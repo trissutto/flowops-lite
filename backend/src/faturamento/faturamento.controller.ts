@@ -1,4 +1,4 @@
-import { Controller, ForbiddenException, Get, Param, Query, Req, UseGuards } from '@nestjs/common';
+import { BadRequestException, Controller, ForbiddenException, Get, Param, Query, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { FaturamentoService } from './faturamento.service';
 import { ErpService } from '../erp/erp.service';
@@ -17,6 +17,32 @@ export class FaturamentoController {
   private requireAdmin(req: any) {
     if (req?.user?.role !== 'admin' && req?.user?.role !== 'operator') {
       throw new ForbiddenException('Apenas admin/operator');
+    }
+  }
+
+  /**
+   * VALIDA o período — incidente 03/07: o input date do navegador dispara
+   * onChange com ano PARCIAL enquanto digita ("0002-07-01"), o JS Date mapeia
+   * ano 2 pra 1902, e a query varria o Giga de 1902 até hoje (a base INTEIRA:
+   * 566k cupons, R$ 169mi na tela e o pool MySQL sofrendo). Nunca mais:
+   * formato estrito, ano 2000–2100, from<=to e período máximo de 3 anos.
+   */
+  private validatePeriod(from: string, to: string) {
+    const re = /^\d{4}-\d{2}-\d{2}$/;
+    if (!re.test(from) || !re.test(to)) {
+      throw new BadRequestException(`Datas devem ser YYYY-MM-DD (recebido: from=${from} to=${to})`);
+    }
+    const y1 = Number(from.slice(0, 4));
+    const y2 = Number(to.slice(0, 4));
+    if (y1 < 2000 || y1 > 2100 || y2 < 2000 || y2 > 2100) {
+      throw new BadRequestException(`Ano fora do intervalo válido 2000–2100 (from=${from} to=${to})`);
+    }
+    if (from > to) {
+      throw new BadRequestException(`Data inicial maior que a final (from=${from} to=${to})`);
+    }
+    const dias = (new Date(to).getTime() - new Date(from).getTime()) / 86400000;
+    if (dias > 1100) {
+      throw new BadRequestException('Período máximo: 3 anos');
     }
   }
 
@@ -42,6 +68,7 @@ export class FaturamentoController {
 
     const f = from || fmt(firstOfMonth);
     const t = to || fmt(today);
+    this.validatePeriod(f, t);
     const g = (granularity === 'week' || granularity === 'month') ? granularity : 'day';
     return this.svc.getResumo(f, t, g);
   }
@@ -64,6 +91,7 @@ export class FaturamentoController {
       `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     const f = from || fmt(today);
     const t = to || fmt(today);
+    this.validatePeriod(f, t);
     return this.svc.auditoriaParidade(f, t);
   }
 
@@ -85,6 +113,7 @@ export class FaturamentoController {
     if (!from || !to) {
       return { error: 'from e to obrigatórios (YYYY-MM-DD)' };
     }
+    this.validatePeriod(from, to);
     return this.svc.getVendasDetalhadas(storeCode, from, to);
   }
 
@@ -105,6 +134,7 @@ export class FaturamentoController {
     if (!loja || !from || !to) {
       return { error: 'loja, from e to obrigatórios (YYYY-MM-DD)' };
     }
+    this.validatePeriod(from, to);
     const dFim = new Date(to);
     dFim.setDate(dFim.getDate() + 1);
     const toExclusive = `${dFim.getFullYear()}-${String(dFim.getMonth() + 1).padStart(2, '0')}-${String(dFim.getDate()).padStart(2, '0')}`;
@@ -131,6 +161,7 @@ export class FaturamentoController {
     if (!from || !to) {
       return { error: 'from e to obrigatórios (YYYY-MM-DD)' };
     }
+    this.validatePeriod(from, to);
     // Soma 1 dia no `to` (fim exclusivo)
     const dFim = new Date(to);
     dFim.setDate(dFim.getDate() + 1);
