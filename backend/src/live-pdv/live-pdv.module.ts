@@ -9,6 +9,7 @@ import { ProductPhotosModule } from '../product-photos/product-photos.module';
 import { RealignmentModule } from '../realignment/realignment.module';
 import { WebsocketModule } from '../websocket/websocket.module';
 import { LivePdvController } from './live-pdv.controller';
+import { LivePublicController } from './live-public.controller';
 import { LivePdvService } from './live-pdv.service';
 import { LivePdvExpiryCron } from './live-pdv-expiry.cron';
 import { LivePdvPayReconcileCron } from './live-pdv-pay-reconcile.cron';
@@ -31,7 +32,7 @@ import { LivePdvPayReconcileCron } from './live-pdv-pay-reconcile.cron';
     RealignmentModule,
     WebsocketModule,
   ],
-  controllers: [LivePdvController],
+  controllers: [LivePdvController, LivePublicController],
   providers: [LivePdvService, LivePdvExpiryCron, LivePdvPayReconcileCron],
   exports: [LivePdvService],
 })

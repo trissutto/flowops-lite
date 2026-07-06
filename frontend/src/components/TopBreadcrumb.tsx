@@ -78,6 +78,7 @@ export default function TopBreadcrumb() {
     pathname === '/login' || pathname.startsWith('/login') ||
     pathname.startsWith('/minha-loja') ||
     pathname.startsWith('/vitrine') ||
+    pathname.startsWith('/cadastro-live') ||
     pathname.includes('/imprimir');
 
   // Monta o breadcrumb a partir do pathname — cada nível é clicável (exceto o último)

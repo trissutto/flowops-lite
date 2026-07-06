@@ -1,8 +1,8 @@
 {
-  "generatedAt": "2026-07-06T17:01:33.467Z",
-  "total": 166,
+  "generatedAt": "2026-07-06T22:31:16.267Z",
+  "total": 167,
   "comAtalho": 124,
-  "semAtalho": 42,
+  "semAtalho": 43,
   "rows": [
     {
       "route": "/",
@@ -24,6 +24,13 @@
       "dynamic": false,
       "hasShortcut": false,
       "file": "src/app/auditoria-sku/page.tsx"
+    },
+    {
+      "route": "/cadastro-live",
+      "section": "cadastro-live",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/cadastro-live/page.tsx"
     },
     {
       "route": "/cadastros/classificacao-produtos",
