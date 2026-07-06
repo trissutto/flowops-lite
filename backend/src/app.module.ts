@@ -61,6 +61,7 @@ import { PushModule } from './push/push.module';
 import { FaturamentoModule } from './faturamento/faturamento.module';
 import { LivePdvModule } from './live-pdv/live-pdv.module';
 import { PromoConfigModule } from './promo-config/promo-config.module';
+import { AccessPolicyModule } from './access-policy/access-policy.module';
 
 @Module({
   imports: [
@@ -124,6 +125,7 @@ import { PromoConfigModule } from './promo-config/promo-config.module';
     FaturamentoModule,
     LivePdvModule,
     PromoConfigModule,
+    AccessPolicyModule,
     ReportsModule,
   ],
 })

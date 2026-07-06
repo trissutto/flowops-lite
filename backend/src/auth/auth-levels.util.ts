@@ -1,4 +1,5 @@
 import { ForbiddenException } from '@nestjs/common';
+import { createHash, randomBytes } from 'crypto';
 
 /**
  * Niveis de senha — hierarquia descendente.
@@ -41,21 +42,84 @@ const ENV_BY_LEVEL: Record<Exclude<AccessLevel, 'VENDEDOR'>, string> = {
   CAIXA: 'CAIXA_PASSWORD',
 };
 
+// ── Senhas configuradas pela TELA (Postgres), com precedência sobre o env ──
+// A tela /retaguarda/descontos-senhas grava aqui via setPasswordOverrides().
+// Guardamos só o HASH (sha256 com salt), nunca a senha em claro — nem no banco,
+// nem em memória. A validação continua SÍNCRONA (sha256 é sync), então todos os
+// call-sites de validateMinLevel seguem funcionando sem virar async.
+export interface LevelSecret {
+  salt: string;
+  hash: string;
+}
+type OverrideMap = Partial<Record<Exclude<AccessLevel, 'VENDEDOR'>, LevelSecret>>;
+let secretOverrides: OverrideMap = {};
+
+/** Hash determinístico (sync) de uma senha com salt. */
+export function hashSecret(salt: string, password: string): string {
+  return createHash('sha256').update(`${salt}:${password}`).digest('hex');
+}
+
+/** Gera {salt, hash} pra uma senha nova (usado ao salvar na tela). */
+export function makeSecret(password: string): LevelSecret {
+  const salt = randomBytes(9).toString('hex');
+  return { salt, hash: hashSecret(salt, password) };
+}
+
+/**
+ * Substitui o conjunto de senhas vindas do banco. Chamado no boot e a cada
+ * gravação da tela. Passar {} volta 100% pro fallback de env.
+ */
+export function setPasswordOverrides(map: OverrideMap | null | undefined): void {
+  secretOverrides = map ? { ...map } : {};
+}
+
 /**
  * Retorna o nivel da senha digitada, ou null se nao bater com nenhuma.
  * Procura do nivel mais ALTO pro mais BAIXO — primeira correspondencia ganha.
+ *
+ * Precedência por nível: se há senha cadastrada no BANCO pra aquele nível,
+ * ela manda (o env daquele nível é ignorado). Sem cadastro no banco, cai no env.
  */
 export function detectPasswordLevel(password?: string): AccessLevel | null {
   if (!password || password.length < 3) return null;
   for (const level of LEVELS_DESC) {
     if (level === 'VENDEDOR') continue;
-    const envKey = ENV_BY_LEVEL[level as Exclude<AccessLevel, 'VENDEDOR'>];
-    const stored = (process.env[envKey] || '').trim();
+    const lvl = level as Exclude<AccessLevel, 'VENDEDOR'>;
+    const override = secretOverrides[lvl];
+    if (override) {
+      // Banco tem precedência: bateu → esse nível; não bateu → NÃO cai no env.
+      if (hashSecret(override.salt, password) === override.hash) return level;
+      continue;
+    }
+    const stored = (process.env[ENV_BY_LEVEL[lvl]] || '').trim();
     if (stored && stored.length >= 3 && stored === password) {
       return level;
     }
   }
   return null;
+}
+
+/** Quais níveis têm senha cadastrada no banco (pra status na tela). */
+export function levelsWithOverride(): Record<Exclude<AccessLevel, 'VENDEDOR'>, boolean> {
+  const out = {} as Record<Exclude<AccessLevel, 'VENDEDOR'>, boolean>;
+  for (const level of LEVELS_DESC) {
+    if (level === 'VENDEDOR') continue;
+    const lvl = level as Exclude<AccessLevel, 'VENDEDOR'>;
+    out[lvl] = !!secretOverrides[lvl];
+  }
+  return out;
+}
+
+/** Quais níveis têm senha no env (pra status na tela). */
+export function levelsWithEnv(): Record<Exclude<AccessLevel, 'VENDEDOR'>, boolean> {
+  const out = {} as Record<Exclude<AccessLevel, 'VENDEDOR'>, boolean>;
+  for (const level of LEVELS_DESC) {
+    if (level === 'VENDEDOR') continue;
+    const lvl = level as Exclude<AccessLevel, 'VENDEDOR'>;
+    const stored = (process.env[ENV_BY_LEVEL[lvl]] || '').trim();
+    out[lvl] = stored.length >= 3;
+  }
+  return out;
 }
 
 /**

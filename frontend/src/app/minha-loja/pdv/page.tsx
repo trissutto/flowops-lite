@@ -693,6 +693,20 @@ function PdvPageInner() {
   const [loadingSale, setLoadingSale] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Faixas de desconto (config /retaguarda/descontos-senhas). Default = regra
+  // antiga 7/10 caso a leitura falhe. Só decide QUAL prompt de senha mostrar —
+  // a validação real é no backend (requireDiscountAuth).
+  const [discountBands, setDiscountBands] = useState({ freeUpToPct: 7, caixaUpToPct: 10 });
+  useEffect(() => {
+    api<{ freeUpToPct: number; caixaUpToPct: number }>('/pdv/discount-policy')
+      .then((r) => {
+        if (r && typeof r.freeUpToPct === 'number' && typeof r.caixaUpToPct === 'number') {
+          setDiscountBands({ freeUpToPct: r.freeUpToPct, caixaUpToPct: r.caixaUpToPct });
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   // Menu lateral recolhível (só visual). Persiste a preferência por PC.
   const [menuCollapsed, setMenuCollapsed] = useState(false);
   useEffect(() => {
@@ -1104,14 +1118,14 @@ function PdvPageInner() {
       const qty = patch.qty ?? item?.qty ?? 1;
       const bruto = (item?.precoUnit ?? 0) * qty;
       const pct = bruto > 0 ? (patch.desconto / bruto) * 100 : 0;
-      if (pct > 10 + 1e-9) {
+      if (pct > discountBands.caixaUpToPct + 1e-9) {
         const pw = window.prompt(`Desconto de ${pct.toFixed(1)}% no item — exige senha de GERENTE:`);
         if (!pw) return;
         password = pw;
         const m = window.prompt('Justificativa do desconto (obrigatória):');
         if (!m || !m.trim()) return;
         motivo = m.trim();
-      } else if (pct > 7 + 1e-9) {
+      } else if (pct > discountBands.freeUpToPct + 1e-9) {
         const pw = window.prompt(`Desconto de ${pct.toFixed(1)}% no item — exige senha do CAIXA:`);
         if (!pw) return;
         password = pw;
@@ -1181,14 +1195,14 @@ function PdvPageInner() {
     if (desconto > 0) {
       const subtotalBruto = sale.items.reduce((s, i) => s + i.precoUnit * i.qty, 0);
       const pct = subtotalBruto > 0 ? (desconto / subtotalBruto) * 100 : 0;
-      if (pct > 10 + 1e-9) {
+      if (pct > discountBands.caixaUpToPct + 1e-9) {
         const pw = window.prompt(`Desconto de ${pct.toFixed(1)}% — exige senha de GERENTE:`);
         if (!pw) return;
         password = pw;
         const m = window.prompt('Justificativa do desconto (obrigatória):');
         if (!m || !m.trim()) return;
         motivo = m.trim();
-      } else if (pct > 7 + 1e-9) {
+      } else if (pct > discountBands.freeUpToPct + 1e-9) {
         const pw = window.prompt(`Desconto de ${pct.toFixed(1)}% — exige senha do CAIXA:`);
         if (!pw) return;
         password = pw;
