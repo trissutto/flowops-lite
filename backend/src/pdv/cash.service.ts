@@ -1584,6 +1584,78 @@ export class CashService {
   }
 
   /**
+   * MASTER: edita valor e/ou motivo de uma sangria/suprimento existente.
+   * Recalcula os totais da sessão se ela já fechou (mesma lógica de add/delete).
+   * Audit imutável em MasterAudit com o antes/depois.
+   */
+  async masterUpdateMovement(input: {
+    movementId: string;
+    valor?: number;
+    motivo?: string;
+    userName?: string | null;
+  }) {
+    const { movementId, userName } = input;
+    const m = await (this.prisma as any).pdvCashMovement.findUnique({
+      where: { id: movementId },
+    });
+    if (!m) throw new NotFoundException('Movimentacao nao encontrada');
+
+    const data: any = {};
+    if (input.valor != null) {
+      const v = Number(input.valor);
+      if (isNaN(v) || v <= 0) throw new BadRequestException('Valor invalido');
+      data.valor = v;
+    }
+    if (input.motivo != null) {
+      const mt = String(input.motivo).trim();
+      if (mt.length < 3) throw new BadRequestException('Informe o motivo (>=3 chars)');
+      data.motivo = mt;
+    }
+    if (Object.keys(data).length === 0) {
+      throw new BadRequestException('Nada pra atualizar (informe valor e/ou motivo)');
+    }
+
+    const updated = await (this.prisma as any).pdvCashMovement.update({
+      where: { id: movementId },
+      data,
+    });
+
+    const session = await (this.prisma as any).pdvCashSession.findUnique({
+      where: { id: m.cashSessionId },
+    });
+    if (session && session.status === 'closed') {
+      const totals = await this.computeSessionTotals(session.id);
+      const fisico = Number(session.dinheiroFisico ?? 0);
+      const novaDiff = fisico - totals.dinheiroEsperado;
+      await (this.prisma as any).pdvCashSession.update({
+        where: { id: session.id },
+        data: {
+          totalSangrias: totals.totalSangrias,
+          totalSuprimentos: totals.totalSuprimentos,
+          dinheiroEsperado: totals.dinheiroEsperado,
+          diferenca: novaDiff,
+        },
+      });
+    }
+
+    this.logger.warn(
+      `[MASTER] UPDATE movement=${movementId} tipo=${m.tipo} R$${m.valor}->R$${updated.valor} por ${userName || 'admin'}`,
+    );
+    await this.recordAudit({
+      action: 'movement_update',
+      entityType: 'movement',
+      entityId: movementId,
+      storeCode: session?.storeCode,
+      storeName: session?.storeName,
+      userName,
+      oldValue: { tipo: m.tipo, valor: Number(m.valor), motivo: m.motivo },
+      newValue: { tipo: m.tipo, valor: Number(updated.valor), motivo: updated.motivo },
+      motivo: (input.motivo || '').trim() || 'Edicao via master',
+    });
+    return { ok: true, movement: updated };
+  }
+
+  /**
    * MASTER: edita um pagamento de venda — troca method, valor e/ou bandeira.
    * Usado pra correcoes pos-fato (caixa marcou dinheiro mas era PIX, etc).
    * Audit em PdvPaymentAudit. Re-validacao da sessao se ja fechou.

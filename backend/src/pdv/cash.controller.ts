@@ -451,6 +451,28 @@ export class CashController {
   }
 
   /**
+   * PATCH /pdv/caixa/master/movement/:id
+   * Body: { valor?, motivo?, password }
+   * Edita valor/motivo de uma sangria/suprimento existente.
+   */
+  @Patch('master/movement/:id')
+  async masterUpdateMovement(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: { valor?: number; motivo?: string; password: string },
+  ) {
+    this.requireMasterRole(req);
+    const nivel = this.validateLevel(body?.password, 'MASTER');
+    const userName = req?.user?.name || req?.user?.email || req?.user?.username || 'admin';
+    return this.svc.masterUpdateMovement({
+      movementId: id,
+      valor: body?.valor != null ? Number(body.valor) : undefined,
+      motivo: body?.motivo,
+      userName: `[${nivel}] ${userName}`,
+    });
+  }
+
+  /**
    * GET /pdv/caixa/master/audit
    * Query: ?storeCode=&action=&from=YYYY-MM-DD&to=YYYY-MM-DD&userName=&page=1&size=50
    * Lista log de auditoria master. Apenas admin/supervisor.
