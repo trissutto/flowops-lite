@@ -355,21 +355,30 @@ export class LivePdvService {
     const rows = resolved.rows;
     if (!rows.length) return { found: false, term: q, viaAtalho, matchedRefs: [], exactMatch: false };
 
-    // Foco em 1 produto. searchByRef("VLM-222") também traz "VLM-222EST" (LIKE),
-    // que é OUTRO produto (estampado). Prefere a REF que bate EXATO com o termo
-    // digitado e traz TODAS as cores dela — igual à Consulta de Produto. Se nada
-    // bate exato (busca por código/nome), cai na 1ª REF retornada.
+    // "JUNTAR POR PREFIXO" (decisão do dono, 06/07): variantes de cor cadastradas
+    // com sufixo na REF (ex.: 900658 = OFF WHITE, 900658M = MOSTARDA) entram na
+    // MESMA grade. Antes o código ficava só com a REF EXATA e a mostarda sumia.
+    //
+    // GUARD anti-explosão: só agrega as irmãs quando existe MATCH EXATO (a REF
+    // base foi digitada inteira). Assim um prefixo curto ("900") — que não bate
+    // exato com nenhuma REF — NÃO arrasta centenas de produtos pra grade no meio
+    // da live; cai no comportamento antigo (1ª REF). Efeito colateral aceito pelo
+    // dono: buscar "VLM-222" agora também traz "VLM-222EST" (estampado).
     const qn = this.norm(q);
     const exact = rows.filter((r) => this.norm(r.REF) === qn);
     const productRows = exact.length
-      ? exact
+      ? rows.filter((r) => this.norm(r.REF).startsWith(qn))
       : rows.filter((r) => this.norm(r.REF) === this.norm(rows[0].REF));
     // Metadados pra VALIDAÇÃO da legenda: quais REFs distintas o termo trouxe
     // e se houve match exato. Campos ADITIVOS — não mudam o comportamento.
     const matchedRefs = Array.from(new Set(rows.map((r) => String(r.REF || '').trim()).filter(Boolean)));
     const exactMatch = exact.length > 0;
-    const ref = String(productRows[0].REF).trim();
-    const descricao = productRows[0].DESCRICAOCOMPLETA || ref;
+    // Cabeçalho/foto/preço-base/promo usam a REF BASE exata (ex.: 900658), não a
+    // variante de cor (900658M) — que pode vir antes na ordem do Giga. As células
+    // da grade continuam agrupadas sob a base; cada uma guarda seu próprio código.
+    const headRow = exact[0] || productRows[0];
+    const ref = String(headRow.REF).trim();
+    const descricao = headRow.DESCRICAOCOMPLETA || ref;
 
     // 2) Estoque por loja (1 query batch p/ todos os CODIGOs do produto).
     const codigos = Array.from(
@@ -384,21 +393,29 @@ export class LivePdvService {
     const refPrice = await this.refPriceWithMirror(ref);
     const storesMap = await this.storesMap();
 
-    // 3) Reservas ativas pra descontar.
-    const itemKeys = productRows.map((r) => this.keyOf(ref, r.COR, r.TAMANHO));
+    // 3) Reservas ativas pra descontar. itemKey usa a REF DA PRÓPRIA LINHA (não a
+    // base) — variantes de cor com sufixo (900658M) têm reserva/estoque próprios,
+    // e assim VLM-222 × VLM-222EST nunca colidem numa mesma célula.
+    const itemKeys = productRows.map((r) =>
+      this.keyOf(String(r.REF || ref).trim(), r.COR, r.TAMANHO),
+    );
     const { byKey, byKeyStore } = await this.committed(Array.from(new Set(itemKeys)));
 
-    // 4) Monta células da grade (cor × tamanho), deduplicando por COR|TAM.
+    // 4) Monta células da grade (cor × tamanho), deduplicando por REF|COR|TAM.
     const cellMap = new Map<string, any>();
     for (const r of productRows) {
+      const rowRef = String(r.REF || ref).trim();
       const cor = r.COR ? String(r.COR).trim() : null;
       const tam = r.TAMANHO ? String(r.TAMANHO).trim() : null;
-      const itemKey = this.keyOf(ref, cor, tam);
+      const itemKey = this.keyOf(rowRef, cor, tam);
       const codigo = String(r.CODIGO || '').trim();
       let cell = cellMap.get(itemKey);
       if (!cell) {
         cell = {
           itemKey,
+          // REF real da célula — o front manda ela no addItem pra resolver o
+          // estoque certo (a variante de cor pode ter REF própria, ex.: 900658M).
+          ref: rowRef,
           cor,
           tamanho: tam,
           codigos: [] as string[],
@@ -450,6 +467,7 @@ export class LivePdvService {
       totalRede += available;
       return {
         itemKey: c.itemKey,
+        ref: c.ref,
         cor: c.cor,
         tamanho: c.tamanho,
         codigos: c.codigos,

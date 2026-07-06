@@ -41,6 +41,9 @@ import { getSocket } from '@/lib/socket';
 /* ─── Types ─── */
 interface GradeCell {
   itemKey: string;
+  // REF real da célula (pode diferir da REF base da grade quando é variante de
+  // cor cadastrada com sufixo, ex.: 900658M). Enviada no addItem.
+  ref?: string;
   cor: string | null;
   tamanho: string | null;
   codigos: string[];
@@ -621,7 +624,7 @@ export default function LivePdvPage() {
     setAdding(cell.itemKey);
     try {
       const body: any = {
-        refCode: product.ref,
+        refCode: cell.ref || product.ref,
         cor: cell.cor,
         tamanho: cell.tamanho,
         qty: 1,
@@ -692,7 +695,7 @@ export default function LivePdvPage() {
             phone: customer.phone,
             instagram: customer.instagram,
           },
-          refCode: product.ref,
+          refCode: cell.ref || product.ref,
           cor: cell.cor,
           tamanho: cell.tamanho,
           qty: 1,
@@ -727,7 +730,7 @@ export default function LivePdvPage() {
         method: 'POST',
         body: JSON.stringify({
           cartId: targetCart.id,
-          refCode: product.ref,
+          refCode: cell.ref || product.ref,
           cor: cell.cor,
           tamanho: cell.tamanho,
           qty: 1,
