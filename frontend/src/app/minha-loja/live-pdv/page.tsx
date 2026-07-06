@@ -243,6 +243,42 @@ export default function LivePdvPage() {
     refreshCarts();
   }, [refreshCarts]);
 
+  // Cadastradas pelo link do ManyChat (origem 'live', 24h) que ainda não têm
+  // carrinho nesta sessão — a fila de "aguardando" que a apresentadora puxa.
+  const [pendingRegs, setPendingRegs] = useState<
+    Array<{ customerId: string; name: string | null; phone: string | null; instagram: string | null; createdAt: string }>
+  >([]);
+  const [pullingId, setPullingId] = useState<string | null>(null);
+  const refreshPending = useCallback(async () => {
+    if (!sessionId) { setPendingRegs([]); return; }
+    try {
+      const r = await api<any[]>(`/live-pdv/sessions/${sessionId}/pending-registrations`);
+      setPendingRegs(r || []);
+    } catch {}
+  }, [sessionId]);
+  useEffect(() => { refreshPending(); }, [refreshPending]);
+  useEffect(() => {
+    if (!sessionId) return;
+    const t = setInterval(refreshPending, 30000); // novas cadastradas chegam durante a live
+    return () => clearInterval(t);
+  }, [sessionId, refreshPending]);
+  async function pullRegisteredCustomer(customerId: string) {
+    if (!sessionId || pullingId) return;
+    setPullingId(customerId);
+    try {
+      await api(`/live-pdv/sessions/${sessionId}/add-customer`, {
+        method: 'POST',
+        body: JSON.stringify({ customerId }),
+      });
+      await refreshCarts();
+      await refreshPending();
+    } catch {
+      alert('Não consegui puxar a cliente agora. Tenta de novo.');
+    } finally {
+      setPullingId(null);
+    }
+  }
+
   // Loja da sessão usa PIX externo? (franquia sem gateway Pagar.me/PagBank)
   // → esconde "Cobrar PIX/Link" e mostra confirmação manual "pagou por fora".
   // Descobre a loja pela sessão e consulta o pixProvider. Erro → não-externo.
@@ -1504,6 +1540,65 @@ export default function LivePdvPage() {
               pixExterno={pixExterno}
               onConfirmExternal={confirmExternalPay}
             />
+
+            {/* Cadastradas pelo link (ManyChat) aguardando — SEMPRE visível durante a
+                live (mesmo vazia) pra ficar claro que o recurso está ali. */}
+            {sessionId && (
+              <div>
+                <div className="mb-1 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <UserPlus className="h-5 w-5 text-amber-600" />
+                    <span className="text-sm font-bold uppercase tracking-wide text-slate-800">
+                      Cadastradas na live ({pendingRegs.length})
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={refreshPending}
+                    title="Atualizar a fila de cadastradas"
+                    className="shrink-0 rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] font-bold text-amber-700 hover:bg-amber-100"
+                  >
+                    Atualizar
+                  </button>
+                </div>
+                <div className="mb-2 text-[11px] text-slate-500">
+                  Quem se cadastrou pelo link e ainda não tem carrinho. Clique pra iniciar.
+                </div>
+                {pendingRegs.length === 0 ? (
+                  <div className="rounded-xl border border-dashed border-amber-200 bg-amber-50/40 px-3 py-4 text-center text-xs text-slate-400">
+                    Ninguém aguardando ainda. Aparece aqui quando alguém comentar <b>CARRINHO</b> e se cadastrar pelo link.
+                  </div>
+                ) : (
+                <div className="grid max-h-[40vh] grid-cols-1 content-start gap-1.5 overflow-y-auto rounded-xl border border-amber-200 bg-amber-50/50 p-1.5 sm:grid-cols-2">
+                  {pendingRegs.map((p) => (
+                    <div
+                      key={p.customerId}
+                      className="flex items-center gap-2 rounded-lg border border-amber-100 bg-white px-2 py-1.5"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-semibold text-slate-800" title={p.name || ''}>
+                          {p.name || 'Sem nome'}
+                        </div>
+                        <div className="truncate text-[11px] text-slate-500">
+                          {p.instagram ? `@${p.instagram}` : ''}
+                          {p.instagram && p.phone ? ' · ' : ''}
+                          {p.phone || ''}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => pullRegisteredCustomer(p.customerId)}
+                        disabled={pullingId === p.customerId}
+                        className="shrink-0 rounded-md bg-amber-600 px-2 py-1 text-[11px] font-bold text-white hover:bg-amber-700 disabled:opacity-60"
+                      >
+                        {pullingId === p.customerId ? '…' : 'Iniciar carrinho'}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                )}
+              </div>
+            )}
 
             {/* Clientes da live — na lateral pra não ser empurrada pela grade */}
             {carts.length > 0 && (
