@@ -1541,18 +1541,34 @@ export default function LivePdvPage() {
               onConfirmExternal={confirmExternalPay}
             />
 
-            {/* Cadastradas pelo link (ManyChat) aguardando — mostra mesmo sem carrinhos */}
-            {pendingRegs.length > 0 && (
+            {/* Cadastradas pelo link (ManyChat) aguardando — SEMPRE visível durante a
+                live (mesmo vazia) pra ficar claro que o recurso está ali. */}
+            {sessionId && (
               <div>
-                <div className="mb-1 flex items-center gap-2">
-                  <UserPlus className="h-5 w-5 text-amber-600" />
-                  <span className="text-sm font-bold uppercase tracking-wide text-slate-800">
-                    Cadastradas na live ({pendingRegs.length})
-                  </span>
+                <div className="mb-1 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <UserPlus className="h-5 w-5 text-amber-600" />
+                    <span className="text-sm font-bold uppercase tracking-wide text-slate-800">
+                      Cadastradas na live ({pendingRegs.length})
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={refreshPending}
+                    title="Atualizar a fila de cadastradas"
+                    className="shrink-0 rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] font-bold text-amber-700 hover:bg-amber-100"
+                  >
+                    Atualizar
+                  </button>
                 </div>
                 <div className="mb-2 text-[11px] text-slate-500">
-                  Se cadastraram pelo link e ainda não têm carrinho. Clique pra iniciar.
+                  Quem se cadastrou pelo link e ainda não tem carrinho. Clique pra iniciar.
                 </div>
+                {pendingRegs.length === 0 ? (
+                  <div className="rounded-xl border border-dashed border-amber-200 bg-amber-50/40 px-3 py-4 text-center text-xs text-slate-400">
+                    Ninguém aguardando ainda. Aparece aqui quando alguém comentar <b>CARRINHO</b> e se cadastrar pelo link.
+                  </div>
+                ) : (
                 <div className="grid max-h-[40vh] grid-cols-1 content-start gap-1.5 overflow-y-auto rounded-xl border border-amber-200 bg-amber-50/50 p-1.5 sm:grid-cols-2">
                   {pendingRegs.map((p) => (
                     <div
@@ -1580,6 +1596,7 @@ export default function LivePdvPage() {
                     </div>
                   ))}
                 </div>
+                )}
               </div>
             )}
 
