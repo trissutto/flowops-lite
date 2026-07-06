@@ -851,6 +851,38 @@ export class LivePdvService {
   }
 
   /**
+   * Clientes que se CADASTRARAM na live (origem 'live') nas últimas 24h e que
+   * ainda NÃO têm carrinho na sessão atual. É a fila de "aguardando" que a
+   * apresentadora vê pra puxar quem chegou pelo cadastro do ManyChat.
+   * (Só origem 'live' — não expõe a base geral de loja/site.)
+   */
+  async pendingLiveRegistrations(sessionId: string) {
+    if (!sessionId) return [];
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const carts = await (this.prisma as any).livePdvCart.findMany({
+      where: { sessionId, customerId: { not: null } },
+      select: { customerId: true },
+    });
+    const already = new Set((carts as any[]).map((c) => c.customerId));
+    const custs = await (this.prisma as any).customer.findMany({
+      where: { originSource: 'live', createdAt: { gte: since } },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, name: true, phone: true, igUsername: true, createdAt: true },
+      take: 80,
+    });
+    return (custs as any[])
+      .filter((c) => !already.has(c.id))
+      .slice(0, 40)
+      .map((c) => ({
+        customerId: c.id,
+        name: c.name,
+        phone: c.phone,
+        instagram: c.igUsername,
+        createdAt: c.createdAt,
+      }));
+  }
+
+  /**
    * Puxa uma cliente já existente (de live anterior) para a sessão de live
    * ATUAL: cria (ou reusa) o carrinho aberto dela na sessão. Usa os dados mais
    * frescos do cadastro mestre, com fallback no snapshot do último carrinho.

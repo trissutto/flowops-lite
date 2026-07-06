@@ -115,6 +115,12 @@ export class LivePdvController {
     return this.svc.addCustomerToSession(id, body?.customerId);
   }
 
+  // Fila de cadastradas (ManyChat) aguardando: origem 'live', 24h, sem carrinho nesta sessão
+  @Get('sessions/:id/pending-registrations')
+  pendingRegistrations(@Param('id') id: string) {
+    return this.svc.pendingLiveRegistrations(id);
+  }
+
   // ── Carrinho / itens ──
   @Post('sessions/:id/items')
   addItem(
