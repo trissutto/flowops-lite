@@ -1977,7 +1977,6 @@ function PdvPageInner() {
                   <span className="uppercase tracking-wider">Campanha:</span>
                   <span className="font-black">
                     {sale.activePromotion === 'YEAR_BASED' ? 'Liquida antigos 50%' :
-                     sale.activePromotion === 'FOUR_FOR_THREE' ? '4 LEVA 3' :
                      <span className="text-slate-500 font-medium">Nenhuma</span>}
                   </span>
                 </div>
@@ -1994,7 +1993,7 @@ function PdvPageInner() {
             )}
             {promoExpanded && (
             <div className="px-3 py-2 bg-[#FAF6E8]/40 border-b border-[#E5E5E0]">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
                 <button
                   onClick={() => setPromotion('NONE')}
                   className={`text-xs py-1.5 px-1 rounded font-bold transition-colors border ${
@@ -2016,35 +2015,7 @@ function PdvPageInner() {
                   Liquida antigos
                   <div className="text-[9px] font-normal">até 31/12/2023 = 50% off</div>
                 </button>
-                <button
-                  onClick={() => setPromotion('FOUR_FOR_THREE')}
-                  className={`text-xs py-1.5 px-1 rounded font-bold transition-colors border ${
-                    sale.activePromotion === 'FOUR_FOR_THREE'
-                      ? 'bg-[#8C7325] text-white border-[#8C7325]'
-                      : 'bg-white text-[#8C7325] border-[#E5E5E0] hover:border-[#D4AF37]'
-                  }`}
-                >
-                  4 LEVA 3
-                  <div className="text-[9px] font-normal">menor sai grátis</div>
-                </button>
               </div>
-              {/* Status da campanha */}
-              {sale.activePromotion === 'FOUR_FOR_THREE' && (() => {
-                const totalPecas = sale.items.reduce((s, i) => s + i.qty, 0);
-                if (totalPecas >= 4) {
-                  return (
-                    <div className="mt-1.5 text-[11px] text-[#8C7325] bg-[#FAF6E8] rounded px-2 py-1 font-semibold">
-                      ✓ ATIVA — peça de menor valor saiu grátis
-                    </div>
-                  );
-                }
-                const faltam = 4 - totalPecas;
-                return (
-                  <div className="mt-1.5 text-[11px] text-amber-800 bg-amber-100 rounded px-2 py-1">
-                    Falta{faltam > 1 ? 'm' : ''} {faltam} peça{faltam > 1 ? 's' : ''} pra ativar
-                  </div>
-                );
-              })()}
             </div>
             )}
             <div className="divide-y divide-[#F0EEE6]">
