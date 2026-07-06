@@ -93,10 +93,41 @@ export class CashService {
       else if (m.tipo === 'suprimento') totalSuprimentos += v;
     }
 
-    // Dinheiro esperado em caixa = fundo + dinheiro vendido - sangrias + suprimentos
+    // Crediário recebido EM DINHEIRO na janela desta sessão — entra fisicamente
+    // na gaveta, então CONTA no dinheiro esperado (não é "venda do dia", mas é
+    // dinheiro no caixa). PIX recebido NÃO entra; misto entra só a parte em
+    // dinheiro. Escopo = mesma loja, pagas entre abertura e fechamento da sessão
+    // (aberta: sem teto). Espelha o cálculo do relatório detalhado.
+    const baixasCrediario = await (this.prisma as any).crediarioBaixa.findMany({
+      where: {
+        lojaCode: session.storeCode,
+        status: 'paid',
+        createdAt: {
+          gte: session.openedAt,
+          ...(session.closedAt ? { lte: session.closedAt } : {}),
+        },
+      },
+      select: { formaPagamento: true, totalPago: true, valorDinheiro: true, valorPix: true },
+    });
+    let recebimentosDinheiro = 0;
+    for (const b of baixasCrediario as any[]) {
+      const forma = String(b.formaPagamento || '').toLowerCase();
+      if (forma === 'misto') {
+        const vDin = Number(b.valorDinheiro) || 0;
+        const vPix = Number(b.valorPix) || 0;
+        // misto antigo sem split preenchido → assume tudo dinheiro (fallback do detalhado)
+        recebimentosDinheiro += vDin <= 0 && vPix <= 0 ? Number(b.totalPago) || 0 : vDin;
+      } else if (forma !== 'pix') {
+        recebimentosDinheiro += Number(b.totalPago) || 0;
+      }
+    }
+
+    // Dinheiro esperado em caixa = fundo + dinheiro vendido + crediário recebido
+    //   em dinheiro + suprimentos - sangrias
     const dinheiroEsperado =
       Number(session.fundoTroco || 0) +
-      byMethod.dinheiro -
+      byMethod.dinheiro +
+      recebimentosDinheiro -
       totalSangrias +
       totalSuprimentos;
 
@@ -113,6 +144,9 @@ export class CashService {
       qtdMarcados,
       totalSangrias,
       totalSuprimentos,
+      // Crediário recebido em dinheiro que já ESTÁ somado no dinheiroEsperado —
+      // exposto pra tela poder mostrar a linha no detalhamento do esperado.
+      totalRecebimentosDinheiro: recebimentosDinheiro,
       dinheiroEsperado,
       qtdVendas: sales.length - qtdMarcados,
     };
