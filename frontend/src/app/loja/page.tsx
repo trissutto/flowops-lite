@@ -15,7 +15,7 @@ import Link from 'next/link';
 import {
   Shuffle, CreditCard, Boxes, CheckCircle2, Package2, Store,
   FileSearch, Truck, BarChart3, Percent, ArrowLeft,
-  LayoutDashboard, Globe2, Settings, ShoppingCart, Tags, KeyRound,
+  LayoutDashboard, Globe2, Settings, ShoppingCart, Tags, KeyRound, Map,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import AdminShell, { type AdminNavItem } from '@/components/AdminShell';
@@ -48,6 +48,7 @@ const LOJA_ITEMS: LojaItem[] = [
   { href: '/cadastros/classificacao-produtos', label: 'Produtos Loja',  subtitle: 'Classificação', description: 'Básico/Moda + plus size',     tone: 'purple', icon: Tags         },
   { href: '/retaguarda/promocoes-config',     label: 'Promoções PDV',  subtitle: 'Config',      description: '50% · básico fora · 4 leva 3',  tone: 'amber',  icon: Percent      },
   { href: '/retaguarda/descontos-senhas',     label: 'Descontos & Senhas', subtitle: 'Config',  description: 'Faixas de desconto + senhas',   tone: 'amber',  icon: KeyRound     },
+  { href: '/retaguarda/mapa-urls',            label: 'Mapa de URLs',   subtitle: 'Sistema',     description: 'Todas as telas + flag de atalho', tone: 'slate',  icon: Map          },
   { href: '/retaguarda/crediario',            label: 'Crediário',      subtitle: 'Cobrança',    description: 'Parcelas + atrasos',            tone: 'rose',   icon: CreditCard   },
   { href: '/loja/juros-crediario',            label: 'Juros Crediário',subtitle: 'Config',      description: 'Carência + taxa mensal',        tone: 'amber',  icon: Percent      },
   { href: '/retaguarda/almoxarifado',         label: 'Almoxarifado',   subtitle: 'Estoque',     description: 'Materiais internos',            tone: 'purple', icon: Boxes        },

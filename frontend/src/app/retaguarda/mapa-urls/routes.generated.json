@@ -1,0 +1,1170 @@
+{
+  "generatedAt": "2026-07-06T17:01:33.467Z",
+  "total": 166,
+  "comAtalho": 124,
+  "semAtalho": 42,
+  "rows": [
+    {
+      "route": "/",
+      "section": "(home)",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/page.tsx"
+    },
+    {
+      "route": "/admin/routing-debug/[wcId]",
+      "section": "admin",
+      "dynamic": true,
+      "hasShortcut": true,
+      "file": "src/app/admin/routing-debug/[wcId]/page.tsx"
+    },
+    {
+      "route": "/auditoria-sku",
+      "section": "auditoria-sku",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/auditoria-sku/page.tsx"
+    },
+    {
+      "route": "/cadastros/classificacao-produtos",
+      "section": "cadastros",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/cadastros/classificacao-produtos/page.tsx"
+    },
+    {
+      "route": "/carrinhos-abandonados",
+      "section": "carrinhos-abandonados",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/carrinhos-abandonados/page.tsx"
+    },
+    {
+      "route": "/clientes",
+      "section": "clientes",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/clientes/page.tsx"
+    },
+    {
+      "route": "/clientes-crm",
+      "section": "clientes-crm",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/clientes-crm/page.tsx"
+    },
+    {
+      "route": "/clientes-crm/sincronizacao",
+      "section": "clientes-crm",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/clientes-crm/sincronizacao/page.tsx"
+    },
+    {
+      "route": "/config",
+      "section": "config",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/config/page.tsx"
+    },
+    {
+      "route": "/config/nfce",
+      "section": "config",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/config/nfce/page.tsx"
+    },
+    {
+      "route": "/config/pagarme",
+      "section": "config",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/config/pagarme/page.tsx"
+    },
+    {
+      "route": "/config/pagbank",
+      "section": "config",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/config/pagbank/page.tsx"
+    },
+    {
+      "route": "/config/pagbank/por-loja",
+      "section": "config",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/config/pagbank/por-loja/page.tsx"
+    },
+    {
+      "route": "/config/pix",
+      "section": "config",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/config/pix/page.tsx"
+    },
+    {
+      "route": "/config/whatsapp",
+      "section": "config",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/config/whatsapp/page.tsx"
+    },
+    {
+      "route": "/config/whatsapp-cobranca",
+      "section": "config",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/config/whatsapp-cobranca/page.tsx"
+    },
+    {
+      "route": "/configuracoes",
+      "section": "configuracoes",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/configuracoes/page.tsx"
+    },
+    {
+      "route": "/crm/lista-personalizada",
+      "section": "crm",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/crm/lista-personalizada/page.tsx"
+    },
+    {
+      "route": "/crm/segmentos",
+      "section": "crm",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/crm/segmentos/page.tsx"
+    },
+    {
+      "route": "/financeiro",
+      "section": "financeiro",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/financeiro/page.tsx"
+    },
+    {
+      "route": "/franquias",
+      "section": "franquias",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/franquias/page.tsx"
+    },
+    {
+      "route": "/gestao",
+      "section": "gestao",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/gestao/page.tsx"
+    },
+    {
+      "route": "/imobiliario",
+      "section": "imobiliario",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/imobiliario/page.tsx"
+    },
+    {
+      "route": "/imobiliario/[id]",
+      "section": "imobiliario",
+      "dynamic": true,
+      "hasShortcut": true,
+      "file": "src/app/imobiliario/[id]/page.tsx"
+    },
+    {
+      "route": "/imobiliario/novo",
+      "section": "imobiliario",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/imobiliario/novo/page.tsx"
+    },
+    {
+      "route": "/impersonate",
+      "section": "impersonate",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/impersonate/page.tsx"
+    },
+    {
+      "route": "/login",
+      "section": "login",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/login/page.tsx"
+    },
+    {
+      "route": "/logs",
+      "section": "logs",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/logs/page.tsx"
+    },
+    {
+      "route": "/loja",
+      "section": "loja",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/loja/page.tsx"
+    },
+    {
+      "route": "/loja/etiquetas-avulsas",
+      "section": "loja",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/loja/etiquetas-avulsas/page.tsx"
+    },
+    {
+      "route": "/loja/juros-crediario",
+      "section": "loja",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/loja/juros-crediario/page.tsx"
+    },
+    {
+      "route": "/loja/pedidos-compra",
+      "section": "loja",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/loja/pedidos-compra/page.tsx"
+    },
+    {
+      "route": "/loja/pedidos-compra/[id]",
+      "section": "loja",
+      "dynamic": true,
+      "hasShortcut": true,
+      "file": "src/app/loja/pedidos-compra/[id]/page.tsx"
+    },
+    {
+      "route": "/loja/pedidos-compra/[id]/etiquetas",
+      "section": "loja",
+      "dynamic": true,
+      "hasShortcut": true,
+      "file": "src/app/loja/pedidos-compra/[id]/etiquetas/page.tsx"
+    },
+    {
+      "route": "/loja/pedidos-compra/[id]/imprimir",
+      "section": "loja",
+      "dynamic": true,
+      "hasShortcut": true,
+      "file": "src/app/loja/pedidos-compra/[id]/imprimir/page.tsx"
+    },
+    {
+      "route": "/loja/pedidos-compra/novo",
+      "section": "loja",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/loja/pedidos-compra/novo/page.tsx"
+    },
+    {
+      "route": "/loja/reposicao",
+      "section": "loja",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/loja/reposicao/page.tsx"
+    },
+    {
+      "route": "/lojas",
+      "section": "lojas",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/lojas/page.tsx"
+    },
+    {
+      "route": "/marketing",
+      "section": "marketing",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/marketing/page.tsx"
+    },
+    {
+      "route": "/marketing/recuperacao",
+      "section": "marketing",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/marketing/recuperacao/page.tsx"
+    },
+    {
+      "route": "/minha-loja",
+      "section": "minha-loja",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/minha-loja/page.tsx"
+    },
+    {
+      "route": "/minha-loja/carrinhos-abandonados",
+      "section": "minha-loja",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/minha-loja/carrinhos-abandonados/page.tsx"
+    },
+    {
+      "route": "/minha-loja/comissao",
+      "section": "minha-loja",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/minha-loja/comissao/page.tsx"
+    },
+    {
+      "route": "/minha-loja/consultar",
+      "section": "minha-loja",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/minha-loja/consultar/page.tsx"
+    },
+    {
+      "route": "/minha-loja/historico",
+      "section": "minha-loja",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/minha-loja/historico/page.tsx"
+    },
+    {
+      "route": "/minha-loja/imprimir-resumo",
+      "section": "minha-loja",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/minha-loja/imprimir-resumo/page.tsx"
+    },
+    {
+      "route": "/minha-loja/imprimir-todos",
+      "section": "minha-loja",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/minha-loja/imprimir-todos/page.tsx"
+    },
+    {
+      "route": "/minha-loja/imprimir/[id]",
+      "section": "minha-loja",
+      "dynamic": true,
+      "hasShortcut": false,
+      "file": "src/app/minha-loja/imprimir/[id]/page.tsx"
+    },
+    {
+      "route": "/minha-loja/live-expedicao",
+      "section": "minha-loja",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/minha-loja/live-expedicao/page.tsx"
+    },
+    {
+      "route": "/minha-loja/live-pdv",
+      "section": "minha-loja",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/minha-loja/live-pdv/page.tsx"
+    },
+    {
+      "route": "/minha-loja/materiais",
+      "section": "minha-loja",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/minha-loja/materiais/page.tsx"
+    },
+    {
+      "route": "/minha-loja/pdv",
+      "section": "minha-loja",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/minha-loja/pdv/page.tsx"
+    },
+    {
+      "route": "/minha-loja/pdv/caixa",
+      "section": "minha-loja",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/minha-loja/pdv/caixa/page.tsx"
+    },
+    {
+      "route": "/minha-loja/pdv/caixa/sangria/[id]",
+      "section": "minha-loja",
+      "dynamic": true,
+      "hasShortcut": false,
+      "file": "src/app/minha-loja/pdv/caixa/sangria/[id]/page.tsx"
+    },
+    {
+      "route": "/minha-loja/pdv/config-impressora",
+      "section": "minha-loja",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/minha-loja/pdv/config-impressora/page.tsx"
+    },
+    {
+      "route": "/minha-loja/pdv/devolucao",
+      "section": "minha-loja",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/minha-loja/pdv/devolucao/page.tsx"
+    },
+    {
+      "route": "/minha-loja/pdv/fechamento",
+      "section": "minha-loja",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/minha-loja/pdv/fechamento/page.tsx"
+    },
+    {
+      "route": "/minha-loja/pdv/marcados",
+      "section": "minha-loja",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/minha-loja/pdv/marcados/page.tsx"
+    },
+    {
+      "route": "/minha-loja/pdv/nfce/[saleId]",
+      "section": "minha-loja",
+      "dynamic": true,
+      "hasShortcut": false,
+      "file": "src/app/minha-loja/pdv/nfce/[saleId]/page.tsx"
+    },
+    {
+      "route": "/minha-loja/pdv/notas",
+      "section": "minha-loja",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/minha-loja/pdv/notas/page.tsx"
+    },
+    {
+      "route": "/minha-loja/pdv/produtos-vendidos",
+      "section": "minha-loja",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/minha-loja/pdv/produtos-vendidos/page.tsx"
+    },
+    {
+      "route": "/minha-loja/pdv/recebimentos",
+      "section": "minha-loja",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/minha-loja/pdv/recebimentos/page.tsx"
+    },
+    {
+      "route": "/minha-loja/pdv/recebimentos-pix-confirmados",
+      "section": "minha-loja",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/minha-loja/pdv/recebimentos-pix-confirmados/page.tsx"
+    },
+    {
+      "route": "/minha-loja/pdv/recebimentos/historico",
+      "section": "minha-loja",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/minha-loja/pdv/recebimentos/historico/page.tsx"
+    },
+    {
+      "route": "/minha-loja/pdv/recebimentos/recibo/_id_deprecated",
+      "section": "minha-loja",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/minha-loja/pdv/recebimentos/recibo/_id_deprecated/page.tsx"
+    },
+    {
+      "route": "/minha-loja/pdv/recebimentos/recibo/[baixaId]",
+      "section": "minha-loja",
+      "dynamic": true,
+      "hasShortcut": false,
+      "file": "src/app/minha-loja/pdv/recebimentos/recibo/[baixaId]/page.tsx"
+    },
+    {
+      "route": "/minha-loja/pdv/recibo-devolucao/[returnId]",
+      "section": "minha-loja",
+      "dynamic": true,
+      "hasShortcut": true,
+      "file": "src/app/minha-loja/pdv/recibo-devolucao/[returnId]/page.tsx"
+    },
+    {
+      "route": "/minha-loja/pdv/recibo/[saleId]",
+      "section": "minha-loja",
+      "dynamic": true,
+      "hasShortcut": true,
+      "file": "src/app/minha-loja/pdv/recibo/[saleId]/page.tsx"
+    },
+    {
+      "route": "/minha-loja/pdv/vale-troca/[code]",
+      "section": "minha-loja",
+      "dynamic": true,
+      "hasShortcut": true,
+      "file": "src/app/minha-loja/pdv/vale-troca/[code]/page.tsx"
+    },
+    {
+      "route": "/minha-loja/ponto",
+      "section": "minha-loja",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/minha-loja/ponto/page.tsx"
+    },
+    {
+      "route": "/minha-loja/realinhamento",
+      "section": "minha-loja",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/minha-loja/realinhamento/page.tsx"
+    },
+    {
+      "route": "/minha-loja/recebimento",
+      "section": "minha-loja",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/minha-loja/recebimento/page.tsx"
+    },
+    {
+      "route": "/minha-loja/transferencia",
+      "section": "minha-loja",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/minha-loja/transferencia/page.tsx"
+    },
+    {
+      "route": "/minha-loja/triagem",
+      "section": "minha-loja",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/minha-loja/triagem/page.tsx"
+    },
+    {
+      "route": "/pedidos",
+      "section": "pedidos",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/pedidos/page.tsx"
+    },
+    {
+      "route": "/pedidos/[id]",
+      "section": "pedidos",
+      "dynamic": true,
+      "hasShortcut": true,
+      "file": "src/app/pedidos/[id]/page.tsx"
+    },
+    {
+      "route": "/pedidos/wc/[id]",
+      "section": "pedidos",
+      "dynamic": true,
+      "hasShortcut": true,
+      "file": "src/app/pedidos/wc/[id]/page.tsx"
+    },
+    {
+      "route": "/pix/[baixaId]",
+      "section": "pix",
+      "dynamic": true,
+      "hasShortcut": false,
+      "file": "src/app/pix/[baixaId]/page.tsx"
+    },
+    {
+      "route": "/produtos",
+      "section": "produtos",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/produtos/page.tsx"
+    },
+    {
+      "route": "/relatorios/giga",
+      "section": "relatorios",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/relatorios/giga/page.tsx"
+    },
+    {
+      "route": "/relatorios/vendedoras",
+      "section": "relatorios",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/relatorios/vendedoras/page.tsx"
+    },
+    {
+      "route": "/retaguarda",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/page.tsx"
+    },
+    {
+      "route": "/retaguarda/almoxarifado",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/almoxarifado/page.tsx"
+    },
+    {
+      "route": "/retaguarda/app-push",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/retaguarda/app-push/page.tsx"
+    },
+    {
+      "route": "/retaguarda/auditoria",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/retaguarda/auditoria/page.tsx"
+    },
+    {
+      "route": "/retaguarda/auditoria-master",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/auditoria-master/page.tsx"
+    },
+    {
+      "route": "/retaguarda/auditoria-ncm",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/auditoria-ncm/page.tsx"
+    },
+    {
+      "route": "/retaguarda/baixa-estoque",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/baixa-estoque/page.tsx"
+    },
+    {
+      "route": "/retaguarda/baixa-origem",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/baixa-origem/page.tsx"
+    },
+    {
+      "route": "/retaguarda/baixas-log",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/baixas-log/page.tsx"
+    },
+    {
+      "route": "/retaguarda/cadastro-produtos",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/cadastro-produtos/page.tsx"
+    },
+    {
+      "route": "/retaguarda/carne-config",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/retaguarda/carne-config/page.tsx"
+    },
+    {
+      "route": "/retaguarda/cashback-config",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/retaguarda/cashback-config/page.tsx"
+    },
+    {
+      "route": "/retaguarda/clientes-duplicados",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/retaguarda/clientes-duplicados/page.tsx"
+    },
+    {
+      "route": "/retaguarda/comissoes",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/comissoes/page.tsx"
+    },
+    {
+      "route": "/retaguarda/comissoes/cargos",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/comissoes/cargos/page.tsx"
+    },
+    {
+      "route": "/retaguarda/crediario",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/crediario/page.tsx"
+    },
+    {
+      "route": "/retaguarda/crediario-juros",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/retaguarda/crediario-juros/page.tsx"
+    },
+    {
+      "route": "/retaguarda/crediario/automatico",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/crediario/automatico/page.tsx"
+    },
+    {
+      "route": "/retaguarda/crediario/mensagens",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/crediario/mensagens/page.tsx"
+    },
+    {
+      "route": "/retaguarda/dashboard",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/dashboard/page.tsx"
+    },
+    {
+      "route": "/retaguarda/dashboard-estrategico",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/retaguarda/dashboard-estrategico/page.tsx"
+    },
+    {
+      "route": "/retaguarda/descontos-senhas",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/descontos-senhas/page.tsx"
+    },
+    {
+      "route": "/retaguarda/diagnostico-erp",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/diagnostico-erp/page.tsx"
+    },
+    {
+      "route": "/retaguarda/distribuicao-estoque",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/distribuicao-estoque/page.tsx"
+    },
+    {
+      "route": "/retaguarda/divergencias",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/divergencias/page.tsx"
+    },
+    {
+      "route": "/retaguarda/dm",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/dm/page.tsx"
+    },
+    {
+      "route": "/retaguarda/enviados-hoje",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/enviados-hoje/page.tsx"
+    },
+    {
+      "route": "/retaguarda/estoque",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/retaguarda/estoque/page.tsx"
+    },
+    {
+      "route": "/retaguarda/faturamento",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/faturamento/page.tsx"
+    },
+    {
+      "route": "/retaguarda/financeiro/transferencias",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/financeiro/transferencias/page.tsx"
+    },
+    {
+      "route": "/retaguarda/inbox",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/inbox/page.tsx"
+    },
+    {
+      "route": "/retaguarda/instagram",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/instagram/page.tsx"
+    },
+    {
+      "route": "/retaguarda/instagram-dashboard",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/instagram-dashboard/page.tsx"
+    },
+    {
+      "route": "/retaguarda/instagram-hub",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/instagram-hub/page.tsx"
+    },
+    {
+      "route": "/retaguarda/inteligencia-estoque",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/inteligencia-estoque/page.tsx"
+    },
+    {
+      "route": "/retaguarda/inteligencia-vendas",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/inteligencia-vendas/page.tsx"
+    },
+    {
+      "route": "/retaguarda/live",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/retaguarda/live/page.tsx"
+    },
+    {
+      "route": "/retaguarda/live-pro",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/live-pro/page.tsx"
+    },
+    {
+      "route": "/retaguarda/lojas",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/lojas/page.tsx"
+    },
+    {
+      "route": "/retaguarda/lu-config",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/lu-config/page.tsx"
+    },
+    {
+      "route": "/retaguarda/mapa-urls",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/mapa-urls/page.tsx"
+    },
+    {
+      "route": "/retaguarda/materiais",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/materiais/page.tsx"
+    },
+    {
+      "route": "/retaguarda/materiais/imprimir/[id]",
+      "section": "retaguarda",
+      "dynamic": true,
+      "hasShortcut": false,
+      "file": "src/app/retaguarda/materiais/imprimir/[id]/page.tsx"
+    },
+    {
+      "route": "/retaguarda/nfce-config",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/retaguarda/nfce-config/page.tsx"
+    },
+    {
+      "route": "/retaguarda/notificacoes",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/notificacoes/page.tsx"
+    },
+    {
+      "route": "/retaguarda/pagarme-config",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/retaguarda/pagarme-config/page.tsx"
+    },
+    {
+      "route": "/retaguarda/pagbank-config",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/retaguarda/pagbank-config/page.tsx"
+    },
+    {
+      "route": "/retaguarda/produtos-vendidos",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/produtos-vendidos/page.tsx"
+    },
+    {
+      "route": "/retaguarda/promissoria-config",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/retaguarda/promissoria-config/page.tsx"
+    },
+    {
+      "route": "/retaguarda/promocoes-config",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/promocoes-config/page.tsx"
+    },
+    {
+      "route": "/retaguarda/publicar-site",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/publicar-site/page.tsx"
+    },
+    {
+      "route": "/retaguarda/realinhamento",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/realinhamento/page.tsx"
+    },
+    {
+      "route": "/retaguarda/realinhamento/imprimir",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/retaguarda/realinhamento/imprimir/page.tsx"
+    },
+    {
+      "route": "/retaguarda/realinhamento/nao-encontrados",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/realinhamento/nao-encontrados/page.tsx"
+    },
+    {
+      "route": "/retaguarda/reconciliar-estoque",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/reconciliar-estoque/page.tsx"
+    },
+    {
+      "route": "/retaguarda/relatorio-fiscal",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/relatorio-fiscal/page.tsx"
+    },
+    {
+      "route": "/retaguarda/remessas",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/remessas/page.tsx"
+    },
+    {
+      "route": "/retaguarda/reprocessar-estoque",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/reprocessar-estoque/page.tsx"
+    },
+    {
+      "route": "/retaguarda/rh",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/rh/page.tsx"
+    },
+    {
+      "route": "/retaguarda/rh/banco-horas",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/rh/banco-horas/page.tsx"
+    },
+    {
+      "route": "/retaguarda/rh/espelho-ponto",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/rh/espelho-ponto/page.tsx"
+    },
+    {
+      "route": "/retaguarda/rh/face-enroll/[sellerId]",
+      "section": "retaguarda",
+      "dynamic": true,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/rh/face-enroll/[sellerId]/page.tsx"
+    },
+    {
+      "route": "/retaguarda/saidas-site",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/retaguarda/saidas-site/page.tsx"
+    },
+    {
+      "route": "/retaguarda/super-painel-caixas",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/super-painel-caixas/page.tsx"
+    },
+    {
+      "route": "/retaguarda/transferencias-rede-franquia",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/transferencias-rede-franquia/page.tsx"
+    },
+    {
+      "route": "/retaguarda/transferencias-report",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/transferencias-report/page.tsx"
+    },
+    {
+      "route": "/retaguarda/trocas-site",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/retaguarda/trocas-site/page.tsx"
+    },
+    {
+      "route": "/retaguarda/vales-troca",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/retaguarda/vales-troca/page.tsx"
+    },
+    {
+      "route": "/retaguarda/venda-certa",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/venda-certa/page.tsx"
+    },
+    {
+      "route": "/retaguarda/vendedoras",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/vendedoras/page.tsx"
+    },
+    {
+      "route": "/retaguarda/vendedoras-ativas",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/vendedoras-ativas/page.tsx"
+    },
+    {
+      "route": "/retaguarda/vendedoras-pdv",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/retaguarda/vendedoras-pdv/page.tsx"
+    },
+    {
+      "route": "/retaguarda/vendedoras/[id]",
+      "section": "retaguarda",
+      "dynamic": true,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/vendedoras/[id]/page.tsx"
+    },
+    {
+      "route": "/retaguarda/vendedoras/nova",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/vendedoras/nova/page.tsx"
+    },
+    {
+      "route": "/retaguarda/whatsapp",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/whatsapp/page.tsx"
+    },
+    {
+      "route": "/retaguarda/wincred-mirror",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/retaguarda/wincred-mirror/page.tsx"
+    },
+    {
+      "route": "/separacao",
+      "section": "separacao",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/separacao/page.tsx"
+    },
+    {
+      "route": "/separacao/imprimir/[wcId]",
+      "section": "separacao",
+      "dynamic": true,
+      "hasShortcut": false,
+      "file": "src/app/separacao/imprimir/[wcId]/page.tsx"
+    },
+    {
+      "route": "/sistema",
+      "section": "sistema",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/sistema/page.tsx"
+    },
+    {
+      "route": "/site",
+      "section": "site",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/site/page.tsx"
+    },
+    {
+      "route": "/site/trocas",
+      "section": "site",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/site/trocas/page.tsx"
+    },
+    {
+      "route": "/usuarios",
+      "section": "usuarios",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/usuarios/page.tsx"
+    },
+    {
+      "route": "/visao-geral",
+      "section": "visao-geral",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/visao-geral/page.tsx"
+    },
+    {
+      "route": "/vitrine",
+      "section": "vitrine",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/vitrine/page.tsx"
+    },
+    {
+      "route": "/vitrine/[slug]",
+      "section": "vitrine",
+      "dynamic": true,
+      "hasShortcut": true,
+      "file": "src/app/vitrine/[slug]/page.tsx"
+    }
+  ]
+}
