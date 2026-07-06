@@ -35,6 +35,8 @@ type Totals = {
   totalCrediario: number;
   totalSangrias: number;
   totalSuprimentos: number;
+  // Crediário recebido em dinheiro — já somado no dinheiroEsperado (entra na gaveta).
+  totalRecebimentosDinheiro?: number;
   dinheiroEsperado: number;
   qtdVendas: number;
 };
@@ -463,6 +465,12 @@ function OpenCashPanel({
               <span>+ Vendas em dinheiro</span>
               <span>R$ {fmt(totals.totalDinheiro)}</span>
             </div>
+            {(totals.totalRecebimentosDinheiro ?? 0) > 0 && (
+              <div className="flex justify-between">
+                <span>+ Crediário recebido (dinheiro)</span>
+                <span>R$ {fmt(totals.totalRecebimentosDinheiro || 0)}</span>
+              </div>
+            )}
             <div className="flex justify-between">
               <span>+ Suprimentos</span>
               <span>R$ {fmt(totals.totalSuprimentos)}</span>
