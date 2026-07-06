@@ -12,6 +12,7 @@ import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service
 import { CashService } from './cash.service';
 import { NfceService } from './nfce.service';
 import { PromoConfigService } from '../promo-config/promo-config.service';
+import { AccessPolicyService } from '../access-policy/access-policy.service';
 import { validateMinLevel } from '../auth/auth-levels.util';
 import * as crypto from 'crypto';
 
@@ -40,6 +41,7 @@ export class PdvService {
     private readonly cash: CashService,
     private readonly nfce: NfceService,
     private readonly promoConfig: PromoConfigService,
+    private readonly accessPolicy: AccessPolicyService,
   ) {}
 
   /**
@@ -1192,7 +1194,7 @@ export class PdvService {
         );
       }
       const pct = bruto > 0 ? (newDesconto / bruto) * 100 : 0;
-      this.requireDiscountAuth(pct, input.password, input.motivo);
+      await this.requireDiscountAuth(pct, input.password, input.motivo);
     }
 
     const newTag = excluindoPromo
@@ -1232,14 +1234,18 @@ export class PdvService {
    * setSaleDiscount(10) → economia total = 5+10 = 15, total = 85.
    */
   // MD-1: desconto avulso em faixas. % sobre o subtotal BRUTO.
-  //   0–7% livre · >7–10% senha CAIXA · >10% senha GERENTE + justificativa.
-  private requireDiscountAuth(pct: number, password?: string, motivo?: string) {
-    if (pct > 10 + 1e-9) {
+  //   0..livre = sem senha · >livre..caixa = senha CAIXA · >caixa = GERENTE + justificativa.
+  //   As faixas (livre/caixa) são configuráveis na tela /retaguarda/descontos-senhas.
+  private async requireDiscountAuth(pct: number, password?: string, motivo?: string) {
+    const { freeUpToPct, caixaUpToPct } = await this.accessPolicy.getThresholds();
+    if (pct > caixaUpToPct + 1e-9) {
       validateMinLevel(password, 'GERENTE'); // lança se senha < GERENTE
       if (!motivo || String(motivo).trim().length < 3) {
-        throw new BadRequestException('Justificativa obrigatória para desconto acima de 10%');
+        throw new BadRequestException(
+          `Justificativa obrigatória para desconto acima de ${caixaUpToPct}%`,
+        );
       }
-    } else if (pct > 7 + 1e-9) {
+    } else if (pct > freeUpToPct + 1e-9) {
       validateMinLevel(password, 'CAIXA'); // lança se senha < CAIXA
     }
   }
@@ -1263,7 +1269,7 @@ export class PdvService {
     // MD-1: senha por faixa, % sobre o subtotal BRUTO (preço cheio).
     const subtotalBruto = sale.items.reduce((s: number, i: any) => s + i.precoUnit * i.qty, 0);
     const pct = subtotalBruto > 0 ? (desconto / subtotalBruto) * 100 : 0;
-    this.requireDiscountAuth(pct, input.password, input.motivo);
+    await this.requireDiscountAuth(pct, input.password, input.motivo);
 
     // Soma dos itens líquidos (já com descontos individuais aplicados)
     const subtotalLiquido = sale.items.reduce((s: number, i: any) => s + (i.total || 0), 0);
