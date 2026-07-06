@@ -10,13 +10,14 @@
  * O @ vem pré-preenchido e TRAVADO (é a chave do carrinho da Live — não pode
  * ter typo). A cliente só confirma nome e digita o celular. Posta em
  * POST /public/cadastro-live (dedup por telefone/@, grava em Customer 'live').
+ *
+ * Estilo em Tailwind (styled-jsx não aplica de forma confiável no App Router /
+ * webview do Instagram — a v1 saiu "crua" em produção).
  */
 
 import { Suspense, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { api } from '@/lib/api';
-
-const GOLD = '#B8912B';
 
 function maskPhone(v: string): string {
   const d = v.replace(/\D/g, '').slice(0, 11);
@@ -37,10 +38,25 @@ function parseErr(e: any): string {
   return 'Não consegui enviar agora. Confira os dados e tente de novo.';
 }
 
+// Ignora placeholder não-resolvido do ManyChat (ex.: "{{IG_USERNAME}}") — se o
+// link vier mal configurado, tratamos como vazio em vez de mostrar o texto cru.
+function cleanParam(v: string | null): string {
+  const s = (v || '').trim();
+  if (!s || s.includes('{{') || s.includes('}}')) return '';
+  return s;
+}
+
+const inputCls =
+  'w-full box-border px-3.5 py-3.5 text-base rounded-xl bg-[#FCFBF7] text-[#2A2620] ' +
+  'border-[1.5px] border-[#E4DDCB] outline-none transition-colors ' +
+  'focus:border-[#B8912B] focus:ring-2 focus:ring-[#EBD9A6]';
+const labelCls = 'block mb-3.5';
+const labelSpanCls = 'block text-[13px] font-bold text-[#6B6456] mb-1.5';
+
 function CadastroForm() {
   const params = useSearchParams();
-  const igParam = (params.get('ig') || '').trim().replace(/^@/, '');
-  const nomeParam = (params.get('nome') || '').trim();
+  const igParam = cleanParam(params.get('ig')).replace(/^@/, '');
+  const nomeParam = cleanParam(params.get('nome'));
   const token = (params.get('t') || '').trim();
 
   const [nome, setNome] = useState('');
@@ -50,13 +66,12 @@ function CadastroForm() {
   const [done, setDone] = useState<{ name: string } | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
-  // Pré-preenche com o que veio do ManyChat
   useEffect(() => {
     if (nomeParam) setNome(nomeParam);
     if (igParam) setIg(igParam);
   }, [nomeParam, igParam]);
 
-  const igLocked = !!igParam; // veio do ManyChat → não deixa editar
+  const igLocked = !!igParam;
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -80,32 +95,38 @@ function CadastroForm() {
 
   if (done) {
     return (
-      <div className="card success">
-        <div className="check">✓</div>
-        <h1>Tudo certo, {done.name.split(' ')[0]}! 💜</h1>
-        <p>Seu cadastro na live foi feito.</p>
-        <p className="big">Agora volta pra live e comenta o <b>número da peça</b> que você quer.</p>
-        <div className="tag">A gente já te encontra pelo seu @ 😉</div>
+      <div className="w-full max-w-[420px] bg-white border border-[#EDE7D6] rounded-3xl p-6 text-center shadow-[0_10px_30px_rgba(140,115,37,0.08)]">
+        <div className="w-[68px] h-[68px] mx-auto mb-4 rounded-full bg-[#FBF6E6] text-[#B8912B] text-4xl font-extrabold flex items-center justify-center">✓</div>
+        <h1 className="text-[23px] font-extrabold text-[#2A2620]">Tudo certo, {done.name.split(' ')[0]}! 💜</h1>
+        <p className="text-[#7A7264] text-[15px] mt-1">Seu cadastro na live foi feito.</p>
+        <p className="text-[17px] text-[#2A2620] mt-3 leading-relaxed">Agora volta pra live e comenta o <b>número da peça</b> que você quer.</p>
+        <div className="mt-4 bg-[#FBF6E6] border border-[#ECD9A0] rounded-xl p-3 text-sm text-[#8C7325] font-semibold">A gente já te encontra pelo seu @ 😉</div>
       </div>
     );
   }
 
   return (
-    <form className="card" onSubmit={submit}>
-      <div className="brand">Lurd&apos;s <span>Plus Size</span></div>
-      <h1>Cadastro da Live</h1>
-      <p className="sub">Preenche rapidinho pra garantir seu carrinho 💜</p>
+    <form
+      onSubmit={submit}
+      className="w-full max-w-[420px] bg-white border border-[#EDE7D6] rounded-3xl p-6 shadow-[0_10px_30px_rgba(140,115,37,0.08)]"
+    >
+      <div className="text-[13px] font-extrabold tracking-wide text-[#B8912B] uppercase mb-3">
+        Lurd&apos;s <span className="text-[#C9A94E] font-semibold">Plus Size</span>
+      </div>
+      <h1 className="text-2xl font-extrabold text-[#2A2620] mb-1">Cadastro da Live</h1>
+      <p className="text-[#7A7264] text-[15px] mb-5">Preenche rapidinho pra garantir seu carrinho 💜</p>
 
       {igLocked && (
-        <div className="iglock">
-          <span className="ig">@{ig}</span>
-          <span className="note">confirmado do seu Instagram</span>
+        <div className="flex items-center gap-2.5 bg-[#FBF6E6] border border-[#ECD9A0] rounded-xl px-3.5 py-2.5 mb-4">
+          <span className="font-extrabold text-[#8C7325] text-base">@{ig}</span>
+          <span className="text-xs text-[#A08A4E]">confirmado do seu Instagram</span>
         </div>
       )}
 
-      <label className="field">
-        <span>Seu nome</span>
+      <label className={labelCls}>
+        <span className={labelSpanCls}>Seu nome</span>
         <input
+          className={inputCls}
           value={nome}
           onChange={(e) => setNome(e.target.value)}
           placeholder="Nome completo"
@@ -115,9 +136,10 @@ function CadastroForm() {
       </label>
 
       {!igLocked && (
-        <label className="field">
-          <span>Seu @ do Instagram</span>
+        <label className={labelCls}>
+          <span className={labelSpanCls}>Seu @ do Instagram</span>
           <input
+            className={inputCls}
             value={ig}
             onChange={(e) => setIg(e.target.value.replace(/^@/, ''))}
             placeholder="seu_usuario"
@@ -126,9 +148,10 @@ function CadastroForm() {
         </label>
       )}
 
-      <label className="field">
-        <span>Seu celular (WhatsApp)</span>
+      <label className={labelCls}>
+        <span className={labelSpanCls}>Seu celular (WhatsApp)</span>
         <input
+          className={inputCls}
           value={phone}
           onChange={(e) => setPhone(maskPhone(e.target.value))}
           placeholder="(11) 91234-5678"
@@ -137,112 +160,31 @@ function CadastroForm() {
         />
       </label>
 
-      {err && <div className="err">{err}</div>}
+      {err && (
+        <div className="bg-[#FDECEC] border border-[#F3C0C0] text-[#9B2C2C] rounded-lg px-3 py-2.5 text-sm mb-3.5">
+          {err}
+        </div>
+      )}
 
-      <button type="submit" disabled={sending}>
+      <button
+        type="submit"
+        disabled={sending}
+        className="w-full py-3.5 text-[17px] font-extrabold text-white bg-[#B8912B] rounded-xl shadow-[0_4px_14px_rgba(184,145,43,0.25)] hover:bg-[#A07F22] active:translate-y-px disabled:opacity-60 transition-colors"
+      >
         {sending ? 'Enviando…' : 'Quero participar 💜'}
       </button>
 
-      <p className="fine">Usamos seus dados só pra te atender na live e no seu pedido.</p>
+      <p className="text-center text-xs text-[#A69E8C] mt-3.5">Usamos seus dados só pra te atender na live e no seu pedido.</p>
     </form>
   );
 }
 
 export default function CadastroLivePage() {
   return (
-    <div className="wrap">
-      <Suspense fallback={<div className="card"><p className="sub">Carregando…</p></div>}>
+    <div className="min-h-screen bg-[#FAFAF7] flex items-start justify-center px-4 pt-[6vh] pb-12">
+      <Suspense fallback={<div className="text-[#7A7264] text-sm mt-10">Carregando…</div>}>
         <CadastroForm />
       </Suspense>
-
-      <style jsx global>{`
-        html, body { margin: 0; background: #FAFAF7; }
-      `}</style>
-      <style jsx>{`
-        .wrap {
-          min-height: 100vh;
-          display: flex;
-          align-items: flex-start;
-          justify-content: center;
-          padding: 28px 16px 48px;
-          font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-          color: #2A2620;
-        }
-        .card {
-          width: 100%;
-          max-width: 420px;
-          background: #fff;
-          border: 1px solid #EDE7D6;
-          border-radius: 20px;
-          padding: 26px 22px 22px;
-          box-shadow: 0 10px 30px rgba(140, 115, 37, 0.08);
-          margin-top: 4vh;
-        }
-        .brand {
-          font-size: 13px;
-          font-weight: 800;
-          letter-spacing: 0.04em;
-          color: ${GOLD};
-          text-transform: uppercase;
-          margin-bottom: 14px;
-        }
-        .brand span { color: #C9A94E; font-weight: 600; }
-        h1 { font-size: 24px; font-weight: 800; margin: 0 0 4px; letter-spacing: -0.01em; }
-        .sub { margin: 0 0 18px; color: #7A7264; font-size: 15px; }
-        .iglock {
-          display: flex; align-items: center; gap: 10px;
-          background: #FBF6E6; border: 1px solid #ECD9A0;
-          border-radius: 12px; padding: 10px 14px; margin-bottom: 16px;
-        }
-        .iglock .ig { font-weight: 800; color: #8C7325; font-size: 16px; }
-        .iglock .note { font-size: 12px; color: #A08A4E; }
-        .field { display: block; margin-bottom: 14px; }
-        .field span {
-          display: block; font-size: 13px; font-weight: 700;
-          color: #6B6456; margin-bottom: 6px;
-        }
-        .field input {
-          width: 100%; box-sizing: border-box;
-          padding: 14px 14px; font-size: 16px;
-          border: 1.5px solid #E4DDCB; border-radius: 12px;
-          background: #FCFBF7; color: #2A2620;
-          outline: none; transition: border-color .15s, box-shadow .15s;
-        }
-        .field input:focus {
-          border-color: ${GOLD};
-          box-shadow: 0 0 0 3px rgba(184, 145, 43, 0.15);
-        }
-        .err {
-          background: #FDECEC; border: 1px solid #F3C0C0; color: #9B2C2C;
-          border-radius: 10px; padding: 10px 12px; font-size: 14px; margin-bottom: 14px;
-        }
-        button {
-          width: 100%; padding: 15px; font-size: 17px; font-weight: 800;
-          color: #fff; background: ${GOLD}; border: none; border-radius: 12px;
-          cursor: pointer; transition: background .15s, transform .05s;
-          box-shadow: 0 4px 14px rgba(184, 145, 43, 0.25);
-        }
-        button:hover:not(:disabled) { background: #A07F22; }
-        button:active:not(:disabled) { transform: translateY(1px); }
-        button:disabled { opacity: .6; cursor: default; }
-        .fine { text-align: center; font-size: 12px; color: #A69E8C; margin: 14px 0 0; }
-
-        /* sucesso */
-        .success { text-align: center; }
-        .success .check {
-          width: 68px; height: 68px; margin: 6px auto 14px;
-          border-radius: 50%; background: #FBF6E6; color: ${GOLD};
-          font-size: 38px; font-weight: 800;
-          display: flex; align-items: center; justify-content: center;
-        }
-        .success h1 { font-size: 23px; }
-        .success p { color: #7A7264; font-size: 15px; margin: 4px 0; }
-        .success .big { font-size: 17px; color: #2A2620; margin-top: 12px; line-height: 1.5; }
-        .success .tag {
-          margin-top: 18px; background: #FBF6E6; border: 1px solid #ECD9A0;
-          border-radius: 12px; padding: 12px; font-size: 14px; color: #8C7325; font-weight: 600;
-        }
-      `}</style>
     </div>
   );
 }
