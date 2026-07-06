@@ -65,7 +65,7 @@ export class StoresController {
   @Post('by-code/:code/pix-provider')
   async setPixProvider(
     @Param('code') code: string,
-    @Body() body: { provider: 'auto' | 'pagbank' | 'pagarme' },
+    @Body() body: { provider: 'auto' | 'pagbank' | 'pagarme' | 'externo' },
   ) {
     return this.stores.setPixProvider(code, body?.provider);
   }

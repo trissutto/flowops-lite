@@ -4043,6 +4043,28 @@ function PaymentModal({
   const [pixLoading, setPixLoading] = useState(false);
   const [pixPaid, setPixPaid] = useState(false);  // setado quando PagBank webhook confirma
   const [pixFallbackReason, setPixFallbackReason] = useState<string | null>(null);
+  // Config de PIX da loja. 'externo' = franquia SEM gateway (ex.: sem chave
+  // Pagar.me): o PIX vira só "informar pagamento" — finaliza direto como
+  // dinheiro/cartão, sem gerar QR nem esperar webhook. `pixProviderReady`
+  // evita a corrida do auto-gerar (não dispara QR antes de saber que é externo).
+  const [storePixProvider, setStorePixProvider] =
+    useState<'auto' | 'pagbank' | 'pagarme' | 'externo'>('auto');
+  const [pixProviderReady, setPixProviderReady] = useState(false);
+  const pixExterno = storePixProvider === 'externo';
+  useEffect(() => {
+    if (!storeCode) { setPixProviderReady(true); return; }
+    let alive = true;
+    (async () => {
+      try {
+        const cfg = await api<{ provider: 'auto' | 'pagbank' | 'pagarme' | 'externo' }>(
+          `/stores/by-code/${storeCode}/pix-provider`,
+        );
+        if (alive && cfg?.provider) setStorePixProvider(cfg.provider);
+      } catch { /* mantém 'auto' */ }
+      finally { if (alive) setPixProviderReady(true); }
+    })();
+    return () => { alive = false; };
+  }, [storeCode]);
   const [copyMsg, setCopyMsg] = useState(false);
   // Valor com que o QR ATUAL foi gerado — base da regeneração automática
   // quando a vendedora altera o campo "Quanto cobrar com PIX?".
@@ -4141,7 +4163,9 @@ function PaymentModal({
     // webhook/polling) — não deixa fechar venda "no escuro". Provider local
     // (chave celular) não tem webhook → vendedora confirma manualmente via
     // botão "Marcar como pago" (linha ~4063).
-    if (selected === 'pix') {
+    // Loja 'externo' (franquia sem gateway): PIX não gera QR — finaliza direto
+    // como dinheiro/cartão. Pula todas as travas de QR/webhook.
+    if (selected === 'pix' && !pixExterno) {
       if (!pixCharge) {
         toast(
           'warning',
@@ -4192,9 +4216,13 @@ function PaymentModal({
       details.troco = trocoP;
     }
     if (selected === 'pix') {
-      // pixCharge é GARANTIDO existir aqui — bloqueio acima impede passar sem.
-      // (Mantém else defensivo apenas pra log; nunca deveria executar.)
-      if (pixCharge) {
+      if (pixExterno) {
+        // Loja sem gateway: cliente pagou PIX na maquininha própria da loja.
+        // Registra como PIX externo (entra no relatório como PIX, marcado).
+        details.pixProvider = 'externo';
+        details.pixExterno = true;
+      } else if (pixCharge) {
+        // pixCharge é GARANTIDO existir aqui — bloqueio acima impede passar sem.
         details.pixTxid = pixCharge.txid;
         details.pixChave = pixCharge.chave;
         details.pixProvider = pixCharge.provider;
@@ -4329,6 +4357,11 @@ function PaymentModal({
   // Em PagBank, o webhook confirma sozinho e a vendedora não precisa apertar nada —
   // o polling abaixo detecta o status=paid e finaliza automático.
   const generatePix = async (pixValor?: number) => {
+    // Loja com PIX externo (franquia sem gateway) NÃO gera cobrança nem QR —
+    // o PIX é só "informar pagamento" e finaliza direto. Choke point único:
+    // protege contra QUALQUER caminho que chame generatePix (auto-gerar,
+    // clique no método, regeração por valor).
+    if (pixExterno) return;
     setPixLoading(true);
     setPixPaid(false);
     setPixFallbackReason(null);
@@ -4486,11 +4519,16 @@ function PaymentModal({
   useEffect(() => {
     if (autoPixTriggeredRef.current) return;
     if (selected !== 'pix') return;
+    // Espera saber o provider da loja antes de auto-gerar — senão, no instante
+    // de abertura (antes do fetch resolver), geraria QR de gateway numa loja
+    // que é 'externo'. Loja externo nunca auto-gera.
+    if (!pixProviderReady) return;
+    if (pixExterno) return;
     if (pixCharge || pixLoading) return;
     autoPixTriggeredRef.current = true;
     generatePix();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected]);
+  }, [selected, pixProviderReady]);
 
   // ── REGENERAÇÃO AUTOMÁTICA DO QR ──
   // Vendedora altera o "Quanto cobrar com PIX?" com QR já na tela → espera
@@ -5704,7 +5742,15 @@ function PaymentModal({
         {/* Painel PIX — QR Code com valor */}
         {selected === 'pix' && (
           <div className="space-y-2 pt-2 border-t">
-            {pixLoading ? (
+            {pixExterno ? (
+              <div className="rounded-lg border-2 border-sky-200 bg-sky-50 p-4 text-center space-y-1">
+                <div className="text-sm font-bold text-sky-900">PIX externo — maquininha da loja</div>
+                <div className="text-[12px] text-sky-800">
+                  Cobre o PIX na sua maquininha/app do banco. Ao confirmar, a venda
+                  finaliza direto — o sistema só registra que foi PIX (não gera QR).
+                </div>
+              </div>
+            ) : pixLoading ? (
               <div className="text-center py-8">
                 <Loader2 className="w-8 h-8 animate-spin inline-block text-emerald-600 mb-2" />
                 <div className="text-sm text-slate-500">Gerando QR Code PIX...</div>

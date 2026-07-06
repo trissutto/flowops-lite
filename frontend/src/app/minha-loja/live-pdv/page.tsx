@@ -240,6 +240,26 @@ export default function LivePdvPage() {
     refreshCarts();
   }, [refreshCarts]);
 
+  // Loja da sessão usa PIX externo? (franquia sem gateway Pagar.me/PagBank)
+  // → esconde "Cobrar PIX/Link" e mostra confirmação manual "pagou por fora".
+  // Descobre a loja pela sessão e consulta o pixProvider. Erro → não-externo.
+  const [pixExterno, setPixExterno] = useState(false);
+  useEffect(() => {
+    if (!sessionId) { setPixExterno(false); return; }
+    let alive = true;
+    (async () => {
+      try {
+        const sessions = await api<any[]>('/live-pdv/sessions');
+        const s = (sessions || []).find((x: any) => x.id === sessionId);
+        const code = s?.liveStoreCode;
+        if (!code) return;
+        const cfg = await api<{ provider?: string }>(`/stores/by-code/${code}/pix-provider`);
+        if (alive) setPixExterno(cfg?.provider === 'externo');
+      } catch { /* mantém não-externo */ }
+    })();
+    return () => { alive = false; };
+  }, [sessionId]);
+
   // Ref do carrinho aberto — pros handlers de socket enxergarem o atual sem
   // re-registrar listener a cada mudança de carrinho.
   const cartOpenRef = useRef<Cart | null>(null);
@@ -933,6 +953,31 @@ export default function LivePdvPage() {
     }
   }
 
+  // Confirmação MANUAL pra loja com PIX externo (franquia sem gateway): a
+  // cliente pagou o PIX por fora (chave da própria loja) e a operadora marca
+  // pago → dispara a separação. Não consulta gateway nenhum.
+  async function confirmExternalPay() {
+    if (!cart) return;
+    if (!window.confirm('Confirmar que a cliente PAGOU o PIX (por fora)?\n\nIsso marca o carrinho como pago e envia pra separação.')) return;
+    setConfirming(true);
+    try {
+      const res = await api<{ paid: boolean; cart: Cart }>(
+        `/live-pdv/carts/${cart.id}/pay-external`,
+        { method: 'POST' },
+      );
+      if (res.paid) {
+        setPaid(true);
+        setCart(res.cart);
+        setQr(null);
+        await refreshCarts();
+      }
+    } catch (e: any) {
+      alert('Erro ao confirmar: ' + (e?.message || e));
+    } finally {
+      setConfirming(false);
+    }
+  }
+
   // (REMOVIDO) O poll de FUNDO das cobranças pendentes foi retirado: usava
   // setInterval a cada 6s chamando o PagBank (lento); quando um ciclo demorava
   // mais que 6s, os ciclos EMPILHAVAM e multiplicavam sozinhos, inundando o
@@ -1453,6 +1498,8 @@ export default function LivePdvPage() {
               onContinue={continueAttending}
               onConfirmPayment={confirmPayment}
               confirming={confirming}
+              pixExterno={pixExterno}
+              onConfirmExternal={confirmExternalPay}
             />
 
             {/* Clientes da live — na lateral pra não ser empurrada pela grade */}
@@ -1635,6 +1682,8 @@ function CartPanel({
   onContinue,
   onConfirmPayment,
   confirming,
+  pixExterno,
+  onConfirmExternal,
 }: {
   cart: Cart | null;
   activeCustomer: ActiveCustomer | null;
@@ -1651,6 +1700,8 @@ function CartPanel({
   onContinue: () => void;
   onConfirmPayment: () => void;
   confirming: boolean;
+  pixExterno: boolean;
+  onConfirmExternal: () => void;
 }) {
   return (
     <div className="lg:sticky lg:top-16 lg:h-fit">
@@ -1861,23 +1912,41 @@ function CartPanel({
             ) : (
               cart &&
               cart.items.some((i) => i.status === 'reserved') && (
-                <div className="mt-3 space-y-2">
-                  <button
-                    onClick={onChargePix}
-                    disabled={paying}
-                    className="flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 py-3 font-bold text-white hover:bg-emerald-700 disabled:opacity-50"
-                  >
-                    {paying ? <Loader2 className="h-5 w-5 animate-spin" /> : <QrCode className="h-5 w-5" />}
-                    Cobrar PIX ({brl(cart.totalCents)})
-                  </button>
-                  <button
-                    onClick={onChargeLink}
-                    disabled={paying}
-                    className="flex w-full items-center justify-center gap-2 rounded-lg border border-emerald-600 py-2.5 font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
-                  >
-                    <Link2 className="h-4 w-4" /> Link de pagamento
-                  </button>
-                </div>
+                pixExterno ? (
+                  // Loja sem gateway: PIX é por fora (chave da própria loja).
+                  // A operadora manda o PIX como quiser e marca pago aqui.
+                  <div className="mt-3 space-y-2">
+                    <div className="rounded-lg border border-sky-200 bg-sky-50 p-2.5 text-center text-[12px] text-sky-800">
+                      PIX externo — mande sua chave pra cliente e marque pago quando cair.
+                    </div>
+                    <button
+                      onClick={onConfirmExternal}
+                      disabled={confirming}
+                      className="flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 py-3 font-bold text-white hover:bg-emerald-700 disabled:opacity-50"
+                    >
+                      {confirming ? <Loader2 className="h-5 w-5 animate-spin" /> : <Check className="h-5 w-5" />}
+                      Cliente pagou? Confirmar ({brl(cart.totalCents)})
+                    </button>
+                  </div>
+                ) : (
+                  <div className="mt-3 space-y-2">
+                    <button
+                      onClick={onChargePix}
+                      disabled={paying}
+                      className="flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 py-3 font-bold text-white hover:bg-emerald-700 disabled:opacity-50"
+                    >
+                      {paying ? <Loader2 className="h-5 w-5 animate-spin" /> : <QrCode className="h-5 w-5" />}
+                      Cobrar PIX ({brl(cart.totalCents)})
+                    </button>
+                    <button
+                      onClick={onChargeLink}
+                      disabled={paying}
+                      className="flex w-full items-center justify-center gap-2 rounded-lg border border-emerald-600 py-2.5 font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+                    >
+                      <Link2 className="h-4 w-4" /> Link de pagamento
+                    </button>
+                  </div>
+                )
               )
             )}
           </div>

@@ -40,8 +40,14 @@ export interface StoreInput {
    * Gateway PIX da loja: 'auto' (default — tenta PagBank, fallback Pagar.me),
    * 'pagbank' (forca PagBank), 'pagarme' (forca Pagar.me).
    * Em todos: cai pro PIX local se gateway falhar.
+   *
+   * 'externo' = loja SEM integração de gateway (ex.: franquias sem chave
+   * Pagar.me). O PIX vira só "informar pagamento": no PDV finaliza direto como
+   * dinheiro/cartão (cliente paga na maquininha própria da loja); na Live o
+   * carrinho é confirmado manualmente (POST /live-pdv/carts/:id/pay-external).
+   * NUNCA chama Pagar.me/PagBank.
    */
-  pixProvider?: 'auto' | 'pagbank' | 'pagarme';
+  pixProvider?: 'auto' | 'pagbank' | 'pagarme' | 'externo';
 }
 
 @Injectable()
@@ -56,13 +62,15 @@ export class StoresService {
    * Retorna config do gateway PIX da loja. Default 'auto' se nunca configurada.
    * Usada pelo PDV antes de gerar QR Code pra escolher qual gateway tentar.
    */
-  async getPixProvider(code: string): Promise<{ provider: 'auto' | 'pagbank' | 'pagarme' }> {
+  async getPixProvider(
+    code: string,
+  ): Promise<{ provider: 'auto' | 'pagbank' | 'pagarme' | 'externo' }> {
     const store = await this.prisma.store.findUnique({
       where: { code },
       select: { pixProvider: true } as any,
     });
     const p = (store as any)?.pixProvider || 'auto';
-    if (p === 'pagbank' || p === 'pagarme') return { provider: p };
+    if (p === 'pagbank' || p === 'pagarme' || p === 'externo') return { provider: p };
     return { provider: 'auto' };
   }
 
@@ -72,9 +80,9 @@ export class StoresService {
    */
   async setPixProvider(
     code: string,
-    provider: 'auto' | 'pagbank' | 'pagarme',
-  ): Promise<{ provider: 'auto' | 'pagbank' | 'pagarme' }> {
-    const p = ['auto', 'pagbank', 'pagarme'].includes(provider) ? provider : 'auto';
+    provider: 'auto' | 'pagbank' | 'pagarme' | 'externo',
+  ): Promise<{ provider: 'auto' | 'pagbank' | 'pagarme' | 'externo' }> {
+    const p = ['auto', 'pagbank', 'pagarme', 'externo'].includes(provider) ? provider : 'auto';
     await this.prisma.store.update({
       where: { code },
       data: { pixProvider: p } as any,
@@ -216,7 +224,7 @@ export class StoresService {
           ? Math.max(0, Math.min(200, Number(data.consolidationScore) || 50))
           : undefined,
         isOutlet: data.isOutlet !== undefined ? !!data.isOutlet : undefined,
-        pixProvider: data.pixProvider && ['auto', 'pagbank', 'pagarme'].includes(data.pixProvider)
+        pixProvider: data.pixProvider && ['auto', 'pagbank', 'pagarme', 'externo'].includes(data.pixProvider)
           ? data.pixProvider
           : undefined,
       } as any,
