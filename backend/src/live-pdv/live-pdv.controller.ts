@@ -216,6 +216,13 @@ export class LivePdvController {
     return this.svc.startPaymentLink(cartId);
   }
 
+  // Confirmação manual pra lojas com PIX externo (franquias sem gateway):
+  // a cliente pagou por fora e a operadora marca pago → dispara a separação.
+  @Post('carts/:cartId/pay-external')
+  payExternal(@Param('cartId') cartId: string) {
+    return this.svc.confirmExternalPayment(cartId);
+  }
+
   @Get('carts/:cartId/payment-status')
   checkPayment(@Param('cartId') cartId: string) {
     return this.svc.checkPayment(cartId);

@@ -1285,6 +1285,7 @@ export class LivePdvService {
     const fresh = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
     const valor = (fresh.totalCents || 0) / 100;
     if (valor <= 0) throw new BadRequestException('Total inválido');
+    await this.assertGatewayAllowed(session.liveStoreCode);
 
     // PIX da Live via PAGBANK (gateway oficial da loja). Reusa o campo
     // pagarmeOrderId do carrinho pra guardar o pagbankOrderId (é só um id de
@@ -1338,6 +1339,7 @@ export class LivePdvService {
     const fresh = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
     const valor = (fresh.totalCents || 0) / 100;
     if (valor <= 0) throw new BadRequestException('Total inválido');
+    await this.assertGatewayAllowed(session.liveStoreCode);
 
     const link = await this.pagarme.createCheckoutLink({
       saleId: cartId,
@@ -1367,6 +1369,61 @@ export class LivePdvService {
       expiresAt: link.expiresAt,
       valor,
     };
+  }
+
+  /**
+   * Lojas com pixProvider='externo' (ex.: franquias sem chave Pagar.me) NÃO
+   * geram cobrança de gateway. Bloqueia startPayment/startPaymentLink com uma
+   * mensagem clara e manda usar a confirmação manual (pay-external).
+   */
+  private async assertGatewayAllowed(storeCode: string): Promise<void> {
+    const store = await (this.prisma as any).store.findUnique({
+      where: { code: storeCode },
+      select: { pixProvider: true },
+    });
+    if ((store as any)?.pixProvider === 'externo') {
+      throw new BadRequestException(
+        'Esta loja usa PIX externo (maquininha própria) — o sistema não gera QR. ' +
+          'Confirme o pagamento manualmente quando a cliente pagar.',
+      );
+    }
+  }
+
+  /**
+   * Confirmação MANUAL de pagamento pra lojas com pixProvider='externo'
+   * (franquias sem gateway). A cliente pagou o PIX por fora (chave da própria
+   * loja) e a operadora confirma na mão → marca pago e dispara a separação.
+   * NÃO consulta gateway nenhum.
+   *
+   * Guard: só permitido em loja 'externo'. Numa loja COM gateway isso seria
+   * marcar pago "no escuro" — lá a confirmação tem que vir do PagBank/Pagar.me.
+   */
+  async confirmExternalPayment(cartId: string) {
+    const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
+    if (!cart) throw new NotFoundException('Carrinho não encontrado');
+    const session = await this.getSession(cart.sessionId);
+    const store = await (this.prisma as any).store.findUnique({
+      where: { code: session.liveStoreCode },
+      select: { pixProvider: true },
+    });
+    if ((store as any)?.pixProvider !== 'externo') {
+      throw new BadRequestException(
+        'Confirmação manual só vale em loja com PIX externo. Esta loja tem gateway — ' +
+          'a confirmação tem que vir do pagamento real.',
+      );
+    }
+    const items = await (this.prisma as any).livePdvItem.findMany({
+      where: { cartId, status: 'reserved' },
+    });
+    if (!items.length) throw new BadRequestException('Carrinho sem itens reservados');
+    // Marca o método pra relatório e dispara o MESMO pipeline pós-pago do
+    // gateway (onCartPaid → separação por loja de origem + socket).
+    await (this.prisma as any).livePdvCart.update({
+      where: { id: cartId },
+      data: { paymentMethod: 'externo' },
+    });
+    const paidCart = await this.onCartPaid(cartId);
+    return { paid: true, cart: paidCart };
   }
 
   /**
