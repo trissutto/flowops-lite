@@ -254,7 +254,20 @@ function SeparacaoPageInner() {
       next['separacao']   = r.byStatus['separacao']?.total ?? 0;
       next['em-transito'] = r.byStatus['shipped']?.total ?? 0;
       next['completed']   = r.byStatus['completed']?.total ?? 0;
-      setTabCounts(next);
+      // merge (não substitui) pra não apagar o contador de carrinhos,
+      // que vem de outro endpoint e pode chegar depois
+      setTabCounts((prev) => ({ ...prev, ...next }));
+    } catch { /* silencioso */ }
+    // Carrinhos abandonados vêm do plugin WP (endpoint próprio), não do
+    // /orders/wc/counts. Badge = abandonados nos últimos 7 dias.
+    try {
+      const since = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+      const s = await api<any>(`/abandoned-carts/stats?since=${since}&_t=${Date.now()}`);
+      // stats pode vir PLANO (abandoned) ou ANINHADO (by_status.abandoned.qty)
+      const raw = (s as any)?.stats || s || {};
+      const by = raw.by_status || {};
+      const abandoned = Number(raw.abandoned ?? by.abandoned?.qty ?? by.abandoned?.count ?? 0) || 0;
+      setTabCounts((prev) => ({ ...prev, carrinhos: abandoned }));
     } catch { /* silencioso */ }
   }
   useEffect(() => {
@@ -1724,6 +1737,12 @@ type CarrinhoAB = {
   time?: string | null;
   unsubscribed?: number | boolean;
   items_count?: number;
+  // Origem do registro: undefined = plugin CartFlows; 'woocommerce' = pedido
+  // iniciado-sem-pagar trazido pelo fallback WC pra preencher gaps de captura.
+  source?: string;
+  // Pedido WC vinculado (quando o CartFlows registrou que o carrinho virou
+  // pedido). Usado pra deduplicar contra os itens do fallback WooCommerce.
+  order_id?: number | null;
 };
 
 type StatsAB = {
@@ -1762,6 +1781,9 @@ function CarrinhosTab() {
   const [lastFetch, setLastFetch] = useState<Date | null>(null);
   // Aviso quando os dados vêm do fallback WooCommerce (plugin WP fora do ar).
   const [warning, setWarning] = useState<string | null>(null);
+  // Quantos itens foram trazidos do WooCommerce pra preencher gaps de captura
+  // do plugin (pedidos iniciados-sem-pagar que o CartFlows não registrou).
+  const [wcFill, setWcFill] = useState(0);
   // Auto-refresh a cada 60s pra capturar carrinhos novos do site
   useEffect(() => {
     const t = setInterval(() => { load(); }, 60000);
@@ -1772,6 +1794,12 @@ function CarrinhosTab() {
   async function openCart(c: CarrinhoAB) {
     setSelected(c);
     setDetail(null);
+    // Itens do WooCommerce (preenchimento de gap) não existem no plugin
+    // CartFlows, então não têm /full — buscar daria 404. Mostra só o resumo.
+    if (c.source === 'woocommerce') {
+      setDetailLoading(false);
+      return;
+    }
     setDetailLoading(true);
     try {
       const d = await api<any>(`/abandoned-carts/${c.id}/full`);
@@ -1795,8 +1823,41 @@ function CarrinhosTab() {
       if (search) qsList.set('search', search);
       // Cache-bust pra forcar request fresh (Vercel/CDN/browser cache)
       qsList.set('_t', String(Date.now()));
+
+      // Busca TODAS as páginas. O plugin do WP limita a 200 carrinhos por
+      // página; num período de 90 dias há centenas (ex.: 463 abandonados).
+      // Antes só a página 1 era carregada → os 263+ carrinhos restantes (os
+      // mais ANTIGOS, no fim da ordenação por data) nunca apareciam na lista,
+      // mesmo o card de KPI mostrando o total cheio.
+      const fetchAllCarts = async (): Promise<ListResp> => {
+        const first = await api<ListResp>(`/abandoned-carts?${qsList}`);
+        const acc: CarrinhoAB[] = [
+          ...(((first as any).items || (first as any).rows || []) as CarrinhoAB[]),
+        ];
+        const totalPages = Number((first as any).total_pages || 1);
+        // Só pagina o plugin real; o fallback WooCommerce já é um proxy parcial
+        // (1 request por status) e não segue a mesma paginação por offset.
+        const isFallback =
+          (first as any).source === 'woocommerce-fallback' ||
+          !!(first as any).pluginError;
+        if (!isFallback && totalPages > 1) {
+          const MAX_PAGES = 20; // teto de segurança (~4.000 carrinhos)
+          for (let p = 2; p <= Math.min(totalPages, MAX_PAGES); p++) {
+            const qs = new URLSearchParams(qsList);
+            qs.set('page', String(p));
+            qs.set('_t', String(Date.now()));
+            try {
+              const r = await api<ListResp>(`/abandoned-carts?${qs}`);
+              const arr = ((r as any).items || (r as any).rows || []) as CarrinhoAB[];
+              if (Array.isArray(arr)) acc.push(...arr);
+            } catch { /* uma página falhou — segue com o que já veio */ }
+          }
+        }
+        return { ...first, items: acc };
+      };
+
       const [listResp, statsResp] = await Promise.all([
-        api<ListResp>(`/abandoned-carts?${qsList}`).catch((e) => ({ ok: false, error: e?.message } as ListResp)),
+        fetchAllCarts().catch((e) => ({ ok: false, error: e?.message } as ListResp)),
         api<any>(`/abandoned-carts/stats?since=${since}&_t=${Date.now()}`).catch(() => null),
       ]);
       setLastFetch(new Date());
@@ -1804,13 +1865,51 @@ function CarrinhosTab() {
         setErro((listResp as any)?.error || 'Falha ao buscar carrinhos.');
         setItems([]);
         setWarning(null);
+        setWcFill(0);
       } else {
-        const arr = (listResp as any).items || (listResp as any).rows || [];
-        setItems(Array.isArray(arr) ? arr : []);
+        let arr: CarrinhoAB[] = (listResp as any).items || (listResp as any).rows || [];
+        if (!Array.isArray(arr)) arr = [];
         // Plugin WP fora → backend caiu pro WooCommerce (dados parciais).
         const usouFallback =
           (listResp as any)?.source === 'woocommerce-fallback' ||
           !!(listResp as any)?.pluginError;
+
+        // MESCLA com o WooCommerce pra preencher janelas onde o CartFlows não
+        // capturou (ex.: o plugin de recuperação ficou inativo por dias e não
+        // gravou nenhum carrinho). Só faz sentido quando o plugin RESPONDEU
+        // (senão já é tudo fallback) e nos filtros de abandonados/todos — em
+        // "recuperados" o WC traria milhares de pedidos concluídos.
+        let fill = 0;
+        if (!usouFallback && statusF !== 'completed') {
+          try {
+            const qsWc = new URLSearchParams({ since, per_page: '100' });
+            if (sParam) qsWc.set('status', sParam);
+            if (search) qsWc.set('search', search);
+            qsWc.set('_t', String(Date.now()));
+            const wc = await api<ListResp>(`/abandoned-carts/wc-pending/list?${qsWc}`);
+            const wcItems = (((wc as any)?.items || (wc as any)?.rows || []) as CarrinhoAB[]);
+            if (Array.isArray(wcItems) && wcItems.length) {
+              // Dedup: não repetir um pedido WC que já está ligado a um carrinho
+              // do plugin (order_id do CartFlows == id do pedido WC).
+              const jaLigados = new Set(
+                arr.map((c) => c.order_id).filter((v) => v != null).map((v) => String(v)),
+              );
+              const novos = wcItems
+                .filter((w) => !jaLigados.has(String(w.id)))
+                .map((w) => ({ ...w, source: 'woocommerce' }));
+              fill = novos.length;
+              arr = [...arr, ...novos];
+              // Reordena por data desc (agora misturamos plugin + WC).
+              arr.sort((a, b) => {
+                const ta = a.time ? Date.parse(a.time) : 0;
+                const tb = b.time ? Date.parse(b.time) : 0;
+                return tb - ta;
+              });
+            }
+          } catch { /* WC indisponível — segue só com o plugin */ }
+        }
+        setWcFill(fill);
+        setItems(arr);
         setWarning(usouFallback ? ((listResp as any)?.warning || 'Mostrando dados parciais via WooCommerce — o plugin de carrinhos do site está fora do ar.') : null);
       }
       // Normaliza: o plugin/WC pode mandar PLANO (abandoned) ou ANINHADO
@@ -1941,7 +2040,7 @@ function CarrinhosTab() {
         <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar nome, email ou telefone..." className="flex-1 min-w-[200px] px-3 py-2 border-2 rounded text-sm" />
         <button onClick={load} className="px-3 py-2 border-2 rounded text-sm font-bold bg-white hover:bg-slate-50">Atualizar</button>
         <button onClick={runDiag} className="px-3 py-2 border-2 rounded text-sm font-bold bg-slate-100 hover:bg-slate-200" title="Schema da tabela CartFlows">Diag</button>
-        <span className="text-xs text-slate-500 ml-auto">{filtered.length} {filtered.length === 1 ? 'carrinho' : 'carrinhos'}{lastFetch ? ` · atualizado ${lastFetch.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : ''}</span>
+        <span className="text-xs text-slate-500 ml-auto">{filtered.length} {filtered.length === 1 ? 'carrinho' : 'carrinhos'}{wcFill > 0 ? ` · ${wcFill} do site` : ''}{lastFetch ? ` · atualizado ${lastFetch.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : ''}</span>
       </div>
 
       {warning && !erro && (
@@ -1963,14 +2062,16 @@ function CarrinhosTab() {
           {filtered.map((c) => {
             const status = (c.order_status || c.status || '').toString();
             const isCompleted = status === 'completed' || status === 'recovered';
+            const isWc = c.source === 'woocommerce';
             const nome = `${c.first_name || ''} ${c.last_name || ''}`.trim() || c.email?.split('@')[0] || 'Cliente';
             const valor = Number(c.total ?? c.cart_total ?? c.cart_total_brl ?? 0);
             return (
-              <div key={c.id} onClick={() => openCart(c)} className={`bg-white border-2 rounded-lg p-3 flex items-center gap-3 cursor-pointer hover:shadow-md hover:border-blue-400 transition ${isCompleted ? 'border-emerald-200 bg-emerald-50' : 'border-slate-200'}`}>
+              <div key={`${c.source || 'wp'}-${c.id}`} onClick={() => openCart(c)} className={`bg-white border-2 rounded-lg p-3 flex items-center gap-3 cursor-pointer hover:shadow-md hover:border-blue-400 transition ${isCompleted ? 'border-emerald-200 bg-emerald-50' : 'border-slate-200'}`}>
                 <div className="flex-1 min-w-0">
                   <div className="font-bold text-sm text-slate-800 truncate">
                     {nome}
                     {isCompleted && <span className="ml-2 text-[10px] bg-emerald-200 text-emerald-800 px-1.5 py-0.5 rounded font-bold uppercase">Recuperado</span>}
+                    {isWc && <span className="ml-2 text-[10px] bg-sky-100 text-sky-700 px-1.5 py-0.5 rounded font-bold uppercase" title="Pedido iniciado no site sem pagamento (via WooCommerce) — o plugin de carrinhos não registrou este">Site</span>}
                     {Boolean(c.unsubscribed) && <span className="ml-2 text-[10px] bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded font-bold uppercase">Optout</span>}
                   </div>
                   <div className="text-[11px] text-slate-500 flex flex-wrap items-center gap-2 mt-0.5">
@@ -2003,6 +2104,12 @@ function CarrinhosTab() {
             </div>
             <div className="p-5 space-y-4">
               {detailLoading && <div className="text-center text-slate-400 py-2">Carregando detalhes...</div>}
+
+              {selected.source === 'woocommerce' && (
+                <div className="bg-sky-50 border border-sky-200 rounded-lg p-3 text-[12px] text-sky-900">
+                  <b>Origem: WooCommerce.</b> Este é um pedido iniciado no site sem pagamento, trazido pra preencher um período em que o plugin de carrinhos não registrou nada. Os itens do carrinho não ficam disponíveis por aqui — consulte o pedido #{selected.id} no WooCommerce/painel do site.
+                </div>
+              )}
 
               <section>
                 <h3 className="text-xs font-bold uppercase text-slate-500 mb-2">Dados da cliente</h3>

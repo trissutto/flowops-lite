@@ -17,7 +17,7 @@ import Link from 'next/link';
 import { ArrowLeft, RefreshCw, Building2, Store as StoreIcon, Loader2, Check, AlertTriangle, Edit2, X, LogIn } from 'lucide-react';
 import { api } from '@/lib/api';
 
-type PixProvider = 'auto' | 'pagbank' | 'pagarme';
+type PixProvider = 'auto' | 'pagbank' | 'pagarme' | 'externo';
 
 type Store = {
   id: string;
@@ -357,6 +357,19 @@ export default function LojasPage() {
                         } disabled:opacity-50`}
                       >
                         PAGAR.ME
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPixProvider(store, 'externo')}
+                        disabled={isSaving}
+                        title="Sem gateway: PIX vira só 'informar pagamento'. Loja cobra na maquininha própria (franquias sem chave Pagar.me)."
+                        className={`px-2 py-1 rounded text-[10px] font-bold transition ${
+                          store.pixProvider === 'externo'
+                            ? 'bg-sky-600 text-white shadow'
+                            : 'text-slate-600 hover:bg-white'
+                        } disabled:opacity-50`}
+                      >
+                        EXTERNO
                       </button>
                     </div>
                   </div>

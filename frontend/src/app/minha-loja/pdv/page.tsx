@@ -149,6 +149,15 @@ const BANDEIRAS_CREDITO = ['MASTERCARD', 'VISANET', 'CIELO', 'HIPERCARD', 'AMEX'
 const brl = (n: number) =>
   Number(n || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
+// Quanto ainda FALTA pagar da venda: total menos vale-troca e pagamentos
+// parciais já lançados. É esse valor que o simulador de parcelamento usa —
+// numa troca, a cliente parcela só a diferença, não o carrinho inteiro.
+const restanteVenda = (sale: Sale | null): number => {
+  if (!sale) return 0;
+  const pago = (sale.payments || []).reduce((s: number, p: any) => s + (Number(p.valor) || 0), 0);
+  return Math.round(((sale.total || 0) - pago) * 100) / 100;
+};
+
 /**
  * Imprime um cupom em browser puro (sem Electron).
  *
@@ -1867,7 +1876,7 @@ function PdvPageInner() {
             <button
               type="button"
               onClick={() => setShowSimular(true)}
-              disabled={!sale?.total || sale.total <= 0}
+              disabled={restanteVenda(sale) <= 0}
               className={`${rowBase} disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent`}
               title="Simular parcelamento"
             >
@@ -2624,7 +2633,7 @@ function PdvPageInner() {
       <div className="lg:hidden fixed bottom-11 left-0 right-0 z-10 px-3">
         <div className="max-w-4xl mx-auto bg-white/95 backdrop-blur border border-slate-200 rounded-2xl p-2 shadow-lg flex gap-2 overflow-x-auto">
           <PdvMobilePill tone="rose"   href="/minha-loja/pdv/recebimentos" icon={Receipt}    label="Crediário" />
-          <PdvMobilePill tone="amber"  onClick={() => setShowSimular(true)} disabled={!sale?.total || sale.total <= 0} icon={CreditCard} label="Simular" />
+          <PdvMobilePill tone="amber"  onClick={() => setShowSimular(true)} disabled={restanteVenda(sale) <= 0} icon={CreditCard} label="Simular" />
           <PdvMobilePill tone="sky"    href="/minha-loja/consultar"        icon={Search}     label="Estoque" />
           <PdvMobilePill tone="purple" href="/minha-loja"                  icon={Globe}      label="Site" badge={pedidosSitePending} />
           <PdvMobilePill tone="green"  href="/minha-loja/pdv/caixa"        icon={DollarSign} label="Caixa" />
@@ -2976,12 +2985,20 @@ function PdvPageInner() {
       )}
 
       {/* Modal Simulador de Parcelamento Cartão */}
-      {showSimular && sale && sale.total > 0 && (
-        <SimularParcelasModal
-          total={sale.total}
-          onClose={() => setShowSimular(false)}
-        />
-      )}
+      {/* BUG FIX: em TROCA (vale-troca aplicado) ou pagamento parcial, simula
+          sobre o que FALTA pagar — não sobre o total bruto do carrinho. Cliente
+          com vale de R$ 269,90 num carrinho de R$ 539,80 parcela só R$ 269,90. */}
+      {showSimular && sale && (() => {
+        const restante = restanteVenda(sale);
+        if (restante <= 0) return null;
+        return (
+          <SimularParcelasModal
+            total={restante}
+            temAbatimento={restante < (sale.total || 0) - 0.01}
+            onClose={() => setShowSimular(false)}
+          />
+        );
+      })()}
 
       {/* Modal PIX Rápido (cobrança avulsa) */}
       {showPixAvulso && (
@@ -4011,6 +4028,28 @@ function PaymentModal({
   const [pixLoading, setPixLoading] = useState(false);
   const [pixPaid, setPixPaid] = useState(false);  // setado quando PagBank webhook confirma
   const [pixFallbackReason, setPixFallbackReason] = useState<string | null>(null);
+  // Config de PIX da loja. 'externo' = franquia SEM gateway (ex.: sem chave
+  // Pagar.me): o PIX vira só "informar pagamento" — finaliza direto como
+  // dinheiro/cartão, sem gerar QR nem esperar webhook. `pixProviderReady`
+  // evita a corrida do auto-gerar (não dispara QR antes de saber que é externo).
+  const [storePixProvider, setStorePixProvider] =
+    useState<'auto' | 'pagbank' | 'pagarme' | 'externo'>('auto');
+  const [pixProviderReady, setPixProviderReady] = useState(false);
+  const pixExterno = storePixProvider === 'externo';
+  useEffect(() => {
+    if (!storeCode) { setPixProviderReady(true); return; }
+    let alive = true;
+    (async () => {
+      try {
+        const cfg = await api<{ provider: 'auto' | 'pagbank' | 'pagarme' | 'externo' }>(
+          `/stores/by-code/${storeCode}/pix-provider`,
+        );
+        if (alive && cfg?.provider) setStorePixProvider(cfg.provider);
+      } catch { /* mantém 'auto' */ }
+      finally { if (alive) setPixProviderReady(true); }
+    })();
+    return () => { alive = false; };
+  }, [storeCode]);
   const [copyMsg, setCopyMsg] = useState(false);
   // Valor com que o QR ATUAL foi gerado — base da regeneração automática
   // quando a vendedora altera o campo "Quanto cobrar com PIX?".
@@ -4109,7 +4148,9 @@ function PaymentModal({
     // webhook/polling) — não deixa fechar venda "no escuro". Provider local
     // (chave celular) não tem webhook → vendedora confirma manualmente via
     // botão "Marcar como pago" (linha ~4063).
-    if (selected === 'pix') {
+    // Loja 'externo' (franquia sem gateway): PIX não gera QR — finaliza direto
+    // como dinheiro/cartão. Pula todas as travas de QR/webhook.
+    if (selected === 'pix' && !pixExterno) {
       if (!pixCharge) {
         toast(
           'warning',
@@ -4160,9 +4201,13 @@ function PaymentModal({
       details.troco = trocoP;
     }
     if (selected === 'pix') {
-      // pixCharge é GARANTIDO existir aqui — bloqueio acima impede passar sem.
-      // (Mantém else defensivo apenas pra log; nunca deveria executar.)
-      if (pixCharge) {
+      if (pixExterno) {
+        // Loja sem gateway: cliente pagou PIX na maquininha própria da loja.
+        // Registra como PIX externo (entra no relatório como PIX, marcado).
+        details.pixProvider = 'externo';
+        details.pixExterno = true;
+      } else if (pixCharge) {
+        // pixCharge é GARANTIDO existir aqui — bloqueio acima impede passar sem.
         details.pixTxid = pixCharge.txid;
         details.pixChave = pixCharge.chave;
         details.pixProvider = pixCharge.provider;
@@ -4297,6 +4342,11 @@ function PaymentModal({
   // Em PagBank, o webhook confirma sozinho e a vendedora não precisa apertar nada —
   // o polling abaixo detecta o status=paid e finaliza automático.
   const generatePix = async (pixValor?: number) => {
+    // Loja com PIX externo (franquia sem gateway) NÃO gera cobrança nem QR —
+    // o PIX é só "informar pagamento" e finaliza direto. Choke point único:
+    // protege contra QUALQUER caminho que chame generatePix (auto-gerar,
+    // clique no método, regeração por valor).
+    if (pixExterno) return;
     setPixLoading(true);
     setPixPaid(false);
     setPixFallbackReason(null);
@@ -4454,11 +4504,16 @@ function PaymentModal({
   useEffect(() => {
     if (autoPixTriggeredRef.current) return;
     if (selected !== 'pix') return;
+    // Espera saber o provider da loja antes de auto-gerar — senão, no instante
+    // de abertura (antes do fetch resolver), geraria QR de gateway numa loja
+    // que é 'externo'. Loja externo nunca auto-gera.
+    if (!pixProviderReady) return;
+    if (pixExterno) return;
     if (pixCharge || pixLoading) return;
     autoPixTriggeredRef.current = true;
     generatePix();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected]);
+  }, [selected, pixProviderReady]);
 
   // ── REGENERAÇÃO AUTOMÁTICA DO QR ──
   // Vendedora altera o "Quanto cobrar com PIX?" com QR já na tela → espera
@@ -5672,7 +5727,15 @@ function PaymentModal({
         {/* Painel PIX — QR Code com valor */}
         {selected === 'pix' && (
           <div className="space-y-2 pt-2 border-t">
-            {pixLoading ? (
+            {pixExterno ? (
+              <div className="rounded-lg border-2 border-sky-200 bg-sky-50 p-4 text-center space-y-1">
+                <div className="text-sm font-bold text-sky-900">PIX externo — maquininha da loja</div>
+                <div className="text-[12px] text-sky-800">
+                  Cobre o PIX na sua maquininha/app do banco. Ao confirmar, a venda
+                  finaliza direto — o sistema só registra que foi PIX (não gera QR).
+                </div>
+              </div>
+            ) : pixLoading ? (
               <div className="text-center py-8">
                 <Loader2 className="w-8 h-8 animate-spin inline-block text-emerald-600 mb-2" />
                 <div className="text-sm text-slate-500">Gerando QR Code PIX...</div>
@@ -7664,11 +7727,15 @@ function PdvOutlinePill({
 // Mostra pra cliente quanto fica cada parcela de 1× a 12×, SEMPRE SEM JUROS.
 // Vendedora fala em voz alta pra cliente "fica 5× de R$ 31,04". A tela cabe
 // todas as 12 parcelas em grade 2 colunas — sem scroll, sem configuração.
+// `total` já vem líquido de vale-troca/parciais; `temAbatimento` troca o
+// rótulo pra "Falta a pagar" pra vendedora não confundir com o total bruto.
 function SimularParcelasModal({
   total,
+  temAbatimento,
   onClose,
 }: {
   total: number;
+  temAbatimento?: boolean;
   onClose: () => void;
 }) {
   const parcelas = Array.from({ length: 12 }, (_, idx) => idx + 1);
@@ -7690,7 +7757,9 @@ function SimularParcelasModal({
 
         {/* Total da venda — referência compacta pra cliente */}
         <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 flex items-center justify-between">
-          <span className="text-[10px] text-emerald-700 font-bold uppercase tracking-wide">Total da venda</span>
+          <span className="text-[10px] text-emerald-700 font-bold uppercase tracking-wide">
+            {temAbatimento ? 'Falta a pagar' : 'Total da venda'}
+          </span>
           <span className="text-xl font-black text-emerald-700 tabular-nums">{brl(total)}</span>
         </div>
 
