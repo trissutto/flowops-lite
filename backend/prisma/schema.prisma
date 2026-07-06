@@ -2105,6 +2105,10 @@ model Customer {
 
   // -- Atribuicao / origem --
   originSource    String?  @map("origin_source")
+  // Carimbo de quando a pessoa se CADASTROU por uma live (link ManyChat).
+  // Independe de createdAt/origin: cliente que já existe na base também é
+  // marcada aqui a cada cadastro, pra aparecer na fila "Cadastradas na live".
+  liveRegisteredAt DateTime? @map("live_registered_at")
   originStoreId   String?  @map("origin_store_id")
   originStore     Store?   @relation("CustomerOriginStore", fields: [originStoreId], references: [id])
   originSeller    String?  @map("origin_seller")
@@ -2204,6 +2208,7 @@ model Customer {
   @@index([originStoreId])
   @@index([targetStoreId])
   @@index([lastOrderAt])
+  @@index([liveRegisteredAt])
   // Dashboard CRM filtra por loja e ordena por recência — composto evita
   // combinar dois índices single-column (filtro + sort).
   @@index([originStoreId, lastOrderAt(sort: Desc)])

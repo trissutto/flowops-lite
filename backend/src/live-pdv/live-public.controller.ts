@@ -52,6 +52,7 @@ export class LivePublicController {
       name,
       phone: phoneDigits,
       instagram: body?.instagram || undefined,
+      markLiveRegistration: true, // veio do link da live → entra na fila "Cadastradas na live"
     });
 
     // Devolve só o necessário pra tela de sucesso (sem vazar PII/id interno).
