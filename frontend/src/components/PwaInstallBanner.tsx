@@ -17,6 +17,7 @@
  */
 
 import { useEffect, useState } from 'react';
+import { usePathname } from 'next/navigation';
 import { X, Download, Share } from 'lucide-react';
 
 interface BeforeInstallPromptEvent extends Event {
@@ -28,6 +29,7 @@ const LS_KEY_DISMISSED = 'lurd_pwa_install_dismissed_at';
 const DISMISS_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 dias
 
 export default function PwaInstallBanner() {
+  const pathname = usePathname();
   const [promptEvent, setPromptEvent] = useState<BeforeInstallPromptEvent | null>(null);
   const [showIosHint, setShowIosHint] = useState(false);
   const [isStandalone, setIsStandalone] = useState(false);
@@ -97,6 +99,9 @@ export default function PwaInstallBanner() {
       window.localStorage.setItem(LS_KEY_DISMISSED, String(Date.now()));
     } catch {}
   };
+
+  // Página pública da cliente (cadastro da live) — sem chrome de app
+  if (pathname?.startsWith('/cadastro-live')) return null;
 
   // Já instalado → não mostra nada
   if (isStandalone) return null;
