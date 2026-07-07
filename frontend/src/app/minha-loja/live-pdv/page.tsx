@@ -1801,6 +1801,8 @@ function CartPanel({
   pixExterno: boolean;
   onConfirmExternal: () => void;
 }) {
+  const [linkCopied, setLinkCopied] = useState(false);
+  const payLink = cart && typeof window !== 'undefined' ? `${window.location.origin}/pagar/${cart.id}` : '';
   return (
     <div className="lg:sticky lg:top-16 lg:h-fit">
       <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
@@ -1894,7 +1896,9 @@ function CartPanel({
                       {cart.freteCents === 999
                         ? '(SEDEX · SP)'
                         : cart.freteCents === 1999
-                        ? '(PAC)'
+                        ? '(PAC · Sul/Sudeste)'
+                        : cart.freteCents === 3999
+                        ? '(PAC · Demais)'
                         : ''}
                     </span>
                     <span>{brl(cart.freteCents)}</span>
@@ -1906,11 +1910,34 @@ function CartPanel({
                 </div>
                 <button
                   onClick={onCalcFrete}
-                  title="Calcula o frete pelo CEP da cliente: SP = SEDEX R$ 9,99 · demais estados = PAC R$ 19,99"
+                  title="Frete pelo CEP: SP SEDEX R$ 9,99 · Sul/Sudeste PAC R$ 19,99 · demais PAC R$ 39,99"
                   className="mt-1 w-full rounded-lg border border-slate-300 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
                 >
-                  Calcular frete pelo CEP · SEDEX SP R$ 9,99 / PAC R$ 19,99
+                  Calcular frete pelo CEP · SP 9,99 / Sul-Sudeste 19,99 / demais 39,99
                 </button>
+                {payLink && (
+                  <div className="mt-2 rounded-lg border border-[#ECD9A0] bg-[#FBF6E6]/50 p-2">
+                    <div className="mb-1.5 text-[11px] font-bold text-[#8C7325]">
+                      Mandar link pra cliente fechar (ela escolhe PIX ou cartão 12x + informa o CEP):
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => { navigator.clipboard?.writeText(payLink); setLinkCopied(true); setTimeout(() => setLinkCopied(false), 2500); }}
+                        className="flex-1 rounded-lg border border-[#D4AF37] bg-white py-2 text-xs font-bold text-[#8C7325] hover:bg-[#FBF6E6]"
+                      >
+                        {linkCopied ? 'Copiado! ✓' : 'Copiar link'}
+                      </button>
+                      <a
+                        href={`https://wa.me/?text=${encodeURIComponent('Oi! 💜 É pra fechar sua compra da live: ' + payLink)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex-1 rounded-lg bg-emerald-600 py-2 text-center text-xs font-bold text-white hover:bg-emerald-700"
+                      >
+                        WhatsApp
+                      </a>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 

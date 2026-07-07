@@ -1169,6 +1169,53 @@ export class LivePdvService {
     return { ...cart, items };
   }
 
+  // Statuses que contam como "já pago" (não deixa cobrar de novo).
+  static PAID_STATES = ['paid', 'separating', 'shipped', 'delivered'];
+
+  /**
+   * Resumo PÚBLICO do carrinho pra página de fechamento da cliente
+   * (/pagar/<cartId>). Só dados necessários — NÃO expõe CPF/telefone/custo.
+   */
+  async publicCheckoutSummary(cartId: string) {
+    const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
+    if (!cart) throw new NotFoundException('Compra não encontrada');
+    const items = await (this.prisma as any).livePdvItem.findMany({
+      where: { cartId, status: { notIn: ['cancelled', 'expired'] } },
+      orderBy: { createdAt: 'asc' },
+      select: { refCode: true, descricao: true, cor: true, tamanho: true, qty: true, priceCents: true },
+    });
+    let storeName: string | null = null;
+    try {
+      const s = await this.getSession(cart.sessionId);
+      storeName = (s as any)?.liveStoreName || null;
+    } catch { /* sessão indisponível — segue sem nome da loja */ }
+    return {
+      cartId: cart.id,
+      firstName: String(cart.customerName || 'Cliente').trim().split(/\s+/)[0] || 'Cliente',
+      status: cart.status,
+      paymentMethod: cart.paymentMethod || null,
+      subtotalCents: cart.subtotalCents || 0,
+      freteCents: cart.freteCents || 0,
+      totalCents: cart.totalCents || 0,
+      cep: cart.customerCep || null,
+      storeName,
+      paid: LivePdvService.PAID_STATES.includes(cart.status),
+      items: (items as any[]).map((it) => ({
+        descricao: it.descricao || it.refCode,
+        ref: it.refCode,
+        cor: it.cor,
+        tamanho: it.tamanho,
+        qty: it.qty,
+        priceCents: it.priceCents,
+      })),
+      // pagamento já iniciado nesse carrinho?
+      pix: cart.paymentMethod === 'pix'
+        ? { qrCodeText: cart.qrCodeText, qrCodeImageUrl: cart.qrCodeImageUrl }
+        : null,
+      paymentUrl: cart.paymentMethod === 'link' ? cart.qrCodeText : null,
+    };
+  }
+
   async listCarts(sessionId: string) {
     const carts = await (this.prisma as any).livePdvCart.findMany({
       where: { sessionId, status: { not: 'cancelled' } },
@@ -1315,20 +1362,27 @@ export class LivePdvService {
 
   /**
    * Frete FIXO por CEP (regra Lurd's):
-   *   - SP (CEP 01000-000 a 19999-999) → SEDEX R$ 9,99
-   *   - Qualquer outro CEP do Brasil    → PAC   R$ 19,99
+   *   - SP (CEP 01000-19999)                         → SEDEX R$  9,99
+   *   - Sul + Sudeste exceto SP (RJ/ES/MG/PR/SC/RS)  → PAC   R$ 19,99
+   *   - Demais estados (Norte/Nordeste/Centro-Oeste) → PAC   R$ 39,99
+   * Faixas por prefixo de CEP (5 primeiros dígitos):
+   *   SP 01000-19999 · RJ/ES/MG 20000-39999 · PR/SC/RS 80000-99999 · resto 40000-79999.
    * Retorna null se o CEP não tiver 8 dígitos.
    */
   private freteFromCep(
     cepRaw?: string | null,
-  ): { cents: number; servico: 'SEDEX' | 'PAC' } | null {
+  ): { cents: number; servico: 'SEDEX' | 'PAC'; regiao: string } | null {
     const cep = String(cepRaw || '').replace(/\D/g, '');
     if (cep.length !== 8) return null;
     const prefixo = parseInt(cep.slice(0, 5), 10); // 5 primeiros dígitos
     if (prefixo >= 1000 && prefixo <= 19999) {
-      return { cents: 999, servico: 'SEDEX' }; // São Paulo
+      return { cents: 999, servico: 'SEDEX', regiao: 'São Paulo' };
     }
-    return { cents: 1999, servico: 'PAC' }; // demais estados
+    // Sudeste (exceto SP): RJ/ES/MG · Sul: PR/SC/RS
+    if ((prefixo >= 20000 && prefixo <= 39999) || (prefixo >= 80000 && prefixo <= 99999)) {
+      return { cents: 1999, servico: 'PAC', regiao: 'Sul/Sudeste' };
+    }
+    return { cents: 3999, servico: 'PAC', regiao: 'Demais estados' }; // N/NE/CO
   }
 
   /**
@@ -1355,7 +1409,7 @@ export class LivePdvService {
     await (this.prisma as any).livePdvCart.update({ where: { id: cartId }, data });
     await this.recalcCart(cartId);
     const fresh = await this.getCart(cartId);
-    return { ...(fresh as any), freteServico: calc.servico };
+    return { ...(fresh as any), freteServico: calc.servico, freteRegiao: calc.regiao };
   }
 
   // ─── Pagamento (PIX) ─────────────────────────────────────────────────────────
@@ -1437,6 +1491,7 @@ export class LivePdvService {
       customerPhone: cart.customerPhone || undefined,
       customerEmail: cart.customerEmail || undefined,
       expiresInMinutes: 1440, // 24h pra cliente pagar
+      maxInstallments: 12, // até 12x sem juros no cartão
     });
 
     const updated = await (this.prisma as any).livePdvCart.update({
