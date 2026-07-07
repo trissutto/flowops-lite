@@ -340,11 +340,30 @@ export class NfceService {
     const pPIS = Number(config.aliqPIS || 0.65);    // 0.65% Lucro Presumido cumulativo
     const pCOFINS = Number(config.aliqCOFINS || 3.0); // 3% Lucro Presumido cumulativo
 
+    // ── Reforma Tributária (NT 2025.002): grupo IBS/CBS ──────────────────
+    // Obrigatório pra CRT=3 desde jan/2026 (rejeição 1115 "IBS/CBS não
+    // informado"). Simples Nacional (CRT 1/2/4) está DISPENSADO até 2027 —
+    // não emitir pra Simples (grupo indevido pode gerar rejeição própria).
+    // Alíquotas 2026 são fixas de teste (LC 214/2025 art. 348): IBS UF
+    // 0,10% + IBS Mun 0,00% + CBS 0,90%, "por fora" — NÃO somam no vNF.
+    // CST 000 (tributação integral) + cClassTrib 000001 (varejo padrão).
+    // Kill-switch: NFCE_IBSCBS=0 (se a SEFAZ rejeitar o grupo por schema).
+    const ibscbsOn = process.env.NFCE_IBSCBS !== '0' && !isSimples;
+    const pIBSUF = Number(config.aliqIBSUF ?? 0.10);
+    const pIBSMun = Number(config.aliqIBSMun ?? 0.0);
+    const pCBS = Number(config.aliqCBS ?? 0.90);
+    const cstIBSCBS = String(config.cstIBSCBS || '000');
+    const cClassTrib = String(config.cClassTrib || '000001');
+
     // Acumuladores pros totais (preenchidos em loop pra Lucro Presumido)
     let vBCTot = 0;
     let vICMSTot = 0;
     let vPISTot = 0;
     let vCOFINSTot = 0;
+    let vBCIBSCBSTot = 0;
+    let vIBSUFTot = 0;
+    let vIBSMunTot = 0;
+    let vCBSTot = 0;
 
     const detLines = items
       .map((it: any, idx: number) => {
@@ -392,12 +411,33 @@ export class NfceService {
         vPISTot += vPISItem;
         vCOFINSTot += vCOFINSItem;
 
+        // IBS/CBS por item (NT 2025.002) — valores informativos em 2026,
+        // arredondados a 2 casas por item; totais somam os itens (bate com
+        // a regra de validação da SEFAZ, tolerância de R$ 0,01).
+        const vIBSUFItem = ibscbsOn ? Math.round(baseCalc * (pIBSUF / 100) * 100) / 100 : 0;
+        const vIBSMunItem = ibscbsOn ? Math.round(baseCalc * (pIBSMun / 100) * 100) / 100 : 0;
+        const vCBSItem = ibscbsOn ? Math.round(baseCalc * (pCBS / 100) * 100) / 100 : 0;
+        const vIBSItem = vIBSUFItem + vIBSMunItem;
+        if (ibscbsOn) {
+          vBCIBSCBSTot += baseCalc;
+          vIBSUFTot += vIBSUFItem;
+          vIBSMunTot += vIBSMunItem;
+          vCBSTot += vCBSItem;
+        }
+        const ibscbsBlock = ibscbsOn
+          ? `<IBSCBS><CST>${cstIBSCBS}</CST><cClassTrib>${cClassTrib}</cClassTrib><gIBSCBS><vBC>${baseCalc.toFixed(2)}</vBC><gIBSUF><pIBSUF>${pIBSUF.toFixed(4)}</pIBSUF><vIBSUF>${vIBSUFItem.toFixed(2)}</vIBSUF></gIBSUF><gIBSMun><pIBSMun>${pIBSMun.toFixed(4)}</pIBSMun><vIBSMun>${vIBSMunItem.toFixed(2)}</vIBSMun></gIBSMun><vIBS>${vIBSItem.toFixed(2)}</vIBS><gCBS><pCBS>${pCBS.toFixed(4)}</pCBS><vCBS>${vCBSItem.toFixed(2)}</vCBS></gCBS></gIBSCBS></IBSCBS>`
+          : '';
+
         // Bloco de imposto conforme regime
         const impostoBlock = isSimples
           ? `<ICMS><ICMSSN102><orig>0</orig><CSOSN>102</CSOSN></ICMSSN102></ICMS>
         <PIS><PISNT><CST>07</CST></PISNT></PIS>
         <COFINS><COFINSNT><CST>07</CST></COFINSNT></COFINS>`
-          : `<ICMS><ICMS00><orig>0</orig><CST>00</CST><modBC>3</modBC><vBC>${baseCalc.toFixed(2)}</vBC><pICMS>${pICMS.toFixed(2)}</pICMS><vICMS>${vICMSItem.toFixed(2)}</vICMS></ICMS00></ICMS><PIS><PISAliq><CST>01</CST><vBC>${baseCalc.toFixed(2)}</vBC><pPIS>${pPIS.toFixed(2)}</pPIS><vPIS>${vPISItem.toFixed(2)}</vPIS></PISAliq></PIS><COFINS><COFINSAliq><CST>01</CST><vBC>${baseCalc.toFixed(2)}</vBC><pCOFINS>${pCOFINS.toFixed(2)}</pCOFINS><vCOFINS>${vCOFINSItem.toFixed(2)}</vCOFINS></COFINSAliq></COFINS>`;
+          : `<ICMS><ICMS00><orig>0</orig><CST>00</CST><modBC>3</modBC><vBC>${baseCalc.toFixed(2)}</vBC><pICMS>${pICMS.toFixed(2)}</pICMS><vICMS>${vICMSItem.toFixed(2)}</vICMS></ICMS00></ICMS><PIS><PISAliq><CST>01</CST><vBC>${baseCalc.toFixed(2)}</vBC><pPIS>${pPIS.toFixed(2)}</pPIS><vPIS>${vPISItem.toFixed(2)}</vPIS></PISAliq></PIS><COFINS><COFINSAliq><CST>01</CST><vBC>${baseCalc.toFixed(2)}</vBC><pCOFINS>${pCOFINS.toFixed(2)}</pCOFINS><vCOFINS>${vCOFINSItem.toFixed(2)}</vCOFINS></COFINSAliq></COFINS>${ibscbsBlock}`;
+
+        // vItem (grupo VB, NT 2025.002): total do item = vProd − vDesc.
+        // Em 2026 IBS/CBS são "por fora" e NÃO entram no vItem.
+        const vItemTag = ibscbsOn ? `<vItem>${baseCalc.toFixed(2)}</vItem>` : '';
 
         return `
     <det nItem="${nItem}">
@@ -421,6 +461,7 @@ export class NfceService {
       <imposto>
         ${impostoBlock}
       </imposto>
+      ${vItemTag}
     </det>`.trim();
       })
       .join('\n');
@@ -548,6 +589,7 @@ export class NfceService {
         <vPIS>${vPISTot.toFixed(2)}</vPIS><vCOFINS>${vCOFINSTot.toFixed(2)}</vCOFINS><vOutro>0.00</vOutro>
         <vNF>${vNF}</vNF>
       </ICMSTot>
+      ${ibscbsOn ? `<IBSCBSTot><vBCIBSCBS>${vBCIBSCBSTot.toFixed(2)}</vBCIBSCBS><gIBS><gIBSUF><vDif>0.00</vDif><vDevTrib>0.00</vDevTrib><vIBSUF>${vIBSUFTot.toFixed(2)}</vIBSUF></gIBSUF><gIBSMun><vDif>0.00</vDif><vDevTrib>0.00</vDevTrib><vIBSMun>${vIBSMunTot.toFixed(2)}</vIBSMun></gIBSMun><vIBS>${(vIBSUFTot + vIBSMunTot).toFixed(2)}</vIBS><vCredPres>0.00</vCredPres><vCredPresCondSus>0.00</vCredPresCondSus></gIBS><gCBS><vDif>0.00</vDif><vDevTrib>0.00</vDevTrib><vCBS>${vCBSTot.toFixed(2)}</vCBS><vCredPres>0.00</vCredPres><vCredPresCondSus>0.00</vCredPresCondSus></gCBS></IBSCBSTot><vNFTot>${vNF}</vNFTot>` : ''}
     </total>
     <transp><modFrete>9</modFrete></transp>
     <pag>${pagLines}</pag>
