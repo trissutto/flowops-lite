@@ -2111,6 +2111,33 @@ function CustomerModal({
   const igRef = useRef<HTMLInputElement>(null);
   useEffect(() => igRef.current?.focus(), []);
 
+  // Busca por @ (autocomplete) — só na abertura de carrinho da live (onlyInstagram).
+  // Acha quem já se cadastrou/participou (cadastradas na live vêm primeiro).
+  const [atMatches, setAtMatches] = useState<
+    Array<{ customerId: string; name: string | null; instagram: string | null; phone: string | null; registered: boolean }>
+  >([]);
+  const skipNextSearch = useRef(false);
+  useEffect(() => {
+    if (!onlyInstagram) return;
+    if (skipNextSearch.current) { skipNextSearch.current = false; setAtMatches([]); return; }
+    const term = instagram.trim().replace(/^@/, '');
+    if (term.length < 2) { setAtMatches([]); return; }
+    let alive = true;
+    const t = setTimeout(async () => {
+      try {
+        const r = await api<any[]>(`/live-pdv/customers/search-at?term=${encodeURIComponent(term)}`);
+        if (alive) setAtMatches(r || []);
+      } catch { if (alive) setAtMatches([]); }
+    }, 250);
+    return () => { alive = false; clearTimeout(t); };
+  }, [instagram, onlyInstagram]);
+  function pickMatch(m: { name: string | null; instagram: string | null }) {
+    skipNextSearch.current = true;
+    setInstagram(m.instagram || '');
+    setName(m.name || '');
+    setAtMatches([]);
+  }
+
   // VERIFICADOR de @ duplicada: normaliza (sem @, minúsculo) e procura um
   // carrinho ABERTO com a mesma @ na lista da live. Evita pedido duplicado.
   const normIg = (s?: string | null) => (s || '').trim().toLowerCase().replace(/^@/, '');
@@ -2199,6 +2226,36 @@ function CustomerModal({
                 }`}
               />
             </div>
+
+            {/* Autocomplete: clientes que já se cadastraram/participaram.
+                Cadastradas pela live aparecem primeiro (badge). */}
+            {onlyInstagram && atMatches.length > 0 && (
+              <div className="mt-1 max-h-52 overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-sm">
+                {atMatches.map((m) => (
+                  <button
+                    key={m.customerId}
+                    type="button"
+                    onClick={() => pickMatch(m)}
+                    className="flex w-full items-center gap-2 border-b border-slate-50 px-3 py-2 text-left last:border-0 hover:bg-rose-50"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-semibold text-slate-800">
+                        {m.name || m.instagram}
+                      </div>
+                      <div className="truncate text-[11px] text-slate-500">
+                        @{m.instagram}
+                        {m.phone ? ` · ${m.phone}` : ''}
+                      </div>
+                    </div>
+                    {m.registered && (
+                      <span className="shrink-0 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-700">
+                        cadastrou na live
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* VERIFICADOR: essa @ já tem carrinho aberto na live */}

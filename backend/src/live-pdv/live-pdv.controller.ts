@@ -109,6 +109,12 @@ export class LivePdvController {
     return this.svc.searchLiveCustomers(term || '');
   }
 
+  // Autocomplete por @ ao identificar a cliente (cadastradas na live vêm primeiro)
+  @Get('customers/search-at')
+  searchCustomersByAt(@Query('term') term: string) {
+    return this.svc.searchCustomersByAt(term || '');
+  }
+
   // Puxa uma cliente de live anterior pra sessão atual (cria/reusa o carrinho)
   @Post('sessions/:id/add-customer')
   addCustomerToSession(@Param('id') id: string, @Body() body: { customerId: string }) {
