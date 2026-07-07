@@ -186,6 +186,12 @@ export default function LivePdvPage() {
   const [newLiveStore, setNewLiveStore] = useState('');
   const [newLiveStores, setNewLiveStores] = useState<Array<{ code: string; name: string }>>([]);
   const [creatingLive, setCreatingLive] = useState(false);
+  // Trocar a loja anfitriã da live ABERTA (live criada com a loja errada,
+  // sem precisar fechar — pedido do dono 07/07).
+  const [swapStoreOpen, setSwapStoreOpen] = useState(false);
+  const [swapStoreCode, setSwapStoreCode] = useState('');
+  const [swapStores, setSwapStores] = useState<Array<{ code: string; name: string }>>([]);
+  const [swappingStore, setSwappingStore] = useState(false);
   const [booting, setBooting] = useState(true);
   const [tab, setTab] = useState<'console' | 'dashboard'>('console');
   // Legenda da Live — atalhos curtos (01, 02...) → referência completa
@@ -423,6 +429,35 @@ export default function LivePdvPage() {
       alert('Erro ao criar sessão: ' + (e?.message || e));
     } finally {
       setCreatingLive(false);
+    }
+  }
+
+  async function openSwapStore() {
+    setSwapStoreOpen(true);
+    try {
+      const stores = await api<any[]>('/stores');
+      const act = (stores || [])
+        .filter((s: any) => s.active !== false)
+        .map((s: any) => ({ code: String(s.code), name: String(s.name) }));
+      setSwapStores(act);
+      setSwapStoreCode(act[0]?.code || '');
+    } catch { setSwapStores([]); }
+  }
+
+  async function confirmSwapStore() {
+    if (!sessionId || !swapStoreCode || swappingStore) return;
+    setSwappingStore(true);
+    try {
+      const s = await api<any>(`/live-pdv/sessions/${sessionId}/store`, {
+        method: 'POST',
+        body: JSON.stringify({ storeCode: swapStoreCode }),
+      });
+      setSessionStoreName(s.liveStoreName || '');
+      setSwapStoreOpen(false);
+    } catch (e: any) {
+      alert(e?.message || 'Erro ao trocar a loja da live');
+    } finally {
+      setSwappingStore(false);
     }
   }
 
@@ -1223,6 +1258,50 @@ export default function LivePdvPage() {
       {showLegenda && sessionId && (
         <LegendaModal sessionId={sessionId} onClose={() => setShowLegenda(false)} />
       )}
+      {/* Trocar a loja anfitriã da live ABERTA (sem fechar). Cobranças já
+          geradas seguem confirmando na conta antiga; as novas usam a nova. */}
+      {swapStoreOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-sm rounded-xl bg-white p-5 shadow-xl">
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="flex items-center gap-2 text-lg font-bold text-slate-800">
+                🏬 Trocar loja anfitriã
+              </h3>
+              <button
+                type="button"
+                onClick={() => setSwapStoreOpen(false)}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <p className="mb-3 text-xs text-slate-500">
+              A live continua aberta — só muda a loja da venda (PIX, separação e remessa
+              das <b>próximas</b> cobranças). QRs já gerados continuam valendo.
+            </p>
+            <select
+              value={swapStoreCode}
+              onChange={(e) => setSwapStoreCode(e.target.value)}
+              className="mb-4 w-full rounded-lg border border-slate-300 bg-white px-3 py-2"
+            >
+              {swapStores.length === 0 && <option value="">Carregando lojas…</option>}
+              {swapStores.map((s) => (
+                <option key={s.code} value={s.code}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={confirmSwapStore}
+              disabled={swappingStore || !swapStoreCode}
+              className="w-full rounded-lg bg-rose-600 py-2.5 font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
+            >
+              {swappingStore ? 'Trocando…' : 'Trocar loja'}
+            </button>
+          </div>
+        </div>
+      )}
       {/* Header */}
       <div className="sticky top-0 z-20 flex items-center gap-3 border-b border-slate-200 bg-white px-4 py-2.5">
         <Link href="/minha-loja" className="text-slate-400 hover:text-slate-600">
@@ -1233,14 +1312,14 @@ export default function LivePdvPage() {
         <span className="rounded-full bg-rose-100 px-2 py-0.5 text-xs font-semibold text-rose-700">
           ● {sessionTitle}
         </span>
-        {sessionStoreName && (
-          <span
-            title="Loja anfitriã da live — define o PIX, a separação e a remessa"
-            className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600"
-          >
-            🏬 {sessionStoreName}
-          </span>
-        )}
+        <button
+          type="button"
+          onClick={openSwapStore}
+          title="Loja anfitriã da live (define o PIX, a separação e a remessa) — clique pra trocar"
+          className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600 hover:bg-slate-200"
+        >
+          🏬 {sessionStoreName || 'definir loja'}
+        </button>
         <button
           onClick={closeLive}
           title="Fechar esta live — guarda os carrinhos e libera pra abrir uma nova"

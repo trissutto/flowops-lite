@@ -48,6 +48,12 @@ export class LivePdvController {
     return this.svc.endSession(id);
   }
 
+  // Troca a loja anfitriã da live ABERTA (ex.: abriu com a loja padrão errada)
+  @Post('sessions/:id/store')
+  changeSessionStore(@Param('id') id: string, @Body() body: { storeCode: string }) {
+    return this.svc.changeSessionStore(id, body?.storeCode);
+  }
+
   // ── Busca / grade ──
   @Get('search')
   search(@Query('term') term: string, @Query('sessionId') sessionId?: string) {

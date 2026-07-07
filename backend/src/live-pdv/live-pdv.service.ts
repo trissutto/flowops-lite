@@ -283,6 +283,33 @@ export class LivePdvService {
     return session;
   }
 
+  /**
+   * Troca a LOJA ANFITRIÃ de uma live ABERTA (pedido do dono 07/07: a live
+   * saiu com a loja padrão errada e não dava pra fechar no meio da operação).
+   * Afeta só o que acontece DEPOIS: novas cobranças PIX (PagBank da nova
+   * loja), remessa/conciliação no despacho e o badge da expedição. Cobranças
+   * JÁ geradas seguem confirmando normal — o checkPayment resolve a conta
+   * pelo registro do pagamento, não pela sessão.
+   */
+  async changeSessionStore(sessionId: string, storeCode: string) {
+    const session = await (this.prisma as any).livePdvSession.findUnique({
+      where: { id: sessionId },
+    });
+    if (!session) throw new NotFoundException('Sessão não encontrada');
+    if (session.status !== 'live') throw new BadRequestException('A live já foi encerrada');
+    const store = await (this.prisma as any).store.findUnique({
+      where: { code: String(storeCode || '') },
+    });
+    if (!store) throw new BadRequestException('Loja não encontrada');
+    const updated = await (this.prisma as any).livePdvSession.update({
+      where: { id: sessionId },
+      data: { liveStoreCode: store.code, liveStoreName: store.name },
+    });
+    // Telas abertas (console/expedição) atualizam via socket
+    this.gateway.emitToLiveOps('live-pdv:cart-updated', { sessionId });
+    return updated;
+  }
+
   /** Loja da live padrão: procura "Anália Franco" pelo nome, senão a 1ª ativa. */
   private async defaultLiveStoreCode(): Promise<string> {
     const stores = await (this.prisma as any).store.findMany({ where: { active: true } });
