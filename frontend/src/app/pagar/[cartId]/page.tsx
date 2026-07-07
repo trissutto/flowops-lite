@@ -38,7 +38,7 @@ type Item = { descricao: string; ref: string; cor: string | null; tamanho: strin
 type Summary = {
   cartId: string; firstName: string; status: string; paymentMethod: string | null;
   subtotalCents: number; freteCents: number; totalCents: number; cep: string | null;
-  storeName: string | null; paid: boolean; items: Item[];
+  storeName: string | null; paid: boolean; pixAvailable: boolean; items: Item[];
   pix: { qrCodeText: string; qrCodeImageUrl: string } | null; paymentUrl: string | null;
 };
 
@@ -96,6 +96,10 @@ export default function PagarPage() {
 
   async function payPix() {
     if (busy) return;
+    if (sum && sum.pixAvailable === false) {
+      setErr('O PIX dessa loja é combinado direto com a vendedora 💜. Pra pagar na hora, use o Cartão até 12x aqui embaixo.');
+      return;
+    }
     setBusy('pix'); setErr(null);
     try {
       const r = await api<any>(`/public/live-pay/${cartId}/pix`, { method: 'POST' });
@@ -251,6 +255,9 @@ export default function PagarPage() {
         </div>
         {!frete && (
           <p className="text-center text-[11px] text-[#A69E8C] mt-3">Informe seu CEP acima pra liberar o pagamento.</p>
+        )}
+        {frete && sum.pixAvailable === false && (
+          <p className="text-center text-[11px] text-[#A69E8C] mt-2">PIX dessa loja é combinado com a vendedora · Cartão até 12x é na hora, aqui 💜</p>
         )}
       </div>
     </div>
