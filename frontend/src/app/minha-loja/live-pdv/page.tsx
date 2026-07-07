@@ -178,7 +178,21 @@ function buildGrade(product: GradeResult) {
 export default function LivePdvPage() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessionTitle, setSessionTitle] = useState('');
-  const [activeLive, setActiveLive] = useState<{ id: string; title: string } | null>(null);
+  const [sessionStoreName, setSessionStoreName] = useState('');
+  const [activeLive, setActiveLive] = useState<{ id: string; title: string; storeName?: string } | null>(null);
+  // Modal "nova live": título + LOJA ANFITRIÃ (obrigatório escolher — antes o
+  // backend caía num padrão fixo e toda live saía como Anália Franco).
+  const [newLiveOpen, setNewLiveOpen] = useState(false);
+  const [newLiveTitle, setNewLiveTitle] = useState('');
+  const [newLiveStore, setNewLiveStore] = useState('');
+  const [newLiveStores, setNewLiveStores] = useState<Array<{ code: string; name: string }>>([]);
+  const [creatingLive, setCreatingLive] = useState(false);
+  // Trocar a loja anfitriã da live ABERTA (live criada com a loja errada,
+  // sem precisar fechar — pedido do dono 07/07).
+  const [swapStoreOpen, setSwapStoreOpen] = useState(false);
+  const [swapStoreCode, setSwapStoreCode] = useState('');
+  const [swapStores, setSwapStores] = useState<Array<{ code: string; name: string }>>([]);
+  const [swappingStore, setSwappingStore] = useState(false);
   const [booting, setBooting] = useState(true);
   const [tab, setTab] = useState<'console' | 'dashboard'>('console');
   // Legenda da Live — atalhos curtos (01, 02...) → referência completa
@@ -226,7 +240,7 @@ export default function LivePdvPage() {
       try {
         const list = await api<any[]>('/live-pdv/sessions');
         const live = (list || []).find((s) => s.status === 'live');
-        if (live) setActiveLive({ id: live.id, title: live.title });
+        if (live) setActiveLive({ id: live.id, title: live.title, storeName: live.liveStoreName || '' });
       } catch {}
       setBooting(false);
     })();
@@ -373,18 +387,78 @@ export default function LivePdvPage() {
       )
     )
       return;
-    const title = prompt('Título da nova live:', `Live ${new Date().toLocaleDateString('pt-BR')}`);
-    if (title === null) return;
+    // Abre o modal (título + loja anfitriã). A loja do login vem pré-selecionada.
+    setNewLiveTitle(`Live ${new Date().toLocaleDateString('pt-BR')}`);
+    setNewLiveOpen(true);
+    try {
+      const [stores, me] = await Promise.all([
+        api<any[]>('/stores').catch(() => [] as any[]),
+        api<any>('/auth/me').catch(() => null),
+      ]);
+      const act = (stores || [])
+        .filter((s: any) => s.active !== false)
+        .map((s: any) => ({ code: String(s.code), name: String(s.name) }));
+      setNewLiveStores(act);
+      const mine = me?.storeCode && act.some((s: any) => s.code === String(me.storeCode))
+        ? String(me.storeCode)
+        : '';
+      setNewLiveStore(mine || act[0]?.code || '');
+    } catch { /* sem lista — o backend usa a loja padrão */ }
+  }
+
+  async function confirmCreateLive() {
+    if (creatingLive) return;
+    if (!newLiveStore && newLiveStores.length > 0) {
+      alert('Escolha a loja anfitriã da live.');
+      return;
+    }
+    setCreatingLive(true);
     try {
       const s = await api<any>('/live-pdv/sessions', {
         method: 'POST',
-        body: JSON.stringify({ title }),
+        body: JSON.stringify({
+          title: newLiveTitle.trim() || undefined,
+          liveStoreCode: newLiveStore || undefined,
+        }),
       });
       setActiveLive(null);
       setSessionId(s.id);
       setSessionTitle(s.title);
+      setSessionStoreName(s.liveStoreName || '');
+      setNewLiveOpen(false);
     } catch (e: any) {
       alert('Erro ao criar sessão: ' + (e?.message || e));
+    } finally {
+      setCreatingLive(false);
+    }
+  }
+
+  async function openSwapStore() {
+    setSwapStoreOpen(true);
+    try {
+      const stores = await api<any[]>('/stores');
+      const act = (stores || [])
+        .filter((s: any) => s.active !== false)
+        .map((s: any) => ({ code: String(s.code), name: String(s.name) }));
+      setSwapStores(act);
+      setSwapStoreCode(act[0]?.code || '');
+    } catch { setSwapStores([]); }
+  }
+
+  async function confirmSwapStore() {
+    if (!sessionId || !swapStoreCode || swappingStore) return;
+    setSwappingStore(true);
+    try {
+      const s = await api<any>(`/live-pdv/sessions/${sessionId}/store`, {
+        method: 'POST',
+        body: JSON.stringify({ storeCode: swapStoreCode }),
+      });
+      setSessionStoreName(s.liveStoreName || '');
+      setSwapStoreOpen(false);
+    } catch (e: any) {
+      alert(e?.message || 'Erro ao trocar a loja da live');
+    } finally {
+      setSwappingStore(false);
     }
   }
 
@@ -393,6 +467,7 @@ export default function LivePdvPage() {
     if (!activeLive) return;
     setSessionId(activeLive.id);
     setSessionTitle(activeLive.title);
+    setSessionStoreName(activeLive.storeName || '');
   }
 
   // Fecha a live atual: guarda os carrinhos na sessão (não apaga) e volta pra
@@ -844,6 +919,13 @@ export default function LivePdvPage() {
       phone: c.customerPhone,
       instagram: c.customerInstagram,
     });
+    // Carrinho JÁ PAGO/EM SEPARAÇÃO: mostra o banner de confirmado — nunca a
+    // tela de cobrança de novo (bug: card "SEPARAÇÃO" voltava pro pagamento).
+    if (['paid', 'separating', 'shipped', 'delivered'].includes(c.status)) {
+      setQr(null);
+      setPaid(true);
+      return;
+    }
     // Se a cliente tem uma cobrança PENDENTE, reabre o QR/link (dá pra mostrar
     // de novo). Senão, limpa. A confirmação de pago segue rodando via socket.
     if (c.status === 'awaiting_payment' && c.qrCodeText) {
@@ -1042,6 +1124,7 @@ export default function LivePdvPage() {
           <>
             <p className="text-slate-500">
               Tem uma live aberta: <b className="text-slate-700">{activeLive.title}</b>
+              {activeLive.storeName ? <> · <b className="text-slate-700">🏬 {activeLive.storeName}</b></> : null}
             </p>
             <button
               onClick={continueLive}
@@ -1070,9 +1153,78 @@ export default function LivePdvPage() {
         <Link href="/minha-loja" className="text-sm text-slate-400 hover:text-slate-600">
           Voltar
         </Link>
+
+        {/* Modal NOVA LIVE: título + loja anfitriã (define PIX/separação/remessa).
+            Antes era um prompt só de título e o backend caía na loja padrão fixa
+            (Anália Franco) — live de Itanhaém saía com a loja errada. */}
+        {newLiveOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+            <div className="w-full max-w-sm rounded-xl bg-white p-5 shadow-xl">
+              <div className="mb-3 flex items-center justify-between">
+                <h3 className="flex items-center gap-2 text-lg font-bold text-slate-800">
+                  <Zap className="h-5 w-5 text-rose-500" /> Nova live
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => setNewLiveOpen(false)}
+                  className="text-slate-400 hover:text-slate-600"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+              <label className="mb-3 block">
+                <span className="mb-1 block text-xs font-bold uppercase tracking-wide text-slate-500">
+                  Título
+                </span>
+                <input
+                  value={newLiveTitle}
+                  onChange={(e) => setNewLiveTitle(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                />
+              </label>
+              <label className="mb-1 block">
+                <span className="mb-1 block text-xs font-bold uppercase tracking-wide text-slate-500">
+                  Loja anfitriã da live *
+                </span>
+                <select
+                  value={newLiveStore}
+                  onChange={(e) => setNewLiveStore(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2"
+                >
+                  {newLiveStores.length === 0 && <option value="">Carregando lojas…</option>}
+                  {newLiveStores.map((s) => (
+                    <option key={s.code} value={s.code}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <p className="mb-4 text-[11px] text-slate-500">
+                É a loja da venda: define o PIX (PagBank dela), a separação e a remessa.
+              </p>
+              <button
+                type="button"
+                onClick={confirmCreateLive}
+                disabled={creatingLive}
+                className="w-full rounded-lg bg-rose-600 py-2.5 font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
+              >
+                {creatingLive ? 'Abrindo…' : '▶ Abrir live'}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
+
+  // Carrinhos que já receberam cobrança saem da grade principal e vão pra
+  // seção própria "EM PAGAMENTO" (pedido do dono: menos poluição na live).
+  const emPagamento = carts
+    .filter((c) => c.status === 'awaiting_payment')
+    .sort((a, b) =>
+      (a.customerName || '').localeCompare(b.customerName || '', 'pt-BR', { sensitivity: 'base' }),
+    );
+  const cartsAtivos = carts.filter((c) => c.status !== 'awaiting_payment');
 
   // Lista de clientes filtrada (por nº da comanda, nome ou @) e ordenada
   // alfabeticamente. Se a busca for só dígitos, casa o nº do carrinho.
@@ -1081,7 +1233,7 @@ export default function LivePdvPage() {
     const qIg = q.replace(/^@/, '');
     const qNum = q.replace(/^#/, '');
     const soDigitos = /^\d+$/.test(qNum);
-    return [...carts]
+    return [...cartsAtivos]
       .filter(
         (c) =>
           !q ||
@@ -1111,6 +1263,50 @@ export default function LivePdvPage() {
       {showLegenda && sessionId && (
         <LegendaModal sessionId={sessionId} onClose={() => setShowLegenda(false)} />
       )}
+      {/* Trocar a loja anfitriã da live ABERTA (sem fechar). Cobranças já
+          geradas seguem confirmando na conta antiga; as novas usam a nova. */}
+      {swapStoreOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-sm rounded-xl bg-white p-5 shadow-xl">
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="flex items-center gap-2 text-lg font-bold text-slate-800">
+                🏬 Trocar loja anfitriã
+              </h3>
+              <button
+                type="button"
+                onClick={() => setSwapStoreOpen(false)}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <p className="mb-3 text-xs text-slate-500">
+              A live continua aberta — só muda a loja da venda (PIX, separação e remessa
+              das <b>próximas</b> cobranças). QRs já gerados continuam valendo.
+            </p>
+            <select
+              value={swapStoreCode}
+              onChange={(e) => setSwapStoreCode(e.target.value)}
+              className="mb-4 w-full rounded-lg border border-slate-300 bg-white px-3 py-2"
+            >
+              {swapStores.length === 0 && <option value="">Carregando lojas…</option>}
+              {swapStores.map((s) => (
+                <option key={s.code} value={s.code}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={confirmSwapStore}
+              disabled={swappingStore || !swapStoreCode}
+              className="w-full rounded-lg bg-rose-600 py-2.5 font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
+            >
+              {swappingStore ? 'Trocando…' : 'Trocar loja'}
+            </button>
+          </div>
+        </div>
+      )}
       {/* Header */}
       <div className="sticky top-0 z-20 flex items-center gap-3 border-b border-slate-200 bg-white px-4 py-2.5">
         <Link href="/minha-loja" className="text-slate-400 hover:text-slate-600">
@@ -1121,6 +1317,14 @@ export default function LivePdvPage() {
         <span className="rounded-full bg-rose-100 px-2 py-0.5 text-xs font-semibold text-rose-700">
           ● {sessionTitle}
         </span>
+        <button
+          type="button"
+          onClick={openSwapStore}
+          title="Loja anfitriã da live (define o PIX, a separação e a remessa) — clique pra trocar"
+          className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600 hover:bg-slate-200"
+        >
+          🏬 {sessionStoreName || 'definir loja'}
+        </button>
         <button
           onClick={closeLive}
           title="Fechar esta live — guarda os carrinhos e libera pra abrir uma nova"
@@ -1606,14 +1810,49 @@ export default function LivePdvPage() {
             )}
 
             {/* Clientes da live — na lateral pra não ser empurrada pela grade */}
-            {carts.length > 0 && (
+            {/* EM PAGAMENTO — carrinhos aguardando o PIX/link. Saem da grade
+                principal pra live ficar limpa; clicar reabre o QR/link. */}
+            {emPagamento.length > 0 && (
+              <div>
+                <div className="mb-1 flex items-center gap-2">
+                  <QrCode className="h-5 w-5 text-sky-600" />
+                  <span className="text-sm font-bold uppercase tracking-wide text-slate-800">
+                    Em pagamento ({emPagamento.length})
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 content-start gap-1.5 rounded-xl border border-sky-200 bg-sky-50/50 p-1.5 sm:grid-cols-2">
+                  {emPagamento.map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onClick={() => openCart(c)}
+                      className={`flex items-center gap-2 rounded-lg border bg-white px-2 py-1.5 text-left transition ${
+                        cart?.id === c.id ? 'border-sky-400' : 'border-sky-100 hover:border-sky-300'
+                      }`}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-semibold text-slate-800" title={c.customerName}>
+                          {c.customerName}
+                        </div>
+                        <div className="text-[11px] text-slate-500 tabular-nums">{brl(c.totalCents)}</div>
+                      </div>
+                      <span className="shrink-0 rounded-full bg-sky-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-sky-700">
+                        {c.paymentMethod === 'link' ? 'Link/cartão' : 'PIX'}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {cartsAtivos.length > 0 && (
               <div>
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
                     <User className="h-5 w-5 text-rose-500" />
                     <span className="text-sm font-bold uppercase tracking-wide text-slate-800">
                       Clientes da live ({clientesFiltradas.length}
-                      {clientFilter.trim() && clientesFiltradas.length !== carts.length ? `/${carts.length}` : ''})
+                      {clientFilter.trim() && clientesFiltradas.length !== cartsAtivos.length ? `/${cartsAtivos.length}` : ''})
                     </span>
                   </div>
                   <button
@@ -1818,7 +2057,9 @@ function CartPanel({
   onConfirmExternal: () => void;
 }) {
   const [linkCopied, setLinkCopied] = useState(false);
-  const payLink = cart && typeof window !== 'undefined' ? `${window.location.origin}/pagar/${cart.id}` : '';
+  // Carrinho já pago/em separação: esconde ações de cobrança (link /pagar, frete)
+  const cartPago = !!cart && ['paid', 'separating', 'shipped', 'delivered'].includes(cart.status);
+  const payLink = cart && !cartPago && typeof window !== 'undefined' ? `${window.location.origin}/pagar/${cart.id}` : '';
   return (
     <div className="lg:sticky lg:top-16 lg:h-fit">
       <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
@@ -1933,6 +2174,7 @@ function CartPanel({
                   <span>Total</span>
                   <span>{brl(cart.totalCents)}</span>
                 </div>
+                {!cartPago && (
                 <button
                   onClick={onCalcFrete}
                   title="Frete pelo CEP: SP SEDEX R$ 9,99 · Sul/Sudeste PAC R$ 19,99 · demais PAC R$ 39,99"
@@ -1940,6 +2182,7 @@ function CartPanel({
                 >
                   Calcular frete pelo CEP · SP 9,99 / Sul-Sudeste 19,99 / demais 39,99
                 </button>
+                )}
                 {payLink && (
                   <div className="mt-2 rounded-lg border border-[#ECD9A0] bg-[#FBF6E6]/50 p-2">
                     <div className="mb-1.5 text-[11px] font-bold text-[#8C7325]">

@@ -844,7 +844,10 @@ export class PagarmeService {
         accepted_payment_methods: acceptedMethods,
         skip_checkout_success_page: false,
         customer_editable: false, // cliente NÃO pode mudar dados (CPF, etc)
-        billing_address_editable: false,
+        // Cliente PREENCHE o endereço no checkout do cartão — o webhook
+        // order.paid devolve o billing_address e a gente alimenta o carrinho
+        // da live (cliente não digita o endereço duas vezes).
+        billing_address_editable: true,
         ...(acceptCard
           ? {
               credit_card: {
@@ -1028,6 +1031,19 @@ export class PagarmeService {
       });
     }
 
+    // Endereço do checkout TAMBÉM pelo caminho do CRON (decisão do dono: sem
+    // webhook — a confirmação vem do reconcile). Quando a consulta ao vivo
+    // detecta pago, aplica o billing_address ao carrinho da live (só vazios).
+    if (local && newStatus === 'paid') {
+      try {
+        const addr =
+          charge?.last_transaction?.card?.billing_address ||
+          order?.customer?.address ||
+          null;
+        if (addr) await this.fillLiveCartAddressFromCheckout(local.saleId, addr);
+      } catch { /* endereço é best-effort — não trava a confirmação */ }
+    }
+
     return {
       pagarmeOrderId,
       status: newStatus,
@@ -1120,7 +1136,73 @@ export class PagarmeService {
       );
     }
 
+    // ── Endereço do checkout → carrinho da LIVE ──
+    // billing_address_editable=true: a cliente preenche o endereço no checkout
+    // do cartão. O order.paid devolve o billing_address; preenchemos os campos
+    // VAZIOS do carrinho (não sobrescreve o que a operadora já digitou).
+    if (newStatus === 'paid') {
+      try {
+        const order = eventType.startsWith('charge.')
+          ? (data?.order && typeof data.order === 'object' ? data.order : data)
+          : data;
+        const charge = (order?.charges || [])[0] || (eventType.startsWith('charge.') ? data : null);
+        const addr =
+          charge?.last_transaction?.card?.billing_address ||
+          order?.customer?.address ||
+          data?.customer?.address ||
+          null;
+        if (addr) await this.fillLiveCartAddressFromCheckout(local.saleId, addr);
+      } catch (e: any) {
+        this.logger.warn(`[pagarme] endereço do checkout não aplicado (sale=${local.saleId}): ${e?.message}`);
+      }
+    }
+
     return { ok: true, saleId: local.saleId };
+  }
+
+  /**
+   * Preenche os campos de endereço VAZIOS do carrinho da live com o
+   * billing_address do checkout. Formato Pagar.me: line_1 = "numero, rua,
+   * bairro" (nessa ordem, separados por vírgula), line_2 = complemento.
+   * saleId que não é carrinho de live é ignorado em silêncio (venda PDV etc).
+   */
+  private async fillLiveCartAddressFromCheckout(saleId: string, addr: any): Promise<void> {
+    const cart = await (this.prisma as any).livePdvCart
+      .findUnique({ where: { id: saleId } })
+      .catch(() => null);
+    if (!cart) return; // não é venda de live
+    const line1 = String(addr?.line_1 || '').trim();
+    const parts = line1.split(',').map((s: string) => s.trim()).filter(Boolean);
+    let numero = '';
+    let rua = '';
+    let bairro = '';
+    if (parts.length >= 3) {
+      numero = parts[0];
+      rua = parts[1];
+      bairro = parts.slice(2).join(', ');
+    } else if (parts.length === 2) {
+      if (/^\d+/.test(parts[0])) { numero = parts[0]; rua = parts[1]; }
+      else rua = line1;
+    } else {
+      rua = line1;
+    }
+    const patch: any = {};
+    const put = (field: string, v: any) => {
+      const val = String(v || '').trim();
+      if (val && !String((cart as any)[field] || '').trim()) patch[field] = val;
+    };
+    put('customerEndereco', rua);
+    put('customerNumero', numero);
+    put('customerComplemento', addr?.line_2);
+    put('customerBairro', bairro);
+    put('customerCidade', addr?.city);
+    put('customerUf', addr?.state);
+    put('customerCep', String(addr?.zip_code || '').replace(/\D/g, ''));
+    if (!Object.keys(patch).length) return;
+    await (this.prisma as any).livePdvCart.update({ where: { id: saleId }, data: patch });
+    this.logger.log(
+      `[pagarme] endereço do checkout aplicado ao carrinho live ${saleId}: ${Object.keys(patch).join(', ')}`,
+    );
   }
 
   // ── Helpers ─────────────────────────────────────────────────────────

@@ -39,6 +39,8 @@ interface QueueGroup {
   customerInstagram: string | null;
   customerCpf: string | null;
   paidAt: string | null;
+  liveStoreCode: string | null;
+  liveStoreName: string | null;
   items: QueueItem[];
 }
 
@@ -149,7 +151,17 @@ export default function LiveExpedicaoPage() {
               <div className="flex items-center gap-2 border-b border-slate-100 p-3">
                 <User className="h-4 w-4 text-slate-400" />
                 <div>
-                  <div className="font-semibold text-slate-800">{g.customerName}</div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-slate-800">{g.customerName}</span>
+                    {g.liveStoreName && (
+                      <span
+                        title="Live em que a venda foi feita (loja anfitriã)"
+                        className="rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wide text-rose-700"
+                      >
+                        Live {g.liveStoreName}
+                      </span>
+                    )}
+                  </div>
                   <div className="text-xs text-slate-500">
                     {g.customerPhone}
                     {g.customerInstagram && ` · @${g.customerInstagram}`}
