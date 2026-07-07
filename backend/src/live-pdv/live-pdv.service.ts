@@ -1206,10 +1206,16 @@ export class LivePdvService {
       select: { refCode: true, descricao: true, cor: true, tamanho: true, qty: true, priceCents: true },
     });
     let storeName: string | null = null;
+    let pixAvailable = true; // PIX automático (PagBank) — falso se a loja é "externo"
     try {
       const s = await this.getSession(cart.sessionId);
       storeName = (s as any)?.liveStoreName || null;
-    } catch { /* sessão indisponível — segue sem nome da loja */ }
+      const store = await (this.prisma as any).store.findUnique({
+        where: { code: (s as any)?.liveStoreCode },
+        select: { pixProvider: true },
+      });
+      pixAvailable = (store as any)?.pixProvider !== 'externo';
+    } catch { /* sessão/loja indisponível — segue com defaults */ }
     return {
       cartId: cart.id,
       firstName: String(cart.customerName || 'Cliente').trim().split(/\s+/)[0] || 'Cliente',
@@ -1220,6 +1226,7 @@ export class LivePdvService {
       totalCents: cart.totalCents || 0,
       cep: cart.customerCep || null,
       storeName,
+      pixAvailable,
       paid: LivePdvService.PAID_STATES.includes(cart.status),
       items: (items as any[]).map((it) => ({
         descricao: it.descricao || it.refCode,
@@ -1500,7 +1507,8 @@ export class LivePdvService {
     const fresh = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
     const valor = (fresh.totalCents || 0) / 100;
     if (valor <= 0) throw new BadRequestException('Total inválido');
-    await this.assertGatewayAllowed(session.liveStoreCode);
+    // NÃO passa pelo assertGatewayAllowed: o cartão usa o Pagar.me da MATRIZ,
+    // independente do PIX da loja (franquia com PIX externo também gera cartão).
 
     const link = await this.pagarme.createCheckoutLink({
       saleId: cartId,
