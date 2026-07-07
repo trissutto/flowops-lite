@@ -883,6 +883,13 @@ export default function LivePdvPage() {
       phone: c.customerPhone,
       instagram: c.customerInstagram,
     });
+    // Carrinho JÁ PAGO/EM SEPARAÇÃO: mostra o banner de confirmado — nunca a
+    // tela de cobrança de novo (bug: card "SEPARAÇÃO" voltava pro pagamento).
+    if (['paid', 'separating', 'shipped', 'delivered'].includes(c.status)) {
+      setQr(null);
+      setPaid(true);
+      return;
+    }
     // Se a cliente tem uma cobrança PENDENTE, reabre o QR/link (dá pra mostrar
     // de novo). Senão, limpa. A confirmação de pago segue rodando via socket.
     if (c.status === 'awaiting_payment' && c.qrCodeText) {
@@ -1911,7 +1918,9 @@ function CartPanel({
   onConfirmExternal: () => void;
 }) {
   const [linkCopied, setLinkCopied] = useState(false);
-  const payLink = cart && typeof window !== 'undefined' ? `${window.location.origin}/pagar/${cart.id}` : '';
+  // Carrinho já pago/em separação: esconde ações de cobrança (link /pagar, frete)
+  const cartPago = !!cart && ['paid', 'separating', 'shipped', 'delivered'].includes(cart.status);
+  const payLink = cart && !cartPago && typeof window !== 'undefined' ? `${window.location.origin}/pagar/${cart.id}` : '';
   return (
     <div className="lg:sticky lg:top-16 lg:h-fit">
       <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
@@ -2017,6 +2026,7 @@ function CartPanel({
                   <span>Total</span>
                   <span>{brl(cart.totalCents)}</span>
                 </div>
+                {!cartPago && (
                 <button
                   onClick={onCalcFrete}
                   title="Frete pelo CEP: SP SEDEX R$ 9,99 · Sul/Sudeste PAC R$ 19,99 · demais PAC R$ 39,99"
@@ -2024,6 +2034,7 @@ function CartPanel({
                 >
                   Calcular frete pelo CEP · SP 9,99 / Sul-Sudeste 19,99 / demais 39,99
                 </button>
+                )}
                 {payLink && (
                   <div className="mt-2 rounded-lg border border-[#ECD9A0] bg-[#FBF6E6]/50 p-2">
                     <div className="mb-1.5 text-[11px] font-bold text-[#8C7325]">
