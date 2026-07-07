@@ -875,6 +875,36 @@ export class LivePdvService {
   }
 
   /**
+   * Autocomplete por @ na hora de identificar a cliente que vai receber a peça.
+   * Busca clientes que TÊM @ (igUsername) por @/nome/telefone — quem se cadastrou
+   * pela live (liveRegisteredAt) vem primeiro. Só clientes com @ (não expõe a
+   * base geral de loja, que não tem Instagram).
+   */
+  async searchCustomersByAt(term: string) {
+    const t = (term || '').trim().replace(/^@/, '');
+    if (t.length < 2) return [];
+    const digits = t.replace(/\D/g, '');
+    const OR: any[] = [
+      { igUsername: { contains: t, mode: 'insensitive' } },
+      { name: { contains: t, mode: 'insensitive' } },
+    ];
+    if (digits.length >= 3) OR.push({ phone: { contains: digits } });
+    const rows = await (this.prisma as any).customer.findMany({
+      where: { igUsername: { not: null }, OR },
+      orderBy: [{ liveRegisteredAt: { sort: 'desc', nulls: 'last' } }, { name: 'asc' }],
+      select: { id: true, name: true, igUsername: true, phone: true, liveRegisteredAt: true },
+      take: 12,
+    });
+    return (rows as any[]).map((r) => ({
+      customerId: r.id,
+      name: r.name,
+      instagram: r.igUsername,
+      phone: r.phone,
+      registered: !!r.liveRegisteredAt,
+    }));
+  }
+
+  /**
    * Clientes que se CADASTRARAM na live (origem 'live') nas últimas 24h e que
    * ainda NÃO têm carrinho na sessão atual. É a fila de "aguardando" que a
    * apresentadora vê pra puxar quem chegou pelo cadastro do ManyChat.
