@@ -5536,7 +5536,11 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     //    COR batendo (exato ou contido) — sem cor não arrisca, falha explícito.
     if (corClean && tamClean) {
       try {
-        const refRegexp = `^${ref.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[A-Z]+$`;
+        // Sufixo pode vir com separador ("900881M", "900881-M", "900881 M").
+        // Cor compara SEM espaços/hífens dos dois lados ("OFF WHITE" casa
+        // "OFF-WHITE"/"OFFWHITE") — grafia varia entre cadastros irmãos.
+        const refRegexp = `^${ref.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[- ]?[A-Z]+$`;
+        const corSquash = corClean.toUpperCase().replace(/[\s-]/g, '');
         const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
           `SELECT p.CODIGO, p.REF, COALESCE(SUM(e.ESTOQUE), 0) AS TOTAL_EST
             FROM produtos p
@@ -5544,14 +5548,14 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
             WHERE p.REF REGEXP ?
               AND TRIM(UPPER(COALESCE(p.TAMANHO, ''))) = TRIM(UPPER(?))
               AND (
-                TRIM(UPPER(COALESCE(p.COR, ''))) = TRIM(UPPER(?))
-                OR UPPER(p.COR) LIKE UPPER(?)
-                OR ? LIKE CONCAT('%', UPPER(p.COR), '%')
+                REPLACE(REPLACE(UPPER(COALESCE(p.COR, '')), ' ', ''), '-', '') = ?
+                OR REPLACE(REPLACE(UPPER(COALESCE(p.COR, '')), ' ', ''), '-', '') LIKE ?
+                OR ? LIKE CONCAT('%', REPLACE(REPLACE(UPPER(COALESCE(p.COR, '')), ' ', ''), '-', ''), '%')
               )
             GROUP BY p.CODIGO, p.REF
             ORDER BY TOTAL_EST DESC, p.CODIGO DESC
             LIMIT 1`,
-          [refRegexp, tamClean, corClean, `%${corClean}%`, corClean.toUpperCase()],
+          [refRegexp, tamClean, corSquash, `%${corSquash}%`, corSquash],
         );
         if ((rows as any[]).length) {
           this.logger.warn(
