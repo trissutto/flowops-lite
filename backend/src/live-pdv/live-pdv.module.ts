@@ -10,6 +10,7 @@ import { RealignmentModule } from '../realignment/realignment.module';
 import { WebsocketModule } from '../websocket/websocket.module';
 import { LivePdvController } from './live-pdv.controller';
 import { LivePublicController } from './live-public.controller';
+import { LivePayPublicController } from './live-pay-public.controller';
 import { LivePdvService } from './live-pdv.service';
 import { LivePdvExpiryCron } from './live-pdv-expiry.cron';
 import { LivePdvPayReconcileCron } from './live-pdv-pay-reconcile.cron';
@@ -32,7 +33,7 @@ import { LivePdvPayReconcileCron } from './live-pdv-pay-reconcile.cron';
     RealignmentModule,
     WebsocketModule,
   ],
-  controllers: [LivePdvController, LivePublicController],
+  controllers: [LivePdvController, LivePublicController, LivePayPublicController],
   providers: [LivePdvService, LivePdvExpiryCron, LivePdvPayReconcileCron],
   exports: [LivePdvService],
 })

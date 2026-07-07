@@ -100,8 +100,8 @@ export default function PwaInstallBanner() {
     } catch {}
   };
 
-  // Página pública da cliente (cadastro da live) — sem chrome de app
-  if (pathname?.startsWith('/cadastro-live')) return null;
+  // Páginas públicas da cliente (cadastro / fechamento da compra) — sem chrome de app
+  if (pathname?.startsWith('/cadastro-live') || pathname?.startsWith('/pagar')) return null;
 
   // Já instalado → não mostra nada
   if (isStandalone) return null;

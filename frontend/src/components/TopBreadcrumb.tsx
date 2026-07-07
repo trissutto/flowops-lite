@@ -79,6 +79,7 @@ export default function TopBreadcrumb() {
     pathname.startsWith('/minha-loja') ||
     pathname.startsWith('/vitrine') ||
     pathname.startsWith('/cadastro-live') ||
+    pathname.startsWith('/pagar') ||
     pathname.includes('/imprimir');
 
   // Monta o breadcrumb a partir do pathname — cada nível é clicável (exceto o último)
