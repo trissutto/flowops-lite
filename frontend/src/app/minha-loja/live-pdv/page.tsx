@@ -1673,7 +1673,13 @@ export default function LivePdvPage() {
                             title={c.cartNumber ? `#${c.cartNumber} · ${c.customerName}` : c.customerName}
                           >
                             {c.cartNumber != null && (
-                              <span className="shrink-0 rounded bg-slate-800 px-1.5 py-px text-[11px] font-bold tabular-nums text-white">
+                              // Verde = já tem peça no carrinho; cinza = vazio.
+                              // Pedido do dono: bater o olho e saber quem comprou.
+                              <span
+                                className={`shrink-0 rounded px-1.5 py-px text-[11px] font-bold tabular-nums text-white ${
+                                  c.items.length > 0 ? 'bg-emerald-600' : 'bg-slate-400'
+                                }`}
+                              >
                                 {c.cartNumber}
                               </span>
                             )}
@@ -1839,7 +1845,11 @@ function CartPanel({
               <div className="min-w-0 flex-1">
                 <div className="flex min-w-0 items-center gap-1.5 font-semibold text-slate-800">
                   {cart?.cartNumber != null && (
-                    <span className="shrink-0 rounded bg-slate-800 px-1.5 py-0.5 text-xs font-bold tabular-nums text-white">
+                    <span
+                      className={`shrink-0 rounded px-1.5 py-0.5 text-xs font-bold tabular-nums text-white ${
+                        (cart?.items?.length || 0) > 0 ? 'bg-emerald-600' : 'bg-slate-400'
+                      }`}
+                    >
                       #{cart.cartNumber}
                     </span>
                   )}
