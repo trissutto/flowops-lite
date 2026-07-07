@@ -3421,6 +3421,7 @@ model LivePdvAtalho {
 model LivePdvCart {
   id                String   @id @default(uuid())
   sessionId         String   @map("session_id")
+  cartNumber        Int?     @map("cart_number")         // nº sequencial da comanda por sessão (busca por número)
   customerId        String?  @map("customer_id")        // FK lógico p/ Customer (sem relação p/ não tocar Customer)
   customerName      String   @map("customer_name")
   customerPhone     String   @map("customer_phone")
@@ -3452,6 +3453,7 @@ model LivePdvCart {
   session           LivePdvSession @relation(fields: [sessionId], references: [id])
   items             LivePdvItem[]
 
+  @@unique([sessionId, cartNumber])
   @@index([sessionId, status])
   @@index([status, createdAt(sort: Desc)])
   @@map("live_pdv_carts")

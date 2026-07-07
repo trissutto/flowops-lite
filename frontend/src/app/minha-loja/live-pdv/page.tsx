@@ -77,6 +77,7 @@ interface CartItem {
 }
 interface Cart {
   id: string;
+  cartNumber?: number | null;
   customerName: string;
   customerPhone: string;
   customerInstagram: string | null;
@@ -1225,14 +1226,18 @@ export default function LivePdvPage() {
     );
   const cartsAtivos = carts.filter((c) => c.status !== 'awaiting_payment');
 
-  // Lista de clientes filtrada (por nome ou @) e ordenada alfabeticamente.
+  // Lista de clientes filtrada (por nº da comanda, nome ou @) e ordenada
+  // alfabeticamente. Se a busca for só dígitos, casa o nº do carrinho.
   const clientesFiltradas = (() => {
     const q = clientFilter.trim().toLowerCase();
     const qIg = q.replace(/^@/, '');
+    const qNum = q.replace(/^#/, '');
+    const soDigitos = /^\d+$/.test(qNum);
     return [...cartsAtivos]
       .filter(
         (c) =>
           !q ||
+          (soDigitos && String(c.cartNumber ?? '') === qNum) ||
           (c.customerName || '').toLowerCase().includes(q) ||
           (c.customerInstagram || '').toLowerCase().replace(/^@/, '').includes(qIg),
       )
@@ -1864,7 +1869,7 @@ export default function LivePdvPage() {
                   <input
                     value={clientFilter}
                     onChange={(e) => setClientFilter(e.target.value)}
-                    placeholder="Buscar cliente por nome ou @"
+                    placeholder="Buscar por nº, nome ou @"
                     className="w-full rounded-lg border border-slate-300 py-2 pl-9 pr-8 text-sm focus:border-rose-400 focus:outline-none"
                   />
                   {clientFilter && (
@@ -1903,10 +1908,21 @@ export default function LivePdvPage() {
                           className="flex min-w-0 flex-1 flex-col gap-0.5 px-2 py-1.5 text-left"
                         >
                           <span
-                            className={`w-full truncate text-sm ${active ? 'font-extrabold text-rose-700' : 'font-semibold text-slate-800'}`}
-                            title={c.customerName}
+                            className={`flex w-full min-w-0 items-center gap-1 text-sm ${active ? 'font-extrabold text-rose-700' : 'font-semibold text-slate-800'}`}
+                            title={c.cartNumber ? `#${c.cartNumber} · ${c.customerName}` : c.customerName}
                           >
-                            {c.customerName}
+                            {c.cartNumber != null && (
+                              // Verde = já tem peça no carrinho; cinza = vazio.
+                              // Pedido do dono: bater o olho e saber quem comprou.
+                              <span
+                                className={`shrink-0 rounded px-1.5 py-px text-[11px] font-bold tabular-nums text-white ${
+                                  c.items.length > 0 ? 'bg-emerald-600' : 'bg-slate-400'
+                                }`}
+                              >
+                                {c.cartNumber}
+                              </span>
+                            )}
+                            <span className="truncate">{c.customerName}</span>
                           </span>
                           <span className="text-xs font-bold tabular-nums text-slate-900">
                             {brl(c.totalCents)}
@@ -2070,8 +2086,17 @@ function CartPanel({
             <div className="mb-2 flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2">
               <User className="h-4 w-4 text-slate-400" />
               <div className="min-w-0 flex-1">
-                <div className="truncate font-semibold text-slate-800">
-                  {cart?.customerName || activeCustomer?.name}
+                <div className="flex min-w-0 items-center gap-1.5 font-semibold text-slate-800">
+                  {cart?.cartNumber != null && (
+                    <span
+                      className={`shrink-0 rounded px-1.5 py-0.5 text-xs font-bold tabular-nums text-white ${
+                        (cart?.items?.length || 0) > 0 ? 'bg-emerald-600' : 'bg-slate-400'
+                      }`}
+                    >
+                      #{cart.cartNumber}
+                    </span>
+                  )}
+                  <span className="truncate">{cart?.customerName || activeCustomer?.name}</span>
                 </div>
                 <div className="truncate text-xs text-slate-500">
                   {cart?.customerPhone || activeCustomer?.phone || 'sem telefone'}
@@ -2623,6 +2648,8 @@ function Dashboard({ sessionId }: { sessionId: string }) {
   const k = data.kpis;
   const cards = [
     { label: 'Clientes atendidas', value: k.clientesAtendidas },
+    { label: 'Carrinhos em aberto', value: k.carrinhosAbertos ?? 0 },
+    { label: 'Valor nos carrinhos', value: brl(k.valorNosCarrinhosCents ?? 0) },
     { label: 'Pedidos criados', value: k.pedidosCriados },
     { label: 'Pedidos pagos', value: k.pedidosPagos },
     { label: 'Faturamento', value: brl(k.faturamentoCents) },

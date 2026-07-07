@@ -762,6 +762,11 @@ export class RealignmentService {
         data: {
           tipo: 'REALINHAMENTO',
           refCode: p.ref || p.sku,
+          // REGRA DO DONO: cada variação é identificada pelo CODIGO (barras),
+          // nunca por ref+cor+tamanho. O plano JÁ conhece o CODIGO exato
+          // (p.sku = r.CODIGO do Giga) — carrega ele na ordem pra baixa/
+          // entrada usarem direto, sem re-resolver por ref/cor/tam depois.
+          codigoBipado: p.sku || null,
           descricao: (p.desc ?? '').trim() || null,
           cor: p.cor ?? null,
           tamanho: p.tamanho ?? null,

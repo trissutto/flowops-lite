@@ -140,9 +140,12 @@ export function buildQrCodeUrlNfce(input: {
   const versao = input.versaoQR || '2';
   const tpAmb = input.ambiente;
   const idCSC = String(parseInt(input.idCSC, 10)); // SEFAZ aceita sem zero-pad
-  // CSC token: remove espaços/quebras coladas junto (erro comum no cadastro)
-  // que quebrariam o hash → cStat 464. Não altera o token em si.
-  const cscToken = String(input.cscToken || '').trim();
+  // CSC token: remove espaços/quebras E caracteres invisíveis (zero-width,
+  // BOM, NBSP) que vêm no copia-e-cola do portal da SEFAZ — o token PARECE
+  // idêntico no olho mas o hash sai diferente → cStat 464. O CSC é sempre
+  // ASCII imprimível (letras/números/hífen), então tudo fora disso é lixo.
+  const cscToken = String(input.cscToken || '')
+    .replace(/[^\x21-\x7E]/g, '');
 
   // Concatena pra hash
   const semHash = `${input.chave}|${versao}|${tpAmb}|${idCSC}`;
@@ -208,20 +211,57 @@ function isTransientNetworkError(err: any): boolean {
   return false;
 }
 
+// ── Tuning da transmissão (ajustável por env, sem deploy de código) ─────
+// 07/07/2026: SEFAZ-SP sobrecarregada — handshake TLS medido em 8-25s.
+// Antes: 90s de timeout × 3 tentativas = até ~4,5min de PDV travado.
+// Agora: 60s × 2 por default; NFCE_SEFAZ_TIMEOUT_MS / NFCE_SEFAZ_RETRIES
+// permitem apertar (ex: 30000/1) ou afrouxar em dia de instabilidade.
+const SEFAZ_TIMEOUT_MS = Math.max(10000, parseInt(process.env.NFCE_SEFAZ_TIMEOUT_MS || '60000', 10) || 60000);
+const SEFAZ_MAX_ATTEMPTS = Math.max(1, parseInt(process.env.NFCE_SEFAZ_RETRIES || '2', 10) || 2);
+
+/**
+ * Cache de https.Agent por certificado — keepAlive + retomada de sessão TLS.
+ * Criar um Agent novo a cada emissão obrigava um handshake TLS completo
+ * toda vez (8-25s com a SEFAZ-SP sob carga). Reusando o agent, as emissões
+ * seguintes da mesma loja aproveitam socket vivo ou sessão TLS abreviada.
+ */
+const sefazAgentCache = new Map<string, any>();
+function getSefazAgent(pfxBase64: string, pfxPassword: string): any {
+  const cacheKey = crypto.createHash('sha1').update(pfxBase64).digest('hex');
+  const cached = sefazAgentCache.get(cacheKey);
+  if (cached) return cached;
+  const { privateKeyPem, certPem } = extractA1FromPfx(pfxBase64, pfxPassword);
+  const https = require('https');
+  const agent = new https.Agent({
+    cert: certPem,
+    key: privateKeyPem,
+    rejectUnauthorized: false, // SEFAZ tem cert cadeia complicada
+    minVersion: 'TLSv1.2',
+    keepAlive: true,
+    keepAliveMsecs: 30000,
+    maxSockets: 4,
+    maxCachedSessions: 100,
+  });
+  sefazAgentCache.set(cacheKey, agent);
+  return agent;
+}
+
 /**
  * POST SOAP pra SEFAZ com retry automático em erros transientes de rede.
- * Backoff: 1s → 3s → 7s. Max 3 tentativas.
+ * Backoff: 1s → 3s → 7s. Tentativas via NFCE_SEFAZ_RETRIES (default 2).
  */
 async function postSefazWithRetry(
   endpoint: string,
   soap: string,
   config: any,
-  maxAttempts = 3,
+  maxAttempts = SEFAZ_MAX_ATTEMPTS,
 ): Promise<{ data: string; status: number; statusText?: string; headers?: any; lastError?: any }> {
   let lastError: any = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const t0 = Date.now();
     try {
       const resp = await axios.post(endpoint, soap, config);
+      console.log(`[nfce-sefaz] resposta em ${Date.now() - t0}ms (tentativa ${attempt}/${maxAttempts}, HTTP ${resp.status})`);
       // Se HTTP 5xx, também é transiente — retry
       if (resp.status >= 500 && resp.status < 600 && attempt < maxAttempts) {
         lastError = new Error(`HTTP ${resp.status}`);
@@ -238,6 +278,10 @@ async function postSefazWithRetry(
     } catch (e: any) {
       lastError = e;
       const transient = isTransientNetworkError(e);
+      console.log(
+        `[nfce-sefaz] falha em ${Date.now() - t0}ms (tentativa ${attempt}/${maxAttempts}, ` +
+        `${e?.code || e?.message || 'erro'}, transiente=${transient})`,
+      );
       if (!transient || attempt >= maxAttempts) {
         // Erro definitivo (ou estouramos retries) — propaga
         throw e;
@@ -347,20 +391,9 @@ export async function transmitNfeSefazSp(input: {
   // SOAP envelope — única declaração XML no topo do documento
   const soap = `<?xml version="1.0" encoding="UTF-8"?><soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope"><soap:Body><nfeDadosMsg xmlns="http://www.portalfiscal.inf.br/nfe/wsdl/NFeAutorizacao4">${enviNFe}</nfeDadosMsg></soap:Body></soap:Envelope>`;
 
-  // Cria agent HTTPS com certificado cliente (mTLS)
-  const { privateKeyPem, certPem } = extractA1FromPfx(
-    input.pfxBase64,
-    input.pfxPassword,
-  );
-
-  const https = require('https');
-  const agent = new https.Agent({
-    cert: certPem,
-    key: privateKeyPem,
-    rejectUnauthorized: false, // SEFAZ tem cert cadeia complicada
-    minVersion: 'TLSv1.2',
-    // SEM ciphers customizados — Node 20+ default funciona em SEFAZ
-  });
+  // Agent HTTPS com certificado cliente (mTLS) — cacheado por certificado
+  // (keepAlive + retomada de sessão TLS; ver getSefazAgent)
+  const agent = getSefazAgent(input.pfxBase64, input.pfxPassword);
 
   // SP NFC-e — SOAP 1.2 com action embutido no Content-Type (asmx exige)
   const SOAP_ACTION =
@@ -377,7 +410,7 @@ export async function transmitNfeSefazSp(input: {
         'User-Agent': 'LurdsOrderOne-NFCe/1.0',
       },
       httpsAgent: agent,
-      timeout: 90000, // SEFAZ-SP às vezes leva 30-60s — 90s dá margem
+      timeout: SEFAZ_TIMEOUT_MS, // NFCE_SEFAZ_TIMEOUT_MS (default 60s)
       maxBodyLength: 10 * 1024 * 1024,
       // Não rejeitar erros 4xx — capturamos pra mostrar resposta da SEFAZ
       validateStatus: () => true,
@@ -416,6 +449,29 @@ export async function transmitNfeSefazSp(input: {
 
   // Parse resposta (cStat, xMotivo, protocolo)
   const parsed = parseSefazResponse(xmlResposta);
+
+  // ── GUARD: resposta TEM que ser da nota que enviamos ─────────────────
+  // Incidente 07/07/2026: autorizador SP glitchou e devolveu o protNFe de
+  // um lote ANTERIOR (outra filial, outra chave, dhRecbto 34min antes do
+  // envio). Sem este guard, um cStat 100 trocado gravaria autorização/
+  // protocolo da nota ERRADA na venda — inaceitável com filiais/franquias
+  // emitindo em paralelo. Chave divergente → trata como falha transiente.
+  const chaveEnviada = (input.xmlAssinado.match(/Id="NFe(\d{44})"/) || [])[1] || '';
+  const chaveResposta = (parsed.protXml?.match(/<chNFe>(\d{44})<\/chNFe>/) || [])[1] || '';
+  if (chaveEnviada && chaveResposta && chaveEnviada !== chaveResposta) {
+    return {
+      success: false,
+      cStat: '999',
+      xMotivo:
+        `Resposta da SEFAZ refere-se a OUTRA nota (chNFe final ...${chaveResposta.slice(-10)} ` +
+        `≠ enviada ...${chaveEnviada.slice(-10)}) — instabilidade no autorizador SP. ` +
+        `Nada foi gravado. Aguarde alguns minutos e tente de novo.`,
+      xmlEnviado: enviNFe,
+      xmlResposta,
+      error: 'chNFe da resposta difere da nota enviada',
+    };
+  }
+
   let xmlAutorizado: string | undefined;
   if (parsed.cStat === '100' && parsed.protocolo) {
     // NFC-e AUTORIZADA — monta procNFe (XML + protocolo, formato pro DANFE)
@@ -650,18 +706,7 @@ export async function cancelNfceSefazSp(input: {
   const endpoint = (SEFAZ_SP_NFCE_ENDPOINTS[input.ambiente] as any).eventos
     || 'https://www.nfce.fazenda.sp.gov.br/ws/NFeRecepcaoEvento4.asmx';
 
-  const { privateKeyPem, certPem } = extractA1FromPfx(
-    input.pfxBase64,
-    input.pfxPassword,
-  );
-
-  const https = require('https');
-  const agent = new https.Agent({
-    cert: certPem,
-    key: privateKeyPem,
-    rejectUnauthorized: false,
-    minVersion: 'TLSv1.2',
-  });
+  const agent = getSefazAgent(input.pfxBase64, input.pfxPassword);
 
   let xmlResposta = '';
   try {
@@ -672,7 +717,7 @@ export async function cancelNfceSefazSp(input: {
         'User-Agent': 'LurdsOrderOne-NFCe/1.0',
       },
       httpsAgent: agent,
-      timeout: 90000,
+      timeout: SEFAZ_TIMEOUT_MS,
       validateStatus: () => true,
     });
     xmlResposta = resp.data;
@@ -715,6 +760,22 @@ export async function cancelNfceSefazSp(input: {
     (retEvt.match(/<nProt>([^<]+)<\/nProt>/) || [])[1] || '';
   const dhRegEvento =
     (retEvt.match(/<dhRegEvento>([^<]+)<\/dhRegEvento>/) || [])[1] || '';
+
+  // GUARD (mesmo do transmit): a resposta tem que referenciar a chave que
+  // cancelamos — autorizador SP já devolveu resposta de outro lote (07/07).
+  const chNFeResp = (retEvt.match(/<chNFe>(\d{44})<\/chNFe>/) || [])[1] || '';
+  if (chNFeResp && chNFeResp !== input.chave) {
+    return {
+      success: false,
+      cStat: '999',
+      xMotivo:
+        `Resposta da SEFAZ refere-se a OUTRA nota (chNFe final ...${chNFeResp.slice(-10)}) — ` +
+        `instabilidade no autorizador SP. Cancelamento NÃO confirmado; tente de novo.`,
+      xmlEnviado: envEvento,
+      xmlResposta,
+      error: 'chNFe da resposta difere da nota cancelada',
+    };
+  }
 
   return {
     success: cStat === '135' || cStat === '136',
