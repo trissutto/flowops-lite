@@ -26,6 +26,10 @@ node_modules/
 # --- Build outputs ---------------------------------------------------------
 dist/
 build/
+# desktop-app/build NÃO é output: são recursos do instalador (installer.nsh,
+# ícones) que o GitHub Actions precisa pra buildar o LURDS ORDER ONE.
+!desktop-app/build/
+!desktop-app/build/**
 .next/
 out/
 **/*.tsbuildinfo
