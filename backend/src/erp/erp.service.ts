@@ -5528,6 +5528,42 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
+    // 4. Variante de cor com REF SUFIXADA (padrão Lurd's: 900658 = OFF WHITE,
+    //    900658M = MOSTARDA — mesma peça, cor cadastrada estendendo a REF).
+    //    A grade da live já junta por prefixo (fix 073db40); a entrada de
+    //    remessa caía aqui: "900881 OFF WHITE/46" não existe como REF 900881,
+    //    está numa irmã "900881X". Busca REF^[A-Z]+$ exigindo TAMANHO exato e
+    //    COR batendo (exato ou contido) — sem cor não arrisca, falha explícito.
+    if (corClean && tamClean) {
+      try {
+        const refRegexp = `^${ref.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[A-Z]+$`;
+        const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+          `SELECT p.CODIGO, p.REF, COALESCE(SUM(e.ESTOQUE), 0) AS TOTAL_EST
+            FROM produtos p
+            LEFT JOIN estoque e ON e.CODIGO = p.CODIGO
+            WHERE p.REF REGEXP ?
+              AND TRIM(UPPER(COALESCE(p.TAMANHO, ''))) = TRIM(UPPER(?))
+              AND (
+                TRIM(UPPER(COALESCE(p.COR, ''))) = TRIM(UPPER(?))
+                OR UPPER(p.COR) LIKE UPPER(?)
+                OR ? LIKE CONCAT('%', UPPER(p.COR), '%')
+              )
+            GROUP BY p.CODIGO, p.REF
+            ORDER BY TOTAL_EST DESC, p.CODIGO DESC
+            LIMIT 1`,
+          [refRegexp, tamClean, corClean, `%${corClean}%`, corClean.toUpperCase()],
+        );
+        if ((rows as any[]).length) {
+          this.logger.warn(
+            `findCodigoByRefCorTam: resolvido via REF irmã sufixada ${(rows as any[])[0].REF} pra ${ref} ${corClean}/${tamClean}`,
+          );
+          return String((rows as any[])[0].CODIGO).trim();
+        }
+      } catch (e) {
+        this.logger.warn(`findCodigoByRefCorTam sufixo falhou: ${(e as Error).message}`);
+      }
+    }
+
     this.logger.warn(`findCodigoByRefCorTam: NADA encontrado pra REF=${ref} COR=${corClean} TAM=${tamClean}`);
     return null;
   }
