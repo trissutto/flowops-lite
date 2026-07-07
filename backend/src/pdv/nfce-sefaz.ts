@@ -416,6 +416,29 @@ export async function transmitNfeSefazSp(input: {
 
   // Parse resposta (cStat, xMotivo, protocolo)
   const parsed = parseSefazResponse(xmlResposta);
+
+  // ── GUARD: resposta TEM que ser da nota que enviamos ─────────────────
+  // Incidente 07/07/2026: autorizador SP glitchou e devolveu o protNFe de
+  // um lote ANTERIOR (outra filial, outra chave, dhRecbto 34min antes do
+  // envio). Sem este guard, um cStat 100 trocado gravaria autorização/
+  // protocolo da nota ERRADA na venda — inaceitável com filiais/franquias
+  // emitindo em paralelo. Chave divergente → trata como falha transiente.
+  const chaveEnviada = (input.xmlAssinado.match(/Id="NFe(\d{44})"/) || [])[1] || '';
+  const chaveResposta = (parsed.protXml?.match(/<chNFe>(\d{44})<\/chNFe>/) || [])[1] || '';
+  if (chaveEnviada && chaveResposta && chaveEnviada !== chaveResposta) {
+    return {
+      success: false,
+      cStat: '999',
+      xMotivo:
+        `Resposta da SEFAZ refere-se a OUTRA nota (chNFe final ...${chaveResposta.slice(-10)} ` +
+        `≠ enviada ...${chaveEnviada.slice(-10)}) — instabilidade no autorizador SP. ` +
+        `Nada foi gravado. Aguarde alguns minutos e tente de novo.`,
+      xmlEnviado: enviNFe,
+      xmlResposta,
+      error: 'chNFe da resposta difere da nota enviada',
+    };
+  }
+
   let xmlAutorizado: string | undefined;
   if (parsed.cStat === '100' && parsed.protocolo) {
     // NFC-e AUTORIZADA — monta procNFe (XML + protocolo, formato pro DANFE)
@@ -715,6 +738,22 @@ export async function cancelNfceSefazSp(input: {
     (retEvt.match(/<nProt>([^<]+)<\/nProt>/) || [])[1] || '';
   const dhRegEvento =
     (retEvt.match(/<dhRegEvento>([^<]+)<\/dhRegEvento>/) || [])[1] || '';
+
+  // GUARD (mesmo do transmit): a resposta tem que referenciar a chave que
+  // cancelamos — autorizador SP já devolveu resposta de outro lote (07/07).
+  const chNFeResp = (retEvt.match(/<chNFe>(\d{44})<\/chNFe>/) || [])[1] || '';
+  if (chNFeResp && chNFeResp !== input.chave) {
+    return {
+      success: false,
+      cStat: '999',
+      xMotivo:
+        `Resposta da SEFAZ refere-se a OUTRA nota (chNFe final ...${chNFeResp.slice(-10)}) — ` +
+        `instabilidade no autorizador SP. Cancelamento NÃO confirmado; tente de novo.`,
+      xmlEnviado: envEvento,
+      xmlResposta,
+      error: 'chNFe da resposta difere da nota cancelada',
+    };
+  }
 
   return {
     success: cStat === '135' || cStat === '136',
