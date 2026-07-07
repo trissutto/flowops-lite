@@ -1871,6 +1871,16 @@ export class LivePdvService {
     const pecasVendidas = paidItems.reduce((s, i) => s + (i.qty || 0), 0);
     const clientesAtendidas = new Set((carts as any[]).map((c) => c.customerId || c.id)).size;
 
+    // Carrinhos EM ABERTO com peça dentro + valor parado neles (ainda não
+    // pago). É o "quanto a live já vendeu" na prática: na live o pagamento
+    // vem depois, então faturamento sozinho fica em zero e engana.
+    const cartsComItem = new Set((items as any[]).map((i) => i.cartId));
+    const openCarts = (carts as any[]).filter(
+      (c) => ['open', 'awaiting_payment'].includes(c.status) && cartsComItem.has(c.id),
+    );
+    const carrinhosAbertos = openCarts.length;
+    const valorNosCarrinhosCents = openCarts.reduce((s, c) => s + (c.totalCents || 0), 0);
+
     // produtos mais vendidos
     const prodMap = new Map<string, { ref: string; descricao: string; qty: number; valorCents: number }>();
     for (const i of paidItems) {
@@ -1892,6 +1902,8 @@ export class LivePdvService {
         pecasVendidas,
         reservasAtivas: (items as any[]).filter((i) => i.status === 'reserved').length,
         conversao: carts.length ? Math.round((paidCarts.length / carts.length) * 100) : 0,
+        carrinhosAbertos,
+        valorNosCarrinhosCents,
       },
       topProducts,
     };

@@ -2368,6 +2368,8 @@ function Dashboard({ sessionId }: { sessionId: string }) {
   const k = data.kpis;
   const cards = [
     { label: 'Clientes atendidas', value: k.clientesAtendidas },
+    { label: 'Carrinhos em aberto', value: k.carrinhosAbertos ?? 0 },
+    { label: 'Valor nos carrinhos', value: brl(k.valorNosCarrinhosCents ?? 0) },
     { label: 'Pedidos criados', value: k.pedidosCriados },
     { label: 'Pedidos pagos', value: k.pedidosPagos },
     { label: 'Faturamento', value: brl(k.faturamentoCents) },
