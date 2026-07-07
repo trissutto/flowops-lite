@@ -1181,11 +1181,20 @@ export default function LivePdvPage() {
     );
   }
 
+  // Carrinhos que já receberam cobrança saem da grade principal e vão pra
+  // seção própria "EM PAGAMENTO" (pedido do dono: menos poluição na live).
+  const emPagamento = carts
+    .filter((c) => c.status === 'awaiting_payment')
+    .sort((a, b) =>
+      (a.customerName || '').localeCompare(b.customerName || '', 'pt-BR', { sensitivity: 'base' }),
+    );
+  const cartsAtivos = carts.filter((c) => c.status !== 'awaiting_payment');
+
   // Lista de clientes filtrada (por nome ou @) e ordenada alfabeticamente.
   const clientesFiltradas = (() => {
     const q = clientFilter.trim().toLowerCase();
     const qIg = q.replace(/^@/, '');
-    return [...carts]
+    return [...cartsAtivos]
       .filter(
         (c) =>
           !q ||
@@ -1717,14 +1726,49 @@ export default function LivePdvPage() {
             )}
 
             {/* Clientes da live — na lateral pra não ser empurrada pela grade */}
-            {carts.length > 0 && (
+            {/* EM PAGAMENTO — carrinhos aguardando o PIX/link. Saem da grade
+                principal pra live ficar limpa; clicar reabre o QR/link. */}
+            {emPagamento.length > 0 && (
+              <div>
+                <div className="mb-1 flex items-center gap-2">
+                  <QrCode className="h-5 w-5 text-sky-600" />
+                  <span className="text-sm font-bold uppercase tracking-wide text-slate-800">
+                    Em pagamento ({emPagamento.length})
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 content-start gap-1.5 rounded-xl border border-sky-200 bg-sky-50/50 p-1.5 sm:grid-cols-2">
+                  {emPagamento.map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onClick={() => openCart(c)}
+                      className={`flex items-center gap-2 rounded-lg border bg-white px-2 py-1.5 text-left transition ${
+                        cart?.id === c.id ? 'border-sky-400' : 'border-sky-100 hover:border-sky-300'
+                      }`}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-semibold text-slate-800" title={c.customerName}>
+                          {c.customerName}
+                        </div>
+                        <div className="text-[11px] text-slate-500 tabular-nums">{brl(c.totalCents)}</div>
+                      </div>
+                      <span className="shrink-0 rounded-full bg-sky-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-sky-700">
+                        {c.paymentMethod === 'link' ? 'Link/cartão' : 'PIX'}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {cartsAtivos.length > 0 && (
               <div>
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
                     <User className="h-5 w-5 text-rose-500" />
                     <span className="text-sm font-bold uppercase tracking-wide text-slate-800">
                       Clientes da live ({clientesFiltradas.length}
-                      {clientFilter.trim() && clientesFiltradas.length !== carts.length ? `/${carts.length}` : ''})
+                      {clientFilter.trim() && clientesFiltradas.length !== cartsAtivos.length ? `/${cartsAtivos.length}` : ''})
                     </span>
                   </div>
                   <button

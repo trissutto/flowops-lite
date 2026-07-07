@@ -1748,10 +1748,20 @@ export class LivePdvService {
       ? await (this.prisma as any).livePdvCart.findMany({ where: { id: { in: cartIds } } })
       : [];
     const cartById = new Map<string, any>(carts.map((c: any) => [c.id, c]));
+    // Loja anfitriã de cada live (badge "LIVE ITANHAÉM" na expedição)
+    const sessionIds = Array.from(new Set(carts.map((c: any) => c.sessionId).filter(Boolean)));
+    const sessions = sessionIds.length
+      ? await (this.prisma as any).livePdvSession.findMany({
+          where: { id: { in: sessionIds } },
+          select: { id: true, liveStoreCode: true, liveStoreName: true },
+        })
+      : [];
+    const sessById = new Map<string, any>(sessions.map((s: any) => [s.id, s]));
     // agrupa por carrinho
     const groups = new Map<string, any>();
     for (const it of items as any[]) {
       const c = cartById.get(it.cartId);
+      const sess = c ? sessById.get(c.sessionId) : null;
       if (!groups.has(it.cartId)) {
         groups.set(it.cartId, {
           cartId: it.cartId,
@@ -1760,6 +1770,8 @@ export class LivePdvService {
           customerInstagram: c?.customerInstagram,
           customerCpf: c?.customerCpf || null,
           paidAt: c?.paidAt,
+          liveStoreCode: sess?.liveStoreCode || null,
+          liveStoreName: sess?.liveStoreName || null,
           items: [],
         });
       }

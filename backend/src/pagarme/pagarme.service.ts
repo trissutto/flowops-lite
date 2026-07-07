@@ -1031,6 +1031,19 @@ export class PagarmeService {
       });
     }
 
+    // Endereço do checkout TAMBÉM pelo caminho do CRON (decisão do dono: sem
+    // webhook — a confirmação vem do reconcile). Quando a consulta ao vivo
+    // detecta pago, aplica o billing_address ao carrinho da live (só vazios).
+    if (local && newStatus === 'paid') {
+      try {
+        const addr =
+          charge?.last_transaction?.card?.billing_address ||
+          order?.customer?.address ||
+          null;
+        if (addr) await this.fillLiveCartAddressFromCheckout(local.saleId, addr);
+      } catch { /* endereço é best-effort — não trava a confirmação */ }
+    }
+
     return {
       pagarmeOrderId,
       status: newStatus,
