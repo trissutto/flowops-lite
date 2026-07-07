@@ -140,9 +140,12 @@ export function buildQrCodeUrlNfce(input: {
   const versao = input.versaoQR || '2';
   const tpAmb = input.ambiente;
   const idCSC = String(parseInt(input.idCSC, 10)); // SEFAZ aceita sem zero-pad
-  // CSC token: remove espaços/quebras coladas junto (erro comum no cadastro)
-  // que quebrariam o hash → cStat 464. Não altera o token em si.
-  const cscToken = String(input.cscToken || '').trim();
+  // CSC token: remove espaços/quebras E caracteres invisíveis (zero-width,
+  // BOM, NBSP) que vêm no copia-e-cola do portal da SEFAZ — o token PARECE
+  // idêntico no olho mas o hash sai diferente → cStat 464. O CSC é sempre
+  // ASCII imprimível (letras/números/hífen), então tudo fora disso é lixo.
+  const cscToken = String(input.cscToken || '')
+    .replace(/[^\x21-\x7E]/g, '');
 
   // Concatena pra hash
   const semHash = `${input.chave}|${versao}|${tpAmb}|${idCSC}`;

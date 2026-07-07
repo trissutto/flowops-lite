@@ -172,7 +172,9 @@ export class NfceService {
       data.numeroAtual = input.numeroAtual;
     }
     // Sensíveis: só sobrescreve se vier valor novo
-    if (input.cscToken) data.cscToken = input.cscToken;
+    // CSC: limpa caracteres invisíveis do copia-e-cola do portal (zero-width,
+    // BOM, NBSP) — token "igual no olho" com lixo dentro gera cStat 464.
+    if (input.cscToken) data.cscToken = input.cscToken.replace(/[^\x21-\x7E]/g, '');
     if (input.certPfxB64) data.certPfxB64 = input.certPfxB64;
     if (input.certPfxPass) data.certPfxPass = input.certPfxPass;
 
