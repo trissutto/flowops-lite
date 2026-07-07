@@ -818,19 +818,40 @@ export class LivePdvService {
       });
       if (open) return open;
     }
-    return (this.prisma as any).livePdvCart.create({
-      data: {
-        sessionId,
-        customerId: customer.id || null,
-        customerName: customer.name,
-        customerPhone: (customer.phone || '').replace(/\D/g, ''),
-        customerInstagram: customer.instagram || null,
-        customerCpf: customer.cpf || null,
-        customerEmail: customer.email || null,
-        customerCep: customer.cep || null,
-        status: 'open',
-      },
+    return this.createCartWithNumber(sessionId, {
+      sessionId,
+      customerId: customer.id || null,
+      customerName: customer.name,
+      customerPhone: (customer.phone || '').replace(/\D/g, ''),
+      customerInstagram: customer.instagram || null,
+      customerCpf: customer.cpf || null,
+      customerEmail: customer.email || null,
+      customerCep: customer.cep || null,
+      status: 'open',
     });
+  }
+
+  /**
+   * Cria o carrinho já com um nº sequencial por sessão (a "comanda" que a
+   * apresentadora usa pra puxar a cliente por número, não só por nome/@).
+   * Número = maior nº da sessão + 1; o @@unique([sessionId, cartNumber]) barra
+   * colisão de criação concorrente → retry (P2002) recalculando o próximo nº.
+   */
+  private async createCartWithNumber(sessionId: string, data: any, attempt = 0): Promise<any> {
+    const last = await (this.prisma as any).livePdvCart.findFirst({
+      where: { sessionId, cartNumber: { not: null } },
+      orderBy: { cartNumber: 'desc' },
+      select: { cartNumber: true },
+    });
+    const cartNumber = (last?.cartNumber || 0) + 1;
+    try {
+      return await (this.prisma as any).livePdvCart.create({ data: { ...data, cartNumber } });
+    } catch (e: any) {
+      if (e?.code === 'P2002' && attempt < 8) {
+        return this.createCartWithNumber(sessionId, data, attempt + 1);
+      }
+      throw e;
+    }
   }
 
   /**
