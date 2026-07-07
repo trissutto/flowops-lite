@@ -29,6 +29,9 @@ build/
 .next/
 out/
 **/*.tsbuildinfo
+# Exceção: desktop-app/build/ são recursos versionados (ícones do instalador/tray),
+# não output de build — o output do electron-builder vai pra desktop-app/dist/.
+!desktop-app/build/
 
 # --- Logs ------------------------------------------------------------------
 *.log
