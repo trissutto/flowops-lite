@@ -177,7 +177,15 @@ function buildGrade(product: GradeResult) {
 export default function LivePdvPage() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessionTitle, setSessionTitle] = useState('');
-  const [activeLive, setActiveLive] = useState<{ id: string; title: string } | null>(null);
+  const [sessionStoreName, setSessionStoreName] = useState('');
+  const [activeLive, setActiveLive] = useState<{ id: string; title: string; storeName?: string } | null>(null);
+  // Modal "nova live": título + LOJA ANFITRIÃ (obrigatório escolher — antes o
+  // backend caía num padrão fixo e toda live saía como Anália Franco).
+  const [newLiveOpen, setNewLiveOpen] = useState(false);
+  const [newLiveTitle, setNewLiveTitle] = useState('');
+  const [newLiveStore, setNewLiveStore] = useState('');
+  const [newLiveStores, setNewLiveStores] = useState<Array<{ code: string; name: string }>>([]);
+  const [creatingLive, setCreatingLive] = useState(false);
   const [booting, setBooting] = useState(true);
   const [tab, setTab] = useState<'console' | 'dashboard'>('console');
   // Legenda da Live — atalhos curtos (01, 02...) → referência completa
@@ -225,7 +233,7 @@ export default function LivePdvPage() {
       try {
         const list = await api<any[]>('/live-pdv/sessions');
         const live = (list || []).find((s) => s.status === 'live');
-        if (live) setActiveLive({ id: live.id, title: live.title });
+        if (live) setActiveLive({ id: live.id, title: live.title, storeName: live.liveStoreName || '' });
       } catch {}
       setBooting(false);
     })();
@@ -372,18 +380,49 @@ export default function LivePdvPage() {
       )
     )
       return;
-    const title = prompt('Título da nova live:', `Live ${new Date().toLocaleDateString('pt-BR')}`);
-    if (title === null) return;
+    // Abre o modal (título + loja anfitriã). A loja do login vem pré-selecionada.
+    setNewLiveTitle(`Live ${new Date().toLocaleDateString('pt-BR')}`);
+    setNewLiveOpen(true);
+    try {
+      const [stores, me] = await Promise.all([
+        api<any[]>('/stores').catch(() => [] as any[]),
+        api<any>('/auth/me').catch(() => null),
+      ]);
+      const act = (stores || [])
+        .filter((s: any) => s.active !== false)
+        .map((s: any) => ({ code: String(s.code), name: String(s.name) }));
+      setNewLiveStores(act);
+      const mine = me?.storeCode && act.some((s: any) => s.code === String(me.storeCode))
+        ? String(me.storeCode)
+        : '';
+      setNewLiveStore(mine || act[0]?.code || '');
+    } catch { /* sem lista — o backend usa a loja padrão */ }
+  }
+
+  async function confirmCreateLive() {
+    if (creatingLive) return;
+    if (!newLiveStore && newLiveStores.length > 0) {
+      alert('Escolha a loja anfitriã da live.');
+      return;
+    }
+    setCreatingLive(true);
     try {
       const s = await api<any>('/live-pdv/sessions', {
         method: 'POST',
-        body: JSON.stringify({ title }),
+        body: JSON.stringify({
+          title: newLiveTitle.trim() || undefined,
+          liveStoreCode: newLiveStore || undefined,
+        }),
       });
       setActiveLive(null);
       setSessionId(s.id);
       setSessionTitle(s.title);
+      setSessionStoreName(s.liveStoreName || '');
+      setNewLiveOpen(false);
     } catch (e: any) {
       alert('Erro ao criar sessão: ' + (e?.message || e));
+    } finally {
+      setCreatingLive(false);
     }
   }
 
@@ -392,6 +431,7 @@ export default function LivePdvPage() {
     if (!activeLive) return;
     setSessionId(activeLive.id);
     setSessionTitle(activeLive.title);
+    setSessionStoreName(activeLive.storeName || '');
   }
 
   // Fecha a live atual: guarda os carrinhos na sessão (não apaga) e volta pra
@@ -1041,6 +1081,7 @@ export default function LivePdvPage() {
           <>
             <p className="text-slate-500">
               Tem uma live aberta: <b className="text-slate-700">{activeLive.title}</b>
+              {activeLive.storeName ? <> · <b className="text-slate-700">🏬 {activeLive.storeName}</b></> : null}
             </p>
             <button
               onClick={continueLive}
@@ -1069,6 +1110,66 @@ export default function LivePdvPage() {
         <Link href="/minha-loja" className="text-sm text-slate-400 hover:text-slate-600">
           Voltar
         </Link>
+
+        {/* Modal NOVA LIVE: título + loja anfitriã (define PIX/separação/remessa).
+            Antes era um prompt só de título e o backend caía na loja padrão fixa
+            (Anália Franco) — live de Itanhaém saía com a loja errada. */}
+        {newLiveOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+            <div className="w-full max-w-sm rounded-xl bg-white p-5 shadow-xl">
+              <div className="mb-3 flex items-center justify-between">
+                <h3 className="flex items-center gap-2 text-lg font-bold text-slate-800">
+                  <Zap className="h-5 w-5 text-rose-500" /> Nova live
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => setNewLiveOpen(false)}
+                  className="text-slate-400 hover:text-slate-600"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+              <label className="mb-3 block">
+                <span className="mb-1 block text-xs font-bold uppercase tracking-wide text-slate-500">
+                  Título
+                </span>
+                <input
+                  value={newLiveTitle}
+                  onChange={(e) => setNewLiveTitle(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                />
+              </label>
+              <label className="mb-1 block">
+                <span className="mb-1 block text-xs font-bold uppercase tracking-wide text-slate-500">
+                  Loja anfitriã da live *
+                </span>
+                <select
+                  value={newLiveStore}
+                  onChange={(e) => setNewLiveStore(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2"
+                >
+                  {newLiveStores.length === 0 && <option value="">Carregando lojas…</option>}
+                  {newLiveStores.map((s) => (
+                    <option key={s.code} value={s.code}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <p className="mb-4 text-[11px] text-slate-500">
+                É a loja da venda: define o PIX (PagBank dela), a separação e a remessa.
+              </p>
+              <button
+                type="button"
+                onClick={confirmCreateLive}
+                disabled={creatingLive}
+                className="w-full rounded-lg bg-rose-600 py-2.5 font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
+              >
+                {creatingLive ? 'Abrindo…' : '▶ Abrir live'}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -1116,6 +1217,14 @@ export default function LivePdvPage() {
         <span className="rounded-full bg-rose-100 px-2 py-0.5 text-xs font-semibold text-rose-700">
           ● {sessionTitle}
         </span>
+        {sessionStoreName && (
+          <span
+            title="Loja anfitriã da live — define o PIX, a separação e a remessa"
+            className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600"
+          >
+            🏬 {sessionStoreName}
+          </span>
+        )}
         <button
           onClick={closeLive}
           title="Fechar esta live — guarda os carrinhos e libera pra abrir uma nova"
