@@ -51,6 +51,45 @@ export class LivePayPublicController {
     return this.svc.computeFreteFromCep(cartId, digits);
   }
 
+  // Endereço de entrega — a cliente preenche NO checkout (a loja recebe o
+  // pedido pronto pra postar, sem precisar caçar endereço pelo Direct).
+  @Post(':cartId/endereco')
+  async endereco(
+    @Param('cartId') key: string,
+    @Body()
+    body: {
+      endereco?: string;
+      numero?: string;
+      complemento?: string;
+      bairro?: string;
+      cidade?: string;
+      uf?: string;
+    },
+  ) {
+    const cartId = await this.svc.resolvePublicCartId(key);
+    const clean = (v: any, max: number) => String(v || '').trim().slice(0, max);
+    const data = {
+      customerEndereco: clean(body?.endereco, 160),
+      customerNumero: clean(body?.numero, 20),
+      customerComplemento: clean(body?.complemento, 80),
+      customerBairro: clean(body?.bairro, 80),
+      customerCidade: clean(body?.cidade, 80),
+      customerUf: clean(body?.uf, 2).toUpperCase(),
+    };
+    const faltando: string[] = [];
+    if (!data.customerEndereco) faltando.push('rua');
+    if (!data.customerNumero) faltando.push('número');
+    if (!data.customerCidade) faltando.push('cidade');
+    if (data.customerUf.length !== 2) faltando.push('UF');
+    if (faltando.length) {
+      throw new BadRequestException(`Preencha o endereço de entrega — falta: ${faltando.join(', ')}.`);
+    }
+    const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
+    if (!cart) throw new NotFoundException('Compra não encontrada');
+    await (this.prisma as any).livePdvCart.update({ where: { id: cartId }, data });
+    return { ok: true };
+  }
+
   @Post(':cartId/pix')
   async pix(@Param('cartId') key: string) {
     const cartId = await this.svc.resolvePublicCartId(key);
@@ -65,7 +104,10 @@ export class LivePayPublicController {
     return this.svc.startPaymentLink(cartId);
   }
 
-  /** Só deixa cobrar se: existe, não está pago e já tem CEP (frete calculado). */
+  /**
+   * Só deixa cobrar se: existe, não está pago, tem CEP (frete calculado) e o
+   * ENDEREÇO de entrega completo — o pedido chega na loja pronto pra postar.
+   */
   private async guardPayable(cartId: string): Promise<void> {
     const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
     if (!cart) throw new NotFoundException('Compra não encontrada');
@@ -75,6 +117,14 @@ export class LivePayPublicController {
     const cep = String(cart.customerCep || '').replace(/\D/g, '');
     if (cep.length !== 8) {
       throw new BadRequestException('Informe seu CEP pra calcular o frete antes de pagar.');
+    }
+    if (
+      !String(cart.customerEndereco || '').trim() ||
+      !String(cart.customerNumero || '').trim() ||
+      !String(cart.customerCidade || '').trim() ||
+      !String(cart.customerUf || '').trim()
+    ) {
+      throw new BadRequestException('Preencha o endereço de entrega antes de pagar. 💜');
     }
   }
 }

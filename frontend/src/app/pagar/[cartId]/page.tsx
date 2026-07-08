@@ -35,9 +35,11 @@ function parseErr(e: any): string {
 }
 
 type Item = { descricao: string; ref: string; cor: string | null; tamanho: string | null; qty: number; priceCents: number };
+type Endereco = { endereco: string; numero: string; complemento: string; bairro: string; cidade: string; uf: string };
 type Summary = {
   cartId: string; firstName: string; status: string; paymentMethod: string | null;
   subtotalCents: number; freteCents: number; totalCents: number; cep: string | null;
+  endereco?: Endereco;
   storeName: string | null; paid: boolean; pixAvailable: boolean; items: Item[];
   pix: { qrCodeText: string; qrCodeImageUrl: string } | null; paymentUrl: string | null;
 };
@@ -51,6 +53,13 @@ export default function PagarPage() {
   const [cep, setCep] = useState('');
   const [frete, setFrete] = useState<{ freteCents: number; totalCents: number; freteServico: string; freteRegiao: string } | null>(null);
   const [calcLoading, setCalcLoading] = useState(false);
+  // Endereço de entrega — a loja recebe o pedido pronto pra postar
+  const [rua, setRua] = useState('');
+  const [numero, setNumero] = useState('');
+  const [complemento, setComplemento] = useState('');
+  const [bairro, setBairro] = useState('');
+  const [cidade, setCidade] = useState('');
+  const [uf, setUf] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [method, setMethod] = useState<'pix' | 'card' | null>(null);
   const [pix, setPix] = useState<{ qrCodeText: string; qrCodeImageUrl: string } | null>(null);
@@ -68,7 +77,28 @@ export default function PagarPage() {
       setFrete({ freteCents: r.freteCents, totalCents: r.totalCents, freteServico: r.freteServico || '', freteRegiao: r.freteRegiao || '' });
     } catch (e: any) { setErr(parseErr(e)); setFrete(null); }
     finally { setCalcLoading(false); }
+    // Preenche rua/bairro/cidade/UF pelo CEP (ViaCEP) — a cliente só confere e põe o número
+    try {
+      const v = await fetch(`https://viacep.com.br/ws/${digits}/json/`).then((x) => x.json());
+      if (!v?.erro) {
+        setRua((prev) => prev || v.logradouro || '');
+        setBairro((prev) => prev || v.bairro || '');
+        setCidade((prev) => prev || v.localidade || '');
+        setUf((prev) => prev || String(v.uf || '').toUpperCase());
+      }
+    } catch { /* ViaCEP fora — cliente digita na mão */ }
   }, [cartId]);
+
+  const enderecoOk =
+    rua.trim().length > 0 && numero.trim().length > 0 && cidade.trim().length > 0 && uf.trim().length === 2;
+
+  // Salva o endereço no carrinho (obrigatório antes de gerar o pagamento)
+  const saveEndereco = useCallback(async () => {
+    await api(`/public/live-pay/${cartId}/endereco`, {
+      method: 'POST',
+      body: JSON.stringify({ endereco: rua, numero, complemento, bairro, cidade, uf }),
+    });
+  }, [cartId, rua, numero, complemento, bairro, cidade, uf]);
 
   const load = useCallback(async () => {
     try {
@@ -78,6 +108,14 @@ export default function PagarPage() {
       if (s.pix?.qrCodeText) { setPix(s.pix); setMethod('pix'); }
       if (s.paymentMethod === 'link' && s.paymentUrl) { setCardUrl(s.paymentUrl); setMethod('card'); }
       if (s.cep) { setCep(maskCep(s.cep)); calcFrete(s.cep); }
+      if (s.endereco) {
+        setRua((prev) => prev || s.endereco!.endereco || '');
+        setNumero((prev) => prev || s.endereco!.numero || '');
+        setComplemento((prev) => prev || s.endereco!.complemento || '');
+        setBairro((prev) => prev || s.endereco!.bairro || '');
+        setCidade((prev) => prev || s.endereco!.cidade || '');
+        setUf((prev) => prev || s.endereco!.uf || '');
+      }
     } catch { setLoadErr('Não encontramos essa compra. Confira o link com a loja. 💜'); }
   }, [cartId, calcFrete]);
   useEffect(() => { if (cartId) load(); }, [cartId, load]);
@@ -102,6 +140,7 @@ export default function PagarPage() {
     }
     setBusy('pix'); setErr(null);
     try {
+      await saveEndereco(); // endereço vai junto — a loja recebe pronto pra postar
       const r = await api<any>(`/public/live-pay/${cartId}/pix`, { method: 'POST' });
       setPix({ qrCodeText: r.qrCodeText, qrCodeImageUrl: r.qrCodeImageUrl });
       setCardUrl(null);
@@ -113,6 +152,7 @@ export default function PagarPage() {
     if (busy) return;
     setBusy('card'); setErr(null);
     try {
+      await saveEndereco();
       const r = await api<any>(`/public/live-pay/${cartId}/card`, { method: 'POST' });
       setCardUrl(r.paymentUrl);
       setPix(null);
@@ -154,7 +194,9 @@ export default function PagarPage() {
   }
 
   const total = frete ? frete.totalCents : sum.subtotalCents;
-  const canPay = !!frete && !busy;
+  const canPay = !!frete && enderecoOk && !busy;
+  const inputCls =
+    'w-full box-border px-3.5 py-3 text-base rounded-xl bg-[#FCFBF7] border-[1.5px] border-[#E4DDCB] outline-none focus:border-[#B8912B] focus:ring-2 focus:ring-[#EBD9A6]';
 
   return (
     <div className="min-h-screen bg-[#FAFAF7] flex items-start justify-center px-4 pt-[5vh] pb-12 font-sans text-[#2A2620]">
@@ -210,6 +252,30 @@ export default function PagarPage() {
           )}
         </label>
 
+        {/* Endereço de entrega — preenchido pelo CEP; a cliente confere e põe o número */}
+        {frete && (
+          <div className="mb-4">
+            <span className="block text-[13px] font-bold text-[#6B6456] mb-1.5">Endereço de entrega 📦</span>
+            <div className="space-y-2">
+              <input value={rua} onChange={(e) => setRua(e.target.value)} placeholder="Rua / avenida" className={inputCls} />
+              <div className="grid grid-cols-[110px_1fr] gap-2">
+                <input value={numero} onChange={(e) => setNumero(e.target.value)} placeholder="Número" inputMode="numeric" className={inputCls} />
+                <input value={complemento} onChange={(e) => setComplemento(e.target.value)} placeholder="Complemento (opcional)" className={inputCls} />
+              </div>
+              <input value={bairro} onChange={(e) => setBairro(e.target.value)} placeholder="Bairro" className={inputCls} />
+              <div className="grid grid-cols-[1fr_80px] gap-2">
+                <input value={cidade} onChange={(e) => setCidade(e.target.value)} placeholder="Cidade" className={inputCls} />
+                <input value={uf} onChange={(e) => setUf(e.target.value.toUpperCase().slice(0, 2))} placeholder="UF" maxLength={2} className={`${inputCls} uppercase`} />
+              </div>
+            </div>
+            {!enderecoOk && (
+              <span className="mt-1 block text-[11px] text-[#A69E8C]">
+                Confere a rua e coloca o <b>número</b> pra gente postar seu pedido certinho 💜
+              </span>
+            )}
+          </div>
+        )}
+
         {err && <div className="bg-[#FDECEC] border border-[#F3C0C0] text-[#9B2C2C] rounded-lg px-3 py-2.5 text-sm mb-3">{err}</div>}
 
         {/* PIX gerado */}
@@ -255,6 +321,9 @@ export default function PagarPage() {
         </div>
         {!frete && (
           <p className="text-center text-[11px] text-[#A69E8C] mt-3">Informe seu CEP acima pra liberar o pagamento.</p>
+        )}
+        {frete && !enderecoOk && (
+          <p className="text-center text-[11px] text-[#A69E8C] mt-3">Complete o endereço de entrega pra liberar o pagamento.</p>
         )}
         {frete && sum.pixAvailable === false && (
           <p className="text-center text-[11px] text-[#A69E8C] mt-2">PIX dessa loja é combinado com a vendedora · Cartão até 12x é na hora, aqui 💜</p>
