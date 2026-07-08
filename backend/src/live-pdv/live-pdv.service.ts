@@ -958,6 +958,14 @@ export class LivePdvService {
       const sid = String(l?.sid || '').trim().slice(0, 64);
       if (!ig || !sid || seen.has(ig)) continue;
       seen.add(ig);
+      // Tabela de vínculos @→sid — a cobrança resolve daqui mesmo sem cadastro
+      await (this.prisma as any).liveManychatSubscriber
+        .upsert({
+          where: { igUsername: ig },
+          create: { igUsername: ig, subscriberId: sid },
+          update: { subscriberId: sid },
+        })
+        .catch(() => {});
       const ids = byIg.get(ig);
       if (ids?.length) {
         await (this.prisma as any).customer.updateMany({
@@ -981,6 +989,46 @@ export class LivePdvService {
   }
 
   /**
+   * WEBHOOK do ManyChat (External Request da automação): grava @→subscriber_id
+   * na tabela de vínculos e, se já existir cadastro com esse @, vincula o
+   * Customer também. Idempotente — a automação por etiqueta pode chamar N vezes.
+   */
+  async upsertManychatLink(input: { sid?: string; ig?: string; name?: string; phone?: string }) {
+    const ig = String(input?.ig || '').trim().replace(/^@/, '').toLowerCase().slice(0, 80);
+    const sid = String(input?.sid || '').trim().slice(0, 64);
+    if (!ig || !sid) throw new BadRequestException('ig e sid são obrigatórios');
+    const name = String(input?.name || '').trim().slice(0, 120) || null;
+    const phone = String(input?.phone || '').replace(/\D/g, '').slice(0, 20) || null;
+    await (this.prisma as any).liveManychatSubscriber.upsert({
+      where: { igUsername: ig },
+      create: { igUsername: ig, subscriberId: sid, name, phone },
+      update: { subscriberId: sid, ...(name ? { name } : {}), ...(phone ? { phone } : {}) },
+    });
+    // Cadastro existente com esse @ (com ou sem @ na frente, case-insensitive)
+    const upd = await (this.prisma as any).customer.updateMany({
+      where: {
+        OR: [
+          { igUsername: { equals: ig, mode: 'insensitive' } },
+          { igUsername: { equals: `@${ig}`, mode: 'insensitive' } },
+        ],
+      },
+      data: { manychatSubscriberId: sid },
+    });
+    return { ok: true, vinculado: upd.count > 0 };
+  }
+
+  /** Resolve o subscriber_id pelo @ na tabela de vínculos do webhook/CSV. */
+  private async lookupManychatSidByIg(instagram?: string | null): Promise<string | null> {
+    const ig = String(instagram || '').trim().replace(/^@/, '').toLowerCase();
+    if (!ig) return null;
+    const row = await (this.prisma as any).liveManychatSubscriber.findUnique({
+      where: { igUsername: ig },
+      select: { subscriberId: true },
+    });
+    return row?.subscriberId || null;
+  }
+
+  /**
    * Manda a DM de cobrança (link curto /p/) pra UMA cliente via ManyChat.
    * Retorna { ok: false, reason } em vez de lançar — a massa acumula em
    * "skipped" e o individual transforma em erro amigável.
@@ -995,6 +1043,16 @@ export class LivePdvService {
         select: { manychatSubscriberId: true },
       });
       sid = cust?.manychatSubscriberId || null;
+    }
+    // Fallback: resolve pelo @ do carrinho (vínculo veio do webhook/CSV mas a
+    // cliente ainda não tem o sid no cadastro) — e já persiste pra próxima.
+    if (!sid) {
+      sid = await this.lookupManychatSidByIg(cart.customerInstagram);
+      if (sid && cart.customerId) {
+        await (this.prisma as any).customer
+          .update({ where: { id: cart.customerId }, data: { manychatSubscriberId: sid } })
+          .catch(() => {});
+      }
     }
     if (!sid) return { ok: false, reason: 'sem vínculo ManyChat (não veio pelo link)' };
     // Garante o link curto (backfill de carrinho antigo)
@@ -1433,6 +1491,9 @@ export class LivePdvService {
       });
       hasManychat = !!cust?.manychatSubscriberId;
     }
+    if (!hasManychat) {
+      hasManychat = !!(await this.lookupManychatSidByIg(cart.customerInstagram));
+    }
     return { ...cart, items, hasManychat };
   }
 
@@ -1516,10 +1577,27 @@ export class LivePdvService {
       });
       for (const cu of custs as any[]) linked.add(cu.id);
     }
+    // Fallback pelo @ do carrinho (vínculo do webhook/CSV sem cadastro casado)
+    const igs = Array.from(new Set(
+      carts
+        .filter((c: any) => !(c.customerId && linked.has(c.customerId)))
+        .map((c: any) => String(c.customerInstagram || '').trim().replace(/^@/, '').toLowerCase())
+        .filter(Boolean),
+    ));
+    const linkedIg = new Set<string>();
+    if (igs.length) {
+      const subs = await (this.prisma as any).liveManychatSubscriber.findMany({
+        where: { igUsername: { in: igs } },
+        select: { igUsername: true },
+      });
+      for (const s of subs as any[]) linkedIg.add(s.igUsername);
+    }
     return carts.map((c: any) => ({
       ...c,
       items: byCart.get(c.id) || [],
-      hasManychat: !!(c.customerId && linked.has(c.customerId)),
+      hasManychat:
+        !!(c.customerId && linked.has(c.customerId)) ||
+        linkedIg.has(String(c.customerInstagram || '').trim().replace(/^@/, '').toLowerCase()),
     }));
   }
 
