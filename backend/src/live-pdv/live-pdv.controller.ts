@@ -151,6 +151,12 @@ export class LivePdvController {
     return this.svc.backfillManychatFromCarts(id);
   }
 
+  // Carimbo de cobrança MANUAL (Direct/WhatsApp) — sincroniza o ✓ entre PCs
+  @Post('carts/:cartId/mark-charged')
+  markCharged(@Param('cartId') cartId: string) {
+    return this.svc.markCartCharged(cartId);
+  }
+
   // Importa vínculos do CSV de Contatos do ManyChat (user_id + @) em lote
   @Post('manychat/import-links')
   importManychatLinks(@Body() body: { links: Array<{ sid: string; ig: string }> }) {
