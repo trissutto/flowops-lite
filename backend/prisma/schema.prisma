@@ -3524,6 +3524,23 @@ model LivePdvPromo {
   @@map("live_pdv_promos")
 }
 
+// Vínculo @ do Instagram → ID de assinante do ManyChat, alimentado em tempo
+// real pelo webhook público (automação "External Request" do ManyChat) e
+// também pelo importador de CSV. A cobrança automática da live resolve o ID
+// daqui quando a cliente ainda não tem Customer.manychatSubscriberId — cobre
+// carrinho criado na mão pela apresentadora (cliente nunca clicou no link).
+model LiveManychatSubscriber {
+  id           String   @id @default(uuid())
+  igUsername   String   @unique @map("ig_username") // sem @, lowercase
+  subscriberId String   @map("subscriber_id")
+  name         String?
+  phone        String?
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@map("live_manychat_subscribers")
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // ESPELHO (ghost) do Giga — tabelas sincronizadas de hora em hora pelo
 // GigaMirrorService. A conta corrente LÊ DAQUI (Postgres), nunca do Giga ao

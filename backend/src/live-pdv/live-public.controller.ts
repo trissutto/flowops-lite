@@ -62,6 +62,50 @@ export class LivePublicController {
   }
 }
 
+/**
+ * Webhook PÚBLICO do ManyChat (External Request) — vínculo @→subscriber_id.
+ *
+ * Uso no ManyChat: automação (ex.: disparo por etiqueta ou no fluxo CARRINHO)
+ * com ação "External Request": POST nesta URL com JSON
+ *   { "token": "<MANYCHAT_HOOK_TOKEN>", "sid": "{{user_id}}",
+ *     "ig": "{{instagram username}}", "name": "{{full name}}", "phone": "{{phone}}" }
+ * Aplicar a etiqueta em massa nos contatos = backfill de todos os vínculos.
+ *
+ * Defesas: token via env MANYCHAT_HOOK_TOKEN (cai pro CADASTRO_LIVE_TOKEN se
+ * não setada) + rate-limit LARGO por IP (o backfill em massa é rajada legítima
+ * vinda dos servidores do ManyChat).
+ */
+const HOOK_RL_WINDOW_MS = 60_000;
+const HOOK_RL_MAX = 2_000; // rajada do backfill em massa é esperada
+const hookHits = new Map<string, number[]>();
+
+@Controller('public/manychat-link')
+export class ManychatHookController {
+  constructor(private readonly svc: LivePdvService) {}
+
+  @Post()
+  async link(
+    @Req() req: any,
+    @Body() body: { token?: string; sid?: string; ig?: string; name?: string; phone?: string },
+  ) {
+    const expected = (
+      process.env.MANYCHAT_HOOK_TOKEN || process.env.CADASTRO_LIVE_TOKEN || ''
+    ).trim();
+    if (expected && String(body?.token || '').trim() !== expected) {
+      throw new ForbiddenException('Token inválido');
+    }
+    const ip = clientIp(req);
+    const now = Date.now();
+    const arr = (hookHits.get(ip) || []).filter((t) => now - t < HOOK_RL_WINDOW_MS);
+    arr.push(now);
+    hookHits.set(ip, arr);
+    if (arr.length > HOOK_RL_MAX) {
+      throw new BadRequestException('Rate limit');
+    }
+    return this.svc.upsertManychatLink(body);
+  }
+}
+
 /** Celular BR: 10 dígitos (fixo antigo) ou 11 (com 9). Aceita DDD 11–99. */
 function isValidBrCell(digits: string): boolean {
   if (digits.length !== 10 && digits.length !== 11) return false;
