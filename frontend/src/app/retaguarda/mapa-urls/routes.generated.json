@@ -1,8 +1,8 @@
 {
-  "generatedAt": "2026-07-06T22:31:16.267Z",
-  "total": 167,
+  "generatedAt": "2026-07-08T00:01:59.835Z",
+  "total": 169,
   "comAtalho": 124,
-  "semAtalho": 43,
+  "semAtalho": 45,
   "rows": [
     {
       "route": "/",
@@ -528,6 +528,20 @@
       "dynamic": false,
       "hasShortcut": true,
       "file": "src/app/minha-loja/triagem/page.tsx"
+    },
+    {
+      "route": "/p/[cartId]",
+      "section": "p",
+      "dynamic": true,
+      "hasShortcut": false,
+      "file": "src/app/p/[cartId]/page.tsx"
+    },
+    {
+      "route": "/pagar/[cartId]",
+      "section": "pagar",
+      "dynamic": true,
+      "hasShortcut": false,
+      "file": "src/app/pagar/[cartId]/page.tsx"
     },
     {
       "route": "/pedidos",

@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { randomBytes } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
 import { RoutingEngine } from '../routing/routing.engine';
@@ -872,13 +873,49 @@ export class LivePdvService {
     });
     const cartNumber = (last?.cartNumber || 0) + 1;
     try {
-      return await (this.prisma as any).livePdvCart.create({ data: { ...data, cartNumber } });
+      // payCode = link curto público (/p/<code>). Gerado junto com a comanda;
+      // colisão (P2002) cai no mesmo retry que o cartNumber.
+      return await (this.prisma as any).livePdvCart.create({
+        data: { ...data, cartNumber, payCode: this.genPayCode() },
+      });
     } catch (e: any) {
       if (e?.code === 'P2002' && attempt < 8) {
         return this.createCartWithNumber(sessionId, data, attempt + 1);
       }
       throw e;
     }
+  }
+
+  /**
+   * Código curto do link público de pagamento: 8 chars aleatórios num alfabeto
+   * sem ambíguos (0/o, 1/l/i) — dá pra ditar por telefone. 31^8 ≈ 850 bi de
+   * combinações: não-adivinhável na prática (e é só um link de pagamento).
+   */
+  private genPayCode(): string {
+    const alphabet = 'abcdefghjkmnpqrstuvwxyz23456789';
+    const bytes = randomBytes(8);
+    let out = '';
+    for (let i = 0; i < 8; i++) out += alphabet[bytes[i] % alphabet.length];
+    return out;
+  }
+
+  /**
+   * Resolve o parâmetro público (/p/<code> ou /pagar/<uuid>) pro id real do
+   * carrinho. Aceita o UUID antigo e o payCode curto.
+   */
+  async resolvePublicCartId(key: string): Promise<string> {
+    const k = String(key || '').trim();
+    if (!k) throw new NotFoundException('Compra não encontrada');
+    const byId = await (this.prisma as any).livePdvCart
+      .findUnique({ where: { id: k }, select: { id: true } })
+      .catch(() => null);
+    if (byId) return byId.id;
+    const byCode = await (this.prisma as any).livePdvCart.findFirst({
+      where: { payCode: k.toLowerCase() },
+      select: { id: true },
+    });
+    if (byCode) return byCode.id;
+    throw new NotFoundException('Compra não encontrada');
   }
 
   /**
@@ -1210,6 +1247,17 @@ export class LivePdvService {
   async getCart(cartId: string) {
     const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
     if (!cart) throw new NotFoundException('Carrinho não encontrado');
+    // Backfill do link curto: carrinho criado antes do payCode ganha um ao abrir.
+    if (!cart.payCode) {
+      try {
+        const upd = await (this.prisma as any).livePdvCart.update({
+          where: { id: cartId },
+          data: { payCode: this.genPayCode() },
+          select: { payCode: true },
+        });
+        cart.payCode = upd.payCode;
+      } catch { /* colisão raríssima — fica sem código até a próxima abertura */ }
+    }
     const items = await (this.prisma as any).livePdvItem.findMany({
       where: { cartId, status: { notIn: ['cancelled', 'expired'] } },
       orderBy: { createdAt: 'asc' },

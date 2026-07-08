@@ -78,6 +78,7 @@ interface CartItem {
 interface Cart {
   id: string;
   cartNumber?: number | null;
+  payCode?: string | null;
   customerName: string;
   customerPhone: string;
   customerInstagram: string | null;
@@ -2059,7 +2060,13 @@ function CartPanel({
   const [linkCopied, setLinkCopied] = useState(false);
   // Carrinho já pago/em separação: esconde ações de cobrança (link /pagar, frete)
   const cartPago = !!cart && ['paid', 'separating', 'shipped', 'delivered'].includes(cart.status);
-  const payLink = cart && !cartPago && typeof window !== 'undefined' ? `${window.location.origin}/pagar/${cart.id}` : '';
+  // Link curto (/p/<code>) quando o carrinho tem payCode; senão o longo (/pagar/<uuid>)
+  const payLink = cart && !cartPago && typeof window !== 'undefined'
+    ? (cart.payCode
+        ? `${window.location.origin}/p/${cart.payCode}`
+        : `${window.location.origin}/pagar/${cart.id}`)
+    : '';
+  const payMsg = `Oi! 💜 É pra fechar sua compra da live: ${payLink}`;
   return (
     <div className="lg:sticky lg:top-16 lg:h-fit">
       <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
@@ -2196,14 +2203,39 @@ function CartPanel({
                         {linkCopied ? 'Copiado! ✓' : 'Copiar link'}
                       </button>
                       <a
-                        href={`https://wa.me/?text=${encodeURIComponent('Oi! 💜 É pra fechar sua compra da live: ' + payLink)}`}
+                        href={`https://wa.me/?text=${encodeURIComponent(payMsg)}`}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="flex-1 rounded-lg bg-emerald-600 py-2 text-center text-xs font-bold text-white hover:bg-emerald-700"
                       >
                         WhatsApp
                       </a>
+                      {cart?.customerInstagram && (
+                        <button
+                          onClick={() => {
+                            // O Instagram não deixa pré-preencher DM: copia a
+                            // mensagem pronta e abre a conversa — só colar (Ctrl+V).
+                            navigator.clipboard?.writeText(payMsg);
+                            setLinkCopied(true);
+                            setTimeout(() => setLinkCopied(false), 2500);
+                            window.open(
+                              `https://ig.me/m/${String(cart.customerInstagram).replace(/^@/, '')}`,
+                              '_blank',
+                              'noopener,noreferrer',
+                            );
+                          }}
+                          title="Copia a mensagem com o link e abre o Direct da cliente — é só colar"
+                          className="flex-1 rounded-lg bg-gradient-to-r from-purple-600 to-pink-500 py-2 text-center text-xs font-bold text-white hover:opacity-90"
+                        >
+                          Direct
+                        </button>
+                      )}
                     </div>
+                    {payLink.includes('/p/') && (
+                      <div className="mt-1.5 truncate text-center font-mono text-[10px] text-[#A08A4E]" title={payLink}>
+                        {payLink.replace(/^https?:\/\//, '')}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

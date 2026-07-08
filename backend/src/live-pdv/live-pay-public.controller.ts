@@ -27,34 +27,40 @@ export class LivePayPublicController {
     private readonly prisma: PrismaService,
   ) {}
 
+  // O :cartId aceita o UUID antigo OU o payCode curto (/p/<code>).
   @Get(':cartId')
-  summary(@Param('cartId') cartId: string) {
+  async summary(@Param('cartId') key: string) {
+    const cartId = await this.svc.resolvePublicCartId(key);
     return this.svc.publicCheckoutSummary(cartId);
   }
 
   @Get(':cartId/status')
-  async status(@Param('cartId') cartId: string) {
+  async status(@Param('cartId') key: string) {
+    const cartId = await this.svc.resolvePublicCartId(key);
     const r: any = await this.svc.checkPayment(cartId);
     return { paid: !!r?.paid };
   }
 
   @Post(':cartId/frete')
-  frete(@Param('cartId') cartId: string, @Body() body: { cep?: string }) {
+  async frete(@Param('cartId') key: string, @Body() body: { cep?: string }) {
     const digits = String(body?.cep || '').replace(/\D/g, '');
     if (digits.length !== 8) {
       throw new BadRequestException('CEP inválido. Digite os 8 números.');
     }
+    const cartId = await this.svc.resolvePublicCartId(key);
     return this.svc.computeFreteFromCep(cartId, digits);
   }
 
   @Post(':cartId/pix')
-  async pix(@Param('cartId') cartId: string) {
+  async pix(@Param('cartId') key: string) {
+    const cartId = await this.svc.resolvePublicCartId(key);
     await this.guardPayable(cartId);
     return this.svc.startPayment(cartId);
   }
 
   @Post(':cartId/card')
-  async card(@Param('cartId') cartId: string) {
+  async card(@Param('cartId') key: string) {
+    const cartId = await this.svc.resolvePublicCartId(key);
     await this.guardPayable(cartId);
     return this.svc.startPaymentLink(cartId);
   }
