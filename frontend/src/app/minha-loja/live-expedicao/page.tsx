@@ -113,14 +113,24 @@ export default function LiveExpedicaoPage() {
     }
   }
 
-  async function markShipped(itemId: string) {
-    const trackingCode = prompt('Código de rastreio (opcional):') || undefined;
+  // Despacho abre MODAL de rastreio — prompt() não existe no app desktop
+  // (Electron): o clique morria sem fazer nada.
+  const [shipItemId, setShipItemId] = useState<string | null>(null);
+  const [shipTracking, setShipTracking] = useState('');
+  function markShipped(itemId: string) {
+    setShipTracking('');
+    setShipItemId(itemId);
+  }
+  async function submitShipped() {
+    if (!shipItemId) return;
+    const itemId = shipItemId;
     setBusy(itemId);
     try {
       await api(`/live-pdv/items/${itemId}/shipped`, {
         method: 'POST',
-        body: JSON.stringify({ trackingCode }),
+        body: JSON.stringify({ trackingCode: shipTracking.trim() || undefined }),
       });
+      setShipItemId(null);
       await load();
     } catch (e: any) {
       alert(e?.message || 'Erro ao despachar');
@@ -316,6 +326,47 @@ export default function LiveExpedicaoPage() {
               load();
             }}
           />
+        )}
+
+        {/* Modal de despacho (rastreio opcional) */}
+        {shipItemId && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+            <div className="w-full max-w-md rounded-xl bg-white shadow-xl">
+              <div className="flex items-center justify-between border-b p-4">
+                <h2 className="text-lg font-bold">📦 Despachar peça da live</h2>
+                <button onClick={() => setShipItemId(null)} className="rounded p-1 hover:bg-slate-100">
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+              <div className="p-4">
+                <label className="mb-1 block text-sm font-medium">Código de rastreio (opcional)</label>
+                <input
+                  autoFocus
+                  value={shipTracking}
+                  onChange={(e) => setShipTracking(e.target.value.toUpperCase())}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && busy !== shipItemId) submitShipped(); }}
+                  placeholder="Ex: BR123456789BR — deixe vazio se não tiver"
+                  className="w-full rounded border px-3 py-3 font-mono text-base uppercase"
+                />
+              </div>
+              <div className="flex gap-2 border-t p-4">
+                <button
+                  onClick={() => setShipItemId(null)}
+                  disabled={busy === shipItemId}
+                  className="flex-1 rounded-lg border border-slate-300 py-3 font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={submitShipped}
+                  disabled={busy === shipItemId}
+                  className="flex-1 rounded-lg bg-rose-600 py-3 font-bold text-white hover:bg-rose-700 disabled:opacity-50"
+                >
+                  {busy === shipItemId ? 'Despachando…' : shipTracking.trim() ? 'Despachar c/ rastreio' : 'Despachar sem rastreio'}
+                </button>
+              </div>
+            </div>
+          </div>
         )}
       </div>
     </div>

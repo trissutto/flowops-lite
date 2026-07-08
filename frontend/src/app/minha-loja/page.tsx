@@ -315,11 +315,20 @@ export default function MinhaLojaPage() {
       alert(e?.message || 'Erro ao marcar separado');
     } finally { setLiveBusy(null); }
   }, [loadLiveRows]);
-  const liveMarkShipped = useCallback(async (itemId: string) => {
-    const trackingCode = prompt('Código de rastreio (opcional):') || undefined;
+  // Despacho da LIVE: abre MODAL de rastreio (prompt() não funciona no app
+  // desktop/Electron — o clique morria sem fazer nada).
+  const [liveShipItemId, setLiveShipItemId] = useState<string | null>(null);
+  const liveMarkShipped = useCallback((itemId: string) => {
+    setLiveShipItemId(itemId);
+  }, []);
+  const liveSubmitShipped = useCallback(async (itemId: string, trackingCode?: string) => {
     setLiveBusy(itemId);
     try {
-      await api(`/live-pdv/items/${itemId}/shipped`, { method: 'POST', body: JSON.stringify({ trackingCode }) });
+      await api(`/live-pdv/items/${itemId}/shipped`, {
+        method: 'POST',
+        body: JSON.stringify({ trackingCode: trackingCode || undefined }),
+      });
+      setLiveShipItemId(null);
       await loadLiveRows();
     } catch (e: any) {
       alert(e?.message || 'Erro ao despachar');
@@ -904,6 +913,15 @@ export default function MinhaLojaPage() {
           row={showShippedModal}
           onClose={() => setShowShippedModal(null)}
           onSubmit={submitShipped}
+        />
+      )}
+
+      {/* Modal enviar item da LIVE (rastreio opcional) */}
+      {liveShipItemId && (
+        <LiveShipModal
+          busy={liveBusy === liveShipItemId}
+          onClose={() => setLiveShipItemId(null)}
+          onSubmit={(tracking) => liveSubmitShipped(liveShipItemId, tracking)}
         />
       )}
 
@@ -1761,6 +1779,57 @@ function PickOrderCard({
       </footer>
       </div>
     </article>
+  );
+}
+
+/* Modal de despacho da LIVE — rastreio OPCIONAL (Electron não tem prompt()) */
+function LiveShipModal({
+  busy, onClose, onSubmit,
+}: {
+  busy: boolean;
+  onClose: () => void;
+  onSubmit: (trackingCode?: string) => void;
+}) {
+  const [tracking, setTracking] = useState('');
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
+      <div className="bg-white rounded-t-2xl sm:rounded-xl w-full sm:max-w-md shadow-xl">
+        <div className="flex items-center justify-between p-4 border-b">
+          <h2 className="font-bold text-lg">📦 Despachar peça da live</h2>
+          <button onClick={onClose} className="p-1 hover:bg-slate-100 rounded">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="p-4">
+          <label className="block text-sm font-medium mb-1">Código de rastreio (opcional)</label>
+          <input
+            type="text"
+            autoFocus
+            value={tracking}
+            onChange={(e) => setTracking(e.target.value.toUpperCase())}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !busy) onSubmit(tracking.trim() || undefined); }}
+            placeholder="Ex: BR123456789BR — deixe vazio se não tiver"
+            className="w-full px-3 py-3 border rounded text-base font-mono uppercase"
+          />
+        </div>
+        <div className="p-4 border-t flex gap-2">
+          <button
+            onClick={onClose}
+            disabled={busy}
+            className="flex-1 py-3 rounded-lg border border-slate-300 font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+          >
+            Cancelar
+          </button>
+          <button
+            onClick={() => onSubmit(tracking.trim() || undefined)}
+            disabled={busy}
+            className="flex-1 py-3 rounded-lg bg-rose-600 font-bold text-white hover:bg-rose-700 disabled:opacity-50"
+          >
+            {busy ? 'Despachando…' : tracking.trim() ? 'Despachar c/ rastreio' : 'Despachar sem rastreio'}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
