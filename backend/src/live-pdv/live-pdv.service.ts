@@ -1865,11 +1865,45 @@ export class LivePdvService {
       where: { id: cartId },
       data: { status: 'paid', paidAt: now },
     });
+    // DECISÃO DO DONO (07/07): pagamento confirmado NÃO manda direto pra loja.
+    // A operadora primeiro CONFERE/COMPLETA os dados da cliente (endereço) e
+    // só então libera — releaseSeparation() abaixo. Igual ao fluxo do site.
+    const session = await this.getSession(cart.sessionId);
+    this.gateway.emitToLiveOps('live-pdv:cart-paid', { sessionId: session.id, cartId });
+    return this.getCart(cartId);
+  }
+
+  /**
+   * LIBERA a separação de um carrinho PAGO pras lojas de origem (a operadora
+   * clica depois de conferir os dados). Exige endereço completo — a loja vai
+   * imprimir etiqueta/postar, então não adianta chegar pedido sem endereço.
+   */
+  async releaseSeparation(cartId: string) {
+    const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
+    if (!cart) throw new NotFoundException('Carrinho não encontrado');
+    if (cart.status === 'separating') return this.getCart(cartId); // idempotente
+    if (cart.status !== 'paid') {
+      throw new BadRequestException('Só carrinho PAGO pode ir pra separação.');
+    }
+
+    // Endereço completo obrigatório (formato do site: loja recebe pronto pra postar)
+    const faltando: string[] = [];
+    if (String(cart.customerCep || '').replace(/\D/g, '').length !== 8) faltando.push('CEP');
+    if (!String(cart.customerEndereco || '').trim()) faltando.push('rua');
+    if (!String(cart.customerNumero || '').trim()) faltando.push('número');
+    if (!String(cart.customerCidade || '').trim()) faltando.push('cidade');
+    if (!String(cart.customerUf || '').trim()) faltando.push('UF');
+    if (faltando.length) {
+      throw new BadRequestException(
+        `Complete o endereço antes de enviar pra separação — falta: ${faltando.join(', ')}.`,
+      );
+    }
 
     // Ordem de separação por loja de origem → emite pra cada loja
     const items = await (this.prisma as any).livePdvItem.findMany({
       where: { cartId, status: 'paid' },
     });
+    if (!items.length) throw new BadRequestException('Carrinho sem itens pagos.');
     const byStore = new Map<string, any[]>();
     for (const it of items as any[]) {
       if (!byStore.has(it.originStoreCode)) byStore.set(it.originStoreCode, []);
@@ -1908,7 +1942,7 @@ export class LivePdvService {
       where: { id: cartId },
       data: { status: 'separating' },
     });
-    this.gateway.emitToLiveOps('live-pdv:cart-paid', { sessionId: session.id, cartId });
+    this.gateway.emitToLiveOps('live-pdv:cart-updated', { sessionId: session.id, cartId });
     return this.getCart(cartId);
   }
 
