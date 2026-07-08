@@ -133,10 +133,11 @@ export class LivePdvController {
     return this.svc.pendingLiveRegistrations(id);
   }
 
-  // Cobrança em massa AUTOMÁTICA via DM (API ManyChat) — carrinhos abertos da sessão
+  // Cobrança em massa AUTOMÁTICA via DM (API ManyChat) — carrinhos abertos da
+  // sessão. body.resend=true ignora o "já enviada" (corrigir link errado etc).
   @Post('sessions/:id/charge-all-dm')
-  chargeAllViaDm(@Param('id') id: string) {
-    return this.svc.chargeAllViaDm(id);
+  chargeAllViaDm(@Param('id') id: string, @Body() body?: { resend?: boolean }) {
+    return this.svc.chargeAllViaDm(id, !!body?.resend);
   }
 
   // Cobrança INDIVIDUAL automática via DM — funciona mesmo com o Insta fechado
