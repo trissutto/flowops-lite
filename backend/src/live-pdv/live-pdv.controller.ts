@@ -207,6 +207,12 @@ export class LivePdvController {
     return this.svc.releaseSeparation(cartId);
   }
 
+  // Bip de conferência da separação (loja bipa o EAN/código; confere e baixa estoque)
+  @Post('carts/:cartId/bip')
+  bipConference(@Param('cartId') cartId: string, @Body() body: { code: string }) {
+    return this.svc.bipConference(cartId, body?.code || '');
+  }
+
   // Recupera carrinhos que expiraram (re-reserva os itens) por N horas (default 24h)
   @Post('sessions/:id/recover-expired')
   recoverExpired(@Param('id') id: string, @Body() body: { ttlHours?: number }) {

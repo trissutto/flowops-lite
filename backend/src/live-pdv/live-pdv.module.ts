@@ -7,6 +7,7 @@ import { PagarmeModule } from '../pagarme/pagarme.module';
 import { PagbankModule } from '../pagbank/pagbank.module';
 import { ProductPhotosModule } from '../product-photos/product-photos.module';
 import { RealignmentModule } from '../realignment/realignment.module';
+import { WincredMirrorModule } from '../wincred-mirror/wincred-mirror.module';
 import { WebsocketModule } from '../websocket/websocket.module';
 import { LivePdvController } from './live-pdv.controller';
 import { LivePublicController } from './live-public.controller';
@@ -32,6 +33,7 @@ import { LivePdvPayReconcileCron } from './live-pdv-pay-reconcile.cron';
     PagbankModule,
     ProductPhotosModule,
     RealignmentModule,
+    WincredMirrorModule,
     WebsocketModule,
   ],
   controllers: [LivePdvController, LivePublicController, LivePayPublicController],

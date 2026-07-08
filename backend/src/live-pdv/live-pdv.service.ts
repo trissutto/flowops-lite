@@ -8,6 +8,7 @@ import { PagbankService } from '../pagbank/pagbank.service';
 import { ProductPhotosService } from '../product-photos/product-photos.service';
 import { RealignmentPricingService } from '../realignment/realignment-pricing.service';
 import { RealtimeGateway } from '../websocket/realtime.gateway';
+import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service';
 import { ManychatService } from './manychat.service';
 import type { StoreInput, StockEntry } from '../routing/types';
 
@@ -45,6 +46,7 @@ export class LivePdvService {
     private readonly pricing: RealignmentPricingService,
     private readonly gateway: RealtimeGateway,
     private readonly manychat: ManychatService,
+    private readonly catalog: WincredCatalogService,
   ) {}
 
   // ─── helpers ──────────────────────────────────────────────────────────────
@@ -1992,10 +1994,130 @@ export class LivePdvService {
   async markSeparated(itemId: string) {
     const item = await (this.prisma as any).livePdvItem.findUnique({ where: { id: itemId } });
     if (!item) throw new NotFoundException('Item não encontrado');
-    return (this.prisma as any).livePdvItem.update({
+    if (item.separatedAt) return item; // idempotente — não baixa duas vezes
+    const updated = await (this.prisma as any).livePdvItem.update({
       where: { id: itemId },
       data: { separatedAt: new Date() },
     });
+    // Baixa de estoque no ato da separação (fallback manual segue o mesmo
+    // padrão do bip). Erro não bloqueia — a peça já está na mão da loja.
+    try {
+      await this.runLiveAutoDebit(updated);
+    } catch (e: any) {
+      this.logger.warn(`[live-debit] baixa manual falhou item=${itemId}: ${e?.message || e}`);
+    }
+    return updated;
+  }
+
+  /**
+   * BIP DE CONFERÊNCIA (fluxo do site aplicado à live): a loja bipa o código
+   * de barras/CODIGO da peça; o sistema confere se ela pertence ao pedido e
+   * marca separada — e dispara a BAIXA de estoque no Giga (padrão do site:
+   * allowNegative + skipNotFound, erro não trava a separação).
+   *
+   * Match em 3 níveis: CODIGO direto (codigoBipado do item) → EAN resolvido
+   * pelo catálogo (espelho→Giga) → REF+cor+tamanho (recadastro de código).
+   */
+  async bipConference(cartId: string, codeRaw: string) {
+    const code = String(codeRaw || '').trim();
+    if (!code) throw new BadRequestException('Bipe ou digite o código da peça.');
+    const items = await (this.prisma as any).livePdvItem.findMany({
+      where: { cartId, status: 'separating' },
+      orderBy: { createdAt: 'asc' },
+    });
+    if (!items.length) throw new BadRequestException('Nada pra separar nesse pedido.');
+    const pend = (items as any[]).filter((i) => !i.separatedAt);
+    if (!pend.length) throw new BadRequestException('Todas as peças já foram bipadas. ✓');
+
+    const norm = (s: any) => String(s ?? '').trim().replace(/^0+/, '');
+    // 1) CODIGO Giga direto (etiqueta com o código)
+    let match = pend.find((i) => norm(i.codigoBipado) === norm(code));
+    // 2) EAN/código de barras → resolve no catálogo (espelho primeiro)
+    if (!match) {
+      const info = await this.catalog.getPdvProductInfo(code).catch(() => null);
+      if (info?.sku) match = pend.find((i) => norm(i.codigoBipado) === norm(info.sku));
+      // 3) mesma REF+cor+tamanho (código recadastrado no Giga)
+      if (!match && info?.ref) {
+        const key = (r: any, c: any, t: any) =>
+          `${String(r || '').toUpperCase()}|${String(c || '').toUpperCase()}|${String(t || '').toUpperCase()}`;
+        const scanKey = key(info.ref, info.cor, info.tamanho);
+        match = pend.find((i) => key(i.refCode, i.cor, i.tamanho) === scanKey);
+      }
+    }
+    if (!match) {
+      throw new BadRequestException(
+        'Essa peça NÃO é deste pedido — confira referência, cor e tamanho.',
+      );
+    }
+
+    const updated = await (this.prisma as any).livePdvItem.update({
+      where: { id: match.id },
+      data: { separatedAt: new Date() },
+    });
+    try {
+      await this.runLiveAutoDebit(updated);
+    } catch (e: any) {
+      this.logger.warn(`[live-debit] baixa no bip falhou item=${match.id}: ${e?.message || e}`);
+    }
+
+    const restantes = pend.length - 1;
+    return {
+      ok: true,
+      itemId: match.id,
+      descricao: match.descricao || match.refCode,
+      cor: match.cor,
+      tamanho: match.tamanho,
+      restantes,
+      completo: restantes === 0,
+    };
+  }
+
+  /**
+   * Baixa de estoque da peça da live no Giga — espelha o runAutoDebit do site:
+   * shadow mode quando ERP_WRITE_ENABLED off; allowNegative + skipNotFound
+   * (a peça já está fisicamente na mão); tudo logado em IntegrationLog.
+   * Idempotência: chamador só invoca na transição de separatedAt (null→data).
+   */
+  private async runLiveAutoDebit(item: any): Promise<void> {
+    const payloadBase = {
+      liveItemId: item.id,
+      cartId: item.cartId,
+      codigo: item.codigoBipado,
+      ref: item.refCode,
+      qty: item.qty,
+      storeCode: item.originStoreCode,
+    };
+    if (!(this.erp as any).isWriteEnabled) {
+      await (this.prisma as any).integrationLog.create({
+        data: {
+          source: 'erp',
+          direction: 'out',
+          event: 'live.debit.shadow',
+          payload: JSON.stringify(payloadBase),
+          status: 200,
+        },
+      });
+      return;
+    }
+    if (!item.codigoBipado) {
+      this.logger.warn(`[live-debit] item ${item.id} sem codigoBipado — baixa pulada`);
+      return;
+    }
+    const result = await (this.erp as any).decreaseStock(
+      [{ sku: item.codigoBipado, qty: item.qty, storeCode: item.originStoreCode }],
+      { allowNegative: true, skipNotFound: true },
+    );
+    await (this.prisma as any).integrationLog.create({
+      data: {
+        source: 'erp',
+        direction: 'out',
+        event: result.success ? 'live.debit.real' : 'live.debit.real.failed',
+        payload: JSON.stringify({ ...payloadBase, error: result.success ? undefined : result.error }),
+        status: result.success ? 200 : 500,
+        ...(result.success ? {} : { error: String(result.error || '').slice(0, 500) }),
+      },
+    });
+    if (!result.success) throw new Error(`decreaseStock falhou: ${result.error}`);
   }
 
   /**
