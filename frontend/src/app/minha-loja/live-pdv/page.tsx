@@ -1495,6 +1495,14 @@ export default function LivePdvPage() {
                 {dmResult}
               </div>
             )}
+            <a
+              href="/retaguarda/manychat-import"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mb-2 block text-center text-[11px] text-violet-600 underline hover:text-violet-800"
+            >
+              Alguém sem vínculo? Importar IDs do ManyChat (CSV) →
+            </a>
             <div className="mb-2 rounded-lg bg-slate-100 px-3 py-1.5 text-center text-xs font-bold text-slate-600">
               {cobradas}/{cobraveis.length} enviadas
             </div>

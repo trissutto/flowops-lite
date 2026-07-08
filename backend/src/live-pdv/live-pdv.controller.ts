@@ -139,6 +139,12 @@ export class LivePdvController {
     return this.svc.chargeAllViaDm(id);
   }
 
+  // Importa vínculos do CSV de Contatos do ManyChat (user_id + @) em lote
+  @Post('manychat/import-links')
+  importManychatLinks(@Body() body: { links: Array<{ sid: string; ig: string }> }) {
+    return this.svc.importManychatLinks(body?.links || []);
+  }
+
   // ── Carrinho / itens ──
   @Post('sessions/:id/items')
   addItem(
