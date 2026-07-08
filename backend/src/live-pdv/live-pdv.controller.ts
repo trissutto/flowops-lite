@@ -145,6 +145,12 @@ export class LivePdvController {
     return this.svc.chargeCartViaDm(cartId);
   }
 
+  // Backfill de vínculos ManyChat pros carrinhos abertos (API findByName)
+  @Post('sessions/:id/backfill-manychat')
+  backfillManychat(@Param('id') id: string) {
+    return this.svc.backfillManychatFromCarts(id);
+  }
+
   // Importa vínculos do CSV de Contatos do ManyChat (user_id + @) em lote
   @Post('manychat/import-links')
   importManychatLinks(@Body() body: { links: Array<{ sid: string; ig: string }> }) {

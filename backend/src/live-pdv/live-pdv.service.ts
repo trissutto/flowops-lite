@@ -1017,6 +1017,64 @@ export class LivePdvService {
     return { ok: true, vinculado: upd.count > 0 };
   }
 
+  /**
+   * BACKFILL via API oficial do ManyChat: pra cada carrinho aberto da sessão
+   * sem vínculo, busca o assinante por nome (findByName aceita nome E username)
+   * e casa pelo ig_username == @ do carrinho. Grava na tabela de vínculos +
+   * Customer. Usado quando as clientes foram adicionadas na mão (sem o link
+   * de cadastro) — o ManyChat não exporta contatos, e etiqueta em massa não
+   * dispara automação, então a API é o único caminho de backfill.
+   */
+  async backfillManychatFromCarts(sessionId: string) {
+    if (!this.manychat.enabled) {
+      throw new BadRequestException(
+        'API ManyChat não configurada — crie a env MANYCHAT_API_TOKEN no Railway.',
+      );
+    }
+    const carts = await (this.prisma as any).livePdvCart.findMany({
+      where: { sessionId, status: 'open' },
+      orderBy: { createdAt: 'asc' },
+    });
+    const vinculados: string[] = [];
+    const jaTinha: string[] = [];
+    const semMatch: string[] = [];
+    for (const cart of carts as any[]) {
+      const ig = String(cart.customerInstagram || '').trim().replace(/^@/, '').toLowerCase();
+      if (!ig) { semMatch.push(cart.customerName || '?'); continue; }
+      // Já resolvível? (cadastro ou tabela de vínculos)
+      let sid: string | null = null;
+      if (cart.customerId) {
+        const cust = await (this.prisma as any).customer.findUnique({
+          where: { id: cart.customerId },
+          select: { manychatSubscriberId: true },
+        });
+        sid = cust?.manychatSubscriberId || null;
+      }
+      if (!sid) sid = await this.lookupManychatSidByIg(ig);
+      if (sid) { jaTinha.push(ig); continue; }
+      // Busca na API: pelo @ e pelo nome (muitos contatos têm o @ como nome)
+      const candidates = [
+        ...(await this.manychat.findSubscribersByName(ig)),
+        ...(await this.manychat.findSubscribersByName(cart.customerName || '')),
+      ];
+      const hit = candidates.find(
+        (s: any) => String(s?.ig_username || '').trim().replace(/^@/, '').toLowerCase() === ig,
+      );
+      if (hit?.id) {
+        await this.upsertManychatLink({ sid: String(hit.id), ig, name: hit.name, phone: hit.phone });
+        vinculados.push(ig);
+      } else {
+        semMatch.push(`@${ig}`);
+      }
+      // Gentil com o rate-limit da API (10 req/s; fazemos ~2 por carrinho)
+      await new Promise((res) => setTimeout(res, 250));
+    }
+    this.logger.log(
+      `[manychat-backfill] sessão=${sessionId}: ${vinculados.length} vinculados, ${jaTinha.length} já tinham, ${semMatch.length} sem match`,
+    );
+    return { vinculados, jaTinha: jaTinha.length, semMatch };
+  }
+
   /** Resolve o subscriber_id pelo @ na tabela de vínculos do webhook/CSV. */
   private async lookupManychatSidByIg(instagram?: string | null): Promise<string | null> {
     const ig = String(instagram || '').trim().replace(/^@/, '').toLowerCase();
