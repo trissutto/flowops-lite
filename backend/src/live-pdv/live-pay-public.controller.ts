@@ -51,8 +51,20 @@ export class LivePayPublicController {
     return this.svc.computeFreteFromCep(cartId, digits);
   }
 
-  // Endereço de entrega — a cliente preenche NO checkout (a loja recebe o
-  // pedido pronto pra postar, sem precisar caçar endereço pelo Direct).
+  // RETIRADA EM LOJA — frete zero, prazo de até 7 dias úteis (igual ao site)
+  @Post(':cartId/retirada')
+  async retirada(@Param('cartId') key: string, @Body() body: { storeCode?: string }) {
+    if (!String(body?.storeCode || '').trim()) {
+      throw new BadRequestException('Escolha a loja de retirada.');
+    }
+    const cartId = await this.svc.resolvePublicCartId(key);
+    return this.svc.setPublicPickup(cartId, String(body.storeCode).trim());
+  }
+
+  // Endereço + dados de contato — a cliente preenche NO checkout (a loja
+  // recebe o pedido pronto pra postar, sem caçar dados pelo Direct).
+  // Celular é OBRIGATÓRIO pra pagar (validado aqui e no guardPayable);
+  // CPF/e-mail são opcionais mas validados quando enviados.
   @Post(':cartId/endereco')
   async endereco(
     @Param('cartId') key: string,
@@ -64,28 +76,57 @@ export class LivePayPublicController {
       bairro?: string;
       cidade?: string;
       uf?: string;
+      celular?: string;
+      cpf?: string;
+      email?: string;
     },
   ) {
     const cartId = await this.svc.resolvePublicCartId(key);
-    const clean = (v: any, max: number) => String(v || '').trim().slice(0, max);
-    const data = {
-      customerEndereco: clean(body?.endereco, 160),
-      customerNumero: clean(body?.numero, 20),
-      customerComplemento: clean(body?.complemento, 80),
-      customerBairro: clean(body?.bairro, 80),
-      customerCidade: clean(body?.cidade, 80),
-      customerUf: clean(body?.uf, 2).toUpperCase(),
-    };
-    const faltando: string[] = [];
-    if (!data.customerEndereco) faltando.push('rua');
-    if (!data.customerNumero) faltando.push('número');
-    if (!data.customerCidade) faltando.push('cidade');
-    if (data.customerUf.length !== 2) faltando.push('UF');
-    if (faltando.length) {
-      throw new BadRequestException(`Preencha o endereço de entrega — falta: ${faltando.join(', ')}.`);
-    }
     const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
     if (!cart) throw new NotFoundException('Compra não encontrada');
+    const clean = (v: any, max: number) => String(v || '').trim().slice(0, max);
+    const data: any = {};
+    // Endereço: obrigatório só no modo ENTREGA (retirada em loja dispensa)
+    if (!cart.isPickup) {
+      data.customerEndereco = clean(body?.endereco, 160);
+      data.customerNumero = clean(body?.numero, 20);
+      data.customerComplemento = clean(body?.complemento, 80);
+      data.customerBairro = clean(body?.bairro, 80);
+      data.customerCidade = clean(body?.cidade, 80);
+      data.customerUf = clean(body?.uf, 2).toUpperCase();
+      const faltando: string[] = [];
+      if (!data.customerEndereco) faltando.push('rua');
+      if (!data.customerNumero) faltando.push('número');
+      if (!data.customerCidade) faltando.push('cidade');
+      if (data.customerUf.length !== 2) faltando.push('UF');
+      if (faltando.length) {
+        throw new BadRequestException(`Preencha o endereço de entrega — falta: ${faltando.join(', ')}.`);
+      }
+    }
+
+    // Celular: obrigatório se o carrinho ainda não tem um válido
+    const jaTemFone = String(cart.customerPhone || '').replace(/\D/g, '').length >= 10;
+    const celDigits = String(body?.celular || '').replace(/\D/g, '');
+    if (celDigits) {
+      if (celDigits.length < 10 || celDigits.length > 11) {
+        throw new BadRequestException('Celular inválido. Use DDD + número (ex.: 11 91234-5678).');
+      }
+      data.customerPhone = celDigits;
+    } else if (!jaTemFone) {
+      throw new BadRequestException('Informe seu celular (com DDD) pra gente falar com você sobre a entrega.');
+    }
+    // CPF/e-mail: opcionais, mas validados quando preenchidos
+    const cpfDigits = String(body?.cpf || '').replace(/\D/g, '');
+    if (cpfDigits) {
+      if (cpfDigits.length !== 11) throw new BadRequestException('CPF inválido — são 11 números.');
+      data.customerCpf = cpfDigits;
+    }
+    const email = clean(body?.email, 120);
+    if (email) {
+      if (!/\S@\S+\.\S+/.test(email)) throw new BadRequestException('E-mail inválido.');
+      data.customerEmail = email;
+    }
+
     await (this.prisma as any).livePdvCart.update({ where: { id: cartId }, data });
     return { ok: true };
   }
@@ -105,8 +146,8 @@ export class LivePayPublicController {
   }
 
   /**
-   * Só deixa cobrar se: existe, não está pago, tem CEP (frete calculado) e o
-   * ENDEREÇO de entrega completo — o pedido chega na loja pronto pra postar.
+   * Só deixa cobrar se: existe, não está pago, celular preenchido e —
+   * ENTREGA: CEP + endereço completo (loja posta) · RETIRADA: loja escolhida.
    */
   private async guardPayable(cartId: string): Promise<void> {
     const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
@@ -114,17 +155,26 @@ export class LivePayPublicController {
     if (LivePdvService.PAID_STATES.includes(cart.status)) {
       throw new BadRequestException('Essa compra já foi paga. 💜');
     }
-    const cep = String(cart.customerCep || '').replace(/\D/g, '');
-    if (cep.length !== 8) {
-      throw new BadRequestException('Informe seu CEP pra calcular o frete antes de pagar.');
+    if (cart.isPickup) {
+      if (!String(cart.pickupStoreCode || '').trim()) {
+        throw new BadRequestException('Escolha a loja de retirada antes de pagar. 💜');
+      }
+    } else {
+      const cep = String(cart.customerCep || '').replace(/\D/g, '');
+      if (cep.length !== 8) {
+        throw new BadRequestException('Informe seu CEP pra calcular o frete antes de pagar.');
+      }
+      if (
+        !String(cart.customerEndereco || '').trim() ||
+        !String(cart.customerNumero || '').trim() ||
+        !String(cart.customerCidade || '').trim() ||
+        !String(cart.customerUf || '').trim()
+      ) {
+        throw new BadRequestException('Preencha o endereço de entrega antes de pagar. 💜');
+      }
     }
-    if (
-      !String(cart.customerEndereco || '').trim() ||
-      !String(cart.customerNumero || '').trim() ||
-      !String(cart.customerCidade || '').trim() ||
-      !String(cart.customerUf || '').trim()
-    ) {
-      throw new BadRequestException('Preencha o endereço de entrega antes de pagar. 💜');
+    if (String(cart.customerPhone || '').replace(/\D/g, '').length < 10) {
+      throw new BadRequestException('Informe seu celular (com DDD) antes de pagar. 💜');
     }
   }
 }

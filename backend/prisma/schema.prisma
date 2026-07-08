@@ -3456,6 +3456,11 @@ model LivePdvCart {
   // Quando a DM automática de cobrança (ManyChat) foi enviada — a cobrança em
   // massa PULA quem já recebeu (não repete DM); o botão individual reenvia.
   dmSentAt          DateTime? @map("dm_sent_at")
+  // RETIRADA EM LOJA (igual ao site): frete zero, prazo de até 7 dias úteis.
+  // A cliente escolhe a loja no checkout; endereço deixa de ser obrigatório.
+  isPickup          Boolean  @default(false) @map("is_pickup")
+  pickupStoreCode   String?  @map("pickup_store_code")
+  pickupStoreName   String?  @map("pickup_store_name")
   createdAt         DateTime @default(now()) @map("created_at")
   updatedAt         DateTime @updatedAt @map("updated_at")
 
