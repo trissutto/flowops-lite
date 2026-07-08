@@ -3157,6 +3157,52 @@ function Dashboard({ sessionId }: { sessionId: string }) {
         ))}
       </div>
 
+      {/* Quem já pagou — conferência ao vivo (nome, valor, forma, status) */}
+      <div className="mt-4 rounded-xl border border-emerald-200 bg-white p-4 shadow-sm">
+        <div className="mb-2 flex items-center justify-between">
+          <span className="font-semibold text-slate-800">💰 Clientes que pagaram ({(data.pagos || []).length})</span>
+          <span className="text-xs text-slate-400">mais recente primeiro</span>
+        </div>
+        {(!data.pagos || data.pagos.length === 0) && (
+          <div className="py-4 text-center text-sm text-slate-400">Nenhum pagamento confirmado ainda.</div>
+        )}
+        <div className="space-y-1">
+          {(data.pagos || []).map((p: any) => (
+            <div key={p.cartId} className="flex items-center gap-2 border-b border-slate-50 py-1.5 text-sm">
+              {p.cartNumber != null && (
+                <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] font-bold text-slate-600">
+                  {p.cartNumber}
+                </span>
+              )}
+              <span className="min-w-0 flex-1 truncate text-slate-700">
+                <span className="font-semibold text-slate-900">{p.customerName || 'cliente'}</span>
+                {p.customerInstagram ? <span className="text-slate-400"> @{p.customerInstagram}</span> : null}
+              </span>
+              <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold uppercase text-slate-500">
+                {p.paymentMethod === 'link' ? 'Link/cartão' : p.paymentMethod === 'pix' ? 'PIX' : '—'}
+              </span>
+              <span
+                className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${
+                  p.status === 'delivered'
+                    ? 'bg-emerald-100 text-emerald-700'
+                    : p.status === 'shipped'
+                    ? 'bg-blue-100 text-blue-700'
+                    : p.status === 'separating'
+                    ? 'bg-violet-100 text-violet-700'
+                    : 'bg-amber-100 text-amber-700'
+                }`}
+              >
+                {p.status === 'delivered' ? 'Entregue' : p.status === 'shipped' ? 'Enviado' : p.status === 'separating' ? 'Separação' : 'Pago'}
+              </span>
+              <span className="shrink-0 font-bold tabular-nums text-emerald-700">{brl(p.totalCents)}</span>
+              <span className="shrink-0 text-xs tabular-nums text-slate-400">
+                {p.paidAt ? new Date(p.paidAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : ''}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+
       <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="mb-2 font-semibold text-slate-800">Produtos mais vendidos</div>
         {(!data.topProducts || data.topProducts.length === 0) && (

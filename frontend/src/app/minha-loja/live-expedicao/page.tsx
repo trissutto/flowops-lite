@@ -34,15 +34,31 @@ interface QueueItem {
 }
 interface QueueGroup {
   cartId: string;
+  cartNumber?: number | null;
   customerName: string;
   customerPhone: string;
   customerInstagram: string | null;
   customerCpf: string | null;
+  customerEmail?: string | null;
+  customerCep?: string | null;
+  customerEndereco?: string | null;
+  customerNumero?: string | null;
+  customerComplemento?: string | null;
+  customerBairro?: string | null;
+  customerCidade?: string | null;
+  customerUf?: string | null;
+  paymentMethod?: string | null; // 'pix' | 'link'
+  subtotalCents?: number | null;
+  freteCents?: number | null;
+  totalCents?: number | null;
   paidAt: string | null;
   liveStoreCode: string | null;
   liveStoreName: string | null;
   items: QueueItem[];
 }
+
+const brl = (cents?: number | null) =>
+  ((cents ?? 0) / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
 export default function LiveExpedicaoPage() {
   const [groups, setGroups] = useState<QueueGroup[]>([]);
@@ -179,6 +195,54 @@ export default function LiveExpedicaoPage() {
                     {g.customerCpf ? '✓ Cadastro' : 'Completar cadastro (CPF)'}
                   </button>
                   <span className="text-xs text-slate-400">{g.items.length} item(s)</span>
+                </div>
+              </div>
+              {/* Envio + pagamento — MESMO padrão do pedido do site (a loja imprime e posta) */}
+              <div className="grid gap-2 border-b border-slate-100 p-3 text-xs leading-relaxed text-slate-600 sm:grid-cols-2">
+                <div>
+                  <div className="mb-0.5 font-semibold text-slate-700">📦 Envio</div>
+                  {g.customerEndereco ? (
+                    <>
+                      <div className="text-slate-800">{g.customerName}</div>
+                      <div>
+                        {g.customerEndereco}
+                        {g.customerNumero ? `, ${g.customerNumero}` : ''}
+                        {g.customerComplemento ? ` — ${g.customerComplemento}` : ''}
+                      </div>
+                      {g.customerBairro && <div>Bairro: {g.customerBairro}</div>}
+                      <div>
+                        {g.customerCidade}
+                        {g.customerUf ? ` - ${g.customerUf}` : ''}
+                      </div>
+                      {g.customerCep && <div>CEP: {g.customerCep}</div>}
+                    </>
+                  ) : (
+                    <div className="font-semibold text-amber-600">
+                      ⚠ Sem endereço — clique em &quot;Completar cadastro&quot; antes de despachar
+                    </div>
+                  )}
+                  {g.customerCpf && <div className="mt-1 font-mono text-slate-700">CPF {g.customerCpf}</div>}
+                  {g.customerPhone && <div>Tel: {g.customerPhone}</div>}
+                  {g.customerEmail && <div className="break-all">✉️ {g.customerEmail}</div>}
+                </div>
+                <div>
+                  <div className="mb-0.5 font-semibold text-slate-700">💳 Pagamento</div>
+                  <div>
+                    Forma:{' '}
+                    <span className="font-semibold text-slate-800">
+                      {g.paymentMethod === 'link' ? 'Link (cartão)' : g.paymentMethod === 'pix' ? 'PIX' : '—'}
+                    </span>
+                    {g.paidAt && (
+                      <span className="text-slate-400">
+                        {' '}· pago às {new Date(g.paidAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    )}
+                  </div>
+                  {g.subtotalCents != null && <div>Peças: {brl(g.subtotalCents)}</div>}
+                  {(g.freteCents ?? 0) > 0 && <div>Frete: {brl(g.freteCents)}</div>}
+                  {g.totalCents != null && (
+                    <div className="font-bold text-emerald-700">Total: {brl(g.totalCents)}</div>
+                  )}
                 </div>
               </div>
               <div className="divide-y divide-slate-50">

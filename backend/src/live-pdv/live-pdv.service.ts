@@ -2216,10 +2216,25 @@ export class LivePdvService {
       if (!groups.has(it.cartId)) {
         groups.set(it.cartId, {
           cartId: it.cartId,
+          cartNumber: c?.cartNumber ?? null,
           customerName: c?.customerName,
           customerPhone: c?.customerPhone,
           customerInstagram: c?.customerInstagram,
           customerCpf: c?.customerCpf || null,
+          customerEmail: c?.customerEmail || null,
+          // Endereço completo — a loja imprime etiqueta e posta (padrão do site)
+          customerCep: c?.customerCep || null,
+          customerEndereco: c?.customerEndereco || null,
+          customerNumero: c?.customerNumero || null,
+          customerComplemento: c?.customerComplemento || null,
+          customerBairro: c?.customerBairro || null,
+          customerCidade: c?.customerCidade || null,
+          customerUf: c?.customerUf || null,
+          // Pagamento — igual ao pedido do site (forma + valores)
+          paymentMethod: c?.paymentMethod || null, // 'pix' | 'link'
+          subtotalCents: c?.subtotalCents ?? null,
+          freteCents: c?.freteCents ?? null,
+          totalCents: c?.totalCents ?? null,
           paidAt: c?.paidAt,
           liveStoreCode: sess?.liveStoreCode || null,
           liveStoreName: sess?.liveStoreName || null,
@@ -2541,8 +2556,23 @@ export class LivePdvService {
     }
     const topProducts = Array.from(prodMap.values()).sort((a, b) => b.qty - a.qty).slice(0, 10);
 
+    // Quem já pagou (mais recente primeiro) — a apresentadora confere ao vivo
+    const pagos = paidCarts
+      .sort((a: any, b: any) => new Date(b.paidAt || 0).getTime() - new Date(a.paidAt || 0).getTime())
+      .map((c: any) => ({
+        cartId: c.id,
+        cartNumber: c.cartNumber ?? null,
+        customerName: c.customerName,
+        customerInstagram: c.customerInstagram,
+        totalCents: c.totalCents || 0,
+        paymentMethod: c.paymentMethod || null, // 'pix' | 'link'
+        paidAt: c.paidAt,
+        status: c.status, // paid | separating | shipped | delivered
+      }));
+
     return {
       session,
+      pagos,
       kpis: {
         clientesAtendidas,
         pedidosCriados: carts.length,
