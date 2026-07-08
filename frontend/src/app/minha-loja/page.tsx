@@ -103,10 +103,24 @@ interface LiveQueueItem {
 }
 interface LiveQueueGroup {
   cartId: string;
+  cartNumber?: number | null;
   customerName: string;
   customerPhone: string;
   customerInstagram: string | null;
   customerCpf: string | null;
+  customerEmail?: string | null;
+  customerCep?: string | null;
+  customerEndereco?: string | null;
+  customerNumero?: string | null;
+  customerComplemento?: string | null;
+  customerBairro?: string | null;
+  customerCidade?: string | null;
+  customerUf?: string | null;
+  paymentMethod?: string | null; // 'pix' | 'link'
+  subtotalCents?: number | null;
+  freteCents?: number | null;
+  totalCents?: number | null;
+  paidAt?: string | null;
   liveStoreName: string | null;
   items: LiveQueueItem[];
 }
@@ -1159,6 +1173,9 @@ function PipelineSteps({ status }: { status: PickStatus }) {
   );
 }
 
+const liveBrl = (cents?: number | null) =>
+  ((cents ?? 0) / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
 /* ─── Card de pedido da LIVE — mesmo formato do pedido do site, com banner
        vermelho "PEDIDO DA LIVE <loja anfitriã>". Ações: Separei → Enviar. ─── */
 function LiveOrderCard({
@@ -1188,7 +1205,7 @@ function LiveOrderCard({
             🔴 PEDIDO DA LIVE{group.liveStoreName ? ` ${group.liveStoreName.toUpperCase()}` : ''}
           </div>
           <div className="text-xs opacity-95 mt-0.5">
-            Venda da live — separar e postar pra cliente. Endereço já conferido pela matriz.
+            Venda da live — separar e postar pra cliente no endereço abaixo.
           </div>
         </div>
 
@@ -1199,6 +1216,54 @@ function LiveOrderCard({
             {group.customerPhone}
             {group.customerInstagram && ` · @${group.customerInstagram}`}
             {group.customerCpf && ` · CPF ${group.customerCpf}`}
+          </div>
+        </div>
+
+        {/* Envio + Pagamento — MESMO padrão do pedido do site (imprime e posta) */}
+        <div className="grid gap-2 border-b border-slate-100 px-4 py-3 text-xs leading-relaxed text-slate-600 sm:grid-cols-2">
+          <div>
+            <div className="mb-0.5 font-semibold text-slate-700">📦 Envio</div>
+            {group.customerEndereco ? (
+              <>
+                <div className="text-slate-800">{group.customerName}</div>
+                <div>
+                  {group.customerEndereco}
+                  {group.customerNumero ? `, ${group.customerNumero}` : ''}
+                  {group.customerComplemento ? ` — ${group.customerComplemento}` : ''}
+                </div>
+                {group.customerBairro && <div>Bairro: {group.customerBairro}</div>}
+                <div>
+                  {group.customerCidade}
+                  {group.customerUf ? ` - ${group.customerUf}` : ''}
+                </div>
+                {group.customerCep && <div>CEP: {group.customerCep}</div>}
+              </>
+            ) : (
+              <div className="font-semibold text-amber-600">
+                ⚠ SEM ENDEREÇO — NÃO postar. Avise a matriz pra completar o cadastro da cliente.
+              </div>
+            )}
+            {group.customerPhone && <div className="mt-1">Tel: {group.customerPhone}</div>}
+            {group.customerEmail && <div className="break-all">✉️ {group.customerEmail}</div>}
+          </div>
+          <div>
+            <div className="mb-0.5 font-semibold text-slate-700">💳 Pagamento</div>
+            <div>
+              Forma:{' '}
+              <span className="font-semibold text-slate-800">
+                {group.paymentMethod === 'link' ? 'Link (cartão)' : group.paymentMethod === 'pix' ? 'PIX' : '—'}
+              </span>
+              {group.paidAt && (
+                <span className="text-slate-400">
+                  {' '}· pago às {new Date(group.paidAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                </span>
+              )}
+            </div>
+            {group.subtotalCents != null && <div>Peças: {liveBrl(group.subtotalCents)}</div>}
+            {(group.freteCents ?? 0) > 0 && <div>Frete: {liveBrl(group.freteCents)}</div>}
+            {group.totalCents != null && (
+              <div className="font-bold text-emerald-700">Total: {liveBrl(group.totalCents)}</div>
+            )}
           </div>
         </div>
 
@@ -1233,8 +1298,14 @@ function LiveOrderCard({
                   )}
                   <button
                     onClick={() => onShipped(it.id)}
-                    disabled={busy === it.id || !it.separatedAt}
-                    title={it.separatedAt ? 'Postar e informar o rastreio' : 'Bipe a peça primeiro (conferência)'}
+                    disabled={busy === it.id || !it.separatedAt || !group.customerEndereco}
+                    title={
+                      !group.customerEndereco
+                        ? 'SEM ENDEREÇO — matriz precisa completar o cadastro antes do envio'
+                        : it.separatedAt
+                        ? 'Postar e informar o rastreio'
+                        : 'Bipe a peça primeiro (conferência)'
+                    }
                     className="inline-flex items-center gap-1 rounded-lg bg-rose-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-40"
                   >
                     📦 Enviar
