@@ -292,11 +292,16 @@ export default function MinhaLojaPage() {
     }
   }, [persistSeen]);
 
-  // Pedidos da LIVE pra esta loja (silencioso: loja sem live não vê nada)
+  // Pedidos da LIVE pra esta loja (silencioso: loja sem live não vê nada).
+  // Pedido FINALIZADO (todas as peças enviadas) sai da home — igual ao site;
+  // segue visível na tela /minha-loja/live-expedicao pra marcar "Entregue".
   const loadLiveRows = useCallback(async () => {
     try {
       const data = await api<LiveQueueGroup[]>('/live-pdv/store-queue');
-      setLiveRows(Array.isArray(data) ? data : []);
+      const pendentes = (Array.isArray(data) ? data : []).filter((g) =>
+        (g.items || []).some((it) => it.status === 'separating'),
+      );
+      setLiveRows(pendentes);
     } catch { /* segue sem live */ }
   }, []);
 
