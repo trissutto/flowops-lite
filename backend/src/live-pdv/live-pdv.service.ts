@@ -1156,7 +1156,13 @@ export class LivePdvService {
         code = upd.payCode;
       } catch { /* raro — usa o link longo */ }
     }
-    const base = (process.env.FRONTEND_URL || 'https://flowops-lite.vercel.app').replace(/\/$/, '');
+    // FRONTEND_URL pode ser lista separada por vírgula (formato do CORS em
+    // main.ts) — o link usa SÓ o primeiro domínio. Bug real: a lista inteira
+    // entrou no link e o Instagram abriu o domínio errado (tela de login).
+    const base = (process.env.FRONTEND_URL || 'https://flowops-lite.vercel.app')
+      .split(',')[0]
+      .trim()
+      .replace(/\/$/, '');
     const link = code ? `${base}/p/${code}` : `${base}/pagar/${cart.id}`;
     const first = String(name).trim().split(/\s+/)[0] || 'cliente';
     const valor = ((cart.totalCents || 0) / 100).toLocaleString('pt-BR', {
@@ -1203,7 +1209,7 @@ export class LivePdvService {
    * cliente — SE ela tiver vínculo ManyChat (se cadastrou pelo link com &sid=).
    * Quem não tem vínculo volta como "skipped" e é cobrada pela fila manual.
    */
-  async chargeAllViaDm(sessionId: string) {
+  async chargeAllViaDm(sessionId: string, resend = false) {
     if (!this.manychat.enabled) {
       throw new BadRequestException(
         'Envio automático não configurado — crie a env MANYCHAT_API_TOKEN no Railway.',
@@ -1219,8 +1225,9 @@ export class LivePdvService {
     for (const cart of carts as any[]) {
       const name = cart.customerName || 'cliente';
       // Já recebeu a DM automática antes? NÃO repete (reenvio só pelo botão
-      // individual do carrinho, que é decisão explícita da operadora).
-      if (cart.dmSentAt) {
+      // individual do carrinho — ou com resend=true, usado pra corrigir envio
+      // com link errado em massa).
+      if (cart.dmSentAt && !resend) {
         skipped.push({ cartId: cart.id, customerName: name, reason: 'DM já enviada' });
         continue;
       }
