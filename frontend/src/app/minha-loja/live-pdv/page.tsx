@@ -487,14 +487,17 @@ export default function LivePdvPage() {
         sent: Array<{ cartId: string; customerName: string }>;
         skipped: Array<{ cartId: string; customerName: string; reason: string }>;
       }>(`/live-pdv/sessions/${sessionId}/charge-all-dm`, { method: 'POST', body: JSON.stringify({}) });
+      const jaEnviadas = r.skipped.filter((s) => /já enviada/i.test(s.reason));
       setChargeAllDone((s) => {
         const n = { ...s };
         for (const it of r.sent) n[it.cartId] = true;
+        for (const it of jaEnviadas) n[it.cartId] = true; // recebeu antes — não repete
         return n;
       });
-      const manuais = r.skipped.filter((s) => !/vazio/.test(s.reason));
+      const manuais = r.skipped.filter((s) => !/vazio|já enviada/i.test(s.reason));
       setDmResult(
         `✓ ${r.sent.length} enviada${r.sent.length === 1 ? '' : 's'} automático` +
+          (jaEnviadas.length ? ` · ${jaEnviadas.length} já tinham recebido (não repete)` : '') +
           (manuais.length
             ? ` · ${manuais.length} pra enviar manual: ${manuais.map((s) => s.customerName).slice(0, 5).join(', ')}${manuais.length > 5 ? '…' : ''}`
             : ''),
