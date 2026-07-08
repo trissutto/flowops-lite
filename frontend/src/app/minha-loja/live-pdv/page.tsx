@@ -98,6 +98,7 @@ interface Cart {
   paymentMethod?: string | null; // 'pix' | 'link' — pra reabrir a cobrança pendente
   qrCodeText?: string | null;
   qrCodeImageUrl?: string | null;
+  hasManychat?: boolean; // cliente tem vínculo ManyChat → DM automática funciona
   items: CartItem[];
 }
 interface ActiveCustomer {
@@ -531,6 +532,28 @@ export default function LivePdvPage() {
       window.open(`https://wa.me/55${d}?text=${encodeURIComponent(msg)}`, '_blank', 'noopener,noreferrer');
     }
     setChargeAllDone((s) => ({ ...s, [c.id]: true }));
+  }
+
+  // Cobra UMA cliente automático via ManyChat (DM direto, chega com Insta fechado)
+  const [dmOneSending, setDmOneSending] = useState<Record<string, boolean>>({});
+  async function chargeOneDm(c: Cart) {
+    if (dmOneSending[c.id]) return;
+    setDmOneSending((s) => ({ ...s, [c.id]: true }));
+    try {
+      await api(`/live-pdv/carts/${c.id}/charge-dm`, { method: 'POST', body: JSON.stringify({}) });
+      setChargeAllDone((s) => ({ ...s, [c.id]: true }));
+      setDmResult(`✓ DM enviada pra ${c.customerName}`);
+    } catch (e: any) {
+      const raw = String(e?.message || '');
+      let msg = 'Falha no envio da DM.';
+      try {
+        const j = JSON.parse(raw.slice(raw.indexOf(': ') + 2));
+        if (j?.message) msg = Array.isArray(j.message) ? j.message[0] : j.message;
+      } catch { /* mensagem crua */ }
+      setDmResult(`⚠️ ${c.customerName}: ${msg}`);
+    } finally {
+      setDmOneSending((s) => ({ ...s, [c.id]: false }));
+    }
   }
 
   async function openSwapStore() {
@@ -1528,6 +1551,17 @@ export default function LivePdvPage() {
                         <b className="tabular-nums">{brl(c.totalCents)}</b>
                       </div>
                     </div>
+                    {c.hasManychat && (
+                      <button
+                        type="button"
+                        onClick={() => chargeOneDm(c)}
+                        disabled={!!dmOneSending[c.id]}
+                        title="Manda a DM sozinho pela API do ManyChat — chega mesmo com o Instagram fechado"
+                        className="shrink-0 rounded-lg bg-slate-800 px-2.5 py-1.5 text-[11px] font-bold text-white hover:bg-slate-900 disabled:opacity-50"
+                      >
+                        {dmOneSending[c.id] ? '…' : '🤖 Auto'}
+                      </button>
+                    )}
                     {c.customerInstagram && (
                       <button
                         type="button"
@@ -2415,8 +2449,33 @@ function CartPanel({
   releasing: boolean;
 }) {
   const [linkCopied, setLinkCopied] = useState(false);
+  // DM automática via ManyChat — estado do envio individual
+  const [dmSending, setDmSending] = useState(false);
+  const [dmStatus, setDmStatus] = useState<string | null>(null);
   // Carrinho já pago/em separação: esconde ações de cobrança (link /pagar, frete)
   const cartPago = !!cart && ['paid', 'separating', 'shipped', 'delivered'].includes(cart.status);
+
+  // Manda a DM sozinho pela API do ManyChat — chega mesmo com o Insta fechado,
+  // porque sai da conta da loja (janela de 24h de quem comentou/se cadastrou).
+  async function sendDmAuto() {
+    if (!cart || dmSending) return;
+    setDmSending(true);
+    setDmStatus(null);
+    try {
+      await api(`/live-pdv/carts/${cart.id}/charge-dm`, { method: 'POST', body: JSON.stringify({}) });
+      setDmStatus('✓ DM enviada no Direct da cliente!');
+    } catch (e: any) {
+      const raw = String(e?.message || '');
+      let msg = 'Falha no envio da DM.';
+      try {
+        const j = JSON.parse(raw.slice(raw.indexOf(': ') + 2));
+        if (j?.message) msg = Array.isArray(j.message) ? j.message[0] : j.message;
+      } catch { /* mensagem crua */ }
+      setDmStatus(`⚠️ ${msg}`);
+    } finally {
+      setDmSending(false);
+    }
+  }
   // Link curto (/p/<code>) quando o carrinho tem payCode; senão o longo (/pagar/<uuid>)
   const payLink = cart && !cartPago && typeof window !== 'undefined'
     ? (cart.payCode
@@ -2590,6 +2649,21 @@ function CartPanel({
                         </button>
                       )}
                     </div>
+                    {cart?.hasManychat && (
+                      <button
+                        onClick={sendDmAuto}
+                        disabled={dmSending}
+                        title="Manda a DM sozinho pela API do ManyChat — chega mesmo com o Instagram fechado"
+                        className="mt-2 w-full rounded-lg bg-slate-800 py-2 text-xs font-bold text-white hover:bg-slate-900 disabled:opacity-50"
+                      >
+                        {dmSending ? 'Enviando DM…' : '🤖 Enviar automático no Direct (ManyChat)'}
+                      </button>
+                    )}
+                    {dmStatus && (
+                      <div className="mt-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-center text-[11px] text-slate-600">
+                        {dmStatus}
+                      </div>
+                    )}
                     {payLink.includes('/p/') && (
                       <div className="mt-1.5 truncate text-center font-mono text-[10px] text-[#A08A4E]" title={payLink}>
                         {payLink.replace(/^https?:\/\//, '')}
