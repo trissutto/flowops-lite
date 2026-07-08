@@ -1120,6 +1120,27 @@ export default function LivePdvPage() {
     }
   }
 
+  // Edita o preço de um item (negociação na hora) — só peça ainda não paga
+  async function setItemPrice(itemId: string, priceCents: number) {
+    if (!cart) return;
+    try {
+      const updated = await api<Cart>(`/live-pdv/items/${itemId}/price`, {
+        method: 'POST',
+        body: JSON.stringify({ priceCents }),
+      });
+      setCart(updated);
+      await refreshCarts();
+    } catch (e: any) {
+      const raw = String(e?.message || '');
+      let msg = 'Erro ao alterar o preço.';
+      try {
+        const j = JSON.parse(raw.slice(raw.indexOf(': ') + 2));
+        if (j?.message) msg = Array.isArray(j.message) ? j.message[0] : j.message;
+      } catch { /* mensagem crua */ }
+      alert(msg);
+    }
+  }
+
   async function removeItem(itemId: string) {
     if (!cart) return;
     try {
@@ -2033,6 +2054,7 @@ export default function LivePdvPage() {
               paying={paying}
               onNewClient={newClient}
               onRemoveItem={removeItem}
+              onSetItemPrice={setItemPrice}
               onChargePix={startPix}
               onChargeLink={startLink}
               onEditCustomer={() => setEditCustomerOpen(true)}
@@ -2423,6 +2445,7 @@ function CartPanel({
   paying,
   onNewClient,
   onRemoveItem,
+  onSetItemPrice,
   onChargePix,
   onChargeLink,
   onEditCustomer,
@@ -2443,6 +2466,7 @@ function CartPanel({
   paying: boolean;
   onNewClient: () => void;
   onRemoveItem: (id: string) => void;
+  onSetItemPrice: (id: string, priceCents: number) => Promise<void> | void;
   onChargePix: () => void;
   onChargeLink: () => void;
   onEditCustomer: () => void;
@@ -2457,6 +2481,15 @@ function CartPanel({
   releasing: boolean;
 }) {
   const [linkCopied, setLinkCopied] = useState(false);
+  // Edição inline do PREÇO de um item (clica no valor → digita → Enter)
+  const [editPriceId, setEditPriceId] = useState<string | null>(null);
+  const [editPriceVal, setEditPriceVal] = useState('');
+  async function savePrice(itemId: string) {
+    const cents = Math.round(parseFloat(editPriceVal.replace(/\./g, '').replace(',', '.')) * 100);
+    setEditPriceId(null);
+    if (!Number.isFinite(cents) || cents <= 0) return;
+    await onSetItemPrice(itemId, cents);
+  }
   // DM automática via ManyChat — estado do envio individual
   const [dmSending, setDmSending] = useState(false);
   const [dmStatus, setDmStatus] = useState<string | null>(null);
@@ -2567,7 +2600,34 @@ function CartPanel({
                       <span className="ml-1 rounded bg-slate-100 px-1">{STATUS_LABEL[it.status] || it.status}</span>
                     </div>
                   </div>
-                  <div className="text-sm font-semibold text-slate-800">{brl(it.priceCents * it.qty)}</div>
+                  {editPriceId === it.id ? (
+                    <input
+                      autoFocus
+                      value={editPriceVal}
+                      onChange={(e) => setEditPriceVal(e.target.value.replace(/[^\d.,]/g, ''))}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') savePrice(it.id);
+                        if (e.key === 'Escape') setEditPriceId(null);
+                      }}
+                      onBlur={() => savePrice(it.id)}
+                      inputMode="decimal"
+                      className="w-20 rounded border border-[#D4AF37] px-1.5 py-0.5 text-right text-sm font-semibold text-slate-800 outline-none focus:ring-2 focus:ring-[#EBD9A6]"
+                    />
+                  ) : it.status === 'reserved' ? (
+                    <button
+                      onClick={() => {
+                        setEditPriceId(it.id);
+                        // Edita o valor UNITÁRIO da peça (com qty>1 o total recalcula)
+                        setEditPriceVal((it.priceCents / 100).toFixed(2).replace('.', ','));
+                      }}
+                      title={`Clique pra editar o valor da peça (negociação na hora)${it.qty > 1 ? ' — valor unitário' : ''}`}
+                      className="rounded px-1 text-sm font-semibold text-slate-800 underline decoration-dotted decoration-[#D4AF37] underline-offset-4 hover:bg-[#FBF6E6]"
+                    >
+                      {brl(it.priceCents * it.qty)}
+                    </button>
+                  ) : (
+                    <div className="text-sm font-semibold text-slate-800">{brl(it.priceCents * it.qty)}</div>
+                  )}
                   {['reserved', 'open'].includes(it.status) && (
                     <button onClick={() => onRemoveItem(it.id)} className="text-slate-300 hover:text-rose-500">
                       <Trash2 className="h-4 w-4" />

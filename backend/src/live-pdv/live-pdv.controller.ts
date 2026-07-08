@@ -158,6 +158,12 @@ export class LivePdvController {
     return this.svc.markCartCharged(cartId);
   }
 
+  // Edita o PREÇO de um item do carrinho (negociação na hora, item ainda não pago)
+  @Post('items/:itemId/price')
+  setItemPrice(@Param('itemId') itemId: string, @Body() body: { priceCents: number }) {
+    return this.svc.setItemPrice(itemId, Number(body?.priceCents));
+  }
+
   // Importa vínculos do CSV de Contatos do ManyChat (user_id + @) em lote
   @Post('manychat/import-links')
   importManychatLinks(@Body() body: { links: Array<{ sid: string; ig: string }> }) {
