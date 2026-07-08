@@ -1032,7 +1032,7 @@ export class LivePdvService {
       );
     }
     const carts = await (this.prisma as any).livePdvCart.findMany({
-      where: { sessionId, status: 'open' },
+      where: { sessionId, status: 'open', totalCents: { gt: 0 } }, // só quem tem peça (cobrável)
       orderBy: { createdAt: 'asc' },
     });
     const vinculados: string[] = [];
@@ -1052,11 +1052,22 @@ export class LivePdvService {
       }
       if (!sid) sid = await this.lookupManychatSidByIg(ig);
       if (sid) { jaTinha.push(ig); continue; }
-      // Busca na API: pelo @ e pelo nome (muitos contatos têm o @ como nome)
-      const candidates = [
-        ...(await this.manychat.findSubscribersByName(ig)),
-        ...(await this.manychat.findSubscribersByName(cart.customerName || '')),
-      ];
+      // Busca na API por vários ângulos: o @, o nome do carrinho e um "nome
+      // humano" derivado do @ (tira dígitos, separa por ponto/underscore) —
+      // no ManyChat a cliente costuma aparecer com o nome do perfil, não o @.
+      const humano = ig
+        .replace(/[._]+/g, ' ')
+        .replace(/\d+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      const queries = Array.from(
+        new Set([ig, String(cart.customerName || '').trim(), humano].filter((q) => q.length >= 3)),
+      );
+      const candidates: any[] = [];
+      for (const q of queries) {
+        candidates.push(...(await this.manychat.findSubscribersByName(q)));
+        await new Promise((res) => setTimeout(res, 120));
+      }
       const hit = candidates.find(
         (s: any) => String(s?.ig_username || '').trim().replace(/^@/, '').toLowerCase() === ig,
       );
