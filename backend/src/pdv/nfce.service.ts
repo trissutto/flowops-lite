@@ -257,7 +257,15 @@ export class NfceService {
 
   // ── Geração XML ─────────────────────────────────────────────────────
 
-  private async buildXml(sale: any, config: any, chave: string, numero: number): Promise<string> {
+  private async buildXml(
+    sale: any,
+    config: any,
+    chave: string,
+    numero: number,
+    // Itens (índice 0-based) cujo NCM deve ser FORÇADO pro fallback genérico —
+    // usado no auto-retry do cStat 778 (NCM do cadastro não existe na TIPI).
+    ncmFallbackItems?: Set<number>,
+  ): Promise<string> {
     const ambiente = config.ambiente;
     // dhEmi precisa estar no formato ISO com timezone OFFSET (-03:00),
     // NÃO com Z. SEFAZ NF-e 4.00 (TDateTimeUTC) só aceita os offsets
@@ -393,7 +401,7 @@ export class NfceService {
           if (isNaN(cap) || cap < 1 || cap > 97) return false;
           return true;
         };
-        const ncm = isValidNcm(ncmFromErp)
+        const ncm = isValidNcm(ncmFromErp) && !ncmFallbackItems?.has(idx)
           ? ncmFromErp
           : (isSimples ? '00000000' : '61099000');
         const cfop = it.cfop || '5102';
@@ -783,12 +791,49 @@ export class NfceService {
       };
     }
 
-    const transmit = await transmitNfeSefazSp({
+    let transmit = await transmitNfeSefazSp({
       xmlAssinado,
       ambiente: config.ambiente as '1' | '2',
       pfxBase64: cfgRaw.certPfxB64,
       pfxPassword: cfgRaw.certPfxPass || '',
     });
+
+    // AUTO-RETRY cStat 778 (NCM do cadastro não existe na TIPI): a SEFAZ
+    // aponta o item ([nItem:N]) — reemite UMA vez trocando o NCM desses itens
+    // pelo genérico válido (61099000) e loga a REF pra corrigir no Giga.
+    // A venda não fica presa em rejeitada por cadastro podre.
+    if (!transmit.success && String(transmit.cStat) === '778') {
+      const idxs = new Set<number>();
+      for (const m of String(transmit.xMotivo || '').matchAll(/nItem[:\s]*(\d+)/gi)) {
+        const i = parseInt(m[1], 10) - 1;
+        if (i >= 0 && i < (sale.items || []).length) idxs.add(i);
+      }
+      if (idxs.size) {
+        for (const i of idxs) {
+          const it = (sale.items || [])[i];
+          this.logger.warn(
+            `[nfce] cStat 778 — NCM inexistente na TIPI: item ${i + 1} ref=${it?.ref || '?'} sku=${it?.sku || '?'} ncm=${it?.ncm || '?'} → fallback 61099000. CORRIGIR o NCM desse produto no cadastro (Giga).`,
+          );
+        }
+        try {
+          const xmlRetry = await this.buildXml(sale, config, chave, numero, idxs);
+          const assinadoRetry = signXmlNfeWithA1({
+            xml: xmlRetry,
+            pfxBase64: cfgRaw.certPfxB64,
+            pfxPassword: cfgRaw.certPfxPass || '',
+          });
+          transmit = await transmitNfeSefazSp({
+            xmlAssinado: assinadoRetry,
+            ambiente: config.ambiente as '1' | '2',
+            pfxBase64: cfgRaw.certPfxB64,
+            pfxPassword: cfgRaw.certPfxPass || '',
+          });
+          if (transmit.success) xmlAssinado = assinadoRetry;
+        } catch (e: any) {
+          this.logger.warn(`[nfce] retry 778 falhou na montagem/assinatura: ${e?.message || e}`);
+        }
+      }
+    }
 
     if (!transmit.success) {
       this.logger.error(
