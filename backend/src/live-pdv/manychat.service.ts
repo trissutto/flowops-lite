@@ -55,4 +55,26 @@ export class ManychatService {
       return { ok: false, error: e?.message || 'falha de rede' };
     }
   }
+
+  /**
+   * Busca assinantes por nome (API oficial). Retorna a lista crua — cada item
+   * traz id, name e ig_username (contas Instagram). Usado pelo backfill que
+   * casa carrinho ↔ assinante pelo @ (o ManyChat não exporta contatos em CSV).
+   */
+  async findSubscribersByName(name: string): Promise<any[]> {
+    const token = (process.env.MANYCHAT_API_TOKEN || '').trim();
+    const q = String(name || '').trim();
+    if (!token || q.length < 2) return [];
+    try {
+      const resp = await fetch(
+        `${this.BASE}/fb/subscriber/findByName?name=${encodeURIComponent(q)}`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+      const data: any = await resp.json().catch(() => ({}));
+      if (resp.ok && data?.status === 'success' && Array.isArray(data.data)) return data.data;
+      return [];
+    } catch {
+      return [];
+    }
+  }
 }
