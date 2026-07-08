@@ -145,6 +145,7 @@ export default function MinhaLojaPage() {
   // do site (formato igual, com a tag "LIVE <loja anfitriã>").
   const [liveRows, setLiveRows] = useState<LiveQueueGroup[]>([]);
   const [liveBusy, setLiveBusy] = useState<string | null>(null);
+  const [liveBipCart, setLiveBipCart] = useState<LiveQueueGroup | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
@@ -846,10 +847,17 @@ export default function MinhaLojaPage() {
             key={g.cartId}
             group={g}
             busy={liveBusy}
+            onBip={() => setLiveBipCart(g)}
             onSeparated={liveMarkSeparated}
             onShipped={liveMarkShipped}
           />
         ))}
+        {liveBipCart && (
+          <LiveBipModal
+            group={liveBipCart}
+            onClose={() => { setLiveBipCart(null); loadLiveRows(); }}
+          />
+        )}
         {visibleRows.length === 0 && liveRows.length === 0 ? (
           <EmptyState />
         ) : (
@@ -1156,16 +1164,19 @@ function PipelineSteps({ status }: { status: PickStatus }) {
 function LiveOrderCard({
   group,
   busy,
+  onBip,
   onSeparated,
   onShipped,
 }: {
   group: LiveQueueGroup;
   busy: string | null;
+  onBip: () => void;
   onSeparated: (itemId: string) => void;
   onShipped: (itemId: string) => void;
 }) {
   const pendentes = group.items.filter((it) => it.status === 'separating');
   const enviados = group.items.filter((it) => it.status === 'shipped');
+  const aBipar = pendentes.filter((it) => !it.separatedAt);
   return (
     <article className="bg-white rounded-xl border border-rose-400 ring-2 ring-rose-200 shadow-md overflow-hidden flex">
       {/* Faixa lateral vermelha — semáforo visual da LIVE */}
@@ -1206,19 +1217,25 @@ function LiveOrderCard({
               </div>
               {it.status === 'separating' ? (
                 <>
-                  {!it.separatedAt && (
+                  {it.separatedAt ? (
+                    <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-bold text-emerald-700">
+                      ✓ Conferida
+                    </span>
+                  ) : (
                     <button
                       onClick={() => onSeparated(it.id)}
                       disabled={busy === it.id}
-                      className="inline-flex items-center gap-1 rounded-lg bg-slate-100 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-200 disabled:opacity-50"
+                      title="Fallback sem bipar (etiqueta danificada) — a baixa de estoque roda igual"
+                      className="inline-flex items-center gap-1 rounded-lg bg-slate-100 px-2.5 py-1.5 text-xs font-medium text-slate-500 hover:bg-slate-200 disabled:opacity-50"
                     >
-                      ✓ Separei
+                      marcar s/ bipar
                     </button>
                   )}
                   <button
                     onClick={() => onShipped(it.id)}
-                    disabled={busy === it.id}
-                    className="inline-flex items-center gap-1 rounded-lg bg-rose-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
+                    disabled={busy === it.id || !it.separatedAt}
+                    title={it.separatedAt ? 'Postar e informar o rastreio' : 'Bipe a peça primeiro (conferência)'}
+                    className="inline-flex items-center gap-1 rounded-lg bg-rose-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-40"
                   >
                     📦 Enviar
                   </button>
@@ -1232,14 +1249,144 @@ function LiveOrderCard({
           ))}
         </div>
 
+        {/* Bip de conferência — mesmo rito do pedido do site */}
+        {aBipar.length > 0 && (
+          <div className="px-4 py-2.5 border-t border-slate-100">
+            <button
+              onClick={onBip}
+              className="w-full rounded-lg bg-violet-600 py-2.5 text-sm font-bold text-white hover:bg-violet-700"
+            >
+              🔍 Bipar conferência ({aBipar.length} peça{aBipar.length > 1 ? 's' : ''})
+            </button>
+          </div>
+        )}
+
         {/* Rodapé: progresso */}
         <div className="bg-slate-50 px-4 py-2 text-xs text-slate-500">
           {pendentes.length > 0
-            ? `${pendentes.length} peça(s) pra separar/enviar`
+            ? aBipar.length > 0
+              ? `${aBipar.length} pra bipar · ${pendentes.length - aBipar.length} conferida(s) aguardando envio`
+              : `Tudo conferido ✓ — informe o rastreio no Enviar`
             : `Tudo enviado ✓ (${enviados.length} peça(s))`}
         </div>
       </div>
     </article>
+  );
+}
+
+/* ─── Modal de bipagem do pedido da LIVE — mesmo rito do site: bipa o código
+       de barras, o sistema confere se a peça é do pedido e baixa o estoque. ─── */
+function LiveBipModal({
+  group,
+  onClose,
+}: {
+  group: LiveQueueGroup;
+  onClose: () => void;
+}) {
+  const [code, setCode] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [doneIds, setDoneIds] = useState<Set<string>>(
+    () => new Set(group.items.filter((i) => i.separatedAt || i.status === 'shipped').map((i) => i.id)),
+  );
+  const [feedback, setFeedback] = useState<{ ok: boolean; text: string } | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { inputRef.current?.focus(); }, []);
+
+  const pendentes = group.items.filter((i) => i.status === 'separating' && !doneIds.has(i.id));
+  const completo = pendentes.length === 0;
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    const c = code.trim();
+    if (!c || busy) return;
+    setBusy(true);
+    setFeedback(null);
+    try {
+      const r = await api<{ ok: boolean; itemId: string; descricao: string; cor: string | null; tamanho: string | null; restantes: number }>(
+        `/live-pdv/carts/${group.cartId}/bip`,
+        { method: 'POST', body: JSON.stringify({ code: c }) },
+      );
+      setDoneIds((s) => new Set(s).add(r.itemId));
+      setFeedback({ ok: true, text: `✓ ${r.descricao}${r.cor ? ` · ${r.cor}` : ''}${r.tamanho ? ` ${r.tamanho}` : ''}` });
+    } catch (err: any) {
+      const raw = String(err?.message || '');
+      let msg = 'Peça não confere.';
+      try {
+        const j = JSON.parse(raw.slice(raw.indexOf(': ') + 2));
+        if (j?.message) msg = Array.isArray(j.message) ? j.message[0] : j.message;
+      } catch { /* texto cru */ }
+      setFeedback({ ok: false, text: `✗ ${msg}` });
+    } finally {
+      setCode('');
+      setBusy(false);
+      inputRef.current?.focus();
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <form onSubmit={submit} className="w-full max-w-md rounded-xl bg-white p-5 shadow-xl">
+        <div className="mb-1 flex items-center justify-between">
+          <h3 className="text-lg font-bold text-slate-800">🔍 Bipar conferência</h3>
+          <button type="button" onClick={onClose} className="text-slate-400 hover:text-slate-600">✕</button>
+        </div>
+        <p className="mb-3 text-xs text-slate-500">
+          <b>{group.customerName}</b> · pedido da LIVE{group.liveStoreName ? ` ${group.liveStoreName.toUpperCase()}` : ''}.
+          Bipe o código de barras de cada peça — a baixa de estoque sai no bip.
+        </p>
+
+        <input
+          ref={inputRef}
+          value={code}
+          onChange={(e) => setCode(e.target.value)}
+          placeholder="Bipe ou digite o código…"
+          disabled={busy || completo}
+          className="mb-2 w-full rounded-lg border-2 border-violet-300 px-3 py-3 text-lg font-mono focus:border-violet-500 focus:outline-none disabled:bg-slate-100"
+        />
+        {feedback && (
+          <div
+            className={`mb-2 rounded-lg px-3 py-2 text-sm font-semibold ${
+              feedback.ok ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'
+            }`}
+          >
+            {feedback.text}
+          </div>
+        )}
+
+        <div className="mb-3 max-h-56 space-y-1 overflow-y-auto">
+          {group.items.filter((i) => i.status === 'separating').map((it) => {
+            const ok = doneIds.has(it.id);
+            return (
+              <div
+                key={it.id}
+                className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm ${
+                  ok ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-slate-200 text-slate-700'
+                }`}
+              >
+                <span className="w-5 text-center">{ok ? '✓' : '•'}</span>
+                <span className="min-w-0 flex-1 truncate">
+                  {it.refCode} · {it.cor} {it.tamanho} <span className="opacity-60">×{it.qty}</span>
+                </span>
+              </div>
+            );
+          })}
+        </div>
+
+        {completo ? (
+          <button
+            type="button"
+            onClick={onClose}
+            className="w-full rounded-lg bg-emerald-600 py-2.5 font-bold text-white hover:bg-emerald-700"
+          >
+            ✓ Tudo conferido — voltar e enviar
+          </button>
+        ) : (
+          <div className="text-center text-xs text-slate-400">
+            {pendentes.length} peça(s) restante(s)
+          </div>
+        )}
+      </form>
+    </div>
   );
 }
 
