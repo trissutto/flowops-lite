@@ -89,6 +89,28 @@ interface PickOrderRow {
   };
 }
 
+// ── Pedido da LIVE na fila desta loja (GET /live-pdv/store-queue) ──
+interface LiveQueueItem {
+  id: string;
+  refCode: string;
+  descricao: string | null;
+  cor: string | null;
+  tamanho: string | null;
+  qty: number;
+  status: string; // separating | shipped
+  separatedAt: string | null;
+  trackingCode: string | null;
+}
+interface LiveQueueGroup {
+  cartId: string;
+  customerName: string;
+  customerPhone: string;
+  customerInstagram: string | null;
+  customerCpf: string | null;
+  liveStoreName: string | null;
+  items: LiveQueueItem[];
+}
+
 interface MeProfile {
   userId: string;
   email: string;
@@ -119,6 +141,10 @@ export default function MinhaLojaPage() {
   const router = useRouter();
   const [me, setMe] = useState<MeProfile | null>(null);
   const [rows, setRows] = useState<PickOrderRow[]>([]);
+  // Pedidos da LIVE pra esta loja separar — entram na MESMA lista dos pedidos
+  // do site (formato igual, com a tag "LIVE <loja anfitriã>").
+  const [liveRows, setLiveRows] = useState<LiveQueueGroup[]>([]);
+  const [liveBusy, setLiveBusy] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
@@ -202,7 +228,7 @@ export default function MinhaLojaPage() {
         }
         // Carrega IDs já notificados hoje — protege contra reload do Electron
         if (profile.storeId) loadSeenFromStorage(profile.storeId);
-        await Promise.all([loadRows(), loadRealignmentCount(), loadShipmentsIncoming()]);
+        await Promise.all([loadRows(), loadLiveRows(), loadRealignmentCount(), loadShipmentsIncoming()]);
       } catch (err: any) {
         setError(err?.message ?? 'Erro ao carregar perfil');
         if (String(err?.message ?? '').startsWith('401')) {
@@ -247,6 +273,35 @@ export default function MinhaLojaPage() {
       setError(err?.message ?? 'Erro ao carregar pedidos');
     }
   }, [persistSeen]);
+
+  // Pedidos da LIVE pra esta loja (silencioso: loja sem live não vê nada)
+  const loadLiveRows = useCallback(async () => {
+    try {
+      const data = await api<LiveQueueGroup[]>('/live-pdv/store-queue');
+      setLiveRows(Array.isArray(data) ? data : []);
+    } catch { /* segue sem live */ }
+  }, []);
+
+  // Ações da LIVE (mesma pegada dos pedidos do site: separar → enviar c/ rastreio)
+  const liveMarkSeparated = useCallback(async (itemId: string) => {
+    setLiveBusy(itemId);
+    try {
+      await api(`/live-pdv/items/${itemId}/separated`, { method: 'POST', body: JSON.stringify({}) });
+      await loadLiveRows();
+    } catch (e: any) {
+      alert(e?.message || 'Erro ao marcar separado');
+    } finally { setLiveBusy(null); }
+  }, [loadLiveRows]);
+  const liveMarkShipped = useCallback(async (itemId: string) => {
+    const trackingCode = prompt('Código de rastreio (opcional):') || undefined;
+    setLiveBusy(itemId);
+    try {
+      await api(`/live-pdv/items/${itemId}/shipped`, { method: 'POST', body: JSON.stringify({ trackingCode }) });
+      await loadLiveRows();
+    } catch (e: any) {
+      alert(e?.message || 'Erro ao despachar');
+    } finally { setLiveBusy(null); }
+  }, [loadLiveRows]);
 
   // Carrega count de realinhamento pendente (pra badge no card do launchpad).
   // Silencioso: se falhar, mostra 0 e segue a vida — não bloqueia a tela.
@@ -405,6 +460,23 @@ export default function MinhaLojaPage() {
       setRealignmentPending((prev) => Math.max(0, prev - 1));
     };
 
+    // Pedido da LIVE liberado pra esta loja — mesma dinâmica do pedido do site
+    // (toast + notificação do SO) e recarrega a fila da live.
+    const onLiveSeparationNew = (payload: any) => {
+      loadLiveRows();
+      const quem = payload?.customerName || 'Cliente';
+      const live = payload?.liveStoreName ? ` (LIVE ${String(payload.liveStoreName).toUpperCase()})` : '';
+      pushToast(`🔴 Pedido da LIVE${live}: ${quem} — ${payload?.count || 1} peça(s) pra separar!`);
+      if (typeof Notification !== 'undefined') {
+        const show = () =>
+          new Notification('LURDS ORDER ONE — Pedido da LIVE', {
+            body: `${quem} · ${payload?.count || 1} peça(s) pra separar${live}`,
+            silent: true,
+          });
+        if (Notification.permission === 'granted') show();
+      }
+    };
+
     socket.on('connect', onConnect);
     socket.on('disconnect', onDisconnect);
     socket.on('pick-order:new', onNew);
@@ -413,6 +485,7 @@ export default function MinhaLojaPage() {
     socket.on('pick-order:print', onPrintRequest);
     socket.on('realignment:new', onRealignmentNew);
     socket.on('realignment:sent', onRealignmentSent);
+    socket.on('live-pdv:separation-new', onLiveSeparationNew);
     if (socket.connected) setConnected(true);
 
     return () => {
@@ -424,8 +497,9 @@ export default function MinhaLojaPage() {
       socket.off('pick-order:print', onPrintRequest);
       socket.off('realignment:new', onRealignmentNew);
       socket.off('realignment:sent', onRealignmentSent);
+      socket.off('live-pdv:separation-new', onLiveSeparationNew);
     };
-  }, [me]);
+  }, [me, loadLiveRows]);
 
   // ---------- Notificação + auto-maximize em 5min ----------
   const triggerNewOrderAlert = useCallback((pickOrder: any) => {
@@ -766,7 +840,17 @@ export default function MinhaLojaPage() {
             </button>
           </div>
         )}
-        {visibleRows.length === 0 ? (
+        {/* Pedidos da LIVE — mesma lista, mesmo formato, com a tag vermelha */}
+        {liveRows.map((g) => (
+          <LiveOrderCard
+            key={g.cartId}
+            group={g}
+            busy={liveBusy}
+            onSeparated={liveMarkSeparated}
+            onShipped={liveMarkShipped}
+          />
+        ))}
+        {visibleRows.length === 0 && liveRows.length === 0 ? (
           <EmptyState />
         ) : (
           visibleRows.map((row) => (
@@ -1064,6 +1148,98 @@ function PipelineSteps({ status }: { status: PickStatus }) {
         );
       })}
     </div>
+  );
+}
+
+/* ─── Card de pedido da LIVE — mesmo formato do pedido do site, com banner
+       vermelho "PEDIDO DA LIVE <loja anfitriã>". Ações: Separei → Enviar. ─── */
+function LiveOrderCard({
+  group,
+  busy,
+  onSeparated,
+  onShipped,
+}: {
+  group: LiveQueueGroup;
+  busy: string | null;
+  onSeparated: (itemId: string) => void;
+  onShipped: (itemId: string) => void;
+}) {
+  const pendentes = group.items.filter((it) => it.status === 'separating');
+  const enviados = group.items.filter((it) => it.status === 'shipped');
+  return (
+    <article className="bg-white rounded-xl border border-rose-400 ring-2 ring-rose-200 shadow-md overflow-hidden flex">
+      {/* Faixa lateral vermelha — semáforo visual da LIVE */}
+      <div className="w-1.5 flex-shrink-0 bg-rose-500" />
+      <div className="flex-1 min-w-0">
+        {/* Banner LIVE — mesmo padrão do banner de transferência */}
+        <div className="bg-rose-600 text-white px-4 py-2.5">
+          <div className="font-bold text-sm flex items-center gap-2">
+            🔴 PEDIDO DA LIVE{group.liveStoreName ? ` ${group.liveStoreName.toUpperCase()}` : ''}
+          </div>
+          <div className="text-xs opacity-95 mt-0.5">
+            Venda da live — separar e postar pra cliente. Endereço já conferido pela matriz.
+          </div>
+        </div>
+
+        {/* Cliente */}
+        <div className="px-4 py-3 border-b border-slate-100">
+          <div className="font-bold text-slate-800">{group.customerName}</div>
+          <div className="text-xs text-slate-500">
+            {group.customerPhone}
+            {group.customerInstagram && ` · @${group.customerInstagram}`}
+            {group.customerCpf && ` · CPF ${group.customerCpf}`}
+          </div>
+        </div>
+
+        {/* Itens */}
+        <div className="divide-y divide-slate-50">
+          {group.items.map((it) => (
+            <div key={it.id} className="flex items-center gap-3 px-4 py-2.5">
+              <div className="min-w-0 flex-1">
+                <div className="font-medium text-slate-800">
+                  {it.refCode} · {it.cor} {it.tamanho} <span className="text-slate-400">×{it.qty}</span>
+                </div>
+                <div className="truncate text-xs text-slate-500">{it.descricao}</div>
+                {it.trackingCode && (
+                  <div className="text-xs text-emerald-600">Rastreio: {it.trackingCode}</div>
+                )}
+              </div>
+              {it.status === 'separating' ? (
+                <>
+                  {!it.separatedAt && (
+                    <button
+                      onClick={() => onSeparated(it.id)}
+                      disabled={busy === it.id}
+                      className="inline-flex items-center gap-1 rounded-lg bg-slate-100 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-200 disabled:opacity-50"
+                    >
+                      ✓ Separei
+                    </button>
+                  )}
+                  <button
+                    onClick={() => onShipped(it.id)}
+                    disabled={busy === it.id}
+                    className="inline-flex items-center gap-1 rounded-lg bg-rose-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
+                  >
+                    📦 Enviar
+                  </button>
+                </>
+              ) : (
+                <span className="rounded-full bg-slate-200 px-2 py-0.5 text-xs font-semibold text-slate-600">
+                  Enviado
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+
+        {/* Rodapé: progresso */}
+        <div className="bg-slate-50 px-4 py-2 text-xs text-slate-500">
+          {pendentes.length > 0
+            ? `${pendentes.length} peça(s) pra separar/enviar`
+            : `Tudo enviado ✓ (${enviados.length} peça(s))`}
+        </div>
+      </div>
+    </article>
   );
 }
 

@@ -201,6 +201,12 @@ export class LivePdvController {
     return this.svc.cancelCart(cartId, body?.reason);
   }
 
+  // Libera a separação de um carrinho PAGO pras lojas de origem (exige endereço completo)
+  @Post('carts/:cartId/release-separation')
+  releaseSeparation(@Param('cartId') cartId: string) {
+    return this.svc.releaseSeparation(cartId);
+  }
+
   // Recupera carrinhos que expiraram (re-reserva os itens) por N horas (default 24h)
   @Post('sessions/:id/recover-expired')
   recoverExpired(@Param('id') id: string, @Body() body: { ttlHours?: number }) {

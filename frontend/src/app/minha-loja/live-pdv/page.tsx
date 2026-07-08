@@ -201,6 +201,8 @@ export default function LivePdvPage() {
   const [chargeAllDone, setChargeAllDone] = useState<Record<string, boolean>>({});
   const [sendingDm, setSendingDm] = useState(false);
   const [dmResult, setDmResult] = useState<string | null>(null);
+  // Liberação da separação (pós-pagamento): operadora confere os dados e envia
+  const [releasing, setReleasing] = useState(false);
   const [booting, setBooting] = useState(true);
   const [tab, setTab] = useState<'console' | 'dashboard'>('console');
   // Legenda da Live — atalhos curtos (01, 02...) → referência completa
@@ -438,6 +440,34 @@ export default function LivePdvPage() {
       alert('Erro ao criar sessão: ' + (e?.message || e));
     } finally {
       setCreatingLive(false);
+    }
+  }
+
+  // Envia o carrinho PAGO pra separação nas lojas de origem. Se o endereço
+  // estiver incompleto, o backend recusa com a lista do que falta — aí a gente
+  // abre o "Editar cliente" já no endereço pra operadora completar.
+  async function releaseSeparation() {
+    if (!cart || releasing) return;
+    setReleasing(true);
+    try {
+      const fresh = await api<Cart>(`/live-pdv/carts/${cart.id}/release-separation`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+      setCart(fresh);
+      await refreshCarts();
+    } catch (e: any) {
+      const raw = String(e?.message || '');
+      let msg = 'Não consegui enviar pra separação.';
+      try {
+        const j = JSON.parse(raw.slice(raw.indexOf(': ') + 2));
+        if (j?.message) msg = Array.isArray(j.message) ? j.message[0] : j.message;
+      } catch { /* mensagem crua */ }
+      alert(msg);
+      // Falta endereço → abre o cadastro direto pra completar
+      if (/endereço|CEP|rua|número|cidade|UF/i.test(msg)) setEditCustomerOpen(true);
+    } finally {
+      setReleasing(false);
     }
   }
 
@@ -1290,7 +1320,13 @@ export default function LivePdvPage() {
     .sort((a, b) =>
       (a.customerName || '').localeCompare(b.customerName || '', 'pt-BR', { sensitivity: 'base' }),
     );
-  const cartsAtivos = carts.filter((c) => c.status !== 'awaiting_payment');
+  // PAGAS aguardando a operadora conferir os dados e liberar a separação
+  const pagasAguardando = carts
+    .filter((c) => c.status === 'paid')
+    .sort((a, b) =>
+      (a.customerName || '').localeCompare(b.customerName || '', 'pt-BR', { sensitivity: 'base' }),
+    );
+  const cartsAtivos = carts.filter((c) => c.status !== 'awaiting_payment' && c.status !== 'paid');
 
   // Lista de clientes filtrada (por nº da comanda, nome ou @) e ordenada
   // alfabeticamente. Se a busca for só dígitos, casa o nº do carrinho.
@@ -1911,6 +1947,8 @@ export default function LivePdvPage() {
               confirming={confirming}
               pixExterno={pixExterno}
               onConfirmExternal={confirmExternalPay}
+              onReleaseSeparation={releaseSeparation}
+              releasing={releasing}
             />
 
             {/* Cadastradas pelo link (ManyChat) aguardando — SEMPRE visível durante a
@@ -2001,6 +2039,43 @@ export default function LivePdvPage() {
                       </div>
                       <span className="shrink-0 rounded-full bg-sky-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-sky-700">
                         {c.paymentMethod === 'link' ? 'Link/cartão' : 'PIX'}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* PAGAS — operadora confere os dados e libera pra separação */}
+            {pagasAguardando.length > 0 && (
+              <div>
+                <div className="mb-1 flex items-center gap-2">
+                  <Check className="h-5 w-5 text-emerald-600" />
+                  <span className="text-sm font-bold uppercase tracking-wide text-slate-800">
+                    Pagas — enviar p/ separação ({pagasAguardando.length})
+                  </span>
+                </div>
+                <div className="mb-2 text-[11px] text-slate-500">
+                  Pagamento confirmado. Clique, confira o endereço e envie pra loja separar.
+                </div>
+                <div className="grid grid-cols-1 content-start gap-1.5 rounded-xl border border-emerald-200 bg-emerald-50/50 p-1.5 sm:grid-cols-2">
+                  {pagasAguardando.map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onClick={() => openCart(c)}
+                      className={`flex items-center gap-2 rounded-lg border bg-white px-2 py-1.5 text-left transition ${
+                        cart?.id === c.id ? 'border-emerald-400' : 'border-emerald-100 hover:border-emerald-300'
+                      }`}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-semibold text-slate-800" title={c.customerName}>
+                          {c.customerName}
+                        </div>
+                        <div className="text-[11px] text-slate-500 tabular-nums">{brl(c.totalCents)}</div>
+                      </div>
+                      <span className="shrink-0 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-emerald-700">
+                        conferir
                       </span>
                     </button>
                   ))}
@@ -2212,6 +2287,8 @@ function CartPanel({
   confirming,
   pixExterno,
   onConfirmExternal,
+  onReleaseSeparation,
+  releasing,
 }: {
   cart: Cart | null;
   activeCustomer: ActiveCustomer | null;
@@ -2230,6 +2307,8 @@ function CartPanel({
   confirming: boolean;
   pixExterno: boolean;
   onConfirmExternal: () => void;
+  onReleaseSeparation: () => void;
+  releasing: boolean;
 }) {
   const [linkCopied, setLinkCopied] = useState(false);
   // Carrinho já pago/em separação: esconde ações de cobrança (link /pagar, frete)
@@ -2418,7 +2497,30 @@ function CartPanel({
             )}
 
             {/* Pagamento */}
-            {paid ? (
+            {paid && cart?.status === 'paid' ? (
+              /* PAGO mas AINDA NÃO liberado: operadora confere/completa os dados
+                 e envia pra separação — igual ao fluxo dos pedidos do site. */
+              <div className="mt-3 flex flex-col items-center gap-1 rounded-lg border-2 border-amber-300 bg-amber-50 p-4 text-amber-800">
+                <Check className="h-8 w-8" />
+                <span className="font-bold">Pagamento confirmado!</span>
+                <span className="text-center text-xs">
+                  Confira os dados da cliente (endereço) e envie pra separação.
+                </span>
+                <button
+                  onClick={onReleaseSeparation}
+                  disabled={releasing}
+                  className="mt-2 w-full rounded-lg bg-emerald-600 py-2.5 text-sm font-bold text-white hover:bg-emerald-700 disabled:opacity-50"
+                >
+                  {releasing ? 'Enviando…' : '📦 Enviar pra separação'}
+                </button>
+                <button
+                  onClick={onEditCustomer}
+                  className="w-full rounded-lg border border-amber-400 bg-white py-2 text-sm font-semibold text-amber-800 hover:bg-amber-100"
+                >
+                  Conferir / completar dados
+                </button>
+              </div>
+            ) : paid ? (
               <div className="mt-3 flex flex-col items-center gap-1 rounded-lg bg-emerald-50 p-4 text-emerald-700">
                 <Check className="h-8 w-8" />
                 <span className="font-bold">Pagamento confirmado!</span>
