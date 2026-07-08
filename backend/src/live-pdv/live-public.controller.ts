@@ -26,7 +26,7 @@ export class LivePublicController {
   @Post()
   async cadastro(
     @Req() req: any,
-    @Body() body: { name?: string; phone?: string; instagram?: string; token?: string },
+    @Body() body: { name?: string; phone?: string; instagram?: string; token?: string; sid?: string },
   ) {
     // 1. Token (se configurado no ambiente)
     const expected = (process.env.CADASTRO_LIVE_TOKEN || '').trim();
@@ -53,6 +53,8 @@ export class LivePublicController {
       phone: phoneDigits,
       instagram: body?.instagram || undefined,
       markLiveRegistration: true, // veio do link da live → entra na fila "Cadastradas na live"
+      // &sid= do ManyChat (User ID do assinante) — base do DM automático (Fase 2)
+      manychatSubscriberId: body?.sid || undefined,
     });
 
     // Devolve só o necessário pra tela de sucesso (sem vazar PII/id interno).

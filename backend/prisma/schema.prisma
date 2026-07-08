@@ -2094,6 +2094,9 @@ model Customer {
   // -- Instagram (mantido pra Lives) --
   igUserId        String?  @unique @map("ig_user_id")
   igUsername      String?  @map("ig_username")
+  // ID do assinante no ManyChat (vem no &sid= do link de cadastro da live).
+  // Base do envio automático de DM (cobrança em massa via API ManyChat).
+  manychatSubscriberId String? @map("manychat_subscriber_id")
 
   // -- Perfil Plus Size --
   sizeDefault     String?  @map("size_default")

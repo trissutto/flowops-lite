@@ -58,6 +58,9 @@ function CadastroForm() {
   const igParam = cleanParam(params.get('ig')).replace(/^@/, '');
   const nomeParam = cleanParam(params.get('nome'));
   const token = (params.get('t') || '').trim();
+  // &sid= = User ID do assinante no ManyChat (base do DM automático). Ignora
+  // placeholder não-resolvido ({{...}}) igual aos outros campos.
+  const sid = cleanParam(params.get('sid'));
 
   const [nome, setNome] = useState('');
   const [ig, setIg] = useState('');
@@ -83,7 +86,7 @@ function CadastroForm() {
     try {
       const r = await api<{ ok: boolean; name: string }>('/public/cadastro-live', {
         method: 'POST',
-        body: JSON.stringify({ name: nome.trim(), phone: digits, instagram: ig.trim(), token }),
+        body: JSON.stringify({ name: nome.trim(), phone: digits, instagram: ig.trim(), token, sid: sid || undefined }),
       });
       setDone({ name: r.name || nome.trim() });
     } catch (e: any) {

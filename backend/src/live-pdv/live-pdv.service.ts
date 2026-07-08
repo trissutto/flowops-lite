@@ -678,12 +678,15 @@ export class LivePdvService {
     // Cadastro veio do link da live (ManyChat)? Carimba liveRegisteredAt pra
     // entrar na fila "Cadastradas na live" — mesmo se a cliente já existir.
     markLiveRegistration?: boolean;
+    // ID do assinante ManyChat (&sid= do link) — base do DM automático.
+    manychatSubscriberId?: string;
   }) {
     const name = (input.name || '').trim();
     const phone = (input.phone || '').replace(/\D/g, '');
     if (!name) throw new BadRequestException('Nome é obrigatório');
     const ig = (input.instagram || '').trim().replace(/^@/, '') || null;
     const liveStamp = input.markLiveRegistration ? new Date() : null;
+    const mcSid = String(input.manychatSubscriberId || '').trim().slice(0, 64) || null;
 
     // Tenta achar cliente existente por telefone ou instagram (evita duplicar).
     // Só busca se houver alguma chave — telefone vazio não pode casar com outros.
@@ -701,6 +704,7 @@ export class LivePdvService {
       if (!existing.email && input.email) patch.email = input.email.trim();
       if (!existing.cpf && input.cpf) patch.cpf = input.cpf.replace(/\D/g, '');
       if (liveStamp) patch.liveRegisteredAt = liveStamp; // sempre carimba, mesmo sem outro patch
+      if (mcSid) patch.manychatSubscriberId = mcSid; // sempre atualiza (id pode mudar de conta)
       if (Object.keys(patch).length) {
         await (this.prisma as any).customer.update({ where: { id: existing.id }, data: patch });
       }
@@ -716,6 +720,7 @@ export class LivePdvService {
         cpf: input.cpf ? input.cpf.replace(/\D/g, '') : null,
         originSource: 'live',
         liveRegisteredAt: liveStamp,
+        manychatSubscriberId: mcSid,
       },
     });
     return { id: created.id, name, phone, instagram: ig };

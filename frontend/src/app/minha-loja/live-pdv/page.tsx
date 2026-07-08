@@ -194,6 +194,11 @@ export default function LivePdvPage() {
   const [swapStoreCode, setSwapStoreCode] = useState('');
   const [swapStores, setSwapStores] = useState<Array<{ code: string; name: string }>>([]);
   const [swappingStore, setSwappingStore] = useState(false);
+  // "Cobrar todas": fila semi-automática de cobrança em massa. Pra cada cliente
+  // copia a mensagem com o link /p/ dela e abre Direct (colar) ou WhatsApp
+  // (já vai preenchido). O Instagram não permite DM automática sem ManyChat API.
+  const [chargeAllOpen, setChargeAllOpen] = useState(false);
+  const [chargeAllDone, setChargeAllDone] = useState<Record<string, boolean>>({});
   const [booting, setBooting] = useState(true);
   const [tab, setTab] = useState<'console' | 'dashboard'>('console');
   // Legenda da Live — atalhos curtos (01, 02...) → referência completa
@@ -432,6 +437,28 @@ export default function LivePdvPage() {
     } finally {
       setCreatingLive(false);
     }
+  }
+
+  // Cobra UMA cliente da fila: copia a mensagem personalizada (link curto /p/)
+  // e abre o canal — Direct (perfil, colar Ctrl+V) ou WhatsApp (texto já vai).
+  function chargeOne(c: Cart, canal: 'direct' | 'whats') {
+    const link = c.payCode
+      ? `${window.location.origin}/p/${c.payCode}`
+      : `${window.location.origin}/pagar/${c.id}`;
+    const first = (c.customerName || '').trim().split(/\s+/)[0] || 'cliente';
+    const msg = `Oi, ${first}! 💜 Suas peças da live deram ${brl(c.totalCents)} + frete. Fecha sua compra aqui: ${link}`;
+    navigator.clipboard?.writeText(msg);
+    if (canal === 'direct' && c.customerInstagram) {
+      window.open(
+        `https://www.instagram.com/${String(c.customerInstagram).replace(/^@/, '')}/`,
+        '_blank',
+        'noopener,noreferrer',
+      );
+    } else if (canal === 'whats' && c.customerPhone) {
+      const d = String(c.customerPhone).replace(/\D/g, '');
+      window.open(`https://wa.me/55${d}?text=${encodeURIComponent(msg)}`, '_blank', 'noopener,noreferrer');
+    }
+    setChargeAllDone((s) => ({ ...s, [c.id]: true }));
   }
 
   async function openSwapStore() {
@@ -1247,6 +1274,14 @@ export default function LivePdvPage() {
       );
   })();
 
+  // Carrinhos "cobráveis" em massa: abertos, com peças e ainda sem cobrança.
+  const cobraveis = cartsAtivos
+    .filter((c) => c.status === 'open' && (c.items?.length || 0) > 0 && (c.totalCents || 0) > 0)
+    .sort((a, b) =>
+      (a.customerName || '').localeCompare(b.customerName || '', 'pt-BR', { sensitivity: 'base' }),
+    );
+  const cobradas = cobraveis.filter((c) => chargeAllDone[c.id]).length;
+
   return (
     <div className="min-h-screen bg-slate-100">
       {/* Aviso rápido: peça adicionada + carrinho fechado (segurança) */}
@@ -1305,6 +1340,81 @@ export default function LivePdvPage() {
             >
               {swappingStore ? 'Trocando…' : 'Trocar loja'}
             </button>
+          </div>
+        </div>
+      )}
+      {/* COBRAR TODAS — fila semi-automática de cobrança em massa */}
+      {chargeAllOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="flex max-h-[85vh] w-full max-w-md flex-col rounded-xl bg-white p-5 shadow-xl">
+            <div className="mb-2 flex items-center justify-between">
+              <h3 className="text-lg font-bold text-slate-800">💰 Cobrar todas</h3>
+              <button
+                type="button"
+                onClick={() => setChargeAllOpen(false)}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <p className="mb-2 text-xs text-slate-500">
+              Cada botão <b>copia a mensagem com o link da cliente</b> e abre o canal:
+              no <b>Direct</b> é só colar (Ctrl+V) e enviar; no <b>WhatsApp</b> a mensagem já vai pronta.
+            </p>
+            <div className="mb-2 rounded-lg bg-slate-100 px-3 py-1.5 text-center text-xs font-bold text-slate-600">
+              {cobradas}/{cobraveis.length} enviadas
+            </div>
+            <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto">
+              {cobraveis.map((c) => {
+                const done = !!chargeAllDone[c.id];
+                return (
+                  <div
+                    key={c.id}
+                    className={`flex items-center gap-2 rounded-lg border px-2.5 py-2 ${
+                      done ? 'border-emerald-200 bg-emerald-50/60' : 'border-slate-200'
+                    }`}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-semibold text-slate-800">
+                        {done ? '✓ ' : ''}{c.customerName}
+                      </div>
+                      <div className="truncate text-[11px] text-slate-500">
+                        {c.customerInstagram ? `@${c.customerInstagram}` : ''}
+                        {c.customerInstagram && c.customerPhone ? ' · ' : ''}
+                        {c.customerPhone || ''}
+                        {' · '}
+                        <b className="tabular-nums">{brl(c.totalCents)}</b>
+                      </div>
+                    </div>
+                    {c.customerInstagram && (
+                      <button
+                        type="button"
+                        onClick={() => chargeOne(c, 'direct')}
+                        title="Copia a mensagem e abre o perfil — clique em Mensagem e cole"
+                        className="shrink-0 rounded-lg bg-gradient-to-r from-purple-600 to-pink-500 px-2.5 py-1.5 text-[11px] font-bold text-white hover:opacity-90"
+                      >
+                        Direct
+                      </button>
+                    )}
+                    {c.customerPhone && (
+                      <button
+                        type="button"
+                        onClick={() => chargeOne(c, 'whats')}
+                        title="Abre o WhatsApp da cliente com a mensagem pronta"
+                        className="shrink-0 rounded-lg bg-emerald-600 px-2.5 py-1.5 text-[11px] font-bold text-white hover:bg-emerald-700"
+                      >
+                        WhatsApp
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+              {cobraveis.length === 0 && (
+                <div className="py-6 text-center text-sm text-slate-400">
+                  Nenhum carrinho aberto pra cobrar. 🎉
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -1844,6 +1954,18 @@ export default function LivePdvPage() {
                   ))}
                 </div>
               </div>
+            )}
+
+            {/* Cobrança em massa: fila semi-automática (Direct/WhatsApp) */}
+            {cobraveis.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setChargeAllOpen(true)}
+                className="w-full rounded-xl border-2 border-[#D4AF37] bg-[#FBF6E6] py-2.5 text-sm font-extrabold text-[#8C7325] hover:bg-[#F5EBC8]"
+              >
+                💰 Cobrar todas ({cobraveis.length})
+                {cobradas > 0 ? ` · ${cobradas} enviada${cobradas > 1 ? 's' : ''}` : ''}
+              </button>
             )}
 
             {cartsAtivos.length > 0 && (
