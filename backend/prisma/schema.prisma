@@ -3436,6 +3436,9 @@ model LivePdvCart {
   customerBairro      String? @map("customer_bairro")
   customerCidade      String? @map("customer_cidade")
   customerUf          String? @map("customer_uf")
+  // Código curto do link público de pagamento (/p/<code>) — 8 chars aleatórios.
+  // Substitui o UUID gigante no link que a cliente recebe no WhatsApp/Direct.
+  payCode           String?  @unique @map("pay_code")
   // open | awaiting_payment | paid | separating | shipped | delivered | cancelled
   status            String   @default("open")
   subtotalCents     Int      @default(0) @map("subtotal_cents")
