@@ -1086,6 +1086,26 @@ export class LivePdvService {
     return { vinculados, jaTinha: jaTinha.length, semMatch };
   }
 
+  /**
+   * Carimbo de cobrança MANUAL: a operadora clicou em Direct/WhatsApp pra
+   * cobrar essa cliente. Grava dmSentAt (mesmo carimbo do automático) — o ✓
+   * sincroniza entre PCs e a cobrança em massa não repete pra ela.
+   */
+  async markCartCharged(cartId: string) {
+    const cart = await (this.prisma as any).livePdvCart.findUnique({
+      where: { id: cartId },
+      select: { id: true, dmSentAt: true },
+    });
+    if (!cart) throw new NotFoundException('Carrinho não encontrado');
+    if (!cart.dmSentAt) {
+      await (this.prisma as any).livePdvCart.update({
+        where: { id: cartId },
+        data: { dmSentAt: new Date() },
+      });
+    }
+    return { ok: true };
+  }
+
   /** Resolve o subscriber_id pelo @ na tabela de vínculos do webhook/CSV. */
   private async lookupManychatSidByIg(instagram?: string | null): Promise<string | null> {
     const ig = String(instagram || '').trim().replace(/^@/, '').toLowerCase();

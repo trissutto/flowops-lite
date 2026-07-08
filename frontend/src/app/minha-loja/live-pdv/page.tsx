@@ -99,6 +99,7 @@ interface Cart {
   qrCodeText?: string | null;
   qrCodeImageUrl?: string | null;
   hasManychat?: boolean; // cliente tem vínculo ManyChat → DM automática funciona
+  dmSentAt?: string | null; // carimbo de cobrança enviada (sincroniza os ✓ entre PCs)
   items: CartItem[];
 }
 interface ActiveCustomer {
@@ -535,6 +536,8 @@ export default function LivePdvPage() {
       window.open(`https://wa.me/55${d}?text=${encodeURIComponent(msg)}`, '_blank', 'noopener,noreferrer');
     }
     setChargeAllDone((s) => ({ ...s, [c.id]: true }));
+    // Carimba no servidor — o ✓ aparece nos outros PCs também
+    api(`/live-pdv/carts/${c.id}/mark-charged`, { method: 'POST', body: JSON.stringify({}) }).catch(() => {});
   }
 
   // Cobra UMA cliente automático via ManyChat (DM direto, chega com Insta fechado)
@@ -1426,7 +1429,9 @@ export default function LivePdvPage() {
     .sort((a, b) =>
       (a.customerName || '').localeCompare(b.customerName || '', 'pt-BR', { sensitivity: 'base' }),
     );
-  const cobradas = cobraveis.filter((c) => chargeAllDone[c.id]).length;
+  // Cobrada = marcada neste navegador OU carimbo do servidor (dmSentAt) — o
+  // carimbo sincroniza entre PCs: quem cobrou em outra máquina aparece ✓ aqui.
+  const cobradas = cobraveis.filter((c) => chargeAllDone[c.id] || c.dmSentAt).length;
 
   return (
     <div className="min-h-screen bg-slate-100">
@@ -1534,7 +1539,7 @@ export default function LivePdvPage() {
             </div>
             <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto">
               {cobraveis.map((c) => {
-                const done = !!chargeAllDone[c.id];
+                const done = !!chargeAllDone[c.id] || !!c.dmSentAt;
                 return (
                   <div
                     key={c.id}
