@@ -1371,9 +1371,10 @@ export default function LivePdvPage() {
     if (!vazios.length || clearingEmpty) return;
     if (
       !confirm(
-        `Excluir ${vazios.length} carrinho(s) VAZIO(S)?\n\n` +
-          'Só remove quem está com 0 peças — nenhuma reserva ou pagamento é tocado. ' +
-          'As clientes continuam no CRM.',
+        `Limpar ${vazios.length} carrinho(s) VAZIO(S) da tela?\n\n` +
+          'NADA é apagado: o cadastro da cliente continua salvo no CRM ' +
+          '(nome, telefone, @, vínculo ManyChat) e o carrinho fica no histórico ' +
+          'como cancelado. Só sai da tela da live.',
       )
     )
       return;
@@ -2225,10 +2226,10 @@ export default function LivePdvPage() {
                     </button>
                   )}
                 </div>
-                {/* GRID de 6 COLUNAS (alfabético, que já vinha da ordenação) —
-                    era lista única, depois 3 colunas; o dono pediu 6 pra ver a
-                    live inteira sem rolar. Em telas menores cai pra 3/2. */}
-                <div className="grid max-h-[60vh] grid-cols-2 content-start gap-1.5 overflow-y-auto rounded-xl border border-slate-200 bg-white p-1.5 md:grid-cols-3 xl:grid-cols-6">
+                {/* GRID em LINHAS, 3 colunas (08/07): o dono trocou as 6 colunas
+                    por linhas maiores pra ver o NOME COMPLETO da cliente.
+                    Em telas menores cai pra 2/1. */}
+                <div className="grid max-h-[60vh] grid-cols-1 content-start gap-1.5 overflow-y-auto rounded-xl border border-slate-200 bg-white p-1.5 sm:grid-cols-2 xl:grid-cols-3">
                   {gridCarts.length === 0 && (
                     <div className="col-span-full px-3 py-4 text-center text-sm text-slate-400">
                       {viewEfetiva === 'pecas' && nVazios > 0
@@ -2252,7 +2253,7 @@ export default function LivePdvPage() {
                           className="flex min-w-0 flex-1 flex-col gap-0.5 px-2 py-1.5 text-left"
                         >
                           <span
-                            className={`flex w-full min-w-0 items-center gap-1 text-sm ${active ? 'font-extrabold text-rose-700' : 'font-semibold text-slate-800'}`}
+                            className={`flex w-full min-w-0 items-start gap-1 text-sm ${active ? 'font-extrabold text-rose-700' : 'font-semibold text-slate-800'}`}
                             title={c.cartNumber ? `#${c.cartNumber} · ${c.customerName}` : c.customerName}
                           >
                             {c.cartNumber != null && (
@@ -2266,7 +2267,8 @@ export default function LivePdvPage() {
                                 {c.cartNumber}
                               </span>
                             )}
-                            <span className="truncate">{c.customerName}</span>
+                            {/* Nome COMPLETO (08/07): sem truncate — a grade virou linhas/3 colunas */}
+                            <span className="break-words leading-tight">{c.customerName}</span>
                           </span>
                           <span className="text-xs font-bold tabular-nums text-slate-900">
                             {brl(c.totalCents)}
