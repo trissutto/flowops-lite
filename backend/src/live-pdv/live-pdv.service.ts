@@ -928,6 +928,59 @@ export class LivePdvService {
   }
 
   /**
+   * IMPORTADOR de vínculos ManyChat (CSV Contatos → user_id + @): casa cada
+   * linha com o cadastro pelo @ (case-insensitive) e grava o
+   * manychatSubscriberId em lote. Não cria cliente — só vincula quem já existe.
+   */
+  async importManychatLinks(links: Array<{ sid: string; ig: string }>) {
+    const list = Array.isArray(links) ? links.slice(0, 20000) : [];
+    if (!list.length) throw new BadRequestException('Nenhuma linha válida no arquivo.');
+
+    // Índice @→ids de todos os clientes com Instagram (subset pequeno da base)
+    const custs = await (this.prisma as any).customer.findMany({
+      where: { igUsername: { not: null } },
+      select: { id: true, igUsername: true },
+    });
+    const byIg = new Map<string, string[]>();
+    for (const c of custs as any[]) {
+      const k = String(c.igUsername || '').trim().replace(/^@/, '').toLowerCase();
+      if (!k) continue;
+      const arr = byIg.get(k) || [];
+      arr.push(c.id);
+      byIg.set(k, arr);
+    }
+
+    const seen = new Set<string>();
+    let vinculados = 0;
+    const semCadastro: string[] = [];
+    for (const l of list) {
+      const ig = String(l?.ig || '').trim().replace(/^@/, '').toLowerCase();
+      const sid = String(l?.sid || '').trim().slice(0, 64);
+      if (!ig || !sid || seen.has(ig)) continue;
+      seen.add(ig);
+      const ids = byIg.get(ig);
+      if (ids?.length) {
+        await (this.prisma as any).customer.updateMany({
+          where: { id: { in: ids } },
+          data: { manychatSubscriberId: sid },
+        });
+        vinculados += ids.length;
+      } else {
+        semCadastro.push(ig);
+      }
+    }
+    this.logger.log(
+      `[manychat-import] ${seen.size} linhas · ${vinculados} vinculados · ${semCadastro.length} sem cadastro`,
+    );
+    return {
+      processados: seen.size,
+      vinculados,
+      semCadastro: semCadastro.length,
+      exemplosSemCadastro: semCadastro.slice(0, 12),
+    };
+  }
+
+  /**
    * Cobrança em massa AUTOMÁTICA via DM (API ManyChat): pra cada carrinho
    * aberto da sessão com peças, manda a mensagem com o link curto /p/ pra
    * cliente — SE ela tiver vínculo ManyChat (se cadastrou pelo link com &sid=).
