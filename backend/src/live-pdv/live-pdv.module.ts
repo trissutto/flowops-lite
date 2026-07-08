@@ -12,6 +12,7 @@ import { LivePdvController } from './live-pdv.controller';
 import { LivePublicController } from './live-public.controller';
 import { LivePayPublicController } from './live-pay-public.controller';
 import { LivePdvService } from './live-pdv.service';
+import { ManychatService } from './manychat.service';
 import { LivePdvExpiryCron } from './live-pdv-expiry.cron';
 import { LivePdvPayReconcileCron } from './live-pdv-pay-reconcile.cron';
 
@@ -34,7 +35,7 @@ import { LivePdvPayReconcileCron } from './live-pdv-pay-reconcile.cron';
     WebsocketModule,
   ],
   controllers: [LivePdvController, LivePublicController, LivePayPublicController],
-  providers: [LivePdvService, LivePdvExpiryCron, LivePdvPayReconcileCron],
+  providers: [LivePdvService, ManychatService, LivePdvExpiryCron, LivePdvPayReconcileCron],
   exports: [LivePdvService],
 })
 export class LivePdvModule {}

@@ -8,6 +8,7 @@ import { PagbankService } from '../pagbank/pagbank.service';
 import { ProductPhotosService } from '../product-photos/product-photos.service';
 import { RealignmentPricingService } from '../realignment/realignment-pricing.service';
 import { RealtimeGateway } from '../websocket/realtime.gateway';
+import { ManychatService } from './manychat.service';
 import type { StoreInput, StockEntry } from '../routing/types';
 
 /**
@@ -43,6 +44,7 @@ export class LivePdvService {
     private readonly photos: ProductPhotosService,
     private readonly pricing: RealignmentPricingService,
     private readonly gateway: RealtimeGateway,
+    private readonly manychat: ManychatService,
   ) {}
 
   // ─── helpers ──────────────────────────────────────────────────────────────
@@ -921,6 +923,78 @@ export class LivePdvService {
     });
     if (byCode) return byCode.id;
     throw new NotFoundException('Compra não encontrada');
+  }
+
+  /**
+   * Cobrança em massa AUTOMÁTICA via DM (API ManyChat): pra cada carrinho
+   * aberto da sessão com peças, manda a mensagem com o link curto /p/ pra
+   * cliente — SE ela tiver vínculo ManyChat (se cadastrou pelo link com &sid=).
+   * Quem não tem vínculo volta como "skipped" e é cobrada pela fila manual.
+   */
+  async chargeAllViaDm(sessionId: string) {
+    if (!this.manychat.enabled) {
+      throw new BadRequestException(
+        'Envio automático não configurado — crie a env MANYCHAT_API_TOKEN no Railway.',
+      );
+    }
+    const carts = await (this.prisma as any).livePdvCart.findMany({
+      where: { sessionId, status: 'open' },
+      orderBy: { createdAt: 'asc' },
+    });
+    const base = (process.env.FRONTEND_URL || 'https://flowops-lite.vercel.app').replace(/\/$/, '');
+    const sent: Array<{ cartId: string; customerName: string }> = [];
+    const skipped: Array<{ cartId: string; customerName: string; reason: string }> = [];
+
+    for (const cart of carts as any[]) {
+      const name = cart.customerName || 'cliente';
+      if ((cart.totalCents || 0) <= 0) {
+        skipped.push({ cartId: cart.id, customerName: name, reason: 'carrinho vazio' });
+        continue;
+      }
+      let sid: string | null = null;
+      if (cart.customerId) {
+        const cust = await (this.prisma as any).customer.findUnique({
+          where: { id: cart.customerId },
+          select: { manychatSubscriberId: true },
+        });
+        sid = cust?.manychatSubscriberId || null;
+      }
+      if (!sid) {
+        skipped.push({ cartId: cart.id, customerName: name, reason: 'sem vínculo ManyChat (não veio pelo link)' });
+        continue;
+      }
+      // Garante o link curto (backfill de carrinho antigo)
+      let code: string | null = cart.payCode;
+      if (!code) {
+        try {
+          const upd = await (this.prisma as any).livePdvCart.update({
+            where: { id: cart.id },
+            data: { payCode: this.genPayCode() },
+            select: { payCode: true },
+          });
+          code = upd.payCode;
+        } catch { /* raro — usa o link longo */ }
+      }
+      const link = code ? `${base}/p/${code}` : `${base}/pagar/${cart.id}`;
+      const first = String(name).trim().split(/\s+/)[0] || 'cliente';
+      const valor = ((cart.totalCents || 0) / 100).toLocaleString('pt-BR', {
+        style: 'currency',
+        currency: 'BRL',
+      });
+      const msg = `Oi, ${first}! 💜 Suas peças da live deram ${valor} + frete. Fecha sua compra aqui: ${link}`;
+      const r = await this.manychat.sendText(sid, msg);
+      if (r.ok) {
+        sent.push({ cartId: cart.id, customerName: name });
+      } else {
+        skipped.push({ cartId: cart.id, customerName: name, reason: r.error || 'falha no envio' });
+      }
+      // Gentil com o rate-limit do ManyChat (10 req/s)
+      await new Promise((res) => setTimeout(res, 150));
+    }
+    this.logger.log(
+      `[live-dm] cobrança em massa sessão=${sessionId}: ${sent.length} enviadas, ${skipped.length} puladas`,
+    );
+    return { sent, skipped };
   }
 
   /**

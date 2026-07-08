@@ -199,6 +199,8 @@ export default function LivePdvPage() {
   // (já vai preenchido). O Instagram não permite DM automática sem ManyChat API.
   const [chargeAllOpen, setChargeAllOpen] = useState(false);
   const [chargeAllDone, setChargeAllDone] = useState<Record<string, boolean>>({});
+  const [sendingDm, setSendingDm] = useState(false);
+  const [dmResult, setDmResult] = useState<string | null>(null);
   const [booting, setBooting] = useState(true);
   const [tab, setTab] = useState<'console' | 'dashboard'>('console');
   // Legenda da Live — atalhos curtos (01, 02...) → referência completa
@@ -436,6 +438,42 @@ export default function LivePdvPage() {
       alert('Erro ao criar sessão: ' + (e?.message || e));
     } finally {
       setCreatingLive(false);
+    }
+  }
+
+  // Envio AUTOMÁTICO em massa via ManyChat (DM direto, sem colar nada).
+  // Quem não tem vínculo ManyChat volta em "skipped" → fila manual abaixo.
+  async function sendAllDm() {
+    if (!sessionId || sendingDm) return;
+    setSendingDm(true);
+    setDmResult(null);
+    try {
+      const r = await api<{
+        sent: Array<{ cartId: string; customerName: string }>;
+        skipped: Array<{ cartId: string; customerName: string; reason: string }>;
+      }>(`/live-pdv/sessions/${sessionId}/charge-all-dm`, { method: 'POST', body: JSON.stringify({}) });
+      setChargeAllDone((s) => {
+        const n = { ...s };
+        for (const it of r.sent) n[it.cartId] = true;
+        return n;
+      });
+      const manuais = r.skipped.filter((s) => !/vazio/.test(s.reason));
+      setDmResult(
+        `✓ ${r.sent.length} enviada${r.sent.length === 1 ? '' : 's'} automático` +
+          (manuais.length
+            ? ` · ${manuais.length} pra enviar manual: ${manuais.map((s) => s.customerName).slice(0, 5).join(', ')}${manuais.length > 5 ? '…' : ''}`
+            : ''),
+      );
+    } catch (e: any) {
+      const raw = String(e?.message || '');
+      let msg = 'Falha no envio automático.';
+      try {
+        const j = JSON.parse(raw.slice(raw.indexOf(': ') + 2));
+        if (j?.message) msg = Array.isArray(j.message) ? j.message[0] : j.message;
+      } catch { /* mensagem crua */ }
+      setDmResult(`⚠️ ${msg}`);
+    } finally {
+      setSendingDm(false);
     }
   }
 
@@ -1361,6 +1399,20 @@ export default function LivePdvPage() {
               Cada botão <b>copia a mensagem com o link da cliente</b> e abre o canal:
               no <b>Direct</b> é só colar (Ctrl+V) e enviar; no <b>WhatsApp</b> a mensagem já vai pronta.
             </p>
+            <button
+              type="button"
+              onClick={sendAllDm}
+              disabled={sendingDm}
+              title="Manda a DM sozinho (via ManyChat) pra quem se cadastrou pelo link da live"
+              className="mb-2 w-full rounded-lg bg-slate-800 py-2 text-xs font-bold text-white hover:bg-slate-900 disabled:opacity-50"
+            >
+              {sendingDm ? 'Enviando DMs…' : '🤖 Enviar automático no Direct (ManyChat)'}
+            </button>
+            {dmResult && (
+              <div className="mb-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-[11px] text-slate-600">
+                {dmResult}
+              </div>
+            )}
             <div className="mb-2 rounded-lg bg-slate-100 px-3 py-1.5 text-center text-xs font-bold text-slate-600">
               {cobradas}/{cobraveis.length} enviadas
             </div>
