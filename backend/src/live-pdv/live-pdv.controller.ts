@@ -133,6 +133,12 @@ export class LivePdvController {
     return this.svc.pendingLiveRegistrations(id);
   }
 
+  // Cobrança em massa AUTOMÁTICA via DM (API ManyChat) — carrinhos abertos da sessão
+  @Post('sessions/:id/charge-all-dm')
+  chargeAllViaDm(@Param('id') id: string) {
+    return this.svc.chargeAllViaDm(id);
+  }
+
   // ── Carrinho / itens ──
   @Post('sessions/:id/items')
   addItem(
