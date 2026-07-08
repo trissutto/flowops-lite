@@ -49,6 +49,14 @@ function parseUrlArg() {
   return null;
 }
 
+// Assets de build/ (ícones): empacotado ficam em resources/build (extraResources);
+// em dev ficam em desktop-app/build.
+function buildAssetPath(name) {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, 'build', name)
+    : path.join(__dirname, '..', 'build', name);
+}
+
 // ----------------- Single-instance lock -----------------
 const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
@@ -85,7 +93,7 @@ function createWindow() {
     minWidth: 360,
     minHeight: 600,
     show: !startHidden,
-    icon: path.join(__dirname, '..', 'build', 'icon.ico'),
+    icon: buildAssetPath('icon.ico'),
     title: 'LURDS ORDER ONE',
     backgroundColor: '#0f172a',
     autoHideMenuBar: true,
@@ -159,16 +167,19 @@ function openPonto() {
   showWindow();
 }
 
+// Fallback da tray: mesmo L dourado 32x32 embutido — buffer vazio deixava a tray INVISÍVEL.
+const TRAY_FALLBACK_PNG_B64 =
+  'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAEyElEQVR42q2XyWskZRiHv7l2OklXd6297/ve2ZdJJkknMZk4iTpezEGYi9tN78GDHkREBRGUMGBAhUFHZRQjRBhkIAoBGRgYEISACP4PCa/+vurqrq/SbdJMGp5DvVXv83zkUKEYs/3qOaNczxu7jbxx3Mgbp428Qd0Y6UGjN3Adw40Gc/5qWf1KLafv1HP6SSOv09JEgDYXQrS1GKJnnhA44IITbjTQQrN9gGqWD6g5GaDt62FamQrQdM0QmOkT5z6ccKOBFpo8Xslo5WpGO1ma8NPWYpCqWQ03+UNdyZ1Dj70qR+MNtNBEm1XS2m41o9H2epgqGY1TdZLtUDsH+7NOj+VHi1+ntV1WTqvH18b81Jz0UznNhyYZkWqfOPctLxpooYk2K6XU0425AE2UdSqlVAzPULHIXJDW891caKCFJtqsmFT5xXhJ4zedlFuH+mnvRTr85iWB9flUzxCniw+ghSbarJBQ+MVYUaNiUhEopTo8PniV/jl6Q2CrmRFiYrCz6/SihSbaLJ9Q6PpcgEaLGh9wkmeXHu3for9/fU1gcyklhHoFAZyWHy000Wa5uEzrV/00UlApH5cpnzApcDoHevjDNv314JbAjYVk15gzWEh0vGighSbaLBszD9DIq3wA8nZah/n9u5t0fP8FgaevxamYlDmFpHXoDlbQwvKjhSbaLBP10dos3tcKZWM+Ti4mm9gOdPT1Bv158KzAxnz0QkHLZ/nRQhNtlo74aG3GoHpO4QOQjfraD5sH8tFvd5bpj/11gfW5sC3qo5ydmOjIttwALTTRZqmIl56aMaiWlSkd8fJhJiqC5cMv5ujx94sCa7PBduz/ghZwo4EWmmizZNhLq9MGVTMypcJePkw7yES99GBvnB59Oy2wOuO3Bc3n7Dg9cKOBFppos0RIotVpnSppmQ9Ayk5r+f7tBj38akxgZcroGbMHLSw/WmiizeJBiVamdCqnfXwAknbCEqXCEh18WqOjL0cFmhO6GeEh6QzYtbssP1poos1iAQ8tT+H/gI8PQMLCtvTjx1U63GsILI5rZsQRssc4LZ/lRwtNtFnU76HlSbyGvXwA4hbBDvc+rNAvt+sCLz8foZvNAOc5O0smyVBrv+Wz/GihiTaLGMPUnMRr2MsHFrGAyN33SvTzJ9W+SEek9r7djRaaaLOwMUxLExrlExIftPEPU9TGnXeKtP9RpS9SYQ/fhcvuRgtNtFlIH6LFcbyGJQrrwyaGiX3p87cLdO+DUl8kQh6+a/ksP1poos2CmnmAbEyikDZkoncIt/jszRzdfbfYF/HgsOCy/GihiTYLqEO0MKZSJuqhoDpkoolg6a1XEvT+66m+wJ9fcLX8aKGJNvMrg6fzIwof+pVBCgC1O8EL0msfbjTQQhNtZsiDx7Wsl0aLPjLkQTJaD51HwMFFduBGAy000Wa67N71K27aXNBJl91tjEvG7kYLTbSZ7nOXNZ/7pJ6TaGFMIc3nFtCfEKcPDbTQRJt/HWnegR3VO0C1rEQ35jVq5PA6HaJEsAuhc+iyAxeccKOBFprtb0PVO3BFlQZ2FGng5L8bVE55aLYu09XG5QAXnHCjgRaaZ76SFclVViTXruJxHcse16nscdElcQond0su4fP8X52V9tBPLnCXAAAAAElFTkSuQmCC';
+
 // ----------------- Tray -----------------
 function createTray() {
-  const iconPath = path.join(__dirname, '..', 'build', 'icon-tray.png');
+  const iconPath = buildAssetPath('icon-tray.png');
   let img;
   try {
     img = nativeImage.createFromPath(iconPath);
     if (img.isEmpty()) throw new Error('icon vazio');
   } catch {
-    // Fallback: ícone gerado em runtime (quadrado azul com F)
-    img = nativeImage.createFromBuffer(Buffer.alloc(0));
+    img = nativeImage.createFromBuffer(Buffer.from(TRAY_FALLBACK_PNG_B64, 'base64'));
   }
   tray = new Tray(img);
   tray.setToolTip('LURDS ORDER ONE — Pedidos da loja');
@@ -662,9 +673,7 @@ function createPontoShortcutIfMissing() {
     }
 
     // Copia ícone bundled (build/icon-ponto.ico) pra pasta permanente do user
-    const iconSrc = app.isPackaged
-      ? path.join(process.resourcesPath, 'build', 'icon-ponto.ico')
-      : path.join(__dirname, '..', 'build', 'icon-ponto.ico');
+    const iconSrc = buildAssetPath('icon-ponto.ico');
     const iconDir = path.join(process.env.LOCALAPPDATA || require('os').tmpdir(), 'LurdsPonto');
     const iconDest = path.join(iconDir, 'icon-ponto.ico');
 
