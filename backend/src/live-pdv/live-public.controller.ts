@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, ForbiddenException, Post, Req } from '@nestjs/common';
+import { BadRequestException, Body, Controller, ForbiddenException, Post, Query, Req } from '@nestjs/common';
 import { LivePdvService } from './live-pdv.service';
 
 /**
@@ -65,10 +65,12 @@ export class LivePublicController {
 /**
  * Webhook PÚBLICO do ManyChat (External Request) — vínculo @→subscriber_id.
  *
- * Uso no ManyChat: automação (ex.: disparo por etiqueta ou no fluxo CARRINHO)
- * com ação "External Request": POST nesta URL com JSON
- *   { "token": "<MANYCHAT_HOOK_TOKEN>", "sid": "{{user_id}}",
- *     "ig": "{{instagram username}}", "name": "{{full name}}", "phone": "{{phone}}" }
+ * Uso no ManyChat: automação (disparo por etiqueta `vincular_flow` ou no fluxo
+ * CARRINHO) com ação "Solicitação Externa": POST em
+ *   .../api/public/manychat-link?t=<MANYCHAT_HOOK_TOKEN>
+ * com corpo "Full Contact Data" (o JSON completo do contato que o ManyChat
+ * monta sozinho — traz id, ig_username, name, phone). Também aceita o formato
+ * enxuto { token, sid, ig, name, phone } pra chamadas manuais/testes.
  * Aplicar a etiqueta em massa nos contatos = backfill de todos os vínculos.
  *
  * Defesas: token via env MANYCHAT_HOOK_TOKEN (cai pro CADASTRO_LIVE_TOKEN se
@@ -86,23 +88,31 @@ export class ManychatHookController {
   @Post()
   async link(
     @Req() req: any,
-    @Body() body: { token?: string; sid?: string; ig?: string; name?: string; phone?: string },
+    @Query('t') t: string | undefined,
+    @Body() body: any,
   ) {
     const expected = (
       process.env.MANYCHAT_HOOK_TOKEN || process.env.CADASTRO_LIVE_TOKEN || ''
     ).trim();
-    if (expected && String(body?.token || '').trim() !== expected) {
+    const got = String(t || body?.token || '').trim();
+    if (expected && got !== expected) {
       throw new ForbiddenException('Token inválido');
     }
     const ip = clientIp(req);
     const now = Date.now();
-    const arr = (hookHits.get(ip) || []).filter((t) => now - t < HOOK_RL_WINDOW_MS);
+    const arr = (hookHits.get(ip) || []).filter((ts) => now - ts < HOOK_RL_WINDOW_MS);
     arr.push(now);
     hookHits.set(ip, arr);
     if (arr.length > HOOK_RL_MAX) {
       throw new BadRequestException('Rate limit');
     }
-    return this.svc.upsertManychatLink(body);
+    // Full Contact Data (id/ig_username) ou formato enxuto (sid/ig)
+    return this.svc.upsertManychatLink({
+      sid: body?.sid || body?.id,
+      ig: body?.ig || body?.ig_username,
+      name: body?.name,
+      phone: body?.phone || body?.whatsapp_phone,
+    });
   }
 }
 
