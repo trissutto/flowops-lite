@@ -1601,6 +1601,15 @@ export class LivePdvService {
       freteCents: cart.freteCents || 0,
       totalCents: cart.totalCents || 0,
       cep: cart.customerCep || null,
+      // Endereço já salvo (prefill do formulário de entrega no checkout)
+      endereco: {
+        endereco: cart.customerEndereco || '',
+        numero: cart.customerNumero || '',
+        complemento: cart.customerComplemento || '',
+        bairro: cart.customerBairro || '',
+        cidade: cart.customerCidade || '',
+        uf: cart.customerUf || '',
+      },
       storeName,
       pixAvailable,
       paid: LivePdvService.PAID_STATES.includes(cart.status),
