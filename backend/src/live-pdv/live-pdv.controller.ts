@@ -139,6 +139,12 @@ export class LivePdvController {
     return this.svc.chargeAllViaDm(id);
   }
 
+  // Cobrança INDIVIDUAL automática via DM — funciona mesmo com o Insta fechado
+  @Post('carts/:cartId/charge-dm')
+  chargeCartViaDm(@Param('cartId') cartId: string) {
+    return this.svc.chargeCartViaDm(cartId);
+  }
+
   // Importa vínculos do CSV de Contatos do ManyChat (user_id + @) em lote
   @Post('manychat/import-links')
   importManychatLinks(@Body() body: { links: Array<{ sid: string; ig: string }> }) {

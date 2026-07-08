@@ -981,6 +981,69 @@ export class LivePdvService {
   }
 
   /**
+   * Manda a DM de cobrança (link curto /p/) pra UMA cliente via ManyChat.
+   * Retorna { ok: false, reason } em vez de lançar — a massa acumula em
+   * "skipped" e o individual transforma em erro amigável.
+   */
+  private async sendCartDm(cart: any): Promise<{ ok: boolean; reason?: string }> {
+    const name = cart.customerName || 'cliente';
+    if ((cart.totalCents || 0) <= 0) return { ok: false, reason: 'carrinho vazio' };
+    let sid: string | null = null;
+    if (cart.customerId) {
+      const cust = await (this.prisma as any).customer.findUnique({
+        where: { id: cart.customerId },
+        select: { manychatSubscriberId: true },
+      });
+      sid = cust?.manychatSubscriberId || null;
+    }
+    if (!sid) return { ok: false, reason: 'sem vínculo ManyChat (não veio pelo link)' };
+    // Garante o link curto (backfill de carrinho antigo)
+    let code: string | null = cart.payCode;
+    if (!code) {
+      try {
+        const upd = await (this.prisma as any).livePdvCart.update({
+          where: { id: cart.id },
+          data: { payCode: this.genPayCode() },
+          select: { payCode: true },
+        });
+        code = upd.payCode;
+      } catch { /* raro — usa o link longo */ }
+    }
+    const base = (process.env.FRONTEND_URL || 'https://flowops-lite.vercel.app').replace(/\/$/, '');
+    const link = code ? `${base}/p/${code}` : `${base}/pagar/${cart.id}`;
+    const first = String(name).trim().split(/\s+/)[0] || 'cliente';
+    const valor = ((cart.totalCents || 0) / 100).toLocaleString('pt-BR', {
+      style: 'currency',
+      currency: 'BRL',
+    });
+    const msg = `Oi, ${first}! 💜 Suas peças da live deram ${valor} + frete. Fecha sua compra aqui: ${link}`;
+    const r = await this.manychat.sendText(sid, msg);
+    return r.ok ? { ok: true } : { ok: false, reason: r.error || 'falha no envio' };
+  }
+
+  /**
+   * Cobrança INDIVIDUAL automática via DM (API ManyChat) — botão no carrinho.
+   * Funciona mesmo com o Instagram da cliente fechado: a DM sai da conta da
+   * loja pela janela de 24h (ela comentou CARRINHO / se cadastrou na live).
+   */
+  async chargeCartViaDm(cartId: string) {
+    if (!this.manychat.enabled) {
+      throw new BadRequestException(
+        'Envio automático não configurado — crie a env MANYCHAT_API_TOKEN no Railway.',
+      );
+    }
+    const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
+    if (!cart) throw new NotFoundException('Carrinho não encontrado');
+    if (LivePdvService.PAID_STATES.includes(cart.status)) {
+      throw new BadRequestException('Carrinho já pago — não precisa cobrar de novo.');
+    }
+    const r = await this.sendCartDm(cart);
+    if (!r.ok) throw new BadRequestException(`DM não enviada: ${r.reason}`);
+    this.logger.log(`[live-dm] cobrança individual carrinho=${cartId} (${cart.customerName || 's/nome'}) enviada`);
+    return { ok: true, customerName: cart.customerName || 'cliente' };
+  }
+
+  /**
    * Cobrança em massa AUTOMÁTICA via DM (API ManyChat): pra cada carrinho
    * aberto da sessão com peças, manda a mensagem com o link curto /p/ pra
    * cliente — SE ela tiver vínculo ManyChat (se cadastrou pelo link com &sid=).
@@ -996,52 +1059,17 @@ export class LivePdvService {
       where: { sessionId, status: 'open' },
       orderBy: { createdAt: 'asc' },
     });
-    const base = (process.env.FRONTEND_URL || 'https://flowops-lite.vercel.app').replace(/\/$/, '');
     const sent: Array<{ cartId: string; customerName: string }> = [];
     const skipped: Array<{ cartId: string; customerName: string; reason: string }> = [];
 
     for (const cart of carts as any[]) {
       const name = cart.customerName || 'cliente';
-      if ((cart.totalCents || 0) <= 0) {
-        skipped.push({ cartId: cart.id, customerName: name, reason: 'carrinho vazio' });
-        continue;
-      }
-      let sid: string | null = null;
-      if (cart.customerId) {
-        const cust = await (this.prisma as any).customer.findUnique({
-          where: { id: cart.customerId },
-          select: { manychatSubscriberId: true },
-        });
-        sid = cust?.manychatSubscriberId || null;
-      }
-      if (!sid) {
-        skipped.push({ cartId: cart.id, customerName: name, reason: 'sem vínculo ManyChat (não veio pelo link)' });
-        continue;
-      }
-      // Garante o link curto (backfill de carrinho antigo)
-      let code: string | null = cart.payCode;
-      if (!code) {
-        try {
-          const upd = await (this.prisma as any).livePdvCart.update({
-            where: { id: cart.id },
-            data: { payCode: this.genPayCode() },
-            select: { payCode: true },
-          });
-          code = upd.payCode;
-        } catch { /* raro — usa o link longo */ }
-      }
-      const link = code ? `${base}/p/${code}` : `${base}/pagar/${cart.id}`;
-      const first = String(name).trim().split(/\s+/)[0] || 'cliente';
-      const valor = ((cart.totalCents || 0) / 100).toLocaleString('pt-BR', {
-        style: 'currency',
-        currency: 'BRL',
-      });
-      const msg = `Oi, ${first}! 💜 Suas peças da live deram ${valor} + frete. Fecha sua compra aqui: ${link}`;
-      const r = await this.manychat.sendText(sid, msg);
+      const r = await this.sendCartDm(cart);
       if (r.ok) {
         sent.push({ cartId: cart.id, customerName: name });
       } else {
-        skipped.push({ cartId: cart.id, customerName: name, reason: r.error || 'falha no envio' });
+        skipped.push({ cartId: cart.id, customerName: name, reason: r.reason || 'falha no envio' });
+        continue;
       }
       // Gentil com o rate-limit do ManyChat (10 req/s)
       await new Promise((res) => setTimeout(res, 150));
@@ -1396,7 +1424,16 @@ export class LivePdvService {
       where: { cartId, status: { notIn: ['cancelled', 'expired'] } },
       orderBy: { createdAt: 'asc' },
     });
-    return { ...cart, items };
+    // Vínculo ManyChat — a UI mostra o botão de DM automática
+    let hasManychat = false;
+    if (cart.customerId) {
+      const cust = await (this.prisma as any).customer.findUnique({
+        where: { id: cart.customerId },
+        select: { manychatSubscriberId: true },
+      });
+      hasManychat = !!cust?.manychatSubscriberId;
+    }
+    return { ...cart, items, hasManychat };
   }
 
   // Statuses que contam como "já pago" (não deixa cobrar de novo).
@@ -1469,7 +1506,21 @@ export class LivePdvService {
       if (!byCart.has(it.cartId)) byCart.set(it.cartId, []);
       byCart.get(it.cartId)!.push(it);
     }
-    return carts.map((c: any) => ({ ...c, items: byCart.get(c.id) || [] }));
+    // Vínculo ManyChat por cliente — a UI mostra o botão de DM automática
+    const custIds = Array.from(new Set(carts.map((c: any) => c.customerId).filter(Boolean)));
+    const linked = new Set<string>();
+    if (custIds.length) {
+      const custs = await (this.prisma as any).customer.findMany({
+        where: { id: { in: custIds }, manychatSubscriberId: { not: null } },
+        select: { id: true },
+      });
+      for (const cu of custs as any[]) linked.add(cu.id);
+    }
+    return carts.map((c: any) => ({
+      ...c,
+      items: byCart.get(c.id) || [],
+      hasManychat: !!(c.customerId && linked.has(c.customerId)),
+    }));
   }
 
   async cancelItem(itemId: string, reason?: string) {
