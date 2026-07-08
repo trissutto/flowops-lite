@@ -1650,6 +1650,13 @@ export class LivePdvService {
         cidade: cart.customerCidade || '',
         uf: cart.customerUf || '',
       },
+      // Flags de dados pessoais (SÓ booleans — página é pública, não vaza PII).
+      // O checkout pede o que falta; celular é obrigatório pra pagar.
+      dados: {
+        hasPhone: String(cart.customerPhone || '').replace(/\D/g, '').length >= 10,
+        hasCpf: String(cart.customerCpf || '').replace(/\D/g, '').length === 11,
+        hasEmail: /\S@\S+\.\S+/.test(String(cart.customerEmail || '')),
+      },
       storeName,
       pixAvailable,
       paid: LivePdvService.PAID_STATES.includes(cart.status),

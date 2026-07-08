@@ -51,8 +51,10 @@ export class LivePayPublicController {
     return this.svc.computeFreteFromCep(cartId, digits);
   }
 
-  // Endereço de entrega — a cliente preenche NO checkout (a loja recebe o
-  // pedido pronto pra postar, sem precisar caçar endereço pelo Direct).
+  // Endereço + dados de contato — a cliente preenche NO checkout (a loja
+  // recebe o pedido pronto pra postar, sem caçar dados pelo Direct).
+  // Celular é OBRIGATÓRIO pra pagar (validado aqui e no guardPayable);
+  // CPF/e-mail são opcionais mas validados quando enviados.
   @Post(':cartId/endereco')
   async endereco(
     @Param('cartId') key: string,
@@ -64,11 +66,14 @@ export class LivePayPublicController {
       bairro?: string;
       cidade?: string;
       uf?: string;
+      celular?: string;
+      cpf?: string;
+      email?: string;
     },
   ) {
     const cartId = await this.svc.resolvePublicCartId(key);
     const clean = (v: any, max: number) => String(v || '').trim().slice(0, max);
-    const data = {
+    const data: any = {
       customerEndereco: clean(body?.endereco, 160),
       customerNumero: clean(body?.numero, 20),
       customerComplemento: clean(body?.complemento, 80),
@@ -86,6 +91,30 @@ export class LivePayPublicController {
     }
     const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
     if (!cart) throw new NotFoundException('Compra não encontrada');
+
+    // Celular: obrigatório se o carrinho ainda não tem um válido
+    const jaTemFone = String(cart.customerPhone || '').replace(/\D/g, '').length >= 10;
+    const celDigits = String(body?.celular || '').replace(/\D/g, '');
+    if (celDigits) {
+      if (celDigits.length < 10 || celDigits.length > 11) {
+        throw new BadRequestException('Celular inválido. Use DDD + número (ex.: 11 91234-5678).');
+      }
+      data.customerPhone = celDigits;
+    } else if (!jaTemFone) {
+      throw new BadRequestException('Informe seu celular (com DDD) pra gente falar com você sobre a entrega.');
+    }
+    // CPF/e-mail: opcionais, mas validados quando preenchidos
+    const cpfDigits = String(body?.cpf || '').replace(/\D/g, '');
+    if (cpfDigits) {
+      if (cpfDigits.length !== 11) throw new BadRequestException('CPF inválido — são 11 números.');
+      data.customerCpf = cpfDigits;
+    }
+    const email = clean(body?.email, 120);
+    if (email) {
+      if (!/\S@\S+\.\S+/.test(email)) throw new BadRequestException('E-mail inválido.');
+      data.customerEmail = email;
+    }
+
     await (this.prisma as any).livePdvCart.update({ where: { id: cartId }, data });
     return { ok: true };
   }
@@ -125,6 +154,9 @@ export class LivePayPublicController {
       !String(cart.customerUf || '').trim()
     ) {
       throw new BadRequestException('Preencha o endereço de entrega antes de pagar. 💜');
+    }
+    if (String(cart.customerPhone || '').replace(/\D/g, '').length < 10) {
+      throw new BadRequestException('Informe seu celular (com DDD) antes de pagar. 💜');
     }
   }
 }

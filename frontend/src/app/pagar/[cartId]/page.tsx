@@ -40,9 +40,23 @@ type Summary = {
   cartId: string; firstName: string; status: string; paymentMethod: string | null;
   subtotalCents: number; freteCents: number; totalCents: number; cep: string | null;
   endereco?: Endereco;
+  dados?: { hasPhone: boolean; hasCpf: boolean; hasEmail: boolean };
   storeName: string | null; paid: boolean; pixAvailable: boolean; items: Item[];
   pix: { qrCodeText: string; qrCodeImageUrl: string } | null; paymentUrl: string | null;
 };
+function maskCel(v: string): string {
+  const d = v.replace(/\D/g, '').slice(0, 11);
+  if (d.length <= 2) return d;
+  if (d.length <= 7) return `(${d.slice(0, 2)}) ${d.slice(2)}`;
+  return `(${d.slice(0, 2)}) ${d.slice(2, d.length - 4)}-${d.slice(-4)}`;
+}
+function maskCpf(v: string): string {
+  const d = v.replace(/\D/g, '').slice(0, 11);
+  return d
+    .replace(/^(\d{3})(\d)/, '$1.$2')
+    .replace(/^(\d{3})\.(\d{3})(\d)/, '$1.$2.$3')
+    .replace(/\.(\d{3})(\d{1,2})$/, '.$1-$2');
+}
 
 export default function PagarPage() {
   const params = useParams();
@@ -60,6 +74,11 @@ export default function PagarPage() {
   const [bairro, setBairro] = useState('');
   const [cidade, setCidade] = useState('');
   const [uf, setUf] = useState('');
+  // Dados de contato — celular OBRIGATÓRIO; CPF/e-mail opcionais.
+  // Só pedimos o que falta (a página é pública, não mostramos o que já temos).
+  const [celular, setCelular] = useState('');
+  const [cpf, setCpf] = useState('');
+  const [email, setEmail] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [method, setMethod] = useState<'pix' | 'card' | null>(null);
   const [pix, setPix] = useState<{ qrCodeText: string; qrCodeImageUrl: string } | null>(null);
@@ -91,14 +110,15 @@ export default function PagarPage() {
 
   const enderecoOk =
     rua.trim().length > 0 && numero.trim().length > 0 && cidade.trim().length > 0 && uf.trim().length === 2;
+  const celularOk = !!sum?.dados?.hasPhone || celular.replace(/\D/g, '').length >= 10;
 
-  // Salva o endereço no carrinho (obrigatório antes de gerar o pagamento)
+  // Salva endereço + contato no carrinho (obrigatório antes de gerar o pagamento)
   const saveEndereco = useCallback(async () => {
     await api(`/public/live-pay/${cartId}/endereco`, {
       method: 'POST',
-      body: JSON.stringify({ endereco: rua, numero, complemento, bairro, cidade, uf }),
+      body: JSON.stringify({ endereco: rua, numero, complemento, bairro, cidade, uf, celular, cpf, email }),
     });
-  }, [cartId, rua, numero, complemento, bairro, cidade, uf]);
+  }, [cartId, rua, numero, complemento, bairro, cidade, uf, celular, cpf, email]);
 
   const load = useCallback(async () => {
     try {
@@ -194,7 +214,10 @@ export default function PagarPage() {
   }
 
   const total = frete ? frete.totalCents : sum.subtotalCents;
-  const canPay = !!frete && enderecoOk && !busy;
+  const canPay = !!frete && enderecoOk && celularOk && !busy;
+  const pedirCelular = !sum.dados?.hasPhone;
+  const pedirCpf = !sum.dados?.hasCpf;
+  const pedirEmail = !sum.dados?.hasEmail;
   const inputCls =
     'w-full box-border px-3.5 py-3 text-base rounded-xl bg-[#FCFBF7] border-[1.5px] border-[#E4DDCB] outline-none focus:border-[#B8912B] focus:ring-2 focus:ring-[#EBD9A6]';
 
@@ -277,6 +300,47 @@ export default function PagarPage() {
           </div>
         )}
 
+        {/* Seus dados — só pede o que falta; celular é obrigatório */}
+        {frete && (pedirCelular || pedirCpf || pedirEmail) && (
+          <div className="mb-4">
+            <span className="block text-[13px] font-bold text-[#6B6456] mb-1.5">Seus dados 💜</span>
+            <div className="space-y-2">
+              {pedirCelular && (
+                <input
+                  value={celular}
+                  onChange={(e) => setCelular(maskCel(e.target.value))}
+                  placeholder="Celular com DDD (obrigatório)"
+                  inputMode="numeric"
+                  className={inputCls}
+                />
+              )}
+              {pedirCpf && (
+                <input
+                  value={cpf}
+                  onChange={(e) => setCpf(maskCpf(e.target.value))}
+                  placeholder="CPF (pra nota fiscal — opcional)"
+                  inputMode="numeric"
+                  className={inputCls}
+                />
+              )}
+              {pedirEmail && (
+                <input
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="E-mail (opcional)"
+                  type="email"
+                  className={inputCls}
+                />
+              )}
+            </div>
+            {pedirCelular && !celularOk && (
+              <span className="mt-1 block text-[11px] text-[#A69E8C]">
+                Deixa seu <b>celular</b> pra gente te avisar da entrega — sem ele o pagamento não libera 💜
+              </span>
+            )}
+          </div>
+        )}
+
         {err && <div className="bg-[#FDECEC] border border-[#F3C0C0] text-[#9B2C2C] rounded-lg px-3 py-2.5 text-sm mb-3">{err}</div>}
 
         {/* PIX gerado */}
@@ -325,6 +389,9 @@ export default function PagarPage() {
         )}
         {frete && !enderecoOk && (
           <p className="text-center text-[11px] text-[#A69E8C] mt-3">Complete o endereço de entrega pra liberar o pagamento.</p>
+        )}
+        {frete && enderecoOk && !celularOk && (
+          <p className="text-center text-[11px] text-[#A69E8C] mt-3">Informe seu celular pra liberar o pagamento.</p>
         )}
         {frete && sum.pixAvailable === false && (
           <p className="text-center text-[11px] text-[#A69E8C] mt-2">PIX dessa loja é combinado com a vendedora · Cartão até 12x é na hora, aqui 💜</p>
