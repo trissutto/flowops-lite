@@ -2213,18 +2213,20 @@ function CartPanel({
                       {cart?.customerInstagram && (
                         <button
                           onClick={() => {
-                            // O Instagram não deixa pré-preencher DM: copia a
-                            // mensagem pronta e abre a conversa — só colar (Ctrl+V).
+                            // O Instagram não deixa pré-preencher DM (e o atalho
+                            // ig.me/m/ não funciona no desktop). Então: copia a
+                            // mensagem pronta e abre o PERFIL da cliente — a
+                            // operadora clica em "Mensagem" e cola (Ctrl+V).
                             navigator.clipboard?.writeText(payMsg);
                             setLinkCopied(true);
                             setTimeout(() => setLinkCopied(false), 2500);
                             window.open(
-                              `https://ig.me/m/${String(cart.customerInstagram).replace(/^@/, '')}`,
+                              `https://www.instagram.com/${String(cart.customerInstagram).replace(/^@/, '')}/`,
                               '_blank',
                               'noopener,noreferrer',
                             );
                           }}
-                          title="Copia a mensagem com o link e abre o Direct da cliente — é só colar"
+                          title="Copia a mensagem com o link e abre o perfil da cliente — clique em Mensagem e cole (Ctrl+V)"
                           className="flex-1 rounded-lg bg-gradient-to-r from-purple-600 to-pink-500 py-2 text-center text-xs font-bold text-white hover:opacity-90"
                         >
                           Direct
