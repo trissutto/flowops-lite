@@ -1650,6 +1650,18 @@ export class LivePdvService {
         cidade: cart.customerCidade || '',
         uf: cart.customerUf || '',
       },
+      // Flags de dados pessoais (SÓ booleans — página é pública, não vaza PII).
+      // O checkout pede o que falta; celular é obrigatório pra pagar.
+      dados: {
+        hasPhone: String(cart.customerPhone || '').replace(/\D/g, '').length >= 10,
+        hasCpf: String(cart.customerCpf || '').replace(/\D/g, '').length === 11,
+        hasEmail: /\S@\S+\.\S+/.test(String(cart.customerEmail || '')),
+      },
+      // Retirada em loja (frete zero, até 7 dias úteis) + lojas disponíveis
+      isPickup: !!cart.isPickup,
+      pickupStoreCode: cart.pickupStoreCode || null,
+      pickupStoreName: cart.pickupStoreName || null,
+      lojas: await this.listPickupStores(),
       storeName,
       pixAvailable,
       paid: LivePdvService.PAID_STATES.includes(cart.status),
@@ -1890,10 +1902,63 @@ export class LivePdvService {
     const data: any = { freteCents: calc.cents };
     // Se o operador digitou o CEP na hora, guarda no carrinho.
     if (overrideDigits.length === 8) data.customerCep = overrideDigits;
+    // Calcular frete de ENTREGA desfaz a retirada em loja (modos exclusivos)
+    data.isPickup = false;
+    data.pickupStoreCode = null;
+    data.pickupStoreName = null;
     await (this.prisma as any).livePdvCart.update({ where: { id: cartId }, data });
     await this.recalcCart(cartId);
     const fresh = await this.getCart(cartId);
     return { ...(fresh as any), freteServico: calc.servico, freteRegiao: calc.regiao };
+  }
+
+  /**
+   * RETIRADA EM LOJA (igual ao site): frete ZERO, prazo de até 7 dias úteis.
+   * A cliente escolhe a loja no checkout público; endereço deixa de ser
+   * exigido pra pagar. A peça sai da loja de origem e é transferida pra loja
+   * de retirada pelo fluxo normal de expedição.
+   */
+  async setPublicPickup(cartId: string, storeCode: string) {
+    const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
+    if (!cart) throw new NotFoundException('Compra não encontrada');
+    if (LivePdvService.PAID_STATES.includes(cart.status)) {
+      throw new BadRequestException('Essa compra já foi paga. 💜');
+    }
+    const store = await (this.prisma as any).store.findUnique({
+      where: { code: String(storeCode || '').trim() },
+      select: { code: true, name: true, active: true },
+    });
+    if (!store?.active) throw new BadRequestException('Loja de retirada inválida.');
+    await (this.prisma as any).livePdvCart.update({
+      where: { id: cartId },
+      data: {
+        isPickup: true,
+        pickupStoreCode: store.code,
+        pickupStoreName: store.name,
+        freteCents: 0,
+      },
+    });
+    await this.recalcCart(cartId);
+    const fresh: any = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
+    return {
+      ok: true,
+      pickupStoreName: store.name,
+      freteCents: 0,
+      totalCents: fresh?.totalCents || 0,
+    };
+  }
+
+  /** Lojas físicas ativas pra retirada (código+nome+cidade — público-safe). */
+  async listPickupStores() {
+    const stores = await (this.prisma as any).store.findMany({
+      where: { active: true },
+      select: { code: true, name: true, city: true },
+      orderBy: { code: 'asc' },
+    });
+    // SITE/DEPÓSITO não recebem cliente
+    return (stores as any[]).filter(
+      (s) => !/site|deposito|depósito/i.test(String(s.name || '')),
+    );
   }
 
   // ─── Pagamento (PIX) ─────────────────────────────────────────────────────────
@@ -2188,17 +2253,20 @@ export class LivePdvService {
       throw new BadRequestException('Só carrinho PAGO pode ir pra separação.');
     }
 
-    // Endereço completo obrigatório (formato do site: loja recebe pronto pra postar)
-    const faltando: string[] = [];
-    if (String(cart.customerCep || '').replace(/\D/g, '').length !== 8) faltando.push('CEP');
-    if (!String(cart.customerEndereco || '').trim()) faltando.push('rua');
-    if (!String(cart.customerNumero || '').trim()) faltando.push('número');
-    if (!String(cart.customerCidade || '').trim()) faltando.push('cidade');
-    if (!String(cart.customerUf || '').trim()) faltando.push('UF');
-    if (faltando.length) {
-      throw new BadRequestException(
-        `Complete o endereço antes de enviar pra separação — falta: ${faltando.join(', ')}.`,
-      );
+    // Endereço completo obrigatório (formato do site: loja recebe pronto pra
+    // postar) — EXCETO retirada em loja, que não tem postagem pro cliente.
+    if (!cart.isPickup) {
+      const faltando: string[] = [];
+      if (String(cart.customerCep || '').replace(/\D/g, '').length !== 8) faltando.push('CEP');
+      if (!String(cart.customerEndereco || '').trim()) faltando.push('rua');
+      if (!String(cart.customerNumero || '').trim()) faltando.push('número');
+      if (!String(cart.customerCidade || '').trim()) faltando.push('cidade');
+      if (!String(cart.customerUf || '').trim()) faltando.push('UF');
+      if (faltando.length) {
+        throw new BadRequestException(
+          `Complete o endereço antes de enviar pra separação — falta: ${faltando.join(', ')}.`,
+        );
+      }
     }
 
     // Ordem de separação por loja de origem → emite pra cada loja
@@ -2295,6 +2363,10 @@ export class LivePdvService {
           subtotalCents: c?.subtotalCents ?? null,
           freteCents: c?.freteCents ?? null,
           totalCents: c?.totalCents ?? null,
+          // Retirada em loja (frete zero, até 7 dias úteis)
+          isPickup: !!c?.isPickup,
+          pickupStoreCode: c?.pickupStoreCode || null,
+          pickupStoreName: c?.pickupStoreName || null,
           paidAt: c?.paidAt,
           liveStoreCode: sess?.liveStoreCode || null,
           liveStoreName: sess?.liveStoreName || null,

@@ -120,6 +120,9 @@ interface LiveQueueGroup {
   subtotalCents?: number | null;
   freteCents?: number | null;
   totalCents?: number | null;
+  isPickup?: boolean;
+  pickupStoreCode?: string | null;
+  pickupStoreName?: string | null;
   paidAt?: string | null;
   liveStoreName: string | null;
   items: LiveQueueItem[];
@@ -1222,8 +1225,15 @@ function LiveOrderCard({
         {/* Envio + Pagamento — MESMO padrão do pedido do site (imprime e posta) */}
         <div className="grid gap-2 border-b border-slate-100 px-4 py-3 text-xs leading-relaxed text-slate-600 sm:grid-cols-2">
           <div>
-            <div className="mb-0.5 font-semibold text-slate-700">📦 Envio</div>
-            {group.customerEndereco ? (
+            <div className="mb-0.5 font-semibold text-slate-700">
+              {group.isPickup ? '🏬 Retirada em loja' : '📦 Envio'}
+            </div>
+            {group.isPickup ? (
+              <div className="font-semibold text-orange-700">
+                Cliente vai RETIRAR na loja {group.pickupStoreName || group.pickupStoreCode} — enviar a
+                peça pra lá (transferência) em até 7 dias úteis. NÃO postar pro endereço.
+              </div>
+            ) : group.customerEndereco ? (
               <>
                 <div className="text-slate-800">{group.customerName}</div>
                 <div>
@@ -1298,12 +1308,14 @@ function LiveOrderCard({
                   )}
                   <button
                     onClick={() => onShipped(it.id)}
-                    disabled={busy === it.id || !it.separatedAt || !group.customerEndereco}
+                    disabled={busy === it.id || !it.separatedAt || (!group.isPickup && !group.customerEndereco)}
                     title={
-                      !group.customerEndereco
+                      !group.isPickup && !group.customerEndereco
                         ? 'SEM ENDEREÇO — matriz precisa completar o cadastro antes do envio'
                         : it.separatedAt
-                        ? 'Postar e informar o rastreio'
+                        ? group.isPickup
+                          ? `Enviar pra loja de retirada (${group.pickupStoreName || group.pickupStoreCode})`
+                          : 'Postar e informar o rastreio'
                         : 'Bipe a peça primeiro (conferência)'
                     }
                     className="inline-flex items-center gap-1 rounded-lg bg-rose-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-40"

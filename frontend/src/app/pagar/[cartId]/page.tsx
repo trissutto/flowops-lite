@@ -40,9 +40,25 @@ type Summary = {
   cartId: string; firstName: string; status: string; paymentMethod: string | null;
   subtotalCents: number; freteCents: number; totalCents: number; cep: string | null;
   endereco?: Endereco;
+  dados?: { hasPhone: boolean; hasCpf: boolean; hasEmail: boolean };
+  isPickup?: boolean; pickupStoreCode?: string | null; pickupStoreName?: string | null;
+  lojas?: Array<{ code: string; name: string; city: string | null }>;
   storeName: string | null; paid: boolean; pixAvailable: boolean; items: Item[];
   pix: { qrCodeText: string; qrCodeImageUrl: string } | null; paymentUrl: string | null;
 };
+function maskCel(v: string): string {
+  const d = v.replace(/\D/g, '').slice(0, 11);
+  if (d.length <= 2) return d;
+  if (d.length <= 7) return `(${d.slice(0, 2)}) ${d.slice(2)}`;
+  return `(${d.slice(0, 2)}) ${d.slice(2, d.length - 4)}-${d.slice(-4)}`;
+}
+function maskCpf(v: string): string {
+  const d = v.replace(/\D/g, '').slice(0, 11);
+  return d
+    .replace(/^(\d{3})(\d)/, '$1.$2')
+    .replace(/^(\d{3})\.(\d{3})(\d)/, '$1.$2.$3')
+    .replace(/\.(\d{3})(\d{1,2})$/, '.$1-$2');
+}
 
 export default function PagarPage() {
   const params = useParams();
@@ -60,6 +76,32 @@ export default function PagarPage() {
   const [bairro, setBairro] = useState('');
   const [cidade, setCidade] = useState('');
   const [uf, setUf] = useState('');
+  // Dados de contato — celular OBRIGATÓRIO; CPF/e-mail opcionais.
+  // Só pedimos o que falta (a página é pública, não mostramos o que já temos).
+  const [celular, setCelular] = useState('');
+  const [cpf, setCpf] = useState('');
+  const [email, setEmail] = useState('');
+  // Modo de recebimento: entrega (frete pelo CEP) ou retirada em loja (grátis)
+  const [modo, setModo] = useState<'entrega' | 'retirada'>('entrega');
+  const [lojaRetirada, setLojaRetirada] = useState('');
+  const [retiradaOk, setRetiradaOk] = useState(false);
+  const [retiradaLoading, setRetiradaLoading] = useState(false);
+
+  async function escolherRetirada(storeCode: string) {
+    setLojaRetirada(storeCode);
+    setRetiradaOk(false);
+    if (!storeCode) return;
+    setRetiradaLoading(true); setErr(null);
+    try {
+      await api(`/public/live-pay/${cartId}/retirada`, {
+        method: 'POST',
+        body: JSON.stringify({ storeCode }),
+      });
+      setRetiradaOk(true);
+      setFrete(null); // zera o frete de entrega na tela — retirada é grátis
+    } catch (e: any) { setErr(parseErr(e)); }
+    finally { setRetiradaLoading(false); }
+  }
   const [err, setErr] = useState<string | null>(null);
   const [method, setMethod] = useState<'pix' | 'card' | null>(null);
   const [pix, setPix] = useState<{ qrCodeText: string; qrCodeImageUrl: string } | null>(null);
@@ -91,14 +133,15 @@ export default function PagarPage() {
 
   const enderecoOk =
     rua.trim().length > 0 && numero.trim().length > 0 && cidade.trim().length > 0 && uf.trim().length === 2;
+  const celularOk = !!sum?.dados?.hasPhone || celular.replace(/\D/g, '').length >= 10;
 
-  // Salva o endereço no carrinho (obrigatório antes de gerar o pagamento)
+  // Salva endereço + contato no carrinho (obrigatório antes de gerar o pagamento)
   const saveEndereco = useCallback(async () => {
     await api(`/public/live-pay/${cartId}/endereco`, {
       method: 'POST',
-      body: JSON.stringify({ endereco: rua, numero, complemento, bairro, cidade, uf }),
+      body: JSON.stringify({ endereco: rua, numero, complemento, bairro, cidade, uf, celular, cpf, email }),
     });
-  }, [cartId, rua, numero, complemento, bairro, cidade, uf]);
+  }, [cartId, rua, numero, complemento, bairro, cidade, uf, celular, cpf, email]);
 
   const load = useCallback(async () => {
     try {
@@ -107,7 +150,11 @@ export default function PagarPage() {
       if (s.paid) setPaid(true);
       if (s.pix?.qrCodeText) { setPix(s.pix); setMethod('pix'); }
       if (s.paymentMethod === 'link' && s.paymentUrl) { setCardUrl(s.paymentUrl); setMethod('card'); }
-      if (s.cep) { setCep(maskCep(s.cep)); calcFrete(s.cep); }
+      if (s.isPickup && s.pickupStoreCode) {
+        setModo('retirada');
+        setLojaRetirada(s.pickupStoreCode);
+        setRetiradaOk(true);
+      } else if (s.cep) { setCep(maskCep(s.cep)); calcFrete(s.cep); }
       if (s.endereco) {
         setRua((prev) => prev || s.endereco!.endereco || '');
         setNumero((prev) => prev || s.endereco!.numero || '');
@@ -193,8 +240,15 @@ export default function PagarPage() {
     );
   }
 
-  const total = frete ? frete.totalCents : sum.subtotalCents;
-  const canPay = !!frete && enderecoOk && !busy;
+  const retirada = modo === 'retirada';
+  const total = retirada ? sum.subtotalCents : frete ? frete.totalCents : sum.subtotalCents;
+  const canPay = retirada
+    ? retiradaOk && celularOk && !busy
+    : !!frete && enderecoOk && celularOk && !busy;
+  const pedirCelular = !sum.dados?.hasPhone;
+  const pedirCpf = !sum.dados?.hasCpf;
+  const pedirEmail = !sum.dados?.hasEmail;
+  const dadosVisiveis = retirada ? retiradaOk : !!frete;
   const inputCls =
     'w-full box-border px-3.5 py-3 text-base rounded-xl bg-[#FCFBF7] border-[1.5px] border-[#E4DDCB] outline-none focus:border-[#B8912B] focus:ring-2 focus:ring-[#EBD9A6]';
 
@@ -227,15 +281,71 @@ export default function PagarPage() {
         <div className="space-y-1 text-sm mb-4">
           <div className="flex justify-between text-[#7A7264]"><span>Subtotal</span><span className="tabular-nums">{brl(sum.subtotalCents)}</span></div>
           <div className="flex justify-between text-[#7A7264]">
-            <span>Frete{frete?.freteServico ? ` (${frete.freteServico})` : ''}</span>
-            <span className="tabular-nums">{frete ? brl(frete.freteCents) : '—'}</span>
+            <span>
+              {retirada ? 'Retirada em loja' : `Frete${frete?.freteServico ? ` (${frete.freteServico})` : ''}`}
+            </span>
+            <span className="tabular-nums">
+              {retirada ? <span className="font-bold text-[#2E7D46]">Grátis</span> : frete ? brl(frete.freteCents) : '—'}
+            </span>
           </div>
           <div className="flex justify-between text-lg font-extrabold pt-1 border-t border-[#EDE7D6] mt-1">
             <span>Total</span><span className="tabular-nums">{brl(total)}</span>
           </div>
         </div>
 
-        {/* CEP / frete */}
+        {/* Como quer receber? Entrega (frete pelo CEP) ou retirada em loja (grátis) */}
+        <div className="mb-4">
+          <span className="block text-[13px] font-bold text-[#6B6456] mb-1.5">Como você quer receber?</span>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => { setModo('entrega'); setRetiradaOk(false); setLojaRetirada(''); if (cep.replace(/\D/g, '').length === 8) calcFrete(cep); }}
+              className={`rounded-xl border-[1.5px] px-3 py-2.5 text-sm font-bold transition-colors ${
+                !retirada ? 'border-[#B8912B] bg-[#FBF6E6] text-[#8C7325]' : 'border-[#E4DDCB] bg-white text-[#7A7264]'
+              }`}
+            >
+              🚚 Receber em casa
+            </button>
+            <button
+              type="button"
+              onClick={() => setModo('retirada')}
+              className={`rounded-xl border-[1.5px] px-3 py-2.5 text-sm font-bold transition-colors ${
+                retirada ? 'border-[#B8912B] bg-[#FBF6E6] text-[#8C7325]' : 'border-[#E4DDCB] bg-white text-[#7A7264]'
+              }`}
+            >
+              🏬 Retirar na loja <span className="font-extrabold text-[#2E7D46]">grátis</span>
+            </button>
+          </div>
+        </div>
+
+        {/* RETIRADA — escolhe a loja (frete zero, até 7 dias úteis) */}
+        {retirada && (
+          <div className="mb-4">
+            <span className="block text-[13px] font-bold text-[#6B6456] mb-1.5">Loja pra retirada 🏬</span>
+            <select
+              value={lojaRetirada}
+              onChange={(e) => escolherRetirada(e.target.value)}
+              className={inputCls}
+            >
+              <option value="">— escolha a loja —</option>
+              {(sum.lojas || []).map((l) => (
+                <option key={l.code} value={l.code}>
+                  {l.name}{l.city ? ` · ${l.city}` : ''}
+                </option>
+              ))}
+            </select>
+            {retiradaLoading && <span className="text-[11px] text-[#A08A4E]">confirmando retirada…</span>}
+            {retiradaOk && !retiradaLoading && (
+              <span className="mt-1 block text-[11px] text-[#8C7325]">
+                ✓ Retirada grátis — sua peça fica disponível na loja em <b>até 7 dias úteis</b>.
+                Avisamos no seu celular quando chegar. 💜
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* CEP / frete — só no modo ENTREGA */}
+        {!retirada && (
         <label className="block mb-4">
           <span className="block text-[13px] font-bold text-[#6B6456] mb-1.5">Seu CEP (pro frete)</span>
           <input
@@ -252,9 +362,10 @@ export default function PagarPage() {
             </span>
           )}
         </label>
+        )}
 
         {/* Endereço de entrega — preenchido pelo CEP; a cliente confere e põe o número */}
-        {frete && (
+        {!retirada && frete && (
           <div className="mb-4">
             <span className="block text-[13px] font-bold text-[#6B6456] mb-1.5">Endereço de entrega 📦</span>
             <div className="space-y-2">
@@ -272,6 +383,47 @@ export default function PagarPage() {
             {!enderecoOk && (
               <span className="mt-1 block text-[11px] text-[#A69E8C]">
                 Confere a rua e coloca o <b>número</b> pra gente postar seu pedido certinho 💜
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Seus dados — só pede o que falta; celular é obrigatório */}
+        {dadosVisiveis && (pedirCelular || pedirCpf || pedirEmail) && (
+          <div className="mb-4">
+            <span className="block text-[13px] font-bold text-[#6B6456] mb-1.5">Seus dados 💜</span>
+            <div className="space-y-2">
+              {pedirCelular && (
+                <input
+                  value={celular}
+                  onChange={(e) => setCelular(maskCel(e.target.value))}
+                  placeholder="Celular com DDD (obrigatório)"
+                  inputMode="numeric"
+                  className={inputCls}
+                />
+              )}
+              {pedirCpf && (
+                <input
+                  value={cpf}
+                  onChange={(e) => setCpf(maskCpf(e.target.value))}
+                  placeholder="CPF (pra nota fiscal — opcional)"
+                  inputMode="numeric"
+                  className={inputCls}
+                />
+              )}
+              {pedirEmail && (
+                <input
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="E-mail (opcional)"
+                  type="email"
+                  className={inputCls}
+                />
+              )}
+            </div>
+            {pedirCelular && !celularOk && (
+              <span className="mt-1 block text-[11px] text-[#A69E8C]">
+                Deixa seu <b>celular</b> pra gente te avisar da entrega — sem ele o pagamento não libera 💜
               </span>
             )}
           </div>
@@ -320,11 +472,17 @@ export default function PagarPage() {
             {busy === 'card' ? 'Gerando link…' : 'Cartão até 12x sem juros'}
           </button>
         </div>
-        {!frete && (
+        {!retirada && !frete && (
           <p className="text-center text-[11px] text-[#A69E8C] mt-3">Informe seu CEP acima pra liberar o pagamento.</p>
         )}
-        {frete && !enderecoOk && (
+        {!retirada && frete && !enderecoOk && (
           <p className="text-center text-[11px] text-[#A69E8C] mt-3">Complete o endereço de entrega pra liberar o pagamento.</p>
+        )}
+        {retirada && !retiradaOk && (
+          <p className="text-center text-[11px] text-[#A69E8C] mt-3">Escolha a loja de retirada pra liberar o pagamento.</p>
+        )}
+        {(retirada ? retiradaOk : !!frete) && (retirada || enderecoOk) && !celularOk && (
+          <p className="text-center text-[11px] text-[#A69E8C] mt-3">Informe seu celular pra liberar o pagamento.</p>
         )}
         {frete && sum.pixAvailable === false && (
           <p className="text-center text-[11px] text-[#A69E8C] mt-2">PIX dessa loja é combinado com a vendedora · Cartão até 12x é na hora, aqui 💜</p>

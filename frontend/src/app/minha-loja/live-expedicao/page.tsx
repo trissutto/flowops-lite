@@ -51,6 +51,9 @@ interface QueueGroup {
   subtotalCents?: number | null;
   freteCents?: number | null;
   totalCents?: number | null;
+  isPickup?: boolean;
+  pickupStoreCode?: string | null;
+  pickupStoreName?: string | null;
   paidAt: string | null;
   liveStoreCode: string | null;
   liveStoreName: string | null;
@@ -200,8 +203,15 @@ export default function LiveExpedicaoPage() {
               {/* Envio + pagamento — MESMO padrão do pedido do site (a loja imprime e posta) */}
               <div className="grid gap-2 border-b border-slate-100 p-3 text-xs leading-relaxed text-slate-600 sm:grid-cols-2">
                 <div>
-                  <div className="mb-0.5 font-semibold text-slate-700">📦 Envio</div>
-                  {g.customerEndereco ? (
+                  <div className="mb-0.5 font-semibold text-slate-700">
+                    {g.isPickup ? '🏬 Retirada em loja' : '📦 Envio'}
+                  </div>
+                  {g.isPickup ? (
+                    <div className="font-semibold text-orange-700">
+                      Cliente vai RETIRAR na loja {g.pickupStoreName || g.pickupStoreCode} — enviar a
+                      peça pra lá (transferência) em até 7 dias úteis. NÃO postar.
+                    </div>
+                  ) : g.customerEndereco ? (
                     <>
                       <div className="text-slate-800">{g.customerName}</div>
                       <div>
