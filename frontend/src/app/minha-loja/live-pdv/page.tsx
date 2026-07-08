@@ -223,6 +223,10 @@ export default function LivePdvPage() {
   const [cart, setCart] = useState<Cart | null>(null);
   const [carts, setCarts] = useState<Cart[]>([]);
   const [clientFilter, setClientFilter] = useState(''); // busca de cliente por nome/@ na lista
+  // Despoluição da grade: por padrão só quem TEM PEÇAS; vazios ficam atrás
+  // de um chip (cliente puxada da fila que ainda não comprou = R$0 · 0 itens).
+  const [cartView, setCartView] = useState<'pecas' | 'vazios' | 'todos'>('pecas');
+  const [clearingEmpty, setClearingEmpty] = useState(false);
   const [showCustomerModal, setShowCustomerModal] = useState(false);
   const [pendingCell, setPendingCell] = useState<GradeCell | null>(null);
   // Aviso rápido "adicionado a Fulana" após fechar o carrinho.
@@ -1348,6 +1352,48 @@ export default function LivePdvPage() {
       );
   })();
 
+  // Partição da grade: com peças × vazios (0 itens). Busca ativa ignora o chip.
+  const nComPecas = clientesFiltradas.filter((c) => (c.items?.length || 0) > 0).length;
+  const nVazios = clientesFiltradas.length - nComPecas;
+  const viewEfetiva: 'pecas' | 'vazios' | 'todos' = clientFilter.trim() ? 'todos' : cartView;
+  const gridCarts = clientesFiltradas.filter((c) =>
+    viewEfetiva === 'todos'
+      ? true
+      : viewEfetiva === 'pecas'
+      ? (c.items?.length || 0) > 0
+      : (c.items?.length || 0) === 0,
+  );
+
+  // Limpeza em massa dos carrinhos VAZIOS (0 peças = sem reserva/pagamento —
+  // excluir é seguro; a cliente continua no CRM e pode ganhar carrinho novo).
+  async function clearEmptyCarts() {
+    const vazios = cartsAtivos.filter((c) => (c.items?.length || 0) === 0);
+    if (!vazios.length || clearingEmpty) return;
+    if (
+      !confirm(
+        `Limpar ${vazios.length} carrinho(s) VAZIO(S) da tela?\n\n` +
+          'NADA é apagado: o cadastro da cliente continua salvo no CRM ' +
+          '(nome, telefone, @, vínculo ManyChat) e o carrinho fica no histórico ' +
+          'como cancelado. Só sai da tela da live.',
+      )
+    )
+      return;
+    setClearingEmpty(true);
+    try {
+      for (const c of vazios) {
+        try {
+          await api(`/live-pdv/carts/${c.id}/cancel`, {
+            method: 'POST',
+            body: JSON.stringify({ reason: 'carrinho vazio (limpeza em massa)' }),
+          });
+        } catch { /* segue os demais */ }
+      }
+      await refreshCarts();
+    } finally {
+      setClearingEmpty(false);
+    }
+  }
+
   // Carrinhos "cobráveis" em massa: abertos, com peças e ainda sem cobrança.
   const cobraveis = cartsAtivos
     .filter((c) => c.status === 'open' && (c.items?.length || 0) > 0 && (c.totalCents || 0) > 0)
@@ -2101,8 +2147,8 @@ export default function LivePdvPage() {
                   <div className="flex items-center gap-2">
                     <User className="h-5 w-5 text-rose-500" />
                     <span className="text-sm font-bold uppercase tracking-wide text-slate-800">
-                      Clientes da live ({clientesFiltradas.length}
-                      {clientFilter.trim() && clientesFiltradas.length !== cartsAtivos.length ? `/${cartsAtivos.length}` : ''})
+                      Clientes da live ({gridCarts.length}
+                      {gridCarts.length !== cartsAtivos.length ? `/${cartsAtivos.length}` : ''})
                     </span>
                   </div>
                   <button
@@ -2113,6 +2159,53 @@ export default function LivePdvPage() {
                   >
                     Recuperar 24h
                   </button>
+                </div>
+                {/* Chips: grade limpa por padrão (só quem tem peças). A busca ignora o chip. */}
+                <div className="mb-2 flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setCartView('pecas')}
+                    className={`rounded-full px-2.5 py-1 text-[11px] font-bold transition ${
+                      viewEfetiva === 'pecas'
+                        ? 'bg-rose-600 text-white'
+                        : 'border border-slate-200 bg-white text-slate-600 hover:border-rose-300'
+                    }`}
+                  >
+                    🛍 Com peças ({nComPecas})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCartView('vazios')}
+                    className={`rounded-full px-2.5 py-1 text-[11px] font-bold transition ${
+                      viewEfetiva === 'vazios'
+                        ? 'bg-slate-700 text-white'
+                        : 'border border-slate-200 bg-white text-slate-500 hover:border-slate-400'
+                    }`}
+                  >
+                    Vazios ({nVazios})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCartView('todos')}
+                    className={`rounded-full px-2.5 py-1 text-[11px] font-bold transition ${
+                      viewEfetiva === 'todos'
+                        ? 'bg-slate-700 text-white'
+                        : 'border border-slate-200 bg-white text-slate-500 hover:border-slate-400'
+                    }`}
+                  >
+                    Todos ({clientesFiltradas.length})
+                  </button>
+                  {nVazios > 0 && (
+                    <button
+                      type="button"
+                      onClick={clearEmptyCarts}
+                      disabled={clearingEmpty}
+                      title="Exclui todos os carrinhos com 0 peças (sem reserva/pagamento — clientes seguem no CRM)"
+                      className="ml-auto rounded-full border border-rose-200 bg-white px-2.5 py-1 text-[11px] font-bold text-rose-600 hover:bg-rose-50 disabled:opacity-50"
+                    >
+                      {clearingEmpty ? 'Limpando…' : `🧹 Limpar vazios (${nVazios})`}
+                    </button>
+                  )}
                 </div>
                 <div className="relative mb-2">
                   <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
@@ -2133,16 +2226,18 @@ export default function LivePdvPage() {
                     </button>
                   )}
                 </div>
-                {/* GRID de 6 COLUNAS (alfabético, que já vinha da ordenação) —
-                    era lista única, depois 3 colunas; o dono pediu 6 pra ver a
-                    live inteira sem rolar. Em telas menores cai pra 3/2. */}
-                <div className="grid max-h-[60vh] grid-cols-2 content-start gap-1.5 overflow-y-auto rounded-xl border border-slate-200 bg-white p-1.5 md:grid-cols-3 xl:grid-cols-6">
-                  {clientesFiltradas.length === 0 && (
+                {/* GRID em LINHAS, 3 colunas (08/07): o dono trocou as 6 colunas
+                    por linhas maiores pra ver o NOME COMPLETO da cliente.
+                    Em telas menores cai pra 2/1. */}
+                <div className="grid max-h-[60vh] grid-cols-1 content-start gap-1.5 overflow-y-auto rounded-xl border border-slate-200 bg-white p-1.5 sm:grid-cols-2 xl:grid-cols-3">
+                  {gridCarts.length === 0 && (
                     <div className="col-span-full px-3 py-4 text-center text-sm text-slate-400">
-                      Nenhuma cliente encontrada.
+                      {viewEfetiva === 'pecas' && nVazios > 0
+                        ? 'Ninguém com peças ainda — os carrinhos vazios estão no chip "Vazios".'
+                        : 'Nenhuma cliente encontrada.'}
                     </div>
                   )}
-                  {clientesFiltradas.map((c) => {
+                  {gridCarts.map((c) => {
                     const active = cart?.id === c.id;
                     return (
                       <div
@@ -2158,7 +2253,7 @@ export default function LivePdvPage() {
                           className="flex min-w-0 flex-1 flex-col gap-0.5 px-2 py-1.5 text-left"
                         >
                           <span
-                            className={`flex w-full min-w-0 items-center gap-1 text-sm ${active ? 'font-extrabold text-rose-700' : 'font-semibold text-slate-800'}`}
+                            className={`flex w-full min-w-0 items-start gap-1 text-sm ${active ? 'font-extrabold text-rose-700' : 'font-semibold text-slate-800'}`}
                             title={c.cartNumber ? `#${c.cartNumber} · ${c.customerName}` : c.customerName}
                           >
                             {c.cartNumber != null && (
@@ -2172,7 +2267,8 @@ export default function LivePdvPage() {
                                 {c.cartNumber}
                               </span>
                             )}
-                            <span className="truncate">{c.customerName}</span>
+                            {/* Nome COMPLETO (08/07): sem truncate — a grade virou linhas/3 colunas */}
+                            <span className="break-words leading-tight">{c.customerName}</span>
                           </span>
                           <span className="text-xs font-bold tabular-nums text-slate-900">
                             {brl(c.totalCents)}
