@@ -1145,7 +1145,14 @@ export class LivePdvService {
     });
     const msg = `Oi, ${first}! 💜 Suas peças da live deram ${valor} + frete. Fecha sua compra aqui: ${link}`;
     const r = await this.manychat.sendText(sid, msg);
-    return r.ok ? { ok: true } : { ok: false, reason: r.error || 'falha no envio' };
+    if (r.ok) {
+      // Carimba o envio — a cobrança em massa não repete DM pra quem já recebeu
+      await (this.prisma as any).livePdvCart
+        .update({ where: { id: cart.id }, data: { dmSentAt: new Date() } })
+        .catch(() => {});
+      return { ok: true };
+    }
+    return { ok: false, reason: r.error || 'falha no envio' };
   }
 
   /**
@@ -1191,6 +1198,12 @@ export class LivePdvService {
 
     for (const cart of carts as any[]) {
       const name = cart.customerName || 'cliente';
+      // Já recebeu a DM automática antes? NÃO repete (reenvio só pelo botão
+      // individual do carrinho, que é decisão explícita da operadora).
+      if (cart.dmSentAt) {
+        skipped.push({ cartId: cart.id, customerName: name, reason: 'DM já enviada' });
+        continue;
+      }
       const r = await this.sendCartDm(cart);
       if (r.ok) {
         sent.push({ cartId: cart.id, customerName: name });
