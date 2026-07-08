@@ -644,6 +644,8 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo }: { lo
   const [showRecebimentos, setShowRecebimentos] = useState(false);
   const [editBandeira, setEditBandeira] = useState<{ paymentId: string; currentBandeira: string; currentMethod: string; valor: number; saleHint: string } | null>(null);
   const [masterModal, setMasterModal] = useState(false);
+  // Lançamento (sangria/suprimento) em edição no modal master (editar/excluir).
+  const [editMov, setEditMov] = useState<Movimento | null>(null);
   const sangriasList = (loja.movimentos || []).filter((m) => m.tipo === 'sangria');
   const suprimentosList = (loja.movimentos || []).filter((m) => m.tipo === 'suprimento');
   const rec = loja.recebimentosCrediario || { totalGeral: 0, totalDinheiro: 0, totalPix: 0, baixas: [] };
@@ -693,6 +695,14 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo }: { lo
           date={loja.aberta ? null : dateFrom || null}
           onClose={() => setMasterModal(false)}
           onSaved={() => { setMasterModal(false); reload(); }}
+        />
+      )}
+      {editMov && (
+        <MovementEditModal
+          loja={loja}
+          mov={editMov}
+          onClose={() => setEditMov(null)}
+          onSaved={() => { setEditMov(null); reload(); }}
         />
       )}
 
@@ -1000,6 +1010,16 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo }: { lo
                             )}
                           </div>
                           <span className="font-mono font-bold tabular-nums text-rose-700 shrink-0">{brl(m.valor)}</span>
+                          {isAdmin && (
+                            <button
+                              type="button"
+                              onClick={() => setEditMov(m)}
+                              className="shrink-0 text-slate-400 hover:text-violet-600 leading-none"
+                              title="Editar / excluir (master)"
+                            >
+                              ✏️
+                            </button>
+                          )}
                         </div>
                       );
                     })}
@@ -1038,6 +1058,16 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo }: { lo
                             )}
                           </div>
                           <span className="font-mono font-bold tabular-nums text-amber-700 shrink-0">{brl(m.valor)}</span>
+                          {isAdmin && (
+                            <button
+                              type="button"
+                              onClick={() => setEditMov(m)}
+                              className="shrink-0 text-slate-400 hover:text-violet-600 leading-none"
+                              title="Editar / excluir (master)"
+                            >
+                              ✏️
+                            </button>
+                          )}
                         </div>
                       );
                     })}
@@ -1531,6 +1561,148 @@ function MasterAdjustModal({
 
         <p className="mt-3 text-[10px] text-slate-400 leading-tight">
           ⚠️ Acao registrada em log com seu usuario. Use somente pra correcoes legitimas — sem rastreabilidade visual no fluxo da vendedora.
+        </p>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// MOVEMENT EDIT MODAL — edita/exclui UM lançamento de sangria/suprimento.
+// Reusa a senha master (sessionStorage) do painel. PATCH edita valor/motivo;
+// DELETE (com confirmação) estorna. O backend recalcula o caixa do dia.
+// ═══════════════════════════════════════════════════════════════════════
+function MovementEditModal({
+  loja, mov, onClose, onSaved,
+}: {
+  loja: Loja;
+  mov: Movimento;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const ehSangria = mov.tipo === 'sangria';
+  const [password, setPassword] = useState<string>(() => {
+    try { return sessionStorage.getItem('flowops.masterPwd') || ''; } catch { return ''; }
+  });
+  const [savePwd, setSavePwd] = useState(true);
+  const [valor, setValor] = useState<string>(String(mov.valor ?? ''));
+  const [motivo, setMotivo] = useState<string>(mov.motivo || '');
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [errMsg, setErrMsg] = useState<string | null>(null);
+  const [okMsg, setOkMsg] = useState<string | null>(null);
+
+  const rememberPwd = () => {
+    if (savePwd) { try { sessionStorage.setItem('flowops.masterPwd', password); } catch {} }
+  };
+
+  async function salvar() {
+    setErrMsg(null); setOkMsg(null);
+    if (!password) { setErrMsg('Senha master obrigatoria'); return; }
+    const valorNum = Number(String(valor).replace(',', '.'));
+    if (isNaN(valorNum) || valorNum <= 0) { setErrMsg('Valor invalido'); return; }
+    if (!motivo || motivo.trim().length < 3) { setErrMsg('Informe o motivo (minimo 3 caracteres)'); return; }
+    setSaving(true);
+    try {
+      await api(`/pdv/caixa/master/movement/${mov.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ valor: valorNum, motivo: motivo.trim(), password }),
+      });
+      rememberPwd();
+      setOkMsg('Lançamento atualizado. Recarregando...');
+      setTimeout(() => onSaved(), 600);
+    } catch (e: any) {
+      setErrMsg(e?.message || 'Falha ao salvar');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function excluir() {
+    setErrMsg(null); setOkMsg(null);
+    if (!password) { setErrMsg('Senha master obrigatoria'); return; }
+    if (!window.confirm(`Excluir este lançamento de ${ehSangria ? 'sangria' : 'suprimento'} de ${brl(mov.valor)}?\n\nO caixa do dia é recalculado.`)) return;
+    setDeleting(true);
+    try {
+      await api(`/pdv/caixa/master/movement/${mov.id}`, {
+        method: 'DELETE',
+        body: JSON.stringify({ password }),
+      });
+      rememberPwd();
+      setOkMsg('Lançamento excluído. Recarregando...');
+      setTimeout(() => onSaved(), 600);
+    } catch (e: any) {
+      setErrMsg(e?.message || 'Falha ao excluir');
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
+  if (!mounted) return null;
+
+  const busy = saving || deleting;
+
+  return createPortal(
+    <div className="fixed inset-0 z-[9998] bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-5 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-start justify-between mb-3">
+          <div>
+            <h3 className="text-lg font-black text-slate-900">
+              {ehSangria ? '⬇️ Editar sangria' : '⬆️ Editar suprimento'}
+            </h3>
+            <p className="text-xs text-slate-500 font-bold">{loja.storeName} <span className="font-mono opacity-70">{loja.storeCode}</span></p>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-700 text-xl leading-none">×</button>
+        </div>
+
+        <label className="block text-xs font-bold text-slate-700 mb-1">Valor (R$)</label>
+        <input
+          type="number" step="0.01" min="0" value={valor}
+          onChange={(e) => setValor(e.target.value)} placeholder="0.00"
+          className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm mb-3 font-mono focus:outline-none focus:ring-2 focus:ring-violet-500"
+        />
+
+        <label className="block text-xs font-bold text-slate-700 mb-1">Motivo *</label>
+        <input
+          type="text" value={motivo}
+          onChange={(e) => setMotivo(e.target.value)} placeholder="motivo do lançamento"
+          className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm mb-3 focus:outline-none focus:ring-2 focus:ring-violet-500"
+        />
+
+        <label className="block text-xs font-bold text-slate-700 mb-1">Senha master *</label>
+        <input
+          type="password" value={password}
+          onChange={(e) => setPassword(e.target.value)} placeholder="senha" autoComplete="current-password"
+          className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm mb-2 font-mono focus:outline-none focus:ring-2 focus:ring-violet-500"
+        />
+        <label className="flex items-center gap-2 text-[11px] text-slate-600 mb-3 cursor-pointer">
+          <input type="checkbox" checked={savePwd} onChange={(e) => setSavePwd(e.target.checked)} />
+          Lembrar senha nesta sessao
+        </label>
+
+        {errMsg && <div className="bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded p-2 mb-3">{errMsg}</div>}
+        {okMsg && <div className="bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs rounded p-2 mb-3">{okMsg}</div>}
+
+        <div className="flex items-center justify-between gap-2">
+          <button
+            onClick={excluir} disabled={busy}
+            className="px-4 py-2 text-sm font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-lg disabled:opacity-40"
+          >
+            {deleting ? 'Excluindo...' : '🗑️ Excluir'}
+          </button>
+          <div className="flex gap-2">
+            <button onClick={onClose} disabled={busy} className="px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-100 rounded-lg disabled:opacity-40">Cancelar</button>
+            <button onClick={salvar} disabled={busy} className="px-4 py-2 text-sm font-bold text-white bg-violet-600 hover:bg-violet-700 rounded-lg disabled:opacity-40">
+              {saving ? 'Salvando...' : 'Salvar'}
+            </button>
+          </div>
+        </div>
+
+        <p className="mt-3 text-[10px] text-slate-400 leading-tight">
+          ⚠️ Ação registrada em log com seu usuario. O caixa do dia é recalculado ao salvar/excluir.
         </p>
       </div>
     </div>,
