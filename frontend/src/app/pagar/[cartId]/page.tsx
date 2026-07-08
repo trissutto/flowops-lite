@@ -210,14 +210,15 @@ export default function PagarPage() {
         {/* Itens */}
         <div className="rounded-2xl border border-[#EDE7D6] divide-y divide-[#F3EFE4] mb-3">
           {sum.items.map((it, idx) => (
-            <div key={idx} className="flex items-center gap-3 px-3 py-2.5">
+            <div key={idx} className="flex items-start gap-3 px-3 py-2.5">
               <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-semibold">{it.descricao}</div>
+                {/* Descrição completa — sem truncate (cliente precisa ler a peça inteira) */}
+                <div className="text-sm font-semibold leading-snug break-words">{it.descricao}</div>
                 <div className="text-[11px] text-[#8C8676]">
                   {[it.cor, it.tamanho].filter(Boolean).join(' · ')}{it.qty > 1 ? ` · ${it.qty}x` : ''}
                 </div>
               </div>
-              <div className="text-sm font-bold tabular-nums">{brl(it.priceCents * it.qty)}</div>
+              <div className="shrink-0 text-sm font-bold tabular-nums">{brl(it.priceCents * it.qty)}</div>
             </div>
           ))}
         </div>
