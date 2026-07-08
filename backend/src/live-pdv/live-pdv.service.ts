@@ -2134,6 +2134,28 @@ export class LivePdvService {
     const fromStore = await (this.prisma as any).store.findUnique({ where: { code: item.originStoreCode } });
     const toStore = await (this.prisma as any).store.findUnique({ where: { code: session.liveStoreCode } });
 
+    // PEÇA DA PRÓPRIA LOJA DA LIVE: não existe cessão entre lojas — nada de
+    // transferência pra si mesma nem obrigação. Só marca enviado.
+    const mesmaLoja =
+      (fromStore?.code || item.originStoreCode) === (toStore?.code || session.liveStoreCode);
+    if (mesmaLoja) {
+      const updatedSelf = await (this.prisma as any).livePdvItem.update({
+        where: { id: input.itemId },
+        data: {
+          status: 'shipped',
+          shippedAt: new Date(),
+          trackingCode: input.trackingCode || null,
+        },
+      });
+      await this.maybeAdvanceCart(item.cartId);
+      this.gateway.emitToLiveOps('live-pdv:item-shipped', {
+        cartId: item.cartId,
+        itemId: input.itemId,
+        transferOrderId: null,
+      });
+      return updatedSelf;
+    }
+
     // 1) Transferência interna (registro contábil origem → loja da live)
     const transfer = await (this.prisma as any).transferOrder.create({
       data: {
@@ -2154,12 +2176,15 @@ export class LivePdvService {
       },
     });
 
-    // 2) Obrigação intercompany (÷2,5) — só quando tipos diferem (REDE↔FILIAL),
-    //    seguindo a mesma regra do módulo financeiro.
+    // 2) Obrigação intercompany (÷2,5): a LOJA DA LIVE paga quem cedeu a peça
+    //    (decisão do dono 07/07 — acerto REDE×FRANQUIA). Gera sempre que os
+    //    DONOS diferem: REDE↔FRANQUIA e FRANQUIA↔FRANQUIA (franquias são donos
+    //    diferentes entre si). Única exceção: REDE→REDE (mesmo dono, sem acerto).
     let obligationId: string | null = null;
     const fromTipo = fromStore?.tipo === 'FILIAL' ? 'FILIAL' : 'REDE';
     const toTipo = toStore?.tipo === 'FILIAL' ? 'FILIAL' : 'REDE';
-    if (fromTipo !== toTipo) {
+    const mesmoDono = fromTipo === 'REDE' && toTipo === 'REDE';
+    if (!mesmoDono) {
       // Conciliação usa o preço CHEIO (base), não o promocional da live.
       const baseCents = item.basePriceCents || item.priceCents;
       const precoTotal = (baseCents * item.qty) / 100;
