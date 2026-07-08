@@ -1731,6 +1731,29 @@ export class LivePdvService {
     }));
   }
 
+  /**
+   * Edita o PREÇO de um item (negociação na hora). Só peça RESERVADA (não
+   * paga) — se o total mudar com cobrança pendente, o recalcCart já derruba o
+   * QR/link antigo e a operadora gera outro com o valor novo.
+   */
+  async setItemPrice(itemId: string, priceCents: number) {
+    if (!Number.isInteger(priceCents) || priceCents <= 0 || priceCents > 9999999) {
+      throw new BadRequestException('Preço inválido.');
+    }
+    const item = await (this.prisma as any).livePdvItem.findUnique({ where: { id: itemId } });
+    if (!item) throw new NotFoundException('Item não encontrado');
+    if (item.status !== 'reserved') {
+      throw new BadRequestException('Só peça reservada (ainda não paga) pode ter o preço alterado.');
+    }
+    await (this.prisma as any).livePdvItem.update({
+      where: { id: itemId },
+      data: { priceCents },
+    });
+    await this.recalcCart(item.cartId);
+    this.gateway.emitToLiveOps('live-pdv:cart-updated', { cartId: item.cartId });
+    return this.getCart(item.cartId);
+  }
+
   async cancelItem(itemId: string, reason?: string) {
     const item = await (this.prisma as any).livePdvItem.findUnique({ where: { id: itemId } });
     if (!item) throw new NotFoundException('Item não encontrado');
