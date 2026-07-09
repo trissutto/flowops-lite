@@ -3,9 +3,11 @@ import {
   Body,
   Controller,
   Get,
+  HttpException,
   NotFoundException,
   Param,
   Post,
+  Req,
 } from '@nestjs/common';
 import { LivePdvService } from './live-pdv.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -27,11 +29,55 @@ export class LivePayPublicController {
     private readonly prisma: PrismaService,
   ) {}
 
+  // ─── Rate limit dos resolvedores (@ e celular são chaves adivinháveis;
+  // sem isso dá pra enumerar os @ dos comentários da live). In-memory por
+  // IP: 10 tentativas / 5 min. Reinício do processo zera — aceitável.
+  private static readonly RL_WINDOW_MS = 5 * 60_000;
+  private static readonly RL_MAX = 10;
+  private readonly rlHits = new Map<string, { n: number; resetAt: number }>();
+
+  private throttleResolve(req: any): void {
+    const ip =
+      String(req?.headers?.['x-forwarded-for'] || '').split(',')[0].trim() ||
+      String(req?.ip || 'desconhecido');
+    const now = Date.now();
+    // Faxina ocasional pra Map não crescer sem limite
+    if (this.rlHits.size > 5000) {
+      for (const [k, v] of this.rlHits) if (v.resetAt < now) this.rlHits.delete(k);
+    }
+    const cur = this.rlHits.get(ip);
+    if (!cur || cur.resetAt < now) {
+      this.rlHits.set(ip, { n: 1, resetAt: now + LivePayPublicController.RL_WINDOW_MS });
+      return;
+    }
+    cur.n += 1;
+    if (cur.n > LivePayPublicController.RL_MAX) {
+      throw new HttpException('Muitas tentativas. Espera uns minutinhos e tenta de novo 💜', 429);
+    }
+  }
+
   // LINK MÁGICO: resolve o @ da cliente pro carrinho dela na LIVE ATIVA.
+  // Se o carrinho já tem celular, devolve challenge:'tel4' em vez do código
+  // (o @ é público nos comentários — os 4 dígitos provam que é a dona).
   // (Declarado ANTES do :cartId pra rota específica ganhar do coringa.)
   @Get('resolve-ig/:ig')
-  resolveByIg(@Param('ig') ig: string) {
+  resolveByIg(@Param('ig') ig: string, @Req() req: any) {
+    this.throttleResolve(req);
     return this.svc.resolveCartByIg(ig);
+  }
+
+  // Etapa 2 do desafio: 4 últimos dígitos do celular → código do checkout.
+  @Post('resolve-ig/:ig/verify')
+  verifyIg(@Param('ig') ig: string, @Body() body: { last4?: string }, @Req() req: any) {
+    this.throttleResolve(req);
+    return this.svc.verifyCartByIg(ig, String(body?.last4 || ''));
+  }
+
+  // Chave alternativa: CELULAR completo (só a dona sabe — abre direto).
+  @Get('resolve-tel/:tel')
+  resolveByTel(@Param('tel') tel: string, @Req() req: any) {
+    this.throttleResolve(req);
+    return this.svc.resolveCartByPhone(tel);
   }
 
   // O :cartId aceita o UUID antigo OU o payCode curto (/p/<code>).
@@ -93,8 +139,19 @@ export class LivePayPublicController {
     if (!cart) throw new NotFoundException('Compra não encontrada');
     const clean = (v: any, max: number) => String(v || '').trim().slice(0, max);
     const data: any = {};
+    // "Entregar neste endereço": o front não reenvia o endereço salvo (a
+    // página pública só mostra ele mascarado). Se nenhum campo de endereço
+    // veio E o carrinho já tem endereço completo, mantém o que está no banco.
+    const enderecoEnviado = [body?.endereco, body?.numero, body?.cidade, body?.uf]
+      .some((v) => String(v || '').trim());
+    const jaTemEndereco = !!(
+      String(cart.customerEndereco || '').trim() &&
+      String(cart.customerNumero || '').trim() &&
+      String(cart.customerCidade || '').trim() &&
+      String(cart.customerUf || '').trim()
+    );
     // Endereço: obrigatório só no modo ENTREGA (retirada em loja dispensa)
-    if (!cart.isPickup) {
+    if (!cart.isPickup && (enderecoEnviado || !jaTemEndereco)) {
       data.customerEndereco = clean(body?.endereco, 160);
       data.customerNumero = clean(body?.numero, 20);
       data.customerComplemento = clean(body?.complemento, 80);

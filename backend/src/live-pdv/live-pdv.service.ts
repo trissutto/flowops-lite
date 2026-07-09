@@ -938,9 +938,95 @@ export class LivePdvService {
    * mostra "pagamento confirmado"). Escopo = só a live ATIVA (não vaza
    * pedido antigo e limita a exposição de quem chutar @ alheio).
    */
-  async resolveCartByIg(igRaw: string): Promise<{ found: boolean; code?: string; reason?: string }> {
+  /**
+   * Núcleo do link mágico: acha o carrinho "alvo" na LIVE ATIVA pelo filtro
+   * dado. Prioriza carrinho cobrável (aberto/aguardando com total > 0).
+   */
+  private async findActiveLiveCart(where: any): Promise<{ cart?: any; reason?: string }> {
+    const session = await (this.prisma as any).livePdvSession.findFirst({
+      where: { status: 'live' },
+      orderBy: { startedAt: 'desc' },
+      select: { id: true },
+    });
+    if (!session) return { reason: 'sem_live' };
+    const carts = await (this.prisma as any).livePdvCart.findMany({
+      where: { sessionId: session.id, status: { not: 'cancelled' }, ...where },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!carts.length) return { reason: 'sem_carrinho' };
+    const cobravel = (carts as any[]).find(
+      (c) => ['open', 'awaiting_payment'].includes(c.status) && (c.totalCents || 0) > 0,
+    );
+    return { cart: cobravel || carts[0] };
+  }
+
+  /** Garante o link curto (backfill de carrinho antigo). */
+  private async ensurePayCode(cart: any): Promise<string | null> {
+    if (cart.payCode) return cart.payCode;
+    try {
+      const upd = await (this.prisma as any).livePdvCart.update({
+        where: { id: cart.id },
+        data: { payCode: this.genPayCode() },
+        select: { payCode: true },
+      });
+      return upd.payCode;
+    } catch { return null; /* colisão raríssima */ }
+  }
+
+  /**
+   * Resolve o @ da cliente pro carrinho dela. SEGURANÇA: o @ é público (fica
+   * nos comentários da live) — se o carrinho já tem celular, NÃO devolve o
+   * código direto: pede os 4 últimos dígitos (verifyCartByIg). Carrinho sem
+   * celular ainda não tem PII pra proteger → abre direto (fluxo PAGAR liso).
+   * Kill-switch: LIVE_RESOLVE_CHALLENGE=0 volta a abrir direto sempre.
+   */
+  async resolveCartByIg(
+    igRaw: string,
+  ): Promise<{ found: boolean; code?: string; reason?: string; challenge?: string }> {
     const ig = String(igRaw || '').trim().replace(/^@/, '');
     if (!ig) return { found: false, reason: 'sem_ig' };
+    const r = await this.findActiveLiveCart({
+      customerInstagram: { equals: ig, mode: 'insensitive' },
+    });
+    if (!r.cart) return { found: false, reason: r.reason };
+    const phone = String(r.cart.customerPhone || '').replace(/\D/g, '');
+    const challengeOn = process.env.LIVE_RESOLVE_CHALLENGE !== '0';
+    if (challengeOn && phone.length >= 10) return { found: true, challenge: 'tel4' };
+    const code = await this.ensurePayCode(r.cart);
+    if (!code) return { found: false, reason: 'sem_codigo' };
+    return { found: true, code };
+  }
+
+  /** Etapa 2 do desafio: confere os 4 últimos dígitos do celular do carrinho. */
+  async verifyCartByIg(
+    igRaw: string,
+    last4Raw: string,
+  ): Promise<{ found: boolean; code?: string; reason?: string }> {
+    const ig = String(igRaw || '').trim().replace(/^@/, '');
+    const last4 = String(last4Raw || '').replace(/\D/g, '');
+    if (!ig) return { found: false, reason: 'sem_ig' };
+    if (last4.length !== 4) return { found: false, reason: 'tel4_errado' };
+    const r = await this.findActiveLiveCart({
+      customerInstagram: { equals: ig, mode: 'insensitive' },
+    });
+    if (!r.cart) return { found: false, reason: r.reason };
+    const phone = String(r.cart.customerPhone || '').replace(/\D/g, '');
+    if (!phone.endsWith(last4)) return { found: false, reason: 'tel4_errado' };
+    const code = await this.ensurePayCode(r.cart);
+    if (!code) return { found: false, reason: 'sem_codigo' };
+    return { found: true, code };
+  }
+
+  /**
+   * Resolve pelo CELULAR completo (chave alternativa da landing). O número
+   * inteiro só a dona sabe — não fica público na live — então abre direto,
+   * sem desafio. Comparação pelos últimos 10 dígitos (tolera 9º dígito/DDI).
+   */
+  async resolveCartByPhone(
+    telRaw: string,
+  ): Promise<{ found: boolean; code?: string; reason?: string }> {
+    const tel = String(telRaw || '').replace(/\D/g, '');
+    if (tel.length < 10 || tel.length > 13) return { found: false, reason: 'tel_invalido' };
     const session = await (this.prisma as any).livePdvSession.findFirst({
       where: { status: 'live' },
       orderBy: { startedAt: 'desc' },
@@ -948,30 +1034,19 @@ export class LivePdvService {
     });
     if (!session) return { found: false, reason: 'sem_live' };
     const carts = await (this.prisma as any).livePdvCart.findMany({
-      where: {
-        sessionId: session.id,
-        status: { not: 'cancelled' },
-        customerInstagram: { equals: ig, mode: 'insensitive' },
-      },
+      where: { sessionId: session.id, status: { not: 'cancelled' } },
       orderBy: { createdAt: 'desc' },
     });
-    if (!carts.length) return { found: false, reason: 'sem_carrinho' };
-    const cobravel = (carts as any[]).find(
+    const alvoTel = tel.slice(-10);
+    const meus = (carts as any[]).filter((c) => {
+      const p = String(c.customerPhone || '').replace(/\D/g, '');
+      return p.length >= 10 && p.slice(-10) === alvoTel;
+    });
+    if (!meus.length) return { found: false, reason: 'sem_carrinho' };
+    const cobravel = meus.find(
       (c) => ['open', 'awaiting_payment'].includes(c.status) && (c.totalCents || 0) > 0,
     );
-    const alvo = cobravel || carts[0];
-    // Garante o link curto (backfill de carrinho antigo)
-    let code: string | null = alvo.payCode;
-    if (!code) {
-      try {
-        const upd = await (this.prisma as any).livePdvCart.update({
-          where: { id: alvo.id },
-          data: { payCode: this.genPayCode() },
-          select: { payCode: true },
-        });
-        code = upd.payCode;
-      } catch { /* colisão raríssima */ }
-    }
+    const code = await this.ensurePayCode(cobravel || meus[0]);
     if (!code) return { found: false, reason: 'sem_codigo' };
     return { found: true, code };
   }
@@ -1662,6 +1737,21 @@ export class LivePdvService {
    * Resumo PÚBLICO do carrinho pra página de fechamento da cliente
    * (/pagar/<cartId>). Só dados necessários — NÃO expõe CPF/telefone/custo.
    */
+  /**
+   * Resumo mascarado do endereço salvo — o suficiente pra DONA reconhecer
+   * ("R. das Fl…, 1** · Sorocaba/SP"), inútil pra curiosa que colou o @ dela.
+   */
+  private maskEnderecoResumo(cart: any): string | null {
+    const rua = String(cart.customerEndereco || '').trim();
+    const num = String(cart.customerNumero || '').trim();
+    const cidade = String(cart.customerCidade || '').trim();
+    const uf = String(cart.customerUf || '').trim();
+    if (!rua || !num || !cidade) return null;
+    const ruaMask = rua.length > 10 ? `${rua.slice(0, 10)}…` : rua;
+    const numMask = num.length > 1 ? `${num.slice(0, 1)}${'*'.repeat(Math.min(num.length - 1, 3))}` : `${num}*`;
+    return `${ruaMask}, ${numMask} · ${cidade}${uf ? `/${uf}` : ''}`;
+  }
+
   async publicCheckoutSummary(cartId: string) {
     const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
     if (!cart) throw new NotFoundException('Compra não encontrada');
@@ -1689,16 +1779,20 @@ export class LivePdvService {
       subtotalCents: cart.subtotalCents || 0,
       freteCents: cart.freteCents || 0,
       totalCents: cart.totalCents || 0,
-      cep: cart.customerCep || null,
-      // Endereço já salvo (prefill do formulário de entrega no checkout)
-      endereco: {
-        endereco: cart.customerEndereco || '',
-        numero: cart.customerNumero || '',
-        complemento: cart.customerComplemento || '',
-        bairro: cart.customerBairro || '',
-        cidade: cart.customerCidade || '',
-        uf: cart.customerUf || '',
-      },
+      // Endereço NUNCA sai inteiro — página é pública e o /meu-pedido resolve
+      // por @ (público nos comentários). A dona vê o resumo mascarado e usa
+      // "entregar neste endereço"; pra trocar, digita de novo. (Era prefill
+      // completo — vazava endereço de quem colasse o @ de outra.)
+      hasEndereco: !!(
+        String(cart.customerEndereco || '').trim() &&
+        String(cart.customerNumero || '').trim() &&
+        String(cart.customerCidade || '').trim() &&
+        String(cart.customerUf || '').trim()
+      ),
+      enderecoResumo: this.maskEnderecoResumo(cart),
+      cepMasked: String(cart.customerCep || '').replace(/\D/g, '').length === 8
+        ? `${String(cart.customerCep).replace(/\D/g, '').slice(0, 2)}•••-•••`
+        : null,
       // Flags de dados pessoais (SÓ booleans — página é pública, não vaza PII).
       // O checkout pede o que falta; celular é obrigatório pra pagar.
       dados: {

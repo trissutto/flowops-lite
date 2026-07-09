@@ -35,11 +35,12 @@ function parseErr(e: any): string {
 }
 
 type Item = { descricao: string; ref: string; cor: string | null; tamanho: string | null; qty: number; priceCents: number };
-type Endereco = { endereco: string; numero: string; complemento: string; bairro: string; cidade: string; uf: string };
 type Summary = {
   cartId: string; firstName: string; status: string; paymentMethod: string | null;
-  subtotalCents: number; freteCents: number; totalCents: number; cep: string | null;
-  endereco?: Endereco;
+  subtotalCents: number; freteCents: number; totalCents: number;
+  // Endereço salvo NUNCA vem inteiro (página pública) — só o resumo mascarado
+  // pra dona reconhecer e reutilizar sem redigitar.
+  hasEndereco?: boolean; enderecoResumo?: string | null; cepMasked?: string | null;
   dados?: { hasPhone: boolean; hasCpf: boolean; hasEmail: boolean };
   isPickup?: boolean; pickupStoreCode?: string | null; pickupStoreName?: string | null;
   lojas?: Array<{ code: string; name: string; city: string | null }>;
@@ -81,6 +82,9 @@ export default function PagarPage() {
   const [celular, setCelular] = useState('');
   const [cpf, setCpf] = useState('');
   const [email, setEmail] = useState('');
+  // Endereço já salvo no carrinho: mostra mascarado + "entregar neste" (sem
+  // redigitar). Trocar = digita tudo de novo (a página nunca vê o endereço real).
+  const [usarSalvo, setUsarSalvo] = useState(false);
   // Modo de recebimento: entrega (frete pelo CEP) ou retirada em loja (grátis)
   const [modo, setModo] = useState<'entrega' | 'retirada'>('entrega');
   const [lojaRetirada, setLojaRetirada] = useState('');
@@ -132,16 +136,22 @@ export default function PagarPage() {
   }, [cartId]);
 
   const enderecoOk =
-    rua.trim().length > 0 && numero.trim().length > 0 && cidade.trim().length > 0 && uf.trim().length === 2;
+    usarSalvo ||
+    (rua.trim().length > 0 && numero.trim().length > 0 && cidade.trim().length > 0 && uf.trim().length === 2);
   const celularOk = !!sum?.dados?.hasPhone || celular.replace(/\D/g, '').length >= 10;
 
-  // Salva endereço + contato no carrinho (obrigatório antes de gerar o pagamento)
+  // Salva endereço + contato no carrinho (obrigatório antes de gerar o pagamento).
+  // "Entregar no endereço salvo": NÃO reenvia endereço — o backend mantém o do banco.
   const saveEndereco = useCallback(async () => {
     await api(`/public/live-pay/${cartId}/endereco`, {
       method: 'POST',
-      body: JSON.stringify({ endereco: rua, numero, complemento, bairro, cidade, uf, celular, cpf, email }),
+      body: JSON.stringify(
+        usarSalvo
+          ? { celular, cpf, email }
+          : { endereco: rua, numero, complemento, bairro, cidade, uf, celular, cpf, email },
+      ),
     });
-  }, [cartId, rua, numero, complemento, bairro, cidade, uf, celular, cpf, email]);
+  }, [cartId, usarSalvo, rua, numero, complemento, bairro, cidade, uf, celular, cpf, email]);
 
   const load = useCallback(async () => {
     try {
@@ -154,14 +164,10 @@ export default function PagarPage() {
         setModo('retirada');
         setLojaRetirada(s.pickupStoreCode);
         setRetiradaOk(true);
-      } else if (s.cep) { setCep(maskCep(s.cep)); calcFrete(s.cep); }
-      if (s.endereco) {
-        setRua((prev) => prev || s.endereco!.endereco || '');
-        setNumero((prev) => prev || s.endereco!.numero || '');
-        setComplemento((prev) => prev || s.endereco!.complemento || '');
-        setBairro((prev) => prev || s.endereco!.bairro || '');
-        setCidade((prev) => prev || s.endereco!.cidade || '');
-        setUf((prev) => prev || s.endereco!.uf || '');
+      } else if (s.hasEndereco && (s.freteCents || 0) > 0) {
+        // Endereço + frete já salvos: reutiliza sem redigitar (e sem expor)
+        setUsarSalvo(true);
+        setFrete({ freteCents: s.freteCents, totalCents: s.totalCents, freteServico: '', freteRegiao: '' });
       }
     } catch { setLoadErr('Não encontramos essa compra. Confira o link com a loja. 💜'); }
   }, [cartId, calcFrete]);
@@ -299,7 +305,11 @@ export default function PagarPage() {
           <div className="grid grid-cols-2 gap-2">
             <button
               type="button"
-              onClick={() => { setModo('entrega'); setRetiradaOk(false); setLojaRetirada(''); if (cep.replace(/\D/g, '').length === 8) calcFrete(cep); }}
+              onClick={() => {
+                setModo('entrega'); setRetiradaOk(false); setLojaRetirada('');
+                if (usarSalvo && sum) setFrete({ freteCents: sum.freteCents, totalCents: sum.totalCents, freteServico: '', freteRegiao: '' });
+                else if (cep.replace(/\D/g, '').length === 8) calcFrete(cep);
+              }}
               className={`rounded-xl border-[1.5px] px-3 py-2.5 text-sm font-bold transition-colors ${
                 !retirada ? 'border-[#B8912B] bg-[#FBF6E6] text-[#8C7325]' : 'border-[#E4DDCB] bg-white text-[#7A7264]'
               }`}
@@ -344,8 +354,26 @@ export default function PagarPage() {
           </div>
         )}
 
+        {/* Endereço já salvo — mostra MASCARADO e reutiliza sem redigitar */}
+        {!retirada && usarSalvo && (
+          <div className="mb-4 rounded-2xl border-[1.5px] border-[#B8912B] bg-[#FBF6E6] px-4 py-3">
+            <div className="text-[13px] font-bold text-[#8C7325]">📦 Entregar no endereço salvo</div>
+            <div className="text-sm text-[#2A2620] mt-0.5">
+              {sum.enderecoResumo || 'Endereço cadastrado'}
+              {sum.cepMasked ? <span className="text-[#8C8676]"> · CEP {sum.cepMasked}</span> : null}
+            </div>
+            <button
+              type="button"
+              onClick={() => { setUsarSalvo(false); setFrete(null); setCep(''); }}
+              className="mt-1.5 text-[12px] font-bold text-[#8C7325] underline underline-offset-2"
+            >
+              Trocar endereço de entrega
+            </button>
+          </div>
+        )}
+
         {/* CEP / frete — só no modo ENTREGA */}
-        {!retirada && (
+        {!retirada && !usarSalvo && (
         <label className="block mb-4">
           <span className="block text-[13px] font-bold text-[#6B6456] mb-1.5">Seu CEP (pro frete)</span>
           <input
@@ -365,7 +393,7 @@ export default function PagarPage() {
         )}
 
         {/* Endereço de entrega — preenchido pelo CEP; a cliente confere e põe o número */}
-        {!retirada && frete && (
+        {!retirada && !usarSalvo && frete && (
           <div className="mb-4">
             <span className="block text-[13px] font-bold text-[#6B6456] mb-1.5">Endereço de entrega 📦</span>
             <div className="space-y-2">
