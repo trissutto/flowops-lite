@@ -296,7 +296,11 @@ function PublicLanding() {
     e.preventDefault();
     const clean = ig.trim().replace(/^@/, '');
     if (!clean) return;
-    router.push(`/meu-pedido?ig=${encodeURIComponent('@' + clean)}`);
+    // Aceita @ do Instagram OU celular: 10+ dígitos = telefone
+    const digits = clean.replace(/\D/g, '');
+    const isTel = digits.length >= 10 && digits.length === clean.replace(/[\s()\-.]/g, '').length;
+    if (isTel) router.push(`/meu-pedido?tel=${digits}`);
+    else router.push(`/meu-pedido?ig=${encodeURIComponent('@' + clean)}`);
   }
 
   return (
@@ -337,7 +341,7 @@ function PublicLanding() {
             <h2 className="font-bold text-[#2A2620]">Comprou na live?</h2>
           </div>
           <p className="text-[#7A7264] text-sm mb-3">
-            Digite seu @ do Instagram pra ver sua sacolinha e finalizar o pagamento.
+            Digite seu <b>@ do Instagram</b> ou seu <b>celular</b> pra ver sua sacolinha e finalizar o pagamento.
           </p>
           <div className="flex gap-2">
             <div className="flex-1 flex items-center rounded-xl border border-[#E4DCC8] bg-[#FBF9F4] px-3 focus-within:border-[#B8912B]">
@@ -345,7 +349,7 @@ function PublicLanding() {
               <input
                 value={ig}
                 onChange={(e) => setIg(e.target.value)}
-                placeholder="seu.instagram"
+                placeholder="seu.instagram ou celular"
                 autoCapitalize="none"
                 autoCorrect="off"
                 spellCheck={false}
