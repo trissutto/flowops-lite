@@ -540,6 +540,35 @@ export default function LivePdvPage() {
     api(`/live-pdv/carts/${c.id}/mark-charged`, { method: 'POST', body: JSON.stringify({}) }).catch(() => {});
   }
 
+  // "JÁ PAGOU por fora" direto na fila: vira PAGO → SAI da lista de cobrança
+  // (pedido do dono 09/07: cliente que pagou no PIX da loja era recobrada).
+  const [payingExternal, setPayingExternal] = useState<Record<string, boolean>>({});
+  async function markPaidExternal(c: Cart) {
+    if (payingExternal[c.id]) return;
+    if (
+      !confirm(
+        `Confirmar que ${c.customerName} JÁ PAGOU (${brl(c.totalCents)}) por fora?\n\n` +
+          'O carrinho vira PAGO, sai da cobrança e entra no fluxo de separação.',
+      )
+    )
+      return;
+    setPayingExternal((s) => ({ ...s, [c.id]: true }));
+    try {
+      await api(`/live-pdv/carts/${c.id}/pay-external`, { method: 'POST', body: JSON.stringify({}) });
+      await refreshCarts();
+    } catch (e: any) {
+      const raw = String(e?.message || '');
+      let msg = 'Erro ao marcar pago.';
+      try {
+        const j = JSON.parse(raw.slice(raw.indexOf(': ') + 2));
+        if (j?.message) msg = Array.isArray(j.message) ? j.message[0] : j.message;
+      } catch { /* cru */ }
+      alert(msg);
+    } finally {
+      setPayingExternal((s) => ({ ...s, [c.id]: false }));
+    }
+  }
+
   // Cobra UMA cliente automático via ManyChat (DM direto, chega com Insta fechado)
   const [dmOneSending, setDmOneSending] = useState<Record<string, boolean>>({});
   async function chargeOneDm(c: Cart) {
@@ -1611,6 +1640,15 @@ export default function LivePdvPage() {
                         WhatsApp
                       </button>
                     )}
+                    <button
+                      type="button"
+                      onClick={() => markPaidExternal(c)}
+                      disabled={!!payingExternal[c.id]}
+                      title="Cliente já pagou por fora (PIX da loja)? Marca PAGO — sai da cobrança e vai pra separação"
+                      className="shrink-0 rounded-lg border border-emerald-300 bg-white px-2.5 py-1.5 text-[11px] font-bold text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+                    >
+                      {payingExternal[c.id] ? '…' : '✓ Pagou'}
+                    </button>
                   </div>
                 );
               })}
