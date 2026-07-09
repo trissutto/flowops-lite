@@ -20,7 +20,7 @@ import {
   LayoutDashboard, Globe2, Store, BarChart3, Settings, Instagram,
   RefreshCw, Zap, Bot, ArrowUpRight, type LucideIcon,
   ShoppingBag, Shuffle, Package2, AlertTriangle, Truck, CreditCard, Bell,
-  Building2, Users,
+  Building2, Users, Lock,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { isPilotOn, fetchPilotStatus, togglePilotServer, PilotStatus } from '@/lib/auto-send-order';
@@ -41,6 +41,9 @@ export default function DashboardHome() {
   const [userName, setUserName] = useState<string>('');
   const [supremo, setSupremo] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  // Visitante sem token (cliente que digitou www.lurdsplussize.com.br) vê a
+  // landing pública em vez da tela de login — equipe entra pelo link discreto.
+  const [visitor, setVisitor] = useState(false);
 
   // Pilot
   const [pilot, setPilot] = useState(false);
@@ -86,6 +89,8 @@ export default function DashboardHome() {
   }
 
   useEffect(() => {
+    // Sem token = visitante — não dispara chamadas autenticadas do dashboard.
+    if (typeof window !== 'undefined' && !localStorage.getItem('flowops_token')) return;
     loadAlerts();
     const id = setInterval(loadAlerts, 60_000);
     return () => clearInterval(id);
@@ -95,7 +100,7 @@ export default function DashboardHome() {
   useEffect(() => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('flowops_token') : null;
     if (!token) {
-      router.push('/login');
+      setVisitor(true);
       return;
     }
     api<{ role: string; name?: string; email?: string }>('/auth/me')
@@ -113,6 +118,7 @@ export default function DashboardHome() {
 
   // Pilot status
   useEffect(() => {
+    if (typeof window !== 'undefined' && !localStorage.getItem('flowops_token')) return;
     setPilot(isPilotOn());
     let cancelled = false;
     async function sync() {
@@ -187,6 +193,9 @@ export default function DashboardHome() {
   // Relógio HH:MM:SS
   const clockHHMM = now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
   const clockSS = now.toLocaleTimeString('pt-BR', { second: '2-digit' });
+
+  // Visitante (cliente) — landing pública da Lurd's, sem tela de login na cara.
+  if (visitor) return <PublicLanding />;
 
   return (
     <AdminShell
@@ -272,6 +281,117 @@ export default function DashboardHome() {
       </section>
 
     </AdminShell>
+  );
+}
+
+// ============================================================================
+// PublicLanding — o que a CLIENTE vê ao abrir www.lurdsplussize.com.br sem
+// login. Mesma paleta dourada/creme das páginas públicas da live (/p/...).
+// ============================================================================
+function PublicLanding() {
+  const router = useRouter();
+  const [ig, setIg] = useState('');
+
+  function goSacola(e: React.FormEvent) {
+    e.preventDefault();
+    const clean = ig.trim().replace(/^@/, '');
+    if (!clean) return;
+    router.push(`/meu-pedido?ig=${encodeURIComponent('@' + clean)}`);
+  }
+
+  return (
+    <main
+      className="min-h-screen flex flex-col items-center justify-center px-4 py-10"
+      style={{ background: 'linear-gradient(160deg, #FBF9F4 0%, #FBF6E6 55%, #F5EAD8 100%)' }}
+    >
+      <div className="w-full max-w-[420px] flex flex-col gap-4">
+        {/* Marca */}
+        <div className="text-center mb-2">
+          <div
+            className="mx-auto w-20 h-20 rounded-full flex items-center justify-center text-white text-4xl font-bold shadow-[0_10px_30px_rgba(140,115,37,0.25)]"
+            style={{
+              background: 'linear-gradient(135deg, #D4AF37 0%, #B8912B 60%, #8C7325 100%)',
+              fontFamily: 'var(--font-display), Georgia, serif',
+            }}
+          >
+            L
+          </div>
+          <h1
+            className="mt-4 text-3xl text-[#2A2620] font-bold"
+            style={{ fontFamily: 'var(--font-display), Georgia, serif' }}
+          >
+            Lurd&apos;s Plus Size
+          </h1>
+          <p className="text-[#7A7264] text-sm mt-1">
+            Moda plus size · Lojas físicas · Lives no Instagram
+          </p>
+        </div>
+
+        {/* Sacolinha da live */}
+        <form
+          onSubmit={goSacola}
+          className="bg-white border border-[#EDE7D6] rounded-3xl p-5 shadow-[0_10px_30px_rgba(140,115,37,0.08)]"
+        >
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-xl">🛍️</span>
+            <h2 className="font-bold text-[#2A2620]">Comprou na live?</h2>
+          </div>
+          <p className="text-[#7A7264] text-sm mb-3">
+            Digite seu @ do Instagram pra ver sua sacolinha e finalizar o pagamento.
+          </p>
+          <div className="flex gap-2">
+            <div className="flex-1 flex items-center rounded-xl border border-[#E4DCC8] bg-[#FBF9F4] px-3 focus-within:border-[#B8912B]">
+              <span className="text-[#B8912B] font-bold">@</span>
+              <input
+                value={ig}
+                onChange={(e) => setIg(e.target.value)}
+                placeholder="seu.instagram"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                className="w-full bg-transparent px-1.5 py-2.5 text-[#2A2620] placeholder-[#B5AC99] outline-none text-sm"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={!ig.trim().replace(/^@/, '')}
+              className="px-4 rounded-xl text-white font-bold text-sm shadow-sm transition hover:opacity-90 disabled:opacity-40"
+              style={{ background: 'linear-gradient(135deg, #B8912B 0%, #8C7325 100%)' }}
+            >
+              Ver
+            </button>
+          </div>
+        </form>
+
+        {/* Links da marca */}
+        <a
+          href="https://lurds.com.br"
+          className="flex items-center justify-center gap-2 rounded-2xl py-3.5 text-white font-bold shadow-sm transition hover:opacity-90"
+          style={{ background: 'linear-gradient(135deg, #B8912B 0%, #8C7325 100%)' }}
+        >
+          <ShoppingBag className="w-5 h-5" />
+          Comprar no site
+        </a>
+        <a
+          href="https://instagram.com/lurdsplussize"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center justify-center gap-2 rounded-2xl py-3.5 font-bold bg-white border border-[#EDE7D6] text-[#2A2620] shadow-sm transition hover:bg-[#FBF6E6]"
+        >
+          <Instagram className="w-5 h-5 text-[#B8912B]" />
+          @lurdsplussize
+        </a>
+
+        {/* Acesso da equipe — discreto */}
+        <Link
+          href="/login"
+          className="mt-3 mx-auto flex items-center gap-1.5 text-xs text-[#B5AC99] hover:text-[#8C7325] transition"
+        >
+          <Lock className="w-3 h-3" />
+          Acesso restrito · equipe
+        </Link>
+      </div>
+    </main>
   );
 }
 
