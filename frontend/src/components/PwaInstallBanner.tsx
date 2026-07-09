@@ -19,6 +19,7 @@
 import { useEffect, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import { X, Download, Share } from 'lucide-react';
+import { getAuthToken } from '@/lib/api';
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -33,6 +34,9 @@ export default function PwaInstallBanner() {
   const [promptEvent, setPromptEvent] = useState<BeforeInstallPromptEvent | null>(null);
   const [showIosHint, setShowIosHint] = useState(false);
   const [isStandalone, setIsStandalone] = useState(false);
+  // O PWA é da EQUIPE — visitante (cliente na landing pública) não vê o banner.
+  const [authed, setAuthed] = useState(false);
+  useEffect(() => { setAuthed(!!getAuthToken()); }, [pathname]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -102,6 +106,10 @@ export default function PwaInstallBanner() {
 
   // Páginas públicas da cliente (cadastro / fechamento da compra) — sem chrome de app
   if (pathname?.startsWith('/cadastro-live') || pathname?.startsWith('/pagar') || pathname?.startsWith('/p/') || pathname?.startsWith('/meu-pedido')) return null;
+
+  // Sem login = visitante (ex.: cliente na landing do lurdsplussize.com.br) →
+  // nada de "instale o app". Exceção: /login, pra vendedora instalar antes de entrar.
+  if (!authed && pathname !== '/login') return null;
 
   // Já instalado → não mostra nada
   if (isStandalone) return null;
