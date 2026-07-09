@@ -27,6 +27,13 @@ export class LivePayPublicController {
     private readonly prisma: PrismaService,
   ) {}
 
+  // LINK MÁGICO: resolve o @ da cliente pro carrinho dela na LIVE ATIVA.
+  // (Declarado ANTES do :cartId pra rota específica ganhar do coringa.)
+  @Get('resolve-ig/:ig')
+  resolveByIg(@Param('ig') ig: string) {
+    return this.svc.resolveCartByIg(ig);
+  }
+
   // O :cartId aceita o UUID antigo OU o payCode curto (/p/<code>).
   @Get(':cartId')
   async summary(@Param('cartId') key: string) {

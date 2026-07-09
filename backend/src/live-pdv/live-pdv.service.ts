@@ -928,6 +928,55 @@ export class LivePdvService {
   }
 
   /**
+   * LINK MÁGICO por @ (rota pública /meu-pedido?ig=@): acha o carrinho da
+   * cliente NA LIVE ATIVA e devolve o payCode pra página redirecionar pro
+   * checkout dela (/p/<code>). É o que o ManyChat manda quando ela comenta
+   * "PAGAR" — sempre dentro da janela de 24h, sem depender de vínculo.
+   *
+   * Prioridade de escolha: carrinho cobrável (open/awaiting com peças) mais
+   * recente; senão o mais recente de qualquer status (pago → a página já
+   * mostra "pagamento confirmado"). Escopo = só a live ATIVA (não vaza
+   * pedido antigo e limita a exposição de quem chutar @ alheio).
+   */
+  async resolveCartByIg(igRaw: string): Promise<{ found: boolean; code?: string; reason?: string }> {
+    const ig = String(igRaw || '').trim().replace(/^@/, '');
+    if (!ig) return { found: false, reason: 'sem_ig' };
+    const session = await (this.prisma as any).livePdvSession.findFirst({
+      where: { status: 'live' },
+      orderBy: { startedAt: 'desc' },
+      select: { id: true },
+    });
+    if (!session) return { found: false, reason: 'sem_live' };
+    const carts = await (this.prisma as any).livePdvCart.findMany({
+      where: {
+        sessionId: session.id,
+        status: { not: 'cancelled' },
+        customerInstagram: { equals: ig, mode: 'insensitive' },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!carts.length) return { found: false, reason: 'sem_carrinho' };
+    const cobravel = (carts as any[]).find(
+      (c) => ['open', 'awaiting_payment'].includes(c.status) && (c.totalCents || 0) > 0,
+    );
+    const alvo = cobravel || carts[0];
+    // Garante o link curto (backfill de carrinho antigo)
+    let code: string | null = alvo.payCode;
+    if (!code) {
+      try {
+        const upd = await (this.prisma as any).livePdvCart.update({
+          where: { id: alvo.id },
+          data: { payCode: this.genPayCode() },
+          select: { payCode: true },
+        });
+        code = upd.payCode;
+      } catch { /* colisão raríssima */ }
+    }
+    if (!code) return { found: false, reason: 'sem_codigo' };
+    return { found: true, code };
+  }
+
+  /**
    * IMPORTADOR de vínculos ManyChat (CSV Contatos → user_id + @): casa cada
    * linha com o cadastro pelo @ (case-insensitive) e grava o
    * manychatSubscriberId em lote. Não cria cliente — só vincula quem já existe.
