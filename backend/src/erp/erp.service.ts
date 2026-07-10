@@ -1884,6 +1884,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   async getRefCatalogSnapshot(): Promise<Array<{
     ref: string;
     descricao: string;
+    busca: string;
     marca: string;
     fornecedor: string;
     categoria: string;
@@ -1895,9 +1896,15 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     // sintética "#<codigo>" — assim meias/acessórios sem REF aparecem na tela
     // de classificação e podem ser excluídos de promoção. O prefixo "#" evita
     // colisão com REFs reais numéricas (ex.: REF "611" ≠ CÓDIGO 611).
+    //
+    // `busca` = TODAS as descrições da REF concatenadas (GROUP_CONCAT).
+    // BUG corrigido: com só MAX(descricao), a pesquisa enxergava UMA variação
+    // da REF — produto novo na mesma REF (ex.: "2319 KASUAL") sumia da busca
+    // quando a descrição agregada era a de OUTRO item da REF.
     const sql = `
       SELECT TRIM(UPPER(p.REF))                                   AS ref,
              MAX(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAOPDV, '')) AS descricao,
+             SUBSTRING(GROUP_CONCAT(DISTINCT UPPER(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAOPDV, '')) SEPARATOR ' '), 1, 8000) AS busca,
              MAX(COALESCE(p.MARCA, ''))                           AS marca,
              MAX(COALESCE(p.FORNECEDOR, ''))                      AS fornecedor,
              MAX(COALESCE(p.NOMEGRUPO, ''))                       AS categoria,
@@ -1911,6 +1918,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
 
       SELECT CONCAT('#', p.CODIGO)                                AS ref,
              COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAOPDV, '')    AS descricao,
+             UPPER(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAOPDV, '')) AS busca,
              COALESCE(p.MARCA, '')                                AS marca,
              COALESCE(p.FORNECEDOR, '')                           AS fornecedor,
              COALESCE(p.NOMEGRUPO, '')                            AS categoria,
@@ -1921,15 +1929,21 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
          AND TRIM(p.CODIGO) <> ''
        LIMIT 400000
     `;
+    let conn: mysql.PoolConnection | null = null;
     try {
       const t0 = Date.now();
-      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql);
+      // GROUP_CONCAT trunca no default de 1024 bytes — REF com muitas
+      // variações perderia descrições. Sobe o limite NA MESMA conexão.
+      conn = await this.pool.getConnection();
+      await conn.query('SET SESSION group_concat_max_len = 65535');
+      const [rows] = await conn.query<mysql.RowDataPacket[]>({ sql, timeout: 120_000 });
       this.logger.log(
         `[erp] getRefCatalogSnapshot: ${(rows as any[]).length} REF(s) em ${Date.now() - t0}ms`,
       );
       return (rows as any[]).map((r) => ({
         ref: String(r.ref || '').trim(),
         descricao: String(r.descricao || '').trim(),
+        busca: String(r.busca || '').trim(),
         marca: String(r.marca || '').trim(),
         fornecedor: String(r.fornecedor || '').trim(),
         categoria: String(r.categoria || '').trim(),
@@ -1938,6 +1952,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     } catch (e) {
       this.logger.error(`getRefCatalogSnapshot falhou: ${(e as Error).message}`);
       throw e;
+    } finally {
+      try { conn?.release(); } catch { /* já liberada */ }
     }
   }
 
