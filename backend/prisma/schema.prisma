@@ -96,6 +96,15 @@ model Store {
   canSendRealign    Boolean  @default(true) @map("can_send_realign")
   canReceiveRealign Boolean  @default(true) @map("can_receive_realign")
 
+  // ── Geofence do PONTO ──
+  // Trava anti-fraude: só deixa bater ponto dentro do raio da loja. Opt-in por
+  // loja (default off pra não travar quem ainda não configurou coordenadas).
+  // pontoLat/pontoLng = coordenadas da loja; pontoRaioM = raio em metros.
+  pontoGeofence Boolean @default(false) @map("ponto_geofence")
+  pontoLat      Float?  @map("ponto_lat")
+  pontoLng      Float?  @map("ponto_lng")
+  pontoRaioM    Int     @default(150) @map("ponto_raio_m")
+
   // ── Consolidação de Grade (Sprint 0) ──
   // Score que define o "peso" da loja como destino quando o sistema
   // CONSOLIDA peças fragmentadas (ex: REF velha, pouca peça, espalhada

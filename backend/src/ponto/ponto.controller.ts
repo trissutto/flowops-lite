@@ -219,4 +219,20 @@ export class PontoController {
       userId: this.currentUser(req) || undefined,
     });
   }
+
+  // ── GEOFENCE do ponto (config por loja — matriz) ──────────────────
+  @Get('geofence/:storeId')
+  getGeofence(@Param('storeId') storeId: string) {
+    return this.svc.getGeofence(storeId);
+  }
+
+  @Post('geofence/:storeId')
+  @UseGuards(AdminOnlyGuard)
+  @AdminOnly()
+  setGeofence(
+    @Param('storeId') storeId: string,
+    @Body() body: { ativo?: boolean; lat?: number | null; lng?: number | null; raioM?: number },
+  ) {
+    return this.svc.setGeofence(storeId, body);
+  }
 }

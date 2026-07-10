@@ -180,6 +180,20 @@ export default function PontoPage() {
     lastSuccessRef.current = lastSuccess ? { name: lastSuccess.name } : null;
   }, [lastSuccess]);
 
+  // GEOFENCE: mantém a última localização conhecida do aparelho pra mandar na
+  // batida. O backend valida contra o raio da loja (se a loja tiver geofence
+  // ligado). watchPosition atualiza sozinho — a 1ª leitura pode levar segundos.
+  const coordsRef = useRef<{ lat: number; lng: number } | null>(null);
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !navigator.geolocation) return;
+    const id = navigator.geolocation.watchPosition(
+      (p) => { coordsRef.current = { lat: p.coords.latitude, lng: p.coords.longitude }; },
+      () => { /* negado/indisponível — coordsRef fica null; backend decide */ },
+      { enableHighAccuracy: true, maximumAge: 30_000, timeout: 20_000 },
+    );
+    return () => navigator.geolocation.clearWatch(id);
+  }, []);
+
   async function baterAuto(match: { seller: SellerDescriptors; distance: number }) {
     if (!me?.storeId) return;
     // Cooldown SÍNCRONO já na entrada: o loop continua detectando a PRÓXIMA
@@ -200,6 +214,8 @@ export default function PontoPage() {
           source: 'face_pdv',
           faceConfidence: confidence,
           snapshot,
+          lat: coordsRef.current?.lat,
+          lng: coordsRef.current?.lng,
         }),
       });
       setLastSuccess({
