@@ -137,12 +137,13 @@ export class ProductClassificationService {
       if (categoria && r.categoria.toUpperCase() !== categoria) return false;
 
       if (words.length) {
-        // Busca por texto considera SÓ referência + descrições (decisão do dono).
-        // Marca e fornecedor ficam de fora: marca é quase toda igual (LUNENDER) e
-        // fornecedor traz dado sujo (CNPJ/ruído) — ambos poluíam o resultado.
-        // `busca` cobre TODAS as variações da REF (não só uma) — produto novo
-        // dentro de uma REF antiga aparece na pesquisa pelo nome dele.
-        const hay = `${r.ref} ${r.busca || r.descricao}`.toUpperCase();
+        // Busca por texto = REF + descrições + MARCA (igual às telas de consulta/
+        // realinhamento, onde o dono busca por "REF MARCA", ex.: "2319 KASUAL").
+        // A MARCA precisa entrar: antes "2319 KASUAL" dava ZERO porque "KASUAL"
+        // é a marca do 2319 e não estava em nenhuma descrição.
+        // Fornecedor SEGUE de fora (dado sujo: CNPJ/ruído poluía o resultado).
+        // `busca` cobre TODAS as variações da REF (não só uma).
+        const hay = `${r.ref} ${r.busca || r.descricao} ${r.marca || ''}`.toUpperCase();
         for (const w of words) if (!hay.includes(w)) return false;
       }
 
@@ -305,7 +306,7 @@ export class ProductClassificationService {
     const snapAntes = this.snapshot || [];
     const idadeMin = this.snapshotAt ? Math.round((Date.now() - this.snapshotAt) / 60000) : null;
     const matchAntes = snapAntes
-      .filter((r) => `${r.ref} ${r.busca || ''} ${r.descricao}`.toUpperCase().includes(term))
+      .filter((r) => `${r.ref} ${r.busca || ''} ${r.descricao} ${r.marca || ''}`.toUpperCase().includes(term))
       .slice(0, 10)
       .map((r) => ({ ref: r.ref, descricao: r.descricao.slice(0, 80) }));
 
@@ -317,7 +318,7 @@ export class ProductClassificationService {
       const snap = await this.getSnapshot(true);
       totalDepois = snap.length;
       matchDepois = snap
-        .filter((r) => `${r.ref} ${r.busca || ''} ${r.descricao}`.toUpperCase().includes(term))
+        .filter((r) => `${r.ref} ${r.busca || ''} ${r.descricao} ${r.marca || ''}`.toUpperCase().includes(term))
         .slice(0, 10)
         .map((r) => ({ ref: r.ref, descricao: r.descricao.slice(0, 80) }));
     } catch (e: any) {
