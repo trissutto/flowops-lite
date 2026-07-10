@@ -233,13 +233,23 @@ export class ProductClassificationService {
     // (DATAALT mais recente). Regra da promoção de julho: cadastro até
     // 31/12/2023 = 50% OFF, EXCETO linha BÁSICA — a MESMA regra YEAR_BASED
     // que o PDV aplica na venda.
-    const precoByRef = await this.getPrecoEDataByRefs(pageRows.map((r) => r.ref));
+    //
+    // ── EXIBIÇÃO (10/07) — descrição/preço da FAMÍLIA DOMINANTE da REF, do
+    // espelho giga_produto (a MESMA fonte da live). REF ambígua (2319 =
+    // helicóptero 2016 + blusão KASUAL atual) mostrava linha Frankenstein:
+    // descrição/preço do helicóptero (MAX alfabético) com marca do blusão.
+    const [precoByRef, displayByRef] = await Promise.all([
+      this.getPrecoEDataByRefs(pageRows.map((r) => r.ref)),
+      this.productSearch.displayInfoByRefs(pageRows.map((r) => r.ref)),
+    ]);
 
     const rows = pageRows.map((r) => {
       const c = cls.get(r.ref);
       const tipoProduto = c ? c.tipoProduto : 0;
       const info = precoByRef.get(r.ref) || null;
-      const preco = info?.preco ?? null;
+      const display = displayByRef.get(r.ref) || null;
+      // Preço: família dominante (giga_produto, fonte da live) > wincred_produtos.
+      const preco = display?.preco ?? info?.preco ?? null;
       const dataCadastro = info?.dataCadastro ?? null;
       const isBasico = tipoProduto === 1;
       const elegivel = !!dataCadastro && dataCadastro <= PROMO_JULHO_CUTOFF;
@@ -248,7 +258,7 @@ export class ProductClassificationService {
         : null;
       return {
         ref: r.ref,
-        descricao: r.descricao,
+        descricao: display?.descricao || r.descricao,
         marca: r.marca,
         fornecedor: r.fornecedor,
         categoria: r.categoria,
