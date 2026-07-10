@@ -234,13 +234,16 @@ export class ProductClassificationService {
     // 31/12/2023 = 50% OFF, EXCETO linha BÁSICA — a MESMA regra YEAR_BASED
     // que o PDV aplica na venda.
     //
-    // ── EXIBIÇÃO (10/07) — descrição/preço da FAMÍLIA DOMINANTE da REF, do
-    // espelho giga_produto (a MESMA fonte da live). REF ambígua (2319 =
-    // helicóptero 2016 + blusão KASUAL atual) mostrava linha Frankenstein:
-    // descrição/preço do helicóptero (MAX alfabético) com marca do blusão.
+    // ── EXIBIÇÃO (10/07) — descrição/preço da REF vindos do espelho
+    // giga_produto (a MESMA fonte da live). Com BUSCA ativa, mostra a família
+    // QUE CASOU com a busca (caso REF 321: "KASUAL VEST" achava o VESTIDO 321
+    // KASUAL mas exibia a BERMUDA YACIMA, família dominante da mesma REF);
+    // sem busca, mostra a FAMÍLIA DOMINANTE (caso REF 2319: helicóptero 2016
+    // × blusão atual — MAX alfabético montava linha Frankenstein).
+    const searchWords = String(f.search || '').trim().split(/\s+/).filter((w) => w.length >= 2);
     const [precoByRef, displayByRef] = await Promise.all([
       this.getPrecoEDataByRefs(pageRows.map((r) => r.ref)),
-      this.productSearch.displayInfoByRefs(pageRows.map((r) => r.ref)),
+      this.productSearch.displayInfoByRefs(pageRows.map((r) => r.ref), { matchWords: searchWords }),
     ]);
 
     const rows = pageRows.map((r) => {
