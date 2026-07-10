@@ -104,11 +104,28 @@ function ReimprimirNfceInner() {
 
   // Dispara o print quando a venda tem NFC-e autorizada E o QR local já ficou
   // pronto (data URL é imediato). Se não há QR esperado, imprime mesmo assim.
+  //
+  // No APP DESKTOP (Electron): sinaliza notifyPrintReady → o main imprime
+  // SILENCIOSO na térmica 80mm configurada, SEM diálogo/preview (o preview
+  // abria em A4 e o cupom saía desalinhado — decisão do dono, 10/07).
+  // window.print() só no browser puro (mesmo padrão do recibo).
   useEffect(() => {
     if (!sale || !sale.nfceChave) return;
     const qrExpected = !!extractQrUrl(sale);
     if (qrExpected && !qrDataUrl) return; // aguarda o QR local ser gerado
-    const t = setTimeout(() => { try { window.print(); } catch {} }, 300);
+    const t = setTimeout(() => {
+      const electron = (window as any).electronAPI;
+      if (electron?.notifyPrintReady) {
+        try {
+          electron.notifyPrintReady();
+        } catch (e) {
+          console.warn('notifyPrintReady falhou:', e);
+          try { window.print(); } catch {}
+        }
+      } else {
+        try { window.print(); } catch {}
+      }
+    }, 300);
     return () => clearTimeout(t);
   }, [sale, qrDataUrl]);
 

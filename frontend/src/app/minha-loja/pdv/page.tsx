@@ -6577,7 +6577,10 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
         } catch (e) {
           // Se gerar QR falhar, segue pra impressao (cupom sai sem QR, mas sai)
         }
-        setTimeout(function() { window.print(); }, 200);
+        // SEM window.print() aqui (10/07): este HTML roda DENTRO da janela
+        // oculta do Electron, e quem imprime eh o main (silencioso, termica
+        // 80mm configurada). O window.print() extra abria o dialogo/preview
+        // por cima, com margens de A4 — e o cupom saia DESALINHADO.
       }
       if (document.readyState === 'complete') renderAndPrint();
       else window.addEventListener('load', renderAndPrint);
@@ -6592,9 +6595,14 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
       const electron = (window as any).electronAPI;
       if (isElectron() && electron?.silentPrintHTML) {
         const cfg = loadPrinterConfig();
-        if (cfg.termica) {
-          await electron.setConfig({ printer: cfg.termica });
-        }
+        // Força modo SILENCIOSO + térmica 80mm configurada (10/07): o toggle
+        // "com diálogo" do tray do app NÃO vale pra NFC-e — o diálogo/preview
+        // abria com margens de A4 e o cupom saía desalinhado. Nota fiscal vai
+        // SEMPRE direto pra impressora cadastrada.
+        await electron.setConfig({
+          ...(cfg.termica ? { printer: cfg.termica } : {}),
+          silentPrint: true,
+        });
         await electron.silentPrintHTML(html);
         return;
       }
