@@ -1146,6 +1146,93 @@ export class PdvService {
     return { ok: true, item };
   }
 
+  /**
+   * VALE PRESENTE — vende um vale dentro da venda aberta do PDV.
+   *
+   * Como funciona (tudo em trilho existente, zero fluxo novo):
+   *   - Entra na venda como item MANUAL ("VALE PRESENTE VP-XXXX-XXXX") →
+   *     o caixa grava no Wincred normal e o estoque NÃO baixa (filtro MANUAL).
+   *     O código sai impresso no cupom.
+   *   - Cria o crédito no MESMO trilho do vale-troca (PdvReturn com
+   *     source='vale_presente'), status 'pending' até a venda FINALIZAR —
+   *     venda cancelada nunca ativa o código.
+   *   - Resgate: mesma tela/endpoints do vale-troca (checkCredit/useCredit
+   *     aceitam o código VP-). Uso parcial = "dividir vale residual" que já existe.
+   *   - Validade: 12 meses. Treino: vale nasce isTraining e nunca ativa.
+   */
+  async addGiftVoucher(input: {
+    saleId: string;
+    valor: number;
+    compradorNome?: string;
+    presenteadoNome?: string;
+  }) {
+    const sale = await (this.prisma as any).pdvSale.findUnique({
+      where: { id: input.saleId },
+      select: { id: true, status: true, storeCode: true, storeName: true, isTraining: true },
+    });
+    if (!sale) throw new NotFoundException('Venda não encontrada');
+    if (sale.status !== 'open')
+      throw new BadRequestException(`Venda não está aberta (status=${sale.status})`);
+
+    const valor = Math.round((Number(input.valor) || 0) * 100) / 100;
+    if (!Number.isFinite(valor) || valor < 1 || valor > 5000)
+      throw new BadRequestException('Valor do vale: entre R$ 1,00 e R$ 5.000,00');
+
+    // Código curto sem caracteres ambíguos (sem 0/O/1/I/L)
+    const gen = () => {
+      const A = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
+      let s = '';
+      for (let i = 0; i < 8; i++) s += A[Math.floor(Math.random() * A.length)];
+      return `VP-${s.slice(0, 4)}-${s.slice(4)}`;
+    };
+    let code = gen();
+    for (let i = 0; i < 5; i++) {
+      const clash = await (this.prisma as any).pdvReturn.findUnique({
+        where: { creditoCode: code },
+        select: { id: true },
+      });
+      if (!clash) break;
+      code = gen();
+    }
+    const validade = new Date();
+    validade.setMonth(validade.getMonth() + 12);
+
+    const comprador = String(input.compradorNome || '').trim().slice(0, 80);
+    const presenteado = String(input.presenteadoNome || '').trim().slice(0, 80);
+    await (this.prisma as any).pdvReturn.create({
+      data: {
+        source: 'vale_presente',
+        modo: 'credito',
+        status: 'pending', // ativa na finalização da venda
+        originalSaleId: sale.id,
+        storeCode: sale.storeCode,
+        storeName: sale.storeName || sale.storeCode,
+        valorTotal: valor,
+        creditoCode: code,
+        creditoValidade: validade,
+        customerName: presenteado || comprador || null,
+        motivo:
+          `VALE PRESENTE` +
+          (comprador ? ` — comprado por ${comprador}` : '') +
+          (presenteado ? ` para ${presenteado}` : '') +
+          ` · válido até ${validade.toLocaleDateString('pt-BR')}`,
+        isTraining: !!sale.isTraining,
+      },
+    });
+
+    // Item manual na venda: cupom imprime o código, caixa grava, estoque não baixa
+    const r = await this.addManualItem({
+      saleId: sale.id,
+      descricao: `VALE PRESENTE ${code}`,
+      valor,
+      qty: 1,
+    });
+    this.logger.log(
+      `[pdv] Vale presente ${code} (R$ ${valor.toFixed(2)}) criado na venda ${sale.id} — ativa na finalização`,
+    );
+    return { ...r, voucher: { code, valor, validade: validade.toISOString() } };
+  }
+
   async updateItem(input: { saleId: string; itemId: string; qty?: number; desconto?: number; password?: string; motivo?: string; excludePromo?: boolean }) {
     const item = await (this.prisma as any).pdvSaleItem.findUnique({
       where: { id: input.itemId },
@@ -1893,6 +1980,21 @@ export class PdvService {
       }
       this.logger.log(`[pdv→TREINO] Venda ${sale.id} é treinamento — pulando Wincred, estoque, Giga, NFC-e.`);
       return { ok: true, sale: updated, nfcePreview: null, training: true };
+    }
+
+    // ── VALE PRESENTE: ativa os vales comprados NESTA venda ──
+    // Criados como 'pending' no addGiftVoucher — só valem depois que o
+    // dinheiro entrou (venda finalizada). Venda cancelada nunca ativa.
+    try {
+      const ativados = await (this.prisma as any).pdvReturn.updateMany({
+        where: { originalSaleId: sale.id, source: 'vale_presente', status: 'pending' },
+        data: { status: 'completed' },
+      });
+      if (ativados.count > 0) {
+        this.logger.log(`[pdv] ${ativados.count} vale(s) presente ativado(s) na venda ${sale.id}`);
+      }
+    } catch (e: any) {
+      this.logger.warn(`[pdv] falha ao ativar vale presente da venda ${sale.id}: ${e?.message || e}`);
     }
 
     // PÓS-PROCESSAMENTO ERP (Wincred + estoque) — OUTBOX por padrão.

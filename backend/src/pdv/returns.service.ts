@@ -685,6 +685,13 @@ export class ReturnsService {
       where: { creditoCode: input.creditoCode },
     });
     if (!ret) throw new NotFoundException('Vale-troca não encontrado');
+    // Vale presente comprado mas com a venda de compra ainda não finalizada
+    // (ou cancelada) — o código impresso só vale depois do dinheiro entrar.
+    if (ret.source === 'vale_presente' && ret.status === 'pending') {
+      throw new BadRequestException(
+        'Vale presente ainda não ativado — a venda em que ele foi comprado não foi finalizada.',
+      );
+    }
     if (ret.status === 'used') {
       throw new BadRequestException(
         `Vale-troca já foi usado em ${ret.creditoUsadoAt ? new Date(ret.creditoUsadoAt).toLocaleString('pt-BR') : 'data desconhecida'}`,
@@ -810,6 +817,11 @@ export class ReturnsService {
       include: { items: true },
     });
     if (!ret) throw new NotFoundException('Vale-troca não encontrado');
+    if (ret.source === 'vale_presente' && ret.status === 'pending') {
+      throw new BadRequestException(
+        'Vale presente ainda não ativado — a venda em que ele foi comprado não foi finalizada.',
+      );
+    }
 
     // ── HISTORICO ──
     // Peças que foram DEVOLVIDAS pra gerar esse vale (PdvReturnItem)

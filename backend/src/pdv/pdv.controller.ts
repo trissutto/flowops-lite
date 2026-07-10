@@ -474,6 +474,26 @@ export class PdvController {
   }
 
   /**
+   * POST /pdv/sales/:id/gift-voucher { valor, compradorNome?, presenteadoNome? }
+   * VALE PRESENTE: item manual na venda + crédito (trilho do vale-troca) que
+   * ativa quando a venda finaliza. Código VP- sai impresso no cupom.
+   */
+  @Post('sales/:id/gift-voucher')
+  addGiftVoucher(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: { valor: number; compradorNome?: string; presenteadoNome?: string },
+  ) {
+    this.requireRole(req);
+    return this.svc.addGiftVoucher({
+      saleId: id,
+      valor: body?.valor,
+      compradorNome: body?.compradorNome,
+      presenteadoNome: body?.presenteadoNome,
+    });
+  }
+
+  /**
    * PATCH /pdv/sales/:id/items/:itemId { qty?, desconto? }
    * Atualiza qty e/ou desconto do item.
    */

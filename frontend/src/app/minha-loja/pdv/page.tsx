@@ -1267,6 +1267,8 @@ function PdvPageInner() {
   const [showValeTroca, setShowValeTroca] = useState(false);
   // ── Modal Item Manual (digitar produto livre) ──
   const [showManualItem, setShowManualItem] = useState(false);
+  // ── Modal Vale Presente (vende um vale; código VP- sai no cupom) ──
+  const [showGiftVoucher, setShowGiftVoucher] = useState(false);
   // ── Modal Simulador de Parcelamento Cartão (mostra cliente quanto fica cada parcela) ──
   const [showSimular, setShowSimular] = useState(false);
   // ── Banner de campanha promocional (colapsado por padrão pra não poluir tela) ──
@@ -2416,8 +2418,15 @@ function PdvPageInner() {
             </button>
           </div>
 
-          {/* Linha secundária — venda online + marcar (fluxos especiais) */}
-          <div className="grid grid-cols-2 gap-2">
+          {/* Linha secundária — venda online + marcar + vale presente (fluxos especiais) */}
+          <div className="grid grid-cols-3 gap-2">
+            <button
+              onClick={() => setShowGiftVoucher(true)}
+              className="flex items-center justify-center gap-1.5 text-xs font-semibold text-slate-500 border border-dashed border-[#E5E2D9] rounded-lg px-2 py-1.5 hover:bg-[#FBF6E6] hover:text-[#8C7325] hover:border-[#CDA434] transition disabled:opacity-40 disabled:cursor-not-allowed"
+              title="Vender VALE PRESENTE — valor livre, código sai no cupom, cliente usa depois como vale-troca"
+            >
+              🎁 Vale Presente
+            </button>
             <button
               onClick={() => venderOutro('venda_online')}
               disabled={!podePagar}
@@ -2979,6 +2988,21 @@ function PdvPageInner() {
             setSale(fresh);
             setShowManualItem(false);
             toast('success', 'Item manual adicionado', 'Confira descrição e valor no carrinho');
+            setTimeout(() => scanBarRef.current?.focus(), 50);
+          }}
+        />
+      )}
+
+      {/* Modal Vale Presente — vende um vale (código VP- no cupom) */}
+      {showGiftVoucher && sale && (
+        <GiftVoucherModal
+          saleId={sale.id}
+          onClose={() => setShowGiftVoucher(false)}
+          onAdded={async (code) => {
+            const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
+            setSale(fresh);
+            setShowGiftVoucher(false);
+            toast('success', `Vale presente ${code} no carrinho`, 'O código sai impresso no cupom — ele ATIVA quando a venda finalizar');
             setTimeout(() => scanBarRef.current?.focus(), 50);
           }}
         />
@@ -7969,6 +7993,136 @@ function DiscountModal({
             Aplicar
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ── VALE PRESENTE MODAL ───────────────────────────────────────────────
+// Vende um vale presente dentro da venda aberta: valor livre digitável +
+// comprador/presenteado opcionais. Entra como item no carrinho (o código
+// VP- sai impresso no cupom) e ATIVA quando a venda finaliza. O resgate é
+// pela mesma tela do vale-troca, em qualquer loja, validade 12 meses.
+function GiftVoucherModal({
+  saleId,
+  onClose,
+  onAdded,
+}: {
+  saleId: string;
+  onClose: () => void;
+  onAdded: (code: string) => void;
+}) {
+  const [valor, setValor] = useState('');
+  const [comprador, setComprador] = useState('');
+  const [presenteado, setPresenteado] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const parseNum = (s: string) => {
+    const n = Number(String(s).trim().replace(/\./g, '').replace(',', '.'));
+    return isNaN(n) ? null : n;
+  };
+
+  const vender = async () => {
+    setError(null);
+    const v = parseNum(valor);
+    if (v == null || v < 1 || v > 5000) {
+      setError('Valor entre R$ 1,00 e R$ 5.000,00 (ex: 100 ou 149,90)');
+      return;
+    }
+    setSaving(true);
+    try {
+      const r = await api<any>(`/pdv/sales/${saleId}/gift-voucher`, {
+        method: 'POST',
+        body: JSON.stringify({
+          valor: v,
+          compradorNome: comprador.trim() || undefined,
+          presenteadoNome: presenteado.trim() || undefined,
+        }),
+      });
+      onAdded(r?.voucher?.code || 'VP');
+    } catch (e: any) {
+      const h = humanizeError(e);
+      setError(`${h.title}${h.hint ? ' · ' + h.hint : ''}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-md p-5 space-y-4 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h2 className="font-black text-lg text-[#8C7325] flex items-center gap-2">
+            🎁 Vale Presente
+          </h2>
+          <button onClick={onClose}><X className="w-5 h-5" /></button>
+        </div>
+
+        <div className="bg-[#FBF6E6] border border-[#ECD9A0] rounded-lg p-2.5 text-[11px] text-[#8C7325] leading-snug">
+          O vale entra no carrinho e o <b>código sai impresso no cupom</b>. Ele só vale
+          depois da venda finalizada. Resgate em <b>qualquer loja</b> pela tela de
+          vale-troca · validade <b>12 meses</b> · uso parcial gera vale residual · não vira troco.
+        </div>
+
+        <div>
+          <label className="text-[11px] uppercase font-bold text-slate-600 mb-1 block">
+            Valor do vale
+          </label>
+          <div className="relative">
+            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-sm">R$</span>
+            <input
+              type="text"
+              autoFocus
+              inputMode="decimal"
+              value={valor}
+              onChange={(e) => setValor(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && vender()}
+              placeholder="100,00"
+              className="w-full px-3 py-3 pl-10 text-xl font-bold tabular-nums border-2 border-emerald-200 rounded-xl text-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-300 focus:border-emerald-400"
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-[11px] uppercase font-bold text-slate-600 mb-1 block">
+              Quem compra (opcional)
+            </label>
+            <input
+              type="text"
+              value={comprador}
+              onChange={(e) => setComprador(e.target.value.slice(0, 80))}
+              placeholder="Nome da cliente"
+              className="w-full px-3 py-2.5 text-sm border-2 border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-300 focus:border-rose-400"
+            />
+          </div>
+          <div>
+            <label className="text-[11px] uppercase font-bold text-slate-600 mb-1 block">
+              Quem ganha (opcional)
+            </label>
+            <input
+              type="text"
+              value={presenteado}
+              onChange={(e) => setPresenteado(e.target.value.slice(0, 80))}
+              onKeyDown={(e) => e.key === 'Enter' && vender()}
+              placeholder="Nome de quem recebe"
+              className="w-full px-3 py-2.5 text-sm border-2 border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-300 focus:border-rose-400"
+            />
+          </div>
+        </div>
+
+        {error && (
+          <div className="bg-rose-50 border border-rose-200 text-rose-700 rounded-lg px-3 py-2 text-sm">{error}</div>
+        )}
+
+        <button
+          onClick={vender}
+          disabled={saving}
+          className="w-full py-3.5 rounded-xl bg-[#B8912B] hover:bg-[#A07F22] text-white font-extrabold text-base disabled:opacity-50"
+        >
+          {saving ? 'Gerando vale…' : '🎁 Adicionar vale ao carrinho'}
+        </button>
       </div>
     </div>
   );
