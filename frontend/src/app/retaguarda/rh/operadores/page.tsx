@@ -43,6 +43,13 @@ function maskCpfShow(cpf: string) {
   const d = cpf.replace(/\D/g, '');
   return d.length === 11 ? `•••.${d.slice(3, 6)}.•••-${d.slice(9)}` : cpf;
 }
+/** Aviso imediato de PIN óbvio (mesma regra do backend) — seguro no cliente. */
+function pinFracoClient(pin: string): boolean {
+  const d = pin.replace(/\D/g, '');
+  if (d.length !== 6) return false;
+  if (/^(\d)\1{5}$/.test(d)) return true;            // 000000, 111111...
+  return '0123456789'.includes(d) || '9876543210'.includes(d); // 123456, 654321
+}
 
 export default function OperadoresPage() {
   const [lista, setLista] = useState<Operador[]>([]);
@@ -58,6 +65,13 @@ export default function OperadoresPage() {
   const [pin, setPin] = useState('');
   const [editando, setEditando] = useState(false);
 
+  // Papel do usuário: loja (gerente) NÃO concede MASTER/SUPREMA — só a matriz.
+  const [role, setRole] = useState<string>('');
+  const niveisDisponiveis: Nivel[] =
+    role === 'store'
+      ? ['CAIXA', 'SUPERVISOR', 'GERENTE']
+      : ['CAIXA', 'SUPERVISOR', 'GERENTE', 'MASTER', 'SUPREMA'];
+
   const load = async () => {
     setLoading(true); setErr(null);
     try {
@@ -65,7 +79,10 @@ export default function OperadoresPage() {
     } catch (e: any) { setErr('Falha ao carregar. Recarregue a página.'); }
     finally { setLoading(false); }
   };
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    api<{ role?: string }>('/auth/me').then((r) => setRole(r?.role || '')).catch(() => {});
+  }, []);
 
   function limpar() {
     setNome(''); setCpf(''); setNivel('CAIXA'); setPin(''); setEditando(false);
@@ -110,7 +127,7 @@ export default function OperadoresPage() {
 
   const cpfOk = cpf.replace(/\D/g, '').length === 11;
   const pinOk = pin === '' ? editando : pin.replace(/\D/g, '').length === 6;
-  const podeSalvar = nome.trim().length >= 3 && cpfOk && pinOk && !saving;
+  const podeSalvar = nome.trim().length >= 3 && cpfOk && pinOk && !pinFracoClient(pin) && !saving;
 
   return (
     <div className="min-h-screen bg-slate-50 p-4 sm:p-6">
@@ -121,8 +138,11 @@ export default function OperadoresPage() {
         <h1 className="text-xl font-bold text-slate-800 flex items-center gap-2">
           <KeyRound className="w-5 h-5 text-[#B8912B]" /> Função & PIN das funcionárias
         </h1>
-        <p className="text-sm text-slate-500 mt-1 mb-5">
+        <p className="text-sm text-slate-500 mt-1 mb-1">
           Cada uma com seu PIN de 6 dígitos pra liberar desconto/sangria. Você vê só as da sua loja.
+        </p>
+        <p className="text-xs text-slate-400 mb-5">
+          💡 Só quem <b>libera</b> tem PIN (caixa, supervisor, gerente). Vendedora e auxiliar <b>não precisam</b>.
         </p>
 
         {/* Form */}
@@ -139,14 +159,19 @@ export default function OperadoresPage() {
                 className="w-full px-3 py-2.5 rounded-xl border border-slate-300 focus:border-[#B8912B] outline-none disabled:bg-slate-100" />
               <select value={nivel} onChange={(e) => setNivel(e.target.value as Nivel)}
                 className="w-full px-3 py-2.5 rounded-xl border border-slate-300 focus:border-[#B8912B] outline-none bg-white">
-                {(['CAIXA', 'SUPERVISOR', 'GERENTE', 'MASTER', 'SUPREMA'] as Nivel[]).map((n) => (
+                {niveisDisponiveis.map((n) => (
                   <option key={n} value={n}>{NIVEL_LABEL[n]}</option>
                 ))}
               </select>
             </div>
             <input value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, '').slice(0, 6))}
               placeholder={editando ? 'PIN (deixe vazio pra manter)' : 'PIN de 6 dígitos'} inputMode="numeric"
-              className="w-full px-3 py-2.5 rounded-xl border border-slate-300 focus:border-[#B8912B] outline-none tracking-[0.3em] text-center" />
+              className={`w-full px-3 py-2.5 rounded-xl border outline-none tracking-[0.3em] text-center ${
+                pinFracoClient(pin) ? 'border-red-400 focus:border-red-500' : 'border-slate-300 focus:border-[#B8912B]'
+              }`} />
+            {pinFracoClient(pin) && (
+              <p className="text-red-500 text-xs -mt-1">PIN muito óbvio — evite sequência (123456) ou repetição (000000).</p>
+            )}
           </div>
           {err && <p className="text-red-600 text-sm mt-3 flex items-center gap-1.5"><AlertCircle className="w-4 h-4" />{err}</p>}
           {okMsg && <p className="text-emerald-600 text-sm mt-3 flex items-center gap-1.5"><Check className="w-4 h-4" />{okMsg}</p>}
