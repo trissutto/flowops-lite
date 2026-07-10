@@ -100,6 +100,14 @@ export default function DashboardHome() {
   useEffect(() => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('flowops_token') : null;
     if (!token) {
+      // Subdomínio da EQUIPE (crm.lurdsplussize.com.br) não mostra a landing
+      // de cliente — vai direto pro login. A landing é só do domínio público
+      // (www / apex), pra cliente que veio da live.
+      const host = typeof window !== 'undefined' ? window.location.hostname : '';
+      if (host.startsWith('crm.')) {
+        router.push('/login');
+        return;
+      }
       setVisitor(true);
       return;
     }
