@@ -93,6 +93,36 @@ export class ProductSearchService implements OnModuleInit {
     return rows;
   }
 
+  /**
+   * BUSCA SOMENTE PELA DESCRIÇÃO — ORDEM EXPLÍCITA DO DONO (10/07):
+   * "FAÇA A BUSCA SOMENTE UTILIZANDO A DESCRIÇÃO. PEGUE QUALQUER PARTE."
+   *
+   * TODAS as palavras do termo têm que aparecer na DESCRICAOCOMPLETA, em
+   * QUALQUER ordem e QUALQUER posição. Ex.: "VESTIDO LONGO MANGA CURTA REF
+   * 30333 PRETO 48" é achado por "VESTIDO 48", por "30333" e por
+   * "MANGA CURTA 48 PRETO". SEM cascata de código/REF — a descrição da Giga
+   * embute REF+MARCA+COR+TAMANHO, então buscar a REF acha pela descrição.
+   * Se vier produto a mais contendo as mesmas palavras, entra mesmo
+   * ("aí é por minha conta" — dono). Índice pg_trgm mantém rápido.
+   */
+  async searchDescricaoOnly(
+    term: string,
+    take = 20000,
+  ): Promise<Array<{ codigo: string; ref: string | null; descricao: string | null }>> {
+    const words = String(term || '')
+      .trim()
+      .split(/\s+/)
+      .map((w) => w.trim())
+      .filter((w) => w.length >= 2)
+      .slice(0, 8);
+    if (!words.length) return [];
+    return (this.prisma as any).gigaProduto.findMany({
+      where: { AND: words.map((w) => ({ descricao: { contains: w, mode: 'insensitive' } })) },
+      select: { codigo: true, ref: true, descricao: true },
+      take,
+    });
+  }
+
   // Stopwords da extração de FAMÍLIA — cópia do ErpService.groupRowsByFamily /
   // WincredCatalogService (mesma heurística usada na consulta/realinhamento).
   private static readonly FAMILIA_STOPWORDS = new Set([
