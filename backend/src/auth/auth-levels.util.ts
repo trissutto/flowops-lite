@@ -73,15 +73,67 @@ export function setPasswordOverrides(map: OverrideMap | null | undefined): void 
   secretOverrides = map ? { ...map } : {};
 }
 
+// ── PINs PESSOAIS por operadora (por CPF, global) ───────────────────────────
+// Cada funcionária tem um PIN próprio ligado a um nível. Substitui, na prática, a
+// "senha compartilhada de nível" pela senha de cada uma — mantendo a hierarquia e,
+// principalmente, passando a saber QUEM autorizou. A senha de nível compartilhada
+// (banco/env) segue como MESTRA de emergência (fallback).
+// O OperadorPinService empurra a lista pra cá (setOperatorPins) no boot e a cada
+// gravação — validação segue SÍNCRONA (sha256), então nenhum call-site vira async.
+export interface OperatorPin {
+  cpf: string;
+  nome: string;
+  nivel: AccessLevel;
+  salt: string;
+  hash: string;
+}
+export interface OperatorMatch {
+  cpf: string;
+  nome: string;
+  nivel: AccessLevel;
+}
+let operatorPins: OperatorPin[] = [];
+
+/** Substitui o conjunto de PINs pessoais (boot e a cada gravação da tela). */
+export function setOperatorPins(list: OperatorPin[] | null | undefined): void {
+  operatorPins = Array.isArray(list) ? list.slice() : [];
+}
+
+/**
+ * Acha de QUEM é o PIN digitado (varre os operadores ativos). Retorna
+ * {cpf, nome, nivel} ou null. O(n) com n pequeno (sha256 é rápido).
+ */
+export function detectOperatorByPin(pin?: string): OperatorMatch | null {
+  if (!pin || pin.length < 4) return null;
+  for (const op of operatorPins) {
+    if (hashSecret(op.salt, pin) === op.hash) {
+      return { cpf: op.cpf, nome: op.nome, nivel: op.nivel };
+    }
+  }
+  return null;
+}
+
+/** True se o PIN já pertence a algum operador (menos o CPF informado). Pra unicidade. */
+export function pinBelongsToOther(pin: string, exceptCpf?: string): boolean {
+  return operatorPins.some(
+    (op) => op.cpf !== exceptCpf && hashSecret(op.salt, pin) === op.hash,
+  );
+}
+
 /**
  * Retorna o nivel da senha digitada, ou null se nao bater com nenhuma.
- * Procura do nivel mais ALTO pro mais BAIXO — primeira correspondencia ganha.
+ * Procura primeiro nos PINs PESSOAIS (assim o PIN de cada uma funciona em
+ * TODOS os pontos de liberação de hoje), depois nas senhas de nível
+ * (banco → env). Do nivel mais ALTO pro mais BAIXO — primeira ganha.
  *
  * Precedência por nível: se há senha cadastrada no BANCO pra aquele nível,
  * ela manda (o env daquele nível é ignorado). Sem cadastro no banco, cai no env.
  */
 export function detectPasswordLevel(password?: string): AccessLevel | null {
   if (!password || password.length < 3) return null;
+  // PIN pessoal primeiro (dá o "quem" via detectOperatorByPin nos call-sites novos).
+  const op = detectOperatorByPin(password);
+  if (op) return op.nivel;
   for (const level of LEVELS_DESC) {
     if (level === 'VENDEDOR') continue;
     const lvl = level as Exclude<AccessLevel, 'VENDEDOR'>;
@@ -138,6 +190,37 @@ export function validateMinLevel(password: string | undefined, minLevel: AccessL
     );
   }
   return level;
+}
+
+/** Resultado da autorização: o nível + QUEM autorizou (se veio de PIN pessoal). */
+export interface AuthorizeResult {
+  level: AccessLevel;
+  byCpf: string | null;   // preenchido quando foi PIN pessoal
+  byNome: string | null;  // idem — pra gravar no log/histórico
+}
+
+/**
+ * Como validateMinLevel, mas devolve TAMBÉM quem autorizou. Use nos pontos que
+ * precisam de rastreabilidade (desconto, cancelamento, sangria). Se foi PIN
+ * pessoal → byCpf/byNome preenchidos; se foi a senha MESTRA compartilhada →
+ * ficam null (autorizou "a mestra", sem pessoa). Lança se inválida/insuficiente.
+ */
+export function authorizeMinLevel(
+  password: string | undefined,
+  minLevel: AccessLevel,
+): AuthorizeResult {
+  const op = detectOperatorByPin(password);
+  if (op) {
+    if (LEVEL_RANK[op.nivel] < LEVEL_RANK[minLevel]) {
+      throw new ForbiddenException(
+        `Nível insuficiente — ${op.nome} é ${op.nivel}, exigido ${minLevel} ou superior.`,
+      );
+    }
+    return { level: op.nivel, byCpf: op.cpf, byNome: op.nome };
+  }
+  // Não é PIN pessoal → cai na senha de nível (mestra/compartilhada).
+  const level = validateMinLevel(password, minLevel); // lança se falhar
+  return { level, byCpf: null, byNome: null };
 }
 
 /**

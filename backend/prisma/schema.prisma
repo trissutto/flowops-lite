@@ -3673,3 +3673,27 @@ model ProductClassification {
   @@index([classificacaoRevisada])
   @@map("product_classification")
 }
+
+/// OperadorPin — PIN pessoal de liberação no PDV, por PESSOA (CPF), global (vale
+/// em qualquer loja). Substitui a "senha compartilhada de nível" pelo PIN de cada
+/// funcionária, mantendo a hierarquia (nivel) — e passa a saber QUEM autorizou.
+/// A senha de nível compartilhada (env/AppConfig) segue como mestra de emergência.
+/// O hash é sha256 com salt por linha (mesmo padrão do auth-levels.util); a
+/// unicidade do PIN é garantida no service (não dá pra impor por índice com salt).
+model OperadorPin {
+  id        String   @id @default(cuid())
+  cpf       String   @unique @db.VarChar(14)
+  nome      String   @db.VarChar(120)
+  nivel     String   @db.VarChar(20) // CAIXA | SUPERVISOR | GERENTE | MASTER | SUPREMA
+  pinSalt   String   @map("pin_salt")
+  pinHash   String   @map("pin_hash")
+  ativo     Boolean  @default(true)
+  // Loja de origem — escopo de visualização (gerente vê só as da sua loja).
+  storeCode String?  @map("store_code") @db.VarChar(20)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([ativo])
+  @@index([storeCode])
+  @@map("operador_pin")
+}
