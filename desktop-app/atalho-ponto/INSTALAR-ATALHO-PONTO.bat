@@ -49,7 +49,7 @@ echo      %ICON_DEST%\ponto-icon.ico
 echo.
 
 REM URL da tela de bater ponto
-set "URL=https://flowops-lite.vercel.app/minha-loja/ponto"
+set "URL=https://crm.lurdsplussize.com.br/minha-loja/ponto"
 set "SHORTCUT=%USERPROFILE%\Desktop\Bater Ponto Lurds.lnk"
 
 REM Gera um script .ps1 temporario e executa

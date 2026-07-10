@@ -29,12 +29,26 @@ autoUpdater.autoInstallOnAppQuit = true;  // instala silenciosamente ao próximo
 const store = new Store({
   name: 'flowops-config',
   defaults: {
-    url: 'https://flowops-lite.vercel.app/minha-loja',
+    url: 'https://crm.lurdsplussize.com.br/minha-loja',
     autoLaunch: true,
     silentPrint: true,
     printer: '', // vazio = padrão do Windows
   },
 });
+
+// Migração (07/2026): o sistema da equipe mudou pra crm.lurdsplussize.com.br —
+// a raiz antiga virou landing pública. Instalações existentes têm a URL velha
+// PERSISTIDA na config (default não corrige), então reescrevemos o host aqui.
+// Lista explícita de hosts legados pra não atropelar URL custom (ex.: dev local).
+const LEGACY_HOSTS = /^https?:\/\/(flowops-lite\.vercel\.app|app-lurds\.vercel\.app|app\.lurds\.com\.br|(www\.)?lurdsplussize\.com\.br)/i;
+{
+  const saved = String(store.get('url') || '');
+  if (LEGACY_HOSTS.test(saved)) {
+    const migrated = saved.replace(LEGACY_HOSTS, 'https://crm.lurdsplussize.com.br');
+    store.set('url', migrated);
+    log.info(`[config] URL migrada pro novo dominio: ${saved} -> ${migrated}`);
+  }
+}
 
 let mainWindow = null;
 let tray = null;
@@ -151,7 +165,7 @@ function showWindow() {
  */
 function openPonto() {
   if (!mainWindow) return;
-  const base = (store.get('url') || 'https://flowops-lite.vercel.app/minha-loja').replace(
+  const base = (store.get('url') || 'https://crm.lurdsplussize.com.br/minha-loja').replace(
     /\/minha-loja.*$/,
     '/minha-loja',
   );
@@ -684,7 +698,7 @@ function createPontoShortcutIfMissing() {
     require('fs').mkdirSync(iconDir, { recursive: true });
     require('fs').copyFileSync(iconSrc, iconDest);
 
-    const url = 'https://flowops-lite.vercel.app/minha-loja/ponto';
+    const url = 'https://crm.lurdsplussize.com.br/minha-loja/ponto';
 
     // Cria .lnk via PowerShell COM
     const psScript = `
