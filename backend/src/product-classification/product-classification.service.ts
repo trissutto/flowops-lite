@@ -52,6 +52,10 @@ const UPSERT_CHUNK = 500;
 // esta tela mostra o preço promocional pra planejamento/etiquetagem.
 const PROMO_JULHO_CUTOFF = '2023-12-31';
 const PROMO_JULHO_PCT = 0.5;
+// Coleções marcadas na REF entram na promo independente do ano de cadastro:
+// sufixo -INV (inverno) / -VER (verão) — regra do dono, 10/07/2026. A MESMA
+// regra existe no PDV (applyAutoDiscounts / YEAR_BASED).
+const PROMO_COLECAO_RE = /-(INV|VER)$/i;
 
 @Injectable()
 export class ProductClassificationService {
@@ -240,7 +244,9 @@ export class ProductClassificationService {
       const preco = display?.preco ?? info?.preco ?? null;
       const dataCadastro = info?.dataCadastro ?? null;
       const isBasico = tipoProduto === 1;
-      const elegivel = !!dataCadastro && dataCadastro <= PROMO_JULHO_CUTOFF;
+      const elegivel =
+        (!!dataCadastro && dataCadastro <= PROMO_JULHO_CUTOFF) ||
+        PROMO_COLECAO_RE.test(r.ref);
       const precoPromo = !isBasico && elegivel && preco != null
         ? Math.round(preco * (1 - PROMO_JULHO_PCT) * 100) / 100
         : null;

@@ -1455,7 +1455,10 @@ export class PdvService {
         }
       }
     } else if (activePromotion === 'YEAR_BASED') {
-      // Regra: tudo cadastrado ATE 31/12/2023 = 50% off (liquida antigos)
+      // Regra: tudo cadastrado ATE 31/12/2023 = 50% off (liquida antigos).
+      // Coleções marcadas na REF também entram, independente do ano de
+      // cadastro: sufixo -INV (inverno) ou -VER (verão) — regra do dono 10/07/2026.
+      const isColecaoPromo = (it: any) => /-(INV|VER)$/i.test(String(it.ref || '').trim());
       const promoByYear = (data: string | null): { pct: number; tag: string } | null => {
         if (!data) return null;
         const dataStr = data.slice(0, 10);
@@ -1497,7 +1500,9 @@ export class PdvService {
           updates.push({ id: it.id, desconto: 0, total: bruto, tag: 'Básico · sem promo' });
           continue;
         }
-        const promo = promoByYear(it.dataCadastro || null);
+        const promo = isColecaoPromo(it)
+          ? { pct: 0.50, tag: 'PROMO 50% · coleção' }
+          : promoByYear(it.dataCadastro || null);
         if (promo) {
           const desconto = Math.round(bruto * promo.pct * 100) / 100;
           updates.push({
