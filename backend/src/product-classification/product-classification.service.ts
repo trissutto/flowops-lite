@@ -283,6 +283,67 @@ export class ProductClassificationService {
     return { ok: true, refs: snap.length, atualizadoEm: new Date().toISOString() };
   }
 
+  /**
+   * DIAGNÓSTICO: compara banco cru × snapshot pra um termo (ex.: "2319").
+   * Devolve: linhas do MySQL (com HEX da REF), estado/idade do snapshot,
+   * matches no snapshot e resultado de um refresh forçado (com erro, se der).
+   */
+  async debugTerm(termRaw: string) {
+    const term = String(termRaw || '').trim().toUpperCase();
+    if (term.length < 2) return { erro: 'informe ?term= com 2+ caracteres' };
+
+    // 1. Banco CRU (mesma fonte do snapshot)
+    let gigaRows: any[] = [];
+    let gigaError: string | null = null;
+    try {
+      gigaRows = await this.erp.debugProdutosByTerm(term);
+    } catch (e: any) {
+      gigaError = e?.message || String(e);
+    }
+
+    // 2. Snapshot ATUAL em memória (antes de forçar refresh)
+    const snapAntes = this.snapshot || [];
+    const idadeMin = this.snapshotAt ? Math.round((Date.now() - this.snapshotAt) / 60000) : null;
+    const matchAntes = snapAntes
+      .filter((r) => `${r.ref} ${r.busca || ''} ${r.descricao}`.toUpperCase().includes(term))
+      .slice(0, 10)
+      .map((r) => ({ ref: r.ref, descricao: r.descricao.slice(0, 80) }));
+
+    // 3. Refresh FORÇADO — captura o erro que a tela engole
+    let refreshError: string | null = null;
+    let totalDepois: number | null = null;
+    let matchDepois: any[] = [];
+    try {
+      const snap = await this.getSnapshot(true);
+      totalDepois = snap.length;
+      matchDepois = snap
+        .filter((r) => `${r.ref} ${r.busca || ''} ${r.descricao}`.toUpperCase().includes(term))
+        .slice(0, 10)
+        .map((r) => ({ ref: r.ref, descricao: r.descricao.slice(0, 80) }));
+    } catch (e: any) {
+      refreshError = e?.message || String(e);
+    }
+
+    return {
+      term,
+      banco: {
+        erro: gigaError,
+        linhas: gigaRows.map((r: any) => ({
+          codigo: r.CODIGO,
+          ref: r.REF,
+          refHex: r.ref_hex,
+          refLen: r.ref_len,
+          descricaoPdv: r.DESCRICAOPDV,
+          descricaoCompleta: r.DESCRICAOCOMPLETA,
+          plusSize: r.PLUS_SIZE,
+          dataAlt: r.DATAALT,
+        })),
+      },
+      snapshotAntes: { total: snapAntes.length, idadeMinutos: idadeMin, matches: matchAntes },
+      snapshotDepois: { total: totalDepois, matches: matchDepois, refreshError },
+    };
+  }
+
   /** Salva 1 REF (toggle individual). */
   async setOne(refRaw: string, tipoProduto: number, user: string) {
     const ref = this.normRef(refRaw);
