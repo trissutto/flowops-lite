@@ -6606,15 +6606,27 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
         await electron.silentPrintHTML(html);
         return;
       }
-      // Fora do Electron (Chrome puro) — sem app desktop não tem como imprimir
-      // silencioso. Mostra erro claro com link pra config.
-      toast(
-        'warning',
-        'App desktop necessário',
-        'Pra imprimir NFC-e direto na térmica, abra pelo app desktop (LURDS ORDER ONE). No Chrome puro não dá pra mandar pra impressora sem preview.',
-      );
+      // APP ANTIGO (sem silentPrintHTML) ou Chrome puro (10/07, caso Suzano
+      // PDV-17): antes só mostrava toast "App desktop necessário" e a NFC-e
+      // NÃO saía na emissão — só na reimpressão. Agora imprime pelo MESMO
+      // caminho da reimpressão que funciona: routePrint na página da DANFE
+      // (app antigo com silentPrintUrl sai silencioso; sem nada, diálogo do
+      // Chrome — que lembra a ELGIN escolhida na 1ª vez).
+      const { routePrint } = await import('@/lib/printer-router');
+      const r = await routePrint({
+        kind: 'nfce',
+        url: `/minha-loja/pdv/nfce/${sale.id}?autoprint=1`,
+        warnIfMissing: true,
+      });
+      if (!r.ok) {
+        toast(
+          'warning',
+          'Impressão NFC-e',
+          'Não consegui mandar pra impressora. Atualize o app desktop (fechar e abrir instala a atualização) e confira a térmica em /pdv/config-impressora.',
+        );
+      }
     } catch (e: any) {
-      console.warn('[nfce] silentPrintHTML falhou:', e);
+      console.warn('[nfce] impressão falhou:', e);
       toast(
         'error',
         'Impressão NFC-e falhou',
