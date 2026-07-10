@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
 /**
@@ -14,14 +14,41 @@ import { PrismaService } from '../prisma/prisma.service';
  * Identidade de campos (nunca misturar):
  *   1) termo = CÓDIGO exato          → variante bipada (código interno/EAN)
  *   2) termo = REFERÊNCIA exata/prefixo (maiúscula padrão Giga + como digitado)
- *   3) fallback: REF insensitive OU DESCRICAOCOMPLETA contém o termo inteiro —
- *      cobre "2319 KASUAL" porque a descrição da Giga embute REF+MARCA+COR+TAM.
+ *   3) FULL-TEXT na descrição (pg_trgm): todas as palavras do termo, em
+ *      qualquer ordem, aceitando pedaço de palavra — cobre "2319 KASUAL" e
+ *      "KASUAL 2319" porque a descrição da Giga embute REF+MARCA+COR+TAM.
  */
 @Injectable()
-export class ProductSearchService {
+export class ProductSearchService implements OnModuleInit {
   private readonly logger = new Logger(ProductSearchService.name);
 
   constructor(private readonly prisma: PrismaService) {}
+
+  /**
+   * FULL-TEXT NO POSTGRES (decisão do dono, 10/07): entre os motores de busca
+   * (Elasticsearch/Meilisearch/Typesense/PG), escolhemos o do PRÓPRIO Postgres —
+   * zero infra nova, zero sync extra (roda em cima do espelho giga_produto que
+   * já existe). Extensão pg_trgm + índice GIN trigram na DESCRICAO tornam o
+   * ILIKE %palavra% indexado (rápido mesmo com 350k+ linhas) e permitem busca
+   * por PEDAÇO de palavra ("KASU" acha KASUAL) em QUALQUER ordem.
+   * DDL idempotente (IF NOT EXISTS), roda em background pra não travar o boot;
+   * se falhar (ex.: sem permissão pra extensão), a busca continua funcionando —
+   * só sem o índice (seq scan, mais lenta).
+   */
+  onModuleInit() {
+    void (async () => {
+      try {
+        await this.prisma.$executeRawUnsafe(`CREATE EXTENSION IF NOT EXISTS pg_trgm`);
+        await this.prisma.$executeRawUnsafe(
+          `CREATE INDEX IF NOT EXISTS giga_produto_descricao_trgm_idx
+             ON giga_produto USING gin (descricao gin_trgm_ops)`,
+        );
+        this.logger.log('[fulltext] pg_trgm + índice trigram em giga_produto.descricao OK');
+      } catch (e) {
+        this.logger.warn(`[fulltext] setup pg_trgm falhou (busca segue sem índice): ${(e as Error).message}`);
+      }
+    })();
+  }
 
   async resolveRows(
     q: string,
@@ -43,14 +70,21 @@ export class ProductSearchService {
     });
     if (rows.length) return rows;
 
-    // 3) Fallback (raro) — ref/nome case-insensitive (varredura). Só quando 1 e 2
-    //    não acharam: busca por nome/descrição ou ref gravada em minúscula.
+    // 3) FULL-TEXT na DESCRIÇÃO (10/07) — estilo motor de busca, via pg_trgm:
+    //    TODAS as palavras do termo têm que aparecer na DESCRICAOCOMPLETA, em
+    //    QUALQUER ordem, aceitando pedaço de palavra ("2319 KASU" e
+    //    "KASUAL 2319" acham "BLUSÃO ... 2319 KASUAL VINHO 46"). Antes exigia
+    //    o termo inteiro contíguo — fora de ordem não achava. O índice GIN
+    //    trigram (onModuleInit) mantém isso rápido. + ref insensitive.
     if (term.length >= 2) {
+      const words = term.split(/\s+/).map((w) => w.trim()).filter((w) => w.length >= 2).slice(0, 6);
       rows = await find(
         {
           OR: [
             { ref: { startsWith: term, mode: 'insensitive' } },
-            { descricao: { contains: term, mode: 'insensitive' } },
+            ...(words.length
+              ? [{ AND: words.map((w) => ({ descricao: { contains: w, mode: 'insensitive' as const } })) }]
+              : [{ descricao: { contains: term, mode: 'insensitive' as const } }]),
           ],
         },
         opts?.fallbackTake ?? 300,
