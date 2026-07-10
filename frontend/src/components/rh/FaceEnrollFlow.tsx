@@ -38,11 +38,48 @@ export default function FaceEnrollFlow({ backHref, doneHref }: { backHref: strin
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
+  // AUTO-CAPTURA (rápida no celular): sem botão — detecta o rosto e tira sozinho.
+  const [auto, setAuto] = useState(true);
+  const [running, setRunning] = useState(false);
+  const [procurando, setProcurando] = useState(false);
+  const busyRef = useRef(false);
+  const stableRef = useRef(0);
 
   useEffect(() => {
     if (!sellerId) return;
     api<any>(`/sellers/${sellerId}/detail`).then((s) => setSeller(s)).catch(() => {});
   }, [sellerId]);
+
+  // Loop da auto-captura: a cada ~350ms confere se tem rosto (detectOnly, rápido).
+  // Estável por ~2 leituras → captura o descriptor e avança o ângulo, com vibração.
+  // Pausa ~1s entre ângulos pra a pessoa virar. Modelo/ câmera prontos = `ready`.
+  useEffect(() => {
+    if (!auto || !running || step >= 3 || !ready) { setProcurando(false); return; }
+    let alive = true;
+    const tick = async () => {
+      if (!alive || busyRef.current || !captureRef.current) return;
+      const tem = await captureRef.current.detectOnly().catch(() => false);
+      if (!alive) return;
+      setProcurando(!tem);
+      if (!tem) { stableRef.current = 0; return; }
+      stableRef.current += 1;
+      if (stableRef.current < 2) return;
+      busyRef.current = true;
+      try {
+        const desc = await captureRef.current.captureDescriptor();
+        if (desc && alive) {
+          if (step === 0) { const snap = captureRef.current.captureSnapshot(); if (snap) setSnapshot(snap); }
+          setDescriptors((prev) => [...prev, desc]);
+          setStep((s) => s + 1);
+          try { (navigator as any).vibrate?.(80); } catch {}
+          stableRef.current = 0;
+          await new Promise((r) => setTimeout(r, 1000)); // deixa a pessoa virar
+        }
+      } finally { busyRef.current = false; }
+    };
+    const id = setInterval(tick, 350);
+    return () => { alive = false; clearInterval(id); };
+  }, [auto, running, step, ready]);
 
   async function capturar() {
     setError(null);
@@ -101,9 +138,33 @@ export default function FaceEnrollFlow({ backHref, doneHref }: { backHref: strin
             <p className="text-xs font-bold uppercase text-emerald-700 mb-1">Captura {step + 1} de 3</p>
             <h2 className="text-lg font-bold text-slate-800 mb-1">{angulo.label}</h2>
             <p className="text-sm text-slate-600 mb-3">{angulo.tip}</p>
-            <button onClick={capturar} disabled={!ready || capturing}
-              className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold py-3 rounded-lg flex items-center justify-center gap-2">
-              {capturing ? (<><Loader2 className="w-5 h-5 animate-spin" /> Capturando...</>) : (<><Camera className="w-5 h-5" /> Capturar</>)}
+
+            {auto ? (
+              !running ? (
+                <>
+                  <button onClick={() => setRunning(true)} disabled={!ready}
+                    className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold py-3.5 rounded-lg flex items-center justify-center gap-2 text-lg">
+                    <Camera className="w-5 h-5" /> {ready ? 'Começar' : 'Ligando câmera…'}
+                  </button>
+                  <p className="text-xs text-slate-400 mt-2">
+                    É automático: segure o celular na frente do rosto e siga as instruções — ele tira sozinho. 💜
+                  </p>
+                </>
+              ) : (
+                <div className="w-full bg-emerald-50 border border-emerald-200 text-emerald-800 font-bold py-3.5 rounded-lg flex items-center justify-center gap-2 text-base">
+                  {procurando ? (<><Loader2 className="w-5 h-5 animate-spin" /> Procurando seu rosto…</>) : (<>📸 Segura assim…</>)}
+                </div>
+              )
+            ) : (
+              <button onClick={capturar} disabled={!ready || capturing}
+                className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold py-3 rounded-lg flex items-center justify-center gap-2">
+                {capturing ? (<><Loader2 className="w-5 h-5 animate-spin" /> Capturando...</>) : (<><Camera className="w-5 h-5" /> Capturar</>)}
+              </button>
+            )}
+
+            <button type="button" onClick={() => { setAuto((a) => !a); setRunning(false); }}
+              className="mt-3 text-xs text-slate-400 hover:text-slate-600 underline underline-offset-2">
+              {auto ? 'Preferir tirar no botão (manual)' : 'Voltar pro automático'}
             </button>
           </div>
         ) : (
