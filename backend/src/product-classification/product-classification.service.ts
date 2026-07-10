@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
+import { ProductSearchService } from '../product-search/product-search.service';
 
 /**
  * Serviço da tela "Classificação de Produtos" (Cadastros).
@@ -65,6 +66,7 @@ export class ProductClassificationService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly erp: ErpService,
+    private readonly productSearch: ProductSearchService,
   ) {}
 
   // ── Helpers ──────────────────────────────────────────────────────────────
@@ -120,16 +122,37 @@ export class ProductClassificationService {
   }
 
   /**
-   * Resolve o conjunto de REFs que casam com a busca usando a MESMA rotina do
-   * Realinhamento (erp.searchByDescriptionGrouped) — que procura DESCRICAOCOMPLETA
-   * LIKE %palavra% VARIAÇÃO POR VARIAÇÃO no Giga (e REF exata quando o termo é
-   * REF-like). Assim uma REF ambígua — ex.: 2319 = "HELICOPTERO..." E "BLUSÃO
-   * KASUAL..." — é achada pela palavra certa ("KASUAL"), coisa que o snapshot (1
-   * descrição por REF via MAX) escondia. null = sem termo (não restringe por REF).
+   * Resolve o conjunto de REFs que casam com a busca usando a MESMA LÓGICA DA
+   * LIVE (decisão do dono, 10/07): ProductSearchService no espelho Postgres
+   * giga_produto — código exato → REF exata/prefixo → descrição contém o termo.
+   * Não toca o Giga ao vivo no caminho comum. Assim "2319 KASUAL" acha os
+   * blusões (a DESCRICAOCOMPLETA embute REF+MARCA+COR+TAM) mesmo com a REF
+   * 2319 ambígua (helicóptero + blusão), coisa que o snapshot (1 descrição por
+   * REF) escondia. null = sem termo (não restringe por REF).
+   *
+   * Redes de segurança, na ordem: espelho vazio → rotina do Realinhamento no
+   * Giga (LIKE palavra a palavra); Giga com erro → null (texto local).
    */
   private async resolveSearchRefs(search?: string): Promise<Set<string> | null> {
     const term = String(search || '').trim();
     if (!term) return null;
+
+    // 1) LÓGICA DA LIVE — espelho Postgres, mesma cascata do /live-pdv/search.
+    try {
+      const rows = await this.productSearch.resolveRows(term, { fallbackTake: 5000 });
+      const set = new Set<string>();
+      for (const r of rows) {
+        // Produto sem REF entra no snapshot com chave sintética "#<codigo>".
+        const ref = this.normRef(r.ref) || (r.codigo ? this.normRef(`#${r.codigo}`) : '');
+        if (ref) set.add(ref);
+      }
+      if (set.size) return set;
+      this.logger.log(`[classificacao] busca "${term}": espelho vazio → rotina do Realinhamento (Giga)`);
+    } catch (e) {
+      this.logger.warn(`[classificacao] busca no espelho falhou: ${(e as Error).message}`);
+    }
+
+    // 2) Rede de segurança: rotina do Realinhamento no Giga ao vivo.
     try {
       const hits = await this.erp.searchByDescriptionGrouped(term);
       const set = new Set<string>();
@@ -140,13 +163,13 @@ export class ProductClassificationService {
       return set;
     } catch (e) {
       this.logger.warn(`[classificacao] busca via ERP falhou, usando texto local: ${(e as Error).message}`);
-      return null; // fallback: applyFilters cai no match textual local
+      return null; // fallback final: applyFilters cai no match textual local
     }
   }
 
   // ── Filtro em memória ────────────────────────────────────────────────────
   // searchRefs: quando presente, o match de busca é POR REF (as REFs que casaram
-  // no Giga pela rotina do Realinhamento). null + termo = fallback textual local.
+  // na LÓGICA DA LIVE / rotina do Realinhamento). null + termo = fallback textual local.
   private applyFilters(
     rows: RefRow[],
     cls: Map<string, ClsRow>,
