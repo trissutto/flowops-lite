@@ -81,7 +81,12 @@ export async function listAvailablePrinters(): Promise<Array<{ name: string; isD
 /** Detecta se está rodando dentro do Electron (PC desktop) */
 export function isElectron(): boolean {
   if (typeof window === 'undefined') return false;
-  return !!(window as any).electronAPI?.isElectron;
+  // App ANTIGO instalado na loja pode não expor a flag isElectron (preload
+  // velho), mas já ter alguma API de impressão — conta como app mesmo assim.
+  // Caso real (Suzano PDV-17, 10/07): app antigo caía no ramo "Chrome puro"
+  // e a NFC-e não saía na emissão.
+  const api = (window as any).electronAPI;
+  return !!(api && (api.isElectron || api.silentPrintUrl || api.silentPrintHTML || api.notifyPrintReady));
 }
 
 /**
