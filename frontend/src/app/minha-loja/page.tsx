@@ -34,7 +34,7 @@ import {
   Clock, PlayCircle, CheckCircle2, Truck, Printer, RefreshCw,
   Wifi, WifiOff, X, LogOut, AlertCircle, Barcode, Search, History,
   Package2, ClipboardList, Shuffle, Inbox, Package, ShoppingCart,
-  Fingerprint, Zap, Radio, ArrowLeftRight, KeyRound,
+  Fingerprint, Zap, Radio, ArrowLeftRight, KeyRound, ScanFace,
 } from 'lucide-react';
 
 type PickStatus = 'new' | 'separating' | 'separated' | 'ready' | 'shipped';
@@ -1027,6 +1027,7 @@ function QuickActionGrid({ realignmentPending = 0, shipmentsIncoming = 0 }: { re
     { href: '/minha-loja/recebimento',   icon: Inbox,        label: 'Receber',        subtitle: 'Mercadoria',  description: 'Dar entrada de remessa',   tone: 'green',   badge: shipmentsIncoming },
     { href: '/minha-loja/ponto',         icon: Fingerprint,  label: 'Ponto',          subtitle: 'Bater',       description: 'Entrada · almoço · saída', tone: 'indigo' },
     { href: '/minha-loja/funcionarias',  icon: KeyRound,     label: 'Funcionárias',   subtitle: 'Função & PIN', description: 'Liberar desconto no PDV',   tone: 'amber'  },
+    { href: '/minha-loja/rosto',         icon: ScanFace,     label: 'Rosto',          subtitle: 'Ponto facial', description: 'Cadastrar rosto pro ponto', tone: 'indigo' },
   ];
 
   const TONES: Record<Tone, { from: string; to: string }> = {

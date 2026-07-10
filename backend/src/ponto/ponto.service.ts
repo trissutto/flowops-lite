@@ -856,6 +856,53 @@ export class PontoService {
     });
   }
 
+  // ── LISTA DE FUNCIONÁRIAS DA LOJA (pro enroll facial da gerente) ──
+  /**
+   * Todas as funcionárias ATIVAS de uma loja + se já têm rosto cadastrado.
+   * Mesmo escopo do listDescriptorsForStore (responsibleStoreId OU
+   * storeCodeOrigin=code). Usado pela tela da gerente pra saber quem falta.
+   */
+  async listStoreSellers(storeId: string) {
+    const store = await (this.prisma as any).store.findUnique({
+      where: { id: storeId },
+      select: { code: true },
+    });
+    if (!store) return [];
+    const sellers = await (this.prisma as any).seller.findMany({
+      where: {
+        active: true,
+        OR: [{ responsibleStoreId: storeId }, { storeCodeOrigin: store.code }],
+      },
+      select: { id: true, name: true, cargo: true, faceDescriptors: true, faceEnrolledAt: true },
+      orderBy: { name: 'asc' },
+    });
+    return sellers.map((s: any) => ({
+      id: s.id,
+      name: s.name,
+      cargo: s.cargo,
+      hasFace: !!s.faceDescriptors,
+      faceEnrolledAt: s.faceEnrolledAt || null,
+    }));
+  }
+
+  /** True se a funcionária pertence à loja (por code) — pro escopo do enroll. */
+  async sellerBelongsToStoreCode(sellerId: string, storeCode: string): Promise<boolean> {
+    if (!storeCode) return false;
+    const store = await (this.prisma as any).store.findUnique({
+      where: { code: storeCode },
+      select: { id: true },
+    });
+    if (!store) return false;
+    const s = await (this.prisma as any).seller.findFirst({
+      where: {
+        id: sellerId,
+        OR: [{ responsibleStoreId: store.id }, { storeCodeOrigin: storeCode }],
+      },
+      select: { id: true },
+    });
+    return !!s;
+  }
+
   // ── GEOFENCE (config por loja) ────────────────────────────────────
   /** Lê a config de geofence do ponto de uma loja. */
   async getGeofence(storeId: string) {
