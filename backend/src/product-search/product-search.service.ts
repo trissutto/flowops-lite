@@ -58,4 +58,77 @@ export class ProductSearchService {
     }
     return rows;
   }
+
+  // Stopwords da extração de FAMÍLIA — cópia do ErpService.groupRowsByFamily /
+  // WincredCatalogService (mesma heurística usada na consulta/realinhamento).
+  private static readonly FAMILIA_STOPWORDS = new Set([
+    'plus', 'size', 'feminina', 'feminino', 'masculino', 'masculina',
+    'infantil', 'unissex', 'adulto', 'manga', 'curta', 'longa', 'comum',
+    'basica', 'basico', 'alfaiataria', 'modelo', 'inverno', 'verao',
+  ]);
+
+  /**
+   * Descrição/preço de EXIBIÇÃO por REF = os do produto DOMINANTE da REF
+   * (a família de descrição com MAIS variações), lidos do espelho giga_produto.
+   *
+   * Motivo (caso REF 2319, 10/07): REF ambígua na Giga — "HELICOPTERO LIDER"
+   * (1 variação, 2016, R$53,90) E "BLUSÃO ... KASUAL" (18+ variações, atual,
+   * R$189,90). Agregar por MAX() monta uma linha Frankenstein (descrição/preço
+   * do helicóptero com marca do blusão). A LIVE mostra o produto certo porque
+   * trabalha nas variações — aqui escolhemos a família majoritária, igual ao
+   * critério de ordenação do realinhamento (VARIANT_COUNT DESC).
+   * Preço = maior vendaUn da REF (mesma regra do refPriceWithMirror da live).
+   */
+  async displayInfoByRefs(
+    refs: string[],
+  ): Promise<Map<string, { descricao: string; preco: number | null; variantes: number }>> {
+    const out = new Map<string, { descricao: string; preco: number | null; variantes: number }>();
+    const clean = Array.from(
+      new Set(refs.map((r) => String(r || '').trim().toUpperCase()).filter(Boolean)),
+    );
+    if (!clean.length) return out;
+    try {
+      const rows: any[] = await (this.prisma as any).gigaProduto.findMany({
+        where: { ref: { in: clean } },
+        select: { ref: true, descricao: true, vendaUn: true },
+      });
+      const norm = (s: string) =>
+        String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+      // por REF: contagem por família + melhor descrição/preço da família
+      const byRef = new Map<string, Map<string, { desc: string; count: number; preco: number }>>();
+      for (const r of rows) {
+        const ref = String(r.ref || '').trim().toUpperCase();
+        const desc = String(r.descricao || '').trim();
+        if (!ref || !desc) continue;
+        const palavras = norm(desc).split(/\s+/).filter(Boolean);
+        const familia =
+          palavras.find((w) => w.length >= 4 && !ProductSearchService.FAMILIA_STOPWORDS.has(w)) ||
+          '_outros';
+        let fams = byRef.get(ref);
+        if (!fams) byRef.set(ref, (fams = new Map()));
+        const preco = Number(r.vendaUn) > 0 ? Number(r.vendaUn) : 0;
+        const cur = fams.get(familia);
+        if (cur) {
+          cur.count++;
+          if (preco > cur.preco) cur.preco = preco;
+        } else {
+          fams.set(familia, { desc, count: 1, preco });
+        }
+      }
+      for (const [ref, fams] of byRef) {
+        let best: { desc: string; count: number; preco: number } | null = null;
+        for (const f of fams.values()) if (!best || f.count > best.count) best = f;
+        if (best) {
+          out.set(ref, {
+            descricao: best.desc,
+            preco: best.preco > 0 ? best.preco : null,
+            variantes: best.count,
+          });
+        }
+      }
+    } catch (e) {
+      this.logger.warn(`displayInfoByRefs falhou (espelho): ${(e as Error).message}`);
+    }
+    return out;
+  }
 }
