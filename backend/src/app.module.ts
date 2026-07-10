@@ -62,6 +62,7 @@ import { FaturamentoModule } from './faturamento/faturamento.module';
 import { LivePdvModule } from './live-pdv/live-pdv.module';
 import { PromoConfigModule } from './promo-config/promo-config.module';
 import { AccessPolicyModule } from './access-policy/access-policy.module';
+import { OperadorPinModule } from './operador-pin/operador-pin.module';
 
 @Module({
   imports: [
@@ -126,6 +127,7 @@ import { AccessPolicyModule } from './access-policy/access-policy.module';
     LivePdvModule,
     PromoConfigModule,
     AccessPolicyModule,
+    OperadorPinModule,
     ReportsModule,
   ],
 })

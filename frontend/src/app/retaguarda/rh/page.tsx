@@ -16,7 +16,7 @@ import Link from 'next/link';
 import {
   ArrowLeft, Users, Clock, DollarSign, GraduationCap, BarChart3,
   UserPlus, UserCheck, Fingerprint, ClipboardList, TrendingUp, Calendar,
-  Cake, BadgeAlert, FileText, Award,
+  Cake, BadgeAlert, FileText, Award, KeyRound,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -117,6 +117,7 @@ export default function RhHubPage() {
           <Botao href="/retaguarda/vendedoras"             icon={UserCheck}   label="Funcionárias"        sub="Lista + prontuário" />
           <Botao href="/retaguarda/vendedoras/nova"        icon={UserPlus}    label="Nova contratação"    sub="Cadastrar" />
           <Botao href="/retaguarda/vendedoras-ativas"      icon={Award}       label="Ativas no PDV"       sub="Whitelist atendimento" />
+          <Botao href="/retaguarda/rh/operadores"          icon={KeyRound}    label="Função & PIN"        sub="Liberar desconto no PDV" />
         </Grupo>
 
         <Grupo titulo="PONTO ELETRÔNICO" icon={Clock}>
