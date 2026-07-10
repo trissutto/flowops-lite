@@ -72,6 +72,12 @@ export default function LoginPage() {
           <LogIn className="w-4 h-4" />
           {loading ? 'Entrando...' : 'Entrar'}
         </button>
+
+        {/* Saída pra cliente que caiu aqui por engano (link antigo, etc.):
+            manda pra landing pública em vez de deixar numa tela de sistema. */}
+        <a href="/" className="mt-5 block text-center text-xs text-slate-400 hover:text-brand">
+          É cliente da Lurd&apos;s? Ver minha sacolinha / comprar →
+        </a>
       </form>
     </div>
   );
