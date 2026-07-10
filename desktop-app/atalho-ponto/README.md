@@ -21,7 +21,7 @@ bate o ponto.
 ## Como funciona por dentro
 
 - Abre o Chrome em **modo `--app`** (janela limpa, sem barra de URL, sem abas)
-- Aponta direto pra `https://flowops-lite.vercel.app/minha-loja/ponto`
+- Aponta direto pra `https://crm.lurdsplussize.com.br/minha-loja/ponto`
 - Usa um ícone próprio (`ponto-icon.ico`, copiado pra `%LOCALAPPDATA%\LurdsPonto\`)
 
 ## Diferença vs LURDS ORDER ONE (app Electron)
