@@ -9,6 +9,7 @@ import { ProductPhotosService } from '../product-photos/product-photos.service';
 import { RealignmentPricingService } from '../realignment/realignment-pricing.service';
 import { RealtimeGateway } from '../websocket/realtime.gateway';
 import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service';
+import { ProductSearchService } from '../product-search/product-search.service';
 import { ManychatService } from './manychat.service';
 import type { StoreInput, StockEntry } from '../routing/types';
 
@@ -47,6 +48,7 @@ export class LivePdvService {
     private readonly gateway: RealtimeGateway,
     private readonly manychat: ManychatService,
     private readonly catalog: WincredCatalogService,
+    private readonly productSearch: ProductSearchService,
   ) {}
 
   // ─── helpers ──────────────────────────────────────────────────────────────
@@ -93,45 +95,21 @@ export class LivePdvService {
   }
 
   // Resolve as linhas do produto (REF/código/nome) — SÓ ESPELHO (giga_produto no
-  // Postgres). Em CAMADAS pra usar os índices (@@index codigo/ref) e NÃO varrer a
-  // tabela toda: código exato → ref exato/prefixo → (só se nada) insensitive/nome.
+  // Postgres). A cascata (código exato → ref exato/prefixo → insensitive/nome)
+  // foi EXTRAÍDA pro ProductSearchService (diretriz 10/07: busca única, outras
+  // telas reutilizam a MESMA rotina da live). Comportamento idêntico ao antigo.
   private async resolveRowsWithMirror(q: string): Promise<{ rows: any[]; fromMirror: boolean }> {
-    const mk = (rows: any[]) =>
-      (rows as any[]).map((r) => ({
+    const rows = await this.productSearch.resolveRows(q);
+    return {
+      rows: rows.map((r) => ({
         CODIGO: r.codigo,
         REF: r.ref,
         DESCRICAOCOMPLETA: r.descricao,
         COR: r.cor,
         TAMANHO: r.tamanho,
-      }));
-    const find = (where: any, take = 1000) =>
-      (this.prisma as any).gigaProduto.findMany({ where, take }).catch(() => []);
-
-    // 1) Código exato (índice) — cobre bipar código/EAN.
-    let rows = await find({ codigo: q });
-    if (rows.length) return { rows: mk(rows), fromMirror: true };
-
-    // 2) REF pelo índice: exato/prefixo em MAIÚSCULA (padrão Giga) e como digitado.
-    const up = q.toUpperCase();
-    rows = await find({
-      OR: [{ ref: up }, { ref: q }, { ref: { startsWith: up } }, { ref: { startsWith: q } }],
-    });
-    if (rows.length) return { rows: mk(rows), fromMirror: true };
-
-    // 3) Fallback (raro) — ref/nome case-insensitive (varredura). Só quando 1 e 2
-    //    não acharam: busca por nome/descrição ou ref gravada em minúscula.
-    if (q.length >= 2) {
-      rows = await find(
-        {
-          OR: [
-            { ref: { startsWith: q, mode: 'insensitive' } },
-            { descricao: { contains: q, mode: 'insensitive' } },
-          ],
-        },
-        300,
-      );
-    }
-    return { rows: mk(rows), fromMirror: true };
+      })),
+      fromMirror: true,
+    };
   }
 
   // Estoque por loja — ESPELHO PRIMEIRO (giga_estoque no Postgres). Só encosta no
