@@ -101,6 +101,109 @@ export class OperadorPinService implements OnModuleInit {
     }));
   }
 
+  /**
+   * EQUIPE da loja pra tela de PIN — evita digitar de novo quem já existe.
+   * Cruza as vendedoras ativas do PDV (PdvActiveSeller) com o RH (Seller,
+   * que tem CPF e cargo) e marca quem já tem PIN. Nenhum dos três cadastros
+   * tem FK entre si — o vínculo é código Wincred e nome normalizado.
+   */
+  async equipe(
+    user: { role?: string; storeCode?: string },
+    storeCodeParam?: string,
+  ): Promise<Array<{
+    nome: string;
+    cpf: string | null;
+    cargo: string | null;
+    nivelSugerido: AccessLevel;
+    storeCode: string | null;
+    jaTemPin: boolean;
+  }>> {
+    const storeCode =
+      user?.role === 'store' && user?.storeCode
+        ? user.storeCode
+        : (storeCodeParam ? String(storeCodeParam).trim() : null);
+
+    const prisma: any = this.prisma;
+    const normNome = (s: any) =>
+      String(s || '').trim().toUpperCase().normalize('NFD')
+        .replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ');
+    // Lojas aparecem como '15', 'LJ15', '015' dependendo do cadastro —
+    // compara sem prefixo LJ e sem zeros à esquerda.
+    const normLoja = (s: any) =>
+      String(s || '').trim().toUpperCase().replace(/^LJ/, '').replace(/^0+/, '');
+    const lojaAlvo = storeCode ? normLoja(storeCode) : null;
+
+    // As três fontes são tabelas pequenas (dezenas/centenas de linhas) —
+    // busca tudo e cruza em JS pra tolerar os formatos de loja divergentes.
+    const [ativas, sellers, pins] = await Promise.all([
+      prisma.pdvActiveSeller.findMany().catch(() => []),
+      prisma.seller.findMany({
+        where: { active: true },
+        select: {
+          name: true, cpf: true, cargo: true, wincredCodigo: true,
+          storeCodeOrigin: true, responsibleStore: { select: { code: true } },
+        },
+      }).catch(() => []),
+      prisma.operadorPin.findMany({ select: { cpf: true, nome: true } }).catch(() => []),
+    ]);
+
+    const pinCpfs = new Set(pins.map((p: any) => cpfDigits(p.cpf)).filter(Boolean));
+    const pinNomes = new Set(pins.map((p: any) => normNome(p.nome)).filter(Boolean));
+
+    const sellerByCodigo = new Map<string, any>();
+    const sellerByNome = new Map<string, any>();
+    for (const s of sellers) {
+      if (s.wincredCodigo) sellerByCodigo.set(String(s.wincredCodigo).trim(), s);
+      sellerByNome.set(normNome(s.name), s);
+    }
+
+    const nivelFromCargo = (cargo: string | null): AccessLevel => {
+      const c = String(cargo || '').toUpperCase();
+      if (c.startsWith('GERENTE')) return 'GERENTE';
+      if (c.startsWith('LIDER')) return 'SUPERVISOR';
+      return 'CAIXA';
+    };
+
+    const out = new Map<string, {
+      nome: string; cpf: string | null; cargo: string | null;
+      nivelSugerido: AccessLevel; storeCode: string | null; jaTemPin: boolean;
+    }>();
+    const push = (nome: string, seller: any, loja: string | null) => {
+      const key = normNome(nome);
+      if (!key || out.has(key)) return;
+      const cpf = seller?.cpf ? cpfDigits(seller.cpf) : '';
+      out.set(key, {
+        nome: String(nome).trim(),
+        cpf: cpf.length === 11 ? cpf : null,
+        cargo: seller?.cargo || null,
+        nivelSugerido: nivelFromCargo(seller?.cargo || null),
+        storeCode: loja,
+        jaTemPin:
+          (cpf.length === 11 && pinCpfs.has(cpf)) || pinNomes.has(key),
+      });
+    };
+
+    // 1) Vendedoras ativas do PDV da loja (a lista que a loja já conhece)
+    for (const a of ativas) {
+      if (lojaAlvo && normLoja(a.storeCode) !== lojaAlvo) continue;
+      const seller =
+        sellerByCodigo.get(String(a.codigo || '').trim()) ||
+        sellerByNome.get(normNome(a.nome)) || null;
+      push(a.nome, seller, a.storeCode || null);
+    }
+    // 2) Funcionárias do RH da mesma loja que não estão na whitelist do PDV
+    for (const s of sellers) {
+      const lojaSeller = s.responsibleStore?.code || s.storeCodeOrigin || null;
+      if (lojaAlvo && (!lojaSeller || normLoja(lojaSeller) !== lojaAlvo)) continue;
+      push(s.name, s, lojaSeller);
+    }
+
+    return Array.from(out.values()).sort((a, b) => {
+      if (a.jaTemPin !== b.jaTemPin) return a.jaTemPin ? 1 : -1; // sem PIN primeiro
+      return a.nome.localeCompare(b.nome, 'pt-BR');
+    });
+  }
+
   /** Cria/atualiza uma operadora. PIN só é (re)definido se vier no input. */
   async upsert(input: OperadorUpsert): Promise<OperadorView> {
     const cpf = cpfDigits(input.cpf);
