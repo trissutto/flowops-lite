@@ -28,6 +28,9 @@ export interface CatalogFilters {
 interface RefRow {
   ref: string;
   descricao: string;
+  // Todas as descrições da REF concatenadas (só pra BUSCA — o display usa
+  // `descricao`). Corrige REF cujo produto novo não aparecia na pesquisa.
+  busca?: string;
   marca: string;
   fornecedor: string;
   categoria: string;
@@ -134,11 +137,12 @@ export class ProductClassificationService {
       if (categoria && r.categoria.toUpperCase() !== categoria) return false;
 
       if (words.length) {
-        // Busca por texto considera SÓ referência + descrição (decisão do dono).
+        // Busca por texto considera SÓ referência + descrições (decisão do dono).
         // Marca e fornecedor ficam de fora: marca é quase toda igual (LUNENDER) e
         // fornecedor traz dado sujo (CNPJ/ruído) — ambos poluíam o resultado.
-        // A REF costuma vir embutida na descrição, então buscar nº de ref funciona.
-        const hay = `${r.ref} ${r.descricao}`.toUpperCase();
+        // `busca` cobre TODAS as variações da REF (não só uma) — produto novo
+        // dentro de uma REF antiga aparece na pesquisa pelo nome dele.
+        const hay = `${r.ref} ${r.busca || r.descricao}`.toUpperCase();
         for (const w of words) if (!hay.includes(w)) return false;
       }
 
