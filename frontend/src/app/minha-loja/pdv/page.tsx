@@ -5870,6 +5870,10 @@ function PaymentModal({
                     <div className="bg-emerald-50 border border-emerald-200 rounded p-2 text-xs text-emerald-900">
                       <b>✓ Confirmação automática:</b> assim que o cliente pagar, o {pixCharge.provider === 'pagarme' ? 'Pagar.me' : 'PagBank'} avisa
                       o sistema e a venda finaliza sozinha.
+                      <div className="mt-1 text-amber-800 bg-amber-50 border border-amber-200 rounded px-1.5 py-1">
+                        💡 <b>Caiu na conta e não confirmou?</b> Confira no app do banco e use o
+                        botão <b>&quot;✓ FINALIZAR&quot;</b> aí embaixo — registra o PIX na mão e libera a venda.
+                      </div>
                     </div>
                   )
                 ) : (
