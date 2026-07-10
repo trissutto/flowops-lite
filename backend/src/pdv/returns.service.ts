@@ -879,6 +879,8 @@ export class ReturnsService {
       valor: ret.valorTotal,
       status: ret.status,
       modo: ret.modo,
+      source: ret.source, // 'flowops' | 'giga_manual' | 'vale_presente'
+      motivo: ret.motivo, // vale presente: "comprado por X para Y · válido até Z"
       validade: ret.creditoValidade,
       vencido: ret.creditoValidade ? new Date(ret.creditoValidade).getTime() < Date.now() : false,
       usado: ret.status === 'used',
