@@ -1,4 +1,4 @@
-import { Body, Controller, ForbiddenException, Get, Param, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, ForbiddenException, Get, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { OperadorPinService, OperadorUpsert } from './operador-pin.service';
 
@@ -18,6 +18,15 @@ export class OperadorPinController {
   @Get()
   list(@Req() req: any) {
     return this.svc.list({ role: req?.user?.role, storeCode: req?.user?.storeCode });
+  }
+
+  /** Equipe da loja (vendedoras ativas + RH) pra escolher em vez de digitar. */
+  @Get('equipe')
+  equipe(@Req() req: any, @Query('storeCode') storeCode?: string) {
+    return this.svc.equipe(
+      { role: req?.user?.role, storeCode: req?.user?.storeCode },
+      storeCode,
+    );
   }
 
   @Post()

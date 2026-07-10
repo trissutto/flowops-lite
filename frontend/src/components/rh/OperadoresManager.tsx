@@ -26,6 +26,16 @@ interface Operador {
   temPin: boolean;
 }
 
+/** Funcionária da equipe da loja (vendedoras ativas do PDV + RH) pra escolher em vez de digitar. */
+interface EquipeItem {
+  nome: string;
+  cpf: string | null;
+  cargo: string | null;
+  nivelSugerido: Nivel;
+  storeCode: string | null;
+  jaTemPin: boolean;
+}
+
 const NIVEL_LABEL: Record<Nivel, string> = {
   CAIXA: 'Caixa',
   SUPERVISOR: 'Supervisor',
@@ -64,6 +74,14 @@ export default function OperadoresManager({ backHref, backLabel }: { backHref: s
   const [pin, setPin] = useState('');
   const [editando, setEditando] = useState(false);
 
+  // Equipe da loja — escolher em vez de digitar de novo
+  const [equipe, setEquipe] = useState<EquipeItem[]>([]);
+  const [equipeSel, setEquipeSel] = useState('');
+
+  // Redefinir PIN inline (prompt() não funciona no app desktop das lojas)
+  const [resetCpf, setResetCpf] = useState<string | null>(null);
+  const [resetPin, setResetPin] = useState('');
+
   // Papel do usuário: loja (gerente) NÃO concede MASTER/SUPREMA — só a matriz.
   const [role, setRole] = useState<string>('');
   const niveisDisponiveis: Nivel[] =
@@ -81,10 +99,24 @@ export default function OperadoresManager({ backHref, backLabel }: { backHref: s
   useEffect(() => {
     load();
     api<{ role?: string }>('/auth/me').then((r) => setRole(r?.role || '')).catch(() => {});
+    api<EquipeItem[]>('/rh/operadores/equipe').then(setEquipe).catch(() => {});
   }, []);
 
   function limpar() {
-    setNome(''); setCpf(''); setNivel('CAIXA'); setPin(''); setEditando(false);
+    setNome(''); setCpf(''); setNivel('CAIXA'); setPin(''); setEditando(false); setEquipeSel('');
+  }
+
+  /** Escolheu alguém da equipe → preenche nome/CPF/função sugerida. */
+  function escolherDaEquipe(idx: string) {
+    setEquipeSel(idx);
+    if (idx === '') return;
+    const f = equipe[Number(idx)];
+    if (!f) return;
+    setNome(f.nome);
+    setCpf(f.cpf ? maskCpf(f.cpf) : '');
+    if (niveisDisponiveis.includes(f.nivelSugerido)) setNivel(f.nivelSugerido);
+    setEditando(false);
+    setOkMsg(null); setErr(null);
   }
   function editar(o: Operador) {
     setNome(o.nome); setCpf(maskCpf(o.cpf)); setNivel(o.nivel); setPin(''); setEditando(true);
@@ -108,12 +140,12 @@ export default function OperadoresManager({ backHref, backLabel }: { backHref: s
     } finally { setSaving(false); }
   }
 
-  async function redefinirPin(o: Operador) {
-    const novo = prompt(`Novo PIN de 6 dígitos para ${o.nome}:`);
-    if (!novo) return;
+  // prompt() não abre no app desktop das lojas (Electron) — campo inline na linha.
+  async function confirmarNovoPin(o: Operador) {
     try {
-      await api(`/rh/operadores/${o.cpf}/pin`, { method: 'POST', body: JSON.stringify({ pin: novo.replace(/\D/g, '') }) });
+      await api(`/rh/operadores/${o.cpf}/pin`, { method: 'POST', body: JSON.stringify({ pin: resetPin.replace(/\D/g, '') }) });
       setOkMsg(`PIN de ${o.nome.split(' ')[0]} redefinido.`);
+      setResetCpf(null); setResetPin('');
     } catch (e: any) { setErr(parseErr(e)); }
   }
 
@@ -150,7 +182,24 @@ export default function OperadoresManager({ backHref, backLabel }: { backHref: s
             <UserPlus className="w-4 h-4" /> {editando ? 'Editar funcionária' : 'Nova funcionária'}
           </div>
           <div className="space-y-3">
-            <input value={nome} onChange={(e) => setNome(e.target.value)} placeholder="Nome completo"
+            {equipe.length > 0 && !editando && (
+              <div>
+                <select value={equipeSel} onChange={(e) => escolherDaEquipe(e.target.value)}
+                  className="w-full px-3 py-2.5 rounded-xl border border-[#B8912B]/50 bg-[#FBF6E6] focus:border-[#B8912B] outline-none font-medium text-slate-700">
+                  <option value="">👥 Escolher da equipe da loja…</option>
+                  {equipe.map((f, i) => (
+                    <option key={`${f.nome}-${i}`} value={String(i)}>
+                      {f.nome}{f.cargo ? ` — ${f.cargo.replace(/_/g, ' ')}` : ''}{f.jaTemPin ? ' ✓ (já tem PIN)' : ''}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  Lista das funcionárias já cadastradas da sua loja — escolher preenche nome, CPF e função.
+                  Se o CPF não vier, é porque falta no RH: complete abaixo.
+                </p>
+              </div>
+            )}
+            <input value={nome} onChange={(e) => { setNome(e.target.value); setEquipeSel(''); }} placeholder="Nome completo"
               className="w-full px-3 py-2.5 rounded-xl border border-slate-300 focus:border-[#B8912B] outline-none" />
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <input value={cpf} onChange={(e) => setCpf(maskCpf(e.target.value))} placeholder="CPF" inputMode="numeric"
@@ -195,21 +244,42 @@ export default function OperadoresManager({ backHref, backLabel }: { backHref: s
         ) : (
           <div className="space-y-2">
             {lista.map((o) => (
-              <div key={o.cpf} className={`bg-white rounded-xl border border-slate-200 p-3 flex items-center gap-3 ${o.ativo ? '' : 'opacity-50'}`}>
-                <div className="flex-1 min-w-0">
-                  <div className="font-semibold text-slate-800 truncate">{o.nome}</div>
-                  <div className="text-xs text-slate-500">
-                    {maskCpfShow(o.cpf)} · <span className="font-semibold text-[#8C7325]">{NIVEL_LABEL[o.nivel]}</span>
-                    {!o.ativo && ' · desativada'}
+              <div key={o.cpf} className={`bg-white rounded-xl border border-slate-200 p-3 ${o.ativo ? '' : 'opacity-50'}`}>
+                <div className="flex items-center gap-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="font-semibold text-slate-800 truncate">{o.nome}</div>
+                    <div className="text-xs text-slate-500">
+                      {maskCpfShow(o.cpf)} · <span className="font-semibold text-[#8C7325]">{NIVEL_LABEL[o.nivel]}</span>
+                      {!o.ativo && ' · desativada'}
+                    </div>
                   </div>
+                  <button onClick={() => editar(o)} className="text-xs font-semibold text-slate-600 hover:text-[#8C7325] px-2 py-1">Editar</button>
+                  <button onClick={() => { setResetCpf(resetCpf === o.cpf ? null : o.cpf); setResetPin(''); setErr(null); }}
+                    className={`text-xs font-semibold px-2 py-1 ${resetCpf === o.cpf ? 'text-[#8C7325]' : 'text-slate-600 hover:text-[#8C7325]'}`} title="Redefinir PIN">
+                    <KeyRound className="w-4 h-4" />
+                  </button>
+                  <button onClick={() => toggleAtivo(o)} className={`text-xs font-semibold px-2 py-1 ${o.ativo ? 'text-slate-400 hover:text-red-600' : 'text-emerald-600'}`} title={o.ativo ? 'Desativar' : 'Ativar'}>
+                    <Power className="w-4 h-4" />
+                  </button>
                 </div>
-                <button onClick={() => editar(o)} className="text-xs font-semibold text-slate-600 hover:text-[#8C7325] px-2 py-1">Editar</button>
-                <button onClick={() => redefinirPin(o)} className="text-xs font-semibold text-slate-600 hover:text-[#8C7325] px-2 py-1" title="Redefinir PIN">
-                  <KeyRound className="w-4 h-4" />
-                </button>
-                <button onClick={() => toggleAtivo(o)} className={`text-xs font-semibold px-2 py-1 ${o.ativo ? 'text-slate-400 hover:text-red-600' : 'text-emerald-600'}`} title={o.ativo ? 'Desativar' : 'Ativar'}>
-                  <Power className="w-4 h-4" />
-                </button>
+                {resetCpf === o.cpf && (
+                  <div className="flex items-center gap-2 mt-2 pt-2 border-t border-slate-100">
+                    <input value={resetPin} onChange={(e) => setResetPin(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                      placeholder="Novo PIN (6 dígitos)" inputMode="numeric" autoFocus
+                      className={`flex-1 px-3 py-2 rounded-lg border outline-none tracking-[0.3em] text-center text-sm ${
+                        pinFracoClient(resetPin) ? 'border-red-400' : 'border-slate-300 focus:border-[#B8912B]'
+                      }`} />
+                    <button onClick={() => confirmarNovoPin(o)}
+                      disabled={resetPin.length !== 6 || pinFracoClient(resetPin)}
+                      className="px-3 py-2 rounded-lg bg-[#B8912B] text-white text-xs font-bold disabled:opacity-40 hover:bg-[#8C7325]">
+                      Salvar PIN
+                    </button>
+                    <button onClick={() => { setResetCpf(null); setResetPin(''); }}
+                      className="px-3 py-2 rounded-lg border border-slate-300 text-slate-500 text-xs font-semibold">
+                      Cancelar
+                    </button>
+                  </div>
+                )}
               </div>
             ))}
           </div>
