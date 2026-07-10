@@ -213,19 +213,25 @@ export default function NotasEmitidasPage() {
     }
   }
 
-  function reimprimirCupom(row: NfceRow) {
+  async function reimprimirCupom(row: NfceRow) {
     // Se tem NFCe autorizada → cupom FISCAL (DANFE com chave, QR, protocolo)
     // Senão → cupom NÃO FISCAL (recibo simples)
+    //
+    // (10/07) SEM window.open/preview: roteia pelo printer-router → no app
+    // desktop sai SILENCIOSO direto na térmica 80mm configurada. A aba com
+    // preview abria o diálogo em A4 e o cupom saía desalinhado.
     const isAuthorized = row.nfceStatus === 'authorized' && !!row.nfceChave;
     const route = isAuthorized
-      ? `/minha-loja/pdv/nfce/${row.id}`
-      : `/minha-loja/pdv/recibo/${row.id}`;
-    window.open(route, '_blank');
+      ? `/minha-loja/pdv/nfce/${row.id}?autoprint=1`
+      : `/minha-loja/pdv/recibo/${row.id}?autoprint=1`;
+    const { routePrint } = await import('@/lib/printer-router');
+    await routePrint({ kind: isAuthorized ? 'nfce' : 'cupom', url: route, warnIfMissing: true });
   }
 
-  function reimprimirNaoFiscal(row: NfceRow) {
-    // Força cupom NÃO FISCAL mesmo que a venda tenha NFCe
-    window.open(`/minha-loja/pdv/recibo/${row.id}`, '_blank');
+  async function reimprimirNaoFiscal(row: NfceRow) {
+    // Força cupom NÃO FISCAL mesmo que a venda tenha NFCe — direto na térmica.
+    const { routePrint } = await import('@/lib/printer-router');
+    await routePrint({ kind: 'cupom', url: `/minha-loja/pdv/recibo/${row.id}?autoprint=1`, warnIfMissing: true });
   }
 
   function badge(status: string, canceladaEm: string | null) {
