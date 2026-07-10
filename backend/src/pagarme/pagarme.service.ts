@@ -1104,8 +1104,17 @@ export class PagarmeService {
       orderId = data?.order_id || data?.order?.id || orderId;
     }
 
+    // CHECKOUT/eventos exóticos: o id vem como chk_/oi_ (checkout/item) e a
+    // order verdadeira fica aninhada no payload. Caça o PRIMEIRO or_ em
+    // qualquer lugar do JSON — sem isso, webhook de pagamento que o PRÓPRIO
+    // sistema criou caía em "order desconhecida" e a venda não confirmava.
+    if (!orderId || !String(orderId).startsWith('or_')) {
+      const found = JSON.stringify(payload).match(/\bor_[A-Za-z0-9]{8,}\b/);
+      if (found) orderId = found[0];
+    }
+
     if (!orderId) {
-      this.logger.warn(`[pagarme] webhook sem orderId: ${JSON.stringify(payload).slice(0, 300)}`);
+      this.logger.warn(`[pagarme] webhook sem orderId (type=${eventType}): ${JSON.stringify(payload).slice(0, 300)}`);
       return { ok: false };
     }
 
@@ -1113,12 +1122,18 @@ export class PagarmeService {
     if (eventType === 'order.paid' || eventType === 'charge.paid') newStatus = 'paid';
     else if (eventType === 'order.canceled' || eventType === 'charge.canceled') newStatus = 'canceled';
     else if (eventType.includes('failed')) newStatus = 'failed';
+    else if (eventType.startsWith('checkout.') || eventType.startsWith('order.item')) {
+      // Ciclo de vida do checkout (created/canceled) e de itens — não muda
+      // status de pagamento. checkout.canceled NÃO cancela a cobrança: o
+      // cliente pode só ter fechado a aba e pagar depois pelo mesmo link.
+      return { ok: true };
+    }
 
     const local = await (this.prisma as any).pagarmePayment.findUnique({
       where: { pagarmeOrderId: orderId },
     });
     if (!local) {
-      this.logger.warn(`[pagarme] webhook pra order desconhecida: ${orderId}`);
+      this.logger.warn(`[pagarme] webhook pra order desconhecida: ${orderId} (type=${eventType})`);
       return { ok: false };
     }
 
