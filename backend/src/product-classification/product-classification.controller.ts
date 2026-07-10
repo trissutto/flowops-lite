@@ -62,6 +62,16 @@ export class ProductClassificationController {
     return this.svc.refresh();
   }
 
+  /**
+   * DIAGNÓSTICO: por que um produto não aparece na tela?
+   * Compara o banco cru (produtos no MySQL, com HEX da REF pra enxergar
+   * caractere invisível) com o snapshot em memória da tela.
+   */
+  @Get('debug')
+  debug(@Query('term') term: string) {
+    return this.svc.debugTerm(String(term || ''));
+  }
+
   @Post('set')
   set(@Body() body: { ref: string; tipoProduto: number }, @Req() req: any) {
     return this.svc.setOne(body?.ref, Number(body?.tipoProduto), this.userLabel(req));

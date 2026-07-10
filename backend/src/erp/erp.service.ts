@@ -1958,6 +1958,26 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * DIAGNÓSTICO da tela de classificação: linhas CRUAS de `produtos` que
+   * batem com o termo (REF ou descrições), com HEX(REF) pra enxergar
+   * caractere invisível que TRIM não remove (tab, quebra, NBSP...).
+   */
+  async debugProdutosByTerm(term: string): Promise<any[]> {
+    if (!this.pool) return [];
+    const t = `%${String(term || '').trim()}%`;
+    const [rows] = await this.pool.query<mysql.RowDataPacket[]>({
+      sql: `SELECT CODIGO, REF, HEX(REF) AS ref_hex, LENGTH(REF) AS ref_len,
+                   DESCRICAOPDV, DESCRICAOCOMPLETA, PLUS_SIZE, DATAALT
+              FROM produtos
+             WHERE REF LIKE ? OR DESCRICAOPDV LIKE ? OR DESCRICAOCOMPLETA LIKE ?
+             LIMIT 30`,
+      values: [t, t, t],
+      timeout: 60_000,
+    });
+    return rows as any[];
+  }
+
+  /**
    * DIAGNÃ“STICO de searchRefsByDateRange â€” usado pra debugar quando "0 resultados".
    * Retorna:
    *   - qual coluna de data foi detectada
