@@ -380,9 +380,32 @@ export class PontoService {
 
     const store = await (this.prisma as any).store.findUnique({
       where: { id: input.storeId },
-      select: { id: true, name: true },
+      select: {
+        id: true, name: true,
+        pontoGeofence: true, pontoLat: true, pontoLng: true, pontoRaioM: true,
+      },
     });
     if (!store) throw new NotFoundException('Loja não encontrada');
+
+    // ── GEOFENCE: só bate ponto perto da loja (anti "bati de casa") ──
+    // Opt-in por loja: só valida se ligado E com coordenadas cadastradas.
+    // Sem coordenada da batida → bloqueia (GPS negado/indisponível). O plano B
+    // humano é a marcação manual da gerente (/ponto/manual), que não passa aqui.
+    if (store.pontoGeofence && store.pontoLat != null && store.pontoLng != null) {
+      if (input.lat == null || input.lng == null) {
+        throw new BadRequestException(
+          'Precisamos da sua localização pra bater o ponto. Ative o GPS/localização e permita o acesso.',
+        );
+      }
+      const raio = store.pontoRaioM || 150;
+      const dist = haversineMeters(input.lat, input.lng, store.pontoLat, store.pontoLng);
+      if (dist > raio) {
+        throw new BadRequestException(
+          `Você está a ~${Math.round(dist)}m da ${store.name}. O ponto só pode ser batido na loja ` +
+            `(até ${raio}m). Se estiver na loja, chame a gerente pra registrar manualmente.`,
+        );
+      }
+    }
 
     // Debounce: já existe batida MESMA tipo nos últimos N minutos? rejeita
     const debounceFrom = new Date(Date.now() - PontoService.DEBOUNCE_MIN * 60_000);
@@ -832,4 +855,52 @@ export class PontoService {
       },
     });
   }
+
+  // ── GEOFENCE (config por loja) ────────────────────────────────────
+  /** Lê a config de geofence do ponto de uma loja. */
+  async getGeofence(storeId: string) {
+    const s = await (this.prisma as any).store.findUnique({
+      where: { id: storeId },
+      select: { id: true, name: true, pontoGeofence: true, pontoLat: true, pontoLng: true, pontoRaioM: true },
+    });
+    if (!s) throw new NotFoundException('Loja não encontrada');
+    return s;
+  }
+
+  /** Define coordenadas/raio e liga/desliga o geofence do ponto de uma loja. */
+  async setGeofence(storeId: string, input: { ativo?: boolean; lat?: number | null; lng?: number | null; raioM?: number }) {
+    const data: any = {};
+    if (input.ativo != null) data.pontoGeofence = !!input.ativo;
+    if (input.lat !== undefined) data.pontoLat = input.lat == null ? null : Number(input.lat);
+    if (input.lng !== undefined) data.pontoLng = input.lng == null ? null : Number(input.lng);
+    if (input.raioM != null) {
+      const r = Math.round(Number(input.raioM));
+      if (!isFinite(r) || r < 30 || r > 5000) throw new BadRequestException('Raio deve ficar entre 30m e 5000m.');
+      data.pontoRaioM = r;
+    }
+    // Não deixa LIGAR sem coordenadas (senão trava todo mundo).
+    if (data.pontoGeofence === true) {
+      const cur = await (this.prisma as any).store.findUnique({ where: { id: storeId }, select: { pontoLat: true, pontoLng: true } });
+      const lat = data.pontoLat !== undefined ? data.pontoLat : cur?.pontoLat;
+      const lng = data.pontoLng !== undefined ? data.pontoLng : cur?.pontoLng;
+      if (lat == null || lng == null) throw new BadRequestException('Cadastre a localização da loja antes de ligar o geofence.');
+    }
+    await (this.prisma as any).store.update({ where: { id: storeId }, data });
+    return this.getGeofence(storeId);
+  }
+}
+
+/**
+ * Distância em METROS entre dois pontos (lat/lng) — fórmula de Haversine.
+ * Usado no geofence do ponto (raio da loja).
+ */
+function haversineMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371000; // raio da Terra em metros
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
 }

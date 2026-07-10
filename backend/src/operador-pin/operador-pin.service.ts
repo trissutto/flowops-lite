@@ -120,7 +120,7 @@ export class OperadorPinService implements OnModuleInit {
       const pin = String(input.pin).replace(/\D/g, '');
       if (pin.length !== PIN_LEN) throw new BadRequestException(`O PIN precisa ter ${PIN_LEN} dígitos.`);
       if (pinFraco(pin)) throw new BadRequestException('PIN muito óbvio (evite sequência ou dígitos repetidos).');
-      if (pinBelongsToOther(pin, cpf)) throw new BadRequestException('Esse PIN já é de outra pessoa. Escolha outro.');
+      if (pinBelongsToOther(pin, cpf)) throw new BadRequestException('PIN inválido — já usado por outra pessoa. Cadastre outro.');
       const s = makeSecret(pin);
       pinFields = { pinSalt: s.salt, pinHash: s.hash };
     } else if (!existing) {
@@ -152,7 +152,7 @@ export class OperadorPinService implements OnModuleInit {
     const p = String(pin || '').replace(/\D/g, '');
     if (p.length !== PIN_LEN) throw new BadRequestException(`O PIN precisa ter ${PIN_LEN} dígitos.`);
     if (pinFraco(p)) throw new BadRequestException('PIN muito óbvio (evite sequência ou dígitos repetidos).');
-    if (pinBelongsToOther(p, c)) throw new BadRequestException('Esse PIN já é de outra pessoa. Escolha outro.');
+    if (pinBelongsToOther(p, c)) throw new BadRequestException('PIN inválido — já usado por outra pessoa. Cadastre outro.');
     const row = await (this.prisma as any).operadorPin.findUnique({ where: { cpf: c } });
     if (!row) throw new NotFoundException('Operadora não encontrada.');
     const s = makeSecret(p);
