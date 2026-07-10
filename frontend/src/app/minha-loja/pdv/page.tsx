@@ -6763,6 +6763,32 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
             </div>
           )}
 
+          {/* ─── VALE PRESENTE vendido nesta venda: imprimir certificado ─── */}
+          {(() => {
+            const vales = (sale.items || [])
+              .map((it: any) => String(it.descricao || '').match(/^VALE PRESENTE (VP-[A-Z0-9]{4}-[A-Z0-9]{4})/)?.[1])
+              .filter(Boolean) as string[];
+            if (!vales.length) return null;
+            return (
+              <div className="rounded border-2 border-[#ECD9A0] bg-[#FBF6E6]/60 p-3 space-y-2">
+                <div className="text-sm font-bold text-[#8C7325]">
+                  🎁 Vale presente ativado! Imprima o certificado pra cliente:
+                </div>
+                {vales.map((code) => (
+                  <button
+                    key={code}
+                    onClick={() =>
+                      window.open(`/minha-loja/pdv/vale-presente/${encodeURIComponent(code)}`, '_blank', 'noopener')
+                    }
+                    className="w-full rounded-lg bg-[#B8912B] hover:bg-[#A07F22] px-3 py-2.5 text-sm font-extrabold text-white flex items-center justify-center gap-2"
+                  >
+                    🖨 Imprimir vale {code}
+                  </button>
+                ))}
+              </div>
+            );
+          })()}
+
           {/* ─── Adicionar CPF na nota (só se ainda NÃO emitiu NFC-e) ─── */}
           {!isAuthorized && !isCancelled && (
             <CpfNaNotaInput ref={cpfInputRef} sale={sale} onUpdated={(s) => setSale(s)} />
