@@ -119,8 +119,40 @@ export class ProductClassificationService {
     this.clsMap = null;
   }
 
+  /**
+   * Resolve o conjunto de REFs que casam com a busca usando a MESMA rotina do
+   * Realinhamento (erp.searchByDescriptionGrouped) — que procura DESCRICAOCOMPLETA
+   * LIKE %palavra% VARIAÇÃO POR VARIAÇÃO no Giga (e REF exata quando o termo é
+   * REF-like). Assim uma REF ambígua — ex.: 2319 = "HELICOPTERO..." E "BLUSÃO
+   * KASUAL..." — é achada pela palavra certa ("KASUAL"), coisa que o snapshot (1
+   * descrição por REF via MAX) escondia. null = sem termo (não restringe por REF).
+   */
+  private async resolveSearchRefs(search?: string): Promise<Set<string> | null> {
+    const term = String(search || '').trim();
+    if (!term) return null;
+    try {
+      const hits = await this.erp.searchByDescriptionGrouped(term);
+      const set = new Set<string>();
+      for (const h of hits || []) {
+        const ref = this.normRef(String((h as any).REF || ''));
+        if (ref) set.add(ref);
+      }
+      return set;
+    } catch (e) {
+      this.logger.warn(`[classificacao] busca via ERP falhou, usando texto local: ${(e as Error).message}`);
+      return null; // fallback: applyFilters cai no match textual local
+    }
+  }
+
   // ── Filtro em memória ────────────────────────────────────────────────────
-  private applyFilters(rows: RefRow[], cls: Map<string, ClsRow>, f: CatalogFilters): RefRow[] {
+  // searchRefs: quando presente, o match de busca é POR REF (as REFs que casaram
+  // no Giga pela rotina do Realinhamento). null + termo = fallback textual local.
+  private applyFilters(
+    rows: RefRow[],
+    cls: Map<string, ClsRow>,
+    f: CatalogFilters,
+    searchRefs?: Set<string> | null,
+  ): RefRow[] {
     const words = String(f.search || '')
       .trim()
       .toUpperCase()
@@ -137,13 +169,14 @@ export class ProductClassificationService {
       if (categoria && r.categoria.toUpperCase() !== categoria) return false;
 
       if (words.length) {
-        // Busca por texto considera SÓ referência + descrições (decisão do dono).
-        // Marca e fornecedor ficam de fora: marca é quase toda igual (LUNENDER) e
-        // fornecedor traz dado sujo (CNPJ/ruído) — ambos poluíam o resultado.
-        // `busca` cobre TODAS as variações da REF (não só uma) — produto novo
-        // dentro de uma REF antiga aparece na pesquisa pelo nome dele.
-        const hay = `${r.ref} ${r.busca || r.descricao}`.toUpperCase();
-        for (const w of words) if (!hay.includes(w)) return false;
+        if (searchRefs) {
+          // Busca resolvida pelo Giga (rotina do Realinhamento): filtra por REF.
+          if (!searchRefs.has(r.ref)) return false;
+        } else {
+          // Fallback local (ERP indisponível): texto em ref + descrições.
+          const hay = `${r.ref} ${r.busca || r.descricao}`.toUpperCase();
+          for (const w of words) if (!hay.includes(w)) return false;
+        }
       }
 
       if (f.quick && f.quick !== 'todos') {
@@ -160,8 +193,12 @@ export class ProductClassificationService {
 
   // ── API pública ──────────────────────────────────────────────────────────
   async list(f: CatalogFilters, page: number, perPage: number) {
-    const [snap, cls] = await Promise.all([this.getSnapshot(), this.getClsMap()]);
-    const filtered = this.applyFilters(snap, cls, f);
+    const [snap, cls, searchRefs] = await Promise.all([
+      this.getSnapshot(),
+      this.getClsMap(),
+      this.resolveSearchRefs(f.search),
+    ]);
+    const filtered = this.applyFilters(snap, cls, f, searchRefs);
     const total = filtered.length;
     const p = Math.max(1, page || 1);
     const pp = Math.min(200, Math.max(1, perPage || 50));
@@ -374,8 +411,12 @@ export class ProductClassificationService {
     if (input.refs && input.refs.length) {
       refs = input.refs.map((r) => this.normRef(r)).filter(Boolean);
     } else if (input.filtro) {
-      const [snap, cls] = await Promise.all([this.getSnapshot(), this.getClsMap()]);
-      refs = this.applyFilters(snap, cls, input.filtro).map((r) => r.ref);
+      const [snap, cls, searchRefs] = await Promise.all([
+        this.getSnapshot(),
+        this.getClsMap(),
+        this.resolveSearchRefs(input.filtro.search),
+      ]);
+      refs = this.applyFilters(snap, cls, input.filtro, searchRefs).map((r) => r.ref);
     } else {
       return { ok: false, error: 'informe refs[] ou filtro', alterados: 0 };
     }
