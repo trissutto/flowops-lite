@@ -112,32 +112,46 @@ export class ProductSearchService implements OnModuleInit {
    * trabalha nas variações — aqui escolhemos a família majoritária, igual ao
    * critério de ordenação do realinhamento (VARIANT_COUNT DESC).
    * Preço = maior vendaUn da REF (mesma regra do refPriceWithMirror da live).
+   *
+   * matchWords (caso REF 321, 10/07): quando a tela tem BUSCA ativa, a linha
+   * mostra a família QUE CASOU com a busca — não a dominante. Sem isso,
+   * "KASUAL VEST" achava o "VESTIDO ... 321 KASUAL" mas a linha exibia a
+   * "BERMUDA JEANS 321 YACIMA" (família com mais variações da mesma REF) —
+   * parecia resultado errado. Famílias que casam TODAS as palavras têm
+   * prioridade; entre elas, vence a com mais variações; sem match, dominante.
    */
   async displayInfoByRefs(
     refs: string[],
+    opts?: { matchWords?: string[] },
   ): Promise<Map<string, { descricao: string; preco: number | null; variantes: number }>> {
     const out = new Map<string, { descricao: string; preco: number | null; variantes: number }>();
     const clean = Array.from(
       new Set(refs.map((r) => String(r || '').trim().toUpperCase()).filter(Boolean)),
     );
     if (!clean.length) return out;
+    const norm = (s: string) =>
+      String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+    const matchWords = (opts?.matchWords || [])
+      .map((w) => norm(w).trim())
+      .filter((w) => w.length >= 2);
     try {
       const rows: any[] = await (this.prisma as any).gigaProduto.findMany({
         where: { ref: { in: clean } },
         select: { ref: true, descricao: true, vendaUn: true },
       });
-      const norm = (s: string) =>
-        String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
-      // por REF: contagem por família + melhor descrição/preço da família
-      const byRef = new Map<string, Map<string, { desc: string; count: number; preco: number }>>();
+      // por REF: contagem por família + melhor descrição/preço da família.
+      // matched = a família tem ao menos UMA variação casando TODAS as palavras.
+      const byRef = new Map<string, Map<string, { desc: string; count: number; preco: number; matched: boolean }>>();
       for (const r of rows) {
         const ref = String(r.ref || '').trim().toUpperCase();
         const desc = String(r.descricao || '').trim();
         if (!ref || !desc) continue;
-        const palavras = norm(desc).split(/\s+/).filter(Boolean);
+        const descNorm = norm(desc);
+        const palavras = descNorm.split(/\s+/).filter(Boolean);
         const familia =
           palavras.find((w) => w.length >= 4 && !ProductSearchService.FAMILIA_STOPWORDS.has(w)) ||
           '_outros';
+        const casa = matchWords.length > 0 && matchWords.every((w) => descNorm.includes(w));
         let fams = byRef.get(ref);
         if (!fams) byRef.set(ref, (fams = new Map()));
         const preco = Number(r.vendaUn) > 0 ? Number(r.vendaUn) : 0;
@@ -145,13 +159,22 @@ export class ProductSearchService implements OnModuleInit {
         if (cur) {
           cur.count++;
           if (preco > cur.preco) cur.preco = preco;
+          // Se qualquer variação da família casa a busca, a família casa.
+          // A desc exibida segue a 1ª da família (diferem só por cor/tamanho).
+          if (casa) cur.matched = true;
         } else {
-          fams.set(familia, { desc, count: 1, preco });
+          fams.set(familia, { desc, count: 1, preco, matched: casa });
         }
       }
       for (const [ref, fams] of byRef) {
-        let best: { desc: string; count: number; preco: number } | null = null;
-        for (const f of fams.values()) if (!best || f.count > best.count) best = f;
+        let best: { desc: string; count: number; preco: number; matched: boolean } | null = null;
+        for (const f of fams.values()) {
+          if (!best) { best = f; continue; }
+          // Família que casou com a busca SEMPRE ganha de família que não casou;
+          // dentro do mesmo grupo, vence a com mais variações.
+          if (f.matched !== best.matched) { if (f.matched) best = f; continue; }
+          if (f.count > best.count) best = f;
+        }
         if (best) {
           out.set(ref, {
             descricao: best.desc,
