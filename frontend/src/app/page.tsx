@@ -20,7 +20,7 @@ import {
   LayoutDashboard, Globe2, Store, BarChart3, Settings, Instagram,
   RefreshCw, Zap, Bot, ArrowUpRight, type LucideIcon,
   ShoppingBag, Shuffle, Package2, AlertTriangle, Truck, CreditCard, Bell,
-  Building2, Users, Lock,
+  Building2, Users,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { isPilotOn, fetchPilotStatus, togglePilotServer, PilotStatus } from '@/lib/auto-send-order';
@@ -393,15 +393,8 @@ function PublicLanding() {
           <Instagram className="w-5 h-5 text-[#B8912B]" />
           @lurdsplussize
         </a>
-
-        {/* Acesso da equipe — discreto */}
-        <Link
-          href="/login"
-          className="mt-3 mx-auto flex items-center gap-1.5 text-xs text-[#B5AC99] hover:text-[#8C7325] transition"
-        >
-          <Lock className="w-3 h-3" />
-          Acesso restrito · equipe
-        </Link>
+        {/* Sem link de equipe na landing pública — a equipe entra pelo
+            subdomínio crm.lurdsplussize.com.br (ou /login direto). */}
       </div>
     </main>
   );
