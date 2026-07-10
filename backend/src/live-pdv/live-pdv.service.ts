@@ -1794,8 +1794,14 @@ export class LivePdvService {
         ? `${String(cart.customerCep).replace(/\D/g, '').slice(0, 2)}•••-•••`
         : null,
       // Flags de dados pessoais (SÓ booleans — página é pública, não vaza PII).
-      // O checkout pede o que falta; celular é obrigatório pra pagar.
+      // O checkout pede o que falta; celular e nome são obrigatórios pra pagar.
       dados: {
+        // hasNome = tem nome REAL (nome+sobrenome e não só o @ do Insta).
+        hasNome: (() => {
+          const n = String(cart.customerName || '').trim();
+          const ig = String(cart.customerInstagram || '').replace(/^@/, '').trim().toLowerCase();
+          return n.length >= 3 && /\s/.test(n) && n.toLowerCase() !== ig;
+        })(),
         hasPhone: String(cart.customerPhone || '').replace(/\D/g, '').length >= 10,
         hasCpf: String(cart.customerCpf || '').replace(/\D/g, '').length === 11,
         hasEmail: /\S@\S+\.\S+/.test(String(cart.customerEmail || '')),

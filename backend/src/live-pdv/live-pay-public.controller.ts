@@ -123,6 +123,7 @@ export class LivePayPublicController {
     @Param('cartId') key: string,
     @Body()
     body: {
+      nome?: string;
       endereco?: string;
       numero?: string;
       complemento?: string;
@@ -139,6 +140,11 @@ export class LivePayPublicController {
     if (!cart) throw new NotFoundException('Compra não encontrada');
     const clean = (v: any, max: number) => String(v || '').trim().slice(0, max);
     const data: any = {};
+    // Nome completo da destinatária — a loja posta a encomenda no nome dela,
+    // não no @ do Instagram (que era o que sobrava no pedido). Só sobrescreve
+    // se a cliente digitou um nome (nunca apaga um nome já existente).
+    const nome = clean(body?.nome, 80);
+    if (nome) data.customerName = nome;
     // "Entregar neste endereço": o front não reenvia o endereço salvo (a
     // página pública só mostra ele mascarado). Se nenhum campo de endereço
     // veio E o carrinho já tem endereço completo, mantém o que está no banco.
@@ -239,6 +245,14 @@ export class LivePayPublicController {
     }
     if (String(cart.customerPhone || '').replace(/\D/g, '').length < 10) {
       throw new BadRequestException('Informe seu celular (com DDD) antes de pagar. 💜');
+    }
+    // Nome completo obrigatório: sem ele a loja não tem em nome de quem postar.
+    // "Real" = tem nome + sobrenome e não é só o @ do Instagram.
+    const nome = String(cart.customerName || '').trim();
+    const igHandle = String(cart.customerInstagram || '').replace(/^@/, '').trim().toLowerCase();
+    const nomeOk = nome.length >= 3 && /\s/.test(nome) && nome.toLowerCase() !== igHandle;
+    if (!nomeOk) {
+      throw new BadRequestException('Informe seu nome completo (nome e sobrenome) pra gente postar seu pedido. 💜');
     }
   }
 }

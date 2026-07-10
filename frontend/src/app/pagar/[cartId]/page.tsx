@@ -41,7 +41,7 @@ type Summary = {
   // Endereço salvo NUNCA vem inteiro (página pública) — só o resumo mascarado
   // pra dona reconhecer e reutilizar sem redigitar.
   hasEndereco?: boolean; enderecoResumo?: string | null; cepMasked?: string | null;
-  dados?: { hasPhone: boolean; hasCpf: boolean; hasEmail: boolean };
+  dados?: { hasNome?: boolean; hasPhone: boolean; hasCpf: boolean; hasEmail: boolean };
   isPickup?: boolean; pickupStoreCode?: string | null; pickupStoreName?: string | null;
   lojas?: Array<{ code: string; name: string; city: string | null }>;
   storeName: string | null; paid: boolean; pixAvailable: boolean; items: Item[];
@@ -77,8 +77,9 @@ export default function PagarPage() {
   const [bairro, setBairro] = useState('');
   const [cidade, setCidade] = useState('');
   const [uf, setUf] = useState('');
-  // Dados de contato — celular OBRIGATÓRIO; CPF/e-mail opcionais.
+  // Dados de contato — nome e celular OBRIGATÓRIOS; CPF/e-mail opcionais.
   // Só pedimos o que falta (a página é pública, não mostramos o que já temos).
+  const [nome, setNome] = useState('');
   const [celular, setCelular] = useState('');
   const [cpf, setCpf] = useState('');
   const [email, setEmail] = useState('');
@@ -139,6 +140,8 @@ export default function PagarPage() {
     usarSalvo ||
     (rua.trim().length > 0 && numero.trim().length > 0 && cidade.trim().length > 0 && uf.trim().length === 2);
   const celularOk = !!sum?.dados?.hasPhone || celular.replace(/\D/g, '').length >= 10;
+  // Nome completo: precisa nome + sobrenome (a loja posta no nome da cliente).
+  const nomeOk = !!sum?.dados?.hasNome || (nome.trim().length >= 3 && /\s/.test(nome.trim()));
 
   // Salva endereço + contato no carrinho (obrigatório antes de gerar o pagamento).
   // "Entregar no endereço salvo": NÃO reenvia endereço — o backend mantém o do banco.
@@ -147,11 +150,11 @@ export default function PagarPage() {
       method: 'POST',
       body: JSON.stringify(
         usarSalvo
-          ? { celular, cpf, email }
-          : { endereco: rua, numero, complemento, bairro, cidade, uf, celular, cpf, email },
+          ? { nome, celular, cpf, email }
+          : { nome, endereco: rua, numero, complemento, bairro, cidade, uf, celular, cpf, email },
       ),
     });
-  }, [cartId, usarSalvo, rua, numero, complemento, bairro, cidade, uf, celular, cpf, email]);
+  }, [cartId, usarSalvo, nome, rua, numero, complemento, bairro, cidade, uf, celular, cpf, email]);
 
   const load = useCallback(async () => {
     try {
@@ -249,8 +252,9 @@ export default function PagarPage() {
   const retirada = modo === 'retirada';
   const total = retirada ? sum.subtotalCents : frete ? frete.totalCents : sum.subtotalCents;
   const canPay = retirada
-    ? retiradaOk && celularOk && !busy
-    : !!frete && enderecoOk && celularOk && !busy;
+    ? retiradaOk && nomeOk && celularOk && !busy
+    : !!frete && enderecoOk && nomeOk && celularOk && !busy;
+  const pedirNome = !sum.dados?.hasNome;
   const pedirCelular = !sum.dados?.hasPhone;
   const pedirCpf = !sum.dados?.hasCpf;
   const pedirEmail = !sum.dados?.hasEmail;
@@ -416,11 +420,20 @@ export default function PagarPage() {
           </div>
         )}
 
-        {/* Seus dados — só pede o que falta; celular é obrigatório */}
-        {dadosVisiveis && (pedirCelular || pedirCpf || pedirEmail) && (
+        {/* Seus dados — só pede o que falta; nome e celular são obrigatórios */}
+        {dadosVisiveis && (pedirNome || pedirCelular || pedirCpf || pedirEmail) && (
           <div className="mb-4">
             <span className="block text-[13px] font-bold text-[#6B6456] mb-1.5">Seus dados 💜</span>
             <div className="space-y-2">
+              {pedirNome && (
+                <input
+                  value={nome}
+                  onChange={(e) => setNome(e.target.value)}
+                  placeholder="Nome e sobrenome (pra postar no seu nome)"
+                  autoCapitalize="words"
+                  className={inputCls}
+                />
+              )}
               {pedirCelular && (
                 <input
                   value={celular}
@@ -509,8 +522,12 @@ export default function PagarPage() {
         {retirada && !retiradaOk && (
           <p className="text-center text-[11px] text-[#A69E8C] mt-3">Escolha a loja de retirada pra liberar o pagamento.</p>
         )}
-        {(retirada ? retiradaOk : !!frete) && (retirada || enderecoOk) && !celularOk && (
-          <p className="text-center text-[11px] text-[#A69E8C] mt-3">Informe seu celular pra liberar o pagamento.</p>
+        {(retirada ? retiradaOk : !!frete) && (retirada || enderecoOk) && (!nomeOk || !celularOk) && (
+          <p className="text-center text-[11px] text-[#A69E8C] mt-3">
+            {!nomeOk
+              ? 'Informe seu nome e sobrenome pra liberar o pagamento.'
+              : 'Informe seu celular pra liberar o pagamento.'}
+          </p>
         )}
         {frete && sum.pixAvailable === false && (
           <p className="text-center text-[11px] text-[#A69E8C] mt-2">PIX dessa loja é combinado com a vendedora · Cartão até 12x é na hora, aqui 💜</p>
