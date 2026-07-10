@@ -212,10 +212,21 @@ export class WincredCatalogService {
     } else {
       const words = cleanTerm.split(/\s+/).map((w) => w.trim()).filter((w) => w.length >= 2);
       if (words.length >= 2) {
+        // Regra única de busca (igual Classificação): CADA palavra pode bater
+        // na REF, no CODIGO ou na descrição — "2319 kasual" acha a REF 2319
+        // mesmo que a descrição não contenha o número.
         products = await prisma.wincredProduto.findMany({
           where: {
             OR: [
-              { AND: words.map((w) => ({ descricaoCompleta: { contains: w, mode: 'insensitive' } })) },
+              {
+                AND: words.map((w) => ({
+                  OR: [
+                    { descricaoCompleta: { contains: w, mode: 'insensitive' } },
+                    { ref: { contains: w, mode: 'insensitive' } },
+                    { codigo: { contains: w } },
+                  ],
+                })),
+              },
               { codigo: { contains: cleanTerm } },
               { ref: { contains: cleanTerm, mode: 'insensitive' } },
             ],
@@ -434,10 +445,17 @@ export class WincredCatalogService {
 
     const words = trimmed.split(/\s+/).filter((w) => w.length >= 2).slice(0, 6);
     if (!words.length) return [];
+    // Regra única de busca: cada palavra pode bater na descrição OU na REF —
+    // "2319 kasual" acha a REF 2319 mesmo sem o número na descrição.
     const rows: any[] = await prisma.wincredProduto.findMany({
       where: {
         AND: [
-          ...words.map((w) => ({ descricaoCompleta: { contains: w, mode: 'insensitive' } })),
+          ...words.map((w) => ({
+            OR: [
+              { descricaoCompleta: { contains: w, mode: 'insensitive' } },
+              { ref: { contains: w, mode: 'insensitive' } },
+            ],
+          })),
           { ref: { not: null } },
           { NOT: { ref: '' } },
         ],

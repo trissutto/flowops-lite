@@ -119,17 +119,34 @@ export class LivePdvService {
     if (rows.length) return { rows: mk(rows), fromMirror: true };
 
     // 3) Fallback (raro) — ref/nome case-insensitive (varredura). Só quando 1 e 2
-    //    não acharam: busca por nome/descrição ou ref gravada em minúscula.
+    //    não acharam. Regra única de busca (igual Classificação): CADA palavra
+    //    pode bater na REF ou na descrição — "2319 kasual" acha a REF 2319
+    //    mesmo que a descrição não contenha o número.
     if (q.length >= 2) {
-      rows = await find(
-        {
-          OR: [
-            { ref: { startsWith: q, mode: 'insensitive' } },
-            { descricao: { contains: q, mode: 'insensitive' } },
-          ],
-        },
-        300,
-      );
+      const words = q.split(/\s+/).map((w) => w.trim()).filter((w) => w.length >= 2);
+      if (words.length >= 2) {
+        rows = await find(
+          {
+            AND: words.map((w) => ({
+              OR: [
+                { ref: { contains: w, mode: 'insensitive' } },
+                { descricao: { contains: w, mode: 'insensitive' } },
+              ],
+            })),
+          },
+          300,
+        );
+      } else {
+        rows = await find(
+          {
+            OR: [
+              { ref: { startsWith: q, mode: 'insensitive' } },
+              { descricao: { contains: q, mode: 'insensitive' } },
+            ],
+          },
+          300,
+        );
+      }
     }
     return { rows: mk(rows), fromMirror: true };
   }

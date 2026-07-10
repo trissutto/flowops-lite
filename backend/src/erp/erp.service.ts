@@ -2858,15 +2858,23 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         let sql: string;
         let params: any[];
         if (words.length >= 2) {
-          // Multi-palavra: AND de LIKE em DESCRICAOCOMPLETA + OR fallback em CODIGO/REF
-          const ands = words.map(() => 'DESCRICAOCOMPLETA LIKE ?').join(' AND ');
+          // Regra única de busca (igual Classificação): CADA palavra pode
+          // bater na DESCRICAOCOMPLETA, na REF ou no CODIGO — "2319 kasual"
+          // acha a REF 2319 mesmo sem o número na descrição.
+          const ands = words
+            .map(() => '(DESCRICAOCOMPLETA LIKE ? OR REF LIKE ? OR CODIGO LIKE ?)')
+            .join(' AND ');
           sql = `SELECT CODIGO, REF, DESCRICAOCOMPLETA, COR, TAMANHO, ID
                    FROM produtos
                   WHERE (${ands})
                      OR CODIGO LIKE ?
                      OR REF LIKE ?
                   LIMIT 20`;
-          params = [...words.map((w) => `%${w}%`), fullLike, fullLike];
+          params = [
+            ...words.flatMap((w) => [`%${w}%`, `%${w}%`, `%${w}%`]),
+            fullLike,
+            fullLike,
+          ];
         } else {
           // 1 palavra (texto): comportamento anterior â€” LIKE em tudo
           sql = `SELECT CODIGO, REF, DESCRICAOCOMPLETA, COR, TAMANHO, ID
@@ -3185,8 +3193,10 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       .slice(0, 6); // limite de palavras pra nÃ£o explodir SQL
     if (!words.length) return [];
 
-    const whereClauses = words.map(() => 'DESCRICAOCOMPLETA LIKE ?').join(' AND ');
-    const params = words.map((w) => `%${w}%`);
+    // Regra única de busca: cada palavra pode bater na descrição OU na REF —
+    // "2319 kasual" acha a REF 2319 mesmo sem o número na descrição.
+    const whereClauses = words.map(() => '(DESCRICAOCOMPLETA LIKE ? OR REF LIKE ?)').join(' AND ');
+    const params = words.flatMap((w) => [`%${w}%`, `%${w}%`]);
 
     try {
       const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
