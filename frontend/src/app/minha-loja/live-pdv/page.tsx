@@ -74,6 +74,7 @@ interface CartItem {
   originStoreCode: string;
   originStoreName: string;
   status: string;
+  trackingCode?: string | null; // rastreio informado pela loja no despacho
 }
 interface Cart {
   id: string;
@@ -2519,6 +2520,8 @@ function CartPanel({
   releasing: boolean;
 }) {
   const [linkCopied, setLinkCopied] = useState(false);
+  // Rastreio copiado (feedback visual por item)
+  const [trackingCopied, setTrackingCopied] = useState<string | null>(null);
   // Edição inline do PREÇO de um item (clica no valor → digita → Enter)
   const [editPriceId, setEditPriceId] = useState<string | null>(null);
   const [editPriceVal, setEditPriceVal] = useState('');
@@ -2637,6 +2640,24 @@ function CartPanel({
                       <Store className="h-3 w-3" /> {it.originStoreName}
                       <span className="ml-1 rounded bg-slate-100 px-1">{STATUS_LABEL[it.status] || it.status}</span>
                     </div>
+                    {/* Rastreio do despacho — clica pra copiar (manda pra cliente no Direct/Whats) */}
+                    {it.trackingCode && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard?.writeText(it.trackingCode!);
+                          setTrackingCopied(it.id);
+                          setTimeout(() => setTrackingCopied(null), 2000);
+                        }}
+                        title="Copiar código de rastreio"
+                        className="mt-0.5 inline-flex items-center gap-1 rounded bg-emerald-50 px-1.5 py-0.5 font-mono text-[11px] font-bold text-emerald-700 hover:bg-emerald-100"
+                      >
+                        📦 {it.trackingCode}
+                        <span className="font-sans font-semibold">
+                          {trackingCopied === it.id ? '✓ copiado' : '📋'}
+                        </span>
+                      </button>
+                    )}
                   </div>
                   {editPriceId === it.id ? (
                     <input
