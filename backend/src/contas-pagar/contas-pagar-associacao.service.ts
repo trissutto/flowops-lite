@@ -274,18 +274,54 @@ export class ContasPagarAssociacaoService {
     };
   }
 
-  /** Fornecedores PENDENTES por qualquer parte do nome (pro "Buscar fornecedor…"). */
+  /**
+   * Fornecedores pro "Buscar fornecedor…" — TODOS os fornecedores do espelho
+   * (não só os com lançamento RH/VALE!), menos os já decididos. Motivo (dono
+   * 11/07, "os fornecedores não vieram completos"): tem pessoa paga por OUTRAS
+   * espécies (OUTROS/DEPÓSITO…) que não entrava na fila RH/VALE — mas precisa
+   * poder ser associada do mesmo jeito. Busca por qualquer parte do nome.
+   */
   async pendentes(q?: string) {
-    const { candidatos } = await this.candidatos();
-    const words = this.limparNome(q || '').split(' ').filter((w) => w.length >= 2);
-    let lista = candidatos as any[];
-    if (words.length) {
-      lista = lista.filter((c) => {
-        const alvo = `${this.limparNome(c.nome || '')} ${c.codigo}`;
-        return words.every((w) => alvo.includes(w));
-      });
-    }
-    return lista.slice(0, 30);
+    const decididosRows: any[] = await (this.prisma as any).contaPagarAssociacao.findMany({
+      select: { fornecedorGigaCodigo: true },
+    });
+    const excluir = decididosRows.map((d) => d.fornecedorGigaCodigo);
+    const words = String(q || '').trim().split(/\s+/).filter((w) => w.length >= 2).slice(0, 6);
+    const fornecedores: any[] = await (this.prisma as any).wincredFornecedor.findMany({
+      where: {
+        ...(excluir.length ? { codigo: { notIn: excluir } } : {}),
+        ...(words.length
+          ? {
+              AND: words.map((w) => ({
+                OR: [
+                  { razaoSocial: { contains: w, mode: 'insensitive' } },
+                  { fantasia: { contains: w, mode: 'insensitive' } },
+                ],
+              })),
+            }
+          : {}),
+      },
+      select: { codigo: true, razaoSocial: true, fantasia: true },
+      orderBy: { razaoSocial: 'asc' },
+      take: 30,
+    });
+    if (!fornecedores.length) return [];
+    // Enriquece com nº de lançamentos/soma nas contas migradas (0 é ok)
+    const codigos = fornecedores.map((f) => f.codigo);
+    const stats: any[] = await this.prisma.$queryRawUnsafe(
+      `SELECT fornecedor_giga_codigo AS codigo, COUNT(*)::int AS total, COALESCE(SUM(valor_cents),0)::float AS soma
+         FROM conta_pagar
+        WHERE fornecedor_giga_codigo = ANY($1::int[]) AND deleted_at IS NULL
+        GROUP BY fornecedor_giga_codigo`,
+      codigos,
+    );
+    const statByCod = new Map<number, any>(stats.map((s) => [Number(s.codigo), s]));
+    return fornecedores.map((f) => ({
+      codigo: f.codigo,
+      nome: f.razaoSocial || f.fantasia || `FORNECEDOR #${f.codigo}`,
+      totalContas: Number(statByCod.get(f.codigo)?.total || 0),
+      somaCents: Number(statByCod.get(f.codigo)?.soma || 0),
+    }));
   }
 
   /** Busca funcionária pra "escolher outra" (inclui INATIVAS/históricas) — com loja/cidade. */
@@ -321,12 +357,17 @@ export class ContasPagarAssociacaoService {
     });
     if (existente) throw new BadRequestException('Fornecedor já decidido — desfaça antes de reassociar');
 
-    // Nome do fornecedor (das contas)
+    // Nome do fornecedor: das contas migradas; se ele ainda não tem conta
+    // nenhuma (busca completa em TODOS os fornecedores), cai pro espelho.
     const amostra = await (this.prisma as any).contaPagar.findFirst({
       where: { fornecedorGigaCodigo: codigo },
       select: { fornecedorNome: true },
     });
-    const fornecedorNome = amostra?.fornecedorNome || `FAVORECIDO #${codigo}`;
+    let fornecedorNome = amostra?.fornecedorNome || null;
+    if (!fornecedorNome) {
+      const f = await (this.prisma as any).wincredFornecedor.findUnique({ where: { codigo } });
+      fornecedorNome = f?.razaoSocial || f?.fantasia || `FAVORECIDO #${codigo}`;
+    }
 
     // Funcionária destino: existente OU criada como histórica (inativa)
     let seller: any = null;
