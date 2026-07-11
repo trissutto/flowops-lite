@@ -24,6 +24,7 @@ import {
   Pencil,
   Percent,
   QrCode,
+  RefreshCw,
   Search,
   History,
   ShoppingCart,
@@ -852,6 +853,27 @@ export default function LivePdvPage() {
   async function doSearch(e?: React.FormEvent) {
     e?.preventDefault();
     await runSearch(term.trim());
+  }
+
+  // Botão "Atualizar estoque": força o refresh pontual no Giga (só os códigos
+  // desta peça) e re-renderiza a grade fresca. Nunca trava: o backend devolve
+  // a grade do espelho se o Giga não responder em 8s.
+  const [refreshingStock, setRefreshingStock] = useState(false);
+  async function refreshStock() {
+    const q = (product?.ref || term).trim();
+    if (!q || refreshingStock) return;
+    setRefreshingStock(true);
+    try {
+      const res = await api<GradeResult>(`/live-pdv/search/refresh-stock`, {
+        method: 'POST',
+        body: JSON.stringify({ term: q, sessionId }),
+      });
+      setProduct(res);
+    } catch {
+      alert('Não consegui atualizar agora (Giga lento?). A grade continua a do espelho.');
+    } finally {
+      setRefreshingStock(false);
+    }
   }
 
   /** Rollback: clica numa REF do histórico → preenche a busca e reabre a grade. */
@@ -1805,8 +1827,20 @@ export default function LivePdvPage() {
             {product && product.found && (
               <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
                 {product.fromMirror && (
-                  <div className="mb-3 inline-flex items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-medium text-slate-500">
-                    <Package className="h-3 w-3" /> Estoque do espelho · atualiza de hora em hora
+                  <div className="mb-3 flex flex-wrap items-center gap-2">
+                    <div className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-medium text-slate-500">
+                      <Package className="h-3 w-3" /> Estoque atualizado do Giga na busca desta peça
+                    </div>
+                    <button
+                      type="button"
+                      onClick={refreshStock}
+                      disabled={refreshingStock}
+                      title="Busca o estoque desta peça direto no Giga agora"
+                      className="inline-flex items-center gap-1 rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] font-bold text-rose-600 hover:bg-rose-100 disabled:opacity-50"
+                    >
+                      <RefreshCw className={`h-3 w-3 ${refreshingStock ? 'animate-spin' : ''}`} />
+                      {refreshingStock ? 'Atualizando…' : 'Atualizar estoque'}
+                    </button>
                   </div>
                 )}
                 <div className="mb-4 flex gap-4">

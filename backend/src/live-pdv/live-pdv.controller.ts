@@ -60,6 +60,13 @@ export class LivePdvController {
     return this.svc.searchGrade(term, sessionId);
   }
 
+  // Botão "Atualizar estoque" da grade: força o refresh pontual do espelho
+  // (só os códigos da peça, direto do Giga) e devolve a grade recalculada.
+  @Post('search/refresh-stock')
+  refreshStock(@Body() body: { term: string; sessionId?: string }) {
+    return this.svc.searchGradeFresh(body?.term, body?.sessionId);
+  }
+
   // ── Legenda da Live (atalhos 01, 02... → referência completa) ──
   // A validação de cada linha usa a MESMA rotina da busca acima (o front
   // chama GET /search pra prévia; o POST revalida no servidor antes de salvar).
