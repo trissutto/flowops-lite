@@ -119,6 +119,7 @@ interface LiveQueueGroup {
   paymentMethod?: string | null; // 'pix' | 'link'
   subtotalCents?: number | null;
   freteCents?: number | null;
+  freteServico?: 'SEDEX' | 'PAC' | null; // forma de envio derivada do CEP
   totalCents?: number | null;
   isPickup?: boolean;
   pickupStoreCode?: string | null;
@@ -1227,13 +1228,27 @@ function LiveOrderCard({
       <div className="w-1.5 flex-shrink-0 bg-rose-500" />
       <div className="flex-1 min-w-0">
         {/* Banner LIVE — mesmo padrão do banner de transferência */}
-        <div className="bg-rose-600 text-white px-4 py-2.5">
-          <div className="font-bold text-sm flex items-center gap-2">
-            🔴 PEDIDO DA LIVE{group.liveStoreName ? ` ${group.liveStoreName.toUpperCase()}` : ''}
+        <div className="bg-rose-600 text-white px-4 py-2.5 flex items-center justify-between gap-2">
+          <div>
+            <div className="font-bold text-sm flex items-center gap-2">
+              🔴 PEDIDO DA LIVE{group.liveStoreName ? ` ${group.liveStoreName.toUpperCase()}` : ''}
+            </div>
+            <div className="text-xs opacity-95 mt-0.5">
+              Venda da live — separar e postar pra cliente no endereço abaixo.
+            </div>
           </div>
-          <div className="text-xs opacity-95 mt-0.5">
-            Venda da live — separar e postar pra cliente no endereço abaixo.
-          </div>
+          <button
+            onClick={async () => {
+              // Imprime o ROMANEIO na térmica configurada (app desktop = silencioso;
+              // Chrome puro = diálogo). Mesma rota de impressão dos cupons.
+              const { routePrint } = await import('@/lib/printer-router');
+              await routePrint({ kind: 'cupom', url: `/minha-loja/live-romaneio/${group.cartId}?autoprint=1`, warnIfMissing: true });
+            }}
+            className="shrink-0 rounded-lg bg-white/15 hover:bg-white/25 px-3 py-1.5 text-xs font-bold"
+            title="Imprimir romaneio do pedido (térmica)"
+          >
+            🖨 Imprimir pedido
+          </button>
         </div>
 
         {/* Cliente */}
@@ -1277,6 +1292,11 @@ function LiveOrderCard({
                 ⚠ SEM ENDEREÇO — NÃO postar. Avise a matriz pra completar o cadastro da cliente.
               </div>
             )}
+            {!group.isPickup && group.freteServico && (
+              <div className="mt-1.5 inline-block rounded-md bg-indigo-50 px-2 py-1 text-[11px] font-extrabold text-indigo-700">
+                📮 Enviar por {group.freteServico}
+              </div>
+            )}
             {group.customerPhone && <div className="mt-1">Tel: {group.customerPhone}</div>}
             {group.customerEmail && <div className="break-all">✉️ {group.customerEmail}</div>}
           </div>
@@ -1294,7 +1314,12 @@ function LiveOrderCard({
               )}
             </div>
             {group.subtotalCents != null && <div>Peças: {liveBrl(group.subtotalCents)}</div>}
-            {(group.freteCents ?? 0) > 0 && <div>Frete: {liveBrl(group.freteCents)}</div>}
+            {(group.freteCents ?? 0) > 0 && (
+              <div>
+                Frete: {liveBrl(group.freteCents)}
+                {group.freteServico && <span className="font-bold text-indigo-700"> · {group.freteServico}</span>}
+              </div>
+            )}
             {group.totalCents != null && (
               <div className="font-bold text-emerald-700">Total: {liveBrl(group.totalCents)}</div>
             )}

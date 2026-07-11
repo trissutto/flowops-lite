@@ -2647,6 +2647,9 @@ export class LivePdvService {
           paymentMethod: c?.paymentMethod || null, // 'pix' | 'link'
           subtotalCents: c?.subtotalCents ?? null,
           freteCents: c?.freteCents ?? null,
+          // FORMA DE ENVIO (11/07): a loja precisa saber se posta SEDEX ou PAC.
+          // Derivada do CEP (mesma regra do cálculo do frete); pickup = null.
+          freteServico: c?.isPickup ? null : this.freteFromCep(c?.customerCep)?.servico ?? null,
           totalCents: c?.totalCents ?? null,
           // Retirada em loja (frete zero, até 7 dias úteis)
           isPickup: !!c?.isPickup,
