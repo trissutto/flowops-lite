@@ -81,6 +81,8 @@ export default function VendedorasPage() {
   const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'inactive'>('active');
 
   const [togglingId, setTogglingId] = useState<string | null>(null);
+  // Edição inline de LOJA/FUNÇÃO direto na lista (sem abrir o prontuário)
+  const [savingCell, setSavingCell] = useState<string | null>(null); // `${id}:loja` | `${id}:cargo`
 
   const load = async () => {
     setLoading(true);
@@ -125,6 +127,62 @@ export default function VendedorasPage() {
       alert('Erro: ' + (e?.message || e));
     } finally {
       setTogglingId(null);
+    }
+  }
+
+  /** Troca a LOJA inline. Grava storeCodeOrigin sempre; líder/gerente também
+   *  passa a responder pela loja escolhida (responsibleStoreId). */
+  async function changeLoja(seller: Seller, code: string) {
+    const store = stores.find((st) => st.code === code) || null;
+    const cargo = seller.cargo || 'VENDEDORA';
+    const body: any = { storeCodeOrigin: code || null };
+    if (cargo !== 'VENDEDORA') body.responsibleStoreId = store?.id || null;
+    setSavingCell(`${seller.id}:loja`);
+    try {
+      await api(`/sellers/${seller.id}`, { method: 'PATCH', body: JSON.stringify(body) });
+      setItems((prev) =>
+        prev.map((x) =>
+          x.id === seller.id
+            ? { ...x, storeCodeOrigin: code || null, responsibleStoreId: cargo !== 'VENDEDORA' ? (store?.id || null) : x.responsibleStoreId }
+            : x,
+        ),
+      );
+    } catch (e: any) {
+      alert('Erro ao trocar loja: ' + (e?.message || e));
+    } finally {
+      setSavingCell(null);
+    }
+  }
+
+  /** Troca a FUNÇÃO inline. Virou líder/gerente → responde pela loja atual;
+   *  virou vendedora → backend zera responsibleStoreId (mantém a loja de origem). */
+  async function changeCargo(seller: Seller, cargo: Cargo) {
+    const respStore = stores.find((st) => st.id === seller.responsibleStoreId);
+    const lojaCode = respStore?.code || seller.storeCodeOrigin || null;
+    const lojaStore = lojaCode ? stores.find((st) => st.code === lojaCode) || null : null;
+    const body: any = { cargo };
+    if (cargo !== 'VENDEDORA' && lojaStore) body.responsibleStoreId = lojaStore.id;
+    // Virando vendedora, preserva a loja visível como origem (o backend zera o responsible)
+    if (cargo === 'VENDEDORA' && !seller.storeCodeOrigin && lojaCode) body.storeCodeOrigin = lojaCode;
+    setSavingCell(`${seller.id}:cargo`);
+    try {
+      await api(`/sellers/${seller.id}`, { method: 'PATCH', body: JSON.stringify(body) });
+      setItems((prev) =>
+        prev.map((x) =>
+          x.id === seller.id
+            ? {
+                ...x,
+                cargo,
+                responsibleStoreId: cargo === 'VENDEDORA' ? null : (lojaStore?.id || x.responsibleStoreId),
+                storeCodeOrigin: x.storeCodeOrigin || lojaCode,
+              }
+            : x,
+        ),
+      );
+    } catch (e: any) {
+      alert('Erro ao trocar função: ' + (e?.message || e));
+    } finally {
+      setSavingCell(null);
     }
   }
 
@@ -288,26 +346,40 @@ export default function VendedorasPage() {
                         </span>
                       )}
                     </td>
-                    <td className="px-3 py-2">
-                      {lojaShow ? (
-                        <span className="inline-flex items-center gap-1">
-                          <span className="text-xs font-mono bg-slate-100 px-1.5 py-0.5 rounded">
-                            {lojaShow}
-                          </span>
-                          {lojaInfo && (
-                            <span className="text-xs text-slate-600">{lojaInfo.name}</span>
-                          )}
-                        </span>
-                      ) : (
-                        <span className="text-xs text-slate-400">—</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-2">
-                      <span
-                        className={`text-xs font-bold px-2 py-0.5 rounded uppercase ${CARGO_COLORS[cargo] || 'bg-slate-100 text-slate-600'}`}
+                    <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+                      <select
+                        value={lojaShow || ''}
+                        disabled={savingCell === `${s.id}:loja`}
+                        onChange={(e) => changeLoja(s, e.target.value)}
+                        className={`text-xs border border-slate-200 rounded-lg px-1.5 py-1 bg-white hover:border-emerald-400 cursor-pointer max-w-[180px] ${
+                          savingCell === `${s.id}:loja` ? 'opacity-50' : ''
+                        }`}
+                        title="Trocar a loja direto aqui"
                       >
-                        {CARGO_LABELS[cargo] || cargo}
-                      </span>
+                        <option value="">—</option>
+                        {stores.map((st) => (
+                          <option key={st.id} value={st.code}>
+                            {st.code} {st.name}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+                      <select
+                        value={cargo}
+                        disabled={savingCell === `${s.id}:cargo`}
+                        onChange={(e) => changeCargo(s, e.target.value as Cargo)}
+                        className={`text-xs font-bold rounded-lg px-1.5 py-1 border border-slate-200 cursor-pointer uppercase ${CARGO_COLORS[cargo] || 'bg-slate-100 text-slate-600'} ${
+                          savingCell === `${s.id}:cargo` ? 'opacity-50' : ''
+                        }`}
+                        title="Trocar a função direto aqui"
+                      >
+                        {(Object.keys(CARGO_LABELS) as Cargo[]).map((c) => (
+                          <option key={c} value={c}>
+                            {CARGO_LABELS[c]}
+                          </option>
+                        ))}
+                      </select>
                       {s.cargoFuncao && (
                         <div className="text-[10px] text-slate-500 mt-0.5">{s.cargoFuncao}</div>
                       )}
