@@ -105,6 +105,7 @@ function Painel({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
   const [pagando, setPagando] = useState<any | null>(null); // conta no modal de baixa
   const [logsDe, setLogsDe] = useState<any | null>(null);
   const [showLote, setShowLote] = useState(false);
+  const [editando, setEditando] = useState<any | null>(null);
 
   const carregarBase = useCallback(() => {
     api<any>('/admin/contas-pagar/stats').then(setStats).catch(() => {});
@@ -125,6 +126,7 @@ function Painel({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
       p.set('status', status);
       if (soEmMaos) p.set('emMaos', '1');
       p.set('page', String(page));
+      p.set('perPage', '200'); // quebra de página de 200 em 200 (pedido do dono)
       const r = await api<any>(`/admin/contas-pagar/list?${p}`);
       setData(r);
     } catch (e: any) {
@@ -273,6 +275,7 @@ function Painel({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
                     ) : (
                       <button onClick={() => acao(() => api(`/admin/contas-pagar/${r.id}/reabrir`, { method: 'PATCH' }), 'Conta reaberta')} className="text-[12px] font-bold px-2.5 py-1 rounded-lg border border-[#E7E2D8] text-slate-500 hover:bg-[#FBF6E6] mr-1">Reabrir</button>
                     )}
+                    <button onClick={() => setEditando(r)} title="Editar lançamento" className="p-1.5 rounded-lg border border-[#E7E2D8] text-slate-400 hover:bg-[#FBF6E6] mr-1"><Pencil className="w-3.5 h-3.5" /></button>
                     <button onClick={() => setLogsDe(r)} title="Histórico/auditoria" className="p-1.5 rounded-lg border border-[#E7E2D8] text-slate-400 hover:bg-[#FBF6E6] mr-1"><History className="w-3.5 h-3.5" /></button>
                     <button
                       onClick={() => { if (confirm(`Excluir a conta ${r.beneficiario || ''} ${brl(r.valorCents)}? (fica no histórico, com seu nome)`)) acao(() => api(`/admin/contas-pagar/${r.id}`, { method: 'DELETE' }), 'Conta excluída'); }}
@@ -317,6 +320,16 @@ function Painel({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
         />
       )}
       {logsDe && <LogsModal conta={logsDe} onClose={() => setLogsDe(null)} />}
+      {editando && (
+        <EditarModal
+          conta={editando}
+          lojas={lojas}
+          especies={especies}
+          onClose={() => setEditando(null)}
+          onOk={() => { setEditando(null); carregar(); carregarBase(); }}
+          avisar={avisar}
+        />
+      )}
       {showLote && data && (
         <BaixaLoteModal
           total={data.total}
@@ -328,6 +341,87 @@ function Painel({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
         />
       )}
     </div>
+  );
+}
+
+/* ═══════════ MODAL: EDITAR LANÇAMENTO (auditoria por campo no backend) ═══════════ */
+function EditarModal({ conta, lojas, especies, onClose, onOk, avisar }: any) {
+  const isFunc = conta.beneficiarioTipo === 'funcionaria';
+  const [beneficiario, setBeneficiario] = useState(conta.beneficiario || '');
+  const [lojaCode, setLojaCode] = useState(conta.lojaCode || '');
+  const [especieId, setEspecieId] = useState(conta.especieId || '');
+  const [notaFiscal, setNotaFiscal] = useState(conta.notaFiscal || '');
+  const [banco, setBanco] = useState(conta.banco || '');
+  const [emissao, setEmissao] = useState(conta.emissao ? String(conta.emissao).slice(0, 10) : '');
+  const [vencimento, setVencimento] = useState(conta.vencimento ? String(conta.vencimento).slice(0, 10) : '');
+  const [valor, setValor] = useState((conta.valorCents / 100).toFixed(2).replace('.', ','));
+  const [obs, setObs] = useState(conta.observacao || '');
+  const [saving, setSaving] = useState(false);
+
+  const salvar = async () => {
+    const valorCents = Math.round((parseFloat(valor.replace(/\./g, '').replace(',', '.')) || 0) * 100);
+    if (!valorCents || valorCents <= 0) { avisar('erro', 'Valor inválido'); return; }
+    if (!vencimento) { avisar('erro', 'Informe o vencimento'); return; }
+    setSaving(true);
+    try {
+      await api(`/admin/contas-pagar/${conta.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          [isFunc ? 'sellerNome' : 'fornecedorNome']: beneficiario.trim() || null,
+          lojaCode,
+          especieId: especieId || null,
+          notaFiscal: notaFiscal || null,
+          banco: banco || null,
+          emissao: emissao || null,
+          vencimento,
+          valorCents,
+          observacao: obs || null,
+        }),
+      });
+      avisar('ok', 'Lançamento atualizado (mudanças na auditoria)');
+      onOk();
+    } catch (e: any) {
+      avisar('erro', e?.message || 'Falha ao salvar');
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <Modal titulo={`Editar — conta nº ${conta.numero}${conta.gigaRegistro ? ` (GIGA ${conta.gigaRegistro})` : ''}`} onClose={onClose} largo>
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+        <div className="col-span-2">
+          <Campo label={isFunc ? 'Funcionária' : 'Fornecedor'}>
+            <input value={beneficiario} onChange={(e) => setBeneficiario(e.target.value)} className="inp" />
+          </Campo>
+        </div>
+        <Campo label="Loja">
+          <select value={lojaCode} onChange={(e) => setLojaCode(e.target.value)} className="inp">
+            {!lojas.some((l: any) => l.code === lojaCode) && lojaCode && <option value={lojaCode}>{lojaCode}</option>}
+            {lojas.map((l: any) => <option key={l.code} value={l.code}>{l.code} · {l.nome}</option>)}
+          </select>
+        </Campo>
+        <Campo label="Espécie">
+          <select value={especieId} onChange={(e) => setEspecieId(e.target.value)} className="inp">
+            <option value="">—</option>
+            {especies.map((e: any) => <option key={e.id} value={e.id}>{e.nome}{e.restrita ? ' 🔒' : ''}</option>)}
+          </select>
+        </Campo>
+        <Campo label="Nota fiscal"><input value={notaFiscal} onChange={(e) => setNotaFiscal(e.target.value)} className="inp" /></Campo>
+        <Campo label="Banco"><input value={banco} onChange={(e) => setBanco(e.target.value)} className="inp" /></Campo>
+        <Campo label="Emissão"><input type="date" value={emissao} onChange={(e) => setEmissao(e.target.value)} className="inp" /></Campo>
+        <Campo label="Vencimento"><input type="date" value={vencimento} onChange={(e) => setVencimento(e.target.value)} className="inp" /></Campo>
+        <Campo label="Valor (R$)"><input value={valor} onChange={(e) => setValor(e.target.value)} className="inp font-bold text-[#2E7D46]" /></Campo>
+      </div>
+      <div className="mt-3">
+        <Campo label="Observações"><input value={obs} onChange={(e) => setObs(e.target.value)} className="inp" /></Campo>
+      </div>
+      <p className="text-[11px] text-slate-400 mt-2">Cada campo alterado entra na auditoria da conta (antes → depois, com seu nome).</p>
+      <div className="flex justify-end gap-2 mt-4">
+        <button onClick={onClose} className="px-4 py-2 rounded-lg border border-[#E7E2D8] text-slate-500 font-bold text-sm">Cancelar</button>
+        <button onClick={salvar} disabled={saving} className="px-4 py-2 rounded-lg bg-[#2E7D46] text-white font-bold text-sm flex items-center gap-2 disabled:opacity-50">
+          {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />} Salvar alterações
+        </button>
+      </div>
+    </Modal>
   );
 }
 
