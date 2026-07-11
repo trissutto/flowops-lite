@@ -2367,6 +2367,137 @@ export class LivePdvService {
    * Pipeline pós-pagamento: marca pago, gera ordens de separação por loja de
    * origem e avisa cada loja em tempo real.
    */
+  /**
+   * RE-CONSOLIDAÇÃO AUTOMÁTICA DE ORIGEM (decisão do dono, 11/07):
+   * cada peça escolhe a loja NA HORA que entra no carrinho (item a item), e o
+   * agrupador de frete só olha lojas JÁ usadas — ninguém reavalia o carrinho
+   * completo no fim. Caso real: 3 peças em ITANHAÉM + SÃO JOSÉ + PRAIA GRANDE
+   * sendo que PRAIA GRANDE cobria as 3 sozinha (3 fretes em vez de 1).
+   *
+   * Roda no PAGAMENTO CONFIRMADO (antes da conferência/separação): roteia o
+   * carrinho INTEIRO no RoutingEngine (Regra 1: uma loja só; senão mínimo de
+   * lojas) e SÓ APLICA se reduzir o número de lojas envolvidas. Regras:
+   *   - item com origem trocada NA MÃO (originManual) não se move; manuais em
+   *     2+ lojas = não mexe em nada (operadora assumiu o controle); manual em
+   *     1 loja vira preferStoreCode (o motor gravita pra ela).
+   *   - disponibilidade = estoque espelho − reservas de OUTROS carrinhos (as
+   *     reservas do próprio carrinho voltam pro saldo — são as peças movidas).
+   *   - QUALQUER erro → loga e mantém as origens atuais (nunca trava pagamento).
+   */
+  private async reconsolidateCartOrigins(cartId: string): Promise<void> {
+    try {
+      const items: any[] = await (this.prisma as any).livePdvItem.findMany({
+        where: { cartId, status: { in: ['reserved', 'paid'] } },
+      });
+      if (items.length < 2) return;
+      const currentStores = new Set(
+        items.map((i) => String(i.originStoreCode || '')).filter(Boolean),
+      );
+      if (currentStores.size <= 1) return; // já está numa loja só
+
+      const movable = items.filter((i) => !i.originManual);
+      if (!movable.length) return;
+      const manualStores = new Set(
+        items
+          .filter((i) => i.originManual)
+          .map((i) => String(i.originStoreCode || ''))
+          .filter(Boolean),
+      );
+      if (manualStores.size > 1) return; // operadora espalhou de propósito
+
+      // Demanda agregada por itemKey (só itens móveis)
+      const demand = new Map<string, number>();
+      const itemMeta = new Map<string, { refCode: string; cor: string | null; tamanho: string | null }>();
+      for (const it of movable) {
+        demand.set(it.itemKey, (demand.get(it.itemKey) || 0) + Number(it.qty || 1));
+        if (!itemMeta.has(it.itemKey)) {
+          itemMeta.set(it.itemKey, { refCode: it.refCode, cor: it.cor, tamanho: it.tamanho });
+        }
+      }
+
+      // Reservas do PRÓPRIO carrinho por key::loja — voltam pro saldo disponível
+      const ownByKeyStore = new Map<string, number>();
+      for (const it of movable) {
+        const k = `${it.itemKey}::${it.originStoreCode}`;
+        ownByKeyStore.set(k, (ownByKeyStore.get(k) || 0) + Number(it.qty || 1));
+      }
+
+      const keys = Array.from(demand.keys());
+      const { byKeyStore } = await this.committed(keys);
+      const storesMap = await this.storesMap();
+
+      const storeInputs: StoreInput[] = [];
+      const seenStores = new Set<string>();
+      const stock: StockEntry[] = [];
+      for (const key of keys) {
+        const meta = itemMeta.get(key)!;
+        const { byStore } = await this.erpStockByStoreForItem(meta.refCode, meta.cor, meta.tamanho);
+        for (const [storeCode, raw] of byStore.entries()) {
+          const st = storesMap.get(storeCode);
+          if (!st) continue;
+          if (!seenStores.has(storeCode)) {
+            seenStores.add(storeCode);
+            storeInputs.push({
+              id: st.id,
+              code: st.code,
+              name: st.name,
+              cep: st.cep,
+              priorityScore: st.priorityScore ?? 50,
+              active: true,
+            });
+          }
+          const reserved = byKeyStore.get(`${key}::${storeCode}`) || 0;
+          const own = ownByKeyStore.get(`${key}::${storeCode}`) || 0;
+          stock.push({ storeCode, sku: key, availableQty: Math.max(0, raw - reserved + own) });
+        }
+      }
+      if (!storeInputs.length) return;
+
+      const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
+      const session = cart ? await this.getSession(cart.sessionId).catch(() => null) : null;
+      const preferStoreCode = manualStores.size === 1 ? Array.from(manualStores)[0] : undefined;
+
+      const result = this.routing.route({
+        items: keys.map((k) => ({ sku: k, quantity: demand.get(k)! })),
+        stores: storeInputs,
+        stock,
+        shippingCep: cart?.customerCep || session?.liveStoreCode || null,
+        preferStoreCode,
+      });
+      if (!result.success || !result.assignments.length) return;
+
+      const newStores = new Set<string>([...manualStores]);
+      for (const a of result.assignments) newStores.add(a.storeCode);
+      if (newStores.size >= currentStores.size) return; // só aplica se REDUZIU
+
+      // Aplica: move cada item móvel pra loja do plano (por itemKey)
+      const targetByKey = new Map<string, { code: string; name: string }>();
+      for (const a of result.assignments) {
+        for (const it of a.items) targetByKey.set(it.sku, { code: a.storeCode, name: a.storeName });
+      }
+      let moved = 0;
+      for (const it of movable) {
+        const target = targetByKey.get(it.itemKey);
+        if (!target || target.code === it.originStoreCode) continue;
+        await (this.prisma as any).livePdvItem.update({
+          where: { id: it.id },
+          data: { originStoreCode: target.code, originStoreName: target.name },
+        });
+        moved++;
+      }
+      if (moved > 0) {
+        this.logger.log(
+          `[reconsolida] carrinho ${cartId}: ${currentStores.size} loja(s) → ${newStores.size} ` +
+            `(${Array.from(newStores).join(', ')}), ${moved} item(ns) movido(s)`,
+        );
+      }
+    } catch (e) {
+      this.logger.warn(
+        `[reconsolida] carrinho ${cartId}: falhou, mantendo origens atuais — ${(e as Error).message}`,
+      );
+    }
+  }
+
   async onCartPaid(cartId: string) {
     const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
     if (!cart) throw new NotFoundException('Carrinho não encontrado');
@@ -2382,6 +2513,10 @@ export class LivePdvService {
       where: { id: cartId },
       data: { status: 'paid', paidAt: now },
     });
+    // RE-CONSOLIDAÇÃO AUTOMÁTICA (11/07): junta as origens do carrinho no
+    // MÍNIMO de lojas possível (ideal: uma só) antes da conferência/separação.
+    // Nunca lança — em erro, mantém as origens escolhidas durante a live.
+    await this.reconsolidateCartOrigins(cartId);
     // DECISÃO DO DONO (07/07): pagamento confirmado NÃO manda direto pra loja.
     // A operadora primeiro CONFERE/COMPLETA os dados da cliente (endereço) e
     // só então libera — releaseSeparation() abaixo. Igual ao fluxo do site.
