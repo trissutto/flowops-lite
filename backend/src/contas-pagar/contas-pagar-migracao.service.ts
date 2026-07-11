@@ -7,17 +7,18 @@ import { ErpService } from '../erp/erp.service';
  * Dossiê-contrato: docs/GIGA-CONTAS-DESCOBERTA.md. Decisão do dono (11/07):
  * 100% Flow — migra o histórico UMA vez (idempotente) e o GIGA congela.
  *
- * 3 operações, todas admin-only e re-executáveis sem duplicar nada:
- *  1. syncEspelho()  — copia a tabela `pagar` crua pro Postgres (giga_pagar).
- *  2. migrar()       — upsert ContaPagar por gigaRegistro com DE-PARA de
- *                      espécie, normalização do EM MÃOS e flags de qualidade.
- *  3. validar()      — contagens/somas GIGA(espelho) × FLOW por status —
- *                      aceite = tudo batendo (relatório de discrepâncias).
+ * ⚠️ EM BACKGROUND (11/07, lição do caso real): a 1ª rodada travou no meio
+ * porque o botão esperava a migração NA MESMA requisição HTTP e o proxy corta
+ * em ~5min — MESMA armadilha do "Sync Completo" do Wincred (02/07). Agora:
+ * start* responde na hora, o progresso fica em memória (GET progresso) e o
+ * clique duplo é travado. A migração processa em LOTES (createMany) e PULA os
+ * registros já migrados — re-rodar continua de onde parou, nunca duplica.
  */
 @Injectable()
 export class ContasPagarMigracaoService {
   private readonly logger = new Logger(ContasPagarMigracaoService.name);
   private readonly BATCH = 3000;
+  private readonly INSERT_BATCH = 1000;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -42,6 +43,48 @@ export class ContasPagarMigracaoService {
     'SALARIO', 'COMISSAO', 'VALE', 'SEM ESPECIE',
   ];
 
+  // ═══ ESTADO DO JOB EM BACKGROUND ═══════════════════════════════════════════
+  private bg: {
+    running: boolean;
+    step: 'espelho' | 'migracao' | null;
+    startedAt: string | null;
+    finishedAt: string | null;
+    processed: number;
+    total: number;
+    error: string | null;
+    resumo: any;
+  } = { running: false, step: null, startedAt: null, finishedAt: null, processed: 0, total: 0, error: null, resumo: null };
+
+  getProgresso() {
+    return this.bg;
+  }
+
+  startEspelhoBackground(): { started: boolean; alreadyRunning: boolean } {
+    if (this.bg.running) return { started: false, alreadyRunning: true };
+    this.bg = { running: true, step: 'espelho', startedAt: new Date().toISOString(), finishedAt: null, processed: 0, total: 0, error: null, resumo: null };
+    void (async () => {
+      const r = await this.syncEspelho();
+      this.bg.running = false;
+      this.bg.finishedAt = new Date().toISOString();
+      this.bg.error = r.ok ? null : r.error || 'falhou';
+      this.bg.resumo = r;
+    })();
+    return { started: true, alreadyRunning: false };
+  }
+
+  startMigracaoBackground(): { started: boolean; alreadyRunning: boolean } {
+    if (this.bg.running) return { started: false, alreadyRunning: true };
+    this.bg = { running: true, step: 'migracao', startedAt: new Date().toISOString(), finishedAt: null, processed: 0, total: 0, error: null, resumo: null };
+    void (async () => {
+      const r = await this.migrar();
+      this.bg.running = false;
+      this.bg.finishedAt = new Date().toISOString();
+      this.bg.error = r.ok ? null : r.error || 'falhou';
+      this.bg.resumo = r;
+    })();
+    return { started: true, alreadyRunning: false };
+  }
+
   // ═══ 1. ESPELHO RAW (giga_pagar) ═══════════════════════════════════════════
   async syncEspelho(): Promise<{ ok: boolean; linhas: number; durationMs: number; error?: string }> {
     const t0 = Date.now();
@@ -50,9 +93,9 @@ export class ContasPagarMigracaoService {
     try {
       const [cnt] = await pool.query({ sql: 'SELECT COUNT(*) AS c FROM pagar', timeout: 60_000 });
       const total = Number((cnt as any[])[0]?.c ?? 0);
+      this.bg.total = total;
       this.logger.log(`[espelho] iniciando — ${total} linhas no GIGA`);
 
-      // SELECT primeiro, TRUNCATE depois do 1º batch chegar (janela mínima sem dados)
       let offset = 0;
       let processed = 0;
       let truncated = false;
@@ -87,6 +130,7 @@ export class ContasPagarMigracaoService {
         }));
         await (this.prisma as any).gigaPagar.createMany({ data, skipDuplicates: true });
         processed += data.length;
+        this.bg.processed = processed;
         offset += this.BATCH;
         if (processed % 15000 === 0) this.logger.log(`[espelho] ${processed}/${total}`);
       }
@@ -110,8 +154,13 @@ export class ContasPagarMigracaoService {
   }
 
   // ═══ 2. MIGRAÇÃO IDEMPOTENTE (giga_pagar → conta_pagar) ═══════════════════
+  // OTIMIZADA (11/07): a 1ª versão fazia findUnique+create+log POR LINHA
+  // (216k round-trips — morria no meio). Agora: Set dos gigaRegistro já
+  // migrados (1 query) + createMany em lotes de 1000, PULANDO os existentes
+  // (GIGA congelado — registro migrado não muda). Auditoria da migração fica
+  // no createdBy='migracao-giga'; log por campo é só das edições NA TELA.
   async migrar(): Promise<{
-    ok: boolean; processadas: number; criadas: number; atualizadas: number;
+    ok: boolean; processadas: number; criadas: number; puladas: number;
     orfaos: number; datasSuspeitas: number; durationMs: number; error?: string;
   }> {
     const t0 = Date.now();
@@ -127,16 +176,41 @@ export class ContasPagarMigracaoService {
       const especies: any[] = await (this.prisma as any).especieConta.findMany();
       const especieIdByNome = new Map<string, string>(especies.map((e) => [e.nome, e.id]));
 
-      // Fornecedores do GIGA (nome por código) — 2.091 linhas, cabe em memória
-      const pool: any = (this.erp as any).pool;
+      // Fornecedores: espelho wincred_fornecedores primeiro (Postgres, sem
+      // depender do Giga vivo); fallback Giga só se o espelho estiver vazio.
       const fornByCod = new Map<number, string>();
-      if (pool) {
-        const [fRows] = await pool.query({ sql: 'SELECT CODIGO, RAZAOSOCIAL FROM fornecedores', timeout: 60_000 });
-        for (const f of fRows as any[]) fornByCod.set(Number(f.CODIGO), String(f.RAZAOSOCIAL || '').trim());
+      const fornMirror: any[] = await (this.prisma as any).wincredFornecedor
+        .findMany({ select: { codigo: true, razaoSocial: true } })
+        .catch(() => []);
+      for (const f of fornMirror) fornByCod.set(Number(f.codigo), String(f.razaoSocial || '').trim());
+      if (!fornByCod.size) {
+        const pool: any = (this.erp as any).pool;
+        if (pool) {
+          const [fRows] = await pool.query({ sql: 'SELECT CODIGO, RAZAOSOCIAL FROM fornecedores', timeout: 60_000 });
+          for (const f of fRows as any[]) fornByCod.set(Number(f.CODIGO), String(f.RAZAOSOCIAL || '').trim());
+        }
       }
 
-      let processadas = 0, criadas = 0, atualizadas = 0, orfaos = 0, datasSuspeitas = 0;
+      // Já migrados: pula (GIGA congelado). Re-rodar = continua de onde parou.
+      const existentes: any[] = await (this.prisma as any).contaPagar.findMany({
+        where: { gigaRegistro: { not: null } },
+        select: { gigaRegistro: true },
+      });
+      const jaMigrados = new Set<number>(existentes.map((e) => Number(e.gigaRegistro)));
+
+      this.bg.total = await (this.prisma as any).gigaPagar.count();
+
+      let processadas = 0, criadas = 0, puladas = 0, orfaos = 0, datasSuspeitas = 0;
       let cursor = -1;
+      let pendentes: any[] = [];
+
+      const flush = async () => {
+        if (!pendentes.length) return;
+        await (this.prisma as any).contaPagar.createMany({ data: pendentes, skipDuplicates: true });
+        criadas += pendentes.length;
+        pendentes = [];
+      };
+
       for (;;) {
         const lote: any[] = await (this.prisma as any).gigaPagar.findMany({
           where: { registro: { gt: cursor } },
@@ -147,11 +221,14 @@ export class ContasPagarMigracaoService {
         cursor = lote[lote.length - 1].registro;
 
         for (const g of lote) {
+          processadas++;
+          if (jaMigrados.has(Number(g.registro))) { puladas++; continue; }
+
           const espOriginal = (g.pesp || '').trim().toUpperCase();
           const espNome = ContasPagarMigracaoService.ESPECIE_DEPARA[espOriginal] || (espOriginal ? espOriginal : 'SEM ESPECIE');
           const especieId = especieIdByNome.get(espNome) || especieIdByNome.get('SEM ESPECIE') || null;
 
-          const fornNome = g.pfav != null ? fornByCod.get(g.pfav) || null : null;
+          const fornNome = g.pfav != null ? fornByCod.get(Number(g.pfav)) || null : null;
           const favorecidoOrfao = g.pfav != null && !fornNome;
           if (favorecidoOrfao) orfaos++;
 
@@ -165,8 +242,8 @@ export class ContasPagarMigracaoService {
             (anoVen != null && (anoVen < 1990 || anoVen > 2035));
           if (dataSuspeita) datasSuspeitas++;
 
-          const valorCents = Math.round(Number(g.pval || 0) * 100);
-          const data = {
+          pendentes.push({
+            gigaRegistro: g.registro,
             lojaCode: (g.loja || '').trim() || '??',
             beneficiarioTipo: 'fornecedor',
             fornecedorGigaCodigo: g.pfav,
@@ -178,7 +255,7 @@ export class ContasPagarMigracaoService {
             cheque: g.ncheque,
             emissao: g.pemi,
             vencimento: g.pven || g.pemi || new Date(Date.UTC(1800, 0, 1)),
-            valorCents,
+            valorCents: Math.round(Number(g.pval || 0) * 100),
             pagamento: g.paga,
             jurosCents: Math.round(Number(g.pjur || 0) * 100),
             descontoCents: Math.round(Number(g.pdes || 0) * 100),
@@ -189,29 +266,20 @@ export class ContasPagarMigracaoService {
             favorecidoOrfao,
             dataSuspeita,
             createdBy: 'migracao-giga',
-          };
-          const existing = await (this.prisma as any).contaPagar.findUnique({
-            where: { gigaRegistro: g.registro },
-            select: { id: true },
           });
-          if (existing) {
-            await (this.prisma as any).contaPagar.update({ where: { gigaRegistro: g.registro }, data });
-            atualizadas++;
-          } else {
-            await (this.prisma as any).contaPagar.create({ data: { ...data, gigaRegistro: g.registro } });
-            criadas++;
-          }
-          processadas++;
+          if (pendentes.length >= this.INSERT_BATCH) await flush();
         }
+        this.bg.processed = processadas;
         if (processadas % 15000 === 0) this.logger.log(`[migracao] ${processadas} processadas…`);
       }
+      await flush();
       this.logger.log(
-        `[migracao] OK — ${processadas} (novas ${criadas}, atualizadas ${atualizadas}, órfãos ${orfaos}, datas suspeitas ${datasSuspeitas}) em ${Date.now() - t0}ms`,
+        `[migracao] OK — ${processadas} (novas ${criadas}, puladas ${puladas}, órfãos ${orfaos}, datas suspeitas ${datasSuspeitas}) em ${Date.now() - t0}ms`,
       );
-      return { ok: true, processadas, criadas, atualizadas, orfaos, datasSuspeitas, durationMs: Date.now() - t0 };
+      return { ok: true, processadas, criadas, puladas, orfaos, datasSuspeitas, durationMs: Date.now() - t0 };
     } catch (e: any) {
       this.logger.error(`[migracao] FALHOU: ${e?.message}`);
-      return { ok: false, processadas: 0, criadas: 0, atualizadas: 0, orfaos: 0, datasSuspeitas: 0, durationMs: Date.now() - t0, error: e?.message };
+      return { ok: false, processadas: 0, criadas: 0, puladas: 0, orfaos: 0, datasSuspeitas: 0, durationMs: Date.now() - t0, error: e?.message };
     }
   }
 
