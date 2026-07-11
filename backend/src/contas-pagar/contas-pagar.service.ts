@@ -269,12 +269,15 @@ export class ContasPagarService {
     }
 
     // Parcelas: usa as customizadas da PRÉVIA se vieram; senão gera mensal.
-    let parcelas: Array<{ vencimento: Date; valorCents: number; emMaos: boolean }> = [];
+    // Duplicata (numerarDuplicatas): cada parcela ganha nota própria "NF/1", "NF/2"…
+    const nfBase = String(body.notaFiscal || '').trim();
+    let parcelas: Array<{ vencimento: Date; valorCents: number; emMaos: boolean; notaFiscal?: string | null }> = [];
     if (Array.isArray(body.parcelasCustom) && body.parcelasCustom.length) {
       parcelas = body.parcelasCustom.map((p: any) => ({
         vencimento: new Date(`${p.vencimento}T00:00:00.000Z`),
         valorCents: Math.round(Number(p.valorCents || 0)),
         emMaos: !!p.emMaos,
+        notaFiscal: String(p.notaFiscal || '').trim() || null,
       }));
       const soma = parcelas.reduce((s, p) => s + p.valorCents, 0);
       if (Math.abs(soma - valorTotal) > parcelas.length) {
@@ -282,6 +285,7 @@ export class ContasPagarService {
       }
     } else {
       const n = Math.min(60, Math.max(1, Number(body.parcelas || 1)));
+      const numerar = !!body.numerarDuplicatas && !!nfBase && n > 1;
       const base = Math.floor(valorTotal / n);
       for (let i = 0; i < n; i++) {
         const v = new Date(venc1);
@@ -290,6 +294,7 @@ export class ContasPagarService {
           vencimento: v,
           valorCents: i === n - 1 ? valorTotal - base * (n - 1) : base,
           emMaos: i === 0 ? !!body.emMaos : false,
+          notaFiscal: numerar ? `${nfBase}/${i + 1}` : null,
         });
       }
     }
@@ -308,7 +313,7 @@ export class ContasPagarService {
           sellerNome: tipo === 'funcionaria' ? String(body.sellerNome || '').trim() || null : null,
           sellerCpf: tipo === 'funcionaria' ? String(body.sellerCpf || '').replace(/\D/g, '') || null : null,
           especieId: body.especieId || null,
-          notaFiscal: body.notaFiscal || null,
+          notaFiscal: p.notaFiscal || nfBase || null,
           banco: body.banco || null,
           emissao: body.emissao ? new Date(`${body.emissao}T00:00:00.000Z`) : null,
           vencimento: p.vencimento,
