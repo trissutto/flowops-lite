@@ -81,7 +81,7 @@ export class SellersController {
   @AdminOnly()
   update(
     @Param('id') id: string,
-    @Body() body: { name?: string; whatsapp?: string | null; active?: boolean; cargo?: string; responsibleStoreId?: string | null },
+    @Body() body: { name?: string; whatsapp?: string | null; active?: boolean; cargo?: string; responsibleStoreId?: string | null; storeCodeOrigin?: string | null },
   ) {
     return this.svc.update(id, body);
   }

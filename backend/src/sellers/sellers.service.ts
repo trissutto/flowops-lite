@@ -356,6 +356,7 @@ export class SellersService {
       active?: boolean;
       cargo?: string;
       responsibleStoreId?: string | null;
+      storeCodeOrigin?: string | null;
       // Prontuario RH
       cpf?: string | null;
       rg?: string | null;
@@ -404,6 +405,11 @@ export class SellersService {
     }
     if (input.responsibleStoreId !== undefined) {
       data.responsibleStoreId = input.responsibleStoreId || null;
+    }
+    // Loja "de origem" (agrupamento/lista) — editável inline na lista de
+    // funcionárias. É a loja mostrada pra VENDEDORA (que não tem responsibleStore).
+    if (input.storeCodeOrigin !== undefined) {
+      data.storeCodeOrigin = String(input.storeCodeOrigin || '').trim() || null;
     }
 
     // ── PRONTUARIO RH ──
