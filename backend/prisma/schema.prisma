@@ -3837,3 +3837,24 @@ model ContaPagarLog {
   @@index([createdAt])
   @@map("conta_pagar_log")
 }
+
+/// Associação Fornecedor(GIGA) → Funcionária (decisão do dono 11/07): os
+/// ~440 "fornecedores" que são PESSOAS (folha RH/VALE de 20 anos) viram
+/// beneficiário FUNCIONÁRIA nas contas e somem do autocomplete de
+/// fornecedores. Persistente (o espelho wincred_fornecedores é truncado a
+/// cada sync — flag lá se perderia). naoEhPessoa=true = descartado da
+/// conciliação (ex.: CONTABILIDADE). Reversível (desfazer apaga a linha).
+model ContaPagarAssociacao {
+  id                   String   @id @default(cuid())
+  fornecedorGigaCodigo Int      @unique @map("fornecedor_giga_codigo")
+  fornecedorNome       String?  @map("fornecedor_nome") @db.VarChar(120)
+  sellerId             String?  @map("seller_id")
+  sellerNome           String?  @map("seller_nome") @db.VarChar(120)
+  naoEhPessoa          Boolean  @default(false) @map("nao_eh_pessoa")
+  contasConvertidas    Int      @default(0) @map("contas_convertidas")
+  criadoPor            String?  @map("criado_por") @db.VarChar(80)
+  createdAt            DateTime @default(now()) @map("created_at")
+
+  @@index([sellerId])
+  @@map("conta_pagar_associacao")
+}

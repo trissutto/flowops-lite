@@ -4,6 +4,7 @@ import {
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { ContasPagarMigracaoService } from './contas-pagar-migracao.service';
 import { ContasPagarService } from './contas-pagar.service';
+import { ContasPagarAssociacaoService } from './contas-pagar-associacao.service';
 
 /**
  * Contas a Pagar 100% Flow — v1 é ferramenta da MATRIZ (admin/master).
@@ -23,6 +24,7 @@ export class ContasPagarController {
   constructor(
     private readonly migracao: ContasPagarMigracaoService,
     private readonly svc: ContasPagarService,
+    private readonly assoc: ContasPagarAssociacaoService,
   ) {}
 
   private requireAdmin(req: any): string {
@@ -171,5 +173,54 @@ export class ContasPagarController {
   logs(@Req() req: any, @Param('id') id: string) {
     this.requireAdmin(req);
     return this.svc.logs(id);
+  }
+
+  // ── associação Fornecedor → Funcionária ───────────────────────────────────
+  @Post('associacao/importar-giga')
+  importarGiga(@Req() req: any) {
+    const usuario = this.requireAdmin(req);
+    return this.assoc.importarFuncionariasGiga(usuario);
+  }
+
+  @Get('associacao/candidatos')
+  candidatos(@Req() req: any) {
+    this.requireAdmin(req);
+    return this.assoc.candidatos();
+  }
+
+  @Get('associacao/funcionarias')
+  buscarFuncionarias(@Req() req: any, @Query('q') q?: string) {
+    this.requireAdmin(req);
+    return this.assoc.buscarFuncionarias(q);
+  }
+
+  @Get('associacao/decididos')
+  decididos(@Req() req: any) {
+    this.requireAdmin(req);
+    return this.assoc.decididos();
+  }
+
+  @Post('associacao/associar')
+  associar(@Req() req: any, @Body() body: any) {
+    const usuario = this.requireAdmin(req);
+    return this.assoc.associar(body, usuario);
+  }
+
+  @Post('associacao/confirmar-exatos')
+  confirmarExatos(@Req() req: any) {
+    const usuario = this.requireAdmin(req);
+    return this.assoc.confirmarExatos(usuario);
+  }
+
+  @Post('associacao/nao-eh-pessoa')
+  naoEhPessoa(@Req() req: any, @Body() body: any) {
+    const usuario = this.requireAdmin(req);
+    return this.assoc.naoEhPessoa(Number(body?.fornecedorGigaCodigo), usuario);
+  }
+
+  @Post('associacao/desfazer')
+  desfazerAssociacao(@Req() req: any, @Body() body: any) {
+    const usuario = this.requireAdmin(req);
+    return this.assoc.desfazer(Number(body?.fornecedorGigaCodigo), usuario);
   }
 }
