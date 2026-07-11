@@ -49,6 +49,7 @@ const GESTAO_ITEMS: GestaoItem[] = [
   { href: '/retaguarda/inteligencia-estoque', label: 'Inteligência',      subtitle: 'Estoque',       description: 'Análise de produto + venda',    tone: 'purple', icon: BarChart3       },
   { href: '/retaguarda/distribuicao-estoque', label: 'Distribuição',      subtitle: 'Estoque PLUS',  description: 'Detecta desequilíbrios entre lojas', tone: 'rose',   icon: Package         },
   // "Financeiro" (analítico WC) movido pro hub /site — é financeiro do e-commerce.
+  { href: '/retaguarda/contas-pagar',         label: 'Contas a Pagar',    subtitle: 'Financeiro',    description: 'Vencimentos, fornecedores e funcionárias', tone: 'green', icon: DollarSign },
   { href: '/retaguarda/financeiro/transferencias', label: 'Transferências', subtitle: 'Inter-lojas',  description: 'Royalties + fechamento',        tone: 'green',  icon: DollarSign      },
   { href: '/retaguarda/transferencias-rede-franquia', label: 'REDE × Franquia', subtitle: 'Conta corrente', description: 'Acerto da franqueada + extrato analítico', tone: 'teal', icon: Network },
   { href: '/relatorios/vendedoras',           label: 'Vendedoras',        subtitle: 'Ranking',       description: 'Vendas por mês',                tone: 'rose',   icon: Users           },
