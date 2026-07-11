@@ -142,8 +142,8 @@ export class ContasPagarService {
     };
   }
 
-  // ── painel: listagem ──────────────────────────────────────────────────────
-  async list(f: ListFilters) {
+  // ── filtros → where (compartilhado entre list e baixa em lote) ────────────
+  private async montarWhere(f: ListFilters): Promise<any> {
     const where: any = { deletedAt: null };
     if (f.status === 'pendentes' || !f.status) where.status = 'aberta';
     else if (f.status === 'pagas') where.status = 'paga';
@@ -184,7 +184,12 @@ export class ContasPagarService {
         return { OR: or };
       });
     }
+    return where;
+  }
 
+  // ── painel: listagem ──────────────────────────────────────────────────────
+  async list(f: ListFilters) {
+    const where = await this.montarWhere(f);
     const page = Math.max(1, f.page || 1);
     const perPage = Math.min(100, Math.max(10, f.perPage || 50));
     const cp = (this.prisma as any).contaPagar;
@@ -390,6 +395,51 @@ export class ContasPagarService {
       orderBy: { createdAt: 'desc' },
       take: 100,
     });
+  }
+
+  // ── BAIXA EM LOTE (11/07 — "precisa verificar e baixar") ─────────────────
+  // O GIGA veio com 6.452 contas em aberto acumuladas em 20+ anos (1977,
+  // 2000, testes de R$0,01…) — pagas na vida real, nunca baixadas no WinCred.
+  // Baixa TODAS as contas ABERTAS do filtro atual de uma vez, com motivo
+  // OBRIGATÓRIO e auditoria individual (quem, quando, motivo).
+  async baixaEmLote(f: ListFilters, body: any, usuario?: string) {
+    const motivo = String(body?.motivo || '').trim();
+    if (motivo.length < 5) throw new BadRequestException('Informe o motivo da baixa em lote (mín. 5 caracteres)');
+    const pagamento = body?.pagamento ? new Date(`${body.pagamento}T00:00:00.000Z`) : this.dia();
+
+    const where = await this.montarWhere({ ...f, status: 'pendentes' });
+    const alvo: any[] = await (this.prisma as any).contaPagar.findMany({
+      where,
+      select: { id: true, valorCents: true },
+    });
+    if (!alvo.length) throw new BadRequestException('Nenhuma conta aberta no filtro atual');
+    if (alvo.length > 20000) throw new BadRequestException('Filtro pega contas demais — refine antes de baixar');
+
+    const ids = alvo.map((a) => a.id);
+    const somaCents = alvo.reduce((s, a) => s + a.valorCents, 0);
+
+    // Baixa + observação do motivo (updateMany não concatena — motivo vai no log)
+    await (this.prisma as any).contaPagar.updateMany({
+      where: { id: { in: ids } },
+      data: { status: 'paga', pagamento, jurosCents: 0, descontoCents: 0, pagoPor: usuario || null, updatedBy: usuario || null },
+    });
+
+    // Auditoria individual em lotes (1 log por conta)
+    const logMsg = `${pagamento.toISOString().slice(0, 10)} — BAIXA EM LOTE: ${motivo}`.slice(0, 300);
+    for (let i = 0; i < ids.length; i += 1000) {
+      await (this.prisma as any).contaPagarLog.createMany({
+        data: ids.slice(i, i + 1000).map((contaId) => ({
+          contaId,
+          campo: 'pagamento',
+          valorAntigo: null,
+          valorNovo: logMsg,
+          usuario: usuario || null,
+          origem: 'lote',
+        })),
+      });
+    }
+    this.logger.log(`[contas] BAIXA EM LOTE por ${usuario || '?'}: ${ids.length} conta(s), R$ ${(somaCents / 100).toFixed(2)} — ${motivo}`);
+    return { ok: true, baixadas: ids.length, somaCents };
   }
 
   // ── aba FUNCIONÁRIAS (restrita) ───────────────────────────────────────────

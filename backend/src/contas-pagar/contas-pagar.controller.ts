@@ -118,6 +118,25 @@ export class ContasPagarController {
     return this.svc.criar(body, usuario);
   }
 
+  /** Baixa TODAS as contas ABERTAS do filtro atual (motivo obrigatório + auditoria). */
+  @Post('baixa-em-lote')
+  baixaEmLote(@Req() req: any, @Body() body: any) {
+    const usuario = this.requireAdmin(req);
+    return this.svc.baixaEmLote(
+      {
+        search: body?.filtros?.search,
+        de: body?.filtros?.de,
+        ate: body?.filtros?.ate,
+        lojaCode: body?.filtros?.lojaCode,
+        especieId: body?.filtros?.especieId,
+        emMaos: !!body?.filtros?.emMaos,
+        incluirRestritas: true,
+      },
+      body,
+      usuario,
+    );
+  }
+
   @Patch(':id/pagar')
   pagar(@Req() req: any, @Param('id') id: string, @Body() body: any) {
     const usuario = this.requireAdmin(req);
