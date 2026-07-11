@@ -12,6 +12,18 @@ import {
 import { LivePdvService } from './live-pdv.service';
 import { PrismaService } from '../prisma/prisma.service';
 
+/** CPF válido de verdade (dígitos verificadores) — Correios/NF rejeitam CPF inventado. */
+function cpfValido(v: string): boolean {
+  const d = String(v || '').replace(/\D/g, '');
+  if (d.length !== 11 || /^(\d)\1{10}$/.test(d)) return false;
+  for (const n of [9, 10]) {
+    let soma = 0;
+    for (let i = 0; i < n; i++) soma += Number(d[i]) * (n + 1 - i);
+    if (((soma * 10) % 11) % 10 !== Number(d[n])) return false;
+  }
+  return true;
+}
+
 /**
  * Controller PÚBLICO (SEM JwtAuthGuard) — página de fechamento da cliente.
  *
@@ -116,8 +128,9 @@ export class LivePayPublicController {
 
   // Endereço + dados de contato — a cliente preenche NO checkout (a loja
   // recebe o pedido pronto pra postar, sem caçar dados pelo Direct).
-  // Celular é OBRIGATÓRIO pra pagar (validado aqui e no guardPayable);
-  // CPF/e-mail são opcionais mas validados quando enviados.
+  // Celular e CPF são OBRIGATÓRIOS pra pagar (validados aqui e no
+  // guardPayable — o Correio exige o CPF da destinatária pra postar);
+  // e-mail é opcional mas validado quando enviado.
   @Post(':cartId/endereco')
   async endereco(
     @Param('cartId') key: string,
@@ -185,11 +198,15 @@ export class LivePayPublicController {
     } else if (!jaTemFone) {
       throw new BadRequestException('Informe seu celular (com DDD) pra gente falar com você sobre a entrega.');
     }
-    // CPF/e-mail: opcionais, mas validados quando preenchidos
+    // CPF: obrigatório se o carrinho ainda não tem um válido (Correios exige
+    // o CPF da destinatária pra postar a encomenda).
+    const jaTemCpf = cpfValido(String(cart.customerCpf || ''));
     const cpfDigits = String(body?.cpf || '').replace(/\D/g, '');
     if (cpfDigits) {
-      if (cpfDigits.length !== 11) throw new BadRequestException('CPF inválido — são 11 números.');
+      if (!cpfValido(cpfDigits)) throw new BadRequestException('CPF inválido — confere os números e tenta de novo.');
       data.customerCpf = cpfDigits;
+    } else if (!jaTemCpf) {
+      throw new BadRequestException('Informe seu CPF — o Correio exige pra postar sua encomenda.');
     }
     const email = clean(body?.email, 120);
     if (email) {
@@ -245,6 +262,11 @@ export class LivePayPublicController {
     }
     if (String(cart.customerPhone || '').replace(/\D/g, '').length < 10) {
       throw new BadRequestException('Informe seu celular (com DDD) antes de pagar. 💜');
+    }
+    // CPF obrigatório: o Correio exige o CPF da destinatária pra postar (e a
+    // NF também usa). Vale pros dois modos — retirada em loja idem.
+    if (!cpfValido(String(cart.customerCpf || ''))) {
+      throw new BadRequestException('Informe seu CPF antes de pagar — o Correio exige pra postar. 💜');
     }
     // Nome completo obrigatório: sem ele a loja não tem em nome de quem postar.
     // "Real" = tem nome + sobrenome e não é só o @ do Instagram.

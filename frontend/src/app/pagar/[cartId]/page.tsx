@@ -60,6 +60,17 @@ function maskCpf(v: string): string {
     .replace(/^(\d{3})\.(\d{3})(\d)/, '$1.$2.$3')
     .replace(/\.(\d{3})(\d{1,2})$/, '.$1-$2');
 }
+/** CPF válido de verdade (dígitos verificadores) — Correios/NF rejeitam CPF inventado. */
+function cpfValido(v: string): boolean {
+  const d = v.replace(/\D/g, '');
+  if (d.length !== 11 || /^(\d)\1{10}$/.test(d)) return false;
+  for (const n of [9, 10]) {
+    let soma = 0;
+    for (let i = 0; i < n; i++) soma += Number(d[i]) * (n + 1 - i);
+    if (((soma * 10) % 11) % 10 !== Number(d[n])) return false;
+  }
+  return true;
+}
 
 export default function PagarPage() {
   const params = useParams();
@@ -77,7 +88,8 @@ export default function PagarPage() {
   const [bairro, setBairro] = useState('');
   const [cidade, setCidade] = useState('');
   const [uf, setUf] = useState('');
-  // Dados de contato — nome e celular OBRIGATÓRIOS; CPF/e-mail opcionais.
+  // Dados de contato — nome, celular e CPF OBRIGATÓRIOS (o Correio exige o
+  // CPF da destinatária pra postar); e-mail opcional.
   // Só pedimos o que falta (a página é pública, não mostramos o que já temos).
   const [nome, setNome] = useState('');
   const [celular, setCelular] = useState('');
@@ -140,6 +152,7 @@ export default function PagarPage() {
     usarSalvo ||
     (rua.trim().length > 0 && numero.trim().length > 0 && cidade.trim().length > 0 && uf.trim().length === 2);
   const celularOk = !!sum?.dados?.hasPhone || celular.replace(/\D/g, '').length >= 10;
+  const cpfOk = !!sum?.dados?.hasCpf || cpfValido(cpf);
   // Nome completo: precisa nome + sobrenome (a loja posta no nome da cliente).
   const nomeOk = !!sum?.dados?.hasNome || (nome.trim().length >= 3 && /\s/.test(nome.trim()));
 
@@ -252,8 +265,8 @@ export default function PagarPage() {
   const retirada = modo === 'retirada';
   const total = retirada ? sum.subtotalCents : frete ? frete.totalCents : sum.subtotalCents;
   const canPay = retirada
-    ? retiradaOk && nomeOk && celularOk && !busy
-    : !!frete && enderecoOk && nomeOk && celularOk && !busy;
+    ? retiradaOk && nomeOk && celularOk && cpfOk && !busy
+    : !!frete && enderecoOk && nomeOk && celularOk && cpfOk && !busy;
   const pedirNome = !sum.dados?.hasNome;
   const pedirCelular = !sum.dados?.hasPhone;
   const pedirCpf = !sum.dados?.hasCpf;
@@ -447,7 +460,7 @@ export default function PagarPage() {
                 <input
                   value={cpf}
                   onChange={(e) => setCpf(maskCpf(e.target.value))}
-                  placeholder="CPF (pra nota fiscal — opcional)"
+                  placeholder="CPF (obrigatório — o Correio exige pra postar)"
                   inputMode="numeric"
                   className={inputCls}
                 />
@@ -465,6 +478,13 @@ export default function PagarPage() {
             {pedirCelular && !celularOk && (
               <span className="mt-1 block text-[11px] text-[#A69E8C]">
                 Deixa seu <b>celular</b> pra gente te avisar da entrega — sem ele o pagamento não libera 💜
+              </span>
+            )}
+            {pedirCpf && !cpfOk && (
+              <span className="mt-1 block text-[11px] text-[#A69E8C]">
+                {cpf.replace(/\D/g, '').length === 11
+                  ? 'Esse CPF não confere — dá uma olhadinha nos números 💜'
+                  : <>O <b>CPF</b> é obrigatório: o Correio exige pra postar sua encomenda 💜</>}
               </span>
             )}
           </div>
@@ -522,11 +542,13 @@ export default function PagarPage() {
         {retirada && !retiradaOk && (
           <p className="text-center text-[11px] text-[#A69E8C] mt-3">Escolha a loja de retirada pra liberar o pagamento.</p>
         )}
-        {(retirada ? retiradaOk : !!frete) && (retirada || enderecoOk) && (!nomeOk || !celularOk) && (
+        {(retirada ? retiradaOk : !!frete) && (retirada || enderecoOk) && (!nomeOk || !celularOk || !cpfOk) && (
           <p className="text-center text-[11px] text-[#A69E8C] mt-3">
             {!nomeOk
               ? 'Informe seu nome e sobrenome pra liberar o pagamento.'
-              : 'Informe seu celular pra liberar o pagamento.'}
+              : !celularOk
+                ? 'Informe seu celular pra liberar o pagamento.'
+                : 'Informe seu CPF pra liberar o pagamento (o Correio exige).'}
           </p>
         )}
         {frete && sum.pixAvailable === false && (
