@@ -412,7 +412,18 @@ export default function NotasEmitidasPage() {
                 </td>
                 <td className="p-2 text-right font-bold tabular-nums">{brl(r.total)}</td>
                 <td className="p-2 text-xs uppercase">{r.paymentMethod || '—'}</td>
-                <td className="p-2 text-xs">{formatDate(r.nfceAutorizadaEm)}</td>
+                <td className="p-2 text-xs">
+                  {r.nfceAutorizadaEm ? (
+                    formatDate(r.nfceAutorizadaEm)
+                  ) : r.finalizedAt ? (
+                    <>
+                      {formatDate(r.finalizedAt)}
+                      <div className="text-[10px] text-slate-400">horário da venda</div>
+                    </>
+                  ) : (
+                    '—'
+                  )}
+                </td>
                 <td className="p-2">
                   <div className="flex gap-1 justify-end items-center">
                     {readOnly && <span className="text-slate-300 text-xs">—</span>}
