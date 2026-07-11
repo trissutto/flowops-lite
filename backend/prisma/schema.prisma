@@ -3706,3 +3706,134 @@ model OperadorPin {
   @@index([storeCode])
   @@map("operador_pin")
 }
+
+/// ═══════════════ CONTAS A PAGAR (100% Flow — GIGA congelado) ═══════════════
+/// Decisões do dono 11/07/2026 + dossiê docs/GIGA-CONTAS-DESCOBERTA.md.
+/// GigaPagar = espelho RAW fiel da tabela `pagar` (só pra migração/conferência
+/// do congelamento — NUNCA é fonte de tela). ContaPagar = o modelo novo.
+
+model GigaPagar {
+  registro Int      @id // pagar.REGISTRO (PK do GIGA)
+  pnum     String?  @db.VarChar(30)
+  pesp     String?  @db.VarChar(10)
+  pser     String?  @db.VarChar(5)
+  pfav     Int?
+  pemi     DateTime? @db.Date
+  pban     String?  @db.VarChar(20)
+  pval     Decimal? @db.Decimal(10, 2)
+  pven     DateTime? @db.Date
+  paga     DateTime? @db.Date
+  pjur     Decimal? @db.Decimal(10, 2)
+  pdes     Decimal? @db.Decimal(10, 2)
+  pobs     String?  @db.VarChar(50)
+  nnota    String?  @db.VarChar(10)
+  ncheque  String?  @db.VarChar(12)
+  pend     String?  @db.VarChar(3)
+  loja     String?  @db.VarChar(2)
+  syncedAt DateTime @default(now()) @map("synced_at")
+
+  @@index([loja])
+  @@index([pven])
+  @@index([pesp])
+  @@map("giga_pagar")
+}
+
+/// Catálogo de espécies — editável na tela. Semente = 11 do GIGA + as variantes
+/// promovidas (CHEQUE, PROMISSORIA, CARNE, SEM ESPECIE) + as novas de
+/// funcionárias (SALARIO, COMISSAO). `restrita` = só perfis autorizados veem
+/// contas dessa espécie (RH/SALARIO/VALE/COMISSAO — salário é dado sensível).
+model EspecieConta {
+  id        String   @id @default(cuid())
+  nome      String   @unique @db.VarChar(30)
+  restrita  Boolean  @default(false)
+  ativa     Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  contas ContaPagar[]
+
+  @@map("especie_conta")
+}
+
+/// A conta a pagar do Flow. Migrada do GIGA (gigaRegistro preenchido) ou
+/// nascida aqui. Soft delete (deletedAt/deletedBy) — nada some de verdade.
+/// Beneficiário: FORNECEDOR (fornecedorGigaCodigo/nome) OU FUNCIONARIA
+/// (sellerId/CPF do RH). Parcelas REAIS via grupoParcelaId + parcelaNum/Total.
+model ContaPagar {
+  id       String @id @default(cuid())
+  numero   Int    @unique @default(autoincrement())
+  lojaCode String @map("loja_code") @db.VarChar(4)
+
+  beneficiarioTipo    String  @default("fornecedor") @map("beneficiario_tipo") @db.VarChar(12) // fornecedor | funcionaria
+  fornecedorGigaCodigo Int?   @map("fornecedor_giga_codigo")
+  fornecedorNome      String? @map("fornecedor_nome") @db.VarChar(120)
+  sellerId            String? @map("seller_id")
+  sellerNome          String? @map("seller_nome") @db.VarChar(120)
+  sellerCpf           String? @map("seller_cpf") @db.VarChar(14)
+
+  especieId       String? @map("especie_id")
+  especie         EspecieConta? @relation(fields: [especieId], references: [id])
+  especieOriginal String? @map("especie_original") @db.VarChar(10) // PESP cru do GIGA
+
+  notaFiscal String? @map("nota_fiscal") @db.VarChar(40)
+  banco      String? @db.VarChar(40)
+  cheque     String? @db.VarChar(20)
+  emissao    DateTime? @db.Date
+  vencimento DateTime  @db.Date
+  valorCents Int       @map("valor_cents")
+
+  // Baixa (P3 do dono: juros e desconto SÃO preenchidos no pagamento)
+  pagamento      DateTime? @db.Date
+  jurosCents     Int       @default(0) @map("juros_cents")
+  descontoCents  Int       @default(0) @map("desconto_cents")
+  pagoPor        String?   @map("pago_por") @db.VarChar(80)
+
+  emMaos         Boolean @default(false) @map("em_maos")
+  emMaosOriginal String? @map("em_maos_original") @db.VarChar(3) // PEND cru do GIGA
+  observacao     String? @db.VarChar(200)
+
+  parcelaNum     Int?    @map("parcela_num")
+  parcelaTotal   Int?    @map("parcela_total")
+  grupoParcelaId String? @map("grupo_parcela_id")
+
+  status String @default("aberta") @db.VarChar(12) // aberta | paga | cancelada
+
+  // Migração/qualidade (dossiê §4)
+  gigaRegistro    Int?    @unique @map("giga_registro")
+  favorecidoOrfao Boolean @default(false) @map("favorecido_orfao")
+  dataSuspeita    Boolean @default(false) @map("data_suspeita")
+
+  createdBy String?   @map("created_by") @db.VarChar(80)
+  updatedBy String?   @map("updated_by") @db.VarChar(80)
+  deletedAt DateTime? @map("deleted_at")
+  deletedBy String?   @map("deleted_by") @db.VarChar(80)
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+
+  logs ContaPagarLog[]
+
+  @@index([lojaCode, vencimento])
+  @@index([status, vencimento])
+  @@index([especieId])
+  @@index([sellerId])
+  @@index([grupoParcelaId])
+  @@index([fornecedorNome])
+  @@index([deletedAt])
+  @@map("conta_pagar")
+}
+
+/// Auditoria POR CAMPO de toda alteração (quem, o quê, antes → depois).
+model ContaPagarLog {
+  id         String   @id @default(cuid())
+  contaId    String   @map("conta_id")
+  conta      ContaPagar @relation(fields: [contaId], references: [id])
+  campo      String   @db.VarChar(40)
+  valorAntigo String? @map("valor_antigo") @db.VarChar(300)
+  valorNovo   String? @map("valor_novo") @db.VarChar(300)
+  usuario    String?  @db.VarChar(80)
+  origem     String   @default("tela") @db.VarChar(20) // tela | migracao | sistema
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([contaId])
+  @@index([createdAt])
+  @@map("conta_pagar_log")
+}
