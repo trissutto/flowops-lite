@@ -652,22 +652,48 @@ function Funcionarias() {
 /* ═══════════════════ DIVERGÊNCIAS (migração GIGA × FLOW) ═══════════════════ */
 function Divergencias({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
   const [val, setVal] = useState<any>(null);
-  const [rodando, setRodando] = useState<string | null>(null);
+  const [prog, setProg] = useState<any>(null);
+  const pollRef = useRef<any>(null);
   const carregar = useCallback(() => {
     api<any>('/admin/contas-pagar/validacao').then(setVal).catch(() => setVal(null));
   }, []);
-  useEffect(() => { carregar(); }, [carregar]);
 
+  // Acompanha o job em background (espelho/migração) a cada 2s.
+  const acompanhar = useCallback(() => {
+    clearInterval(pollRef.current);
+    pollRef.current = setInterval(async () => {
+      try {
+        const p = await api<any>('/admin/contas-pagar/progresso');
+        setProg(p);
+        if (!p?.running) {
+          clearInterval(pollRef.current);
+          if (p?.finishedAt) {
+            if (p.error) avisar('erro', `${p.step === 'espelho' ? 'Espelho' : 'Migração'}: ${p.error}`);
+            else avisar('ok', `${p.step === 'espelho' ? 'Espelho' : 'Migração'} concluído`);
+          }
+          carregar();
+        }
+      } catch { /* mantém polling */ }
+    }, 2000);
+  }, [avisar, carregar]);
+
+  useEffect(() => {
+    carregar();
+    // Se já tem job rodando (ex.: voltou pra tela), retoma o acompanhamento.
+    api<any>('/admin/contas-pagar/progresso').then((p) => { setProg(p); if (p?.running) acompanhar(); }).catch(() => {});
+    return () => clearInterval(pollRef.current);
+  }, [carregar, acompanhar]);
+
+  const rodando = !!prog?.running;
   const rodar = async (rota: string, label: string) => {
-    setRodando(label);
     try {
       const r = await api<any>(`/admin/contas-pagar/${rota}`, { method: 'POST' });
-      if (r?.ok === false) throw new Error(r?.error || 'falhou');
-      avisar('ok', `${label} concluído`);
-      carregar();
+      if (r?.alreadyRunning) { avisar('erro', 'Já tem um processo rodando — aguarde terminar'); return; }
+      avisar('ok', `${label} iniciado — acompanhe a barra`);
+      acompanhar();
     } catch (e: any) {
       avisar('erro', `${label}: ${e?.message || 'falhou'}`);
-    } finally { setRodando(null); }
+    }
   };
 
   return (
@@ -677,15 +703,37 @@ function Divergencias({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => voi
         Lançamento novo é só no Flow; o GIGA fica congelado pra consulta.
       </div>
       <div className="flex gap-2">
-        <button onClick={() => rodar('espelho/sync', 'Espelho do GIGA')} disabled={!!rodando} className="px-4 py-2 rounded-lg bg-[#B8912B] text-white font-bold text-sm flex items-center gap-2 disabled:opacity-60">
-          {rodando === 'Espelho do GIGA' ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />} 1 · Sincronizar espelho
+        <button onClick={() => rodar('espelho/sync', 'Espelho do GIGA')} disabled={rodando} className="px-4 py-2 rounded-lg bg-[#B8912B] text-white font-bold text-sm flex items-center gap-2 disabled:opacity-60">
+          {rodando && prog?.step === 'espelho' ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />} 1 · Sincronizar espelho
         </button>
-        <button onClick={() => rodar('migrar', 'Migração')} disabled={!!rodando} className="px-4 py-2 rounded-lg bg-[#B8912B] text-white font-bold text-sm flex items-center gap-2 disabled:opacity-60">
-          {rodando === 'Migração' ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />} 2 · Migrar (idempotente)
+        <button onClick={() => rodar('migrar', 'Migração')} disabled={rodando} className="px-4 py-2 rounded-lg bg-[#B8912B] text-white font-bold text-sm flex items-center gap-2 disabled:opacity-60">
+          {rodando && prog?.step === 'migracao' ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />} 2 · Migrar (idempotente)
         </button>
         <button onClick={carregar} className="px-4 py-2 rounded-lg border border-[#E7E2D8] text-slate-500 font-bold text-sm">Atualizar validação</button>
       </div>
-      {rodando && <p className="text-xs text-slate-400">⏳ {rodando} rodando — as 71.974 contas levam alguns minutos. Pode sair da tela; rodar de novo NÃO duplica.</p>}
+      {rodando && (
+        <div className="bg-white border border-[#E7E2D8] rounded-xl p-4">
+          <div className="flex justify-between text-sm font-bold text-slate-600 mb-2">
+            <span>⏳ {prog?.step === 'espelho' ? 'Copiando o GIGA pro espelho…' : 'Migrando pro modelo novo…'}</span>
+            <span>{(prog?.processed || 0).toLocaleString('pt-BR')} / {(prog?.total || 0).toLocaleString('pt-BR')}</span>
+          </div>
+          <div className="h-2.5 bg-[#F1EDE3] rounded-full overflow-hidden">
+            <div
+              className="h-full bg-[#B8912B] rounded-full transition-all"
+              style={{ width: `${prog?.total ? Math.min(100, Math.round((prog.processed / prog.total) * 100)) : 5}%` }}
+            />
+          </div>
+          <p className="text-[11px] text-slate-400 mt-2">Roda no servidor — pode sair da tela. Rodar de novo NÃO duplica (continua de onde parou).</p>
+        </div>
+      )}
+      {!rodando && prog?.finishedAt && prog?.resumo && (
+        <p className="text-xs text-slate-500">
+          Último processo ({prog.step === 'espelho' ? 'espelho' : 'migração'}): {prog.error ? `❌ ${prog.error}` : '✓ concluído'}
+          {prog.resumo?.linhas != null && ` · ${Number(prog.resumo.linhas).toLocaleString('pt-BR')} linhas`}
+          {prog.resumo?.criadas != null && ` · ${Number(prog.resumo.criadas).toLocaleString('pt-BR')} novas, ${Number(prog.resumo.puladas || 0).toLocaleString('pt-BR')} já migradas`}
+          {prog.resumo?.durationMs != null && ` · ${Math.round(prog.resumo.durationMs / 1000)}s`}
+        </p>
+      )}
       {val && (
         <>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">

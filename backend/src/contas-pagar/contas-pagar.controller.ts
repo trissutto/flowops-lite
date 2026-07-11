@@ -33,17 +33,23 @@ export class ContasPagarController {
     return String(req?.user?.name || req?.user?.username || req?.user?.email || role);
   }
 
-  // ── migração ──────────────────────────────────────────────────────────────
+  // ── migração (EM BACKGROUND — o proxy corta requisição longa em ~5min) ────
   @Post('espelho/sync')
   syncEspelho(@Req() req: any) {
     this.requireAdmin(req);
-    return this.migracao.syncEspelho();
+    return this.migracao.startEspelhoBackground();
   }
 
   @Post('migrar')
   migrar(@Req() req: any) {
     this.requireAdmin(req);
-    return this.migracao.migrar();
+    return this.migracao.startMigracaoBackground();
+  }
+
+  @Get('progresso')
+  progresso(@Req() req: any) {
+    this.requireAdmin(req);
+    return this.migracao.getProgresso();
   }
 
   @Get('validacao')
