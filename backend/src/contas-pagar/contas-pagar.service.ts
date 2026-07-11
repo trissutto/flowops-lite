@@ -191,7 +191,8 @@ export class ContasPagarService {
   async list(f: ListFilters) {
     const where = await this.montarWhere(f);
     const page = Math.max(1, f.page || 1);
-    const perPage = Math.min(100, Math.max(10, f.perPage || 50));
+    // 200 por página (pedido do dono, 11/07) — quebra de página de 200 em 200.
+    const perPage = Math.min(200, Math.max(10, f.perPage || 200));
     const cp = (this.prisma as any).contaPagar;
     const [total, soma, rows] = await Promise.all([
       cp.count({ where }),
@@ -217,6 +218,7 @@ export class ContasPagarService {
         lojaCode: r.lojaCode,
         beneficiarioTipo: r.beneficiarioTipo,
         beneficiario: r.beneficiarioTipo === 'funcionaria' ? r.sellerNome : r.fornecedorNome,
+        especieId: r.especieId,
         especie: r.especie?.nome || r.especieOriginal || '—',
         especieRestrita: !!r.especie?.restrita,
         notaFiscal: r.notaFiscal,
