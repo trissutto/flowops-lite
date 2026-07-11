@@ -36,6 +36,9 @@ export class LivePdvService {
   private readonly COMMITTED = ['reserved', 'paid', 'separating'];
   /** Throttle da checagem AO VIVO no gateway por carrinho (anti-flood de polling). */
   private readonly lastLiveCheck = new Map<string, number>();
+  /** Throttle do refresh PONTUAL do espelho de estoque (por conjunto de códigos). */
+  private readonly lastStockRefresh = new Map<string, number>();
+  private static readonly STOCK_REFRESH_TTL_MS = 45_000;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -110,6 +113,73 @@ export class LivePdvService {
       })),
       fromMirror: true,
     };
+  }
+
+  /**
+   * Refresh PONTUAL do espelho giga_estoque só pros CODIGOs de UMA peça — query
+   * indexada e minúscula no Giga (nada do full de 283k linhas do cron horário).
+   * Timeout de 8s + catch total: se o Giga pendurar, o espelho fica como está e
+   * a grade segue sendo servida por ele. Retorna true se atualizou.
+   *
+   * Formato: reescreve o codigo NO FORMATO QUE A GRADE CONSULTA (o codigo do
+   * giga_produto), casando pelo valor numérico — padding de zeros é
+   * inconsistente entre produtos e estoque no Giga (convenção do projeto:
+   * JOIN sempre via CAST AS UNSIGNED).
+   */
+  private async refreshMirrorStock(codigos: string[], opts?: { force?: boolean }): Promise<boolean> {
+    const uniq = Array.from(
+      new Set(codigos.map((c) => String(c).trim()).filter((c) => /^\d+$/.test(c))),
+    ).slice(0, 80);
+    if (!uniq.length) return false;
+    const key = uniq.slice().sort().join(',');
+    const now = Date.now();
+    if (!opts?.force && now - (this.lastStockRefresh.get(key) || 0) < LivePdvService.STOCK_REFRESH_TTL_MS) {
+      return false;
+    }
+    this.lastStockRefresh.set(key, now);
+    if (this.lastStockRefresh.size > 1000) {
+      for (const [k, t] of this.lastStockRefresh) {
+        if (now - t > LivePdvService.STOCK_REFRESH_TTL_MS) this.lastStockRefresh.delete(k);
+      }
+    }
+    const pool: any = (this.erp as any).pool;
+    if (!pool) return false;
+    try {
+      const nums = uniq.map((c) => Number(c));
+      const placeholders = nums.map(() => '?').join(',');
+      const [rows] = await pool.query(
+        {
+          sql: `SELECT CODIGO AS codigo, LOJA AS loja, SUM(ESTOQUE) AS estoque
+                  FROM estoque
+                 WHERE CAST(CODIGO AS UNSIGNED) IN (${placeholders})
+                 GROUP BY CODIGO, LOJA`,
+          timeout: 8_000,
+        },
+        nums,
+      );
+      const byNum = new Map<number, string>(uniq.map((c) => [Number(c), c]));
+      const data = (rows as any[])
+        .map((r) => ({
+          codigo: byNum.get(Number(r.codigo)) || String(r.codigo ?? '').trim(),
+          loja: String(r.loja ?? '').trim(),
+          estoque: Number(r.estoque) || 0,
+        }))
+        .filter((r) => r.codigo && r.loja && r.estoque > 0);
+      // Apaga nos DOIS formatos (pedido e cru do Giga) e regrava — código que
+      // zerou o estoque sai do espelho (a grade passa a mostrar esgotado).
+      const apagar = Array.from(
+        new Set([...uniq, ...(rows as any[]).map((r) => String(r.codigo ?? '').trim())]),
+      ).filter(Boolean);
+      await this.prisma.$transaction([
+        (this.prisma as any).gigaEstoque.deleteMany({ where: { codigo: { in: apagar } } }),
+        ...(data.length ? [(this.prisma as any).gigaEstoque.createMany({ data })] : []),
+      ]);
+      this.logger.log(`[live] estoque pontual: ${uniq.length} código(s) → ${data.length} linha(s) frescas`);
+      return true;
+    } catch (e) {
+      this.logger.warn(`[live] refresh pontual de estoque falhou (espelho preservado): ${(e as Error).message}`);
+      return false;
+    }
   }
 
   // Estoque por loja — ESPELHO PRIMEIRO (giga_estoque no Postgres). Só encosta no
@@ -394,6 +464,15 @@ export class LivePdvService {
     const codigos = Array.from(
       new Set(productRows.map((r) => String(r.CODIGO || '').trim()).filter(Boolean)),
     );
+    // Peça no ar SEMPRE fresca: refresh pontual do espelho direto do Giga
+    // (query minúscula indexada, throttle 45s). Espera no MÁXIMO 2,5s — caso
+    // normal responde em ms e a grade já sai fresca; se o Giga estiver lento,
+    // a grade sai do espelho e o refresh termina em background (a próxima
+    // busca da mesma peça pega o estoque novo).
+    await Promise.race([
+      this.refreshMirrorStock(codigos).catch(() => false),
+      new Promise((r) => setTimeout(r, 2_500)),
+    ]);
     const stockRes = await this.stockWithMirror(codigos);
     const detailed = stockRes.detailed;
     const fromMirror = resolved.fromMirror || stockRes.fromMirror;
@@ -550,6 +629,22 @@ export class LivePdvService {
    *   - o termo não é AMBÍGUO (várias REFs sem match exato).
    * Retorna a grade da validação pro front exibir a prévia idêntica à live.
    */
+  /**
+   * Botão "Atualizar estoque" da grade: FORÇA o refresh pontual (ignora o
+   * throttle de 45s) e devolve a grade recalculada. Se o Giga não responder
+   * em 8s, devolve a grade do espelho mesmo — nunca trava a live.
+   */
+  async searchGradeFresh(term: string, sessionId?: string) {
+    const q = String(term || '').trim();
+    if (!q) throw new BadRequestException('Informe a referência');
+    const resolved = await this.resolveRowsWithMirror(q);
+    const codigos = Array.from(
+      new Set(resolved.rows.map((r) => String(r.CODIGO || '').trim()).filter(Boolean)),
+    );
+    if (codigos.length) await this.refreshMirrorStock(codigos, { force: true });
+    return this.searchGrade(q, sessionId);
+  }
+
   async saveAtalho(sessionId: string, input: { id?: string | null; atalho: string; refCode: string }) {
     await this.getSession(sessionId);
     const atalho = this.normAtalho(input.atalho);
