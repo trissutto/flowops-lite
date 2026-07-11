@@ -3271,8 +3271,17 @@ function Dashboard({ sessionId }: { sessionId: string }) {
     { label: 'Ticket médio', value: brl(k.ticketMedioCents) },
     { label: 'Peças vendidas', value: k.pecasVendidas },
     { label: 'Reservas ativas', value: k.reservasAtivas },
-    { label: 'Conversão', value: `${k.conversao}%` },
+    // Sem funil (backend antigo) mantém o card simples de conversão
+    ...(k.funil ? [] : [{ label: 'Conversão', value: `${k.conversao}%` }]),
   ];
+  // Funil em camadas: criados → com produto → pagos (cada barra é % dos criados)
+  const funilRows = k.funil
+    ? [
+        { label: 'Carrinhos criados', n: k.funil.criados, pctBar: 100, detalhe: 'comentou e abriu carrinho' },
+        { label: 'Com produto', n: k.funil.comProduto, pctBar: k.funil.pctComProduto, detalhe: `${k.funil.pctComProduto}% dos criados` },
+        { label: 'Pagos', n: k.funil.pagos, pctBar: k.funil.pctPagosDoTotal, detalhe: `${k.funil.pctPagosDosComProduto}% dos com produto · ${k.funil.pctPagosDoTotal}% do total` },
+      ]
+    : [];
   return (
     <div className="p-4">
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
@@ -3283,6 +3292,33 @@ function Dashboard({ sessionId }: { sessionId: string }) {
           </div>
         ))}
       </div>
+
+      {/* Funil de conversão em camadas: criados → com produto → pagos */}
+      {funilRows.length > 0 && (
+        <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="mb-3 flex items-center justify-between">
+            <span className="text-xs uppercase tracking-wide text-slate-400">Conversão — funil da live</span>
+            <span className="text-xs text-slate-400">cada barra é % dos carrinhos criados</span>
+          </div>
+          <div className="space-y-2.5">
+            {funilRows.map((r, i) => (
+              <div key={r.label} className="flex items-center gap-3">
+                <span className="w-36 shrink-0 text-sm font-semibold text-slate-700">{r.label}</span>
+                <div className="relative h-7 flex-1 overflow-hidden rounded-lg bg-slate-100">
+                  <div
+                    className={`h-full rounded-lg transition-all ${i === 0 ? 'bg-slate-300' : i === 1 ? 'bg-amber-300' : 'bg-emerald-400'}`}
+                    style={{ width: `${Math.max(r.pctBar, r.n > 0 ? 3 : 0)}%` }}
+                  />
+                  <span className="absolute inset-y-0 left-2 flex items-center text-sm font-extrabold text-slate-800 tabular-nums">
+                    {r.n}
+                  </span>
+                </div>
+                <span className="w-64 shrink-0 text-right text-xs text-slate-500">{r.detalhe}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Quem já pagou — conferência ao vivo (nome, valor, forma, status) */}
       <div className="mt-4 rounded-xl border border-emerald-200 bg-white p-4 shadow-sm">

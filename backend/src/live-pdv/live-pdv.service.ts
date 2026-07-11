@@ -2966,6 +2966,20 @@ export class LivePdvService {
     const carrinhosAbertos = openCarts.length;
     const valorNosCarrinhosCents = openCarts.reduce((s, c) => s + (c.totalCents || 0), 0);
 
+    // Funil de conversão em CAMADAS (pedido do dono 11/07): criados → com
+    // produto dentro → pagos. Carrinho sem item = cliente comentou mas nada
+    // foi bipado pra ela; medir as camadas separa "não engajou" de "desistiu".
+    const carrinhosComProduto = (carts as any[]).filter((c) => cartsComItem.has(c.id)).length;
+    const pct = (parte: number, todo: number) => (todo ? Math.round((parte / todo) * 100) : 0);
+    const funil = {
+      criados: carts.length,
+      comProduto: carrinhosComProduto,
+      pagos: paidCarts.length,
+      pctComProduto: pct(carrinhosComProduto, carts.length),
+      pctPagosDosComProduto: pct(paidCarts.length, carrinhosComProduto),
+      pctPagosDoTotal: pct(paidCarts.length, carts.length),
+    };
+
     // produtos mais vendidos
     const prodMap = new Map<string, { ref: string; descricao: string; qty: number; valorCents: number }>();
     for (const i of paidItems) {
@@ -3004,6 +3018,7 @@ export class LivePdvService {
         conversao: carts.length ? Math.round((paidCarts.length / carts.length) * 100) : 0,
         carrinhosAbertos,
         valorNosCarrinhosCents,
+        funil,
       },
       topProducts,
     };
