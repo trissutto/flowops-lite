@@ -19,6 +19,29 @@ export class ManychatService {
   }
 
   async sendText(subscriberId: string, text: string): Promise<{ ok: boolean; error?: string }> {
+    const first = await this.sendRaw(subscriberId, text);
+    if (first.ok) return first;
+    // Fora da janela de 24h da Meta ("Notification Reason") → retenta UMA vez
+    // com a tag HUMAN_AGENT, que estende a janela do Instagram pra 7 DIAS.
+    // Funciona se a conta ManyChat tem a permissão Human Agent (contas Pro
+    // costumam ter); se a Meta recusar, devolve o erro original e a cliente
+    // cai na fila manual (Direct/WhatsApp) como antes.
+    if (/24 hour|notification reason/i.test(first.error || '')) {
+      const tagged = await this.sendRaw(subscriberId, text, 'HUMAN_AGENT');
+      if (tagged.ok) {
+        this.logger.log(`[manychat] sub=${subscriberId} fora das 24h — entregue com HUMAN_AGENT (janela de 7 dias)`);
+        return tagged;
+      }
+      return { ok: false, error: String(first.error || 'fora da janela de 24h').slice(0, 200) };
+    }
+    return first;
+  }
+
+  private async sendRaw(
+    subscriberId: string,
+    text: string,
+    messageTag?: string,
+  ): Promise<{ ok: boolean; error?: string }> {
     const token = (process.env.MANYCHAT_API_TOKEN || '').trim();
     if (!token) {
       throw new BadRequestException(
@@ -41,6 +64,7 @@ export class ManychatService {
               messages: [{ type: 'text', text }],
             },
           },
+          ...(messageTag ? { message_tag: messageTag } : {}),
         }),
       });
       const data: any = await resp.json().catch(() => ({}));
@@ -49,7 +73,9 @@ export class ManychatService {
         data?.message ||
         data?.details?.messages?.[0]?.message ||
         `HTTP ${resp.status}`;
-      this.logger.warn(`[manychat] envio falhou sub=${subscriberId}: ${JSON.stringify(data).slice(0, 300)}`);
+      this.logger.warn(
+        `[manychat] envio falhou sub=${subscriberId}${messageTag ? ` tag=${messageTag}` : ''}: ${JSON.stringify(data).slice(0, 300)}`,
+      );
       return { ok: false, error: String(err).slice(0, 200) };
     } catch (e: any) {
       return { ok: false, error: e?.message || 'falha de rede' };
