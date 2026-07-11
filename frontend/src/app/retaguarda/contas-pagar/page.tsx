@@ -23,7 +23,7 @@ const fmtData = (s: string | null | undefined) =>
   s ? new Date(s).toLocaleDateString('pt-BR', { timeZone: 'UTC' }) : '—';
 const hojeStr = () => new Date().toISOString().slice(0, 10);
 
-type Aba = 'painel' | 'funcionarias' | 'divergencias';
+type Aba = 'painel' | 'funcionarias' | 'associacao' | 'divergencias';
 
 export default function ContasPagarPage() {
   const [aba, setAba] = useState<Aba>('painel');
@@ -55,6 +55,7 @@ export default function ContasPagarPage() {
           {([
             ['painel', 'Painel', CalendarDays],
             ['funcionarias', 'Funcionárias', Users],
+            ['associacao', 'Associação', Users],
             ['divergencias', 'Divergências GIGA × FLOW', Scale],
           ] as any[]).map(([k, label, Icon]) => (
             <button
@@ -73,6 +74,7 @@ export default function ContasPagarPage() {
       <main className="max-w-7xl mx-auto px-4 py-5">
         {aba === 'painel' && <Painel avisar={avisar} />}
         {aba === 'funcionarias' && <Funcionarias />}
+        {aba === 'associacao' && <Associacao avisar={avisar} />}
         {aba === 'divergencias' && <Divergencias avisar={avisar} />}
       </main>
 
@@ -808,6 +810,204 @@ function Funcionarias() {
         </div>
       )}
     </div>
+  );
+}
+
+/* ═══════════ ASSOCIAÇÃO Fornecedor → Funcionária ═══════════ */
+function Associacao({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
+  const [data, setData] = useState<any>(null);
+  const [decididos, setDecididos] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [rodando, setRodando] = useState<string | null>(null);
+  const [escolhendo, setEscolhendo] = useState<any | null>(null); // candidato no modal "escolher outra"
+
+  const carregar = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [c, d] = await Promise.all([
+        api<any>('/admin/contas-pagar/associacao/candidatos'),
+        api<any[]>('/admin/contas-pagar/associacao/decididos'),
+      ]);
+      setData(c);
+      setDecididos(d || []);
+    } catch (e: any) {
+      avisar('erro', e?.message || 'Falha ao carregar');
+    } finally { setLoading(false); }
+  }, [avisar]);
+  useEffect(() => { carregar(); }, [carregar]);
+
+  const acao = async (fn: () => Promise<any>, ok: string, label: string) => {
+    setRodando(label);
+    try { const r = await fn(); avisar('ok', typeof ok === 'string' ? ok : ok); carregar(); return r; }
+    catch (e: any) { avisar('erro', e?.message || 'Falhou'); }
+    finally { setRodando(null); }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-white border-l-4 border-[#B8912B] rounded-lg p-3 text-sm text-slate-500">
+        👤 <b>Fornecedores que são PESSOAS</b> (folha RH/VALE de 20 anos no GIGA) viram beneficiária
+        FUNCIONÁRIA em todas as contas e somem do autocomplete de fornecedores. Tudo reversível e auditado.
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <button
+          onClick={() => acao(() => api('/admin/contas-pagar/associacao/importar-giga', { method: 'POST' }), 'Funcionárias do GIGA importadas', 'import')}
+          disabled={!!rodando}
+          className="px-4 py-2 rounded-lg bg-[#B8912B] text-white font-bold text-sm flex items-center gap-2 disabled:opacity-60"
+        >
+          {rodando === 'import' ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+          1 · Importar funcionárias do GIGA (CPF/loja)
+        </button>
+        <button
+          onClick={() => acao(() => api('/admin/contas-pagar/associacao/confirmar-exatos', { method: 'POST' }), 'Nomes exatos associados em lote', 'exatos')}
+          disabled={!!rodando || !data?.exatos}
+          className="px-4 py-2 rounded-lg bg-[#2E7D46] text-white font-bold text-sm flex items-center gap-2 disabled:opacity-60"
+        >
+          {rodando === 'exatos' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+          2 · Confirmar todos os EXATOS ({data?.exatos ?? 0})
+        </button>
+        <button onClick={carregar} className="px-4 py-2 rounded-lg border border-[#E7E2D8] text-slate-500 font-bold text-sm">Atualizar</button>
+      </div>
+
+      {loading && !data ? (
+        <div className="p-10 text-center text-slate-400"><Loader2 className="w-6 h-6 animate-spin mx-auto" /></div>
+      ) : (
+        <>
+          <div className="bg-white border border-[#E7E2D8] rounded-xl overflow-x-auto">
+            <table className="w-full text-sm min-w-[860px]">
+              <thead>
+                <tr className="bg-[#FAFAF7] text-[11px] uppercase tracking-wide text-slate-500 border-b border-[#E7E2D8]">
+                  <th className="text-left px-3 py-2">Fornecedor (GIGA)</th>
+                  <th className="text-right px-3 py-2">Lançamentos</th>
+                  <th className="text-left px-3 py-2">Sugestão de funcionária</th>
+                  <th className="px-3 py-2"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {(data?.candidatos || []).map((c: any) => (
+                  <tr key={c.codigo} className="border-b border-[#F1EDE3] hover:bg-[#FBF6E6]">
+                    <td className="px-3 py-2">
+                      <div className="font-bold">{c.nome}</div>
+                      <div className="text-[11px] text-slate-400">GIGA #{c.codigo} · {brl(c.somaCents)}</div>
+                    </td>
+                    <td className="px-3 py-2 text-right whitespace-nowrap">
+                      <b>{c.totalContas}</b> <span className="text-[11px] text-slate-400">({c.contasRhVale} em RH/VALE)</span>
+                    </td>
+                    <td className="px-3 py-2">
+                      {c.sugestao ? (
+                        <span className="flex items-center gap-2">
+                          <span className={`text-[10px] font-extrabold px-1.5 py-0.5 rounded ${c.nivel === 'exato' ? 'bg-emerald-50 text-[#2E7D46]' : 'bg-amber-50 text-amber-600'}`}>
+                            {String(c.nivel).toUpperCase()}
+                          </span>
+                          <b>{c.sugestao.nome}</b>
+                          {!c.sugestao.ativa && <span className="text-[10px] text-slate-400">(inativa)</span>}
+                        </span>
+                      ) : (
+                        <span className="text-slate-400 text-[12px]">sem match — criar histórica?</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 whitespace-nowrap text-right">
+                      {c.sugestao && (
+                        <button
+                          onClick={() => acao(() => api('/admin/contas-pagar/associacao/associar', { method: 'POST', body: JSON.stringify({ fornecedorGigaCodigo: c.codigo, sellerId: c.sugestao.sellerId }) }), `Associado: ${c.sugestao.nome}`, `a${c.codigo}`)}
+                          disabled={!!rodando}
+                          className="text-[12px] font-bold px-2.5 py-1 rounded-lg border border-[#2E7D46] text-[#2E7D46] hover:bg-emerald-50 mr-1"
+                        >✓ Confirmar</button>
+                      )}
+                      <button onClick={() => setEscolhendo(c)} disabled={!!rodando} className="text-[12px] font-bold px-2.5 py-1 rounded-lg border border-[#E7E2D8] text-slate-500 hover:bg-[#FBF6E6] mr-1">Escolher…</button>
+                      <button
+                        onClick={() => acao(() => api('/admin/contas-pagar/associacao/associar', { method: 'POST', body: JSON.stringify({ fornecedorGigaCodigo: c.codigo, criarHistorica: true }) }), 'Funcionária histórica criada e associada', `h${c.codigo}`)}
+                        disabled={!!rodando}
+                        className="text-[12px] font-bold px-2.5 py-1 rounded-lg border border-[#B8912B] text-[#8C7325] hover:bg-[#FBF6E6] mr-1"
+                      >👤 Criar histórica</button>
+                      <button
+                        onClick={() => acao(() => api('/admin/contas-pagar/associacao/nao-eh-pessoa', { method: 'POST', body: JSON.stringify({ fornecedorGigaCodigo: c.codigo }) }), 'Marcado como "não é pessoa"', `n${c.codigo}`)}
+                        disabled={!!rodando}
+                        className="text-[12px] font-bold px-2.5 py-1 rounded-lg border border-[#E7E2D8] text-slate-400 hover:bg-rose-50"
+                      >Não é pessoa</button>
+                    </td>
+                  </tr>
+                ))}
+                {data && !data.candidatos?.length && (
+                  <tr><td colSpan={4} className="text-center text-slate-400 py-8">🎉 Fila zerada — todos os fornecedores-pessoa foram decididos.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          {decididos.length > 0 && (
+            <div className="bg-white border border-[#E7E2D8] rounded-xl p-4">
+              <h3 className="text-sm font-extrabold text-slate-600 mb-2">Decididos ({decididos.length})</h3>
+              <div className="max-h-64 overflow-y-auto divide-y divide-[#F1EDE3]">
+                {decididos.map((d: any) => (
+                  <div key={d.id} className="py-1.5 text-sm flex items-center justify-between gap-2">
+                    <span>
+                      <b>{d.fornecedorNome || `GIGA #${d.fornecedorGigaCodigo}`}</b>
+                      {d.naoEhPessoa
+                        ? <span className="text-slate-400"> — não é pessoa</span>
+                        : <span> → 👤 <b>{d.sellerNome}</b> <span className="text-[11px] text-slate-400">({d.contasConvertidas} conta(s))</span></span>}
+                    </span>
+                    <button
+                      onClick={() => acao(() => api('/admin/contas-pagar/associacao/desfazer', { method: 'POST', body: JSON.stringify({ fornecedorGigaCodigo: d.fornecedorGigaCodigo }) }), 'Desfeito', `d${d.id}`)}
+                      className="text-[11px] font-bold px-2 py-0.5 rounded border border-[#E7E2D8] text-slate-400 hover:bg-rose-50"
+                    >Desfazer</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {escolhendo && (
+        <EscolherFuncionariaModal
+          candidato={escolhendo}
+          onClose={() => setEscolhendo(null)}
+          onOk={() => { setEscolhendo(null); carregar(); }}
+          avisar={avisar}
+        />
+      )}
+    </div>
+  );
+}
+
+function EscolherFuncionariaModal({ candidato, onClose, onOk, avisar }: any) {
+  const [q, setQ] = useState('');
+  const [opts, setOpts] = useState<any[]>([]);
+  const [saving, setSaving] = useState(false);
+  const tRef = useRef<any>(null);
+  useEffect(() => {
+    clearTimeout(tRef.current);
+    tRef.current = setTimeout(async () => {
+      try { setOpts(await api<any[]>(`/admin/contas-pagar/associacao/funcionarias?q=${encodeURIComponent(q)}`)); }
+      catch { setOpts([]); }
+    }, 250);
+  }, [q]);
+  const escolher = async (sellerId: string, nome: string) => {
+    setSaving(true);
+    try {
+      await api('/admin/contas-pagar/associacao/associar', {
+        method: 'POST',
+        body: JSON.stringify({ fornecedorGigaCodigo: candidato.codigo, sellerId }),
+      });
+      avisar('ok', `Associado: ${nome}`);
+      onOk();
+    } catch (e: any) { avisar('erro', e?.message || 'Falhou'); }
+    finally { setSaving(false); }
+  };
+  return (
+    <Modal titulo={`Associar "${candidato.nome}" a…`} onClose={onClose}>
+      <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Busque a funcionária (inclui inativas/históricas)…" className="inp" />
+      <div className="max-h-64 overflow-y-auto divide-y divide-[#F1EDE3] mt-2">
+        {opts.map((o) => (
+          <button key={o.id} disabled={saving} onClick={() => escolher(o.id, o.name)} className="block w-full text-left px-2 py-2 text-sm hover:bg-[#FBF6E6]">
+            <b>{o.name}</b> {!o.active && <span className="text-[10px] text-slate-400">(inativa)</span>}
+            {o.cpf && <span className="text-[11px] text-slate-400 ml-2">CPF {o.cpf}</span>}
+          </button>
+        ))}
+        {!opts.length && <p className="text-sm text-slate-400 py-3 px-2">Digite pra buscar…</p>}
+      </div>
+    </Modal>
   );
 }
 

@@ -80,18 +80,28 @@ export class ContasPagarService {
     }));
   }
 
-  fornecedoresOptions(q?: string) {
+  async fornecedoresOptions(q?: string) {
     const term = String(q || '').trim();
+    // Fornecedores ASSOCIADOS a funcionária ficam fora do autocomplete
+    // (viraram pessoa — decisão do dono 11/07). "Não é pessoa" continua.
+    const associados: any[] = await (this.prisma as any).contaPagarAssociacao.findMany({
+      where: { sellerId: { not: null } },
+      select: { fornecedorGigaCodigo: true },
+    });
+    const excluir = associados.map((a) => a.fornecedorGigaCodigo);
     return (this.prisma as any).wincredFornecedor.findMany({
-      where: term
-        ? {
-            OR: [
-              { razaoSocial: { contains: term, mode: 'insensitive' } },
-              { fantasia: { contains: term, mode: 'insensitive' } },
-              { cnpj: { contains: term } },
-            ],
-          }
-        : {},
+      where: {
+        ...(excluir.length ? { codigo: { notIn: excluir } } : {}),
+        ...(term
+          ? {
+              OR: [
+                { razaoSocial: { contains: term, mode: 'insensitive' } },
+                { fantasia: { contains: term, mode: 'insensitive' } },
+                { cnpj: { contains: term } },
+              ],
+            }
+          : {}),
+      },
       select: { codigo: true, razaoSocial: true, fantasia: true, cnpj: true },
       orderBy: { razaoSocial: 'asc' },
       take: 20,
