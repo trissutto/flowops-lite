@@ -104,6 +104,7 @@ function Painel({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
   const [loading, setLoading] = useState(false);
   const [pagando, setPagando] = useState<any | null>(null); // conta no modal de baixa
   const [logsDe, setLogsDe] = useState<any | null>(null);
+  const [showLote, setShowLote] = useState(false);
 
   const carregarBase = useCallback(() => {
     api<any>('/admin/contas-pagar/stats').then(setStats).catch(() => {});
@@ -290,7 +291,15 @@ function Painel({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
 
       {data && (
         <div className="flex items-center justify-between text-sm text-slate-500">
-          <span>{data.total} conta(s) · soma <b className="text-[#2E7D46]">{brl(data.somaCents)}</b></span>
+          <span className="flex items-center gap-3">
+            {data.total} conta(s) · soma <b className="text-[#2E7D46]">{brl(data.somaCents)}</b>
+            {status === 'pendentes' && data.total > 0 && (
+              <button
+                onClick={() => setShowLote(true)}
+                className="px-3 py-1.5 rounded-lg border border-[#2E7D46] text-[#2E7D46] font-bold hover:bg-emerald-50"
+              >✓ Baixar TODAS do filtro ({data.total})</button>
+            )}
+          </span>
           <span className="flex items-center gap-2">
             <button disabled={page <= 1} onClick={() => setPage(page - 1)} className="px-3 py-1 rounded-lg border border-[#E7E2D8] disabled:opacity-40">‹</button>
             Pág. {data.page} / {Math.max(1, Math.ceil(data.total / data.perPage))}
@@ -308,7 +317,66 @@ function Painel({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
         />
       )}
       {logsDe && <LogsModal conta={logsDe} onClose={() => setLogsDe(null)} />}
+      {showLote && data && (
+        <BaixaLoteModal
+          total={data.total}
+          somaCents={data.somaCents}
+          filtros={{ search: busca.trim() || undefined, de: de || undefined, ate: ate || undefined, lojaCode: lojaCode || undefined, especieId: especieId || undefined, emMaos: soEmMaos }}
+          onClose={() => setShowLote(false)}
+          onOk={() => { setShowLote(false); carregar(); carregarBase(); }}
+          avisar={avisar}
+        />
+      )}
     </div>
+  );
+}
+
+/* ═══════════ MODAL: BAIXA EM LOTE (regularização histórica) ═══════════ */
+function BaixaLoteModal({ total, somaCents, filtros, onClose, onOk, avisar }: any) {
+  const [pagamento, setPagamento] = useState(hojeStr());
+  const [motivo, setMotivo] = useState('Regularização histórica — contas antigas já pagas fora do sistema (herança GIGA)');
+  const [confirmo, setConfirmo] = useState('');
+  const [saving, setSaving] = useState(false);
+  const confirmar = async () => {
+    setSaving(true);
+    try {
+      const r = await api<any>('/admin/contas-pagar/baixa-em-lote', {
+        method: 'POST',
+        body: JSON.stringify({ filtros, pagamento, motivo }),
+      });
+      avisar('ok', `${r.baixadas} conta(s) baixada(s) — ${brl(r.somaCents)}`);
+      onOk();
+    } catch (e: any) {
+      avisar('erro', e?.message || 'Falhou');
+    } finally { setSaving(false); }
+  };
+  return (
+    <Modal titulo="Baixar TODAS as contas abertas do filtro" onClose={onClose}>
+      <div className="space-y-3">
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-800">
+          ⚠️ Vai marcar como <b>PAGA</b>: <b>{total} conta(s)</b> · soma <b>{brl(somaCents)}</b> — exatamente
+          o que o filtro atual mostra. Cada uma recebe registro de auditoria com seu nome e o motivo.
+          Dá pra reabrir individualmente se precisar.
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <Campo label="Data do pagamento"><input type="date" value={pagamento} onChange={(e) => setPagamento(e.target.value)} className="inp" /></Campo>
+          <Campo label={`Digite BAIXAR pra confirmar`}><input value={confirmo} onChange={(e) => setConfirmo(e.target.value)} placeholder="BAIXAR" className="inp" /></Campo>
+        </div>
+        <Campo label="Motivo (obrigatório — vai pra auditoria de cada conta)">
+          <input value={motivo} onChange={(e) => setMotivo(e.target.value)} className="inp" />
+        </Campo>
+        <div className="flex justify-end gap-2">
+          <button onClick={onClose} className="px-4 py-2 rounded-lg border border-[#E7E2D8] text-slate-500 font-bold text-sm">Cancelar</button>
+          <button
+            onClick={confirmar}
+            disabled={saving || confirmo.trim().toUpperCase() !== 'BAIXAR' || motivo.trim().length < 5}
+            className="px-4 py-2 rounded-lg bg-[#2E7D46] text-white font-bold text-sm flex items-center gap-2 disabled:opacity-50"
+          >
+            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />} Baixar {total} conta(s)
+          </button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
