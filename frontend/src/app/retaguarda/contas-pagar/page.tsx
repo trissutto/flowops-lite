@@ -14,6 +14,7 @@ import Link from 'next/link';
 import {
   ArrowLeft, Plus, Search, Loader2, Check, X, Wallet, AlertTriangle,
   CalendarDays, Users, Scale, RefreshCw, Trash2, Pencil, History,
+  ListChecks, Printer,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -23,7 +24,7 @@ const fmtData = (s: string | null | undefined) =>
   s ? new Date(s).toLocaleDateString('pt-BR', { timeZone: 'UTC' }) : '—';
 const hojeStr = () => new Date().toISOString().slice(0, 10);
 
-type Aba = 'painel' | 'funcionarias' | 'associacao' | 'divergencias';
+type Aba = 'painel' | 'hoje' | 'funcionarias' | 'associacao' | 'divergencias';
 
 export default function ContasPagarPage() {
   const [aba, setAba] = useState<Aba>('painel');
@@ -54,6 +55,7 @@ export default function ContasPagarPage() {
         <div className="max-w-7xl mx-auto px-4 pb-2 flex gap-2">
           {([
             ['painel', 'Painel', CalendarDays],
+            ['hoje', 'A fazer hoje', ListChecks],
             ['funcionarias', 'Funcionárias', Users],
             ['associacao', 'Associação', Users],
             ['divergencias', 'Divergências GIGA × FLOW', Scale],
@@ -73,6 +75,7 @@ export default function ContasPagarPage() {
 
       <main className="max-w-7xl mx-auto px-4 py-5">
         {aba === 'painel' && <Painel avisar={avisar} />}
+        {aba === 'hoje' && <AFazerHoje avisar={avisar} />}
         {aba === 'funcionarias' && <Funcionarias />}
         {aba === 'associacao' && <Associacao avisar={avisar} />}
         {aba === 'divergencias' && <Divergencias avisar={avisar} />}
@@ -595,6 +598,12 @@ function NovaContaModal({ onClose, avisar }: any) {
 
   const valorCents = Math.round((parseFloat(valor.replace(/\./g, '').replace(',', '.')) || 0) * 100);
 
+  // Espécies com comportamento próprio: DUPLICATA numera NF/1, NF/2… por
+  // parcela; DEPOSITO pede banco·agência·conta e cai na aba "A fazer hoje".
+  const especieNome = especies.find((e) => e.id === especieId)?.nome || '';
+  const isDuplicata = especieNome === 'DUPLICATA';
+  const isDeposito = especieNome === 'DEPOSITO';
+
   const gerarPrevia = () => {
     if (!valorCents || !venc1) { avisar('erro', 'Preencha valor e 1º vencimento'); return; }
     const n = Math.min(60, Math.max(1, nParcelas));
@@ -607,6 +616,7 @@ function NovaContaModal({ onClose, avisar }: any) {
         vencimento: d.toISOString().slice(0, 10),
         valorCents: i === n - 1 ? valorCents - base * (n - 1) : base,
         emMaos: i === 0 ? emMaos : false,
+        notaFiscal: isDuplicata && notaFiscal.trim() && n > 1 ? `${notaFiscal.trim()}/${i + 1}` : undefined,
       });
     }
     setPrevia(rows);
@@ -635,6 +645,7 @@ function NovaContaModal({ onClose, avisar }: any) {
           emMaos,
           observacao: obs || undefined,
           parcelasCustom: previa || undefined,
+          numerarDuplicatas: isDuplicata,
         }),
       });
       avisar('ok', `Conta criada (${previa?.length || nParcelas} parcela(s))`);
@@ -690,13 +701,17 @@ function NovaContaModal({ onClose, avisar }: any) {
             </select>
           </Campo>
           <Campo label="Espécie">
-            <select value={especieId} onChange={(e) => setEspecieId(e.target.value)} className="inp">
+            <select value={especieId} onChange={(e) => { setEspecieId(e.target.value); setPrevia(null); }} className="inp">
               <option value="">Selecione…</option>
               {especies.filter((e) => e.ativa).map((e) => <option key={e.id} value={e.id}>{e.nome}{e.restrita ? ' 🔒' : ''}</option>)}
             </select>
           </Campo>
-          <Campo label="Nota fiscal"><input value={notaFiscal} onChange={(e) => setNotaFiscal(e.target.value)} className="inp" /></Campo>
-          <Campo label="Banco"><input value={banco} onChange={(e) => setBanco(e.target.value)} className="inp" /></Campo>
+          <Campo label={isDuplicata ? 'Nota fiscal (base das duplicatas)' : 'Nota fiscal'}>
+            <input value={notaFiscal} onChange={(e) => { setNotaFiscal(e.target.value); if (isDuplicata) setPrevia(null); }} className="inp" />
+          </Campo>
+          <Campo label={isDeposito ? 'Banco · agência · conta' : 'Banco'}>
+            <input value={banco} onChange={(e) => setBanco(e.target.value)} placeholder={isDeposito ? 'Ex.: Itaú · ag 1234 · cc 56789-0' : ''} className="inp" />
+          </Campo>
           <Campo label="Emissão"><input type="date" value={emissao} onChange={(e) => setEmissao(e.target.value)} className="inp" /></Campo>
           <Campo label="Valor TOTAL (R$)"><input value={valor} onChange={(e) => { setValor(e.target.value); setPrevia(null); }} placeholder="0,00" className="inp font-bold text-[#2E7D46]" /></Campo>
           <Campo label="1º vencimento"><input type="date" value={venc1} onChange={(e) => { setVenc1(e.target.value); setPrevia(null); }} className="inp" /></Campo>
@@ -709,6 +724,19 @@ function NovaContaModal({ onClose, avisar }: any) {
         </div>
         <Campo label="Observações"><input value={obs} onChange={(e) => setObs(e.target.value)} className="inp" /></Campo>
 
+        {isDuplicata && (
+          <div className="bg-[#FBF6E6] border border-[#E7E2D8] rounded-lg px-3 py-2 text-[12px] text-[#8C7325]">
+            📄 <b>Duplicata:</b> com nota fiscal + mais de 1 parcela, cada parcela ganha o número
+            <b> {notaFiscal.trim() || 'NF'}/1, {notaFiscal.trim() || 'NF'}/2…</b> automaticamente (dá pra editar na prévia).
+          </div>
+        )}
+        {isDeposito && (
+          <div className="bg-[#FBF6E6] border border-[#E7E2D8] rounded-lg px-3 py-2 text-[12px] text-[#8C7325]">
+            🏦 <b>Depósito a fazer:</b> entra na aba <b>“A fazer hoje”</b> no dia do vencimento — quem for ao banco
+            marca como feito lá. Preencha banco · agência · conta pra sair na lista impressa.
+          </div>
+        )}
+
         {/* prévia de parcelas */}
         <div className="border border-dashed border-[#B8912B] bg-[#FBF6E6] rounded-xl p-3">
           <div className="flex items-center justify-between mb-2">
@@ -718,12 +746,22 @@ function NovaContaModal({ onClose, avisar }: any) {
           {previa ? (
             <table className="w-full text-sm bg-white rounded-lg overflow-hidden">
               <thead><tr className="text-[11px] uppercase text-slate-400 border-b border-[#F1EDE3]">
-                <th className="text-left px-3 py-1.5">#</th><th className="text-left px-3 py-1.5">Vencimento</th><th className="text-right px-3 py-1.5">Valor (R$)</th><th className="text-center px-3 py-1.5">Em mãos</th>
+                <th className="text-left px-3 py-1.5">#</th>{isDuplicata && <th className="text-left px-3 py-1.5">Duplicata nº</th>}<th className="text-left px-3 py-1.5">Vencimento</th><th className="text-right px-3 py-1.5">Valor (R$)</th><th className="text-center px-3 py-1.5">Em mãos</th>
               </tr></thead>
               <tbody>
                 {previa.map((p, i) => (
                   <tr key={i} className="border-b border-[#F1EDE3]">
                     <td className="px-3 py-1.5 text-slate-500">{i + 1}/{previa.length}</td>
+                    {isDuplicata && (
+                      <td className="px-3 py-1.5">
+                        <input
+                          value={p.notaFiscal || ''}
+                          onChange={(e) => { const c = [...previa]; c[i] = { ...p, notaFiscal: e.target.value }; setPrevia(c); }}
+                          placeholder={`${notaFiscal.trim() || 'NF'}/${i + 1}`}
+                          className="border border-[#E7E2D8] rounded px-2 py-0.5 w-28"
+                        />
+                      </td>
+                    )}
                     <td className="px-3 py-1.5">
                       <input type="date" value={p.vencimento} onChange={(e) => { const c = [...previa]; c[i] = { ...p, vencimento: e.target.value }; setPrevia(c); }} className="border border-[#E7E2D8] rounded px-2 py-0.5" />
                     </td>
@@ -741,7 +779,7 @@ function NovaContaModal({ onClose, avisar }: any) {
                     </td>
                   </tr>
                 ))}
-                <tr><td colSpan={2} className="px-3 py-1.5 font-bold text-slate-500">Soma</td>
+                <tr><td colSpan={isDuplicata ? 3 : 2} className="px-3 py-1.5 font-bold text-slate-500">Soma</td>
                   <td className="px-3 py-1.5 text-right font-extrabold text-[#2E7D46]">{brl(previa.reduce((s, p) => s + p.valorCents, 0))}</td><td></td></tr>
               </tbody>
             </table>
@@ -762,6 +800,157 @@ function NovaContaModal({ onClose, avisar }: any) {
         </div>
       </div>
     </Modal>
+  );
+}
+
+/* ═══════════════ A FAZER HOJE — checklist de pagamentos/depósitos do dia ═══════════════
+   Atrasadas + vencendo hoje, com filtro rápido (depósitos / em mãos), baixa em
+   1 clique (reversível pelo "Reabrir" do painel) e lista pra levar ao banco. */
+function AFazerHoje({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
+  const [especies, setEspecies] = useState<any[]>([]);
+  const [filtro, setFiltro] = useState<'tudo' | 'depositos' | 'emMaos'>('tudo');
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  const [marcando, setMarcando] = useState<string | null>(null);
+
+  useEffect(() => {
+    api<any[]>('/admin/contas-pagar/especies').then(setEspecies).catch(() => {});
+  }, []);
+  const depositoId = especies.find((e) => e.nome === 'DEPOSITO')?.id;
+
+  const carregar = useCallback(async () => {
+    setLoading(true);
+    try {
+      const p = new URLSearchParams();
+      p.set('status', 'pendentes');
+      p.set('ate', hojeStr());
+      p.set('perPage', '200');
+      if (filtro === 'depositos' && depositoId) p.set('especieId', depositoId);
+      if (filtro === 'emMaos') p.set('emMaos', '1');
+      setData(await api<any>(`/admin/contas-pagar/list?${p}`));
+    } catch (e: any) {
+      avisar('erro', e?.message || 'Falha ao carregar');
+    } finally { setLoading(false); }
+  }, [filtro, depositoId, avisar]);
+  useEffect(() => { carregar(); }, [carregar]);
+
+  const rows: any[] = data?.rows || [];
+  const atrasadas = rows.filter((r) => r.vencida);
+  const doDia = rows.filter((r) => !r.vencida);
+  const soma = (l: any[]) => l.reduce((s, r) => s + r.valorCents, 0);
+
+  const feito = async (r: any) => {
+    setMarcando(r.id);
+    try {
+      await api(`/admin/contas-pagar/${r.id}/pagar`, { method: 'PATCH', body: JSON.stringify({ pagamento: hojeStr() }) });
+      avisar('ok', `Feito: ${r.beneficiario || ''} ${brl(r.valorCents)} (reabre pelo Painel se precisar)`);
+      carregar();
+    } catch (e: any) {
+      avisar('erro', e?.message || 'Falhou');
+    } finally { setMarcando(null); }
+  };
+
+  const imprimir = () => {
+    const linha = (r: any) =>
+      `<tr><td class="cb">☐</td><td>${fmtData(r.vencimento)}</td><td><b>${r.beneficiario || '—'}</b>${r.observacao ? `<br><small>${r.observacao}</small>` : ''}</td><td>${r.especie}</td><td>${r.banco || '—'}</td><td>${r.lojaCode}</td><td class="v">${brl(r.valorCents)}</td></tr>`;
+    const bloco = (titulo: string, l: any[]) => l.length
+      ? `<h2>${titulo} — ${l.length} conta(s) · ${brl(soma(l))}</h2><table><tr><th></th><th>Venc.</th><th>Beneficiário</th><th>Espécie</th><th>Banco</th><th>Loja</th><th>Valor</th></tr>${l.map(linha).join('')}</table>`
+      : '';
+    const w = window.open('', 'lurds_a_fazer', 'width=760,height=640');
+    if (!w) { avisar('erro', 'Popup bloqueado — libere popups pra imprimir'); return; }
+    w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>A fazer — ${new Date().toLocaleDateString('pt-BR')}</title>
+      <style>
+        body{font-family:Arial,sans-serif;font-size:13px;color:#111;margin:20px}
+        h1{font-size:16px;margin:0 0 2px} .sub{color:#666;font-size:11px;margin-bottom:14px}
+        h2{font-size:13px;margin:16px 0 6px;border-bottom:1.5px solid #111;padding-bottom:3px}
+        table{width:100%;border-collapse:collapse} th{font-size:10px;text-transform:uppercase;color:#666;text-align:left;padding:3px 6px}
+        td{padding:4px 6px;border-bottom:1px solid #ddd;vertical-align:top} td.cb{font-size:16px;width:22px} td.v{text-align:right;font-weight:bold;white-space:nowrap}
+        small{color:#888} .tot{margin-top:14px;text-align:right;font-weight:bold;font-size:14px}
+      </style></head><body>
+      <h1>Lurd's Plus Size — contas a fazer</h1>
+      <div class="sub">${new Date().toLocaleDateString('pt-BR')} · filtro: ${filtro === 'depositos' ? 'só depósitos' : filtro === 'emMaos' ? 'só em mãos' : 'tudo'}</div>
+      ${bloco('ATRASADAS', atrasadas)}
+      ${bloco('VENCEM HOJE', doDia)}
+      <div class="tot">TOTAL: ${rows.length} conta(s) · ${brl(soma(rows))}</div>
+      </body></html>`);
+    w.document.close();
+    w.focus();
+    w.print();
+  };
+
+  const Grupo = ({ titulo, cor, lista }: { titulo: string; cor: string; lista: any[] }) => (
+    <div className="bg-white border border-[#E7E2D8] rounded-xl overflow-x-auto">
+      <div className={`px-4 py-2.5 flex items-center justify-between border-b border-[#E7E2D8] ${cor === 'rose' ? 'bg-rose-50' : 'bg-amber-50'}`}>
+        <span className={`text-sm font-extrabold ${cor === 'rose' ? 'text-rose-600' : 'text-amber-700'}`}>{titulo} · {lista.length} conta(s)</span>
+        <span className="text-sm font-extrabold text-[#2E7D46]">{brl(soma(lista))}</span>
+      </div>
+      <table className="w-full text-sm min-w-[820px]">
+        <tbody>
+          {lista.map((r) => (
+            <tr key={r.id} className="border-b border-[#F1EDE3] hover:bg-[#FBF6E6]">
+              <td className="px-3 py-2 whitespace-nowrap text-slate-600 w-24">{fmtData(r.vencimento)}</td>
+              <td className="px-3 py-2">
+                <div className="font-bold">{r.beneficiario || '—'}{r.beneficiarioTipo === 'funcionaria' ? ' 👤' : ''}</div>
+                {r.observacao && <div className="text-[11px] text-slate-400">{r.observacao}</div>}
+              </td>
+              <td className="px-3 py-2 whitespace-nowrap">
+                <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-[#FAFAF7] border border-[#E7E2D8] text-slate-500">{r.especie}</span>
+              </td>
+              <td className="px-3 py-2 text-slate-500 text-[12px]">{r.banco || '—'}</td>
+              <td className="px-3 py-2 text-slate-600 w-14">{r.lojaCode}</td>
+              <td className="px-3 py-2 text-slate-500 w-16">{r.parcela || ''}</td>
+              <td className="px-3 py-2 text-center w-20">{r.emMaos && <span className="text-[11px] font-extrabold px-2 py-0.5 rounded-full border bg-emerald-50 border-[#2E7D46] text-[#2E7D46]">✋ em mãos</span>}</td>
+              <td className="px-3 py-2 text-right font-extrabold text-[#2E7D46] whitespace-nowrap">{brl(r.valorCents)}</td>
+              <td className="px-3 py-2 text-right w-28">
+                <button
+                  onClick={() => feito(r)}
+                  disabled={marcando === r.id}
+                  className="text-[12px] font-bold px-3 py-1.5 rounded-lg border border-[#2E7D46] text-[#2E7D46] hover:bg-emerald-50 disabled:opacity-50"
+                >{marcando === r.id ? <Loader2 className="w-3.5 h-3.5 animate-spin inline" /> : '✓ Feito'}</button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-white border border-[#E7E2D8] rounded-xl p-4 flex flex-wrap items-center gap-2 text-sm">
+        {([['tudo', '📋 Tudo'], ['depositos', '🏦 Só depósitos'], ['emMaos', '✋ Só em mãos']] as const).map(([k, label]) => (
+          <button
+            key={k}
+            onClick={() => setFiltro(k)}
+            className={`px-3 py-1.5 rounded-full border font-semibold ${filtro === k ? 'bg-[#FBF6E6] border-[#B8912B] text-[#8C7325]' : 'border-[#E7E2D8] text-slate-500 hover:bg-[#FBF6E6]'}`}
+          >{label}</button>
+        ))}
+        {data && (
+          <span className="text-slate-500 ml-1">
+            {data.total} conta(s) até hoje · <b className="text-[#2E7D46]">{brl(data.somaCents)}</b>
+            {data.total > rows.length && <span className="text-amber-600"> · mostrando as primeiras {rows.length}</span>}
+          </span>
+        )}
+        <button
+          onClick={imprimir}
+          disabled={!rows.length}
+          className="ml-auto px-4 py-2 rounded-lg bg-[#B8912B] hover:bg-[#8C7325] text-white font-bold text-sm flex items-center gap-2 disabled:opacity-50"
+        ><Printer className="w-4 h-4" /> Imprimir lista</button>
+      </div>
+
+      {loading && !data ? (
+        <div className="p-10 text-center text-slate-400"><Loader2 className="w-6 h-6 animate-spin mx-auto" /></div>
+      ) : !rows.length ? (
+        <div className="bg-white border border-[#E7E2D8] rounded-xl p-10 text-center text-slate-400">
+          🎉 Nada a fazer{filtro !== 'tudo' ? ' nesse filtro' : ''} — nenhuma conta vencida ou vencendo hoje.
+        </div>
+      ) : (
+        <>
+          {atrasadas.length > 0 && <Grupo titulo="ATRASADAS" cor="rose" lista={atrasadas} />}
+          {doDia.length > 0 && <Grupo titulo="VENCEM HOJE" cor="amber" lista={doDia} />}
+        </>
+      )}
+    </div>
   );
 }
 
