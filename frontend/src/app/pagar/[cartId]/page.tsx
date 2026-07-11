@@ -120,6 +120,10 @@ export default function PagarPage() {
     finally { setRetiradaLoading(false); }
   }
   const [err, setErr] = useState<string | null>(null);
+  // Endereço DEPOIS do pagamento: carrinho pago sem endereço (PIX/link gerado
+  // no console da live) mostra o formulário na tela de confirmação.
+  const [savingAddr, setSavingAddr] = useState(false);
+  const [addrDone, setAddrDone] = useState(false);
   const [method, setMethod] = useState<'pix' | 'card' | null>(null);
   const [pix, setPix] = useState<{ qrCodeText: string; qrCodeImageUrl: string } | null>(null);
   const [cardUrl, setCardUrl] = useState<string | null>(null);
@@ -251,12 +255,86 @@ export default function PagarPage() {
     return <div className="min-h-screen bg-[#FAFAF7] flex items-start justify-center px-4 pt-[10vh] text-[#7A7264] text-sm">Carregando sua compra…</div>;
   }
   if (paid) {
+    // Pagou sem endereço (PIX/link gerado na live)? Completa AQUI mesmo —
+    // sem isso a loja não tem pra onde postar e caça a cliente no Direct.
+    const precisaEndereco = !addrDone && !sum.isPickup && !sum.hasEndereco;
+    const precisaCel = !sum.dados?.hasPhone;
+    const precisaCpfPago = !sum.dados?.hasCpf;
+    const addrOk =
+      rua.trim().length > 0 && numero.trim().length > 0 && cidade.trim().length > 0 && uf.trim().length === 2 &&
+      cep.replace(/\D/g, '').length === 8 &&
+      (!precisaCel || celular.replace(/\D/g, '').length >= 10) &&
+      (!precisaCpfPago || cpfValido(cpf));
+    const preencherViaCep = async (v: string) => {
+      setCep(v);
+      const digits = v.replace(/\D/g, '');
+      if (digits.length !== 8) return;
+      try {
+        const r = await fetch(`https://viacep.com.br/ws/${digits}/json/`).then((x) => x.json());
+        if (!r?.erro) {
+          setRua((prev) => prev || r.logradouro || '');
+          setBairro((prev) => prev || r.bairro || '');
+          setCidade((prev) => prev || r.localidade || '');
+          setUf((prev) => prev || String(r.uf || '').toUpperCase());
+        }
+      } catch { /* ViaCEP fora — digita na mão */ }
+    };
+    const salvarEnderecoPosPago = async () => {
+      setSavingAddr(true); setErr(null);
+      try {
+        await api(`/public/live-pay/${cartId}/endereco`, {
+          method: 'POST',
+          body: JSON.stringify({
+            nome, endereco: rua, numero, complemento, bairro, cidade, uf, celular, cpf, email,
+            cep: cep.replace(/\D/g, ''),
+          }),
+        });
+        setAddrDone(true);
+      } catch (e: any) { setErr(parseErr(e)); }
+      finally { setSavingAddr(false); }
+    };
     return (
       <div className="min-h-screen bg-[#FAFAF7] flex items-start justify-center px-4 pt-[6vh] pb-12">
         <div className={`${card} p-6 text-center`}>
           <div className="w-[68px] h-[68px] mx-auto mb-4 rounded-full bg-[#FBF6E6] text-[#B8912B] text-4xl font-extrabold flex items-center justify-center">✓</div>
           <h1 className="text-[23px] font-extrabold text-[#2A2620]">Pagamento confirmado! 💜</h1>
-          <p className="text-[#7A7264] text-[15px] mt-1">Obrigada, {sum.firstName}! Já estamos separando seu pedido.</p>
+          <p className="text-[#7A7264] text-[15px] mt-1">
+            Obrigada, {sum.firstName}!{' '}
+            {precisaEndereco ? 'Falta só uma coisinha pra gente postar:' : addrDone ? 'Endereço recebido — já estamos separando seu pedido. 💜' : 'Já estamos separando seu pedido.'}
+          </p>
+          {precisaEndereco && (
+            <div className="mt-4 text-left">
+              <span className="block text-[13px] font-bold text-[#6B6456] mb-1.5">Seu endereço de entrega 📦</span>
+              <div className="space-y-2">
+                <input value={cep} onChange={(e) => preencherViaCep(maskCep(e.target.value))} placeholder="CEP" inputMode="numeric" className="w-full box-border px-3.5 py-3 text-base rounded-xl bg-[#FCFBF7] border-[1.5px] border-[#E4DDCB] outline-none focus:border-[#B8912B] focus:ring-2 focus:ring-[#EBD9A6]" />
+                <input value={rua} onChange={(e) => setRua(e.target.value)} placeholder="Rua / avenida" className="w-full box-border px-3.5 py-3 text-base rounded-xl bg-[#FCFBF7] border-[1.5px] border-[#E4DDCB] outline-none focus:border-[#B8912B] focus:ring-2 focus:ring-[#EBD9A6]" />
+                <div className="grid grid-cols-[110px_1fr] gap-2">
+                  <input value={numero} onChange={(e) => setNumero(e.target.value)} placeholder="Número" inputMode="numeric" className="w-full box-border px-3.5 py-3 text-base rounded-xl bg-[#FCFBF7] border-[1.5px] border-[#E4DDCB] outline-none focus:border-[#B8912B] focus:ring-2 focus:ring-[#EBD9A6]" />
+                  <input value={complemento} onChange={(e) => setComplemento(e.target.value)} placeholder="Complemento (opcional)" className="w-full box-border px-3.5 py-3 text-base rounded-xl bg-[#FCFBF7] border-[1.5px] border-[#E4DDCB] outline-none focus:border-[#B8912B] focus:ring-2 focus:ring-[#EBD9A6]" />
+                </div>
+                <input value={bairro} onChange={(e) => setBairro(e.target.value)} placeholder="Bairro" className="w-full box-border px-3.5 py-3 text-base rounded-xl bg-[#FCFBF7] border-[1.5px] border-[#E4DDCB] outline-none focus:border-[#B8912B] focus:ring-2 focus:ring-[#EBD9A6]" />
+                <div className="grid grid-cols-[1fr_80px] gap-2">
+                  <input value={cidade} onChange={(e) => setCidade(e.target.value)} placeholder="Cidade" className="w-full box-border px-3.5 py-3 text-base rounded-xl bg-[#FCFBF7] border-[1.5px] border-[#E4DDCB] outline-none focus:border-[#B8912B] focus:ring-2 focus:ring-[#EBD9A6]" />
+                  <input value={uf} onChange={(e) => setUf(e.target.value.toUpperCase().slice(0, 2))} placeholder="UF" maxLength={2} className="w-full box-border px-3.5 py-3 text-base rounded-xl bg-[#FCFBF7] border-[1.5px] border-[#E4DDCB] outline-none focus:border-[#B8912B] focus:ring-2 focus:ring-[#EBD9A6] uppercase" />
+                </div>
+                {precisaCel && (
+                  <input value={celular} onChange={(e) => setCelular(maskCel(e.target.value))} placeholder="Celular com DDD" inputMode="numeric" className="w-full box-border px-3.5 py-3 text-base rounded-xl bg-[#FCFBF7] border-[1.5px] border-[#E4DDCB] outline-none focus:border-[#B8912B] focus:ring-2 focus:ring-[#EBD9A6]" />
+                )}
+                {precisaCpfPago && (
+                  <input value={cpf} onChange={(e) => setCpf(maskCpf(e.target.value))} placeholder="CPF (o Correio exige pra postar)" inputMode="numeric" className="w-full box-border px-3.5 py-3 text-base rounded-xl bg-[#FCFBF7] border-[1.5px] border-[#E4DDCB] outline-none focus:border-[#B8912B] focus:ring-2 focus:ring-[#EBD9A6]" />
+                )}
+              </div>
+              {err && <div className="bg-[#FDECEC] border border-[#F3C0C0] text-[#9B2C2C] rounded-lg px-3 py-2.5 text-sm mt-2">{err}</div>}
+              <button
+                onClick={salvarEnderecoPosPago}
+                disabled={!addrOk || savingAddr}
+                className="mt-3 w-full py-3.5 text-[16px] font-extrabold text-white rounded-xl disabled:opacity-50"
+                style={{ background: 'linear-gradient(135deg, #B8912B 0%, #8C7325 100%)' }}
+              >
+                {savingAddr ? 'Salvando…' : 'Salvar endereço de entrega'}
+              </button>
+            </div>
+          )}
         </div>
       </div>
     );

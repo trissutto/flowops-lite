@@ -1224,6 +1224,48 @@ export class LivePdvService {
    * Retorna { ok: false, reason } em vez de lançar — a massa acumula em
    * "skipped" e o individual transforma em erro amigável.
    */
+  /** Endereço de entrega incompleto pra postagem (mesma régua do releaseSeparation). */
+  private enderecoIncompleto(cart: any): boolean {
+    return (
+      String(cart.customerCep || '').replace(/\D/g, '').length !== 8 ||
+      !String(cart.customerEndereco || '').trim() ||
+      !String(cart.customerNumero || '').trim() ||
+      !String(cart.customerCidade || '').trim() ||
+      !String(cart.customerUf || '').trim()
+    );
+  }
+
+  /**
+   * DM automática pós-pagamento pedindo o ENDEREÇO — pro carrinho pago sem
+   * endereço completo (PIX/link gerado no console, cliente nunca passou pelo
+   * checkout). A cliente completa no mesmo link público; a operadora para de
+   * caçar endereço no Direct. Best-effort: falha nunca trava o pagamento.
+   */
+  private async sendAddressRequestDm(cart: any): Promise<void> {
+    if (!this.manychat.enabled) return;
+    let sid: string | null = null;
+    if (cart.customerId) {
+      const cust = await (this.prisma as any).customer.findUnique({
+        where: { id: cart.customerId },
+        select: { manychatSubscriberId: true },
+      });
+      sid = cust?.manychatSubscriberId || null;
+    }
+    if (!sid) sid = await this.lookupManychatSidByIg(cart.customerInstagram);
+    if (!sid) return;
+    const base = (process.env.FRONTEND_URL || 'https://flowops-lite.vercel.app')
+      .split(',')[0]
+      .trim()
+      .replace(/\/$/, '');
+    const link = cart.payCode ? `${base}/p/${cart.payCode}` : `${base}/pagar/${cart.id}`;
+    const first = String(cart.customerName || 'cliente').trim().split(/\s+/)[0] || 'cliente';
+    const msg =
+      `Pagamento confirmado, ${first}! 💜 Só falta seu ENDEREÇO pra gente postar suas peças. ` +
+      `Preenche aqui rapidinho: ${link}`;
+    const r = await this.manychat.sendText(sid, msg);
+    if (r.ok) this.logger.log(`[live-dm] pedido de endereço enviado (carrinho ${cart.id})`);
+  }
+
   private async sendCartDm(cart: any): Promise<{ ok: boolean; reason?: string }> {
     const name = cart.customerName || 'cliente';
     if ((cart.totalCents || 0) <= 0) return { ok: false, reason: 'carrinho vazio' };
@@ -2517,6 +2559,13 @@ export class LivePdvService {
     // MÍNIMO de lojas possível (ideal: uma só) antes da conferência/separação.
     // Nunca lança — em erro, mantém as origens escolhidas durante a live.
     await this.reconsolidateCartOrigins(cartId);
+    // Pagou SEM endereço de entrega (PIX/link do console — não passou pelo
+    // checkout)? Pede automaticamente por DM. Best-effort, nunca trava.
+    if (!cart.isPickup && this.enderecoIncompleto(cart)) {
+      this.sendAddressRequestDm(cart).catch((e) =>
+        this.logger.warn(`[live-dm] pedido de endereço falhou: ${(e as Error).message}`),
+      );
+    }
     // DECISÃO DO DONO (07/07): pagamento confirmado NÃO manda direto pra loja.
     // A operadora primeiro CONFERE/COMPLETA os dados da cliente (endereço) e
     // só então libera — releaseSeparation() abaixo. Igual ao fluxo do site.
