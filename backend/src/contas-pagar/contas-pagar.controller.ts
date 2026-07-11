@@ -188,6 +188,20 @@ export class ContasPagarController {
     return this.assoc.candidatos();
   }
 
+  /** Painel INVERTIDO: funcionárias (RH, alfabética) como referência. */
+  @Get('associacao/painel')
+  painelPorFuncionaria(@Req() req: any) {
+    this.requireAdmin(req);
+    return this.assoc.painelPorFuncionaria();
+  }
+
+  /** Fornecedores pendentes por qualquer parte do nome (picker do painel). */
+  @Get('associacao/pendentes')
+  pendentes(@Req() req: any, @Query('q') q?: string) {
+    this.requireAdmin(req);
+    return this.assoc.pendentes(q);
+  }
+
   @Get('associacao/funcionarias')
   buscarFuncionarias(@Req() req: any, @Query('q') q?: string) {
     this.requireAdmin(req);

@@ -185,6 +185,109 @@ export class ContasPagarAssociacaoService {
     return { candidatos: out, pendentes: out.length, exatos: out.filter((o) => o.nivel === 'exato').length };
   }
 
+  /**
+   * PAINEL INVERTIDO (pedido do dono 11/07): a REFERÊNCIA é a tabela do RH —
+   * funcionárias em ordem ALFABÉTICA com nome/loja/CPF — e pra cada uma
+   * mostramos os fornecedores JÁ associados + as SUGESTÕES de fornecedor
+   * pendente (o inverso da fila por fornecedor). Uma pessoa pode ter VÁRIOS
+   * cadastros de fornecedor ao longo dos anos — todos se associam a ela.
+   */
+  async painelPorFuncionaria() {
+    const [{ candidatos }, lojaNome] = await Promise.all([this.candidatos(), this.mapaLojas()]);
+    const sellers: any[] = await (this.prisma as any).seller.findMany({
+      select: { id: true, name: true, cpf: true, active: true, storeCodeOrigin: true, cidade: true },
+      orderBy: { name: 'asc' },
+    });
+    const sellersNorm = sellers.map((s) => ({
+      ...s,
+      norm: this.limparNome(s.name),
+      toks: this.tokens(s.name),
+      loja: this.lojaDisplay(s, lojaNome),
+    }));
+
+    // Já associados, agrupados por funcionária
+    const assoc: any[] = await (this.prisma as any).contaPagarAssociacao.findMany({
+      where: { sellerId: { not: null } },
+      select: { sellerId: true, fornecedorGigaCodigo: true, fornecedorNome: true, contasConvertidas: true },
+    });
+    const assocBySeller = new Map<string, any[]>();
+    for (const a of assoc) {
+      if (!assocBySeller.has(a.sellerId)) assocBySeller.set(a.sellerId, []);
+      assocBySeller.get(a.sellerId)!.push({
+        codigo: a.fornecedorGigaCodigo, nome: a.fornecedorNome, contas: a.contasConvertidas,
+      });
+    }
+
+    // Sugestões: cada fornecedor pendente vai pra MELHOR funcionária (mesmas
+    // regras da fila: exato > contido/subset > parecido).
+    const sugestoesBySeller = new Map<string, any[]>();
+    for (const c of candidatos as any[]) {
+      const norm = String(c.nomeLimpo || '');
+      const toks = new Set<string>(norm.split(' ').filter((t: string) => t.length >= 3));
+      let melhor: any = null; let nivel: string | null = null;
+      const exato = sellersNorm.find((s) => s.norm === norm && norm.length > 5);
+      if (exato) { melhor = exato; nivel = 'exato'; }
+      if (!melhor) {
+        const contido = sellersNorm.find((s) => norm.length > 8 && s.norm.length > 8 && (s.norm.includes(norm) || norm.includes(s.norm)));
+        if (contido) { melhor = contido; nivel = 'contido'; }
+      }
+      if (!melhor && toks.size >= 2) {
+        const subset = sellersNorm.find((s) => {
+          if (s.toks.size < 2) return false;
+          for (const t of s.toks) if (!toks.has(t)) return false;
+          return true;
+        });
+        if (subset) { melhor = subset; nivel = 'contido'; }
+      }
+      if (!melhor && toks.size >= 2) {
+        let best: any = null; let bestScore = 0;
+        for (const s of sellersNorm) {
+          if (s.toks.size < 2) continue;
+          let comum = 0;
+          for (const t of toks) if (s.toks.has(t)) comum++;
+          const score = comum / Math.max(toks.size, s.toks.size);
+          if (score > bestScore) { bestScore = score; best = s; }
+        }
+        if (best && bestScore >= 0.6) { melhor = best; nivel = 'parecido'; }
+      }
+      if (melhor) {
+        if (!sugestoesBySeller.has(melhor.id)) sugestoesBySeller.set(melhor.id, []);
+        sugestoesBySeller.get(melhor.id)!.push({
+          codigo: c.codigo, nome: c.nome, totalContas: c.totalContas, somaCents: c.somaCents, nivel,
+        });
+      }
+    }
+
+    return {
+      funcionarias: sellersNorm.map((s) => ({
+        sellerId: s.id,
+        nome: s.name,
+        cpf: s.cpf,
+        ativa: s.active,
+        loja: s.loja,
+        associados: assocBySeller.get(s.id) || [],
+        sugestoes: (sugestoesBySeller.get(s.id) || []).sort((a, b) => b.totalContas - a.totalContas),
+      })),
+      pendentesTotal: (candidatos as any[]).length,
+      semSugestao: (candidatos as any[]).length -
+        Array.from(sugestoesBySeller.values()).reduce((s, arr) => s + arr.length, 0),
+    };
+  }
+
+  /** Fornecedores PENDENTES por qualquer parte do nome (pro "Buscar fornecedor…"). */
+  async pendentes(q?: string) {
+    const { candidatos } = await this.candidatos();
+    const words = this.limparNome(q || '').split(' ').filter((w) => w.length >= 2);
+    let lista = candidatos as any[];
+    if (words.length) {
+      lista = lista.filter((c) => {
+        const alvo = `${this.limparNome(c.nome || '')} ${c.codigo}`;
+        return words.every((w) => alvo.includes(w));
+      });
+    }
+    return lista.slice(0, 30);
+  }
+
   /** Busca funcionária pra "escolher outra" (inclui INATIVAS/históricas) — com loja/cidade. */
   async buscarFuncionarias(q?: string) {
     const term = String(q || '').trim();
