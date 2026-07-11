@@ -19,10 +19,11 @@ import {
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
-type Cargo = 'VENDEDORA' | 'LIDER_B' | 'LIDER_A' | 'GERENTE_B' | 'GERENTE_A';
+type Cargo = 'VENDEDORA' | 'CAIXA' | 'LIDER_B' | 'LIDER_A' | 'GERENTE_B' | 'GERENTE_A';
 
 const CARGO_LABELS: Record<string, string> = {
   VENDEDORA: 'Vendedora',
+  CAIXA: 'Caixa',
   LIDER_B: 'Líder B',
   LIDER_A: 'Líder A',
   GERENTE_B: 'Gerente B',
@@ -31,11 +32,15 @@ const CARGO_LABELS: Record<string, string> = {
 
 const CARGO_COLORS: Record<string, string> = {
   VENDEDORA: 'bg-emerald-100 text-emerald-700',
+  CAIXA: 'bg-amber-100 text-amber-700',
   LIDER_B: 'bg-blue-100 text-blue-700',
   LIDER_A: 'bg-blue-200 text-blue-800',
   GERENTE_B: 'bg-violet-100 text-violet-700',
   GERENTE_A: 'bg-violet-200 text-violet-800',
 };
+
+/** Vendedora e Caixa não respondem por loja (comissão é sobre as próprias vendas). */
+const cargoSemLoja = (c: string) => c === 'VENDEDORA' || c === 'CAIXA';
 
 type Seller = {
   id: string;
@@ -136,14 +141,14 @@ export default function VendedorasPage() {
     const store = stores.find((st) => st.code === code) || null;
     const cargo = seller.cargo || 'VENDEDORA';
     const body: any = { storeCodeOrigin: code || null };
-    if (cargo !== 'VENDEDORA') body.responsibleStoreId = store?.id || null;
+    if (!cargoSemLoja(cargo)) body.responsibleStoreId = store?.id || null;
     setSavingCell(`${seller.id}:loja`);
     try {
       await api(`/sellers/${seller.id}`, { method: 'PATCH', body: JSON.stringify(body) });
       setItems((prev) =>
         prev.map((x) =>
           x.id === seller.id
-            ? { ...x, storeCodeOrigin: code || null, responsibleStoreId: cargo !== 'VENDEDORA' ? (store?.id || null) : x.responsibleStoreId }
+            ? { ...x, storeCodeOrigin: code || null, responsibleStoreId: !cargoSemLoja(cargo) ? (store?.id || null) : x.responsibleStoreId }
             : x,
         ),
       );
@@ -161,9 +166,9 @@ export default function VendedorasPage() {
     const lojaCode = respStore?.code || seller.storeCodeOrigin || null;
     const lojaStore = lojaCode ? stores.find((st) => st.code === lojaCode) || null : null;
     const body: any = { cargo };
-    if (cargo !== 'VENDEDORA' && lojaStore) body.responsibleStoreId = lojaStore.id;
-    // Virando vendedora, preserva a loja visível como origem (o backend zera o responsible)
-    if (cargo === 'VENDEDORA' && !seller.storeCodeOrigin && lojaCode) body.storeCodeOrigin = lojaCode;
+    if (!cargoSemLoja(cargo) && lojaStore) body.responsibleStoreId = lojaStore.id;
+    // Virando vendedora/caixa, preserva a loja visível como origem (o backend zera o responsible)
+    if (cargoSemLoja(cargo) && !seller.storeCodeOrigin && lojaCode) body.storeCodeOrigin = lojaCode;
     setSavingCell(`${seller.id}:cargo`);
     try {
       await api(`/sellers/${seller.id}`, { method: 'PATCH', body: JSON.stringify(body) });
@@ -173,7 +178,7 @@ export default function VendedorasPage() {
             ? {
                 ...x,
                 cargo,
-                responsibleStoreId: cargo === 'VENDEDORA' ? null : (lojaStore?.id || x.responsibleStoreId),
+                responsibleStoreId: cargoSemLoja(cargo) ? null : (lojaStore?.id || x.responsibleStoreId),
                 storeCodeOrigin: x.storeCodeOrigin || lojaCode,
               }
             : x,
