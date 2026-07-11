@@ -813,21 +813,29 @@ function Funcionarias() {
   );
 }
 
-/* ═══════════ ASSOCIAÇÃO Fornecedor → Funcionária ═══════════ */
+/* ═══════════ ASSOCIAÇÃO — referência = FUNCIONÁRIAS do RH (alfabética) ═══════════
+   Pedido do dono (11/07): o inverso da fila por fornecedor — eu procuro a
+   funcionária pelo nome certinho (tabela do RH) e associo os fornecedores dela. */
 function Associacao({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
-  const [data, setData] = useState<any>(null);
+  const [painel, setPainel] = useState<any>(null);
+  const [data, setData] = useState<any>(null); // fila restante (criar histórica / não é pessoa)
   const [decididos, setDecididos] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [rodando, setRodando] = useState<string | null>(null);
-  const [escolhendo, setEscolhendo] = useState<any | null>(null); // candidato no modal "escolher outra"
+  const [escolhendo, setEscolhendo] = useState<any | null>(null); // fornecedor no modal "escolher funcionária"
+  const [buscandoPara, setBuscandoPara] = useState<any | null>(null); // funcionária no modal "buscar fornecedor"
+  const [filtroFun, setFiltroFun] = useState('');
+  const [soComSugestao, setSoComSugestao] = useState(true);
 
   const carregar = useCallback(async () => {
     setLoading(true);
     try {
-      const [c, d] = await Promise.all([
+      const [p, c, d] = await Promise.all([
+        api<any>('/admin/contas-pagar/associacao/painel'),
         api<any>('/admin/contas-pagar/associacao/candidatos'),
         api<any[]>('/admin/contas-pagar/associacao/decididos'),
       ]);
+      setPainel(p);
       setData(c);
       setDecididos(d || []);
     } catch (e: any) {
@@ -869,72 +877,124 @@ function Associacao({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void 
         <button onClick={carregar} className="px-4 py-2 rounded-lg border border-[#E7E2D8] text-slate-500 font-bold text-sm">Atualizar</button>
       </div>
 
-      {loading && !data ? (
+      {loading && !painel ? (
         <div className="p-10 text-center text-slate-400"><Loader2 className="w-6 h-6 animate-spin mx-auto" /></div>
       ) : (
         <>
+          {/* ── REFERÊNCIA: funcionárias do RH, ordem alfabética ── */}
+          <div className="bg-white border border-[#E7E2D8] rounded-xl p-3 flex flex-wrap items-center gap-2 text-sm">
+            <Search className="w-4 h-4 text-slate-400" />
+            <input
+              value={filtroFun}
+              onChange={(e) => setFiltroFun(e.target.value)}
+              placeholder="Filtrar funcionária pelo nome…"
+              className="flex-1 min-w-[220px] border border-[#E7E2D8] rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-[#B8912B]"
+            />
+            <button
+              onClick={() => setSoComSugestao(!soComSugestao)}
+              className={`px-3 py-1 rounded-full border font-semibold ${soComSugestao ? 'bg-[#FBF6E6] border-[#B8912B] text-[#8C7325]' : 'border-[#E7E2D8] text-slate-500'}`}
+            >Só com sugestão/associação</button>
+            {painel && (
+              <span className="text-[12px] text-slate-400">
+                {painel.pendentesTotal} fornecedor(es)-pessoa pendente(s)
+              </span>
+            )}
+          </div>
+
           <div className="bg-white border border-[#E7E2D8] rounded-xl overflow-x-auto">
-            <table className="w-full text-sm min-w-[860px]">
+            <table className="w-full text-sm min-w-[880px]">
               <thead>
                 <tr className="bg-[#FAFAF7] text-[11px] uppercase tracking-wide text-slate-500 border-b border-[#E7E2D8]">
-                  <th className="text-left px-3 py-2">Fornecedor (GIGA)</th>
-                  <th className="text-right px-3 py-2">Lançamentos</th>
-                  <th className="text-left px-3 py-2">Sugestão de funcionária</th>
+                  <th className="text-left px-3 py-2">Funcionária (RH · A→Z)</th>
+                  <th className="text-left px-3 py-2">Fornecedores associados</th>
+                  <th className="text-left px-3 py-2">Sugestões (clique pra associar)</th>
                   <th className="px-3 py-2"></th>
                 </tr>
               </thead>
               <tbody>
-                {(data?.candidatos || []).map((c: any) => (
-                  <tr key={c.codigo} className="border-b border-[#F1EDE3] hover:bg-[#FBF6E6]">
-                    <td className="px-3 py-2">
-                      <div className="font-bold">{c.nome}</div>
-                      <div className="text-[11px] text-slate-400">GIGA #{c.codigo} · {brl(c.somaCents)}</div>
-                    </td>
-                    <td className="px-3 py-2 text-right whitespace-nowrap">
-                      <b>{c.totalContas}</b> <span className="text-[11px] text-slate-400">({c.contasRhVale} em RH/VALE)</span>
-                    </td>
-                    <td className="px-3 py-2">
-                      {c.sugestao ? (
-                        <span className="flex items-center gap-2">
-                          <span className={`text-[10px] font-extrabold px-1.5 py-0.5 rounded ${c.nivel === 'exato' ? 'bg-emerald-50 text-[#2E7D46]' : 'bg-amber-50 text-amber-600'}`}>
-                            {String(c.nivel).toUpperCase()}
+                {(painel?.funcionarias || [])
+                  .filter((f: any) => {
+                    if (soComSugestao && !f.sugestoes.length && !f.associados.length) return false;
+                    if (!filtroFun.trim()) return true;
+                    return f.nome.toUpperCase().includes(filtroFun.trim().toUpperCase());
+                  })
+                  .map((f: any) => (
+                    <tr key={f.sellerId} className="border-b border-[#F1EDE3] hover:bg-[#FBF6E6] align-top">
+                      <td className="px-3 py-2 whitespace-nowrap">
+                        <div className="font-bold">{f.nome}</div>
+                        <div className="text-[11px] text-slate-400">
+                          {f.loja && <span className="font-bold text-[#8C7325]">{f.loja}</span>}
+                          {f.cpf && <span> · CPF {f.cpf}</span>}
+                          {!f.ativa && <span> · inativa</span>}
+                        </div>
+                      </td>
+                      <td className="px-3 py-2">
+                        {f.associados.length ? f.associados.map((a: any) => (
+                          <span key={a.codigo} className="inline-flex items-center gap-1 text-[11px] font-bold bg-emerald-50 text-[#2E7D46] rounded-full px-2 py-0.5 mr-1 mb-1">
+                            ✓ {a.nome} <span className="text-emerald-500 font-normal">({a.contas})</span>
                           </span>
-                          <b>{c.sugestao.nome}</b>
-                          {c.sugestao.loja && <span className="text-[11px] font-bold text-[#8C7325]">· {c.sugestao.loja}</span>}
-                          {!c.sugestao.ativa && <span className="text-[10px] text-slate-400">(inativa)</span>}
-                        </span>
-                      ) : (
-                        <span className="text-slate-400 text-[12px]">sem match — criar histórica?</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-2 whitespace-nowrap text-right">
-                      {c.sugestao && (
+                        )) : <span className="text-[12px] text-slate-300">—</span>}
+                      </td>
+                      <td className="px-3 py-2">
+                        {f.sugestoes.length ? f.sugestoes.map((s: any) => (
+                          <button
+                            key={s.codigo}
+                            disabled={!!rodando}
+                            onClick={() => acao(() => api('/admin/contas-pagar/associacao/associar', { method: 'POST', body: JSON.stringify({ fornecedorGigaCodigo: s.codigo, sellerId: f.sellerId }) }), `${s.nome} → ${f.nome}`, `s${s.codigo}`)}
+                            title={`${s.totalContas} lançamento(s) · ${brl(s.somaCents)} · confiança: ${s.nivel}`}
+                            className={`inline-flex items-center gap-1 text-[11px] font-bold rounded-full px-2 py-0.5 mr-1 mb-1 border ${s.nivel === 'exato' ? 'border-[#2E7D46] text-[#2E7D46] hover:bg-emerald-50' : 'border-amber-400 text-amber-700 hover:bg-amber-50'}`}
+                          >
+                            ＋ {s.nome} <span className="font-normal">({s.totalContas})</span>
+                          </button>
+                        )) : <span className="text-[12px] text-slate-300">—</span>}
+                      </td>
+                      <td className="px-3 py-2 whitespace-nowrap text-right">
                         <button
-                          onClick={() => acao(() => api('/admin/contas-pagar/associacao/associar', { method: 'POST', body: JSON.stringify({ fornecedorGigaCodigo: c.codigo, sellerId: c.sugestao.sellerId }) }), `Associado: ${c.sugestao.nome}`, `a${c.codigo}`)}
+                          onClick={() => setBuscandoPara(f)}
                           disabled={!!rodando}
-                          className="text-[12px] font-bold px-2.5 py-1 rounded-lg border border-[#2E7D46] text-[#2E7D46] hover:bg-emerald-50 mr-1"
-                        >✓ Confirmar</button>
-                      )}
-                      <button onClick={() => setEscolhendo(c)} disabled={!!rodando} className="text-[12px] font-bold px-2.5 py-1 rounded-lg border border-[#E7E2D8] text-slate-500 hover:bg-[#FBF6E6] mr-1">Escolher…</button>
+                          className="text-[12px] font-bold px-2.5 py-1 rounded-lg border border-[#E7E2D8] text-slate-500 hover:bg-[#FBF6E6]"
+                        >🔍 Buscar fornecedor…</button>
+                      </td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* ── Fornecedores-pessoa que sobraram (ex sem cadastro / não é pessoa) ── */}
+          {(data?.candidatos?.length ?? 0) > 0 && (
+            <div className="bg-white border border-[#E7E2D8] rounded-xl p-4">
+              <h3 className="text-sm font-extrabold text-slate-600 mb-1">
+                Fornecedores-pessoa ainda sem dona ({data.candidatos.length})
+              </h3>
+              <p className="text-[12px] text-slate-400 mb-2">
+                Ex-funcionárias sem cadastro → <b>Criar histórica</b>. Empresas que caíram aqui por engano → <b>Não é pessoa</b>.
+              </p>
+              <div className="max-h-72 overflow-y-auto divide-y divide-[#F1EDE3]">
+                {data.candidatos.map((c: any) => (
+                  <div key={c.codigo} className="py-1.5 text-sm flex items-center justify-between gap-2">
+                    <span className="min-w-0">
+                      <b>{c.nome}</b>
+                      <span className="text-[11px] text-slate-400"> · {c.totalContas} lançamento(s) · {brl(c.somaCents)}</span>
+                    </span>
+                    <span className="shrink-0">
+                      <button onClick={() => setEscolhendo(c)} disabled={!!rodando} className="text-[11px] font-bold px-2 py-0.5 rounded border border-[#E7E2D8] text-slate-500 hover:bg-[#FBF6E6] mr-1">Escolher…</button>
                       <button
                         onClick={() => acao(() => api('/admin/contas-pagar/associacao/associar', { method: 'POST', body: JSON.stringify({ fornecedorGigaCodigo: c.codigo, criarHistorica: true }) }), 'Funcionária histórica criada e associada', `h${c.codigo}`)}
                         disabled={!!rodando}
-                        className="text-[12px] font-bold px-2.5 py-1 rounded-lg border border-[#B8912B] text-[#8C7325] hover:bg-[#FBF6E6] mr-1"
+                        className="text-[11px] font-bold px-2 py-0.5 rounded border border-[#B8912B] text-[#8C7325] hover:bg-[#FBF6E6] mr-1"
                       >👤 Criar histórica</button>
                       <button
                         onClick={() => acao(() => api('/admin/contas-pagar/associacao/nao-eh-pessoa', { method: 'POST', body: JSON.stringify({ fornecedorGigaCodigo: c.codigo }) }), 'Marcado como "não é pessoa"', `n${c.codigo}`)}
                         disabled={!!rodando}
-                        className="text-[12px] font-bold px-2.5 py-1 rounded-lg border border-[#E7E2D8] text-slate-400 hover:bg-rose-50"
+                        className="text-[11px] font-bold px-2 py-0.5 rounded border border-[#E7E2D8] text-slate-400 hover:bg-rose-50"
                       >Não é pessoa</button>
-                    </td>
-                  </tr>
+                    </span>
+                  </div>
                 ))}
-                {data && !data.candidatos?.length && (
-                  <tr><td colSpan={4} className="text-center text-slate-400 py-8">🎉 Fila zerada — todos os fornecedores-pessoa foram decididos.</td></tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+              </div>
+            </div>
+          )}
 
           {decididos.length > 0 && (
             <div className="bg-white border border-[#E7E2D8] rounded-xl p-4">
@@ -968,7 +1028,56 @@ function Associacao({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void 
           avisar={avisar}
         />
       )}
+      {buscandoPara && (
+        <BuscarFornecedorModal
+          funcionaria={buscandoPara}
+          onClose={() => setBuscandoPara(null)}
+          onOk={() => { setBuscandoPara(null); carregar(); }}
+          avisar={avisar}
+        />
+      )}
     </div>
+  );
+}
+
+/** Busca fornecedor PENDENTE (qualquer parte do nome) e associa à funcionária. */
+function BuscarFornecedorModal({ funcionaria, onClose, onOk, avisar }: any) {
+  const [q, setQ] = useState('');
+  const [opts, setOpts] = useState<any[]>([]);
+  const [saving, setSaving] = useState(false);
+  const tRef = useRef<any>(null);
+  useEffect(() => {
+    clearTimeout(tRef.current);
+    tRef.current = setTimeout(async () => {
+      try { setOpts(await api<any[]>(`/admin/contas-pagar/associacao/pendentes?q=${encodeURIComponent(q)}`)); }
+      catch { setOpts([]); }
+    }, 250);
+  }, [q]);
+  const escolher = async (codigo: number, nome: string) => {
+    setSaving(true);
+    try {
+      await api('/admin/contas-pagar/associacao/associar', {
+        method: 'POST',
+        body: JSON.stringify({ fornecedorGigaCodigo: codigo, sellerId: funcionaria.sellerId }),
+      });
+      avisar('ok', `${nome} → ${funcionaria.nome}`);
+      onOk();
+    } catch (e: any) { avisar('erro', e?.message || 'Falhou'); }
+    finally { setSaving(false); }
+  };
+  return (
+    <Modal titulo={`Associar fornecedor a "${funcionaria.nome}"`} onClose={onClose}>
+      <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Busque o fornecedor por qualquer parte do nome…" className="inp" />
+      <div className="max-h-64 overflow-y-auto divide-y divide-[#F1EDE3] mt-2">
+        {opts.map((o) => (
+          <button key={o.codigo} disabled={saving} onClick={() => escolher(o.codigo, o.nome)} className="block w-full text-left px-2 py-2 text-sm hover:bg-[#FBF6E6]">
+            <b>{o.nome}</b>
+            <span className="text-[11px] text-slate-400 ml-2">GIGA #{o.codigo} · {o.totalContas} lançamento(s) · {brl(o.somaCents)}</span>
+          </button>
+        ))}
+        {!opts.length && <p className="text-sm text-slate-400 py-3 px-2">Nenhum fornecedor pendente com esse texto.</p>}
+      </div>
+    </Modal>
   );
 }
 
