@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { PrismaModule } from '../prisma/prisma.module';
 import { ErpModule } from '../erp/erp.module';
 import { ContasPagarMigracaoService } from './contas-pagar-migracao.service';
+import { ContasPagarService } from './contas-pagar.service';
 import { ContasPagarController } from './contas-pagar.controller';
 
 /**
@@ -11,7 +12,7 @@ import { ContasPagarController } from './contas-pagar.controller';
  */
 @Module({
   imports: [PrismaModule, ErpModule],
-  providers: [ContasPagarMigracaoService],
+  providers: [ContasPagarMigracaoService, ContasPagarService],
   controllers: [ContasPagarController],
 })
 export class ContasPagarModule {}
