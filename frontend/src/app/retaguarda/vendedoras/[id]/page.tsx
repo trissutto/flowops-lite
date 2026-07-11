@@ -95,6 +95,9 @@ export default function ProntuarioPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Alterações não salvas — protege contra perder edição ao abrir a câmera
+  // do cadastro facial (clique no botão errado descartava tudo).
+  const [dirty, setDirty] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -117,10 +120,11 @@ export default function ProntuarioPage() {
   function update<K extends keyof Seller>(key: K, value: any) {
     if (!data) return;
     setData({ ...data, [key]: value });
+    setDirty(true);
   }
 
-  async function salvar() {
-    if (!data) return;
+  async function salvar(opts?: { silent?: boolean }): Promise<boolean> {
+    if (!data) return false;
     setSaving(true);
     try {
       await api(`/sellers/${id}`, {
@@ -147,13 +151,27 @@ export default function ProntuarioPage() {
           observacoes: data.observacoes,
         }),
       });
-      alert('✓ Salvo');
-      load();
+      setDirty(false);
+      if (!opts?.silent) {
+        alert('✓ Salvo');
+        load();
+      }
+      return true;
     } catch (e: any) {
       alert('Erro: ' + (e?.message || e));
+      return false;
     } finally {
       setSaving(false);
     }
+  }
+
+  /** Abre a câmera do cadastro facial SEM perder edição: salva antes se preciso. */
+  async function abrirCameraFace() {
+    if (dirty) {
+      const ok = await salvar({ silent: true });
+      if (!ok) return; // erro já apareceu no alert — não navega
+    }
+    router.push(`/retaguarda/rh/face-enroll/${id}`);
   }
 
   async function toggleAtivo() {
@@ -420,12 +438,12 @@ export default function ProntuarioPage() {
                   Cadastrado em {fmtDate(data.faceEnrolledAt)}
                 </p>
               </div>
-              <Link
-                href={`/retaguarda/rh/face-enroll/${id}`}
+              <button
+                onClick={abrirCameraFace}
                 className="text-sm text-emerald-700 font-bold hover:underline"
               >
-                Refazer
-              </Link>
+                📷 Refazer rosto
+              </button>
             </div>
           ) : (
             <div className="flex items-center justify-between bg-amber-50 border border-amber-200 rounded-lg p-3">
@@ -437,12 +455,12 @@ export default function ProntuarioPage() {
                   Sem ele, {data.name.split(' ')[0]} não consegue bater ponto no PDV.
                 </p>
               </div>
-              <Link
-                href={`/retaguarda/rh/face-enroll/${id}`}
-                className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm px-3 py-2 rounded-lg whitespace-nowrap"
+              <button
+                onClick={abrirCameraFace}
+                className="bg-amber-500 hover:bg-amber-600 text-white font-bold text-sm px-3 py-2 rounded-lg whitespace-nowrap"
               >
-                Cadastrar
-              </Link>
+                📷 Cadastrar rosto (câmera)
+              </button>
             </div>
           )}
         </Section>
@@ -465,8 +483,13 @@ export default function ProntuarioPage() {
 
         {/* SAVE */}
         <div className="sticky bottom-4 bg-white border-2 border-emerald-500 rounded-xl p-3 shadow-lg flex items-center justify-end gap-3">
+          {dirty && (
+            <span className="text-xs font-bold text-amber-600">
+              ● alterações não salvas
+            </span>
+          )}
           <button
-            onClick={salvar}
+            onClick={() => salvar()}
             disabled={saving}
             className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold px-6 py-2.5 rounded-lg flex items-center gap-2"
           >
