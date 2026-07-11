@@ -900,6 +900,7 @@ function Associacao({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void 
                             {String(c.nivel).toUpperCase()}
                           </span>
                           <b>{c.sugestao.nome}</b>
+                          {c.sugestao.loja && <span className="text-[11px] font-bold text-[#8C7325]">· {c.sugestao.loja}</span>}
                           {!c.sugestao.ativa && <span className="text-[10px] text-slate-400">(inativa)</span>}
                         </span>
                       ) : (
@@ -1001,7 +1002,9 @@ function EscolherFuncionariaModal({ candidato, onClose, onOk, avisar }: any) {
       <div className="max-h-64 overflow-y-auto divide-y divide-[#F1EDE3] mt-2">
         {opts.map((o) => (
           <button key={o.id} disabled={saving} onClick={() => escolher(o.id, o.name)} className="block w-full text-left px-2 py-2 text-sm hover:bg-[#FBF6E6]">
-            <b>{o.name}</b> {!o.active && <span className="text-[10px] text-slate-400">(inativa)</span>}
+            <b>{o.name}</b>
+            {o.loja && <span className="text-[11px] font-bold text-[#8C7325] ml-2">· {o.loja}</span>}
+            {!o.active && <span className="text-[10px] text-slate-400 ml-1">(inativa)</span>}
             {o.cpf && <span className="text-[11px] text-slate-400 ml-2">CPF {o.cpf}</span>}
           </button>
         ))}

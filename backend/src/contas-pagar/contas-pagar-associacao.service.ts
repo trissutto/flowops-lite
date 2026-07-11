@@ -37,6 +37,19 @@ export class ContasPagarAssociacaoService {
     return new Set(this.limparNome(nome).split(' ').filter((t) => t.length >= 3));
   }
 
+  /** Mapa code → nome da loja (pra exibir "· ITANHAÉM" ao lado da pessoa). */
+  private async mapaLojas(): Promise<Map<string, string>> {
+    const stores: any[] = await (this.prisma as any).store.findMany({ select: { code: true, name: true } });
+    return new Map(stores.map((s) => [String(s.code), String(s.name)]));
+  }
+
+  /** Loja/cidade de exibição da funcionária (facilita escolher a pessoa certa). */
+  private lojaDisplay(s: { storeCodeOrigin?: string | null; cidade?: string | null }, lojaNome: Map<string, string>): string | null {
+    const code = s.storeCodeOrigin ? String(s.storeCodeOrigin).trim() : '';
+    if (code) return lojaNome.get(code) || `LOJA ${code}`;
+    return s.cidade ? String(s.cidade).trim() : null;
+  }
+
   // ── 1. IMPORTA as funcionárias ATIVAS do GIGA (CPF, cargo, salário, loja) ─
   async importarFuncionariasGiga(usuario?: string) {
     const pool: any = (this.erp as any).pool;
@@ -109,10 +122,16 @@ export class ContasPagarAssociacaoService {
     });
     const decididos = new Set(jaDecididos.map((d) => d.fornecedorGigaCodigo));
 
+    const lojaNome = await this.mapaLojas();
     const sellers: any[] = await (this.prisma as any).seller.findMany({
-      select: { id: true, name: true, cpf: true, active: true },
+      select: { id: true, name: true, cpf: true, active: true, storeCodeOrigin: true, cidade: true },
     });
-    const sellersNorm = sellers.map((s) => ({ ...s, norm: this.limparNome(s.name), toks: this.tokens(s.name) }));
+    const sellersNorm = sellers.map((s) => ({
+      ...s,
+      norm: this.limparNome(s.name),
+      toks: this.tokens(s.name),
+      loja: this.lojaDisplay(s, lojaNome),
+    }));
 
     const out: any[] = [];
     for (const g of grupos) {
@@ -127,6 +146,17 @@ export class ContasPagarAssociacaoService {
       if (!sugestao) {
         const contido = sellersNorm.find((s) => norm.length > 8 && (s.norm.includes(norm) || norm.includes(s.norm)) && s.norm.length > 8);
         if (contido) { sugestao = contido; nivel = 'contido'; }
+      }
+      if (!sugestao && toks.size >= 2) {
+        // TODOS os tokens da funcionária dentro do nome do fornecedor (em
+        // QUALQUER posição): "ANDREA DIESNER" ⊂ "ANDREA DE PAULA MACHADO
+        // DIESNER - SANTOS 2". Pega o que o "contido" (contíguo) perdia.
+        const subset = sellersNorm.find((s) => {
+          if (s.toks.size < 2) return false;
+          for (const t of s.toks) if (!toks.has(t)) return false;
+          return true;
+        });
+        if (subset) { sugestao = subset; nivel = 'contido'; }
       }
       if (!sugestao && toks.size >= 2) {
         let best: any = null; let bestScore = 0;
@@ -146,22 +176,34 @@ export class ContasPagarAssociacaoService {
         totalContas: Number(g.total_contas),
         contasRhVale: Number(g.contas_rh_vale),
         somaCents: Number(g.soma_cents),
-        sugestao: sugestao ? { sellerId: sugestao.id, nome: sugestao.name, cpf: sugestao.cpf, ativa: sugestao.active } : null,
+        sugestao: sugestao
+          ? { sellerId: sugestao.id, nome: sugestao.name, cpf: sugestao.cpf, ativa: sugestao.active, loja: sugestao.loja }
+          : null,
         nivel,
       });
     }
     return { candidatos: out, pendentes: out.length, exatos: out.filter((o) => o.nivel === 'exato').length };
   }
 
-  /** Busca funcionária pra "escolher outra" (inclui INATIVAS/históricas). */
-  buscarFuncionarias(q?: string) {
+  /** Busca funcionária pra "escolher outra" (inclui INATIVAS/históricas) — com loja/cidade. */
+  async buscarFuncionarias(q?: string) {
     const term = String(q || '').trim();
-    return (this.prisma as any).seller.findMany({
-      where: term ? { name: { contains: term, mode: 'insensitive' } } : {},
-      select: { id: true, name: true, cpf: true, active: true },
-      orderBy: [{ active: 'desc' }, { name: 'asc' }],
-      take: 20,
-    });
+    const [rows, lojaNome] = await Promise.all([
+      (this.prisma as any).seller.findMany({
+        where: term ? { name: { contains: term, mode: 'insensitive' } } : {},
+        select: { id: true, name: true, cpf: true, active: true, storeCodeOrigin: true, cidade: true },
+        orderBy: [{ active: 'desc' }, { name: 'asc' }],
+        take: 30,
+      }),
+      this.mapaLojas(),
+    ]);
+    return (rows as any[]).map((s) => ({
+      id: s.id,
+      name: s.name,
+      cpf: s.cpf,
+      active: s.active,
+      loja: this.lojaDisplay(s, lojaNome),
+    }));
   }
 
   // ── 3. ASSOCIAR (converte TODAS as contas do fornecedor) ──────────────────
