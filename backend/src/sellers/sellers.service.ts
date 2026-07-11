@@ -393,13 +393,16 @@ export class SellersService {
     if (input.active !== undefined) data.active = !!input.active;
 
     if (input.cargo !== undefined) {
-      const validCargos = ['VENDEDORA', 'LIDER_B', 'LIDER_A', 'GERENTE_B', 'GERENTE_A'];
+      // CAIXA existe no motor de comissão (2% próprias on/off, ver
+      // CommissionsService.seedDefaultCargoRules) e no dropdown das telas —
+      // faltava aqui na validação (erro 400 "cargo inválido" de 11/07).
+      const validCargos = ['VENDEDORA', 'CAIXA', 'LIDER_B', 'LIDER_A', 'GERENTE_B', 'GERENTE_A'];
       if (!validCargos.includes(input.cargo)) {
         throw new BadRequestException(`cargo inválido. Use: ${validCargos.join(', ')}`);
       }
       data.cargo = input.cargo;
-      // Se virou VENDEDORA, zera responsibleStoreId (não responde por loja)
-      if (input.cargo === 'VENDEDORA' && input.responsibleStoreId === undefined) {
+      // VENDEDORA/CAIXA não respondem por loja → zera responsibleStoreId
+      if ((input.cargo === 'VENDEDORA' || input.cargo === 'CAIXA') && input.responsibleStoreId === undefined) {
         data.responsibleStoreId = null;
       }
     }
