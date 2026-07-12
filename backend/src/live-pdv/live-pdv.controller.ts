@@ -69,11 +69,13 @@ export class LivePdvController {
   /**
    * Cobrança MANUAL de UM carrinho pela API do ManyChat (botão "WhatsApp" da
    * fila Cobrar Todas) — nada de abrir o app do WhatsApp na mão.
-   * Matriz (admin/master/operator): é quem opera o console da live.
+   * SEM gate de papel (só JWT, como as demais ações do console): a operadora
+   * da live loga com o perfil da LOJA anfitriã (role 'store') — caso real
+   * 12/07: 'admin/master' e depois 'matriz' bloquearam a operadora (403).
+   * Cobrar 1 carrinho é ação do console, igual charge-dm/mark-charged.
    */
   @Post('carts/:cartId/cobranca-whats')
-  cobrancaWhatsManual(@Req() req: any, @Param('cartId') cartId: string) {
-    this.requireMatriz(req);
+  cobrancaWhatsManual(@Param('cartId') cartId: string) {
     return this.cobrancaWhats.cobrarManual(cartId);
   }
 
