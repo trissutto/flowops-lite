@@ -3465,6 +3465,11 @@ model LivePdvCart {
   // Quando a DM automática de cobrança (ManyChat) foi enviada — a cobrança em
   // massa PULA quem já recebeu (não repete DM); o botão individual reenvia.
   dmSentAt          DateTime? @map("dm_sent_at")
+  // COBRANÇA AUTOMÁTICA POR WHATSAPP (11/07): carrinho parado → template
+  // individual com o link exato via ManyChat API. 1 envio por carrinho;
+  // tentativas limita retry em falha (não vira spam de erro).
+  cobrancaWhatsEnviadaAt  DateTime? @map("cobranca_whats_enviada_at")
+  cobrancaWhatsTentativas Int       @default(0) @map("cobranca_whats_tentativas")
   // RETIRADA EM LOJA (igual ao site): frete zero, prazo de até 7 dias úteis.
   // A cliente escolhe a loja no checkout; endereço deixa de ser obrigatório.
   isPickup          Boolean  @default(false) @map("is_pickup")

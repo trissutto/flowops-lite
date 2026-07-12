@@ -103,4 +103,100 @@ export class ManychatService {
       return [];
     }
   }
+
+  // ═══════════ WHATSAPP (cobrança automática da live — 11/07) ═══════════
+  // O número WhatsApp da conta é de API — todo envio sai por aqui. Fluxo:
+  // acha/cria o assinante pelo TELEFONE → grava custom fields (nome, valor,
+  // link do carrinho) → dispara o flow que contém o TEMPLATE de utilidade
+  // aprovado pela Meta (o template lê os fields). flow_ns vem da env
+  // MANYCHAT_COBRANCA_FLOW_NS (ManyChat → automação → ⋮ → Set Flow NS).
+
+  private authHeaders() {
+    const token = (process.env.MANYCHAT_API_TOKEN || '').trim();
+    return {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    };
+  }
+
+  /** Acha assinante pelo telefone (E.164 sem +). Retorna id ou null. */
+  async findSubscriberByPhone(phoneDigits: string): Promise<string | null> {
+    try {
+      const resp = await fetch(
+        `${this.BASE}/fb/subscriber/findBySystemField?phone=${encodeURIComponent('+' + phoneDigits)}`,
+        { headers: this.authHeaders() },
+      );
+      const data: any = await resp.json().catch(() => ({}));
+      if (resp.ok && data?.status === 'success' && data?.data?.id) return String(data.data.id);
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Cria assinante de WhatsApp pelo telefone (opt-in: a cliente forneceu o
+   * celular no cadastro da live pra ser contatada sobre a compra).
+   */
+  async createWhatsAppSubscriber(phoneDigits: string, nome?: string): Promise<{ id: string | null; error?: string }> {
+    try {
+      const partes = String(nome || '').trim().split(/\s+/);
+      const resp = await fetch(`${this.BASE}/fb/subscriber/createSubscriber`, {
+        method: 'POST',
+        headers: this.authHeaders(),
+        body: JSON.stringify({
+          whatsapp_phone: '+' + phoneDigits,
+          first_name: partes[0] || undefined,
+          last_name: partes.slice(1).join(' ') || undefined,
+          has_opt_in_sms: true,
+          consent_phrase: 'Cadastro na live (celular fornecido pra contato da compra)',
+        }),
+      });
+      const data: any = await resp.json().catch(() => ({}));
+      if (resp.ok && data?.status === 'success' && data?.data?.id) return { id: String(data.data.id) };
+      return { id: null, error: (data?.message || `HTTP ${resp.status}`).slice(0, 200) };
+    } catch (e: any) {
+      return { id: null, error: e?.message || 'falha de rede' };
+    }
+  }
+
+  /** Grava um custom field por NOME (o template do flow lê esses campos). */
+  async setCustomFieldByName(subscriberId: string, fieldName: string, value: string): Promise<boolean> {
+    try {
+      const resp = await fetch(`${this.BASE}/fb/subscriber/setCustomFieldByName`, {
+        method: 'POST',
+        headers: this.authHeaders(),
+        body: JSON.stringify({
+          subscriber_id: Number(subscriberId) || subscriberId,
+          field_name: fieldName,
+          field_value: value,
+        }),
+      });
+      const data: any = await resp.json().catch(() => ({}));
+      return resp.ok && data?.status === 'success';
+    } catch {
+      return false;
+    }
+  }
+
+  /** Dispara um flow (que contém o template WhatsApp) pro assinante. */
+  async sendFlow(subscriberId: string, flowNs: string): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const resp = await fetch(`${this.BASE}/fb/sending/sendFlow`, {
+        method: 'POST',
+        headers: this.authHeaders(),
+        body: JSON.stringify({
+          subscriber_id: Number(subscriberId) || subscriberId,
+          flow_ns: flowNs,
+        }),
+      });
+      const data: any = await resp.json().catch(() => ({}));
+      if (resp.ok && data?.status === 'success') return { ok: true };
+      const err = data?.message || data?.details?.messages?.[0]?.message || `HTTP ${resp.status}`;
+      this.logger.warn(`[manychat] sendFlow falhou sub=${subscriberId}: ${JSON.stringify(data).slice(0, 300)}`);
+      return { ok: false, error: String(err).slice(0, 200) };
+    } catch (e: any) {
+      return { ok: false, error: e?.message || 'falha de rede' };
+    }
+  }
 }
