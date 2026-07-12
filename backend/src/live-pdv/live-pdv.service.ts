@@ -2636,8 +2636,9 @@ export class LivePdvService {
       throw new BadRequestException('Só carrinho PAGO pode ir pra separação.');
     }
 
-    // Endereço completo obrigatório (formato do site: loja recebe pronto pra
-    // postar) — EXCETO retirada em loja, que não tem postagem pro cliente.
+    // Endereço completo + CPF VÁLIDO obrigatórios (formato do site: loja
+    // recebe pronto pra postar; os Correios EXIGEM o CPF da destinatária) —
+    // EXCETO retirada em loja, que não tem postagem.
     if (!cart.isPickup) {
       const faltando: string[] = [];
       if (String(cart.customerCep || '').replace(/\D/g, '').length !== 8) faltando.push('CEP');
@@ -2645,6 +2646,7 @@ export class LivePdvService {
       if (!String(cart.customerNumero || '').trim()) faltando.push('número');
       if (!String(cart.customerCidade || '').trim()) faltando.push('cidade');
       if (!String(cart.customerUf || '').trim()) faltando.push('UF');
+      if (!this.cpfValido(cart.customerCpf)) faltando.push('CPF válido (os Correios exigem pra postar)');
       if (faltando.length) {
         throw new BadRequestException(
           `Complete o endereço antes de enviar pra separação — falta: ${faltando.join(', ')}.`,
@@ -2663,6 +2665,25 @@ export class LivePdvService {
     });
     if (!items.length) throw new BadRequestException('Carrinho sem itens pagos.');
     return this.handoffToSiteFlow(cart, items as any[]);
+  }
+
+  /**
+   * CPF válido de verdade (dígitos verificadores) — mesmo algoritmo do
+   * checkout público /pagar. Correios/NF rejeitam CPF inventado.
+   */
+  private cpfValido(raw?: string | null): boolean {
+    const d = String(raw || '').replace(/\D/g, '');
+    if (d.length !== 11 || /^(\d)\1{10}$/.test(d)) return false;
+    let s = 0;
+    for (let i = 0; i < 9; i++) s += Number(d[i]) * (10 - i);
+    let dv1 = (s * 10) % 11;
+    if (dv1 === 10) dv1 = 0;
+    if (dv1 !== Number(d[9])) return false;
+    s = 0;
+    for (let i = 0; i < 10; i++) s += Number(d[i]) * (11 - i);
+    let dv2 = (s * 10) % 11;
+    if (dv2 === 10) dv2 = 0;
+    return dv2 === Number(d[10]);
   }
 
   /** Base dos wcOrderId sintéticos de pedidos da LIVE (longe do range real do WC). */
