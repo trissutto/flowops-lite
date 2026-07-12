@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeGateway } from '../websocket/realtime.gateway';
 import { WooCommerceService } from '../woocommerce/woocommerce.service';
 import { ErpService } from '../erp/erp.service';
+import { ManychatService } from '../live-pdv/manychat.service';
 
 // Status LOGÍSTICO do pick-order (controlado pela loja):
 //   new          → chegou, filial não começou
@@ -45,12 +46,16 @@ const WC_STATUS_SHIPPED = 'completed';
 @Injectable()
 export class PickOrdersService {
   private readonly logger = new Logger(PickOrdersService.name);
+  // Divisor do valor intercompany (regra do dono: VENDAUN ÷ 2,5 — NUNCA o CUSTO)
+  private static readonly DIVISOR_CUSTO = 2.5;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly gateway: RealtimeGateway,
     @Inject(forwardRef(() => WooCommerceService))
     private readonly wc: WooCommerceService,
     private readonly erp: ErpService,
+    private readonly manychat: ManychatService,
   ) {}
 
   /**
@@ -1607,6 +1612,18 @@ export class PickOrdersService {
       }
     }
 
+    // ═══ EFEITOS DO ENVIO (best-effort — falha NUNCA desfaz o shipped) ═══
+    //  1. Acerto intercompany ÷2,5: quem cedeu a peça recebe da "dona" da venda
+    //     (LIVE → loja da live; SITE → REDE, decisão do dono 12/07). REDE→REDE
+    //     não gera (mesmo dono).
+    //  2. Cliente da LIVE recebe WhatsApp com o rastreio (o site já avisa via
+    //     hook completed do WooCommerce).
+    if (input.status === 'shipped') {
+      this.afterShippedSideEffects(id, input).catch((e) =>
+        this.logger.warn(`[shipped-effects] pick ${id}: ${e?.message || e}`),
+      );
+    }
+
     const wcOrderId =
       !isLiveOrder && updated.order?.wcOrderId ? Number(updated.order.wcOrderId) : null;
     const storeLabel = updated.store
@@ -1726,6 +1743,155 @@ export class PickOrdersService {
       wcSyncWarning,
       autoDebit,
     };
+  }
+
+  /**
+   * EFEITOS DO ENVIO (best-effort, roda depois do shipped ser gravado):
+   *
+   * 1. ACERTO INTERCOMPANY ÷2,5 (decisão do dono 12/07 — "o site entra sim,
+   *    entra como REDE"): quando a loja que despachou NÃO é a dona da venda,
+   *    registra TransferOrder + InterStoreObligation por item, valor = preço
+   *    CHEIO ÷ 2,5 (OrderItem.baseUnitPrice — a live grava o preço cheio;
+   *    site usa o unitPrice, que já é o cheio).
+   *      - dona da venda: LIVE → loja anfitriã da live · SITE → REDE (pseudo
+   *        destino "SITE") · pickup-transfer → loja de retirada.
+   *      - mesmo dono (REDE→REDE) ou a própria loja da live despachando =
+   *        NÃO gera nada (regra do markShipped legado da live).
+   * 2. WHATSAPP DE RASTREIO pra cliente da LIVE via ManyChat (o site avisa
+   *    pelo hook completed do WooCommerce; a live não tem WC). Gated por
+   *    MANYCHAT_RASTREIO_FLOW_NS + MANYCHAT_API_TOKEN — sem envs, pula.
+   */
+  private async afterShippedSideEffects(
+    pickOrderId: string,
+    input: { trackingCode?: string; carrier?: string },
+  ) {
+    const po: any = await (this.prisma as any).pickOrder.findUnique({
+      where: { id: pickOrderId },
+      include: {
+        store: true,
+        order: { include: { items: true } },
+      },
+    });
+    if (!po?.order) return;
+    const order: any = po.order;
+    const fromStore: any = po.store;
+    const itens: any[] = (order.items || []).filter(
+      (i: any) => i.assignedStoreId === po.storeId,
+    );
+    if (!itens.length) return;
+
+    // ── resolve a "dona" da venda (destino do acerto) ──
+    let destino: { code: string; name: string; tipo: string } | null = null;
+    let liveCart: any = null;
+    if (po.isTransfer && po.transferToStoreCode) {
+      const st = await (this.prisma as any).store
+        .findUnique({ where: { code: po.transferToStoreCode } })
+        .catch(() => null);
+      if (st) destino = { code: st.code, name: st.name, tipo: st.tipo === 'FILIAL' ? 'FILIAL' : 'REDE' };
+    } else if (order.source === 'live' && order.liveCartId) {
+      liveCart = await (this.prisma as any).livePdvCart
+        .findUnique({ where: { id: order.liveCartId }, include: { session: true } })
+        .catch(() => null);
+      const liveStoreCode = liveCart?.session?.liveStoreCode;
+      if (liveStoreCode) {
+        const st = await (this.prisma as any).store
+          .findUnique({ where: { code: liveStoreCode } })
+          .catch(() => null);
+        destino = st
+          ? { code: st.code, name: st.name, tipo: st.tipo === 'FILIAL' ? 'FILIAL' : 'REDE' }
+          : { code: liveStoreCode, name: liveCart?.session?.liveStoreName || liveStoreCode, tipo: 'REDE' };
+      }
+    } else {
+      destino = { code: 'SITE', name: 'VENDA SITE', tipo: 'REDE' }; // site é da REDE
+    }
+
+    // ── 1) obrigação intercompany ÷2,5 ──
+    try {
+      const fromTipo = fromStore?.tipo === 'FILIAL' ? 'FILIAL' : 'REDE';
+      const mesmaLoja = destino && fromStore?.code === destino.code;
+      const mesmoDono = !destino || (fromTipo === 'REDE' && destino.tipo === 'REDE');
+      if (destino && !mesmaLoja && !mesmoDono) {
+        const mesReferencia = new Date().toISOString().slice(0, 7);
+        for (const it of itens) {
+          const transfer = await (this.prisma as any).transferOrder.create({
+            data: {
+              tipo: order.source === 'live' ? 'LIVE' : 'SITE',
+              refCode: String(it.sku || ''),
+              codigoBipado: String(it.sku || ''),
+              descricao: it.productName || null,
+              qtyOrigem: Number(it.quantity || 1),
+              lojaOrigemCode: fromStore?.code,
+              lojaOrigemName: fromStore?.name,
+              lojaDestinoCode: destino.code,
+              lojaDestinoName: destino.name,
+              solicitanteNome: order.source === 'live' ? 'LIVE COMMERCE' : 'VENDA SITE',
+              mensagem: `Pedido ${order.wcOrderNumber} expedido${input.trackingCode ? ` (rastreio ${input.trackingCode})` : ''}`,
+            },
+          });
+          const baseUnit = Number(it.baseUnitPrice ?? it.unitPrice ?? 0);
+          const precoTotal = baseUnit * Number(it.quantity || 1);
+          await (this.prisma as any).interStoreObligation.create({
+            data: {
+              transferOrderId: transfer.id,
+              fromStoreCode: fromStore?.code,
+              fromStoreName: fromStore?.name,
+              fromStoreTipo: fromTipo,
+              toStoreCode: destino.code,
+              toStoreName: destino.name,
+              toStoreTipo: destino.tipo,
+              refCode: String(it.sku || ''),
+              sku: String(it.sku || ''),
+              descricao: it.productName || null,
+              qty: Number(it.quantity || 1),
+              precoUnitario: baseUnit,
+              precoTotal,
+              divisor: PickOrdersService.DIVISOR_CUSTO,
+              valorObrigacao: precoTotal / PickOrdersService.DIVISOR_CUSTO,
+              mesReferencia,
+              status: 'pending',
+            },
+          });
+        }
+        this.logger.log(
+          `[acerto-÷2,5] pedido ${order.wcOrderNumber}: ${itens.length} item(ns) ${fromStore?.code} → ${destino.code}`,
+        );
+      }
+    } catch (e: any) {
+      this.logger.warn(`[acerto-÷2,5] pedido ${order.wcOrderNumber}: ${e?.message || e}`);
+    }
+
+    // ── 2) WhatsApp de rastreio pra cliente da LIVE ──
+    if (order.source === 'live') {
+      try {
+        const flowNs = (process.env.MANYCHAT_RASTREIO_FLOW_NS || '').trim();
+        if (!flowNs || !this.manychat.enabled) return;
+        const digits = String(order.customerPhone || '').replace(/\D/g, '');
+        const phone =
+          digits.length === 10 || digits.length === 11
+            ? '55' + digits
+            : digits.startsWith('55') && (digits.length === 12 || digits.length === 13)
+              ? digits
+              : null;
+        if (!phone) return;
+        let subId = await this.manychat.findSubscriberByPhone(phone);
+        if (!subId) {
+          const created = await this.manychat.createWhatsAppSubscriber(phone, order.customerName);
+          subId = created.id;
+        }
+        if (!subId) return;
+        const primeiroNome = String(order.customerName || '').trim().split(/\s+/)[0] || 'cliente';
+        await this.manychat.setCustomFieldByName(subId, 'rastreio_nome', primeiroNome);
+        await this.manychat.setCustomFieldByName(subId, 'rastreio_codigo', String(input.trackingCode || ''));
+        await this.manychat.setCustomFieldByName(subId, 'rastreio_transportadora', String(input.carrier || 'Correios'));
+        await this.manychat.setCustomFieldByName(subId, 'rastreio_pedido', String(order.wcOrderNumber || ''));
+        const r = await this.manychat.sendFlow(subId, flowNs);
+        this.logger.log(
+          `[rastreio-whats] pedido ${order.wcOrderNumber}: ${r.ok ? 'enviado' : `falhou (${r.error})`}`,
+        );
+      } catch (e: any) {
+        this.logger.warn(`[rastreio-whats] pedido ${order.wcOrderNumber}: ${e?.message || e}`);
+      }
+    }
   }
 
   /**

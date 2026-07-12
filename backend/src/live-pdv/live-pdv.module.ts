@@ -41,6 +41,8 @@ import { LivePdvCobrancaWhatsCron } from './live-pdv-cobranca-whats.cron';
   ],
   controllers: [LivePdvController, LivePublicController, ManychatHookController, LivePayPublicController],
   providers: [LivePdvService, ManychatService, LivePdvExpiryCron, LivePdvPayReconcileCron, LivePdvCobrancaWhatsCron],
-  exports: [LivePdvService],
+  // ManychatService exportado pro PickOrdersModule mandar o WhatsApp de
+  // rastreio pra cliente da LIVE no envio (pedido do site avisa via WC).
+  exports: [LivePdvService, ManychatService],
 })
 export class LivePdvModule {}

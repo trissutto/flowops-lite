@@ -2726,6 +2726,8 @@ export class LivePdvService {
                   .join(' · '),
                 quantity: Number(it.qty || 1),
                 unitPrice: (it.priceCents || 0) / 100,
+                // preço CHEIO — base da obrigação ÷2,5 na expedição
+                baseUnitPrice: (it.basePriceCents || it.priceCents || 0) / 100,
               })),
             },
           },

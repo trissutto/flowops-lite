@@ -695,6 +695,9 @@ model OrderItem {
   productName     String? @map("product_name")
   quantity        Int
   unitPrice       Float?  @map("unit_price")
+  // Preço CHEIO (sem promoção) — base da obrigação intercompany ÷2,5.
+  // Pedido da LIVE grava o basePriceCents; site fica null (unitPrice é o cheio).
+  baseUnitPrice   Float?  @map("base_unit_price")
   assignedStoreId String? @map("assigned_store_id")
 
   order         Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
