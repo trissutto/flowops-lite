@@ -34,6 +34,14 @@ export class LivePdvController {
     }
   }
 
+  /** Matriz = admin/master/operator (mesmo público que opera o console da live). */
+  private requireMatriz(req: any) {
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'master' && role !== 'operator') {
+      throw new ForbiddenException('Apenas matriz');
+    }
+  }
+
   // ── Cobrança automática por WhatsApp (admin) ──
   /** Lista os carrinhos que o próximo ciclo cobraria (conferência humana). */
   @Get('cobranca-whats/preview')
@@ -61,10 +69,11 @@ export class LivePdvController {
   /**
    * Cobrança MANUAL de UM carrinho pela API do ManyChat (botão "WhatsApp" da
    * fila Cobrar Todas) — nada de abrir o app do WhatsApp na mão.
+   * Matriz (admin/master/operator): é quem opera o console da live.
    */
   @Post('carts/:cartId/cobranca-whats')
   cobrancaWhatsManual(@Req() req: any, @Param('cartId') cartId: string) {
-    this.requireAdmin(req);
+    this.requireMatriz(req);
     return this.cobrancaWhats.cobrarManual(cartId);
   }
 
