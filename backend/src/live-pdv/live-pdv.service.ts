@@ -2669,15 +2669,14 @@ export class LivePdvService {
   private static readonly LIVE_WC_ID_BASE = 900_000_000;
 
   /**
-   * Converte o carrinho PAGO da live num Order do trilho do site e roteia.
+   * Converte o carrinho PAGO da live num Order do trilho do site.
    *  - Order source='live', liveCartId, wcOrderId sintético (900M+, sequencial
    *    com retry em colisão), número exibido "LIVE-<comanda>".
    *  - SKU do item = codigoBipado (CODIGO Giga da grade) — mesmo formato que o
    *    estoque/bipagem do site usam.
-   *  - Roteia na hora com a regra do site: single-store/pickup confirma direto
-   *    (confirmRoute cria pick-orders + socket pick-order:new + push); quebra
-   *    multi-loja e falta de estoque ficam em 'processing' pra decisão humana
-   *    na tela Pedidos & Separação — mesmo gate do 1-CLIQUE.
+   *  - NÃO roteia: o pedido fica em 'processing' e o roteamento é 100% da
+   *    retaguarda (Pedidos & Separação — 1-CLIQUE/Prévia/massa). A loja só é
+   *    avisada quando a MATRIZ roteia (igual pedido do site sem piloto).
    *  - NUNCA volta pro fluxo antigo: o cart guarda orderId e vira espelho.
    */
   private async handoffToSiteFlow(cart: any, items: any[]) {
@@ -2740,25 +2739,13 @@ export class LivePdvService {
       throw new BadRequestException('Não consegui gerar o nº do pedido da live — tente de novo.');
     }
 
-    let roteado = false;
-    let aviso: string | null = null;
-    try {
-      const preview: any = await this.routingService.previewRoute(order.id);
-      if (preview?.success && preview.strategy !== 'multi-store') {
-        await this.routingService.confirmRoute(order.id, preview);
-        roteado = true;
-      } else if (preview?.success) {
-        aviso = 'Precisa de 2+ lojas — aguardando aprovação na tela Pedidos & Separação.';
-      } else {
-        const faltando = (preview?.missing || [])
-          .map((m: any) => m.sku)
-          .slice(0, 5)
-          .join(', ');
-        aviso = `Sem estoque pra rotear automático${faltando ? ` (${faltando})` : ''} — resolver na Pedidos & Separação.`;
-      }
-    } catch (e: any) {
-      aviso = `Roteamento falhou (${e?.message || e}) — resolver na Pedidos & Separação.`;
-    }
+    // DECISÃO DO DONO (12/07, corrigida no mesmo dia): o release NÃO roteia —
+    // TODO roteamento acontece na retaguarda (tela Pedidos & Separação), como
+    // nos pedidos do site: o pedido cai em "Processando" e a matriz decide
+    // (1-CLIQUE, Prévia ou em massa). Nada de card/alerta pra loja aqui.
+    // Caso real: release automático roteou single-store e alertou Itanhaém
+    // sem a matriz ter visto o pedido.
+    const aviso = 'Aguardando roteamento na tela Pedidos & Separação (aba Processando).';
 
     await (this.prisma as any).livePdvCart.update({
       where: { id: cart.id },
@@ -2766,11 +2753,10 @@ export class LivePdvService {
     });
     this.gateway.emitToLiveOps('live-pdv:cart-updated', { sessionId: cart.sessionId, cartId: cart.id });
     this.logger.log(
-      `[live→site] carrinho #${cart.cartNumber ?? cart.id} virou pedido ${order.wcOrderNumber}` +
-        (roteado ? ' (roteado — card já na loja)' : ` (pendente: ${aviso})`),
+      `[live→site] carrinho #${cart.cartNumber ?? cart.id} virou pedido ${order.wcOrderNumber} — aguardando roteamento na retaguarda`,
     );
     const fresh = await this.getCart(cart.id);
-    return { ...(fresh as any), siteFlow: { orderNumber: order.wcOrderNumber, roteado, aviso } };
+    return { ...(fresh as any), siteFlow: { orderNumber: order.wcOrderNumber, roteado: false, aviso } };
   }
 
   /**

@@ -2975,7 +2975,9 @@ function CartPanel({
               <div className="mt-3 flex flex-col items-center gap-1 rounded-lg bg-emerald-50 p-4 text-emerald-700">
                 <Check className="h-8 w-8" />
                 <span className="font-bold">Pagamento confirmado!</span>
-                <span className="text-xs">Ordem de separação enviada à loja de origem.</span>
+                <span className="text-center text-xs">
+                  Pedido enviado pra <b>Pedidos &amp; Separação</b> — o roteamento pra loja é feito lá (aba Processando).
+                </span>
                 <button
                   onClick={onContinue}
                   className="mt-2 rounded-lg bg-emerald-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700"
