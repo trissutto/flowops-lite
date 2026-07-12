@@ -114,6 +114,31 @@ interface ActiveCustomer {
 const brl = (cents: number) =>
   ((cents || 0) / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
+/** Máscara 000.000.000-00 pro CPF. */
+const maskCpf = (v: string) =>
+  v
+    .replace(/\D/g, '')
+    .slice(0, 11)
+    .replace(/(\d{3})(\d)/, '$1.$2')
+    .replace(/(\d{3})\.(\d{3})(\d)/, '$1.$2.$3')
+    .replace(/\.(\d{3})(\d{1,2})$/, '.$1-$2');
+
+/** CPF válido de verdade (dígitos verificadores) — Correios exigem pra postar. */
+function cpfValido(raw: string): boolean {
+  const d = (raw || '').replace(/\D/g, '');
+  if (d.length !== 11 || /^(\d)\1{10}$/.test(d)) return false;
+  let s = 0;
+  for (let i = 0; i < 9; i++) s += Number(d[i]) * (10 - i);
+  let dv1 = (s * 10) % 11;
+  if (dv1 === 10) dv1 = 0;
+  if (dv1 !== Number(d[9])) return false;
+  s = 0;
+  for (let i = 0; i < 10; i++) s += Number(d[i]) * (11 - i);
+  let dv2 = (s * 10) % 11;
+  if (dv2 === 10) dv2 = 0;
+  return dv2 === Number(d[10]);
+}
+
 // Base dos LINKS QUE A CLIENTE RECEBE (cobrança/pagamento). O domínio oficial
 // é www.lurdsplussize.com.br — o console pode estar rodando na vercel.app
 // (app desktop), então NUNCA usar window.location.origin pra link de cliente.
@@ -481,8 +506,8 @@ export default function LivePdvPage() {
         if (j?.message) msg = Array.isArray(j.message) ? j.message[0] : j.message;
       } catch { /* mensagem crua */ }
       alert(msg);
-      // Falta endereço → abre o cadastro direto pra completar
-      if (/endereço|CEP|rua|número|cidade|UF/i.test(msg)) setEditCustomerOpen(true);
+      // Falta endereço/CPF → abre o cadastro direto pra completar
+      if (/endereço|CEP|rua|número|cidade|UF|CPF/i.test(msg)) setEditCustomerOpen(true);
     } finally {
       setReleasing(false);
     }
@@ -3379,7 +3404,23 @@ function CustomerModal({
               <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Nome (opcional)" className="w-full rounded-lg border border-slate-300 px-3 py-2" />
               <input value={phone} onChange={(e) => setPhone(maskPhoneBR(e.target.value))} placeholder="Telefone (opcional)" inputMode="tel" maxLength={15} className="w-full rounded-lg border border-slate-300 px-3 py-2" />
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                <input value={cpf} onChange={(e) => setCpf(e.target.value)} placeholder="CPF (opcional)" className="rounded-lg border border-slate-300 px-3 py-2" />
+                <div className="flex flex-col">
+                  <input
+                    value={cpf}
+                    onChange={(e) => setCpf(maskCpf(e.target.value))}
+                    placeholder="CPF (obrigatório pra ENVIO — Correios)"
+                    className={`rounded-lg border px-3 py-2 ${
+                      cpf.replace(/\D/g, '').length === 11 && !cpfValido(cpf)
+                        ? 'border-red-400 bg-red-50'
+                        : 'border-slate-300'
+                    }`}
+                  />
+                  {cpf.replace(/\D/g, '').length === 11 && !cpfValido(cpf) && (
+                    <span className="mt-0.5 text-[10px] font-semibold text-red-600">
+                      CPF não confere — verifique os números (o envio pra separação vai travar).
+                    </span>
+                  )}
+                </div>
                 <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="E-mail (opcional)" className="rounded-lg border border-slate-300 px-3 py-2" />
               </div>
             </>
