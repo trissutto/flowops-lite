@@ -510,6 +510,13 @@ export default function MinhaLojaPage() {
       }
     };
 
+    // Pedido da LIVE RECOLHIDO pela matriz (roteamento repensado) — some da fila
+    const onLiveSeparationRemoved = (payload: any) => {
+      loadLiveRows();
+      const quem = payload?.customerName || 'Cliente';
+      pushToast(`↩ Pedido da LIVE de ${quem} foi recolhido pela matriz — pode ignorar.`);
+    };
+
     socket.on('connect', onConnect);
     socket.on('disconnect', onDisconnect);
     socket.on('pick-order:new', onNew);
@@ -519,6 +526,7 @@ export default function MinhaLojaPage() {
     socket.on('realignment:new', onRealignmentNew);
     socket.on('realignment:sent', onRealignmentSent);
     socket.on('live-pdv:separation-new', onLiveSeparationNew);
+    socket.on('live-pdv:separation-removed', onLiveSeparationRemoved);
     if (socket.connected) setConnected(true);
 
     return () => {
@@ -531,6 +539,7 @@ export default function MinhaLojaPage() {
       socket.off('realignment:new', onRealignmentNew);
       socket.off('realignment:sent', onRealignmentSent);
       socket.off('live-pdv:separation-new', onLiveSeparationNew);
+      socket.off('live-pdv:separation-removed', onLiveSeparationRemoved);
     };
   }, [me, loadLiveRows]);
 

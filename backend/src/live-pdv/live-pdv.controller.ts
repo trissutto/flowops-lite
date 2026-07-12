@@ -279,6 +279,13 @@ export class LivePdvController {
     return this.svc.releaseSeparation(cartId);
   }
 
+  // RECOLHE o pedido das lojas de volta pra UMA loja só (ex.: matriz) — inverso
+  // do release-separation, pra repensar o roteamento antes de gerar remessa/frete.
+  @Post('carts/:cartId/retract-separation')
+  retractSeparation(@Param('cartId') cartId: string, @Body() body: { storeCode: string }) {
+    return this.svc.retractSeparation(cartId, body?.storeCode || '');
+  }
+
   // Bip de conferência da separação (loja bipa o EAN/código; confere e baixa estoque)
   @Post('carts/:cartId/bip')
   bipConference(@Param('cartId') cartId: string, @Body() body: { code: string }) {

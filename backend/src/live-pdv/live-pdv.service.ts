@@ -2696,6 +2696,86 @@ export class LivePdvService {
     return this.getCart(cartId);
   }
 
+  /**
+   * RECOLHE o pedido das lojas — o inverso do releaseSeparation. Caso real de
+   * 12/07: pedido roteado pra 6+ lojas geraria uma remessa/frete por loja; o
+   * supervisor puxa tudo pra UMA loja (ex.: matriz) e decide com calma antes
+   * de liberar de novo.
+   * - Vale pra carrinho 'paid' (só re-ancora a origem) ou 'separating' (tira
+   *   das filas das lojas e volta pra 'paid').
+   * - Peça já BIPADA (separatedAt) bloqueia: o estoque já baixou na loja de
+   *   origem — depois do bip o caminho é devolução, não recolha.
+   * - Origem gravada com originManual: a re-consolidação automática nunca
+   *   desfaz decisão humana.
+   * - SEM validação de estoque na loja destino, de propósito: é uma decisão
+   *   administrativa (a loja destino pode nem ter a peça — o dono resolve).
+   */
+  async retractSeparation(cartId: string, storeCode: string) {
+    const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
+    if (!cart) throw new NotFoundException('Carrinho não encontrado');
+    if (!['paid', 'separating'].includes(cart.status)) {
+      throw new BadRequestException('Só pedido PAGO ou EM SEPARAÇÃO pode ser recolhido.');
+    }
+    const store = await (this.prisma as any).store.findUnique({ where: { code: storeCode } });
+    if (!store) throw new BadRequestException('Loja destino não encontrada');
+
+    const items = await (this.prisma as any).livePdvItem.findMany({
+      where: { cartId, status: { in: ['paid', 'separating'] } },
+    });
+    if (!items.length) throw new BadRequestException('Pedido sem itens ativos.');
+    const bipados = (items as any[]).filter((i) => i.separatedAt);
+    if (bipados.length) {
+      const lojas = Array.from(
+        new Set(bipados.map((i: any) => i.originStoreName || i.originStoreCode)),
+      );
+      throw new BadRequestException(
+        `${bipados.length} peça(s) já bipada(s) em ${lojas.join(', ')} — o estoque já baixou lá; resolva essas peças (devolução) antes de recolher.`,
+      );
+    }
+
+    // Lojas que tinham itens NA FILA de separação → avisa pra sumir da tela
+    const affected = new Set<string>(
+      (items as any[])
+        .filter((i) => i.status === 'separating')
+        .map((i) => String(i.originStoreCode || ''))
+        .filter(Boolean),
+    );
+
+    await (this.prisma as any).livePdvItem.updateMany({
+      where: { id: { in: (items as any[]).map((i: any) => i.id) } },
+      data: {
+        status: 'paid',
+        originStoreCode: store.code,
+        originStoreName: store.name,
+        originManual: true,
+      },
+    });
+    await (this.prisma as any).livePdvCart.update({
+      where: { id: cartId },
+      data: { status: 'paid' },
+    });
+
+    for (const code of affected) {
+      const st = await (this.prisma as any).store
+        .findUnique({ where: { code } })
+        .catch(() => null);
+      if (st?.id) {
+        this.gateway.emitToStore(st.id, 'live-pdv:separation-removed', {
+          sessionId: cart.sessionId,
+          cartId,
+          storeCode: code,
+          customerName: cart.customerName,
+          toStoreName: store.name,
+        });
+      }
+    }
+    this.gateway.emitToLiveOps('live-pdv:cart-updated', { sessionId: cart.sessionId, cartId });
+    this.logger.log(
+      `[recolher] carrinho ${cartId}: ${affected.size || 'nenhuma'} loja(s) em separação → tudo pra ${store.code} (${store.name})`,
+    );
+    return this.getCart(cartId);
+  }
+
   // ─── Painel da loja de origem (separação/expedição) ───────────────────────────
   async storeQueue(storeCode: string) {
     const items = await (this.prisma as any).livePdvItem.findMany({
