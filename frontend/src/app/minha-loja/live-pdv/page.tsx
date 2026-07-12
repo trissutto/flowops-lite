@@ -527,6 +527,10 @@ export default function LivePdvPage() {
     }
   }
 
+  // Estado do envio WhatsApp por carrinho — feedback visual + trava de
+  // duplo clique (sem isso o sucesso era silencioso e cada clique reenviava).
+  const [whatsState, setWhatsState] = useState<Record<string, 'sending' | 'sent' | undefined>>({});
+
   // Cobra UMA cliente da fila: Direct abre o perfil (colar Ctrl+V);
   // WhatsApp dispara DIRETO pela API do ManyChat (template aprovado — chega
   // sozinho, sem abrir app). Se a API falhar, cai no wa.me como plano B.
@@ -544,9 +548,16 @@ export default function LivePdvPage() {
         'noopener,noreferrer',
       );
     } else if (canal === 'whats' && c.customerPhone) {
+      if (whatsState[c.id] === 'sending') return; // trava duplo clique
+      if (whatsState[c.id] === 'sent' && !confirm(`Já foi enviado o WhatsApp pra ${c.customerName}. Enviar DE NOVO?`)) {
+        return;
+      }
+      setWhatsState((s) => ({ ...s, [c.id]: 'sending' }));
       try {
         await api(`/live-pdv/carts/${c.id}/cobranca-whats`, { method: 'POST', body: JSON.stringify({}) });
+        setWhatsState((s) => ({ ...s, [c.id]: 'sent' }));
       } catch (e: any) {
+        setWhatsState((s) => ({ ...s, [c.id]: undefined }));
         // API indisponível/recusou → plano B: wa.me manual (comportamento antigo)
         const raw = String(e?.message || '');
         let m = 'ManyChat indisponível';
@@ -1680,10 +1691,19 @@ export default function LivePdvPage() {
                       <button
                         type="button"
                         onClick={() => chargeOne(c, 'whats')}
+                        disabled={whatsState[c.id] === 'sending'}
                         title="Envia a cobrança DIRETO no WhatsApp da cliente pela API do ManyChat (template aprovado) — sem abrir app"
-                        className="shrink-0 rounded-lg bg-emerald-600 px-2.5 py-1.5 text-[11px] font-bold text-white hover:bg-emerald-700"
+                        className={`shrink-0 rounded-lg px-2.5 py-1.5 text-[11px] font-bold text-white disabled:opacity-60 ${
+                          whatsState[c.id] === 'sent'
+                            ? 'bg-emerald-800'
+                            : 'bg-emerald-600 hover:bg-emerald-700'
+                        }`}
                       >
-                        WhatsApp 🤖
+                        {whatsState[c.id] === 'sending'
+                          ? '⏳ enviando…'
+                          : whatsState[c.id] === 'sent'
+                            ? '✓ WhatsApp enviado'
+                            : 'WhatsApp 🤖'}
                       </button>
                     )}
                     <button
