@@ -281,9 +281,19 @@ export class LivePdvController {
 
   // RECOLHE o pedido das lojas de volta pra UMA loja só (ex.: matriz) — inverso
   // do release-separation, pra repensar o roteamento antes de gerar remessa/frete.
+  // Só vale pro fluxo LEGADO (cart sem orderId) — no trilho do site é na tela
+  // Pedidos & Separação.
   @Post('carts/:cartId/retract-separation')
   retractSeparation(@Param('cartId') cartId: string, @Body() body: { storeCode: string }) {
     return this.svc.retractSeparation(cartId, body?.storeCode || '');
+  }
+
+  // MIGRAÇÃO (12/07, admin): move os pedidos da live do fluxo antigo de
+  // separação pro trilho do site (cancela ordem nas lojas + recalcula do zero).
+  @Post('admin/migrate-to-site-flow')
+  migrateToSiteFlow(@Req() req: any) {
+    this.requireAdmin(req);
+    return this.svc.migrateSeparatingToSiteFlow();
   }
 
   // Bip de conferência da separação (loja bipa o EAN/código; confere e baixa estoque)

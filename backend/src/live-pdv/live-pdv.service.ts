@@ -3,6 +3,7 @@ import { randomBytes } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
 import { RoutingEngine } from '../routing/routing.engine';
+import { RoutingService } from '../routing/routing.service';
 import { PagarmeService } from '../pagarme/pagarme.service';
 import { PagbankService } from '../pagbank/pagbank.service';
 import { ProductPhotosService } from '../product-photos/product-photos.service';
@@ -44,6 +45,7 @@ export class LivePdvService {
     private readonly prisma: PrismaService,
     private readonly erp: ErpService,
     private readonly routing: RoutingEngine,
+    private readonly routingService: RoutingService,
     private readonly pagarme: PagarmeService,
     private readonly pagbank: PagbankService,
     private readonly photos: ProductPhotosService,
@@ -2628,7 +2630,8 @@ export class LivePdvService {
   async releaseSeparation(cartId: string) {
     const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
     if (!cart) throw new NotFoundException('Carrinho não encontrado');
-    if (cart.status === 'separating') return this.getCart(cartId); // idempotente
+    if (cart.orderId) return this.getCart(cartId); // idempotente — já virou pedido do trilho do site
+    if (cart.status === 'separating') return this.getCart(cartId); // idempotente (fluxo legado)
     if (cart.status !== 'paid') {
       throw new BadRequestException('Só carrinho PAGO pode ir pra separação.');
     }
@@ -2649,51 +2652,211 @@ export class LivePdvService {
       }
     }
 
-    // Ordem de separação por loja de origem → emite pra cada loja
+    // ═══ TRILHO DO SITE (decisão do dono, 12/07) ═══
+    // A venda da live NÃO tem mais fluxo próprio de separação: vira um Order
+    // normal (source='live') e segue EXATAMENTE o caminho do pedido do site —
+    // RoutingEngine (Regra 1: UMA loja só; quebra em 2+ lojas exige aprovação
+    // na tela Pedidos & Separação), PickOrder por loja com card+push, bip,
+    // fila de aprovação de baixa e envio com rastreio obrigatório.
     const items = await (this.prisma as any).livePdvItem.findMany({
       where: { cartId, status: 'paid' },
     });
     if (!items.length) throw new BadRequestException('Carrinho sem itens pagos.');
-    const byStore = new Map<string, any[]>();
-    for (const it of items as any[]) {
-      if (!byStore.has(it.originStoreCode)) byStore.set(it.originStoreCode, []);
-      byStore.get(it.originStoreCode)!.push(it);
-    }
-    const session = await this.getSession(cart.sessionId);
-    for (const [storeCode, storeItems] of byStore.entries()) {
-      const store = await (this.prisma as any).store.findUnique({ where: { code: storeCode } });
-      // marca como em separação
-      await (this.prisma as any).livePdvItem.updateMany({
-        where: { id: { in: storeItems.map((i: any) => i.id) } },
-        data: { status: 'separating' },
-      });
-      if (store?.id) {
-        this.gateway.emitToStore(store.id, 'live-pdv:separation-new', {
-          sessionId: session.id,
-          cartId,
-          storeCode,
-          liveStoreCode: session.liveStoreCode,
-          liveStoreName: session.liveStoreName,
-          customerName: cart.customerName,
-          customerPhone: cart.customerPhone,
-          count: storeItems.length,
-          items: storeItems.map((i: any) => ({
-            id: i.id,
-            ref: i.refCode,
-            descricao: i.descricao,
-            cor: i.cor,
-            tamanho: i.tamanho,
-            qty: i.qty,
-          })),
+    return this.handoffToSiteFlow(cart, items as any[]);
+  }
+
+  /** Base dos wcOrderId sintéticos de pedidos da LIVE (longe do range real do WC). */
+  private static readonly LIVE_WC_ID_BASE = 900_000_000;
+
+  /**
+   * Converte o carrinho PAGO da live num Order do trilho do site e roteia.
+   *  - Order source='live', liveCartId, wcOrderId sintético (900M+, sequencial
+   *    com retry em colisão), número exibido "LIVE-<comanda>".
+   *  - SKU do item = codigoBipado (CODIGO Giga da grade) — mesmo formato que o
+   *    estoque/bipagem do site usam.
+   *  - Roteia na hora com a regra do site: single-store/pickup confirma direto
+   *    (confirmRoute cria pick-orders + socket pick-order:new + push); quebra
+   *    multi-loja e falta de estoque ficam em 'processing' pra decisão humana
+   *    na tela Pedidos & Separação — mesmo gate do 1-CLIQUE.
+   *  - NUNCA volta pro fluxo antigo: o cart guarda orderId e vira espelho.
+   */
+  private async handoffToSiteFlow(cart: any, items: any[]) {
+    // shipping no formato do WC — os cards da loja e a impressão leem esse JSON
+    const shipping = {
+      first_name: cart.customerName || '',
+      last_name: '',
+      address_1: [cart.customerEndereco, cart.customerNumero].filter(Boolean).join(', '),
+      address_2: [cart.customerComplemento, cart.customerBairro].filter(Boolean).join(' - '),
+      city: cart.customerCidade || '',
+      state: cart.customerUf || '',
+      postcode: cart.customerCep || '',
+      phone: cart.customerPhone || '',
+    };
+    const frete = this.freteFromCep(cart.customerCep);
+
+    let order: any = null;
+    const seq = await (this.prisma as any).order.count({ where: { source: 'live' } });
+    for (let tent = 0; tent < 5 && !order; tent++) {
+      try {
+        order = await (this.prisma as any).order.create({
+          data: {
+            wcOrderId: LivePdvService.LIVE_WC_ID_BASE + seq + 1 + tent,
+            wcOrderNumber: `LIVE-${cart.cartNumber ?? seq + 1 + tent}`,
+            source: 'live',
+            liveCartId: cart.id,
+            status: 'processing',
+            customerName: cart.customerName,
+            customerEmail: cart.customerEmail,
+            customerPhone: cart.customerPhone,
+            customerCpf: cart.customerCpf,
+            shippingCep: String(cart.customerCep || '').replace(/\D/g, ''),
+            shippingAddress: JSON.stringify(shipping),
+            totalAmount: (cart.totalCents || 0) / 100,
+            isPickup: !!cart.isPickup,
+            pickupStoreCode: cart.pickupStoreCode || null,
+            shippingMethod: cart.isPickup
+              ? 'Retirada em loja (LIVE)'
+              : `LIVE${frete ? ` · ${frete.servico}` : ''}`,
+            wcDateCreated: cart.paidAt ?? cart.createdAt,
+            items: {
+              create: items.map((it) => ({
+                sku: String(it.codigoBipado || it.itemKey),
+                productName: [it.descricao || it.refCode, it.cor, it.tamanho]
+                  .filter(Boolean)
+                  .join(' · '),
+                quantity: Number(it.qty || 1),
+                unitPrice: (it.priceCents || 0) / 100,
+              })),
+            },
+          },
         });
+      } catch (e: any) {
+        if (e?.code !== 'P2002') throw e; // P2002 = wcOrderId colidiu → tenta o próximo
       }
     }
+    if (!order) {
+      throw new BadRequestException('Não consegui gerar o nº do pedido da live — tente de novo.');
+    }
+
+    let roteado = false;
+    let aviso: string | null = null;
+    try {
+      const preview: any = await this.routingService.previewRoute(order.id);
+      if (preview?.success && preview.strategy !== 'multi-store') {
+        await this.routingService.confirmRoute(order.id, preview);
+        roteado = true;
+      } else if (preview?.success) {
+        aviso = 'Precisa de 2+ lojas — aguardando aprovação na tela Pedidos & Separação.';
+      } else {
+        const faltando = (preview?.missing || [])
+          .map((m: any) => m.sku)
+          .slice(0, 5)
+          .join(', ');
+        aviso = `Sem estoque pra rotear automático${faltando ? ` (${faltando})` : ''} — resolver na Pedidos & Separação.`;
+      }
+    } catch (e: any) {
+      aviso = `Roteamento falhou (${e?.message || e}) — resolver na Pedidos & Separação.`;
+    }
+
     await (this.prisma as any).livePdvCart.update({
-      where: { id: cartId },
-      data: { status: 'separating' },
+      where: { id: cart.id },
+      data: { status: 'separating', orderId: order.id },
     });
-    this.gateway.emitToLiveOps('live-pdv:cart-updated', { sessionId: session.id, cartId });
-    return this.getCart(cartId);
+    this.gateway.emitToLiveOps('live-pdv:cart-updated', { sessionId: cart.sessionId, cartId: cart.id });
+    this.logger.log(
+      `[live→site] carrinho #${cart.cartNumber ?? cart.id} virou pedido ${order.wcOrderNumber}` +
+        (roteado ? ' (roteado — card já na loja)' : ` (pendente: ${aviso})`),
+    );
+    const fresh = await this.getCart(cart.id);
+    return { ...(fresh as any), siteFlow: { orderNumber: order.wcOrderNumber, roteado, aviso } };
+  }
+
+  /**
+   * MIGRAÇÃO (12/07): move os pedidos da live que estavam no fluxo ANTIGO de
+   * separação pro trilho do site, recalculando a loja do zero.
+   *  - Cancela a ordem antiga nas lojas (itens separating→paid + socket
+   *    live-pdv:separation-removed pra fila sumir da tela).
+   *  - Refaz o release pelo trilho novo (Order + roteamento do site).
+   *  - Pula com aviso: peça já bipada/enviada (estoque já mexeu — manual) e
+   *    endereço incompleto (volta pra PAGO pro operador completar e liberar).
+   */
+  async migrateSeparatingToSiteFlow() {
+    const carts = await (this.prisma as any).livePdvCart.findMany({
+      where: { status: 'separating', orderId: null },
+      orderBy: { paidAt: 'asc' },
+    });
+    const resultado: any[] = [];
+    for (const cart of carts as any[]) {
+      const label = `#${cart.cartNumber ?? cart.id.slice(0, 8)} ${cart.customerName || ''}`.trim();
+      try {
+        const items = await (this.prisma as any).livePdvItem.findMany({
+          where: { cartId: cart.id, status: { in: ['paid', 'separating'] } },
+        });
+        if (!items.length) {
+          resultado.push({ cart: label, ok: false, motivo: 'sem itens ativos' });
+          continue;
+        }
+        if ((items as any[]).some((i) => i.separatedAt)) {
+          resultado.push({
+            cart: label,
+            ok: false,
+            motivo: 'peça já bipada na loja (estoque baixou) — resolver manualmente',
+          });
+          continue;
+        }
+        // 1) cancela a ordem de separação antiga nas lojas envolvidas
+        const lojas = new Set<string>(
+          (items as any[])
+            .filter((i) => i.status === 'separating')
+            .map((i) => String(i.originStoreCode || ''))
+            .filter(Boolean),
+        );
+        await (this.prisma as any).livePdvItem.updateMany({
+          where: { id: { in: (items as any[]).map((i: any) => i.id) } },
+          data: { status: 'paid' },
+        });
+        for (const code of lojas) {
+          const st = await (this.prisma as any).store
+            .findUnique({ where: { code } })
+            .catch(() => null);
+          if (st?.id) {
+            this.gateway.emitToStore(st.id, 'live-pdv:separation-removed', {
+              sessionId: cart.sessionId,
+              cartId: cart.id,
+              storeCode: code,
+              customerName: cart.customerName,
+              toStoreName: 'Pedidos & Separação (matriz)',
+            });
+          }
+        }
+        await (this.prisma as any).livePdvCart.update({
+          where: { id: cart.id },
+          data: { status: 'paid' },
+        });
+        // 2) refaz o release pelo trilho novo (valida endereço de novo)
+        try {
+          const r: any = await this.releaseSeparation(cart.id);
+          resultado.push({
+            cart: label,
+            ok: true,
+            pedido: r?.siteFlow?.orderNumber,
+            roteado: r?.siteFlow?.roteado ?? false,
+            aviso: r?.siteFlow?.aviso ?? null,
+          });
+        } catch (e: any) {
+          resultado.push({
+            cart: label,
+            ok: false,
+            motivo: `voltou pra PAGO: ${e?.message || e}`,
+          });
+        }
+      } catch (e: any) {
+        resultado.push({ cart: label, ok: false, motivo: String(e?.message || e).slice(0, 200) });
+      }
+    }
+    const migrados = resultado.filter((r) => r.ok).length;
+    this.logger.log(`[live→site] migração: ${migrados}/${resultado.length} carrinho(s) movidos pro trilho do site`);
+    return { total: resultado.length, migrados, detalhes: resultado };
   }
 
   /**
@@ -2713,6 +2876,11 @@ export class LivePdvService {
   async retractSeparation(cartId: string, storeCode: string) {
     const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
     if (!cart) throw new NotFoundException('Carrinho não encontrado');
+    if (cart.orderId) {
+      throw new BadRequestException(
+        'Este pedido já está no trilho do site — gerencie (recalcular/trocar loja) na tela Pedidos & Separação.',
+      );
+    }
     if (!['paid', 'separating'].includes(cart.status)) {
       throw new BadRequestException('Só pedido PAGO ou EM SEPARAÇÃO pode ser recolhido.');
     }
