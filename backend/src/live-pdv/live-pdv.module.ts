@@ -17,6 +17,7 @@ import { LivePdvService } from './live-pdv.service';
 import { ManychatService } from './manychat.service';
 import { LivePdvExpiryCron } from './live-pdv-expiry.cron';
 import { LivePdvPayReconcileCron } from './live-pdv-pay-reconcile.cron';
+import { LivePdvCobrancaWhatsCron } from './live-pdv-cobranca-whats.cron';
 
 /**
  * Módulo de Live Commerce operado pela apresentadora (Live PDV).
@@ -39,7 +40,7 @@ import { LivePdvPayReconcileCron } from './live-pdv-pay-reconcile.cron';
     WebsocketModule,
   ],
   controllers: [LivePdvController, LivePublicController, ManychatHookController, LivePayPublicController],
-  providers: [LivePdvService, ManychatService, LivePdvExpiryCron, LivePdvPayReconcileCron],
+  providers: [LivePdvService, ManychatService, LivePdvExpiryCron, LivePdvPayReconcileCron, LivePdvCobrancaWhatsCron],
   exports: [LivePdvService],
 })
 export class LivePdvModule {}

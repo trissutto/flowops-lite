@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  ForbiddenException,
   Get,
   Param,
   Post,
@@ -11,6 +12,7 @@ import {
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { LivePdvService } from './live-pdv.service';
+import { LivePdvCobrancaWhatsCron } from './live-pdv-cobranca-whats.cron';
 
 /**
  * /api/live-pdv — Console de Live Commerce operado pela apresentadora +
@@ -22,7 +24,39 @@ export class LivePdvController {
   constructor(
     private readonly svc: LivePdvService,
     private readonly prisma: PrismaService,
+    private readonly cobrancaWhats: LivePdvCobrancaWhatsCron,
   ) {}
+
+  private requireAdmin(req: any) {
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'master') {
+      throw new ForbiddenException('Apenas admin/master');
+    }
+  }
+
+  // ── Cobrança automática por WhatsApp (admin) ──
+  /** Lista os carrinhos que o próximo ciclo cobraria (conferência humana). */
+  @Get('cobranca-whats/preview')
+  async cobrancaWhatsPreview(@Req() req: any) {
+    this.requireAdmin(req);
+    const carts = await this.cobrancaWhats.elegiveis(100);
+    return carts.map((c: any) => ({
+      cartId: c.id,
+      nome: c.customerName,
+      telefone: c.customerPhone,
+      valorCents: c.totalCents,
+      status: c.status,
+      paradoDesde: c.updatedAt,
+      tentativas: c.cobrancaWhatsTentativas,
+    }));
+  }
+
+  /** Roda um ciclo de cobrança AGORA (sem esperar o cron de 30min). */
+  @Post('cobranca-whats/run')
+  cobrancaWhatsRun(@Req() req: any) {
+    this.requireAdmin(req);
+    return this.cobrancaWhats.executarCiclo();
+  }
 
   // ── Sessões ──
   @Post('sessions')
