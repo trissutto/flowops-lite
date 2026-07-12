@@ -55,6 +55,7 @@ type Resumo = {
       breakdown?: {
         giga: { faturamento: number; cupons: number };
         flowops: { faturamento: number; cupons: number };
+        live?: { faturamento: number; cupons: number };
       } | null;
     };
     anterior: { faturamento: number; cupons: number; pecas: number; ticketMedio: number };
@@ -110,6 +111,8 @@ export default function FaturamentoPage() {
   const [err, setErr] = useState<string | null>(null);
   // Drill-down: storeCode expandida + vendas detalhadas em cache
   const [expandedStore, setExpandedStore] = useState<string | null>(null);
+  // Separação do card SITE (clique): Site efetivo · Venda online WhatsApp · Live
+  const [breakdownOpen, setBreakdownOpen] = useState<Record<string, boolean>>({});
   const [storeVendas, setStoreVendas] = useState<Record<string, any[]>>({});
   const [storeMeta, setStoreMeta] = useState<Record<string, { source?: string; sourceWarning?: string; zumbisOcultas?: number }>>({});
   const [loadingVendas, setLoadingVendas] = useState<string | null>(null);
@@ -695,11 +698,19 @@ export default function FaturamentoPage() {
               {data.lojas.map((l) => (
                 <div
                   key={l.storeCode}
+                  onClick={() => {
+                    if (l.atual.breakdown) {
+                      setBreakdownOpen((s) => ({ ...s, [l.storeCode]: !s[l.storeCode] }));
+                    }
+                  }}
                   className={`rounded-xl p-3 border ${
-                    l.storeCode === 'SITE'
+                    l.atual.breakdown ? 'cursor-pointer hover:ring-2 hover:ring-violet-300' : ''
+                  } ${
+                    l.storeCode === 'SITE' || l.atual.breakdown
                       ? 'bg-violet-50 border-violet-200'
                       : 'bg-white border-slate-200'
                   }`}
+                  title={l.atual.breakdown ? 'Clique pra abrir/fechar a separação Site efetivo · WhatsApp · Live' : undefined}
                 >
                   <div className="flex items-center justify-between mb-1.5">
                     <div className="flex items-center gap-1.5">
@@ -721,16 +732,34 @@ export default function FaturamentoPage() {
                     Ano ant.: {brl(l.anterior.faturamento)}
                   </div>
 
-                  {/* Breakdown SITE: Giga + Flowops */}
-                  {l.atual.breakdown && (
+                  {/* Breakdown SITE (clique no card): Site efetivo · Venda online WhatsApp · Live */}
+                  {l.atual.breakdown && !breakdownOpen[l.storeCode] && (
+                    <div className="mt-2 text-[10px] font-semibold text-violet-500">
+                      ▸ clique pra ver: Site efetivo · WhatsApp · Live
+                    </div>
+                  )}
+                  {l.atual.breakdown && breakdownOpen[l.storeCode] && (
                     <div className="mt-2 bg-white border border-violet-200 rounded-md p-2 text-[11px] space-y-0.5">
                       <div className="flex justify-between">
-                        <span className="text-slate-600">📦 Flowops (WC)</span>
-                        <span className="font-bold text-violet-800">{brl(l.atual.breakdown.flowops.faturamento)}</span>
+                        <span className="text-slate-600">🛒 Site efetivo (e-commerce)</span>
+                        <span className="font-bold text-violet-800">
+                          {brl(l.atual.breakdown.flowops.faturamento)}
+                          <span className="ml-1 font-normal text-slate-400">· {l.atual.breakdown.flowops.cupons}</span>
+                        </span>
                       </div>
                       <div className="flex justify-between">
-                        <span className="text-slate-600">🗄 Giga (legacy)</span>
-                        <span className="font-bold text-violet-800">{brl(l.atual.breakdown.giga.faturamento)}</span>
+                        <span className="text-slate-600">💬 Venda online WhatsApp</span>
+                        <span className="font-bold text-violet-800">
+                          {brl(l.atual.breakdown.giga.faturamento)}
+                          <span className="ml-1 font-normal text-slate-400">· {l.atual.breakdown.giga.cupons}</span>
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-600">🔴 Live Commerce</span>
+                        <span className="font-bold text-rose-700">
+                          {brl(l.atual.breakdown.live?.faturamento ?? 0)}
+                          <span className="ml-1 font-normal text-slate-400">· {l.atual.breakdown.live?.cupons ?? 0}</span>
+                        </span>
                       </div>
                     </div>
                   )}

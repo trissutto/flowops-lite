@@ -444,16 +444,27 @@ export class FaturamentoService {
       this.getFlowopsSiteFaturamento(dInicioMetaMes, dFimMetaMesExclusive),
     ]);
 
+    // ── 3b) LIVE Commerce: carrinhos PAGOS (componente do SITE, 12/07) ──
+    const [liveAtual, liveAnterior, liveMetaMes] = await Promise.all([
+      this.getLiveFaturamento(dInicio, dFimExclusive),
+      this.getLiveFaturamento(dInicioAnterior, dFimAnterior),
+      this.getLiveFaturamento(dInicioMetaMes, dFimMetaMesExclusive),
+    ]);
+
     // Time series Flowops SITE (mesmo formato do Giga)
     const flowTsAtual = await this.getFlowopsTimeseries(dInicio, dFimExclusive, granularity);
     const flowTsAnterior = await this.getFlowopsTimeseries(dInicioAnterior, dFimAnterior, granularity);
+    const liveTsAtual = await this.getLiveTimeseries(dInicio, dFimExclusive, granularity);
+    const liveTsAnterior = await this.getLiveTimeseries(dInicioAnterior, dFimAnterior, granularity);
 
-    // ── 4) Compõe SITE = Giga SITE + Flowops completed ──
+    // ── 4) Compõe SITE = Giga SITE (WhatsApp) + Flowops (site efetivo) + LIVE ──
     const lojasBase = this.combinarLojas(
       gigaAtual,
       gigaAnterior,
       flowAtual,
       flowAnterior,
+      liveAtual,
+      liveAnterior,
       nomeLoja,
       siteStoreCode,
     );
@@ -464,7 +475,9 @@ export class FaturamentoService {
       const gm = mapMetaMes.get(l.storeCode) || { faturamento: 0 };
       const isSite = l.storeCode === siteStoreCode;
       const metaMes = isSite
-        ? Number(gm.faturamento || 0) + Number(flowMetaMes.faturamento || 0)
+        ? Number(gm.faturamento || 0) +
+          Number(flowMetaMes.faturamento || 0) +
+          Number(liveMetaMes.faturamento || 0)
         : Number(gm.faturamento || 0);
       return { ...l, metaMes };
     });
@@ -477,8 +490,14 @@ export class FaturamentoService {
     const totalPecasAtual = lojas.reduce((s, l) => s + l.atual.pecas, 0);
     const varTotal = totalAnterior > 0 ? ((totalAtual - totalAnterior) / totalAnterior) * 100 : 0;
 
-    // ── 6) Time series mergeada (Giga + flowops SITE) ──
-    const series = this.mergeTimeseries(tsAtual, tsAnterior, flowTsAtual, flowTsAnterior, granularity);
+    // ── 6) Time series mergeada (Giga + flowops SITE + LIVE) ──
+    const series = this.mergeTimeseries(
+      tsAtual,
+      tsAnterior,
+      [...flowTsAtual, ...liveTsAtual],
+      [...flowTsAnterior, ...liveTsAnterior],
+      granularity,
+    );
 
     // Debug: ajuda a identificar gráfico de ano anterior zerado
     this.logger.log(
@@ -584,6 +603,10 @@ export class FaturamentoService {
       where: {
         status: { in: FaturamentoService.FATURAMENTO_STATUSES },
         wcDateCreated: { gte: inicioEfetivo, lt: fimExclusive },
+        // Pedido da LIVE (source='live') NÃO entra aqui — a live é um
+        // componente próprio do SITE (getLiveFaturamento, fonte LivePdvCart,
+        // que cobre também o legado pré-trilho). Somar os dois duplicaria.
+        source: 'site',
       },
       select: {
         // Só ITENS — totalAmount inclui frete (sedex/PAC) e a regra é
@@ -610,6 +633,74 @@ export class FaturamentoService {
     };
   }
 
+  /**
+   * Status do carrinho da LIVE que contam como VENDIDO (cliente pagou).
+   * Fonte = LivePdvCart (cobre TODA a história da live, inclusive o legado
+   * anterior ao trilho do site). Valor = subtotalCents (produtos, SEM frete —
+   * mesmo critério do site/Wincred). Sem cutoff: live sempre foi só no Flow.
+   */
+  private static readonly LIVE_VENDIDO_STATUSES = [
+    'paid',
+    'separating',
+    'shipped',
+    'delivered',
+  ];
+
+  /** Faturamento das vendas da LIVE pagas no período (componente do SITE). */
+  private async getLiveFaturamento(inicio: Date, fimExclusive: Date) {
+    const carts = await (this.prisma as any).livePdvCart.findMany({
+      where: {
+        status: { in: FaturamentoService.LIVE_VENDIDO_STATUSES },
+        paidAt: { gte: inicio, lt: fimExclusive },
+      },
+      select: {
+        subtotalCents: true,
+        items: { select: { qty: true, status: true } },
+      },
+    });
+    let faturamento = 0;
+    let pecas = 0;
+    for (const c of carts as any[]) {
+      faturamento += (Number(c.subtotalCents) || 0) / 100;
+      for (const it of c.items || []) {
+        if (['cancelled', 'expired'].includes(it.status)) continue;
+        pecas += Number(it.qty) || 0;
+      }
+    }
+    return {
+      faturamento,
+      cupons: (carts as any[]).length,
+      pecas,
+      ticketMedio: carts.length > 0 ? faturamento / carts.length : 0,
+    };
+  }
+
+  /** Time series das vendas da LIVE (mesmo formato do Giga/Flowops). */
+  private async getLiveTimeseries(
+    inicio: Date,
+    fimExclusive: Date,
+    granularity: 'day' | 'week' | 'month',
+  ) {
+    const carts = await (this.prisma as any).livePdvCart.findMany({
+      where: {
+        status: { in: FaturamentoService.LIVE_VENDIDO_STATUSES },
+        paidAt: { gte: inicio, lt: fimExclusive },
+      },
+      select: { paidAt: true, subtotalCents: true },
+    });
+    const buckets = new Map<string, number>();
+    for (const c of carts as any[]) {
+      if (!c.paidAt) continue;
+      const b = this.bucketKey(new Date(c.paidAt), granularity);
+      buckets.set(b, (buckets.get(b) || 0) + (Number(c.subtotalCents) || 0) / 100);
+    }
+    return Array.from(buckets.entries()).map(([bucket, faturamento]) => ({
+      bucket,
+      storeCode: 'SITE',
+      faturamento,
+    }));
+  }
+
   /** Time series do Flowops SITE no formato compatível com a do Giga */
   private async getFlowopsTimeseries(
     inicio: Date,
@@ -626,6 +717,7 @@ export class FaturamentoService {
       where: {
         status: { in: FaturamentoService.FATURAMENTO_STATUSES },
         wcDateCreated: { gte: inicioEfetivo, lt: fimExclusive },
+        source: 'site', // live tem série própria (getLiveTimeseries)
       },
       // Mesmo critério da função acima: SUM(quantity * unitPrice) — sem frete.
       select: {
@@ -659,6 +751,8 @@ export class FaturamentoService {
     gigaAnterior: any[],
     flowAtual: any,
     flowAnterior: any,
+    liveAtual: any,
+    liveAnterior: any,
     nomeLoja: Map<string, string>,
     siteStoreCode: string,
   ) {
@@ -678,31 +772,34 @@ export class FaturamentoService {
 
       const isSite = code === siteStoreCode;
 
-      // Pra SITE, soma Giga + Flowops
+      // Pra SITE, soma Giga (venda online WhatsApp) + Flowops (site efetivo) + LIVE
       const atual = isSite
         ? {
-            faturamento: ga.faturamento + flowAtual.faturamento,
-            cupons: ga.cupons + flowAtual.cupons,
-            pecas: ga.pecas + flowAtual.pecas,
+            faturamento: ga.faturamento + flowAtual.faturamento + liveAtual.faturamento,
+            cupons: ga.cupons + flowAtual.cupons + liveAtual.cupons,
+            pecas: ga.pecas + flowAtual.pecas + liveAtual.pecas,
             ticketMedio:
-              ga.cupons + flowAtual.cupons > 0
-                ? (ga.faturamento + flowAtual.faturamento) / (ga.cupons + flowAtual.cupons)
+              ga.cupons + flowAtual.cupons + liveAtual.cupons > 0
+                ? (ga.faturamento + flowAtual.faturamento + liveAtual.faturamento) /
+                  (ga.cupons + flowAtual.cupons + liveAtual.cupons)
                 : 0,
             breakdown: {
               giga: { faturamento: ga.faturamento, cupons: ga.cupons },
               flowops: { faturamento: flowAtual.faturamento, cupons: flowAtual.cupons },
+              live: { faturamento: liveAtual.faturamento, cupons: liveAtual.cupons },
             },
           }
         : { ...ga, breakdown: null };
 
       const anterior = isSite
         ? {
-            faturamento: gp.faturamento + flowAnterior.faturamento,
-            cupons: gp.cupons + flowAnterior.cupons,
-            pecas: gp.pecas + flowAnterior.pecas,
+            faturamento: gp.faturamento + flowAnterior.faturamento + liveAnterior.faturamento,
+            cupons: gp.cupons + flowAnterior.cupons + liveAnterior.cupons,
+            pecas: gp.pecas + flowAnterior.pecas + liveAnterior.pecas,
             ticketMedio:
-              gp.cupons + flowAnterior.cupons > 0
-                ? (gp.faturamento + flowAnterior.faturamento) / (gp.cupons + flowAnterior.cupons)
+              gp.cupons + flowAnterior.cupons + liveAnterior.cupons > 0
+                ? (gp.faturamento + flowAnterior.faturamento + liveAnterior.faturamento) /
+                  (gp.cupons + flowAnterior.cupons + liveAnterior.cupons)
                 : 0,
           }
         : { ...gp };
