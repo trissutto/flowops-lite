@@ -518,24 +518,38 @@ export default function LivePdvPage() {
     }
   }
 
-  // Cobra UMA cliente da fila: copia a mensagem personalizada (link curto /p/)
-  // e abre o canal — Direct (perfil, colar Ctrl+V) ou WhatsApp (texto já vai).
-  function chargeOne(c: Cart, canal: 'direct' | 'whats') {
+  // Cobra UMA cliente da fila: Direct abre o perfil (colar Ctrl+V);
+  // WhatsApp dispara DIRETO pela API do ManyChat (template aprovado — chega
+  // sozinho, sem abrir app). Se a API falhar, cai no wa.me como plano B.
+  async function chargeOne(c: Cart, canal: 'direct' | 'whats') {
     const link = c.payCode
       ? `${window.location.origin}/p/${c.payCode}`
       : `${window.location.origin}/pagar/${c.id}`;
     const first = (c.customerName || '').trim().split(/\s+/)[0] || 'cliente';
     const msg = `Oi, ${first}! 💜 Suas peças da live deram ${brl(c.totalCents)} + frete. Fecha sua compra aqui: ${link}`;
-    navigator.clipboard?.writeText(msg);
     if (canal === 'direct' && c.customerInstagram) {
+      navigator.clipboard?.writeText(msg);
       window.open(
         `https://www.instagram.com/${String(c.customerInstagram).replace(/^@/, '')}/`,
         '_blank',
         'noopener,noreferrer',
       );
     } else if (canal === 'whats' && c.customerPhone) {
-      const d = String(c.customerPhone).replace(/\D/g, '');
-      window.open(`https://wa.me/55${d}?text=${encodeURIComponent(msg)}`, '_blank', 'noopener,noreferrer');
+      try {
+        await api(`/live-pdv/carts/${c.id}/cobranca-whats`, { method: 'POST', body: JSON.stringify({}) });
+      } catch (e: any) {
+        // API indisponível/recusou → plano B: wa.me manual (comportamento antigo)
+        const raw = String(e?.message || '');
+        let m = 'ManyChat indisponível';
+        try {
+          const j = JSON.parse(raw.slice(raw.indexOf(': ') + 2));
+          if (j?.message) m = Array.isArray(j.message) ? j.message[0] : j.message;
+        } catch { /* cru */ }
+        alert(`Não consegui enviar pela API (${m}).\nAbrindo o WhatsApp manual como plano B — a mensagem já está copiada.`);
+        navigator.clipboard?.writeText(msg);
+        const d = String(c.customerPhone).replace(/\D/g, '');
+        window.open(`https://wa.me/55${d}?text=${encodeURIComponent(msg)}`, '_blank', 'noopener,noreferrer');
+      }
     }
     setChargeAllDone((s) => ({ ...s, [c.id]: true }));
     // Carimba no servidor — o ✓ aparece nos outros PCs também
@@ -1657,10 +1671,10 @@ export default function LivePdvPage() {
                       <button
                         type="button"
                         onClick={() => chargeOne(c, 'whats')}
-                        title="Abre o WhatsApp da cliente com a mensagem pronta"
+                        title="Envia a cobrança DIRETO no WhatsApp da cliente pela API do ManyChat (template aprovado) — sem abrir app"
                         className="shrink-0 rounded-lg bg-emerald-600 px-2.5 py-1.5 text-[11px] font-bold text-white hover:bg-emerald-700"
                       >
-                        WhatsApp
+                        WhatsApp 🤖
                       </button>
                     )}
                     <button

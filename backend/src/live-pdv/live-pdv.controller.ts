@@ -58,6 +58,16 @@ export class LivePdvController {
     return this.cobrancaWhats.executarCiclo();
   }
 
+  /**
+   * Cobrança MANUAL de UM carrinho pela API do ManyChat (botão "WhatsApp" da
+   * fila Cobrar Todas) — nada de abrir o app do WhatsApp na mão.
+   */
+  @Post('carts/:cartId/cobranca-whats')
+  cobrancaWhatsManual(@Req() req: any, @Param('cartId') cartId: string) {
+    this.requireAdmin(req);
+    return this.cobrancaWhats.cobrarManual(cartId);
+  }
+
   // ── Sessões ──
   @Post('sessions')
   createSession(
@@ -294,6 +304,15 @@ export class LivePdvController {
   migrateToSiteFlow(@Req() req: any) {
     this.requireAdmin(req);
     return this.svc.migrateSeparatingToSiteFlow();
+  }
+
+  // MIGRAÇÃO DOS BIPADOS (12/07, admin): pedidos que a migração normal pulou
+  // por já terem peça bipada — mantém a loja, cria pick-order 'separated' com
+  // baixa reconhecida (sem duplicar estoque). body.desde = ISO (só pagos ≥).
+  @Post('admin/migrate-bipados-to-site-flow')
+  migrateBipadosToSiteFlow(@Req() req: any, @Body() body: { desde?: string }) {
+    this.requireAdmin(req);
+    return this.svc.migrateBipadosToSiteFlow(body?.desde);
   }
 
   // Bip de conferência da separação (loja bipa o EAN/código; confere e baixa estoque)

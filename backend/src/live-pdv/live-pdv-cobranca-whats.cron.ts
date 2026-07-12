@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { ManychatService } from './manychat.service';
@@ -166,6 +166,63 @@ export class LivePdvCobrancaWhatsCron {
       this.logger.log(`[cobranca-whats] ciclo: ${enviados} enviada(s), ${falhas} falha(s) de ${carts.length} elegível(is)`);
     }
     return { enviados, falhas, elegiveis: carts.length };
+  }
+
+  /**
+   * COBRANÇA MANUAL (12/07, pedido do dono): o botão "WhatsApp" da fila
+   * "Cobrar todas" dispara DIRETO pela API do ManyChat (mesmo template da
+   * cobrança automática) em vez de abrir o app do WhatsApp na mão.
+   * Ignora o "parado 2h" e o "já enviada" (o operador decide quando cobrar),
+   * mas exige carrinho cobrável (aberto/aguardando, total>0, telefone).
+   */
+  async cobrarManual(cartId: string): Promise<{ ok: boolean }> {
+    const flowNs = (process.env.MANYCHAT_COBRANCA_FLOW_NS || '').trim();
+    if (!this.manychat.enabled || !flowNs) {
+      throw new BadRequestException(
+        'Cobrança via ManyChat não configurada — confira MANYCHAT_API_TOKEN e MANYCHAT_COBRANCA_FLOW_NS no Railway.',
+      );
+    }
+    const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
+    if (!cart) throw new NotFoundException('Carrinho não encontrado');
+    if (!['open', 'awaiting_payment'].includes(cart.status)) {
+      throw new BadRequestException('Carrinho não está mais em cobrança (já pago/cancelado).');
+    }
+    if (!(cart.totalCents > 0)) throw new BadRequestException('Carrinho sem valor.');
+    const phone = this.normalizePhone(cart.customerPhone);
+    if (!phone) throw new BadRequestException('Telefone da cliente inválido pra WhatsApp.');
+
+    let subId = await this.manychat.findSubscriberByPhone(phone);
+    if (!subId) {
+      const created = await this.manychat.createWhatsAppSubscriber(phone, cart.customerName);
+      subId = created.id;
+      if (!subId) {
+        throw new BadRequestException(`ManyChat não criou o contato: ${created.error || 'sem id'}`);
+      }
+    }
+    const primeiroNome = String(cart.customerName || '').trim().split(/\s+/)[0] || 'cliente';
+    const valor = ((cart.totalCents || 0) / 100).toLocaleString('pt-BR', {
+      style: 'currency',
+      currency: 'BRL',
+    });
+    const link = this.linkDoCarrinho(cart);
+    await this.manychat.setCustomFieldByName(subId, 'cobranca_nome', primeiroNome);
+    await this.manychat.setCustomFieldByName(subId, 'cobranca_valor', valor);
+    await this.manychat.setCustomFieldByName(subId, 'cobranca_link', link);
+    const r = await this.manychat.sendFlow(subId, flowNs);
+    if (!r.ok) {
+      await this.logIntegracao('live.cobranca-whats.manual.fail', { cartId, erro: r.error }, 500);
+      throw new BadRequestException(`ManyChat recusou o envio: ${r.error || 'erro desconhecido'}`);
+    }
+    await (this.prisma as any).livePdvCart.update({
+      where: { id: cartId },
+      data: { cobrancaWhatsEnviadaAt: new Date() },
+    });
+    await this.logIntegracao(
+      'live.cobranca-whats.manual.sent',
+      { cartId, phone: `...${phone.slice(-4)}`, valorCents: cart.totalCents, link },
+      200,
+    );
+    return { ok: true };
   }
 
   private async marcarTentativa(cartId: string, tentativas: number, motivo?: string) {
