@@ -145,6 +145,9 @@ export class ManychatService {
         method: 'POST',
         headers: this.authHeaders(),
         body: JSON.stringify({
+          // A API EXIGE `phone` (ou email) — mandar SÓ whatsapp_phone devolve
+          // "Validation error" (caso real 12/07, botão WhatsApp da fila).
+          phone: '+' + phoneDigits,
           whatsapp_phone: '+' + phoneDigits,
           first_name: partes[0] || undefined,
           last_name: partes.slice(1).join(' ') || undefined,
@@ -154,7 +157,10 @@ export class ManychatService {
       });
       const data: any = await resp.json().catch(() => ({}));
       if (resp.ok && data?.status === 'success' && data?.data?.id) return { id: String(data.data.id) };
-      return { id: null, error: (data?.message || `HTTP ${resp.status}`).slice(0, 200) };
+      // inclui os detalhes de validação (campo a campo) pro erro ser acionável
+      const det = data?.details ? ` ${JSON.stringify(data.details)}` : '';
+      this.logger.warn(`[manychat] createSubscriber falhou: ${JSON.stringify(data).slice(0, 300)}`);
+      return { id: null, error: `${data?.message || `HTTP ${resp.status}`}${det}`.slice(0, 250) };
     } catch (e: any) {
       return { id: null, error: e?.message || 'falha de rede' };
     }
