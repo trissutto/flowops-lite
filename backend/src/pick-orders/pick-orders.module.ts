@@ -5,9 +5,11 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { WebsocketModule } from '../websocket/websocket.module';
 import { WooCommerceModule } from '../woocommerce/woocommerce.module';
 import { ErpModule } from '../erp/erp.module';
+import { LivePdvModule } from '../live-pdv/live-pdv.module';
 
 @Module({
-  imports: [PrismaModule, WebsocketModule, forwardRef(() => WooCommerceModule), ErpModule],
+  // LivePdvModule → ManychatService (WhatsApp de rastreio pra cliente da LIVE)
+  imports: [PrismaModule, WebsocketModule, forwardRef(() => WooCommerceModule), ErpModule, LivePdvModule],
   controllers: [PickOrdersController],
   providers: [PickOrdersService],
   exports: [PickOrdersService],
