@@ -2140,6 +2140,10 @@ export default function LivePdvPage() {
               onConfirmExternal={confirmExternalPay}
               onReleaseSeparation={releaseSeparation}
               releasing={releasing}
+              onRetracted={async (fresh) => {
+                setCart(fresh);
+                await refreshCarts();
+              }}
             />
 
             {/* Cadastradas pelo link (ManyChat) aguardando — SEMPRE visível durante a
@@ -2531,6 +2535,7 @@ function CartPanel({
   onConfirmExternal,
   onReleaseSeparation,
   releasing,
+  onRetracted,
 }: {
   cart: Cart | null;
   activeCustomer: ActiveCustomer | null;
@@ -2552,6 +2557,7 @@ function CartPanel({
   onConfirmExternal: () => void;
   onReleaseSeparation: () => void;
   releasing: boolean;
+  onRetracted: (fresh: Cart) => void | Promise<void>;
 }) {
   const [linkCopied, setLinkCopied] = useState(false);
   // Rastreio copiado (feedback visual por item)
@@ -2570,6 +2576,51 @@ function CartPanel({
   const [dmStatus, setDmStatus] = useState<string | null>(null);
   // Carrinho já pago/em separação: esconde ações de cobrança (link /pagar, frete)
   const cartPago = !!cart && ['paid', 'separating', 'shipped', 'delivered'].includes(cart.status);
+
+  // RECOLHER pedido: puxa TODOS os itens de volta pra UMA loja (ex.: matriz)
+  // e tira das filas de separação — pra repensar roteamento/frete de remessa.
+  const [retractOpen, setRetractOpen] = useState(false);
+  const [retractStores, setRetractStores] = useState<{ code: string; name: string }[]>([]);
+  const [retractCode, setRetractCode] = useState('');
+  const [retracting, setRetracting] = useState(false);
+  const podeRecolher = !!cart && ['paid', 'separating'].includes(cart.status);
+  async function openRetract() {
+    setRetractOpen(true);
+    try {
+      const stores = await api<any[]>('/stores');
+      const act = (stores || [])
+        .filter((s: any) => s.active !== false)
+        .map((s: any) => ({ code: String(s.code), name: String(s.name) }));
+      setRetractStores(act);
+      // pré-seleciona a matriz se existir (é o caso de uso típico)
+      const matriz = act.find((s) => /matriz/i.test(s.name));
+      setRetractCode(matriz?.code || act[0]?.code || '');
+    } catch {
+      setRetractStores([]);
+    }
+  }
+  async function confirmRetract() {
+    if (!cart || !retractCode || retracting) return;
+    setRetracting(true);
+    try {
+      const fresh = await api<Cart>(`/live-pdv/carts/${cart.id}/retract-separation`, {
+        method: 'POST',
+        body: JSON.stringify({ storeCode: retractCode }),
+      });
+      setRetractOpen(false);
+      await onRetracted(fresh);
+    } catch (e: any) {
+      const raw = String(e?.message || '');
+      let msg = 'Não consegui recolher o pedido.';
+      try {
+        const j = JSON.parse(raw.slice(raw.indexOf(': ') + 2));
+        if (j?.message) msg = Array.isArray(j.message) ? j.message[0] : j.message;
+      } catch { /* mensagem crua */ }
+      alert(msg);
+    } finally {
+      setRetracting(false);
+    }
+  }
 
   // Manda a DM sozinho pela API do ManyChat — chega mesmo com o Insta fechado,
   // porque sai da conta da loja (janela de 24h de quem comentou/se cadastrou).
@@ -2601,6 +2652,46 @@ function CartPanel({
   const payMsg = `Oi! 💜 É pra fechar sua compra da live: ${payLink}`;
   return (
     <div className="lg:sticky lg:top-16 lg:h-fit">
+      {/* Modal RECOLHER PEDIDO: junta todos os itens numa loja só */}
+      {retractOpen && cart && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-sm rounded-xl bg-white p-4 shadow-xl">
+            <div className="mb-1 text-base font-bold text-slate-800">↩ Recolher pedido</div>
+            <p className="mb-3 text-xs text-slate-500">
+              Todos os itens saem das filas das lojas e ficam com origem numa loja só.
+              O pedido volta pra <b>PAGO</b> — você envia pra separação de novo quando decidir.
+              Peça já bipada bloqueia (estoque já baixou na loja).
+            </p>
+            <label className="mb-1 block text-xs font-semibold text-slate-600">Levar tudo pra:</label>
+            <select
+              value={retractCode}
+              onChange={(e) => setRetractCode(e.target.value)}
+              className="mb-3 w-full rounded-lg border border-slate-300 p-2 text-sm"
+            >
+              {retractStores.map((s) => (
+                <option key={s.code} value={s.code}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setRetractOpen(false)}
+                className="flex-1 rounded-lg border border-slate-300 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={confirmRetract}
+                disabled={retracting || !retractCode}
+                className="flex-1 rounded-lg bg-amber-500 py-2 text-sm font-bold text-white hover:bg-amber-600 disabled:opacity-50"
+              >
+                {retracting ? 'Recolhendo…' : 'Recolher'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
         <div className="flex items-center justify-between border-b border-slate-100 p-3">
           <div className="flex items-center gap-2 font-semibold text-slate-800">
@@ -2858,6 +2949,13 @@ function CartPanel({
                 >
                   Conferir / completar dados
                 </button>
+                <button
+                  onClick={openRetract}
+                  className="w-full rounded-lg border border-amber-300 bg-white py-1.5 text-xs font-semibold text-amber-700 hover:bg-amber-100"
+                  title="Junta todos os itens numa loja só (ex.: matriz) antes de liberar — evita remessa/frete de várias lojas"
+                >
+                  ↩ Recolher pedido pra UMA loja
+                </button>
               </div>
             ) : paid ? (
               <div className="mt-3 flex flex-col items-center gap-1 rounded-lg bg-emerald-50 p-4 text-emerald-700">
@@ -2870,6 +2968,15 @@ function CartPanel({
                 >
                   Continuar atendendo →
                 </button>
+                {podeRecolher && (
+                  <button
+                    onClick={openRetract}
+                    className="mt-1 w-full rounded-lg border border-emerald-300 bg-white py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
+                    title="Tira o pedido das filas das lojas e junta tudo numa loja só (ex.: matriz) — o pedido volta pra PAGO e você libera de novo quando decidir"
+                  >
+                    ↩ Recolher pedido das lojas
+                  </button>
+                )}
               </div>
             ) : qr?.link ? (
               <div className="mt-3 flex flex-col gap-2 rounded-lg border border-slate-200 p-3">
