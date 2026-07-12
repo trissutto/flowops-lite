@@ -128,8 +128,8 @@ export class LivePdvCobrancaWhatsCron {
         continue;
       }
       try {
-        // 1) assinante WhatsApp pelo telefone (acha ou cria)
-        let subId = await this.manychat.findSubscriberByPhone(phone);
+        // 1) assinante WhatsApp pelo telefone (busca em camadas; cria em último caso)
+        let subId = await this.manychat.findWhatsAppSubscriber(phone);
         if (!subId) {
           const created = await this.manychat.createWhatsAppSubscriber(phone, cart.customerName);
           subId = created.id;
@@ -191,12 +191,16 @@ export class LivePdvCobrancaWhatsCron {
     const phone = this.normalizePhone(cart.customerPhone);
     if (!phone) throw new BadRequestException('Telefone da cliente inválido pra WhatsApp.');
 
-    let subId = await this.manychat.findSubscriberByPhone(phone);
+    let subId = await this.manychat.findWhatsAppSubscriber(phone);
     if (!subId) {
       const created = await this.manychat.createWhatsAppSubscriber(phone, cart.customerName);
       subId = created.id;
       if (!subId) {
-        throw new BadRequestException(`ManyChat não criou o contato: ${created.error || 'sem id'}`);
+        throw new BadRequestException(
+          `ManyChat não achou nem criou o contato: ${created.error || 'sem id'}. ` +
+            `Se o erro diz "already exists", o contato existe mas sem busca possível — ` +
+            `confira se a regra do campo wa_phone está ativa no ManyChat.`,
+        );
       }
     }
     const primeiroNome = String(cart.customerName || '').trim().split(/\s+/)[0] || 'cliente';

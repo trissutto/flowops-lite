@@ -1873,7 +1873,7 @@ export class PickOrdersService {
               ? digits
               : null;
         if (!phone) return;
-        let subId = await this.manychat.findSubscriberByPhone(phone);
+        let subId = await this.manychat.findWhatsAppSubscriber(phone);
         if (!subId) {
           const created = await this.manychat.createWhatsAppSubscriber(phone, order.customerName);
           subId = created.id;
