@@ -232,6 +232,10 @@ function SeparacaoPageInner() {
   const [storeCode, setStoreCode] = useState<string>('');
   const [stores, setStores] = useState<Array<{ code: string; name: string; openOrders: number }>>([]);
 
+  // Filtro de ORIGEM: '' = todos · 'site' (WooCommerce) · 'live' (Live Commerce).
+  // Pedido da live entra na MESMA fila (source='live', nº "LIVE-<comanda>").
+  const [sourceFilter, setSourceFilter] = useState<'' | 'site' | 'live'>('');
+
   // Carrega lojas com contagem de pedidos em aberto
   useEffect(() => {
     (async () => {
@@ -1077,6 +1081,27 @@ function SeparacaoPageInner() {
           </button>
         )}
 
+        {/* ─── FILTRO ORIGEM (SITE / LIVE) ─── */}
+        <div className="flex items-center gap-1 ml-3">
+          {([['', 'Todos'], ['site', 'Site'], ['live', 'Live']] as const).map(([val, label]) => (
+            <button
+              key={val || 'todos'}
+              type="button"
+              onClick={() => setSourceFilter(val)}
+              className={`px-3 py-1.5 rounded-full text-xs font-bold border transition ${
+                sourceFilter === val
+                  ? val === 'live'
+                    ? 'bg-rose-600 border-rose-600 text-white'
+                    : 'bg-slate-800 border-slate-800 text-white'
+                  : 'bg-white border-slate-300 text-slate-600 hover:bg-slate-100'
+              }`}
+              title={val === 'live' ? 'Só pedidos da Live Commerce' : val === 'site' ? 'Só pedidos do site (WooCommerce)' : 'Site + Live'}
+            >
+              {val === 'live' ? '🔴 ' : ''}{label}
+            </button>
+          ))}
+        </div>
+
         {/* ─── FILTRO LOJA RESPONSÁVEL ─── */}
         <div className="flex items-center gap-2 ml-auto">
           <span className="text-xs font-bold uppercase tracking-wider text-slate-600">
@@ -1219,13 +1244,13 @@ function SeparacaoPageInner() {
       {/* Lista */}
       {status === 'carrinhos' ? (
         <CarrinhosTab />
-      ) : !loading && orders.length === 0 ? (
+      ) : !loading && orders.filter((o: any) => !sourceFilter || (o.orderSource || 'site') === sourceFilter).length === 0 ? (
         <div className="bg-white rounded-lg shadow p-8 text-center text-slate-400">
-          Nenhum pedido com esse status no momento. 🎉
+          Nenhum pedido {sourceFilter === 'live' ? 'da LIVE ' : sourceFilter === 'site' ? 'do site ' : ''}com esse status no momento. 🎉
         </div>
       ) : (
         <div className="space-y-2">
-          {orders.map((o) => {
+          {orders.filter((o: any) => !sourceFilter || (o.orderSource || 'site') === sourceFilter).map((o) => {
             const p = preview[o.id];
             const err = errorByOrder[o.id];
             const isBusy = busy[o.id];
@@ -1274,6 +1299,11 @@ function SeparacaoPageInner() {
                       >
                         #{o.number}
                       </Link>
+                      {(o as any).orderSource === 'live' && (
+                        <span className="ml-1 inline-block rounded bg-rose-600 px-1.5 py-0.5 text-[10px] font-bold text-white align-middle">
+                          🔴 LIVE
+                        </span>
+                      )}
                       <div className="text-xs text-slate-500">{fmtDate(o.dateCreatedGmt)} atrás</div>
                     </div>
                     <div className="sm:col-span-4 sm:truncate min-w-0">

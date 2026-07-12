@@ -1549,7 +1549,7 @@ export class PickOrdersService {
           : {}),
       },
       include: {
-        order: { select: { wcOrderNumber: true, wcOrderId: true, customerName: true } },
+        order: { select: { wcOrderNumber: true, wcOrderId: true, customerName: true, source: true, liveCartId: true } },
         store: { select: { code: true, name: true } },
       },
     });
@@ -1594,7 +1594,21 @@ export class PickOrdersService {
     //
     //  Falha aqui NÃO derruba a ação da loja — só loga e anexa warning na resposta.
     // ════════════════════════════════════════════════════════════════════════
-    const wcOrderId = updated.order?.wcOrderId ? Number(updated.order.wcOrderId) : null;
+    const isLiveOrder = (updated.order as any)?.source === 'live';
+    // Pedido da LIVE: espelha o status de volta no carrinho da live (console
+    // da operadora/dashboards) — e NUNCA sincroniza com o WooCommerce (o
+    // wcOrderId é sintético; não existe no site).
+    if (isLiveOrder && (updated.order as any)?.liveCartId) {
+      const liveCartId = (updated.order as any).liveCartId as string;
+      if (input.status === 'shipped' && allShipped) {
+        await (this.prisma as any).livePdvCart
+          .update({ where: { id: liveCartId }, data: { status: 'shipped' } })
+          .catch(() => {});
+      }
+    }
+
+    const wcOrderId =
+      !isLiveOrder && updated.order?.wcOrderId ? Number(updated.order.wcOrderId) : null;
     const storeLabel = updated.store
       ? `${updated.store.name} (${updated.store.code})`
       : 'Loja';

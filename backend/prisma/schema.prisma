@@ -330,6 +330,11 @@ model Order {
   id              String   @id @default(uuid())
   wcOrderId       Int      @unique @map("wc_order_id")
   wcOrderNumber   String?  @map("wc_order_number")
+  // Origem do pedido: 'site' (WooCommerce) ou 'live' (Live Commerce).
+  // Pedido da LIVE entra no MESMO trilho do site (decisão do dono, 12/07):
+  // wcOrderId sintético (900M+), sem sync com WooCommerce (guards por source).
+  source          String   @default("site")
+  liveCartId      String?  @unique @map("live_cart_id") // LivePdvCart.id de origem
   status          String   // pending, routing, awaiting_stock, separating, ready, shipped, delivered, cancelled
   customerName    String?  @map("customer_name")
   customerEmail   String?  @map("customer_email")
@@ -362,6 +367,7 @@ model Order {
 
   @@index([status])
   @@index([sellerId])
+  @@index([source])
   @@map("orders")
 }
 
@@ -3475,6 +3481,11 @@ model LivePdvCart {
   isPickup          Boolean  @default(false) @map("is_pickup")
   pickupStoreCode   String?  @map("pickup_store_code")
   pickupStoreName   String?  @map("pickup_store_name")
+  // TRILHO DO SITE (12/07): ao liberar a separação, a venda da live vira um
+  // Order normal (source='live') e segue o fluxo do site (pick-orders, bip,
+  // baixa, envio). orderId aponta pro Order gerado; o cart vira só o registro
+  // da venda na live (cobrança/pagamento) + espelho de status.
+  orderId           String?  @unique @map("order_id")
   createdAt         DateTime @default(now()) @map("created_at")
   updatedAt         DateTime @updatedAt @map("updated_at")
 
