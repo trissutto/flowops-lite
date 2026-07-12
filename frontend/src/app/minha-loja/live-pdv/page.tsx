@@ -114,6 +114,15 @@ interface ActiveCustomer {
 const brl = (cents: number) =>
   ((cents || 0) / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
+// Base dos LINKS QUE A CLIENTE RECEBE (cobrança/pagamento). O domínio oficial
+// é www.lurdsplussize.com.br — o console pode estar rodando na vercel.app
+// (app desktop), então NUNCA usar window.location.origin pra link de cliente.
+// Em localhost (dev/preview) mantém o origin pra testar.
+const publicBase = () =>
+  typeof window !== 'undefined' && /localhost|127\.0\.0\.1/.test(window.location.hostname)
+    ? window.location.origin
+    : 'https://www.lurdsplussize.com.br';
+
 const STATUS_LABEL: Record<string, string> = {
   open: 'Aberto',
   awaiting_payment: 'Aguardando pagamento',
@@ -523,8 +532,8 @@ export default function LivePdvPage() {
   // sozinho, sem abrir app). Se a API falhar, cai no wa.me como plano B.
   async function chargeOne(c: Cart, canal: 'direct' | 'whats') {
     const link = c.payCode
-      ? `${window.location.origin}/p/${c.payCode}`
-      : `${window.location.origin}/pagar/${c.id}`;
+      ? `${publicBase()}/p/${c.payCode}`
+      : `${publicBase()}/pagar/${c.id}`;
     const first = (c.customerName || '').trim().split(/\s+/)[0] || 'cliente';
     const msg = `Oi, ${first}! 💜 Suas peças da live deram ${brl(c.totalCents)} + frete. Fecha sua compra aqui: ${link}`;
     if (canal === 'direct' && c.customerInstagram) {
@@ -2660,8 +2669,8 @@ function CartPanel({
   // Link curto (/p/<code>) quando o carrinho tem payCode; senão o longo (/pagar/<uuid>)
   const payLink = cart && !cartPago && typeof window !== 'undefined'
     ? (cart.payCode
-        ? `${window.location.origin}/p/${cart.payCode}`
-        : `${window.location.origin}/pagar/${cart.id}`)
+        ? `${publicBase()}/p/${cart.payCode}`
+        : `${publicBase()}/pagar/${cart.id}`)
     : '';
   const payMsg = `Oi! 💜 É pra fechar sua compra da live: ${payLink}`;
   return (
