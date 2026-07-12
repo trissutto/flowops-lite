@@ -121,17 +121,74 @@ export class ManychatService {
 
   /** Acha assinante pelo telefone (E.164 sem +). Retorna id ou null. */
   async findSubscriberByPhone(phoneDigits: string): Promise<string | null> {
+    // Formato varia por conta/origem do contato — tenta com e sem o "+"
+    for (const q of ['+' + phoneDigits, phoneDigits]) {
+      try {
+        const resp = await fetch(
+          `${this.BASE}/fb/subscriber/findBySystemField?phone=${encodeURIComponent(q)}`,
+          { headers: this.authHeaders() },
+        );
+        const data: any = await resp.json().catch(() => ({}));
+        if (resp.ok && data?.status === 'success' && data?.data?.id) return String(data.data.id);
+      } catch { /* tenta o próximo formato */ }
+    }
+    return null;
+  }
+
+  /** Cache do id numérico dos custom fields (nome → field_id). */
+  private customFieldIdCache = new Map<string, number>();
+
+  private async getCustomFieldId(name: string): Promise<number | null> {
+    if (this.customFieldIdCache.has(name)) return this.customFieldIdCache.get(name)!;
+    try {
+      const resp = await fetch(`${this.BASE}/fb/page/getCustomFields`, { headers: this.authHeaders() });
+      const data: any = await resp.json().catch(() => ({}));
+      if (resp.ok && data?.status === 'success' && Array.isArray(data.data)) {
+        for (const f of data.data) {
+          if (f?.name && f?.id) this.customFieldIdCache.set(String(f.name), Number(f.id));
+        }
+      }
+      return this.customFieldIdCache.get(name) ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Busca assinante por CUSTOM FIELD (ex.: wa_phone = espelho do WhatsApp ID). */
+  async findSubscriberByCustomField(fieldName: string, value: string): Promise<string | null> {
+    const fieldId = await this.getCustomFieldId(fieldName);
+    if (!fieldId) return null;
     try {
       const resp = await fetch(
-        `${this.BASE}/fb/subscriber/findBySystemField?phone=${encodeURIComponent('+' + phoneDigits)}`,
+        `${this.BASE}/fb/subscriber/findByCustomField?field_id=${fieldId}&field_value=${encodeURIComponent(value)}`,
         { headers: this.authHeaders() },
       );
       const data: any = await resp.json().catch(() => ({}));
-      if (resp.ok && data?.status === 'success' && data?.data?.id) return String(data.data.id);
+      const list = Array.isArray(data?.data) ? data.data : data?.data ? [data.data] : [];
+      if (resp.ok && data?.status === 'success' && list[0]?.id) return String(list[0].id);
       return null;
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Busca DEFINITIVA de assinante WhatsApp pelo telefone, em camadas:
+   *  1. findBySystemField phone (com e sem "+") — acha quem tem o campo
+   *     Telefone preenchido;
+   *  2. findByCustomField wa_phone — campo-ESPELHO do WhatsApp ID, populado
+   *     por regra no ManyChat (workaround oficial: a API NÃO busca por wa_id,
+   *     e contato criado organicamente pelo WhatsApp fica com Telefone vazio —
+   *     caso real 12/07: "This WhatsApp ID already exists" no createSubscriber).
+   */
+  async findWhatsAppSubscriber(phoneDigits: string): Promise<string | null> {
+    const byPhone = await this.findSubscriberByPhone(phoneDigits);
+    if (byPhone) return byPhone;
+    for (const v of [phoneDigits, '+' + phoneDigits]) {
+      const byField = await this.findSubscriberByCustomField('wa_phone', v);
+      if (byField) return byField;
+    }
+    return null;
   }
 
   /**
