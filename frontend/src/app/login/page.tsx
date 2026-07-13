@@ -34,6 +34,8 @@ export default function LoginPage() {
         router.push('/minha-loja/pdv');
       } else if (res.user?.role === 'contador') {
         router.push('/retaguarda/relatorio-fiscal');
+      } else if (res.user?.role === 'franquias' || res.user?.role === 'master_franquia') {
+        router.push('/franquias');
       } else {
         router.push('/');
       }

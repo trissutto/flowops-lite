@@ -53,7 +53,7 @@ export class AuthController {
   @Post('impersonate-store')
   async impersonateStore(@Req() req: any, @Body() dto: ImpersonateStoreDto) {
     const role = req?.user?.role;
-    if (role !== 'admin' && role !== 'master') {
+    if (role !== 'admin' && role !== 'master' && role !== 'master_franquia') {
       throw new ForbiddenException('Apenas admin/master pode entrar como loja');
     }
     const adminUserId = req.user.userId || req.user.sub;

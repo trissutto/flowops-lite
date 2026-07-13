@@ -85,7 +85,9 @@ export default function NotasEmitidasPage() {
       .then((me) => {
         const adminLike = me?.role === 'admin' || me?.role === 'master';
         setIsAdmin(adminLike);
-        setReadOnly(me?.role === 'franquias');
+        // master_franquia também consulta aqui em modo leitura — ação (cancelar/
+        // corrigir nota) ele faz DENTRO do PDV da loja via Entrar PDV.
+        setReadOnly(me?.role === 'franquias' || me?.role === 'master_franquia');
         // Escopa pra loja em que está operando. No PDV de ITANHAÉM (role=store,
         // storeCode=01) → só notas de ITANHAÉM. Admin/master da matriz sem loja
         // específica fica em "Todas".
