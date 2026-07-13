@@ -457,6 +457,54 @@ export default function PedidoDetailPage() {
   }
 
   /**
+   * "Recalcular automático" do banner de PROBLEMA: re-roteia SÓ os pick-orders
+   * das lojas que reportaram issue (swap cirúrgico via pickOrderId, um a um).
+   * As outras lojas do pedido — inclusive as que JÁ ENVIARAM — não são tocadas.
+   * Bug real 13/07: o botão recalculava o pedido INTEIRO e "trocava tudo".
+   */
+  async function recalcularLojasComProblema() {
+    const issues = liveStatus.filter((r) => r.issueReason && r.id);
+    if (!issues.length) return;
+    const nomes = issues.map((r) => `${r.storeName || r.storeCode}`).join(', ');
+    if (!confirm(
+      `Re-rotear SÓ as peças de: ${nomes}?\n\n` +
+      `O sistema escolhe outra loja automaticamente (excluindo a que reportou o problema). ` +
+      `As demais lojas deste pedido NÃO são tocadas.`,
+    )) return;
+    setSepLoading(true);
+    setSepError(null);
+    try {
+      const resumo: string[] = [];
+      for (const r of issues) {
+        const res = await api<{
+          ok: boolean;
+          message?: string;
+          pickOrders?: Array<{ storeCode: string }>;
+          newStoreCode?: string;
+        }>(`/orders/wc/${wcId}/recalculate-separation`, {
+          method: 'POST',
+          body: JSON.stringify({ pickOrderId: r.id }),
+        });
+        if (res.ok) {
+          const destino = res.newStoreCode || res.pickOrders?.map((p) => p.storeCode).join('+') || 'nova loja';
+          resumo.push(`${r.storeCode} → ${destino}`);
+        } else {
+          resumo.push(`${r.storeCode}: ${res.message || 'nenhuma loja com estoque'}`);
+        }
+      }
+      setFlash(`✓ ${resumo.join(' · ')}`);
+      setTimeout(() => setFlash(null), 6000);
+      api<typeof liveStatus>(`/pick-orders/by-wc/${wcId}`)
+        .then((data) => setLiveStatus(Array.isArray(data) ? data : []))
+        .catch(() => {});
+    } catch (e: any) {
+      setSepError(e?.message || 'Falha ao re-rotear a loja com problema.');
+    } finally {
+      setSepLoading(false);
+    }
+  }
+
+  /**
    * Troca manual da loja de origem — usuário escolhe pular uma loja específica
    * (ex: "não quero MOEMA enviar, quero outra loja"). Chama o mesmo
    * recalculate-separation mas forçando `excludeStoreCodes: [storeCode]`.
@@ -687,12 +735,18 @@ export default function PedidoDetailPage() {
    * excluindo-loja e matriz decide.
    */
   async function applyPickStore(pickedCode: string, pickedName: string) {
-    if (!confirm(
-      `Forçar o pedido pra ${pickedName} (${pickedCode})?\n\n` +
-      `O sistema vai excluir TODAS as outras lojas do roteamento. Se ` +
-      `${pickedCode} não tiver estoque suficiente do que falta, o pedido ` +
-      `fica pending.`,
-    )) return;
+    // Texto do confirm reflete o MODO: swap cirúrgico (só a loja de origem
+    // muda) × recalculate total (pedido inteiro forçado pra loja escolhida).
+    const msg = swapTarget
+      ? `Trocar ${swapTarget.fromStoreCode} por ${pickedName} (${pickedCode})?\n\n` +
+        `SÓ as peças que estavam com ${swapTarget.fromStoreCode} mudam de loja — ` +
+        `as outras lojas deste pedido NÃO são tocadas. Se ${pickedCode} não ` +
+        `tiver estoque, nada muda.`
+      : `Forçar o pedido INTEIRO pra ${pickedName} (${pickedCode})?\n\n` +
+        `O sistema vai excluir TODAS as outras lojas do roteamento. Se ` +
+        `${pickedCode} não tiver estoque suficiente do que falta, o pedido ` +
+        `fica pending.`;
+    if (!confirm(msg)) return;
 
     setPickStoreApplying(pickedCode);
     setPickStoreError(null);
@@ -1235,19 +1289,33 @@ export default function PedidoDetailPage() {
                     </div>
                   ))}
                 <div className="mt-3 flex flex-wrap gap-2">
+                  {/* CIRÚRGICO: os dois botões agem SÓ na(s) loja(s) que reportou(aram)
+                      problema — as outras lojas do pedido (inclusive as que já
+                      enviaram) ficam intocadas. Bug real 13/07: recalculava tudo. */}
                   <button
-                    onClick={loadSeparation}
+                    onClick={recalcularLojasComProblema}
                     disabled={sepLoading}
                     className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-semibold bg-white border border-red-400 text-red-800 hover:bg-red-50 disabled:opacity-60"
-                    title="Deixa o sistema escolher automaticamente (exclui a loja que reportou)"
+                    title="Re-roteia SÓ as peças da loja com problema (exclui ela); as outras lojas não mudam"
                   >
-                    🔁 Recalcular automático
+                    🔁 Recalcular automático (só a loja com problema)
                   </button>
                   <button
-                    onClick={openPickStoreModal}
+                    onClick={() => {
+                      const issue = liveStatus.find((r) => r.issueReason && r.id);
+                      if (issue) {
+                        setSwapTarget({
+                          pickOrderId: issue.id,
+                          fromStoreCode: issue.storeCode!,
+                          fromStoreName: issue.storeName,
+                          fromStatus: issue.status,
+                        });
+                      }
+                      openPickStoreModal();
+                    }}
                     disabled={sepLoading}
                     className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-semibold bg-red-600 text-white hover:bg-red-700 disabled:opacity-60"
-                    title="Abre lista de lojas candidatas pra você escolher manualmente"
+                    title="Escolhe a loja que assume SÓ as peças da loja com problema; as outras lojas não mudam"
                   >
                     🎯 Escolher outra loja manualmente
                   </button>
