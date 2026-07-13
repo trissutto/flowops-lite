@@ -146,6 +146,9 @@ export class LivePayPublicController {
       celular?: string;
       cpf?: string;
       email?: string;
+      // CEP: no fluxo normal vem do cálculo de frete; no completar-depois-de-
+      // pago (PIX/link gerado no console) a cliente informa aqui.
+      cep?: string;
     },
   ) {
     const cartId = await this.svc.resolvePublicCartId(key);
@@ -169,6 +172,10 @@ export class LivePayPublicController {
       String(cart.customerCidade || '').trim() &&
       String(cart.customerUf || '').trim()
     );
+    // CEP enviado direto (completar-depois-de-pago): salva se válido.
+    const cepDigits = String(body?.cep || '').replace(/\D/g, '');
+    if (cepDigits.length === 8) data.customerCep = cepDigits;
+
     // Endereço: obrigatório só no modo ENTREGA (retirada em loja dispensa)
     if (!cart.isPickup && (enderecoEnviado || !jaTemEndereco)) {
       data.customerEndereco = clean(body?.endereco, 160);
