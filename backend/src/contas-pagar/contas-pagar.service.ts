@@ -164,9 +164,14 @@ export class ContasPagarService {
     if (f.especieId) where.especieId = f.especieId;
     if (f.emMaos) where.emMaos = true;
     if (f.de || f.ate) {
-      where.vencimento = {};
-      if (f.de) where.vencimento.gte = new Date(`${f.de}T00:00:00.000Z`);
-      if (f.ate) where.vencimento.lte = new Date(`${f.ate}T00:00:00.000Z`);
+      // Recorte de tempo: no filtro PAGAS o De/Até corta pela data do
+      // PAGAMENTO ("o que paguei no período") — a conta baixada hoje quase
+      // sempre venceu em outro dia, então cortar por vencimento vinha vazio
+      // (bug real 13/07). Pendentes/todas seguem cortando por vencimento.
+      const campo = f.status === 'pagas' ? 'pagamento' : 'vencimento';
+      where[campo] = {};
+      if (f.de) where[campo].gte = new Date(`${f.de}T00:00:00.000Z`);
+      if (f.ate) where[campo].lte = new Date(`${f.ate}T00:00:00.000Z`);
     }
     if (!f.incluirRestritas) {
       const restritas = await this.especiesRestritasIds();
