@@ -3774,6 +3774,53 @@ function LegendaModal({ sessionId, onClose }: { sessionId: string; onClose: () =
 
   const pendentes = rows.filter((r) => r.refCode.trim() && (!r.salva || r.status !== 'ok')).length;
 
+  // CARTÕES IMPRESSOS pra apresentadora mostrar na câmera (pedido do dono
+  // 13/07): nº da legenda em Arial Black com ~7cm de altura, valor com ~5cm,
+  // 2cm de vão, centralizados — e ESPELHADOS (a câmera da live inverte a
+  // imagem; sem espelhar aparece ao contrário). Cabem 2 cartões por A4 com
+  // linha de corte no meio (7+2+5 = 14cm por cartão — 8 por folha não fecha
+  // nessas medidas). O valor encolhe sozinho se não couber na largura.
+  function imprimirCartoes() {
+    const prontas = rows.filter((r) => r.status === 'ok' && r.grade?.found && r.atalho.trim());
+    if (!prontas.length) {
+      alert('Nenhuma linha válida (verde) pra imprimir — cadastre e valide os atalhos primeiro.');
+      return;
+    }
+    const valor = (cents: number) => ((cents || 0) / 100).toFixed(2).replace('.', ',');
+    const cards = prontas
+      .map(
+        (r) =>
+          `<div class="card"><div class="mirror"><div class="num">${r.atalho}</div><div class="val">${valor(r.grade.priceCents)}</div></div></div>`,
+      )
+      .join('');
+    const w = window.open('', 'lurds_legenda_print', 'width=820,height=640');
+    if (!w) {
+      alert('Popup bloqueado — libere popups pra imprimir.');
+      return;
+    }
+    w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Legendas da live (espelhado)</title>
+      <style>
+        @page { size: A4 portrait; margin: 0; }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Arial Black', 'Arial Bold', Arial, sans-serif; font-weight: 900; }
+        .card { height: 14.85cm; width: 21cm; display: flex; align-items: center; justify-content: center; page-break-inside: avoid; border-bottom: 1px dashed #aaa; overflow: hidden; }
+        .card:nth-child(2n) { border-bottom: none; page-break-after: always; }
+        .mirror { transform: scaleX(-1); text-align: center; }
+        .num { font-size: 9.6cm; line-height: 1; letter-spacing: 0.15cm; }
+        .val { font-size: 6.7cm; line-height: 1; margin-top: 2cm; white-space: nowrap; }
+      </style></head><body>${cards}
+      <script>
+        document.querySelectorAll('.val').forEach(function (el) {
+          var max = el.closest('.card').clientWidth - 40;
+          var size = 6.7;
+          while (el.scrollWidth > max && size > 2) { size -= 0.2; el.style.fontSize = size + 'cm'; }
+        });
+        window.print();
+      <\/script></body></html>`);
+    w.document.close();
+    w.focus();
+  }
+
   return (
     <div className="fixed inset-0 z-40 flex items-start justify-center bg-black/60 p-3 sm:p-6 overflow-y-auto" onClick={onClose}>
       <div className="w-full max-w-3xl rounded-2xl bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
@@ -3785,7 +3832,16 @@ function LegendaModal({ sessionId, onClose }: { sessionId: string; onClose: () =
               a grade abaixo é exatamente o que o operador vai ver ao digitar o atalho.
             </p>
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X className="h-5 w-5" /></button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={imprimirCartoes}
+              title="Cartões com nº da legenda (7cm) + valor (5cm), espelhados pra câmera — 2 por folha A4"
+              className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-rose-300 bg-rose-50 px-3 py-1.5 text-xs font-bold text-rose-600 hover:bg-rose-100"
+            >
+              🖨️ Imprimir cartões (espelhado)
+            </button>
+            <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X className="h-5 w-5" /></button>
+          </div>
         </div>
 
         {topErr && <div className="mx-5 mt-3 rounded-lg bg-rose-50 border border-rose-200 px-3 py-2 text-xs text-rose-800">{topErr}</div>}
