@@ -24,6 +24,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { api } from '@/lib/api';
+import { appPrompt } from '@/lib/app-prompt';
 import { getSocket } from '@/lib/socket';
 import ProductThumb from '@/components/ProductThumb';
 import {
@@ -551,11 +552,10 @@ export default function MinhaLojaRealinhamentoPage() {
   /** Filial reporta que não encontrou a peça fisicamente (estoque divergente,
    *  etiqueta errada, peça sumida). Pede motivo e marca pra matriz revisar. */
   async function reportNotFound(item: RealignmentItem) {
-    const motivo = window.prompt(
+    const motivo = await appPrompt(
       `❌ Não achou a peça?\n\n` +
         `${item.refCode} ${item.cor || ''} ${item.tamanho || ''}\n\n` +
         `Por que? (ex: peça não está na arara, etiqueta errada, estoque divergente)`,
-      '',
     );
     if (motivo === null) return; // cancelou
     try {
