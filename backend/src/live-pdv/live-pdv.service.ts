@@ -412,7 +412,7 @@ export class LivePdvService {
     let q = (term || '').trim();
     if (!q) throw new BadRequestException('Informe referência, código, SKU ou nome');
 
-    let viaAtalho: { atalho: string; refCode: string } | null = null;
+    let viaAtalho: { atalho: string; refCode: string; cor?: string | null } | null = null;
     if (sessionId && !opts?.skipAtalho) {
       const key = this.normAtalho(q);
       // Tolerância de digitação: "1" acha o atalho "01" e vice-versa.
@@ -426,7 +426,7 @@ export class LivePdvService {
         where: { sessionId, atalho: { in: Array.from(candidates) } },
       });
       if (at) {
-        viaAtalho = { atalho: at.atalho, refCode: at.refCode };
+        viaAtalho = { atalho: at.atalho, refCode: at.refCode, cor: at.cor || null };
         q = String(at.refCode).trim();
       }
     }
@@ -448,9 +448,19 @@ export class LivePdvService {
     // dono: buscar "VLM-222" agora também traz "VLM-222EST" (estampado).
     const qn = this.norm(q);
     const exact = rows.filter((r) => this.norm(r.REF) === qn);
-    const productRows = exact.length
+    let productRows = exact.length
       ? rows.filter((r) => this.norm(r.REF).startsWith(qn))
       : rows.filter((r) => this.norm(r.REF) === this.norm(rows[0].REF));
+
+    // COR DA LEGENDA (13/07): o atalho pode fixar a cor vendida naquela
+    // legenda — a grade abre SÓ com as linhas dessa cor (menos poluição e
+    // zero risco de bipar a cor errada). Fallback: se a cor sumiu do
+    // cadastro desde o cadastro da legenda, mostra todas (não trava a live).
+    if (viaAtalho?.cor) {
+      const corAlvo = this.norm(viaAtalho.cor);
+      const daCor = productRows.filter((r) => this.norm(r.COR) === corAlvo);
+      if (daCor.length) productRows = daCor;
+    }
     // Metadados pra VALIDAÇÃO da legenda: quais REFs distintas o termo trouxe
     // e se houve match exato. Campos ADITIVOS — não mudam o comportamento.
     const matchedRefs = Array.from(new Set(rows.map((r) => String(r.REF || '').trim()).filter(Boolean)));
@@ -647,10 +657,14 @@ export class LivePdvService {
     return this.searchGrade(q, sessionId);
   }
 
-  async saveAtalho(sessionId: string, input: { id?: string | null; atalho: string; refCode: string }) {
+  async saveAtalho(
+    sessionId: string,
+    input: { id?: string | null; atalho: string; refCode: string; cor?: string | null },
+  ) {
     await this.getSession(sessionId);
     const atalho = this.normAtalho(input.atalho);
     const refCode = String(input.refCode || '').trim();
+    const cor = String(input.cor || '').trim() || null;
     if (!atalho) throw new BadRequestException('Informe o atalho (ex: 01)');
     if (atalho.length > 10) throw new BadRequestException('Atalho muito longo (máx 10 caracteres)');
     if (!refCode) throw new BadRequestException('Informe a referência');
@@ -667,6 +681,17 @@ export class LivePdvService {
       );
     }
 
+    // Cor escolhida precisa EXISTIR na grade validada (proteção contra typo;
+    // a UI manda a cor vinda do select, mas o backend revalida).
+    if (cor) {
+      const cores = new Set(
+        (grade.cells || []).map((c: any) => this.norm(c.cor)).filter(Boolean),
+      );
+      if (!cores.has(this.norm(cor))) {
+        throw new BadRequestException(`Cor "${cor}" não existe na grade dessa referência.`);
+      }
+    }
+
     // Atalho duplicado na mesma live (em OUTRA linha) — erro amigável
     const dup = await (this.prisma as any).livePdvAtalho.findUnique({
       where: { sessionId_atalho: { sessionId, atalho } },
@@ -679,12 +704,12 @@ export class LivePdvService {
     if (input.id) {
       row = await (this.prisma as any).livePdvAtalho.update({
         where: { id: input.id },
-        data: { atalho, refCode, descricao: grade.descricao || null },
+        data: { atalho, refCode, descricao: grade.descricao || null, cor },
       });
     } else {
       const count = await (this.prisma as any).livePdvAtalho.count({ where: { sessionId } });
       row = await (this.prisma as any).livePdvAtalho.create({
-        data: { sessionId, atalho, refCode, descricao: grade.descricao || null, position: count },
+        data: { sessionId, atalho, refCode, descricao: grade.descricao || null, cor, position: count },
       });
     }
     return { ok: true, atalho: row, grade };

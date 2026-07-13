@@ -63,7 +63,7 @@ interface GradeResult {
   totalRede?: number;
   cells?: GradeCell[];
   fromMirror?: boolean; // produto/estoque vieram do espelho (Giga fora do ar)
-  viaAtalho?: { atalho: string; refCode: string } | null; // busca veio da legenda (01, 02…)
+  viaAtalho?: { atalho: string; refCode: string; cor?: string | null } | null; // busca veio da legenda (01, 02…)
 }
 interface CartItem {
   id: string;
@@ -1965,6 +1965,14 @@ export default function LivePdvPage() {
                             {p.viaAtalho.atalho}
                           </span>
                         )}
+                        {p.viaAtalho?.cor && (
+                          <span
+                            title="Cor fixada na legenda — a grade mostra só essa cor"
+                            className="shrink-0 max-w-[110px] truncate rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-bold text-violet-700"
+                          >
+                            🎨 {p.viaAtalho.cor}
+                          </span>
+                        )}
                         <div className="h-10 w-10 shrink-0 overflow-hidden rounded-lg bg-slate-100">
                           {p.photoUrl ? (
                             // eslint-disable-next-line @next/next/no-img-element
@@ -3650,6 +3658,7 @@ type LegendaRow = {
   id: string | null;
   atalho: string;
   refCode: string;
+  cor: string | null;  // cor VENDIDA nesta legenda (null = todas as cores)
   status: LegendaStatus;
   grade: any | null;
   erro: string | null;
@@ -3704,11 +3713,11 @@ function LegendaModal({ sessionId, onClose }: { sessionId: string; onClose: () =
         const salvos = await api<any[]>(`/live-pdv/sessions/${sessionId}/atalhos`);
         if (cancelled) return;
         const iniciais: LegendaRow[] = (salvos || []).map((a) => ({
-          id: a.id, atalho: a.atalho, refCode: a.refCode,
+          id: a.id, atalho: a.atalho, refCode: a.refCode, cor: a.cor || null,
           status: 'buscando' as LegendaStatus, grade: null, erro: null, salva: true, salvando: false,
         }));
         if (iniciais.length === 0) {
-          iniciais.push({ id: null, atalho: '01', refCode: '', status: 'vazia', grade: null, erro: null, salva: false, salvando: false });
+          iniciais.push({ id: null, atalho: '01', refCode: '', cor: null, status: 'vazia', grade: null, erro: null, salva: false, salvando: false });
         }
         setRows(iniciais);
         setLoading(false);
@@ -3727,7 +3736,8 @@ function LegendaModal({ sessionId, onClose }: { sessionId: string; onClose: () =
   }, [sessionId]);
 
   const onRefChange = (idx: number, value: string) => {
-    patchRow(idx, { refCode: value, salva: false, status: value.trim() ? 'buscando' : 'vazia', grade: null });
+    // Trocou a referência → a cor escolhida era da peça antiga; limpa.
+    patchRow(idx, { refCode: value, cor: null, salva: false, status: value.trim() ? 'buscando' : 'vazia', grade: null });
     if (timersRef.current[idx]) clearTimeout(timersRef.current[idx]);
     timersRef.current[idx] = setTimeout(() => validarLinha(idx, value), 700);
   };
@@ -3740,7 +3750,7 @@ function LegendaModal({ sessionId, onClose }: { sessionId: string; onClose: () =
 
   const addLinha = () =>
     setRows((prev) => [...prev, {
-      id: null, atalho: proximoAtalho(prev), refCode: '',
+      id: null, atalho: proximoAtalho(prev), refCode: '', cor: null,
       status: 'vazia' as LegendaStatus, grade: null, erro: null, salva: false, salvando: false,
     }]);
 
@@ -3751,7 +3761,7 @@ function LegendaModal({ sessionId, onClose }: { sessionId: string; onClose: () =
     try {
       const r = await api<any>(`/live-pdv/sessions/${sessionId}/atalhos`, {
         method: 'POST',
-        body: JSON.stringify({ id: row.id, atalho: row.atalho, refCode: row.refCode.trim() }),
+        body: JSON.stringify({ id: row.id, atalho: row.atalho, refCode: row.refCode.trim(), cor: row.cor }),
       });
       patchRow(idx, { id: r?.atalho?.id || row.id, atalho: r?.atalho?.atalho || row.atalho, salva: true, salvando: false });
     } catch (e: any) {
@@ -3931,6 +3941,34 @@ function LegendaModal({ sessionId, onClose }: { sessionId: string; onClose: () =
                   <div className="text-[11px] text-slate-500">
                     Referência: <b>{row.grade.ref}</b> · {row.grade.totalRede} peças na rede
                   </div>
+                  {/* COR VENDIDA nesta legenda — digitar o atalho abre a grade
+                      SÓ dessa cor (menos poluição, zero bipe de cor errada) */}
+                  {(() => {
+                    const cores = Array.from(
+                      new Set((row.grade.cells || []).map((c: any) => c.cor).filter(Boolean)),
+                    ) as string[];
+                    if (cores.length < 2 && !row.cor) return null;
+                    return (
+                      <div className="flex flex-wrap items-center gap-2 rounded-lg bg-violet-50 border border-violet-200 px-2 py-1.5 text-xs">
+                        <span className="font-bold text-violet-800">🎨 Cor desta legenda:</span>
+                        <select
+                          value={row.cor || ''}
+                          onChange={(e) => patchRow(idx, { cor: e.target.value || null, salva: false })}
+                          className="rounded-lg border-2 border-violet-300 bg-white px-2 py-1 text-xs font-bold text-slate-700 focus:border-violet-500 focus:outline-none"
+                        >
+                          <option value="">Todas as cores</option>
+                          {cores.map((c) => (
+                            <option key={c} value={c}>{c}</option>
+                          ))}
+                        </select>
+                        {row.cor && (
+                          <span className="text-[10px] font-bold text-violet-700">
+                            o atalho {row.atalho || ''} vai abrir SÓ {row.cor}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })()}
                   {/* Grade por cor × tamanho — mesmo dado que abre na live */}
                   {(() => {
                     const porCor = new Map<string, any[]>();
@@ -3940,8 +3978,8 @@ function LegendaModal({ sessionId, onClose }: { sessionId: string; onClose: () =
                       porCor.get(cor)!.push(c);
                     }
                     return Array.from(porCor.entries()).map(([cor, cells]) => (
-                      <div key={cor} className="text-xs">
-                        <span className="font-bold text-slate-600">{cor}:</span>{' '}
+                      <div key={cor} className={`text-xs ${row.cor && cor !== row.cor ? 'opacity-40' : ''}`}>
+                        <span className={`font-bold ${row.cor === cor ? 'text-violet-700' : 'text-slate-600'}`}>{cor}:</span>{' '}
                         <span className="tabular-nums">
                           {cells.map((c: any) => `${c.tamanho || '—'} ${c.available} pç`).join(' · ')}
                         </span>
