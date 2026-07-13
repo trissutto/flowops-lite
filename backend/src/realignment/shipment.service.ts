@@ -1204,7 +1204,11 @@ export class RealignmentShipmentService {
     // Remessa tem REF "12608" (base), peça Wincred tem REF "12608V" (sufixo da cor).
     // Strip sufixo de letras em ambas REFs antes de comparar.
     if (!matchedItemId && info && info.ref) {
-      const stripSufixoLetras = (s: string) => norm(s).replace(/[A-Z]+$/, '');
+      // Remove sufixo de letras E o separador (espaço/hífen) que pode vir
+      // antes dele: "61140077 M" → "61140077" (bug real 13/07: o replace de
+      // letras deixava o espaço no fim e "61140077 " nunca batia com
+      // "61140077" — bipe recusava peça que estava na lista).
+      const stripSufixoLetras = (s: string) => norm(s).replace(/[\s-]*[A-Z]+$/, '').trim();
       const skuRefBase = stripSufixoLetras(info.ref);
       const skuCor = norm(info.cor);
       const skuTam = norm(info.tamanho);
