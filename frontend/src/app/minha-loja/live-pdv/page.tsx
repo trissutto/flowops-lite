@@ -3807,8 +3807,12 @@ function LegendaModal({ sessionId, onClose }: { sessionId: string; onClose: () =
         .card:nth-child(2n+1) { border-right: 1px dashed #bbb; }
         .card:nth-child(8n) { page-break-after: always; }
         .mirror { transform: scaleX(-1); text-align: center; }
-        .num { font-size: 4.8cm; line-height: 1; letter-spacing: 0.08cm; }
-        .val { font-size: 3cm; line-height: 1; margin-top: 0.5cm; white-space: nowrap; }
+        /* A caixa da fonte (ascender/descender) é maior que o dígito: com
+           4.8cm + 3cm o conteúdo somava ~8.3cm num cartão de 7.42cm e
+           CORTAVA em cima/baixo (bug real 13/07). Reduzido ~30%:
+           3.3 + 0.4 + 2.1 = 5.8cm — cabe com folga e centralizado. */
+        .num { font-size: 3.3cm; line-height: 0.95; letter-spacing: 0.05cm; }
+        .val { font-size: 2.1cm; line-height: 1; margin-top: 0.4cm; white-space: nowrap; }
       </style></head><body>${cards}
       <script>
         // Encolhe nº/valor até caberem na largura do cartão (atalhos de 4+
