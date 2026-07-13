@@ -13,6 +13,8 @@ export interface ProdutosVendidosFilters {
   from?: string;
   to?: string;
   storeCode?: string;
+  /** Restringe a um CONJUNTO de lojas (ex: master_franquia → só FILIAL). */
+  storeCodes?: string[];
   sellerName?: string;
   sku?: string;
   customerCpf?: string;
@@ -82,6 +84,7 @@ export class ProdutosVendidosService {
       isTraining: false,
     };
     if (filters.storeCode) saleListWhere.storeCode = filters.storeCode;
+    else if (filters.storeCodes?.length) saleListWhere.storeCode = { in: filters.storeCodes };
     if (filters.customerCpf) {
       const cpf = filters.customerCpf.replace(/\D/g, '');
       if (cpf.length === 11) saleListWhere.customerCpf = cpf;
@@ -163,6 +166,7 @@ export class ProdutosVendidosService {
         isTraining: false,
       };
       if (filters.storeCode) retWhere.storeCode = filters.storeCode;
+      else if (filters.storeCodes?.length) retWhere.storeCode = { in: filters.storeCodes };
       if (filters.customerCpf) {
         const cpf = filters.customerCpf.replace(/\D/g, '');
         if (cpf.length === 11) retWhere.customerCpf = cpf;

@@ -34,7 +34,10 @@ export default function LoginPage() {
         router.push('/minha-loja/pdv');
       } else if (res.user?.role === 'contador') {
         router.push('/retaguarda/relatorio-fiscal');
-      } else if (res.user?.role === 'franquias' || res.user?.role === 'master_franquia') {
+      } else if (res.user?.role === 'master_franquia') {
+        // Master da franquia vive no super painel (só com as lojas FRANQUIA)
+        router.push('/retaguarda/super-painel-caixas');
+      } else if (res.user?.role === 'franquias') {
         router.push('/franquias');
       } else {
         router.push('/');

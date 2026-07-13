@@ -111,6 +111,15 @@ export default function FranquiasHub() {
 
         {/* Áreas */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {isMaster && (
+            <AreaCard
+              href="/retaguarda/super-painel-caixas"
+              label="Painel de Caixas"
+              description="Caixas ao vivo das lojas franquia"
+              icon={BarChart3}
+              tone="emerald"
+            />
+          )}
           <AreaCard
             href="/minha-loja/pdv/notas"
             label="Notas (NFC-e)"

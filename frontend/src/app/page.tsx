@@ -115,7 +115,8 @@ export default function DashboardHome() {
       .then((me) => {
         if (me.role === 'store') router.push('/minha-loja/pdv');
         else if (me.role === 'contador') router.push('/retaguarda/relatorio-fiscal');
-        else if (me.role === 'franquias' || me.role === 'master_franquia') router.push('/franquias');
+        else if (me.role === 'master_franquia') router.push('/retaguarda/super-painel-caixas');
+        else if (me.role === 'franquias') router.push('/franquias');
         if (me.name) setUserName(me.name);
         // SUPREMO: só este e-mail enxerga o módulo Imóveis.
         setSupremo(String(me.email || '').trim().toLowerCase() === 'trissutto@gmail.com');
