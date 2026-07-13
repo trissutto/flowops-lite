@@ -3800,20 +3800,21 @@ function LegendaModal({ sessionId, onClose }: { sessionId: string; onClose: () =
     }
     w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Legendas da live (espelhado)</title>
       <style>
-        @page { size: A4 portrait; margin: 0; }
+        /* Margem de 6mm no @page: sem ela o grid ocupava os 21cm cravados e a
+           borda física NÃO-IMPRIMÍVEL da impressora cortava/desenquadrava as
+           colunas (bug real 13/07). Grid útil: 19.8 × 28.5cm → cartão 9.9 × 7.12cm. */
+        @page { size: A4 portrait; margin: 6mm; }
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Arial Black', 'Arial Bold', Arial, sans-serif; font-weight: 900; display: flex; flex-wrap: wrap; width: 21cm; }
-        .card { width: 10.5cm; height: 7.42cm; display: flex; align-items: center; justify-content: center; overflow: hidden; page-break-inside: avoid; border-bottom: 1px dashed #bbb; }
+        body { font-family: 'Arial Black', 'Arial Bold', Arial, sans-serif; font-weight: 900; display: flex; flex-wrap: wrap; width: 19.8cm; }
+        .card { width: 9.9cm; height: 7.12cm; display: flex; align-items: center; justify-content: center; overflow: hidden; page-break-inside: avoid; border-bottom: 1px dashed #bbb; }
         .card:nth-child(2n+1) { border-right: 1px dashed #bbb; }
         .card:nth-child(8n) { page-break-after: always; }
         .mirror { transform: scaleX(-1); text-align: center; }
-        /* A caixa da fonte (ascender/descender) é maior que o dígito: com
-           4.8cm + 3cm o conteúdo somava ~8.3cm num cartão de 7.42cm e
-           CORTAVA em cima/baixo (bug real 13/07). Reduzido ~30%:
-           3.3 + 0.4 + 2.1 = 5.8cm — cabe com folga e centralizado. */
+        /* Conteúdo: 3.3 + 0.4 + 2.1 = 5.8cm num cartão de 7.12cm — folga. */
         .num { font-size: 3.3cm; line-height: 0.95; letter-spacing: 0.05cm; }
         .val { font-size: 2.1cm; line-height: 1; margin-top: 0.4cm; white-space: nowrap; }
-      </style></head><body>${cards}
+        .ver { position: absolute; left: 2px; top: 2px; font-family: Arial; font-weight: 400; font-size: 8px; color: #999; }
+      </style></head><body><span class="ver">L8-v3</span>${cards}
       <script>
         // Encolhe nº/valor até caberem na largura do cartão (atalhos de 4+
         // dígitos e preços longos não podem vazar pro cartão vizinho).
