@@ -275,7 +275,7 @@ export default function LivePdvPage() {
   const [showCustomerModal, setShowCustomerModal] = useState(false);
   // Célula clicada aguardando identificação da cliente — leva junto a REF da
   // grade de origem (com 4 grades abertas, o fallback não pode ser global).
-  const [pendingCell, setPendingCell] = useState<{ cell: GradeCell; refCode: string } | null>(null);
+  const [pendingCell, setPendingCell] = useState<{ cell: GradeCell; refCode: string; gkey: string } | null>(null);
   // Aviso rápido "adicionado a Fulana" após fechar o carrinho.
   const [addedFlash, setAddedFlash] = useState<string | null>(null);
   // Aviso âmbar "QR da Fulana venceu" (cobrança resetada pelo backend).
@@ -736,7 +736,7 @@ export default function LivePdvPage() {
         body: JSON.stringify({ refCode: p.ref, priceCents: Math.round(reais * 100) }),
       });
       setPromoEditingRef(null);
-      await refreshGradeFor(p.ref);
+      await refreshGradesOfRef(p.ref);
       await refreshCarts();
       await syncOpenCartAfterPriceChange();
     } catch (e: any) {
@@ -752,7 +752,7 @@ export default function LivePdvPage() {
         body: JSON.stringify({ refCode: p.ref, priceCents: 0 }),
       });
       setPromoEditingRef(null);
-      await refreshGradeFor(p.ref);
+      await refreshGradesOfRef(p.ref);
       await refreshCarts();
       await syncOpenCartAfterPriceChange();
     } catch (e: any) {
@@ -890,12 +890,19 @@ export default function LivePdvPage() {
   // ─── Busca / grades abertas (até 4) ──────────────────────────────────────
   const MAX_GRADES = 4;
 
-  /** Insere/atualiza a grade na lista: mesma REF substitui no lugar; nova entra
-   *  no fim; passou de 4, a MAIS ANTIGA sai. */
+  /** Identidade de um cartão aberto: REF + cor da legenda. Duas legendas da
+   *  MESMA referência com cores diferentes (ex.: 01 = VMM-225 MARROM e
+   *  02 = VMM-225 PRETO) são cartões DISTINTOS e ficam abertas lado a lado —
+   *  identificar só por REF fazia a 2ª legenda substituir a 1ª (live 13/07). */
+  const gradeKey = (g: Pick<GradeResult, 'ref' | 'viaAtalho'>) =>
+    `${g.ref || ''}::${g.viaAtalho?.cor || ''}`;
+
+  /** Insere/atualiza a grade na lista: mesmo cartão (REF+cor) substitui no
+   *  lugar; novo entra no fim; passou de 4, a MAIS ANTIGA sai. */
   function upsertProduct(res: GradeResult) {
     if (!res?.found || !res.ref) return;
     setProducts((prev) => {
-      const idx = prev.findIndex((p) => p.ref === res.ref);
+      const idx = prev.findIndex((p) => gradeKey(p) === gradeKey(res));
       if (idx >= 0) {
         const c = [...prev];
         c[idx] = res;
@@ -906,10 +913,10 @@ export default function LivePdvPage() {
     });
   }
 
-  function closeGrade(ref?: string) {
-    setProducts((prev) => prev.filter((p) => p.ref !== ref));
-    if (promoEditingRef === ref) setPromoEditingRef(null);
-    if (cupomEditingRef === ref) setCupomEditingRef(null);
+  function closeGrade(g: GradeResult) {
+    setProducts((prev) => prev.filter((p) => gradeKey(p) !== gradeKey(g)));
+    if (promoEditingRef === g.ref) setPromoEditingRef(null);
+    if (cupomEditingRef === g.ref) setCupomEditingRef(null);
   }
 
   /**
@@ -921,26 +928,37 @@ export default function LivePdvPage() {
    * Busca pelo ATALHO quando o cartão veio da legenda (preserva o filtro de
    * cor da legenda); senão pela REF base do próprio cartão.
    */
-  async function refreshGradeFor(refBase?: string | null) {
-    const alvo = String(refBase || '').trim();
+  async function refreshGradeFor(key?: string | null) {
+    const alvo = String(key || '').trim();
     if (!alvo) return;
-    const atual = products.find((p) => p.ref === alvo);
+    const atual = products.find((p) => gradeKey(p) === alvo);
     if (!atual) return; // cartão já fechado — nada a atualizar
-    const termo = atual.viaAtalho?.atalho || atual.ref || alvo;
+    const termo = atual.viaAtalho?.atalho || atual.ref || '';
+    if (!termo) return;
     try {
       const sid = sessionId ? `&sessionId=${sessionId}` : '';
       const res = await api<GradeResult>(`/live-pdv/search?term=${encodeURIComponent(termo)}${sid}`);
-      if (res?.found && res.ref === alvo) {
-        setProducts((prev) => prev.map((p) => (p.ref === alvo ? res : p)));
+      if (res?.found && gradeKey(res) === alvo) {
+        setProducts((prev) => prev.map((p) => (gradeKey(p) === alvo ? res : p)));
       }
     } catch {
       /* mantém a grade como está */
     }
   }
 
+  /** Recarrega os cartões de uma REF (promo muda o preço de TODOS os cartões
+   *  daquela referência, mesmo com cores diferentes abertas). */
+  async function refreshGradesOfRef(ref?: string | null) {
+    const alvoRef = String(ref || '').trim();
+    if (!alvoRef) return;
+    for (const p of products.filter((g) => g.ref === alvoRef)) {
+      await refreshGradeFor(gradeKey(p));
+    }
+  }
+
   /** Recarrega TODAS as grades abertas (ex.: carrinho cancelado liberou reservas). */
   async function refreshAllGrades() {
-    for (const p of products) await refreshGradeFor(p.ref);
+    for (const p of products) await refreshGradeFor(gradeKey(p));
   }
 
   async function runSearch(q: string) {
@@ -986,7 +1004,9 @@ export default function LivePdvPage() {
   // devolve a grade do espelho se o Giga não responder em 8s.
   const [refreshingRef, setRefreshingRef] = useState<string | null>(null);
   async function refreshStock(p: GradeResult) {
-    const q = (p.ref || '').trim();
+    // Busca pelo ATALHO quando o cartão veio da legenda — mantém o filtro de
+    // cor; buscar pela REF devolveria a grade com TODAS as cores (outro cartão).
+    const q = (p.viaAtalho?.atalho || p.ref || '').trim();
     if (!q || refreshingRef) return;
     setRefreshingRef(q);
     try {
@@ -1024,21 +1044,21 @@ export default function LivePdvPage() {
     searchRef.current?.focus();
   }
 
-  async function clickCell(cell: GradeCell, refCode: string) {
+  async function clickCell(cell: GradeCell, refCode: string, gkey: string) {
     if (cell.available <= 0) return;
     if (!sessionId) {
       alert('Crie/abra uma sessão de live primeiro.');
       return;
     }
     if (!activeCustomer) {
-      setPendingCell({ cell, refCode });
+      setPendingCell({ cell, refCode, gkey });
       setShowCustomerModal(true);
       return;
     }
-    await addItem(cell, refCode);
+    await addItem(cell, refCode, gkey);
   }
 
-  async function addItem(cell: GradeCell, refCode: string) {
+  async function addItem(cell: GradeCell, refCode: string, gkey: string) {
     if (!sessionId || !(cell.ref || refCode)) return;
     setAdding(cell.itemKey);
     try {
@@ -1065,7 +1085,7 @@ export default function LivePdvPage() {
       setCart(res.cart);
       setQr(null);
       setPaid(false);
-      await refreshGradeFor(refCode); // atualiza SÓ o cartão da peça — nunca cria/derruba cartão
+      await refreshGradeFor(gkey); // atualiza SÓ o cartão da peça — nunca cria/derruba cartão
       await refreshCarts();
       closeAfterAdd(res.cart?.customerName); // fecha o carrinho por segurança
     } catch (e: any) {
@@ -1094,14 +1114,14 @@ export default function LivePdvPage() {
       setPendingCell(null);
       if (pending) {
         // addItem precisa do customer atualizado
-        setTimeout(() => addItemWith(c, pending.cell, pending.refCode), 0);
+        setTimeout(() => addItemWith(c, pending.cell, pending.refCode, pending.gkey), 0);
       }
     } catch (e: any) {
       alert(e?.message || 'Erro ao salvar cliente');
     }
   }
 
-  async function addItemWith(customer: ActiveCustomer, cell: GradeCell, refCode: string) {
+  async function addItemWith(customer: ActiveCustomer, cell: GradeCell, refCode: string, gkey: string) {
     if (!sessionId || !(cell.ref || refCode)) return;
     setAdding(cell.itemKey);
     try {
@@ -1121,7 +1141,7 @@ export default function LivePdvPage() {
         }),
       });
       setCart(res.cart);
-      await refreshGradeFor(refCode);
+      await refreshGradeFor(gkey);
       await refreshCarts();
       closeAfterAdd(res.cart?.customerName); // fecha o carrinho por segurança
     } catch (e: any) {
@@ -1138,10 +1158,10 @@ export default function LivePdvPage() {
     const pending = pendingCell;
     setPendingCell(null);
     openCart(existing);
-    if (pending) setTimeout(() => addItemToCart(existing, pending.cell, pending.refCode), 0);
+    if (pending) setTimeout(() => addItemToCart(existing, pending.cell, pending.refCode, pending.gkey), 0);
   }
 
-  async function addItemToCart(targetCart: Cart, cell: GradeCell, refCode: string) {
+  async function addItemToCart(targetCart: Cart, cell: GradeCell, refCode: string, gkey: string) {
     if (!sessionId || !(cell.ref || refCode)) return;
     setAdding(cell.itemKey);
     try {
@@ -1156,7 +1176,7 @@ export default function LivePdvPage() {
         }),
       });
       setCart(res.cart);
-      await refreshGradeFor(refCode);
+      await refreshGradeFor(gkey);
       await refreshCarts();
       closeAfterAdd(res.cart?.customerName);
     } catch (e: any) {
@@ -1967,10 +1987,10 @@ export default function LivePdvPage() {
                 {products.map((p) => {
                   const promoEditing = promoEditingRef === p.ref;
                   const cupomEditing = cupomEditingRef === p.ref;
-                  const refreshing = refreshingRef === p.ref;
+                  const refreshing = refreshingRef === (p.viaAtalho?.atalho || p.ref);
                   const g = buildGrade(p);
                   return (
-                    <div key={p.ref} className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+                    <div key={gradeKey(p)} className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
                       {/* Cabeçalho compacto: atalho · foto · desc · preço · ações */}
                       <div className="mb-2 flex items-center gap-2">
                         {p.viaAtalho?.atalho && (
@@ -2016,7 +2036,7 @@ export default function LivePdvPage() {
                         </button>
                         <button
                           type="button"
-                          onClick={() => closeGrade(p.ref)}
+                          onClick={() => closeGrade(p)}
                           title="Fechar esta grade"
                           className="shrink-0 rounded-md border border-slate-200 p-1.5 text-slate-400 hover:bg-slate-50 hover:text-slate-600"
                         >
@@ -2172,7 +2192,7 @@ export default function LivePdvPage() {
                                           <button
                                             type="button"
                                             disabled={!cell || qty <= 0 || busy}
-                                            onClick={() => cell && clickCell(cell, p.ref || '')}
+                                            onClick={() => cell && clickCell(cell, p.ref || '', gradeKey(p))}
                                             title={title}
                                             className={`mx-auto flex h-8 w-full items-center justify-center rounded text-sm font-extrabold transition ${
                                               qty <= 0
