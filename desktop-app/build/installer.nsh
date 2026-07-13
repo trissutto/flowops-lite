@@ -9,6 +9,11 @@
 !include "nsDialogs.nsh"
 !include "LogicLib.nsh"
 
+; As Functions abaixo são compiladas TAMBÉM no pass do DESINSTALADOR, onde as
+; macros do MUI2 (MUI_HEADER_TEXT) não existem — o build quebrava com
+; "macro named MUI_HEADER_TEXT not found" e nenhum release saía. A página de
+; senha só faz sentido no INSTALADOR, então o bloco todo fica atrás do guard.
+!ifndef BUILD_UNINSTALLER
 Var Dialog
 Var PasswordInput
 
@@ -30,8 +35,8 @@ Var PasswordInput
 
 ; Página custom de senha
 Function PasswordPageCreate
-  !insertmacro MUI_HEADER_TEXT "Senha de Instalação" "Digite a senha autorizada pra instalar o LURDS ORDER ONE."
-
+  ; (sem MUI_HEADER_TEXT: este include compila antes do MUI2.nsh do
+  ;  electron-builder e a macro não existe ainda — quebrava o build)
   nsDialogs::Create 1018
   Pop $Dialog
   ${If} $Dialog == error
@@ -63,3 +68,4 @@ Function PasswordPageLeave
   MessageBox MB_ICONSTOP|MB_OK "Senha incorreta.$\r$\n$\r$\nA instalação será cancelada. Solicite a senha correta à matriz e execute o instalador novamente."
   Quit
 FunctionEnd
+!endif
