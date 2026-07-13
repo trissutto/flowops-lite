@@ -3774,12 +3774,12 @@ function LegendaModal({ sessionId, onClose }: { sessionId: string; onClose: () =
 
   const pendentes = rows.filter((r) => r.refCode.trim() && (!r.salva || r.status !== 'ok')).length;
 
-  // CARTÕES IMPRESSOS pra apresentadora mostrar na câmera (pedido do dono
-  // 13/07): nº da legenda em Arial Black com ~7cm de altura, valor com ~5cm,
-  // 2cm de vão, centralizados — e ESPELHADOS (a câmera da live inverte a
-  // imagem; sem espelhar aparece ao contrário). Cabem 2 cartões por A4 com
-  // linha de corte no meio (7+2+5 = 14cm por cartão — 8 por folha não fecha
-  // nessas medidas). O valor encolhe sozinho se não couber na largura.
+  // CARTÕES IMPRESSOS pra apresentadora mostrar na câmera — 8 POR FOLHA A4
+  // (ajuste do dono 13/07: a 1ª versão saiu gigante com 2/folha). Grade 2×4
+  // com linhas de corte: cada cartão tem 10,5×7,42cm, nº da legenda ~3,5cm de
+  // altura e valor ~2,2cm, Arial Black, centralizados e ESPELHADOS (a câmera
+  // da live inverte a imagem). Número e valor encolhem sozinhos se não
+  // couberem na largura do cartão.
   function imprimirCartoes() {
     const prontas = rows.filter((r) => r.status === 'ok' && r.grade?.found && r.atalho.trim());
     if (!prontas.length) {
@@ -3802,18 +3802,21 @@ function LegendaModal({ sessionId, onClose }: { sessionId: string; onClose: () =
       <style>
         @page { size: A4 portrait; margin: 0; }
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Arial Black', 'Arial Bold', Arial, sans-serif; font-weight: 900; }
-        .card { height: 14.85cm; width: 21cm; display: flex; align-items: center; justify-content: center; page-break-inside: avoid; border-bottom: 1px dashed #aaa; overflow: hidden; }
-        .card:nth-child(2n) { border-bottom: none; page-break-after: always; }
+        body { font-family: 'Arial Black', 'Arial Bold', Arial, sans-serif; font-weight: 900; display: flex; flex-wrap: wrap; width: 21cm; }
+        .card { width: 10.5cm; height: 7.42cm; display: flex; align-items: center; justify-content: center; overflow: hidden; page-break-inside: avoid; border-bottom: 1px dashed #bbb; }
+        .card:nth-child(2n+1) { border-right: 1px dashed #bbb; }
+        .card:nth-child(8n) { page-break-after: always; }
         .mirror { transform: scaleX(-1); text-align: center; }
-        .num { font-size: 9.6cm; line-height: 1; letter-spacing: 0.15cm; }
-        .val { font-size: 6.7cm; line-height: 1; margin-top: 2cm; white-space: nowrap; }
+        .num { font-size: 4.8cm; line-height: 1; letter-spacing: 0.08cm; }
+        .val { font-size: 3cm; line-height: 1; margin-top: 0.5cm; white-space: nowrap; }
       </style></head><body>${cards}
       <script>
-        document.querySelectorAll('.val').forEach(function (el) {
-          var max = el.closest('.card').clientWidth - 40;
-          var size = 6.7;
-          while (el.scrollWidth > max && size > 2) { size -= 0.2; el.style.fontSize = size + 'cm'; }
+        // Encolhe nº/valor até caberem na largura do cartão (atalhos de 4+
+        // dígitos e preços longos não podem vazar pro cartão vizinho).
+        document.querySelectorAll('.num, .val').forEach(function (el) {
+          var max = el.closest('.card').clientWidth - 16;
+          var size = parseFloat(getComputedStyle(el).fontSize) / 37.8; // px → cm
+          while (el.scrollWidth > max && size > 1) { size -= 0.1; el.style.fontSize = size + 'cm'; }
         });
         window.print();
       <\/script></body></html>`);
@@ -3835,7 +3838,7 @@ function LegendaModal({ sessionId, onClose }: { sessionId: string; onClose: () =
           <div className="flex items-center gap-2">
             <button
               onClick={imprimirCartoes}
-              title="Cartões com nº da legenda (7cm) + valor (5cm), espelhados pra câmera — 2 por folha A4"
+              title="Cartões com nº da legenda + valor, espelhados pra câmera — 8 por folha A4 (2×4)"
               className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-rose-300 bg-rose-50 px-3 py-1.5 text-xs font-bold text-rose-600 hover:bg-rose-100"
             >
               🖨️ Imprimir cartões (espelhado)
