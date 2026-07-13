@@ -736,7 +736,7 @@ export default function LivePdvPage() {
         body: JSON.stringify({ refCode: p.ref, priceCents: Math.round(reais * 100) }),
       });
       setPromoEditingRef(null);
-      await refreshGrade(p.ref);
+      await refreshGradeFor(p.ref);
       await refreshCarts();
       await syncOpenCartAfterPriceChange();
     } catch (e: any) {
@@ -752,7 +752,7 @@ export default function LivePdvPage() {
         body: JSON.stringify({ refCode: p.ref, priceCents: 0 }),
       });
       setPromoEditingRef(null);
-      await refreshGrade(p.ref);
+      await refreshGradeFor(p.ref);
       await refreshCarts();
       await syncOpenCartAfterPriceChange();
     } catch (e: any) {
@@ -912,14 +912,27 @@ export default function LivePdvPage() {
     if (cupomEditingRef === ref) setCupomEditingRef(null);
   }
 
-  /** Recarrega em silêncio a grade de UMA ref aberta (estoque/reservas mudaram). */
-  async function refreshGrade(refCode?: string | null) {
-    const q = String(refCode || '').trim();
-    if (!q) return;
+  /**
+   * Recarrega EM SILÊNCIO a grade de um cartão JÁ ABERTO (estoque/reservas
+   * mudaram). NUNCA adiciona cartão novo nem derruba os abertos — bug real
+   * 13/07 (na live): após jogar no carrinho uma variante de cor (cell.ref
+   * com sufixo, ex. "…M"), o refresh buscava pela VARIANTE, o upsert criava
+   * um cartão novo ("abriu outra aleatória") e empurrava o antigo pra fora.
+   * Busca pelo ATALHO quando o cartão veio da legenda (preserva o filtro de
+   * cor da legenda); senão pela REF base do próprio cartão.
+   */
+  async function refreshGradeFor(refBase?: string | null) {
+    const alvo = String(refBase || '').trim();
+    if (!alvo) return;
+    const atual = products.find((p) => p.ref === alvo);
+    if (!atual) return; // cartão já fechado — nada a atualizar
+    const termo = atual.viaAtalho?.atalho || atual.ref || alvo;
     try {
       const sid = sessionId ? `&sessionId=${sessionId}` : '';
-      const res = await api<GradeResult>(`/live-pdv/search?term=${encodeURIComponent(q)}${sid}`);
-      if (res?.found) upsertProduct(res);
+      const res = await api<GradeResult>(`/live-pdv/search?term=${encodeURIComponent(termo)}${sid}`);
+      if (res?.found && res.ref === alvo) {
+        setProducts((prev) => prev.map((p) => (p.ref === alvo ? res : p)));
+      }
     } catch {
       /* mantém a grade como está */
     }
@@ -927,7 +940,7 @@ export default function LivePdvPage() {
 
   /** Recarrega TODAS as grades abertas (ex.: carrinho cancelado liberou reservas). */
   async function refreshAllGrades() {
-    for (const p of products) await refreshGrade(p.ref);
+    for (const p of products) await refreshGradeFor(p.ref);
   }
 
   async function runSearch(q: string) {
@@ -1052,7 +1065,7 @@ export default function LivePdvPage() {
       setCart(res.cart);
       setQr(null);
       setPaid(false);
-      await refreshGrade(cell.ref || refCode); // atualiza SÓ a grade da peça — as outras ficam
+      await refreshGradeFor(refCode); // atualiza SÓ o cartão da peça — nunca cria/derruba cartão
       await refreshCarts();
       closeAfterAdd(res.cart?.customerName); // fecha o carrinho por segurança
     } catch (e: any) {
@@ -1108,7 +1121,7 @@ export default function LivePdvPage() {
         }),
       });
       setCart(res.cart);
-      await refreshGrade(cell.ref || refCode);
+      await refreshGradeFor(refCode);
       await refreshCarts();
       closeAfterAdd(res.cart?.customerName); // fecha o carrinho por segurança
     } catch (e: any) {
@@ -1143,7 +1156,7 @@ export default function LivePdvPage() {
         }),
       });
       setCart(res.cart);
-      await refreshGrade(cell.ref || refCode);
+      await refreshGradeFor(refCode);
       await refreshCarts();
       closeAfterAdd(res.cart?.customerName);
     } catch (e: any) {
