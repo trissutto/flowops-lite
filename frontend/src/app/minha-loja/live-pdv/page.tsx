@@ -63,6 +63,7 @@ interface GradeResult {
   totalRede?: number;
   cells?: GradeCell[];
   fromMirror?: boolean; // produto/estoque vieram do espelho (Giga fora do ar)
+  viaAtalho?: { atalho: string; refCode: string } | null; // busca veio da legenda (01, 02…)
 }
 interface CartItem {
   id: string;
@@ -248,11 +249,17 @@ export default function LivePdvPage() {
 
   // Busca / grade
   const [term, setTerm] = useState('');
-  const [product, setProduct] = useState<GradeResult | null>(null);
+  // Até 4 GRADES ABERTAS ao mesmo tempo (pedido do dono 13/07): a apresentadora
+  // mostra as legendas 01–04 juntas e a operadora clica nas células de todas
+  // sem re-buscar. Busca nova preenche o próximo espaço; a 5ª derruba a mais
+  // antiga; ✕ fecha na mão. Busca sem resultado NÃO fecha as grades abertas.
+  const [products, setProducts] = useState<GradeResult[]>([]);
+  const [searchMiss, setSearchMiss] = useState<string | null>(null);
   const [searching, setSearching] = useState(false);
-  const [promoEditing, setPromoEditing] = useState(false);
+  // Edição de promo/cupom é POR GRADE (guarda a ref da grade em edição)
+  const [promoEditingRef, setPromoEditingRef] = useState<string | null>(null);
   const [promoInput, setPromoInput] = useState('');
-  const [cupomEditing, setCupomEditing] = useState(false);
+  const [cupomEditingRef, setCupomEditingRef] = useState<string | null>(null);
   const [cupomInput, setCupomInput] = useState('20,00');
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -266,7 +273,9 @@ export default function LivePdvPage() {
   const [cartView, setCartView] = useState<'pecas' | 'vazios' | 'todos'>('pecas');
   const [clearingEmpty, setClearingEmpty] = useState(false);
   const [showCustomerModal, setShowCustomerModal] = useState(false);
-  const [pendingCell, setPendingCell] = useState<GradeCell | null>(null);
+  // Célula clicada aguardando identificação da cliente — leva junto a REF da
+  // grade de origem (com 4 grades abertas, o fallback não pode ser global).
+  const [pendingCell, setPendingCell] = useState<{ cell: GradeCell; refCode: string } | null>(null);
   // Aviso rápido "adicionado a Fulana" após fechar o carrinho.
   const [addedFlash, setAddedFlash] = useState<string | null>(null);
   // Aviso âmbar "QR da Fulana venceu" (cobrança resetada pelo backend).
@@ -707,15 +716,15 @@ export default function LivePdvPage() {
       setSessionTitle('');
       setActiveLive(null);
       setCart(null);
-      setProduct(null);
+      setProducts([]);
     } catch (e: any) {
       alert('Erro ao fechar live: ' + (e?.message || e));
     }
   }
 
-  // ─── Preço promocional da live ──────────────────────────────────────────────
-  async function applyPromo() {
-    if (!sessionId || !product?.ref) return;
+  // ─── Preço promocional da live (por grade) ──────────────────────────────────
+  async function applyPromo(p: GradeResult) {
+    if (!sessionId || !p?.ref) return;
     const reais = parseFloat(promoInput.replace(',', '.'));
     if (isNaN(reais) || reais <= 0) {
       alert('Informe um preço promocional válido.');
@@ -724,10 +733,10 @@ export default function LivePdvPage() {
     try {
       await api(`/live-pdv/sessions/${sessionId}/promo`, {
         method: 'POST',
-        body: JSON.stringify({ refCode: product.ref, priceCents: Math.round(reais * 100) }),
+        body: JSON.stringify({ refCode: p.ref, priceCents: Math.round(reais * 100) }),
       });
-      setPromoEditing(false);
-      await doSearch();
+      setPromoEditingRef(null);
+      await refreshGrade(p.ref);
       await refreshCarts();
       await syncOpenCartAfterPriceChange();
     } catch (e: any) {
@@ -735,15 +744,15 @@ export default function LivePdvPage() {
     }
   }
 
-  async function removePromo() {
-    if (!sessionId || !product?.ref) return;
+  async function removePromo(p: GradeResult) {
+    if (!sessionId || !p?.ref) return;
     try {
       await api(`/live-pdv/sessions/${sessionId}/promo`, {
         method: 'POST',
-        body: JSON.stringify({ refCode: product.ref, priceCents: 0 }),
+        body: JSON.stringify({ refCode: p.ref, priceCents: 0 }),
       });
-      setPromoEditing(false);
-      await doSearch();
+      setPromoEditingRef(null);
+      await refreshGrade(p.ref);
       await refreshCarts();
       await syncOpenCartAfterPriceChange();
     } catch (e: any) {
@@ -753,37 +762,37 @@ export default function LivePdvPage() {
 
   // Preço ORIGINAL (base) — referência pros descontos rápidos. Quando já tem
   // promo ativa, usa o basePriceCents (o riscado); senão o preço atual.
-  function baseCents(): number {
-    if (!product) return 0;
-    return product.basePriceCents || product.priceCents || 0;
+  function baseCents(p: GradeResult): number {
+    if (!p) return 0;
+    return p.basePriceCents || p.priceCents || 0;
   }
 
   // Grava um preço final (centavos) como promo da live — usado pelos atalhos
   // "50% OFF" e "Cupom relâmpago". Mesmo endpoint do applyPromo.
-  async function setPromoCents(cents: number) {
-    if (!sessionId || !product?.ref) return;
+  async function setPromoCents(p: GradeResult, cents: number) {
+    if (!sessionId || !p?.ref) return;
     const safe = Math.max(0, Math.round(cents));
-    const full = product.basePriceCents || product.priceCents || 0;
+    const full = p.basePriceCents || p.priceCents || 0;
     try {
       await api(`/live-pdv/sessions/${sessionId}/promo`, {
         method: 'POST',
-        body: JSON.stringify({ refCode: product.ref, priceCents: safe }),
+        body: JSON.stringify({ refCode: p.ref, priceCents: safe }),
       });
-      setPromoEditing(false);
-      setCupomEditing(false);
-      // Atualiza o preço NA TELA imediatamente — NÃO depende do doSearch (que
-      // por sua vez exige o termo ainda estar no campo de busca). Sem isso, o
-      // desconto "não abatia" quando o campo de busca já tinha sido limpo.
-      setProduct((p) =>
-        p
-          ? {
-              ...p,
-              priceCents: safe,
-              basePriceCents: p.basePriceCents || p.priceCents,
-              promoActive: safe > 0 && safe < full,
-              cells: (p.cells || []).map((c) => ({ ...c, priceCents: safe })),
-            }
-          : p,
+      setPromoEditingRef(null);
+      setCupomEditingRef(null);
+      // Atualiza o preço NA TELA imediatamente — não depende de nova busca.
+      setProducts((list) =>
+        list.map((x) =>
+          x.ref === p.ref
+            ? {
+                ...x,
+                priceCents: safe,
+                basePriceCents: x.basePriceCents || x.priceCents,
+                promoActive: safe > 0 && safe < full,
+                cells: (x.cells || []).map((c) => ({ ...c, priceCents: safe })),
+              }
+            : x,
+        ),
       );
       await refreshCarts();
       await syncOpenCartAfterPriceChange();
@@ -793,15 +802,15 @@ export default function LivePdvPage() {
   }
 
   // 50% sobre o preço ORIGINAL.
-  function applyMetade() {
-    const base = baseCents();
+  function applyMetade(p: GradeResult) {
+    const base = baseCents(p);
     if (!base) return;
-    setPromoCents(Math.round(base / 2));
+    setPromoCents(p, Math.round(base / 2));
   }
 
   // Cupom relâmpago: desconta R$ X do preço ORIGINAL.
-  function applyCupom() {
-    const base = baseCents();
+  function applyCupom(p: GradeResult) {
+    const base = baseCents(p);
     const off = parseFloat(cupomInput.replace(',', '.'));
     if (isNaN(off) || off <= 0) {
       alert('Informe o valor do cupom em reais (ex: 20,00).');
@@ -812,7 +821,7 @@ export default function LivePdvPage() {
       alert('O desconto não pode ser maior ou igual ao preço.');
       return;
     }
-    setPromoCents(base - offCents);
+    setPromoCents(p, base - offCents);
   }
 
   // ─── Frete pelo CEP ──────────────────────────────────────────────────────
@@ -878,12 +887,53 @@ export default function LivePdvPage() {
     });
   }
 
-  // ─── Busca ────────────────────────────────────────────────────────────────
+  // ─── Busca / grades abertas (até 4) ──────────────────────────────────────
+  const MAX_GRADES = 4;
+
+  /** Insere/atualiza a grade na lista: mesma REF substitui no lugar; nova entra
+   *  no fim; passou de 4, a MAIS ANTIGA sai. */
+  function upsertProduct(res: GradeResult) {
+    if (!res?.found || !res.ref) return;
+    setProducts((prev) => {
+      const idx = prev.findIndex((p) => p.ref === res.ref);
+      if (idx >= 0) {
+        const c = [...prev];
+        c[idx] = res;
+        return c;
+      }
+      const next = [...prev, res];
+      return next.length > MAX_GRADES ? next.slice(next.length - MAX_GRADES) : next;
+    });
+  }
+
+  function closeGrade(ref?: string) {
+    setProducts((prev) => prev.filter((p) => p.ref !== ref));
+    if (promoEditingRef === ref) setPromoEditingRef(null);
+    if (cupomEditingRef === ref) setCupomEditingRef(null);
+  }
+
+  /** Recarrega em silêncio a grade de UMA ref aberta (estoque/reservas mudaram). */
+  async function refreshGrade(refCode?: string | null) {
+    const q = String(refCode || '').trim();
+    if (!q) return;
+    try {
+      const sid = sessionId ? `&sessionId=${sessionId}` : '';
+      const res = await api<GradeResult>(`/live-pdv/search?term=${encodeURIComponent(q)}${sid}`);
+      if (res?.found) upsertProduct(res);
+    } catch {
+      /* mantém a grade como está */
+    }
+  }
+
+  /** Recarrega TODAS as grades abertas (ex.: carrinho cancelado liberou reservas). */
+  async function refreshAllGrades() {
+    for (const p of products) await refreshGrade(p.ref);
+  }
+
   async function runSearch(q: string) {
     if (!q) return;
     setSearching(true);
-    setProduct(null);
-    setPromoEditing(false);
+    setSearchMiss(null);
     setHistoryOpen(false);
     try {
       const sid = sessionId ? `&sessionId=${sessionId}` : '';
@@ -895,14 +945,18 @@ export default function LivePdvPage() {
           setTimeout(() => reject(new Error('__timeout__')), 12000),
         ),
       ]);
-      setProduct(res);
-      if (res?.found) pushRefHistory(res.ref || q);
+      if (res?.found) {
+        upsertProduct(res);
+        pushRefHistory(res.ref || q);
+        setTerm(''); // limpa pra próxima legenda — as grades ficam abertas
+      } else {
+        setSearchMiss(q);
+      }
     } catch (err: any) {
       if (err?.message === '__timeout__') {
-        setProduct(null);
         alert('A busca demorou demais (o Giga pode estar lento). Tente de novo.');
       } else {
-        setProduct({ found: false });
+        setSearchMiss(q);
       }
     } finally {
       setSearching(false);
@@ -914,24 +968,24 @@ export default function LivePdvPage() {
     await runSearch(term.trim());
   }
 
-  // Botão "Atualizar estoque": força o refresh pontual no Giga (só os códigos
-  // desta peça) e re-renderiza a grade fresca. Nunca trava: o backend devolve
-  // a grade do espelho se o Giga não responder em 8s.
-  const [refreshingStock, setRefreshingStock] = useState(false);
-  async function refreshStock() {
-    const q = (product?.ref || term).trim();
-    if (!q || refreshingStock) return;
-    setRefreshingStock(true);
+  // Botão "Atualizar estoque" (por grade): força o refresh pontual no Giga (só
+  // os códigos da peça) e re-renderiza a grade fresca. Nunca trava: o backend
+  // devolve a grade do espelho se o Giga não responder em 8s.
+  const [refreshingRef, setRefreshingRef] = useState<string | null>(null);
+  async function refreshStock(p: GradeResult) {
+    const q = (p.ref || '').trim();
+    if (!q || refreshingRef) return;
+    setRefreshingRef(q);
     try {
       const res = await api<GradeResult>(`/live-pdv/search/refresh-stock`, {
         method: 'POST',
         body: JSON.stringify({ term: q, sessionId }),
       });
-      setProduct(res);
+      if (res?.found) upsertProduct(res);
     } catch {
       alert('Não consegui atualizar agora (Giga lento?). A grade continua a do espelho.');
     } finally {
-      setRefreshingStock(false);
+      setRefreshingRef(null);
     }
   }
 
@@ -957,26 +1011,26 @@ export default function LivePdvPage() {
     searchRef.current?.focus();
   }
 
-  async function clickCell(cell: GradeCell) {
+  async function clickCell(cell: GradeCell, refCode: string) {
     if (cell.available <= 0) return;
     if (!sessionId) {
       alert('Crie/abra uma sessão de live primeiro.');
       return;
     }
     if (!activeCustomer) {
-      setPendingCell(cell);
+      setPendingCell({ cell, refCode });
       setShowCustomerModal(true);
       return;
     }
-    await addItem(cell);
+    await addItem(cell, refCode);
   }
 
-  async function addItem(cell: GradeCell) {
-    if (!sessionId || !product?.ref) return;
+  async function addItem(cell: GradeCell, refCode: string) {
+    if (!sessionId || !(cell.ref || refCode)) return;
     setAdding(cell.itemKey);
     try {
       const body: any = {
-        refCode: cell.ref || product.ref,
+        refCode: cell.ref || refCode,
         cor: cell.cor,
         tamanho: cell.tamanho,
         qty: 1,
@@ -998,7 +1052,7 @@ export default function LivePdvPage() {
       setCart(res.cart);
       setQr(null);
       setPaid(false);
-      await doSearch(); // atualiza estoque exibido
+      await refreshGrade(cell.ref || refCode); // atualiza SÓ a grade da peça — as outras ficam
       await refreshCarts();
       closeAfterAdd(res.cart?.customerName); // fecha o carrinho por segurança
     } catch (e: any) {
@@ -1023,19 +1077,19 @@ export default function LivePdvPage() {
       setActiveCustomer(c);
       setCart(null);
       setShowCustomerModal(false);
-      const cell = pendingCell;
+      const pending = pendingCell;
       setPendingCell(null);
-      if (cell) {
+      if (pending) {
         // addItem precisa do customer atualizado
-        setTimeout(() => addItemWith(c, cell), 0);
+        setTimeout(() => addItemWith(c, pending.cell, pending.refCode), 0);
       }
     } catch (e: any) {
       alert(e?.message || 'Erro ao salvar cliente');
     }
   }
 
-  async function addItemWith(customer: ActiveCustomer, cell: GradeCell) {
-    if (!sessionId || !product?.ref) return;
+  async function addItemWith(customer: ActiveCustomer, cell: GradeCell, refCode: string) {
+    if (!sessionId || !(cell.ref || refCode)) return;
     setAdding(cell.itemKey);
     try {
       const res = await api<{ cart: Cart }>(`/live-pdv/sessions/${sessionId}/items`, {
@@ -1047,14 +1101,14 @@ export default function LivePdvPage() {
             phone: customer.phone,
             instagram: customer.instagram,
           },
-          refCode: cell.ref || product.ref,
+          refCode: cell.ref || refCode,
           cor: cell.cor,
           tamanho: cell.tamanho,
           qty: 1,
         }),
       });
       setCart(res.cart);
-      await doSearch();
+      await refreshGrade(cell.ref || refCode);
       await refreshCarts();
       closeAfterAdd(res.cart?.customerName); // fecha o carrinho por segurança
     } catch (e: any) {
@@ -1068,28 +1122,28 @@ export default function LivePdvPage() {
   // @) em vez de criar outro — abre ele e adiciona a peça pendente nele.
   function handleUseExisting(existing: Cart) {
     setShowCustomerModal(false);
-    const cell = pendingCell;
+    const pending = pendingCell;
     setPendingCell(null);
     openCart(existing);
-    if (cell) setTimeout(() => addItemToCart(existing, cell), 0);
+    if (pending) setTimeout(() => addItemToCart(existing, pending.cell, pending.refCode), 0);
   }
 
-  async function addItemToCart(targetCart: Cart, cell: GradeCell) {
-    if (!sessionId || !product?.ref) return;
+  async function addItemToCart(targetCart: Cart, cell: GradeCell, refCode: string) {
+    if (!sessionId || !(cell.ref || refCode)) return;
     setAdding(cell.itemKey);
     try {
       const res = await api<{ cart: Cart }>(`/live-pdv/sessions/${sessionId}/items`, {
         method: 'POST',
         body: JSON.stringify({
           cartId: targetCart.id,
-          refCode: cell.ref || product.ref,
+          refCode: cell.ref || refCode,
           cor: cell.cor,
           tamanho: cell.tamanho,
           qty: 1,
         }),
       });
       setCart(res.cart);
-      await doSearch();
+      await refreshGrade(cell.ref || refCode);
       await refreshCarts();
       closeAfterAdd(res.cart?.customerName);
     } catch (e: any) {
@@ -1115,7 +1169,7 @@ export default function LivePdvPage() {
       await api(`/live-pdv/carts/${cart.id}/cancel`, { method: 'POST', body: JSON.stringify({}) });
       newClient();
       await refreshCarts();
-      await doSearch(); // atualiza estoque (reservas liberadas)
+      await refreshAllGrades(); // atualiza estoque (reservas liberadas)
     } catch (e: any) {
       alert('Erro ao excluir: ' + (e?.message || e));
     }
@@ -1129,7 +1183,7 @@ export default function LivePdvPage() {
       await api(`/live-pdv/carts/${c.id}/cancel`, { method: 'POST', body: JSON.stringify({}) });
       if (cart?.id === c.id) newClient(); // se era a que estava aberta no painel, limpa
       await refreshCarts();
-      await doSearch(); // atualiza estoque (reservas liberadas)
+      await refreshAllGrades(); // atualiza estoque (reservas liberadas)
     } catch (e: any) {
       alert('Erro ao excluir: ' + (e?.message || e));
     }
@@ -1886,278 +1940,248 @@ export default function LivePdvPage() {
               )}
             </form>
 
-            {product && !product.found && (
-              <div className="rounded-xl border border-amber-200 bg-amber-50 p-6 text-center text-amber-700">
-                Nada encontrado para “{term}”.
+            {searchMiss && (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-center text-sm text-amber-700">
+                Nada encontrado para “{searchMiss}” — as grades abertas continuam aí.
               </div>
             )}
 
-            {product && product.found && (
-              <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-                {product.fromMirror && (
-                  <div className="mb-3 flex flex-wrap items-center gap-2">
-                    <div className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-medium text-slate-500">
-                      <Package className="h-3 w-3" /> Estoque atualizado do Giga na busca desta peça
-                    </div>
-                    <button
-                      type="button"
-                      onClick={refreshStock}
-                      disabled={refreshingStock}
-                      title="Busca o estoque desta peça direto no Giga agora"
-                      className="inline-flex items-center gap-1 rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] font-bold text-rose-600 hover:bg-rose-100 disabled:opacity-50"
-                    >
-                      <RefreshCw className={`h-3 w-3 ${refreshingStock ? 'animate-spin' : ''}`} />
-                      {refreshingStock ? 'Atualizando…' : 'Atualizar estoque'}
-                    </button>
-                  </div>
-                )}
-                <div className="mb-4 flex gap-4">
-                  <div className="h-28 w-28 shrink-0 overflow-hidden rounded-lg bg-slate-100">
-                    {product.photoUrl ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={product.photoUrl} alt={product.descricao || ''} className="h-full w-full object-cover" />
-                    ) : (
-                      <div className="flex h-full w-full items-center justify-center text-slate-300">
-                        <Package className="h-10 w-10" />
-                      </div>
-                    )}
-                  </div>
-                  <div className="min-w-0">
-                    <div className="text-xs font-semibold text-rose-600">{product.ref}</div>
-                    <h2 className="truncate text-lg font-bold text-slate-800">{product.descricao}</h2>
-
-                    {/* Preço + preço promocional da live */}
-                    {promoEditing ? (
-                      <div className="mt-1 flex flex-wrap items-center gap-2">
-                        <div className="relative">
-                          <span className="absolute left-2 top-1/2 -translate-y-1/2 text-sm text-slate-400">R$</span>
-                          <input
-                            autoFocus
-                            value={promoInput}
-                            onChange={(e) => setPromoInput(e.target.value)}
-                            onKeyDown={(e) => e.key === 'Enter' && applyPromo()}
-                            inputMode="decimal"
-                            placeholder="0,00"
-                            className="w-28 rounded-lg border border-rose-300 py-1.5 pl-8 pr-2 text-lg font-bold focus:outline-none focus:ring-2 focus:ring-rose-200"
-                          />
-                        </div>
-                        <button
-                          onClick={applyPromo}
-                          className="rounded-lg bg-rose-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-rose-700"
-                        >
-                          Aplicar
-                        </button>
-                        {product.promoActive && (
-                          <button
-                            onClick={removePromo}
-                            className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-50"
-                          >
-                            Remover promo
-                          </button>
-                        )}
-                        <button
-                          onClick={() => setPromoEditing(false)}
-                          className="text-sm text-slate-400 hover:text-slate-600"
-                        >
-                          Cancelar
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="mt-1 space-y-2">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className={`text-2xl font-extrabold ${product.promoActive ? 'text-rose-600' : 'text-slate-900'}`}>
-                            {brl(product.priceCents || 0)}
-                          </span>
-                          {product.promoActive && (
-                            <>
-                              <span className="text-sm text-slate-400 line-through">
-                                {brl(product.basePriceCents || 0)}
-                              </span>
-                              <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-bold uppercase text-rose-700">
-                                <Tag className="h-3 w-3" /> Promo Live
-                              </span>
-                            </>
-                          )}
-                          <button
-                            onClick={() => {
-                              setPromoInput(((product.priceCents || 0) / 100).toFixed(2).replace('.', ','));
-                              setCupomEditing(false);
-                              setPromoEditing(true);
-                            }}
-                            title="Definir preço promocional da live"
-                            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-1 text-xs font-medium text-slate-600 hover:border-rose-300 hover:text-rose-600"
-                          >
-                            <Pencil className="h-3.5 w-3.5" /> Preço
-                          </button>
-                          {/* 50% sobre o preço ORIGINAL */}
-                          <button
-                            onClick={applyMetade}
-                            title="Aplicar 50% de desconto sobre o preço original"
-                            className="inline-flex items-center gap-1 rounded-lg border border-amber-300 bg-amber-50 px-2 py-1 text-xs font-bold text-amber-700 hover:bg-amber-100"
-                          >
-                            <Percent className="h-3.5 w-3.5" /> 50% OFF
-                          </button>
-                          {/* Cupom relâmpago — R$ X off editável */}
-                          <button
-                            onClick={() => {
-                              setPromoEditing(false);
-                              setCupomEditing((v) => !v);
-                            }}
-                            title="Cupom relâmpago — desconto em reais sobre o preço original"
-                            className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-xs font-bold ${
-                              cupomEditing
-                                ? 'border-rose-400 bg-rose-50 text-rose-700'
-                                : 'border-rose-300 text-rose-600 hover:bg-rose-50'
-                            }`}
-                          >
-                            <Zap className="h-3.5 w-3.5" /> Cupom relâmpago
-                          </button>
-                          {product.promoActive && (
-                            <button
-                              onClick={removePromo}
-                              className="text-xs text-slate-400 underline hover:text-slate-600"
-                            >
-                              remover
-                            </button>
-                          )}
-                        </div>
-
-                        {cupomEditing && (
-                          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-rose-200 bg-rose-50/50 p-2">
-                            <span className="text-xs font-bold uppercase tracking-wide text-rose-700">
-                              Cupom relâmpago
-                            </span>
-                            <div className="relative">
-                              <span className="absolute left-2 top-1/2 -translate-y-1/2 text-sm text-slate-400">−R$</span>
-                              <input
-                                autoFocus
-                                value={cupomInput}
-                                onChange={(e) => setCupomInput(e.target.value)}
-                                onKeyDown={(e) => e.key === 'Enter' && applyCupom()}
-                                inputMode="decimal"
-                                placeholder="20,00"
-                                className="w-28 rounded-lg border border-rose-300 py-1.5 pl-9 pr-2 text-base font-bold focus:outline-none focus:ring-2 focus:ring-rose-200"
-                              />
-                            </div>
-                            <button
-                              onClick={applyCupom}
-                              className="rounded-lg bg-rose-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-rose-700"
-                            >
-                              Aplicar
-                            </button>
-                            <span className="text-xs text-slate-500">
-                              sobre {brl(product.basePriceCents || product.priceCents || 0)}
-                            </span>
-                            <button
-                              onClick={() => setCupomEditing(false)}
-                              className="text-sm text-slate-400 hover:text-slate-600"
-                            >
-                              Cancelar
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    <div className="mt-1 inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700">
-                      <Package className="h-3 w-3" /> {product.totalRede} na rede
-                    </div>
-                  </div>
-                </div>
-
-                {/* Grade — matriz cor × tamanho (clique na célula adiciona ao carrinho) */}
-                {(() => {
-                  const g = buildGrade(product);
-                  if (!g.colors.length) {
-                    return <div className="text-sm text-slate-400">Sem grade disponível.</div>;
-                  }
+            {/* ATÉ 4 GRADES ABERTAS lado a lado (2×2 em monitor grande, coluna
+                no notebook). Cada cartão é compacto e independente: promo,
+                atualizar estoque e fechar são POR PEÇA. */}
+            {products.length > 0 && (
+              <div className={`grid grid-cols-1 gap-3 ${products.length > 1 ? '2xl:grid-cols-2' : ''}`}>
+                {products.map((p) => {
+                  const promoEditing = promoEditingRef === p.ref;
+                  const cupomEditing = cupomEditingRef === p.ref;
+                  const refreshing = refreshingRef === p.ref;
+                  const g = buildGrade(p);
                   return (
-                    <div className="overflow-x-auto rounded-lg border border-slate-200">
-                      <table className="w-full border-collapse text-sm">
-                        <thead>
-                          <tr className="border-b border-slate-200 bg-slate-100">
-                            <th className="sticky left-0 z-10 min-w-[90px] bg-slate-100 px-3 py-2 text-left font-bold text-slate-700">
-                              Cor
-                            </th>
-                            {g.sizes.map((s) => (
-                              <th key={s} className="min-w-[42px] px-2 py-1.5 text-center font-bold text-slate-700">
-                                {s}
-                              </th>
-                            ))}
-                            <th className="min-w-[48px] bg-slate-200 px-2 py-2 text-center font-bold text-slate-700">
-                              Total
-                            </th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {g.colors.map((cor) => {
-                            const colorTotal = g.totalsByColor.get(cor) || 0;
-                            return (
-                              <tr key={cor} className="border-b border-slate-100 hover:bg-slate-50">
-                                <td className="sticky left-0 z-10 border-r border-slate-100 bg-white px-3 py-2 font-semibold text-slate-800">
-                                  <span className="flex items-center gap-2">
-                                    <span className={`h-2 w-2 rounded-full ${colorTotal > 0 ? 'bg-emerald-500' : 'bg-slate-300'}`} />
-                                    <span className="max-w-[110px] truncate" title={cor}>{cor}</span>
-                                  </span>
-                                </td>
-                                {g.sizes.map((s) => {
-                                  const cell = g.cellByKey.get(`${cor}|${s}`);
-                                  const qty = cell?.available ?? 0;
-                                  const busy = !!cell && adding === cell.itemKey;
-                                  const low = qty > 0 && qty <= 2;
-                                  const title =
-                                    cell && cell.perStore.length
-                                      ? cell.perStore.map((ps) => `${ps.storeName}: ${ps.qty}`).join('  ·  ')
-                                      : 'Sem estoque';
-                                  return (
-                                    <td key={s} className="p-0.5 text-center">
-                                      <button
-                                        type="button"
-                                        disabled={!cell || qty <= 0 || busy}
-                                        onClick={() => cell && clickCell(cell)}
-                                        title={title}
-                                        className={`mx-auto flex h-9 w-full items-center justify-center rounded font-extrabold transition ${
-                                          qty <= 0
-                                            ? 'cursor-not-allowed bg-slate-50 text-slate-300'
-                                            : low
-                                            ? 'border border-amber-300 bg-amber-100 text-amber-900 hover:bg-amber-200 active:scale-95'
-                                            : 'border border-emerald-300 bg-emerald-100 text-emerald-900 hover:bg-emerald-200 active:scale-95'
-                                        }`}
-                                      >
-                                        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : qty > 0 ? qty : '—'}
-                                      </button>
-                                    </td>
-                                  );
-                                })}
-                                <td className={`bg-slate-50 px-2 py-2 text-center font-bold ${colorTotal > 0 ? 'text-emerald-700' : 'text-slate-400'}`}>
-                                  {colorTotal}
-                                </td>
+                    <div key={p.ref} className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+                      {/* Cabeçalho compacto: atalho · foto · desc · preço · ações */}
+                      <div className="mb-2 flex items-center gap-2">
+                        {p.viaAtalho?.atalho && (
+                          <span className="shrink-0 rounded-full bg-rose-100 px-2 py-0.5 font-mono text-[11px] font-bold text-rose-700">
+                            {p.viaAtalho.atalho}
+                          </span>
+                        )}
+                        <div className="h-10 w-10 shrink-0 overflow-hidden rounded-lg bg-slate-100">
+                          {p.photoUrl ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={p.photoUrl} alt={p.descricao || ''} className="h-full w-full object-cover" />
+                          ) : (
+                            <div className="flex h-full w-full items-center justify-center text-slate-300">
+                              <Package className="h-5 w-5" />
+                            </div>
+                          )}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-[10px] font-semibold text-rose-600">{p.ref}</div>
+                          <div className="truncate text-sm font-bold text-slate-800" title={p.descricao || ''}>
+                            {p.descricao}
+                          </div>
+                        </div>
+                        <span className="shrink-0 whitespace-nowrap rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">
+                          {p.totalRede} na rede
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => refreshStock(p)}
+                          disabled={!!refreshingRef}
+                          title="Busca o estoque desta peça direto no Giga agora"
+                          className="shrink-0 rounded-md border border-rose-200 bg-rose-50 p-1.5 text-rose-600 hover:bg-rose-100 disabled:opacity-50"
+                        >
+                          <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => closeGrade(p.ref)}
+                          title="Fechar esta grade"
+                          className="shrink-0 rounded-md border border-slate-200 p-1.5 text-slate-400 hover:bg-slate-50 hover:text-slate-600"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+
+                      {/* Preço + promo (compacto, por peça) */}
+                      {promoEditing ? (
+                        <div className="mb-2 flex flex-wrap items-center gap-2">
+                          <div className="relative">
+                            <span className="absolute left-2 top-1/2 -translate-y-1/2 text-sm text-slate-400">R$</span>
+                            <input
+                              autoFocus
+                              value={promoInput}
+                              onChange={(e) => setPromoInput(e.target.value)}
+                              onKeyDown={(e) => e.key === 'Enter' && applyPromo(p)}
+                              inputMode="decimal"
+                              placeholder="0,00"
+                              className="w-24 rounded-lg border border-rose-300 py-1 pl-8 pr-2 text-base font-bold focus:outline-none focus:ring-2 focus:ring-rose-200"
+                            />
+                          </div>
+                          <button onClick={() => applyPromo(p)} className="rounded-lg bg-rose-600 px-3 py-1 text-sm font-semibold text-white hover:bg-rose-700">
+                            Aplicar
+                          </button>
+                          {p.promoActive && (
+                            <button onClick={() => removePromo(p)} className="rounded-lg border border-slate-300 px-3 py-1 text-sm text-slate-600 hover:bg-slate-50">
+                              Remover promo
+                            </button>
+                          )}
+                          <button onClick={() => setPromoEditingRef(null)} className="text-sm text-slate-400 hover:text-slate-600">
+                            Cancelar
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="mb-2 space-y-1.5">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className={`text-lg font-extrabold ${p.promoActive ? 'text-rose-600' : 'text-slate-900'}`}>
+                              {brl(p.priceCents || 0)}
+                            </span>
+                            {p.promoActive && (
+                              <>
+                                <span className="text-xs text-slate-400 line-through">{brl(p.basePriceCents || 0)}</span>
+                                <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-1.5 py-0.5 text-[9px] font-bold uppercase text-rose-700">
+                                  <Tag className="h-2.5 w-2.5" /> Promo
+                                </span>
+                              </>
+                            )}
+                            <button
+                              onClick={() => {
+                                setPromoInput(((p.priceCents || 0) / 100).toFixed(2).replace('.', ','));
+                                setCupomEditingRef(null);
+                                setPromoEditingRef(p.ref || null);
+                              }}
+                              title="Definir preço promocional da live"
+                              className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-1.5 py-0.5 text-[11px] font-medium text-slate-600 hover:border-rose-300 hover:text-rose-600"
+                            >
+                              <Pencil className="h-3 w-3" /> Preço
+                            </button>
+                            <button
+                              onClick={() => applyMetade(p)}
+                              title="Aplicar 50% de desconto sobre o preço original"
+                              className="inline-flex items-center gap-1 rounded-lg border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[11px] font-bold text-amber-700 hover:bg-amber-100"
+                            >
+                              <Percent className="h-3 w-3" /> 50%
+                            </button>
+                            <button
+                              onClick={() => {
+                                setPromoEditingRef(null);
+                                setCupomEditingRef(cupomEditing ? null : p.ref || null);
+                              }}
+                              title="Cupom relâmpago — desconto em reais sobre o preço original"
+                              className={`inline-flex items-center gap-1 rounded-lg border px-1.5 py-0.5 text-[11px] font-bold ${
+                                cupomEditing ? 'border-rose-400 bg-rose-50 text-rose-700' : 'border-rose-300 text-rose-600 hover:bg-rose-50'
+                              }`}
+                            >
+                              <Zap className="h-3 w-3" /> Cupom
+                            </button>
+                            {p.promoActive && (
+                              <button onClick={() => removePromo(p)} className="text-[11px] text-slate-400 underline hover:text-slate-600">
+                                remover
+                              </button>
+                            )}
+                          </div>
+
+                          {cupomEditing && (
+                            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-rose-200 bg-rose-50/50 p-1.5">
+                              <div className="relative">
+                                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-sm text-slate-400">−R$</span>
+                                <input
+                                  autoFocus
+                                  value={cupomInput}
+                                  onChange={(e) => setCupomInput(e.target.value)}
+                                  onKeyDown={(e) => e.key === 'Enter' && applyCupom(p)}
+                                  inputMode="decimal"
+                                  placeholder="20,00"
+                                  className="w-24 rounded-lg border border-rose-300 py-1 pl-9 pr-2 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-rose-200"
+                                />
+                              </div>
+                              <button onClick={() => applyCupom(p)} className="rounded-lg bg-rose-600 px-3 py-1 text-sm font-semibold text-white hover:bg-rose-700">
+                                Aplicar
+                              </button>
+                              <span className="text-[11px] text-slate-500">sobre {brl(p.basePriceCents || p.priceCents || 0)}</span>
+                              <button onClick={() => setCupomEditingRef(null)} className="text-sm text-slate-400 hover:text-slate-600">
+                                Cancelar
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Grade compacta — SEM coluna Total (o total está no chip "na
+                          rede"); Cor mais larga; célula menor pro 46–60 caber no 2×2 */}
+                      {g.colors.length === 0 ? (
+                        <div className="text-sm text-slate-400">Sem grade disponível.</div>
+                      ) : (
+                        <div className="overflow-x-auto rounded-lg border border-slate-200">
+                          <table className="w-full border-collapse text-sm">
+                            <thead>
+                              <tr className="border-b border-slate-200 bg-slate-100">
+                                <th className="sticky left-0 z-10 min-w-[110px] bg-slate-100 px-2 py-1.5 text-left text-xs font-bold text-slate-700">
+                                  Cor
+                                </th>
+                                {g.sizes.map((s) => (
+                                  <th key={s} className="min-w-[38px] px-1 py-1 text-center text-xs font-bold text-slate-700">
+                                    {s}
+                                  </th>
+                                ))}
                               </tr>
-                            );
-                          })}
-                          <tr className="border-t-2 border-slate-300 bg-slate-100">
-                            <td className="sticky left-0 z-10 border-r border-slate-200 bg-slate-100 px-3 py-2 font-bold text-slate-700">
-                              Total
-                            </td>
-                            {g.sizes.map((s) => {
-                              const t = g.totalsBySize.get(s) || 0;
-                              return (
-                                <td key={s} className={`px-2 py-2 text-center font-bold ${t > 0 ? 'text-slate-800' : 'text-slate-400'}`}>
-                                  {t}
-                                </td>
-                              );
-                            })}
-                            <td className="bg-slate-200 px-2 py-2 text-center font-extrabold text-emerald-700">
-                              {product.totalRede}
-                            </td>
-                          </tr>
-                        </tbody>
-                      </table>
+                            </thead>
+                            <tbody>
+                              {g.colors.map((cor) => {
+                                const colorTotal = g.totalsByColor.get(cor) || 0;
+                                return (
+                                  <tr key={cor} className="border-b border-slate-100 hover:bg-slate-50">
+                                    <td className="sticky left-0 z-10 border-r border-slate-100 bg-white px-2 py-1 text-xs font-semibold text-slate-800">
+                                      <span className="flex items-center gap-1.5">
+                                        <span className={`h-2 w-2 shrink-0 rounded-full ${colorTotal > 0 ? 'bg-emerald-500' : 'bg-slate-300'}`} />
+                                        <span className="max-w-[120px] truncate" title={cor}>{cor}</span>
+                                      </span>
+                                    </td>
+                                    {g.sizes.map((s) => {
+                                      const cell = g.cellByKey.get(`${cor}|${s}`);
+                                      const qty = cell?.available ?? 0;
+                                      const busy = !!cell && adding === cell.itemKey;
+                                      const low = qty > 0 && qty <= 2;
+                                      const title =
+                                        cell && cell.perStore.length
+                                          ? cell.perStore.map((ps) => `${ps.storeName}: ${ps.qty}`).join('  ·  ')
+                                          : 'Sem estoque';
+                                      return (
+                                        <td key={s} className="p-0.5 text-center">
+                                          <button
+                                            type="button"
+                                            disabled={!cell || qty <= 0 || busy}
+                                            onClick={() => cell && clickCell(cell, p.ref || '')}
+                                            title={title}
+                                            className={`mx-auto flex h-8 w-full items-center justify-center rounded text-sm font-extrabold transition ${
+                                              qty <= 0
+                                                ? 'cursor-not-allowed bg-slate-50 text-slate-300'
+                                                : low
+                                                ? 'border border-amber-300 bg-amber-100 text-amber-900 hover:bg-amber-200 active:scale-95'
+                                                : 'border border-emerald-300 bg-emerald-100 text-emerald-900 hover:bg-emerald-200 active:scale-95'
+                                            }`}
+                                          >
+                                            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : qty > 0 ? qty : '—'}
+                                          </button>
+                                        </td>
+                                      );
+                                    })}
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
                     </div>
                   );
-                })()}
+                })}
+              </div>
+            )}
 
-                <div className="mt-2 flex flex-wrap items-center gap-3 px-1 text-[11px] text-slate-500">
+            {products.length > 0 && (
+              <>
+                <div className="mt-1 flex flex-wrap items-center gap-3 px-1 text-[11px] text-slate-500">
                   <span className="inline-flex items-center gap-1">
                     <span className="inline-block h-3 w-3 rounded border border-emerald-300 bg-emerald-100" /> disponível
                   </span>
@@ -2167,12 +2191,12 @@ export default function LivePdvPage() {
                   <span className="inline-flex items-center gap-1">
                     <span className="inline-block h-3 w-3 rounded border border-slate-200 bg-slate-50" /> sem estoque
                   </span>
-                  <span>· clique na célula pra adicionar · passe o mouse pra ver por loja</span>
+                  <span>· clique na célula pra adicionar · até {MAX_GRADES} grades abertas (a mais antiga sai)</span>
                 </div>
 
-                {/* Novo carrinho — logo abaixo da grade, pra começar a próxima
+                {/* Novo carrinho — abaixo das grades, pra começar a próxima
                     cliente rápido sem sair da mão. */}
-                <div className="mt-4 flex justify-center">
+                <div className="mt-3 flex justify-center">
                   <button
                     onClick={newClient}
                     className="inline-flex items-center gap-2 rounded-xl bg-rose-600 px-6 py-2.5 font-bold text-white shadow hover:bg-rose-700"
@@ -2180,7 +2204,7 @@ export default function LivePdvPage() {
                     <ShoppingCart className="h-5 w-5" /> Novo carrinho
                   </button>
                 </div>
-              </div>
+              </>
             )}
 
           </div>
