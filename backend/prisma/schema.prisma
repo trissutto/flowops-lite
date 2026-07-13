@@ -3428,6 +3428,9 @@ model LivePdvAtalho {
   atalho    String   // código curto normalizado (trim + UPPER) — único por sessão
   refCode   String   @map("ref_code")  // referência COMPLETA validada (o termo que o operador digitaria)
   descricao String?  // snapshot da descrição na validação (exibição na lista)
+  // Cor VENDIDA nesta legenda (13/07): digitar o atalho abre a grade SÓ dessa
+  // cor. Null = todas as cores (comportamento antigo).
+  cor       String?  @db.VarChar(40)
   position  Int      @default(0)
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")

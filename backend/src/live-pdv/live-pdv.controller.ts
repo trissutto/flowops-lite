@@ -134,12 +134,13 @@ export class LivePdvController {
   @Post('sessions/:id/atalhos')
   saveAtalho(
     @Param('id') sessionId: string,
-    @Body() body: { id?: string | null; atalho: string; refCode: string },
+    @Body() body: { id?: string | null; atalho: string; refCode: string; cor?: string | null },
   ) {
     return this.svc.saveAtalho(sessionId, {
       id: body?.id || null,
       atalho: body?.atalho || '',
       refCode: body?.refCode || '',
+      cor: body?.cor ?? null,
     });
   }
 
