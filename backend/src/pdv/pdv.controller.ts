@@ -309,20 +309,20 @@ export class PdvController {
     @Query('q') q?: string,
     @Query('limit') limit?: string,
   ) {
-    // READ-ONLY: admin/store (requireRole) + 'franquias' (só leitura).
+    // READ-ONLY: admin/store (requireRole) + 'franquias'/'master_franquia'.
     const role = req?.user?.role;
-    if (role !== 'admin' && role !== 'store' && role !== 'franquias') {
+    if (role !== 'admin' && role !== 'store' && role !== 'franquias' && role !== 'master_franquia') {
       throw new ForbiddenException('Apenas admin, loja ou administrador de franquias');
     }
 
     // ESCOPO POR PAPEL:
     //  - store      → SÓ a própria loja (ignora storeCode da query).
-    //  - franquias  → SÓ as lojas FILIAL (franqueadas).
+    //  - franquias/master_franquia → SÓ as lojas FILIAL (franqueadas).
     //  - admin/master → todas (ou filtra pelo storeCode escolhido).
     const userStoreCode = req?.user?.storeCode;
     let effectiveStoreCode = role === 'store' && userStoreCode ? userStoreCode : storeCode;
     let storeCodes: string[] | undefined;
-    if (role === 'franquias') {
+    if (role === 'franquias' || role === 'master_franquia') {
       const franq = await (this.svc as any).prisma.store.findMany({
         where: { tipo: 'FILIAL', active: true },
         select: { code: true },

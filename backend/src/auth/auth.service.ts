@@ -65,16 +65,20 @@ export class AuthService {
   async impersonateStore(adminUserId: string, storeCode: string) {
     const admin = await this.prisma.user.findUnique({ where: { id: adminUserId } });
     if (!admin || !admin.active) throw new UnauthorizedException('Admin invalido');
-    if (admin.role !== 'admin' && admin.role !== 'master') {
+    if (admin.role !== 'admin' && admin.role !== 'master' && admin.role !== 'master_franquia') {
       throw new UnauthorizedException('Apenas admin/master pode impersonar loja');
     }
 
     const store = await this.prisma.store.findUnique({
       where: { code: storeCode },
-      select: { id: true, code: true, name: true, active: true },
+      select: { id: true, code: true, name: true, active: true, tipo: true },
     });
     if (!store) throw new NotFoundException(`Loja ${storeCode} nao cadastrada`);
     if (!store.active) throw new BadRequestException(`Loja ${storeCode} esta inativa`);
+    // MASTER DA FRANQUIA: só abre lojas franqueadas (tipo=FILIAL) — nunca REDE.
+    if (admin.role === 'master_franquia' && store.tipo !== 'FILIAL') {
+      throw new UnauthorizedException(`Loja ${store.code} nao e franquia — acesso negado`);
+    }
 
     const payload = {
       sub: admin.id,
