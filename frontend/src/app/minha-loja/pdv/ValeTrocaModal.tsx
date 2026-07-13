@@ -61,15 +61,18 @@ export default function ValeTrocaModal({
     setInfo(null);
     const c = code.trim().toUpperCase();
     if (!c) {
-      setErr('Bipa ou digita o código TROCA-XXXXX');
+      setErr('Bipa ou digita o código TROCA-XXXXXXXX');
       return;
     }
     setBusy(true);
     try {
       const r = await api<CreditInfo>(`/pdv/devolucao/credito/${encodeURIComponent(c)}`);
-      setInfo(r);
+      // Decimal do Prisma chega serializado como STRING — coage pra número
+      // aqui, senão as comparações de saldo viram concatenação de texto.
+      const norm = { ...r, valor: Number(r.valor) || 0 };
+      setInfo(norm);
       // Valor default: o menor entre saldo do vale e restante da venda
-      const aplicavel = Math.min(r.valor, totalRestante);
+      const aplicavel = Math.min(norm.valor, totalRestante);
       setValor(aplicavel.toFixed(2).replace('.', ','));
     } catch (e: any) {
       setErr(e?.message || 'Vale-troca não encontrado');
@@ -78,11 +81,20 @@ export default function ValeTrocaModal({
     }
   };
 
+  // pt-BR: vírgula é o decimal e ponto é milhar ("1.234,56"). Sem vírgula,
+  // ponto vale como decimal ("23.90" = 23,90) — senão virava 2390.
+  const parseValor = (s: string) => {
+    const t = (s || '').trim();
+    if (!t) return 0;
+    const norm = t.includes(',') ? t.replace(/\./g, '').replace(',', '.') : t;
+    return Number(norm);
+  };
+
   const aplicar = async () => {
     if (!info) return;
     setErr('');
-    const v = Number((valor || '0').replace(/\./g, '').replace(',', '.'));
-    if (!v || v <= 0) {
+    const v = parseValor(valor);
+    if (!v || v <= 0 || !isFinite(v)) {
       setErr('Valor inválido');
       return;
     }
@@ -112,7 +124,11 @@ export default function ValeTrocaModal({
     }
   };
 
-  const valido = info && !info.vencido && !info.usado;
+  // Anulado/cancelado também invalida (ex: residual cujo vale original voltou
+  // num cancelamento) — antes o modal mostrava "Válido" e o backend recusava
+  // só na hora de aplicar.
+  const anulado = !!info && (info.status === 'cancelled' || info.status === 'anulado');
+  const valido = info && !info.vencido && !info.usado && !anulado;
 
   return (
     <div
@@ -143,7 +159,7 @@ export default function ValeTrocaModal({
                 value={code}
                 onChange={(e) => setCode(e.target.value.toUpperCase())}
                 onKeyDown={(e) => e.key === 'Enter' && validar()}
-                placeholder="TROCA-XXXXX"
+                placeholder="TROCA-XXXXXXXX"
                 disabled={busy}
                 className="flex-1 px-3 py-2 border-2 border-slate-200 rounded-lg font-mono text-base font-bold tracking-widest text-slate-800 focus:border-fuchsia-400 focus:ring-2 focus:ring-fuchsia-200 focus:outline-none uppercase"
               />
@@ -187,6 +203,10 @@ export default function ValeTrocaModal({
                 ) : info.usado ? (
                   <span className="text-[10px] font-bold uppercase bg-rose-600 text-white px-2 py-0.5 rounded-full">
                     Já usado
+                  </span>
+                ) : anulado ? (
+                  <span className="text-[10px] font-bold uppercase bg-slate-600 text-white px-2 py-0.5 rounded-full">
+                    Anulado
                   </span>
                 ) : (
                   <span className="text-[10px] font-bold uppercase bg-amber-600 text-white px-2 py-0.5 rounded-full">
