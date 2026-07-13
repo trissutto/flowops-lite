@@ -184,9 +184,9 @@ function Painel({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2 text-sm">
-          <label className="text-slate-500 font-semibold">De</label>
+          <label className="text-slate-500 font-semibold">{status === 'pagas' ? 'Pago de' : 'De'}</label>
           <input type="date" value={de} onChange={(e) => { setDe(e.target.value); setPage(1); }} className="border border-[#E7E2D8] rounded-lg px-2 py-1" />
-          <label className="text-slate-500 font-semibold">Até</label>
+          <label className="text-slate-500 font-semibold">{status === 'pagas' ? 'até' : 'Até'}</label>
           <input type="date" value={ate} onChange={(e) => { setAte(e.target.value); setPage(1); }} className="border border-[#E7E2D8] rounded-lg px-2 py-1" />
           <button onClick={() => atalho('hoje')} className="px-3 py-1 rounded-full border border-[#E7E2D8] hover:bg-[#FBF6E6] font-semibold text-slate-600">Hoje</button>
           <button onClick={() => atalho('ontem')} className="px-3 py-1 rounded-full border border-[#E7E2D8] hover:bg-[#FBF6E6] font-semibold text-slate-600">Ontem</button>
