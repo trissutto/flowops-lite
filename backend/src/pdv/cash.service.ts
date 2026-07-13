@@ -475,7 +475,9 @@ export class CashService {
   // Retorna agregado de TODAS as lojas ativas com totais do caixa do dia.
   // Usado pela tela /retaguarda/super-painel-caixas com polling 60s.
 
-  async getSuperPainelCaixas(): Promise<{
+  // `storeCodes` restringe o painel a um CONJUNTO de lojas (ex: master da
+  // franquia só vê as lojas tipo=FILIAL). undefined = todas.
+  async getSuperPainelCaixas(storeCodes?: string[]): Promise<{
     lojas: Array<{
       storeCode: string;
       storeName: string;
@@ -541,7 +543,10 @@ export class CashService {
   }> {
     // Lista todas lojas ativas (Postgres)
     const stores = await this.prisma.store.findMany({
-      where: { active: true } as any,
+      where: {
+        active: true,
+        ...(storeCodes?.length ? { code: { in: storeCodes } } : {}),
+      } as any,
       orderBy: { code: 'asc' },
       select: { code: true, name: true } as any,
     });
@@ -747,7 +752,7 @@ export class CashService {
    * Estrutura compativel com o painel ao vivo pra reutilizar componentes
    * do frontend, mas sem detalhamento por sessao (aberta=false sempre).
    */
-  async getSuperPainelHistorico(from: Date, to: Date): Promise<any> {
+  async getSuperPainelHistorico(from: Date, to: Date, storeCodes?: string[]): Promise<any> {
     // Normaliza range: from=00:00:00, to=23:59:59 do dia
     // Limites no fuso BR. `from`/`to` chegam como meia-noite UTC da data
     // escolhida (controller: new Date('YYYY-MM-DD'+'T00:00:00')) → lê o YMD.
@@ -755,7 +760,10 @@ export class CashService {
     const toEnd = dayBoundsFromUtcDate(to).end;
 
     const stores = await this.prisma.store.findMany({
-      where: { active: true } as any,
+      where: {
+        active: true,
+        ...(storeCodes?.length ? { code: { in: storeCodes } } : {}),
+      } as any,
       orderBy: { code: 'asc' },
       select: { code: true, name: true } as any,
     });

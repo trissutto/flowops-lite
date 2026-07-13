@@ -269,16 +269,29 @@ export class CashController {
   }
 
   /**
-   * GET /pdv/caixa/super-painel — Retaguarda: agregado de TODAS as lojas
-   * Restrito a admin/supervisor.
+   * Lojas da FRANQUIA (tipo=FILIAL, rótulo "FRANQUIA" na tela de lojas).
+   * Usado pra escopar o super-painel do papel master_franquia.
+   */
+  private async franquiaStoreCodes(): Promise<string[]> {
+    const rows = await (this.svc as any).prisma.store.findMany({
+      where: { tipo: 'FILIAL', active: true },
+      select: { code: true },
+    });
+    return (rows as any[]).map((r) => r.code);
+  }
+
+  /**
+   * GET /pdv/caixa/super-painel — Retaguarda: agregado de TODAS as lojas.
+   * Restrito a admin/supervisor. master_franquia vê SÓ as lojas FRANQUIA.
    */
   @Get('super-painel')
   async getSuperPainel(@Req() req: any) {
     const role = req?.user?.role;
-    if (role !== 'admin' && role !== 'supervisor') {
+    if (role !== 'admin' && role !== 'supervisor' && role !== 'master_franquia') {
       throw new ForbiddenException('Apenas admin ou supervisor');
     }
-    return this.svc.getSuperPainelCaixas();
+    const storeCodes = role === 'master_franquia' ? await this.franquiaStoreCodes() : undefined;
+    return this.svc.getSuperPainelCaixas(storeCodes);
   }
 
   /**
@@ -293,7 +306,7 @@ export class CashController {
     @Query('to') to?: string,
   ) {
     const role = req?.user?.role;
-    if (role !== 'admin' && role !== 'supervisor') {
+    if (role !== 'admin' && role !== 'supervisor' && role !== 'master_franquia') {
       throw new ForbiddenException('Apenas admin ou supervisor');
     }
     if (!from) {
@@ -307,7 +320,8 @@ export class CashController {
     if (dTo < dFrom) {
       throw new BadRequestException('"to" nao pode ser anterior a "from"');
     }
-    return this.svc.getSuperPainelHistorico(dFrom, dTo);
+    const storeCodes = role === 'master_franquia' ? await this.franquiaStoreCodes() : undefined;
+    return this.svc.getSuperPainelHistorico(dFrom, dTo, storeCodes);
   }
 
   /**
@@ -324,8 +338,11 @@ export class CashController {
     @Body() body: { sessionIds: string[]; note?: string },
   ) {
     const role = req?.user?.role;
-    if (role !== 'admin' && role !== 'supervisor') {
+    if (role !== 'admin' && role !== 'supervisor' && role !== 'master_franquia') {
       throw new ForbiddenException('Apenas admin ou supervisor');
+    }
+    if (role === 'master_franquia') {
+      await this.assertSessionsSaoFranquia(body.sessionIds || []);
     }
     return this.svc.markSessionsAsChecked({
       sessionIds: body.sessionIds || [],
@@ -345,12 +362,31 @@ export class CashController {
     @Body() body: { sessionIds: string[] },
   ) {
     const role = req?.user?.role;
-    if (role !== 'admin' && role !== 'supervisor') {
+    if (role !== 'admin' && role !== 'supervisor' && role !== 'master_franquia') {
       throw new ForbiddenException('Apenas admin ou supervisor');
+    }
+    if (role === 'master_franquia') {
+      await this.assertSessionsSaoFranquia(body.sessionIds || []);
     }
     return this.svc.unmarkSessionsAsChecked({
       sessionIds: body.sessionIds || [],
     });
+  }
+
+  /** master_franquia só toca sessões de caixa de loja FRANQUIA (tipo=FILIAL). */
+  private async assertSessionsSaoFranquia(sessionIds: string[]) {
+    if (!sessionIds.length) return;
+    const prisma = (this.svc as any).prisma;
+    const sessions = await prisma.pdvCashSession.findMany({
+      where: { id: { in: sessionIds } },
+      select: { storeCode: true },
+    });
+    const franquia = new Set(await this.franquiaStoreCodes());
+    for (const s of sessions as any[]) {
+      if (!franquia.has(s.storeCode)) {
+        throw new ForbiddenException(`Sessão de loja ${s.storeCode} não é franquia — acesso negado`);
+      }
+    }
   }
 
   // ═════════════════════════════════════════════════════════════════════
@@ -367,10 +403,23 @@ export class CashController {
     return validateMinLevel(password, minLevel);
   }
 
+  // master_franquia também pode (segue exigindo a senha de nível MASTER/GERENTE);
+  // nos endpoints com storeCode explícito a loja é validada como FRANQUIA. Nos
+  // endpoints por id (movement/sale/payment) o id só é visível pra ele dentro do
+  // próprio painel escopado — e a senha de nível é a segunda trava.
   private requireMasterRole(req: any) {
     const role = req?.user?.role;
-    if (role !== 'admin' && role !== 'supervisor' && role !== 'operator') {
+    if (role !== 'admin' && role !== 'supervisor' && role !== 'operator' && role !== 'master_franquia') {
       throw new ForbiddenException('Apenas admin/supervisor/operator');
+    }
+  }
+
+  /** master_franquia só ajusta caixa de loja FRANQUIA (tipo=FILIAL). */
+  private async assertStoreEhFranquia(req: any, storeCode: string) {
+    if (req?.user?.role !== 'master_franquia') return;
+    const franquia = await this.franquiaStoreCodes();
+    if (!franquia.includes(storeCode)) {
+      throw new ForbiddenException(`Loja ${storeCode} não é franquia — acesso negado`);
     }
   }
 
@@ -387,6 +436,7 @@ export class CashController {
     this.requireMasterRole(req);
     const nivel = this.validateLevel(body?.password, 'MASTER');
     if (!body?.storeCode) throw new BadRequestException('storeCode obrigatorio');
+    await this.assertStoreEhFranquia(req, body.storeCode);
     const userName = req?.user?.name || req?.user?.email || req?.user?.username || 'admin';
     return this.svc.masterAdjustFundo({
       storeCode: body.storeCode,
@@ -417,6 +467,7 @@ export class CashController {
     this.requireMasterRole(req);
     const nivel = this.validateLevel(body?.password, 'MASTER');
     if (!body?.storeCode) throw new BadRequestException('storeCode obrigatorio');
+    await this.assertStoreEhFranquia(req, body.storeCode);
     const userName = req?.user?.name || req?.user?.email || req?.user?.username || 'admin';
     return this.svc.masterAddMovement({
       storeCode: body.storeCode,
