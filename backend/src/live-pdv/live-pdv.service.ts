@@ -955,15 +955,45 @@ export class LivePdvService {
       });
       if (open) return open;
     }
+
+    // PUXA o cadastro mestre (CRM/lives anteriores): quem já comprou em live
+    // passada NÃO preenche nada de novo — a abertura de carrinho na live manda
+    // só a @, então nome/telefone/CPF/e-mail/endereço vêm do que já existe.
+    // Falha aqui nunca trava a live: segue com o que veio da tela.
+    let mestre: any = null;
+    let mestreAddr: any = null;
+    if (customer.id) {
+      try {
+        mestre = await (this.prisma as any).customer.findUnique({ where: { id: customer.id } });
+        mestreAddr = await (this.prisma as any).customerAddress.findFirst({
+          where: { customerId: customer.id, active: true },
+          orderBy: [{ isPrimary: 'desc' }, { updatedAt: 'desc' }],
+        });
+      } catch { /* segue sem hidratar */ }
+    }
+    const ig = customer.instagram || mestre?.igUsername || null;
+    // Nome: o modal da live usa a @ como nome quando vem vazio — se o mestre
+    // tem um nome de verdade (diferente da @), prefere ele.
+    const nomeTela = (customer.name || '').trim();
+    const nomeMestre = (mestre?.name || '').trim();
+    const telaEraSoArroba = !nomeTela || nomeTela === (ig || '').replace(/^@/, '');
+    const name = (telaEraSoArroba && nomeMestre ? nomeMestre : nomeTela) || nomeMestre || ig || 'cliente';
+
     return this.createCartWithNumber(sessionId, {
       sessionId,
       customerId: customer.id || null,
-      customerName: customer.name,
-      customerPhone: (customer.phone || '').replace(/\D/g, ''),
-      customerInstagram: customer.instagram || null,
-      customerCpf: customer.cpf || null,
-      customerEmail: customer.email || null,
-      customerCep: customer.cep || null,
+      customerName: name,
+      customerPhone: (customer.phone || '').replace(/\D/g, '') || (mestre?.phone || '').replace(/\D/g, ''),
+      customerInstagram: ig,
+      customerCpf: customer.cpf || mestre?.cpf || null,
+      customerEmail: customer.email || mestre?.email || null,
+      customerCep: customer.cep || mestreAddr?.cep || null,
+      customerEndereco: mestreAddr?.street || null,
+      customerNumero: mestreAddr?.number || null,
+      customerComplemento: mestreAddr?.complement || null,
+      customerBairro: mestreAddr?.district || null,
+      customerCidade: mestreAddr?.city || null,
+      customerUf: mestreAddr?.state || null,
       status: 'open',
     });
   }
