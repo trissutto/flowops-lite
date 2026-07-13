@@ -3659,6 +3659,12 @@ model GigaProduto {
   id        String   @id @default(cuid())
   codigo    String
   ref       String?
+  // REF-BASE canônica (13/07): a REF sem o sufixo de variante que o cadastro
+  // da Giga inventa na mão ("VLM-222P"/"VLM-222 VD" → "VLM-222"; "900658M" →
+  // "900658"). Regra: corta o que vem DEPOIS do último dígito — "VLM-2225"
+  // fica inteiro (dígito é parte do núcleo, produto DIFERENTE). A grade da
+  // live agrupa a família por esta coluna. Preenchida no sync + backfill boot.
+  refBase   String?  @map("ref_base")
   descricao String?
   cor       String?
   tamanho   String?
@@ -3669,6 +3675,7 @@ model GigaProduto {
 
   @@index([codigo])
   @@index([ref])
+  @@index([refBase])
   @@map("giga_produto")
 }
 
