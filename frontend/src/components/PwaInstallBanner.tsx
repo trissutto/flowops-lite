@@ -107,9 +107,10 @@ export default function PwaInstallBanner() {
   // Páginas públicas da cliente (cadastro / fechamento da compra) — sem chrome de app
   if (pathname?.startsWith('/cadastro-live') || pathname?.startsWith('/pagar') || pathname?.startsWith('/p/') || pathname?.startsWith('/meu-pedido')) return null;
 
-  // Sem login = visitante (ex.: cliente na landing do lurdsplussize.com.br) →
-  // nada de "instale o app". Exceção: /login, pra vendedora instalar antes de entrar.
-  if (!authed && pathname !== '/login') return null;
+  // Sem login = visitante (cliente na landing OU alguém que caiu na /login) →
+  // nada de "instale o app". A equipe usa o app de desktop e, no navegador,
+  // instala DEPOIS de logada. Cliente nunca vê o banner de sistema.
+  if (!authed) return null;
 
   // Já instalado → não mostra nada
   if (isStandalone) return null;
