@@ -890,12 +890,12 @@ export default function LivePdvPage() {
   // ─── Busca / grades abertas (até 4) ──────────────────────────────────────
   const MAX_GRADES = 4;
 
-  /** Identidade de um cartão aberto: REF + cor da legenda. Duas legendas da
-   *  MESMA referência com cores diferentes (ex.: 01 = VMM-225 MARROM e
-   *  02 = VMM-225 PRETO) são cartões DISTINTOS e ficam abertas lado a lado —
-   *  identificar só por REF fazia a 2ª legenda substituir a 1ª (live 13/07). */
+  /** Identidade de um cartão aberto: a LEGENDA (atalho) manda — cada legenda é
+   *  um cartão próprio, mesmo que duas apontem pra MESMA referência (com ou sem
+   *  cor). Identificar só por REF fazia a 2ª legenda substituir a 1ª (live
+   *  13/07). Busca direta por REF (sem legenda) usa a REF como identidade. */
   const gradeKey = (g: Pick<GradeResult, 'ref' | 'viaAtalho'>) =>
-    `${g.ref || ''}::${g.viaAtalho?.cor || ''}`;
+    `${g.viaAtalho?.atalho || ''}::${g.ref || ''}::${g.viaAtalho?.cor || ''}`;
 
   /** Insere/atualiza a grade na lista: mesmo cartão (REF+cor) substitui no
    *  lugar; novo entra no fim; passou de 4, a MAIS ANTIGA sai. */
@@ -2232,7 +2232,7 @@ export default function LivePdvPage() {
                   <span className="inline-flex items-center gap-1">
                     <span className="inline-block h-3 w-3 rounded border border-slate-200 bg-slate-50" /> sem estoque
                   </span>
-                  <span>· clique na célula pra adicionar · até {MAX_GRADES} grades abertas (a mais antiga sai)</span>
+                  <span>· clique na célula pra adicionar · até {MAX_GRADES} grades abertas (a mais antiga sai) · v2</span>
                 </div>
 
                 {/* Novo carrinho — abaixo das grades, pra começar a próxima
