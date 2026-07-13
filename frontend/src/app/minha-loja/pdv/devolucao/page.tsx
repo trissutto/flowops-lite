@@ -20,6 +20,7 @@ import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, Search, Check, X, Banknote, ArrowRightLeft, CreditCard } from 'lucide-react';
 import { api } from '@/lib/api';
+import { appPrompt } from '@/lib/app-prompt';
 
 type Item = {
   id: string;
@@ -284,12 +285,12 @@ export default function DevolucaoPage() {
   async function exigirSenhaGerente(): Promise<{ password: string; motivoFinal: string } | null> {
     let motivoFinal = motivo.trim();
     if (!motivoFinal) {
-      const m = window.prompt('Justificativa da devolução em dinheiro/pix (obrigatória):');
+      const m = await appPrompt('Justificativa da devolução em dinheiro/pix (obrigatória):');
       if (!m || !m.trim()) return null;
       motivoFinal = m.trim();
       setMotivo(motivoFinal);
     }
-    const pw = window.prompt('Senha do GERENTE para liberar devolução em dinheiro/pix:');
+    const pw = await appPrompt('Senha do GERENTE para liberar devolução em dinheiro/pix:', { password: true });
     if (!pw) return null;
     return { password: pw, motivoFinal };
   }

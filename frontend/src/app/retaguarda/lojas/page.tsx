@@ -16,6 +16,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, RefreshCw, Building2, Store as StoreIcon, Loader2, Check, AlertTriangle, Edit2, X, LogIn } from 'lucide-react';
 import { api } from '@/lib/api';
+import { appPrompt } from '@/lib/app-prompt';
 
 type PixProvider = 'auto' | 'pagbank' | 'pagarme' | 'externo';
 
@@ -136,12 +137,12 @@ export default function LojasPage() {
   // Edita CNPJ esperado da loja (auditoria fiscal — bloqueia emissão por CNPJ errado)
   const editCnpj = async (store: Store) => {
     const currentCnpj = fmtCnpj(store.expectedCnpj);
-    const newCnpj = window.prompt(
+    const newCnpj = await appPrompt(
       `CNPJ esperado pra loja ${store.code} ${store.name}:\n\n` +
       `Esse CNPJ é validado quando a vendedora finaliza uma venda. Se a config NFC-e ` +
       `da loja apontar pra outro CNPJ, o sistema BLOQUEIA a emissão.\n\n` +
       `Deixe em branco pra desativar a validação.`,
-      currentCnpj,
+      { defaultValue: currentCnpj },
     );
     if (newCnpj === null) return;
     const cleanCnpj = newCnpj.replace(/\D/g, '');
@@ -150,9 +151,9 @@ export default function LojasPage() {
       return;
     }
     const razaoSocial = cleanCnpj
-      ? window.prompt(
+      ? await appPrompt(
           `Razão social do CNPJ ${fmtCnpj(cleanCnpj)} (opcional, ajuda a identificar no relatório):`,
-          store.expectedRazaoSocial || '',
+          { defaultValue: store.expectedRazaoSocial || '' },
         )
       : null;
     setSavingId(store.id);

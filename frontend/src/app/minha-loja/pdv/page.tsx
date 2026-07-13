@@ -36,6 +36,7 @@ import { api } from '@/lib/api';
 import { loadPrinterConfig } from '@/lib/printer-router';
 import { PdvToastProvider, usePdvToast, humanizeError } from '@/components/PdvToast';
 import ValeTrocaModal from './ValeTrocaModal';
+import { appPrompt } from '@/lib/app-prompt';
 import { HUB_TONES, type HubTone } from '@/components/HubCard';
 import StorePickOrderAlert from '@/components/StorePickOrderAlert';
 import TrainingModeBanner from '@/components/TrainingModeBanner';
@@ -251,9 +252,10 @@ async function postCrediarioComOverride(saleId: string, payload: any): Promise<a
     const msg = String(e?.message || '');
     const ehLimite = /^403/.test(msg) && /limite de cr[eé]dito/i.test(msg);
     if (!ehLimite || typeof window === 'undefined') throw e;
-    const senha = window.prompt(
+    const senha = await appPrompt(
       'Cliente acima do LIMITE DE CRÉDITO.\n\n' +
         'Digite a senha de SUPERVISOR para liberar o crediário (ou cancele para abortar):',
+      { password: true },
     );
     if (!senha) throw e;
     return await api<any>(`/pdv/sales/${saleId}/crediario`, {
@@ -1119,14 +1121,14 @@ function PdvPageInner() {
       const bruto = (item?.precoUnit ?? 0) * qty;
       const pct = bruto > 0 ? (patch.desconto / bruto) * 100 : 0;
       if (pct > discountBands.caixaUpToPct + 1e-9) {
-        const pw = window.prompt(`Desconto de ${pct.toFixed(1)}% no item — exige senha de GERENTE:`);
+        const pw = await appPrompt(`Desconto de ${pct.toFixed(1)}% no item — exige senha de GERENTE:`, { password: true });
         if (!pw) return;
         password = pw;
-        const m = window.prompt('Justificativa do desconto (obrigatória):');
+        const m = await appPrompt('Justificativa do desconto (obrigatória):');
         if (!m || !m.trim()) return;
         motivo = m.trim();
       } else if (pct > discountBands.freeUpToPct + 1e-9) {
-        const pw = window.prompt(`Desconto de ${pct.toFixed(1)}% no item — exige senha do CAIXA:`);
+        const pw = await appPrompt(`Desconto de ${pct.toFixed(1)}% no item — exige senha do CAIXA:`, { password: true });
         if (!pw) return;
         password = pw;
       }
@@ -1196,14 +1198,14 @@ function PdvPageInner() {
       const subtotalBruto = sale.items.reduce((s, i) => s + i.precoUnit * i.qty, 0);
       const pct = subtotalBruto > 0 ? (desconto / subtotalBruto) * 100 : 0;
       if (pct > discountBands.caixaUpToPct + 1e-9) {
-        const pw = window.prompt(`Desconto de ${pct.toFixed(1)}% — exige senha de GERENTE:`);
+        const pw = await appPrompt(`Desconto de ${pct.toFixed(1)}% — exige senha de GERENTE:`, { password: true });
         if (!pw) return;
         password = pw;
-        const m = window.prompt('Justificativa do desconto (obrigatória):');
+        const m = await appPrompt('Justificativa do desconto (obrigatória):');
         if (!m || !m.trim()) return;
         motivo = m.trim();
       } else if (pct > discountBands.freeUpToPct + 1e-9) {
-        const pw = window.prompt(`Desconto de ${pct.toFixed(1)}% — exige senha do CAIXA:`);
+        const pw = await appPrompt(`Desconto de ${pct.toFixed(1)}% — exige senha do CAIXA:`, { password: true });
         if (!pw) return;
         password = pw;
       }
