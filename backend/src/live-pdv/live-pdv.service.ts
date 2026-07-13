@@ -56,6 +56,14 @@ export class LivePdvService {
     private readonly productSearch: ProductSearchService,
   ) {}
 
+  /** FILTRO DE LIVE (13/07, decisão do dono): a live é SÓ plus size feminino.
+   *  Tamanhos permitidos na grade — qualquer outro (P/M/G, 38/40/42, infantil…)
+   *  é ruído de cadastro e não vira célula. Vale SÓ na busca da live
+   *  (searchGrade); PDV e consulta continuam vendo o catálogo inteiro. */
+  private static readonly LIVE_TAMANHOS = new Set([
+    '46', '48', '50', '52', '54', '56', '58', '60', '46/48', '50/52',
+  ]);
+
   // ─── helpers ──────────────────────────────────────────────────────────────
   private norm(s: any): string {
     return String(s ?? '').trim().toUpperCase();
@@ -448,9 +456,31 @@ export class LivePdvService {
     // dono: buscar "VLM-222" agora também traz "VLM-222EST" (estampado).
     const qn = this.norm(q);
     const exact = rows.filter((r) => this.norm(r.REF) === qn);
+    // TRAVA DO PREFIXO NUMÉRICO (13/07): a junção por prefixo NÃO pode arrastar
+    // produto DIFERENTE cuja REF só continua com mais dígitos — "VLM-222" traz
+    // "VLM-222P"/"VLM-222 VD" (variantes), mas NUNCA "VLM-2225"/"VLM-22201"
+    // (outros produtos). Sufixo de variante começa com letra/espaço/separador.
     let productRows = exact.length
-      ? rows.filter((r) => this.norm(r.REF).startsWith(qn))
+      ? rows.filter((r) => {
+          const ref = this.norm(r.REF);
+          return ref.startsWith(qn) && !/^\d/.test(ref.slice(qn.length));
+        })
       : rows.filter((r) => this.norm(r.REF) === this.norm(rows[0].REF));
+
+    // FILTRO DE LIVE (13/07, decisão do dono): live é SÓ plus size FEMININO.
+    // 1) tamanho fora da whitelist (46–60, 46/48, 50/52) não vira célula —
+    //    linha sem tamanho preenchido passa (cadastro incompleto não some);
+    // 2) descrição MASCULIN…/INFANTIL sai.
+    // Mesmo padrão do filtro de cor da legenda: se zerar tudo, mostra tudo
+    // (cadastro fora do padrão nunca trava a live).
+    const soPlusFeminino = productRows.filter((r) => {
+      const tam = this.norm(r.TAMANHO);
+      if (tam && !LivePdvService.LIVE_TAMANHOS.has(tam)) return false;
+      const desc = this.norm(r.DESCRICAOCOMPLETA);
+      if (desc.includes('MASCULIN') || desc.includes('INFANTIL')) return false;
+      return true;
+    });
+    if (soPlusFeminino.length) productRows = soPlusFeminino;
 
     // COR DA LEGENDA (13/07): o atalho pode fixar a cor vendida naquela
     // legenda — a grade abre SÓ com as linhas dessa cor (menos poluição e
