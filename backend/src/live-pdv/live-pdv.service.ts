@@ -3430,6 +3430,10 @@ export class LivePdvService {
         itemId: input.itemId,
         transferOrderId: null,
       });
+      // Rastreio AUTOMÁTICO pra cliente (WhatsApp template / DM) — best-effort
+      this.notifyTracking(item.cartId, input.trackingCode).catch((e) =>
+        this.logger.warn(`[rastreio] aviso falhou: ${(e as Error).message}`),
+      );
       return updatedSelf;
     }
 
@@ -3510,7 +3514,95 @@ export class LivePdvService {
       itemId: input.itemId,
       transferOrderId: transfer.id,
     });
+    // Rastreio AUTOMÁTICO pra cliente (WhatsApp template / DM) — best-effort
+    this.notifyTracking(item.cartId, input.trackingCode).catch((e) =>
+      this.logger.warn(`[rastreio] aviso falhou: ${(e as Error).message}`),
+    );
     return updated;
+  }
+
+  /**
+   * Avisa a CLIENTE do rastreio assim que a loja despacha (mesmo canal da
+   * cobrança automática — pedidos do site já têm isso via WooCommerce; a live
+   * não tinha nada e a operadora mandava rastreio na mão).
+   *
+   * Camadas:
+   *  1. WhatsApp com TEMPLATE de utilidade (flow ManyChat) — chega SEMPRE,
+   *     sem janela de 24h. Requer env MANYCHAT_RASTREIO_FLOW_NS (flow lendo os
+   *     custom fields rastreio_nome / rastreio_codigo / rastreio_link).
+   *  2. Fallback: DM no Instagram (sendText já retenta com HUMAN_AGENT).
+   *
+   * Dedup: 1 mensagem por CÓDIGO por carrinho — a loja despachando 5 peças no
+   * mesmo pacote gera 1 aviso; 2 pacotes (2 lojas) geram 2, um por rastreio.
+   * Best-effort: nenhuma falha aqui trava o despacho.
+   */
+  private async notifyTracking(cartId: string, trackingCode?: string | null): Promise<void> {
+    const code = String(trackingCode || '').trim().toUpperCase();
+    if (!code || !this.manychat.enabled) return;
+    const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
+    if (!cart) return;
+    // Dedup por (carrinho, código)
+    const jaAvisado = await (this.prisma as any).livePdvItem.findFirst({
+      where: { cartId, trackingCode: code, trackingNotifiedAt: { not: null } },
+      select: { id: true },
+    });
+    if (jaAvisado) return;
+    await (this.prisma as any).livePdvItem.updateMany({
+      where: { cartId, trackingCode: { equals: code, mode: 'insensitive' } },
+      data: { trackingNotifiedAt: new Date() },
+    });
+
+    const primeiroNome = String(cart.customerName || 'cliente').trim().split(/\s+/)[0] || 'cliente';
+    const link = `https://rastreamento.correios.com.br/app/index.php?objetos=${encodeURIComponent(code)}`;
+
+    // 1) WhatsApp template (utilidade — sem janela de 24h)
+    const flowNs = (process.env.MANYCHAT_RASTREIO_FLOW_NS || '').trim();
+    let phone = String(cart.customerPhone || '').replace(/\D/g, '').replace(/^0+/, '');
+    if (phone.length === 10 || phone.length === 11) phone = '55' + phone;
+    const phoneOk = (phone.length === 12 || phone.length === 13) && phone.startsWith('55');
+    if (flowNs && phoneOk) {
+      try {
+        let subId = await this.manychat.findWhatsAppSubscriber(phone);
+        if (!subId) subId = (await this.manychat.createWhatsAppSubscriber(phone, cart.customerName)).id;
+        if (subId) {
+          await this.manychat.setCustomFieldByName(subId, 'rastreio_nome', primeiroNome);
+          await this.manychat.setCustomFieldByName(subId, 'rastreio_codigo', code);
+          await this.manychat.setCustomFieldByName(subId, 'rastreio_link', link);
+          const r = await this.manychat.sendFlow(subId, flowNs);
+          if (r.ok) {
+            this.logger.log(`[rastreio] carrinho ${cartId}: WhatsApp enviado (${code})`);
+            return;
+          }
+          this.logger.warn(`[rastreio] carrinho ${cartId}: WhatsApp falhou (${r.error}) — tentando DM`);
+        }
+      } catch (e) {
+        this.logger.warn(`[rastreio] carrinho ${cartId}: WhatsApp falhou (${(e as Error).message}) — tentando DM`);
+      }
+    }
+
+    // 2) Fallback: DM no Instagram
+    let sid: string | null = null;
+    if (cart.customerId) {
+      const cust = await (this.prisma as any).customer.findUnique({
+        where: { id: cart.customerId },
+        select: { manychatSubscriberId: true },
+      });
+      sid = cust?.manychatSubscriberId || null;
+    }
+    if (!sid) sid = await this.lookupManychatSidByIg(cart.customerInstagram);
+    if (!sid) {
+      this.logger.log(`[rastreio] carrinho ${cartId}: sem canal automático — avisar manual (${code})`);
+      return;
+    }
+    const msg =
+      `Oi, ${primeiroNome}! 📦 Suas peças da live foram postadas!\n` +
+      `Rastreio: ${code}\nAcompanhe aqui: ${link} 💜`;
+    const r = await this.manychat.sendText(sid, msg);
+    this.logger.log(
+      r.ok
+        ? `[rastreio] carrinho ${cartId}: DM enviada (${code})`
+        : `[rastreio] carrinho ${cartId}: DM falhou (${r.error}) — avisar manual`,
+    );
   }
 
   async markDelivered(itemId: string) {

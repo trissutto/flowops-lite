@@ -3527,6 +3527,8 @@ model LivePdvItem {
   shippedAt         DateTime? @map("shipped_at")
   deliveredAt       DateTime? @map("delivered_at")
   trackingCode      String?  @map("tracking_code")
+  // Carimbo do aviso de rastreio pra cliente (WhatsApp/DM) — 1 msg por código
+  trackingNotifiedAt DateTime? @map("tracking_notified_at")
   transferOrderId   String?  @map("transfer_order_id")   // transferência interna gerada no despacho
   obligationId      String?  @map("obligation_id")        // obrigação intercompany gerada
   cancelledAt       DateTime? @map("cancelled_at")
