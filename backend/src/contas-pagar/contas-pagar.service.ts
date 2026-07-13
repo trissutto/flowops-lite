@@ -89,18 +89,18 @@ export class ContasPagarService {
       select: { fornecedorGigaCodigo: true },
     });
     const excluir = associados.map((a) => a.fornecedorGigaCodigo);
+    // Termo só de dígitos também busca por CÓDIGO do fornecedor no GIGA
+    // (o placeholder da tela promete "767" — antes só nome/CNPJ casavam).
+    const or: any[] = [
+      { razaoSocial: { contains: term, mode: 'insensitive' } },
+      { fantasia: { contains: term, mode: 'insensitive' } },
+      { cnpj: { contains: term } },
+    ];
+    if (/^\d+$/.test(term)) or.push({ codigo: parseInt(term, 10) });
     return (this.prisma as any).wincredFornecedor.findMany({
       where: {
         ...(excluir.length ? { codigo: { notIn: excluir } } : {}),
-        ...(term
-          ? {
-              OR: [
-                { razaoSocial: { contains: term, mode: 'insensitive' } },
-                { fantasia: { contains: term, mode: 'insensitive' } },
-                { cnpj: { contains: term } },
-              ],
-            }
-          : {}),
+        ...(term ? { OR: or } : {}),
       },
       select: { codigo: true, razaoSocial: true, fantasia: true, cnpj: true },
       orderBy: { razaoSocial: 'asc' },
@@ -110,12 +110,15 @@ export class ContasPagarService {
 
   funcionariasOptions(q?: string) {
     const term = String(q || '').trim();
+    // ATENÇÃO: Seller NÃO tem storeId — selecionar campo inexistente faz o
+    // Prisma lançar erro e o autocomplete voltar VAZIO (bug real 13/07: a
+    // busca de funcionária nunca retornava nada na tela Nova conta).
     return (this.prisma as any).seller.findMany({
       where: {
         active: true,
         ...(term ? { name: { contains: term, mode: 'insensitive' } } : {}),
       },
-      select: { id: true, name: true, cpf: true, storeId: true },
+      select: { id: true, name: true, cpf: true },
       orderBy: { name: 'asc' },
       take: 20,
     });
