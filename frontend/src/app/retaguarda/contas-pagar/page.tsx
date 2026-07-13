@@ -583,18 +583,22 @@ function NovaContaModal({ onClose, avisar }: any) {
     api<any[]>('/admin/contas-pagar/especies').then(setEspecies).catch(() => {});
   }, []);
 
-  // autocomplete beneficiário (qualquer parte)
+  // autocomplete beneficiário (qualquer parte) — ao FOCAR com o campo vazio
+  // já puxa a lista (20 primeiros em ordem alfabética); digitou, filtra.
+  const [benefFocus, setBenefFocus] = useState(false);
+  const [benefBuscou, setBenefBuscou] = useState(false);
   useEffect(() => {
     clearTimeout(buscaRef.current);
-    if (!benefQ.trim() || benefSel) { setBenefOpts([]); return; }
+    if (!benefFocus || benefSel) { setBenefOpts([]); setBenefBuscou(false); return; }
     buscaRef.current = setTimeout(async () => {
       try {
         const rota = tipo === 'fornecedor' ? 'opcoes/fornecedores' : 'opcoes/funcionarias';
         const r = await api<any[]>(`/admin/contas-pagar/${rota}?q=${encodeURIComponent(benefQ.trim())}`);
         setBenefOpts(r || []);
       } catch { setBenefOpts([]); }
-    }, 250);
-  }, [benefQ, tipo, benefSel]);
+      setBenefBuscou(true);
+    }, benefQ.trim() ? 250 : 0);
+  }, [benefQ, tipo, benefSel, benefFocus]);
 
   const valorCents = Math.round((parseFloat(valor.replace(/\./g, '').replace(',', '.')) || 0) * 100);
 
@@ -673,22 +677,31 @@ function NovaContaModal({ onClose, avisar }: any) {
             <input
               value={benefSel ? (benefSel.razaoSocial || benefSel.name) : benefQ}
               onChange={(e) => { setBenefSel(null); setBenefQ(e.target.value); }}
-              placeholder={tipo === 'fornecedor' ? 'Ex.: 767, malwee, celeiro…' : 'Ex.: juliana…'}
+              onFocus={() => setBenefFocus(true)}
+              onBlur={() => setTimeout(() => setBenefFocus(false), 200)}
+              placeholder={tipo === 'fornecedor' ? 'Clique pra ver a lista, ou busque: 767, malwee…' : 'Clique pra ver a lista, ou busque: juliana…'}
               className="inp"
             />
           </Campo>
-          {benefOpts.length > 0 && (
+          {benefFocus && !benefSel && benefOpts.length > 0 && (
             <div className="absolute z-10 bg-white border border-[#E7E2D8] rounded-lg shadow-lg w-full max-h-48 overflow-y-auto">
               {benefOpts.map((o) => (
                 <button
                   key={o.codigo ?? o.id}
-                  onClick={() => { setBenefSel(o); setBenefOpts([]); }}
+                  onMouseDown={(e) => { e.preventDefault(); setBenefSel(o); setBenefOpts([]); }}
                   className="block w-full text-left px-3 py-2 text-sm hover:bg-[#FBF6E6]"
                 >
                   <b>{o.razaoSocial || o.name}</b>
                   <span className="text-slate-400 text-xs ml-2">{o.cnpj || o.cpf || ''}</span>
                 </button>
               ))}
+            </div>
+          )}
+          {benefFocus && !benefSel && benefBuscou && benefOpts.length === 0 && (
+            <div className="absolute z-10 bg-white border border-[#E7E2D8] rounded-lg shadow-lg w-full px-3 py-2.5 text-sm text-slate-400">
+              {tipo === 'fornecedor'
+                ? <>Nenhum fornecedor com “{benefQ.trim()}”. Pode salvar assim mesmo — a conta fica com esse nome novo.</>
+                : <>Nenhuma funcionária com “{benefQ.trim()}”.</>}
             </div>
           )}
         </div>
