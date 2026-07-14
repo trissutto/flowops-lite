@@ -553,63 +553,131 @@ export class ProductsEditorService {
    * - { pairs: [{codigo, dataAlt:'YYYY-MM-DD'}] } → lista explícita (extraída
    *   do backup do Postgres) pros casos que o nativo não cobre.
    */
-  async restaurarDataAlt(input: { source?: 'native'; pairs?: Array<{ codigo: string; dataAlt: string }>; userName?: string | null }) {
+  /** Progresso em memória da restauração em background. */
+  private restauracao: {
+    rodando: boolean; fonte: string; total: number; feitos: number;
+    inicio: string | null; fim: string | null; erro: string | null;
+  } = { rodando: false, fonte: '', total: 0, feitos: 0, inicio: null, fim: null, erro: null };
+
+  restauracaoProgresso() {
+    return this.restauracao;
+  }
+
+  async restaurarDataAlt(input: {
+    source?: 'native' | 'ref';
+    pairs?: Array<{ codigo: string; dataAlt: string }>;
+    userName?: string | null;
+  }) {
+    if (this.restauracao.rodando) {
+      return { ok: false, jaRodando: true, progresso: this.restauracao };
+    }
     let pairs: Array<{ codigo: string; dataAlt: string }> = [];
+
     if (input.source === 'native') {
       const rows: any[] = await (this.prisma as any).product.findMany({
-        where: { flowIsSource: true, dataAlt: { lt: new Date('2026-07-13T00:00:00Z'), not: null } },
+        where: { flowIsSource: true, dataAlt: { lt: new Date('2026-07-13T00:00:00Z') } },
         select: { codigo: true, dataAlt: true },
       });
-      pairs = rows.map((r) => ({
-        codigo: String(r.codigo),
-        dataAlt: new Date(r.dataAlt).toISOString().slice(0, 10),
-      }));
+      pairs = rows
+        .filter((r) => r.dataAlt)
+        .map((r) => ({ codigo: String(r.codigo), dataAlt: new Date(r.dataAlt).toISOString().slice(0, 10) }));
+    } else if (input.source === 'ref') {
+      // INFERÊNCIA POR REF: variações da mesma referência compartilham a data
+      // de cadastro. Pra cada REF com linhas sujas, usa a DATA MAIS FREQUENTE
+      // entre as irmãs LIMPAS. REF sem irmã limpa fica de fora (vai pro backup).
+      const limpas: any[] = await (this.prisma as any).$queryRawUnsafe(
+        `SELECT ref, "dataAlt"::date AS d, COUNT(*)::int AS n
+           FROM product
+          WHERE "dataAlt" < '2026-07-13' AND ref IS NOT NULL AND ref <> ''
+          GROUP BY ref, "dataAlt"::date`,
+      );
+      const modaPorRef = new Map<string, { d: string; n: number }>();
+      for (const r of limpas) {
+        const d = r.d instanceof Date ? r.d.toISOString().slice(0, 10) : String(r.d).slice(0, 10);
+        const cur = modaPorRef.get(r.ref);
+        if (!cur || Number(r.n) > cur.n) modaPorRef.set(r.ref, { d, n: Number(r.n) });
+      }
+      const sujas: any[] = await (this.prisma as any).product.findMany({
+        where: { dataAlt: { gte: new Date('2026-07-13T00:00:00Z') }, ref: { not: null } },
+        select: { codigo: true, ref: true },
+      });
+      for (const s of sujas) {
+        const moda = modaPorRef.get(s.ref);
+        if (moda) pairs.push({ codigo: String(s.codigo), dataAlt: moda.d });
+      }
     } else if (Array.isArray(input.pairs)) {
       pairs = input.pairs
         .filter((p) => p?.codigo && /^\d{4}-\d{2}-\d{2}$/.test(String(p.dataAlt || '')))
         .map((p) => ({ codigo: String(p.codigo).trim(), dataAlt: String(p.dataAlt) }));
     }
-    if (!pairs.length) throw new BadRequestException('Nada pra restaurar (pairs vazio ou nativo sem linhas limpas)');
-    if (pairs.length > 100000) throw new BadRequestException('Máximo 100.000 por chamada');
+    if (!pairs.length) throw new BadRequestException('Nada pra restaurar com essa fonte');
 
-    // 1) Giga (fonte que a promo lê via fallback + de onde os syncs copiam)
-    const { atualizados } = await this.erp.restoreDataAlt(pairs);
-
-    // 2) Espelho Wincred + nativa (linhas NÃO congeladas) — agrupado por data
-    const porData = new Map<string, string[]>();
-    for (const p of pairs) {
-      const list = porData.get(p.dataAlt) || [];
-      list.push(this.normalizeCodigo(p.codigo)!);
-      porData.set(p.dataAlt, list);
+    // Pequeno (até 2k) → processa inline. Grande → BACKGROUND com commit por
+    // lote (o gateway cortava a chamada de 88k e a transação única sumia com
+    // o progresso — incidente da manhã de 14/07).
+    if (pairs.length <= 2000) {
+      const n = await this.executarRestauracao(pairs, input.source || 'pairs', input.userName || null);
+      return { ok: true, restaurados: n, pares: pairs.length, background: false };
     }
-    for (const [dataAlt, codigos] of porData.entries()) {
-      const d = new Date(`${dataAlt}T00:00:00Z`);
-      for (let i = 0; i < codigos.length; i += 10000) {
-        const chunk = codigos.slice(i, i + 10000);
+    this.restauracao = {
+      rodando: true, fonte: input.source || 'pairs', total: pairs.length, feitos: 0,
+      inicio: new Date().toISOString(), fim: null, erro: null,
+    };
+    void this.executarRestauracao(pairs, input.source || 'pairs', input.userName || null)
+      .catch((e) => {
+        this.restauracao.erro = (e as Error).message?.slice(0, 200) || 'erro';
+      })
+      .finally(() => {
+        this.restauracao.rodando = false;
+        this.restauracao.fim = new Date().toISOString();
+      });
+    return { ok: true, background: true, pares: pairs.length, acompanhe: 'GET /products-editor/restaurar-dataalt/progresso' };
+  }
+
+  /** Executa em lotes de 2.000 pares: Giga (autocommit) + espelho + nativa. */
+  private async executarRestauracao(
+    pairs: Array<{ codigo: string; dataAlt: string }>,
+    fonte: string,
+    userName: string | null,
+  ): Promise<number> {
+    let restaurados = 0;
+    for (let i = 0; i < pairs.length; i += 2000) {
+      const lote = pairs.slice(i, i + 2000);
+      const { atualizados } = await this.erp.restoreDataAlt(lote);
+      restaurados += atualizados;
+      // Espelho + nativa, agrupado por data dentro do lote
+      const porData = new Map<string, string[]>();
+      for (const p of lote) {
+        const list = porData.get(p.dataAlt) || [];
+        list.push(this.normalizeCodigo(p.codigo)!);
+        porData.set(p.dataAlt, list);
+      }
+      for (const [dataAlt, codigos] of porData.entries()) {
+        const d = new Date(`${dataAlt}T00:00:00Z`);
         await (this.prisma as any).wincredProduto
-          .updateMany({ where: { codigo: { in: chunk } }, data: { dataAlt: d } })
+          .updateMany({ where: { codigo: { in: codigos } }, data: { dataAlt: d } })
           .catch(() => null);
         await (this.prisma as any).product
-          .updateMany({ where: { codigo: { in: chunk } }, data: { dataAlt: d } })
+          .updateMany({ where: { codigo: { in: codigos } }, data: { dataAlt: d } })
           .catch(() => null);
       }
+      this.restauracao.feitos = Math.min(pairs.length, i + lote.length);
+      this.logger.log(`[dataalt] restauração ${fonte}: ${this.restauracao.feitos}/${pairs.length}`);
     }
-
     await (this.prisma as any).productEditAudit.create({
       data: {
         batchId: randomUUID(),
         codigo: 'RESTAURACAO',
         ref: null,
         field: 'DATAALT_RESTAURADA',
-        oldValue: `fonte=${input.source || 'pairs'}`,
-        newValue: `${pairs.length} produtos, ${porData.size} data(s)`,
-        userName: input.userName || null,
+        oldValue: `fonte=${fonte}`,
+        newValue: `${pairs.length} pares processados, ${restaurados} linhas no Giga`,
+        userName,
         applied: true,
       },
     }).catch(() => null);
-
-    this.logger.log(`[dataalt] RESTAURADOS ${atualizados} produtos no Giga (${porData.size} datas, fonte=${input.source || 'pairs'})`);
-    return { ok: true, restaurados: atualizados, pares: pairs.length, datasDistintas: porData.size };
+    this.logger.log(`[dataalt] RESTAURAÇÃO CONCLUÍDA (${fonte}): ${restaurados} linhas no Giga`);
+    return restaurados;
   }
 
   /** Últimos lotes de auditoria (tela mostra o histórico recente). */
