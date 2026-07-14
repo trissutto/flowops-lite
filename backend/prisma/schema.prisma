@@ -3728,6 +3728,57 @@ model ProductEditAudit {
   @@map("product_edit_audit")
 }
 
+/// PRODUTO NATIVO DO FLOW (migração "sair da Giga", fase produtos P1-P3).
+/// Nasce como cópia curada do espelho wincred_produtos (catálogo inteiro) e
+/// ganha a camada que o Giga nunca teve: genero, categoria, liveOk, ativo.
+/// Campos do espelho usam os MESMOS nomes do WincredProduto — permite trocar
+/// o model nas leituras (flag PRODUCT_NATIVE_READS) sem reescrever queries.
+/// flowIsSource=true → a linha foi editada NO FLOW (fonte da verdade); o sync
+/// do espelho NUNCA mais sobrescreve os campos dela (replicação vai Flow→Giga).
+/// curadoManual=true → genero/liveOk definidos na mão; sync não recalcula.
+model Product {
+  codigo            String    @id @db.VarChar(14)
+  grupo             Int?
+  nomeGrupo         String?   @db.VarChar(30)
+  descricaoPdv      String?   @db.VarChar(50)
+  descricaoCompleta String?   @db.VarChar(100)
+  custo             Decimal?  @db.Decimal(10, 2)
+  vendaUn           Decimal?  @db.Decimal(10, 2)
+  fornecedor        String?   @db.VarChar(18)
+  unidade           String?   @db.VarChar(2)
+  estoque           Int?
+  margem            Decimal?  @db.Decimal(10, 2)
+  dataAlt           DateTime? @db.Date
+  subgrupo          Int?
+  cor               String?   @db.VarChar(15)
+  tamanho           String?   @db.VarChar(20)
+  marca             String?   @db.VarChar(30)
+  ref               String?   @db.VarChar(10)
+  ncm               String?   @db.VarChar(8)
+  tributo           String?   @db.VarChar(4)
+  cfop              Int?
+  plusSize          Int?
+
+  // ── Camada NATIVA (não existe no Giga) ──
+  genero       String?   @db.VarChar(12) // FEMININO | MASCULINO | INFANTIL
+  categoria    String?   @db.VarChar(30)
+  liveOk       Boolean   @default(false) // apto pra busca da LIVE (plus feminino)
+  ativo        Boolean   @default(true)
+  curadoManual Boolean   @default(false) @map("curado_manual")
+  flowIsSource Boolean   @default(false) @map("flow_is_source")
+  editedAt     DateTime? @map("edited_at")
+
+  syncedAt  DateTime @default(now()) @map("synced_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([ref])
+  @@index([ref, cor])
+  @@index([liveOk])
+  @@index([genero])
+  @@index([flowIsSource])
+  @@map("product")
+}
+
 /// OperadorPin — PIN pessoal de liberação no PDV, por PESSOA (CPF), global (vale
 /// em qualquer loja). Substitui a "senha compartilhada de nível" pelo PIN de cada
 /// funcionária, mantendo a hierarquia (nivel) — e passa a saber QUEM autorizou.
