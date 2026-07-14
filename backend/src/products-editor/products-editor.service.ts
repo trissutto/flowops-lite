@@ -82,12 +82,14 @@ export class ProductsEditorService {
     const term = String(q || '').trim();
     if (!term) throw new BadRequestException('Informe o termo de busca');
 
-    const base = await this.search.resolveRows(term, { fallbackTake: 400 });
+    // Teto 5.000 variações (pedido do dono 13/07: "deixar livre" — o teto é só
+    // proteção pro navegador; nenhuma família real chega perto disso).
+    const base = await this.search.resolveRows(term, { fallbackTake: 5000 });
     if (!base.length) return { rows: [], fonte: 'espelho', warnings: { legendaAtiva: [], classificacao: [] } };
 
     const codigos = Array.from(
       new Set(base.map((r: any) => String(r.codigo || '').trim()).filter(Boolean)),
-    ).slice(0, 600);
+    ).slice(0, 5000);
 
     // ── Enriquecimento (MARCA + preço + descrição frescos) ──
     let fonte: 'giga' | 'espelho' = 'espelho';
@@ -215,7 +217,7 @@ export class ProductsEditorService {
   }) {
     const edits = (input.edits || []).filter((e) => e && e.codigo && e.changes);
     if (!edits.length) throw new BadRequestException('Nenhuma edição informada');
-    if (edits.length > 500) throw new BadRequestException('Máximo 500 variações por lote');
+    if (edits.length > 5000) throw new BadRequestException('Máximo 5.000 variações por lote');
 
     // ── Validação de campos/limites ──
     for (const e of edits) {
