@@ -1,5 +1,6 @@
 ﻿import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { randomUUID } from 'crypto';
 import * as mysql from 'mysql2/promise';
 import { StockEntry } from '../routing/types';
 import { PrismaService } from '../prisma/prisma.service';
@@ -172,6 +173,141 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       out.push({ storeCode, sku: originalSku, availableQty: qty });
     }
     return out;
+  }
+
+  /**
+   * WRITE-THROUGH de estoque nos espelhos (giga_estoque + wincred_estoque).
+   * Entrada/baixa no Giga refletem NA HORA no Flow — sem esperar o full de
+   * hora em hora. Incidente VOGUE VINHO 14/07: entrada de 1un pela tela de
+   * pedidos gravou no Giga, a grade da live (que esconde estoque 0) só veria
+   * o saldo na virada da hora. Best effort: falha aqui NUNCA quebra a
+   * operação principal (o cron continua sendo a fonte de reconciliação).
+   */
+  private async mirrorStockWriteThrough(
+    applied: Array<{ sku: string; storeCode: string; newStock: number }>,
+  ): Promise<void> {
+    for (const a of applied) {
+      try {
+        const lojaRaw = String(a.storeCode || '').trim();
+        const loja2 = /^\d{1}$/.test(lojaRaw) ? lojaRaw.padStart(2, '0') : lojaRaw;
+        const lojas = Array.from(new Set([lojaRaw, loja2, lojaRaw.replace(/^0+/, '') || lojaRaw]));
+        const novo = Math.max(0, Number(a.newStock) || 0);
+        const variants = this.skuVariants(String(a.sku || '').trim());
+        if (!variants.length || !lojas.length) continue;
+
+        const upd = await (this.prismaFlow as any).gigaEstoque.updateMany({
+          where: { codigo: { in: variants }, loja: { in: lojas } },
+          data: { estoque: novo, syncedAt: new Date() },
+        });
+        if (!upd.count) {
+          await (this.prismaFlow as any).gigaEstoque.create({
+            data: { codigo: String(a.sku).trim(), loja: loja2, estoque: novo },
+          });
+        }
+
+        const codNorm = this.wincredCodigo(String(a.sku).trim());
+        await (this.prismaFlow as any).wincredEstoque.upsert({
+          where: { codigo_loja: { codigo: codNorm, loja: loja2 } },
+          create: { codigo: codNorm, loja: loja2, estoque: novo },
+          update: { estoque: novo, syncedAt: new Date() },
+        });
+      } catch (e) {
+        this.logger.warn(
+          `[mirror-writethrough] estoque ${a.sku}/${a.storeCode}: ${(e as Error).message}`,
+        );
+      }
+    }
+  }
+
+  /**
+   * CONSTITUIÇÃO 14/07 (Flow = fonte): aplica o DELTA de estoque direto nos
+   * espelhos (giga_estoque + wincred_estoque) ANTES do Giga. Retorna o
+   * "applied" no mesmo formato do caminho Giga.
+   */
+  private async mirrorStockApplyDelta(
+    items: Array<{ sku: string; qty: number; storeCode: string }>,
+    sign: 1 | -1,
+    allowNegative: boolean,
+  ): Promise<Array<{ sku: string; storeCode: string; qty: number; previousStock: number; newStock: number }>> {
+    const applied: Array<{ sku: string; storeCode: string; qty: number; previousStock: number; newStock: number }> = [];
+    for (const it of items) {
+      try {
+        const sku = String(it.sku || '').trim();
+        const qty = Math.abs(Number(it.qty) || 0);
+        const lojaRaw = String(it.storeCode || '').trim().toUpperCase().replace(/^LJ/i, '');
+        if (!sku || !qty || !lojaRaw) continue;
+        const loja2 = /^\d{1,2}$/.test(lojaRaw) ? lojaRaw.padStart(2, '0') : lojaRaw;
+        const lojas = Array.from(new Set([lojaRaw, loja2, lojaRaw.replace(/^0+/, '') || lojaRaw]));
+        const variants = this.skuVariants(sku);
+
+        const row: any = await (this.prismaFlow as any).gigaEstoque.findFirst({
+          where: { codigo: { in: variants }, loja: { in: lojas } },
+        });
+        const previousStock = Number(row?.estoque) || 0;
+        let newStock = previousStock + sign * qty;
+        if (newStock < 0 && !allowNegative) newStock = 0;
+
+        if (row) {
+          await (this.prismaFlow as any).gigaEstoque.update({
+            where: { id: row.id },
+            data: { estoque: newStock, syncedAt: new Date() },
+          });
+        } else {
+          await (this.prismaFlow as any).gigaEstoque.create({
+            data: { codigo: sku, loja: loja2, estoque: newStock },
+          });
+        }
+        const codNorm = this.wincredCodigo(sku);
+        await (this.prismaFlow as any).wincredEstoque.upsert({
+          where: { codigo_loja: { codigo: codNorm, loja: loja2 } },
+          create: { codigo: codNorm, loja: loja2, estoque: newStock },
+          update: { estoque: newStock, syncedAt: new Date() },
+        });
+        applied.push({ sku, storeCode: loja2, qty, previousStock, newStock });
+      } catch (e) {
+        this.logger.warn(`[flow-estoque] delta ${it.sku}/${it.storeCode}: ${(e as Error).message}`);
+      }
+    }
+    return applied;
+  }
+
+  /** Enfileira a réplica de estoque pro Giga no erp_outbox (kind estoque_delta). */
+  private async enqueueStockDelta(
+    op: 'inc' | 'dec',
+    items: Array<{ sku: string; qty: number; storeCode: string }>,
+    opts?: { allowNegative?: boolean; skipNotFound?: boolean },
+    lastError?: string,
+  ): Promise<void> {
+    try {
+      await (this.prismaFlow as any).erpOutbox.create({
+        data: {
+          kind: 'estoque_delta',
+          saleId: `stk-${randomUUID()}`,
+          payload: { op, items, opts: opts || null },
+          status: 'pending',
+          lastError: lastError ? String(lastError).slice(0, 300) : null,
+        },
+      });
+      this.logger.warn(
+        `[flow-estoque] Giga indisponível — ${op} de ${items.length} item(ns) enfileirado no outbox (${lastError || 'erro'})`,
+      );
+    } catch (e) {
+      this.logger.error(`[flow-estoque] falha ao enfileirar ${op}: ${(e as Error).message}`);
+    }
+  }
+
+  /** Réplica Giga-only usada pelo outbox (kind estoque_delta). O delta já foi
+   *  aplicado no Flow no momento da operação — aqui NÃO mexe no espelho de
+   *  novo (o writeThrough absoluto pós-sucesso reconcilia). */
+  async applyStockDeltaGigaOnly(
+    op: 'inc' | 'dec',
+    items: Array<{ sku: string; qty: number; storeCode: string }>,
+    opts?: { allowNegative?: boolean; skipNotFound?: boolean },
+  ): Promise<{ success: boolean; error?: string }> {
+    const r = op === 'inc'
+      ? await this.increaseStockGigaOnly(items)
+      : await this.decreaseStockGigaOnly(items, opts);
+    return { success: r.success, error: r.error };
   }
 
   /** getStockTotalBySkus pelo espelho — inclui a regra "existe no cadastro = 0". */
@@ -1192,7 +1328,34 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * O `storeCode` deve estar padronizado no formato Giga: 2 dÃ­gitos (01..20).
    * A funÃ§Ã£o normaliza strings tipo "LJ01" â†’ "01" automaticamente.
    */
+  /**
+   * BAIXA de estoque — CONSTITUIÇÃO 14/07: TUDO NO FLOW, GIGA SÓ ESPELHO.
+   * O Flow (espelhos giga_estoque/wincred_estoque) é a FONTE: o delta aplica
+   * aqui NA HORA (grade/separação/PDV veem em segundos). O Giga recebe a
+   * réplica em seguida; se estiver pendurado/fora, vai pra fila do outbox
+   * (kind estoque_delta) e a operação NÃO trava nem falha.
+   */
   async decreaseStock(
+    items: Array<{ sku: string; qty: number; storeCode: string }>,
+    opts?: { allowNegative?: boolean; skipNotFound?: boolean },
+  ): Promise<{
+    success: boolean;
+    applied: Array<{ sku: string; storeCode: string; qty: number; previousStock: number; newStock: number }>;
+    error?: string;
+    attempts?: number;
+    gigaEnfileirado?: boolean;
+  }> {
+    if (!this.isWriteEnabled || !this.pool || !items.length) {
+      return this.decreaseStockGigaOnly(items, opts); // shadow/sem pool: comportamento legado
+    }
+    const flowApplied = await this.mirrorStockApplyDelta(items, -1, !!opts?.allowNegative);
+    const giga = await this.decreaseStockGigaOnly(items, opts);
+    if (giga.success) return giga;
+    await this.enqueueStockDelta('dec', items, opts, giga.error);
+    return { success: true, applied: flowApplied, gigaEnfileirado: true };
+  }
+
+  private async decreaseStockGigaOnly(
     items: Array<{ sku: string; qty: number; storeCode: string }>,
     opts?: { allowNegative?: boolean; skipNotFound?: boolean },
   ): Promise<{
@@ -1396,6 +1559,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           applied.slice(0, 5).map((a) => `${a.sku}/${a.storeCode}: ${a.previousStock}â†’${a.newStock}`).join(', ') +
           (applied.length > 5 ? ` â€¦ (+${applied.length - 5} mais)` : ''),
       );
+      void this.mirrorStockWriteThrough(applied);
       return { success: true, applied };
     } catch (e: any) {
       try { await conn.rollback(); } catch { /* ignore */ }
@@ -1424,7 +1588,28 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    *    INSERIDO (peÃ§a que nunca passou por essa loja antes â€” comum em
    *    realinhamento. SÃ³ o INSERT, sem mexer em produtos.)
    */
+  /** ENTRADA de estoque — mesmo modelo da baixa: Flow primeiro (fonte),
+   *  Giga réplica inline com fallback pro outbox. */
   async increaseStock(
+    items: Array<{ sku: string; qty: number; storeCode: string }>,
+  ): Promise<{
+    success: boolean;
+    applied: Array<{ sku: string; storeCode: string; qty: number; previousStock: number; newStock: number }>;
+    error?: string;
+    attempts?: number;
+    gigaEnfileirado?: boolean;
+  }> {
+    if (!this.isWriteEnabled || !this.pool || !items.length) {
+      return this.increaseStockGigaOnly(items);
+    }
+    const flowApplied = await this.mirrorStockApplyDelta(items, +1, true);
+    const giga = await this.increaseStockGigaOnly(items);
+    if (giga.success) return giga;
+    await this.enqueueStockDelta('inc', items, undefined, giga.error);
+    return { success: true, applied: flowApplied, gigaEnfileirado: true };
+  }
+
+  private async increaseStockGigaOnly(
     items: Array<{ sku: string; qty: number; storeCode: string }>,
   ): Promise<{
     success: boolean;
@@ -1639,6 +1824,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           applied.slice(0, 5).map((a) => `${a.sku}/${a.storeCode}: ${a.previousStock}â†’${a.newStock}`).join(', ') +
           (applied.length > 5 ? ` â€¦ (+${applied.length - 5} mais)` : ''),
       );
+      void this.mirrorStockWriteThrough(applied);
       return { success: true, applied };
     } catch (e: any) {
       try { await conn.rollback(); } catch { /* ignore */ }
@@ -8082,6 +8268,40 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     } finally {
       conn.release();
     }
+  }
+
+  /**
+   * EXCLUSÃO de produtos no Giga (editor de produtos). Apaga da tabela
+   * `produtos` E as linhas de `estoque` dos códigos. Variantes de zero-padding
+   * cobertas. Gated por ERP_WRITE_ENABLED.
+   */
+  async deleteProdutos(codigos: string[]): Promise<{ excluidos: number }> {
+    if (!this.isWriteEnabled) {
+      throw new Error('ERP_WRITE_ENABLED=false. Setar env=true pra liberar exclusão.');
+    }
+    if (!this.pool) throw new Error('ERP MySQL nao esta conectado');
+    const variants: string[] = [];
+    for (const c of codigos) {
+      const t = String(c || '').trim();
+      if (t) variants.push(...this.skuVariants(t));
+    }
+    if (!variants.length) return { excluidos: 0 };
+    let excluidos = 0;
+    for (let i = 0; i < variants.length; i += 500) {
+      const chunk = variants.slice(i, i + 500);
+      const placeholders = chunk.map(() => '?').join(',');
+      const [r]: any = await this.pool.query(
+        `DELETE FROM produtos WHERE CODIGO IN (${placeholders})`,
+        chunk,
+      );
+      excluidos += Number(r?.affectedRows) || 0;
+      await this.pool.query(
+        `DELETE FROM estoque WHERE CODIGO IN (${placeholders})`,
+        chunk,
+      ).catch((e: any) => this.logger.warn(`deleteProdutos estoque: ${e?.message}`));
+    }
+    this.logger.log(`deleteProdutos: ${excluidos} produto(s) excluído(s) no Giga`);
+    return { excluidos };
   }
 
   /**
