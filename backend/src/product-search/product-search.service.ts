@@ -97,7 +97,17 @@ export class ProductSearchService implements OnModuleInit {
         p.findMany({ where: { ativo: true, ...where }, take }).catch(() => []);
       // 1) Código exato — como digitado E normalizado (nativo guarda sem zeros).
       let nrows = await findN({ codigo: { in: [term, this.normalizeCodigo(term)] } });
-      if (nrows.length) return nrows.map((r: any) => this.mapNative(r));
+      if (nrows.length) {
+        // BIPE → GRADE INTEIRA (13/07): bipar UMA variação expande pra TODAS
+        // as linhas da REF dela — a live monta a grade completa (cor×tamanho),
+        // não só a célula da peça bipada.
+        const refsHit = Array.from(new Set(nrows.map((r: any) => r.ref).filter(Boolean)));
+        if (refsHit.length) {
+          const familia = await findN({ ref: { in: refsHit } });
+          if (familia.length) nrows = familia;
+        }
+        return nrows.map((r: any) => this.mapNative(r));
+      }
       // 2) REF exata/prefixo.
       const upN = term.toUpperCase();
       nrows = await findN({
@@ -127,7 +137,16 @@ export class ProductSearchService implements OnModuleInit {
 
     // 1) Código exato (índice) — cobre bipar código/EAN.
     let rows = await find({ codigo: term });
-    if (rows.length) return rows;
+    if (rows.length) {
+      // BIPE → GRADE INTEIRA (13/07): mesmo comportamento do caminho nativo —
+      // expande a peça bipada pra todas as variações da REF dela.
+      const refsHit = Array.from(new Set(rows.map((r: any) => r.ref).filter(Boolean)));
+      if (refsHit.length) {
+        const familia = await find({ ref: { in: refsHit } });
+        if (familia.length) rows = familia;
+      }
+      return rows;
+    }
 
     // 2) REF pelo índice: exato/prefixo em MAIÚSCULA (padrão Giga) e como digitado.
     const up = term.toUpperCase();
