@@ -170,6 +170,21 @@ export class WincredMirrorService {
     error: string | null;
   } = { running: false, startedAt: null, finishedAt: null, current: null, results: [], error: null };
 
+  // ── TRAVA ANTI-OVERLAP por tabela (14/07) ─────────────────────────────
+  // Full horário, incremental de 10min, botão da tela e full das 3h rodavam
+  // SEM trava entre si: dois rebuilds sobrepostos (ou um rebuild morto por
+  // deploy no meio) deixavam o espelho pela metade — 782/283k em 11/07,
+  // 142k→28k em 14/07. Railway roda 1 instância → boolean em memória basta.
+  private syncLocks = new Set<string>();
+  private acquireLock(name: string): boolean {
+    if (this.syncLocks.has(name)) return false;
+    this.syncLocks.add(name);
+    return true;
+  }
+  private releaseLock(name: string) {
+    this.syncLocks.delete(name);
+  }
+
   getSyncProgress() {
     return this.bgState;
   }
@@ -260,6 +275,10 @@ export class WincredMirrorService {
     const t0 = Date.now();
     const pool: any = (this.erp as any).pool;
     if (!pool) return { table: 'produtos', success: false, processed: 0, durationMs: 0, error: 'MySQL pool nao inicializado' };
+    if (!this.acquireLock('produtos')) {
+      this.logger.warn('[produtos] sync já em andamento — pulando (trava anti-overlap)');
+      return { table: 'produtos', success: false, processed: 0, durationMs: 0, error: 'sync de produtos já em andamento' };
+    }
 
     try {
       const total = await this.countMysql('produtos');
@@ -332,37 +351,35 @@ export class WincredMirrorService {
             ean: r.EAN_MIRROR ? String(r.EAN_MIRROR).trim().slice(0, 20) || null : null,
           }));
 
-      // TRUNCATE só DEPOIS do SELECT dar certo — a janela em que o espelho
-      // fica vazio (bipe caindo no fallback Giga) encolhe pros segundos dos
-      // inserts locais, em vez do sync inteiro. SELECT falhou → espelho
-      // antigo fica intacto.
-      await this.withRetry('truncate produtos', () =>
-        this.prisma.$executeRawUnsafe(`TRUNCATE TABLE "wincred_produtos"`),
+      // REPLACE ATÔMICO (14/07): antes era TRUNCATE + inserts — janela em que
+      // o espelho ficava vazio/parcial (bipe no fallback Giga), e deploy no
+      // meio deixava o catálogo pela metade até o próximo full. Agora DELETE +
+      // inserts numa transação única: leitores veem o catálogo antigo até o
+      // commit; falha/restart no meio dá rollback e nada se perde.
+      if (!data.length) throw new Error('SELECT produtos veio vazio — espelho preservado');
+      await this.prisma.$transaction(
+        async (tx) => {
+          await (tx as any).wincredProduto.deleteMany({});
+          const CHUNK = 1000;
+          for (let i = 0; i < data.length; i += CHUNK) {
+            await (tx as any).wincredProduto.createMany({
+              data: data.slice(i, i + CHUNK),
+              skipDuplicates: true,
+            });
+          }
+        },
+        { timeout: 300_000, maxWait: 30_000 },
       );
 
-      let processed = 0;
-      const CHUNK = 1000;
-      for (let i = 0; i < data.length; i += CHUNK) {
-        await this.withRetry(`produtos@${i}`, () =>
-          (this.prisma as any).wincredProduto.createMany({
-            data: data.slice(i, i + CHUNK),
-            skipDuplicates: true,
-          }),
-        );
-        processed = Math.min(i + CHUNK, data.length);
-        if (i % (CHUNK * 20) === 0 && i > 0) {
-          this.logger.log(`[produtos] insert ${processed}/${data.length} (${Math.round((processed / data.length) * 100)}%)`);
-          await this.sleep(25);
-        }
-      }
-
       const durationMs = Date.now() - t0;
-      this.logger.log(`[produtos] OK — ${processed} linhas em ${durationMs}ms`);
-      return { table: 'produtos', success: true, processed, durationMs };
+      this.logger.log(`[produtos] OK — ${data.length} linhas em ${durationMs}ms (replace atômico)`);
+      return { table: 'produtos', success: true, processed: data.length, durationMs };
     } catch (e) {
       const msg = (e as Error).message;
-      this.logger.error(`[produtos] FALHOU: ${msg}`);
+      this.logger.error(`[produtos] FALHOU (espelho antigo preservado): ${msg}`);
       return { table: 'produtos', success: false, processed: 0, durationMs: Date.now() - t0, error: msg };
+    } finally {
+      this.releaseLock('produtos');
     }
   }
 
@@ -370,67 +387,80 @@ export class WincredMirrorService {
   //  SYNC ESTOQUE (full)
   // ─────────────────────────────────────────────────────────────────────
 
+  /**
+   * FULL do estoque com REPLACE ATÔMICO (14/07): lê o Wincred INTEIRO primeiro
+   * (sem tocar no Postgres) e troca tudo numa transação única — quem lê o
+   * espelho continua vendo o estoque antigo até o commit; deploy/crash no meio
+   * dá rollback e o espelho antigo fica INTACTO. Antes era TRUNCATE + inserts
+   * em lote: janela vazia de 1-3min toda hora, e rebuild morto pela metade.
+   * Mesmo padrão do GigaMirrorService.syncEstoque (mesma tabela, meses sem
+   * incidente). DELETE (não TRUNCATE) de propósito: TRUNCATE trava leitores
+   * até o commit; DELETE deixa lerem o snapshot antigo (MVCC).
+   */
   async syncEstoque(): Promise<SyncResult> {
     const t0 = Date.now();
     const pool: any = (this.erp as any).pool;
     if (!pool) return { table: 'estoque', success: false, processed: 0, durationMs: 0, error: 'MySQL pool nao inicializado' };
+    if (!this.acquireLock('estoque')) {
+      this.logger.warn('[estoque] sync já em andamento — pulando (trava anti-overlap)');
+      return { table: 'estoque', success: false, processed: 0, durationMs: 0, error: 'sync de estoque já em andamento' };
+    }
 
     try {
       const total = await this.countMysql('estoque');
-      this.logger.log(`[estoque] iniciando sync — ${total} linhas no Wincred`);
+      this.logger.log(`[estoque] iniciando sync — ${total} linhas no Wincred (replace atômico)`);
 
-      await this.withRetry('truncate estoque', () => this.prisma.$executeRawUnsafe(`TRUNCATE TABLE "wincred_estoque"`));
-
-      let processed = 0;
+      // 1) LÊ TUDO do Wincred antes de tocar no Postgres.
+      const seen = new Set<string>();
+      const all: Array<{ codigo: string; loja: string; estoque: number | null }> = [];
       let offset = 0;
-      while (offset < total) {
+      while (offset < total + this.BATCH) {
         const [rows] = await pool.query(
           { sql: `SELECT CODIGO, ESTOQUE, LOJA FROM estoque ORDER BY CODIGO, LOJA LIMIT ? OFFSET ?`, timeout: 120_000 },
           [this.BATCH, offset],
         );
         if (!(rows as any[]).length) break;
-
-        // Dedup por (CODIGO, LOJA)
-        const seen = new Set<string>();
-        const data = (rows as any[])
-          .filter((r) => {
-            const c = this.normalizeCodigo(r.CODIGO);
-            const l = String(r.LOJA || '').trim();
-            if (!c || !l) return false;
-            const k = `${c}|${l}`;
-            if (seen.has(k)) return false;
-            seen.add(k);
-            return true;
-          })
-          .map((r) => ({
-            codigo: this.normalizeCodigo(r.CODIGO)!,
-            loja: String(r.LOJA).trim(),
-            estoque: r.ESTOQUE != null ? Number(r.ESTOQUE) : null,
-          }));
-
-        if (data.length) {
-          await this.withRetry(`estoque@${offset}`, () =>
-            (this.prisma as any).wincredEstoque.createMany({
-              data,
-              skipDuplicates: true,
-            }),
-          );
+        for (const r of rows as any[]) {
+          const c = this.normalizeCodigo(r.CODIGO);
+          const l = String(r.LOJA || '').trim();
+          if (!c || !l) continue;
+          const k = `${c}|${l}`;
+          if (seen.has(k)) continue;
+          seen.add(k);
+          all.push({ codigo: c, loja: l, estoque: r.ESTOQUE != null ? Number(r.ESTOQUE) : null });
         }
-        processed += data.length;
         offset += this.BATCH;
         if (offset % (this.BATCH * 20) === 0) {
-          this.logger.log(`[estoque] ${processed}/${total} (${Math.round((processed / total) * 100)}%)`);
+          this.logger.log(`[estoque] lendo Wincred ${all.length}/${total}`);
           await this.sleep(50);
         }
       }
+      // Vazio = Wincred indisponível (sempre há estoque na rede) → NÃO zera o espelho.
+      if (!all.length) throw new Error('SELECT estoque veio vazio — espelho preservado');
+
+      // 2) REPLACE ATÔMICO no Postgres.
+      await this.prisma.$transaction(
+        async (tx) => {
+          await (tx as any).wincredEstoque.deleteMany({});
+          for (let i = 0; i < all.length; i += 5000) {
+            await (tx as any).wincredEstoque.createMany({
+              data: all.slice(i, i + 5000),
+              skipDuplicates: true,
+            });
+          }
+        },
+        { timeout: 300_000, maxWait: 30_000 },
+      );
 
       const durationMs = Date.now() - t0;
-      this.logger.log(`[estoque] OK — ${processed} linhas em ${durationMs}ms`);
-      return { table: 'estoque', success: true, processed, durationMs };
+      this.logger.log(`[estoque] OK — ${all.length} linhas em ${durationMs}ms (replace atômico)`);
+      return { table: 'estoque', success: true, processed: all.length, durationMs };
     } catch (e) {
       const msg = (e as Error).message;
-      this.logger.error(`[estoque] FALHOU: ${msg}`);
+      this.logger.error(`[estoque] FALHOU (espelho antigo preservado): ${msg}`);
       return { table: 'estoque', success: false, processed: 0, durationMs: Date.now() - t0, error: msg };
+    } finally {
+      this.releaseLock('estoque');
     }
   }
 
@@ -594,8 +624,16 @@ export class WincredMirrorService {
       }
 
       // ── 2. Estoque dos produtos modificados (somente eles) ──
+      // TRAVA (14/07): se o FULL de estoque está rodando agora, pula esta parte
+      // — mexer nas mesmas linhas durante o replace atômico só cria conflito;
+      // o próprio full já traz o estoque fresco de tudo.
       let estoqueAtualizado = 0;
-      if (codigosModificados.length > 0) {
+      const estoqueLivre = this.acquireLock('estoque');
+      if (!estoqueLivre) {
+        this.logger.warn('[incremental] full de estoque em andamento — parte de estoque pulada');
+      }
+      try {
+      if (estoqueLivre && codigosModificados.length > 0) {
         // Wincred guarda CODIGO em estoque com formato variavel (padding zeros, etc).
         // Vamos buscar pelos codigos normalizados — convertemos cada para varias formas.
         // Mais simples: SELECT estoque WHERE codigo numerico IN (lista numerica).
@@ -621,12 +659,6 @@ export class WincredMirrorService {
             variants,
           );
 
-          // Deleta estoque desses codigos no Postgres, re-insere
-          await this.prisma.$executeRawUnsafe(
-            `DELETE FROM wincred_estoque WHERE codigo = ANY($1::text[])`,
-            chunk,
-          );
-
           const seen = new Set<string>();
           const dataEst = (estRows as any[])
             .filter((r) => {
@@ -644,14 +676,26 @@ export class WincredMirrorService {
               estoque: r.ESTOQUE != null ? Number(r.ESTOQUE) : null,
             }));
 
-          if (dataEst.length) {
-            await (this.prisma as any).wincredEstoque.createMany({
-              data: dataEst,
-              skipDuplicates: true,
-            });
-            estoqueAtualizado += dataEst.length;
-          }
+          // Delete + re-insert do lote numa TRANSAÇÃO (14/07): sem ela, um
+          // crash entre o DELETE e o createMany sumia com o estoque desses
+          // códigos até o próximo full.
+          await this.prisma.$transaction(async (tx) => {
+            await tx.$executeRawUnsafe(
+              `DELETE FROM wincred_estoque WHERE codigo = ANY($1::text[])`,
+              chunk,
+            );
+            if (dataEst.length) {
+              await (tx as any).wincredEstoque.createMany({
+                data: dataEst,
+                skipDuplicates: true,
+              });
+            }
+          });
+          estoqueAtualizado += dataEst.length;
         }
+      }
+      } finally {
+        if (estoqueLivre) this.releaseLock('estoque');
       }
 
       await this.setSyncState('produtos', {
