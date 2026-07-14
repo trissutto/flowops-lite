@@ -8131,6 +8131,40 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * EXCLUSÃO de produtos no Giga (editor de produtos). Apaga da tabela
+   * `produtos` E as linhas de `estoque` dos códigos. Variantes de zero-padding
+   * cobertas. Gated por ERP_WRITE_ENABLED.
+   */
+  async deleteProdutos(codigos: string[]): Promise<{ excluidos: number }> {
+    if (!this.isWriteEnabled) {
+      throw new Error('ERP_WRITE_ENABLED=false. Setar env=true pra liberar exclusão.');
+    }
+    if (!this.pool) throw new Error('ERP MySQL nao esta conectado');
+    const variants: string[] = [];
+    for (const c of codigos) {
+      const t = String(c || '').trim();
+      if (t) variants.push(...this.skuVariants(t));
+    }
+    if (!variants.length) return { excluidos: 0 };
+    let excluidos = 0;
+    for (let i = 0; i < variants.length; i += 500) {
+      const chunk = variants.slice(i, i + 500);
+      const placeholders = chunk.map(() => '?').join(',');
+      const [r]: any = await this.pool.query(
+        `DELETE FROM produtos WHERE CODIGO IN (${placeholders})`,
+        chunk,
+      );
+      excluidos += Number(r?.affectedRows) || 0;
+      await this.pool.query(
+        `DELETE FROM estoque WHERE CODIGO IN (${placeholders})`,
+        chunk,
+      ).catch((e: any) => this.logger.warn(`deleteProdutos estoque: ${e?.message}`));
+    }
+    this.logger.log(`deleteProdutos: ${excluidos} produto(s) excluído(s) no Giga`);
+    return { excluidos };
+  }
+
+  /**
    * RESTAURAÇÃO DO INCIDENTE 14/07: devolve a DATA DE CADASTRO (DATAALT)
    * original de produtos que o editor carimbou com a data da edição —
    * o que tirou peças antigas da promoção Liquida Antigos.

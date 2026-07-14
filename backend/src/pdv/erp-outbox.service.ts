@@ -89,6 +89,7 @@ export class ErpOutboxService {
   /** true = job concluído; false = re-agendado (ou failed). */
   private async processJob(job: any): Promise<boolean> {
     if (job.kind === 'produto_cadastro') return this.processProdutoCadastro(job);
+    if (job.kind === 'produto_exclusao') return this.processProdutoExclusao(job);
     if (job.kind !== 'venda') {
       await this.markFailed(job, `kind desconhecido: ${job.kind}`);
       return false;
@@ -228,6 +229,40 @@ export class ErpOutboxService {
         },
       });
       this.logger.warn(`[outbox] cadastro ${job.saleId} re-agendado (+${delayS}s): ${e?.message}`);
+      return false;
+    }
+  }
+
+  /** Réplica da EXCLUSÃO de produto pro Giga (o Flow já apagou). Idempotente. */
+  private async processProdutoExclusao(job: any): Promise<boolean> {
+    const codigos = Array.isArray(job.payload?.codigos) ? job.payload.codigos : null;
+    if (!codigos?.length) {
+      await this.markFailed(job, 'payload sem codigos');
+      return false;
+    }
+    try {
+      const r = await this.erp.deleteProdutos(codigos);
+      await (this.prisma as any).erpOutbox.update({
+        where: { id: job.id },
+        data: { status: 'done', doneAt: new Date(), lastError: null },
+      });
+      this.logger.log(`[outbox] exclusão ${job.saleId}: ${r.excluidos} apagado(s) no Wincred`);
+      return true;
+    } catch (e: any) {
+      const attempts = (job.attempts || 0) + 1;
+      const delayS =
+        ErpOutboxService.BACKOFF_S[Math.min(attempts - 1, ErpOutboxService.BACKOFF_S.length - 1)] ??
+        ErpOutboxService.BACKOFF_CAP_S;
+      await (this.prisma as any).erpOutbox.update({
+        where: { id: job.id },
+        data: attempts >= ErpOutboxService.MAX_ATTEMPTS
+          ? { status: 'failed', attempts, lastError: String(e?.message || e).slice(0, 300) }
+          : {
+              status: 'pending', attempts,
+              lastError: String(e?.message || e).slice(0, 300),
+              nextRetryAt: new Date(Date.now() + Math.min(delayS, ErpOutboxService.BACKOFF_CAP_S) * 1000),
+            },
+      });
       return false;
     }
   }

@@ -966,6 +966,92 @@ export class ProductsEditorService {
     return { ok: true, background: true, pares: mapa.size, acompanhe: 'GET /products-editor/restaurar-dataalt/progresso' };
   }
 
+  /**
+   * EXCLUSÃO de produtos (tela do editor). Trava de segurança: código com
+   * ESTOQUE > 0 em qualquer loja só sai com forcar=true. Apaga do Flow
+   * (product, wincred_produtos, espelhos de estoque) na hora e replica a
+   * exclusão pro Giga inline — Giga fora → outbox kind produto_exclusao.
+   * Tudo auditado (ANTES da exclusão) em product_edit_audit.
+   */
+  async excluirProdutos(input: { codigos: string[]; forcar?: boolean; userName?: string | null }) {
+    const codigos = Array.from(
+      new Set(
+        (input.codigos || [])
+          .map((c) => this.normalizeCodigo(String(c || '')))
+          .filter((c): c is string => !!c),
+      ),
+    );
+    if (!codigos.length) throw new BadRequestException('Nenhum código informado');
+    if (codigos.length > 500) throw new BadRequestException('Máximo de 500 produtos por exclusão');
+
+    // Trava: estoque > 0 em alguma loja (espelho)
+    if (!input.forcar) {
+      const rows: any[] = await (this.prisma as any).wincredEstoque.findMany({
+        where: { codigo: { in: codigos }, estoque: { gt: 0 } },
+        select: { codigo: true, loja: true, estoque: true },
+      });
+      if (rows.length) {
+        const bloqueados = Array.from(new Set(rows.map((r) => String(r.codigo))));
+        return {
+          ok: false,
+          bloqueados,
+          mensagem: `${bloqueados.length} código(s) com ESTOQUE > 0 — confirme com "forçar" pra excluir mesmo assim`,
+        };
+      }
+    }
+
+    // Auditoria ANTES de apagar (registra o que era)
+    const antes: any[] = await (this.prisma as any).product.findMany({
+      where: { codigo: { in: codigos } },
+      select: { codigo: true, ref: true, descricaoCompleta: true },
+    });
+    const infoPorCodigo = new Map(antes.map((p) => [String(p.codigo), p]));
+    const batchId = randomUUID();
+    await (this.prisma as any).productEditAudit.createMany({
+      data: codigos.map((c) => ({
+        batchId,
+        codigo: c,
+        ref: infoPorCodigo.get(c)?.ref || null,
+        field: 'EXCLUIDO',
+        oldValue: (infoPorCodigo.get(c)?.descricaoCompleta || '').slice(0, 100) || null,
+        newValue: input.forcar ? 'excluído (forçado, com estoque)' : 'excluído',
+        userName: input.userName || null,
+        applied: true,
+      })),
+    }).catch(() => null);
+
+    // Flow primeiro (efeito imediato em busca/bipe/grade)
+    await (this.prisma as any).product.deleteMany({ where: { codigo: { in: codigos } } }).catch(() => null);
+    await (this.prisma as any).wincredProduto.deleteMany({ where: { codigo: { in: codigos } } }).catch(() => null);
+    await (this.prisma as any).wincredEstoque.deleteMany({ where: { codigo: { in: codigos } } }).catch(() => null);
+    await (this.prisma as any).gigaEstoque.deleteMany({ where: { codigo: { in: codigos } } }).catch(() => null);
+
+    // Réplica no Giga: inline com fallback pro outbox
+    let excluidosGiga = 0;
+    let gigaEnfileirado = false;
+    try {
+      const r = await this.erp.deleteProdutos(codigos);
+      excluidosGiga = r.excluidos;
+    } catch (e) {
+      gigaEnfileirado = true;
+      await (this.prisma as any).erpOutbox.create({
+        data: {
+          kind: 'produto_exclusao',
+          saleId: `del-${batchId}`,
+          payload: { codigos },
+          status: 'pending',
+        },
+      }).catch(() => null);
+      this.logger.warn(`[editor] exclusão: Giga indisponível (${(e as Error).message}) — enfileirada no outbox`);
+    }
+    this.logger.log(
+      `[editor] EXCLUSÃO: ${codigos.length} código(s) no Flow` +
+        (gigaEnfileirado ? ' + Giga via outbox' : ` + ${excluidosGiga} no Giga`) +
+        ` (por ${input.userName || '?'})`,
+    );
+    return { ok: true, excluidos: codigos.length, excluidosGiga, gigaEnfileirado, batchId };
+  }
+
   /** Últimos lotes de auditoria (tela mostra o histórico recente). */
   async auditRecent(limit = 200) {
     return (this.prisma as any).productEditAudit.findMany({

@@ -17,7 +17,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
   ArrowLeft, Search, Pencil, Tags, DollarSign, ReplaceAll, Loader2,
-  AlertTriangle, Check, X, Lock, History,
+  AlertTriangle, Check, X, Lock, History, Trash2,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -262,6 +262,49 @@ export default function EditorProdutosPage() {
     }
   };
 
+  // EXCLUSÃO em bloco: dupla confirmação; estoque > 0 exige "forçar" (3ª
+  // confirmação). Apaga do Flow na hora e replica pro Giga (inline/outbox).
+  const excluirSelecionadas = async () => {
+    const codigos = Array.from(sel);
+    if (!codigos.length) return;
+    const ok = window.confirm(
+      `EXCLUIR ${codigos.length} variação(ões) selecionada(s)?\n\n` +
+        `Isso apaga o produto do Flow E do Giga (cadastro e estoque). ` +
+        `Não tem desfazer — fica só o registro na auditoria.`,
+    );
+    if (!ok) return;
+    setMassaBusy(true); setErr('');
+    try {
+      let r = await api<{ ok: boolean; excluidos?: number; bloqueados?: string[]; mensagem?: string; gigaEnfileirado?: boolean }>(
+        '/products-editor/excluir',
+        { method: 'POST', body: JSON.stringify({ codigos }) },
+      );
+      if (!r.ok && r.bloqueados?.length) {
+        const forcar = window.confirm(
+          `${r.mensagem}\n\nCódigos com estoque: ${r.bloqueados.slice(0, 10).join(', ')}` +
+            (r.bloqueados.length > 10 ? ` (+${r.bloqueados.length - 10})` : '') +
+            `\n\nEXCLUIR MESMO ASSIM (estoque some junto)?`,
+        );
+        if (!forcar) { setMassaBusy(false); return; }
+        r = await api('/products-editor/excluir', {
+          method: 'POST', body: JSON.stringify({ codigos, forcar: true }),
+        });
+      }
+      if (r.ok) {
+        setOkMsg(
+          `✓ ${r.excluidos} variação(ões) excluída(s)` +
+            (r.gigaEnfileirado ? ' — Giga fora do ar, réplica na fila do outbox.' : '.'),
+        );
+        setSel(new Set());
+        await buscar();
+      }
+    } catch (e: any) {
+      setErr(e?.message || 'Falha na exclusão');
+    } finally {
+      setMassaBusy(false);
+    }
+  };
+
   const aplicarSubstituicao = () => {
     const de = descDe.trim();
     if (!de) return;
@@ -457,6 +500,10 @@ export default function EditorProdutosPage() {
             <button onClick={() => setModalDesc(true)} disabled={!sel.size}
               className="px-3 py-1.5 rounded-lg border-2 border-sky-300 bg-sky-50 text-sky-900 text-xs font-bold disabled:opacity-40 flex items-center gap-1.5">
               <ReplaceAll className="w-3.5 h-3.5" /> Substituir na descrição
+            </button>
+            <button onClick={excluirSelecionadas} disabled={!sel.size || massaBusy}
+              className="px-3 py-1.5 rounded-lg border-2 border-red-300 bg-red-50 text-red-800 text-xs font-bold disabled:opacity-40 flex items-center gap-1.5">
+              <Trash2 className="w-3.5 h-3.5" /> Excluir selecionadas
             </button>
             <div className="flex-1" />
             {meta?.fonte === 'espelho' && (

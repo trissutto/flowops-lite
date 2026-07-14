@@ -73,6 +73,21 @@ export class ProductsEditorController {
     });
   }
 
+  /**
+   * POST /products-editor/excluir — Body: { codigos: string[], forcar?: boolean }
+   * Exclui produtos do Flow (imediato) e replica pro Giga (inline/outbox).
+   * Código com estoque > 0 exige forcar=true. Máx. 500 por chamada. Auditado.
+   */
+  @Post('excluir')
+  async excluir(@Req() req: any, @Body() body: { codigos?: string[]; forcar?: boolean }) {
+    this.requireAdmin(req);
+    return this.svc.excluirProdutos({
+      codigos: body?.codigos || [],
+      forcar: !!body?.forcar,
+      userName: req?.user?.name || req?.user?.email || null,
+    });
+  }
+
   /** INCIDENTE 14/07 — diagnóstico do estrago da DATAALT. */
   @Get('dataalt-diagnostico')
   async dataAltDiag(@Req() req: any) {
