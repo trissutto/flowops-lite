@@ -692,8 +692,18 @@ export class ProductsEditorService {
     // volume do backup de mês passado é montado temporariamente em produção,
     // extraímos as datas daqui mesmo e depois o volume atual volta).
     const useSelf = url === 'self';
-    if (!useSelf && !/^postgres(ql)?:\/\//.test(url)) {
-      throw new BadRequestException('URL do Postgres temporário inválida (ou use "self")');
+    // 'peer://host[:porta]' = mesmo usuário/senha/banco do env DATABASE_URL,
+    // trocando só o host (Postgres temporário na rede interna do Railway,
+    // montado com o volume do backup — a senha nunca sai do servidor).
+    let effectiveUrl = url;
+    if (url.startsWith('peer://')) {
+      const peer = url.slice('peer://'.length).replace(/\/+$/, '');
+      const base = process.env.DATABASE_URL || '';
+      const m = base.match(/^(postgres(?:ql)?:\/\/[^@]+@)([^/?]+)(.*)$/);
+      if (!m || !peer) throw new BadRequestException('peer:// inválido ou DATABASE_URL ausente');
+      effectiveUrl = `${m[1]}${peer.includes(':') ? peer : peer + ':5432'}${m[3]}`;
+    } else if (!useSelf && !/^postgres(ql)?:\/\//.test(url)) {
+      throw new BadRequestException('URL do Postgres temporário inválida (ou use "self"/"peer://host")');
     }
     if (this.restauracao.rodando) return { ok: false, jaRodando: true, progresso: this.restauracao };
 
@@ -728,7 +738,7 @@ export class ProductsEditorService {
       backupRows = await (this.prisma as any).$queryRawUnsafe(backupSql);
     } else {
       const { PrismaClient } = require('@prisma/client');
-      const temp = new PrismaClient({ datasources: { db: { url } } });
+      const temp = new PrismaClient({ datasources: { db: { url: effectiveUrl } } });
       try {
         backupRows = await temp.$queryRawUnsafe(backupSql);
       } finally {
