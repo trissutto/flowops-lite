@@ -8743,11 +8743,36 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * [from, to). Usado SÓ pelo GigaMirrorService (janela de 3 dias no cron +
    * backfill mensal no boot).
    */
+  /** Colunas realmente existentes na `caixa` (o schema Wincred varia por
+   *  instalação — ex.: CONTROLE não existe na da Lurd's e derrubou o backfill
+   *  de 14/07). Sonda uma vez e monta o SELECT só com o que existe. */
+  private caixaColsCache: { cols: Set<string>; at: number } | null = null;
+  private async caixaColumns(): Promise<Set<string>> {
+    const now = Date.now();
+    if (this.caixaColsCache && now - this.caixaColsCache.at < 6 * 3600_000) {
+      return this.caixaColsCache.cols;
+    }
+    const [rows] = await this.pool.query<mysql.RowDataPacket[]>(`SHOW COLUMNS FROM caixa`);
+    const cols = new Set((rows as any[]).map((c) => String(c.Field || '').toUpperCase()));
+    this.caixaColsCache = { cols, at: now };
+    return cols;
+  }
+
   async getCaixaMovRows(from: Date, to: Date): Promise<any[]> {
     if (!this.pool) return [];
+    const cols = await this.caixaColumns();
+    const wanted = [
+      'REGISTRO', 'NUMERO', 'CONTROLE', 'CODIGO', 'DATA', 'DATAFEC', 'HORA', 'DESCRICAO',
+      'QUANTIDADE', 'VALOR', 'VALORTOTAL', 'OPERADOR', 'VENDEDOR', 'CLIENTE', 'LOJA', 'MARCADO',
+    ];
+    const present = wanted.filter((c) => cols.has(c));
+    for (const req of ['REGISTRO', 'CODIGO', 'DATA', 'LOJA']) {
+      if (!present.includes(req)) {
+        throw new Error(`caixa sem coluna obrigatória ${req} — espelho caixa_mov não suportado neste schema`);
+      }
+    }
     const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
-      `SELECT REGISTRO, NUMERO, CONTROLE, CODIGO, DATA, DATAFEC, HORA, DESCRICAO,
-              QUANTIDADE, VALOR, VALORTOTAL, OPERADOR, VENDEDOR, CLIENTE, LOJA, MARCADO
+      `SELECT ${present.join(', ')}
          FROM caixa
         WHERE DATA >= ? AND DATA < ?`,
       [from, to],
