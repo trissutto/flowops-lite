@@ -527,6 +527,21 @@ export class LivePdvService {
       } catch {
         /* coluna ainda não populada/erro → fallback por prefixo abaixo */
       }
+      // UNE com as linhas que a BUSCA acabou de resolver (nativa/espelho
+      // frescos): o giga_produto full-synca a cada ~6h, então produto
+      // recém-cadastrado (caso VOGUE BEGE, 14/07) já aparece na busca mas
+      // ainda não na família do espelho — sem a união, a família "engolia"
+      // a cor nova da grade. Dedup por CODIGO normalizado (padding de zeros
+      // varia entre fontes; linha duplicada contaria estoque 2x).
+      const keyCod = (c: any) => String(c ?? '').trim().replace(/^0+/, '');
+      const vistos = new Set(familia.map((r) => keyCod(r.CODIGO)));
+      for (const r of rows) {
+        if (ProductSearchService.refBaseOf(r.REF) !== baseAlvo) continue;
+        const k = keyCod(r.CODIGO);
+        if (vistos.has(k)) continue;
+        vistos.add(k);
+        familia.push(r);
+      }
     }
     // Fallback (espelho sem ref_base ainda): junção por prefixo antiga, com a
     // TRAVA DO PREFIXO NUMÉRICO — sufixo de variante começa com letra/espaço/
