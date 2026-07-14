@@ -498,6 +498,49 @@ export class LivePdvService {
           })
         : rows.filter((r) => this.norm(r.REF) === this.norm(rows[0].REF));
 
+    // REF AMBÍGUA (14/07, caso 14538): a MESMA REF cobre produtos DIFERENTES
+    // na Giga (SAÍDA DE PRAIA ACQUA + CASACO JULIA) — sem separar, a grade
+    // vira Frankenstein: descrição de um, preço do outro, cores misturadas.
+    // Divide por FAMÍLIA de descrição (regra do caso 2319, já usada nas outras
+    // telas) e fica com UMA:
+    //   - o termo tem palavra além da REF ("14538 JULIA") → família que casa;
+    //   - senão → família DOMINANTE (mais variações).
+    // Pra vender a OUTRA família, digita a REF + uma palavra dela
+    // ("14538 ACQUA") — na busca ou no refCode da legenda.
+    const porFamilia = new Map<string, any[]>();
+    for (const r of productRows) {
+      const f = ProductSearchService.familiaOf(r.DESCRICAOCOMPLETA);
+      const list = porFamilia.get(f) || [];
+      list.push(r);
+      porFamilia.set(f, list);
+    }
+    if (porFamilia.size > 1) {
+      const palavrasDoTermo = this.norm(q)
+        .split(/\s+/)
+        .filter((w) => w.length >= 3 && !/^\d+$/.test(w) && this.norm(w) !== qn);
+      let escolhida: any[] | null = null;
+      if (palavrasDoTermo.length) {
+        for (const list of porFamilia.values()) {
+          const casa = list.some((r) => {
+            const d = this.norm(r.DESCRICAOCOMPLETA);
+            return palavrasDoTermo.every((w) => d.includes(w));
+          });
+          if (casa) { escolhida = list; break; }
+        }
+      }
+      if (!escolhida) {
+        for (const list of porFamilia.values()) {
+          if (!escolhida || list.length > escolhida.length) escolhida = list;
+        }
+      }
+      if (escolhida?.length) {
+        this.logger.log(
+          `[grade] REF ambígua "${qn}": ${porFamilia.size} famílias (${Array.from(porFamilia.keys()).join(', ')}) → exibindo "${ProductSearchService.familiaOf(escolhida[0].DESCRICAOCOMPLETA)}" (${escolhida.length} linhas)`,
+        );
+        productRows = escolhida;
+      }
+    }
+
     // FILTRO DE LIVE (13/07, decisão do dono): live é SÓ plus size FEMININO.
     // 1) tamanho fora da whitelist (46–60, 46/48, 50/52) não vira célula —
     //    linha sem tamanho preenchido passa (cadastro incompleto não some);
@@ -534,7 +577,10 @@ export class LivePdvService {
     // Cabeçalho/foto/preço-base/promo usam a REF BASE (ex.: VLM-222), não a
     // variante de cor (VLM-222P) — que pode vir antes na ordem do Giga. As células
     // da grade continuam agrupadas sob a base; cada uma guarda seu próprio código.
-    const headRow = exact[0] || productRows[0];
+    // headRow SEMPRE dentro das linhas exibidas — exact[0] pode ser da família
+    // DESCARTADA (caso 14538: a saída de praia também tem REF exata "14538",
+    // e a descrição/foto do cabeçalho viravam as dela com a grade do casaco).
+    const headRow = productRows.find((r) => this.norm(r.REF) === qn) || productRows[0];
     const ref = (familia.length ? baseAlvo : String(headRow.REF).trim()) || String(headRow.REF).trim();
     const descricao = headRow.DESCRICAOCOMPLETA || ref;
 
