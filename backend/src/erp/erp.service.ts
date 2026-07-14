@@ -70,6 +70,26 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     return ok;
   }
 
+  /**
+   * COBERTURA DE PERÍODO (fix 13/07): o espelho giga_caixa_diario só guarda o
+   * histórico recente. Consulta que começa ANTES da data mais antiga do
+   * espelho (ex.: comparação "ano anterior" do faturamento) tem que ir pro
+   * Giga ao vivo — senão volta vazio e o gráfico compara com R$ 0,00.
+   */
+  private mirrorCaixaMinCache: { min: Date | null; at: number } | null = null;
+  private async mirrorCaixaCovers(inicio: Date): Promise<boolean> {
+    const now = Date.now();
+    if (!this.mirrorCaixaMinCache || now - this.mirrorCaixaMinCache.at > 60_000) {
+      const row = await (this.prismaFlow as any).gigaCaixaDiario
+        .findFirst({ orderBy: { data: 'asc' }, select: { data: true } })
+        .catch(() => null);
+      this.mirrorCaixaMinCache = { min: row?.data ? new Date(row.data) : null, at: now };
+    }
+    const min = this.mirrorCaixaMinCache.min;
+    if (!min) return false;
+    return inicio.getTime() >= min.getTime();
+  }
+
   /** getStock (roteamento) pelo espelho — replica a resolução anti-colisão. */
   private async getStockFromMirror(skus: string[], storeCodes: string[]): Promise<StockEntry[]> {
     const uniqueOriginals = Array.from(
@@ -2843,7 +2863,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     if (!storeCodes.length) return out;
     if (this.mirrorReadsEnabled) {
       try {
-        if (await this.mirrorCaixaReady()) {
+        if ((await this.mirrorCaixaReady()) && (await this.mirrorCaixaCovers(inicio))) {
           return await this.getSalesGrossByStoresFromMirror(storeCodes, inicio, fim);
         }
       } catch (e) {
@@ -8928,7 +8948,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   ): Promise<Array<{ bucket: string; storeCode: string; faturamento: number }>> {
     if (this.mirrorReadsEnabled) {
       try {
-        if (await this.mirrorCaixaReady()) {
+        if ((await this.mirrorCaixaReady()) && (await this.mirrorCaixaCovers(inicio))) {
           return await this.getFaturamentoTimeseriesFromMirror(inicio, fim, granularity);
         }
       } catch (e) {
