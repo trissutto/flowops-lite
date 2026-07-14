@@ -2643,11 +2643,10 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
              MAX(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAOPDV, '')) AS descricao,
              SUBSTRING(GROUP_CONCAT(DISTINCT UPPER(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAOPDV, '')) SEPARATOR ' '), 1, 8000) AS busca,
              MAX(COALESCE(p.MARCA, ''))                           AS marca,
-             MAX(COALESCE(NULLIF(TRIM(f.FANTASIA), ''), NULLIF(TRIM(f.RAZAOSOCIAL), ''), p.FORNECEDOR, '')) AS fornecedor,
+             MAX(COALESCE(p.FORNECEDOR, ''))                      AS fornecedor,
              MAX(COALESCE(p.NOMEGRUPO, ''))                       AS categoria,
              MAX(CASE WHEN p.PLUS_SIZE IN (1, 2) THEN 1 ELSE 0 END) AS plus_size
         FROM produtos p
-        LEFT JOIN fornecedores f ON f.CNPJ = p.FORNECEDOR
        WHERE p.REF IS NOT NULL
          AND TRIM(p.REF) <> ''
        GROUP BY TRIM(UPPER(p.REF))
@@ -2658,11 +2657,10 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
              COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAOPDV, '')    AS descricao,
              UPPER(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAOPDV, '')) AS busca,
              COALESCE(p.MARCA, '')                                AS marca,
-             COALESCE(NULLIF(TRIM(f.FANTASIA), ''), NULLIF(TRIM(f.RAZAOSOCIAL), ''), p.FORNECEDOR, '') AS fornecedor,
+             COALESCE(p.FORNECEDOR, '')                           AS fornecedor,
              COALESCE(p.NOMEGRUPO, '')                            AS categoria,
              CASE WHEN p.PLUS_SIZE IN (1, 2) THEN 1 ELSE 0 END    AS plus_size
         FROM produtos p
-        LEFT JOIN fornecedores f ON f.CNPJ = p.FORNECEDOR
        WHERE (p.REF IS NULL OR TRIM(p.REF) = '')
          AND p.CODIGO IS NOT NULL
          AND TRIM(p.CODIGO) <> ''
@@ -2679,15 +2677,34 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       this.logger.log(
         `[erp] getRefCatalogSnapshot: ${(rows as any[]).length} REF(s) em ${Date.now() - t0}ms`,
       );
-      return (rows as any[]).map((r) => ({
-        ref: String(r.ref || '').trim(),
-        descricao: String(r.descricao || '').trim(),
-        busca: String(r.busca || '').trim(),
-        marca: String(r.marca || '').trim(),
-        fornecedor: String(r.fornecedor || '').trim(),
-        categoria: String(r.categoria || '').trim(),
-        plusSize: Number(r.plus_size) === 1,
-      }));
+      // produtos.FORNECEDOR guarda o CNPJ — traduz pro NOME em memória
+      // (JOIN no SQL quebrava: collation/charset misto nas tabelas legadas).
+      const fornNome = new Map<string, string>();
+      try {
+        const [fs] = await conn.query<mysql.RowDataPacket[]>({
+          sql: 'SELECT CNPJ, FANTASIA, RAZAOSOCIAL FROM fornecedores',
+          timeout: 15_000,
+        });
+        for (const f of fs as any[]) {
+          const cnpj = String(f.CNPJ || '').trim();
+          const nome = String(f.FANTASIA || '').trim() || String(f.RAZAOSOCIAL || '').trim();
+          if (cnpj && nome) fornNome.set(cnpj, nome);
+        }
+      } catch (e) {
+        this.logger.warn(`[erp] snapshot: mapa de fornecedores falhou (${(e as Error).message}) — mantendo CNPJ cru`);
+      }
+      return (rows as any[]).map((r) => {
+        const fornRaw = String(r.fornecedor || '').trim();
+        return {
+          ref: String(r.ref || '').trim(),
+          descricao: String(r.descricao || '').trim(),
+          busca: String(r.busca || '').trim(),
+          marca: String(r.marca || '').trim(),
+          fornecedor: fornNome.get(fornRaw) || fornRaw,
+          categoria: String(r.categoria || '').trim(),
+          plusSize: Number(r.plus_size) === 1,
+        };
+      });
     } catch (e) {
       this.logger.error(`getRefCatalogSnapshot falhou: ${(e as Error).message}`);
       throw e;
