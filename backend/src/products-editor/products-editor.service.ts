@@ -870,6 +870,102 @@ export class ProductsEditorService {
     return this.executarRestauracao(pairs, 'caixa', userName);
   }
 
+  // ── AUDITORIA COMPLETA por arquivo (backup Giga 12/07) ────────────────────
+  // O dono exportou CODIGO+DATAALT do backup de 12/07 (véspera do incidente).
+  // Fluxo em 2 passos: (1) carregar o arquivo em memória (SEM escrita) e
+  // (2) executar — compara o catálogo INTEIRO do Giga com o arquivo e corrige
+  // TODA divergência (confere inclusive as levas 1-3).
+  private arquivoPairs: Map<string, string> | null = null;
+
+  carregarArquivoDataAlt(
+    pairsIn: Array<{ codigo: string; dataAlt: string }>,
+    opts: { zerar?: boolean } = {},
+  ) {
+    if (opts.zerar || !this.arquivoPairs) this.arquivoPairs = new Map();
+    let invalidos = 0;
+    let datasInvalidas = 0;
+    let datasSuspeitas = 0;
+    let colisoes = 0;
+    for (const p of pairsIn || []) {
+      const cod = this.normalizeCodigo(String(p?.codigo ?? ''));
+      let d = String(p?.dataAlt ?? '').trim().slice(0, 10);
+      const br = d.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+      if (br) d = `${br[3]}-${br[2]}-${br[1]}`;
+      if (!cod) { invalidos++; continue; }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || d.startsWith('0000')) { datasInvalidas++; continue; }
+      // backup é de 12/07 — data igual/depois de 13/07 nele é lixo
+      if (d >= '2026-07-13') { datasSuspeitas++; continue; }
+      const prev = this.arquivoPairs.get(cod);
+      if (prev !== undefined) {
+        colisoes++;
+        if (d < prev) this.arquivoPairs.set(cod, d); // colisão: fica a mais antiga
+      } else {
+        this.arquivoPairs.set(cod, d);
+      }
+    }
+    return {
+      ok: true,
+      carregados: this.arquivoPairs.size,
+      descartados: { codigoInvalido: invalidos, dataInvalida: datasInvalidas, dataSuspeita: datasSuspeitas },
+      colisoesDeCodigo: colisoes,
+    };
+  }
+
+  async executarAuditoriaArquivo(userName: string | null) {
+    if (!this.arquivoPairs?.size) {
+      throw new BadRequestException('Arquivo ainda não carregado (POST restaurar-dataalt-arquivo primeiro)');
+    }
+    if (this.restauracao.rodando) return { ok: false, jaRodando: true, progresso: this.restauracao };
+    const mapa = this.arquivoPairs;
+    this.restauracao = {
+      rodando: true, fonte: 'arquivo', total: 0, feitos: 0,
+      inicio: new Date().toISOString(), fim: null, erro: null,
+    };
+    const prog = this.restauracao as any;
+    void (async () => {
+      // 1) Catálogo INTEIRO do Giga, paginado
+      prog.etapa = 'lendo catálogo do Giga';
+      const divergentes: Array<{ codigo: string; dataAlt: string }> = [];
+      let iguais = 0;
+      let foraDoArquivo = 0;
+      let catalogo = 0;
+      let cursor = '';
+      for (let page = 0; page < 15; page++) {
+        const res = await this.erp.runReadOnly(
+          `SELECT CODIGO, DATE_FORMAT(DATAALT, '%Y-%m-%d') AS d FROM produtos
+            WHERE CODIGO > '${cursor.replace(/'/g, '')}'
+            ORDER BY CODIGO LIMIT 40000`,
+          { maxRows: 40000, timeoutMs: 90_000 },
+        );
+        const rows = res.rows as any[];
+        if (!rows.length) break;
+        catalogo += rows.length;
+        prog.etapa = `lendo catálogo do Giga (${catalogo})`;
+        for (const r of rows) {
+          const cod = this.normalizeCodigo(String(r.CODIGO));
+          if (!cod) continue;
+          const alvo = mapa.get(cod);
+          if (alvo === undefined) { foraDoArquivo++; continue; }
+          const atual = String(r.d || '');
+          if (atual === alvo) iguais++;
+          else divergentes.push({ codigo: cod, dataAlt: alvo });
+        }
+        cursor = String(rows[rows.length - 1].CODIGO);
+        if (rows.length < 40000) break;
+      }
+      prog.resumo = { catalogoGiga: catalogo, iguais, foraDoArquivo, divergentes: divergentes.length };
+      this.logger.log(`[dataalt] auditoria arquivo: catálogo=${catalogo} iguais=${iguais} fora=${foraDoArquivo} divergentes=${divergentes.length}`);
+      if (!divergentes.length) return;
+      // 2) Corrige TODA divergência com a verdade de 12/07
+      this.restauracao.total = divergentes.length;
+      prog.etapa = 'corrigindo divergências';
+      await this.executarRestauracao(divergentes, 'arquivo', userName);
+    })()
+      .catch((e) => { this.restauracao.erro = (e as Error).message?.slice(0, 200) || 'erro'; })
+      .finally(() => { this.restauracao.rodando = false; this.restauracao.fim = new Date().toISOString(); });
+    return { ok: true, background: true, pares: mapa.size, acompanhe: 'GET /products-editor/restaurar-dataalt/progresso' };
+  }
+
   /** Últimos lotes de auditoria (tela mostra o histórico recente). */
   async auditRecent(limit = 200) {
     return (this.prisma as any).productEditAudit.findMany({
