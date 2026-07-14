@@ -174,6 +174,50 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     return out;
   }
 
+  /**
+   * WRITE-THROUGH de estoque nos espelhos (giga_estoque + wincred_estoque).
+   * Entrada/baixa no Giga refletem NA HORA no Flow — sem esperar o full de
+   * hora em hora. Incidente VOGUE VINHO 14/07: entrada de 1un pela tela de
+   * pedidos gravou no Giga, a grade da live (que esconde estoque 0) só veria
+   * o saldo na virada da hora. Best effort: falha aqui NUNCA quebra a
+   * operação principal (o cron continua sendo a fonte de reconciliação).
+   */
+  private async mirrorStockWriteThrough(
+    applied: Array<{ sku: string; storeCode: string; newStock: number }>,
+  ): Promise<void> {
+    for (const a of applied) {
+      try {
+        const lojaRaw = String(a.storeCode || '').trim();
+        const loja2 = /^\d{1}$/.test(lojaRaw) ? lojaRaw.padStart(2, '0') : lojaRaw;
+        const lojas = Array.from(new Set([lojaRaw, loja2, lojaRaw.replace(/^0+/, '') || lojaRaw]));
+        const novo = Math.max(0, Number(a.newStock) || 0);
+        const variants = this.skuVariants(String(a.sku || '').trim());
+        if (!variants.length || !lojas.length) continue;
+
+        const upd = await (this.prismaFlow as any).gigaEstoque.updateMany({
+          where: { codigo: { in: variants }, loja: { in: lojas } },
+          data: { estoque: novo, syncedAt: new Date() },
+        });
+        if (!upd.count) {
+          await (this.prismaFlow as any).gigaEstoque.create({
+            data: { codigo: String(a.sku).trim(), loja: loja2, estoque: novo },
+          });
+        }
+
+        const codNorm = this.wincredCodigo(String(a.sku).trim());
+        await (this.prismaFlow as any).wincredEstoque.upsert({
+          where: { codigo_loja: { codigo: codNorm, loja: loja2 } },
+          create: { codigo: codNorm, loja: loja2, estoque: novo },
+          update: { estoque: novo, syncedAt: new Date() },
+        });
+      } catch (e) {
+        this.logger.warn(
+          `[mirror-writethrough] estoque ${a.sku}/${a.storeCode}: ${(e as Error).message}`,
+        );
+      }
+    }
+  }
+
   /** getStockTotalBySkus pelo espelho — inclui a regra "existe no cadastro = 0". */
   private async getStockTotalBySkusFromMirror(skus: string[]): Promise<Record<string, number>> {
     const unique = Array.from(new Set(skus.filter((s) => s && s.trim()))).map((s) => s.trim());
@@ -1396,6 +1440,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           applied.slice(0, 5).map((a) => `${a.sku}/${a.storeCode}: ${a.previousStock}â†’${a.newStock}`).join(', ') +
           (applied.length > 5 ? ` â€¦ (+${applied.length - 5} mais)` : ''),
       );
+      void this.mirrorStockWriteThrough(applied);
       return { success: true, applied };
     } catch (e: any) {
       try { await conn.rollback(); } catch { /* ignore */ }
@@ -1639,6 +1684,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           applied.slice(0, 5).map((a) => `${a.sku}/${a.storeCode}: ${a.previousStock}â†’${a.newStock}`).join(', ') +
           (applied.length > 5 ? ` â€¦ (+${applied.length - 5} mais)` : ''),
       );
+      void this.mirrorStockWriteThrough(applied);
       return { success: true, applied };
     } catch (e: any) {
       try { await conn.rollback(); } catch { /* ignore */ }
