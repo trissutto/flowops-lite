@@ -692,7 +692,9 @@ export default function EditorProdutosPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {preview.map((p, i) => (
+                {/* Renderiza no máx 500 linhas — preview de milhares travava o
+                    navegador; o restante é aplicado igual (contagem abaixo). */}
+                {preview.slice(0, 500).map((p, i) => (
                   <tr key={i}>
                     <td className="px-2 py-1.5 font-mono text-slate-500">{p.codigo}</td>
                     <td className="px-2 py-1.5 font-mono">{p.ref}</td>
@@ -701,6 +703,13 @@ export default function EditorProdutosPage() {
                     <td className="px-2 py-1.5 text-emerald-700 font-semibold">{p.depois}</td>
                   </tr>
                 ))}
+                {preview.length > 500 && (
+                  <tr>
+                    <td colSpan={5} className="px-2 py-2 text-center text-slate-500 font-semibold bg-slate-50">
+                      … e mais {preview.length - 500} alterações iguais às acima (aplicadas do mesmo jeito)
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
