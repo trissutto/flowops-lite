@@ -84,6 +84,12 @@ export class ProductsEditorService {
 
     // Teto 5.000 variações (pedido do dono 13/07: "deixar livre" — o teto é só
     // proteção pro navegador; nenhuma família real chega perto disso).
+    // PERF (13/07, caso ROVITEX): com a tabela nativa ativa, marca/preço saem
+    // DELA (1 query no Postgres) — nada de enriquecer via Giga ao vivo em
+    // lotes sequenciais (17 idas à KingHost deixavam a busca em dezenas de
+    // segundos pra marcas grandes).
+    const nativeReads = String(process.env.PRODUCT_NATIVE_READS ?? '').trim() === '1';
+
     const base = await this.search.resolveRows(term, { fallbackTake: 5000 });
     if (!base.length) return { rows: [], fonte: 'espelho', warnings: { legendaAtiva: [], classificacao: [] } };
 
@@ -92,8 +98,26 @@ export class ProductsEditorService {
     ).slice(0, 5000);
 
     // ── Enriquecimento (MARCA + preço + descrição frescos) ──
-    let fonte: 'giga' | 'espelho' = 'espelho';
+    let fonte: 'giga' | 'espelho' | 'flow' = 'espelho';
     const extra = new Map<string, { marca: string | null; vendaUn: number | null; descricao: string | null; ref: string | null; cor: string | null; tamanho: string | null }>();
+    if (nativeReads) {
+      // Tabela nativa é a fonte: 1 query no Postgres resolve tudo.
+      const prows: any[] = await (this.prisma as any).product.findMany({
+        where: { codigo: { in: codigos } },
+        select: { codigo: true, marca: true, vendaUn: true, descricaoCompleta: true, ref: true, cor: true, tamanho: true },
+      });
+      for (const r of prows) {
+        extra.set(String(r.codigo).trim(), {
+          marca: r.marca != null ? String(r.marca).trim() : null,
+          vendaUn: r.vendaUn != null ? Number(r.vendaUn) : null,
+          descricao: r.descricaoCompleta != null ? String(r.descricaoCompleta) : null,
+          ref: r.ref != null ? String(r.ref).trim() : null,
+          cor: r.cor != null ? String(r.cor).trim() : null,
+          tamanho: r.tamanho != null ? String(r.tamanho).trim() : null,
+        });
+      }
+      fonte = 'flow';
+    } else {
     try {
       for (let i = 0; i < codigos.length; i += 300) {
         const chunk = codigos.slice(i, i + 300);
@@ -130,6 +154,7 @@ export class ProductsEditorService {
           if (w) extra.set(c, { marca: w.marca ?? null, vendaUn: w.vendaUn != null ? Number(w.vendaUn) : null, descricao: null, ref: null, cor: null, tamanho: null });
         }
       } catch { /* segue sem marca */ }
+    }
     }
 
     // ── Estoque total (espelho, informativo) ──
