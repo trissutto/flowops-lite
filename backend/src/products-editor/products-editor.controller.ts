@@ -73,6 +73,31 @@ export class ProductsEditorController {
     });
   }
 
+  /** INCIDENTE 14/07 — diagnóstico do estrago da DATAALT. */
+  @Get('dataalt-diagnostico')
+  async dataAltDiag(@Req() req: any) {
+    this.requireAdmin(req);
+    return this.svc.dataAltDiagnostico();
+  }
+
+  /**
+   * POST /products-editor/restaurar-dataalt
+   * Body: { source: 'native' } OU { pairs: [{codigo, dataAlt:'YYYY-MM-DD'}] }
+   * Restaura a data de cadastro original (promo Liquida Antigos).
+   */
+  @Post('restaurar-dataalt')
+  async restaurarDataAlt(
+    @Req() req: any,
+    @Body() body: { source?: 'native'; pairs?: Array<{ codigo: string; dataAlt: string }> },
+  ) {
+    this.requireAdmin(req);
+    return this.svc.restaurarDataAlt({
+      source: body?.source,
+      pairs: body?.pairs,
+      userName: req?.user?.name || req?.user?.email || null,
+    });
+  }
+
   /** GET /products-editor/audit — histórico recente (ANTES→DEPOIS). */
   @Get('audit')
   async audit(@Req() req: any, @Query('limit') limit?: string) {
