@@ -108,16 +108,20 @@ export class ProductSearchService implements OnModuleInit {
         }
         return nrows.map((r: any) => this.mapNative(r));
       }
-      // 2) REF exata/prefixo.
+      // 2) REF exata/prefixo — MAS SEM SEQUESTRAR A BUSCA (fix 13/07, caso
+      //    "MARRIE": existe uma REF chamada MARRIE (mochila infantil) e a
+      //    cascata parava nela, escondendo as centenas de peças com MARRIE na
+      //    DESCRIÇÃO). O acerto de REF vem PRIMEIRO na lista, e o full-text
+      //    da descrição é SOMADO em seguida (dedup por código).
       const upN = term.toUpperCase();
-      nrows = await findN({
+      const refHitsN: any[] = await findN({
         OR: [{ ref: upN }, { ref: term }, { ref: { startsWith: upN } }, { ref: { startsWith: term } }],
       });
-      if (nrows.length) return nrows.map((r: any) => this.mapNative(r));
       // 3) Full-text na descrição (pg_trgm no índice product_descricao_trgm_idx).
+      let descHitsN: any[] = [];
       if (term.length >= 2) {
         const wordsN = term.split(/\s+/).map((w) => w.trim()).filter((w) => w.length >= 2).slice(0, 6);
-        nrows = await findN(
+        descHitsN = await findN(
           {
             OR: [
               { ref: { startsWith: term, mode: 'insensitive' } },
@@ -129,6 +133,8 @@ export class ProductSearchService implements OnModuleInit {
           opts?.fallbackTake ?? 300,
         );
       }
+      const vistos = new Set(refHitsN.map((r: any) => r.codigo));
+      nrows = [...refHitsN, ...descHitsN.filter((r: any) => !vistos.has(r.codigo))];
       return nrows.map((r: any) => this.mapNative(r));
     }
 
@@ -148,12 +154,12 @@ export class ProductSearchService implements OnModuleInit {
       return rows;
     }
 
-    // 2) REF pelo índice: exato/prefixo em MAIÚSCULA (padrão Giga) e como digitado.
+    // 2) REF exata/prefixo — SEM SEQUESTRAR A BUSCA (fix 13/07, caso MARRIE):
+    //    o acerto de REF vem primeiro, e o full-text da descrição é SOMADO.
     const up = term.toUpperCase();
-    rows = await find({
+    const refHits: any[] = await find({
       OR: [{ ref: up }, { ref: term }, { ref: { startsWith: up } }, { ref: { startsWith: term } }],
     });
-    if (rows.length) return rows;
 
     // 3) FULL-TEXT na DESCRIÇÃO (10/07) — estilo motor de busca, via pg_trgm:
     //    TODAS as palavras do termo têm que aparecer na DESCRICAOCOMPLETA, em
@@ -161,9 +167,10 @@ export class ProductSearchService implements OnModuleInit {
     //    "KASUAL 2319" acham "BLUSÃO ... 2319 KASUAL VINHO 46"). Antes exigia
     //    o termo inteiro contíguo — fora de ordem não achava. O índice GIN
     //    trigram (onModuleInit) mantém isso rápido. + ref insensitive.
+    let descHits: any[] = [];
     if (term.length >= 2) {
       const words = term.split(/\s+/).map((w) => w.trim()).filter((w) => w.length >= 2).slice(0, 6);
-      rows = await find(
+      descHits = await find(
         {
           OR: [
             { ref: { startsWith: term, mode: 'insensitive' } },
@@ -175,7 +182,8 @@ export class ProductSearchService implements OnModuleInit {
         opts?.fallbackTake ?? 300,
       );
     }
-    return rows;
+    const vistos = new Set(refHits.map((r: any) => r.codigo));
+    return [...refHits, ...descHits.filter((r: any) => !vistos.has(r.codigo))];
   }
 
   /**
