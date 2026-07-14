@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
+import { ProductSearchService } from '../product-search/product-search.service';
 import { generateEan13Batch } from './ean.util';
 
 /**
@@ -121,6 +122,18 @@ export class ProductRegistrationService {
     this.logger.log(
       `Cadastro Dinâmico: ref=${input.ref} grupo=${input.grupoCodigo} → ${result.inseridos}/${produtos.length} produtos inseridos`,
     );
+
+    // 4) ESPELHO IMEDIATO (14/07, caso VOGUE BEGE na live): sem isso, a peça
+    // recém-cadastrada só aparecia na busca da live/PDV depois da corrente de
+    // syncs (espelho 10min → nativa no minuto 38 — até ~1h de espera). Semeia
+    // as três cópias do Postgres AGORA; os syncs seguintes só confirmam.
+    // Falha aqui NUNCA desfaz o cadastro (o Giga é a fonte) — só loga.
+    try {
+      await this.espelhoImediato(produtos);
+      this.logger.log(`Cadastro Dinâmico: ${produtos.length} produto(s) espelhados na hora (wincred+giga+nativa)`);
+    } catch (e) {
+      this.logger.warn(`Cadastro Dinâmico: espelho imediato falhou (syncs normais cobrem): ${(e as Error).message}`);
+    }
     return {
       inseridos: result.inseridos,
       ignorados: result.ignorados,
@@ -139,6 +152,115 @@ export class ProductRegistrationService {
   // ───────────────────────────────────────────────────────────────────────
   // Helpers privados
   // ───────────────────────────────────────────────────────────────────────
+
+  /** Tamanhos aceitos na live — mesma whitelist do LivePdvService/nativa. */
+  private static readonly LIVE_TAMANHOS = new Set([
+    '46', '48', '50', '52', '54', '56', '58', '60', '46/48', '50/52',
+  ]);
+
+  /**
+   * ESPELHO IMEDIATO (14/07): grava o cadastro novo nas TRÊS cópias do
+   * Postgres (wincred_produtos, giga_produto e a nativa `product`), com as
+   * MESMAS regras de curadoria do ProductNativeService (genero/liveOk). A
+   * peça recém-cadastrada aparece na busca da live/PDV na hora, sem esperar
+   * a corrente de syncs. Idempotente: upsert por codigo; linha nativa com
+   * flowIsSource=true nunca é sobrescrita.
+   */
+  private async espelhoImediato(
+    produtos: Array<{
+      codigo: string;
+      grupo: number;
+      nomeGrupo: string;
+      subgrupo?: number;
+      descricaoCompleta: string;
+      descricaoPdv: string;
+      custo: number;
+      precoVenda: number;
+      margem: number;
+      fornecedor: string;
+      cor: string;
+      tamanho: string;
+      ref: string;
+      plusSize: boolean;
+      ncm?: string;
+      cfop?: number | string;
+      tributo?: string;
+      marca?: string;
+    }>,
+  ) {
+    const p: any = this.prisma;
+    const hoje = new Date();
+    for (const item of produtos) {
+      const codigo = String(item.codigo).trim();
+      const desc = item.descricaoCompleta || '';
+      const plus = item.plusSize ? 1 : 0;
+      const cfop = item.cfop != null && String(item.cfop).trim() !== '' ? Number(item.cfop) : null;
+      const tam = String(item.tamanho || '').trim();
+      const mascInf = /MASCULIN|INFANTIL/i.test(desc);
+      const liveOk =
+        plus === 1 && !mascInf && (!tam || ProductRegistrationService.LIVE_TAMANHOS.has(tam));
+
+      const base = {
+        grupo: item.grupo ?? null,
+        nomeGrupo: item.nomeGrupo || null,
+        descricaoPdv: item.descricaoPdv || null,
+        descricaoCompleta: desc || null,
+        custo: item.custo ?? null,
+        vendaUn: item.precoVenda ?? null,
+        fornecedor: item.fornecedor || null,
+        estoque: 0,
+        margem: item.margem ?? null,
+        dataAlt: hoje,
+        subgrupo: item.subgrupo ?? null,
+        cor: item.cor || null,
+        tamanho: tam || null,
+        marca: item.marca || null,
+        ref: item.ref || null,
+        ncm: item.ncm || null,
+        tributo: item.tributo || null,
+        plusSize: plus,
+      };
+
+      // 1) Espelho Wincred (PK codigo) — upsert direto.
+      await p.wincredProduto.upsert({
+        where: { codigo },
+        create: { codigo, ...base },
+        update: base,
+      });
+
+      // 2) Espelho giga_produto (sem unique em codigo) — delete + create.
+      await p.gigaProduto.deleteMany({ where: { codigo } });
+      await p.gigaProduto.create({
+        data: {
+          codigo,
+          ref: item.ref || null,
+          refBase: item.ref ? ProductSearchService.refBaseOf(item.ref) : null,
+          descricao: desc || null,
+          cor: item.cor || null,
+          tamanho: tam || null,
+          grupo: item.nomeGrupo || null,
+          ncm: item.ncm || null,
+          vendaUn: item.precoVenda ?? null,
+        },
+      });
+
+      // 3) Tabela NATIVA `product` — respeita flowIsSource (nunca sobrescreve).
+      const existente = await p.product.findUnique({ where: { codigo }, select: { flowIsSource: true } });
+      const nativa = {
+        ...base,
+        cfop,
+        ean: null,
+        genero: mascInf ? (/MASCULIN/i.test(desc) ? 'MASCULINO' : 'INFANTIL') : plus === 1 ? 'FEMININO' : null,
+        liveOk,
+        ativo: true,
+      };
+      if (!existente) {
+        await p.product.create({ data: { codigo, ...nativa } });
+      } else if (!existente.flowIsSource) {
+        await p.product.update({ where: { codigo }, data: nativa });
+      }
+    }
+  }
 
   private validarInput(input: PreviewInput) {
     if (!input.grupoCodigo) throw new BadRequestException('Grupo é obrigatório.');
