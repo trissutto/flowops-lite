@@ -1994,7 +1994,7 @@ export default function LivePdvPage() {
                       {/* Cabeçalho compacto: atalho · foto · desc · preço · ações */}
                       <div className="mb-2 flex items-center gap-2">
                         {p.viaAtalho?.atalho && (
-                          <span className="shrink-0 rounded-full bg-rose-100 px-2 py-0.5 font-mono text-[11px] font-bold text-rose-700">
+                          <span className="shrink-0 rounded-full bg-rose-100 px-2.5 py-1 font-mono text-lg font-black leading-none text-rose-700">
                             {p.viaAtalho.atalho}
                           </span>
                         )}
@@ -2876,13 +2876,8 @@ function CartPanel({
                   >
                     <Pencil className="h-3.5 w-3.5" /> Editar
                   </button>
-                  <button
-                    onClick={onDeleteCart}
-                    title="Excluir o carrinho desta cliente (libera as reservas)"
-                    className="inline-flex items-center gap-1 rounded-lg border border-rose-200 px-2 py-1 text-xs font-medium text-rose-600 hover:border-rose-400 hover:bg-rose-50"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" /> Excluir
-                  </button>
+                  {/* Excluir carrinho ficava aqui — mudou pro RODAPÉ do carrinho
+                      (14/07): colado no "Novo carrinho" dava clique errado. */}
                 </div>
               )}
             </div>
@@ -3232,6 +3227,18 @@ function CartPanel({
                   </div>
                 )
               )
+            )}
+
+            {/* Excluir carrinho — no RODAPÉ de propósito (14/07): antes ficava
+                no topo, colado no "Novo carrinho", e dava clique errado. */}
+            {cart && (
+              <button
+                onClick={onDeleteCart}
+                title="Excluir o carrinho desta cliente (libera as reservas)"
+                className="mt-4 flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-rose-200 py-1.5 text-xs font-medium text-rose-500 hover:border-rose-400 hover:bg-rose-50"
+              >
+                <Trash2 className="h-3.5 w-3.5" /> Excluir carrinho (libera as reservas)
+              </button>
             )}
           </div>
         )}
