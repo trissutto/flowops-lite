@@ -64,6 +64,25 @@ export class LivePdvService {
     '46', '48', '50', '52', '54', '56', '58', '60', '46/48', '50/52',
   ]);
 
+  /**
+   * Título de exibição da grade SEM a cor/tamanho da linha (14/07): a
+   * DESCRICAOCOMPLETA da Giga é por variação ("CASACO ... 14538 PRETO 46
+   * JULIA PLUS") e confundia — legenda fixada em TERRACOTA com "PRETO 46" no
+   * título. Remove a ÚLTIMA ocorrência da cor e do tamanho DESTA linha (só a
+   * última: "SAIDA DE PRAIA ACQUA ROSA ROSA 46" mantém o "ACQUA ROSA" do nome
+   * e perde só o " ROSA 46" da variação).
+   */
+  private tituloSemVariacao(desc: any, cor: any, tamanho: any): string {
+    let out = ` ${String(desc || '').trim()} `;
+    for (const tok of [this.norm(cor), this.norm(tamanho)]) {
+      if (!tok) continue;
+      const alvo = ` ${tok} `;
+      const idx = out.toUpperCase().lastIndexOf(alvo);
+      if (idx >= 0) out = `${out.slice(0, idx)} ${out.slice(idx + alvo.length)}`;
+    }
+    return out.replace(/\s{2,}/g, ' ').trim();
+  }
+
   // ─── helpers ──────────────────────────────────────────────────────────────
   private norm(s: any): string {
     return String(s ?? '').trim().toUpperCase();
@@ -275,9 +294,24 @@ export class LivePdvService {
         select: { codigo: true, cor: true, tamanho: true },
       })
       .catch(() => []);
-    const matched = (prods as any[]).filter(
+    let matched = (prods as any[]).filter(
       (r) => this.norm(r.cor) === this.norm(cor) && this.norm(r.tamanho) === this.norm(tam),
     );
+    // FALLBACK NA NATIVA (14/07, caso VOGUE BEGE): produto recém-cadastrado
+    // ainda não está no espelho giga_produto (full de ~6h), mas o catálogo
+    // nativo já tem (espelho imediato do cadastro). Sem isso a GRADE mostrava
+    // o estoque e o CLIQUE respondia "sem estoque em nenhuma loja".
+    if (!matched.length) {
+      const nativos = await (this.prisma as any).product
+        .findMany({
+          where: { ref: refCode },
+          select: { codigo: true, cor: true, tamanho: true },
+        })
+        .catch(() => []);
+      matched = (nativos as any[]).filter(
+        (r) => this.norm(r.cor) === this.norm(cor) && this.norm(r.tamanho) === this.norm(tam),
+      );
+    }
     const codigos = Array.from(
       new Set(matched.map((r) => String(r.codigo || '').trim()).filter(Boolean)),
     );
@@ -405,6 +439,29 @@ export class LivePdvService {
     });
   }
 
+  /**
+   * REABRE uma live encerrada (14/07, pedido do dono: live encerrou sem querer
+   * no meio da operação). Nada foi apagado no encerramento — reabrir só volta
+   * o status, e o console recupera busca/grades/venda. Trava: não deixa duas
+   * lives abertas ao mesmo tempo (o modelo do console é uma por vez).
+   */
+  async reopenSession(id: string) {
+    const s = await this.getSession(id);
+    if (s.status === 'live') return s;
+    const outra = await (this.prisma as any).livePdvSession.findFirst({
+      where: { status: 'live', id: { not: id } },
+    });
+    if (outra) {
+      throw new BadRequestException(
+        `Já existe uma live aberta ("${outra.title}") — feche-a antes de reabrir esta.`,
+      );
+    }
+    return (this.prisma as any).livePdvSession.update({
+      where: { id },
+      data: { status: 'live', endedAt: null },
+    });
+  }
+
   // ─── Busca + Grade ──────────────────────────────────────────────────────────
   /**
    * Busca produto e devolve a grade com estoque consolidado + por loja
@@ -456,16 +513,105 @@ export class LivePdvService {
     // dono: buscar "VLM-222" agora também traz "VLM-222EST" (estampado).
     const qn = this.norm(q);
     const exact = rows.filter((r) => this.norm(r.REF) === qn);
-    // TRAVA DO PREFIXO NUMÉRICO (13/07): a junção por prefixo NÃO pode arrastar
-    // produto DIFERENTE cuja REF só continua com mais dígitos — "VLM-222" traz
-    // "VLM-222P"/"VLM-222 VD" (variantes), mas NUNCA "VLM-2225"/"VLM-22201"
-    // (outros produtos). Sufixo de variante começa com letra/espaço/separador.
-    let productRows = exact.length
-      ? rows.filter((r) => {
-          const ref = this.norm(r.REF);
-          return ref.startsWith(qn) && !/^\d/.test(ref.slice(qn.length));
-        })
-      : rows.filter((r) => this.norm(r.REF) === this.norm(rows[0].REF));
+
+    // FAMÍLIA POR REF-BASE (13/07, decisão do dono): REF composta ("VLM-222",
+    // "VLM-222P", "VLM-222 VD") é o MESMO produto — qualquer forma digitada
+    // (base, variante ou código bipado) abre a família INTEIRA, agrupada pela
+    // coluna ref_base do espelho. Resolve os 3 sintomas que pareciam bug:
+    //   1) variante digitada abria sozinha (sem as irmãs);
+    //   2) base SEM cadastro exato mostrava só a 1ª cor;
+    //   3) prefixo arrastava REF numérica maior (VLM-222 puxava VLM-2225 —
+    //      ref_base preserva dígitos, então VLM-2225 é outra família).
+    // Sufixo NÃO vira cor (sem padrão no cadastro — dono, 13/07): a cor é
+    // sempre o campo COR da linha; o sufixo só agrupa.
+    const baseAlvo = ProductSearchService.refBaseOf(exact.length ? qn : String(rows[0].REF || ''));
+    let familia: any[] = [];
+    if (baseAlvo) {
+      try {
+        const fam = await (this.prisma as any).gigaProduto.findMany({
+          where: { refBase: baseAlvo },
+          take: 1000,
+        });
+        familia = fam.map((r: any) => ({
+          CODIGO: r.codigo,
+          REF: r.ref,
+          DESCRICAOCOMPLETA: r.descricao,
+          COR: r.cor,
+          TAMANHO: r.tamanho,
+        }));
+      } catch {
+        /* coluna ainda não populada/erro → fallback por prefixo abaixo */
+      }
+      // UNE com as linhas que a BUSCA acabou de resolver (nativa/espelho
+      // frescos): o giga_produto full-synca a cada ~6h, então produto
+      // recém-cadastrado (caso VOGUE BEGE, 14/07) já aparece na busca mas
+      // ainda não na família do espelho — sem a união, a família "engolia"
+      // a cor nova da grade. Dedup por CODIGO normalizado (padding de zeros
+      // varia entre fontes; linha duplicada contaria estoque 2x).
+      const keyCod = (c: any) => String(c ?? '').trim().replace(/^0+/, '');
+      const vistos = new Set(familia.map((r) => keyCod(r.CODIGO)));
+      for (const r of rows) {
+        if (ProductSearchService.refBaseOf(r.REF) !== baseAlvo) continue;
+        const k = keyCod(r.CODIGO);
+        if (vistos.has(k)) continue;
+        vistos.add(k);
+        familia.push(r);
+      }
+    }
+    // Fallback (espelho sem ref_base ainda): junção por prefixo antiga, com a
+    // TRAVA DO PREFIXO NUMÉRICO — sufixo de variante começa com letra/espaço/
+    // separador, então "VLM-222" NUNCA arrasta "VLM-2225"/"VLM-22201".
+    let productRows = familia.length
+      ? familia
+      : exact.length
+        ? rows.filter((r) => {
+            const ref = this.norm(r.REF);
+            return ref.startsWith(qn) && !/^\d/.test(ref.slice(qn.length));
+          })
+        : rows.filter((r) => this.norm(r.REF) === this.norm(rows[0].REF));
+
+    // REF AMBÍGUA (14/07, caso 14538): a MESMA REF cobre produtos DIFERENTES
+    // na Giga (SAÍDA DE PRAIA ACQUA + CASACO JULIA) — sem separar, a grade
+    // vira Frankenstein: descrição de um, preço do outro, cores misturadas.
+    // Divide por FAMÍLIA de descrição (regra do caso 2319, já usada nas outras
+    // telas) e fica com UMA:
+    //   - o termo tem palavra além da REF ("14538 JULIA") → família que casa;
+    //   - senão → família DOMINANTE (mais variações).
+    // Pra vender a OUTRA família, digita a REF + uma palavra dela
+    // ("14538 ACQUA") — na busca ou no refCode da legenda.
+    const porFamilia = new Map<string, any[]>();
+    for (const r of productRows) {
+      const f = ProductSearchService.familiaOf(r.DESCRICAOCOMPLETA);
+      const list = porFamilia.get(f) || [];
+      list.push(r);
+      porFamilia.set(f, list);
+    }
+    if (porFamilia.size > 1) {
+      const palavrasDoTermo = this.norm(q)
+        .split(/\s+/)
+        .filter((w) => w.length >= 3 && !/^\d+$/.test(w) && this.norm(w) !== qn);
+      let escolhida: any[] | null = null;
+      if (palavrasDoTermo.length) {
+        for (const list of porFamilia.values()) {
+          const casa = list.some((r) => {
+            const d = this.norm(r.DESCRICAOCOMPLETA);
+            return palavrasDoTermo.every((w) => d.includes(w));
+          });
+          if (casa) { escolhida = list; break; }
+        }
+      }
+      if (!escolhida) {
+        for (const list of porFamilia.values()) {
+          if (!escolhida || list.length > escolhida.length) escolhida = list;
+        }
+      }
+      if (escolhida?.length) {
+        this.logger.log(
+          `[grade] REF ambígua "${qn}": ${porFamilia.size} famílias (${Array.from(porFamilia.keys()).join(', ')}) → exibindo "${ProductSearchService.familiaOf(escolhida[0].DESCRICAOCOMPLETA)}" (${escolhida.length} linhas)`,
+        );
+        productRows = escolhida;
+      }
+    }
 
     // FILTRO DE LIVE (13/07, decisão do dono): live é SÓ plus size FEMININO.
     // 1) tamanho fora da whitelist (46–60, 46/48, 50/52) não vira célula —
@@ -492,15 +638,31 @@ export class LivePdvService {
       if (daCor.length) productRows = daCor;
     }
     // Metadados pra VALIDAÇÃO da legenda: quais REFs distintas o termo trouxe
-    // e se houve match exato. Campos ADITIVOS — não mudam o comportamento.
+    // e se o termo identifica UM produto. Com a família por ref_base, várias
+    // REFs da MESMA família não são ambiguidade ("VLM-222" sem cadastro exato
+    // achando VLM-222P + VLM-222 VD é 1 produto só) — a legenda pode salvar.
     const matchedRefs = Array.from(new Set(rows.map((r) => String(r.REF || '').trim()).filter(Boolean)));
-    const exactMatch = exact.length > 0;
-    // Cabeçalho/foto/preço-base/promo usam a REF BASE exata (ex.: 900658), não a
-    // variante de cor (900658M) — que pode vir antes na ordem do Giga. As células
+    const mesmaFamilia =
+      matchedRefs.length > 0 &&
+      matchedRefs.every((r) => ProductSearchService.refBaseOf(r) === baseAlvo);
+    const exactMatch = exact.length > 0 || (familia.length > 0 && mesmaFamilia);
+    // Cabeçalho/foto/preço-base/promo usam a REF BASE (ex.: VLM-222), não a
+    // variante de cor (VLM-222P) — que pode vir antes na ordem do Giga. As células
     // da grade continuam agrupadas sob a base; cada uma guarda seu próprio código.
-    const headRow = exact[0] || productRows[0];
-    const ref = String(headRow.REF).trim();
-    const descricao = headRow.DESCRICAOCOMPLETA || ref;
+    // headRow SEMPRE dentro das linhas exibidas — exact[0] pode ser da família
+    // DESCARTADA (caso 14538: a saída de praia também tem REF exata "14538",
+    // e a descrição/foto do cabeçalho viravam as dela com a grade do casaco).
+    const headRow = productRows.find((r) => this.norm(r.REF) === qn) || productRows[0];
+    const ref = (familia.length ? baseAlvo : String(headRow.REF).trim()) || String(headRow.REF).trim();
+    // TÍTULO SEM COR/TAMANHO (14/07, pedido do dono): a descrição da Giga é da
+    // LINHA e embute a cor/tamanho dela ("... PRETO 46 JULIA PLUS") — legenda
+    // fixada em TERRACOTA exibia "PRETO 46" no título e confundia. A grade
+    // abaixo é quem informa cor×tamanho; o título fica só com o produto.
+    const descricao = this.tituloSemVariacao(
+      headRow.DESCRICAOCOMPLETA || ref,
+      headRow.COR,
+      headRow.TAMANHO,
+    );
 
     // 2) Estoque por loja (1 query batch p/ todos os CODIGOs do produto).
     const codigos = Array.from(

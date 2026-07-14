@@ -25,6 +25,41 @@ export class ProductSearchService implements OnModuleInit {
   constructor(private readonly prisma: PrismaService) {}
 
   /**
+   * REF-BASE canônica (13/07, decisão do dono): no cadastro da Giga a cor
+   * virou sufixo de REF na mão ("VLM-222P", "VLM-222 VD", "900658M") SEM
+   * padrão de significado — então NÃO adivinhamos cor por sufixo; só
+   * agrupamos a família. Regra única: corta tudo DEPOIS do último dígito.
+   *   VLM-222P → VLM-222 · "VLM-222 VD" → VLM-222 · 900658M → 900658
+   *   VLM-2225 → VLM-2225 (dígito é núcleo: produto DIFERENTE não se mistura)
+   * REF sem dígito nenhum (ex.: "GRAVATA") fica como está.
+   */
+  static refBaseOf(ref: any): string {
+    const up = String(ref ?? '').trim().toUpperCase();
+    const stripped = up.replace(/[^0-9]+$/, '');
+    return stripped || up;
+  }
+
+  /**
+   * FAMÍLIA de descrição (caso 14538, 14/07): a MESMA REF cobre produtos
+   * DIFERENTES na Giga (SAÍDA DE PRAIA ACQUA + CASACO JULIA). A família é a
+   * primeira palavra "significativa" da descrição — mesma heurística do
+   * displayInfoByRefs/realinhamento (caso 2319: helicóptero × blusão).
+   */
+  static familiaOf(desc: any): string {
+    const palavras = String(desc || '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '')
+      .split(/\s+/)
+      .filter(Boolean);
+    return (
+      palavras.find(
+        (w) => w.length >= 4 && !/\d/.test(w) && !ProductSearchService.FAMILIA_STOPWORDS.has(w),
+      ) || '_outros'
+    );
+  }
+
+  /**
    * FULL-TEXT NO POSTGRES (decisão do dono, 10/07): entre os motores de busca
    * (Elasticsearch/Meilisearch/Typesense/PG), escolhemos o do PRÓPRIO Postgres —
    * zero infra nova, zero sync extra (roda em cima do espelho giga_produto que

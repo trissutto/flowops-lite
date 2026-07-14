@@ -1052,6 +1052,52 @@ export class ProductsEditorService {
     return { ok: true, excluidos: codigos.length, excluidosGiga, gigaEnfileirado, batchId };
   }
 
+  /**
+   * INCIDENTE DATAALT — passo final (14/07): a tabela NATIVA `product` guarda
+   * cópia PRÓPRIA da data de cadastro, e o bipe do PDV lê DELA quando
+   * PRODUCT_NATIVE_READS=1 — por isso a promo "Liquida antigos" continuava
+   * mostrando "Sem promo · 2026" mesmo com Giga e espelho já restaurados.
+   *
+   * Copia a data DO ESPELHO wincred_produtos (ressincronizado do Giga já
+   * corrigido pelo backup 12/07) pra nativa, SÓ nas linhas sujas:
+   *   nativa >= 13/07 (carimbo do incidente)  E  espelho < 13/07 (data real).
+   * NUNCA toca: o Giga, datas já corretas na nativa (< 13/07), e produtos
+   * genuinamente novos (espelho também >= 13/07 → fora do WHERE).
+   * Dry-run por padrão: devolve contagem + amostra SEM escrever nada.
+   */
+  async restaurarDataAltNativoDoEspelho(executar: boolean) {
+    const whereSujo = `
+      FROM product p
+      JOIN wincred_produtos w ON w.codigo = p.codigo
+     WHERE p."dataAlt" IS NOT NULL
+       AND p."dataAlt" >= DATE '2026-07-13'
+       AND w."dataAlt" IS NOT NULL
+       AND w."dataAlt" < DATE '2026-07-13'`;
+    const cand: any[] = await this.prisma.$queryRawUnsafe(
+      `SELECT COUNT(*)::int AS c ${whereSujo}`,
+    );
+    const candidatos = Number(cand?.[0]?.c || 0);
+    const amostra: any[] = await this.prisma.$queryRawUnsafe(
+      `SELECT p.codigo, p.ref, p."dataAlt"::text AS nativa_suja, w."dataAlt"::text AS espelho_correto
+       ${whereSujo}
+       ORDER BY p.codigo
+       LIMIT 10`,
+    );
+    if (!executar) return { dryRun: true, candidatos, amostra };
+    const atualizados: number = await this.prisma.$executeRawUnsafe(
+      `UPDATE product p
+          SET "dataAlt" = w."dataAlt"
+         FROM wincred_produtos w
+        WHERE w.codigo = p.codigo
+          AND p."dataAlt" IS NOT NULL
+          AND p."dataAlt" >= DATE '2026-07-13'
+          AND w."dataAlt" IS NOT NULL
+          AND w."dataAlt" < DATE '2026-07-13'`,
+    );
+    this.logger.log(`[dataalt] nativa ← espelho: ${atualizados} linhas corrigidas`);
+    return { dryRun: false, atualizados };
+  }
+
   /** Últimos lotes de auditoria (tela mostra o histórico recente). */
   async auditRecent(limit = 200) {
     return (this.prisma as any).productEditAudit.findMany({

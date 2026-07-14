@@ -215,6 +215,11 @@ export default function WincredMirrorPage() {
       {/* Teste rapido: peek de uma REF no Postgres */}
       <PeekRefBox />
 
+      {/* Incidente DATAALT 13/07: corrigir a data na tabela NATIVA `product`
+          (fonte do bipe com PRODUCT_NATIVE_READS=1) copiando do espelho já
+          restaurado. Dry-run primeiro; execução só no segundo clique. */}
+      <FixDataAltNativoBox />
+
       {/* Status por tabela */}
       <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
         <div className="px-5 py-3 border-b border-slate-100 bg-slate-50">
@@ -322,6 +327,75 @@ export default function WincredMirrorPage() {
   );
 }
 
+
+/**
+ * INCIDENTE DATAALT (13/07): a tabela nativa `product` guardou a data suja e o
+ * bipe do PDV lê dela (PRODUCT_NATIVE_READS=1) — promo "Liquida antigos"
+ * mostrava "Sem promo · 2026" em peça de 2023. Este box corrige copiando a
+ * data DO ESPELHO (já restaurado do backup 12/07), SÓ nas linhas sujas.
+ * Passo 1 (dry-run) mostra contagem+amostra sem escrever; passo 2 executa.
+ */
+function FixDataAltNativoBox() {
+  const [loading, setLoading] = useState(false);
+  const [dry, setDry] = useState<any | null>(null);
+  const [done, setDone] = useState<any | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const run = async (executar: boolean) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const r = await api('/products-editor/restaurar-dataalt-nativo-espelho', {
+        method: 'POST',
+        body: JSON.stringify({ executar }),
+      });
+      if (executar) { setDone(r); setDry(null); }
+      else { setDry(r); setDone(null); }
+    } catch (e: any) {
+      setError(e?.message || 'erro');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="bg-rose-50 border border-rose-200 rounded-xl p-4">
+      <h2 className="font-bold text-rose-900 mb-1">Incidente DATAALT — corrigir tabela nativa (bipe do PDV)</h2>
+      <p className="text-xs text-rose-700 mb-3">
+        Copia a data de cadastro do ESPELHO (restaurado do backup 12/07) pra tabela nativa
+        `product`, só nas linhas com data ≥ 13/07 cujo espelho tem data anterior. Não toca no
+        Giga nem em datas já corretas. Rode o dry-run primeiro.
+      </p>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => run(false)}
+          disabled={loading}
+          className="px-4 py-2 rounded-lg border border-rose-400 text-rose-700 text-sm font-bold hover:bg-rose-100 disabled:opacity-50"
+        >
+          {loading ? 'Verificando…' : '1. Ver o que seria corrigido (dry-run)'}
+        </button>
+        <button
+          onClick={() => run(true)}
+          disabled={loading || !dry?.candidatos}
+          className="px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-sm font-bold disabled:opacity-50"
+        >
+          2. Executar correção{dry?.candidatos ? ` (${dry.candidatos} linhas)` : ''}
+        </button>
+      </div>
+      {error && <div className="mt-2 text-sm text-red-700">{error}</div>}
+      {dry && (
+        <pre className="mt-3 bg-slate-900 text-amber-300 p-3 rounded text-[11px] overflow-x-auto font-mono">
+{JSON.stringify(dry, null, 2)}
+        </pre>
+      )}
+      {done && (
+        <div className="mt-3 rounded-lg bg-emerald-100 px-3 py-2 text-sm font-bold text-emerald-800">
+          ✅ {done.atualizados} linha(s) corrigidas na tabela nativa. Rebipe a peça pra conferir a promo.
+        </div>
+      )}
+    </div>
+  );
+}
 
 function PeekRefBox() {
   const [ref, setRef] = useState('VLM-222');

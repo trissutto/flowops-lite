@@ -129,6 +129,21 @@ export class ProductNativeService {
     }
   }
 
+  /**
+   * Boot (14/07, caso VOGUE BEGE): roda o incremental ~25s após subir —
+   * cadastro feito minutos antes de um deploy não fica invisível até o
+   * minuto 38 (o espelho incremental de 10min já trouxe a linha; aqui só
+   * empurramos espelho→nativa). Gated pela mesma env dos crons.
+   */
+  onModuleInit() {
+    if (!this.cronEnabled) return;
+    setTimeout(() => {
+      this.syncIncremental().catch((e) =>
+        this.logger.warn(`[product-native] incremental de boot falhou: ${(e as Error).message}`),
+      );
+    }, 25_000);
+  }
+
   /** Hora em hora, minuto 38 (espelho Wincred roda no 23 — pegamos ele fresco). */
   @Cron('0 38 * * * *')
   async cronHourly() {

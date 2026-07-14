@@ -220,6 +220,16 @@ export default function LivePdvPage() {
   const [sessionTitle, setSessionTitle] = useState('');
   const [sessionStoreName, setSessionStoreName] = useState('');
   const [activeLive, setActiveLive] = useState<{ id: string; title: string; storeName?: string } | null>(null);
+  // LIVES PASSADAS (14/07, pedido do dono): a tela inicial lista as últimas
+  // lives (encerradas ou não) com filtro — abrir uma encerrada entra em MODO
+  // CONSULTA/COBRANÇA: sem busca/grade (não vende), mas com carrinhos,
+  // cobrança (PIX/link/DM), marcar pago, separação e dashboard funcionando.
+  const [pastLives, setPastLives] = useState<
+    Array<{ id: string; title: string; status: string; liveStoreName?: string | null; createdAt?: string }>
+  >([]);
+  const [liveFilter, setLiveFilter] = useState('');
+  const [sessionStatus, setSessionStatus] = useState<string>('live');
+  const consulta = sessionStatus !== 'live';
   // Modal "nova live": título + LOJA ANFITRIÃ (obrigatório escolher — antes o
   // backend caía num padrão fixo e toda live saía como Anália Franco).
   const [newLiveOpen, setNewLiveOpen] = useState(false);
@@ -302,6 +312,7 @@ export default function LivePdvPage() {
         const list = await api<any[]>('/live-pdv/sessions');
         const live = (list || []).find((s) => s.status === 'live');
         if (live) setActiveLive({ id: live.id, title: live.title, storeName: live.liveStoreName || '' });
+        setPastLives(list || []);
       } catch {}
       setBooting(false);
     })();
@@ -693,9 +704,46 @@ export default function LivePdvPage() {
   // Continua a live que já estava aberta (sem fechar nada).
   function continueLive() {
     if (!activeLive) return;
+    setSessionStatus('live');
     setSessionId(activeLive.id);
     setSessionTitle(activeLive.title);
     setSessionStoreName(activeLive.storeName || '');
+  }
+
+  // Abre uma live PASSADA em modo consulta/cobrança (encerrada) ou normal (ao vivo).
+  function openPastLive(s: { id: string; title: string; status: string; liveStoreName?: string | null }) {
+    setSessionStatus(s.status || 'ended');
+    setSessionId(s.id);
+    setSessionTitle(s.title);
+    setSessionStoreName(s.liveStoreName || '');
+  }
+
+  // REABRE uma live encerrada (14/07): nada foi apagado no encerramento —
+  // volta o status e o console recupera busca/grades/venda na hora.
+  async function reopenLive() {
+    if (!sessionId) return;
+    if (!confirm(`Reabrir a live "${sessionTitle}"? Ela volta AO VIVO com busca e venda liberadas.`)) return;
+    try {
+      await api(`/live-pdv/sessions/${sessionId}/reopen`, { method: 'POST' });
+      setSessionStatus('live');
+      setActiveLive({ id: sessionId, title: sessionTitle, storeName: sessionStoreName });
+      setPastLives((prev) => prev.map((s) => (s.id === sessionId ? { ...s, status: 'live' } : s)));
+      await refreshCarts();
+    } catch (e: any) {
+      alert('Erro ao reabrir: ' + (e?.message || e));
+    }
+  }
+
+  // Sai da live aberta SEM encerrar nada — volta pra tela de escolha.
+  function backToPicker() {
+    setSessionId(null);
+    setSessionTitle('');
+    setCart(null);
+    setActiveCustomer(null);
+    setQr(null);
+    setPaid(false);
+    setProducts([]);
+    setSessionStatus('live');
   }
 
   // Fecha a live atual: guarda os carrinhos na sessão (não apaga) e volta pra
@@ -1498,6 +1546,66 @@ export default function LivePdvPage() {
             </button>
           </>
         )}
+        {/* LIVES ANTERIORES — consulta e cobrança de lives já encerradas.
+            (14/07, pedido do dono): encerrar a live não pode esconder os
+            carrinhos; aqui reabre qualquer live pra cobrar ou só conferir. */}
+        {pastLives.length > 0 && (
+          <div className="mt-2 w-full max-w-lg rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="mb-2 flex items-center justify-between">
+              <h2 className="text-sm font-bold uppercase tracking-wide text-slate-500">
+                Lives anteriores
+              </h2>
+              <span className="text-[11px] text-slate-400">consultar · cobrar</span>
+            </div>
+            <input
+              value={liveFilter}
+              onChange={(e) => setLiveFilter(e.target.value)}
+              placeholder="Filtrar por nome ou data (ex: 13/07)…"
+              className="mb-2 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+            />
+            <div className="max-h-72 space-y-1 overflow-y-auto">
+              {pastLives
+                .filter((s) => {
+                  const f = liveFilter.trim().toLowerCase();
+                  if (!f) return true;
+                  const data = s.createdAt
+                    ? new Date(s.createdAt).toLocaleDateString('pt-BR')
+                    : '';
+                  return (
+                    (s.title || '').toLowerCase().includes(f) ||
+                    (s.liveStoreName || '').toLowerCase().includes(f) ||
+                    data.includes(f)
+                  );
+                })
+                .slice(0, 20)
+                .map((s) => (
+                  <button
+                    key={s.id}
+                    onClick={() => openPastLive(s)}
+                    className="flex w-full items-center gap-2 rounded-lg border border-slate-100 px-3 py-2 text-left hover:border-rose-300 hover:bg-rose-50"
+                  >
+                    <span
+                      className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                        s.status === 'live'
+                          ? 'bg-rose-100 text-rose-700'
+                          : 'bg-slate-100 text-slate-500'
+                      }`}
+                    >
+                      {s.status === 'live' ? '● AO VIVO' : 'ENCERRADA'}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-sm font-semibold text-slate-700">
+                      {s.title}
+                    </span>
+                    <span className="shrink-0 text-[11px] text-slate-400">
+                      {s.liveStoreName ? `🏬 ${s.liveStoreName} · ` : ''}
+                      {s.createdAt ? new Date(s.createdAt).toLocaleDateString('pt-BR') : ''}
+                    </span>
+                  </button>
+                ))}
+            </div>
+          </div>
+        )}
+
         <Link href="/minha-loja" className="text-sm text-slate-400 hover:text-slate-600">
           Voltar
         </Link>
@@ -1846,9 +1954,18 @@ export default function LivePdvPage() {
         </Link>
         <Zap className="h-5 w-5 text-rose-500" />
         <span className="font-bold text-slate-800">Live Commerce</span>
-        <span className="rounded-full bg-rose-100 px-2 py-0.5 text-xs font-semibold text-rose-700">
-          ● {sessionTitle}
+        <span
+          className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+            consulta ? 'bg-slate-200 text-slate-600' : 'bg-rose-100 text-rose-700'
+          }`}
+        >
+          {consulta ? '◼ ' : '● '}{sessionTitle}
         </span>
+        {consulta && (
+          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-700">
+            ENCERRADA · consulta e cobrança
+          </span>
+        )}
         <button
           type="button"
           onClick={openSwapStore}
@@ -1857,20 +1974,41 @@ export default function LivePdvPage() {
         >
           🏬 {sessionStoreName || 'definir loja'}
         </button>
-        <button
-          onClick={closeLive}
-          title="Fechar esta live — guarda os carrinhos e libera pra abrir uma nova"
-          className="rounded-md border border-slate-200 px-2 py-1 text-xs font-medium text-slate-500 hover:border-rose-300 hover:text-rose-600"
-        >
-          Fechar live
-        </button>
-        <button
-          onClick={() => setShowLegenda(true)}
-          title="Legenda da live — atalhos curtos (01, 02...) pra cada referência, com validação"
-          className="rounded-md border border-violet-300 bg-violet-50 px-2 py-1 text-xs font-bold text-violet-700 hover:bg-violet-100"
-        >
-          📋 Legenda
-        </button>
+        {consulta ? (
+          <>
+            <button
+              onClick={reopenLive}
+              title="Reabre esta live (nada foi apagado — volta busca, grades e venda)"
+              className="rounded-md border border-emerald-400 bg-emerald-50 px-2 py-1 text-xs font-bold text-emerald-700 hover:bg-emerald-100"
+            >
+              ▶ Reabrir live
+            </button>
+            <button
+              onClick={backToPicker}
+              title="Voltar pra lista de lives (não mexe em nada)"
+              className="rounded-md border border-slate-200 px-2 py-1 text-xs font-medium text-slate-500 hover:border-rose-300 hover:text-rose-600"
+            >
+              ← Trocar de live
+            </button>
+          </>
+        ) : (
+          <button
+            onClick={closeLive}
+            title="Fechar esta live — guarda os carrinhos e libera pra abrir uma nova"
+            className="rounded-md border border-slate-200 px-2 py-1 text-xs font-medium text-slate-500 hover:border-rose-300 hover:text-rose-600"
+          >
+            Fechar live
+          </button>
+        )}
+        {!consulta && (
+          <button
+            onClick={() => setShowLegenda(true)}
+            title="Legenda da live — atalhos curtos (01, 02...) pra cada referência, com validação"
+            className="rounded-md border border-violet-300 bg-violet-50 px-2 py-1 text-xs font-bold text-violet-700 hover:bg-violet-100"
+          >
+            📋 Legenda
+          </button>
+        )}
         <div className="ml-auto flex items-center gap-1 rounded-lg border border-slate-200 p-0.5">
           <button
             onClick={() => setTab('console')}
@@ -1893,9 +2031,10 @@ export default function LivePdvPage() {
         // Proporção 1.3fr:1fr (~56/44) — antes era [1fr_460px]: a coluna da
         // busca+grade encolheu ~25% pra dar mais espaço aos carrinhos
         // (Carrinho + Clientes da Live).
-        <div className="grid grid-cols-1 gap-4 p-4 lg:grid-cols-[1.3fr_1fr]">
-          {/* Coluna principal: busca + grade */}
-          <div>
+        <div className={`grid grid-cols-1 gap-4 p-4 ${consulta ? 'mx-auto w-full max-w-3xl' : 'lg:grid-cols-[1.3fr_1fr]'}`}>
+          {/* Coluna principal: busca + grade — some no modo consulta (live
+              encerrada não vende; só carrinhos/cobrança/separação) */}
+          <div className={consulta ? 'hidden' : ''}>
             <form onSubmit={doSearch} className="mb-4 flex flex-col sm:flex-row gap-2">
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" />
@@ -1994,7 +2133,7 @@ export default function LivePdvPage() {
                       {/* Cabeçalho compacto: atalho · foto · desc · preço · ações */}
                       <div className="mb-2 flex items-center gap-2">
                         {p.viaAtalho?.atalho && (
-                          <span className="shrink-0 rounded-full bg-rose-100 px-2 py-0.5 font-mono text-[11px] font-bold text-rose-700">
+                          <span className="shrink-0 rounded-full bg-rose-100 px-2.5 py-1 font-mono text-lg font-black leading-none text-rose-700">
                             {p.viaAtalho.atalho}
                           </span>
                         )}
@@ -2258,6 +2397,7 @@ export default function LivePdvPage() {
               qr={qr}
               paid={paid}
               paying={paying}
+              consulta={consulta}
               onNewClient={newClient}
               onRemoveItem={removeItem}
               onSetItemPrice={setItemPrice}
@@ -2280,8 +2420,9 @@ export default function LivePdvPage() {
             />
 
             {/* Cadastradas pelo link (ManyChat) aguardando — SEMPRE visível durante a
-                live (mesmo vazia) pra ficar claro que o recurso está ali. */}
-            {sessionId && (
+                live (mesmo vazia) pra ficar claro que o recurso está ali.
+                No modo consulta (live encerrada) some: fila é coisa de live no ar. */}
+            {sessionId && !consulta && (
               <div>
                 <div className="mb-1 flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
@@ -2653,6 +2794,7 @@ function CartPanel({
   qr,
   paid,
   paying,
+  consulta = false,
   onNewClient,
   onRemoveItem,
   onSetItemPrice,
@@ -2675,6 +2817,8 @@ function CartPanel({
   qr: { text: string; img: string; valor: number; link?: string } | null;
   paid: boolean;
   paying: boolean;
+  /** Live encerrada (consulta/cobrança): esconde "Novo carrinho". */
+  consulta?: boolean;
   onNewClient: () => void;
   onRemoveItem: (id: string) => void;
   onSetItemPrice: (id: string, priceCents: number) => Promise<void> | void;
@@ -2830,12 +2974,14 @@ function CartPanel({
           <div className="flex items-center gap-2 font-semibold text-slate-800">
             <ShoppingCart className="h-5 w-5 text-rose-500" /> Carrinho
           </div>
-          <button
-            onClick={onNewClient}
-            className="inline-flex items-center gap-1 rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-200"
-          >
-            <ShoppingCart className="h-3.5 w-3.5" /> Novo carrinho
-          </button>
+          {!consulta && (
+            <button
+              onClick={onNewClient}
+              className="inline-flex items-center gap-1 rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-200"
+            >
+              <ShoppingCart className="h-3.5 w-3.5" /> Novo carrinho
+            </button>
+          )}
         </div>
 
         {!activeCustomer && !cart && (
@@ -2876,13 +3022,8 @@ function CartPanel({
                   >
                     <Pencil className="h-3.5 w-3.5" /> Editar
                   </button>
-                  <button
-                    onClick={onDeleteCart}
-                    title="Excluir o carrinho desta cliente (libera as reservas)"
-                    className="inline-flex items-center gap-1 rounded-lg border border-rose-200 px-2 py-1 text-xs font-medium text-rose-600 hover:border-rose-400 hover:bg-rose-50"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" /> Excluir
-                  </button>
+                  {/* Excluir carrinho ficava aqui — mudou pro RODAPÉ do carrinho
+                      (14/07): colado no "Novo carrinho" dava clique errado. */}
                 </div>
               )}
             </div>
@@ -3232,6 +3373,18 @@ function CartPanel({
                   </div>
                 )
               )
+            )}
+
+            {/* Excluir carrinho — no RODAPÉ de propósito (14/07): antes ficava
+                no topo, colado no "Novo carrinho", e dava clique errado. */}
+            {cart && (
+              <button
+                onClick={onDeleteCart}
+                title="Excluir o carrinho desta cliente (libera as reservas)"
+                className="mt-4 flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-rose-200 py-1.5 text-xs font-medium text-rose-500 hover:border-rose-400 hover:bg-rose-50"
+              >
+                <Trash2 className="h-3.5 w-3.5" /> Excluir carrinho (libera as reservas)
+              </button>
             )}
           </div>
         )}
