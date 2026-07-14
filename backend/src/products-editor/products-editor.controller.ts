@@ -124,6 +124,32 @@ export class ProductsEditorController {
     });
   }
 
+  /**
+   * POST /products-editor/restaurar-dataalt-arquivo
+   * Body: { pairs: [{codigo, dataAlt}], zerar?: boolean }
+   * PASSO 1 da auditoria por arquivo (backup 12/07): só carrega em memória,
+   * NÃO escreve nada. Pode ser chamado em partes (zerar=true na primeira).
+   */
+  @Post('restaurar-dataalt-arquivo')
+  async restaurarDataAltArquivo(
+    @Req() req: any,
+    @Body() body: { pairs?: Array<{ codigo: string; dataAlt: string }>; zerar?: boolean },
+  ) {
+    this.requireAdmin(req);
+    return this.svc.carregarArquivoDataAlt(body?.pairs || [], { zerar: !!body?.zerar });
+  }
+
+  /**
+   * POST /products-editor/restaurar-dataalt-arquivo/executar
+   * PASSO 2: compara o catálogo inteiro do Giga com o arquivo carregado e
+   * corrige toda divergência (background).
+   */
+  @Post('restaurar-dataalt-arquivo/executar')
+  async restaurarDataAltArquivoExecutar(@Req() req: any) {
+    this.requireAdmin(req);
+    return this.svc.executarAuditoriaArquivo(req?.user?.name || req?.user?.email || null);
+  }
+
   /** Progresso da restauração em background. */
   @Get('restaurar-dataalt/progresso')
   async restaurarProgresso(@Req() req: any) {
