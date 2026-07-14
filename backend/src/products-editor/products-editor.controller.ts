@@ -58,6 +58,21 @@ export class ProductsEditorController {
     });
   }
 
+  /**
+   * POST /products-editor/apply-marca-todos — Body: { q, marca }
+   * MARCA EM MASSA: aplica em TODOS os resultados da busca no servidor,
+   * sem o teto de 5.000 da tela (marcas com dezenas de milhares de variações).
+   */
+  @Post('apply-marca-todos')
+  async applyMarcaTodos(@Req() req: any, @Body() body: { q: string; marca: string }) {
+    this.requireAdmin(req);
+    return this.svc.applyMarcaBySearch({
+      q: String(body?.q || ''),
+      marca: String(body?.marca || ''),
+      userName: req?.user?.name || req?.user?.email || null,
+    });
+  }
+
   /** GET /products-editor/audit — histórico recente (ANTES→DEPOIS). */
   @Get('audit')
   async audit(@Req() req: any, @Query('limit') limit?: string) {

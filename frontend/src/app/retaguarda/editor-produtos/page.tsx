@@ -84,6 +84,7 @@ export default function EditorProdutosPage() {
   const [modalDesc, setModalDesc] = useState(false);
   const [modalMarca, setModalMarca] = useState(false);
   const [novaMarca, setNovaMarca] = useState('');
+  const [massaBusy, setMassaBusy] = useState(false);
   const [preview, setPreview] = useState<Array<{ codigo: string; ref: string; field: string; antes: string; depois: string }> | null>(null);
   const [applying, setApplying] = useState(false);
 
@@ -227,6 +228,38 @@ export default function EditorProdutosPage() {
       return next;
     });
     setModalMarca(false); setNovaMarca('');
+  };
+
+  // MARCA EM MASSA no servidor: sem teto de 5.000, sem preview — dupla
+  // confirmação via confirm() (funciona no app desktop; só prompt() que não).
+  const aplicarMarcaEmMassa = async () => {
+    const marca = novaMarca.trim().toUpperCase();
+    const termo = q.trim();
+    if (!marca || !termo) return;
+    const ok = window.confirm(
+      `Aplicar a marca "${marca}" em TODOS os produtos que a busca "${termo}" encontrar no servidor?\n\n` +
+        `Isso inclui variações ALÉM das ${rows.length} exibidas na tela e grava direto, sem preview ` +
+        `(fica registrado na auditoria).`,
+    );
+    if (!ok) return;
+    setMassaBusy(true); setErr('');
+    try {
+      const r = await api<{ atualizados: number; planejados: number; shadow: boolean }>(
+        '/products-editor/apply-marca-todos',
+        { method: 'POST', body: JSON.stringify({ q: termo, marca }) },
+      );
+      setModalMarca(false); setNovaMarca('');
+      setOkMsg(
+        r.shadow
+          ? `SHADOW MODE: ${r.planejados} variações registradas sem gravar.`
+          : `✓ Marca "${marca}" aplicada em ${r.planejados} variações (busca "${termo}").`,
+      );
+      await buscar();
+    } catch (e: any) {
+      setErr(e?.message || 'Falha na aplicação em massa');
+    } finally {
+      setMassaBusy(false);
+    }
   };
 
   const aplicarSubstituicao = () => {
@@ -602,6 +635,22 @@ export default function EditorProdutosPage() {
             onOk={aplicarMarca}
             onCancel={() => setModalMarca(false)}
           />
+          {/* MARCA EM MASSA: aplica no SERVIDOR em todos os resultados da
+              busca — sem o teto de 5.000 da tela (marcas gigantes). */}
+          <div className="mt-3 pt-3 border-t border-slate-100">
+            <button
+              onClick={aplicarMarcaEmMassa}
+              disabled={!novaMarca.trim() || !q.trim() || massaBusy}
+              className="w-full px-4 py-2.5 rounded-xl border-2 border-violet-400 bg-violet-50 text-violet-900 font-bold text-sm disabled:opacity-40 flex items-center justify-center gap-2"
+            >
+              {massaBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <ReplaceAll className="w-4 h-4" />}
+              Aplicar em TODOS os resultados da busca &quot;{q.trim()}&quot; (sem limite)
+            </button>
+            <p className="text-[10px] text-slate-500 mt-1 leading-snug">
+              Roda no servidor e pega TUDO que a busca encontrar — inclusive além das {rows.length} linhas
+              exibidas. Grava direto (sem preview), com registro na auditoria.
+            </p>
+          </div>
         </Modal>
       )}
 

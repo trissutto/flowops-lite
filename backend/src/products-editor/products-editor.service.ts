@@ -396,6 +396,103 @@ export class ProductsEditorService {
     return { ok: true, shadow: false, batchId, atualizados, planejados: erpRows.length };
   }
 
+  /**
+   * MARCA EM MASSA NO SERVIDOR (13/07): aplica a marca em TODOS os resultados
+   * da busca, SEM o teto de 5.000 da tela (marcas com dezenas de milhares de
+   * variações não cabem no navegador). Mesma ordem de gravação do apply():
+   * nativo-primeiro com réplica quando PRODUCT_NATIVE_WRITES=1; senão
+   * Giga-primeiro. Auditoria em UMA linha-resumo por lote (o detalhe linha a
+   * linha de 20k+ variações não agrega — o resumo diz busca, marca e volume).
+   */
+  async applyMarcaBySearch(input: { q: string; marca: string; userName?: string | null }) {
+    const q = String(input.q || '').trim();
+    const marca = String(input.marca || '').trim().toUpperCase();
+    if (!q) throw new BadRequestException('Informe o termo de busca');
+    if (!marca) throw new BadRequestException('Informe a marca');
+    if (marca.length > LIMITS.marca) {
+      throw new BadRequestException(`MARCA passa do limite do Giga (${LIMITS.marca} caracteres)`);
+    }
+
+    const rows = await this.search.resolveRows(q, { fallbackTake: 200000 });
+    const codigos = Array.from(
+      new Set(rows.map((r: any) => String(r.codigo || '').trim()).filter(Boolean)),
+    );
+    if (!codigos.length) throw new BadRequestException(`Busca "${q}" não encontrou nada`);
+
+    const batchId = randomUUID();
+    const auditResumo = {
+      batchId,
+      codigo: 'MASSA',
+      ref: null,
+      field: 'MARCA_EM_MASSA',
+      oldValue: `busca "${q.slice(0, 80)}" → ${codigos.length} variações`,
+      newValue: marca,
+      userName: input.userName || null,
+      applied: !this.shadowMode,
+    };
+
+    if (this.shadowMode) {
+      await (this.prisma as any).productEditAudit.createMany({ data: [auditResumo] });
+      return { ok: true, shadow: true, batchId, atualizados: 0, planejados: codigos.length };
+    }
+
+    const erpRows = codigos.map((c) => ({ codigo: c, set: { marca } }));
+    let atualizados = 0;
+    let replicaErro: string | null = null;
+
+    if (this.nativeWrites) {
+      const now = new Date();
+      for (let i = 0; i < codigos.length; i += 10000) {
+        const chunk = codigos.slice(i, i + 10000);
+        const res = await (this.prisma as any).product.updateMany({
+          where: { codigo: { in: Array.from(new Set(chunk.flatMap((c) => [c, this.normalizeCodigo(c)!].filter(Boolean)))) } },
+          data: { marca, flowIsSource: true, editedAt: now },
+        });
+        atualizados += Number(res.count) || 0;
+      }
+      try {
+        await this.erp.updateProdutosCampos(erpRows);
+      } catch (eGiga) {
+        replicaErro = (eGiga as Error).message?.slice(0, 180) || 'erro';
+        this.logger.error(`[editor-produtos] réplica em massa pro Giga FALHOU (${replicaErro}), batch ${batchId}`);
+      }
+    } else {
+      const r = await this.erp.updateProdutosCampos(erpRows);
+      atualizados = r.atualizados;
+      for (let i = 0; i < codigos.length; i += 10000) {
+        const chunk = codigos.slice(i, i + 10000);
+        await (this.prisma as any).product
+          .updateMany({
+            where: { codigo: { in: Array.from(new Set(chunk.flatMap((c) => [c, this.normalizeCodigo(c)!].filter(Boolean)))) } },
+            data: { marca },
+          })
+          .catch(() => null);
+      }
+    }
+
+    // Espelho Wincred (o giga_produto não tem coluna de marca).
+    for (let i = 0; i < codigos.length; i += 10000) {
+      const chunk = codigos.slice(i, i + 10000);
+      await (this.prisma as any).wincredProduto
+        .updateMany({
+          where: { codigo: { in: chunk.map((c) => this.normalizeCodigo(c)!).filter(Boolean) } },
+          data: { marca, dataAlt: new Date() },
+        })
+        .catch(() => null);
+    }
+
+    const audits: any[] = [auditResumo];
+    if (replicaErro) {
+      audits.push({
+        batchId, codigo: 'BATCH', ref: null, field: 'REPLICA_GIGA_ERRO',
+        oldValue: null, newValue: replicaErro, userName: input.userName || null, applied: true,
+      });
+    }
+    await (this.prisma as any).productEditAudit.createMany({ data: audits });
+    this.logger.log(`[editor-produtos] MARCA EM MASSA "${marca}" em ${codigos.length} variações (busca "${q}") por ${input.userName || '?'}`);
+    return { ok: true, shadow: false, batchId, atualizados: atualizados || codigos.length, planejados: codigos.length };
+  }
+
   /** Últimos lotes de auditoria (tela mostra o histórico recente). */
   async auditRecent(limit = 200) {
     return (this.prisma as any).productEditAudit.findMany({
