@@ -294,9 +294,24 @@ export class LivePdvService {
         select: { codigo: true, cor: true, tamanho: true },
       })
       .catch(() => []);
-    const matched = (prods as any[]).filter(
+    let matched = (prods as any[]).filter(
       (r) => this.norm(r.cor) === this.norm(cor) && this.norm(r.tamanho) === this.norm(tam),
     );
+    // FALLBACK NA NATIVA (14/07, caso VOGUE BEGE): produto recém-cadastrado
+    // ainda não está no espelho giga_produto (full de ~6h), mas o catálogo
+    // nativo já tem (espelho imediato do cadastro). Sem isso a GRADE mostrava
+    // o estoque e o CLIQUE respondia "sem estoque em nenhuma loja".
+    if (!matched.length) {
+      const nativos = await (this.prisma as any).product
+        .findMany({
+          where: { ref: refCode },
+          select: { codigo: true, cor: true, tamanho: true },
+        })
+        .catch(() => []);
+      matched = (nativos as any[]).filter(
+        (r) => this.norm(r.cor) === this.norm(cor) && this.norm(r.tamanho) === this.norm(tam),
+      );
+    }
     const codigos = Array.from(
       new Set(matched.map((r) => String(r.codigo || '').trim()).filter(Boolean)),
     );
