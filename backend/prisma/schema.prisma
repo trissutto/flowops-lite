@@ -3234,6 +3234,9 @@ model WincredProduto {
   cst               String?   @db.Char(3)
   csosn             String?   @db.Char(3)
   cfop              Int?
+  // EAN/código de barras (primeira coluna EAN-like preenchida no Giga —
+  // EAN13/EAN/CODBARRAS variam por instalação; o sync sonda e copia).
+  ean               String?   @db.VarChar(20)
 
   // Metadata de sync
   syncedAt          DateTime  @default(now()) @map("synced_at")
@@ -3317,6 +3320,54 @@ model WincredCodigo {
   syncedAt DateTime @default(now()) @map("synced_at")
 
   @@map("wincred_codigos")
+}
+
+/// Espelho de wincred.funcionarios — vendedoras ativas por loja (login do PDV).
+/// Full replace de hora em hora junto com o GigaMirror. Tira o SELECT em
+/// `funcionarios` do caminho quente do login das lojas.
+model WincredFuncionario {
+  codigo   String  @id @db.VarChar(14)
+  nome     String? @db.VarChar(80)
+  apelido  String? @db.VarChar(40)
+  loja     String? @db.VarChar(4)
+  inativo  Boolean @default(false)
+
+  syncedAt DateTime @default(now()) @map("synced_at")
+
+  @@index([loja])
+  @@map("wincred_funcionarios")
+}
+
+/// Espelho DETALHADO de wincred.caixa — venda item a item (1 linha por item).
+/// Janela deslizante: cron horário re-copia os últimos 3 dias; backfill desde
+/// GIGA_MIRROR_FROM roda no boot quando a tabela está vazia (chunks mensais).
+/// Destrava: dashboards ricos (top REFs/vendedoras/marcas/heatmap), consulta
+/// de venda antiga/devolução manual e resumos de vendas SEM tocar o Giga.
+model GigaCaixaMov {
+  registro   String    @id @db.VarChar(20)
+  numero     String?   @db.VarChar(20)
+  controle   String?   @db.VarChar(20)
+  codigo     String?   @db.VarChar(14)
+  data       DateTime? @db.Date
+  dataFec    DateTime? @map("data_fec") @db.Date
+  hora       String?   @db.VarChar(10)
+  descricao  String?   @db.VarChar(120)
+  quantidade Decimal?  @db.Decimal(10, 2)
+  valor      Decimal?  @db.Decimal(10, 2)
+  valorTotal Decimal?  @map("valor_total") @db.Decimal(10, 2)
+  operador   String?   @db.VarChar(30)
+  vendedor   String?   @db.VarChar(40)
+  cliente    String?   @db.VarChar(80)
+  loja       String?   @db.VarChar(4)
+  marcado    String?   @db.VarChar(4)
+
+  syncedAt DateTime @default(now()) @map("synced_at")
+
+  @@index([data])
+  @@index([loja, data])
+  @@index([codigo])
+  @@index([dataFec])
+  @@map("giga_caixa_mov")
 }
 
 /// Espelho ENXUTO de wincred.movimento — SÓ parcelas de crediário EM ABERTO.
@@ -3758,6 +3809,7 @@ model Product {
   tributo           String?   @db.VarChar(4)
   cfop              Int?
   plusSize          Int?
+  ean               String?   @db.VarChar(20)
 
   // ── Camada NATIVA (não existe no Giga) ──
   genero       String?   @db.VarChar(12) // FEMININO | MASCULINO | INFANTIL

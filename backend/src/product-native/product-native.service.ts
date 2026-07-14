@@ -38,13 +38,13 @@ export class ProductNativeService {
       INSERT INTO product (
         codigo, grupo, "nomeGrupo", "descricaoPdv", "descricaoCompleta", custo, "vendaUn",
         fornecedor, unidade, estoque, margem, "dataAlt", subgrupo, cor, tamanho, marca, ref,
-        ncm, tributo, cfop, "plusSize",
+        ncm, tributo, cfop, "plusSize", ean,
         genero, "liveOk", ativo, curado_manual, flow_is_source, edited_at, synced_at, updated_at
       )
       SELECT
         w.codigo, w.grupo, w."nomeGrupo", w."descricaoPdv", w."descricaoCompleta", w.custo, w."vendaUn",
         w.fornecedor, w.unidade, w.estoque, w.margem, w."dataAlt", w.subgrupo, w.cor, w.tamanho, w.marca, w.ref,
-        w.ncm, w.tributo, w.cfop, w."plusSize",
+        w.ncm, w.tributo, w.cfop, w."plusSize", w.ean,
         CASE
           WHEN upper(coalesce(w."descricaoCompleta", '')) LIKE '%MASCULIN%' THEN 'MASCULINO'
           WHEN upper(coalesce(w."descricaoCompleta", '')) LIKE '%INFANTIL%' THEN 'INFANTIL'
@@ -86,6 +86,7 @@ export class ProductNativeService {
         tributo = EXCLUDED.tributo,
         cfop = EXCLUDED.cfop,
         "plusSize" = EXCLUDED."plusSize",
+        ean = EXCLUDED.ean,
         genero = CASE WHEN product.curado_manual THEN product.genero ELSE EXCLUDED.genero END,
         "liveOk" = CASE WHEN product.curado_manual THEN product."liveOk" ELSE EXCLUDED."liveOk" END,
         synced_at = now(),

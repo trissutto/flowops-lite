@@ -44,8 +44,10 @@ export class CrediarioMirrorService {
 
   // ── CRONS ────────────────────────────────────────────────────────────────
 
-  /** Parcelas abertas — de hora em hora (min 41). */
-  @Cron('41 * * * *', { name: 'crediario-mirror-abertas' })
+  /** Parcelas abertas — A CADA 10 MINUTOS (14/07, pedido do dono: espelho do
+   *  crediário fresco pras telas de baixa/cobrança). Guard `running` evita
+   *  overlap se o Giga demorar. */
+  @Cron('*/10 * * * *', { name: 'crediario-mirror-abertas' })
   async cronAbertas(): Promise<void> {
     if (!this.cronEnabled) return;
     if (this.running) return;
