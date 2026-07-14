@@ -40,6 +40,26 @@ export class ProductSearchService implements OnModuleInit {
   }
 
   /**
+   * FAMÍLIA de descrição (caso 14538, 14/07): a MESMA REF cobre produtos
+   * DIFERENTES na Giga (SAÍDA DE PRAIA ACQUA + CASACO JULIA). A família é a
+   * primeira palavra "significativa" da descrição — mesma heurística do
+   * displayInfoByRefs/realinhamento (caso 2319: helicóptero × blusão).
+   */
+  static familiaOf(desc: any): string {
+    const palavras = String(desc || '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '')
+      .split(/\s+/)
+      .filter(Boolean);
+    return (
+      palavras.find(
+        (w) => w.length >= 4 && !/\d/.test(w) && !ProductSearchService.FAMILIA_STOPWORDS.has(w),
+      ) || '_outros'
+    );
+  }
+
+  /**
    * FULL-TEXT NO POSTGRES (decisão do dono, 10/07): entre os motores de busca
    * (Elasticsearch/Meilisearch/Typesense/PG), escolhemos o do PRÓPRIO Postgres —
    * zero infra nova, zero sync extra (roda em cima do espelho giga_produto que
