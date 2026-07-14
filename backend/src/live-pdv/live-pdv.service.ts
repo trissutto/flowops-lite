@@ -456,16 +456,47 @@ export class LivePdvService {
     // dono: buscar "VLM-222" agora também traz "VLM-222EST" (estampado).
     const qn = this.norm(q);
     const exact = rows.filter((r) => this.norm(r.REF) === qn);
-    // TRAVA DO PREFIXO NUMÉRICO (13/07): a junção por prefixo NÃO pode arrastar
-    // produto DIFERENTE cuja REF só continua com mais dígitos — "VLM-222" traz
-    // "VLM-222P"/"VLM-222 VD" (variantes), mas NUNCA "VLM-2225"/"VLM-22201"
-    // (outros produtos). Sufixo de variante começa com letra/espaço/separador.
-    let productRows = exact.length
-      ? rows.filter((r) => {
-          const ref = this.norm(r.REF);
-          return ref.startsWith(qn) && !/^\d/.test(ref.slice(qn.length));
-        })
-      : rows.filter((r) => this.norm(r.REF) === this.norm(rows[0].REF));
+
+    // FAMÍLIA POR REF-BASE (13/07, decisão do dono): REF composta ("VLM-222",
+    // "VLM-222P", "VLM-222 VD") é o MESMO produto — qualquer forma digitada
+    // (base, variante ou código bipado) abre a família INTEIRA, agrupada pela
+    // coluna ref_base do espelho. Resolve os 3 sintomas que pareciam bug:
+    //   1) variante digitada abria sozinha (sem as irmãs);
+    //   2) base SEM cadastro exato mostrava só a 1ª cor;
+    //   3) prefixo arrastava REF numérica maior (VLM-222 puxava VLM-2225 —
+    //      ref_base preserva dígitos, então VLM-2225 é outra família).
+    // Sufixo NÃO vira cor (sem padrão no cadastro — dono, 13/07): a cor é
+    // sempre o campo COR da linha; o sufixo só agrupa.
+    const baseAlvo = ProductSearchService.refBaseOf(exact.length ? qn : String(rows[0].REF || ''));
+    let familia: any[] = [];
+    if (baseAlvo) {
+      try {
+        const fam = await (this.prisma as any).gigaProduto.findMany({
+          where: { refBase: baseAlvo },
+          take: 1000,
+        });
+        familia = fam.map((r: any) => ({
+          CODIGO: r.codigo,
+          REF: r.ref,
+          DESCRICAOCOMPLETA: r.descricao,
+          COR: r.cor,
+          TAMANHO: r.tamanho,
+        }));
+      } catch {
+        /* coluna ainda não populada/erro → fallback por prefixo abaixo */
+      }
+    }
+    // Fallback (espelho sem ref_base ainda): junção por prefixo antiga, com a
+    // TRAVA DO PREFIXO NUMÉRICO — sufixo de variante começa com letra/espaço/
+    // separador, então "VLM-222" NUNCA arrasta "VLM-2225"/"VLM-22201".
+    let productRows = familia.length
+      ? familia
+      : exact.length
+        ? rows.filter((r) => {
+            const ref = this.norm(r.REF);
+            return ref.startsWith(qn) && !/^\d/.test(ref.slice(qn.length));
+          })
+        : rows.filter((r) => this.norm(r.REF) === this.norm(rows[0].REF));
 
     // FILTRO DE LIVE (13/07, decisão do dono): live é SÓ plus size FEMININO.
     // 1) tamanho fora da whitelist (46–60, 46/48, 50/52) não vira célula —
@@ -492,14 +523,19 @@ export class LivePdvService {
       if (daCor.length) productRows = daCor;
     }
     // Metadados pra VALIDAÇÃO da legenda: quais REFs distintas o termo trouxe
-    // e se houve match exato. Campos ADITIVOS — não mudam o comportamento.
+    // e se o termo identifica UM produto. Com a família por ref_base, várias
+    // REFs da MESMA família não são ambiguidade ("VLM-222" sem cadastro exato
+    // achando VLM-222P + VLM-222 VD é 1 produto só) — a legenda pode salvar.
     const matchedRefs = Array.from(new Set(rows.map((r) => String(r.REF || '').trim()).filter(Boolean)));
-    const exactMatch = exact.length > 0;
-    // Cabeçalho/foto/preço-base/promo usam a REF BASE exata (ex.: 900658), não a
-    // variante de cor (900658M) — que pode vir antes na ordem do Giga. As células
+    const mesmaFamilia =
+      matchedRefs.length > 0 &&
+      matchedRefs.every((r) => ProductSearchService.refBaseOf(r) === baseAlvo);
+    const exactMatch = exact.length > 0 || (familia.length > 0 && mesmaFamilia);
+    // Cabeçalho/foto/preço-base/promo usam a REF BASE (ex.: VLM-222), não a
+    // variante de cor (VLM-222P) — que pode vir antes na ordem do Giga. As células
     // da grade continuam agrupadas sob a base; cada uma guarda seu próprio código.
     const headRow = exact[0] || productRows[0];
-    const ref = String(headRow.REF).trim();
+    const ref = (familia.length ? baseAlvo : String(headRow.REF).trim()) || String(headRow.REF).trim();
     const descricao = headRow.DESCRICAOCOMPLETA || ref;
 
     // 2) Estoque por loja (1 query batch p/ todos os CODIGOs do produto).

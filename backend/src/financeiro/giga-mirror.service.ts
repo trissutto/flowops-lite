@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
+import { ProductSearchService } from '../product-search/product-search.service';
 
 /**
  * GigaMirrorService — o "ghost" do Giga.
@@ -56,6 +57,28 @@ export class GigaMirrorService implements OnModuleInit {
         this.logger.error(`backfill caixa_mov falhou: ${e?.message || e}`),
       );
     }, 30_000);
+    // Backfill da REF-BASE (13/07): preenche ref_base nas linhas que ainda não
+    // têm (coluna nova entra via prisma db push; o sync completo do catálogo só
+    // roda a cada ~6h — sem isso a live ficaria horas sem família). UPDATE
+    // idempotente 100% no Postgres, mesma regra do ProductSearchService.refBaseOf.
+    setTimeout(() => {
+      this.backfillRefBase().catch((e) =>
+        this.logger.error(`backfill ref_base falhou: ${e?.message || e}`),
+      );
+    }, 15000);
+  }
+
+  private async backfillRefBase() {
+    const n: number = await this.prisma.$executeRawUnsafe(`
+      UPDATE giga_produto
+         SET ref_base = CASE
+               WHEN NULLIF(regexp_replace(upper(btrim(ref)), '[^0-9]+$', ''), '') IS NULL
+                 THEN upper(btrim(ref))
+               ELSE regexp_replace(upper(btrim(ref)), '[^0-9]+$', '')
+             END
+       WHERE ref IS NOT NULL AND ref_base IS NULL
+    `);
+    if (n > 0) this.logger.log(`[ref_base] backfill: ${n} linhas preenchidas`);
   }
 
   private async maybeBackfill() {
@@ -358,6 +381,7 @@ export class GigaMirrorService implements OnModuleInit {
     const data = rows.map((r) => ({
       codigo: r.codigo,
       ref: r.ref || null,
+      refBase: r.ref ? ProductSearchService.refBaseOf(r.ref) : null,
       descricao: r.descricao || null,
       cor: r.cor || null,
       tamanho: r.tamanho || null,
