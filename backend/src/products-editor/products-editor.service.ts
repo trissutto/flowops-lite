@@ -771,6 +771,105 @@ export class ProductsEditorService {
     };
   }
 
+  /**
+   * LEVA 4 (incidente DATAALT): prova de idade pela PRIMEIRA VENDA no caixa.
+   * Código ainda sujo cuja primeira venda foi ANTES de 2026 é obviamente
+   * antigo → DATAALT vira a data da 1ª venda (aproximação suficiente pra
+   * promo YEAR_BASED; a data real de cadastro é anterior, nunca posterior).
+   * Fontes: espelho giga_caixa_mov (rápido) + caixa do Giga ao vivo em chunks
+   * pequenos read-only (só se CODIGO for indexado). Roda em background.
+   */
+  async restaurarDataAltPorCaixa(input: { userName?: string | null }) {
+    if (this.restauracao.rodando) return { ok: false, jaRodando: true, progresso: this.restauracao };
+    this.restauracao = {
+      rodando: true, fonte: 'caixa', total: 0, feitos: 0,
+      inicio: new Date().toISOString(), fim: null, erro: null,
+    };
+    void this.executarLevaCaixa(input.userName || null)
+      .catch((e) => { this.restauracao.erro = (e as Error).message?.slice(0, 200) || 'erro'; })
+      .finally(() => { this.restauracao.rodando = false; this.restauracao.fim = new Date().toISOString(); });
+    return { ok: true, background: true, acompanhe: 'GET /products-editor/restaurar-dataalt/progresso' };
+  }
+
+  private async executarLevaCaixa(userName: string | null) {
+    const prog = this.restauracao as any;
+
+    // 1) Códigos ainda sujos no Giga (paginado)
+    prog.etapa = 'lendo códigos sujos no Giga';
+    const sujos: string[] = [];
+    let cursor = '';
+    for (let page = 0; page < 10; page++) {
+      const res = await this.erp.runReadOnly(
+        `SELECT CODIGO FROM produtos
+          WHERE DATAALT >= '2026-07-13' AND CODIGO > '${cursor.replace(/'/g, '')}'
+          ORDER BY CODIGO LIMIT 40000`,
+        { maxRows: 40000, timeoutMs: 60_000 },
+      );
+      const rows = res.rows as any[];
+      if (!rows.length) break;
+      for (const r of rows) {
+        const c = this.normalizeCodigo(String(r.CODIGO));
+        if (c) sujos.push(c);
+      }
+      cursor = String(rows[rows.length - 1].CODIGO);
+      if (rows.length < 40000) break;
+    }
+    if (!sujos.length) return 0;
+
+    // 2) Espelho giga_caixa_mov: 1ª venda por código (só PROVA idade se < 2026)
+    prog.etapa = 'primeira venda no espelho';
+    const first = new Map<string, string>();
+    try {
+      const mirror: Array<{ cod: string; d: string }> = await (this.prisma as any).$queryRawUnsafe(
+        `SELECT regexp_replace(codigo, '^0+', '') AS cod, to_char(MIN(data), 'YYYY-MM-DD') AS d
+           FROM giga_caixa_mov
+          WHERE codigo IS NOT NULL AND data IS NOT NULL
+          GROUP BY 1`,
+      );
+      for (const r of mirror) {
+        if (r.cod && r.d) first.set(r.cod, String(r.d));
+      }
+    } catch (e) {
+      this.logger.warn(`[dataalt] leva caixa: espelho falhou (${(e as Error).message}), seguindo só com Giga`);
+    }
+
+    // 3) Giga ao vivo pros sujos ainda sem prova de idade (espelho cobre só a
+    //    janela recente — 1ª venda 2026 no espelho NÃO prova que é novo)
+    const semProva = sujos.filter((c) => !(first.get(c) && first.get(c)! < '2026-01-01'));
+    const indexado = await this.erp.caixaCodigoIndexed();
+    if (indexado) {
+      const CHUNK = 300;
+      for (let i = 0; i < semProva.length; i += CHUNK) {
+        prog.etapa = `varrendo caixa do Giga ${i}/${semProva.length}`;
+        try {
+          const m = await this.erp.getFirstSaleDatesChunk(semProva.slice(i, i + CHUNK));
+          for (const [cod, d] of m.entries()) {
+            const prev = first.get(cod);
+            if (!prev || d < prev) first.set(cod, d);
+          }
+        } catch (e) {
+          this.logger.warn(`[dataalt] leva caixa: chunk ${i} falhou: ${(e as Error).message}`);
+        }
+        await new Promise((r) => setTimeout(r, 200)); // respiro pro Giga
+      }
+    } else {
+      this.logger.warn('[dataalt] leva caixa: caixa.CODIGO SEM índice — pulando varredura ao vivo');
+    }
+
+    // 4) Pares: só quem tem 1ª venda ANTES de 2026 (prova de idade)
+    const pairs: Array<{ codigo: string; dataAlt: string }> = [];
+    for (const c of sujos) {
+      const d = first.get(c);
+      if (d && d < '2026-01-01') pairs.push({ codigo: c, dataAlt: d });
+    }
+    this.logger.log(`[dataalt] leva caixa: ${sujos.length} sujos, ${pairs.length} com prova de idade pela caixa`);
+    if (!pairs.length) return 0;
+
+    prog.etapa = 'gravando no Giga';
+    this.restauracao.total = pairs.length;
+    return this.executarRestauracao(pairs, 'caixa', userName);
+  }
+
   /** Últimos lotes de auditoria (tela mostra o histórico recente). */
   async auditRecent(limit = 200) {
     return (this.prisma as any).productEditAudit.findMany({

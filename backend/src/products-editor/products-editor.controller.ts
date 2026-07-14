@@ -112,6 +112,18 @@ export class ProductsEditorController {
     });
   }
 
+  /**
+   * POST /products-editor/restaurar-dataalt-caixa — Leva 4: prova de idade
+   * pela primeira venda no caixa (espelho + Giga read-only em chunks).
+   */
+  @Post('restaurar-dataalt-caixa')
+  async restaurarDataAltCaixa(@Req() req: any) {
+    this.requireAdmin(req);
+    return this.svc.restaurarDataAltPorCaixa({
+      userName: req?.user?.name || req?.user?.email || null,
+    });
+  }
+
   /** Progresso da restauração em background. */
   @Get('restaurar-dataalt/progresso')
   async restaurarProgresso(@Req() req: any) {
