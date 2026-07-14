@@ -8061,31 +8061,24 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       porData.set(p.dataAlt, list);
     }
 
-    const conn = await this.pool.getConnection();
+    // AUTOCOMMIT por statement (SEM transação gigante): incidente 14/07 mostrou
+    // que 88k updates numa transação única = commit invisível + timeout de
+    // gateway + lock gigante. Cada UPDATE commita sozinho — progresso visível
+    // e re-execução é idempotente (regrava o mesmo valor).
     let atualizados = 0;
-    try {
-      await conn.beginTransaction();
-      for (const [dataAlt, codigos] of porData.entries()) {
-        for (let i = 0; i < codigos.length; i += 500) {
-          const chunk = codigos.slice(i, i + 500);
-          const placeholders = chunk.map(() => '?').join(',');
-          const [result]: any = await conn.query(
-            `UPDATE produtos SET DATAALT = ? WHERE CODIGO IN (${placeholders})`,
-            [dataAlt, ...chunk],
-          );
-          atualizados += Number(result.affectedRows) || 0;
-        }
+    for (const [dataAlt, codigos] of porData.entries()) {
+      for (let i = 0; i < codigos.length; i += 500) {
+        const chunk = codigos.slice(i, i + 500);
+        const placeholders = chunk.map(() => '?').join(',');
+        const [result]: any = await this.pool.query(
+          `UPDATE produtos SET DATAALT = ? WHERE CODIGO IN (${placeholders})`,
+          [dataAlt, ...chunk],
+        );
+        atualizados += Number(result.affectedRows) || 0;
       }
-      await conn.commit();
-      this.logger.log(`restoreDataAlt: ${atualizados} produtos restaurados no Giga (${porData.size} data(s))`);
-      return { atualizados };
-    } catch (e) {
-      await conn.rollback();
-      this.logger.error(`restoreDataAlt falhou - rollback: ${(e as Error).message}`);
-      throw e;
-    } finally {
-      conn.release();
     }
+    this.logger.log(`restoreDataAlt: ${atualizados} produtos restaurados no Giga (${porData.size} data(s))`);
+    return { atualizados };
   }
 
   async inserirProdutosBatch(produtos: Array<{

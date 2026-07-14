@@ -88,7 +88,7 @@ export class ProductsEditorController {
   @Post('restaurar-dataalt')
   async restaurarDataAlt(
     @Req() req: any,
-    @Body() body: { source?: 'native'; pairs?: Array<{ codigo: string; dataAlt: string }> },
+    @Body() body: { source?: 'native' | 'ref'; pairs?: Array<{ codigo: string; dataAlt: string }> },
   ) {
     this.requireAdmin(req);
     return this.svc.restaurarDataAlt({
@@ -96,6 +96,13 @@ export class ProductsEditorController {
       pairs: body?.pairs,
       userName: req?.user?.name || req?.user?.email || null,
     });
+  }
+
+  /** Progresso da restauração em background. */
+  @Get('restaurar-dataalt/progresso')
+  async restaurarProgresso(@Req() req: any) {
+    this.requireAdmin(req);
+    return this.svc.restauracaoProgresso();
   }
 
   /** GET /products-editor/audit — histórico recente (ANTES→DEPOIS). */
