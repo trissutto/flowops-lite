@@ -59,6 +59,7 @@ const GESTAO_ITEMS: GestaoItem[] = [
   { href: '/marketing',                       label: 'Marketing',         subtitle: 'Campanhas',     description: 'Recuperação + WhatsApp',        tone: 'rose',   icon: Megaphone       },
   { href: '/retaguarda/notificacoes',         label: 'Notificações',      subtitle: 'Push Central',  description: 'Avisar lojas: promoção, reunião…', tone: 'purple', icon: Bell           },
   { href: '/retaguarda/cadastro-produtos',    label: 'Cadastro Produtos', subtitle: 'Novo SKU',      description: 'Gerar SKUs no Wincred',         tone: 'purple', icon: Package         },
+  { href: '/retaguarda/editor-produtos',      label: 'Editor Produtos',   subtitle: 'Padronizar',    description: 'REF, preço e descrição em bloco', tone: 'amber', icon: Package         },
   { href: '/retaguarda/remessas',             label: 'Remessas',          subtitle: 'Em trânsito',   description: 'Caixas + comprovantes PDF',     tone: 'sky',    icon: Truck           },
   { href: '/retaguarda/realinhamento',        label: 'Realinhamento',     subtitle: 'Criar',         description: 'Rebalancear estoque',           tone: 'amber',  icon: Shuffle         },
   { href: '/retaguarda/realinhamento/nao-encontrados', label: 'Não Encontradas', subtitle: 'Revisar', description: 'Filiais reportaram',           tone: 'rose',   icon: AlertTriangle  },

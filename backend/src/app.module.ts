@@ -14,6 +14,7 @@ import { ProgressiveDiscountModule } from './progressive-discount/progressive-di
 import { StockMirrorModule } from './stock-mirror/stock-mirror.module';
 import { WincredMirrorModule } from './wincred-mirror/wincred-mirror.module';
 import { ProductsModule } from './products/products.module';
+import { ProductsEditorModule } from './products-editor/products-editor.module';
 import { StoresModule } from './stores/stores.module';
 import { StockModule } from './stock/stock.module';
 import { RoutingModule } from './routing/routing.module';
@@ -81,6 +82,7 @@ import { OperadorPinModule } from './operador-pin/operador-pin.module';
     StockMirrorModule,
     WincredMirrorModule,
     ProductsModule,
+    ProductsEditorModule,
     StoresModule,
     StockModule,
     RoutingModule,

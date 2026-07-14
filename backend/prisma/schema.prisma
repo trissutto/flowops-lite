@@ -3707,6 +3707,27 @@ model ProductClassification {
   @@map("product_classification")
 }
 
+/// Auditoria do EDITOR DE PRODUTOS (/retaguarda/editor-produtos): cada campo
+/// alterado vira uma linha ANTES→DEPOIS, agrupada por batchId (um "Confirmar").
+/// applied=false = shadow mode (EDITOR_PRODUTOS_WRITE=0, só logou sem gravar).
+model ProductEditAudit {
+  id        String   @id @default(cuid())
+  batchId   String   @map("batch_id")
+  codigo    String   @db.VarChar(20)
+  ref       String?  @db.VarChar(20)
+  field     String   @db.VarChar(30)
+  oldValue  String?  @map("old_value") @db.VarChar(200)
+  newValue  String?  @map("new_value") @db.VarChar(200)
+  userName  String?  @map("user_name") @db.VarChar(120)
+  applied   Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([batchId])
+  @@index([codigo])
+  @@index([createdAt])
+  @@map("product_edit_audit")
+}
+
 /// OperadorPin — PIN pessoal de liberação no PDV, por PESSOA (CPF), global (vale
 /// em qualquer loja). Substitui a "senha compartilhada de nível" pelo PIN de cada
 /// funcionária, mantendo a hierarquia (nivel) — e passa a saber QUEM autorizou.
