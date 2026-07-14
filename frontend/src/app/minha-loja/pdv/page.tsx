@@ -2114,26 +2114,31 @@ function PdvPageInner() {
                       <span className="text-sm font-bold text-slate-900 truncate">
                         {it.descricao || it.ref || it.sku}
                       </span>
-                      {it.promoTag && (
-                        <span
-                          className={`text-[9px] font-bold px-1.5 py-0.5 rounded shrink-0 ${
-                            it.promoTag === 'SEM_PROMO'
-                              ? 'bg-slate-200 text-slate-600 border border-slate-300'
-                              : it.promoTag.includes('4 LEVA 3')
-                              ? 'bg-[#8C7325] text-white border border-[#8C7325]'
+                      {/* Badge de promoção (pedido do dono 14/07): 30% maior e
+                          código de cor fixo — AZUL = fora/sem promoção (básico),
+                          VERMELHO = participando de promoção. MANUAL segue cinza. */}
+                      {it.promoTag && (() => {
+                        const semPromo =
+                          it.promoTag === 'SEM_PROMO' || /SEM PROMO/i.test(it.promoTag);
+                        return (
+                          <span
+                            className={`text-[12px] font-bold px-2 py-1 rounded shrink-0 ${
+                              semPromo
+                                ? 'bg-blue-600 text-white border border-blue-700'
+                                : it.promoTag === 'MANUAL'
+                                ? 'bg-slate-600 text-white border border-slate-600'
+                                : 'bg-red-600 text-white border border-red-700'
+                            }`}
+                            title={semPromo ? 'Fora da promoção (não participa)' : `Desconto: ${brl(it.desconto)}`}
+                          >
+                            {semPromo
+                              ? (it.promoTag === 'SEM_PROMO' ? '🚫 Fora da promo' : `🚫 ${it.promoTag}`)
                               : it.promoTag === 'MANUAL'
-                              ? 'bg-slate-600 text-white border border-slate-600'
-                              : 'bg-[#FAF6E8] text-[#8C7325] border border-[#D4AF37]/40'
-                          }`}
-                          title={it.promoTag === 'SEM_PROMO' ? 'Fora da promoção (não participa)' : `Desconto: ${brl(it.desconto)}`}
-                        >
-                          {it.promoTag === 'SEM_PROMO'
-                            ? '🚫 Fora da promo'
-                            : it.promoTag === 'MANUAL'
-                            ? '✏️ MANUAL'
-                            : `🎁 ${it.promoTag}`}
-                        </span>
-                      )}
+                              ? '✏️ MANUAL'
+                              : `🎁 ${it.promoTag}`}
+                          </span>
+                        );
+                      })()}
                     </div>
                     <div className="text-xs text-slate-400 font-medium mt-0.5 truncate">
                       ref {it.ref || it.sku}
