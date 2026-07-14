@@ -505,8 +505,13 @@ ipcMain.handle('flowops:silent-print-url', async (_evt, inputUrl) => {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
-      // Compartilha sessão com a janela principal → localStorage (JWT) disponível
-      partition: 'persist:default',
+      // FIX 14/07: NADA de partition aqui. 'persist:default' criava uma sessão
+      // SEPARADA da janela principal (que usa a default session) — o JWT do
+      // localStorage não existia lá, recibo/NFC-e tomavam 401 e a janela
+      // fechava sem imprimir ("teste imprime, venda não"). Sem partition, a
+      // hidden window compartilha a MESMA sessão/login da janela principal.
+      // (O frontend também passa o token via #ptk= na URL, que cobre os apps
+      // antigos que ainda têm este bug.)
     },
   });
 

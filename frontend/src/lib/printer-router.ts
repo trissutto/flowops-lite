@@ -20,6 +20,8 @@
  *   routePrint({ kind: 'cupom', url: '/minha-loja/pdv/recibo/abc?autoprint=1' });
  */
 
+import { getAuthToken } from './api';
+
 export type PrinterKind = 'cupom' | 'nfce' | 'vale' | 'sangria' | 'recibo_pix' | 'carne';
 
 /**
@@ -118,9 +120,17 @@ export async function routePrint(input: {
         console.warn(`[printer-router] Sem impressora configurada pra "${profile}". Usando padrão do Windows.`);
       }
 
-      const absoluteUrl = input.url.startsWith('http')
+      let absoluteUrl = input.url.startsWith('http')
         ? input.url
         : window.location.origin + input.url;
+      // FIX 14/07 ("teste imprime, venda não"): a hidden window do app roda
+      // numa sessão SEM o login → recibo/NFC-e tomavam 401 e nada saía. O JWT
+      // vai no FRAGMENT (#ptk=) — não aparece em servidor/log — e a página de
+      // impressão autentica (ver getAuthToken em api.ts).
+      try {
+        const tk = getAuthToken();
+        if (tk) absoluteUrl += `${absoluteUrl.includes('#') ? '&' : '#'}ptk=${encodeURIComponent(tk)}`;
+      } catch { /* sem token, segue como antes */ }
       await electron.silentPrintUrl(absoluteUrl);
       return { ok: true, mode: 'electron-silent' };
     } catch (e: any) {
