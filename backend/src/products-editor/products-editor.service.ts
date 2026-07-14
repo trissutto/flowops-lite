@@ -688,7 +688,13 @@ export class ProductsEditorService {
    */
   async restaurarDataAltDeBackup(input: { url: string; userName?: string | null }) {
     const url = String(input.url || '').trim();
-    if (!/^postgres(ql)?:\/\//.test(url)) throw new BadRequestException('URL do Postgres temporário inválida');
+    // 'self' = lê o PRÓPRIO banco de produção (usado no swap de volume: o
+    // volume do backup de mês passado é montado temporariamente em produção,
+    // extraímos as datas daqui mesmo e depois o volume atual volta).
+    const useSelf = url === 'self';
+    if (!useSelf && !/^postgres(ql)?:\/\//.test(url)) {
+      throw new BadRequestException('URL do Postgres temporário inválida (ou use "self")');
+    }
     if (this.restauracao.rodando) return { ok: false, jaRodando: true, progresso: this.restauracao };
 
     // 1) Códigos ainda sujos no Giga — paginado (são ~74k e o runReadOnly
@@ -713,18 +719,21 @@ export class ProductsEditorService {
     }
     if (!sujos.size) return { ok: true, mensagem: 'Nenhum produto sujo restante' };
 
-    // 2) Backup temporário: PrismaClient apontado pra URL passada
-    const { PrismaClient } = require('@prisma/client');
-    const temp = new PrismaClient({ datasources: { db: { url } } });
-    let backupRows: any[] = [];
-    try {
-      backupRows = await temp.$queryRawUnsafe(
-        `SELECT codigo, to_char("dataAlt", 'YYYY-MM-DD') AS d
+    // 2) Fonte das datas: banco do backup (URL) ou o próprio banco ('self')
+    const backupSql = `SELECT codigo, to_char("dataAlt", 'YYYY-MM-DD') AS d
            FROM wincred_produtos
-          WHERE "dataAlt" IS NOT NULL`,
-      );
-    } finally {
-      await temp.$disconnect().catch(() => null);
+          WHERE "dataAlt" IS NOT NULL`;
+    let backupRows: any[] = [];
+    if (useSelf) {
+      backupRows = await (this.prisma as any).$queryRawUnsafe(backupSql);
+    } else {
+      const { PrismaClient } = require('@prisma/client');
+      const temp = new PrismaClient({ datasources: { db: { url } } });
+      try {
+        backupRows = await temp.$queryRawUnsafe(backupSql);
+      } finally {
+        await temp.$disconnect().catch(() => null);
+      }
     }
 
     // 3) Interseção: só restaura quem está sujo E existia no backup
