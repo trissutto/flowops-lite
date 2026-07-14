@@ -7058,6 +7058,71 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    *
    * Requer ERP_WRITE_ENABLED='true'. SenÃ£o lanÃ§a erro sem tocar no banco.
    */
+  /**
+   * EDITOR DE PRODUTOS (/retaguarda/editor-produtos): UPDATE de campos do
+   * cadastro direto no Giga (fonte da verdade) - REF/descricao/marca/cor/
+   * tamanho/preco. DESCRICAOPDV acompanha a descricao completa (50 chars),
+   * igual ao cadastro. DATAALT=CURDATE() SEMPRE: e o campo que o sync
+   * incremental do espelho usa pra enxergar a mudanca.
+   * Transacao unica: ou grava o lote inteiro, ou nada (nunca meio-gravado).
+   * WHERE por CODIGO EXATO (string vinda da propria busca) - sem CAST, porque
+   * padding inconsistente poderia casar outra linha.
+   */
+  async updateProdutosCampos(rows: Array<{
+    codigo: string;
+    set: {
+      ref?: string;
+      descricaoCompleta?: string;
+      marca?: string;
+      cor?: string;
+      tamanho?: string;
+      vendaUn?: number;
+    };
+  }>): Promise<{ atualizados: number }> {
+    if (!this.isWriteEnabled) {
+      throw new Error('ERP_WRITE_ENABLED=false. Setar env=true pra liberar edicao de produtos.');
+    }
+    if (!this.pool) throw new Error('ERP MySQL nao esta conectado');
+    if (!rows.length) return { atualizados: 0 };
+
+    const conn = await this.pool.getConnection();
+    let atualizados = 0;
+    try {
+      await conn.beginTransaction();
+      for (const r of rows) {
+        const sets: string[] = [];
+        const params: any[] = [];
+        const s = r.set || {};
+        if (s.ref !== undefined) { sets.push('REF = ?'); params.push(String(s.ref).slice(0, 10)); }
+        if (s.descricaoCompleta !== undefined) {
+          sets.push('DESCRICAOCOMPLETA = ?'); params.push(String(s.descricaoCompleta).slice(0, 100));
+          sets.push('DESCRICAOPDV = ?'); params.push(String(s.descricaoCompleta).slice(0, 50));
+        }
+        if (s.marca !== undefined) { sets.push('MARCA = ?'); params.push(String(s.marca).slice(0, 30)); }
+        if (s.cor !== undefined) { sets.push('COR = ?'); params.push(String(s.cor).slice(0, 15)); }
+        if (s.tamanho !== undefined) { sets.push('TAMANHO = ?'); params.push(String(s.tamanho).slice(0, 20)); }
+        if (s.vendaUn !== undefined) { sets.push('VENDAUN = ?'); params.push(Number(s.vendaUn)); }
+        if (!sets.length) continue;
+        sets.push(`DATAALT = CURDATE()`);
+        sets.push(`OPERADOR = 'FLOWOPS'`);
+        const [result]: any = await conn.query(
+          `UPDATE produtos SET ${sets.join(', ')} WHERE CODIGO = ? LIMIT 1`,
+          [...params, r.codigo],
+        );
+        if (result.affectedRows && result.affectedRows > 0) atualizados++;
+      }
+      await conn.commit();
+      this.logger.log(`updateProdutosCampos: ${atualizados}/${rows.length} produtos atualizados no Giga`);
+      return { atualizados };
+    } catch (e) {
+      await conn.rollback();
+      this.logger.error(`updateProdutosCampos falhou - rollback: ${(e as Error).message}`);
+      throw e;
+    } finally {
+      conn.release();
+    }
+  }
+
   async inserirProdutosBatch(produtos: Array<{
     codigo: string;
     grupo: number;
