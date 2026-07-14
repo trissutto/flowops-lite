@@ -169,6 +169,14 @@ export class GigaMirrorService implements OnModuleInit {
       cliente: r.CLIENTE != null ? String(r.CLIENTE).trim().slice(0, 80) : null,
       loja: r.LOJA != null ? String(r.LOJA).trim().slice(0, 4) : null,
       marcado: r.MARCADO != null ? String(r.MARCADO).trim().slice(0, 4) : null,
+      codCliente: r.CODCLIENTE != null ? String(r.CODCLIENTE).trim().slice(0, 20) : null,
+      nomeCliente: r.NOMECLIENTE != null ? String(r.NOMECLIENTE).trim().slice(0, 80) : null,
+      cpf: r.CPF != null ? String(r.CPF).trim().slice(0, 20) : null,
+      vendedora: r.VENDEDORA != null ? String(r.VENDEDORA).trim().slice(0, 40) : null,
+      vendedoraCode: r.VENDEDORACODE != null ? String(r.VENDEDORACODE).trim().slice(0, 14) : null,
+      fpag: r.FPAG != null ? String(r.FPAG).trim().slice(0, 30) : null,
+      obsPedido: r.OBS_PEDIDO != null ? String(r.OBS_PEDIDO).trim().slice(0, 200) : null,
+      valorUnitario: r.VALORUNITARIO != null ? Number(r.VALORUNITARIO) : null,
     };
   }
 
@@ -205,7 +213,17 @@ export class GigaMirrorService implements OnModuleInit {
    *  quando giga_caixa_mov está vazia (fire-and-forget, sequencial, logado). */
   private async maybeBackfillCaixaMov(): Promise<void> {
     const count = await (this.prisma as any).gigaCaixaMov.count().catch(() => -1);
-    if (count !== 0) return; // já tem dados (ou erro) — não backfilla
+    if (count < 0) return; // erro de leitura — não mexe
+    // v2 (14/07): colunas ricas novas (cliente/cpf/vendedora/fpag/valorUnit).
+    // Se o espelho foi carregado ANTES da v2, zera e re-backfilla uma vez.
+    if (count !== 0) {
+      const v2 = await (this.prisma as any).gigaMirrorState
+        .findUnique({ where: { tabela: 'caixa_mov_v2' } })
+        .catch(() => null);
+      if (v2) return; // já está na v2
+      this.logger.log('[caixa_mov] upgrade v2 (colunas ricas) — limpando pra re-backfill');
+      await (this.prisma as any).gigaCaixaMov.deleteMany({});
+    }
     this.logger.log('[caixa_mov] tabela vazia — backfill histórico em chunks mensais');
     const start = this.windowFrom();
     const end = this.windowTo();
@@ -224,6 +242,14 @@ export class GigaMirrorService implements OnModuleInit {
       cursor = next;
     }
     this.logger.log(`[caixa_mov] backfill concluído: ${total} linhas`);
+    // Marca a versão v2 do espelho (colunas ricas) — evita re-backfill em loop.
+    await (this.prisma as any).gigaMirrorState
+      .upsert({
+        where: { tabela: 'caixa_mov_v2' },
+        create: { tabela: 'caixa_mov_v2', lastOkAt: new Date(), rows: total },
+        update: { lastOkAt: new Date(), rows: total },
+      })
+      .catch(() => null);
   }
 
   // ── FUNCIONÁRIOS (wincred_funcionarios) ───────────────────────────────────
