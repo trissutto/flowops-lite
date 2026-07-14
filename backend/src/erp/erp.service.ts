@@ -117,6 +117,13 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         codigoGigaToOriginal.set(codigoGiga, originalSku);
       }
     }
+    // EAN prefixo 8 (gerado pelo Flow): namespace próprio, sem colisão de
+    // padding — não precisa (nem pode) esperar aparecer no espelho de
+    // cadastro giga_produto (~6h). Entra direto na resolução de estoque.
+    const jaResolvidos = new Set(codigoGigaToOriginal.values());
+    for (const s of uniqueOriginals) {
+      if (/^8\d{12}$/.test(s) && !jaResolvidos.has(s)) codigoGigaToOriginal.set(s, s);
+    }
     if (!codigoGigaToOriginal.size) return [];
 
     // PASSO 2 — estoque de TODAS as variantes de padding dos códigos reais.
@@ -4063,14 +4070,30 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    */
   async getEansBySkus(skus: string[]): Promise<Record<string, string>> {
     if (!skus.length) return {};
+    // EAN-13 prefixo 8 é GERADO PELO FLOW (EanSequence): o código É o próprio
+    // EAN. Resolve local, sem espelho nem Giga — produto cadastrado na live
+    // aparece na separação na hora (incidente 14/07).
+    const selfEan: Record<string, string> = {};
+    for (const s of skus) {
+      const t = String(s || '').trim();
+      if (/^8\d{12}$/.test(t)) selfEan[t] = t;
+    }
+    const pendentes = skus.filter((s) => !selfEan[String(s || '').trim()]);
+    if (!pendentes.length) return selfEan;
     if (this.mirrorReadsEnabled) {
       try {
-        if (await this.mirrorEanReady()) return (await this.getEansBySkusFromMirror(skus)) as Record<string, string>;
+        if (await this.mirrorEanReady()) {
+          const m = (await this.getEansBySkusFromMirror(pendentes)) as Record<string, string>;
+          return { ...m, ...selfEan };
+        }
       } catch (e) {
         this.logger.warn(`[mirror-reads] getEansBySkus: ${(e as Error).message} → Giga ao vivo`);
       }
     }
-    if (!this.pool) return {};
+    if (!this.pool) return selfEan;
+    const skusVivos = pendentes;
+    {
+      const skus = skusVivos; // caminho vivo abaixo intacto (só sem os prefixo-8)
 
     const candidates = ['EAN13', 'EAN', 'CODBARRAS', 'CODIGOBARRAS', 'COD_BARRAS', 'CODIGO_BARRAS'];
 
@@ -4109,7 +4132,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     if (totalSet.size === 0) {
       this.logger.warn(`getEansBySkus: nenhuma coluna resolveu EANs pros SKUs ${skus.slice(0, 3).join(',')}...`);
     }
-    return map;
+    return { ...map, ...selfEan };
+    }
   }
 
   /**
@@ -4125,6 +4149,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     if (!ean) return null;
     const raw = ean.trim();
     if (!raw) return null;
+    // EAN prefixo 8 = gerado pelo Flow: o EAN É o código. Resolve local.
+    if (/^8\d{12}$/.test(raw)) return raw;
     if (this.mirrorReadsEnabled) {
       try {
         if (await this.mirrorEanReady()) {

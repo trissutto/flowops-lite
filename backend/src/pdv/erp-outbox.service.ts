@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
+import { ErpService } from '../erp/erp.service';
 import { PdvService } from './pdv.service';
 
 /**
@@ -38,6 +39,7 @@ export class ErpOutboxService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly pdv: PdvService,
+    private readonly erp: ErpService,
   ) {}
 
   @Cron(CronExpression.EVERY_30_SECONDS, { name: 'erp-outbox-processor' })
@@ -86,6 +88,7 @@ export class ErpOutboxService {
 
   /** true = job concluído; false = re-agendado (ou failed). */
   private async processJob(job: any): Promise<boolean> {
+    if (job.kind === 'produto_cadastro') return this.processProdutoCadastro(job);
     if (job.kind !== 'venda') {
       await this.markFailed(job, `kind desconhecido: ${job.kind}`);
       return false;
@@ -180,6 +183,53 @@ export class ErpOutboxService {
       `[outbox] venda ${job.saleId} re-agendada (+${delayS}s, tentativa ${attempts}): ${stepError}`,
     );
     return false;
+  }
+
+  /**
+   * Réplica do CADASTRO DE PRODUTO pro Giga (o cadastro já gravou no Flow —
+   * `product` + `wincred_produtos` — e só a cópia legada fica na fila quando
+   * o Giga está fora). INSERT IGNORE no Wincred = retry idempotente.
+   */
+  private async processProdutoCadastro(job: any): Promise<boolean> {
+    const produtos = Array.isArray(job.payload?.produtos) ? job.payload.produtos : null;
+    if (!produtos?.length) {
+      await this.markFailed(job, 'payload sem produtos');
+      return false;
+    }
+    try {
+      const r = await this.erp.inserirProdutosBatch(produtos);
+      await (this.prisma as any).erpOutbox.update({
+        where: { id: job.id },
+        data: { status: 'done', doneAt: new Date(), lastError: null },
+      });
+      this.logger.log(
+        `[outbox] cadastro ${job.saleId}: ${r.inseridos}/${produtos.length} replicado(s) no Wincred (tentativa ${job.attempts + 1})`,
+      );
+      return true;
+    } catch (e: any) {
+      const attempts = (job.attempts || 0) + 1;
+      if (attempts >= ErpOutboxService.MAX_ATTEMPTS) {
+        await (this.prisma as any).erpOutbox.update({
+          where: { id: job.id },
+          data: { status: 'failed', attempts, lastError: String(e?.message || e).slice(0, 300) },
+        });
+        return false;
+      }
+      const delayS =
+        ErpOutboxService.BACKOFF_S[Math.min(attempts - 1, ErpOutboxService.BACKOFF_S.length - 1)] ??
+        ErpOutboxService.BACKOFF_CAP_S;
+      await (this.prisma as any).erpOutbox.update({
+        where: { id: job.id },
+        data: {
+          status: 'pending',
+          attempts,
+          lastError: String(e?.message || e).slice(0, 300),
+          nextRetryAt: new Date(Date.now() + Math.min(delayS, ErpOutboxService.BACKOFF_CAP_S) * 1000),
+        },
+      });
+      this.logger.warn(`[outbox] cadastro ${job.saleId} re-agendado (+${delayS}s): ${e?.message}`);
+      return false;
+    }
   }
 
   private async markFailed(job: any, error: string): Promise<void> {
