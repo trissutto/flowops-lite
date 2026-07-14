@@ -103,6 +103,12 @@ export class LivePdvController {
     return this.svc.endSession(id);
   }
 
+  // Reabre live encerrada (nada foi apagado — só volta o status).
+  @Post('sessions/:id/reopen')
+  reopenSession(@Param('id') id: string) {
+    return this.svc.reopenSession(id);
+  }
+
   // Troca a loja anfitriã da live ABERTA (ex.: abriu com a loja padrão errada)
   @Post('sessions/:id/store')
   changeSessionStore(@Param('id') id: string, @Body() body: { storeCode: string }) {

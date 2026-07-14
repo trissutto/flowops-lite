@@ -424,6 +424,29 @@ export class LivePdvService {
     });
   }
 
+  /**
+   * REABRE uma live encerrada (14/07, pedido do dono: live encerrou sem querer
+   * no meio da operação). Nada foi apagado no encerramento — reabrir só volta
+   * o status, e o console recupera busca/grades/venda. Trava: não deixa duas
+   * lives abertas ao mesmo tempo (o modelo do console é uma por vez).
+   */
+  async reopenSession(id: string) {
+    const s = await this.getSession(id);
+    if (s.status === 'live') return s;
+    const outra = await (this.prisma as any).livePdvSession.findFirst({
+      where: { status: 'live', id: { not: id } },
+    });
+    if (outra) {
+      throw new BadRequestException(
+        `Já existe uma live aberta ("${outra.title}") — feche-a antes de reabrir esta.`,
+      );
+    }
+    return (this.prisma as any).livePdvSession.update({
+      where: { id },
+      data: { status: 'live', endedAt: null },
+    });
+  }
+
   // ─── Busca + Grade ──────────────────────────────────────────────────────────
   /**
    * Busca produto e devolve a grade com estoque consolidado + por loja
