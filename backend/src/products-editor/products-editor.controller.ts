@@ -150,6 +150,18 @@ export class ProductsEditorController {
     return this.svc.executarAuditoriaArquivo(req?.user?.name || req?.user?.email || null);
   }
 
+  /**
+   * POST /products-editor/restaurar-dataalt-nativo-espelho
+   * Passo final do incidente DATAALT (14/07): corrige a data na tabela NATIVA
+   * `product` (fonte do bipe com PRODUCT_NATIVE_READS=1) copiando do espelho
+   * wincred_produtos já restaurado. Dry-run por padrão; { executar: true } grava.
+   */
+  @Post('restaurar-dataalt-nativo-espelho')
+  async restaurarDataAltNativoEspelho(@Req() req: any, @Body() body: { executar?: boolean }) {
+    this.requireAdmin(req);
+    return this.svc.restaurarDataAltNativoDoEspelho(!!body?.executar);
+  }
+
   /** Progresso da restauração em background. */
   @Get('restaurar-dataalt/progresso')
   async restaurarProgresso(@Req() req: any) {
