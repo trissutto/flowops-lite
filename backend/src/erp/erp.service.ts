@@ -2643,10 +2643,11 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
              MAX(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAOPDV, '')) AS descricao,
              SUBSTRING(GROUP_CONCAT(DISTINCT UPPER(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAOPDV, '')) SEPARATOR ' '), 1, 8000) AS busca,
              MAX(COALESCE(p.MARCA, ''))                           AS marca,
-             MAX(COALESCE(p.FORNECEDOR, ''))                      AS fornecedor,
+             MAX(COALESCE(NULLIF(TRIM(f.FANTASIA), ''), NULLIF(TRIM(f.RAZAOSOCIAL), ''), p.FORNECEDOR, '')) AS fornecedor,
              MAX(COALESCE(p.NOMEGRUPO, ''))                       AS categoria,
              MAX(CASE WHEN p.PLUS_SIZE IN (1, 2) THEN 1 ELSE 0 END) AS plus_size
         FROM produtos p
+        LEFT JOIN fornecedores f ON f.CNPJ = p.FORNECEDOR
        WHERE p.REF IS NOT NULL
          AND TRIM(p.REF) <> ''
        GROUP BY TRIM(UPPER(p.REF))
@@ -2657,10 +2658,11 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
              COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAOPDV, '')    AS descricao,
              UPPER(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAOPDV, '')) AS busca,
              COALESCE(p.MARCA, '')                                AS marca,
-             COALESCE(p.FORNECEDOR, '')                           AS fornecedor,
+             COALESCE(NULLIF(TRIM(f.FANTASIA), ''), NULLIF(TRIM(f.RAZAOSOCIAL), ''), p.FORNECEDOR, '') AS fornecedor,
              COALESCE(p.NOMEGRUPO, '')                            AS categoria,
              CASE WHEN p.PLUS_SIZE IN (1, 2) THEN 1 ELSE 0 END    AS plus_size
         FROM produtos p
+        LEFT JOIN fornecedores f ON f.CNPJ = p.FORNECEDOR
        WHERE (p.REF IS NULL OR TRIM(p.REF) = '')
          AND p.CODIGO IS NOT NULL
          AND TRIM(p.CODIGO) <> ''
@@ -8079,6 +8081,46 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     }
     this.logger.log(`restoreDataAlt: ${atualizados} produtos restaurados no Giga (${porData.size} data(s))`);
     return { atualizados };
+  }
+
+  /** Leva 4 (incidente DATAALT): a caixa tem índice em CODIGO? Sem índice a
+   *  varredura por chunks viraria full-scan repetido — aí só usamos o espelho. */
+  async caixaCodigoIndexed(): Promise<boolean> {
+    if (!this.pool) return false;
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>({ sql: 'SHOW INDEX FROM caixa', timeout: 15_000 });
+      return (rows as any[]).some((r) => String(r.Column_name || '').toUpperCase() === 'CODIGO');
+    } catch {
+      return false;
+    }
+  }
+
+  /** Leva 4: primeira venda (MIN(DATA)) por código na caixa do Giga, em um
+   *  chunk pequeno. Read-only, IN-list com variantes de zero-padding. */
+  async getFirstSaleDatesChunk(codigos: string[]): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    if (!this.pool || !codigos.length) return out;
+    const { allVariants, variantToOriginal } = this.expandSkus(codigos);
+    if (!allVariants.length) return out;
+    const placeholders = allVariants.map(() => '?').join(',');
+    const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+      {
+        sql: `SELECT CODIGO, DATE_FORMAT(MIN(DATA), '%Y-%m-%d') AS d
+                FROM caixa
+               WHERE CODIGO IN (${placeholders})
+               GROUP BY CODIGO`,
+        timeout: 30_000,
+      },
+      allVariants,
+    );
+    for (const r of rows as any[]) {
+      const orig = variantToOriginal.get(String(r.CODIGO || '').trim());
+      const d = String(r.d || '');
+      if (!orig || !/^\d{4}-\d{2}-\d{2}$/.test(d)) continue;
+      const prev = out.get(orig);
+      if (!prev || d < prev) out.set(orig, d);
+    }
+    return out;
   }
 
   async inserirProdutosBatch(produtos: Array<{
