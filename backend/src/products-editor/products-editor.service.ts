@@ -680,6 +680,78 @@ export class ProductsEditorService {
     return restaurados;
   }
 
+  /**
+   * FASE BACKUP (incidente DATAALT): conecta num Postgres TEMPORÁRIO
+   * (restaurado do backup de mês passado), lê codigo→dataAlt original de
+   * wincred_produtos, cruza com os códigos AINDA sujos no Giga e alimenta o
+   * restaurador em background. O banco de produção não é tocado como fonte.
+   */
+  async restaurarDataAltDeBackup(input: { url: string; userName?: string | null }) {
+    const url = String(input.url || '').trim();
+    if (!/^postgres(ql)?:\/\//.test(url)) throw new BadRequestException('URL do Postgres temporário inválida');
+    if (this.restauracao.rodando) return { ok: false, jaRodando: true, progresso: this.restauracao };
+
+    // 1) Códigos ainda sujos no Giga — paginado (são ~74k e o runReadOnly
+    //    limita 50k por query)
+    const sujos = new Set<string>();
+    let cursor = '';
+    for (let page = 0; page < 10; page++) {
+      const res = await this.erp.runReadOnly(
+        `SELECT CODIGO FROM produtos
+          WHERE DATAALT >= '2026-07-13' AND CODIGO > '${cursor.replace(/'/g, '')}'
+          ORDER BY CODIGO LIMIT 40000`,
+        { maxRows: 40000, timeoutMs: 60_000 },
+      );
+      const rows = res.rows as any[];
+      if (!rows.length) break;
+      for (const r of rows) {
+        const c = this.normalizeCodigo(String(r.CODIGO));
+        if (c) sujos.add(c);
+      }
+      cursor = String(rows[rows.length - 1].CODIGO);
+      if (rows.length < 40000) break;
+    }
+    if (!sujos.size) return { ok: true, mensagem: 'Nenhum produto sujo restante' };
+
+    // 2) Backup temporário: PrismaClient apontado pra URL passada
+    const { PrismaClient } = require('@prisma/client');
+    const temp = new PrismaClient({ datasources: { db: { url } } });
+    let backupRows: any[] = [];
+    try {
+      backupRows = await temp.$queryRawUnsafe(
+        `SELECT codigo, to_char("dataAlt", 'YYYY-MM-DD') AS d
+           FROM wincred_produtos
+          WHERE "dataAlt" IS NOT NULL`,
+      );
+    } finally {
+      await temp.$disconnect().catch(() => null);
+    }
+
+    // 3) Interseção: só restaura quem está sujo E existia no backup
+    const pairs: Array<{ codigo: string; dataAlt: string }> = [];
+    for (const r of backupRows) {
+      const cod = this.normalizeCodigo(String(r.codigo));
+      if (cod && sujos.has(cod) && r.d) pairs.push({ codigo: cod, dataAlt: String(r.d) });
+    }
+    if (!pairs.length) {
+      return { ok: true, mensagem: 'Backup lido, mas nenhum código sujo consta nele (todos são cadastros novos?)', backupLinhas: backupRows.length, sujos: sujos.size };
+    }
+
+    this.restauracao = {
+      rodando: true, fonte: 'backup', total: pairs.length, feitos: 0,
+      inicio: new Date().toISOString(), fim: null, erro: null,
+    };
+    void this.executarRestauracao(pairs, 'backup', input.userName || null)
+      .catch((e) => { this.restauracao.erro = (e as Error).message?.slice(0, 200) || 'erro'; })
+      .finally(() => { this.restauracao.rodando = false; this.restauracao.fim = new Date().toISOString(); });
+
+    return {
+      ok: true, background: true,
+      backupLinhas: backupRows.length, sujosNoGiga: sujos.size, paresARestaurar: pairs.length,
+      acompanhe: 'GET /products-editor/restaurar-dataalt/progresso',
+    };
+  }
+
   /** Últimos lotes de auditoria (tela mostra o histórico recente). */
   async auditRecent(limit = 200) {
     return (this.prisma as any).productEditAudit.findMany({

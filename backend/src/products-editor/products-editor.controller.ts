@@ -98,6 +98,20 @@ export class ProductsEditorController {
     });
   }
 
+  /**
+   * POST /products-editor/restaurar-dataalt-backup — Body: { url }
+   * Lê codigo→dataAlt do Postgres TEMPORÁRIO (restaurado do backup) e
+   * restaura os códigos ainda sujos. Roda em background.
+   */
+  @Post('restaurar-dataalt-backup')
+  async restaurarDataAltBackup(@Req() req: any, @Body() body: { url?: string }) {
+    this.requireAdmin(req);
+    return this.svc.restaurarDataAltDeBackup({
+      url: String(body?.url || ''),
+      userName: req?.user?.name || req?.user?.email || null,
+    });
+  }
+
   /** Progresso da restauração em background. */
   @Get('restaurar-dataalt/progresso')
   async restaurarProgresso(@Req() req: any) {
