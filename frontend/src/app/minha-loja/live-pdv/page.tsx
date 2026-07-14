@@ -718,6 +718,22 @@ export default function LivePdvPage() {
     setSessionStoreName(s.liveStoreName || '');
   }
 
+  // REABRE uma live encerrada (14/07): nada foi apagado no encerramento —
+  // volta o status e o console recupera busca/grades/venda na hora.
+  async function reopenLive() {
+    if (!sessionId) return;
+    if (!confirm(`Reabrir a live "${sessionTitle}"? Ela volta AO VIVO com busca e venda liberadas.`)) return;
+    try {
+      await api(`/live-pdv/sessions/${sessionId}/reopen`, { method: 'POST' });
+      setSessionStatus('live');
+      setActiveLive({ id: sessionId, title: sessionTitle, storeName: sessionStoreName });
+      setPastLives((prev) => prev.map((s) => (s.id === sessionId ? { ...s, status: 'live' } : s)));
+      await refreshCarts();
+    } catch (e: any) {
+      alert('Erro ao reabrir: ' + (e?.message || e));
+    }
+  }
+
   // Sai da live aberta SEM encerrar nada — volta pra tela de escolha.
   function backToPicker() {
     setSessionId(null);
@@ -1959,13 +1975,22 @@ export default function LivePdvPage() {
           🏬 {sessionStoreName || 'definir loja'}
         </button>
         {consulta ? (
-          <button
-            onClick={backToPicker}
-            title="Voltar pra lista de lives (não mexe em nada)"
-            className="rounded-md border border-slate-200 px-2 py-1 text-xs font-medium text-slate-500 hover:border-rose-300 hover:text-rose-600"
-          >
-            ← Trocar de live
-          </button>
+          <>
+            <button
+              onClick={reopenLive}
+              title="Reabre esta live (nada foi apagado — volta busca, grades e venda)"
+              className="rounded-md border border-emerald-400 bg-emerald-50 px-2 py-1 text-xs font-bold text-emerald-700 hover:bg-emerald-100"
+            >
+              ▶ Reabrir live
+            </button>
+            <button
+              onClick={backToPicker}
+              title="Voltar pra lista de lives (não mexe em nada)"
+              className="rounded-md border border-slate-200 px-2 py-1 text-xs font-medium text-slate-500 hover:border-rose-300 hover:text-rose-600"
+            >
+              ← Trocar de live
+            </button>
+          </>
         ) : (
           <button
             onClick={closeLive}
