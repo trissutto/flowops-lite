@@ -82,6 +82,8 @@ export default function EditorProdutosPage() {
   const [modalRef, setModalRef] = useState(false);
   const [modalPreco, setModalPreco] = useState(false);
   const [modalDesc, setModalDesc] = useState(false);
+  const [modalMarca, setModalMarca] = useState(false);
+  const [novaMarca, setNovaMarca] = useState('');
   const [preview, setPreview] = useState<Array<{ codigo: string; ref: string; field: string; antes: string; depois: string }> | null>(null);
   const [applying, setApplying] = useState(false);
 
@@ -207,6 +209,24 @@ export default function EditorProdutosPage() {
       return next;
     });
     setModalPreco(false); setPrecoValor('');
+  };
+
+  // Marca em bloco: aplica a marca digitada SÓ no campo MARCA das selecionadas.
+  const aplicarMarca = () => {
+    const target = novaMarca.trim().toUpperCase();
+    if (!target) return;
+    setPending((prev) => {
+      const next = new Map(prev);
+      for (const r of rows) {
+        if (!sel.has(r.codigo)) continue;
+        const cur = { ...(next.get(r.codigo) || {}) };
+        if (target === String(r.marca || '').toUpperCase()) delete (cur as any).marca;
+        else cur.marca = target;
+        if (Object.keys(cur).length) next.set(r.codigo, cur); else next.delete(r.codigo);
+      }
+      return next;
+    });
+    setModalMarca(false); setNovaMarca('');
   };
 
   const aplicarSubstituicao = () => {
@@ -379,6 +399,15 @@ export default function EditorProdutosPage() {
         {/* Barra de ações em bloco */}
         {rows.length > 0 && (
           <div className="mb-3 flex items-center gap-2 flex-wrap">
+            <button
+              onClick={() =>
+                setSel((prev) =>
+                  prev.size === rows.length ? new Set() : new Set(rows.map((r) => r.codigo)),
+                )
+              }
+              className="px-3 py-1.5 rounded-lg border-2 border-slate-300 bg-white text-slate-700 text-xs font-bold">
+              {sel.size === rows.length ? 'Desmarcar todas' : `Selecionar todas (${rows.length})`}
+            </button>
             <span className="text-xs text-slate-500">{sel.size} selecionada(s)</span>
             <button onClick={() => setModalRef(true)} disabled={!sel.size}
               className="px-3 py-1.5 rounded-lg border-2 border-amber-300 bg-amber-50 text-amber-900 text-xs font-bold disabled:opacity-40 flex items-center gap-1.5">
@@ -387,6 +416,10 @@ export default function EditorProdutosPage() {
             <button onClick={() => setModalPreco(true)} disabled={!sel.size}
               className="px-3 py-1.5 rounded-lg border-2 border-emerald-300 bg-emerald-50 text-emerald-900 text-xs font-bold disabled:opacity-40 flex items-center gap-1.5">
               <DollarSign className="w-3.5 h-3.5" /> Preço em bloco
+            </button>
+            <button onClick={() => setModalMarca(true)} disabled={!sel.size}
+              className="px-3 py-1.5 rounded-lg border-2 border-violet-300 bg-violet-50 text-violet-900 text-xs font-bold disabled:opacity-40 flex items-center gap-1.5">
+              <Tags className="w-3.5 h-3.5" /> Marca em bloco
             </button>
             <button onClick={() => setModalDesc(true)} disabled={!sel.size}
               className="px-3 py-1.5 rounded-lg border-2 border-sky-300 bg-sky-50 text-sky-900 text-xs font-bold disabled:opacity-40 flex items-center gap-1.5">
@@ -548,6 +581,26 @@ export default function EditorProdutosPage() {
             okDisabled={!isFinite(parsePreco(precoValor))}
             onOk={aplicarPreco}
             onCancel={() => setModalPreco(false)}
+          />
+        </Modal>
+      )}
+
+      {/* ── Modal: Marca em bloco ── */}
+      {modalMarca && (
+        <Modal title="Marca em bloco" onClose={() => setModalMarca(false)}>
+          <p className="text-xs text-slate-500 mb-2">
+            As {sel.size} variações selecionadas ficam com a marca digitada — só o campo MARCA muda.
+          </p>
+          <input value={novaMarca} maxLength={30}
+            onChange={(e) => setNovaMarca(e.target.value.toUpperCase())}
+            onKeyDown={(e) => e.key === 'Enter' && novaMarca.trim() && aplicarMarca()}
+            placeholder="Ex.: MARIE (máx 30)"
+            className="w-full px-3 py-2.5 border-2 border-slate-200 rounded-xl font-bold uppercase focus:border-violet-400 focus:outline-none" />
+          <ModalActions
+            okLabel="Aplicar às selecionadas"
+            okDisabled={!novaMarca.trim()}
+            onOk={aplicarMarca}
+            onCancel={() => setModalMarca(false)}
           />
         </Modal>
       )}
