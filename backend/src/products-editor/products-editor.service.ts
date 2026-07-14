@@ -404,7 +404,8 @@ export class ProductsEditorService {
         }
         const w = buildData(g.set);
         if (Object.keys(w).length) {
-          w.dataAlt = new Date();
+          // ⚠️ NÃO tocar dataAlt (incidente 14/07): é a data de CADASTRO que
+          // a promoção Liquida Antigos usa. Edição não muda idade da peça.
           await (this.prisma as any).wincredProduto.updateMany({
             where: { codigo: { in: g.codigos.map((c) => this.normalizeCodigo(c)!).filter(Boolean) } },
             data: w,
@@ -501,7 +502,7 @@ export class ProductsEditorService {
       await (this.prisma as any).wincredProduto
         .updateMany({
           where: { codigo: { in: chunk.map((c) => this.normalizeCodigo(c)!).filter(Boolean) } },
-          data: { marca, dataAlt: new Date() },
+          data: { marca }, // ⚠️ sem dataAlt (incidente 14/07 — data de cadastro/promo)
         })
         .catch(() => null);
     }
@@ -516,6 +517,99 @@ export class ProductsEditorService {
     await (this.prisma as any).productEditAudit.createMany({ data: audits });
     this.logger.log(`[editor-produtos] MARCA EM MASSA "${marca}" em ${codigos.length} variações (busca "${q}") por ${input.userName || '?'}`);
     return { ok: true, shadow: false, batchId, atualizados: atualizados || codigos.length, planejados: codigos.length };
+  }
+
+  // ── INCIDENTE 14/07 — DATAALT carimbada pelo editor (quebrou a promo) ────
+
+  /** Raio-X do estrago: quantas linhas do nativo têm dataAlt nos dias das
+   *  edições (13-14/07), separadas por flowIsSource (congeladas = fonte limpa). */
+  async dataAltDiagnostico() {
+    const p: any = this.prisma;
+    const sujoDesde = new Date('2026-07-13T00:00:00Z');
+    const [nativoSujo, nativoFrozenLimpo, nativoFrozenSujo, gigaEditados] = await Promise.all([
+      p.product.count({ where: { dataAlt: { gte: sujoDesde }, flowIsSource: false } }),
+      p.product.count({ where: { dataAlt: { lt: sujoDesde }, flowIsSource: true } }),
+      p.product.count({ where: { dataAlt: { gte: sujoDesde }, flowIsSource: true } }),
+      p.productEditAudit.findMany({
+        where: { applied: true, codigo: { notIn: ['MASSA', 'BATCH'] } },
+        select: { codigo: true },
+        distinct: ['codigo'],
+      }),
+    ]);
+    return {
+      explicacao: 'frozenLimpo = flowIsSource com data antiga (restauráveis já); frozenSujo + auditados pré-flag precisam do backup',
+      nativoComDataSuja_naoCongelado: nativoSujo,
+      congeladosComDataLimpa_restauraveis: nativoFrozenLimpo,
+      congeladosComDataSuja_precisamBackup: nativoFrozenSujo,
+      codigosDistintosNaAuditoria: gigaEditados.length,
+    };
+  }
+
+  /**
+   * Restaura DATAALT no Giga + espelho Wincred.
+   * - { source: 'native' } → usa a data CONGELADA da tabela nativa (linhas
+   *   flowIsSource=true com dataAlt anterior a 13/07 — o sync nunca as
+   *   sobrescreveu, então guardam a data de antes da edição).
+   * - { pairs: [{codigo, dataAlt:'YYYY-MM-DD'}] } → lista explícita (extraída
+   *   do backup do Postgres) pros casos que o nativo não cobre.
+   */
+  async restaurarDataAlt(input: { source?: 'native'; pairs?: Array<{ codigo: string; dataAlt: string }>; userName?: string | null }) {
+    let pairs: Array<{ codigo: string; dataAlt: string }> = [];
+    if (input.source === 'native') {
+      const rows: any[] = await (this.prisma as any).product.findMany({
+        where: { flowIsSource: true, dataAlt: { lt: new Date('2026-07-13T00:00:00Z'), not: null } },
+        select: { codigo: true, dataAlt: true },
+      });
+      pairs = rows.map((r) => ({
+        codigo: String(r.codigo),
+        dataAlt: new Date(r.dataAlt).toISOString().slice(0, 10),
+      }));
+    } else if (Array.isArray(input.pairs)) {
+      pairs = input.pairs
+        .filter((p) => p?.codigo && /^\d{4}-\d{2}-\d{2}$/.test(String(p.dataAlt || '')))
+        .map((p) => ({ codigo: String(p.codigo).trim(), dataAlt: String(p.dataAlt) }));
+    }
+    if (!pairs.length) throw new BadRequestException('Nada pra restaurar (pairs vazio ou nativo sem linhas limpas)');
+    if (pairs.length > 100000) throw new BadRequestException('Máximo 100.000 por chamada');
+
+    // 1) Giga (fonte que a promo lê via fallback + de onde os syncs copiam)
+    const { atualizados } = await this.erp.restoreDataAlt(pairs);
+
+    // 2) Espelho Wincred + nativa (linhas NÃO congeladas) — agrupado por data
+    const porData = new Map<string, string[]>();
+    for (const p of pairs) {
+      const list = porData.get(p.dataAlt) || [];
+      list.push(this.normalizeCodigo(p.codigo)!);
+      porData.set(p.dataAlt, list);
+    }
+    for (const [dataAlt, codigos] of porData.entries()) {
+      const d = new Date(`${dataAlt}T00:00:00Z`);
+      for (let i = 0; i < codigos.length; i += 10000) {
+        const chunk = codigos.slice(i, i + 10000);
+        await (this.prisma as any).wincredProduto
+          .updateMany({ where: { codigo: { in: chunk } }, data: { dataAlt: d } })
+          .catch(() => null);
+        await (this.prisma as any).product
+          .updateMany({ where: { codigo: { in: chunk } }, data: { dataAlt: d } })
+          .catch(() => null);
+      }
+    }
+
+    await (this.prisma as any).productEditAudit.create({
+      data: {
+        batchId: randomUUID(),
+        codigo: 'RESTAURACAO',
+        ref: null,
+        field: 'DATAALT_RESTAURADA',
+        oldValue: `fonte=${input.source || 'pairs'}`,
+        newValue: `${pairs.length} produtos, ${porData.size} data(s)`,
+        userName: input.userName || null,
+        applied: true,
+      },
+    }).catch(() => null);
+
+    this.logger.log(`[dataalt] RESTAURADOS ${atualizados} produtos no Giga (${porData.size} datas, fonte=${input.source || 'pairs'})`);
+    return { ok: true, restaurados: atualizados, pares: pairs.length, datasDistintas: porData.size };
   }
 
   /** Últimos lotes de auditoria (tela mostra o histórico recente). */

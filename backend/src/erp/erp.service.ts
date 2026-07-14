@@ -8008,7 +8008,12 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     try {
       await conn.beginTransaction();
       for (const g of grupos.values()) {
-        const sets = [...g.sets, `DATAALT = CURDATE()`, `OPERADOR = 'FLOWOPS'`];
+        // ⚠️ INCIDENTE 14/07: NUNCA tocar DATAALT aqui. DATAALT é a DATA DE
+        // CADASTRO que a promoção "Liquida antigos" usa pra decidir quem é
+        // antigo — carimbar CURDATE() tirou milhares de peças da promo.
+        // O espelho/nativa são atualizados direto pelo editor; não precisamos
+        // do DATAALT pro sync enxergar a mudança.
+        const sets = [...g.sets, `OPERADOR = 'FLOWOPS'`];
         // Lotes de 500 códigos por IN() pra não estourar tamanho de query.
         for (let i = 0; i < g.codigos.length; i += 500) {
           const chunk = g.codigos.slice(i, i + 500);
@@ -8028,6 +8033,55 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     } catch (e) {
       await conn.rollback();
       this.logger.error(`updateProdutosCampos falhou - rollback: ${(e as Error).message}`);
+      throw e;
+    } finally {
+      conn.release();
+    }
+  }
+
+  /**
+   * RESTAURAÇÃO DO INCIDENTE 14/07: devolve a DATA DE CADASTRO (DATAALT)
+   * original de produtos que o editor carimbou com a data da edição —
+   * o que tirou peças antigas da promoção Liquida Antigos.
+   * Agrupa por data (poucos UPDATEs) e cobre variantes de zero-padding.
+   */
+  async restoreDataAlt(pairs: Array<{ codigo: string; dataAlt: string }>): Promise<{ atualizados: number }> {
+    if (!this.isWriteEnabled) {
+      throw new Error('ERP_WRITE_ENABLED=false. Setar env=true pra liberar restauração.');
+    }
+    if (!this.pool) throw new Error('ERP MySQL nao esta conectado');
+    const clean = pairs.filter((p) => p.codigo && /^\d{4}-\d{2}-\d{2}$/.test(String(p.dataAlt || '')));
+    if (!clean.length) return { atualizados: 0 };
+
+    // Agrupa por DATA → 1 UPDATE por data (com IN de todas as variantes).
+    const porData = new Map<string, string[]>();
+    for (const p of clean) {
+      const list = porData.get(p.dataAlt) || [];
+      for (const v of this.skuVariants(String(p.codigo).trim())) list.push(v);
+      porData.set(p.dataAlt, list);
+    }
+
+    const conn = await this.pool.getConnection();
+    let atualizados = 0;
+    try {
+      await conn.beginTransaction();
+      for (const [dataAlt, codigos] of porData.entries()) {
+        for (let i = 0; i < codigos.length; i += 500) {
+          const chunk = codigos.slice(i, i + 500);
+          const placeholders = chunk.map(() => '?').join(',');
+          const [result]: any = await conn.query(
+            `UPDATE produtos SET DATAALT = ? WHERE CODIGO IN (${placeholders})`,
+            [dataAlt, ...chunk],
+          );
+          atualizados += Number(result.affectedRows) || 0;
+        }
+      }
+      await conn.commit();
+      this.logger.log(`restoreDataAlt: ${atualizados} produtos restaurados no Giga (${porData.size} data(s))`);
+      return { atualizados };
+    } catch (e) {
+      await conn.rollback();
+      this.logger.error(`restoreDataAlt falhou - rollback: ${(e as Error).message}`);
       throw e;
     } finally {
       conn.release();
