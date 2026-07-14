@@ -48,6 +48,14 @@ export class GigaMirrorService implements OnModuleInit {
         this.logger.error(`backfill inicial falhou: ${e?.message || e}`),
       );
     }, 8000);
+    // Backfill da CAIXA DETALHADA (14/07): histórico mensal desde
+    // GIGA_MIRROR_FROM quando a tabela está vazia. Atraso maior pra não
+    // competir com o boot nem com o backfill acima.
+    setTimeout(() => {
+      this.maybeBackfillCaixaMov().catch((e) =>
+        this.logger.error(`backfill caixa_mov falhou: ${e?.message || e}`),
+      );
+    }, 30_000);
   }
 
   private async maybeBackfill() {
@@ -115,10 +123,129 @@ export class GigaMirrorService implements OnModuleInit {
         this.logger.error(`sync estoque falhou (espelho preservado): ${e?.message || e}`);
         await this.setState('estoque', null, String(e?.message || e));
       }
+      // CAIXA DETALHADA (14/07): janela deslizante de 3 dias a cada hora.
+      // Backfill histórico roda no boot quando a tabela está vazia.
+      try {
+        const n = await this.syncCaixaMovWindow(3);
+        this.logger.log(`espelho giga_caixa_mov (janela 3d): ${n} linhas`);
+      } catch (e: any) {
+        this.logger.error(`sync caixa_mov falhou (espelho preservado): ${e?.message || e}`);
+        await this.setState('caixa_mov', null, String(e?.message || e));
+      }
+      // FUNCIONÁRIOS (14/07): full replace horário (tabela pequena).
+      try {
+        const n = await this.syncFuncionarios();
+        this.logger.log(`espelho wincred_funcionarios: ${n} linhas`);
+      } catch (e: any) {
+        this.logger.error(`sync funcionarios falhou (espelho preservado): ${e?.message || e}`);
+        await this.setState('funcionarios', null, String(e?.message || e));
+      }
     } finally {
       this.syncing = false;
     }
     return this.getState();
+  }
+
+  // ── CAIXA DETALHADA (giga_caixa_mov) ──────────────────────────────────────
+
+  private mapCaixaMovRow(r: any) {
+    const reg = r.REGISTRO != null ? String(r.REGISTRO).trim() : '';
+    if (!reg) return null;
+    const d = (v: any) => (v ? new Date(v) : null);
+    return {
+      registro: reg.slice(0, 20),
+      numero: r.NUMERO != null ? String(r.NUMERO).trim().slice(0, 20) : null,
+      controle: r.CONTROLE != null ? String(r.CONTROLE).trim().slice(0, 20) : null,
+      codigo: r.CODIGO != null ? String(r.CODIGO).trim().slice(0, 14) : null,
+      data: d(r.DATA),
+      dataFec: d(r.DATAFEC),
+      hora: r.HORA != null ? String(r.HORA).trim().slice(0, 10) : null,
+      descricao: r.DESCRICAO != null ? String(r.DESCRICAO).trim().slice(0, 120) : null,
+      quantidade: r.QUANTIDADE != null ? Number(r.QUANTIDADE) : null,
+      valor: r.VALOR != null ? Number(r.VALOR) : null,
+      valorTotal: r.VALORTOTAL != null ? Number(r.VALORTOTAL) : null,
+      operador: r.OPERADOR != null ? String(r.OPERADOR).trim().slice(0, 30) : null,
+      vendedor: r.VENDEDOR != null ? String(r.VENDEDOR).trim().slice(0, 40) : null,
+      cliente: r.CLIENTE != null ? String(r.CLIENTE).trim().slice(0, 80) : null,
+      loja: r.LOJA != null ? String(r.LOJA).trim().slice(0, 4) : null,
+      marcado: r.MARCADO != null ? String(r.MARCADO).trim().slice(0, 4) : null,
+    };
+  }
+
+  /** Re-copia [hoje-days, amanhã): pega vendas novas, canceladas e marcados. */
+  private async syncCaixaMovWindow(days: number): Promise<number> {
+    const from = new Date();
+    from.setUTCHours(0, 0, 0, 0);
+    from.setUTCDate(from.getUTCDate() - days);
+    const to = this.windowTo();
+    return this.syncCaixaMovRange(from, to);
+  }
+
+  private async syncCaixaMovRange(from: Date, to: Date): Promise<number> {
+    // Busca o Giga ANTES de tocar o Postgres (falha → espelho intacto).
+    const rows = await this.erp.getCaixaMovRows(from, to);
+    const data = rows.map((r) => this.mapCaixaMovRow(r)).filter(Boolean) as any[];
+    // Dedup por registro (PK) — o Giga não deveria repetir, mas defensivo.
+    const byReg = new Map(data.map((d) => [d.registro, d]));
+    const unique = Array.from(byReg.values());
+    await this.prisma.$transaction(async (tx: any) => {
+      await tx.gigaCaixaMov.deleteMany({ where: { data: { gte: from, lt: to } } });
+      for (let i = 0; i < unique.length; i += 5000) {
+        await tx.gigaCaixaMov.createMany({
+          data: unique.slice(i, i + 5000),
+          skipDuplicates: true,
+        });
+      }
+    }, { timeout: 120_000 });
+    await this.setState('caixa_mov', unique.length, null);
+    return unique.length;
+  }
+
+  /** Backfill histórico em chunks MENSAIS desde GIGA_MIRROR_FROM. Roda no boot
+   *  quando giga_caixa_mov está vazia (fire-and-forget, sequencial, logado). */
+  private async maybeBackfillCaixaMov(): Promise<void> {
+    const count = await (this.prisma as any).gigaCaixaMov.count().catch(() => -1);
+    if (count !== 0) return; // já tem dados (ou erro) — não backfilla
+    this.logger.log('[caixa_mov] tabela vazia — backfill histórico em chunks mensais');
+    const start = this.windowFrom();
+    const end = this.windowTo();
+    let cursor = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), 1));
+    let total = 0;
+    while (cursor < end) {
+      const next = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth() + 1, 1));
+      const chunkTo = next < end ? next : end;
+      try {
+        const n = await this.syncCaixaMovRange(cursor, chunkTo);
+        total += n;
+        this.logger.log(`[caixa_mov] backfill ${cursor.toISOString().slice(0, 7)}: ${n} linhas (total ${total})`);
+      } catch (e: any) {
+        this.logger.error(`[caixa_mov] backfill ${cursor.toISOString().slice(0, 7)} falhou: ${e?.message || e}`);
+      }
+      cursor = next;
+    }
+    this.logger.log(`[caixa_mov] backfill concluído: ${total} linhas`);
+  }
+
+  // ── FUNCIONÁRIOS (wincred_funcionarios) ───────────────────────────────────
+
+  private async syncFuncionarios(): Promise<number> {
+    const rows = await this.erp.getFuncionariosRawAll();
+    if (!rows.length) return 0; // Giga vazio/fora → preserva o espelho
+    const data = rows.map((r) => ({
+      codigo: r.codigo.slice(0, 14),
+      nome: r.nome ? r.nome.slice(0, 80) : null,
+      apelido: r.apelido ? r.apelido.slice(0, 40) : null,
+      loja: r.loja ? r.loja.slice(0, 4) : null,
+      inativo: !!r.inativo,
+    }));
+    const byCod = new Map(data.map((d) => [d.codigo, d]));
+    const unique = Array.from(byCod.values());
+    await this.prisma.$transaction(async (tx: any) => {
+      await tx.wincredFuncionario.deleteMany({});
+      await tx.wincredFuncionario.createMany({ data: unique, skipDuplicates: true });
+    });
+    await this.setState('funcionarios', unique.length, null);
+    return unique.length;
   }
 
   private async syncTransferencias(): Promise<number> {

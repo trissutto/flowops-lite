@@ -234,6 +234,28 @@ export class WincredMirrorService {
   //  SYNC PRODUTOS (full)
   // ─────────────────────────────────────────────────────────────────────
 
+  /**
+   * EAN no espelho (14/07): a coluna de código de barras varia por instalação
+   * do Wincred (EAN13/EAN/CODBARRAS/...). Sonda uma vez qual existe e inclui
+   * no SELECT dos syncs como EAN_MIRROR. Sem coluna → ean fica null (o
+   * fallback Giga do bipe por EAN continua cobrindo).
+   */
+  private eanColCache: { col: string | null; at: number } | null = null;
+  private async detectEanColumn(pool: any): Promise<string | null> {
+    const now = Date.now();
+    if (this.eanColCache && now - this.eanColCache.at < 6 * 3600_000) return this.eanColCache.col;
+    let col: string | null = null;
+    try {
+      const [cols] = await pool.query(`SHOW COLUMNS FROM produtos`);
+      const names = new Set((cols as any[]).map((c) => String(c.Field || '').toUpperCase()));
+      for (const cand of ['EAN13', 'EAN', 'CODBARRAS', 'CODIGOBARRAS', 'COD_BARRAS', 'CODIGO_BARRAS']) {
+        if (names.has(cand)) { col = cand; break; }
+      }
+    } catch { /* segue sem EAN */ }
+    this.eanColCache = { col, at: now };
+    return col;
+  }
+
   async syncProdutos(): Promise<SyncResult> {
     const t0 = Date.now();
     const pool: any = (this.erp as any).pool;
@@ -250,13 +272,15 @@ export class WincredMirrorService {
       // MESMA tabela inteira de hora em hora há semanas sem incidente
       // (~350k linhas ≈ 1-2min de SELECT + inserts locais).
       this.logger.log(`[produtos] iniciando full sync — ${total} linhas no Wincred (leitura única)`);
+      const eanCol = await this.detectEanColumn(pool);
+      const eanSelect = eanCol ? `, \`${eanCol}\` AS EAN_MIRROR` : '';
       const [rows] = await pool.query({
         sql: `SELECT CODIGO, GRUPO, NOMEGRUPO, DESCRICAOPDV, DESCRICAOCOMPLETA,
                   CUSTO, VENDAUN, FORNECEDOR, UNIDADE, ESTOQUE, MARGEM, DATAALT,
                   SUBGRUPO, COR, TAMANHO, MARCA, REF, CODFORNECEDOR, OPERADOR,
                   CONFPRECO, TRIBUTO, NCM, PLUS_SIZE, ID, CATEGORIAS,
                   COD_PIS, ALIQ_PIS, COD_COFINS, ALIQ_COFINS, ALIQ_ICMS,
-                  CST, CSOSN, CFOP
+                  CST, CSOSN, CFOP${eanSelect}
              FROM produtos`,
         timeout: 300_000,
       });
@@ -305,6 +329,7 @@ export class WincredMirrorService {
             cst: r.CST || null,
             csosn: r.CSOSN || null,
             cfop: r.CFOP != null ? Number(r.CFOP) : null,
+            ean: r.EAN_MIRROR ? String(r.EAN_MIRROR).trim().slice(0, 20) || null : null,
           }));
 
       // TRUNCATE só DEPOIS do SELECT dar certo — a janela em que o espelho
@@ -487,6 +512,8 @@ export class WincredMirrorService {
     let produtosAtualizados = 0;
     let maxDataAlt: Date | null = null;
     try {
+      const eanColInc = await this.detectEanColumn(pool);
+      const eanSelectInc = eanColInc ? `, \`${eanColInc}\` AS EAN_MIRROR` : '';
       const [rows] = await pool.query(
         {
           sql: `SELECT CODIGO, GRUPO, NOMEGRUPO, DESCRICAOPDV, DESCRICAOCOMPLETA,
@@ -494,7 +521,7 @@ export class WincredMirrorService {
                 SUBGRUPO, COR, TAMANHO, MARCA, REF, CODFORNECEDOR, OPERADOR,
                 CONFPRECO, TRIBUTO, NCM, PLUS_SIZE, ID, CATEGORIAS,
                 COD_PIS, ALIQ_PIS, COD_COFINS, ALIQ_COFINS, ALIQ_ICMS,
-                CST, CSOSN, CFOP
+                CST, CSOSN, CFOP${eanSelectInc}
            FROM produtos
           WHERE DATAALT IS NOT NULL
             AND DATAALT >= ?
@@ -546,6 +573,7 @@ export class WincredMirrorService {
           cst: r.CST || null,
           csosn: r.CSOSN || null,
           cfop: r.CFOP != null ? Number(r.CFOP) : null,
+          ean: r.EAN_MIRROR ? String(r.EAN_MIRROR).trim().slice(0, 20) || null : null,
         };
 
         try {

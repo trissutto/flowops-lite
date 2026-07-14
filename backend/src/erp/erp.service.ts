@@ -261,6 +261,78 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     return out;
   }
 
+  /** Espelho de funcionarios pronto? (vazio = nunca sincronizou → Giga) */
+  private mirrorFuncReadyCache: { ok: boolean; at: number } | null = null;
+  private async mirrorFuncReady(): Promise<boolean> {
+    const now = Date.now();
+    if (this.mirrorFuncReadyCache && now - this.mirrorFuncReadyCache.at < 60_000) {
+      return this.mirrorFuncReadyCache.ok;
+    }
+    const n = await (this.prismaFlow as any).wincredFuncionario.count().catch(() => 0);
+    const ok = Number(n) > 5;
+    this.mirrorFuncReadyCache = { ok, at: now };
+    return ok;
+  }
+
+  /** Espelho tem EANs preenchidos? (coluna nova — só usa depois do 1º sync) */
+  private mirrorEanReadyCache: { ok: boolean; at: number } | null = null;
+  private async mirrorEanReady(): Promise<boolean> {
+    const now = Date.now();
+    if (this.mirrorEanReadyCache && now - this.mirrorEanReadyCache.at < 300_000) {
+      return this.mirrorEanReadyCache.ok;
+    }
+    const n = await (this.prismaFlow as any).wincredProduto
+      .count({ where: { ean: { not: null } } })
+      .catch(() => 0);
+    const ok = Number(n) > 100;
+    this.mirrorEanReadyCache = { ok, at: now };
+    return ok;
+  }
+
+  /** normalização de codigo padrão wincred (sem zeros à esquerda). */
+  private wincredCodigo(raw: string): string {
+    const s = String(raw ?? '').trim();
+    if (!s || !/^\d+$/.test(s)) return s;
+    return s.replace(/^0+/, '') || '0';
+  }
+
+  private async getEansBySkusFromMirror(skus: string[]): Promise<Record<string, string>> {
+    const originals = skus.map((s) => String(s || '').trim()).filter(Boolean);
+    const normToOriginal = new Map<string, string>();
+    for (const s of originals) {
+      const n = this.wincredCodigo(s);
+      if (!normToOriginal.has(n)) normToOriginal.set(n, s);
+    }
+    const rows: any[] = await (this.prismaFlow as any).wincredProduto.findMany({
+      where: { codigo: { in: Array.from(normToOriginal.keys()) }, ean: { not: null } },
+      select: { codigo: true, ean: true },
+    });
+    const map: Record<string, string> = {};
+    for (const r of rows) {
+      const original = normToOriginal.get(String(r.codigo).trim());
+      const ean = r.ean ? String(r.ean).trim() : '';
+      if (original && ean && ean.length >= 8 && !map[original]) map[original] = ean;
+    }
+    return map;
+  }
+
+  private async findSkuByAnyEanFromMirror(list: string[]): Promise<string | null> {
+    // 1) codigo primeiro (mesma prioridade do caminho ao vivo: etiquetas da
+    //    Lurd's carregam o CODIGO interno como barcode).
+    const norms = Array.from(new Set(list.map((v) => this.wincredCodigo(v))));
+    const byCodigo: any = await (this.prismaFlow as any).wincredProduto.findFirst({
+      where: { codigo: { in: norms } },
+      select: { codigo: true },
+    });
+    if (byCodigo?.codigo) return String(byCodigo.codigo).trim();
+    // 2) colunas de EAN propriamente ditas.
+    const byEan: any = await (this.prismaFlow as any).wincredProduto.findFirst({
+      where: { ean: { in: list } },
+      select: { codigo: true },
+    });
+    return byEan?.codigo ? String(byEan.codigo).trim() : null;
+  }
+
   /** getSalesGrossByStores pelo espelho giga_caixa_diario (bruto por loja/dia). */
   private async getSalesGrossByStoresFromMirror(
     storeCodes: string[],
@@ -3608,7 +3680,15 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * qual SKU Ã© via esse mapa invertido.
    */
   async getEansBySkus(skus: string[]): Promise<Record<string, string>> {
-    if (!skus.length || !this.pool) return {};
+    if (!skus.length) return {};
+    if (this.mirrorReadsEnabled) {
+      try {
+        if (await this.mirrorEanReady()) return (await this.getEansBySkusFromMirror(skus)) as Record<string, string>;
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] getEansBySkus: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
+    if (!this.pool) return {};
 
     const candidates = ['EAN13', 'EAN', 'CODBARRAS', 'CODIGOBARRAS', 'COD_BARRAS', 'CODIGO_BARRAS'];
 
@@ -3660,9 +3740,27 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * diferente de zeros).
    */
   async findSkuByAnyEan(ean: string): Promise<string | null> {
-    if (!this.pool || !ean) return null;
+    if (!ean) return null;
     const raw = ean.trim();
     if (!raw) return null;
+    if (this.mirrorReadsEnabled) {
+      try {
+        if (await this.mirrorEanReady()) {
+          const strippedM = raw.replace(/^0+/, '');
+          const variantsM = new Set<string>([raw, strippedM]);
+          if (/^\d+$/.test(raw)) {
+            variantsM.add(raw.padStart(13, '0'));
+            variantsM.add(raw.padStart(14, '0'));
+          }
+          const hit = await this.findSkuByAnyEanFromMirror(Array.from(variantsM).filter(Boolean));
+          if (hit) return hit;
+          // miss no espelho → deixa o Giga tentar (EAN recém-cadastrado)
+        }
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] findSkuByAnyEan: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
+    if (!this.pool) return null;
 
     // Gera variantes: cru, sem zeros Ã  esquerda, padded pra 13/14 dÃ­gitos
     const stripped = raw.replace(/^0+/, '');
@@ -8640,15 +8738,95 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * Filtra por status ativo + LOJA. Usado pelo sync /retaguarda/vendedoras
    * pra popular PdvActiveSeller.
    */
+  /**
+   * FONTE DO ESPELHO giga_caixa_mov: linhas cruas da `caixa` num intervalo
+   * [from, to). Usado SÓ pelo GigaMirrorService (janela de 3 dias no cron +
+   * backfill mensal no boot).
+   */
+  async getCaixaMovRows(from: Date, to: Date): Promise<any[]> {
+    if (!this.pool) return [];
+    const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+      `SELECT REGISTRO, NUMERO, CONTROLE, CODIGO, DATA, DATAFEC, HORA, DESCRICAO,
+              QUANTIDADE, VALOR, VALORTOTAL, OPERADOR, VENDEDOR, CLIENTE, LOJA, MARCADO
+         FROM caixa
+        WHERE DATA >= ? AND DATA < ?`,
+      [from, to],
+    );
+    return rows as any[];
+  }
+
+  /**
+   * FONTE DO ESPELHO wincred_funcionarios: todas as vendedoras (com flag de
+   * inatividade quando a coluna existir). Usado SÓ pelo GigaMirrorService.
+   */
+  async getFuncionariosRawAll(): Promise<Array<{ codigo: string; nome: string | null; apelido: string | null; loja: string | null; inativo: boolean }>> {
+    if (!this.pool) return [];
+    let rows: mysql.RowDataPacket[] = [];
+    let hasFlag = true;
+    try {
+      const [r] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT CODIGO, NOME, APELIDO, LOJA, FLAG_INATIVO FROM funcionarios`,
+      );
+      rows = r;
+    } catch {
+      hasFlag = false;
+      const [r] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT CODIGO, NOME, APELIDO, LOJA FROM funcionarios`,
+      );
+      rows = r;
+    }
+    return (rows as any[])
+      .map((r) => ({
+        codigo: String(r.CODIGO || '').trim(),
+        nome: r.NOME ? String(r.NOME).trim() : null,
+        apelido: r.APELIDO ? String(r.APELIDO).trim() : null,
+        loja: r.LOJA ? String(r.LOJA).trim().toUpperCase() : null,
+        inativo: hasFlag
+          ? !(r.FLAG_INATIVO == null || r.FLAG_INATIVO === 'N' || r.FLAG_INATIVO === 0 || r.FLAG_INATIVO === '0')
+          : false,
+      }))
+      .filter((r) => r.codigo);
+  }
+
   async getFuncionariosAtivosByLoja(storeCodes: string[]): Promise<Array<{
     codigo: string;
     nome: string;
     apelido: string | null;
     storeCode: string;
   }>> {
-    if (!this.pool) return [];
     const codes = storeCodes.filter(Boolean);
     if (codes.length === 0) return [];
+    if (this.mirrorReadsEnabled) {
+      try {
+        if (await this.mirrorFuncReady()) {
+          // Lojas com e sem zero à esquerda (mesma tolerância dos outros paths).
+          const lojaSet = new Set<string>();
+          for (const c of codes) {
+            const s = String(c).trim().toUpperCase();
+            lojaSet.add(s);
+            if (/^\d{1,2}$/.test(s)) {
+              lojaSet.add(s.padStart(2, '0'));
+              lojaSet.add(s.replace(/^0+/, '') || s);
+            }
+          }
+          const rows: any[] = await (this.prismaFlow as any).wincredFuncionario.findMany({
+            where: { loja: { in: Array.from(lojaSet) }, inativo: false },
+            orderBy: [{ loja: 'asc' }, { nome: 'asc' }],
+          });
+          return rows
+            .map((r) => ({
+              codigo: String(r.codigo || '').trim(),
+              nome: String(r.nome || '').trim(),
+              apelido: r.apelido ? String(r.apelido).trim() : null,
+              storeCode: String(r.loja || '').trim().toUpperCase(),
+            }))
+            .filter((r) => r.codigo && r.nome);
+        }
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] getFuncionariosAtivosByLoja: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
+    if (!this.pool) return [];
     try {
       // Tenta primeiro com FLAG_INATIVO (estrutura comum do Wincred).
       // Se nÃ£o existir essa coluna, cai pro select sem filtro e o caller filtra.
