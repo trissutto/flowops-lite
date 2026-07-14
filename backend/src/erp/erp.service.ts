@@ -2,6 +2,7 @@
 import { ConfigService } from '@nestjs/config';
 import * as mysql from 'mysql2/promise';
 import { StockEntry } from '../routing/types';
+import { PrismaService } from '../prisma/prisma.service';
 
 /**
  * Cliente para o MySQL do ERP gigasistemas21 (WinCred).
@@ -23,7 +24,287 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(ErpService.name);
   private pool: mysql.Pool;
 
-  constructor(private readonly config: ConfigService) {}
+  constructor(
+    private readonly config: ConfigService,
+    private readonly prismaFlow: PrismaService,
+  ) {}
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // LEITURAS PELO ESPELHO — GIGA_MIRROR_READS=1 (pacote 1 da migração 13/07)
+  //
+  // Intercepta as consultas de ESTOQUE (giga_estoque) e de FATURAMENTO BRUTO
+  // (giga_caixa_diario) DENTRO do ErpService: todos os consumidores (products,
+  // stock, catalog, live, routing, intelligence, financeiro, faturamento)
+  // trocam de fonte de uma vez, sem tocar em tela nenhuma.
+  //
+  // Segurança: qualquer erro OU espelho vazio (nunca sincronizado) → cai pro
+  // Giga ao vivo, query original intocada. Kill-switch: remover a env.
+  // ═══════════════════════════════════════════════════════════════════════
+
+  private get mirrorReadsEnabled(): boolean {
+    return String(process.env.GIGA_MIRROR_READS ?? '').trim() === '1' && !!this.prismaFlow;
+  }
+
+  /** Cache 60s: espelho de estoque tem dados? (vazio = nunca sincronizou → Giga) */
+  private mirrorStockReadyCache: { ok: boolean; at: number } | null = null;
+  private async mirrorStockReady(): Promise<boolean> {
+    const now = Date.now();
+    if (this.mirrorStockReadyCache && now - this.mirrorStockReadyCache.at < 60_000) {
+      return this.mirrorStockReadyCache.ok;
+    }
+    const n = await (this.prismaFlow as any).gigaEstoque.count().catch(() => 0);
+    const ok = Number(n) > 1000;
+    this.mirrorStockReadyCache = { ok, at: now };
+    return ok;
+  }
+
+  private mirrorCaixaReadyCache: { ok: boolean; at: number } | null = null;
+  private async mirrorCaixaReady(): Promise<boolean> {
+    const now = Date.now();
+    if (this.mirrorCaixaReadyCache && now - this.mirrorCaixaReadyCache.at < 60_000) {
+      return this.mirrorCaixaReadyCache.ok;
+    }
+    const n = await (this.prismaFlow as any).gigaCaixaDiario.count().catch(() => 0);
+    const ok = Number(n) > 10;
+    this.mirrorCaixaReadyCache = { ok, at: now };
+    return ok;
+  }
+
+  /** getStock (roteamento) pelo espelho — replica a resolução anti-colisão. */
+  private async getStockFromMirror(skus: string[], storeCodes: string[]): Promise<StockEntry[]> {
+    const uniqueOriginals = Array.from(
+      new Set(skus.map((s) => String(s || '').trim()).filter(Boolean)),
+    );
+    if (!uniqueOriginals.length) return [];
+    const { allVariants, variantToOriginal } = this.expandSkus(uniqueOriginals);
+    if (!allVariants.length) return [];
+
+    // PASSO 1 — resolve o CODIGO real no cadastro (espelho giga_produto), com a
+    // mesma regra anti-colisão do caminho ao vivo (prioriza padding mais longo).
+    const prodRows: any[] = await (this.prismaFlow as any).gigaProduto.findMany({
+      where: { codigo: { in: allVariants } },
+      select: { codigo: true },
+    });
+    const codigoGigaToOriginal = new Map<string, string>();
+    for (const r of prodRows) {
+      const codigoGiga = String(r.codigo).trim();
+      const originalSku = variantToOriginal.get(codigoGiga);
+      if (!originalSku) continue;
+      const previous = Array.from(codigoGigaToOriginal.entries()).find(([, o]) => o === originalSku)?.[0];
+      if (!previous) codigoGigaToOriginal.set(codigoGiga, originalSku);
+      else if (codigoGiga.length > previous.length) {
+        codigoGigaToOriginal.delete(previous);
+        codigoGigaToOriginal.set(codigoGiga, originalSku);
+      }
+    }
+    if (!codigoGigaToOriginal.size) return [];
+
+    // PASSO 2 — estoque de TODAS as variantes de padding dos códigos reais.
+    const codigoVariantToOriginal = new Map<string, string>();
+    const codigosVariants: string[] = [];
+    for (const [codigoGiga, originalSku] of codigoGigaToOriginal.entries()) {
+      for (const v of this.skuVariants(codigoGiga)) {
+        codigosVariants.push(v);
+        if (!codigoVariantToOriginal.has(v)) codigoVariantToOriginal.set(v, originalSku);
+      }
+    }
+
+    // Lojas com e sem zero à esquerda (mesma tolerância do caminho ao vivo).
+    const lojaToStoreCode = new Map<string, string>();
+    for (const sc of storeCodes) {
+      const s = String(sc ?? '').trim();
+      if (!s) continue;
+      if (!lojaToStoreCode.has(s)) lojaToStoreCode.set(s, s);
+      if (/^\d{1,2}$/.test(s)) {
+        const padded = s.padStart(2, '0');
+        if (!lojaToStoreCode.has(padded)) lojaToStoreCode.set(padded, s);
+        const stripped = s.replace(/^0+/, '') || s;
+        if (!lojaToStoreCode.has(stripped)) lojaToStoreCode.set(stripped, s);
+      }
+    }
+
+    const rows: any[] = await (this.prismaFlow as any).gigaEstoque.findMany({
+      where: {
+        codigo: { in: codigosVariants },
+        loja: { in: Array.from(lojaToStoreCode.keys()) },
+        estoque: { gt: 0 },
+      },
+      select: { codigo: true, loja: true, estoque: true },
+    });
+    const agg = new Map<string, number>();
+    for (const r of rows) {
+      const storeCode = lojaToStoreCode.get(String(r.loja).trim()) ?? String(r.loja).trim();
+      const originalSku = codigoVariantToOriginal.get(String(r.codigo).trim());
+      if (!originalSku) continue;
+      const key = `${storeCode}::${originalSku}`;
+      agg.set(key, (agg.get(key) || 0) + (Number(r.estoque) || 0));
+    }
+    const out: StockEntry[] = [];
+    for (const [key, qty] of agg.entries()) {
+      const [storeCode, originalSku] = key.split('::');
+      out.push({ storeCode, sku: originalSku, availableQty: qty });
+    }
+    return out;
+  }
+
+  /** getStockTotalBySkus pelo espelho — inclui a regra "existe no cadastro = 0". */
+  private async getStockTotalBySkusFromMirror(skus: string[]): Promise<Record<string, number>> {
+    const unique = Array.from(new Set(skus.filter((s) => s && s.trim()))).map((s) => s.trim());
+    if (!unique.length) return {};
+    const { allVariants, variantToOriginal } = this.expandSkus(unique);
+    if (!allVariants.length) return {};
+
+    const existsInProducts = new Set<string>();
+    const prodRows: any[] = await (this.prismaFlow as any).gigaProduto.findMany({
+      where: { codigo: { in: allVariants } },
+      select: { codigo: true },
+    });
+    for (const r of prodRows) {
+      const codigoGiga = String(r.codigo).trim();
+      existsInProducts.add(variantToOriginal.get(codigoGiga) || codigoGiga);
+    }
+
+    const rows: any[] = await (this.prismaFlow as any).gigaEstoque.findMany({
+      where: { codigo: { in: allVariants } },
+      select: { codigo: true, estoque: true },
+    });
+    const result: Record<string, number> = {};
+    for (const r of rows) {
+      const original = variantToOriginal.get(String(r.codigo).trim()) || String(r.codigo).trim();
+      result[original] = (result[original] || 0) + (Number(r.estoque) || 0);
+    }
+    for (const sku of existsInProducts) {
+      if (!(sku in result)) result[sku] = 0;
+    }
+    return result;
+  }
+
+  /** getStockBySkusDetailed pelo espelho (por loja, só positivos). */
+  private async getStockBySkusDetailedFromMirror(
+    skus: string[],
+  ): Promise<Record<string, Array<{ storeCode: string; qty: number }>>> {
+    const unique = Array.from(new Set(skus.filter((s) => s && s.trim()))).map((s) => s.trim());
+    if (!unique.length) return {};
+    const { allVariants, variantToOriginal } = this.expandSkus(unique);
+    if (!allVariants.length) return {};
+    const rows: any[] = await (this.prismaFlow as any).gigaEstoque.findMany({
+      where: { codigo: { in: allVariants }, estoque: { gt: 0 } },
+      select: { codigo: true, loja: true, estoque: true },
+    });
+    const agg = new Map<string, Map<string, number>>();
+    for (const r of rows) {
+      const original = variantToOriginal.get(String(r.codigo).trim()) || String(r.codigo).trim();
+      const storeCode = String(r.loja).trim();
+      const qty = Number(r.estoque) || 0;
+      if (qty <= 0) continue;
+      if (!agg.has(original)) agg.set(original, new Map());
+      const lojaMap = agg.get(original)!;
+      lojaMap.set(storeCode, (lojaMap.get(storeCode) || 0) + qty);
+    }
+    const map: Record<string, Array<{ storeCode: string; qty: number }>> = {};
+    for (const [sku, lojaMap] of agg.entries()) {
+      map[sku] = Array.from(lojaMap.entries())
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([storeCode, qty]) => ({ storeCode, qty }));
+    }
+    return map;
+  }
+
+  /** getStockBySkuAndStores pelo espelho (soma por loja das variantes do SKU). */
+  private async getStockBySkuAndStoresFromMirror(
+    sku: string,
+    storeCodes: string[],
+  ): Promise<Map<string, number>> {
+    const out = new Map<string, number>();
+    const variants = this.skuVariants(sku);
+    if (!variants.length) return out;
+    const lojaToStoreCode = new Map<string, string>();
+    for (const sc of storeCodes) {
+      const s = String(sc ?? '').trim();
+      if (!s) continue;
+      if (!lojaToStoreCode.has(s)) lojaToStoreCode.set(s, s);
+      if (/^\d{1,2}$/.test(s)) {
+        const padded = s.padStart(2, '0');
+        if (!lojaToStoreCode.has(padded)) lojaToStoreCode.set(padded, s);
+        const stripped = s.replace(/^0+/, '') || s;
+        if (!lojaToStoreCode.has(stripped)) lojaToStoreCode.set(stripped, s);
+      }
+    }
+    const rows: any[] = await (this.prismaFlow as any).gigaEstoque.findMany({
+      where: { codigo: { in: variants }, loja: { in: Array.from(lojaToStoreCode.keys()) } },
+      select: { loja: true, estoque: true },
+    });
+    for (const r of rows) {
+      const storeCode = lojaToStoreCode.get(String(r.loja).trim()) ?? String(r.loja).trim();
+      out.set(storeCode, (out.get(storeCode) || 0) + (Number(r.estoque) || 0));
+    }
+    return out;
+  }
+
+  /** getSalesGrossByStores pelo espelho giga_caixa_diario (bruto por loja/dia). */
+  private async getSalesGrossByStoresFromMirror(
+    storeCodes: string[],
+    inicio: Date,
+    fim: Date,
+  ): Promise<Map<string, number>> {
+    const out = new Map<string, number>();
+    const lojaToStoreCode = new Map<string, string>();
+    for (const sc of storeCodes) {
+      const s = String(sc ?? '').trim();
+      if (!s) continue;
+      lojaToStoreCode.set(s, s);
+      if (/^\d{1,2}$/.test(s)) lojaToStoreCode.set(s.padStart(2, '0'), s);
+    }
+    const rows: any[] = await (this.prismaFlow as any).gigaCaixaDiario.findMany({
+      where: {
+        loja: { in: Array.from(lojaToStoreCode.keys()) },
+        data: { gte: inicio, lte: fim },
+      },
+      select: { loja: true, bruto: true },
+    });
+    for (const r of rows) {
+      const storeCode = lojaToStoreCode.get(String(r.loja).trim()) ?? String(r.loja).trim();
+      out.set(storeCode, (out.get(storeCode) || 0) + (Number(r.bruto) || 0));
+    }
+    return out;
+  }
+
+  /** getFaturamentoTimeseries pelo espelho (bucket dia/semana/mês por loja). */
+  private async getFaturamentoTimeseriesFromMirror(
+    inicio: Date,
+    fim: Date,
+    granularity: 'day' | 'week' | 'month',
+  ): Promise<Array<{ bucket: string; storeCode: string; faturamento: number }>> {
+    const rows: any[] = await (this.prismaFlow as any).gigaCaixaDiario.findMany({
+      where: { data: { gte: inicio, lte: fim } },
+      select: { loja: true, data: true, bruto: true },
+    });
+    const bucketOf = (d: Date): string => {
+      const ymd = new Date(d);
+      if (granularity === 'month') {
+        return `${ymd.getUTCFullYear()}-${String(ymd.getUTCMonth() + 1).padStart(2, '0')}-01`;
+      }
+      if (granularity === 'week') {
+        // Bucket = segunda-feira da semana (aprox. do %x-%v do MySQL).
+        const day = ymd.getUTCDay() || 7;
+        const monday = new Date(ymd);
+        monday.setUTCDate(ymd.getUTCDate() - (day - 1));
+        return monday.toISOString().slice(0, 10);
+      }
+      return ymd.toISOString().slice(0, 10);
+    };
+    const agg = new Map<string, number>();
+    for (const r of rows) {
+      const key = `${bucketOf(new Date(r.data))}::${String(r.loja).trim()}`;
+      agg.set(key, (agg.get(key) || 0) + (Number(r.bruto) || 0));
+    }
+    return Array.from(agg.entries())
+      .map(([key, faturamento]) => {
+        const [bucket, storeCode] = key.split('::');
+        return { bucket, storeCode, faturamento: Number(faturamento.toFixed(2)) };
+      })
+      .sort((a, b) => a.bucket.localeCompare(b.bucket) || a.storeCode.localeCompare(b.storeCode));
+  }
 
   // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
   // HELPERS DE NORMALIZAÃ‡ÃƒO DE SKU
@@ -1538,7 +1819,15 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    *      o formato que enviou)
    */
   async getStock(skus: string[], storeCodes: string[]): Promise<StockEntry[]> {
-    if (!skus.length || !storeCodes.length || !this.pool) return [];
+    if (!skus.length || !storeCodes.length) return [];
+    if (this.mirrorReadsEnabled) {
+      try {
+        if (await this.mirrorStockReady()) return await this.getStockFromMirror(skus, storeCodes);
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] getStock: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
+    if (!this.pool) return [];
 
     // Normaliza SKUs originais (sem duplicatas, sem strings vazias)
     const uniqueOriginals = Array.from(
@@ -2171,7 +2460,15 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * Usado pela tela /produtos pra comparar estoque WooCommerce x ERP fÃ­sico.
    */
   async getStockTotalBySkus(skus: string[]): Promise<Record<string, number>> {
-    if (!skus.length || !this.pool) return {};
+    if (!skus.length) return {};
+    if (this.mirrorReadsEnabled) {
+      try {
+        if (await this.mirrorStockReady()) return await this.getStockTotalBySkusFromMirror(skus);
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] getStockTotalBySkus: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
+    if (!this.pool) return {};
 
     // Normaliza: tira duplicados e strings vazias
     const unique = Array.from(new Set(skus.filter((s) => s && s.trim()))).map((s) => s.trim());
@@ -2243,7 +2540,15 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * Ãštil pra detalhamento por filial na tela de produto.
    */
   async getStockBySkusDetailed(skus: string[]): Promise<Record<string, Array<{ storeCode: string; qty: number }>>> {
-    if (!skus.length || !this.pool) return {};
+    if (!skus.length) return {};
+    if (this.mirrorReadsEnabled) {
+      try {
+        if (await this.mirrorStockReady()) return await this.getStockBySkusDetailedFromMirror(skus);
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] getStockBySkusDetailed: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
+    if (!this.pool) return {};
     const unique = Array.from(new Set(skus.filter((s) => s && s.trim()))).map((s) => s.trim());
     if (!unique.length) return {};
 
@@ -2535,7 +2840,17 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     opts: { throwOnError?: boolean } = {},
   ): Promise<Map<string, number>> {
     const out = new Map<string, number>();
-    if (!this.pool || !storeCodes.length) return out;
+    if (!storeCodes.length) return out;
+    if (this.mirrorReadsEnabled) {
+      try {
+        if (await this.mirrorCaixaReady()) {
+          return await this.getSalesGrossByStoresFromMirror(storeCodes, inicio, fim);
+        }
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] getSalesGrossByStores: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
+    if (!this.pool) return out;
     // RETRY: um blip transitório (uma das 2 conexões paralelas da conta corrente
     // cai) não pode zerar a venda. Tenta de novo antes de desistir.
     let lastErr: any = null;
@@ -6073,7 +6388,15 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    */
   async getStockBySkuAndStores(sku: string, storeCodes: string[]): Promise<Map<string, number>> {
     const out = new Map<string, number>();
-    if (!this.pool || !sku || !storeCodes.length) return out;
+    if (!sku || !storeCodes.length) return out;
+    if (this.mirrorReadsEnabled) {
+      try {
+        if (await this.mirrorStockReady()) return await this.getStockBySkuAndStoresFromMirror(sku, storeCodes);
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] getStockBySkuAndStores: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
+    if (!this.pool) return out;
     const variants = this.skuVariants(sku);
     if (!variants.length) return out;
     try {
@@ -8603,6 +8926,15 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     fim: Date,
     granularity: 'day' | 'week' | 'month' = 'day',
   ): Promise<Array<{ bucket: string; storeCode: string; faturamento: number }>> {
+    if (this.mirrorReadsEnabled) {
+      try {
+        if (await this.mirrorCaixaReady()) {
+          return await this.getFaturamentoTimeseriesFromMirror(inicio, fim, granularity);
+        }
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] getFaturamentoTimeseries: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
     if (!this.pool) return [];
     // MySQL DATE_FORMAT pra agrupar
     const fmt =
