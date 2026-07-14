@@ -292,27 +292,43 @@ export class ProductsEditorService {
     }
 
     // ── GRAVAÇÃO ──
+    // PERF (13/07): agrupa por payload IGUAL — ação em bloco (marca/preço
+    // igual em N variações) vira UMA query por tabela em vez de N (era o
+    // "preenchimento lento" na troca de marcas).
+    const buildData = (set: any) => {
+      const data: any = {};
+      if (set.ref !== undefined) data.ref = set.ref;
+      if (set.descricaoCompleta !== undefined) {
+        data.descricaoCompleta = set.descricaoCompleta;
+        data.descricaoPdv = String(set.descricaoCompleta).slice(0, 50);
+      }
+      if (set.marca !== undefined) data.marca = set.marca;
+      if (set.cor !== undefined) data.cor = set.cor;
+      if (set.tamanho !== undefined) data.tamanho = set.tamanho;
+      if (set.vendaUn !== undefined) data.vendaUn = set.vendaUn;
+      return data;
+    };
+    const grupos = new Map<string, { set: any; codigos: string[] }>();
+    for (const r of erpRows) {
+      const key = JSON.stringify(r.set);
+      const g = grupos.get(key);
+      if (g) g.codigos.push(r.codigo);
+      else grupos.set(key, { set: r.set, codigos: [r.codigo] });
+    }
+    const comNormalizados = (codigos: string[]) =>
+      Array.from(new Set(codigos.flatMap((c) => [c, this.normalizeCodigo(c)!].filter(Boolean))));
+
     // Modo NATIVO (P3): Flow primeiro (fonte da verdade) + réplica pro Giga.
     // Modo padrão: Giga primeiro (fonte da verdade) — comportamento original.
     let atualizados = 0;
     if (this.nativeWrites) {
       const now = new Date();
-      for (const r of erpRows) {
-        const data: any = { flowIsSource: true, editedAt: now };
-        if (r.set.ref !== undefined) data.ref = r.set.ref;
-        if (r.set.descricaoCompleta !== undefined) {
-          data.descricaoCompleta = r.set.descricaoCompleta;
-          data.descricaoPdv = String(r.set.descricaoCompleta).slice(0, 50);
-        }
-        if (r.set.marca !== undefined) data.marca = r.set.marca;
-        if (r.set.cor !== undefined) data.cor = r.set.cor;
-        if (r.set.tamanho !== undefined) data.tamanho = r.set.tamanho;
-        if (r.set.vendaUn !== undefined) data.vendaUn = r.set.vendaUn;
+      for (const g of grupos.values()) {
         const res = await (this.prisma as any).product.updateMany({
-          where: { codigo: { in: [r.codigo, this.normalizeCodigo(r.codigo)].filter(Boolean) } },
-          data,
+          where: { codigo: { in: comNormalizados(g.codigos) } },
+          data: { ...buildData(g.set), flowIsSource: true, editedAt: now },
         });
-        if (res.count > 0) atualizados++;
+        atualizados += Number(res.count) || 0;
       }
       // Réplica pro Giga (dual-write). Falha NÃO desfaz a edição — audita.
       try {
@@ -336,60 +352,42 @@ export class ProductsEditorService {
       const r = await this.erp.updateProdutosCampos(erpRows);
       atualizados = r.atualizados;
       // Mantém a tabela nativa fresca (sem flowIsSource — Giga segue como fonte).
-      for (const row of erpRows) {
-        const data: any = {};
-        if (row.set.ref !== undefined) data.ref = row.set.ref;
-        if (row.set.descricaoCompleta !== undefined) {
-          data.descricaoCompleta = row.set.descricaoCompleta;
-          data.descricaoPdv = String(row.set.descricaoCompleta).slice(0, 50);
-        }
-        if (row.set.marca !== undefined) data.marca = row.set.marca;
-        if (row.set.cor !== undefined) data.cor = row.set.cor;
-        if (row.set.tamanho !== undefined) data.tamanho = row.set.tamanho;
-        if (row.set.vendaUn !== undefined) data.vendaUn = row.set.vendaUn;
-        if (Object.keys(data).length) {
-          await (this.prisma as any).product
-            .updateMany({
-              where: { codigo: { in: [row.codigo, this.normalizeCodigo(row.codigo)].filter(Boolean) } },
-              data,
-            })
-            .catch(() => null);
-        }
+      for (const g of grupos.values()) {
+        await (this.prisma as any).product
+          .updateMany({
+            where: { codigo: { in: comNormalizados(g.codigos) } },
+            data: buildData(g.set),
+          })
+          .catch(() => null);
       }
     }
 
     // ── ESPELHOS: reflete na hora (o sync incremental confirma depois) ──
-    for (const r of erpRows) {
-      const g: any = {};
-      if (r.set.ref !== undefined) g.ref = r.set.ref;
-      if (r.set.descricaoCompleta !== undefined) g.descricao = r.set.descricaoCompleta;
-      if (r.set.cor !== undefined) g.cor = r.set.cor;
-      if (r.set.tamanho !== undefined) g.tamanho = r.set.tamanho;
-      if (r.set.vendaUn !== undefined) g.vendaUn = r.set.vendaUn;
+    for (const g of grupos.values()) {
       try {
-        if (Object.keys(g).length) {
-          await (this.prisma as any).gigaProduto.updateMany({ where: { codigo: r.codigo }, data: g });
+        const gp: any = {};
+        if (g.set.ref !== undefined) gp.ref = g.set.ref;
+        if (g.set.descricaoCompleta !== undefined) gp.descricao = g.set.descricaoCompleta;
+        if (g.set.cor !== undefined) gp.cor = g.set.cor;
+        if (g.set.tamanho !== undefined) gp.tamanho = g.set.tamanho;
+        if (g.set.vendaUn !== undefined) gp.vendaUn = g.set.vendaUn;
+        if (Object.keys(gp).length) {
+          await (this.prisma as any).gigaProduto.updateMany({
+            where: { codigo: { in: g.codigos } },
+            data: gp,
+          });
         }
-        const w: any = {};
-        if (r.set.ref !== undefined) w.ref = r.set.ref;
-        if (r.set.descricaoCompleta !== undefined) {
-          w.descricaoCompleta = r.set.descricaoCompleta;
-          w.descricaoPdv = String(r.set.descricaoCompleta).slice(0, 50);
-        }
-        if (r.set.marca !== undefined) w.marca = r.set.marca;
-        if (r.set.cor !== undefined) w.cor = r.set.cor;
-        if (r.set.tamanho !== undefined) w.tamanho = r.set.tamanho;
-        if (r.set.vendaUn !== undefined) w.vendaUn = r.set.vendaUn;
+        const w = buildData(g.set);
         if (Object.keys(w).length) {
           w.dataAlt = new Date();
           await (this.prisma as any).wincredProduto.updateMany({
-            where: { codigo: this.normalizeCodigo(r.codigo)! },
+            where: { codigo: { in: g.codigos.map((c) => this.normalizeCodigo(c)!).filter(Boolean) } },
             data: w,
           });
         }
       } catch (e2) {
         // Espelho desatualizado não é fatal: o sync incremental corrige (DATAALT foi tocada no Giga).
-        this.logger.warn(`[editor-produtos] espelho não atualizou pro código ${r.codigo}: ${(e2 as Error).message}`);
+        this.logger.warn(`[editor-produtos] espelho não atualizou (grupo de ${g.codigos.length}): ${(e2 as Error).message}`);
       }
     }
 

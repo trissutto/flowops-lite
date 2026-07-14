@@ -7085,34 +7085,52 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     if (!this.pool) throw new Error('ERP MySQL nao esta conectado');
     if (!rows.length) return { atualizados: 0 };
 
+    // PERF (13/07): agrupa por payload IGUAL de SET → ação em bloco (ex: marca
+    // igual em 400 variações) vira UMA query "UPDATE ... WHERE CODIGO IN (...)"
+    // em vez de 400 roundtrips WAN ao MySQL (era o "preenchimento lento").
+    const grupos = new Map<string, { sets: string[]; params: any[]; codigos: string[] }>();
+    for (const r of rows) {
+      const sets: string[] = [];
+      const params: any[] = [];
+      const s = r.set || {};
+      if (s.ref !== undefined) { sets.push('REF = ?'); params.push(String(s.ref).slice(0, 10)); }
+      if (s.descricaoCompleta !== undefined) {
+        sets.push('DESCRICAOCOMPLETA = ?'); params.push(String(s.descricaoCompleta).slice(0, 100));
+        sets.push('DESCRICAOPDV = ?'); params.push(String(s.descricaoCompleta).slice(0, 50));
+      }
+      if (s.marca !== undefined) { sets.push('MARCA = ?'); params.push(String(s.marca).slice(0, 30)); }
+      if (s.cor !== undefined) { sets.push('COR = ?'); params.push(String(s.cor).slice(0, 15)); }
+      if (s.tamanho !== undefined) { sets.push('TAMANHO = ?'); params.push(String(s.tamanho).slice(0, 20)); }
+      if (s.vendaUn !== undefined) { sets.push('VENDAUN = ?'); params.push(Number(s.vendaUn)); }
+      if (!sets.length) continue;
+      const key = JSON.stringify([sets, params]);
+      const g = grupos.get(key);
+      if (g) g.codigos.push(r.codigo);
+      else grupos.set(key, { sets, params, codigos: [r.codigo] });
+    }
+    if (!grupos.size) return { atualizados: 0 };
+
     const conn = await this.pool.getConnection();
     let atualizados = 0;
     try {
       await conn.beginTransaction();
-      for (const r of rows) {
-        const sets: string[] = [];
-        const params: any[] = [];
-        const s = r.set || {};
-        if (s.ref !== undefined) { sets.push('REF = ?'); params.push(String(s.ref).slice(0, 10)); }
-        if (s.descricaoCompleta !== undefined) {
-          sets.push('DESCRICAOCOMPLETA = ?'); params.push(String(s.descricaoCompleta).slice(0, 100));
-          sets.push('DESCRICAOPDV = ?'); params.push(String(s.descricaoCompleta).slice(0, 50));
+      for (const g of grupos.values()) {
+        const sets = [...g.sets, `DATAALT = CURDATE()`, `OPERADOR = 'FLOWOPS'`];
+        // Lotes de 500 códigos por IN() pra não estourar tamanho de query.
+        for (let i = 0; i < g.codigos.length; i += 500) {
+          const chunk = g.codigos.slice(i, i + 500);
+          const placeholders = chunk.map(() => '?').join(',');
+          const [result]: any = await conn.query(
+            `UPDATE produtos SET ${sets.join(', ')} WHERE CODIGO IN (${placeholders})`,
+            [...g.params, ...chunk],
+          );
+          atualizados += Number(result.affectedRows) || 0;
         }
-        if (s.marca !== undefined) { sets.push('MARCA = ?'); params.push(String(s.marca).slice(0, 30)); }
-        if (s.cor !== undefined) { sets.push('COR = ?'); params.push(String(s.cor).slice(0, 15)); }
-        if (s.tamanho !== undefined) { sets.push('TAMANHO = ?'); params.push(String(s.tamanho).slice(0, 20)); }
-        if (s.vendaUn !== undefined) { sets.push('VENDAUN = ?'); params.push(Number(s.vendaUn)); }
-        if (!sets.length) continue;
-        sets.push(`DATAALT = CURDATE()`);
-        sets.push(`OPERADOR = 'FLOWOPS'`);
-        const [result]: any = await conn.query(
-          `UPDATE produtos SET ${sets.join(', ')} WHERE CODIGO = ? LIMIT 1`,
-          [...params, r.codigo],
-        );
-        if (result.affectedRows && result.affectedRows > 0) atualizados++;
       }
       await conn.commit();
-      this.logger.log(`updateProdutosCampos: ${atualizados}/${rows.length} produtos atualizados no Giga`);
+      this.logger.log(
+        `updateProdutosCampos: ${atualizados}/${rows.length} produtos atualizados no Giga (${grupos.size} grupo(s) de UPDATE)`,
+      );
       return { atualizados };
     } catch (e) {
       await conn.rollback();
