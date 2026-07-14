@@ -50,6 +50,20 @@ export class ProductsEditorService {
     return String(process.env.EDITOR_PRODUTOS_WRITE ?? '').trim() === '0';
   }
 
+  /**
+   * P3 da migração de produtos: PRODUCT_NATIVE_WRITES=1 → o FLOW vira a fonte
+   * da verdade do cadastro. A edição grava PRIMEIRO na tabela nativa `product`
+   * (com flowIsSource=true — o sync do espelho nunca mais sobrescreve a linha)
+   * e REPLICA pro Giga na sequência (dual-write: o Wincred continua enxergando
+   * tudo). Se a replicação falhar, a edição VALE (fonte é o Flow) e a falha
+   * fica auditada (field=REPLICA_GIGA_ERRO) pra retry manual.
+   * Rollback: tirar a env → volta ao modo atual (Giga primeiro, e o Giga está
+   * em dia porque toda escrita nativa replicou).
+   */
+  private get nativeWrites(): boolean {
+    return String(process.env.PRODUCT_NATIVE_WRITES ?? '').trim() === '1';
+  }
+
   /** Mesma normalização do espelho Wincred: só dígitos perdem zeros à esquerda. */
   private normalizeCodigo(raw: any): string | null {
     const s = String(raw ?? '').trim();
@@ -275,8 +289,72 @@ export class ProductsEditorService {
       return { ok: true, shadow: true, batchId, atualizados: 0, planejados: erpRows.length };
     }
 
-    // ── GRAVA NO GIGA (fonte da verdade) ──
-    const { atualizados } = await this.erp.updateProdutosCampos(erpRows);
+    // ── GRAVAÇÃO ──
+    // Modo NATIVO (P3): Flow primeiro (fonte da verdade) + réplica pro Giga.
+    // Modo padrão: Giga primeiro (fonte da verdade) — comportamento original.
+    let atualizados = 0;
+    if (this.nativeWrites) {
+      const now = new Date();
+      for (const r of erpRows) {
+        const data: any = { flowIsSource: true, editedAt: now };
+        if (r.set.ref !== undefined) data.ref = r.set.ref;
+        if (r.set.descricaoCompleta !== undefined) {
+          data.descricaoCompleta = r.set.descricaoCompleta;
+          data.descricaoPdv = String(r.set.descricaoCompleta).slice(0, 50);
+        }
+        if (r.set.marca !== undefined) data.marca = r.set.marca;
+        if (r.set.cor !== undefined) data.cor = r.set.cor;
+        if (r.set.tamanho !== undefined) data.tamanho = r.set.tamanho;
+        if (r.set.vendaUn !== undefined) data.vendaUn = r.set.vendaUn;
+        const res = await (this.prisma as any).product.updateMany({
+          where: { codigo: { in: [r.codigo, this.normalizeCodigo(r.codigo)].filter(Boolean) } },
+          data,
+        });
+        if (res.count > 0) atualizados++;
+      }
+      // Réplica pro Giga (dual-write). Falha NÃO desfaz a edição — audita.
+      try {
+        await this.erp.updateProdutosCampos(erpRows);
+      } catch (eGiga) {
+        const msg = (eGiga as Error).message?.slice(0, 180) || 'erro';
+        this.logger.error(`[editor-produtos] réplica pro Giga FALHOU (${msg}) — edição vale no Flow, batch ${batchId}`);
+        auditRows.push({
+          batchId,
+          codigo: 'BATCH',
+          ref: null,
+          field: 'REPLICA_GIGA_ERRO',
+          oldValue: null,
+          newValue: msg,
+          userName: input.userName || null,
+          applied: true,
+        });
+      }
+    } else {
+      // ── GRAVA NO GIGA (fonte da verdade no modo padrão) ──
+      const r = await this.erp.updateProdutosCampos(erpRows);
+      atualizados = r.atualizados;
+      // Mantém a tabela nativa fresca (sem flowIsSource — Giga segue como fonte).
+      for (const row of erpRows) {
+        const data: any = {};
+        if (row.set.ref !== undefined) data.ref = row.set.ref;
+        if (row.set.descricaoCompleta !== undefined) {
+          data.descricaoCompleta = row.set.descricaoCompleta;
+          data.descricaoPdv = String(row.set.descricaoCompleta).slice(0, 50);
+        }
+        if (row.set.marca !== undefined) data.marca = row.set.marca;
+        if (row.set.cor !== undefined) data.cor = row.set.cor;
+        if (row.set.tamanho !== undefined) data.tamanho = row.set.tamanho;
+        if (row.set.vendaUn !== undefined) data.vendaUn = row.set.vendaUn;
+        if (Object.keys(data).length) {
+          await (this.prisma as any).product
+            .updateMany({
+              where: { codigo: { in: [row.codigo, this.normalizeCodigo(row.codigo)].filter(Boolean) } },
+              data,
+            })
+            .catch(() => null);
+        }
+      }
+    }
 
     // ── ESPELHOS: reflete na hora (o sync incremental confirma depois) ──
     for (const r of erpRows) {

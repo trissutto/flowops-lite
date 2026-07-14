@@ -43,11 +43,44 @@ export class ProductSearchService implements OnModuleInit {
           `CREATE INDEX IF NOT EXISTS giga_produto_descricao_trgm_idx
              ON giga_produto USING gin (descricao gin_trgm_ops)`,
         );
-        this.logger.log('[fulltext] pg_trgm + índice trigram em giga_produto.descricao OK');
+        // P2 migração de produtos: mesmo índice na tabela NATIVA `product`.
+        await this.prisma.$executeRawUnsafe(
+          `CREATE INDEX IF NOT EXISTS product_descricao_trgm_idx
+             ON product USING gin ("descricaoCompleta" gin_trgm_ops)`,
+        );
+        this.logger.log('[fulltext] pg_trgm + índices trigram (giga_produto + product) OK');
       } catch (e) {
         this.logger.warn(`[fulltext] setup pg_trgm falhou (busca segue sem índice): ${(e as Error).message}`);
       }
     })();
+  }
+
+  /**
+   * P2 da migração de produtos: PRODUCT_NATIVE_READS=1 → a busca única lê a
+   * tabela NATIVA `product` (curada, com ativo/genero) em vez do espelho
+   * giga_produto. Kill-switch instantâneo: remover a env volta pro espelho.
+   */
+  private get nativeReads(): boolean {
+    return String(process.env.PRODUCT_NATIVE_READS ?? '').trim() === '1';
+  }
+
+  /** Mesma normalização do espelho Wincred (codigo sem zeros à esquerda). */
+  private normalizeCodigo(raw: string): string {
+    const s = String(raw ?? '').trim();
+    if (!s || !/^\d+$/.test(s)) return s;
+    return s.replace(/^0+/, '') || '0';
+  }
+
+  /** Linha da tabela nativa no formato que TODOS os consumidores esperam. */
+  private mapNative(r: any) {
+    return {
+      codigo: String(r.codigo ?? ''),
+      ref: r.ref != null ? String(r.ref) : '',
+      descricao: r.descricaoCompleta != null ? String(r.descricaoCompleta) : '',
+      cor: r.cor != null ? String(r.cor) : '',
+      tamanho: r.tamanho != null ? String(r.tamanho) : '',
+      vendaUn: r.vendaUn != null ? Number(r.vendaUn) : null,
+    };
   }
 
   async resolveRows(
@@ -56,6 +89,39 @@ export class ProductSearchService implements OnModuleInit {
   ): Promise<Array<{ codigo: string; ref: string; descricao: string; cor: string; tamanho: string }>> {
     const term = String(q || '').trim();
     if (!term) return [];
+
+    // ── TABELA NATIVA (P2, flag PRODUCT_NATIVE_READS) ──
+    if (this.nativeReads) {
+      const p = (this.prisma as any).product;
+      const findN = (where: any, take = 1000) =>
+        p.findMany({ where: { ativo: true, ...where }, take }).catch(() => []);
+      // 1) Código exato — como digitado E normalizado (nativo guarda sem zeros).
+      let nrows = await findN({ codigo: { in: [term, this.normalizeCodigo(term)] } });
+      if (nrows.length) return nrows.map((r: any) => this.mapNative(r));
+      // 2) REF exata/prefixo.
+      const upN = term.toUpperCase();
+      nrows = await findN({
+        OR: [{ ref: upN }, { ref: term }, { ref: { startsWith: upN } }, { ref: { startsWith: term } }],
+      });
+      if (nrows.length) return nrows.map((r: any) => this.mapNative(r));
+      // 3) Full-text na descrição (pg_trgm no índice product_descricao_trgm_idx).
+      if (term.length >= 2) {
+        const wordsN = term.split(/\s+/).map((w) => w.trim()).filter((w) => w.length >= 2).slice(0, 6);
+        nrows = await findN(
+          {
+            OR: [
+              { ref: { startsWith: term, mode: 'insensitive' } },
+              ...(wordsN.length
+                ? [{ AND: wordsN.map((w) => ({ descricaoCompleta: { contains: w, mode: 'insensitive' as const } })) }]
+                : [{ descricaoCompleta: { contains: term, mode: 'insensitive' as const } }]),
+            ],
+          },
+          opts?.fallbackTake ?? 300,
+        );
+      }
+      return nrows.map((r: any) => this.mapNative(r));
+    }
+
     const find = (where: any, take = 1000) =>
       (this.prisma as any).gigaProduto.findMany({ where, take }).catch(() => []);
 
@@ -116,6 +182,17 @@ export class ProductSearchService implements OnModuleInit {
       .filter((w) => w.length >= 2)
       .slice(0, 8);
     if (!words.length) return [];
+    if (this.nativeReads) {
+      const rows: any[] = await (this.prisma as any).product.findMany({
+        where: {
+          ativo: true,
+          AND: words.map((w) => ({ descricaoCompleta: { contains: w, mode: 'insensitive' } })),
+        },
+        select: { codigo: true, ref: true, descricaoCompleta: true },
+        take,
+      });
+      return rows.map((r) => ({ codigo: r.codigo, ref: r.ref, descricao: r.descricaoCompleta }));
+    }
     return (this.prisma as any).gigaProduto.findMany({
       where: { AND: words.map((w) => ({ descricao: { contains: w, mode: 'insensitive' } })) },
       select: { codigo: true, ref: true, descricao: true },
@@ -165,10 +242,17 @@ export class ProductSearchService implements OnModuleInit {
       .map((w) => norm(w).trim())
       .filter((w) => w.length >= 2);
     try {
-      const rows: any[] = await (this.prisma as any).gigaProduto.findMany({
-        where: { ref: { in: clean } },
-        select: { ref: true, descricao: true, vendaUn: true },
-      });
+      const rows: any[] = this.nativeReads
+        ? (
+            await (this.prisma as any).product.findMany({
+              where: { ref: { in: clean }, ativo: true },
+              select: { ref: true, descricaoCompleta: true, vendaUn: true },
+            })
+          ).map((r: any) => ({ ref: r.ref, descricao: r.descricaoCompleta, vendaUn: r.vendaUn }))
+        : await (this.prisma as any).gigaProduto.findMany({
+            where: { ref: { in: clean } },
+            select: { ref: true, descricao: true, vendaUn: true },
+          });
       // por REF: contagem por família + melhor descrição/preço da família.
       // matched = a família tem ao menos UMA variação casando TODAS as palavras.
       const byRef = new Map<string, Map<string, { desc: string; count: number; preco: number; matched: boolean }>>();
