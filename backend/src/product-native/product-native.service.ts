@@ -51,7 +51,9 @@ export class ProductNativeService {
           WHEN w."plusSize" IN (1, 2) THEN 'FEMININO'
           ELSE NULL
         END,
-        (
+        -- COALESCE obrigatório: PLUS_SIZE nulo (cadastro antigo) deixaria a
+        -- expressão NULL e a coluna liveOk é NOT NULL → derrubava o lote inteiro.
+        COALESCE((
           w."plusSize" IN (1, 2)
           AND upper(coalesce(w."descricaoCompleta", '')) NOT LIKE '%MASCULIN%'
           AND upper(coalesce(w."descricaoCompleta", '')) NOT LIKE '%INFANTIL%'
@@ -59,7 +61,7 @@ export class ProductNativeService {
             coalesce(trim(w.tamanho), '') = ''
             OR trim(w.tamanho) IN ('46','48','50','52','54','56','58','60','46/48','50/52')
           )
-        ),
+        ), false),
         true, false, false, NULL, now(), now()
       FROM wincred_produtos w
       ${where}
@@ -101,6 +103,9 @@ export class ProductNativeService {
       const ms = Date.now() - t0;
       this.logger.log(`[product-native] sync FULL: ${upserted} linhas em ${ms}ms`);
       return { upserted: Number(upserted), ms };
+    } catch (e) {
+      this.logger.error(`[product-native] sync FULL falhou: ${(e as Error).message}`);
+      throw e;
     } finally {
       this.syncing = false;
     }
@@ -115,6 +120,9 @@ export class ProductNativeService {
       const ms = Date.now() - t0;
       this.logger.log(`[product-native] sync incremental: ${upserted} linhas em ${ms}ms`);
       return { upserted: Number(upserted), ms };
+    } catch (e) {
+      this.logger.error(`[product-native] sync incremental falhou: ${(e as Error).message}`);
+      throw e;
     } finally {
       this.syncing = false;
     }
