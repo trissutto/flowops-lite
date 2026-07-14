@@ -64,6 +64,25 @@ export class LivePdvService {
     '46', '48', '50', '52', '54', '56', '58', '60', '46/48', '50/52',
   ]);
 
+  /**
+   * Título de exibição da grade SEM a cor/tamanho da linha (14/07): a
+   * DESCRICAOCOMPLETA da Giga é por variação ("CASACO ... 14538 PRETO 46
+   * JULIA PLUS") e confundia — legenda fixada em TERRACOTA com "PRETO 46" no
+   * título. Remove a ÚLTIMA ocorrência da cor e do tamanho DESTA linha (só a
+   * última: "SAIDA DE PRAIA ACQUA ROSA ROSA 46" mantém o "ACQUA ROSA" do nome
+   * e perde só o " ROSA 46" da variação).
+   */
+  private tituloSemVariacao(desc: any, cor: any, tamanho: any): string {
+    let out = ` ${String(desc || '').trim()} `;
+    for (const tok of [this.norm(cor), this.norm(tamanho)]) {
+      if (!tok) continue;
+      const alvo = ` ${tok} `;
+      const idx = out.toUpperCase().lastIndexOf(alvo);
+      if (idx >= 0) out = `${out.slice(0, idx)} ${out.slice(idx + alvo.length)}`;
+    }
+    return out.replace(/\s{2,}/g, ' ').trim();
+  }
+
   // ─── helpers ──────────────────────────────────────────────────────────────
   private norm(s: any): string {
     return String(s ?? '').trim().toUpperCase();
@@ -582,7 +601,15 @@ export class LivePdvService {
     // e a descrição/foto do cabeçalho viravam as dela com a grade do casaco).
     const headRow = productRows.find((r) => this.norm(r.REF) === qn) || productRows[0];
     const ref = (familia.length ? baseAlvo : String(headRow.REF).trim()) || String(headRow.REF).trim();
-    const descricao = headRow.DESCRICAOCOMPLETA || ref;
+    // TÍTULO SEM COR/TAMANHO (14/07, pedido do dono): a descrição da Giga é da
+    // LINHA e embute a cor/tamanho dela ("... PRETO 46 JULIA PLUS") — legenda
+    // fixada em TERRACOTA exibia "PRETO 46" no título e confundia. A grade
+    // abaixo é quem informa cor×tamanho; o título fica só com o produto.
+    const descricao = this.tituloSemVariacao(
+      headRow.DESCRICAOCOMPLETA || ref,
+      headRow.COR,
+      headRow.TAMANHO,
+    );
 
     // 2) Estoque por loja (1 query batch p/ todos os CODIGOs do produto).
     const codigos = Array.from(
