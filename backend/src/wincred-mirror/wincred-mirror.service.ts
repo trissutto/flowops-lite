@@ -397,7 +397,16 @@ export class WincredMirrorService {
    * incidente). DELETE (não TRUNCATE) de propósito: TRUNCATE trava leitores
    * até o commit; DELETE deixa lerem o snapshot antigo (MVCC).
    */
-  async syncEstoque(): Promise<SyncResult> {
+  async syncEstoque(force = false): Promise<SyncResult> {
+    // CONSTITUIÇÃO 14/07 (dono): FLOW é a FONTE do estoque e ninguém mais mexe
+    // em estoque no Wincred desktop. O full Giga→Flow fica DESLIGADO por
+    // padrão — só sobrescreveria a verdade do Flow na janela da fila do
+    // outbox. O Giga segue recebendo réplica de tudo (backup). Recuperação:
+    // botão manual da tela (force=true) ou env ESTOQUE_SYNC_GIGA=1.
+    const gigaSyncOn = String(process.env.ESTOQUE_SYNC_GIGA ?? '').trim() === '1';
+    if (!gigaSyncOn && !force) {
+      return { table: 'estoque', success: true, processed: 0, durationMs: 0, error: 'desligado — Flow é a fonte (ESTOQUE_SYNC_GIGA=1 reativa)' };
+    }
     const t0 = Date.now();
     const pool: any = (this.erp as any).pool;
     if (!pool) return { table: 'estoque', success: false, processed: 0, durationMs: 0, error: 'MySQL pool nao inicializado' };
