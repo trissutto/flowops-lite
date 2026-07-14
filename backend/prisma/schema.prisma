@@ -3360,6 +3360,16 @@ model GigaCaixaMov {
   cliente    String?   @db.VarChar(80)
   loja       String?   @db.VarChar(4)
   marcado    String?   @db.VarChar(4)
+  // Colunas ricas do schema Lurd's (v2 14/07) — usadas pela tela de vendas
+  // do caixa, clientes únicos e vendedoras. Sonda: ausentes viram NULL.
+  codCliente    String?  @map("cod_cliente") @db.VarChar(20)
+  nomeCliente   String?  @map("nome_cliente") @db.VarChar(80)
+  cpf           String?  @db.VarChar(20)
+  vendedora     String?  @db.VarChar(40)
+  vendedoraCode String?  @map("vendedora_code") @db.VarChar(14)
+  fpag          String?  @db.VarChar(30)
+  obsPedido     String?  @map("obs_pedido") @db.VarChar(200)
+  valorUnitario Decimal? @map("valor_unitario") @db.Decimal(10, 2)
 
   syncedAt DateTime @default(now()) @map("synced_at")
 
