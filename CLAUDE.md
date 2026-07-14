@@ -23,7 +23,7 @@ O Giga MySQL **PENDURA** (não dá erro — `.catch` não pega) quando o firewal
 - Tabelas `wincred_produtos`, `wincred_estoque`, grupos/subgrupos/fornecedores/codigos.
 - Sync: incremental **10min** (por DATAALT), estoque **full de hora em hora** (minuto 23 — venda no Giga muda estoque SEM tocar DATAALT), full geral **3h da manhã**.
 - Gated por env **`WINCRED_MIRROR_CRON_ENABLED=1`** (sem ela o espelho NÃO atualiza).
-- **Só espelha produtos `PLUS_SIZE IN (1,2)`** — não-plus (gravatas, acessórios) sempre caem no fallback Giga.
+- **Espelha o catálogo INTEIRO** (filtro PLUS_SIZE removido em 02/07) — o fallback Giga cobre só EAN/recém-cadastrado/preço zerado.
 - `codigo` normalizado SEM zeros à esquerda (`normalizeCodigo`).
 - **`vendaUn` está em REAIS — NUNCA dividir por 100.** O caminho antigo do Giga parecia centavos porque o `parsePrice` remove o ponto ("80.00"→8000) e divide de volta. Dividir o Decimal do Prisma derrubou preços 100× (bug de 01/07, corrigido).
 - Admin: tela `/retaguarda/wincred-mirror` (status + botões de sync) e `POST /admin/wincred-mirror/sync/all` (primeira carga, ~2-4min).
@@ -44,10 +44,10 @@ Cron de 1h espelha transferências/vendas/estoque pro financeiro. Conta corrente
 - **Crediário**: `listAllOpen` (runReadOnly até 5.000 linhas/30s — a query mais pesada do sistema) + `markCrediarioParcelaPaid/Unpaid` + `createCrediarioParcelas` na venda.
 - **Devoluções/trocas/marcados**: `increaseStock`/`insertCaixaMarcado` síncronos.
 - **Consulta de loja** (`searchByRef` etc.), realinhamento, royalties (`getSalesGrossByStores`), site-publish, pick-orders (EANs).
-- **Cadastro de produtos ESCREVE no Giga** (`inserirProdutosBatch/Grupo/Subgrupo`) e a sequência de códigos (tabela `codigos`) é do Giga — fonte da verdade do cadastro ainda é o Giga.
+- **Cadastro de produtos ESCREVE no Giga** (`inserirProdutosBatch/Grupo/Subgrupo`) — mas o CÓDIGO do produto novo já é 100% do Flow: EAN-13 prefixo 8 gerado pela `EanSequence` (Postgres, transação) em `product-registration/`; a tabela `codigos` do Giga NÃO é consultada pra sequência (só espelhada pra lookup de EAN antigo). Grupos/subgrupos ainda são do Giga.
 
 ### Plano "sair da Giga" (ordem)
-1. ✅ bipe+busca espelho · 2. ✅ outbox venda · 3. ✅ estoque hourly + fallback · 4. tirar filtro PLUS_SIZE do sync · 5. espelhar `movimento` (crediário) · 6. devoluções/marcados no outbox · 7. `queueLimit` finito + timeout por query · 8. cadastro nativo (tabela `Product` própria + gerador de código) com Giga como réplica · 9. desligar.
+1. ✅ bipe+busca espelho · 2. ✅ outbox venda · 3. ✅ estoque hourly + fallback · 4. ✅ filtro PLUS_SIZE removido (02/07) · 5. espelhar `movimento` (crediário) · 6. devoluções/marcados no outbox · 7. `queueLimit` finito + timeout por query · 8. 🔶 tabela nativa `Product` criada (13/07, flags `PRODUCT_NATIVE_READS`/`PRODUCT_NATIVE_WRITES`; gerador de código já era nativo via EanSequence) — falta migrar leituras restantes (site-publish, pick-orders, realinhamento) e grupos/subgrupos · 9. desligar.
 
 ## ENV flags importantes (Railway → flowops-lite → Variables)
 
