@@ -3114,8 +3114,13 @@ function CartPanel({
               {(cart?.items || []).map((it) => (
                 <div key={it.id} className="flex items-center gap-2 rounded-lg border border-slate-100 p-2">
                   <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-medium text-slate-800">
-                      {it.refCode} · {it.cor} {it.tamanho}
+                    {/* DESCRIÇÃO COMPLETA da peça (15/07): não só a legenda/ref.
+                        ref · cor · tamanho vira subtítulo pra conferência rápida. */}
+                    <div className="text-sm font-medium text-slate-800 leading-snug" title={it.descricao || it.refCode}>
+                      {it.descricao || it.refCode}
+                    </div>
+                    <div className="truncate text-[11px] font-semibold text-slate-500">
+                      {it.refCode}{it.cor ? ` · ${it.cor}` : ''}{it.tamanho ? ` · ${it.tamanho}` : ''}
                     </div>
                     <div className="flex items-center gap-1 text-[11px] text-slate-500">
                       <Store className="h-3 w-3" /> {it.originStoreName}
