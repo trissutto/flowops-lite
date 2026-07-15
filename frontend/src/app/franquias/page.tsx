@@ -128,18 +128,18 @@ export default function FranquiasHub() {
             tone="emerald"
           />
           <AreaCard
+            href="/franquias/faturamento"
             label="Faturamento"
-            description="Vendas e faturamento das franquias"
+            description="Bruto, vendas, ticket, formas de pagamento e ranking"
             icon={BarChart3}
             tone="sky"
-            soon
           />
           <AreaCard
+            href="/franquias/estoque"
             label="Estoque"
-            description="Estoque e produtos das franquias"
+            description="Peças, valor por loja, grupos e consulta de produto"
             icon={Package2}
             tone="violet"
-            soon
           />
         </div>
       </main>
