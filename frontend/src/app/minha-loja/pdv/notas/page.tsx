@@ -253,7 +253,9 @@ export default function NotasEmitidasPage() {
     <div className="max-w-7xl mx-auto p-3 space-y-3">
       {/* Header */}
       <div className="flex items-center gap-3">
-        <Link href="/minha-loja/pdv" className="text-slate-600 hover:text-slate-900">
+        {/* Voltar: papel de franquia volta pro HUB de franquias (não pra tela
+            "Selecione a loja" do PDV, que não faz sentido pra ele). */}
+        <Link href={readOnly ? '/franquias' : '/minha-loja/pdv'} className="text-slate-600 hover:text-slate-900">
           <ArrowLeft className="w-5 h-5" />
         </Link>
         <h1 className="text-xl font-bold text-slate-800 flex items-center gap-2">
