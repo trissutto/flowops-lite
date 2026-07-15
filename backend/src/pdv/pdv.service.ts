@@ -1233,7 +1233,7 @@ export class PdvService {
     return { ...r, voucher: { code, valor, validade: validade.toISOString() } };
   }
 
-  async updateItem(input: { saleId: string; itemId: string; qty?: number; desconto?: number; password?: string; motivo?: string; excludePromo?: boolean }) {
+  async updateItem(input: { saleId: string; itemId: string; qty?: number; desconto?: number; password?: string; motivo?: string; excludePromo?: boolean; forcePromo?: boolean }) {
     const item = await (this.prisma as any).pdvSaleItem.findUnique({
       where: { id: input.itemId },
     });
@@ -1256,9 +1256,15 @@ export class PdvService {
     // =false → re-inclui na promoção (volta ao automático, tag null).
     const excluindoPromo = input.excludePromo === true;
     const reincluindoPromo = input.excludePromo === false;
+    // FORÇAR PROMO (15/07): botão AZUL — coloca o item BÁSICO na promoção
+    // (ignora só o filtro básico; data/coleção seguem valendo no recálculo).
+    const forcandoPromo = input.forcePromo === true;
+    const desforcandoPromo = input.forcePromo === false;
 
     const newDesconto = excluindoPromo
       ? 0
+      : forcandoPromo || desforcandoPromo
+      ? (item.desconto || 0) // o applyAutoDiscounts recalcula
       : input.desconto != null ? Math.max(0, input.desconto) : (item.desconto || 0);
     const bruto = item.precoUnit * newQty;
     if (newDesconto > bruto) {
@@ -1268,7 +1274,8 @@ export class PdvService {
     // Desconto MANUAL (>0) — só conta como manual se NÃO está excluindo/reincluindo
     // a promoção. marca 'MANUAL' pra applyAutoDiscounts não sobrescrever.
     const isManualDiscount =
-      !excluindoPromo && !reincluindoPromo && input.desconto != null && newDesconto > 0;
+      !excluindoPromo && !reincluindoPromo && !forcandoPromo && !desforcandoPromo &&
+      input.desconto != null && newDesconto > 0;
 
     // MD-1: desconto manual por item em faixas (% sobre o BRUTO do item).
     //   0–7% livre · >7–10% senha CAIXA · >10% senha GERENTE + justificativa.
@@ -1286,13 +1293,21 @@ export class PdvService {
 
     const newTag = excluindoPromo
       ? 'SEM_PROMO'
-      : reincluindoPromo
-      ? null
+      : reincluindoPromo || forcandoPromo || desforcandoPromo
+      ? null // volta pro automático — o applyAutoDiscounts define a tag final
       : isManualDiscount
       ? 'MANUAL'
       : input.desconto != null && newDesconto === 0
       ? null
       : item.promoTag;
+
+    // forcarPromo: liga no forçar, desliga no des-forçar E no excluir (tirar da
+    // promo un-força também). Edição de qty/desconto não mexe na flag.
+    const newForcar = forcandoPromo
+      ? true
+      : desforcandoPromo || excluindoPromo
+      ? false
+      : (item.forcarPromo ?? false);
 
     const updated = await (this.prisma as any).pdvSaleItem.update({
       where: { id: item.id },
@@ -1301,6 +1316,7 @@ export class PdvService {
         desconto: newDesconto,
         total: bruto - newDesconto,
         promoTag: newTag,
+        forcarPromo: newForcar,
       },
     });
     await this.applyAutoDiscounts(input.saleId);
@@ -1495,8 +1511,11 @@ export class PdvService {
       for (const it of items as any[]) {
         if (isManual(it)) continue; // preserva manual
         const bruto = it.precoUnit * it.qty;
-        // Peça básica: fica fora da promoção de 50% (preço cheio)
-        if (isBasico(it)) {
+        // Peça básica: fica fora da promoção de 50% (preço cheio) — SALVO se a
+        // operadora FORÇOU a entrada (botão azul). Forçar ignora só o filtro
+        // básico; data e coleção (-INV/-VER) continuam decidindo abaixo, então
+        // um básico NOVO forçado não ganha desconto (cai no 'Sem promo · ano').
+        if (isBasico(it) && !it.forcarPromo) {
           updates.push({ id: it.id, desconto: 0, total: bruto, tag: 'Básico · sem promo' });
           continue;
         }

@@ -1963,6 +1963,11 @@ model PdvSaleItem {
   precoUnit   Float    @map("preco_unit")
   desconto    Float    @default(0)
   promoTag    String?  @map("promo_tag")         // ex: "PROMO 30% · 2022" ou "4 LEVA 3"
+  // FORÇAR PROMO (15/07): botão AZUL "colocar na promoção" — o item entra na
+  // campanha mesmo sendo BÁSICO. Ignora SÓ o filtro básico; data e coleção
+  // (-INV/-VER) continuam valendo (item novo forçado não ganha desconto).
+  // Flag separada do promoTag porque o recálculo automático sobrescreve a tag.
+  forcarPromo Boolean  @default(false) @map("forcar_promo")
   total       Float
   // Override de vendedora POR ITEM. NULL = usa sale.sellerName (padrao).
   // Usado quando 2 vendedoras atendem na mesma compra — uma operou tudo
