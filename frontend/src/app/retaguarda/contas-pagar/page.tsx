@@ -157,6 +157,43 @@ function Painel({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
     catch (e: any) { avisar('erro', e?.message || 'Falhou'); }
   };
 
+  // SELEÇÃO EM MASSA (14/07, pedido do dono): checkbox por lançamento +
+  // "selecionar todos" (da página atual) → excluir de uma vez. Mesmo
+  // soft-delete auditado da lixeirinha individual.
+  const [selecionadas, setSelecionadas] = useState<Set<string>>(new Set());
+  const [excluindoLote, setExcluindoLote] = useState(false);
+  const idsPagina: string[] = (data?.rows || []).map((r: any) => r.id);
+  const todasMarcadas = idsPagina.length > 0 && idsPagina.every((id) => selecionadas.has(id));
+  const toggleUma = (id: string) =>
+    setSelecionadas((prev) => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
+  const toggleTodas = () =>
+    setSelecionadas(todasMarcadas ? new Set() : new Set(idsPagina));
+  const excluirSelecionadas = async () => {
+    const ids = Array.from(selecionadas);
+    if (!ids.length) return;
+    if (!confirm(`Excluir ${ids.length} lançamento(s) selecionado(s)?\n\nFicam no histórico, com seu nome (mesma exclusão da lixeirinha).`)) return;
+    setExcluindoLote(true);
+    try {
+      const r = await api<any>('/admin/contas-pagar/excluir-lote', {
+        method: 'POST',
+        body: JSON.stringify({ ids }),
+      });
+      avisar('ok', `${r.excluidas} lançamento(s) excluído(s)${r.erros?.length ? ` · ${r.erros.length} com erro` : ''}`);
+      setSelecionadas(new Set());
+      carregar();
+      carregarBase();
+    } catch (e: any) {
+      avisar('erro', e?.message || 'Falha ao excluir em lote');
+    } finally {
+      setExcluindoLote(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
       {/* cards */}
@@ -223,6 +260,15 @@ function Painel({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
           <table className="w-full text-sm min-w-[900px]">
             <thead>
               <tr className="bg-[#FAFAF7] text-[11px] uppercase tracking-wide text-slate-500 border-b border-[#E7E2D8]">
+                <th className="px-3 py-2 w-8">
+                  <input
+                    type="checkbox"
+                    checked={todasMarcadas}
+                    onChange={toggleTodas}
+                    title="Selecionar todos (da página)"
+                    className="h-4 w-4 accent-[#B8912B] cursor-pointer"
+                  />
+                </th>
                 <th className="text-left px-3 py-2">Vencimento</th>
                 <th className="text-left px-3 py-2">Beneficiário</th>
                 <th className="text-left px-3 py-2">Espécie</th>
@@ -236,7 +282,15 @@ function Painel({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
             </thead>
             <tbody>
               {(data?.rows || []).map((r: any) => (
-                <tr key={r.id} className="border-b border-[#F1EDE3] hover:bg-[#FBF6E6]">
+                <tr key={r.id} className={`border-b border-[#F1EDE3] hover:bg-[#FBF6E6] ${selecionadas.has(r.id) ? 'bg-[#FBF6E6]' : ''}`}>
+                  <td className="px-3 py-2 w-8">
+                    <input
+                      type="checkbox"
+                      checked={selecionadas.has(r.id)}
+                      onChange={() => toggleUma(r.id)}
+                      className="h-4 w-4 accent-[#B8912B] cursor-pointer"
+                    />
+                  </td>
                   <td className="px-3 py-2 whitespace-nowrap">
                     {r.status === 'paga' ? (
                       <span className="text-[11px] font-extrabold px-2 py-0.5 rounded bg-emerald-50 text-[#2E7D46]">PAGA · {fmtData(r.pagamento)}</span>
@@ -290,7 +344,7 @@ function Painel({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
                 </tr>
               ))}
               {data && !data.rows?.length && (
-                <tr><td colSpan={9} className="text-center text-slate-400 py-10">Nenhuma conta encontrada.</td></tr>
+                <tr><td colSpan={10} className="text-center text-slate-400 py-10">Nenhuma conta encontrada.</td></tr>
               )}
             </tbody>
           </table>
@@ -306,6 +360,16 @@ function Painel({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
                 onClick={() => setShowLote(true)}
                 className="px-3 py-1.5 rounded-lg border border-[#2E7D46] text-[#2E7D46] font-bold hover:bg-emerald-50"
               >✓ Baixar TODAS do filtro ({data.total})</button>
+            )}
+            {selecionadas.size > 0 && (
+              <button
+                onClick={excluirSelecionadas}
+                disabled={excluindoLote}
+                className="px-3 py-1.5 rounded-lg bg-rose-600 text-white font-bold hover:bg-rose-700 disabled:opacity-50 flex items-center gap-1.5"
+              >
+                <Trash2 className="w-4 h-4" />
+                {excluindoLote ? 'Excluindo…' : `Excluir selecionadas (${selecionadas.size})`}
+              </button>
             )}
           </span>
           <span className="flex items-center gap-2">
