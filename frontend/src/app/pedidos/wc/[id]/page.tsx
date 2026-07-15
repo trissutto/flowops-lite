@@ -225,6 +225,9 @@ export default function PedidoDetailPage() {
     storeCode: string | null;
     storeName: string | null;
     storeCity: string | null;
+    // SKUs desta loja — usados pra medir a cobertura do "Trocar loja" só
+    // contra os itens que realmente vão mudar de loja.
+    skus?: string[];
     updatedAt: string;
     issueReason?: string | null;
     issueReasonLabel?: string | null;
@@ -643,6 +646,18 @@ export default function PedidoDetailPage() {
       preview.missing.forEach((m) => allSkus.add(m.sku));
       Object.keys(preview.alternativesBySku ?? {}).forEach((sku) => allSkus.add(sku));
 
+      // MODO SWAP (14/07): "Trocar loja" de UM pick-order considera SÓ os SKUs
+      // DAQUELA loja — não o pedido inteiro. Sem isso a cobertura "cobre X/9"
+      // contava contra TODOS os itens do pedido (inclusive os de outra loja que
+      // nem vão mudar), e uma loja que cobre 100% do que será trocado aparecia
+      // como "⚠ cobre 6/9". Fallback: sem os SKUs da loja, usa o pedido inteiro.
+      let relevantSkus = allSkus;
+      if (swapTarget?.pickOrderId) {
+        const po = liveStatus.find((p) => p.id === swapTarget.pickOrderId);
+        const swapSkus = (po?.skus ?? []).filter((s) => allSkus.has(s));
+        if (swapSkus.length) relevantSkus = new Set(swapSkus);
+      }
+
       // Quantidades pedidas (pra comparar com availableQty)
       const qtyBySku = new Map<string, number>();
       preview.groups.forEach((g) => g.items.forEach((it) => {
@@ -652,50 +667,37 @@ export default function PedidoDetailPage() {
         qtyBySku.set(m.sku, (qtyBySku.get(m.sku) ?? 0) + m.quantity);
       });
 
-      // Monta mapa storeCode → { skusCovered, totalQty, missingSkus }
+      // Cobertura por loja, escopada aos relevantSkus. Uma passagem só: monta o
+      // conjunto de SKUs cobertos por loja (group assignee + alternativa com
+      // estoque suficiente) e deriva skusCovered/missing/totalQty dele.
+      const skusArr = Array.from(relevantSkus);
       const byStore = new Map<string, { skusCovered: number; totalQty: number; missing: string[] }>();
-      for (const code of activeStores.map((s) => s.code)) {
-        byStore.set(code, { skusCovered: 0, totalQty: 0, missing: [] });
-      }
-      // Também considera loja que está num group (tem tudo daquele grupo)
-      preview.groups.forEach((g) => {
-        const rec = byStore.get(g.storeCode);
-        if (!rec) return;
-        g.items.forEach((it) => {
-          rec.skusCovered += 1;
-          rec.totalQty += it.quantity;
-        });
-      });
-      // Adiciona o que aparece em alternativesBySku (qty disponível por loja/SKU)
-      Object.entries(preview.alternativesBySku ?? {}).forEach(([sku, alts]) => {
-        const need = qtyBySku.get(sku) ?? 1;
-        alts.forEach((alt) => {
-          const rec = byStore.get(alt.storeCode);
-          if (!rec) return;
-          if (alt.availableQty >= need) {
-            // Evita dupla contagem se a loja já está como group assignee
-            const alreadyInGroup = preview.groups.some(
-              (g) => g.storeCode === alt.storeCode && g.items.some((it) => it.sku === sku),
-            );
-            if (!alreadyInGroup) {
-              rec.skusCovered += 1;
-              rec.totalQty += alt.availableQty;
-            }
-          }
-        });
-      });
-
-      // Calcula missingSkus por loja
-      const skusArr = Array.from(allSkus);
-      for (const [code, rec] of byStore.entries()) {
+      for (const s of activeStores) {
+        const code = s.code;
         const covered = new Set<string>();
-        preview.groups.filter((g) => g.storeCode === code).forEach((g) => g.items.forEach((it) => covered.add(it.sku)));
+        let totalQty = 0;
+        preview.groups.filter((g) => g.storeCode === code).forEach((g) =>
+          g.items.forEach((it) => {
+            if (relevantSkus.has(it.sku) && !covered.has(it.sku)) {
+              covered.add(it.sku);
+              totalQty += it.quantity;
+            }
+          }),
+        );
         Object.entries(preview.alternativesBySku ?? {}).forEach(([sku, alts]) => {
+          if (!relevantSkus.has(sku) || covered.has(sku)) return;
           const need = qtyBySku.get(sku) ?? 1;
           const alt = alts.find((a) => a.storeCode === code);
-          if (alt && alt.availableQty >= need) covered.add(sku);
+          if (alt && alt.availableQty >= need) {
+            covered.add(sku);
+            totalQty += alt.availableQty;
+          }
         });
-        rec.missing = skusArr.filter((sku) => !covered.has(sku));
+        byStore.set(code, {
+          skusCovered: covered.size,
+          totalQty,
+          missing: skusArr.filter((sku) => !covered.has(sku)),
+        });
       }
 
       const candidates = activeStores
@@ -709,7 +711,7 @@ export default function PedidoDetailPage() {
             state: s.state,
             active: s.active,
             skusCovered: rec.skusCovered,
-            skusTotal: allSkus.size,
+            skusTotal: relevantSkus.size,
             totalQty: rec.totalQty,
             missingSkus: rec.missing,
             hasReportedIssue: issueCodes.has(s.code),
@@ -2099,8 +2101,11 @@ export default function PedidoDetailPage() {
               {!pickStoreLoading && pickStoreCandidates.length > 0 && (
                 <div className="space-y-2">
                   <div className="text-xs text-slate-500 mb-2">
-                    Ordenado por <b>maior cobertura</b> (mais SKUs do pedido disponíveis).
-                    A loja <b>✓ verde</b> cobre o pedido todo. <b>⚠ amarelo</b> cobre parcialmente
+                    Ordenado por <b>maior cobertura</b> (mais SKUs disponíveis)
+                    {swapTarget
+                      ? <> — <b>só dos itens de {swapTarget.fromStoreName || swapTarget.fromStoreCode}</b> (as outras lojas do pedido não entram na conta).</>
+                      : ' do pedido.'}
+                    {' '}A loja <b>✓ verde</b> cobre tudo. <b>⚠ amarelo</b> cobre parcialmente
                     (vai faltar peça — ia precisar transferir ou quebrar de novo).
                   </div>
                   {pickStoreCandidates.map((c) => {
