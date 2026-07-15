@@ -324,7 +324,10 @@ export class CashController {
     if (dTo < dFrom) {
       throw new BadRequestException('"to" nao pode ser anterior a "from"');
     }
-    const storeCodes = role === 'master_franquia' ? await this.franquiaStoreCodes() : undefined;
+    // BUG 15/07: 'franquias' passava no guard mas NÃO era escopado — o dia
+    // anterior mostrava TODAS as lojas. Escopo vale pros DOIS papéis de franquia.
+    const storeCodes =
+      role === 'master_franquia' || role === 'franquias' ? await this.franquiaStoreCodes() : undefined;
     return this.svc.getSuperPainelHistorico(dFrom, dTo, storeCodes);
   }
 
