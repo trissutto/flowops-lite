@@ -1216,24 +1216,25 @@ export class PickOrdersService {
         store: { select: { id: true, code: true, name: true, city: true } },
       },
     });
-    // SKUs de cada loja (14/07): a tela "Trocar loja" precisa saber QUAIS itens
-    // são da loja em swap pra medir a cobertura só contra eles (não o pedido
-    // inteiro). Item vai pra loja onde foi assignado; sem assignação (pedido de
-    // loja única) conta pra loja se for a única pick-order.
+    // ITENS de cada loja (14/07 skus p/ "Trocar loja"; 15/07 lista completa p/
+    // a operadora VER quais peças cada loja separa e decidir consolidar). Item
+    // vai pra loja onde foi assignado; sem assignação (pedido de loja única)
+    // conta pra loja se for a única pick-order.
     const itens = await this.prisma.orderItem.findMany({
       where: { orderId: order.id },
-      select: { sku: true, assignedStoreId: true },
+      select: { sku: true, productName: true, quantity: true, assignedStoreId: true },
     });
     const soUmaLoja = rows.length === 1;
+    const itensDaStore = (storeId: string) =>
+      itens.filter((i) => i.assignedStoreId === storeId || (soUmaLoja && !i.assignedStoreId));
     const skusPorStore = (storeId: string): string[] =>
-      Array.from(
-        new Set(
-          itens
-            .filter((i) => i.assignedStoreId === storeId || (soUmaLoja && !i.assignedStoreId))
-            .map((i) => String(i.sku || '').trim())
-            .filter(Boolean),
-        ),
-      );
+      Array.from(new Set(itensDaStore(storeId).map((i) => String(i.sku || '').trim()).filter(Boolean)));
+    const itemsPorStore = (storeId: string) =>
+      itensDaStore(storeId).map((i) => ({
+        sku: String(i.sku || '').trim(),
+        descricao: i.productName || null,
+        qty: Number(i.quantity) || 1,
+      }));
     const reasonLabels: Record<string, string> = {
       out_of_stock: 'Sem estoque físico',
       defective: 'Peça com defeito',
@@ -1266,6 +1267,9 @@ export class PickOrdersService {
         storeCity: r.store?.city ?? null,
         // SKUs desta loja (pra cobertura do "Trocar loja" — ver acima).
         skus: skusPorStore(r.storeId),
+        // Peças que ESTA loja separa (descrição + qtd) — a operadora vê o que
+        // foi roteado pra cada uma e decide consolidar (evitar 2 SEDEX).
+        items: itemsPorStore(r.storeId),
         isTransfer: (r as any).isTransfer ?? false,
         transferToStoreCode: (r as any).transferToStoreCode ?? null,
         issueReason,
