@@ -228,6 +228,8 @@ export default function PedidoDetailPage() {
     // SKUs desta loja — usados pra medir a cobertura do "Trocar loja" só
     // contra os itens que realmente vão mudar de loja.
     skus?: string[];
+    // Peças que esta loja separa (descrição + qtd) — mostradas no card.
+    items?: Array<{ sku: string; descricao: string | null; qty: number }>;
     updatedAt: string;
     issueReason?: string | null;
     issueReasonLabel?: string | null;
@@ -1452,6 +1454,25 @@ export default function PedidoDetailPage() {
                         );
                       })()}
                     </div>
+                    {/* PEÇAS desta loja (15/07): a operadora vê o que foi
+                        roteado pra cada loja e decide se dá pra consolidar
+                        (juntar tudo numa só via ↔ Trocar loja, evitando 2 SEDEX). */}
+                    {(r.items?.length ?? 0) > 0 && (
+                      <div className="mt-1.5 pl-6">
+                        <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400 mb-0.5">
+                          {r.items!.reduce((s, it) => s + (it.qty || 1), 0)} peça(s) nesta loja
+                        </div>
+                        <ul className="space-y-0.5">
+                          {r.items!.map((it, i) => (
+                            <li key={`${it.sku}-${i}`} className="text-xs text-slate-600 flex gap-1.5">
+                              <span className="font-bold tabular-nums text-slate-500 shrink-0">{it.qty}×</span>
+                              <span className="truncate">{it.descricao || it.sku}</span>
+                              <span className="text-slate-300 shrink-0 font-mono">· {it.sku}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
                     {r.status === 'shipped' && r.trackingCode && (
                       <div className="mt-1 pl-6 text-xs text-slate-700">
                         <Truck className="w-3 h-3 inline mr-1" />
