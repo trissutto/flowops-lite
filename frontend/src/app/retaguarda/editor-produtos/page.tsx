@@ -95,6 +95,22 @@ export default function EditorProdutosPage() {
   // clicou na célula → stepper −/+ que grava NA HORA (motivo AJUSTE, auditado).
   const [cellSel, setCellSel] = useState<{ codigo: string; loja: string } | null>(null);
   const [cellBusy, setCellBusy] = useState(false);
+  // Abreviação da loja no cabeçalho (ITANH, SOROC…) em vez do número
+  const [lojaNomes, setLojaNomes] = useState<Map<string, string>>(new Map());
+  useEffect(() => {
+    api<Array<{ code: string; name: string }>>('/stores')
+      .then((list) => {
+        const m = new Map<string, string>();
+        for (const s of list || []) {
+          const abbr = String(s.name || '')
+            .normalize('NFD').replace(/[̀-ͯ]/g, '')
+            .replace(/[^A-Za-z0-9 ]/g, '').trim().toUpperCase().slice(0, 5);
+          m.set(String(s.code).padStart(2, '0'), abbr || String(s.code));
+        }
+        setLojaNomes(m);
+      })
+      .catch(() => {});
+  }, []);
 
   // Inputs dos modais
   const [novaRef, setNovaRef] = useState('');
@@ -337,10 +353,13 @@ export default function EditorProdutosPage() {
   // ── Preview + aplicar ─────────────────────────────────────────────────────
   // Lojas disponíveis: união do que aparece no estoque dos resultados + rede fixa
   const lojasDisponiveis = useMemo(() => {
-    const s = new Set<string>(['01', '02', '03', '05', '06', '08', '10', '15', '17', '18']);
+    // TODAS as lojas cadastradas (endpoint /stores) + qualquer código que
+    // apareça no estoque — tudo visível de uma vez, sem scroll horizontal.
+    const s = new Set<string>(lojaNomes.keys());
+    if (!s.size) for (const c of ['01', '02', '03', '05', '06', '08', '10', '15', '17', '18']) s.add(c);
     for (const r of rows) for (const l of Object.keys(r.estoqueLojas || {})) s.add(l);
     return Array.from(s).sort();
-  }, [rows]);
+  }, [rows, lojaNomes]);
 
   // Clique no stepper da célula: grava NA HORA (Flow fonte, Giga réplica)
   const aplicarMovCelula = async (row: Row, loja: string, delta: 1 | -1) => {
@@ -568,13 +587,15 @@ export default function EditorProdutosPage() {
                     <th className="w-8" />
                     <th className="text-left px-2 py-1.5">SKU</th>
                     <th className="text-left px-2 py-1.5">REF</th>
-                    <th className="text-left px-2 py-1.5 min-w-[560px]">Descrição</th>
+                    <th className="text-left px-2 py-1.5 min-w-[280px]">Descrição</th>
                     <th className="text-left px-2 py-1.5">Marca</th>
                     <th className="text-left px-2 py-1.5">Cor</th>
                     <th className="text-left px-2 py-1.5">Tam</th>
                     <th className="text-right px-2 py-1.5">Preço (R$)</th>
                     {lojasDisponiveis.map((l) => (
-                      <th key={l} className="text-center px-1 py-1.5 w-10">{l}</th>
+                      <th key={l} title={`Loja ${l}`} className="text-center px-0.5 py-1.5 w-9 whitespace-nowrap">
+                        {lojaNomes.get(l) || l}
+                      </th>
                     ))}
                   </tr>
                 </thead>
@@ -602,12 +623,12 @@ export default function EditorProdutosPage() {
                         <td className="px-2 py-1 font-mono text-xs text-slate-500 whitespace-nowrap">
                           <span className="inline-flex items-center gap-1">{r.codigo} <Lock className="w-3 h-3 text-slate-300" /></span>
                         </td>
-                        <td className="px-1 py-1">{cell('ref', 'w-28', false, LIMITS.ref)}</td>
-                        <td className="px-1 py-1">{cell('descricao', 'w-full min-w-[560px]', false, LIMITS.descricao)}</td>
-                        <td className="px-1 py-1">{cell('marca', 'w-32', false, LIMITS.marca)}</td>
-                        <td className="px-1 py-1">{cell('cor', 'w-44', false, LIMITS.cor)}</td>
-                        <td className="px-1 py-1">{cell('tamanho', 'w-16', false, LIMITS.tamanho)}</td>
-                        <td className="px-1 py-1">{cell('preco', 'w-24', true)}</td>
+                        <td className="px-1 py-1">{cell('ref', 'w-24', false, LIMITS.ref)}</td>
+                        <td className="px-1 py-1">{cell('descricao', 'w-full min-w-[280px]', false, LIMITS.descricao)}</td>
+                        <td className="px-1 py-1">{cell('marca', 'w-24', false, LIMITS.marca)}</td>
+                        <td className="px-1 py-1">{cell('cor', 'w-28', false, LIMITS.cor)}</td>
+                        <td className="px-1 py-1">{cell('tamanho', 'w-12', false, LIMITS.tamanho)}</td>
+                        <td className="px-1 py-1">{cell('preco', 'w-20', true)}</td>
                         {/* MATRIZ por loja (padrão Wincred): clicou → stepper −/+ grava na hora */}
                         {lojasDisponiveis.map((loja) => {
                           const qtd = r.estoqueLojas?.[loja] ?? 0;
