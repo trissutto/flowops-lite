@@ -209,12 +209,13 @@ export default function SuperPainelCaixas() {
   const [pixConc, setPixConc] = useState<Record<string, PixConcStatus>>({});
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Detecta role do user (admin pode editar bandeira)
+  // Quem pode EDITAR no painel (bandeira, ajustes master, conferir sessão).
+  // 15/07: papéis de franquia editam igual admin — o backend escopa às FILIAIS.
   useEffect(() => {
     (async () => {
       try {
         const me = await api<{ role: string }>('/auth/me');
-        setIsAdmin(me?.role === 'admin');
+        setIsAdmin(['admin', 'master_franquia', 'franquias'].includes(me?.role));
       } catch { /* ignora */ }
     })();
   }, []);
