@@ -126,6 +126,8 @@ type Sale = {
     precoUnit: number;
     desconto: number;
     promoTag: string | null;
+    // Item BÁSICO que a operadora forçou pra dentro da promoção (botão azul).
+    forcarPromo?: boolean;
     total: number;
   }>;
 };
@@ -1105,7 +1107,7 @@ function PdvPageInner() {
   };
 
   // ── Atualizar qty/desconto do item ──
-  const updateItem = async (itemId: string, patch: { qty?: number; desconto?: number; excludePromo?: boolean }) => {
+  const updateItem = async (itemId: string, patch: { qty?: number; desconto?: number; excludePromo?: boolean; forcePromo?: boolean }) => {
     if (!sale) return;
     // MD-1: desconto manual por item em faixas (% sobre o BRUTO do item):
     // 0–7% livre · >7–10% CAIXA · >10% GERENTE + justificativa. Campanha ativa bloqueia.
@@ -1159,6 +1161,19 @@ function PdvPageInner() {
         } else {
           toast('success', 'Item de volta na promoção', item?.descricao || item?.ref || item?.sku);
         }
+      }
+      // Feedback de FORÇAR promo (botão azul): avisa se a data/coleção barrou
+      // (item novo forçado não ganha desconto — o filtro de data ainda vale).
+      if (patch.forcePromo === true) {
+        const item = fresh.items.find((i) => i.id === itemId);
+        if (item && item.desconto > 0) {
+          toast('success', 'Item colocado na promoção', `${item.descricao || item.ref || item.sku} · ${brl(item.desconto)} off`);
+        } else {
+          toast('warning', 'Sem desconto pra este item', 'Forçado, mas a data/coleção não se enquadra na campanha.');
+        }
+      } else if (patch.forcePromo === false) {
+        const item = fresh.items.find((i) => i.id === itemId);
+        toast('info', 'Item voltou a básico', item?.descricao || item?.ref || item?.sku);
       }
     } catch (e: any) {
       const h = humanizeError(e);
@@ -2209,26 +2224,56 @@ function PdvPageInner() {
                       >
                         <Percent className="w-3.5 h-3.5" />
                       </button>
-                      {/* Tirar/voltar item da PROMOÇÃO ativa (peça que não participa).
-                          Só aparece com campanha ativa e item que tem promo OU já foi excluído. */}
-                      {sale.activePromotion && sale.activePromotion !== 'NONE' &&
-                        (it.promoTag === 'SEM_PROMO' || (it.desconto > 0 && /^(PROMO|4 LEVA)/.test(it.promoTag || ''))) && (
-                        <button
-                          onClick={() => updateItem(it.id, { excludePromo: it.promoTag !== 'SEM_PROMO' })}
-                          className={`w-6 h-6 rounded flex items-center justify-center text-[11px] leading-none transition active:scale-95 ${
-                            it.promoTag === 'SEM_PROMO'
-                              ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
-                              : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
-                          }`}
-                          title={
-                            it.promoTag === 'SEM_PROMO'
-                              ? 'Incluir este item na promoção'
-                              : 'Tirar este item da promoção (não participa)'
-                          }
-                        >
-                          {it.promoTag === 'SEM_PROMO' ? '🎁' : '🚫'}
-                        </button>
-                      )}
+                      {/* Botão de PROMOÇÃO por item (campanha ativa). Um só botão,
+                          conforme o estado:
+                            🎁 verde  = SEM_PROMO → voltar ao automático
+                            ⬆️ azul   = BÁSICO → COLOCAR na promoção (força, ignora
+                                        só o filtro básico; data/coleção seguem)
+                            ⬇️ azul   = FORÇADO → tirar da promo forçada (volta básico)
+                            🚫 cinza  = promo automática → tirar da promoção */}
+                      {sale.activePromotion && sale.activePromotion !== 'NONE' && (() => {
+                        const semPromoTag = it.promoTag === 'SEM_PROMO';
+                        const isForced = !!it.forcarPromo;
+                        const basicoTag = !isForced && /b[áa]sico/i.test(it.promoTag || '');
+                        const autoPromo = !isForced && it.desconto > 0 && /^(PROMO|4 LEVA)/.test(it.promoTag || '');
+                        if (semPromoTag) {
+                          return (
+                            <button
+                              onClick={() => updateItem(it.id, { excludePromo: false })}
+                              className="w-6 h-6 rounded flex items-center justify-center text-[11px] leading-none transition active:scale-95 bg-emerald-100 text-emerald-700 hover:bg-emerald-200"
+                              title="Incluir este item na promoção (volta ao automático)"
+                            >🎁</button>
+                          );
+                        }
+                        if (isForced) {
+                          return (
+                            <button
+                              onClick={() => updateItem(it.id, { forcePromo: false })}
+                              className="w-6 h-6 rounded flex items-center justify-center text-[11px] leading-none transition active:scale-95 bg-blue-600 text-white hover:bg-blue-700"
+                              title="Tirar da promoção forçada (volta a básico)"
+                            >⬇️</button>
+                          );
+                        }
+                        if (basicoTag) {
+                          return (
+                            <button
+                              onClick={() => updateItem(it.id, { forcePromo: true })}
+                              className="w-6 h-6 rounded flex items-center justify-center text-[11px] leading-none transition active:scale-95 bg-blue-100 text-blue-700 hover:bg-blue-200"
+                              title="Colocar este item na promoção (aplica o desconto mesmo sendo básico)"
+                            >⬆️</button>
+                          );
+                        }
+                        if (autoPromo) {
+                          return (
+                            <button
+                              onClick={() => updateItem(it.id, { excludePromo: true })}
+                              className="w-6 h-6 rounded flex items-center justify-center text-[11px] leading-none transition active:scale-95 bg-slate-200 text-slate-700 hover:bg-slate-300"
+                              title="Tirar este item da promoção (não participa)"
+                            >🚫</button>
+                          );
+                        }
+                        return null;
+                      })()}
                       <button
                         onClick={() => removeItem(it.id)}
                         className="w-6 h-6 rounded text-slate-300 hover:text-rose-600 hover:bg-rose-50 flex items-center justify-center transition active:scale-95"

@@ -502,7 +502,7 @@ export class PdvController {
     @Req() req: any,
     @Param('id') id: string,
     @Param('itemId') itemId: string,
-    @Body() body: { qty?: number; desconto?: number; password?: string; motivo?: string; excludePromo?: boolean },
+    @Body() body: { qty?: number; desconto?: number; password?: string; motivo?: string; excludePromo?: boolean; forcePromo?: boolean },
   ) {
     this.requireRole(req);
     return this.svc.updateItem({
@@ -513,6 +513,7 @@ export class PdvController {
       password: body?.password,
       motivo: body?.motivo,
       excludePromo: body?.excludePromo,
+      forcePromo: body?.forcePromo,
     });
   }
 
