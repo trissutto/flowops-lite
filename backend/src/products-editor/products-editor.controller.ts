@@ -88,6 +88,23 @@ export class ProductsEditorController {
     });
   }
 
+  /**
+   * POST /products-editor/movimentar
+   * Body: { movimentos: [{codigo, loja, qtd, tipo: 'entrada'|'saida', motivo}] }
+   * Entrada/saída manual com motivo obrigatório. Flow é a fonte; Giga réplica.
+   */
+  @Post('movimentar')
+  async movimentar(
+    @Req() req: any,
+    @Body() body: { movimentos?: Array<{ codigo: string; loja: string; qtd: number; tipo: 'entrada' | 'saida'; motivo: string }> },
+  ) {
+    this.requireAdmin(req);
+    return this.svc.movimentarEstoque({
+      movimentos: body?.movimentos || [],
+      userName: req?.user?.name || req?.user?.email || null,
+    });
+  }
+
   /** INCIDENTE 14/07 — diagnóstico do estrago da DATAALT. */
   @Get('dataalt-diagnostico')
   async dataAltDiag(@Req() req: any) {

@@ -157,15 +157,21 @@ export class ProductsEditorService {
     }
     }
 
-    // ── Estoque total (espelho, informativo) ──
+    // ── Estoque (espelho = fonte desde 14/07): total + POR LOJA ──
     const estoquePorCodigo = new Map<string, number>();
+    const estoqueLojasPorCodigo = new Map<string, Record<string, number>>();
     try {
       const est: any[] = await (this.prisma as any).gigaEstoque.findMany({
         where: { codigo: { in: codigos } },
-        select: { codigo: true, estoque: true },
+        select: { codigo: true, loja: true, estoque: true },
       });
       for (const e of est) {
-        estoquePorCodigo.set(e.codigo, (estoquePorCodigo.get(e.codigo) || 0) + (Number(e.estoque) || 0));
+        const qtd = Number(e.estoque) || 0;
+        estoquePorCodigo.set(e.codigo, (estoquePorCodigo.get(e.codigo) || 0) + qtd);
+        const loja = String(e.loja || '').trim().padStart(2, '0');
+        const m = estoqueLojasPorCodigo.get(e.codigo) || {};
+        m[loja] = (m[loja] || 0) + qtd;
+        estoqueLojasPorCodigo.set(e.codigo, m);
       }
     } catch { /* informativo */ }
 
@@ -184,6 +190,7 @@ export class ProductsEditorService {
           tamanho: ex?.tamanho ?? (r.tamanho != null ? String(r.tamanho).trim() : ''),
           preco: ex?.vendaUn ?? (r as any).vendaUn ?? null,
           estoque: estoquePorCodigo.get(codigo) ?? null,
+          estoqueLojas: estoqueLojasPorCodigo.get(codigo) ?? {},
         };
       })
       .sort((a, b) =>
@@ -1096,6 +1103,84 @@ export class ProductsEditorService {
     );
     this.logger.log(`[dataalt] nativa ← espelho: ${atualizados} linhas corrigidas`);
     return { dryRun: false, atualizados };
+  }
+
+  /**
+   * MOVIMENTAÇÃO MANUAL de estoque (tela do editor, 15/07): entrada/saída com
+   * loja + quantidade + MOTIVO obrigatório. Flow é a fonte (erp.increase/
+   * decreaseStock já aplicam o delta no espelho primeiro e replicam pro Giga
+   * inline/outbox). Tudo auditado em product_edit_audit.
+   */
+  async movimentarEstoque(input: {
+    movimentos: Array<{ codigo: string; loja: string; qtd: number; tipo: 'entrada' | 'saida'; motivo: string }>;
+    userName?: string | null;
+  }) {
+    const movs = (input.movimentos || [])
+      .map((m) => ({
+        codigo: this.normalizeCodigo(String(m?.codigo || '')) || '',
+        loja: String(m?.loja || '').trim().padStart(2, '0'),
+        qtd: Math.floor(Math.abs(Number(m?.qtd) || 0)),
+        tipo: m?.tipo === 'saida' ? 'saida' as const : 'entrada' as const,
+        motivo: String(m?.motivo || '').trim().slice(0, 60),
+      }))
+      .filter((m) => m.codigo && m.loja && m.qtd > 0);
+    if (!movs.length) throw new BadRequestException('Nenhum movimento válido');
+    if (movs.length > 200) throw new BadRequestException('Máximo de 200 movimentos por vez');
+    if (movs.some((m) => !m.motivo)) throw new BadRequestException('Motivo é obrigatório em todo movimento');
+
+    const batchId = randomUUID();
+    const resultados: Array<{ codigo: string; loja: string; tipo: string; qtd: number; antes: number | null; depois: number | null; ok: boolean; erro?: string }> = [];
+
+    const entradas = movs.filter((m) => m.tipo === 'entrada').map((m) => ({ sku: m.codigo, qty: m.qtd, storeCode: m.loja }));
+    const saidas = movs.filter((m) => m.tipo === 'saida').map((m) => ({ sku: m.codigo, qty: m.qtd, storeCode: m.loja }));
+
+    const aplicadoPorChave = new Map<string, { previousStock: number; newStock: number }>();
+    let erroGeral: string | null = null;
+    try {
+      if (entradas.length) {
+        const r = await this.erp.increaseStock(entradas);
+        for (const a of r.applied || []) aplicadoPorChave.set(`entrada|${this.normalizeCodigo(a.sku)}|${String(a.storeCode).padStart(2, '0')}`, a);
+        if (!r.success) erroGeral = r.error || 'falha na entrada';
+      }
+      if (saidas.length) {
+        const r = await this.erp.decreaseStock(saidas, { allowNegative: false });
+        for (const a of r.applied || []) aplicadoPorChave.set(`saida|${this.normalizeCodigo(a.sku)}|${String(a.storeCode).padStart(2, '0')}`, a);
+        if (!r.success) erroGeral = erroGeral || r.error || 'falha na saída';
+      }
+    } catch (e) {
+      erroGeral = (e as Error).message;
+    }
+
+    for (const m of movs) {
+      const ap = aplicadoPorChave.get(`${m.tipo}|${m.codigo}|${m.loja}`);
+      resultados.push({
+        codigo: m.codigo, loja: m.loja, tipo: m.tipo, qtd: m.qtd,
+        antes: ap ? ap.previousStock : null,
+        depois: ap ? ap.newStock : null,
+        ok: !!ap,
+        erro: ap ? undefined : (erroGeral || 'não aplicado'),
+      });
+    }
+
+    await (this.prisma as any).productEditAudit.createMany({
+      data: movs.map((m) => {
+        const ap = aplicadoPorChave.get(`${m.tipo}|${m.codigo}|${m.loja}`);
+        return {
+          batchId,
+          codigo: m.codigo,
+          ref: null,
+          field: m.tipo === 'entrada' ? 'ESTOQUE_ENTRADA' : 'ESTOQUE_SAIDA',
+          oldValue: ap ? `loja ${m.loja}: ${ap.previousStock}` : `loja ${m.loja}`,
+          newValue: `${ap ? ap.newStock : '?'} (${m.tipo} ${m.qtd} — ${m.motivo})`,
+          userName: input.userName || null,
+          applied: !!ap,
+        };
+      }),
+    }).catch(() => null);
+
+    const aplicados = resultados.filter((r) => r.ok).length;
+    this.logger.log(`[editor] movimentação: ${aplicados}/${movs.length} aplicado(s) (por ${input.userName || '?'})`);
+    return { ok: aplicados > 0, aplicados, total: movs.length, resultados, batchId };
   }
 
   /** Últimos lotes de auditoria (tela mostra o histórico recente). */
