@@ -43,6 +43,7 @@
       "createStartMenuShortcut": true,
       "shortcutName": "LURDS ORDER ONE",
       "runAfterFinish": true,
+      "warningsAsErrors": false,
       "include": "build/installer.nsh"
     },
     "extraResources": [
