@@ -39,6 +39,7 @@ interface LojaItem {
 }
 
 const LOJA_ITEMS: LojaItem[] = [
+  { href: '/retaguarda/editor-produtos',      label: 'Editor Produtos', subtitle: 'Estoque + cadastro', description: 'Matriz por loja · preço · marca', tone: 'amber', icon: Tags },
   { href: '/loja/pedidos-compra',             label: 'Pedidos Compra', subtitle: 'Fornecedores', description: 'Pedidos + cadastro automático', tone: 'rose',   icon: ShoppingCart },
   { href: '/loja/reposicao',                  label: 'Reposição',      subtitle: 'Estoque',      description: 'Busca REF + qty + etiquetas',   tone: 'green',  icon: Package2     },
   { href: '/loja/etiquetas-avulsas',          label: 'Etiquetas',      subtitle: 'Avulsas',      description: 'Imprimir por REF/SKU',          tone: 'amber',  icon: Tags         },
