@@ -161,7 +161,9 @@ function ProdutosVendidosContent() {
   const [error, setError] = useState<string | null>(null);
   const [editSeller, setEditSeller] = useState<{ itemId: string; saleId: string; currentName: string; produtoHint: string } | null>(null);
 
-  const isMatrix = me?.role === 'admin' || me?.role === 'operator' || me?.role === 'supervisor';
+  // Quem edita/exclui aqui: matriz + papéis de franquia (15/07). O backend
+  // escopa os dados e as ações da franquia às lojas FILIAL.
+  const isMatrix = ['admin', 'operator', 'supervisor', 'master_franquia', 'franquias'].includes(me?.role || '');
 
   useEffect(() => {
     api<Me>('/auth/me').then(setMe).catch(() => {});

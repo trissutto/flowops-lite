@@ -41,10 +41,12 @@ export class ProdutosVendidosController {
       effectiveStoreCode = userStoreCode;
     }
 
-    // master_franquia → SÓ lojas FRANQUIA (tipo=FILIAL). Se pediu uma loja
-    // específica, ela precisa ser franquia; sem loja, restringe ao conjunto.
+    // Papéis de franquia (master_franquia + franquias) → SÓ lojas FRANQUIA
+    // (tipo=FILIAL). Se pediu uma loja específica, ela precisa ser franquia;
+    // sem loja, restringe ao conjunto. (15/07: 'franquias' também escopado —
+    // antes via tudo neste endpoint.)
     let storeCodesScope: string[] | undefined;
-    if (role === 'master_franquia') {
+    if (role === 'master_franquia' || role === 'franquias') {
       const rows = await (this.svc as any).prisma.store.findMany({
         where: { tipo: 'FILIAL', active: true },
         select: { code: true },
