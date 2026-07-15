@@ -287,10 +287,14 @@ export class CashController {
   @Get('super-painel')
   async getSuperPainel(@Req() req: any) {
     const role = req?.user?.role;
-    if (role !== 'admin' && role !== 'supervisor' && role !== 'master_franquia') {
+    // 'franquias' (15/07, decisão do dono): a operadora vê o Super Painel
+    // 100% IDÊNTICO (cascatas incluídas), escopado às lojas FILIAL. As AÇÕES
+    // (conferir/ajustes master) continuam barradas pra esse papel nos POSTs.
+    if (role !== 'admin' && role !== 'supervisor' && role !== 'master_franquia' && role !== 'franquias') {
       throw new ForbiddenException('Apenas admin ou supervisor');
     }
-    const storeCodes = role === 'master_franquia' ? await this.franquiaStoreCodes() : undefined;
+    const storeCodes =
+      role === 'master_franquia' || role === 'franquias' ? await this.franquiaStoreCodes() : undefined;
     return this.svc.getSuperPainelCaixas(storeCodes);
   }
 
@@ -306,7 +310,7 @@ export class CashController {
     @Query('to') to?: string,
   ) {
     const role = req?.user?.role;
-    if (role !== 'admin' && role !== 'supervisor' && role !== 'master_franquia') {
+    if (role !== 'admin' && role !== 'supervisor' && role !== 'master_franquia' && role !== 'franquias') {
       throw new ForbiddenException('Apenas admin ou supervisor');
     }
     if (!from) {
@@ -320,7 +324,10 @@ export class CashController {
     if (dTo < dFrom) {
       throw new BadRequestException('"to" nao pode ser anterior a "from"');
     }
-    const storeCodes = role === 'master_franquia' ? await this.franquiaStoreCodes() : undefined;
+    // BUG 15/07: 'franquias' passava no guard mas NÃO era escopado — o dia
+    // anterior mostrava TODAS as lojas. Escopo vale pros DOIS papéis de franquia.
+    const storeCodes =
+      role === 'master_franquia' || role === 'franquias' ? await this.franquiaStoreCodes() : undefined;
     return this.svc.getSuperPainelHistorico(dFrom, dTo, storeCodes);
   }
 

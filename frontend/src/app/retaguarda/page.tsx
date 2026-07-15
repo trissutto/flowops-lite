@@ -86,6 +86,9 @@ export default function GestaoHub() {
         if (me.role === 'store') router.push('/minha-loja/pdv');
         // Contador só tem acesso ao relatório fiscal — bloqueia hub geral
         else if (me.role === 'contador') router.push('/retaguarda/relatorio-fiscal');
+        // Franquia NUNCA vê o hub completo da retaguarda — vai pro portal dela
+        // (bug 15/07: voltar do painel de caixas caía no menu de admin inteiro)
+        else if (me.role === 'franquias' || me.role === 'master_franquia') router.push('/franquias');
       })
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
