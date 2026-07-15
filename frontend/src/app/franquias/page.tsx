@@ -111,15 +111,16 @@ export default function FranquiasHub() {
 
         {/* Áreas */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {isMaster && (
-            <AreaCard
-              href="/retaguarda/super-painel-caixas"
-              label="Painel de Caixas"
-              description="Caixas ao vivo das lojas franquia"
-              icon={BarChart3}
-              tone="emerald"
-            />
-          )}
+          {/* Faturamento = o MESMO Super Painel da retaguarda (15/07, decisão
+              do dono: "100% idêntico, inclusive as cascatas"). O backend escopa
+              os papéis de franquia só às lojas FILIAL automaticamente. */}
+          <AreaCard
+            href="/retaguarda/super-painel-caixas"
+            label="Faturamento · Super Painel"
+            description="Caixas, vendas e formas — com as cascatas, ao vivo e por período"
+            icon={BarChart3}
+            tone="sky"
+          />
           <AreaCard
             href="/minha-loja/pdv/notas"
             label="Notas (NFC-e)"
@@ -128,18 +129,18 @@ export default function FranquiasHub() {
             tone="emerald"
           />
           <AreaCard
-            href="/franquias/faturamento"
-            label="Faturamento"
-            description="Bruto, vendas, ticket, formas de pagamento e ranking"
-            icon={BarChart3}
-            tone="sky"
-          />
-          <AreaCard
             href="/franquias/estoque"
             label="Estoque"
             description="Peças, valor por loja, grupos e consulta de produto"
             icon={Package2}
             tone="violet"
+          />
+          <AreaCard
+            href="/franquias/faturamento"
+            label="Resumo & Ranking"
+            description="Bruto oficial por dia, ranking das franquias e mais vendidos"
+            icon={BarChart3}
+            tone="emerald"
           />
         </div>
       </main>
