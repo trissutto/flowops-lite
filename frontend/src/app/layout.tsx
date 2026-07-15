@@ -3,6 +3,7 @@ import { Cormorant_Garamond, Inter } from 'next/font/google';
 import './globals.css';
 import TopBreadcrumb from '@/components/TopBreadcrumb';
 import NewOrderAlert from '@/components/NewOrderAlert';
+import SupplyRequestAlert from '@/components/SupplyRequestAlert';
 import PwaInstallBanner from '@/components/PwaInstallBanner';
 import ServiceWorkerRegister from '@/components/ServiceWorkerRegister';
 import PushSubscriptionManager from '@/components/PushSubscriptionManager';
@@ -78,6 +79,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <TopBreadcrumb />
         {children}
         <NewOrderAlert />
+        <SupplyRequestAlert />
         <PwaInstallBanner />
         <PushSubscriptionManager />
         <ServiceWorkerRegister />
