@@ -91,13 +91,10 @@ export default function EditorProdutosPage() {
   const [preview, setPreview] = useState<Array<{ codigo: string; ref: string; field: string; antes: string; depois: string }> | null>(null);
   const [applying, setApplying] = useState(false);
 
-  // Movimentação manual de estoque (15/07): pendências entram no MESMO preview
-  const [movs, setMovs] = useState<Movimento[]>([]);
-  const [modalMov, setModalMov] = useState(false);
-  const [movTipo, setMovTipo] = useState<'entrada' | 'saida'>('entrada');
-  const [movLoja, setMovLoja] = useState('01');
-  const [movQtd, setMovQtd] = useState('1');
-  const [movMotivo, setMovMotivo] = useState('COMPRA');
+  // Estoque em MATRIZ (padrão Wincred, pedido do dono 15/07): coluna por loja,
+  // clicou na célula → stepper −/+ que grava NA HORA (motivo AJUSTE, auditado).
+  const [cellSel, setCellSel] = useState<{ codigo: string; loja: string } | null>(null);
+  const [cellBusy, setCellBusy] = useState(false);
 
   // Inputs dos modais
   const [novaRef, setNovaRef] = useState('');
@@ -121,7 +118,7 @@ export default function EditorProdutosPage() {
     const term = q.trim();
     if (!term) return;
     setBusy(true); setErr(''); setOkMsg('');
-    setPending(new Map()); setSel(new Set()); setMovs([]);
+    setPending(new Map()); setSel(new Set()); setCellSel(null);
     try {
       const r = await api<SearchResp>(`/products-editor/search?q=${encodeURIComponent(term)}`);
       setRows(r.rows || []);
@@ -345,31 +342,32 @@ export default function EditorProdutosPage() {
     return Array.from(s).sort();
   }, [rows]);
 
-  // Adiciona movimentos pendentes (1 por variação selecionada) — só grava no preview
-  const adicionarMovimentos = () => {
-    const qtd = Math.floor(Math.abs(Number(movQtd)));
-    if (!qtd) { setErr('Quantidade inválida'); return; }
-    if (!movMotivo.trim()) { setErr('Motivo é obrigatório'); return; }
-    const novos: Movimento[] = Array.from(sel).map((codigo) => ({
-      codigo, loja: movLoja, qtd, tipo: movTipo, motivo: movMotivo.trim().toUpperCase(),
-    }));
-    setMovs((prev) => [...prev, ...novos]);
-    setModalMov(false); setErr('');
+  // Clique no stepper da célula: grava NA HORA (Flow fonte, Giga réplica)
+  const aplicarMovCelula = async (row: Row, loja: string, delta: 1 | -1) => {
+    if (cellBusy) return;
+    const atual = row.estoqueLojas?.[loja] ?? 0;
+    if (delta < 0 && atual <= 0) return;
+    setCellBusy(true); setErr('');
+    try {
+      await api('/products-editor/movimentar', {
+        method: 'POST',
+        body: JSON.stringify({
+          movimentos: [{ codigo: row.codigo, loja, qtd: 1, tipo: delta > 0 ? 'entrada' : 'saida', motivo: 'AJUSTE' }],
+        }),
+      });
+      setRows((prev) => prev.map((r) => r.codigo === row.codigo
+        ? { ...r, estoqueLojas: { ...(r.estoqueLojas || {}), [loja]: Math.max(0, atual + delta) } }
+        : r));
+    } catch (e: any) {
+      setErr(e?.message || 'Falha no movimento');
+    } finally {
+      setCellBusy(false);
+    }
   };
 
   const montarPreview = () => {
     setErr('');
     const linhas: Array<{ codigo: string; ref: string; field: string; antes: string; depois: string }> = [];
-    for (const m of movs) {
-      const row = rows.find((r) => r.codigo === m.codigo);
-      const antes = row?.estoqueLojas?.[m.loja] ?? 0;
-      const depois = m.tipo === 'entrada' ? antes + m.qtd : Math.max(0, antes - m.qtd);
-      linhas.push({
-        codigo: m.codigo, ref: row?.ref || '',
-        field: `${m.tipo === 'entrada' ? 'ENTRADA' : 'SAÍDA'} LOJA ${m.loja} (${m.motivo})`,
-        antes: `${antes} un`, depois: `${depois} un`,
-      });
-    }
     for (const [codigo, ch] of pending) {
       const row = rows.find((r) => r.codigo === codigo);
       if (!row) continue;
@@ -397,33 +395,23 @@ export default function EditorProdutosPage() {
   const confirmarAplicar = async () => {
     setApplying(true); setErr('');
     try {
-      const partes: string[] = [];
-      if (pending.size) {
-        const edits = Array.from(pending.entries()).map(([codigo, ch]) => {
-          const changes: any = { ...ch };
-          if (changes.preco !== undefined) changes.preco = parsePreco(String(changes.preco));
-          return { codigo, changes };
-        });
-        const r = await api<{ ok: boolean; shadow: boolean; atualizados: number; planejados: number }>(
-          '/products-editor/apply',
-          { method: 'POST', body: JSON.stringify({ edits }) },
-        );
-        partes.push(r.shadow
-          ? `SHADOW: ${r.planejados} edições só na auditoria`
-          : `${r.atualizados} edições gravadas`);
-      }
-      if (movs.length) {
-        const r = await api<{ ok: boolean; aplicados: number; total: number }>(
-          '/products-editor/movimentar',
-          { method: 'POST', body: JSON.stringify({ movimentos: movs }) },
-        );
-        partes.push(`${r.aplicados}/${r.total} movimentos de estoque aplicados`);
-      }
+      const edits = Array.from(pending.entries()).map(([codigo, ch]) => {
+        const changes: any = { ...ch };
+        if (changes.preco !== undefined) changes.preco = parsePreco(String(changes.preco));
+        return { codigo, changes };
+      });
+      const r = await api<{ ok: boolean; shadow: boolean; atualizados: number; planejados: number }>(
+        '/products-editor/apply',
+        { method: 'POST', body: JSON.stringify({ edits }) },
+      );
       setPreview(null);
       setPending(new Map());
-      setMovs([]);
       setSel(new Set());
-      setOkMsg(`✓ ${partes.join(' · ')} — Flow na hora, Giga em réplica.`);
+      setOkMsg(
+        r.shadow
+          ? `SHADOW MODE: ${r.planejados} alterações registradas na auditoria SEM gravar (EDITOR_PRODUTOS_WRITE=0).`
+          : `✓ ${r.atualizados} variações gravadas — Flow na hora, Giga em réplica.`,
+      );
       await buscar(); // recarrega fresco
     } catch (e: any) {
       setErr(e?.message || 'Falha ao aplicar');
@@ -551,10 +539,6 @@ export default function EditorProdutosPage() {
               className="px-3 py-1.5 rounded-lg border-2 border-sky-300 bg-sky-50 text-sky-900 text-xs font-bold disabled:opacity-40 flex items-center gap-1.5">
               <ReplaceAll className="w-3.5 h-3.5" /> Substituir na descrição
             </button>
-            <button onClick={() => { setMovTipo('entrada'); setModalMov(true); }} disabled={!sel.size}
-              className="px-3 py-1.5 rounded-lg border-2 border-emerald-300 bg-emerald-50 text-emerald-900 text-xs font-bold disabled:opacity-40 flex items-center gap-1.5">
-              <DollarSign className="w-3.5 h-3.5" /> Entrada/Saída
-            </button>
             <button onClick={excluirSelecionadas} disabled={!sel.size || massaBusy}
               className="px-3 py-1.5 rounded-lg border-2 border-red-300 bg-red-50 text-red-800 text-xs font-bold disabled:opacity-40 flex items-center gap-1.5">
               <Trash2 className="w-3.5 h-3.5" /> Excluir selecionadas
@@ -589,7 +573,9 @@ export default function EditorProdutosPage() {
                     <th className="text-left px-2 py-1.5">Cor</th>
                     <th className="text-left px-2 py-1.5">Tam</th>
                     <th className="text-right px-2 py-1.5">Preço (R$)</th>
-                    <th className="text-right px-2 py-1.5">Est.</th>
+                    {lojasDisponiveis.map((l) => (
+                      <th key={l} className="text-center px-1 py-1.5 w-10">{l}</th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-50">
@@ -622,21 +608,35 @@ export default function EditorProdutosPage() {
                         <td className="px-1 py-1">{cell('cor', 'w-44', false, LIMITS.cor)}</td>
                         <td className="px-1 py-1">{cell('tamanho', 'w-16', false, LIMITS.tamanho)}</td>
                         <td className="px-1 py-1">{cell('preco', 'w-24', true)}</td>
-                        <td className="px-2 py-1 text-right text-xs tabular-nums whitespace-nowrap">
-                          {Object.keys(r.estoqueLojas || {}).length ? (
-                            Object.entries(r.estoqueLojas || {})
-                              .filter(([, v]) => v > 0)
-                              .sort(([a], [b]) => a.localeCompare(b))
-                              .map(([loja, v]) => (
-                                <span key={loja} className="inline-block ml-1 px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-800 text-[10px] font-bold">
-                                  {loja}:{v}
+                        {/* MATRIZ por loja (padrão Wincred): clicou → stepper −/+ grava na hora */}
+                        {lojasDisponiveis.map((loja) => {
+                          const qtd = r.estoqueLojas?.[loja] ?? 0;
+                          const ativa = cellSel?.codigo === r.codigo && cellSel?.loja === loja;
+                          return (
+                            <td key={loja} className="px-0.5 py-1 text-center tabular-nums">
+                              {ativa ? (
+                                <span className="inline-flex items-center gap-0.5 bg-amber-50 border border-amber-300 rounded-md px-1">
+                                  <button onClick={() => aplicarMovCelula(r, loja, -1)} disabled={cellBusy || qtd <= 0}
+                                    className="w-5 h-5 text-rose-700 font-black disabled:opacity-30" aria-label="Tirar 1">−</button>
+                                  <span className="text-xs font-black min-w-[16px]">{qtd}</span>
+                                  <button onClick={() => aplicarMovCelula(r, loja, 1)} disabled={cellBusy}
+                                    className="w-5 h-5 text-emerald-700 font-black disabled:opacity-30" aria-label="Somar 1">+</button>
+                                  <button onClick={() => setCellSel(null)} className="w-4 h-4 text-slate-400" aria-label="Fechar">×</button>
                                 </span>
-                              ))
-                          ) : null}
-                          {!Object.entries(r.estoqueLojas || {}).some(([, v]) => v > 0) && (
-                            <span className="text-rose-600 font-bold text-[10px]">zerado</span>
-                          )}
-                        </td>
+                              ) : (
+                                <button
+                                  onClick={() => setCellSel({ codigo: r.codigo, loja })}
+                                  className={`w-8 h-6 rounded text-xs font-bold hover:ring-2 hover:ring-amber-300 ${
+                                    qtd > 0 ? 'text-slate-800' : 'text-slate-300'
+                                  }`}
+                                  title={`Loja ${loja} — clique pra ajustar`}
+                                >
+                                  {qtd > 0 ? qtd : '·'}
+                                </button>
+                              )}
+                            </td>
+                          );
+                        })}
                       </tr>
                     );
                   })}
@@ -655,17 +655,14 @@ export default function EditorProdutosPage() {
       </main>
 
       {/* Barra fixa de salvar */}
-      {(nPend > 0 || movs.length > 0) && (
+      {nPend > 0 && (
         <div className="fixed bottom-0 inset-x-0 z-30 bg-white border-t-2 border-amber-300 shadow-2xl">
           <div className="max-w-[1700px] mx-auto px-4 py-3 flex items-center gap-3">
             <span className="text-sm font-semibold text-slate-700">
-              {nPend > 0 && `${nPend} edição(ões)`}
-              {nPend > 0 && movs.length > 0 && ' + '}
-              {movs.length > 0 && `${movs.length} movimento(s) de estoque`}
-              {' pendente(s)'}
+              {nPend} alteração(ões) pendente(s) em {pending.size} variação(ões)
             </span>
             <div className="flex-1" />
-            <button onClick={() => { setPending(new Map()); setMovs([]); setErr(''); }}
+            <button onClick={() => { setPending(new Map()); setErr(''); }}
               className="px-4 py-2 rounded-xl border-2 border-slate-300 text-slate-600 text-sm font-bold">
               Descartar
             </button>
@@ -769,56 +766,6 @@ export default function EditorProdutosPage() {
               exibidas. Grava direto (sem preview), com registro na auditoria.
             </p>
           </div>
-        </Modal>
-      )}
-
-      {/* ── Modal: Entrada/Saída de estoque (motivo obrigatório) ── */}
-      {modalMov && (
-        <Modal title="Entrada / Saída de estoque" onClose={() => setModalMov(false)}>
-          <p className="text-xs text-slate-500 mb-2">
-            Cria 1 movimento pra cada uma das {sel.size} variações selecionadas. Nada grava agora —
-            entra no <b>preview</b> junto com as edições.
-          </p>
-          <div className="flex gap-2 mb-3">
-            <button onClick={() => setMovTipo('entrada')}
-              className={`flex-1 px-3 py-2 rounded-lg text-xs font-bold border-2 ${movTipo === 'entrada' ? 'border-emerald-500 bg-emerald-50 text-emerald-800' : 'border-slate-200 text-slate-500'}`}>
-              + ENTRADA
-            </button>
-            <button onClick={() => setMovTipo('saida')}
-              className={`flex-1 px-3 py-2 rounded-lg text-xs font-bold border-2 ${movTipo === 'saida' ? 'border-rose-500 bg-rose-50 text-rose-800' : 'border-slate-200 text-slate-500'}`}>
-              − SAÍDA
-            </button>
-          </div>
-          <div className="flex gap-2 mb-2">
-            <div className="flex-1">
-              <label className="text-[11px] font-bold uppercase text-slate-500">Loja</label>
-              <select value={movLoja} onChange={(e) => setMovLoja(e.target.value)}
-                className="w-full px-3 py-2.5 border-2 border-slate-200 rounded-xl font-bold focus:border-emerald-400 focus:outline-none bg-white">
-                {lojasDisponiveis.map((l) => <option key={l} value={l}>Loja {l}</option>)}
-              </select>
-            </div>
-            <div className="w-28">
-              <label className="text-[11px] font-bold uppercase text-slate-500">Qtd</label>
-              <input value={movQtd} onChange={(e) => setMovQtd(e.target.value.replace(/\D/g, ''))}
-                inputMode="numeric"
-                className="w-full px-3 py-2.5 border-2 border-slate-200 rounded-xl font-bold tabular-nums text-center focus:border-emerald-400 focus:outline-none" />
-            </div>
-          </div>
-          <label className="text-[11px] font-bold uppercase text-slate-500">Motivo (obrigatório)</label>
-          <select value={movMotivo} onChange={(e) => setMovMotivo(e.target.value)}
-            className="w-full px-3 py-2.5 border-2 border-slate-200 rounded-xl font-bold focus:border-emerald-400 focus:outline-none bg-white">
-            <option value="COMPRA">Compra / recebimento</option>
-            <option value="AJUSTE">Ajuste de contagem</option>
-            <option value="PERDA">Perda / defeito</option>
-            <option value="DEVOLUCAO">Devolução avulsa</option>
-            <option value="BRINDE">Brinde / uso interno</option>
-          </select>
-          <ModalActions
-            okLabel={`Adicionar ${sel.size} movimento(s) ao preview`}
-            okDisabled={!sel.size || !Number(movQtd)}
-            onOk={adicionarMovimentos}
-            onCancel={() => setModalMov(false)}
-          />
         </Modal>
       )}
 
