@@ -1839,6 +1839,58 @@ export class LivePdvService {
   }
 
   /**
+   * RECORRENTES (15/07): clientes que já criaram carrinho em QUALQUER live
+   * (mesmo sem pagar). Busca por nome/@/telefone nos snapshots dos carrinhos.
+   * Dedup por cliente (fica o mais recente), exclui quem já está na live atual.
+   * A operadora puxa pra live com 1 clique (add-customer). Sem termo → mostra
+   * os mais recentes.
+   */
+  async recurringLiveCustomers(sessionId: string, term?: string) {
+    const q = String(term || '').trim();
+    const igq = q.replace(/^@/, '');
+    const digits = q.replace(/\D/g, '');
+    const carts = await (this.prisma as any).livePdvCart.findMany({
+      where: {
+        customerId: { not: null },
+        ...(q
+          ? {
+              OR: [
+                { customerName: { contains: q, mode: 'insensitive' } },
+                { customerInstagram: { contains: igq, mode: 'insensitive' } },
+                ...(digits ? [{ customerPhone: { contains: digits } }] : []),
+              ],
+            }
+          : {}),
+      },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        customerId: true, customerName: true, customerInstagram: true,
+        customerPhone: true, createdAt: true, sessionId: true,
+      },
+      take: 500,
+    });
+    // Clientes que JÁ têm carrinho na live atual (não repropor).
+    const naSessao = new Set(
+      (carts as any[]).filter((c) => c.sessionId === sessionId).map((c) => c.customerId),
+    );
+    const seen = new Set<string>();
+    const out: any[] = [];
+    for (const c of carts as any[]) {
+      if (c.sessionId === sessionId || naSessao.has(c.customerId) || seen.has(c.customerId)) continue;
+      seen.add(c.customerId);
+      out.push({
+        customerId: c.customerId,
+        name: c.customerName || null,
+        instagram: c.customerInstagram || null,
+        phone: c.customerPhone || null,
+        lastAt: c.createdAt,
+      });
+      if (out.length >= 30) break;
+    }
+    return out;
+  }
+
+  /**
    * Puxa uma cliente já existente (de live anterior) para a sessão de live
    * ATUAL: cria (ou reusa) o carrinho aberto dela na sessão. Usa os dados mais
    * frescos do cadastro mestre, com fallback no snapshot do último carrinho.

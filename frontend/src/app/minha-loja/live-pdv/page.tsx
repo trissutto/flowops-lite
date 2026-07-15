@@ -280,7 +280,11 @@ export default function LivePdvPage() {
   const [clientFilter, setClientFilter] = useState(''); // busca de cliente por nome/@ na lista
   // Despoluição da grade: por padrão só quem TEM PEÇAS; vazios ficam atrás
   // de um chip (cliente puxada da fila que ainda não comprou = R$0 · 0 itens).
-  const [cartView, setCartView] = useState<'pecas' | 'vazios' | 'todos'>('pecas');
+  const [cartView, setCartView] = useState<'pecas' | 'vazios' | 'todos' | 'recorrentes'>('pecas');
+  // RECORRENTES (15/07): clientes que já criaram carrinho em qualquer live.
+  // Busca por nome/@/telefone (reusa o mesmo campo de busca); puxa pra live.
+  const [recorrentes, setRecorrentes] = useState<Array<{ customerId: string; name: string | null; instagram: string | null; phone: string | null; lastAt: string }>>([]);
+  const [recLoading, setRecLoading] = useState(false);
   const [clearingEmpty, setClearingEmpty] = useState(false);
   const [showCustomerModal, setShowCustomerModal] = useState(false);
   // Célula clicada aguardando identificação da cliente — leva junto a REF da
@@ -359,12 +363,34 @@ export default function LivePdvPage() {
       });
       await refreshCarts();
       await refreshPending();
+      // some da lista de recorrentes (agora tem carrinho na live)
+      setRecorrentes((prev) => prev.filter((r) => r.customerId !== customerId));
     } catch {
       alert('Não consegui puxar a cliente agora. Tenta de novo.');
     } finally {
       setPullingId(null);
     }
   }
+
+  // Busca de recorrentes (só quando o chip "Recorrentes" está ativo). Debounce
+  // leve pra não bater a cada tecla; reusa o campo de busca (clientFilter).
+  useEffect(() => {
+    if (cartView !== 'recorrentes' || !sessionId) return;
+    let alive = true;
+    setRecLoading(true);
+    const t = setTimeout(async () => {
+      try {
+        const q = clientFilter.trim();
+        const r = await api<any[]>(`/live-pdv/sessions/${sessionId}/recurring${q ? `?q=${encodeURIComponent(q)}` : ''}`);
+        if (alive) setRecorrentes(r || []);
+      } catch {
+        if (alive) setRecorrentes([]);
+      } finally {
+        if (alive) setRecLoading(false);
+      }
+    }, 300);
+    return () => { alive = false; clearTimeout(t); };
+  }, [cartView, clientFilter, sessionId]);
 
   // Loja da sessão usa PIX externo? (franquia sem gateway Pagar.me/PagBank)
   // → esconde "Cobrar PIX/Link" e mostra confirmação manual "pagou por fora".
@@ -1711,7 +1737,10 @@ export default function LivePdvPage() {
   // Partição da grade: com peças × vazios (0 itens). Busca ativa ignora o chip.
   const nComPecas = clientesFiltradas.filter((c) => (c.items?.length || 0) > 0).length;
   const nVazios = clientesFiltradas.length - nComPecas;
-  const viewEfetiva: 'pecas' | 'vazios' | 'todos' = clientFilter.trim() ? 'todos' : cartView;
+  // No modo recorrentes o filtro alimenta a busca de recorrentes (não força
+  // 'todos' na lista da sessão). Nos demais, busca ativa mostra todos.
+  const viewEfetiva: 'pecas' | 'vazios' | 'todos' | 'recorrentes' =
+    cartView === 'recorrentes' ? 'recorrentes' : clientFilter.trim() ? 'todos' : cartView;
   const gridCarts = clientesFiltradas.filter((c) =>
     viewEfetiva === 'todos'
       ? true
@@ -2564,7 +2593,9 @@ export default function LivePdvPage() {
               </button>
             )}
 
-            {cartsAtivos.length > 0 && (
+            {/* SEMPRE visível (15/07): dá acesso ao chip "Recorrentes" mesmo com
+                a live vazia — o operador puxa clientes de lives passadas. */}
+            {true && (
               <div>
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
@@ -2618,6 +2649,18 @@ export default function LivePdvPage() {
                   >
                     Todos ({clientesFiltradas.length})
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => setCartView('recorrentes')}
+                    title="Clientes que já compraram em lives anteriores — busque e puxe pra live"
+                    className={`rounded-full px-2.5 py-1 text-[11px] font-bold transition ${
+                      viewEfetiva === 'recorrentes'
+                        ? 'bg-violet-600 text-white'
+                        : 'border border-violet-200 bg-white text-violet-600 hover:border-violet-400'
+                    }`}
+                  >
+                    🔁 Recorrentes
+                  </button>
                   {nVazios > 0 && (
                     <button
                       type="button"
@@ -2649,9 +2692,47 @@ export default function LivePdvPage() {
                     </button>
                   )}
                 </div>
+                {/* RECORRENTES (15/07): clientes de lives anteriores — busca +
+                    puxa pra live num clique. Só quando o chip está ativo. */}
+                {viewEfetiva === 'recorrentes' && (
+                  <div className="max-h-[60vh] space-y-1.5 overflow-y-auto rounded-xl border border-violet-200 bg-white p-1.5">
+                    {recLoading && (
+                      <div className="px-3 py-4 text-center text-sm text-slate-400">Buscando…</div>
+                    )}
+                    {!recLoading && recorrentes.length === 0 && (
+                      <div className="px-3 py-6 text-center text-sm text-slate-400">
+                        {clientFilter.trim()
+                          ? 'Nenhuma cliente recorrente pra essa busca.'
+                          : 'Digite nome, @ ou telefone pra achar clientes de lives anteriores — ou veja as mais recentes abaixo.'}
+                      </div>
+                    )}
+                    {recorrentes.map((r) => (
+                      <div key={r.customerId} className="flex items-center gap-2 rounded-lg border border-slate-100 px-2 py-1.5 hover:border-violet-200">
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-sm font-semibold text-slate-800">{r.name || r.instagram || 'Cliente'}</div>
+                          <div className="truncate text-[11px] text-slate-500">
+                            {r.instagram ? `@${r.instagram}` : ''}
+                            {r.instagram && r.phone ? ' · ' : ''}
+                            {r.phone || ''}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => pullRegisteredCustomer(r.customerId)}
+                          disabled={pullingId === r.customerId}
+                          title="Puxar esta cliente pra live atual"
+                          className="shrink-0 rounded-lg bg-violet-600 px-2.5 py-1 text-xs font-bold text-white hover:bg-violet-700 disabled:opacity-50"
+                        >
+                          {pullingId === r.customerId ? '…' : '↑ Puxar'}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 {/* GRID em LINHAS, 3 colunas (08/07): o dono trocou as 6 colunas
                     por linhas maiores pra ver o NOME COMPLETO da cliente.
                     Em telas menores cai pra 2/1. */}
+                {viewEfetiva !== 'recorrentes' && (
                 <div className="grid max-h-[60vh] grid-cols-1 content-start gap-1.5 overflow-y-auto rounded-xl border border-slate-200 bg-white p-1.5 sm:grid-cols-2 xl:grid-cols-3">
                   {gridCarts.length === 0 && (
                     <div className="col-span-full px-3 py-4 text-center text-sm text-slate-400">
@@ -2728,6 +2809,7 @@ export default function LivePdvPage() {
                     );
                   })}
                 </div>
+                )}
               </div>
             )}
           </div>

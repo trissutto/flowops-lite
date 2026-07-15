@@ -202,6 +202,13 @@ export class LivePdvController {
     return this.svc.pendingLiveRegistrations(id);
   }
 
+  // Recorrentes: clientes que já criaram carrinho em qualquer live (busca por
+  // nome/@/telefone). Puxa pra live atual via add-customer.
+  @Get('sessions/:id/recurring')
+  recurring(@Param('id') id: string, @Query('q') q?: string) {
+    return this.svc.recurringLiveCustomers(id, q);
+  }
+
   // Cobrança em massa AUTOMÁTICA via DM (API ManyChat) — carrinhos abertos da
   // sessão. body.resend=true ignora o "já enviada" (corrigir link errado etc).
   @Post('sessions/:id/charge-all-dm')
