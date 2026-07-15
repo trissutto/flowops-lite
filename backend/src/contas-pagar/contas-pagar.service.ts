@@ -414,6 +414,31 @@ export class ContasPagarService {
     return { ok: true, id: upd.id };
   }
 
+  /**
+   * EXCLUSÃO EM LOTE (14/07, pedido do dono): checkbox por lançamento +
+   * "selecionar todos" na tela. Mesmo soft-delete auditado do individual —
+   * um log por conta. Máx. 500 por chamada (proteção contra clique acidental
+   * num filtro gigante).
+   */
+  async excluirLote(ids: string[], usuario?: string) {
+    const clean = Array.from(
+      new Set((ids || []).map((s) => String(s || '').trim()).filter(Boolean)),
+    );
+    if (!clean.length) throw new BadRequestException('Nenhum lançamento selecionado');
+    if (clean.length > 500) throw new BadRequestException('Máximo de 500 lançamentos por vez');
+    let excluidas = 0;
+    const erros: Array<{ id: string; erro: string }> = [];
+    for (const id of clean) {
+      try {
+        await this.excluir(id, usuario);
+        excluidas++;
+      } catch (e) {
+        erros.push({ id, erro: (e as Error).message?.slice(0, 120) || 'erro' });
+      }
+    }
+    return { ok: true, excluidas, erros };
+  }
+
   async logs(id: string) {
     return (this.prisma as any).contaPagarLog.findMany({
       where: { contaId: id },
