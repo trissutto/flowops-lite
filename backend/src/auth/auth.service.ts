@@ -10,11 +10,28 @@ export class AuthService {
     private readonly jwt: JwtService,
   ) {}
 
+  /** E-mail do DONO — papel admin é blindado (ver guardião no login). */
+  private static readonly OWNER_EMAIL = 'trissutto@gmail.com';
+
   async login(email: string, password: string) {
-    const user = await this.prisma.user.findUnique({ where: { email } });
+    let user = await this.prisma.user.findUnique({ where: { email } });
     if (!user || !user.active) throw new UnauthorizedException('Credenciais invalidas');
     const ok = await bcrypt.compare(password, user.passwordHash);
     if (!ok) throw new UnauthorizedException('Credenciais invalidas');
+
+    // GUARDIÃO DO DONO (15/07): a conta do dono NUNCA pode perder o papel
+    // admin — um ajuste errado de cadastro rebaixou pra 'franquias' e trancou
+    // o dono no portal (e, sendo o único admin, ninguém conseguia desfazer
+    // pela tela). Se o papel estiver diferente, restaura no ato do login.
+    if (
+      user.email.trim().toLowerCase() === AuthService.OWNER_EMAIL &&
+      user.role !== 'admin'
+    ) {
+      user = await this.prisma.user.update({
+        where: { id: user.id },
+        data: { role: 'admin' },
+      });
+    }
 
     let storeCode: string | null = null;
     let storeName: string | null = null;
