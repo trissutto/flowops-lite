@@ -18,7 +18,7 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { FileText, BarChart3, Package2, ArrowUpRight, LogOut, Lock, Building2 } from 'lucide-react';
+import { FileText, BarChart3, Package2, ArrowUpRight, LogOut, Lock, Building2, ShoppingBag } from 'lucide-react';
 import { api } from '@/lib/api';
 import StoreSwitcher from '@/components/StoreSwitcher';
 
@@ -141,6 +141,13 @@ export default function FranquiasHub() {
             description="Bruto oficial por dia, ranking das franquias e mais vendidos"
             icon={BarChart3}
             tone="emerald"
+          />
+          <AreaCard
+            href="/retaguarda/produtos-vendidos"
+            label="Produtos Vendidos · Editar"
+            description="Vendas das franquias: editar vendedora/pagamento e excluir venda"
+            icon={ShoppingBag}
+            tone="sky"
           />
         </div>
       </main>
