@@ -81,6 +81,25 @@ export default function EditorProdutosPage() {
   // Seleção pra ações em bloco
   const [sel, setSel] = useState<Set<string>>(new Set());
 
+  // Histórico da variação (quando vendeu, pra quem, se voltou/troca)
+  const [histCodigo, setHistCodigo] = useState<string | null>(null);
+  const [histData, setHistData] = useState<any>(null);
+  const [histLoading, setHistLoading] = useState(false);
+
+  async function abrirHistorico(codigo: string, descricao?: string) {
+    setHistCodigo(codigo);
+    setHistData(null);
+    setHistLoading(true);
+    try {
+      const d = await api<any>(`/products-editor/historico?codigo=${encodeURIComponent(codigo)}`);
+      setHistData({ ...d, descricao });
+    } catch (e: any) {
+      setHistData({ erro: e?.message || 'Falha ao carregar histórico', movimentos: [] });
+    } finally {
+      setHistLoading(false);
+    }
+  }
+
   // Modais
   const [modalRef, setModalRef] = useState(false);
   const [modalPreco, setModalPreco] = useState(false);
@@ -621,7 +640,18 @@ export default function EditorProdutosPage() {
                             className="w-4 h-4 accent-amber-600" />
                         </td>
                         <td className="px-2 py-1 font-mono text-xs text-slate-500 whitespace-nowrap">
-                          <span className="inline-flex items-center gap-1">{r.codigo} <Lock className="w-3 h-3 text-slate-300" /></span>
+                          <span className="inline-flex items-center gap-1">
+                            {r.codigo}
+                            <Lock className="w-3 h-3 text-slate-300" />
+                            <button
+                              type="button"
+                              onClick={() => abrirHistorico(r.codigo, r.descricao)}
+                              title="Histórico da peça (vendas, trocas, devoluções)"
+                              className="text-slate-400 hover:text-amber-700"
+                            >
+                              <History className="w-3.5 h-3.5" />
+                            </button>
+                          </span>
                         </td>
                         <td className="px-1 py-1">{cell('ref', 'w-24', false, LIMITS.ref)}</td>
                         <td className="px-1 py-1">{cell('descricao', 'w-full min-w-[280px]', false, LIMITS.descricao)}</td>
@@ -864,6 +894,83 @@ export default function EditorProdutosPage() {
               Confirmar e gravar
             </button>
           </div>
+        </Modal>
+      )}
+
+      {/* HISTÓRICO DA VARIAÇÃO — vendas (Giga) + trocas/devoluções (Flow) */}
+      {histCodigo && (
+        <Modal
+          title={`Histórico — ${histCodigo}${histData?.descricao ? ' · ' + histData.descricao : ''}`}
+          onClose={() => { setHistCodigo(null); setHistData(null); }}
+          wide
+        >
+          {histLoading ? (
+            <div className="py-8 text-center text-slate-400 text-sm">
+              <Loader2 className="w-5 h-5 animate-spin inline mr-1" /> Carregando histórico…
+            </div>
+          ) : histData?.erro ? (
+            <div className="py-6 text-center text-rose-600 text-sm">{histData.erro}</div>
+          ) : (
+            <div>
+              {histData?.resumo && (
+                <div className="flex flex-wrap gap-2 mb-3 text-xs">
+                  <span className="px-2 py-1 rounded bg-emerald-50 text-emerald-800 font-semibold">{histData.resumo.vendas} venda(s)</span>
+                  <span className="px-2 py-1 rounded bg-rose-50 text-rose-800 font-semibold">{histData.resumo.devolucoes} devolução(ões)</span>
+                  <span className="px-2 py-1 rounded bg-amber-50 text-amber-800 font-semibold">{histData.resumo.trocas} troca(s)</span>
+                  <span className="px-2 py-1 rounded bg-slate-100 text-slate-600 font-semibold">{histData.resumo.marcados} marcado(s)</span>
+                </div>
+              )}
+              <div className="max-h-[60vh] overflow-auto border border-slate-100 rounded-lg">
+                {(histData?.movimentos || []).length === 0 ? (
+                  <div className="py-8 text-center text-slate-400 text-sm">Sem movimentos registrados pra esta peça.</div>
+                ) : (
+                  <table className="w-full text-xs">
+                    <thead className="sticky top-0 bg-slate-50 text-[10px] uppercase tracking-wider text-slate-400">
+                      <tr>
+                        <th className="text-left px-2 py-1.5">Data</th>
+                        <th className="text-left px-2 py-1.5">Tipo</th>
+                        <th className="text-left px-2 py-1.5">Loja</th>
+                        <th className="text-left px-2 py-1.5">Cliente</th>
+                        <th className="text-left px-2 py-1.5">Vendedora</th>
+                        <th className="text-center px-2 py-1.5">Qtd</th>
+                        <th className="text-right px-2 py-1.5">Valor</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {histData.movimentos.map((m: any, i: number) => {
+                        const info: Record<string, [string, string]> = {
+                          venda: ['Venda', 'bg-emerald-100 text-emerald-800'],
+                          troca: ['Troca', 'bg-amber-100 text-amber-800'],
+                          devolucao: ['Devolução', 'bg-rose-100 text-rose-800'],
+                          marcado: ['Marcado', 'bg-slate-100 text-slate-600'],
+                        };
+                        const [label, cls] = info[m.tipo] || [m.tipo, 'bg-slate-100 text-slate-600'];
+                        const dt = m.data ? new Date(m.data).toLocaleDateString('pt-BR') : '—';
+                        const hh = m.hora ? String(m.hora).slice(0, 5) : '';
+                        return (
+                          <tr key={i} className="border-t border-slate-50">
+                            <td className="px-2 py-1.5 whitespace-nowrap text-slate-600">{dt}{hh ? ` ${hh}` : ''}</td>
+                            <td className="px-2 py-1.5">
+                              <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${cls}`}>{label}</span>
+                              {m.motivo ? <span className="ml-1 text-slate-400">{m.motivo}</span> : null}
+                            </td>
+                            <td className="px-2 py-1.5">{m.loja}</td>
+                            <td className="px-2 py-1.5">{m.cliente || '—'}</td>
+                            <td className="px-2 py-1.5">{m.vendedora || '—'}</td>
+                            <td className="px-2 py-1.5 text-center tabular-nums">{m.qty}</td>
+                            <td className="px-2 py-1.5 text-right tabular-nums">{`R$ ${(Number(m.valor) || 0).toFixed(2).replace('.', ',')}`}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+              <p className="mt-2 text-[10px] text-slate-400">
+                Vendas do Giga (todas as lojas, histórico completo). Trocas/devoluções da era FlowOps (as antigas, só no Giga legado, não aparecem).
+              </p>
+            </div>
+          )}
         </Modal>
       )}
     </div>

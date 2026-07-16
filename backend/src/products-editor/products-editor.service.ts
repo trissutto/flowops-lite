@@ -239,6 +239,136 @@ export class ProductsEditorService {
   }
 
   /**
+   * HISTÓRICO DE UMA VARIAÇÃO (código/SKU) — quando vendeu, pra quem, quem
+   * vendeu, e se voltou (devolução/troca). Pedido do dono (16/07).
+   *
+   * Fontes:
+   *  - VENDAS/MARCADOS: `caixa` do Giga (histórico completo, TODAS as lojas).
+   *    MARCADO='SIM' = "provar em casa"; linha negativa = devolução legada.
+   *  - DEVOLUÇÕES/TROCAS: `PdvReturn` do Flow (da era FlowOps pra cá) que
+   *    tocaram este SKU. Troca antiga só-no-Giga não tem registro estruturado.
+   *  - Nome da vendedora: espelho `wincred_funcionarios` (VENDEDOR = código).
+   */
+  async historicoProduto(codigoRaw: string) {
+    const codigo = String(codigoRaw || '').replace(/\D/g, '');
+    if (!codigo) throw new BadRequestException('Informe o código da variação');
+    const codNum = Number(codigo);
+    const skuNorm = codigo.replace(/^0+/, '') || codigo;
+
+    // 1) Vendas/marcados no Giga (caixa) — read-only, todas as lojas.
+    let caixaRows: any[] = [];
+    try {
+      const res = await this.erp.runReadOnly(
+        `SELECT REGISTRO, DATA, HORA, LOJA, NOMECLIENTE, VENDEDOR,
+                QUANTIDADE, VALORTOTAL, MARCADO
+           FROM caixa
+          WHERE CAST(CODIGO AS UNSIGNED) = ?
+          ORDER BY DATA DESC, HORA DESC`,
+        { maxRows: 500, timeoutMs: 20000 },
+        [codNum],
+      );
+      caixaRows = res.rows || [];
+    } catch (e: any) {
+      this.logger.warn(`[historico] caixa falhou p/ ${codigo}: ${e?.message || e}`);
+    }
+
+    // 2) Nome da vendedora (espelho) + nome da loja.
+    const vendCodes = Array.from(
+      new Set(caixaRows.map((r) => String(r.VENDEDOR ?? '').trim()).filter(Boolean)),
+    );
+    const nomeVend = new Map<string, string>();
+    if (vendCodes.length) {
+      const funcs = await (this.prisma as any).wincredFuncionario
+        .findMany({ where: { codigo: { in: vendCodes } }, select: { codigo: true, nome: true } })
+        .catch(() => []);
+      for (const f of funcs as any[]) nomeVend.set(String(f.codigo).trim(), f.nome || '');
+    }
+    const stores = await (this.prisma as any).store
+      .findMany({ select: { code: true, name: true } })
+      .catch(() => []);
+    const storeName = new Map<string, string>(
+      (stores as any[]).map((s) => [String(s.code).trim().replace(/^0+/, ''), s.name]),
+    );
+    const lojaNome = (loja: any) => {
+      const c = String(loja ?? '').trim().replace(/^0+/, '');
+      return storeName.get(c) || (loja ? `Loja ${loja}` : '—');
+    };
+
+    const vendas = caixaRows.map((r) => {
+      const marcado = String(r.MARCADO ?? '').toUpperCase() === 'SIM';
+      const valor = Number(r.VALORTOTAL) || 0;
+      const qty = Number(r.QUANTIDADE) || 1;
+      const devolucaoLegada = valor < 0 || qty < 0;
+      return {
+        tipo: marcado ? 'marcado' : devolucaoLegada ? 'devolucao' : 'venda',
+        data: r.DATA ? new Date(r.DATA).toISOString() : null,
+        hora: r.HORA ? String(r.HORA) : null,
+        loja: lojaNome(r.LOJA),
+        cliente: (String(r.NOMECLIENTE || '').trim()) || null,
+        vendedora:
+          nomeVend.get(String(r.VENDEDOR ?? '').trim()) ||
+          (r.VENDEDOR ? `Cód ${r.VENDEDOR}` : null),
+        qty: Math.abs(qty),
+        valor: Math.abs(valor),
+        fonte: 'giga',
+      };
+    });
+
+    // 3) Devoluções/trocas no Flow (PdvReturn) que tocaram este SKU.
+    let devolucoes: any[] = [];
+    try {
+      const items = await (this.prisma as any).pdvReturnItem.findMany({
+        where: { sku: { in: Array.from(new Set([codigo, skuNorm])) } },
+        select: {
+          qty: true,
+          total: true,
+          return: {
+            select: {
+              storeCode: true, storeName: true, modo: true, valorTotal: true,
+              customerName: true, motivo: true, createdAt: true, status: true,
+            },
+          },
+        },
+        take: 300,
+      });
+      devolucoes = (items as any[])
+        .filter((it) => it.return && it.return.status !== 'cancelled')
+        .map((it) => ({
+          tipo: it.return.modo === 'troca' ? 'troca' : 'devolucao',
+          data: it.return.createdAt ? new Date(it.return.createdAt).toISOString() : null,
+          hora: null,
+          loja: it.return.storeName || lojaNome(it.return.storeCode),
+          cliente: it.return.customerName || null,
+          vendedora: null,
+          qty: it.qty || 1,
+          valor: Math.abs(Number(it.total) || 0),
+          modo: it.return.modo,
+          motivo: it.return.motivo || null,
+          fonte: 'flow',
+        }));
+    } catch (e: any) {
+      this.logger.warn(`[historico] returns falhou p/ ${codigo}: ${e?.message || e}`);
+    }
+
+    const movimentos = [...vendas, ...devolucoes].sort((a, b) =>
+      String(b.data || '').localeCompare(String(a.data || '')),
+    );
+
+    return {
+      codigo,
+      resumo: {
+        vendas: vendas.filter((v) => v.tipo === 'venda').length,
+        devolucoes:
+          devolucoes.filter((d) => d.tipo === 'devolucao').length +
+          vendas.filter((v) => v.tipo === 'devolucao').length,
+        trocas: devolucoes.filter((d) => d.tipo === 'troca').length,
+        marcados: vendas.filter((v) => v.tipo === 'marcado').length,
+      },
+      movimentos,
+    };
+  }
+
+  /**
    * Aplica um lote de edições. Cada item: { codigo, changes }.
    * Valida limites → grava no GIGA (transação única) → atualiza espelhos →
    * audita campo a campo. Em shadow mode só audita (applied=false).

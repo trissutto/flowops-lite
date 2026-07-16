@@ -45,6 +45,16 @@ export class ProductsEditorController {
     return this.svc.refInfo(String(ref || ''), excludeCodigos);
   }
 
+  /**
+   * GET /products-editor/historico?codigo=XXX — linha do tempo da variação:
+   * vendas (Giga caixa) + devoluções/trocas (Flow), com loja, cliente e vendedora.
+   */
+  @Get('historico')
+  async historico(@Req() req: any, @Query('codigo') codigo?: string) {
+    this.requireAdmin(req);
+    return this.svc.historicoProduto(String(codigo || ''));
+  }
+
   /** POST /products-editor/apply — Body: { edits: [{ codigo, changes }] } */
   @Post('apply')
   async apply(
