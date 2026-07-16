@@ -222,6 +222,38 @@ export class LivePayPublicController {
     }
 
     await (this.prisma as any).livePdvCart.update({ where: { id: cartId }, data });
+
+    // WHATSAPP DE VOLTA PRO CADASTRO MESTRE (15/07): o celular digitado aqui
+    // alimentava só o carrinho — na live seguinte a cliente aparecia de novo
+    // sem telefone e o "Cobrar todas" ficava sem o botão WhatsApp. Agora:
+    //  - cliente SEM telefone no mestre → grava;
+    //  - número já usado por OUTRA cliente → aceita no carrinho (venda nunca
+    //    trava) e só registra o aviso no log (decisão do dono 15/07).
+    if (data.customerPhone && cart.customerId) {
+      try {
+        const dona: any = await (this.prisma as any).customer.findUnique({
+          where: { id: cart.customerId },
+          select: { id: true, phone: true },
+        });
+        const donaTemFone = String(dona?.phone || '').replace(/\D/g, '').length >= 10;
+        if (dona && !donaTemFone) {
+          const outra: any = await (this.prisma as any).customer.findFirst({
+            where: { id: { not: dona.id }, phone: { endsWith: data.customerPhone.slice(-10) } },
+            select: { id: true, name: true },
+          });
+          if (outra) {
+            console.warn(
+              `[live-pay] celular ${data.customerPhone} do carrinho ${cartId} já pertence à cliente ${outra.id} (${outra.name}) — mestre não atualizado`,
+            );
+          } else {
+            await (this.prisma as any).customer.update({
+              where: { id: dona.id },
+              data: { phone: data.customerPhone },
+            });
+          }
+        }
+      } catch { /* best-effort — nunca quebra o checkout */ }
+    }
     return { ok: true };
   }
 
