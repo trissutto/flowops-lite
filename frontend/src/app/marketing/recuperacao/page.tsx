@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 
 /**
  * /marketing/recuperacao
@@ -565,7 +566,7 @@ function PreviewModal({
   return (
     <div
       className="fixed inset-0 z-50 bg-black/50 flex items-end sm:items-center justify-center p-0 sm:p-4"
-      onClick={onClose}
+      {...overlayClose(onClose)}
     >
       <div
         className="bg-white rounded-t-xl sm:rounded-xl w-full max-w-xl max-h-[92vh] overflow-y-auto"
@@ -631,7 +632,7 @@ function OptOutsPanel({
   return (
     <div
       className="fixed inset-0 z-50 bg-black/50 flex items-end sm:items-center justify-center p-0 sm:p-4"
-      onClick={onClose}
+      {...overlayClose(onClose)}
     >
       <div
         className="bg-white rounded-t-xl sm:rounded-xl w-full max-w-lg max-h-[92vh] overflow-y-auto"

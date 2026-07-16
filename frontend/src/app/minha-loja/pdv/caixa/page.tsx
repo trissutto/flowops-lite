@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 
 /**
  * /minha-loja/pdv/caixa
@@ -989,7 +990,7 @@ function AjustePagamentoModal({ target, onClose, onSaved }: { target: NonNullabl
     } catch (e: any) { setError(e?.message || String(e)); } finally { setSaving(false); }
   };
   return (
-    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" {...overlayClose(onClose)}>
       <div className="bg-white rounded-xl max-w-md w-full p-5 space-y-3 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <h2 className="text-lg font-black text-blue-700 flex items-center gap-2">✏️ Ajustar pagamento</h2>
         <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-sm space-y-1">

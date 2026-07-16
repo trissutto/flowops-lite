@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 
 /**
  * /retaguarda/super-painel-caixas
@@ -1326,7 +1327,7 @@ function EditBandeiraModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" {...overlayClose(onClose)}>
       <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-5 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <h2 className="text-lg font-black mb-1">Trocar bandeira do cartão</h2>
         <p className="text-xs text-slate-500 mb-3">{saleHint}</p>
@@ -1482,7 +1483,7 @@ function MasterAdjustModal({
   if (!mounted) return null;
 
   return createPortal(
-    <div className="fixed inset-0 z-[9998] bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-[9998] bg-black/60 flex items-center justify-center p-4" {...overlayClose(onClose)}>
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-5 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-start justify-between mb-3">
           <div>
@@ -1650,7 +1651,7 @@ function MovementEditModal({
   const busy = saving || deleting;
 
   return createPortal(
-    <div className="fixed inset-0 z-[9998] bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-[9998] bg-black/60 flex items-center justify-center p-4" {...overlayClose(onClose)}>
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-5 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-start justify-between mb-3">
           <div>
@@ -1797,7 +1798,7 @@ function MasterEditPaymentModal({
   if (!mounted) return null;
 
   return createPortal(
-    <div className="fixed inset-0 z-[9998] bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-[9998] bg-black/60 flex items-center justify-center p-4" {...overlayClose(onClose)}>
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-5 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-start justify-between mb-3">
           <div>

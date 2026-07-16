@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 
 /**
  * <ProductPhoto> — exibe foto do produto (por REF, opcionalmente por COR).
@@ -267,7 +268,7 @@ export default function ProductPhoto({
       {lightbox && photo && (
         <div
           className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4 cursor-zoom-out"
-          onClick={() => setLightbox(false)}
+          {...overlayClose(() => setLightbox(false))}
         >
           <img
             src={photo.url}

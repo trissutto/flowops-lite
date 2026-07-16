@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 
 /**
  * BulkEditModal — aplica o MESMO patch em vários itens da fila.
@@ -166,7 +167,7 @@ export default function BulkEditModal({ ids, onClose, onSaved }: Props) {
     : flattenCats(categorias);
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" {...overlayClose(onClose)}>
       <div
         className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col"
         onClick={(e) => e.stopPropagation()}

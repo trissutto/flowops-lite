@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 
 /**
  * NewOrderAlert — Popup global de "CHEGOU PEDIDO".
@@ -354,10 +355,7 @@ export default function NewOrderAlert() {
       className="fixed inset-0 z-[9999] overflow-y-auto p-2 sm:p-4"
       aria-live="assertive"
       role="alert"
-      onClick={(e) => {
-        // Clique no fundo (fora do card) fecha tudo
-        if (e.target === e.currentTarget) dismissAll();
-      }}
+      {...overlayClose(dismissAll)}
       style={{ WebkitOverflowScrolling: 'touch', backgroundColor: 'rgba(0,0,0,0.15)' }}
     >
       {/* Botao FECHAR FLUTUANTE — sempre visivel no canto superior direito,

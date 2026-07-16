@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 
 /**
  * ValeTrocaModal — aplica um vale-troca (TROCA-XXXXX) como pagamento parcial
@@ -133,7 +134,7 @@ export default function ValeTrocaModal({
   return (
     <div
       className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-2 sm:p-4"
-      onClick={onClose}
+      {...overlayClose(onClose)}
     >
       <div
         className="bg-white rounded-t-2xl sm:rounded-lg w-full max-w-md flex flex-col max-h-[95vh]"

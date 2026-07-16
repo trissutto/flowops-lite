@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 
 /**
  * /retaguarda/crediario/automatico — Disparador automático de cobrança WA.
@@ -433,7 +434,7 @@ function CampanhaForm({
   }
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" {...overlayClose(onClose)}>
       <div
         className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto p-5"
         onClick={(e) => e.stopPropagation()}
@@ -591,7 +592,7 @@ function DetailModal({ data, onClose }: { data: DetailResp; onClose: () => void 
   }, [data.tentativas]);
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" {...overlayClose(onClose)}>
       <div
         className="bg-white rounded-2xl max-w-5xl w-full max-h-[90vh] overflow-y-auto p-5"
         onClick={(e) => e.stopPropagation()}
