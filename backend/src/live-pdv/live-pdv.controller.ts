@@ -222,6 +222,14 @@ export class LivePdvController {
     return this.svc.chargeCartViaDm(cartId);
   }
 
+  // SACOLA PELA DM: apresentadora confere a sacola fechada pela cliente e
+  // LIBERA — tira da fila de revisão e manda o link. Verificação humana antes
+  // de finalizar (exigência do dono).
+  @Post('carts/:cartId/liberar-cobranca')
+  liberarCobranca(@Param('cartId') cartId: string) {
+    return this.svc.liberarCobranca(cartId);
+  }
+
   // Backfill de vínculos ManyChat pros carrinhos abertos (API findByName)
   @Post('sessions/:id/backfill-manychat')
   backfillManychat(@Param('id') id: string) {

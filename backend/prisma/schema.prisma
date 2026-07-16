@@ -3555,6 +3555,15 @@ model LivePdvCart {
   // tentativas limita retry em falha (não vira spam de erro).
   cobrancaWhatsEnviadaAt  DateTime? @map("cobranca_whats_enviada_at")
   cobrancaWhatsTentativas Int       @default(0) @map("cobranca_whats_tentativas")
+  // SACOLA PELA DM (16/07): a cliente montou o carrinho sozinha pelo ManyChat.
+  // selfCart marca a origem (apresentadora confere com atenção). awaitingReview
+  // = cliente digitou FECHAR e a sacola está na FILA DE REVISÃO — a cobrança NÃO
+  // sai sozinha; a apresentadora confere e libera (liberarCobranca). É a
+  // "verificação antes de finalizar" exigida pelo dono. clientClosedAt = quando
+  // ela fechou. Gated por LIVE_DM_SELFCART=1.
+  selfCart          Boolean   @default(false) @map("self_cart")
+  awaitingReview    Boolean   @default(false) @map("awaiting_review")
+  clientClosedAt    DateTime? @map("client_closed_at")
   // RETIRADA EM LOJA (igual ao site): frete zero, prazo de até 7 dias úteis.
   // A cliente escolhe a loja no checkout; endereço deixa de ser obrigatório.
   isPickup          Boolean  @default(false) @map("is_pickup")

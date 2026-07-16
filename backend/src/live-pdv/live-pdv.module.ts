@@ -11,7 +11,7 @@ import { WincredMirrorModule } from '../wincred-mirror/wincred-mirror.module';
 import { ProductSearchModule } from '../product-search/product-search.module';
 import { WebsocketModule } from '../websocket/websocket.module';
 import { LivePdvController } from './live-pdv.controller';
-import { LivePublicController, ManychatHookController } from './live-public.controller';
+import { LivePublicController, ManychatHookController, ManychatInboundController } from './live-public.controller';
 import { LivePayPublicController } from './live-pay-public.controller';
 import { LivePdvService } from './live-pdv.service';
 import { ManychatService } from './manychat.service';
@@ -39,7 +39,7 @@ import { LivePdvCobrancaWhatsCron } from './live-pdv-cobranca-whats.cron';
     ProductSearchModule,
     WebsocketModule,
   ],
-  controllers: [LivePdvController, LivePublicController, ManychatHookController, LivePayPublicController],
+  controllers: [LivePdvController, LivePublicController, ManychatHookController, ManychatInboundController, LivePayPublicController],
   providers: [LivePdvService, ManychatService, LivePdvExpiryCron, LivePdvPayReconcileCron, LivePdvCobrancaWhatsCron],
   // ManychatService exportado pro PickOrdersModule mandar o WhatsApp de
   // rastreio pra cliente da LIVE no envio (pedido do site avisa via WC).

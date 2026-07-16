@@ -1715,6 +1715,236 @@ export class LivePdvService {
     return { ok: true, customerName: cart.customerName || 'cliente' };
   }
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // SACOLA PELA DM (16/07) — a cliente monta o próprio carrinho pelo ManyChat.
+  // A cliente NÃO sai da live: manda "<número da legenda> <tamanho>" no direct,
+  // o bot confirma cada peça pelo NOME (some o erro de transcrição da
+  // apresentadora) e mostra a sacola. No FECHAR a sacola vai pra FILA DE
+  // REVISÃO — a cobrança só sai quando a apresentadora LIBERA (liberarCobranca).
+  // Isso é a "verificação antes de finalizar" exigida pelo dono.
+  //
+  // Gated por LIVE_DM_SELFCART=1 (default OFF — merge não muda nada na live).
+  // Segurança: identidade = @ que mandou a msg (ManyChat), então "cliente
+  // errada" não acontece; "peça errada" é pega pelo eco + revisão humana.
+  // ═══════════════════════════════════════════════════════════════════════
+
+  get selfCartEnabled(): boolean {
+    return String(process.env.LIVE_DM_SELFCART ?? '').trim() === '1';
+  }
+
+  private brl(cents: number): string {
+    return `R$ ${(Math.max(0, Number(cents) || 0) / 100).toFixed(2).replace('.', ',')}`;
+  }
+
+  /** Resumo curto da sacola pro DM (nomes + tamanho + total). */
+  private async sacolaResumo(cartId: string): Promise<string> {
+    const itens = await (this.prisma as any).livePdvItem.findMany({
+      where: { cartId, status: { in: this.COMMITTED } },
+      orderBy: { createdAt: 'asc' },
+      select: { descricao: true, refCode: true, cor: true, tamanho: true, qty: true, priceCents: true },
+    });
+    if (!itens.length) return 'Sua sacola está vazia. Manda o número da peça + tamanho (ex: 7 48).';
+    const linhas = (itens as any[]).map((it, i) => {
+      const nome = (it.descricao || it.refCode || 'peça').toString().trim();
+      const det = [it.cor, it.tamanho].filter(Boolean).join(' ');
+      return `${i + 1}) ${nome}${det ? ` — ${det}` : ''} · ${this.brl(it.priceCents * (it.qty || 1))}`;
+    });
+    const total = (itens as any[]).reduce((s, it) => s + (it.priceCents || 0) * (it.qty || 1), 0);
+    return `🛍️ Sua sacola:\n${linhas.join('\n')}\n\nTotal: ${this.brl(total)}`;
+  }
+
+  /**
+   * Webhook do ManyChat: recebe a mensagem da cliente no DM e responde.
+   * Retorna SEMPRE { reply } (texto pro ManyChat mandar de volta). Nunca lança
+   * pro webhook — erro vira mensagem amigável (o ManyChat não trava o flow).
+   */
+  async manychatInbound(input: {
+    ig?: string | null;
+    phone?: string | null;
+    name?: string | null;
+    text?: string | null;
+    sid?: string | null;
+  }): Promise<{ reply: string; cartId?: string; awaitingReview?: boolean }> {
+    if (!this.selfCartEnabled) {
+      return { reply: 'A sacola pela DM está desativada no momento. Fala com a gente que a gente monta pra você. 💛' };
+    }
+    const ig = String(input.ig || '').trim().replace(/^@/, '');
+    const raw = String(input.text || '').trim();
+    if (!raw) return { reply: 'Manda o número da peça + tamanho (ex: 7 48). Ou digite SACOLA pra ver o que já tem.' };
+
+    // Vincula o subscriber do ManyChat (idempotente) — sem isso, a apresentadora
+    // não consegue mandar o link no liberar (chargeCartViaDm precisa do vínculo).
+    if (ig && input.sid) {
+      await this.upsertManychatLink({
+        sid: String(input.sid),
+        ig,
+        name: input.name || undefined,
+        phone: input.phone || undefined,
+      }).catch(() => null);
+    }
+
+    // Sessão ativa
+    const session = await (this.prisma as any).livePdvSession.findFirst({
+      where: { status: 'live' },
+      orderBy: { startedAt: 'desc' },
+      select: { id: true },
+    });
+    if (!session) return { reply: 'Não tem live rolando agora. Assim que começar, é só mandar o número da peça. 💛' };
+
+    // Comando normalizado (sem acento, upper)
+    const cmd = this.norm(raw);
+    const primeira = cmd.split(/\s+/)[0];
+
+    // Acha/gera o carrinho da @ (identidade = quem mandou a msg)
+    let cart: any = null;
+    if (ig) {
+      const found = await this.findActiveLiveCart({
+        customerInstagram: { equals: ig, mode: 'insensitive' },
+      });
+      cart = found.cart || null;
+    }
+
+    // Ajuda / lista
+    if (['AJUDA', 'HELP', 'MENU'].includes(primeira)) {
+      return { reply: 'Como comprar na live:\n• Manda o NÚMERO da peça + tamanho (ex: 7 48)\n• SACOLA — ver o que já tem\n• TIRAR 7 — remover uma peça\n• LISTA — números das peças\n• FECHAR — finalizar (a gente confere e te manda o link)' };
+    }
+    if (['LISTA', 'CATALOGO', 'CATÁLOGO', 'PECAS', 'PEÇAS'].includes(primeira)) {
+      const atalhos = await (this.prisma as any).livePdvAtalho.findMany({
+        where: { sessionId: session.id },
+        orderBy: { position: 'asc' },
+        take: 60,
+        select: { atalho: true, descricao: true },
+      });
+      if (!atalhos.length) return { reply: 'Ainda não tem peças numeradas nesta live. Aguarda a apresentadora. 💛' };
+      const linhas = (atalhos as any[]).map((a) => `${a.atalho} — ${(a.descricao || '').toString().trim() || 'peça'}`);
+      return { reply: `Peças da live:\n${linhas.join('\n')}\n\nManda o número + tamanho (ex: 7 48).` };
+    }
+
+    // SACOLA
+    if (['SACOLA', 'CARRINHO'].includes(primeira)) {
+      if (!cart) return { reply: 'Você ainda não tem sacola. Manda o número da peça + tamanho (ex: 7 48).' };
+      return { reply: await this.sacolaResumo(cart.id), cartId: cart.id };
+    }
+
+    // FECHAR → fila de revisão (NÃO manda link — verificação humana antes)
+    if (['FECHAR', 'FINALIZAR', 'PAGAR', 'FIM', 'ACABOU'].includes(primeira)) {
+      if (!cart) return { reply: 'Você ainda não tem sacola pra fechar. Manda o número da peça + tamanho (ex: 7 48).' };
+      const temItem = await (this.prisma as any).livePdvItem.count({
+        where: { cartId: cart.id, status: { in: this.COMMITTED } },
+      });
+      if (!temItem) return { reply: 'Sua sacola está vazia. Manda o número da peça + tamanho (ex: 7 48).' };
+      await (this.prisma as any).livePdvCart.update({
+        where: { id: cart.id },
+        data: { awaitingReview: true, clientClosedAt: new Date(), selfCart: true },
+      });
+      this.gateway.emitToLiveOps('live-pdv:cart-review', { cartId: cart.id });
+      const resumo = await this.sacolaResumo(cart.id);
+      return {
+        reply: `${resumo}\n\n✅ Sacola enviada pra conferência! Assim que a Lurd's confirmar, te mando o link de pagamento aqui. 💛`,
+        cartId: cart.id,
+        awaitingReview: true,
+      };
+    }
+
+    // TIRAR <número>
+    if (['TIRAR', 'REMOVER', 'REMOVE', 'CANCELA', 'CANCELAR'].includes(primeira)) {
+      if (!cart) return { reply: 'Você ainda não tem sacola.' };
+      const numero = cmd.split(/\s+/)[1];
+      if (!numero) return { reply: 'Qual número tirar? Ex: TIRAR 7.' };
+      const at = await this.acharAtalho(session.id, numero);
+      if (!at) return { reply: `Não achei a peça ${numero} na sua sacola.` };
+      const refBase = this.norm(at.refCode);
+      const itens = await (this.prisma as any).livePdvItem.findMany({
+        where: { cartId: cart.id, status: { in: this.COMMITTED } },
+        select: { id: true, refCode: true },
+      });
+      const alvo = (itens as any[]).filter((it) => this.norm(it.refCode) === refBase);
+      if (!alvo.length) return { reply: `A peça ${numero} não está na sua sacola.` };
+      for (const it of alvo) await this.cancelItem(it.id, 'removido pela cliente (DM)').catch(() => null);
+      return { reply: `Ok, tirei a peça ${numero}. \n\n${await this.sacolaResumo(cart.id)}`, cartId: cart.id };
+    }
+
+    // ADD — "<número> <tamanho>" (ou só número → pede o tamanho)
+    const partes = cmd.split(/\s+/).filter(Boolean);
+    const numero = partes[0];
+    if (!/^\d{1,4}[A-Z]?$/.test(numero)) {
+      return { reply: 'Não entendi. Manda o NÚMERO da peça + tamanho (ex: 7 48), ou digite AJUDA.' };
+    }
+    const at = await this.acharAtalho(session.id, numero);
+    if (!at) return { reply: `Não achei a peça ${numero}. Confere o número que a apresentadora falou (ou digite LISTA).` };
+    const tamanho = partes.slice(1).join(' ').trim();
+    if (!tamanho) {
+      return { reply: `Peça ${numero}${at.descricao ? ` (${at.descricao})` : ''}: qual tamanho? Ex: ${numero} 48.` };
+    }
+
+    // Garante carrinho (cria com a identidade da @ se ainda não tem)
+    try {
+      if (!cart) {
+        cart = await this.ensureCart(session.id, {
+          id: null,
+          name: (input.name || ig || 'Cliente da Live').toString().trim(),
+          phone: String(input.phone || '').replace(/\D/g, ''),
+          instagram: ig || null,
+        } as any);
+      }
+      const res = await this.addItem({
+        sessionId: session.id,
+        cartId: cart.id,
+        refCode: at.refCode,
+        cor: at.cor || null,
+        tamanho,
+        qty: 1,
+      });
+      await (this.prisma as any).livePdvCart.update({
+        where: { id: cart.id },
+        data: { selfCart: true, awaitingReview: false },
+      }).catch(() => null);
+      const nome = (res?.item?.descricao || at.descricao || at.refCode || 'peça').toString().trim();
+      return {
+        reply: `✅ ${nome} — ${at.cor ? at.cor + ' ' : ''}${tamanho} na sua sacola.\n\n${await this.sacolaResumo(cart.id)}\n\nManda mais ou digite FECHAR.`,
+        cartId: cart.id,
+      };
+    } catch (e: any) {
+      const msg = String(e?.message || e || '').toLowerCase();
+      if (msg.includes('estoque')) {
+        return { reply: `Poxa, a peça ${numero} no ${tamanho} está sem estoque. 😔 Tenta outro tamanho ou outra peça.` };
+      }
+      return { reply: `Não consegui adicionar a peça ${numero} no ${tamanho}. Confere o tamanho (ex: ${numero} 48) ou digite LISTA.` };
+    }
+  }
+
+  /** Acha a legenda (atalho) tolerando zeros à esquerda, igual ao searchGrade. */
+  private async acharAtalho(sessionId: string, numeroRaw: string): Promise<any | null> {
+    const key = this.normAtalho(numeroRaw);
+    const cand = new Set<string>([key]);
+    if (/^\d+$/.test(key)) {
+      const semZeros = key.replace(/^0+/, '');
+      if (semZeros) cand.add(semZeros);
+      cand.add(key.padStart(2, '0'));
+    }
+    return (this.prisma as any).livePdvAtalho.findFirst({
+      where: { sessionId, atalho: { in: Array.from(cand) } },
+    });
+  }
+
+  /**
+   * LIBERAR COBRANÇA — a apresentadora confere a sacola fechada pela cliente e
+   * libera: tira da fila de revisão e manda o link de pagamento pela DM.
+   * É a "verificação antes de finalizar". Sem isso, a cobrança nunca sai
+   * sozinha de uma sacola montada pela cliente.
+   */
+  async liberarCobranca(cartId: string) {
+    const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
+    if (!cart) throw new NotFoundException('Carrinho não encontrado');
+    await (this.prisma as any).livePdvCart.update({
+      where: { id: cartId },
+      data: { awaitingReview: false },
+    });
+    const r = await this.chargeCartViaDm(cartId);
+    this.logger.log(`[live-dm] sacola ${cartId} (${cart.customerName || 's/nome'}) revisada e liberada → link enviado`);
+    return { ...r };
+  }
+
   /**
    * Cobrança em massa AUTOMÁTICA via DM (API ManyChat): pra cada carrinho
    * aberto da sessão com peças, manda a mensagem com o link curto /p/ pra

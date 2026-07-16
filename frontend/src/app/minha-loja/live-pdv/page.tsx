@@ -104,6 +104,9 @@ interface Cart {
   qrCodeImageUrl?: string | null;
   hasManychat?: boolean; // cliente tem vínculo ManyChat → DM automática funciona
   dmSentAt?: string | null; // carimbo de cobrança enviada (sincroniza os ✓ entre PCs)
+  selfCart?: boolean; // cliente montou a sacola sozinha pela DM (ManyChat)
+  awaitingReview?: boolean; // cliente digitou FECHAR → aguarda a apresentadora liberar
+  clientClosedAt?: string | null;
   items: CartItem[];
 }
 interface ActiveCustomer {
@@ -278,6 +281,7 @@ export default function LivePdvPage() {
   const [activeCustomer, setActiveCustomer] = useState<ActiveCustomer | null>(null);
   const [cart, setCart] = useState<Cart | null>(null);
   const [carts, setCarts] = useState<Cart[]>([]);
+  const [liberando, setLiberando] = useState<string | null>(null); // sacola da DM sendo liberada
   const [clientFilter, setClientFilter] = useState(''); // busca de cliente por nome/@ na lista
   // Despoluição da grade: por padrão só quem TEM PEÇAS; vazios ficam atrás
   // de um chip (cliente puxada da fila que ainda não comprou = R$0 · 0 itens).
@@ -460,6 +464,10 @@ export default function LivePdvPage() {
     socket.on('live-pdv:item-shipped', onChange);
     socket.on('live-pdv:promo', onChange);
     socket.on('live-pdv:charge-expired', onChargeExpired);
+    // SACOLA PELA DM: cliente montando/fechando o carrinho sozinha → atualiza a
+    // fila (item-reserved cobre o add via DM; cart-review é o FECHAR pra revisão).
+    socket.on('live-pdv:item-reserved', onChange);
+    socket.on('live-pdv:cart-review', onChange);
 
     // Cinto de segurança: se socket E webhook falharem, a lista ainda
     // atualiza sozinha a cada 90s.
@@ -473,6 +481,8 @@ export default function LivePdvPage() {
       socket.off('live-pdv:item-shipped', onChange);
       socket.off('live-pdv:promo', onChange);
       socket.off('live-pdv:charge-expired', onChargeExpired);
+      socket.off('live-pdv:item-reserved', onChange);
+      socket.off('live-pdv:cart-review', onChange);
       clearInterval(safety);
     };
   }, [sessionId, refreshCarts]);
@@ -1790,6 +1800,31 @@ export default function LivePdvPage() {
   // carimbo sincroniza entre PCs: quem cobrou em outra máquina aparece ✓ aqui.
   const cobradas = cobraveis.filter((c) => chargeAllDone[c.id] || c.dmSentAt).length;
 
+  // SACOLA PELA DM: carrinhos que a cliente FECHOU e aguardam a apresentadora
+  // conferir e liberar a cobrança (verificação humana antes de finalizar).
+  const pendentesRevisao = cartsAtivos.filter(
+    (c) => c.awaitingReview && (c.items?.length || 0) > 0,
+  );
+
+  async function liberarSacola(c: Cart) {
+    if (
+      !confirm(
+        `Conferiu a sacola de ${c.customerName || 'cliente'} (${(c.items?.length || 0)} peça(s), ` +
+          `${brl(c.totalCents)})?\n\nAo liberar, o link de pagamento vai automático pra cliente.`,
+      )
+    )
+      return;
+    setLiberando(c.id);
+    try {
+      await api(`/live-pdv/carts/${c.id}/liberar-cobranca`, { method: 'POST', body: JSON.stringify({}) });
+      await refreshCarts();
+    } catch (e: any) {
+      alert(e?.message || 'Falha ao liberar a cobrança.');
+    } finally {
+      setLiberando(null);
+    }
+  }
+
   return (
     <div className="min-h-screen bg-slate-100">
       {/* Aviso rápido: peça adicionada + carrinho fechado (segurança) */}
@@ -1851,6 +1886,53 @@ export default function LivePdvPage() {
           </div>
         </div>
       )}
+      {/* SACOLAS PELA DM — fila de REVISÃO (verificação humana antes de cobrar).
+          A cliente montou e fechou sozinha pelo ManyChat; a apresentadora confere
+          e libera → só então o link de pagamento vai pra cliente. */}
+      {pendentesRevisao.length > 0 && (
+        <div className="mx-auto mt-3 w-full max-w-3xl px-3">
+          <div className="rounded-xl border-2 border-amber-300 bg-amber-50 p-3">
+            <div className="mb-1 flex items-center gap-2">
+              <span className="text-lg">🔔</span>
+              <h3 className="text-sm font-bold text-amber-900">
+                {pendentesRevisao.length} sacola(s) da cliente pra conferir
+              </h3>
+            </div>
+            <p className="mb-3 text-xs text-amber-800">
+              Montadas pela cliente na DM. Confira as peças e libere — só então o link de pagamento é enviado.
+            </p>
+            <div className="space-y-2">
+              {pendentesRevisao.map((c) => (
+                <div key={c.id} className="flex items-center justify-between gap-3 rounded-lg bg-white p-2.5 shadow-sm">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-semibold text-slate-800">
+                      {c.customerName || 'cliente'}
+                      {c.customerInstagram ? ` · @${c.customerInstagram}` : ''}
+                    </div>
+                    <div className="truncate text-xs text-slate-500">
+                      {(c.items || [])
+                        .map((it) => `${it.descricao || it.refCode}${it.tamanho ? ' ' + it.tamanho : ''}`)
+                        .join(' · ')}
+                    </div>
+                    <div className="text-xs font-bold text-emerald-700">
+                      {c.items?.length || 0} peça(s) · {brl(c.totalCents)}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => liberarSacola(c)}
+                    disabled={liberando === c.id}
+                    className="shrink-0 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-700 disabled:opacity-60"
+                  >
+                    {liberando === c.id ? 'Liberando…' : '✅ Conferi — Liberar'}
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* COBRAR TODAS — fila semi-automática de cobrança em massa */}
       {chargeAllOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
