@@ -30,7 +30,14 @@ export class RoutingService {
    */
   async previewRoute(
     orderId: string,
-    opts?: { excludeStoreCodes?: string[]; preferStoreCode?: string | null },
+    opts?: {
+      excludeStoreCodes?: string[];
+      preferStoreCode?: string | null;
+      // SWAP cirúrgico: roteia SÓ estes itens (os órfãos da loja trocada), não o
+      // pedido inteiro. Sem isso, re-rotear "só São José" re-roteava as 5 peças
+      // (Limeira inclusa) porque o engine recebia order.items completo.
+      onlyItems?: Array<{ sku: string; quantity: number }>;
+    },
   ) {
     const order = await this.prisma.order.findUniqueOrThrow({
       where: { id: orderId },
@@ -46,7 +53,12 @@ export class RoutingService {
         ...(excludeCodes.length ? { code: { notIn: excludeCodes } } : {}),
       },
     });
-    const skus = order.items.map((i) => i.sku);
+    // Escopo dos itens a rotear: subconjunto (swap) ou pedido inteiro (padrão).
+    const routeItems =
+      opts?.onlyItems && opts.onlyItems.length > 0
+        ? opts.onlyItems.map((i) => ({ sku: i.sku, quantity: Math.max(1, Number(i.quantity) || 1) }))
+        : order.items.map((i) => ({ sku: i.sku, quantity: i.quantity }));
+    const skus = routeItems.map((i) => i.sku);
     const storeCodes = stores.map((s) => s.code);
     const stock = await this.stock.getStockFor(skus, storeCodes);
 
@@ -57,7 +69,7 @@ export class RoutingService {
     const liquidStock = this.subtractCommitted(stock, committed);
 
     const result = this.engine.route({
-      items: order.items.map((i) => ({ sku: i.sku, quantity: i.quantity })),
+      items: routeItems,
       stores: stores.map((s) => ({
         id: s.id,
         code: s.code,
@@ -736,8 +748,14 @@ export class RoutingService {
       };
     }
 
-    // Senão: routing automático (busca loja com estoque, exclui as problemáticas)
-    const preview = await this.previewRoute(orderId, { excludeStoreCodes });
+    // Senão: routing automático (busca loja com estoque, exclui as problemáticas).
+    // CRÍTICO: roteia SÓ os itens órfãos (os da loja trocada) — não o pedido
+    // inteiro. Sem o onlyItems, re-rotear "só São José" re-roteava as outras
+    // lojas junto (bug: "roteia tudo").
+    const preview = await this.previewRoute(orderId, {
+      excludeStoreCodes,
+      onlyItems: itemsAssigned.map((it: any) => ({ sku: it.sku, quantity: it.quantity })),
+    });
 
     if (!preview.success) {
       return {
