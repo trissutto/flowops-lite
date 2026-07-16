@@ -591,7 +591,31 @@ export class LivePdvService {
         .split(/\s+/)
         .filter((w) => w.length >= 3 && !/^\d+$/.test(w) && this.norm(w) !== qn);
       let escolhida: any[] | null = null;
-      if (palavrasDoTermo.length) {
+
+      // 0) BIPE (16/07, pedido do dono): quando o termo é um CÓDIGO que casa
+      // com UMA linha (a peça foi passada no leitor), a família certa é a DA
+      // PRÓPRIA PEÇA bipada — não a dominante. Sem isso, bipar uma peça da
+      // família menor de uma REF homônima trazia o produto da família maior
+      // ("passo o leitor e vem outro produto"). A descrição da peça bipada é
+      // a "similaridade" que desambigua.
+      const codBipado = String(q).replace(/\D/g, '').replace(/^0+/, '');
+      if (codBipado) {
+        const scanRow = productRows.find(
+          (r) => String(r.CODIGO ?? '').trim().replace(/^0+/, '') === codBipado,
+        );
+        if (scanRow) {
+          const famBipada = ProductSearchService.familiaOf(scanRow.DESCRICAOCOMPLETA);
+          const lista = porFamilia.get(famBipada);
+          if (lista?.length) {
+            escolhida = lista;
+            this.logger.log(
+              `[grade] REF ambígua "${qn}": código ${codBipado} bipado → ancorando na família da peça "${famBipada}" (${lista.length} linhas)`,
+            );
+          }
+        }
+      }
+
+      if (!escolhida && palavrasDoTermo.length) {
         for (const list of porFamilia.values()) {
           const casa = list.some((r) => {
             const d = this.norm(r.DESCRICAOCOMPLETA);
