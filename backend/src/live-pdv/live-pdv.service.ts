@@ -2385,6 +2385,36 @@ export class LivePdvService {
     await (this.prisma as any).livePdvCart.update({ where: { id: cartId }, data });
   }
 
+  /**
+   * LEGENDA POR ITEM (16/07, pedido do dono): mapeia cada item do carrinho pro
+   * número da legenda (atalho) da live — pra conferir a peça na linha do
+   * carrinho. Casa por refCode (+cor quando a legenda fixa a cor).
+   */
+  private async atalhosByRef(sessionId: string): Promise<Map<string, any[]>> {
+    const byRef = new Map<string, any[]>();
+    if (!sessionId) return byRef;
+    const atalhos = await (this.prisma as any).livePdvAtalho
+      .findMany({ where: { sessionId }, select: { atalho: true, refCode: true, cor: true } })
+      .catch(() => []);
+    for (const a of atalhos as any[]) {
+      const k = this.norm(a.refCode);
+      if (!byRef.has(k)) byRef.set(k, []);
+      byRef.get(k)!.push(a);
+    }
+    return byRef;
+  }
+
+  private legendaDeItem(it: any, byRef: Map<string, any[]>): string | null {
+    const cands = byRef.get(this.norm(it?.refCode)) || [];
+    if (!cands.length) return null;
+    const corN = this.norm(it?.cor);
+    const match =
+      cands.find((a: any) => a.cor && this.norm(a.cor) === corN) ||
+      cands.find((a: any) => !a.cor) ||
+      cands[0];
+    return match?.atalho ?? null;
+  }
+
   async getCart(cartId: string) {
     const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
     if (!cart) throw new NotFoundException('Carrinho não encontrado');
@@ -2415,7 +2445,9 @@ export class LivePdvService {
     if (!hasManychat) {
       hasManychat = !!(await this.lookupManychatSidByIg(cart.customerInstagram));
     }
-    return { ...cart, items, hasManychat };
+    const byRef = await this.atalhosByRef(cart.sessionId);
+    const itemsLeg = items.map((it: any) => ({ ...it, legenda: this.legendaDeItem(it, byRef) }));
+    return { ...cart, items: itemsLeg, hasManychat };
   }
 
   // Statuses que contam como "já pago" (não deixa cobrar de novo).
@@ -2559,9 +2591,11 @@ export class LivePdvService {
       });
       for (const s of subs as any[]) linkedIg.add(s.igUsername);
     }
+    // Legenda por item (mesma sessão pra todos os carrinhos → 1 query só).
+    const byRef = await this.atalhosByRef(sessionId);
     return carts.map((c: any) => ({
       ...c,
-      items: byCart.get(c.id) || [],
+      items: (byCart.get(c.id) || []).map((it: any) => ({ ...it, legenda: this.legendaDeItem(it, byRef) })),
       hasManychat:
         !!(c.customerId && linked.has(c.customerId)) ||
         linkedIg.has(String(c.customerInstagram || '').trim().replace(/^@/, '').toLowerCase()),
