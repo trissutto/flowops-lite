@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 
 /**
  * /retaguarda/faturamento
@@ -991,7 +992,7 @@ function EstornoModal({
   return (
     <div
       className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
-      onClick={resultado ? onSuccess : onClose}
+      {...overlayClose(resultado ? onSuccess : onClose)}
     >
       <div
         className="bg-white rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden max-h-[90vh] overflow-y-auto"

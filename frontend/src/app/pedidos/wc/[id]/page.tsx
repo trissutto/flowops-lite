@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -2060,7 +2061,7 @@ export default function PedidoDetailPage() {
       {pickStoreOpen && (
         <div
           className="fixed inset-0 z-[80] bg-black/60 flex items-center justify-center p-4"
-          onClick={() => !pickStoreApplying && (setPickStoreOpen(false), setSwapTarget(null))}
+          {...overlayClose(() => !pickStoreApplying && (setPickStoreOpen(false), setSwapTarget(null)))}
         >
           <div
             className="bg-white rounded-lg shadow-2xl max-w-2xl w-full max-h-[85vh] flex flex-col"
@@ -2313,7 +2314,7 @@ function SkuDiagnoseModal({
   return (
     <div
       className="fixed inset-0 bg-black/60 z-50 flex items-start justify-center p-4 overflow-y-auto"
-      onClick={onClose}
+      {...overlayClose(onClose)}
     >
       <div
         className="bg-white rounded-2xl w-full max-w-3xl my-8 overflow-hidden"

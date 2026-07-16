@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 
 /**
  * /minha-loja/realinhamento — Tela onde a FILIAL separa as ordens de
@@ -1154,7 +1155,7 @@ export default function MinhaLojaRealinhamentoPage() {
       {problemasShipment && (
         <div
           className="fixed inset-0 bg-black/60 z-50 flex items-start justify-center p-4 overflow-y-auto"
-          onClick={() => setProblemasShipment(null)}
+          {...overlayClose(() => setProblemasShipment(null))}
         >
           <div
             className="bg-white rounded-2xl w-full max-w-2xl my-8 overflow-hidden"

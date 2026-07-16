@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 
 /**
  * /vitrine/[slug] — Página de DETALHE do produto (PDP).
@@ -555,7 +556,7 @@ export default function ProductDetailPage() {
       {zoomOpen && mainImg && (
         <div
           className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4 cursor-zoom-out"
-          onClick={() => setZoomOpen(false)}
+          {...overlayClose(() => setZoomOpen(false))}
         >
           <img src={mainImg} alt={product.name} className="max-w-full max-h-full object-contain" />
           <button

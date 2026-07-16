@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 
 /**
  * /minha-loja/pdv — Frente de caixa.
@@ -2782,7 +2783,7 @@ function PdvPageInner() {
       {showOnlinePending && (
         <div
           className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4"
-          onClick={() => setShowOnlinePending(false)}
+          {...overlayClose(() => setShowOnlinePending(false))}
         >
           <div
             className="bg-white rounded-xl w-full max-w-2xl max-h-[90vh] flex flex-col"
@@ -7868,7 +7869,7 @@ function SimularParcelasModal({
   const valorParcela = (n: number) => total / n;
 
   return (
-    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-2 sm:p-4" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-2 sm:p-4" {...overlayClose(onClose)}>
       <div
         className="bg-white rounded-xl w-full max-w-md p-3 space-y-2 max-h-[95vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
@@ -8001,7 +8002,7 @@ function DiscountModal({
   const valorFinal = Math.max(0, base - (parseNum(reaisStr) || 0));
 
   return (
-    <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-4" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-4" {...overlayClose(onClose)}>
       <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-md p-5 space-y-4 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between">
           <h2 className="font-black text-lg text-amber-700 flex items-center gap-2">
@@ -8152,7 +8153,7 @@ function GiftVoucherModal({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-4" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-4" {...overlayClose(onClose)}>
       <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-md p-5 space-y-4 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between">
           <h2 className="font-black text-lg text-[#8C7325] flex items-center gap-2">
@@ -8290,7 +8291,7 @@ function ManualItemModal({
   const total = (parseNum(valor) || 0) * (Number(qty) || 0);
 
   return (
-    <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-4" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-4" {...overlayClose(onClose)}>
       <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-md p-5 space-y-4 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between">
           <h2 className="font-black text-lg text-rose-700 flex items-center gap-2">
@@ -8416,7 +8417,7 @@ function ShortcutsHelpModal({ onClose }: { onClose: () => void }) {
   return (
     <div
       className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4"
-      onClick={onClose}
+      {...overlayClose(onClose)}
     >
       <div
         onClick={(e) => e.stopPropagation()}

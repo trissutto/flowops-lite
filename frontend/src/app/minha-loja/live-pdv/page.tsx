@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 
 /**
  * /minha-loja/live-pdv — Console de Live Commerce (operado pela apresentadora/loja)
@@ -2110,7 +2111,7 @@ export default function LivePdvPage() {
                   {historyOpen && (
                     <>
                       {/* backdrop invisível — clique fora fecha */}
-                      <div className="fixed inset-0 z-30" onClick={() => setHistoryOpen(false)} />
+                      <div className="fixed inset-0 z-30" {...overlayClose(() => setHistoryOpen(false))} />
                       <div className="absolute right-0 z-40 mt-1 max-h-[50vh] w-64 overflow-y-auto rounded-xl border border-slate-200 bg-white py-1 shadow-xl">
                         {refHistory.map((r) => (
                           <button
@@ -4113,7 +4114,7 @@ function LegendaModal({ sessionId, onClose }: { sessionId: string; onClose: () =
   }
 
   return (
-    <div className="fixed inset-0 z-40 flex items-start justify-center bg-black/60 p-3 sm:p-6 overflow-y-auto" onClick={onClose}>
+    <div className="fixed inset-0 z-40 flex items-start justify-center bg-black/60 p-3 sm:p-6 overflow-y-auto" {...overlayClose(onClose)}>
       <div className="w-full max-w-3xl rounded-2xl bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3">
           <div>

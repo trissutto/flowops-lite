@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 
 /**
  * /retaguarda/contas-pagar — Contas a Pagar 100% Flow (mockup aprovado 11/07).
@@ -1518,7 +1519,7 @@ function Divergencias({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => voi
 /* ═══════════════════ componentes base ═══════════════════ */
 function Modal({ titulo, children, onClose, largo }: any) {
   return (
-    <div className="fixed inset-0 bg-black/40 z-40 flex items-start justify-center p-4 overflow-y-auto" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/40 z-40 flex items-start justify-center p-4 overflow-y-auto" {...overlayClose(onClose)}>
       <div className={`bg-white rounded-2xl shadow-xl w-full ${largo ? 'max-w-3xl' : 'max-w-lg'} mt-10 p-5`} onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <h2 className="font-extrabold">{titulo}</h2>

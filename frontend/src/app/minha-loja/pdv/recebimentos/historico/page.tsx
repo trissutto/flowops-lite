@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 
 /**
  * /minha-loja/pdv/recebimentos/historico
@@ -352,7 +353,7 @@ export default function HistoricoBaixasPage() {
         {estornoBaixa && (
           <div
             className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4"
-            onClick={() => !estornando && setEstornoBaixa(null)}
+            {...overlayClose(() => !estornando && setEstornoBaixa(null))}
           >
             <div
               className="bg-white rounded-xl max-w-md w-full p-5 space-y-3 max-h-[90vh] overflow-y-auto"

@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 
 /**
  * /minha-loja/triagem — TRIAGEM DO PROVADOR.
@@ -1040,7 +1041,7 @@ export default function TriagemPage() {
       {(boxLoading || boxDetail) && (
         <div
           className="fixed inset-0 bg-black/60 z-50 flex items-start justify-center p-4 overflow-y-auto"
-          onClick={() => setBoxDetail(null)}
+          {...overlayClose(() => setBoxDetail(null))}
         >
           <div
             className="bg-white rounded-lg max-w-2xl w-full my-8 overflow-hidden"

@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 
 /**
  * AdminShell — Layout admin "dashboard clássico":
@@ -87,7 +88,7 @@ export default function AdminShell({
       {!noSidebar && mobileOpen && (
         <div
           className="fixed inset-0 z-40 bg-black/30 md:hidden"
-          onClick={() => setMobileOpen(false)}
+          {...overlayClose(() => setMobileOpen(false))}
         />
       )}
 
