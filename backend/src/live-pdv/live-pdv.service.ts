@@ -255,16 +255,34 @@ export class LivePdvService {
   /**
    * Reservas ATIVAS por itemKey e por (itemKey, loja). Usado pra calcular
    * disponibilidade real durante a live (ERP − reservas em andamento).
+   *
+   * ESCOPO POR SESSÃO (bug 16/07): SÓ conta itens da PRÓPRIA live (sessionId).
+   * Sem esse filtro, itens de lives PASSADAS com o mesmo itemKey (paid/reserved
+   * presos) descontavam do estoque de hoje — caso DISNEY-014 54: 7 itens da live
+   * de 03/07 (5 paid já baixados no Giga + 2 reserved órfãos) zeravam as 6 peças
+   * físicas → o tamanho sumia da grade. Sem sessionId, cai na live ATIVA (a
+   * relevante nas operações ao vivo); sem live ativa, não desconta nada.
    */
-  private async committed(itemKeys: string[]): Promise<{
+  private async committed(itemKeys: string[], sessionId?: string): Promise<{
     byKey: Map<string, number>;
     byKeyStore: Map<string, number>;
   }> {
     const byKey = new Map<string, number>();
     const byKeyStore = new Map<string, number>();
     if (itemKeys.length === 0) return { byKey, byKeyStore };
+    let scopeSid = sessionId;
+    if (!scopeSid) {
+      const active = await (this.prisma as any).livePdvSession.findFirst({
+        where: { status: 'live' },
+        orderBy: { startedAt: 'desc' },
+        select: { id: true },
+      });
+      scopeSid = active?.id;
+    }
+    // Sem sessão de escopo → nada a descontar (grade mostra o estoque cheio).
+    if (!scopeSid) return { byKey, byKeyStore };
     const rows = await (this.prisma as any).livePdvItem.findMany({
-      where: { itemKey: { in: itemKeys }, status: { in: this.COMMITTED } },
+      where: { itemKey: { in: itemKeys }, status: { in: this.COMMITTED }, sessionId: scopeSid },
       select: { itemKey: true, originStoreCode: true, qty: true },
     });
     for (const r of rows as any[]) {
@@ -716,7 +734,7 @@ export class LivePdvService {
     const itemKeys = productRows.map((r) =>
       this.keyOf(String(r.REF || ref).trim(), r.COR, r.TAMANHO),
     );
-    const { byKey, byKeyStore } = await this.committed(Array.from(new Set(itemKeys)));
+    const { byKey, byKeyStore } = await this.committed(Array.from(new Set(itemKeys)), sessionId);
 
     // 4) Monta células da grade (cor × tamanho), deduplicando por REF|COR|TAM.
     const cellMap = new Map<string, any>();
@@ -2222,7 +2240,7 @@ export class LivePdvService {
     // Estoque por loja + reservas ativas → disponibilidade real
     const { byStore, bestCodigo } = await this.erpStockByStoreForItem(ref, cor, tam);
     if (byStore.size === 0) throw new BadRequestException('Produto sem estoque em nenhuma loja');
-    const { byKeyStore } = await this.committed([itemKey]);
+    const { byKeyStore } = await this.committed([itemKey], session.id);
 
     // Monta entradas pro RoutingEngine (sku sintético = itemKey)
     const storesMap = await this.storesMap();
@@ -2675,7 +2693,7 @@ export class LivePdvService {
     if (!store) throw new BadRequestException('Loja não encontrada');
     // Valida estoque disponível na nova loja
     const { byStore } = await this.erpStockByStoreForItem(item.refCode, item.cor, item.tamanho);
-    const { byKeyStore } = await this.committed([item.itemKey]);
+    const { byKeyStore } = await this.committed([item.itemKey], item.sessionId);
     const raw = byStore.get(storeCode) || 0;
     const reserved = byKeyStore.get(`${item.itemKey}::${storeCode}`) || 0;
     // desconta a própria reserva atual se já era nessa loja (não é o caso, mas seguro)
