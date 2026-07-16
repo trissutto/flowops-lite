@@ -2014,6 +2014,50 @@ export class PdvController {
   }
 
   /**
+   * GET /pdv/admin/reconcile-manual-stock/preview — estoque fantasma "MANUAL":
+   * produto REAL vendido com desconto manual (promoTag='MANUAL' + sku/ref reais)
+   * que o filtro antigo pulava na baixa. Invisível ao reconcile normal (a venda
+   * marcava stockDecreasedAt). Dry-run: só conta/lista, não baixa nada.
+   */
+  @Get('admin/reconcile-manual-stock/preview')
+  async previewReconcileManualStock(
+    @Req() req: any,
+    @Query('since') since?: string,
+    @Query('until') until?: string,
+    @Query('storeCode') storeCode?: string,
+    @Query('limit') limit?: string,
+  ) {
+    if (req?.user?.role !== 'admin') {
+      throw new ForbiddenException('Apenas admin pode reconciliar estoque');
+    }
+    return this.svc.reconcileManualStockBacklog({
+      sinceIso: since,
+      untilIso: until,
+      storeCode,
+      limit: limit ? Number(limit) : 1000,
+      dryRun: true,
+    });
+  }
+
+  /** POST /pdv/admin/reconcile-manual-stock/execute — baixa os fantasmas MANUAL. */
+  @Post('admin/reconcile-manual-stock/execute')
+  async executeReconcileManualStock(
+    @Req() req: any,
+    @Body() body: { since?: string; until?: string; storeCode?: string; limit?: number },
+  ) {
+    if (req?.user?.role !== 'admin') {
+      throw new ForbiddenException('Apenas admin pode reconciliar estoque');
+    }
+    return this.svc.reconcileManualStockBacklog({
+      sinceIso: body?.since,
+      untilIso: body?.until,
+      storeCode: body?.storeCode,
+      limit: body?.limit || 1000,
+      dryRun: false,
+    });
+  }
+
+  /**
    * GET /pdv/admin/cleanup-ghost-sales/preview?olderThanMinutes=30&storeCode=01
    * Lista vendas fantasma (open + sem items + criadas ha > N min). Dry-run.
    */
