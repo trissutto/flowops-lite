@@ -78,6 +78,7 @@ interface CartItem {
   originStoreName: string;
   status: string;
   trackingCode?: string | null; // rastreio informado pela loja no despacho
+  legenda?: string | null; // nº da legenda (atalho) da live — pra conferir a peça
 }
 interface Cart {
   id: string;
@@ -3199,8 +3200,13 @@ function CartPanel({
                   <div className="min-w-0 flex-1">
                     {/* DESCRIÇÃO COMPLETA da peça (15/07): não só a legenda/ref.
                         ref · cor · tamanho vira subtítulo pra conferência rápida. */}
-                    <div className="text-sm font-medium text-slate-800 leading-snug" title={it.descricao || it.refCode}>
-                      {it.descricao || it.refCode}
+                    <div className="text-sm font-medium text-slate-800 leading-snug flex items-start gap-1.5" title={it.descricao || it.refCode}>
+                      {it.legenda && (
+                        <span className="shrink-0 rounded-md bg-fuchsia-600 px-1.5 py-0.5 text-[11px] font-black leading-none text-white" title={`Legenda ${it.legenda}`}>
+                          #{it.legenda}
+                        </span>
+                      )}
+                      <span className="min-w-0">{it.descricao || it.refCode}</span>
                     </div>
                     <div className="truncate text-[11px] font-semibold text-slate-500">
                       {it.refCode}{it.cor ? ` · ${it.cor}` : ''}{it.tamanho ? ` · ${it.tamanho}` : ''}
