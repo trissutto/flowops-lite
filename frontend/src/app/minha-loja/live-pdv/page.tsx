@@ -4056,6 +4056,8 @@ type LegendaRow = {
   erro: string | null;
   salva: boolean;      // true = persistida e sem edição pendente
   salvando: boolean;
+  precoEdit?: string | null;   // editor de preço da live aberto (string = valor digitado; null/undefined = fechado)
+  precoSalvando?: boolean;     // aplicando/removendo a promo da live
 };
 
 function LegendaModal({ sessionId, onClose }: { sessionId: string; onClose: () => void }) {
@@ -4158,6 +4160,49 @@ function LegendaModal({ sessionId, onClose }: { sessionId: string; onClose: () =
       patchRow(idx, { id: r?.atalho?.id || row.id, atalho: r?.atalho?.atalho || row.atalho, salva: true, salvando: false });
     } catch (e: any) {
       patchRow(idx, { salvando: false, erro: e?.message || 'Falha ao salvar' });
+    }
+  };
+
+  // ── Preço da LIVE (promo da sessão) direto na legenda ────────────────────
+  // Mesmo endpoint da grade (POST sessions/:id/promo por REF). Vale SÓ nesta
+  // live e não toca no cadastro. Depois de aplicar, revalida a linha pra o
+  // preço novo (e o "promo da live") aparecer na hora — inclusive nos cartões.
+  const aplicarPrecoLive = async (idx: number) => {
+    const row = rows[idx];
+    if (!row.grade?.ref) return;
+    const raw = String(row.precoEdit ?? '').trim().replace(/\./g, '').replace(',', '.');
+    const reais = parseFloat(raw);
+    if (!isFinite(reais) || reais <= 0) {
+      patchRow(idx, { erro: 'Informe um preço válido (ex.: 59,90)' });
+      return;
+    }
+    patchRow(idx, { precoSalvando: true, erro: null });
+    try {
+      await api(`/live-pdv/sessions/${sessionId}/promo`, {
+        method: 'POST',
+        body: JSON.stringify({ refCode: row.grade.ref, priceCents: Math.round(reais * 100) }),
+      });
+      patchRow(idx, { precoEdit: null, precoSalvando: false });
+      await validarLinha(idx, row.refCode); // recarrega a grade com o preço novo
+    } catch (e: any) {
+      patchRow(idx, { precoSalvando: false, erro: e?.message || 'Falha ao aplicar preço da live' });
+    }
+  };
+
+  // Volta ao preço normal (remove a promo da live desta REF).
+  const removerPrecoLive = async (idx: number) => {
+    const row = rows[idx];
+    if (!row.grade?.ref) return;
+    patchRow(idx, { precoSalvando: true, erro: null });
+    try {
+      await api(`/live-pdv/sessions/${sessionId}/promo`, {
+        method: 'POST',
+        body: JSON.stringify({ refCode: row.grade.ref, priceCents: 0 }),
+      });
+      patchRow(idx, { precoEdit: null, precoSalvando: false });
+      await validarLinha(idx, row.refCode);
+    } catch (e: any) {
+      patchRow(idx, { precoSalvando: false, erro: e?.message || 'Falha ao remover preço da live' });
     }
   };
 
@@ -4337,10 +4382,69 @@ function LegendaModal({ sessionId, onClose }: { sessionId: string; onClose: () =
                 <div className="rounded-lg bg-white border border-emerald-200 p-2.5 space-y-1.5">
                   <div className="flex items-center justify-between gap-2">
                     <div className="text-xs font-bold text-emerald-700">🟢 Referência validada</div>
-                    <div className="text-xs font-black text-emerald-700 tabular-nums">
-                      {((row.grade.priceCents || 0) / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                      {row.grade.promoActive ? ' (promo da live)' : ''}
-                    </div>
+                    {row.precoEdit == null ? (
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs font-black text-emerald-700 tabular-nums">
+                          {((row.grade.priceCents || 0) / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                        </span>
+                        {row.grade.promoActive && (
+                          <span className="rounded bg-amber-100 px-1 py-0.5 text-[9px] font-bold text-amber-700">promo da live</span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => patchRow(idx, { precoEdit: ((row.grade.priceCents || 0) / 100).toFixed(2).replace('.', ','), erro: null })}
+                          className="rounded-md border border-emerald-300 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700 hover:bg-emerald-50"
+                          title="Editar o preço desta peça só nesta live"
+                        >
+                          ✎ preço
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1">
+                        <span className="text-[11px] font-bold text-slate-500">R$</span>
+                        <input
+                          autoFocus
+                          value={row.precoEdit}
+                          onChange={(e) => patchRow(idx, { precoEdit: e.target.value })}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') aplicarPrecoLive(idx);
+                            if (e.key === 'Escape') patchRow(idx, { precoEdit: null, erro: null });
+                          }}
+                          inputMode="decimal"
+                          placeholder="59,90"
+                          className="w-20 rounded-md border-2 border-emerald-300 px-2 py-1 text-xs font-bold text-slate-800 focus:border-emerald-500 focus:outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => aplicarPrecoLive(idx)}
+                          disabled={row.precoSalvando}
+                          className="rounded-md bg-emerald-600 px-2 py-1 text-xs font-bold text-white hover:bg-emerald-700 disabled:opacity-40"
+                          title="Aplicar preço nesta live"
+                        >
+                          {row.precoSalvando ? <Loader2 className="h-3 w-3 animate-spin" /> : 'OK'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => patchRow(idx, { precoEdit: null, erro: null })}
+                          disabled={row.precoSalvando}
+                          className="rounded-md border border-slate-300 px-1.5 py-1 text-xs font-bold text-slate-500 hover:bg-slate-50 disabled:opacity-40"
+                          title="Cancelar"
+                        >
+                          ✕
+                        </button>
+                        {row.grade.promoActive && (
+                          <button
+                            type="button"
+                            onClick={() => removerPrecoLive(idx)}
+                            disabled={row.precoSalvando}
+                            className="rounded-md border border-amber-300 px-1.5 py-1 text-[10px] font-bold text-amber-700 hover:bg-amber-50 disabled:opacity-40"
+                            title="Voltar ao preço normal (tira a promo da live)"
+                          >
+                            normal
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </div>
                   <div className="text-sm font-bold text-slate-800">{row.grade.descricao}</div>
                   <div className="text-[11px] text-slate-500">
