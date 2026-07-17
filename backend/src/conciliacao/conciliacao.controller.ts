@@ -41,10 +41,11 @@ export class ConciliacaoController {
     @Req() req: any,
     @Query('status') status?: string,
     @Query('gateway') gateway?: string,
+    @Query('loja') loja?: string,
     @Query('page') page?: string,
   ) {
     this.requireAdmin(req);
-    return this.svc.listar({ status, gateway, page: parseInt(page || '1', 10) || 1 });
+    return this.svc.listar({ status, gateway, storeCode: loja || undefined, page: parseInt(page || '1', 10) || 1 });
   }
 
   /** GET /conciliacao/tx/:id/json — JSON bruto da transação (auditoria). */
