@@ -21,6 +21,22 @@ type Demanda = {
   createdAt: string;
   finishedAt: string | null;
   nImagens: number;
+  tags?: string[];
+};
+
+type Tag = { id: string; nome: string; cor: string };
+
+const TAG_COR: Record<string, string> = {
+  amber: 'bg-amber-100 text-amber-800 border-amber-300',
+  sky: 'bg-sky-100 text-sky-800 border-sky-300',
+  emerald: 'bg-emerald-100 text-emerald-800 border-emerald-300',
+  rose: 'bg-rose-100 text-rose-800 border-rose-300',
+  violet: 'bg-violet-100 text-violet-800 border-violet-300',
+  orange: 'bg-orange-100 text-orange-800 border-orange-300',
+  teal: 'bg-teal-100 text-teal-800 border-teal-300',
+  pink: 'bg-pink-100 text-pink-800 border-pink-300',
+  slate: 'bg-slate-100 text-slate-700 border-slate-300',
+  lime: 'bg-lime-100 text-lime-800 border-lime-300',
 };
 
 const CRIT_STYLE: Record<string, string> = {
@@ -40,6 +56,28 @@ export default function DemandasPage() {
   const [err, setErr] = useState('');
   const [filtroStatus, setFiltroStatus] = useState<'todas' | 'aberta' | 'concluida'>('aberta');
   const [filtroCrit, setFiltroCrit] = useState<string>('');
+  const [filtroTag, setFiltroTag] = useState<string>('');
+
+  // Tags (catálogo criado pelo dono: RH, CONTAS A PAGAR, PDV…)
+  const [tagsCat, setTagsCat] = useState<Tag[]>([]);
+  const [selTags, setSelTags] = useState<Set<string>>(new Set());
+  const [novaTag, setNovaTag] = useState('');
+  const corDaTag = (nome: string) => TAG_COR[tagsCat.find((t) => t.nome === nome)?.cor || 'slate'] || TAG_COR.slate;
+  const carregarTags = () => api<Tag[]>('/demandas/tags').then(setTagsCat).catch(() => {});
+  const criarTag = async () => {
+    const nome = novaTag.trim().toUpperCase();
+    if (!nome) return;
+    await api('/demandas/tags', { method: 'POST', body: JSON.stringify({ nome }) }).catch(() => null);
+    setNovaTag('');
+    await carregarTags();
+    setSelTags((p) => new Set(p).add(nome));
+  };
+  const excluirTag = async (t: Tag) => {
+    if (!window.confirm(`Excluir a tag ${t.nome}? Ela some de todas as demandas.`)) return;
+    await api(`/demandas/tags/${t.id}`, { method: 'DELETE' }).catch(() => null);
+    if (filtroTag === t.nome) setFiltroTag('');
+    await carregarTags();
+  };
 
   // Formulário
   const [titulo, setTitulo] = useState('');
@@ -65,11 +103,12 @@ export default function DemandasPage() {
       const qs = new URLSearchParams();
       if (filtroStatus !== 'todas') qs.set('status', filtroStatus);
       if (filtroCrit) qs.set('criticidade', filtroCrit);
+      if (filtroTag) qs.set('tag', filtroTag);
       setList(await api<Demanda[]>(`/demandas?${qs.toString()}`));
     } catch (e: any) { setErr(e?.message || 'Falha ao carregar'); }
     finally { setBusy(false); }
   };
-  useEffect(() => { if (allowed) load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [allowed, filtroStatus, filtroCrit]);
+  useEffect(() => { if (allowed) { load(); carregarTags(); } /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [allowed, filtroStatus, filtroCrit, filtroTag]);
 
   const addFiles = (files: FileList | File[]) => {
     for (const f of Array.from(files)) {
@@ -87,8 +126,8 @@ export default function DemandasPage() {
     if (!prompt.trim()) { setErr('Escreva a demanda'); return; }
     setSalvando(true); setErr('');
     try {
-      await api('/demandas', { method: 'POST', body: JSON.stringify({ titulo, prompt, criticidade, imagens }) });
-      setTitulo(''); setPrompt(''); setImagens([]); setCriticidade('IMPORTANTE');
+      await api('/demandas', { method: 'POST', body: JSON.stringify({ titulo, prompt, criticidade, imagens, tags: Array.from(selTags) }) });
+      setTitulo(''); setPrompt(''); setImagens([]); setCriticidade('IMPORTANTE'); setSelTags(new Set());
       await load();
     } catch (e: any) { setErr(e?.message || 'Falha ao criar'); }
     finally { setSalvando(false); }
@@ -147,6 +186,25 @@ export default function DemandasPage() {
           <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={3}
             placeholder="Escreve a demanda como se fosse um prompt… (cola prints aqui com Ctrl+V)"
             className="w-full px-3 py-2 border-2 border-slate-200 rounded-xl text-sm focus:border-amber-400 focus:outline-none" />
+          {/* Tags da demanda (catálogo seu: cria à vontade, clica pra marcar) */}
+          <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+            {tagsCat.map((t) => (
+              <button key={t.id}
+                onClick={() => setSelTags((p) => { const n = new Set(p); if (n.has(t.nome)) n.delete(t.nome); else n.add(t.nome); return n; })}
+                onContextMenu={(e) => { e.preventDefault(); excluirTag(t); }}
+                title="Clique marca · botão direito exclui a tag"
+                className={`px-2.5 py-1 rounded-full text-[10px] font-black border ${selTags.has(t.nome) ? TAG_COR[t.cor] || TAG_COR.slate : 'border-slate-200 text-slate-400'}`}>
+                {t.nome}
+              </button>
+            ))}
+            <input value={novaTag} onChange={(e) => setNovaTag(e.target.value.toUpperCase())}
+              onKeyDown={(e) => e.key === 'Enter' && criarTag()}
+              placeholder="+ nova tag"
+              className="w-28 px-2 py-1 border border-dashed border-slate-300 rounded-full text-[10px] font-bold uppercase focus:border-amber-400 focus:outline-none" />
+            {novaTag.trim() && (
+              <button onClick={criarTag} className="px-2 py-1 rounded-full bg-slate-800 text-white text-[10px] font-black">criar</button>
+            )}
+          </div>
           <div className="flex items-center gap-2 mt-2 flex-wrap">
             {imagens.map((img, i) => (
               // eslint-disable-next-line @next/next/no-img-element
@@ -186,6 +244,13 @@ export default function DemandasPage() {
               {c || 'Todas criticidades'}
             </button>
           ))}
+          {tagsCat.length > 0 && <span className="w-px h-6 bg-slate-200 mx-1" />}
+          {tagsCat.map((t) => (
+            <button key={t.id} onClick={() => setFiltroTag(filtroTag === t.nome ? '' : t.nome)}
+              className={`px-3 py-1.5 rounded-full text-[11px] font-black border-2 ${filtroTag === t.nome ? TAG_COR[t.cor] || TAG_COR.slate : 'border-slate-200 text-slate-400'}`}>
+              {t.nome}
+            </button>
+          ))}
         </div>
 
         {/* Lista */}
@@ -198,6 +263,13 @@ export default function DemandasPage() {
               <span className={`px-2 py-1 rounded-lg text-[10px] font-black border ${CRIT_STYLE[d.criticidade]}`}>{d.criticidade}</span>
               <div className="flex-1 min-w-0 cursor-pointer" onClick={() => abrirDetalhe(d)}>
                 {d.titulo && <div className="font-bold text-slate-800 text-sm">{d.titulo}</div>}
+                {(d.tags || []).length > 0 && (
+                  <div className="flex gap-1 flex-wrap my-0.5">
+                    {(d.tags || []).map((t) => (
+                      <span key={t} className={`px-2 py-0.5 rounded-full text-[9px] font-black border ${corDaTag(t)}`}>{t}</span>
+                    ))}
+                  </div>
+                )}
                 <div className={`text-sm text-slate-600 whitespace-pre-wrap ${d.status === 'concluida' ? 'line-through' : ''}`}>{d.prompt.slice(0, 300)}{d.prompt.length > 300 ? '…' : ''}</div>
                 <div className="text-[11px] text-slate-400 mt-1">
                   criada {fmtData(d.createdAt)}

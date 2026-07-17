@@ -1,4 +1,4 @@
-// FlowOps Lite - Prisma Schema
+﻿// FlowOps Lite - Prisma Schema
 //
 // Em DEV LOCAL usa SQLite (arquivo backend/prisma/dev.db).
 // Em PRODUCAO (Railway) usa Postgres — Railway injeta DATABASE_URL.
@@ -4035,6 +4035,7 @@ model Demanda {
   createdAt   DateTime  @default(now()) @map("created_at")
   finishedAt  DateTime? @map("finished_at")
   userName    String?   @map("user_name") @db.VarChar(60)
+  tags        String[]  @default([])
   imagens     DemandaImagem[]
 
   @@index([status, criticidade])
@@ -4051,4 +4052,15 @@ model DemandaImagem {
 
   @@index([demandaId])
   @@map("demanda_imagens")
+}
+
+/// Tags das demandas (17/07): catalogo criado pelo dono (RH, CONTAS A PAGAR,
+/// PDV...). A demanda guarda os nomes em array (filtro via has).
+model DemandaTag {
+  id        String   @id @default(uuid())
+  nome      String   @unique @db.VarChar(30)
+  cor       String   @db.VarChar(20)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("demanda_tags")
 }
