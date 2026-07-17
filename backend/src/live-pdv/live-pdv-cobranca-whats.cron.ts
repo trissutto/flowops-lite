@@ -219,7 +219,7 @@ export class LivePdvCobrancaWhatsCron {
     }
     await (this.prisma as any).livePdvCart.update({
       where: { id: cartId },
-      data: { cobrancaWhatsEnviadaAt: new Date() },
+      data: { cobrancaWhatsEnviadaAt: new Date(), cobrancaWhatsCount: { increment: 1 } },
     });
     await this.logIntegracao(
       'live.cobranca-whats.manual.sent',

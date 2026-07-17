@@ -3555,6 +3555,8 @@ model LivePdvCart {
   // tentativas limita retry em falha (não vira spam de erro).
   cobrancaWhatsEnviadaAt  DateTime? @map("cobranca_whats_enviada_at")
   cobrancaWhatsTentativas Int       @default(0) @map("cobranca_whats_tentativas")
+  cobrancaWhatsCount      Int       @default(0) @map("cobranca_whats_count")
+  cobrancaDirectCount     Int       @default(0) @map("cobranca_direct_count")
   // SACOLA PELA DM (16/07): a cliente montou o carrinho sozinha pelo ManyChat.
   // selfCart marca a origem (apresentadora confere com atenção). awaitingReview
   // = cliente digitou FECHAR e a sacola está na FILA DE REVISÃO — a cobrança NÃO

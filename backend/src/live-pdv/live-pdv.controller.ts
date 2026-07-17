@@ -237,9 +237,11 @@ export class LivePdvController {
   }
 
   // Carimbo de cobrança MANUAL (Direct/WhatsApp) — sincroniza o ✓ entre PCs
+  // + contador de tentativas por canal (body.canal: 'direct' | 'whats')
   @Post('carts/:cartId/mark-charged')
-  markCharged(@Param('cartId') cartId: string) {
-    return this.svc.markCartCharged(cartId);
+  markCharged(@Param('cartId') cartId: string, @Body() body: { canal?: 'direct' | 'whats' }) {
+    const canal = body?.canal === 'whats' ? 'whats' : body?.canal === 'direct' ? 'direct' : undefined;
+    return this.svc.markCartCharged(cartId, canal);
   }
 
   // Edita o PREÇO de um item do carrinho (negociação na hora, item ainda não pago)

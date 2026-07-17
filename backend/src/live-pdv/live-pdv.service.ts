@@ -1579,18 +1579,23 @@ export class LivePdvService {
    * cobrar essa cliente. Grava dmSentAt (mesmo carimbo do automático) — o ✓
    * sincroniza entre PCs e a cobrança em massa não repete pra ela.
    */
-  async markCartCharged(cartId: string) {
+  async markCartCharged(cartId: string, canal?: 'direct' | 'whats') {
     const cart = await (this.prisma as any).livePdvCart.findUnique({
       where: { id: cartId },
       select: { id: true, dmSentAt: true },
     });
     if (!cart) throw new NotFoundException('Carrinho não encontrado');
-    if (!cart.dmSentAt) {
-      await (this.prisma as any).livePdvCart.update({
-        where: { id: cartId },
-        data: { dmSentAt: new Date() },
-      });
-    }
+    // Contador de tentativas por canal (17/07): cada clique soma 1 — o número
+    // aparece dentro do botão Direct/WhatsApp da tela Cobrar todas. Sem canal
+    // = só o carimbo (WhatsApp via API já contou no endpoint cobranca-whats).
+    const data: any = canal === 'whats'
+      ? { cobrancaWhatsCount: { increment: 1 } }
+      : canal === 'direct'
+        ? { cobrancaDirectCount: { increment: 1 } }
+        : {};
+    if (!cart.dmSentAt) data.dmSentAt = new Date();
+    if (!Object.keys(data).length) return { ok: true };
+    await (this.prisma as any).livePdvCart.update({ where: { id: cartId }, data });
     return { ok: true };
   }
 
@@ -1704,7 +1709,7 @@ export class LivePdvService {
     if (r.ok) {
       // Carimba o envio — a cobrança em massa não repete DM pra quem já recebeu
       await (this.prisma as any).livePdvCart
-        .update({ where: { id: cart.id }, data: { dmSentAt: new Date() } })
+        .update({ where: { id: cart.id }, data: { dmSentAt: new Date(), cobrancaDirectCount: { increment: 1 } } })
         .catch(() => {});
       return { ok: true };
     }
