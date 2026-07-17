@@ -367,9 +367,13 @@ export async function transmitNfeSefazSp(input: {
   pfxBase64: string;
   pfxPassword: string;
   idLote?: string;
+  // Override do endpoint de autorização — usado pela NF-e modelo 55, que fala
+  // com os hosts nfe.fazenda.sp.gov.br (NFC-e usa nfce.*). O SOAPAction e o
+  // wsdl NFeAutorizacao4 são idênticos; só muda o host.
+  endpointOverride?: string;
 }): Promise<TransmitResult> {
   const idLote = input.idLote || String(Date.now()).slice(-15);
-  const endpoint = SEFAZ_SP_NFCE_ENDPOINTS[input.ambiente].autorizacao;
+  const endpoint = input.endpointOverride || SEFAZ_SP_NFCE_ENDPOINTS[input.ambiente].autorizacao;
 
   // ═══════════════════════════════════════════════════════════════════
   // CRÍTICO: SEFAZ-SP NFC-e exige XML totalmente minificado.
