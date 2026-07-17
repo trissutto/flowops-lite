@@ -30,6 +30,7 @@ import TrackingTimeline from '@/components/TrackingTimeline';
 import ProductThumb from '@/components/ProductThumb';
 import PushActivateButton from '@/components/PushActivateButton';
 import BipModal from './BipModal';
+import SwapModal, { SwapPayload, SwapResponse } from './SwapModal';
 import {
   Clock, PlayCircle, CheckCircle2, Truck, Printer, RefreshCw,
   Wifi, WifiOff, X, LogOut, AlertCircle, Barcode, Search, History,
@@ -170,6 +171,12 @@ export default function MinhaLojaPage() {
   const [showShippedModal, setShowShippedModal] = useState<PickOrderRow | null>(null);
   const [showBipModal, setShowBipModal] = useState<PickOrderRow | null>(null);
   const [showIssueModal, setShowIssueModal] = useState<PickOrderRow | null>(null);
+  // Troca manual de peça na separação (pedido do site OU da live).
+  const [swapCtx, setSwapCtx] = useState<
+    | { kind: 'pick'; pickOrderId: string; itemId: string; label: string }
+    | { kind: 'live'; itemId: string; label: string }
+    | null
+  >(null);
   // Filtro de aba: null = todos | 'new' | 'separating' | 'ready' (separados+ready)
   const [filterTab, setFilterTab] = useState<'new' | 'separating' | 'ready' | null>(null);
   const [toasts, setToasts] = useState<Array<{ id: string; msg: string }>>([]);
@@ -891,12 +898,37 @@ export default function MinhaLojaPage() {
             onBip={() => setLiveBipCart(g)}
             onSeparated={liveMarkSeparated}
             onShipped={liveMarkShipped}
+            onSwapItem={(it) =>
+              setSwapCtx({
+                kind: 'live',
+                itemId: it.id,
+                label: `${it.refCode}${it.cor ? ` · ${it.cor}` : ''}${it.tamanho ? ` ${it.tamanho}` : ''}`,
+              })
+            }
           />
         ))}
         {liveBipCart && (
           <LiveBipModal
             group={liveBipCart}
             onClose={() => { setLiveBipCart(null); loadLiveRows(); }}
+          />
+        )}
+        {swapCtx && (
+          <SwapModal
+            currentLabel={swapCtx.label}
+            onClose={() => setSwapCtx(null)}
+            onDone={() => { loadRows(); loadLiveRows(); }}
+            onSwap={(p: SwapPayload): Promise<SwapResponse> =>
+              swapCtx.kind === 'pick'
+                ? api<SwapResponse>(`/pick-orders/${swapCtx.pickOrderId}/swap-item`, {
+                    method: 'POST',
+                    body: JSON.stringify({ orderItemId: swapCtx.itemId, ...p }),
+                  })
+                : api<SwapResponse>(`/live-pdv/items/${swapCtx.itemId}/swap`, {
+                    method: 'POST',
+                    body: JSON.stringify(p),
+                  })
+            }
           />
         )}
         {visibleRows.length === 0 && liveRows.length === 0 ? (
@@ -912,6 +944,14 @@ export default function MinhaLojaPage() {
               onPrint={() => openPrintWindow(row.id)}
               onReportIssue={() => setShowIssueModal(row)}
               onSeen={() => cancelAutoMaximize(row.id)}
+              onSwapItem={(it) =>
+                setSwapCtx({
+                  kind: 'pick',
+                  pickOrderId: row.id,
+                  itemId: it.id ?? '',
+                  label: it.productName ?? it.sku,
+                })
+              }
             />
           ))
         )}
@@ -1222,12 +1262,14 @@ function LiveOrderCard({
   onBip,
   onSeparated,
   onShipped,
+  onSwapItem,
 }: {
   group: LiveQueueGroup;
   busy: string | null;
   onBip: () => void;
   onSeparated: (itemId: string) => void;
   onShipped: (itemId: string) => void;
+  onSwapItem: (it: LiveQueueItem) => void;
 }) {
   const pendentes = group.items.filter((it) => it.status === 'separating');
   const enviados = group.items.filter((it) => it.status === 'shipped');
@@ -1338,13 +1380,31 @@ function LiveOrderCard({
 
         {/* Itens */}
         <div className="divide-y divide-slate-50">
-          {group.items.map((it) => (
+          {group.items.map((it) => {
+            const podeTrocar = it.status === 'separating' && !it.separatedAt;
+            return (
             <div key={it.id} className="flex items-center gap-3 px-4 py-2.5">
               <div className="min-w-0 flex-1">
-                <div className="font-medium text-slate-800">
-                  {it.refCode} · {it.cor} {it.tamanho} <span className="text-slate-400">×{it.qty}</span>
-                </div>
-                <div className="truncate text-xs text-slate-500">{it.descricao}</div>
+                {podeTrocar ? (
+                  <button
+                    onClick={() => onSwapItem(it)}
+                    title="Trocar esta peça por outra"
+                    className="group/troca text-left w-full"
+                  >
+                    <div className="font-medium text-slate-800 group-hover/troca:text-[#8C7325] group-hover/troca:underline decoration-dotted underline-offset-2">
+                      {it.refCode} · {it.cor} {it.tamanho} <span className="text-slate-400">×{it.qty}</span>
+                      <span className="ml-1 text-[10px] font-bold uppercase tracking-wide text-[#B8912B] opacity-0 group-hover/troca:opacity-100">✎ trocar</span>
+                    </div>
+                    <div className="truncate text-xs text-slate-500">{it.descricao}</div>
+                  </button>
+                ) : (
+                  <>
+                    <div className="font-medium text-slate-800">
+                      {it.refCode} · {it.cor} {it.tamanho} <span className="text-slate-400">×{it.qty}</span>
+                    </div>
+                    <div className="truncate text-xs text-slate-500">{it.descricao}</div>
+                  </>
+                )}
                 {it.trackingCode && (
                   <div className="text-xs text-emerald-600">Rastreio: {it.trackingCode}</div>
                 )}
@@ -1388,7 +1448,8 @@ function LiveOrderCard({
                 </span>
               )}
             </div>
-          ))}
+            );
+          })}
         </div>
 
         {/* Bip de conferência — mesmo rito do pedido do site */}
@@ -1533,7 +1594,7 @@ function LiveBipModal({
 }
 
 function PickOrderCard({
-  row, onStart, onBip, onShip, onPrint, onReportIssue, onSeen,
+  row, onStart, onBip, onShip, onPrint, onReportIssue, onSeen, onSwapItem,
 }: {
   row: PickOrderRow;
   onStart: () => void;
@@ -1542,6 +1603,7 @@ function PickOrderCard({
   onPrint: () => void;
   onReportIssue: () => void;
   onSeen: () => void;
+  onSwapItem: (it: PickOrderItem) => void;
 }) {
   const { order, status } = row;
   const items = order.items ?? [];
@@ -1684,9 +1746,22 @@ function PickOrderCard({
                 {it.quantity}x
               </span>
               <div className="flex-1 min-w-0">
-                <div className="text-slate-900 font-semibold leading-tight">
-                  {it.productName ?? it.sku}
-                </div>
+                {(status === 'new' || status === 'separating') ? (
+                  <button
+                    onClick={() => onSwapItem(it)}
+                    title="Trocar esta peça por outra"
+                    className="group/troca text-left w-full"
+                  >
+                    <div className="text-slate-900 font-semibold leading-tight group-hover/troca:text-[#8C7325] group-hover/troca:underline decoration-dotted underline-offset-2">
+                      {it.productName ?? it.sku}
+                      <span className="ml-1 text-[10px] font-bold uppercase tracking-wide text-[#B8912B] opacity-0 group-hover/troca:opacity-100">✎ trocar</span>
+                    </div>
+                  </button>
+                ) : (
+                  <div className="text-slate-900 font-semibold leading-tight">
+                    {it.productName ?? it.sku}
+                  </div>
+                )}
                 {it.variant && (
                   <div className="text-xs text-slate-500 mt-0.5">{it.variant}</div>
                 )}
