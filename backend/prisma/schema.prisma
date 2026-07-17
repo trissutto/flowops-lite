@@ -1,4 +1,4 @@
-﻿// FlowOps Lite - Prisma Schema
+// FlowOps Lite - Prisma Schema
 //
 // Em DEV LOCAL usa SQLite (arquivo backend/prisma/dev.db).
 // Em PRODUCAO (Railway) usa Postgres — Railway injeta DATABASE_URL.
@@ -4086,4 +4086,89 @@ model DemandaTag {
   createdAt DateTime @default(now()) @map("created_at")
 
   @@map("demanda_tags")
+}
+
+/// ═══════════ CONCILIACAO FINANCEIRA (aprovado 17/07) ═══════════
+/// Espinha do modulo: toda transacao de gateway (PagBank/Pagarme/Stone) vira
+/// uma linha aqui, com o JSON BRUTO guardado (nunca perder informacao).
+model FinancialTransaction {
+  id                String    @id @default(uuid())
+  gateway           String    @db.VarChar(12)
+  origem            String?   @db.VarChar(10)
+  pedidoRef         String?   @map("pedido_ref") @db.VarChar(40)
+  storeCode         String?   @map("store_code") @db.VarChar(4)
+  paymentId         String?   @map("payment_id") @db.VarChar(80)
+  chargeId          String?   @map("charge_id") @db.VarChar(80)
+  transactionId     String?   @map("transaction_id") @db.VarChar(80)
+  authorizationCode String?   @map("authorization_code") @db.VarChar(40)
+  nsu               String?   @db.VarChar(40)
+  tid               String?   @db.VarChar(40)
+  pixTxid           String?   @map("pix_txid") @db.VarChar(80)
+  statusGateway     String?   @map("status_gateway") @db.VarChar(30)
+  statusInterno     String    @default("pendente") @map("status_interno") @db.VarChar(20)
+  valorBrutoCents   Int?      @map("valor_bruto_cents")
+  valorLiquidoCents Int?      @map("valor_liquido_cents")
+  taxaCents         Int?      @map("taxa_cents")
+  parcelas          Int?
+  bandeira          String?   @db.VarChar(20)
+  tipoPagamento     String?   @map("tipo_pagamento") @db.VarChar(20)
+  cartaoFinal       String?   @map("cartao_final") @db.VarChar(4)
+  dataVenda         DateTime? @map("data_venda")
+  dataAutorizacao   DateTime? @map("data_autorizacao")
+  dataCaptura       DateTime? @map("data_captura")
+  dataCancelamento  DateTime? @map("data_cancelamento")
+  dataRecebimento   DateTime? @map("data_recebimento")
+  rawJson           Json?     @map("raw_json")
+  rawHash           String?   @map("raw_hash") @db.VarChar(64)
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  @@unique([gateway, chargeId, transactionId])
+  @@index([gateway, dataVenda])
+  @@index([pedidoRef])
+  @@index([nsu])
+  @@index([pixTxid])
+  @@index([statusInterno])
+  @@map("financial_transactions")
+}
+
+/// Creditos efetivamente pagos pela adquirente (extrato/recebiveis).
+model FinancialRecebimento {
+  id            String    @id @default(uuid())
+  gateway       String    @db.VarChar(12)
+  transactionId String?   @map("transaction_id") @db.VarChar(80)
+  chargeId      String?   @map("charge_id") @db.VarChar(80)
+  dataCredito   DateTime? @map("data_credito")
+  valorCents    Int?      @map("valor_cents")
+  taxaCents     Int?      @map("taxa_cents")
+  liquidoCents  Int?      @map("liquido_cents")
+  lote          String?   @db.VarChar(40)
+  banco         String?   @db.VarChar(40)
+  status        String?   @db.VarChar(20)
+  rawJson       Json?     @map("raw_json")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  @@index([gateway, dataCredito])
+  @@index([transactionId])
+  @@map("financial_recebimentos")
+}
+
+/// Resultado do motor: cada transacao casada (ou nao) com venda e recebimento.
+model FinancialConciliacao {
+  id               String    @id @default(uuid())
+  transactionId    String    @unique @map("transaction_id")
+  pedidoRef        String?   @map("pedido_ref") @db.VarChar(40)
+  gateway          String    @db.VarChar(12)
+  status           String    @db.VarChar(20)
+  valorSistemaCents  Int?    @map("valor_sistema_cents")
+  valorGatewayCents  Int?    @map("valor_gateway_cents")
+  valorRecebidoCents Int?    @map("valor_recebido_cents")
+  diferencaCents     Int?    @map("diferenca_cents")
+  motivo           String?   @db.VarChar(200)
+  ultimaConciliacao DateTime @default(now()) @map("ultima_conciliacao")
+  createdAt        DateTime  @default(now()) @map("created_at")
+
+  @@index([status])
+  @@index([gateway, status])
+  @@map("financial_conciliacoes")
 }
