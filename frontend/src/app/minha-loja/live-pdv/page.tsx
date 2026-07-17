@@ -4250,6 +4250,19 @@ function LegendaModal({ sessionId, onClose }: { sessionId: string; onClose: () =
             >
               🖨️ Imprimir cartões (espelhado)
             </button>
+            <button
+              onClick={async () => {
+                if (!confirm('LIMPAR TODAS as legendas desta live?\n\n(As legendas nunca somem sozinhas — só por este botão.)')) return;
+                try {
+                  await api(`/live-pdv/sessions/${sessionId}/atalhos/limpar-tudo`, { method: 'POST', body: JSON.stringify({}) });
+                  setRows([]);
+                } catch (e: any) { setTopErr(e?.message || 'Falha ao limpar'); }
+              }}
+              title="Apaga TODAS as legendas desta live (elas nunca zeram sozinhas ao abrir live nova)"
+              className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-bold text-slate-500 hover:bg-slate-100"
+            >
+              🧹 Limpar tudo
+            </button>
             <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X className="h-5 w-5" /></button>
           </div>
         </div>

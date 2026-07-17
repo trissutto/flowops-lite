@@ -155,6 +155,12 @@ export class LivePdvController {
     return this.svc.deleteAtalho(sessionId, atalhoId);
   }
 
+  // Botão "Limpar tudo" da tela de legendas (as legendas NUNCA zeram sozinhas)
+  @Post('sessions/:id/atalhos/limpar-tudo')
+  clearAtalhos(@Param('id') sessionId: string) {
+    return this.svc.clearAtalhos(sessionId);
+  }
+
   // ── Preço promocional da live ──
   @Get('sessions/:id/promos')
   listPromos(@Param('id') sessionId: string) {
