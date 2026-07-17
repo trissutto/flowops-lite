@@ -36,6 +36,7 @@ import { HealthModule } from './health/health.module';
 import { ReportsModule } from './reports/reports.module';
 import { UsersModule } from './users/users.module';
 import { PickOrdersModule } from './pick-orders/pick-orders.module';
+import { NfeModule } from './nfe/nfe.module';
 import { MarketingRecoveryModule } from './marketing-recovery/marketing-recovery.module';
 import { CrmModule } from './crm/crm.module';
 import { SuppliesModule } from './supplies/supplies.module';
@@ -107,6 +108,7 @@ import { OperadorPinModule } from './operador-pin/operador-pin.module';
     HealthModule,
     UsersModule,
     PickOrdersModule,
+    NfeModule,
     MarketingRecoveryModule,
     CrmModule,
     SuppliesModule,

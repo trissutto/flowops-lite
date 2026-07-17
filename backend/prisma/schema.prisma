@@ -1879,6 +1879,60 @@ model NfceConfig {
   @@map("nfce_configs")
 }
 
+// ── NF-e modelo 55 (transferência entre lojas) ──────────────────────────
+// Documento fiscal emitido quando mercadoria sai de uma loja/CNPJ pra outra
+// (RealignmentShipment tipo TRANSFERENCIA/REALINHAMENTO, transição in_transit).
+// A identidade fiscal (CNPJ/IE/endereço/certificado/ambiente) reaproveita o
+// NfceConfig por storeCode; aqui fica só o documento emitido e seu retorno.
+model NfeDoc {
+  id              String   @id @default(uuid())
+  // Origem do documento (remessa de transferência). Null se emitido avulso.
+  shipmentId      String?  @map("shipment_id")
+  fromStoreCode   String   @map("from_store_code")  // emitente
+  toStoreCode     String   @map("to_store_code")    // destinatário
+  modelo          String   @default("55")
+  serie           String
+  numero          Int
+  cNF             String?  @map("c_nf")             // código numérico (8 díg) da chave
+  chave           String?  @unique                  // 44 dígitos
+  tpAmb           String   @map("tp_amb")           // '1' prod · '2' homolog
+  natOp           String   @map("nat_op")
+  cfop            String
+  valorTotalCents Int      @default(0) @map("valor_total_cents")
+  // pending → signed → authorized | rejected | error | cancelled
+  status          String   @default("pending")
+  cStat           String?  @map("c_stat")
+  xMotivo         String?  @map("x_motivo")
+  protocolo       String?
+  dhRecbto        String?
+  xmlEnviado      String?  @map("xml_enviado")     @db.Text
+  xmlAutorizado   String?  @map("xml_autorizado")  @db.Text
+  xmlResposta     String?  @map("xml_resposta")    @db.Text
+  erro            String?  @db.Text
+  emittedByUserId String?  @map("emitted_by_user_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@index([shipmentId])
+  @@index([status])
+  @@index([fromStoreCode, status])
+  @@map("nfe_docs")
+}
+
+// Contador de numeração NF-e (por loja + modelo + série), separado do NFC-e.
+// `proximo` = próximo número livre; incremento atômico no service.
+model NfeSequence {
+  id         String   @id @default(uuid())
+  storeCode  String   @map("store_code")
+  modelo     String   @default("55")
+  serie      String
+  proximo    Int      @default(1)
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  @@unique([storeCode, modelo, serie])
+  @@map("nfe_sequences")
+}
+
 model PdvReturnItem {
   id              String   @id @default(uuid())
   returnId        String   @map("return_id")
