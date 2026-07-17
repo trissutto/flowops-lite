@@ -1,5 +1,6 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { randomBytes } from 'crypto';
+import { authorizeMinLevel } from '../auth/auth-levels.util';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
 import { RoutingEngine } from '../routing/routing.engine';
@@ -2777,6 +2778,132 @@ export class LivePdvService {
       where: { id: itemId },
       data: { originStoreCode: store.code, originStoreName: store.name, originManual: true },
     });
+  }
+
+  /**
+   * TROCA MANUAL DE PEÇA na separação do pedido da LIVE.
+   *
+   * Mesma regra do pedido do site: só ANTES da baixa de estoque (item ainda
+   * 'separating' e sem separatedAt — a baixa roda no bip/marcar-separado sobre
+   * o codigoBipado ATUAL, então trocar aqui faz a baixa cair no produto novo e
+   * o antigo nunca é baixado). Diferença de preço ⇒ exige senha GERENTE+.
+   * Mantém a MESMA loja de origem (não reroteia) — só troca qual peça vai.
+   */
+  async swapItem(
+    itemId: string,
+    input: {
+      codigo: string;
+      ref?: string | null;
+      cor?: string | null;
+      tamanho?: string | null;
+      descricao?: string | null;
+      password?: string | null;
+    },
+    ctx: { storeCode?: string | null; isAdmin?: boolean } = {},
+  ): Promise<any> {
+    const item = await (this.prisma as any).livePdvItem.findUnique({ where: { id: itemId } });
+    if (!item) throw new NotFoundException('Item não encontrado');
+    if (!ctx.isAdmin && ctx.storeCode && item.originStoreCode !== ctx.storeCode) {
+      throw new ForbiddenException('Peça de outra loja');
+    }
+    if (item.status !== 'separating' || item.separatedAt) {
+      throw new BadRequestException(
+        'Só dá pra trocar a peça ANTES de conferir/enviar. Se já conferiu/enviou, use Devolução/Troca.',
+      );
+    }
+
+    const newSku = String(input.codigo || '').trim();
+    if (!newSku) throw new BadRequestException('Selecione a peça nova');
+    const oldSku = item.codigoBipado || '';
+    if (newSku === oldSku) throw new BadRequestException('É a mesma peça — nada pra trocar');
+
+    // Preços do espelho (REAIS — não dividir por 100). Diferença ⇒ exige senha.
+    const oldInfo = oldSku ? await this.catalog.getPdvProductInfo(oldSku).catch(() => null) : null;
+    const newInfo = await this.catalog.getPdvProductInfo(newSku).catch(() => null);
+    if (!newInfo) {
+      throw new BadRequestException('Peça nova não encontrada no catálogo — confira o código.');
+    }
+    const oldPrice = oldInfo?.preco ?? (item.priceCents ? item.priceCents / 100 : 0);
+    const newPrice = newInfo.preco ?? 0;
+    const diff = Math.round((newPrice - oldPrice) * 100) / 100;
+    const hasDiff = Math.abs(diff) >= 0.01;
+
+    const ref = String(input.ref || item.refCode || '').trim();
+    const cor = input.cor != null ? String(input.cor).trim() || null : item.cor;
+    const tam = input.tamanho != null ? String(input.tamanho).trim() || null : item.tamanho;
+    const descricao = (input.descricao || newInfo.descricao || ref).trim() || ref;
+
+    let authorizedByCpf: string | null = null;
+    let authorizedByNome: string | null = null;
+    if (hasDiff) {
+      const pwd = String(input.password || '').trim();
+      if (!pwd) {
+        return {
+          ok: false,
+          needsPassword: true,
+          oldSku,
+          newSku,
+          oldPrice,
+          newPrice,
+          diff,
+          newDescricao: descricao,
+        };
+      }
+      const auth = authorizeMinLevel(pwd, 'GERENTE'); // 403 se inválida/insuficiente
+      authorizedByCpf = auth.byCpf;
+      authorizedByNome = auth.byNome;
+    }
+
+    const basePriceCents = this.reaisToCents(newPrice);
+    await (this.prisma as any).livePdvItem.update({
+      where: { id: itemId },
+      data: {
+        refCode: ref,
+        itemKey: this.keyOf(ref, cor, tam),
+        codigoBipado: newSku,
+        cor,
+        tamanho: tam,
+        descricao,
+        priceCents: basePriceCents,
+        basePriceCents,
+      },
+    });
+
+    await (this.prisma as any).integrationLog.create({
+      data: {
+        source: 'live-pdv',
+        direction: 'internal',
+        event: 'item.swap',
+        payload: JSON.stringify({
+          itemId,
+          cartId: item.cartId,
+          storeCode: item.originStoreCode,
+          oldSku,
+          newSku,
+          oldPrice,
+          newPrice,
+          diff,
+          authorizedByCpf,
+          authorizedByNome,
+        }),
+        status: 200,
+      },
+    });
+
+    try {
+      this.gateway.emitToLiveOps('live-pdv:cart-updated', { cartId: item.cartId });
+    } catch { /* socket best-effort */ }
+
+    return {
+      ok: true,
+      oldSku,
+      newSku,
+      oldPrice,
+      newPrice,
+      diff,
+      authorizedBy: authorizedByNome,
+      item: { id: itemId, refCode: ref, cor, tamanho: tam, descricao, codigoBipado: newSku },
+    };
   }
 
   async setFrete(cartId: string, freteCents: number) {

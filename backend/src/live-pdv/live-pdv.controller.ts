@@ -420,6 +420,29 @@ export class LivePdvController {
     return this.svc.storeQueue(code);
   }
 
+  // LOJA troca uma peça manualmente na separação do pedido da live. Só antes de
+  // conferir/enviar. Diferença de preço ⇒ a service devolve needsPassword e a
+  // tela pede senha GERENTE+ (reenviada no body.password).
+  @Post('items/:itemId/swap')
+  async swapItem(
+    @Req() req: any,
+    @Param('itemId') itemId: string,
+    @Body()
+    body: {
+      codigo: string;
+      ref?: string;
+      cor?: string;
+      tamanho?: string;
+      descricao?: string;
+      password?: string;
+    },
+  ) {
+    const role = req?.user?.role;
+    const isAdmin = role === 'admin' || role === 'operator' || role === 'supervisor';
+    const storeCode = isAdmin ? null : await this.resolveStoreCode(req);
+    return this.svc.swapItem(itemId, body ?? ({} as any), { storeCode, isAdmin });
+  }
+
   @Post('items/:itemId/separated')
   markSeparated(@Param('itemId') itemId: string) {
     return this.svc.markSeparated(itemId);

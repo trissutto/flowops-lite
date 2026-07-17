@@ -332,6 +332,34 @@ export class PickOrdersController {
   }
 
   /**
+   * LOJA troca uma peça manualmente na separação (produto não encontrado / trocar
+   * por outro). Só antes da baixa de estoque. Se o preço da peça nova difere,
+   * exige senha GERENTE+ (a service devolve needsPassword quando falta senha).
+   * Body: { orderItemId, codigo, ref?, cor?, tamanho?, descricao?, password? }
+   */
+  @Post(':id/swap-item')
+  swapItem(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body()
+    body: {
+      orderItemId: string;
+      codigo: string;
+      ref?: string;
+      cor?: string;
+      tamanho?: string;
+      descricao?: string;
+      password?: string;
+    },
+  ) {
+    const user = req.user as AuthUser;
+    if (user.role !== 'store' || !user.storeId) {
+      throw new ForbiddenException('Apenas usuários de loja trocam peça na separação');
+    }
+    return this.svc.swapItem(id, user.storeId, body ?? ({} as any), user.userId);
+  }
+
+  /**
    * Matriz consulta todos os pick-orders de um pedido WC (por wcOrderId).
    * Usado na tela /pedidos/wc/[id] pra mostrar status ao vivo de cada loja,
    * incluindo rastreio quando shipped. Retorna array vazio se não tem pick-orders.
