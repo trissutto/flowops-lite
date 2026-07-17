@@ -4157,7 +4157,29 @@ function LegendaModal({ sessionId, onClose }: { sessionId: string; onClose: () =
         method: 'POST',
         body: JSON.stringify({ id: row.id, atalho: row.atalho, refCode: row.refCode.trim(), cor: row.cor }),
       });
-      patchRow(idx, { id: r?.atalho?.id || row.id, atalho: r?.atalho?.atalho || row.atalho, salva: true, salvando: false });
+      // Se o operador deixou o editor de PREÇO aberto e clicou "Salvar" (em vez
+      // do "OK" do preço), aplica a promo junto — senão o preço se perdia
+      // silenciosamente (o "Salvar" só gravava a referência/cor).
+      let precoAplicado = false;
+      if (row.precoEdit != null && row.grade?.ref) {
+        const raw = String(row.precoEdit).trim().replace(/\./g, '').replace(',', '.');
+        const reais = parseFloat(raw);
+        if (isFinite(reais) && reais > 0) {
+          await api(`/live-pdv/sessions/${sessionId}/promo`, {
+            method: 'POST',
+            body: JSON.stringify({ refCode: row.grade.ref, priceCents: Math.round(reais * 100) }),
+          });
+          precoAplicado = true;
+        }
+      }
+      patchRow(idx, {
+        id: r?.atalho?.id || row.id,
+        atalho: r?.atalho?.atalho || row.atalho,
+        salva: true,
+        salvando: false,
+        precoEdit: null,
+      });
+      if (precoAplicado) await validarLinha(idx, row.refCode); // reflete o preço novo na hora
     } catch (e: any) {
       patchRow(idx, { salvando: false, erro: e?.message || 'Falha ao salvar' });
     }
@@ -4392,7 +4414,7 @@ function LegendaModal({ sessionId, onClose }: { sessionId: string; onClose: () =
                         )}
                         <button
                           type="button"
-                          onClick={() => patchRow(idx, { precoEdit: ((row.grade.priceCents || 0) / 100).toFixed(2).replace('.', ','), erro: null })}
+                          onClick={() => patchRow(idx, { precoEdit: ((row.grade.priceCents || 0) / 100).toFixed(2).replace('.', ','), erro: null, salva: false })}
                           className="rounded-md border border-emerald-300 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700 hover:bg-emerald-50"
                           title="Editar o preço desta peça só nesta live"
                         >
