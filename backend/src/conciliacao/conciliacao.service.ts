@@ -179,6 +179,126 @@ export class ConciliacaoService {
     }
   }
 
+  // ── FASE 3: MOTOR DE CONCILIAÇÃO ──────────────────────────────────────
+  private static readonly PAGO = new Set(['paid', 'captured', 'approved', 'succeeded', 'PAID', 'CAPTURED']);
+
+  /** Acha a venda no sistema pelo pedidoRef: PdvSale OU carrinho da live. */
+  private async valorSistemaCents(pedidoRef: string | null): Promise<{ achou: boolean; cents: number | null; origem: string | null }> {
+    if (!pedidoRef) return { achou: false, cents: null, origem: null };
+    const sale: any = await (this.prisma as any).pdvSale.findUnique({
+      where: { id: pedidoRef }, select: { total: true, status: true },
+    }).catch(() => null);
+    if (sale) return { achou: true, cents: this.toCents(sale.total), origem: 'pdv' };
+    const cart: any = await (this.prisma as any).livePdvCart.findUnique({
+      where: { id: pedidoRef }, select: { totalCents: true },
+    }).catch(() => null);
+    if (cart) return { achou: true, cents: Number(cart.totalCents) || 0, origem: 'live' };
+    return { achou: false, cents: null, origem: null };
+  }
+
+  /** Roda o motor sobre as transações PAGAS da janela. Idempotente. */
+  async conciliar(desdeDias = 400): Promise<{ conciliadas: number; divergentes: number; semVenda: number; duplicadas: number; total: number }> {
+    const desde = new Date(Date.now() - desdeDias * 86400000);
+    const txs: any[] = await (this.prisma as any).financialTransaction.findMany({
+      where: { createdAt: { gte: desde } },
+      orderBy: { dataVenda: 'asc' },
+    });
+    const pagas = txs.filter((t) => ConciliacaoService.PAGO.has(String(t.statusGateway || '')));
+    const porPedido = new Map<string, number>();
+    for (const t of pagas) {
+      if (t.pedidoRef) porPedido.set(t.pedidoRef, (porPedido.get(t.pedidoRef) || 0) + 1);
+    }
+    const r = { conciliadas: 0, divergentes: 0, semVenda: 0, duplicadas: 0, total: pagas.length };
+    for (const t of pagas) {
+      let status = 'NAO_ENCONTRADO';
+      let motivo: string | null = null;
+      let valorSistema: number | null = null;
+      const gw = Number(t.valorBrutoCents) || null;
+      const sis = await this.valorSistemaCents(t.pedidoRef);
+      if (t.pedidoRef && (porPedido.get(t.pedidoRef) || 0) > 1) {
+        status = 'DUPLICADO';
+        motivo = `${porPedido.get(t.pedidoRef)} transações pagas pro mesmo pedido`;
+        valorSistema = sis.cents;
+        r.duplicadas++;
+      } else if (!sis.achou) {
+        status = 'NAO_ENCONTRADO';
+        motivo = t.pedidoRef ? `pedido ${t.pedidoRef} não existe no sistema` : 'pagamento sem venda vinculada';
+        r.semVenda++;
+      } else {
+        valorSistema = sis.cents;
+        const dif = gw != null && valorSistema != null ? gw - valorSistema : null;
+        if (dif != null && Math.abs(dif) <= 1) {
+          status = 'CONCILIADO';
+          r.conciliadas++;
+        } else {
+          status = 'DIVERGENTE';
+          motivo = `valor gateway ${gw ?? '?'}c ≠ sistema ${valorSistema ?? '?'}c`;
+          r.divergentes++;
+        }
+      }
+      const diferenca = gw != null && valorSistema != null ? gw - valorSistema : null;
+      await (this.prisma as any).financialConciliacao.upsert({
+        where: { transactionId: t.id },
+        create: {
+          transactionId: t.id, pedidoRef: t.pedidoRef, gateway: t.gateway, status,
+          valorSistemaCents: valorSistema, valorGatewayCents: gw,
+          diferencaCents: diferenca, motivo,
+        },
+        update: {
+          status, pedidoRef: t.pedidoRef, valorSistemaCents: valorSistema,
+          valorGatewayCents: gw, diferencaCents: diferenca, motivo,
+          ultimaConciliacao: new Date(),
+        },
+      });
+      await (this.prisma as any).financialTransaction.update({
+        where: { id: t.id },
+        data: { statusInterno: status.toLowerCase() },
+      }).catch(() => null);
+    }
+    this.logger.log(`[conciliacao] motor: ${JSON.stringify(r)}`);
+    return r;
+  }
+
+  /** Lista pra tela: transação + conciliação, filtrável. */
+  async listar(f: { status?: string; gateway?: string; page?: number; perPage?: number }) {
+    const page = Math.max(1, f.page || 1);
+    const perPage = Math.min(200, Math.max(10, f.perPage || 50));
+    const where: any = {};
+    if (f.status) where.status = f.status;
+    if (f.gateway) where.gateway = f.gateway;
+    const [total, rows] = await Promise.all([
+      (this.prisma as any).financialConciliacao.count({ where }),
+      (this.prisma as any).financialConciliacao.findMany({
+        where,
+        orderBy: { ultimaConciliacao: 'desc' },
+        skip: (page - 1) * perPage,
+        take: perPage,
+      }),
+    ]);
+    const txIds = rows.map((r: any) => r.transactionId);
+    const txs: any[] = await (this.prisma as any).financialTransaction.findMany({
+      where: { id: { in: txIds } },
+    });
+    const porId = new Map(txs.map((t) => [t.id, t]));
+    return {
+      total, page, perPage,
+      rows: rows.map((c: any) => {
+        const t: any = porId.get(c.transactionId) || {};
+        return {
+          ...c,
+          tipoPagamento: t.tipoPagamento, bandeira: t.bandeira, nsu: t.nsu,
+          storeCode: t.storeCode, dataVenda: t.dataVenda, statusGateway: t.statusGateway,
+          parcelas: t.parcelas, cartaoFinal: t.cartaoFinal,
+        };
+      }),
+    };
+  }
+
+  /** JSON bruto de uma transação (botão Ver JSON da tela). */
+  async verJson(transactionId: string) {
+    return (this.prisma as any).financialTransaction.findUnique({ where: { id: transactionId } });
+  }
+
   private tryJson(s: any): any {
     if (typeof s !== 'string') return s;
     try { return JSON.parse(s); } catch { return { raw: s }; }
