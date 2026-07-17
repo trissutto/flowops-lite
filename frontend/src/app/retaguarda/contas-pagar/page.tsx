@@ -177,6 +177,10 @@ function Painel({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
     }
     return m;
   }, [data]);
+  // SELEÇÃO EM MASSA (14/07, pedido do dono): declarada AQUI (antes de selRows)
+  // porque selRows/idsPagina leem `selecionadas` — se ficasse embaixo dava
+  // "Cannot access before initialization" no build minificado de produção (TDZ).
+  const [selecionadas, setSelecionadas] = useState<Set<string>>(new Set());
   const selRows = (data?.rows || []).filter((r: any) => selecionadas.has(r.id) && r.status === 'aberta');
   const selCents = selRows.reduce((s: number, r: any) => s + (Number(r.valorCents) || 0), 0);
   const [pagandoLote, setPagandoLote] = useState(false);
@@ -209,7 +213,7 @@ function Painel({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
   };
   // SELEÇÃO EM MASSA (14/07, pedido do dono): checkbox por lançamento +
   // "selecionar todos" (da página atual) → excluir OU pagar de uma vez.
-  const [selecionadas, setSelecionadas] = useState<Set<string>>(new Set());
+  // (o estado `selecionadas` foi declarado lá em cima, antes de selRows)
   const [excluindoLote, setExcluindoLote] = useState(false);
   const idsPagina: string[] = (data?.rows || []).map((r: any) => r.id);
   const todasMarcadas = idsPagina.length > 0 && idsPagina.every((id) => selecionadas.has(id));
