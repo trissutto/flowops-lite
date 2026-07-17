@@ -723,6 +723,32 @@ function LogsModal({ conta, onClose }: any) {
   );
 }
 
+/* Campo de VALOR de uma parcela — mantém o texto DIGITADO enquanto o campo está
+ * focado (não reformata a cada tecla, que impedia digitar: ex. "59,90" virava
+ * "5,00" no meio). Só normaliza pra X,XX ao sair do campo (blur). */
+function ParcelaValorInput({ cents, onCents }: { cents: number; onCents: (c: number) => void }) {
+  const fmt = (c: number) => (c / 100).toFixed(2).replace('.', ',');
+  const [text, setText] = useState(() => fmt(cents));
+  const [focus, setFocus] = useState(false);
+  // Reflete mudanças de fora (ex.: "Gerar prévia" de novo) só quando não editando.
+  useEffect(() => { if (!focus) setText(fmt(cents)); }, [cents, focus]);
+  return (
+    <input
+      value={text}
+      inputMode="decimal"
+      onFocus={() => setFocus(true)}
+      onChange={(e) => {
+        const raw = e.target.value;
+        setText(raw); // guarda EXATAMENTE o que foi digitado
+        const c = Math.round((parseFloat(raw.replace(/\./g, '').replace(',', '.')) || 0) * 100);
+        onCents(c); // atualiza a soma ao vivo
+      }}
+      onBlur={() => setFocus(false)}
+      className="border border-[#E7E2D8] rounded px-2 py-0.5 w-24 text-right font-bold text-[#2E7D46]"
+    />
+  );
+}
+
 /* ═══════════════════ MODAL: NOVA CONTA (prévia de parcelas) ═══════════════════ */
 function NovaContaModal({ onClose, avisar }: any) {
   const [tipo, setTipo] = useState<'fornecedor' | 'funcionaria'>('fornecedor');
@@ -946,10 +972,9 @@ function NovaContaModal({ onClose, avisar }: any) {
                       <input type="date" value={p.vencimento} onChange={(e) => { const c = [...previa]; c[i] = { ...p, vencimento: e.target.value }; setPrevia(c); }} className="border border-[#E7E2D8] rounded px-2 py-0.5" />
                     </td>
                     <td className="px-3 py-1.5 text-right">
-                      <input
-                        value={(p.valorCents / 100).toFixed(2).replace('.', ',')}
-                        onChange={(e) => { const c = [...previa]; c[i] = { ...p, valorCents: Math.round((parseFloat(e.target.value.replace(/\./g, '').replace(',', '.')) || 0) * 100) }; setPrevia(c); }}
-                        className="border border-[#E7E2D8] rounded px-2 py-0.5 w-24 text-right font-bold text-[#2E7D46]"
+                      <ParcelaValorInput
+                        cents={p.valorCents}
+                        onCents={(c) => { const arr = [...previa]; arr[i] = { ...p, valorCents: c }; setPrevia(arr); }}
                       />
                     </td>
                     <td className="px-3 py-1.5 text-center">
