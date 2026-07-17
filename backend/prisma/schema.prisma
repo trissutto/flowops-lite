@@ -4044,3 +4044,32 @@ model ContaPagarAssociacao {
   @@index([sellerId])
   @@map("conta_pagar_associacao")
 }
+
+/// DEMANDAS (15/07): backlog do dono na aba Gestao - prompt + prints colados,
+/// criticidade em 3 niveis e datas de criacao/finalizacao. So admin.
+model Demanda {
+  id          String    @id @default(uuid())
+  titulo      String?   @db.VarChar(120)
+  prompt      String
+  criticidade String    @db.VarChar(12)
+  status      String    @default("aberta")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  finishedAt  DateTime? @map("finished_at")
+  userName    String?   @map("user_name") @db.VarChar(60)
+  imagens     DemandaImagem[]
+
+  @@index([status, criticidade])
+  @@map("demandas")
+}
+
+model DemandaImagem {
+  id        String   @id @default(uuid())
+  demandaId String   @map("demanda_id")
+  demanda   Demanda  @relation(fields: [demandaId], references: [id], onDelete: Cascade)
+  mime      String   @db.VarChar(40)
+  dataB64   String   @map("data_b64")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([demandaId])
+  @@map("demanda_imagens")
+}

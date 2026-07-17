@@ -42,6 +42,7 @@ interface GestaoItem {
 }
 
 const GESTAO_ITEMS: GestaoItem[] = [
+  { href: '/retaguarda/demandas',             label: 'Demandas',          subtitle: 'Backlog',       description: 'Prompt + prints · criticidade', tone: 'amber',  icon: ClipboardList },
   { href: '/retaguarda/dashboard',            label: 'Dashboard',         subtitle: 'KPIs',          description: 'Visão geral em tempo real',     tone: 'teal',   icon: LayoutDashboard },
   { href: '/retaguarda/super-painel-caixas',  label: 'Super Painel',      subtitle: 'Caixas ao vivo', description: 'Vendas em tempo real (todas lojas)', tone: 'rose', icon: DollarSign      },
   { href: '/retaguarda/faturamento',          label: 'Faturamento',       subtitle: 'Por loja',      description: 'Gráfico + comparação ano anterior', tone: 'green',  icon: DollarSign     },
