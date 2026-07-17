@@ -155,6 +155,12 @@ export class LivePdvController {
     return this.svc.deleteAtalho(sessionId, atalhoId);
   }
 
+  // Botão "Limpar tudo" da tela de legendas (as legendas NUNCA zeram sozinhas)
+  @Post('sessions/:id/atalhos/limpar-tudo')
+  clearAtalhos(@Param('id') sessionId: string) {
+    return this.svc.clearAtalhos(sessionId);
+  }
+
   // ── Preço promocional da live ──
   @Get('sessions/:id/promos')
   listPromos(@Param('id') sessionId: string) {
@@ -237,9 +243,11 @@ export class LivePdvController {
   }
 
   // Carimbo de cobrança MANUAL (Direct/WhatsApp) — sincroniza o ✓ entre PCs
+  // + contador de tentativas por canal (body.canal: 'direct' | 'whats')
   @Post('carts/:cartId/mark-charged')
-  markCharged(@Param('cartId') cartId: string) {
-    return this.svc.markCartCharged(cartId);
+  markCharged(@Param('cartId') cartId: string, @Body() body: { canal?: 'direct' | 'whats' }) {
+    const canal = body?.canal === 'whats' ? 'whats' : body?.canal === 'direct' ? 'direct' : undefined;
+    return this.svc.markCartCharged(cartId, canal);
   }
 
   // Edita o PREÇO de um item do carrinho (negociação na hora, item ainda não pago)

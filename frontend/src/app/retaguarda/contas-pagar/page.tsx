@@ -158,9 +158,57 @@ function Painel({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
     catch (e: any) { avisar('erro', e?.message || 'Falhou'); }
   };
 
+  // ── Melhorias 17/07 (aprovadas 1,2,3,5,7,8,9) ──
+  const lojaAbbr = (code: string) => {
+    const l: any = lojas.find((x: any) => x.code === code);
+    if (!l?.nome) return code;
+    return String(l.nome).normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().slice(0, 5);
+  };
+  // Agrupamento por dia (agenda de pagamento): VENCIDAS → HOJE → cada data
+  const grupoKey = (r: any) =>
+    r.status === 'paga' ? `PAGA EM ${fmtData(r.pagamento)}` : r.vencida ? 'VENCIDAS' : r.hoje ? 'HOJE' : fmtData(r.vencimento);
+  const grupos = useMemo(() => {
+    const m = new Map<string, { qtd: number; cents: number }>();
+    for (const r of data?.rows || []) {
+      const k = grupoKey(r);
+      const g = m.get(k) || { qtd: 0, cents: 0 };
+      g.qtd += 1; g.cents += Number(r.valorCents) || 0;
+      m.set(k, g);
+    }
+    return m;
+  }, [data]);
+  const selRows = (data?.rows || []).filter((r: any) => selecionadas.has(r.id) && r.status === 'aberta');
+  const selCents = selRows.reduce((s: number, r: any) => s + (Number(r.valorCents) || 0), 0);
+  const [pagandoLote, setPagandoLote] = useState(false);
+  const pagarSelecionadas = async () => {
+    if (!selRows.length) return;
+    if (!window.confirm(`Pagar ${selRows.length} conta(s) HOJE — total ${brl(selCents)}?`)) return;
+    setPagandoLote(true);
+    let ok = 0;
+    for (const r of selRows) {
+      try { await api(`/admin/contas-pagar/${r.id}/pagar`, { method: 'PATCH', body: JSON.stringify({ pagamento: hojeStr() }) }); ok++; }
+      catch { /* segue as demais */ }
+    }
+    setPagandoLote(false);
+    avisar(ok === selRows.length ? 'ok' : 'erro', `${ok}/${selRows.length} conta(s) paga(s)`);
+    setSelecionadas(new Set());
+    carregar(); carregarBase();
+  };
+  // Higiene: vencidas há mais de 30 dias (nesta página)
+  const antigas = (data?.rows || []).filter((r: any) => {
+    if (r.status === 'paga' || !r.vencida || !r.vencimento) return false;
+    return (Date.now() - new Date(r.vencimento).getTime()) > 30 * 86400000;
+  });
+  const clicarCard = (qual: 'vencidas' | 'hoje' | 'prox7' | 'pagasMes' | 'pendenteTotal') => {
+    setPage(1);
+    if (qual === 'vencidas') { setStatus('pendentes'); setDe(''); setAte(new Date(Date.now() - 86400000).toISOString().slice(0, 10)); }
+    else if (qual === 'hoje') { setStatus('pendentes'); atalho('hoje'); }
+    else if (qual === 'prox7') { setStatus('pendentes'); atalho(7); }
+    else if (qual === 'pagasMes') { setStatus('pagas'); atalho('mes'); }
+    else { setStatus('pendentes'); setDe(''); setAte(''); }
+  };
   // SELEÇÃO EM MASSA (14/07, pedido do dono): checkbox por lançamento +
-  // "selecionar todos" (da página atual) → excluir de uma vez. Mesmo
-  // soft-delete auditado da lixeirinha individual.
+  // "selecionar todos" (da página atual) → excluir OU pagar de uma vez.
   const [selecionadas, setSelecionadas] = useState<Set<string>>(new Set());
   const [excluindoLote, setExcluindoLote] = useState(false);
   const idsPagina: string[] = (data?.rows || []).map((r: any) => r.id);
@@ -200,11 +248,12 @@ function Painel({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
       {/* cards */}
       {stats && (
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-          <CardStat titulo="Vencidas" cents={stats.vencidas.cents} qtd={stats.vencidas.qtd} cor="text-rose-600" />
-          <CardStat titulo="Vencem hoje" cents={stats.hoje.cents} qtd={stats.hoje.qtd} cor="text-amber-600" />
-          <CardStat titulo="Próximos 7 dias" cents={stats.prox7.cents} qtd={stats.prox7.qtd} cor="text-slate-800" />
-          <CardStat titulo="Pagas no mês" cents={stats.pagasMes.cents} qtd={stats.pagasMes.qtd} cor="text-[#2E7D46]" />
-          <CardStat titulo="Pendente total" cents={stats.pendenteTotal.cents} qtd={stats.pendenteTotal.qtd} cor="text-slate-800" />
+          {/* Cards CLICÁVEIS = filtro (aprovado 17/07) */}
+          <div onClick={() => clicarCard('vencidas')} className="cursor-pointer hover:scale-[1.02] transition-transform" title="Filtrar vencidas"><CardStat titulo="Vencidas" cents={stats.vencidas.cents} qtd={stats.vencidas.qtd} cor="text-rose-600" /></div>
+          <div onClick={() => clicarCard('hoje')} className="cursor-pointer hover:scale-[1.02] transition-transform" title="Filtrar as de hoje"><CardStat titulo="Vencem hoje" cents={stats.hoje.cents} qtd={stats.hoje.qtd} cor="text-amber-600" /></div>
+          <div onClick={() => clicarCard('prox7')} className="cursor-pointer hover:scale-[1.02] transition-transform" title="Filtrar próximos 7 dias"><CardStat titulo="Próximos 7 dias" cents={stats.prox7.cents} qtd={stats.prox7.qtd} cor="text-slate-800" /></div>
+          <div onClick={() => clicarCard('pagasMes')} className="cursor-pointer hover:scale-[1.02] transition-transform" title="Filtrar pagas no mês"><CardStat titulo="Pagas no mês" cents={stats.pagasMes.cents} qtd={stats.pagasMes.qtd} cor="text-[#2E7D46]" /></div>
+          <div onClick={() => clicarCard('pendenteTotal')} className="cursor-pointer hover:scale-[1.02] transition-transform" title="Todas as pendentes"><CardStat titulo="Pendente total" cents={stats.pendenteTotal.cents} qtd={stats.pendenteTotal.qtd} cor="text-slate-800" /></div>
         </div>
       )}
 
@@ -221,24 +270,8 @@ function Painel({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
             />
           </div>
         </div>
+        {/* UMA linha, ordem lógica: STATUS → PERÍODO → LOJA → ESPÉCIE (aprovado 17/07) */}
         <div className="flex flex-wrap items-center gap-2 text-sm">
-          <label className="text-slate-500 font-semibold">{status === 'pagas' ? 'Pago de' : 'De'}</label>
-          <input type="date" value={de} onChange={(e) => { setDe(e.target.value); setPage(1); }} className="border border-[#E7E2D8] rounded-lg px-2 py-1" />
-          <label className="text-slate-500 font-semibold">{status === 'pagas' ? 'até' : 'Até'}</label>
-          <input type="date" value={ate} onChange={(e) => { setAte(e.target.value); setPage(1); }} className="border border-[#E7E2D8] rounded-lg px-2 py-1" />
-          <button onClick={() => atalho('hoje')} className="px-3 py-1 rounded-full border border-[#E7E2D8] hover:bg-[#FBF6E6] font-semibold text-slate-600">Hoje</button>
-          <button onClick={() => atalho('ontem')} className="px-3 py-1 rounded-full border border-[#E7E2D8] hover:bg-[#FBF6E6] font-semibold text-slate-600">Ontem</button>
-          <button onClick={() => atalho(7)} className="px-3 py-1 rounded-full border border-[#E7E2D8] hover:bg-[#FBF6E6] font-semibold text-slate-600">7 dias</button>
-          <button onClick={() => atalho('mes')} className="px-3 py-1 rounded-full border border-[#E7E2D8] hover:bg-[#FBF6E6] font-semibold text-slate-600">Mês</button>
-          <button onClick={() => { setDe(''); setAte(''); setPage(1); }} className="px-3 py-1 rounded-full border border-[#E7E2D8] hover:bg-[#FBF6E6] text-slate-500">Limpar datas</button>
-          <select value={lojaCode} onChange={(e) => { setLojaCode(e.target.value); setPage(1); }} className="border border-[#E7E2D8] rounded-lg px-2 py-1">
-            <option value="">Loja: todas</option>
-            {lojas.map((l) => <option key={l.code} value={l.code}>{l.code} · {l.nome}</option>)}
-          </select>
-          <select value={especieId} onChange={(e) => { setEspecieId(e.target.value); setPage(1); }} className="border border-[#E7E2D8] rounded-lg px-2 py-1">
-            <option value="">Espécie: todas</option>
-            {especies.map((e) => <option key={e.id} value={e.id}>{e.nome}{e.restrita ? ' 🔒' : ''}</option>)}
-          </select>
           {(['pendentes', 'pagas', 'todas'] as const).map((s) => (
             <button
               key={s}
@@ -250,7 +283,33 @@ function Painel({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
             onClick={() => { setSoEmMaos(!soEmMaos); setPage(1); }}
             className={`px-3 py-1 rounded-full border font-semibold ${soEmMaos ? 'bg-[#FBF6E6] border-[#B8912B] text-[#8C7325]' : 'border-[#E7E2D8] text-slate-500 hover:bg-[#FBF6E6]'}`}
           >✋ Só em mãos</button>
+          <span className="w-px h-5 bg-[#E7E2D8] mx-1" />
+          <label className="text-slate-500 font-semibold">{status === 'pagas' ? 'Pago de' : 'De'}</label>
+          <input type="date" value={de} onChange={(e) => { setDe(e.target.value); setPage(1); }} className="border border-[#E7E2D8] rounded-lg px-2 py-1" />
+          <label className="text-slate-500 font-semibold">{status === 'pagas' ? 'até' : 'Até'}</label>
+          <input type="date" value={ate} onChange={(e) => { setAte(e.target.value); setPage(1); }} className="border border-[#E7E2D8] rounded-lg px-2 py-1" />
+          <button onClick={() => atalho('hoje')} className="px-3 py-1 rounded-full border border-[#E7E2D8] hover:bg-[#FBF6E6] font-semibold text-slate-600">Hoje</button>
+          <button onClick={() => atalho('ontem')} className="px-3 py-1 rounded-full border border-[#E7E2D8] hover:bg-[#FBF6E6] font-semibold text-slate-600">Ontem</button>
+          <button onClick={() => atalho(7)} className="px-3 py-1 rounded-full border border-[#E7E2D8] hover:bg-[#FBF6E6] font-semibold text-slate-600">7 dias</button>
+          <button onClick={() => atalho('mes')} className="px-3 py-1 rounded-full border border-[#E7E2D8] hover:bg-[#FBF6E6] font-semibold text-slate-600">Mês</button>
+          <button onClick={() => { setDe(''); setAte(''); setPage(1); }} className="px-3 py-1 rounded-full border border-[#E7E2D8] hover:bg-[#FBF6E6] text-slate-500">Limpar datas</button>
+          <span className="w-px h-5 bg-[#E7E2D8] mx-1" />
+          <select value={lojaCode} onChange={(e) => { setLojaCode(e.target.value); setPage(1); }} className="border border-[#E7E2D8] rounded-lg px-2 py-1">
+            <option value="">Loja: todas</option>
+            {lojas.map((l) => <option key={l.code} value={l.code}>{l.code} · {l.nome}</option>)}
+          </select>
+          <select value={especieId} onChange={(e) => { setEspecieId(e.target.value); setPage(1); }} className="border border-[#E7E2D8] rounded-lg px-2 py-1">
+            <option value="">Espécie: todas</option>
+            {especies.map((e) => <option key={e.id} value={e.id}>{e.nome}{e.restrita ? ' 🔒' : ''}</option>)}
+          </select>
         </div>
+        {/* Higiene: dívida velha ≠ lixo de cadastro (aprovado 17/07) */}
+        {antigas.length > 0 && (
+          <div className="flex items-center gap-2 bg-rose-50 border border-rose-200 text-rose-700 rounded-lg px-3 py-2 text-xs font-semibold">
+            <AlertTriangle className="w-4 h-4" />
+            {antigas.length} conta(s) vencida(s) há mais de 30 dias ({brl(antigas.reduce((s: number, r: any) => s + (Number(r.valorCents) || 0), 0))}) — revise se é dívida real ou lançamento pra excluir.
+          </div>
+        )}
       </div>
 
       {/* tabela */}
@@ -282,7 +341,22 @@ function Painel({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
               </tr>
             </thead>
             <tbody>
-              {(data?.rows || []).map((r: any) => (
+              {(data?.rows || []).map((r: any, idx: number) => {
+                const k = grupoKey(r);
+                const anterior = idx > 0 ? grupoKey((data.rows as any[])[idx - 1]) : null;
+                const g = grupos.get(k);
+                return (
+                <>
+                {k !== anterior && (
+                  <tr key={`g-${k}`} className="bg-[#FAFAF7] border-b border-[#E7E2D8]">
+                    <td colSpan={10} className="px-3 py-1.5 text-[11px] font-extrabold tracking-wide">
+                      {k === 'VENCIDAS' ? <span className="text-rose-600">🔴 VENCIDAS</span>
+                        : k === 'HOJE' ? <span className="text-amber-600">🟠 HOJE</span>
+                        : <span className="text-slate-500">{k}</span>}
+                      <span className="text-slate-400 font-semibold"> · {g?.qtd} conta(s) · {brl(g?.cents || 0)}</span>
+                    </td>
+                  </tr>
+                )}
                 <tr key={r.id} className={`border-b border-[#F1EDE3] hover:bg-[#FBF6E6] ${selecionadas.has(r.id) ? 'bg-[#FBF6E6]' : ''}`}>
                   <td className="px-3 py-2 w-8">
                     <input
@@ -320,14 +394,16 @@ function Painel({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
                     </span>
                   </td>
                   <td className="px-3 py-2 text-slate-600">{r.notaFiscal || '—'}</td>
-                  <td className="px-3 py-2 text-slate-600">{r.lojaCode}</td>
+                  <td className="px-3 py-2 text-slate-600" title={`Loja ${r.lojaCode}`}>{lojaAbbr(r.lojaCode)}</td>
                   <td className="px-3 py-2 text-slate-500">{r.parcela || '—'}</td>
                   <td className="px-3 py-2 text-right font-extrabold text-[#2E7D46] whitespace-nowrap">{brl(r.valorCents)}</td>
                   <td className="px-3 py-2 text-center">
+                    {/* Só a EXCEÇÃO grita: sem a conta em mãos = vermelho; em mãos = discreto */}
                     <button
                       onClick={() => acao(() => api(`/admin/contas-pagar/${r.id}/em-maos`, { method: 'PATCH' }), 'Em mãos atualizado')}
-                      className={`text-[11px] font-extrabold px-2 py-0.5 rounded-full border ${r.emMaos ? 'bg-emerald-50 border-[#2E7D46] text-[#2E7D46]' : 'border-[#E7E2D8] text-slate-400'}`}
-                    >{r.emMaos ? 'SIM' : 'NÃO'}</button>
+                      title={r.emMaos ? 'Conta em mãos (clique pra marcar que NÃO está)' : 'Conta NÃO está em mãos'}
+                      className={`text-[11px] font-extrabold px-2 py-0.5 rounded-full border ${r.emMaos ? 'border-transparent text-slate-300 hover:border-[#E7E2D8]' : 'bg-rose-50 border-rose-400 text-rose-600'}`}
+                    >{r.emMaos ? '✓' : '🖐️ NÃO'}</button>
                   </td>
                   <td className="px-3 py-2 whitespace-nowrap text-right">
                     {r.status === 'aberta' ? (
@@ -343,7 +419,9 @@ function Painel({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
                     ><Trash2 className="w-3.5 h-3.5" /></button>
                   </td>
                 </tr>
-              ))}
+                </>
+                );
+              })}
               {data && !data.rows?.length && (
                 <tr><td colSpan={10} className="text-center text-slate-400 py-10">Nenhuma conta encontrada.</td></tr>
               )}
@@ -378,6 +456,26 @@ function Painel({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
             Pág. {data.page} / {Math.max(1, Math.ceil(data.total / data.perPage))}
             <button disabled={page >= Math.ceil(data.total / data.perPage)} onClick={() => setPage(page + 1)} className="px-3 py-1 rounded-lg border border-[#E7E2D8] disabled:opacity-40">›</button>
           </span>
+        </div>
+      )}
+
+      {/* Barra de LOTE — visível ao marcar (aprovado 17/07): pagar OU excluir */}
+      {selecionadas.size > 0 && (
+        <div className="fixed bottom-0 inset-x-0 z-30 bg-white border-t-2 border-[#2E7D46] shadow-2xl">
+          <div className="max-w-7xl mx-auto px-4 py-3 flex items-center gap-3 text-sm">
+            <span className="font-bold text-slate-700">{selecionadas.size} selecionada(s){selRows.length > 0 && <> · abertas <span className="text-[#2E7D46]">{brl(selCents)}</span></>}</span>
+            <div className="flex-1" />
+            <button onClick={() => setSelecionadas(new Set())} className="px-4 py-2 rounded-xl border border-[#E7E2D8] text-slate-500 font-bold">Limpar</button>
+            <button onClick={excluirSelecionadas} disabled={excluindoLote}
+              className="px-4 py-2 rounded-xl bg-rose-600 text-white font-bold disabled:opacity-50 flex items-center gap-1.5">
+              <Trash2 className="w-4 h-4" /> {excluindoLote ? 'Excluindo…' : 'Excluir'}
+            </button>
+            <button onClick={pagarSelecionadas} disabled={pagandoLote}
+              className="px-5 py-2 rounded-xl text-white font-black flex items-center gap-2 disabled:opacity-50" style={{ background: '#2E7D46' }}>
+              {pagandoLote ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+              Pagar selecionadas (hoje)
+            </button>
+          </div>
         </div>
       )}
 

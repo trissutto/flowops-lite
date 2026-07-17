@@ -395,7 +395,40 @@ export class LivePdvService {
         createdByUserId: input.userId || null,
       },
     });
+    // LEGENDAS PERSISTEM ENTRE LIVES (dono 17/07: "nunca zere automaticamente"):
+    // copia os atalhos da última live pra nova. Limpar é ação humana — botão
+    // "Limpar tudo" na tela de legendas.
+    try {
+      const anterior = await (this.prisma as any).livePdvSession.findFirst({
+        where: { id: { not: session.id } },
+        orderBy: { startedAt: 'desc' },
+        select: { id: true },
+      });
+      if (anterior) {
+        const atalhos: any[] = await (this.prisma as any).livePdvAtalho.findMany({
+          where: { sessionId: anterior.id },
+        });
+        if (atalhos.length) {
+          await (this.prisma as any).livePdvAtalho.createMany({
+            data: atalhos.map(({ id: _id, sessionId: _s, createdAt: _c, updatedAt: _u, ...resto }: any) => ({
+              ...resto,
+              sessionId: session.id,
+            })),
+            skipDuplicates: true,
+          });
+          this.logger.log(`[live] ${atalhos.length} legenda(s) copiada(s) da live anterior pra ${session.id}`);
+        }
+      }
+    } catch (e) {
+      this.logger.warn(`[live] cópia de legendas falhou (segue sem): ${(e as Error).message}`);
+    }
     return session;
+  }
+
+  /** Limpa TODAS as legendas da live (botão "Limpar tudo" — ação humana). */
+  async clearAtalhos(sessionId: string) {
+    const r = await (this.prisma as any).livePdvAtalho.deleteMany({ where: { sessionId } });
+    return { ok: true, removidos: r.count };
   }
 
   /**
@@ -1579,18 +1612,23 @@ export class LivePdvService {
    * cobrar essa cliente. Grava dmSentAt (mesmo carimbo do automático) — o ✓
    * sincroniza entre PCs e a cobrança em massa não repete pra ela.
    */
-  async markCartCharged(cartId: string) {
+  async markCartCharged(cartId: string, canal?: 'direct' | 'whats') {
     const cart = await (this.prisma as any).livePdvCart.findUnique({
       where: { id: cartId },
       select: { id: true, dmSentAt: true },
     });
     if (!cart) throw new NotFoundException('Carrinho não encontrado');
-    if (!cart.dmSentAt) {
-      await (this.prisma as any).livePdvCart.update({
-        where: { id: cartId },
-        data: { dmSentAt: new Date() },
-      });
-    }
+    // Contador de tentativas por canal (17/07): cada clique soma 1 — o número
+    // aparece dentro do botão Direct/WhatsApp da tela Cobrar todas. Sem canal
+    // = só o carimbo (WhatsApp via API já contou no endpoint cobranca-whats).
+    const data: any = canal === 'whats'
+      ? { cobrancaWhatsCount: { increment: 1 } }
+      : canal === 'direct'
+        ? { cobrancaDirectCount: { increment: 1 } }
+        : {};
+    if (!cart.dmSentAt) data.dmSentAt = new Date();
+    if (!Object.keys(data).length) return { ok: true };
+    await (this.prisma as any).livePdvCart.update({ where: { id: cartId }, data });
     return { ok: true };
   }
 
@@ -1704,7 +1742,7 @@ export class LivePdvService {
     if (r.ok) {
       // Carimba o envio — a cobrança em massa não repete DM pra quem já recebeu
       await (this.prisma as any).livePdvCart
-        .update({ where: { id: cart.id }, data: { dmSentAt: new Date() } })
+        .update({ where: { id: cart.id }, data: { dmSentAt: new Date(), cobrancaDirectCount: { increment: 1 } } })
         .catch(() => {});
       return { ok: true };
     }
@@ -3268,11 +3306,33 @@ export class LivePdvService {
         this.logger.warn(`[live-dm] pedido de endereço falhou: ${(e as Error).message}`),
       );
     }
-    // DECISÃO DO DONO (07/07): pagamento confirmado NÃO manda direto pra loja.
-    // A operadora primeiro CONFERE/COMPLETA os dados da cliente (endereço) e
-    // só então libera — releaseSeparation() abaixo. Igual ao fluxo do site.
     const session = await this.getSession(cart.sessionId);
     this.gateway.emitToLiveOps('live-pdv:cart-paid', { sessionId: session.id, cartId });
+    // AUTO-SEPARAÇÃO (dono 17/07, revoga a decisão de 07/07): pagou → vira
+    // demanda na tela de separação NA HORA, sem conferência um a um — DESDE
+    // que os dados obrigatórios estejam completos (só COMPLEMENTO pode
+    // faltar). Incompleto (pagou por link do console sem checkout) permanece
+    // na fila "PAGAS — conferir" e a DM já pediu o endereço acima.
+    try {
+      const fresco = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
+      const completo =
+        !!fresco &&
+        (fresco.isPickup ||
+          (String(fresco.customerCep || '').replace(/\D/g, '').length === 8 &&
+            String(fresco.customerEndereco || '').trim() &&
+            String(fresco.customerNumero || '').trim() &&
+            String(fresco.customerCidade || '').trim() &&
+            String(fresco.customerUf || '').trim() &&
+            this.cpfValido(fresco.customerCpf)));
+      if (completo) {
+        await this.releaseSeparation(cartId);
+        this.logger.log(`[live] carrinho ${cartId} pago → separação AUTOMÁTICA (dados completos)`);
+      } else {
+        this.logger.log(`[live] carrinho ${cartId} pago com dados incompletos → fica na conferência manual`);
+      }
+    } catch (e) {
+      this.logger.warn(`[live] auto-separação do ${cartId} falhou (fica na conferência): ${(e as Error).message}`);
+    }
     return this.getCart(cartId);
   }
 

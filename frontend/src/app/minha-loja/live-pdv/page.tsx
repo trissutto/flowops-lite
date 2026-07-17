@@ -613,11 +613,17 @@ export default function LivePdvPage() {
   // Estado do envio WhatsApp por carrinho — feedback visual + trava de
   // duplo clique (sem isso o sucesso era silencioso e cada clique reenviava).
   const [whatsState, setWhatsState] = useState<Record<string, 'sending' | 'sent' | undefined>>({});
+  // Contador local de tentativas por canal (soma com o do servidor até o refresh)
+  const [tentativasLocal, setTentativasLocal] = useState<Record<string, { direct: number; whats: number }>>({});
+  const nTentativas = (c: any, canal: 'direct' | 'whats') =>
+    (Number(canal === 'direct' ? c.cobrancaDirectCount : c.cobrancaWhatsCount) || 0) +
+    (tentativasLocal[c.id]?.[canal] || 0);
 
   // Cobra UMA cliente da fila: Direct abre o perfil (colar Ctrl+V);
   // WhatsApp dispara DIRETO pela API do ManyChat (template aprovado — chega
   // sozinho, sem abrir app). Se a API falhar, cai no wa.me como plano B.
   async function chargeOne(c: Cart, canal: 'direct' | 'whats') {
+    let whatsViaApi = false; // API do ManyChat já conta a tentativa no servidor
     const link = c.payCode
       ? `${publicBase()}/p/${c.payCode}`
       : `${publicBase()}/pagar/${c.id}`;
@@ -638,6 +644,7 @@ export default function LivePdvPage() {
       setWhatsState((s) => ({ ...s, [c.id]: 'sending' }));
       try {
         await api(`/live-pdv/carts/${c.id}/cobranca-whats`, { method: 'POST', body: JSON.stringify({}) });
+        whatsViaApi = true;
         setWhatsState((s) => ({ ...s, [c.id]: 'sent' }));
       } catch (e: any) {
         setWhatsState((s) => ({ ...s, [c.id]: undefined }));
@@ -655,8 +662,21 @@ export default function LivePdvPage() {
       }
     }
     setChargeAllDone((s) => ({ ...s, [c.id]: true }));
-    // Carimba no servidor — o ✓ aparece nos outros PCs também
-    api(`/live-pdv/carts/${c.id}/mark-charged`, { method: 'POST', body: JSON.stringify({}) }).catch(() => {});
+    // Carimba no servidor com o CANAL — o ✓ e o contador aparecem nos outros
+    // PCs. WhatsApp via API NÃO manda canal (o endpoint cobranca-whats já
+    // somou a tentativa no servidor — evita contar 2×).
+    api(`/live-pdv/carts/${c.id}/mark-charged`, {
+      method: 'POST',
+      body: JSON.stringify(whatsViaApi ? {} : { canal }),
+    }).catch(() => {});
+    // Contadorzinho local imediato (o servidor confirma no próximo refresh)
+    setTentativasLocal((s) => ({
+      ...s,
+      [c.id]: {
+        direct: (s[c.id]?.direct || 0) + (canal === 'direct' ? 1 : 0),
+        whats: (s[c.id]?.whats || 0) + (canal === 'whats' ? 1 : 0),
+      },
+    }));
   }
 
   // "JÁ PAGOU por fora" direto na fila: vira PAGO → SAI da lista de cobrança
@@ -2015,9 +2035,14 @@ export default function LivePdvPage() {
                         type="button"
                         onClick={() => chargeOne(c, 'direct')}
                         title="Copia a mensagem e abre o perfil — clique em Mensagem e cole"
-                        className="shrink-0 rounded-lg bg-gradient-to-r from-purple-600 to-pink-500 px-2.5 py-1.5 text-[11px] font-bold text-white hover:opacity-90"
+                        className="shrink-0 rounded-lg bg-gradient-to-r from-purple-600 to-pink-500 px-2.5 py-1.5 text-[11px] font-bold text-white hover:opacity-90 inline-flex items-center gap-1"
                       >
                         Direct
+                        {nTentativas(c, 'direct') > 0 && (
+                          <span className="rounded-full bg-white/25 px-1.5 text-[10px] font-black tabular-nums" title={`${nTentativas(c, 'direct')} cobrança(s) por Direct`}>
+                            {nTentativas(c, 'direct')}
+                          </span>
+                        )}
                       </button>
                     )}
                     {c.customerPhone && (
@@ -2037,6 +2062,11 @@ export default function LivePdvPage() {
                           : whatsState[c.id] === 'sent'
                             ? '✓ WhatsApp enviado'
                             : 'WhatsApp 🤖'}
+                        {nTentativas(c, 'whats') > 0 && (
+                          <span className="ml-1 rounded-full bg-white/25 px-1.5 text-[10px] font-black tabular-nums" title={`${nTentativas(c, 'whats')} cobrança(s) por WhatsApp`}>
+                            {nTentativas(c, 'whats')}
+                          </span>
+                        )}
                       </button>
                     )}
                     <button
@@ -4219,6 +4249,19 @@ function LegendaModal({ sessionId, onClose }: { sessionId: string; onClose: () =
               className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-rose-300 bg-rose-50 px-3 py-1.5 text-xs font-bold text-rose-600 hover:bg-rose-100"
             >
               🖨️ Imprimir cartões (espelhado)
+            </button>
+            <button
+              onClick={async () => {
+                if (!confirm('LIMPAR TODAS as legendas desta live?\n\n(As legendas nunca somem sozinhas — só por este botão.)')) return;
+                try {
+                  await api(`/live-pdv/sessions/${sessionId}/atalhos/limpar-tudo`, { method: 'POST', body: JSON.stringify({}) });
+                  setRows([]);
+                } catch (e: any) { setTopErr(e?.message || 'Falha ao limpar'); }
+              }}
+              title="Apaga TODAS as legendas desta live (elas nunca zeram sozinhas ao abrir live nova)"
+              className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-bold text-slate-500 hover:bg-slate-100"
+            >
+              🧹 Limpar tudo
             </button>
             <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X className="h-5 w-5" /></button>
           </div>
