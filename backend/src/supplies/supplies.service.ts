@@ -1,5 +1,7 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { RealtimeGateway } from '../websocket/realtime.gateway';
+import { PushService } from '../push/push.service';
 
 // Prisma client ainda não foi regenerado localmente pros novos models (SupplyItem,
 // SupplyRequest, SupplyRequestItem). Usamos `as any` nos acessos aos delegates.
@@ -47,7 +49,12 @@ const STATUS_TRANSITIONS: Record<string, string[]> = {
 
 @Injectable()
 export class SuppliesService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(SuppliesService.name);
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly gateway: RealtimeGateway,
+    private readonly push: PushService,
+  ) {}
 
   // ============================================================
   // SUPPLY ITEMS (catálogo do almoxarifado)
@@ -167,6 +174,33 @@ export class SuppliesService {
         store: { select: { id: true, code: true, name: true } },
       },
     });
+
+    // NOTIFICA A RETAGUARDA (15/07): sino/toast em tempo real (sala 'admin') +
+    // push (avisa até com o app fechado). Fire-and-forget: falhar aqui NUNCA
+    // derruba o pedido — só loga.
+    try {
+      const nItens = (created.items || []).length;
+      const loja = created.store?.name || created.store?.code || 'Filial';
+      const payload = {
+        id: created.id,
+        storeCode: created.store?.code || null,
+        storeName: created.store?.name || null,
+        itens: nItens,
+        note: created.note || null,
+        createdAt: created.createdAt,
+      };
+      this.gateway.emitToAdmins('supplies:new-request', payload);
+      void this.push
+        .sendToAdmins({
+          title: '📦 Novo pedido de materiais',
+          body: `${loja} pediu ${nItens} item(ns).`,
+          tag: `supplies-${created.id}`,
+          data: { url: '/retaguarda/inbox' },
+        })
+        .catch((e) => this.logger.warn(`[supplies] push falhou: ${e?.message || e}`));
+    } catch (e: any) {
+      this.logger.warn(`[supplies] notificação falhou: ${e?.message || e}`);
+    }
     return created;
   }
 

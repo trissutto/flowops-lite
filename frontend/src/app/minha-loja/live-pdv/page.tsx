@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 
 /**
  * /minha-loja/live-pdv — Console de Live Commerce (operado pela apresentadora/loja)
@@ -77,6 +78,7 @@ interface CartItem {
   originStoreName: string;
   status: string;
   trackingCode?: string | null; // rastreio informado pela loja no despacho
+  legenda?: string | null; // nº da legenda (atalho) da live — pra conferir a peça
 }
 interface Cart {
   id: string;
@@ -103,6 +105,9 @@ interface Cart {
   qrCodeImageUrl?: string | null;
   hasManychat?: boolean; // cliente tem vínculo ManyChat → DM automática funciona
   dmSentAt?: string | null; // carimbo de cobrança enviada (sincroniza os ✓ entre PCs)
+  selfCart?: boolean; // cliente montou a sacola sozinha pela DM (ManyChat)
+  awaitingReview?: boolean; // cliente digitou FECHAR → aguarda a apresentadora liberar
+  clientClosedAt?: string | null;
   items: CartItem[];
 }
 interface ActiveCustomer {
@@ -277,10 +282,15 @@ export default function LivePdvPage() {
   const [activeCustomer, setActiveCustomer] = useState<ActiveCustomer | null>(null);
   const [cart, setCart] = useState<Cart | null>(null);
   const [carts, setCarts] = useState<Cart[]>([]);
+  const [liberando, setLiberando] = useState<string | null>(null); // sacola da DM sendo liberada
   const [clientFilter, setClientFilter] = useState(''); // busca de cliente por nome/@ na lista
   // Despoluição da grade: por padrão só quem TEM PEÇAS; vazios ficam atrás
   // de um chip (cliente puxada da fila que ainda não comprou = R$0 · 0 itens).
-  const [cartView, setCartView] = useState<'pecas' | 'vazios' | 'todos'>('pecas');
+  const [cartView, setCartView] = useState<'pecas' | 'vazios' | 'todos' | 'recorrentes'>('pecas');
+  // RECORRENTES (15/07): clientes que já criaram carrinho em qualquer live.
+  // Busca por nome/@/telefone (reusa o mesmo campo de busca); puxa pra live.
+  const [recorrentes, setRecorrentes] = useState<Array<{ customerId: string; name: string | null; instagram: string | null; phone: string | null; lastAt: string }>>([]);
+  const [recLoading, setRecLoading] = useState(false);
   const [clearingEmpty, setClearingEmpty] = useState(false);
   const [showCustomerModal, setShowCustomerModal] = useState(false);
   // Célula clicada aguardando identificação da cliente — leva junto a REF da
@@ -359,12 +369,34 @@ export default function LivePdvPage() {
       });
       await refreshCarts();
       await refreshPending();
+      // some da lista de recorrentes (agora tem carrinho na live)
+      setRecorrentes((prev) => prev.filter((r) => r.customerId !== customerId));
     } catch {
       alert('Não consegui puxar a cliente agora. Tenta de novo.');
     } finally {
       setPullingId(null);
     }
   }
+
+  // Busca de recorrentes (só quando o chip "Recorrentes" está ativo). Debounce
+  // leve pra não bater a cada tecla; reusa o campo de busca (clientFilter).
+  useEffect(() => {
+    if (cartView !== 'recorrentes' || !sessionId) return;
+    let alive = true;
+    setRecLoading(true);
+    const t = setTimeout(async () => {
+      try {
+        const q = clientFilter.trim();
+        const r = await api<any[]>(`/live-pdv/sessions/${sessionId}/recurring${q ? `?q=${encodeURIComponent(q)}` : ''}`);
+        if (alive) setRecorrentes(r || []);
+      } catch {
+        if (alive) setRecorrentes([]);
+      } finally {
+        if (alive) setRecLoading(false);
+      }
+    }, 300);
+    return () => { alive = false; clearTimeout(t); };
+  }, [cartView, clientFilter, sessionId]);
 
   // Loja da sessão usa PIX externo? (franquia sem gateway Pagar.me/PagBank)
   // → esconde "Cobrar PIX/Link" e mostra confirmação manual "pagou por fora".
@@ -433,6 +465,10 @@ export default function LivePdvPage() {
     socket.on('live-pdv:item-shipped', onChange);
     socket.on('live-pdv:promo', onChange);
     socket.on('live-pdv:charge-expired', onChargeExpired);
+    // SACOLA PELA DM: cliente montando/fechando o carrinho sozinha → atualiza a
+    // fila (item-reserved cobre o add via DM; cart-review é o FECHAR pra revisão).
+    socket.on('live-pdv:item-reserved', onChange);
+    socket.on('live-pdv:cart-review', onChange);
 
     // Cinto de segurança: se socket E webhook falharem, a lista ainda
     // atualiza sozinha a cada 90s.
@@ -446,6 +482,8 @@ export default function LivePdvPage() {
       socket.off('live-pdv:item-shipped', onChange);
       socket.off('live-pdv:promo', onChange);
       socket.off('live-pdv:charge-expired', onChargeExpired);
+      socket.off('live-pdv:item-reserved', onChange);
+      socket.off('live-pdv:cart-review', onChange);
       clearInterval(safety);
     };
   }, [sessionId, refreshCarts]);
@@ -1711,7 +1749,10 @@ export default function LivePdvPage() {
   // Partição da grade: com peças × vazios (0 itens). Busca ativa ignora o chip.
   const nComPecas = clientesFiltradas.filter((c) => (c.items?.length || 0) > 0).length;
   const nVazios = clientesFiltradas.length - nComPecas;
-  const viewEfetiva: 'pecas' | 'vazios' | 'todos' = clientFilter.trim() ? 'todos' : cartView;
+  // No modo recorrentes o filtro alimenta a busca de recorrentes (não força
+  // 'todos' na lista da sessão). Nos demais, busca ativa mostra todos.
+  const viewEfetiva: 'pecas' | 'vazios' | 'todos' | 'recorrentes' =
+    cartView === 'recorrentes' ? 'recorrentes' : clientFilter.trim() ? 'todos' : cartView;
   const gridCarts = clientesFiltradas.filter((c) =>
     viewEfetiva === 'todos'
       ? true
@@ -1759,6 +1800,31 @@ export default function LivePdvPage() {
   // Cobrada = marcada neste navegador OU carimbo do servidor (dmSentAt) — o
   // carimbo sincroniza entre PCs: quem cobrou em outra máquina aparece ✓ aqui.
   const cobradas = cobraveis.filter((c) => chargeAllDone[c.id] || c.dmSentAt).length;
+
+  // SACOLA PELA DM: carrinhos que a cliente FECHOU e aguardam a apresentadora
+  // conferir e liberar a cobrança (verificação humana antes de finalizar).
+  const pendentesRevisao = cartsAtivos.filter(
+    (c) => c.awaitingReview && (c.items?.length || 0) > 0,
+  );
+
+  async function liberarSacola(c: Cart) {
+    if (
+      !confirm(
+        `Conferiu a sacola de ${c.customerName || 'cliente'} (${(c.items?.length || 0)} peça(s), ` +
+          `${brl(c.totalCents)})?\n\nAo liberar, o link de pagamento vai automático pra cliente.`,
+      )
+    )
+      return;
+    setLiberando(c.id);
+    try {
+      await api(`/live-pdv/carts/${c.id}/liberar-cobranca`, { method: 'POST', body: JSON.stringify({}) });
+      await refreshCarts();
+    } catch (e: any) {
+      alert(e?.message || 'Falha ao liberar a cobrança.');
+    } finally {
+      setLiberando(null);
+    }
+  }
 
   return (
     <div className="min-h-screen bg-slate-100">
@@ -1821,6 +1887,53 @@ export default function LivePdvPage() {
           </div>
         </div>
       )}
+      {/* SACOLAS PELA DM — fila de REVISÃO (verificação humana antes de cobrar).
+          A cliente montou e fechou sozinha pelo ManyChat; a apresentadora confere
+          e libera → só então o link de pagamento vai pra cliente. */}
+      {pendentesRevisao.length > 0 && (
+        <div className="mx-auto mt-3 w-full max-w-3xl px-3">
+          <div className="rounded-xl border-2 border-amber-300 bg-amber-50 p-3">
+            <div className="mb-1 flex items-center gap-2">
+              <span className="text-lg">🔔</span>
+              <h3 className="text-sm font-bold text-amber-900">
+                {pendentesRevisao.length} sacola(s) da cliente pra conferir
+              </h3>
+            </div>
+            <p className="mb-3 text-xs text-amber-800">
+              Montadas pela cliente na DM. Confira as peças e libere — só então o link de pagamento é enviado.
+            </p>
+            <div className="space-y-2">
+              {pendentesRevisao.map((c) => (
+                <div key={c.id} className="flex items-center justify-between gap-3 rounded-lg bg-white p-2.5 shadow-sm">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-semibold text-slate-800">
+                      {c.customerName || 'cliente'}
+                      {c.customerInstagram ? ` · @${c.customerInstagram}` : ''}
+                    </div>
+                    <div className="truncate text-xs text-slate-500">
+                      {(c.items || [])
+                        .map((it) => `${it.descricao || it.refCode}${it.tamanho ? ' ' + it.tamanho : ''}`)
+                        .join(' · ')}
+                    </div>
+                    <div className="text-xs font-bold text-emerald-700">
+                      {c.items?.length || 0} peça(s) · {brl(c.totalCents)}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => liberarSacola(c)}
+                    disabled={liberando === c.id}
+                    className="shrink-0 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-700 disabled:opacity-60"
+                  >
+                    {liberando === c.id ? 'Liberando…' : '✅ Conferi — Liberar'}
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* COBRAR TODAS — fila semi-automática de cobrança em massa */}
       {chargeAllOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
@@ -2081,7 +2194,7 @@ export default function LivePdvPage() {
                   {historyOpen && (
                     <>
                       {/* backdrop invisível — clique fora fecha */}
-                      <div className="fixed inset-0 z-30" onClick={() => setHistoryOpen(false)} />
+                      <div className="fixed inset-0 z-30" {...overlayClose(() => setHistoryOpen(false))} />
                       <div className="absolute right-0 z-40 mt-1 max-h-[50vh] w-64 overflow-y-auto rounded-xl border border-slate-200 bg-white py-1 shadow-xl">
                         {refHistory.map((r) => (
                           <button
@@ -2564,7 +2677,9 @@ export default function LivePdvPage() {
               </button>
             )}
 
-            {cartsAtivos.length > 0 && (
+            {/* SEMPRE visível (15/07): dá acesso ao chip "Recorrentes" mesmo com
+                a live vazia — o operador puxa clientes de lives passadas. */}
+            {true && (
               <div>
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
@@ -2618,6 +2733,18 @@ export default function LivePdvPage() {
                   >
                     Todos ({clientesFiltradas.length})
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => setCartView('recorrentes')}
+                    title="Clientes que já compraram em lives anteriores — busque e puxe pra live"
+                    className={`rounded-full px-2.5 py-1 text-[11px] font-bold transition ${
+                      viewEfetiva === 'recorrentes'
+                        ? 'bg-violet-600 text-white'
+                        : 'border border-violet-200 bg-white text-violet-600 hover:border-violet-400'
+                    }`}
+                  >
+                    🔁 Recorrentes
+                  </button>
                   {nVazios > 0 && (
                     <button
                       type="button"
@@ -2649,9 +2776,47 @@ export default function LivePdvPage() {
                     </button>
                   )}
                 </div>
+                {/* RECORRENTES (15/07): clientes de lives anteriores — busca +
+                    puxa pra live num clique. Só quando o chip está ativo. */}
+                {viewEfetiva === 'recorrentes' && (
+                  <div className="max-h-[60vh] space-y-1.5 overflow-y-auto rounded-xl border border-violet-200 bg-white p-1.5">
+                    {recLoading && (
+                      <div className="px-3 py-4 text-center text-sm text-slate-400">Buscando…</div>
+                    )}
+                    {!recLoading && recorrentes.length === 0 && (
+                      <div className="px-3 py-6 text-center text-sm text-slate-400">
+                        {clientFilter.trim()
+                          ? 'Nenhuma cliente recorrente pra essa busca.'
+                          : 'Digite nome, @ ou telefone pra achar clientes de lives anteriores — ou veja as mais recentes abaixo.'}
+                      </div>
+                    )}
+                    {recorrentes.map((r) => (
+                      <div key={r.customerId} className="flex items-center gap-2 rounded-lg border border-slate-100 px-2 py-1.5 hover:border-violet-200">
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-sm font-semibold text-slate-800">{r.name || r.instagram || 'Cliente'}</div>
+                          <div className="truncate text-[11px] text-slate-500">
+                            {r.instagram ? `@${r.instagram}` : ''}
+                            {r.instagram && r.phone ? ' · ' : ''}
+                            {r.phone || ''}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => pullRegisteredCustomer(r.customerId)}
+                          disabled={pullingId === r.customerId}
+                          title="Puxar esta cliente pra live atual"
+                          className="shrink-0 rounded-lg bg-violet-600 px-2.5 py-1 text-xs font-bold text-white hover:bg-violet-700 disabled:opacity-50"
+                        >
+                          {pullingId === r.customerId ? '…' : '↑ Puxar'}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 {/* GRID em LINHAS, 3 colunas (08/07): o dono trocou as 6 colunas
                     por linhas maiores pra ver o NOME COMPLETO da cliente.
                     Em telas menores cai pra 2/1. */}
+                {viewEfetiva !== 'recorrentes' && (
                 <div className="grid max-h-[60vh] grid-cols-1 content-start gap-1.5 overflow-y-auto rounded-xl border border-slate-200 bg-white p-1.5 sm:grid-cols-2 xl:grid-cols-3">
                   {gridCarts.length === 0 && (
                     <div className="col-span-full px-3 py-4 text-center text-sm text-slate-400">
@@ -2728,6 +2893,7 @@ export default function LivePdvPage() {
                     );
                   })}
                 </div>
+                )}
               </div>
             )}
           </div>
@@ -3032,8 +3198,18 @@ function CartPanel({
               {(cart?.items || []).map((it) => (
                 <div key={it.id} className="flex items-center gap-2 rounded-lg border border-slate-100 p-2">
                   <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-medium text-slate-800">
-                      {it.refCode} · {it.cor} {it.tamanho}
+                    {/* DESCRIÇÃO COMPLETA da peça (15/07): não só a legenda/ref.
+                        ref · cor · tamanho vira subtítulo pra conferência rápida. */}
+                    <div className="text-sm font-medium text-slate-800 leading-snug flex items-start gap-1.5" title={it.descricao || it.refCode}>
+                      {it.legenda && (
+                        <span className="shrink-0 rounded-md bg-fuchsia-600 px-1.5 py-0.5 text-[11px] font-black leading-none text-white" title={`Legenda ${it.legenda}`}>
+                          #{it.legenda}
+                        </span>
+                      )}
+                      <span className="min-w-0">{it.descricao || it.refCode}</span>
+                    </div>
+                    <div className="truncate text-[11px] font-semibold text-slate-500">
+                      {it.refCode}{it.cor ? ` · ${it.cor}` : ''}{it.tamanho ? ` · ${it.tamanho}` : ''}
                     </div>
                     <div className="flex items-center gap-1 text-[11px] text-slate-500">
                       <Store className="h-3 w-3" /> {it.originStoreName}
@@ -4026,7 +4202,7 @@ function LegendaModal({ sessionId, onClose }: { sessionId: string; onClose: () =
   }
 
   return (
-    <div className="fixed inset-0 z-40 flex items-start justify-center bg-black/60 p-3 sm:p-6 overflow-y-auto" onClick={onClose}>
+    <div className="fixed inset-0 z-40 flex items-start justify-center bg-black/60 p-3 sm:p-6 overflow-y-auto" {...overlayClose(onClose)}>
       <div className="w-full max-w-3xl rounded-2xl bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3">
           <div>

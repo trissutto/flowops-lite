@@ -272,6 +272,12 @@ export class CashController {
    * Lojas da FRANQUIA (tipo=FILIAL, rótulo "FRANQUIA" na tela de lojas).
    * Usado pra escopar o super-painel do papel master_franquia.
    */
+  /** Papéis de FRANQUIA (15/07, decisão do dono): ambos editam o painel
+   *  igual à rede, porém SEMPRE escopados às lojas FILIAL. */
+  private ehPapelFranquia(role: string | undefined): boolean {
+    return role === 'master_franquia' || role === 'franquias';
+  }
+
   private async franquiaStoreCodes(): Promise<string[]> {
     const rows = await (this.svc as any).prisma.store.findMany({
       where: { tipo: 'FILIAL', active: true },
@@ -345,10 +351,10 @@ export class CashController {
     @Body() body: { sessionIds: string[]; note?: string },
   ) {
     const role = req?.user?.role;
-    if (role !== 'admin' && role !== 'supervisor' && role !== 'master_franquia') {
+    if (role !== 'admin' && role !== 'supervisor' && !this.ehPapelFranquia(role)) {
       throw new ForbiddenException('Apenas admin ou supervisor');
     }
-    if (role === 'master_franquia') {
+    if (this.ehPapelFranquia(role)) {
       await this.assertSessionsSaoFranquia(body.sessionIds || []);
     }
     return this.svc.markSessionsAsChecked({
@@ -369,10 +375,10 @@ export class CashController {
     @Body() body: { sessionIds: string[] },
   ) {
     const role = req?.user?.role;
-    if (role !== 'admin' && role !== 'supervisor' && role !== 'master_franquia') {
+    if (role !== 'admin' && role !== 'supervisor' && !this.ehPapelFranquia(role)) {
       throw new ForbiddenException('Apenas admin ou supervisor');
     }
-    if (role === 'master_franquia') {
+    if (this.ehPapelFranquia(role)) {
       await this.assertSessionsSaoFranquia(body.sessionIds || []);
     }
     return this.svc.unmarkSessionsAsChecked({
@@ -380,7 +386,21 @@ export class CashController {
     });
   }
 
-  /** master_franquia só toca sessões de caixa de loja FRANQUIA (tipo=FILIAL). */
+  /** Papel de franquia só edita bandeira de pagamento de venda em loja FILIAL. */
+  private async assertPagamentoEhFranquia(paymentId: string) {
+    const prisma = (this.svc as any).prisma;
+    const pay = await prisma.pdvSalePayment.findUnique({
+      where: { id: paymentId },
+      select: { sale: { select: { storeCode: true } } },
+    });
+    const storeCode = pay?.sale?.storeCode;
+    const franquia = new Set(await this.franquiaStoreCodes());
+    if (!storeCode || !franquia.has(storeCode)) {
+      throw new ForbiddenException(`Pagamento de loja ${storeCode || '?'} não é franquia — acesso negado`);
+    }
+  }
+
+  /** Papel de franquia só toca sessões de caixa de loja FRANQUIA (tipo=FILIAL). */
   private async assertSessionsSaoFranquia(sessionIds: string[]) {
     if (!sessionIds.length) return;
     const prisma = (this.svc as any).prisma;
@@ -416,14 +436,14 @@ export class CashController {
   // próprio painel escopado — e a senha de nível é a segunda trava.
   private requireMasterRole(req: any) {
     const role = req?.user?.role;
-    if (role !== 'admin' && role !== 'supervisor' && role !== 'operator' && role !== 'master_franquia') {
+    if (role !== 'admin' && role !== 'supervisor' && role !== 'operator' && !this.ehPapelFranquia(role)) {
       throw new ForbiddenException('Apenas admin/supervisor/operator');
     }
   }
 
-  /** master_franquia só ajusta caixa de loja FRANQUIA (tipo=FILIAL). */
+  /** Papel de franquia só ajusta caixa de loja FRANQUIA (tipo=FILIAL). */
   private async assertStoreEhFranquia(req: any, storeCode: string) {
-    if (req?.user?.role !== 'master_franquia') return;
+    if (!this.ehPapelFranquia(req?.user?.role)) return;
     const franquia = await this.franquiaStoreCodes();
     if (!franquia.includes(storeCode)) {
       throw new ForbiddenException(`Loja ${storeCode} não é franquia — acesso negado`);
@@ -650,8 +670,13 @@ export class CashController {
     @Param('paymentId') paymentId: string,
     @Body() body: { bandeira: string; reason?: string },
   ) {
-    if (req?.user?.role !== 'admin') {
+    // admin + papéis de franquia (15/07). Papel de franquia só edita bandeira
+    // de pagamento de venda em loja FILIAL — escopo forçado no service.
+    if (req?.user?.role !== 'admin' && !this.ehPapelFranquia(req?.user?.role)) {
       throw new ForbiddenException('Apenas admin pode editar bandeira');
+    }
+    if (this.ehPapelFranquia(req?.user?.role)) {
+      await this.assertPagamentoEhFranquia(paymentId);
     }
     return this.svc.updatePaymentBandeira(
       paymentId,

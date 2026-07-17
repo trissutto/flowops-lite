@@ -163,6 +163,13 @@ export class ContasPagarController {
     return this.svc.atualizar(id, body, usuario);
   }
 
+  /** Exclusão em lote (seleção na tela). Body: { ids: string[] } — máx 500. */
+  @Post('excluir-lote')
+  excluirLote(@Req() req: any, @Body() body: { ids?: string[] }) {
+    const usuario = this.requireAdmin(req);
+    return this.svc.excluirLote(body?.ids || [], usuario);
+  }
+
   @Delete(':id')
   excluir(@Req() req: any, @Param('id') id: string) {
     const usuario = this.requireAdmin(req);

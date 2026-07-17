@@ -255,16 +255,34 @@ export class LivePdvService {
   /**
    * Reservas ATIVAS por itemKey e por (itemKey, loja). Usado pra calcular
    * disponibilidade real durante a live (ERP − reservas em andamento).
+   *
+   * ESCOPO POR SESSÃO (bug 16/07): SÓ conta itens da PRÓPRIA live (sessionId).
+   * Sem esse filtro, itens de lives PASSADAS com o mesmo itemKey (paid/reserved
+   * presos) descontavam do estoque de hoje — caso DISNEY-014 54: 7 itens da live
+   * de 03/07 (5 paid já baixados no Giga + 2 reserved órfãos) zeravam as 6 peças
+   * físicas → o tamanho sumia da grade. Sem sessionId, cai na live ATIVA (a
+   * relevante nas operações ao vivo); sem live ativa, não desconta nada.
    */
-  private async committed(itemKeys: string[]): Promise<{
+  private async committed(itemKeys: string[], sessionId?: string): Promise<{
     byKey: Map<string, number>;
     byKeyStore: Map<string, number>;
   }> {
     const byKey = new Map<string, number>();
     const byKeyStore = new Map<string, number>();
     if (itemKeys.length === 0) return { byKey, byKeyStore };
+    let scopeSid = sessionId;
+    if (!scopeSid) {
+      const active = await (this.prisma as any).livePdvSession.findFirst({
+        where: { status: 'live' },
+        orderBy: { startedAt: 'desc' },
+        select: { id: true },
+      });
+      scopeSid = active?.id;
+    }
+    // Sem sessão de escopo → nada a descontar (grade mostra o estoque cheio).
+    if (!scopeSid) return { byKey, byKeyStore };
     const rows = await (this.prisma as any).livePdvItem.findMany({
-      where: { itemKey: { in: itemKeys }, status: { in: this.COMMITTED } },
+      where: { itemKey: { in: itemKeys }, status: { in: this.COMMITTED }, sessionId: scopeSid },
       select: { itemKey: true, originStoreCode: true, qty: true },
     });
     for (const r of rows as any[]) {
@@ -591,7 +609,31 @@ export class LivePdvService {
         .split(/\s+/)
         .filter((w) => w.length >= 3 && !/^\d+$/.test(w) && this.norm(w) !== qn);
       let escolhida: any[] | null = null;
-      if (palavrasDoTermo.length) {
+
+      // 0) BIPE (16/07, pedido do dono): quando o termo é um CÓDIGO que casa
+      // com UMA linha (a peça foi passada no leitor), a família certa é a DA
+      // PRÓPRIA PEÇA bipada — não a dominante. Sem isso, bipar uma peça da
+      // família menor de uma REF homônima trazia o produto da família maior
+      // ("passo o leitor e vem outro produto"). A descrição da peça bipada é
+      // a "similaridade" que desambigua.
+      const codBipado = String(q).replace(/\D/g, '').replace(/^0+/, '');
+      if (codBipado) {
+        const scanRow = productRows.find(
+          (r) => String(r.CODIGO ?? '').trim().replace(/^0+/, '') === codBipado,
+        );
+        if (scanRow) {
+          const famBipada = ProductSearchService.familiaOf(scanRow.DESCRICAOCOMPLETA);
+          const lista = porFamilia.get(famBipada);
+          if (lista?.length) {
+            escolhida = lista;
+            this.logger.log(
+              `[grade] REF ambígua "${qn}": código ${codBipado} bipado → ancorando na família da peça "${famBipada}" (${lista.length} linhas)`,
+            );
+          }
+        }
+      }
+
+      if (!escolhida && palavrasDoTermo.length) {
         for (const list of porFamilia.values()) {
           const casa = list.some((r) => {
             const d = this.norm(r.DESCRICAOCOMPLETA);
@@ -692,7 +734,7 @@ export class LivePdvService {
     const itemKeys = productRows.map((r) =>
       this.keyOf(String(r.REF || ref).trim(), r.COR, r.TAMANHO),
     );
-    const { byKey, byKeyStore } = await this.committed(Array.from(new Set(itemKeys)));
+    const { byKey, byKeyStore } = await this.committed(Array.from(new Set(itemKeys)), sessionId);
 
     // 4) Monta células da grade (cor × tamanho), deduplicando por REF|COR|TAM.
     const cellMap = new Map<string, any>();
@@ -1691,6 +1733,236 @@ export class LivePdvService {
     return { ok: true, customerName: cart.customerName || 'cliente' };
   }
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // SACOLA PELA DM (16/07) — a cliente monta o próprio carrinho pelo ManyChat.
+  // A cliente NÃO sai da live: manda "<número da legenda> <tamanho>" no direct,
+  // o bot confirma cada peça pelo NOME (some o erro de transcrição da
+  // apresentadora) e mostra a sacola. No FECHAR a sacola vai pra FILA DE
+  // REVISÃO — a cobrança só sai quando a apresentadora LIBERA (liberarCobranca).
+  // Isso é a "verificação antes de finalizar" exigida pelo dono.
+  //
+  // Gated por LIVE_DM_SELFCART=1 (default OFF — merge não muda nada na live).
+  // Segurança: identidade = @ que mandou a msg (ManyChat), então "cliente
+  // errada" não acontece; "peça errada" é pega pelo eco + revisão humana.
+  // ═══════════════════════════════════════════════════════════════════════
+
+  get selfCartEnabled(): boolean {
+    return String(process.env.LIVE_DM_SELFCART ?? '').trim() === '1';
+  }
+
+  private brl(cents: number): string {
+    return `R$ ${(Math.max(0, Number(cents) || 0) / 100).toFixed(2).replace('.', ',')}`;
+  }
+
+  /** Resumo curto da sacola pro DM (nomes + tamanho + total). */
+  private async sacolaResumo(cartId: string): Promise<string> {
+    const itens = await (this.prisma as any).livePdvItem.findMany({
+      where: { cartId, status: { in: this.COMMITTED } },
+      orderBy: { createdAt: 'asc' },
+      select: { descricao: true, refCode: true, cor: true, tamanho: true, qty: true, priceCents: true },
+    });
+    if (!itens.length) return 'Sua sacola está vazia. Manda o número da peça + tamanho (ex: 7 48).';
+    const linhas = (itens as any[]).map((it, i) => {
+      const nome = (it.descricao || it.refCode || 'peça').toString().trim();
+      const det = [it.cor, it.tamanho].filter(Boolean).join(' ');
+      return `${i + 1}) ${nome}${det ? ` — ${det}` : ''} · ${this.brl(it.priceCents * (it.qty || 1))}`;
+    });
+    const total = (itens as any[]).reduce((s, it) => s + (it.priceCents || 0) * (it.qty || 1), 0);
+    return `🛍️ Sua sacola:\n${linhas.join('\n')}\n\nTotal: ${this.brl(total)}`;
+  }
+
+  /**
+   * Webhook do ManyChat: recebe a mensagem da cliente no DM e responde.
+   * Retorna SEMPRE { reply } (texto pro ManyChat mandar de volta). Nunca lança
+   * pro webhook — erro vira mensagem amigável (o ManyChat não trava o flow).
+   */
+  async manychatInbound(input: {
+    ig?: string | null;
+    phone?: string | null;
+    name?: string | null;
+    text?: string | null;
+    sid?: string | null;
+  }): Promise<{ reply: string; cartId?: string; awaitingReview?: boolean }> {
+    if (!this.selfCartEnabled) {
+      return { reply: 'A sacola pela DM está desativada no momento. Fala com a gente que a gente monta pra você. 💛' };
+    }
+    const ig = String(input.ig || '').trim().replace(/^@/, '');
+    const raw = String(input.text || '').trim();
+    if (!raw) return { reply: 'Manda o número da peça + tamanho (ex: 7 48). Ou digite SACOLA pra ver o que já tem.' };
+
+    // Vincula o subscriber do ManyChat (idempotente) — sem isso, a apresentadora
+    // não consegue mandar o link no liberar (chargeCartViaDm precisa do vínculo).
+    if (ig && input.sid) {
+      await this.upsertManychatLink({
+        sid: String(input.sid),
+        ig,
+        name: input.name || undefined,
+        phone: input.phone || undefined,
+      }).catch(() => null);
+    }
+
+    // Sessão ativa
+    const session = await (this.prisma as any).livePdvSession.findFirst({
+      where: { status: 'live' },
+      orderBy: { startedAt: 'desc' },
+      select: { id: true },
+    });
+    if (!session) return { reply: 'Não tem live rolando agora. Assim que começar, é só mandar o número da peça. 💛' };
+
+    // Comando normalizado (sem acento, upper)
+    const cmd = this.norm(raw);
+    const primeira = cmd.split(/\s+/)[0];
+
+    // Acha/gera o carrinho da @ (identidade = quem mandou a msg)
+    let cart: any = null;
+    if (ig) {
+      const found = await this.findActiveLiveCart({
+        customerInstagram: { equals: ig, mode: 'insensitive' },
+      });
+      cart = found.cart || null;
+    }
+
+    // Ajuda / lista
+    if (['AJUDA', 'HELP', 'MENU'].includes(primeira)) {
+      return { reply: 'Como comprar na live:\n• Manda o NÚMERO da peça + tamanho (ex: 7 48)\n• SACOLA — ver o que já tem\n• TIRAR 7 — remover uma peça\n• LISTA — números das peças\n• FECHAR — finalizar (a gente confere e te manda o link)' };
+    }
+    if (['LISTA', 'CATALOGO', 'CATÁLOGO', 'PECAS', 'PEÇAS'].includes(primeira)) {
+      const atalhos = await (this.prisma as any).livePdvAtalho.findMany({
+        where: { sessionId: session.id },
+        orderBy: { position: 'asc' },
+        take: 60,
+        select: { atalho: true, descricao: true },
+      });
+      if (!atalhos.length) return { reply: 'Ainda não tem peças numeradas nesta live. Aguarda a apresentadora. 💛' };
+      const linhas = (atalhos as any[]).map((a) => `${a.atalho} — ${(a.descricao || '').toString().trim() || 'peça'}`);
+      return { reply: `Peças da live:\n${linhas.join('\n')}\n\nManda o número + tamanho (ex: 7 48).` };
+    }
+
+    // SACOLA
+    if (['SACOLA', 'CARRINHO'].includes(primeira)) {
+      if (!cart) return { reply: 'Você ainda não tem sacola. Manda o número da peça + tamanho (ex: 7 48).' };
+      return { reply: await this.sacolaResumo(cart.id), cartId: cart.id };
+    }
+
+    // FECHAR → fila de revisão (NÃO manda link — verificação humana antes)
+    if (['FECHAR', 'FINALIZAR', 'PAGAR', 'FIM', 'ACABOU'].includes(primeira)) {
+      if (!cart) return { reply: 'Você ainda não tem sacola pra fechar. Manda o número da peça + tamanho (ex: 7 48).' };
+      const temItem = await (this.prisma as any).livePdvItem.count({
+        where: { cartId: cart.id, status: { in: this.COMMITTED } },
+      });
+      if (!temItem) return { reply: 'Sua sacola está vazia. Manda o número da peça + tamanho (ex: 7 48).' };
+      await (this.prisma as any).livePdvCart.update({
+        where: { id: cart.id },
+        data: { awaitingReview: true, clientClosedAt: new Date(), selfCart: true },
+      });
+      this.gateway.emitToLiveOps('live-pdv:cart-review', { cartId: cart.id });
+      const resumo = await this.sacolaResumo(cart.id);
+      return {
+        reply: `${resumo}\n\n✅ Sacola enviada pra conferência! Assim que a Lurd's confirmar, te mando o link de pagamento aqui. 💛`,
+        cartId: cart.id,
+        awaitingReview: true,
+      };
+    }
+
+    // TIRAR <número>
+    if (['TIRAR', 'REMOVER', 'REMOVE', 'CANCELA', 'CANCELAR'].includes(primeira)) {
+      if (!cart) return { reply: 'Você ainda não tem sacola.' };
+      const numero = cmd.split(/\s+/)[1];
+      if (!numero) return { reply: 'Qual número tirar? Ex: TIRAR 7.' };
+      const at = await this.acharAtalho(session.id, numero);
+      if (!at) return { reply: `Não achei a peça ${numero} na sua sacola.` };
+      const refBase = this.norm(at.refCode);
+      const itens = await (this.prisma as any).livePdvItem.findMany({
+        where: { cartId: cart.id, status: { in: this.COMMITTED } },
+        select: { id: true, refCode: true },
+      });
+      const alvo = (itens as any[]).filter((it) => this.norm(it.refCode) === refBase);
+      if (!alvo.length) return { reply: `A peça ${numero} não está na sua sacola.` };
+      for (const it of alvo) await this.cancelItem(it.id, 'removido pela cliente (DM)').catch(() => null);
+      return { reply: `Ok, tirei a peça ${numero}. \n\n${await this.sacolaResumo(cart.id)}`, cartId: cart.id };
+    }
+
+    // ADD — "<número> <tamanho>" (ou só número → pede o tamanho)
+    const partes = cmd.split(/\s+/).filter(Boolean);
+    const numero = partes[0];
+    if (!/^\d{1,4}[A-Z]?$/.test(numero)) {
+      return { reply: 'Não entendi. Manda o NÚMERO da peça + tamanho (ex: 7 48), ou digite AJUDA.' };
+    }
+    const at = await this.acharAtalho(session.id, numero);
+    if (!at) return { reply: `Não achei a peça ${numero}. Confere o número que a apresentadora falou (ou digite LISTA).` };
+    const tamanho = partes.slice(1).join(' ').trim();
+    if (!tamanho) {
+      return { reply: `Peça ${numero}${at.descricao ? ` (${at.descricao})` : ''}: qual tamanho? Ex: ${numero} 48.` };
+    }
+
+    // Garante carrinho (cria com a identidade da @ se ainda não tem)
+    try {
+      if (!cart) {
+        cart = await this.ensureCart(session.id, {
+          id: null,
+          name: (input.name || ig || 'Cliente da Live').toString().trim(),
+          phone: String(input.phone || '').replace(/\D/g, ''),
+          instagram: ig || null,
+        } as any);
+      }
+      const res = await this.addItem({
+        sessionId: session.id,
+        cartId: cart.id,
+        refCode: at.refCode,
+        cor: at.cor || null,
+        tamanho,
+        qty: 1,
+      });
+      await (this.prisma as any).livePdvCart.update({
+        where: { id: cart.id },
+        data: { selfCart: true, awaitingReview: false },
+      }).catch(() => null);
+      const nome = (res?.item?.descricao || at.descricao || at.refCode || 'peça').toString().trim();
+      return {
+        reply: `✅ ${nome} — ${at.cor ? at.cor + ' ' : ''}${tamanho} na sua sacola.\n\n${await this.sacolaResumo(cart.id)}\n\nManda mais ou digite FECHAR.`,
+        cartId: cart.id,
+      };
+    } catch (e: any) {
+      const msg = String(e?.message || e || '').toLowerCase();
+      if (msg.includes('estoque')) {
+        return { reply: `Poxa, a peça ${numero} no ${tamanho} está sem estoque. 😔 Tenta outro tamanho ou outra peça.` };
+      }
+      return { reply: `Não consegui adicionar a peça ${numero} no ${tamanho}. Confere o tamanho (ex: ${numero} 48) ou digite LISTA.` };
+    }
+  }
+
+  /** Acha a legenda (atalho) tolerando zeros à esquerda, igual ao searchGrade. */
+  private async acharAtalho(sessionId: string, numeroRaw: string): Promise<any | null> {
+    const key = this.normAtalho(numeroRaw);
+    const cand = new Set<string>([key]);
+    if (/^\d+$/.test(key)) {
+      const semZeros = key.replace(/^0+/, '');
+      if (semZeros) cand.add(semZeros);
+      cand.add(key.padStart(2, '0'));
+    }
+    return (this.prisma as any).livePdvAtalho.findFirst({
+      where: { sessionId, atalho: { in: Array.from(cand) } },
+    });
+  }
+
+  /**
+   * LIBERAR COBRANÇA — a apresentadora confere a sacola fechada pela cliente e
+   * libera: tira da fila de revisão e manda o link de pagamento pela DM.
+   * É a "verificação antes de finalizar". Sem isso, a cobrança nunca sai
+   * sozinha de uma sacola montada pela cliente.
+   */
+  async liberarCobranca(cartId: string) {
+    const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
+    if (!cart) throw new NotFoundException('Carrinho não encontrado');
+    await (this.prisma as any).livePdvCart.update({
+      where: { id: cartId },
+      data: { awaitingReview: false },
+    });
+    const r = await this.chargeCartViaDm(cartId);
+    this.logger.log(`[live-dm] sacola ${cartId} (${cart.customerName || 's/nome'}) revisada e liberada → link enviado`);
+    return { ...r };
+  }
+
   /**
    * Cobrança em massa AUTOMÁTICA via DM (API ManyChat): pra cada carrinho
    * aberto da sessão com peças, manda a mensagem com o link curto /p/ pra
@@ -1839,6 +2111,58 @@ export class LivePdvService {
   }
 
   /**
+   * RECORRENTES (15/07): clientes que já criaram carrinho em QUALQUER live
+   * (mesmo sem pagar). Busca por nome/@/telefone nos snapshots dos carrinhos.
+   * Dedup por cliente (fica o mais recente), exclui quem já está na live atual.
+   * A operadora puxa pra live com 1 clique (add-customer). Sem termo → mostra
+   * os mais recentes.
+   */
+  async recurringLiveCustomers(sessionId: string, term?: string) {
+    const q = String(term || '').trim();
+    const igq = q.replace(/^@/, '');
+    const digits = q.replace(/\D/g, '');
+    const carts = await (this.prisma as any).livePdvCart.findMany({
+      where: {
+        customerId: { not: null },
+        ...(q
+          ? {
+              OR: [
+                { customerName: { contains: q, mode: 'insensitive' } },
+                { customerInstagram: { contains: igq, mode: 'insensitive' } },
+                ...(digits ? [{ customerPhone: { contains: digits } }] : []),
+              ],
+            }
+          : {}),
+      },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        customerId: true, customerName: true, customerInstagram: true,
+        customerPhone: true, createdAt: true, sessionId: true,
+      },
+      take: 500,
+    });
+    // Clientes que JÁ têm carrinho na live atual (não repropor).
+    const naSessao = new Set(
+      (carts as any[]).filter((c) => c.sessionId === sessionId).map((c) => c.customerId),
+    );
+    const seen = new Set<string>();
+    const out: any[] = [];
+    for (const c of carts as any[]) {
+      if (c.sessionId === sessionId || naSessao.has(c.customerId) || seen.has(c.customerId)) continue;
+      seen.add(c.customerId);
+      out.push({
+        customerId: c.customerId,
+        name: c.customerName || null,
+        instagram: c.customerInstagram || null,
+        phone: c.customerPhone || null,
+        lastAt: c.createdAt,
+      });
+      if (out.length >= 30) break;
+    }
+    return out;
+  }
+
+  /**
    * Puxa uma cliente já existente (de live anterior) para a sessão de live
    * ATUAL: cria (ou reusa) o carrinho aberto dela na sessão. Usa os dados mais
    * frescos do cadastro mestre, com fallback no snapshot do último carrinho.
@@ -1916,7 +2240,7 @@ export class LivePdvService {
     // Estoque por loja + reservas ativas → disponibilidade real
     const { byStore, bestCodigo } = await this.erpStockByStoreForItem(ref, cor, tam);
     if (byStore.size === 0) throw new BadRequestException('Produto sem estoque em nenhuma loja');
-    const { byKeyStore } = await this.committed([itemKey]);
+    const { byKeyStore } = await this.committed([itemKey], session.id);
 
     // Monta entradas pro RoutingEngine (sku sintético = itemKey)
     const storesMap = await this.storesMap();
@@ -2061,6 +2385,36 @@ export class LivePdvService {
     await (this.prisma as any).livePdvCart.update({ where: { id: cartId }, data });
   }
 
+  /**
+   * LEGENDA POR ITEM (16/07, pedido do dono): mapeia cada item do carrinho pro
+   * número da legenda (atalho) da live — pra conferir a peça na linha do
+   * carrinho. Casa por refCode (+cor quando a legenda fixa a cor).
+   */
+  private async atalhosByRef(sessionId: string): Promise<Map<string, any[]>> {
+    const byRef = new Map<string, any[]>();
+    if (!sessionId) return byRef;
+    const atalhos = await (this.prisma as any).livePdvAtalho
+      .findMany({ where: { sessionId }, select: { atalho: true, refCode: true, cor: true } })
+      .catch(() => []);
+    for (const a of atalhos as any[]) {
+      const k = this.norm(a.refCode);
+      if (!byRef.has(k)) byRef.set(k, []);
+      byRef.get(k)!.push(a);
+    }
+    return byRef;
+  }
+
+  private legendaDeItem(it: any, byRef: Map<string, any[]>): string | null {
+    const cands = byRef.get(this.norm(it?.refCode)) || [];
+    if (!cands.length) return null;
+    const corN = this.norm(it?.cor);
+    const match =
+      cands.find((a: any) => a.cor && this.norm(a.cor) === corN) ||
+      cands.find((a: any) => !a.cor) ||
+      cands[0];
+    return match?.atalho ?? null;
+  }
+
   async getCart(cartId: string) {
     const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
     if (!cart) throw new NotFoundException('Carrinho não encontrado');
@@ -2091,7 +2445,9 @@ export class LivePdvService {
     if (!hasManychat) {
       hasManychat = !!(await this.lookupManychatSidByIg(cart.customerInstagram));
     }
-    return { ...cart, items, hasManychat };
+    const byRef = await this.atalhosByRef(cart.sessionId);
+    const itemsLeg = items.map((it: any) => ({ ...it, legenda: this.legendaDeItem(it, byRef) }));
+    return { ...cart, items: itemsLeg, hasManychat };
   }
 
   // Statuses que contam como "já pago" (não deixa cobrar de novo).
@@ -2235,9 +2591,11 @@ export class LivePdvService {
       });
       for (const s of subs as any[]) linkedIg.add(s.igUsername);
     }
+    // Legenda por item (mesma sessão pra todos os carrinhos → 1 query só).
+    const byRef = await this.atalhosByRef(sessionId);
     return carts.map((c: any) => ({
       ...c,
-      items: byCart.get(c.id) || [],
+      items: (byCart.get(c.id) || []).map((it: any) => ({ ...it, legenda: this.legendaDeItem(it, byRef) })),
       hasManychat:
         !!(c.customerId && linked.has(c.customerId)) ||
         linkedIg.has(String(c.customerInstagram || '').trim().replace(/^@/, '').toLowerCase()),
@@ -2369,7 +2727,7 @@ export class LivePdvService {
     if (!store) throw new BadRequestException('Loja não encontrada');
     // Valida estoque disponível na nova loja
     const { byStore } = await this.erpStockByStoreForItem(item.refCode, item.cor, item.tamanho);
-    const { byKeyStore } = await this.committed([item.itemKey]);
+    const { byKeyStore } = await this.committed([item.itemKey], item.sessionId);
     const raw = byStore.get(storeCode) || 0;
     const reserved = byKeyStore.get(`${item.itemKey}::${storeCode}`) || 0;
     // desconta a própria reserva atual se já era nessa loja (não é o caso, mas seguro)

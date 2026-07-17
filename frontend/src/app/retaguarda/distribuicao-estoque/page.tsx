@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 
 /**
  * /retaguarda/distribuicao-estoque
@@ -1162,7 +1163,7 @@ function RealignDrawer({
 
   return (
     <>
-      <div className="fixed inset-0 bg-black/40 z-30 backdrop-blur-sm" onClick={onClose} />
+      <div className="fixed inset-0 bg-black/40 z-30 backdrop-blur-sm" {...overlayClose(onClose)} />
       <aside className="fixed inset-0 bg-slate-50 shadow-2xl z-40 overflow-y-auto">
         {/* Header — fixo no topo */}
         <div className="sticky top-0 bg-white border-b border-slate-200 px-5 py-3 z-20">
@@ -2852,7 +2853,7 @@ function RefDetailsDrawer({
 
   return (
     <>
-      <div className="fixed inset-0 bg-black/40 z-30 backdrop-blur-sm" onClick={onClose} />
+      <div className="fixed inset-0 bg-black/40 z-30 backdrop-blur-sm" {...overlayClose(onClose)} />
       <aside className="fixed inset-0 bg-white shadow-2xl z-40 overflow-y-auto">
         <div className="sticky top-0 bg-white border-b border-slate-200 px-5 py-3 flex items-center justify-between z-10">
           <div>
@@ -3114,7 +3115,7 @@ function ConsolidateDrawer({
 
   return (
     <>
-      <div className="fixed inset-0 bg-black/40 z-30 backdrop-blur-sm" onClick={onClose} />
+      <div className="fixed inset-0 bg-black/40 z-30 backdrop-blur-sm" {...overlayClose(onClose)} />
       <aside className="fixed inset-0 bg-white shadow-2xl z-40 overflow-y-auto">
         <div className="sticky top-0 bg-white border-b border-slate-200 px-5 py-3 z-10">
           <div className="flex items-center justify-between">

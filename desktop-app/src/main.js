@@ -41,12 +41,23 @@ const store = new Store({
 // PERSISTIDA na config (default não corrige), então reescrevemos o host aqui.
 // Lista explícita de hosts legados pra não atropelar URL custom (ex.: dev local).
 const LEGACY_HOSTS = /^https?:\/\/(flowops-lite\.vercel\.app|app-lurds\.vercel\.app|app\.lurds\.com\.br|(www\.)?lurdsplussize\.com\.br)/i;
+const CANONICAL = 'https://crm.lurdsplussize.com.br';
+
+// Reescreve QUALQUER host legado pro domínio canônico (crm). Sem host/vazio →
+// cai no default. Chamado em TODO load (não só uma vez) pra self-heal mesmo se
+// a config velha persistir — o app antigo abria a raiz pública (sem sessão).
+function forceCanonicalUrl(u) {
+  const s = String(u || '').trim();
+  if (!s) return `${CANONICAL}/minha-loja`;
+  if (LEGACY_HOSTS.test(s)) return s.replace(LEGACY_HOSTS, CANONICAL);
+  return s;
+}
 {
   const saved = String(store.get('url') || '');
-  if (LEGACY_HOSTS.test(saved)) {
-    const migrated = saved.replace(LEGACY_HOSTS, 'https://crm.lurdsplussize.com.br');
-    store.set('url', migrated);
-    log.info(`[config] URL migrada pro novo dominio: ${saved} -> ${migrated}`);
+  const canon = forceCanonicalUrl(saved);
+  if (canon !== saved) {
+    store.set('url', canon);
+    log.info(`[config] URL normalizada pro dominio canonico: ${saved} -> ${canon}`);
   }
 }
 
@@ -98,7 +109,11 @@ function applyAutoLaunch(enabled) {
 
 // ----------------- Janela principal -----------------
 function createWindow() {
-  const url = parseUrlArg() || store.get('url');
+  // forceCanonicalUrl em TODO load: se a config velha ainda tiver host legado,
+  // corrige na hora (o app antigo abria flowops-lite.vercel.app = raiz pública
+  // sem sessão). Persiste a versão corrigida.
+  const url = forceCanonicalUrl(parseUrlArg() || store.get('url'));
+  try { store.set('url', url); } catch {}
   const startHidden = process.argv.includes('--hidden');
 
   mainWindow = new BrowserWindow({

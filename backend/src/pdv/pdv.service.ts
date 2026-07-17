@@ -1233,7 +1233,7 @@ export class PdvService {
     return { ...r, voucher: { code, valor, validade: validade.toISOString() } };
   }
 
-  async updateItem(input: { saleId: string; itemId: string; qty?: number; desconto?: number; password?: string; motivo?: string; excludePromo?: boolean }) {
+  async updateItem(input: { saleId: string; itemId: string; qty?: number; desconto?: number; password?: string; motivo?: string; excludePromo?: boolean; forcePromo?: boolean }) {
     const item = await (this.prisma as any).pdvSaleItem.findUnique({
       where: { id: input.itemId },
     });
@@ -1256,9 +1256,15 @@ export class PdvService {
     // =false → re-inclui na promoção (volta ao automático, tag null).
     const excluindoPromo = input.excludePromo === true;
     const reincluindoPromo = input.excludePromo === false;
+    // FORÇAR PROMO (15/07): botão AZUL — coloca o item BÁSICO na promoção
+    // (ignora só o filtro básico; data/coleção seguem valendo no recálculo).
+    const forcandoPromo = input.forcePromo === true;
+    const desforcandoPromo = input.forcePromo === false;
 
     const newDesconto = excluindoPromo
       ? 0
+      : forcandoPromo || desforcandoPromo
+      ? (item.desconto || 0) // o applyAutoDiscounts recalcula
       : input.desconto != null ? Math.max(0, input.desconto) : (item.desconto || 0);
     const bruto = item.precoUnit * newQty;
     if (newDesconto > bruto) {
@@ -1268,7 +1274,8 @@ export class PdvService {
     // Desconto MANUAL (>0) — só conta como manual se NÃO está excluindo/reincluindo
     // a promoção. marca 'MANUAL' pra applyAutoDiscounts não sobrescrever.
     const isManualDiscount =
-      !excluindoPromo && !reincluindoPromo && input.desconto != null && newDesconto > 0;
+      !excluindoPromo && !reincluindoPromo && !forcandoPromo && !desforcandoPromo &&
+      input.desconto != null && newDesconto > 0;
 
     // MD-1: desconto manual por item em faixas (% sobre o BRUTO do item).
     //   0–7% livre · >7–10% senha CAIXA · >10% senha GERENTE + justificativa.
@@ -1286,13 +1293,21 @@ export class PdvService {
 
     const newTag = excluindoPromo
       ? 'SEM_PROMO'
-      : reincluindoPromo
-      ? null
+      : reincluindoPromo || forcandoPromo || desforcandoPromo
+      ? null // volta pro automático — o applyAutoDiscounts define a tag final
       : isManualDiscount
       ? 'MANUAL'
       : input.desconto != null && newDesconto === 0
       ? null
       : item.promoTag;
+
+    // forcarPromo: liga no forçar, desliga no des-forçar E no excluir (tirar da
+    // promo un-força também). Edição de qty/desconto não mexe na flag.
+    const newForcar = forcandoPromo
+      ? true
+      : desforcandoPromo || excluindoPromo
+      ? false
+      : (item.forcarPromo ?? false);
 
     const updated = await (this.prisma as any).pdvSaleItem.update({
       where: { id: item.id },
@@ -1301,6 +1316,7 @@ export class PdvService {
         desconto: newDesconto,
         total: bruto - newDesconto,
         promoTag: newTag,
+        forcarPromo: newForcar,
       },
     });
     await this.applyAutoDiscounts(input.saleId);
@@ -1495,8 +1511,11 @@ export class PdvService {
       for (const it of items as any[]) {
         if (isManual(it)) continue; // preserva manual
         const bruto = it.precoUnit * it.qty;
-        // Peça básica: fica fora da promoção de 50% (preço cheio)
-        if (isBasico(it)) {
+        // Peça básica: fica fora da promoção de 50% (preço cheio) — SALVO se a
+        // operadora FORÇOU a entrada (botão azul). Forçar ignora só o filtro
+        // básico; data e coleção (-INV/-VER) continuam decidindo abaixo, então
+        // um básico NOVO forçado não ganha desconto (cai no 'Sem promo · ano').
+        if (isBasico(it) && !it.forcarPromo) {
           updates.push({ id: it.id, desconto: 0, total: bruto, tag: 'Básico · sem promo' });
           continue;
         }
@@ -2260,6 +2279,35 @@ export class PdvService {
   }
 
   /**
+   * Um item baixa estoque no ERP? Exclui SÓ o que não é produto de catálogo:
+   *   - sku vazio
+   *   - sku 'MANUAL-...' e ref 'MANUAL' → linha avulsa (vale presente, peça sem
+   *     cadastro, ajuste manual) — não existe no estoque.
+   *   - ref/promoTag 'MARCADO' → item "provar em casa", estoque já tratado.
+   *
+   * IMPORTANTE (16/07): NÃO excluir por promoTag==='MANUAL'. Produto real que
+   * recebeu desconto manual por item ganha promoTag='MANUAL' (pra fugir do
+   * applyAutoDiscounts) mas TEM sku/ref reais e PRECISA baixar estoque. O filtro
+   * antigo pulava esses → estoque fantasma (ex: casaco 700961/46 em São José,
+   * vendido 14/07 e ainda em estoque). Como a venda marcava stockDecreasedAt
+   * mesmo assim, o reconcile normal nunca achava.
+   */
+  private isStockEligibleItem(it: any): boolean {
+    const sku = String(it?.sku || '').trim();
+    if (!sku) return false;
+    if (sku.startsWith('MANUAL-')) return false;
+    if (it?.ref === 'MANUAL') return false;
+    if (it?.ref === 'MARCADO') return false;
+    if (it?.promoTag === 'MARCADO') return false;
+    return true;
+  }
+
+  /** Item real (sku/ref de catálogo) que só virou MANUAL por desconto manual. */
+  private isManualPricedRealItem(it: any): boolean {
+    return it?.promoTag === 'MANUAL' && this.isStockEligibleItem(it);
+  }
+
+  /**
    * PASSO 2 do sync ERP: baixa de estoque no Wincred.
    * PULA items MANUAL/MARCADO. allowNegative + skipNotFound (divergências não
    * bloqueiam). Marca sale.stockDecreasedAt no sucesso — mesma flag usada pelo
@@ -2287,22 +2335,17 @@ export class PdvService {
       }
 
       const saleItems = (sale.items || []) as any[];
-      const stockItems = saleItems
-        .filter((it: any) => {
-          const sku = String(it.sku || '').trim();
-          if (!sku) return false;
-          if (sku.startsWith('MANUAL-')) return false;
-          if (it.ref === 'MANUAL') return false;
-          if (it.ref === 'MARCADO') return false;
-          if (it.promoTag === 'MARCADO') return false;
-          if (it.promoTag === 'MANUAL') return false;
-          return true;
-        })
-        .map((it: any) => ({
-          sku: String(it.sku || '').trim(),
-          qty: Math.max(1, Number(it.qty) || 1),
-          storeCode: sale.storeCode,
-        }));
+      // Itens que BAIXAM estoque. NOTA (16/07): NÃO filtrar por
+      // promoTag==='MANUAL' — isso pulava produto REAL que só recebeu desconto
+      // manual por item (sku/ref reais), deixando estoque fantasma. O item
+      // avulso de verdade (vale presente / sem cadastro) já é excluído pelo
+      // sku 'MANUAL-...' e ref 'MANUAL'. Ver isStockEligibleItem().
+      const eligible = saleItems.filter((it: any) => this.isStockEligibleItem(it));
+      const stockItems = eligible.map((it: any) => ({
+        sku: String(it.sku || '').trim(),
+        qty: Math.max(1, Number(it.qty) || 1),
+        storeCode: sale.storeCode,
+      }));
 
       if (stockItems.length === 0) {
         try {
@@ -2329,10 +2372,20 @@ export class PdvService {
         `(loja ${sale.storeCode}) em ${r.attempts || 1} tentativa(s).`,
       );
       try {
+        const nowStamp = new Date();
         await (this.prisma as any).pdvSale.update({
           where: { id: sale.id },
-          data: { stockDecreasedAt: new Date() },
+          data: { stockDecreasedAt: nowStamp },
         });
+        // Marca a flag POR ITEM nos que baixaram — o backfill de manuais
+        // (reconcileManualStockBacklog) usa isso pra não re-baixar.
+        const ids = eligible.map((it: any) => it.id).filter(Boolean);
+        if (ids.length > 0) {
+          await (this.prisma as any).pdvSaleItem.updateMany({
+            where: { id: { in: ids } },
+            data: { stockDecreasedAt: nowStamp },
+          });
+        }
       } catch { /* segue */ }
       return { ok: true };
     } catch (e: any) {
@@ -2633,7 +2686,7 @@ export class PdvService {
       take: limit,
       include: {
         items: {
-          select: { sku: true, qty: true, ref: true, promoTag: true },
+          select: { id: true, sku: true, qty: true, ref: true, promoTag: true },
         },
       },
     });
@@ -2645,22 +2698,14 @@ export class PdvService {
 
     for (const sale of sales as any[]) {
       try {
-        const stockItems = (sale.items as any[])
-          .filter((it) => {
-            const sku = String(it.sku || '').trim();
-            if (!sku) return false;
-            if (sku.startsWith('MANUAL-')) return false;
-            if (it.ref === 'MANUAL') return false;
-            if (it.ref === 'MARCADO') return false;
-            if (it.promoTag === 'MANUAL') return false;
-            if (it.promoTag === 'MARCADO') return false;
-            return true;
-          })
-          .map((it) => ({
-            sku: String(it.sku || '').trim(),
-            qty: Math.max(1, Number(it.qty) || 1),
-            storeCode: sale.storeCode,
-          }));
+        // Mesmo critério do bipe (isStockEligibleItem): produto real com
+        // desconto manual (promoTag='MANUAL' + sku/ref reais) TAMBÉM baixa.
+        const eligible = (sale.items as any[]).filter((it) => this.isStockEligibleItem(it));
+        const stockItems = eligible.map((it) => ({
+          sku: String(it.sku || '').trim(),
+          qty: Math.max(1, Number(it.qty) || 1),
+          storeCode: sale.storeCode,
+        }));
 
         if (stockItems.length === 0) {
           if (!dryRun) {
@@ -2699,10 +2744,18 @@ export class PdvService {
           });
         } else {
           aplicados++;
+          const nowStamp = new Date();
           await (this.prisma as any).pdvSale.update({
             where: { id: sale.id },
-            data: { stockDecreasedAt: new Date() },
+            data: { stockDecreasedAt: nowStamp },
           });
+          const ids = eligible.map((it: any) => it.id).filter(Boolean);
+          if (ids.length > 0) {
+            await (this.prisma as any).pdvSaleItem.updateMany({
+              where: { id: { in: ids } },
+              data: { stockDecreasedAt: nowStamp },
+            });
+          }
         }
       } catch (e: any) {
         falhas.push({
@@ -2726,6 +2779,157 @@ export class PdvService {
       aplicados,
       finished: (sales as any[]).length < limit,
     };
+  }
+
+  // ═════════════════════════════════════════════════════════════════════════
+  // BACKFILL de ESTOQUE FANTASMA "MANUAL" (16/07)
+  //
+  // Caso invisível ao reconcile normal: produto REAL (sku/ref de catálogo)
+  // vendido com DESCONTO MANUAL por item ganhou promoTag='MANUAL' e o filtro
+  // antigo o excluía da baixa — MAS a venda marcava sale.stockDecreasedAt do
+  // mesmo jeito. Resultado: item nunca baixou e o reconcile (que busca
+  // sale.stockDecreasedAt=null) nunca o via.
+  //
+  // Aqui a busca é POR ITEM: promoTag='MANUAL' + sku/ref reais + a flag NOVA
+  // item.stockDecreasedAt=null. Idempotente via essa flag por item — a baixa
+  // do bipe/reconcile (já corrigidos) também a marca, então nada roda 2x.
+  // ═════════════════════════════════════════════════════════════════════════
+  async reconcileManualStockBacklog(input: {
+    sinceIso?: string;
+    untilIso?: string;
+    storeCode?: string;
+    dryRun?: boolean;
+    limit?: number;
+  }): Promise<{
+    mode: 'dry-run' | 'executed';
+    sinceIso: string;
+    untilIso: string;
+    storeCode: string | null;
+    itemsEncontrados: number;
+    qtdTotal: number;
+    porLoja: Record<string, { itens: number; qtd: number }>;
+    amostra: Array<{ saleId: string; storeCode: string; sku: string; ref: string | null; qty: number; finalizedAt: string | null }>;
+    aplicados: number;
+    falhas: Array<{ itemId: string; sku: string; storeCode: string; error: string }>;
+    finished: boolean;
+  }> {
+    const sinceIso = input.sinceIso
+      || new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString();
+    const since = new Date(sinceIso);
+    const untilIso = input.untilIso || new Date().toISOString();
+    const until = new Date(untilIso);
+    const limit = Math.max(1, Math.min(2000, input.limit || 1000));
+    const dryRun = !!input.dryRun;
+    const storeCode = input.storeCode?.trim() || null;
+
+    // Itens MANUAL de produto real ainda não baixados, em vendas finalizadas
+    // (não treino) na janela. O sku/ref reais separam do avulso (MANUAL-...).
+    const where: any = {
+      promoTag: 'MANUAL',
+      stockDecreasedAt: null,
+      NOT: [
+        { sku: { startsWith: 'MANUAL-' } },
+        { ref: 'MANUAL' },
+        { ref: 'MARCADO' },
+      ],
+      sale: {
+        is: {
+          status: 'finalized',
+          isTraining: false,
+          finalizedAt: { gte: since, lte: until },
+          ...(storeCode ? { storeCode } : {}),
+        },
+      },
+    };
+
+    const items: any[] = await (this.prisma as any).pdvSaleItem.findMany({
+      where,
+      orderBy: { createdAt: 'asc' },
+      take: limit,
+      select: {
+        id: true, sku: true, ref: true, qty: true,
+        sale: { select: { id: true, storeCode: true, finalizedAt: true } },
+      },
+    });
+
+    const porLoja: Record<string, { itens: number; qtd: number }> = {};
+    let qtdTotal = 0;
+    for (const it of items) {
+      const loja = String(it.sale?.storeCode || '??');
+      const q = Math.max(1, Number(it.qty) || 1);
+      qtdTotal += q;
+      if (!porLoja[loja]) porLoja[loja] = { itens: 0, qtd: 0 };
+      porLoja[loja].itens += 1;
+      porLoja[loja].qtd += q;
+    }
+    const amostra = items.slice(0, 30).map((it) => ({
+      saleId: it.sale?.id,
+      storeCode: it.sale?.storeCode,
+      sku: it.sku,
+      ref: it.ref,
+      qty: it.qty,
+      finalizedAt: it.sale?.finalizedAt ? new Date(it.sale.finalizedAt).toISOString() : null,
+    }));
+
+    const base = {
+      sinceIso, untilIso, storeCode,
+      itemsEncontrados: items.length,
+      qtdTotal, porLoja, amostra,
+      finished: items.length < limit,
+    };
+
+    if (dryRun) {
+      return { mode: 'dry-run', ...base, aplicados: 0, falhas: [] };
+    }
+
+    if (!this.erp.isWriteEnabled) {
+      return {
+        mode: 'executed', ...base, aplicados: 0,
+        falhas: items.map((it) => ({
+          itemId: it.id, sku: it.sku, storeCode: it.sale?.storeCode,
+          error: 'ERP_WRITE_ENABLED=false — sem permissao pra baixar estoque',
+        })),
+      };
+    }
+
+    let aplicados = 0;
+    const falhas: Array<{ itemId: string; sku: string; storeCode: string; error: string }> = [];
+
+    // Baixa item a item (cada um pode ser de loja diferente) e marca a flag
+    // POR ITEM só quando a baixa dá certo — retry seguro.
+    for (const it of items) {
+      const loja = String(it.sale?.storeCode || '').trim();
+      const sku = String(it.sku || '').trim();
+      const qty = Math.max(1, Number(it.qty) || 1);
+      if (!loja || !sku) {
+        falhas.push({ itemId: it.id, sku, storeCode: loja, error: 'sku/loja ausente' });
+        continue;
+      }
+      try {
+        const r = await this.erp.decreaseStock(
+          [{ sku, qty, storeCode: loja }],
+          { allowNegative: true, skipNotFound: true },
+        );
+        if (!r.success) {
+          falhas.push({ itemId: it.id, sku, storeCode: loja, error: r.error || 'falha desconhecida' });
+          continue;
+        }
+        await (this.prisma as any).pdvSaleItem.update({
+          where: { id: it.id },
+          data: { stockDecreasedAt: new Date() },
+        });
+        aplicados++;
+      } catch (e: any) {
+        falhas.push({ itemId: it.id, sku, storeCode: loja, error: e?.message || String(e) });
+      }
+    }
+
+    this.logger.log(
+      `[pdv/reconcile-manual] ${aplicados} item(s) MANUAL baixado(s), ${falhas.length} falha(s) ` +
+      `(janela ${sinceIso}..${untilIso})`,
+    );
+
+    return { mode: 'executed', ...base, aplicados, falhas };
   }
 
   /**

@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 
 /**
  * /retaguarda/contas-pagar — Contas a Pagar 100% Flow (mockup aprovado 11/07).
@@ -158,9 +159,6 @@ function Painel({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
   };
 
   // ── Melhorias 17/07 (aprovadas 1,2,3,5,7,8,9) ──
-  const [sel, setSel] = useState<Set<string>>(new Set());
-  useEffect(() => { setSel(new Set()); }, [data]);
-  const toggleSel = (id: string) => setSel((p) => { const n = new Set(p); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const lojaAbbr = (code: string) => {
     const l: any = lojas.find((x: any) => x.code === code);
     if (!l?.nome) return code;
@@ -179,7 +177,7 @@ function Painel({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
     }
     return m;
   }, [data]);
-  const selRows = (data?.rows || []).filter((r: any) => sel.has(r.id));
+  const selRows = (data?.rows || []).filter((r: any) => selecionadas.has(r.id) && r.status === 'aberta');
   const selCents = selRows.reduce((s: number, r: any) => s + (Number(r.valorCents) || 0), 0);
   const [pagandoLote, setPagandoLote] = useState(false);
   const pagarSelecionadas = async () => {
@@ -193,6 +191,7 @@ function Painel({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
     }
     setPagandoLote(false);
     avisar(ok === selRows.length ? 'ok' : 'erro', `${ok}/${selRows.length} conta(s) paga(s)`);
+    setSelecionadas(new Set());
     carregar(); carregarBase();
   };
   // Higiene: vencidas há mais de 30 dias (nesta página)
@@ -207,6 +206,41 @@ function Painel({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
     else if (qual === 'prox7') { setStatus('pendentes'); atalho(7); }
     else if (qual === 'pagasMes') { setStatus('pagas'); atalho('mes'); }
     else { setStatus('pendentes'); setDe(''); setAte(''); }
+  };
+  // SELEÇÃO EM MASSA (14/07, pedido do dono): checkbox por lançamento +
+  // "selecionar todos" (da página atual) → excluir OU pagar de uma vez.
+  const [selecionadas, setSelecionadas] = useState<Set<string>>(new Set());
+  const [excluindoLote, setExcluindoLote] = useState(false);
+  const idsPagina: string[] = (data?.rows || []).map((r: any) => r.id);
+  const todasMarcadas = idsPagina.length > 0 && idsPagina.every((id) => selecionadas.has(id));
+  const toggleUma = (id: string) =>
+    setSelecionadas((prev) => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
+  const toggleTodas = () =>
+    setSelecionadas(todasMarcadas ? new Set() : new Set(idsPagina));
+  const excluirSelecionadas = async () => {
+    const ids = Array.from(selecionadas);
+    if (!ids.length) return;
+    if (!confirm(`Excluir ${ids.length} lançamento(s) selecionado(s)?\n\nFicam no histórico, com seu nome (mesma exclusão da lixeirinha).`)) return;
+    setExcluindoLote(true);
+    try {
+      const r = await api<any>('/admin/contas-pagar/excluir-lote', {
+        method: 'POST',
+        body: JSON.stringify({ ids }),
+      });
+      avisar('ok', `${r.excluidas} lançamento(s) excluído(s)${r.erros?.length ? ` · ${r.erros.length} com erro` : ''}`);
+      setSelecionadas(new Set());
+      carregar();
+      carregarBase();
+    } catch (e: any) {
+      avisar('erro', e?.message || 'Falha ao excluir em lote');
+    } finally {
+      setExcluindoLote(false);
+    }
   };
 
   return (
@@ -286,7 +320,15 @@ function Painel({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
           <table className="w-full text-sm min-w-[900px]">
             <thead>
               <tr className="bg-[#FAFAF7] text-[11px] uppercase tracking-wide text-slate-500 border-b border-[#E7E2D8]">
-                <th className="w-8 px-2 py-2" />
+                <th className="px-3 py-2 w-8">
+                  <input
+                    type="checkbox"
+                    checked={todasMarcadas}
+                    onChange={toggleTodas}
+                    title="Selecionar todos (da página)"
+                    className="h-4 w-4 accent-[#B8912B] cursor-pointer"
+                  />
+                </th>
                 <th className="text-left px-3 py-2">Vencimento</th>
                 <th className="text-left px-3 py-2">Beneficiário</th>
                 <th className="text-left px-3 py-2">Espécie</th>
@@ -315,11 +357,14 @@ function Painel({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
                     </td>
                   </tr>
                 )}
-                <tr key={r.id} className="border-b border-[#F1EDE3] hover:bg-[#FBF6E6]">
-                  <td className="px-2 py-2 text-center">
-                    {r.status === 'aberta' && (
-                      <input type="checkbox" checked={sel.has(r.id)} onChange={() => toggleSel(r.id)} className="w-4 h-4 accent-[#B8912B]" />
-                    )}
+                <tr key={r.id} className={`border-b border-[#F1EDE3] hover:bg-[#FBF6E6] ${selecionadas.has(r.id) ? 'bg-[#FBF6E6]' : ''}`}>
+                  <td className="px-3 py-2 w-8">
+                    <input
+                      type="checkbox"
+                      checked={selecionadas.has(r.id)}
+                      onChange={() => toggleUma(r.id)}
+                      className="h-4 w-4 accent-[#B8912B] cursor-pointer"
+                    />
                   </td>
                   <td className="px-3 py-2 whitespace-nowrap">
                     {r.status === 'paga' ? (
@@ -395,6 +440,16 @@ function Painel({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
                 className="px-3 py-1.5 rounded-lg border border-[#2E7D46] text-[#2E7D46] font-bold hover:bg-emerald-50"
               >✓ Baixar TODAS do filtro ({data.total})</button>
             )}
+            {selecionadas.size > 0 && (
+              <button
+                onClick={excluirSelecionadas}
+                disabled={excluindoLote}
+                className="px-3 py-1.5 rounded-lg bg-rose-600 text-white font-bold hover:bg-rose-700 disabled:opacity-50 flex items-center gap-1.5"
+              >
+                <Trash2 className="w-4 h-4" />
+                {excluindoLote ? 'Excluindo…' : `Excluir selecionadas (${selecionadas.size})`}
+              </button>
+            )}
           </span>
           <span className="flex items-center gap-2">
             <button disabled={page <= 1} onClick={() => setPage(page - 1)} className="px-3 py-1 rounded-lg border border-[#E7E2D8] disabled:opacity-40">‹</button>
@@ -404,13 +459,17 @@ function Painel({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
         </div>
       )}
 
-      {/* Barra de LOTE — visível ao marcar (aprovado 17/07) */}
-      {sel.size > 0 && (
+      {/* Barra de LOTE — visível ao marcar (aprovado 17/07): pagar OU excluir */}
+      {selecionadas.size > 0 && (
         <div className="fixed bottom-0 inset-x-0 z-30 bg-white border-t-2 border-[#2E7D46] shadow-2xl">
           <div className="max-w-7xl mx-auto px-4 py-3 flex items-center gap-3 text-sm">
-            <span className="font-bold text-slate-700">{sel.size} selecionada(s) · <span className="text-[#2E7D46]">{brl(selCents)}</span></span>
+            <span className="font-bold text-slate-700">{selecionadas.size} selecionada(s){selRows.length > 0 && <> · abertas <span className="text-[#2E7D46]">{brl(selCents)}</span></>}</span>
             <div className="flex-1" />
-            <button onClick={() => setSel(new Set())} className="px-4 py-2 rounded-xl border border-[#E7E2D8] text-slate-500 font-bold">Limpar</button>
+            <button onClick={() => setSelecionadas(new Set())} className="px-4 py-2 rounded-xl border border-[#E7E2D8] text-slate-500 font-bold">Limpar</button>
+            <button onClick={excluirSelecionadas} disabled={excluindoLote}
+              className="px-4 py-2 rounded-xl bg-rose-600 text-white font-bold disabled:opacity-50 flex items-center gap-1.5">
+              <Trash2 className="w-4 h-4" /> {excluindoLote ? 'Excluindo…' : 'Excluir'}
+            </button>
             <button onClick={pagarSelecionadas} disabled={pagandoLote}
               className="px-5 py-2 rounded-xl text-white font-black flex items-center gap-2 disabled:opacity-50" style={{ background: '#2E7D46' }}>
               {pagandoLote ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
@@ -1558,7 +1617,7 @@ function Divergencias({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => voi
 /* ═══════════════════ componentes base ═══════════════════ */
 function Modal({ titulo, children, onClose, largo }: any) {
   return (
-    <div className="fixed inset-0 bg-black/40 z-40 flex items-start justify-center p-4 overflow-y-auto" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/40 z-40 flex items-start justify-center p-4 overflow-y-auto" {...overlayClose(onClose)}>
       <div className={`bg-white rounded-2xl shadow-xl w-full ${largo ? 'max-w-3xl' : 'max-w-lg'} mt-10 p-5`} onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <h2 className="font-extrabold">{titulo}</h2>

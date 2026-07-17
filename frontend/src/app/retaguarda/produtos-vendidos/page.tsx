@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 
 /**
  * /retaguarda/produtos-vendidos
@@ -161,7 +162,9 @@ function ProdutosVendidosContent() {
   const [error, setError] = useState<string | null>(null);
   const [editSeller, setEditSeller] = useState<{ itemId: string; saleId: string; currentName: string; produtoHint: string } | null>(null);
 
-  const isMatrix = me?.role === 'admin' || me?.role === 'operator' || me?.role === 'supervisor';
+  // Quem edita/exclui aqui: matriz + papéis de franquia (15/07). O backend
+  // escopa os dados e as ações da franquia às lojas FILIAL.
+  const isMatrix = ['admin', 'operator', 'supervisor', 'master_franquia', 'franquias'].includes(me?.role || '');
 
   useEffect(() => {
     api<Me>('/auth/me').then(setMe).catch(() => {});
@@ -853,7 +856,7 @@ function EditSellerModal({
   }
 
   return (
-    <div className="fixed inset-0 z-[9998] bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-[9998] bg-black/60 flex items-center justify-center p-4" {...overlayClose(onClose)}>
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-5 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-start justify-between mb-3">
           <div>

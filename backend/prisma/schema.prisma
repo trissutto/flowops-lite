@@ -1963,11 +1963,23 @@ model PdvSaleItem {
   precoUnit   Float    @map("preco_unit")
   desconto    Float    @default(0)
   promoTag    String?  @map("promo_tag")         // ex: "PROMO 30% · 2022" ou "4 LEVA 3"
+  // FORÇAR PROMO (15/07): botão AZUL "colocar na promoção" — o item entra na
+  // campanha mesmo sendo BÁSICO. Ignora SÓ o filtro básico; data e coleção
+  // (-INV/-VER) continuam valendo (item novo forçado não ganha desconto).
+  // Flag separada do promoTag porque o recálculo automático sobrescreve a tag.
+  forcarPromo Boolean  @default(false) @map("forcar_promo")
   total       Float
   // Override de vendedora POR ITEM. NULL = usa sale.sellerName (padrao).
   // Usado quando 2 vendedoras atendem na mesma compra — uma operou tudo
   // e depois a comissao eh dividida item por item.
   sellerName  String?  @map("seller_name")
+  // Baixa de estoque POR ITEM (16/07). A flag da VENDA (sale.stockDecreasedAt)
+  // marca "a venda passou pela baixa", mas ITENS excluidos do filtro (ex:
+  // produto real com desconto manual — promoTag='MANUAL' — que o filtro antigo
+  // pulava por engano) ficavam SEM baixa e SEM como detectar (flag da venda ja
+  // marcada). Esta flag por item deixa o backfill de manuais (reconcileManual)
+  // achar e baixar so o que faltou, de forma idempotente.
+  stockDecreasedAt DateTime? @map("stock_decreased_at")
   createdAt   DateTime @default(now()) @map("created_at")
 
   sale        PdvSale  @relation(fields: [saleId], references: [id], onDelete: Cascade)
@@ -3543,6 +3555,15 @@ model LivePdvCart {
   // tentativas limita retry em falha (não vira spam de erro).
   cobrancaWhatsEnviadaAt  DateTime? @map("cobranca_whats_enviada_at")
   cobrancaWhatsTentativas Int       @default(0) @map("cobranca_whats_tentativas")
+  // SACOLA PELA DM (16/07): a cliente montou o carrinho sozinha pelo ManyChat.
+  // selfCart marca a origem (apresentadora confere com atenção). awaitingReview
+  // = cliente digitou FECHAR e a sacola está na FILA DE REVISÃO — a cobrança NÃO
+  // sai sozinha; a apresentadora confere e libera (liberarCobranca). É a
+  // "verificação antes de finalizar" exigida pelo dono. clientClosedAt = quando
+  // ela fechou. Gated por LIVE_DM_SELFCART=1.
+  selfCart          Boolean   @default(false) @map("self_cart")
+  awaitingReview    Boolean   @default(false) @map("awaiting_review")
+  clientClosedAt    DateTime? @map("client_closed_at")
   // RETIRADA EM LOJA (igual ao site): frete zero, prazo de até 7 dias úteis.
   // A cliente escolhe a loja no checkout; endereço deixa de ser obrigatório.
   isPickup          Boolean  @default(false) @map("is_pickup")

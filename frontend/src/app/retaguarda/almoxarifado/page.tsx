@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 
 /**
  * /retaguarda/almoxarifado
@@ -330,7 +331,7 @@ function ItemFormModal({
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-slate-900/60 backdrop-blur-sm"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      {...overlayClose(onClose)}
     >
       <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-5 space-y-3 max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between">

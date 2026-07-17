@@ -60,6 +60,10 @@ export class CashService {
       credito: 0,
       debito: 0,
       crediario: 0,
+      // 15/07: separados de 'outros' pra conciliação — venda online É dinheiro
+      // recebido (entra no Recebido); vale-troca NÃO é (abate do Vendido).
+      venda_online: 0,
+      vale_troca: 0,
       outros: 0,
     };
 
@@ -76,7 +80,11 @@ export class CashService {
       for (const p of s.payments || []) {
         const method = String(p.method || '').toLowerCase();
         const valor = Number(p.valor) || 0;
-        if (method in byMethod) {
+        if (method === 'vale_troca' || method === 'vale' || method === 'troca') {
+          byMethod.vale_troca += valor;
+        } else if (method === 'venda_online' || method === 'online') {
+          byMethod.venda_online += valor;
+        } else if (method in byMethod) {
           byMethod[method] += valor;
         } else {
           byMethod.outros += valor;
@@ -139,6 +147,8 @@ export class CashService {
       totalCartaoCredito: byMethod.credito,
       totalCartaoDebito: byMethod.debito,
       totalCrediario: byMethod.crediario,
+      totalVendaOnline: byMethod.venda_online,
+      totalValeTroca: byMethod.vale_troca,
       totalOutros: byMethod.outros,
       totalMarcados,
       qtdMarcados,
@@ -554,6 +564,7 @@ export class CashService {
     const emptyTotais = {
       totalVendas: 0, totalDinheiro: 0, totalPix: 0,
       totalCartaoCredito: 0, totalCartaoDebito: 0, totalCrediario: 0,
+      totalVendaOnline: 0, totalValeTroca: 0,
       totalSangrias: 0, totalSuprimentos: 0, dinheiroEsperado: 0, qtdVendas: 0,
     };
 
@@ -699,6 +710,8 @@ export class CashService {
             totalCartaoCredito: t.totalCartaoCredito,
             totalCartaoDebito: t.totalCartaoDebito,
             totalCrediario: t.totalCrediario,
+            totalVendaOnline: t.totalVendaOnline,
+            totalValeTroca: t.totalValeTroca,
             totalSangrias: t.totalSangrias,
             totalSuprimentos: t.totalSuprimentos,
             dinheiroEsperado: t.dinheiroEsperado,
@@ -716,6 +729,7 @@ export class CashService {
     const consolidado: any = {
       totalVendas: 0, totalDinheiro: 0, totalPix: 0,
       totalCartaoCredito: 0, totalCartaoDebito: 0, totalCrediario: 0,
+      totalVendaOnline: 0, totalValeTroca: 0,
       totalMarcados: 0, qtdMarcados: 0,
       totalSangrias: 0, totalSuprimentos: 0, qtdVendas: 0,
       qtdLojasAbertas: 0, qtdLojasFechadas: 0,
@@ -728,6 +742,8 @@ export class CashService {
       consolidado.totalCartaoCredito += l.totais.totalCartaoCredito;
       consolidado.totalCartaoDebito += l.totais.totalCartaoDebito;
       consolidado.totalCrediario += l.totais.totalCrediario;
+      consolidado.totalVendaOnline += (l.totais as any).totalVendaOnline || 0;
+      consolidado.totalValeTroca += (l.totais as any).totalValeTroca || 0;
       consolidado.totalMarcados += (l.totais as any).totalMarcados || 0;
       consolidado.qtdMarcados += (l.totais as any).qtdMarcados || 0;
       consolidado.totalSangrias += l.totais.totalSangrias;
@@ -800,6 +816,7 @@ export class CashService {
           ELO_DEBITO: mkSlot(),                // ELO no debito (slot proprio)
           CREDITO_GENERICO: mkSlot(), DEBITO_GENERICO: mkSlot(),
           VALE_TROCA: mkSlot(),
+          VENDA_ONLINE: mkSlot(),
           OUTROS: mkSlot(),
         };
         const bandeiraMap: Record<string, string> = {
@@ -832,7 +849,7 @@ export class CashService {
         let totalMarcados = 0;
         let qtdMarcados = 0;
         let qtdVendasReais = 0;
-        let totalDinheiro = 0, totalPix = 0, totalCartaoCredito = 0, totalCartaoDebito = 0, totalCrediario = 0, totalValeTroca = 0;
+        let totalDinheiro = 0, totalPix = 0, totalCartaoCredito = 0, totalCartaoDebito = 0, totalCrediario = 0, totalValeTroca = 0, totalVendaOnline = 0;
         const ranking: Record<string, { nome: string; qtd: number; total: number }> = {};
 
         for (const sale of sales as any[]) {
@@ -868,6 +885,10 @@ export class CashService {
             else if (m === 'vale_troca' || m === 'vale' || m === 'troca') {
               totalValeTroca += v;
               pushVenda('VALE_TROCA' as any, sale, p, v);
+            }
+            else if (m === 'venda_online' || m === 'online') {
+              totalVendaOnline += v;
+              pushVenda('VENDA_ONLINE' as any, sale, p, v);
             }
             else if (m === 'credito' || m === 'credit') {
               totalCartaoCredito += v;
@@ -1015,6 +1036,7 @@ export class CashService {
             totalCartaoDebito,
             totalCrediario,
             totalValeTroca,
+            totalVendaOnline,
             totalMarcados,
             qtdMarcados,
             totalSangrias,
@@ -1039,6 +1061,7 @@ export class CashService {
     const consolidado = {
       totalVendas: 0, totalDinheiro: 0, totalPix: 0,
       totalCartaoCredito: 0, totalCartaoDebito: 0, totalCrediario: 0,
+      totalValeTroca: 0, totalVendaOnline: 0,
       totalMarcados: 0, qtdMarcados: 0,
       totalSangrias: 0, totalSuprimentos: 0, qtdVendas: 0,
       qtdLojasAbertas: 0, qtdLojasFechadas: lojas.length,
@@ -1050,6 +1073,8 @@ export class CashService {
       consolidado.totalCartaoCredito += l.totais.totalCartaoCredito;
       consolidado.totalCartaoDebito += l.totais.totalCartaoDebito;
       consolidado.totalCrediario += l.totais.totalCrediario;
+      consolidado.totalValeTroca += (l.totais as any).totalValeTroca || 0;
+      consolidado.totalVendaOnline += (l.totais as any).totalVendaOnline || 0;
       consolidado.totalMarcados += l.totais.totalMarcados;
       consolidado.qtdMarcados += l.totais.qtdMarcados;
       consolidado.totalSangrias += l.totais.totalSangrias;

@@ -62,6 +62,28 @@ export class PdvController {
       throw new ForbiddenException('Apenas admin ou loja');
   }
 
+  /** Papéis de franquia (editam ações de venda, escopados às lojas FILIAL). */
+  private ehPapelFranquia(role: string | undefined): boolean {
+    return role === 'master_franquia' || role === 'franquias';
+  }
+
+  /** Papel de franquia só age em venda de loja FRANQUIA (tipo=FILIAL). */
+  private async assertSaleEhFranquia(saleId: string) {
+    const prisma = (this.svc as any).prisma;
+    const sale = await prisma.pdvSale.findUnique({
+      where: { id: saleId },
+      select: { storeCode: true },
+    });
+    const franquia = await prisma.store.findMany({
+      where: { tipo: 'FILIAL', active: true },
+      select: { code: true },
+    });
+    const codes = new Set((franquia as any[]).map((s) => s.code));
+    if (!sale?.storeCode || !codes.has(sale.storeCode)) {
+      throw new ForbiddenException(`Venda de loja ${sale?.storeCode || '?'} não é franquia — acesso negado`);
+    }
+  }
+
   // ── CACHE DE DESCOBERTA GIGA ─────────────────────────────────────────────
   // FLAG PDV_GIGA_CACHE (default: false):
   //   false → comportamento atual: delega direto pro crediarios.detectClientesTable()
@@ -364,9 +386,10 @@ export class PdvController {
     @Body() body: { motivo: string; password: string },
   ) {
     const role = req?.user?.role;
-    if (role !== 'admin' && role !== 'supervisor' && role !== 'operator') {
+    if (role !== 'admin' && role !== 'supervisor' && role !== 'operator' && !this.ehPapelFranquia(role)) {
       throw new ForbiddenException('Apenas admin/supervisor/operator');
     }
+    if (this.ehPapelFranquia(role)) await this.assertSaleEhFranquia(id);
     const nivel = validateMinLevel(body?.password, 'MASTER');
     const userName = req?.user?.name || req?.user?.email || req?.user?.username || 'admin';
     return this.svc.masterCancelZumbi({
@@ -397,9 +420,10 @@ export class PdvController {
     @Body() body: { motivo: string; password: string },
   ) {
     const role = req?.user?.role;
-    if (role !== 'admin' && role !== 'supervisor' && role !== 'operator') {
+    if (role !== 'admin' && role !== 'supervisor' && role !== 'operator' && !this.ehPapelFranquia(role)) {
       throw new ForbiddenException('Apenas admin/supervisor/operator');
     }
+    if (this.ehPapelFranquia(role)) await this.assertSaleEhFranquia(id);
     const nivel = validateMinLevel(body?.password, 'MASTER');
     const userName = req?.user?.name || req?.user?.email || req?.user?.username || 'admin';
     return this.svc.masterEstornarVenda({
@@ -424,9 +448,10 @@ export class PdvController {
     @Body() body: { motivo: string; password: string },
   ) {
     const role = req?.user?.role;
-    if (role !== 'admin' && role !== 'supervisor' && role !== 'operator') {
+    if (role !== 'admin' && role !== 'supervisor' && role !== 'operator' && !this.ehPapelFranquia(role)) {
       throw new ForbiddenException('Apenas admin/supervisor/operator');
     }
+    if (this.ehPapelFranquia(role)) await this.assertSaleEhFranquia(id);
     const nivel = validateMinLevel(body?.password, 'MASTER');
     const userName = req?.user?.name || req?.user?.email || req?.user?.username || 'admin';
     return this.svc.masterCancelDuplicada({
@@ -502,7 +527,7 @@ export class PdvController {
     @Req() req: any,
     @Param('id') id: string,
     @Param('itemId') itemId: string,
-    @Body() body: { qty?: number; desconto?: number; password?: string; motivo?: string; excludePromo?: boolean },
+    @Body() body: { qty?: number; desconto?: number; password?: string; motivo?: string; excludePromo?: boolean; forcePromo?: boolean },
   ) {
     this.requireRole(req);
     return this.svc.updateItem({
@@ -513,6 +538,7 @@ export class PdvController {
       password: body?.password,
       motivo: body?.motivo,
       excludePromo: body?.excludePromo,
+      forcePromo: body?.forcePromo,
     });
   }
 
@@ -1983,6 +2009,50 @@ export class PdvController {
       untilIso: body?.until,
       storeCode: body?.storeCode,
       limit: body?.limit || 100,
+      dryRun: false,
+    });
+  }
+
+  /**
+   * GET /pdv/admin/reconcile-manual-stock/preview — estoque fantasma "MANUAL":
+   * produto REAL vendido com desconto manual (promoTag='MANUAL' + sku/ref reais)
+   * que o filtro antigo pulava na baixa. Invisível ao reconcile normal (a venda
+   * marcava stockDecreasedAt). Dry-run: só conta/lista, não baixa nada.
+   */
+  @Get('admin/reconcile-manual-stock/preview')
+  async previewReconcileManualStock(
+    @Req() req: any,
+    @Query('since') since?: string,
+    @Query('until') until?: string,
+    @Query('storeCode') storeCode?: string,
+    @Query('limit') limit?: string,
+  ) {
+    if (req?.user?.role !== 'admin') {
+      throw new ForbiddenException('Apenas admin pode reconciliar estoque');
+    }
+    return this.svc.reconcileManualStockBacklog({
+      sinceIso: since,
+      untilIso: until,
+      storeCode,
+      limit: limit ? Number(limit) : 1000,
+      dryRun: true,
+    });
+  }
+
+  /** POST /pdv/admin/reconcile-manual-stock/execute — baixa os fantasmas MANUAL. */
+  @Post('admin/reconcile-manual-stock/execute')
+  async executeReconcileManualStock(
+    @Req() req: any,
+    @Body() body: { since?: string; until?: string; storeCode?: string; limit?: number },
+  ) {
+    if (req?.user?.role !== 'admin') {
+      throw new ForbiddenException('Apenas admin pode reconciliar estoque');
+    }
+    return this.svc.reconcileManualStockBacklog({
+      sinceIso: body?.since,
+      untilIso: body?.until,
+      storeCode: body?.storeCode,
+      limit: body?.limit || 1000,
       dryRun: false,
     });
   }

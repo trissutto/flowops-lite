@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 
 /**
  * ProductThumb — thumbnail compartilhado de produto.
@@ -120,7 +121,7 @@ export function ProductThumb({
       {zoomed && (
         <div
           className="fixed inset-0 z-[300] bg-black/85 flex items-center justify-center p-4 cursor-zoom-out"
-          onClick={() => setZoomed(false)}
+          {...overlayClose(() => setZoomed(false))}
         >
           <button
             type="button"

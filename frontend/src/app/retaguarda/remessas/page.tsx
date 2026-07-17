@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 
 /**
  * /retaguarda/remessas
@@ -394,7 +395,7 @@ export default function RemessasAdminPage() {
       {(detailLoading || detail) && (
         <div
           className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
-          onClick={() => setDetail(null)}
+          {...overlayClose(() => setDetail(null))}
         >
           <div
             className="bg-white rounded-lg max-w-3xl w-full max-h-[85vh] overflow-hidden flex flex-col"

@@ -202,6 +202,13 @@ export class LivePdvController {
     return this.svc.pendingLiveRegistrations(id);
   }
 
+  // Recorrentes: clientes que já criaram carrinho em qualquer live (busca por
+  // nome/@/telefone). Puxa pra live atual via add-customer.
+  @Get('sessions/:id/recurring')
+  recurring(@Param('id') id: string, @Query('q') q?: string) {
+    return this.svc.recurringLiveCustomers(id, q);
+  }
+
   // Cobrança em massa AUTOMÁTICA via DM (API ManyChat) — carrinhos abertos da
   // sessão. body.resend=true ignora o "já enviada" (corrigir link errado etc).
   @Post('sessions/:id/charge-all-dm')
@@ -213,6 +220,14 @@ export class LivePdvController {
   @Post('carts/:cartId/charge-dm')
   chargeCartViaDm(@Param('cartId') cartId: string) {
     return this.svc.chargeCartViaDm(cartId);
+  }
+
+  // SACOLA PELA DM: apresentadora confere a sacola fechada pela cliente e
+  // LIBERA — tira da fila de revisão e manda o link. Verificação humana antes
+  // de finalizar (exigência do dono).
+  @Post('carts/:cartId/liberar-cobranca')
+  liberarCobranca(@Param('cartId') cartId: string) {
+    return this.svc.liberarCobranca(cartId);
   }
 
   // Backfill de vínculos ManyChat pros carrinhos abertos (API findByName)
