@@ -55,6 +55,7 @@ import { FinanceiroModule } from './financeiro/financeiro.module';
 import { IntelligenceModule } from './intelligence/intelligence.module';
 import { PdvModule } from './pdv/pdv.module';
 import { WcReturnsModule } from './wc-returns/wc-returns.module';
+import { TrocasModule } from './trocas/trocas.module';
 import { PagbankModule } from './pagbank/pagbank.module';
 import { PagarmeModule } from './pagarme/pagarme.module';
 import { ProductRegistrationModule } from './product-registration/product-registration.module';
@@ -127,6 +128,7 @@ import { OperadorPinModule } from './operador-pin/operador-pin.module';
     IntelligenceModule,
     PdvModule,
     WcReturnsModule,
+    TrocasModule,
     PagbankModule,
     PagarmeModule,
     ProductRegistrationModule,

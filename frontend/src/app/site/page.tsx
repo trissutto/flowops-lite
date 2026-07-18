@@ -48,6 +48,7 @@ const SITE_ITEMS: SiteItem[] = [
   { href: '/produtos',                 label: 'Produtos Site',   subtitle: 'WooCommerce',  description: 'Catálogo · variações',    tone: 'purple', icon: ShoppingBag   },
   { href: '/retaguarda/baixas-log',    label: 'Log de Baixas',   subtitle: 'Auditoria',    description: 'ERP → WC',                tone: 'amber',  icon: FileSearch    },
   { href: '/site/trocas',              label: 'Trocas Site',     subtitle: 'Devolução',    description: 'Pedidos WC',              tone: 'rose',   icon: ArrowRightLeft },
+  { href: '/site/portal-trocas',       label: 'Portal de Trocas',subtitle: 'Self-service', description: 'Solicitações da cliente', tone: 'amber',  icon: ArrowRightLeft },
   { href: '/config/whatsapp',          label: 'WhatsApp',        subtitle: 'Conexão',      description: 'Baileys + bulk send',     tone: 'green',  icon: MessageCircle },
   { href: '/vitrine',                  label: 'Vitrine',         subtitle: 'Pública',      description: 'Catálogo cliente',        tone: 'sky',    icon: Store         },
 ];

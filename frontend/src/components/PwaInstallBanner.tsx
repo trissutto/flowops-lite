@@ -105,7 +105,7 @@ export default function PwaInstallBanner() {
   };
 
   // Páginas públicas da cliente (cadastro / fechamento da compra) — sem chrome de app
-  if (pathname?.startsWith('/cadastro-live') || pathname?.startsWith('/pagar') || pathname?.startsWith('/p/') || pathname?.startsWith('/meu-pedido')) return null;
+  if (pathname?.startsWith('/cadastro-live') || pathname?.startsWith('/pagar') || pathname?.startsWith('/p/') || pathname?.startsWith('/meu-pedido') || pathname?.startsWith('/trocas')) return null;
 
   // Sem login = visitante (cliente na landing OU alguém que caiu na /login) →
   // nada de "instale o app". A equipe usa o app de desktop e, no navegador,
