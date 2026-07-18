@@ -5,13 +5,14 @@ import { TrackingModule } from '../tracking/tracking.module';
 import { EmailModule } from '../email/email.module';
 import { ErpModule } from '../erp/erp.module';
 import { TrocasService } from './trocas.service';
+import { TrocasCronService } from './trocas-cron.service';
 import { TrocasPublicController } from './trocas-public.controller';
 import { TrocasAdminController } from './trocas-admin.controller';
 
 @Module({
   imports: [PrismaModule, WooCommerceModule, TrackingModule, EmailModule, ErpModule],
   controllers: [TrocasPublicController, TrocasAdminController],
-  providers: [TrocasService],
+  providers: [TrocasService, TrocasCronService],
   exports: [TrocasService],
 })
 export class TrocasModule {}

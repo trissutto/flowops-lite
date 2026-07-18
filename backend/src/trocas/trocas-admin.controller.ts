@@ -69,6 +69,20 @@ export class TrocasAdminController {
     return { status: TROCA_STATUS };
   }
 
+  /** GET /trocas/dashboard — indicadores gerenciais do período */
+  @Get('dashboard')
+  async dashboard(
+    @Req() req: any,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    this.requireView(req);
+    return this.svc.getDashboard({
+      from: from ? new Date(`${from}T00:00:00`) : undefined,
+      to: to ? new Date(`${to}T23:59:59.999`) : undefined,
+    });
+  }
+
   /** GET /trocas/:id — detalhe + timeline + painel de benefícios */
   @Get(':id')
   async detail(@Req() req: any, @Param('id') id: string) {

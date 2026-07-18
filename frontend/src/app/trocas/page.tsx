@@ -35,6 +35,8 @@ type OrderItem = {
 type TrocaPublica = {
   id: string;
   numero: string;
+  origem: string | null;
+  podeNovaTroca: boolean;
   status: string;
   motivo: string;
   valorTotalPago: number;
@@ -176,6 +178,41 @@ export default function PortalTrocasPage() {
   // Informar rastreio de devolução
   const [rastreioInput, setRastreioInput] = useState<Record<string, string>>({});
   const [rastreioBusy, setRastreioBusy] = useState<string | null>(null);
+
+  // Fase 3 — troca da troca (sobre a peça recebida)
+  const [novaTrocaDe, setNovaTrocaDe] = useState<string | null>(null);
+  const [ntMotivo, setNtMotivo] = useState('');
+  const [ntMotivoDetalhe, setNtMotivoDetalhe] = useState('');
+  const [ntChecks, setNtChecks] = useState<boolean[]>(DECLARACOES.map(() => false));
+  const [ntBusy, setNtBusy] = useState(false);
+
+  async function solicitarNovamente(troca: TrocaPublica) {
+    setErr(null);
+    setNtBusy(true);
+    try {
+      const res = await api<ResultadoSolicitacao & { origem: string }>('/public/trocas/solicitar-novamente', {
+        method: 'POST',
+        body: JSON.stringify({
+          pedido,
+          doc,
+          parentTrocaId: troca.id,
+          motivo: ntMotivo,
+          motivoDetalhe: ntMotivo === 'Outro' ? ntMotivoDetalhe : undefined,
+          declaracaoAceita: ntChecks.every(Boolean),
+        }),
+      });
+      setNovaTrocaDe(null);
+      setNtMotivo('');
+      setNtMotivoDetalhe('');
+      setNtChecks(DECLARACOES.map(() => false));
+      setResultado(res);
+      setStep('fim');
+    } catch (e: any) {
+      setErr(parseErr(e));
+    } finally {
+      setNtBusy(false);
+    }
+  }
 
   // Fase 2 — escolha da solução (por troca aguardando_decisao)
   const [decidindo, setDecidindo] = useState<string | null>(null);   // trocaId com painel aberto
@@ -405,7 +442,14 @@ export default function PortalTrocasPage() {
                   {data.trocas.map((t) => (
                     <div key={t.id} className="border border-[#EDE7D8] rounded-xl p-3.5">
                       <div className="flex items-center justify-between">
-                        <span className="font-extrabold text-[#8C7325]">{t.numero}</span>
+                        <span className="font-extrabold text-[#8C7325]">
+                          {t.numero}
+                          {t.origem && (
+                            <span className="ml-1.5 text-[11px] font-bold text-[#A79F8E]">
+                              (troca da {t.origem})
+                            </span>
+                          )}
+                        </span>
                         <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-[#FBF6E6] text-[#8C7325]">
                           {STATUS_LABEL[t.status] || t.status}
                         </span>
@@ -620,6 +664,68 @@ export default function PortalTrocasPage() {
                       {t.envioTrackingCode && (
                         <div className="mt-2 text-sm bg-[#EAF6EE] rounded-lg px-3 py-2 text-[#2E7D46]">
                           📦 Nova peça enviada! Rastreio: <b>{t.envioTrackingCode}</b>
+                        </div>
+                      )}
+
+                      {/* FASE 3 — troca da troca */}
+                      {t.podeNovaTroca && novaTrocaDe !== t.id && (
+                        <button
+                          className="mt-3 w-full py-2.5 rounded-lg text-[13px] font-bold border border-[#B8912B] text-[#8C7325] hover:bg-[#FBF6E6]"
+                          onClick={() => { setNovaTrocaDe(t.id); setNtMotivo(''); setNtChecks(DECLARACOES.map(() => false)); }}
+                        >
+                          🔁 Trocar a peça recebida ({t.novaCor} · {t.novaTamanho})
+                        </button>
+                      )}
+                      {novaTrocaDe === t.id && (
+                        <div className="mt-3 border border-[#EBD9A6] bg-[#FBF6E6] rounded-xl p-3.5">
+                          <div className="text-sm font-bold text-[#8C7325] mb-2">
+                            Nova troca da peça {t.novaProductName} ({t.novaCor} · {t.novaTamanho})
+                          </div>
+                          <select
+                            className={inputCls + ' !py-2.5 mb-2'}
+                            value={ntMotivo}
+                            onChange={(e) => setNtMotivo(e.target.value)}
+                          >
+                            <option value="">Motivo da troca…</option>
+                            {(data?.motivos || []).map((m) => <option key={m} value={m}>{m}</option>)}
+                          </select>
+                          {ntMotivo === 'Outro' && (
+                            <textarea
+                              className={inputCls + ' !py-2.5 mb-2'}
+                              rows={2}
+                              placeholder="Conta pra gente o que aconteceu…"
+                              value={ntMotivoDetalhe}
+                              onChange={(e) => setNtMotivoDetalhe(e.target.value)}
+                            />
+                          )}
+                          <div className="space-y-1.5 mb-3">
+                            {DECLARACOES.map((d, i) => (
+                              <label key={i} className="flex items-start gap-2 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  className="mt-0.5 accent-[#B8912B]"
+                                  checked={ntChecks[i]}
+                                  onChange={(e) => setNtChecks((c) => c.map((v, j) => (j === i ? e.target.checked : v)))}
+                                />
+                                <span className="text-[12px] text-[#2A2620]">{d}</span>
+                              </label>
+                            ))}
+                          </div>
+                          <div className="flex gap-2">
+                            <button
+                              className="flex-1 py-2.5 rounded-lg text-[13px] font-bold border border-[#E4DDCB] text-[#6B6456]"
+                              onClick={() => setNovaTrocaDe(null)}
+                            >
+                              Cancelar
+                            </button>
+                            <button
+                              className="flex-1 py-2.5 rounded-lg text-[13px] font-bold text-white bg-[#B8912B] disabled:opacity-50"
+                              disabled={ntBusy || !ntMotivo || !ntChecks.every(Boolean) || (ntMotivo === 'Outro' && ntMotivoDetalhe.trim().length < 3)}
+                              onClick={() => solicitarNovamente(t)}
+                            >
+                              {ntBusy ? 'Enviando…' : 'Solicitar troca'}
+                            </button>
+                          </div>
                         </div>
                       )}
 

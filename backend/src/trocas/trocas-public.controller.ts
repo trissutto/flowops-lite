@@ -98,6 +98,36 @@ export class TrocasPublicController {
   }
 
   /**
+   * POST /public/trocas/solicitar-novamente — TROCA DA TROCA.
+   * { pedido, doc, parentTrocaId, motivo, motivoDetalhe?, declaracaoAceita }
+   */
+  @Post('solicitar-novamente')
+  async solicitarNovamente(
+    @Req() req: any,
+    @Body()
+    body: {
+      pedido?: string;
+      doc?: string;
+      parentTrocaId?: string;
+      motivo?: string;
+      motivoDetalhe?: string;
+      declaracaoAceita?: boolean;
+    },
+  ) {
+    guardRate(req);
+    if (!body?.parentTrocaId) throw new BadRequestException('parentTrocaId obrigatório');
+    return this.svc.solicitarNovamente({
+      pedido: String(body?.pedido || ''),
+      doc: String(body?.doc || ''),
+      parentTrocaId: String(body.parentTrocaId),
+      motivo: String(body?.motivo || ''),
+      motivoDetalhe: body?.motivoDetalhe,
+      declaracaoAceita: !!body?.declaracaoAceita,
+      ip: clientIp(req),
+    });
+  }
+
+  /**
    * POST /public/trocas/variacoes { pedido, doc, trocaId }
    * Grade tamanho×cor disponível da peça devolvida (Etapas 13-14).
    */
