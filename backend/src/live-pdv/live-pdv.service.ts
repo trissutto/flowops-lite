@@ -3148,20 +3148,17 @@ export class LivePdvService {
    * Guard: só permitido em loja 'externo'. Numa loja COM gateway isso seria
    * marcar pago "no escuro" — lá a confirmação tem que vir do PagBank/Pagar.me.
    */
-  async confirmExternalPayment(cartId: string) {
+  async confirmExternalPayment(cartId: string, confirmedBy?: string | null) {
     const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
     if (!cart) throw new NotFoundException('Carrinho não encontrado');
-    const session = await this.getSession(cart.sessionId);
-    const store = await (this.prisma as any).store.findUnique({
-      where: { code: session.liveStoreCode },
-      select: { pixProvider: true },
-    });
-    if ((store as any)?.pixProvider !== 'externo') {
-      throw new BadRequestException(
-        'Confirmação manual só vale em loja com PIX externo. Esta loja tem gateway — ' +
-          'a confirmação tem que vir do pagamento real.',
-      );
+    if (['paid', 'separating', 'shipped', 'delivered'].includes(cart.status)) {
+      return { paid: true, cart };
     }
+    // LIBERADO PRA QUALQUER LOJA (dono, 18/07): cliente que paga "por fora"
+    // (PIX direto na chave da loja) existe também em loja COM gateway — a
+    // trava antiga por pixProvider='externo' impedia a operadora de marcar
+    // pago e a cliente era recobrada. Dupla confirmação fica no front; aqui
+    // registramos QUEM confirmou pra auditoria.
     const items = await (this.prisma as any).livePdvItem.findMany({
       where: { cartId, status: 'reserved' },
     });
@@ -3172,6 +3169,11 @@ export class LivePdvService {
       where: { id: cartId },
       data: { paymentMethod: 'externo' },
     });
+    this.logger.log(
+      `[live] pagamento EXTERNO confirmado manualmente cart=${cartId} ` +
+        `(@${cart.customerInstagram || '?'} · R$ ${((cart.totalCents || 0) / 100).toFixed(2)}) ` +
+        `por ${confirmedBy || 'operador não identificado'}`,
+    );
     const paidCart = await this.onCartPaid(cartId);
     return { paid: true, cart: paidCart };
   }
