@@ -332,7 +332,12 @@ export class TrocasService {
     // Trocas já existentes desse pedido (histórico + saldo elegível)
     const trocas = await (this.prisma as any).trocaSolicitacao.findMany({
       where: { wcOrderId: Number(order.id) },
-      include: { items: true, eventos: { orderBy: { createdAt: 'asc' } } },
+      include: {
+        items: true,
+        eventos: { orderBy: { createdAt: 'asc' } },
+        parent: { select: { numero: true } },
+        filhas: { select: { id: true, numero: true, status: true } },
+      },
       orderBy: { createdAt: 'asc' },
     });
 
@@ -379,9 +384,18 @@ export class TrocasService {
 
   /** Visão pública de uma troca (sem dados internos). */
   private formatTrocaPublic(t: any) {
+    const filhaAtiva = (t.filhas || []).some((f: any) => f.status !== 'cancelada');
+    // Troca da troca: finalizada com nova peça ENVIADA e sem filha ativa
+    const podeNovaTroca =
+      t.status === 'finalizada' &&
+      ['trocar_tamanho', 'trocar_cor'].includes(t.decisao || '') &&
+      !!t.envioTrackingCode &&
+      !filhaAtiva;
     return {
       id: t.id,
       numero: formatTrocaNumero(t.numero),
+      origem: t.parent ? formatTrocaNumero(t.parent.numero) : null,
+      podeNovaTroca,
       status: t.status,
       motivo: t.motivo,
       valorTotalPago: t.valorTotalPago,
@@ -589,6 +603,167 @@ export class TrocasService {
       },
     });
     return { ok: true, status: 'postada' };
+  }
+
+  // ── Portal público: TROCA DA TROCA (encadeada) ──────────────────────
+
+  /**
+   * Nova solicitação sobre a peça RECEBIDA numa troca anterior.
+   * Vínculo: parentId → troca de origem; wcOrderId SEMPRE o pedido original.
+   * Prazo: 7 dias corridos da ENTREGA do reenvio (rastreio envioTrackingCode).
+   * Valor: herda o líquido pago da troca de origem (nunca o preço atual).
+   */
+  async solicitarNovamente(input: {
+    pedido: string;
+    doc: string;
+    parentTrocaId: string;
+    motivo: string;
+    motivoDetalhe?: string;
+    declaracaoAceita: boolean;
+    ip?: string;
+  }) {
+    if (!input.declaracaoAceita) {
+      throw new BadRequestException('É preciso aceitar a declaração pra continuar.');
+    }
+    const motivo = String(input.motivo || '').trim();
+    if (!TROCA_MOTIVOS.includes(motivo as any)) {
+      throw new BadRequestException('Escolha um motivo válido pra troca.');
+    }
+    if (motivo === 'Outro' && !String(input.motivoDetalhe || '').trim()) {
+      throw new BadRequestException('Descreva o motivo da troca.');
+    }
+
+    const { order } = await this.findAndVerifyOrder(input);
+    const parent = await (this.prisma as any).trocaSolicitacao.findFirst({
+      where: { id: input.parentTrocaId, wcOrderId: Number(order.id) },
+      include: { filhas: { select: { status: true } } },
+    });
+    if (!parent) throw new NotFoundException('Troca de origem não encontrada pra este pedido.');
+    if (
+      parent.status !== 'finalizada' ||
+      !['trocar_tamanho', 'trocar_cor'].includes(parent.decisao || '') ||
+      !parent.envioTrackingCode ||
+      !parent.novaSku
+    ) {
+      throw new BadRequestException('Essa troca não tem peça enviada disponível pra nova troca.');
+    }
+    if ((parent.filhas || []).some((f: any) => f.status !== 'cancelada')) {
+      throw new BadRequestException(
+        'Já existe uma troca em andamento pra essa peça. Aguarde a conclusão pra abrir outra.',
+      );
+    }
+
+    // Prazo pela entrega do REENVIO
+    const prazoDias = await this.getPrazoDias();
+    const t = await this.tracking.fetchTracking(parent.envioTrackingCode);
+    let deliveredAt: Date | null = null;
+    let via: 'rastreio' | 'data_pedido' | 'nao_verificado' = 'nao_verificado';
+    if (!t.error && (t.delivered || t.events.length)) {
+      if (!t.delivered) {
+        throw new BadRequestException(
+          'Ainda não identificamos a entrega da nova peça no rastreio. Assim que ela chegar, você poderá solicitar a troca.',
+        );
+      }
+      const ev = t.events.find((e) => e.isDelivery);
+      if (ev) {
+        deliveredAt = parseBrDateTime(ev.date, ev.time);
+        if (deliveredAt) via = 'rastreio';
+      }
+    }
+    // Fallback quando o provedor falha: conta do envio com folga de trânsito
+    if (via !== 'rastreio' && parent.envioAt) {
+      deliveredAt = new Date(parent.envioAt);
+      via = 'data_pedido';
+    }
+    const dias = deliveredAt
+      ? Math.floor((Date.now() - deliveredAt.getTime()) / 86_400_000)
+      : null;
+    const margem = via === 'data_pedido' ? 10 : 0;
+    if (dias != null && dias > prazoDias + margem) {
+      throw new BadRequestException('Infelizmente este pedido não está mais dentro do prazo para troca.');
+    }
+
+    const beneficio = parent.customerCpf
+      ? await this.getBeneficioReversa(parent.customerCpf)
+      : { disponivel: false };
+    const usaGratis = !!beneficio.disponivel;
+    const status = usaGratis ? 'aguardando_postagem' : 'aguardando_envio_cliente';
+    const valor = round2(Number(parent.valorTotalPago) || 0);
+    const nomePeca =
+      `${parent.novaProductName || 'Peça da troca anterior'}` +
+      (parent.novaCor || parent.novaTamanho ? ` (${[parent.novaCor, parent.novaTamanho].filter(Boolean).join(' · ')})` : '');
+
+    const troca = await (this.prisma as any).trocaSolicitacao.create({
+      data: {
+        wcOrderId: parent.wcOrderId,
+        wcOrderNumber: parent.wcOrderNumber,
+        parentId: parent.id,
+        customerName: parent.customerName,
+        customerCpf: parent.customerCpf,
+        customerEmail: parent.customerEmail,
+        customerPhone: parent.customerPhone,
+        motivo,
+        motivoDetalhe: String(input.motivoDetalhe || '').trim() || null,
+        status,
+        trackingCodePedido: parent.envioTrackingCode,
+        deliveredAt,
+        prazoVerificadoVia: via,
+        diasDesdeEntrega: dias,
+        dentroDoPrazo: true,
+        declaracaoAceitaAt: new Date(),
+        declaracaoIp: input.ip || null,
+        reversaGratis: usaGratis,
+        valorTotalPago: valor,
+        items: {
+          create: [{
+            sku: parent.novaSku,
+            productName: nomePeca,
+            qty: 1,
+            valorOriginalUnit: valor,
+            valorPagoUnit: valor,
+            totalPago: valor,
+          }],
+        },
+        eventos: {
+          create: [
+            {
+              tipo: 'solicitacao',
+              descricao:
+                `TROCA DA TROCA — nova solicitação sobre a peça recebida na ${formatTrocaNumero(parent.numero)} ` +
+                `(pedido original #${parent.wcOrderNumber}). Motivo: ${motivo}` +
+                (input.motivoDetalhe ? ` — ${String(input.motivoDetalhe).trim()}` : '') +
+                `. Prazo verificado via ${via}${dias != null ? ` (${dias} dias desde a entrega)` : ''}. ` +
+                `Valor herdado: R$ ${valor.toFixed(2)}.`,
+              statusPara: status,
+            },
+            {
+              tipo: 'reversa',
+              descricao: usaGratis
+                ? 'Logística reversa GRATUITA reservada. Aguardando equipe gerar o código.'
+                : 'Benefício da reversa já utilizado — devolução por conta da cliente.',
+            },
+          ],
+        },
+      },
+    });
+
+    this.logger.log(
+      `[troca] ${formatTrocaNumero(troca.numero)} (filha de ${formatTrocaNumero(parent.numero)}) ` +
+        `pedido=${parent.wcOrderId} status=${status} R$${valor.toFixed(2)}`,
+    );
+
+    return {
+      ok: true,
+      numero: formatTrocaNumero(troca.numero),
+      origem: formatTrocaNumero(parent.numero),
+      status,
+      reversaGratis: usaGratis,
+      valorTotalPago: valor,
+      enderecoDevolucao: usaGratis ? null : ENDERECO_DEVOLUCAO,
+      mensagem: usaGratis
+        ? 'Nova troca criada! Você vai receber por e-mail o código de postagem gratuita dos Correios.'
+        : 'Nova troca criada! Como a logística reversa gratuita já foi utilizada neste CPF, a devolução é por sua conta. Envie a peça pro endereço abaixo e informe o rastreio aqui no portal.',
+    };
   }
 
   // ── Admin: lista / detalhe ───────────────────────────────────────────
@@ -1291,6 +1466,87 @@ export class TrocasService {
       },
     });
     return { ok: true, troca: updated };
+  }
+
+  // ── Admin: dashboard gerencial ───────────────────────────────────────
+
+  async getDashboard(input: { from?: Date; to?: Date }) {
+    const where: any = {};
+    if (input.from || input.to) {
+      where.createdAt = {};
+      if (input.from) where.createdAt.gte = input.from;
+      if (input.to) where.createdAt.lte = input.to;
+    }
+    const trocas = await (this.prisma as any).trocaSolicitacao.findMany({
+      where,
+      include: {
+        items: { select: { sku: true, productName: true, qty: true } },
+        eventos: { select: { statusPara: true, createdAt: true } },
+      },
+    });
+
+    const ativas = trocas.filter((t: any) => t.status !== 'cancelada');
+    const count = (fn: (t: any) => boolean) => ativas.filter(fn).length;
+    const avgDays = (pairs: Array<[Date | string | null, Date | string | null]>) => {
+      const ds = pairs
+        .filter(([a, b]) => a && b)
+        .map(([a, b]) => (new Date(b as any).getTime() - new Date(a as any).getTime()) / 86_400_000)
+        .filter((d) => d >= 0);
+      return ds.length ? Math.round((ds.reduce((s, d) => s + d, 0) / ds.length) * 10) / 10 : null;
+    };
+    const firstEvento = (t: any, statusPara: string): Date | null => {
+      const e = (t.eventos || []).find((x: any) => x.statusPara === statusPara);
+      return e ? e.createdAt : null;
+    };
+
+    // Rankings
+    const rank = (map: Map<string, number>, top = 8) =>
+      [...map.entries()].sort((a, b) => b[1] - a[1]).slice(0, top)
+        .map(([k, v]) => ({ nome: k, total: v }));
+    const motivosMap = new Map<string, number>();
+    const produtosMap = new Map<string, number>();
+    for (const t of ativas) {
+      motivosMap.set(t.motivo, (motivosMap.get(t.motivo) || 0) + 1);
+      for (const it of t.items) {
+        const key = it.productName || it.sku;
+        produtosMap.set(key, (produtosMap.get(key) || 0) + (it.qty || 1));
+      }
+    }
+
+    const decididas = ativas.filter((t: any) => t.decisao);
+    const pct = (n: number) => (decididas.length ? Math.round((n / decididas.length) * 100) : 0);
+    const nVale = decididas.filter((t: any) => t.decisao === 'vale').length;
+    const nReemb = decididas.filter((t: any) => t.decisao === 'reembolso').length;
+    const nPeca = decididas.filter((t: any) => ['trocar_tamanho', 'trocar_cor'].includes(t.decisao)).length;
+
+    return {
+      total: ativas.length,
+      canceladas: trocas.length - ativas.length,
+      finalizadas: count((t) => t.status === 'finalizada'),
+      abertas: count((t) => t.status !== 'finalizada'),
+      porStatus: TROCA_STATUS.reduce((acc: Record<string, number>, s) => {
+        const n = trocas.filter((t: any) => t.status === s).length;
+        if (n > 0) acc[s] = n;
+        return acc;
+      }, {}),
+      valorTotalPeriodo: round2(ativas.reduce((s: number, t: any) => s + (Number(t.valorTotalPago) || 0), 0)),
+      // Tempos médios (dias)
+      tempoMedioPostagem: avgDays(ativas.map((t: any) => [t.createdAt, firstEvento(t, 'postada')])),
+      tempoMedioConferencia: avgDays(ativas.map((t: any) => [t.recebidaAt, t.conferenciaAt])),
+      tempoMedioConclusao: avgDays(ativas.map((t: any) => [t.createdAt, firstEvento(t, 'finalizada')])),
+      // Rankings e recortes
+      motivos: rank(motivosMap),
+      produtosMaisTrocados: rank(produtosMap),
+      trocasPorTamanho: decididas.filter((t: any) => t.decisao === 'trocar_tamanho').length,
+      trocasPorCor: decididas.filter((t: any) => t.decisao === 'trocar_cor').length,
+      trocasPorDefeito: count((t) => t.motivo === 'Produto com defeito'),
+      trocasEncadeadas: count((t) => !!t.parentId),
+      // Percentuais sobre trocas decididas
+      pctVale: pct(nVale),
+      pctReembolso: pct(nReemb),
+      pctTrocaPeca: pct(nPeca),
+      reversasGratis: count((t) => t.reversaGratis),
+    };
   }
 
   // ── Admin: cancelar ──────────────────────────────────────────────────

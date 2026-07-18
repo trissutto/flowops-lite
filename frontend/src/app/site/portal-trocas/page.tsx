@@ -63,6 +63,28 @@ type TrocaRow = {
   items: Array<{ sku: string; productName: string | null; qty: number; valorPagoUnit: number; totalPago: number; valorOriginalUnit: number; stockReturnedAt: string | null; stockError: string | null }>;
 };
 
+type Dash = {
+  total: number;
+  canceladas: number;
+  finalizadas: number;
+  abertas: number;
+  porStatus: Record<string, number>;
+  valorTotalPeriodo: number;
+  tempoMedioPostagem: number | null;
+  tempoMedioConferencia: number | null;
+  tempoMedioConclusao: number | null;
+  motivos: Array<{ nome: string; total: number }>;
+  produtosMaisTrocados: Array<{ nome: string; total: number }>;
+  trocasPorTamanho: number;
+  trocasPorCor: number;
+  trocasPorDefeito: number;
+  trocasEncadeadas: number;
+  pctVale: number;
+  pctReembolso: number;
+  pctTrocaPeca: number;
+  reversasGratis: number;
+};
+
 const CHECKLIST = ['Produto correto', 'Sem uso', 'Etiqueta presente', 'Sem avarias', 'Conforme política'];
 const REPROVACAO_MOTIVOS = ['Produto usado', 'Sem etiqueta', 'Produto danificado', 'Produto diferente'];
 type StoreOpt = { code: string; name: string; active?: boolean };
@@ -175,6 +197,27 @@ export default function PortalTrocasAdminPage() {
       .then((s) => setStores((s || []).filter((x) => x.active !== false)))
       .catch(() => setStores([]));
   }, []);
+
+  // Fase 3 — dashboard gerencial
+  const [showDash, setShowDash] = useState(false);
+  const [dash, setDash] = useState<Dash | null>(null);
+  const [dashLoading, setDashLoading] = useState(false);
+
+  const loadDash = useCallback(async () => {
+    setDashLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (from) params.set('from', from);
+      if (to) params.set('to', to);
+      setDash(await api<Dash>(`/trocas/dashboard?${params.toString()}`));
+    } catch {
+      setDash(null);
+    } finally {
+      setDashLoading(false);
+    }
+  }, [from, to]);
+
+  useEffect(() => { if (showDash) loadDash(); }, [showDash, loadDash]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -318,6 +361,12 @@ export default function PortalTrocasAdminPage() {
           <h1 className="font-extrabold text-base">Portal de Trocas — solicitações</h1>
           <p className="text-xs text-[#6B6456]">Self-service da cliente · reversa · conferência</p>
         </div>
+        <button
+          onClick={() => setShowDash((v) => !v)}
+          className={`px-3 py-2 rounded-lg text-sm font-bold border ${showDash ? 'bg-[#FBF6E6] border-[#B8912B] text-[#8C7325]' : 'border-[#E4DDCB] text-[#6B6456] hover:bg-[#FBF6E6]'}`}
+        >
+          📊 Dashboard
+        </button>
         <button onClick={load} className="p-2 rounded-lg hover:bg-[#FBF6E6]" title="Atualizar">
           <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
         </button>
@@ -363,6 +412,75 @@ export default function PortalTrocasAdminPage() {
 
         {err && !detail && (
           <div className="mb-4 px-4 py-3 rounded-xl bg-red-50 border border-red-200 text-red-700 text-sm">{err}</div>
+        )}
+
+        {/* Dashboard gerencial (Fase 3) */}
+        {showDash && (
+          <div className="bg-white rounded-2xl border border-[#EDE7D8] p-4 mb-4">
+            {dashLoading && (
+              <div className="py-6 text-center text-[#6B6456] text-sm">
+                <Loader2 className="inline animate-spin mr-2" size={15} />Calculando indicadores…
+              </div>
+            )}
+            {!dashLoading && dash && (
+              <>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+                  {[
+                    ['Trocas no período', String(dash.total)],
+                    ['Em aberto', String(dash.abertas)],
+                    ['Finalizadas', String(dash.finalizadas)],
+                    ['Valor movimentado', brl(dash.valorTotalPeriodo)],
+                    ['Tempo até postagem', dash.tempoMedioPostagem != null ? `${dash.tempoMedioPostagem}d` : '—'],
+                    ['Tempo de conferência', dash.tempoMedioConferencia != null ? `${dash.tempoMedioConferencia}d` : '—'],
+                    ['Tempo até conclusão', dash.tempoMedioConclusao != null ? `${dash.tempoMedioConclusao}d` : '—'],
+                    ['Reversas grátis usadas', String(dash.reversasGratis)],
+                  ].map(([label, val]) => (
+                    <div key={label} className="border border-[#EDE7D8] rounded-xl p-3">
+                      <div className="text-[11px] font-bold text-[#6B6456]">{label}</div>
+                      <div className="text-lg font-extrabold text-[#2A2620]">{val}</div>
+                    </div>
+                  ))}
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+                  {[
+                    ['% troca de peça', `${dash.pctTrocaPeca}%`],
+                    ['% vale-compras', `${dash.pctVale}%`],
+                    ['% reembolso', `${dash.pctReembolso}%`],
+                    ['Trocas da troca', String(dash.trocasEncadeadas)],
+                    ['Por tamanho', String(dash.trocasPorTamanho)],
+                    ['Por cor', String(dash.trocasPorCor)],
+                    ['Com defeito', String(dash.trocasPorDefeito)],
+                    ['Canceladas', String(dash.canceladas)],
+                  ].map(([label, val]) => (
+                    <div key={label} className="border border-[#EDE7D8] rounded-xl p-3">
+                      <div className="text-[11px] font-bold text-[#6B6456]">{label}</div>
+                      <div className="text-lg font-extrabold text-[#2A2620]">{val}</div>
+                    </div>
+                  ))}
+                </div>
+                <div className="grid sm:grid-cols-2 gap-3">
+                  <div className="border border-[#EDE7D8] rounded-xl p-3">
+                    <div className="text-[11px] font-bold text-[#6B6456] mb-2">Motivos mais frequentes</div>
+                    {dash.motivos.length === 0 && <div className="text-sm text-[#6B6456]">Sem dados no período.</div>}
+                    {dash.motivos.map((m) => (
+                      <div key={m.nome} className="flex justify-between text-sm py-0.5">
+                        <span>{m.nome}</span><b>{m.total}</b>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="border border-[#EDE7D8] rounded-xl p-3">
+                    <div className="text-[11px] font-bold text-[#6B6456] mb-2">Produtos mais trocados</div>
+                    {dash.produtosMaisTrocados.length === 0 && <div className="text-sm text-[#6B6456]">Sem dados no período.</div>}
+                    {dash.produtosMaisTrocados.map((p) => (
+                      <div key={p.nome} className="flex justify-between text-sm py-0.5 gap-2">
+                        <span className="truncate">{p.nome}</span><b className="shrink-0">{p.total}</b>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
         )}
 
         {/* Tabela */}
@@ -440,6 +558,9 @@ export default function PortalTrocasAdminPage() {
                     <div className="text-sm text-[#6B6456]">
                       Pedido #{detail.wcOrderNumber || detail.wcOrderId}
                       {detail.parent && <> · origem T{String(detail.parent.numero).padStart(4, '0')}</>}
+                      {detail.filhas?.length > 0 && (
+                        <> · gerou {detail.filhas.map((f) => `T${String(f.numero).padStart(4, '0')}`).join(', ')}</>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-2">

@@ -4279,6 +4279,8 @@ model TrocaSolicitacao {
   reversaCodigo    String?   @map("reversa_codigo")
   reversaPrazo     DateTime? @map("reversa_prazo")
   reversaEnviadaAt DateTime? @map("reversa_enviada_at")
+  // Lembrete de vencimento do código reverso (cron manda 1x)
+  reversaLembreteAt DateTime? @map("reversa_lembrete_at")
   // Devolução por conta da cliente (benefício já usado): rastreio informado
   clienteTrackingCode String? @map("cliente_tracking_code")
   // Soma do líquido pago dos itens selecionados
