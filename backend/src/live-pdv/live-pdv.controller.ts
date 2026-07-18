@@ -401,11 +401,12 @@ export class LivePdvController {
     return this.svc.startPaymentLink(cartId);
   }
 
-  // Confirmação manual pra lojas com PIX externo (franquias sem gateway):
-  // a cliente pagou por fora e a operadora marca pago → dispara a separação.
+  // Confirmação manual "JÁ PAGOU por fora" — liberada pra QUALQUER loja
+  // (dono 18/07). Registra quem confirmou no log pra auditoria.
   @Post('carts/:cartId/pay-external')
-  payExternal(@Param('cartId') cartId: string) {
-    return this.svc.confirmExternalPayment(cartId);
+  payExternal(@Param('cartId') cartId: string, @Req() req: any) {
+    const who = req?.user?.name || req?.user?.email || req?.user?.sub || null;
+    return this.svc.confirmExternalPayment(cartId, who);
   }
 
   @Get('carts/:cartId/payment-status')
