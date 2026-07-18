@@ -148,31 +148,101 @@ export class TrocasService {
   // ── Localizar pedido (identidade = nº pedido + CPF ou e-mail) ───────
 
   /**
-   * Acha o pedido WC e valida a identidade. NUNCA diferencia "pedido não
-   * existe" de "dados não conferem" (evita enumeração de pedidos).
+   * Monta um "pedido no formato WC" a partir do Order LOCAL do Flow.
+   * Necessário pros pedidos da LIVE ("LIVE-61", wcOrderId sintético 900M+),
+   * que NÃO existem no WooCommerce — e serve de fallback pro site também.
+   * OrderItem.unitPrice = pago · baseUnitPrice = cheio (live).
+   */
+  private buildOrderFromLocal(local: any) {
+    const status = ['delivered', 'shipped', 'ready'].includes(String(local.status))
+      ? 'completed'
+      : String(local.status || 'processing');
+    return {
+      id: local.wcOrderId,
+      number: local.wcOrderNumber || String(local.wcOrderId),
+      status,
+      billing: {
+        first_name: local.customerName || '',
+        last_name: '',
+        cpf: local.customerCpf || '',
+        email: local.customerEmail || '',
+        phone: local.customerPhone || '',
+      },
+      line_items: (local.items || []).map((it: any) => ({
+        sku: it.sku,
+        name: it.productName || it.sku,
+        quantity: it.quantity,
+        subtotal: String(((it.baseUnitPrice ?? it.unitPrice) || 0) * (it.quantity || 1)),
+        total: String((it.unitPrice || 0) * (it.quantity || 1)),
+      })),
+      fee_lines: [],
+      coupon_lines: [],
+      meta_data: local.trackingCode
+        ? [{ key: '_tracking_number', value: local.trackingCode }]
+        : [],
+      date_created: local.wcDateCreated || local.createdAt,
+      date_paid: local.wcDateCreated || local.createdAt,
+      date_completed: null,
+      // Live é paga via PIX (PagBank/Pagar.me) — reembolso pede chave PIX
+      payment_method: local.source === 'live' ? 'pix' : '',
+      total: String(local.totalAmount ?? ''),
+    };
+  }
+
+  /**
+   * Acha o pedido e valida a identidade. Resolve PRIMEIRO na tabela Order
+   * local (cobre pedidos da LIVE "LIVE-61" e números com letra); pedidos do
+   * site seguem buscando o detalhe completo no WC (cupons/fees pro rateio).
+   * NUNCA diferencia "não existe" de "dados não conferem" (anti-enumeração).
    */
   private async findAndVerifyOrder(input: { pedido: string; doc: string }) {
-    const pedidoNum = parseInt(onlyDigits(input.pedido), 10);
+    const clean = String(input.pedido || '').trim().replace(/^#/, '');
     const doc = String(input.doc || '').trim();
-    if (!pedidoNum || !doc) {
+    if (!clean || !doc) {
       throw new BadRequestException('Informe o número do pedido e o CPF ou e-mail da compra.');
     }
+    const isNumeric = /^\d+$/.test(clean);
+    const pedidoNum = isNumeric ? parseInt(clean, 10) : NaN;
+
+    // 1) Tabela Order do Flow (site espelhado + pedidos da LIVE)
+    const orClauses: any[] = [{ wcOrderNumber: { equals: clean, mode: 'insensitive' } }];
+    if (isNumeric) orClauses.push({ wcOrderId: pedidoNum });
+    const local = await (this.prisma as any).order.findFirst({
+      where: { OR: orClauses },
+      include: { items: true },
+      orderBy: { createdAt: 'desc' },
+    });
 
     let order: any = null;
-    try {
-      order = await this.wc.getOrder(pedidoNum);
-    } catch {
-      order = null;
+    if (local) {
+      if (local.source === 'live') {
+        order = this.buildOrderFromLocal(local);
+      } else {
+        // Pedido do site: detalhe completo no WC; local é fallback se o WC cair
+        try {
+          order = await this.wc.getOrder(local.wcOrderId);
+        } catch {
+          order = this.buildOrderFromLocal(local);
+        }
+      }
     }
-    // Se o "number" exibido difere do id interno, tenta busca textual
-    if (!order) {
+
+    // 2) Direto no WC (pedido do site que ainda não espelhou no Flow)
+    if (!order && isNumeric) {
       try {
-        const res = await this.wc.listOrders({ search: String(pedidoNum), perPage: 10, status: 'any' } as any);
-        order = (res.data || []).find(
-          (o: any) => String(o.number) === String(pedidoNum) || Number(o.id) === pedidoNum,
-        ) || null;
+        order = await this.wc.getOrder(pedidoNum);
       } catch {
         order = null;
+      }
+      if (!order) {
+        try {
+          const res = await this.wc.listOrders({ search: clean, perPage: 10, status: 'any' } as any);
+          order = (res.data || []).find(
+            (o: any) => String(o.number) === clean || Number(o.id) === pedidoNum,
+          ) || null;
+        } catch {
+          order = null;
+        }
       }
     }
 

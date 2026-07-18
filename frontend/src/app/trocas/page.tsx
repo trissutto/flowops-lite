@@ -376,8 +376,7 @@ export default function PortalTrocasPage() {
               </span>
               <input
                 className={inputCls}
-                inputMode="numeric"
-                placeholder="Ex.: 12345"
+                placeholder="Ex.: 12345 ou LIVE-61"
                 value={pedido}
                 onChange={(e) => setPedido(e.target.value)}
                 required
