@@ -79,6 +79,7 @@ export default function TopBreadcrumb() {
     pathname.startsWith('/minha-loja') ||
     pathname.startsWith('/vitrine') ||
     pathname.startsWith('/cadastro-live') ||
+    pathname.startsWith('/trocas') ||
     pathname.startsWith('/pagar') ||
     pathname.startsWith('/p/') ||
     pathname.startsWith('/meu-pedido') ||

@@ -4226,3 +4226,123 @@ model FinancialConciliacao {
   @@index([gateway, status])
   @@map("financial_conciliacoes")
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// PORTAL DE TROCAS — self-service do e-commerce (cliente solicita sozinha)
+// ═══════════════════════════════════════════════════════════════════════
+//
+// Diferente do WcReturnRequest (troca registrada PELA EQUIPE quando a peça
+// já está na loja), aqui a SOLICITAÇÃO nasce no portal público /trocas e
+// atravessa um fluxo com status até a conclusão. O valor usado em qualquer
+// vale/reembolso é o LÍQUIDO PAGO pela cliente (congelado no momento da
+// solicitação — mudança de preço futura não afeta).
+//
+// Encadeamento (troca da troca): parentId aponta pra troca de origem;
+// wcOrderId SEMPRE aponta pro pedido original (nunca se perde o vínculo).
+
+model TrocaSolicitacao {
+  id            String   @id @default(uuid())
+  // Numeração sequencial exibida como T0001, T0002...
+  numero        Int      @unique @default(autoincrement())
+  // Pedido WC original (raiz do encadeamento)
+  wcOrderId     Int      @map("wc_order_id")
+  wcOrderNumber String?  @map("wc_order_number")
+  // Troca de origem (quando é troca da troca)
+  parentId      String?  @map("parent_id")
+  parent        TrocaSolicitacao?  @relation("TrocaEncadeada", fields: [parentId], references: [id])
+  filhas        TrocaSolicitacao[] @relation("TrocaEncadeada")
+  // Cliente (snapshot do pedido)
+  customerName  String?  @map("customer_name")
+  customerCpf   String?  @map("customer_cpf")
+  customerEmail String?  @map("customer_email")
+  customerPhone String?  @map("customer_phone")
+  // Motivo
+  motivo        String
+  motivoDetalhe String?  @map("motivo_detalhe") @db.Text
+  // Fluxo: solicitada | aguardando_postagem | aguardando_envio_cliente |
+  //   postada | em_transporte | recebida | em_conferencia |
+  //   aguardando_decisao | produto_reservado | aguardando_pagamento_diferenca |
+  //   reembolso_andamento | finalizada | cancelada
+  status        String   @default("solicitada")
+  // Validação do prazo (snapshot na solicitação)
+  trackingCodePedido String?   @map("tracking_code_pedido")
+  deliveredAt        DateTime? @map("delivered_at")
+  // 'rastreio' (entrega detectada) | 'data_pedido' (fallback) | 'nao_verificado'
+  prazoVerificadoVia String?   @map("prazo_verificado_via")
+  diasDesdeEntrega   Int?      @map("dias_desde_entrega")
+  dentroDoPrazo      Boolean?  @map("dentro_do_prazo")
+  // Declaração da cliente (checkboxes obrigatórios do portal)
+  declaracaoAceitaAt DateTime? @map("declaracao_aceita_at")
+  declaracaoIp       String?   @map("declaracao_ip")
+  // Logística reversa
+  reversaGratis    Boolean   @default(false) @map("reversa_gratis")
+  reversaCodigo    String?   @map("reversa_codigo")
+  reversaPrazo     DateTime? @map("reversa_prazo")
+  reversaEnviadaAt DateTime? @map("reversa_enviada_at")
+  // Devolução por conta da cliente (benefício já usado): rastreio informado
+  clienteTrackingCode String? @map("cliente_tracking_code")
+  // Soma do líquido pago dos itens selecionados
+  valorTotalPago Float    @map("valor_total_pago")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @default(now()) @updatedAt @map("updated_at")
+
+  items   TrocaItem[]
+  eventos TrocaEvento[]
+
+  @@index([wcOrderId])
+  @@index([customerCpf])
+  @@index([status, createdAt(sort: Desc)])
+  @@map("troca_solicitacoes")
+}
+
+model TrocaItem {
+  id          String  @id @default(uuid())
+  trocaId     String  @map("troca_id")
+  sku         String
+  productName String? @map("product_name")
+  qty         Int     @default(1)
+  // Preço cheio unitário (subtotal do WC, antes de qualquer desconto)
+  valorOriginalUnit Float @map("valor_original_unit")
+  // LÍQUIDO pago unitário (promoção + cupom rateado + desconto PIX rateado)
+  valorPagoUnit     Float @map("valor_pago_unit")
+  totalPago         Float @map("total_pago")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  troca TrocaSolicitacao @relation(fields: [trocaId], references: [id], onDelete: Cascade)
+
+  @@index([trocaId])
+  @@index([sku])
+  @@map("troca_itens")
+}
+
+// Linha do tempo auditável — nunca apagar (regra da política)
+model TrocaEvento {
+  id         String   @id @default(uuid())
+  trocaId    String   @map("troca_id")
+  tipo       String   // solicitacao | status | reversa | rastreio_cliente | concessao | email | nota
+  descricao  String   @db.Text
+  statusDe   String?  @map("status_de")
+  statusPara String?  @map("status_para")
+  userId     String?  @map("user_id")
+  userName   String?  @map("user_name")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  troca TrocaSolicitacao @relation(fields: [trocaId], references: [id], onDelete: Cascade)
+
+  @@index([trocaId, createdAt])
+  @@map("troca_eventos")
+}
+
+// Concessão EXTRA de reversa grátis (além da 1 por CPF) — exige justificativa
+model TrocaReversaConcessao {
+  id            String   @id @default(uuid())
+  cpf           String
+  trocaId       String?  @map("troca_id")
+  justificativa String   @db.Text
+  userId        String?  @map("user_id")
+  userName      String?  @map("user_name")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@index([cpf])
+  @@map("troca_reversa_concessoes")
+}
