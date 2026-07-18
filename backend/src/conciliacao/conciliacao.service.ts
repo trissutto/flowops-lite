@@ -260,12 +260,20 @@ export class ConciliacaoService {
   }
 
   /** Lista pra tela: transação + conciliação, filtrável. */
-  async listar(f: { status?: string; gateway?: string; page?: number; perPage?: number }) {
+  async listar(f: { status?: string; gateway?: string; storeCode?: string; page?: number; perPage?: number }) {
     const page = Math.max(1, f.page || 1);
     const perPage = Math.min(200, Math.max(10, f.perPage || 50));
     const where: any = {};
     if (f.status) where.status = f.status;
     if (f.gateway) where.gateway = f.gateway;
+    // Filtro por LOJA: a loja mora na transação — resolve os ids primeiro
+    if (f.storeCode) {
+      const txsDaLoja: any[] = await (this.prisma as any).financialTransaction.findMany({
+        where: { storeCode: f.storeCode },
+        select: { id: true },
+      });
+      where.transactionId = { in: txsDaLoja.map((t) => t.id) };
+    }
     const [total, rows] = await Promise.all([
       (this.prisma as any).financialConciliacao.count({ where }),
       (this.prisma as any).financialConciliacao.findMany({
