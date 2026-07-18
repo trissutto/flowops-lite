@@ -34,7 +34,8 @@ export default function TopNav() {
       pathname.startsWith('/login') ||
       pathname.startsWith('/minha-loja') ||
       pathname.startsWith('/vitrine') || // vitrine simula site público — sem header interno
-      pathname.startsWith('/trocas'), // portal de trocas público — cliente não vê chrome interno
+      pathname.startsWith('/trocas') || // portal de trocas público — cliente não vê chrome interno
+      pathname.startsWith('/meus-pedidos'), // acompanhamento público de pedidos
     [pathname],
   );
 
