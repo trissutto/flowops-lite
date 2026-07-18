@@ -4283,6 +4283,36 @@ model TrocaSolicitacao {
   clienteTrackingCode String? @map("cliente_tracking_code")
   // Soma do líquido pago dos itens selecionados
   valorTotalPago Float    @map("valor_total_pago")
+
+  // ── FASE 2: recebimento → conferência → decisão → envio ──
+  recebidaAt         DateTime? @map("recebida_at")
+  conferenciaAt      DateTime? @map("conferencia_at")
+  conferenciaAprovada Boolean? @map("conferencia_aprovada")
+  conferenciaChecklist Json?   @map("conferencia_checklist")
+  conferenciaReprovadaMotivo String? @map("conferencia_reprovada_motivo")
+  // Loja que recebeu a peça fisicamente (entrada de estoque nela)
+  receivingStoreCode String?   @map("receiving_store_code")
+  receivingStoreName String?   @map("receiving_store_name")
+  // Decisão da cliente: trocar_tamanho | trocar_cor | vale | reembolso
+  decisao            String?
+  decisaoAt          DateTime? @map("decisao_at")
+  // Nova peça escolhida (reserva LÓGICA — desconta da disponibilidade
+  // mostrada a outras trocas; Giga só baixa no envio real)
+  novaSku            String?   @map("nova_sku")
+  novaProductName    String?   @map("nova_product_name")
+  novaCor            String?   @map("nova_cor")
+  novaTamanho        String?   @map("nova_tamanho")
+  reservaAt          DateTime? @map("reserva_at")
+  // Vale-compras (cupom WC + registro local, 90 dias)
+  valeCode           String?   @unique @map("vale_code")
+  valeValidade       DateTime? @map("vale_validade")
+  // Reembolso (sistema ORGANIZA; equipe executa no gateway)
+  reembolsoForma     String?   @map("reembolso_forma")     // pix | cartao | outro
+  reembolsoChavePix  String?   @map("reembolso_chave_pix")
+  reembolsoConcluidoAt DateTime? @map("reembolso_concluido_at")
+  // Envio da nova peça
+  envioTrackingCode  String?   @map("envio_tracking_code")
+  envioAt            DateTime? @map("envio_at")
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @default(now()) @updatedAt @map("updated_at")
 
@@ -4306,6 +4336,9 @@ model TrocaItem {
   // LÍQUIDO pago unitário (promoção + cupom rateado + desconto PIX rateado)
   valorPagoUnit     Float @map("valor_pago_unit")
   totalPago         Float @map("total_pago")
+  // Entrada de estoque na conferência aprovada (via increaseStock)
+  stockReturnedAt   DateTime? @map("stock_returned_at")
+  stockError        String?   @map("stock_error")
   createdAt   DateTime @default(now()) @map("created_at")
 
   troca TrocaSolicitacao @relation(fields: [trocaId], references: [id], onDelete: Cascade)

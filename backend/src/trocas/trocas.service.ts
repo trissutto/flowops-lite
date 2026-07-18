@@ -8,6 +8,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { WooCommerceService } from '../woocommerce/woocommerce.service';
 import { TrackingService } from '../tracking/tracking.service';
 import { EmailService } from '../email/email.service';
+import { ErpService } from '../erp/erp.service';
 
 /**
  * trocas.service.ts — PORTAL DE TROCAS self-service do e-commerce.
@@ -42,6 +43,21 @@ export const TROCA_STATUS = [
   'reembolso_andamento',
   'finalizada',
   'cancelada',
+] as const;
+
+export const CONFERENCIA_CHECKLIST = [
+  'Produto correto',
+  'Sem uso',
+  'Etiqueta presente',
+  'Sem avarias',
+  'Conforme política',
+] as const;
+
+export const CONFERENCIA_REPROVACAO_MOTIVOS = [
+  'Produto usado',
+  'Sem etiqueta',
+  'Produto danificado',
+  'Produto diferente',
 ] as const;
 
 export const TROCA_MOTIVOS = [
@@ -111,6 +127,7 @@ export class TrocasService {
     private readonly wc: WooCommerceService,
     private readonly tracking: TrackingService,
     private readonly email: EmailService,
+    private readonly erp: ErpService,
   ) {}
 
   // ── Config (mesma chave da tela de trocas da equipe) ────────────────
@@ -373,6 +390,16 @@ export class TrocasService {
       reversaPrazo: t.reversaPrazo,
       clienteTrackingCode: t.clienteTrackingCode,
       createdAt: t.createdAt,
+      // Fase 2 — visão pública da decisão/andamento
+      decisao: t.decisao,
+      novaSku: t.novaSku,
+      novaProductName: t.novaProductName,
+      novaCor: t.novaCor,
+      novaTamanho: t.novaTamanho,
+      valeCode: t.valeCode,
+      valeValidade: t.valeValidade,
+      reembolsoForma: t.reembolsoForma,
+      envioTrackingCode: t.envioTrackingCode,
       items: (t.items || []).map((it: any) => ({
         sku: it.sku,
         productName: it.productName,
@@ -758,6 +785,505 @@ export class TrocasService {
           create: {
             tipo: 'concessao',
             descricao: `Reversa gratuita EXTRA concedida. Justificativa: ${justificativa}`,
+            userId: input.userId || null,
+            userName: input.userName || null,
+          },
+        },
+      },
+    });
+    return { ok: true, troca: updated };
+  }
+
+  // ═══ FASE 2: recebimento → conferência → decisão → envio ═══════════
+
+  private portalUrl(): string {
+    const front = (process.env.FRONTEND_URL || '').split(',')[0].trim();
+    return `${front || 'https://www.lurdsplussize.com.br'}/trocas`;
+  }
+
+  /** Etapa 9 — "Produto Recebido" → automaticamente Em Conferência. */
+  async receber(input: { id: string; userId?: string; userName?: string }) {
+    const troca = await (this.prisma as any).trocaSolicitacao.findUnique({ where: { id: input.id } });
+    if (!troca) throw new NotFoundException('Troca não encontrada');
+    if (['finalizada', 'cancelada'].includes(troca.status)) {
+      throw new BadRequestException(`Troca ${troca.status} — não dá pra receber.`);
+    }
+    const updated = await (this.prisma as any).trocaSolicitacao.update({
+      where: { id: troca.id },
+      data: {
+        status: 'em_conferencia',
+        recebidaAt: troca.recebidaAt || new Date(),
+        eventos: {
+          create: {
+            tipo: 'status',
+            descricao: 'Produto recebido — enviado pra conferência.',
+            statusDe: troca.status,
+            statusPara: 'em_conferencia',
+            userId: input.userId || null,
+            userName: input.userName || null,
+          },
+        },
+      },
+    });
+    return { ok: true, troca: updated };
+  }
+
+  /**
+   * Etapas 10-12 — conferência com checklist.
+   * Aprovada: entrada de estoque na loja que RECEBEU (increaseStock) +
+   * e-mail "escolha a solução" + status aguardando_decisao.
+   * Reprovada: e-mail com o motivo + WhatsApp do atendimento; status fica
+   * em_conferencia com flag reprovada (equipe resolve manualmente).
+   */
+  async conferir(input: {
+    id: string;
+    aprovado: boolean;
+    checklist?: Record<string, boolean>;
+    motivoReprovacao?: string;
+    storeCode?: string;
+    userId?: string;
+    userName?: string;
+  }) {
+    const troca = await (this.prisma as any).trocaSolicitacao.findUnique({
+      where: { id: input.id },
+      include: { items: true },
+    });
+    if (!troca) throw new NotFoundException('Troca não encontrada');
+    if (!['em_conferencia', 'recebida'].includes(troca.status)) {
+      throw new BadRequestException('Troca não está em conferência.');
+    }
+
+    // ── REPROVADA ──
+    if (!input.aprovado) {
+      const motivo = String(input.motivoReprovacao || '').trim();
+      if (!CONFERENCIA_REPROVACAO_MOTIVOS.includes(motivo as any)) {
+        throw new BadRequestException('Escolha o motivo da reprovação.');
+      }
+      let emailOk = false;
+      if (troca.customerEmail) {
+        emailOk = await this.email.send(
+          troca.customerEmail,
+          `Lurds Plus Size — conferência da troca ${formatTrocaNumero(troca.numero)}`,
+          `
+          <div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;color:#2A2620">
+            <h2 style="color:#8C7325">Olá! 💛</h2>
+            <p>Recebemos a peça da sua troca <b>${formatTrocaNumero(troca.numero)}</b>, mas infelizmente ela <b>não passou na conferência</b>.</p>
+            <p>Motivo: <b>${motivo}</b></p>
+            <p>Por favor, entre em contato com nosso atendimento pelo WhatsApp <b>(13) 99625-6238</b> pra gente resolver juntas a melhor solução.</p>
+            <p>Equipe Lurds Plus Size 💛</p>
+          </div>`,
+        );
+      }
+      const updated = await (this.prisma as any).trocaSolicitacao.update({
+        where: { id: troca.id },
+        data: {
+          conferenciaAt: new Date(),
+          conferenciaAprovada: false,
+          conferenciaReprovadaMotivo: motivo,
+          conferenciaChecklist: input.checklist || null,
+          eventos: {
+            create: {
+              tipo: 'conferencia',
+              descricao:
+                `Conferência REPROVADA — ${motivo}.` +
+                (emailOk ? ' Cliente comunicada por e-mail (contato via WhatsApp).' : ' E-mail NÃO enviado — comunicar a cliente manualmente.'),
+              userId: input.userId || null,
+              userName: input.userName || null,
+            },
+          },
+        },
+      });
+      return { ok: true, aprovado: false, emailEnviado: emailOk, troca: updated };
+    }
+
+    // ── APROVADA ──
+    const storeCode = String(input.storeCode || '').trim();
+    if (!storeCode) throw new BadRequestException('Informe a loja que recebeu a peça (entrada de estoque).');
+    const store = await this.prisma.store.findUnique({
+      where: { code: storeCode },
+      select: { code: true, name: true } as any,
+    });
+    if (!store) throw new BadRequestException(`Loja ${storeCode} não cadastrada`);
+
+    // Etapa 11 — entrada automática no estoque da loja receptora
+    const stockAttempts: Array<{ ok: boolean; error?: string }> = [];
+    try {
+      const result = await this.erp.increaseStock(
+        troca.items.map((it: any) => ({ sku: it.sku, qty: it.qty, storeCode })),
+      );
+      for (const _ of troca.items) {
+        stockAttempts.push(result.success ? { ok: true } : { ok: false, error: result.error });
+      }
+    } catch (e: any) {
+      for (const _ of troca.items) stockAttempts.push({ ok: false, error: e?.message || String(e) });
+    }
+    for (let i = 0; i < troca.items.length; i++) {
+      await (this.prisma as any).trocaItem.update({
+        where: { id: troca.items[i].id },
+        data: {
+          stockReturnedAt: stockAttempts[i]?.ok ? new Date() : null,
+          stockError: stockAttempts[i]?.ok ? null : stockAttempts[i]?.error || null,
+        },
+      });
+    }
+    const stockOk = stockAttempts.every((a) => a.ok);
+
+    // Etapa 12 — e-mail "escolha a solução"
+    let emailOk = false;
+    if (troca.customerEmail) {
+      emailOk = await this.email.send(
+        troca.customerEmail,
+        `Lurds Plus Size — recebemos seu produto! Escolha como finalizar a troca ${formatTrocaNumero(troca.numero)} 💛`,
+        `
+        <div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;color:#2A2620">
+          <h2 style="color:#8C7325">Olá! 💛</h2>
+          <p>Recebemos e conferimos o produto da sua troca <b>${formatTrocaNumero(troca.numero)}</b> — está tudo certo!</p>
+          <p><b>Agora é sua vez de escolher</b> como deseja finalizar: trocar o tamanho, trocar a cor, receber um vale-compras ou solicitar reembolso.</p>
+          <p style="text-align:center;margin:24px 0">
+            <a href="${this.portalUrl()}" style="background:#B8912B;color:#fff;font-weight:bold;padding:14px 28px;border-radius:12px;text-decoration:none">Escolher minha solução</a>
+          </p>
+          <p>Valor disponível pra troca: <b>R$ ${Number(troca.valorTotalPago).toFixed(2).replace('.', ',')}</b> (valor efetivamente pago).</p>
+          <p>Qualquer dúvida, estamos à disposição! 💛<br/>Equipe Lurds Plus Size</p>
+        </div>`,
+      );
+    }
+
+    const updated = await (this.prisma as any).trocaSolicitacao.update({
+      where: { id: troca.id },
+      data: {
+        status: 'aguardando_decisao',
+        conferenciaAt: new Date(),
+        conferenciaAprovada: true,
+        conferenciaChecklist: input.checklist || null,
+        receivingStoreCode: (store as any).code,
+        receivingStoreName: (store as any).name,
+        eventos: {
+          create: {
+            tipo: 'conferencia',
+            descricao:
+              `Conferência APROVADA. Entrada de estoque na loja ${(store as any).name} (${storeCode})` +
+              (stockOk ? ' concluída.' : ' com ERRO em pelo menos um item — verificar (retry manual).') +
+              (emailOk ? ' Cliente avisada por e-mail pra escolher a solução.' : ' E-mail NÃO enviado — avisar a cliente manualmente.'),
+            statusDe: troca.status,
+            statusPara: 'aguardando_decisao',
+            userId: input.userId || null,
+            userName: input.userName || null,
+          },
+        },
+      },
+    });
+    return { ok: true, aprovado: true, stockOk, emailEnviado: emailOk, troca: updated };
+  }
+
+  // ── Grade de variações (ref × cor × tamanho) pelo ESPELHO ───────────
+
+  /** Qtd reservada logicamente por outras trocas ativas (produto_reservado). */
+  private async reservedQty(codigos: string[]): Promise<Map<string, number>> {
+    if (!codigos.length) return new Map();
+    const rows = await (this.prisma as any).trocaSolicitacao.findMany({
+      where: { novaSku: { in: codigos }, status: 'produto_reservado' },
+      select: { novaSku: true },
+    });
+    const map = new Map<string, number>();
+    for (const r of rows) map.set(r.novaSku, (map.get(r.novaSku) || 0) + 1);
+    return map;
+  }
+
+  /**
+   * Variações da peça devolvida (mesma REF no espelho Wincred), com
+   * disponibilidade = soma do estoque de TODAS as lojas − reservas lógicas.
+   * Regra: decisão de tamanho/cor só pra troca de 1 item (multi-item → vale/reembolso).
+   */
+  async getVariacoes(input: { pedido: string; doc: string; trocaId: string }) {
+    const { order } = await this.findAndVerifyOrder(input);
+    const troca = await (this.prisma as any).trocaSolicitacao.findFirst({
+      where: { id: input.trocaId, wcOrderId: Number(order.id) },
+      include: { items: true },
+    });
+    if (!troca) throw new NotFoundException('Troca não encontrada pra este pedido.');
+    if (troca.items.length !== 1) {
+      return { ok: false, motivo: 'multi_itens', variacoes: [] };
+    }
+
+    const codigo = String(troca.items[0].sku || '').replace(/^0+/, '');
+    const produto = await (this.prisma as any).wincredProduto.findUnique({ where: { codigo } });
+    if (!produto?.ref) {
+      return { ok: false, motivo: 'sem_ref', variacoes: [] };
+    }
+
+    const variacoes = await (this.prisma as any).wincredProduto.findMany({
+      where: { ref: produto.ref },
+      select: { codigo: true, descricaoPdv: true, cor: true, tamanho: true, vendaUn: true },
+    });
+    const codigos = variacoes.map((v: any) => v.codigo);
+    const [estoques, reservas] = await Promise.all([
+      (this.prisma as any).wincredEstoque.groupBy({
+        by: ['codigo'],
+        where: { codigo: { in: codigos } },
+        _sum: { estoque: true },
+      }),
+      this.reservedQty(codigos),
+    ]);
+    const estoqueByCodigo = new Map<string, number>(
+      estoques.map((e: any) => [e.codigo, Number(e._sum?.estoque) || 0]),
+    );
+
+    return {
+      ok: true,
+      ref: produto.ref,
+      atual: { codigo, cor: produto.cor, tamanho: produto.tamanho },
+      variacoes: variacoes
+        .map((v: any) => {
+          const disp = Math.max(
+            0,
+            (estoqueByCodigo.get(v.codigo) || 0) - (reservas.get(v.codigo) || 0),
+          );
+          return {
+            sku: v.codigo,
+            nome: v.descricaoPdv,
+            cor: v.cor || '—',
+            tamanho: v.tamanho || '—',
+            disponivel: disp,
+          };
+        })
+        .filter((v: any) => v.disponivel > 0 || v.sku === codigo),
+    };
+  }
+
+  // ── Etapas 12-17: decisão da cliente ─────────────────────────────────
+
+  async decidir(input: {
+    pedido: string;
+    doc: string;
+    trocaId: string;
+    decisao: 'trocar_tamanho' | 'trocar_cor' | 'vale' | 'reembolso';
+    novaSku?: string;
+    chavePix?: string;
+  }) {
+    const { order } = await this.findAndVerifyOrder(input);
+    const troca = await (this.prisma as any).trocaSolicitacao.findFirst({
+      where: { id: input.trocaId, wcOrderId: Number(order.id) },
+      include: { items: true },
+    });
+    if (!troca) throw new NotFoundException('Troca não encontrada pra este pedido.');
+    if (troca.status !== 'aguardando_decisao') {
+      throw new BadRequestException('Esta troca não está aguardando a sua decisão.');
+    }
+
+    // ── Trocar tamanho/cor: reserva lógica da nova peça ──
+    if (input.decisao === 'trocar_tamanho' || input.decisao === 'trocar_cor') {
+      const novaSku = String(input.novaSku || '').replace(/^0+/, '');
+      if (!novaSku) throw new BadRequestException('Escolha a nova peça.');
+      const grade = await this.getVariacoes(input);
+      if (!grade.ok) throw new BadRequestException('Troca de tamanho/cor indisponível pra esta solicitação.');
+      const opcao = (grade.variacoes as any[]).find((v) => v.sku === novaSku);
+      if (!opcao || opcao.disponivel <= 0) {
+        throw new BadRequestException('Essa opção acabou de ficar indisponível. Escolha outra, por favor.');
+      }
+      const updated = await (this.prisma as any).trocaSolicitacao.update({
+        where: { id: troca.id },
+        data: {
+          decisao: input.decisao,
+          decisaoAt: new Date(),
+          novaSku,
+          novaProductName: opcao.nome,
+          novaCor: opcao.cor,
+          novaTamanho: opcao.tamanho,
+          reservaAt: new Date(),
+          status: 'produto_reservado',
+          eventos: {
+            create: {
+              tipo: 'decisao',
+              descricao: `Cliente escolheu ${input.decisao === 'trocar_tamanho' ? 'trocar o TAMANHO' : 'trocar a COR'}: ${opcao.nome} (${opcao.cor} · ${opcao.tamanho}, SKU ${novaSku}). Peça reservada.`,
+              statusDe: 'aguardando_decisao',
+              statusPara: 'produto_reservado',
+            },
+          },
+        },
+      });
+      return {
+        ok: true,
+        status: 'produto_reservado',
+        mensagem: `Prontinho! Reservamos a peça ${opcao.cor} · tamanho ${opcao.tamanho} pra você. Assim que enviarmos, o rastreio aparece aqui no portal.`,
+        troca: this.formatTrocaPublic({ ...updated, items: troca.items, eventos: [] }),
+      };
+    }
+
+    // ── Vale-compras: cupom WC + registro local (90 dias) ──
+    if (input.decisao === 'vale') {
+      const valeCode = `TROCA-${Math.random().toString(36).toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8).padEnd(8, '0')}`;
+      const validade = new Date(Date.now() + 90 * 86_400_000);
+      let cupomOk = false;
+      try {
+        const r = await this.wc.createDiscountCoupon({
+          code: valeCode,
+          amount: Number(troca.valorTotalPago),
+          expiresAt: validade,
+          description: `Vale-compras troca ${formatTrocaNumero(troca.numero)} (pedido #${troca.wcOrderNumber})`,
+          customerEmail: troca.customerEmail || undefined,
+        });
+        cupomOk = !!r.ok;
+      } catch { /* segue — vale local vale mesmo sem cupom no site */ }
+
+      let emailOk = false;
+      if (troca.customerEmail) {
+        emailOk = await this.email.send(
+          troca.customerEmail,
+          `Lurds Plus Size — seu vale-compras de R$ ${Number(troca.valorTotalPago).toFixed(2).replace('.', ',')} 💛`,
+          `
+          <div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;color:#2A2620">
+            <h2 style="color:#8C7325">Olá! 💛</h2>
+            <p>Sua troca <b>${formatTrocaNumero(troca.numero)}</b> foi finalizada com um vale-compras:</p>
+            <p style="font-size:24px;font-weight:bold;background:#FBF6E6;border:2px dashed #B8912B;border-radius:12px;padding:16px;text-align:center;letter-spacing:2px">${valeCode}</p>
+            <p>Valor: <b>R$ ${Number(troca.valorTotalPago).toFixed(2).replace('.', ',')}</b> · válido até <b>${validade.toLocaleDateString('pt-BR')}</b>.</p>
+            <p>Use no site aplicando o código no carrinho, ou apresente em uma de nossas lojas físicas.</p>
+            <p>Equipe Lurds Plus Size 💛</p>
+          </div>`,
+        );
+      }
+
+      const updated = await (this.prisma as any).trocaSolicitacao.update({
+        where: { id: troca.id },
+        data: {
+          decisao: 'vale',
+          decisaoAt: new Date(),
+          valeCode,
+          valeValidade: validade,
+          status: 'finalizada',
+          eventos: {
+            create: {
+              tipo: 'decisao',
+              descricao:
+                `Cliente escolheu VALE-COMPRAS de R$ ${Number(troca.valorTotalPago).toFixed(2)} — código ${valeCode}, válido até ${validade.toLocaleDateString('pt-BR')}.` +
+                (cupomOk ? ' Cupom criado no site.' : ' ATENÇÃO: cupom NÃO criado no WC — criar manualmente.') +
+                (emailOk ? ' E-mail enviado.' : ' E-mail NÃO enviado.'),
+              statusDe: 'aguardando_decisao',
+              statusPara: 'finalizada',
+            },
+          },
+        },
+      });
+      return {
+        ok: true,
+        status: 'finalizada',
+        valeCode,
+        valeValidade: validade,
+        mensagem: `Seu vale-compras ${valeCode} de R$ ${Number(troca.valorTotalPago).toFixed(2).replace('.', ',')} está pronto! Vale no site ou em qualquer loja física até ${validade.toLocaleDateString('pt-BR')}.`,
+        troca: this.formatTrocaPublic({ ...updated, items: troca.items, eventos: [] }),
+      };
+    }
+
+    // ── Reembolso: identifica a forma de pagamento e organiza ──
+    if (input.decisao === 'reembolso') {
+      const metodo = String(order.payment_method || '').toLowerCase();
+      const isPix = metodo.includes('pix');
+      const forma = isPix ? 'pix' : metodo.includes('card') || metodo.includes('credit') || metodo.includes('cart') ? 'cartao' : 'outro';
+      const chavePix = String(input.chavePix || '').trim();
+      if (isPix && chavePix.length < 5) {
+        throw new BadRequestException('Informe a chave PIX pra receber o reembolso.');
+      }
+      const updated = await (this.prisma as any).trocaSolicitacao.update({
+        where: { id: troca.id },
+        data: {
+          decisao: 'reembolso',
+          decisaoAt: new Date(),
+          reembolsoForma: forma,
+          reembolsoChavePix: isPix ? chavePix : null,
+          status: 'reembolso_andamento',
+          eventos: {
+            create: {
+              tipo: 'decisao',
+              descricao:
+                `Cliente escolheu REEMBOLSO de R$ ${Number(troca.valorTotalPago).toFixed(2)} — forma: ${forma.toUpperCase()}` +
+                (isPix ? ` (chave PIX informada).` : forma === 'cartao' ? ' (estorno no cartão — solicitar no gateway).' : '.'),
+              statusDe: 'aguardando_decisao',
+              statusPara: 'reembolso_andamento',
+            },
+          },
+        },
+      });
+      return {
+        ok: true,
+        status: 'reembolso_andamento',
+        mensagem: isPix
+          ? 'Reembolso solicitado! Faremos o PIX pra chave informada em até 3 dias úteis.'
+          : 'Reembolso solicitado! O estorno será feito na mesma forma de pagamento da compra (o prazo de aparecer na fatura depende da operadora do cartão).',
+        troca: this.formatTrocaPublic({ ...updated, items: troca.items, eventos: [] }),
+      };
+    }
+
+    throw new BadRequestException('Escolha uma opção válida.');
+  }
+
+  // ── Admin: envio da nova peça / conclusão do reembolso ──────────────
+
+  /** Etapas 18-19 — registra o rastreio do reenvio e finaliza. */
+  async registrarEnvio(input: { id: string; trackingCode: string; userId?: string; userName?: string }) {
+    const code = String(input.trackingCode || '').trim().toUpperCase();
+    if (code.length < 8) throw new BadRequestException('Código de rastreio inválido.');
+    const troca = await (this.prisma as any).trocaSolicitacao.findUnique({ where: { id: input.id } });
+    if (!troca) throw new NotFoundException('Troca não encontrada');
+    if (troca.status !== 'produto_reservado') {
+      throw new BadRequestException('Troca não está com produto reservado aguardando envio.');
+    }
+
+    let emailOk = false;
+    if (troca.customerEmail) {
+      emailOk = await this.email.send(
+        troca.customerEmail,
+        `Lurds Plus Size — sua nova peça está a caminho! 💛`,
+        `
+        <div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;color:#2A2620">
+          <h2 style="color:#8C7325">Olá! 💛</h2>
+          <p>A nova peça da sua troca <b>${formatTrocaNumero(troca.numero)}</b> (${troca.novaProductName || ''} ${troca.novaCor || ''} · ${troca.novaTamanho || ''}) já foi postada!</p>
+          <p>Código de rastreio: <b>${code}</b></p>
+          <p><a href="https://rastreamento.correios.com.br/app/index.php?objetos=${encodeURIComponent(code)}">Acompanhar entrega nos Correios</a></p>
+          <p>Equipe Lurds Plus Size 💛</p>
+        </div>`,
+      );
+    }
+
+    const updated = await (this.prisma as any).trocaSolicitacao.update({
+      where: { id: troca.id },
+      data: {
+        envioTrackingCode: code,
+        envioAt: new Date(),
+        status: 'finalizada',
+        eventos: {
+          create: {
+            tipo: 'envio',
+            descricao:
+              `Nova peça enviada — rastreio ${code}. Troca finalizada.` +
+              (emailOk ? ' Cliente avisada por e-mail.' : ' E-mail NÃO enviado — avisar a cliente.'),
+            statusDe: troca.status,
+            statusPara: 'finalizada',
+            userId: input.userId || null,
+            userName: input.userName || null,
+          },
+        },
+      },
+    });
+    return { ok: true, emailEnviado: emailOk, troca: updated };
+  }
+
+  /** Etapa 17 — equipe executou o PIX/estorno no gateway e conclui. */
+  async concluirReembolso(input: { id: string; userId?: string; userName?: string }) {
+    const troca = await (this.prisma as any).trocaSolicitacao.findUnique({ where: { id: input.id } });
+    if (!troca) throw new NotFoundException('Troca não encontrada');
+    if (troca.status !== 'reembolso_andamento') {
+      throw new BadRequestException('Troca não está com reembolso em andamento.');
+    }
+    const updated = await (this.prisma as any).trocaSolicitacao.update({
+      where: { id: troca.id },
+      data: {
+        status: 'finalizada',
+        reembolsoConcluidoAt: new Date(),
+        eventos: {
+          create: {
+            tipo: 'status',
+            descricao: `Reembolso de R$ ${Number(troca.valorTotalPago).toFixed(2)} concluído (${(troca.reembolsoForma || '').toUpperCase()}). Troca finalizada.`,
+            statusDe: 'reembolso_andamento',
+            statusPara: 'finalizada',
             userId: input.userId || null,
             userName: input.userName || null,
           },

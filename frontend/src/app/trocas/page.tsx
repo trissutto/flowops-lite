@@ -43,8 +43,26 @@ type TrocaPublica = {
   reversaPrazo: string | null;
   clienteTrackingCode: string | null;
   createdAt: string;
+  // Fase 2
+  decisao: string | null;
+  novaSku: string | null;
+  novaProductName: string | null;
+  novaCor: string | null;
+  novaTamanho: string | null;
+  valeCode: string | null;
+  valeValidade: string | null;
+  reembolsoForma: string | null;
+  envioTrackingCode: string | null;
   items: Array<{ sku: string; productName: string; qty: number; totalPago: number }>;
   timeline: Array<{ tipo: string; descricao: string; statusPara: string | null; createdAt: string }>;
+};
+
+type Variacao = { sku: string; nome: string; cor: string; tamanho: string; disponivel: number };
+type GradeVariacoes = {
+  ok: boolean;
+  motivo?: string;
+  atual?: { codigo: string; cor: string | null; tamanho: string | null };
+  variacoes: Variacao[];
 };
 
 type Localizado = {
@@ -159,6 +177,61 @@ export default function PortalTrocasPage() {
   const [rastreioInput, setRastreioInput] = useState<Record<string, string>>({});
   const [rastreioBusy, setRastreioBusy] = useState<string | null>(null);
 
+  // Fase 2 — escolha da solução (por troca aguardando_decisao)
+  const [decidindo, setDecidindo] = useState<string | null>(null);   // trocaId com painel aberto
+  const [modoDecisao, setModoDecisao] = useState<'peca' | 'vale' | 'reembolso' | null>(null);
+  const [grade, setGrade] = useState<GradeVariacoes | null>(null);
+  const [gradeSel, setGradeSel] = useState<string | null>(null);     // sku escolhida
+  const [chavePix, setChavePix] = useState('');
+  const [decisaoBusy, setDecisaoBusy] = useState(false);
+  const [decisaoMsg, setDecisaoMsg] = useState<string | null>(null);
+
+  async function abrirTrocaPeca(troca: TrocaPublica) {
+    setErr(null);
+    setModoDecisao('peca');
+    setDecidindo(troca.id);
+    setGrade(null);
+    setGradeSel(null);
+    try {
+      const g = await api<GradeVariacoes>('/public/trocas/variacoes', {
+        method: 'POST',
+        body: JSON.stringify({ pedido, doc, trocaId: troca.id }),
+      });
+      setGrade(g);
+      if (!g.ok) {
+        setModoDecisao(null);
+        setErr(
+          g.motivo === 'multi_itens'
+            ? 'Troca com mais de uma peça: escolha vale-compras ou reembolso (ou fale com a gente no WhatsApp).'
+            : 'Não achamos variações dessa peça — escolha vale-compras ou reembolso.',
+        );
+      }
+    } catch (e: any) {
+      setErr(parseErr(e));
+      setModoDecisao(null);
+    }
+  }
+
+  async function decidir(troca: TrocaPublica, decisao: string, novaSku?: string) {
+    setErr(null);
+    setDecisaoBusy(true);
+    try {
+      const res = await api<{ ok: boolean; mensagem: string }>('/public/trocas/decidir', {
+        method: 'POST',
+        body: JSON.stringify({ pedido, doc, trocaId: troca.id, decisao, novaSku, chavePix: chavePix || undefined }),
+      });
+      setDecisaoMsg(res.mensagem);
+      setDecidindo(null);
+      setModoDecisao(null);
+      setChavePix('');
+      await localizar();
+    } catch (e: any) {
+      setErr(parseErr(e));
+    } finally {
+      setDecisaoBusy(false);
+    }
+  }
+
   async function localizar(e?: React.FormEvent) {
     e?.preventDefault();
     setErr(null);
@@ -249,6 +322,11 @@ export default function PortalTrocasPage() {
         {err && (
           <div className="mb-4 px-4 py-3 rounded-xl bg-[#FDECEC] border border-[#E9B4B4] text-[#8C2B2B] text-sm">
             {err}
+          </div>
+        )}
+        {decisaoMsg && (
+          <div className="mb-4 px-4 py-3 rounded-xl bg-[#EAF6EE] border border-[#BBDFC7] text-[#2E7D46] text-sm font-bold">
+            {decisaoMsg}
           </div>
         )}
 
@@ -374,6 +452,174 @@ export default function PortalTrocasPage() {
                       {t.clienteTrackingCode && (
                         <div className="mt-2 text-sm text-[#6B6456]">
                           Rastreio da devolução: <b>{t.clienteTrackingCode}</b>
+                        </div>
+                      )}
+
+                      {/* FASE 2 — escolha da solução */}
+                      {t.status === 'aguardando_decisao' && (
+                        <div className="mt-3 bg-[#FBF6E6] border border-[#EBD9A6] rounded-xl p-3.5">
+                          <div className="text-sm font-bold text-[#8C7325] mb-2">
+                            🎉 Recebemos seu produto! Como você quer finalizar?
+                          </div>
+
+                          {decidindo !== t.id && (
+                            <div className="grid grid-cols-2 gap-2">
+                              <button
+                                className="py-2.5 rounded-lg text-[13px] font-bold text-white bg-[#B8912B] hover:bg-[#8C7325]"
+                                onClick={() => abrirTrocaPeca(t)}
+                              >
+                                Trocar tamanho/cor
+                              </button>
+                              <button
+                                className="py-2.5 rounded-lg text-[13px] font-bold text-white bg-[#B8912B] hover:bg-[#8C7325]"
+                                onClick={() => { setDecidindo(t.id); setModoDecisao('vale'); }}
+                              >
+                                Vale-compras
+                              </button>
+                              <button
+                                className="col-span-2 py-2.5 rounded-lg text-[13px] font-bold border border-[#B8912B] text-[#8C7325]"
+                                onClick={() => { setDecidindo(t.id); setModoDecisao('reembolso'); }}
+                              >
+                                Solicitar reembolso
+                              </button>
+                            </div>
+                          )}
+
+                          {/* Grade tamanho×cor */}
+                          {decidindo === t.id && modoDecisao === 'peca' && (
+                            <div>
+                              {!grade && <div className="text-sm text-[#6B6456]">Carregando opções…</div>}
+                              {grade?.ok && (
+                                <>
+                                  <div className="text-[13px] text-[#6B6456] mb-2">
+                                    Sua peça: <b>{grade.atual?.cor} · {grade.atual?.tamanho}</b>. Escolha a nova:
+                                  </div>
+                                  <div className="flex flex-wrap gap-2">
+                                    {grade.variacoes
+                                      .filter((v) => v.sku !== grade.atual?.codigo)
+                                      .map((v) => (
+                                        <button
+                                          key={v.sku}
+                                          className={
+                                            'px-3 py-2 rounded-lg text-[13px] font-bold border ' +
+                                            (gradeSel === v.sku
+                                              ? 'border-[#B8912B] bg-white text-[#8C7325]'
+                                              : 'border-[#E4DDCB] bg-white text-[#2A2620]')
+                                          }
+                                          onClick={() => setGradeSel(v.sku)}
+                                        >
+                                          {v.cor} · {v.tamanho}
+                                        </button>
+                                      ))}
+                                  </div>
+                                  {grade.variacoes.filter((v) => v.sku !== grade.atual?.codigo).length === 0 && (
+                                    <div className="text-[13px] text-[#6B6456] mt-1">
+                                      Nenhuma outra variação disponível agora — escolha vale-compras ou reembolso.
+                                    </div>
+                                  )}
+                                  <div className="flex gap-2 mt-3">
+                                    <button
+                                      className="flex-1 py-2.5 rounded-lg text-[13px] font-bold border border-[#E4DDCB] text-[#6B6456]"
+                                      onClick={() => { setDecidindo(null); setModoDecisao(null); }}
+                                    >
+                                      Voltar
+                                    </button>
+                                    <button
+                                      className="flex-1 py-2.5 rounded-lg text-[13px] font-bold text-white bg-[#B8912B] disabled:opacity-50"
+                                      disabled={!gradeSel || decisaoBusy}
+                                      onClick={() => {
+                                        const nova = grade.variacoes.find((v) => v.sku === gradeSel);
+                                        const mudouCor = nova && nova.cor !== grade.atual?.cor;
+                                        decidir(t, mudouCor ? 'trocar_cor' : 'trocar_tamanho', gradeSel!);
+                                      }}
+                                    >
+                                      {decisaoBusy ? 'Reservando…' : 'Confirmar e reservar'}
+                                    </button>
+                                  </div>
+                                </>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Vale-compras */}
+                          {decidindo === t.id && modoDecisao === 'vale' && (
+                            <div>
+                              <p className="text-[13px] text-[#2A2620]">
+                                Você recebe um vale de <b>{brl(t.valorTotalPago)}</b>, válido por 90 dias,
+                                pra usar no site ou em qualquer loja física.
+                              </p>
+                              <div className="flex gap-2 mt-3">
+                                <button
+                                  className="flex-1 py-2.5 rounded-lg text-[13px] font-bold border border-[#E4DDCB] text-[#6B6456]"
+                                  onClick={() => { setDecidindo(null); setModoDecisao(null); }}
+                                >
+                                  Voltar
+                                </button>
+                                <button
+                                  className="flex-1 py-2.5 rounded-lg text-[13px] font-bold text-white bg-[#2E7D46] disabled:opacity-50"
+                                  disabled={decisaoBusy}
+                                  onClick={() => decidir(t, 'vale')}
+                                >
+                                  {decisaoBusy ? 'Gerando…' : 'Quero o vale-compras'}
+                                </button>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Reembolso */}
+                          {decidindo === t.id && modoDecisao === 'reembolso' && (
+                            <div>
+                              <p className="text-[13px] text-[#2A2620]">
+                                Reembolso de <b>{brl(t.valorTotalPago)}</b> na forma de pagamento da compra.
+                                Se você pagou via <b>PIX</b>, informe sua chave:
+                              </p>
+                              <input
+                                className={inputCls + ' !py-2.5 mt-2'}
+                                placeholder="Chave PIX (CPF, celular, e-mail…)"
+                                value={chavePix}
+                                onChange={(e) => setChavePix(e.target.value)}
+                              />
+                              <div className="flex gap-2 mt-3">
+                                <button
+                                  className="flex-1 py-2.5 rounded-lg text-[13px] font-bold border border-[#E4DDCB] text-[#6B6456]"
+                                  onClick={() => { setDecidindo(null); setModoDecisao(null); }}
+                                >
+                                  Voltar
+                                </button>
+                                <button
+                                  className="flex-1 py-2.5 rounded-lg text-[13px] font-bold text-white bg-[#B8912B] disabled:opacity-50"
+                                  disabled={decisaoBusy}
+                                  onClick={() => decidir(t, 'reembolso')}
+                                >
+                                  {decisaoBusy ? 'Enviando…' : 'Solicitar reembolso'}
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* FASE 2 — andamento após a decisão */}
+                      {t.status === 'produto_reservado' && t.novaProductName && (
+                        <div className="mt-2 text-sm bg-[#EAF6EE] rounded-lg px-3 py-2 text-[#2E7D46]">
+                          ✅ Nova peça reservada: <b>{t.novaProductName}</b> ({t.novaCor} · {t.novaTamanho}).
+                          Em breve enviaremos com o rastreio.
+                        </div>
+                      )}
+                      {t.valeCode && (
+                        <div className="mt-2 text-sm bg-[#FBF6E6] rounded-lg px-3 py-2">
+                          🎁 Vale-compras: <b>{t.valeCode}</b> · {brl(t.valorTotalPago)}
+                          {t.valeValidade && <> · válido até {fmtData(t.valeValidade)}</>}
+                        </div>
+                      )}
+                      {t.status === 'reembolso_andamento' && (
+                        <div className="mt-2 text-sm bg-[#FBF6E6] rounded-lg px-3 py-2">
+                          💰 Reembolso em andamento ({(t.reembolsoForma || '').toUpperCase()}).
+                        </div>
+                      )}
+                      {t.envioTrackingCode && (
+                        <div className="mt-2 text-sm bg-[#EAF6EE] rounded-lg px-3 py-2 text-[#2E7D46]">
+                          📦 Nova peça enviada! Rastreio: <b>{t.envioTrackingCode}</b>
                         </div>
                       )}
 

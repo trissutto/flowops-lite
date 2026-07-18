@@ -120,6 +120,63 @@ export class TrocasAdminController {
     });
   }
 
+  /** POST /trocas/:id/receber — Etapa 9: produto chegou → em_conferencia */
+  @Post(':id/receber')
+  async receber(@Req() req: any, @Param('id') id: string) {
+    this.requireView(req); // loja também pode registrar o recebimento
+    return this.svc.receber({ id, ...this.who(req) });
+  }
+
+  /**
+   * POST /trocas/:id/conferir — Etapa 10
+   * { aprovado, checklist?, motivoReprovacao?, storeCode? }
+   * Aprovada exige storeCode (loja que recebeu = entrada de estoque).
+   */
+  @Post(':id/conferir')
+  async conferir(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body()
+    body: {
+      aprovado?: boolean;
+      checklist?: Record<string, boolean>;
+      motivoReprovacao?: string;
+      storeCode?: string;
+    },
+  ) {
+    this.requireView(req);
+    if (typeof body?.aprovado !== 'boolean') {
+      throw new BadRequestException('Informe aprovado=true/false.');
+    }
+    return this.svc.conferir({
+      id,
+      aprovado: body.aprovado,
+      checklist: body.checklist,
+      motivoReprovacao: body.motivoReprovacao,
+      storeCode: body.storeCode,
+      ...this.who(req),
+    });
+  }
+
+  /** POST /trocas/:id/envio { trackingCode } — Etapas 18-19 */
+  @Post(':id/envio')
+  async envio(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: { trackingCode?: string },
+  ) {
+    this.requireView(req);
+    if (!body?.trackingCode) throw new BadRequestException('Informe o rastreio.');
+    return this.svc.registrarEnvio({ id, trackingCode: body.trackingCode, ...this.who(req) });
+  }
+
+  /** POST /trocas/:id/reembolso-concluido — equipe executou PIX/estorno */
+  @Post(':id/reembolso-concluido')
+  async reembolsoConcluido(@Req() req: any, @Param('id') id: string) {
+    this.requireAdmin(req);
+    return this.svc.concluirReembolso({ id, ...this.who(req) });
+  }
+
   /** POST /trocas/:id/cancelar { motivo? } */
   @Post(':id/cancelar')
   async cancelar(

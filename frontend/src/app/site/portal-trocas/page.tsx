@@ -41,8 +41,31 @@ type TrocaRow = {
   dentroDoPrazo: boolean | null;
   valorTotalPago: number;
   createdAt: string;
-  items: Array<{ sku: string; productName: string | null; qty: number; valorPagoUnit: number; totalPago: number; valorOriginalUnit: number }>;
+  // Fase 2
+  recebidaAt: string | null;
+  conferenciaAt: string | null;
+  conferenciaAprovada: boolean | null;
+  conferenciaReprovadaMotivo: string | null;
+  receivingStoreCode: string | null;
+  receivingStoreName: string | null;
+  decisao: string | null;
+  novaSku: string | null;
+  novaProductName: string | null;
+  novaCor: string | null;
+  novaTamanho: string | null;
+  valeCode: string | null;
+  valeValidade: string | null;
+  reembolsoForma: string | null;
+  reembolsoChavePix: string | null;
+  reembolsoConcluidoAt: string | null;
+  envioTrackingCode: string | null;
+  envioAt: string | null;
+  items: Array<{ sku: string; productName: string | null; qty: number; valorPagoUnit: number; totalPago: number; valorOriginalUnit: number; stockReturnedAt: string | null; stockError: string | null }>;
 };
+
+const CHECKLIST = ['Produto correto', 'Sem uso', 'Etiqueta presente', 'Sem avarias', 'Conforme política'];
+const REPROVACAO_MOTIVOS = ['Produto usado', 'Sem etiqueta', 'Produto danificado', 'Produto diferente'];
+type StoreOpt = { code: string; name: string; active?: boolean };
 
 type TrocaDetail = TrocaRow & {
   eventos: Array<{ id: string; tipo: string; descricao: string; statusPara: string | null; userName: string | null; createdAt: string }>;
@@ -140,6 +163,19 @@ export default function PortalTrocasAdminPage() {
   const [justificativa, setJustificativa] = useState('');
   const [showConceder, setShowConceder] = useState(false);
 
+  // Fase 2 — conferência / envio
+  const [stores, setStores] = useState<StoreOpt[]>([]);
+  const [confChecks, setConfChecks] = useState<boolean[]>(CHECKLIST.map(() => false));
+  const [confStore, setConfStore] = useState('');
+  const [confReprovaMotivo, setConfReprovaMotivo] = useState('');
+  const [envioRastreio, setEnvioRastreio] = useState('');
+
+  useEffect(() => {
+    api<StoreOpt[]>('/stores')
+      .then((s) => setStores((s || []).filter((x) => x.active !== false)))
+      .catch(() => setStores([]));
+  }, []);
+
   const load = useCallback(async () => {
     setLoading(true);
     setErr(null);
@@ -182,6 +218,9 @@ export default function PortalTrocasAdminPage() {
     setNotaStatus('');
     setJustificativa('');
     setShowConceder(false);
+    setConfChecks(CHECKLIST.map(() => false));
+    setConfReprovaMotivo('');
+    setEnvioRastreio('');
     try {
       const d = await api<TrocaDetail>(`/trocas/${id}`);
       setDetail(d);
@@ -230,6 +269,32 @@ export default function PortalTrocasAdminPage() {
         body: JSON.stringify({ justificativa }),
       }),
     );
+
+  const receber = () => action(() => api(`/trocas/${detail!.id}/receber`, { method: 'POST', body: '{}' }));
+
+  const conferir = (aprovado: boolean) =>
+    action(() =>
+      api(`/trocas/${detail!.id}/conferir`, {
+        method: 'POST',
+        body: JSON.stringify({
+          aprovado,
+          checklist: Object.fromEntries(CHECKLIST.map((c, i) => [c, confChecks[i]])),
+          motivoReprovacao: aprovado ? undefined : confReprovaMotivo,
+          storeCode: aprovado ? confStore : undefined,
+        }),
+      }),
+    );
+
+  const registrarEnvio = () =>
+    action(() =>
+      api(`/trocas/${detail!.id}/envio`, {
+        method: 'POST',
+        body: JSON.stringify({ trackingCode: envioRastreio }),
+      }),
+    );
+
+  const concluirReembolso = () =>
+    action(() => api(`/trocas/${detail!.id}/reembolso-concluido`, { method: 'POST', body: '{}' }));
 
   const cancelar = () => {
     const motivo = window.prompt('Motivo do cancelamento (fica na auditoria):');
@@ -459,6 +524,8 @@ export default function PortalTrocasAdminPage() {
                           {it.valorPagoUnit < it.valorOriginalUnit && (
                             <> · cheio {brl(it.valorOriginalUnit)}</>
                           )}
+                          {it.stockReturnedAt && <span className="text-green-700"> · estoque OK</span>}
+                          {it.stockError && <span className="text-red-700 font-bold"> · ERRO estoque: {it.stockError}</span>}
                         </div>
                       </div>
                       <div className="font-bold text-[#2E7D46] shrink-0">{brl(it.totalPago)}</div>
@@ -475,6 +542,138 @@ export default function PortalTrocasAdminPage() {
 
                 {/* Ações */}
                 <div className="space-y-3 mb-4">
+                  {/* FASE 2 — Produto recebido (Etapa 9) */}
+                  {['solicitada', 'aguardando_postagem', 'aguardando_envio_cliente', 'postada', 'em_transporte', 'recebida'].includes(detail.status) && (
+                    <button
+                      className="w-full py-3 rounded-xl font-bold text-white bg-teal-600 hover:bg-teal-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                      disabled={busy}
+                      onClick={receber}
+                    >
+                      <PackageCheck size={16} /> Produto recebido → conferência
+                    </button>
+                  )}
+
+                  {/* FASE 2 — Conferência (Etapa 10) */}
+                  {detail.status === 'em_conferencia' && (
+                    <div className="border border-purple-200 bg-purple-50 rounded-xl p-3.5">
+                      <div className="text-xs font-bold text-purple-800 mb-2">Conferência da peça</div>
+                      {detail.conferenciaAprovada === false && (
+                        <div className="mb-2 text-xs font-bold text-red-700 bg-red-50 border border-red-200 rounded-lg px-2.5 py-1.5">
+                          Reprovada em {fmtDataHora(detail.conferenciaAt)} — {detail.conferenciaReprovadaMotivo}. Cliente orientada pro WhatsApp; refaça a conferência ou cancele.
+                        </div>
+                      )}
+                      <div className="space-y-1.5 mb-3">
+                        {CHECKLIST.map((c, i) => (
+                          <label key={c} className="flex items-center gap-2 text-sm cursor-pointer">
+                            <input
+                              type="checkbox"
+                              className="accent-purple-600"
+                              checked={confChecks[i]}
+                              onChange={(e) => setConfChecks((v) => v.map((x, j) => (j === i ? e.target.checked : x)))}
+                            />
+                            {c}
+                          </label>
+                        ))}
+                      </div>
+                      <div className="flex gap-2 items-center mb-2">
+                        <span className="text-xs font-bold text-[#6B6456]">Entrada de estoque na loja:</span>
+                        <select
+                          className="flex-1 px-2.5 py-2 rounded-lg border border-[#E4DDCB] text-sm"
+                          value={confStore}
+                          onChange={(e) => setConfStore(e.target.value)}
+                        >
+                          <option value="">Loja que recebeu…</option>
+                          {stores.map((s) => <option key={s.code} value={s.code}>{s.name}</option>)}
+                        </select>
+                      </div>
+                      <button
+                        className="w-full py-2.5 rounded-lg font-bold text-white bg-green-600 hover:bg-green-700 disabled:opacity-50 text-sm"
+                        disabled={busy || !confChecks.every(Boolean) || !confStore}
+                        onClick={() => conferir(true)}
+                      >
+                        ✓ Aprovar (entrada de estoque + e-mail pra cliente escolher)
+                      </button>
+                      <div className="flex gap-2 mt-2">
+                        <select
+                          className="flex-1 px-2.5 py-2 rounded-lg border border-red-200 text-sm"
+                          value={confReprovaMotivo}
+                          onChange={(e) => setConfReprovaMotivo(e.target.value)}
+                        >
+                          <option value="">Motivo da reprovação…</option>
+                          {REPROVACAO_MOTIVOS.map((m) => <option key={m} value={m}>{m}</option>)}
+                        </select>
+                        <button
+                          className="px-4 py-2 rounded-lg font-bold text-red-700 border border-red-300 hover:bg-red-50 disabled:opacity-50 text-sm"
+                          disabled={busy || !confReprovaMotivo}
+                          onClick={() => conferir(false)}
+                        >
+                          Reprovar
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* FASE 2 — Decisão da cliente / reserva / envio */}
+                  {detail.decisao && (
+                    <div className="border border-[#EDE7D8] rounded-xl p-3.5 text-sm">
+                      <div className="text-xs font-bold text-[#6B6456] mb-1">Decisão da cliente</div>
+                      {(detail.decisao === 'trocar_tamanho' || detail.decisao === 'trocar_cor') && (
+                        <>
+                          {detail.decisao === 'trocar_tamanho' ? 'Trocar TAMANHO' : 'Trocar COR'} →{' '}
+                          <b>{detail.novaProductName}</b> ({detail.novaCor} · {detail.novaTamanho}) · SKU {detail.novaSku}
+                          <div className="text-xs text-[#6B6456]">Reserva lógica ativa — separar e enviar.</div>
+                        </>
+                      )}
+                      {detail.decisao === 'vale' && (
+                        <>Vale-compras <b>{detail.valeCode}</b> · {brl(detail.valorTotalPago)}{detail.valeValidade && <> · até {fmtDataHora(detail.valeValidade).slice(0, 10)}</>}</>
+                      )}
+                      {detail.decisao === 'reembolso' && (
+                        <>
+                          Reembolso {(detail.reembolsoForma || '').toUpperCase()} de <b>{brl(detail.valorTotalPago)}</b>
+                          {detail.reembolsoChavePix && <div className="text-xs mt-1">Chave PIX: <b className="select-all">{detail.reembolsoChavePix}</b></div>}
+                          {detail.reembolsoConcluidoAt && <div className="text-xs text-green-700 mt-1">Concluído em {fmtDataHora(detail.reembolsoConcluidoAt)}</div>}
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {detail.status === 'produto_reservado' && (
+                    <div className="border border-cyan-200 bg-cyan-50 rounded-xl p-3.5">
+                      <div className="text-xs font-bold text-cyan-800 mb-2">Enviar nova peça (Etapa 18)</div>
+                      <div className="flex gap-2">
+                        <input
+                          className="flex-1 px-3 py-2 rounded-lg border border-[#E4DDCB] text-sm"
+                          placeholder="Código de rastreio do envio"
+                          value={envioRastreio}
+                          onChange={(e) => setEnvioRastreio(e.target.value)}
+                        />
+                        <button
+                          className="px-4 py-2 rounded-lg font-bold text-white bg-[#B8912B] hover:bg-[#8C7325] disabled:opacity-50 text-sm"
+                          disabled={busy || envioRastreio.trim().length < 8}
+                          onClick={registrarEnvio}
+                        >
+                          Enviar + finalizar
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {detail.status === 'reembolso_andamento' && (
+                    <button
+                      className="w-full py-3 rounded-xl font-bold text-white bg-green-600 hover:bg-green-700 disabled:opacity-50"
+                      disabled={busy}
+                      onClick={concluirReembolso}
+                    >
+                      💰 Reembolso executado no gateway → finalizar
+                    </button>
+                  )}
+
+                  {detail.envioTrackingCode && (
+                    <div className="border border-green-200 bg-green-50 rounded-xl p-3.5 text-sm">
+                      📦 Nova peça enviada em {fmtDataHora(detail.envioAt)} · rastreio <b>{detail.envioTrackingCode}</b>
+                    </div>
+                  )}
+
                   {/* Reversa */}
                   {!detail.reversaCodigo && detail.status !== 'cancelada' && detail.status !== 'finalizada' && (
                     <div className="border border-[#EDE7D8] rounded-xl p-3.5">
