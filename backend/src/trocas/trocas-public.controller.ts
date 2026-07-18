@@ -98,6 +98,55 @@ export class TrocasPublicController {
   }
 
   /**
+   * POST /public/trocas/variacoes { pedido, doc, trocaId }
+   * Grade tamanho×cor disponível da peça devolvida (Etapas 13-14).
+   */
+  @Post('variacoes')
+  async variacoes(
+    @Req() req: any,
+    @Body() body: { pedido?: string; doc?: string; trocaId?: string },
+  ) {
+    guardRate(req);
+    if (!body?.trocaId) throw new BadRequestException('trocaId obrigatório');
+    return this.svc.getVariacoes({
+      pedido: String(body?.pedido || ''),
+      doc: String(body?.doc || ''),
+      trocaId: String(body.trocaId),
+    });
+  }
+
+  /**
+   * POST /public/trocas/decidir
+   * { pedido, doc, trocaId, decisao: trocar_tamanho|trocar_cor|vale|reembolso,
+   *   novaSku?, chavePix? }  (Etapas 12-17)
+   */
+  @Post('decidir')
+  async decidir(
+    @Req() req: any,
+    @Body()
+    body: {
+      pedido?: string;
+      doc?: string;
+      trocaId?: string;
+      decisao?: 'trocar_tamanho' | 'trocar_cor' | 'vale' | 'reembolso';
+      novaSku?: string;
+      chavePix?: string;
+    },
+  ) {
+    guardRate(req);
+    if (!body?.trocaId) throw new BadRequestException('trocaId obrigatório');
+    if (!body?.decisao) throw new BadRequestException('Escolha uma opção.');
+    return this.svc.decidir({
+      pedido: String(body?.pedido || ''),
+      doc: String(body?.doc || ''),
+      trocaId: String(body.trocaId),
+      decisao: body.decisao,
+      novaSku: body.novaSku,
+      chavePix: body.chavePix,
+    });
+  }
+
+  /**
    * POST /public/trocas/rastreio { pedido, doc, trocaId, trackingCode }
    * Cliente informa o rastreio da devolução (quando o envio é por conta dela).
    */
