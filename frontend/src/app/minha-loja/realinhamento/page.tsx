@@ -275,40 +275,19 @@ export default function MinhaLojaRealinhamentoPage() {
       const blob = await r.blob();
       const blobUrl = URL.createObjectURL(blob);
 
-      // 1) Tenta Electron silent print (PC com app desktop instalado)
-      const electron = (window as any).electronAPI;
-      if (electron?.silentPrintUrl) {
-        try {
-          await electron.silentPrintUrl(blobUrl);
-          pushToast(`🖨️ Romaneio ${code} enviado pra impressora.`);
-          setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
-          return;
-        } catch (e) {
-          console.warn('Electron silent print falhou, caindo no popup:', e);
-        }
-      }
-
-      // 2) Fallback browser: abre popup que dispara print()
-      const w = window.open(blobUrl, 'lurds_remessa_print', 'width=900,height=650,resizable=yes');
-      if (!w) {
+      // Romaneio é A4 (capa + lista) → imprime na impressora A4 CONFIGURADA.
+      // Antes ia direto no silentPrint (impressora ativa = quase sempre a
+      // térmica) e saía esticado no rolo. printPdfA4 escolhe a A4 antes.
+      const { printPdfA4 } = await import('@/lib/printer-router');
+      const res = await printPdfA4(blobUrl);
+      if (res.mode === 'popup-blocked') {
         alert(
           'Popup bloqueado. Habilite popups pra imprimir automático,\n' +
           'ou clica em "PDF" pra baixar e imprimir manualmente.',
         );
-        setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
-        return;
+      } else if (res.mode === 'electron-silent') {
+        pushToast(`🖨️ Romaneio ${code} enviado pra impressora.`);
       }
-      // Espera carregar e dispara print
-      const tryPrint = () => {
-        try {
-          w.focus();
-          w.print();
-        } catch {
-          // ignora — usuário pode dar Ctrl+P manual
-        }
-      };
-      // PDFs no Chrome às vezes precisam de delay pra renderizar antes do print
-      setTimeout(tryPrint, 800);
       setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
     } catch (e: any) {
       alert(`Erro ao imprimir: ${e?.message || e}`);

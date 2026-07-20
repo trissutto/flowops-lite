@@ -4,6 +4,8 @@ import { RealtimeGateway } from '../websocket/realtime.gateway';
 import { WooCommerceService } from '../woocommerce/woocommerce.service';
 import { ErpService } from '../erp/erp.service';
 import { ManychatService } from '../live-pdv/manychat.service';
+import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service';
+import { authorizeMinLevel } from '../auth/auth-levels.util';
 
 // Status LOGÍSTICO do pick-order (controlado pela loja):
 //   new          → chegou, filial não começou
@@ -56,7 +58,156 @@ export class PickOrdersService {
     private readonly wc: WooCommerceService,
     private readonly erp: ErpService,
     private readonly manychat: ManychatService,
+    private readonly catalog: WincredCatalogService,
   ) {}
+
+  /**
+   * TROCA MANUAL DE PEÇA na separação (pedido do site/WooCommerce).
+   *
+   * A vendedora clica na descrição da peça e escolhe outra no espelho. Regras:
+   *  - Só ANTES da baixa de estoque (status new/separating e sem debitApprovedAt).
+   *    A baixa acontece no finish-separation/ship SOBRE O SKU ATUAL do item — então
+   *    trocar o SKU aqui faz a baixa cair no produto novo e o antigo nunca é baixado.
+   *    Já baixado/enviado → recusa e manda usar devolução/troca (não reconcilia estoque
+   *    síncrono no Giga de propósito — fora do caminho crítico).
+   *  - Se o PREÇO do produto novo difere do antigo (≥ R$0,01), EXIGE senha de nível
+   *    GERENTE ou acima (authorizeMinLevel). Sem senha → devolve needsPassword + a
+   *    diferença pra tela pedir a autorização. Registra QUEM autorizou no log.
+   */
+  async swapItem(
+    pickOrderId: string,
+    storeId: string,
+    input: {
+      orderItemId: string;
+      codigo: string;
+      ref?: string | null;
+      cor?: string | null;
+      tamanho?: string | null;
+      descricao?: string | null;
+      password?: string | null;
+    },
+    userId?: string,
+  ): Promise<any> {
+    const po = await this.prisma.pickOrder.findUnique({ where: { id: pickOrderId } });
+    if (!po) throw new NotFoundException('Pedido não encontrado');
+    if (po.storeId !== storeId) throw new ForbiddenException('Pedido de outra loja');
+    if (po.status !== 'new' && po.status !== 'separating') {
+      throw new BadRequestException(
+        'Só dá pra trocar a peça ANTES de finalizar a separação. Se já foi separado/enviado, use Devolução/Troca.',
+      );
+    }
+    if ((po as any).debitApprovedAt) {
+      throw new BadRequestException('Estoque já baixado — use Devolução/Troca em vez de trocar aqui.');
+    }
+
+    const newSku = String(input.codigo || '').trim();
+    if (!newSku) throw new BadRequestException('Selecione a peça nova');
+
+    const item = await this.prisma.orderItem.findUnique({ where: { id: input.orderItemId } });
+    if (!item) throw new NotFoundException('Item não encontrado');
+    if (item.orderId !== po.orderId || (item as any).assignedStoreId !== storeId) {
+      throw new BadRequestException('Item não pertence a este pedido/loja');
+    }
+    const oldSku = item.sku;
+    if (newSku === oldSku) throw new BadRequestException('É a mesma peça — nada pra trocar');
+
+    // Preços do ESPELHO (em REAIS — não dividir por 100). Diferença ⇒ exige senha.
+    const oldInfo = await this.catalog.getPdvProductInfo(oldSku).catch(() => null);
+    const newInfo = await this.catalog.getPdvProductInfo(newSku).catch(() => null);
+    if (!newInfo) {
+      throw new BadRequestException('Peça nova não encontrada no catálogo — confira o código.');
+    }
+    const oldPrice = oldInfo?.preco ?? (item.unitPrice ?? 0);
+    const newPrice = newInfo.preco ?? 0;
+    const diff = Math.round((newPrice - oldPrice) * 100) / 100;
+    const hasDiff = Math.abs(diff) >= 0.01;
+
+    // Diferença de valor SEM senha → não aplica; devolve pra tela pedir autorização.
+    let authorizedByCpf: string | null = null;
+    let authorizedByNome: string | null = null;
+    if (hasDiff) {
+      const pwd = String(input.password || '').trim();
+      if (!pwd) {
+        return {
+          ok: false,
+          needsPassword: true,
+          oldSku,
+          newSku,
+          oldPrice,
+          newPrice,
+          diff,
+          newDescricao: this.buildItemName(input, newInfo),
+        };
+      }
+      // Lança ForbiddenException (403) se senha inválida ou nível < GERENTE.
+      const auth = authorizeMinLevel(pwd, 'GERENTE');
+      authorizedByCpf = auth.byCpf;
+      authorizedByNome = auth.byNome;
+    }
+
+    const newName = this.buildItemName(input, newInfo);
+    const updated = await this.prisma.orderItem.update({
+      where: { id: item.id },
+      data: {
+        sku: newSku,
+        productName: newName,
+        unitPrice: newPrice,
+        baseUnitPrice: newPrice,
+      },
+    });
+
+    await this.prisma.integrationLog.create({
+      data: {
+        source: 'pick-order',
+        direction: 'internal',
+        event: 'item.swap',
+        payload: JSON.stringify({
+          pickOrderId,
+          orderItemId: item.id,
+          storeId,
+          userId: userId ?? null,
+          oldSku,
+          newSku,
+          oldPrice,
+          newPrice,
+          diff,
+          authorizedByCpf,
+          authorizedByNome,
+        }),
+        status: 200,
+      },
+    });
+
+    return {
+      ok: true,
+      oldSku,
+      newSku,
+      oldPrice,
+      newPrice,
+      diff,
+      authorizedBy: authorizedByNome,
+      item: {
+        id: updated.id,
+        sku: updated.sku,
+        productName: updated.productName,
+        quantity: updated.quantity,
+        unitPrice: updated.unitPrice,
+      },
+    };
+  }
+
+  /** Nome de exibição da peça nova: prioriza o que a tela mandou, cai no espelho. */
+  private buildItemName(
+    input: { ref?: string | null; cor?: string | null; tamanho?: string | null; descricao?: string | null; codigo: string },
+    info: { descricao?: string | null; ref?: string | null; cor?: string | null; tamanho?: string | null } | null,
+  ): string {
+    const desc = (input.descricao || info?.descricao || '').trim();
+    if (desc) return desc;
+    const ref = (input.ref || info?.ref || input.codigo || '').trim();
+    const cor = (input.cor || info?.cor || '').trim();
+    const tam = (input.tamanho || info?.tamanho || '').trim();
+    return [ref, cor, tam].filter(Boolean).join(' ') || input.codigo;
+  }
 
   /**
    * Retorna os items desse pick-order com o EAN resolvido do ERP.

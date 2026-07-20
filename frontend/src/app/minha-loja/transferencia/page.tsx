@@ -143,23 +143,14 @@ export default function TransferenciaPage() {
       if (!r.ok) throw new Error((await r.text().catch(() => '')) || `HTTP ${r.status}`);
       const blobUrl = URL.createObjectURL(await r.blob());
 
-      const electron = (window as any).electronAPI;
-      if (electron?.silentPrintUrl) {
-        try {
-          await electron.silentPrintUrl(blobUrl);
-          setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
-          return;
-        } catch {
-          /* cai no popup */
-        }
-      }
-      const w = window.open(blobUrl, 'lurds_remessa_print', 'width=1000,height=700,resizable=yes');
-      if (!w) {
+      // Romaneio é A4 (capa + lista) → imprime na impressora A4 CONFIGURADA.
+      // Antes ia direto no silentPrint (impressora ativa = quase sempre a
+      // térmica) e saía esticado no rolo. printPdfA4 escolhe a A4 antes.
+      const { printPdfA4 } = await import('@/lib/printer-router');
+      const res = await printPdfA4(blobUrl);
+      if (res.mode === 'popup-blocked') {
         setMsg({ type: 'warn', text: `Remessa enviada. Popup de impressão bloqueado — habilite popups ou imprima a remessa ${code} no Realinhamento.` });
-        setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
-        return;
       }
-      setTimeout(() => { try { w.focus(); w.print(); } catch { /* Ctrl+P manual */ } }, 800);
       setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
     } catch (e: any) {
       setMsg({ type: 'warn', text: `Remessa enviada, mas falhou imprimir: ${e?.message || e}. Imprima pela tela de Realinhamento.` });

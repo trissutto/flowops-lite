@@ -15,6 +15,7 @@ import {
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { validateMinLevel } from '../auth/auth-levels.util';
 import { CashService } from './cash.service';
+import { AdiantamentosService } from '../adiantamentos/adiantamentos.service';
 
 /**
  * /pdv/caixa — fluxo de caixa diário (abertura, sangria, fechamento).
@@ -25,7 +26,10 @@ import { CashService } from './cash.service';
 @UseGuards(JwtAuthGuard)
 @Controller('pdv/caixa')
 export class CashController {
-  constructor(private readonly svc: CashService) {}
+  constructor(
+    private readonly svc: CashService,
+    private readonly adiantamentos: AdiantamentosService,
+  ) {}
 
   private requireRole(req: any) {
     const role = req?.user?.role;
@@ -102,21 +106,55 @@ export class CashController {
    * POST /pdv/caixa/sangria
    * Body: { valor, motivo }
    */
+  /** Lista funcionárias pro seletor de "adiantamento" na sangria (loja/admin). */
+  @Get('funcionarias')
+  async funcionarias(@Req() req: any, @Query('q') q?: string) {
+    this.requireRole(req);
+    return this.adiantamentos.funcionariasOptions(q);
+  }
+
   @Post('sangria')
   async sangria(
     @Req() req: any,
-    @Body() body: { valor: number; motivo: string; storeCode?: string },
+    @Body() body: {
+      valor: number; motivo: string; storeCode?: string;
+      // ADIANTAMENTO PRA FUNCIONÁRIA: se vier sellerNome, a sangria também gera
+      // um débito no extrato da funcionária (abatido no próximo vale/salário).
+      sellerId?: string; sellerNome?: string; sellerCpf?: string;
+    },
   ) {
     this.requireRole(req);
     const { storeCode } = this.resolveStore(req, { storeCode: body.storeCode });
-    return this.svc.addMovement({
-      storeCode,
-      tipo: 'sangria',
-      valor: Number(body.valor),
-      motivo: body.motivo,
-      userId: req?.user?.sub || req?.user?.id || null,
-      userName: req?.user?.name || req?.user?.email || null,
+    const userId = req?.user?.sub || req?.user?.id || null;
+    const userName = req?.user?.name || req?.user?.email || null;
+    const isAdiantamento = !!String(body.sellerNome || '').trim();
+    const motivo = isAdiantamento
+      ? `Adiantamento — ${String(body.sellerNome).trim()}${body.motivo ? ` · ${body.motivo}` : ''}`
+      : body.motivo;
+
+    const movement = await this.svc.addMovement({
+      storeCode, tipo: 'sangria', valor: Number(body.valor), motivo, userId, userName,
     });
+
+    if (isAdiantamento) {
+      try {
+        await this.adiantamentos.criar({
+          sellerId: body.sellerId || null,
+          sellerNome: String(body.sellerNome).trim(),
+          sellerCpf: body.sellerCpf || null,
+          storeCode,
+          valorCents: Math.round(Number(body.valor) * 100),
+          cashMovementId: (movement as any)?.movement?.id || (movement as any)?.id || null,
+          motivo: body.motivo || null,
+          userId, userName,
+        });
+      } catch (e: any) {
+        // Não desfaz a sangria (dinheiro já saiu) — loga; matriz ajusta se preciso.
+        // eslint-disable-next-line no-console
+        console.error('[sangria/adiantamento] falha ao registrar adiantamento:', e?.message || e);
+      }
+    }
+    return movement;
   }
 
   /**

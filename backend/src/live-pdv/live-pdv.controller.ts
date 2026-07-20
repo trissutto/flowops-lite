@@ -401,11 +401,12 @@ export class LivePdvController {
     return this.svc.startPaymentLink(cartId);
   }
 
-  // Confirmação manual pra lojas com PIX externo (franquias sem gateway):
-  // a cliente pagou por fora e a operadora marca pago → dispara a separação.
+  // Confirmação manual "JÁ PAGOU por fora" — liberada pra QUALQUER loja
+  // (dono 18/07). Registra quem confirmou no log pra auditoria.
   @Post('carts/:cartId/pay-external')
-  payExternal(@Param('cartId') cartId: string) {
-    return this.svc.confirmExternalPayment(cartId);
+  payExternal(@Param('cartId') cartId: string, @Req() req: any) {
+    const who = req?.user?.name || req?.user?.email || req?.user?.sub || null;
+    return this.svc.confirmExternalPayment(cartId, who);
   }
 
   @Get('carts/:cartId/payment-status')
@@ -418,6 +419,29 @@ export class LivePdvController {
   async storeQueue(@Req() req: any, @Query('storeCode') storeCode?: string) {
     const code = storeCode || (await this.resolveStoreCode(req));
     return this.svc.storeQueue(code);
+  }
+
+  // LOJA troca uma peça manualmente na separação do pedido da live. Só antes de
+  // conferir/enviar. Diferença de preço ⇒ a service devolve needsPassword e a
+  // tela pede senha GERENTE+ (reenviada no body.password).
+  @Post('items/:itemId/swap')
+  async swapItem(
+    @Req() req: any,
+    @Param('itemId') itemId: string,
+    @Body()
+    body: {
+      codigo: string;
+      ref?: string;
+      cor?: string;
+      tamanho?: string;
+      descricao?: string;
+      password?: string;
+    },
+  ) {
+    const role = req?.user?.role;
+    const isAdmin = role === 'admin' || role === 'operator' || role === 'supervisor';
+    const storeCode = isAdmin ? null : await this.resolveStoreCode(req);
+    return this.svc.swapItem(itemId, body ?? ({} as any), { storeCode, isAdmin });
   }
 
   @Post('items/:itemId/separated')

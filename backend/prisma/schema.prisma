@@ -1553,6 +1553,35 @@ model PdvCashMovement {
   @@map("pdv_cash_movements")
 }
 
+// ADIANTAMENTO DE FUNCIONÁRIA — dinheiro adiantado via sangria do caixa, que
+// vira débito no extrato da funcionária e é abatido no PRÓXIMO pagamento dela
+// (vale dia 20 OU salário dia 05, o que vier primeiro). Sem senha pra liberar
+// (registra o operador). Extrato mostrado na aba Funcionárias do Contas a Pagar.
+model AdiantamentoFuncionaria {
+  id             String    @id @default(uuid())
+  sellerId       String?   @map("seller_id")
+  sellerNome     String    @map("seller_nome")
+  sellerCpf      String?   @map("seller_cpf")
+  storeCode      String    @map("store_code")
+  valorCents     Int       @map("valor_cents")
+  // Rastreio da origem: a sangria (PdvCashMovement) que tirou o dinheiro do caixa
+  cashMovementId String?   @map("cash_movement_id")
+  // pendente = ainda deve · abatido = descontado num pagamento · cancelado
+  status         String    @default("pendente")
+  // Quando abatido: a conta (ContaPagar) de vale/salário onde entrou o desconto
+  abatidoEmContaId String? @map("abatido_em_conta_id")
+  abatidoAt      DateTime? @map("abatido_at")
+  motivo         String?
+  userId         String?   @map("user_id")
+  userName       String?   @map("user_name")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  @@index([sellerId, status])
+  @@index([storeCode, status])
+  @@map("adiantamentos_funcionaria")
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // DEVOLUÇÃO / TROCA
 // ═══════════════════════════════════════════════════════════════════════
@@ -1877,6 +1906,60 @@ model NfceConfig {
   updatedAt       DateTime @updatedAt @map("updated_at")
 
   @@map("nfce_configs")
+}
+
+// ── NF-e modelo 55 (transferência entre lojas) ──────────────────────────
+// Documento fiscal emitido quando mercadoria sai de uma loja/CNPJ pra outra
+// (RealignmentShipment tipo TRANSFERENCIA/REALINHAMENTO, transição in_transit).
+// A identidade fiscal (CNPJ/IE/endereço/certificado/ambiente) reaproveita o
+// NfceConfig por storeCode; aqui fica só o documento emitido e seu retorno.
+model NfeDoc {
+  id              String   @id @default(uuid())
+  // Origem do documento (remessa de transferência). Null se emitido avulso.
+  shipmentId      String?  @map("shipment_id")
+  fromStoreCode   String   @map("from_store_code")  // emitente
+  toStoreCode     String   @map("to_store_code")    // destinatário
+  modelo          String   @default("55")
+  serie           String
+  numero          Int
+  cNF             String?  @map("c_nf")             // código numérico (8 díg) da chave
+  chave           String?  @unique                  // 44 dígitos
+  tpAmb           String   @map("tp_amb")           // '1' prod · '2' homolog
+  natOp           String   @map("nat_op")
+  cfop            String
+  valorTotalCents Int      @default(0) @map("valor_total_cents")
+  // pending → signed → authorized | rejected | error | cancelled
+  status          String   @default("pending")
+  cStat           String?  @map("c_stat")
+  xMotivo         String?  @map("x_motivo")
+  protocolo       String?
+  dhRecbto        String?
+  xmlEnviado      String?  @map("xml_enviado")     @db.Text
+  xmlAutorizado   String?  @map("xml_autorizado")  @db.Text
+  xmlResposta     String?  @map("xml_resposta")    @db.Text
+  erro            String?  @db.Text
+  emittedByUserId String?  @map("emitted_by_user_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@index([shipmentId])
+  @@index([status])
+  @@index([fromStoreCode, status])
+  @@map("nfe_docs")
+}
+
+// Contador de numeração NF-e (por loja + modelo + série), separado do NFC-e.
+// `proximo` = próximo número livre; incremento atômico no service.
+model NfeSequence {
+  id         String   @id @default(uuid())
+  storeCode  String   @map("store_code")
+  modelo     String   @default("55")
+  serie      String
+  proximo    Int      @default(1)
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  @@unique([storeCode, modelo, serie])
+  @@map("nfe_sequences")
 }
 
 model PdvReturnItem {
@@ -4171,4 +4254,159 @@ model FinancialConciliacao {
   @@index([status])
   @@index([gateway, status])
   @@map("financial_conciliacoes")
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// PORTAL DE TROCAS — self-service do e-commerce (cliente solicita sozinha)
+// ═══════════════════════════════════════════════════════════════════════
+//
+// Diferente do WcReturnRequest (troca registrada PELA EQUIPE quando a peça
+// já está na loja), aqui a SOLICITAÇÃO nasce no portal público /trocas e
+// atravessa um fluxo com status até a conclusão. O valor usado em qualquer
+// vale/reembolso é o LÍQUIDO PAGO pela cliente (congelado no momento da
+// solicitação — mudança de preço futura não afeta).
+//
+// Encadeamento (troca da troca): parentId aponta pra troca de origem;
+// wcOrderId SEMPRE aponta pro pedido original (nunca se perde o vínculo).
+
+model TrocaSolicitacao {
+  id            String   @id @default(uuid())
+  // Numeração sequencial exibida como T0001, T0002...
+  numero        Int      @unique @default(autoincrement())
+  // Pedido WC original (raiz do encadeamento)
+  wcOrderId     Int      @map("wc_order_id")
+  wcOrderNumber String?  @map("wc_order_number")
+  // Troca de origem (quando é troca da troca)
+  parentId      String?  @map("parent_id")
+  parent        TrocaSolicitacao?  @relation("TrocaEncadeada", fields: [parentId], references: [id])
+  filhas        TrocaSolicitacao[] @relation("TrocaEncadeada")
+  // Cliente (snapshot do pedido)
+  customerName  String?  @map("customer_name")
+  customerCpf   String?  @map("customer_cpf")
+  customerEmail String?  @map("customer_email")
+  customerPhone String?  @map("customer_phone")
+  // Motivo
+  motivo        String
+  motivoDetalhe String?  @map("motivo_detalhe") @db.Text
+  // Fluxo: solicitada | aguardando_postagem | aguardando_envio_cliente |
+  //   postada | em_transporte | recebida | em_conferencia |
+  //   aguardando_decisao | produto_reservado | aguardando_pagamento_diferenca |
+  //   reembolso_andamento | finalizada | cancelada
+  status        String   @default("solicitada")
+  // Validação do prazo (snapshot na solicitação)
+  trackingCodePedido String?   @map("tracking_code_pedido")
+  deliveredAt        DateTime? @map("delivered_at")
+  // 'rastreio' (entrega detectada) | 'data_pedido' (fallback) | 'nao_verificado'
+  prazoVerificadoVia String?   @map("prazo_verificado_via")
+  diasDesdeEntrega   Int?      @map("dias_desde_entrega")
+  dentroDoPrazo      Boolean?  @map("dentro_do_prazo")
+  // Declaração da cliente (checkboxes obrigatórios do portal)
+  declaracaoAceitaAt DateTime? @map("declaracao_aceita_at")
+  declaracaoIp       String?   @map("declaracao_ip")
+  // Logística reversa
+  reversaGratis    Boolean   @default(false) @map("reversa_gratis")
+  reversaCodigo    String?   @map("reversa_codigo")
+  reversaPrazo     DateTime? @map("reversa_prazo")
+  reversaEnviadaAt DateTime? @map("reversa_enviada_at")
+  // Lembrete de vencimento do código reverso (cron manda 1x)
+  reversaLembreteAt DateTime? @map("reversa_lembrete_at")
+  // Devolução por conta da cliente (benefício já usado): rastreio informado
+  clienteTrackingCode String? @map("cliente_tracking_code")
+  // Soma do líquido pago dos itens selecionados
+  valorTotalPago Float    @map("valor_total_pago")
+
+  // ── FASE 2: recebimento → conferência → decisão → envio ──
+  recebidaAt         DateTime? @map("recebida_at")
+  conferenciaAt      DateTime? @map("conferencia_at")
+  conferenciaAprovada Boolean? @map("conferencia_aprovada")
+  conferenciaChecklist Json?   @map("conferencia_checklist")
+  conferenciaReprovadaMotivo String? @map("conferencia_reprovada_motivo")
+  // Loja que recebeu a peça fisicamente (entrada de estoque nela)
+  receivingStoreCode String?   @map("receiving_store_code")
+  receivingStoreName String?   @map("receiving_store_name")
+  // Decisão da cliente: trocar_tamanho | trocar_cor | vale | reembolso
+  decisao            String?
+  decisaoAt          DateTime? @map("decisao_at")
+  // Nova peça escolhida (reserva LÓGICA — desconta da disponibilidade
+  // mostrada a outras trocas; Giga só baixa no envio real)
+  novaSku            String?   @map("nova_sku")
+  novaProductName    String?   @map("nova_product_name")
+  novaCor            String?   @map("nova_cor")
+  novaTamanho        String?   @map("nova_tamanho")
+  reservaAt          DateTime? @map("reserva_at")
+  // Vale-compras (cupom WC + registro local, 90 dias)
+  valeCode           String?   @unique @map("vale_code")
+  valeValidade       DateTime? @map("vale_validade")
+  // Reembolso (sistema ORGANIZA; equipe executa no gateway)
+  reembolsoForma     String?   @map("reembolso_forma")     // pix | cartao | outro
+  reembolsoChavePix  String?   @map("reembolso_chave_pix")
+  reembolsoConcluidoAt DateTime? @map("reembolso_concluido_at")
+  // Envio da nova peça
+  envioTrackingCode  String?   @map("envio_tracking_code")
+  envioAt            DateTime? @map("envio_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @default(now()) @updatedAt @map("updated_at")
+
+  items   TrocaItem[]
+  eventos TrocaEvento[]
+
+  @@index([wcOrderId])
+  @@index([customerCpf])
+  @@index([status, createdAt(sort: Desc)])
+  @@map("troca_solicitacoes")
+}
+
+model TrocaItem {
+  id          String  @id @default(uuid())
+  trocaId     String  @map("troca_id")
+  sku         String
+  productName String? @map("product_name")
+  qty         Int     @default(1)
+  // Preço cheio unitário (subtotal do WC, antes de qualquer desconto)
+  valorOriginalUnit Float @map("valor_original_unit")
+  // LÍQUIDO pago unitário (promoção + cupom rateado + desconto PIX rateado)
+  valorPagoUnit     Float @map("valor_pago_unit")
+  totalPago         Float @map("total_pago")
+  // Entrada de estoque na conferência aprovada (via increaseStock)
+  stockReturnedAt   DateTime? @map("stock_returned_at")
+  stockError        String?   @map("stock_error")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  troca TrocaSolicitacao @relation(fields: [trocaId], references: [id], onDelete: Cascade)
+
+  @@index([trocaId])
+  @@index([sku])
+  @@map("troca_itens")
+}
+
+// Linha do tempo auditável — nunca apagar (regra da política)
+model TrocaEvento {
+  id         String   @id @default(uuid())
+  trocaId    String   @map("troca_id")
+  tipo       String   // solicitacao | status | reversa | rastreio_cliente | concessao | email | nota
+  descricao  String   @db.Text
+  statusDe   String?  @map("status_de")
+  statusPara String?  @map("status_para")
+  userId     String?  @map("user_id")
+  userName   String?  @map("user_name")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  troca TrocaSolicitacao @relation(fields: [trocaId], references: [id], onDelete: Cascade)
+
+  @@index([trocaId, createdAt])
+  @@map("troca_eventos")
+}
+
+// Concessão EXTRA de reversa grátis (além da 1 por CPF) — exige justificativa
+model TrocaReversaConcessao {
+  id            String   @id @default(uuid())
+  cpf           String
+  trocaId       String?  @map("troca_id")
+  justificativa String   @db.Text
+  userId        String?  @map("user_id")
+  userName      String?  @map("user_name")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@index([cpf])
+  @@map("troca_reversa_concessoes")
 }

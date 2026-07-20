@@ -39,6 +39,18 @@ export default function ConciliacaoPage() {
   const [page, setPage] = useState(1);
   const [fStatus, setFStatus] = useState('');
   const [fGateway, setFGateway] = useState('');
+  const [fLoja, setFLoja] = useState('');
+  // Abreviação do nome da loja (mesmo padrão do editor de produtos)
+  const [lojas, setLojas] = useState<Array<{ code: string; name: string }>>([]);
+  useEffect(() => {
+    api<Array<{ code: string; name: string }>>('/stores').then(setLojas).catch(() => {});
+  }, []);
+  const lojaAbbr = (code: string | null) => {
+    if (!code) return '—';
+    const l = lojas.find((x) => x.code === code || x.code === String(code).padStart(2, '0'));
+    if (!l?.name) return code;
+    return String(l.name).normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().slice(0, 5);
+  };
   const [busy, setBusy] = useState(false);
   const [rodando, setRodando] = useState<'importar' | 'conciliar' | null>(null);
   const [err, setErr] = useState('');
@@ -56,7 +68,7 @@ export default function ConciliacaoPage() {
     try {
       const [st, lista] = await Promise.all([
         api<any>('/conciliacao/status'),
-        api<any>(`/conciliacao/list?status=${fStatus}&gateway=${fGateway}&page=${page}`),
+        api<any>(`/conciliacao/list?status=${fStatus}&gateway=${fGateway}&loja=${fLoja}&page=${page}`),
       ]);
       setStatus(st);
       setRows(lista.rows || []);
@@ -64,7 +76,7 @@ export default function ConciliacaoPage() {
     } catch (e: any) { setErr(e?.message || 'Falha ao carregar'); }
     finally { setBusy(false); }
   };
-  useEffect(() => { if (allowed) carregar(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [allowed, fStatus, fGateway, page]);
+  useEffect(() => { if (allowed) carregar(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [allowed, fStatus, fGateway, fLoja, page]);
 
   const rodar = async (qual: 'importar' | 'conciliar') => {
     setRodando(qual); setErr('');
@@ -135,6 +147,11 @@ export default function ConciliacaoPage() {
                 {t.gateway} · {t.qtd} transações · {brl(t.brutoCents)}
               </button>
             ))}
+            <select value={fLoja} onChange={(e) => { setFLoja(e.target.value); setPage(1); }}
+              className="px-3 py-1.5 rounded-full border-2 border-[#E7E2D8] bg-white text-slate-600 font-bold">
+              <option value="">Loja: todas</option>
+              {lojas.map((l) => <option key={l.code} value={l.code}>{l.code} · {l.name}</option>)}
+            </select>
           </div>
         )}
 
@@ -148,6 +165,8 @@ export default function ConciliacaoPage() {
                 <tr className="bg-[#FAFAF7] text-[10px] uppercase tracking-wide text-slate-500 border-b border-[#E7E2D8]">
                   <th className="text-left px-3 py-2">Data venda</th>
                   <th className="text-left px-3 py-2">Gateway</th>
+                  <th className="text-left px-3 py-2">Loja</th>
+                  <th className="text-left px-3 py-2">Cliente</th>
                   <th className="text-left px-3 py-2">Forma</th>
                   <th className="text-left px-3 py-2">NSU / cartão</th>
                   <th className="text-left px-3 py-2">Pedido</th>
@@ -163,6 +182,8 @@ export default function ConciliacaoPage() {
                   <tr key={r.id} className="border-b border-[#F1EDE3] hover:bg-[#FBF6E6]">
                     <td className="px-3 py-2 whitespace-nowrap text-xs">{fmtData(r.dataVenda)}</td>
                     <td className="px-3 py-2 text-xs font-bold">{r.gateway}</td>
+                    <td className="px-3 py-2 text-xs font-bold text-slate-600" title={r.storeCode ? `Loja ${r.storeCode}` : 'sem loja na transação'}>{lojaAbbr(r.storeCode)}</td>
+                    <td className="px-3 py-2 text-xs text-slate-700 max-w-[170px] truncate" title={r.clienteNome || ''}>{r.clienteNome || '—'}</td>
                     <td className="px-3 py-2 text-xs">{r.tipoPagamento || '—'}{r.bandeira ? ` · ${r.bandeira}` : ''}{r.parcelas > 1 ? ` ${r.parcelas}x` : ''}</td>
                     <td className="px-3 py-2 text-xs font-mono text-slate-500">{r.nsu || '—'}{r.cartaoFinal ? ` ·${r.cartaoFinal}` : ''}</td>
                     <td className="px-3 py-2 text-xs font-mono text-slate-500">{r.pedidoRef ? String(r.pedidoRef).slice(0, 8) : '—'}</td>
@@ -186,7 +207,7 @@ export default function ConciliacaoPage() {
                   </tr>
                 ))}
                 {!rows.length && !busy && (
-                  <tr><td colSpan={10} className="text-center text-slate-400 py-10">
+                  <tr><td colSpan={12} className="text-center text-slate-400 py-10">
                     Nada aqui ainda — clique em <b>1. Importar</b> e depois <b>2. Conciliar</b>.
                   </td></tr>
                 )}

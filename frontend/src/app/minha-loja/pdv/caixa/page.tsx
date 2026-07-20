@@ -1199,6 +1199,23 @@ function MovModal({
   const [motivo, setMotivo] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  // ADIANTAMENTO PRA FUNCIONÁRIA (só na sangria): puxa a funcionária e gera o
+  // débito no extrato dela (abatido no próximo vale/salário).
+  const [isAdianto, setIsAdianto] = useState(false);
+  const [sellerQ, setSellerQ] = useState('');
+  const [sellerOpts, setSellerOpts] = useState<any[]>([]);
+  const [sellerSel, setSellerSel] = useState<any | null>(null);
+  const [sellerFocus, setSellerFocus] = useState(false);
+  useEffect(() => {
+    if (!isAdianto || sellerSel || !sellerFocus) return;
+    const t = setTimeout(async () => {
+      try {
+        const r = await api<any[]>(`/pdv/caixa/funcionarias?q=${encodeURIComponent(sellerQ.trim())}`);
+        setSellerOpts(r || []);
+      } catch { setSellerOpts([]); }
+    }, sellerQ.trim() ? 250 : 0);
+    return () => clearTimeout(t);
+  }, [isAdianto, sellerQ, sellerSel, sellerFocus]);
 
   async function submit() {
     setErr('');
@@ -1207,7 +1224,11 @@ function MovModal({
       setErr('Informe o valor');
       return;
     }
-    if (motivo.trim().length < 3) {
+    if (isAdianto && !sellerSel) {
+      setErr('Escolha a funcionária do adiantamento');
+      return;
+    }
+    if (!isAdianto && motivo.trim().length < 3) {
       setErr('Informe o motivo (mínimo 3 caracteres)');
       return;
     }
@@ -1215,6 +1236,11 @@ function MovModal({
     try {
       const body: any = { valor: v, motivo: motivo.trim() };
       if (storeCode) body.storeCode = storeCode;
+      if (isAdianto && sellerSel) {
+        body.sellerId = sellerSel.id;
+        body.sellerNome = sellerSel.name;
+        body.sellerCpf = sellerSel.cpf;
+      }
       const mov = await api<{ id: string }>(`/pdv/caixa/${tipo}`, {
         method: 'POST',
         body: JSON.stringify(body),
@@ -1277,13 +1303,58 @@ function MovModal({
         className="w-full p-3 border rounded-lg text-lg focus:ring-2 focus:ring-rose-400"
         autoFocus
       />
-      <label className="block text-sm font-semibold text-gray-700 mb-1 mt-4">Motivo</label>
+
+      {tipo === 'sangria' && (
+        <div className="mt-4 rounded-lg border border-[#E6DFC8] bg-[#FBF6E6]/50 p-3">
+          <label className="flex items-center gap-2 text-sm font-semibold text-[#8C7325] cursor-pointer">
+            <input
+              type="checkbox"
+              checked={isAdianto}
+              onChange={(e) => { setIsAdianto(e.target.checked); setSellerSel(null); setSellerQ(''); }}
+              className="w-4 h-4 accent-[#B8912B]"
+            />
+            👤 Adiantamento pra funcionária <span className="font-normal text-[#8C7325]/70">(abate no próximo vale/salário)</span>
+          </label>
+          {isAdianto && (
+            <div className="relative mt-2">
+              <input
+                value={sellerSel ? sellerSel.name : sellerQ}
+                onChange={(e) => { setSellerSel(null); setSellerQ(e.target.value); }}
+                onFocus={() => setSellerFocus(true)}
+                onBlur={() => setTimeout(() => setSellerFocus(false), 200)}
+                placeholder="Busque a funcionária pelo nome…"
+                className="w-full p-2.5 border rounded-lg text-sm focus:ring-2 focus:ring-[#D4AF37]"
+              />
+              {sellerFocus && !sellerSel && sellerOpts.length > 0 && (
+                <div className="absolute z-10 bg-white border border-[#E6DFC8] rounded-lg shadow-lg w-full max-h-44 overflow-y-auto">
+                  {sellerOpts.map((o) => (
+                    <button
+                      key={o.id}
+                      onMouseDown={(e) => { e.preventDefault(); setSellerSel(o); setSellerOpts([]); }}
+                      className="block w-full text-left px-3 py-2 text-sm hover:bg-[#FBF6E6]"
+                    >
+                      <b>{o.name}</b>{o.cpf && <span className="text-slate-400 text-xs ml-2 font-mono">{o.cpf}</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {sellerSel && (
+                <div className="mt-1 text-[11px] text-[#2E7D46] font-semibold">
+                  ✓ {sellerSel.name}{sellerSel.cpf ? ` · CPF ${sellerSel.cpf}` : ''} — entra no extrato dela
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      <label className="block text-sm font-semibold text-gray-700 mb-1 mt-4">{isAdianto ? 'Observação (opcional)' : 'Motivo'}</label>
       <textarea
         value={motivo}
         onChange={(e) => setMotivo(e.target.value)}
         rows={2}
         placeholder={
-          tipo === 'sangria' ? 'Ex: pagamento boleto luz' : 'Ex: reforço de troco'
+          isAdianto ? 'Ex: pediu adiantamento' : tipo === 'sangria' ? 'Ex: pagamento boleto luz' : 'Ex: reforço de troco'
         }
         className="w-full p-3 border rounded-lg focus:ring-2 focus:ring-rose-400"
       />
