@@ -166,6 +166,7 @@ export default function ConciliacaoPage() {
                   <th className="text-left px-3 py-2">Data venda</th>
                   <th className="text-left px-3 py-2">Gateway</th>
                   <th className="text-left px-3 py-2">Loja</th>
+                  <th className="text-left px-3 py-2">Cliente</th>
                   <th className="text-left px-3 py-2">Forma</th>
                   <th className="text-left px-3 py-2">NSU / cartão</th>
                   <th className="text-left px-3 py-2">Pedido</th>
@@ -182,6 +183,7 @@ export default function ConciliacaoPage() {
                     <td className="px-3 py-2 whitespace-nowrap text-xs">{fmtData(r.dataVenda)}</td>
                     <td className="px-3 py-2 text-xs font-bold">{r.gateway}</td>
                     <td className="px-3 py-2 text-xs font-bold text-slate-600" title={r.storeCode ? `Loja ${r.storeCode}` : 'sem loja na transação'}>{lojaAbbr(r.storeCode)}</td>
+                    <td className="px-3 py-2 text-xs text-slate-700 max-w-[170px] truncate" title={r.clienteNome || ''}>{r.clienteNome || '—'}</td>
                     <td className="px-3 py-2 text-xs">{r.tipoPagamento || '—'}{r.bandeira ? ` · ${r.bandeira}` : ''}{r.parcelas > 1 ? ` ${r.parcelas}x` : ''}</td>
                     <td className="px-3 py-2 text-xs font-mono text-slate-500">{r.nsu || '—'}{r.cartaoFinal ? ` ·${r.cartaoFinal}` : ''}</td>
                     <td className="px-3 py-2 text-xs font-mono text-slate-500">{r.pedidoRef ? String(r.pedidoRef).slice(0, 8) : '—'}</td>
@@ -205,7 +207,7 @@ export default function ConciliacaoPage() {
                   </tr>
                 ))}
                 {!rows.length && !busy && (
-                  <tr><td colSpan={11} className="text-center text-slate-400 py-10">
+                  <tr><td colSpan={12} className="text-center text-slate-400 py-10">
                     Nada aqui ainda — clique em <b>1. Importar</b> e depois <b>2. Conciliar</b>.
                   </td></tr>
                 )}
