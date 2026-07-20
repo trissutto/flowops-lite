@@ -1553,6 +1553,35 @@ model PdvCashMovement {
   @@map("pdv_cash_movements")
 }
 
+// ADIANTAMENTO DE FUNCIONÁRIA — dinheiro adiantado via sangria do caixa, que
+// vira débito no extrato da funcionária e é abatido no PRÓXIMO pagamento dela
+// (vale dia 20 OU salário dia 05, o que vier primeiro). Sem senha pra liberar
+// (registra o operador). Extrato mostrado na aba Funcionárias do Contas a Pagar.
+model AdiantamentoFuncionaria {
+  id             String    @id @default(uuid())
+  sellerId       String?   @map("seller_id")
+  sellerNome     String    @map("seller_nome")
+  sellerCpf      String?   @map("seller_cpf")
+  storeCode      String    @map("store_code")
+  valorCents     Int       @map("valor_cents")
+  // Rastreio da origem: a sangria (PdvCashMovement) que tirou o dinheiro do caixa
+  cashMovementId String?   @map("cash_movement_id")
+  // pendente = ainda deve · abatido = descontado num pagamento · cancelado
+  status         String    @default("pendente")
+  // Quando abatido: a conta (ContaPagar) de vale/salário onde entrou o desconto
+  abatidoEmContaId String? @map("abatido_em_conta_id")
+  abatidoAt      DateTime? @map("abatido_at")
+  motivo         String?
+  userId         String?   @map("user_id")
+  userName       String?   @map("user_name")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  @@index([sellerId, status])
+  @@index([storeCode, status])
+  @@map("adiantamentos_funcionaria")
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // DEVOLUÇÃO / TROCA
 // ═══════════════════════════════════════════════════════════════════════
