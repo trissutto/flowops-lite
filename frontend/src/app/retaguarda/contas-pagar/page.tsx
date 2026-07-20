@@ -390,6 +390,9 @@ function Painel({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
                       )}
                       {r.favorecidoOrfao && <span title="Favorecido órfão no GIGA">⚠️</span>}
                     </div>
+                    {r.beneficiarioTipo === 'funcionaria' && r.beneficiarioCpf && (
+                      <div className="text-[11px] text-slate-400 font-mono">CPF {r.beneficiarioCpf}</div>
+                    )}
                     {r.observacao && <div className="text-[11px] text-slate-400">{r.observacao}</div>}
                   </td>
                   <td className="px-3 py-2">
@@ -1190,6 +1193,7 @@ function Funcionarias() {
           {data.pessoas.map((p: any) => (
             <div key={p.sellerId || p.nome} className="bg-white border border-[#E7E2D8] rounded-xl p-4">
               <div className="font-extrabold">{p.nome}</div>
+              {p.cpf && <div className="text-[11px] text-slate-400 font-mono">CPF {p.cpf}</div>}
               <div className="text-lg font-extrabold text-[#2E7D46] my-1">{brl(p.totalCents)}</div>
               <div className="space-y-1">
                 {p.itens.map((i: any) => (

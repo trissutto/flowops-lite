@@ -236,6 +236,8 @@ export class ContasPagarService {
         lojaCode: r.lojaCode,
         beneficiarioTipo: r.beneficiarioTipo,
         beneficiario: r.beneficiarioTipo === 'funcionaria' ? r.sellerNome : r.fornecedorNome,
+        // CPF da funcionária — pra distinguir homônimas na lista (nome inteiro + CPF)
+        beneficiarioCpf: r.beneficiarioTipo === 'funcionaria' ? r.sellerCpf || null : null,
         especieId: r.especieId,
         especie: r.especie?.nome || r.especieOriginal || '—',
         especieRestrita: !!r.especie?.restrita,
@@ -506,11 +508,12 @@ export class ContasPagarService {
       include: { especie: { select: { nome: true } } },
       orderBy: [{ sellerNome: 'asc' }, { vencimento: 'asc' }],
     });
-    const porPessoa = new Map<string, { nome: string; sellerId: string | null; totalCents: number; itens: any[] }>();
+    const porPessoa = new Map<string, { nome: string; cpf: string | null; sellerId: string | null; totalCents: number; itens: any[] }>();
     for (const r of rows) {
-      const key = r.sellerId || r.sellerNome || '?';
+      // Chave por sellerId (homônimas NÃO se juntam); só cai no nome se não tiver id.
+      const key = r.sellerId || `${r.sellerNome || '?'}::${r.sellerCpf || ''}`;
       let p = porPessoa.get(key);
-      if (!p) porPessoa.set(key, (p = { nome: r.sellerNome || '?', sellerId: r.sellerId, totalCents: 0, itens: [] }));
+      if (!p) porPessoa.set(key, (p = { nome: r.sellerNome || '?', cpf: r.sellerCpf || null, sellerId: r.sellerId, totalCents: 0, itens: [] }));
       p.totalCents += r.valorCents;
       p.itens.push({
         id: r.id,
