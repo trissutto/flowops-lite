@@ -138,7 +138,7 @@ export class ReturnsService {
    *                  loja passa storeCode=null (controller só permite
    *                  isso se role=admin/operator E ?crossStore=1).
    */
-  async lookupSalesBySku(sku: string, storeCode?: string | null) {
+  async lookupSalesBySku(sku: string, homeStoreCode?: string | null) {
     const cleanSku = String(sku || '').trim();
     if (!cleanSku) throw new BadRequestException('Informe o SKU/REF da peça');
 
@@ -147,10 +147,10 @@ export class ReturnsService {
     const dataLimite = new Date();
     dataLimite.setDate(dataLimite.getDate() - 90);
 
-    // ── Filtro por loja (modo A2) ──
-    // Se storeCode vier setado, restringe ao PDV daquela loja.
-    // Se vier null/undefined, vê vendas de TODAS as lojas (override admin).
-    const storeFilter: any = storeCode ? { storeCode } : {};
+    // ── Vendas de TODA a rede, loja local em DESTAQUE (regra do dono) ──
+    // O bipe traz as vendas da LOJA ATUAL em cima e as das OUTRAS lojas
+    // embaixo (cada bloco da mais nova pra mais velha). homeStoreCode marca
+    // qual é a "casa" (sameStore=true). Sem Giga — só FlowOps.
 
     // VARIANTES: gera todas variacoes do SKU com/sem zeros a esquerda
     // (ex: '5210367', '0005210367', '00000005210367', ...). Sem isso, peca
@@ -175,51 +175,40 @@ export class ReturnsService {
       ],
     };
 
-    // 1ª busca: VENDAS FINALIZADAS na janela
-    let sales = await (this.prisma as any).pdvSale.findMany({
-      where: {
-        status: 'finalized',
-        finalizedAt: { gte: dataLimite },
-        items: { some: itemFilter },
-        ...storeFilter, // modo A2 — filtra por loja se vier definido
-      },
-      orderBy: { finalizedAt: 'desc' },
-      take: 20,
-      include: {
-        items: { where: itemFilter },
-      },
-    });
+    const home = (homeStoreCode || '').trim() || null;
+    const findFinalized = (extra: any, take: number) =>
+      (this.prisma as any).pdvSale.findMany({
+        where: { status: 'finalized', finalizedAt: { gte: dataLimite }, items: { some: itemFilter }, ...extra },
+        orderBy: { finalizedAt: 'desc' },
+        take,
+        include: { items: { where: itemFilter } },
+      });
 
-    // 2ª tentativa (fallback): se não achou finalized, tenta vendas RECENTES
-    // em qualquer status (open/cancelled). Cobre venda PIX que ainda não
-    // confirmou via webhook, ou venda cancelada por engano.
+    // LOJA LOCAL (destaque) em cima, REDE (outras lojas) embaixo. Cada bloco
+    // já vem da mais nova pra mais velha (orderBy finalizedAt desc).
+    let localSales: any[] = home ? await findFinalized({ storeCode: home }, 20) : [];
+    let otherSales: any[] = await findFinalized(home ? { storeCode: { not: home } } : {}, 20);
+    let sales = [...localSales, ...otherSales];
+
+    // Fallback: se NADA finalized, tenta vendas recentes (7d) em qualquer status
+    // (PIX ainda não confirmado, venda cancelada por engano) — mesma ordem.
     if (sales.length === 0) {
       const dataRecente = new Date();
       dataRecente.setDate(dataRecente.getDate() - 7);
-      const fallback = await (this.prisma as any).pdvSale.findMany({
-        where: {
-          createdAt: { gte: dataRecente },
-          items: { some: itemFilter },
-          ...storeFilter, // mesmo filtro no fallback
-        },
-        orderBy: { createdAt: 'desc' },
-        take: 5,
-        include: {
-          items: { where: itemFilter },
-        },
-      });
-      if (fallback.length > 0) {
-        this.logger.log(
-          `[devolucao/lookup-by-sku] q="${cleanSku}" sem finalized, ` +
-          `mas achou ${fallback.length} venda(s) recente(s) status: ` +
-          `${fallback.map((f: any) => f.status).join(',')}`,
-        );
-      }
-      sales = fallback;
+      const findRecent = (extra: any, take: number) =>
+        (this.prisma as any).pdvSale.findMany({
+          where: { createdAt: { gte: dataRecente }, items: { some: itemFilter }, ...extra },
+          orderBy: { createdAt: 'desc' },
+          take,
+          include: { items: { where: itemFilter } },
+        });
+      const localR = home ? await findRecent({ storeCode: home }, 5) : [];
+      const otherR = await findRecent(home ? { storeCode: { not: home } } : {}, 5);
+      sales = [...localR, ...otherR];
     }
 
     if (sales.length === 0) {
-      return { sku: cleanSku, sales: [] };
+      return { sku: cleanSku, homeStoreCode: home, sales: [] };
     }
 
     // Pra cada venda, calcula quanto desse SKU ainda pode ser devolvido
@@ -261,6 +250,8 @@ export class ReturnsService {
         nfceNumber: s.nfceNumber,
         storeCode: s.storeCode,
         storeName: s.storeName,
+        // sameStore: venda foi na loja ATUAL (destaque) vs outra loja da rede (abaixo)
+        sameStore: !!home && s.storeCode === home,
         customerName: s.customerName,
         customerCpf: s.customerCpf,
         finalizedAt: s.finalizedAt || s.createdAt, // fallback p/ vendas open
@@ -273,7 +264,7 @@ export class ReturnsService {
       };
     });
 
-    return { sku: cleanSku, sales: result };
+    return { sku: cleanSku, homeStoreCode: home, sales: result };
   }
 
   // ── Criar devolução ─────────────────────────────────────────────────

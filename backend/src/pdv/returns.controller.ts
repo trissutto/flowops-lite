@@ -80,16 +80,13 @@ export class ReturnsController {
   async lookupBySku(
     @Req() req: any,
     @Query('sku') sku: string,
-    @Query('crossStore') crossStore?: string,
   ) {
     this.requireRole(req);
-    const role = req?.user?.role;
-    const userStoreCode = req?.user?.storeCode || null;
-    // crossStore=1 sÃ³ funciona se for admin/operator. Vendedora comum sempre filtra.
-    const isAdmin = role === 'admin' || role === 'operator';
-    const wantsCross = crossStore === '1' || crossStore === 'true';
-    const storeCodeFilter = isAdmin && wantsCross ? null : userStoreCode;
-    return this.svc.lookupSalesBySku(sku, storeCodeFilter);
+    // Regra do dono: SEMPRE traz a rede — vendas da loja ATUAL em destaque e as
+    // outras lojas abaixo. A loja do JWT vira a "casa" (sameStore) pro destaque.
+    // A devolução em si segue pedindo confirmação cross-store (createReturn).
+    const homeStoreCode = req?.user?.storeCode || null;
+    return this.svc.lookupSalesBySku(sku, homeStoreCode);
   }
 
   /**
