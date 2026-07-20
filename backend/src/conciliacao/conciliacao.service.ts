@@ -288,18 +288,59 @@ export class ConciliacaoService {
       where: { id: { in: txIds } },
     });
     const porId = new Map(txs.map((t) => [t.id, t]));
+
+    // NOME DO CLIENTE: da venda quando o pedido casa (PDV ou carrinho da live);
+    // quando é "pgto sem venda", tenta o nome do PAGADOR no raw do gateway
+    // (o sistema envia customer.name ao criar a order). Ajuda a identificar de
+    // quem é cada PIX que caiu sem venda vinculada.
+    const pedidoRefs = Array.from(
+      new Set(rows.map((r: any) => r.pedidoRef).filter(Boolean)),
+    ) as string[];
+    const [vendas, carrinhos] = await Promise.all([
+      pedidoRefs.length
+        ? (this.prisma as any).pdvSale.findMany({ where: { id: { in: pedidoRefs } }, select: { id: true, customerName: true } })
+        : [],
+      pedidoRefs.length
+        ? (this.prisma as any).livePdvCart.findMany({ where: { id: { in: pedidoRefs } }, select: { id: true, customerName: true } })
+        : [],
+    ]);
+    const nomeVenda = new Map<string, string | null>((vendas as any[]).map((v) => [v.id, v.customerName]));
+    const nomeCart = new Map<string, string | null>((carrinhos as any[]).map((v) => [v.id, v.customerName]));
+
     return {
       total, page, perPage,
       rows: rows.map((c: any) => {
         const t: any = porId.get(c.transactionId) || {};
+        const clienteNome =
+          (c.pedidoRef && (nomeVenda.get(c.pedidoRef) || nomeCart.get(c.pedidoRef))) ||
+          this.nomeDoRaw(t.rawJson) ||
+          null;
         return {
           ...c,
+          clienteNome,
           tipoPagamento: t.tipoPagamento, bandeira: t.bandeira, nsu: t.nsu,
           storeCode: t.storeCode, dataVenda: t.dataVenda, statusGateway: t.statusGateway,
           parcelas: t.parcelas, cartaoFinal: t.cartaoFinal,
         };
       }),
     };
+  }
+
+  /** Extrai o nome do pagador/cliente do JSON bruto do gateway (best-effort). */
+  private nomeDoRaw(raw: any): string | null {
+    if (!raw || typeof raw !== 'object') return null;
+    const cands = [
+      raw?.customer?.name,
+      raw?.charges?.[0]?.customer?.name,
+      raw?.data?.customer?.name,
+      raw?.order?.customer?.name,
+      raw?.customerName,
+    ];
+    for (const c of cands) {
+      const s = c ? String(c).trim() : '';
+      if (s) return s;
+    }
+    return null;
   }
 
   /** JSON bruto de uma transação (botão Ver JSON da tela). */
