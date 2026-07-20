@@ -187,6 +187,37 @@ function printViaIframe(url: string): Promise<{ ok: boolean; mode: string; error
   });
 }
 
+/**
+ * Imprime um PDF (blob URL) na impressora A4 CONFIGURADA.
+ *
+ * Usado pelo ROMANEIO DE REMESSA/TRANSFERÊNCIA (capa A4 paisagem + lista). Esse
+ * impresso vinha sendo mandado direto no `silentPrintUrl` SEM escolher a
+ * impressora → ia pra impressora ATIVA do momento (quase sempre a térmica do
+ * último cupom) e saía como um rolo comprido/esticado. Aqui a gente seleciona a
+ * impressora A4 antes. No navegador, abre popup pra escolher a impressora na mão.
+ *
+ * Retorna { ok, mode }. mode 'popup-blocked' → o caller avisa pra liberar popup.
+ */
+export async function printPdfA4(blobUrl: string): Promise<{ ok: boolean; mode: string }> {
+  if (isElectron()) {
+    const electron = (window as any).electronAPI;
+    try {
+      const a4 = loadPrinterConfig().a4;
+      if (a4 && electron.setConfig) {
+        await electron.setConfig({ printer: a4 }); // seleciona a A4 (HP/Brother)
+      }
+      await electron.silentPrintUrl(blobUrl);
+      return { ok: true, mode: 'electron-silent' };
+    } catch {
+      /* cai no popup abaixo */
+    }
+  }
+  const w = window.open(blobUrl, 'lurds_remessa_print', 'width=1000,height=700,resizable=yes');
+  if (!w) return { ok: false, mode: 'popup-blocked' };
+  setTimeout(() => { try { w.focus(); w.print(); } catch { /* Ctrl+P manual */ } }, 800);
+  return { ok: true, mode: 'popup' };
+}
+
 /** Retorna o profile (termica/a4) que um KIND usa — útil pra UI */
 export function getProfileForKind(kind: PrinterKind): 'termica' | 'a4' {
   return KIND_TO_PROFILE[kind];
