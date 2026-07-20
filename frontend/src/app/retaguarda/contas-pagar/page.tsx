@@ -1191,6 +1191,11 @@ function Funcionarias() {
             <div key={p.sellerId || p.nome} className="bg-white border border-[#E7E2D8] rounded-xl p-4">
               <div className="font-extrabold">{p.nome}</div>
               <div className="text-lg font-extrabold text-[#2E7D46] my-1">{brl(p.totalCents)}</div>
+              {p.saldoAdiantamentoCents > 0 && (
+                <div className="mb-1 inline-block rounded-md bg-amber-50 border border-amber-300 px-2 py-0.5 text-[11px] font-bold text-amber-800">
+                  💸 Adiantamento a descontar: {brl(p.saldoAdiantamentoCents)}
+                </div>
+              )}
               <div className="space-y-1">
                 {p.itens.map((i: any) => (
                   <div key={i.id} className="text-xs text-slate-500 flex justify-between">

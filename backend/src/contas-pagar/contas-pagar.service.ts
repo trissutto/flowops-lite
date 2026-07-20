@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { AdiantamentosService } from '../adiantamentos/adiantamentos.service';
 
 /**
  * Operação do Contas a Pagar 100% Flow (Fase 2 — telas do mockup aprovado
@@ -36,7 +37,10 @@ const CAMPOS_EDITAVEIS = new Set([
 export class ContasPagarService {
   private readonly logger = new Logger(ContasPagarService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly adiantamentos: AdiantamentosService,
+  ) {}
 
   // ── helpers ────────────────────────────────────────────────────────────────
   private dia(d = new Date()): Date {
@@ -354,13 +358,36 @@ export class ContasPagarService {
     if (c.status === 'paga') throw new BadRequestException('Conta já está paga');
     const pagamento = body?.pagamento ? new Date(`${body.pagamento}T00:00:00.000Z`) : this.dia();
     const jurosCents = Math.max(0, Math.round(Number(body?.jurosCents || 0)));
-    const descontoCents = Math.max(0, Math.round(Number(body?.descontoCents || 0)));
+    let descontoCents = Math.max(0, Math.round(Number(body?.descontoCents || 0)));
+
+    // ── ABATIMENTO DE ADIANTAMENTO ──────────────────────────────────────────
+    // Se é pagamento de FUNCIONÁRIA e a espécie é VALE ou SALÁRIO, desconta os
+    // adiantamentos pendentes dela NESTE pagamento (o que vier primeiro). Vira
+    // desconto na conta e marca os adiantamentos como abatidos (rastreado).
+    let abatimentoAdiantoCents = 0;
+    if ((c as any).beneficiarioTipo === 'funcionaria' && ((c as any).sellerId || (c as any).sellerNome)) {
+      const esp = (c as any).especieId
+        ? await (this.prisma as any).especieConta.findUnique({ where: { id: (c as any).especieId }, select: { nome: true } }).catch(() => null)
+        : null;
+      const nomeEsp = String(esp?.nome || '').toUpperCase();
+      if (nomeEsp === 'VALE' || nomeEsp === 'SALARIO' || nomeEsp === 'SALÁRIO') {
+        const restante = Math.max(0, ((c as any).valorCents || 0) - descontoCents);
+        abatimentoAdiantoCents = await this.adiantamentos.abaterParaConta({
+          sellerId: (c as any).sellerId, sellerNome: (c as any).sellerNome, contaId: id, maxCents: restante,
+        });
+        descontoCents += abatimentoAdiantoCents;
+      }
+    }
+
     const upd = await (this.prisma as any).contaPagar.update({
       where: { id },
       data: { status: 'paga', pagamento, jurosCents, descontoCents, pagoPor: usuario || null, updatedBy: usuario || null },
     });
     await this.log(id, 'pagamento', null, `${pagamento.toISOString().slice(0, 10)} (juros ${(jurosCents / 100).toFixed(2)}, desc ${(descontoCents / 100).toFixed(2)})`, usuario);
-    return upd;
+    if (abatimentoAdiantoCents > 0) {
+      await this.log(id, 'abatimento_adiantamento', null, (abatimentoAdiantoCents / 100).toFixed(2), usuario);
+    }
+    return { ...upd, abatimentoAdiantoCents };
   }
 
   async reabrir(id: string, usuario?: string) {
@@ -506,11 +533,12 @@ export class ContasPagarService {
       include: { especie: { select: { nome: true } } },
       orderBy: [{ sellerNome: 'asc' }, { vencimento: 'asc' }],
     });
-    const porPessoa = new Map<string, { nome: string; sellerId: string | null; totalCents: number; itens: any[] }>();
+    type Pessoa = { nome: string; sellerId: string | null; totalCents: number; saldoAdiantamentoCents: number; itens: any[] };
+    const porPessoa = new Map<string, Pessoa>();
     for (const r of rows) {
       const key = r.sellerId || r.sellerNome || '?';
       let p = porPessoa.get(key);
-      if (!p) porPessoa.set(key, (p = { nome: r.sellerNome || '?', sellerId: r.sellerId, totalCents: 0, itens: [] }));
+      if (!p) porPessoa.set(key, (p = { nome: r.sellerNome || '?', sellerId: r.sellerId, totalCents: 0, saldoAdiantamentoCents: 0, itens: [] }));
       p.totalCents += r.valorCents;
       p.itens.push({
         id: r.id,
@@ -523,10 +551,32 @@ export class ContasPagarService {
         observacao: r.observacao,
       });
     }
+
+    // SALDO DE ADIANTAMENTO (extrato): quanto cada funcionária ainda deve de
+    // adiantamentos pendentes — abatido no próximo vale/salário.
+    const saldos = await this.adiantamentos.saldosPendentes();
+    const saldoById = new Map<string, number>();
+    const saldoByNome = new Map<string, number>();
+    for (const s of saldos) {
+      if (s.sellerId) saldoById.set(s.sellerId, (saldoById.get(s.sellerId) || 0) + s.cents);
+      saldoByNome.set(s.sellerNome, (saldoByNome.get(s.sellerNome) || 0) + s.cents);
+    }
+    for (const p of porPessoa.values()) {
+      p.saldoAdiantamentoCents = (p.sellerId ? saldoById.get(p.sellerId) : 0) || saldoByNome.get(p.nome) || 0;
+    }
+    // Funcionária que SÓ tem adiantamento pendente (sem conta no mês) também aparece.
+    for (const s of saldos) {
+      const key = s.sellerId || s.sellerNome || '?';
+      if (s.cents > 0 && !porPessoa.has(key)) {
+        porPessoa.set(key, { nome: s.sellerNome, sellerId: s.sellerId, totalCents: 0, saldoAdiantamentoCents: s.cents, itens: [] });
+      }
+    }
+
     return {
       mes: m,
       pessoas: Array.from(porPessoa.values()).sort((a, b) => b.totalCents - a.totalCents),
       totalCents: rows.reduce((s, r) => s + r.valorCents, 0),
+      saldoAdiantamentoTotalCents: saldos.reduce((s, x) => s + x.cents, 0),
       qtd: rows.length,
     };
   }

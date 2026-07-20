@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { PrismaModule } from '../prisma/prisma.module';
 import { ErpModule } from '../erp/erp.module';
+import { AdiantamentosModule } from '../adiantamentos/adiantamentos.module';
 import { ContasPagarMigracaoService } from './contas-pagar-migracao.service';
 import { ContasPagarService } from './contas-pagar.service';
 import { ContasPagarAssociacaoService } from './contas-pagar-associacao.service';
@@ -12,7 +13,7 @@ import { ContasPagarController } from './contas-pagar.controller';
  * + validação de aceite. Dossiê-contrato: docs/GIGA-CONTAS-DESCOBERTA.md.
  */
 @Module({
-  imports: [PrismaModule, ErpModule],
+  imports: [PrismaModule, ErpModule, AdiantamentosModule],
   providers: [ContasPagarMigracaoService, ContasPagarService, ContasPagarAssociacaoService],
   controllers: [ContasPagarController],
 })
