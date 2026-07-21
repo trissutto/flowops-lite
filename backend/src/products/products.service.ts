@@ -2641,7 +2641,7 @@ export class ProductsService {
 
     // 3. Coleta SKUs únicos e agrupa por REF
     const skus = Array.from(new Set(rawRows.map((r) => String(r.CODIGO)).filter(Boolean)));
-    const skuToMeta = new Map<string, { ref: string; descricao: string; cor: string; tamanho: string }>();
+    const skuToMeta = new Map<string, { ref: string; descricao: string; cor: string; tamanho: string; preco: number | null }>();
     for (const r of rawRows) {
       const sku = String(r.CODIGO);
       if (!sku || skuToMeta.has(sku)) continue;
@@ -2650,6 +2650,8 @@ export class ProductsService {
         descricao: String(r.DESCRICAOCOMPLETA ?? ''),
         cor: String(r.COR ?? ''),
         tamanho: String(r.TAMANHO ?? ''),
+        // VENDAUN em REAIS (espelho e Giga) — NUNCA dividir por 100
+        preco: r.VENDAUN != null && Number(r.VENDAUN) > 0 ? Number(r.VENDAUN) : null,
       });
     }
 
@@ -2719,7 +2721,7 @@ export class ProductsService {
     const byRef = new Map<string, {
       ref: string;
       name: string;
-      variants: Map<string, { sku: string; cor: string; tamanho: string; myStoreQty: number }>;
+      variants: Map<string, { sku: string; cor: string; tamanho: string; myStoreQty: number; preco: number | null }>;
       otherStoresMap: Map<string, {
         code: string;
         name: string;
@@ -2749,6 +2751,7 @@ export class ProductsService {
           cor: meta.cor,
           tamanho: meta.tamanho,
           myStoreQty: 0,
+          preco: meta.preco,
         });
       }
 

@@ -371,6 +371,8 @@ export class WincredCatalogService {
       ESTOQUE: p.estoque != null ? Number(p.estoque) : null,
       TOTAL_EST: totalEst,
       ID: p.idWincred != null ? Number(p.idWincred) : null,
+      // vendaUn no espelho é DECIMAL em REAIS — NUNCA dividir por 100
+      VENDAUN: p.vendaUn != null ? Number(p.vendaUn) : null,
     }));
   }
 
