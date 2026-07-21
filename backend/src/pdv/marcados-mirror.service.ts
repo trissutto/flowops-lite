@@ -173,7 +173,54 @@ export class MarcadosMirrorService {
     }
   }
 
-  /** Preenche clienteNome/cpf a partir do espelho giga_clientes. */
+  /** Normaliza código/loja pra casar caixa × giga_clientes (padding de zeros
+   *  é inconsistente no Giga — mesma regra do CAST AS UNSIGNED dos produtos). */
+  private normNum(s: any): string {
+    const d = String(s ?? '').replace(/\D/g, '').replace(/^0+/, '');
+    return d || '0';
+  }
+
+  /**
+   * Busca nome/CPF no espelho giga_clientes pros pares (loja, codCliente),
+   * casando NORMALIZADO. Preferência: ficha da mesma loja; senão qualquer
+   * loja com o mesmo código. Retorna Map por `${loja}|${cod}` normalizado.
+   */
+  async lookupNomes(pares: Array<{ storeCode: string; codCliente: string }>): Promise<Map<string, { nome: string | null; cpf: string | null }>> {
+    const out = new Map<string, { nome: string | null; cpf: string | null }>();
+    const codsNorm = Array.from(new Set(pares.map((p) => this.normNum(p.codCliente)))).filter((c) => c !== '0');
+    if (!codsNorm.length) return out;
+    // Busca por código cru E sem zeros (cobre os dois jeitos de gravar)
+    const variantes = Array.from(new Set([
+      ...codsNorm,
+      ...pares.map((p) => String(p.codCliente).trim()),
+    ])).slice(0, 2000);
+    const fichas: any[] = await (this.prisma as any).gigaCliente.findMany({
+      where: { codigo: { in: variantes } },
+      select: { loja: true, codigo: true, nome: true, cpf: true },
+    });
+    const byExact = new Map<string, any>();
+    const byCod = new Map<string, any>();
+    for (const f of fichas) {
+      const k = `${this.normNum(f.loja)}|${this.normNum(f.codigo)}`;
+      if (!byExact.has(k)) byExact.set(k, f);
+      const c = this.normNum(f.codigo);
+      // preferência pra ficha com nome preenchido
+      if (!byCod.has(c) || (!byCod.get(c)?.nome && f.nome)) byCod.set(c, f);
+    }
+    for (const p of pares) {
+      const k = `${this.normNum(p.storeCode)}|${this.normNum(p.codCliente)}`;
+      const f = byExact.get(k) || byCod.get(this.normNum(p.codCliente));
+      if (f) {
+        out.set(k, {
+          nome: f.nome || null,
+          cpf: f.cpf ? String(f.cpf).replace(/\D/g, '') || null : null,
+        });
+      }
+    }
+    return out;
+  }
+
+  /** Preenche clienteNome/cpf a partir do espelho giga_clientes (persistindo). */
   private async enrichClientes() {
     const semNome: any[] = await (this.prisma as any).marcado.findMany({
       where: { OR: [{ clienteNome: null }, { cpf: null }] },
@@ -181,38 +228,15 @@ export class MarcadosMirrorService {
       take: 5000,
     });
     if (!semNome.length) return;
-    const pares = Array.from(new Set(semNome.map((m) => `${m.storeCode}|${m.codCliente}`)));
-    const fichas: any[] = await (this.prisma as any).gigaCliente.findMany({
-      where: {
-        OR: pares.slice(0, 1000).map((p) => {
-          const [loja, codigo] = p.split('|');
-          return { loja, codigo };
-        }),
-      },
-      select: { loja: true, codigo: true, nome: true, cpf: true },
-    });
-    const porChave = new Map(fichas.map((f) => [`${f.loja}|${f.codigo}`, f]));
-    // Fallback: código bate mas a loja não (ficha só existe em outra loja)
-    const porCodigo = new Map<string, any>();
-    for (const f of fichas) if (!porCodigo.has(f.codigo)) porCodigo.set(f.codigo, f);
-    const codigosFaltando = Array.from(new Set(
-      semNome.filter((m) => !porChave.has(`${m.storeCode}|${m.codCliente}`)).map((m) => m.codCliente),
-    ));
-    if (codigosFaltando.length) {
-      const extras: any[] = await (this.prisma as any).gigaCliente.findMany({
-        where: { codigo: { in: codigosFaltando.slice(0, 1000) } },
-        select: { loja: true, codigo: true, nome: true, cpf: true },
-      });
-      for (const f of extras) if (!porCodigo.has(f.codigo)) porCodigo.set(f.codigo, f);
-    }
+    const nomes = await this.lookupNomes(semNome);
     for (const m of semNome) {
-      const f = porChave.get(`${m.storeCode}|${m.codCliente}`) || porCodigo.get(m.codCliente);
-      if (!f?.nome && !f?.cpf) continue;
+      const f = nomes.get(`${this.normNum(m.storeCode)}|${this.normNum(m.codCliente)}`);
+      if (!f || (!f.nome && !f.cpf)) continue;
       await (this.prisma as any).marcado.update({
         where: { id: m.id },
         data: {
           clienteNome: f.nome || undefined,
-          cpf: f.cpf ? String(f.cpf).replace(/\D/g, '') || undefined : undefined,
+          cpf: f.cpf || undefined,
         },
       });
     }

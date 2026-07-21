@@ -689,10 +689,24 @@ export class MarcadosService {
         orderBy: [{ dataMarcacao: 'desc' }, { createdAt: 'desc' }],
         take: limit,
       });
+      // Nome na HORA pros que o sync ainda não enriqueceu (casamento
+      // normalizado com giga_clientes — padding de zeros varia no Giga)
+      let nomes: Map<string, { nome: string | null; cpf: string | null }> | null = null;
+      const semNome = nativos.filter((n) => !n.clienteNome);
+      if (semNome.length) {
+        try {
+          nomes = await this.mirror.lookupNomes(
+            semNome.map((n) => ({ storeCode: n.storeCode, codCliente: n.codCliente })),
+          );
+        } catch { /* segue sem nome */ }
+      }
+      const normNum = (s: any) => String(s ?? '').replace(/\D/g, '').replace(/^0+/, '') || '0';
       const rows = nativos.map((n) => ({
         ...this.toGigaShape(n),
         codCliente: n.codCliente,
-        clienteNome: n.clienteNome || null,
+        clienteNome: n.clienteNome
+          || nomes?.get(`${normNum(n.storeCode)}|${normNum(n.codCliente)}`)?.nome
+          || null,
         classificacao: null,
       }));
       return { rows, total: rows.length, fonte: 'flow' };
@@ -709,8 +723,10 @@ export class MarcadosService {
       // REPETE em cada loja (cód 2 existe em todas), cada linha da caixa
       // multiplicava com o nome do cliente de OUTRAS lojas (aparecia "VISA
       // ELECTRON"/"CIELO" como cliente). JOIN agora casa LOJA também.
+      // CAST dos dois lados: padding de zeros da LOJA é inconsistente no Giga
+      // ('1' × '01') — igualdade direta anulava o nome (LEFT JOIN sem match).
       const joinClientes = cm
-        ? `LEFT JOIN \`${cm.table}\` cli ON cli.\`${cm.codCliente}\` = c.CLIENTE AND cli.LOJA = c.LOJA`
+        ? `LEFT JOIN \`${cm.table}\` cli ON cli.\`${cm.codCliente}\` = c.CLIENTE AND CAST(cli.LOJA AS UNSIGNED) = CAST(c.LOJA AS UNSIGNED)`
         : '';
       const selectNome = cm?.nome ? `cli.\`${cm.nome}\` AS clienteNome,` : '';
 
