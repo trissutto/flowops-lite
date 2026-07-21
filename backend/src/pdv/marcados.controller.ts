@@ -1,5 +1,6 @@
 import { Body, Controller, ForbiddenException, Get, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt.guard';
+import { authorizeMinLevel } from '../auth/auth-levels.util';
 import { MarcadosService } from './marcados.service';
 import { MarcadosMirrorService } from './marcados-mirror.service';
 import { isTrainingRequest } from './training.util';
@@ -48,6 +49,34 @@ export class MarcadosController {
   syncStatus(@Req() req: any) {
     this.requireAdmin(req);
     return this.mirror.status();
+  }
+
+  /**
+   * POST /pdv/marcados/baixar — BAIXA SEM FINANCEIRO (clientes-bin: DEFEITOS,
+   * FURTO, reservas). Remove a marcação do Giga sem venda/caixa/estoque.
+   * Exige senha GERENTE+ (auditável: motivo + quem autorizou).
+   */
+  @Post('baixar')
+  baixar(
+    @Req() req: any,
+    @Body() body: {
+      registros: Array<number | string>;
+      codCliente?: string;
+      loja?: string;
+      motivo: string;
+      password: string;
+    },
+  ) {
+    this.requireAdmin(req);
+    const auth = authorizeMinLevel(String(body?.password || ''), 'GERENTE');
+    const quem = auth.byNome || req?.user?.name || req?.user?.email || 'gerente';
+    return this.svc.baixarMarcados({
+      registros: body?.registros || [],
+      codCliente: body?.codCliente,
+      loja: body?.loja,
+      motivo: String(body?.motivo || ''),
+      autorizadoPor: `[${auth.level}] ${quem}`,
+    });
   }
 
   /**

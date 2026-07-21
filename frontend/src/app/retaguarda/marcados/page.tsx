@@ -10,7 +10,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Tag, Loader2, RefreshCw, ChevronDown, ChevronRight, Search } from 'lucide-react';
+import { ArrowLeft, Tag, Loader2, RefreshCw, ChevronDown, ChevronRight, Search, Trash2, X, Lock } from 'lucide-react';
 import { api } from '@/lib/api';
 
 const brl = (n: number) =>
@@ -58,6 +58,7 @@ export default function RetaguardaMarcadosPage() {
   const [filtroNome, setFiltroNome] = useState('');
   const [ordem, setOrdem] = useState<'nome' | 'valor'>('nome');
   const [abertos, setAbertos] = useState<Set<string>>(new Set());
+  const [baixando, setBaixando] = useState<Grupo | null>(null);
 
   useEffect(() => { api<any[]>('/stores').then((r) => setLojas(r || [])).catch(() => {}); }, []);
 
@@ -269,6 +270,15 @@ export default function RetaguardaMarcadosPage() {
                 </button>
                 {aberto && (
                   <div className="border-t border-[#F1EDE3] overflow-x-auto">
+                    <div className="px-4 py-2 flex justify-end bg-[#FBF6E6]/40">
+                      <button
+                        onClick={() => setBaixando(g)}
+                        className="text-xs font-bold text-rose-700 border border-rose-300 rounded-lg px-3 py-1.5 hover:bg-rose-50 flex items-center gap-1.5"
+                        title="Remove a marcação SEM gerar venda e SEM devolver estoque (defeito, furto, reserva…)"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" /> Dar baixa sem financeiro ({g.qtd} peça(s) · {brl(g.total)})
+                      </button>
+                    </div>
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="text-[10px] uppercase text-slate-400 border-b border-[#F8F5EC]">
@@ -299,7 +309,111 @@ export default function RetaguardaMarcadosPage() {
             );
           })}
         </div>
+
+        {baixando && (
+          <BaixaModal
+            grupo={baixando}
+            onClose={() => setBaixando(null)}
+            onDone={() => { setBaixando(null); carregar(); }}
+          />
+        )}
       </main>
+    </div>
+  );
+}
+
+/**
+ * Baixa SEM financeiro: remove a marcação do Giga sem venda, sem caixa e sem
+ * devolver estoque — pros "clientes"-bin (DEFEITOS, FURTO, reservas…).
+ * Senha GERENTE + motivo obrigatório (fica auditado quem baixou e por quê).
+ */
+function BaixaModal({ grupo, onClose, onDone }: { grupo: Grupo; onClose: () => void; onDone: () => void }) {
+  const [motivo, setMotivo] = useState('');
+  const [senha, setSenha] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const confirmar = async () => {
+    setErr(null); setBusy(true);
+    try {
+      const registros = grupo.itens.map((it) => it.REGISTRO).filter((r: any) => Number(r) > 0);
+      const loja = grupo.lojas[0] || '';
+      const r = await api<{ ok: boolean; baixados: number; falhas: string[] }>('/pdv/marcados/baixar', {
+        method: 'POST',
+        body: JSON.stringify({
+          registros,
+          codCliente: grupo.codCliente,
+          loja,
+          motivo,
+          password: senha,
+        }),
+      });
+      if (!r.ok && r.falhas?.length) {
+        setErr(`${r.baixados} baixado(s), mas ${r.falhas.length} falharam: ${r.falhas[0]}`);
+        setBusy(false);
+        return;
+      }
+      onDone();
+    } catch (e: any) {
+      setErr(e?.message || 'Falha na baixa');
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl border border-rose-200 overflow-hidden">
+        <div className="flex items-center justify-between px-5 py-3 border-b border-rose-100 bg-rose-50">
+          <h3 className="font-bold text-rose-900 flex items-center gap-2">
+            <Trash2 className="w-4 h-4" /> Baixa sem financeiro
+          </h3>
+          <button onClick={onClose} className="p-1.5 rounded-lg text-slate-500 hover:bg-white"><X className="w-5 h-5" /></button>
+        </div>
+        <div className="p-5 space-y-3">
+          <div className="rounded-lg bg-slate-50 border border-slate-200 px-3 py-2 text-sm">
+            <div className="font-bold text-slate-800">{grupo.nome}</div>
+            <div className="text-xs text-slate-500">
+              {grupo.qtd} peça(s) · <b className="text-rose-700">{brl(grupo.total)}</b> · cód {grupo.codCliente}
+            </div>
+          </div>
+          <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-[11px] text-amber-800">
+            Isso <b>remove a marcação do Giga</b> sem gerar venda, sem mexer no caixa e{' '}
+            <b>sem devolver as peças ao estoque</b> (defeito/furto/perda não volta). Não tem desfazer.
+          </div>
+          <div>
+            <label className="text-[11px] uppercase font-bold text-slate-400">Motivo (obrigatório)</label>
+            <input
+              value={motivo}
+              onChange={(e) => setMotivo(e.target.value.toUpperCase())}
+              placeholder="Ex.: DEFEITO / FURTO / LIMPEZA DE RESERVAS"
+              className="mt-0.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-rose-400 focus:outline-none"
+            />
+          </div>
+          <div>
+            <label className="text-[11px] uppercase font-bold text-slate-400 flex items-center gap-1">
+              <Lock className="w-3 h-3" /> Senha gerente
+            </label>
+            <input
+              type="password"
+              value={senha}
+              onChange={(e) => setSenha(e.target.value)}
+              className="mt-0.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-rose-400 focus:outline-none"
+            />
+          </div>
+          {err && <div className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700">{err}</div>}
+          <div className="flex justify-end gap-2 pt-1">
+            <button onClick={onClose} disabled={busy}
+              className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-bold text-slate-600">
+              Cancelar
+            </button>
+            <button onClick={confirmar} disabled={busy || !motivo.trim() || !senha}
+              className="rounded-lg bg-rose-600 hover:bg-rose-700 text-white px-4 py-2 text-sm font-bold disabled:opacity-50 flex items-center gap-1.5">
+              {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+              Baixar {grupo.qtd} peça(s)
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
