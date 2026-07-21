@@ -44,4 +44,18 @@ export class ClientesGigaController {
     this.requireAdmin(req);
     return this.svc.sample(Number(limit) || 3);
   }
+
+  /** Busca unificada (nome/CPF/fone/código) — agrupada por PESSOA. */
+  @Get('search')
+  search(@Req() req: any, @Query('q') q?: string) {
+    this.requireAdmin(req);
+    return this.svc.search(q || '');
+  }
+
+  /** Ficha completa da pessoa (todas as lojas + CRM + parcelas em aberto). */
+  @Get('pessoa')
+  pessoa(@Req() req: any, @Query('loja') loja?: string, @Query('codigo') codigo?: string) {
+    this.requireAdmin(req);
+    return this.svc.pessoa(String(loja || ''), String(codigo || ''));
+  }
 }
