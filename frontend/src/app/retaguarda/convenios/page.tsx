@@ -328,7 +328,7 @@ function ConvenioDetalhe({ convenio, onVoltar }: { convenio: any; onVoltar: () =
               </tr>
             ))}
             {membros.length === 0 && (
-              <tr><td colSpan={6} className="px-5 py-6 text-center text-slate-400 text-sm">Nenhum associado — adicione ou cole a lista do sindicato.</td></tr>
+              <tr><td colSpan={6} className="px-5 py-6 text-center text-slate-400 text-sm">Nenhum associado ainda — eles aparecem aqui sozinhos conforme o caixa lança compras no convênio (limite R$ 0,00 = conferência online no sindicato).</td></tr>
             )}
           </tbody>
         </table>

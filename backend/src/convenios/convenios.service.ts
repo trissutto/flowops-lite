@@ -147,6 +147,27 @@ export class ConveniosService {
     }));
   }
 
+  /**
+   * Acha o associado pelo nome ou CRIA na hora (dono 21/07: o sindicato NÃO
+   * manda lista — a conferência do limite é ONLINE no sistema do sindicato).
+   * Associado criado assim entra com limite 0 = "sem controle de limite no
+   * Flow" (validarCompra não trava; só registra pra fatura).
+   */
+  async obterOuCriarMembro(convenioId: string, nome: string, matricula?: string | null) {
+    const nomeNorm = String(nome || '').trim().toUpperCase().replace(/\s+/g, ' ');
+    if (!nomeNorm) throw new BadRequestException('Convênio: informe o nome do associado');
+    const existente = await (this.prisma as any).convenioMembro.findFirst({
+      where: { convenioId, nome: { equals: nomeNorm, mode: 'insensitive' } },
+    });
+    if (existente) {
+      if (!existente.ativo) throw new BadRequestException(`Associado ${existente.nome} está INATIVO no convênio`);
+      return existente;
+    }
+    return (this.prisma as any).convenioMembro.create({
+      data: { convenioId, nome: nomeNorm, matricula: String(matricula || '').trim() || null, limiteCents: 0 },
+    });
+  }
+
   /** Validação usada pelo addPayment do PDV. Lança se não puder. */
   async validarCompra(input: { convenioId: string; membroId: string; storeCode: string; valorCents: number }) {
     const conv = await (this.prisma as any).convenio.findUnique({ where: { id: input.convenioId } });
@@ -157,6 +178,11 @@ export class ConveniosService {
     const membro = await (this.prisma as any).convenioMembro.findUnique({ where: { id: input.membroId } });
     if (!membro || membro.convenioId !== conv.id) throw new BadRequestException('Associado não encontrado no convênio');
     if (!membro.ativo) throw new BadRequestException(`Associado ${membro.nome} está INATIVO no convênio`);
+    // Limite 0 = sem controle de limite no Flow — o caixa confere ONLINE no
+    // sistema do sindicato. Só registra (fatura), não trava.
+    if (!membro.limiteCents || membro.limiteCents <= 0) {
+      return { conv, membro, disponivel: null };
+    }
     const aberto = await (this.prisma as any).convenioCompra.aggregate({
       _sum: { valorCents: true },
       where: { convenioId: conv.id, membroId: membro.id, faturaId: null },
