@@ -2244,6 +2244,53 @@ export class PdvService {
         `[pdv→estoque] Venda ${sale.id}: falha na baixa de estoque — ${estoque.error}. Venda no flowops segue OK.`,
       );
     }
+    const marcados = await this.erpStepFecharMarcados(sale);
+    if (!marcados.ok) {
+      this.logger.warn(
+        `[pdv→marcados] Venda ${sale.id}: falha ao fechar marcados puxados — ${marcados.error}.`,
+      );
+    }
+  }
+
+  /**
+   * PASSO 3 do sync ERP: fecha os MARCADOS PUXADOS pra essa venda.
+   *
+   * BUG (21/07, Indaiatuba): a venda puxada de marcados gravava linha NOVA na
+   * caixa (gravarVendaPdv manda todos os itens) mas a linha marcada antiga
+   * ficava com MARCADO='SIM' pra sempre — a peça continuava "em marca" no nome
+   * da cliente E contava 2x na caixa. O campo sale.marcadosRegistros era
+   * gravado no puxarParaVenda e nunca lido.
+   *
+   * Fecha = DELETE da linha antiga (a linha nova da venda é a que vale).
+   * Estoque NÃO é tocado: a marcação já baixou; a venda pulou os itens
+   * MARCADO (isStockEligibleItem). Idempotente: o DELETE só pega
+   * MARCADO='SIM' — retry com 0 linhas afetadas conta como ok.
+   */
+  async erpStepFecharMarcados(sale: any): Promise<{ ok: boolean; error?: string }> {
+    const regs = String(sale?.marcadosRegistros || '')
+      .split(',')
+      .map((s: string) => Number(s.trim()))
+      .filter((n: number) => Number.isFinite(n) && n > 0);
+    if (!regs.length) return { ok: true };
+    if (!this.erp.isWriteEnabled) {
+      this.logger.warn(
+        `[pdv→marcados] Venda ${sale.id}: ERP_WRITE_ENABLED=false — marcados ${regs.join(',')} NÃO fechados no Wincred.`,
+      );
+      return { ok: true };
+    }
+    const falhas: string[] = [];
+    for (const reg of regs) {
+      const r = await this.erp.deleteCaixaMarcadoRow({ registro: reg });
+      if (r.success) {
+        this.logger.log(`[pdv→marcados] Venda ${sale.id}: marcado REGISTRO=${reg} fechado (linha removida).`);
+      } else if (/Nenhuma linha/i.test(r.error || '')) {
+        // Já fechado num retry anterior (ou devolvido) — idempotente, segue.
+      } else {
+        falhas.push(`REG ${reg}: ${r.error || 'falha'}`);
+      }
+    }
+    if (falhas.length) return { ok: false, error: falhas.join(' | ') };
+    return { ok: true };
   }
 
   /**

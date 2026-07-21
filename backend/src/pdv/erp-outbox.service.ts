@@ -141,7 +141,16 @@ export class ErpOutboxService {
       else stepError = `estoque: ${r.error || 'falha'}`;
     }
 
-    if (caixaDoneAt && stockDoneAt) {
+    // ── Passo 3: fecha marcados PUXADOS (DELETE da linha MARCADO='SIM') ──
+    // Idempotente por natureza (só apaga se ainda for SIM) — sem coluna de
+    // progresso; retry re-executa sem risco. Sem isso a peça puxada pro PDV
+    // ficava "em marca" pra sempre (bug 21/07 Indaiatuba).
+    if (!stepError) {
+      const r = await this.pdv.erpStepFecharMarcados(sale);
+      if (!r.ok) stepError = `marcados: ${r.error || 'falha'}`;
+    }
+
+    if (caixaDoneAt && stockDoneAt && !stepError) {
       await (this.prisma as any).erpOutbox.update({
         where: { id: job.id },
         data: {
