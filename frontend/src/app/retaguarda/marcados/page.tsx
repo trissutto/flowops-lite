@@ -56,6 +56,7 @@ export default function RetaguardaMarcadosPage() {
   const [loja, setLoja] = useState('');
   const [lojas, setLojas] = useState<Array<{ code: string; name: string }>>([]);
   const [filtroNome, setFiltroNome] = useState('');
+  const [ordem, setOrdem] = useState<'nome' | 'valor'>('nome');
   const [abertos, setAbertos] = useState<Set<string>>(new Set());
 
   useEffect(() => { api<any[]>('/stores').then((r) => setLojas(r || [])).catch(() => {}); }, []);
@@ -113,11 +114,12 @@ export default function RetaguardaMarcadosPage() {
     let list = Array.from(map.values());
     const f = filtroNome.trim().toUpperCase();
     if (f) list = list.filter((g) => g.nome.toUpperCase().includes(f) || g.codCliente.includes(f));
-    list.sort((a, b) => b.total - a.total);
+    if (ordem === 'nome') list.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+    else list.sort((a, b) => b.total - a.total);
     // Itens de cada cliente: mais novos primeiro
     for (const g of list) g.itens.sort((a, b) => String(b.DATA || '').localeCompare(String(a.DATA || '')));
     return list;
-  }, [rows, filtroNome]);
+  }, [rows, filtroNome, ordem]);
 
   const totalGeral = grupos.reduce((s, g) => s + g.total, 0);
   const qtdGeral = grupos.reduce((s, g) => s + g.qtd, 0);
@@ -180,10 +182,20 @@ export default function RetaguardaMarcadosPage() {
             className="rounded-lg bg-[#B8912B] hover:bg-[#8C7325] text-white text-sm font-bold px-4 py-2 disabled:opacity-50">
             Filtrar
           </button>
-          <div className="relative ml-auto">
-            <Search className="w-4 h-4 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input value={filtroNome} onChange={(e) => setFiltroNome(e.target.value)} placeholder="Filtrar cliente…"
-              className="rounded-lg border border-[#E7E2D8] pl-8 pr-3 py-2 text-sm focus:border-[#D4AF37] focus:outline-none w-52" />
+          <div className="flex items-end gap-2 ml-auto">
+            <div className="flex rounded-lg border border-[#E7E2D8] overflow-hidden">
+              {([['nome', 'A→Z'], ['valor', 'R$ maior']] as const).map(([k, l]) => (
+                <button key={k} onClick={() => setOrdem(k)}
+                  className={`px-2.5 py-2 text-xs font-bold ${ordem === k ? 'bg-[#B8912B] text-white' : 'text-slate-600 hover:bg-[#FBF6E6]'}`}>
+                  {l}
+                </button>
+              ))}
+            </div>
+            <div className="relative">
+              <Search className="w-4 h-4 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input value={filtroNome} onChange={(e) => setFiltroNome(e.target.value)} placeholder="Filtrar cliente…"
+                className="rounded-lg border border-[#E7E2D8] pl-8 pr-3 py-2 text-sm focus:border-[#D4AF37] focus:outline-none w-52" />
+            </div>
           </div>
         </div>
 
