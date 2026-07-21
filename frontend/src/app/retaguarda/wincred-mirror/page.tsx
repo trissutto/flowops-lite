@@ -407,6 +407,7 @@ function FixDataAltNativoBox() {
 function ClientesGigaBox() {
   const [st, setSt] = useState<{
     total: number; comCpf: number; pessoasUnicas: number; vinculadosAoCrm: number;
+    porLoja?: Array<{ loja: string; fichas: number }>;
     ultimoSync: string | null; rodando: boolean;
     ultimoResultado?: { erro?: string } | null;
   } | null>(null);
@@ -461,6 +462,17 @@ function ClientesGigaBox() {
               <span>· {st.pessoasUnicas.toLocaleString('pt-BR')} pessoas (CPF)</span>
               <span>· {st.vinculadosAoCrm.toLocaleString('pt-BR')} no CRM</span>
               {st.ultimoSync && <span className="text-emerald-600 font-normal">· último: {new Date(st.ultimoSync).toLocaleString('pt-BR')}</span>}
+            </div>
+          )}
+          {/* POR LOJA — confere que TODAS as lojas vieram (a tabela do Giga é
+              uma só pra rede; aqui dá pra ver se alguma loja veio zerada) */}
+          {st?.porLoja && st.porLoja.length > 0 && (
+            <div className="mt-2 flex gap-1.5 flex-wrap">
+              {st.porLoja.map((l) => (
+                <span key={l.loja} className="rounded-md bg-white/70 border border-emerald-200 px-1.5 py-0.5 text-[10px] font-bold text-emerald-800 tabular-nums">
+                  LJ{l.loja}: {l.fichas.toLocaleString('pt-BR')}
+                </span>
+              ))}
             </div>
           )}
         </div>

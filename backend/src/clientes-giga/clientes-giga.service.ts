@@ -275,11 +275,13 @@ export class ClientesGigaService {
   // ── consultas (status + amostra pra desenhar a tela) ────────────────────
 
   async status() {
-    const [total, comCpf, vinculados, pessoas, ultimo] = await Promise.all([
+    const [total, comCpf, vinculados, pessoas, porLojaRaw, ultimo] = await Promise.all([
       (this.prisma as any).gigaCliente.count(),
       (this.prisma as any).gigaCliente.count({ where: { cpf: { not: null } } }),
       (this.prisma as any).gigaCliente.count({ where: { customerId: { not: null } } }),
       (this.prisma as any).gigaCliente.groupBy({ by: ['personKey'], where: { personKey: { not: null } } }).then((g: any[]) => g.length),
+      // Quebra POR LOJA — confere na tela que TODAS as lojas vieram (dono 21/07).
+      (this.prisma as any).gigaCliente.groupBy({ by: ['loja'], _count: { _all: true }, orderBy: { loja: 'asc' } }),
       (this.prisma as any).gigaCliente.findFirst({ orderBy: { syncedAt: 'desc' }, select: { syncedAt: true } }),
     ]);
     return {
@@ -287,6 +289,7 @@ export class ClientesGigaService {
       comCpf,
       pessoasUnicas: pessoas,   // pessoas distintas por CPF (integração)
       vinculadosAoCrm: vinculados,
+      porLoja: (porLojaRaw as any[]).map((l) => ({ loja: l.loja, fichas: l._count._all })),
       ultimoSync: ultimo?.syncedAt || null,
       rodando: this.running,
       ultimoResultado: this.lastResult,
