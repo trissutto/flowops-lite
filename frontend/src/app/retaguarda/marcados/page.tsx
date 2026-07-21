@@ -30,6 +30,28 @@ type Row = {
   codCliente: number | string;
   clienteNome?: string | null;
   classificacao?: string | null;
+  status?: string;
+  baixadoAt?: string | null;
+  baixaMotivo?: string | null;
+  baixaPor?: string | null;
+  fechadoAt?: string | null;
+  devolvidoAt?: string | null;
+};
+
+const STATUS_OPTS = [
+  ['ativo', 'Em marca'],
+  ['fechado', 'Viraram venda'],
+  ['devolvido', 'Devolvidos'],
+  ['baixado', 'Baixados'],
+  ['todos', 'Tudo'],
+] as const;
+
+const STATUS_BADGE: Record<string, { label: string; cls: string }> = {
+  ativo: { label: 'EM MARCA', cls: 'bg-amber-50 border-amber-300 text-amber-700' },
+  fechado: { label: 'VIROU VENDA', cls: 'bg-emerald-50 border-emerald-300 text-emerald-700' },
+  devolvido: { label: 'DEVOLVIDO', cls: 'bg-sky-50 border-sky-300 text-sky-700' },
+  baixado: { label: 'BAIXADO', cls: 'bg-rose-50 border-rose-300 text-rose-700' },
+  fechado_giga: { label: 'FECHADO NO GIGA', cls: 'bg-slate-100 border-slate-300 text-slate-600' },
 };
 
 type Grupo = {
@@ -59,16 +81,18 @@ export default function RetaguardaMarcadosPage() {
   const [ordem, setOrdem] = useState<'nome' | 'valor'>('nome');
   const [abertos, setAbertos] = useState<Set<string>>(new Set());
   const [baixando, setBaixando] = useState<Grupo | null>(null);
+  const [statusFiltro, setStatusFiltro] = useState<string>('ativo');
 
   useEffect(() => { api<any[]>('/stores').then((r) => setLojas(r || [])).catch(() => {}); }, []);
 
-  const carregar = async (pDe = de, pAte = ate, pLoja = loja) => {
+  const carregar = async (pDe = de, pAte = ate, pLoja = loja, pStatus = statusFiltro) => {
     setLoading(true); setErr(null);
     try {
       const qs = new URLSearchParams({ limit: '10000' });
       if (pLoja) qs.set('loja', pLoja);
       if (pDe) qs.set('dataInicial', pDe);
       if (pAte) qs.set('dataFinal', pAte);
+      if (pStatus && pStatus !== 'ativo') qs.set('status', pStatus);
       const r = await api<{ rows: Row[]; total: number; truncado?: boolean; fonte?: string; error?: string }>(`/pdv/marcados?${qs.toString()}`);
       setRows(Array.isArray(r?.rows) ? r.rows : []);
       setFonte(r?.fonte || null);
@@ -183,6 +207,19 @@ export default function RetaguardaMarcadosPage() {
             className="rounded-lg bg-[#B8912B] hover:bg-[#8C7325] text-white text-sm font-bold px-4 py-2 disabled:opacity-50">
             Filtrar
           </button>
+          <div className="w-full flex gap-1 flex-wrap">
+            {STATUS_OPTS.map(([k, l]) => (
+              <button key={k}
+                onClick={() => { setStatusFiltro(k); carregar(de, ate, loja, k); }}
+                className={`rounded-full border px-3 py-1 text-xs font-bold ${
+                  statusFiltro === k
+                    ? 'bg-[#B8912B] border-[#B8912B] text-white'
+                    : 'border-[#E7E2D8] text-slate-600 hover:bg-[#FBF6E6]'
+                }`}>
+                {l}
+              </button>
+            ))}
+          </div>
           <div className="flex items-end gap-2 ml-auto">
             <div className="flex rounded-lg border border-[#E7E2D8] overflow-hidden">
               {([['nome', 'A→Z'], ['valor', 'R$ maior']] as const).map(([k, l]) => (
@@ -270,6 +307,7 @@ export default function RetaguardaMarcadosPage() {
                 </button>
                 {aberto && (
                   <div className="border-t border-[#F1EDE3] overflow-x-auto">
+                    {statusFiltro === 'ativo' && (
                     <div className="px-4 py-2 flex justify-end bg-[#FBF6E6]/40">
                       <button
                         onClick={() => setBaixando(g)}
@@ -279,6 +317,7 @@ export default function RetaguardaMarcadosPage() {
                         <Trash2 className="w-3.5 h-3.5" /> Dar baixa sem financeiro ({g.qtd} peça(s) · {brl(g.total)})
                       </button>
                     </div>
+                    )}
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="text-[10px] uppercase text-slate-400 border-b border-[#F8F5EC]">
@@ -287,7 +326,8 @@ export default function RetaguardaMarcadosPage() {
                           <th className="text-left px-2 py-1.5">Descrição</th>
                           <th className="text-right px-2 py-1.5">Qty</th>
                           <th className="text-right px-2 py-1.5">Valor</th>
-                          <th className="text-center px-4 py-1.5">Loja</th>
+                          <th className="text-center px-2 py-1.5">Loja</th>
+                          {statusFiltro !== 'ativo' && <th className="text-left px-4 py-1.5">Situação</th>}
                         </tr>
                       </thead>
                       <tbody>
@@ -298,7 +338,30 @@ export default function RetaguardaMarcadosPage() {
                             <td className="px-2 py-1.5 text-slate-700">{it.DESCRICAO}</td>
                             <td className="px-2 py-1.5 text-right tabular-nums">{Number(it.QUANTIDADE) || 1}</td>
                             <td className="px-2 py-1.5 text-right tabular-nums font-bold">{brl(Number(it.VALORTOTAL) || Number(it.VALOR) || 0)}</td>
-                            <td className="px-4 py-1.5 text-center text-xs font-bold text-slate-500">{it.LOJA}</td>
+                            <td className="px-2 py-1.5 text-center text-xs font-bold text-slate-500">{it.LOJA}</td>
+                            {statusFiltro !== 'ativo' && (
+                              <td className="px-4 py-1.5 text-xs">
+                                {(() => {
+                                  const b = STATUS_BADGE[it.status || 'ativo'] || STATUS_BADGE.ativo;
+                                  return (
+                                    <span className={`inline-block rounded border px-1.5 py-0.5 text-[10px] font-bold ${b.cls}`}>
+                                      {b.label}
+                                    </span>
+                                  );
+                                })()}
+                                {it.status === 'baixado' && (
+                                  <div className="text-[10px] text-slate-500 mt-0.5">
+                                    {fmtData(it.baixadoAt)} · {it.baixaMotivo || ''} · {it.baixaPor || ''}
+                                  </div>
+                                )}
+                                {it.status === 'fechado' && (
+                                  <div className="text-[10px] text-slate-500 mt-0.5">venda em {fmtData(it.fechadoAt)}</div>
+                                )}
+                                {it.status === 'devolvido' && (
+                                  <div className="text-[10px] text-slate-500 mt-0.5">voltou em {fmtData(it.devolvidoAt)}</div>
+                                )}
+                              </td>
+                            )}
                           </tr>
                         ))}
                       </tbody>

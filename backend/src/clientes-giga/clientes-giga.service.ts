@@ -530,6 +530,52 @@ export class ClientesGigaService {
    * sobre "já está fechado": fechou → sai da lista), limite disponível,
    * cashback (CRM, da PESSOA) e se pode marcar pra experimentar.
    */
+  /**
+   * HISTÓRICO DE MARCADOS da PESSOA (todas as fichas/lojas) — tudo que já
+   * esteve em marca: ativo, fechado (virou venda), devolvido, baixado (com
+   * motivo + quem autorizou) e fechado_giga. Lê a tabela nativa `marcados`.
+   */
+  async marcadosHistorico(loja: string, codigo: string) {
+    const base: any = await (this.prisma as any).gigaCliente.findUnique({
+      where: { loja_codigo: { loja, codigo } },
+    });
+    if (!base) return { found: false, itens: [] };
+    const fichas: any[] = base.personKey
+      ? await (this.prisma as any).gigaCliente.findMany({ where: { personKey: base.personKey } })
+      : [base];
+    const digits = String(base.cpf || '').replace(/\D/g, '');
+    const itens: any[] = await (this.prisma as any).marcado.findMany({
+      where: {
+        isTraining: false,
+        OR: [
+          ...(digits.length === 11 ? [{ cpf: digits }] : []),
+          ...fichas.map((f) => ({ codCliente: String(f.codigo), storeCode: String(f.loja) })),
+        ],
+      },
+      orderBy: [{ dataMarcacao: 'desc' }, { createdAt: 'desc' }],
+      take: 500,
+    });
+    return {
+      found: true,
+      itens: itens.map((n) => ({
+        registro: n.registroGiga != null ? Number(n.registroGiga) : null,
+        data: n.dataMarcacao,
+        sku: n.sku,
+        descricao: n.descricao || '',
+        qty: n.qty,
+        valorTotal: Number(n.valorTotal) || 0,
+        loja: n.storeCode,
+        status: n.status,
+        fechadoAt: n.fechadoAt,
+        devolvidoAt: n.devolvidoAt,
+        baixadoAt: n.baixadoAt,
+        baixaMotivo: n.baixaMotivo,
+        baixaPor: n.baixaPor,
+        saleId: n.saleId,
+      })),
+    };
+  }
+
   async resumo(loja: string, codigo: string) {
     const base: any = await (this.prisma as any).gigaCliente.findUnique({
       where: { loja_codigo: { loja, codigo } },
