@@ -322,7 +322,7 @@ function ConsultarInner() {
     <div className="min-h-screen bg-[#f4f1ec]">
       {/* Header */}
       <header className="bg-brand text-white sticky top-0 z-30 shadow">
-        <div className="px-4 py-3 flex items-center justify-between max-w-4xl mx-auto gap-3">
+        <div className="px-4 py-3 flex items-center justify-between max-w-6xl mx-auto gap-3">
           <div className="flex items-center gap-2 min-w-0">
             <Link href="/minha-loja" className="p-2 -ml-2 hover:bg-white/10 rounded" title="Voltar"><ArrowLeft className="w-5 h-5" /></Link>
             <Logo height={28} className="brightness-0 invert hidden sm:block" />
@@ -336,7 +336,7 @@ function ConsultarInner() {
       </header>
 
       {/* Tabs + search */}
-      <section className="max-w-4xl mx-auto px-3 pt-3">
+      <section className="max-w-6xl mx-auto px-3 pt-3">
         <ModeTabs mode={mode} onChange={(m) => { setMode(m); setData(null); setPickedRefFromDesc(null); }} />
 
         <div className="relative">
@@ -371,7 +371,7 @@ function ConsultarInner() {
       </section>
 
       {connStatus === 'offline' && (
-        <div className="max-w-4xl mx-auto px-3 mt-3">
+        <div className="max-w-6xl mx-auto px-3 mt-3">
           <div className="bg-red-50 border border-red-300 rounded-lg p-3 flex items-center gap-2 text-red-800 text-sm">
             <AlertCircle className="w-5 h-5 flex-shrink-0" />
             <div><strong>Sem conexão com o servidor.</strong> A busca pode demorar ou falhar. Assim que voltar, roda sozinha.</div>
@@ -379,7 +379,7 @@ function ConsultarInner() {
         </div>
       )}
 
-      <main className="max-w-4xl mx-auto p-3 pb-10">
+      <main className="max-w-6xl mx-auto p-3 pb-10">
         {searchError && <ErrorBox message={searchError} onRetry={() => runSearch(mode, query)} />}
 
         {/* Modo DESC: lista de REFs clicáveis OU detalhe de uma REF escolhida */}
@@ -801,7 +801,7 @@ function ProductCard({ item, highlightSku, myStore }: {
           <table className="w-full text-sm border-collapse">
             <thead>
               <tr className="bg-slate-100 border-b border-slate-200">
-                <th className="text-left px-3 py-2 font-bold text-slate-700 sticky left-0 bg-slate-100 z-10 min-w-[90px]">
+                <th className="text-left px-3 py-2 font-bold text-slate-700 sticky left-0 bg-slate-100 z-10 min-w-[150px]">
                   Cor
                 </th>
                 {sizes.map((s) => (
@@ -841,7 +841,7 @@ function ProductCard({ item, highlightSku, myStore }: {
                         <span className={`w-2 h-2 rounded-full ${
                           colorTotal > 0 ? 'bg-emerald-500' : 'bg-slate-300'
                         }`} />
-                        <span className="truncate max-w-[100px]" title={cor}>{cor}</span>
+                        <span className="truncate max-w-[200px]" title={cor}>{cor}</span>
                       </div>
                       {priceInfo.varies && (() => {
                         const pr = priceInfo.byColor.get(cor);
@@ -1123,7 +1123,7 @@ function StockByStoreMatrix({ item, myStore }: {
                   >
                     <td className="px-2 py-1 sticky left-0 z-10 bg-white border-r border-slate-100 whitespace-nowrap">
                       <span className="inline-flex items-center gap-1 rounded bg-slate-100 px-1.5 py-0.5 font-semibold text-slate-800">
-                        <span className="truncate max-w-[110px]" title={r.cor}>{r.cor}</span>
+                        <span className="truncate max-w-[200px]" title={r.cor}>{r.cor}</span>
                         <span className="text-slate-400 font-normal">·</span>
                         <span>{r.tamanho}</span>
                       </span>
