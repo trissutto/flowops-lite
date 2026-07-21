@@ -584,8 +584,20 @@ export class PdvService {
     // limite do ciclo. Lança com a mensagem do limite se estourar.
     if (input.method === 'convenio') {
       const det = input.details || {};
-      if (!det.convenioId || !det.membroId) {
-        throw new BadRequestException('Convênio: selecione o associado');
+      if (!det.convenioId || (!det.membroId && !det.membroNome)) {
+        throw new BadRequestException('Convênio: informe o associado');
+      }
+      // Sem membroId = associado digitado no caixa (não tem lista — a
+      // conferência do limite é online no sindicato). Cria/acha pelo nome.
+      if (!det.membroId) {
+        const membro = await this.convenios.obterOuCriarMembro(
+          String(det.convenioId),
+          String(det.membroNome),
+          det.membroMatricula ? String(det.membroMatricula) : null,
+        );
+        det.membroId = membro.id;
+        det.membroNome = membro.nome;
+        input.details = det;
       }
       await this.convenios.validarCompra({
         convenioId: String(det.convenioId),
@@ -2083,8 +2095,11 @@ export class PdvService {
 
     // CONVÊNIO — registra a(s) compra(s) do associado no ciclo (conta no
     // limite e entra na fatura do sindicato). Idempotente por saleId+membro.
+    // Treino NUNCA registra (senão entra na fatura REAL do sindicato).
     try {
-      const convenioPayments = (payments as any[]).filter((p: any) => p.method === 'convenio');
+      const convenioPayments = (sale as any).isTraining
+        ? []
+        : (payments as any[]).filter((p: any) => p.method === 'convenio');
       for (const p of convenioPayments) {
         let det: any = null;
         try { det = typeof p.details === 'string' ? JSON.parse(p.details) : p.details; } catch { /* ignora */ }

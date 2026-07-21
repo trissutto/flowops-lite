@@ -4206,10 +4206,12 @@ function PaymentModal({
     }
     if (selected === 'convenio') {
       if (!convMembro) {
-        toast('warning', 'Selecione o associado', 'Busque o nome na lista do convênio');
+        toast('warning', 'Informe o associado', 'Digite o nome e confirme (conferência do limite é online no sindicato)');
         return;
       }
-      if (Math.round(valor * 100) > (convMembro.disponivelCents ?? 0)) {
+      // Limite só trava se foi cadastrado na retaguarda (limite > 0).
+      // Associado sem limite no Flow = conferência online no sindicato.
+      if (convMembro.id && (convMembro.limiteCents || 0) > 0 && Math.round(valor * 100) > (convMembro.disponivelCents ?? 0)) {
         toast('error', 'Limite do convênio insuficiente', `Disponível pra ${convMembro.nome}: ${brl((convMembro.disponivelCents || 0) / 100)}`);
         return;
       }
@@ -4316,7 +4318,8 @@ function PaymentModal({
     if (selected === 'convenio' && convMembro && convenioAtivo) {
       details.convenioId = convenioAtivo.id;
       details.convenioNome = convenioAtivo.nome;
-      details.membroId = convMembro.id;
+      // Sem id = nome digitado no caixa; o backend cria/acha o associado
+      if (convMembro.id) details.membroId = convMembro.id;
       details.membroNome = convMembro.nome;
       if (convMembro.matricula) details.membroMatricula = convMembro.matricula;
     }
@@ -4953,11 +4956,11 @@ function PaymentModal({
     }
     if (selected === 'convenio') {
       if (!convMembro) {
-        toast('warning', 'Selecione o associado do convênio');
+        toast('warning', 'Informe o associado do convênio');
         return;
       }
       const cobrar = restante > 0 ? restante : total;
-      if (Math.round(cobrar * 100) > (convMembro.disponivelCents ?? 0)) {
+      if (convMembro.id && (convMembro.limiteCents || 0) > 0 && Math.round(cobrar * 100) > (convMembro.disponivelCents ?? 0)) {
         toast('error', 'Limite do convênio insuficiente', `Disponível pra ${convMembro.nome}: ${brl((convMembro.disponivelCents || 0) / 100)}`);
         return;
       }
@@ -4992,7 +4995,8 @@ function PaymentModal({
     if (selected === 'convenio' && convMembro && convenioAtivo) {
       details.convenioId = convenioAtivo.id;
       details.convenioNome = convenioAtivo.nome;
-      details.membroId = convMembro.id;
+      // Sem id = nome digitado no caixa; o backend cria/acha o associado
+      if (convMembro.id) details.membroId = convMembro.id;
       details.membroNome = convMembro.nome;
       if (convMembro.matricula) details.membroMatricula = convMembro.matricula;
     }
@@ -5608,7 +5612,11 @@ function PaymentModal({
                   <div className="font-bold text-sm text-slate-800">{convMembro.nome}</div>
                   <div className="text-[11px] text-slate-500">
                     {convMembro.matricula ? `Mat. ${convMembro.matricula} · ` : ''}
-                    Disponível: <b className="text-emerald-700">{brl((convMembro.disponivelCents || 0) / 100)}</b>
+                    {convMembro.id && (convMembro.limiteCents || 0) > 0 ? (
+                      <>Disponível: <b className="text-emerald-700">{brl((convMembro.disponivelCents || 0) / 100)}</b></>
+                    ) : (
+                      <b className="text-[#8C7325]">Confira o limite no sistema do sindicato (online)</b>
+                    )}
                   </div>
                 </div>
                 <button
@@ -5634,18 +5642,30 @@ function PaymentModal({
                       key={m.id}
                       type="button"
                       onClick={() => setConvMembro(m)}
-                      disabled={(m.disponivelCents || 0) <= 0}
+                      disabled={(m.limiteCents || 0) > 0 && (m.disponivelCents || 0) <= 0}
                       className="w-full text-left bg-white border border-[#E7E2D8] rounded-lg px-3 py-2 hover:border-[#D4AF37] disabled:opacity-40 flex items-center justify-between gap-2"
                     >
                       <span className="text-sm font-medium text-slate-700">{m.nome}</span>
-                      <span className={`text-xs font-bold tabular-nums ${(m.disponivelCents || 0) > 0 ? 'text-emerald-700' : 'text-rose-600'}`}>
-                        {brl((m.disponivelCents || 0) / 100)}
+                      <span className={`text-xs font-bold tabular-nums ${(m.limiteCents || 0) <= 0 ? 'text-[#8C7325]' : (m.disponivelCents || 0) > 0 ? 'text-emerald-700' : 'text-rose-600'}`}>
+                        {(m.limiteCents || 0) <= 0 ? 'online' : brl((m.disponivelCents || 0) / 100)}
                       </span>
                     </button>
                   ))}
-                  {convResultados.length === 0 && (
+                  {/* Sem lista do sindicato — conferência é ONLINE: o caixa digita
+                      o nome, confere o limite no sistema do sindicato e usa direto */}
+                  {convBusca.trim().length >= 3 &&
+                    !convResultados.some((m) => m.nome === convBusca.trim().toUpperCase()) && (
+                    <button
+                      type="button"
+                      onClick={() => setConvMembro({ id: null, nome: convBusca.trim().toUpperCase() })}
+                      className="w-full text-left bg-white border-2 border-dashed border-[#D4AF37] rounded-lg px-3 py-2 hover:bg-[#FBF6E6] text-sm font-bold text-[#8C7325]"
+                    >
+                      ➕ Usar &quot;{convBusca.trim().toUpperCase()}&quot; — conferido online no sindicato
+                    </button>
+                  )}
+                  {convResultados.length === 0 && convBusca.trim().length < 3 && (
                     <div className="text-[11px] text-slate-400 px-1 py-2">
-                      {convBusca ? 'Nenhum associado encontrado — confira com o sindicato.' : 'Digite o nome pra buscar na lista do convênio.'}
+                      Digite o nome do associado (a conferência do limite é online, no sistema do sindicato).
                     </div>
                   )}
                 </div>
