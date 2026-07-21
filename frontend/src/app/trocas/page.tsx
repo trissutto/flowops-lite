@@ -59,6 +59,15 @@ type TrocaPublica = {
   timeline: Array<{ tipo: string; descricao: string; statusPara: string | null; createdAt: string }>;
 };
 
+type PedidoResumo = {
+  numero: string;
+  origem: 'Live' | 'Site';
+  data: string | null;
+  total: number | null;
+  itens: string[];
+  itensTotal: number;
+};
+
 type Variacao = { sku: string; nome: string; cor: string; tamanho: string; disponivel: number };
 type GradeVariacoes = {
   ok: boolean;
@@ -163,12 +172,15 @@ export default function PortalTrocasPage() {
   const [pedido, setPedido] = useState('');
   const [doc, setDoc] = useState('');
 
+  // Tela 1: busca por CPF/celular → lista de pedidos (tela 2)
+  const [pedidosList, setPedidosList] = useState<PedidoResumo[] | null>(null);
+
   const [data, setData] = useState<Localizado | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   // Wizard de nova troca
-  const [step, setStep] = useState<'busca' | 'pedido' | 'motivo' | 'declaracao' | 'fim'>('busca');
+  const [step, setStep] = useState<'busca' | 'lista' | 'pedido' | 'motivo' | 'declaracao' | 'fim'>('busca');
   const [sel, setSel] = useState<Record<string, number>>({}); // sku → qty
   const [motivo, setMotivo] = useState('');
   const [motivoDetalhe, setMotivoDetalhe] = useState('');
@@ -269,14 +281,44 @@ export default function PortalTrocasPage() {
     }
   }
 
-  async function localizar(e?: React.FormEvent) {
+  // Tela 1 → busca todos os pedidos por CPF/celular/e-mail
+  async function buscar(e?: React.FormEvent) {
     e?.preventDefault();
+    setErr(null);
+    setLoading(true);
+    try {
+      const res = await api<{ ok: boolean; pedidos: PedidoResumo[] }>('/public/trocas/buscar', {
+        method: 'POST',
+        body: JSON.stringify({ doc }),
+      });
+      if (!res.pedidos?.length) {
+        setErr('Não encontramos pedidos com esse dado. Confira o CPF/celular usado na compra — ou fale com a gente no WhatsApp (13) 99625-6238.');
+        return;
+      }
+      setPedidosList(res.pedidos);
+      if (res.pedidos.length === 1) {
+        // Um pedido só → entra direto nele
+        await localizar(undefined, res.pedidos[0].numero);
+      } else {
+        setStep('lista');
+      }
+    } catch (e: any) {
+      setErr(parseErr(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function localizar(e?: React.FormEvent, pedidoEscolhido?: string) {
+    e?.preventDefault();
+    const num = pedidoEscolhido || pedido;
+    if (pedidoEscolhido) setPedido(pedidoEscolhido);
     setErr(null);
     setLoading(true);
     try {
       const res = await api<Localizado>('/public/trocas/localizar', {
         method: 'POST',
-        body: JSON.stringify({ pedido, doc }),
+        body: JSON.stringify({ pedido: num, doc }),
       });
       setData(res);
       setStep('pedido');
@@ -367,37 +409,65 @@ export default function PortalTrocasPage() {
           </div>
         )}
 
-        {/* PASSO 1 — localizar pedido */}
+        {/* PASSO 1 — CPF/celular acha todos os pedidos */}
         {step === 'busca' && (
-          <form onSubmit={localizar} className={cardCls}>
-            <label className="block mb-3.5">
-              <span className="block text-[13px] font-bold text-[#6B6456] mb-1.5">
-                Número do pedido
-              </span>
-              <input
-                className={inputCls}
-                placeholder="Ex.: 12345 ou LIVE-61"
-                value={pedido}
-                onChange={(e) => setPedido(e.target.value)}
-                required
-              />
-            </label>
+          <form onSubmit={buscar} className={cardCls}>
             <label className="block mb-5">
               <span className="block text-[13px] font-bold text-[#6B6456] mb-1.5">
-                CPF ou e-mail usado na compra
+                CPF ou celular usado na compra
               </span>
               <input
                 className={inputCls}
-                placeholder="000.000.000-00 ou email@exemplo.com"
+                placeholder="000.000.000-00 ou (13) 99999-9999"
                 value={doc}
                 onChange={(e) => setDoc(e.target.value)}
                 required
               />
             </label>
             <button type="submit" className={btnCls} disabled={loading}>
-              {loading ? 'Localizando…' : 'Localizar pedido'}
+              {loading ? 'Buscando…' : 'Buscar meus pedidos'}
             </button>
           </form>
+        )}
+
+        {/* PASSO 1.5 — lista de pedidos: cliente escolhe qual trocar */}
+        {step === 'lista' && pedidosList && (
+          <div className="space-y-3">
+            <div className="text-center text-sm text-[#6B6456]">
+              Encontramos <b className="text-[#2A2620]">{pedidosList.length} pedidos</b>. Qual você quer trocar?
+            </div>
+            {pedidosList.map((p) => (
+              <button
+                key={p.numero}
+                className={cardCls + ' w-full text-left hover:border-[#B8912B] transition-colors'}
+                disabled={loading}
+                onClick={() => localizar(undefined, p.numero)}
+              >
+                <div className="flex items-center justify-between">
+                  <div>
+                    <span className="font-extrabold text-[#8C7325]">#{p.numero}</span>
+                    <span className="ml-2 text-[11px] font-bold px-2 py-0.5 rounded-full bg-[#FBF6E6] text-[#8C7325]">
+                      {p.origem}
+                    </span>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-sm font-bold text-[#2E7D46]">{brl(p.total || 0)}</div>
+                    <div className="text-[11px] text-[#6B6456]">{fmtData(p.data)}</div>
+                  </div>
+                </div>
+                <div className="mt-1.5 text-[13px] text-[#6B6456]">
+                  {p.itens.join(' · ')}
+                  {p.itensTotal > p.itens.length && ` · +${p.itensTotal - p.itens.length} peça(s)`}
+                </div>
+              </button>
+            ))}
+            <button
+              className="w-full text-center text-sm text-[#6B6456] underline"
+              onClick={() => { setStep('busca'); setPedidosList(null); }}
+            >
+              Buscar outro CPF/celular
+            </button>
+          </div>
         )}
 
         {/* PASSO 2 — pedido localizado: histórico + seleção de itens */}
@@ -848,9 +918,13 @@ export default function PortalTrocasPage() {
 
             <button
               className="w-full text-center text-sm text-[#6B6456] underline"
-              onClick={() => { setStep('busca'); setData(null); }}
+              onClick={() => {
+                setData(null);
+                if (pedidosList && pedidosList.length > 1) setStep('lista');
+                else { setStep('busca'); setPedidosList(null); }
+              }}
             >
-              Consultar outro pedido
+              {pedidosList && pedidosList.length > 1 ? 'Voltar pros meus pedidos' : 'Consultar outro CPF/celular'}
             </button>
           </div>
         )}

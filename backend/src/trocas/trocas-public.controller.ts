@@ -56,8 +56,18 @@ export class TrocasPublicController {
   constructor(private readonly svc: TrocasService) {}
 
   /**
+   * POST /public/trocas/buscar { doc } — tela 1: CPF/celular/e-mail →
+   * lista resumida dos pedidos; a cliente escolhe qual trocar na tela 2.
+   */
+  @Post('buscar')
+  async buscar(@Req() req: any, @Body() body: { doc?: string }) {
+    guardRate(req);
+    return this.svc.buscarPedidos({ doc: String(body?.doc || '') });
+  }
+
+  /**
    * POST /public/trocas/localizar { pedido, doc }
-   * doc = CPF ou e-mail usado na compra.
+   * doc = CPF, celular ou e-mail usado na compra.
    */
   @Post('localizar')
   async localizar(@Req() req: any, @Body() body: { pedido?: string; doc?: string }) {
