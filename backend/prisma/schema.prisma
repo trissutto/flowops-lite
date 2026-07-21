@@ -3580,6 +3580,47 @@ model GigaCliente {
   @@map("giga_clientes")
 }
 
+/// CREDIÁRIO NATIVO — FASE 1 do Tier 3 do "sair da Giga" (21/07).
+/// Ledger COMPLETO de parcelas importado do `movimento` do Giga (abertas E
+/// pagas — todo o histórico), com a camada nativa pro Flow virar fonte:
+///   flowIsSource=true → parcela criada/baixada NO FLOW (fase 2); o sync do
+///   Giga nunca sobrescreve; réplica vai Flow→Giga pelo outbox.
+///   saleId/baixaId → rastreio da venda PDV e da baixa que quitou (fase 2).
+/// Chave = REGISTRO do Giga. Parcela nova do Flow (fase 2) usará faixa própria.
+model CrediarioParcela {
+  registro      String    @id @db.VarChar(20)
+  controle      String?   @db.VarChar(20)
+  numeroCompra  String?   @map("numero_compra") @db.VarChar(20)
+  loja          String    @default("00") @db.VarChar(4)
+  codCliente    String?   @map("cod_cliente") @db.VarChar(20)
+  nomeCliente   String?   @map("nome_cliente") @db.VarChar(120)
+  parcela       Int?
+  totalParcelas Int?      @map("total_parcelas")
+  dataCompra    DateTime? @map("data_compra") @db.Date
+  valorCompra   Decimal?  @map("valor_compra") @db.Decimal(10, 2)
+  vencimento    DateTime? @db.Date
+  valorParcela  Decimal?  @map("valor_parcela") @db.Decimal(10, 2)
+  pago          Boolean   @default(false)
+  dataPagamento DateTime? @map("data_pagamento") @db.Date
+  valorPago     Decimal?  @map("valor_pago") @db.Decimal(10, 2)
+  juros         Decimal?  @db.Decimal(10, 2)
+  multa         Decimal?  @db.Decimal(10, 2)
+  obs           String?   @db.VarChar(300)
+  // ── Camada NATIVA (fase 2: Flow fonte da verdade) ──
+  flowIsSource  Boolean   @default(false) @map("flow_is_source")
+  saleId        String?   @map("sale_id")
+  baixaId       String?   @map("baixa_id")
+  editedAt      DateTime? @map("edited_at")
+  syncedAt      DateTime  @default(now()) @map("synced_at")
+
+  @@index([loja, codCliente])
+  @@index([codCliente])
+  @@index([pago, vencimento])
+  @@index([numeroCompra])
+  @@index([flowIsSource])
+  @@map("crediario_parcelas")
+}
+
 /// Sequência de CÓDIGO pra cliente NOVO cadastrado no Flow (por loja).
 /// Começa em 500001 — faixa alta que NUNCA colide com a numeração do Giga
 /// (mesma ideia do EAN prefixo-8 dos produtos: o Flow é dono do código novo).
