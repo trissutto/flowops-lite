@@ -3563,6 +3563,12 @@ model GigaCliente {
   // aponta pro Customer mestre do CRM quando o CPF/fone casa.
   personKey       String?   @map("person_key")
   customerId      String?   @map("customer_id")
+  // ── FONTE DA VERDADE (mesmo padrão do Product) ──
+  // flowIsSource=true → ficha editada/criada NO FLOW; o sync do Giga NUNCA
+  // sobrescreve; a réplica vai Flow→Giga pelo outbox (kind cliente_upsert).
+  flowIsSource    Boolean   @default(false) @map("flow_is_source")
+  editedAt        DateTime? @map("edited_at")
+  editedBy        String?   @map("edited_by")
   syncedAt        DateTime  @default(now()) @map("synced_at")
 
   @@id([loja, codigo])
@@ -3572,6 +3578,17 @@ model GigaCliente {
   @@index([personKey])
   @@index([customerId])
   @@map("giga_clientes")
+}
+
+/// Sequência de CÓDIGO pra cliente NOVO cadastrado no Flow (por loja).
+/// Começa em 500001 — faixa alta que NUNCA colide com a numeração do Giga
+/// (mesma ideia do EAN prefixo-8 dos produtos: o Flow é dono do código novo).
+model GigaClienteSeq {
+  loja      String   @id @db.VarChar(4)
+  proximo   Int      @default(500001)
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("giga_cliente_seq")
 }
 
 /// Estado do sync incremental. 1 linha por tabela.

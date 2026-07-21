@@ -91,6 +91,7 @@ export class ErpOutboxService {
     if (job.kind === 'produto_cadastro') return this.processProdutoCadastro(job);
     if (job.kind === 'produto_exclusao') return this.processProdutoExclusao(job);
     if (job.kind === 'estoque_delta') return this.processEstoqueDelta(job);
+    if (job.kind === 'cliente_upsert') return this.processClienteUpsert(job);
     if (job.kind !== 'venda') {
       await this.markFailed(job, `kind desconhecido: ${job.kind}`);
       return false;
@@ -288,6 +289,43 @@ export class ErpOutboxService {
         data: { status: 'done', doneAt: new Date(), lastError: null },
       });
       this.logger.log(`[outbox] estoque ${job.saleId} (${op}) replicado no Wincred`);
+      return true;
+    } catch (e: any) {
+      const attempts = (job.attempts || 0) + 1;
+      const delayS =
+        ErpOutboxService.BACKOFF_S[Math.min(attempts - 1, ErpOutboxService.BACKOFF_S.length - 1)] ??
+        ErpOutboxService.BACKOFF_CAP_S;
+      await (this.prisma as any).erpOutbox.update({
+        where: { id: job.id },
+        data: attempts >= ErpOutboxService.MAX_ATTEMPTS
+          ? { status: 'failed', attempts, lastError: String(e?.message || e).slice(0, 300) }
+          : {
+              status: 'pending', attempts,
+              lastError: String(e?.message || e).slice(0, 300),
+              nextRetryAt: new Date(Date.now() + Math.min(delayS, ErpOutboxService.BACKOFF_CAP_S) * 1000),
+            },
+      });
+      return false;
+    }
+  }
+
+  /** Réplica de CLIENTE editado/criado no Flow pro Giga (kind cliente_upsert).
+   *  O Flow é a fonte (giga_clientes flowIsSource) — aqui só espelha na tabela
+   *  `clientes` legada. Idempotente: UPDATE por (CODIGO, LOJA) ou INSERT. */
+  private async processClienteUpsert(job: any): Promise<boolean> {
+    const p = job.payload || {};
+    if (!p.codigo || !p.set) {
+      await this.markFailed(job, 'cliente_upsert sem payload válido');
+      return false;
+    }
+    try {
+      const r = await this.erp.upsertClienteGiga({ loja: p.loja, codigo: p.codigo, set: p.set });
+      if (!r.success) throw new Error(r.error || 'falha na réplica de cliente');
+      await (this.prisma as any).erpOutbox.update({
+        where: { id: job.id },
+        data: { status: 'done', doneAt: new Date(), lastError: null },
+      });
+      this.logger.log(`[outbox] cliente ${p.loja}/${p.codigo} replicado no Giga`);
       return true;
     } catch (e: any) {
       const attempts = (job.attempts || 0) + 1;
