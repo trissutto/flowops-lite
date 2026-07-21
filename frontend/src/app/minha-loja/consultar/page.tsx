@@ -866,6 +866,7 @@ function ProductCard({ item, highlightSku, myStore }: {
                             qty={qty}
                             matched={matched}
                             selected={isCellSel}
+                            preco={v?.preco}
                             onClick={() => handleCellClick(cor, s)}
                           />
                         </td>
@@ -1185,10 +1186,12 @@ function StockByStoreMatrix({ item, myStore }: {
  *  - ring vinho grosso quando selecionada (filtra outras lojas por essa combinação)
  */
 function MatrixCell({
-  qty, matched, selected, onClick,
-}: { qty: number; matched: boolean; selected: boolean; onClick: () => void }) {
+  qty, matched, selected, onClick, preco,
+}: { qty: number; matched: boolean; selected: boolean; onClick: () => void; preco?: number | null }) {
   const base =
     'mx-auto w-full h-10 rounded flex items-center justify-center font-extrabold relative cursor-pointer transition hover:scale-[1.04] active:scale-95 select-none';
+  // Tooltip: preço na frente (passar o mouse no número mostra o valor)
+  const precoTip = preco != null && preco > 0 ? `${fmtBRL(preco)} · ` : '';
 
   if (qty === 0) {
     // ZERO: sem estoque aqui. Mas clicável — abre o filtro pra ver quem tem.
@@ -1196,7 +1199,7 @@ function MatrixCell({
       <button
         type="button"
         onClick={onClick}
-        title="Sem estoque aqui — clique pra ver quem tem"
+        title={`${precoTip}Sem estoque aqui — clique pra ver quem tem`}
         className={`${base} text-base ${
           selected
             ? 'ring-2 ring-brand bg-brand/10 text-brand'
@@ -1215,7 +1218,7 @@ function MatrixCell({
     <button
       type="button"
       onClick={onClick}
-      title={critico ? 'ÚLTIMA peça deste tamanho/cor — clique pra ver outras lojas' : 'Clique pra filtrar outras lojas por este tamanho/cor'}
+      title={`${precoTip}${critico ? 'ÚLTIMA peça deste tamanho/cor — clique pra ver outras lojas' : 'Clique pra filtrar outras lojas por este tamanho/cor'}`}
       className={`${base} text-base ${
         critico
           ? 'bg-orange-300 text-orange-900 border border-orange-500 hover:bg-orange-400'
