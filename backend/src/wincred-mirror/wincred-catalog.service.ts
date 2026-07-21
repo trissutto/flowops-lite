@@ -332,7 +332,11 @@ export class WincredCatalogService {
       if (!foundRef.startsWith(baseRef)) return false;
       const suffix = foundRef.slice(baseRef.length);
       if (suffix.startsWith(' ') || suffix.startsWith('-')) return true;
-      if (/^[A-Za-z]/.test(suffix)) return true;
+      // Letras COLADAS: só sufixo curto de cor (1-2 letras, ex.: "223P",
+      // "223VN"). 3+ letras é OUTRA REF ("8709RIU" ≠ variação de "8709") —
+      // regra alinhada com o normalizeBaseRef da consulta (velho erro de
+      // "adivinhar a referência", dono 21/07).
+      if (/^[A-Za-z]{1,2}$/.test(suffix)) return true;
       return false;
     };
     const filtered = produtos.filter((p) => isVariationOf(String(p.ref || '').trim(), clean));
@@ -373,6 +377,7 @@ export class WincredCatalogService {
       ID: p.idWincred != null ? Number(p.idWincred) : null,
       // vendaUn no espelho é DECIMAL em REAIS — NUNCA dividir por 100
       VENDAUN: p.vendaUn != null ? Number(p.vendaUn) : null,
+      FORNECEDOR: p.fornecedor ? String(p.fornecedor).trim() : null,
     }));
   }
 

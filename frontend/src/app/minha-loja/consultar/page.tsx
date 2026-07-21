@@ -262,15 +262,33 @@ function ConsultarInner() {
     if (!loadingProfile && !authError) inputRef.current?.focus();
   }, [loadingProfile, authError, mode]);
 
-  // ao clicar numa REF do resultado de descrição → busca detalhe
-  const loadRefDetail = useCallback(async (ref: string) => {
+  // ao clicar numa REF do resultado de descrição → busca detalhe.
+  // A MESMA REF pode ter 2+ produtos (fornecedores diferentes, ex.: "8709"
+  // calça MANIFESTO e vestido RIU KIU) — escolhe o resultado cujo NOME mais
+  // parece com o item que a vendedora CLICOU, nunca o results[0] às cegas.
+  const loadRefDetail = useCallback(async (ref: string, clickedName?: string) => {
     setLoadingRefFromDesc(true);
     setSearchError(null);
     try {
       const resp = await apiRetry<StoreSearchResult>(
         `/products/store-search?mode=ref&q=${encodeURIComponent(ref)}`,
       );
-      const first = resp.results[0] ?? null;
+      let first = resp.results[0] ?? null;
+      if (clickedName && resp.results.length > 1) {
+        const words = new Set(
+          clickedName.toUpperCase().split(/\s+/).filter((w) => w.length > 2),
+        );
+        let best = first;
+        let bestScore = -1;
+        for (const r of resp.results) {
+          const score = r.name
+            .toUpperCase()
+            .split(/\s+/)
+            .filter((w) => words.has(w)).length;
+          if (score > bestScore) { bestScore = score; best = r; }
+        }
+        first = best;
+      }
       setPickedRefFromDesc(first);
     } catch (err: any) {
       setSearchError(err?.message ?? 'Falha ao carregar REF.');
@@ -487,7 +505,7 @@ function DescResults({
 }: {
   data: StoreSearchResult;
   loading: boolean;
-  onPickRef: (ref: string) => void;
+  onPickRef: (ref: string, clickedName?: string) => void;
 }) {
   const refs = data.refMatches ?? [];
   if (refs.length === 0) return null;
@@ -514,7 +532,7 @@ function DescResults({
         {refs.map((r) => (
           <button
             key={r.ref}
-            onClick={() => onPickRef(r.ref)}
+            onClick={() => onPickRef(r.ref, r.name)}
             disabled={loading}
             className="w-full text-left bg-white rounded-xl border border-slate-200 hover:border-brand hover:bg-brand/5 shadow-sm p-4 flex items-start gap-3 transition disabled:opacity-50"
           >
