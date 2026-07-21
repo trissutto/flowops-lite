@@ -211,9 +211,10 @@ const gigaData = (v: any): string | null => {
 };
 
 function FichaPessoa({ ficha, onVoltar, onReload }: { ficha: any; onVoltar: () => void; onReload: (loja: string, codigo: string) => void }) {
-  const { pessoa, fichas, customer, parcelasAbertas, totalAbertoReais } = ficha;
+  const { pessoa, fichas, customer, parcelasAbertas, parcelasPagas, totalAbertoReais, totalPagoReais } = ficha;
   const bloqueada = fichas.some((f: any) => String(f.bloqueado || '').toUpperCase() === 'SIM');
   const [editando, setEditando] = useState<any | null>(null);
+  const [verPagas, setVerPagas] = useState(false);
 
   // CONSOLIDA entre as fichas: primeiro valor não-vazio do campo (nomes REAIS
   // do Giga, ex. ENDERECORES). Ficha duplicada/incompleta não deixa "—" na tela.
@@ -390,6 +391,36 @@ function FichaPessoa({ ficha, onVoltar, onReload }: { ficha: any; onVoltar: () =
           </table>
         ) : (
           <div className="px-5 py-6 text-sm text-slate-400">Nenhuma parcela em aberto. ✓</div>
+        )}
+
+        {/* HISTÓRICO do crediário (parcelas PAGAS — do ledger nativo) */}
+        {parcelasPagas?.length > 0 && (
+          <>
+            <button
+              onClick={() => setVerPagas(!verPagas)}
+              className="w-full px-5 py-2.5 text-left text-xs font-bold text-slate-500 hover:bg-slate-50 flex items-center gap-1 border-t border-[#F1EDE3]"
+            >
+              {verPagas ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+              Parcelas pagas ({parcelasPagas.length}{totalPagoReais ? ` · ${brl(totalPagoReais)}` : ''})
+            </button>
+            {verPagas && (
+              <table className="w-full text-sm">
+                <tbody>
+                  {parcelasPagas.map((p: any) => (
+                    <tr key={p.registro} className="border-b border-[#F8F5EC]">
+                      <td className="px-5 py-1.5 text-xs text-slate-500 whitespace-nowrap">pago {fmtData(p.dataPagamento)}</td>
+                      <td className="px-2 py-1.5 text-xs text-slate-400">{p.parcela}/{p.totalParcelas}</td>
+                      <td className="px-2 py-1.5 text-xs text-slate-400">LJ{p.loja}</td>
+                      <td className="px-2 py-1.5 text-xs text-slate-400">venc. {fmtData(p.vencimento)}</td>
+                      <td className="px-5 py-1.5 text-right tabular-nums text-emerald-700 font-semibold">
+                        {brl(Number(p.valorPago ?? p.valorParcela) || 0)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </>
         )}
       </div>
 

@@ -216,6 +216,10 @@ export default function WincredMirrorPage() {
           nativa de clientes + crediário nativo). Botão pedido do dono 21/07. */}
       <ClientesGigaBox />
 
+      {/* CREDIÁRIO NATIVO fase 1: importa o `movimento` INTEIRO (abertas e
+          pagas) — a ficha da cliente passa a mostrar o crediário completo. */}
+      <CrediarioNativoBox />
+
       {/* Teste rapido: peek de uma REF no Postgres */}
       <PeekRefBox />
 
@@ -485,6 +489,80 @@ function ClientesGigaBox() {
             <><Loader2 className="w-4 h-4 animate-spin" /> Importando clientes...</>
           ) : (
             <><Play className="w-4 h-4" /> Importar clientes do Giga</>
+          )}
+        </button>
+      </div>
+      {err && <div className="mt-2 text-xs font-bold text-red-700">{err}</div>}
+    </div>
+  );
+}
+
+/* ─── CREDIÁRIO NATIVO (fase 1) — importa o movimento inteiro do Giga ────── */
+function CrediarioNativoBox() {
+  const [st, setSt] = useState<{
+    total: number; abertas: number; pagas: number; vencidas: number;
+    ultimoSync: string | null; rodando: boolean;
+    ultimoResultado?: { erro?: string } | null;
+  } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = async () => {
+    try { setSt(await api('/admin/crediario-nativo/status')); } catch { /* mantém */ }
+  };
+  useEffect(() => { load(); }, []);
+
+  const rodar = async () => {
+    if (busy) return;
+    setBusy(true); setErr(null);
+    try {
+      const r = await api<{ started: boolean; alreadyRunning: boolean }>(
+        '/admin/crediario-nativo/sync', { method: 'POST' },
+      );
+      if (!r.started && r.alreadyRunning) setErr('Já tem uma importação rodando — acompanhando.');
+      const t0 = Date.now();
+      while (Date.now() - t0 < 20 * 60 * 1000) {
+        await new Promise((res) => setTimeout(res, 4000));
+        const cur = await api<any>('/admin/crediario-nativo/status').catch(() => null);
+        if (cur) setSt(cur);
+        if (cur && !cur.rodando) {
+          if (cur.ultimoResultado?.erro) setErr(`Importação falhou: ${cur.ultimoResultado.erro}`);
+          break;
+        }
+      }
+    } catch (e: any) {
+      setErr(e?.message || 'Erro ao iniciar a importação');
+    } finally { setBusy(false); load(); }
+  };
+
+  return (
+    <div className="bg-gradient-to-br from-sky-50 to-blue-50 border border-sky-200 rounded-xl p-5">
+      <div className="flex items-center gap-4 flex-wrap">
+        <div className="flex-1 min-w-[260px]">
+          <h2 className="font-bold text-sky-900 mb-1">Crediário nativo — importação do movimento</h2>
+          <p className="text-xs text-sky-700">
+            Traz o <b>movimento</b> inteiro (parcelas abertas E pagas — todo o histórico) pro Flow.
+            A ficha da cliente passa a mostrar o crediário completo. Fase 2: venda/baixa gravam no Flow.
+          </p>
+          {st && (
+            <div className="mt-2 flex gap-3 flex-wrap text-[11px] font-bold text-sky-800">
+              <span>{st.total.toLocaleString('pt-BR')} parcelas</span>
+              <span>· {st.abertas.toLocaleString('pt-BR')} abertas</span>
+              <span className="text-red-700">· {st.vencidas.toLocaleString('pt-BR')} vencidas</span>
+              <span className="text-emerald-700">· {st.pagas.toLocaleString('pt-BR')} pagas</span>
+              {st.ultimoSync && <span className="text-sky-600 font-normal">· último: {new Date(st.ultimoSync).toLocaleString('pt-BR')}</span>}
+            </div>
+          )}
+        </div>
+        <button
+          onClick={rodar}
+          disabled={busy || !!st?.rodando}
+          className="shrink-0 px-5 py-3 rounded-lg bg-sky-600 hover:bg-sky-700 text-white font-bold flex items-center gap-2 shadow disabled:opacity-50"
+        >
+          {busy || st?.rodando ? (
+            <><Loader2 className="w-4 h-4 animate-spin" /> Importando crediário...</>
+          ) : (
+            <><Play className="w-4 h-4" /> Importar crediário do Giga</>
           )}
         </button>
       </div>

@@ -380,13 +380,35 @@ export class ClientesGigaService {
         }).catch(() => null)
       : null;
 
-    // Parcelas em aberto (espelho do movimento) de TODAS as fichas da pessoa
-    const parcelas: any[] = await (this.prisma as any).wincredMovimentoAberto.findMany({
-      where: { OR: fichas.map((f) => ({ loja: f.loja, codCliente: f.codigo })) },
-      orderBy: { vencimento: 'asc' },
-      take: 200,
-    }).catch(() => []);
+    // CREDIÁRIO — NATIVO primeiro (ledger completo: abertas E pagas; fase 1 do
+    // crediário nativo). Fallback: espelho de abertas se o nativo está vazio.
+    const orFichas = fichas.map((f) => ({ loja: f.loja, codCliente: f.codigo }));
+    let parcelas: any[] = [];
+    let parcelasPagas: any[] = [];
+    const nativoTem = await (this.prisma as any).crediarioParcela.findFirst({ select: { registro: true } })
+      .catch(() => null);
+    if (nativoTem) {
+      [parcelas, parcelasPagas] = await Promise.all([
+        (this.prisma as any).crediarioParcela.findMany({
+          where: { OR: orFichas, pago: false },
+          orderBy: { vencimento: 'asc' },
+          take: 200,
+        }).catch(() => []),
+        (this.prisma as any).crediarioParcela.findMany({
+          where: { OR: orFichas, pago: true },
+          orderBy: { dataPagamento: 'desc' },
+          take: 120,
+        }).catch(() => []),
+      ]);
+    } else {
+      parcelas = await (this.prisma as any).wincredMovimentoAberto.findMany({
+        where: { OR: orFichas },
+        orderBy: { vencimento: 'asc' },
+        take: 200,
+      }).catch(() => []);
+    }
     const totalAberto = parcelas.reduce((s, p) => s + (Number(p.valorParcela) || 0), 0);
+    const totalPago = parcelasPagas.reduce((s, p) => s + (Number(p.valorPago ?? p.valorParcela) || 0), 0);
 
     return {
       found: true,
@@ -394,7 +416,9 @@ export class ClientesGigaService {
       fichas,
       customer,
       parcelasAbertas: parcelas,
+      parcelasPagas,
       totalAbertoReais: Math.round(totalAberto * 100) / 100,
+      totalPagoReais: Math.round(totalPago * 100) / 100,
     };
   }
 
@@ -515,11 +539,19 @@ export class ClientesGigaService {
       ? await (this.prisma as any).gigaCliente.findMany({ where: { personKey: base.personKey } })
       : [base];
 
-    // Crediário em aberto (espelho — todas as fichas da pessoa)
-    const parcelas: any[] = await (this.prisma as any).wincredMovimentoAberto.findMany({
-      where: { OR: fichas.map((f) => ({ loja: f.loja, codCliente: f.codigo })) },
-      select: { valorParcela: true, vencimento: true },
-    }).catch(() => []);
+    // Crediário em aberto — NATIVO primeiro (crediário nativo fase 1),
+    // fallback espelho de abertas se o nativo ainda está vazio.
+    const orFichasResumo = fichas.map((f) => ({ loja: f.loja, codCliente: f.codigo }));
+    const temNativo = await (this.prisma as any).crediarioParcela.findFirst({ select: { registro: true } }).catch(() => null);
+    const parcelas: any[] = temNativo
+      ? await (this.prisma as any).crediarioParcela.findMany({
+          where: { OR: orFichasResumo, pago: false },
+          select: { valorParcela: true, vencimento: true },
+        }).catch(() => [])
+      : await (this.prisma as any).wincredMovimentoAberto.findMany({
+          where: { OR: orFichasResumo },
+          select: { valorParcela: true, vencimento: true },
+        }).catch(() => []);
     const crediarioAbertoReais = Math.round(parcelas.reduce((s, p) => s + (Number(p.valorParcela) || 0), 0) * 100) / 100;
     const crediarioVencidas = parcelas.filter((p) => p.vencimento && new Date(p.vencimento).getTime() < Date.now() - 86400000).length;
 
