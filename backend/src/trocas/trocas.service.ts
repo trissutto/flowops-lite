@@ -257,12 +257,70 @@ export class TrocasService {
       billing.cpf || (order.meta_data || []).find((m: any) => m.key === '_billing_cpf')?.value,
     );
     const emailPedido = normEmail(billing.email);
+    const phonePedido = onlyDigits(billing.phone);
 
     const cpfOk = docDigits.length === 11 && cpfPedido && docDigits === cpfPedido;
     const emailOk = doc.includes('@') && emailPedido && normEmail(doc) === emailPedido;
-    if (!cpfOk && !emailOk) throw genericErr;
+    // Celular também identifica (decisão do dono 21/07: busca por CPF OU
+    // celular) — compara pelos últimos 8 dígitos (tolera DDD/9º dígito/+55)
+    const phoneOk =
+      docDigits.length >= 10 &&
+      phonePedido.length >= 8 &&
+      docDigits.slice(-8) === phonePedido.slice(-8);
+    if (!cpfOk && !emailOk && !phoneOk) throw genericErr;
 
     return { order, cpfPedido, emailPedido };
+  }
+
+  // ── Portal público: buscar pedidos por CPF/celular (tela 1) ─────────
+
+  /**
+   * Busca TODOS os pedidos da cliente por CPF, celular ou e-mail — ela
+   * escolhe qual trocar na segunda tela (dono 21/07: ninguém decora número
+   * de pedido). Devolve só o resumo (número, data, itens) — nada de
+   * endereço/PII. Rate-limit no controller segura força-bruta.
+   */
+  async buscarPedidos(input: { doc: string }) {
+    const doc = String(input.doc || '').trim();
+    const digits = onlyDigits(doc);
+    const isEmail = doc.includes('@');
+
+    const or: any[] = [];
+    if (isEmail) {
+      or.push({ customerEmail: { equals: doc.toLowerCase(), mode: 'insensitive' } });
+    }
+    if (!isEmail && digits.length === 11) {
+      const cpfFmt = `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9)}`;
+      or.push({ customerCpf: { in: [digits, cpfFmt] } });
+    }
+    if (!isEmail && digits.length >= 10) {
+      // celular: casa pelos últimos 8 dígitos (DDD/9º dígito/+55 variam)
+      or.push({ customerPhone: { contains: digits.slice(-8) } });
+    }
+    if (!or.length) {
+      throw new BadRequestException('Informe seu CPF, celular com DDD ou e-mail da compra.');
+    }
+
+    const orders = await (this.prisma as any).order.findMany({
+      where: { OR: or },
+      include: { items: { select: { productName: true, sku: true, quantity: true } } },
+      orderBy: [{ wcDateCreated: 'desc' }, { createdAt: 'desc' }],
+      take: 15,
+    });
+
+    return {
+      ok: true,
+      pedidos: (orders as any[]).map((o) => ({
+        numero: o.wcOrderNumber || String(o.wcOrderId),
+        origem: o.source === 'live' ? 'Live' : 'Site',
+        data: o.wcDateCreated || o.createdAt,
+        total: o.totalAmount,
+        itens: (o.items || [])
+          .slice(0, 3)
+          .map((it: any) => `${it.quantity}× ${it.productName || it.sku}`),
+        itensTotal: (o.items || []).length,
+      })),
+    };
   }
 
   /** Extrai código de rastreio do pedido WC (plugins mais comuns no BR). */
