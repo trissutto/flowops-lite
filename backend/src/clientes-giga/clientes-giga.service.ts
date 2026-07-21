@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
+import { findAllCustomersByCpf, aggregatePerson } from '../customers/customer-aggregation.helper';
 
 /**
  * IMPORTAÇÃO COMPLETA da tabela `clientes` do Giga pro Flow (giga_clientes).
@@ -497,6 +498,95 @@ export class ClientesGigaService {
     await this.enqueueGigaReplica(loja, codigo, campos);
     this.logger.log(`[clientes-giga] cliente NOVO ${loja}/${codigo} (${campos.NOME}) por ${userName || '?'}`);
     return { ok: true, loja, codigo, ficha: nova };
+  }
+
+  /**
+   * RESUMO DA CLIENTE (painel no topo da ficha — pedido do dono 21/07):
+   * crediário em aberto, MARCADOS pra fechar (AO VIVO no Giga — é a verdade
+   * sobre "já está fechado": fechou → sai da lista), limite disponível,
+   * cashback (CRM, da PESSOA) e se pode marcar pra experimentar.
+   */
+  async resumo(loja: string, codigo: string) {
+    const base: any = await (this.prisma as any).gigaCliente.findUnique({
+      where: { loja_codigo: { loja, codigo } },
+    });
+    if (!base) return { found: false };
+    const fichas: any[] = base.personKey
+      ? await (this.prisma as any).gigaCliente.findMany({ where: { personKey: base.personKey } })
+      : [base];
+
+    // Crediário em aberto (espelho — todas as fichas da pessoa)
+    const parcelas: any[] = await (this.prisma as any).wincredMovimentoAberto.findMany({
+      where: { OR: fichas.map((f) => ({ loja: f.loja, codCliente: f.codigo })) },
+      select: { valorParcela: true, vencimento: true },
+    }).catch(() => []);
+    const crediarioAbertoReais = Math.round(parcelas.reduce((s, p) => s + (Number(p.valorParcela) || 0), 0) * 100) / 100;
+    const crediarioVencidas = parcelas.filter((p) => p.vencimento && new Date(p.vencimento).getTime() < Date.now() - 86400000).length;
+
+    // MARCADOS pra fechar — AO VIVO no Giga (MARCADO='SIM'): fonte da verdade
+    // sobre o que ainda está fora. Giga fora → null (a tela avisa).
+    let marcados: { itens: any[]; totalReais: number } | null = null;
+    try {
+      const itens: any[] = [];
+      for (const f of fichas) {
+        const cod = Number(String(f.codigo).replace(/\D/g, '')) || 0;
+        const lj = String(f.loja).replace(/\D/g, '').padStart(2, '0');
+        if (!cod) continue;
+        const r = await this.erp.runReadOnly(
+          `SELECT REGISTRO, DATA, DESCRICAO, QUANTIDADE, VALORTOTAL, LOJA
+             FROM caixa
+            WHERE UPPER(MARCADO) = 'SIM' AND CLIENTE = ${cod} AND LOJA = '${lj}'
+            ORDER BY DATA DESC LIMIT 100`,
+          { maxRows: 100, timeoutMs: 8000 },
+        );
+        itens.push(...r.rows);
+      }
+      const totalReais = Math.round(itens.reduce((s, r) => s + (Number(r.VALORTOTAL) || 0), 0) * 100) / 100;
+      marcados = { itens, totalReais };
+    } catch (e) {
+      this.logger.warn(`[clientes-giga] resumo: marcados ao vivo indisponível (${(e as Error).message})`);
+    }
+
+    // Limite / avaliação / bloqueado — da ficha ABERTA (são POR LOJA no Giga)
+    const raw = base.rawJson || {};
+    const limiteTotal = Number(base.limiteCompras ?? raw.LIMITECOMPRAS) || 0;
+    const avaliacao = String(base.avaliacao ?? raw.AVALIACAO ?? '').trim().toUpperCase() || null;
+    const bloqueado = String(base.bloqueado ?? raw.BLOQUEADO ?? '').trim().toUpperCase() === 'SIM';
+    const totalMarcado = marcados?.totalReais ?? 0;
+    const limiteDisponivel = Math.round((limiteTotal - totalMarcado) * 100) / 100;
+
+    let podeMarcar = true;
+    let motivoMarcar: string | null = null;
+    if (bloqueado) { podeMarcar = false; motivoMarcar = 'Cliente BLOQUEADO'; }
+    else if (avaliacao !== 'A') { podeMarcar = false; motivoMarcar = `Avaliação "${avaliacao || '—'}" — só clientes A marcam`; }
+    else if (limiteTotal <= 0) { podeMarcar = false; motivoMarcar = 'Sem limite de compras configurado'; }
+    else if (marcados && limiteDisponivel <= 0) { podeMarcar = false; motivoMarcar = 'Limite todo tomado por marcados em aberto'; }
+
+    // Cashback — da PESSOA (CRM), disponível em qualquer loja
+    let cashbackCents: number | null = null;
+    const digits = String(base.cpf || '').replace(/\D/g, '');
+    if (digits.length === 11) {
+      try {
+        const customers = await findAllCustomersByCpf(this.prisma as any, digits);
+        cashbackCents = aggregatePerson(customers).cashbackBalanceCents || 0;
+      } catch { /* CRM indisponível — segue null */ }
+    }
+
+    return {
+      found: true,
+      crediarioAbertoReais,
+      crediarioVencidas,
+      marcados,               // null = Giga fora (sem conferência ao vivo agora)
+      limiteTotal,
+      limiteDisponivel,
+      avaliacao,
+      bloqueado,
+      podeMarcar,
+      motivoMarcar,
+      cashbackCents,
+      lojaFicha: base.loja,
+      codigoFicha: base.codigo,
+    };
   }
 
   /**

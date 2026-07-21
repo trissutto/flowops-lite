@@ -1,5 +1,6 @@
 import { Body, Controller, ForbiddenException, Get, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt.guard';
+import { authorizeMinLevel } from '../auth/auth-levels.util';
 import { ClientesGigaService } from './clientes-giga.service';
 
 /**
@@ -86,6 +87,37 @@ export class ClientesGigaController {
     return this.svc.cadastrar(
       String(body?.loja || ''), body?.campos || {},
       req?.user?.name || req?.user?.email || null,
+    );
+  }
+
+  /** RESUMO da cliente: crediário, marcados AO VIVO, limite, cashback, pode marcar. */
+  @Get('resumo')
+  resumo(@Req() req: any, @Query('loja') loja?: string, @Query('codigo') codigo?: string) {
+    this.requireAdmin(req);
+    return this.svc.resumo(String(loja || ''), String(codigo || ''));
+  }
+
+  /** Campos SENSÍVEIS (limite/avaliação/bloqueado) — exige senha GERENTE+.
+   *  Registra QUEM autorizou (PIN pessoal) na ficha. */
+  @Post('ficha/restrito')
+  restrito(
+    @Req() req: any,
+    @Body() body: {
+      loja: string; codigo: string; password: string;
+      campos: { LIMITECOMPRAS?: string; AVALIACAO?: string; BLOQUEADO?: string };
+    },
+  ) {
+    this.requireAdmin(req);
+    // Lança 403 se senha inválida ou nível < GERENTE; devolve quem autorizou.
+    const auth = authorizeMinLevel(String(body?.password || ''), 'GERENTE');
+    const permitidos: Record<string, any> = {};
+    for (const k of ['LIMITECOMPRAS', 'AVALIACAO', 'BLOQUEADO'] as const) {
+      if (body?.campos?.[k] !== undefined) permitidos[k] = body.campos[k];
+    }
+    const quem = auth.byNome || req?.user?.name || req?.user?.email || 'gerente';
+    return this.svc.editarFicha(
+      String(body?.loja || ''), String(body?.codigo || ''), permitidos,
+      `[${auth.level}] ${quem}`,
     );
   }
 }
