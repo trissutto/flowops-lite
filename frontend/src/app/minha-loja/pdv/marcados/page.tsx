@@ -58,12 +58,15 @@ const fmtDate = (s: string | null) => s ? new Date(s).toLocaleDateString('pt-BR'
 
 type ClienteMatch = {
   codCliente: string;
+  loja?: string;
   nome: string;
   cpf: string;
   classificacao: string;
   limiteTotal: number;
-  qtdMarcados: number;
-  totalMarcados: number;
+  // null = Giga não respondeu a tempo (a busca vem do espelho e não trava);
+  // abre o cliente pra ver os marcados
+  qtdMarcados: number | null;
+  totalMarcados: number | null;
 };
 
 export default function MarcadosPage() {
@@ -299,12 +302,12 @@ export default function MarcadosPage() {
         {matches.length > 0 && !info && (
           <div className="mt-2 border rounded-lg overflow-hidden bg-white shadow-md">
             <div className="px-3 py-2 bg-slate-50 border-b text-[11px] uppercase font-bold tracking-wider text-slate-600">
-              {matches.length} cliente(s) com marcados ativos — clique pra abrir
+              {matches.length} cliente(s) — clique pra abrir os marcados
             </div>
             <div className="max-h-[400px] overflow-y-auto">
               {matches.map((m) => (
                 <button
-                  key={m.codCliente}
+                  key={`${m.loja || ''}:${m.codCliente}`}
                   type="button"
                   onClick={() => escolherCliente(m)}
                   className="w-full px-3 py-2.5 hover:bg-blue-50 border-b last:border-b-0 text-left flex items-center gap-3 transition"
@@ -315,8 +318,14 @@ export default function MarcadosPage() {
                   </div>
                   <div className="text-right shrink-0">
                     <div className="text-[10px] uppercase font-bold text-slate-500">Em marca</div>
-                    <div className="font-black text-rose-700 tabular-nums">{brl(m.totalMarcados)}</div>
-                    <div className="text-[10px] text-slate-500">{m.qtdMarcados} peça(s)</div>
+                    {m.totalMarcados == null ? (
+                      <div className="text-[11px] text-slate-400 italic">abre pra ver</div>
+                    ) : (
+                      <>
+                        <div className="font-black text-rose-700 tabular-nums">{brl(m.totalMarcados)}</div>
+                        <div className="text-[10px] text-slate-500">{m.qtdMarcados} peça(s)</div>
+                      </>
+                    )}
                   </div>
                   {m.classificacao === 'A' && (
                     <span className="text-[10px] font-black bg-emerald-600 text-white px-1.5 py-0.5 rounded">A</span>
