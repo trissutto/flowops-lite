@@ -150,8 +150,17 @@ export class ClientesGigaService {
         if (batch.length < ClientesGigaService.PAGE) break;
       }
 
+      // INTEGRAÇÃO: liga os registros ao Customer mestre do CRM (por CPF).
+      const vinc = await this.vincular().catch((e) => {
+        this.logger.warn(`[clientes-giga] vinculação falhou (segue sem): ${(e as Error).message}`);
+        return { vinculados: 0, semMatch: 0 };
+      });
+
       this.lastResult = { at: new Date(), total };
-      this.logger.log(`[clientes-giga] sync completo: ${total} clientes em ${Math.round((Date.now() - t0) / 1000)}s`);
+      this.logger.log(
+        `[clientes-giga] sync completo: ${total} clientes em ${Math.round((Date.now() - t0) / 1000)}s · ` +
+        `${vinc.vinculados} vinculados ao CRM`,
+      );
       return { ok: true, total, paginas };
     } catch (e: any) {
       const erro = String(e?.message || e);
@@ -200,21 +209,75 @@ export class ClientesGigaService {
       salario: this.num(this.pick(row, /^salario$/i, /^renda$/i)),
       admissao: this.dateOf(this.pick(row, /^admissao$/i, /^data_?admissao$/i)),
       observacao: this.str(this.pick(row, /^observacao$/i, /^obs$/i), 2000),
+      personKey: this.personKeyOf(this.pick(row, /^cpf$/i, /^cpf_?cnpj$/i, /^cnpj_?cpf$/i, /^cpfcgc$/i, /^cgccpf$/i)),
       rawJson: this.sanitizeRow(row),
     };
+  }
+
+  /** MESMA convenção do CRM (customer-aggregation): personKey = "cpf:<dígitos>".
+   *  É o que unifica a PESSOA entre lojas, site e live. */
+  private personKeyOf(cpfRaw: any): string | null {
+    const digits = String(cpfRaw ?? '').replace(/\D/g, '');
+    return digits.length === 11 ? `cpf:${digits}` : null;
+  }
+
+  /**
+   * VINCULAÇÃO com o CRM — liga cada registro do Giga ao Customer MESTRE
+   * (integração site+lojas+live, pedido do dono). Match por CPF (forte e
+   * inequívoco). Fone fica pra fase da tela (ambíguo demais pra automático).
+   * Não CRIA Customer aqui — só liga onde a pessoa já existe no CRM; a tela
+   * unifica o resto pelo personKey.
+   */
+  async vincular(): Promise<{ vinculados: number; semMatch: number }> {
+    const gigaComCpf: any[] = await (this.prisma as any).gigaCliente.findMany({
+      where: { personKey: { not: null }, customerId: null },
+      select: { loja: true, codigo: true, personKey: true },
+    });
+    if (!gigaComCpf.length) return { vinculados: 0, semMatch: 0 };
+
+    // Customers por personKey OU por CPF (dígitos) — cobre cadastros antigos sem personKey.
+    const keys = Array.from(new Set(gigaComCpf.map((g) => g.personKey)));
+    const cpfs = keys.map((k) => String(k).slice(4));
+    const customers: any[] = await (this.prisma as any).customer.findMany({
+      where: { OR: [{ personKey: { in: keys } }, { cpf: { in: cpfs } }] },
+      select: { id: true, personKey: true, cpf: true },
+    });
+    const byKey = new Map<string, string>();
+    for (const c of customers) {
+      const k = c.personKey || (c.cpf ? `cpf:${String(c.cpf).replace(/\D/g, '')}` : null);
+      if (k && !byKey.has(k)) byKey.set(k, c.id);
+    }
+
+    let vinculados = 0;
+    for (const g of gigaComCpf) {
+      const customerId = byKey.get(g.personKey);
+      if (!customerId) continue;
+      await (this.prisma as any).gigaCliente.update({
+        where: { loja_codigo: { loja: g.loja, codigo: g.codigo } },
+        data: { customerId },
+      });
+      vinculados++;
+    }
+    const semMatch = gigaComCpf.length - vinculados;
+    this.logger.log(`[clientes-giga] vinculação CRM: ${vinculados} ligados ao Customer mestre, ${semMatch} sem match (unificam via personKey)`);
+    return { vinculados, semMatch };
   }
 
   // ── consultas (status + amostra pra desenhar a tela) ────────────────────
 
   async status() {
-    const [total, comCpf, ultimo] = await Promise.all([
+    const [total, comCpf, vinculados, pessoas, ultimo] = await Promise.all([
       (this.prisma as any).gigaCliente.count(),
       (this.prisma as any).gigaCliente.count({ where: { cpf: { not: null } } }),
+      (this.prisma as any).gigaCliente.count({ where: { customerId: { not: null } } }),
+      (this.prisma as any).gigaCliente.groupBy({ by: ['personKey'], where: { personKey: { not: null } } }).then((g: any[]) => g.length),
       (this.prisma as any).gigaCliente.findFirst({ orderBy: { syncedAt: 'desc' }, select: { syncedAt: true } }),
     ]);
     return {
-      total,
+      total,                    // registros (fichas por loja)
       comCpf,
+      pessoasUnicas: pessoas,   // pessoas distintas por CPF (integração)
+      vinculadosAoCrm: vinculados,
       ultimoSync: ultimo?.syncedAt || null,
       rodando: this.running,
       ultimoResultado: this.lastResult,
