@@ -3520,6 +3520,52 @@ model WincredCliente {
   @@map("wincred_clientes")
 }
 
+/// CLIENTES DO GIGA — importação COMPLETA da tabela `clientes` (dono, 21/07:
+/// "puxe a tabela exatamente igual ao Giga com todos os campos e importe tudo").
+/// Base da futura tela de Consulta de Clientes nativa (substitui a do Giga) e
+/// do crediário nativo. Colunas conhecidas viram campos estruturados/indexados;
+/// a LINHA ORIGINAL INTEIRA fica em rawJson — NENHUM campo se perde, mesmo os
+/// que o mapeamento não reconhece (RG/exp, cônjuge, pai/mãe, autorizados,
+/// referências, etc). Chave (loja, codigo): o CODIGO se repete entre lojas.
+model GigaCliente {
+  loja            String    @default("00") @db.VarChar(4)
+  codigo          String    @db.VarChar(20)
+  nome            String?   @db.VarChar(120)
+  cpf             String?   @db.VarChar(20)
+  rg              String?   @db.VarChar(30)
+  nascimento      DateTime? @db.Date
+  email           String?   @db.VarChar(120)
+  foneRes         String?   @map("fone_res") @db.VarChar(30)
+  foneCel         String?   @map("fone_cel") @db.VarChar(30)
+  foneRec         String?   @map("fone_rec") @db.VarChar(30)
+  falarCom        String?   @map("falar_com") @db.VarChar(60)
+  endereco        String?   @db.VarChar(120)
+  numero          String?   @db.VarChar(15)
+  complemento     String?   @db.VarChar(60)
+  bairro          String?   @db.VarChar(60)
+  cidade          String?   @db.VarChar(60)
+  uf              String?   @db.VarChar(2)
+  cep             String?   @db.VarChar(12)
+  bloqueado       String?   @db.VarChar(5)
+  avaliacao       String?   @db.VarChar(4)
+  situacao        String?   @db.VarChar(30)
+  pontos          Decimal?  @db.Decimal(12, 2)
+  limiteCompras   Decimal?  @map("limite_compras") @db.Decimal(12, 2)
+  aberturaCredito DateTime? @map("abertura_credito") @db.Date
+  localTrabalho   String?   @map("local_trabalho") @db.VarChar(120)
+  salario         Decimal?  @db.Decimal(12, 2)
+  admissao        DateTime? @db.Date
+  observacao      String?   @db.Text
+  rawJson         Json      @map("raw_json")
+  syncedAt        DateTime  @default(now()) @map("synced_at")
+
+  @@id([loja, codigo])
+  @@index([nome])
+  @@index([cpf])
+  @@index([codigo])
+  @@map("giga_clientes")
+}
+
 /// Estado do sync incremental. 1 linha por tabela.
 /// Cron incremental usa lastDataAlt pra pegar so produtos modificados desde
 /// o ultimo run (WHERE DATAALT > lastDataAlt). Estoque nao tem DATAALT — re-syncamos
