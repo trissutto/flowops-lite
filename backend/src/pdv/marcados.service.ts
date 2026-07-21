@@ -663,6 +663,78 @@ export class MarcadosService {
   }
 
   /**
+   * BAIXA SEM FINANCEIRO (dono 21/07): clientes-bin (DEFEITOS, FURTO, PEÇAS
+   * NÃO ENCONTRADAS, reservas...) acumulam marcado que NUNCA vira venda.
+   * A baixa remove a marcação do Giga (DELETE, só linha MARCADO='SIM') e
+   * marca o nativo como 'baixado' — SEM venda, SEM caixa, SEM devolver
+   * estoque (peça com defeito/furtada não volta pro estoque).
+   * Auditável: motivo + quem autorizou (senha GERENTE no controller).
+   */
+  async baixarMarcados(input: {
+    registros: Array<number | string>;
+    codCliente?: string;
+    loja?: string;
+    motivo: string;
+    autorizadoPor: string;
+  }): Promise<{ ok: boolean; baixados: number; falhas: string[] }> {
+    const motivo = String(input.motivo || '').trim().toUpperCase().slice(0, 160);
+    if (!motivo) throw new BadRequestException('Informe o motivo da baixa');
+    const regs = (input.registros || [])
+      .map((r) => Number(r))
+      .filter((n) => Number.isFinite(n) && n > 0);
+    if (!regs.length && !input.codCliente) {
+      throw new BadRequestException('Nada pra baixar');
+    }
+    if (!this.erp.isWriteEnabled) {
+      throw new BadRequestException('ERP_WRITE_ENABLED desabilitado — baixa não removeria do Giga');
+    }
+
+    let baixados = 0;
+    const falhas: string[] = [];
+    const agora = new Date();
+    const dadosBaixa = {
+      status: 'baixado',
+      baixadoAt: agora,
+      baixaMotivo: motivo,
+      baixaPor: String(input.autorizadoPor || '').slice(0, 120),
+    };
+
+    for (const reg of regs) {
+      const r = await this.erp.deleteCaixaMarcadoRow({ registro: reg });
+      if (!r.success && !/Nenhuma linha/i.test(r.error || '')) {
+        falhas.push(`REG ${reg}: ${r.error || 'falha'}`);
+        continue;
+      }
+      await (this.prisma as any).marcado.updateMany({
+        where: { registroGiga: BigInt(reg), status: 'ativo' },
+        data: dadosBaixa,
+      }).catch(() => { /* sync reconcilia */ });
+      baixados++;
+    }
+
+    // Linhas nativas do cliente SEM registroGiga (flow recém-criado) — baixa
+    // direto no nativo (não existem no Giga ainda; o sync não vai recriar).
+    if (input.codCliente) {
+      const loja = String(input.loja || '').replace(/\D/g, '').padStart(2, '0');
+      const r = await (this.prisma as any).marcado.updateMany({
+        where: {
+          status: 'ativo', registroGiga: null,
+          codCliente: String(input.codCliente),
+          ...(input.loja ? { storeCode: loja } : {}),
+        },
+        data: dadosBaixa,
+      });
+      baixados += Number(r?.count) || 0;
+    }
+
+    this.logger.log(
+      `[marcados.baixa] ${baixados} baixado(s) SEM financeiro · motivo="${motivo}" · por=${input.autorizadoPor}` +
+      (falhas.length ? ` · falhas=${falhas.length}` : ''),
+    );
+    return { ok: falhas.length === 0, baixados, falhas };
+  }
+
+  /**
    * Lista marcados ativos de TODOS os clientes (visão geral pra retaguarda).
    * Filtros opcionais: loja, classificacao, dataInicial, dataFinal.
    */
