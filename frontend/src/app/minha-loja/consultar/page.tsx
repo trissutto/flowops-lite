@@ -52,7 +52,12 @@ interface Variant {
   cor: string;
   tamanho: string;
   myStoreQty: number;
+  /** Preço de venda (REAIS) — null quando o cadastro não tem preço */
+  preco?: number | null;
 }
+
+const fmtBRL = (v: number) =>
+  v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
 interface OtherStoreVariant { sku: string; cor: string; tamanho: string; qty: number }
 interface OtherStore {
@@ -642,11 +647,35 @@ function ProductCard({ item, highlightSku, myStore }: {
     const cellsByColor = new Map<string, Variant[]>();
     for (const c of colors) {
       cellsByColor.set(c, sizes.map((s) => cellByColorSize.get(c)?.get(s) || {
-        sku: '', cor: c, tamanho: s, myStoreQty: 0,
+        sku: '', cor: c, tamanho: s, myStoreQty: 0, preco: null,
       }));
     }
 
     return { sizes, colors, cellsByColor, totalsBySize, totalsByColor, cellByColorSize };
+  }, [item.variants]);
+
+  // Preços da REF: 1 preço só → mostra no cabeçalho; muda por cor → preço na
+  // linha; muda por tamanho dentro da cor → faixa na linha + exato na célula
+  // clicada (regra do dono 21/07).
+  const priceInfo = useMemo(() => {
+    const all = item.variants
+      .map((v) => v.preco)
+      .filter((p): p is number => p != null && p > 0);
+    const uniq = Array.from(new Set(all.map((p) => Math.round(p * 100))));
+    const min = all.length ? Math.min(...all) : null;
+    const max = all.length ? Math.max(...all) : null;
+    const byColor = new Map<string, { min: number; max: number }>();
+    for (const v of item.variants) {
+      if (v.preco == null || v.preco <= 0) continue;
+      const c = (v.cor || '—').trim();
+      const cur = byColor.get(c);
+      if (!cur) byColor.set(c, { min: v.preco, max: v.preco });
+      else {
+        cur.min = Math.min(cur.min, v.preco);
+        cur.max = Math.max(cur.max, v.preco);
+      }
+    }
+    return { min, max, varies: uniq.length > 1, byColor };
   }, [item.variants]);
 
   // Cor pré-selecionada: se tem SKU bipado, seleciona a cor do SKU.
@@ -720,6 +749,18 @@ function ProductCard({ item, highlightSku, myStore }: {
             <div className="text-xs text-slate-500 mt-0.5">
               {colors.length} cor{colors.length === 1 ? '' : 'es'} · {sizes.length} tamanho{sizes.length === 1 ? '' : 's'}
             </div>
+            {priceInfo.min != null && (
+              <div className="text-lg font-extrabold text-emerald-700 mt-1 leading-none">
+                {!priceInfo.varies
+                  ? fmtBRL(priceInfo.min)
+                  : `${fmtBRL(priceInfo.min)} – ${fmtBRL(priceInfo.max!)}`}
+                {priceInfo.varies && (
+                  <span className="ml-2 text-[10px] font-bold text-amber-600 uppercase tracking-wide align-middle">
+                    preço varia — veja por linha
+                  </span>
+                )}
+              </div>
+            )}
           </div>
           <div className={`text-right flex-shrink-0 ${hasInMyStore ? 'text-emerald-700' : 'text-slate-400'}`}>
             <div className="text-3xl font-extrabold leading-none">{item.myStoreTotal}</div>
@@ -740,7 +781,18 @@ function ProductCard({ item, highlightSku, myStore }: {
               className="text-xs text-brand font-medium hover:underline flex items-center gap-1"
             >
               <X className="w-3 h-3" /> Limpar filtro
-              {selectedColor && <span className="font-normal">({selectedColor}{selectedSize ? ` · ${selectedSize}` : ''})</span>}
+              {selectedColor && (
+                <span className="font-normal">
+                  ({selectedColor}
+                  {selectedSize ? ` · ${selectedSize}` : ''}
+                  {(() => {
+                    // Preço EXATO da célula selecionada (cor + tamanho)
+                    if (!selectedSize) return null;
+                    const v = cellByColorSize.get(selectedColor)?.get(selectedSize);
+                    return v?.preco != null && v.preco > 0 ? ` · ${fmtBRL(v.preco)}` : null;
+                  })()})
+                </span>
+              )}
             </button>
           )}
         </div>
@@ -791,6 +843,17 @@ function ProductCard({ item, highlightSku, myStore }: {
                         }`} />
                         <span className="truncate max-w-[100px]" title={cor}>{cor}</span>
                       </div>
+                      {priceInfo.varies && (() => {
+                        const pr = priceInfo.byColor.get(cor);
+                        if (!pr) return null;
+                        return (
+                          <div className="text-[10px] font-bold text-emerald-700 mt-0.5 whitespace-nowrap">
+                            {pr.min === pr.max
+                              ? fmtBRL(pr.min)
+                              : `${fmtBRL(pr.min)}–${fmtBRL(pr.max)}`}
+                          </div>
+                        );
+                      })()}
                     </td>
                     {sizes.map((s) => {
                       const v = cellByColorSize.get(cor)?.get(s);

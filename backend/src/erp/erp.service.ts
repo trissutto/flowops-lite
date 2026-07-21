@@ -4002,7 +4002,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
         `SELECT p.CODIGO, p.REF, p.DESCRICAOCOMPLETA, p.COR, p.TAMANHO, p.ESTOQUE,
                 COALESCE((SELECT SUM(e.ESTOQUE) FROM estoque e WHERE e.CODIGO = p.CODIGO), 0) AS TOTAL_EST,
-                p.ID
+                p.ID, p.VENDAUN
            FROM produtos p
           WHERE p.REF = ? OR p.REF LIKE ?
           ORDER BY p.COR, p.TAMANHO
