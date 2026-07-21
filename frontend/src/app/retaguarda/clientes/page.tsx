@@ -172,10 +172,33 @@ export default function ConsultaClientesPage() {
 }
 
 /* ─── Ficha unificada ─────────────────────────────────────────────────────── */
+
+/** Data do Giga: ISO 'YYYY-MM-DD'; 1899-11-30 é o "nulo" do Wincred. */
+const gigaData = (v: any): string | null => {
+  const s = String(v || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || s.startsWith('1899')) return null;
+  const [y, m, d] = s.split('-');
+  return `${d}/${m}/${y}`;
+};
+
 function FichaPessoa({ ficha, onVoltar }: { ficha: any; onVoltar: () => void }) {
   const { pessoa, fichas, customer, parcelasAbertas, totalAbertoReais } = ficha;
-  const f0 = fichas[0] || {};
   const bloqueada = fichas.some((f: any) => String(f.bloqueado || '').toUpperCase() === 'SIM');
+
+  // CONSOLIDA entre as fichas: primeiro valor não-vazio do campo (nomes REAIS
+  // do Giga, ex. ENDERECORES). Ficha duplicada/incompleta não deixa "—" na tela.
+  const cons = (key: string): string | null => {
+    for (const f of fichas) {
+      const v = f?.rawJson?.[key];
+      if (v != null && String(v).trim() !== '' && String(v) !== '0') return String(v).trim();
+    }
+    return null;
+  };
+  const consData = (key: string) => gigaData(cons(key));
+  const consMoney = (key: string) => {
+    const v = cons(key);
+    return v != null && isFinite(Number(v)) ? brl(Number(v)) : null;
+  };
 
   const Campo = ({ label, valor }: { label: string; valor: any }) => (
     <div>
@@ -183,6 +206,23 @@ function FichaPessoa({ ficha, onVoltar }: { ficha: any; onVoltar: () => void }) 
       <div className="text-sm text-slate-800">{valor == null || valor === '' ? '—' : String(valor)}</div>
     </div>
   );
+
+  /** Card de seção que só mostra campos COM valor (e some se tudo vazio). */
+  const Secao = ({ titulo, icone, campos }: { titulo: string; icone: React.ReactNode; campos: Array<[string, any]> }) => {
+    const cheios = campos.filter(([, v]) => v != null && v !== '');
+    if (!cheios.length) return null;
+    return (
+      <div className="bg-white rounded-2xl border border-[#E7E2D8] shadow-sm p-5">
+        <h3 className="font-bold text-slate-800 flex items-center gap-2 mb-3">{icone} {titulo}</h3>
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-3">
+          {cheios.map(([label, v]) => <Campo key={label} label={label} valor={v} />)}
+        </div>
+      </div>
+    );
+  };
+
+  const enderecoRes = [cons('ENDERECORES'), cons('NUMERORES'), cons('COMPRES'), cons('BAIRRORES'), cons('CIDADERES'), cons('UFRES'), cons('CEPRES')]
+    .filter(Boolean).join(', ') || null;
 
   return (
     <div className="space-y-4">
@@ -211,19 +251,79 @@ function FichaPessoa({ ficha, onVoltar }: { ficha: any; onVoltar: () => void }) 
           </div>
         </div>
         <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-3">
-          <Campo label="Nascimento" valor={f0.nascimento ? fmtData(f0.nascimento) : null} />
-          <Campo label="RG" valor={f0.rg} />
-          <Campo label="Celular" valor={f0.foneCel} />
-          <Campo label="Email" valor={f0.email || customer?.email} />
+          <Campo label="Nascimento" valor={consData('NASCIMENTO')} />
+          <Campo label="RG" valor={[cons('RG'), cons('RGEXP')].filter(Boolean).join(' · ')} />
+          <Campo label="Celular" valor={cons('FONECEL')} />
+          <Campo label="Fone res / recado" valor={[cons('FONERES'), cons('FONEREC')].filter(Boolean).join(' · ')} />
+          <Campo label="Falar com" valor={cons('NOMEREC')} />
+          <Campo label="Email" valor={cons('EMAIL') || customer?.email} />
+          <Campo label="Estado civil" valor={cons('ESTADOCIVIL')} />
+          <Campo label="Naturalidade" valor={cons('NATURALIDADE')} />
         </div>
         <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
-          <Campo
-            label="Endereço"
-            valor={[f0.endereco, f0.numero, f0.complemento, f0.bairro, f0.cidade, f0.uf, f0.cep].filter(Boolean).join(', ') || null}
-          />
-          <Campo label="Trabalho" valor={[f0.localTrabalho, f0.salario != null ? brl(Number(f0.salario)) : null].filter(Boolean).join(' · ') || null} />
+          <Campo label="Endereço" valor={enderecoRes} />
+          <Campo label="Observação" valor={cons('OBS')} />
         </div>
       </div>
+
+      {/* Seções com os campos REAIS do Giga (só aparecem se têm conteúdo) */}
+      <Secao
+        titulo="Família"
+        icone={<Users className="w-4 h-4 text-[#B8912B]" />}
+        campos={[
+          ['Cônjuge', [cons('CONJUGE'), cons('CONJUGERG') && `RG ${cons('CONJUGERG')}`, cons('CONJUGECPF') && `CPF ${fmtCpf(cons('CONJUGECPF'))}`].filter(Boolean).join(' · ') || null],
+          ['Pai', cons('PAI')],
+          ['Mãe', cons('MAE')],
+        ]}
+      />
+      <Secao
+        titulo="Trabalho"
+        icone={<Store className="w-4 h-4 text-[#B8912B]" />}
+        campos={[
+          ['Local de trabalho', cons('TRABALHORAZAOSOC')],
+          ['Endereço', [cons('TRABALHOENDERECO'), cons('TRABALHOCOMP'), cons('TRABALHOBAIRRO'), cons('TRABALHOCIDADE'), cons('TRABALHOUF'), cons('TRABALHOCEP')].filter(Boolean).join(', ') || null],
+          ['Fone', cons('TRABALHOFONE')],
+          ['Função', cons('TRABALHOCARGO')],
+          ['Admissão', consData('TRABALHOADM')],
+          ['Salário', consMoney('TRABALHOSALARIO')],
+        ]}
+      />
+      <Secao
+        titulo="Crédito & SPC"
+        icone={<ShieldAlert className="w-4 h-4 text-[#B8912B]" />}
+        campos={[
+          ['Abertura do crédito', consData('DATACREDITO')],
+          ['Consulta nº', cons('SPCCONSULTA')],
+          ['Data consulta', consData('SPCDATA')],
+          ['Situação', cons('SPCSITUACAO')],
+          ['Obs SPC', cons('SPCOBS')],
+          ['Negativado', cons('NEGATIVADO')],
+          ['Justiça', cons('JUSTICA')],
+          ['1ª compra', consData('PRICOMPRA')],
+          ['Última compra', consData('ULTCOMPRA')],
+        ]}
+      />
+      <Secao
+        titulo="Cartão Lurd's"
+        icone={<CreditCard className="w-4 h-4 text-[#B8912B]" />}
+        campos={[
+          ['Nº cartão', cons('COD_CARD')],
+          ['Emitido', cons('EMITIDO')],
+          ['Fidelidade', cons('FIDELIDADE')],
+          ['Autorizado 1', [cons('AUTORIZADO1'), cons('AUTORIZADO1RG') && `RG ${cons('AUTORIZADO1RG')}`, cons('AUTORIZADO1CPF') && `CPF ${fmtCpf(cons('AUTORIZADO1CPF'))}`].filter(Boolean).join(' · ') || null],
+          ['Autorizado 2', [cons('AUTORIZADO2'), cons('AUTORIZADO2RG') && `RG ${cons('AUTORIZADO2RG')}`, cons('AUTORIZADO2CPF') && `CPF ${fmtCpf(cons('AUTORIZADO2CPF'))}`].filter(Boolean).join(' · ') || null],
+        ]}
+      />
+      <Secao
+        titulo="Referências"
+        icone={<Phone className="w-4 h-4 text-[#B8912B]" />}
+        campos={[
+          ['Comercial 1', [cons('REFCOM1'), cons('FONEREFCOM1')].filter(Boolean).join(' · ') || null],
+          ['Comercial 2', [cons('REFCOM2'), cons('FONEREFCOM2')].filter(Boolean).join(' · ') || null],
+          ['Pessoal 1', [cons('REFPESSOAL1'), cons('FONEREFPESSOAL1')].filter(Boolean).join(' · ') || null],
+          ['Pessoal 2', [cons('REFPESSOAL2'), cons('FONEREFPESSOAL2')].filter(Boolean).join(' · ') || null],
+        ]}
+      />
 
       {/* Crediário em aberto (todas as lojas) */}
       <div className="bg-white rounded-2xl border border-[#E7E2D8] shadow-sm overflow-hidden">
