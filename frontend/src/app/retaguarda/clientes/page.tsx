@@ -459,13 +459,15 @@ const FORM_CAMPOS: Array<{ key: string; label: string; tipo?: 'date' | 'select-s
   { key: 'FONEREC', label: 'Fone recado', mask: 'fone' },
   { key: 'NOMEREC', label: 'Falar com' },
   { key: 'EMAIL', label: 'Email', largo: true, lower: true },
+  // CEP NA FRENTE (dono 21/07): digitou o CEP → busca no ViaCEP e preenche
+  // endereço/bairro/cidade/UF sozinho (valida o endereço na fonte).
+  { key: 'CEPRES', label: 'CEP', mask: 'cep' },
   { key: 'ENDERECORES', label: 'Endereço', largo: true },
   { key: 'NUMERORES', label: 'Número' },
   { key: 'COMPRES', label: 'Complemento' },
   { key: 'BAIRRORES', label: 'Bairro' },
   { key: 'CIDADERES', label: 'Cidade' },
   { key: 'UFRES', label: 'UF' },
-  { key: 'CEPRES', label: 'CEP', mask: 'cep' },
   { key: 'PAI', label: 'Pai', largo: true },
   { key: 'MAE', label: 'Mãe', largo: true },
   { key: 'CONJUGE', label: 'Cônjuge', largo: true },
@@ -538,6 +540,26 @@ function ClienteForm({
   const [lojas, setLojas] = useState<Array<{ code: string; name: string }>>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [cepInfo, setCepInfo] = useState<string | null>(null);
+
+  // CEP completo → ViaCEP preenche endereço/bairro/cidade/UF (valida na fonte).
+  // Só preenche campo VAZIO — não sobrescreve o que já foi digitado.
+  const buscarCep = async (cepDigits: string) => {
+    setCepInfo('Buscando endereço…');
+    try {
+      const r = await fetch(`https://viacep.com.br/ws/${cepDigits}/json/`);
+      const d = await r.json();
+      if (d?.erro) { setCepInfo('⚠ CEP não encontrado — confira'); return; }
+      setCampos((p) => ({
+        ...p,
+        ENDERECORES: p.ENDERECORES?.trim() ? p.ENDERECORES : String(d.logradouro || '').toUpperCase(),
+        BAIRRORES: p.BAIRRORES?.trim() ? p.BAIRRORES : String(d.bairro || '').toUpperCase(),
+        CIDADERES: p.CIDADERES?.trim() ? p.CIDADERES : String(d.localidade || '').toUpperCase(),
+        UFRES: p.UFRES?.trim() ? p.UFRES : String(d.uf || '').toUpperCase(),
+      }));
+      setCepInfo('✓ Endereço preenchido pelo CEP — confira o número');
+    } catch { setCepInfo('⚠ Falha ao consultar o CEP (sem internet?)'); }
+  };
 
   useEffect(() => {
     if (modo === 'nova') api<Array<{ code: string; name: string }>>('/stores').then(setLojas).catch(() => {});
@@ -614,13 +636,28 @@ function ClienteForm({
                     <option value="SIM">SIM</option>
                   </select>
                 ) : (
-                  <input
-                    type={c.tipo === 'date' ? 'date' : 'text'}
-                    inputMode={c.mask ? 'numeric' : undefined}
-                    value={campos[c.key] || ''}
-                    onChange={(e) => { const v = tratar(c, e.target.value); setCampos((p) => ({ ...p, [c.key]: v })); }}
-                    className="mt-0.5 w-full rounded-lg border border-[#E7E2D8] bg-white px-3 py-2 text-sm focus:border-[#D4AF37] focus:outline-none"
-                  />
+                  <>
+                    <input
+                      type={c.tipo === 'date' ? 'date' : 'text'}
+                      inputMode={c.mask ? 'numeric' : undefined}
+                      value={campos[c.key] || ''}
+                      onChange={(e) => {
+                        const v = tratar(c, e.target.value);
+                        setCampos((p) => ({ ...p, [c.key]: v }));
+                        if (c.key === 'CEPRES') {
+                          const d = soDigitos(v);
+                          if (d.length === 8) void buscarCep(d);
+                          else setCepInfo(null);
+                        }
+                      }}
+                      className="mt-0.5 w-full rounded-lg border border-[#E7E2D8] bg-white px-3 py-2 text-sm focus:border-[#D4AF37] focus:outline-none"
+                    />
+                    {c.key === 'CEPRES' && cepInfo && (
+                      <div className={`mt-0.5 text-[10px] font-bold ${cepInfo.startsWith('✓') ? 'text-emerald-700' : cepInfo.startsWith('⚠') ? 'text-amber-700' : 'text-slate-400'}`}>
+                        {cepInfo}
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             ))}
