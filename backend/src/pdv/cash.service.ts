@@ -2191,13 +2191,25 @@ export class CashService {
       throw new BadRequestException('Não há caixa aberto nesta loja.');
     }
 
-    // Bloqueia fechamento se houver venda em aberto na sessão
-    const openSales = await (this.prisma as any).pdvSale.count({
+    // Venda em aberto NÃO bloqueia mais o fechamento (dono 21/07 — o erro
+    // "Existem N venda(s) em aberto" atrapalhava todo fim de dia). Vendas
+    // abertas nessa hora são zumbis (carrinho não finalizado): cancela
+    // automaticamente, registra na observação e segue o fechamento — mesmo
+    // comportamento do antigo botão "Cancelar pendências e fechar caixa".
+    // Venda finalizada NUNCA é tocada aqui.
+    const zumbis = await (this.prisma as any).pdvSale.updateMany({
       where: { cashSessionId: session.id, status: 'open' },
+      data: {
+        status: 'cancelled',
+        cancelledAt: new Date(),
+        cancelReason: 'Cancelamento automático no fechamento do caixa (venda não finalizada)',
+      },
     });
-    if (openSales > 0) {
-      throw new BadRequestException(
-        `Existem ${openSales} venda(s) em aberto. Finalize ou cancele antes de fechar o caixa.`,
+    let obsZumbis = '';
+    if (zumbis.count > 0) {
+      obsZumbis = `[fechamento: ${zumbis.count} venda(s) em aberto cancelada(s) automaticamente]`;
+      this.logger.warn(
+        `[caixa] closeCash ${storeCode}: ${zumbis.count} venda(s) zumbi canceladas na sessão ${session.id}`,
       );
     }
 
@@ -2219,9 +2231,10 @@ export class CashService {
         status: 'closed',
         closedAt: new Date(),
         closedByName: closedByName || null,
-        observacao: observacao
-          ? (session.observacao ? `${session.observacao}\n---\n${observacao}` : observacao)
-          : session.observacao,
+        observacao: (() => {
+          const partes = [session.observacao, observacao, obsZumbis].filter(Boolean);
+          return partes.length ? partes.join('\n---\n') : null;
+        })(),
         totalVendas: totals.totalVendas,
         totalDinheiro: totals.totalDinheiro,
         totalPix: totals.totalPix,
