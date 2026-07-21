@@ -18,7 +18,7 @@ import {
   LayoutDashboard, BarChart3, DollarSign, Users, ShoppingBag,
   Shuffle, Truck, AlertTriangle, FileSearch, Activity, ArrowLeft,
   Globe2, Store, Settings, Megaphone, CreditCard, ClipboardList,
-  Package, Bell, Network,
+  Package, Bell, Network, Tag,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import AdminShell, { type AdminNavItem } from '@/components/AdminShell';
@@ -57,6 +57,7 @@ const GESTAO_ITEMS: GestaoItem[] = [
   { href: '/relatorios/vendedoras',           label: 'Vendedoras',        subtitle: 'Ranking',       description: 'Vendas por mês',                tone: 'rose',   icon: Users           },
   { href: '/retaguarda/crediario/automatico', label: 'Cobrança',          subtitle: 'Crediário',     description: 'Campanhas automáticas',         tone: 'orange', icon: CreditCard      },
   { href: '/retaguarda/crediario',            label: 'Crediário',         subtitle: 'Manual',        description: 'Lista + WhatsApp bulk',         tone: 'orange', icon: CreditCard      },
+  { href: '/retaguarda/marcados',             label: 'Marcados',          subtitle: 'Provar em casa', description: 'Peças em marca por cliente (rede toda)', tone: 'amber', icon: Tag        },
   { href: '/clientes',                        label: 'Clientes',          subtitle: 'CRM',           description: 'Histórico + segmentos',         tone: 'sky',    icon: Users           },
   { href: '/marketing',                       label: 'Marketing',         subtitle: 'Campanhas',     description: 'Recuperação + WhatsApp',        tone: 'rose',   icon: Megaphone       },
   { href: '/retaguarda/notificacoes',         label: 'Notificações',      subtitle: 'Push Central',  description: 'Avisar lojas: promoção, reunião…', tone: 'purple', icon: Bell           },
