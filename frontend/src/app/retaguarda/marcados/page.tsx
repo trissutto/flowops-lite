@@ -48,6 +48,8 @@ export default function RetaguardaMarcadosPage() {
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // 'flow' = tabela nativa (instantâneo) · 'giga' = ao vivo no ERP (lento)
+  const [fonte, setFonte] = useState<string | null>(null);
   const [de, setDe] = useState('');
   const [ate, setAte] = useState('');
   const [loja, setLoja] = useState('');
@@ -64,8 +66,10 @@ export default function RetaguardaMarcadosPage() {
       if (pLoja) qs.set('loja', pLoja);
       if (pDe) qs.set('dataInicial', pDe);
       if (pAte) qs.set('dataFinal', pAte);
-      const r = await api<{ rows: Row[]; total: number }>(`/pdv/marcados?${qs.toString()}`);
+      const r = await api<{ rows: Row[]; total: number; fonte?: string; error?: string }>(`/pdv/marcados?${qs.toString()}`);
       setRows(Array.isArray(r?.rows) ? r.rows : []);
+      setFonte(r?.fonte || null);
+      if (r?.error) setErr(r.error);
     } catch (e: any) {
       setErr(e?.message || 'Falha ao carregar (Giga pode estar lento) — tenta de novo');
     } finally {
@@ -200,6 +204,13 @@ export default function RetaguardaMarcadosPage() {
         {err && (
           <div className="rounded-lg bg-amber-50 border border-amber-300 px-3 py-2 text-sm text-amber-800">
             ⚠️ {err}
+          </div>
+        )}
+        {fonte === 'giga' && !err && (
+          <div className="rounded-lg bg-amber-50 border border-amber-300 px-3 py-2 text-xs text-amber-800">
+            ⚠️ Lendo do <b>Giga ao vivo</b> (lento e sujeito a queda). Rode{' '}
+            <Link href="/retaguarda/wincred-mirror" className="underline font-bold">Importar marcados do Giga</Link>{' '}
+            uma vez — a tela passa a ler o Flow e responde na hora.
           </div>
         )}
         {rows.length >= 500 && (

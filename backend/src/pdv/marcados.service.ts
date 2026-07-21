@@ -697,32 +697,46 @@ export class MarcadosService {
       }));
       return { rows, total: rows.length, fonte: 'flow' };
     }
+    // Fallback GIGA ao vivo (espelho vazio / MARCADOS_NATIVE_READS=0)
     const where: string[] = [`UPPER(c.MARCADO) = 'SIM'`];
-    if (input.loja) where.push(`c.LOJA = '${input.loja.replace(/[^0-9]/g, '')}'`);
-    if (input.dataInicial) where.push(`c.DATA >= '${input.dataInicial}'`);
-    if (input.dataFinal) where.push(`c.DATA <= '${input.dataFinal}'`);
+    if (input.loja) where.push(`c.LOJA = '${input.loja.replace(/[^0-9]/g, '').padStart(2, '0')}'`);
+    if (input.dataInicial) where.push(`c.DATA >= '${input.dataInicial.replace(/[^0-9-]/g, '')}'`);
+    if (input.dataFinal) where.push(`c.DATA <= '${input.dataFinal.replace(/[^0-9-]/g, '')}'`);
 
-    const cm = await this.crediarios.detectClientesTable();
-    const joinClientes = cm
-      ? `LEFT JOIN \`${cm.table}\` cli ON cli.\`${cm.codCliente}\` = c.CLIENTE`
-      : '';
-    const selectNome = cm?.nome ? `cli.\`${cm.nome}\` AS clienteNome,` : '';
+    try {
+      const cm = await this.crediarios.detectClientesTable();
+      // BUG FIX (21/07): o JOIN era só por CÓDIGO — como o código de cliente
+      // REPETE em cada loja (cód 2 existe em todas), cada linha da caixa
+      // multiplicava com o nome do cliente de OUTRAS lojas (aparecia "VISA
+      // ELECTRON"/"CIELO" como cliente). JOIN agora casa LOJA também.
+      const joinClientes = cm
+        ? `LEFT JOIN \`${cm.table}\` cli ON cli.\`${cm.codCliente}\` = c.CLIENTE AND cli.LOJA = c.LOJA`
+        : '';
+      const selectNome = cm?.nome ? `cli.\`${cm.nome}\` AS clienteNome,` : '';
 
-    const sql = `
-      SELECT
-        c.REGISTRO, c.NUMERO, c.CODIGO, c.DATA, c.DESCRICAO,
-        c.QUANTIDADE, c.VALOR, c.VALORTOTAL, c.VENDEDOR, c.LOJA,
-        c.CLIENTE AS codCliente,
-        ${selectNome}
-        cli.AVALIACAO AS classificacao
-      FROM caixa c
-      ${joinClientes}
-      WHERE ${where.join(' AND ')}
-      ORDER BY c.DATA DESC, c.REGISTRO DESC
-      LIMIT ${limit}
-    `;
-    const r = await this.erp.runReadOnly(sql, { maxRows: limit, timeoutMs: 15000 });
-    return { rows: r.rows, total: r.rows.length };
+      const sql = `
+        SELECT
+          c.REGISTRO, c.NUMERO, c.CODIGO, c.DATA, c.DESCRICAO,
+          c.QUANTIDADE, c.VALOR, c.VALORTOTAL, c.VENDEDOR, c.LOJA,
+          c.CLIENTE AS codCliente,
+          ${selectNome}
+          cli.AVALIACAO AS classificacao
+        FROM caixa c
+        ${joinClientes}
+        WHERE ${where.join(' AND ')}
+        ORDER BY c.DATA DESC, c.REGISTRO DESC
+        LIMIT ${limit}
+      `;
+      const r = await this.erp.runReadOnly(sql, { maxRows: limit, timeoutMs: 15000 });
+      return { rows: r.rows, total: r.rows.length, fonte: 'giga' };
+    } catch (e: any) {
+      // NUNCA 500 na tela — devolve vazio com aviso acionável.
+      this.logger.warn(`[marcados] listAll (Giga ao vivo) falhou: ${e?.message}`);
+      return {
+        rows: [], total: 0, fonte: 'giga',
+        error: 'Giga demorou/caiu nessa consulta. Rode "Importar marcados do Giga" na tela do espelho Wincred — aí essa tela lê o Flow e responde na hora.',
+      };
+    }
   }
 
   // ── PUXAR MARCADOS PRA VENDA NO PDV ──────────────────────────────
