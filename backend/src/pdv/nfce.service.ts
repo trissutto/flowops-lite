@@ -309,7 +309,13 @@ export class NfceService {
       (s: number, it: any) => s + (it.qty || 0) * (it.precoUnit || 0),
       0,
     );
-    const totalLiquido = Number(sale.total || 0);
+    // VALE-TROCA entra como DESCONTO (não pagamento) — o líquido tributável
+    // é o que a cliente pagou de verdade. SEFAZ exige vDesc(itens) somando
+    // o vDesc total (cStat 537), então o vale precisa ser rateado aqui.
+    const valeDesconto = ((sale.payments || []) as any[])
+      .filter((p: any) => ['vale_troca', 'vale', 'troca'].includes(String(p.method || '').toLowerCase()))
+      .reduce((s: number, p: any) => s + (Number(p.valor) || 0), 0);
+    const totalLiquido = Math.max(0, Number(sale.total || 0) - valeDesconto);
     const descontoEfetivoTotal = Math.max(0, brutoTotal - totalLiquido);
     const somaDescontosItens = items.reduce(
       (s: number, it: any) => s + Number(it.desconto || 0),
@@ -481,17 +487,35 @@ export class NfceService {
       (s, it) => s + (it.qty || 0) * (it.precoUnit || 0),
       0,
     );
-    const vNFNum = Number(sale.total || 0);
+    // ⚠ VALE-TROCA é DESCONTO fiscal, NÃO pagamento (GRAVÍSSIMO da NFC-e 94
+    // Moema 21/07: nota saiu com vNF CHEIO R$ 1.429 com o vale de R$ 559,80
+    // dentro do "MULTIPLO"). A peça devolvida já pagou ICMS na nota original —
+    // a nota nova só pode tributar o que a cliente efetivamente pagou:
+    //   vNF = sale.total − vale · vale entra no vDesc · detPag SEM o vale.
+    const valeTrocaTotal = ((sale.payments || []) as any[])
+      .filter((p: any) => ['vale_troca', 'vale', 'troca'].includes(String(p.method || '').toLowerCase()))
+      .reduce((s: number, p: any) => s + (Number(p.valor) || 0), 0);
+    const vNFNum = Math.round((Number(sale.total || 0) - valeTrocaTotal) * 100) / 100;
+    if (vNFNum <= 0.009) {
+      // Troca PAR (vale cobre 100%): a NFC-e original já cobriu o ICMS —
+      // não há fato gerador novo, NÃO se emite nota com vNF zero.
+      throw new BadRequestException(
+        'Venda coberta 100% pelo vale-troca (troca par) — sem valor a tributar, NFC-e não deve ser emitida.',
+      );
+    }
     // SEFAZ valida: vNF = vProd - vDesc. Calcula vDesc TOTAL como diferença
-    // entre o bruto e o que cliente realmente pagou. Cobre tanto descontos
-    // por item quanto descontos aplicados na venda inteira (ex: -R$ 22,90
-    // aplicados via /sales/:id/discount).
+    // entre o bruto e o que cliente realmente pagou (inclui o vale-troca,
+    // descontos por item e descontos na venda inteira).
     const vDescTotNum = Math.max(0, vTotProdNum - vNFNum);
     const vTotProd = vTotProdNum.toFixed(2);
     const vDescTot = vDescTotNum.toFixed(2);
     const vNF = vNFNum.toFixed(2);
 
-    const payments = (sale.payments || []) as any[];
+    // detPag SEM os pagamentos de vale (viraram vDesc acima) — soma dos
+    // <vPag> tem que bater com o vNF.
+    const payments = ((sale.payments || []) as any[]).filter(
+      (p: any) => !['vale_troca', 'vale', 'troca'].includes(String(p.method || '').toLowerCase()),
+    );
     // CNPJ usado como "instituição de pagamento" no grupo <card>. Usa o CNPJ do
     // próprio emitente como genérico (comprovado em produção: SEFAZ ACEITA — a
     // nota 110 com esse formato passou no cartão; só caiu por outro motivo).

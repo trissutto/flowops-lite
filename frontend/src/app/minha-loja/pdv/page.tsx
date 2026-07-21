@@ -6496,6 +6496,22 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
     // ── Quantidade total de itens ────────────────────────────────────
     const qtdItens = sale.items.reduce((s, it) => s + (Number(it.qty) || 0), 0);
 
+    // ── VALE-TROCA no cupom = DESCONTO (espelha o XML da nota) ────────
+    // O total da NOTA é sale.total − vale; os pagamentos exibidos são só os
+    // reais (PIX/cartão/dinheiro). Sem isso o cupom saía "VALOR TOTAL R$
+    // 1.429 / MULTIPLO" numa troca com vale de R$ 559,80 (nota 94, 21/07).
+    const salePays = ((sale as any).payments || []) as Array<{ method: string; valor: number }>;
+    const isVale = (m: string) => ['vale_troca', 'vale', 'troca'].includes(String(m || '').toLowerCase());
+    const cupomVale = salePays.filter((p) => isVale(p.method)).reduce((s, p) => s + (Number(p.valor) || 0), 0);
+    const cupomTotalNota = Math.max(0, Math.round((sale.total - cupomVale) * 100) / 100);
+    const cupomPagsReais = salePays.filter((p) => !isVale(p.method));
+    const nomePag = (m: string) => String(m || '').replace(/_/g, ' ').toUpperCase();
+    const cupomPagLinhas = cupomPagsReais.length
+      ? cupomPagsReais
+          .map((p) => `<div class="row sm bold"><span>${nomePag(p.method)}</span><span>${brl(Number(p.valor) || 0)}</span></div>`)
+          .join('')
+      : `<div class="row sm bold"><span>${(sale.paymentMethod || 'SPLIT').toUpperCase()}</span><span>${brl(cupomTotalNota)}</span></div>`;
+
     // QR gerado AQUI (lib local 'qrcode', mesma da página DANFE) e embutido
     // como <img data:>. O script antigo no HTML nunca rodava certo: referenciava
     // qrUrl sem interpolação (ReferenceError engolido pelo catch → cupom SEM QR,
@@ -6584,16 +6600,20 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
   ${itensHtml}
   <div class="sep"></div>
 
-  <!-- Totais -->
+  <!-- Totais — VALE-TROCA é DESCONTO na nota (não pagamento): o cupom tem
+       que espelhar o XML (vNF = total − vale; caso NFC-e 94 Moema 21/07) -->
   <div class="row sm"><span>QTD. TOTAL DE ITENS</span><span>${qtdItens}</span></div>
-  <div class="row bold lg"><span>VALOR TOTAL R$</span><span>${brl(sale.total)}</span></div>
+  ${cupomVale > 0 ? `
+  <div class="row sm"><span>SUBTOTAL R$</span><span>${brl(sale.total)}</span></div>
+  <div class="row sm bold"><span>DESCONTO VALE-TROCA</span><span>-${brl(cupomVale)}</span></div>` : ''}
+  <div class="row bold lg"><span>VALOR TOTAL R$</span><span>${brl(cupomTotalNota)}</span></div>
   <div class="row sm"><span>FORMA PAGAMENTO</span><span>VALOR PAGO</span></div>
-  <div class="row sm bold"><span>${(sale.paymentMethod || 'SPLIT').toUpperCase()}</span><span>${brl(sale.total)}</span></div>
+  ${cupomPagLinhas}
   <div class="sep"></div>
 
   <!-- Tributos (Lei 12.741) -->
   <div class="center xs">Tributos totais incidentes (Lei Federal 12.741/2012):</div>
-  <div class="center xs bold">R$ ${(sale.total * 0.0996).toFixed(2).replace('.', ',')} (Fonte: IBPT)</div>
+  <div class="center xs bold">R$ ${(cupomTotalNota * 0.0996).toFixed(2).replace('.', ',')} (Fonte: IBPT)</div>
   <div class="sep"></div>
 
   <!-- Identificação do consumidor -->
