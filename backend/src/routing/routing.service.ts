@@ -130,6 +130,23 @@ export class RoutingService {
       return { persisted: false };
     }
 
+    // ── IDEMPOTÊNCIA (caso real 21/07: pedido #197435 DUPLICADO na loja) ──
+    // confirmRoute é chamado de vários gatilhos (webhook WC — que REENTREGA —,
+    // varredura do pilot, confirmação manual). Se o pedido JÁ tem pick-order
+    // ATIVO (new/separating), um segundo confirm criaria cards duplicados na
+    // loja. Recalcular NÃO passa por aqui com ativos: ele DELETA os ativos
+    // antes de re-rotear — então pular aqui é sempre seguro.
+    const ativosExistentes = await this.prisma.pickOrder.findMany({
+      where: { orderId, status: { in: ['new', 'separating'] } },
+      select: { id: true, storeId: true },
+    });
+    if (ativosExistentes.length > 0) {
+      this.logger.warn(
+        `[routing] confirmRoute IGNORADO pra order ${orderId}: já tem ${ativosExistentes.length} pick-order(s) ativo(s) — gatilho duplicado (webhook reentregue?)`,
+      );
+      return { persisted: false, alreadyRouted: true, existing: ativosExistentes };
+    }
+
     const createdPickOrders: Array<{ id: string; storeId: string }> = [];
 
     // Snapshot do cliente pra loja fonte saber pra quem enviar (em caso de transferência)
