@@ -4002,7 +4002,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
         `SELECT p.CODIGO, p.REF, p.DESCRICAOCOMPLETA, p.COR, p.TAMANHO, p.ESTOQUE,
                 COALESCE((SELECT SUM(e.ESTOQUE) FROM estoque e WHERE e.CODIGO = p.CODIGO), 0) AS TOTAL_EST,
-                p.ID, p.VENDAUN
+                p.ID, p.VENDAUN, p.FORNECEDOR
            FROM produtos p
           WHERE p.REF = ? OR p.REF LIKE ?
           ORDER BY p.COR, p.TAMANHO
@@ -4017,7 +4017,9 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         if (!foundRef.startsWith(baseRef)) return false;
         const suffix = foundRef.slice(baseRef.length);
         if (suffix.startsWith(' ') || suffix.startsWith('-')) return true;
-        if (/^[A-Za-z]/.test(suffix)) return true;
+        // Letras COLADAS: só sufixo curto de cor (1-2). 3+ letras = OUTRA REF
+        // ("8709RIU" não é variação de "8709") — igual ao espelho.
+        if (/^[A-Za-z]{1,2}$/.test(suffix)) return true;
         return false;
       };
 

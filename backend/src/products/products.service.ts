@@ -2641,7 +2641,7 @@ export class ProductsService {
 
     // 3. Coleta SKUs únicos e agrupa por REF
     const skus = Array.from(new Set(rawRows.map((r) => String(r.CODIGO)).filter(Boolean)));
-    const skuToMeta = new Map<string, { ref: string; descricao: string; cor: string; tamanho: string; preco: number | null }>();
+    const skuToMeta = new Map<string, { ref: string; descricao: string; cor: string; tamanho: string; preco: number | null; fornecedor: string }>();
     for (const r of rawRows) {
       const sku = String(r.CODIGO);
       if (!sku || skuToMeta.has(sku)) continue;
@@ -2652,6 +2652,9 @@ export class ProductsService {
         tamanho: String(r.TAMANHO ?? ''),
         // VENDAUN em REAIS (espelho e Giga) — NUNCA dividir por 100
         preco: r.VENDAUN != null && Number(r.VENDAUN) > 0 ? Number(r.VENDAUN) : null,
+        // REF é RECICLADA entre fornecedores no Giga ("8709" = calça MANIFESTO
+        // e vestido RIU KIU) — o fornecedor separa os baldes
+        fornecedor: String(r.FORNECEDOR ?? '').trim().toUpperCase(),
       });
     }
 
@@ -2734,15 +2737,20 @@ export class ProductsService {
     for (const sku of skus) {
       const meta = skuToMeta.get(sku)!;
       const ref = normalizeBaseRef(meta.ref);
-      if (!byRef.has(ref)) {
-        byRef.set(ref, {
+      // Chave do balde = REF + FORNECEDOR: a mesma REF numérica é reusada
+      // por fornecedores diferentes no Giga (calça MANIFESTO e vestido
+      // RIU KIU ambos "8709") — sem o fornecedor os produtos se misturam e
+      // a grade mostra o nome/preço de um com as variações do outro.
+      const bucketKey = `${ref}|${meta.fornecedor}`;
+      if (!byRef.has(bucketKey)) {
+        byRef.set(bucketKey, {
           ref,
           name: cleanProductName(meta.descricao) || ref,
           variants: new Map(),
           otherStoresMap: new Map(),
         });
       }
-      const bucket = byRef.get(ref)!;
+      const bucket = byRef.get(bucketKey)!;
 
       // cria/atualiza variant da minha loja (qty = 0 se não tiver estoque)
       if (!bucket.variants.has(sku)) {
