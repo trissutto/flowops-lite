@@ -131,8 +131,10 @@ export class ClientesGigaService {
       const pool: any = (this.erp as any).pool;
       if (!pool) throw new Error('pool Giga não inicializado');
 
-      // Full-replace: limpa e recarrega (zona de pouso, sem escrita nativa ainda).
-      await (this.prisma as any).gigaCliente.deleteMany({});
+      // Full-replace SÓ do que veio do Giga. Ficha editada/criada NO FLOW
+      // (flowIsSource=true) fica intacta — o Flow é a fonte da verdade dela
+      // (skipDuplicates abaixo garante que o Giga não re-insere por cima).
+      await (this.prisma as any).gigaCliente.deleteMany({ where: { flowIsSource: false } });
 
       let total = 0;
       let paginas = 0;
@@ -393,6 +395,108 @@ export class ClientesGigaService {
       parcelasAbertas: parcelas,
       totalAbertoReais: Math.round(totalAberto * 100) / 100,
     };
+  }
+
+  // ── EDIÇÃO + CADASTRO (Flow = fonte da verdade; Giga vira réplica) ───────
+
+  /** Campos editáveis (nomes REAIS do Giga). LOJA/CODIGO ficam de fora — são a
+   *  chave. Whitelist evita coluna arbitrária via POST. */
+  private static readonly CAMPOS_EDITAVEIS = new Set([
+    'NOME', 'CPF', 'RG', 'RGEXP', 'RGEMISSAO', 'NASCIMENTO', 'NATURALIDADE', 'ESTADOCIVIL',
+    'CONJUGE', 'CONJUGERG', 'CONJUGECPF', 'PAI', 'MAE', 'EMAIL', 'OBS',
+    'FONECEL', 'FONERES', 'FONEREC', 'NOMEREC',
+    'ENDERECORES', 'NUMERORES', 'COMPRES', 'BAIRRORES', 'CIDADERES', 'UFRES', 'CEPRES',
+    'TRABALHORAZAOSOC', 'TRABALHOENDERECO', 'TRABALHOBAIRRO', 'TRABALHOCIDADE', 'TRABALHOUF',
+    'TRABALHOCEP', 'TRABALHOFONE', 'TRABALHOCARGO', 'TRABALHOSALARIO', 'TRABALHOADM',
+    'AVALIACAO', 'LIMITECOMPRAS', 'BLOQUEADO', 'DATACREDITO', 'COD_CARD', 'EMITIDO', 'FIDELIDADE',
+    'AUTORIZADO1', 'AUTORIZADO1RG', 'AUTORIZADO1CPF', 'AUTORIZADO2', 'AUTORIZADO2RG', 'AUTORIZADO2CPF',
+    'REFCOM1', 'FONEREFCOM1', 'REFCOM2', 'FONEREFCOM2',
+    'REFPESSOAL1', 'FONEREFPESSOAL1', 'REFPESSOAL2', 'FONEREFPESSOAL2',
+  ]);
+
+  private filtrarCampos(campos: Record<string, any>): Record<string, any> {
+    const out: Record<string, any> = {};
+    for (const [k, v] of Object.entries(campos || {})) {
+      const key = String(k).toUpperCase().trim();
+      if (!ClientesGigaService.CAMPOS_EDITAVEIS.has(key)) continue;
+      out[key] = v == null || String(v).trim() === '' ? null : String(v).trim();
+    }
+    return out;
+  }
+
+  private async enqueueGigaReplica(loja: string, codigo: string, set: Record<string, any>) {
+    try {
+      await (this.prisma as any).erpOutbox.create({
+        data: {
+          kind: 'cliente_upsert',
+          saleId: `cli-${loja}-${codigo}-${Date.now()}`,
+          payload: { loja, codigo, set },
+          status: 'pending',
+        },
+      });
+    } catch (e) {
+      this.logger.error(`[clientes-giga] falha ao enfileirar réplica Giga: ${(e as Error).message}`);
+    }
+  }
+
+  /** EDITA uma ficha: Flow-first (flowIsSource=true — o sync nunca mais
+   *  sobrescreve) + réplica pro Giga via outbox (PDV legado continua vendo). */
+  async editarFicha(loja: string, codigo: string, camposRaw: Record<string, any>, userName?: string | null) {
+    const ficha: any = await (this.prisma as any).gigaCliente.findUnique({
+      where: { loja_codigo: { loja, codigo } },
+    });
+    if (!ficha) return { ok: false, erro: 'Ficha não encontrada' };
+    const campos = this.filtrarCampos(camposRaw);
+    if (!Object.keys(campos).length) return { ok: false, erro: 'Nenhum campo válido' };
+
+    // Merge no rawJson (fonte) e re-mapeia os campos estruturados do merge.
+    const mergedRaw = { ...(ficha.rawJson || {}), ...campos, LOJA: loja, CODIGO: codigo };
+    const data = this.mapRow(mergedRaw, { codCol: 'CODIGO', lojaCol: 'LOJA' });
+    if (!data) return { ok: false, erro: 'Falha ao mapear campos' };
+    delete (data as any).loja;
+    delete (data as any).codigo;
+
+    const upd = await (this.prisma as any).gigaCliente.update({
+      where: { loja_codigo: { loja, codigo } },
+      data: { ...data, flowIsSource: true, editedAt: new Date(), editedBy: userName || null },
+    });
+    await this.enqueueGigaReplica(loja, codigo, campos);
+    this.logger.log(`[clientes-giga] ficha ${loja}/${codigo} editada por ${userName || '?'} (${Object.keys(campos).join(', ')})`);
+    return { ok: true, ficha: upd };
+  }
+
+  /** Código pra cliente NOVO — sequência do FLOW por loja (faixa 500001+,
+   *  nunca colide com a numeração do Giga; mesma ideia do EAN prefixo-8). */
+  private async alocarCodigo(loja: string): Promise<string> {
+    await (this.prisma as any).gigaClienteSeq.upsert({
+      where: { loja }, create: { loja }, update: {},
+    });
+    const r = await (this.prisma as any).gigaClienteSeq.update({
+      where: { loja },
+      data: { proximo: { increment: 1 } },
+      select: { proximo: true },
+    });
+    return String(r.proximo - 1);
+  }
+
+  /** CADASTRA cliente novo NO FLOW (fonte da verdade) + réplica pro Giga. */
+  async cadastrar(lojaRaw: string, camposRaw: Record<string, any>, userName?: string | null) {
+    const loja = String(lojaRaw || '').replace(/^LJ/i, '').padStart(2, '0');
+    const campos = this.filtrarCampos(camposRaw);
+    if (!campos.NOME) return { ok: false, erro: 'Nome é obrigatório' };
+    const codigo = await this.alocarCodigo(loja);
+    const raw = { ...campos, LOJA: loja, CODIGO: codigo };
+    const data = this.mapRow(raw, { codCol: 'CODIGO', lojaCol: 'LOJA' });
+    if (!data) return { ok: false, erro: 'Falha ao mapear campos' };
+
+    const nova = await (this.prisma as any).gigaCliente.create({
+      data: { ...data, flowIsSource: true, editedAt: new Date(), editedBy: userName || null },
+    });
+    // Vincula ao CRM na hora se o CPF casar
+    if (nova.personKey) await this.vincular().catch(() => null);
+    await this.enqueueGigaReplica(loja, codigo, campos);
+    this.logger.log(`[clientes-giga] cliente NOVO ${loja}/${codigo} (${campos.NOME}) por ${userName || '?'}`);
+    return { ok: true, loja, codigo, ficha: nova };
   }
 
   /**

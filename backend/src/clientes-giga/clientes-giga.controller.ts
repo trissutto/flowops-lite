@@ -1,4 +1,4 @@
-import { Controller, ForbiddenException, Get, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, ForbiddenException, Get, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { ClientesGigaService } from './clientes-giga.service';
 
@@ -64,5 +64,28 @@ export class ClientesGigaController {
   historico(@Req() req: any, @Query('loja') loja?: string, @Query('codigo') codigo?: string) {
     this.requireAdmin(req);
     return this.svc.historico(String(loja || ''), String(codigo || ''));
+  }
+
+  /** EDITA uma ficha (Flow = fonte; Giga recebe réplica via outbox). */
+  @Post('ficha/editar')
+  editar(
+    @Req() req: any,
+    @Body() body: { loja: string; codigo: string; campos: Record<string, any> },
+  ) {
+    this.requireAdmin(req);
+    return this.svc.editarFicha(
+      String(body?.loja || ''), String(body?.codigo || ''), body?.campos || {},
+      req?.user?.name || req?.user?.email || null,
+    );
+  }
+
+  /** CADASTRA cliente novo no Flow (código 500001+; réplica pro Giga). */
+  @Post('cadastro')
+  cadastrar(@Req() req: any, @Body() body: { loja: string; campos: Record<string, any> }) {
+    this.requireAdmin(req);
+    return this.svc.cadastrar(
+      String(body?.loja || ''), body?.campos || {},
+      req?.user?.name || req?.user?.email || null,
+    );
   }
 }

@@ -17,7 +17,7 @@ import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
   ArrowLeft, Search, Users, Loader2, Phone, MapPin, CreditCard,
-  ShieldAlert, ChevronDown, ChevronUp, BadgeCheck, Store,
+  ShieldAlert, ChevronDown, ChevronUp, BadgeCheck, Store, Pencil, UserPlus, X,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -47,6 +47,7 @@ export default function ConsultaClientesPage() {
   const [buscou, setBuscou] = useState(false);
   const [ficha, setFicha] = useState<any | null>(null);
   const [fichaBusy, setFichaBusy] = useState(false);
+  const [novaAberta, setNovaAberta] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -110,9 +111,28 @@ export default function ConsultaClientesPage() {
           {busy && <Loader2 className="w-5 h-5 absolute right-4 top-1/2 -translate-y-1/2 animate-spin text-[#B8912B]" />}
         </div>
 
+        {/* Nova cliente — nasce NO FLOW (código 500001+), replica pro Giga */}
+        {!ficha && (
+          <div className="flex justify-end">
+            <button
+              onClick={() => setNovaAberta(true)}
+              className="rounded-lg bg-[#B8912B] hover:bg-[#8C7325] text-white text-sm font-bold px-4 py-2 flex items-center gap-1.5"
+            >
+              <UserPlus className="w-4 h-4" /> Nova cliente
+            </button>
+          </div>
+        )}
+        {novaAberta && (
+          <ClienteForm
+            modo="nova"
+            onClose={() => setNovaAberta(false)}
+            onSaved={(loja, codigo) => { setNovaAberta(false); abrirFicha(loja, codigo); }}
+          />
+        )}
+
         {/* FICHA DA PESSOA */}
         {ficha ? (
-          <FichaPessoa ficha={ficha} onVoltar={() => setFicha(null)} />
+          <FichaPessoa ficha={ficha} onVoltar={() => setFicha(null)} onReload={abrirFicha} />
         ) : (
           <>
             {/* Resultados */}
@@ -187,9 +207,10 @@ const gigaData = (v: any): string | null => {
   return `${d}/${m}/${y}`;
 };
 
-function FichaPessoa({ ficha, onVoltar }: { ficha: any; onVoltar: () => void }) {
+function FichaPessoa({ ficha, onVoltar, onReload }: { ficha: any; onVoltar: () => void; onReload: (loja: string, codigo: string) => void }) {
   const { pessoa, fichas, customer, parcelasAbertas, totalAbertoReais } = ficha;
   const bloqueada = fichas.some((f: any) => String(f.bloqueado || '').toUpperCase() === 'SIM');
+  const [editando, setEditando] = useState<any | null>(null);
 
   // CONSOLIDA entre as fichas: primeiro valor não-vazio do campo (nomes REAIS
   // do Giga, ex. ENDERECORES). Ficha duplicada/incompleta não deixa "—" na tela.
@@ -370,7 +391,172 @@ function FichaPessoa({ ficha, onVoltar }: { ficha: any; onVoltar: () => void }) 
       <HistoricoCard hist={ficha._hist} />
 
       {/* Fichas por loja (limite/avaliação/pontos são POR LOJA no Giga) */}
-      {fichas.map((f: any) => <FichaLoja key={`${f.loja}-${f.codigo}`} f={f} />)}
+      {fichas.map((f: any) => (
+        <FichaLoja key={`${f.loja}-${f.codigo}`} f={f} onEditar={() => setEditando(f)} />
+      ))}
+
+      {editando && (
+        <ClienteForm
+          modo="editar"
+          fichaAtual={editando}
+          onClose={() => setEditando(null)}
+          onSaved={() => { setEditando(null); onReload(editando.loja, editando.codigo); }}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ─── Formulário compartilhado (editar ficha / nova cliente) ─────────────────
+   Grava NO FLOW (fonte da verdade; flowIsSource) e replica pro Giga via
+   outbox. Campos com os NOMES REAIS do Giga. */
+const FORM_CAMPOS: Array<{ key: string; label: string; tipo?: 'date' | 'select-sn'; largo?: boolean }> = [
+  { key: 'NOME', label: 'Nome completo', largo: true },
+  { key: 'CPF', label: 'CPF' },
+  { key: 'NASCIMENTO', label: 'Nascimento', tipo: 'date' },
+  { key: 'RG', label: 'RG' },
+  { key: 'ESTADOCIVIL', label: 'Estado civil' },
+  { key: 'FONECEL', label: 'Celular' },
+  { key: 'FONERES', label: 'Fone residencial' },
+  { key: 'FONEREC', label: 'Fone recado' },
+  { key: 'NOMEREC', label: 'Falar com' },
+  { key: 'EMAIL', label: 'Email', largo: true },
+  { key: 'ENDERECORES', label: 'Endereço', largo: true },
+  { key: 'NUMERORES', label: 'Número' },
+  { key: 'COMPRES', label: 'Complemento' },
+  { key: 'BAIRRORES', label: 'Bairro' },
+  { key: 'CIDADERES', label: 'Cidade' },
+  { key: 'UFRES', label: 'UF' },
+  { key: 'CEPRES', label: 'CEP' },
+  { key: 'PAI', label: 'Pai', largo: true },
+  { key: 'MAE', label: 'Mãe', largo: true },
+  { key: 'CONJUGE', label: 'Cônjuge', largo: true },
+  { key: 'TRABALHORAZAOSOC', label: 'Local de trabalho', largo: true },
+  { key: 'TRABALHOCARGO', label: 'Função' },
+  { key: 'TRABALHOSALARIO', label: 'Salário (R$)' },
+  { key: 'AVALIACAO', label: 'Avaliação (A/B/C…)' },
+  { key: 'LIMITECOMPRAS', label: 'Limite compras (R$)' },
+  { key: 'BLOQUEADO', label: 'Bloqueado', tipo: 'select-sn' },
+  { key: 'OBS', label: 'Observação', largo: true },
+];
+
+function ClienteForm({
+  modo, fichaAtual, onClose, onSaved,
+}: {
+  modo: 'editar' | 'nova';
+  fichaAtual?: any;
+  onClose: () => void;
+  onSaved: (loja: string, codigo: string) => void;
+}) {
+  const raw = fichaAtual?.rawJson || {};
+  const [campos, setCampos] = useState<Record<string, string>>(() => {
+    const init: Record<string, string> = {};
+    for (const c of FORM_CAMPOS) {
+      const v = raw[c.key];
+      init[c.key] = v == null ? '' : (c.tipo === 'date' ? String(v).slice(0, 10) : String(v));
+    }
+    return init;
+  });
+  const [loja, setLoja] = useState<string>(fichaAtual?.loja || '');
+  const [lojas, setLojas] = useState<Array<{ code: string; name: string }>>([]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (modo === 'nova') api<Array<{ code: string; name: string }>>('/stores').then(setLojas).catch(() => {});
+  }, [modo]);
+
+  const salvar = async () => {
+    setErr(null);
+    if (!campos.NOME?.trim()) { setErr('Nome é obrigatório'); return; }
+    if (modo === 'nova' && !loja) { setErr('Escolha a loja da ficha'); return; }
+    setBusy(true);
+    try {
+      if (modo === 'editar') {
+        const r = await api<any>('/admin/clientes-giga/ficha/editar', {
+          method: 'POST',
+          body: JSON.stringify({ loja: fichaAtual.loja, codigo: fichaAtual.codigo, campos }),
+        });
+        if (!r?.ok) throw new Error(r?.erro || 'Falha ao salvar');
+        onSaved(fichaAtual.loja, fichaAtual.codigo);
+      } else {
+        const r = await api<any>('/admin/clientes-giga/cadastro', {
+          method: 'POST',
+          body: JSON.stringify({ loja, campos }),
+        });
+        if (!r?.ok) throw new Error(r?.erro || 'Falha ao cadastrar');
+        onSaved(r.loja, r.codigo);
+      }
+    } catch (e: any) {
+      setErr(e?.message || 'Erro ao salvar');
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 p-4 pt-10 overflow-y-auto">
+      <div className="w-full max-w-3xl rounded-2xl bg-[#FAFAF7] shadow-2xl border border-[#E6DFC8] overflow-hidden mb-10">
+        <div className="flex items-center justify-between px-5 py-3 bg-white border-b border-[#E6DFC8]">
+          <h3 className="font-bold text-slate-800 flex items-center gap-2">
+            {modo === 'editar'
+              ? <><Pencil className="w-4 h-4 text-[#B8912B]" /> Editar ficha — Loja {fichaAtual?.loja} · {fichaAtual?.codigo}</>
+              : <><UserPlus className="w-4 h-4 text-[#B8912B]" /> Nova cliente</>}
+          </h3>
+          <button onClick={onClose} className="p-2 rounded-lg text-slate-500 hover:bg-slate-100"><X className="w-5 h-5" /></button>
+        </div>
+
+        <div className="p-5 space-y-3">
+          {modo === 'nova' && (
+            <div>
+              <label className="text-[11px] uppercase tracking-wide font-bold text-slate-400">Loja da ficha</label>
+              <select value={loja} onChange={(e) => setLoja(e.target.value)}
+                className="mt-0.5 w-full rounded-lg border border-[#E7E2D8] bg-white px-3 py-2 text-sm focus:border-[#D4AF37] focus:outline-none">
+                <option value="">Selecione…</option>
+                {lojas.map((l) => <option key={l.code} value={l.code}>{l.code} · {l.name}</option>)}
+              </select>
+            </div>
+          )}
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+            {FORM_CAMPOS.map((c) => (
+              <div key={c.key} className={c.largo ? 'col-span-2 md:col-span-3' : ''}>
+                <label className="text-[11px] uppercase tracking-wide font-bold text-slate-400">{c.label}</label>
+                {c.tipo === 'select-sn' ? (
+                  <select
+                    value={campos[c.key] || ''}
+                    onChange={(e) => setCampos((p) => ({ ...p, [c.key]: e.target.value }))}
+                    className="mt-0.5 w-full rounded-lg border border-[#E7E2D8] bg-white px-3 py-2 text-sm focus:border-[#D4AF37] focus:outline-none"
+                  >
+                    <option value="">—</option>
+                    <option value="NAO">NÃO</option>
+                    <option value="SIM">SIM</option>
+                  </select>
+                ) : (
+                  <input
+                    type={c.tipo === 'date' ? 'date' : 'text'}
+                    value={campos[c.key] || ''}
+                    onChange={(e) => setCampos((p) => ({ ...p, [c.key]: e.target.value }))}
+                    className="mt-0.5 w-full rounded-lg border border-[#E7E2D8] bg-white px-3 py-2 text-sm focus:border-[#D4AF37] focus:outline-none"
+                  />
+                )}
+              </div>
+            ))}
+          </div>
+          {err && <div className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">{err}</div>}
+          <div className="flex justify-end gap-2 pt-1">
+            <button onClick={onClose} disabled={busy}
+              className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-600 hover:bg-slate-50 disabled:opacity-50">
+              Cancelar
+            </button>
+            <button onClick={salvar} disabled={busy}
+              className="rounded-lg bg-[#2E7D46] hover:bg-[#256a3a] text-white px-5 py-2 text-sm font-bold flex items-center gap-2 disabled:opacity-50">
+              {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+              {modo === 'editar' ? 'Salvar alterações' : 'Cadastrar cliente'}
+            </button>
+          </div>
+          <p className="text-[10px] text-slate-400">
+            Grava no Flow (fonte da verdade) e replica pro Giga automaticamente em segundos.
+          </p>
+        </div>
+      </div>
     </div>
   );
 }
@@ -459,7 +645,7 @@ function HistoricoCard({ hist }: { hist: any }) {
 }
 
 /* Ficha de UMA loja + todos os campos originais do Giga (rawJson dinâmico) */
-function FichaLoja({ f }: { f: any }) {
+function FichaLoja({ f, onEditar }: { f: any; onEditar: () => void }) {
   const [aberto, setAberto] = useState(false);
   const raw = f.rawJson || {};
   return (
@@ -467,7 +653,16 @@ function FichaLoja({ f }: { f: any }) {
       <div className="px-5 py-3 border-b border-[#F1EDE3] flex items-center gap-3 flex-wrap">
         <h3 className="font-bold text-slate-800 flex items-center gap-2">
           <Store className="w-4 h-4 text-[#B8912B]" /> Loja {f.loja} · ficha {f.codigo}
+          {f.flowIsSource && (
+            <span title={`Editada no Flow${f.editedBy ? ` por ${f.editedBy}` : ''} — fonte da verdade`} className="rounded bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 text-[9px] font-bold text-emerald-700">FLOW</span>
+          )}
         </h3>
+        <button
+          onClick={onEditar}
+          className="rounded-lg border border-[#B8912B] px-2.5 py-1 text-[11px] font-bold text-[#8C7325] hover:bg-[#FBF6E6] flex items-center gap-1"
+        >
+          <Pencil className="w-3 h-3" /> Editar
+        </button>
         <div className="flex gap-2 text-[11px] font-bold ml-auto">
           {f.avaliacao && <span className="rounded bg-[#FBF6E6] border border-[#E6DFC8] px-2 py-0.5 text-[#8C7325]">Avaliação {f.avaliacao}</span>}
           {f.limiteCompras != null && <span className="rounded bg-emerald-50 border border-emerald-200 px-2 py-0.5 text-emerald-700">Limite {brl(Number(f.limiteCompras))}</span>}

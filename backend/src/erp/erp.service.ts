@@ -296,6 +296,55 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * Réplica de CLIENTE pro Giga (kind cliente_upsert do outbox). O Flow já é a
+   * fonte da verdade da ficha (giga_clientes flowIsSource) — aqui só mantém a
+   * tabela `clientes` do Giga em dia pro PDV legado/crediário enquanto ele
+   * viver. UPDATE por (CODIGO, LOJA); se não existe (cadastro novo do Flow,
+   * faixa 500001+), INSERT com as colunas conhecidas. Best-effort com retry
+   * do outbox — falha não afeta a ficha no Flow.
+   */
+  async upsertClienteGiga(input: {
+    loja: string;
+    codigo: string;
+    set: Record<string, any>;
+  }): Promise<{ success: boolean; error?: string }> {
+    if (!this.isWriteEnabled) return { success: false, error: 'ERP_WRITE_ENABLED não habilitado' };
+    if (!this.pool) return { success: false, error: 'Pool ERP não inicializado' };
+    const loja = String(input.loja || '').replace(/^LJ/i, '').padStart(2, '0');
+    const codigo = String(input.codigo || '').trim();
+    // Só nomes de coluna seguros (A-Z0-9_) — payload vem do whitelist do Flow.
+    const entries = Object.entries(input.set || {}).filter(([k]) => /^[A-Z0-9_]+$/.test(k));
+    if (!codigo || !entries.length) return { success: false, error: 'payload inválido' };
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT COUNT(*) AS n FROM clientes WHERE CODIGO = ? AND LOJA = ?`,
+        [codigo, loja],
+      );
+      const existe = Number((rows[0] as any)?.n) > 0;
+      if (existe) {
+        const sets = entries.map(([k]) => `\`${k}\` = ?`).join(', ');
+        await this.pool.query(
+          `UPDATE clientes SET ${sets} WHERE CODIGO = ? AND LOJA = ? LIMIT 5`,
+          [...entries.map(([, v]) => v), codigo, loja],
+        );
+      } else {
+        const cols = ['LOJA', 'CODIGO', ...entries.map(([k]) => k)];
+        const placeholders = cols.map(() => '?').join(', ');
+        await this.pool.query(
+          `INSERT INTO clientes (${cols.map((c) => `\`${c}\``).join(', ')}) VALUES (${placeholders})`,
+          [loja, codigo, ...entries.map(([, v]) => v)],
+        );
+      }
+      this.logger.log(`[cliente-giga] réplica ${existe ? 'UPDATE' : 'INSERT'} ${loja}/${codigo} (${entries.length} campo(s))`);
+      return { success: true };
+    } catch (e: any) {
+      const msg = String(e?.message || e);
+      this.logger.error(`[cliente-giga] réplica falhou ${loja}/${codigo}: ${msg}`);
+      return { success: false, error: msg };
+    }
+  }
+
   /** Réplica Giga-only usada pelo outbox (kind estoque_delta). O delta já foi
    *  aplicado no Flow no momento da operação — aqui NÃO mexe no espelho de
    *  novo (o writeThrough absoluto pós-sucesso reconcilia). */
