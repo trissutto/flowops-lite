@@ -3557,12 +3557,20 @@ model GigaCliente {
   admissao        DateTime? @db.Date
   observacao      String?   @db.Text
   rawJson         Json      @map("raw_json")
+  // ── INTEGRAÇÃO (uma PESSOA só — site + lojas + live) ──
+  // personKey = "cpf:<dígitos>" (MESMA convenção do CRM/customer-aggregation).
+  // Registros da mesma pessoa em N lojas compartilham o personKey; customerId
+  // aponta pro Customer mestre do CRM quando o CPF/fone casa.
+  personKey       String?   @map("person_key")
+  customerId      String?   @map("customer_id")
   syncedAt        DateTime  @default(now()) @map("synced_at")
 
   @@id([loja, codigo])
   @@index([nome])
   @@index([cpf])
   @@index([codigo])
+  @@index([personKey])
+  @@index([customerId])
   @@map("giga_clientes")
 }
 

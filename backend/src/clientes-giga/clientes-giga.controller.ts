@@ -31,6 +31,13 @@ export class ClientesGigaController {
     return this.svc.status();
   }
 
+  /** Re-roda só a vinculação com o Customer mestre (ex.: após dedup no CRM). */
+  @Post('vincular')
+  vincular(@Req() req: any) {
+    this.requireAdmin(req);
+    return this.svc.vincular();
+  }
+
   @Get('sample')
   sample(@Req() req: any, @Query('limit') limit?: string) {
     this.requireAdmin(req);
