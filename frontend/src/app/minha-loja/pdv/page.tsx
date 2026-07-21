@@ -35,6 +35,10 @@ import {
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { loadPrinterConfig } from '@/lib/printer-router';
+// Import ESTÁTICO (igual à página DANFE de reimpressão, que sempre imprimiu
+// QR) — o import dinâmico devolvia o módulo sem .default em alguns bundles
+// e o QR morria num catch silencioso (caso Moema 21/07, round 2).
+import QRCode from 'qrcode';
 import { PdvToastProvider, usePdvToast, humanizeError } from '@/components/PdvToast';
 import ValeTrocaModal from './ValeTrocaModal';
 import { appPrompt } from '@/lib/app-prompt';
@@ -6499,9 +6503,16 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
     let qrDataUrl = '';
     if (qrUrl) {
       try {
-        const QR = (await import('qrcode')).default;
-        qrDataUrl = await QR.toDataURL(qrUrl, { errorCorrectionLevel: 'M', margin: 0, width: 220 });
-      } catch { /* cupom sai sem QR, mas sai */ }
+        qrDataUrl = await QRCode.toDataURL(qrUrl, { errorCorrectionLevel: 'M', margin: 0, width: 220 });
+      } catch (e) {
+        // Cupom sai sem QR, mas sai — e agora o erro aparece no console
+        // pra diagnóstico em vez de morrer calado.
+        console.error('[nfce] falha ao gerar QR do cupom:', e);
+      }
+    }
+    if (!qrDataUrl) {
+      console.warn('[nfce] cupom SEM QR: qrUrl=', qrUrl ? 'ok' : 'VAZIO',
+        'chave=', sale.nfceChave ? 'ok' : 'VAZIA', 'xml=', xmlForQr ? 'ok' : 'VAZIO');
     }
 
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>NFC-e ${sale.nfceNumber || ''}</title>
