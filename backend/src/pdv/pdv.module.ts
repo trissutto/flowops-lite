@@ -23,6 +23,7 @@ import { CrediarioPrintService } from './crediario-print.service';
 import { CoordsDbService } from './coords-db.service';
 import { PdvDiagController } from './pdv-diag.controller';
 import { MarcadosService } from './marcados.service';
+import { MarcadosMirrorService } from './marcados-mirror.service';
 import { MarcadosController } from './marcados.controller';
 import { ActiveSellersService } from './active-sellers.service';
 import { ActiveSellersController } from './active-sellers.controller';
@@ -36,7 +37,7 @@ import { ProdutosVendidosController } from './produtos-vendidos.controller';
 @Module({
   imports: [PrismaModule, ErpModule, PagarmeModule, forwardRef(() => CrediariosModule), WooCommerceModule, PromoConfigModule, AccessPolicyModule, WincredMirrorModule, AdiantamentosModule, ConveniosModule],
   controllers: [PdvController, CashController, ReturnsController, ReturnsPublicController, PdvDiagController, MarcadosController, ActiveSellersController, CarneCoordsController, FiscalReportController, ProdutosVendidosController],
-  providers: [PdvService, ErpOutboxService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, CoordsDbService, MarcadosService, ActiveSellersService, CarneCoordsService, FiscalReportService, ProdutosVendidosService],
-  exports: [PdvService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, CoordsDbService, MarcadosService, ActiveSellersService, CarneCoordsService, FiscalReportService, ProdutosVendidosService],
+  providers: [PdvService, ErpOutboxService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, CoordsDbService, MarcadosService, MarcadosMirrorService, ActiveSellersService, CarneCoordsService, FiscalReportService, ProdutosVendidosService],
+  exports: [PdvService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, CoordsDbService, MarcadosService, MarcadosMirrorService, ActiveSellersService, CarneCoordsService, FiscalReportService, ProdutosVendidosService],
 })
 export class PdvModule {}

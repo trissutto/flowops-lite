@@ -555,28 +555,51 @@ export class ClientesGigaService {
     const crediarioAbertoReais = Math.round(parcelas.reduce((s, p) => s + (Number(p.valorParcela) || 0), 0) * 100) / 100;
     const crediarioVencidas = parcelas.filter((p) => p.vencimento && new Date(p.vencimento).getTime() < Date.now() - 86400000).length;
 
-    // MARCADOS pra fechar — AO VIVO no Giga (MARCADO='SIM'): fonte da verdade
-    // sobre o que ainda está fora. Giga fora → null (a tela avisa).
+    // MARCADOS pra fechar — NATIVO (tabela marcados, 21/07 "chega de Giga");
+    // se o espelho nunca foi importado, cai pro Giga ao vivo. Erro → null
+    // (a tela avisa).
     let marcados: { itens: any[]; totalReais: number } | null = null;
     try {
+      const temNativo = (await (this.prisma as any).marcado.count()) > 0
+        && String(process.env.MARCADOS_NATIVE_READS ?? '').trim() !== '0';
       const itens: any[] = [];
-      for (const f of fichas) {
-        const cod = Number(String(f.codigo).replace(/\D/g, '')) || 0;
-        const lj = String(f.loja).replace(/\D/g, '').padStart(2, '0');
-        if (!cod) continue;
-        const r = await this.erp.runReadOnly(
-          `SELECT REGISTRO, DATA, DESCRICAO, QUANTIDADE, VALORTOTAL, LOJA
-             FROM caixa
-            WHERE UPPER(MARCADO) = 'SIM' AND CLIENTE = ${cod} AND LOJA = '${lj}'
-            ORDER BY DATA DESC LIMIT 100`,
-          { maxRows: 100, timeoutMs: 8000 },
-        );
-        itens.push(...r.rows);
+      if (temNativo) {
+        const orMarc = fichas.map((f: any) => ({
+          codCliente: String(f.codigo),
+          storeCode: String(f.loja).replace(/\D/g, '').padStart(2, '0'),
+        }));
+        const nativos: any[] = await (this.prisma as any).marcado.findMany({
+          where: { status: 'ativo', isTraining: false, OR: orMarc },
+          orderBy: [{ dataMarcacao: 'desc' }],
+          take: 200,
+        });
+        itens.push(...nativos.map((n) => ({
+          REGISTRO: n.registroGiga != null ? Number(n.registroGiga) : null,
+          DATA: n.dataMarcacao,
+          DESCRICAO: n.descricao || '',
+          QUANTIDADE: n.qty,
+          VALORTOTAL: Number(n.valorTotal) || 0,
+          LOJA: n.storeCode,
+        })));
+      } else {
+        for (const f of fichas) {
+          const cod = Number(String(f.codigo).replace(/\D/g, '')) || 0;
+          const lj = String(f.loja).replace(/\D/g, '').padStart(2, '0');
+          if (!cod) continue;
+          const r = await this.erp.runReadOnly(
+            `SELECT REGISTRO, DATA, DESCRICAO, QUANTIDADE, VALORTOTAL, LOJA
+               FROM caixa
+              WHERE UPPER(MARCADO) = 'SIM' AND CLIENTE = ${cod} AND LOJA = '${lj}'
+              ORDER BY DATA DESC LIMIT 100`,
+            { maxRows: 100, timeoutMs: 8000 },
+          );
+          itens.push(...r.rows);
+        }
       }
       const totalReais = Math.round(itens.reduce((s, r) => s + (Number(r.VALORTOTAL) || 0), 0) * 100) / 100;
       marcados = { itens, totalReais };
     } catch (e) {
-      this.logger.warn(`[clientes-giga] resumo: marcados ao vivo indisponível (${(e as Error).message})`);
+      this.logger.warn(`[clientes-giga] resumo: marcados indisponível (${(e as Error).message})`);
     }
 
     // Limite / avaliação / bloqueado — da ficha ABERTA (são POR LOJA no Giga)

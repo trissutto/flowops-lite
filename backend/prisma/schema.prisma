@@ -3715,6 +3715,42 @@ model GigaClienteSeq {
   @@map("giga_cliente_seq")
 }
 
+/// MARCADOS NATIVOS (provar em casa) — fonte de leitura no Flow (21/07).
+/// Import da caixa do Giga (MARCADO='SIM') + atualizado na hora pelas
+/// operações do Flow (marcar / puxar pra venda / devolver). registroGiga
+/// amarra na linha da caixa pra réplica (fechar = DELETE lá).
+model Marcado {
+  id           String    @id @default(cuid())
+  registroGiga BigInt?   @unique @map("registro_giga")
+  storeCode    String    @map("store_code") @db.VarChar(4)
+  codCliente   String    @map("cod_cliente") @db.VarChar(20)
+  clienteNome  String?   @map("cliente_nome") @db.VarChar(120)
+  cpf          String?   @db.VarChar(20)
+  numero       Int?      // CONTROLE/NUMERO do Giga (agrupa a marcação)
+  sku          String    @db.VarChar(60)
+  descricao    String?   @db.VarChar(160)
+  qty          Int       @default(1)
+  valorUnit    Decimal   @default(0) @map("valor_unit") @db.Decimal(12, 2)
+  valorTotal   Decimal   @default(0) @map("valor_total") @db.Decimal(12, 2)
+  vendedor     String?   @db.VarChar(80)
+  dataMarcacao DateTime? @map("data_marcacao") @db.Date
+  /// ativo | fechado (virou venda no Flow) | devolvido | fechado_giga (sumiu do Giga)
+  status       String    @default("ativo") @db.VarChar(16)
+  saleId       String?   @map("sale_id")
+  fechadoAt    DateTime? @map("fechado_at")
+  devolvidoAt  DateTime? @map("devolvido_at")
+  /// giga (import/sync) | flow (marcado criado pelo PDV)
+  origem       String    @default("giga") @db.VarChar(10)
+  isTraining   Boolean   @default(false) @map("is_training")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  @@index([status, codCliente])
+  @@index([status, storeCode])
+  @@index([status, cpf])
+  @@map("marcados")
+}
+
 /// Estado do sync incremental. 1 linha por tabela.
 /// Cron incremental usa lastDataAlt pra pegar so produtos modificados desde
 /// o ultimo run (WHERE DATAALT > lastDataAlt). Estoque nao tem DATAALT — re-syncamos

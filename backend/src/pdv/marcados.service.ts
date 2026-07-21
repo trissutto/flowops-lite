@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, Logger, NotFoundException } from '@nes
 import { ErpService } from '../erp/erp.service';
 import { CrediariosService } from '../crediarios/crediarios.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { MarcadosMirrorService } from './marcados-mirror.service';
 
 /**
  * MARCADOS — sistema de "leva pra provar em casa" da Lurd's.
@@ -28,7 +29,36 @@ export class MarcadosService {
     private readonly erp: ErpService,
     private readonly crediarios: CrediariosService,
     private readonly prisma: PrismaService,
+    private readonly mirror: MarcadosMirrorService,
   ) {}
+
+  /** Kill-switch: MARCADOS_NATIVE_READS=0 volta as consultas pro Giga ao vivo. */
+  private get nativeReads(): boolean {
+    return String(process.env.MARCADOS_NATIVE_READS ?? '').trim() !== '0';
+  }
+
+  /** Leituras nativas valem se a flag está ligada E o espelho já foi importado. */
+  private async useNative(): Promise<boolean> {
+    if (!this.nativeReads) return false;
+    try { return await this.mirror.hasMirror(); } catch { return false; }
+  }
+
+  /** Converte a linha nativa pro shape UPPERCASE que as telas já consomem. */
+  private toGigaShape(m: any): any {
+    return {
+      REGISTRO: m.registroGiga != null ? Number(m.registroGiga) : null,
+      NUMERO: m.numero ?? null,
+      CODIGO: m.sku,
+      DATA: m.dataMarcacao,
+      DESCRICAO: m.descricao || '',
+      QUANTIDADE: m.qty,
+      VALOR: Number(m.valorUnit) || 0,
+      VALORTOTAL: Number(m.valorTotal) || 0,
+      VENDEDOR: m.vendedor ?? null,
+      OPERADOR: 0,
+      LOJA: m.storeCode,
+    };
+  }
 
   /**
    * Cria UM marcado a partir de uma venda PDV existente.
@@ -157,6 +187,54 @@ export class MarcadosService {
 
     if (!insertResult.success) {
       throw new BadRequestException(`Falha ao inserir marcados no Giga: ${insertResult.error}`);
+    }
+
+    // Grava o NATIVO na hora (a consulta já lê daqui). Best-effort: captura
+    // os REGISTROs recém-inseridos pelo CONTROLE; se o Giga demorar, cria sem
+    // registroGiga e o sync horário casa por NUMERO+loja+sku.
+    try {
+      const lojaCode = String(input.storeCode || '').trim().toUpperCase().replace(/^LJ/i, '').padStart(2, '0');
+      const controle = Number(insertResult.controle) || null;
+      const regPorSku = new Map<string, number[]>();
+      if (controle) {
+        try {
+          const cap = await this.erp.runReadOnly(
+            `SELECT REGISTRO, CODIGO FROM caixa
+              WHERE NUMERO = ${controle} AND CLIENTE = ${codCliente} AND UPPER(MARCADO) = 'SIM'`,
+            { maxRows: 100, timeoutMs: 8000 },
+          );
+          for (const row of cap.rows || []) {
+            const k = String(row.CODIGO || '').trim();
+            if (!regPorSku.has(k)) regPorSku.set(k, []);
+            regPorSku.get(k)!.push(Number(row.REGISTRO));
+          }
+        } catch { /* segue sem registro — sync casa depois */ }
+      }
+      for (const it of sale.items) {
+        const sku = String(it.sku || it.ref || '').trim();
+        const fila = regPorSku.get(sku);
+        const reg = fila && fila.length ? fila.shift()! : null;
+        await (this.prisma as any).marcado.create({
+          data: {
+            registroGiga: reg ? BigInt(reg) : null,
+            storeCode: lojaCode,
+            codCliente: String(codCliente),
+            clienteNome: info.cliente?.nome || null,
+            cpf: String(sale.customerCpf || '').replace(/\D/g, '') || null,
+            numero: controle,
+            sku: sku.slice(0, 60),
+            descricao: String(it.descricao || '').slice(0, 160) || null,
+            qty: Number(it.qty) || 1,
+            valorUnit: Number(it.precoUnit) || 0,
+            valorTotal: Number(it.total) || 0,
+            dataMarcacao: new Date(),
+            status: 'ativo',
+            origem: 'flow',
+          },
+        });
+      }
+    } catch (e: any) {
+      this.logger.warn(`[marcados] nativo não gravado na criação (sync horário pega): ${e?.message}`);
     }
 
     // 4. Baixa estoque Giga (igual venda — peças saem do estoque físico)
@@ -293,16 +371,35 @@ export class MarcadosService {
     const classificacao = String(row.AVALIACAO || row.avaliacao || '').trim().toUpperCase();
     const limiteTotal = Number(row.LIMITECOMPRAS || row.limitecompras || 0);
 
-    // 3. Busca marcados ativos do cliente na tabela `caixa`
-    const marcadosSql = `
-      SELECT REGISTRO, NUMERO, CODIGO, DATA, DESCRICAO, QUANTIDADE, VALOR, VALORTOTAL, VENDEDOR, OPERADOR, LOJA
-      FROM caixa
-      WHERE UPPER(MARCADO) = 'SIM' AND CLIENTE = ${Number(codCliente) || 0}
-      ORDER BY DATA DESC, REGISTRO DESC
-      LIMIT 200
-    `;
-    const m = await this.erp.runReadOnly(marcadosSql, { maxRows: 200, timeoutMs: 10000 });
-    const marcadosAtivos = m.rows;
+    // 3. Busca marcados ativos do cliente — NATIVO primeiro (tabela marcados
+    // no Postgres, "CHEGA DE GIGA" 21/07); Giga só se o espelho nunca rodou
+    // ou com MARCADOS_NATIVE_READS=0.
+    let marcadosAtivos: any[];
+    if (await this.useNative()) {
+      const nativos: any[] = await (this.prisma as any).marcado.findMany({
+        where: {
+          status: 'ativo',
+          isTraining: false,
+          OR: [
+            ...(safeCpf ? [{ cpf: safeCpf }] : []),
+            ...(codCliente ? [{ codCliente: String(codCliente) }] : []),
+          ],
+        },
+        orderBy: [{ dataMarcacao: 'desc' }, { createdAt: 'desc' }],
+        take: 200,
+      });
+      marcadosAtivos = nativos.map((n) => this.toGigaShape(n));
+    } else {
+      const marcadosSql = `
+        SELECT REGISTRO, NUMERO, CODIGO, DATA, DESCRICAO, QUANTIDADE, VALOR, VALORTOTAL, VENDEDOR, OPERADOR, LOJA
+        FROM caixa
+        WHERE UPPER(MARCADO) = 'SIM' AND CLIENTE = ${Number(codCliente) || 0}
+        ORDER BY DATA DESC, REGISTRO DESC
+        LIMIT 200
+      `;
+      const m = await this.erp.runReadOnly(marcadosSql, { maxRows: 200, timeoutMs: 10000 });
+      marcadosAtivos = m.rows;
+    }
     const totalMarcadosAtivos = marcadosAtivos.reduce(
       (s: number, r: any) => s + (Number(r.VALORTOTAL) || Number(r.VALOR) || 0),
       0,
@@ -394,12 +491,46 @@ export class MarcadosService {
     const lista = Array.from(porPessoa.values()).slice(0, 20);
     if (!lista.length) return [];
 
-    // 2) Badge "em marca": UMA agregada no Giga com teto DURO de 6s no app
-    //    (Promise.race) — se o Giga pendurar, a busca responde MESMO ASSIM
-    //    (badge vem null e a tela mostra "abre pra ver").
+    // 2) Badge "em marca" — NATIVO quando o espelho de marcados existe
+    //    (zero Giga na busca); senão cai na agregada Giga com teto de 6s.
     let agg = new Map<string, { qtd: number; total: number }>();
     let aggOk = false;
-    try {
+    if (await this.useNative()) {
+      try {
+        const cpfs = lista.map((m) => String(m.cpf || '').replace(/\D/g, '')).filter((c) => c.length === 11);
+        const codes = lista.map((m) => String(m.codigo || '').trim()).filter(Boolean);
+        const [porCpf, porCod]: any[][] = await Promise.all([
+          cpfs.length
+            ? (this.prisma as any).marcado.groupBy({
+                by: ['cpf'], _count: { _all: true }, _sum: { valorTotal: true },
+                where: { status: 'ativo', isTraining: false, cpf: { in: cpfs } },
+              })
+            : [],
+          codes.length
+            ? (this.prisma as any).marcado.groupBy({
+                by: ['codCliente'], _count: { _all: true }, _sum: { valorTotal: true },
+                where: { status: 'ativo', isTraining: false, codCliente: { in: codes } },
+              })
+            : [],
+        ]);
+        aggOk = true;
+        const byCpf = new Map(porCpf.map((x: any) => [x.cpf, x]));
+        const byCod = new Map(porCod.map((x: any) => [x.codCliente, x]));
+        for (const m of lista) {
+          const hit = byCpf.get(String(m.cpf || '').replace(/\D/g, '')) || byCod.get(String(m.codigo || '').trim());
+          if (hit) {
+            agg.set(String(Number(m.codigo)), {
+              qtd: Number(hit._count?._all) || 0,
+              total: Number(hit._sum?.valorTotal) || 0,
+            });
+          }
+        }
+      } catch (e: any) {
+        this.logger.warn(`[marcados] agregada nativa falhou: ${e?.message}`);
+        aggOk = false;
+      }
+    }
+    if (!aggOk) try {
       const codes = Array.from(new Set(
         lista.map((m) => Number(m.codigo)).filter((n) => Number.isFinite(n) && n > 0),
       ));
@@ -518,6 +649,16 @@ export class MarcadosService {
       `[marcados.devolver] REGISTRO=${reg} OK · estoque +${appliedCount}/${input.qty} em ${input.loja} · caixa.MARCADO removido`,
     );
 
+    // Atualiza o NATIVO na hora (a tela reflete sem esperar o sync horário)
+    try {
+      await (this.prisma as any).marcado.updateMany({
+        where: { registroGiga: BigInt(reg), status: 'ativo' },
+        data: { status: 'devolvido', devolvidoAt: new Date() },
+      });
+    } catch (e: any) {
+      this.logger.warn(`[marcados.devolver] nativo não atualizado (sync pega): ${e?.message}`);
+    }
+
     return { ok: true };
   }
 
@@ -532,32 +673,70 @@ export class MarcadosService {
     limit?: number;
   } = {}): Promise<any> {
     const limit = Math.min(500, input.limit || 100);
+
+    // NATIVO primeiro — a versão Giga era full-scan da caixa POR REQUEST.
+    if (await this.useNative()) {
+      const where: any = { status: 'ativo', isTraining: false };
+      if (input.loja) where.storeCode = String(input.loja).replace(/[^0-9]/g, '').padStart(2, '0');
+      if (input.dataInicial || input.dataFinal) {
+        where.dataMarcacao = {
+          ...(input.dataInicial ? { gte: new Date(`${input.dataInicial}T00:00:00.000Z`) } : {}),
+          ...(input.dataFinal ? { lte: new Date(`${input.dataFinal}T23:59:59.999Z`) } : {}),
+        };
+      }
+      const nativos: any[] = await (this.prisma as any).marcado.findMany({
+        where,
+        orderBy: [{ dataMarcacao: 'desc' }, { createdAt: 'desc' }],
+        take: limit,
+      });
+      const rows = nativos.map((n) => ({
+        ...this.toGigaShape(n),
+        codCliente: n.codCliente,
+        clienteNome: n.clienteNome || null,
+        classificacao: null,
+      }));
+      return { rows, total: rows.length, fonte: 'flow' };
+    }
+    // Fallback GIGA ao vivo (espelho vazio / MARCADOS_NATIVE_READS=0)
     const where: string[] = [`UPPER(c.MARCADO) = 'SIM'`];
-    if (input.loja) where.push(`c.LOJA = '${input.loja.replace(/[^0-9]/g, '')}'`);
-    if (input.dataInicial) where.push(`c.DATA >= '${input.dataInicial}'`);
-    if (input.dataFinal) where.push(`c.DATA <= '${input.dataFinal}'`);
+    if (input.loja) where.push(`c.LOJA = '${input.loja.replace(/[^0-9]/g, '').padStart(2, '0')}'`);
+    if (input.dataInicial) where.push(`c.DATA >= '${input.dataInicial.replace(/[^0-9-]/g, '')}'`);
+    if (input.dataFinal) where.push(`c.DATA <= '${input.dataFinal.replace(/[^0-9-]/g, '')}'`);
 
-    const cm = await this.crediarios.detectClientesTable();
-    const joinClientes = cm
-      ? `LEFT JOIN \`${cm.table}\` cli ON cli.\`${cm.codCliente}\` = c.CLIENTE`
-      : '';
-    const selectNome = cm?.nome ? `cli.\`${cm.nome}\` AS clienteNome,` : '';
+    try {
+      const cm = await this.crediarios.detectClientesTable();
+      // BUG FIX (21/07): o JOIN era só por CÓDIGO — como o código de cliente
+      // REPETE em cada loja (cód 2 existe em todas), cada linha da caixa
+      // multiplicava com o nome do cliente de OUTRAS lojas (aparecia "VISA
+      // ELECTRON"/"CIELO" como cliente). JOIN agora casa LOJA também.
+      const joinClientes = cm
+        ? `LEFT JOIN \`${cm.table}\` cli ON cli.\`${cm.codCliente}\` = c.CLIENTE AND cli.LOJA = c.LOJA`
+        : '';
+      const selectNome = cm?.nome ? `cli.\`${cm.nome}\` AS clienteNome,` : '';
 
-    const sql = `
-      SELECT
-        c.REGISTRO, c.NUMERO, c.CODIGO, c.DATA, c.DESCRICAO,
-        c.QUANTIDADE, c.VALOR, c.VALORTOTAL, c.VENDEDOR, c.LOJA,
-        c.CLIENTE AS codCliente,
-        ${selectNome}
-        cli.AVALIACAO AS classificacao
-      FROM caixa c
-      ${joinClientes}
-      WHERE ${where.join(' AND ')}
-      ORDER BY c.DATA DESC, c.REGISTRO DESC
-      LIMIT ${limit}
-    `;
-    const r = await this.erp.runReadOnly(sql, { maxRows: limit, timeoutMs: 15000 });
-    return { rows: r.rows, total: r.rows.length };
+      const sql = `
+        SELECT
+          c.REGISTRO, c.NUMERO, c.CODIGO, c.DATA, c.DESCRICAO,
+          c.QUANTIDADE, c.VALOR, c.VALORTOTAL, c.VENDEDOR, c.LOJA,
+          c.CLIENTE AS codCliente,
+          ${selectNome}
+          cli.AVALIACAO AS classificacao
+        FROM caixa c
+        ${joinClientes}
+        WHERE ${where.join(' AND ')}
+        ORDER BY c.DATA DESC, c.REGISTRO DESC
+        LIMIT ${limit}
+      `;
+      const r = await this.erp.runReadOnly(sql, { maxRows: limit, timeoutMs: 15000 });
+      return { rows: r.rows, total: r.rows.length, fonte: 'giga' };
+    } catch (e: any) {
+      // NUNCA 500 na tela — devolve vazio com aviso acionável.
+      this.logger.warn(`[marcados] listAll (Giga ao vivo) falhou: ${e?.message}`);
+      return {
+        rows: [], total: 0, fonte: 'giga',
+        error: 'Giga demorou/caiu nessa consulta. Rode "Importar marcados do Giga" na tela do espelho Wincred — aí essa tela lê o Flow e responde na hora.',
+      };
+    }
   }
 
   // ── PUXAR MARCADOS PRA VENDA NO PDV ──────────────────────────────
@@ -590,14 +769,25 @@ export class MarcadosService {
     const regsCsv = input.registros.map((r) => Number(r)).filter((r) => Number.isFinite(r) && r > 0);
     if (regsCsv.length === 0) throw new BadRequestException('REGISTROs invalidos');
 
-    const sql = `
-      SELECT REGISTRO, CODIGO, DESCRICAO, QUANTIDADE, VALOR, VALORTOTAL, LOJA
-      FROM caixa
-      WHERE REGISTRO IN (${regsCsv.join(',')})
-        AND UPPER(MARCADO) = 'SIM'
-    `;
-    const r = await this.erp.runReadOnly(sql, { maxRows: 100, timeoutMs: 15000 });
-    const rows: any[] = r.rows || [];
+    // NATIVO primeiro; se o espelho não tiver os REGISTROs (defasado), cai
+    // pro Giga ao vivo — puxar pra venda não pode falhar por espelho velho.
+    let rows: any[] = [];
+    if (await this.useNative()) {
+      const nativos: any[] = await (this.prisma as any).marcado.findMany({
+        where: { status: 'ativo', registroGiga: { in: regsCsv.map((n) => BigInt(n)) } },
+      });
+      rows = nativos.map((n) => this.toGigaShape(n));
+    }
+    if (rows.length === 0) {
+      const sql = `
+        SELECT REGISTRO, CODIGO, DESCRICAO, QUANTIDADE, VALOR, VALORTOTAL, LOJA
+        FROM caixa
+        WHERE REGISTRO IN (${regsCsv.join(',')})
+          AND UPPER(MARCADO) = 'SIM'
+      `;
+      const r = await this.erp.runReadOnly(sql, { maxRows: 100, timeoutMs: 15000 });
+      rows = r.rows || [];
+    }
     if (rows.length === 0) {
       throw new BadRequestException('Nenhum marcado ativo encontrado pros REGISTROs informados');
     }

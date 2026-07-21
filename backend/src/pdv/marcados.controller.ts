@@ -1,6 +1,7 @@
 import { Body, Controller, ForbiddenException, Get, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { MarcadosService } from './marcados.service';
+import { MarcadosMirrorService } from './marcados-mirror.service';
 import { isTrainingRequest } from './training.util';
 
 /**
@@ -14,12 +15,39 @@ import { isTrainingRequest } from './training.util';
 @Controller('pdv/marcados')
 @UseGuards(JwtAuthGuard)
 export class MarcadosController {
-  constructor(private readonly svc: MarcadosService) {}
+  constructor(
+    private readonly svc: MarcadosService,
+    private readonly mirror: MarcadosMirrorService,
+  ) {}
 
   private requireRole(req: any) {
     const role = req?.user?.role;
     if (role !== 'admin' && role !== 'operator' && role !== 'store')
       throw new ForbiddenException('Acesso negado');
+  }
+
+  private requireAdmin(req: any) {
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'operator')
+      throw new ForbiddenException('Acesso negado');
+  }
+
+  /**
+   * POST /pdv/marcados/sync — dispara o import Giga → tabela nativa `marcados`
+   * em background (acompanha pelo status). Admin/operator.
+   */
+  @Post('sync')
+  startSync(@Req() req: any) {
+    this.requireAdmin(req);
+    void this.mirror.syncFromGiga();
+    return { started: true };
+  }
+
+  /** GET /pdv/marcados/sync/status — contadores + último resultado. */
+  @Get('sync/status')
+  syncStatus(@Req() req: any) {
+    this.requireAdmin(req);
+    return this.mirror.status();
   }
 
   /**
