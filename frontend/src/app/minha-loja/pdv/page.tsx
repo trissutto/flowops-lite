@@ -6492,6 +6492,18 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
     // ── Quantidade total de itens ────────────────────────────────────
     const qtdItens = sale.items.reduce((s, it) => s + (Number(it.qty) || 0), 0);
 
+    // QR gerado AQUI (lib local 'qrcode', mesma da página DANFE) e embutido
+    // como <img data:>. O script antigo no HTML nunca rodava certo: referenciava
+    // qrUrl sem interpolação (ReferenceError engolido pelo catch → cupom SEM QR,
+    // caso Moema 21/07) e ainda dependia de CDN externo na janela do Electron.
+    let qrDataUrl = '';
+    if (qrUrl) {
+      try {
+        const QR = (await import('qrcode')).default;
+        qrDataUrl = await QR.toDataURL(qrUrl, { errorCorrectionLevel: 'M', margin: 0, width: 220 });
+      } catch { /* cupom sai sem QR, mas sai */ }
+    }
+
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>NFC-e ${sale.nfceNumber || ''}</title>
 <style>
   @page { size: 80mm auto; margin: 0; }
@@ -6501,7 +6513,11 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
     font-family: 'Courier New', monospace;
     font-size: 11px;
     font-weight: 600;  /* mais grosso que normal */
-    width: 78mm;
+    /* Papel 80mm tem área imprimível ~72mm — 78mm cortava a direita
+       (valores "comidos" no cupom de Moema 21/07; mesma correção da
+       página DANFE de reimpressão). */
+    width: 72mm;
+    max-width: 72mm;
     margin: 0;
     padding: 2mm;
     color: #000;
@@ -6589,8 +6605,8 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
   <div class="chave center">${sale.nfceChave || ''}</div>
   <div class="sep"></div>
 
-  <!-- QR Code -->
-  ${qrUrl ? `<canvas id="qr" width="180" height="180" style="display:block;margin:0 auto;image-rendering:pixelated;"></canvas>` : ''}
+  <!-- QR Code (imagem embutida — sem script, sem CDN, sem corrida) -->
+  ${qrDataUrl ? `<img src="${qrDataUrl}" width="180" height="180" class="qr" style="image-rendering:pixelated;" />` : ''}
 
   <!-- Protocolo -->
   <div class="center xs">Protocolo de autorização:</div>
@@ -6601,44 +6617,9 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
   <div class="center sm bold">Obrigado pela preferência!</div>
   <div class="center xs">Volte sempre 💖</div>
 
-  <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
-  <script>
-    (function() {
-      function renderAndPrint() {
-        try {
-          var canvas = document.getElementById('qr');
-          var url = JSON.stringify(qrUrl);
-          if (canvas && url && typeof qrcode === 'function') {
-            var qr = qrcode(0, 'M');
-            qr.addData(url);
-            qr.make();
-            var ctx = canvas.getContext('2d');
-            ctx.fillStyle = '#fff';
-            ctx.fillRect(0, 0, 180, 180);
-            ctx.fillStyle = '#000';
-            var n = qr.getModuleCount();
-            var size = Math.floor(180 / n);
-            var offset = Math.floor((180 - size * n) / 2);
-            for (var r = 0; r < n; r++) {
-              for (var col = 0; col < n; col++) {
-                if (qr.isDark(r, col)) {
-                  ctx.fillRect(offset + col * size, offset + r * size, size, size);
-                }
-              }
-            }
-          }
-        } catch (e) {
-          // Se gerar QR falhar, segue pra impressao (cupom sai sem QR, mas sai)
-        }
-        // SEM window.print() aqui (10/07): este HTML roda DENTRO da janela
-        // oculta do Electron, e quem imprime eh o main (silencioso, termica
-        // 80mm configurada). O window.print() extra abria o dialogo/preview
-        // por cima, com margens de A4 — e o cupom saia DESALINHADO.
-      }
-      if (document.readyState === 'complete') renderAndPrint();
-      else window.addEventListener('load', renderAndPrint);
-    })();
-  </script>
+  <!-- SEM script: QR já vem como <img data:> embutida (gerada antes do HTML).
+       SEM window.print() (10/07): quem imprime é o main do Electron
+       (silencioso, térmica 80mm configurada). -->
 </body></html>`;
 
     // NFC-e SEMPRE vai direto pra impressora fiscal térmica 80mm configurada.
