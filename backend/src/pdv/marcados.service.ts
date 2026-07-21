@@ -475,22 +475,29 @@ export class MarcadosService {
       };
     }
 
-    // 1. Estorna estoque Giga (peça volta pra loja)
-    const stockResult = await this.erp.increaseStock([
-      { sku: input.sku, qty: input.qty, storeCode: input.loja },
-    ]);
-    if (!stockResult.success) {
-      return {
-        ok: false,
-        error: `Falha ao estornar estoque Giga: ${stockResult.error}`,
-      };
-    }
-    const appliedCount = stockResult.applied?.length || 0;
-    if (appliedCount === 0) {
-      return {
-        ok: false,
-        error: `increaseStock retornou success mas 0 SKUs aplicados. Possível mismatch storeCode "${input.loja}" vs LOJA Giga.`,
-      };
+    // 1. Estorna estoque Giga (peça volta pra loja).
+    // Item AVULSO (sku MANUAL-...) não existe no estoque do Giga — pula o
+    // estorno e só remove a marcação (senão o increaseStock devolvia 0
+    // aplicados e travava a devolução do item de teste/avulso).
+    const isAvulso = String(input.sku).trim().toUpperCase().startsWith('MANUAL-');
+    let appliedCount = 0;
+    if (!isAvulso) {
+      const stockResult = await this.erp.increaseStock([
+        { sku: input.sku, qty: input.qty, storeCode: input.loja },
+      ]);
+      if (!stockResult.success) {
+        return {
+          ok: false,
+          error: `Falha ao estornar estoque Giga: ${stockResult.error}`,
+        };
+      }
+      appliedCount = stockResult.applied?.length || 0;
+      if (appliedCount === 0) {
+        return {
+          ok: false,
+          error: `increaseStock retornou success mas 0 SKUs aplicados. Possível mismatch storeCode "${input.loja}" vs LOJA Giga.`,
+        };
+      }
     }
 
     // 2. DELETE da linha caixa (tira do nome da pessoa marcada)
