@@ -83,6 +83,9 @@ export class MarcadosMirrorService {
         { maxRows: 50000, timeoutMs: 90000 },
       );
       const rows: any[] = r.rows || [];
+      if ((r as any).truncated) {
+        this.logger.warn(`[marcados-mirror] ATENÇÃO: caixa tem MAIS de ${rows.length} linhas MARCADO=SIM — import truncado`);
+      }
       const vivos = new Set<string>();
 
       let importados = 0;
