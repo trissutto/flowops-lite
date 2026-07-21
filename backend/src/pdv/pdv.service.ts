@@ -2287,7 +2287,15 @@ export class PdvService {
         // Já fechado num retry anterior (ou devolvido) — idempotente, segue.
       } else {
         falhas.push(`REG ${reg}: ${r.error || 'falha'}`);
+        continue;
       }
+      // Espelho nativo acompanha na hora (leituras já saem daqui)
+      try {
+        await (this.prisma as any).marcado.updateMany({
+          where: { registroGiga: BigInt(reg), status: 'ativo' },
+          data: { status: 'fechado', saleId: sale.id, fechadoAt: new Date() },
+        });
+      } catch { /* sync horário reconcilia */ }
     }
     if (falhas.length) return { ok: false, error: falhas.join(' | ') };
     return { ok: true };

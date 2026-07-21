@@ -220,6 +220,8 @@ export default function WincredMirrorPage() {
           pagas) — a ficha da cliente passa a mostrar o crediário completo. */}
       <CrediarioNativoBox />
 
+      <MarcadosNativoBox />
+
       {/* Teste rapido: peek de uma REF no Postgres */}
       <PeekRefBox />
 
@@ -563,6 +565,89 @@ function CrediarioNativoBox() {
             <><Loader2 className="w-4 h-4 animate-spin" /> Importando crediário...</>
           ) : (
             <><Play className="w-4 h-4" /> Importar crediário do Giga</>
+          )}
+        </button>
+      </div>
+      {err && <div className="mt-2 text-xs font-bold text-red-700">{err}</div>}
+    </div>
+  );
+}
+
+function MarcadosNativoBox() {
+  const [st, setSt] = useState<{
+    total: number; ativos: number; fechados: number; devolvidos: number; fechadosGiga: number;
+    porLoja: Array<{ loja: string; ativos: number }>;
+    running: boolean;
+    lastResult?: { at?: string; importados?: number; error?: string } | null;
+  } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = async () => {
+    try { setSt(await api('/pdv/marcados/sync/status')); } catch { /* mantém */ }
+  };
+  useEffect(() => { load(); }, []);
+
+  const rodar = async () => {
+    if (busy) return;
+    setBusy(true); setErr(null);
+    try {
+      await api('/pdv/marcados/sync', { method: 'POST' });
+      const t0 = Date.now();
+      while (Date.now() - t0 < 10 * 60 * 1000) {
+        await new Promise((res) => setTimeout(res, 4000));
+        const cur = await api<any>('/pdv/marcados/sync/status').catch(() => null);
+        if (cur) setSt(cur);
+        if (cur && !cur.running) {
+          if (cur.lastResult?.error) setErr(`Importação falhou: ${cur.lastResult.error}`);
+          break;
+        }
+      }
+    } catch (e: any) {
+      setErr(e?.message || 'Erro ao iniciar a importação');
+    } finally { setBusy(false); load(); }
+  };
+
+  return (
+    <div className="bg-gradient-to-br from-amber-50 to-yellow-50 border border-amber-200 rounded-xl p-5">
+      <div className="flex items-center gap-4 flex-wrap">
+        <div className="flex-1 min-w-[260px]">
+          <h2 className="font-bold text-amber-900 mb-1">Marcados nativos — provar em casa no Flow</h2>
+          <p className="text-xs text-amber-700">
+            Importa tudo que está <b>em marca</b> (caixa MARCADO=SIM) pro Flow. Depois disso as
+            consultas de marcados (PDV e retaguarda) leem daqui — sem Giga no caminho. Sync
+            automático de hora em hora + atualização na hora ao marcar/devolver/fechar.
+          </p>
+          {st && (
+            <div className="mt-2 flex gap-3 flex-wrap text-[11px] font-bold text-amber-800">
+              <span>{st.ativos.toLocaleString('pt-BR')} em marca</span>
+              <span className="text-emerald-700">· {st.fechados.toLocaleString('pt-BR')} fechados</span>
+              <span>· {st.devolvidos.toLocaleString('pt-BR')} devolvidos</span>
+              {st.fechadosGiga > 0 && <span className="text-slate-500">· {st.fechadosGiga} fechados no Giga</span>}
+              {st.lastResult?.at && (
+                <span className="text-amber-600 font-normal">· último: {new Date(st.lastResult.at).toLocaleString('pt-BR')}</span>
+              )}
+            </div>
+          )}
+          {st && st.porLoja?.length > 0 && (
+            <div className="mt-1.5 flex gap-1.5 flex-wrap">
+              {st.porLoja.map((l) => (
+                <span key={l.loja} className="text-[10px] font-bold bg-white border border-amber-200 rounded px-1.5 py-0.5 text-amber-800">
+                  LJ {l.loja}: {l.ativos}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+        <button
+          onClick={rodar}
+          disabled={busy || !!st?.running}
+          className="shrink-0 px-5 py-3 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold flex items-center gap-2 shadow disabled:opacity-50"
+        >
+          {busy || st?.running ? (
+            <><Loader2 className="w-4 h-4 animate-spin" /> Importando marcados...</>
+          ) : (
+            <><Play className="w-4 h-4" /> Importar marcados do Giga</>
           )}
         </button>
       </div>
