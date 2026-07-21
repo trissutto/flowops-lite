@@ -306,4 +306,89 @@ export class ClientesGigaService {
     const colunas = rows.length ? Object.keys(rows[0].rawJson || {}) : [];
     return { colunasGiga: colunas, amostra: rows };
   }
+
+  // ── CONSULTA DE CLIENTES (tela nativa — substitui a do Giga) ─────────────
+
+  /** Busca UNIFICADA por nome / CPF / fone / código. Agrupa por PESSOA
+   *  (personKey); ficha sem CPF vira "pessoa" própria (loja+codigo). */
+  async search(qRaw: string) {
+    const q = String(qRaw || '').trim();
+    if (q.length < 2) return { pessoas: [] };
+    const digits = q.replace(/\D/g, '');
+    const or: any[] = [{ nome: { contains: q, mode: 'insensitive' } }];
+    if (digits.length >= 3) {
+      or.push({ cpf: { contains: digits } });
+      or.push({ foneCel: { contains: digits } });
+      or.push({ foneRes: { contains: digits } });
+      or.push({ codigo: digits });
+    }
+    const fichas: any[] = await (this.prisma as any).gigaCliente.findMany({
+      where: { OR: or },
+      select: {
+        loja: true, codigo: true, nome: true, cpf: true, foneCel: true,
+        cidade: true, bloqueado: true, avaliacao: true, personKey: true, customerId: true,
+      },
+      orderBy: { nome: 'asc' },
+      take: 120,
+    });
+    // Agrupa por pessoa (personKey; sem CPF → cada ficha é uma entrada)
+    const porPessoa = new Map<string, any>();
+    for (const f of fichas) {
+      const key = f.personKey || `ficha:${f.loja}:${f.codigo}`;
+      let p = porPessoa.get(key);
+      if (!p) {
+        porPessoa.set(key, (p = {
+          personKey: f.personKey, nome: f.nome, cpf: f.cpf, foneCel: f.foneCel,
+          cidade: f.cidade, noCrm: !!f.customerId, fichas: [],
+        }));
+      }
+      p.noCrm = p.noCrm || !!f.customerId;
+      p.fichas.push({ loja: f.loja, codigo: f.codigo, bloqueado: f.bloqueado, avaliacao: f.avaliacao });
+    }
+    return { pessoas: Array.from(porPessoa.values()).slice(0, 60) };
+  }
+
+  /** FICHA COMPLETA da pessoa: todas as fichas dela (todas as lojas), o vínculo
+   *  CRM e as parcelas de crediário EM ABERTO (espelho wincred_movimento_aberto,
+   *  referenciadas por loja+codCliente). rawJson vai junto — a tela mostra TODOS
+   *  os campos originais do Giga. */
+  async pessoa(loja: string, codigo: string) {
+    const base: any = await (this.prisma as any).gigaCliente.findUnique({
+      where: { loja_codigo: { loja, codigo } },
+    });
+    if (!base) return { found: false };
+
+    const fichas: any[] = base.personKey
+      ? await (this.prisma as any).gigaCliente.findMany({
+          where: { personKey: base.personKey },
+          orderBy: { loja: 'asc' },
+        })
+      : [base];
+
+    // CRM (integração site+lojas+live)
+    const customerId = fichas.find((f) => f.customerId)?.customerId || null;
+    const customer = customerId
+      ? await (this.prisma as any).customer.findUnique({
+          where: { id: customerId },
+          select: { id: true, name: true, phone: true, whatsapp: true, email: true, igUsername: true, originStoreId: true },
+        }).catch(() => null)
+      : null;
+
+    // Parcelas em aberto (espelho do movimento) de TODAS as fichas da pessoa
+    const parcelas: any[] = await (this.prisma as any).wincredMovimentoAberto.findMany({
+      where: { OR: fichas.map((f) => ({ loja: f.loja, codCliente: f.codigo })) },
+      orderBy: { vencimento: 'asc' },
+      take: 200,
+    }).catch(() => []);
+    const totalAberto = parcelas.reduce((s, p) => s + (Number(p.valorParcela) || 0), 0);
+
+    return {
+      found: true,
+      pessoa: { nome: base.nome, cpf: base.cpf, personKey: base.personKey },
+      fichas,
+      customer,
+      parcelasAbertas: parcelas,
+      totalAbertoReais: Math.round(totalAberto * 100) / 100,
+    };
+  }
 }
