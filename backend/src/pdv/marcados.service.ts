@@ -222,34 +222,66 @@ export class MarcadosService {
   }> {
     if (!cpf) throw new BadRequestException('CPF obrigatório');
     const safeCpf = String(cpf).replace(/\D/g, '');
-
-    // 1. Detecta tabela de clientes (já existe esse helper no crediarios)
-    const cm = await this.crediarios.detectClientesTable();
-    if (!cm) {
-      throw new BadRequestException('Tabela de clientes não detectada no Giga');
-    }
-
-    // 2. Busca cliente — UMA query so com OR cobrindo 3 formatos possiveis
-    // (digito puro, formatado XXX.XXX.XXX-XX, e qualquer formato no banco
-    // via REPLACE). Antes eram 3 queries serial — agora 1 round-trip so.
-    // Economiza ~300-500ms na busca por cliente.
     const formattedCpf = safeCpf.length === 11
       ? `${safeCpf.slice(0,3)}.${safeCpf.slice(3,6)}.${safeCpf.slice(6,9)}-${safeCpf.slice(9)}`
       : safeCpf;
 
-    const sql = `
-      SELECT * FROM \`${cm.table}\`
-      WHERE \`CPF\` = '${safeCpf}'
-         OR \`CPF\` = '${formattedCpf}'
-         OR REPLACE(REPLACE(REPLACE(\`CPF\`,'.',''),'-',''),'/','') = '${safeCpf}'
-      LIMIT 1
-    `;
-    const r = await this.erp.runReadOnly(sql, { maxRows: 1, timeoutMs: 10000 });
-    const row: any = r.rows[0] || null;
+    // 2. Busca cliente — ESPELHO Postgres primeiro (giga_clientes, importado).
+    // O caminho antigo batia no Giga ao vivo e pendurava a tela quando o pool
+    // travava. Giga só entra como fallback (recém-cadastrado que o sync ainda
+    // não trouxe). Se a pessoa tem ficha em várias lojas, vale a com
+    // classificação 'A' e maior limite (o antigo LIMIT 1 pegava uma qualquer).
+    let row: any = null;
+    try {
+      const fichas: any[] = await (this.prisma as any).gigaCliente.findMany({
+        where: { OR: [{ personKey: `cpf:${safeCpf}` }, { cpf: safeCpf }, { cpf: formattedCpf }] },
+      });
+      if (fichas.length) {
+        const f = fichas.slice().sort((a, b) => {
+          const aA = String(a.avaliacao || '').trim().toUpperCase() === 'A' ? 1 : 0;
+          const bA = String(b.avaliacao || '').trim().toUpperCase() === 'A' ? 1 : 0;
+          if (aA !== bA) return bA - aA;
+          return Number(b.limiteCompras || 0) - Number(a.limiteCompras || 0);
+        })[0];
+        row = {
+          CODIGO: f.codigo,
+          NOME: f.nome,
+          CPF: f.cpf || safeCpf,
+          AVALIACAO: f.avaliacao || '',
+          LIMITECOMPRAS: Number(f.limiteCompras || 0),
+          ULTCOMPRA: (f.rawJson as any)?.ULTCOMPRA ?? null,
+        };
+      }
+    } catch (e: any) {
+      this.logger.warn(`[marcados] espelho giga_clientes falhou, caindo pro Giga: ${e?.message}`);
+    }
+
+    if (!row) {
+      const cm = await this.crediarios.detectClientesTable();
+      if (!cm) {
+        throw new BadRequestException('Tabela de clientes não detectada no Giga');
+      }
+      const sql = `
+        SELECT * FROM \`${cm.table}\`
+        WHERE \`CPF\` = '${safeCpf}'
+           OR \`CPF\` = '${formattedCpf}'
+           OR REPLACE(REPLACE(REPLACE(\`CPF\`,'.',''),'-',''),'/','') = '${safeCpf}'
+        LIMIT 1
+      `;
+      const r = await this.erp.runReadOnly(sql, { maxRows: 1, timeoutMs: 10000 });
+      const giga: any = r.rows[0] || null;
+      if (giga) {
+        row = {
+          ...giga,
+          CODIGO: cm.codCliente ? giga[cm.codCliente] : (giga.CODCLIENTE ?? giga.CODIGO ?? ''),
+        };
+      }
+    }
+
     if (!row) {
       return {
         permitido: false,
-        motivo: 'Cliente não encontrado no Giga (precisa cadastrar antes)',
+        motivo: 'Cliente não encontrado (nem no espelho, nem no Giga — precisa cadastrar antes)',
         cliente: null,
         marcadosAtivos: [],
         totalMarcadosAtivos: 0,
@@ -257,9 +289,7 @@ export class MarcadosService {
       };
     }
 
-    const codCliente = String(
-      cm.codCliente ? row[cm.codCliente] : (row.CODCLIENTE ?? row.CODIGO ?? ''),
-    ).trim();
+    const codCliente = String(row.CODIGO ?? '').trim();
     const classificacao = String(row.AVALIACAO || row.avaliacao || '').trim().toUpperCase();
     const limiteTotal = Number(row.LIMITECOMPRAS || row.limitecompras || 0);
 
@@ -316,75 +346,103 @@ export class MarcadosService {
    */
   async searchClientesByNameOrCpf(query: string): Promise<Array<{
     codCliente: string;
+    loja?: string;
     nome: string;
     cpf: string;
     classificacao: string;
     limiteTotal: number;
-    qtdMarcados: number;
-    totalMarcados: number;
+    qtdMarcados: number | null;
+    totalMarcados: number | null;
   }>> {
     const q = String(query || '').trim();
     if (q.length < 2) return [];
 
-    const cm = await this.crediarios.detectClientesTable();
-    if (!cm) return [];
-
     // Detecta se eh CPF (so digitos, 5+ chars) ou nome (com letras)
     const onlyDigits = q.replace(/\D/g, '');
-    const isCpfLike = onlyDigits.length >= 5 && /^\d+$/.test(q.replace(/[.\-]/g, ''));
+    const isCpfLike = onlyDigits.length >= 5 && /^\d+$/.test(q.replace(/[.\-\s/]/g, ''));
 
-    const nomeCol = cm.nome || 'NOME';
-    const cpfCol = cm.cpf || 'CPF';
-    const codCol = cm.codCliente || 'CODIGO';
+    // 1) ESPELHO Postgres (giga_clientes) — a versão antiga batia no Giga ao
+    //    vivo com INNER JOIN na caixa INTEIRA (full scan sem índice em
+    //    MARCADO) e PENDURAVA a busca por nome (caso ELISA 21/07, Indaiatuba).
+    //    O espelho responde na hora e não depende do Giga estar de pé.
+    const fichas: any[] = await (this.prisma as any).gigaCliente.findMany({
+      where: isCpfLike
+        ? { OR: [{ personKey: { contains: onlyDigits } }, { cpf: { contains: onlyDigits } }] }
+        : { nome: { contains: q, mode: 'insensitive' } },
+      select: {
+        loja: true, codigo: true, nome: true, cpf: true,
+        avaliacao: true, limiteCompras: true, personKey: true,
+      },
+      orderBy: [{ nome: 'asc' }],
+      take: 80,
+    });
 
-    // Valor da busca vai como PLACEHOLDER (?) — mysql2 escapa. Fim do risco de
-    // SQL injection (o replace(/'/g,"''") anterior nao cobria o bypass por
-    // backslash no MySQL). Nome de coluna/tabela vem da deteccao interna, nao
-    // do usuario.
-    // 1) Lista candidatos por nome/cpf; 2) filtra quem tem MARCADO='SIM' na caixa
-    let where: string;
-    const params: any[] = [];
-    if (isCpfLike) {
-      // Busca por CPF parcial (tolera com ou sem formatacao)
-      where = `(REPLACE(REPLACE(REPLACE(\`${cpfCol}\`,'.',''),'-',''),'/','') LIKE ?)`;
-      params.push(`%${onlyDigits}%`);
-    } else {
-      // Busca por nome (case-insensitive via UPPER)
-      where = `(UPPER(\`${nomeCol}\`) LIKE UPPER(?))`;
-      params.push(`%${q}%`);
+    // Dedup por PESSOA (mesma cliente tem ficha em várias lojas):
+    // vale a ficha com classificação 'A' / maior limite.
+    const porPessoa = new Map<string, any>();
+    for (const f of fichas) {
+      const key = f.personKey || `${f.loja}:${f.codigo}`;
+      const atual = porPessoa.get(key);
+      if (!atual) { porPessoa.set(key, { ...f }); continue; }
+      const novoA = String(f.avaliacao || '').trim().toUpperCase() === 'A';
+      const atualA = String(atual.avaliacao || '').trim().toUpperCase() === 'A';
+      const trocar = (novoA && !atualA) ||
+        (novoA === atualA && Number(f.limiteCompras || 0) > Number(atual.limiteCompras || 0));
+      if (trocar) porPessoa.set(key, { ...f, cpf: atual.cpf || f.cpf });
+      else if (!atual.cpf && f.cpf) atual.cpf = f.cpf;
     }
+    const lista = Array.from(porPessoa.values()).slice(0, 20);
+    if (!lista.length) return [];
 
-    const sql = `
-      SELECT c.\`${codCol}\` AS codCliente,
-             c.\`${nomeCol}\` AS nome,
-             c.\`${cpfCol}\` AS cpf,
-             c.AVALIACAO AS classificacao,
-             c.LIMITECOMPRAS AS limiteTotal,
-             COUNT(cx.REGISTRO) AS qtdMarcados,
-             COALESCE(SUM(cx.VALORTOTAL), 0) AS totalMarcados
-        FROM \`${cm.table}\` c
-        INNER JOIN caixa cx ON cx.CLIENTE = c.\`${codCol}\` AND UPPER(cx.MARCADO) = 'SIM'
-       WHERE ${where}
-       GROUP BY c.\`${codCol}\`, c.\`${nomeCol}\`, c.\`${cpfCol}\`, c.AVALIACAO, c.LIMITECOMPRAS
-       ORDER BY MAX(cx.DATA) DESC
-       LIMIT 20
-    `;
-
+    // 2) Badge "em marca": UMA agregada no Giga com teto DURO de 6s no app
+    //    (Promise.race) — se o Giga pendurar, a busca responde MESMO ASSIM
+    //    (badge vem null e a tela mostra "abre pra ver").
+    let agg = new Map<string, { qtd: number; total: number }>();
+    let aggOk = false;
     try {
-      const r = await this.erp.runReadOnly(sql, { maxRows: 20, timeoutMs: 10000 }, params);
-      return (r.rows || []).map((row: any) => ({
-        codCliente: String(row.codCliente || '').trim(),
-        nome: String(row.nome || '').trim(),
-        cpf: String(row.cpf || '').trim(),
-        classificacao: String(row.classificacao || '').trim().toUpperCase(),
-        limiteTotal: Number(row.limiteTotal) || 0,
-        qtdMarcados: Number(row.qtdMarcados) || 0,
-        totalMarcados: Math.round((Number(row.totalMarcados) || 0) * 100) / 100,
-      }));
+      const codes = Array.from(new Set(
+        lista.map((m) => Number(m.codigo)).filter((n) => Number.isFinite(n) && n > 0),
+      ));
+      if (codes.length) {
+        const p = this.erp.runReadOnly(
+          `SELECT CLIENTE, COUNT(*) AS qtd, COALESCE(SUM(VALORTOTAL),0) AS total
+             FROM caixa
+            WHERE UPPER(MARCADO) = 'SIM' AND CLIENTE IN (${codes.join(',')})
+            GROUP BY CLIENTE`,
+          { maxRows: 100, timeoutMs: 5000 },
+        );
+        const r: any = await Promise.race([
+          p.catch(() => null),
+          new Promise((res) => setTimeout(res, 6000, null)),
+        ]);
+        if (r?.rows) {
+          aggOk = true;
+          agg = new Map(r.rows.map((x: any) => [
+            String(Number(x.CLIENTE)),
+            { qtd: Number(x.qtd) || 0, total: Number(x.total) || 0 },
+          ]));
+        }
+      }
     } catch (e: any) {
-      this.logger.warn(`[marcados] searchClientesByNameOrCpf falhou: ${e?.message}`);
-      return [];
+      this.logger.warn(`[marcados] agregada de marcados falhou (segue sem badge): ${e?.message}`);
     }
+
+    // Quem tem marcado aparece primeiro (era o filtro da versão antiga)
+    const out = lista.map((m) => {
+      const a = agg.get(String(Number(m.codigo)));
+      return {
+        codCliente: String(m.codigo || '').trim(),
+        loja: String(m.loja || ''),
+        nome: String(m.nome || '').trim(),
+        cpf: String(m.cpf || '').trim(),
+        classificacao: String(m.avaliacao || '').trim().toUpperCase(),
+        limiteTotal: Number(m.limiteCompras) || 0,
+        qtdMarcados: aggOk ? (a?.qtd ?? 0) : null,
+        totalMarcados: aggOk ? Math.round((a?.total ?? 0) * 100) / 100 : null,
+      };
+    });
+    out.sort((a, b) => (b.totalMarcados || 0) - (a.totalMarcados || 0));
+    return out;
   }
 
   /**
