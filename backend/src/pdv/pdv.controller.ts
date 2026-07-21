@@ -641,6 +641,17 @@ export class PdvController {
   }
 
   /**
+   * POST /pdv/sales/:id/frete { valor }
+   * FRETE da venda online — soma no que a cliente paga, fora do total de
+   * produtos (faturamento/comissão/NFC-e/Giga não veem frete).
+   */
+  @Post('sales/:id/frete')
+  setFrete(@Req() req: any, @Param('id') id: string, @Body() body: { valor: number }) {
+    this.requireRole(req);
+    return this.svc.setFrete({ saleId: id, valor: Number(body?.valor) });
+  }
+
+  /**
    * POST /pdv/sales/:id/payments { method, valor, details? }
    * Adiciona pagamento parcial à venda (split payment).
    */

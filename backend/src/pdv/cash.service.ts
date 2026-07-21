@@ -54,6 +54,9 @@ export class CashService {
     let totalVendas = 0;
     let totalMarcados = 0;
     let qtdMarcados = 0;
+    // FRETE da venda online: a cliente paga junto (está nos payments), mas
+    // NÃO é produto — linha própria no fechamento, fora do faturamento.
+    let totalFrete = 0;
     const byMethod: Record<string, number> = {
       dinheiro: 0,
       pix: 0,
@@ -150,6 +153,9 @@ export class CashService {
       totalVendaOnline: byMethod.venda_online,
       totalValeTroca: byMethod.vale_troca,
       totalOutros: byMethod.outros,
+      // FRETE cobrado nas vendas online da sessão — já incluso nos valores
+      // recebidos acima (payments), destacado pra sair do "produtos"
+      totalFrete,
       totalMarcados,
       qtdMarcados,
       totalSangrias,
@@ -234,6 +240,7 @@ export class CashService {
       OUTROS: mkSlot(),
     };
     let totalVendas = 0;
+    let totalFrete = 0; // frete das vendas online — destacado, fora dos produtos
     const qtdVendas = sales.length;
 
     const bandeiraMap: Record<string, string> = {
@@ -265,6 +272,7 @@ export class CashService {
 
     for (const s of sales as any[]) {
       totalVendas += Number(s.total) || 0;
+      totalFrete += Number(s.frete) || 0;
       for (const p of s.payments || []) {
         const method = String(p.method || '').toLowerCase();
         const valor = Number(p.valor) || 0;
@@ -441,6 +449,9 @@ export class CashService {
       },
       resumo: {
         totalVendas,
+        // FRETE das vendas online — já dentro dos valores recebidos
+        // (payments), destacado pra ficar FORA do total de produtos
+        totalFrete,
         totalDinheiro: totais.DINHEIRO.valor,
         totalPix: totais.PIX.valor,
         totalCrediario: totais.CREDIARIO.valor,
@@ -711,6 +722,7 @@ export class CashService {
             totalCartaoDebito: t.totalCartaoDebito,
             totalCrediario: t.totalCrediario,
             totalVendaOnline: t.totalVendaOnline,
+            totalFrete: (t as any).totalFrete || 0,
             totalValeTroca: t.totalValeTroca,
             totalSangrias: t.totalSangrias,
             totalSuprimentos: t.totalSuprimentos,
@@ -849,6 +861,7 @@ export class CashService {
         let totalMarcados = 0;
         let qtdMarcados = 0;
         let qtdVendasReais = 0;
+        let totalFrete = 0; // frete das vendas online — fora dos produtos
         let totalDinheiro = 0, totalPix = 0, totalCartaoCredito = 0, totalCartaoDebito = 0, totalCrediario = 0, totalValeTroca = 0, totalVendaOnline = 0;
         const ranking: Record<string, { nome: string; qtd: number; total: number }> = {};
 
@@ -861,6 +874,7 @@ export class CashService {
             continue;
           }
           totalVendas += Number(sale.total) || 0;
+          totalFrete += Number(sale.frete) || 0;
           qtdVendasReais += 1;
           const nome = String(sale.sellerName || sale.vendedorName || 'Sem vendedora').trim();
           if (!ranking[nome]) ranking[nome] = { nome, qtd: 0, total: 0 };
@@ -1037,6 +1051,7 @@ export class CashService {
             totalCrediario,
             totalValeTroca,
             totalVendaOnline,
+            totalFrete,
             totalMarcados,
             qtdMarcados,
             totalSangrias,

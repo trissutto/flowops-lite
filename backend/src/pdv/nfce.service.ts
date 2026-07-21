@@ -491,7 +491,21 @@ export class NfceService {
     const vDescTot = vDescTotNum.toFixed(2);
     const vNF = vNFNum.toFixed(2);
 
-    const payments = (sale.payments || []) as any[];
+    // ⚠ FRETE da venda online fica FORA da NFC-e (não é produto): os payments
+    // somam total+frete, mas o vNF é só produtos — desconta o frete do maior
+    // pagamento pra soma dos <vPag> bater com o vNF (senão cStat de rejeição).
+    const freteFora = Math.round((Number((sale as any).frete) || 0) * 100) / 100;
+    let payments = ((sale.payments || []) as any[]).map((p: any) => ({ ...p }));
+    if (freteFora > 0 && payments.length > 0) {
+      let restante = freteFora;
+      for (const pg of [...payments].sort((a, b) => (Number(b.valor) || 0) - (Number(a.valor) || 0))) {
+        const tira = Math.min(Number(pg.valor) || 0, restante);
+        pg.valor = Math.round(((Number(pg.valor) || 0) - tira) * 100) / 100;
+        restante = Math.round((restante - tira) * 100) / 100;
+        if (restante <= 0) break;
+      }
+      payments = payments.filter((p: any) => (Number(p.valor) || 0) > 0);
+    }
     // CNPJ usado como "instituição de pagamento" no grupo <card>. Usa o CNPJ do
     // próprio emitente como genérico (comprovado em produção: SEFAZ ACEITA — a
     // nota 110 com esse formato passou no cartão; só caiu por outro motivo).

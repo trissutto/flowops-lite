@@ -553,6 +553,34 @@ export class PdvService {
   }
 
   /**
+   * FRETE da venda ONLINE — repasse de custo, não é produto do catálogo.
+   * Soma no que a cliente paga (payments cobrem total + frete) mas fica
+   * FORA de sale.total: faturamento, comissão, NFC-e e Giga seguem só com
+   * produtos. Fechamento do caixa mostra a linha FRETE separada.
+   */
+  async setFrete(input: { saleId: string; valor: number }) {
+    const sale = await this.getSale(input.saleId);
+    if (sale.status !== 'open') {
+      throw new BadRequestException(`Venda já está ${sale.status} — frete só em venda aberta.`);
+    }
+    const valor = Math.round((Number(input.valor) || 0) * 100) / 100;
+    if (valor < 0 || valor > 2000) {
+      throw new BadRequestException('Frete inválido (0 a R$ 2.000).');
+    }
+    // Se já tem pagamento lançado, mudar o frete bagunçaria a conta —
+    // vendedora remove os pagamentos e relança.
+    const jaPago = await this.sumPaidValue(input.saleId);
+    if (jaPago > 0) {
+      throw new BadRequestException('Remova os pagamentos antes de alterar o frete.');
+    }
+    const updated = await (this.prisma as any).pdvSale.update({
+      where: { id: sale.id },
+      data: { frete: valor },
+    });
+    return { ok: true, frete: valor, sale: updated };
+  }
+
+  /**
    * Adiciona um pagamento parcial à venda.
    * Pode ser um único pagamento (R$ 153,10 dinheiro) ou parte de split
    * (R$ 100 dinheiro + R$ 53,10 PIX em 2 chamadas).
@@ -673,9 +701,10 @@ export class PdvService {
       }
     }
 
-    // Não deixa pagar mais que o total
+    // Não deixa pagar mais que o total (+ frete da venda online, que a
+    // cliente paga junto mas fica fora do total de produtos)
     const jaPago = await this.sumPaidValue(input.saleId);
-    const restante = sale.total - jaPago;
+    const restante = sale.total + (Number(sale.frete) || 0) - jaPago;
     const valor = Math.round(input.valor * 100) / 100;
     if (valor > restante + 0.001) {
       throw new BadRequestException(
@@ -1907,17 +1936,20 @@ export class PdvService {
       );
     }
 
-    // Verifica que pago = total
+    // Verifica que pago = total + frete (frete da venda online é cobrado
+    // junto, mas NÃO compõe sale.total — que segue sendo só produtos)
     const jaPago = await this.sumPaidValue(sale.id);
-    if (Math.abs(jaPago - sale.total) > 0.01) {
+    const totalCobrado = Math.round((sale.total + (Number(sale.frete) || 0)) * 100) / 100;
+    if (Math.abs(jaPago - totalCobrado) > 0.01) {
       this.logger.warn(
         `[pdv] finalize REJEITADO (pago≠total): venda ${sale.id} ` +
-          `total=R$${Number(sale.total || 0).toFixed(2)} pago=R$${jaPago.toFixed(2)} ` +
+          `total=R$${Number(sale.total || 0).toFixed(2)} frete=R$${Number(sale.frete || 0).toFixed(2)} pago=R$${jaPago.toFixed(2)} ` +
           `payments=[${(payments as any[]).map((p: any) => `${p.method}:${Number(p.valor || 0).toFixed(2)}`).join(', ')}]`,
       );
       throw new BadRequestException(
-        `Total pago R$${jaPago.toFixed(2)} ≠ total venda R$${sale.total.toFixed(2)}. ` +
-          `Faltam R$${(sale.total - jaPago).toFixed(2)}.`,
+        `Total pago R$${jaPago.toFixed(2)} ≠ total a cobrar R$${totalCobrado.toFixed(2)}` +
+          `${Number(sale.frete) > 0 ? ` (produtos R$${sale.total.toFixed(2)} + frete R$${Number(sale.frete).toFixed(2)})` : ''}. ` +
+          `Faltam R$${(totalCobrado - jaPago).toFixed(2)}.`,
       );
     }
     // 0 pagamentos (troca par zerada) → 'troca_par' · 1 → método dele · N → "MULTIPLO"
@@ -2236,21 +2268,41 @@ export class PdvService {
         // Pagamentos: usa array payments (após split) ou fallback pro paymentMethod legado.
         // Quando método é credito/debito genérico, extrai a bandeira do details
         // (ex: method='credito' + details.bandeira='MASTERCARD' → mapeia como MASTERCARD).
-        pagamentos: payments.length > 0
-          ? payments.map((p: any) => {
-              let metodo = String(p.method || '');
-              const generico = metodo === 'credito' || metodo === 'debito' || metodo === 'cartao';
-              if (generico && p.details) {
-                try {
-                  const det = typeof p.details === 'string' ? JSON.parse(p.details) : p.details;
-                  if (det?.bandeira) {
-                    metodo = String(det.bandeira); // MASTERCARD, VISA, ELO etc.
-                  }
-                } catch { /* ignora details inválido */ }
-              }
-              return { metodo, valor: Number(p.valor) || 0 };
-            })
-          : [{ metodo: finalMethod, valor: sale.total }],
+        // ⚠ FRETE FICA FORA DO GIGA (dono 21/07): o frete da venda online está
+        // dentro dos payments (cliente paga junto), mas NÃO pode entrar na
+        // caixa do Wincred (viraria faturamento bruto/royalties). Desconta o
+        // frete do MAIOR pagamento antes de mandar — a soma enviada volta a
+        // ser só produtos (= sale.total).
+        pagamentos: (() => {
+          const frete = Math.round((Number(sale.frete) || 0) * 100) / 100;
+          const mapped = payments.length > 0
+            ? payments.map((p: any) => {
+                let metodo = String(p.method || '');
+                const generico = metodo === 'credito' || metodo === 'debito' || metodo === 'cartao';
+                if (generico && p.details) {
+                  try {
+                    const det = typeof p.details === 'string' ? JSON.parse(p.details) : p.details;
+                    if (det?.bandeira) {
+                      metodo = String(det.bandeira); // MASTERCARD, VISA, ELO etc.
+                    }
+                  } catch { /* ignora details inválido */ }
+                }
+                return { metodo, valor: Number(p.valor) || 0 };
+              })
+            : [{ metodo: finalMethod, valor: sale.total }];
+          if (frete > 0 && payments.length > 0) {
+            let restante = frete;
+            // Desconta do maior pro menor (frete nunca deve zerar tudo — a
+            // soma dos payments é total+frete, então sobra exatamente total)
+            for (const pg of [...mapped].sort((a, b) => b.valor - a.valor)) {
+              const tira = Math.min(pg.valor, restante);
+              pg.valor = Math.round((pg.valor - tira) * 100) / 100;
+              restante = Math.round((restante - tira) * 100) / 100;
+              if (restante <= 0) break;
+            }
+          }
+          return mapped.filter((pg) => pg.valor > 0);
+        })(),
         clienteCode: 0,
         clienteCpf: sale.customerCpf || undefined,
         nomeCliente: sale.customerName || undefined,

@@ -454,6 +454,10 @@ export default function SuperPainelCaixas() {
               {(() => {
                 const c: any = data.consolidado;
                 const valeTroca = c.totalValeTroca || 0;
+                // FRETE das vendas online: está DENTRO do recebido (payments),
+                // mas fora do vendido (produtos) — soma no vendido pra conta
+                // bater, com o valor destacado na etiqueta.
+                const freteCobrado = c.totalFrete || 0;
                 const recebido =
                   (c.totalDinheiro || 0) +
                   (c.totalPix || 0) +
@@ -461,7 +465,7 @@ export default function SuperPainelCaixas() {
                   (c.totalCartaoDebito || 0) +
                   (c.totalCrediario || 0) +
                   (c.totalVendaOnline || 0);
-                const vendidoLiquido = (c.totalVendas || 0) - valeTroca;
+                const vendidoLiquido = (c.totalVendas || 0) - valeTroca + freteCobrado;
                 const diff = Number((vendidoLiquido - recebido).toFixed(2));
                 const bate = Math.abs(diff) < 0.02;
                 return (
@@ -477,6 +481,9 @@ export default function SuperPainelCaixas() {
                       <span>Vendido <b>{brl(vendidoLiquido)}</b></span>
                       {valeTroca > 0 && (
                         <span className="text-[10px] opacity-80">({brl(c.totalVendas)} − vale {brl(valeTroca)})</span>
+                      )}
+                      {freteCobrado > 0 && (
+                        <span className="text-[10px] opacity-80">(+ FRETE {brl(freteCobrado)} — fora do faturamento)</span>
                       )}
                       <span className="opacity-70">vs</span>
                       <span>Recebido <b>{brl(recebido)}</b></span>
@@ -767,6 +774,8 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo }: { lo
             Click leva pra /produtos-vendidos com filtro de data + loja. */}
         {t.totalVendas > 0 && (() => {
           const valeTroca = (t as any).totalValeTroca || 0;
+          // Frete das vendas online: dentro do recebido, fora dos produtos
+          const freteCobrado = (t as any).totalFrete || 0;
           const somaModalidades =
             (t.totalDinheiro || 0) +
             (t.totalPix || 0) +
@@ -774,7 +783,7 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo }: { lo
             (t.totalCartaoDebito || 0) +
             (t.totalCrediario || 0) +
             ((t as any).totalVendaOnline || 0);
-          const vendidoLiquido = (t.totalVendas || 0) - valeTroca;
+          const vendidoLiquido = (t.totalVendas || 0) - valeTroca + freteCobrado;
           const diff = Number((vendidoLiquido - somaModalidades).toFixed(2));
           const bate = Math.abs(diff) < 0.02;
           const concUrl = `/retaguarda/produtos-vendidos?storeCode=${encodeURIComponent(loja.storeCode)}${dateFrom ? `&from=${dateFrom}` : ''}${dateTo ? `&to=${dateTo}` : ''}`;
@@ -795,6 +804,9 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo }: { lo
                 <span className="font-mono">{brl(vendidoLiquido)}</span>
                 {valeTroca > 0 && (
                   <span className="opacity-60 text-[10px]">(vale −{brl(valeTroca)})</span>
+                )}
+                {freteCobrado > 0 && (
+                  <span className="opacity-60 text-[10px]">(frete +{brl(freteCobrado)})</span>
                 )}
                 <span className="opacity-60">vs</span>
                 <span className="font-mono">{brl(somaModalidades)}</span>

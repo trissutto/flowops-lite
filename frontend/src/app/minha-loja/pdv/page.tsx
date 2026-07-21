@@ -3980,7 +3980,14 @@ function PaymentModal({
   // Lista de pagamentos parciais já adicionados
   const [payments, setPayments] = useState(initialPayments || []);
   const jaPago = payments.reduce((s, p) => s + p.valor, 0);
-  const restante = Math.max(0, Math.round((total - jaPago) * 100) / 100);
+  // FRETE da venda ONLINE — a cliente paga junto (soma no total a cobrar),
+  // mas fica FORA do total de produtos/faturamento/NFC-e/Giga (dono 21/07).
+  const [freteStr, setFreteStr] = useState('');
+  const freteNum = (() => {
+    const n = Number((freteStr || '0').replace(/\./g, '').replace(',', '.'));
+    return isNaN(n) || n < 0 ? 0 : Math.round(n * 100) / 100;
+  })();
+  const restante = Math.max(0, Math.round((total + freteNum - jaPago) * 100) / 100);
   const pago100 = restante < 0.01;
   // Auto-seleciona quando filtro tem só 1 método (PIX, crediario) OU quando
   // veio um presetMethod dos atalhos rápidos (MASTERCARD/VISANET/REDESHOP/...).
@@ -4135,6 +4142,12 @@ function PaymentModal({
   // VENDA ONLINE — sub-tipo (PIX direto ou Link externo). Vendedora informa
   // só pra ter no histórico. Sem geração de cobrança, sem NFC-e automática.
   const [vendaOnlineTipo, setVendaOnlineTipo] = useState<'pix' | 'link' | 'pagarme_link' | null>(null);
+  // Saiu da venda online → zera o frete (o valor só existe nesse fluxo;
+  // sem isso o restante ficaria inflado numa forma que não cobra frete)
+  useEffect(() => {
+    if (selected !== 'venda_online' && freteStr) setFreteStr('');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected]);
   // Estado do Link Pagar.me gerado (URL + status)
   const [pagarmeLink, setPagarmeLink] = useState<{
     pagarmeOrderId: string;
@@ -4251,6 +4264,21 @@ function PaymentModal({
     if (selected === 'dinheiro' && recebidoNum > 0 && recebidoNum < valor) {
       toast('warning', 'Valor recebido insuficiente', `Recebido ${brl(recebidoNum)} é menor que ${brl(valor)}`);
       return;
+    }
+
+    // FRETE da venda online: grava na venda ANTES do pagamento (o backend
+    // valida pago = produtos + frete). Só no 1º pagamento — com pagamento
+    // lançado o backend bloqueia alteração de frete.
+    if (selected === 'venda_online' && jaPago === 0) {
+      try {
+        await api(`/pdv/sales/${saleId}/frete`, {
+          method: 'POST',
+          body: JSON.stringify({ valor: freteNum }),
+        });
+      } catch (e: any) {
+        toast('error', 'Falha ao gravar o frete', 'Confira o valor e tente de novo.');
+        return;
+      }
     }
 
     const details: any = {};
@@ -5335,6 +5363,30 @@ function PaymentModal({
                 </span>
               </button>
             </div>
+            {/* FRETE — cobrado junto da cliente, FORA do faturamento de produtos */}
+            <div className="border border-teal-200 bg-teal-50/50 rounded-lg p-2 space-y-1">
+              <label className="text-[10px] text-teal-800 uppercase font-bold tracking-wider">
+                Frete (R$) — opcional
+              </label>
+              <input
+                inputMode="decimal"
+                className="w-full px-3 py-2 rounded border border-teal-300 text-sm font-bold"
+                placeholder="0,00"
+                value={freteStr}
+                onChange={(e) => setFreteStr(e.target.value)}
+                disabled={jaPago > 0}
+              />
+              <div className="text-[10px] text-teal-700 leading-snug">
+                Soma no valor que a cliente paga e na conferência do caixa, mas fica{' '}
+                <b>separado dos produtos</b> (fora do faturamento/fechamento mensal).
+                {freteNum > 0 && (
+                  <div className="mt-0.5 font-bold text-teal-900">
+                    Produtos {brl(total)} + frete {brl(freteNum)} = a cobrar {brl(total + freteNum)}
+                  </div>
+                )}
+              </div>
+            </div>
+
             {!customerCpf && (
               <div className="bg-rose-50 border border-rose-300 text-rose-800 text-xs rounded p-2 font-semibold">
                 ⚠ CPF do cliente é obrigatório. Aperte F5 pra identificar.

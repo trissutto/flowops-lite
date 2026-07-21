@@ -1355,6 +1355,11 @@ model PdvSale {
   subtotal        Float    @default(0)
   desconto        Float    @default(0)
   total           Float    @default(0)
+  // FRETE da venda ONLINE (WhatsApp/Instagram) — repasse de custo, NÃO é
+  // produto: fica FORA de total/faturamento/comissão/NFC-e/Giga. A cliente
+  // paga junto (payments cobrem total + frete) e o fechamento do caixa
+  // mostra a linha FRETE separada. (dono 21/07)
+  frete           Float    @default(0)
   // Campanha promocional ATIVA (exclusiva — uma de cada vez)
   // Valores: 'YEAR_BASED' | 'FOUR_FOR_THREE' | 'NONE' (default)
   activePromotion String?  @map("active_promotion")
