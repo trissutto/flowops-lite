@@ -672,7 +672,10 @@ export class MarcadosService {
     dataFinal?: string;
     limit?: number;
   } = {}): Promise<any> {
-    const limit = Math.min(500, input.limit || 100);
+    // Teto: nativo aguenta MUITO mais (Postgres indexado); o cap de 500 valia
+    // pro full-scan do Giga e escondia clientes antigos (caso Itanhaém 21/07).
+    const limitGiga = Math.min(500, input.limit || 100);
+    const limit = Math.min(10000, input.limit || 100);
 
     // NATIVO primeiro — a versão Giga era full-scan da caixa POR REQUEST.
     if (await this.useNative()) {
@@ -684,11 +687,14 @@ export class MarcadosService {
           ...(input.dataFinal ? { lte: new Date(`${input.dataFinal}T23:59:59.999Z`) } : {}),
         };
       }
-      const nativos: any[] = await (this.prisma as any).marcado.findMany({
-        where,
-        orderBy: [{ dataMarcacao: 'desc' }, { createdAt: 'desc' }],
-        take: limit,
-      });
+      const [nativos, totalCount]: [any[], number] = await Promise.all([
+        (this.prisma as any).marcado.findMany({
+          where,
+          orderBy: [{ dataMarcacao: 'desc' }, { createdAt: 'desc' }],
+          take: limit,
+        }),
+        (this.prisma as any).marcado.count({ where }),
+      ]);
       // Nome na HORA pros que o sync ainda não enriqueceu (casamento
       // normalizado com giga_clientes — padding de zeros varia no Giga)
       let nomes: Map<string, { nome: string | null; cpf: string | null }> | null = null;
@@ -709,7 +715,7 @@ export class MarcadosService {
           || null,
         classificacao: null,
       }));
-      return { rows, total: rows.length, fonte: 'flow' };
+      return { rows, total: totalCount, truncado: totalCount > rows.length, fonte: 'flow' };
     }
     // Fallback GIGA ao vivo (espelho vazio / MARCADOS_NATIVE_READS=0)
     const where: string[] = [`UPPER(c.MARCADO) = 'SIM'`];
@@ -741,9 +747,9 @@ export class MarcadosService {
         ${joinClientes}
         WHERE ${where.join(' AND ')}
         ORDER BY c.DATA DESC, c.REGISTRO DESC
-        LIMIT ${limit}
+        LIMIT ${limitGiga}
       `;
-      const r = await this.erp.runReadOnly(sql, { maxRows: limit, timeoutMs: 15000 });
+      const r = await this.erp.runReadOnly(sql, { maxRows: limitGiga, timeoutMs: 15000 });
       return { rows: r.rows, total: r.rows.length, fonte: 'giga' };
     } catch (e: any) {
       // NUNCA 500 na tela — devolve vazio com aviso acionável.

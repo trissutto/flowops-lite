@@ -50,6 +50,7 @@ export default function RetaguardaMarcadosPage() {
   const [err, setErr] = useState<string | null>(null);
   // 'flow' = tabela nativa (instantâneo) · 'giga' = ao vivo no ERP (lento)
   const [fonte, setFonte] = useState<string | null>(null);
+  const [truncado, setTruncado] = useState(false);
   const [de, setDe] = useState('');
   const [ate, setAte] = useState('');
   const [loja, setLoja] = useState('');
@@ -62,13 +63,14 @@ export default function RetaguardaMarcadosPage() {
   const carregar = async (pDe = de, pAte = ate, pLoja = loja) => {
     setLoading(true); setErr(null);
     try {
-      const qs = new URLSearchParams({ limit: '500' });
+      const qs = new URLSearchParams({ limit: '10000' });
       if (pLoja) qs.set('loja', pLoja);
       if (pDe) qs.set('dataInicial', pDe);
       if (pAte) qs.set('dataFinal', pAte);
-      const r = await api<{ rows: Row[]; total: number; fonte?: string; error?: string }>(`/pdv/marcados?${qs.toString()}`);
+      const r = await api<{ rows: Row[]; total: number; truncado?: boolean; fonte?: string; error?: string }>(`/pdv/marcados?${qs.toString()}`);
       setRows(Array.isArray(r?.rows) ? r.rows : []);
       setFonte(r?.fonte || null);
+      setTruncado(!!r?.truncado);
       if (r?.error) setErr(r.error);
     } catch (e: any) {
       setErr(e?.message || 'Falha ao carregar (Giga pode estar lento) — tenta de novo');
@@ -213,9 +215,9 @@ export default function RetaguardaMarcadosPage() {
             uma vez — a tela passa a ler o Flow e responde na hora.
           </div>
         )}
-        {rows.length >= 500 && (
+        {(truncado || (fonte === 'giga' && rows.length >= 500)) && (
           <div className="rounded-lg bg-sky-50 border border-sky-200 px-3 py-2 text-xs text-sky-800">
-            Mostrando as 500 marcações mais recentes — use o filtro de data/loja pra fechar o recorte.
+            Mostrando as {rows.length.toLocaleString('pt-BR')} marcações mais recentes (tem mais além dessas) — use o filtro de data/loja pra fechar o recorte.
           </div>
         )}
 
