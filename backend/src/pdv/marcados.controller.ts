@@ -112,6 +112,7 @@ export class MarcadosController {
     @Query('dataInicial') dataInicial?: string,
     @Query('dataFinal') dataFinal?: string,
     @Query('limit') limit?: string,
+    @Query('status') status?: string,
   ) {
     this.requireRole(req);
     return this.svc.listAllMarcados({
@@ -119,6 +120,7 @@ export class MarcadosController {
       dataInicial,
       dataFinal,
       limit: limit ? Number(limit) : 100,
+      status,
     });
   }
 

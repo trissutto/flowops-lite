@@ -17,7 +17,7 @@ import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
   ArrowLeft, Search, Users, Loader2, Phone, MapPin, CreditCard,
-  ShieldAlert, ChevronDown, ChevronUp, BadgeCheck, Store, Pencil, UserPlus, X,
+  ShieldAlert, ChevronDown, ChevronUp, BadgeCheck, Store, Pencil, UserPlus, X, Tag,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -426,6 +426,10 @@ function FichaPessoa({ ficha, onVoltar, onReload }: { ficha: any; onVoltar: () =
 
       {/* HISTÓRICO COMPLETO — lojas + PDV + site + live + devoluções */}
       <HistoricoCard hist={ficha._hist} />
+
+      {/* HISTÓRICO DE MARCADOS — tudo que já esteve em marca (ativo/fechado/
+          devolvido/baixado com motivo+quem). Tabela nativa do Flow. */}
+      <MarcadosHistoricoCard base={ficha._base} />
 
       {/* Fichas por loja (limite/avaliação/pontos são POR LOJA no Giga) */}
       {fichas.map((f: any) => (
@@ -876,6 +880,100 @@ const ORIGEM_STYLE: Record<string, { label: string; cls: string }> = {
   LIVE: { label: 'Live', cls: 'bg-rose-50 border-rose-200 text-rose-700' },
   DEVOLUCAO: { label: 'Devolução', cls: 'bg-red-50 border-red-300 text-red-700' },
 };
+
+/** Histórico de MARCADOS da pessoa — carrega sob demanda (expande ao clicar). */
+function MarcadosHistoricoCard({ base }: { base: { loja: string; codigo: string } }) {
+  const [aberto, setAberto] = useState(false);
+  const [itens, setItens] = useState<any[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [statusF, setStatusF] = useState<string>('');
+
+  const BADGE: Record<string, { label: string; cls: string }> = {
+    ativo: { label: 'EM MARCA', cls: 'bg-amber-50 border-amber-300 text-amber-700' },
+    fechado: { label: 'VIROU VENDA', cls: 'bg-emerald-50 border-emerald-300 text-emerald-700' },
+    devolvido: { label: 'DEVOLVIDO', cls: 'bg-sky-50 border-sky-300 text-sky-700' },
+    baixado: { label: 'BAIXADO', cls: 'bg-rose-50 border-rose-300 text-rose-700' },
+    fechado_giga: { label: 'FECHADO NO GIGA', cls: 'bg-slate-100 border-slate-300 text-slate-600' },
+  };
+
+  const abrir = async () => {
+    setAberto(!aberto);
+    if (itens || loading || aberto) return;
+    setLoading(true);
+    try {
+      const r = await api<{ itens: any[] }>(
+        `/admin/clientes-giga/marcados-historico?loja=${encodeURIComponent(base.loja)}&codigo=${encodeURIComponent(base.codigo)}`,
+      );
+      setItens(r?.itens || []);
+    } catch { setItens([]); }
+    finally { setLoading(false); }
+  };
+
+  const visiveis = (itens || []).filter((i) => !statusF || i.status === statusF);
+  const contagens: Record<string, number> = {};
+  for (const i of itens || []) contagens[i.status] = (contagens[i.status] || 0) + 1;
+
+  return (
+    <div className="bg-white rounded-2xl border border-[#E7E2D8] shadow-sm overflow-hidden">
+      <button onClick={abrir} className="w-full px-5 py-3 flex items-center justify-between gap-2 hover:bg-[#FBF6E6]/50">
+        <h3 className="font-bold text-slate-800 flex items-center gap-2">
+          <Tag className="w-4 h-4 text-[#B8912B]" /> Histórico de marcados
+          {itens && <span className="text-xs font-normal text-slate-400">({itens.length} peça{itens.length !== 1 ? 's' : ''})</span>}
+        </h3>
+        <span className="text-xs text-slate-400">{aberto ? '▲ fechar' : '▼ abrir'}</span>
+      </button>
+      {aberto && (
+        <div className="border-t border-[#F1EDE3]">
+          {loading && <div className="py-6 text-center text-slate-400"><Loader2 className="w-5 h-5 animate-spin mx-auto" /></div>}
+          {itens && itens.length === 0 && (
+            <div className="py-6 text-center text-slate-400 text-sm">Nenhuma peça marcada no histórico dessa cliente.</div>
+          )}
+          {itens && itens.length > 0 && (
+            <>
+              <div className="px-5 py-2 flex gap-1.5 flex-wrap border-b border-[#F8F5EC]">
+                <button onClick={() => setStatusF('')}
+                  className={`rounded-full border px-2.5 py-0.5 text-[11px] font-bold ${!statusF ? 'bg-[#B8912B] border-[#B8912B] text-white' : 'border-[#E7E2D8] text-slate-500'}`}>
+                  Tudo ({itens.length})
+                </button>
+                {Object.entries(contagens).map(([st, n]) => (
+                  <button key={st} onClick={() => setStatusF(statusF === st ? '' : st)}
+                    className={`rounded-full border px-2.5 py-0.5 text-[11px] font-bold ${statusF === st ? 'bg-[#B8912B] border-[#B8912B] text-white' : 'border-[#E7E2D8] text-slate-500'}`}>
+                    {(BADGE[st]?.label || st)} ({n})
+                  </button>
+                ))}
+              </div>
+              <div className="overflow-x-auto max-h-80 overflow-y-auto">
+                <table className="w-full text-sm">
+                  <tbody>
+                    {visiveis.map((it, i) => {
+                      const b = BADGE[it.status] || BADGE.ativo;
+                      return (
+                        <tr key={it.registro || `f${i}`} className="border-b border-[#F8F5EC] last:border-b-0">
+                          <td className="px-5 py-1.5 text-xs text-slate-500 whitespace-nowrap">{it.data ? new Date(it.data).toLocaleDateString('pt-BR') : '—'}</td>
+                          <td className="px-2 py-1.5 text-slate-700">{it.descricao || it.sku}</td>
+                          <td className="px-2 py-1.5 text-right tabular-nums font-bold whitespace-nowrap">{brl(it.valorTotal)}</td>
+                          <td className="px-2 py-1.5 text-center text-xs font-bold text-slate-500">LJ {it.loja}</td>
+                          <td className="px-5 py-1.5 text-xs whitespace-nowrap">
+                            <span className={`inline-block rounded border px-1.5 py-0.5 text-[10px] font-bold ${b.cls}`}>{b.label}</span>
+                            {it.status === 'baixado' && (
+                              <div className="text-[10px] text-slate-500 mt-0.5">
+                                {it.baixadoAt ? new Date(it.baixadoAt).toLocaleDateString('pt-BR') : ''} · {it.baixaMotivo || ''}<br />{it.baixaPor || ''}
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function HistoricoCard({ hist }: { hist: any }) {
   const [filtro, setFiltro] = useState<string>('');

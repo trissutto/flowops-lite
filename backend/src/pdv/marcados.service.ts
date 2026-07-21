@@ -743,6 +743,8 @@ export class MarcadosService {
     dataInicial?: string;
     dataFinal?: string;
     limit?: number;
+    /** ativo (default) | fechado | devolvido | baixado | fechado_giga | todos — só no NATIVO */
+    status?: string;
   } = {}): Promise<any> {
     // Teto: nativo aguenta MUITO mais (Postgres indexado); o cap de 500 valia
     // pro full-scan do Giga e escondia clientes antigos (caso Itanhaém 21/07).
@@ -751,7 +753,9 @@ export class MarcadosService {
 
     // NATIVO primeiro — a versão Giga era full-scan da caixa POR REQUEST.
     if (await this.useNative()) {
-      const where: any = { status: 'ativo', isTraining: false };
+      const st = String(input.status || 'ativo').trim();
+      const where: any = { isTraining: false };
+      if (st !== 'todos') where.status = st;
       if (input.loja) where.storeCode = String(input.loja).replace(/[^0-9]/g, '').padStart(2, '0');
       if (input.dataInicial || input.dataFinal) {
         where.dataMarcacao = {
@@ -786,6 +790,14 @@ export class MarcadosService {
           || nomes?.get(`${normNum(n.storeCode)}|${normNum(n.codCliente)}`)?.nome
           || null,
         classificacao: null,
+        // Histórico: além dos ativos, a tela mostra o que aconteceu com cada peça
+        status: n.status,
+        fechadoAt: n.fechadoAt,
+        devolvidoAt: n.devolvidoAt,
+        baixadoAt: n.baixadoAt,
+        baixaMotivo: n.baixaMotivo,
+        baixaPor: n.baixaPor,
+        saleId: n.saleId,
       }));
       return { rows, total: totalCount, truncado: totalCount > rows.length, fonte: 'flow' };
     }

@@ -91,6 +91,14 @@ export class ClientesGigaController {
   }
 
   /** RESUMO da cliente: crediário, marcados AO VIVO, limite, cashback, pode marcar. */
+  /** Histórico COMPLETO de marcados da pessoa (ativos + fechados + devolvidos
+   *  + baixados com motivo/quem) — tabela nativa `marcados`. */
+  @Get('marcados-historico')
+  marcadosHistorico(@Req() req: any, @Query('loja') loja?: string, @Query('codigo') codigo?: string) {
+    this.requireAdmin(req);
+    return this.svc.marcadosHistorico(String(loja || ''), String(codigo || ''));
+  }
+
   @Get('resumo')
   resumo(@Req() req: any, @Query('loja') loja?: string, @Query('codigo') codigo?: string) {
     this.requireAdmin(req);
