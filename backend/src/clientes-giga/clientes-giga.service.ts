@@ -112,6 +112,15 @@ export class ClientesGigaService {
 
   // ── sync ─────────────────────────────────────────────────────────────────
 
+  /** Dispara o sync em BACKGROUND (mesmo padrão do wincred-mirror: o POST
+   *  responde na hora e a tela faz poll do status — importação de 100k+ linhas
+   *  estouraria o timeout do proxy se fosse síncrona). */
+  startBackground(): { started: boolean; alreadyRunning: boolean } {
+    if (this.running) return { started: false, alreadyRunning: true };
+    void this.syncAll();
+    return { started: true, alreadyRunning: false };
+  }
+
   async syncAll(): Promise<{ ok: boolean; total: number; paginas: number; erro?: string }> {
     if (this.running) return { ok: false, total: 0, paginas: 0, erro: 'sync já em andamento' };
     this.running = true;

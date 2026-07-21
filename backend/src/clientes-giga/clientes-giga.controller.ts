@@ -19,10 +19,11 @@ export class ClientesGigaController {
     }
   }
 
+  /** Dispara em background — responde na hora; acompanhar em GET /status. */
   @Post('sync')
   sync(@Req() req: any) {
     this.requireAdmin(req);
-    return this.svc.syncAll();
+    return this.svc.startBackground();
   }
 
   @Get('status')

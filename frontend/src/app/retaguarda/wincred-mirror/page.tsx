@@ -212,6 +212,10 @@ export default function WincredMirrorPage() {
         </button>
       </div>
 
+      {/* Importação COMPLETA da tabela clientes do Giga (base da consulta
+          nativa de clientes + crediário nativo). Botão pedido do dono 21/07. */}
+      <ClientesGigaBox />
+
       {/* Teste rapido: peek de uma REF no Postgres */}
       <PeekRefBox />
 
@@ -393,6 +397,86 @@ function FixDataAltNativoBox() {
           ✅ {done.atualizados} linha(s) corrigidas na tabela nativa. Rebipe a peça pra conferir a promo.
         </div>
       )}
+    </div>
+  );
+}
+
+/* ─── Importação COMPLETA da tabela `clientes` do Giga ───────────────────────
+   Base da Consulta de Clientes nativa + crediário nativo (sair da Giga).
+   POST dispara em background; a caixa faz poll do status a cada 4s. */
+function ClientesGigaBox() {
+  const [st, setSt] = useState<{
+    total: number; comCpf: number; pessoasUnicas: number; vinculadosAoCrm: number;
+    ultimoSync: string | null; rodando: boolean;
+    ultimoResultado?: { erro?: string } | null;
+  } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = async () => {
+    try { setSt(await api('/admin/clientes-giga/status')); } catch { /* mantém último */ }
+  };
+  useEffect(() => { load(); }, []);
+
+  const rodar = async () => {
+    if (busy) return;
+    setBusy(true); setErr(null);
+    try {
+      const r = await api<{ started: boolean; alreadyRunning: boolean }>(
+        '/admin/clientes-giga/sync', { method: 'POST' },
+      );
+      if (!r.started && r.alreadyRunning) setErr('Já tem uma importação rodando — acompanhando.');
+      // Poll até terminar (guarda de 15min)
+      const t0 = Date.now();
+      while (Date.now() - t0 < 15 * 60 * 1000) {
+        await new Promise((res) => setTimeout(res, 4000));
+        await load();
+        const cur = await api<any>('/admin/clientes-giga/status').catch(() => null);
+        if (cur && !cur.rodando) {
+          setSt(cur);
+          if (cur.ultimoResultado?.erro) setErr(`Importação falhou: ${cur.ultimoResultado.erro}`);
+          break;
+        }
+      }
+    } catch (e: any) {
+      setErr(e?.message || 'Erro ao iniciar a importação');
+    } finally {
+      setBusy(false);
+      load();
+    }
+  };
+
+  return (
+    <div className="bg-gradient-to-br from-emerald-50 to-teal-50 border border-emerald-200 rounded-xl p-5">
+      <div className="flex items-center gap-4 flex-wrap">
+        <div className="flex-1 min-w-[260px]">
+          <h2 className="font-bold text-emerald-900 mb-1">Clientes do Giga — importação completa</h2>
+          <p className="text-xs text-emerald-700">
+            Traz a tabela <b>clientes</b> inteira (todos os campos e lojas) pro Flow e vincula ao CRM por CPF.
+            Base da Consulta de Clientes nativa. Demora alguns minutos na primeira carga.
+          </p>
+          {st && (
+            <div className="mt-2 flex gap-3 flex-wrap text-[11px] font-bold text-emerald-800">
+              <span>{st.total.toLocaleString('pt-BR')} fichas</span>
+              <span>· {st.pessoasUnicas.toLocaleString('pt-BR')} pessoas (CPF)</span>
+              <span>· {st.vinculadosAoCrm.toLocaleString('pt-BR')} no CRM</span>
+              {st.ultimoSync && <span className="text-emerald-600 font-normal">· último: {new Date(st.ultimoSync).toLocaleString('pt-BR')}</span>}
+            </div>
+          )}
+        </div>
+        <button
+          onClick={rodar}
+          disabled={busy || !!st?.rodando}
+          className="shrink-0 px-5 py-3 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold flex items-center gap-2 shadow disabled:opacity-50"
+        >
+          {busy || st?.rodando ? (
+            <><Loader2 className="w-4 h-4 animate-spin" /> Importando clientes...</>
+          ) : (
+            <><Play className="w-4 h-4" /> Importar clientes do Giga</>
+          )}
+        </button>
+      </div>
+      {err && <div className="mt-2 text-xs font-bold text-red-700">{err}</div>}
     </div>
   );
 }
