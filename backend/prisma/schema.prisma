@@ -3621,6 +3621,89 @@ model CrediarioParcela {
   @@map("crediario_parcelas")
 }
 
+/// ══════════ CONVÊNIO (sindicato — dono 21/07) ══════════
+/// "Cartão de crédito" da loja conveniada (ex.: Indaiatuba × sindicato):
+/// associado compra sem pagar na hora; a loja FATURA O SINDICATO no dia de
+/// fechamento (consolidado, por associado); sindicato paga e desconta em
+/// folha. Limite POR CICLO: disponível = limite − compras ainda não faturadas
+/// (fechou a fatura → sindicato assume → limite renova).
+model Convenio {
+  id            String   @id @default(uuid())
+  nome          String   @db.VarChar(80)
+  storeCode     String   @map("store_code") @db.VarChar(4)  // SÓ vale nesta loja
+  diaFechamento Int      @default(20) @map("dia_fechamento")
+  ativo         Boolean  @default(true)
+  obs           String?  @db.VarChar(300)
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  membros ConvenioMembro[]
+  compras ConvenioCompra[]
+  faturas ConvenioFatura[]
+
+  @@index([storeCode, ativo])
+  @@map("convenios")
+}
+
+/// Associado — SÓ a lista que o sindicato manda (nome + limite). Sem ficha.
+model ConvenioMembro {
+  id          String   @id @default(uuid())
+  convenioId  String   @map("convenio_id")
+  nome        String   @db.VarChar(120)
+  matricula   String?  @db.VarChar(30)
+  limiteCents Int      @default(0) @map("limite_cents")
+  ativo       Boolean  @default(true)
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  convenio Convenio         @relation(fields: [convenioId], references: [id], onDelete: Cascade)
+  compras  ConvenioCompra[]
+
+  @@index([convenioId, ativo])
+  @@index([convenioId, nome])
+  @@map("convenio_membros")
+}
+
+/// Compra no convênio (criada quando a venda PDV finaliza com pgto 'convenio').
+/// faturaId null = ciclo aberto (conta no limite do associado).
+model ConvenioCompra {
+  id         String   @id @default(uuid())
+  convenioId String   @map("convenio_id")
+  membroId   String   @map("membro_id")
+  storeCode  String   @map("store_code") @db.VarChar(4)
+  saleId     String?  @map("sale_id")
+  valorCents Int      @map("valor_cents")
+  faturaId   String?  @map("fatura_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  convenio Convenio        @relation(fields: [convenioId], references: [id], onDelete: Cascade)
+  membro   ConvenioMembro  @relation(fields: [membroId], references: [id])
+  fatura   ConvenioFatura? @relation(fields: [faturaId], references: [id])
+
+  @@index([convenioId, faturaId])
+  @@index([membroId, faturaId])
+  @@index([saleId])
+  @@map("convenio_compras")
+}
+
+/// Fatura mensal pro sindicato (consolidada, por associado no detalhe).
+model ConvenioFatura {
+  id         String    @id @default(uuid())
+  convenioId String    @map("convenio_id")
+  de         DateTime  @db.Date
+  ate        DateTime  @db.Date
+  totalCents Int       @default(0) @map("total_cents")
+  status     String    @default("aberta") // aberta | paga
+  geradaEm   DateTime  @default(now()) @map("gerada_em")
+  pagaEm     DateTime? @map("paga_em")
+  obs        String?   @db.VarChar(300)
+
+  convenio Convenio         @relation(fields: [convenioId], references: [id], onDelete: Cascade)
+  compras  ConvenioCompra[]
+
+  @@index([convenioId, status])
+  @@map("convenio_faturas")
+}
+
 /// Sequência de CÓDIGO pra cliente NOVO cadastrado no Flow (por loja).
 /// Começa em 500001 — faixa alta que NUNCA colide com a numeração do Giga
 /// (mesma ideia do EAN prefixo-8 dos produtos: o Flow é dono do código novo).

@@ -13,6 +13,7 @@ import { CashService } from './cash.service';
 import { NfceService } from './nfce.service';
 import { PromoConfigService } from '../promo-config/promo-config.service';
 import { AccessPolicyService } from '../access-policy/access-policy.service';
+import { ConveniosService } from '../convenios/convenios.service';
 import { validateMinLevel } from '../auth/auth-levels.util';
 import * as crypto from 'crypto';
 
@@ -42,6 +43,7 @@ export class PdvService {
     private readonly nfce: NfceService,
     private readonly promoConfig: PromoConfigService,
     private readonly accessPolicy: AccessPolicyService,
+    private readonly convenios: ConveniosService,
   ) {}
 
   /**
@@ -568,7 +570,7 @@ export class PdvService {
 
     const sale = await (this.prisma as any).pdvSale.findUnique({
       where: { id: input.saleId },
-      select: { id: true, status: true, total: true, customerCpf: true },
+      select: { id: true, status: true, total: true, customerCpf: true, storeCode: true },
     });
     if (!sale) throw new NotFoundException('Venda não encontrada');
     if (sale.status !== 'open') throw new BadRequestException('Venda já fechada');
@@ -576,6 +578,21 @@ export class PdvService {
     // Crediário precisa de cliente
     if (input.method === 'crediario' && !sale.customerCpf) {
       throw new BadRequestException('Crediário exige CPF do cliente');
+    }
+
+    // CONVÊNIO (sindicato): só na loja conveniada, associado ativo e dentro do
+    // limite do ciclo. Lança com a mensagem do limite se estourar.
+    if (input.method === 'convenio') {
+      const det = input.details || {};
+      if (!det.convenioId || !det.membroId) {
+        throw new BadRequestException('Convênio: selecione o associado');
+      }
+      await this.convenios.validarCompra({
+        convenioId: String(det.convenioId),
+        membroId: String(det.membroId),
+        storeCode: String(sale.storeCode || ''),
+        valorCents: Math.round(Number(input.valor) * 100),
+      });
     }
 
     // VENDA ONLINE — pagamento já recebido por fora (PIX direto / link externo).
@@ -2062,6 +2079,26 @@ export class PdvService {
       } else {
         await this.postFinalizeErpSync(sale, payments as any[], finalMethod);
       }
+    }
+
+    // CONVÊNIO — registra a(s) compra(s) do associado no ciclo (conta no
+    // limite e entra na fatura do sindicato). Idempotente por saleId+membro.
+    try {
+      const convenioPayments = (payments as any[]).filter((p: any) => p.method === 'convenio');
+      for (const p of convenioPayments) {
+        let det: any = null;
+        try { det = typeof p.details === 'string' ? JSON.parse(p.details) : p.details; } catch { /* ignora */ }
+        if (!det?.convenioId || !det?.membroId) continue;
+        await this.convenios.registrarCompra({
+          convenioId: String(det.convenioId),
+          membroId: String(det.membroId),
+          storeCode: String((sale as any).storeCode || ''),
+          saleId: sale.id,
+          valorCents: Math.round(Number(p.valor) * 100),
+        });
+      }
+    } catch (e: any) {
+      this.logger.error(`[pdv] falha ao registrar compra de convênio da venda ${sale.id}: ${e?.message || e}`);
     }
 
     // VALE-TROCA — marca como USED todo pdvReturn cujo creditoCode foi usado

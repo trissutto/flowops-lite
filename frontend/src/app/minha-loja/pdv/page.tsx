@@ -30,7 +30,7 @@ import {
   Send, Mail, MessageSquare, FileText, RotateCcw, History, Percent,
   Clock, ChevronRight, Pause, DollarSign, ArrowRightLeft, Search, Sparkles,
   Receipt, Globe, Shuffle, Tag, Wallet, ArrowUpRight, Printer,
-  RefreshCw,
+  RefreshCw, Handshake,
   type LucideIcon,
 } from 'lucide-react';
 import { api } from '@/lib/api';
@@ -4014,6 +4014,28 @@ function PaymentModal({
   const [valorParcial, setValorParcial] = useState('');
   const [addingPayment, setAddingPayment] = useState(false);
 
+  // ── CONVÊNIO (sindicato) ── a forma só aparece se a loja tem convênio ativo.
+  // Associado vem da lista que o sindicato mandou (sem ficha de cliente).
+  const [convenioAtivo, setConvenioAtivo] = useState<{ id: string; nome: string } | null>(null);
+  const [convBusca, setConvBusca] = useState('');
+  const [convResultados, setConvResultados] = useState<any[]>([]);
+  const [convMembro, setConvMembro] = useState<any | null>(null);
+  useEffect(() => {
+    if (!storeCode) return;
+    api<any>(`/pdv/convenio/ativo?storeCode=${encodeURIComponent(storeCode)}`)
+      .then((c) => setConvenioAtivo(c && c.id ? c : null))
+      .catch(() => setConvenioAtivo(null));
+  }, [storeCode]);
+  useEffect(() => {
+    if (!convenioAtivo || selected !== 'convenio') return;
+    const t = setTimeout(() => {
+      api<any[]>(`/pdv/convenio/${convenioAtivo.id}/membros?q=${encodeURIComponent(convBusca)}`)
+        .then((r) => setConvResultados(Array.isArray(r) ? r : []))
+        .catch(() => setConvResultados([]));
+    }, 300);
+    return () => clearTimeout(t);
+  }, [convBusca, convenioAtivo, selected]);
+
   // ── Crediário ──
   // Entrada (pagamento avulso descontado do total antes de parcelar)
   const [credEntrada, setCredEntrada] = useState('');
@@ -4182,6 +4204,16 @@ function PaymentModal({
       toast('warning', 'Defina o primeiro vencimento');
       return;
     }
+    if (selected === 'convenio') {
+      if (!convMembro) {
+        toast('warning', 'Selecione o associado', 'Busque o nome na lista do convênio');
+        return;
+      }
+      if (Math.round(valor * 100) > (convMembro.disponivelCents ?? 0)) {
+        toast('error', 'Limite do convênio insuficiente', `Disponível pra ${convMembro.nome}: ${brl((convMembro.disponivelCents || 0) / 100)}`);
+        return;
+      }
+    }
     if (needsBandeira && !bandeira) {
       toast('warning', 'Escolha a bandeira', 'Visa, Master, Elo, Hipercard…');
       return;
@@ -4280,6 +4312,13 @@ function PaymentModal({
       const trocoP = recebidoNum > valor ? recebidoNum - valor : 0;
       details.recebido = recebidoNum || valor;
       details.troco = trocoP;
+    }
+    if (selected === 'convenio' && convMembro && convenioAtivo) {
+      details.convenioId = convenioAtivo.id;
+      details.convenioNome = convenioAtivo.nome;
+      details.membroId = convMembro.id;
+      details.membroNome = convMembro.nome;
+      if (convMembro.matricula) details.membroMatricula = convMembro.matricula;
     }
     if (selected === 'pix') {
       if (pixExterno) {
@@ -4874,6 +4913,8 @@ function PaymentModal({
     setParcelas(1);
     setValorParcial('');
     setEffectiveFilter('all');
+    setConvMembro(null);
+    setConvBusca('');
   };
 
   const canConfirm = useMemo(() => {
@@ -4884,8 +4925,9 @@ function PaymentModal({
     if (selected === 'dinheiro' && recebidoNum < restante) return false;
     if (needsBandeira && !bandeira) return false;
     if (selected === 'venda_online' && (!customerCpf || !vendaOnlineTipo)) return false;
+    if (selected === 'convenio' && !convMembro) return false;
     return true;
-  }, [selected, bandeira, needsBandeira, recebidoNum, restante, customerCpf, vendaOnlineTipo]);
+  }, [selected, bandeira, needsBandeira, recebidoNum, restante, customerCpf, vendaOnlineTipo, convMembro]);
 
   const confirm = async () => {
     if (!selected) return;
@@ -4906,6 +4948,17 @@ function PaymentModal({
       }
       if (!credVencto) {
         toast('warning', 'Defina o primeiro vencimento');
+        return;
+      }
+    }
+    if (selected === 'convenio') {
+      if (!convMembro) {
+        toast('warning', 'Selecione o associado do convênio');
+        return;
+      }
+      const cobrar = restante > 0 ? restante : total;
+      if (Math.round(cobrar * 100) > (convMembro.disponivelCents ?? 0)) {
+        toast('error', 'Limite do convênio insuficiente', `Disponível pra ${convMembro.nome}: ${brl((convMembro.disponivelCents || 0) / 100)}`);
         return;
       }
     }
@@ -4935,6 +4988,13 @@ function PaymentModal({
     if (selected === 'pix' && pixCharge) {
       details.pixTxid = pixCharge.txid;
       details.pixChave = pixCharge.chave;
+    }
+    if (selected === 'convenio' && convMembro && convenioAtivo) {
+      details.convenioId = convenioAtivo.id;
+      details.convenioNome = convenioAtivo.nome;
+      details.membroId = convMembro.id;
+      details.membroNome = convMembro.nome;
+      if (convMembro.matricula) details.membroMatricula = convMembro.matricula;
     }
     if (needsBandeira) details.bandeira = bandeira;
 
@@ -5148,7 +5208,11 @@ function PaymentModal({
               )}
             </div>
             <div className="grid grid-cols-2 gap-2">
-              {PAYMENT_METHODS
+              {[
+                ...PAYMENT_METHODS,
+                // CONVÊNIO só aparece na loja que tem convênio ativo (ex.: Indaiatuba)
+                ...(convenioAtivo ? [{ id: 'convenio', label: 'Convênio', icon: Handshake } as any] : []),
+              ]
                 .filter((p) => {
                   if (effectiveFilter === 'all') return true;
                   if (effectiveFilter === 'pix') return p.id === 'pix';
@@ -5532,6 +5596,64 @@ function PaymentModal({
         })()}
 
         {/* CREDIÁRIO — banner pendências + entrada + primeiro vencimento */}
+        {/* ── CONVÊNIO: busca e seleção do associado (lista do sindicato) ── */}
+        {selected === 'convenio' && convenioAtivo && (
+          <div className="space-y-2 bg-[#FBF6E6] border-2 border-[#E6DFC8] rounded-xl p-3">
+            <div className="text-xs font-bold text-[#8C7325] flex items-center gap-1.5">
+              <Handshake className="w-4 h-4" /> {convenioAtivo.nome}
+            </div>
+            {convMembro ? (
+              <div className="bg-white border-2 border-emerald-300 rounded-lg p-2.5 flex items-center justify-between gap-2">
+                <div>
+                  <div className="font-bold text-sm text-slate-800">{convMembro.nome}</div>
+                  <div className="text-[11px] text-slate-500">
+                    {convMembro.matricula ? `Mat. ${convMembro.matricula} · ` : ''}
+                    Disponível: <b className="text-emerald-700">{brl((convMembro.disponivelCents || 0) / 100)}</b>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => { setConvMembro(null); setConvBusca(''); }}
+                  className="text-[11px] font-bold text-slate-500 underline decoration-dotted shrink-0"
+                >
+                  trocar
+                </button>
+              </div>
+            ) : (
+              <>
+                <input
+                  value={convBusca}
+                  onChange={(e) => setConvBusca(e.target.value.toUpperCase())}
+                  placeholder="Nome do associado…"
+                  autoFocus
+                  className="w-full rounded-lg border-2 border-[#E6DFC8] px-3 py-2 text-sm focus:border-[#D4AF37] focus:outline-none"
+                />
+                <div className="max-h-44 overflow-y-auto space-y-1">
+                  {convResultados.map((m) => (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => setConvMembro(m)}
+                      disabled={(m.disponivelCents || 0) <= 0}
+                      className="w-full text-left bg-white border border-[#E7E2D8] rounded-lg px-3 py-2 hover:border-[#D4AF37] disabled:opacity-40 flex items-center justify-between gap-2"
+                    >
+                      <span className="text-sm font-medium text-slate-700">{m.nome}</span>
+                      <span className={`text-xs font-bold tabular-nums ${(m.disponivelCents || 0) > 0 ? 'text-emerald-700' : 'text-rose-600'}`}>
+                        {brl((m.disponivelCents || 0) / 100)}
+                      </span>
+                    </button>
+                  ))}
+                  {convResultados.length === 0 && (
+                    <div className="text-[11px] text-slate-400 px-1 py-2">
+                      {convBusca ? 'Nenhum associado encontrado — confira com o sindicato.' : 'Digite o nome pra buscar na lista do convênio.'}
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
         {selected === 'crediario' && customerCpf && (
           <div className="space-y-2 pt-2 border-t">
             {credLoading && (
@@ -5981,7 +6103,8 @@ function PaymentModal({
                   addingPayment ||
                   !valorParcial ||
                   (needsBandeira && !bandeira) ||
-                  (selected === 'crediario' && !customerCpf)
+                  (selected === 'crediario' && !customerCpf) ||
+                  (selected === 'convenio' && !convMembro)
                 }
                 className={`w-full px-3 py-4 font-black rounded-xl text-base disabled:opacity-40 flex items-center justify-center gap-2 transition-all shadow-md ${
                   vaiFinalizar
