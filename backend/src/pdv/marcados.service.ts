@@ -141,7 +141,7 @@ export class MarcadosService {
       throw new BadRequestException('Código do cliente não encontrado');
     }
 
-    const insertResult = await this.erp.insertCaixaMarcado({
+    const marcadoPayload = {
       items: sale.items.map((it: any) => ({
         codigo: String(it.sku || it.ref || '').trim(),
         descricao: String(it.descricao || '').slice(0, 100),
@@ -153,10 +153,19 @@ export class MarcadosService {
       })),
       cliente: codCliente,
       loja: input.storeCode,
-    });
+    };
+    const insertResult = await this.erp.insertCaixaMarcado(marcadoPayload);
 
+    // RESILIÊNCIA (sair da Giga): se o write vivo falhar (Giga lento/fora), NÃO
+    // trava a operadora — enfileira o INSERT no outbox e segue. A venda finaliza
+    // como MARCADO no Postgres; a linha `caixa` do Giga entra pela fila (30s).
+    let marcadoEnfileirado = false;
     if (!insertResult.success) {
-      throw new BadRequestException(`Falha ao inserir marcados no Giga: ${insertResult.error}`);
+      await this.erp.enqueueMarcado(marcadoPayload, insertResult.error);
+      marcadoEnfileirado = true;
+      this.logger.warn(
+        `[marcados] INSERT vivo no Giga falhou (${insertResult.error}) — enfileirado no outbox, seguindo com a marcação.`,
+      );
     }
 
     // 4. Baixa estoque Giga (igual venda — peças saem do estoque físico)
@@ -188,8 +197,8 @@ export class MarcadosService {
 
     this.logger.log(
       `[marcados] Marcado criado: cliente=${info.cliente.nome} (cod ${codCliente}) ` +
-      `controle=${insertResult.controle} total=R$${Number(sale.total).toFixed(2)} ` +
-      `items=${sale.items.length}`,
+      `controle=${insertResult.controle ?? '(fila)'} total=R$${Number(sale.total).toFixed(2)} ` +
+      `items=${sale.items.length}${marcadoEnfileirado ? ' [enfileirado no outbox — Giga sincroniza depois]' : ''}`,
     );
 
     return {

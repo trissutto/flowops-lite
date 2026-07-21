@@ -46,6 +46,13 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     return String(process.env.GIGA_MIRROR_READS ?? '').trim() === '1' && !!this.prismaFlow;
   }
 
+  /** Leituras de PRODUTO pela tabela NATIVA (Postgres `product`) — sair da Giga.
+   *  Quando ligado, searchByRef (consulta de loja/realinhamento) e outras leituras
+   *  de catálogo saem do Postgres em vez do Giga vivo. Fallback pro Giga em erro. */
+  private get productNativeReads(): boolean {
+    return String(process.env.PRODUCT_NATIVE_READS ?? '').trim() === '1' && !!this.prismaFlow;
+  }
+
   /** Cache 60s: espelho de estoque tem dados? (vazio = nunca sincronizou → Giga) */
   private mirrorStockReadyCache: { ok: boolean; at: number } | null = null;
   private async mirrorStockReady(): Promise<boolean> {
@@ -293,6 +300,32 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       );
     } catch (e) {
       this.logger.error(`[flow-estoque] falha ao enfileirar ${op}: ${(e as Error).message}`);
+    }
+  }
+
+  /** Enfileira o INSERT de marcado no Giga (kind 'marcado') quando o write vivo
+   *  falha. A venda já finaliza como MARCADO no Postgres e o estoque baixa pelo
+   *  caminho resiliente — aqui só garante que a linha `caixa` MARCADO='SIM' entre
+   *  no Giga pela fila, sem travar/falhar a operadora com o Giga lento/fora. */
+  async enqueueMarcado(
+    payload: { items: any[]; cliente: number; loja: string },
+    lastError?: string,
+  ): Promise<void> {
+    try {
+      await (this.prismaFlow as any).erpOutbox.create({
+        data: {
+          kind: 'marcado',
+          saleId: `mkd-${randomUUID()}`,
+          payload,
+          status: 'pending',
+          lastError: lastError ? String(lastError).slice(0, 300) : null,
+        },
+      });
+      this.logger.warn(
+        `[marcado] Giga indisponível — INSERT de marcado (cliente ${payload.cliente}) enfileirado no outbox (${lastError || 'erro'})`,
+      );
+    } catch (e) {
+      this.logger.error(`[marcado] falha ao enfileirar: ${(e as Error).message}`);
     }
   }
 
@@ -3938,9 +3971,52 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    *   - base + dÃ­gito (ex: "9002" + "71" = "900271")
    */
   async searchByRef(ref: string): Promise<any[]> {
-    if (!this.pool || !ref) return [];
-    const clean = String(ref).trim();
+    const clean = String(ref || '').trim();
     if (!clean) return [];
+
+    // NATIVO (sair da Giga): variações da REF na tabela `product` do Postgres,
+    // mapeadas pros MESMOS nomes UPPERCASE do Giga. Fallback pro Giga em erro.
+    if (this.productNativeReads) {
+      try {
+        const prods: any[] = await (this.prismaFlow as any).product.findMany({
+          where: { ref: { startsWith: clean, mode: 'insensitive' } },
+          select: { codigo: true, ref: true, descricaoCompleta: true, cor: true, tamanho: true, estoque: true },
+          orderBy: [{ cor: 'asc' }, { tamanho: 'asc' }],
+          take: 1000,
+        });
+        // Mesmo filtro de variação + dedup (REF+COR+TAM, maior estoque) do Giga.
+        const isVar = (fr: string, b: string) => {
+          if (!fr) return false;
+          if (fr === b) return true;
+          if (!fr.startsWith(b)) return false;
+          const s = fr.slice(b.length);
+          return s.startsWith(' ') || s.startsWith('-') || /^[A-Za-z]/.test(s);
+        };
+        const nrm = (s: any) => String(s ?? '').trim().toUpperCase();
+        const byKey = new Map<string, any>();
+        for (const p of prods) {
+          if (!isVar(String(p.ref || ''), clean)) continue;
+          const est = Number(p.estoque) || 0;
+          const cod = Number(p.codigo) || 0;
+          const k = `${nrm(p.ref)}|${nrm(p.cor)}|${nrm(p.tamanho)}`;
+          const cur = byKey.get(k);
+          if (!cur || est > cur.TOTAL_EST || (est === cur.TOTAL_EST && cod > (Number(cur.CODIGO) || 0))) {
+            byKey.set(k, { CODIGO: p.codigo, REF: p.ref, DESCRICAOCOMPLETA: p.descricaoCompleta, COR: p.cor, TAMANHO: p.tamanho, ESTOQUE: est, TOTAL_EST: est, ID: null });
+          }
+        }
+        const deduped = Array.from(byKey.values());
+        // Só devolve se achou algo. Vazio pode ser tabela `product` fria/sem
+        // backfill → cai pro Giga por segurança (durante a transição).
+        if (deduped.length) {
+          this.logger.log(`[product-native] searchByRef("${clean}"): ${prods.length} -> dedup ${deduped.length}.`);
+          return deduped;
+        }
+      } catch (e) {
+        this.logger.warn(`[product-native] searchByRef caiu pro Giga: ${(e as Error).message}`);
+      }
+    }
+
+    if (!this.pool) return [];
     try {
       // Busca tudo que comeÃ§a com a REF base â€” cada cor pode estar com sufixo
       // diferente no Giga. Filtramos os falsos positivos no JS abaixo.
