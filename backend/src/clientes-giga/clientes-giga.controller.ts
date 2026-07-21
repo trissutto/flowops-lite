@@ -58,4 +58,11 @@ export class ClientesGigaController {
     this.requireAdmin(req);
     return this.svc.pessoa(String(loja || ''), String(codigo || ''));
   }
+
+  /** Histórico completo (lojas espelhadas + PDV + site + live + devoluções). */
+  @Get('historico')
+  historico(@Req() req: any, @Query('loja') loja?: string, @Query('codigo') codigo?: string) {
+    this.requireAdmin(req);
+    return this.svc.historico(String(loja || ''), String(codigo || ''));
+  }
 }

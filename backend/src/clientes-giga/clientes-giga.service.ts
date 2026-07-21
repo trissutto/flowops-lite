@@ -394,4 +394,130 @@ export class ClientesGigaService {
       totalAbertoReais: Math.round(totalAberto * 100) / 100,
     };
   }
+
+  /**
+   * HISTÓRICO COMPLETO da pessoa — integração site + lojas + live (regra do
+   * dono): compras das LOJAS (espelho giga_caixa_mov, zero Giga vivo), vendas
+   * do PDV Flow, pedidos do SITE, carrinhos pagos da LIVE e DEVOLUÇÕES.
+   * Uma linha do tempo só, mais recente primeiro.
+   */
+  async historico(loja: string, codigo: string) {
+    const base: any = await (this.prisma as any).gigaCliente.findUnique({
+      where: { loja_codigo: { loja, codigo } },
+      select: { loja: true, codigo: true, cpf: true, personKey: true },
+    });
+    if (!base) return { found: false, eventos: [] };
+    const fichas: any[] = base.personKey
+      ? await (this.prisma as any).gigaCliente.findMany({
+          where: { personKey: base.personKey },
+          select: { loja: true, codigo: true },
+        })
+      : [{ loja: base.loja, codigo: base.codigo }];
+
+    const digits = String(base.cpf || '').replace(/\D/g, '');
+    const cpfVariants = digits.length === 11
+      ? [digits, `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9)}`]
+      : [];
+
+    const num = (v: any) => (v == null ? 0 : Number(v) || 0);
+    type Ev = { origem: string; data: Date | null; loja: string | null; titulo: string; detalhe: string | null; valor: number; itens?: number };
+    const eventos: Ev[] = [];
+
+    // ── 1. LOJAS (Giga espelhado): linhas da caixa por (loja, codCliente) ou CPF,
+    //    agrupadas por COMPRA (loja+numero+data). MARCADO vira etiqueta.
+    const caixaOr: any[] = fichas.map((f) => ({ loja: f.loja, codCliente: f.codigo }));
+    if (cpfVariants.length) caixaOr.push({ cpf: { in: cpfVariants } });
+    const caixaRows: any[] = await (this.prisma as any).gigaCaixaMov.findMany({
+      where: { OR: caixaOr },
+      orderBy: { data: 'desc' },
+      take: 1500,
+    }).catch(() => []);
+    const compras = new Map<string, { data: Date | null; loja: string | null; itens: any[]; total: number; marcado: boolean; fpag: string | null; vendedora: string | null }>();
+    for (const r of caixaRows) {
+      const k = `${r.loja}|${r.numero || r.registro}|${r.data ? new Date(r.data).toISOString().slice(0, 10) : ''}`;
+      let c = compras.get(k);
+      if (!c) compras.set(k, (c = { data: r.data, loja: r.loja, itens: [], total: 0, marcado: false, fpag: r.fpag || null, vendedora: r.vendedora || r.vendedor || null }));
+      c.itens.push(r);
+      c.total += num(r.valorTotal);
+      if (String(r.marcado || '').toUpperCase() === 'SIM') c.marcado = true;
+    }
+    for (const c of compras.values()) {
+      const primeiro = c.itens[0];
+      eventos.push({
+        origem: c.marcado ? 'MARCADO' : 'LOJA',
+        data: c.data,
+        loja: c.loja,
+        titulo: String(primeiro?.descricao || 'Compra na loja').slice(0, 60) + (c.itens.length > 1 ? ` +${c.itens.length - 1} itens` : ''),
+        detalhe: [c.fpag, c.vendedora && `vend. ${c.vendedora}`].filter(Boolean).join(' · ') || null,
+        valor: Math.round(c.total * 100) / 100,
+        itens: c.itens.length,
+      });
+    }
+
+    if (cpfVariants.length) {
+      // ── 2. PDV Flow ──
+      const vendas: any[] = await (this.prisma as any).pdvSale.findMany({
+        where: { customerCpf: { in: cpfVariants }, status: 'finalized', isTraining: false },
+        select: { storeCode: true, finalizedAt: true, total: true, paymentMethod: true, _count: { select: { items: true } } },
+        orderBy: { finalizedAt: 'desc' },
+        take: 300,
+      }).catch(() => []);
+      for (const v of vendas) {
+        eventos.push({
+          origem: 'PDV', data: v.finalizedAt, loja: v.storeCode,
+          titulo: `Venda PDV (${v._count?.items ?? '?'} item${(v._count?.items || 0) > 1 ? 's' : ''})`,
+          detalhe: v.paymentMethod || null, valor: num(v.total), itens: v._count?.items,
+        });
+      }
+      // ── 3. SITE ──
+      const pedidos: any[] = await (this.prisma as any).order.findMany({
+        where: { customerCpf: { in: cpfVariants } },
+        select: { wcOrderNumber: true, wcDateCreated: true, createdAt: true, totalAmount: true, status: true },
+        orderBy: { createdAt: 'desc' },
+        take: 200,
+      }).catch(() => []);
+      for (const p of pedidos) {
+        eventos.push({
+          origem: 'SITE', data: p.wcDateCreated || p.createdAt, loja: null,
+          titulo: `Pedido site ${p.wcOrderNumber ? `#${p.wcOrderNumber}` : ''}`.trim(),
+          detalhe: p.status || null, valor: num(p.totalAmount),
+        });
+      }
+      // ── 4. LIVE ──
+      const carts: any[] = await (this.prisma as any).livePdvCart.findMany({
+        where: { customerCpf: { in: cpfVariants }, status: { in: ['paid', 'separating', 'shipped', 'delivered'] } },
+        select: { cartNumber: true, paidAt: true, createdAt: true, totalCents: true, status: true },
+        orderBy: { createdAt: 'desc' },
+        take: 200,
+      }).catch(() => []);
+      for (const c of carts) {
+        eventos.push({
+          origem: 'LIVE', data: c.paidAt || c.createdAt, loja: null,
+          titulo: `Live${c.cartNumber ? ` · carrinho ${c.cartNumber}` : ''}`,
+          detalhe: c.status, valor: num(c.totalCents) / 100,
+        });
+      }
+      // ── 5. DEVOLUÇÕES ──
+      const devs: any[] = await (this.prisma as any).pdvReturn.findMany({
+        where: { customerCpf: { in: cpfVariants }, isTraining: false },
+        select: { storeCode: true, createdAt: true, valorTotal: true, modo: true },
+        orderBy: { createdAt: 'desc' },
+        take: 200,
+      }).catch(() => []);
+      for (const d of devs) {
+        eventos.push({
+          origem: 'DEVOLUCAO', data: d.createdAt, loja: d.storeCode,
+          titulo: 'Devolução/troca', detalhe: d.modo || null, valor: -num(d.valorTotal),
+        });
+      }
+    }
+
+    eventos.sort((a, b) => (b.data ? new Date(b.data).getTime() : 0) - (a.data ? new Date(a.data).getTime() : 0));
+    const porOrigem: Record<string, { qtd: number; total: number }> = {};
+    for (const e of eventos) {
+      const o = (porOrigem[e.origem] = porOrigem[e.origem] || { qtd: 0, total: 0 });
+      o.qtd++; o.total += e.valor;
+    }
+    return { found: true, eventos: eventos.slice(0, 400), porOrigem };
+  }
 }

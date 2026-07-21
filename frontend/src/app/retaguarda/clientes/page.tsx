@@ -72,7 +72,13 @@ export default function ConsultaClientesPage() {
     setFichaBusy(true);
     try {
       const r = await api<any>(`/admin/clientes-giga/pessoa?loja=${encodeURIComponent(loja)}&codigo=${encodeURIComponent(codigo)}`);
-      if (r?.found) setFicha(r);
+      if (r?.found) {
+        setFicha({ ...r, _hist: null });
+        // Histórico carrega em paralelo (não trava a ficha abrir)
+        api<any>(`/admin/clientes-giga/historico?loja=${encodeURIComponent(loja)}&codigo=${encodeURIComponent(codigo)}`)
+          .then((h) => setFicha((cur: any) => (cur ? { ...cur, _hist: h } : cur)))
+          .catch(() => setFicha((cur: any) => (cur ? { ...cur, _hist: { eventos: [] } } : cur)));
+      }
     } catch { /* mantém a lista */ }
     finally { setFichaBusy(false); }
   };
@@ -360,8 +366,94 @@ function FichaPessoa({ ficha, onVoltar }: { ficha: any; onVoltar: () => void }) 
         )}
       </div>
 
+      {/* HISTÓRICO COMPLETO — lojas + PDV + site + live + devoluções */}
+      <HistoricoCard hist={ficha._hist} />
+
       {/* Fichas por loja (limite/avaliação/pontos são POR LOJA no Giga) */}
       {fichas.map((f: any) => <FichaLoja key={`${f.loja}-${f.codigo}`} f={f} />)}
+    </div>
+  );
+}
+
+/* ─── Histórico completo (integração: lojas + PDV + site + live) ──────────── */
+const ORIGEM_STYLE: Record<string, { label: string; cls: string }> = {
+  LOJA: { label: 'Loja', cls: 'bg-[#FBF6E6] border-[#E6DFC8] text-[#8C7325]' },
+  MARCADO: { label: 'Marcado', cls: 'bg-amber-50 border-amber-300 text-amber-700' },
+  PDV: { label: 'PDV', cls: 'bg-blue-50 border-blue-200 text-blue-700' },
+  SITE: { label: 'Site', cls: 'bg-indigo-50 border-indigo-200 text-indigo-700' },
+  LIVE: { label: 'Live', cls: 'bg-rose-50 border-rose-200 text-rose-700' },
+  DEVOLUCAO: { label: 'Devolução', cls: 'bg-red-50 border-red-300 text-red-700' },
+};
+
+function HistoricoCard({ hist }: { hist: any }) {
+  const [filtro, setFiltro] = useState<string>('');
+  const eventos: any[] = hist?.eventos || [];
+  const porOrigem: Record<string, { qtd: number; total: number }> = hist?.porOrigem || {};
+  const visiveis = filtro ? eventos.filter((e) => e.origem === filtro) : eventos;
+  const totalGeral = eventos.filter((e) => e.origem !== 'DEVOLUCAO').reduce((s, e) => s + (Number(e.valor) || 0), 0);
+
+  return (
+    <div className="bg-white rounded-2xl border border-[#E7E2D8] shadow-sm overflow-hidden">
+      <div className="px-5 py-3 border-b border-[#F1EDE3] flex items-center justify-between gap-2 flex-wrap">
+        <h3 className="font-bold text-slate-800 flex items-center gap-2">
+          <Search className="w-4 h-4 text-[#B8912B]" /> Histórico completo
+          {hist && <span className="text-xs font-normal text-slate-400">({eventos.length} registro{eventos.length !== 1 ? 's' : ''})</span>}
+        </h3>
+        {hist && eventos.length > 0 && (
+          <span className="text-sm font-black text-[#2E7D46]">{brl(Math.round(totalGeral * 100) / 100)} em compras</span>
+        )}
+      </div>
+
+      {!hist ? (
+        <div className="px-5 py-6 text-sm text-slate-400 flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Carregando histórico…</div>
+      ) : eventos.length === 0 ? (
+        <div className="px-5 py-6 text-sm text-slate-400">Nenhuma compra encontrada (lojas desde 2025 · PDV/site/live completos).</div>
+      ) : (
+        <>
+          {/* Filtros por origem */}
+          <div className="px-5 py-2.5 flex gap-1.5 flex-wrap border-b border-[#F8F5EC]">
+            <button
+              onClick={() => setFiltro('')}
+              className={`rounded-full border px-2.5 py-1 text-[11px] font-bold ${!filtro ? 'bg-slate-800 text-white border-slate-800' : 'bg-white border-slate-200 text-slate-500'}`}
+            >
+              Todas ({eventos.length})
+            </button>
+            {Object.entries(porOrigem).map(([o, s]) => (
+              <button
+                key={o}
+                onClick={() => setFiltro(filtro === o ? '' : o)}
+                className={`rounded-full border px-2.5 py-1 text-[11px] font-bold ${filtro === o ? 'bg-slate-800 text-white border-slate-800' : ORIGEM_STYLE[o]?.cls || 'bg-white border-slate-200 text-slate-500'}`}
+              >
+                {ORIGEM_STYLE[o]?.label || o} ({s.qtd})
+              </button>
+            ))}
+          </div>
+          <div className="max-h-96 overflow-y-auto">
+            <table className="w-full text-sm">
+              <tbody>
+                {visiveis.map((e, i) => (
+                  <tr key={i} className="border-b border-[#F8F5EC]">
+                    <td className="px-5 py-2 whitespace-nowrap text-xs text-slate-500">{fmtData(e.data)}</td>
+                    <td className="px-2 py-2">
+                      <span className={`rounded border px-1.5 py-0.5 text-[10px] font-bold ${ORIGEM_STYLE[e.origem]?.cls || ''}`}>
+                        {ORIGEM_STYLE[e.origem]?.label || e.origem}
+                      </span>
+                    </td>
+                    <td className="px-2 py-2 text-xs text-slate-500 whitespace-nowrap">{e.loja ? `LJ${e.loja}` : '—'}</td>
+                    <td className="px-2 py-2 min-w-0">
+                      <div className="text-slate-800 truncate max-w-[280px]">{e.titulo}</div>
+                      {e.detalhe && <div className="text-[11px] text-slate-400 truncate max-w-[280px]">{e.detalhe}</div>}
+                    </td>
+                    <td className={`px-5 py-2 text-right tabular-nums font-semibold whitespace-nowrap ${e.valor < 0 ? 'text-red-600' : 'text-slate-800'}`}>
+                      {brl(e.valor)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
     </div>
   );
 }
