@@ -7,6 +7,7 @@ import { WooCommerceModule } from '../woocommerce/woocommerce.module';
 import { PromoConfigModule } from '../promo-config/promo-config.module';
 import { AccessPolicyModule } from '../access-policy/access-policy.module';
 import { WincredMirrorModule } from '../wincred-mirror/wincred-mirror.module';
+import { ConveniosModule } from '../convenios/convenios.module';
 import { AdiantamentosModule } from '../adiantamentos/adiantamentos.module';
 import { PdvService } from './pdv.service';
 import { ErpOutboxService } from './erp-outbox.service';
@@ -33,7 +34,7 @@ import { ProdutosVendidosService } from './produtos-vendidos.service';
 import { ProdutosVendidosController } from './produtos-vendidos.controller';
 
 @Module({
-  imports: [PrismaModule, ErpModule, PagarmeModule, forwardRef(() => CrediariosModule), WooCommerceModule, PromoConfigModule, AccessPolicyModule, WincredMirrorModule, AdiantamentosModule],
+  imports: [PrismaModule, ErpModule, PagarmeModule, forwardRef(() => CrediariosModule), WooCommerceModule, PromoConfigModule, AccessPolicyModule, WincredMirrorModule, AdiantamentosModule, ConveniosModule],
   controllers: [PdvController, CashController, ReturnsController, ReturnsPublicController, PdvDiagController, MarcadosController, ActiveSellersController, CarneCoordsController, FiscalReportController, ProdutosVendidosController],
   providers: [PdvService, ErpOutboxService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, CoordsDbService, MarcadosService, ActiveSellersService, CarneCoordsService, FiscalReportService, ProdutosVendidosService],
   exports: [PdvService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, CoordsDbService, MarcadosService, ActiveSellersService, CarneCoordsService, FiscalReportService, ProdutosVendidosService],
