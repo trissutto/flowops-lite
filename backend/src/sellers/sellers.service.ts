@@ -267,6 +267,7 @@ export class SellersService {
 
   async create(input: {
     name: string;
+    apelido?: string;
     whatsapp?: string;
     cargo?: string;
     responsibleStoreId?: string | null;
@@ -313,6 +314,7 @@ export class SellersService {
       return await this.prisma.seller.create({
         data: {
           name: normalized,
+          apelido: input.apelido?.trim().toUpperCase().slice(0, 40) || null,
           whatsapp: input.whatsapp?.trim() || null,
           cargo,
           responsibleStoreId: cargo !== 'VENDEDORA' ? input.responsibleStoreId || null : null,
@@ -352,6 +354,7 @@ export class SellersService {
     id: string,
     input: {
       name?: string;
+      apelido?: string | null;
       whatsapp?: string | null;
       active?: boolean;
       cargo?: string;
@@ -389,6 +392,7 @@ export class SellersService {
         .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
         .join(' ');
     }
+    if (input.apelido !== undefined) data.apelido = input.apelido?.trim().toUpperCase().slice(0, 40) || null;
     if (input.whatsapp !== undefined) data.whatsapp = input.whatsapp?.trim() || null;
     if (input.active !== undefined) data.active = !!input.active;
 

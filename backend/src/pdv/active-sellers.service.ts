@@ -18,10 +18,25 @@ export class ActiveSellersService {
    */
   async list(storeCode: string) {
     if (!storeCode) throw new BadRequestException('storeCode obrigatório');
-    return (this.prisma as any).pdvActiveSeller.findMany({
+    const rows: any[] = await (this.prisma as any).pdvActiveSeller.findMany({
       where: { storeCode },
       orderBy: { nome: 'asc' },
     });
+    // APELIDO (22/07): vem do cadastro da funcionária (Seller, casado pelo
+    // código do Wincred) — é o que o popup do PDV mostra no lugar do nome.
+    try {
+      const sellers: any[] = await (this.prisma as any).seller.findMany({
+        where: { wincredCodigo: { not: null } },
+        select: { wincredCodigo: true, apelido: true },
+      });
+      const norm = (s: any) => String(s ?? '').replace(/\D/g, '').replace(/^0+/, '') || '0';
+      const apelidoPorCodigo = new Map(
+        sellers.filter((s) => s.apelido).map((s) => [norm(s.wincredCodigo), s.apelido]),
+      );
+      return rows.map((r) => ({ ...r, apelido: apelidoPorCodigo.get(norm(r.codigo)) || null }));
+    } catch {
+      return rows;
+    }
   }
 
   /**

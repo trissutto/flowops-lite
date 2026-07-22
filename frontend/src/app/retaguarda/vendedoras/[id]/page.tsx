@@ -27,6 +27,7 @@ import HorarioGrid from '@/components/rh/HorarioGrid';
 type Seller = {
   id: string;
   name: string;
+  apelido?: string | null;
   whatsapp: string | null;
   active: boolean;
   createdAt: string;
@@ -131,6 +132,7 @@ export default function ProntuarioPage() {
         method: 'PATCH',
         body: JSON.stringify({
           name: data.name,
+          apelido: data.apelido ?? null,
           whatsapp: data.whatsapp,
           cargo: data.cargo,
           cpf: data.cpf,
@@ -278,6 +280,13 @@ export default function ProntuarioPage() {
                 type="date"
                 value={inputDate(data.dataNascimento)}
                 onChange={(v) => update('dataNascimento', v)}
+              />
+            </Field>
+            <Field label="Apelido (aparece no PDV)">
+              <Input
+                value={data.apelido || ''}
+                onChange={(v) => update('apelido', v.toUpperCase())}
+                placeholder="Ex.: LETICIA 2, JÔ, MARI"
               />
             </Field>
             <Field label="WhatsApp">

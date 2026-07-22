@@ -41,6 +41,7 @@ export default function NovaFuncionariaPage() {
 
   // Dados pessoais
   const [name, setName] = useState('');
+  const [apelido, setApelido] = useState('');
   const [cpf, setCpf] = useState('');
   const [rg, setRg] = useState('');
   const [dataNascimento, setDataNascimento] = useState('');
@@ -112,6 +113,7 @@ export default function NovaFuncionariaPage() {
     try {
       const body: any = {
         name: nome,
+        apelido: apelido.trim() || undefined,
         cargo,
         responsibleStoreId: responsibleStoreId || null,
         cpf: cpf.replace(/\D/g, '') || undefined,
@@ -181,6 +183,9 @@ export default function NovaFuncionariaPage() {
           <Grid>
             <Field label="Nome completo *" required>
               <Input value={name} onChange={setName} placeholder="Ex: Maria Silva" autoFocus />
+            </Field>
+            <Field label="Apelido (aparece no PDV)">
+              <Input value={apelido} onChange={(v) => setApelido(v.toUpperCase())} placeholder="Ex.: LETICIA 2, JÔ, MARI" />
             </Field>
             <Field label="CPF">
               <Input value={cpf} onChange={setCpf} placeholder="000.000.000-00" />

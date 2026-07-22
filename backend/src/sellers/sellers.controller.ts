@@ -45,7 +45,7 @@ export class SellersController {
 
   @Post()
   @AdminOnly()
-  create(@Body() body: { name: string; whatsapp?: string }) {
+  create(@Body() body: { name: string; apelido?: string; whatsapp?: string }) {
     return this.svc.create(body);
   }
 
@@ -81,7 +81,7 @@ export class SellersController {
   @AdminOnly()
   update(
     @Param('id') id: string,
-    @Body() body: { name?: string; whatsapp?: string | null; active?: boolean; cargo?: string; responsibleStoreId?: string | null; storeCodeOrigin?: string | null },
+    @Body() body: { name?: string; apelido?: string | null; whatsapp?: string | null; active?: boolean; cargo?: string; responsibleStoreId?: string | null; storeCodeOrigin?: string | null },
   ) {
     return this.svc.update(id, body);
   }
