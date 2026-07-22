@@ -305,15 +305,17 @@ export class CommissionsService {
     // NOTA: tabela real = pdv_sales / pdv_returns (@@map), colunas snake_case,
     // status finalizado = 'finalized'. Aliases voltam em camelCase pro código
     // downstream continuar lendo r.storeCode / r.sellerId / r.total.
-    // NOTA (22/07): exclui paymentMethod='MARCADO' — marcação ("provar em
-    // casa") não é venda; a venda real acontece quando o marcado é puxado
-    // pra venda. Contar as duas dava comissão em dobro.
+    // NOTA (22/07): exclui paymentMethod='MARCADO' (marcação não é venda —
+    // contar marcação + venda puxada dava comissão em dobro) e abate o
+    // VALE-TROCA usado NA PRÓPRIA VENDA (venda de 100 paga com vale de 23,90
+    // comissiona 76,10 — regra do dono).
     const salesByStore: any[] = await this.prisma.$queryRawUnsafe(
       `SELECT
          store_code AS "storeCode",
          COUNT(*)::int AS qtd,
-         SUM(total)::float AS total
-       FROM pdv_sales
+         SUM(total - COALESCE(vt.vale, 0))::float AS total
+       FROM pdv_sales s
+       ${CommissionsService.VALE_JOIN_SQL}
        WHERE finalized_at >= $1
          AND finalized_at <= $2
          AND status = 'finalized'
@@ -323,13 +325,15 @@ export class CommissionsService {
       period.startDate,
       period.endDate,
     );
-    // Trocas/devoluções por LOJA: TODAS as devoluções da loja no período
-    // (com e sem cupom flowops), pra reduzir a base do líder/gerente.
+    // Trocas/devoluções por LOJA — SÓ modo dinheiro/pix (22/07): devolução
+    // que vira vale abate quando o vale é USADO numa venda (join acima),
+    // não aqui — senão descontava duas vezes.
     const trocasByStore: any[] = await this.prisma.$queryRawUnsafe(
       `SELECT store_code AS "storeCode", SUM(valor_total)::float AS total
        FROM pdv_returns
        WHERE created_at >= $1 AND created_at <= $2
          AND is_training = false
+         ${CommissionsService.TROCA_DINHEIRO_SQL}
        GROUP BY store_code`,
       period.startDate,
       period.endDate,
@@ -352,8 +356,9 @@ export class CommissionsService {
     const salesBySeller: any[] = await this.prisma.$queryRawUnsafe(
       `SELECT seller_id AS "sellerId", store_code AS "storeCode",
          COUNT(*)::int AS qtd,
-         SUM(total)::float AS total
-       FROM pdv_sales
+         SUM(total - COALESCE(vt.vale, 0))::float AS total
+       FROM pdv_sales s
+       ${CommissionsService.VALE_JOIN_SQL}
        WHERE finalized_at >= $1
          AND finalized_at <= $2
          AND seller_id IS NOT NULL
@@ -367,6 +372,7 @@ export class CommissionsService {
     // Trocas/devoluções atribuídas à VENDEDORA da venda original (via
     // original_sale_id → pdv_sales.seller_id). Devolução manual sem cupom
     // (original_sale_id NULL) NÃO entra aqui — vira desconto só da loja.
+    // SÓ modo dinheiro/pix (22/07) — vale abate quando é usado.
     const trocasBySeller: any[] = await this.prisma.$queryRawUnsafe(
       `SELECT s.seller_id AS "sellerId", s.store_code AS "storeCode",
          SUM(r.valor_total)::float AS total
@@ -375,6 +381,7 @@ export class CommissionsService {
        WHERE r.created_at >= $1 AND r.created_at <= $2
          AND r.is_training = false
          AND s.seller_id IS NOT NULL
+         AND r.modo IN ('dinheiro', 'pix')
        GROUP BY s.seller_id, s.store_code`,
       period.startDate,
       period.endDate,
@@ -665,6 +672,22 @@ export class CommissionsService {
    *  venda — contar as duas seria comissão em dobro (bug 22/07). */
   private static readonly SEM_MARCACAO_SQL = `AND (payment_method IS NULL OR payment_method <> 'MARCADO')`;
 
+  /**
+   * REGRA DO VALE-TROCA (dono 22/07): o vale abate NA VENDA QUE O USOU —
+   * venda de R$ 100 paga com vale de R$ 23,90 comissiona sobre R$ 76,10.
+   * Em contrapartida, devolução modo troca/crédito (que gera vale) NÃO abate
+   * mais da vendedora original — só devolução em DINHEIRO/PIX abate (cliente
+   * levou o dinheiro embora; não existe venda nova pra descontar).
+   */
+  private static readonly VALE_JOIN_SQL = `
+    LEFT JOIN (
+      SELECT sale_id, SUM(valor)::float AS vale
+        FROM pdv_sale_payments
+       WHERE method = 'vale_troca'
+       GROUP BY sale_id
+    ) vt ON vt.sale_id = s.id`;
+  private static readonly TROCA_DINHEIRO_SQL = `AND modo IN ('dinheiro', 'pix')`;
+
   async relatorioRh(input: { de: string; ate: string; storeCode?: string }): Promise<any> {
     const de = String(input.de || '').slice(0, 10);
     const ate = String(input.ate || '').slice(0, 10);
@@ -679,25 +702,34 @@ export class CommissionsService {
 
     // Agregados por loja (base do líder/gerente) e por vendedora×loja
     const salesByStore: any[] = await this.prisma.$queryRawUnsafe(
-      `SELECT store_code AS "storeCode", COUNT(*)::int AS qtd, SUM(total)::float AS total
-         FROM pdv_sales
+      `SELECT store_code AS "storeCode", COUNT(*)::int AS qtd,
+              SUM(total)::float AS bruto,
+              SUM(COALESCE(vt.vale, 0))::float AS vale
+         FROM pdv_sales s
+         ${CommissionsService.VALE_JOIN_SQL}
         WHERE finalized_at >= $1 AND finalized_at <= $2
           AND status = 'finalized' AND is_training = false
           ${CommissionsService.SEM_MARCACAO_SQL} ${storeFilterSql}
         GROUP BY store_code`,
       ...params,
     );
+    // Só devolução em DINHEIRO/PIX abate aqui — troca/crédito viram vale e o
+    // vale abate quando é USADO numa venda (regra do dono 22/07)
     const trocasByStore: any[] = await this.prisma.$queryRawUnsafe(
       `SELECT store_code AS "storeCode", SUM(valor_total)::float AS total
          FROM pdv_returns
-        WHERE created_at >= $1 AND created_at <= $2 AND is_training = false ${storeFilterSql}
+        WHERE created_at >= $1 AND created_at <= $2 AND is_training = false
+          ${CommissionsService.TROCA_DINHEIRO_SQL} ${storeFilterSql}
         GROUP BY store_code`,
       ...params,
     );
     const salesBySeller: any[] = await this.prisma.$queryRawUnsafe(
       `SELECT seller_id AS "sellerId", store_code AS "storeCode",
-              COUNT(*)::int AS qtd, SUM(total)::float AS total
-         FROM pdv_sales
+              COUNT(*)::int AS qtd,
+              SUM(total)::float AS bruto,
+              SUM(COALESCE(vt.vale, 0))::float AS vale
+         FROM pdv_sales s
+         ${CommissionsService.VALE_JOIN_SQL}
         WHERE finalized_at >= $1 AND finalized_at <= $2
           AND seller_id IS NOT NULL AND status = 'finalized' AND is_training = false
           ${CommissionsService.SEM_MARCACAO_SQL} ${storeFilterSql}
@@ -711,6 +743,7 @@ export class CommissionsService {
          JOIN pdv_sales s ON s.id = r.original_sale_id
         WHERE r.created_at >= $1 AND r.created_at <= $2
           AND r.is_training = false AND s.seller_id IS NOT NULL
+          AND r.modo IN ('dinheiro', 'pix')
           ${lojaFiltro ? 'AND r.store_code = $3' : ''}
         GROUP BY s.seller_id, s.store_code`,
       ...params,
@@ -719,8 +752,10 @@ export class CommissionsService {
     const vendasDetalhe: any[] = await this.prisma.$queryRawUnsafe(
       `SELECT id, seller_id AS "sellerId", store_code AS "storeCode",
               finalized_at AS "finalizedAt", total::float AS total,
+              COALESCE(vt.vale, 0)::float AS vale,
               payment_method AS "paymentMethod", customer_name AS "customerName"
-         FROM pdv_sales
+         FROM pdv_sales s
+         ${CommissionsService.VALE_JOIN_SQL}
         WHERE finalized_at >= $1 AND finalized_at <= $2
           AND seller_id IS NOT NULL AND status = 'finalized' AND is_training = false
           ${CommissionsService.SEM_MARCACAO_SQL} ${storeFilterSql}
@@ -735,6 +770,7 @@ export class CommissionsService {
          JOIN pdv_sales s ON s.id = r.original_sale_id
         WHERE r.created_at >= $1 AND r.created_at <= $2
           AND r.is_training = false AND s.seller_id IS NOT NULL
+          AND r.modo IN ('dinheiro', 'pix')
           ${lojaFiltro ? 'AND r.store_code = $3' : ''}
         ORDER BY r.created_at
         LIMIT 20000`,
@@ -765,29 +801,35 @@ export class CommissionsService {
       return sellersById.get(key) || sellersByCodigo.get(key) || null;
     };
 
-    const storeTotals = new Map<string, { vendido: number; trocas: number; qtd: number }>();
+    const storeTotals = new Map<string, { vendido: number; vale: number; trocas: number; qtd: number }>();
     for (const r of salesByStore) {
-      storeTotals.set(r.storeCode, { vendido: Number(r.total) || 0, trocas: 0, qtd: Number(r.qtd) || 0 });
+      storeTotals.set(r.storeCode, {
+        vendido: Number(r.bruto) || 0,
+        vale: Number(r.vale) || 0,
+        trocas: 0,
+        qtd: Number(r.qtd) || 0,
+      });
     }
     for (const r of trocasByStore) {
-      const cur = storeTotals.get(r.storeCode) || { vendido: 0, trocas: 0, qtd: 0 };
+      const cur = storeTotals.get(r.storeCode) || { vendido: 0, vale: 0, trocas: 0, qtd: 0 };
       cur.trocas = Number(r.total) || 0;
       storeTotals.set(r.storeCode, cur);
     }
 
-    const sellerSalesMap = new Map<string, { vendido: number; trocas: number; qtd: number }>();
+    const sellerSalesMap = new Map<string, { vendido: number; vale: number; trocas: number; qtd: number }>();
     let skippedVendido = 0;
     const skippedSellerIds = new Set<string>();
     for (const r of salesBySeller) {
       const seller = resolveSeller(r.sellerId);
       if (!seller) {
-        skippedVendido += Number(r.total) || 0;
+        skippedVendido += (Number(r.bruto) || 0) - (Number(r.vale) || 0);
         skippedSellerIds.add(String(r.sellerId));
         continue;
       }
       const k = `${seller.id}|${r.storeCode}`;
-      const cur = sellerSalesMap.get(k) || { vendido: 0, trocas: 0, qtd: 0 };
-      cur.vendido += Number(r.total) || 0;
+      const cur = sellerSalesMap.get(k) || { vendido: 0, vale: 0, trocas: 0, qtd: 0 };
+      cur.vendido += Number(r.bruto) || 0;
+      cur.vale += Number(r.vale) || 0;
       cur.qtd += Number(r.qtd) || 0;
       sellerSalesMap.set(k, cur);
     }
@@ -795,7 +837,7 @@ export class CommissionsService {
       const seller = resolveSeller(r.sellerId);
       if (!seller) continue;
       const k = `${seller.id}|${r.storeCode}`;
-      const cur = sellerSalesMap.get(k) || { vendido: 0, trocas: 0, qtd: 0 };
+      const cur = sellerSalesMap.get(k) || { vendido: 0, vale: 0, trocas: 0, qtd: 0 };
       cur.trocas += Number(r.total) || 0;
       sellerSalesMap.set(k, cur);
     }
@@ -819,7 +861,7 @@ export class CommissionsService {
     // Uma "linha de cálculo" por vendedora×loja — MESMA regra do fechamento
     type Linha = {
       sellerId: string; storeCode: string; cargo: string; calcMode: string;
-      totalVendido: number; totalTrocas: number; vendidoLiquido: number; qtdVendas: number;
+      totalVendido: number; totalVale: number; totalTrocas: number; vendidoLiquido: number; qtdVendas: number;
       percentApplied: number; comissaoBase: number;
       metaValue: number | null; metaAtingida: boolean; bonusPercent: number | null; bonusValue: number;
       total: number; semRegra: boolean;
@@ -831,17 +873,18 @@ export class CommissionsService {
       if (!storeId) return;
       const rule = await this.resolveRuleFor(sellerId, storeId, cargo, endDate);
       const calcMode = rule?.calcMode || 'on_self';
-      let totalVendido = 0, totalTrocas = 0, qtdVendas = 0;
+      let totalVendido = 0, totalVale = 0, totalTrocas = 0, qtdVendas = 0;
       if (calcMode === 'on_responsible_store') {
         const st = storeTotals.get(storeCode);
         if (!st) return;
-        totalVendido = st.vendido; totalTrocas = st.trocas; qtdVendas = st.qtd;
+        totalVendido = st.vendido; totalVale = st.vale; totalTrocas = st.trocas; qtdVendas = st.qtd;
       } else {
         const sl = sellerSalesMap.get(`${sellerId}|${storeCode}`);
         if (!sl) return;
-        totalVendido = sl.vendido; totalTrocas = sl.trocas; qtdVendas = sl.qtd;
+        totalVendido = sl.vendido; totalVale = sl.vale; totalTrocas = sl.trocas; qtdVendas = sl.qtd;
       }
-      const vendidoLiquido = Math.max(0, totalVendido - totalTrocas);
+      // Base = vendido − vale usado (abate NA venda) − devoluções em dinheiro
+      const vendidoLiquido = Math.max(0, totalVendido - totalVale - totalTrocas);
       let percentApplied = 0, comissaoBase = 0, bonusValue = 0;
       let metaAtingida = false;
       let metaValue: number | null = null, bonusPercent: number | null = null;
@@ -859,7 +902,7 @@ export class CommissionsService {
       }
       linhas.push({
         sellerId, storeCode, cargo, calcMode,
-        totalVendido, totalTrocas, vendidoLiquido, qtdVendas,
+        totalVendido, totalVale, totalTrocas, vendidoLiquido, qtdVendas,
         percentApplied, comissaoBase, metaValue, metaAtingida, bonusPercent, bonusValue,
         total: comissaoBase + bonusValue, semRegra: !rule,
       });
@@ -896,7 +939,7 @@ export class CommissionsService {
           cargo: l.cargo,
           ativa: !!seller?.active,
           lojas: [],
-          totalVendido: 0, totalTrocas: 0, vendidoLiquido: 0, qtdVendas: 0,
+          totalVendido: 0, totalVale: 0, totalTrocas: 0, vendidoLiquido: 0, qtdVendas: 0,
           comissaoBase: 0, bonusValue: 0, total: 0,
           linhas: [], vendas: [], trocas: [],
           semRegra: false,
@@ -905,6 +948,7 @@ export class CommissionsService {
       }
       if (!f.lojas.includes(l.storeCode)) f.lojas.push(l.storeCode);
       f.totalVendido += l.totalVendido;
+      f.totalVale += l.totalVale;
       f.totalTrocas += l.totalTrocas;
       f.vendidoLiquido += l.vendidoLiquido;
       f.qtdVendas += l.qtdVendas;
@@ -920,16 +964,25 @@ export class CommissionsService {
       const vendas = vendasPorSeller.get(sellerId) || [];
       const percentDe = (storeCode: string) =>
         f.linhas.find((l: Linha) => l.storeCode === storeCode && l.calcMode !== 'on_responsible_store')?.percentApplied ?? 0;
-      f.vendas = vendas.map((v: any) => ({
-        id: v.id,
-        data: v.finalizedAt,
-        loja: v.storeCode,
-        cliente: v.customerName || null,
-        pagamento: v.paymentMethod || null,
-        valor: Number(v.total) || 0,
-        percent: percentDe(v.storeCode),
-        comissao: Math.round(((Number(v.total) || 0) * percentDe(v.storeCode)) / 100 * 100) / 100,
-      }));
+      f.vendas = vendas.map((v: any) => {
+        const valor = Number(v.total) || 0;
+        const vale = Number(v.vale) || 0;
+        // Regra do dono 22/07: vale-troca abate NA venda — comissão sobre a base
+        const base = Math.max(0, valor - vale);
+        const pct = percentDe(v.storeCode);
+        return {
+          id: v.id,
+          data: v.finalizedAt,
+          loja: v.storeCode,
+          cliente: v.customerName || null,
+          pagamento: v.paymentMethod || null,
+          valor,
+          vale,
+          base,
+          percent: pct,
+          comissao: Math.round((base * pct) / 100 * 100) / 100,
+        };
+      });
       f.trocas = (trocasPorSeller.get(sellerId) || []).map((t: any) => ({
         data: t.createdAt, loja: t.storeCode, valor: Number(t.total) || 0,
       }));
@@ -940,6 +993,7 @@ export class CommissionsService {
     const round2 = (n: number) => Math.round(n * 100) / 100;
     for (const f of funcionarias) {
       f.totalVendido = round2(f.totalVendido);
+      f.totalVale = round2(f.totalVale);
       f.totalTrocas = round2(f.totalTrocas);
       f.vendidoLiquido = round2(f.vendidoLiquido);
       f.comissaoBase = round2(f.comissaoBase);
@@ -953,6 +1007,7 @@ export class CommissionsService {
       totais: {
         funcionarias: funcionarias.length,
         vendido: round2(funcionarias.reduce((s, f) => s + f.totalVendido, 0)),
+        valeTroca: round2(funcionarias.reduce((s, f) => s + f.totalVale, 0)),
         trocas: round2(funcionarias.reduce((s, f) => s + f.totalTrocas, 0)),
         vendidoLiquido: round2(funcionarias.reduce((s, f) => s + f.vendidoLiquido, 0)),
         comissao: round2(funcionarias.reduce((s, f) => s + f.total, 0)),

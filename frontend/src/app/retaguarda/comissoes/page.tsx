@@ -346,8 +346,9 @@ function FolhaRhTab() {
         </div>
       </div>
 
-      {/* Totais — a conta INTEIRA visível: vendido − trocas = líquido */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+      {/* Totais — a conta INTEIRA visível:
+          vendido − vale-troca usado − devoluções em dinheiro = base */}
+      <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
         <div className="bg-white rounded-xl border border-slate-200 p-3 text-center">
           <div className="text-[10px] uppercase font-bold text-slate-400">Funcionárias</div>
           <div className="text-xl font-black text-slate-800">{dados?.totais?.funcionarias ?? '—'}</div>
@@ -357,11 +358,15 @@ function FolhaRhTab() {
           <div className="text-xl font-black text-slate-800">{dados?.totais?.vendido != null ? brl(dados.totais.vendido) : '—'}</div>
         </div>
         <div className="bg-white rounded-xl border border-slate-200 p-3 text-center">
-          <div className="text-[10px] uppercase font-bold text-slate-400">Trocas</div>
+          <div className="text-[10px] uppercase font-bold text-slate-400">Vale-troca usado</div>
+          <div className="text-xl font-black text-amber-600">{dados?.totais?.valeTroca != null ? `−${brl(dados.totais.valeTroca)}` : '—'}</div>
+        </div>
+        <div className="bg-white rounded-xl border border-slate-200 p-3 text-center">
+          <div className="text-[10px] uppercase font-bold text-slate-400">Dev. dinheiro</div>
           <div className="text-xl font-black text-rose-600">{dados?.totais?.trocas != null ? `−${brl(dados.totais.trocas)}` : '—'}</div>
         </div>
         <div className="bg-white rounded-xl border border-slate-200 p-3 text-center">
-          <div className="text-[10px] uppercase font-bold text-slate-400">= Líquido (base)</div>
+          <div className="text-[10px] uppercase font-bold text-slate-400">= Base</div>
           <div className="text-xl font-black text-slate-800">{dados ? brl(dados.totais.vendidoLiquido) : '—'}</div>
         </div>
         <div className="bg-white rounded-xl border border-slate-200 p-3 text-center">
@@ -406,8 +411,9 @@ function FolhaRhTab() {
                   </div>
                   <div className="text-xs text-slate-500">
                     {f.qtdVendas} venda(s) · vendido {brl(f.totalVendido)}
-                    {f.totalTrocas > 0 && <> · trocas −{brl(f.totalTrocas)}</>}
-                    {' '}· líquido <b>{brl(f.vendidoLiquido)}</b>
+                    {f.totalVale > 0 && <> · vale-troca −{brl(f.totalVale)}</>}
+                    {f.totalTrocas > 0 && <> · dev. dinheiro −{brl(f.totalTrocas)}</>}
+                    {' '}· base <b>{brl(f.vendidoLiquido)}</b>
                     {' '}· {f.lojas.map((lj: string) => (
                       <span key={lj} className="inline-block bg-slate-100 border border-slate-200 rounded px-1 text-[10px] font-bold mr-1">LJ {lj}</span>
                     ))}
@@ -456,14 +462,21 @@ function FolhaRhTab() {
                               <td className="px-2 py-1 text-xs text-slate-600 truncate max-w-[180px]">{v.cliente || '—'}</td>
                               <td className="px-2 py-1 text-xs text-slate-500 uppercase">{v.pagamento || '—'}</td>
                               <td className="px-2 py-1 text-center text-xs font-bold text-slate-500">{v.loja}</td>
-                              <td className="px-2 py-1 text-right tabular-nums">{brl(v.valor)}</td>
+                              <td className="px-2 py-1 text-right tabular-nums">
+                                {brl(v.valor)}
+                                {(v.vale || 0) > 0 && (
+                                  <div className="text-[10px] text-amber-700 whitespace-nowrap">
+                                    − vale {brl(v.vale)} → base <b>{brl(v.base)}</b>
+                                  </div>
+                                )}
+                              </td>
                               <td className="px-4 py-1 text-right tabular-nums font-bold text-emerald-700">{brl(v.comissao)}</td>
                             </tr>
                           ))}
                           {f.trocas.map((t: any, i: number) => (
                             <tr key={`t${i}`} className="border-b border-slate-50 last:border-b-0 bg-rose-50/40">
                               <td className="px-4 py-1 text-xs text-rose-600 whitespace-nowrap">{new Date(t.data).toLocaleDateString('pt-BR')}</td>
-                              <td className="px-2 py-1 text-xs text-rose-600" colSpan={2}>TROCA/DEVOLUÇÃO (abate da base)</td>
+                              <td className="px-2 py-1 text-xs text-rose-600" colSpan={2}>DEVOLUÇÃO EM DINHEIRO/PIX (abate da base)</td>
                               <td className="px-2 py-1 text-center text-xs font-bold text-rose-500">{t.loja}</td>
                               <td className="px-2 py-1 text-right tabular-nums text-rose-600">−{brl(t.valor)}</td>
                               <td className="px-4 py-1" />
