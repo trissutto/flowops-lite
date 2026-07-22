@@ -419,11 +419,18 @@ function FolhaRhTab() {
                     ))}
                   </div>
                 </div>
-                <div className="text-right shrink-0">
-                  <div className="font-black text-emerald-700 tabular-nums">{brl(f.total)}</div>
-                  {f.bonusValue > 0 && (
-                    <div className="text-[10px] text-violet-600 font-bold">inclui bônus {brl(f.bonusValue)} 🎯</div>
-                  )}
+                <div className="shrink-0 flex items-center gap-5">
+                  <div className="text-right">
+                    <div className="text-[10px] uppercase font-bold text-slate-400">Vendido</div>
+                    <div className="font-black text-slate-800 tabular-nums text-lg">{brl(f.totalVendido)}</div>
+                  </div>
+                  <div className="text-right min-w-[110px]">
+                    <div className="text-[10px] uppercase font-bold text-emerald-600">Comissão</div>
+                    <div className="font-black text-emerald-700 tabular-nums text-lg">{brl(f.total)}</div>
+                    {f.bonusValue > 0 && (
+                      <div className="text-[10px] text-violet-600 font-bold">inclui bônus {brl(f.bonusValue)} 🎯</div>
+                    )}
+                  </div>
                 </div>
               </button>
               {aberto && (
