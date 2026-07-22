@@ -235,8 +235,10 @@ export class CommissionsService {
     if (existing) return existing;
 
     const [y, m] = yearMonth.split('-').map((s) => parseInt(s, 10));
-    const startDate = new Date(y, m - 1, 1, 0, 0, 0);
-    const endDate = new Date(y, m, 0, 23, 59, 59); // último dia do mês
+    // Mês em HORÁRIO DE BRASÍLIA (UTC-3) — no servidor (UTC) o `new Date(y,m,d)`
+    // cortava o mês 3h mais cedo: venda do dia 30 à noite caía no mês seguinte.
+    const startDate = new Date(Date.UTC(y, m - 1, 1, 3, 0, 0));
+    const endDate = new Date(Date.UTC(y, m, 1, 2, 59, 59, 999)); // 23:59:59.999 BRT do último dia
 
     return (this.prisma as any).commissionPeriod.create({
       data: {
@@ -303,6 +305,9 @@ export class CommissionsService {
     // NOTA: tabela real = pdv_sales / pdv_returns (@@map), colunas snake_case,
     // status finalizado = 'finalized'. Aliases voltam em camelCase pro código
     // downstream continuar lendo r.storeCode / r.sellerId / r.total.
+    // NOTA (22/07): exclui paymentMethod='MARCADO' — marcação ("provar em
+    // casa") não é venda; a venda real acontece quando o marcado é puxado
+    // pra venda. Contar as duas dava comissão em dobro.
     const salesByStore: any[] = await this.prisma.$queryRawUnsafe(
       `SELECT
          store_code AS "storeCode",
@@ -313,6 +318,7 @@ export class CommissionsService {
          AND finalized_at <= $2
          AND status = 'finalized'
          AND is_training = false
+         ${CommissionsService.SEM_MARCACAO_SQL}
        GROUP BY store_code`,
       period.startDate,
       period.endDate,
@@ -353,6 +359,7 @@ export class CommissionsService {
          AND seller_id IS NOT NULL
          AND status = 'finalized'
          AND is_training = false
+         ${CommissionsService.SEM_MARCACAO_SQL}
        GROUP BY seller_id, store_code`,
       period.startDate,
       period.endDate,
@@ -644,14 +651,27 @@ export class CommissionsService {
    * Só PDV com vendedora identificada (decisão do dono); o que ficou de fora
    * aparece em `semAtribuicao` pra conferência.
    */
+  /** Janela do dia em HORÁRIO DE BRASÍLIA (UTC-3). O corte em UTC puro
+   *  jogava venda depois das 21h pro dia seguinte (bug 22/07 — a Folha não
+   *  batia com o Faturamento nem com o próprio Flow). */
+  private brtRange(de: string, ate: string): { startDate: Date; endDate: Date } {
+    const startDate = new Date(`${de}T03:00:00.000Z`); // 00:00 BRT
+    const endDate = new Date(new Date(`${ate}T03:00:00.000Z`).getTime() + 24 * 3600 * 1000 - 1); // 23:59:59.999 BRT
+    return { startDate, endDate };
+  }
+
+  /** Marcação (provar em casa) NÃO é venda: fecha com paymentMethod='MARCADO'
+   *  e a venda de verdade acontece DEPOIS, quando o marcado é puxado pra
+   *  venda — contar as duas seria comissão em dobro (bug 22/07). */
+  private static readonly SEM_MARCACAO_SQL = `AND (payment_method IS NULL OR payment_method <> 'MARCADO')`;
+
   async relatorioRh(input: { de: string; ate: string; storeCode?: string }): Promise<any> {
     const de = String(input.de || '').slice(0, 10);
     const ate = String(input.ate || '').slice(0, 10);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(de) || !/^\d{4}-\d{2}-\d{2}$/.test(ate)) {
       throw new BadRequestException('Período inválido — use De/Até (YYYY-MM-DD)');
     }
-    const startDate = new Date(`${de}T00:00:00.000Z`);
-    const endDate = new Date(`${ate}T23:59:59.999Z`);
+    const { startDate, endDate } = this.brtRange(de, ate);
     const lojaFiltro = input.storeCode ? String(input.storeCode).trim() : null;
 
     const storeFilterSql = lojaFiltro ? `AND store_code = $3` : '';
@@ -662,7 +682,8 @@ export class CommissionsService {
       `SELECT store_code AS "storeCode", COUNT(*)::int AS qtd, SUM(total)::float AS total
          FROM pdv_sales
         WHERE finalized_at >= $1 AND finalized_at <= $2
-          AND status = 'finalized' AND is_training = false ${storeFilterSql}
+          AND status = 'finalized' AND is_training = false
+          ${CommissionsService.SEM_MARCACAO_SQL} ${storeFilterSql}
         GROUP BY store_code`,
       ...params,
     );
@@ -678,7 +699,8 @@ export class CommissionsService {
               COUNT(*)::int AS qtd, SUM(total)::float AS total
          FROM pdv_sales
         WHERE finalized_at >= $1 AND finalized_at <= $2
-          AND seller_id IS NOT NULL AND status = 'finalized' AND is_training = false ${storeFilterSql}
+          AND seller_id IS NOT NULL AND status = 'finalized' AND is_training = false
+          ${CommissionsService.SEM_MARCACAO_SQL} ${storeFilterSql}
         GROUP BY seller_id, store_code`,
       ...params,
     );
@@ -700,7 +722,8 @@ export class CommissionsService {
               payment_method AS "paymentMethod", customer_name AS "customerName"
          FROM pdv_sales
         WHERE finalized_at >= $1 AND finalized_at <= $2
-          AND seller_id IS NOT NULL AND status = 'finalized' AND is_training = false ${storeFilterSql}
+          AND seller_id IS NOT NULL AND status = 'finalized' AND is_training = false
+          ${CommissionsService.SEM_MARCACAO_SQL} ${storeFilterSql}
         ORDER BY finalized_at
         LIMIT 20000`,
       ...params,
@@ -722,7 +745,8 @@ export class CommissionsService {
       `SELECT COUNT(*)::int AS qtd, COALESCE(SUM(total), 0)::float AS total
          FROM pdv_sales
         WHERE finalized_at >= $1 AND finalized_at <= $2
-          AND seller_id IS NULL AND status = 'finalized' AND is_training = false ${storeFilterSql}`,
+          AND seller_id IS NULL AND status = 'finalized' AND is_training = false
+          ${CommissionsService.SEM_MARCACAO_SQL} ${storeFilterSql}`,
       ...params,
     );
 
@@ -963,11 +987,13 @@ export class CommissionsService {
 
     // Lado GIGA: caixa por VENDEDOR (mesma base do ranking do Wincred).
     // Teto duro de 20s no app — se o Giga pendurar, responde com erro claro.
+    // DATAFEC (data de FECHAMENTO do cupom) — é o que as telas do Wincred
+    // usam; filtrar por DATA deixava cupom fechado no dia seguinte de fora.
     const p = this.erp.runReadOnly(
       `SELECT VENDEDOR, COUNT(*) AS qtd, COALESCE(SUM(VALORTOTAL), 0) AS total
          FROM caixa
         WHERE LOJA = '${loja}'
-          AND DATA >= '${de}' AND DATA <= '${ate}'
+          AND DATAFEC >= '${de}' AND DATAFEC <= '${ate}'
           AND UPPER(COALESCE(MARCADO, '')) <> 'SIM'
         GROUP BY VENDEDOR`,
       { maxRows: 500, timeoutMs: 15000 },
@@ -980,14 +1006,15 @@ export class CommissionsService {
       return { ok: false, error: `Wincred indisponível pra conferência: ${(giga as any).__erro}` };
     }
 
-    // Lado FLOW: pdv_sales por vendedora na mesma janela/loja
-    const startDate = new Date(`${de}T00:00:00.000Z`);
-    const endDate = new Date(`${ate}T23:59:59.999Z`);
+    // Lado FLOW: pdv_sales por vendedora na mesma janela/loja (dia em BRT,
+    // sem marcação — mesmos critérios da Folha)
+    const { startDate, endDate } = this.brtRange(de, ate);
     const flowRows: any[] = await this.prisma.$queryRawUnsafe(
       `SELECT seller_id AS "sellerId", COUNT(*)::int AS qtd, SUM(total)::float AS total
          FROM pdv_sales
         WHERE finalized_at >= $1 AND finalized_at <= $2
           AND status = 'finalized' AND is_training = false AND store_code = $3
+          ${CommissionsService.SEM_MARCACAO_SQL}
         GROUP BY seller_id`,
       startDate, endDate, loja,
     );
