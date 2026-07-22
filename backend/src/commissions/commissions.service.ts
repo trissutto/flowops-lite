@@ -6,6 +6,7 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { ErpService } from '../erp/erp.service';
 
 /**
  * CommissionsService — F4 do plano de migração 30/06.
@@ -34,7 +35,10 @@ import { PrismaService } from '../prisma/prisma.service';
 export class CommissionsService {
   private readonly logger = new Logger(CommissionsService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly erp: ErpService,
+  ) {}
 
   // ── Rules CRUD ─────────────────────────────────────────────────────
 
@@ -933,6 +937,113 @@ export class CommissionsService {
         naoCadastradaQtd: skippedSellerIds.size,
         naoCadastradaValor: round2(skippedVendido),
       },
+    };
+  }
+
+  /**
+   * CONFERÊNCIA Flow × Wincred (22/07): o ranking do Wincred lê a CAIXA do
+   * Giga, que tem as vendas do Flow (replicadas via outbox) E vendas que só
+   * existem lá — principalmente MARCADO fechado na tela do Wincred (a linha
+   * vira venda sem nunca passar pelo PDV do Flow) e lançamento manual.
+   * Compara vendedora a vendedora pro RH ver EXATAMENTE onde está a diferença.
+   *
+   * Exige LOJA (query na caixa filtrada por LOJA+DATA — sem full scan).
+   * Marcados ativos (MARCADO='SIM') ficam FORA dos dois lados (reserva ≠ venda).
+   */
+  async relatorioRhConferencia(input: { de: string; ate: string; storeCode: string }): Promise<any> {
+    const de = String(input.de || '').slice(0, 10);
+    const ate = String(input.ate || '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(de) || !/^\d{4}-\d{2}-\d{2}$/.test(ate)) {
+      throw new BadRequestException('Período inválido — use De/Até (YYYY-MM-DD)');
+    }
+    const loja = String(input.storeCode || '').replace(/\D/g, '').padStart(2, '0');
+    if (!loja || loja === '00') {
+      throw new BadRequestException('Escolha UMA loja pra conferir com o Wincred');
+    }
+
+    // Lado GIGA: caixa por VENDEDOR (mesma base do ranking do Wincred).
+    // Teto duro de 20s no app — se o Giga pendurar, responde com erro claro.
+    const p = this.erp.runReadOnly(
+      `SELECT VENDEDOR, COUNT(*) AS qtd, COALESCE(SUM(VALORTOTAL), 0) AS total
+         FROM caixa
+        WHERE LOJA = '${loja}'
+          AND DATA >= '${de}' AND DATA <= '${ate}'
+          AND UPPER(COALESCE(MARCADO, '')) <> 'SIM'
+        GROUP BY VENDEDOR`,
+      { maxRows: 500, timeoutMs: 15000 },
+    );
+    const giga: any = await Promise.race([
+      p.catch((e: any) => ({ __erro: e?.message || 'falha' })),
+      new Promise((res) => setTimeout(res, 20000, { __erro: 'Giga não respondeu em 20s' })),
+    ]);
+    if ((giga as any).__erro) {
+      return { ok: false, error: `Wincred indisponível pra conferência: ${(giga as any).__erro}` };
+    }
+
+    // Lado FLOW: pdv_sales por vendedora na mesma janela/loja
+    const startDate = new Date(`${de}T00:00:00.000Z`);
+    const endDate = new Date(`${ate}T23:59:59.999Z`);
+    const flowRows: any[] = await this.prisma.$queryRawUnsafe(
+      `SELECT seller_id AS "sellerId", COUNT(*)::int AS qtd, SUM(total)::float AS total
+         FROM pdv_sales
+        WHERE finalized_at >= $1 AND finalized_at <= $2
+          AND status = 'finalized' AND is_training = false AND store_code = $3
+        GROUP BY seller_id`,
+      startDate, endDate, loja,
+    );
+
+    const allSellers: any[] = await (this.prisma as any).seller.findMany({});
+    const sellersById = new Map(allSellers.map((s) => [s.id, s]));
+    const sellersByCodigo = new Map(
+      allSellers.filter((s) => s.wincredCodigo).map((s) => [String(Number(s.wincredCodigo)), s]),
+    );
+
+    // Consolida por "pessoa": chave = codigo Wincred quando existe, senão nome
+    type Comp = { nome: string; codigoWincred: string | null; wincredQtd: number; wincredTotal: number; flowQtd: number; flowTotal: number };
+    const porChave = new Map<string, Comp>();
+    const chaveDe = (codigo: string | null, nome: string) => codigo ? `cod:${codigo}` : `nome:${nome}`;
+
+    for (const r of (giga.rows || [])) {
+      const codigo = r.VENDEDOR != null ? String(Number(r.VENDEDOR)) : '0';
+      const seller = sellersByCodigo.get(codigo);
+      const nome = seller?.name || (codigo === '0' ? '(sem vendedora no Wincred)' : `VENDEDOR cód ${codigo}`);
+      const k = chaveDe(codigo, nome);
+      const c = porChave.get(k) || { nome, codigoWincred: codigo, wincredQtd: 0, wincredTotal: 0, flowQtd: 0, flowTotal: 0 };
+      c.wincredQtd += Number(r.qtd) || 0;
+      c.wincredTotal += Number(r.total) || 0;
+      porChave.set(k, c);
+    }
+    for (const r of flowRows) {
+      const seller = r.sellerId ? (sellersById.get(String(r.sellerId).trim()) || sellersByCodigo.get(String(Number(r.sellerId)) || '')) : null;
+      const codigo = seller?.wincredCodigo ? String(Number(seller.wincredCodigo)) : null;
+      const nome = seller?.name || (r.sellerId ? `seller ${String(r.sellerId).slice(0, 8)}…` : '(sem vendedora no Flow)');
+      const k = chaveDe(codigo, nome);
+      const c = porChave.get(k) || { nome, codigoWincred: codigo, wincredQtd: 0, wincredTotal: 0, flowQtd: 0, flowTotal: 0 };
+      c.flowQtd += Number(r.qtd) || 0;
+      c.flowTotal += Number(r.total) || 0;
+      porChave.set(k, c);
+    }
+
+    const round2 = (n: number) => Math.round(n * 100) / 100;
+    const linhas = Array.from(porChave.values())
+      .map((c) => ({
+        ...c,
+        wincredTotal: round2(c.wincredTotal),
+        flowTotal: round2(c.flowTotal),
+        diferenca: round2(c.wincredTotal - c.flowTotal),
+      }))
+      .sort((a, b) => Math.abs(b.diferenca) - Math.abs(a.diferenca));
+
+    return {
+      ok: true,
+      de, ate, loja,
+      linhas,
+      totais: {
+        wincred: round2(linhas.reduce((s, l) => s + l.wincredTotal, 0)),
+        flow: round2(linhas.reduce((s, l) => s + l.flowTotal, 0)),
+        diferenca: round2(linhas.reduce((s, l) => s + l.diferenca, 0)),
+      },
+      nota: 'Diferença positiva = venda que só existe na caixa do Wincred (marcado fechado por lá, venda manual, ou data divergente — linha de marcado fechado mantém a DATA da marcação).',
     };
   }
 

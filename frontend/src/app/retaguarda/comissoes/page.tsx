@@ -185,8 +185,22 @@ function FolhaRhTab() {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [abertos, setAbertos] = useState<Set<string>>(new Set());
+  // Conferência Flow × caixa do Wincred (por vendedora, exige loja)
+  const [conf, setConf] = useState<any | null>(null);
+  const [confLoading, setConfLoading] = useState(false);
 
   useEffect(() => { api<any[]>('/stores').then((r) => setLojas(r || [])).catch(() => {}); }, []);
+
+  const conferir = async () => {
+    if (!loja) return;
+    setConfLoading(true); setConf(null);
+    try {
+      const qs = new URLSearchParams({ de, ate, loja });
+      setConf(await api(`/commissions/relatorio-rh/conferencia?${qs.toString()}`));
+    } catch (e: any) {
+      setConf({ ok: false, error: e?.message || 'Falha na conferência' });
+    } finally { setConfLoading(false); }
+  };
 
   const buscar = async (pDe = de, pAte = ate, pLoja = loja) => {
     setLoading(true); setErr(null);
@@ -259,11 +273,70 @@ function FolhaRhTab() {
           className="rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-bold px-4 py-2 disabled:opacity-50 flex items-center gap-1.5">
           {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Calculator className="w-4 h-4" />} Calcular
         </button>
+        <button onClick={conferir} disabled={confLoading || !loja}
+          title={!loja ? 'Escolha UMA loja pra conferir' : 'Compara com a caixa do Wincred, vendedora a vendedora'}
+          className="rounded-lg border border-amber-400 px-3 py-2 text-sm font-bold text-amber-700 hover:bg-amber-50 flex items-center gap-1.5 disabled:opacity-40">
+          {confLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />} Conferir com Wincred
+        </button>
         <button onClick={() => window.print()} disabled={!funcionarias.length}
           className="ml-auto rounded-lg border border-slate-300 px-3 py-2 text-sm font-bold text-slate-600 hover:bg-slate-50 flex items-center gap-1.5 disabled:opacity-40">
           <Printer className="w-4 h-4" /> Imprimir
         </button>
       </div>
+
+      {/* Painel da conferência Flow × Wincred */}
+      {conf && (
+        <div className="bg-white rounded-xl border border-amber-300 overflow-hidden print:hidden">
+          <div className="px-4 py-2.5 bg-amber-50 border-b border-amber-200 flex items-center justify-between gap-2 flex-wrap">
+            <div className="text-sm font-bold text-amber-900">
+              Conferência Flow × Wincred — LJ {conf.loja || loja}
+            </div>
+            {conf.ok && (
+              <div className="text-xs font-bold text-amber-800">
+                Wincred {brl(conf.totais.wincred)} · Flow {brl(conf.totais.flow)} ·{' '}
+                diferença <span className={conf.totais.diferenca > 0 ? 'text-rose-700' : 'text-emerald-700'}>{brl(conf.totais.diferenca)}</span>
+              </div>
+            )}
+            <button onClick={() => setConf(null)} className="text-slate-400 hover:text-slate-600"><X className="w-4 h-4" /></button>
+          </div>
+          {!conf.ok ? (
+            <div className="px-4 py-3 text-sm text-rose-700">⚠️ {conf.error}</div>
+          ) : (
+            <>
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-[10px] uppercase text-slate-400 border-b border-slate-100">
+                    <th className="text-left px-4 py-1.5">Vendedora</th>
+                    <th className="text-right px-2 py-1.5">Wincred (caixa)</th>
+                    <th className="text-right px-2 py-1.5">Flow (PDV)</th>
+                    <th className="text-right px-4 py-1.5">Diferença</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {conf.linhas.map((l: any, i: number) => (
+                    <tr key={i} className={`border-b border-slate-50 last:border-b-0 ${Math.abs(l.diferenca) > 0.01 ? 'bg-rose-50/40' : ''}`}>
+                      <td className="px-4 py-1.5 font-medium text-slate-700">
+                        {l.nome}
+                        <span className="text-[10px] text-slate-400 ml-1.5">
+                          {l.wincredQtd} × {l.flowQtd} vendas
+                        </span>
+                      </td>
+                      <td className="px-2 py-1.5 text-right tabular-nums">{brl(l.wincredTotal)}</td>
+                      <td className="px-2 py-1.5 text-right tabular-nums">{brl(l.flowTotal)}</td>
+                      <td className={`px-4 py-1.5 text-right tabular-nums font-bold ${Math.abs(l.diferenca) > 0.01 ? 'text-rose-700' : 'text-emerald-600'}`}>
+                        {Math.abs(l.diferenca) > 0.01 ? brl(l.diferenca) : '✓'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div className="px-4 py-2 text-[11px] text-slate-500 border-t border-slate-100">
+                {conf.nota}
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       {/* Cabeçalho de impressão */}
       <div className="hidden print:block text-center">

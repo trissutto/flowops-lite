@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { PrismaModule } from '../prisma/prisma.module';
+import { ErpModule } from '../erp/erp.module';
 import { CommissionsService } from './commissions.service';
 import { CommissionsController } from './commissions.controller';
 
@@ -11,7 +12,7 @@ import { CommissionsController } from './commissions.controller';
  * mensais idempotentes e marcar comissões como pagas.
  */
 @Module({
-  imports: [PrismaModule],
+  imports: [PrismaModule, ErpModule],
   controllers: [CommissionsController],
   providers: [CommissionsService],
   exports: [CommissionsService],

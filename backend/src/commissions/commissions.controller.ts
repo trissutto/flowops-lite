@@ -64,6 +64,22 @@ export class CommissionsController {
     });
   }
 
+  /** Conferência Flow × caixa do Wincred, vendedora a vendedora (exige loja). */
+  @Get('relatorio-rh/conferencia')
+  relatorioRhConferencia(
+    @Req() req: any,
+    @Query('de') de?: string,
+    @Query('ate') ate?: string,
+    @Query('loja') loja?: string,
+  ) {
+    this.requireAdmin(req);
+    return this.svc.relatorioRhConferencia({
+      de: String(de || ''),
+      ate: String(ate || ''),
+      storeCode: String(loja || ''),
+    });
+  }
+
   // ── Rules ──────────────────────────────────────────────────────────
 
   @Get('rules')
