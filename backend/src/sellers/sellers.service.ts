@@ -311,7 +311,7 @@ export class SellersService {
     }
 
     try {
-      return await this.prisma.seller.create({
+      const created = await this.prisma.seller.create({
         data: {
           name: normalized,
           apelido: input.apelido?.trim().toUpperCase().slice(0, 40) || null,
@@ -342,11 +342,51 @@ export class SellersService {
           storeCodeOrigin: input.storeCodeOrigin || null,
         } as any,
       });
+      // Loja onde trabalha → entra sozinha na escolha de vendedora do PDV
+      await this.syncPdvWhitelist(created.id, null);
+      return created;
     } catch (e: any) {
       if (e?.code === 'P2002') {
         throw new BadRequestException(`Já existe uma vendedora com o nome "${normalized}".`);
       }
       throw e;
+    }
+  }
+
+  /**
+   * LOJA ONDE TRABALHA → PDV (22/07): selecionar a loja no cadastro coloca a
+   * funcionária AUTOMATICAMENTE na escolha de vendedora do PDV daquela loja
+   * (whitelist pdv_active_sellers) — sem depender da tela vendedoras-ativas.
+   * Trocou de loja → sai da anterior e entra na nova; inativou → sai de todas.
+   * Entradas manuais em OUTRAS lojas (multi-loja via vendedoras-ativas) são
+   * preservadas, exceto quando a funcionária é inativada.
+   */
+  private async syncPdvWhitelist(sellerId: string, prevStoreCode: string | null) {
+    try {
+      const s: any = await this.prisma.seller.findUnique({ where: { id: sellerId } });
+      if (!s) return;
+      const codigo = String(s.wincredCodigo || s.id).trim();
+      const nome = String((s as any).apelido || s.name).trim();
+      const alvo = s.active ? String(s.storeCodeOrigin || '').trim() || null : null;
+
+      if (!s.active) {
+        await (this.prisma as any).pdvActiveSeller.deleteMany({ where: { codigo } });
+        return;
+      }
+      if (prevStoreCode && prevStoreCode !== alvo) {
+        await (this.prisma as any).pdvActiveSeller.deleteMany({
+          where: { codigo, storeCode: prevStoreCode },
+        });
+      }
+      if (alvo) {
+        await (this.prisma as any).pdvActiveSeller.upsert({
+          where: { storeCode_codigo: { storeCode: alvo, codigo } },
+          create: { storeCode: alvo, codigo, nome },
+          update: { nome },
+        });
+      }
+    } catch (e: any) {
+      this.logger.warn(`[sellers] syncPdvWhitelist falhou (${sellerId}): ${e?.message || e}`);
     }
   }
 
@@ -444,7 +484,11 @@ export class SellersService {
     }
 
     try {
-      return await this.prisma.seller.update({ where: { id }, data });
+      const updated = await this.prisma.seller.update({ where: { id }, data });
+      // Loja onde trabalha / apelido / ativo mudaram → reflete na escolha de
+      // vendedora do PDV (whitelist), tirando da loja anterior se trocou.
+      await this.syncPdvWhitelist(id, seller.storeCodeOrigin || null);
+      return updated;
     } catch (e: any) {
       if (e?.code === 'P2002') {
         throw new BadRequestException('Já existe uma vendedora com esse nome.');

@@ -26,14 +26,20 @@ export class ActiveSellersService {
     // código do Wincred) — é o que o popup do PDV mostra no lugar do nome.
     try {
       const sellers: any[] = await (this.prisma as any).seller.findMany({
-        where: { wincredCodigo: { not: null } },
-        select: { wincredCodigo: true, apelido: true },
+        where: { apelido: { not: null } },
+        select: { id: true, wincredCodigo: true, apelido: true },
       });
       const norm = (s: any) => String(s ?? '').replace(/\D/g, '').replace(/^0+/, '') || '0';
-      const apelidoPorCodigo = new Map(
-        sellers.filter((s) => s.apelido).map((s) => [norm(s.wincredCodigo), s.apelido]),
+      // codigo da whitelist pode ser o código Wincred OU o Seller.id (funcionária
+      // criada direto no Flow, sem código Giga)
+      const porCodigo = new Map(
+        sellers.filter((s) => s.wincredCodigo).map((s) => [norm(s.wincredCodigo), s.apelido]),
       );
-      return rows.map((r) => ({ ...r, apelido: apelidoPorCodigo.get(norm(r.codigo)) || null }));
+      const porId = new Map(sellers.map((s) => [String(s.id), s.apelido]));
+      return rows.map((r) => ({
+        ...r,
+        apelido: porId.get(String(r.codigo)) || porCodigo.get(norm(r.codigo)) || null,
+      }));
     } catch {
       return rows;
     }

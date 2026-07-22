@@ -269,13 +269,13 @@ export default function NovaFuncionariaPage() {
           )}
 
           <div className="mt-3">
-            <Field label="Loja de origem (PDV)">
+            <Field label="Loja onde trabalha">
               <select
                 value={storeCodeOrigin}
                 onChange={(e) => setStoreCodeOrigin(e.target.value)}
                 className="w-full px-3 py-2 border rounded text-sm"
               >
-                <option value="">— não vincular —</option>
+                <option value="">— sem loja —</option>
                 {stores.map((s) => (
                   <option key={s.id} value={s.code}>
                     {s.code} {s.name}
@@ -284,7 +284,7 @@ export default function NovaFuncionariaPage() {
               </select>
             </Field>
             <p className="text-xs text-slate-400 mt-1">
-              Loja onde aparece na lista do PDV. Pode ser igual à loja responsável.
+              Ela entra sozinha na escolha de vendedora no PDV desta loja.
             </p>
           </div>
 

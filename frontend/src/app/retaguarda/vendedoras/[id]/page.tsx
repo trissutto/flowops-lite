@@ -99,6 +99,11 @@ export default function ProntuarioPage() {
   // Alterações não salvas — protege contra perder edição ao abrir a câmera
   // do cadastro facial (clique no botão errado descartava tudo).
   const [dirty, setDirty] = useState(false);
+  // Lojas pro seletor "Loja onde trabalha" (vira whitelist do PDV)
+  const [lojas, setLojas] = useState<Array<{ code: string; name: string }>>([]);
+  useEffect(() => {
+    api<Array<{ code: string; name: string }>>('/stores').then((r) => setLojas(r || [])).catch(() => {});
+  }, []);
 
   async function load() {
     setLoading(true);
@@ -133,6 +138,7 @@ export default function ProntuarioPage() {
         body: JSON.stringify({
           name: data.name,
           apelido: data.apelido ?? null,
+          storeCodeOrigin: data.storeCodeOrigin ?? null,
           whatsapp: data.whatsapp,
           cargo: data.cargo,
           cpf: data.cpf,
@@ -288,6 +294,21 @@ export default function ProntuarioPage() {
                 onChange={(v) => update('apelido', v.toUpperCase())}
                 placeholder="Ex.: LETICIA 2, JÔ, MARI"
               />
+            </Field>
+            <Field label="Loja onde trabalha">
+              <select
+                value={data.storeCodeOrigin || ''}
+                onChange={(e) => update('storeCodeOrigin', e.target.value || null)}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white"
+              >
+                <option value="">— sem loja —</option>
+                {lojas.map((s) => (
+                  <option key={s.code} value={s.code}>{s.code} · {s.name}</option>
+                ))}
+              </select>
+              <p className="text-[11px] text-slate-400 mt-1">
+                Ela entra sozinha na escolha de vendedora no PDV desta loja.
+              </p>
             </Field>
             <Field label="WhatsApp">
               <Input
