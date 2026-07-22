@@ -128,7 +128,9 @@ export default function RhHubPage() {
         </Grupo>
 
         <Grupo titulo="COMISSÃO" icon={DollarSign}>
-          <Botao href="/retaguarda/comissoes"              icon={DollarSign} label="Regras + Fechamento" sub="Mensal por vendedora" />
+          <Botao href="/retaguarda/comissoes?aba=folha"    icon={DollarSign} label="Folha RH"            sub="Comissão por funcionária · pagar" />
+          <Botao href="/retaguarda/comissoes?aba=rules"    icon={ClipboardList} label="Regras"           sub="% · meta · bônus" />
+          <Botao href="/retaguarda/comissoes?aba=periods"  icon={Calendar}   label="Fechamentos"         sub="Mensal (abrir/fechar/pagar)" />
           <Botao href="/retaguarda/comissoes/cargos"       icon={Award}      label="Por cargo"           sub="Vendedora · Líder · Gerente" />
         </Grupo>
 
