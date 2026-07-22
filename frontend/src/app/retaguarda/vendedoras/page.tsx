@@ -195,10 +195,19 @@ export default function VendedorasPage() {
   const storeByCode = new Map<string, Store>();
   for (const s of stores) storeByCode.set(s.code, s);
 
+  // Contagem do dropdown com os MESMOS critérios da lista (status atual +
+  // loja de origem OU loja responsável) — antes contava todas (ativas +
+  // desligadas) só por origem e o número "não batia" com o mostrando.
   const countByStore = new Map<string, number>();
   for (const s of items) {
-    if (s.storeCodeOrigin) {
-      countByStore.set(s.storeCodeOrigin, (countByStore.get(s.storeCodeOrigin) || 0) + 1);
+    if (filterStatus === 'active' && !s.active) continue;
+    if (filterStatus === 'inactive' && s.active) continue;
+    const codes = new Set<string>();
+    if (s.storeCodeOrigin) codes.add(s.storeCodeOrigin);
+    const respStore = stores.find((st) => st.id === s.responsibleStoreId);
+    if (respStore?.code) codes.add(respStore.code);
+    for (const c of codes) {
+      countByStore.set(c, (countByStore.get(c) || 0) + 1);
     }
   }
 
