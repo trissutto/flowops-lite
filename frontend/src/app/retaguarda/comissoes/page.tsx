@@ -346,14 +346,22 @@ function FolhaRhTab() {
         </div>
       </div>
 
-      {/* Totais */}
-      <div className="grid grid-cols-3 gap-3">
+      {/* Totais — a conta INTEIRA visível: vendido − trocas = líquido */}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         <div className="bg-white rounded-xl border border-slate-200 p-3 text-center">
           <div className="text-[10px] uppercase font-bold text-slate-400">Funcionárias</div>
           <div className="text-xl font-black text-slate-800">{dados?.totais?.funcionarias ?? '—'}</div>
         </div>
         <div className="bg-white rounded-xl border border-slate-200 p-3 text-center">
-          <div className="text-[10px] uppercase font-bold text-slate-400">Vendido líquido</div>
+          <div className="text-[10px] uppercase font-bold text-slate-400">Vendido</div>
+          <div className="text-xl font-black text-slate-800">{dados?.totais?.vendido != null ? brl(dados.totais.vendido) : '—'}</div>
+        </div>
+        <div className="bg-white rounded-xl border border-slate-200 p-3 text-center">
+          <div className="text-[10px] uppercase font-bold text-slate-400">Trocas</div>
+          <div className="text-xl font-black text-rose-600">{dados?.totais?.trocas != null ? `−${brl(dados.totais.trocas)}` : '—'}</div>
+        </div>
+        <div className="bg-white rounded-xl border border-slate-200 p-3 text-center">
+          <div className="text-[10px] uppercase font-bold text-slate-400">= Líquido (base)</div>
           <div className="text-xl font-black text-slate-800">{dados ? brl(dados.totais.vendidoLiquido) : '—'}</div>
         </div>
         <div className="bg-white rounded-xl border border-slate-200 p-3 text-center">

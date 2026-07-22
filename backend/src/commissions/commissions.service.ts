@@ -952,6 +952,8 @@ export class CommissionsService {
       funcionarias,
       totais: {
         funcionarias: funcionarias.length,
+        vendido: round2(funcionarias.reduce((s, f) => s + f.totalVendido, 0)),
+        trocas: round2(funcionarias.reduce((s, f) => s + f.totalTrocas, 0)),
         vendidoLiquido: round2(funcionarias.reduce((s, f) => s + f.vendidoLiquido, 0)),
         comissao: round2(funcionarias.reduce((s, f) => s + f.total, 0)),
       },
