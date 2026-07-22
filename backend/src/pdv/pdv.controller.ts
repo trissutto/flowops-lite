@@ -22,6 +22,7 @@ import { isValidTrainingPassword, isTrainingRequest } from './training.util';
 import { PdvService } from './pdv.service';
 import { ErpOutboxService } from './erp-outbox.service';
 import { ErpService } from '../erp/erp.service';
+import { PrismaService } from '../prisma/prisma.service';
 import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service';
 import { PixService } from './pix.service';
 import { NfceService } from './nfce.service';
@@ -54,6 +55,7 @@ export class PdvController {
     private readonly crediarioPrint: CrediarioPrintService,
     private readonly woo: WooCommerceService,
     private readonly returns: ReturnsService,
+    private readonly prisma: PrismaService,
   ) {}
 
   private requireRole(req: any) {
@@ -1505,14 +1507,37 @@ export class PdvController {
       console.warn('[funcionarios-search] erro:', e?.message);
     }
 
+    // APELIDO (22/07): loja SEM whitelist configurada cai neste fallback e o
+    // popup não via o apelido do cadastro. Casa pelo código do Wincred e, na
+    // falta dele na ficha, pelo NOME (os dois vêm da mesma tabela do Giga).
+    const normCod = (s: any) => String(s ?? '').replace(/\D/g, '').replace(/^0+/, '') || '0';
+    const normNome = (s: any) => String(s ?? '').trim().toUpperCase().replace(/\s+/g, ' ');
+    let apelidoPorCodigo = new Map<string, string>();
+    let apelidoPorNome = new Map<string, string>();
+    try {
+      const sellers: any[] = await (this.prisma as any).seller.findMany({
+        where: { apelido: { not: null } },
+        select: { wincredCodigo: true, name: true, apelido: true },
+      });
+      apelidoPorCodigo = new Map(
+        sellers.filter((s) => s.wincredCodigo).map((s) => [normCod(s.wincredCodigo), s.apelido]),
+      );
+      apelidoPorNome = new Map(sellers.map((s) => [normNome(s.name), s.apelido]));
+    } catch { /* segue sem apelido */ }
+
     return {
       table,
       lojaFiltered: !!(lojaCol && safeLoja),
-      results: rows.map((r) => ({
-        codigo: String(r.codigo ?? '').trim(),
-        nome: String(r.nome ?? '').trim(),
-        loja: r.loja !== undefined ? String(r.loja ?? '').trim() : '',
-      })).filter((r) => r.nome),
+      results: rows.map((r) => {
+        const codigo = String(r.codigo ?? '').trim();
+        const nome = String(r.nome ?? '').trim();
+        return {
+          codigo,
+          nome,
+          apelido: apelidoPorCodigo.get(normCod(codigo)) || apelidoPorNome.get(normNome(nome)) || null,
+          loja: r.loja !== undefined ? String(r.loja ?? '').trim() : '',
+        };
+      }).filter((r) => r.nome),
     };
   }
 
