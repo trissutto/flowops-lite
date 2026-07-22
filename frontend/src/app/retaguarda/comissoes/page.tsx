@@ -16,6 +16,7 @@ import Link from 'next/link';
 import {
   ArrowLeft, DollarSign, Plus, Save, X, Trash2, Loader2, Calculator,
   Lock, CheckCircle2, Download, RefreshCw, AlertTriangle, Search,
+  ChevronDown, ChevronRight, Printer, Users,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -75,7 +76,7 @@ const brl = (n: number | string | null | undefined) =>
   Number(n || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
 export default function ComissoesPage() {
-  const [tab, setTab] = useState<'rules' | 'periods' | 'report' | 'sales'>('rules');
+  const [tab, setTab] = useState<'rules' | 'periods' | 'report' | 'sales' | 'folha'>('folha');
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6 space-y-5">
       <div className="flex items-center gap-3">
@@ -105,6 +106,7 @@ export default function ComissoesPage() {
 
       <div className="flex gap-1 border-b border-slate-200">
         {[
+          { k: 'folha', label: 'Folha RH' },
           { k: 'rules', label: 'Regras' },
           { k: 'periods', label: 'Fechamentos' },
           { k: 'report', label: 'Relatório' },
@@ -124,6 +126,7 @@ export default function ComissoesPage() {
         ))}
       </div>
 
+      {tab === 'folha' && <FolhaRhTab />}
       {tab === 'rules' && <RulesTab />}
       {tab === 'periods' && <PeriodsTab />}
       {tab === 'report' && <ReportTab />}
@@ -165,6 +168,244 @@ const isoDaysAgo = (n: number) => {
   d.setDate(d.getDate() - n);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 };
+
+/**
+ * FOLHA RH — comissão por FUNCIONÁRIA em período livre (De/Até + loja),
+ * mesma matemática do fechamento, com cascata venda a venda e impressão.
+ * Só PDV com vendedora identificada; o que ficou de fora aparece no aviso.
+ */
+function FolhaRhTab() {
+  const iso = (d: Date) => d.toISOString().slice(0, 10);
+  const hoje = new Date();
+  const [de, setDe] = useState(iso(new Date(hoje.getFullYear(), hoje.getMonth(), 1)));
+  const [ate, setAte] = useState(iso(hoje));
+  const [loja, setLoja] = useState('');
+  const [lojas, setLojas] = useState<Array<{ code: string; name: string }>>([]);
+  const [dados, setDados] = useState<any | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [abertos, setAbertos] = useState<Set<string>>(new Set());
+
+  useEffect(() => { api<any[]>('/stores').then((r) => setLojas(r || [])).catch(() => {}); }, []);
+
+  const buscar = async (pDe = de, pAte = ate, pLoja = loja) => {
+    setLoading(true); setErr(null);
+    try {
+      const qs = new URLSearchParams({ de: pDe, ate: pAte });
+      if (pLoja) qs.set('loja', pLoja);
+      setDados(await api(`/commissions/relatorio-rh?${qs.toString()}`));
+    } catch (e: any) {
+      setErr(e?.message || 'Falha ao calcular');
+    } finally { setLoading(false); }
+  };
+  useEffect(() => { buscar(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+
+  const atalho = (tipo: 'hoje' | 'ontem' | '7d' | 'mes' | 'mesAnterior') => {
+    const h = new Date();
+    let nDe = de, nAte = ate;
+    if (tipo === 'hoje') { nDe = iso(h); nAte = iso(h); }
+    if (tipo === 'ontem') { const d = new Date(h); d.setDate(d.getDate() - 1); nDe = iso(d); nAte = iso(d); }
+    if (tipo === '7d') { const d = new Date(h); d.setDate(d.getDate() - 7); nDe = iso(d); nAte = iso(h); }
+    if (tipo === 'mes') { nDe = iso(new Date(h.getFullYear(), h.getMonth(), 1)); nAte = iso(h); }
+    if (tipo === 'mesAnterior') {
+      nDe = iso(new Date(h.getFullYear(), h.getMonth() - 1, 1));
+      nAte = iso(new Date(h.getFullYear(), h.getMonth(), 0));
+    }
+    setDe(nDe); setAte(nAte);
+    buscar(nDe, nAte, loja);
+  };
+
+  const toggle = (id: string) => setAbertos((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+
+  const fmtD = (s: any) => (s ? new Date(s).toLocaleDateString('pt-BR') : '—');
+  const funcionarias: any[] = dados?.funcionarias || [];
+  const sem = dados?.semAtribuicao;
+
+  return (
+    <div className="space-y-4">
+      {/* Filtros — De/Até + atalhos + loja (convenção da casa) */}
+      <div className="bg-white rounded-xl border border-slate-200 p-3 flex flex-wrap items-end gap-3 print:hidden">
+        <div>
+          <label className="text-[10px] uppercase font-bold text-slate-400 block">De</label>
+          <input type="date" value={de} onChange={(e) => setDe(e.target.value)}
+            className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm" />
+        </div>
+        <div>
+          <label className="text-[10px] uppercase font-bold text-slate-400 block">Até</label>
+          <input type="date" value={ate} onChange={(e) => setAte(e.target.value)}
+            className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm" />
+        </div>
+        <div className="flex gap-1">
+          {([['hoje', 'Hoje'], ['ontem', 'Ontem'], ['7d', '7 dias'], ['mes', 'Mês'], ['mesAnterior', 'Mês anterior']] as const).map(([k, l]) => (
+            <button key={k} onClick={() => atalho(k)}
+              className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-bold text-slate-600 hover:bg-emerald-50 hover:border-emerald-300">
+              {l}
+            </button>
+          ))}
+        </div>
+        <div>
+          <label className="text-[10px] uppercase font-bold text-slate-400 block">Loja</label>
+          <select value={loja} onChange={(e) => { setLoja(e.target.value); buscar(de, ate, e.target.value); }}
+            className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm">
+            <option value="">Todas</option>
+            {lojas.map((l) => <option key={l.code} value={l.code}>{l.code} · {l.name}</option>)}
+          </select>
+        </div>
+        <button onClick={() => buscar()} disabled={loading}
+          className="rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-bold px-4 py-2 disabled:opacity-50 flex items-center gap-1.5">
+          {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Calculator className="w-4 h-4" />} Calcular
+        </button>
+        <button onClick={() => window.print()} disabled={!funcionarias.length}
+          className="ml-auto rounded-lg border border-slate-300 px-3 py-2 text-sm font-bold text-slate-600 hover:bg-slate-50 flex items-center gap-1.5 disabled:opacity-40">
+          <Printer className="w-4 h-4" /> Imprimir
+        </button>
+      </div>
+
+      {/* Cabeçalho de impressão */}
+      <div className="hidden print:block text-center">
+        <div className="text-lg font-black">LURD&apos;S PLUS SIZE — FOLHA DE COMISSÕES</div>
+        <div className="text-sm text-slate-600">
+          Período {fmtD(dados?.de)} a {fmtD(dados?.ate)}{dados?.loja ? ` · Loja ${dados.loja}` : ' · Todas as lojas'}
+        </div>
+      </div>
+
+      {/* Totais */}
+      <div className="grid grid-cols-3 gap-3">
+        <div className="bg-white rounded-xl border border-slate-200 p-3 text-center">
+          <div className="text-[10px] uppercase font-bold text-slate-400">Funcionárias</div>
+          <div className="text-xl font-black text-slate-800">{dados?.totais?.funcionarias ?? '—'}</div>
+        </div>
+        <div className="bg-white rounded-xl border border-slate-200 p-3 text-center">
+          <div className="text-[10px] uppercase font-bold text-slate-400">Vendido líquido</div>
+          <div className="text-xl font-black text-slate-800">{dados ? brl(dados.totais.vendidoLiquido) : '—'}</div>
+        </div>
+        <div className="bg-white rounded-xl border border-slate-200 p-3 text-center">
+          <div className="text-[10px] uppercase font-bold text-slate-400">Comissão total</div>
+          <div className="text-xl font-black text-emerald-700">{dados ? brl(dados.totais.comissao) : '—'}</div>
+        </div>
+      </div>
+
+      {err && <div className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">⚠️ {err}</div>}
+      {sem && (sem.semVendedoraQtd > 0 || sem.naoCadastradaQtd > 0) && (
+        <div className="rounded-lg bg-amber-50 border border-amber-300 px-3 py-2 text-xs text-amber-800 print:hidden">
+          ⚠️ Fora da folha: {sem.semVendedoraQtd > 0 && <b>{sem.semVendedoraQtd} venda(s) SEM vendedora ({brl(sem.semVendedoraValor)})</b>}
+          {sem.semVendedoraQtd > 0 && sem.naoCadastradaQtd > 0 && ' · '}
+          {sem.naoCadastradaQtd > 0 && <b>{sem.naoCadastradaQtd} vendedora(s) não cadastrada(s) ({brl(sem.naoCadastradaValor)}) — corrija em &quot;Trocar vendedora&quot;</b>}
+        </div>
+      )}
+
+      {/* Lista por funcionária (alfabética) */}
+      <div className="space-y-2">
+        {loading && !dados && (
+          <div className="text-center py-10 text-slate-400"><Loader2 className="w-6 h-6 animate-spin mx-auto" /></div>
+        )}
+        {dados && funcionarias.length === 0 && (
+          <div className="text-center py-10 text-slate-400 text-sm">Nenhuma venda com vendedora no período.</div>
+        )}
+        {funcionarias.map((f) => {
+          const aberto = abertos.has(f.sellerId);
+          return (
+            <div key={f.sellerId} className="bg-white rounded-xl border border-slate-200 overflow-hidden print:break-inside-avoid">
+              <button onClick={() => toggle(f.sellerId)}
+                className="w-full px-4 py-3 flex items-center gap-3 text-left hover:bg-emerald-50/40 transition">
+                {aberto ? <ChevronDown className="w-4 h-4 text-slate-400 shrink-0 print:hidden" /> : <ChevronRight className="w-4 h-4 text-slate-400 shrink-0 print:hidden" />}
+                <div className="flex-1 min-w-0">
+                  <div className="font-bold text-slate-900 truncate flex items-center gap-2">
+                    {f.nome}
+                    <span className={`text-[10px] font-black px-1.5 py-0.5 rounded ${CARGO_COLORS[f.cargo as Cargo] || 'bg-slate-100 text-slate-600'}`}>
+                      {CARGO_LABELS[f.cargo as Cargo] || f.cargo}
+                    </span>
+                    {f.semRegra && (
+                      <span className="text-[10px] font-bold bg-red-100 text-red-700 px-1.5 py-0.5 rounded">SEM REGRA — R$ 0</span>
+                    )}
+                  </div>
+                  <div className="text-xs text-slate-500">
+                    {f.qtdVendas} venda(s) · vendido {brl(f.totalVendido)}
+                    {f.totalTrocas > 0 && <> · trocas −{brl(f.totalTrocas)}</>}
+                    {' '}· líquido <b>{brl(f.vendidoLiquido)}</b>
+                    {' '}· {f.lojas.map((lj: string) => (
+                      <span key={lj} className="inline-block bg-slate-100 border border-slate-200 rounded px-1 text-[10px] font-bold mr-1">LJ {lj}</span>
+                    ))}
+                  </div>
+                </div>
+                <div className="text-right shrink-0">
+                  <div className="font-black text-emerald-700 tabular-nums">{brl(f.total)}</div>
+                  {f.bonusValue > 0 && (
+                    <div className="text-[10px] text-violet-600 font-bold">inclui bônus {brl(f.bonusValue)} 🎯</div>
+                  )}
+                </div>
+              </button>
+              {aberto && (
+                <div className="border-t border-slate-100">
+                  {/* Breakdown por loja/regra */}
+                  <div className="px-4 py-2 flex gap-2 flex-wrap bg-slate-50/60 text-[11px] text-slate-600">
+                    {f.linhas.map((l: any, i: number) => (
+                      <span key={i} className="bg-white border border-slate-200 rounded px-2 py-0.5">
+                        LJ {l.storeCode}: {l.calcMode === 'on_responsible_store' ? 'loja toda' : 'vendas próprias'}{' '}
+                        {brl(l.vendidoLiquido)} × {Number(l.percentApplied)}% = <b>{brl(l.comissaoBase)}</b>
+                        {l.metaAtingida && <> + bônus {Number(l.bonusPercent)}% = <b>{brl(l.bonusValue)}</b></>}
+                        {!l.metaAtingida && l.metaValue != null && <> (meta {brl(l.metaValue)} não batida)</>}
+                      </span>
+                    ))}
+                  </div>
+                  {/* Cascata venda a venda (vendas próprias) */}
+                  {f.vendas.length > 0 && (
+                    <div className="overflow-x-auto max-h-96 overflow-y-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="text-[10px] uppercase text-slate-400 border-b border-slate-100">
+                            <th className="text-left px-4 py-1.5">Data</th>
+                            <th className="text-left px-2 py-1.5">Cliente</th>
+                            <th className="text-left px-2 py-1.5">Pagamento</th>
+                            <th className="text-center px-2 py-1.5">Loja</th>
+                            <th className="text-right px-2 py-1.5">Venda</th>
+                            <th className="text-right px-4 py-1.5">Comissão</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {f.vendas.map((v: any) => (
+                            <tr key={v.id} className="border-b border-slate-50 last:border-b-0">
+                              <td className="px-4 py-1 text-xs text-slate-500 whitespace-nowrap">
+                                {new Date(v.data).toLocaleDateString('pt-BR')} {new Date(v.data).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                              </td>
+                              <td className="px-2 py-1 text-xs text-slate-600 truncate max-w-[180px]">{v.cliente || '—'}</td>
+                              <td className="px-2 py-1 text-xs text-slate-500 uppercase">{v.pagamento || '—'}</td>
+                              <td className="px-2 py-1 text-center text-xs font-bold text-slate-500">{v.loja}</td>
+                              <td className="px-2 py-1 text-right tabular-nums">{brl(v.valor)}</td>
+                              <td className="px-4 py-1 text-right tabular-nums font-bold text-emerald-700">{brl(v.comissao)}</td>
+                            </tr>
+                          ))}
+                          {f.trocas.map((t: any, i: number) => (
+                            <tr key={`t${i}`} className="border-b border-slate-50 last:border-b-0 bg-rose-50/40">
+                              <td className="px-4 py-1 text-xs text-rose-600 whitespace-nowrap">{new Date(t.data).toLocaleDateString('pt-BR')}</td>
+                              <td className="px-2 py-1 text-xs text-rose-600" colSpan={2}>TROCA/DEVOLUÇÃO (abate da base)</td>
+                              <td className="px-2 py-1 text-center text-xs font-bold text-rose-500">{t.loja}</td>
+                              <td className="px-2 py-1 text-right tabular-nums text-rose-600">−{brl(t.valor)}</td>
+                              <td className="px-4 py-1" />
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                  {f.vendas.length === 0 && f.linhas.some((l: any) => l.calcMode === 'on_responsible_store') && (
+                    <div className="px-4 py-2 text-xs text-slate-500">
+                      Comissão calculada sobre a loja inteira (cargo {CARGO_LABELS[f.cargo as Cargo] || f.cargo}) — sem lista de vendas próprias.
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 function SalesTab() {
   const [stores, setStores] = useState<Store[]>([]);
