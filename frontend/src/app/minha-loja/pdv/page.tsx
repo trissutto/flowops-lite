@@ -3197,7 +3197,9 @@ function ConfirmSaleModal({
     String(m || '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 
   const [searchTerm, setSearchTerm] = useState('');
-  const [results, setResults] = useState<Array<{ codigo: string; nome: string; loja?: string }>>([]);
+  // apelido: definido no cadastro da funcionária (retaguarda/vendedoras) —
+  // é o que aparece e o que fica gravado na venda como nome da vendedora
+  const [results, setResults] = useState<Array<{ codigo: string; nome: string; apelido?: string | null; loja?: string }>>([]);
   const [searching, setSearching] = useState(false);
   const [tabelaOk, setTabelaOk] = useState<boolean | null>(null);
   const [lojaFiltered, setLojaFiltered] = useState(false);
@@ -3220,7 +3222,7 @@ function ConfirmSaleModal({
     (async () => {
       setSearching(true);
       try {
-        const ativas = await api<Array<{ codigo: string; nome: string }>>(
+        const ativas = await api<Array<{ codigo: string; nome: string; apelido?: string | null }>>(
           `/pdv/vendedoras-ativas?storeCode=${encodeURIComponent(storeCode)}`,
         );
         if (cancelled) return;
@@ -3282,7 +3284,9 @@ function ConfirmSaleModal({
     if (usingActiveList && whitelist) {
       const term = searchTerm.trim().toLowerCase();
       if (!term) return whitelist;
-      return whitelist.filter((f) => f.nome.toLowerCase().includes(term));
+      return whitelist.filter((f) =>
+        f.nome.toLowerCase().includes(term) || (f.apelido || '').toLowerCase().includes(term),
+      );
     }
     return results;
   }, [usingActiveList, whitelist, results, searchTerm]);
@@ -3306,7 +3310,7 @@ function ConfirmSaleModal({
     } else if (e.key === 'Enter') {
       e.preventDefault();
       const pick = visibleResults[highlight];
-      if (pick) setSelected({ codigo: pick.codigo, nome: pick.nome });
+      if (pick) setSelected({ codigo: pick.codigo, nome: pick.apelido || pick.nome });
     } else if (e.key === 'Escape') {
       e.preventDefault();
       onCancel();
@@ -3387,14 +3391,16 @@ function ConfirmSaleModal({
           {visibleResults.length > 0 && (
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
               {visibleResults.map((f, idx) => {
-                const isSel = selected?.codigo === f.codigo && selected?.nome === f.nome;
-                const primeiroNome = f.nome.split(/\s+/)[0];
+                // APELIDO do cadastro vence; senão primeiro nome
+                const rotulo = (f as any).apelido || f.nome.split(/\s+/)[0];
+                const nomeEscolhido = (f as any).apelido || f.nome;
+                const isSel = selected?.codigo === f.codigo && selected?.nome === nomeEscolhido;
                 return (
                   <button
                     key={f.codigo + f.nome}
                     type="button"
                     data-vendedora-idx={idx}
-                    onClick={() => setSelected({ codigo: f.codigo, nome: f.nome })}
+                    onClick={() => setSelected({ codigo: f.codigo, nome: nomeEscolhido })}
                     title={f.nome}
                     className={`relative flex flex-col items-center justify-center gap-2 rounded-2xl border-2 p-4 min-h-[112px] transition active:scale-[0.97] ${
                       isSel
@@ -3415,7 +3421,7 @@ function ConfirmSaleModal({
                     <span className={`text-[13px] font-bold text-center leading-tight line-clamp-2 ${
                       isSel ? 'text-[#7A5E0E]' : 'text-slate-700'
                     }`} title={f.nome}>
-                      {primeiroNome}
+                      {rotulo}
                     </span>
                   </button>
                 );

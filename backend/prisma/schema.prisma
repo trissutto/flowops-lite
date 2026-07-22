@@ -378,6 +378,9 @@ model Order {
 model Seller {
   id        String   @id @default(uuid())
   name      String   @unique
+  // APELIDO (22/07): é o que aparece na escolha da vendedora no PDV —
+  // nome completo fica pra folha/RH.
+  apelido   String?  @db.VarChar(40)
   whatsapp  String?  // opcional — pra matriz saber contato da vendedora
   active    Boolean  @default(true)
   createdAt DateTime @default(now()) @map("created_at")
