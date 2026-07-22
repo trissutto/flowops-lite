@@ -6,6 +6,7 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { ErpService } from '../erp/erp.service';
 
 /**
  * CommissionsService — F4 do plano de migração 30/06.
@@ -34,7 +35,10 @@ import { PrismaService } from '../prisma/prisma.service';
 export class CommissionsService {
   private readonly logger = new Logger(CommissionsService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly erp: ErpService,
+  ) {}
 
   // ── Rules CRUD ─────────────────────────────────────────────────────
 
@@ -231,8 +235,10 @@ export class CommissionsService {
     if (existing) return existing;
 
     const [y, m] = yearMonth.split('-').map((s) => parseInt(s, 10));
-    const startDate = new Date(y, m - 1, 1, 0, 0, 0);
-    const endDate = new Date(y, m, 0, 23, 59, 59); // último dia do mês
+    // Mês em HORÁRIO DE BRASÍLIA (UTC-3) — no servidor (UTC) o `new Date(y,m,d)`
+    // cortava o mês 3h mais cedo: venda do dia 30 à noite caía no mês seguinte.
+    const startDate = new Date(Date.UTC(y, m - 1, 1, 3, 0, 0));
+    const endDate = new Date(Date.UTC(y, m, 1, 2, 59, 59, 999)); // 23:59:59.999 BRT do último dia
 
     return (this.prisma as any).commissionPeriod.create({
       data: {
@@ -299,6 +305,9 @@ export class CommissionsService {
     // NOTA: tabela real = pdv_sales / pdv_returns (@@map), colunas snake_case,
     // status finalizado = 'finalized'. Aliases voltam em camelCase pro código
     // downstream continuar lendo r.storeCode / r.sellerId / r.total.
+    // NOTA (22/07): exclui paymentMethod='MARCADO' — marcação ("provar em
+    // casa") não é venda; a venda real acontece quando o marcado é puxado
+    // pra venda. Contar as duas dava comissão em dobro.
     const salesByStore: any[] = await this.prisma.$queryRawUnsafe(
       `SELECT
          store_code AS "storeCode",
@@ -309,6 +318,7 @@ export class CommissionsService {
          AND finalized_at <= $2
          AND status = 'finalized'
          AND is_training = false
+         ${CommissionsService.SEM_MARCACAO_SQL}
        GROUP BY store_code`,
       period.startDate,
       period.endDate,
@@ -349,6 +359,7 @@ export class CommissionsService {
          AND seller_id IS NOT NULL
          AND status = 'finalized'
          AND is_training = false
+         ${CommissionsService.SEM_MARCACAO_SQL}
        GROUP BY seller_id, store_code`,
       period.startDate,
       period.endDate,
@@ -640,14 +651,27 @@ export class CommissionsService {
    * Só PDV com vendedora identificada (decisão do dono); o que ficou de fora
    * aparece em `semAtribuicao` pra conferência.
    */
+  /** Janela do dia em HORÁRIO DE BRASÍLIA (UTC-3). O corte em UTC puro
+   *  jogava venda depois das 21h pro dia seguinte (bug 22/07 — a Folha não
+   *  batia com o Faturamento nem com o próprio Flow). */
+  private brtRange(de: string, ate: string): { startDate: Date; endDate: Date } {
+    const startDate = new Date(`${de}T03:00:00.000Z`); // 00:00 BRT
+    const endDate = new Date(new Date(`${ate}T03:00:00.000Z`).getTime() + 24 * 3600 * 1000 - 1); // 23:59:59.999 BRT
+    return { startDate, endDate };
+  }
+
+  /** Marcação (provar em casa) NÃO é venda: fecha com paymentMethod='MARCADO'
+   *  e a venda de verdade acontece DEPOIS, quando o marcado é puxado pra
+   *  venda — contar as duas seria comissão em dobro (bug 22/07). */
+  private static readonly SEM_MARCACAO_SQL = `AND (payment_method IS NULL OR payment_method <> 'MARCADO')`;
+
   async relatorioRh(input: { de: string; ate: string; storeCode?: string }): Promise<any> {
     const de = String(input.de || '').slice(0, 10);
     const ate = String(input.ate || '').slice(0, 10);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(de) || !/^\d{4}-\d{2}-\d{2}$/.test(ate)) {
       throw new BadRequestException('Período inválido — use De/Até (YYYY-MM-DD)');
     }
-    const startDate = new Date(`${de}T00:00:00.000Z`);
-    const endDate = new Date(`${ate}T23:59:59.999Z`);
+    const { startDate, endDate } = this.brtRange(de, ate);
     const lojaFiltro = input.storeCode ? String(input.storeCode).trim() : null;
 
     const storeFilterSql = lojaFiltro ? `AND store_code = $3` : '';
@@ -658,7 +682,8 @@ export class CommissionsService {
       `SELECT store_code AS "storeCode", COUNT(*)::int AS qtd, SUM(total)::float AS total
          FROM pdv_sales
         WHERE finalized_at >= $1 AND finalized_at <= $2
-          AND status = 'finalized' AND is_training = false ${storeFilterSql}
+          AND status = 'finalized' AND is_training = false
+          ${CommissionsService.SEM_MARCACAO_SQL} ${storeFilterSql}
         GROUP BY store_code`,
       ...params,
     );
@@ -674,7 +699,8 @@ export class CommissionsService {
               COUNT(*)::int AS qtd, SUM(total)::float AS total
          FROM pdv_sales
         WHERE finalized_at >= $1 AND finalized_at <= $2
-          AND seller_id IS NOT NULL AND status = 'finalized' AND is_training = false ${storeFilterSql}
+          AND seller_id IS NOT NULL AND status = 'finalized' AND is_training = false
+          ${CommissionsService.SEM_MARCACAO_SQL} ${storeFilterSql}
         GROUP BY seller_id, store_code`,
       ...params,
     );
@@ -696,7 +722,8 @@ export class CommissionsService {
               payment_method AS "paymentMethod", customer_name AS "customerName"
          FROM pdv_sales
         WHERE finalized_at >= $1 AND finalized_at <= $2
-          AND seller_id IS NOT NULL AND status = 'finalized' AND is_training = false ${storeFilterSql}
+          AND seller_id IS NOT NULL AND status = 'finalized' AND is_training = false
+          ${CommissionsService.SEM_MARCACAO_SQL} ${storeFilterSql}
         ORDER BY finalized_at
         LIMIT 20000`,
       ...params,
@@ -718,7 +745,8 @@ export class CommissionsService {
       `SELECT COUNT(*)::int AS qtd, COALESCE(SUM(total), 0)::float AS total
          FROM pdv_sales
         WHERE finalized_at >= $1 AND finalized_at <= $2
-          AND seller_id IS NULL AND status = 'finalized' AND is_training = false ${storeFilterSql}`,
+          AND seller_id IS NULL AND status = 'finalized' AND is_training = false
+          ${CommissionsService.SEM_MARCACAO_SQL} ${storeFilterSql}`,
       ...params,
     );
 
@@ -933,6 +961,116 @@ export class CommissionsService {
         naoCadastradaQtd: skippedSellerIds.size,
         naoCadastradaValor: round2(skippedVendido),
       },
+    };
+  }
+
+  /**
+   * CONFERÊNCIA Flow × Wincred (22/07): o ranking do Wincred lê a CAIXA do
+   * Giga, que tem as vendas do Flow (replicadas via outbox) E vendas que só
+   * existem lá — principalmente MARCADO fechado na tela do Wincred (a linha
+   * vira venda sem nunca passar pelo PDV do Flow) e lançamento manual.
+   * Compara vendedora a vendedora pro RH ver EXATAMENTE onde está a diferença.
+   *
+   * Exige LOJA (query na caixa filtrada por LOJA+DATA — sem full scan).
+   * Marcados ativos (MARCADO='SIM') ficam FORA dos dois lados (reserva ≠ venda).
+   */
+  async relatorioRhConferencia(input: { de: string; ate: string; storeCode: string }): Promise<any> {
+    const de = String(input.de || '').slice(0, 10);
+    const ate = String(input.ate || '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(de) || !/^\d{4}-\d{2}-\d{2}$/.test(ate)) {
+      throw new BadRequestException('Período inválido — use De/Até (YYYY-MM-DD)');
+    }
+    const loja = String(input.storeCode || '').replace(/\D/g, '').padStart(2, '0');
+    if (!loja || loja === '00') {
+      throw new BadRequestException('Escolha UMA loja pra conferir com o Wincred');
+    }
+
+    // Lado GIGA: caixa por VENDEDOR (mesma base do ranking do Wincred).
+    // Teto duro de 20s no app — se o Giga pendurar, responde com erro claro.
+    // DATAFEC (data de FECHAMENTO do cupom) — é o que as telas do Wincred
+    // usam; filtrar por DATA deixava cupom fechado no dia seguinte de fora.
+    const p = this.erp.runReadOnly(
+      `SELECT VENDEDOR, COUNT(*) AS qtd, COALESCE(SUM(VALORTOTAL), 0) AS total
+         FROM caixa
+        WHERE LOJA = '${loja}'
+          AND DATAFEC >= '${de}' AND DATAFEC <= '${ate}'
+          AND UPPER(COALESCE(MARCADO, '')) <> 'SIM'
+        GROUP BY VENDEDOR`,
+      { maxRows: 500, timeoutMs: 15000 },
+    );
+    const giga: any = await Promise.race([
+      p.catch((e: any) => ({ __erro: e?.message || 'falha' })),
+      new Promise((res) => setTimeout(res, 20000, { __erro: 'Giga não respondeu em 20s' })),
+    ]);
+    if ((giga as any).__erro) {
+      return { ok: false, error: `Wincred indisponível pra conferência: ${(giga as any).__erro}` };
+    }
+
+    // Lado FLOW: pdv_sales por vendedora na mesma janela/loja (dia em BRT,
+    // sem marcação — mesmos critérios da Folha)
+    const { startDate, endDate } = this.brtRange(de, ate);
+    const flowRows: any[] = await this.prisma.$queryRawUnsafe(
+      `SELECT seller_id AS "sellerId", COUNT(*)::int AS qtd, SUM(total)::float AS total
+         FROM pdv_sales
+        WHERE finalized_at >= $1 AND finalized_at <= $2
+          AND status = 'finalized' AND is_training = false AND store_code = $3
+          ${CommissionsService.SEM_MARCACAO_SQL}
+        GROUP BY seller_id`,
+      startDate, endDate, loja,
+    );
+
+    const allSellers: any[] = await (this.prisma as any).seller.findMany({});
+    const sellersById = new Map(allSellers.map((s) => [s.id, s]));
+    const sellersByCodigo = new Map(
+      allSellers.filter((s) => s.wincredCodigo).map((s) => [String(Number(s.wincredCodigo)), s]),
+    );
+
+    // Consolida por "pessoa": chave = codigo Wincred quando existe, senão nome
+    type Comp = { nome: string; codigoWincred: string | null; wincredQtd: number; wincredTotal: number; flowQtd: number; flowTotal: number };
+    const porChave = new Map<string, Comp>();
+    const chaveDe = (codigo: string | null, nome: string) => codigo ? `cod:${codigo}` : `nome:${nome}`;
+
+    for (const r of (giga.rows || [])) {
+      const codigo = r.VENDEDOR != null ? String(Number(r.VENDEDOR)) : '0';
+      const seller = sellersByCodigo.get(codigo);
+      const nome = seller?.name || (codigo === '0' ? '(sem vendedora no Wincred)' : `VENDEDOR cód ${codigo}`);
+      const k = chaveDe(codigo, nome);
+      const c = porChave.get(k) || { nome, codigoWincred: codigo, wincredQtd: 0, wincredTotal: 0, flowQtd: 0, flowTotal: 0 };
+      c.wincredQtd += Number(r.qtd) || 0;
+      c.wincredTotal += Number(r.total) || 0;
+      porChave.set(k, c);
+    }
+    for (const r of flowRows) {
+      const seller = r.sellerId ? (sellersById.get(String(r.sellerId).trim()) || sellersByCodigo.get(String(Number(r.sellerId)) || '')) : null;
+      const codigo = seller?.wincredCodigo ? String(Number(seller.wincredCodigo)) : null;
+      const nome = seller?.name || (r.sellerId ? `seller ${String(r.sellerId).slice(0, 8)}…` : '(sem vendedora no Flow)');
+      const k = chaveDe(codigo, nome);
+      const c = porChave.get(k) || { nome, codigoWincred: codigo, wincredQtd: 0, wincredTotal: 0, flowQtd: 0, flowTotal: 0 };
+      c.flowQtd += Number(r.qtd) || 0;
+      c.flowTotal += Number(r.total) || 0;
+      porChave.set(k, c);
+    }
+
+    const round2 = (n: number) => Math.round(n * 100) / 100;
+    const linhas = Array.from(porChave.values())
+      .map((c) => ({
+        ...c,
+        wincredTotal: round2(c.wincredTotal),
+        flowTotal: round2(c.flowTotal),
+        diferenca: round2(c.wincredTotal - c.flowTotal),
+      }))
+      .sort((a, b) => Math.abs(b.diferenca) - Math.abs(a.diferenca));
+
+    return {
+      ok: true,
+      de, ate, loja,
+      linhas,
+      totais: {
+        wincred: round2(linhas.reduce((s, l) => s + l.wincredTotal, 0)),
+        flow: round2(linhas.reduce((s, l) => s + l.flowTotal, 0)),
+        diferenca: round2(linhas.reduce((s, l) => s + l.diferenca, 0)),
+      },
+      nota: 'Diferença positiva = venda que só existe na caixa do Wincred (marcado fechado por lá, venda manual, ou data divergente — linha de marcado fechado mantém a DATA da marcação).',
     };
   }
 
