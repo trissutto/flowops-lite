@@ -238,6 +238,8 @@ export class ReturnsController {
       storeName?: string;
       attachToSaleId?: string | null;
       password?: string;
+      /** Frontend manda true quando user confirma o alerta cross-store. */
+      confirmCrossStore?: boolean;
     },
   ) {
     this.requireRole(req);
@@ -256,6 +258,7 @@ export class ReturnsController {
       // TRAVA DE SEGURANÃ‡A: sessÃ£o em treino (header) â†’ batch inteiro tratado
       // como treino MESMO que as vendas originais sejam reais.
       trainingRequest: isTrainingRequest(req),
+      confirmCrossStore: !!body.confirmCrossStore,
     });
   }
 

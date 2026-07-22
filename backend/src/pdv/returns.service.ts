@@ -1597,6 +1597,9 @@ export class ReturnsService {
     userName?: string;
     /** MODO TREINAMENTO — sessão com header x-training-mode (união com sale.isTraining) */
     trainingRequest?: boolean;
+    /** CONFIRMAÇÃO cross-store — igual ao createReturn (gap corrigido 22/07:
+     *  o batch entrava sem avisar que a peça era de outra loja). */
+    confirmCrossStore?: boolean;
   }) {
     const { vendas, storeCode, storeName, modo, motivo, userId, userName } = input;
     const attachToSaleId = input.attachToSaleId || null;
@@ -1608,6 +1611,28 @@ export class ReturnsService {
     for (const v of vendas) {
       if (!v.originalSaleId) throw new BadRequestException('originalSaleId faltando em uma das vendas');
       if (!v.items?.length) throw new BadRequestException(`Venda ${v.originalSaleId.slice(0, 8)} sem itens`);
+    }
+
+    // ── ALERTA CROSS-STORE (mesma regra do createReturn) ──
+    if (!input.confirmCrossStore && storeCode) {
+      const salesLojas: any[] = await (this.prisma as any).pdvSale.findMany({
+        where: { id: { in: vendas.map((v) => v.originalSaleId) } },
+        select: { storeCode: true, storeName: true },
+      });
+      const outra = salesLojas.find((s) => s.storeCode && s.storeCode !== storeCode);
+      if (outra) {
+        throw new BadRequestException({
+          crossStoreAlert: true,
+          message:
+            `Tem peça vendida na loja ${outra.storeName || outra.storeCode}, ` +
+            `mas a devolução está sendo feita na loja ${storeName || storeCode}. ` +
+            `Se confirmar, as peças entrarão no estoque da loja ${storeName || storeCode}.`,
+          originalStoreCode: outra.storeCode,
+          originalStoreName: outra.storeName,
+          currentStoreCode: storeCode,
+          currentStoreName: storeName,
+        });
+      }
     }
 
     // 1. Pré-carrega todas as vendas + valida items + monta itemsToCreate por venda
