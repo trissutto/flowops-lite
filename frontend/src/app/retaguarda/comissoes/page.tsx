@@ -77,6 +77,19 @@ const brl = (n: number | string | null | undefined) =>
 
 export default function ComissoesPage() {
   const [tab, setTab] = useState<'rules' | 'periods' | 'report' | 'sales' | 'folha'>('folha');
+  // Atalhos do hub RH chegam com ?aba= — abre direto na aba pedida.
+  // (window.location em vez de useSearchParams pra não exigir Suspense no build)
+  useEffect(() => {
+    try {
+      const aba = new URLSearchParams(window.location.search).get('aba') || '';
+      const mapa: Record<string, typeof tab> = {
+        folha: 'folha', rules: 'rules', regras: 'rules',
+        periods: 'periods', fechamentos: 'periods',
+        report: 'report', relatorio: 'report', sales: 'sales',
+      };
+      if (mapa[aba]) setTab(mapa[aba]);
+    } catch { /* fica na default */ }
+  }, []);
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6 space-y-5">
       <div className="flex items-center gap-3">
