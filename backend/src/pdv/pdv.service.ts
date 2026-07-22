@@ -356,6 +356,11 @@ export class PdvService {
             descricao: String(it.descricao || ''),
           })),
           pagamentos: [{ metodo: 'estorno', valor: -Math.abs(Number(sale.total) || 0) }],
+          // MESMA vendedora da venda original (22/07): sem isso o negativo caía
+          // em VENDEDOR=0 e o ranking do Wincred deixava o valor CHEIO da venda
+          // cancelada no nome da vendedora (bucket "sem vendedora" negativo na
+          // conferência da Folha RH).
+          vendedorName: sale.vendedorName || undefined,
           obsPedido: `estorno-${saleId.slice(0, 8)}`,
         } as any);
         passos.push({
