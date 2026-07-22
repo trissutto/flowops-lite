@@ -47,6 +47,23 @@ export class CommissionsController {
     }
   }
 
+  // ── Relatório FOLHA RH — período livre De/Até + loja, por funcionária ──
+
+  @Get('relatorio-rh')
+  relatorioRh(
+    @Req() req: any,
+    @Query('de') de?: string,
+    @Query('ate') ate?: string,
+    @Query('loja') loja?: string,
+  ) {
+    this.requireAdmin(req);
+    return this.svc.relatorioRh({
+      de: String(de || ''),
+      ate: String(ate || ''),
+      storeCode: loja || undefined,
+    });
+  }
+
   // ── Rules ──────────────────────────────────────────────────────────
 
   @Get('rules')
