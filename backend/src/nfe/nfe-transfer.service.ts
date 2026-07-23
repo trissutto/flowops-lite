@@ -211,13 +211,13 @@ export class NfeTransferService {
   private startPadraoPara(cnpj: string, serie: string): number | undefined {
     // Varredura 23/07 de TODAS as instalações GigaNFe locais (última nNF
     // emitida por CNPJ, série 1, mod 55):
+    // Só CNPJs ATIVOS na rede (dono 23/07: não listar empresa extinta).
+    // Históricos achados na varredura, se algum dia voltarem: Búzios/RJ
+    // 20104813000724 → 103 · raiz 28.110.859: 000253 → 30, 000415 → 31.
     const CONTINUACAO_GIGANFE: Record<string, number> = {
       '30246592000197': 519,  // LURDS matriz Itanhaém-1 — última 518 (jun/26)
       '30246592000278': 8,    // LURDS filial Jundiaí — última 7 (ago/25)
       '20104813000139': 2298, // RISSUTTO matriz Itanhaém-2 — última 2297 (abr/26)
-      '20104813000724': 103,  // RISSUTTO filial Búzios/RJ — última 102 (mar/23)
-      '28110859000253': 30,   // raiz 28.110.859 (Moema antiga) — última 29 (dez/22)
-      '28110859000415': 31,   // raiz 28.110.859 filial — última 30 (mar/23)
     };
     return CONTINUACAO_GIGANFE[cnpj] && serie === '1' ? CONTINUACAO_GIGANFE[cnpj] : undefined;
   }
@@ -297,7 +297,9 @@ export class NfeTransferService {
       const ncm = this.normNcm(info?.ncm, g.sku, warnings);
       items.push({
         sku: g.sku,
-        ean: (info?.ean || '').trim() || 'SEM GTIN',
+        // GTIN do schema aceita SÓ 8/12/13/14 dígitos — EAN torto do espelho
+        // (7/9/11 díg, letra, espaço) derruba o LOTE inteiro com cStat 225.
+        ean: this.gtinValido((info?.ean || '').trim()),
         xProd: (info?.descricao || g.row.descricao || g.sku).trim().slice(0, 120),
         ncm,
         cfop,
@@ -446,6 +448,11 @@ export class NfeTransferService {
 
   private digits(s: string): string {
     return String(s || '').replace(/\D/g, '');
+  }
+
+  /** cEAN/cEANTrib: pattern do XSD é "SEM GTIN" ou 8/12/13/14 dígitos. */
+  private gtinValido(ean: string): string {
+    return /^(\d{8}|\d{12,14})$/.test(ean) ? ean : 'SEM GTIN';
   }
 
   private normNcm(ncm: any, sku: string, warnings: string[]): string {

@@ -187,6 +187,31 @@ export default function RemessasAdminPage() {
     }
   };
 
+  // Baixa o XML EXATO que foi à SEFAZ (diagnóstico de rejeição sem queimar número)
+  const baixarXmlNfe = async (d: any) => {
+    try {
+      const doc = await api<any>(`/nfe/${d.id}`);
+      const partes: Array<[string, string | null]> = [
+        [`nfe-${d.numero}-enviado.xml`, doc?.xmlEnviado],
+        [`nfe-${d.numero}-resposta.xml`, d.status !== 'authorized' ? doc?.xmlResposta : null],
+      ];
+      let baixou = false;
+      for (const [nome, xml] of partes) {
+        if (!xml) continue;
+        const blob = new Blob([xml], { type: 'application/xml' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = nome;
+        a.click();
+        URL.revokeObjectURL(a.href);
+        baixou = true;
+      }
+      if (!baixou) alert('Esta NF-e não tem XML gravado (falhou antes de assinar).');
+    } catch (e: any) {
+      alert(`Erro ao buscar XML: ${e?.message || e}`);
+    }
+  };
+
   const carregarPreview = async () => {
     if (!detailId || nfePreviewLoading) return;
     setNfePreviewLoading(true);
@@ -482,6 +507,7 @@ export default function RemessasAdminPage() {
                       <th className="text-left py-1.5 pr-2">Status</th>
                       <th className="text-right py-1.5 pr-2">Valor</th>
                       <th className="text-left py-1.5">Chave / Motivo</th>
+                      <th className="text-left py-1.5 pl-2">XML</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -512,6 +538,15 @@ export default function RemessasAdminPage() {
                         </td>
                         <td className="py-1.5 font-mono text-[10px] break-all max-w-[260px]">
                           {d.status === 'authorized' ? d.chave : (d.xMotivo || d.chave || '—')}
+                        </td>
+                        <td className="py-1.5 pl-2 whitespace-nowrap">
+                          <button
+                            onClick={() => baixarXmlNfe(d)}
+                            className="text-[10px] px-1.5 py-0.5 rounded border border-slate-300 hover:bg-slate-100 text-slate-600"
+                            title="Baixar o XML enviado à SEFAZ (e a resposta, se rejeitada)"
+                          >
+                            ⬇ XML
+                          </button>
                         </td>
                       </tr>
                     ))}
