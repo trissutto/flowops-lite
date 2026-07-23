@@ -54,6 +54,7 @@ export class NfeTransferService {
       where: { id: shipmentId },
     });
     if (!shipment) throw new NotFoundException('Remessa não encontrada');
+    this.checarLojaBloqueada(shipment);
 
     // Idempotência: não reemitir o que já foi autorizado.
     const jaAutorizada = await this.prisma.nfeDoc.findFirst({
@@ -211,12 +212,12 @@ export class NfeTransferService {
   private startPadraoPara(cnpj: string, serie: string): number | undefined {
     // Varredura 23/07 de TODAS as instalações GigaNFe locais (última nNF
     // emitida por CNPJ, série 1, mod 55):
-    // Só CNPJs ATIVOS na rede (dono 23/07: não listar empresa extinta).
-    // Históricos achados na varredura, se algum dia voltarem: Búzios/RJ
-    // 20104813000724 → 103 · raiz 28.110.859: 000253 → 30, 000415 → 31.
+    // Só CNPJs ATIVOS na rede (dono 23/07: não listar loja encerrada).
+    // Históricos achados na varredura, se algum dia voltarem: Jundiaí
+    // 30246592000278 → 8 · Búzios/RJ 20104813000724 → 103 ·
+    // raiz 28.110.859: 000253 → 30, 000415 → 31.
     const CONTINUACAO_GIGANFE: Record<string, number> = {
       '30246592000197': 519,  // LURDS matriz Itanhaém-1 — última 518 (jun/26)
-      '30246592000278': 8,    // LURDS filial Jundiaí — última 7 (ago/25)
       '20104813000139': 2298, // RISSUTTO matriz Itanhaém-2 — última 2297 (abr/26)
     };
     return CONTINUACAO_GIGANFE[cnpj] && serie === '1' ? CONTINUACAO_GIGANFE[cnpj] : undefined;
@@ -322,6 +323,7 @@ export class NfeTransferService {
       where: { id: shipmentId },
     });
     if (!shipment) throw new NotFoundException('Remessa não encontrada');
+    this.checarLojaBloqueada(shipment);
 
     const jaAutorizada = await this.prisma.nfeDoc.findFirst({
       where: { shipmentId, status: 'authorized' },
@@ -448,6 +450,21 @@ export class NfeTransferService {
 
   private digits(s: string): string {
     return String(s || '').replace(/\D/g, '');
+  }
+
+  /** Lojas fora da NF-e por enquanto (dono 23/07: Sorocaba tem CNPJ errado na
+   *  config fiscal — consumiu numeração da LURDS matriz). Ajuste via env
+   *  NFE_LOJAS_BLOQUEADAS (lista separada por vírgula; vazio = nenhuma). */
+  private checarLojaBloqueada(shipment: { fromStoreCode: string; toStoreCode: string }) {
+    const bloqueadas = String(process.env.NFE_LOJAS_BLOQUEADAS ?? '06')
+      .split(',').map((s) => s.trim()).filter(Boolean);
+    for (const code of [shipment.fromStoreCode, shipment.toStoreCode]) {
+      if (bloqueadas.includes(String(code))) {
+        throw new BadRequestException(
+          `Loja ${code} está FORA da NF-e por enquanto (config fiscal em revisão — CNPJ). Corrija o cadastro fiscal e remova da env NFE_LOJAS_BLOQUEADAS.`,
+        );
+      }
+    }
   }
 
   /** cEAN/cEANTrib: pattern do XSD é "SEM GTIN" ou 8/12/13/14 dígitos. */
