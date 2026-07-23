@@ -1181,6 +1181,68 @@ export class PdvService {
   }
 
   /**
+   * FRETE À PARTE da venda online (dono 23/07): linha própria na venda —
+   * soma no total a cobrar, entra no caixa como receita da loja, aparece
+   * destacada no cupom/relatórios. ref='FRETE' garante:
+   *   - NÃO baixa estoque (isStockEligibleItem)
+   *   - FORA da base de comissão (Folha RH + fechamento abatem, igual vale)
+   * Chamar de novo ATUALIZA o valor; valor 0 REMOVE a linha.
+   */
+  async setFrete(saleId: string, valorRaw: number) {
+    const sale = await (this.prisma as any).pdvSale.findUnique({
+      where: { id: saleId },
+      select: { id: true, status: true },
+    });
+    if (!sale) throw new NotFoundException('Venda não encontrada');
+    if (sale.status !== 'open')
+      throw new BadRequestException(`Venda não está aberta (status=${sale.status})`);
+
+    const valor = Math.round((Number(valorRaw) || 0) * 100) / 100;
+    if (valor < 0) throw new BadRequestException('Frete não pode ser negativo');
+
+    const existente = await (this.prisma as any).pdvSaleItem.findFirst({
+      where: { saleId, ref: 'FRETE' },
+      select: { id: true },
+    });
+
+    if (valor === 0) {
+      if (existente) await (this.prisma as any).pdvSaleItem.delete({ where: { id: existente.id } });
+    } else if (existente) {
+      await (this.prisma as any).pdvSaleItem.update({
+        where: { id: existente.id },
+        data: { precoUnit: valor, total: valor, qty: 1 },
+      });
+    } else {
+      await (this.prisma as any).pdvSaleItem.create({
+        data: {
+          saleId,
+          sku: 'FRETE',
+          ean: null,
+          ref: 'FRETE',
+          cor: null,
+          tamanho: null,
+          descricao: 'FRETE — ENVIO',
+          ncm: null,
+          cfop: null,
+          dataCadastro: null,
+          qty: 1,
+          precoUnit: valor,
+          desconto: 0,
+          total: valor,
+          promoTag: 'FRETE',
+        },
+      });
+    }
+
+    await this.recalcTotals(saleId);
+    const fresh = await (this.prisma as any).pdvSale.findUnique({
+      where: { id: saleId },
+      select: { total: true },
+    });
+    return { ok: true, freteReais: valor, total: Number(fresh?.total) || 0 };
+  }
+
+  /**
    * VALE PRESENTE — vende um vale dentro da venda aberta do PDV.
    *
    * Como funciona (tudo em trilho existente, zero fluxo novo):
@@ -2411,6 +2473,7 @@ export class PdvService {
     if (it?.ref === 'MANUAL') return false;
     if (it?.ref === 'MARCADO') return false;
     if (it?.promoTag === 'MARCADO') return false;
+    if (it?.ref === 'FRETE') return false; // frete não é peça — sem estoque
     return true;
   }
 
