@@ -525,6 +525,60 @@ export class ClientesGigaService {
   }
 
   /**
+   * COPIA a ficha de OUTRA loja pra loja destino (caso Jéssica 23/07:
+   * cliente mudou de cidade e o crediário exige ficha NA loja da venda).
+   * A ficha nasce no FLOW (código próprio da loja destino via alocarCodigo)
+   * e é replicada pro Wincred pelo outbox (~30s). Idempotente por CPF.
+   * LIMITE/AVALIAÇÃO/BLOQUEADO NÃO são copiados — crédito é decisão POR
+   * LOJA (gerente ajusta com senha na tela de Clientes).
+   */
+  async copiarParaLoja(input: {
+    lojaOrigem: string;
+    codigoOrigem: string;
+    lojaDestino: string;
+    /** Fallbacks caso a ficha de origem ainda não esteja no espelho */
+    nome?: string | null;
+    cpf?: string | null;
+    userName?: string | null;
+  }) {
+    const lojaO = String(input.lojaOrigem || '').replace(/^LJ/i, '').replace(/\D/g, '').padStart(2, '0');
+    const lojaD = String(input.lojaDestino || '').replace(/^LJ/i, '').replace(/\D/g, '').padStart(2, '0');
+    if (!lojaD || lojaD === '00') return { ok: false, erro: 'Loja destino inválida' };
+    if (lojaO === lojaD) return { ok: false, erro: 'Origem e destino são a mesma loja' };
+
+    // Ficha de origem no espelho (tolera padding de zeros no código)
+    const codRaw = String(input.codigoOrigem || '').trim();
+    const variantes = Array.from(new Set([codRaw, codRaw.replace(/^0+/, ''), codRaw.padStart(6, '0')])).filter(Boolean);
+    const origem: any = await (this.prisma as any).gigaCliente.findFirst({
+      where: { loja: lojaO, codigo: { in: variantes } },
+    });
+
+    // Idempotência: já existe ficha da MESMA pessoa (CPF) na loja destino?
+    const cpfDigits = String(input.cpf || origem?.cpf || '').replace(/\D/g, '');
+    if (cpfDigits.length === 11) {
+      const jaTem: any = await (this.prisma as any).gigaCliente.findFirst({
+        where: { loja: lojaD, personKey: `cpf:${cpfDigits}` },
+        select: { codigo: true },
+      });
+      if (jaTem) return { ok: true, jaExistia: true, loja: lojaD, codigo: jaTem.codigo };
+    }
+
+    // Campos da cópia: rawJson da origem SEM os campos de crédito (por loja)
+    // e sem chaves; fallback mínimo nome+CPF quando o espelho não tem a ficha.
+    const raw: Record<string, any> = origem?.rawJson ? { ...(origem.rawJson as any) } : {};
+    for (const k of ['CODIGO', 'LOJA', 'LIMITECOMPRAS', 'AVALIACAO', 'BLOQUEADO', 'SPCSITUACAO', 'SPCCONSULTA', 'SPCDATA', 'SPCOBS', 'DATACREDITO']) {
+      delete raw[k];
+    }
+    if (!raw.NOME && input.nome) raw.NOME = String(input.nome).toUpperCase();
+    if (!raw.CPF && cpfDigits) raw.CPF = cpfDigits;
+    if (!raw.NOME) return { ok: false, erro: 'Ficha de origem não encontrada no espelho e nome não informado' };
+
+    const quem = `${input.userName || 'pdv'} (cópia LJ ${lojaO})`;
+    const r: any = await this.cadastrar(lojaD, raw, quem);
+    return r.ok ? { ...r, jaExistia: false } : r;
+  }
+
+  /**
    * RESUMO DA CLIENTE (painel no topo da ficha — pedido do dono 21/07):
    * crediário em aberto, MARCADOS pra fechar (AO VIVO no Giga — é a verdade
    * sobre "já está fechado": fechou → sai da lista), limite disponível,

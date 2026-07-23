@@ -4060,6 +4060,8 @@ function PaymentModal({
     return d.toISOString().slice(0, 10);
   });
   const [credObs, setCredObs] = useState('');
+  // Cópia 1-clique da ficha de outra loja (banner "cliente é de outra loja")
+  const [copiandoFicha, setCopiandoFicha] = useState(false);
   // Info do cliente vinda do Giga + pendências (pra banner de inadimplência)
   const [credCustomerInfo, setCredCustomerInfo] = useState<{
     found: boolean;
@@ -5720,6 +5722,48 @@ function PaymentModal({
                     Cadastro encontrado: <b>{credCustomerInfo.outraLoja.nome || '—'}</b> · cód{' '}
                     {credCustomerInfo.outraLoja.codCliente} · loja {credCustomerInfo.outraLoja.lojas.join(', ')}
                   </div>
+                )}
+                {/* CÓPIA 1-CLIQUE (caso Jéssica 23/07): cria a ficha NESTA loja
+                    copiando a da outra (sem limite/avaliação — crédito é por
+                    loja). Réplica pro Wincred leva ~30s; re-busca automática. */}
+                {credCustomerInfo.outraLoja && (
+                  <button
+                    type="button"
+                    disabled={copiandoFicha}
+                    onClick={async () => {
+                      setCopiandoFicha(true);
+                      try {
+                        const r = await api<any>('/pdv/clientes-giga/copiar-para-loja', {
+                          method: 'POST',
+                          body: JSON.stringify({
+                            lojaOrigem: credCustomerInfo.outraLoja!.lojas[0],
+                            codigoOrigem: credCustomerInfo.outraLoja!.codCliente,
+                            lojaDestino: storeCode,
+                            nome: credCustomerInfo.outraLoja!.nome,
+                            cpf: customerCpf,
+                          }),
+                        });
+                        if (r?.ok) {
+                          toast(
+                            'success',
+                            r.jaExistia ? 'Ficha já existia nesta loja' : `Ficha criada nesta loja (cód ${r.codigo})`,
+                            'Gravando no Wincred — busco de novo em ~35s automaticamente',
+                          );
+                          setTimeout(() => setCredRefresh((n) => n + 1), 35000);
+                        } else {
+                          toast('error', 'Não deu pra copiar a ficha', r?.erro || 'Tente cadastrar no Wincred');
+                        }
+                      } catch (e: any) {
+                        const h = humanizeError(e);
+                        toast('error', h.title, h.hint);
+                      } finally {
+                        setCopiandoFicha(false);
+                      }
+                    }}
+                    className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs disabled:opacity-50"
+                  >
+                    {copiandoFicha ? '⏳ Copiando ficha…' : '🏪 Copiar cadastro pra ESTA loja (1 clique)'}
+                  </button>
                 )}
                 <button
                   type="button"
