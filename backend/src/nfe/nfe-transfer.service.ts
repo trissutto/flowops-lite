@@ -533,7 +533,6 @@ export class NfeTransferService {
       `<nNF>${p.numero}</nNF>` +
       `<dhEmi>${p.dhEmi}</dhEmi>` +
       `<dhSaiEnt>${p.dhEmi}</dhSaiEnt>` +
-      `<dhSaiEnt>${p.dhEmi}</dhSaiEnt>` +
       `<tpNF>1</tpNF>` +
       `<idDest>${idDest}</idDest>` +
       `<cMunFG>${p.origem.ender.codMunicipio}</cMunFG>` +
