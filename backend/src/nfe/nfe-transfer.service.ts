@@ -209,9 +209,15 @@ export class NfeTransferService {
    *                   cStat 100 produção) → 2298
    *  CNPJ que nunca emitiu mod 55 começa em 1 (ou via POST /nfe/sequence). */
   private startPadraoPara(cnpj: string, serie: string): number | undefined {
+    // Varredura 23/07 de TODAS as instalações GigaNFe locais (última nNF
+    // emitida por CNPJ, série 1, mod 55):
     const CONTINUACAO_GIGANFE: Record<string, number> = {
-      '30246592000197': 519,
-      '20104813000139': 2298,
+      '30246592000197': 519,  // LURDS matriz Itanhaém-1 — última 518 (jun/26)
+      '30246592000278': 8,    // LURDS filial Jundiaí — última 7 (ago/25)
+      '20104813000139': 2298, // RISSUTTO matriz Itanhaém-2 — última 2297 (abr/26)
+      '20104813000724': 103,  // RISSUTTO filial Búzios/RJ — última 102 (mar/23)
+      '28110859000253': 30,   // raiz 28.110.859 (Moema antiga) — última 29 (dez/22)
+      '28110859000415': 31,   // raiz 28.110.859 filial — última 30 (mar/23)
     };
     return CONTINUACAO_GIGANFE[cnpj] && serie === '1' ? CONTINUACAO_GIGANFE[cnpj] : undefined;
   }
