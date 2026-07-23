@@ -5743,9 +5743,8 @@ function PaymentModal({
                             cpf: customerCpf,
                           }),
                         });
-                        if (r?.ok && (r.replicado || r.jaExistia)) {
-                          // Gravou no Wincred na hora (ou ficha já existia) —
-                          // re-busca rapidinho
+                        if (r?.ok && r.replicado) {
+                          // Gravou no Wincred na hora — re-busca rapidinho
                           toast(
                             'success',
                             r.jaExistia ? 'Ficha já existia nesta loja' : `Ficha criada nesta loja (cód ${r.codigo})`,

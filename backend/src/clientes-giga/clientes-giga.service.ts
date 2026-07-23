@@ -554,13 +554,41 @@ export class ClientesGigaService {
     });
 
     // Idempotência: já existe ficha da MESMA pessoa (CPF) na loja destino?
+    // (caso Pamela: 1ª tentativa criou no Flow mas a réplica falhou — aqui
+    // RE-GRAVA no Wincred em vez de só devolver "já existia")
     const cpfDigits = String(input.cpf || origem?.cpf || '').replace(/\D/g, '');
     if (cpfDigits.length === 11) {
       const jaTem: any = await (this.prisma as any).gigaCliente.findFirst({
         where: { loja: lojaD, personKey: `cpf:${cpfDigits}` },
-        select: { codigo: true },
       });
-      if (jaTem) return { ok: true, jaExistia: true, loja: lojaD, codigo: jaTem.codigo };
+      if (jaTem) {
+        let replicado = false;
+        let replicaErro: string | null = null;
+        try {
+          const rawTem: Record<string, any> = {};
+          for (const [k, v] of Object.entries((jaTem.rawJson as any) || {})) {
+            if (v == null) continue;
+            let val: any = v;
+            if (typeof val === 'string') {
+              const s = val.trim();
+              if (!s) continue;
+              const m = /^(\d{4}-\d{2}-\d{2})T\d{2}:\d{2}/.exec(s);
+              val = m ? m[1] : s;
+              if (String(val).startsWith('1899-11-30')) continue;
+            }
+            rawTem[k] = val;
+          }
+          delete rawTem.CODIGO; delete rawTem.LOJA;
+          const rep = await this.erp.upsertClienteGiga({
+            loja: lojaD, codigo: jaTem.codigo, set: this.filtrarCampos(rawTem),
+          });
+          replicado = !!rep.success;
+          replicaErro = rep.error || null;
+        } catch (e: any) {
+          replicaErro = e?.message || String(e);
+        }
+        return { ok: true, jaExistia: true, loja: lojaD, codigo: jaTem.codigo, replicado, replicaErro };
+      }
     }
 
     // Campos da cópia: rawJson da origem SEM os campos de crédito (por loja)
