@@ -423,6 +423,25 @@ export class NfeTransferService {
     if (!ender?.codMunicipio) {
       throw new BadRequestException(`Loja ${storeCode} sem codMunicipio (IBGE) no endereço fiscal`);
     }
+    // PRÉ-VALIDAÇÃO dos padrões do schema — erro aqui rejeitava o LOTE com
+    // cStat 225 genérico e queimava número (23/07: CEP de Itanhaém com 9
+    // dígitos "117466694" rejeitou 2298–2304). Agora a PRÉVIA já acusa o
+    // campo errado em português, antes de numerar/assinar.
+    const problemas: string[] = [];
+    const cnpjD = this.digits(cfg.cnpj as string);
+    if (cnpjD.length !== 14) problemas.push(`CNPJ "${cfg.cnpj}" inválido (precisa de 14 dígitos)`);
+    const ieD = this.digits(cfg.ie as string);
+    if (ieD.length < 2 || ieD.length > 14) problemas.push(`IE "${cfg.ie}" inválida (2–14 dígitos)`);
+    const cepD = this.digits(String(ender.cep || ''));
+    if (cepD.length !== 8) problemas.push(`CEP "${ender.cep}" inválido (precisa de 8 dígitos — está com ${cepD.length})`);
+    if (!/^\d{7}$/.test(String(ender.codMunicipio).trim())) {
+      problemas.push(`código IBGE do município "${ender.codMunicipio}" inválido (7 dígitos)`);
+    }
+    if (problemas.length) {
+      throw new BadRequestException(
+        `Config fiscal da loja ${storeCode} com dados inválidos pra NF-e: ${problemas.join(' · ')}. Corrija no cadastro fiscal e tente de novo.`,
+      );
+    }
     return {
       storeCode,
       cnpj: this.digits(cfg.cnpj as string),
@@ -536,6 +555,8 @@ export class NfeTransferService {
 
   private esc(s: string): string {
     return String(s || '')
+      // caractere de controle (lixo de cadastro) é XML inválido → fora
+      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
