@@ -70,6 +70,7 @@ export class NfeTransferService {
     const ambiente = origem.ambiente;
     const tpAmb = ambiente;
     const serie = opts.serie || '1';
+    await this.garantirContinuacao(origem.storeCode, origem.cnpj, serie);
     const numero = await this.seq.next(origem.storeCode, serie, {
       start: opts.startNumero ?? this.startPadraoPara(origem.cnpj, serie),
     });
@@ -202,13 +203,34 @@ export class NfeTransferService {
     };
   }
 
-  /** CONTINUAÇÃO DA NUMERAÇÃO do GigaNFe (mapeado em C:\NFe_LURDS 23/07):
-   *  matriz 0001-97 emitiu até a nº 518 (série 1, jun/26) — 1ª do Flow = 519.
-   *  Outros CNPJs começam em 1 (ou via POST /nfe/sequence). Só vale na
-   *  CRIAÇÃO da sequência. */
+  /** CONTINUAÇÃO DA NUMERAÇÃO do GigaNFe (mapeado 23/07 nas pastas locais):
+   *    C:\NFe_LURDS → LURDS matriz 30.246.592/0001-97: última 518 (jun/26) → 519
+   *    C:\NFe_TO    → RISSUTTO matriz 20.104.813/0001-39: última 2297 (abr/26,
+   *                   cStat 100 produção) → 2298
+   *  CNPJ que nunca emitiu mod 55 começa em 1 (ou via POST /nfe/sequence). */
   private startPadraoPara(cnpj: string, serie: string): number | undefined {
-    const CONTINUACAO_GIGANFE: Record<string, number> = { '30246592000197': 519 };
+    const CONTINUACAO_GIGANFE: Record<string, number> = {
+      '30246592000197': 519,
+      '20104813000139': 2298,
+    };
     return CONTINUACAO_GIGANFE[cnpj] && serie === '1' ? CONTINUACAO_GIGANFE[cnpj] : undefined;
+  }
+
+  /** Garante que a sequência NUNCA fique ABAIXO da continuação do GigaNFe —
+   *  conserta sequência criada antes do mapeamento (loja 01 nasceu em 1/2).
+   *  Nunca REBAIXA número. */
+  private async garantirContinuacao(storeCode: string, cnpj: string, serie: string) {
+    const startPadrao = this.startPadraoPara(cnpj, serie);
+    if (!startPadrao) return;
+    const row = await this.prisma.nfeSequence.findUnique({
+      where: { storeCode_modelo_serie: { storeCode, modelo: '55', serie } },
+    });
+    if (row && row.proximo < startPadrao) {
+      await this.seq.setProximo(storeCode, serie, startPadrao);
+      this.logger.warn(
+        `[nfe] sequência ${storeCode}/55/${serie} corrigida: ${row.proximo} → ${startPadrao} (continuação GigaNFe do CNPJ ${cnpj})`,
+      );
+    }
   }
 
   /** Monta os dados da nota (fiscal origem/destino + itens a custo) — usado
@@ -300,12 +322,14 @@ export class NfeTransferService {
     const data = await this.buildTransferData(shipment, { requireCert: false });
     const { origem, destino } = data;
 
-    // Espia o próximo número SEM incrementar
+    // Espia o próximo número SEM incrementar (respeitando a continuação
+    // do GigaNFe — nunca mostra número abaixo da última nota real)
     const serie = '1';
     const seqRow = await this.prisma.nfeSequence.findUnique({
       where: { storeCode_modelo_serie: { storeCode: origem.storeCode, modelo: '55', serie } },
     });
-    const proximoNumero = seqRow?.proximo ?? this.startPadraoPara(origem.cnpj, serie) ?? 1;
+    const startPadrao = this.startPadraoPara(origem.cnpj, serie);
+    const proximoNumero = Math.max(seqRow?.proximo ?? 0, startPadrao ?? 0) || 1;
 
     const icmsMode = String(process.env.NFE_TRANSFER_ICMS ?? 'sem').trim();
     const crt3 = String(origem.regime || '1') === '3';
