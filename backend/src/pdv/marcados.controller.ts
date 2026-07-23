@@ -96,9 +96,12 @@ export class MarcadosController {
    * o CPF e quer achar pelo nome.
    */
   @Get('search')
-  searchClientes(@Req() req: any, @Query('q') q: string) {
+  searchClientes(@Req() req: any, @Query('q') q: string, @Query('loja') loja?: string) {
     this.requireRole(req);
-    return this.svc.searchClientesByNameOrCpf(q || '');
+    // ESCOPO POR LOJA (23/07): o PDV só vê clientes da própria loja —
+    // RESERVAS/DEFEITOS existem em toda loja e misturavam.
+    const lojaScope = String(loja || req?.user?.storeCode || '').replace(/\D/g, '');
+    return this.svc.searchClientesByNameOrCpf(q || '', lojaScope || undefined);
   }
 
   /**

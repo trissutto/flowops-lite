@@ -441,7 +441,7 @@ export class MarcadosService {
    * Usado na tela /pdv/marcados quando vendedora nao tem o CPF em maos
    * e quer pesquisar pelo nome (ex: "MARIA SILVA").
    */
-  async searchClientesByNameOrCpf(query: string): Promise<Array<{
+  async searchClientesByNameOrCpf(query: string, lojaScope?: string): Promise<Array<{
     codCliente: string;
     loja?: string;
     nome: string;
@@ -462,10 +462,17 @@ export class MarcadosService {
     //    vivo com INNER JOIN na caixa INTEIRA (full scan sem índice em
     //    MARCADO) e PENDURAVA a busca por nome (caso ELISA 21/07, Indaiatuba).
     //    O espelho responde na hora e não depende do Giga estar de pé.
+    // ESCOPO POR LOJA (23/07): PDV só enxerga fichas da própria loja —
+    // cadastros repetem por loja (RESERVAS etc). Sem lojaScope (retaguarda),
+    // segue rede toda.
+    const lojaFiltro = lojaScope ? String(lojaScope).replace(/\D/g, '').padStart(2, '0') : null;
     const fichas: any[] = await (this.prisma as any).gigaCliente.findMany({
-      where: isCpfLike
-        ? { OR: [{ personKey: { contains: onlyDigits } }, { cpf: { contains: onlyDigits } }] }
-        : { nome: { contains: q, mode: 'insensitive' } },
+      where: {
+        ...(lojaFiltro ? { loja: lojaFiltro } : {}),
+        ...(isCpfLike
+          ? { OR: [{ personKey: { contains: onlyDigits } }, { cpf: { contains: onlyDigits } }] }
+          : { nome: { contains: q, mode: 'insensitive' } }),
+      },
       select: {
         loja: true, codigo: true, nome: true, cpf: true,
         avaliacao: true, limiteCompras: true, personKey: true,
