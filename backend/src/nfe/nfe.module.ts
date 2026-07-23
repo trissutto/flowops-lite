@@ -4,12 +4,13 @@ import { WincredMirrorModule } from '../wincred-mirror/wincred-mirror.module';
 import { NfeController } from './nfe.controller';
 import { NfeTransferService } from './nfe-transfer.service';
 import { NfeSequenceService } from './nfe-sequence.service';
+import { DanfePdfService } from './danfe-pdf.service';
 
 @Module({
   // WincredMirrorModule → WincredCatalogService (custo + NCM do espelho)
   imports: [PrismaModule, WincredMirrorModule],
   controllers: [NfeController],
-  providers: [NfeTransferService, NfeSequenceService],
+  providers: [NfeTransferService, NfeSequenceService, DanfePdfService],
   exports: [NfeTransferService],
 })
 export class NfeModule {}
