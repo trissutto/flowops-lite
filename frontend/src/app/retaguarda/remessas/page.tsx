@@ -205,7 +205,10 @@ export default function RemessasAdminPage() {
     setNfeResult(null);
     try {
       const r = await api<any>(`/nfe/transfer/emit/${detailId}`, { method: 'POST', body: JSON.stringify({}) });
-      setNfeResult(r);
+      // Backend devolve { ok, jaEmitida, doc: {...}, warnings } — desembrulha
+      // o doc pro painel (bug 23/07: lia no nível de cima e mostrava vazio)
+      const d = r?.doc || r || {};
+      setNfeResult({ ...d, ok: r?.ok, jaEmitida: r?.jaEmitida, warnings: r?.warnings });
     } catch (e: any) {
       setNfeResult({ erro: e?.message || 'Falha na emissão' });
     } finally {
@@ -671,16 +674,26 @@ export default function RemessasAdminPage() {
                       )
                     )}
                     {nfeResult && (
-                      <div className={`mt-2 rounded px-3 py-2 text-xs ${nfeResult.erro || nfeResult.status === 'rejeitada' ? 'bg-rose-50 border border-rose-200 text-rose-800' : 'bg-emerald-50 border border-emerald-200 text-emerald-800'}`}>
+                      <div className={`mt-2 rounded px-3 py-2 text-xs ${nfeResult.erro || nfeResult.status === 'rejected' ? 'bg-rose-50 border border-rose-200 text-rose-800' : 'bg-emerald-50 border border-emerald-200 text-emerald-800'}`}>
                         {nfeResult.erro ? (
                           <>⚠️ {nfeResult.erro}</>
                         ) : (
                           <>
-                            {nfeResult.status === 'autorizada' ? '✅ AUTORIZADA' : `Status: ${nfeResult.status || '—'}`}
+                            {nfeResult.status === 'authorized'
+                              ? `✅ AUTORIZADA${nfeResult.jaEmitida ? ' (já existia — não reemitiu)' : ''}`
+                              : nfeResult.status === 'rejected'
+                              ? '❌ REJEITADA pela SEFAZ'
+                              : `Status: ${nfeResult.status || '—'}`}
                             {nfeResult.numero != null && <> · nº <b>{nfeResult.numero}</b> série {nfeResult.serie || '1'}</>}
+                            {nfeResult.tpAmb && <> · <b>{nfeResult.tpAmb === '1' ? 'PRODUÇÃO' : 'HOMOLOGAÇÃO'}</b></>}
                             {nfeResult.cStat && <> · cStat {nfeResult.cStat}</>}
                             {nfeResult.xMotivo && <> · {nfeResult.xMotivo}</>}
                             {nfeResult.chave && <div className="font-mono mt-1 break-all">{nfeResult.chave}</div>}
+                            {Array.isArray(nfeResult.warnings) && nfeResult.warnings.length > 0 && (
+                              <div className="mt-1 text-amber-800">
+                                {nfeResult.warnings.map((w: string, i: number) => <div key={i}>⚠ {w}</div>)}
+                              </div>
+                            )}
                           </>
                         )}
                       </div>
