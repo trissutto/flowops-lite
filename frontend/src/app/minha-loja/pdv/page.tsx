@@ -5743,11 +5743,23 @@ function PaymentModal({
                             cpf: customerCpf,
                           }),
                         });
-                        if (r?.ok) {
+                        if (r?.ok && r.replicado) {
+                          // Gravou no Wincred na hora — re-busca rapidinho
                           toast(
                             'success',
                             r.jaExistia ? 'Ficha já existia nesta loja' : `Ficha criada nesta loja (cód ${r.codigo})`,
-                            'Gravando no Wincred — busco de novo em ~35s automaticamente',
+                            'Gravada no Wincred ✓ — buscando de novo…',
+                          );
+                          setTimeout(() => setCredRefresh((n) => n + 1), 3000);
+                        } else if (r?.ok) {
+                          // Criou no Flow mas a gravação no Wincred falhou agora —
+                          // o outbox segue tentando; mostra o motivo real
+                          toast(
+                            'warning',
+                            `Ficha criada (cód ${r.codigo}) — Wincred pendente`,
+                            r.replicaErro
+                              ? `Erro na gravação: ${String(r.replicaErro).slice(0, 120)} — re-tento automático; busque de novo em ~1 min`
+                              : 'Gravando no Wincred — busco de novo em ~35s',
                           );
                           setTimeout(() => setCredRefresh((n) => n + 1), 35000);
                         } else {

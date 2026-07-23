@@ -554,20 +554,65 @@ export class ClientesGigaService {
     });
 
     // Idempotência: já existe ficha da MESMA pessoa (CPF) na loja destino?
+    // (caso Pamela: 1ª tentativa criou no Flow mas a réplica falhou — aqui
+    // RE-GRAVA no Wincred em vez de só devolver "já existia")
     const cpfDigits = String(input.cpf || origem?.cpf || '').replace(/\D/g, '');
     if (cpfDigits.length === 11) {
       const jaTem: any = await (this.prisma as any).gigaCliente.findFirst({
         where: { loja: lojaD, personKey: `cpf:${cpfDigits}` },
-        select: { codigo: true },
       });
-      if (jaTem) return { ok: true, jaExistia: true, loja: lojaD, codigo: jaTem.codigo };
+      if (jaTem) {
+        let replicado = false;
+        let replicaErro: string | null = null;
+        try {
+          const rawTem: Record<string, any> = {};
+          for (const [k, v] of Object.entries((jaTem.rawJson as any) || {})) {
+            if (v == null) continue;
+            let val: any = v;
+            if (typeof val === 'string') {
+              const s = val.trim();
+              if (!s) continue;
+              const m = /^(\d{4}-\d{2}-\d{2})T\d{2}:\d{2}/.exec(s);
+              val = m ? m[1] : s;
+              if (String(val).startsWith('1899-11-30')) continue;
+            }
+            rawTem[k] = val;
+          }
+          delete rawTem.CODIGO; delete rawTem.LOJA;
+          const rep = await this.erp.upsertClienteGiga({
+            loja: lojaD, codigo: jaTem.codigo, set: this.filtrarCampos(rawTem),
+          });
+          replicado = !!rep.success;
+          replicaErro = rep.error || null;
+        } catch (e: any) {
+          replicaErro = e?.message || String(e);
+        }
+        return { ok: true, jaExistia: true, loja: lojaD, codigo: jaTem.codigo, replicado, replicaErro };
+      }
     }
 
     // Campos da cópia: rawJson da origem SEM os campos de crédito (por loja)
     // e sem chaves; fallback mínimo nome+CPF quando o espelho não tem a ficha.
-    const raw: Record<string, any> = origem?.rawJson ? { ...(origem.rawJson as any) } : {};
+    const rawOrigem: Record<string, any> = origem?.rawJson ? { ...(origem.rawJson as any) } : {};
     for (const k of ['CODIGO', 'LOJA', 'LIMITECOMPRAS', 'AVALIACAO', 'BLOQUEADO', 'SPCSITUACAO', 'SPCCONSULTA', 'SPCDATA', 'SPCOBS', 'DATACREDITO']) {
-      delete raw[k];
+      delete rawOrigem[k];
+    }
+    // SANITIZAÇÃO (23/07 — a cópia da Pamela falhava aqui): o rawJson guarda
+    // datas como ISO com hora ('1985-03-10T00:00:00.000Z') e sentinela
+    // 1899-11-30 do Wincred — o MySQL estrito REJEITA e a réplica ficava
+    // presa em retry. Vira DATE puro; vazio/sentinela/null caem fora.
+    const raw: Record<string, any> = {};
+    for (const [k, v] of Object.entries(rawOrigem)) {
+      if (v == null) continue;
+      let val: any = v;
+      if (typeof val === 'string') {
+        const s = val.trim();
+        if (!s) continue;
+        const m = /^(\d{4}-\d{2}-\d{2})T\d{2}:\d{2}/.exec(s);
+        val = m ? m[1] : s;
+        if (String(val).startsWith('1899-11-30')) continue;
+      }
+      raw[k] = val;
     }
     if (!raw.NOME && input.nome) raw.NOME = String(input.nome).toUpperCase();
     if (!raw.CPF && cpfDigits) raw.CPF = cpfDigits;
@@ -575,7 +620,25 @@ export class ClientesGigaService {
 
     const quem = `${input.userName || 'pdv'} (cópia LJ ${lojaO})`;
     const r: any = await this.cadastrar(lojaD, raw, quem);
-    return r.ok ? { ...r, jaExistia: false } : r;
+    if (!r.ok) return r;
+
+    // RÉPLICA IMEDIATA no Wincred (além do outbox, que segue como garantia):
+    // o caixa está COM A CLIENTE NA FRENTE — 3s em vez de 35s. E se der erro
+    // de SQL, ele aparece na tela em vez de morrer no retry silencioso.
+    let replicado = false;
+    let replicaErro: string | null = null;
+    try {
+      const campos = this.filtrarCampos(raw);
+      const rep = await this.erp.upsertClienteGiga({ loja: lojaD, codigo: r.codigo, set: campos });
+      replicado = !!rep.success;
+      replicaErro = rep.error || null;
+    } catch (e: any) {
+      replicaErro = e?.message || String(e);
+    }
+    if (replicaErro) {
+      this.logger.warn(`[clientes-giga] cópia ${lojaD}/${r.codigo}: réplica imediata falhou (${replicaErro}) — outbox segue tentando`);
+    }
+    return { ...r, jaExistia: false, replicado, replicaErro };
   }
 
   /**
