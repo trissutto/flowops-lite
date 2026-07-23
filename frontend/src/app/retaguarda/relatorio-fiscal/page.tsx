@@ -515,7 +515,192 @@ export default function RelatorioFiscalPage() {
             Defina os filtros acima e clique em <b>Aplicar filtros</b> pra carregar o relatório.
           </div>
         )}
+
+        {/* NF-e de transferência entre lojas (mod. 55) — pro contador */}
+        <NfeTransferSection stores={stores} />
       </div>
+    </div>
+  );
+}
+
+/**
+ * NF-e modelo 55 (transferência entre lojas) — emitidas pelo Flow.
+ * Filtro por LOJA DE ORIGEM (é o CNPJ emitente) + status. DANFE em PDF e
+ * XML (enviado + resposta) direto na linha, pro contador baixar.
+ */
+function NfeTransferSection({ stores }: { stores: Store[] }) {
+  const [lojaFiltro, setLojaFiltro] = useState('');
+  const [statusFiltro, setStatusFiltro] = useState('authorized');
+  const [rows, setRows] = useState<any[] | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const API_URL =
+    process.env.NEXT_PUBLIC_API_URL || 'https://flowops-lite-production.up.railway.app';
+  const authHeaders = (): Record<string, string> => {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('flowops_token') : null;
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  };
+
+  const load = async (loja: string, status: string) => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams();
+      params.set('limit', '200');
+      if (loja) params.set('storeCode', loja);
+      if (status) params.set('status', status);
+      setRows(await api<any[]>(`/nfe?${params}`));
+    } catch {
+      setRows([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+  useEffect(() => {
+    load(lojaFiltro, statusFiltro);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lojaFiltro, statusFiltro]);
+
+  const abrirDanfe = async (d: any) => {
+    try {
+      const r = await fetch(`${API_URL}/api/nfe/${d.id}/danfe`, { headers: authHeaders() });
+      if (!r.ok) throw new Error((await r.json().catch(() => null))?.message || `HTTP ${r.status}`);
+      const blobUrl = URL.createObjectURL(await r.blob());
+      const w = window.open(blobUrl, '_blank');
+      if (!w) {
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = `danfe-${d.numero}.pdf`;
+        a.click();
+      }
+    } catch (e: any) {
+      alert(`Erro ao gerar DANFE: ${e?.message || e}`);
+    }
+  };
+
+  const baixarXml = async (d: any) => {
+    try {
+      const r = await fetch(`${API_URL}/api/nfe/${d.id}`, { headers: authHeaders() });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const doc = await r.json();
+      const xml = doc?.xmlAutorizado || doc?.xmlEnviado;
+      if (!xml) {
+        alert('Esta NF-e não tem XML gravado.');
+        return;
+      }
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([xml], { type: 'application/xml' }));
+      a.download = `nfe-${d.numero}.xml`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } catch (e: any) {
+      alert(`Erro ao baixar XML: ${e?.message || e}`);
+    }
+  };
+
+  const storeName = (code: string) => stores.find((s) => s.code === code)?.name || code;
+
+  return (
+    <div className="bg-white rounded-xl shadow p-5 space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-sm font-bold text-slate-700 uppercase">
+          📄 NF-e de transferência entre lojas (mod. 55)
+        </h2>
+        <div className="flex items-center gap-2">
+          <select
+            value={lojaFiltro}
+            onChange={(e) => setLojaFiltro(e.target.value)}
+            className="p-2 border rounded-lg text-sm"
+          >
+            <option value="">Todas as lojas (origem)</option>
+            {stores.map((s) => (
+              <option key={s.code} value={s.code}>{s.code} — {s.name}</option>
+            ))}
+          </select>
+          <select
+            value={statusFiltro}
+            onChange={(e) => setStatusFiltro(e.target.value)}
+            className="p-2 border rounded-lg text-sm"
+          >
+            <option value="authorized">Autorizadas</option>
+            <option value="rejected">Rejeitadas</option>
+            <option value="">Todas</option>
+          </select>
+        </div>
+      </div>
+
+      {loading || rows === null ? (
+        <div className="text-center py-6 text-slate-400 text-sm">Carregando…</div>
+      ) : rows.length === 0 ? (
+        <div className="text-center py-6 text-slate-400 text-sm">Nenhuma NF-e com esse filtro.</div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-[10px] uppercase text-slate-400 border-b">
+                <th className="text-left py-1.5 pr-2">Quando</th>
+                <th className="text-left py-1.5 pr-2">Origem → Destino</th>
+                <th className="text-left py-1.5 pr-2">Nº / Série</th>
+                <th className="text-left py-1.5 pr-2">Amb.</th>
+                <th className="text-left py-1.5 pr-2">Status</th>
+                <th className="text-right py-1.5 pr-2">Valor</th>
+                <th className="text-left py-1.5 pr-2">Chave / Motivo</th>
+                <th className="text-left py-1.5">Arquivos</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((d) => (
+                <tr key={d.id} className="border-b last:border-0 align-top">
+                  <td className="py-1.5 pr-2 whitespace-nowrap text-slate-500">
+                    {d.createdAt ? new Date(d.createdAt).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '—'}
+                  </td>
+                  <td className="py-1.5 pr-2 whitespace-nowrap">
+                    {d.fromStoreCode} {storeName(d.fromStoreCode)} → {d.toStoreCode} {storeName(d.toStoreCode)}
+                  </td>
+                  <td className="py-1.5 pr-2 whitespace-nowrap font-mono font-bold">{d.numero}/{d.serie}</td>
+                  <td className="py-1.5 pr-2">
+                    <span className={`font-bold ${d.tpAmb === '1' ? 'text-rose-700' : 'text-emerald-700'}`}>
+                      {d.tpAmb === '1' ? 'PROD' : 'HOMOL'}
+                    </span>
+                  </td>
+                  <td className="py-1.5 pr-2">
+                    <span className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-bold border ${
+                      d.status === 'authorized'
+                        ? 'bg-emerald-50 border-emerald-300 text-emerald-700'
+                        : d.status === 'rejected'
+                        ? 'bg-rose-50 border-rose-300 text-rose-700'
+                        : 'bg-amber-50 border-amber-300 text-amber-700'
+                    }`}>
+                      {d.status === 'authorized' ? 'AUTORIZADA' : d.status === 'rejected' ? 'REJEITADA' : (d.status || '?').toUpperCase()}
+                    </span>
+                  </td>
+                  <td className="py-1.5 pr-2 text-right tabular-nums whitespace-nowrap">
+                    {brl(Number(d.valorTotalCents || 0) / 100)}
+                  </td>
+                  <td className="py-1.5 pr-2 font-mono text-[10px] break-all max-w-[240px]">
+                    {d.status === 'authorized' ? d.chave : (d.xMotivo || d.chave || '—')}
+                  </td>
+                  <td className="py-1.5 whitespace-nowrap">
+                    <button
+                      onClick={() => abrirDanfe(d)}
+                      className="text-[10px] px-1.5 py-0.5 rounded border border-emerald-300 hover:bg-emerald-50 text-emerald-700 font-bold mr-1"
+                      title="Abrir DANFE em PDF"
+                    >
+                      📄 DANFE
+                    </button>
+                    <button
+                      onClick={() => baixarXml(d)}
+                      className="text-[10px] px-1.5 py-0.5 rounded border border-slate-300 hover:bg-slate-100 text-slate-600"
+                      title="Baixar o XML da NF-e"
+                    >
+                      ⬇ XML
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

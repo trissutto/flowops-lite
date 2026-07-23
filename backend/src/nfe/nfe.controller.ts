@@ -1,9 +1,11 @@
 import {
-  Body, Controller, ForbiddenException, Get, Param, Post, Query, Req, UseGuards,
+  Body, Controller, ForbiddenException, Get, Param, Post, Query, Req, Res, UseGuards,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { NfeTransferService } from './nfe-transfer.service';
 import { NfeSequenceService } from './nfe-sequence.service';
+import { DanfePdfService } from './danfe-pdf.service';
 
 /**
  * /nfe — emissão de NF-e modelo 55 (transferência entre lojas). Matriz-only.
@@ -15,12 +17,22 @@ export class NfeController {
   constructor(
     private readonly transfer: NfeTransferService,
     private readonly seq: NfeSequenceService,
+    private readonly danfe: DanfePdfService,
   ) {}
 
   private requireMatriz(req: any) {
     const role = req?.user?.role;
     if (role !== 'admin' && role !== 'operator') {
       throw new ForbiddenException('Apenas matriz (admin/operator) emite NF-e');
+    }
+  }
+
+  /** Leitura (lista/XML/DANFE): matriz + supervisor + CONTADOR (aba
+   *  contabilidade — dono 23/07: notas disponíveis pro contador). */
+  private requireLeitura(req: any) {
+    const role = req?.user?.role;
+    if (!['admin', 'operator', 'supervisor', 'contador'].includes(role)) {
+      throw new ForbiddenException('Sem permissão pra consultar NF-e');
     }
   }
 
@@ -48,9 +60,14 @@ export class NfeController {
 
   /** Lista NF-e emitidas (filtro por loja/status). */
   @Get()
-  list(@Req() req: any, @Query('storeCode') storeCode?: string, @Query('status') status?: string) {
-    this.requireMatriz(req);
-    return this.transfer.list({ storeCode, status });
+  list(
+    @Req() req: any,
+    @Query('storeCode') storeCode?: string,
+    @Query('status') status?: string,
+    @Query('limit') limit?: string,
+  ) {
+    this.requireLeitura(req);
+    return this.transfer.list({ storeCode, status, limit: Number(limit) || undefined });
   }
 
   /** Status da numeração NF-e de uma loja. */
@@ -71,10 +88,26 @@ export class NfeController {
     return this.seq.setProximo(storeCode, body?.serie || '1', Number(body?.proximo) || 1);
   }
 
+  /** DANFE em PDF (A4, com código de barras da chave). */
+  @Get(':id/danfe')
+  async getDanfe(@Req() req: any, @Param('id') id: string, @Res() res: Response) {
+    this.requireLeitura(req);
+    try {
+      const { buffer, filename } = await this.danfe.generateForDoc(id);
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+      res.setHeader('Content-Length', String(buffer.length));
+      res.end(buffer);
+    } catch (e: any) {
+      console.error('[nfe/danfe] FALHA ao gerar DANFE', id, '\n', e?.stack || e);
+      res.status(e?.status === 404 ? 404 : 500).json({ message: e?.message || 'Erro ao gerar DANFE' });
+    }
+  }
+
   /** Documento por id (com XMLs). */
   @Get(':id')
   getDoc(@Req() req: any, @Param('id') id: string) {
-    this.requireMatriz(req);
+    this.requireLeitura(req);
     return this.transfer.getDoc(id);
   }
 }

@@ -32,7 +32,7 @@ import {
   Loader2,
   PackageCheck,
 } from 'lucide-react';
-import { api } from '@/lib/api';
+import { api, API_URL, getAuthToken } from '@/lib/api';
 
 type ShipmentRow = {
   id: string;
@@ -177,6 +177,7 @@ export default function RemessasAdminPage() {
   // Lista de NF-e emitidas ("será que foi?" — resposta definitiva num lugar só)
   const [nfeList, setNfeList] = useState<any[] | null>(null);
   const [nfeListOpen, setNfeListOpen] = useState(false);
+  const [nfeLojaFiltro, setNfeLojaFiltro] = useState(''); // filtro por loja de ORIGEM (emitente)
   const abrirNfeList = async () => {
     setNfeListOpen(true);
     setNfeList(null);
@@ -184,6 +185,27 @@ export default function RemessasAdminPage() {
       setNfeList(await api<any[]>('/nfe?limit=100'));
     } catch {
       setNfeList([]);
+    }
+  };
+
+  // DANFE em PDF — fetch com bearer (rota autenticada) → abre em nova aba
+  const abrirDanfe = async (docId: string, numero: any) => {
+    try {
+      const token = getAuthToken();
+      const r = await fetch(`${API_URL}/api/nfe/${docId}/danfe`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!r.ok) throw new Error((await r.json().catch(() => null))?.message || `HTTP ${r.status}`);
+      const blobUrl = URL.createObjectURL(await r.blob());
+      const w = window.open(blobUrl, '_blank');
+      if (!w) {
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = `danfe-${numero}.pdf`;
+        a.click();
+      }
+    } catch (e: any) {
+      alert(`Erro ao gerar DANFE: ${e?.message || e}`);
     }
   };
 
@@ -483,11 +505,26 @@ export default function RemessasAdminPage() {
             className="bg-white rounded-lg max-w-4xl w-full max-h-[85vh] overflow-hidden flex flex-col"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="px-4 py-3 border-b flex items-center justify-between bg-indigo-50">
+            <div className="px-4 py-3 border-b flex items-center justify-between gap-3 bg-indigo-50">
               <h2 className="font-semibold text-indigo-900">📄 NF-e de transferência emitidas</h2>
-              <button onClick={() => setNfeListOpen(false)} className="p-1.5 hover:bg-white rounded">
-                <X className="w-4 h-4" />
-              </button>
+              <div className="flex items-center gap-2">
+                <select
+                  value={nfeLojaFiltro}
+                  onChange={(e) => setNfeLojaFiltro(e.target.value)}
+                  className="text-xs p-1.5 border rounded-lg bg-white"
+                  title="Filtrar pela loja de ORIGEM (o CNPJ emitente da nota)"
+                >
+                  <option value="">Todas as lojas</option>
+                  {Array.from(new Set((nfeList || []).map((d: any) => String(d.fromStoreCode))))
+                    .sort()
+                    .map((c) => (
+                      <option key={c} value={c}>Loja {c}</option>
+                    ))}
+                </select>
+                <button onClick={() => setNfeListOpen(false)} className="p-1.5 hover:bg-white rounded">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
             </div>
             <div className="flex-1 overflow-auto p-4">
               {nfeList === null ? (
@@ -511,7 +548,9 @@ export default function RemessasAdminPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {nfeList.map((d) => (
+                    {nfeList
+                      .filter((d: any) => !nfeLojaFiltro || String(d.fromStoreCode) === nfeLojaFiltro)
+                      .map((d) => (
                       <tr key={d.id} className="border-b last:border-0 align-top">
                         <td className="py-1.5 pr-2 whitespace-nowrap text-slate-500">{fmtDate(d.createdAt)}</td>
                         <td className="py-1.5 pr-2 whitespace-nowrap">{d.fromStoreCode} → {d.toStoreCode}</td>
@@ -540,6 +579,17 @@ export default function RemessasAdminPage() {
                           {d.status === 'authorized' ? d.chave : (d.xMotivo || d.chave || '—')}
                         </td>
                         <td className="py-1.5 pl-2 whitespace-nowrap">
+                          <button
+                            onClick={() => abrirDanfe(d.id, d.numero)}
+                            className={`text-[10px] px-1.5 py-0.5 rounded border mr-1 ${
+                              d.status === 'authorized'
+                                ? 'border-emerald-300 hover:bg-emerald-50 text-emerald-700 font-bold'
+                                : 'border-slate-300 hover:bg-slate-100 text-slate-500'
+                            }`}
+                            title={d.status === 'authorized' ? 'Abrir DANFE em PDF' : 'DANFE de conferência (sai com tarja SEM VALOR FISCAL)'}
+                          >
+                            📄 DANFE
+                          </button>
                           <button
                             onClick={() => baixarXmlNfe(d)}
                             className="text-[10px] px-1.5 py-0.5 rounded border border-slate-300 hover:bg-slate-100 text-slate-600"
@@ -724,6 +774,14 @@ export default function RemessasAdminPage() {
                             {nfeResult.cStat && <> · cStat {nfeResult.cStat}</>}
                             {nfeResult.xMotivo && <> · {nfeResult.xMotivo}</>}
                             {nfeResult.chave && <div className="font-mono mt-1 break-all">{nfeResult.chave}</div>}
+                            {nfeResult.status === 'authorized' && nfeResult.id && (
+                              <button
+                                onClick={() => abrirDanfe(nfeResult.id, nfeResult.numero)}
+                                className="mt-2 px-3 py-1.5 rounded border-2 border-emerald-400 bg-white hover:bg-emerald-50 text-emerald-700 font-bold"
+                              >
+                                📄 Abrir DANFE (PDF)
+                              </button>
+                            )}
                             {Array.isArray(nfeResult.warnings) && nfeResult.warnings.length > 0 && (
                               <div className="mt-1 text-amber-800">
                                 {nfeResult.warnings.map((w: string, i: number) => <div key={i}>⚠ {w}</div>)}
