@@ -156,6 +156,7 @@ export default function RemessasAdminPage() {
     setDetail(null);
     setDetailId(id);
     setNfeResult(null);
+    setNfePreview(null);
     setDetailLoading(true);
     try {
       const d = await api<ShipmentDetail>(`/realignment/shipments/admin/${id}`);
@@ -171,6 +172,19 @@ export default function RemessasAdminPage() {
   const [detailId, setDetailId] = useState<string | null>(null);
   const [nfeEmitting, setNfeEmitting] = useState(false);
   const [nfeResult, setNfeResult] = useState<any | null>(null);
+  const [nfePreview, setNfePreview] = useState<any | null>(null);
+  const [nfePreviewLoading, setNfePreviewLoading] = useState(false);
+  const carregarPreview = async () => {
+    if (!detailId || nfePreviewLoading) return;
+    setNfePreviewLoading(true);
+    try {
+      setNfePreview(await api<any>(`/nfe/transfer/preview/${detailId}`));
+    } catch (e: any) {
+      setNfePreview({ erro: e?.message || 'Falha na prévia' });
+    } finally {
+      setNfePreviewLoading(false);
+    }
+  };
   const emitirNfe = async () => {
     if (!detailId || nfeEmitting) return;
     if (!confirm('Emitir NF-e de transferência desta remessa?\n\nO ambiente (homologação/produção) vem da config fiscal da loja de ORIGEM.')) return;
@@ -473,14 +487,95 @@ export default function RemessasAdminPage() {
                           Emite pelo CNPJ da loja de origem ({detail.fromStoreCode}) · itens a preço de custo · CFOP 5152/6152
                         </div>
                       </div>
-                      <button
-                        onClick={emitirNfe}
-                        disabled={nfeEmitting}
-                        className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-bold disabled:opacity-50"
-                      >
-                        {nfeEmitting ? 'Emitindo…' : '📄 Emitir NF-e'}
-                      </button>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={carregarPreview}
+                          disabled={nfePreviewLoading}
+                          className="px-4 py-2 rounded-lg border-2 border-indigo-400 text-indigo-700 hover:bg-indigo-100 text-sm font-bold disabled:opacity-50"
+                        >
+                          {nfePreviewLoading ? 'Carregando…' : '👁 Prévia'}
+                        </button>
+                        <button
+                          onClick={emitirNfe}
+                          disabled={nfeEmitting}
+                          className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-bold disabled:opacity-50"
+                        >
+                          {nfeEmitting ? 'Emitindo…' : '📄 Emitir NF-e'}
+                        </button>
+                      </div>
                     </div>
+                    {nfePreview && (
+                      nfePreview.erro ? (
+                        <div className="mt-2 rounded px-3 py-2 text-xs bg-rose-50 border border-rose-200 text-rose-800">⚠️ {nfePreview.erro}</div>
+                      ) : (
+                        <div className="mt-2 rounded-lg bg-white border border-indigo-200 p-3 text-xs space-y-2">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            <div>
+                              <div className="text-[10px] uppercase font-bold text-slate-400">Emitente</div>
+                              <div className="font-semibold">{nfePreview.emitente.razaoSocial}</div>
+                              <div className="font-mono">{nfePreview.emitente.cnpj} · IE {nfePreview.emitente.ie}</div>
+                              <div>
+                                nº <b>{nfePreview.proximoNumero}</b> série {nfePreview.serie} ·{' '}
+                                <b className={nfePreview.emitente.ambiente === '1' ? 'text-rose-700' : 'text-emerald-700'}>
+                                  {nfePreview.emitente.ambiente === '1' ? 'PRODUÇÃO' : 'HOMOLOGAÇÃO'}
+                                </b>
+                              </div>
+                            </div>
+                            <div>
+                              <div className="text-[10px] uppercase font-bold text-slate-400">Destinatário</div>
+                              <div className="font-semibold">{nfePreview.destinatario.razaoSocial}</div>
+                              <div className="font-mono">{nfePreview.destinatario.cnpj} · IE {nfePreview.destinatario.ie}</div>
+                              <div>CFOP <b>{nfePreview.cfop}</b> · {nfePreview.icms?.descricao}</div>
+                            </div>
+                          </div>
+                          {nfePreview.avisoInterEmpresa && (
+                            <div className="rounded bg-amber-50 border border-amber-300 px-2 py-1.5 text-amber-800 font-semibold">
+                              ⚠️ {nfePreview.avisoInterEmpresa}
+                            </div>
+                          )}
+                          {nfePreview.jaEmitida && (
+                            <div className="rounded bg-emerald-50 border border-emerald-300 px-2 py-1.5 text-emerald-800 font-semibold">
+                              ✅ Essa remessa JÁ tem NF-e autorizada — Emitir devolve a existente.
+                            </div>
+                          )}
+                          <div className="overflow-x-auto max-h-56 overflow-y-auto">
+                            <table className="w-full">
+                              <thead>
+                                <tr className="text-[10px] uppercase text-slate-400 border-b">
+                                  <th className="text-left py-1 pr-2">SKU</th>
+                                  <th className="text-left py-1 pr-2">Produto</th>
+                                  <th className="text-left py-1 pr-2">NCM</th>
+                                  <th className="text-right py-1 pr-2">Qtd</th>
+                                  <th className="text-right py-1 pr-2">Custo un.</th>
+                                  <th className="text-right py-1">Total</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {nfePreview.items.map((it: any) => (
+                                  <tr key={it.sku} className="border-b last:border-0">
+                                    <td className="py-1 pr-2 font-mono">{it.sku}</td>
+                                    <td className="py-1 pr-2 truncate max-w-[220px]">{it.xProd}</td>
+                                    <td className="py-1 pr-2 font-mono">{it.ncm}</td>
+                                    <td className="py-1 pr-2 text-right">{it.qty}</td>
+                                    <td className="py-1 pr-2 text-right tabular-nums">R$ {Number(it.vUn).toFixed(2)}</td>
+                                    <td className="py-1 text-right tabular-nums font-semibold">R$ {Number(it.vProd).toFixed(2)}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                          <div className="flex justify-between font-bold text-sm border-t pt-1.5">
+                            <span>TOTAL DA NOTA ({nfePreview.items.length} item(ns))</span>
+                            <span>R$ {Number(nfePreview.valorTotal).toFixed(2)}</span>
+                          </div>
+                          {nfePreview.warnings?.length > 0 && (
+                            <div className="rounded bg-amber-50 border border-amber-200 px-2 py-1.5 text-amber-800">
+                              {nfePreview.warnings.map((w: string, i: number) => <div key={i}>⚠ {w}</div>)}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    )}
                     {nfeResult && (
                       <div className={`mt-2 rounded px-3 py-2 text-xs ${nfeResult.erro || nfeResult.status === 'rejeitada' ? 'bg-rose-50 border border-rose-200 text-rose-800' : 'bg-emerald-50 border border-emerald-200 text-emerald-800'}`}>
                         {nfeResult.erro ? (

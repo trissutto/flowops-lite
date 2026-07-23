@@ -25,6 +25,13 @@ export class NfeController {
   }
 
   /** Emite a NF-e de transferência de uma remessa (RealignmentShipment). */
+  /** PRÉVIA — tudo que a nota vai ter, sem numerar/assinar/transmitir. */
+  @Get('transfer/preview/:shipmentId')
+  previewTransfer(@Req() req: any, @Param('shipmentId') shipmentId: string) {
+    this.requireMatriz(req);
+    return this.transfer.previewForShipment(shipmentId);
+  }
+
   @Post('transfer/emit/:shipmentId')
   emitTransfer(
     @Req() req: any,

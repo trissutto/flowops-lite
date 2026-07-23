@@ -63,74 +63,16 @@ export class NfeTransferService {
       return { ok: true, jaEmitida: true, doc: this.publicDoc(jaAutorizada) };
     }
 
-    const origem = await this.loadStoreFiscal(shipment.fromStoreCode);
-    const destino = await this.loadStoreFiscal(shipment.toStoreCode);
-
-    // Itens da remessa (uma linha por unidade) → agrupa por SKU.
-    const rows = await this.prisma.transferOrder.findMany({
-      where: { shipmentId, realignmentStatus: { not: 'cancelled' } },
-    });
-    if (!rows.length) throw new BadRequestException('Remessa sem itens pra faturar');
-
-    const grouped = new Map<string, { sku: string; qty: number; row: any }>();
-    for (const r of rows as any[]) {
-      const sku = String(r.codigoBipado || '').trim();
-      if (!sku) continue; // sem código do ERP não dá pra faturar essa linha
-      const g = grouped.get(sku) || { sku, qty: 0, row: r };
-      g.qty += r.qtyOrigem || 1;
-      grouped.set(sku, g);
-    }
-    if (!grouped.size) {
-      throw new BadRequestException('Nenhum item com código do ERP (codigoBipado) pra faturar');
-    }
+    const data = await this.buildTransferData(shipment, { requireCert: true });
+    const { origem, destino, items, warnings, cfop, interestadual } = data;
+    const valorTotal = data.valorTotal;
 
     const ambiente = origem.ambiente;
     const tpAmb = ambiente;
     const serie = opts.serie || '1';
-    // CONTINUAÇÃO DA NUMERAÇÃO do GigaNFe (mapeado em C:\NFe_LURDS 23/07):
-    // a matriz 0001-97 emitiu até a nº 518 (série 1, jun/26) — a 1ª nota
-    // do Flow nesse CNPJ nasce 519. Outros CNPJs começam em 1 (ou no valor
-    // definido via POST /nfe/sequence). Só vale na CRIAÇÃO da sequência.
-    const CONTINUACAO_GIGANFE: Record<string, number> = { '30246592000197': 519 };
-    const startPadrao = CONTINUACAO_GIGANFE[origem.cnpj] && serie === '1'
-      ? CONTINUACAO_GIGANFE[origem.cnpj]
-      : undefined;
-    const numero = await this.seq.next(origem.storeCode, serie, { start: opts.startNumero ?? startPadrao });
-
-    // Monta itens com custo + NCM do espelho.
-    const warnings: string[] = [];
-    const items: Array<{
-      sku: string; ean: string; xProd: string; ncm: string; cfop: string;
-      qty: number; vUn: number; vProd: number;
-    }> = [];
-    const interestadual = origem.ender.uf !== destino.ender.uf;
-    const cfop = interestadual ? '6152' : '5152';
-
-    for (const g of grouped.values()) {
-      const info = await this.catalog.getPdvProductInfo(g.sku).catch(() => null);
-      // Valor = CUSTO UNITÁRIO real (sem fator). Fallback base/2.5 só se sem custo.
-      let vUn = Number(info?.custo) || 0;
-      if (vUn <= 0) {
-        const alt = (Number(info?.preco) || 0) / 2.5;
-        vUn = Math.round(alt * 100) / 100;
-        warnings.push(`SKU ${g.sku} sem custo cadastrado — usei base÷2,5 (R$ ${vUn.toFixed(2)})`);
-      }
-      vUn = Math.round(vUn * 100) / 100;
-      const vProd = Math.round(vUn * g.qty * 100) / 100;
-      const ncm = this.normNcm(info?.ncm, g.sku, warnings);
-      items.push({
-        sku: g.sku,
-        ean: (info?.ean || '').trim() || 'SEM GTIN',
-        xProd: (info?.descricao || g.row.descricao || g.sku).trim().slice(0, 120),
-        ncm,
-        cfop,
-        qty: g.qty,
-        vUn,
-        vProd,
-      });
-    }
-
-    const valorTotal = items.reduce((s, i) => s + i.vProd, 0);
+    const numero = await this.seq.next(origem.storeCode, serie, {
+      start: opts.startNumero ?? this.startPadraoPara(origem.cnpj, serie),
+    });
     const valorTotalCents = Math.round(valorTotal * 100);
 
     const dhEmi = this.dhEmiNow();
@@ -260,7 +202,142 @@ export class NfeTransferService {
     };
   }
 
-  private async loadStoreFiscal(storeCode: string): Promise<StoreFiscal> {
+  /** CONTINUAÇÃO DA NUMERAÇÃO do GigaNFe (mapeado em C:\NFe_LURDS 23/07):
+   *  matriz 0001-97 emitiu até a nº 518 (série 1, jun/26) — 1ª do Flow = 519.
+   *  Outros CNPJs começam em 1 (ou via POST /nfe/sequence). Só vale na
+   *  CRIAÇÃO da sequência. */
+  private startPadraoPara(cnpj: string, serie: string): number | undefined {
+    const CONTINUACAO_GIGANFE: Record<string, number> = { '30246592000197': 519 };
+    return CONTINUACAO_GIGANFE[cnpj] && serie === '1' ? CONTINUACAO_GIGANFE[cnpj] : undefined;
+  }
+
+  /** Monta os dados da nota (fiscal origem/destino + itens a custo) — usado
+   *  pela EMISSÃO (requireCert) e pela PRÉVIA (sem cert, sem numeração). */
+  private async buildTransferData(
+    shipment: any,
+    opts: { requireCert: boolean },
+  ): Promise<{
+    origem: StoreFiscal;
+    destino: StoreFiscal;
+    items: Array<{ sku: string; ean: string; xProd: string; ncm: string; cfop: string; qty: number; vUn: number; vProd: number }>;
+    valorTotal: number;
+    warnings: string[];
+    interestadual: boolean;
+    cfop: string;
+  }> {
+    const origem = await this.loadStoreFiscal(shipment.fromStoreCode, opts);
+    const destino = await this.loadStoreFiscal(shipment.toStoreCode, { requireCert: false });
+
+    // Itens da remessa (uma linha por unidade) → agrupa por SKU.
+    const rows = await this.prisma.transferOrder.findMany({
+      where: { shipmentId: shipment.id, realignmentStatus: { not: 'cancelled' } },
+    });
+    if (!rows.length) throw new BadRequestException('Remessa sem itens pra faturar');
+
+    const grouped = new Map<string, { sku: string; qty: number; row: any }>();
+    for (const r of rows as any[]) {
+      const sku = String(r.codigoBipado || '').trim();
+      if (!sku) continue; // sem código do ERP não dá pra faturar essa linha
+      const g = grouped.get(sku) || { sku, qty: 0, row: r };
+      g.qty += r.qtyOrigem || 1;
+      grouped.set(sku, g);
+    }
+    if (!grouped.size) {
+      throw new BadRequestException('Nenhum item com código do ERP (codigoBipado) pra faturar');
+    }
+
+    // Monta itens com custo + NCM do espelho.
+    const warnings: string[] = [];
+    const items: Array<{
+      sku: string; ean: string; xProd: string; ncm: string; cfop: string;
+      qty: number; vUn: number; vProd: number;
+    }> = [];
+    const interestadual = origem.ender.uf !== destino.ender.uf;
+    const cfop = interestadual ? '6152' : '5152';
+
+    for (const g of grouped.values()) {
+      const info = await this.catalog.getPdvProductInfo(g.sku).catch(() => null);
+      // Valor = CUSTO UNITÁRIO real (sem fator). Fallback base/2.5 só se sem custo.
+      let vUn = Number(info?.custo) || 0;
+      if (vUn <= 0) {
+        const alt = (Number(info?.preco) || 0) / 2.5;
+        vUn = Math.round(alt * 100) / 100;
+        warnings.push(`SKU ${g.sku} sem custo cadastrado — usei base÷2,5 (R$ ${vUn.toFixed(2)})`);
+      }
+      vUn = Math.round(vUn * 100) / 100;
+      const vProd = Math.round(vUn * g.qty * 100) / 100;
+      const ncm = this.normNcm(info?.ncm, g.sku, warnings);
+      items.push({
+        sku: g.sku,
+        ean: (info?.ean || '').trim() || 'SEM GTIN',
+        xProd: (info?.descricao || g.row.descricao || g.sku).trim().slice(0, 120),
+        ncm,
+        cfop,
+        qty: g.qty,
+        vUn,
+        vProd,
+      });
+    }
+
+    const valorTotal = items.reduce((s, i) => s + i.vProd, 0);
+    return { origem, destino, items, valorTotal, warnings, interestadual, cfop };
+  }
+
+  /**
+   * PRÉVIA da NF-e (dono 23/07): tudo que a nota vai ter — SEM consumir
+   * numeração, SEM assinar, SEM transmitir e SEM exigir certificado.
+   */
+  async previewForShipment(shipmentId: string) {
+    const shipment = await this.prisma.realignmentShipment.findUnique({
+      where: { id: shipmentId },
+    });
+    if (!shipment) throw new NotFoundException('Remessa não encontrada');
+
+    const jaAutorizada = await this.prisma.nfeDoc.findFirst({
+      where: { shipmentId, status: 'authorized' },
+    });
+
+    const data = await this.buildTransferData(shipment, { requireCert: false });
+    const { origem, destino } = data;
+
+    // Espia o próximo número SEM incrementar
+    const serie = '1';
+    const seqRow = await this.prisma.nfeSequence.findUnique({
+      where: { storeCode_modelo_serie: { storeCode: origem.storeCode, modelo: '55', serie } },
+    });
+    const proximoNumero = seqRow?.proximo ?? this.startPadraoPara(origem.cnpj, serie) ?? 1;
+
+    const icmsMode = String(process.env.NFE_TRANSFER_ICMS ?? 'sem').trim();
+    const crt3 = String(origem.regime || '1') === '3';
+    const interEmpresa = origem.cnpj.slice(0, 8) !== destino.cnpj.slice(0, 8);
+
+    return {
+      ok: true,
+      jaEmitida: !!jaAutorizada,
+      docAutorizado: jaAutorizada ? this.publicDoc(jaAutorizada) : null,
+      remessa: { code: shipment.code, de: shipment.fromStoreCode, para: shipment.toStoreCode },
+      emitente: { cnpj: origem.cnpj, razaoSocial: origem.razaoSocial, ie: origem.ie, uf: origem.ender.uf, ambiente: origem.ambiente, regime: origem.regime },
+      destinatario: { cnpj: destino.cnpj, razaoSocial: destino.razaoSocial, ie: destino.ie, uf: destino.ender.uf },
+      serie,
+      proximoNumero,
+      cfop: data.cfop,
+      interestadual: data.interestadual,
+      icms: crt3
+        ? (icmsMode === 'destacado'
+          ? { modo: 'destacado', descricao: `ICMS destacado (CST 00, ${data.interestadual ? '12' : '18'}%) — modelo das notas antigas do GigaNFe` }
+          : { modo: 'sem', descricao: 'SEM destaque de ICMS (CST 41 — operação não tributada)' })
+        : { modo: 'simples', descricao: 'Simples Nacional — CSOSN 400' },
+      interEmpresa,
+      avisoInterEmpresa: interEmpresa
+        ? `ATENÇÃO: origem (raiz ${origem.cnpj.slice(0, 8)}) e destino (raiz ${destino.cnpj.slice(0, 8)}) são EMPRESAS DIFERENTES — juridicamente não é transferência (CFOP 5152/6152 pode ser indevido). Confirme a natureza da operação com o contador antes de emitir.`
+        : null,
+      items: data.items,
+      valorTotal: Math.round(data.valorTotal * 100) / 100,
+      warnings: data.warnings,
+    };
+  }
+
+  private async loadStoreFiscal(storeCode: string, opts: { requireCert: boolean } = { requireCert: true }): Promise<StoreFiscal> {
     const cfg = await this.prisma.nfceConfig.findUnique({ where: { storeCode } });
     if (!cfg) {
       throw new BadRequestException(`Loja ${storeCode} sem config fiscal (NfceConfig). Configure CNPJ/IE/endereço/certificado.`);
@@ -298,7 +375,7 @@ export class NfeTransferService {
     const faltando: string[] = [];
     if (!cfg.cnpj) faltando.push('CNPJ');
     if (!cfg.ie) faltando.push('IE');
-    if (!certPfxB64 || !certPfxPass) faltando.push('certificado A1 (nem próprio, nem de loja da mesma raiz de CNPJ)');
+    if (opts.requireCert && (!certPfxB64 || !certPfxPass)) faltando.push('certificado A1 (nem próprio, nem de loja da mesma raiz de CNPJ)');
     if (!cfg.endereco) faltando.push('endereço');
     if (faltando.length) {
       throw new BadRequestException(`Loja ${storeCode} sem ${faltando.join(', ')} na config fiscal`);
@@ -471,12 +548,15 @@ export class NfeTransferService {
     const autXmlCnpj = String(process.env.NFE_AUTXML_CNPJ ?? '11145597000189').replace(/\D/g, '');
     const autXML = autXmlCnpj ? `<autXML><CNPJ>${autXmlCnpj}</CNPJ></autXML>` : '';
 
-    // REGIME (23/07, espelho da nota real nº 518 do GigaNFe):
-    //   CRT 3 (normal — matriz e filiais Lurds): ICMS00 CST 00 DESTACADO
-    //     (18% interna SP / 12% interestadual), PIS/COFINS CST 01 zerados,
-    //     IPI cEnq 999 CST 99 zerado. Totais vBC/vICMS preenchidos.
-    //   CRT 1 (Simples — se algum CNPJ da rede for): CSOSN 400 como antes.
+    // ICMS DA TRANSFERÊNCIA (dono 23/07: "transferência não pode gerar
+    // imposto") — NFE_TRANSFER_ICMS:
+    //   'sem' (DEFAULT): CST 41 (não tributada) — sem destaque, totais zerados
+    //   'destacado': ICMS00 CST 00 (18% interna / 12% interestadual) — modelo
+    //     das notas antigas do GigaNFe (nº 518). Confirmar com o contador.
+    //   CRT 1 (Simples): CSOSN 400 sempre.
+    // PIS/COFINS CST 01 zerados e IPI 999/99 nos dois modos (igual à real).
     const crt3 = String(p.origem.regime || '1') === '3';
+    const icmsDestacado = crt3 && String(process.env.NFE_TRANSFER_ICMS ?? 'sem').trim() === 'destacado';
     const aliqInterna = Number(process.env.NFE_ICMS_ALIQ_INTERNA ?? 18);
     const aliqInter = Number(process.env.NFE_ICMS_ALIQ_INTERESTADUAL ?? 12);
 
@@ -503,7 +583,7 @@ export class NfeTransferService {
           `<indTot>1</indTot>` +
           `</prod>`;
         let icms: string;
-        if (crt3) {
+        if (icmsDestacado) {
           const interestadual = String(it.cfop).startsWith('6');
           const pIcms = interestadual ? aliqInter : aliqInterna;
           const vBC = Math.round(it.vProd * 100) / 100;
@@ -514,6 +594,9 @@ export class NfeTransferService {
             `<ICMS><ICMS00><orig>0</orig><CST>00</CST><modBC>3</modBC>` +
             `<vBC>${this.money(vBC)}</vBC><pICMS>${pIcms.toFixed(4)}</pICMS><vICMS>${this.money(vIcms)}</vICMS>` +
             `</ICMS00></ICMS>`;
+        } else if (crt3) {
+          // Transferência SEM destaque: CST 41 — operação não tributada
+          icms = `<ICMS><ICMS40><orig>0</orig><CST>41</CST></ICMS40></ICMS>`;
         } else {
           icms = `<ICMS><ICMSSN102><orig>0</orig><CSOSN>400</CSOSN></ICMSSN102></ICMS>`;
         }
