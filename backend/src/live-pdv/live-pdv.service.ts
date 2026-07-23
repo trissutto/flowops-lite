@@ -62,8 +62,16 @@ export class LivePdvService {
    *  é ruído de cadastro e não vira célula. Vale SÓ na busca da live
    *  (searchGrade); PDV e consulta continuam vendo o catálogo inteiro. */
   private static readonly LIVE_TAMANHOS = new Set([
-    '46', '48', '50', '52', '54', '56', '58', '60', '46/48', '50/52',
+    '46', '48', '50', '52', '54', '56', '58', '60',
+    '46/48', '50/52', '54/56', '58/60',
   ]);
+
+  /** Tamanho canônico pra whitelist: "46 48", "46-48" e "46 / 48" viram
+   *  "46/48" (o cadastro da Giga grava composto de todo jeito — 23/07, S01092
+   *  "46 48" sumia da grade da live). */
+  private tamCanon(s: any): string {
+    return this.norm(s).replace(/\s*[/-]\s*/g, '/').replace(/\s+/g, '/');
+  }
 
   /**
    * Título de exibição da grade SEM a cor/tamanho da linha (14/07): a
@@ -696,7 +704,7 @@ export class LivePdvService {
     // Mesmo padrão do filtro de cor da legenda: se zerar tudo, mostra tudo
     // (cadastro fora do padrão nunca trava a live).
     const soPlusFeminino = productRows.filter((r) => {
-      const tam = this.norm(r.TAMANHO);
+      const tam = this.tamCanon(r.TAMANHO);
       if (tam && !LivePdvService.LIVE_TAMANHOS.has(tam)) return false;
       const desc = this.norm(r.DESCRICAOCOMPLETA);
       if (desc.includes('MASCULIN') || desc.includes('INFANTIL')) return false;
