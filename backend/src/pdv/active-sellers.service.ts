@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
 /**
@@ -10,6 +10,7 @@ import { PrismaService } from '../prisma/prisma.service';
  */
 @Injectable()
 export class ActiveSellersService {
+  private readonly logger = new Logger(ActiveSellersService.name);
   constructor(private readonly prisma: PrismaService) {}
 
   /**
@@ -18,10 +19,39 @@ export class ActiveSellersService {
    */
   async list(storeCode: string) {
     if (!storeCode) throw new BadRequestException('storeCode obrigatório');
-    const rows: any[] = await (this.prisma as any).pdvActiveSeller.findMany({
+    let rows: any[] = await (this.prisma as any).pdvActiveSeller.findMany({
       where: { storeCode },
       orderBy: { nome: 'asc' },
     });
+
+    // AUTO-REPARO (23/07): um bug do sync apagou vendedoras legítimas da
+    // whitelist (código de funcionária repete entre lojas). Toda leitura
+    // reconcilia: funcionária ATIVA com "loja onde trabalha" = esta loja e
+    // que não está na lista volta sozinha — nenhuma loja fica sem vendedora.
+    try {
+      const ativos: any[] = await (this.prisma as any).seller.findMany({
+        where: { active: true, storeCodeOrigin: storeCode },
+        select: { id: true, wincredCodigo: true, name: true, apelido: true },
+      });
+      const have = new Set(rows.map((r) => String(r.codigo).trim()));
+      let repos = 0;
+      for (const s of ativos) {
+        const codigo = String(s.wincredCodigo || s.id).trim();
+        if (!codigo || have.has(codigo)) continue;
+        const nome = String(s.apelido || s.name).trim();
+        const criado = await (this.prisma as any).pdvActiveSeller.upsert({
+          where: { storeCode_codigo: { storeCode, codigo } },
+          create: { storeCode, codigo, nome },
+          update: {},
+        });
+        rows.push(criado);
+        repos++;
+      }
+      if (repos > 0) {
+        rows.sort((a, b) => String(a.nome).localeCompare(String(b.nome), 'pt-BR'));
+        this.logger?.log?.(`[active-sellers] auto-reparo: ${repos} vendedora(s) devolvida(s) à loja ${storeCode}`);
+      }
+    } catch { /* lista segue como está */ }
     // APELIDO (22/07): vem do cadastro da funcionária (Seller, casado pelo
     // código do Wincred) — é o que o popup do PDV mostra no lugar do nome.
     try {
