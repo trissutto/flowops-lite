@@ -4062,6 +4062,9 @@ function PaymentModal({
   const [credObs, setCredObs] = useState('');
   // Cópia 1-clique da ficha de outra loja (banner "cliente é de outra loja")
   const [copiandoFicha, setCopiandoFicha] = useState(false);
+  // FRETE à parte (venda online) — vira linha própria na venda
+  const [freteStr, setFreteStr] = useState('');
+  const [aplicandoFrete, setAplicandoFrete] = useState(false);
   // Info do cliente vinda do Giga + pendências (pra banner de inadimplência)
   const [credCustomerInfo, setCredCustomerInfo] = useState<{
     found: boolean;
@@ -5428,6 +5431,55 @@ function PaymentModal({
                 ⚠ CPF do cliente é obrigatório. Aperte F5 pra identificar.
               </div>
             )}
+
+            {/* ── FRETE À PARTE (dono 23/07): vira linha própria na venda —
+                soma no total, entra no caixa como receita e fica FORA da
+                base de comissão da vendedora ── */}
+            <div className="bg-white border-2 border-teal-200 rounded-lg p-2.5">
+              <label className="text-[10px] text-slate-600 uppercase font-semibold tracking-wider">
+                Frete cobrado da cliente (R$) — opcional
+              </label>
+              <div className="flex gap-2 mt-1">
+                <input
+                  value={freteStr}
+                  onChange={(e) => setFreteStr(e.target.value.replace(/[^\d.,]/g, ''))}
+                  placeholder="0,00"
+                  inputMode="decimal"
+                  className="flex-1 rounded-lg border-2 border-slate-200 px-3 py-2 text-sm text-right tabular-nums focus:border-teal-400 focus:outline-none"
+                />
+                <button
+                  type="button"
+                  disabled={aplicandoFrete}
+                  onClick={async () => {
+                    const v = Math.round((Number((freteStr || '0').replace(/\./g, '').replace(',', '.')) || 0) * 100) / 100;
+                    setAplicandoFrete(true);
+                    try {
+                      const r = await api<{ ok: boolean; freteReais: number; total: number }>(
+                        `/pdv/sales/${saleId}/frete`,
+                        { method: 'POST', body: JSON.stringify({ valor: v }) },
+                      );
+                      onPaymentsChange?.();
+                      toast(
+                        'success',
+                        v > 0 ? `Frete de ${brl(v)} aplicado` : 'Frete removido',
+                        `Total da venda: ${brl(r.total)} — a linha FRETE aparece no carrinho`,
+                      );
+                    } catch (e: any) {
+                      const h = humanizeError(e);
+                      toast('error', h.title, h.hint);
+                    } finally {
+                      setAplicandoFrete(false);
+                    }
+                  }}
+                  className="rounded-lg bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold px-4 disabled:opacity-50"
+                >
+                  {aplicandoFrete ? '...' : 'Aplicar frete'}
+                </button>
+              </div>
+              <p className="text-[10px] text-slate-400 mt-1">
+                Soma no total a cobrar · não baixa estoque · fora da comissão da vendedora.
+              </p>
+            </div>
 
             {/* ── PAINEL: Link Pagar.me — gera URL + cliente paga + webhook ── */}
             {vendaOnlineTipo === 'pagarme_link' && customerCpf && (

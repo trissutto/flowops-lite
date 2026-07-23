@@ -501,6 +501,20 @@ export class PdvController {
   }
 
   /**
+   * POST /pdv/sales/:id/frete { valor }
+   * FRETE À PARTE (venda online) — linha própria na venda; valor 0 remove.
+   */
+  @Post('sales/:id/frete')
+  setFrete(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: { valor: number },
+  ) {
+    this.requireRole(req);
+    return this.svc.setFrete(id, Number(body?.valor));
+  }
+
+  /**
    * POST /pdv/sales/:id/gift-voucher { valor, compradorNome?, presenteadoNome? }
    * VALE PRESENTE: item manual na venda + crédito (trilho do vale-troca) que
    * ativa quando a venda finaliza. Código VP- sai impresso no cupom.
