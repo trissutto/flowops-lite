@@ -154,6 +154,8 @@ export default function RemessasAdminPage() {
 
   const openDetail = async (id: string) => {
     setDetail(null);
+    setDetailId(id);
+    setNfeResult(null);
     setDetailLoading(true);
     try {
       const d = await api<ShipmentDetail>(`/realignment/shipments/admin/${id}`);
@@ -162,6 +164,25 @@ export default function RemessasAdminPage() {
       alert(e?.message || 'Erro ao carregar detalhe');
     } finally {
       setDetailLoading(false);
+    }
+  };
+
+  // ── NF-e de transferência (Fase 3, 23/07): emite direto do detalhe ──
+  const [detailId, setDetailId] = useState<string | null>(null);
+  const [nfeEmitting, setNfeEmitting] = useState(false);
+  const [nfeResult, setNfeResult] = useState<any | null>(null);
+  const emitirNfe = async () => {
+    if (!detailId || nfeEmitting) return;
+    if (!confirm('Emitir NF-e de transferência desta remessa?\n\nO ambiente (homologação/produção) vem da config fiscal da loja de ORIGEM.')) return;
+    setNfeEmitting(true);
+    setNfeResult(null);
+    try {
+      const r = await api<any>(`/nfe/transfer/emit/${detailId}`, { method: 'POST', body: JSON.stringify({}) });
+      setNfeResult(r);
+    } catch (e: any) {
+      setNfeResult({ erro: e?.message || 'Falha na emissão' });
+    } finally {
+      setNfeEmitting(false);
     }
   };
 
@@ -441,6 +462,40 @@ export default function RemessasAdminPage() {
                       <div className="text-xs text-slate-500">Recebida</div>
                       <div className="font-medium">{fmtDate(detail.receivedAt)}</div>
                     </div>
+                  </div>
+
+                  {/* NF-e de transferência — emite pelo CNPJ da loja de origem */}
+                  <div className="mb-4 rounded-lg border-2 border-indigo-200 bg-indigo-50/50 p-3">
+                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                      <div className="text-sm">
+                        <div className="font-bold text-indigo-900">NF-e de transferência (mod. 55)</div>
+                        <div className="text-xs text-indigo-700">
+                          Emite pelo CNPJ da loja de origem ({detail.fromStoreCode}) · itens a preço de custo · CFOP 5152/6152
+                        </div>
+                      </div>
+                      <button
+                        onClick={emitirNfe}
+                        disabled={nfeEmitting}
+                        className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-bold disabled:opacity-50"
+                      >
+                        {nfeEmitting ? 'Emitindo…' : '📄 Emitir NF-e'}
+                      </button>
+                    </div>
+                    {nfeResult && (
+                      <div className={`mt-2 rounded px-3 py-2 text-xs ${nfeResult.erro || nfeResult.status === 'rejeitada' ? 'bg-rose-50 border border-rose-200 text-rose-800' : 'bg-emerald-50 border border-emerald-200 text-emerald-800'}`}>
+                        {nfeResult.erro ? (
+                          <>⚠️ {nfeResult.erro}</>
+                        ) : (
+                          <>
+                            {nfeResult.status === 'autorizada' ? '✅ AUTORIZADA' : `Status: ${nfeResult.status || '—'}`}
+                            {nfeResult.numero != null && <> · nº <b>{nfeResult.numero}</b> série {nfeResult.serie || '1'}</>}
+                            {nfeResult.cStat && <> · cStat {nfeResult.cStat}</>}
+                            {nfeResult.xMotivo && <> · {nfeResult.xMotivo}</>}
+                            {nfeResult.chave && <div className="font-mono mt-1 break-all">{nfeResult.chave}</div>}
+                          </>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   <div className="text-xs uppercase text-slate-500 font-semibold mb-2">
