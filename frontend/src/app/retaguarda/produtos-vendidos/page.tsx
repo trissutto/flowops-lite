@@ -797,6 +797,7 @@ function ProdutosVendidosContent() {
           saleId={editSeller.saleId}
           currentName={editSeller.currentName}
           produtoHint={editSeller.produtoHint}
+          storeCode={storeCode}
           onClose={() => setEditSeller(null)}
           onSaved={() => { setEditSeller(null); buscar(); }}
         />
@@ -806,18 +807,39 @@ function ProdutosVendidosContent() {
 }
 
 function EditSellerModal({
-  itemId, saleId, currentName, produtoHint, onClose, onSaved,
+  itemId, saleId, currentName, produtoHint, storeCode, onClose, onSaved,
 }: {
   itemId: string;
   saleId: string;
   currentName: string;
   produtoHint: string;
+  storeCode?: string;
   onClose: () => void;
   onSaved: () => void;
 }) {
   const [scope, setScope] = useState<'item' | 'sale'>('item');
-  const [novoNome, setNovoNome] = useState(currentName);
+  // Começa VAZIO de propósito: obriga escolher na lista (se iniciasse com a
+  // atual, o Confirmar passava sem o usuário perceber que não escolheu)
+  const [novoNome, setNovoNome] = useState('');
   const [motivo, setMotivo] = useState('');
+  // SELEÇÃO em vez de digitação livre (dono 23/07): nome digitado errado
+  // vira vendedora fantasma e some da comissão. Lista = cadastro de
+  // funcionárias ativas, com as da loja do filtro primeiro.
+  const [vendedoras, setVendedoras] = useState<Array<{ name: string; apelido?: string | null; storeCodeOrigin?: string | null }>>([]);
+  useEffect(() => {
+    api<any[]>('/sellers')
+      .then((arr) => {
+        const ativas = (arr || []).filter((s: any) => s.active !== false);
+        ativas.sort((a: any, b: any) => {
+          const aLoja = storeCode && a.storeCodeOrigin === storeCode ? 0 : 1;
+          const bLoja = storeCode && b.storeCodeOrigin === storeCode ? 0 : 1;
+          if (aLoja !== bLoja) return aLoja - bLoja;
+          return String(a.name).localeCompare(String(b.name), 'pt-BR');
+        });
+        setVendedoras(ativas);
+      })
+      .catch(() => setVendedoras([]));
+  }, [storeCode]);
   const [password, setPassword] = useState<string>(() => {
     try { return sessionStorage.getItem('flowops.masterPwd') || ''; } catch { return ''; }
   });
@@ -828,7 +850,7 @@ function EditSellerModal({
   async function save() {
     setErrMsg(null);
     const nome = novoNome.trim().toUpperCase();
-    if (!nome || nome.length < 2) { setErrMsg('Nome invalido'); return; }
+    if (!nome || nome.length < 2) { setErrMsg('Escolha a vendedora na lista'); return; }
     if (!motivo || motivo.trim().length < 3) { setErrMsg('Motivo obrigatorio'); return; }
     if (!password) { setErrMsg('Senha obrigatoria'); return; }
     setSaving(true);
@@ -882,13 +904,20 @@ function EditSellerModal({
         </div>
 
         <label className="block text-xs font-bold text-slate-700 mb-1">Nova vendedora *</label>
-        <input
-          type="text"
+        <select
           value={novoNome}
-          onChange={(e) => setNovoNome(e.target.value.toUpperCase())}
-          placeholder="ex: MARIA SILVA"
-          className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm mb-3 font-medium uppercase focus:outline-none focus:ring-2 focus:ring-violet-500"
-        />
+          onChange={(e) => setNovoNome(e.target.value)}
+          className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm mb-3 font-medium bg-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+        >
+          <option value="">— escolha a vendedora —</option>
+          {vendedoras.map((v) => (
+            <option key={v.name} value={v.name}>
+              {v.name}
+              {v.apelido ? ` (${v.apelido})` : ''}
+              {v.storeCodeOrigin ? ` · LJ ${v.storeCodeOrigin}` : ''}
+            </option>
+          ))}
+        </select>
 
         <label className="block text-xs font-bold text-slate-700 mb-1">Motivo *</label>
         <input
