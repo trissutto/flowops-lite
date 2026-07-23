@@ -397,7 +397,7 @@ export default function NfceConfigPage() {
                   <Field label="Cód. Município IBGE" value={cfg.endereco.codMunicipio} onChange={(v) => setCfg({ ...cfg, endereco: { ...cfg.endereco, codMunicipio: v } })} placeholder="3550308" />
                 </div>
                 <p className="text-xs text-gray-500 mt-1">
-                  Códigos IBGE comuns: SP capital 3550308 · Itanhaém 3523107 · Santos 3548500 ·{' '}
+                  Códigos IBGE comuns: SP capital 3550308 · Itanhaém 3522109 · Santos 3548500 ·{' '}
                   <a
                     href="https://www.ibge.gov.br/explica/codigos-dos-municipios.php"
                     target="_blank"
