@@ -177,6 +177,7 @@ export default function RemessasAdminPage() {
   // Lista de NF-e emitidas ("será que foi?" — resposta definitiva num lugar só)
   const [nfeList, setNfeList] = useState<any[] | null>(null);
   const [nfeListOpen, setNfeListOpen] = useState(false);
+  const [nfeLojaFiltro, setNfeLojaFiltro] = useState(''); // filtro por loja de ORIGEM (emitente)
   const abrirNfeList = async () => {
     setNfeListOpen(true);
     setNfeList(null);
@@ -504,11 +505,26 @@ export default function RemessasAdminPage() {
             className="bg-white rounded-lg max-w-4xl w-full max-h-[85vh] overflow-hidden flex flex-col"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="px-4 py-3 border-b flex items-center justify-between bg-indigo-50">
+            <div className="px-4 py-3 border-b flex items-center justify-between gap-3 bg-indigo-50">
               <h2 className="font-semibold text-indigo-900">📄 NF-e de transferência emitidas</h2>
-              <button onClick={() => setNfeListOpen(false)} className="p-1.5 hover:bg-white rounded">
-                <X className="w-4 h-4" />
-              </button>
+              <div className="flex items-center gap-2">
+                <select
+                  value={nfeLojaFiltro}
+                  onChange={(e) => setNfeLojaFiltro(e.target.value)}
+                  className="text-xs p-1.5 border rounded-lg bg-white"
+                  title="Filtrar pela loja de ORIGEM (o CNPJ emitente da nota)"
+                >
+                  <option value="">Todas as lojas</option>
+                  {Array.from(new Set((nfeList || []).map((d: any) => String(d.fromStoreCode))))
+                    .sort()
+                    .map((c) => (
+                      <option key={c} value={c}>Loja {c}</option>
+                    ))}
+                </select>
+                <button onClick={() => setNfeListOpen(false)} className="p-1.5 hover:bg-white rounded">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
             </div>
             <div className="flex-1 overflow-auto p-4">
               {nfeList === null ? (
@@ -532,7 +548,9 @@ export default function RemessasAdminPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {nfeList.map((d) => (
+                    {nfeList
+                      .filter((d: any) => !nfeLojaFiltro || String(d.fromStoreCode) === nfeLojaFiltro)
+                      .map((d) => (
                       <tr key={d.id} className="border-b last:border-0 align-top">
                         <td className="py-1.5 pr-2 whitespace-nowrap text-slate-500">{fmtDate(d.createdAt)}</td>
                         <td className="py-1.5 pr-2 whitespace-nowrap">{d.fromStoreCode} → {d.toStoreCode}</td>

@@ -27,6 +27,15 @@ export class NfeController {
     }
   }
 
+  /** Leitura (lista/XML/DANFE): matriz + supervisor + CONTADOR (aba
+   *  contabilidade — dono 23/07: notas disponíveis pro contador). */
+  private requireLeitura(req: any) {
+    const role = req?.user?.role;
+    if (!['admin', 'operator', 'supervisor', 'contador'].includes(role)) {
+      throw new ForbiddenException('Sem permissão pra consultar NF-e');
+    }
+  }
+
   /** Emite a NF-e de transferência de uma remessa (RealignmentShipment). */
   /** PRÉVIA — tudo que a nota vai ter, sem numerar/assinar/transmitir. */
   @Get('transfer/preview/:shipmentId')
@@ -51,9 +60,14 @@ export class NfeController {
 
   /** Lista NF-e emitidas (filtro por loja/status). */
   @Get()
-  list(@Req() req: any, @Query('storeCode') storeCode?: string, @Query('status') status?: string) {
-    this.requireMatriz(req);
-    return this.transfer.list({ storeCode, status });
+  list(
+    @Req() req: any,
+    @Query('storeCode') storeCode?: string,
+    @Query('status') status?: string,
+    @Query('limit') limit?: string,
+  ) {
+    this.requireLeitura(req);
+    return this.transfer.list({ storeCode, status, limit: Number(limit) || undefined });
   }
 
   /** Status da numeração NF-e de uma loja. */
@@ -77,7 +91,7 @@ export class NfeController {
   /** DANFE em PDF (A4, com código de barras da chave). */
   @Get(':id/danfe')
   async getDanfe(@Req() req: any, @Param('id') id: string, @Res() res: Response) {
-    this.requireMatriz(req);
+    this.requireLeitura(req);
     try {
       const { buffer, filename } = await this.danfe.generateForDoc(id);
       res.setHeader('Content-Type', 'application/pdf');
@@ -93,7 +107,7 @@ export class NfeController {
   /** Documento por id (com XMLs). */
   @Get(':id')
   getDoc(@Req() req: any, @Param('id') id: string) {
-    this.requireMatriz(req);
+    this.requireLeitura(req);
     return this.transfer.getDoc(id);
   }
 }
