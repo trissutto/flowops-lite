@@ -265,10 +265,40 @@ export class NfeTransferService {
     if (!cfg) {
       throw new BadRequestException(`Loja ${storeCode} sem config fiscal (NfceConfig). Configure CNPJ/IE/endereço/certificado.`);
     }
+
+    // CERTIFICADO POR EMPRESA (dono 23/07): são só 2 A1 na rede — um por
+    // RAIZ de CNPJ (LURDS 30.246.592 e T.O. RISSUTTO 20.x). O e-CNPJ da
+    // matriz assina as notas de TODAS as filiais da mesma raiz. Se a loja
+    // não tem cert próprio na config, herda o de outra loja da MESMA raiz
+    // que tenha — sobe o certificado UMA vez e a empresa inteira emite.
+    let certPfxB64 = cfg.certPfxB64 as string | null;
+    let certPfxPass = cfg.certPfxPass as string | null;
+    if ((!certPfxB64 || !certPfxPass) && cfg.cnpj) {
+      const raiz = this.digits(cfg.cnpj as string).slice(0, 8);
+      if (raiz.length === 8) {
+        const irmas = await this.prisma.nfceConfig.findMany({
+          where: {
+            certPfxB64: { not: null },
+            certPfxPass: { not: null },
+            cnpj: { not: null },
+          },
+          select: { storeCode: true, cnpj: true, certPfxB64: true, certPfxPass: true },
+        });
+        const doadora = irmas.find((c) => this.digits(String(c.cnpj)).slice(0, 8) === raiz);
+        if (doadora) {
+          certPfxB64 = doadora.certPfxB64 as string;
+          certPfxPass = doadora.certPfxPass as string;
+          this.logger?.log?.(
+            `[nfe] loja ${storeCode} usando certificado da loja ${doadora.storeCode} (mesma raiz de CNPJ ${raiz})`,
+          );
+        }
+      }
+    }
+
     const faltando: string[] = [];
     if (!cfg.cnpj) faltando.push('CNPJ');
     if (!cfg.ie) faltando.push('IE');
-    if (!cfg.certPfxB64 || !cfg.certPfxPass) faltando.push('certificado A1');
+    if (!certPfxB64 || !certPfxPass) faltando.push('certificado A1 (nem próprio, nem de loja da mesma raiz de CNPJ)');
     if (!cfg.endereco) faltando.push('endereço');
     if (faltando.length) {
       throw new BadRequestException(`Loja ${storeCode} sem ${faltando.join(', ')} na config fiscal`);
@@ -291,8 +321,8 @@ export class NfeTransferService {
       uf: (cfg.uf || ender.uf || 'SP').toUpperCase(),
       ambiente: (cfg.ambiente === '1' ? '1' : '2') as '1' | '2',
       regime: cfg.regime || '1',
-      certPfxB64: cfg.certPfxB64 as string,
-      certPfxPass: cfg.certPfxPass as string,
+      certPfxB64: certPfxB64 as string,
+      certPfxPass: certPfxPass as string,
       ender: {
         logradouro: String(ender.logradouro || '').trim(),
         numero: String(ender.numero || 'S/N').trim(),
