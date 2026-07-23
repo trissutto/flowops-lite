@@ -370,7 +370,23 @@ export class SellersService {
       const alvo = s.active ? String(s.storeCodeOrigin || '').trim() || null : null;
 
       if (!s.active) {
-        await (this.prisma as any).pdvActiveSeller.deleteMany({ where: { codigo } });
+        // BUG GRAVE (23/07): deleteMany({codigo}) apagava TODAS as lojas —
+        // o código de funcionária REPETE entre lojas (igual cliente), então
+        // desligar uma ficha varria vendedoras legítimas de outras lojas
+        // (Jundiaí ficou com 2). Agora só remove linha que é DELA de verdade:
+        // mesma loja da ficha OU mesmo nome/apelido.
+        const normNome = (x: any) => String(x ?? '').trim().toUpperCase().replace(/\s+/g, ' ');
+        const linhas: any[] = await (this.prisma as any).pdvActiveSeller.findMany({
+          where: { codigo },
+        });
+        const nomesDela = new Set([normNome(s.name), normNome((s as any).apelido)].filter(Boolean));
+        const lojaDela = String(s.storeCodeOrigin || '').trim();
+        const ids = linhas
+          .filter((r) => (lojaDela && r.storeCode === lojaDela) || nomesDela.has(normNome(r.nome)))
+          .map((r) => r.id);
+        if (ids.length) {
+          await (this.prisma as any).pdvActiveSeller.deleteMany({ where: { id: { in: ids } } });
+        }
         return;
       }
       if (prevStoreCode && prevStoreCode !== alvo) {
