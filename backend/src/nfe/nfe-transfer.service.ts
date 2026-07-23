@@ -87,7 +87,15 @@ export class NfeTransferService {
     const ambiente = origem.ambiente;
     const tpAmb = ambiente;
     const serie = opts.serie || '1';
-    const numero = await this.seq.next(origem.storeCode, serie, { start: opts.startNumero });
+    // CONTINUAÇÃO DA NUMERAÇÃO do GigaNFe (mapeado em C:\NFe_LURDS 23/07):
+    // a matriz 0001-97 emitiu até a nº 518 (série 1, jun/26) — a 1ª nota
+    // do Flow nesse CNPJ nasce 519. Outros CNPJs começam em 1 (ou no valor
+    // definido via POST /nfe/sequence). Só vale na CRIAÇÃO da sequência.
+    const CONTINUACAO_GIGANFE: Record<string, number> = { '30246592000197': 519 };
+    const startPadrao = CONTINUACAO_GIGANFE[origem.cnpj] && serie === '1'
+      ? CONTINUACAO_GIGANFE[origem.cnpj]
+      : undefined;
+    const numero = await this.seq.next(origem.storeCode, serie, { start: opts.startNumero ?? startPadrao });
 
     // Monta itens com custo + NCM do espelho.
     const warnings: string[] = [];
@@ -394,6 +402,7 @@ export class NfeTransferService {
       `<nNF>${p.numero}</nNF>` +
       `<dhEmi>${p.dhEmi}</dhEmi>` +
       `<dhSaiEnt>${p.dhEmi}</dhSaiEnt>` +
+      `<dhSaiEnt>${p.dhEmi}</dhSaiEnt>` +
       `<tpNF>1</tpNF>` +
       `<idDest>${idDest}</idDest>` +
       `<cMunFG>${p.origem.ender.codMunicipio}</cMunFG>` +
@@ -427,6 +436,22 @@ export class NfeTransferService {
       `<IE>${p.destino.ie}</IE>` +
       `</dest>`;
 
+    // Contador autorizado a baixar o XML — presente em TODAS as notas reais
+    // do GigaNFe (mapeado em C:\NFe_LURDS, 23/07). Override via env.
+    const autXmlCnpj = String(process.env.NFE_AUTXML_CNPJ ?? '11145597000189').replace(/\D/g, '');
+    const autXML = autXmlCnpj ? `<autXML><CNPJ>${autXmlCnpj}</CNPJ></autXML>` : '';
+
+    // REGIME (23/07, espelho da nota real nº 518 do GigaNFe):
+    //   CRT 3 (normal — matriz e filiais Lurds): ICMS00 CST 00 DESTACADO
+    //     (18% interna SP / 12% interestadual), PIS/COFINS CST 01 zerados,
+    //     IPI cEnq 999 CST 99 zerado. Totais vBC/vICMS preenchidos.
+    //   CRT 1 (Simples — se algum CNPJ da rede for): CSOSN 400 como antes.
+    const crt3 = String(p.origem.regime || '1') === '3';
+    const aliqInterna = Number(process.env.NFE_ICMS_ALIQ_INTERNA ?? 18);
+    const aliqInter = Number(process.env.NFE_ICMS_ALIQ_INTERESTADUAL ?? 12);
+
+    let totBC = 0;
+    let totICMS = 0;
     const det = p.items
       .map((it, idx) => {
         const xProd = homolog ? HOMOLOG_FRASE : it.xProd;
@@ -447,14 +472,31 @@ export class NfeTransferService {
           `<vUnTrib>${this.money(it.vUn)}</vUnTrib>` +
           `<indTot>1</indTot>` +
           `</prod>`;
-        // Simples Nacional (CRT=1) transferência: ICMS CSOSN 400 (não tributada),
-        // IPI/PIS/COFINS CST 99 zerados — igual ao que a GigaNFe emitia.
+        let icms: string;
+        if (crt3) {
+          const interestadual = String(it.cfop).startsWith('6');
+          const pIcms = interestadual ? aliqInter : aliqInterna;
+          const vBC = Math.round(it.vProd * 100) / 100;
+          const vIcms = Math.round(vBC * pIcms) / 100;
+          totBC += vBC;
+          totICMS += vIcms;
+          icms =
+            `<ICMS><ICMS00><orig>0</orig><CST>00</CST><modBC>3</modBC>` +
+            `<vBC>${this.money(vBC)}</vBC><pICMS>${pIcms.toFixed(4)}</pICMS><vICMS>${this.money(vIcms)}</vICMS>` +
+            `</ICMS00></ICMS>`;
+        } else {
+          icms = `<ICMS><ICMSSN102><orig>0</orig><CSOSN>400</CSOSN></ICMSSN102></ICMS>`;
+        }
+        const pisCofins = crt3
+          ? `<PIS><PISAliq><CST>01</CST><vBC>0.00</vBC><pPIS>0.0000</pPIS><vPIS>0.00</vPIS></PISAliq></PIS>` +
+            `<COFINS><COFINSAliq><CST>01</CST><vBC>0.00</vBC><pCOFINS>0.0000</pCOFINS><vCOFINS>0.00</vCOFINS></COFINSAliq></COFINS>`
+          : `<PIS><PISOutr><CST>99</CST><vBC>0.00</vBC><pPIS>0.0000</pPIS><vPIS>0.00</vPIS></PISOutr></PIS>` +
+            `<COFINS><COFINSOutr><CST>99</CST><vBC>0.00</vBC><pCOFINS>0.0000</pCOFINS><vCOFINS>0.00</vCOFINS></COFINSOutr></COFINS>`;
         const imposto =
           `<imposto>` +
-          `<ICMS><ICMSSN102><orig>0</orig><CSOSN>400</CSOSN></ICMSSN102></ICMS>` +
+          icms +
           `<IPI><cEnq>999</cEnq><IPITrib><CST>99</CST><vBC>0.00</vBC><pIPI>0.0000</pIPI><vIPI>0.00</vIPI></IPITrib></IPI>` +
-          `<PIS><PISOutr><CST>99</CST><vBC>0.00</vBC><pPIS>0.0000</pPIS><vPIS>0.00</vPIS></PISOutr></PIS>` +
-          `<COFINS><COFINSOutr><CST>99</CST><vBC>0.00</vBC><pCOFINS>0.0000</pCOFINS><vCOFINS>0.00</vCOFINS></COFINSOutr></COFINS>` +
+          pisCofins +
           `</imposto>`;
         return `<det nItem="${idx + 1}">${prod}${imposto}</det>`;
       })
@@ -463,7 +505,7 @@ export class NfeTransferService {
     const vTot = this.money(p.valorTotal);
     const total =
       `<total><ICMSTot>` +
-      `<vBC>0.00</vBC><vICMS>0.00</vICMS><vICMSDeson>0.00</vICMSDeson>` +
+      `<vBC>${this.money(totBC)}</vBC><vICMS>${this.money(totICMS)}</vICMS><vICMSDeson>0.00</vICMSDeson>` +
       `<vFCP>0.00</vFCP><vBCST>0.00</vBCST><vST>0.00</vST><vFCPST>0.00</vFCPST><vFCPSTRet>0.00</vFCPSTRet>` +
       `<vProd>${vTot}</vProd>` +
       `<vFrete>0.00</vFrete><vSeg>0.00</vSeg><vDesc>0.00</vDesc><vII>0.00</vII>` +
@@ -478,7 +520,7 @@ export class NfeTransferService {
 
     const infNFe =
       `<infNFe versao="4.00" Id="NFe${p.chave}">` +
-      ide + emit + dest + det + total + transp + pag + infAdic +
+      ide + emit + dest + autXML + det + total + transp + pag + infAdic +
       `</infNFe>`;
 
     return `<?xml version="1.0" encoding="UTF-8"?><NFe xmlns="http://www.portalfiscal.inf.br/nfe">${infNFe}</NFe>`;
