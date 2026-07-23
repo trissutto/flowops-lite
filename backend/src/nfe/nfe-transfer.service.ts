@@ -54,6 +54,7 @@ export class NfeTransferService {
       where: { id: shipmentId },
     });
     if (!shipment) throw new NotFoundException('Remessa não encontrada');
+    this.checarLojaBloqueada(shipment);
 
     // Idempotência: não reemitir o que já foi autorizado.
     const jaAutorizada = await this.prisma.nfeDoc.findFirst({
@@ -211,12 +212,12 @@ export class NfeTransferService {
   private startPadraoPara(cnpj: string, serie: string): number | undefined {
     // Varredura 23/07 de TODAS as instalações GigaNFe locais (última nNF
     // emitida por CNPJ, série 1, mod 55):
-    // Só CNPJs ATIVOS na rede (dono 23/07: não listar empresa extinta).
-    // Históricos achados na varredura, se algum dia voltarem: Búzios/RJ
-    // 20104813000724 → 103 · raiz 28.110.859: 000253 → 30, 000415 → 31.
+    // Só CNPJs ATIVOS na rede (dono 23/07: não listar loja encerrada).
+    // Históricos achados na varredura, se algum dia voltarem: Jundiaí
+    // 30246592000278 → 8 · Búzios/RJ 20104813000724 → 103 ·
+    // raiz 28.110.859: 000253 → 30, 000415 → 31.
     const CONTINUACAO_GIGANFE: Record<string, number> = {
       '30246592000197': 519,  // LURDS matriz Itanhaém-1 — última 518 (jun/26)
-      '30246592000278': 8,    // LURDS filial Jundiaí — última 7 (ago/25)
       '20104813000139': 2298, // RISSUTTO matriz Itanhaém-2 — última 2297 (abr/26)
     };
     return CONTINUACAO_GIGANFE[cnpj] && serie === '1' ? CONTINUACAO_GIGANFE[cnpj] : undefined;
@@ -322,6 +323,7 @@ export class NfeTransferService {
       where: { id: shipmentId },
     });
     if (!shipment) throw new NotFoundException('Remessa não encontrada');
+    this.checarLojaBloqueada(shipment);
 
     const jaAutorizada = await this.prisma.nfeDoc.findFirst({
       where: { shipmentId, status: 'authorized' },
@@ -421,6 +423,25 @@ export class NfeTransferService {
     if (!ender?.codMunicipio) {
       throw new BadRequestException(`Loja ${storeCode} sem codMunicipio (IBGE) no endereço fiscal`);
     }
+    // PRÉ-VALIDAÇÃO dos padrões do schema — erro aqui rejeitava o LOTE com
+    // cStat 225 genérico e queimava número (23/07: CEP de Itanhaém com 9
+    // dígitos "117466694" rejeitou 2298–2304). Agora a PRÉVIA já acusa o
+    // campo errado em português, antes de numerar/assinar.
+    const problemas: string[] = [];
+    const cnpjD = this.digits(cfg.cnpj as string);
+    if (cnpjD.length !== 14) problemas.push(`CNPJ "${cfg.cnpj}" inválido (precisa de 14 dígitos)`);
+    const ieD = this.digits(cfg.ie as string);
+    if (ieD.length < 2 || ieD.length > 14) problemas.push(`IE "${cfg.ie}" inválida (2–14 dígitos)`);
+    const cepD = this.digits(String(ender.cep || ''));
+    if (cepD.length !== 8) problemas.push(`CEP "${ender.cep}" inválido (precisa de 8 dígitos — está com ${cepD.length})`);
+    if (!/^\d{7}$/.test(String(ender.codMunicipio).trim())) {
+      problemas.push(`código IBGE do município "${ender.codMunicipio}" inválido (7 dígitos)`);
+    }
+    if (problemas.length) {
+      throw new BadRequestException(
+        `Config fiscal da loja ${storeCode} com dados inválidos pra NF-e: ${problemas.join(' · ')}. Corrija no cadastro fiscal e tente de novo.`,
+      );
+    }
     return {
       storeCode,
       cnpj: this.digits(cfg.cnpj as string),
@@ -448,6 +469,21 @@ export class NfeTransferService {
 
   private digits(s: string): string {
     return String(s || '').replace(/\D/g, '');
+  }
+
+  /** Lojas fora da NF-e por enquanto (dono 23/07: Sorocaba tem CNPJ errado na
+   *  config fiscal — consumiu numeração da LURDS matriz). Ajuste via env
+   *  NFE_LOJAS_BLOQUEADAS (lista separada por vírgula; vazio = nenhuma). */
+  private checarLojaBloqueada(shipment: { fromStoreCode: string; toStoreCode: string }) {
+    const bloqueadas = String(process.env.NFE_LOJAS_BLOQUEADAS ?? '06')
+      .split(',').map((s) => s.trim()).filter(Boolean);
+    for (const code of [shipment.fromStoreCode, shipment.toStoreCode]) {
+      if (bloqueadas.includes(String(code))) {
+        throw new BadRequestException(
+          `Loja ${code} está FORA da NF-e por enquanto (config fiscal em revisão — CNPJ). Corrija o cadastro fiscal e remova da env NFE_LOJAS_BLOQUEADAS.`,
+        );
+      }
+    }
   }
 
   /** cEAN/cEANTrib: pattern do XSD é "SEM GTIN" ou 8/12/13/14 dígitos. */
@@ -519,6 +555,8 @@ export class NfeTransferService {
 
   private esc(s: string): string {
     return String(s || '')
+      // caractere de controle (lixo de cadastro) é XML inválido → fora
+      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
