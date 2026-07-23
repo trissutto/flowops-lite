@@ -174,6 +174,19 @@ export default function RemessasAdminPage() {
   const [nfeResult, setNfeResult] = useState<any | null>(null);
   const [nfePreview, setNfePreview] = useState<any | null>(null);
   const [nfePreviewLoading, setNfePreviewLoading] = useState(false);
+  // Lista de NF-e emitidas ("será que foi?" — resposta definitiva num lugar só)
+  const [nfeList, setNfeList] = useState<any[] | null>(null);
+  const [nfeListOpen, setNfeListOpen] = useState(false);
+  const abrirNfeList = async () => {
+    setNfeListOpen(true);
+    setNfeList(null);
+    try {
+      setNfeList(await api<any[]>('/nfe?limit=100'));
+    } catch {
+      setNfeList([]);
+    }
+  };
+
   const carregarPreview = async () => {
     if (!detailId || nfePreviewLoading) return;
     setNfePreviewLoading(true);
@@ -227,6 +240,12 @@ export default function RemessasAdminPage() {
               Rastreio de todas as caixas de realinhamento entre lojas (últimos {daysAgo} dias)
             </p>
           </div>
+          <button
+            onClick={abrirNfeList}
+            className="px-3 py-2 rounded-lg border-2 border-indigo-300 text-indigo-700 hover:bg-indigo-50 text-sm font-bold"
+          >
+            📄 NF-e emitidas
+          </button>
           <button
             onClick={load}
             disabled={loading}
@@ -425,6 +444,81 @@ export default function RemessasAdminPage() {
           </div>
         )}
       </main>
+
+      {/* Modal NF-e emitidas */}
+      {nfeListOpen && (
+        <div
+          className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+          {...overlayClose(() => setNfeListOpen(false))}
+        >
+          <div
+            className="bg-white rounded-lg max-w-4xl w-full max-h-[85vh] overflow-hidden flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-4 py-3 border-b flex items-center justify-between bg-indigo-50">
+              <h2 className="font-semibold text-indigo-900">📄 NF-e de transferência emitidas</h2>
+              <button onClick={() => setNfeListOpen(false)} className="p-1.5 hover:bg-white rounded">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-auto p-4">
+              {nfeList === null ? (
+                <div className="text-center py-8 text-slate-400">
+                  <Loader2 className="w-6 h-6 animate-spin inline-block" />
+                </div>
+              ) : nfeList.length === 0 ? (
+                <div className="text-center py-8 text-slate-400 text-sm">Nenhuma NF-e emitida ainda.</div>
+              ) : (
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="text-[10px] uppercase text-slate-400 border-b">
+                      <th className="text-left py-1.5 pr-2">Quando</th>
+                      <th className="text-left py-1.5 pr-2">Rota</th>
+                      <th className="text-left py-1.5 pr-2">Nº / Série</th>
+                      <th className="text-left py-1.5 pr-2">Amb.</th>
+                      <th className="text-left py-1.5 pr-2">Status</th>
+                      <th className="text-right py-1.5 pr-2">Valor</th>
+                      <th className="text-left py-1.5">Chave / Motivo</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {nfeList.map((d) => (
+                      <tr key={d.id} className="border-b last:border-0 align-top">
+                        <td className="py-1.5 pr-2 whitespace-nowrap text-slate-500">{fmtDate(d.createdAt)}</td>
+                        <td className="py-1.5 pr-2 whitespace-nowrap">{d.fromStoreCode} → {d.toStoreCode}</td>
+                        <td className="py-1.5 pr-2 whitespace-nowrap font-mono font-bold">{d.numero}/{d.serie}</td>
+                        <td className="py-1.5 pr-2">
+                          <span className={`font-bold ${d.tpAmb === '1' ? 'text-rose-700' : 'text-emerald-700'}`}>
+                            {d.tpAmb === '1' ? 'PROD' : 'HOMOL'}
+                          </span>
+                        </td>
+                        <td className="py-1.5 pr-2">
+                          <span className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-bold border ${
+                            d.status === 'authorized'
+                              ? 'bg-emerald-50 border-emerald-300 text-emerald-700'
+                              : d.status === 'rejected'
+                              ? 'bg-rose-50 border-rose-300 text-rose-700'
+                              : 'bg-amber-50 border-amber-300 text-amber-700'
+                          }`}>
+                            {d.status === 'authorized' ? 'AUTORIZADA' : d.status === 'rejected' ? 'REJEITADA' : (d.status || '?').toUpperCase()}
+                          </span>
+                          {d.cStat && <div className="text-[10px] text-slate-400 mt-0.5">cStat {d.cStat}</div>}
+                        </td>
+                        <td className="py-1.5 pr-2 text-right tabular-nums whitespace-nowrap">
+                          R$ {(Number(d.valorTotalCents || 0) / 100).toFixed(2)}
+                        </td>
+                        <td className="py-1.5 font-mono text-[10px] break-all max-w-[260px]">
+                          {d.status === 'authorized' ? d.chave : (d.xMotivo || d.chave || '—')}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modal detalhe */}
       {(detailLoading || detail) && (
