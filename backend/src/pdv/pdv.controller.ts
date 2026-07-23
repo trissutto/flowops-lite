@@ -1138,8 +1138,13 @@ export class PdvController {
     @Req() req: any,
     @Query('q') q: string,
     @Query('limit') limitStr?: string,
+    @Query('loja') loja?: string,
   ) {
     this.requireRole(req);
+    // ESCOPO POR LOJA (23/07): cadastros do Giga são POR LOJA (RESERVAS,
+    // DEFEITOS etc existem em todas) — o PDV só vê as fichas da PRÓPRIA
+    // loja. Clientes do CRM (pessoas com CPF, site/live) seguem da rede.
+    const lojaScope = String(loja || req?.user?.storeCode || '').replace(/\D/g, '');
     const term = String(q || '').trim();
     if (term.length < 2) {
       return { results: [] };
@@ -1262,7 +1267,11 @@ export class PdvController {
 
         if (wheres.length > 0) {
           const orderBy = cm.nome ? `ORDER BY \`${cm.nome}\` ASC` : `ORDER BY \`${cm.codCliente}\` ASC`;
-          const sql = `SELECT ${selectCols.join(', ')} FROM \`${cm.table}\` WHERE ${wheres.join(' OR ')} ${orderBy} LIMIT ${restante * 2}`;
+          // CAST dos dois lados: padding da LOJA é inconsistente no Giga ('1' × '01')
+          const lojaAnd = lojaScope && cm.loja
+            ? ` AND CAST(\`${cm.loja}\` AS UNSIGNED) = ${Number(lojaScope)}`
+            : '';
+          const sql = `SELECT ${selectCols.join(', ')} FROM \`${cm.table}\` WHERE (${wheres.join(' OR ')})${lojaAnd} ${orderBy} LIMIT ${restante * 2}`;
 
           try {
             const r = await this.erp.runReadOnly(sql, { maxRows: restante * 2, timeoutMs: 8000 });

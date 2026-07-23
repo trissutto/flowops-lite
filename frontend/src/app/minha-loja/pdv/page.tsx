@@ -1613,6 +1613,8 @@ function PdvPageInner() {
       // Cartão/crediário/marcado/vale NÃO imprimem cupom auto.
       // Roteado via printer-router → vai SEMPRE pra impressora térmica
       // configurada em /minha-loja/pdv/config-impressora.
+      // (Removida em 23/07 a pedido do dono e RESTAURADA no mesmo dia —
+      // as lojas usam o cupom em dinheiro/PIX.)
       const isDirectDinheiro = paymentMethod === 'dinheiro';
       const allPaymentsDinheiro = (fresh?.payments?.length ?? 0) > 0 &&
         (fresh.payments || []).every((p: any) => String(p.method).toLowerCase() === 'dinheiro');
@@ -3571,7 +3573,13 @@ function CustomerModal({
     const t = setTimeout(async () => {
       setSearching(true);
       try {
-        const r = await api<{ results: typeof results }>(`/pdv/customer-search?q=${encodeURIComponent(term)}&limit=20`);
+        // Escopo por loja: só clientes DESTA loja (RESERVAS etc repetem por loja)
+        let lojaParam = '';
+        try {
+          const lj = localStorage.getItem('lurds_pdv_store') || '';
+          if (lj) lojaParam = `&loja=${encodeURIComponent(lj)}`;
+        } catch { /* backend usa a loja do token */ }
+        const r = await api<{ results: typeof results }>(`/pdv/customer-search?q=${encodeURIComponent(term)}&limit=20${lojaParam}`);
         setResults(r.results || []);
         setShowResults(true);
       } catch {

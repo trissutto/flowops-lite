@@ -103,7 +103,13 @@ export default function MarcadosPage() {
     const t = setTimeout(async () => {
       setSearching(true);
       try {
-        const r = await api<ClienteMatch[]>(`/pdv/marcados/search?q=${encodeURIComponent(q)}`);
+        // Escopo por loja: só clientes DESTA loja (cadastros repetem por loja)
+        let lojaParam = '';
+        try {
+          const lj = localStorage.getItem('lurds_pdv_store') || '';
+          if (lj) lojaParam = `&loja=${encodeURIComponent(lj)}`;
+        } catch { /* backend usa a loja do token */ }
+        const r = await api<ClienteMatch[]>(`/pdv/marcados/search?q=${encodeURIComponent(q)}${lojaParam}`);
         setMatches(Array.isArray(r) ? r : []);
       } catch {
         setMatches([]);
