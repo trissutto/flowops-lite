@@ -2352,8 +2352,15 @@ export class LivePdvService {
     let priceReais = bestCodigo ? priceMap.get(bestCodigo) || 0 : 0;
     if (priceReais === 0) priceReais = await this.refPriceWithMirror(ref);
     const basePriceCents = this.reaisToCents(priceReais);
-    // Aplica preço promocional da live se houver pro REF nessa sessão
-    const promo = await this.getPromo(session.id, ref);
+    // Aplica preço promocional da live se houver pro REF nessa sessão.
+    // A célula da grade manda a REF da VARIANTE (24372-INV) mas a promo é
+    // gravada na REF BASE da grade (24372) — sem o fallback o item entrava
+    // a preço cheio (23/07, vestido 24372-INV a 129,90 com promo de 64,95).
+    let promo = await this.getPromo(session.id, ref);
+    if (promo == null) {
+      const base = ProductSearchService.refBaseOf(ref);
+      if (base && base !== ref) promo = await this.getPromo(session.id, base);
+    }
     const priceCents = promo != null && promo > 0 ? promo : basePriceCents;
 
     // Descrição — SÓ ESPELHO, ref EXATO (usa índice).
