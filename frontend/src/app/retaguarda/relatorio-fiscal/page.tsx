@@ -227,9 +227,13 @@ export default function RelatorioFiscalPage() {
       </div>
 
       <div className="max-w-7xl mx-auto px-6 py-6 space-y-6">
+        {/* NF-e de transferência entre lojas (mod. 55) — no TOPO pro contador
+            achar sem rolar a tabela gigante de NFC-e */}
+        <NfeTransferSection stores={stores} />
+
         {/* Filtros */}
         <div className="bg-white rounded-xl shadow p-5 space-y-4">
-          <h2 className="text-sm font-bold text-slate-700 uppercase">Filtros</h2>
+          <h2 className="text-sm font-bold text-slate-700 uppercase">Filtros — NFC-e (cupons de venda)</h2>
           <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
             <div>
               <label className="block text-xs font-semibold text-slate-600 mb-1">De</label>
@@ -515,9 +519,6 @@ export default function RelatorioFiscalPage() {
             Defina os filtros acima e clique em <b>Aplicar filtros</b> pra carregar o relatório.
           </div>
         )}
-
-        {/* NF-e de transferência entre lojas (mod. 55) — pro contador */}
-        <NfeTransferSection stores={stores} />
       </div>
     </div>
   );
@@ -600,11 +601,16 @@ function NfeTransferSection({ stores }: { stores: Store[] }) {
   const storeName = (code: string) => stores.find((s) => s.code === code)?.name || code;
 
   return (
-    <div className="bg-white rounded-xl shadow p-5 space-y-4">
+    <div className="bg-white rounded-xl shadow p-5 space-y-4 border-2 border-indigo-200">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-sm font-bold text-slate-700 uppercase">
-          📄 NF-e de transferência entre lojas (mod. 55)
-        </h2>
+        <div>
+          <h2 className="text-sm font-bold text-indigo-800 uppercase">
+            📄 Notas fiscais de transferência entre lojas (NF-e mod. 55)
+          </h2>
+          <p className="text-[11px] text-slate-500 mt-0.5">
+            As "notas grandes" emitidas pelo Flow — DANFE em PDF e XML pro contador.
+          </p>
+        </div>
         <div className="flex items-center gap-2">
           <select
             value={lojaFiltro}
