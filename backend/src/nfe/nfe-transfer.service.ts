@@ -74,71 +74,73 @@ export class NfeTransferService {
     const tpAmb = ambiente;
     const serie = opts.serie || '1';
     await this.garantirContinuacao(origem.storeCode, origem.cnpj, serie);
-    const numero = await this.seq.next(origem.storeCode, serie, {
+    let numero = await this.seq.next(origem.storeCode, serie, {
       start: opts.startNumero ?? this.startPadraoPara(origem.cnpj, serie),
     });
     const valorTotalCents = Math.round(valorTotal * 100);
-
-    const dhEmi = this.dhEmiNow();
-    const cNF = crypto.randomInt(10_000_000, 99_999_999).toString();
     const cUF = CUF_BY_UF[origem.ender.uf] || origem.ender.codMunicipio.slice(0, 2);
-    const chave = this.buildChave({ cUF, cnpj: origem.cnpj, serie, numero, cNF, dataEmissao: new Date() });
-
     const natOp = 'TRANSFERENCIA DE MERC ADQ TERCEIROS';
+    const endpoint = SEFAZ_SP_NFE_ENDPOINTS[tpAmb].autorizacao;
+
     // Registra o doc ANTES de transmitir (rastreabilidade mesmo se a SEFAZ cair).
     const doc = await this.prisma.nfeDoc.create({
       data: {
-        shipmentId,
-        fromStoreCode: origem.storeCode,
-        toStoreCode: destino.storeCode,
-        modelo: '55',
-        serie,
-        numero,
-        cNF,
-        chave,
-        tpAmb,
-        natOp,
-        cfop,
-        valorTotalCents,
-        status: 'pending',
-        emittedByUserId: opts.userId ?? null,
+        shipmentId, fromStoreCode: origem.storeCode, toStoreCode: destino.storeCode,
+        modelo: '55', serie, numero, cNF: '', chave: '', tpAmb, natOp, cfop, valorTotalCents,
+        status: 'pending', emittedByUserId: opts.userId ?? null,
       },
     });
 
-    // Monta + assina + transmite.
-    const xml = this.buildXml({
-      chave, cUF, cNF, serie, numero, dhEmi, tpAmb, natOp,
-      origem, destino, interestadual, items, valorTotal, remCode: shipment.code,
-    });
-    const xmlMin = xml.replace(/>\s+</g, '><').trim();
-
-    let xmlAssinado: string;
-    try {
-      xmlAssinado = signXmlNfeWithA1({
-        xml: xmlMin,
-        pfxBase64: origem.certPfxB64,
-        pfxPassword: origem.certPfxPass,
+    // AUTO-DESCOBERTA DO NÚMERO REAL (dono 24/07): a filial já emitiu notas pelo
+    // GigaNFe, então nºs antigos JÁ EXISTEM na SEFAZ. Se cair num nº usado, a
+    // SEFAZ rejeita com cStat 539/204 (duplicidade) — aí pulamos pro próximo e
+    // tentamos de novo até autorizar. Número rejeitado por duplicidade NÃO cria
+    // lacuna (ele já existia como outra nota). Limite via NFE_539_MAX_RETRY.
+    const MAX_DUP_RETRY = Number(process.env.NFE_539_MAX_RETRY ?? 30);
+    let res: any = null;
+    let chave = '';
+    let cNF = '';
+    for (let tentativa = 0; ; tentativa++) {
+      const dhEmi = this.dhEmiNow();
+      cNF = crypto.randomInt(10_000_000, 99_999_999).toString();
+      chave = this.buildChave({ cUF, cnpj: origem.cnpj, serie, numero, cNF, dataEmissao: new Date() });
+      const xml = this.buildXml({
+        chave, cUF, cNF, serie, numero, dhEmi, tpAmb, natOp,
+        origem, destino, interestadual, items, valorTotal, remCode: shipment.code,
       });
-    } catch (e: any) {
+      const xmlMin = xml.replace(/>\s+</g, '><').trim();
+      let xmlAssinado: string;
+      try {
+        xmlAssinado = signXmlNfeWithA1({ xml: xmlMin, pfxBase64: origem.certPfxB64, pfxPassword: origem.certPfxPass });
+      } catch (e: any) {
+        await this.prisma.nfeDoc.update({
+          where: { id: doc.id },
+          data: { status: 'error', numero, cNF, chave, erro: `Assinatura: ${e?.message || e}` },
+        });
+        throw new BadRequestException(`Falha ao assinar NF-e: ${e?.message || e}`);
+      }
       await this.prisma.nfeDoc.update({
         where: { id: doc.id },
-        data: { status: 'error', erro: `Assinatura: ${e?.message || e}` },
+        data: { numero, cNF, chave, status: 'signed', xmlEnviado: xmlAssinado },
       });
-      throw new BadRequestException(`Falha ao assinar NF-e: ${e?.message || e}`);
-    }
-    await this.prisma.nfeDoc.update({
-      where: { id: doc.id },
-      data: { status: 'signed', xmlEnviado: xmlAssinado },
-    });
 
-    const endpoint = SEFAZ_SP_NFE_ENDPOINTS[tpAmb].autorizacao;
-    const res = await transmitNfeSefazSp({
-      xmlAssinado,
-      ambiente: tpAmb,
-      pfxBase64: origem.certPfxB64,
-      pfxPassword: origem.certPfxPass,
-      endpointOverride: endpoint,
-    });
+      res = await transmitNfeSefazSp({
+        xmlAssinado, ambiente: tpAmb,
+        pfxBase64: origem.certPfxB64, pfxPassword: origem.certPfxPass,
+        endpointOverride: endpoint,
+      });
+      const ok = res.success && (res.cStat === '100' || res.cStat === '150');
+      if (ok) break;
+      const duplicado = res.cStat === '539' || res.cStat === '204';
+      if (duplicado && tentativa < MAX_DUP_RETRY) {
+        this.logger.warn(
+          `[nfe] ${origem.storeCode} nº ${numero} já existe na SEFAZ (cStat ${res.cStat}) → tentando ${numero + 1}`,
+        );
+        numero = await this.seq.next(origem.storeCode, serie);
+        continue;
+      }
+      break;
+    }
 
     const autorizada = res.success && (res.cStat === '100' || res.cStat === '150');
     const updated = await this.prisma.nfeDoc.update({

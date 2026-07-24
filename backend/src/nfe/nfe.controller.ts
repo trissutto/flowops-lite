@@ -85,6 +85,13 @@ export class NfeController {
     return this.transfer.list({ storeCode, status, limit: Number(limit) || undefined });
   }
 
+  /** Numeração NF-e de TODAS as lojas (tela de gerência). */
+  @Get('sequences')
+  sequences(@Req() req: any) {
+    this.requireMatriz(req);
+    return this.seq.listAll();
+  }
+
   /** Status da numeração NF-e de uma loja. */
   @Get('sequence/:storeCode')
   sequence(@Req() req: any, @Param('storeCode') storeCode: string) {

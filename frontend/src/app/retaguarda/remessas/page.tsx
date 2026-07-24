@@ -211,6 +211,34 @@ export default function RemessasAdminPage() {
     }
   };
 
+  // ── Numeração NF-e por loja (gerência) ────────────────────────────────────
+  const [seqOpen, setSeqOpen] = useState(false);
+  const [seqList, setSeqList] = useState<any[] | null>(null);
+  const [seqEdit, setSeqEdit] = useState<Record<string, string>>({});
+  const abrirSeq = async () => {
+    setSeqOpen(true);
+    setSeqList(null);
+    try {
+      setSeqList(await api<any[]>('/nfe/sequences'));
+    } catch {
+      setSeqList([]);
+    }
+  };
+  const salvarSeq = async (storeCode: string) => {
+    const val = parseInt((seqEdit[storeCode] || '').replace(/\D/g, ''), 10);
+    if (!val || val < 1) return;
+    try {
+      await api(`/nfe/sequence/${storeCode}`, {
+        method: 'POST',
+        body: JSON.stringify({ serie: '1', proximo: val }),
+      });
+      setSeqEdit((p) => ({ ...p, [storeCode]: '' }));
+      setSeqList(await api<any[]>('/nfe/sequences'));
+    } catch (e: any) {
+      alert(`Erro ao salvar: ${e?.message || e}`);
+    }
+  };
+
   // DANFE em PDF — fetch com bearer (rota autenticada) → abre em nova aba
   const abrirDanfe = async (docId: string, numero: any) => {
     try {
@@ -318,6 +346,13 @@ export default function RemessasAdminPage() {
             className="px-3 py-2 rounded-lg border-2 border-indigo-300 text-indigo-700 hover:bg-indigo-50 text-sm font-bold"
           >
             📄 NF-e emitidas
+          </button>
+          <button
+            onClick={abrirSeq}
+            className="px-3 py-2 rounded-lg border-2 border-slate-300 text-slate-700 hover:bg-slate-50 text-sm font-bold"
+            title="Numeração da NF-e por loja — ajuste o próximo número real de cada CNPJ"
+          >
+            🔢 Numeração
           </button>
           <button
             onClick={load}
@@ -631,6 +666,74 @@ export default function RemessasAdminPage() {
                               ✕ Cancelar
                             </button>
                           )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de NUMERAÇÃO NF-e por loja */}
+      {seqOpen && (
+        <div
+          className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+          {...overlayClose(() => setSeqOpen(false))}
+        >
+          <div className="bg-white rounded-lg max-w-3xl w-full max-h-[85vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="px-4 py-3 border-b flex items-center justify-between bg-slate-50">
+              <h2 className="font-semibold text-slate-800">🔢 Numeração da NF-e por loja</h2>
+              <button onClick={() => setSeqOpen(false)} className="p-1.5 hover:bg-white rounded"><X className="w-4 h-4" /></button>
+            </div>
+            <div className="px-4 py-2 text-xs text-slate-600 bg-amber-50 border-b border-amber-200">
+              <b>"Próximo nº"</b> é o número que o Flow vai usar na próxima emissão de cada loja. Se a filial já
+              emitia notas no GigaNFe, coloque aqui o <b>último número real + 1</b> (do GigaNFe / contador / portal SEFAZ).
+              Se errar pra baixo, a SEFAZ recusa o número já usado e o Flow <b>avança sozinho</b> até achar o livre.
+            </div>
+            <div className="flex-1 overflow-auto p-4">
+              {seqList === null ? (
+                <div className="text-center py-8 text-slate-400"><Loader2 className="w-6 h-6 animate-spin inline-block" /></div>
+              ) : (
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="text-[10px] uppercase text-slate-400 border-b">
+                      <th className="text-left py-1.5 pr-2">Loja</th>
+                      <th className="text-left py-1.5 pr-2">CNPJ (NF-e)</th>
+                      <th className="text-right py-1.5 pr-2">Próximo nº</th>
+                      <th className="text-left py-1.5">Ajustar</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {seqList.map((s) => (
+                      <tr key={s.storeCode} className="border-b last:border-0">
+                        <td className="py-1.5 pr-2 whitespace-nowrap font-semibold">{s.storeCode} {s.storeName}</td>
+                        <td className="py-1.5 pr-2 font-mono text-[10px] text-slate-500">
+                          {s.cnpj ? s.cnpj.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5') : '—'}
+                        </td>
+                        <td className="py-1.5 pr-2 text-right font-mono font-bold tabular-nums">
+                          {s.proximo ?? <span className="text-slate-400 font-normal">nunca emitiu</span>}
+                        </td>
+                        <td className="py-1.5">
+                          <div className="flex items-center gap-1">
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              value={seqEdit[s.storeCode] || ''}
+                              onChange={(e) => setSeqEdit((p) => ({ ...p, [s.storeCode]: e.target.value }))}
+                              placeholder="nº real"
+                              className="w-20 p-1 border rounded text-xs text-right"
+                            />
+                            <button
+                              onClick={() => salvarSeq(s.storeCode)}
+                              disabled={!seqEdit[s.storeCode]}
+                              className="text-[10px] px-2 py-1 rounded bg-slate-700 text-white font-bold hover:bg-slate-800 disabled:opacity-30"
+                            >
+                              OK
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
