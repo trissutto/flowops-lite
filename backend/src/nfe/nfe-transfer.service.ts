@@ -131,6 +131,7 @@ export class NfeTransferService {
       });
       const ok = res.success && (res.cStat === '100' || res.cStat === '150');
       if (ok) break;
+      // 539/204 = número JÁ USADO no GigaNFe → avança e re-tenta o próximo.
       const duplicado = res.cStat === '539' || res.cStat === '204';
       if (duplicado && tentativa < MAX_DUP_RETRY) {
         this.logger.warn(
@@ -138,6 +139,11 @@ export class NfeTransferService {
         );
         numero = await this.seq.next(origem.storeCode, serie);
         continue;
+      }
+      // 778 = NCM inexistente [nItem:X] → troca o NCM ruim por um válido
+      // (vestuário) e re-tenta com o MESMO número (não foi duplicidade).
+      if (res.cStat === '778' && tentativa < MAX_DUP_RETRY) {
+        if (this.corrigirNcmInvalido(items, res.xMotivo)) continue;
       }
       break;
     }
@@ -594,8 +600,39 @@ export class NfeTransferService {
   private normNcm(ncm: any, sku: string, warnings: string[]): string {
     const n = this.digits(String(ncm || ''));
     if (n.length === 8) return n;
-    warnings.push(`SKU ${sku} sem NCM válido — usei 62179000 (vestuário) provisório`);
-    return '62179000';
+    warnings.push(`SKU ${sku} sem NCM válido — usei ${NfeTransferService.NCM_FALLBACK} (vestuário) provisório`);
+    return NfeTransferService.NCM_FALLBACK;
+  }
+
+  // NCM de vestuário genérico e VÁLIDO na tabela oficial — fallback quando o
+  // cadastro tem NCM inexistente. 6217.90.00 = "outras partes/acessórios de
+  // vestuário". Como é transferência a custo (CSOSN 400, imposto zero), o NCM
+  // exato não muda tributação — só precisa EXISTIR pra SEFAZ aceitar.
+  private static readonly NCM_FALLBACK = '62179000';
+
+  /**
+   * cStat 778 (NCM inexistente [nItem:X]): troca o NCM ruim do item apontado —
+   * e de TODOS os itens com o MESMO NCM errado — pelo fallback válido, pra a
+   * emissão auto-corrigir e re-tentar. Retorna true se corrigiu algo.
+   */
+  private corrigirNcmInvalido(
+    items: Array<{ ncm: string; sku: string }>,
+    xMotivo: string | undefined,
+  ): boolean {
+    const m = String(xMotivo || '').match(/nItem:\s*(\d+)/i);
+    if (!m) return false;
+    const idx = parseInt(m[1], 10) - 1;
+    if (idx < 0 || idx >= items.length) return false;
+    const ruim = items[idx].ncm;
+    if (!ruim || ruim === NfeTransferService.NCM_FALLBACK) return false; // já é o fallback
+    let n = 0;
+    for (const it of items) {
+      if (it.ncm === ruim) { it.ncm = NfeTransferService.NCM_FALLBACK; n++; }
+    }
+    this.logger.warn(
+      `[nfe] NCM inexistente "${ruim}" corrigido pra ${NfeTransferService.NCM_FALLBACK} em ${n} item(ns) → re-tentando`,
+    );
+    return n > 0;
   }
 
   private dhEmiNow(): string {
