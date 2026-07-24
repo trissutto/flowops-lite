@@ -838,15 +838,18 @@ export class NfeTransferService {
       `</ICMSTot></total>`;
 
     // TRANSPORTE PRÓPRIO por conta do remetente (modFrete=3, "veículo próprio"
-    // — dono 24/07) + VOLUME com peso estimado = nº de peças × 0,25 kg.
-    // modFrete override via NFE_MODFRETE; peso por peça via NFE_PESO_POR_PECA_KG.
+    // — dono 24/07) + VOLUME(S). Peso TOTAL = nº peças × 0,25 kg. Nº de volumes
+    // = 1 a cada 40 peças (dono 24/07: 40→1, 80→2, 120→3). Envs:
+    // NFE_MODFRETE, NFE_PESO_POR_PECA_KG, NFE_PECAS_POR_VOLUME.
     const totalPecas = p.items.reduce((s, it) => s + (Number(it.qty) || 0), 0);
     const pesoPorPeca = Number(process.env.NFE_PESO_POR_PECA_KG ?? 0.25) || 0.25;
+    const pecasPorVol = Number(process.env.NFE_PECAS_POR_VOLUME ?? 40) || 40;
     const pesoKg = (totalPecas * pesoPorPeca).toFixed(3);
+    const qVol = Math.max(1, Math.ceil(totalPecas / pecasPorVol));
     const modFrete = String(process.env.NFE_MODFRETE ?? '3').trim();
     const transp =
       `<transp><modFrete>${modFrete}</modFrete>` +
-      `<vol><qVol>1</qVol><esp>VOLUME</esp><pesoL>${pesoKg}</pesoL><pesoB>${pesoKg}</pesoB></vol>` +
+      `<vol><qVol>${qVol}</qVol><esp>VOLUME</esp><pesoL>${pesoKg}</pesoL><pesoB>${pesoKg}</pesoB></vol>` +
       `</transp>`;
     // Transferência não tem pagamento → tPag 90 (sem pagamento), vPag 0.
     const pag = `<pag><detPag><tPag>90</tPag><vPag>0.00</vPag></detPag></pag>`;
