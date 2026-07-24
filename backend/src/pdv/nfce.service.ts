@@ -330,7 +330,12 @@ export class NfceService {
     // Lógica: o desconto EFETIVO total = brutoTotal − sale.total. Subtrai a
     // soma dos descontos JÁ aplicados nos itens — o que sobra é o desconto
     // adicional na venda toda, que distribuímos proporcionalmente.
-    const brutoTotal = items.reduce(
+    // ITENS FISCAIS: só valores >= 0. Linha manual de DESCONTO (valor negativo,
+    // ex.: "desconto df" -R$29,90) NÃO pode virar <det> com vProd negativo (o
+    // schema rejeita, cStat 225) — ela entra como DESCONTO, rateado nos itens
+    // pela lógica abaixo (brutoFiscal − total = desconto a distribuir).
+    const itensFiscais = items.filter((it: any) => Number(it.precoUnit || 0) >= 0 && Number(it.qty || 0) > 0);
+    const brutoTotal = itensFiscais.reduce(
       (s: number, it: any) => s + (it.qty || 0) * (it.precoUnit || 0),
       0,
     );
@@ -406,7 +411,7 @@ export class NfceService {
     let vIBSMunTot = 0;
     let vCBSTot = 0;
 
-    const detLines = items
+    const detLines = itensFiscais
       .map((it: any, idx: number) => {
         const nItem = idx + 1;
         const cProd = it.sku || `SEM-CODIGO-${nItem}`;
@@ -435,6 +440,11 @@ export class NfceService {
         const ncm = isValidNcm(ncmFromErp) && !ncmFallbackItems?.has(idx)
           ? ncmFromErp
           : (isSimples ? '00000000' : '61099000');
+        // cEAN/cEANTrib: o schema só aceita "SEM GTIN" ou 8/12/13/14 dígitos.
+        // EAN torto no cadastro (7/9/10/11 díg, letra, espaço) derrubava o cupom
+        // inteiro com cStat 225 (mesmo bug que a NF-e tinha). Fora do padrão → SEM GTIN.
+        const eanRaw = String(it.ean || '').trim();
+        const cEAN = /^(\d{8}|\d{12,14})$/.test(eanRaw) ? eanRaw : 'SEM GTIN';
         const cfop = it.cfop || '5102';
         const vUnCom = (it.precoUnit || 0).toFixed(2);
         // vProd = bruto sem descontos (qty × precoUnit). vDesc é separado.
@@ -484,7 +494,7 @@ export class NfceService {
     <det nItem="${nItem}">
       <prod>
         <cProd>${this.esc(cProd)}</cProd>
-        <cEAN>${this.esc(it.ean || 'SEM GTIN')}</cEAN>
+        <cEAN>${cEAN}</cEAN>
         <xProd>${this.esc(xProd)}</xProd>
         <NCM>${ncm}</NCM>
         <CFOP>${cfop}</CFOP>
@@ -492,7 +502,7 @@ export class NfceService {
         <qCom>${(it.qty || 1).toFixed(4)}</qCom>
         <vUnCom>${vUnCom}</vUnCom>
         <vProd>${vProd}</vProd>
-        <cEANTrib>${this.esc(it.ean || 'SEM GTIN')}</cEANTrib>
+        <cEANTrib>${cEAN}</cEANTrib>
         <uTrib>UN</uTrib>
         <qTrib>${(it.qty || 1).toFixed(4)}</qTrib>
         <vUnTrib>${vUnCom}</vUnTrib>
@@ -507,8 +517,9 @@ export class NfceService {
       })
       .join('\n');
 
-    // vProd = soma dos (qty × precoUnit) sem descontos — bruto
-    const vTotProdNum = items.reduce(
+    // vProd = soma dos (qty × precoUnit) dos itens FISCAIS (sem as linhas de
+    // desconto negativas). vDesc absorve a diferença pro vNF (= sale.total).
+    const vTotProdNum = itensFiscais.reduce(
       (s, it) => s + (it.qty || 0) * (it.precoUnit || 0),
       0,
     );
