@@ -480,7 +480,12 @@ export class NfeTransferService {
           },
           select: { storeCode: true, cnpj: true, certPfxB64: true, certPfxPass: true },
         });
-        const doadora = irmas.find((c) => this.digits(String(c.cnpj)).slice(0, 8) === raiz);
+        // Prefere o cert da MATRIZ (/0001) da raiz — dono 24/07: "o A1 vinculado
+        // a cada matriz deve ser usado por todas as filiais daquela matriz".
+        // Fallback: qualquer irmã da mesma raiz que tenha cert.
+        const daRaiz = irmas.filter((c) => this.digits(String(c.cnpj)).slice(0, 8) === raiz);
+        const doadora =
+          daRaiz.find((c) => this.digits(String(c.cnpj)).slice(8, 12) === '0001') || daRaiz[0];
         if (doadora) {
           certPfxB64 = doadora.certPfxB64 as string;
           certPfxPass = doadora.certPfxPass as string;
@@ -560,7 +565,9 @@ export class NfeTransferService {
    *  config fiscal — consumiu numeração da LURDS matriz). Ajuste via env
    *  NFE_LOJAS_BLOQUEADAS (lista separada por vírgula; vazio = nenhuma). */
   private checarLojaBloqueada(shipment: { fromStoreCode: string; toStoreCode: string }) {
-    const bloqueadas = String(process.env.NFE_LOJAS_BLOQUEADAS ?? '06')
+    // Dono 24/07: liberar emissão de TODAS as unidades (default vazio). O
+    // bloqueio por loja fica só como válvula manual via NFE_LOJAS_BLOQUEADAS.
+    const bloqueadas = String(process.env.NFE_LOJAS_BLOQUEADAS ?? '')
       .split(',').map((s) => s.trim()).filter(Boolean);
     for (const code of [shipment.fromStoreCode, shipment.toStoreCode]) {
       if (bloqueadas.includes(String(code))) {
