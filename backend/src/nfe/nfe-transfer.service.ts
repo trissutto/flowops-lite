@@ -347,8 +347,13 @@ export class NfeTransferService {
     interestadual: boolean;
     cfop: string;
   }> {
-    const origem = await this.loadStoreFiscal(shipment.fromStoreCode, opts);
+    // Carrega o DESTINO primeiro; a ORIGEM escolhe a identidade cuja RAIZ casa
+    // com a do destino (Itanhaém multi-empresa emite como LURDS 30 pra loja 30).
     const destino = await this.loadStoreFiscal(shipment.toStoreCode, { requireCert: false });
+    const origem = await this.loadStoreFiscal(shipment.fromStoreCode, {
+      ...opts,
+      matchRaiz: destino.cnpj.slice(0, 8),
+    });
 
     // Itens da remessa (uma linha por unidade) → agrupa por SKU.
     const rows = await this.prisma.transferOrder.findMany({
@@ -466,7 +471,7 @@ export class NfeTransferService {
 
   private async loadStoreFiscal(
     storeCode: string,
-    opts: { requireCert: boolean; identidade?: 'nfe' | 'base' } = { requireCert: true },
+    opts: { requireCert: boolean; identidade?: 'nfe' | 'base'; matchRaiz?: string } = { requireCert: true },
   ): Promise<StoreFiscal> {
     const cfg = await this.prisma.nfceConfig.findUnique({ where: { storeCode } });
     if (!cfg) {
@@ -517,6 +522,36 @@ export class NfeTransferService {
       regimeSrc = String(cfg.regime || '1');
       enderecoSrc = String(cfg.endereco || '');
     }
+
+    // IDENTIDADE POR DESTINO (dono 24/07): loja com mais de uma empresa (ex.:
+    // Itanhaém = RISSUTTO 20 + LURDS 30). Se pediram matchRaiz (a raiz do
+    // DESTINO da transferência) e a identidade primária NÃO é dessa raiz,
+    // procura nas EXTRAS uma cujo CNPJ seja dessa raiz — e emite por ela, pra
+    // origem e destino serem a MESMA empresa (transferência de verdade).
+    if (opts.matchRaiz && opts.matchRaiz.length === 8 && this.digits(cnpjSrc).slice(0, 8) !== opts.matchRaiz) {
+      const extras = this.parseIdentidadesExtras(cfg.nfeIdentidadesExtras);
+      const alt = extras.find((e) => this.digits(String(e.cnpj || '')).slice(0, 8) === opts.matchRaiz);
+      if (alt) {
+        cnpjSrc = this.digits(String(alt.cnpj || ''));
+        ieSrc = this.digits(String(alt.ie || ''));
+        razaoSrc = String(alt.razaoSocial || '').trim();
+        fantasiaSrc = String(alt.fantasia || alt.razaoSocial || '').trim();
+        regimeSrc = String(alt.regime || cfg.regime || '1');
+        enderecoSrc = typeof alt.endereco === 'string' ? alt.endereco : JSON.stringify(alt.endereco || {});
+        const falta: string[] = [];
+        if (cnpjSrc.length !== 14) falta.push('CNPJ');
+        if (ieSrc.length < 2) falta.push('IE');
+        if (razaoSrc.length < 2) falta.push('Razão Social');
+        if (!enderecoSrc || enderecoSrc === '{}') falta.push('Endereço');
+        if (falta.length) {
+          throw new BadRequestException(
+            `Loja ${storeCode}: a identidade extra (raiz ${opts.matchRaiz}) pra emitir ao destino está incompleta. Faltou: ${falta.join(', ')}. Complete em Config → NFC-e → "Outras razões da loja".`,
+          );
+        }
+      }
+      // Sem extra dessa raiz → segue com a primária (o bloqueio inter-empresa avisa).
+    }
+
     const raizNfe = this.digits(cnpjSrc).slice(0, 8);
 
     // CERTIFICADO POR EMPRESA: um A1 por RAIZ de CNPJ. O cert precisa bater com
@@ -610,6 +645,19 @@ export class NfeTransferService {
 
   private digits(s: string): string {
     return String(s || '').replace(/\D/g, '');
+  }
+
+  /** Lê o JSON de identidades fiscais extras da loja (multi-empresa). */
+  private parseIdentidadesExtras(raw: any): Array<{
+    cnpj?: string; ie?: string; razaoSocial?: string; fantasia?: string; regime?: string; endereco?: any;
+  }> {
+    if (!raw) return [];
+    try {
+      const arr = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      return Array.isArray(arr) ? arr : [];
+    } catch {
+      return [];
+    }
   }
 
   /** Lojas fora da NF-e por enquanto (dono 23/07: Sorocaba tem CNPJ errado na
