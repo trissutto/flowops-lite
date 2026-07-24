@@ -162,7 +162,7 @@ export default function NotasEmitidasPage() {
       const doc = r?.doc || r;
       if (r?.ok || doc?.status === 'authorized') {
         setVOkDoc(doc);
-        load();
+        carregar();
       } else {
         setVErr(doc?.xMotivo || r?.xMotivo || 'A SEFAZ não autorizou.');
       }
