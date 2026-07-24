@@ -58,6 +58,21 @@ export class NfeController {
     });
   }
 
+  /** Cancela uma NF-e autorizada (evento 110111, prazo SEFAZ 24h). */
+  @Post(':id/cancel')
+  cancel(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: { justificativa?: string },
+  ) {
+    this.requireMatriz(req);
+    return this.transfer.cancelDoc(
+      id,
+      body?.justificativa || '',
+      req?.user?.userId || req?.user?.sub || null,
+    );
+  }
+
   /** Lista NF-e emitidas (filtro por loja/status). */
   @Get()
   list(
