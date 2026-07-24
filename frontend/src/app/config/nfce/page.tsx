@@ -242,6 +242,7 @@ export default function NfceConfigPage() {
         ...EMPTY_CFG,
         ...updated,
         endereco: updated.endereco || EMPTY_CFG.endereco,
+        nfeEndereco: updated.nfeEndereco || EMPTY_CFG.nfeEndereco,
       });
       setPfxBase64('');
       setPfxPassword('');
