@@ -47,6 +47,7 @@ import { SitePublishModule } from './site-publish/site-publish.module';
 import { WhatsappModule } from './whatsapp/whatsapp.module';
 import { IntegrationLogsModule } from './integration-logs/integration-logs.module';
 import { TrackingModule } from './tracking/tracking.module';
+import { CorreiosModule } from './correios/correios.module';
 import { PilotModule } from './pilot/pilot.module';
 import { SellersModule } from './sellers/sellers.module';
 import { PontoModule } from './ponto/ponto.module';
@@ -124,6 +125,7 @@ import { OperadorPinModule } from './operador-pin/operador-pin.module';
     WhatsappModule,
     IntegrationLogsModule,
     TrackingModule,
+    CorreiosModule,
     PilotModule,
     SellersModule,
     PontoModule,
