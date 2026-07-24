@@ -66,6 +66,7 @@ type ConfigState = {
     cep: string;
     municipio: string;
     codMunicipio: string;
+    uf: string;
   };
 };
 
@@ -105,6 +106,7 @@ const EMPTY_CFG: ConfigState = {
     cep: '',
     municipio: '',
     codMunicipio: '',
+    uf: '',
   },
 };
 
@@ -449,8 +451,15 @@ export default function NfceConfigPage() {
                 <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800 mb-3">
                   <b>Deixe VAZIO na maioria das lojas.</b> Preencha só quando a NFC-e (térmica) desta
                   loja é emitida sob o CNPJ de OUTRA empresa (alinhamento de máquina de cartão) — aí a
-                  NF-e/DANFE usa estes dados REAIS da loja na Receita. Cada campo vazio cai no dado da NFC-e acima.
+                  NF-e/DANFE usa estes dados REAIS da loja na Receita. O endereço/regime de cima é da <b>NFC-e</b> e NÃO muda.
                 </div>
+                {cfg.nfeCnpj.trim() && (
+                  <div className="rounded-lg bg-rose-50 border border-rose-300 px-3 py-2 text-xs text-rose-800 mb-3 font-semibold">
+                    ⚠️ Com o CNPJ da NF-e preenchido, a IDENTIDADE INTEIRA da NF-e é obrigatória:
+                    <b> IE, Razão Social E Endereço da NF-e</b>. A NF-e NÃO pode usar o endereço/razão da NFC-e
+                    (é outro estabelecimento). Se faltar algum, a emissão é bloqueada.
+                  </div>
+                )}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <Field label="CNPJ da NF-e (real)" value={cfg.nfeCnpj} onChange={(v) => setCfg({ ...cfg, nfeCnpj: v })} placeholder="deixe vazio = usa o CNPJ da NFC-e" />
                   <Field label="Inscrição Estadual da NF-e" value={cfg.nfeIe} onChange={(v) => setCfg({ ...cfg, nfeIe: v })} placeholder="IE do CNPJ real" />
@@ -472,9 +481,11 @@ export default function NfceConfigPage() {
                     </p>
                   </div>
                 </div>
-                <details className="mt-2">
-                  <summary className="text-xs font-semibold text-gray-600 cursor-pointer">Endereço da NF-e (só se diferente)</summary>
-                  <div className="mt-2 space-y-3">
+                <div className="mt-3">
+                  <div className="text-sm font-semibold text-rose-800 mb-2">
+                    Endereço da NF-e (REAL da loja na Receita — separado do endereço da NFC-e acima)
+                  </div>
+                  <div className="space-y-3">
                     <Field label="Logradouro" value={cfg.nfeEndereco.logradouro} onChange={(v) => setCfg({ ...cfg, nfeEndereco: { ...cfg.nfeEndereco, logradouro: v } })} />
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                       <Field label="Número" value={cfg.nfeEndereco.numero} onChange={(v) => setCfg({ ...cfg, nfeEndereco: { ...cfg.nfeEndereco, numero: v } })} />
@@ -483,10 +494,11 @@ export default function NfceConfigPage() {
                     </div>
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                       <Field label="Município" value={cfg.nfeEndereco.municipio} onChange={(v) => setCfg({ ...cfg, nfeEndereco: { ...cfg.nfeEndereco, municipio: v } })} />
-                      <Field label="Cód. Município IBGE" value={cfg.nfeEndereco.codMunicipio} onChange={(v) => setCfg({ ...cfg, nfeEndereco: { ...cfg.nfeEndereco, codMunicipio: v } })} placeholder="3522109" />
+                      <Field label="UF" value={cfg.nfeEndereco.uf} onChange={(v) => setCfg({ ...cfg, nfeEndereco: { ...cfg.nfeEndereco, uf: v } })} placeholder="SP" />
+                      <Field label="Cód. Município IBGE" value={cfg.nfeEndereco.codMunicipio} onChange={(v) => setCfg({ ...cfg, nfeEndereco: { ...cfg.nfeEndereco, codMunicipio: v } })} placeholder="3548500" />
                     </div>
                   </div>
-                </details>
+                </div>
               </Card>
 
               <Card
