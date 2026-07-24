@@ -106,6 +106,8 @@ export default function RemessasAdminPage() {
 
   // Filtros
   const [statusFilter, setStatusFilter] = useState<string>(''); // '' = todos
+  const [origemFiltro, setOrigemFiltro] = useState<string>(''); // '' = todas
+  const [destinoFiltro, setDestinoFiltro] = useState<string>('');
   const [search, setSearch] = useState('');
   const [daysAgo, setDaysAgo] = useState(30);
 
@@ -140,11 +142,23 @@ export default function RemessasAdminPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statusFilter, daysAgo]);
 
-  // Filtro de busca client-side adicional (substring no código + lojas)
+  // Opções de loja pros selects (origem/destino) — deduplicadas das remessas
+  const lojaOpcoes = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const r of rows) {
+      m.set(r.fromStoreCode, `${r.fromStoreCode} ${r.fromStoreName}`);
+      m.set(r.toStoreCode, `${r.toStoreCode} ${r.toStoreName}`);
+    }
+    return Array.from(m.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+  }, [rows]);
+
+  // Filtro de busca client-side adicional (substring no código + lojas + origem/destino)
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return rows;
     return rows.filter((r) => {
+      if (origemFiltro && r.fromStoreCode !== origemFiltro) return false;
+      if (destinoFiltro && r.toStoreCode !== destinoFiltro) return false;
+      if (!q) return true;
       return (
         r.code.toLowerCase().includes(q) ||
         r.fromStoreCode.toLowerCase().includes(q) ||
@@ -153,7 +167,7 @@ export default function RemessasAdminPage() {
         r.toStoreName.toLowerCase().includes(q)
       );
     });
-  }, [rows, search]);
+  }, [rows, search, origemFiltro, destinoFiltro]);
 
   const openDetail = async (id: string) => {
     setDetail(null);
@@ -425,6 +439,28 @@ export default function RemessasAdminPage() {
               className="w-full pl-9 pr-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500"
             />
           </div>
+          <select
+            value={origemFiltro}
+            onChange={(e) => setOrigemFiltro(e.target.value)}
+            className="text-sm border rounded-md px-3 py-2"
+            title="Filtrar por loja de ORIGEM"
+          >
+            <option value="">Origem: todas</option>
+            {lojaOpcoes.map(([code, label]) => (
+              <option key={code} value={code}>➜ {label}</option>
+            ))}
+          </select>
+          <select
+            value={destinoFiltro}
+            onChange={(e) => setDestinoFiltro(e.target.value)}
+            className="text-sm border rounded-md px-3 py-2"
+            title="Filtrar por loja de DESTINO"
+          >
+            <option value="">Destino: todas</option>
+            {lojaOpcoes.map(([code, label]) => (
+              <option key={code} value={code}>⇥ {label}</option>
+            ))}
+          </select>
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
