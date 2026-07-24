@@ -470,16 +470,47 @@ export class NfeTransferService {
       throw new BadRequestException(`Loja ${storeCode} sem config fiscal (NfceConfig). Configure CNPJ/IE/endereço/certificado.`);
     }
 
-    // IDENTIDADE DA NF-e (dono 24/07): a NF-e/DANFE usa os DADOS REAIS da loja
-    // na Receita. Quando a NFC-e (térmica) é emitida sob o CNPJ de outra empresa
-    // (alinhamento da máquina de cartão), os campos nfe* trazem o CNPJ real —
-    // cada um com FALLBACK pro campo principal (loja normal não preenche nada).
-    const cnpjSrc = (cfg.nfeCnpj || cfg.cnpj || '') as string;
-    const ieSrc = (cfg.nfeIe || cfg.ie || '') as string;
-    const razaoSrc = (cfg.nfeRazaoSocial || cfg.razaoSocial || '') as string;
-    const fantasiaSrc = (cfg.nfeFantasia || cfg.fantasia || cfg.razaoSocial || '') as string;
-    const regimeSrc = (cfg.nfeRegime || cfg.regime || '1') as string;
-    const enderecoSrc = (cfg.nfeEndereco || cfg.endereco || '') as string;
+    // IDENTIDADE DA NF-e (dono 24/07). Regra CRÍTICA (bug 24/07: Praia Grande
+    // saiu com endereço da MATRIZ): CNPJ, razão social e endereço de um
+    // estabelecimento NÃO se misturam. Se a NF-e sai sob um CNPJ DIFERENTE da
+    // NFC-e (alinhamento de máquina de cartão), a identidade INTEIRA tem que ser
+    // a da NF-e — razão/IE/endereço NÃO caem nos dados da NFC-e (é outro CNPJ).
+    // Loja normal (NF-e == NFC-e) não preenche os campos nfe* e usa os principais.
+    const nfeCnpjD = this.digits(String(cfg.nfeCnpj || ''));
+    const baseCnpjD = this.digits(String(cfg.cnpj || ''));
+    const identidadePropria = nfeCnpjD.length === 14 && nfeCnpjD !== baseCnpjD;
+
+    let cnpjSrc: string;
+    let ieSrc: string;
+    let razaoSrc: string;
+    let fantasiaSrc: string;
+    let regimeSrc: string;
+    let enderecoSrc: string;
+    if (identidadePropria) {
+      cnpjSrc = String(cfg.nfeCnpj);
+      ieSrc = String(cfg.nfeIe || '');
+      razaoSrc = String(cfg.nfeRazaoSocial || '');
+      fantasiaSrc = String(cfg.nfeFantasia || cfg.nfeRazaoSocial || '');
+      regimeSrc = String(cfg.nfeRegime || cfg.regime || '1');
+      enderecoSrc = String(cfg.nfeEndereco || '');
+      // Identidade da NF-e TEM que ser completa — sem herdar da NFC-e.
+      const faltaNfe: string[] = [];
+      if (this.digits(ieSrc).length < 2) faltaNfe.push('Inscrição Estadual');
+      if (razaoSrc.trim().length < 2) faltaNfe.push('Razão Social');
+      if (!enderecoSrc.trim()) faltaNfe.push('Endereço');
+      if (faltaNfe.length) {
+        throw new BadRequestException(
+          `Loja ${storeCode}: a NF-e sai sob o CNPJ ${cnpjSrc} (diferente da NFC-e), então precisa da IDENTIDADE COMPLETA da NF-e. Faltou: ${faltaNfe.join(', ')}. Preencha em Config → NFC-e → seção "Dados da NF-e". A NF-e NÃO pode usar razão/endereço da NFC-e (é outro estabelecimento).`,
+        );
+      }
+    } else {
+      cnpjSrc = String(cfg.cnpj || '');
+      ieSrc = String(cfg.ie || '');
+      razaoSrc = String(cfg.razaoSocial || '');
+      fantasiaSrc = String(cfg.fantasia || cfg.razaoSocial || '');
+      regimeSrc = String(cfg.regime || '1');
+      enderecoSrc = String(cfg.endereco || '');
+    }
     const raizNfe = this.digits(cnpjSrc).slice(0, 8);
 
     // CERTIFICADO POR EMPRESA: um A1 por RAIZ de CNPJ. O cert precisa bater com
