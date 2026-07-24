@@ -53,6 +53,20 @@ type ConfigState = {
   numeroAtual: number;
   certificadoCarregado: boolean;
   ready: boolean;
+  // Identidade da NF-e (nota grande) quando difere da NFC-e (vazio = usa a NFC-e)
+  nfeCnpj: string;
+  nfeIe: string;
+  nfeRazaoSocial: string;
+  nfeFantasia: string;
+  nfeRegime: string;
+  nfeEndereco: {
+    logradouro: string;
+    numero: string;
+    bairro: string;
+    cep: string;
+    municipio: string;
+    codMunicipio: string;
+  };
 };
 
 const EMPTY_CFG: ConfigState = {
@@ -79,6 +93,19 @@ const EMPTY_CFG: ConfigState = {
   numeroAtual: 0,
   certificadoCarregado: false,
   ready: false,
+  nfeCnpj: '',
+  nfeIe: '',
+  nfeRazaoSocial: '',
+  nfeFantasia: '',
+  nfeRegime: '',
+  nfeEndereco: {
+    logradouro: '',
+    numero: '',
+    bairro: '',
+    cep: '',
+    municipio: '',
+    codMunicipio: '',
+  },
 };
 
 export default function NfceConfigPage() {
@@ -132,6 +159,7 @@ export default function NfceConfigPage() {
         ...EMPTY_CFG,
         ...data,
         endereco: data.endereco || EMPTY_CFG.endereco,
+        nfeEndereco: data.nfeEndereco || EMPTY_CFG.nfeEndereco,
       });
     } catch (e: any) {
       setMsg({ kind: 'err', text: 'Falha ao ler config: ' + (e?.message || e) });
@@ -193,6 +221,13 @@ export default function NfceConfigPage() {
         endereco: cfg.endereco,
         cscId: cfg.cscId,
         serie: cfg.serie,
+        // Identidade da NF-e (vazio limpa o override no backend)
+        nfeCnpj: cfg.nfeCnpj,
+        nfeIe: cfg.nfeIe,
+        nfeRazaoSocial: cfg.nfeRazaoSocial,
+        nfeFantasia: cfg.nfeFantasia,
+        nfeRegime: cfg.nfeRegime,
+        nfeEndereco: cfg.nfeEndereco,
       };
       if (cfg.numeroAtual > 0) body.numeroAtual = cfg.numeroAtual;
       if (cscTokenChanged && cfg.cscToken) body.cscToken = cfg.cscToken;
@@ -407,6 +442,35 @@ export default function NfceConfigPage() {
                     consultar IBGE
                   </a>
                 </p>
+              </Card>
+
+              <Card title="Dados da NF-e (nota grande) — só se DIFERENTE da NFC-e">
+                <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800 mb-3">
+                  <b>Deixe VAZIO na maioria das lojas.</b> Preencha só quando a NFC-e (térmica) desta
+                  loja é emitida sob o CNPJ de OUTRA empresa (alinhamento de máquina de cartão) — aí a
+                  NF-e/DANFE usa estes dados REAIS da loja na Receita. Cada campo vazio cai no dado da NFC-e acima.
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <Field label="CNPJ da NF-e (real)" value={cfg.nfeCnpj} onChange={(v) => setCfg({ ...cfg, nfeCnpj: v })} placeholder="deixe vazio = usa o CNPJ da NFC-e" />
+                  <Field label="Inscrição Estadual da NF-e" value={cfg.nfeIe} onChange={(v) => setCfg({ ...cfg, nfeIe: v })} placeholder="IE do CNPJ real" />
+                  <Field label="Razão Social da NF-e" value={cfg.nfeRazaoSocial} onChange={(v) => setCfg({ ...cfg, nfeRazaoSocial: v })} />
+                  <Field label="Nome Fantasia da NF-e" value={cfg.nfeFantasia} onChange={(v) => setCfg({ ...cfg, nfeFantasia: v })} />
+                </div>
+                <details className="mt-2">
+                  <summary className="text-xs font-semibold text-gray-600 cursor-pointer">Endereço da NF-e (só se diferente)</summary>
+                  <div className="mt-2 space-y-3">
+                    <Field label="Logradouro" value={cfg.nfeEndereco.logradouro} onChange={(v) => setCfg({ ...cfg, nfeEndereco: { ...cfg.nfeEndereco, logradouro: v } })} />
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                      <Field label="Número" value={cfg.nfeEndereco.numero} onChange={(v) => setCfg({ ...cfg, nfeEndereco: { ...cfg.nfeEndereco, numero: v } })} />
+                      <Field label="Bairro" value={cfg.nfeEndereco.bairro} onChange={(v) => setCfg({ ...cfg, nfeEndereco: { ...cfg.nfeEndereco, bairro: v } })} />
+                      <Field label="CEP" value={cfg.nfeEndereco.cep} onChange={(v) => setCfg({ ...cfg, nfeEndereco: { ...cfg.nfeEndereco, cep: v } })} placeholder="00000-000" />
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                      <Field label="Município" value={cfg.nfeEndereco.municipio} onChange={(v) => setCfg({ ...cfg, nfeEndereco: { ...cfg.nfeEndereco, municipio: v } })} />
+                      <Field label="Cód. Município IBGE" value={cfg.nfeEndereco.codMunicipio} onChange={(v) => setCfg({ ...cfg, nfeEndereco: { ...cfg.nfeEndereco, codMunicipio: v } })} placeholder="3522109" />
+                    </div>
+                  </div>
+                </details>
               </Card>
 
               <Card

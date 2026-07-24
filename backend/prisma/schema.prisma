@@ -1904,6 +1904,17 @@ model NfceConfig {
   // Certificado A1
   certPfxB64      String?  @map("cert_pfx_b64") @db.Text
   certPfxPass     String?  @map("cert_pfx_pass")
+  // ── Identidade da NF-e (mod 55) quando DIFERE da NFC-e (dono 24/07) ──
+  // Algumas lojas emitem NFC-e sob o CNPJ de OUTRA empresa (alinhamento da
+  // máquina de cartão), mas a NF-e/DANFE precisa ser o CNPJ REAL da loja na
+  // Receita. Se nfeCnpj estiver preenchido, a NF-e usa estes campos (cada um
+  // com fallback pro campo principal). Vazio = NF-e usa os mesmos dados da NFC-e.
+  nfeCnpj         String?  @map("nfe_cnpj")
+  nfeIe           String?  @map("nfe_ie")
+  nfeRazaoSocial  String?  @map("nfe_razao_social")
+  nfeFantasia     String?  @map("nfe_fantasia")
+  nfeEndereco     String?  @map("nfe_endereco") @db.Text
+  nfeRegime       String?  @map("nfe_regime")
   // Auditoria
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
