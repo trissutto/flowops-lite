@@ -1915,6 +1915,12 @@ model NfceConfig {
   nfeFantasia     String?  @map("nfe_fantasia")
   nfeEndereco     String?  @map("nfe_endereco") @db.Text
   nfeRegime       String?  @map("nfe_regime")
+  // ── Identidades fiscais EXTRAS da loja (dono 24/07) ──
+  // Loja que abriga MAIS DE UMA empresa (ex.: Itanhaém tem T.O. RISSUTTO 20 E
+  // LURDS 30). JSON array de { cnpj, ie, razaoSocial, fantasia, regime,
+  // endereco:{...} }. Na TRANSFERÊNCIA, a emissão escolhe a identidade da
+  // ORIGEM cuja RAIZ de CNPJ casa com a do DESTINO (vira transferência real).
+  nfeIdentidadesExtras String? @map("nfe_identidades_extras") @db.Text
   // Auditoria
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")

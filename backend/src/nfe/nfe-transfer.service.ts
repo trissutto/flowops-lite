@@ -931,7 +931,7 @@ export class NfeTransferService {
     const cpfCnpj = this.digits(c.cpfCnpj || sale.customerCpf || '');
     const nome = String(c.nome || sale.customerName || '').trim();
     const endereco = String(c.endereco || sale.customerEndereco || '').trim();
-    const numero = String(c.numero || sale.customerNumero || 'S/N').trim();
+    const custNumero = String(c.numero || sale.customerNumero || 'S/N').trim();
     const bairro = String(c.bairro || sale.customerBairro || '').trim();
     const cidade = String(c.cidade || sale.customerCidade || '').trim();
     const uf = String(c.uf || sale.customerUf || '').trim().toUpperCase().slice(0, 2);
@@ -995,7 +995,7 @@ export class NfeTransferService {
     let numero = await this.seq.next(origem.storeCode, serie, { start: this.startPadraoPara(origem.cnpj, serie) });
     const cUF = CUF_BY_UF[origem.ender.uf] || origem.ender.codMunicipio.slice(0, 2);
     const natOp = 'VENDA DE MERCADORIA';
-    const dest = { cpfCnpj, nome, endereco, numero, bairro, cidade, uf, cep, codMun };
+    const dest = { cpfCnpj, nome, endereco, numero: custNumero, bairro, cidade, uf, cep, codMun };
 
     const doc = await this.prisma.nfeDoc.create({
       data: {
