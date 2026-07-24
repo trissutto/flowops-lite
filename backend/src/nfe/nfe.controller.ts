@@ -36,6 +36,30 @@ export class NfeController {
     }
   }
 
+  /** Venda no PDV pode emitir a NF-e "nota grande" a pedido da cliente (dono
+   *  24/07: vendedora normal). Loja/admin/operator. */
+  private requireVenda(req: any) {
+    const role = req?.user?.role;
+    if (!['admin', 'operator', 'store'].includes(role)) {
+      throw new ForbiddenException('Sem permissão pra emitir NF-e de venda');
+    }
+  }
+
+  /** Emite a NF-e (mod 55) de uma VENDA do PDV — caso extremo (cliente pede a
+   *  nota grande). Cancela o cupom (dentro de 30min) e emite no lugar. */
+  @Post('venda/:saleId')
+  emitVenda(
+    @Req() req: any,
+    @Param('saleId') saleId: string,
+    @Body() body: { customer?: any },
+  ) {
+    this.requireVenda(req);
+    return this.transfer.emitVendaForSale(saleId, {
+      userId: req?.user?.userId || req?.user?.sub || null,
+      customer: body?.customer,
+    });
+  }
+
   /** Emite a NF-e de transferência de uma remessa (RealignmentShipment). */
   /** PRÉVIA — tudo que a nota vai ter, sem numerar/assinar/transmitir. */
   @Get('transfer/preview/:shipmentId')
@@ -113,7 +137,11 @@ export class NfeController {
   /** DANFE em PDF (A4, com código de barras da chave). */
   @Get(':id/danfe')
   async getDanfe(@Req() req: any, @Param('id') id: string, @Res() res: Response) {
-    this.requireLeitura(req);
+    // Loja também abre o DANFE (venda no PDV) — além de matriz/supervisor/contador.
+    const role = req?.user?.role;
+    if (!['admin', 'operator', 'supervisor', 'contador', 'store'].includes(role)) {
+      throw new ForbiddenException('Sem permissão pra abrir o DANFE');
+    }
     try {
       const { buffer, filename } = await this.danfe.generateForDoc(id);
       res.setHeader('Content-Type', 'application/pdf');

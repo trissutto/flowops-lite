@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, RefreshCw, FileText, X, Search, Printer, Loader2, Check, AlertCircle } from 'lucide-react';
-import { api } from '@/lib/api';
+import { api, API_URL, getAuthToken } from '@/lib/api';
 
 /**
  * Tela de NFC-es emitidas — visão por loja ou geral.
@@ -116,6 +116,71 @@ export default function NotasEmitidasPage() {
     setFixName(r.customerName || '');
     setFixError(null);
     setFixResult(null);
+  }
+
+  // ── NF-e de VENDA ("nota grande") — caso extremo, a pedido da cliente ──
+  const [vendaTarget, setVendaTarget] = useState<NfceRow | null>(null);
+  const [vCust, setVCust] = useState<any>({});
+  const [vBusy, setVBusy] = useState(false);
+  const [vErr, setVErr] = useState<string | null>(null);
+  const [vOkDoc, setVOkDoc] = useState<any>(null);
+  function abrirVenda(r: NfceRow) {
+    setVendaTarget(r);
+    setVErr(null); setVOkDoc(null);
+    setVCust({
+      cpfCnpj: (r.customerCpf || '').replace(/\D/g, ''),
+      nome: r.customerName || '',
+      endereco: '', numero: '', bairro: '', cidade: '', uf: '', cep: '', codMunicipio: '',
+    });
+  }
+  // CEP → ViaCEP → preenche endereço + código IBGE do município (a NF-e exige)
+  async function buscarCep(cep: string) {
+    const d = cep.replace(/\D/g, '');
+    if (d.length !== 8) return;
+    try {
+      const r = await fetch(`https://viacep.com.br/ws/${d}/json/`);
+      const j = await r.json();
+      if (j?.erro) return;
+      setVCust((p: any) => ({
+        ...p, cep: d,
+        endereco: p.endereco || j.logradouro || '',
+        bairro: p.bairro || j.bairro || '',
+        cidade: j.localidade || p.cidade || '',
+        uf: j.uf || p.uf || '',
+        codMunicipio: j.ibge || p.codMunicipio || '',
+      }));
+    } catch { /* offline — preenche na mão */ }
+  }
+  async function emitirVenda() {
+    if (!vendaTarget || vBusy) return;
+    setVBusy(true); setVErr(null);
+    try {
+      const r = await api<any>(`/nfe/venda/${vendaTarget.id}`, {
+        method: 'POST',
+        body: JSON.stringify({ customer: vCust }),
+      });
+      const doc = r?.doc || r;
+      if (r?.ok || doc?.status === 'authorized') {
+        setVOkDoc(doc);
+        load();
+      } else {
+        setVErr(doc?.xMotivo || r?.xMotivo || 'A SEFAZ não autorizou.');
+      }
+    } catch (e: any) {
+      setVErr(e?.message || 'Falha ao emitir');
+    } finally {
+      setVBusy(false);
+    }
+  }
+  async function abrirDanfeVenda(docId: string, numero: any) {
+    try {
+      const token = getAuthToken();
+      const resp = await fetch(`${API_URL}/api/nfe/${docId}/danfe`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const url = URL.createObjectURL(await resp.blob());
+      const w = window.open(url, '_blank');
+      if (!w) { const a = document.createElement('a'); a.href = url; a.download = `danfe-${numero}.pdf`; a.click(); }
+    } catch (e: any) { alert(`Erro ao abrir DANFE: ${e?.message || e}`); }
   }
 
   async function executarReemissao() {
@@ -467,6 +532,16 @@ export default function NotasEmitidasPage() {
                       <FileText className="w-3 h-3" />
                       Não fiscal
                     </button>
+                    {/* NF-e "nota grande" — caso EXTREMO (cliente pede). Substitui
+                        o cupom (cancela se dentro de 30min); nunca os dois. */}
+                    <button
+                      onClick={() => abrirVenda(r)}
+                      className="px-2 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 rounded text-xs font-bold border border-indigo-200 flex items-center gap-1"
+                      title="Emitir NF-e (nota grande) desta venda — a pedido da cliente. Substitui o cupom."
+                    >
+                      <FileText className="w-3 h-3" />
+                      NF-e
+                    </button>
                     {r.podeCancelar && (
                       <button
                         onClick={() => { setCancelTarget(r); setCancelMotivo(''); setCancelError(null); }}
@@ -622,6 +697,70 @@ export default function NotasEmitidasPage() {
                 )}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal NF-e de VENDA (nota grande) */}
+      {vendaTarget && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => !vBusy && setVendaTarget(null)}>
+          <div className="bg-white rounded-xl max-w-lg w-full max-h-[90vh] overflow-auto p-5" onClick={(e) => e.stopPropagation()}>
+            <h2 className="font-bold text-indigo-900 text-lg mb-1">📄 Emitir NF-e (nota grande)</h2>
+            <p className="text-xs text-slate-500 mb-3">
+              Caso extremo — a pedido da cliente. A NF-e <b>substitui o cupom</b> (cancela se estiver dentro dos 30 min).
+              Valor: <b>R$ {Number(vendaTarget.total || 0).toFixed(2)}</b>. Precisa dos dados completos da cliente.
+            </p>
+
+            {vOkDoc ? (
+              <div className="rounded-lg bg-emerald-50 border border-emerald-200 p-3 text-sm text-emerald-800">
+                ✅ NF-e nº <b>{vOkDoc.numero}</b> autorizada!
+                <button
+                  onClick={() => abrirDanfeVenda(vOkDoc.id, vOkDoc.numero)}
+                  className="mt-2 block px-4 py-2 rounded-lg bg-indigo-600 text-white font-bold hover:bg-indigo-700"
+                >📄 Abrir DANFE (PDF)</button>
+              </div>
+            ) : (
+              <>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <label className="text-xs font-semibold text-slate-600">CPF / CNPJ
+                    <input value={vCust.cpfCnpj || ''} onChange={(e) => setVCust({ ...vCust, cpfCnpj: e.target.value.replace(/\D/g, '') })}
+                      className="w-full p-2 border rounded mt-0.5 text-sm" placeholder="só números" /></label>
+                  <label className="text-xs font-semibold text-slate-600">Nome / Razão social
+                    <input value={vCust.nome || ''} onChange={(e) => setVCust({ ...vCust, nome: e.target.value })}
+                      className="w-full p-2 border rounded mt-0.5 text-sm" /></label>
+                  <label className="text-xs font-semibold text-slate-600">CEP
+                    <input value={vCust.cep || ''} onChange={(e) => setVCust({ ...vCust, cep: e.target.value.replace(/\D/g, '') })}
+                      onBlur={(e) => buscarCep(e.target.value)}
+                      className="w-full p-2 border rounded mt-0.5 text-sm" placeholder="busca o endereço" /></label>
+                  <label className="text-xs font-semibold text-slate-600">Cód. IBGE (auto)
+                    <input value={vCust.codMunicipio || ''} onChange={(e) => setVCust({ ...vCust, codMunicipio: e.target.value })}
+                      className="w-full p-2 border rounded mt-0.5 text-sm bg-slate-50" placeholder="vem do CEP" /></label>
+                  <label className="text-xs font-semibold text-slate-600 sm:col-span-2">Logradouro
+                    <input value={vCust.endereco || ''} onChange={(e) => setVCust({ ...vCust, endereco: e.target.value })}
+                      className="w-full p-2 border rounded mt-0.5 text-sm" /></label>
+                  <label className="text-xs font-semibold text-slate-600">Número
+                    <input value={vCust.numero || ''} onChange={(e) => setVCust({ ...vCust, numero: e.target.value })}
+                      className="w-full p-2 border rounded mt-0.5 text-sm" /></label>
+                  <label className="text-xs font-semibold text-slate-600">Bairro
+                    <input value={vCust.bairro || ''} onChange={(e) => setVCust({ ...vCust, bairro: e.target.value })}
+                      className="w-full p-2 border rounded mt-0.5 text-sm" /></label>
+                  <label className="text-xs font-semibold text-slate-600">Cidade
+                    <input value={vCust.cidade || ''} onChange={(e) => setVCust({ ...vCust, cidade: e.target.value })}
+                      className="w-full p-2 border rounded mt-0.5 text-sm" /></label>
+                  <label className="text-xs font-semibold text-slate-600">UF
+                    <input value={vCust.uf || ''} onChange={(e) => setVCust({ ...vCust, uf: e.target.value.toUpperCase().slice(0, 2) })}
+                      className="w-full p-2 border rounded mt-0.5 text-sm" /></label>
+                </div>
+                {vErr && <div className="mt-2 rounded bg-rose-50 border border-rose-200 px-3 py-2 text-xs text-rose-800">{vErr}</div>}
+                <div className="flex justify-end gap-2 mt-4">
+                  <button onClick={() => !vBusy && setVendaTarget(null)} disabled={vBusy}
+                    className="px-3 py-2 rounded-lg border text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-50">Voltar</button>
+                  <button onClick={emitirVenda} disabled={vBusy}
+                    className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-bold hover:bg-indigo-700 disabled:opacity-40">
+                    {vBusy ? 'Emitindo…' : 'Emitir NF-e'}</button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
