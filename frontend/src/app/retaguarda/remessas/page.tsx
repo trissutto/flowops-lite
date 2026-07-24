@@ -56,6 +56,9 @@ type ShipmentRow = {
   missingCount: number;
   pendingScanCount: number;
   hoursInTransit: number | null;
+  nfeEmitida?: boolean;
+  nfeNumero?: number | null;
+  nfeSerie?: string | null;
 };
 
 type ShipmentDetail = ShipmentRow & {
@@ -489,6 +492,18 @@ export default function RemessasAdminPage() {
                     >
                       <td className="px-3 py-2 font-mono text-xs font-semibold text-slate-700">
                         {r.code}
+                        {r.nfeEmitida ? (
+                          <div
+                            className="mt-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-50 border border-emerald-300 text-emerald-700 text-[10px] font-bold"
+                            title={`NF-e nº ${r.nfeNumero}/${r.nfeSerie || '1'} autorizada`}
+                          >
+                            📄 NF-e {r.nfeNumero}
+                          </div>
+                        ) : (
+                          <div className="mt-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-50 border border-slate-200 text-slate-400 text-[10px] font-semibold" title="Sem NF-e emitida">
+                            sem NF-e
+                          </div>
+                        )}
                       </td>
                       <td className="px-3 py-2">
                         <div className="text-slate-700">
