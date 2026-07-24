@@ -456,6 +456,21 @@ export default function NfceConfigPage() {
                   <Field label="Inscrição Estadual da NF-e" value={cfg.nfeIe} onChange={(v) => setCfg({ ...cfg, nfeIe: v })} placeholder="IE do CNPJ real" />
                   <Field label="Razão Social da NF-e" value={cfg.nfeRazaoSocial} onChange={(v) => setCfg({ ...cfg, nfeRazaoSocial: v })} />
                   <Field label="Nome Fantasia da NF-e" value={cfg.nfeFantasia} onChange={(v) => setCfg({ ...cfg, nfeFantasia: v })} />
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Regime Tributário da NF-e</label>
+                    <select
+                      value={cfg.nfeRegime}
+                      onChange={(e) => setCfg({ ...cfg, nfeRegime: e.target.value })}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                    >
+                      <option value="">(usa o regime da NFC-e)</option>
+                      <option value="1">1 — Simples Nacional (CSOSN)</option>
+                      <option value="3">3 — Regime Normal (CST)</option>
+                    </select>
+                    <p className="text-xs text-gray-500 mt-1">
+                      Se o CNPJ da NF-e é de outra empresa com regime diferente da NFC-e, escolha aqui.
+                    </p>
+                  </div>
                 </div>
                 <details className="mt-2">
                   <summary className="text-xs font-semibold text-gray-600 cursor-pointer">Endereço da NF-e (só se diferente)</summary>
