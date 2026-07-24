@@ -178,6 +178,29 @@ export default function RemessasAdminPage() {
   const [nfeList, setNfeList] = useState<any[] | null>(null);
   const [nfeListOpen, setNfeListOpen] = useState(false);
   const [nfeLojaFiltro, setNfeLojaFiltro] = useState(''); // filtro por loja de ORIGEM (emitente)
+  // Cancelamento de NF-e (evento 110111, prazo SEFAZ 24h)
+  const [cancelTarget, setCancelTarget] = useState<any | null>(null);
+  const [cancelJust, setCancelJust] = useState('');
+  const [cancelBusy, setCancelBusy] = useState(false);
+  const confirmarCancelamento = async () => {
+    if (!cancelTarget || cancelBusy) return;
+    const just = cancelJust.trim();
+    if (just.length < 15) return;
+    setCancelBusy(true);
+    try {
+      await api(`/nfe/${cancelTarget.id}/cancel`, {
+        method: 'POST',
+        body: JSON.stringify({ justificativa: just }),
+      });
+      setCancelTarget(null);
+      setCancelJust('');
+      await abrirNfeList(); // recarrega a lista (status vira CANCELADA)
+    } catch (e: any) {
+      alert(`Não foi possível cancelar: ${e?.message || e}`);
+    } finally {
+      setCancelBusy(false);
+    }
+  };
   const abrirNfeList = async () => {
     setNfeListOpen(true);
     setNfeList(null);
@@ -566,9 +589,11 @@ export default function RemessasAdminPage() {
                               ? 'bg-emerald-50 border-emerald-300 text-emerald-700'
                               : d.status === 'rejected'
                               ? 'bg-rose-50 border-rose-300 text-rose-700'
+                              : d.status === 'cancelled'
+                              ? 'bg-slate-100 border-slate-300 text-slate-600 line-through'
                               : 'bg-amber-50 border-amber-300 text-amber-700'
                           }`}>
-                            {d.status === 'authorized' ? 'AUTORIZADA' : d.status === 'rejected' ? 'REJEITADA' : (d.status || '?').toUpperCase()}
+                            {d.status === 'authorized' ? 'AUTORIZADA' : d.status === 'rejected' ? 'REJEITADA' : d.status === 'cancelled' ? 'CANCELADA' : (d.status || '?').toUpperCase()}
                           </span>
                           {d.cStat && <div className="text-[10px] text-slate-400 mt-0.5">cStat {d.cStat}</div>}
                         </td>
@@ -592,17 +617,73 @@ export default function RemessasAdminPage() {
                           </button>
                           <button
                             onClick={() => baixarXmlNfe(d)}
-                            className="text-[10px] px-1.5 py-0.5 rounded border border-slate-300 hover:bg-slate-100 text-slate-600"
+                            className="text-[10px] px-1.5 py-0.5 rounded border border-slate-300 hover:bg-slate-100 text-slate-600 mr-1"
                             title="Baixar o XML enviado à SEFAZ (e a resposta, se rejeitada)"
                           >
                             ⬇ XML
                           </button>
+                          {d.status === 'authorized' && (
+                            <button
+                              onClick={() => setCancelTarget(d)}
+                              className="text-[10px] px-1.5 py-0.5 rounded border border-rose-300 hover:bg-rose-50 text-rose-700 font-bold"
+                              title="Cancelar esta NF-e na SEFAZ (prazo 24h)"
+                            >
+                              ✕ Cancelar
+                            </button>
+                          )}
                         </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de CANCELAMENTO de NF-e */}
+      {cancelTarget && (
+        <div
+          className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4"
+          {...overlayClose(() => !cancelBusy && setCancelTarget(null))}
+        >
+          <div className="bg-white rounded-lg max-w-md w-full p-5" onClick={(e) => e.stopPropagation()}>
+            <h2 className="font-bold text-rose-800 text-lg mb-1">Cancelar NF-e nº {cancelTarget.numero}/{cancelTarget.serie}</h2>
+            <p className="text-xs text-slate-500 mb-3">
+              Envia o evento de cancelamento à SEFAZ. <b>Prazo legal: 24h</b> após a autorização —
+              fora disso a SEFAZ recusa (aí só carta de correção/estorno pelo contador).
+            </p>
+            <label className="block text-xs font-semibold text-slate-600 mb-1">
+              Justificativa (mín. 15 caracteres)
+            </label>
+            <textarea
+              value={cancelJust}
+              onChange={(e) => setCancelJust(e.target.value.slice(0, 255))}
+              rows={3}
+              autoFocus
+              placeholder="Ex.: Remessa cancelada — mercadoria não seguiu para a loja destino."
+              className="w-full p-2 border rounded-lg text-sm resize-none"
+            />
+            <div className={`text-[11px] mt-1 ${cancelJust.trim().length < 15 ? 'text-rose-600' : 'text-emerald-600'}`}>
+              {cancelJust.trim().length}/255 {cancelJust.trim().length < 15 ? '— faltam ' + (15 - cancelJust.trim().length) : '✓'}
+            </div>
+            <div className="flex justify-end gap-2 mt-4">
+              <button
+                onClick={() => !cancelBusy && setCancelTarget(null)}
+                disabled={cancelBusy}
+                className="px-3 py-2 rounded-lg border text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+              >
+                Voltar
+              </button>
+              <button
+                onClick={confirmarCancelamento}
+                disabled={cancelBusy || cancelJust.trim().length < 15}
+                className="px-4 py-2 rounded-lg bg-rose-600 text-white text-sm font-bold hover:bg-rose-700 disabled:opacity-40 inline-flex items-center gap-2"
+              >
+                {cancelBusy && <Loader2 className="w-4 h-4 animate-spin" />}
+                {cancelBusy ? 'Cancelando…' : 'Cancelar NF-e na SEFAZ'}
+              </button>
             </div>
           </div>
         </div>

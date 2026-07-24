@@ -620,6 +620,9 @@ export async function cancelNfceSefazSp(input: {
   ambiente: '1' | '2';
   pfxBase64: string;
   pfxPassword: string;
+  // Override do host de eventos — NF-e mod 55 usa nfe.fazenda.sp.gov.br
+  // (NFC-e usa nfce.*). O evento 110111 é idêntico; só muda o host.
+  endpointOverride?: string;
 }): Promise<CancelResult> {
   // Validações de input
   const just = (input.justificativa || '').trim();
@@ -707,7 +710,8 @@ export async function cancelNfceSefazSp(input: {
     'http://www.portalfiscal.inf.br/nfe/wsdl/NFeRecepcaoEvento4/nfeRecepcaoEvento';
   const soap = `<?xml version="1.0" encoding="UTF-8"?><soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope"><soap:Body><nfeDadosMsg xmlns="http://www.portalfiscal.inf.br/nfe/wsdl/NFeRecepcaoEvento4">${envEvento}</nfeDadosMsg></soap:Body></soap:Envelope>`;
 
-  const endpoint = (SEFAZ_SP_NFCE_ENDPOINTS[input.ambiente] as any).eventos
+  const endpoint = input.endpointOverride
+    || (SEFAZ_SP_NFCE_ENDPOINTS[input.ambiente] as any).eventos
     || 'https://www.nfce.fazenda.sp.gov.br/ws/NFeRecepcaoEvento4.asmx';
 
   const agent = getSefazAgent(input.pfxBase64, input.pfxPassword);

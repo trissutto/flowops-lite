@@ -3,7 +3,7 @@ import * as crypto from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service';
 import { NfeSequenceService } from './nfe-sequence.service';
-import { signXmlNfeWithA1, transmitNfeSefazSp } from '../pdv/nfce-sefaz';
+import { signXmlNfeWithA1, transmitNfeSefazSp, cancelNfceSefazSp } from '../pdv/nfce-sefaz';
 import { SEFAZ_SP_NFE_ENDPOINTS, HOMOLOG_FRASE } from './nfe-sefaz-endpoints';
 
 /** UF → código IBGE (cUF). Só os estados que a rede opera; expandir se preciso. */
@@ -67,6 +67,8 @@ export class NfeTransferService {
     const data = await this.buildTransferData(shipment, { requireCert: true });
     const { origem, destino, items, warnings, cfop, interestadual } = data;
     const valorTotal = data.valorTotal;
+
+    this.checarMesmaEmpresa(origem, destino);
 
     const ambiente = origem.ambiente;
     const tpAmb = ambiente;
@@ -166,6 +168,89 @@ export class NfeTransferService {
     const doc = await this.prisma.nfeDoc.findUnique({ where: { id } });
     if (!doc) throw new NotFoundException('NF-e não encontrada');
     return doc;
+  }
+
+  /**
+   * BLOQUEIO (dono 24/07): transferência é SÓ dentro da MESMA empresa.
+   * Raiz 20.104.813 (T.O. RISSUTTO) e 30.246.592 (LURDS PLUS SIZE) são CNPJs
+   * de empresas DIFERENTES — origem↔destino entre elas é VENDA, não
+   * transferência (CFOP 5152/6152 indevido). Kill-switch: NFE_ALLOW_INTER_EMPRESA=1.
+   */
+  private checarMesmaEmpresa(origem: StoreFiscal, destino: StoreFiscal) {
+    if (String(process.env.NFE_ALLOW_INTER_EMPRESA ?? '') === '1') return;
+    const raizO = origem.cnpj.slice(0, 8);
+    const raizD = destino.cnpj.slice(0, 8);
+    if (raizO !== raizD) {
+      throw new BadRequestException(
+        `NF-e de transferência SÓ entre lojas da MESMA empresa. Origem (${origem.razaoSocial || raizO}) e destino (${destino.razaoSocial || raizD}) têm CNPJs de empresas diferentes — juridicamente isso é VENDA, não transferência. Emissão bloqueada.`,
+      );
+    }
+  }
+
+  /**
+   * CANCELAMENTO de NF-e autorizada (evento 110111) — reusa a camada de evento
+   * do NFC-e apontando pro host da NF-e mod 55. Prazo SEFAZ-SP: 24h após a
+   * autorização (fora do prazo a SEFAZ recusa). Exige justificativa 15-255.
+   */
+  async cancelDoc(id: string, justificativa: string, userId?: string | null) {
+    const doc = await this.prisma.nfeDoc.findUnique({ where: { id } });
+    if (!doc) throw new NotFoundException('NF-e não encontrada');
+    if (doc.status === 'cancelled') {
+      return { ok: true, jaCancelada: true, doc: this.publicDoc(doc) };
+    }
+    if (doc.status !== 'authorized') {
+      throw new BadRequestException('Só é possível cancelar NF-e AUTORIZADA.');
+    }
+    if (!doc.chave || !doc.protocolo) {
+      throw new BadRequestException('NF-e sem chave/protocolo gravados — não dá pra cancelar.');
+    }
+    const just = String(justificativa || '').trim();
+    if (just.length < 15 || just.length > 255) {
+      throw new BadRequestException('Justificativa do cancelamento precisa ter entre 15 e 255 caracteres.');
+    }
+
+    const origem = await this.loadStoreFiscal(doc.fromStoreCode, { requireCert: true });
+    const amb: '1' | '2' = doc.tpAmb === '1' ? '1' : '2';
+    const endpoint = SEFAZ_SP_NFE_ENDPOINTS[amb].eventos;
+
+    const res = await cancelNfceSefazSp({
+      chave: doc.chave,
+      protocolo: doc.protocolo,
+      justificativa: just,
+      cnpj: origem.cnpj,
+      ambiente: amb,
+      pfxBase64: origem.certPfxB64,
+      pfxPassword: origem.certPfxPass,
+      endpointOverride: endpoint,
+    });
+
+    // cStat de sucesso do evento: 135 (registrado+vinculado) ou 155 (idem c/ ressalva)
+    const cancelada = res.success && (res.cStat === '135' || res.cStat === '155');
+    const updated = await this.prisma.nfeDoc.update({
+      where: { id },
+      data: {
+        status: cancelada ? 'cancelled' : doc.status,
+        cStat: res.cStat,
+        xMotivo: res.xMotivo,
+        xmlResposta: res.xmlResposta || doc.xmlResposta,
+        erro: cancelada
+          ? `Cancelada${res.nProtCancelamento ? ` · prot ${res.nProtCancelamento}` : ''} · ${just}`
+          : (res.error || res.xMotivo || doc.erro),
+        emittedByUserId: userId || doc.emittedByUserId,
+      },
+    });
+    if (!cancelada) {
+      throw new BadRequestException(
+        `SEFAZ recusou o cancelamento: cStat ${res.cStat} — ${res.xMotivo || res.error || 'erro'}`,
+      );
+    }
+    return {
+      ok: true,
+      doc: this.publicDoc(updated),
+      cStat: res.cStat,
+      xMotivo: res.xMotivo,
+      protocoloCancelamento: res.nProtCancelamento || null,
+    };
   }
 
   /** Lista NF-e emitidas (filtro por loja/status). */
@@ -700,7 +785,17 @@ export class NfeTransferService {
       `<vOutro>0.00</vOutro><vNF>${vTot}</vNF>` +
       `</ICMSTot></total>`;
 
-    const transp = `<transp><modFrete>9</modFrete></transp>`;
+    // TRANSPORTE PRÓPRIO por conta do remetente (modFrete=3, "veículo próprio"
+    // — dono 24/07) + VOLUME com peso estimado = nº de peças × 0,25 kg.
+    // modFrete override via NFE_MODFRETE; peso por peça via NFE_PESO_POR_PECA_KG.
+    const totalPecas = p.items.reduce((s, it) => s + (Number(it.qty) || 0), 0);
+    const pesoPorPeca = Number(process.env.NFE_PESO_POR_PECA_KG ?? 0.25) || 0.25;
+    const pesoKg = (totalPecas * pesoPorPeca).toFixed(3);
+    const modFrete = String(process.env.NFE_MODFRETE ?? '3').trim();
+    const transp =
+      `<transp><modFrete>${modFrete}</modFrete>` +
+      `<vol><qVol>1</qVol><esp>VOLUME</esp><pesoL>${pesoKg}</pesoL><pesoB>${pesoKg}</pesoB></vol>` +
+      `</transp>`;
     // Transferência não tem pagamento → tPag 90 (sem pagamento), vPag 0.
     const pag = `<pag><detPag><tPag>90</tPag><vPag>0.00</vPag></detPag></pag>`;
     const infAdic = `<infAdic><infCpl>${this.esc(`Transferencia de mercadoria - Remessa ${p.remCode}`)}</infCpl></infAdic>`;
