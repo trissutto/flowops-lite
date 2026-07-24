@@ -95,6 +95,8 @@ export class NfceService {
       nfeFantasia: cfg.nfeFantasia || '',
       nfeRegime: cfg.nfeRegime || '',
       nfeEndereco: cfg.nfeEndereco ? JSON.parse(cfg.nfeEndereco) : null,
+      // Razões extras da loja (multi-empresa, ex.: Itanhaém 20+30)
+      nfeIdentidadesExtras: (() => { try { return cfg.nfeIdentidadesExtras ? JSON.parse(cfg.nfeIdentidadesExtras) : []; } catch { return []; } })(),
     };
   }
 
@@ -154,6 +156,7 @@ export class NfceService {
       nfeFantasia: string;
       nfeRegime: string;
       nfeEndereco: any;
+      nfeIdentidadesExtras: any;
     }>,
   ) {
     if (!storeCode) throw new BadRequestException('storeCode obrigatório');
@@ -201,6 +204,12 @@ export class NfceService {
     if (input.nfeEndereco != null) {
       const hasEnd = input.nfeEndereco && Object.values(input.nfeEndereco).some((v) => String(v || '').trim());
       data.nfeEndereco = hasEnd ? JSON.stringify(input.nfeEndereco) : null;
+    }
+    if (input.nfeIdentidadesExtras != null) {
+      // Só guarda identidades com CNPJ preenchido (14 dígitos); vazio limpa.
+      const arr = Array.isArray(input.nfeIdentidadesExtras) ? input.nfeIdentidadesExtras : [];
+      const limpas = arr.filter((e: any) => String(e?.cnpj || '').replace(/\D/g, '').length === 14);
+      data.nfeIdentidadesExtras = limpas.length ? JSON.stringify(limpas) : null;
     }
 
     if (existing) {
