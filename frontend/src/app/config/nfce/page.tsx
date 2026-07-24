@@ -68,6 +68,11 @@ type ConfigState = {
     codMunicipio: string;
     uf: string;
   };
+  // Razões extras da loja (multi-empresa, ex.: Itanhaém RISSUTTO 20 + LURDS 30)
+  nfeIdentidadesExtras: Array<{
+    cnpj: string; ie: string; razaoSocial: string; fantasia: string; regime: string;
+    endereco: { logradouro: string; numero: string; bairro: string; cep: string; municipio: string; codMunicipio: string; uf: string };
+  }>;
 };
 
 const EMPTY_CFG: ConfigState = {
@@ -108,6 +113,12 @@ const EMPTY_CFG: ConfigState = {
     codMunicipio: '',
     uf: '',
   },
+  nfeIdentidadesExtras: [],
+};
+
+const EMPTY_IDENTIDADE = {
+  cnpj: '', ie: '', razaoSocial: '', fantasia: '', regime: '1',
+  endereco: { logradouro: '', numero: '', bairro: '', cep: '', municipio: '', codMunicipio: '', uf: '' },
 };
 
 export default function NfceConfigPage() {
@@ -162,6 +173,9 @@ export default function NfceConfigPage() {
         ...data,
         endereco: data.endereco || EMPTY_CFG.endereco,
         nfeEndereco: data.nfeEndereco || EMPTY_CFG.nfeEndereco,
+        nfeIdentidadesExtras: Array.isArray(data.nfeIdentidadesExtras)
+          ? data.nfeIdentidadesExtras.map((e: any) => ({ ...EMPTY_IDENTIDADE, ...e, endereco: { ...EMPTY_IDENTIDADE.endereco, ...(e.endereco || {}) } }))
+          : [],
       });
     } catch (e: any) {
       setMsg({ kind: 'err', text: 'Falha ao ler config: ' + (e?.message || e) });
@@ -230,6 +244,7 @@ export default function NfceConfigPage() {
         nfeFantasia: cfg.nfeFantasia,
         nfeRegime: cfg.nfeRegime,
         nfeEndereco: cfg.nfeEndereco,
+        nfeIdentidadesExtras: cfg.nfeIdentidadesExtras,
       };
       if (cfg.numeroAtual > 0) body.numeroAtual = cfg.numeroAtual;
       if (cscTokenChanged && cfg.cscToken) body.cscToken = cfg.cscToken;
@@ -245,6 +260,9 @@ export default function NfceConfigPage() {
         ...updated,
         endereco: updated.endereco || EMPTY_CFG.endereco,
         nfeEndereco: updated.nfeEndereco || EMPTY_CFG.nfeEndereco,
+        nfeIdentidadesExtras: Array.isArray(updated.nfeIdentidadesExtras)
+          ? updated.nfeIdentidadesExtras.map((e: any) => ({ ...EMPTY_IDENTIDADE, ...e, endereco: { ...EMPTY_IDENTIDADE.endereco, ...(e.endereco || {}) } }))
+          : [],
       });
       setPfxBase64('');
       setPfxPassword('');
@@ -499,6 +517,56 @@ export default function NfceConfigPage() {
                     </div>
                   </div>
                 </div>
+              </Card>
+
+              <Card title="Outras razões da loja (para NF-e de transferência)">
+                <div className="rounded-lg bg-indigo-50 border border-indigo-200 px-3 py-2 text-xs text-indigo-800 mb-3">
+                  Só pra loja que tem <b>mais de uma empresa</b> no mesmo endereço (ex.: Itanhaém = T.O. RISSUTTO 20 <b>e</b> LURDS 30).
+                  Na <b>transferência</b>, o sistema escolhe automaticamente a razão da ORIGEM cujo <b>CNPJ é da mesma empresa do DESTINO</b> — daí vira transferência de verdade. Deixe vazio na maioria das lojas.
+                </div>
+                {cfg.nfeIdentidadesExtras.map((idn, i) => {
+                  const upd = (patch: any) => setCfg({ ...cfg, nfeIdentidadesExtras: cfg.nfeIdentidadesExtras.map((x, j) => j === i ? { ...x, ...patch } : x) });
+                  const updEnd = (patch: any) => upd({ endereco: { ...idn.endereco, ...patch } });
+                  return (
+                    <div key={i} className="border-2 border-slate-200 rounded-lg p-3 mb-3">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-sm font-bold text-slate-700">Razão extra #{i + 1}</span>
+                        <button type="button" onClick={() => setCfg({ ...cfg, nfeIdentidadesExtras: cfg.nfeIdentidadesExtras.filter((_, j) => j !== i) })}
+                          className="text-xs text-rose-600 hover:underline">✕ Remover</button>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <Field label="CNPJ" value={idn.cnpj} onChange={(v) => upd({ cnpj: v })} placeholder="30.246.592/0001-97" />
+                        <Field label="Inscrição Estadual" value={idn.ie} onChange={(v) => upd({ ie: v })} />
+                        <Field label="Razão Social" value={idn.razaoSocial} onChange={(v) => upd({ razaoSocial: v })} placeholder="LURDS PLUS SIZE CONFECÇÕES" />
+                        <Field label="Nome Fantasia" value={idn.fantasia} onChange={(v) => upd({ fantasia: v })} />
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">Regime</label>
+                          <select value={idn.regime} onChange={(e) => upd({ regime: e.target.value })} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+                            <option value="1">1 — Simples Nacional</option>
+                            <option value="3">3 — Regime Normal</option>
+                          </select>
+                        </div>
+                      </div>
+                      <div className="mt-2 space-y-2">
+                        <Field label="Logradouro" value={idn.endereco.logradouro} onChange={(v) => updEnd({ logradouro: v })} />
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                          <Field label="Número" value={idn.endereco.numero} onChange={(v) => updEnd({ numero: v })} />
+                          <Field label="Bairro" value={idn.endereco.bairro} onChange={(v) => updEnd({ bairro: v })} />
+                          <Field label="CEP" value={idn.endereco.cep} onChange={(v) => updEnd({ cep: v })} placeholder="00000-000" />
+                        </div>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                          <Field label="Município" value={idn.endereco.municipio} onChange={(v) => updEnd({ municipio: v })} />
+                          <Field label="UF" value={idn.endereco.uf} onChange={(v) => updEnd({ uf: v })} placeholder="SP" />
+                          <Field label="Cód. IBGE" value={idn.endereco.codMunicipio} onChange={(v) => updEnd({ codMunicipio: v })} placeholder="3522109" />
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+                <button type="button" onClick={() => setCfg({ ...cfg, nfeIdentidadesExtras: [...cfg.nfeIdentidadesExtras, JSON.parse(JSON.stringify(EMPTY_IDENTIDADE))] })}
+                  className="text-sm font-bold text-indigo-700 border-2 border-indigo-300 rounded-lg px-3 py-1.5 hover:bg-indigo-50">
+                  + Adicionar outra razão
+                </button>
               </Card>
 
               <Card

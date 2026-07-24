@@ -288,6 +288,7 @@ export class SellersService {
     horarioTrabalho?: any;
     observacoes?: string;
     storeCodeOrigin?: string;
+    lojasAtuacao?: string[];
   }) {
     const name = (input.name || '').trim();
     if (!name) throw new BadRequestException('Nome é obrigatório.');
@@ -340,9 +341,12 @@ export class SellersService {
               : null,
           observacoes: input.observacoes || null,
           storeCodeOrigin: input.storeCodeOrigin || null,
+          lojasAtuacao: Array.isArray(input.lojasAtuacao) && input.lojasAtuacao.length
+            ? JSON.stringify(input.lojasAtuacao.map((s) => String(s).trim()).filter(Boolean))
+            : null,
         } as any,
       });
-      // Loja onde trabalha → entra sozinha na escolha de vendedora do PDV
+      // Loja(s) onde trabalha → entra sozinha na escolha de vendedora do PDV
       await this.syncPdvWhitelist(created.id, null);
       return created;
     } catch (e: any) {
@@ -365,39 +369,43 @@ export class SellersService {
     try {
       const s: any = await this.prisma.seller.findUnique({ where: { id: sellerId } });
       if (!s) return;
-      const codigo = String(s.wincredCodigo || s.id).trim();
+      const realCodigo = String(s.wincredCodigo || s.id).trim();
       const nome = String((s as any).apelido || s.name).trim();
-      const alvo = s.active ? String(s.storeCodeOrigin || '').trim() || null : null;
+      const origin = String(s.storeCodeOrigin || '').trim();
+      const normNome = (x: any) => String(x ?? '').trim().toUpperCase().replace(/\s+/g, ' ');
+      const nomesDela = new Set([normNome(s.name), normNome((s as any).apelido)].filter(Boolean));
+      // Código SINTÉTICO pras lojas VISITADAS (multi-loja): o wincredCodigo é da
+      // loja de origem e REPETE entre lojas (colidiria com outra vendedora).
+      // Prefixo "F" não-numérico nunca bate com código do Wincred. A comissão é
+      // por NOME, então o código aqui só identifica a linha da whitelist.
+      const codigoGuest = `F${String(s.id).replace(/-/g, '').slice(0, 18)}`;
 
-      if (!s.active) {
-        // BUG GRAVE (23/07): deleteMany({codigo}) apagava TODAS as lojas —
-        // o código de funcionária REPETE entre lojas (igual cliente), então
-        // desligar uma ficha varria vendedoras legítimas de outras lojas
-        // (Jundiaí ficou com 2). Agora só remove linha que é DELA de verdade:
-        // mesma loja da ficha OU mesmo nome/apelido.
-        const normNome = (x: any) => String(x ?? '').trim().toUpperCase().replace(/\s+/g, ' ');
-        const linhas: any[] = await (this.prisma as any).pdvActiveSeller.findMany({
-          where: { codigo },
-        });
-        const nomesDela = new Set([normNome(s.name), normNome((s as any).apelido)].filter(Boolean));
-        const lojaDela = String(s.storeCodeOrigin || '').trim();
-        const ids = linhas
-          .filter((r) => (lojaDela && r.storeCode === lojaDela) || nomesDela.has(normNome(r.nome)))
-          .map((r) => r.id);
-        if (ids.length) {
-          await (this.prisma as any).pdvActiveSeller.deleteMany({ where: { id: { in: ids } } });
-        }
-        return;
+      // Conjunto de lojas onde ela aparece no PDV (lojasAtuacao ∪ origem).
+      const lojas = new Set<string>();
+      if (s.active) {
+        let arr: any[] = [];
+        try { arr = s.lojasAtuacao ? JSON.parse(s.lojasAtuacao) : []; } catch { arr = []; }
+        if (Array.isArray(arr)) arr.forEach((l) => { const v = String(l || '').trim(); if (v) lojas.add(v); });
+        if (origin) lojas.add(origin);
       }
-      if (prevStoreCode && prevStoreCode !== alvo) {
-        await (this.prisma as any).pdvActiveSeller.deleteMany({
-          where: { codigo, storeCode: prevStoreCode },
-        });
+      const codigoPara = (loja: string) => (loja === origin ? realCodigo : codigoGuest);
+
+      // Linhas atuais DELA (por código real, sintético ou nome) — pra reconciliar.
+      const todas: any[] = await (this.prisma as any).pdvActiveSeller.findMany({
+        where: { OR: [{ codigo: realCodigo }, { codigo: codigoGuest }] },
+      });
+      const delas = todas.filter((r) => nomesDela.has(normNome(r.nome)) || lojas.has(r.storeCode));
+      // Remove as linhas dela que NÃO estão mais nas lojas-alvo (ou todas, se inativa).
+      const remover = delas.filter((r) => !lojas.has(r.storeCode)).map((r) => r.id);
+      if (remover.length) {
+        await (this.prisma as any).pdvActiveSeller.deleteMany({ where: { id: { in: remover } } });
       }
-      if (alvo) {
+      // Garante uma linha por loja-alvo.
+      for (const loja of lojas) {
+        const codigo = codigoPara(loja);
         await (this.prisma as any).pdvActiveSeller.upsert({
-          where: { storeCode_codigo: { storeCode: alvo, codigo } },
-          create: { storeCode: alvo, codigo, nome },
+          where: { storeCode_codigo: { storeCode: loja, codigo } },
+          create: { storeCode: loja, codigo, nome },
           update: { nome },
         });
       }
@@ -416,6 +424,7 @@ export class SellersService {
       cargo?: string;
       responsibleStoreId?: string | null;
       storeCodeOrigin?: string | null;
+      lojasAtuacao?: string[] | null;
       // Prontuario RH
       cpf?: string | null;
       rg?: string | null;
@@ -473,6 +482,11 @@ export class SellersService {
     // funcionárias. É a loja mostrada pra VENDEDORA (que não tem responsibleStore).
     if (input.storeCodeOrigin !== undefined) {
       data.storeCodeOrigin = String(input.storeCodeOrigin || '').trim() || null;
+    }
+    if (input.lojasAtuacao !== undefined) {
+      data.lojasAtuacao = Array.isArray(input.lojasAtuacao) && input.lojasAtuacao.length
+        ? JSON.stringify(input.lojasAtuacao.map((s) => String(s).trim()).filter(Boolean))
+        : null;
     }
 
     // ── PRONTUARIO RH ──

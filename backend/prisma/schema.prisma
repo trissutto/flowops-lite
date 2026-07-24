@@ -405,6 +405,10 @@ model Seller {
   wincredCodigo      String? @map("wincred_codigo")
   // Loja onde foi originalmente importada (pra agrupamento). Pode mudar.
   storeCodeOrigin    String? @map("store_code_origin")
+  // MULTI-LOJA (dono 24/07): vendedora que atende em VÁRIAS lojas sem precisar
+  // ser recriada em cada uma. JSON array de storeCodes — aparece no PDV de
+  // TODAS. Comissão soma sozinha (é por nome). Vazio = só a storeCodeOrigin.
+  lojasAtuacao       String? @map("lojas_atuacao") @db.Text
 
   // ── PRONTUARIO RH ────────────────────────────────────────────────
   cpf                String?  @db.VarChar(14)

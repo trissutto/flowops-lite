@@ -36,6 +36,7 @@ type Seller = {
   responsibleStore?: { id: string; code: string; name: string } | null;
   wincredCodigo?: string | null;
   storeCodeOrigin?: string | null;
+  lojasAtuacao?: string[] | null;
   // RH
   cpf?: string | null;
   rg?: string | null;
@@ -110,7 +111,12 @@ export default function ProntuarioPage() {
     setError(null);
     try {
       const r = await api<Seller>(`/sellers/${id}/detail`);
-      setData(r);
+      // lojasAtuacao pode vir como string JSON (raw) ou array — normaliza.
+      let la: string[] = [];
+      const raw: any = (r as any).lojasAtuacao;
+      if (Array.isArray(raw)) la = raw;
+      else if (typeof raw === 'string' && raw.trim()) { try { const p = JSON.parse(raw); if (Array.isArray(p)) la = p; } catch { /* ignora */ } }
+      setData({ ...r, lojasAtuacao: la });
     } catch (e: any) {
       setError(e?.message || 'Erro');
     } finally {
@@ -139,6 +145,7 @@ export default function ProntuarioPage() {
           name: data.name,
           apelido: data.apelido ?? null,
           storeCodeOrigin: data.storeCodeOrigin ?? null,
+          lojasAtuacao: data.lojasAtuacao ?? [],
           whatsapp: data.whatsapp,
           cargo: data.cargo,
           cpf: data.cpf,
@@ -307,7 +314,35 @@ export default function ProntuarioPage() {
                 ))}
               </select>
               <p className="text-[11px] text-slate-400 mt-1">
-                Ela entra sozinha na escolha de vendedora no PDV desta loja.
+                Loja PRINCIPAL. Ela entra sozinha na escolha de vendedora no PDV desta loja.
+              </p>
+            </Field>
+            <Field label="Também atua em (outras lojas)">
+              <div className="flex flex-wrap gap-1.5">
+                {lojas
+                  .filter((s) => s.code !== data.storeCodeOrigin)
+                  .map((s) => {
+                    const on = (data.lojasAtuacao || []).includes(s.code);
+                    return (
+                      <button
+                        key={s.code}
+                        type="button"
+                        onClick={() => {
+                          const cur = new Set(data.lojasAtuacao || []);
+                          if (on) cur.delete(s.code); else cur.add(s.code);
+                          update('lojasAtuacao', Array.from(cur));
+                        }}
+                        className={`text-[11px] px-2 py-1 rounded-full border transition ${
+                          on ? 'bg-emerald-600 border-emerald-600 text-white font-bold' : 'bg-white border-slate-300 text-slate-600 hover:bg-slate-50'
+                        }`}
+                      >
+                        {s.code} · {s.name}
+                      </button>
+                    );
+                  })}
+              </div>
+              <p className="text-[11px] text-slate-400 mt-1">
+                Marque outras lojas onde ela vende — aparece no PDV de todas, sem precisar recadastrar. A comissão soma sozinha (é por nome).
               </p>
             </Field>
             <Field label="WhatsApp">
