@@ -464,7 +464,10 @@ export class NfeTransferService {
     };
   }
 
-  private async loadStoreFiscal(storeCode: string, opts: { requireCert: boolean } = { requireCert: true }): Promise<StoreFiscal> {
+  private async loadStoreFiscal(
+    storeCode: string,
+    opts: { requireCert: boolean; identidade?: 'nfe' | 'base' } = { requireCert: true },
+  ): Promise<StoreFiscal> {
     const cfg = await this.prisma.nfceConfig.findUnique({ where: { storeCode } });
     if (!cfg) {
       throw new BadRequestException(`Loja ${storeCode} sem config fiscal (NfceConfig). Configure CNPJ/IE/endereço/certificado.`);
@@ -476,9 +479,12 @@ export class NfeTransferService {
     // NFC-e (alinhamento de máquina de cartão), a identidade INTEIRA tem que ser
     // a da NF-e — razão/IE/endereço NÃO caem nos dados da NFC-e (é outro CNPJ).
     // Loja normal (NF-e == NFC-e) não preenche os campos nfe* e usa os principais.
+    // identidade='base' (VENDA no PDV): usa SEMPRE os dados da NFC-e (mesmo
+    // estabelecimento que vendeu). Só a TRANSFERÊNCIA usa a identidade própria.
     const nfeCnpjD = this.digits(String(cfg.nfeCnpj || ''));
     const baseCnpjD = this.digits(String(cfg.cnpj || ''));
-    const identidadePropria = nfeCnpjD.length === 14 && nfeCnpjD !== baseCnpjD;
+    const identidadePropria =
+      opts.identidade !== 'base' && nfeCnpjD.length === 14 && nfeCnpjD !== baseCnpjD;
 
     let cnpjSrc: string;
     let ieSrc: string;
@@ -891,6 +897,237 @@ export class NfeTransferService {
       ide + emit + dest + autXML + det + total + transp + pag + infAdic +
       `</infNFe>`;
 
+    return `<?xml version="1.0" encoding="UTF-8"?><NFe xmlns="http://www.portalfiscal.inf.br/nfe">${infNFe}</NFe>`;
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // NF-e de VENDA no PDV (mod 55) — CASO EXTREMO: a cliente precisa da nota
+  // grande no lugar do cupom (dono 24/07). NUNCA os dois. Identidade = a MESMA
+  // da NFC-e (mesmo estabelecimento vendeu). Valores a PREÇO DE VENDA.
+  // ══════════════════════════════════════════════════════════════════════════
+  async emitVendaForSale(
+    saleId: string,
+    opts: {
+      userId?: string | null;
+      customer?: {
+        cpfCnpj?: string; nome?: string; endereco?: string; numero?: string;
+        bairro?: string; cidade?: string; uf?: string; cep?: string; codMunicipio?: string;
+      };
+    } = {},
+  ) {
+    const sale: any = await (this.prisma as any).pdvSale.findUnique({
+      where: { id: saleId },
+      include: { items: true },
+    });
+    if (!sale) throw new NotFoundException('Venda não encontrada');
+    if (sale.status !== 'finalized') throw new BadRequestException('A venda precisa estar finalizada.');
+
+    const linkId = `venda:${saleId}`;
+    const ja = await this.prisma.nfeDoc.findFirst({ where: { shipmentId: linkId, status: 'authorized' } });
+    if (ja) return { ok: true, jaEmitida: true, doc: this.publicDoc(ja) };
+
+    // Destinatário (obrigatório na mod 55) — request tem prioridade, cai no snapshot da venda.
+    const c = opts.customer || {};
+    const cpfCnpj = this.digits(c.cpfCnpj || sale.customerCpf || '');
+    const nome = String(c.nome || sale.customerName || '').trim();
+    const endereco = String(c.endereco || sale.customerEndereco || '').trim();
+    const numero = String(c.numero || sale.customerNumero || 'S/N').trim();
+    const bairro = String(c.bairro || sale.customerBairro || '').trim();
+    const cidade = String(c.cidade || sale.customerCidade || '').trim();
+    const uf = String(c.uf || sale.customerUf || '').trim().toUpperCase().slice(0, 2);
+    const cep = this.digits(c.cep || sale.customerCep || '');
+    const codMun = this.digits(c.codMunicipio || '');
+    const faltam: string[] = [];
+    if (cpfCnpj.length !== 11 && cpfCnpj.length !== 14) faltam.push('CPF/CNPJ');
+    if (nome.length < 2) faltam.push('nome');
+    if (!endereco) faltam.push('logradouro');
+    if (!bairro) faltam.push('bairro');
+    if (!cidade) faltam.push('cidade');
+    if (uf.length !== 2) faltam.push('UF');
+    if (cep.length !== 8) faltam.push('CEP');
+    if (codMun.length !== 7) faltam.push('código IBGE do município (vem do CEP)');
+    if (faltam.length) throw new BadRequestException(`Dados da cliente incompletos pra NF-e: ${faltam.join(', ')}.`);
+
+    // Identidade fiscal = a da NFC-e (mesmo CNPJ que vendeu). NÃO usa nfe* de transferência.
+    const origem = await this.loadStoreFiscal(sale.storeCode, { requireCert: true, identidade: 'base' });
+    const tpAmb = origem.ambiente;
+    const serie = '1';
+
+    // GUARD "NUNCA OS 2": se a venda tem NFC-e autorizada, cancela — só dentro
+    // dos 30 min que a SEFAZ permite. Fora do prazo, ABORTA (evita duplicidade).
+    if (sale.nfceStatus === 'authorized' && sale.nfceChave && sale.nfceProtocolo) {
+      const emitidaEm = sale.nfceAutorizadaEm ? new Date(sale.nfceAutorizadaEm).getTime() : 0;
+      const min = emitidaEm ? (Date.now() - emitidaEm) / 60000 : 999;
+      if (min > 30) {
+        throw new BadRequestException('O cupom (NFC-e) desta venda já passou dos 30 min pra cancelar na SEFAZ. Não dá pra emitir a NF-e sem duplicar — fale com o contador.');
+      }
+      const canc = await cancelNfceSefazSp({
+        chave: sale.nfceChave, protocolo: sale.nfceProtocolo,
+        justificativa: 'Substituicao do cupom fiscal por NF-e a pedido do cliente',
+        cnpj: origem.cnpj, ambiente: tpAmb,
+        pfxBase64: origem.certPfxB64, pfxPassword: origem.certPfxPass,
+      });
+      const okc = canc.success && (canc.cStat === '135' || canc.cStat === '155');
+      if (!okc) {
+        throw new BadRequestException(`Não cancelei o cupom pra emitir a NF-e (cStat ${canc.cStat}: ${canc.xMotivo || canc.error}). Abortado pra não duplicar.`);
+      }
+      await (this.prisma as any).pdvSale.update({
+        where: { id: saleId },
+        data: { nfceStatus: 'cancelled', nfceCanceladaEm: new Date(), nfceCancelamentoMotivo: 'Substituida por NF-e (nota grande)' },
+      });
+    }
+
+    // Itens a PREÇO DE VENDA (não custo).
+    const interestadual = origem.ender.uf !== uf;
+    const cfop = interestadual ? '6102' : '5102';
+    const items = (sale.items as any[]).map((it) => ({
+      sku: String(it.sku || '').trim(),
+      ean: this.gtinValido(String(it.ean || '').trim()),
+      xProd: String(it.descricao || it.sku).trim().slice(0, 120),
+      ncm: this.normNcm(it.ncm, it.sku, []),
+      cfop, qty: it.qty || 1,
+      vUn: Math.round((it.precoUnit || 0) * 100) / 100,
+      vProd: Math.round((it.total || 0) * 100) / 100,
+    }));
+    const valorTotal = items.reduce((s, i) => s + i.vProd, 0);
+
+    await this.garantirContinuacao(origem.storeCode, origem.cnpj, serie);
+    let numero = await this.seq.next(origem.storeCode, serie, { start: this.startPadraoPara(origem.cnpj, serie) });
+    const cUF = CUF_BY_UF[origem.ender.uf] || origem.ender.codMunicipio.slice(0, 2);
+    const natOp = 'VENDA DE MERCADORIA';
+    const dest = { cpfCnpj, nome, endereco, numero, bairro, cidade, uf, cep, codMun };
+
+    const doc = await this.prisma.nfeDoc.create({
+      data: {
+        shipmentId: linkId, fromStoreCode: sale.storeCode, toStoreCode: sale.storeCode,
+        modelo: '55', serie, numero, cNF: '', chave: '', tpAmb, natOp, cfop,
+        valorTotalCents: Math.round(valorTotal * 100), status: 'pending',
+        emittedByUserId: opts.userId ?? null,
+      },
+    });
+
+    const MAX = Number(process.env.NFE_539_MAX_RETRY ?? 30);
+    let res: any = null;
+    let chave = '';
+    let cNF = '';
+    for (let t = 0; ; t++) {
+      const dhEmi = this.dhEmiNow();
+      cNF = crypto.randomInt(10_000_000, 99_999_999).toString();
+      chave = this.buildChave({ cUF, cnpj: origem.cnpj, serie, numero, cNF, dataEmissao: new Date() });
+      const xml = this.buildVendaXml({ chave, cUF, cNF, serie, numero, dhEmi, tpAmb, natOp, cfop, origem, dest, interestadual, items, valorTotal, saleRef: String(sale.id).slice(0, 8) });
+      const xmlMin = xml.replace(/>\s+</g, '><').trim();
+      let xmlAssinado: string;
+      try {
+        xmlAssinado = signXmlNfeWithA1({ xml: xmlMin, pfxBase64: origem.certPfxB64, pfxPassword: origem.certPfxPass });
+      } catch (e: any) {
+        await this.prisma.nfeDoc.update({ where: { id: doc.id }, data: { status: 'error', numero, cNF, chave, erro: `Assinatura: ${e?.message || e}` } });
+        throw new BadRequestException(`Falha ao assinar NF-e: ${e?.message || e}`);
+      }
+      await this.prisma.nfeDoc.update({ where: { id: doc.id }, data: { numero, cNF, chave, status: 'signed', xmlEnviado: xmlAssinado } });
+      res = await transmitNfeSefazSp({ xmlAssinado, ambiente: tpAmb, pfxBase64: origem.certPfxB64, pfxPassword: origem.certPfxPass, endpointOverride: SEFAZ_SP_NFE_ENDPOINTS[tpAmb].autorizacao });
+      const okk = res.success && (res.cStat === '100' || res.cStat === '150');
+      if (okk) break;
+      if ((res.cStat === '539' || res.cStat === '204') && t < MAX) { numero = await this.seq.next(origem.storeCode, serie); continue; }
+      if (res.cStat === '778' && t < MAX && this.corrigirNcmInvalido(items, res.xMotivo)) continue;
+      break;
+    }
+    const autorizada = res.success && (res.cStat === '100' || res.cStat === '150');
+    const updated = await this.prisma.nfeDoc.update({
+      where: { id: doc.id },
+      data: {
+        status: autorizada ? 'authorized' : 'rejected', cStat: res.cStat, xMotivo: res.xMotivo,
+        protocolo: res.protocolo ?? null, dhRecbto: res.dhRecbto ?? null,
+        xmlAutorizado: res.xmlAutorizado ?? null, xmlResposta: res.xmlResposta ?? null,
+        erro: autorizada ? null : res.xMotivo || res.error || 'Rejeitada',
+      },
+    });
+    return { ok: autorizada, doc: this.publicDoc(updated), cStat: res.cStat, xMotivo: res.xMotivo };
+  }
+
+  private buildVendaXml(p: {
+    chave: string; cUF: string; cNF: string; serie: string; numero: number;
+    dhEmi: string; tpAmb: '1' | '2'; natOp: string; cfop: string;
+    origem: StoreFiscal;
+    dest: { cpfCnpj: string; nome: string; endereco: string; numero: string; bairro: string; cidade: string; uf: string; cep: string; codMun: string };
+    interestadual: boolean;
+    items: Array<{ sku: string; ean: string; xProd: string; ncm: string; cfop: string; qty: number; vUn: number; vProd: number }>;
+    valorTotal: number; saleRef: string;
+  }): string {
+    const homolog = p.tpAmb === '2';
+    const destNome = homolog ? HOMOLOG_FRASE : (p.dest.nome || 'CONSUMIDOR');
+    const idDest = p.interestadual ? '2' : '1';
+    const crt3 = String(p.origem.regime || '1') === '3';
+
+    const ide =
+      `<ide><cUF>${p.cUF}</cUF><cNF>${p.cNF.padStart(8, '0')}</cNF><natOp>${this.esc(p.natOp)}</natOp>` +
+      `<mod>55</mod><serie>${p.serie}</serie><nNF>${p.numero}</nNF><dhEmi>${p.dhEmi}</dhEmi><dhSaiEnt>${p.dhEmi}</dhSaiEnt>` +
+      `<tpNF>1</tpNF><idDest>${idDest}</idDest><cMunFG>${p.origem.ender.codMunicipio}</cMunFG><tpImp>1</tpImp>` +
+      `<tpEmis>1</tpEmis><cDV>${p.chave.slice(-1)}</cDV><tpAmb>${p.tpAmb}</tpAmb><finNFe>1</finNFe>` +
+      `<indFinal>1</indFinal><indPres>1</indPres><procEmi>0</procEmi><verProc>FlowOps-NFe-1.0</verProc></ide>`;
+
+    const emit =
+      `<emit><CNPJ>${p.origem.cnpj}</CNPJ><xNome>${this.esc(p.origem.razaoSocial)}</xNome>` +
+      (p.origem.fantasia ? `<xFant>${this.esc(p.origem.fantasia)}</xFant>` : '') +
+      `<enderEmit>${this.buildEnder(p.origem.ender)}</enderEmit><IE>${p.origem.ie}</IE><CRT>${p.origem.regime || '1'}</CRT></emit>`;
+
+    const isCnpj = p.dest.cpfCnpj.length === 14;
+    const docTag = isCnpj ? `<CNPJ>${p.dest.cpfCnpj}</CNPJ>` : `<CPF>${p.dest.cpfCnpj}</CPF>`;
+    const enderDest =
+      `<enderDest><xLgr>${this.esc(p.dest.endereco)}</xLgr><nro>${this.esc(p.dest.numero || 'S/N')}</nro>` +
+      `<xBairro>${this.esc(p.dest.bairro)}</xBairro><cMun>${p.dest.codMun}</cMun><xMun>${this.esc(p.dest.cidade)}</xMun>` +
+      `<UF>${p.dest.uf}</UF><CEP>${p.dest.cep}</CEP><cPais>1058</cPais><xPais>BRASIL</xPais></enderDest>`;
+    const dest = `<dest>${docTag}<xNome>${this.esc(destNome)}</xNome>${enderDest}<indIEDest>9</indIEDest></dest>`;
+
+    const autXmlCnpj = String(process.env.NFE_AUTXML_CNPJ ?? '11145597000189').replace(/\D/g, '');
+    const autXML = autXmlCnpj ? `<autXML><CNPJ>${autXmlCnpj}</CNPJ></autXML>` : '';
+
+    const aliqInterna = Number(process.env.NFE_ICMS_ALIQ_INTERNA ?? 18);
+    const aliqInter = Number(process.env.NFE_ICMS_ALIQ_INTERESTADUAL ?? 12);
+    let totBC = 0;
+    let totICMS = 0;
+    const det = p.items
+      .map((it, idx) => {
+        const xProd = homolog ? HOMOLOG_FRASE : it.xProd;
+        const prod =
+          `<prod><cProd>${this.esc(it.sku)}</cProd><cEAN>${it.ean}</cEAN><xProd>${this.esc(xProd)}</xProd>` +
+          `<NCM>${it.ncm}</NCM><CFOP>${it.cfop}</CFOP><uCom>UN</uCom><qCom>${it.qty.toFixed(4)}</qCom>` +
+          `<vUnCom>${this.money(it.vUn)}</vUnCom><vProd>${this.money(it.vProd)}</vProd>` +
+          `<cEANTrib>${it.ean}</cEANTrib><uTrib>UN</uTrib><qTrib>${it.qty.toFixed(4)}</qTrib>` +
+          `<vUnTrib>${this.money(it.vUn)}</vUnTrib><indTot>1</indTot></prod>`;
+        let icms: string;
+        if (crt3) {
+          const pIcms = p.interestadual ? aliqInter : aliqInterna;
+          const vBC = Math.round(it.vProd * 100) / 100;
+          const vIcms = Math.round(vBC * pIcms) / 100;
+          totBC += vBC;
+          totICMS += vIcms;
+          icms = `<ICMS><ICMS00><orig>0</orig><CST>00</CST><modBC>3</modBC><vBC>${this.money(vBC)}</vBC><pICMS>${pIcms.toFixed(4)}</pICMS><vICMS>${this.money(vIcms)}</vICMS></ICMS00></ICMS>`;
+        } else {
+          // Simples Nacional — CSOSN 102 (tributada, sem crédito), igual à NFC-e.
+          icms = `<ICMS><ICMSSN102><orig>0</orig><CSOSN>102</CSOSN></ICMSSN102></ICMS>`;
+        }
+        const pisCofins = crt3
+          ? `<PIS><PISAliq><CST>01</CST><vBC>0.00</vBC><pPIS>0.0000</pPIS><vPIS>0.00</vPIS></PISAliq></PIS><COFINS><COFINSAliq><CST>01</CST><vBC>0.00</vBC><pCOFINS>0.0000</pCOFINS><vCOFINS>0.00</vCOFINS></COFINSAliq></COFINS>`
+          : `<PIS><PISNT><CST>07</CST></PISNT></PIS><COFINS><COFINSNT><CST>07</CST></COFINSNT></COFINS>`;
+        return `<det nItem="${idx + 1}">${prod}<imposto>${icms}${pisCofins}</imposto></det>`;
+      })
+      .join('');
+
+    const vTot = this.money(p.valorTotal);
+    const total =
+      `<total><ICMSTot><vBC>${this.money(totBC)}</vBC><vICMS>${this.money(totICMS)}</vICMS><vICMSDeson>0.00</vICMSDeson>` +
+      `<vFCP>0.00</vFCP><vBCST>0.00</vBCST><vST>0.00</vST><vFCPST>0.00</vFCPST><vFCPSTRet>0.00</vFCPSTRet>` +
+      `<vProd>${vTot}</vProd><vFrete>0.00</vFrete><vSeg>0.00</vSeg><vDesc>0.00</vDesc><vII>0.00</vII>` +
+      `<vIPI>0.00</vIPI><vIPIDevol>0.00</vIPIDevol><vPIS>0.00</vPIS><vCOFINS>0.00</vCOFINS><vOutro>0.00</vOutro><vNF>${vTot}</vNF></ICMSTot></total>`;
+
+    const transp = `<transp><modFrete>9</modFrete></transp>`;
+    const pag = `<pag><detPag><tPag>99</tPag><vPag>${vTot}</vPag></detPag></pag>`;
+    const cpl = crt3
+      ? `Venda ref ${p.saleRef}.`
+      : `Venda ref ${p.saleRef}. DOCUMENTO EMITIDO POR ME OU EPP OPTANTE PELO SIMPLES NACIONAL.`;
+    const infAdic = `<infAdic><infCpl>${this.esc(cpl)}</infCpl></infAdic>`;
+
+    const infNFe = `<infNFe versao="4.00" Id="NFe${p.chave}">${ide}${emit}${dest}${autXML}${det}${total}${transp}${pag}${infAdic}</infNFe>`;
     return `<?xml version="1.0" encoding="UTF-8"?><NFe xmlns="http://www.portalfiscal.inf.br/nfe">${infNFe}</NFe>`;
   }
 }
