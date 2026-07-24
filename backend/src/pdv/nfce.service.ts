@@ -88,6 +88,13 @@ export class NfceService {
       certificadoCarregado: !!cfg.certPfxB64,
       ready:
         !!cfg.cnpj && !!cfg.ie && !!cfg.cscToken && !!cfg.certPfxB64,
+      // Identidade da NF-e quando difere da NFC-e (vazio = usa os mesmos dados)
+      nfeCnpj: cfg.nfeCnpj || '',
+      nfeIe: cfg.nfeIe || '',
+      nfeRazaoSocial: cfg.nfeRazaoSocial || '',
+      nfeFantasia: cfg.nfeFantasia || '',
+      nfeRegime: cfg.nfeRegime || '',
+      nfeEndereco: cfg.nfeEndereco ? JSON.parse(cfg.nfeEndereco) : null,
     };
   }
 
@@ -140,6 +147,13 @@ export class NfceService {
       numeroAtual: number;
       certPfxB64: string;
       certPfxPass: string;
+      // Identidade da NF-e quando difere da NFC-e (todos opcionais)
+      nfeCnpj: string;
+      nfeIe: string;
+      nfeRazaoSocial: string;
+      nfeFantasia: string;
+      nfeRegime: string;
+      nfeEndereco: any;
     }>,
   ) {
     if (!storeCode) throw new BadRequestException('storeCode obrigatório');
@@ -177,6 +191,17 @@ export class NfceService {
     if (input.cscToken) data.cscToken = input.cscToken.replace(/[^\x21-\x7E]/g, '');
     if (input.certPfxB64) data.certPfxB64 = input.certPfxB64;
     if (input.certPfxPass) data.certPfxPass = input.certPfxPass;
+    // Identidade da NF-e (nota grande) quando difere da NFC-e — string vazia
+    // limpa o override (volta a usar os dados da NFC-e).
+    if (input.nfeCnpj != null) data.nfeCnpj = input.nfeCnpj.replace(/\D/g, '') || null;
+    if (input.nfeIe != null) data.nfeIe = input.nfeIe.replace(/\D/g, '') || null;
+    if (input.nfeRazaoSocial != null) data.nfeRazaoSocial = input.nfeRazaoSocial.trim() || null;
+    if (input.nfeFantasia != null) data.nfeFantasia = input.nfeFantasia.trim() || null;
+    if (input.nfeRegime != null) data.nfeRegime = input.nfeRegime || null;
+    if (input.nfeEndereco != null) {
+      const hasEnd = input.nfeEndereco && Object.values(input.nfeEndereco).some((v) => String(v || '').trim());
+      data.nfeEndereco = hasEnd ? JSON.stringify(input.nfeEndereco) : null;
+    }
 
     if (existing) {
       await (this.prisma as any).nfceConfig.update({

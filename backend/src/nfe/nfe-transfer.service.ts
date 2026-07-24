@@ -462,61 +462,72 @@ export class NfeTransferService {
       throw new BadRequestException(`Loja ${storeCode} sem config fiscal (NfceConfig). Configure CNPJ/IE/endereço/certificado.`);
     }
 
-    // CERTIFICADO POR EMPRESA (dono 23/07): são só 2 A1 na rede — um por
-    // RAIZ de CNPJ (LURDS 30.246.592 e T.O. RISSUTTO 20.x). O e-CNPJ da
-    // matriz assina as notas de TODAS as filiais da mesma raiz. Se a loja
-    // não tem cert próprio na config, herda o de outra loja da MESMA raiz
-    // que tenha — sobe o certificado UMA vez e a empresa inteira emite.
-    let certPfxB64 = cfg.certPfxB64 as string | null;
-    let certPfxPass = cfg.certPfxPass as string | null;
-    if ((!certPfxB64 || !certPfxPass) && cfg.cnpj) {
-      const raiz = this.digits(cfg.cnpj as string).slice(0, 8);
-      if (raiz.length === 8) {
-        const irmas = await this.prisma.nfceConfig.findMany({
-          where: {
-            certPfxB64: { not: null },
-            certPfxPass: { not: null },
-            cnpj: { not: null },
-          },
-          select: { storeCode: true, cnpj: true, certPfxB64: true, certPfxPass: true },
-        });
-        const doadora = irmas.find((c) => this.digits(String(c.cnpj)).slice(0, 8) === raiz);
-        if (doadora) {
-          certPfxB64 = doadora.certPfxB64 as string;
-          certPfxPass = doadora.certPfxPass as string;
-          this.logger?.log?.(
-            `[nfe] loja ${storeCode} usando certificado da loja ${doadora.storeCode} (mesma raiz de CNPJ ${raiz})`,
-          );
-        }
+    // IDENTIDADE DA NF-e (dono 24/07): a NF-e/DANFE usa os DADOS REAIS da loja
+    // na Receita. Quando a NFC-e (térmica) é emitida sob o CNPJ de outra empresa
+    // (alinhamento da máquina de cartão), os campos nfe* trazem o CNPJ real —
+    // cada um com FALLBACK pro campo principal (loja normal não preenche nada).
+    const cnpjSrc = (cfg.nfeCnpj || cfg.cnpj || '') as string;
+    const ieSrc = (cfg.nfeIe || cfg.ie || '') as string;
+    const razaoSrc = (cfg.nfeRazaoSocial || cfg.razaoSocial || '') as string;
+    const fantasiaSrc = (cfg.nfeFantasia || cfg.fantasia || cfg.razaoSocial || '') as string;
+    const regimeSrc = (cfg.nfeRegime || cfg.regime || '1') as string;
+    const enderecoSrc = (cfg.nfeEndereco || cfg.endereco || '') as string;
+    const raizNfe = this.digits(cnpjSrc).slice(0, 8);
+
+    // CERTIFICADO POR EMPRESA: um A1 por RAIZ de CNPJ. O cert precisa bater com
+    // a raiz do CNPJ que VAI EMITIR (cnpjSrc) — não com o CNPJ da NFC-e. Loja
+    // com CNPJ-NFC-e de outra raiz NÃO usa o próprio cert pra NF-e.
+    let certPfxB64: string | null = null;
+    let certPfxPass: string | null = null;
+    // 1. cert próprio, SÓ se a raiz dele (= raiz do cnpj do config) casar com a raiz da NF-e
+    if (cfg.certPfxB64 && cfg.certPfxPass && this.digits(String(cfg.cnpj)).slice(0, 8) === raizNfe) {
+      certPfxB64 = cfg.certPfxB64 as string;
+      certPfxPass = cfg.certPfxPass as string;
+    }
+    // 2. senão, herda o A1 da MATRIZ (/0001) da raiz da NF-e (qualquer irmã com cert)
+    if ((!certPfxB64 || !certPfxPass) && raizNfe.length === 8) {
+      const irmas = await this.prisma.nfceConfig.findMany({
+        where: { certPfxB64: { not: null }, certPfxPass: { not: null }, cnpj: { not: null } },
+        select: { storeCode: true, cnpj: true, certPfxB64: true, certPfxPass: true },
+      });
+      const daRaiz = irmas.filter((c) => this.digits(String(c.cnpj)).slice(0, 8) === raizNfe);
+      const doadora =
+        daRaiz.find((c) => this.digits(String(c.cnpj)).slice(8, 12) === '0001') || daRaiz[0];
+      if (doadora) {
+        certPfxB64 = doadora.certPfxB64 as string;
+        certPfxPass = doadora.certPfxPass as string;
+        this.logger?.log?.(
+          `[nfe] loja ${storeCode} usando certificado da loja ${doadora.storeCode} (matriz da raiz ${raizNfe})`,
+        );
       }
     }
 
     const faltando: string[] = [];
-    if (!cfg.cnpj) faltando.push('CNPJ');
-    if (!cfg.ie) faltando.push('IE');
-    if (opts.requireCert && (!certPfxB64 || !certPfxPass)) faltando.push('certificado A1 (nem próprio, nem de loja da mesma raiz de CNPJ)');
-    if (!cfg.endereco) faltando.push('endereço');
+    if (!cnpjSrc) faltando.push('CNPJ');
+    if (!ieSrc) faltando.push('IE');
+    if (opts.requireCert && (!certPfxB64 || !certPfxPass)) faltando.push('certificado A1 (nem próprio, nem da matriz da mesma raiz de CNPJ)');
+    if (!enderecoSrc) faltando.push('endereço');
     if (faltando.length) {
-      throw new BadRequestException(`Loja ${storeCode} sem ${faltando.join(', ')} na config fiscal`);
+      throw new BadRequestException(`Loja ${storeCode} sem ${faltando.join(', ')} na config fiscal da NF-e`);
     }
     let ender: any;
     try {
-      ender = JSON.parse(cfg.endereco as string);
+      ender = JSON.parse(enderecoSrc);
     } catch {
-      throw new BadRequestException(`Endereço fiscal da loja ${storeCode} inválido (JSON)`);
+      throw new BadRequestException(`Endereço fiscal da NF-e da loja ${storeCode} inválido (JSON)`);
     }
     if (!ender?.codMunicipio) {
-      throw new BadRequestException(`Loja ${storeCode} sem codMunicipio (IBGE) no endereço fiscal`);
+      throw new BadRequestException(`Loja ${storeCode} sem codMunicipio (IBGE) no endereço fiscal da NF-e`);
     }
     // PRÉ-VALIDAÇÃO dos padrões do schema — erro aqui rejeitava o LOTE com
     // cStat 225 genérico e queimava número (23/07: CEP de Itanhaém com 9
     // dígitos "117466694" rejeitou 2298–2304). Agora a PRÉVIA já acusa o
     // campo errado em português, antes de numerar/assinar.
     const problemas: string[] = [];
-    const cnpjD = this.digits(cfg.cnpj as string);
-    if (cnpjD.length !== 14) problemas.push(`CNPJ "${cfg.cnpj}" inválido (precisa de 14 dígitos)`);
-    const ieD = this.digits(cfg.ie as string);
-    if (ieD.length < 2 || ieD.length > 14) problemas.push(`IE "${cfg.ie}" inválida (2–14 dígitos)`);
+    const cnpjD = this.digits(cnpjSrc);
+    if (cnpjD.length !== 14) problemas.push(`CNPJ "${cnpjSrc}" inválido (precisa de 14 dígitos)`);
+    const ieD = this.digits(ieSrc);
+    if (ieD.length < 2 || ieD.length > 14) problemas.push(`IE "${ieSrc}" inválida (2–14 dígitos)`);
     const cepD = this.digits(String(ender.cep || ''));
     if (cepD.length !== 8) problemas.push(`CEP "${ender.cep}" inválido (precisa de 8 dígitos — está com ${cepD.length})`);
     if (!/^\d{7}$/.test(String(ender.codMunicipio).trim())) {
@@ -524,18 +535,18 @@ export class NfeTransferService {
     }
     if (problemas.length) {
       throw new BadRequestException(
-        `Config fiscal da loja ${storeCode} com dados inválidos pra NF-e: ${problemas.join(' · ')}. Corrija no cadastro fiscal e tente de novo.`,
+        `Config fiscal da NF-e da loja ${storeCode} com dados inválidos: ${problemas.join(' · ')}. Corrija no cadastro fiscal e tente de novo.`,
       );
     }
     return {
       storeCode,
-      cnpj: this.digits(cfg.cnpj as string),
-      ie: this.digits(cfg.ie as string),
-      razaoSocial: (cfg.razaoSocial || '').trim(),
-      fantasia: (cfg.fantasia || cfg.razaoSocial || '').trim(),
+      cnpj: this.digits(cnpjSrc),
+      ie: this.digits(ieSrc),
+      razaoSocial: razaoSrc.trim(),
+      fantasia: fantasiaSrc.trim(),
       uf: (cfg.uf || ender.uf || 'SP').toUpperCase(),
       ambiente: (cfg.ambiente === '1' ? '1' : '2') as '1' | '2',
-      regime: cfg.regime || '1',
+      regime: regimeSrc,
       certPfxB64: certPfxB64 as string,
       certPfxPass: certPfxPass as string,
       ender: {
@@ -560,7 +571,9 @@ export class NfeTransferService {
    *  config fiscal — consumiu numeração da LURDS matriz). Ajuste via env
    *  NFE_LOJAS_BLOQUEADAS (lista separada por vírgula; vazio = nenhuma). */
   private checarLojaBloqueada(shipment: { fromStoreCode: string; toStoreCode: string }) {
-    const bloqueadas = String(process.env.NFE_LOJAS_BLOQUEADAS ?? '06')
+    // Dono 24/07: liberar emissão de TODAS as unidades (default vazio). O
+    // bloqueio por loja fica só como válvula manual via NFE_LOJAS_BLOQUEADAS.
+    const bloqueadas = String(process.env.NFE_LOJAS_BLOQUEADAS ?? '')
       .split(',').map((s) => s.trim()).filter(Boolean);
     for (const code of [shipment.fromStoreCode, shipment.toStoreCode]) {
       if (bloqueadas.includes(String(code))) {
