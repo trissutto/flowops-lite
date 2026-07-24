@@ -136,6 +136,20 @@ export class DanfePdfService {
         const enderD = this.block(dest, 'enderDest');
         const tot = this.block(xml, 'ICMSTot');
         const infCpl = this.tag(this.block(xml, 'infAdic'), 'infCpl');
+        // Transporte + volumes (modFrete/peso) — lidos do XML.
+        const transpB = this.block(xml, 'transp');
+        const volB = this.block(transpB, 'vol');
+        const modFrete = this.tag(transpB, 'modFrete');
+        const modFreteLabel: Record<string, string> = {
+          '0': '0 - REMETENTE', '1': '1 - DESTINAT.', '2': '2 - TERCEIROS',
+          '3': '3 - PRÓPRIO/REM.', '4': '4 - PRÓPRIO/DEST.', '9': '9 - SEM FRETE',
+        };
+        const qVol = this.tag(volB, 'qVol');
+        const espVol = this.tag(volB, 'esp');
+        const pesoL = this.tag(volB, 'pesoL');
+        const pesoB = this.tag(volB, 'pesoB');
+        const fmtPeso = (v: string) =>
+          v ? Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 3, maximumFractionDigits: 3 }) : '';
         const chave = String(nfe.chave || '').replace(/\D/g, '');
         const homolog = String(nfe.tpAmb) === '2';
         const autorizada = nfe.status === 'authorized';
@@ -323,13 +337,14 @@ export class DanfePdfService {
         // ── TRANSPORTADOR / VOLUMES ──────────────────────────────────────
         this.section(doc, M, y, 'TRANSPORTADOR / VOLUMES TRANSPORTADOS');
         y += 7;
-        // linha A
-        this.cell(doc, M, y, IW * 0.34, rowH, 'RAZÃO SOCIAL', '');
-        this.cell(doc, M + IW * 0.34, y, IW * 0.14, rowH, 'FRETE POR CONTA', '9 - SEM FRETE', { fs: 6.5 });
+        // linha A — transporte próprio (3/4) → transportador = o próprio emitente
+        const transpProprio = modFrete === '3' || modFrete === '4';
+        this.cell(doc, M, y, IW * 0.34, rowH, 'RAZÃO SOCIAL', transpProprio ? this.tag(emit, 'xNome') : '', { fs: 6.5 });
+        this.cell(doc, M + IW * 0.34, y, IW * 0.14, rowH, 'FRETE POR CONTA', modFreteLabel[modFrete] || modFrete || '', { fs: 6.5 });
         this.cell(doc, M + IW * 0.48, y, IW * 0.13, rowH, 'CÓDIGO ANTT', '');
         this.cell(doc, M + IW * 0.61, y, IW * 0.13, rowH, 'PLACA DO VEÍCULO', '');
-        this.cell(doc, M + IW * 0.74, y, IW * 0.06, rowH, 'UF', '');
-        this.cell(doc, M + IW * 0.80, y, IW * 0.20, rowH, 'CNPJ / CPF', '');
+        this.cell(doc, M + IW * 0.74, y, IW * 0.06, rowH, 'UF', transpProprio ? this.tag(this.block(emit, 'enderEmit'), 'UF') : '', { fs: 7, align: 'center' });
+        this.cell(doc, M + IW * 0.80, y, IW * 0.20, rowH, 'CNPJ / CPF', transpProprio ? this.fmtCnpj(this.tag(emit, 'CNPJ')) : '', { fs: 7 });
         y += rowH;
         // linha B
         this.cell(doc, M, y, IW * 0.48, rowH, 'ENDEREÇO', '');
@@ -337,14 +352,13 @@ export class DanfePdfService {
         this.cell(doc, M + IW * 0.74, y, IW * 0.06, rowH, 'UF', '');
         this.cell(doc, M + IW * 0.80, y, IW * 0.20, rowH, 'INSCRIÇÃO ESTADUAL', '');
         y += rowH;
-        // volumes
-        const totalPecas = dets.reduce((s, it) => s + Number(it.qtd || 0), 0);
-        this.cell(doc, M, y, IW * 0.14, rowH, 'QUANTIDADE', String(totalPecas), { fs: 7 });
-        this.cell(doc, M + IW * 0.14, y, IW * 0.24, rowH, 'ESPÉCIE', 'VOLUME(S)', { fs: 7 });
+        // volumes — qVol/esp/peso lidos do XML (peso = nº peças × 0,25 kg)
+        this.cell(doc, M, y, IW * 0.14, rowH, 'QUANTIDADE', qVol || '1', { fs: 7 });
+        this.cell(doc, M + IW * 0.14, y, IW * 0.24, rowH, 'ESPÉCIE', espVol || 'VOLUME', { fs: 7 });
         this.cell(doc, M + IW * 0.38, y, IW * 0.20, rowH, 'MARCA', '');
         this.cell(doc, M + IW * 0.58, y, IW * 0.20, rowH, 'NUMERAÇÃO', '');
-        this.cell(doc, M + IW * 0.78, y, IW * 0.11, rowH, 'PESO BRUTO', '');
-        this.cell(doc, M + IW * 0.89, y, IW * 0.11, rowH, 'PESO LÍQUIDO', '');
+        this.cell(doc, M + IW * 0.78, y, IW * 0.11, rowH, 'PESO BRUTO', fmtPeso(pesoB), { fs: 7, align: 'right' });
+        this.cell(doc, M + IW * 0.89, y, IW * 0.11, rowH, 'PESO LÍQUIDO', fmtPeso(pesoL), { fs: 7, align: 'right' });
         y += rowH;
 
         // ── DADOS DO PRODUTO / SERVIÇOS ──────────────────────────────────
