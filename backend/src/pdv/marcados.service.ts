@@ -644,6 +644,45 @@ export class MarcadosService {
   }
 
   /**
+   * DIAGNÓSTICO read-only: agrupa os marcados ATIVOS de um cliente por NUMERO
+   * (cada "marcar" gera um NUMERO/controle). Serve pra enxergar a duplicação
+   * (ex.: 4 grupos ~iguais = marcaram 4× a mesma peça). NÃO altera nada.
+   */
+  async analisarMarcadosCliente(input: { cpf?: string; codCliente?: string }): Promise<{
+    totalPecas: number;
+    totalValor: number;
+    grupos: Array<{ numero: number | null; pecas: number; qtd: number; valor: number; comGiga: number; semGiga: number; data: any }>;
+  }> {
+    const or: any[] = [];
+    if (input.cpf) or.push({ cpf: String(input.cpf).replace(/\D/g, '') });
+    if (input.codCliente) or.push({ codCliente: String(input.codCliente).trim() });
+    if (!or.length) throw new BadRequestException('Informe codCliente ou cpf');
+
+    const rows: any[] = await (this.prisma as any).marcado.findMany({
+      where: { status: 'ativo', isTraining: false, OR: or },
+      orderBy: [{ dataMarcacao: 'asc' }, { createdAt: 'asc' }],
+    });
+
+    const byNumero = new Map<string, any>();
+    for (const r of rows) {
+      const k = r.numero != null ? String(r.numero) : 'sem-numero';
+      if (!byNumero.has(k)) {
+        byNumero.set(k, { numero: r.numero ?? null, pecas: 0, qtd: 0, valor: 0, comGiga: 0, semGiga: 0, data: r.dataMarcacao });
+      }
+      const g = byNumero.get(k);
+      g.pecas++;
+      g.qtd += Number(r.qty) || 0;
+      g.valor += Number(r.valorTotal) || 0;
+      if (r.registroGiga != null) g.comGiga++; else g.semGiga++;
+    }
+    const grupos = Array.from(byNumero.values())
+      .map((g) => ({ ...g, valor: Math.round(g.valor * 100) / 100 }))
+      .sort((a, b) => b.valor - a.valor);
+    const totalValor = Math.round(rows.reduce((s, r) => s + (Number(r.valorTotal) || 0), 0) * 100) / 100;
+    return { totalPecas: rows.length, totalValor, grupos };
+  }
+
+  /**
    * DEVOLVE 1 peça marcada — o cliente trouxe de volta.
    *  - DELETE FROM caixa WHERE REGISTRO + CONTROLE (chave composta)
    *  - increaseStock(SKU, qty, loja) — peça volta pro estoque Giga
@@ -727,6 +766,122 @@ export class MarcadosService {
     }
 
     return { ok: true };
+  }
+
+  /**
+   * DESDUPLICA marcações de um cliente que foram marcadas VÁRIAS VEZES (mesma
+   * peça em N grupos/NUMERO diferentes). Mantém 1 grupo (keepNumero, ou o mais
+   * antigo) e DEVOLVE os outros — via devolverItemMarcado, que retorna o estoque
+   * (increaseStock) de cada peça removida. Estoque é delta: −N marcações +
+   * (N−1) devoluções = −1 líquido (correto). Peça sem linha no Giga
+   * (registroGiga null = fantasma do sync) só fecha o nativo (não mexe estoque).
+   * `dryRun` (default true): só mostra o plano, sem tocar em nada.
+   */
+  async desduplicarMarcadosCliente(input: {
+    cpf?: string;
+    codCliente?: string;
+    keepNumero?: number;
+    dryRun?: boolean;
+  }): Promise<{
+    dryRun: boolean;
+    keepNumero: number | null;
+    valorMantido: number;
+    gruposRemovidos: number;
+    pecasRemovidas: number;
+    valorRemovido: number;
+    estoqueDevolvido: number;
+    falhas: string[];
+    grupos: Array<{ numero: number | null; pecas: number; valor: number }>;
+  }> {
+    const or: any[] = [];
+    if (input.cpf) or.push({ cpf: String(input.cpf).replace(/\D/g, '') });
+    if (input.codCliente) or.push({ codCliente: String(input.codCliente).trim() });
+    if (!or.length) throw new BadRequestException('Informe codCliente ou cpf');
+    const dryRun = input.dryRun !== false;
+
+    const rows: any[] = await (this.prisma as any).marcado.findMany({
+      where: { status: 'ativo', isTraining: false, OR: or },
+      orderBy: [{ dataMarcacao: 'asc' }, { createdAt: 'asc' }],
+    });
+    if (!rows.length) throw new BadRequestException('Cliente sem marcados ativos');
+
+    // Agrupa por NUMERO (cada "marcar" = 1 numero/controle).
+    const byNumero = new Map<string, any[]>();
+    for (const r of rows) {
+      const k = r.numero != null ? String(r.numero) : `sem-${r.id}`;
+      if (!byNumero.has(k)) byNumero.set(k, []);
+      byNumero.get(k)!.push(r);
+    }
+    const grupos = Array.from(byNumero.entries())
+      .map(([, g]) => ({
+        numero: g[0].numero ?? null,
+        pecas: g.length,
+        valor: Math.round(g.reduce((s, r) => s + (Number(r.valorTotal) || 0), 0) * 100) / 100,
+        data: g[0].dataMarcacao,
+        rows: g,
+      }))
+      .sort((a, b) => new Date(a.data || 0).getTime() - new Date(b.data || 0).getTime());
+
+    // Mantém: keepNumero (se informado) ou o MAIS ANTIGO.
+    const keep = input.keepNumero != null
+      ? grupos.find((g) => g.numero === Number(input.keepNumero))
+      : grupos[0];
+    if (!keep) throw new BadRequestException(`keepNumero ${input.keepNumero} não encontrado nos grupos`);
+
+    const remover = grupos.filter((g) => g !== keep);
+    const falhas: string[] = [];
+    let pecasRemovidas = 0;
+    let valorRemovido = 0;
+    let estoqueDevolvido = 0;
+
+    for (const g of remover) {
+      for (const m of g.rows) {
+        pecasRemovidas++;
+        valorRemovido += Number(m.valorTotal) || 0;
+        if (dryRun) continue;
+        try {
+          if (m.registroGiga != null) {
+            // Devolve de verdade: retorna estoque + remove linha no Giga + nativo.
+            const r = await this.devolverItemMarcado({
+              registro: Number(m.registroGiga),
+              sku: m.sku,
+              qty: Number(m.qty) || 1,
+              loja: m.storeCode,
+            });
+            if (r.ok) estoqueDevolvido += Number(m.qty) || 1;
+            else falhas.push(`REGISTRO ${m.registroGiga} (${m.sku}): ${r.error}`);
+          } else {
+            // Fantasma sem linha no Giga → só fecha o nativo (estoque não foi
+            // baixado por este registro; quem baixou foi a marcação com Giga).
+            await (this.prisma as any).marcado.update({
+              where: { id: m.id },
+              data: { status: 'fechado', fechadoAt: new Date() },
+            });
+          }
+        } catch (e: any) {
+          falhas.push(`${m.sku}: ${e?.message || e}`);
+        }
+      }
+    }
+
+    if (!dryRun) {
+      this.logger.warn(
+        `[marcados/desdup] cliente ${input.cpf || input.codCliente}: manteve numero=${keep.numero} (R$${keep.valor}), ` +
+        `removeu ${pecasRemovidas} peça(s) de ${remover.length} grupo(s), estoque devolvido=${estoqueDevolvido}, falhas=${falhas.length}`,
+      );
+    }
+
+    return {
+      dryRun,
+      keepNumero: keep.numero,
+      valorMantido: keep.valor,
+      gruposRemovidos: remover.length,
+      pecasRemovidas,
+      valorRemovido: Math.round(valorRemovido * 100) / 100,
+      estoqueDevolvido,
+      falhas,
+      grupos: grupos.map((g) => ({ numero: g.numero, pecas: g.pecas, valor: g.valor })),
+    };
   }
 
   /**
