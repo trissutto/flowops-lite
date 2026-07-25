@@ -167,6 +167,35 @@ export default function PedidoDetalhePage() {
     }
   };
 
+  /**
+   * RECEBIMENTO POR COR (linha): chega só uma cor da REF. Recebe apenas o item
+   * daquela cor; as outras cores continuam pendentes. Reusa /receive com 1 id.
+   */
+  const receberCor = async (ref: string, it: any) => {
+    if (!data) return;
+    const totalCor = Object.values(it.tamanhosQty || {}).reduce((a: number, b: any) => a + (Number(b) || 0), 0);
+    if (!confirm(
+      `Confirmar recebimento de ${ref} · ${it.cor} (${totalCor} peças)?\n\n` +
+      `As outras cores desta REF continuam pendentes.`,
+    )) return;
+    setReceiving(true);
+    try {
+      const itemsRecebidos = editMode
+        ? [{ itemId: it.id, tamanhosQty: adjustedQty[it.id] || it.tamanhosQty }]
+        : [];
+      const r = await api<any>(`/purchase-orders/${id}/receive`, {
+        method: 'POST',
+        body: JSON.stringify({ itemIds: [it.id], itemsRecebidos }),
+      });
+      setReceiveResult(r);
+      await fetchData();
+    } catch (e: any) {
+      alert('Erro ao receber cor: ' + e?.message);
+    } finally {
+      setReceiving(false);
+    }
+  };
+
   /** Abre tela de etiquetas filtrada por REF — só imprime as desta ref */
   const imprimirEtiquetasDaRef = (ref: string) => {
     router.push(`/loja/pedidos-compra/${id}/etiquetas?ref=${encodeURIComponent(ref)}`);
@@ -574,6 +603,7 @@ export default function PedidoDetalhePage() {
                         <th key={t} className="text-center p-1 font-mono text-violet-700">{t}</th>
                       ))}
                       <th className="text-center p-1 font-mono text-violet-700">TOT</th>
+                      {!isRecebido && <th className="text-right p-1" />}
                     </tr>
                   </thead>
                   <tbody>
@@ -613,6 +643,25 @@ export default function PedidoDetalhePage() {
                             );
                           })}
                           <td className="p-1 text-center font-black text-violet-700 tabular-nums">{total}</td>
+                          {!isRecebido && (
+                            <td className="p-1 text-right whitespace-nowrap">
+                              {it.itemStatus === 'recebido' ? (
+                                <span className="inline-flex items-center gap-1 text-emerald-700 text-[11px] font-bold">
+                                  <CheckCircle2 className="w-3.5 h-3.5" /> recebida
+                                </span>
+                              ) : (
+                                <button
+                                  onClick={() => receberCor(ref, it)}
+                                  disabled={receiving}
+                                  className="inline-flex items-center gap-1 px-2 py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] rounded shadow disabled:opacity-50"
+                                  title={`Receber só a cor ${it.cor} desta REF — as outras cores continuam pendentes`}
+                                >
+                                  {receiving ? <Loader2 className="w-3 h-3 animate-spin" /> : <CheckCircle2 className="w-3 h-3" />}
+                                  Receber cor
+                                </button>
+                              )}
+                            </td>
+                          )}
                         </tr>
                       );
                     })}
