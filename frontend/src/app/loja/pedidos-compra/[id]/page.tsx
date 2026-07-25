@@ -127,6 +127,34 @@ export default function PedidoDetalhePage() {
     }
   };
 
+  // ── EDIÇÃO EM TEMPO REAL (salva ao sair do campo) ──────────────────────
+  const [savingItem, setSavingItem] = useState<string | null>(null);
+  const patchItem = async (itemId: string, patch: any) => {
+    setSavingItem(itemId);
+    try {
+      await api(`/purchase-orders/items/${itemId}`, { method: 'PATCH', body: JSON.stringify(patch) });
+      await fetchData();
+    } catch (e: any) {
+      alert('Erro ao salvar: ' + (e?.message || e));
+    } finally {
+      setSavingItem(null);
+    }
+  };
+  // Descrição vale pra REF inteira (todas as cores) — patcha cada item da REF.
+  const patchDescricaoRef = async (refItems: any[], descricaoBase: string) => {
+    setSavingItem('desc');
+    try {
+      for (const it of refItems) {
+        await api(`/purchase-orders/items/${it.id}`, { method: 'PATCH', body: JSON.stringify({ descricaoBase }) });
+      }
+      await fetchData();
+    } catch (e: any) {
+      alert('Erro ao salvar descrição: ' + (e?.message || e));
+    } finally {
+      setSavingItem(null);
+    }
+  };
+
   /**
    * RECEBIMENTO PARCIAL: aceita só a REF clicada. Backend processa apenas
    * esses itemIds, marca eles como recebido e mantém o pedido em
@@ -554,7 +582,19 @@ export default function PedidoDetalhePage() {
                     ✓ RECEBIDO
                   </span>
                 )}
-                <div className="font-bold text-slate-700">{primeiro.descricaoBase}</div>
+                {editMode && !isRecebido ? (
+                  <input
+                    defaultValue={primeiro.descricaoBase}
+                    onBlur={(e) => {
+                      const v = e.target.value.trim().toUpperCase();
+                      if (v && v !== primeiro.descricaoBase) patchDescricaoRef(refItems, v);
+                    }}
+                    className="font-bold text-slate-700 border border-slate-300 rounded px-2 py-1 text-sm w-full max-w-md"
+                    title="Descrição da REF (todas as cores) — salva ao sair do campo"
+                  />
+                ) : (
+                  <div className="font-bold text-slate-700">{primeiro.descricaoBase}</div>
+                )}
                 <div className="text-[11px] text-slate-500">
                   {primeiro.grupoNome} / {primeiro.subgrupoNome}
                   {primeiro.plusSize && ' · PLUS SIZE'}
@@ -615,7 +655,21 @@ export default function PedidoDetalhePage() {
                       for (const t of tamanhosOrdenados) total += Number(qtyPraExibir[t] || 0);
                       return (
                         <tr key={it.id} className="border-t border-slate-100">
-                          <td className="p-1 font-bold text-amber-700">{it.cor}</td>
+                          <td className="p-1 font-bold text-amber-700">
+                            {editMode && !isRecebido ? (
+                              <input
+                                defaultValue={it.cor}
+                                onBlur={(e) => {
+                                  const v = e.target.value.trim().toUpperCase();
+                                  if (v && v !== it.cor) patchItem(it.id, { cor: v });
+                                }}
+                                className="border border-slate-300 rounded px-1.5 py-0.5 text-sm font-bold text-amber-700 w-32"
+                                title="Nome da cor — salva ao sair do campo"
+                              />
+                            ) : (
+                              it.cor
+                            )}
+                          </td>
                           {tamanhosOrdenados.map((t) => {
                             const qty = Number(qtyPraExibir[t] || 0);
                             return (
@@ -632,7 +686,13 @@ export default function PedidoDetalhePage() {
                                         [it.id]: { ...(prev[it.id] || it.tamanhosQty), [t]: v },
                                       }));
                                     }}
-                                    className="w-12 px-1 py-0.5 border rounded text-center font-mono text-sm"
+                                    onBlur={() => {
+                                      // Salva a grade da cor ao sair do campo (tempo real).
+                                      const nova = adjustedQty[it.id];
+                                      if (nova) patchItem(it.id, { tamanhosQty: nova });
+                                    }}
+                                    disabled={savingItem === it.id}
+                                    className="w-12 px-1 py-0.5 border rounded text-center font-mono text-sm disabled:opacity-50"
                                   />
                                 ) : (
                                   <span className={`font-mono text-sm ${qty === 0 ? 'text-slate-300' : 'text-slate-800'}`}>
