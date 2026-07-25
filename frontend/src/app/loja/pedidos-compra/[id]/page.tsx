@@ -14,7 +14,7 @@ import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import {
   ArrowLeft, Loader2, AlertCircle, Package, CheckCircle2,
-  Truck, Printer, FileText, Edit3, Trash2, Plus, X,
+  Truck, Printer, FileText, Edit3, Trash2, Plus, X, Search,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -80,6 +80,7 @@ export default function PedidoDetalhePage() {
   // Modo edição de qty (recebimento detalhado): { itemId → { tam → qty } }
   const [adjustedQty, setAdjustedQty] = useState<Record<string, Record<string, number>>>({});
   const [editMode, setEditMode] = useState(false);
+  const [buscaRef, setBuscaRef] = useState(''); // filtro por REF/descrição/cor
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [editHeader, setEditHeader] = useState(false);
 
@@ -546,8 +547,37 @@ export default function PedidoDetalhePage() {
           />
         )}
 
+        {/* Busca por REF (evita rolar a lista toda) */}
+        {itemsPorRef.size > 3 && (
+          <div className="sticky top-[64px] z-20 -mx-1 mb-2 bg-slate-50/95 backdrop-blur py-1">
+            <div className="relative">
+              <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                value={buscaRef}
+                onChange={(e) => setBuscaRef(e.target.value)}
+                placeholder="Buscar REF, descrição ou cor…"
+                className="w-full pl-9 pr-9 py-2 text-sm border rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-violet-500"
+              />
+              {buscaRef && (
+                <button onClick={() => setBuscaRef('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-lg leading-none">×</button>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Items agrupados por REF */}
-        {Array.from(itemsPorRef.entries()).map(([ref, refItems]) => {
+        {Array.from(itemsPorRef.entries())
+          .filter(([ref, refItems]) => {
+            const q = buscaRef.trim().toLowerCase();
+            if (!q) return true;
+            const desc = String(refItems[0]?.descricaoBase || '').toLowerCase();
+            return (
+              ref.toLowerCase().includes(q) ||
+              desc.includes(q) ||
+              refItems.some((it: any) => String(it.cor || '').toLowerCase().includes(q))
+            );
+          })
+          .map(([ref, refItems]) => {
           const primeiro = refItems[0];
           // Coleta todos os tamanhos únicos dessa REF (pode variar por linha)
           const todosTamanhos = new Set<string>();
