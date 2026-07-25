@@ -1471,9 +1471,10 @@ export class CrediarioBaixaService {
   // ── Preview ────────────────────────────────────────────────────────
 
   /** Leituras do crediário pelo Postgres (nativo/espelho) em vez do Giga ao vivo.
-   *  CREDIARIO_NATIVE_READS=0 volta tudo pro Giga. */
+   *  DEFAULT OFF (revertido 25/07 após incidente "crediários sumiram do PDV" —
+   *  a validar contra dados reais antes de reativar). CREDIARIO_NATIVE_READS=1 liga. */
   private get nativeReads(): boolean {
-    return String(process.env.CREDIARIO_NATIVE_READS ?? '1') !== '0';
+    return String(process.env.CREDIARIO_NATIVE_READS ?? '0') === '1';
   }
 
   /** Escrita da baixa/estorno no Giga via erp_outbox (assíncrona) em vez de
