@@ -81,6 +81,8 @@ export default function MarcadosPage() {
   const [processing, setProcessing] = useState(false);
   const [puxando, setPuxando] = useState(false);
   const [processResult, setProcessResult] = useState<{ ok: number; falhas: string[] } | null>(null);
+  const [dedupPlan, setDedupPlan] = useState<any>(null);
+  const [dedupBusy, setDedupBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { inputRef.current?.focus(); }, []);
@@ -134,6 +136,39 @@ export default function MarcadosPage() {
       setErr(e?.message || 'Falha ao buscar cliente');
     } finally {
       setBusy(false);
+    }
+  }
+
+  // ── Corrigir duplicados (admin): preview + aplicar ──
+  async function previewDedup() {
+    const cpf = (info?.cliente?.cpf || '').replace(/\D/g, '');
+    if (!cpf) { setErr('Cliente sem CPF — não dá pra analisar'); return; }
+    setDedupBusy(true); setErr(null); setDedupPlan(null);
+    try {
+      const r = await api<any>('/pdv/marcados/desduplicar', {
+        method: 'POST', body: JSON.stringify({ cpf, dryRun: true }),
+      });
+      setDedupPlan(r);
+    } catch (e: any) {
+      setErr(e?.message || 'Falha ao analisar duplicados');
+    } finally {
+      setDedupBusy(false);
+    }
+  }
+  async function aplicarDedup() {
+    const cpf = (info?.cliente?.cpf || '').replace(/\D/g, '');
+    if (!cpf) return;
+    setDedupBusy(true); setErr(null);
+    try {
+      await api('/pdv/marcados/desduplicar', {
+        method: 'POST', body: JSON.stringify({ cpf, dryRun: false }),
+      });
+      setDedupPlan(null);
+      await buscarPorCpf(cpf); // recarrega a ficha já corrigida
+    } catch (e: any) {
+      setErr(e?.message || 'Falha ao aplicar correção');
+    } finally {
+      setDedupBusy(false);
     }
   }
 
@@ -383,7 +418,60 @@ export default function MarcadosPage() {
                 </span>
               )}
             </div>
+            {/* Corrigir duplicados (admin) — marcação repetida no PDV */}
+            {info.marcadosAtivos.length > 0 && (
+              <div className="mt-3 pt-3 border-t border-emerald-200/60">
+                <button
+                  onClick={previewDedup}
+                  disabled={dedupBusy}
+                  className="text-xs px-3 py-1.5 rounded font-bold border border-amber-400 bg-white text-amber-700 hover:bg-amber-50 disabled:opacity-50"
+                  title="Detecta marcações repetidas (mesma peça marcada várias vezes) e devolve as duplicadas ao estoque"
+                >
+                  {dedupBusy ? '⏳ Analisando…' : '🔧 Corrigir duplicados'}
+                </button>
+              </div>
+            )}
           </div>
+
+          {/* Plano de correção de duplicados (preview antes de aplicar) */}
+          {dedupPlan && (
+            <div className="border-2 border-amber-300 bg-amber-50 rounded-lg p-4">
+              {dedupPlan.gruposRemovidos > 0 ? (
+                <>
+                  <div className="font-bold text-amber-900 mb-1">
+                    Encontrei {dedupPlan.grupos?.length} marcação(ões) — {dedupPlan.gruposRemovidos} duplicada(s).
+                  </div>
+                  <div className="text-sm text-amber-800 mb-2">
+                    Vou <b>manter 1</b> (fica <b>{brl(dedupPlan.valorMantido || 0)}</b>) e <b>devolver ao estoque</b>{' '}
+                    {dedupPlan.pecasRemovidas} peça(s) (<b>{brl(dedupPlan.valorRemovido || 0)}</b> das cópias).
+                  </div>
+                  <div className="text-[11px] text-amber-700 mb-3 font-mono">
+                    {(dedupPlan.grupos || []).map((g: any) => `#${g.numero ?? '—'}: ${g.pecas}pç ${brl(g.valor)}`).join('  ·  ')}
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={aplicarDedup}
+                      disabled={dedupBusy}
+                      className="text-xs px-4 py-2 rounded font-bold bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50"
+                    >
+                      {dedupBusy ? '⏳ Aplicando…' : 'Aplicar correção'}
+                    </button>
+                    <button
+                      onClick={() => setDedupPlan(null)}
+                      className="text-xs px-4 py-2 rounded font-bold bg-white border text-slate-600 hover:bg-slate-50"
+                    >
+                      Cancelar
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <div className="text-sm text-emerald-800 flex items-center justify-between gap-2">
+                  <span>✓ Nenhuma marcação duplicada — está tudo certo (1 marcação só).</span>
+                  <button onClick={() => setDedupPlan(null)} className="text-xs px-3 py-1 rounded border bg-white hover:bg-slate-50">OK</button>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Lista de marcados */}
           {info.marcadosAtivos.length === 0 ? (
