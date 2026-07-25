@@ -61,7 +61,7 @@ export class MarcadosController {
     @Req() req: any,
     @Body() body: { codCliente?: string; cpf?: string; dryRun?: boolean },
   ) {
-    this.requireAdmin(req);
+    this.requireRole(req);
     return this.svc.dedupMarcadosCliente({
       codCliente: body?.codCliente,
       cpf: body?.cpf,
@@ -75,7 +75,7 @@ export class MarcadosController {
    */
   @Get('analise')
   analise(@Req() req: any, @Query('cpf') cpf?: string, @Query('codCliente') codCliente?: string) {
-    this.requireAdmin(req);
+    this.requireRole(req);
     return this.svc.analisarMarcadosCliente({ cpf, codCliente });
   }
 
@@ -89,7 +89,7 @@ export class MarcadosController {
     @Req() req: any,
     @Body() body: { cpf?: string; codCliente?: string; keepNumero?: number; dryRun?: boolean },
   ) {
-    this.requireAdmin(req);
+    this.requireRole(req);
     return this.svc.desduplicarMarcadosCliente({
       cpf: body?.cpf,
       codCliente: body?.codCliente,
