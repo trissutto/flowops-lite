@@ -110,6 +110,15 @@ export class MarcadosService {
     if (!sale.items || sale.items.length === 0) {
       throw new BadRequestException('Venda sem items');
     }
+    // TRAVA ANTI-DUPLICAÇÃO: venda que veio de "Puxar pra venda" já tem as peças
+    // EM MARCA (marcadosRegistros). Marcar de novo re-insere tudo e duplica (o
+    // que aconteceu na Leticia). Pra vender é só finalizar — não re-marcar.
+    if (sale.marcadosRegistros) {
+      throw new BadRequestException(
+        'Essa venda foi PUXADA de marcados — as peças já estão em marca. Pra concluir, ' +
+        'FINALIZE a venda (vender). Não dá pra marcar de novo (evita duplicar).',
+      );
+    }
 
     // ── MODO TREINAMENTO ──
     // União: venda já criada em treino OU sessão atual em treino (header).
