@@ -271,12 +271,15 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     return applied;
   }
 
-  /** Enfileira a réplica de estoque pro Giga no erp_outbox (kind estoque_delta). */
+  /** Enfileira a réplica de estoque pro Giga no erp_outbox (kind estoque_delta).
+   *  `deferred=true` = enfileirado POR DESIGN (fluxo em lote não espera o Giga),
+   *  não por indisponibilidade — só muda o texto do log. */
   private async enqueueStockDelta(
     op: 'inc' | 'dec',
     items: Array<{ sku: string; qty: number; storeCode: string }>,
     opts?: { allowNegative?: boolean; skipNotFound?: boolean },
     lastError?: string,
+    deferred = false,
   ): Promise<void> {
     try {
       await (this.prismaFlow as any).erpOutbox.create({
@@ -288,9 +291,15 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           lastError: lastError ? String(lastError).slice(0, 300) : null,
         },
       });
-      this.logger.warn(
-        `[flow-estoque] Giga indisponível — ${op} de ${items.length} item(ns) enfileirado no outbox (${lastError || 'erro'})`,
-      );
+      if (deferred) {
+        this.logger.log(
+          `[flow-estoque] ${op} de ${items.length} item(ns) enfileirado no outbox (réplica Giga assíncrona)`,
+        );
+      } else {
+        this.logger.warn(
+          `[flow-estoque] Giga indisponível — ${op} de ${items.length} item(ns) enfileirado no outbox (${lastError || 'erro'})`,
+        );
+      }
     } catch (e) {
       this.logger.error(`[flow-estoque] falha ao enfileirar ${op}: ${(e as Error).message}`);
     }
@@ -1655,6 +1664,26 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     const giga = await this.increaseStockGigaOnly(items);
     if (giga.success) return giga;
     await this.enqueueStockDelta('inc', items, undefined, giga.error);
+    return { success: true, applied: flowApplied, gigaEnfileirado: true };
+  }
+
+  /**
+   * ENTRADA de estoque ASSÍNCRONA — aplica o delta no Flow (fonte) na hora e
+   * enfileira a réplica pro Giga no outbox SEM tentar inline. Usada em fluxos
+   * de LOTE (recebimento de compra), onde esperar o Giga item-a-item pendura a
+   * tela: o estoque já vale no Flow em ms e o cron do outbox grava no Giga com
+   * retry/backoff. Não depende do Giga estar rápido nem vivo.
+   */
+  async increaseStockAsync(
+    items: Array<{ sku: string; qty: number; storeCode: string }>,
+  ): Promise<{
+    success: boolean;
+    applied: Array<{ sku: string; storeCode: string; qty: number; previousStock: number; newStock: number }>;
+    gigaEnfileirado: boolean;
+  }> {
+    if (!items.length) return { success: true, applied: [], gigaEnfileirado: false };
+    const flowApplied = await this.mirrorStockApplyDelta(items, +1, true);
+    await this.enqueueStockDelta('inc', items, undefined, undefined, true);
     return { success: true, applied: flowApplied, gigaEnfileirado: true };
   }
 

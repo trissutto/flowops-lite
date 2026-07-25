@@ -471,6 +471,12 @@ export class PurchaseOrdersService {
       itemsRecebidosMap.set(ir.itemId, ir.tamanhosQty);
     }
 
+    // Escrita no Giga ASSÍNCRONA (via erp_outbox): o recebimento finaliza no
+    // Flow (cadastro nativo + espelho + estoque) e enfileira a réplica pro Giga,
+    // sem esperar item-a-item o MySQL lento da KingHost. Kill-switch:
+    // PO_RECEIVE_ERP_OUTBOX=0 volta ao inline legado (espera o Giga).
+    const usarOutbox = String(process.env.PO_RECEIVE_ERP_OUTBOX ?? '1') !== '0';
+
     // Atualiza qty recebida em cada item (fallback: qty pedida)
     const log: any[] = [];
     let totalSkusInseridos = 0;
@@ -543,7 +549,7 @@ export class PurchaseOrdersService {
           ncm: it.ncm || undefined,
           cfop: it.cfop ? Number(it.cfop) : 5102,
           marca: order.marca || order.fornecedorNome,
-        });
+        }, { gigaAsync: usarOutbox });
 
         // Estende com qtd recebida + atualiza estoque inicial via increaseStock
         const skusGerados: any[] = [];
@@ -566,11 +572,18 @@ export class PurchaseOrdersService {
           .map((s) => ({ sku: s.codigo, qty: s.qty, storeCode: lojaMatriz }));
         if (itemsParaEstoque.length > 0) {
           try {
-            const inc = await (this.erp as any).increaseStock?.(itemsParaEstoque);
+            // Assíncrono (default): aplica no Flow na hora + enfileira Giga no
+            // outbox. Inline (kill-switch off): espera o Giga (comportamento antigo).
+            const inc = usarOutbox
+              ? await (this.erp as any).increaseStockAsync?.(itemsParaEstoque)
+              : await (this.erp as any).increaseStock?.(itemsParaEstoque);
             if (inc && !inc.success) {
               this.logger.warn(`[purchase-orders] estoque inicial nao aplicado: ${inc.error}`);
             } else {
-              this.logger.log(`[purchase-orders] estoque inicial: ${itemsParaEstoque.length} SKUs na loja ${lojaMatriz}`);
+              this.logger.log(
+                `[purchase-orders] estoque inicial: ${itemsParaEstoque.length} SKUs na loja ${lojaMatriz}` +
+                  (usarOutbox ? ' (Flow + Giga via outbox)' : ' (inline)'),
+              );
             }
           } catch (e: any) {
             this.logger.warn(`[purchase-orders] increaseStock falhou: ${e?.message}`);
