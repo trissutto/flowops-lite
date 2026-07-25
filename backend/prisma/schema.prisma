@@ -351,6 +351,16 @@ model Order {
   pickupStoreCode String?  @map("pickup_store_code")                   // código da loja onde cliente vai retirar (LJ05 etc)
   shippingMethod  String?  @map("shipping_method")                      // título do método de envio do WC (pra UI)
   wcDateCreated   DateTime? @map("wc_date_created") // data que o cliente fez o pedido no site
+  // ── Atribuição de MARKETING (de qual campanha/anúncio veio o pedido) ──
+  // Capturado do Order Attribution nativo do WooCommerce (_wc_order_attribution_*)
+  // no momento do sync. Só vem preenchido se o anúncio carregar UTMs na URL
+  // (Meta → Parâmetros de URL com {{campaign.name}}/{{campaign.id}}). Base do
+  // relatório "Vendas por campanha". NÃO é retroativo (só a partir do sync novo).
+  utmSource       String? @map("utm_source")     // facebook, instagram, google...
+  utmMedium       String? @map("utm_medium")      // paid, cpc, social...
+  utmCampaign     String? @map("utm_campaign")    // NOME da campanha ({{campaign.name}})
+  utmId           String? @map("utm_id")          // ID da campanha ({{campaign.id}})
+  utmContent      String? @map("utm_content")     // anúncio/criativo ({{ad.name}})
   // ── Atribuição de venda (atendente que iniciou o contato — cliente fecha no site) ──
   // Marcação manual via UI (operadora matriz). Relatório mensal soma por vendedora.
   sellerId        String?   @map("seller_id")
@@ -368,6 +378,7 @@ model Order {
   @@index([status])
   @@index([sellerId])
   @@index([source])
+  @@index([utmCampaign])
   @@map("orders")
 }
 

@@ -90,6 +90,9 @@ interface WcOrderListItem {
   // Vendedora atribuída (tag pra relatório de vendas online por atendente)
   sellerId?: string | null;
   sellerName?: string | null;
+  // Marketing: nome da campanha de origem (Order Attribution do WC). Só vem
+  // preenchido se o anúncio carregou UTM na URL. null = direto/sem campanha.
+  utmCampaign?: string | null;
 }
 
 interface SeparationGroup {
@@ -1358,6 +1361,16 @@ function SeparacaoPageInner() {
                           }}
                         />
                       </span>
+
+                      {/* Campanha de origem (Order Attribution do WC) */}
+                      {o.utmCampaign && (
+                        <span
+                          className="ml-2 inline-flex items-center gap-1 px-2 py-0.5 bg-violet-100 text-violet-800 text-[10px] font-bold rounded align-middle max-w-[220px] truncate"
+                          title={`Veio da campanha: ${o.utmCampaign}`}
+                        >
+                          📣 {o.utmCampaign}
+                        </span>
+                      )}
 
                       {/* Badge da(s) loja(s) responsável(is) pela separação */}
                       {o.pickOrders && o.pickOrders.length > 0 && (
