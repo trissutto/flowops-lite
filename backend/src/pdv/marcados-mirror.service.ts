@@ -112,12 +112,15 @@ export class MarcadosMirrorService {
         };
         const existente = await (this.prisma as any).marcado.findUnique({
           where: { registroGiga: BigInt(reg) },
-          select: { id: true },
+          select: { id: true, status: true },
         });
         if (existente) {
           // Linha ainda SIM no Giga → segue ativa (reabre se tinha sido
-          // marcada fechado_giga por um sync com Giga capenga)
-          await (this.prisma as any).marcado.update({ where: { id: existente.id }, data });
+          // marcada fechado_giga por um sync com Giga capenga). EXCEÇÃO: se está
+          // 'puxado' (foi pro PDV), PRESERVA — senão o sync devolvia pra 'ativo'
+          // e a peça reaparecia na tela de Marcados estando numa venda.
+          const dataUpd = existente.status === 'puxado' ? { ...data, status: 'puxado' } : data;
+          await (this.prisma as any).marcado.update({ where: { id: existente.id }, data: dataUpd });
         } else {
           // Marcação criada pelo Flow cujo REGISTRO não foi capturado na hora
           // (Giga lento): casa por NUMERO+loja+sku pra não duplicar.

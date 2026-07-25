@@ -2401,10 +2401,11 @@ export class PdvService {
         falhas.push(`REG ${reg}: ${r.error || 'falha'}`);
         continue;
       }
-      // Espelho nativo acompanha na hora (leituras já saem daqui)
+      // Espelho nativo acompanha na hora (leituras já saem daqui). Fecha tanto
+      // 'ativo' quanto 'puxado' (a peça vai virar venda de verdade).
       try {
         await (this.prisma as any).marcado.updateMany({
-          where: { registroGiga: BigInt(reg), status: 'ativo' },
+          where: { registroGiga: BigInt(reg), status: { in: ['ativo', 'puxado'] } },
           data: { status: 'fechado', saleId: sale.id, fechadoAt: new Date() },
         });
       } catch { /* sync horário reconcilia */ }
@@ -2732,6 +2733,24 @@ export class PdvService {
         cancelReason: input.reason || null,
       },
     });
+
+    // Venda veio de "Puxar marcados" → DEVOLVE as peças pra tela de Marcados
+    // (status 'puxado' → 'ativo'). Sem isso ficariam presas fora da tela.
+    try {
+      const regsM = String((sale as any).marcadosRegistros || '')
+        .split(',')
+        .map((s: string) => Number(s.trim()))
+        .filter((n: number) => Number.isFinite(n) && n > 0);
+      if (regsM.length) {
+        const r = await (this.prisma as any).marcado.updateMany({
+          where: { registroGiga: { in: regsM.map((n) => BigInt(n)) }, status: 'puxado', saleId: sale.id },
+          data: { status: 'ativo', saleId: null },
+        });
+        if (r?.count) this.logger.log(`[pdv] cancel: ${r.count} marcado(s) devolvido(s) pra tela (venda ${sale.id})`);
+      }
+    } catch (e: any) {
+      this.logger.warn(`[pdv] cancel: erro ao devolver marcados pra tela: ${e?.message || e}`);
+    }
 
     // FIX: cancelar venda DEVOLVE o vale-troca usado nela. Sem isso, o cliente
     // que pagou com vale e teve a venda cancelada PERDIA o crédito (o vale

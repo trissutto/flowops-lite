@@ -1205,6 +1205,26 @@ export class MarcadosService {
       },
     });
 
+    // TIRA da tela de Marcados JÁ (status 'puxado') — peça não pode ficar nas
+    // DUAS telas ao mesmo tempo. Cancelar a venda devolve pra 'ativo'
+    // (pdv.cancel); finalizar fecha de vez (erpStepFecharMarcados). Treino não
+    // grava marcadosRegistros, então nem entra aqui.
+    if (!input.isTraining) {
+      const regsPuxados = rows
+        .map((x: any) => Number(x.REGISTRO))
+        .filter((n: number) => Number.isFinite(n) && n > 0);
+      if (regsPuxados.length) {
+        try {
+          await (this.prisma as any).marcado.updateMany({
+            where: { registroGiga: { in: regsPuxados.map((n) => BigInt(n)) }, status: 'ativo' },
+            data: { status: 'puxado', saleId: sale.id },
+          });
+        } catch (e: any) {
+          this.logger.warn(`[marcados/puxar] não marcou como 'puxado': ${e?.message}`);
+        }
+      }
+    }
+
     return { saleId: sale.id, itemsAdded, total };
   }
 }
