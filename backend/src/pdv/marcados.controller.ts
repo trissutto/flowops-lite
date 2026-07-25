@@ -52,6 +52,24 @@ export class MarcadosController {
   }
 
   /**
+   * POST /pdv/marcados/dedup { codCliente?, cpf?, dryRun? }
+   * Limpa marcações DUPLICADAS de um cliente (linhas-fantasma que o sync criou).
+   * dryRun=true (default) só mostra o que fecharia. Admin.
+   */
+  @Post('dedup')
+  dedup(
+    @Req() req: any,
+    @Body() body: { codCliente?: string; cpf?: string; dryRun?: boolean },
+  ) {
+    this.requireAdmin(req);
+    return this.svc.dedupMarcadosCliente({
+      codCliente: body?.codCliente,
+      cpf: body?.cpf,
+      dryRun: body?.dryRun,
+    });
+  }
+
+  /**
    * POST /pdv/marcados/baixar — BAIXA SEM FINANCEIRO (clientes-bin: DEFEITOS,
    * FURTO, reservas). Remove a marcação do Giga sem venda/caixa/estoque.
    * Exige senha GERENTE+ (auditável: motivo + quem autorizou).

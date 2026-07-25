@@ -434,6 +434,66 @@ export class MarcadosService {
   }
 
   /**
+   * LIMPA DUPLICADOS de marcação de um cliente. Fecha (status='fechado') as
+   * linhas-FANTASMA: registros nativos EXATAMENTE iguais (mesma loja+numero+sku+
+   * qty+valorTotal) que o sync criou por não casar o órfão do Flow. Mantém 1 por
+   * peça — de preferência a ligada ao Giga (registroGiga != null).
+   * `dryRun` (default true): só mostra o que FECHARIA, sem tocar em nada.
+   * NÃO mexe em marcações com numero diferente (marcação separada de verdade).
+   */
+  async dedupMarcadosCliente(input: {
+    codCliente?: string;
+    cpf?: string;
+    dryRun?: boolean;
+  }): Promise<{ grupos: number; duplicados: number; dryRun: boolean; fechados: any[] }> {
+    const or: any[] = [];
+    if (input.cpf) or.push({ cpf: String(input.cpf).replace(/\D/g, '') });
+    if (input.codCliente) or.push({ codCliente: String(input.codCliente).trim() });
+    if (!or.length) throw new BadRequestException('Informe codCliente ou cpf');
+    const dryRun = input.dryRun !== false; // default TRUE (seguro)
+
+    const rows: any[] = await (this.prisma as any).marcado.findMany({
+      where: { status: 'ativo', isTraining: false, OR: or },
+      orderBy: [{ registroGiga: 'asc' }, { createdAt: 'asc' }],
+    });
+
+    const groups = new Map<string, any[]>();
+    for (const r of rows) {
+      const key = `${r.storeCode}|${r.sku}|${r.numero ?? ''}|${r.qty}|${Number(r.valorTotal)}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(r);
+    }
+
+    const fechados: any[] = [];
+    for (const g of groups.values()) {
+      if (g.length <= 1) continue; // sem duplicata exata
+      const keep = g.find((x) => x.registroGiga != null) || g[0];
+      for (const x of g) {
+        if (x.id === keep.id) continue;
+        fechados.push({
+          id: x.id,
+          sku: x.sku,
+          descricao: x.descricao,
+          valorTotal: Number(x.valorTotal),
+          numero: x.numero,
+          registroGiga: x.registroGiga != null ? String(x.registroGiga) : null,
+          mantido: keep.id,
+        });
+      }
+    }
+
+    if (!dryRun && fechados.length) {
+      await (this.prisma as any).marcado.updateMany({
+        where: { id: { in: fechados.map((f) => f.id) } },
+        data: { status: 'fechado', fechadoAt: new Date() },
+      });
+      this.logger.warn(`[marcados/dedup] ${fechados.length} duplicado(s) fechado(s) pra ${input.cpf || input.codCliente}`);
+    }
+
+    return { grupos: groups.size, duplicados: fechados.length, dryRun, fechados };
+  }
+
+  /**
    * Busca clientes por nome OU CPF parcial. Retorna ate 20 matches pra
    * vendedora escolher. Filtro: clientes que TEM pelo menos 1 marcado
    * ativo (status='SIM' na tabela `caixa`).
