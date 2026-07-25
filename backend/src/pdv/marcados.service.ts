@@ -3,6 +3,7 @@ import { ErpService } from '../erp/erp.service';
 import { CrediariosService } from '../crediarios/crediarios.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { MarcadosMirrorService } from './marcados-mirror.service';
+import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service';
 
 /**
  * MARCADOS — sistema de "leva pra provar em casa" da Lurd's.
@@ -30,6 +31,7 @@ export class MarcadosService {
     private readonly crediarios: CrediariosService,
     private readonly prisma: PrismaService,
     private readonly mirror: MarcadosMirrorService,
+    private readonly catalog: WincredCatalogService,
   ) {}
 
   /** Kill-switch: MARCADOS_NATIVE_READS=0 volta as consultas pro Giga ao vivo. */
@@ -1162,19 +1164,25 @@ export class MarcadosService {
       const precoUnit = qty > 0 ? Math.round((valorTotal / qty) * 100) / 100 : Number(row.VALOR) || 0;
       const descricao = String(row.DESCRICAO || row.CODIGO || 'Item marcado').slice(0, 80);
       const sku = String(row.CODIGO || `MARCADO-${row.REGISTRO}`);
+      // Resolve REF real + dataCadastro (+cor/tam/ncm/cfop/ean) pelo catálogo,
+      // igual ao bipe. SEM isso a campanha (liquida antigos por data / coleção
+      // -INV/-VER por REF) não consegue avaliar a peça e o desconto não aplica.
+      // precoUnit fica o da marcação (a campanha aplica o % em cima dele).
+      let info: any = null;
+      try { info = await this.catalog.getPdvProductInfo(sku); } catch { /* mantém básico */ }
       try {
         await (this.prisma as any).pdvSaleItem.create({
           data: {
             saleId: sale.id,
             sku,
-            ean: null,
-            ref: 'MARCADO',
-            cor: null,
-            tamanho: null,
+            ean: info?.ean ?? null,
+            ref: info?.ref || 'MARCADO',
+            cor: info?.cor ?? null,
+            tamanho: info?.tamanho ?? null,
             descricao,
-            ncm: null,
-            cfop: null,
-            dataCadastro: null,
+            ncm: info?.ncm ?? null,
+            cfop: info?.cfop ?? null,
+            dataCadastro: info?.dataCadastro ?? null,
             qty,
             precoUnit,
             desconto: 0,
