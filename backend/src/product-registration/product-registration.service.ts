@@ -86,7 +86,7 @@ export class ProductRegistrationService {
    * todos os produtos no Wincred numa transação MySQL. Idempotente por
    * CODIGO (INSERT IGNORE).
    */
-  async processar(input: ProcessarInput) {
+  async processar(input: ProcessarInput, opts?: { gigaAsync?: boolean }) {
     this.validarInput(input);
     const linhas = this.expandirCombinacoes(input);
     if (!linhas.length) throw new BadRequestException('Nenhuma combinação cor×tamanho gerada.');
@@ -128,15 +128,12 @@ export class ProductRegistrationService {
     // 4) Réplica pro Giga: tenta inline (best effort); se o Giga estiver
     //    pendurado/fora, enfileira no erp_outbox (kind produto_cadastro,
     //    INSERT IGNORE = retry idempotente) e o cadastro NÃO trava.
+    //    gigaAsync=true (fluxo em LOTE, ex: recebimento de compra): NÃO tenta
+    //    inline — enfileira direto pra não pendurar a tela no Giga lento.
     let inseridos = produtos.length;
     let ignorados = 0;
     let gigaEnfileirado = false;
-    try {
-      const result = await this.erp.inserirProdutosBatch(produtos);
-      inseridos = result.inseridos;
-      ignorados = result.ignorados;
-    } catch (e) {
-      gigaEnfileirado = true;
+    if (opts?.gigaAsync) {
       await (this.prisma as any).erpOutbox.create({
         data: {
           kind: 'produto_cadastro',
@@ -145,9 +142,29 @@ export class ProductRegistrationService {
           status: 'pending',
         },
       });
-      this.logger.warn(
-        `Cadastro Dinâmico: Giga indisponível (${(e as Error).message}) — réplica enfileirada no outbox (ref=${input.ref})`,
+      gigaEnfileirado = true;
+      this.logger.log(
+        `Cadastro Dinâmico: ref=${input.ref} — réplica Giga enfileirada no outbox (modo assíncrono/lote)`,
       );
+    } else {
+      try {
+        const result = await this.erp.inserirProdutosBatch(produtos);
+        inseridos = result.inseridos;
+        ignorados = result.ignorados;
+      } catch (e) {
+        gigaEnfileirado = true;
+        await (this.prisma as any).erpOutbox.create({
+          data: {
+            kind: 'produto_cadastro',
+            saleId: `cad-${randomUUID()}`,
+            payload: { produtos },
+            status: 'pending',
+          },
+        });
+        this.logger.warn(
+          `Cadastro Dinâmico: Giga indisponível (${(e as Error).message}) — réplica enfileirada no outbox (ref=${input.ref})`,
+        );
+      }
     }
     this.logger.log(
       `Cadastro Dinâmico: ref=${input.ref} grupo=${input.grupoCodigo} → ${produtos.length} no Flow` +
