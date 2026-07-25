@@ -7590,6 +7590,20 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * Tabela `grupos` (CODIGO PK + GRUPO nome).
    */
   async listarGrupos(): Promise<Array<{ codigo: number; nome: string }>> {
+    // Espelho primeiro (wincred_grupos) — cai pro Giga se vazio/erro.
+    if (this.mirrorReadsEnabled) {
+      try {
+        const rows: any[] = await (this.prismaFlow as any).wincredGrupo.findMany({
+          orderBy: { grupo: 'asc' },
+        });
+        const mapped = rows
+          .map((r) => ({ codigo: Number(r.codigo), nome: String(r.grupo || '').trim() || `GRUPO-${r.codigo}` }))
+          .filter((g) => g.codigo);
+        if (mapped.length) return mapped;
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] listarGrupos: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
     if (!this.pool) return [];
     try {
       const [rows] = await this.pool.query(
@@ -7613,6 +7627,24 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * Tabela `subgrupos` (CODIGO PK + SUBGRUPO nome + GRUPO FK).
    */
   async listarSubgrupos(grupoCodigo: number): Promise<Array<{ codigo: number; nome: string }>> {
+    // Espelho primeiro (wincred_subgrupos). Um grupo pode ter 0 subgrupos, então
+    // o fallback é gated pela tabela estar POPULADA (count>0), não pelo resultado.
+    if (this.mirrorReadsEnabled) {
+      try {
+        const total = await (this.prismaFlow as any).wincredSubgrupo.count();
+        if (total > 0) {
+          const rows: any[] = await (this.prismaFlow as any).wincredSubgrupo.findMany({
+            where: { grupo: grupoCodigo },
+            orderBy: { subgrupo: 'asc' },
+          });
+          return rows
+            .map((r) => ({ codigo: Number(r.codigo), nome: String(r.subgrupo || '').trim() || `SUBGRUPO-${r.codigo}` }))
+            .filter((s) => s.codigo);
+        }
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] listarSubgrupos: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
     if (!this.pool) return [];
     try {
       const [rows] = await this.pool.query(
@@ -8047,6 +8079,21 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * de cores com sugestÃµes + permitir digitar nova.
    */
   async listarCoresDistintas(limit = 200): Promise<string[]> {
+    if (this.mirrorReadsEnabled) {
+      try {
+        const rows: any[] = await (this.prismaFlow as any).wincredProduto.groupBy({
+          by: ['cor'],
+          where: { cor: { not: null } },
+          _count: { cor: true },
+          orderBy: { _count: { cor: 'desc' } },
+          take: limit + 5,
+        });
+        const out = rows.map((r) => String(r.cor || '').trim()).filter(Boolean).slice(0, limit);
+        if (out.length) return out;
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] listarCoresDistintas: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
     if (!this.pool) return [];
     try {
       const [rows] = await this.pool.query(
@@ -8070,6 +8117,21 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * de tamanhos com sugestÃµes.
    */
   async listarTamanhosDistintos(limit = 200): Promise<string[]> {
+    if (this.mirrorReadsEnabled) {
+      try {
+        const rows: any[] = await (this.prismaFlow as any).wincredProduto.groupBy({
+          by: ['tamanho'],
+          where: { tamanho: { not: null } },
+          _count: { tamanho: true },
+          orderBy: { _count: { tamanho: 'desc' } },
+          take: limit + 5,
+        });
+        const out = rows.map((r) => String(r.tamanho || '').trim()).filter(Boolean).slice(0, limit);
+        if (out.length) return out;
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] listarTamanhosDistintos: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
     if (!this.pool) return [];
     try {
       const [rows] = await this.pool.query(
@@ -8094,8 +8156,43 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * fallback LIKE.
    */
   async findFornecedorCnpjByNome(nome: string): Promise<string | null> {
-    if (!this.pool || !nome?.trim()) return null;
+    if (!nome?.trim()) return null;
     const n = nome.trim();
+    if (this.mirrorReadsEnabled) {
+      try {
+        const total = await (this.prismaFlow as any).wincredFornecedor.count();
+        if (total > 0) {
+          // Exato (case-insensitive) em fantasia OU razão social; fallback contains.
+          const exato: any = await (this.prismaFlow as any).wincredFornecedor.findFirst({
+            where: {
+              OR: [
+                { fantasia: { equals: n, mode: 'insensitive' } },
+                { razaoSocial: { equals: n, mode: 'insensitive' } },
+              ],
+              cnpj: { not: null },
+            },
+            select: { cnpj: true },
+          });
+          if (exato?.cnpj) return String(exato.cnpj).trim() || null;
+          const like: any = await (this.prismaFlow as any).wincredFornecedor.findFirst({
+            where: {
+              OR: [
+                { fantasia: { contains: n, mode: 'insensitive' } },
+                { razaoSocial: { contains: n, mode: 'insensitive' } },
+              ],
+              cnpj: { not: null },
+            },
+            orderBy: { fantasia: 'asc' },
+            select: { cnpj: true },
+          });
+          if (like?.cnpj) return String(like.cnpj).trim() || null;
+          return null; // mirror populado e não achou = não existe
+        }
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] findFornecedorCnpjByNome: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
+    if (!this.pool) return null;
     try {
       // Match exato (FANTASIA ou RAZAOSOCIAL)
       const [rows1] = await this.pool.query(
@@ -8131,6 +8228,27 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * Lista fornecedores cadastrados em produtos (CNPJ + nome se disponÃ­vel).
    */
   async listarFornecedores(limit = 5000): Promise<Array<{ cnpj: string; nome: string; fantasia?: string }>> {
+    // Espelho primeiro (wincred_fornecedores). FANTASIA = MARCA no Lurd's.
+    if (this.mirrorReadsEnabled) {
+      try {
+        const rows: any[] = await (this.prismaFlow as any).wincredFornecedor.findMany({
+          where: { OR: [{ razaoSocial: { not: null } }, { fantasia: { not: null } }] },
+          select: { cnpj: true, razaoSocial: true, fantasia: true },
+          take: limit,
+        });
+        const result = rows
+          .map((r) => {
+            const fant = r.fantasia ? String(r.fantasia).trim() : '';
+            const nomeReal = String(r.razaoSocial || '').trim();
+            return { cnpj: String(r.cnpj || '').trim(), nome: fant || nomeReal, fantasia: fant || undefined };
+          })
+          .filter((f) => f.nome)
+          .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+        if (result.length) return result;
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] listarFornecedores: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
     if (!this.pool) return [];
     // FANTASIA = MARCA no Lurd's â€” preferir FANTASIA na exibicao quando houver.
     // SCHEMA REAL: fornecedores tem CNPJ + RAZAOSOCIAL + FANTASIA (nao CGC nem NOME)
