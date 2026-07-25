@@ -673,7 +673,7 @@ export class RoutingService {
           qty: it.quantity || 1,
           storeCode: oldStoreCode,
         }));
-        erpReverseResult = await this.erp.increaseStock(stockItems);
+        erpReverseResult = await this.erp.increaseStockAsync(stockItems);
         if (erpReverseResult.success) {
           this.logger.log(
             `[swap] estorno Giga OK pra loja ${oldStoreCode}: ${itemsAssigned.length} item(ns) voltaram pro estoque`,

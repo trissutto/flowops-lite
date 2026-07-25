@@ -412,7 +412,7 @@ export class ReturnsService {
       this.logger.log(`[returns→TREINO] devolução simulada — skip increaseStock`);
     } else
     try {
-      const erpResult = await this.erp.increaseStock(
+      const erpResult = await this.erp.increaseStockAsync(
         itemsToCreate.map((it) => ({
           sku: it.sku,
           qty: it.qty,
@@ -1247,7 +1247,7 @@ export class ReturnsService {
 
     for (const [sc, items] of byStore) {
       try {
-        const r = await this.erp.increaseStock(
+        const r = await this.erp.increaseStockAsync(
           items.map((i) => ({ sku: i.sku, qty: i.qty, storeCode: sc })),
         );
         if (r.success) {
@@ -1421,7 +1421,7 @@ export class ReturnsService {
       this.logger.log(`[devolucao/manual→TREINO] devolução simulada — skip increaseStock`);
     } else
     try {
-      const r = await this.erp.increaseStock([
+      const r = await this.erp.increaseStockAsync([
         { sku: produto.codigo, qty: 1, storeCode },
       ]);
       estoqueOk = r.success;
@@ -1727,7 +1727,7 @@ export class ReturnsService {
       if (alguemTreino) this.logger.log(`[returns/batch→TREINO] devolução simulada — skip increaseStock`);
     } else {
       try {
-        const erpResult = await this.erp.increaseStock(allItemsForStock);
+        const erpResult = await this.erp.increaseStockAsync(allItemsForStock);
         if (erpResult.success) {
           for (const it of allItemsForStock) stockOkBySku.set(it.sku, { ok: true });
         } else {

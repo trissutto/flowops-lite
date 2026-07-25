@@ -1787,6 +1787,9 @@ type CarrinhoAB = {
   // Pedido WC vinculado (quando o CartFlows registrou que o carrinho virou
   // pedido). Usado pra deduplicar contra os itens do fallback WooCommerce.
   order_id?: number | null;
+  // Campanha de origem (via order_id → Order local com atribuição do WC).
+  // null/undefined = carrinho sem pedido ainda ou sem UTM (não atribuível).
+  utmCampaign?: string | null;
 };
 
 type StatsAB = {
@@ -2123,6 +2126,14 @@ function CarrinhosTab() {
                     {c.phone && <span>{c.phone}</span>}
                     <span>{fmt(c.time)}</span>
                     {Number(c.items_count) > 0 && <span>{c.items_count} {Number(c.items_count) === 1 ? 'item' : 'itens'}</span>}
+                    {c.utmCampaign && (
+                      <span
+                        className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-violet-100 text-violet-800 font-bold rounded max-w-[200px] truncate"
+                        title={`Veio da campanha: ${c.utmCampaign}`}
+                      >
+                        📣 {c.utmCampaign}
+                      </span>
+                    )}
                   </div>
                 </div>
                 <div className="font-black text-rose-700 tabular-nums text-lg whitespace-nowrap">{BRL(valor)}</div>
@@ -2164,6 +2175,12 @@ function CarrinhosTab() {
                   <div><span className="text-slate-500">Total:</span> <b className="text-rose-700">{BRL(Number(selected.total ?? selected.cart_total ?? selected.cart_total_brl ?? 0))}</b></div>
                   <div><span className="text-slate-500">Abandonado em:</span> {fmt(selected.time)}</div>
                   <div><span className="text-slate-500">Status:</span> {selected.order_status || selected.status || '-'}</div>
+                  {(selected.utmCampaign || detail?.utmCampaign) && (
+                    <div className="sm:col-span-2">
+                      <span className="text-slate-500">Campanha:</span>{' '}
+                      <b className="text-violet-700">📣 {selected.utmCampaign || detail?.utmCampaign}</b>
+                    </div>
+                  )}
                 </div>
               </section>
 

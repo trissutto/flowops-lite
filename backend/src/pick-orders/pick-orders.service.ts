@@ -439,7 +439,7 @@ export class PickOrdersService {
       select: { sku: true, quantity: true, productName: true },
     });
 
-    const result = await this.erp.decreaseStock(
+    const result = await this.erp.decreaseStockAsync(
       items.map((i) => ({ sku: i.sku, qty: i.quantity, storeCode })),
       { allowNegative: true, skipNotFound: true },
     );
@@ -894,7 +894,7 @@ export class PickOrdersService {
         );
       }
 
-      const result = await this.erp.decreaseStock(
+      const result = await this.erp.decreaseStockAsync(
         items.map((i) => ({ sku: i.sku, qty: i.quantity, storeCode })),
       );
 
@@ -2181,7 +2181,7 @@ export class PickOrdersService {
         return { attempted: true, applied: false, skipped: false, shadow: false, reason: 'loja sem código configurado' };
       }
 
-      const result = await this.erp.decreaseStock(
+      const result = await this.erp.decreaseStockAsync(
         items.map((i) => ({ sku: i.sku, qty: i.quantity, storeCode })),
       );
 
