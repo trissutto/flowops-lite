@@ -70,6 +70,35 @@ export class MarcadosController {
   }
 
   /**
+   * GET /pdv/marcados/analise?cpf=...  (read-only)
+   * Agrupa os marcados ativos do cliente por NUMERO — enxerga a duplicação.
+   */
+  @Get('analise')
+  analise(@Req() req: any, @Query('cpf') cpf?: string, @Query('codCliente') codCliente?: string) {
+    this.requireAdmin(req);
+    return this.svc.analisarMarcadosCliente({ cpf, codCliente });
+  }
+
+  /**
+   * POST /pdv/marcados/desduplicar { cpf?, codCliente?, keepNumero?, dryRun? }
+   * Mantém 1 marcação e DEVOLVE as duplicadas (retorna estoque). Admin.
+   * dryRun=true (default) só mostra o plano.
+   */
+  @Post('desduplicar')
+  desduplicar(
+    @Req() req: any,
+    @Body() body: { cpf?: string; codCliente?: string; keepNumero?: number; dryRun?: boolean },
+  ) {
+    this.requireAdmin(req);
+    return this.svc.desduplicarMarcadosCliente({
+      cpf: body?.cpf,
+      codCliente: body?.codCliente,
+      keepNumero: body?.keepNumero,
+      dryRun: body?.dryRun,
+    });
+  }
+
+  /**
    * POST /pdv/marcados/baixar — BAIXA SEM FINANCEIRO (clientes-bin: DEFEITOS,
    * FURTO, reservas). Remove a marcação do Giga sem venda/caixa/estoque.
    * Exige senha GERENTE+ (auditável: motivo + quem autorizou).
