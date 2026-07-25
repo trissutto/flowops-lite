@@ -9610,9 +9610,50 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
      NÃ£o inclui composiÃ§Ã£o SITE (Giga + Flowops) â€” quem combina Ã© o caller
      (controller), pra deixar service genÃ©rico.
      â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+  /** Espelho do getFaturamentoPorLoja via giga_caixa_mov — MESMA regra da query
+   *  viva: filtra por DATAFEC, exclui MARCADO='SIM', cupons = DISTINCT numero.
+   *  Bate exato com o Wincred (o espelho copia a `caixa` linha a linha). */
+  private async getFaturamentoPorLojaFromMirror(inicio: Date, fim: Date): Promise<
+    Array<{ storeCode: string; faturamento: number; cupons: number; pecas: number; ticketMedio: number }>
+  > {
+    const rows: any[] = await (this.prismaFlow as any).$queryRawUnsafe(
+      `SELECT loja AS "storeCode",
+              COUNT(DISTINCT numero)::int AS cupons,
+              COALESCE(SUM(quantidade), 0)::float8 AS pecas,
+              COALESCE(SUM(valor_total), 0)::float8 AS faturamento
+         FROM giga_caixa_mov
+        WHERE data_fec >= $1 AND data_fec < $2
+          AND (marcado IS NULL OR marcado <> 'SIM')
+        GROUP BY loja
+        ORDER BY faturamento DESC`,
+      inicio, fim,
+    );
+    return rows.map((r) => {
+      const faturamento = Number(r.faturamento) || 0;
+      const cupons = Number(r.cupons) || 0;
+      const pecas = Number(r.pecas) || 0;
+      return {
+        storeCode: String(r.storeCode || '').trim().toUpperCase(),
+        faturamento,
+        cupons,
+        pecas,
+        ticketMedio: cupons > 0 ? faturamento / cupons : 0,
+      };
+    });
+  }
+
   async getFaturamentoPorLoja(inicio: Date, fim: Date): Promise<
     Array<{ storeCode: string; faturamento: number; cupons: number; pecas: number; ticketMedio: number }>
   > {
+    // Espelho primeiro (mesma regra DATAFEC); cai pro Giga ao vivo se o espelho
+    // não estiver pronto/cobrindo o período.
+    try {
+      if (await this.caixaMovUsable(inicio)) {
+        return await this.getFaturamentoPorLojaFromMirror(inicio, fim);
+      }
+    } catch (e) {
+      this.logger.warn(`[mirror-reads] getFaturamentoPorLoja: ${(e as Error).message} → Giga ao vivo`);
+    }
     if (!this.pool) return [];
     try {
       // IMPORTANTE: usa DATAFEC (data de fechamento do cupom), nÃ£o DATA.
