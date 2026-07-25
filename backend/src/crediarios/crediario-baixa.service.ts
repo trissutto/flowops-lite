@@ -1083,7 +1083,7 @@ export class CrediarioBaixaService {
         : null;
       const rows: any[] = await (this.prisma as any).wincredCliente.findMany({
         where: {
-          ...(onlyDigits ? { codCliente: safeQ } : { nome: { contains: safeQ, mode: 'insensitive' } }),
+          ...(onlyDigits ? { codCliente: { in: this.codVariants(safeQ) } } : { nome: { contains: safeQ, mode: 'insensitive' } }),
           ...(safeStoreS ? { loja: safeStoreS } : {}),
         },
         orderBy: { nome: 'asc' },
@@ -1100,7 +1100,8 @@ export class CrediarioBaixaService {
         outS.push({ codCliente: cod, nome, telefone: tel });
         if (outS.length >= 30) break;
       }
-      return outS;
+      // REDE DE SEGURANÇA: nada no espelho → cai pro Giga (não retorna vazio à toa).
+      if (outS.length > 0) return outS;
     }
 
     const cm = await this.crediarios.detectClientesTable();
@@ -1173,37 +1174,42 @@ export class CrediarioBaixaService {
     // ── ESPELHO DE ABERTAS PRIMEIRO (wincred_movimento_aberto). Só quando populado. ──
     if (this.nativeReads && (await (this.prisma as any).wincredMovimentoAberto.count()) > 0) {
       const rows: any[] = await (this.prisma as any).wincredMovimentoAberto.findMany({
-        where: { codCliente: cod, ...(safeStoreN ? { loja: safeStoreN } : {}) },
+        where: { codCliente: { in: this.codVariants(cod) }, ...(safeStoreN ? { loja: safeStoreN } : {}) },
         orderBy: { vencimento: 'asc' },
         take: 500,
       });
-      const phonesN = await this.crediarios.fetchPhonesByClienteIds([cod], safeStoreN || undefined);
-      const phoneInfoN = phonesN.get(cod) || null;
-      const cfgN = await this.getConfig();
-      const outN: OpenInstallment[] = [];
-      for (const row of rows) {
-        const valor = Number(row.valorParcela || 0);
-        if (!row.vencimento || !valor) continue;
-        const venc = new Date(row.vencimento);
-        const { diasAtraso, juros } = this.calcJuros(venc, valor, cfgN);
-        outN.push({
-          registro: String(row.registro),
-          controle: String(row.controle),
-          numeroCompra: row.numeroCompra ? String(row.numeroCompra) : null,
-          parcela: row.parcela != null ? Number(row.parcela) : null,
-          totalParcelas: row.totalParcelas != null ? Number(row.totalParcelas) : null,
-          vencimento: venc.toISOString().slice(0, 10),
-          valorParcela: valor,
-          diasAtraso,
-          jurosCalculado: juros,
-          valorComJuros: Math.round((valor + juros) * 100) / 100,
-          codCliente: String(row.codCliente),
-          nome: row.nome ? String(row.nome) : phoneInfoN?.nome || null,
-          telefone: phoneInfoN?.telefone || null,
-          obs: null,
-        });
+      // REDE DE SEGURANÇA: espelho SEM linhas pra este cliente → NÃO retorna
+      // vazio; cai pro Giga (a fonte). Evita o "crediário sumiu" por mismatch.
+      if (rows.length > 0) {
+        const phonesN = await this.crediarios.fetchPhonesByClienteIds([cod], safeStoreN || undefined);
+        const phoneInfoN = phonesN.get(cod) || null;
+        const cfgN = await this.getConfig();
+        const outN: OpenInstallment[] = [];
+        for (const row of rows) {
+          const valor = Number(row.valorParcela || 0);
+          if (!row.vencimento || !valor) continue;
+          const venc = new Date(row.vencimento);
+          const { diasAtraso, juros } = this.calcJuros(venc, valor, cfgN);
+          outN.push({
+            registro: String(row.registro),
+            controle: String(row.controle),
+            numeroCompra: row.numeroCompra ? String(row.numeroCompra) : null,
+            parcela: row.parcela != null ? Number(row.parcela) : null,
+            totalParcelas: row.totalParcelas != null ? Number(row.totalParcelas) : null,
+            vencimento: venc.toISOString().slice(0, 10),
+            valorParcela: valor,
+            diasAtraso,
+            jurosCalculado: juros,
+            valorComJuros: Math.round((valor + juros) * 100) / 100,
+            codCliente: String(row.codCliente),
+            nome: row.nome ? String(row.nome) : phoneInfoN?.nome || null,
+            telefone: phoneInfoN?.telefone || null,
+            obs: null,
+          });
+        }
+        if (outN.length > 0) return outN;
       }
-      return outN;
+      // else: segue pro Giga abaixo (rede de segurança).
     }
 
     let map = await this.crediarios.detectColumns();
@@ -1475,6 +1481,18 @@ export class CrediarioBaixaService {
    *  a validar contra dados reais antes de reativar). CREDIARIO_NATIVE_READS=1 liga. */
   private get nativeReads(): boolean {
     return String(process.env.CREDIARIO_NATIVE_READS ?? '0') === '1';
+  }
+
+  /** Variantes do codCliente pra casar o espelho (padding de zeros varia entre
+   *  as tabelas do Giga — clientes vs movimento). */
+  private codVariants(cod: string): string[] {
+    const c = String(cod || '').trim();
+    const set = new Set<string>();
+    if (c) set.add(c);
+    const noZeros = c.replace(/^0+/, '');
+    if (noZeros) set.add(noZeros);
+    if (/^\d+$/.test(c)) set.add(String(Number(c)));
+    return Array.from(set);
   }
 
   /** Escrita da baixa/estorno no Giga via erp_outbox (assíncrona) em vez de
