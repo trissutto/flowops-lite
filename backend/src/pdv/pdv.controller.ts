@@ -481,6 +481,17 @@ export class PdvController {
   }
 
   /**
+   * POST /pdv/sales/:id/recalcular-precos
+   * Reconsulta o preço ATUAL (promoção vigente) de cada item e atualiza.
+   * Usado quando itens puxados de MARCADO vêm com o preço original congelado.
+   */
+  @Post('sales/:id/recalcular-precos')
+  recalcularPrecos(@Req() req: any, @Param('id') id: string) {
+    this.requireRole(req);
+    return this.svc.recalcularPrecos({ saleId: id });
+  }
+
+  /**
    * POST /pdv/sales/:id/items/manual { descricao, valor, qty? }
    * Adiciona item MANUAL — usado quando o produto não passa pelo bipe.
    * Vendedora digita descrição + valor livres pra não travar o caixa.

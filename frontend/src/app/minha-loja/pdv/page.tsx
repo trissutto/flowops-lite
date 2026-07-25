@@ -1248,6 +1248,31 @@ function PdvPageInner() {
     }
   };
 
+  // ── Recalcular preços (promoção) — reconsulta o preço atual de cada item ──
+  // Útil pra itens puxados de MARCADO, que vêm com o preço original congelado.
+  const [recalculando, setRecalculando] = useState(false);
+  const recalcularPrecos = async () => {
+    if (!sale) return;
+    setRecalculando(true);
+    try {
+      const r = await api<{ atualizados: number }>(`/pdv/sales/${sale.id}/recalcular-precos`, {
+        method: 'POST',
+      });
+      const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
+      setSale(fresh);
+      if (r.atualizados > 0) {
+        toast('success', `${r.atualizados} preço(s) atualizado(s)`, `Total: ${brl(fresh.total)}`);
+      } else {
+        toast('info', 'Nada a recalcular', 'Todos os itens já estão no preço atual.');
+      }
+    } catch (e: any) {
+      const h = humanizeError(e);
+      toast('error', h.title, h.hint);
+    } finally {
+      setRecalculando(false);
+    }
+  };
+
   // ── "Fechar depois" — deixa venda OPEN e abre nova ──
   const fecharDepois = () => {
     if (!sale || !sale.items?.length) return;
@@ -2065,6 +2090,17 @@ function PdvPageInner() {
                   <div className="text-[9px] font-normal">até 31/12/2023 = 50% off</div>
                 </button>
               </div>
+              {/* Recalcular preços — resgata o preço ATUAL (promoção) de cada
+                  item. Itens puxados de MARCADO vêm com o preço original. */}
+              <button
+                type="button"
+                onClick={recalcularPrecos}
+                disabled={recalculando}
+                className="mt-1.5 w-full text-xs py-1.5 px-1 rounded font-bold border border-[#D4AF37] bg-white text-[#8C7325] hover:bg-[#FBF6E6] transition-colors disabled:opacity-50 flex items-center justify-center gap-1.5"
+                title="Reconsulta o preço atual (promoção vigente) de cada item — corrige peças marcadas que vieram com o preço original"
+              >
+                {recalculando ? '⏳ Recalculando…' : '🔄 Recalcular preços (promoção)'}
+              </button>
             </div>
             )}
             <div className="divide-y divide-[#F0EEE6]">
