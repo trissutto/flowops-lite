@@ -1211,7 +1211,7 @@ export class TrocasService {
     // Etapa 11 — entrada automática no estoque da loja receptora
     const stockAttempts: Array<{ ok: boolean; error?: string }> = [];
     try {
-      const result = await this.erp.increaseStock(
+      const result = await this.erp.increaseStockAsync(
         troca.items.map((it: any) => ({ sku: it.sku, qty: it.qty, storeCode })),
       );
       for (const _ of troca.items) {

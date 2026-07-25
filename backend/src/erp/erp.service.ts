@@ -1680,6 +1680,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     success: boolean;
     applied: Array<{ sku: string; storeCode: string; qty: number; previousStock: number; newStock: number }>;
     gigaEnfileirado: boolean;
+    error?: string;
+    attempts?: number;
   }> {
     // Kill-switch mestre das escritas de estoque secundárias (devoluções, trocas,
     // marcados, realinhamento, recebimento…): ERP_STOCK_WRITES_ASYNC=0 volta TODAS
@@ -1708,6 +1710,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     success: boolean;
     applied: Array<{ sku: string; storeCode: string; qty: number; previousStock: number; newStock: number }>;
     gigaEnfileirado: boolean;
+    error?: string;
+    attempts?: number;
   }> {
     if (String(process.env.ERP_STOCK_WRITES_ASYNC ?? '1') === '0') {
       const r = await this.decreaseStock(items, opts);

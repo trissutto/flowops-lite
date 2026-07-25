@@ -244,7 +244,7 @@ export class MarcadosService {
         qty: Number(it.qty) || 1,
         storeCode: input.storeCode,
       }));
-      const stockResult = await this.erp.decreaseStock(stockItems);
+      const stockResult = await this.erp.decreaseStockAsync(stockItems);
       if (!stockResult.success) {
         this.logger.error(
           `[marcados] INSERT em caixa OK, mas falha ao baixar estoque: ${stockResult.error}. ` +
