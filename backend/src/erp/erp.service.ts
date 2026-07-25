@@ -1681,9 +1681,41 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     applied: Array<{ sku: string; storeCode: string; qty: number; previousStock: number; newStock: number }>;
     gigaEnfileirado: boolean;
   }> {
+    // Kill-switch mestre das escritas de estoque secundárias (devoluções, trocas,
+    // marcados, realinhamento, recebimento…): ERP_STOCK_WRITES_ASYNC=0 volta TODAS
+    // ao inline (espera o Giga), sem tocar nos call-sites.
+    if (String(process.env.ERP_STOCK_WRITES_ASYNC ?? '1') === '0') {
+      const r = await this.increaseStock(items);
+      return { success: r.success, applied: r.applied, gigaEnfileirado: !!r.gigaEnfileirado };
+    }
     if (!items.length) return { success: true, applied: [], gigaEnfileirado: false };
     const flowApplied = await this.mirrorStockApplyDelta(items, +1, true);
     await this.enqueueStockDelta('inc', items, undefined, undefined, true);
+    return { success: true, applied: flowApplied, gigaEnfileirado: true };
+  }
+
+  /**
+   * BAIXA de estoque ASSÍNCRONA — simétrica ao increaseStockAsync. Aplica o
+   * delta no Flow (fonte) na hora e enfileira a réplica pro Giga no outbox, sem
+   * esperar o Giga inline. Usada em fluxos secundários de baixa (marcar peça,
+   * ajuste manual, separação) pra não pendurar a UI no MySQL lento.
+   * `allowNegative`/`skipNotFound` continuam valendo no espelho e na réplica.
+   */
+  async decreaseStockAsync(
+    items: Array<{ sku: string; qty: number; storeCode: string }>,
+    opts?: { allowNegative?: boolean; skipNotFound?: boolean },
+  ): Promise<{
+    success: boolean;
+    applied: Array<{ sku: string; storeCode: string; qty: number; previousStock: number; newStock: number }>;
+    gigaEnfileirado: boolean;
+  }> {
+    if (String(process.env.ERP_STOCK_WRITES_ASYNC ?? '1') === '0') {
+      const r = await this.decreaseStock(items, opts);
+      return { success: r.success, applied: r.applied, gigaEnfileirado: !!(r as any).gigaEnfileirado };
+    }
+    if (!items.length) return { success: true, applied: [], gigaEnfileirado: false };
+    const flowApplied = await this.mirrorStockApplyDelta(items, -1, !!opts?.allowNegative);
+    await this.enqueueStockDelta('dec', items, opts, undefined, true);
     return { success: true, applied: flowApplied, gigaEnfileirado: true };
   }
 
