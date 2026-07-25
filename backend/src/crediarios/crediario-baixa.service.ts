@@ -1074,6 +1074,35 @@ export class CrediarioBaixaService {
     const q = String(input.q || '').trim();
     if (q.length < 2) return [];
 
+    // ── ESPELHO PRIMEIRO (wincred_clientes). Só quando populado. ──
+    if (this.nativeReads && (await (this.prisma as any).wincredCliente.count()) > 0) {
+      const safeQ = q.replace(/['"\\;]/g, '').slice(0, 100);
+      const onlyDigits = /^\d+$/.test(safeQ);
+      const safeStoreS = input.storeCode
+        ? String(input.storeCode).replace(/[^0-9]/g, '').padStart(2, '0').slice(0, 2)
+        : null;
+      const rows: any[] = await (this.prisma as any).wincredCliente.findMany({
+        where: {
+          ...(onlyDigits ? { codCliente: safeQ } : { nome: { contains: safeQ, mode: 'insensitive' } }),
+          ...(safeStoreS ? { loja: safeStoreS } : {}),
+        },
+        orderBy: { nome: 'asc' },
+        take: 60,
+      });
+      const outS: Array<{ codCliente: string; nome: string; telefone: string | null }> = [];
+      for (const c of rows) {
+        const cod = String(c.codCliente || '');
+        const n = parseInt(cod.replace(/\D/g, ''), 10);
+        if (isNaN(n) || n <= 3) continue;
+        const nome = String(c.nome || '').trim();
+        if (CARD_NAME_REGEX.test(nome)) continue;
+        const tel = String(c.telefone || '').trim() || String(c.telefone2 || '').trim() || null;
+        outS.push({ codCliente: cod, nome, telefone: tel });
+        if (outS.length >= 30) break;
+      }
+      return outS;
+    }
+
     const cm = await this.crediarios.detectClientesTable();
     if (!cm || !cm.nome) {
       throw new BadRequestException(
@@ -1136,6 +1165,46 @@ export class CrediarioBaixaService {
   }): Promise<OpenInstallment[]> {
     const cod = String(input.codCliente || '').trim();
     if (!cod) throw new BadRequestException('codCliente obrigatório');
+
+    const safeStoreN = input.storeCode
+      ? String(input.storeCode).replace(/[^0-9]/g, '').padStart(2, '0').slice(0, 2)
+      : null;
+
+    // ── ESPELHO DE ABERTAS PRIMEIRO (wincred_movimento_aberto). Só quando populado. ──
+    if (this.nativeReads && (await (this.prisma as any).wincredMovimentoAberto.count()) > 0) {
+      const rows: any[] = await (this.prisma as any).wincredMovimentoAberto.findMany({
+        where: { codCliente: cod, ...(safeStoreN ? { loja: safeStoreN } : {}) },
+        orderBy: { vencimento: 'asc' },
+        take: 500,
+      });
+      const phonesN = await this.crediarios.fetchPhonesByClienteIds([cod], safeStoreN || undefined);
+      const phoneInfoN = phonesN.get(cod) || null;
+      const cfgN = await this.getConfig();
+      const outN: OpenInstallment[] = [];
+      for (const row of rows) {
+        const valor = Number(row.valorParcela || 0);
+        if (!row.vencimento || !valor) continue;
+        const venc = new Date(row.vencimento);
+        const { diasAtraso, juros } = this.calcJuros(venc, valor, cfgN);
+        outN.push({
+          registro: String(row.registro),
+          controle: String(row.controle),
+          numeroCompra: row.numeroCompra ? String(row.numeroCompra) : null,
+          parcela: row.parcela != null ? Number(row.parcela) : null,
+          totalParcelas: row.totalParcelas != null ? Number(row.totalParcelas) : null,
+          vencimento: venc.toISOString().slice(0, 10),
+          valorParcela: valor,
+          diasAtraso,
+          jurosCalculado: juros,
+          valorComJuros: Math.round((valor + juros) * 100) / 100,
+          codCliente: String(row.codCliente),
+          nome: row.nome ? String(row.nome) : phoneInfoN?.nome || null,
+          telefone: phoneInfoN?.telefone || null,
+          obs: null,
+        });
+      }
+      return outN;
+    }
 
     let map = await this.crediarios.detectColumns();
     if (!map.codCliente || !map.vencimento || !map.valorParcela) {
@@ -1401,6 +1470,55 @@ export class CrediarioBaixaService {
 
   // ── Preview ────────────────────────────────────────────────────────
 
+  /** Leituras do crediário pelo Postgres (nativo/espelho) em vez do Giga ao vivo.
+   *  CREDIARIO_NATIVE_READS=0 volta tudo pro Giga. */
+  private get nativeReads(): boolean {
+    return String(process.env.CREDIARIO_NATIVE_READS ?? '1') !== '0';
+  }
+
+  /** Escrita da baixa/estorno no Giga via erp_outbox (assíncrona) em vez de
+   *  inline. DEFAULT OFF (write-path financeiro) — CREDIARIO_ERP_OUTBOX=1 liga.
+   *  O recibo (crediarioBaixa) já é a fonte; o espelho de abertas já tem
+   *  write-through — o outbox só replica o UPDATE no Giga com retry. */
+  private get crediarioOutboxEnabled(): boolean {
+    return String(process.env.CREDIARIO_ERP_OUTBOX ?? '0') === '1';
+  }
+
+  /** Lê 1 parcela ABERTA do espelho (wincred_movimento_aberto) por REGISTRO+
+   *  CONTROLE. Esse espelho tem write-through na baixa (marcarPagasNoEspelho):
+   *  parcela paga SOME dele na hora — logo "presente = em aberto AGORA", sem
+   *  risco de baixa dupla. Ausente (paga ou não-sincronizada) → undefined, e o
+   *  caller confere no Giga (autoridade sobre PAGO). */
+  private async previewParcelaEspelho(
+    registro: string,
+    controle: string,
+    cfg: JurosConfig,
+  ): Promise<OpenInstallment | undefined> {
+    const row: any = await (this.prisma as any).wincredMovimentoAberto.findFirst({
+      where: { registro: String(registro), controle: String(controle) },
+    });
+    if (!row) return undefined;
+    const valor = Number(row.valorParcela || 0);
+    const venc = new Date(row.vencimento);
+    const { diasAtraso, juros } = this.calcJuros(venc, valor, cfg);
+    return {
+      registro: String(row.registro),
+      controle: String(row.controle),
+      numeroCompra: row.numeroCompra ? String(row.numeroCompra) : null,
+      parcela: row.parcela != null ? Number(row.parcela) : null,
+      totalParcelas: row.totalParcelas != null ? Number(row.totalParcelas) : null,
+      vencimento: venc.toISOString().slice(0, 10),
+      valorParcela: valor,
+      diasAtraso,
+      jurosCalculado: juros,
+      valorComJuros: Math.round((valor + juros) * 100) / 100,
+      codCliente: String(row.codCliente),
+      nome: row.nome ? String(row.nome) : null,
+      telefone: null,
+      obs: null,
+    };
+  }
+
   async previewBaixa(input: {
     parcelas: Array<{ registro: string; controle: string }>;
     storeCode?: string;
@@ -1410,17 +1528,32 @@ export class CrediarioBaixaService {
     totalJuros: number;
     totalPago: number;
   }> {
-    const map = await this.crediarios.detectColumns();
-    if (!map.registro || !map.controle) {
-      throw new BadRequestException('Coluna REGISTRO/CONTROLE não detectada');
-    }
     if (!input.parcelas?.length) throw new BadRequestException('Selecione pelo menos 1 parcela');
 
     const cfg = await this.getConfig();
 
-    // Busca cada parcela no Giga
+    // ── ESPELHO DE ABERTAS PRIMEIRO: parcela presente = em aberto agora
+    // (write-through remove na baixa). Ausente → confere no Giga (autoridade). ──
+    const espelhoOk = this.nativeReads
+      ? (await (this.prisma as any).wincredMovimentoAberto.count()) > 0
+      : false;
+
+    const map = await this.crediarios.detectColumns();
+    if (!espelhoOk && (!map.registro || !map.controle)) {
+      throw new BadRequestException('Coluna REGISTRO/CONTROLE não detectada');
+    }
+
+    // Busca cada parcela (espelho → fallback Giga)
     const result: OpenInstallment[] = [];
     for (const p of input.parcelas) {
+      if (espelhoOk) {
+        const nat = await this.previewParcelaEspelho(p.registro, p.controle, cfg);
+        if (nat) { result.push(nat); continue; }
+        // não achou no espelho de abertas → confere no Giga (pode estar paga lá)
+        if (!map.registro || !map.controle) {
+          throw new BadRequestException(`Parcela não encontrada: ${p.registro}/${p.controle}`);
+        }
+      }
       const safeReg = String(p.registro).replace(/['"\\]/g, '');
       const safeCtl = String(p.controle).replace(/['"\\]/g, '');
 
@@ -1889,6 +2022,36 @@ export class CrediarioBaixaService {
     // ERP_MULTA_PERCENT se outra loja precisar de percentual diferente.
     const multaPct = Number(process.env.ERP_MULTA_PERCENT ?? '2.0') || 2.0;
 
+    // ── OUTBOX (default OFF): finaliza no Postgres + write-through no espelho e
+    // enfileira a réplica pro Giga. O worker faz o markCrediarioParcelaPaid. ──
+    if (this.crediarioOutboxEnabled) {
+      const jobItems = items.map((it: any) => ({
+        baixaItemId: it.id,
+        registro: it.registro,
+        controle: it.controle,
+        valorPago: it.valorPago,
+        juros: Number(it.jurosCalculado) || 0,
+        multa: (Number(it.diasAtraso) > 0)
+          ? Math.round(Number(it.valorParcela) * (multaPct / 100) * 100) / 100
+          : 0,
+        dataPagamento: new Date().toISOString(),
+      }));
+      // Write-through imediato: parcela paga sai do espelho de abertas já.
+      void this.crediarioMirror
+        .marcarPagasNoEspelho(items.map((it: any) => it.registro))
+        .catch(() => { /* cron corrige */ });
+      await (this.prisma as any).erpOutbox.create({
+        data: {
+          kind: 'crediario_baixa',
+          saleId: `credbaixa-${baixaId}`,
+          payload: { items: jobItems, columns: cols },
+          status: 'pending',
+        },
+      });
+      this.logger.log(`[crediario-baixa] baixa ${baixaId}: ${items.length} parcela(s) enfileirada(s) pro Giga (outbox)`);
+      return;
+    }
+
     for (const it of items) {
       const multa = (Number(it.diasAtraso) > 0)
         ? Math.round(Number(it.valorParcela) * (multaPct / 100) * 100) / 100
@@ -2108,14 +2271,34 @@ export class CrediarioBaixaService {
       multa: map.multa,
     };
 
+    // OUTBOX (default OFF): enfileira a reversão no Giga; o UPDATE PAGO='N' roda
+    // no worker com retry. O estorno "vale" no Flow na hora (write-through abaixo).
+    const useOutbox = this.crediarioOutboxEnabled;
+    if (useOutbox) {
+      await (this.prisma as any).erpOutbox.create({
+        data: {
+          kind: 'crediario_estorno',
+          saleId: `credestorno-${input.baixaId}`,
+          payload: {
+            items: (baixa.items as any[]).map((it) => ({ registro: it.registro, controle: it.controle })),
+            columns: cols,
+          },
+          status: 'pending',
+        },
+      });
+    }
+
     const details: any[] = [];
     let revertidos = 0, falhas = 0;
     for (const it of baixa.items as any[]) {
-      const r = await this.erp.markCrediarioParcelaUnpaid({
-        registro: it.registro,
-        controle: it.controle,
-        columns: cols,
-      });
+      // Inline: reverte no Giga na hora. Outbox: otimista (worker replica).
+      const r = useOutbox
+        ? { success: true, error: undefined as string | undefined }
+        : await this.erp.markCrediarioParcelaUnpaid({
+            registro: it.registro,
+            controle: it.controle,
+            columns: cols,
+          });
       details.push({
         registro: it.registro,
         controle: it.controle,
@@ -2128,7 +2311,7 @@ export class CrediarioBaixaService {
         where: { id: it.id },
         data: {
           gigaUpdateOk: false,
-          gigaError: r.success ? 'ESTORNADA' : `ESTORNO FALHOU: ${r.error || 'erro'}`,
+          gigaError: r.success ? (useOutbox ? 'ESTORNADA (outbox)' : 'ESTORNADA') : `ESTORNO FALHOU: ${r.error || 'erro'}`,
         },
       });
     }

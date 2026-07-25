@@ -92,6 +92,8 @@ export class ErpOutboxService {
     if (job.kind === 'produto_exclusao') return this.processProdutoExclusao(job);
     if (job.kind === 'estoque_delta') return this.processEstoqueDelta(job);
     if (job.kind === 'cliente_upsert') return this.processClienteUpsert(job);
+    if (job.kind === 'crediario_baixa') return this.processCrediarioBaixa(job);
+    if (job.kind === 'crediario_estorno') return this.processCrediarioEstorno(job);
     if (job.kind !== 'venda') {
       await this.markFailed(job, `kind desconhecido: ${job.kind}`);
       return false;
@@ -352,6 +354,106 @@ export class ErpOutboxService {
             },
       });
       return false;
+    }
+  }
+
+  /** Re-agenda um job com backoff (ou marca failed no teto). Helper comum. */
+  private async requeueOrFail(job: any, err: any): Promise<boolean> {
+    const attempts = (job.attempts || 0) + 1;
+    const msg = String(err?.message || err).slice(0, 300);
+    if (attempts >= ErpOutboxService.MAX_ATTEMPTS) {
+      await (this.prisma as any).erpOutbox.update({
+        where: { id: job.id },
+        data: { status: 'failed', attempts, lastError: msg },
+      });
+      return false;
+    }
+    const delayS =
+      ErpOutboxService.BACKOFF_S[Math.min(attempts - 1, ErpOutboxService.BACKOFF_S.length - 1)] ??
+      ErpOutboxService.BACKOFF_CAP_S;
+    await (this.prisma as any).erpOutbox.update({
+      where: { id: job.id },
+      data: {
+        status: 'pending', attempts, lastError: msg,
+        nextRetryAt: new Date(Date.now() + Math.min(delayS, ErpOutboxService.BACKOFF_CAP_S) * 1000),
+      },
+    });
+    return false;
+  }
+
+  /**
+   * Réplica da BAIXA de crediário pro Giga (o recibo já é fonte no Postgres e o
+   * espelho de abertas já foi atualizado por write-through). UPDATE PAGO='S' em
+   * `movimento` por REGISTRO+CONTROLE — idempotente (rodar 2x é inofensivo).
+   * As colunas resolvidas vêm no payload, então NÃO precisa detectar schema.
+   */
+  private async processCrediarioBaixa(job: any): Promise<boolean> {
+    const items = Array.isArray(job.payload?.items) ? job.payload.items : null;
+    const columns = job.payload?.columns;
+    if (!items?.length || !columns) {
+      await this.markFailed(job, 'crediario_baixa sem items/columns');
+      return false;
+    }
+    try {
+      let lastErr = '';
+      for (const it of items) {
+        const r = await (this.erp as any).markCrediarioParcelaPaid({
+          registro: it.registro,
+          controle: it.controle,
+          valorPago: it.valorPago,
+          dataPagamento: it.dataPagamento ? new Date(it.dataPagamento) : new Date(),
+          juros: Number(it.juros) || 0,
+          multa: Number(it.multa) || 0,
+          columns,
+        });
+        if (it.baixaItemId) {
+          await (this.prisma as any).crediarioBaixaItem
+            .update({ where: { id: it.baixaItemId }, data: { gigaUpdateOk: !!r.success, gigaError: r.error || null } })
+            .catch(() => {});
+        }
+        if (!r.success) lastErr = r.error || 'falha na baixa';
+      }
+      if (lastErr) throw new Error(lastErr);
+      await (this.prisma as any).erpOutbox.update({
+        where: { id: job.id },
+        data: { status: 'done', doneAt: new Date(), lastError: null },
+      });
+      this.logger.log(`[outbox] crediario_baixa ${job.saleId}: ${items.length} parcela(s) no Giga`);
+      return true;
+    } catch (e: any) {
+      this.logger.warn(`[outbox] crediario_baixa ${job.saleId} re-agendado: ${e?.message}`);
+      return this.requeueOrFail(job, e);
+    }
+  }
+
+  /** Réplica do ESTORNO de crediário pro Giga. UPDATE PAGO='N' — idempotente. */
+  private async processCrediarioEstorno(job: any): Promise<boolean> {
+    const items = Array.isArray(job.payload?.items) ? job.payload.items : null;
+    const columns = job.payload?.columns;
+    if (!items?.length || !columns) {
+      await this.markFailed(job, 'crediario_estorno sem items/columns');
+      return false;
+    }
+    try {
+      let lastErr = '';
+      for (const it of items) {
+        const r = await (this.erp as any).markCrediarioParcelaUnpaid({
+          registro: it.registro,
+          controle: it.controle,
+          columns,
+        });
+        if (!r.success) lastErr = r.error || 'falha no estorno';
+      }
+      if (lastErr) throw new Error(lastErr);
+      await (this.prisma as any).erpOutbox.update({
+        where: { id: job.id },
+        data: { status: 'done', doneAt: new Date(), lastError: null },
+      });
+      this.logger.log(`[outbox] crediario_estorno ${job.saleId}: ${items.length} parcela(s) revertidas no Giga`);
+      return true;
+    } catch (e: any) {
+      this.logger.warn(`[outbox] crediario_estorno ${job.saleId} re-agendado: ${e?.message}`);
+      return this.requeueOrFail(job, e);
     }
   }
 
