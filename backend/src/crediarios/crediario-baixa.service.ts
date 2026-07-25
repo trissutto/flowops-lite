@@ -1476,6 +1476,14 @@ export class CrediarioBaixaService {
     return String(process.env.CREDIARIO_NATIVE_READS ?? '1') !== '0';
   }
 
+  /** Escrita da baixa/estorno no Giga via erp_outbox (assíncrona) em vez de
+   *  inline. DEFAULT OFF (write-path financeiro) — CREDIARIO_ERP_OUTBOX=1 liga.
+   *  O recibo (crediarioBaixa) já é a fonte; o espelho de abertas já tem
+   *  write-through — o outbox só replica o UPDATE no Giga com retry. */
+  private get crediarioOutboxEnabled(): boolean {
+    return String(process.env.CREDIARIO_ERP_OUTBOX ?? '0') === '1';
+  }
+
   /** Lê 1 parcela ABERTA do espelho (wincred_movimento_aberto) por REGISTRO+
    *  CONTROLE. Esse espelho tem write-through na baixa (marcarPagasNoEspelho):
    *  parcela paga SOME dele na hora — logo "presente = em aberto AGORA", sem
@@ -2014,6 +2022,36 @@ export class CrediarioBaixaService {
     // ERP_MULTA_PERCENT se outra loja precisar de percentual diferente.
     const multaPct = Number(process.env.ERP_MULTA_PERCENT ?? '2.0') || 2.0;
 
+    // ── OUTBOX (default OFF): finaliza no Postgres + write-through no espelho e
+    // enfileira a réplica pro Giga. O worker faz o markCrediarioParcelaPaid. ──
+    if (this.crediarioOutboxEnabled) {
+      const jobItems = items.map((it: any) => ({
+        baixaItemId: it.id,
+        registro: it.registro,
+        controle: it.controle,
+        valorPago: it.valorPago,
+        juros: Number(it.jurosCalculado) || 0,
+        multa: (Number(it.diasAtraso) > 0)
+          ? Math.round(Number(it.valorParcela) * (multaPct / 100) * 100) / 100
+          : 0,
+        dataPagamento: new Date().toISOString(),
+      }));
+      // Write-through imediato: parcela paga sai do espelho de abertas já.
+      void this.crediarioMirror
+        .marcarPagasNoEspelho(items.map((it: any) => it.registro))
+        .catch(() => { /* cron corrige */ });
+      await (this.prisma as any).erpOutbox.create({
+        data: {
+          kind: 'crediario_baixa',
+          saleId: `credbaixa-${baixaId}`,
+          payload: { items: jobItems, columns: cols },
+          status: 'pending',
+        },
+      });
+      this.logger.log(`[crediario-baixa] baixa ${baixaId}: ${items.length} parcela(s) enfileirada(s) pro Giga (outbox)`);
+      return;
+    }
+
     for (const it of items) {
       const multa = (Number(it.diasAtraso) > 0)
         ? Math.round(Number(it.valorParcela) * (multaPct / 100) * 100) / 100
@@ -2233,14 +2271,34 @@ export class CrediarioBaixaService {
       multa: map.multa,
     };
 
+    // OUTBOX (default OFF): enfileira a reversão no Giga; o UPDATE PAGO='N' roda
+    // no worker com retry. O estorno "vale" no Flow na hora (write-through abaixo).
+    const useOutbox = this.crediarioOutboxEnabled;
+    if (useOutbox) {
+      await (this.prisma as any).erpOutbox.create({
+        data: {
+          kind: 'crediario_estorno',
+          saleId: `credestorno-${input.baixaId}`,
+          payload: {
+            items: (baixa.items as any[]).map((it) => ({ registro: it.registro, controle: it.controle })),
+            columns: cols,
+          },
+          status: 'pending',
+        },
+      });
+    }
+
     const details: any[] = [];
     let revertidos = 0, falhas = 0;
     for (const it of baixa.items as any[]) {
-      const r = await this.erp.markCrediarioParcelaUnpaid({
-        registro: it.registro,
-        controle: it.controle,
-        columns: cols,
-      });
+      // Inline: reverte no Giga na hora. Outbox: otimista (worker replica).
+      const r = useOutbox
+        ? { success: true, error: undefined as string | undefined }
+        : await this.erp.markCrediarioParcelaUnpaid({
+            registro: it.registro,
+            controle: it.controle,
+            columns: cols,
+          });
       details.push({
         registro: it.registro,
         controle: it.controle,
@@ -2253,7 +2311,7 @@ export class CrediarioBaixaService {
         where: { id: it.id },
         data: {
           gigaUpdateOk: false,
-          gigaError: r.success ? 'ESTORNADA' : `ESTORNO FALHOU: ${r.error || 'erro'}`,
+          gigaError: r.success ? (useOutbox ? 'ESTORNADA (outbox)' : 'ESTORNADA') : `ESTORNO FALHOU: ${r.error || 'erro'}`,
         },
       });
     }
