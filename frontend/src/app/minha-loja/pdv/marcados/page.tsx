@@ -139,14 +139,17 @@ export default function MarcadosPage() {
     }
   }
 
-  // ── Corrigir duplicados (admin): preview + aplicar ──
+  // ── Corrigir duplicados: preview + aplicar ──
+  // Manda cpf E codCliente — a ficha conta os marcados por cpf OU codCliente,
+  // então a limpeza precisa enxergar exatamente o mesmo conjunto (senão sobra).
   async function previewDedup() {
     const cpf = (info?.cliente?.cpf || '').replace(/\D/g, '');
-    if (!cpf) { setErr('Cliente sem CPF — não dá pra analisar'); return; }
+    const codCliente = info?.cliente?.codCliente || undefined;
+    if (!cpf && !codCliente) { setErr('Cliente sem CPF/código — não dá pra analisar'); return; }
     setDedupBusy(true); setErr(null); setDedupPlan(null);
     try {
       const r = await api<any>('/pdv/marcados/desduplicar', {
-        method: 'POST', body: JSON.stringify({ cpf, dryRun: true }),
+        method: 'POST', body: JSON.stringify({ cpf: cpf || undefined, codCliente, dryRun: true }),
       });
       setDedupPlan(r);
     } catch (e: any) {
@@ -157,14 +160,15 @@ export default function MarcadosPage() {
   }
   async function aplicarDedup() {
     const cpf = (info?.cliente?.cpf || '').replace(/\D/g, '');
-    if (!cpf) return;
+    const codCliente = info?.cliente?.codCliente || undefined;
+    if (!cpf && !codCliente) return;
     setDedupBusy(true); setErr(null);
     try {
       await api('/pdv/marcados/desduplicar', {
-        method: 'POST', body: JSON.stringify({ cpf, dryRun: false }),
+        method: 'POST', body: JSON.stringify({ cpf: cpf || undefined, codCliente, dryRun: false }),
       });
       setDedupPlan(null);
-      await buscarPorCpf(cpf); // recarrega a ficha já corrigida
+      if (cpf) await buscarPorCpf(cpf); // recarrega a ficha já corrigida
     } catch (e: any) {
       setErr(e?.message || 'Falha ao aplicar correção');
     } finally {
@@ -436,17 +440,15 @@ export default function MarcadosPage() {
           {/* Plano de correção de duplicados (preview antes de aplicar) */}
           {dedupPlan && (
             <div className="border-2 border-amber-300 bg-amber-50 rounded-lg p-4">
-              {dedupPlan.gruposRemovidos > 0 ? (
+              {dedupPlan.pecasRemovidas > 0 ? (
                 <>
                   <div className="font-bold text-amber-900 mb-1">
-                    Encontrei {dedupPlan.grupos?.length} marcação(ões) — {dedupPlan.gruposRemovidos} duplicada(s).
+                    Vão sobrar <b>{dedupPlan.produtosMantidos} produto(s)</b> — total{' '}
+                    <b>{brl(dedupPlan.valorMantido || 0)}</b>.
                   </div>
-                  <div className="text-sm text-amber-800 mb-2">
-                    Vou <b>manter 1</b> (fica <b>{brl(dedupPlan.valorMantido || 0)}</b>) e <b>devolver ao estoque</b>{' '}
-                    {dedupPlan.pecasRemovidas} peça(s) (<b>{brl(dedupPlan.valorRemovido || 0)}</b> das cópias).
-                  </div>
-                  <div className="text-[11px] text-amber-700 mb-3 font-mono">
-                    {(dedupPlan.grupos || []).map((g: any) => `#${g.numero ?? '—'}: ${g.pecas}pç ${brl(g.valor)}`).join('  ·  ')}
+                  <div className="text-sm text-amber-800 mb-3">
+                    Vou <b>devolver ao estoque</b> {dedupPlan.pecasRemovidas} peça(s) duplicada(s){' '}
+                    (<b>{brl(dedupPlan.valorRemovido || 0)}</b> das cópias).
                   </div>
                   <div className="flex gap-2">
                     <button
@@ -454,7 +456,7 @@ export default function MarcadosPage() {
                       disabled={dedupBusy}
                       className="text-xs px-4 py-2 rounded font-bold bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50"
                     >
-                      {dedupBusy ? '⏳ Aplicando…' : 'Aplicar correção'}
+                      {dedupBusy ? '⏳ Aplicando…' : `Aplicar — deixar em ${brl(dedupPlan.valorMantido || 0)}`}
                     </button>
                     <button
                       onClick={() => setDedupPlan(null)}
@@ -466,7 +468,7 @@ export default function MarcadosPage() {
                 </>
               ) : (
                 <div className="text-sm text-emerald-800 flex items-center justify-between gap-2">
-                  <span>✓ Nenhuma marcação duplicada — está tudo certo (1 marcação só).</span>
+                  <span>✓ Nenhum produto duplicado — está tudo certo ({dedupPlan.produtosMantidos} produto(s)).</span>
                   <button onClick={() => setDedupPlan(null)} className="text-xs px-3 py-1 rounded border bg-white hover:bg-slate-50">OK</button>
                 </div>
               )}
