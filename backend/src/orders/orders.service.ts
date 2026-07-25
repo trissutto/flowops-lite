@@ -2,6 +2,7 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { OrderStatus } from '../common/enums';
 import { extractCpf, detectPickup } from '../woocommerce/wc-order-extract.util';
+import { extractAttributionRaw } from '../woocommerce/attribution.util';
 
 @Injectable()
 export class OrdersService {
@@ -81,6 +82,9 @@ export class OrdersService {
       );
     }
 
+    // Atribuição de marketing (de qual campanha veio) — Order Attribution do WC.
+    const attr = extractAttributionRaw(wc.meta_data ?? []);
+
     const payload = {
       wcOrderNumber: String(wc.number ?? wc.id),
       status,
@@ -96,6 +100,17 @@ export class OrdersService {
       pickupStoreCode: pickup.pickupStoreCode,
       shippingMethod: pickup.shippingMethodTitle,
       wcDateCreated: wcCreated,
+      // Só grava atribuição quando o WC mandou algo (source/campaign) — assim um
+      // webhook de update sem meta_data NÃO apaga a campanha capturada no 1º toque.
+      ...(attr.sourceType || attr.utmSource || attr.utmCampaign
+        ? {
+            utmSource: attr.utmSource,
+            utmMedium: attr.utmMedium,
+            utmCampaign: attr.utmCampaign,
+            utmId: attr.utmId,
+            utmContent: attr.utmContent,
+          }
+        : {}),
     };
 
     const existing = await this.prisma.order.findUnique({ where: { wcOrderId } });
@@ -201,6 +216,97 @@ export class OrdersService {
    * Retorna KPIs agregados + breakdowns (por status / loja / dia / produto / pickup).
    * Pickups, transferências e fretes separados pra o CEO ter visibilidade de origem e destino.
    */
+  /**
+   * Relatório VENDAS POR CAMPANHA no intervalo [from, to] (America/Sao_Paulo).
+   * Agrupa pedidos do SITE pela campanha de origem (utmCampaign capturada do
+   * Order Attribution do WC no sync). Receita real = soma do total dos pedidos
+   * NÃO cancelados. Pedidos sem UTM caem no bucket "Sem campanha / Direto".
+   * ATENÇÃO: só reflete o que foi capturado a partir do momento em que as
+   * campanhas do Meta passaram a mandar UTM na URL — NÃO é retroativo.
+   */
+  async campanhasReport(fromStr: string, toStr: string) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fromStr) || !/^\d{4}-\d{2}-\d{2}$/.test(toStr)) {
+      throw new Error('from e to devem estar no formato YYYY-MM-DD');
+    }
+    const from = new Date(`${fromStr}T00:00:00-03:00`);
+    const to = new Date(`${toStr}T23:59:59.999-03:00`);
+    if (to < from) throw new Error('to deve ser >= from');
+
+    const whereDate = {
+      source: 'site',
+      OR: [
+        { wcDateCreated: { gte: from, lte: to } },
+        { AND: [{ wcDateCreated: null }, { createdAt: { gte: from, lte: to } }] },
+      ],
+    };
+
+    const orders = await this.prisma.order.findMany({
+      where: whereDate,
+      select: {
+        status: true,
+        totalAmount: true,
+        utmCampaign: true,
+        utmSource: true,
+        utmMedium: true,
+      },
+    });
+
+    const isFinancial = (s: string) => !['cancelled', 'failed'].includes(s);
+    const SEM = 'Sem campanha / Direto';
+
+    const map = new Map<string, {
+      campanha: string;
+      source: string | null;
+      medium: string | null;
+      pedidos: number;
+      receita: number;
+      cancelados: number;
+      comUtm: boolean;
+    }>();
+    let totalPedidos = 0;
+    let totalReceita = 0;
+
+    for (const o of orders) {
+      const camp = o.utmCampaign?.trim();
+      const key = camp || SEM;
+      let g = map.get(key);
+      if (!g) {
+        g = {
+          campanha: key,
+          source: o.utmSource || null,
+          medium: o.utmMedium || null,
+          pedidos: 0,
+          receita: 0,
+          cancelados: 0,
+          comUtm: !!camp,
+        };
+        map.set(key, g);
+      }
+      if (!isFinancial(o.status)) {
+        g.cancelados++;
+        continue;
+      }
+      const amt = Number(o.totalAmount ?? 0);
+      g.pedidos++;
+      g.receita += amt;
+      totalPedidos++;
+      totalReceita += amt;
+    }
+
+    const campanhas = Array.from(map.values())
+      .map((g) => ({ ...g, ticketMedio: g.pedidos > 0 ? g.receita / g.pedidos : 0 }))
+      .sort((a, b) => b.receita - a.receita);
+
+    return {
+      from: fromStr,
+      to: toStr,
+      totalPedidos,
+      totalReceita,
+      ticketMedioGeral: totalPedidos > 0 ? totalReceita / totalPedidos : 0,
+      campanhas,
+    };
+  }
+
   async analytics(fromStr: string, toStr: string) {
     // Parse das datas do query string (formato YYYY-MM-DD).
     // Usa timezone America/Sao_Paulo (-03:00) porque o CEO pensa em horário local,

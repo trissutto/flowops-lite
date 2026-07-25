@@ -8,7 +8,7 @@ import { RoutingService } from '../routing/routing.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { WooCommerceService } from '../woocommerce/woocommerce.service';
 import { ErpService } from '../erp/erp.service';
-import { extractAttribution } from '../woocommerce/attribution.util';
+import { extractAttribution, extractAttributionRaw } from '../woocommerce/attribution.util';
 import { extractCpf, detectPickup, extractVariantFromLineItem } from '../woocommerce/wc-order-extract.util';
 
 @Controller('orders')
@@ -47,6 +47,26 @@ export class OrdersController {
       return await this.orders.analytics(from, to);
     } catch (e: any) {
       throw new BadRequestException(e?.message ?? 'Falha ao gerar analítico');
+    }
+  }
+
+  /**
+   * Relatório VENDAS POR CAMPANHA (De/Até). Agrupa pedidos do site pela
+   * campanha de origem (utmCampaign do Order Attribution do WC).
+   * Ex: GET /orders/report/campanhas?from=2026-07-01&to=2026-07-25
+   */
+  @Get('report/campanhas')
+  async campanhasReport(
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    if (!from || !to) {
+      throw new BadRequestException('Parâmetros "from" e "to" são obrigatórios (YYYY-MM-DD).');
+    }
+    try {
+      return await this.orders.campanhasReport(from, to);
+    } catch (e: any) {
+      throw new BadRequestException(e?.message ?? 'Falha ao gerar relatório de campanhas');
     }
   }
 
@@ -152,6 +172,8 @@ export class OrdersController {
         // Origem do pedido (site/live) — 'source' já é a atribuição UTM do WC
         orderSource: 'site',
         ...extractAttribution(o.meta_data ?? []),
+        // NOME cru da campanha (pra badge de "veio da campanha X" na separação)
+        utmCampaign: extractAttributionRaw(o.meta_data ?? []).utmCampaign,
       };
     });
 
