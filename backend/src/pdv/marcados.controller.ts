@@ -87,13 +87,12 @@ export class MarcadosController {
   @Post('desduplicar')
   desduplicar(
     @Req() req: any,
-    @Body() body: { cpf?: string; codCliente?: string; keepNumero?: number; dryRun?: boolean },
+    @Body() body: { cpf?: string; codCliente?: string; dryRun?: boolean },
   ) {
     this.requireRole(req);
     return this.svc.desduplicarMarcadosCliente({
       cpf: body?.cpf,
       codCliente: body?.codCliente,
-      keepNumero: body?.keepNumero,
       dryRun: body?.dryRun,
     });
   }
