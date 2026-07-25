@@ -1025,7 +1025,11 @@ export class PurchaseOrdersService {
 
   async listLabels(orderId: string) {
     const order = await this.getById(orderId);
-    if (order.status !== 'recebido' && order.status !== 'recebido_com_erro') {
+    // RECEBIDO_PARCIAL também gera etiquetas (dono 25/07): recebeu só uma
+    // REF/cor → imprime as etiquetas DELA. O loop abaixo só monta etiqueta de
+    // item com SKU gerado (= já recebido), então parcial sai só do que chegou.
+    const okStatus = ['recebido', 'recebido_com_erro', 'recebido_parcial'];
+    if (!okStatus.includes(order.status)) {
       throw new BadRequestException('Pedido ainda não foi recebido');
     }
     const labels: Array<{
