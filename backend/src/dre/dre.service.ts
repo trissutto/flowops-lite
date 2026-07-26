@@ -156,61 +156,89 @@ export class DreService implements OnApplicationBootstrap {
    * ressuscitá-los.
    */
   async onApplicationBootstrap() {
-    const CHAVE = 'dre_ajustes_seed_2607';
-    try {
-      const feito = await (this.prisma as any).appConfig.findUnique({ where: { key: CHAVE } });
-      if (feito) return;
+    // Cada bloco tem CHAVE PRÓPRIA. Uma trava única já falhou: o seed rodou
+    // no primeiro deploy (VERISURE + segurança) e, quando as taxas e o
+    // marketing entraram depois, a chave existente fez o boot inteiro sair
+    // pelo `return` — a grade de taxas nunca foi criada e a tela ficou sem
+    // onde digitar. Seed novo = chave nova, sempre.
+    const blocos: Array<{ chave: string; rotulo: string; run: () => Promise<void> }> = [
+      {
+        chave: 'dre_ajustes_seed_2607',
+        rotulo: 'VERISURE fora + segurança R$ 200/loja (exceto SANTOS)',
+        run: async () => {
+          await (this.prisma as any).dreAjuste.createMany({
+            data: [
+              {
+                tipo: 'EXCLUIR_FORNECEDOR',
+                descricao: 'VERISURE (contrato encerrado)',
+                fornecedorMatch: 'VERISURE',
+                criadoPor: 'seed 26/07',
+              },
+              {
+                tipo: 'DESPESA_FIXA',
+                descricao: 'Segurança e monitoramento',
+                valorMensalCents: 20000, // R$ 200,00 por loja/mês
+                grupo: 'FIXA',
+                lojasExcluidas: 'SANTOS', // Santos não paga
+                criadoPor: 'seed 26/07',
+              },
+            ],
+            skipDuplicates: true,
+          });
+        },
+      },
+      {
+        chave: 'dre_marketing_pct_2607',
+        rotulo: 'Marketing 5% do faturamento (despesa variável)',
+        run: async () => {
+          // A verba acompanha a venda de cada loja — não é valor fixo.
+          await (this.prisma as any).dreAjuste.createMany({
+            data: [{
+              tipo: 'DESPESA_PCT',
+              descricao: 'Marketing',
+              percentual: 5,
+              grupo: 'VARIAVEL',
+              criadoPor: 'seed 26/07',
+            }],
+            skipDuplicates: true,
+          });
+        },
+      },
+      {
+        chave: 'dre_taxas_cartao_2607',
+        rotulo: 'grade de taxas de cartão/PIX (percentual zerado)',
+        run: async () => {
+          // Percentual entra ZERADO de propósito: taxa chutada vira despesa
+          // inventada. A tela também monta linha a partir das bandeiras que
+          // apareceram nas vendas, então não depende só desta grade.
+          const grade = [
+            { forma: 'PIX', bandeira: 'PIX', faixaParcela: 'UNICA' },
+            ...['VISA ELECTRON', 'REDESHOP', 'ELO'].map((b) => ({
+              forma: 'DEBITO', bandeira: b, faixaParcela: 'UNICA',
+            })),
+            ...['VISA', 'MASTERCARD', 'HIPERCARD', 'AMEX', 'CIELO'].flatMap((b) =>
+              ['1', '2-6', '7-12'].map((f) => ({ forma: 'CREDITO', bandeira: b, faixaParcela: f })),
+            ),
+          ].map((t) => ({ ...t, taxaPct: 0, criadoPor: 'seed 26/07' }));
+          await (this.prisma as any).taxaCartao.createMany({ data: grade, skipDuplicates: true });
+        },
+      },
+    ];
 
-      await (this.prisma as any).dreAjuste.createMany({
-        data: [
-          {
-            tipo: 'EXCLUIR_FORNECEDOR',
-            descricao: 'VERISURE (contrato encerrado)',
-            fornecedorMatch: 'VERISURE',
-            criadoPor: 'seed 26/07',
-          },
-          {
-            tipo: 'DESPESA_FIXA',
-            descricao: 'Segurança e monitoramento',
-            valorMensalCents: 20000, // R$ 200,00 por loja/mês
-            grupo: 'FIXA',
-            lojasExcluidas: 'SANTOS', // Santos não paga
-            criadoPor: 'seed 26/07',
-          },
-          {
-            // Marketing como % da venda (pedido do dono 26/07): a verba
-            // acompanha o faturamento de cada loja, não é valor fixo.
-            tipo: 'DESPESA_PCT',
-            descricao: 'Marketing',
-            percentual: 5,
-            grupo: 'VARIAVEL',
-            criadoPor: 'seed 26/07',
-          },
-        ],
-        skipDuplicates: true,
-      });
-      // Grade de taxas que o dono pediu (26/07). Percentual entra ZERADO de
-      // propósito: taxa chutada vira despesa inventada. As linhas nascem
-      // prontas pra ele só digitar o % de cada uma.
-      const grade: any[] = [
-        { forma: 'PIX', bandeira: 'PIX', faixaParcela: 'UNICA' },
-        ...['VISA ELECTRON', 'REDESHOP', 'ELO'].map((b) => ({
-          forma: 'DEBITO', bandeira: b, faixaParcela: 'UNICA',
-        })),
-        ...['VISA', 'MASTERCARD', 'HIPERCARD', 'AMEX'].flatMap((b) =>
-          ['1', '2-6', '7-12'].map((f) => ({ forma: 'CREDITO', bandeira: b, faixaParcela: f })),
-        ),
-      ].map((t) => ({ ...t, taxaPct: 0, criadoPor: 'seed 26/07' }));
-
-      await (this.prisma as any).taxaCartao.createMany({ data: grade, skipDuplicates: true });
-
-      await (this.prisma as any).appConfig.create({
-        data: { key: CHAVE, valueJson: JSON.stringify({ seededAt: new Date().toISOString() }) },
-      });
-      this.logger.log('[dre] ajustes iniciais criados (VERISURE fora + segurança R$ 200/loja exceto SANTOS)');
-    } catch (e: any) {
-      // Nunca deixa o seed derrubar o boot.
-      this.logger.warn(`[dre] seed de ajustes pulado: ${e?.message || e}`);
+    for (const b of blocos) {
+      try {
+        const feito = await (this.prisma as any).appConfig.findUnique({ where: { key: b.chave } });
+        if (feito) continue;
+        await b.run();
+        await (this.prisma as any).appConfig.create({
+          data: { key: b.chave, valueJson: JSON.stringify({ seededAt: new Date().toISOString() }) },
+        });
+        this.logger.log(`[dre] seed aplicado: ${b.rotulo}`);
+      } catch (e: any) {
+        // Nunca deixa o seed derrubar o boot — e um bloco quebrado não
+        // impede os outros.
+        this.logger.warn(`[dre] seed "${b.chave}" pulado: ${e?.message || e}`);
+      }
     }
   }
 
