@@ -4497,6 +4497,8 @@ model DreAjuste {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
+  realizados DreAjusteRealizado[]
+
   @@index([tipo, ativo])
   @@map("dre_ajuste")
 }
@@ -4525,6 +4527,34 @@ model TaxaCartao {
   @@unique([bandeira, faixaParcela])
   @@index([ativo])
   @@map("taxa_cartao")
+}
+
+/// VALOR REALIZADO de um ajuste percentual, por MÊS (dono, 26/07).
+///
+/// O percentual do `DreAjuste` é uma SIMULAÇÃO — serve pro mês corrente, antes
+/// de fechar a fatura da mídia. Quando o dono lança aqui o que gastou de
+/// verdade, este valor SOBREPÕE o percentual naquele mês, e a DRE para de
+/// simular. Enquanto não houver linha, vale o coeficiente.
+///
+/// O valor é o TOTAL do mês; a DRE distribui entre as colunas-alvo do ajuste
+/// proporcional ao faturamento de cada uma (mesmo critério do percentual).
+model DreAjusteRealizado {
+  id       String @id @default(cuid())
+  ajusteId String @map("ajuste_id")
+  mes      String @db.VarChar(7) // YYYY-MM
+
+  valorCents Int    @map("valor_cents")
+  observacao String? @db.VarChar(160)
+
+  lancadoPor String?  @map("lancado_por") @db.VarChar(80)
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  ajuste DreAjuste @relation(fields: [ajusteId], references: [id], onDelete: Cascade)
+
+  @@unique([ajusteId, mes])
+  @@index([mes])
+  @@map("dre_ajuste_realizado")
 }
 
 /// DEMANDAS (15/07): backlog do dono na aba Gestao - prompt + prints colados,

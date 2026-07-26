@@ -296,6 +296,31 @@ export class DreService implements OnApplicationBootstrap {
           await (this.prisma as any).taxaCartao.createMany({ data: grade, skipDuplicates: true });
         },
       },
+      {
+        chave: 'dre_marketing_por_canal_2607',
+        rotulo: 'Meta/Google Ads separados por loja e SITE',
+        run: async () => {
+          // O dono quer enxergar mídia por PLATAFORMA e por DESTINO — Meta e
+          // Google gastam diferente, e o SITE consome muito mais que a loja.
+          // Um "Marketing 5%" único escondia as quatro realidades.
+          // Estes % são SIMULAÇÃO: no fim do mês ele lança o gasto real e o
+          // valor lançado passa a mandar (DreAjusteRealizado).
+          await (this.prisma as any).dreAjuste.deleteMany({
+            where: { tipo: 'DESPESA_PCT', descricao: { in: ['Marketing', 'Marketing SITE'] } },
+          });
+          await (this.prisma as any).dreAjuste.createMany({
+            data: [
+              { descricao: 'META ADS LOJAS', percentual: 3, lojasExcluidas: 'SITE' },
+              { descricao: 'META ADS SITE', percentual: 20, lojasIncluidas: 'SITE' },
+              { descricao: 'GOOGLE ADS LOJAS', percentual: 3, lojasExcluidas: 'SITE' },
+              { descricao: 'GOOGLE ADS SITE', percentual: 10, lojasIncluidas: 'SITE' },
+            ].map((a) => ({
+              ...a, tipo: 'DESPESA_PCT', grupo: 'VARIAVEL', criadoPor: 'seed 26/07',
+            })),
+            skipDuplicates: true,
+          });
+        },
+      },
     ];
 
     for (const b of blocos) {
@@ -722,14 +747,51 @@ export class DreService implements OnApplicationBootstrap {
     // Despesa em % do faturamento (ex: marketing 5%) — acompanha a venda, não
     // precisa de proporção por dias nem de rateio: vendeu mais, gastou mais.
     const pctGerenciais = ajustesGerenciais.filter((a) => a.tipo === 'DESPESA_PCT' && a.percentual);
+
+    // REALIZADO SOBREPÕE O SIMULADO: enquanto a fatura da mídia não fecha, a
+    // DRE usa o coeficiente; no dia em que o dono lança o gasto real daquele
+    // mês, o valor lançado manda e o percentual vira só referência.
+    const realizados: any[] = pctGerenciais.length
+      ? await (this.prisma as any).dreAjusteRealizado.findMany({
+          where: { mes: mesRef, ajusteId: { in: pctGerenciais.map((a: any) => a.id) } },
+        })
+      : [];
+    const realizadoPorAjuste = new Map<string, number>();
+    for (const r of realizados) realizadoPorAjuste.set(r.ajusteId, Number(r.valorCents) / 100);
+
+    const simulacao: any[] = [];
     for (const aj of pctGerenciais) {
-      const pctAj = Number(aj.percentual) / 100;
       const grupo = (String(aj.grupo || 'VARIAVEL').toUpperCase() as DreGrupoEspecie);
-      for (const col of colunas.values()) {
-        if (!col.faturamentoBruto) continue;
-        if (!this.ajusteValePra(aj, col)) continue;
-        this.somaDespesa(col, aj.descricao, grupo, col.faturamentoBruto * pctAj);
+      const alvos = [...colunas.values()].filter(
+        (c) => c.faturamentoBruto > 0 && this.ajusteValePra(aj, c),
+      );
+      const baseAlvo = alvos.reduce((s, c) => s + c.faturamentoBruto, 0);
+      if (!baseAlvo) continue;
+
+      const real = realizadoPorAjuste.get(aj.id);
+      // Valor lançado é do MÊS: num filtro parcial entra proporcional aos dias,
+      // igual à despesa fixa — senão "últimos 7 dias" cobraria a mídia inteira.
+      const totalAplicado = real != null
+        ? real * proporcao
+        : baseAlvo * (Number(aj.percentual) / 100);
+
+      for (const col of alvos) {
+        // Rateio pelo faturamento: mesma régua do percentual, então trocar
+        // simulado por realizado não muda a distribuição entre as lojas.
+        this.somaDespesa(col, aj.descricao, grupo, totalAplicado * (col.faturamentoBruto / baseAlvo));
       }
+
+      simulacao.push({
+        id: aj.id,
+        descricao: aj.descricao,
+        percentual: Number(aj.percentual),
+        alvo: alvos.map((c) => c.label),
+        baseFaturamento: baseAlvo,
+        simulado: baseAlvo * (Number(aj.percentual) / 100),
+        realizado: real ?? null,
+        aplicado: totalAplicado,
+        fonte: real != null ? 'realizado' : 'simulado',
+      });
     }
 
     const fixasGerenciais = ajustesGerenciais.filter((a) => a.tipo === 'DESPESA_FIXA' && a.valorMensalCents);
@@ -879,6 +941,14 @@ export class DreService implements OnApplicationBootstrap {
         total: [...descartadas.values()].reduce((s, d) => s + d.valor, 0)
           + despesaSemColuna + despesaFranquia
           + [...excluidoPorAjuste.values()].reduce((s, v) => s + v, 0),
+      },
+      // Mídia: quanto está SIMULADO por coeficiente e quanto já foi LANÇADO.
+      // A tela usa isso pro dono fechar o mês com o valor real da fatura.
+      midia: {
+        mes: mesRef,
+        linhas: simulacao,
+        totalAplicado: simulacao.reduce((s, m) => s + m.aplicado, 0),
+        aindaSimulado: simulacao.filter((m) => m.fonte === 'simulado').length,
       },
       ajustes: ajustesGerenciais.map((a: any) => ({
         id: a.id, tipo: a.tipo, descricao: a.descricao,
@@ -1549,6 +1619,63 @@ export class DreService implements OnApplicationBootstrap {
   async deleteAjuste(id: string) {
     await (this.prisma as any).dreAjuste.delete({ where: { id } });
     return { ok: true };
+  }
+
+  /**
+   * Lança o gasto REAL de um ajuste percentual num mês. A partir daí a DRE
+   * para de simular por coeficiente naquele mês.
+   */
+  async lancarRealizado(
+    input: { ajusteId: string; mes: string; valor: number; observacao?: string },
+    usuario?: string,
+  ) {
+    const mes = String(input.mes || '').slice(0, 7);
+    if (!/^\d{4}-\d{2}$/.test(mes)) throw new BadRequestException('Mês inválido (YYYY-MM)');
+    const valor = Number(input.valor);
+    if (!Number.isFinite(valor) || valor < 0) throw new BadRequestException('Valor inválido');
+
+    const ajuste = await (this.prisma as any).dreAjuste.findUnique({ where: { id: input.ajusteId } });
+    if (!ajuste) throw new BadRequestException('Ajuste não encontrado');
+    if (ajuste.tipo !== 'DESPESA_PCT') {
+      throw new BadRequestException('Só ajuste percentual aceita valor realizado');
+    }
+
+    const row = await (this.prisma as any).dreAjusteRealizado.upsert({
+      where: { ajusteId_mes: { ajusteId: input.ajusteId, mes } },
+      create: {
+        ajusteId: input.ajusteId,
+        mes,
+        valorCents: Math.round(valor * 100),
+        observacao: input.observacao?.slice(0, 160) || null,
+        lancadoPor: usuario || null,
+      },
+      update: {
+        valorCents: Math.round(valor * 100),
+        observacao: input.observacao?.slice(0, 160) || null,
+        lancadoPor: usuario || null,
+      },
+    });
+    return { ok: true, id: row.id, mes, valor };
+  }
+
+  /** Apaga o lançado — o mês volta a usar o coeficiente. */
+  async apagarRealizado(ajusteId: string, mes: string) {
+    await (this.prisma as any).dreAjusteRealizado.deleteMany({ where: { ajusteId, mes } });
+    return { ok: true, voltouPraSimulacao: true };
+  }
+
+  /** Lançamentos de um mês, pra tela mostrar o que já foi fechado. */
+  async listRealizados(mes: string) {
+    const m = String(mes || '').slice(0, 7);
+    if (!/^\d{4}-\d{2}$/.test(m)) throw new BadRequestException('Mês inválido (YYYY-MM)');
+    const rows: any[] = await (this.prisma as any).dreAjusteRealizado.findMany({
+      where: { mes: m },
+    });
+    return rows.map((r) => ({
+      ajusteId: r.ajusteId, mes: r.mes,
+      valor: Number(r.valorCents) / 100,
+      observacao: r.observacao, lancadoPor: r.lancadoPor, lancadoEm: r.updatedAt,
+    }));
   }
 
   // ── taxas de cartão ──────────────────────────────────────────────────────
