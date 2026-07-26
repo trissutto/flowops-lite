@@ -50,12 +50,28 @@ type Coluna = {
   avisos: string[]; cmvEstimadoPct: number;
 };
 
+type Franquia = {
+  code: string; name: string; faturamentoBruto: number;
+  cupons: number; pecas: number; royalties: number; marketing: number;
+};
+
 type Resultado = {
   de: string; ate: string; mesRef: string;
   total: Coluna; colunas: Coluna[];
+  franquias: {
+    lojas: Franquia[]; faturamentoBruto: number; royalties: number; marketing: number;
+    royaltiesPct: number; marketingPct: number; despesaLancada: number;
+  };
+  consolidadoDono: { resultadoRede: number; royaltiesFranquia: number; total: number };
+  conciliacao: {
+    faturamentoRede: number; faturamentoFranquias: number;
+    faturamentoForaDaDre: number; lojasForaDaDre: string[]; totalGrupo: number;
+  };
   rede: { despesaTotal: number; lojas: string[]; criterioRateio: string };
   config: {
     markupFallback: number;
+    aliquotaPadrao: number;
+    cmvIndisponivel: boolean;
     lojasSemGrupo: string[];
     especiesSemGrupo: number;
     contasSemEspecie: { valor: number; lojas: string[] };
@@ -73,7 +89,7 @@ const LINHAS: Array<{
   { campo: 'receitaLiquida', label: '( = ) Receita líquida', tipo: 'subtotal' },
   { campo: 'cmv', label: '( - ) CMV (custo das peças vendidas)', tipo: 'deducao' },
   { campo: 'margemBruta', label: '( = ) Margem bruta', tipo: 'subtotal', pctCampo: 'margemBrutaPct' },
-  { campo: 'impostos', label: '( - ) Impostos', tipo: 'deducao', nota: 'Alíquota efetiva por CNPJ' },
+  { campo: 'impostos', label: '( - ) Impostos', tipo: 'deducao', nota: '10% da receita líquida' },
   { campo: 'despesasVariaveis', label: '( - ) Despesas variáveis', tipo: 'deducao', drill: 'VARIAVEL' },
   { campo: 'margemContribuicao', label: '( = ) Margem de contribuição', tipo: 'subtotal', pctCampo: 'margemContribuicaoPct' },
   { campo: 'despesasFixas', label: '( - ) Despesas fixas da loja', tipo: 'deducao', drill: 'FIXA' },
@@ -208,24 +224,23 @@ function AbaDre({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
 
       {data && total && (
         <>
-          {/* KPIs do consolidado */}
-          <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+          <Conciliacao data={data} />
+
+          {/* KPIs — REDE (lojas próprias). Franquia tem bloco próprio. */}
+          <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
             <Kpi titulo="Receita líquida" valor={brl(total.receitaLiquida)} sub={`${total.cupons} cupons · ${total.pecas} peças`} />
             <Kpi titulo="Margem de contribuição" valor={pct(total.margemContribuicaoPct)} sub={brl(total.margemContribuicao)} />
             <Kpi titulo="Resultado 4-wall" valor={brl(total.resultado4Wall)} sub={pct(total.resultado4WallPct)}
               tom={total.resultado4Wall >= 0 ? 'verde' : 'vermelho'} />
-            <Kpi titulo="Lucro líquido" valor={brl(total.resultadoLiquido)} sub={`Lucratividade ${pct(total.lucratividade)}`}
+            <Kpi titulo="Lucro da rede" valor={brl(total.resultadoLiquido)} sub={`Lucratividade ${pct(total.lucratividade)}`}
               tom={total.resultadoLiquido >= 0 ? 'verde' : 'vermelho'} />
-            <Kpi
-              titulo="Ponto de equilíbrio"
-              valor={total.pontoEquilibrio ? brl(total.pontoEquilibrio) : '—'}
-              sub={
-                total.pontoEquilibrio == null ? 'sem despesa fixa lançada'
-                  : total.faltaPraEquilibrio ? `faltam ${brl(total.faltaPraEquilibrio)}`
-                  : 'atingido no período'
-              }
-              tom={total.pontoEquilibrio && !total.faltaPraEquilibrio ? 'verde' : 'neutro'}
-            />
+            <Kpi titulo={`Royalties franquia (${data.franquias.royaltiesPct}%)`}
+              valor={brl(data.consolidadoDono.royaltiesFranquia)}
+              sub={`sobre ${brlCurto(data.franquias.faturamentoBruto)} faturados`}
+              tom={data.consolidadoDono.royaltiesFranquia > 0 ? 'verde' : 'neutro'} />
+            <Kpi titulo="TOTAL DO DONO" valor={brl(data.consolidadoDono.total)}
+              sub="lucro da rede + royalties"
+              tom={data.consolidadoDono.total >= 0 ? 'verde' : 'vermelho'} />
           </div>
 
           <Waterfall total={total} />
@@ -314,6 +329,7 @@ function AbaDre({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
             </div>
           </div>
 
+          <BlocoFranquias data={data} />
           <Qualidade data={data} />
         </>
       )}
@@ -409,9 +425,126 @@ function Waterfall({ total }: { total: Coluna }) {
   );
 }
 
+/**
+ * Fecha a conta contra a tela "Faturamento por Loja". As duas telas leem a
+ * MESMA fonte (caixa do Giga); a DRE só mostra as lojas próprias, então o
+ * total dela é menor de propósito. Esta faixa mostra a soma completa pra
+ * ninguém precisar desconfiar de qual número está certo.
+ */
+function Conciliacao({ data }: { data: Resultado }) {
+  const c = data.conciliacao;
+  const temFranquia = c.faturamentoFranquias > 0;
+  const temFora = c.faturamentoForaDaDre > 0;
+  if (!temFranquia && !temFora) return null;
+
+  return (
+    <div className="bg-white border border-[#E7E2D8] rounded-xl px-4 py-3 text-sm">
+      <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wide mb-2">
+        Conciliação com a tela “Faturamento por Loja”
+      </div>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 font-semibold">
+        <Parcela label="Rede (lojas próprias)" valor={c.faturamentoRede} />
+        {temFranquia && <><span className="text-slate-400">+</span>
+          <Parcela label="Franquias" valor={c.faturamentoFranquias} /></>}
+        {temFora && <><span className="text-slate-400">+</span>
+          <Parcela label="Fora da DRE" valor={c.faturamentoForaDaDre} alerta /></>}
+        <span className="text-slate-400">=</span>
+        <Parcela label="Total do grupo" valor={c.totalGrupo} forte />
+      </div>
+      <p className="text-[11px] text-slate-400 mt-2">
+        A DRE mostra o resultado das <b>lojas próprias</b>. Franquia entra só pelos royalties —
+        o faturamento dela não é receita sua.
+        {temFora && ` Lojas sem papel definido na DRE: ${c.lojasForaDaDre.join(', ')}.`}
+      </p>
+    </div>
+  );
+}
+
+function Parcela({ label, valor, forte, alerta }: {
+  label: string; valor: number; forte?: boolean; alerta?: boolean;
+}) {
+  return (
+    <span className={`px-2.5 py-1 rounded-lg border ${
+      forte ? 'bg-[#FBF6E6] border-[#D4AF37] text-slate-800'
+        : alerta ? 'bg-amber-50 border-amber-300 text-amber-800'
+        : 'bg-slate-50 border-[#E7E2D8] text-slate-700'
+    }`}>
+      <span className="text-[11px] font-bold text-slate-500 mr-1.5">{label}</span>
+      <span className="tabular-nums">{brl(valor)}</span>
+    </span>
+  );
+}
+
+/**
+ * FRANQUIAS — o dono não ganha o resultado da loja franqueada, ganha o
+ * royalty. Por isso ela não é coluna da DRE: é este bloco.
+ */
+function BlocoFranquias({ data }: { data: Resultado }) {
+  const f = data.franquias;
+  if (!f.lojas.length) return null;
+
+  return (
+    <div className="bg-white border border-[#E7E2D8] rounded-xl overflow-hidden">
+      <div className="px-4 py-3 border-b border-[#E7E2D8] bg-[#FBF6E6]/50">
+        <h2 className="font-extrabold text-slate-800">Franquias</h2>
+        <p className="text-xs text-slate-500">
+          Não entram na DRE da rede — seu ganho aqui é o royalty de {f.royaltiesPct}% sobre a venda delas
+        </p>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-[#E7E2D8] text-xs text-slate-500">
+              <th className="text-left px-4 py-2 font-bold">Franquia</th>
+              <th className="text-right px-3 py-2 font-bold">Faturamento dela</th>
+              <th className="text-right px-3 py-2 font-bold">Cupons</th>
+              <th className="text-right px-3 py-2 font-bold">Peças</th>
+              <th className="text-right px-3 py-2 font-bold text-[#2E7D46]">
+                Royalties {f.royaltiesPct}% <span className="font-normal">(seu)</span>
+              </th>
+              <th className="text-right px-4 py-2 font-bold">
+                Marketing {f.marketingPct}% <span className="font-normal text-slate-400">(repasse)</span>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {f.lojas.map((l) => (
+              <tr key={l.code} className="border-b border-[#F5F2EB]">
+                <td className="px-4 py-2 font-semibold">{l.name}</td>
+                <td className="text-right px-3 py-2 tabular-nums text-slate-500">{brl(l.faturamentoBruto)}</td>
+                <td className="text-right px-3 py-2 tabular-nums text-slate-500">{l.cupons}</td>
+                <td className="text-right px-3 py-2 tabular-nums text-slate-500">{l.pecas}</td>
+                <td className="text-right px-3 py-2 tabular-nums font-extrabold text-[#2E7D46]">{brl(l.royalties)}</td>
+                <td className="text-right px-4 py-2 tabular-nums text-slate-500">{brl(l.marketing)}</td>
+              </tr>
+            ))}
+            <tr className="bg-[#F4F8F5] font-extrabold border-t border-[#E7E2D8]">
+              <td className="px-4 py-2">TOTAL</td>
+              <td className="text-right px-3 py-2 tabular-nums">{brl(f.faturamentoBruto)}</td>
+              <td colSpan={2} />
+              <td className="text-right px-3 py-2 tabular-nums text-[#2E7D46]">{brl(f.royalties)}</td>
+              <td className="text-right px-4 py-2 tabular-nums">{brl(f.marketing)}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p className="px-4 py-2 text-[11px] text-slate-400 border-t border-[#F5F2EB]">
+        O marketing de {f.marketingPct}% é repasse pra cobrir a verba da rede — entra como caixa, não como lucro.
+        A mercadoria vendida pra franquia (preço ÷ 2,5) também não conta aqui.
+      </p>
+    </div>
+  );
+}
+
 /** Avisos de qualidade do dado — o painel diz onde ele está chutando. */
 function Qualidade({ data }: { data: Resultado }) {
   const itens: string[] = [];
+  if (data.config.cmvIndisponivel) {
+    itens.push(
+      'O espelho do caixa não cobre este período — o CMV (e portanto a margem) está zerado. ' +
+      'Rode a sincronização do espelho ou escolha um período mais recente.',
+    );
+  }
   if (data.config.lojasSemGrupo.length) {
     itens.push(
       `${data.config.lojasSemGrupo.length} loja(s) sem papel definido na DRE (${data.config.lojasSemGrupo.join(', ')}) — ` +
@@ -451,7 +584,8 @@ function Qualidade({ data }: { data: Resultado }) {
         ))}
       </ul>
       <div className="text-[11px] text-amber-700 mt-2">
-        Fonte: {data.fonte}. Venda lançada só no GIGA (WhatsApp antigo) não entra nesta DRE.
+        Fonte: {data.fonte}. Imposto padrão de {data.config.aliquotaPadrao}% sobre a receita líquida
+        (dá pra sobrepor por CNPJ/mês em Configuração).
       </div>
     </div>
   );
@@ -553,6 +687,7 @@ function DrillModal({
 const AJUDA_LOJA: Record<string, string> = {
   LOJA: 'Loja física — vira coluna e é avaliada pelo resultado 4-wall',
   CANAL: 'LIVE/SITE — coluna própria; a peça sai da loja a preço de custo',
+  FRANQUIA: 'Loja franqueada — sai da DRE; entra só pelos 8% de royalties',
   REDE: 'Matriz — não é coluna; o que for lançado aqui é rateado por faturamento',
   FORA: 'Ignorada na DRE (CD, loja fechada, cadastro de teste)',
 };
@@ -635,7 +770,10 @@ function AbaConfig({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }
       </Bloco>
 
       {/* Alíquotas */}
-      <Bloco titulo="Alíquota efetiva por CNPJ × mês" subtitulo="A faixa do Simples muda com o RBT12 — por isso não existe percentual único da rede">
+      <Bloco
+        titulo={`Imposto — padrão ${cfg.aliquotaPadrao}% da receita líquida`}
+        subtitulo="Só preencha abaixo se algum CNPJ estiver numa faixa diferente do Simples num mês específico"
+      >
         <div className="flex flex-wrap items-end gap-2 mb-3">
           <Campo label="CNPJ">
             <input value={novaAliq.cnpj} onChange={(e) => setNovaAliq({ ...novaAliq, cnpj: e.target.value })}
@@ -659,7 +797,9 @@ function AbaConfig({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }
           </button>
         </div>
         {cfg.aliquotas.length === 0 ? (
-          <p className="text-xs text-slate-400">Nenhuma alíquota cadastrada — o imposto está entrando como zero em todas as colunas.</p>
+          <p className="text-xs text-slate-400">
+            Nenhum override cadastrado — todas as colunas estão usando os {cfg.aliquotaPadrao}% padrão.
+          </p>
         ) : (
           <table className="w-full text-sm">
             <thead><tr className="text-xs text-slate-500 border-b border-[#E7E2D8]">
