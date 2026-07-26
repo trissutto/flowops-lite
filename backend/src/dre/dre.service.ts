@@ -876,13 +876,35 @@ export class DreService implements OnApplicationBootstrap {
       if (!col.despesasFixas && col.faturamentoBruto) {
         col.avisos.push('Nenhuma despesa fixa lançada no Contas a Pagar pro período');
       }
-      // Alarme de cupom colapsado (ver bloco 3a).
+      // ── SANIDADE DA CONTAGEM DE CUPOM (3 checagens) ────────────────────
+      // A causa raiz já foi corrigida (o NUMERO é FLOAT e achatava na
+      // conversão pra texto — ver getCaixaMovRaw), mas as checagens ficam:
+      // é dado que vem de fora e pode voltar a quebrar sem avisar.
       const noFlow = cuponsFlow.get(col.key) || 0;
       if (noFlow > 0 && col.cupons > 0 && col.cupons < noFlow) {
         col.avisos.push(
-          `Contagem de cupom suspeita: ${col.cupons} no caixa do Giga contra ${noFlow} vendas no PDV — ` +
-          'o caixa contém o PDV, então não pode ter menos. O ticket médio está inflado; ' +
-          'a numeração do cupom deve reiniciar por caixa/operador, não só por dia.',
+          `Contagem de cupom colapsada: ${col.cupons} no caixa contra ${noFlow} vendas no PDV — ` +
+          'o caixa contém o PDV, então não pode ter menos. Ticket médio e peças/venda estão inflados.',
+        );
+      }
+      if (col.cupons > 0 && col.pecas > 0) {
+        const itensPorCupom = col.pecas / col.cupons;
+        if (itensPorCupom > 8) {
+          col.avisos.push(
+            `${itensPorCupom.toFixed(1)} peças por venda — alto demais pra varejo de moda. ` +
+            'Sinal de cupom colapsado (várias vendas contadas como uma).',
+          );
+        } else if (itensPorCupom < 1) {
+          col.avisos.push(
+            `${itensPorCupom.toFixed(2)} peça por venda — abaixo de 1 é impossível. ` +
+            'Sinal de cupom inflado (a mesma venda contada várias vezes).',
+          );
+        }
+      }
+      if (col.ticketMedio > 0 && (col.ticketMedio < 80 || col.ticketMedio > 1200)) {
+        col.avisos.push(
+          `Ticket médio de ${this.brl(col.ticketMedio)} fora da faixa esperada de moda plus size ` +
+          '(R$ 80 a R$ 1.200) — confira a contagem de cupom antes de usar esse número.',
         );
       }
       // Os DOIS caminhos de troca em uso ao mesmo tempo: se a mesma troca foi
@@ -1296,7 +1318,7 @@ export class DreService implements OnApplicationBootstrap {
         // Aqui o GROUP BY já é por DIA, então DISTINCT numero basta — mas
         // mantém a chave completa pra não virar armadilha se o agrupamento mudar.
         `SELECT to_char(data_fec, 'YYYY-MM-DD') AS dia,
-                COUNT(DISTINCT (data_fec, numero))::int AS cupons,
+                COUNT(DISTINCT COALESCE(NULLIF(btrim(obs_pedido), ''), 'n:' || numero))::int AS cupons,
                 COALESCE(SUM(valor_total), 0)::float8 AS total
            FROM giga_caixa_mov
           WHERE data_fec >= $1 AND data_fec < $2
