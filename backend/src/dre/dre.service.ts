@@ -1259,6 +1259,88 @@ export class DreService implements OnApplicationBootstrap {
     throw new BadRequestException(`Linha "${input.linha}" não tem drill-down`);
   }
 
+  /**
+   * DIAGNÓSTICO DA CONTAGEM DE CUPOM.
+   *
+   * O ticket médio saiu em R$ 2.722 numa loja de moda plus size e o alarme
+   * acusou 50 cupons no caixa contra 347 vendas no PDV. Antes de trocar a
+   * chave de novo no escuro (já errei uma vez supondo que o NUMERO
+   * reiniciava — ele é MAX(NUMERO)+1 global), esta rota MEDE cada candidata
+   * a chave de cupom contra a verdade conhecida: o nº de vendas do PdvSale.
+   *
+   * A chave certa é a que chega perto de `vendasPdv` sem ficar abaixo.
+   */
+  async diagnosticoCupom(input: { de: string; ate: string }) {
+    const { de, ate } = this.validaPeriodo(input.de, input.ate);
+    const { inicio, fimExclusive } = this.caixaRange(de, ate);
+    const { startDate, endDate } = this.brtRange(de, ate);
+
+    const chaves: any[] = await this.prisma.$queryRawUnsafe(
+      `SELECT loja AS "loja",
+              COUNT(*)::int                                   AS linhas,
+              COUNT(DISTINCT numero)::int                     AS "porNumero",
+              COUNT(DISTINCT (data_fec, numero))::int         AS "porDataNumero",
+              COUNT(DISTINCT controle)::int                   AS "porControle",
+              COUNT(DISTINCT (numero, hora))::int             AS "porNumeroHora",
+              COUNT(DISTINCT (data_fec, numero, cod_cliente))::int AS "porDataNumeroCliente",
+              COUNT(DISTINCT registro)::int                   AS "porRegistro",
+              SUM(CASE WHEN numero IS NULL THEN 1 ELSE 0 END)::int AS "numeroNulo",
+              SUM(CASE WHEN controle IS NULL THEN 1 ELSE 0 END)::int AS "controleNulo"
+         FROM giga_caixa_mov
+        WHERE data_fec >= $1 AND data_fec < $2
+          AND (marcado IS NULL OR marcado <> 'SIM')
+        GROUP BY loja`,
+      inicio, fimExclusive,
+    );
+
+    const vendas: any[] = await this.prisma.$queryRawUnsafe(
+      `SELECT store_code AS "storeCode", COUNT(*)::int AS vendas
+         FROM pdv_sales
+        WHERE finalized_at >= $1 AND finalized_at <= $2
+          AND status = 'finalized' AND is_training = false
+          AND (payment_method IS NULL OR payment_method <> 'MARCADO')
+        GROUP BY store_code`,
+      startDate, endDate,
+    );
+    const pdvPorLoja = new Map<string, number>();
+    for (const v of vendas) {
+      for (const variante of this.variantes(v.storeCode)) {
+        pdvPorLoja.set(variante, Number(v.vendas || 0));
+      }
+      pdvPorLoja.set(String(v.storeCode || '').toUpperCase(), Number(v.vendas || 0));
+    }
+
+    // Amostra: os NUMEROs que mais repetem — mostra o que está sendo agrupado.
+    const amostra: any[] = await this.prisma.$queryRawUnsafe(
+      `SELECT loja, numero, controle,
+              COUNT(*)::int AS linhas,
+              COUNT(DISTINCT data_fec)::int AS dias,
+              COUNT(DISTINCT cod_cliente)::int AS clientes,
+              MIN(hora) AS "horaMin", MAX(hora) AS "horaMax",
+              SUM(valor_total)::float8 AS total
+         FROM giga_caixa_mov
+        WHERE data_fec >= $1 AND data_fec < $2
+          AND (marcado IS NULL OR marcado <> 'SIM')
+        GROUP BY loja, numero, controle
+        ORDER BY linhas DESC
+        LIMIT 15`,
+      inicio, fimExclusive,
+    );
+
+    return {
+      de, ate,
+      explicacao:
+        'CUPOM = uma venda. A DRE conta valores distintos de NUMERO na caixa do Giga. '
+        + 'Compare cada coluna "por*" com vendasPdv: a chave boa é a que chega perto SEM ficar abaixo '
+        + '(o caixa contém o PDV, então nunca pode ter menos).',
+      lojas: chaves.map((c) => ({
+        ...c,
+        vendasPdv: pdvPorLoja.get(String(c.loja || '').trim().toUpperCase()) ?? null,
+      })),
+      amostraNumerosQueMaisRepetem: amostra,
+    };
+  }
+
   // ── configuração ─────────────────────────────────────────────────────────
 
   async config() {
