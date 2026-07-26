@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
+import { FaturamentoService } from '../faturamento/faturamento.service';
 
 /**
  * DRE por loja — painel /retaguarda/dre.
@@ -144,6 +145,7 @@ export class DreService implements OnApplicationBootstrap {
   constructor(
     private readonly prisma: PrismaService,
     private readonly erp: ErpService,
+    private readonly faturamento: FaturamentoService,
   ) {}
 
   /**
@@ -460,7 +462,7 @@ export class DreService implements OnApplicationBootstrap {
     }
 
     // ── 4) Canais digitais (LIVE / SITE) ──
-    await this.aplicaCanais(colunas, canais, startDate, endDate);
+    await this.aplicaCanais(colunas, canais, inicio, fimExclusive);
 
     // ── 5) Despesas (ContaPagar por VENCIMENTO) ──
     const especies: any[] = await (this.prisma as any).especieConta.findMany();
@@ -796,8 +798,8 @@ export class DreService implements OnApplicationBootstrap {
   private async aplicaCanais(
     colunas: Map<string, DreColuna>,
     canais: any[],
-    startDate: Date,
-    endDate: Date,
+    inicio: Date,
+    fimExclusive: Date,
   ) {
     if (!canais.length) return;
 
@@ -808,48 +810,24 @@ export class DreService implements OnApplicationBootstrap {
     const colLive = acha(/\bLIVE\b/);
     const colSite = acha(/\bSITE\b|E-?COMMERCE/);
 
-    if (colLive) {
-      const [venda]: any[] = await this.prisma.$queryRawUnsafe(
-        `SELECT COUNT(*)::int AS cupons, COALESCE(SUM(subtotal_cents), 0)::bigint AS total
-           FROM live_pdv_carts
-          WHERE paid_at >= $1 AND paid_at <= $2 AND status = ANY($3::text[])`,
-        startDate, endDate, LIVE_VENDIDO,
-      );
-      colLive.faturamentoBruto += Number(venda?.total || 0) / 100;
-      colLive.cupons += Number(venda?.cupons || 0);
+    // Os MESMOS métodos que a tela /retaguarda/faturamento usa. Reimplementar
+    // aqui já custou R$ 48k de divergência no SITE (26/07): a tela conta 8
+    // status de pedido, pela data da COMPRA e sem frete; a cópia contava só
+    // 'completed', pela data de chegada no Flow e com frete.
+    const [live, site] = await Promise.all([
+      colLive ? this.faturamento.getLiveFaturamento(inicio, fimExclusive) : null,
+      colSite ? this.faturamento.getFlowopsSiteFaturamento(inicio, fimExclusive) : null,
+    ]);
 
-      // Só as PEÇAS — o CMV do canal sai do markup, igual às lojas.
-      const [pc]: any[] = await this.prisma.$queryRawUnsafe(
-        `SELECT COALESCE(SUM(i.qty), 0)::int AS pecas
-           FROM live_pdv_items i
-           JOIN live_pdv_carts c ON c.id = i.cart_id
-          WHERE c.paid_at >= $1 AND c.paid_at <= $2
-            AND c.status = ANY($3::text[]) AND i.status <> 'cancelled'`,
-        startDate, endDate, LIVE_VENDIDO,
-      );
-      colLive.pecas += Number(pc?.pecas || 0);
+    if (colLive && live) {
+      colLive.faturamentoBruto += live.faturamento;
+      colLive.cupons += live.cupons;
+      colLive.pecas += live.pecas;
     }
-
-    if (colSite) {
-      const [venda]: any[] = await this.prisma.$queryRawUnsafe(
-        `SELECT COUNT(*)::int AS cupons, COALESCE(SUM(total_amount), 0)::float AS total
-           FROM orders
-          WHERE created_at >= $1 AND created_at <= $2
-            AND status = 'completed' AND source <> 'live'`,
-        startDate, endDate,
-      );
-      colSite.faturamentoBruto += Number(venda?.total || 0);
-      colSite.cupons += Number(venda?.cupons || 0);
-
-      const [pc]: any[] = await this.prisma.$queryRawUnsafe(
-        `SELECT COALESCE(SUM(oi.quantity), 0)::int AS pecas
-           FROM order_items oi
-           JOIN orders o ON o.id = oi.order_id
-          WHERE o.created_at >= $1 AND o.created_at <= $2
-            AND o.status = 'completed' AND o.source <> 'live'`,
-        startDate, endDate,
-      );
-      colSite.pecas += Number(pc?.pecas || 0);
+    if (colSite && site) {
+      colSite.faturamentoBruto += site.faturamento;
+      colSite.cupons += site.cupons;
+      colSite.pecas += site.pecas;
 
       if (colLive && colSite.key === colLive.key) {
         colSite.avisos.push('LIVE e SITE na MESMA coluna — cadastre uma loja-canal pra cada um pra separar');
