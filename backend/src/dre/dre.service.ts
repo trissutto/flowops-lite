@@ -205,6 +205,29 @@ export class DreService implements OnApplicationBootstrap {
         },
       },
       {
+        chave: 'dre_marketing_site_20pct_2607',
+        rotulo: 'Marketing do SITE 20% (loja física fica em 5%)',
+        run: async () => {
+          // O digital gasta MUITO mais mídia que a loja física (dono, 26/07).
+          // Em vez de um percentual médio que mente nos dois lados, são dois
+          // ajustes mirando alvos diferentes.
+          await (this.prisma as any).dreAjuste.updateMany({
+            where: { tipo: 'DESPESA_PCT', descricao: 'Marketing' },
+            data: { lojasExcluidas: 'SITE' },
+          });
+          await (this.prisma as any).dreAjuste.create({
+            data: {
+              tipo: 'DESPESA_PCT',
+              descricao: 'Marketing SITE',
+              percentual: 20,
+              grupo: 'VARIAVEL',
+              lojasIncluidas: 'SITE',
+              criadoPor: 'seed 26/07',
+            },
+          });
+        },
+      },
+      {
         chave: 'dre_especies_limpeza_2607',
         rotulo: 'espécies de despesa criadas + formas de pagamento inativadas',
         run: async () => {
@@ -702,30 +725,23 @@ export class DreService implements OnApplicationBootstrap {
     for (const aj of pctGerenciais) {
       const pctAj = Number(aj.percentual) / 100;
       const grupo = (String(aj.grupo || 'VARIAVEL').toUpperCase() as DreGrupoEspecie);
-      const foraDaRegra = new Set(
-        String(aj.lojasExcluidas || '').split(',').map((s: string) => this.semAcento(s).trim()).filter(Boolean),
-      );
       for (const col of colunas.values()) {
         if (!col.faturamentoBruto) continue;
-        if (foraDaRegra.has(this.semAcento(col.key)) || foraDaRegra.has(this.semAcento(col.label))) continue;
+        if (!this.ajusteValePra(aj, col)) continue;
         this.somaDespesa(col, aj.descricao, grupo, col.faturamentoBruto * pctAj);
       }
     }
 
     const fixasGerenciais = ajustesGerenciais.filter((a) => a.tipo === 'DESPESA_FIXA' && a.valorMensalCents);
     for (const aj of fixasGerenciais) {
-      const foraDaRegra = new Set(
-        String(aj.lojasExcluidas || '')
-          .split(',')
-          .map((s: string) => this.semAcento(s).trim())
-          .filter(Boolean),
-      );
       const valor = (Number(aj.valorMensalCents) / 100) * proporcao;
       const grupo = (String(aj.grupo || 'FIXA').toUpperCase() as DreGrupoEspecie);
+      const temWhitelist = !!String(aj.lojasIncluidas || '').trim();
       for (const col of colunas.values()) {
-        // Só loja física paga: canal digital não tem ponto pra vigiar.
-        if (col.grupo !== 'LOJA') continue;
-        if (foraDaRegra.has(this.semAcento(col.key)) || foraDaRegra.has(this.semAcento(col.label))) continue;
+        // Só loja física paga — canal digital não tem ponto pra vigiar. Mas se
+        // o ajuste mira lojas específicas, a escolha é do dono e vale.
+        if (!temWhitelist && col.grupo !== 'LOJA') continue;
+        if (!this.ajusteValePra(aj, col)) continue;
         this.somaDespesa(col, aj.descricao, grupo, valor);
       }
     }
@@ -869,7 +885,7 @@ export class DreService implements OnApplicationBootstrap {
         fornecedorMatch: a.fornecedorMatch,
         valorMensal: a.valorMensalCents != null ? a.valorMensalCents / 100 : null,
       percentual: a.percentual != null ? Number(a.percentual) : null,
-        grupo: a.grupo, lojasExcluidas: a.lojasExcluidas,
+        grupo: a.grupo, lojasExcluidas: a.lojasExcluidas, lojasIncluidas: a.lojasIncluidas,
       })),
       config: {
         markup: MARKUP,
@@ -880,6 +896,24 @@ export class DreService implements OnApplicationBootstrap {
       },
       fonte: 'Caixa do Giga (espelho giga_caixa_mov) — MESMA fonte da tela Faturamento por Loja',
     };
+  }
+
+  /**
+   * O ajuste vale pra esta coluna? `lojasIncluidas` (whitelist) tem
+   * precedência: preenchido, aplica SÓ nelas. Senão, aplica em todas menos
+   * as de `lojasExcluidas`. Casa por código OU por nome, sem acento.
+   */
+  private ajusteValePra(aj: any, col: DreColuna): boolean {
+    const lista = (v: string) => new Set(
+      String(v || '').split(',').map((s) => this.semAcento(s).trim()).filter(Boolean),
+    );
+    const alvo = [this.semAcento(col.key), this.semAcento(col.label)];
+
+    const incluidas = lista(aj.lojasIncluidas);
+    if (incluidas.size > 0) return alvo.some((a) => incluidas.has(a));
+
+    const excluidas = lista(aj.lojasExcluidas);
+    return !alvo.some((a) => excluidas.has(a));
   }
 
   /** Faixa de parcela usada na tabela de taxa. */
@@ -1370,7 +1404,7 @@ export class DreService implements OnApplicationBootstrap {
       fornecedorMatch: a.fornecedorMatch,
       valorMensal: a.valorMensalCents != null ? a.valorMensalCents / 100 : null,
       percentual: a.percentual != null ? Number(a.percentual) : null,
-      grupo: a.grupo, lojasExcluidas: a.lojasExcluidas, ativo: a.ativo,
+      grupo: a.grupo, lojasExcluidas: a.lojasExcluidas, lojasIncluidas: a.lojasIncluidas, ativo: a.ativo,
     }));
   }
 
@@ -1383,6 +1417,7 @@ export class DreService implements OnApplicationBootstrap {
     percentual?: number;
     grupo?: string;
     lojasExcluidas?: string;
+    lojasIncluidas?: string;
     ativo?: boolean;
   }, usuario?: string) {
     const tipo = String(input.tipo || '').toUpperCase();
@@ -1416,6 +1451,8 @@ export class DreService implements OnApplicationBootstrap {
       percentual: tipo === 'DESPESA_PCT' ? Number(input.percentual) : null,
       grupo: tipo === 'EXCLUIR_FORNECEDOR' ? null
         : String(input.grupo || (tipo === 'DESPESA_PCT' ? 'VARIAVEL' : 'FIXA')).toUpperCase(),
+      lojasIncluidas: tipo !== 'EXCLUIR_FORNECEDOR'
+        ? (String(input.lojasIncluidas || '').trim().slice(0, 200) || null) : null,
       lojasExcluidas: tipo !== 'EXCLUIR_FORNECEDOR'
         ? (String(input.lojasExcluidas || '').trim().slice(0, 200) || null) : null,
       ativo: input.ativo !== false,
