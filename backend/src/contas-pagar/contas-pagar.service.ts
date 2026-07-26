@@ -67,8 +67,16 @@ export class ContasPagarService {
   }
 
   // ── catálogos/opções ──────────────────────────────────────────────────────
+  /**
+   * Só as ATIVAS. Espécie inativada (ex: as formas de pagamento herdadas do
+   * Giga — BOLETO, CHEQUE, DEPOSITO…) some do lançamento novo, mas continua
+   * valendo nas contas antigas que já a usam.
+   */
   especies() {
-    return (this.prisma as any).especieConta.findMany({ orderBy: { nome: 'asc' } });
+    return (this.prisma as any).especieConta.findMany({
+      where: { ativa: true },
+      orderBy: { nome: 'asc' },
+    });
   }
 
   async lojas() {

@@ -59,6 +59,26 @@ export class DreController {
     return this.svc.setGrupoEspecie(id, body?.grupo);
   }
 
+  /** Cria espécie de conta — não existia no sistema até 26/07. */
+  @Post('config/especie')
+  criarEspecie(@Req() req: any, @Body() body: { nome: string; dreGrupo?: string; restrita?: boolean }) {
+    const usuario = this.requireAdmin(req);
+    return this.svc.criarEspecie(body, usuario);
+  }
+
+  /** Inativa (não apaga — o histórico continua apontando pra ela). */
+  @Delete('config/especie/:id')
+  inativarEspecie(@Req() req: any, @Param('id') id: string) {
+    this.requireAdmin(req);
+    return this.svc.setEspecieAtiva(id, false);
+  }
+
+  @Patch('config/especie/:id/reativar')
+  reativarEspecie(@Req() req: any, @Param('id') id: string) {
+    this.requireAdmin(req);
+    return this.svc.setEspecieAtiva(id, true);
+  }
+
   @Post('config/aliquota')
   upsertAliquota(
     @Req() req: any,
