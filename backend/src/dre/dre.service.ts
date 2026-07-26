@@ -821,12 +821,18 @@ export class DreService implements OnApplicationBootstrap {
     // O que já estiver lançado (GPS/FGTS/ENCARGOS) MANDA: o cálculo só cobre
     // a diferença, então quando a guia inteira entra, o complemento zera
     // sozinho e ninguém conta duas vezes.
-    const encargos: any[] = await (this.prisma as any).dreEncargoFolha.findMany();
-    const pctPorCnpj = new Map<string, any>();
-    for (const e of encargos) pctPorCnpj.set(this.soDigitos(e.cnpj), e);
+    // É por LOJA, não por CNPJ: nem toda loja tem CNPJ cadastrado e o dono
+    // raciocina por loja. O regime vai junto só pra tela explicar o número.
+    const encargoPorLoja = new Map<string, { pct: number; regime: string }>();
+    for (const s of stores) {
+      if (s.dreEncargoPct == null) continue;
+      const pct = Number(s.dreEncargoPct);
+      if (!Number.isFinite(pct) || pct <= 0) continue;
+      encargoPorLoja.set(s.code, { pct, regime: String(s.dreRegime || 'PRESUMIDO') });
+    }
 
     for (const col of colunas.values()) {
-      const cfg = col.cnpj ? pctPorCnpj.get(col.cnpj) : null;
+      const cfg = encargoPorLoja.get(col.key);
       if (!cfg) continue;
 
       const folha = (col.despesasDetalhe || [])
@@ -838,14 +844,14 @@ export class DreService implements OnApplicationBootstrap {
         .filter((d) => /FGTS|INSS|ENCARGO|GPS|DARF/.test(this.semAcento(d.especie)))
         .reduce((s, d) => s + d.valor, 0);
 
-      const devido = folha * (Number(cfg.encargoPct) / 100);
+      const devido = folha * (cfg.pct / 100);
       const complemento = Math.max(0, devido - jaLancado);
       if (complemento > 0.005) {
         this.somaDespesa(col, `Encargos sobre folha (${cfg.regime})`, 'FIXA', complemento);
       }
       col.encargoFolha = {
         regime: cfg.regime,
-        pct: Number(cfg.encargoPct),
+        pct: cfg.pct,
         folha,
         devido,
         jaLancado,
@@ -1597,6 +1603,8 @@ export class DreService implements OnApplicationBootstrap {
         dreGrupoEfetivo: this.grupoDaLoja(s),
         configurado: !!s.dreGrupo,
         markup: s.dreMarkup != null ? Number(s.dreMarkup) : null,
+        encargoPct: s.dreEncargoPct != null ? Number(s.dreEncargoPct) : null,
+        regime: s.dreRegime || null,
       })),
       // Só as ATIVAS na tela de classificação — inativa não recebe conta nova,
       // não faz sentido pedir pro dono classificar.
@@ -1859,49 +1867,27 @@ export class DreService implements OnApplicationBootstrap {
     return { ok: true, id: row.id, cnpj, mes, aliquotaPct: pct };
   }
 
-  /** Percentual de encargo sobre folha por CNPJ (Simples × Presumido). */
-  async upsertEncargoFolha(
-    input: { cnpj: string; regime?: string; encargoPct: number; observacao?: string },
-    usuario?: string,
-  ) {
-    const cnpj = this.soDigitos(input.cnpj);
-    if (cnpj.length !== 14) throw new BadRequestException('CNPJ inválido (14 dígitos)');
-    const pct = Number(input.encargoPct);
-    // Teto em 100%: encargo maior que a própria folha seria erro de digitação,
-    // não regime tributário.
-    if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
-      throw new BadRequestException('Percentual deve estar entre 0 e 100');
+  /**
+   * Encargo sobre folha DESTA LOJA. Valor nulo/vazio desliga o cálculo dela.
+   * Faixa 0–100: encargo maior que a própria folha é dedo errado.
+   */
+  async setEncargoLoja(code: string, pct: number | null, regime?: string) {
+    let valor: number | null = null;
+    if (pct != null && String(pct) !== '') {
+      valor = Number(pct);
+      if (!Number.isFinite(valor) || valor < 0 || valor > 100) {
+        throw new BadRequestException('Encargo deve estar entre 0 e 100%');
+      }
     }
-    const regime = String(input.regime || 'PRESUMIDO').toUpperCase();
-    if (!['SIMPLES', 'PRESUMIDO', 'REAL'].includes(regime)) {
-      throw new BadRequestException('Regime inválido (SIMPLES | PRESUMIDO | REAL)');
-    }
-
-    const row = await (this.prisma as any).dreEncargoFolha.upsert({
-      where: { cnpj },
-      create: {
-        cnpj, regime, encargoPct: pct,
-        observacao: input.observacao?.slice(0, 160) || null,
-        criadoPor: usuario?.slice(0, 80) || null,
+    const r = String(regime || '').toUpperCase();
+    await (this.prisma as any).store.update({
+      where: { code },
+      data: {
+        dreEncargoPct: valor,
+        ...(['SIMPLES', 'PRESUMIDO', 'REAL'].includes(r) ? { dreRegime: r } : {}),
       },
-      update: { regime, encargoPct: pct, observacao: input.observacao?.slice(0, 160) || null },
     });
-    return { ok: true, id: row.id, cnpj, regime, encargoPct: pct };
-  }
-
-  async listEncargosFolha() {
-    const rows: any[] = await (this.prisma as any).dreEncargoFolha.findMany({
-      orderBy: { cnpj: 'asc' },
-    });
-    return rows.map((r) => ({
-      id: r.id, cnpj: r.cnpj, regime: r.regime,
-      encargoPct: Number(r.encargoPct), observacao: r.observacao,
-    }));
-  }
-
-  async deleteEncargoFolha(id: string) {
-    await (this.prisma as any).dreEncargoFolha.delete({ where: { id } });
-    return { ok: true };
+    return { ok: true, code, encargoPct: valor, regime: r || null };
   }
 
   async deleteAliquota(id: string) {

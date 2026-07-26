@@ -103,6 +103,13 @@ model Store {
   /// ITANHAÉM trabalha com 2,35 (dono, 26/07).
   dreMarkup     Decimal? @map("dre_markup") @db.Decimal(5, 3)
 
+  /// Encargo sobre a FOLHA desta loja (% sobre salários + RH + comissão).
+  /// É por LOJA e não por CNPJ porque nem toda loja tem CNPJ cadastrado — e
+  /// é assim que o dono raciocina. O regime fica junto só pra tela explicar
+  /// de onde vem o número (T.O. no Simples × LURDS no Presumido).
+  dreEncargoPct Decimal? @map("dre_encargo_pct") @db.Decimal(6, 3)
+  dreRegime     String?  @map("dre_regime") @db.VarChar(12) // SIMPLES | PRESUMIDO | REAL
+
   // ── Config de Realinhamento ──
   // Controla se a loja participa do balanço automático de estoque entre lojas.
   // Ambos default true (participa de tudo). Casos comuns:
@@ -4562,35 +4569,7 @@ model DreAjusteRealizado {
   @@map("dre_ajuste_realizado")
 }
 
-/// Encargo sobre FOLHA por CNPJ (dono, 26/07).
-///
-/// O grupo tem regimes diferentes e isso muda tudo: as T.O. são SIMPLES
-/// NACIONAL (o INSS patronal está dentro do DAS — sobra FGTS e provisões) e as
-/// LURDS são LUCRO PRESUMIDO (INSS patronal 20% + RAT + Terceiros + FGTS).
-/// Um percentual único da rede mentiria nos dois lados.
-///
-/// A DRE aplica este % sobre a folha DE CADA LOJA (salários + RH + comissão),
-/// então o encargo nasce na loja em vez de virar despesa da matriz rateada por
-/// faturamento — loja com mais gente paga mais, que é o certo.
-///
-/// Se a guia (GPS/FGTS) já estiver lançada no Contas a Pagar, o LANÇADO manda
-/// e o cálculo só cobre a diferença.
-model DreEncargoFolha {
-  id     String @id @default(cuid())
-  cnpj   String @unique @db.VarChar(14) // só dígitos
-  /// Informativo, pra tela explicar de onde vem o percentual.
-  regime String @default("PRESUMIDO") @db.VarChar(12) // SIMPLES | PRESUMIDO | REAL
 
-  /// % sobre a folha. 3 casas: 28,8% não é 29%.
-  encargoPct Decimal @map("encargo_pct") @db.Decimal(6, 3)
-  observacao String? @db.VarChar(160)
-
-  criadoPor String?  @map("criado_por") @db.VarChar(80)
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
-
-  @@map("dre_encargo_folha")
-}
 
 /// DEMANDAS (15/07): backlog do dono na aba Gestao - prompt + prints colados,
 /// criticidade em 3 niveis e datas de criacao/finalizacao. So admin.
