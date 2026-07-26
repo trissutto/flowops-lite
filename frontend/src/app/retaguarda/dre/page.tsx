@@ -195,6 +195,9 @@ function AbaDre({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
   // ver TODAS de uma vez, não metade atrás do scroll.
   const [compactoManual, setCompactoManual] = useState<boolean | null>(null);
   const [drill, setDrill] = useState<{ coluna: Coluna; linha: string; label: string } | null>(null);
+  // Foco numa loja: '' = rede inteira (tabela larga). Com loja escolhida, a
+  // tela vira FICHA — números grandes, um indicador por card.
+  const [foco, setFoco] = useState('');
 
   const carregar = useCallback(async () => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(de) || !/^\d{4}-\d{2}-\d{2}$/.test(ate)) return;
@@ -256,26 +259,42 @@ function AbaDre({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
           ))}
         </div>
         <div className="flex-1" />
-        <button onClick={() => setCompactoManual(!compacto)}
-          className={`px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 ${
-            compacto ? 'bg-[#B8912B] border-[#B8912B] text-white' : 'bg-white border-[#E7E2D8] text-slate-600 hover:bg-[#FBF6E6]'
+        <select
+          value={foco}
+          onChange={(e) => setFoco(e.target.value)}
+          title="Ver uma loja sozinha, com números grandes"
+          className={`px-2.5 py-1.5 rounded-lg border text-xs font-bold ${
+            foco ? 'bg-[#B8912B] border-[#B8912B] text-white' : 'bg-white border-[#E7E2D8] text-slate-600'
           }`}
-          title="Tira R$ e centavos pra caber a rede inteira na tela">
-          <Minimize2 className="w-3.5 h-3.5" /> Compacto
-        </button>
-        <button onClick={() => setVerDetalhe((v) => !v)}
-          className={`px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 ${
-            verDetalhe ? 'bg-[#B8912B] border-[#B8912B] text-white' : 'bg-white border-[#E7E2D8] text-slate-600 hover:bg-[#FBF6E6]'
-          }`}
-          title="Abre cada linha de despesa nas espécies que a compõem (aluguel, folha, energia…)">
-          <ListTree className="w-3.5 h-3.5" /> Detalhar despesas
-        </button>
-        <button onClick={() => setVerPct((v) => !v)}
-          className={`px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 ${
-            verPct ? 'bg-[#B8912B] border-[#B8912B] text-white' : 'bg-white border-[#E7E2D8] text-slate-600 hover:bg-[#FBF6E6]'
-          }`}>
-          <Percent className="w-3.5 h-3.5" /> % da receita
-        </button>
+        >
+          <option value="">🏢 Rede inteira</option>
+          {colunas.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
+        </select>
+        {/* Só fazem sentido na tabela larga — a ficha já vem grande e detalhada. */}
+        {!foco && (
+          <>
+            <button onClick={() => setCompactoManual(!compacto)}
+              className={`px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 ${
+                compacto ? 'bg-[#B8912B] border-[#B8912B] text-white' : 'bg-white border-[#E7E2D8] text-slate-600 hover:bg-[#FBF6E6]'
+              }`}
+              title="Tira R$ e centavos pra caber a rede inteira na tela">
+              <Minimize2 className="w-3.5 h-3.5" /> Compacto
+            </button>
+            <button onClick={() => setVerDetalhe((v) => !v)}
+              className={`px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 ${
+                verDetalhe ? 'bg-[#B8912B] border-[#B8912B] text-white' : 'bg-white border-[#E7E2D8] text-slate-600 hover:bg-[#FBF6E6]'
+              }`}
+              title="Abre cada linha de despesa nas espécies que a compõem (aluguel, folha, energia…)">
+              <ListTree className="w-3.5 h-3.5" /> Detalhar despesas
+            </button>
+            <button onClick={() => setVerPct((v) => !v)}
+              className={`px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 ${
+                verPct ? 'bg-[#B8912B] border-[#B8912B] text-white' : 'bg-white border-[#E7E2D8] text-slate-600 hover:bg-[#FBF6E6]'
+              }`}>
+              <Percent className="w-3.5 h-3.5" /> % da receita
+            </button>
+          </>
+        )}
         <button onClick={carregar} disabled={loading}
           className="px-3 py-1.5 rounded-lg border border-[#E7E2D8] hover:bg-[#FBF6E6] text-xs font-semibold flex items-center gap-1.5">
           {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />} Atualizar
@@ -286,7 +305,16 @@ function AbaDre({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
         <div className="py-20 text-center text-slate-400"><Loader2 className="w-8 h-8 animate-spin mx-auto" /></div>
       )}
 
-      {data && total && (
+      {/* FICHA DA LOJA — uma coluna só, números grandes. */}
+      {data && foco && colunas.find((c) => c.key === foco) && (
+        <FichaLoja
+          coluna={colunas.find((c) => c.key === foco)!}
+          data={data}
+          onDrill={(linha, label) => setDrill({ coluna: colunas.find((c) => c.key === foco)!, linha, label })}
+        />
+      )}
+
+      {data && total && !foco && (
         <>
           <Conciliacao data={data} />
 
@@ -421,6 +449,176 @@ function AbaDre({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
       )}
 
       {drill && <DrillModal de={de} ate={ate} alvo={drill} onClose={() => setDrill(null)} />}
+    </div>
+  );
+}
+
+/**
+ * FICHA DA LOJA — a mesma DRE, mas de uma loja só e em tamanho de bater o
+ * olho. A tabela larga serve pra COMPARAR a rede; esta serve pra ENTENDER uma
+ * loja. Os quatro números que decidem alguma coisa vêm primeiro e grandes:
+ * lucro, margem de contribuição, resultado 4-wall e ponto de equilíbrio.
+ */
+function FichaLoja({ coluna: c, data, onDrill }: {
+  coluna: Coluna;
+  data: Resultado;
+  onDrill: (linha: string, label: string) => void;
+}) {
+  const positivo = c.resultadoLiquido >= 0;
+  const bateuPE = !!c.pontoEquilibrioDia;
+
+  return (
+    <div className="space-y-4 max-w-[1200px]">
+      {/* Identificação + veredito */}
+      <div className={`rounded-2xl px-6 py-5 border-2 ${
+        positivo ? 'bg-[#F4F8F5] border-[#2E7D46]' : 'bg-rose-50 border-rose-300'
+      }`}>
+        <div className="flex flex-wrap items-end gap-x-8 gap-y-3">
+          <div>
+            <div className="text-xs font-bold text-slate-500 uppercase tracking-wide">
+              {c.grupo === 'CANAL' ? 'Canal digital' : 'Loja'} · {data.de.split('-').reverse().join('/')} a {data.ate.split('-').reverse().join('/')}
+            </div>
+            <h2 className="text-3xl font-extrabold text-slate-800 leading-tight">{c.label}</h2>
+          </div>
+          <div className="flex-1" />
+          <div className="text-right">
+            <div className="text-xs font-bold text-slate-500 uppercase">Lucro líquido</div>
+            <div className={`text-4xl font-extrabold leading-none ${positivo ? 'text-[#2E7D46]' : 'text-rose-600'}`}>
+              {brl(c.resultadoLiquido)}
+            </div>
+            <div className="text-sm font-bold text-slate-500 mt-1">
+              {pct(c.lucratividade)} da receita
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Os marcadores que decidem — grandes */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <KpiGrande titulo="Faturamento" valor={brl(c.faturamentoBruto)}
+          sub={`${c.cupons} vendas · ${c.pecas} peças`} />
+        <KpiGrande titulo="Margem de contribuição" valor={pct(c.margemContribuicaoPct)}
+          sub={brl(c.margemContribuicao)} tom="dourado" />
+        <KpiGrande titulo="Resultado 4-wall" valor={brl(c.resultado4Wall)}
+          sub={`${pct(c.resultado4WallPct)} · só o que a loja controla`}
+          tom={c.resultado4Wall >= 0 ? 'verde' : 'vermelho'} />
+        <KpiGrande
+          titulo="Ponto de equilíbrio"
+          valor={bateuPE ? `dia ${fmtDia(c.pontoEquilibrioDia)}` : (c.faltaPraEquilibrio ? `faltam ${brlCurto(c.faltaPraEquilibrio)}` : '—')}
+          sub={c.pontoEquilibrio ? `precisa vender ${brl(c.pontoEquilibrio)}` : 'sem despesa fixa lançada'}
+          tom={bateuPE ? 'verde' : c.faltaPraEquilibrio ? 'vermelho' : 'neutro'}
+        />
+      </div>
+
+      {/* Segunda régua: o que explica a margem */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <KpiGrande titulo="Margem bruta" valor={pct(c.margemBrutaPct)} sub={`CMV = venda ÷ ${String(c.markup).replace('.', ',')}`} pequeno />
+        <KpiGrande titulo="Ticket médio" valor={brl(c.ticketMedio)} sub={`${c.cupons} vendas no período`} pequeno />
+        <KpiGrande titulo="Peças por venda" valor={c.cupons ? (c.pecas / c.cupons).toFixed(1) : '—'} sub={`${c.pecas} peças`} pequeno />
+        <KpiGrande titulo="Imposto" valor={c.aliquotaPct != null ? `${Number(c.aliquotaPct).toFixed(1)}%` : '—'} sub={brl(c.impostos)} pequeno />
+      </div>
+
+      {/* DRE vertical, fonte grande */}
+      <div className="bg-white border border-[#E7E2D8] rounded-xl overflow-hidden">
+        <div className="px-5 py-3 border-b border-[#E7E2D8] bg-[#FBF6E6]/50">
+          <h3 className="font-extrabold text-slate-800">Do faturamento ao lucro</h3>
+        </div>
+        <table className="w-full">
+          <tbody>
+            {LINHAS.map((l) => {
+              const v = Number(c[l.campo] || 0);
+              const destaque = l.tipo === 'resultado';
+              const sub = l.tipo === 'subtotal';
+              const info = l.tipo === 'info';
+              if (!v && !destaque && !sub) return null;
+              const pctBase = c.receitaLiquida
+                ? (l.pctCampo ? Number(c[l.pctCampo] || 0) : v / c.receitaLiquida) : 0;
+              return (
+                <tr key={String(l.campo)} className={
+                  destaque ? 'bg-[#F4F8F5] border-y-2 border-[#E7E2D8]'
+                    : sub ? 'bg-slate-50 border-y border-[#F0EDE6]'
+                    : 'border-b border-[#F5F2EB]'
+                }>
+                  <td className={`px-5 py-2.5 ${destaque ? 'text-base font-extrabold' : sub ? 'font-bold' : info ? 'text-slate-400 italic text-sm' : 'text-slate-600'}`}>
+                    {l.label}
+                    {l.nota && <span className="block text-[11px] font-normal text-slate-400">{l.nota}</span>}
+                  </td>
+                  <td className="px-3 py-2.5 text-right text-sm text-slate-400 tabular-nums w-24">
+                    {v && !info ? pct(pctBase) : ''}
+                  </td>
+                  <td className={`px-5 py-2.5 text-right tabular-nums w-52 ${
+                    destaque ? `text-2xl font-extrabold ${v >= 0 ? 'text-[#2E7D46]' : 'text-rose-600'}`
+                      : sub ? 'text-lg font-bold'
+                      : info ? 'text-slate-400'
+                      : 'text-base'
+                  }`}>
+                    {l.drill && v ? (
+                      <button onClick={() => onDrill(l.drill!, l.label)}
+                        className="hover:underline decoration-dotted underline-offset-4">
+                        {l.tipo === 'deducao' ? `(${brl(v)})` : brl(v)}
+                      </button>
+                    ) : (
+                      v ? (l.tipo === 'deducao' ? `(${brl(v)})` : brl(v)) : <span className="text-slate-300">—</span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Onde vai a despesa desta loja */}
+      {c.despesasDetalhe?.length > 0 && (
+        <div className="bg-white border border-[#E7E2D8] rounded-xl p-5">
+          <h3 className="font-extrabold text-slate-800 mb-3">Onde vai a despesa</h3>
+          <div className="space-y-1.5">
+            {c.despesasDetalhe.slice(0, 12).map((d) => {
+              const share = c.receitaLiquida ? d.valor / c.receitaLiquida : 0;
+              return (
+                <div key={`${d.grupo}-${d.especie}`} className="flex items-center gap-3">
+                  <div className="w-44 text-sm font-semibold truncate">{d.especie}</div>
+                  <div className="flex-1 h-4 bg-slate-100 rounded overflow-hidden">
+                    <div className={`h-full ${
+                      d.grupo === 'VARIAVEL' ? 'bg-[#D4AF37]' : d.grupo === 'FINANCEIRA' ? 'bg-rose-400' : 'bg-slate-400'
+                    }`} style={{ width: `${Math.min(100, share * 100 * 2.5)}%` }} />
+                  </div>
+                  <div className="w-28 text-right text-sm font-bold tabular-nums">{brl(d.valor)}</div>
+                  <div className="w-14 text-right text-xs text-slate-400 tabular-nums">{pct(share)}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {c.avisos.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+          <div className="font-extrabold text-amber-800 flex items-center gap-1.5 mb-2 text-sm">
+            <AlertTriangle className="w-4 h-4" /> Atenção nesta loja
+          </div>
+          <ul className="space-y-1 text-amber-900 text-xs">
+            {c.avisos.map((a) => <li key={a}>• {a}</li>)}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function KpiGrande({ titulo, valor, sub, tom = 'neutro', pequeno }: {
+  titulo: string; valor: string; sub?: string;
+  tom?: 'neutro' | 'verde' | 'vermelho' | 'dourado'; pequeno?: boolean;
+}) {
+  const cor = tom === 'verde' ? 'text-[#2E7D46]'
+    : tom === 'vermelho' ? 'text-rose-600'
+    : tom === 'dourado' ? 'text-[#8C7325]'
+    : 'text-slate-800';
+  return (
+    <div className="bg-white border border-[#E7E2D8] rounded-xl px-4 py-3">
+      <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wide">{titulo}</div>
+      <div className={`font-extrabold leading-tight mt-1 ${pequeno ? 'text-xl' : 'text-2xl'} ${cor}`}>{valor}</div>
+      {sub && <div className="text-[11px] text-slate-400 mt-0.5">{sub}</div>}
     </div>
   );
 }
