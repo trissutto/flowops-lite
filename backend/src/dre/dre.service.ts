@@ -177,6 +177,15 @@ export class DreService implements OnApplicationBootstrap {
             lojasExcluidas: 'SANTOS', // Santos não paga
             criadoPor: 'seed 26/07',
           },
+          {
+            // Marketing como % da venda (pedido do dono 26/07): a verba
+            // acompanha o faturamento de cada loja, não é valor fixo.
+            tipo: 'DESPESA_PCT',
+            descricao: 'Marketing',
+            percentual: 5,
+            grupo: 'VARIAVEL',
+            criadoPor: 'seed 26/07',
+          },
         ],
         skipDuplicates: true,
       });
@@ -609,6 +618,22 @@ export class DreService implements OnApplicationBootstrap {
     const diasNoMes = new Date(Number(mesRef.slice(0, 4)), Number(mesRef.slice(5, 7)), 0).getDate();
     const proporcao = Math.min(1, diasPeriodo / diasNoMes);
 
+    // Despesa em % do faturamento (ex: marketing 5%) — acompanha a venda, não
+    // precisa de proporção por dias nem de rateio: vendeu mais, gastou mais.
+    const pctGerenciais = ajustesGerenciais.filter((a) => a.tipo === 'DESPESA_PCT' && a.percentual);
+    for (const aj of pctGerenciais) {
+      const pctAj = Number(aj.percentual) / 100;
+      const grupo = (String(aj.grupo || 'VARIAVEL').toUpperCase() as DreGrupoEspecie);
+      const foraDaRegra = new Set(
+        String(aj.lojasExcluidas || '').split(',').map((s: string) => this.semAcento(s).trim()).filter(Boolean),
+      );
+      for (const col of colunas.values()) {
+        if (!col.faturamentoBruto) continue;
+        if (foraDaRegra.has(this.semAcento(col.key)) || foraDaRegra.has(this.semAcento(col.label))) continue;
+        this.somaDespesa(col, aj.descricao, grupo, col.faturamentoBruto * pctAj);
+      }
+    }
+
     const fixasGerenciais = ajustesGerenciais.filter((a) => a.tipo === 'DESPESA_FIXA' && a.valorMensalCents);
     for (const aj of fixasGerenciais) {
       const foraDaRegra = new Set(
@@ -638,7 +663,10 @@ export class DreService implements OnApplicationBootstrap {
     const serie = await this.serieDiaria(inicio, fimExclusive, indice);
 
     for (const col of lista) {
-      col.receitaLiquida = col.faturamentoBruto - col.devolucoes;
+      // TROCA/VALE NÃO ABATE (decisão do dono, 26/07 — repetida). Só sai da
+      // receita a devolução em DINHEIRO/PIX, onde a cliente levou o dinheiro
+      // embora. Troca fica visível na tela como informação, fora da conta.
+      col.receitaLiquida = col.faturamentoBruto - col.devolucoesDinheiro;
       // CMV = venda ÷ 2,65 sobre a receita LÍQUIDA — peça devolvida não
       // vendeu, então o custo dela já sai junto. Regra ÚNICA: vale pra loja
       // física e pra canal digital (LIVE/SITE) igual.
@@ -762,6 +790,7 @@ export class DreService implements OnApplicationBootstrap {
         id: a.id, tipo: a.tipo, descricao: a.descricao,
         fornecedorMatch: a.fornecedorMatch,
         valorMensal: a.valorMensalCents != null ? a.valorMensalCents / 100 : null,
+      percentual: a.percentual != null ? Number(a.percentual) : null,
         grupo: a.grupo, lojasExcluidas: a.lojasExcluidas,
       })),
       config: {
@@ -930,7 +959,8 @@ export class DreService implements OnApplicationBootstrap {
       }
     }
     t.despesasDetalhe.sort((a, b) => b.valor - a.valor);
-    t.receitaLiquida = t.faturamentoBruto - t.devolucoes;
+    // Mesma regra das colunas: troca/vale não abate.
+    t.receitaLiquida = t.faturamentoBruto - t.devolucoesDinheiro;
     t.margemBruta = t.receitaLiquida - t.cmv;
     t.margemContribuicao = t.margemBruta - t.impostos - t.despesasVariaveis;
     t.resultado4Wall = t.margemContribuicao - t.despesasFixas;
@@ -1211,6 +1241,7 @@ export class DreService implements OnApplicationBootstrap {
       id: a.id, tipo: a.tipo, descricao: a.descricao,
       fornecedorMatch: a.fornecedorMatch,
       valorMensal: a.valorMensalCents != null ? a.valorMensalCents / 100 : null,
+      percentual: a.percentual != null ? Number(a.percentual) : null,
       grupo: a.grupo, lojasExcluidas: a.lojasExcluidas, ativo: a.ativo,
     }));
   }
@@ -1221,13 +1252,14 @@ export class DreService implements OnApplicationBootstrap {
     descricao: string;
     fornecedorMatch?: string;
     valorMensal?: number;
+    percentual?: number;
     grupo?: string;
     lojasExcluidas?: string;
     ativo?: boolean;
   }, usuario?: string) {
     const tipo = String(input.tipo || '').toUpperCase();
-    if (!['EXCLUIR_FORNECEDOR', 'DESPESA_FIXA'].includes(tipo)) {
-      throw new BadRequestException('Tipo inválido (EXCLUIR_FORNECEDOR | DESPESA_FIXA)');
+    if (!['EXCLUIR_FORNECEDOR', 'DESPESA_FIXA', 'DESPESA_PCT'].includes(tipo)) {
+      throw new BadRequestException('Tipo inválido (EXCLUIR_FORNECEDOR | DESPESA_FIXA | DESPESA_PCT)');
     }
     const descricao = String(input.descricao || '').trim().slice(0, 60);
     if (descricao.length < 2) throw new BadRequestException('Descrição obrigatória');
@@ -1239,6 +1271,12 @@ export class DreService implements OnApplicationBootstrap {
       const v = Number(input.valorMensal);
       if (!Number.isFinite(v) || v <= 0) throw new BadRequestException('Valor mensal deve ser maior que zero');
     }
+    if (tipo === 'DESPESA_PCT') {
+      const v = Number(input.percentual);
+      if (!Number.isFinite(v) || v <= 0 || v > 100) {
+        throw new BadRequestException('Percentual deve estar entre 0 e 100');
+      }
+    }
 
     const data: any = {
       tipo,
@@ -1247,8 +1285,10 @@ export class DreService implements OnApplicationBootstrap {
         ? String(input.fornecedorMatch).trim().slice(0, 60) : null,
       valorMensalCents: tipo === 'DESPESA_FIXA'
         ? Math.round(Number(input.valorMensal) * 100) : null,
-      grupo: tipo === 'DESPESA_FIXA' ? String(input.grupo || 'FIXA').toUpperCase() : null,
-      lojasExcluidas: tipo === 'DESPESA_FIXA'
+      percentual: tipo === 'DESPESA_PCT' ? Number(input.percentual) : null,
+      grupo: tipo === 'EXCLUIR_FORNECEDOR' ? null
+        : String(input.grupo || (tipo === 'DESPESA_PCT' ? 'VARIAVEL' : 'FIXA')).toUpperCase(),
+      lojasExcluidas: tipo !== 'EXCLUIR_FORNECEDOR'
         ? (String(input.lojasExcluidas || '').trim().slice(0, 200) || null) : null,
       ativo: input.ativo !== false,
     };
