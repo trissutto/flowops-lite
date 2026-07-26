@@ -86,6 +86,18 @@ model Store {
   // REDE↔FILIAL. Default REDE pra não quebrar lojas existentes.
   tipo          String   @default("REDE")  // REDE | FILIAL
 
+  // ── Papel na DRE (painel /retaguarda/dre) ──
+  // Separa o que é COLUNA de resultado do que é despesa da rede a ratear:
+  //   LOJA  = loja física → coluna própria, avaliada pelo resultado 4-wall
+  //   CANAL = LIVE/SITE   → coluna própria; a peça que sai da loja entra aqui
+  //                         a PREÇO DE CUSTO (a loja de origem não fatura)
+  //   REDE  = matriz/holding → NÃO é coluna; tudo que é lançado nela é
+  //                         rateado por faturamento entre LOJA+CANAL
+  //   FORA  = ignorada na DRE (CD, loja fechada, cadastro de teste)
+  // NULL = ainda não configurada → o service aplica heurística (SITE/LIVE
+  // viram CANAL, o resto vira LOJA) e a tela pede a configuração.
+  dreGrupo      String?  @map("dre_grupo") @db.VarChar(6)
+
   // ── Config de Realinhamento ──
   // Controla se a loja participa do balanço automático de estoque entre lojas.
   // Ambos default true (participa de tudo). Casos comuns:
@@ -2059,6 +2071,13 @@ model PdvSaleItem {
   // Usado quando 2 vendedoras atendem na mesma compra — uma operou tudo
   // e depois a comissao eh dividida item por item.
   sellerName  String?  @map("seller_name")
+  // CUSTO CONGELADO NO ATO DA VENDA (26/07) — base do CMV da DRE.
+  // O custo do produto muda com o tempo (recompra, reajuste do fornecedor);
+  // sem este carimbo a margem de um mês FECHADO mudava sozinha depois.
+  // Preenchido no bipe com o custo do espelho Wincred. NULL = venda antiga
+  // (antes desta mudança) ou item manual → a DRE cai pro custo ATUAL do
+  // produto e marca a coluna como ESTIMADA na tela.
+  custoUnitCents Int? @map("custo_unit_cents")
   // Baixa de estoque POR ITEM (16/07). A flag da VENDA (sale.stockDecreasedAt)
   // marca "a venda passou pela baixa", mas ITENS excluidos do filtro (ex:
   // produto real com desconto manual — promoTag='MANUAL' — que o filtro antigo
@@ -4258,6 +4277,19 @@ model EspecieConta {
   ativa     Boolean  @default(true)
   createdAt DateTime @default(now()) @map("created_at")
 
+  // ── Classificação na DRE (painel /retaguarda/dre) ──
+  //   VARIAVEL   = varia com a venda (comissão, taxa de cartão, frete)
+  //   FIXA       = fixa da loja (aluguel, folha, luz, contador…)
+  //   FINANCEIRA = juros, multa, IOF, encargo de empréstimo
+  //   CMV        = compra de MERCADORIA → NÃO entra como despesa. O CMV da
+  //                DRE sai do custo das peças VENDIDAS; contar a compra
+  //                também seria contar estoque duas vezes.
+  //   IMPOSTO    = DAS/Simples → NÃO entra: o imposto vem da alíquota por
+  //                CNPJ configurada no painel (regime de competência).
+  //   IGNORAR    = transferência entre contas, adiantamento, etc.
+  // NULL = o service classifica por heurística no nome e a tela sinaliza.
+  dreGrupo  String?  @map("dre_grupo") @db.VarChar(10)
+
   contas ContaPagar[]
 
   @@map("especie_conta")
@@ -4366,6 +4398,27 @@ model ContaPagarAssociacao {
 
   @@index([sellerId])
   @@map("conta_pagar_associacao")
+}
+
+/// Alíquota efetiva de imposto por CNPJ × mês (painel /retaguarda/dre).
+/// O grupo tem VÁRIOS CNPJs e cada um está numa faixa diferente do Simples
+/// (a faixa muda com o RBT12) — por isso a alíquota é por CNPJ e por MÊS, não
+/// um percentual único da rede. A loja herda pelo `Store.expectedCnpj`.
+/// Mês sem linha própria usa a alíquota mais recente ANTERIOR do mesmo CNPJ;
+/// CNPJ sem nenhuma linha entra com imposto zero e a tela avisa.
+model DreAliquota {
+  id          String   @id @default(cuid())
+  cnpj        String   @db.VarChar(14)   // só dígitos
+  mes         String   @db.VarChar(7)    // YYYY-MM
+  aliquotaPct Decimal  @map("aliquota_pct") @db.Decimal(5, 2)
+  observacao  String?  @db.VarChar(120)
+  criadoPor   String?  @map("criado_por") @db.VarChar(80)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@unique([cnpj, mes])
+  @@index([cnpj, mes])
+  @@map("dre_aliquota")
 }
 
 /// DEMANDAS (15/07): backlog do dono na aba Gestao - prompt + prints colados,

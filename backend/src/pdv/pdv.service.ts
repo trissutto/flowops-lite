@@ -1101,6 +1101,13 @@ export class PdvService {
           precoUnit: info.preco,
           desconto: 0,
           total: info.preco * qty,
+          // Congela o CUSTO do produto no ato da venda — base do CMV da DRE.
+          // Sem isso a margem de um mês já fechado mudava quando o custo do
+          // produto era reajustado no cadastro.
+          custoUnitCents:
+            info.custo != null && Number.isFinite(info.custo) && info.custo > 0
+              ? Math.round(info.custo * 100)
+              : null,
         },
       });
     }

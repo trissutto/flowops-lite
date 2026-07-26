@@ -47,6 +47,7 @@ const GESTAO_ITEMS: GestaoItem[] = [
   { href: '/retaguarda/dashboard',            label: 'Dashboard',         subtitle: 'KPIs',          description: 'Visão geral em tempo real',     tone: 'teal',   icon: LayoutDashboard },
   { href: '/retaguarda/super-painel-caixas',  label: 'Super Painel',      subtitle: 'Caixas ao vivo', description: 'Vendas em tempo real (todas lojas)', tone: 'rose', icon: DollarSign      },
   { href: '/retaguarda/faturamento',          label: 'Faturamento',       subtitle: 'Por loja',      description: 'Gráfico + comparação ano anterior', tone: 'green',  icon: DollarSign     },
+  { href: '/retaguarda/dre',                  label: 'Resultado (DRE)',   subtitle: 'Por loja',      description: 'Margem, 4-wall e ponto de equilíbrio', tone: 'teal', icon: BarChart3      },
   { href: '/retaguarda/relatorio-fiscal',     label: 'Relatório Fiscal',  subtitle: 'NFC-e',          description: 'Auditoria por CNPJ/série + inconsistências', tone: 'purple', icon: ClipboardList },
   { href: '/retaguarda/inteligencia-estoque', label: 'Inteligência',      subtitle: 'Estoque',       description: 'Análise de produto + venda',    tone: 'purple', icon: BarChart3       },
   { href: '/retaguarda/distribuicao-estoque', label: 'Distribuição',      subtitle: 'Estoque PLUS',  description: 'Detecta desequilíbrios entre lojas', tone: 'rose',   icon: Package         },
