@@ -4490,6 +4490,32 @@ model DreAjuste {
   @@map("dre_ajuste")
 }
 
+/// Taxa da adquirente por BANDEIRA × FAIXA DE PARCELA (dono, 26/07).
+///
+/// A DRE cruza isto com os pagamentos reais da venda (`PdvSalePayment`, que
+/// guarda bandeira e nº de parcelas em `details`) e joga o resultado em
+/// DESPESA VARIÁVEL — sem depender de ninguém lançar no Contas a Pagar.
+///
+/// Taxa vale pra rede toda (decisão do dono: as maquininhas são negociadas
+/// junto). `faixaParcela`: UNICA (pix/débito) | 1 | 2-6 | 7-12.
+model TaxaCartao {
+  id           String  @id @default(cuid())
+  forma        String  @db.VarChar(10) // PIX | DEBITO | CREDITO
+  bandeira     String  @db.VarChar(20) // VISA, MASTERCARD, ELO, AMEX…
+  faixaParcela String  @map("faixa_parcela") @db.VarChar(6)
+  /// % sobre o valor pago. 3 casas: adquirente cobra 2,49%, 3,199%…
+  taxaPct      Decimal @map("taxa_pct") @db.Decimal(6, 3)
+  ativo        Boolean @default(true)
+
+  criadoPor String?  @map("criado_por") @db.VarChar(80)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([bandeira, faixaParcela])
+  @@index([ativo])
+  @@map("taxa_cartao")
+}
+
 /// DEMANDAS (15/07): backlog do dono na aba Gestao - prompt + prints colados,
 /// criticidade em 3 niveis e datas de criacao/finalizacao. So admin.
 model Demanda {
