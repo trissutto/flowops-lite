@@ -47,6 +47,18 @@ export class DreController {
     return this.svc.config();
   }
 
+  /**
+   * GET /api/dre/diagnostico/cupom?de=&ate=
+   * Mede cada candidata a chave de cupom contra o nº de vendas do PDV.
+   * Existe porque o ticket médio saiu irreal e eu já errei uma vez trocando
+   * a chave por suposição — agora só troco com o número na mão.
+   */
+  @Get('diagnostico/cupom')
+  diagnosticoCupom(@Req() req: any, @Query('de') de: string, @Query('ate') ate: string) {
+    this.requireAdmin(req);
+    return this.svc.diagnosticoCupom({ de, ate });
+  }
+
   @Patch('config/loja/:code')
   setGrupoLoja(@Req() req: any, @Param('code') code: string, @Body() body: { grupo: string }) {
     this.requireAdmin(req);
