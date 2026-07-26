@@ -1,5 +1,5 @@
 import { Controller, Get } from '@nestjs/common';
-import { MigrationFlagsService } from '../bootstrap/migration-flags.service';
+import { MigrationFlagsService } from './migration-flags.service';
 
 /**
  * Healthcheck simples — usado pelo Railway pra saber se o container
