@@ -723,12 +723,25 @@ export class ClientesGigaService {
     // (a tela avisa).
     let marcados: { itens: any[]; totalReais: number } | null = null;
     try {
+      // DEFAULT OFF (26/07): era `?? '' !== '0'`, ou seja ligado quando a
+      // variável não existe — mesmo defeito que sumiu com o crediário em 25/07.
       const temNativo = (await (this.prisma as any).marcado.count()) > 0
-        && String(process.env.MARCADOS_NATIVE_READS ?? '').trim() !== '0';
+        && String(process.env.MARCADOS_NATIVE_READS ?? '0').trim() === '1';
       const itens: any[] = [];
       if (temNativo) {
+        // Código do Giga tem padding de zero inconsistente: '01234' e '1234'
+        // são a mesma pessoa. Sem as variantes o espelho responde vazio.
+        const codVariants = (cod: any): string[] => {
+          const c = String(cod ?? '').trim();
+          const set = new Set<string>();
+          if (c) set.add(c);
+          const noZeros = c.replace(/^0+/, '');
+          if (noZeros) set.add(noZeros);
+          if (/^\d+$/.test(c)) set.add(String(Number(c)));
+          return [...set];
+        };
         const orMarc = fichas.map((f: any) => ({
-          codCliente: String(f.codigo),
+          codCliente: { in: codVariants(f.codigo) },
           storeCode: String(f.loja).replace(/\D/g, '').padStart(2, '0'),
         }));
         const nativos: any[] = await (this.prisma as any).marcado.findMany({
@@ -744,7 +757,10 @@ export class ClientesGigaService {
           VALORTOTAL: Number(n.valorTotal) || 0,
           LOJA: n.storeCode,
         })));
-      } else {
+      }
+      // REDE DE SEGURANÇA: espelho vazio NÃO é "cliente sem marcado" — pode ser
+      // sync parcial. Confere no Giga antes de liberar limite pra marcação.
+      if (!itens.length) {
         for (const f of fichas) {
           const cod = Number(String(f.codigo).replace(/\D/g, '')) || 0;
           const lj = String(f.loja).replace(/\D/g, '').padStart(2, '0');
