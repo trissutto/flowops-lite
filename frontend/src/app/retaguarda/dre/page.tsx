@@ -19,7 +19,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import {
   ArrowLeft, BarChart3, Loader2, RefreshCw, Settings, AlertTriangle,
-  ChevronRight, Plus, Trash2, X, Percent, Target, ListTree,
+  ChevronRight, Plus, Trash2, X, Percent, Target, ListTree, ClipboardList,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -74,7 +74,17 @@ type Resultado = {
   despesaDescartada: {
     porEspecie: Array<{ especie: string; grupo: string; valor: number }>;
     semColuna: number; emFranquia: number; total: number;
+    porAjuste: Array<{ descricao: string; valor: number }>;
   };
+  planilha: {
+    itens: Array<{ rubrica: string; grupo: string; valor: number; especies: string[]; presente: boolean }>;
+    faltando: string[];
+    foraDaPlanilha: Array<{ especie: string; valor: number }>;
+  };
+  ajustes: Array<{
+    id: string; tipo: string; descricao: string; fornecedorMatch: string | null;
+    valorMensal: number | null; grupo: string | null; lojasExcluidas: string | null;
+  }>;
   config: {
     markup: number;
     aliquotaPadrao: number;
@@ -376,6 +386,7 @@ function AbaDre({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
           </div>
 
           <BlocoFranquias data={data} />
+          <CoberturaPlanilha data={data} />
           <Qualidade data={data} />
         </>
       )}
@@ -591,6 +602,115 @@ function BlocoFranquias({ data }: { data: Resultado }) {
   );
 }
 
+/**
+ * Confronto com a PLANILHA IDEAL: rubrica por rubrica, o que tem lançamento
+ * e o que está faltando. Responde de forma permanente o "quais despesas a
+ * planilha tem que a DRE não tem".
+ */
+function CoberturaPlanilha({ data }: { data: Resultado }) {
+  const [aberto, setAberto] = useState(false);
+  const p = data.planilha;
+  const temCount = p.itens.filter((i) => i.presente).length;
+
+  return (
+    <div className="bg-white border border-[#E7E2D8] rounded-xl overflow-hidden">
+      <button
+        onClick={() => setAberto((v) => !v)}
+        className="w-full px-4 py-3 flex items-center gap-3 hover:bg-[#FBF6E6]/50 text-left"
+      >
+        <ClipboardList className="w-4 h-4 text-[#B8912B]" />
+        <div className="flex-1">
+          <h2 className="font-extrabold text-slate-800">Cobertura da planilha</h2>
+          <p className="text-xs text-slate-500">
+            {temCount} de {p.itens.length} rubricas da PLANILHA IDEAL têm lançamento no período
+            {p.faltando.length > 0 && ` · faltando: ${p.faltando.slice(0, 4).join(', ')}${p.faltando.length > 4 ? '…' : ''}`}
+          </p>
+        </div>
+        <ChevronRight className={`w-4 h-4 text-slate-400 transition-transform ${aberto ? 'rotate-90' : ''}`} />
+      </button>
+
+      {aberto && (
+        <div className="border-t border-[#E7E2D8] p-4 grid md:grid-cols-2 gap-4">
+          <div>
+            <div className="text-[11px] font-bold text-slate-500 uppercase mb-2">Rubrica a rubrica</div>
+            <table className="w-full text-sm">
+              <tbody>
+                {p.itens.map((i) => (
+                  <tr key={i.rubrica} className="border-b border-[#F5F2EB]">
+                    <td className="py-1.5 w-5">
+                      {i.presente
+                        ? <span className="text-[#2E7D46] font-bold">✓</span>
+                        : <span className="text-rose-500 font-bold">✗</span>}
+                    </td>
+                    <td className={i.presente ? '' : 'text-rose-700 font-semibold'}>
+                      {i.rubrica}
+                      {i.especies.length > 0 && (
+                        <span className="text-[11px] text-slate-400 ml-1.5">({i.especies.join(', ')})</span>
+                      )}
+                    </td>
+                    <td className="text-right tabular-nums text-slate-600">
+                      {i.valor ? brl(i.valor) : <span className="text-slate-300">—</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {p.faltando.length > 0 && (
+              <p className="text-[11px] text-slate-500 mt-2">
+                Rubrica sem lançamento não é erro do sistema: quer dizer que a despesa não está no
+                Contas a Pagar do período, ou está com um nome de espécie que não bate.
+              </p>
+            )}
+          </div>
+
+          <div>
+            <div className="text-[11px] font-bold text-slate-500 uppercase mb-2">
+              Gasto que a planilha não previa
+            </div>
+            {p.foraDaPlanilha.length === 0 ? (
+              <p className="text-xs text-slate-400">Nada — tudo que gastou casa com uma rubrica da planilha.</p>
+            ) : (
+              <table className="w-full text-sm">
+                <tbody>
+                  {p.foraDaPlanilha.map((f) => (
+                    <tr key={f.especie} className="border-b border-[#F5F2EB]">
+                      <td className="py-1.5">{f.especie}</td>
+                      <td className="text-right tabular-nums text-slate-600">{brl(f.valor)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+
+            {data.ajustes.length > 0 && (
+              <>
+                <div className="text-[11px] font-bold text-slate-500 uppercase mt-4 mb-2">
+                  Ajustes gerenciais aplicados
+                </div>
+                <ul className="text-xs text-slate-600 space-y-1">
+                  {data.ajustes.map((a) => (
+                    <li key={a.id}>
+                      {a.tipo === 'EXCLUIR_FORNECEDOR' ? (
+                        <>🚫 <b>{a.descricao}</b> — fora da DRE (fornecedor “{a.fornecedorMatch}”)</>
+                      ) : (
+                        <>➕ <b>{a.descricao}</b> — {brl(a.valorMensal || 0)}/mês por loja
+                          {a.lojasExcluidas && <span className="text-slate-400"> · exceto {a.lojasExcluidas}</span>}</>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+                <p className="text-[11px] text-slate-400 mt-2">
+                  Ajuste gerencial não mexe no Contas a Pagar — a conta real continua lá.
+                </p>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Avisos de qualidade do dado — o painel diz onde ele está chutando. */
 function Qualidade({ data }: { data: Resultado }) {
   const itens: string[] = [];
@@ -628,6 +748,12 @@ function Qualidade({ data }: { data: Resultado }) {
   if (d.semColuna > 0) {
     itens.push(
       `${brl(d.semColuna)} em contas de loja que não é coluna da DRE (sem papel definido ou marcada FORA).`,
+    );
+  }
+  for (const a of d.porAjuste || []) {
+    itens.push(
+      `${brl(a.valor)} de “${a.descricao}” saiu por ajuste gerencial — fornecedor excluído da DRE. ` +
+      'A conta continua no Contas a Pagar.',
     );
   }
   if (d.emFranquia > 0) {
@@ -899,6 +1025,8 @@ function AbaConfig({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }
         </p>
       </Bloco>
 
+      <BlocoAjustes avisar={avisar} />
+
       {/* Espécies */}
       <Bloco
         titulo="Classificação das espécies de conta"
@@ -926,6 +1054,122 @@ function AbaConfig({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }
         </p>
       </Bloco>
     </div>
+  );
+}
+
+/**
+ * Ajustes gerenciais: corrigem o resultado SEM mexer no Contas a Pagar.
+ * Dois casos reais que motivaram (26/07): tirar a VERISURE da DRE (contrato
+ * encerrado, conta ainda lançada) e somar R$ 200/loja de segurança que não
+ * está lançado em lugar nenhum.
+ */
+function BlocoAjustes({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
+  const [lista, setLista] = useState<any[]>([]);
+  const [novo, setNovo] = useState({
+    tipo: 'DESPESA_FIXA', descricao: '', fornecedorMatch: '',
+    valorMensal: '', grupo: 'FIXA', lojasExcluidas: '',
+  });
+
+  const carregar = useCallback(() => {
+    api<any[]>('/dre/config/ajustes').then(setLista).catch(() => {});
+  }, []);
+  useEffect(() => { carregar(); }, [carregar]);
+
+  const salvar = async () => {
+    try {
+      await api('/dre/config/ajuste', {
+        method: 'POST',
+        body: JSON.stringify({
+          ...novo,
+          valorMensal: novo.valorMensal ? Number(String(novo.valorMensal).replace(',', '.')) : undefined,
+        }),
+      });
+      avisar('ok', 'Ajuste salvo');
+      setNovo({ ...novo, descricao: '', fornecedorMatch: '', valorMensal: '', lojasExcluidas: '' });
+      carregar();
+    } catch (e: any) { avisar('erro', e?.message || 'Falhou'); }
+  };
+  const remover = async (id: string) => {
+    try { await api(`/dre/config/ajuste/${id}`, { method: 'DELETE' }); carregar(); }
+    catch (e: any) { avisar('erro', e?.message || 'Falhou'); }
+  };
+
+  const ehExclusao = novo.tipo === 'EXCLUIR_FORNECEDOR';
+
+  return (
+    <Bloco
+      titulo="Ajustes gerenciais"
+      subtitulo="Corrigem o resultado sem mexer no Contas a Pagar — a conta real continua lá"
+    >
+      <div className="flex flex-wrap items-end gap-2 mb-3">
+        <Campo label="Tipo">
+          <select value={novo.tipo} onChange={(e) => setNovo({ ...novo, tipo: e.target.value })}
+            className="px-2 py-1.5 rounded-lg border border-[#E7E2D8] text-sm">
+            <option value="DESPESA_FIXA">Somar despesa por loja</option>
+            <option value="EXCLUIR_FORNECEDOR">Excluir fornecedor da DRE</option>
+          </select>
+        </Campo>
+        <Campo label="Descrição">
+          <input value={novo.descricao} onChange={(e) => setNovo({ ...novo, descricao: e.target.value })}
+            placeholder={ehExclusao ? 'VERISURE (contrato encerrado)' : 'Segurança e monitoramento'}
+            className="px-2 py-1.5 rounded-lg border border-[#E7E2D8] text-sm w-60" />
+        </Campo>
+        {ehExclusao ? (
+          <Campo label="Fornecedor contém">
+            <input value={novo.fornecedorMatch} onChange={(e) => setNovo({ ...novo, fornecedorMatch: e.target.value })}
+              placeholder="VERISURE" className="px-2 py-1.5 rounded-lg border border-[#E7E2D8] text-sm w-40" />
+          </Campo>
+        ) : (
+          <>
+            <Campo label="R$ por loja/mês">
+              <input value={novo.valorMensal} onChange={(e) => setNovo({ ...novo, valorMensal: e.target.value })}
+                placeholder="200,00" className="px-2 py-1.5 rounded-lg border border-[#E7E2D8] text-sm w-28" />
+            </Campo>
+            <Campo label="Lojas que NÃO pagam">
+              <input value={novo.lojasExcluidas} onChange={(e) => setNovo({ ...novo, lojasExcluidas: e.target.value })}
+                placeholder="SANTOS" className="px-2 py-1.5 rounded-lg border border-[#E7E2D8] text-sm w-44" />
+            </Campo>
+          </>
+        )}
+        <button onClick={salvar}
+          className="bg-[#B8912B] hover:bg-[#8C7325] text-white font-bold px-3 py-1.5 rounded-lg text-sm flex items-center gap-1.5">
+          <Plus className="w-4 h-4" /> Salvar
+        </button>
+      </div>
+
+      {lista.length === 0 ? (
+        <p className="text-xs text-slate-400">Nenhum ajuste — a DRE está usando o Contas a Pagar cru.</p>
+      ) : (
+        <table className="w-full text-sm">
+          <thead><tr className="text-xs text-slate-500 border-b border-[#E7E2D8]">
+            <th className="text-left py-1.5">Ajuste</th><th className="text-left">Regra</th><th />
+          </tr></thead>
+          <tbody>
+            {lista.map((a) => (
+              <tr key={a.id} className="border-b border-[#F5F2EB]">
+                <td className="py-1.5 font-semibold">
+                  {a.tipo === 'EXCLUIR_FORNECEDOR' ? '🚫 ' : '➕ '}{a.descricao}
+                </td>
+                <td className="text-slate-500 text-xs">
+                  {a.tipo === 'EXCLUIR_FORNECEDOR'
+                    ? `fornecedor contém “${a.fornecedorMatch}” → fora da DRE`
+                    : `${brl(a.valorMensal || 0)}/mês por loja${a.lojasExcluidas ? ` · exceto ${a.lojasExcluidas}` : ''}`}
+                </td>
+                <td className="text-right">
+                  <button onClick={() => remover(a.id)} className="p-1 hover:bg-rose-50 rounded text-rose-500">
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <p className="text-[11px] text-slate-400 mt-2">
+        Despesa por loja é valor MENSAL e entra proporcional aos dias do período — filtrar 7 dias
+        não cobra o mês inteiro. Só vale pra loja física (canal digital não tem ponto pra vigiar).
+      </p>
+    </Bloco>
   );
 }
 

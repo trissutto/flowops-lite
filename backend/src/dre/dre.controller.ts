@@ -73,4 +73,24 @@ export class DreController {
     this.requireAdmin(req);
     return this.svc.deleteAliquota(id);
   }
+
+  // ── ajustes gerenciais (não tocam no Contas a Pagar) ──
+
+  @Get('config/ajustes')
+  listAjustes(@Req() req: any) {
+    this.requireAdmin(req);
+    return this.svc.listAjustes();
+  }
+
+  @Post('config/ajuste')
+  upsertAjuste(@Req() req: any, @Body() body: any) {
+    const usuario = this.requireAdmin(req);
+    return this.svc.upsertAjuste(body, usuario);
+  }
+
+  @Delete('config/ajuste/:id')
+  deleteAjuste(@Req() req: any, @Param('id') id: string) {
+    this.requireAdmin(req);
+    return this.svc.deleteAjuste(id);
+  }
 }

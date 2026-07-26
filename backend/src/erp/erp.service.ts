@@ -9735,8 +9735,16 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     Array<{ storeCode: string; faturamento: number; cupons: number; pecas: number; ticketMedio: number }>
   > {
     const rows: any[] = await (this.prismaFlow as any).$queryRawUnsafe(
+      // CUPOM = (DATA DE FECHAMENTO, NÚMERO) — não só o NÚMERO.
+      // O NUMERO do cupom REINICIA (por dia/caixa), então `COUNT(DISTINCT
+      // numero)` num período de vários dias colapsava cupons diferentes num
+      // só: o mês fechava com ~1/3 dos cupons e o ticket médio ia pra
+      // R$ 1.000 numa loja de moda. Prova (26/07): no mesmo período o caixa
+      // do Giga contava 1.064 cupons e o PdvSale contava 2.685 — sendo que o
+      // caixa é SUPERSET do PdvSale, é impossível ter menos.
+      // A loja não entra na chave porque o GROUP BY já isola por loja.
       `SELECT loja AS "storeCode",
-              COUNT(DISTINCT numero)::int AS cupons,
+              COUNT(DISTINCT (data_fec, numero))::int AS cupons,
               COALESCE(SUM(quantidade), 0)::float8 AS pecas,
               COALESCE(SUM(valor_total), 0)::float8 AS faturamento
          FROM giga_caixa_mov
@@ -9780,9 +9788,11 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       // no dia X+1) ficavam fora no antigo filtro por DATA. Trocando pra
       // DATAFEC, bate exato com Wincred em todas as lojas.
       const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+        // CUPOM = (DATAFEC, NUMERO) — o NUMERO reinicia e sozinho colapsa
+        // cupons de dias diferentes. Mesma correção do espelho acima.
         `SELECT
             c.LOJA AS storeCode,
-            COUNT(DISTINCT c.NUMERO) AS cupons,
+            COUNT(DISTINCT CONCAT(c.DATAFEC, '|', c.NUMERO)) AS cupons,
             SUM(c.QUANTIDADE) AS pecas,
             SUM(c.VALORTOTAL) AS faturamento
          FROM caixa c

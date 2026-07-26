@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
 
@@ -52,6 +52,34 @@ const MARKETING_PCT = 4;
 
 /** Status de venda da LIVE que contam como vendido (mesma lista do faturamento). */
 const LIVE_VENDIDO = ['paid', 'separating', 'shipped', 'delivered'];
+
+/**
+ * Rubricas de despesa da "PLANILHA IDEAL" (modelo SEBRAE/SP), na ordem dela.
+ * Serve pra tela responder "o que a planilha tem e a DRE não tem" — cada
+ * rubrica é procurada nas espécies do Contas a Pagar por palavra-chave.
+ */
+const RUBRICAS_PLANILHA: Array<{ rubrica: string; termos: string[]; grupo: 'FIXA' | 'VARIAVEL' | 'FINANCEIRA' }> = [
+  { rubrica: 'Aluguel', termos: ['ALUGUEL', 'LOCACAO'], grupo: 'FIXA' },
+  { rubrica: 'Salários', termos: ['SALARIO', 'FOLHA', 'ORDENADO'], grupo: 'FIXA' },
+  { rubrica: 'Encargos', termos: ['ENCARGO', 'FGTS', 'INSS', 'RESCISAO', 'FERIAS', 'DECIMO'], grupo: 'FIXA' },
+  { rubrica: 'Água', termos: ['AGUA', 'SABESP'], grupo: 'FIXA' },
+  { rubrica: 'Telefone', termos: ['TELEFONE', 'CELULAR', 'VIVO', 'CLARO', 'TIM'], grupo: 'FIXA' },
+  { rubrica: 'Internet', termos: ['INTERNET', 'LINK', 'BANDA'], grupo: 'FIXA' },
+  { rubrica: 'Luz', termos: ['LUZ', 'ENERGIA', 'ELETRIC', 'ENEL', 'CPFL'], grupo: 'FIXA' },
+  { rubrica: 'Material de escritório', termos: ['MATERIAL', 'ESCRITORIO', 'PAPELARIA'], grupo: 'FIXA' },
+  { rubrica: 'Despesas com veículos', termos: ['VEICULO', 'COMBUSTIVEL', 'FROTA', 'PEDAGIO'], grupo: 'FIXA' },
+  { rubrica: 'Contador', termos: ['CONTADOR', 'CONTABIL', 'HONORARIO'], grupo: 'FIXA' },
+  { rubrica: 'Manutenção', termos: ['MANUTENCAO', 'REPARO', 'CONSERTO'], grupo: 'FIXA' },
+  { rubrica: 'Equipe MKT', termos: ['MKT', 'MARKETING', 'AGENCIA', 'SOCIAL'], grupo: 'FIXA' },
+  { rubrica: 'Royalties', termos: ['ROYALT'], grupo: 'FIXA' },
+  { rubrica: 'Publicidade', termos: ['PUBLICID', 'ANUNCIO', 'TRAFEGO', 'META ADS', 'GOOGLE'], grupo: 'FIXA' },
+  { rubrica: 'Pró-labore', termos: ['PRO-LABORE', 'PRO LABORE', 'PROLABORE', 'RETIRADA'], grupo: 'FIXA' },
+  { rubrica: 'Taxas de banco', termos: ['TAXA', 'BANCO', 'TARIFA'], grupo: 'VARIAVEL' },
+  { rubrica: 'Segurança e monitoramento', termos: ['SEGURANCA', 'MONITORA', 'VIGIL', 'ALARME'], grupo: 'FIXA' },
+  { rubrica: 'Seguros', termos: ['SEGURO'], grupo: 'FIXA' },
+  { rubrica: 'Comissão', termos: ['COMISS'], grupo: 'VARIAVEL' },
+  { rubrica: 'Despesas financeiras', termos: ['JURO', 'MULTA', 'IOF'], grupo: 'FINANCEIRA' },
+];
 
 type DreGrupoLoja = 'LOJA' | 'CANAL' | 'FRANQUIA' | 'REDE' | 'FORA';
 type DreGrupoEspecie = 'VARIAVEL' | 'FIXA' | 'FINANCEIRA' | 'CMV' | 'IMPOSTO' | 'IGNORAR';
@@ -110,13 +138,55 @@ export interface DreColuna {
 }
 
 @Injectable()
-export class DreService {
+export class DreService implements OnApplicationBootstrap {
   private readonly logger = new Logger(DreService.name);
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly erp: ErpService,
   ) {}
+
+  /**
+   * Semeia os ajustes que o dono pediu em 26/07 — uma vez só.
+   *
+   * A trava é uma chave em AppConfig, NÃO "tabela vazia": se ele apagar os
+   * dois ajustes depois, é porque não quer mais, e o boot seguinte não pode
+   * ressuscitá-los.
+   */
+  async onApplicationBootstrap() {
+    const CHAVE = 'dre_ajustes_seed_2607';
+    try {
+      const feito = await (this.prisma as any).appConfig.findUnique({ where: { key: CHAVE } });
+      if (feito) return;
+
+      await (this.prisma as any).dreAjuste.createMany({
+        data: [
+          {
+            tipo: 'EXCLUIR_FORNECEDOR',
+            descricao: 'VERISURE (contrato encerrado)',
+            fornecedorMatch: 'VERISURE',
+            criadoPor: 'seed 26/07',
+          },
+          {
+            tipo: 'DESPESA_FIXA',
+            descricao: 'Segurança e monitoramento',
+            valorMensalCents: 20000, // R$ 200,00 por loja/mês
+            grupo: 'FIXA',
+            lojasExcluidas: 'SANTOS', // Santos não paga
+            criadoPor: 'seed 26/07',
+          },
+        ],
+        skipDuplicates: true,
+      });
+      await (this.prisma as any).appConfig.create({
+        data: { key: CHAVE, valueJson: JSON.stringify({ seededAt: new Date().toISOString() }) },
+      });
+      this.logger.log('[dre] ajustes iniciais criados (VERISURE fora + segurança R$ 200/loja exceto SANTOS)');
+    } catch (e: any) {
+      // Nunca deixa o seed derrubar o boot.
+      this.logger.warn(`[dre] seed de ajustes pulado: ${e?.message || e}`);
+    }
+  }
 
   // ── helpers ──────────────────────────────────────────────────────────────
 
@@ -345,6 +415,29 @@ export class DreService {
       col.devolucoes += Number(d.dinheiro || 0) + Number(d.troca || 0);
     }
 
+    // ── 3a) SANIDADE DA CONTAGEM DE CUPOM ────────────────────────────────
+    // O caixa do Giga é SUPERSET do PdvSale (tem as vendas do PDV via outbox
+    // MAIS as lançadas direto no Giga). Logo cupons do caixa < vendas do
+    // PdvSale é IMPOSSÍVEL — quando acontece, a chave do cupom está
+    // colapsando (foi assim que o ticket médio foi pra R$ 1.000 em 26/07).
+    // Fica no código como alarme permanente: se a numeração reiniciar por
+    // caixa/operador e (data, número) não bastar, a tela avisa sozinha.
+    const vendasFlow: any[] = await this.prisma.$queryRawUnsafe(
+      `SELECT store_code AS "storeCode", COUNT(*)::int AS vendas
+         FROM pdv_sales
+        WHERE finalized_at >= $1 AND finalized_at <= $2
+          AND status = 'finalized' AND is_training = false
+          AND (payment_method IS NULL OR payment_method <> 'MARCADO')
+        GROUP BY store_code`,
+      startDate, endDate,
+    );
+    const cuponsFlow = new Map<string, number>();
+    for (const v of vendasFlow) {
+      const key = resolve(v.storeCode);
+      if (!key) continue;
+      cuponsFlow.set(key, (cuponsFlow.get(key) || 0) + Number(v.vendas || 0));
+    }
+
     // ── 3b) Ajuste negativo lançado DENTRO da venda ──────────────────────
     // Item manual com valor negativo ("TROCA DEFEITO -39,90") vai pro caixa
     // do Giga como linha negativa — ou seja, JÁ está abatido no faturamento
@@ -379,13 +472,23 @@ export class DreService {
 
     const contas: any[] = await this.prisma.$queryRawUnsafe(
       `SELECT loja_code AS "lojaCode", especie_id AS "especieId",
+              COALESCE(fornecedor_nome, seller_nome, '') AS "beneficiario",
               SUM(valor_cents)::bigint AS "valorCents"
          FROM conta_pagar
         WHERE vencimento >= $1::date AND vencimento <= $2::date
           AND status <> 'cancelada' AND deleted_at IS NULL
-        GROUP BY loja_code, especie_id`,
+        GROUP BY loja_code, especie_id, COALESCE(fornecedor_nome, seller_nome, '')`,
       de, ate,
     );
+
+    // Ajustes gerenciais (não mexem no Contas a Pagar — ver model DreAjuste).
+    const ajustesGerenciais: any[] = await (this.prisma as any).dreAjuste.findMany({
+      where: { ativo: true },
+    });
+    const exclusoes = ajustesGerenciais
+      .filter((a) => a.tipo === 'EXCLUIR_FORNECEDOR' && a.fornecedorMatch)
+      .map((a) => ({ termo: this.semAcento(a.fornecedorMatch), descricao: a.descricao }));
+    const excluidoPorAjuste = new Map<string, number>();
 
     let despesaRede = 0;
     let despesaFranquia = 0;
@@ -398,6 +501,18 @@ export class DreService {
     for (const c of contas) {
       const valor = Number(c.valorCents || 0) / 100;
       if (!valor) continue;
+      // Fornecedor excluído por ajuste (ex: VERISURE, contrato encerrado):
+      // sai da DRE mas NÃO some — vai pro bloco "o que ficou de fora".
+      const benef = this.semAcento(c.beneficiario);
+      const excluido = benef && exclusoes.find((e) => benef.includes(e.termo));
+      if (excluido) {
+        excluidoPorAjuste.set(
+          excluido.descricao,
+          (excluidoPorAjuste.get(excluido.descricao) || 0) + valor,
+        );
+        continue;
+      }
+
       const g: DreGrupoEspecie = (c.especieId ? grupoPorEspecie.get(c.especieId) : undefined) || 'FIXA';
       const nome = (c.especieId ? nomeEspecie.get(c.especieId) : null) || '(sem espécie)';
       if (!c.especieId) {
@@ -419,6 +534,34 @@ export class DreService {
       if (!key || !colunas.has(key)) { despesaSemColuna += valor; continue; }
 
       this.somaDespesa(colunas.get(key)!, nome, g, valor);
+    }
+
+    // ── 5b) Despesa fixa GERENCIAL (o dono sabe que existe, não está lançada)
+    // Valor é MENSAL por loja e entra proporcional aos dias do período — sem
+    // isso, filtrar "7 dias" cobraria o mês inteiro de segurança.
+    const diasPeriodo = Math.max(
+      1,
+      Math.round((new Date(`${ate}T00:00:00Z`).getTime() - new Date(`${de}T00:00:00Z`).getTime()) / 86400000) + 1,
+    );
+    const diasNoMes = new Date(Number(mesRef.slice(0, 4)), Number(mesRef.slice(5, 7)), 0).getDate();
+    const proporcao = Math.min(1, diasPeriodo / diasNoMes);
+
+    const fixasGerenciais = ajustesGerenciais.filter((a) => a.tipo === 'DESPESA_FIXA' && a.valorMensalCents);
+    for (const aj of fixasGerenciais) {
+      const foraDaRegra = new Set(
+        String(aj.lojasExcluidas || '')
+          .split(',')
+          .map((s: string) => this.semAcento(s).trim())
+          .filter(Boolean),
+      );
+      const valor = (Number(aj.valorMensalCents) / 100) * proporcao;
+      const grupo = (String(aj.grupo || 'FIXA').toUpperCase() as DreGrupoEspecie);
+      for (const col of colunas.values()) {
+        // Só loja física paga: canal digital não tem ponto pra vigiar.
+        if (col.grupo !== 'LOJA') continue;
+        if (foraDaRegra.has(this.semAcento(col.key)) || foraDaRegra.has(this.semAcento(col.label))) continue;
+        this.somaDespesa(col, aj.descricao, grupo, valor);
+      }
     }
 
     // ── 6) Imposto: 10% padrão, com override por CNPJ/mês ──
@@ -464,6 +607,15 @@ export class DreService {
 
       if (!col.despesasFixas && col.faturamentoBruto) {
         col.avisos.push('Nenhuma despesa fixa lançada no Contas a Pagar pro período');
+      }
+      // Alarme de cupom colapsado (ver bloco 3a).
+      const noFlow = cuponsFlow.get(col.key) || 0;
+      if (noFlow > 0 && col.cupons > 0 && col.cupons < noFlow) {
+        col.avisos.push(
+          `Contagem de cupom suspeita: ${col.cupons} no caixa do Giga contra ${noFlow} vendas no PDV — ` +
+          'o caixa contém o PDV, então não pode ter menos. O ticket médio está inflado; ' +
+          'a numeração do cupom deve reiniciar por caixa/operador, não só por dia.',
+        );
       }
       // Os DOIS caminhos de troca em uso ao mesmo tempo: se a mesma troca foi
       // lançada como item negativo E como devolução, ela é abatida em dobro.
@@ -526,6 +678,10 @@ export class DreService {
         totalGrupo: faturamentoRede + franquiaTotal.faturamentoBruto + faturamentoForaDaDre,
       },
       rede: { despesaTotal: despesaRede, lojas: lojasRede, criterioRateio: 'faturamento' },
+      // Confronto com a PLANILHA IDEAL: rubrica por rubrica, o que tem
+      // lançamento no período e o que está zerado. É a resposta permanente
+      // pro "quais despesas a planilha tem que a DRE não tem".
+      planilha: this.conferePlanilha(total),
       // Toda despesa do Contas a Pagar que a DRE viu e NÃO somou. Sem isso,
       // "cadê o aluguel?" não tem resposta na tela.
       despesaDescartada: {
@@ -534,9 +690,17 @@ export class DreService {
           .sort((a, b) => b.valor - a.valor),
         semColuna: despesaSemColuna,
         emFranquia: despesaFranquia,
+        porAjuste: [...excluidoPorAjuste.entries()].map(([descricao, valor]) => ({ descricao, valor })),
         total: [...descartadas.values()].reduce((s, d) => s + d.valor, 0)
-          + despesaSemColuna + despesaFranquia,
+          + despesaSemColuna + despesaFranquia
+          + [...excluidoPorAjuste.values()].reduce((s, v) => s + v, 0),
       },
+      ajustes: ajustesGerenciais.map((a: any) => ({
+        id: a.id, tipo: a.tipo, descricao: a.descricao,
+        fornecedorMatch: a.fornecedorMatch,
+        valorMensal: a.valorMensalCents != null ? a.valorMensalCents / 100 : null,
+        grupo: a.grupo, lojasExcluidas: a.lojasExcluidas,
+      })),
       config: {
         markup: MARKUP,
         aliquotaPadrao: ALIQUOTA_PADRAO,
@@ -545,6 +709,39 @@ export class DreService {
         contasSemEspecie: { valor: semEspecie.valor, lojas: [...semEspecie.lojas] },
       },
       fonte: 'Caixa do Giga (espelho giga_caixa_mov) — MESMA fonte da tela Faturamento por Loja',
+    };
+  }
+
+  /**
+   * Confronta as rubricas da PLANILHA IDEAL com o que veio do Contas a Pagar
+   * no período. Rubrica sem lançamento não significa erro do sistema — quer
+   * dizer que a despesa não está lançada (ou está com outro nome de espécie).
+   */
+  private conferePlanilha(total: DreColuna) {
+    const detalhe = total.despesasDetalhe || [];
+    const itens = RUBRICAS_PLANILHA.map((r) => {
+      const casadas = detalhe.filter((d) => {
+        const nome = this.semAcento(d.especie);
+        return r.termos.some((t) => nome.includes(t));
+      });
+      return {
+        rubrica: r.rubrica,
+        grupo: r.grupo,
+        valor: casadas.reduce((s, d) => s + d.valor, 0),
+        especies: casadas.map((d) => d.especie),
+        presente: casadas.length > 0,
+      };
+    });
+    // Espécie que gastou dinheiro e não casou com nenhuma rubrica da planilha.
+    const cobertas = new Set(itens.flatMap((i) => i.especies));
+    const foraDaPlanilha = detalhe
+      .filter((d) => !cobertas.has(d.especie) && d.valor > 0)
+      .map((d) => ({ especie: d.especie, valor: d.valor }));
+
+    return {
+      itens,
+      faltando: itens.filter((i) => !i.presente).map((i) => i.rubrica),
+      foraDaPlanilha,
     };
   }
 
@@ -722,8 +919,10 @@ export class DreService {
 
     if (linha === 'FATURAMENTO') {
       const vendas: any[] = await this.prisma.$queryRawUnsafe(
+        // Aqui o GROUP BY já é por DIA, então DISTINCT numero basta — mas
+        // mantém a chave completa pra não virar armadilha se o agrupamento mudar.
         `SELECT to_char(data_fec, 'YYYY-MM-DD') AS dia,
-                COUNT(DISTINCT numero)::int AS cupons,
+                COUNT(DISTINCT (data_fec, numero))::int AS cupons,
                 COALESCE(SUM(valor_total), 0)::float8 AS total
            FROM giga_caixa_mov
           WHERE data_fec >= $1 AND data_fec < $2
@@ -861,6 +1060,69 @@ export class DreService {
 
   async deleteAliquota(id: string) {
     await (this.prisma as any).dreAliquota.delete({ where: { id } });
+    return { ok: true };
+  }
+
+  // ── ajustes gerenciais ───────────────────────────────────────────────────
+
+  async listAjustes() {
+    const rows: any[] = await (this.prisma as any).dreAjuste.findMany({
+      orderBy: [{ tipo: 'asc' }, { descricao: 'asc' }],
+    });
+    return rows.map((a) => ({
+      id: a.id, tipo: a.tipo, descricao: a.descricao,
+      fornecedorMatch: a.fornecedorMatch,
+      valorMensal: a.valorMensalCents != null ? a.valorMensalCents / 100 : null,
+      grupo: a.grupo, lojasExcluidas: a.lojasExcluidas, ativo: a.ativo,
+    }));
+  }
+
+  async upsertAjuste(input: {
+    id?: string;
+    tipo: string;
+    descricao: string;
+    fornecedorMatch?: string;
+    valorMensal?: number;
+    grupo?: string;
+    lojasExcluidas?: string;
+    ativo?: boolean;
+  }, usuario?: string) {
+    const tipo = String(input.tipo || '').toUpperCase();
+    if (!['EXCLUIR_FORNECEDOR', 'DESPESA_FIXA'].includes(tipo)) {
+      throw new BadRequestException('Tipo inválido (EXCLUIR_FORNECEDOR | DESPESA_FIXA)');
+    }
+    const descricao = String(input.descricao || '').trim().slice(0, 60);
+    if (descricao.length < 2) throw new BadRequestException('Descrição obrigatória');
+
+    if (tipo === 'EXCLUIR_FORNECEDOR' && !String(input.fornecedorMatch || '').trim()) {
+      throw new BadRequestException('Informe o nome (ou parte) do fornecedor a excluir');
+    }
+    if (tipo === 'DESPESA_FIXA') {
+      const v = Number(input.valorMensal);
+      if (!Number.isFinite(v) || v <= 0) throw new BadRequestException('Valor mensal deve ser maior que zero');
+    }
+
+    const data: any = {
+      tipo,
+      descricao,
+      fornecedorMatch: tipo === 'EXCLUIR_FORNECEDOR'
+        ? String(input.fornecedorMatch).trim().slice(0, 60) : null,
+      valorMensalCents: tipo === 'DESPESA_FIXA'
+        ? Math.round(Number(input.valorMensal) * 100) : null,
+      grupo: tipo === 'DESPESA_FIXA' ? String(input.grupo || 'FIXA').toUpperCase() : null,
+      lojasExcluidas: tipo === 'DESPESA_FIXA'
+        ? (String(input.lojasExcluidas || '').trim().slice(0, 200) || null) : null,
+      ativo: input.ativo !== false,
+    };
+
+    const row = input.id
+      ? await (this.prisma as any).dreAjuste.update({ where: { id: input.id }, data })
+      : await (this.prisma as any).dreAjuste.create({ data: { ...data, criadoPor: usuario || null } });
+    return { ok: true, id: row.id };
+  }
+
+  async deleteAjuste(id: string) {
+    await (this.prisma as any).dreAjuste.delete({ where: { id } });
     return { ok: true };
   }
 }
