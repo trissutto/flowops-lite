@@ -85,6 +85,9 @@ export interface DreColuna {
 
   avisos: string[];
   cmvEstimadoPct: number;
+
+  /** De onde veio cada real de despesa — espécie a espécie, do Contas a Pagar. */
+  despesasDetalhe: Array<{ especie: string; grupo: DreGrupoEspecie; valor: number }>;
 }
 
 @Injectable()
@@ -175,8 +178,19 @@ export class DreService {
       rateioRede: 0, despesasFinanceiras: 0, resultadoLiquido: 0, lucratividade: 0,
       pontoEquilibrio: null, pontoEquilibrioDia: null, faltaPraEquilibrio: null,
       cupons: 0, pecas: 0, ticketMedio: 0,
-      avisos: [], cmvEstimadoPct: 0,
+      avisos: [], cmvEstimadoPct: 0, despesasDetalhe: [],
     };
+  }
+
+  /** Acumula a despesa na coluna E guarda de qual espécie ela veio. */
+  private somaDespesa(col: DreColuna, especie: string, grupo: DreGrupoEspecie, valor: number) {
+    if (grupo === 'VARIAVEL') col.despesasVariaveis += valor;
+    else if (grupo === 'FINANCEIRA') col.despesasFinanceiras += valor;
+    else col.despesasFixas += valor;
+
+    const hit = col.despesasDetalhe.find((d) => d.especie === especie && d.grupo === grupo);
+    if (hit) hit.valor += valor;
+    else col.despesasDetalhe.push({ especie, grupo, valor });
   }
 
   /** Variantes do código de loja — o Giga grava ora '01', ora '1'. */
@@ -307,6 +321,9 @@ export class DreService {
     const grupoPorEspecie = new Map<string, DreGrupoEspecie>();
     for (const e of especies) grupoPorEspecie.set(e.id, this.grupoDaEspecie(e));
 
+    const nomeEspecie = new Map<string, string>();
+    for (const e of especies) nomeEspecie.set(e.id, e.nome);
+
     const contas: any[] = await this.prisma.$queryRawUnsafe(
       `SELECT loja_code AS "lojaCode", especie_id AS "especieId",
               SUM(valor_cents)::bigint AS "valorCents"
@@ -320,28 +337,35 @@ export class DreService {
     let despesaRede = 0;
     let despesaFranquia = 0;
     const semEspecie = { valor: 0, lojas: new Set<string>() };
+    // Despesa que a DRE viu e NÃO usou — o dono precisa saber o que foi
+    // descartado e por quê, senão "faltou aluguel" vira mistério.
+    const descartadas = new Map<string, { grupo: DreGrupoEspecie; valor: number }>();
+    let despesaSemColuna = 0;
 
     for (const c of contas) {
       const valor = Number(c.valorCents || 0) / 100;
       if (!valor) continue;
       const g: DreGrupoEspecie = (c.especieId ? grupoPorEspecie.get(c.especieId) : undefined) || 'FIXA';
+      const nome = (c.especieId ? nomeEspecie.get(c.especieId) : null) || '(sem espécie)';
       if (!c.especieId) {
         semEspecie.valor += valor;
         semEspecie.lojas.add(String(c.lojaCode));
       }
-      if (g === 'CMV' || g === 'IMPOSTO' || g === 'IGNORAR') continue;
+      if (g === 'CMV' || g === 'IMPOSTO' || g === 'IGNORAR') {
+        const d = descartadas.get(nome) || { grupo: g, valor: 0 };
+        d.valor += valor;
+        descartadas.set(nome, d);
+        continue;
+      }
 
       const alvo = indice.get(String(c.lojaCode || '').trim().toUpperCase());
       if (alvo?.startsWith('__REDE__')) { despesaRede += valor; continue; }
       // Despesa lançada numa FRANQUIA é dela, não do dono — fica de fora.
       if (alvo?.startsWith('__FRANQUIA__')) { despesaFranquia += valor; continue; }
       const key = alvo && !alvo.startsWith('__') ? alvo : null;
-      if (!key || !colunas.has(key)) continue;
+      if (!key || !colunas.has(key)) { despesaSemColuna += valor; continue; }
 
-      const col = colunas.get(key)!;
-      if (g === 'VARIAVEL') col.despesasVariaveis += valor;
-      else if (g === 'FINANCEIRA') col.despesasFinanceiras += valor;
-      else col.despesasFixas += valor;
+      this.somaDespesa(colunas.get(key)!, nome, g, valor);
     }
 
     // ── 6) Imposto: 10% padrão, com override por CNPJ/mês ──
@@ -393,6 +417,7 @@ export class DreService {
       }
     }
 
+    for (const col of lista) col.despesasDetalhe.sort((a, b) => b.valor - a.valor);
     lista.sort((a, b) => b.faturamentoBruto - a.faturamentoBruto);
     const total = this.consolida(lista);
 
@@ -442,6 +467,17 @@ export class DreService {
         totalGrupo: faturamentoRede + franquiaTotal.faturamentoBruto + faturamentoForaDaDre,
       },
       rede: { despesaTotal: despesaRede, lojas: lojasRede, criterioRateio: 'faturamento' },
+      // Toda despesa do Contas a Pagar que a DRE viu e NÃO somou. Sem isso,
+      // "cadê o aluguel?" não tem resposta na tela.
+      despesaDescartada: {
+        porEspecie: [...descartadas.entries()]
+          .map(([especie, d]) => ({ especie, grupo: d.grupo, valor: d.valor }))
+          .sort((a, b) => b.valor - a.valor),
+        semColuna: despesaSemColuna,
+        emFranquia: despesaFranquia,
+        total: [...descartadas.values()].reduce((s, d) => s + d.valor, 0)
+          + despesaSemColuna + despesaFranquia,
+      },
       config: {
         markupFallback: MARKUP_FALLBACK,
         aliquotaPadrao: ALIQUOTA_PADRAO,
@@ -467,7 +503,13 @@ export class DreService {
       t.rateioRede += c.rateioRede;
       t.cupons += c.cupons;
       t.pecas += c.pecas;
+      for (const d of c.despesasDetalhe) {
+        const hit = t.despesasDetalhe.find((x) => x.especie === d.especie && x.grupo === d.grupo);
+        if (hit) hit.valor += d.valor;
+        else t.despesasDetalhe.push({ ...d });
+      }
     }
+    t.despesasDetalhe.sort((a, b) => b.valor - a.valor);
     t.receitaLiquida = t.faturamentoBruto - t.devolucoes;
     t.margemBruta = t.receitaLiquida - t.cmv;
     t.margemContribuicao = t.margemBruta - t.impostos - t.despesasVariaveis;

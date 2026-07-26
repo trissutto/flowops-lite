@@ -14,11 +14,12 @@
  * Admin/master apenas. Competência: despesa entra pelo VENCIMENTO.
  */
 
+import * as React from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import {
   ArrowLeft, BarChart3, Loader2, RefreshCw, Settings, AlertTriangle,
-  ChevronRight, Plus, Trash2, X, Percent, Target,
+  ChevronRight, Plus, Trash2, X, Percent, Target, ListTree,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -48,6 +49,7 @@ type Coluna = {
   pontoEquilibrio: number | null; pontoEquilibrioDia: string | null; faltaPraEquilibrio: number | null;
   cupons: number; pecas: number; ticketMedio: number;
   avisos: string[]; cmvEstimadoPct: number;
+  despesasDetalhe: Array<{ especie: string; grupo: string; valor: number }>;
 };
 
 type Franquia = {
@@ -68,6 +70,10 @@ type Resultado = {
     faturamentoForaDaDre: number; lojasForaDaDre: string[]; totalGrupo: number;
   };
   rede: { despesaTotal: number; lojas: string[]; criterioRateio: string };
+  despesaDescartada: {
+    porEspecie: Array<{ especie: string; grupo: string; valor: number }>;
+    semColuna: number; emFranquia: number; total: number;
+  };
   config: {
     markupFallback: number;
     aliquotaPadrao: number;
@@ -83,6 +89,8 @@ type Resultado = {
 const LINHAS: Array<{
   campo: keyof Coluna; label: string; tipo: 'receita' | 'deducao' | 'subtotal' | 'resultado';
   pctCampo?: keyof Coluna; drill?: string; nota?: string;
+  /** Linha de despesa: abre detalhe por espécie deste grupo quando ligado. */
+  grupoDespesa?: 'FIXA' | 'VARIAVEL' | 'FINANCEIRA';
 }> = [
   { campo: 'faturamentoBruto', label: '( + ) Faturamento bruto', tipo: 'receita', drill: 'FATURAMENTO' },
   { campo: 'devolucoes', label: '( - ) Devoluções', tipo: 'deducao' },
@@ -90,12 +98,12 @@ const LINHAS: Array<{
   { campo: 'cmv', label: '( - ) CMV (custo das peças vendidas)', tipo: 'deducao' },
   { campo: 'margemBruta', label: '( = ) Margem bruta', tipo: 'subtotal', pctCampo: 'margemBrutaPct' },
   { campo: 'impostos', label: '( - ) Impostos', tipo: 'deducao', nota: '10% da receita líquida' },
-  { campo: 'despesasVariaveis', label: '( - ) Despesas variáveis', tipo: 'deducao', drill: 'VARIAVEL' },
+  { campo: 'despesasVariaveis', label: '( - ) Despesas variáveis', tipo: 'deducao', drill: 'VARIAVEL', grupoDespesa: 'VARIAVEL' },
   { campo: 'margemContribuicao', label: '( = ) Margem de contribuição', tipo: 'subtotal', pctCampo: 'margemContribuicaoPct' },
-  { campo: 'despesasFixas', label: '( - ) Despesas fixas da loja', tipo: 'deducao', drill: 'FIXA' },
+  { campo: 'despesasFixas', label: '( - ) Despesas fixas da loja', tipo: 'deducao', drill: 'FIXA', grupoDespesa: 'FIXA' },
   { campo: 'resultado4Wall', label: '( = ) RESULTADO 4-WALL', tipo: 'resultado', pctCampo: 'resultado4WallPct', nota: 'Só o que a loja controla' },
   { campo: 'rateioRede', label: '( - ) Rateio da rede', tipo: 'deducao', nota: 'Matriz, rateada por faturamento' },
-  { campo: 'despesasFinanceiras', label: '( - ) Despesas financeiras', tipo: 'deducao', drill: 'FINANCEIRA' },
+  { campo: 'despesasFinanceiras', label: '( - ) Despesas financeiras', tipo: 'deducao', drill: 'FINANCEIRA', grupoDespesa: 'FINANCEIRA' },
   { campo: 'resultadoLiquido', label: '( = ) LUCRO LÍQUIDO', tipo: 'resultado', pctCampo: 'lucratividade' },
 ];
 
@@ -157,6 +165,7 @@ function AbaDre({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
   const [data, setData] = useState<Resultado | null>(null);
   const [loading, setLoading] = useState(false);
   const [verPct, setVerPct] = useState(false);
+  const [verDetalhe, setVerDetalhe] = useState(false);
   const [drill, setDrill] = useState<{ coluna: Coluna; linha: string; label: string } | null>(null);
 
   const carregar = useCallback(async () => {
@@ -187,6 +196,17 @@ function AbaDre({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
   const colunas = data?.colunas || [];
   const total = data?.total;
 
+  // Espécies presentes em cada grupo de despesa (união de todas as colunas),
+  // ordenadas pelo peso na rede — é o "de onde saiu o dinheiro".
+  const especiesPorGrupo = useMemo(() => {
+    const out: Record<string, string[]> = {};
+    if (!total) return out;
+    for (const d of total.despesasDetalhe || []) {
+      (out[d.grupo] ||= []).push(d.especie);
+    }
+    return out;
+  }, [total]);
+
   return (
     <div className="space-y-4">
       {/* Filtro */}
@@ -206,6 +226,13 @@ function AbaDre({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
           ))}
         </div>
         <div className="flex-1" />
+        <button onClick={() => setVerDetalhe((v) => !v)}
+          className={`px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 ${
+            verDetalhe ? 'bg-[#B8912B] border-[#B8912B] text-white' : 'bg-white border-[#E7E2D8] text-slate-600 hover:bg-[#FBF6E6]'
+          }`}
+          title="Abre cada linha de despesa nas espécies que a compõem (aluguel, folha, energia…)">
+          <ListTree className="w-3.5 h-3.5" /> Detalhar despesas
+        </button>
         <button onClick={() => setVerPct((v) => !v)}
           className={`px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 ${
             verPct ? 'bg-[#B8912B] border-[#B8912B] text-white' : 'bg-white border-[#E7E2D8] text-slate-600 hover:bg-[#FBF6E6]'
@@ -276,7 +303,8 @@ function AbaDre({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
                 </thead>
                 <tbody>
                   {LINHAS.map((l) => (
-                    <tr key={String(l.campo)} className={
+                    <React.Fragment key={String(l.campo)}>
+                    <tr className={
                       l.tipo === 'resultado' ? 'bg-[#F4F8F5] border-y border-[#E7E2D8] font-extrabold'
                         : l.tipo === 'subtotal' ? 'bg-slate-50 font-bold border-y border-[#F0EDE6]'
                         : 'hover:bg-[#FBF6E6]/40 border-b border-[#F5F2EB]'
@@ -304,6 +332,21 @@ function AbaDre({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
                         </td>
                       ))}
                     </tr>
+                    {/* Detalhe por espécie — responde "o que entrou como despesa" */}
+                    {verDetalhe && l.grupoDespesa && (especiesPorGrupo[l.grupoDespesa] || []).map((esp) => (
+                      <tr key={`${String(l.campo)}-${esp}`} className="text-xs bg-white/60">
+                        <td className="pl-9 pr-3 py-1 sticky left-0 bg-white text-slate-500">↳ {esp}</td>
+                        <td className="text-right px-3 py-1 border-l border-[#E7E2D8] tabular-nums text-slate-600">
+                          {valorEspecie(total, l.grupoDespesa!, esp)}
+                        </td>
+                        {colunas.map((c) => (
+                          <td key={c.key} className="text-right px-3 py-1 tabular-nums text-slate-500">
+                            {valorEspecie(c, l.grupoDespesa!, esp)}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                    </React.Fragment>
                   ))}
 
                   {/* Indicadores */}
@@ -337,6 +380,13 @@ function AbaDre({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
       {drill && <DrillModal de={de} ate={ate} alvo={drill} onClose={() => setDrill(null)} />}
     </div>
   );
+}
+
+/** Valor de UMA espécie dentro de uma coluna (linha de detalhe da despesa). */
+function valorEspecie(coluna: Coluna, grupo: string, especie: string) {
+  const hit = (coluna.despesasDetalhe || []).find((d) => d.grupo === grupo && d.especie === especie);
+  if (!hit || !hit.valor) return <span className="text-slate-300">—</span>;
+  return <>{brl(hit.valor)}</>;
 }
 
 function Celula({ coluna, linha, verPct }: { coluna: Coluna; linha: typeof LINHAS[number]; verPct: boolean }) {
@@ -561,6 +611,27 @@ function Qualidade({ data }: { data: Resultado }) {
       `${brl(data.config.contasSemEspecie.valor)} em contas SEM espécie caíram em despesa fixa ` +
       `(lojas: ${data.config.contasSemEspecie.lojas.join(', ') || '—'}).`,
     );
+  }
+  // "Cadê o aluguel?" — tudo que veio do Contas a Pagar e a DRE NÃO somou.
+  const d = data.despesaDescartada;
+  for (const e of d.porEspecie) {
+    const porque = e.grupo === 'CMV'
+      ? 'classificada como compra de mercadoria (o CMV vem das peças vendidas)'
+      : e.grupo === 'IMPOSTO'
+        ? `classificada como imposto (a DRE usa os ${data.config.aliquotaPadrao}% da receita)`
+        : 'classificada como IGNORAR';
+    itens.push(
+      `${brl(e.valor)} da espécie “${e.especie}” NÃO entrou: ${porque}. ` +
+      'Se isso é despesa de verdade, reclassifique em Configuração.',
+    );
+  }
+  if (d.semColuna > 0) {
+    itens.push(
+      `${brl(d.semColuna)} em contas de loja que não é coluna da DRE (sem papel definido ou marcada FORA).`,
+    );
+  }
+  if (d.emFranquia > 0) {
+    itens.push(`${brl(d.emFranquia)} lançados em franquia — despesa dela, não sua. Fora do seu resultado.`);
   }
   if (!data.rede.lojas.length) {
     itens.push(
