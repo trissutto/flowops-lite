@@ -161,9 +161,19 @@ export class DreService {
     const cfg = String(store?.dreGrupo || '').toUpperCase();
     if (['LOJA', 'CANAL', 'FRANQUIA', 'REDE', 'FORA'].includes(cfg)) return cfg as DreGrupoLoja;
     if (String(store?.tipo || '').toUpperCase() === 'FILIAL') return 'FRANQUIA';
-    const nome = `${store?.name || ''} ${store?.code || ''}`.toUpperCase();
+    const nome = this.semAcento(`${store?.name || ''} ${store?.code || ''}`);
+    // Ponto logístico não é loja: não tem vitrine, não tem resultado próprio.
+    // O que passar por ele aparece na CONCILIAÇÃO como "fora da DRE" — o
+    // dinheiro não some da tela, só sai do resultado (pedido do dono 26/07).
+    if (/\bDEPOSITO\b|\bALMOXARIFADO\b|\bCD\b|\bCENTRO DE DISTRIBUICAO\b/.test(nome)) return 'FORA';
     if (/\bSITE\b|\bLIVE\b|E-?COMMERCE/.test(nome)) return 'CANAL';
     return 'LOJA';
+  }
+
+  private semAcento(s: string): string {
+    // Tira acento pra "Depósito" casar com /DEPOSITO/. O range do replace são
+    // os acentos combinantes (U+0300–U+036F) que o normalize('NFD') separa.
+    return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase();
   }
 
   private grupoDaEspecie(especie: any): DreGrupoEspecie {
