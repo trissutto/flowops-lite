@@ -65,6 +65,13 @@ export class DreController {
     return this.svc.setGrupoLoja(code, body?.grupo);
   }
 
+  /** Markup do CMV desta loja. null/vazio volta pro padrão da rede. */
+  @Patch('config/loja/:code/markup')
+  setMarkupLoja(@Req() req: any, @Param('code') code: string, @Body() body: { markup: number | null }) {
+    this.requireAdmin(req);
+    return this.svc.setMarkupLoja(code, body?.markup ?? null);
+  }
+
   @Patch('config/especie/:id')
   setGrupoEspecie(@Req() req: any, @Param('id') id: string, @Body() body: { grupo: string }) {
     this.requireAdmin(req);

@@ -98,6 +98,11 @@ model Store {
   // viram CANAL, o resto vira LOJA) e a tela pede a configuração.
   dreGrupo      String?  @map("dre_grupo") @db.VarChar(6)
 
+  /// Markup da loja pro CMV da DRE (custo = venda ÷ markup). NULL = usa o
+  /// padrão da rede (2,7). Existe porque nem toda loja compra igual —
+  /// ITANHAÉM trabalha com 2,35 (dono, 26/07).
+  dreMarkup     Decimal? @map("dre_markup") @db.Decimal(5, 3)
+
   // ── Config de Realinhamento ──
   // Controla se a loja participa do balanço automático de estoque entre lojas.
   // Ambos default true (participa de tudo). Casos comuns:
