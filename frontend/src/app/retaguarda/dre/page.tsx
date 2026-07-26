@@ -19,7 +19,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import {
   ArrowLeft, BarChart3, Loader2, RefreshCw, Settings, AlertTriangle,
-  ChevronRight, Plus, Trash2, X, Percent, Target, ListTree, ClipboardList, Minimize2,
+  ChevronRight, Plus, Trash2, X, Percent, Target, ListTree, ClipboardList, Minimize2, Megaphone,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -80,6 +80,16 @@ type Resultado = {
     itens: Array<{ rubrica: string; grupo: string; valor: number; especies: string[]; presente: boolean }>;
     faltando: string[];
     foraDaPlanilha: Array<{ especie: string; valor: number }>;
+  };
+  midia: {
+    mes: string;
+    totalAplicado: number;
+    aindaSimulado: number;
+    linhas: Array<{
+      id: string; descricao: string; percentual: number; alvo: string[];
+      baseFaturamento: number; simulado: number; realizado: number | null;
+      aplicado: number; fonte: 'simulado' | 'realizado';
+    }>;
   };
   ajustes: Array<{
     id: string; tipo: string; descricao: string; fornecedorMatch: string | null;
@@ -402,6 +412,7 @@ function AbaDre({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
           </div>
 
           <BlocoFranquias data={data} />
+          <BlocoMidia data={data} onMudou={carregar} avisar={avisar} />
           <CoberturaPlanilha data={data} />
           <Qualidade data={data} />
         </>
@@ -619,6 +630,151 @@ function BlocoFranquias({ data }: { data: Resultado }) {
       <p className="px-4 py-2 text-[11px] text-slate-400 border-t border-[#F5F2EB]">
         O marketing de {f.marketingPct}% é repasse pra cobrir a verba da rede — entra como caixa, não como lucro.
         A mercadoria vendida pra franquia (preço ÷ 2,5) também não conta aqui.
+      </p>
+    </div>
+  );
+}
+
+/**
+ * MÍDIA — simulado × realizado.
+ *
+ * O percentual (Meta 3% loja, 20% site…) é chute educado pro mês em
+ * andamento. Quando a fatura fecha, o dono lança o valor real aqui e a DRE
+ * para de simular NAQUELE mês. Apagar o valor devolve pro coeficiente.
+ */
+function BlocoMidia({ data, onMudou, avisar }: {
+  data: Resultado;
+  onMudou: () => void;
+  avisar: (t: 'ok' | 'erro', m: string) => void;
+}) {
+  const [editando, setEditando] = useState<Record<string, string>>({});
+  const [salvando, setSalvando] = useState<string | null>(null);
+  const m = data.midia;
+  if (!m?.linhas?.length) return null;
+
+  const salvar = async (linha: any, texto: string) => {
+    const valor = Number(String(texto).replace(/\./g, '').replace(',', '.'));
+    if (!Number.isFinite(valor) || valor < 0) return avisar('erro', 'Valor inválido');
+    setSalvando(linha.id);
+    try {
+      await api('/dre/config/realizado', {
+        method: 'POST',
+        body: JSON.stringify({ ajusteId: linha.id, mes: m.mes, valor }),
+      });
+      avisar('ok', `${linha.descricao}: ${brl(valor)} lançado em ${m.mes}`);
+      setEditando((e) => { const n = { ...e }; delete n[linha.id]; return n; });
+      onMudou();
+    } catch (e: any) { avisar('erro', e?.message || 'Falhou'); }
+    finally { setSalvando(null); }
+  };
+
+  const voltarPraSimulacao = async (linha: any) => {
+    try {
+      await api(`/dre/config/realizado/${linha.id}/${m.mes}`, { method: 'DELETE' });
+      avisar('ok', `${linha.descricao} voltou pro coeficiente de ${linha.percentual}%`);
+      onMudou();
+    } catch (e: any) { avisar('erro', e?.message || 'Falhou'); }
+  };
+
+  return (
+    <div className="bg-white border border-[#E7E2D8] rounded-xl overflow-hidden">
+      <div className="px-4 py-3 border-b border-[#E7E2D8] bg-[#FBF6E6]/50 flex items-center gap-2">
+        <Megaphone className="w-4 h-4 text-[#B8912B]" />
+        <div className="flex-1">
+          <h2 className="font-extrabold text-slate-800">Mídia — {m.mes}</h2>
+          <p className="text-xs text-slate-500">
+            {m.aindaSimulado > 0
+              ? `${m.aindaSimulado} de ${m.linhas.length} ainda no coeficiente — lance o valor da fatura pra fechar o mês`
+              : 'Todas as linhas com valor real lançado'}
+          </p>
+        </div>
+        <div className="text-right">
+          <div className="text-[11px] font-bold text-slate-500 uppercase">Total na DRE</div>
+          <div className="font-extrabold tabular-nums">{brl(m.totalAplicado)}</div>
+        </div>
+      </div>
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-[#E7E2D8] text-xs text-slate-500">
+              <th className="text-left px-4 py-2 font-bold">Plataforma</th>
+              <th className="text-left px-3 py-2 font-bold">Onde pega</th>
+              <th className="text-right px-3 py-2 font-bold">Simulado</th>
+              <th className="text-right px-3 py-2 font-bold">Gasto real do mês</th>
+              <th className="text-right px-4 py-2 font-bold">Entra na DRE</th>
+            </tr>
+          </thead>
+          <tbody>
+            {m.linhas.map((l) => {
+              const emEdicao = editando[l.id];
+              const texto = emEdicao ?? (l.realizado != null
+                ? l.realizado.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : '');
+              return (
+                <tr key={l.id} className="border-b border-[#F5F2EB]">
+                  <td className="px-4 py-2 font-semibold">
+                    {l.descricao}
+                    <span className="ml-1.5 text-[11px] font-normal text-slate-400">{l.percentual}%</span>
+                  </td>
+                  <td className="px-3 py-2 text-xs text-slate-500 max-w-[220px] truncate" title={l.alvo.join(', ')}>
+                    {l.alvo.length > 3 ? `${l.alvo.length} lojas` : l.alvo.join(', ')}
+                  </td>
+                  <td className={`text-right px-3 py-2 tabular-nums ${
+                    l.fonte === 'realizado' ? 'text-slate-300 line-through' : 'text-slate-600'
+                  }`}>
+                    {brl(l.simulado)}
+                  </td>
+                  <td className="text-right px-3 py-2">
+                    <div className="flex items-center justify-end gap-1">
+                      <span className="text-slate-400 text-xs">R$</span>
+                      <input
+                        value={texto}
+                        placeholder="—"
+                        inputMode="decimal"
+                        disabled={salvando === l.id}
+                        onChange={(e) => setEditando({ ...editando, [l.id]: e.target.value })}
+                        onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                        onBlur={() => {
+                          const v = editando[l.id];
+                          if (v == null) return;
+                          if (v.trim() === '') return;
+                          salvar(l, v);
+                        }}
+                        className={`w-28 text-right px-1.5 py-0.5 rounded border text-sm ${
+                          l.realizado != null ? 'border-[#2E7D46] bg-[#F4F8F5]' : 'border-[#E7E2D8]'
+                        }`}
+                      />
+                      {l.realizado != null && (
+                        <button
+                          onClick={() => voltarPraSimulacao(l)}
+                          title="Apagar o lançado e voltar pro coeficiente"
+                          className="p-1 hover:bg-rose-50 rounded text-slate-300 hover:text-rose-500"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                  <td className="text-right px-4 py-2 tabular-nums font-extrabold">
+                    {brl(l.aplicado)}
+                    <span className={`ml-1.5 text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                      l.fonte === 'realizado'
+                        ? 'bg-[#F4F8F5] text-[#2E7D46]'
+                        : 'bg-amber-50 text-amber-700'
+                    }`}>
+                      {l.fonte === 'realizado' ? 'REAL' : 'SIMULADO'}
+                    </span>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <p className="px-4 py-2 text-[11px] text-slate-400 border-t border-[#F5F2EB]">
+        Enquanto você não lança, vale o coeficiente. O valor lançado é o TOTAL do mês e é distribuído
+        entre as lojas na proporção do faturamento — a mesma régua do percentual, então trocar simulado
+        por real não muda quem paga mais. Filtro de período parcial cobra proporcional aos dias.
       </p>
     </div>
   );

@@ -126,6 +126,29 @@ export class DreController {
     return this.svc.deleteAjuste(id);
   }
 
+  // ── realizado do mês (sobrepõe o coeficiente) ──
+
+  @Get('config/realizados')
+  listRealizados(@Req() req: any, @Query('mes') mes: string) {
+    this.requireAdmin(req);
+    return this.svc.listRealizados(mes);
+  }
+
+  @Post('config/realizado')
+  lancarRealizado(
+    @Req() req: any,
+    @Body() body: { ajusteId: string; mes: string; valor: number; observacao?: string },
+  ) {
+    const usuario = this.requireAdmin(req);
+    return this.svc.lancarRealizado(body, usuario);
+  }
+
+  @Delete('config/realizado/:ajusteId/:mes')
+  apagarRealizado(@Req() req: any, @Param('ajusteId') ajusteId: string, @Param('mes') mes: string) {
+    this.requireAdmin(req);
+    return this.svc.apagarRealizado(ajusteId, mes);
+  }
+
   // ── taxas de cartão (viram despesa variável na DRE) ──
 
   @Get('config/taxas')
