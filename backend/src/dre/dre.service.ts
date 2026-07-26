@@ -1717,21 +1717,31 @@ export class DreService implements OnApplicationBootstrap {
     const paraMover = alvos.filter((a) => a.especieId !== input.especieDestinoId);
     await (this.prisma as any).contaPagar.updateMany({
       where: { id: { in: paraMover.map((a) => a.id) } },
-      data: { especieId: input.especieDestinoId, updatedBy: usuario || null },
+      data: { especieId: input.especieDestinoId, updatedBy: usuario?.slice(0, 80) || null },
     });
 
     // Rastro por conta — sem isso, uma reclassificação errada em 300 contas
     // não teria como ser auditada nem desfeita com segurança.
-    await (this.prisma as any).contaPagarLog.createMany({
-      data: paraMover.map((a) => ({
-        contaId: a.id,
-        campo: 'especieId',
-        valorAntigo: a.especie?.nome || '(sem espécie)',
-        valorNovo: destino.nome,
-        usuario: usuario || null,
-        origem: 'reclassificacao-massa',
-      })),
-    });
+    //
+    // Os campos são curtos no schema (origem VarChar(20), usuario 80, valores
+    // 300) e estourar QUALQUER um derruba a operação inteira em 500. Já
+    // aconteceu: 'reclassificacao-massa' tem 21 caracteres. Corta tudo aqui.
+    try {
+      await (this.prisma as any).contaPagarLog.createMany({
+        data: paraMover.map((a) => ({
+          contaId: a.id,
+          campo: 'especieId',
+          valorAntigo: String(a.especie?.nome || '(sem espécie)').slice(0, 300),
+          valorNovo: String(destino.nome).slice(0, 300),
+          usuario: usuario ? String(usuario).slice(0, 80) : null,
+          origem: 'massa',
+        })),
+      });
+    } catch (e: any) {
+      // As contas JÁ foram movidas. Perder o log é ruim, mas devolver erro
+      // aqui faria o dono repetir a operação achando que não funcionou.
+      this.logger.error(`[dre] reclassificação aplicada mas o log falhou: ${e?.message || e}`);
+    }
 
     this.logger.log(
       `[dre] reclassificação em massa: ${paraMover.length} conta(s) → "${destino.nome}" por ${usuario || '—'}`,
@@ -1768,8 +1778,8 @@ export class DreService implements OnApplicationBootstrap {
     }
     const row = await (this.prisma as any).dreAliquota.upsert({
       where: { cnpj_mes: { cnpj, mes } },
-      create: { cnpj, mes, aliquotaPct: pct, observacao: input.observacao || null, criadoPor: usuario || null },
-      update: { aliquotaPct: pct, observacao: input.observacao || null },
+      create: { cnpj, mes, aliquotaPct: pct, observacao: input.observacao?.slice(0, 120) || null, criadoPor: usuario?.slice(0, 80) || null },
+      update: { aliquotaPct: pct, observacao: input.observacao?.slice(0, 120) || null },
     });
     return { ok: true, id: row.id, cnpj, mes, aliquotaPct: pct };
   }
@@ -1846,7 +1856,7 @@ export class DreService implements OnApplicationBootstrap {
 
     const row = input.id
       ? await (this.prisma as any).dreAjuste.update({ where: { id: input.id }, data })
-      : await (this.prisma as any).dreAjuste.create({ data: { ...data, criadoPor: usuario || null } });
+      : await (this.prisma as any).dreAjuste.create({ data: { ...data, criadoPor: usuario?.slice(0, 80) || null } });
     return { ok: true, id: row.id };
   }
 
@@ -1881,12 +1891,12 @@ export class DreService implements OnApplicationBootstrap {
         mes,
         valorCents: Math.round(valor * 100),
         observacao: input.observacao?.slice(0, 160) || null,
-        lancadoPor: usuario || null,
+        lancadoPor: usuario?.slice(0, 80) || null,
       },
       update: {
         valorCents: Math.round(valor * 100),
         observacao: input.observacao?.slice(0, 160) || null,
-        lancadoPor: usuario || null,
+        lancadoPor: usuario?.slice(0, 80) || null,
       },
     });
     return { ok: true, id: row.id, mes, valor };
@@ -1932,7 +1942,8 @@ export class DreService implements OnApplicationBootstrap {
     if (!['PIX', 'DEBITO', 'CREDITO'].includes(forma)) {
       throw new BadRequestException('Forma inválida (PIX | DEBITO | CREDITO)');
     }
-    const bandeira = this.semAcento(input.bandeira).replace(/[_\-\s]+/g, ' ').trim();
+    // slice(0,20): a coluna é VarChar(20) e estourar derruba tudo em 500.
+    const bandeira = this.semAcento(input.bandeira).replace(/[_\-\s]+/g, ' ').trim().slice(0, 20);
     if (!bandeira) throw new BadRequestException('Bandeira obrigatória');
     const faixa = String(input.faixaParcela || 'UNICA').toUpperCase().trim();
     if (!['UNICA', '1', '2-6', '7-12'].includes(faixa)) {
@@ -1945,7 +1956,7 @@ export class DreService implements OnApplicationBootstrap {
 
     const row = await (this.prisma as any).taxaCartao.upsert({
       where: { bandeira_faixaParcela: { bandeira, faixaParcela: faixa } },
-      create: { forma, bandeira, faixaParcela: faixa, taxaPct: pct, criadoPor: usuario || null },
+      create: { forma, bandeira, faixaParcela: faixa, taxaPct: pct, criadoPor: usuario?.slice(0, 80) || null },
       update: { forma, taxaPct: pct, ativo: input.ativo !== false },
     });
     return { ok: true, id: row.id, bandeira, faixaParcela: faixa, taxaPct: pct };

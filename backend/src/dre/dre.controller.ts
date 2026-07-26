@@ -1,5 +1,6 @@
 import {
-  Body, Controller, Delete, ForbiddenException, Get, Param, Patch, Post, Query, Req, UseGuards,
+  BadRequestException, Body, Controller, Delete, ForbiddenException,
+  Get, Param, Patch, Post, Query, Req, UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { DreService } from './dre.service';
@@ -115,7 +116,7 @@ export class DreController {
   }
 
   @Post('config/reclassificar')
-  reclassificar(
+  async reclassificar(
     @Req() req: any,
     @Body() body: {
       especieOrigemId?: string; busca?: string; de?: string; ate?: string;
@@ -123,7 +124,16 @@ export class DreController {
     },
   ) {
     const usuario = this.requireAdmin(req);
-    return this.svc.reclassificarEmMassa(body, usuario);
+    try {
+      return await this.svc.reclassificarEmMassa(body, usuario);
+    } catch (e: any) {
+      if (e instanceof BadRequestException) throw e;
+      // 500 sem mensagem não ajuda ninguém no meio de uma operação em massa —
+      // devolve o motivo real (foi assim que o VarChar(20) estourado apareceu).
+      throw new BadRequestException(
+        `Não deu pra reclassificar: ${e?.message || e}`,
+      );
+    }
   }
 
   @Post('config/aliquota')
