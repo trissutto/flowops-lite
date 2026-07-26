@@ -38,7 +38,7 @@ const fmtDia = (iso?: string | null) => (iso ? iso.split('-').reverse().slice(0,
 const iso = (d: Date) => d.toISOString().slice(0, 10);
 
 type Coluna = {
-  key: string; label: string; grupo: 'LOJA' | 'CANAL'; cnpj: string | null;
+  key: string; label: string; grupo: 'LOJA' | 'CANAL'; cnpj: string | null; markup: number;
   faturamentoBruto: number; devolucoes: number; receitaLiquida: number;
   devolucoesDinheiro: number; devolucoesTroca: number; ajustesNaVenda: number;
   cmv: number; margemBruta: number; margemBrutaPct: number;
@@ -96,7 +96,7 @@ type Resultado = {
     valorMensal: number | null; percentual: number | null; grupo: string | null; lojasExcluidas: string | null; lojasIncluidas: string | null;
   }>;
   config: {
-    markup: number;
+    markupPadrao: number;
     aliquotaPadrao: number;
     lojasSemGrupo: string[];
     especiesSemGrupo: number;
@@ -117,7 +117,7 @@ const LINHAS: Array<{
   { campo: 'devolucoesDinheiro', label: '( - ) Devolução em dinheiro/pix', tipo: 'deducao', nota: 'Único que abate — a cliente levou o dinheiro' },
   { campo: 'devolucoesTroca', label: '( i ) Troca / vale gerado', tipo: 'info', nota: 'NÃO abate do faturamento (decisão do dono) — a peça nova entra cheia depois' },
   { campo: 'receitaLiquida', label: '( = ) Receita líquida', tipo: 'subtotal' },
-  { campo: 'cmv', label: '( - ) CMV (custo das peças vendidas)', tipo: 'deducao', nota: 'Venda ÷ 2,65 (markup)' },
+  { campo: 'cmv', label: '( - ) CMV (custo das peças vendidas)', tipo: 'deducao', nota: 'Venda ÷ markup da loja' },
   { campo: 'margemBruta', label: '( = ) Margem bruta', tipo: 'subtotal', pctCampo: 'margemBrutaPct' },
   { campo: 'impostos', label: '( - ) Impostos', tipo: 'deducao', nota: '10% da receita líquida' },
   { campo: 'despesasVariaveis', label: '( - ) Despesas variáveis', tipo: 'deducao', drill: 'VARIAVEL', grupoDespesa: 'VARIAVEL' },
@@ -406,6 +406,8 @@ function AbaDre({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
                     valor={(c) => String(c.pecas || 0)} />
                   <LinhaIndicador label="Alíquota de imposto" total={total} colunas={colunas}
                     valor={(c) => (c.aliquotaPct == null ? 'não cadastrada' : `${Number(c.aliquotaPct).toFixed(2)}%`)} />
+                  <LinhaIndicador label="Markup do CMV" total={total} colunas={colunas}
+                    valor={(c) => `÷ ${Number(c.markup || 0).toFixed(2).replace('.', ',')}`} />
                 </tbody>
               </table>
             </div>
@@ -959,7 +961,7 @@ function Qualidade({ data }: { data: Resultado }) {
         ))}
       </ul>
       <div className="text-[11px] text-amber-700 mt-2">
-        Fonte: {data.fonte}. CMV = venda ÷ {data.config.markup} · imposto de {data.config.aliquotaPadrao}% sobre a receita líquida
+        Fonte: {data.fonte}. CMV = venda ÷ markup da loja (padrão {data.config.markupPadrao}) · imposto de {data.config.aliquotaPadrao}% sobre a receita líquida
         (dá pra sobrepor por CNPJ/mês em Configuração).
       </div>
     </div>
@@ -1079,6 +1081,7 @@ function AbaConfig({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }
   const [cfg, setCfg] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [novaEspecie, setNovaEspecie] = useState({ nome: '', dreGrupo: 'FIXA' });
+  const [markupEdit, setMarkupEdit] = useState<Record<string, string>>({});
   const [novaAliq, setNovaAliq] = useState({ cnpj: '', mes: new Date().toISOString().slice(0, 7), aliquotaPct: '', observacao: '' });
 
   const carregar = useCallback(async () => {
@@ -1092,6 +1095,18 @@ function AbaConfig({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }
   const salvarLoja = async (code: string, grupo: string) => {
     try { await api(`/dre/config/loja/${encodeURIComponent(code)}`, { method: 'PATCH', body: JSON.stringify({ grupo }) }); avisar('ok', `${code} → ${grupo}`); carregar(); }
     catch (e: any) { avisar('erro', e?.message || 'Falhou'); }
+  };
+  const salvarMarkup = async (code: string, texto: string) => {
+    const t = String(texto).trim();
+    const markup = t === '' ? null : Number(t.replace(',', '.'));
+    try {
+      await api(`/dre/config/loja/${encodeURIComponent(code)}/markup`, {
+        method: 'PATCH', body: JSON.stringify({ markup }),
+      });
+      avisar('ok', markup == null ? `${code} voltou pro markup padrão` : `${code} → CMV = venda ÷ ${markup}`);
+      setMarkupEdit((m) => { const n = { ...m }; delete n[code]; return n; });
+      carregar();
+    } catch (e: any) { avisar('erro', e?.message || 'Falhou'); }
   };
   const salvarEspecie = async (id: string, grupo: string) => {
     try { await api(`/dre/config/especie/${id}`, { method: 'PATCH', body: JSON.stringify({ grupo }) }); avisar('ok', 'Espécie classificada'); carregar(); }
@@ -1148,6 +1163,26 @@ function AbaConfig({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }
                   {!l.configurado && ' · usando heurística'}
                 </div>
               </div>
+              {/* Markup do CMV: vazio = padrão da rede. Nem toda loja compra
+                  igual (ITANHAÉM trabalha com 2,35). */}
+              <label className="flex items-center gap-1 text-xs" title={`Markup do CMV — vazio usa o padrão da rede (${cfg.markupPadrao})`}>
+                <span className="text-slate-400">÷</span>
+                <input
+                  value={markupEdit[l.code] ?? (l.markup != null ? String(l.markup).replace('.', ',') : '')}
+                  placeholder={String(cfg.markupPadrao).replace('.', ',')}
+                  inputMode="decimal"
+                  onChange={(e) => setMarkupEdit({ ...markupEdit, [l.code]: e.target.value })}
+                  onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                  onBlur={() => {
+                    const v = markupEdit[l.code];
+                    if (v == null) return;
+                    salvarMarkup(l.code, v);
+                  }}
+                  className={`w-14 text-right px-1 py-1 rounded border text-xs ${
+                    l.markup != null ? 'border-[#B8912B] bg-[#FBF6E6] font-bold' : 'border-[#E7E2D8]'
+                  }`}
+                />
+              </label>
               <select
                 value={l.dreGrupo || l.dreGrupoEfetivo}
                 onChange={(e) => salvarLoja(l.code, e.target.value)}

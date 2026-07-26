@@ -30,17 +30,18 @@ import { FaturamentoService } from '../faturamento/faturamento.service';
  */
 
 /**
- * CMV = VENDA ÷ MARKUP (decisão do dono 26/07: markup 2,65).
+ * CMV = VENDA ÷ MARKUP (decisão do dono 26/07).
  *
  * NÃO usa o campo CUSTO do cadastro do Giga de propósito — ele está
  * desatualizado/zerado em parte da base, o que distorcia a margem sem aviso.
- * Markup fixo é premissa gerencial explícita: todo mundo enxerga a regra.
+ * Markup é premissa gerencial explícita: todo mundo enxerga a regra.
  *
- * Consequência assumida: a margem BRUTA fica igual em todas as colunas
- * (1 − 1/2,65 = 62,3%). Quem diferencia loja de loja daqui pra baixo é
- * despesa, imposto e rateio — não o mix de produto.
+ * 2,7 é o padrão da rede; a loja que compra diferente sobrepõe em
+ * `Store.dreMarkup` (ITANHAÉM = 2,35). Ou seja: a margem bruta agora PODE
+ * variar entre colunas — mas só quando o dono disse que varia, nunca por
+ * cadastro de custo furado.
  */
-const MARKUP = 2.65;
+const MARKUP_PADRAO = 2.7;
 
 /** Alíquota efetiva padrão — decisão do dono 26/07 ("considere 10%"). */
 const ALIQUOTA_PADRAO = 10;
@@ -90,6 +91,8 @@ export interface DreColuna {
   label: string;
   grupo: 'LOJA' | 'CANAL';
   cnpj: string | null;
+  /** Markup usado no CMV desta coluna (padrão da rede ou override da loja). */
+  markup: number;
 
   faturamentoBruto: number;
   devolucoes: number;
@@ -297,6 +300,18 @@ export class DreService implements OnApplicationBootstrap {
         },
       },
       {
+        chave: 'dre_markup_itanhaem_2607',
+        rotulo: 'markup de ITANHAEM em 2,35 (rede fica em 2,7)',
+        run: async () => {
+          // Nem toda loja compra igual (dono, 26/07). Casa por nome porque o
+          // código da loja varia entre ambientes.
+          await (this.prisma as any).store.updateMany({
+            where: { name: { contains: 'ITANHA', mode: 'insensitive' } },
+            data: { dreMarkup: 2.35 },
+          });
+        },
+      },
+      {
         chave: 'dre_marketing_por_canal_2607',
         rotulo: 'Meta/Google Ads separados por loja e SITE',
         run: async () => {
@@ -438,9 +453,9 @@ export class DreService implements OnApplicationBootstrap {
     return 'FIXA';
   }
 
-  private colunaVazia(key: string, label: string, grupo: 'LOJA' | 'CANAL', cnpj: string | null): DreColuna {
+  private colunaVazia(key: string, label: string, grupo: 'LOJA' | 'CANAL', cnpj: string | null, markup = MARKUP_PADRAO): DreColuna {
     return {
-      key, label, grupo, cnpj,
+      key, label, grupo, cnpj, markup,
       faturamentoBruto: 0, devolucoes: 0, devolucoesDinheiro: 0, devolucoesTroca: 0,
       ajustesNaVenda: 0, receitaLiquida: 0,
       cmv: 0, margemBruta: 0, margemBrutaPct: 0,
@@ -509,7 +524,13 @@ export class DreService implements OnApplicationBootstrap {
         continue;
       }
 
-      const col = this.colunaVazia(s.code, s.name || s.code, grupo, this.soDigitos(s.expectedCnpj) || null);
+      // Markup da loja (ex: ITANHAÉM 2,35) ou o padrão da rede.
+      const mk = s.dreMarkup != null ? Number(s.dreMarkup) : MARKUP_PADRAO;
+      const col = this.colunaVazia(
+        s.code, s.name || s.code, grupo,
+        this.soDigitos(s.expectedCnpj) || null,
+        Number.isFinite(mk) && mk > 0 ? mk : MARKUP_PADRAO,
+      );
       colunas.set(s.code, col);
       for (const v of this.variantes(s.code)) indice.set(v, s.code);
       if (s.name) indice.set(String(s.name).toUpperCase(), s.code);
@@ -826,7 +847,7 @@ export class DreService implements OnApplicationBootstrap {
       // CMV = venda ÷ 2,65 sobre a receita LÍQUIDA — peça devolvida não
       // vendeu, então o custo dela já sai junto. Regra ÚNICA: vale pra loja
       // física e pra canal digital (LIVE/SITE) igual.
-      col.cmv = col.receitaLiquida / MARKUP;
+      col.cmv = col.receitaLiquida / col.markup;
       col.margemBruta = col.receitaLiquida - col.cmv;
 
       const aliq = (col.cnpj ? overrides.get(col.cnpj) : undefined) ?? ALIQUOTA_PADRAO;
@@ -958,7 +979,7 @@ export class DreService implements OnApplicationBootstrap {
         grupo: a.grupo, lojasExcluidas: a.lojasExcluidas, lojasIncluidas: a.lojasIncluidas,
       })),
       config: {
-        markup: MARKUP,
+        markupPadrao: MARKUP_PADRAO,
         aliquotaPadrao: ALIQUOTA_PADRAO,
         lojasSemGrupo: stores.filter((s) => !s.dreGrupo).map((s) => s.code),
         especiesSemGrupo: especies.filter((e) => !e.dreGrupo).length,
@@ -1144,6 +1165,9 @@ export class DreService implements OnApplicationBootstrap {
     // Mesma regra das colunas: troca/vale não abate.
     t.receitaLiquida = t.faturamentoBruto - t.devolucoesDinheiro;
     t.margemBruta = t.receitaLiquida - t.cmv;
+    // O CMV do total é a SOMA das colunas (cada uma com o seu markup), então
+    // o markup da rede é o EFETIVO — mistura de 2,7 com o 2,35 de ITANHAÉM.
+    t.markup = t.cmv > 0 ? t.receitaLiquida / t.cmv : MARKUP_PADRAO;
     t.margemContribuicao = t.margemBruta - t.impostos - t.despesasVariaveis;
     t.resultado4Wall = t.margemContribuicao - t.despesasFixas;
     t.resultadoLiquido = t.resultado4Wall - t.rateioRede - t.despesasFinanceiras;
@@ -1422,6 +1446,7 @@ export class DreService implements OnApplicationBootstrap {
 
     return {
       aliquotaPadrao: ALIQUOTA_PADRAO,
+      markupPadrao: MARKUP_PADRAO,
       royaltiesPct: ROYALTIES_PCT,
       marketingPct: MARKETING_PCT,
       lojas: stores.map((s: any) => ({
@@ -1433,6 +1458,7 @@ export class DreService implements OnApplicationBootstrap {
         dreGrupo: s.dreGrupo || null,
         dreGrupoEfetivo: this.grupoDaLoja(s),
         configurado: !!s.dreGrupo,
+        markup: s.dreMarkup != null ? Number(s.dreMarkup) : null,
       })),
       // Só as ATIVAS na tela de classificação — inativa não recebe conta nova,
       // não faz sentido pedir pro dono classificar.
@@ -1455,6 +1481,23 @@ export class DreService implements OnApplicationBootstrap {
         especie: ['VARIAVEL', 'FIXA', 'FINANCEIRA', 'CMV', 'IMPOSTO', 'IGNORAR'],
       },
     };
+  }
+
+  /**
+   * Markup da loja pro CMV. `null` volta pro padrão da rede.
+   * Faixa 1,1–10: abaixo de 1 o custo seria maior que a venda; acima de 10 é
+   * dedo errado, não negócio.
+   */
+  async setMarkupLoja(code: string, markup: number | null) {
+    let valor: number | null = null;
+    if (markup != null && String(markup) !== '') {
+      valor = Number(markup);
+      if (!Number.isFinite(valor) || valor < 1.1 || valor > 10) {
+        throw new BadRequestException('Markup deve estar entre 1,1 e 10');
+      }
+    }
+    await (this.prisma as any).store.update({ where: { code }, data: { dreMarkup: valor } });
+    return { ok: true, code, markup: valor, padrao: MARKUP_PADRAO };
   }
 
   async setGrupoLoja(code: string, grupo: string) {
