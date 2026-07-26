@@ -4467,10 +4467,17 @@ model DreAliquota {
 ///     está lançada no Contas a Pagar (ex: segurança R$ 200/loja). Valor é
 ///     MENSAL e entra proporcional aos dias do período. `lojasExcluidas`
 ///     lista quem NÃO paga (ex: SANTOS).
+///
+///   DESPESA_PCT — despesa que acompanha a venda, em % do FATURAMENTO BRUTO
+///     de cada coluna (ex: marketing 5%). Não precisa de rateio nem de
+///     proporção por dias: se a loja vendeu mais, gastou mais.
 model DreAjuste {
   id        String  @id @default(cuid())
-  tipo      String  @db.VarChar(20) // EXCLUIR_FORNECEDOR | DESPESA_FIXA
+  tipo      String  @db.VarChar(20) // EXCLUIR_FORNECEDOR | DESPESA_FIXA | DESPESA_PCT
   descricao String  @db.VarChar(60) // rótulo que aparece na DRE
+
+  /// DESPESA_PCT: % sobre o faturamento bruto da coluna.
+  percentual Decimal? @db.Decimal(6, 3)
 
   /// EXCLUIR_FORNECEDOR: casa por "contém", sem acento e case-insensitive.
   fornecedorMatch String? @map("fornecedor_match") @db.VarChar(60)

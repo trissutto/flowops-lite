@@ -83,7 +83,7 @@ type Resultado = {
   };
   ajustes: Array<{
     id: string; tipo: string; descricao: string; fornecedorMatch: string | null;
-    valorMensal: number | null; grupo: string | null; lojasExcluidas: string | null;
+    valorMensal: number | null; percentual: number | null; grupo: string | null; lojasExcluidas: string | null;
   }>;
   config: {
     markup: number;
@@ -104,8 +104,8 @@ const LINHAS: Array<{
 }> = [
   { campo: 'faturamentoBruto', label: '( + ) Faturamento bruto', tipo: 'receita', drill: 'FATURAMENTO' },
   { campo: 'ajustesNaVenda', label: '( i ) Ajuste negativo dentro da venda', tipo: 'info', nota: 'JÁ abatido no faturamento acima — não subtrai de novo' },
-  { campo: 'devolucoesDinheiro', label: '( - ) Devolução em dinheiro/pix', tipo: 'deducao', nota: 'Cliente levou o dinheiro' },
-  { campo: 'devolucoesTroca', label: '( - ) Devolução que virou vale/troca', tipo: 'deducao', nota: 'A peça nova entra cheia no faturamento depois' },
+  { campo: 'devolucoesDinheiro', label: '( - ) Devolução em dinheiro/pix', tipo: 'deducao', nota: 'Único que abate — a cliente levou o dinheiro' },
+  { campo: 'devolucoesTroca', label: '( i ) Troca / vale gerado', tipo: 'info', nota: 'NÃO abate do faturamento (decisão do dono) — a peça nova entra cheia depois' },
   { campo: 'receitaLiquida', label: '( = ) Receita líquida', tipo: 'subtotal' },
   { campo: 'cmv', label: '( - ) CMV (custo das peças vendidas)', tipo: 'deducao', nota: 'Venda ÷ 2,65 (markup)' },
   { campo: 'margemBruta', label: '( = ) Margem bruta', tipo: 'subtotal', pctCampo: 'margemBrutaPct' },
@@ -1211,7 +1211,7 @@ function BlocoAjustes({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => voi
   const [lista, setLista] = useState<any[]>([]);
   const [novo, setNovo] = useState({
     tipo: 'DESPESA_FIXA', descricao: '', fornecedorMatch: '',
-    valorMensal: '', grupo: 'FIXA', lojasExcluidas: '',
+    valorMensal: '', percentual: '', grupo: 'FIXA', lojasExcluidas: '',
   });
 
   const carregar = useCallback(() => {
@@ -1226,10 +1226,11 @@ function BlocoAjustes({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => voi
         body: JSON.stringify({
           ...novo,
           valorMensal: novo.valorMensal ? Number(String(novo.valorMensal).replace(',', '.')) : undefined,
+          percentual: novo.percentual ? Number(String(novo.percentual).replace(',', '.')) : undefined,
         }),
       });
       avisar('ok', 'Ajuste salvo');
-      setNovo({ ...novo, descricao: '', fornecedorMatch: '', valorMensal: '', lojasExcluidas: '' });
+      setNovo({ ...novo, descricao: '', fornecedorMatch: '', valorMensal: '', percentual: '', lojasExcluidas: '' });
       carregar();
     } catch (e: any) { avisar('erro', e?.message || 'Falhou'); }
   };
@@ -1249,7 +1250,8 @@ function BlocoAjustes({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => voi
         <Campo label="Tipo">
           <select value={novo.tipo} onChange={(e) => setNovo({ ...novo, tipo: e.target.value })}
             className="px-2 py-1.5 rounded-lg border border-[#E7E2D8] text-sm">
-            <option value="DESPESA_FIXA">Somar despesa por loja</option>
+            <option value="DESPESA_FIXA">Somar R$ por loja/mês</option>
+            <option value="DESPESA_PCT">Somar % do faturamento</option>
             <option value="EXCLUIR_FORNECEDOR">Excluir fornecedor da DRE</option>
           </select>
         </Campo>
@@ -1265,9 +1267,24 @@ function BlocoAjustes({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => voi
           </Campo>
         ) : (
           <>
-            <Campo label="R$ por loja/mês">
-              <input value={novo.valorMensal} onChange={(e) => setNovo({ ...novo, valorMensal: e.target.value })}
-                placeholder="200,00" className="px-2 py-1.5 rounded-lg border border-[#E7E2D8] text-sm w-28" />
+            {novo.tipo === 'DESPESA_PCT' ? (
+              <Campo label="% do faturamento">
+                <input value={novo.percentual} onChange={(e) => setNovo({ ...novo, percentual: e.target.value })}
+                  placeholder="5" className="px-2 py-1.5 rounded-lg border border-[#E7E2D8] text-sm w-24" />
+              </Campo>
+            ) : (
+              <Campo label="R$ por loja/mês">
+                <input value={novo.valorMensal} onChange={(e) => setNovo({ ...novo, valorMensal: e.target.value })}
+                  placeholder="200,00" className="px-2 py-1.5 rounded-lg border border-[#E7E2D8] text-sm w-28" />
+              </Campo>
+            )}
+            <Campo label="Entra como">
+              <select value={novo.grupo} onChange={(e) => setNovo({ ...novo, grupo: e.target.value })}
+                className="px-2 py-1.5 rounded-lg border border-[#E7E2D8] text-sm">
+                <option value="VARIAVEL">Despesa variável</option>
+                <option value="FIXA">Despesa fixa</option>
+                <option value="FINANCEIRA">Despesa financeira</option>
+              </select>
             </Campo>
             <Campo label="Lojas que NÃO pagam">
               <input value={novo.lojasExcluidas} onChange={(e) => setNovo({ ...novo, lojasExcluidas: e.target.value })}
@@ -1297,7 +1314,9 @@ function BlocoAjustes({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => voi
                 <td className="text-slate-500 text-xs">
                   {a.tipo === 'EXCLUIR_FORNECEDOR'
                     ? `fornecedor contém “${a.fornecedorMatch}” → fora da DRE`
-                    : `${brl(a.valorMensal || 0)}/mês por loja${a.lojasExcluidas ? ` · exceto ${a.lojasExcluidas}` : ''}`}
+                    : a.tipo === 'DESPESA_PCT'
+                      ? `${a.percentual}% do faturamento de cada loja${a.lojasExcluidas ? ` · exceto ${a.lojasExcluidas}` : ''}`
+                      : `${brl(a.valorMensal || 0)}/mês por loja${a.lojasExcluidas ? ` · exceto ${a.lojasExcluidas}` : ''}`}
                 </td>
                 <td className="text-right">
                   <button onClick={() => remover(a.id)} className="p-1 hover:bg-rose-50 rounded text-rose-500">
