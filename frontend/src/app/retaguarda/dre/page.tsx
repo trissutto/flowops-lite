@@ -40,6 +40,7 @@ const iso = (d: Date) => d.toISOString().slice(0, 10);
 type Coluna = {
   key: string; label: string; grupo: 'LOJA' | 'CANAL'; cnpj: string | null;
   faturamentoBruto: number; devolucoes: number; receitaLiquida: number;
+  devolucoesDinheiro: number; devolucoesTroca: number; ajustesNaVenda: number;
   cmv: number; margemBruta: number; margemBrutaPct: number;
   impostos: number; aliquotaPct: number | null; despesasVariaveis: number;
   margemContribuicao: number; margemContribuicaoPct: number;
@@ -87,13 +88,15 @@ type Resultado = {
 
 /** Linhas da DRE, na ordem da planilha. `drill` = linha que abre detalhe. */
 const LINHAS: Array<{
-  campo: keyof Coluna; label: string; tipo: 'receita' | 'deducao' | 'subtotal' | 'resultado';
+  campo: keyof Coluna; label: string; tipo: 'receita' | 'deducao' | 'subtotal' | 'resultado' | 'info';
   pctCampo?: keyof Coluna; drill?: string; nota?: string;
   /** Linha de despesa: abre detalhe por espécie deste grupo quando ligado. */
   grupoDespesa?: 'FIXA' | 'VARIAVEL' | 'FINANCEIRA';
 }> = [
   { campo: 'faturamentoBruto', label: '( + ) Faturamento bruto', tipo: 'receita', drill: 'FATURAMENTO' },
-  { campo: 'devolucoes', label: '( - ) Devoluções', tipo: 'deducao' },
+  { campo: 'ajustesNaVenda', label: '( i ) Ajuste negativo dentro da venda', tipo: 'info', nota: 'JÁ abatido no faturamento acima — não subtrai de novo' },
+  { campo: 'devolucoesDinheiro', label: '( - ) Devolução em dinheiro/pix', tipo: 'deducao', nota: 'Cliente levou o dinheiro' },
+  { campo: 'devolucoesTroca', label: '( - ) Devolução que virou vale/troca', tipo: 'deducao', nota: 'A peça nova entra cheia no faturamento depois' },
   { campo: 'receitaLiquida', label: '( = ) Receita líquida', tipo: 'subtotal' },
   { campo: 'cmv', label: '( - ) CMV (custo das peças vendidas)', tipo: 'deducao' },
   { campo: 'margemBruta', label: '( = ) Margem bruta', tipo: 'subtotal', pctCampo: 'margemBrutaPct' },
@@ -307,6 +310,7 @@ function AbaDre({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
                     <tr className={
                       l.tipo === 'resultado' ? 'bg-[#F4F8F5] border-y border-[#E7E2D8] font-extrabold'
                         : l.tipo === 'subtotal' ? 'bg-slate-50 font-bold border-y border-[#F0EDE6]'
+                        : l.tipo === 'info' ? 'text-slate-400 italic border-b border-[#F5F2EB]'
                         : 'hover:bg-[#FBF6E6]/40 border-b border-[#F5F2EB]'
                     }>
                       <td className="px-3 py-2 sticky left-0 bg-inherit">
@@ -398,6 +402,8 @@ function Celula({ coluna, linha, verPct }: { coluna: Coluna; linha: typeof LINHA
     return <span className={p < 0 ? 'text-rose-600' : ''}>{pct(p)}</span>;
   }
   if (!v) return <span className="text-slate-300">—</span>;
+  // Linha informativa não leva parênteses: ela NÃO está sendo subtraída aqui.
+  if (linha.tipo === 'info') return <span className="text-slate-400">{brl(v)}</span>;
   const negativo = linha.tipo === 'deducao';
   return (
     <span className={v < 0 ? 'text-rose-600' : linha.tipo === 'resultado' ? 'text-[#2E7D46]' : ''}>
