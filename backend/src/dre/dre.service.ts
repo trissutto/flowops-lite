@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
+import { FaturamentoService } from '../faturamento/faturamento.service';
 
 /**
  * DRE por loja — painel /retaguarda/dre.
@@ -144,6 +145,7 @@ export class DreService implements OnApplicationBootstrap {
   constructor(
     private readonly prisma: PrismaService,
     private readonly erp: ErpService,
+    private readonly faturamento: FaturamentoService,
   ) {}
 
   /**
@@ -178,6 +180,21 @@ export class DreService implements OnApplicationBootstrap {
         ],
         skipDuplicates: true,
       });
+      // Grade de taxas que o dono pediu (26/07). Percentual entra ZERADO de
+      // propósito: taxa chutada vira despesa inventada. As linhas nascem
+      // prontas pra ele só digitar o % de cada uma.
+      const grade: any[] = [
+        { forma: 'PIX', bandeira: 'PIX', faixaParcela: 'UNICA' },
+        ...['VISA ELECTRON', 'REDESHOP', 'ELO'].map((b) => ({
+          forma: 'DEBITO', bandeira: b, faixaParcela: 'UNICA',
+        })),
+        ...['VISA', 'MASTERCARD', 'HIPERCARD', 'AMEX'].flatMap((b) =>
+          ['1', '2-6', '7-12'].map((f) => ({ forma: 'CREDITO', bandeira: b, faixaParcela: f })),
+        ),
+      ].map((t) => ({ ...t, taxaPct: 0, criadoPor: 'seed 26/07' }));
+
+      await (this.prisma as any).taxaCartao.createMany({ data: grade, skipDuplicates: true });
+
       await (this.prisma as any).appConfig.create({
         data: { key: CHAVE, valueJson: JSON.stringify({ seededAt: new Date().toISOString() }) },
       });
@@ -460,7 +477,7 @@ export class DreService implements OnApplicationBootstrap {
     }
 
     // ── 4) Canais digitais (LIVE / SITE) ──
-    await this.aplicaCanais(colunas, canais, startDate, endDate);
+    await this.aplicaCanais(colunas, canais, inicio, fimExclusive);
 
     // ── 5) Despesas (ContaPagar por VENCIMENTO) ──
     const especies: any[] = await (this.prisma as any).especieConta.findMany();
@@ -534,6 +551,20 @@ export class DreService implements OnApplicationBootstrap {
       if (!key || !colunas.has(key)) { despesaSemColuna += valor; continue; }
 
       this.somaDespesa(colunas.get(key)!, nome, g, valor);
+    }
+
+    // ── 5a) TAXA DE CARTÃO — despesa variável calculada, não lançada ─────
+    const taxas = await this.taxaCartaoPorLoja(startDate, endDate, indice);
+    for (const [key, t] of taxas.porLoja) {
+      const col = colunas.get(key);
+      if (!col) continue;
+      this.somaDespesa(col, 'Taxa de cartão/PIX', 'VARIAVEL', t.taxa);
+      if (t.semTaxaCadastrada > 0) {
+        col.avisos.push(
+          `${this.brl(t.semTaxaCadastrada)} pagos em bandeira/parcela SEM taxa cadastrada ` +
+          `(${[...t.faltando].join(', ')}) — essa parte entrou com taxa zero.`,
+        );
+      }
     }
 
     // ── 5b) Despesa fixa GERENCIAL (o dono sabe que existe, não está lançada)
@@ -712,6 +743,105 @@ export class DreService implements OnApplicationBootstrap {
     };
   }
 
+  /** Faixa de parcela usada na tabela de taxa. */
+  private faixaDe(metodo: string, parcelas: number): string {
+    if (metodo !== 'credito') return 'UNICA';
+    if (parcelas <= 1) return '1';
+    if (parcelas <= 6) return '2-6';
+    return '7-12';
+  }
+
+  /**
+   * Normaliza o nome da bandeira. O PDV grava o que a vendedora escolheu
+   * ("VISA ELECTRON", "Mastercard", "REDE SHOP") e o cadastro de taxa precisa
+   * casar com isso sem depender de digitação idêntica.
+   */
+  private normalizaBandeira(raw: string, metodo: string): string {
+    const b = this.semAcento(raw).replace(/[_\-\s]+/g, ' ').trim();
+    if (!b) return metodo === 'pix' ? 'PIX' : metodo === 'debito' ? 'DEBITO' : 'CREDITO';
+    if (/^MASTER/.test(b)) return 'MASTERCARD';
+    if (/^VISA ?ELECTRON/.test(b)) return 'VISA ELECTRON';
+    if (/^VISA/.test(b)) return 'VISA';
+    if (/^REDE ?SHOP/.test(b)) return 'REDESHOP';
+    if (/^AMERICAN|^AMEX/.test(b)) return 'AMEX';
+    if (/^HIPER/.test(b)) return 'HIPERCARD';
+    if (/^ELO/.test(b)) return 'ELO';
+    return b;
+  }
+
+  /**
+   * Taxa de cartão/PIX por loja: cruza os pagamentos REAIS da venda (bandeira
+   * + nº de parcelas, que o PDV grava em `PdvSalePayment.details`) com a
+   * tabela de taxa cadastrada. Vira DESPESA VARIÁVEL sem ninguém lançar nada
+   * no Contas a Pagar.
+   *
+   * Ressalva medida, não escondida: a fonte é o Flow e o faturamento da DRE
+   * vem do caixa do Giga. Venda lançada direto no Giga não tem bandeira aqui
+   * e fica sem taxa — a tela avisa em vez de fingir que está completo.
+   */
+  private async taxaCartaoPorLoja(
+    startDate: Date,
+    endDate: Date,
+    indice: Map<string, string>,
+  ) {
+    const tabela: any[] = await (this.prisma as any).taxaCartao.findMany({ where: { ativo: true } });
+    if (!tabela.length) return { porLoja: new Map(), cadastradas: 0 };
+
+    const porChave = new Map<string, number>();
+    for (const t of tabela) {
+      porChave.set(`${this.semAcento(t.bandeira)}|${t.faixaParcela}`, Number(t.taxaPct));
+    }
+
+    const pagamentos: any[] = await this.prisma.$queryRawUnsafe(
+      `SELECT s.store_code AS "storeCode", p.method, p.details, SUM(p.valor)::float AS total
+         FROM pdv_sale_payments p
+         JOIN pdv_sales s ON s.id = p.sale_id
+        WHERE s.finalized_at >= $1 AND s.finalized_at <= $2
+          AND s.status = 'finalized' AND s.is_training = false
+          AND (s.payment_method IS NULL OR s.payment_method <> 'MARCADO')
+          AND lower(p.method) IN ('pix','debito','credito','cartao')
+        GROUP BY s.store_code, p.method, p.details`,
+      startDate, endDate,
+    );
+
+    const porLoja = new Map<string, {
+      taxa: number; base: number; semTaxaCadastrada: number; faltando: Set<string>;
+    }>();
+
+    for (const row of pagamentos) {
+      const hit = indice.get(String(row.storeCode || '').trim().toUpperCase());
+      if (!hit || hit.startsWith('__')) continue;
+      const valor = Number(row.total || 0);
+      if (!valor) continue;
+
+      const metodo = String(row.method || '').toLowerCase();
+      let bandeiraRaw = '';
+      let parcelas = 1;
+      try {
+        const det = typeof row.details === 'string' ? JSON.parse(row.details) : row.details;
+        bandeiraRaw = String(det?.bandeira || '');
+        parcelas = Number(det?.parcelas) || 1;
+      } catch { /* details inválido → cai no genérico */ }
+
+      const bandeira = this.normalizaBandeira(bandeiraRaw, metodo);
+      const faixa = this.faixaDe(metodo, parcelas);
+      const pct = porChave.get(`${bandeira}|${faixa}`);
+
+      const acc = porLoja.get(hit)
+        || { taxa: 0, base: 0, semTaxaCadastrada: 0, faltando: new Set<string>() };
+      acc.base += valor;
+      if (pct == null) {
+        acc.semTaxaCadastrada += valor;
+        acc.faltando.add(faixa === 'UNICA' ? bandeira : `${bandeira} ${faixa}x`);
+      } else {
+        acc.taxa += valor * (pct / 100);
+      }
+      porLoja.set(hit, acc);
+    }
+
+    return { porLoja, cadastradas: tabela.length };
+  }
+
   /**
    * Confronta as rubricas da PLANILHA IDEAL com o que veio do Contas a Pagar
    * no período. Rubrica sem lançamento não significa erro do sistema — quer
@@ -796,8 +926,8 @@ export class DreService implements OnApplicationBootstrap {
   private async aplicaCanais(
     colunas: Map<string, DreColuna>,
     canais: any[],
-    startDate: Date,
-    endDate: Date,
+    inicio: Date,
+    fimExclusive: Date,
   ) {
     if (!canais.length) return;
 
@@ -808,48 +938,24 @@ export class DreService implements OnApplicationBootstrap {
     const colLive = acha(/\bLIVE\b/);
     const colSite = acha(/\bSITE\b|E-?COMMERCE/);
 
-    if (colLive) {
-      const [venda]: any[] = await this.prisma.$queryRawUnsafe(
-        `SELECT COUNT(*)::int AS cupons, COALESCE(SUM(subtotal_cents), 0)::bigint AS total
-           FROM live_pdv_carts
-          WHERE paid_at >= $1 AND paid_at <= $2 AND status = ANY($3::text[])`,
-        startDate, endDate, LIVE_VENDIDO,
-      );
-      colLive.faturamentoBruto += Number(venda?.total || 0) / 100;
-      colLive.cupons += Number(venda?.cupons || 0);
+    // Os MESMOS métodos que a tela /retaguarda/faturamento usa. Reimplementar
+    // aqui já custou R$ 48k de divergência no SITE (26/07): a tela conta 8
+    // status de pedido, pela data da COMPRA e sem frete; a cópia contava só
+    // 'completed', pela data de chegada no Flow e com frete.
+    const [live, site] = await Promise.all([
+      colLive ? this.faturamento.getLiveFaturamento(inicio, fimExclusive) : null,
+      colSite ? this.faturamento.getFlowopsSiteFaturamento(inicio, fimExclusive) : null,
+    ]);
 
-      // Só as PEÇAS — o CMV do canal sai do markup, igual às lojas.
-      const [pc]: any[] = await this.prisma.$queryRawUnsafe(
-        `SELECT COALESCE(SUM(i.qty), 0)::int AS pecas
-           FROM live_pdv_items i
-           JOIN live_pdv_carts c ON c.id = i.cart_id
-          WHERE c.paid_at >= $1 AND c.paid_at <= $2
-            AND c.status = ANY($3::text[]) AND i.status <> 'cancelled'`,
-        startDate, endDate, LIVE_VENDIDO,
-      );
-      colLive.pecas += Number(pc?.pecas || 0);
+    if (colLive && live) {
+      colLive.faturamentoBruto += live.faturamento;
+      colLive.cupons += live.cupons;
+      colLive.pecas += live.pecas;
     }
-
-    if (colSite) {
-      const [venda]: any[] = await this.prisma.$queryRawUnsafe(
-        `SELECT COUNT(*)::int AS cupons, COALESCE(SUM(total_amount), 0)::float AS total
-           FROM orders
-          WHERE created_at >= $1 AND created_at <= $2
-            AND status = 'completed' AND source <> 'live'`,
-        startDate, endDate,
-      );
-      colSite.faturamentoBruto += Number(venda?.total || 0);
-      colSite.cupons += Number(venda?.cupons || 0);
-
-      const [pc]: any[] = await this.prisma.$queryRawUnsafe(
-        `SELECT COALESCE(SUM(oi.quantity), 0)::int AS pecas
-           FROM order_items oi
-           JOIN orders o ON o.id = oi.order_id
-          WHERE o.created_at >= $1 AND o.created_at <= $2
-            AND o.status = 'completed' AND o.source <> 'live'`,
-        startDate, endDate,
-      );
-      colSite.pecas += Number(pc?.pecas || 0);
+    if (colSite && site) {
+      colSite.faturamentoBruto += site.faturamento;
+      colSite.cupons += site.cupons;
+      colSite.pecas += site.pecas;
 
       if (colLive && colSite.key === colLive.key) {
         colSite.avisos.push('LIVE e SITE na MESMA coluna — cadastre uma loja-canal pra cada um pra separar');
@@ -1124,5 +1230,97 @@ export class DreService implements OnApplicationBootstrap {
   async deleteAjuste(id: string) {
     await (this.prisma as any).dreAjuste.delete({ where: { id } });
     return { ok: true };
+  }
+
+  // ── taxas de cartão ──────────────────────────────────────────────────────
+
+  async listTaxas() {
+    const rows: any[] = await (this.prisma as any).taxaCartao.findMany({
+      orderBy: [{ forma: 'asc' }, { bandeira: 'asc' }, { faixaParcela: 'asc' }],
+    });
+    return rows.map((t) => ({
+      id: t.id, forma: t.forma, bandeira: t.bandeira,
+      faixaParcela: t.faixaParcela, taxaPct: Number(t.taxaPct), ativo: t.ativo,
+    }));
+  }
+
+  async upsertTaxa(
+    input: { forma: string; bandeira: string; faixaParcela: string; taxaPct: number; ativo?: boolean },
+    usuario?: string,
+  ) {
+    const forma = String(input.forma || '').toUpperCase().trim();
+    if (!['PIX', 'DEBITO', 'CREDITO'].includes(forma)) {
+      throw new BadRequestException('Forma inválida (PIX | DEBITO | CREDITO)');
+    }
+    const bandeira = this.semAcento(input.bandeira).replace(/[_\-\s]+/g, ' ').trim();
+    if (!bandeira) throw new BadRequestException('Bandeira obrigatória');
+    const faixa = String(input.faixaParcela || 'UNICA').toUpperCase().trim();
+    if (!['UNICA', '1', '2-6', '7-12'].includes(faixa)) {
+      throw new BadRequestException('Faixa inválida (UNICA | 1 | 2-6 | 7-12)');
+    }
+    const pct = Number(input.taxaPct);
+    if (!Number.isFinite(pct) || pct < 0 || pct > 30) {
+      throw new BadRequestException('Taxa deve estar entre 0 e 30%');
+    }
+
+    const row = await (this.prisma as any).taxaCartao.upsert({
+      where: { bandeira_faixaParcela: { bandeira, faixaParcela: faixa } },
+      create: { forma, bandeira, faixaParcela: faixa, taxaPct: pct, criadoPor: usuario || null },
+      update: { forma, taxaPct: pct, ativo: input.ativo !== false },
+    });
+    return { ok: true, id: row.id, bandeira, faixaParcela: faixa, taxaPct: pct };
+  }
+
+  async deleteTaxa(id: string) {
+    await (this.prisma as any).taxaCartao.delete({ where: { id } });
+    return { ok: true };
+  }
+
+  /**
+   * Bandeiras/faixas que APARECERAM nas vendas do período, com o volume — pra
+   * tela mostrar o que precisa de taxa em vez de o dono adivinhar. Inclui o
+   * que já tem taxa (pra conferir) e o que não tem (pra cadastrar).
+   */
+  async bandeirasDoPeriodo(input: { de: string; ate: string }) {
+    const { de, ate } = this.validaPeriodo(input.de, input.ate);
+    const { startDate, endDate } = this.brtRange(de, ate);
+
+    const rows: any[] = await this.prisma.$queryRawUnsafe(
+      `SELECT p.method, p.details, SUM(p.valor)::float AS total, COUNT(*)::int AS qtd
+         FROM pdv_sale_payments p
+         JOIN pdv_sales s ON s.id = p.sale_id
+        WHERE s.finalized_at >= $1 AND s.finalized_at <= $2
+          AND s.status = 'finalized' AND s.is_training = false
+          AND lower(p.method) IN ('pix','debito','credito','cartao')
+        GROUP BY p.method, p.details`,
+      startDate, endDate,
+    );
+
+    const tabela: any[] = await (this.prisma as any).taxaCartao.findMany();
+    const temTaxa = new Set(tabela.map((t) => `${this.semAcento(t.bandeira)}|${t.faixaParcela}`));
+
+    const agrupado = new Map<string, any>();
+    for (const r of rows) {
+      const metodo = String(r.method || '').toLowerCase();
+      let bandeiraRaw = ''; let parcelas = 1;
+      try {
+        const det = typeof r.details === 'string' ? JSON.parse(r.details) : r.details;
+        bandeiraRaw = String(det?.bandeira || '');
+        parcelas = Number(det?.parcelas) || 1;
+      } catch { /* ignora */ }
+      const bandeira = this.normalizaBandeira(bandeiraRaw, metodo);
+      const faixa = this.faixaDe(metodo, parcelas);
+      const chave = `${bandeira}|${faixa}`;
+      const acc = agrupado.get(chave) || {
+        forma: metodo === 'pix' ? 'PIX' : metodo === 'debito' ? 'DEBITO' : 'CREDITO',
+        bandeira, faixaParcela: faixa, volume: 0, transacoes: 0,
+        temTaxa: temTaxa.has(chave),
+      };
+      acc.volume += Number(r.total || 0);
+      acc.transacoes += Number(r.qtd || 0);
+      agrupado.set(chave, acc);
+    }
+
+    return [...agrupado.values()].sort((a, b) => b.volume - a.volume);
   }
 }

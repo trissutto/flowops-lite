@@ -1047,6 +1047,7 @@ function AbaConfig({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }
         </p>
       </Bloco>
 
+      <BlocoTaxas avisar={avisar} />
       <BlocoAjustes avisar={avisar} />
 
       {/* Espécies */}
@@ -1076,6 +1077,127 @@ function AbaConfig({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }
         </p>
       </Bloco>
     </div>
+  );
+}
+
+/**
+ * Taxas da adquirente por bandeira × faixa de parcela. A DRE cruza isto com
+ * a bandeira e o nº de parcelas que o PDV já grava em cada pagamento, e joga
+ * o resultado em DESPESA VARIÁVEL — ninguém precisa lançar no Contas a Pagar.
+ */
+function BlocoTaxas({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
+  const [taxas, setTaxas] = useState<any[]>([]);
+  const [bandeiras, setBandeiras] = useState<any[]>([]);
+  const [editando, setEditando] = useState<Record<string, string>>({});
+  const hoje = new Date();
+  const de = iso(new Date(hoje.getFullYear(), hoje.getMonth(), 1));
+  const ate = iso(hoje);
+
+  const carregar = useCallback(() => {
+    api<any[]>('/dre/config/taxas').then(setTaxas).catch(() => {});
+    api<any[]>(`/dre/config/bandeiras?de=${de}&ate=${ate}`).then(setBandeiras).catch(() => {});
+  }, [de, ate]);
+  useEffect(() => { carregar(); }, [carregar]);
+
+  const salvar = async (t: any, valor: string) => {
+    const pct = Number(String(valor).replace(',', '.'));
+    if (!Number.isFinite(pct)) return;
+    try {
+      await api('/dre/config/taxa', {
+        method: 'POST',
+        body: JSON.stringify({
+          forma: t.forma, bandeira: t.bandeira, faixaParcela: t.faixaParcela, taxaPct: pct,
+        }),
+      });
+      avisar('ok', `${t.bandeira} ${t.faixaParcela !== 'UNICA' ? t.faixaParcela + 'x' : ''} → ${pct}%`);
+      carregar();
+    } catch (e: any) { avisar('erro', e?.message || 'Falhou'); }
+  };
+
+  // Volume observado por bandeira/faixa no mês — pra ele saber onde a taxa dói.
+  const volumePor = useMemo(() => {
+    const m: Record<string, { volume: number; transacoes: number }> = {};
+    for (const b of bandeiras) m[`${b.bandeira}|${b.faixaParcela}`] = b;
+    return m;
+  }, [bandeiras]);
+
+  const semCadastro = bandeiras.filter((b) => !b.temTaxa && b.volume > 0);
+  const porForma = ['PIX', 'DEBITO', 'CREDITO'] as const;
+  const rotuloFaixa = (f: string) =>
+    f === 'UNICA' ? '—' : f === '1' ? 'à vista' : f === '2-6' ? '2 a 6x' : '7 a 12x';
+
+  return (
+    <Bloco
+      titulo="Taxas de cartão e PIX"
+      subtitulo="Vira despesa VARIÁVEL sozinha, cruzando com a bandeira e as parcelas que o PDV já grava em cada venda"
+    >
+      {semCadastro.length > 0 && (
+        <div className="mb-3 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-900">
+          <b>Apareceu no mês e não tem taxa cadastrada:</b>{' '}
+          {semCadastro.map((b) => `${b.bandeira}${b.faixaParcela !== 'UNICA' ? ` ${b.faixaParcela}x` : ''} (${brl(b.volume)})`).join(' · ')}.
+          Essa parte está entrando com taxa zero.
+        </div>
+      )}
+
+      {porForma.map((forma) => {
+        const doGrupo = taxas.filter((t) => t.forma === forma);
+        if (!doGrupo.length) return null;
+        return (
+          <div key={forma} className="mb-3">
+            <div className="text-[11px] font-bold text-slate-500 uppercase mb-1">
+              {forma === 'PIX' ? 'PIX' : forma === 'DEBITO' ? 'Débito' : 'Crédito'}
+            </div>
+            <table className="w-full text-sm">
+              <thead><tr className="text-xs text-slate-500 border-b border-[#E7E2D8]">
+                <th className="text-left py-1">Bandeira</th>
+                <th className="text-left">Parcelas</th>
+                <th className="text-right">Taxa %</th>
+                <th className="text-right">Volume no mês</th>
+                <th className="text-right">Custo estimado</th>
+              </tr></thead>
+              <tbody>
+                {doGrupo.map((t) => {
+                  const vol = volumePor[`${t.bandeira}|${t.faixaParcela}`];
+                  const valor = editando[t.id] ?? String(t.taxaPct).replace('.', ',');
+                  const custo = vol ? (vol.volume * Number(String(valor).replace(',', '.') || 0)) / 100 : 0;
+                  return (
+                    <tr key={t.id} className="border-b border-[#F5F2EB]">
+                      <td className="py-1 font-semibold">{t.bandeira}</td>
+                      <td className="text-slate-500">{rotuloFaixa(t.faixaParcela)}</td>
+                      <td className="text-right">
+                        <input
+                          value={valor}
+                          onChange={(e) => setEditando({ ...editando, [t.id]: e.target.value })}
+                          onBlur={() => {
+                            const v = editando[t.id];
+                            if (v != null && Number(v.replace(',', '.')) !== Number(t.taxaPct)) salvar(t, v);
+                          }}
+                          className={`w-16 text-right px-1.5 py-0.5 rounded border text-sm ${
+                            Number(t.taxaPct) > 0 ? 'border-[#E7E2D8]' : 'border-amber-300 bg-amber-50'
+                          }`}
+                        />
+                        <span className="text-slate-400 ml-0.5">%</span>
+                      </td>
+                      <td className="text-right tabular-nums text-slate-500">
+                        {vol ? brl(vol.volume) : <span className="text-slate-300">—</span>}
+                      </td>
+                      <td className="text-right tabular-nums font-semibold">
+                        {custo ? brl(custo) : <span className="text-slate-300">—</span>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        );
+      })}
+
+      <p className="text-[11px] text-slate-400">
+        As taxas valem pra rede toda. Volume e custo mostram o mês corrente, só pra você conferir a
+        ordem de grandeza — na DRE vale o período do filtro. Campo amarelo = taxa ainda em zero.
+      </p>
+    </Bloco>
   );
 }
 

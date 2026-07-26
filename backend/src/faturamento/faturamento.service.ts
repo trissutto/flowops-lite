@@ -590,7 +590,10 @@ export class FaturamentoService {
    * RESPEITA O CUTOFF: só conta vendas a partir de FLOWOPS_SITE_CUTOFF_DATE.
    * Antes do cutoff, as vendas eram lançadas no Giga (já contadas lá).
    */
-  private async getFlowopsSiteFaturamento(inicio: Date, fimExclusive: Date) {
+  /** PUBLICO (26/07): a DRE consome ESTE metodo em vez de reimplementar a
+   *  regra do SITE. Reimplementar ja custou R$ 48k de divergencia entre as
+   *  duas telas (status, data e frete diferentes). Um lugar so. */
+  async getFlowopsSiteFaturamento(inicio: Date, fimExclusive: Date) {
     const cutoff = this.getFlowopsSiteCutoff();
     // inicio efetivo = max(inicio do filtro, cutoff)
     const inicioEfetivo = inicio < cutoff ? cutoff : inicio;
@@ -647,7 +650,8 @@ export class FaturamentoService {
   ];
 
   /** Faturamento das vendas da LIVE pagas no período (componente do SITE). */
-  private async getLiveFaturamento(inicio: Date, fimExclusive: Date) {
+  /** PUBLICO (26/07) — mesma razao do getFlowopsSiteFaturamento. */
+  async getLiveFaturamento(inicio: Date, fimExclusive: Date) {
     const carts = await (this.prisma as any).livePdvCart.findMany({
       where: {
         status: { in: FaturamentoService.LIVE_VENDIDO_STATUSES },

@@ -93,4 +93,31 @@ export class DreController {
     this.requireAdmin(req);
     return this.svc.deleteAjuste(id);
   }
+
+  // ── taxas de cartão (viram despesa variável na DRE) ──
+
+  @Get('config/taxas')
+  listTaxas(@Req() req: any) {
+    this.requireAdmin(req);
+    return this.svc.listTaxas();
+  }
+
+  /** Bandeiras que apareceram nas vendas do período, com volume. */
+  @Get('config/bandeiras')
+  bandeiras(@Req() req: any, @Query('de') de: string, @Query('ate') ate: string) {
+    this.requireAdmin(req);
+    return this.svc.bandeirasDoPeriodo({ de, ate });
+  }
+
+  @Post('config/taxa')
+  upsertTaxa(@Req() req: any, @Body() body: any) {
+    const usuario = this.requireAdmin(req);
+    return this.svc.upsertTaxa(body, usuario);
+  }
+
+  @Delete('config/taxa/:id')
+  deleteTaxa(@Req() req: any, @Param('id') id: string) {
+    this.requireAdmin(req);
+    return this.svc.deleteTaxa(id);
+  }
 }
