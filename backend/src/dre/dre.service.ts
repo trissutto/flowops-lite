@@ -1618,6 +1618,133 @@ export class DreService implements OnApplicationBootstrap {
     return { ok: true, id, nome: row.nome, ativa };
   }
 
+  /**
+   * PRÉVIA da reclassificação em massa: quantas contas seriam movidas, quanto
+   * somam e uma amostra pra conferir ANTES de aplicar.
+   *
+   * Serve pro caso real: existem N contas de vale-transporte lançadas como
+   * VALE (ou OUTROS) e o dono quer todas na espécie VALE TRANSPORTE de uma
+   * vez, sem abrir conta por conta.
+   */
+  async previaReclassificacao(input: {
+    especieOrigemId?: string;
+    busca?: string;
+    de?: string;
+    ate?: string;
+  }) {
+    const where = this.whereReclassificacao(input);
+    const [total, agg, amostra] = await Promise.all([
+      (this.prisma as any).contaPagar.count({ where }),
+      (this.prisma as any).contaPagar.aggregate({ where, _sum: { valorCents: true } }),
+      (this.prisma as any).contaPagar.findMany({
+        where,
+        orderBy: { vencimento: 'desc' },
+        take: 25,
+        include: { especie: true },
+      }),
+    ]);
+
+    return {
+      total,
+      valor: Number(agg?._sum?.valorCents || 0) / 100,
+      amostra: amostra.map((c: any) => ({
+        id: c.id,
+        numero: c.numero,
+        vencimento: c.vencimento,
+        beneficiario: c.fornecedorNome || c.sellerNome || '—',
+        especieAtual: c.especie?.nome || '(sem espécie)',
+        observacao: c.observacao,
+        lojaCode: c.lojaCode,
+        valor: Number(c.valorCents || 0) / 100,
+      })),
+    };
+  }
+
+  private whereReclassificacao(input: {
+    especieOrigemId?: string; busca?: string; de?: string; ate?: string;
+  }) {
+    const where: any = { deletedAt: null, status: { not: 'cancelada' } };
+    if (input.especieOrigemId) {
+      where.especieId = input.especieOrigemId === '__SEM__' ? null : input.especieOrigemId;
+    }
+    const q = String(input.busca || '').trim();
+    if (q) {
+      // Procura em TODO campo onde o operador pode ter escrito "vale
+      // transporte": nome do beneficiário, observação e nota fiscal.
+      where.OR = [
+        { fornecedorNome: { contains: q, mode: 'insensitive' } },
+        { sellerNome: { contains: q, mode: 'insensitive' } },
+        { observacao: { contains: q, mode: 'insensitive' } },
+        { notaFiscal: { contains: q, mode: 'insensitive' } },
+      ];
+    }
+    if (input.de || input.ate) {
+      where.vencimento = {};
+      if (input.de) where.vencimento.gte = new Date(`${input.de}T00:00:00Z`);
+      if (input.ate) where.vencimento.lte = new Date(`${input.ate}T00:00:00Z`);
+    }
+    return where;
+  }
+
+  /**
+   * APLICA a reclassificação. Cada conta movida gera ContaPagarLog — o mesmo
+   * rastro de "quem mudou o quê" que a edição unitária já deixa. Reversível:
+   * é só reclassificar de volta.
+   */
+  async reclassificarEmMassa(
+    input: {
+      especieOrigemId?: string; busca?: string; de?: string; ate?: string;
+      especieDestinoId: string;
+    },
+    usuario?: string,
+  ) {
+    const destino = await (this.prisma as any).especieConta.findUnique({
+      where: { id: input.especieDestinoId },
+    });
+    if (!destino) throw new BadRequestException('Espécie de destino não encontrada');
+
+    const where = this.whereReclassificacao(input);
+    const alvos: any[] = await (this.prisma as any).contaPagar.findMany({
+      where,
+      select: { id: true, especieId: true, especie: { select: { nome: true } } },
+      take: 5000,
+    });
+    if (!alvos.length) return { ok: true, movidas: 0, destino: destino.nome };
+    if (alvos.some((a) => a.especieId === input.especieDestinoId) && alvos.length === 1) {
+      return { ok: true, movidas: 0, destino: destino.nome, jaEstavam: 1 };
+    }
+
+    const paraMover = alvos.filter((a) => a.especieId !== input.especieDestinoId);
+    await (this.prisma as any).contaPagar.updateMany({
+      where: { id: { in: paraMover.map((a) => a.id) } },
+      data: { especieId: input.especieDestinoId, updatedBy: usuario || null },
+    });
+
+    // Rastro por conta — sem isso, uma reclassificação errada em 300 contas
+    // não teria como ser auditada nem desfeita com segurança.
+    await (this.prisma as any).contaPagarLog.createMany({
+      data: paraMover.map((a) => ({
+        contaId: a.id,
+        campo: 'especieId',
+        valorAntigo: a.especie?.nome || '(sem espécie)',
+        valorNovo: destino.nome,
+        usuario: usuario || null,
+        origem: 'reclassificacao-massa',
+      })),
+    });
+
+    this.logger.log(
+      `[dre] reclassificação em massa: ${paraMover.length} conta(s) → "${destino.nome}" por ${usuario || '—'}`,
+    );
+    return {
+      ok: true,
+      movidas: paraMover.length,
+      jaEstavam: alvos.length - paraMover.length,
+      destino: destino.nome,
+      truncado: alvos.length >= 5000,
+    };
+  }
+
   async setGrupoEspecie(id: string, grupo: string) {
     const g = String(grupo || '').toUpperCase();
     if (!['VARIAVEL', 'FIXA', 'FINANCEIRA', 'CMV', 'IMPOSTO', 'IGNORAR'].includes(g)) {
