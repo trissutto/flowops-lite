@@ -36,9 +36,10 @@ export class DreController {
     @Query('ate') ate: string,
     @Query('coluna') coluna: string,
     @Query('linha') linha: string,
+    @Query('especie') especie?: string,
   ) {
     this.requireAdmin(req);
-    return this.svc.drill({ de, ate, coluna, linha });
+    return this.svc.drill({ de, ate, coluna, linha, especie });
   }
 
   @Get('config')
