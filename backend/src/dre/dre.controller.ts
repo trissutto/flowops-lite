@@ -151,27 +151,19 @@ export class DreController {
     return this.svc.deleteAliquota(id);
   }
 
-  // ── encargo sobre folha por CNPJ (Simples × Presumido) ──
-
-  @Get('config/encargos-folha')
-  listEncargosFolha(@Req() req: any) {
-    this.requireAdmin(req);
-    return this.svc.listEncargosFolha();
-  }
-
-  @Post('config/encargo-folha')
-  upsertEncargoFolha(
+  /**
+   * Encargo sobre folha DESTA LOJA (% + regime). Vazio desliga o cálculo.
+   * É por loja e não por CNPJ: nem toda loja tem CNPJ cadastrado, e é assim
+   * que o dono raciocina (pedido dele, 26/07).
+   */
+  @Patch('config/loja/:code/encargo')
+  setEncargoLoja(
     @Req() req: any,
-    @Body() body: { cnpj: string; regime?: string; encargoPct: number; observacao?: string },
+    @Param('code') code: string,
+    @Body() body: { pct: number | null; regime?: string },
   ) {
-    const usuario = this.requireAdmin(req);
-    return this.svc.upsertEncargoFolha(body, usuario);
-  }
-
-  @Delete('config/encargo-folha/:id')
-  deleteEncargoFolha(@Req() req: any, @Param('id') id: string) {
     this.requireAdmin(req);
-    return this.svc.deleteEncargoFolha(id);
+    return this.svc.setEncargoLoja(code, body?.pct ?? null, body?.regime);
   }
 
   // ── ajustes gerenciais (não tocam no Contas a Pagar) ──
