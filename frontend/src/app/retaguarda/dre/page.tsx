@@ -19,7 +19,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import {
   ArrowLeft, BarChart3, Loader2, RefreshCw, Settings, AlertTriangle,
-  ChevronRight, Plus, Trash2, X, Percent, Target, ListTree, ClipboardList,
+  ChevronRight, Plus, Trash2, X, Percent, Target, ListTree, ClipboardList, Minimize2,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -153,7 +153,9 @@ export default function DrePage() {
         </div>
       </header>
 
-      <main className="max-w-[1600px] mx-auto px-4 py-5">
+      {/* Sem max-w: a DRE tem uma coluna POR LOJA (~12) e travar em 1600px
+          escondia metade da rede atrás do scroll. Painel de dado usa a tela toda. */}
+      <main className="w-full px-4 py-5">
         {aba === 'dre' ? <AbaDre avisar={avisar} /> : <AbaConfig avisar={avisar} />}
       </main>
 
@@ -178,6 +180,10 @@ function AbaDre({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
   const [loading, setLoading] = useState(false);
   const [verPct, setVerPct] = useState(false);
   const [verDetalhe, setVerDetalhe] = useState(false);
+  // Compacto: sem "R$" e sem centavos, coluna de 84px. Liga SOZINHO quando a
+  // rede não cabe na tela — a DRE tem uma coluna por loja e o dono precisa
+  // ver TODAS de uma vez, não metade atrás do scroll.
+  const [compactoManual, setCompactoManual] = useState<boolean | null>(null);
   const [drill, setDrill] = useState<{ coluna: Coluna; linha: string; label: string } | null>(null);
 
   const carregar = useCallback(async () => {
@@ -207,6 +213,8 @@ function AbaDre({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
 
   const colunas = data?.colunas || [];
   const total = data?.total;
+  // 8+ colunas já estouram um monitor de 1920 no formato cheio.
+  const compacto = compactoManual ?? colunas.length > 7;
 
   // Espécies presentes em cada grupo de despesa (união de todas as colunas),
   // ordenadas pelo peso na rede — é o "de onde saiu o dinheiro".
@@ -238,6 +246,13 @@ function AbaDre({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
           ))}
         </div>
         <div className="flex-1" />
+        <button onClick={() => setCompactoManual(!compacto)}
+          className={`px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 ${
+            compacto ? 'bg-[#B8912B] border-[#B8912B] text-white' : 'bg-white border-[#E7E2D8] text-slate-600 hover:bg-[#FBF6E6]'
+          }`}
+          title="Tira R$ e centavos pra caber a rede inteira na tela">
+          <Minimize2 className="w-3.5 h-3.5" /> Compacto
+        </button>
         <button onClick={() => setVerDetalhe((v) => !v)}
           className={`px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 ${
             verDetalhe ? 'bg-[#B8912B] border-[#B8912B] text-white' : 'bg-white border-[#E7E2D8] text-slate-600 hover:bg-[#FBF6E6]'
@@ -287,17 +302,18 @@ function AbaDre({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
           {/* Tabela DRE */}
           <div className="bg-white border border-[#E7E2D8] rounded-xl overflow-hidden">
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className={`w-full ${compacto ? 'text-xs' : 'text-sm'}`}>
                 <thead>
                   <tr className="bg-[#FBF6E6] border-b border-[#E7E2D8]">
-                    <th className="text-left px-3 py-2.5 font-extrabold text-slate-700 sticky left-0 bg-[#FBF6E6] min-w-[280px]">
+                    <th className={`text-left px-3 py-2.5 font-extrabold text-slate-700 sticky left-0 bg-[#FBF6E6] ${compacto ? 'min-w-[230px]' : 'min-w-[280px]'}`}>
                       Demonstrativo de Resultados
+                      {compacto && <span className="block text-[10px] font-normal text-slate-400">valores em R$, sem centavos</span>}
                     </th>
-                    <th className="text-right px-3 py-2.5 font-extrabold text-slate-700 min-w-[120px] border-l border-[#E7E2D8]">
+                    <th className={`text-right ${compacto ? 'px-1.5' : 'px-3'} py-2.5 font-extrabold text-slate-700 ${compacto ? 'min-w-[84px]' : 'min-w-[120px]'} border-l border-[#E7E2D8]`}>
                       TOTAL REDE
                     </th>
                     {colunas.map((c) => (
-                      <th key={c.key} className="text-right px-3 py-2.5 font-bold text-slate-600 min-w-[120px]">
+                      <th key={c.key} className={`text-right ${compacto ? 'px-1.5' : 'px-3'} py-2.5 font-bold text-slate-600 ${compacto ? 'min-w-[84px]' : 'min-w-[120px]'}`}>
                         <div className="flex items-center justify-end gap-1">
                           {c.avisos.length > 0 && (
                             <span title={c.avisos.join('\n')}>
@@ -327,7 +343,7 @@ function AbaDre({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
                         {l.nota && <span className="ml-2 text-[10px] font-normal text-slate-400">{l.nota}</span>}
                       </td>
                       <td className="text-right px-3 py-2 border-l border-[#E7E2D8] tabular-nums">
-                        <Celula coluna={total} linha={l} verPct={verPct} />
+                        <Celula coluna={total} linha={l} verPct={verPct} compacto={compacto} />
                       </td>
                       {colunas.map((c) => (
                         <td key={c.key} className="text-right px-3 py-2 tabular-nums">
@@ -337,10 +353,10 @@ function AbaDre({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
                               className="hover:underline decoration-dotted underline-offset-2"
                               title="Ver detalhe"
                             >
-                              <Celula coluna={c} linha={l} verPct={verPct} />
+                              <Celula coluna={c} linha={l} verPct={verPct} compacto={compacto} />
                             </button>
                           ) : (
-                            <Celula coluna={c} linha={l} verPct={verPct} />
+                            <Celula coluna={c} linha={l} verPct={verPct} compacto={compacto} />
                           )}
                         </td>
                       ))}
@@ -403,7 +419,13 @@ function valorEspecie(coluna: Coluna, grupo: string, especie: string) {
   return <>{brl(hit.valor)}</>;
 }
 
-function Celula({ coluna, linha, verPct }: { coluna: Coluna; linha: typeof LINHAS[number]; verPct: boolean }) {
+/** No modo compacto some o "R$" e os centavos — é o que faz a rede caber. */
+const valorTabela = (v: number, compacto: boolean) =>
+  compacto ? Math.round(v).toLocaleString('pt-BR') : brl(v);
+
+function Celula({ coluna, linha, verPct, compacto = false }: {
+  coluna: Coluna; linha: typeof LINHAS[number]; verPct: boolean; compacto?: boolean;
+}) {
   const v = Number(coluna[linha.campo] || 0);
   if (verPct) {
     const base = coluna.receitaLiquida || 0;
@@ -413,11 +435,11 @@ function Celula({ coluna, linha, verPct }: { coluna: Coluna; linha: typeof LINHA
   }
   if (!v) return <span className="text-slate-300">—</span>;
   // Linha informativa não leva parênteses: ela NÃO está sendo subtraída aqui.
-  if (linha.tipo === 'info') return <span className="text-slate-400">{brl(v)}</span>;
+  if (linha.tipo === 'info') return <span className="text-slate-400">{valorTabela(v, compacto)}</span>;
   const negativo = linha.tipo === 'deducao';
   return (
     <span className={v < 0 ? 'text-rose-600' : linha.tipo === 'resultado' ? 'text-[#2E7D46]' : ''}>
-      {negativo ? `(${brl(v)})` : brl(v)}
+      {negativo ? `(${valorTabela(v, compacto)})` : valorTabela(v, compacto)}
     </span>
   );
 }
