@@ -60,11 +60,11 @@ const LIVE_VENDIDO = ['paid', 'separating', 'shipped', 'delivered'];
  * rubrica é procurada nas espécies do Contas a Pagar por palavra-chave.
  */
 const RUBRICAS_PLANILHA: Array<{ rubrica: string; termos: string[]; grupo: 'FIXA' | 'VARIAVEL' | 'FINANCEIRA' }> = [
-  { rubrica: 'Aluguel', termos: ['ALUGUEL', 'LOCACAO'], grupo: 'FIXA' },
+  { rubrica: 'Aluguel', termos: ['ALUGUE', 'LOCACAO'], grupo: 'FIXA' }, // 'ALUGUE' casa ALUGUEL e ALUGUEIS (nome real da especie)
   { rubrica: 'Salários', termos: ['SALARIO', 'FOLHA', 'ORDENADO'], grupo: 'FIXA' },
   { rubrica: 'Encargos', termos: ['ENCARGO', 'FGTS', 'INSS', 'RESCISAO', 'FERIAS', 'DECIMO'], grupo: 'FIXA' },
   { rubrica: 'Água', termos: ['AGUA', 'SABESP'], grupo: 'FIXA' },
-  { rubrica: 'Telefone', termos: ['TELEFONE', 'CELULAR', 'VIVO', 'CLARO', 'TIM'], grupo: 'FIXA' },
+  { rubrica: 'Telefone', termos: ['TELEFON', 'FONE', 'CELULAR', 'VIVO', 'CLARO'], grupo: 'FIXA' },
   { rubrica: 'Internet', termos: ['INTERNET', 'LINK', 'BANDA'], grupo: 'FIXA' },
   { rubrica: 'Luz', termos: ['LUZ', 'ENERGIA', 'ELETRIC', 'ENEL', 'CPFL'], grupo: 'FIXA' },
   { rubrica: 'Material de escritório', termos: ['MATERIAL', 'ESCRITORIO', 'PAPELARIA'], grupo: 'FIXA' },
@@ -279,7 +279,23 @@ export class DreService implements OnApplicationBootstrap {
     }
     const n = String(especie?.nome || '').toUpperCase();
     if (!n) return 'FIXA';
-    if (/MERCADORIA|COMPRA|FORNECEDOR|DUPLICATA/.test(n)) return 'CMV';
+    // ── FORMA DE PAGAMENTO ≠ NATUREZA DE DESPESA ──────────────────────────
+    // 6 das 17 espécies herdadas do Giga são forma de pagamento: DEPOSITO,
+    // BOLETO, CHEQUE, PROMISSORIA, CARNE, DUPLICATA. O dono confirmou em
+    // 26/07 que TODAS são pagamento de MERCADORIA.
+    //
+    // Antes disso, só DUPLICATA era reconhecida — as outras 5 caíam no default
+    // FIXA, ou seja: compra de mercadoria virava custo fixo da loja. Era o que
+    // inflava a despesa fixa e comia o resultado (ITANHAÉM aparecia com R$ 2MM
+    // de fixa contra ~R$ 300k das outras).
+    //
+    // Marcadas como CMV = ficam FORA da DRE, porque o custo da mercadoria já
+    // entra por VENDA ÷ 2,65 ("nada entra como pagamento de mercadoria por
+    // enquanto" — dono). O valor não some: aparece no bloco "o que ficou de
+    // fora" com o motivo.
+    if (/MERCADORIA|COMPRA|FORNECEDOR|DUPLICATA|DEPOSITO|BOLETO|CHEQUE|PROMISSORIA|CARNE/.test(n)) {
+      return 'CMV';
+    }
     if (/IMPOSTO|DAS\b|SIMPLES|ICMS|PIS|COFINS|IRPJ|CSLL|TRIBUT/.test(n)) return 'IMPOSTO';
     if (/JURO|MULTA|IOF|EMPRESTIMO|EMPRÉSTIMO|FINANCIAMENTO/.test(n)) return 'FINANCEIRA';
     if (/COMISS|TAXA|CARTAO|CARTÃO|FRETE|ROYALT|MARKETING|PUBLICID/.test(n)) return 'VARIAVEL';
@@ -488,9 +504,15 @@ export class DreService implements OnApplicationBootstrap {
     for (const e of especies) nomeEspecie.set(e.id, e.nome);
 
     const contas: any[] = await this.prisma.$queryRawUnsafe(
+      // JUROS entra junto (26/07): a baixa grava juros_cents separado do
+      // principal e a DRE ignorava — juro pago por atraso era despesa
+      // invisível no resultado. Vem numa coluna própria porque ele NÃO é da
+      // natureza da conta: aluguel pago com atraso não gera "mais aluguel",
+      // gera DESPESA FINANCEIRA.
       `SELECT loja_code AS "lojaCode", especie_id AS "especieId",
               COALESCE(fornecedor_nome, seller_nome, '') AS "beneficiario",
-              SUM(valor_cents)::bigint AS "valorCents"
+              SUM(valor_cents)::bigint AS "valorCents",
+              SUM(juros_cents)::bigint AS "jurosCents"
          FROM conta_pagar
         WHERE vencimento >= $1::date AND vencimento <= $2::date
           AND status <> 'cancelada' AND deleted_at IS NULL
@@ -517,7 +539,8 @@ export class DreService implements OnApplicationBootstrap {
 
     for (const c of contas) {
       const valor = Number(c.valorCents || 0) / 100;
-      if (!valor) continue;
+      const juros = Number(c.jurosCents || 0) / 100;
+      if (!valor && !juros) continue;
       // Fornecedor excluído por ajuste (ex: VERISURE, contrato encerrado):
       // sai da DRE mas NÃO some — vai pro bloco "o que ficou de fora".
       const benef = this.semAcento(c.beneficiario);
@@ -536,6 +559,17 @@ export class DreService implements OnApplicationBootstrap {
         semEspecie.valor += valor;
         semEspecie.lojas.add(String(c.lojaCode));
       }
+
+      const alvo = indice.get(String(c.lojaCode || '').trim().toUpperCase());
+      const key = alvo && !alvo.startsWith('__') ? alvo : null;
+      const col = key ? colunas.get(key) : null;
+
+      // JUROS entra SEMPRE que a loja é coluna — inclusive de conta cujo
+      // principal é descartado. Juro de boleto de mercadoria não é mercadoria:
+      // é multa por atraso, despesa financeira de verdade.
+      if (juros > 0 && col) this.somaDespesa(col, 'Juros por atraso', 'FINANCEIRA', juros);
+
+      if (!valor) continue;
       if (g === 'CMV' || g === 'IMPOSTO' || g === 'IGNORAR') {
         const d = descartadas.get(nome) || { grupo: g, valor: 0 };
         d.valor += valor;
@@ -543,14 +577,12 @@ export class DreService implements OnApplicationBootstrap {
         continue;
       }
 
-      const alvo = indice.get(String(c.lojaCode || '').trim().toUpperCase());
       if (alvo?.startsWith('__REDE__')) { despesaRede += valor; continue; }
       // Despesa lançada numa FRANQUIA é dela, não do dono — fica de fora.
       if (alvo?.startsWith('__FRANQUIA__')) { despesaFranquia += valor; continue; }
-      const key = alvo && !alvo.startsWith('__') ? alvo : null;
-      if (!key || !colunas.has(key)) { despesaSemColuna += valor; continue; }
+      if (!col) { despesaSemColuna += valor; continue; }
 
-      this.somaDespesa(colunas.get(key)!, nome, g, valor);
+      this.somaDespesa(col, nome, g, valor);
     }
 
     // ── 5a) TAXA DE CARTÃO — despesa variável calculada, não lançada ─────
