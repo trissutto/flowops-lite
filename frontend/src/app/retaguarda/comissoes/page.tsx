@@ -361,7 +361,7 @@ function FolhaRhTab() {
 
       {/* Totais — a conta INTEIRA visível:
           vendido − vale-troca usado − devoluções em dinheiro = base */}
-      <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-7 gap-3">
         <div className="bg-white rounded-xl border border-slate-200 p-3 text-center">
           <div className="text-[10px] uppercase font-bold text-slate-400">Funcionárias</div>
           <div className="text-xl font-black text-slate-800">{dados?.totais?.funcionarias ?? '—'}</div>
@@ -373,6 +373,10 @@ function FolhaRhTab() {
         <div className="bg-white rounded-xl border border-slate-200 p-3 text-center">
           <div className="text-[10px] uppercase font-bold text-slate-400">Vale-troca usado</div>
           <div className="text-xl font-black text-amber-600">{dados?.totais?.valeTroca != null ? `−${brl(dados.totais.valeTroca)}` : '—'}</div>
+        </div>
+        <div className="bg-white rounded-xl border border-slate-200 p-3 text-center">
+          <div className="text-[10px] uppercase font-bold text-slate-400">Frete</div>
+          <div className="text-xl font-black text-teal-600">{dados?.totais?.frete != null ? `−${brl(dados.totais.frete)}` : '—'}</div>
         </div>
         <div className="bg-white rounded-xl border border-slate-200 p-3 text-center">
           <div className="text-[10px] uppercase font-bold text-slate-400">Dev. dinheiro</div>
@@ -425,6 +429,7 @@ function FolhaRhTab() {
                   <div className="text-xs text-slate-500">
                     {f.qtdVendas} venda(s) · vendido {brl(f.totalVendido)}
                     {f.totalVale > 0 && <> · vale-troca −{brl(f.totalVale)}</>}
+                    {f.totalFrete > 0 && <> · frete −{brl(f.totalFrete)}</>}
                     {f.totalTrocas > 0 && <> · dev. dinheiro −{brl(f.totalTrocas)}</>}
                     {' '}· base <b>{brl(f.vendidoLiquido)}</b>
                     {' '}· {f.lojas.map((lj: string) => (
@@ -484,9 +489,11 @@ function FolhaRhTab() {
                               <td className="px-2 py-1 text-center text-xs font-bold text-slate-500">{v.loja}</td>
                               <td className="px-2 py-1 text-right tabular-nums">
                                 {brl(v.valor)}
-                                {(v.vale || 0) > 0 && (
+                                {((v.vale || 0) > 0 || (v.frete || 0) > 0) && (
                                   <div className="text-[10px] text-amber-700 whitespace-nowrap">
-                                    − vale {brl(v.vale)} → base <b>{brl(v.base)}</b>
+                                    {(v.vale || 0) > 0 && <>− vale {brl(v.vale)} </>}
+                                    {(v.frete || 0) > 0 && <>− frete {brl(v.frete)} </>}
+                                    → base <b>{brl(v.base)}</b>
                                   </div>
                                 )}
                               </td>

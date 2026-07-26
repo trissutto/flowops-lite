@@ -52,6 +52,52 @@ export class MarcadosController {
   }
 
   /**
+   * POST /pdv/marcados/dedup { codCliente?, cpf?, dryRun? }
+   * Limpa marcações DUPLICADAS de um cliente (linhas-fantasma que o sync criou).
+   * dryRun=true (default) só mostra o que fecharia. Admin.
+   */
+  @Post('dedup')
+  dedup(
+    @Req() req: any,
+    @Body() body: { codCliente?: string; cpf?: string; dryRun?: boolean },
+  ) {
+    this.requireRole(req);
+    return this.svc.dedupMarcadosCliente({
+      codCliente: body?.codCliente,
+      cpf: body?.cpf,
+      dryRun: body?.dryRun,
+    });
+  }
+
+  /**
+   * GET /pdv/marcados/analise?cpf=...  (read-only)
+   * Agrupa os marcados ativos do cliente por NUMERO — enxerga a duplicação.
+   */
+  @Get('analise')
+  analise(@Req() req: any, @Query('cpf') cpf?: string, @Query('codCliente') codCliente?: string) {
+    this.requireRole(req);
+    return this.svc.analisarMarcadosCliente({ cpf, codCliente });
+  }
+
+  /**
+   * POST /pdv/marcados/desduplicar { cpf?, codCliente?, keepNumero?, dryRun? }
+   * Mantém 1 marcação e DEVOLVE as duplicadas (retorna estoque). Admin.
+   * dryRun=true (default) só mostra o plano.
+   */
+  @Post('desduplicar')
+  desduplicar(
+    @Req() req: any,
+    @Body() body: { cpf?: string; codCliente?: string; dryRun?: boolean },
+  ) {
+    this.requireRole(req);
+    return this.svc.desduplicarMarcadosCliente({
+      cpf: body?.cpf,
+      codCliente: body?.codCliente,
+      dryRun: body?.dryRun,
+    });
+  }
+
+  /**
    * POST /pdv/marcados/baixar — BAIXA SEM FINANCEIRO (clientes-bin: DEFEITOS,
    * FURTO, reservas). Remove a marcação do Giga sem venda/caixa/estoque.
    * Exige senha GERENTE+ (auditável: motivo + quem autorizou).
@@ -96,9 +142,12 @@ export class MarcadosController {
    * o CPF e quer achar pelo nome.
    */
   @Get('search')
-  searchClientes(@Req() req: any, @Query('q') q: string) {
+  searchClientes(@Req() req: any, @Query('q') q: string, @Query('loja') loja?: string) {
     this.requireRole(req);
-    return this.svc.searchClientesByNameOrCpf(q || '');
+    // ESCOPO POR LOJA (23/07): o PDV só vê clientes da própria loja —
+    // RESERVAS/DEFEITOS existem em toda loja e misturavam.
+    const lojaScope = String(loja || req?.user?.storeCode || '').replace(/\D/g, '');
+    return this.svc.searchClientesByNameOrCpf(q || '', lojaScope || undefined);
   }
 
   /**

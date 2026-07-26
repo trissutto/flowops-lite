@@ -1789,6 +1789,18 @@ export class RealignmentShipmentService {
       else if (it.realignmentStatus === 'sent') agg.sent += 1;
     }
 
+    // NF-e AUTORIZADA por remessa (selo "nota emitida" na lista, dono 24/07).
+    const nfeDocs = await (this.prisma as any).nfeDoc.findMany({
+      where: { shipmentId: { in: ids }, status: 'authorized' },
+      select: { shipmentId: true, numero: true, serie: true },
+    });
+    const nfeByShipment = new Map<string, { numero: number; serie: string }>();
+    for (const d of nfeDocs as any[]) {
+      if (d.shipmentId && !nfeByShipment.has(d.shipmentId)) {
+        nfeByShipment.set(d.shipmentId, { numero: d.numero, serie: d.serie });
+      }
+    }
+
     return shipments.map((s: any) => {
       const agg = summary.get(s.id) || { totalItems: 0, totalQty: 0, received: 0, missing: 0, sent: 0 };
       // Tempo em trânsito (em horas) pra alertar remessas paradas
@@ -1796,6 +1808,7 @@ export class RealignmentShipmentService {
       if (s.status === 'in_transit' && s.sentAt) {
         hoursInTransit = (Date.now() - new Date(s.sentAt).getTime()) / 1000 / 60 / 60;
       }
+      const nfe = nfeByShipment.get(s.id);
       return {
         ...s,
         totalItemsLive: agg.totalItems,
@@ -1804,6 +1817,9 @@ export class RealignmentShipmentService {
         missingCount: agg.missing,
         pendingScanCount: agg.sent,
         hoursInTransit,
+        nfeEmitida: !!nfe,
+        nfeNumero: nfe?.numero ?? null,
+        nfeSerie: nfe?.serie ?? null,
       };
     });
   }

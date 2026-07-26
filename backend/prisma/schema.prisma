@@ -363,6 +363,16 @@ model Order {
   pickupStoreCode String?  @map("pickup_store_code")                   // código da loja onde cliente vai retirar (LJ05 etc)
   shippingMethod  String?  @map("shipping_method")                      // título do método de envio do WC (pra UI)
   wcDateCreated   DateTime? @map("wc_date_created") // data que o cliente fez o pedido no site
+  // ── Atribuição de MARKETING (de qual campanha/anúncio veio o pedido) ──
+  // Capturado do Order Attribution nativo do WooCommerce (_wc_order_attribution_*)
+  // no momento do sync. Só vem preenchido se o anúncio carregar UTMs na URL
+  // (Meta → Parâmetros de URL com {{campaign.name}}/{{campaign.id}}). Base do
+  // relatório "Vendas por campanha". NÃO é retroativo (só a partir do sync novo).
+  utmSource       String? @map("utm_source")     // facebook, instagram, google...
+  utmMedium       String? @map("utm_medium")      // paid, cpc, social...
+  utmCampaign     String? @map("utm_campaign")    // NOME da campanha ({{campaign.name}})
+  utmId           String? @map("utm_id")          // ID da campanha ({{campaign.id}})
+  utmContent      String? @map("utm_content")     // anúncio/criativo ({{ad.name}})
   // ── Atribuição de venda (atendente que iniciou o contato — cliente fecha no site) ──
   // Marcação manual via UI (operadora matriz). Relatório mensal soma por vendedora.
   sellerId        String?   @map("seller_id")
@@ -380,6 +390,7 @@ model Order {
   @@index([status])
   @@index([sellerId])
   @@index([source])
+  @@index([utmCampaign])
   @@map("orders")
 }
 
@@ -417,6 +428,10 @@ model Seller {
   wincredCodigo      String? @map("wincred_codigo")
   // Loja onde foi originalmente importada (pra agrupamento). Pode mudar.
   storeCodeOrigin    String? @map("store_code_origin")
+  // MULTI-LOJA (dono 24/07): vendedora que atende em VÁRIAS lojas sem precisar
+  // ser recriada em cada uma. JSON array de storeCodes — aparece no PDV de
+  // TODAS. Comissão soma sozinha (é por nome). Vazio = só a storeCodeOrigin.
+  lojasAtuacao       String? @map("lojas_atuacao") @db.Text
 
   // ── PRONTUARIO RH ────────────────────────────────────────────────
   cpf                String?  @db.VarChar(14)
@@ -1916,6 +1931,23 @@ model NfceConfig {
   // Certificado A1
   certPfxB64      String?  @map("cert_pfx_b64") @db.Text
   certPfxPass     String?  @map("cert_pfx_pass")
+  // ── Identidade da NF-e (mod 55) quando DIFERE da NFC-e (dono 24/07) ──
+  // Algumas lojas emitem NFC-e sob o CNPJ de OUTRA empresa (alinhamento da
+  // máquina de cartão), mas a NF-e/DANFE precisa ser o CNPJ REAL da loja na
+  // Receita. Se nfeCnpj estiver preenchido, a NF-e usa estes campos (cada um
+  // com fallback pro campo principal). Vazio = NF-e usa os mesmos dados da NFC-e.
+  nfeCnpj         String?  @map("nfe_cnpj")
+  nfeIe           String?  @map("nfe_ie")
+  nfeRazaoSocial  String?  @map("nfe_razao_social")
+  nfeFantasia     String?  @map("nfe_fantasia")
+  nfeEndereco     String?  @map("nfe_endereco") @db.Text
+  nfeRegime       String?  @map("nfe_regime")
+  // ── Identidades fiscais EXTRAS da loja (dono 24/07) ──
+  // Loja que abriga MAIS DE UMA empresa (ex.: Itanhaém tem T.O. RISSUTTO 20 E
+  // LURDS 30). JSON array de { cnpj, ie, razaoSocial, fantasia, regime,
+  // endereco:{...} }. Na TRANSFERÊNCIA, a emissão escolhe a identidade da
+  // ORIGEM cuja RAIZ de CNPJ casa com a do DESTINO (vira transferência real).
+  nfeIdentidadesExtras String? @map("nfe_identidades_extras") @db.Text
   // Auditoria
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")

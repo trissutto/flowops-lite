@@ -14,7 +14,7 @@ import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import {
   ArrowLeft, Loader2, AlertCircle, Package, CheckCircle2,
-  Truck, Printer, FileText, Edit3, Trash2, Plus, X,
+  Truck, Printer, FileText, Edit3, Trash2, Plus, X, Search,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -80,6 +80,7 @@ export default function PedidoDetalhePage() {
   // Modo edição de qty (recebimento detalhado): { itemId → { tam → qty } }
   const [adjustedQty, setAdjustedQty] = useState<Record<string, Record<string, number>>>({});
   const [editMode, setEditMode] = useState(false);
+  const [buscaRef, setBuscaRef] = useState(''); // filtro por REF/descrição/cor
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [editHeader, setEditHeader] = useState(false);
 
@@ -127,6 +128,34 @@ export default function PedidoDetalhePage() {
     }
   };
 
+  // ── EDIÇÃO EM TEMPO REAL (salva ao sair do campo) ──────────────────────
+  const [savingItem, setSavingItem] = useState<string | null>(null);
+  const patchItem = async (itemId: string, patch: any) => {
+    setSavingItem(itemId);
+    try {
+      await api(`/purchase-orders/items/${itemId}`, { method: 'PATCH', body: JSON.stringify(patch) });
+      await fetchData();
+    } catch (e: any) {
+      alert('Erro ao salvar: ' + (e?.message || e));
+    } finally {
+      setSavingItem(null);
+    }
+  };
+  // Descrição vale pra REF inteira (todas as cores) — patcha cada item da REF.
+  const patchDescricaoRef = async (refItems: any[], descricaoBase: string) => {
+    setSavingItem('desc');
+    try {
+      for (const it of refItems) {
+        await api(`/purchase-orders/items/${it.id}`, { method: 'PATCH', body: JSON.stringify({ descricaoBase }) });
+      }
+      await fetchData();
+    } catch (e: any) {
+      alert('Erro ao salvar descrição: ' + (e?.message || e));
+    } finally {
+      setSavingItem(null);
+    }
+  };
+
   /**
    * RECEBIMENTO PARCIAL: aceita só a REF clicada. Backend processa apenas
    * esses itemIds, marca eles como recebido e mantém o pedido em
@@ -162,6 +191,35 @@ export default function PedidoDetalhePage() {
       await fetchData();
     } catch (e: any) {
       alert('Erro ao receber REF: ' + e?.message);
+    } finally {
+      setReceiving(false);
+    }
+  };
+
+  /**
+   * RECEBIMENTO POR COR (linha): chega só uma cor da REF. Recebe apenas o item
+   * daquela cor; as outras cores continuam pendentes. Reusa /receive com 1 id.
+   */
+  const receberCor = async (ref: string, it: any) => {
+    if (!data) return;
+    const totalCor = Object.values(it.tamanhosQty || {}).reduce((a: number, b: any) => a + (Number(b) || 0), 0);
+    if (!confirm(
+      `Confirmar recebimento de ${ref} · ${it.cor} (${totalCor} peças)?\n\n` +
+      `As outras cores desta REF continuam pendentes.`,
+    )) return;
+    setReceiving(true);
+    try {
+      const itemsRecebidos = editMode
+        ? [{ itemId: it.id, tamanhosQty: adjustedQty[it.id] || it.tamanhosQty }]
+        : [];
+      const r = await api<any>(`/purchase-orders/${id}/receive`, {
+        method: 'POST',
+        body: JSON.stringify({ itemIds: [it.id], itemsRecebidos }),
+      });
+      setReceiveResult(r);
+      await fetchData();
+    } catch (e: any) {
+      alert('Erro ao receber cor: ' + e?.message);
     } finally {
       setReceiving(false);
     }
@@ -489,8 +547,37 @@ export default function PedidoDetalhePage() {
           />
         )}
 
+        {/* Busca por REF (evita rolar a lista toda) */}
+        {itemsPorRef.size > 3 && (
+          <div className="sticky top-[64px] z-20 -mx-1 mb-2 bg-slate-50/95 backdrop-blur py-1">
+            <div className="relative">
+              <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                value={buscaRef}
+                onChange={(e) => setBuscaRef(e.target.value)}
+                placeholder="Buscar REF, descrição ou cor…"
+                className="w-full pl-9 pr-9 py-2 text-sm border rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-violet-500"
+              />
+              {buscaRef && (
+                <button onClick={() => setBuscaRef('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-lg leading-none">×</button>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Items agrupados por REF */}
-        {Array.from(itemsPorRef.entries()).map(([ref, refItems]) => {
+        {Array.from(itemsPorRef.entries())
+          .filter(([ref, refItems]) => {
+            const q = buscaRef.trim().toLowerCase();
+            if (!q) return true;
+            const desc = String(refItems[0]?.descricaoBase || '').toLowerCase();
+            return (
+              ref.toLowerCase().includes(q) ||
+              desc.includes(q) ||
+              refItems.some((it: any) => String(it.cor || '').toLowerCase().includes(q))
+            );
+          })
+          .map(([ref, refItems]) => {
           const primeiro = refItems[0];
           // Coleta todos os tamanhos únicos dessa REF (pode variar por linha)
           const todosTamanhos = new Set<string>();
@@ -525,7 +612,19 @@ export default function PedidoDetalhePage() {
                     ✓ RECEBIDO
                   </span>
                 )}
-                <div className="font-bold text-slate-700">{primeiro.descricaoBase}</div>
+                {editMode && !isRecebido ? (
+                  <input
+                    defaultValue={primeiro.descricaoBase}
+                    onBlur={(e) => {
+                      const v = e.target.value.trim().toUpperCase();
+                      if (v && v !== primeiro.descricaoBase) patchDescricaoRef(refItems, v);
+                    }}
+                    className="font-bold text-slate-700 border border-slate-300 rounded px-2 py-1 text-sm w-full max-w-md"
+                    title="Descrição da REF (todas as cores) — salva ao sair do campo"
+                  />
+                ) : (
+                  <div className="font-bold text-slate-700">{primeiro.descricaoBase}</div>
+                )}
                 <div className="text-[11px] text-slate-500">
                   {primeiro.grupoNome} / {primeiro.subgrupoNome}
                   {primeiro.plusSize && ' · PLUS SIZE'}
@@ -574,6 +673,7 @@ export default function PedidoDetalhePage() {
                         <th key={t} className="text-center p-1 font-mono text-violet-700">{t}</th>
                       ))}
                       <th className="text-center p-1 font-mono text-violet-700">TOT</th>
+                      {!isRecebido && <th className="text-right p-1" />}
                     </tr>
                   </thead>
                   <tbody>
@@ -585,7 +685,21 @@ export default function PedidoDetalhePage() {
                       for (const t of tamanhosOrdenados) total += Number(qtyPraExibir[t] || 0);
                       return (
                         <tr key={it.id} className="border-t border-slate-100">
-                          <td className="p-1 font-bold text-amber-700">{it.cor}</td>
+                          <td className="p-1 font-bold text-amber-700">
+                            {editMode && !isRecebido ? (
+                              <input
+                                defaultValue={it.cor}
+                                onBlur={(e) => {
+                                  const v = e.target.value.trim().toUpperCase();
+                                  if (v && v !== it.cor) patchItem(it.id, { cor: v });
+                                }}
+                                className="border border-slate-300 rounded px-1.5 py-0.5 text-sm font-bold text-amber-700 w-32"
+                                title="Nome da cor — salva ao sair do campo"
+                              />
+                            ) : (
+                              it.cor
+                            )}
+                          </td>
                           {tamanhosOrdenados.map((t) => {
                             const qty = Number(qtyPraExibir[t] || 0);
                             return (
@@ -602,7 +716,13 @@ export default function PedidoDetalhePage() {
                                         [it.id]: { ...(prev[it.id] || it.tamanhosQty), [t]: v },
                                       }));
                                     }}
-                                    className="w-12 px-1 py-0.5 border rounded text-center font-mono text-sm"
+                                    onBlur={() => {
+                                      // Salva a grade da cor ao sair do campo (tempo real).
+                                      const nova = adjustedQty[it.id];
+                                      if (nova) patchItem(it.id, { tamanhosQty: nova });
+                                    }}
+                                    disabled={savingItem === it.id}
+                                    className="w-12 px-1 py-0.5 border rounded text-center font-mono text-sm disabled:opacity-50"
                                   />
                                 ) : (
                                   <span className={`font-mono text-sm ${qty === 0 ? 'text-slate-300' : 'text-slate-800'}`}>
@@ -613,6 +733,25 @@ export default function PedidoDetalhePage() {
                             );
                           })}
                           <td className="p-1 text-center font-black text-violet-700 tabular-nums">{total}</td>
+                          {!isRecebido && (
+                            <td className="p-1 text-right whitespace-nowrap">
+                              {it.itemStatus === 'recebido' ? (
+                                <span className="inline-flex items-center gap-1 text-emerald-700 text-[11px] font-bold">
+                                  <CheckCircle2 className="w-3.5 h-3.5" /> recebida
+                                </span>
+                              ) : (
+                                <button
+                                  onClick={() => receberCor(ref, it)}
+                                  disabled={receiving}
+                                  className="inline-flex items-center gap-1 px-2 py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] rounded shadow disabled:opacity-50"
+                                  title={`Receber só a cor ${it.cor} desta REF — as outras cores continuam pendentes`}
+                                >
+                                  {receiving ? <Loader2 className="w-3 h-3 animate-spin" /> : <CheckCircle2 className="w-3 h-3" />}
+                                  Receber cor
+                                </button>
+                              )}
+                            </td>
+                          )}
                         </tr>
                       );
                     })}

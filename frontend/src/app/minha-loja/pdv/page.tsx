@@ -1248,6 +1248,31 @@ function PdvPageInner() {
     }
   };
 
+  // ── Recalcular preços (promoção) — reconsulta o preço atual de cada item ──
+  // Útil pra itens puxados de MARCADO, que vêm com o preço original congelado.
+  const [recalculando, setRecalculando] = useState(false);
+  const recalcularPrecos = async () => {
+    if (!sale) return;
+    setRecalculando(true);
+    try {
+      const r = await api<{ atualizados: number }>(`/pdv/sales/${sale.id}/recalcular-precos`, {
+        method: 'POST',
+      });
+      const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
+      setSale(fresh);
+      if (r.atualizados > 0) {
+        toast('success', `${r.atualizados} preço(s) atualizado(s)`, `Total: ${brl(fresh.total)}`);
+      } else {
+        toast('info', 'Nada a recalcular', 'Todos os itens já estão no preço atual.');
+      }
+    } catch (e: any) {
+      const h = humanizeError(e);
+      toast('error', h.title, h.hint);
+    } finally {
+      setRecalculando(false);
+    }
+  };
+
   // ── "Fechar depois" — deixa venda OPEN e abre nova ──
   const fecharDepois = () => {
     if (!sale || !sale.items?.length) return;
@@ -1613,6 +1638,8 @@ function PdvPageInner() {
       // Cartão/crediário/marcado/vale NÃO imprimem cupom auto.
       // Roteado via printer-router → vai SEMPRE pra impressora térmica
       // configurada em /minha-loja/pdv/config-impressora.
+      // (Removida em 23/07 a pedido do dono e RESTAURADA no mesmo dia —
+      // as lojas usam o cupom em dinheiro/PIX.)
       const isDirectDinheiro = paymentMethod === 'dinheiro';
       const allPaymentsDinheiro = (fresh?.payments?.length ?? 0) > 0 &&
         (fresh.payments || []).every((p: any) => String(p.method).toLowerCase() === 'dinheiro');
@@ -2063,6 +2090,17 @@ function PdvPageInner() {
                   <div className="text-[9px] font-normal">até 31/12/2023 = 50% off</div>
                 </button>
               </div>
+              {/* Recalcular preços — resgata o preço ATUAL (promoção) de cada
+                  item. Itens puxados de MARCADO vêm com o preço original. */}
+              <button
+                type="button"
+                onClick={recalcularPrecos}
+                disabled={recalculando}
+                className="mt-1.5 w-full text-xs py-1.5 px-1 rounded font-bold border border-[#D4AF37] bg-white text-[#8C7325] hover:bg-[#FBF6E6] transition-colors disabled:opacity-50 flex items-center justify-center gap-1.5"
+                title="Reconsulta o preço atual (promoção vigente) de cada item — corrige peças marcadas que vieram com o preço original"
+              >
+                {recalculando ? '⏳ Recalculando…' : '🔄 Recalcular preços (promoção)'}
+              </button>
             </div>
             )}
             <div className="divide-y divide-[#F0EEE6]">
@@ -3571,7 +3609,13 @@ function CustomerModal({
     const t = setTimeout(async () => {
       setSearching(true);
       try {
-        const r = await api<{ results: typeof results }>(`/pdv/customer-search?q=${encodeURIComponent(term)}&limit=20`);
+        // Escopo por loja: só clientes DESTA loja (RESERVAS etc repetem por loja)
+        let lojaParam = '';
+        try {
+          const lj = localStorage.getItem('lurds_pdv_store') || '';
+          if (lj) lojaParam = `&loja=${encodeURIComponent(lj)}`;
+        } catch { /* backend usa a loja do token */ }
+        const r = await api<{ results: typeof results }>(`/pdv/customer-search?q=${encodeURIComponent(term)}&limit=20${lojaParam}`);
         setResults(r.results || []);
         setShowResults(true);
       } catch {
@@ -4052,6 +4096,11 @@ function PaymentModal({
     return d.toISOString().slice(0, 10);
   });
   const [credObs, setCredObs] = useState('');
+  // Cópia 1-clique da ficha de outra loja (banner "cliente é de outra loja")
+  const [copiandoFicha, setCopiandoFicha] = useState(false);
+  // FRETE à parte (venda online) — vira linha própria na venda
+  const [freteStr, setFreteStr] = useState('');
+  const [aplicandoFrete, setAplicandoFrete] = useState(false);
   // Info do cliente vinda do Giga + pendências (pra banner de inadimplência)
   const [credCustomerInfo, setCredCustomerInfo] = useState<{
     found: boolean;
@@ -5419,6 +5468,55 @@ function PaymentModal({
               </div>
             )}
 
+            {/* ── FRETE À PARTE (dono 23/07): vira linha própria na venda —
+                soma no total, entra no caixa como receita e fica FORA da
+                base de comissão da vendedora ── */}
+            <div className="bg-white border-2 border-teal-200 rounded-lg p-2.5">
+              <label className="text-[10px] text-slate-600 uppercase font-semibold tracking-wider">
+                Frete cobrado da cliente (R$) — opcional
+              </label>
+              <div className="flex gap-2 mt-1">
+                <input
+                  value={freteStr}
+                  onChange={(e) => setFreteStr(e.target.value.replace(/[^\d.,]/g, ''))}
+                  placeholder="0,00"
+                  inputMode="decimal"
+                  className="flex-1 rounded-lg border-2 border-slate-200 px-3 py-2 text-sm text-right tabular-nums focus:border-teal-400 focus:outline-none"
+                />
+                <button
+                  type="button"
+                  disabled={aplicandoFrete}
+                  onClick={async () => {
+                    const v = Math.round((Number((freteStr || '0').replace(/\./g, '').replace(',', '.')) || 0) * 100) / 100;
+                    setAplicandoFrete(true);
+                    try {
+                      const r = await api<{ ok: boolean; freteReais: number; total: number }>(
+                        `/pdv/sales/${saleId}/frete`,
+                        { method: 'POST', body: JSON.stringify({ valor: v }) },
+                      );
+                      onPaymentsChange?.();
+                      toast(
+                        'success',
+                        v > 0 ? `Frete de ${brl(v)} aplicado` : 'Frete removido',
+                        `Total da venda: ${brl(r.total)} — a linha FRETE aparece no carrinho`,
+                      );
+                    } catch (e: any) {
+                      const h = humanizeError(e);
+                      toast('error', h.title, h.hint);
+                    } finally {
+                      setAplicandoFrete(false);
+                    }
+                  }}
+                  className="rounded-lg bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold px-4 disabled:opacity-50"
+                >
+                  {aplicandoFrete ? '...' : 'Aplicar frete'}
+                </button>
+              </div>
+              <p className="text-[10px] text-slate-400 mt-1">
+                Soma no total a cobrar · não baixa estoque · fora da comissão da vendedora.
+              </p>
+            </div>
+
             {/* ── PAINEL: Link Pagar.me — gera URL + cliente paga + webhook ── */}
             {vendaOnlineTipo === 'pagarme_link' && customerCpf && (
               <div className="border-2 border-violet-300 rounded-lg p-2 bg-violet-50/30 space-y-2">
@@ -5712,6 +5810,60 @@ function PaymentModal({
                     Cadastro encontrado: <b>{credCustomerInfo.outraLoja.nome || '—'}</b> · cód{' '}
                     {credCustomerInfo.outraLoja.codCliente} · loja {credCustomerInfo.outraLoja.lojas.join(', ')}
                   </div>
+                )}
+                {/* CÓPIA 1-CLIQUE (caso Jéssica 23/07): cria a ficha NESTA loja
+                    copiando a da outra (sem limite/avaliação — crédito é por
+                    loja). Réplica pro Wincred leva ~30s; re-busca automática. */}
+                {credCustomerInfo.outraLoja && (
+                  <button
+                    type="button"
+                    disabled={copiandoFicha}
+                    onClick={async () => {
+                      setCopiandoFicha(true);
+                      try {
+                        const r = await api<any>('/pdv/clientes-giga/copiar-para-loja', {
+                          method: 'POST',
+                          body: JSON.stringify({
+                            lojaOrigem: credCustomerInfo.outraLoja!.lojas[0],
+                            codigoOrigem: credCustomerInfo.outraLoja!.codCliente,
+                            lojaDestino: storeCode,
+                            nome: credCustomerInfo.outraLoja!.nome,
+                            cpf: customerCpf,
+                          }),
+                        });
+                        if (r?.ok && r.replicado) {
+                          // Gravou no Wincred na hora — re-busca rapidinho
+                          toast(
+                            'success',
+                            r.jaExistia ? 'Ficha já existia nesta loja' : `Ficha criada nesta loja (cód ${r.codigo})`,
+                            'Gravada no Wincred ✓ — buscando de novo…',
+                          );
+                          setTimeout(() => setCredRefresh((n) => n + 1), 3000);
+                        } else if (r?.ok) {
+                          // Criou no Flow mas a gravação no Wincred falhou agora —
+                          // o outbox segue tentando; mostra o motivo real
+                          toast(
+                            'warning',
+                            `Ficha criada (cód ${r.codigo}) — Wincred pendente`,
+                            r.replicaErro
+                              ? `Erro na gravação: ${String(r.replicaErro).slice(0, 120)} — re-tento automático; busque de novo em ~1 min`
+                              : 'Gravando no Wincred — busco de novo em ~35s',
+                          );
+                          setTimeout(() => setCredRefresh((n) => n + 1), 35000);
+                        } else {
+                          toast('error', 'Não deu pra copiar a ficha', r?.erro || 'Tente cadastrar no Wincred');
+                        }
+                      } catch (e: any) {
+                        const h = humanizeError(e);
+                        toast('error', h.title, h.hint);
+                      } finally {
+                        setCopiandoFicha(false);
+                      }
+                    }}
+                    className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs disabled:opacity-50"
+                  >
+                    {copiandoFicha ? '⏳ Copiando ficha…' : '🏪 Copiar cadastro pra ESTA loja (1 clique)'}
+                  </button>
                 )}
                 <button
                   type="button"

@@ -2604,20 +2604,33 @@ export class ProductsService {
     }
 
     // Modo SKU/COD — acha a linha, pega a REF, expande TODA a REF.
-    // Também dispara quando parece código/EAN no modo ref (vendedora bipou
-    // etiqueta na aba REF/Descrição — comportamento mais comum na prática).
     let rawRows: any[] = [];
-    if (effectiveMode === 'sku' || (effectiveMode === 'ref' && isLikelyCodeOrEan)) {
+    if (effectiveMode === 'sku') {
+      // Aba "Cód. Etiqueta" / bipe → código PRIMEIRO (intencional).
       if (isLikelyEan) detectedAs = 'ean';
-      // Guarda o código exato que a vendedora passou — marca a variante no resultado
       matchedSkuForResult = term;
       rawRows = await this.catalog.searchByCodeAndExpandRef(term);
-      // Fallback: se não achou pelo código, tenta como REF direto
-      if (!rawRows.length) {
-        rawRows = await this.catalog.searchByRef(term);
+      if (!rawRows.length) rawRows = await this.catalog.searchByRef(term);
+    } else if (effectiveMode === 'ref' && isLikelyCodeOrEan) {
+      // Aba REF/Descrição com termo SÓ NÚMEROS: pode ser uma REF numérica
+      // (ex.: "223263" = família MARRIE) OU o código de etiqueta bipado por
+      // engano. O número colide entre os dois namespaces do Giga — "223263"
+      // é REF do MARRIE E TAMBÉM o CÓDIGO de uma peça do REF 6168.
+      // REF EXATA tem prioridade (igual à consulta da Giga); só cai pro código
+      // se NÃO existir REF com esse número (aí é etiqueta bipada na aba errada).
+      rawRows = await this.catalog.searchByRef(term);
+      const temRefExata = rawRows.some((r) => String(r.REF ?? '').trim() === term);
+      if (!temRefExata) {
+        const porCodigo = await this.catalog.searchByCodeAndExpandRef(term);
+        if (porCodigo.length) {
+          if (isLikelyEan) detectedAs = 'ean';
+          matchedSkuForResult = term;
+          rawRows = porCodigo;
+        }
+        // porCodigo vazio → mantém o searchByRef (pode ter match por prefixo)
       }
     } else {
-      // Modo REF — busca exata + prefixo
+      // Modo REF puro (não-numérico) — busca exata + prefixo
       rawRows = await this.catalog.searchByRef(term);
     }
     if (!rawRows.length) {

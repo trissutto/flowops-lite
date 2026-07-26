@@ -51,6 +51,31 @@ export class NfeSequenceService {
     });
   }
 
+  /** Numeração de TODAS as lojas (série 1) + nome + CNPJ da NF-e, pra tela de
+   *  gerência. Mostra o próximo número que o Flow usará em cada loja. */
+  async listAll(modelo = '55') {
+    const [seqs, stores, cfgs] = await Promise.all([
+      this.prisma.nfeSequence.findMany({ where: { modelo }, select: { storeCode: true, serie: true, proximo: true, updatedAt: true } }),
+      this.prisma.store.findMany({ where: { active: true }, select: { code: true, name: true }, orderBy: { code: 'asc' } }),
+      this.prisma.nfceConfig.findMany({ select: { storeCode: true, cnpj: true, nfeCnpj: true } }),
+    ]);
+    const seqByStore = new Map(seqs.filter((s) => s.serie === '1').map((s) => [s.storeCode, s]));
+    const cfgByStore = new Map(cfgs.map((c) => [c.storeCode, c]));
+    return stores.map((st) => {
+      const seq = seqByStore.get(st.code);
+      const cfg: any = cfgByStore.get(st.code);
+      const cnpj = (cfg?.nfeCnpj || cfg?.cnpj || '').replace(/\D/g, '');
+      return {
+        storeCode: st.code,
+        storeName: st.name,
+        cnpj: cnpj || null,
+        serie: '1',
+        proximo: seq?.proximo ?? null, // null = nunca emitiu pelo Flow
+        updatedAt: seq?.updatedAt ?? null,
+      };
+    });
+  }
+
   /** Define/ajusta o próximo número de uma série (config inicial). */
   async setProximo(storeCode: string, serie: string, proximo: number, modelo = '55') {
     const where = { storeCode_modelo_serie: { storeCode, modelo, serie } };

@@ -712,6 +712,9 @@ function ProductCard({ item, highlightSku, myStore }: {
 
   const [selectedColor, setSelectedColor] = useState<string | null>(highlightedColor);
   const [selectedSize, setSelectedSize] = useState<string | null>(highlightedSize);
+  // Hover na célula da grade → mostra o CÓDIGO DE BARRAS da variante
+  // (cor+tamanho) abaixo do preço da linha da cor (pedido do dono 23/07)
+  const [hoverCell, setHoverCell] = useState<{ cor: string; tamanho: string; sku: string } | null>(null);
   useEffect(() => { setSelectedColor(highlightedColor); }, [highlightedColor]);
   useEffect(() => { setSelectedSize(highlightedSize); }, [highlightedSize]);
 
@@ -872,6 +875,11 @@ function ProductCard({ item, highlightSku, myStore }: {
                           </div>
                         );
                       })()}
+                      {hoverCell?.cor === cor && (
+                        <div className="text-[10px] font-mono text-slate-500 mt-0.5 whitespace-nowrap">
+                          ||| {hoverCell.sku} · tam {hoverCell.tamanho}
+                        </div>
+                      )}
                     </td>
                     {sizes.map((s) => {
                       const v = cellByColorSize.get(cor)?.get(s);
@@ -879,7 +887,12 @@ function ProductCard({ item, highlightSku, myStore }: {
                       const matched = !!v && highlightSku === v.sku;
                       const isCellSel = isColorSel && selectedSize === s;
                       return (
-                        <td key={s} className="p-0.5 text-center">
+                        <td
+                          key={s}
+                          className="p-0.5 text-center"
+                          onMouseEnter={() => v?.sku && setHoverCell({ cor, tamanho: s, sku: v.sku })}
+                          onMouseLeave={() => setHoverCell((cur) => (cur?.cor === cor && cur?.tamanho === s ? null : cur))}
+                        >
                           <MatrixCell
                             qty={qty}
                             matched={matched}

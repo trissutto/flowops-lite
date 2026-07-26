@@ -129,3 +129,45 @@ export class ClientesGigaController {
     );
   }
 }
+
+/**
+ * /pdv/clientes-giga — operações de cliente acessíveis do CAIXA (role store).
+ * Caso Jéssica (23/07): cliente com ficha em OUTRA loja precisa de ficha
+ * NESTA loja pro crediário — o caixa copia com 1 clique no banner.
+ */
+@Controller('pdv/clientes-giga')
+@UseGuards(JwtAuthGuard)
+export class ClientesGigaPdvController {
+  constructor(private readonly svc: ClientesGigaService) {}
+
+  private requireRole(req: any) {
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'operator' && role !== 'store') {
+      throw new ForbiddenException('Acesso negado');
+    }
+  }
+
+  /** Copia a ficha de outra loja pra loja informada (idempotente por CPF). */
+  @Post('copiar-para-loja')
+  copiarParaLoja(
+    @Req() req: any,
+    @Body() body: {
+      lojaOrigem: string;
+      codigoOrigem: string;
+      lojaDestino?: string;
+      nome?: string;
+      cpf?: string;
+    },
+  ) {
+    this.requireRole(req);
+    const lojaDestino = String(body?.lojaDestino || req?.user?.storeCode || '');
+    return this.svc.copiarParaLoja({
+      lojaOrigem: String(body?.lojaOrigem || ''),
+      codigoOrigem: String(body?.codigoOrigem || ''),
+      lojaDestino,
+      nome: body?.nome || null,
+      cpf: body?.cpf || null,
+      userName: req?.user?.name || req?.user?.email || null,
+    });
+  }
+}

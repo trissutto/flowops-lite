@@ -4058,6 +4058,7 @@ type LegendaRow = {
   salvando: boolean;
   precoEdit?: string | null;   // editor de preço da live aberto (string = valor digitado; null/undefined = fechado)
   precoSalvando?: boolean;     // aplicando/removendo a promo da live
+  sel?: boolean;               // marcada pro desconto em massa (checkbox de seleção)
 };
 
 function LegendaModal({ sessionId, onClose }: { sessionId: string; onClose: () => void }) {
@@ -4228,6 +4229,44 @@ function LegendaModal({ sessionId, onClose }: { sessionId: string; onClose: () =
     }
   };
 
+  // ── DESCONTO EM MASSA (50%) nas legendas selecionadas ────────────────────
+  // Checkbox por peça válida + botão que aplica metade do PREÇO CHEIO
+  // (basePriceCents) como promo da live em todas as marcadas de uma vez.
+  const [aplicandoMassa, setAplicandoMassa] = useState(false);
+  const selecionaveis = rows.filter((r) => r.status === 'ok' && r.grade?.ref);
+  const selCount = selecionaveis.filter((r) => r.sel).length;
+
+  const toggleSelTodas = (on: boolean) =>
+    setRows((prev) => prev.map((r) => (r.status === 'ok' && r.grade?.ref ? { ...r, sel: on } : r)));
+
+  // pct = 50 (metade) ou 0 (remove a promo, volta ao preço cheio).
+  const aplicarDescontoMassa = async (pct: number) => {
+    const alvos = rows
+      .map((r, i) => ({ r, i }))
+      .filter(({ r }) => r.sel && r.status === 'ok' && r.grade?.ref && (r.grade.basePriceCents || 0) > 0);
+    if (!alvos.length) {
+      setTopErr('Marque ao menos uma peça válida (verde) pra aplicar o desconto.');
+      return;
+    }
+    setAplicandoMassa(true);
+    setTopErr(null);
+    try {
+      for (const { r, i } of alvos) {
+        const base = r.grade.basePriceCents || 0;
+        const novo = pct > 0 ? Math.round(base * (1 - pct / 100)) : 0; // 0 = remove promo
+        await api(`/live-pdv/sessions/${sessionId}/promo`, {
+          method: 'POST',
+          body: JSON.stringify({ refCode: r.grade.ref, priceCents: novo }),
+        });
+        await validarLinha(i, r.refCode); // reflete o preço novo na hora (cartões inclusive)
+      }
+    } catch (e: any) {
+      setTopErr(e?.message || 'Falha ao aplicar o desconto em massa');
+    } finally {
+      setAplicandoMassa(false);
+    }
+  };
+
   const removerLinha = async (idx: number) => {
     const row = rows[idx];
     if (row.id) {
@@ -4343,6 +4382,43 @@ function LegendaModal({ sessionId, onClose }: { sessionId: string; onClose: () =
             </div>
           )}
 
+          {/* Barra de desconto em massa — só quando há peças válidas */}
+          {!loading && selecionaveis.length > 0 && (
+            <div className="sticky top-0 z-10 -mx-1 flex flex-wrap items-center gap-2 rounded-lg border-2 border-violet-200 bg-violet-50 px-3 py-2">
+              <label className="flex items-center gap-1.5 text-xs font-bold text-violet-800 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 accent-violet-600"
+                  checked={selCount === selecionaveis.length && selCount > 0}
+                  ref={(el) => { if (el) el.indeterminate = selCount > 0 && selCount < selecionaveis.length; }}
+                  onChange={(e) => toggleSelTodas(e.target.checked)}
+                />
+                Selecionar todas ({selecionaveis.length})
+              </label>
+              <span className="text-xs font-bold text-violet-700">{selCount} marcada(s)</span>
+              <div className="ml-auto flex items-center gap-1.5">
+                <button
+                  type="button"
+                  disabled={aplicandoMassa || selCount === 0}
+                  onClick={() => aplicarDescontoMassa(50)}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-1.5 text-xs font-black text-white hover:bg-violet-700 disabled:opacity-40"
+                  title="Aplica metade do preço cheio como promo da live nas peças marcadas"
+                >
+                  {aplicandoMassa ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : '%'} Aplicar 50% nas marcadas
+                </button>
+                <button
+                  type="button"
+                  disabled={aplicandoMassa || selCount === 0}
+                  onClick={() => aplicarDescontoMassa(0)}
+                  className="rounded-lg border border-violet-300 bg-white px-2.5 py-1.5 text-xs font-bold text-violet-700 hover:bg-violet-100 disabled:opacity-40"
+                  title="Remove a promo da live das peças marcadas (volta ao preço cheio)"
+                >
+                  Tirar promo
+                </button>
+              </div>
+            </div>
+          )}
+
           {!loading && (
             <div className="grid grid-cols-[80px_1fr_40px] gap-2 text-[11px] font-bold uppercase tracking-wide text-slate-500 px-1">
               <span>Atalho</span><span>Referência</span><span />
@@ -4403,7 +4479,16 @@ function LegendaModal({ sessionId, onClose }: { sessionId: string; onClose: () =
               {row.status === 'ok' && row.grade && (
                 <div className="rounded-lg bg-white border border-emerald-200 p-2.5 space-y-1.5">
                   <div className="flex items-center justify-between gap-2">
-                    <div className="text-xs font-bold text-emerald-700">🟢 Referência validada</div>
+                    <label className="flex items-center gap-1.5 text-xs font-bold text-emerald-700 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 accent-violet-600"
+                        checked={!!row.sel}
+                        onChange={(e) => patchRow(idx, { sel: e.target.checked })}
+                        title="Marcar pra desconto em massa"
+                      />
+                      🟢 Referência validada
+                    </label>
                     {row.precoEdit == null ? (
                       <div className="flex items-center gap-1.5">
                         <span className="text-xs font-black text-emerald-700 tabular-nums">

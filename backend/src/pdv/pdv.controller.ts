@@ -22,6 +22,7 @@ import { isValidTrainingPassword, isTrainingRequest } from './training.util';
 import { PdvService } from './pdv.service';
 import { ErpOutboxService } from './erp-outbox.service';
 import { ErpService } from '../erp/erp.service';
+import { PrismaService } from '../prisma/prisma.service';
 import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service';
 import { PixService } from './pix.service';
 import { NfceService } from './nfce.service';
@@ -54,6 +55,7 @@ export class PdvController {
     private readonly crediarioPrint: CrediarioPrintService,
     private readonly woo: WooCommerceService,
     private readonly returns: ReturnsService,
+    private readonly prisma: PrismaService,
   ) {}
 
   private requireRole(req: any) {
@@ -479,6 +481,17 @@ export class PdvController {
   }
 
   /**
+   * POST /pdv/sales/:id/recalcular-precos
+   * Reconsulta o preço ATUAL (promoção vigente) de cada item e atualiza.
+   * Usado quando itens puxados de MARCADO vêm com o preço original congelado.
+   */
+  @Post('sales/:id/recalcular-precos')
+  recalcularPrecos(@Req() req: any, @Param('id') id: string) {
+    this.requireRole(req);
+    return this.svc.recalcularPrecos({ saleId: id });
+  }
+
+  /**
    * POST /pdv/sales/:id/items/manual { descricao, valor, qty? }
    * Adiciona item MANUAL — usado quando o produto não passa pelo bipe.
    * Vendedora digita descrição + valor livres pra não travar o caixa.
@@ -496,6 +509,20 @@ export class PdvController {
       valor: body?.valor,
       qty: body?.qty,
     });
+  }
+
+  /**
+   * POST /pdv/sales/:id/frete { valor }
+   * FRETE À PARTE (venda online) — linha própria na venda; valor 0 remove.
+   */
+  @Post('sales/:id/frete')
+  setFrete(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: { valor: number },
+  ) {
+    this.requireRole(req);
+    return this.svc.setFrete(id, Number(body?.valor));
   }
 
   /**
@@ -1136,8 +1163,13 @@ export class PdvController {
     @Req() req: any,
     @Query('q') q: string,
     @Query('limit') limitStr?: string,
+    @Query('loja') loja?: string,
   ) {
     this.requireRole(req);
+    // ESCOPO POR LOJA (23/07): cadastros do Giga são POR LOJA (RESERVAS,
+    // DEFEITOS etc existem em todas) — o PDV só vê as fichas da PRÓPRIA
+    // loja. Clientes do CRM (pessoas com CPF, site/live) seguem da rede.
+    const lojaScope = String(loja || req?.user?.storeCode || '').replace(/\D/g, '');
     const term = String(q || '').trim();
     if (term.length < 2) {
       return { results: [] };
@@ -1260,7 +1292,11 @@ export class PdvController {
 
         if (wheres.length > 0) {
           const orderBy = cm.nome ? `ORDER BY \`${cm.nome}\` ASC` : `ORDER BY \`${cm.codCliente}\` ASC`;
-          const sql = `SELECT ${selectCols.join(', ')} FROM \`${cm.table}\` WHERE ${wheres.join(' OR ')} ${orderBy} LIMIT ${restante * 2}`;
+          // CAST dos dois lados: padding da LOJA é inconsistente no Giga ('1' × '01')
+          const lojaAnd = lojaScope && cm.loja
+            ? ` AND CAST(\`${cm.loja}\` AS UNSIGNED) = ${Number(lojaScope)}`
+            : '';
+          const sql = `SELECT ${selectCols.join(', ')} FROM \`${cm.table}\` WHERE (${wheres.join(' OR ')})${lojaAnd} ${orderBy} LIMIT ${restante * 2}`;
 
           try {
             const r = await this.erp.runReadOnly(sql, { maxRows: restante * 2, timeoutMs: 8000 });
@@ -1505,14 +1541,37 @@ export class PdvController {
       console.warn('[funcionarios-search] erro:', e?.message);
     }
 
+    // APELIDO (22/07): loja SEM whitelist configurada cai neste fallback e o
+    // popup não via o apelido do cadastro. Casa pelo código do Wincred e, na
+    // falta dele na ficha, pelo NOME (os dois vêm da mesma tabela do Giga).
+    const normCod = (s: any) => String(s ?? '').replace(/\D/g, '').replace(/^0+/, '') || '0';
+    const normNome = (s: any) => String(s ?? '').trim().toUpperCase().replace(/\s+/g, ' ');
+    let apelidoPorCodigo = new Map<string, string>();
+    let apelidoPorNome = new Map<string, string>();
+    try {
+      const sellers: any[] = await (this.prisma as any).seller.findMany({
+        where: { apelido: { not: null } },
+        select: { wincredCodigo: true, name: true, apelido: true },
+      });
+      apelidoPorCodigo = new Map(
+        sellers.filter((s) => s.wincredCodigo).map((s) => [normCod(s.wincredCodigo), s.apelido]),
+      );
+      apelidoPorNome = new Map(sellers.map((s) => [normNome(s.name), s.apelido]));
+    } catch { /* segue sem apelido */ }
+
     return {
       table,
       lojaFiltered: !!(lojaCol && safeLoja),
-      results: rows.map((r) => ({
-        codigo: String(r.codigo ?? '').trim(),
-        nome: String(r.nome ?? '').trim(),
-        loja: r.loja !== undefined ? String(r.loja ?? '').trim() : '',
-      })).filter((r) => r.nome),
+      results: rows.map((r) => {
+        const codigo = String(r.codigo ?? '').trim();
+        const nome = String(r.nome ?? '').trim();
+        return {
+          codigo,
+          nome,
+          apelido: apelidoPorCodigo.get(normCod(codigo)) || apelidoPorNome.get(normNome(nome)) || null,
+          loja: r.loja !== undefined ? String(r.loja ?? '').trim() : '',
+        };
+      }).filter((r) => r.nome),
     };
   }
 

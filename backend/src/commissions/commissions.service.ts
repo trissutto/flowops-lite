@@ -313,9 +313,10 @@ export class CommissionsService {
       `SELECT
          store_code AS "storeCode",
          COUNT(*)::int AS qtd,
-         SUM(total - COALESCE(vt.vale, 0))::float AS total
+         SUM(total - COALESCE(vt.vale, 0) - COALESCE(fr.frete, 0))::float AS total
        FROM pdv_sales s
        ${CommissionsService.VALE_JOIN_SQL}
+       ${CommissionsService.FRETE_JOIN_SQL}
        WHERE finalized_at >= $1
          AND finalized_at <= $2
          AND status = 'finalized'
@@ -356,9 +357,10 @@ export class CommissionsService {
     const salesBySeller: any[] = await this.prisma.$queryRawUnsafe(
       `SELECT seller_id AS "sellerId", store_code AS "storeCode",
          COUNT(*)::int AS qtd,
-         SUM(total - COALESCE(vt.vale, 0))::float AS total
+         SUM(total - COALESCE(vt.vale, 0) - COALESCE(fr.frete, 0))::float AS total
        FROM pdv_sales s
        ${CommissionsService.VALE_JOIN_SQL}
+       ${CommissionsService.FRETE_JOIN_SQL}
        WHERE finalized_at >= $1
          AND finalized_at <= $2
          AND seller_id IS NOT NULL
@@ -686,6 +688,15 @@ export class CommissionsService {
        WHERE method = 'vale_troca'
        GROUP BY sale_id
     ) vt ON vt.sale_id = s.id`;
+  /** FRETE (23/07): linha ref='FRETE' da venda online é receita da loja mas
+   *  NÃO comissiona — vendedora ganha sobre as peças, não sobre o correio. */
+  private static readonly FRETE_JOIN_SQL = `
+    LEFT JOIN (
+      SELECT sale_id, SUM(total)::float AS frete
+        FROM pdv_sale_items
+       WHERE ref = 'FRETE'
+       GROUP BY sale_id
+    ) fr ON fr.sale_id = s.id`;
   private static readonly TROCA_DINHEIRO_SQL = `AND modo IN ('dinheiro', 'pix')`;
 
   async relatorioRh(input: { de: string; ate: string; storeCode?: string }): Promise<any> {
@@ -704,9 +715,11 @@ export class CommissionsService {
     const salesByStore: any[] = await this.prisma.$queryRawUnsafe(
       `SELECT store_code AS "storeCode", COUNT(*)::int AS qtd,
               SUM(total)::float AS bruto,
-              SUM(COALESCE(vt.vale, 0))::float AS vale
+              SUM(COALESCE(vt.vale, 0))::float AS vale,
+              SUM(COALESCE(fr.frete, 0))::float AS frete
          FROM pdv_sales s
          ${CommissionsService.VALE_JOIN_SQL}
+         ${CommissionsService.FRETE_JOIN_SQL}
         WHERE finalized_at >= $1 AND finalized_at <= $2
           AND status = 'finalized' AND is_training = false
           ${CommissionsService.SEM_MARCACAO_SQL} ${storeFilterSql}
@@ -727,9 +740,11 @@ export class CommissionsService {
       `SELECT seller_id AS "sellerId", store_code AS "storeCode",
               COUNT(*)::int AS qtd,
               SUM(total)::float AS bruto,
-              SUM(COALESCE(vt.vale, 0))::float AS vale
+              SUM(COALESCE(vt.vale, 0))::float AS vale,
+              SUM(COALESCE(fr.frete, 0))::float AS frete
          FROM pdv_sales s
          ${CommissionsService.VALE_JOIN_SQL}
+         ${CommissionsService.FRETE_JOIN_SQL}
         WHERE finalized_at >= $1 AND finalized_at <= $2
           AND seller_id IS NOT NULL AND status = 'finalized' AND is_training = false
           ${CommissionsService.SEM_MARCACAO_SQL} ${storeFilterSql}
@@ -753,9 +768,11 @@ export class CommissionsService {
       `SELECT id, seller_id AS "sellerId", store_code AS "storeCode",
               finalized_at AS "finalizedAt", total::float AS total,
               COALESCE(vt.vale, 0)::float AS vale,
+              COALESCE(fr.frete, 0)::float AS frete,
               payment_method AS "paymentMethod", customer_name AS "customerName"
          FROM pdv_sales s
          ${CommissionsService.VALE_JOIN_SQL}
+         ${CommissionsService.FRETE_JOIN_SQL}
         WHERE finalized_at >= $1 AND finalized_at <= $2
           AND seller_id IS NOT NULL AND status = 'finalized' AND is_training = false
           ${CommissionsService.SEM_MARCACAO_SQL} ${storeFilterSql}
@@ -801,35 +818,37 @@ export class CommissionsService {
       return sellersById.get(key) || sellersByCodigo.get(key) || null;
     };
 
-    const storeTotals = new Map<string, { vendido: number; vale: number; trocas: number; qtd: number }>();
+    const storeTotals = new Map<string, { vendido: number; vale: number; frete: number; trocas: number; qtd: number }>();
     for (const r of salesByStore) {
       storeTotals.set(r.storeCode, {
         vendido: Number(r.bruto) || 0,
         vale: Number(r.vale) || 0,
+        frete: Number(r.frete) || 0,
         trocas: 0,
         qtd: Number(r.qtd) || 0,
       });
     }
     for (const r of trocasByStore) {
-      const cur = storeTotals.get(r.storeCode) || { vendido: 0, vale: 0, trocas: 0, qtd: 0 };
+      const cur = storeTotals.get(r.storeCode) || { vendido: 0, vale: 0, frete: 0, trocas: 0, qtd: 0 };
       cur.trocas = Number(r.total) || 0;
       storeTotals.set(r.storeCode, cur);
     }
 
-    const sellerSalesMap = new Map<string, { vendido: number; vale: number; trocas: number; qtd: number }>();
+    const sellerSalesMap = new Map<string, { vendido: number; vale: number; frete: number; trocas: number; qtd: number }>();
     let skippedVendido = 0;
     const skippedSellerIds = new Set<string>();
     for (const r of salesBySeller) {
       const seller = resolveSeller(r.sellerId);
       if (!seller) {
-        skippedVendido += (Number(r.bruto) || 0) - (Number(r.vale) || 0);
+        skippedVendido += (Number(r.bruto) || 0) - (Number(r.vale) || 0) - (Number(r.frete) || 0);
         skippedSellerIds.add(String(r.sellerId));
         continue;
       }
       const k = `${seller.id}|${r.storeCode}`;
-      const cur = sellerSalesMap.get(k) || { vendido: 0, vale: 0, trocas: 0, qtd: 0 };
+      const cur = sellerSalesMap.get(k) || { vendido: 0, vale: 0, frete: 0, trocas: 0, qtd: 0 };
       cur.vendido += Number(r.bruto) || 0;
       cur.vale += Number(r.vale) || 0;
+      cur.frete += Number(r.frete) || 0;
       cur.qtd += Number(r.qtd) || 0;
       sellerSalesMap.set(k, cur);
     }
@@ -837,7 +856,7 @@ export class CommissionsService {
       const seller = resolveSeller(r.sellerId);
       if (!seller) continue;
       const k = `${seller.id}|${r.storeCode}`;
-      const cur = sellerSalesMap.get(k) || { vendido: 0, vale: 0, trocas: 0, qtd: 0 };
+      const cur = sellerSalesMap.get(k) || { vendido: 0, vale: 0, frete: 0, trocas: 0, qtd: 0 };
       cur.trocas += Number(r.total) || 0;
       sellerSalesMap.set(k, cur);
     }
@@ -861,7 +880,7 @@ export class CommissionsService {
     // Uma "linha de cálculo" por vendedora×loja — MESMA regra do fechamento
     type Linha = {
       sellerId: string; storeCode: string; cargo: string; calcMode: string;
-      totalVendido: number; totalVale: number; totalTrocas: number; vendidoLiquido: number; qtdVendas: number;
+      totalVendido: number; totalVale: number; totalFrete: number; totalTrocas: number; vendidoLiquido: number; qtdVendas: number;
       percentApplied: number; comissaoBase: number;
       metaValue: number | null; metaAtingida: boolean; bonusPercent: number | null; bonusValue: number;
       total: number; semRegra: boolean;
@@ -873,18 +892,19 @@ export class CommissionsService {
       if (!storeId) return;
       const rule = await this.resolveRuleFor(sellerId, storeId, cargo, endDate);
       const calcMode = rule?.calcMode || 'on_self';
-      let totalVendido = 0, totalVale = 0, totalTrocas = 0, qtdVendas = 0;
+      let totalVendido = 0, totalVale = 0, totalFrete = 0, totalTrocas = 0, qtdVendas = 0;
       if (calcMode === 'on_responsible_store') {
         const st = storeTotals.get(storeCode);
         if (!st) return;
-        totalVendido = st.vendido; totalVale = st.vale; totalTrocas = st.trocas; qtdVendas = st.qtd;
+        totalVendido = st.vendido; totalVale = st.vale; totalFrete = st.frete; totalTrocas = st.trocas; qtdVendas = st.qtd;
       } else {
         const sl = sellerSalesMap.get(`${sellerId}|${storeCode}`);
         if (!sl) return;
-        totalVendido = sl.vendido; totalVale = sl.vale; totalTrocas = sl.trocas; qtdVendas = sl.qtd;
+        totalVendido = sl.vendido; totalVale = sl.vale; totalFrete = sl.frete; totalTrocas = sl.trocas; qtdVendas = sl.qtd;
       }
-      // Base = vendido − vale usado (abate NA venda) − devoluções em dinheiro
-      const vendidoLiquido = Math.max(0, totalVendido - totalVale - totalTrocas);
+      // Base = vendido − vale usado (abate NA venda) − frete (não comissiona)
+      //        − devoluções em dinheiro
+      const vendidoLiquido = Math.max(0, totalVendido - totalVale - totalFrete - totalTrocas);
       let percentApplied = 0, comissaoBase = 0, bonusValue = 0;
       let metaAtingida = false;
       let metaValue: number | null = null, bonusPercent: number | null = null;
@@ -902,7 +922,7 @@ export class CommissionsService {
       }
       linhas.push({
         sellerId, storeCode, cargo, calcMode,
-        totalVendido, totalVale, totalTrocas, vendidoLiquido, qtdVendas,
+        totalVendido, totalVale, totalFrete, totalTrocas, vendidoLiquido, qtdVendas,
         percentApplied, comissaoBase, metaValue, metaAtingida, bonusPercent, bonusValue,
         total: comissaoBase + bonusValue, semRegra: !rule,
       });
@@ -939,7 +959,7 @@ export class CommissionsService {
           cargo: l.cargo,
           ativa: !!seller?.active,
           lojas: [],
-          totalVendido: 0, totalVale: 0, totalTrocas: 0, vendidoLiquido: 0, qtdVendas: 0,
+          totalVendido: 0, totalVale: 0, totalFrete: 0, totalTrocas: 0, vendidoLiquido: 0, qtdVendas: 0,
           comissaoBase: 0, bonusValue: 0, total: 0,
           linhas: [], vendas: [], trocas: [],
           semRegra: false,
@@ -949,6 +969,7 @@ export class CommissionsService {
       if (!f.lojas.includes(l.storeCode)) f.lojas.push(l.storeCode);
       f.totalVendido += l.totalVendido;
       f.totalVale += l.totalVale;
+      f.totalFrete += l.totalFrete;
       f.totalTrocas += l.totalTrocas;
       f.vendidoLiquido += l.vendidoLiquido;
       f.qtdVendas += l.qtdVendas;
@@ -967,8 +988,9 @@ export class CommissionsService {
       f.vendas = vendas.map((v: any) => {
         const valor = Number(v.total) || 0;
         const vale = Number(v.vale) || 0;
-        // Regra do dono 22/07: vale-troca abate NA venda — comissão sobre a base
-        const base = Math.max(0, valor - vale);
+        const frete = Number(v.frete) || 0;
+        // Regra do dono: vale-troca e frete abatem NA venda — comissão sobre a base
+        const base = Math.max(0, valor - vale - frete);
         const pct = percentDe(v.storeCode);
         return {
           id: v.id,
@@ -978,6 +1000,7 @@ export class CommissionsService {
           pagamento: v.paymentMethod || null,
           valor,
           vale,
+          frete,
           base,
           percent: pct,
           comissao: Math.round((base * pct) / 100 * 100) / 100,
@@ -994,6 +1017,7 @@ export class CommissionsService {
     for (const f of funcionarias) {
       f.totalVendido = round2(f.totalVendido);
       f.totalVale = round2(f.totalVale);
+      f.totalFrete = round2(f.totalFrete);
       f.totalTrocas = round2(f.totalTrocas);
       f.vendidoLiquido = round2(f.vendidoLiquido);
       f.comissaoBase = round2(f.comissaoBase);
@@ -1008,6 +1032,7 @@ export class CommissionsService {
         funcionarias: funcionarias.length,
         vendido: round2(funcionarias.reduce((s, f) => s + f.totalVendido, 0)),
         valeTroca: round2(funcionarias.reduce((s, f) => s + f.totalVale, 0)),
+        frete: round2(funcionarias.reduce((s, f) => s + f.totalFrete, 0)),
         trocas: round2(funcionarias.reduce((s, f) => s + f.totalTrocas, 0)),
         vendidoLiquido: round2(funcionarias.reduce((s, f) => s + f.vendidoLiquido, 0)),
         comissao: round2(funcionarias.reduce((s, f) => s + f.total, 0)),

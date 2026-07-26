@@ -198,6 +198,9 @@ export default function VendedorasPage() {
   // Contagem do dropdown com os MESMOS critérios da lista (status atual +
   // loja de origem OU loja responsável) — antes contava todas (ativas +
   // desligadas) só por origem e o número "não batia" com o mostrando.
+  const totalNoStatus = items.filter((s) =>
+    filterStatus === 'active' ? s.active : filterStatus === 'inactive' ? !s.active : true,
+  ).length;
   const countByStore = new Map<string, number>();
   for (const s of items) {
     if (filterStatus === 'active' && !s.active) continue;
@@ -283,7 +286,7 @@ export default function VendedorasPage() {
             onChange={(e) => setFilterStore(e.target.value)}
             className="px-3 py-2 border rounded-lg bg-white font-bold text-sm min-w-[220px]"
           >
-            <option value="">Todas as lojas ({items.length})</option>
+            <option value="">Todas as lojas ({totalNoStatus})</option>
             {stores.map((st) => {
               const count = countByStore.get(st.code) || 0;
               return (

@@ -88,6 +88,15 @@ export class NfceService {
       certificadoCarregado: !!cfg.certPfxB64,
       ready:
         !!cfg.cnpj && !!cfg.ie && !!cfg.cscToken && !!cfg.certPfxB64,
+      // Identidade da NF-e quando difere da NFC-e (vazio = usa os mesmos dados)
+      nfeCnpj: cfg.nfeCnpj || '',
+      nfeIe: cfg.nfeIe || '',
+      nfeRazaoSocial: cfg.nfeRazaoSocial || '',
+      nfeFantasia: cfg.nfeFantasia || '',
+      nfeRegime: cfg.nfeRegime || '',
+      nfeEndereco: cfg.nfeEndereco ? JSON.parse(cfg.nfeEndereco) : null,
+      // Razões extras da loja (multi-empresa, ex.: Itanhaém 20+30)
+      nfeIdentidadesExtras: (() => { try { return cfg.nfeIdentidadesExtras ? JSON.parse(cfg.nfeIdentidadesExtras) : []; } catch { return []; } })(),
     };
   }
 
@@ -140,6 +149,14 @@ export class NfceService {
       numeroAtual: number;
       certPfxB64: string;
       certPfxPass: string;
+      // Identidade da NF-e quando difere da NFC-e (todos opcionais)
+      nfeCnpj: string;
+      nfeIe: string;
+      nfeRazaoSocial: string;
+      nfeFantasia: string;
+      nfeRegime: string;
+      nfeEndereco: any;
+      nfeIdentidadesExtras: any;
     }>,
   ) {
     if (!storeCode) throw new BadRequestException('storeCode obrigatório');
@@ -177,6 +194,23 @@ export class NfceService {
     if (input.cscToken) data.cscToken = input.cscToken.replace(/[^\x21-\x7E]/g, '');
     if (input.certPfxB64) data.certPfxB64 = input.certPfxB64;
     if (input.certPfxPass) data.certPfxPass = input.certPfxPass;
+    // Identidade da NF-e (nota grande) quando difere da NFC-e — string vazia
+    // limpa o override (volta a usar os dados da NFC-e).
+    if (input.nfeCnpj != null) data.nfeCnpj = input.nfeCnpj.replace(/\D/g, '') || null;
+    if (input.nfeIe != null) data.nfeIe = input.nfeIe.replace(/\D/g, '') || null;
+    if (input.nfeRazaoSocial != null) data.nfeRazaoSocial = input.nfeRazaoSocial.trim() || null;
+    if (input.nfeFantasia != null) data.nfeFantasia = input.nfeFantasia.trim() || null;
+    if (input.nfeRegime != null) data.nfeRegime = input.nfeRegime || null;
+    if (input.nfeEndereco != null) {
+      const hasEnd = input.nfeEndereco && Object.values(input.nfeEndereco).some((v) => String(v || '').trim());
+      data.nfeEndereco = hasEnd ? JSON.stringify(input.nfeEndereco) : null;
+    }
+    if (input.nfeIdentidadesExtras != null) {
+      // Só guarda identidades com CNPJ preenchido (14 dígitos); vazio limpa.
+      const arr = Array.isArray(input.nfeIdentidadesExtras) ? input.nfeIdentidadesExtras : [];
+      const limpas = arr.filter((e: any) => String(e?.cnpj || '').replace(/\D/g, '').length === 14);
+      data.nfeIdentidadesExtras = limpas.length ? JSON.stringify(limpas) : null;
+    }
 
     if (existing) {
       await (this.prisma as any).nfceConfig.update({
@@ -305,7 +339,12 @@ export class NfceService {
     // Lógica: o desconto EFETIVO total = brutoTotal − sale.total. Subtrai a
     // soma dos descontos JÁ aplicados nos itens — o que sobra é o desconto
     // adicional na venda toda, que distribuímos proporcionalmente.
-    const brutoTotal = items.reduce(
+    // ITENS FISCAIS: só valores >= 0. Linha manual de DESCONTO (valor negativo,
+    // ex.: "desconto df" -R$29,90) NÃO pode virar <det> com vProd negativo (o
+    // schema rejeita, cStat 225) — ela entra como DESCONTO, rateado nos itens
+    // pela lógica abaixo (brutoFiscal − total = desconto a distribuir).
+    const itensFiscais = items.filter((it: any) => Number(it.precoUnit || 0) >= 0 && Number(it.qty || 0) > 0);
+    const brutoTotal = itensFiscais.reduce(
       (s: number, it: any) => s + (it.qty || 0) * (it.precoUnit || 0),
       0,
     );
@@ -381,7 +420,7 @@ export class NfceService {
     let vIBSMunTot = 0;
     let vCBSTot = 0;
 
-    const detLines = items
+    const detLines = itensFiscais
       .map((it: any, idx: number) => {
         const nItem = idx + 1;
         const cProd = it.sku || `SEM-CODIGO-${nItem}`;
@@ -410,6 +449,11 @@ export class NfceService {
         const ncm = isValidNcm(ncmFromErp) && !ncmFallbackItems?.has(idx)
           ? ncmFromErp
           : (isSimples ? '00000000' : '61099000');
+        // cEAN/cEANTrib: o schema só aceita "SEM GTIN" ou 8/12/13/14 dígitos.
+        // EAN torto no cadastro (7/9/10/11 díg, letra, espaço) derrubava o cupom
+        // inteiro com cStat 225 (mesmo bug que a NF-e tinha). Fora do padrão → SEM GTIN.
+        const eanRaw = String(it.ean || '').trim();
+        const cEAN = /^(\d{8}|\d{12,14})$/.test(eanRaw) ? eanRaw : 'SEM GTIN';
         const cfop = it.cfop || '5102';
         const vUnCom = (it.precoUnit || 0).toFixed(2);
         // vProd = bruto sem descontos (qty × precoUnit). vDesc é separado.
@@ -459,7 +503,7 @@ export class NfceService {
     <det nItem="${nItem}">
       <prod>
         <cProd>${this.esc(cProd)}</cProd>
-        <cEAN>${this.esc(it.ean || 'SEM GTIN')}</cEAN>
+        <cEAN>${cEAN}</cEAN>
         <xProd>${this.esc(xProd)}</xProd>
         <NCM>${ncm}</NCM>
         <CFOP>${cfop}</CFOP>
@@ -467,7 +511,7 @@ export class NfceService {
         <qCom>${(it.qty || 1).toFixed(4)}</qCom>
         <vUnCom>${vUnCom}</vUnCom>
         <vProd>${vProd}</vProd>
-        <cEANTrib>${this.esc(it.ean || 'SEM GTIN')}</cEANTrib>
+        <cEANTrib>${cEAN}</cEANTrib>
         <uTrib>UN</uTrib>
         <qTrib>${(it.qty || 1).toFixed(4)}</qTrib>
         <vUnTrib>${vUnCom}</vUnTrib>
@@ -482,8 +526,9 @@ export class NfceService {
       })
       .join('\n');
 
-    // vProd = soma dos (qty × precoUnit) sem descontos — bruto
-    const vTotProdNum = items.reduce(
+    // vProd = soma dos (qty × precoUnit) dos itens FISCAIS (sem as linhas de
+    // desconto negativas). vDesc absorve a diferença pro vNF (= sale.total).
+    const vTotProdNum = itensFiscais.reduce(
       (s, it) => s + (it.qty || 0) * (it.precoUnit || 0),
       0,
     );

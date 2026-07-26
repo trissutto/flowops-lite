@@ -185,7 +185,7 @@ export class WincredCatalogService {
 
     let products: any[] = [];
     if (isNumericRef) {
-      // 1) CODIGO exato (normalizado) OU REF exata — CODIGO primeiro
+      // 1) CODIGO exato (normalizado) OU REF exata.
       const codigo = this.normalizeCodigo(cleanTerm);
       products = await this.produtoTable.findMany({
         where: {
@@ -197,7 +197,17 @@ export class WincredCatalogService {
         orderBy: [{ descricaoCompleta: 'asc' }, { tamanho: 'asc' }, { cor: 'asc' }],
         take: 80,
       });
-      if (codigo) {
+      // PRIORIDADE: se o número existe como REF (ex.: "223263" = família MARRIE),
+      // a REF vem PRIMEIRO — senão colide com o CÓDIGO homônimo de outra peça
+      // ("223263" também é o CÓDIGO de uma peça do REF 6168). Só afeta a busca
+      // por REF (erp-search/dropdown); o BIPE do leitor usa getPdvProductInfo e
+      // segue CÓDIGO-primeiro (scanner intocado). Sem REF exata → código primeiro.
+      const temRefExata = products.some((p: any) => String(p.ref ?? '').trim() === cleanTerm);
+      if (temRefExata) {
+        products.sort((a: any, b: any) =>
+          (String(a.ref ?? '').trim() === cleanTerm ? 0 : 1) -
+          (String(b.ref ?? '').trim() === cleanTerm ? 0 : 1));
+      } else if (codigo) {
         products.sort((a: any, b: any) => (a.codigo === codigo ? 0 : 1) - (b.codigo === codigo ? 0 : 1));
       }
       // 2) REF por prefixo

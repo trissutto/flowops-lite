@@ -271,12 +271,15 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     return applied;
   }
 
-  /** Enfileira a réplica de estoque pro Giga no erp_outbox (kind estoque_delta). */
+  /** Enfileira a réplica de estoque pro Giga no erp_outbox (kind estoque_delta).
+   *  `deferred=true` = enfileirado POR DESIGN (fluxo em lote não espera o Giga),
+   *  não por indisponibilidade — só muda o texto do log. */
   private async enqueueStockDelta(
     op: 'inc' | 'dec',
     items: Array<{ sku: string; qty: number; storeCode: string }>,
     opts?: { allowNegative?: boolean; skipNotFound?: boolean },
     lastError?: string,
+    deferred = false,
   ): Promise<void> {
     try {
       await (this.prismaFlow as any).erpOutbox.create({
@@ -288,9 +291,15 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           lastError: lastError ? String(lastError).slice(0, 300) : null,
         },
       });
-      this.logger.warn(
-        `[flow-estoque] Giga indisponível — ${op} de ${items.length} item(ns) enfileirado no outbox (${lastError || 'erro'})`,
-      );
+      if (deferred) {
+        this.logger.log(
+          `[flow-estoque] ${op} de ${items.length} item(ns) enfileirado no outbox (réplica Giga assíncrona)`,
+        );
+      } else {
+        this.logger.warn(
+          `[flow-estoque] Giga indisponível — ${op} de ${items.length} item(ns) enfileirado no outbox (${lastError || 'erro'})`,
+        );
+      }
     } catch (e) {
       this.logger.error(`[flow-estoque] falha ao enfileirar ${op}: ${(e as Error).message}`);
     }
@@ -1655,6 +1664,62 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     const giga = await this.increaseStockGigaOnly(items);
     if (giga.success) return giga;
     await this.enqueueStockDelta('inc', items, undefined, giga.error);
+    return { success: true, applied: flowApplied, gigaEnfileirado: true };
+  }
+
+  /**
+   * ENTRADA de estoque ASSÍNCRONA — aplica o delta no Flow (fonte) na hora e
+   * enfileira a réplica pro Giga no outbox SEM tentar inline. Usada em fluxos
+   * de LOTE (recebimento de compra), onde esperar o Giga item-a-item pendura a
+   * tela: o estoque já vale no Flow em ms e o cron do outbox grava no Giga com
+   * retry/backoff. Não depende do Giga estar rápido nem vivo.
+   */
+  async increaseStockAsync(
+    items: Array<{ sku: string; qty: number; storeCode: string }>,
+  ): Promise<{
+    success: boolean;
+    applied: Array<{ sku: string; storeCode: string; qty: number; previousStock: number; newStock: number }>;
+    gigaEnfileirado: boolean;
+    error?: string;
+    attempts?: number;
+  }> {
+    // Kill-switch mestre das escritas de estoque secundárias (devoluções, trocas,
+    // marcados, realinhamento, recebimento…): ERP_STOCK_WRITES_ASYNC=0 volta TODAS
+    // ao inline (espera o Giga), sem tocar nos call-sites.
+    if (String(process.env.ERP_STOCK_WRITES_ASYNC ?? '1') === '0') {
+      const r = await this.increaseStock(items);
+      return { success: r.success, applied: r.applied, gigaEnfileirado: !!r.gigaEnfileirado };
+    }
+    if (!items.length) return { success: true, applied: [], gigaEnfileirado: false };
+    const flowApplied = await this.mirrorStockApplyDelta(items, +1, true);
+    await this.enqueueStockDelta('inc', items, undefined, undefined, true);
+    return { success: true, applied: flowApplied, gigaEnfileirado: true };
+  }
+
+  /**
+   * BAIXA de estoque ASSÍNCRONA — simétrica ao increaseStockAsync. Aplica o
+   * delta no Flow (fonte) na hora e enfileira a réplica pro Giga no outbox, sem
+   * esperar o Giga inline. Usada em fluxos secundários de baixa (marcar peça,
+   * ajuste manual, separação) pra não pendurar a UI no MySQL lento.
+   * `allowNegative`/`skipNotFound` continuam valendo no espelho e na réplica.
+   */
+  async decreaseStockAsync(
+    items: Array<{ sku: string; qty: number; storeCode: string }>,
+    opts?: { allowNegative?: boolean; skipNotFound?: boolean },
+  ): Promise<{
+    success: boolean;
+    applied: Array<{ sku: string; storeCode: string; qty: number; previousStock: number; newStock: number }>;
+    gigaEnfileirado: boolean;
+    error?: string;
+    attempts?: number;
+  }> {
+    if (String(process.env.ERP_STOCK_WRITES_ASYNC ?? '1') === '0') {
+      const r = await this.decreaseStock(items, opts);
+      return { success: r.success, applied: r.applied, gigaEnfileirado: !!(r as any).gigaEnfileirado };
+    }
+    if (!items.length) return { success: true, applied: [], gigaEnfileirado: false };
+    const flowApplied = await this.mirrorStockApplyDelta(items, -1, !!opts?.allowNegative);
+    await this.enqueueStockDelta('dec', items, opts, undefined, true);
     return { success: true, applied: flowApplied, gigaEnfileirado: true };
   }
 
@@ -7525,6 +7590,20 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * Tabela `grupos` (CODIGO PK + GRUPO nome).
    */
   async listarGrupos(): Promise<Array<{ codigo: number; nome: string }>> {
+    // Espelho primeiro (wincred_grupos) — cai pro Giga se vazio/erro.
+    if (this.mirrorReadsEnabled) {
+      try {
+        const rows: any[] = await (this.prismaFlow as any).wincredGrupo.findMany({
+          orderBy: { grupo: 'asc' },
+        });
+        const mapped = rows
+          .map((r) => ({ codigo: Number(r.codigo), nome: String(r.grupo || '').trim() || `GRUPO-${r.codigo}` }))
+          .filter((g) => g.codigo);
+        if (mapped.length) return mapped;
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] listarGrupos: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
     if (!this.pool) return [];
     try {
       const [rows] = await this.pool.query(
@@ -7548,6 +7627,24 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * Tabela `subgrupos` (CODIGO PK + SUBGRUPO nome + GRUPO FK).
    */
   async listarSubgrupos(grupoCodigo: number): Promise<Array<{ codigo: number; nome: string }>> {
+    // Espelho primeiro (wincred_subgrupos). Um grupo pode ter 0 subgrupos, então
+    // o fallback é gated pela tabela estar POPULADA (count>0), não pelo resultado.
+    if (this.mirrorReadsEnabled) {
+      try {
+        const total = await (this.prismaFlow as any).wincredSubgrupo.count();
+        if (total > 0) {
+          const rows: any[] = await (this.prismaFlow as any).wincredSubgrupo.findMany({
+            where: { grupo: grupoCodigo },
+            orderBy: { subgrupo: 'asc' },
+          });
+          return rows
+            .map((r) => ({ codigo: Number(r.codigo), nome: String(r.subgrupo || '').trim() || `SUBGRUPO-${r.codigo}` }))
+            .filter((s) => s.codigo);
+        }
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] listarSubgrupos: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
     if (!this.pool) return [];
     try {
       const [rows] = await this.pool.query(
@@ -7982,6 +8079,21 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * de cores com sugestÃµes + permitir digitar nova.
    */
   async listarCoresDistintas(limit = 200): Promise<string[]> {
+    if (this.mirrorReadsEnabled) {
+      try {
+        const rows: any[] = await (this.prismaFlow as any).wincredProduto.groupBy({
+          by: ['cor'],
+          where: { cor: { not: null } },
+          _count: { cor: true },
+          orderBy: { _count: { cor: 'desc' } },
+          take: limit + 5,
+        });
+        const out = rows.map((r) => String(r.cor || '').trim()).filter(Boolean).slice(0, limit);
+        if (out.length) return out;
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] listarCoresDistintas: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
     if (!this.pool) return [];
     try {
       const [rows] = await this.pool.query(
@@ -8005,6 +8117,21 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * de tamanhos com sugestÃµes.
    */
   async listarTamanhosDistintos(limit = 200): Promise<string[]> {
+    if (this.mirrorReadsEnabled) {
+      try {
+        const rows: any[] = await (this.prismaFlow as any).wincredProduto.groupBy({
+          by: ['tamanho'],
+          where: { tamanho: { not: null } },
+          _count: { tamanho: true },
+          orderBy: { _count: { tamanho: 'desc' } },
+          take: limit + 5,
+        });
+        const out = rows.map((r) => String(r.tamanho || '').trim()).filter(Boolean).slice(0, limit);
+        if (out.length) return out;
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] listarTamanhosDistintos: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
     if (!this.pool) return [];
     try {
       const [rows] = await this.pool.query(
@@ -8029,8 +8156,43 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * fallback LIKE.
    */
   async findFornecedorCnpjByNome(nome: string): Promise<string | null> {
-    if (!this.pool || !nome?.trim()) return null;
+    if (!nome?.trim()) return null;
     const n = nome.trim();
+    if (this.mirrorReadsEnabled) {
+      try {
+        const total = await (this.prismaFlow as any).wincredFornecedor.count();
+        if (total > 0) {
+          // Exato (case-insensitive) em fantasia OU razão social; fallback contains.
+          const exato: any = await (this.prismaFlow as any).wincredFornecedor.findFirst({
+            where: {
+              OR: [
+                { fantasia: { equals: n, mode: 'insensitive' } },
+                { razaoSocial: { equals: n, mode: 'insensitive' } },
+              ],
+              cnpj: { not: null },
+            },
+            select: { cnpj: true },
+          });
+          if (exato?.cnpj) return String(exato.cnpj).trim() || null;
+          const like: any = await (this.prismaFlow as any).wincredFornecedor.findFirst({
+            where: {
+              OR: [
+                { fantasia: { contains: n, mode: 'insensitive' } },
+                { razaoSocial: { contains: n, mode: 'insensitive' } },
+              ],
+              cnpj: { not: null },
+            },
+            orderBy: { fantasia: 'asc' },
+            select: { cnpj: true },
+          });
+          if (like?.cnpj) return String(like.cnpj).trim() || null;
+          return null; // mirror populado e não achou = não existe
+        }
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] findFornecedorCnpjByNome: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
+    if (!this.pool) return null;
     try {
       // Match exato (FANTASIA ou RAZAOSOCIAL)
       const [rows1] = await this.pool.query(
@@ -8066,6 +8228,27 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * Lista fornecedores cadastrados em produtos (CNPJ + nome se disponÃ­vel).
    */
   async listarFornecedores(limit = 5000): Promise<Array<{ cnpj: string; nome: string; fantasia?: string }>> {
+    // Espelho primeiro (wincred_fornecedores). FANTASIA = MARCA no Lurd's.
+    if (this.mirrorReadsEnabled) {
+      try {
+        const rows: any[] = await (this.prismaFlow as any).wincredFornecedor.findMany({
+          where: { OR: [{ razaoSocial: { not: null } }, { fantasia: { not: null } }] },
+          select: { cnpj: true, razaoSocial: true, fantasia: true },
+          take: limit,
+        });
+        const result = rows
+          .map((r) => {
+            const fant = r.fantasia ? String(r.fantasia).trim() : '';
+            const nomeReal = String(r.razaoSocial || '').trim();
+            return { cnpj: String(r.cnpj || '').trim(), nome: fant || nomeReal, fantasia: fant || undefined };
+          })
+          .filter((f) => f.nome)
+          .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+        if (result.length) return result;
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] listarFornecedores: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
     if (!this.pool) return [];
     // FANTASIA = MARCA no Lurd's â€” preferir FANTASIA na exibicao quando houver.
     // SCHEMA REAL: fornecedores tem CNPJ + RAZAOSOCIAL + FANTASIA (nao CGC nem NOME)
@@ -9545,9 +9728,50 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
      NÃ£o inclui composiÃ§Ã£o SITE (Giga + Flowops) â€” quem combina Ã© o caller
      (controller), pra deixar service genÃ©rico.
      â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+  /** Espelho do getFaturamentoPorLoja via giga_caixa_mov — MESMA regra da query
+   *  viva: filtra por DATAFEC, exclui MARCADO='SIM', cupons = DISTINCT numero.
+   *  Bate exato com o Wincred (o espelho copia a `caixa` linha a linha). */
+  private async getFaturamentoPorLojaFromMirror(inicio: Date, fim: Date): Promise<
+    Array<{ storeCode: string; faturamento: number; cupons: number; pecas: number; ticketMedio: number }>
+  > {
+    const rows: any[] = await (this.prismaFlow as any).$queryRawUnsafe(
+      `SELECT loja AS "storeCode",
+              COUNT(DISTINCT numero)::int AS cupons,
+              COALESCE(SUM(quantidade), 0)::float8 AS pecas,
+              COALESCE(SUM(valor_total), 0)::float8 AS faturamento
+         FROM giga_caixa_mov
+        WHERE data_fec >= $1 AND data_fec < $2
+          AND (marcado IS NULL OR marcado <> 'SIM')
+        GROUP BY loja
+        ORDER BY faturamento DESC`,
+      inicio, fim,
+    );
+    return rows.map((r) => {
+      const faturamento = Number(r.faturamento) || 0;
+      const cupons = Number(r.cupons) || 0;
+      const pecas = Number(r.pecas) || 0;
+      return {
+        storeCode: String(r.storeCode || '').trim().toUpperCase(),
+        faturamento,
+        cupons,
+        pecas,
+        ticketMedio: cupons > 0 ? faturamento / cupons : 0,
+      };
+    });
+  }
+
   async getFaturamentoPorLoja(inicio: Date, fim: Date): Promise<
     Array<{ storeCode: string; faturamento: number; cupons: number; pecas: number; ticketMedio: number }>
   > {
+    // Espelho primeiro (mesma regra DATAFEC); cai pro Giga ao vivo se o espelho
+    // não estiver pronto/cobrindo o período.
+    try {
+      if (await this.caixaMovUsable(inicio)) {
+        return await this.getFaturamentoPorLojaFromMirror(inicio, fim);
+      }
+    } catch (e) {
+      this.logger.warn(`[mirror-reads] getFaturamentoPorLoja: ${(e as Error).message} → Giga ao vivo`);
+    }
     if (!this.pool) return [];
     try {
       // IMPORTANTE: usa DATAFEC (data de fechamento do cupom), nÃ£o DATA.

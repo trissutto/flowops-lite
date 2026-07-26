@@ -3,6 +3,7 @@ import { ErpService } from '../erp/erp.service';
 import { CrediariosService } from '../crediarios/crediarios.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { MarcadosMirrorService } from './marcados-mirror.service';
+import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service';
 
 /**
  * MARCADOS — sistema de "leva pra provar em casa" da Lurd's.
@@ -30,6 +31,7 @@ export class MarcadosService {
     private readonly crediarios: CrediariosService,
     private readonly prisma: PrismaService,
     private readonly mirror: MarcadosMirrorService,
+    private readonly catalog: WincredCatalogService,
   ) {}
 
   /** Kill-switch: MARCADOS_NATIVE_READS=0 volta as consultas pro Giga ao vivo. */
@@ -109,6 +111,15 @@ export class MarcadosService {
     }
     if (!sale.items || sale.items.length === 0) {
       throw new BadRequestException('Venda sem items');
+    }
+    // TRAVA ANTI-DUPLICAÇÃO: venda que veio de "Puxar pra venda" já tem as peças
+    // EM MARCA (marcadosRegistros). Marcar de novo re-insere tudo e duplica (o
+    // que aconteceu na Leticia). Pra vender é só finalizar — não re-marcar.
+    if (sale.marcadosRegistros) {
+      throw new BadRequestException(
+        'Essa venda foi PUXADA de marcados — as peças já estão em marca. Pra concluir, ' +
+        'FINALIZE a venda (vender). Não dá pra marcar de novo (evita duplicar).',
+      );
     }
 
     // ── MODO TREINAMENTO ──
@@ -244,7 +255,7 @@ export class MarcadosService {
         qty: Number(it.qty) || 1,
         storeCode: input.storeCode,
       }));
-      const stockResult = await this.erp.decreaseStock(stockItems);
+      const stockResult = await this.erp.decreaseStockAsync(stockItems);
       if (!stockResult.success) {
         this.logger.error(
           `[marcados] INSERT em caixa OK, mas falha ao baixar estoque: ${stockResult.error}. ` +
@@ -434,6 +445,66 @@ export class MarcadosService {
   }
 
   /**
+   * LIMPA DUPLICADOS de marcação de um cliente. Fecha (status='fechado') as
+   * linhas-FANTASMA: registros nativos EXATAMENTE iguais (mesma loja+numero+sku+
+   * qty+valorTotal) que o sync criou por não casar o órfão do Flow. Mantém 1 por
+   * peça — de preferência a ligada ao Giga (registroGiga != null).
+   * `dryRun` (default true): só mostra o que FECHARIA, sem tocar em nada.
+   * NÃO mexe em marcações com numero diferente (marcação separada de verdade).
+   */
+  async dedupMarcadosCliente(input: {
+    codCliente?: string;
+    cpf?: string;
+    dryRun?: boolean;
+  }): Promise<{ grupos: number; duplicados: number; dryRun: boolean; fechados: any[] }> {
+    const or: any[] = [];
+    if (input.cpf) or.push({ cpf: String(input.cpf).replace(/\D/g, '') });
+    if (input.codCliente) or.push({ codCliente: String(input.codCliente).trim() });
+    if (!or.length) throw new BadRequestException('Informe codCliente ou cpf');
+    const dryRun = input.dryRun !== false; // default TRUE (seguro)
+
+    const rows: any[] = await (this.prisma as any).marcado.findMany({
+      where: { status: 'ativo', isTraining: false, OR: or },
+      orderBy: [{ registroGiga: 'asc' }, { createdAt: 'asc' }],
+    });
+
+    const groups = new Map<string, any[]>();
+    for (const r of rows) {
+      const key = `${r.storeCode}|${r.sku}|${r.numero ?? ''}|${r.qty}|${Number(r.valorTotal)}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(r);
+    }
+
+    const fechados: any[] = [];
+    for (const g of groups.values()) {
+      if (g.length <= 1) continue; // sem duplicata exata
+      const keep = g.find((x) => x.registroGiga != null) || g[0];
+      for (const x of g) {
+        if (x.id === keep.id) continue;
+        fechados.push({
+          id: x.id,
+          sku: x.sku,
+          descricao: x.descricao,
+          valorTotal: Number(x.valorTotal),
+          numero: x.numero,
+          registroGiga: x.registroGiga != null ? String(x.registroGiga) : null,
+          mantido: keep.id,
+        });
+      }
+    }
+
+    if (!dryRun && fechados.length) {
+      await (this.prisma as any).marcado.updateMany({
+        where: { id: { in: fechados.map((f) => f.id) } },
+        data: { status: 'fechado', fechadoAt: new Date() },
+      });
+      this.logger.warn(`[marcados/dedup] ${fechados.length} duplicado(s) fechado(s) pra ${input.cpf || input.codCliente}`);
+    }
+
+    return { grupos: groups.size, duplicados: fechados.length, dryRun, fechados };
+  }
+
+  /**
    * Busca clientes por nome OU CPF parcial. Retorna ate 20 matches pra
    * vendedora escolher. Filtro: clientes que TEM pelo menos 1 marcado
    * ativo (status='SIM' na tabela `caixa`).
@@ -441,7 +512,7 @@ export class MarcadosService {
    * Usado na tela /pdv/marcados quando vendedora nao tem o CPF em maos
    * e quer pesquisar pelo nome (ex: "MARIA SILVA").
    */
-  async searchClientesByNameOrCpf(query: string): Promise<Array<{
+  async searchClientesByNameOrCpf(query: string, lojaScope?: string): Promise<Array<{
     codCliente: string;
     loja?: string;
     nome: string;
@@ -462,10 +533,17 @@ export class MarcadosService {
     //    vivo com INNER JOIN na caixa INTEIRA (full scan sem índice em
     //    MARCADO) e PENDURAVA a busca por nome (caso ELISA 21/07, Indaiatuba).
     //    O espelho responde na hora e não depende do Giga estar de pé.
+    // ESCOPO POR LOJA (23/07): PDV só enxerga fichas da própria loja —
+    // cadastros repetem por loja (RESERVAS etc). Sem lojaScope (retaguarda),
+    // segue rede toda.
+    const lojaFiltro = lojaScope ? String(lojaScope).replace(/\D/g, '').padStart(2, '0') : null;
     const fichas: any[] = await (this.prisma as any).gigaCliente.findMany({
-      where: isCpfLike
-        ? { OR: [{ personKey: { contains: onlyDigits } }, { cpf: { contains: onlyDigits } }] }
-        : { nome: { contains: q, mode: 'insensitive' } },
+      where: {
+        ...(lojaFiltro ? { loja: lojaFiltro } : {}),
+        ...(isCpfLike
+          ? { OR: [{ personKey: { contains: onlyDigits } }, { cpf: { contains: onlyDigits } }] }
+          : { nome: { contains: q, mode: 'insensitive' } }),
+      },
       select: {
         loja: true, codigo: true, nome: true, cpf: true,
         avaliacao: true, limiteCompras: true, personKey: true,
@@ -577,6 +655,45 @@ export class MarcadosService {
   }
 
   /**
+   * DIAGNÓSTICO read-only: agrupa os marcados ATIVOS de um cliente por NUMERO
+   * (cada "marcar" gera um NUMERO/controle). Serve pra enxergar a duplicação
+   * (ex.: 4 grupos ~iguais = marcaram 4× a mesma peça). NÃO altera nada.
+   */
+  async analisarMarcadosCliente(input: { cpf?: string; codCliente?: string }): Promise<{
+    totalPecas: number;
+    totalValor: number;
+    grupos: Array<{ numero: number | null; pecas: number; qtd: number; valor: number; comGiga: number; semGiga: number; data: any }>;
+  }> {
+    const or: any[] = [];
+    if (input.cpf) or.push({ cpf: String(input.cpf).replace(/\D/g, '') });
+    if (input.codCliente) or.push({ codCliente: String(input.codCliente).trim() });
+    if (!or.length) throw new BadRequestException('Informe codCliente ou cpf');
+
+    const rows: any[] = await (this.prisma as any).marcado.findMany({
+      where: { status: 'ativo', isTraining: false, OR: or },
+      orderBy: [{ dataMarcacao: 'asc' }, { createdAt: 'asc' }],
+    });
+
+    const byNumero = new Map<string, any>();
+    for (const r of rows) {
+      const k = r.numero != null ? String(r.numero) : 'sem-numero';
+      if (!byNumero.has(k)) {
+        byNumero.set(k, { numero: r.numero ?? null, pecas: 0, qtd: 0, valor: 0, comGiga: 0, semGiga: 0, data: r.dataMarcacao });
+      }
+      const g = byNumero.get(k);
+      g.pecas++;
+      g.qtd += Number(r.qty) || 0;
+      g.valor += Number(r.valorTotal) || 0;
+      if (r.registroGiga != null) g.comGiga++; else g.semGiga++;
+    }
+    const grupos = Array.from(byNumero.values())
+      .map((g) => ({ ...g, valor: Math.round(g.valor * 100) / 100 }))
+      .sort((a, b) => b.valor - a.valor);
+    const totalValor = Math.round(rows.reduce((s, r) => s + (Number(r.valorTotal) || 0), 0) * 100) / 100;
+    return { totalPecas: rows.length, totalValor, grupos };
+  }
+
+  /**
    * DEVOLVE 1 peça marcada — o cliente trouxe de volta.
    *  - DELETE FROM caixa WHERE REGISTRO + CONTROLE (chave composta)
    *  - increaseStock(SKU, qty, loja) — peça volta pro estoque Giga
@@ -660,6 +777,113 @@ export class MarcadosService {
     }
 
     return { ok: true };
+  }
+
+  /**
+   * DESDUPLICA por PRODUTO (SKU): o cliente teve a MESMA peça marcada várias
+   * vezes (marcação repetida no PDV). Mantém 1 marcado de cada SKU (o ligado ao
+   * Giga / mais antigo) e DEVOLVE o resto ao estoque via devolverItemMarcado
+   * (increaseStock). Estoque é delta: as devoluções compensam as baixas extras.
+   * Peça sem linha no Giga (registroGiga null = fantasma do sync) só fecha o
+   * nativo (não mexe estoque). `dryRun` (default true): só mostra o plano.
+   */
+  async desduplicarMarcadosCliente(input: {
+    cpf?: string;
+    codCliente?: string;
+    dryRun?: boolean;
+  }): Promise<{
+    dryRun: boolean;
+    produtosMantidos: number;
+    valorMantido: number;
+    pecasRemovidas: number;
+    valorRemovido: number;
+    estoqueDevolvido: number;
+    falhas: string[];
+  }> {
+    const or: any[] = [];
+    if (input.cpf) or.push({ cpf: String(input.cpf).replace(/\D/g, '') });
+    if (input.codCliente) or.push({ codCliente: String(input.codCliente).trim() });
+    if (!or.length) throw new BadRequestException('Informe codCliente ou cpf');
+    const dryRun = input.dryRun !== false;
+
+    const rows: any[] = await (this.prisma as any).marcado.findMany({
+      where: { status: 'ativo', isTraining: false, OR: or },
+      orderBy: [{ dataMarcacao: 'asc' }, { createdAt: 'asc' }],
+    });
+    if (!rows.length) throw new BadRequestException('Cliente sem marcados ativos');
+
+    // Agrupa por SKU (mesmo produto = duplicidade). Mantém 1 por SKU.
+    const bySku = new Map<string, any[]>();
+    for (const r of rows) {
+      const k = String(r.sku || '').trim().toUpperCase() || `sem-sku-${r.id}`;
+      if (!bySku.has(k)) bySku.set(k, []);
+      bySku.get(k)!.push(r);
+    }
+
+    const remover: any[] = [];
+    let valorMantido = 0;
+    for (const g of bySku.values()) {
+      // Ordena: com registroGiga primeiro (real), depois mais antigo → mantém g[0].
+      g.sort((a, b) => {
+        const ga = a.registroGiga != null ? 0 : 1;
+        const gb = b.registroGiga != null ? 0 : 1;
+        if (ga !== gb) return ga - gb;
+        return new Date(a.dataMarcacao || 0).getTime() - new Date(b.dataMarcacao || 0).getTime();
+      });
+      valorMantido += Number(g[0].valorTotal) || 0;
+      for (let i = 1; i < g.length; i++) remover.push(g[i]);
+    }
+
+    const falhas: string[] = [];
+    let pecasRemovidas = 0;
+    let valorRemovido = 0;
+    let estoqueDevolvido = 0;
+
+    for (const m of remover) {
+      pecasRemovidas++;
+      valorRemovido += Number(m.valorTotal) || 0;
+      if (dryRun) continue;
+      try {
+        if (m.registroGiga != null) {
+          // Devolve de verdade: retorna estoque + remove linha no Giga + nativo.
+          const r = await this.devolverItemMarcado({
+            registro: Number(m.registroGiga),
+            sku: m.sku,
+            qty: Number(m.qty) || 1,
+            loja: m.storeCode,
+          });
+          if (r.ok) estoqueDevolvido += Number(m.qty) || 1;
+          else falhas.push(`REGISTRO ${m.registroGiga} (${m.sku}): ${r.error}`);
+        } else {
+          // Fantasma sem linha no Giga → só fecha o nativo (quem baixou estoque
+          // foi a marcação com Giga; este registro nunca tocou o estoque).
+          await (this.prisma as any).marcado.update({
+            where: { id: m.id },
+            data: { status: 'fechado', fechadoAt: new Date() },
+          });
+        }
+      } catch (e: any) {
+        falhas.push(`${m.sku}: ${e?.message || e}`);
+      }
+    }
+
+    if (!dryRun) {
+      this.logger.warn(
+        `[marcados/desdup] cliente ${input.cpf || input.codCliente}: manteve ${bySku.size} produto(s) único(s) ` +
+        `(R$${Math.round(valorMantido * 100) / 100}), removeu ${pecasRemovidas} peça(s) duplicada(s), ` +
+        `estoque devolvido=${estoqueDevolvido}, falhas=${falhas.length}`,
+      );
+    }
+
+    return {
+      dryRun,
+      produtosMantidos: bySku.size,
+      valorMantido: Math.round(valorMantido * 100) / 100,
+      pecasRemovidas,
+      valorRemovido: Math.round(valorRemovido * 100) / 100,
+      estoqueDevolvido,
+      falhas,
+    };
   }
 
   /**
@@ -940,19 +1164,25 @@ export class MarcadosService {
       const precoUnit = qty > 0 ? Math.round((valorTotal / qty) * 100) / 100 : Number(row.VALOR) || 0;
       const descricao = String(row.DESCRICAO || row.CODIGO || 'Item marcado').slice(0, 80);
       const sku = String(row.CODIGO || `MARCADO-${row.REGISTRO}`);
+      // Resolve REF real + dataCadastro (+cor/tam/ncm/cfop/ean) pelo catálogo,
+      // igual ao bipe. SEM isso a campanha (liquida antigos por data / coleção
+      // -INV/-VER por REF) não consegue avaliar a peça e o desconto não aplica.
+      // precoUnit fica o da marcação (a campanha aplica o % em cima dele).
+      let info: any = null;
+      try { info = await this.catalog.getPdvProductInfo(sku); } catch { /* mantém básico */ }
       try {
         await (this.prisma as any).pdvSaleItem.create({
           data: {
             saleId: sale.id,
             sku,
-            ean: null,
-            ref: 'MARCADO',
-            cor: null,
-            tamanho: null,
+            ean: info?.ean ?? null,
+            ref: info?.ref || 'MARCADO',
+            cor: info?.cor ?? null,
+            tamanho: info?.tamanho ?? null,
             descricao,
-            ncm: null,
-            cfop: null,
-            dataCadastro: null,
+            ncm: info?.ncm ?? null,
+            cfop: info?.cfop ?? null,
+            dataCadastro: info?.dataCadastro ?? null,
             qty,
             precoUnit,
             desconto: 0,
@@ -974,6 +1204,26 @@ export class MarcadosService {
         total,
       },
     });
+
+    // TIRA da tela de Marcados JÁ (status 'puxado') — peça não pode ficar nas
+    // DUAS telas ao mesmo tempo. Cancelar a venda devolve pra 'ativo'
+    // (pdv.cancel); finalizar fecha de vez (erpStepFecharMarcados). Treino não
+    // grava marcadosRegistros, então nem entra aqui.
+    if (!input.isTraining) {
+      const regsPuxados = rows
+        .map((x: any) => Number(x.REGISTRO))
+        .filter((n: number) => Number.isFinite(n) && n > 0);
+      if (regsPuxados.length) {
+        try {
+          await (this.prisma as any).marcado.updateMany({
+            where: { registroGiga: { in: regsPuxados.map((n) => BigInt(n)) }, status: 'ativo' },
+            data: { status: 'puxado', saleId: sale.id },
+          });
+        } catch (e: any) {
+          this.logger.warn(`[marcados/puxar] não marcou como 'puxado': ${e?.message}`);
+        }
+      }
+    }
 
     return { saleId: sale.id, itemsAdded, total };
   }

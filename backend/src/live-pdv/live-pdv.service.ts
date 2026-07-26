@@ -62,8 +62,16 @@ export class LivePdvService {
    *  é ruído de cadastro e não vira célula. Vale SÓ na busca da live
    *  (searchGrade); PDV e consulta continuam vendo o catálogo inteiro. */
   private static readonly LIVE_TAMANHOS = new Set([
-    '46', '48', '50', '52', '54', '56', '58', '60', '46/48', '50/52',
+    '46', '48', '50', '52', '54', '56', '58', '60',
+    '46/48', '50/52', '54/56', '58/60',
   ]);
+
+  /** Tamanho canônico pra whitelist: "46 48", "46-48" e "46 / 48" viram
+   *  "46/48" (o cadastro da Giga grava composto de todo jeito — 23/07, S01092
+   *  "46 48" sumia da grade da live). */
+  private tamCanon(s: any): string {
+    return this.norm(s).replace(/\s*[/-]\s*/g, '/').replace(/\s+/g, '/');
+  }
 
   /**
    * Título de exibição da grade SEM a cor/tamanho da linha (14/07): a
@@ -696,7 +704,7 @@ export class LivePdvService {
     // Mesmo padrão do filtro de cor da legenda: se zerar tudo, mostra tudo
     // (cadastro fora do padrão nunca trava a live).
     const soPlusFeminino = productRows.filter((r) => {
-      const tam = this.norm(r.TAMANHO);
+      const tam = this.tamCanon(r.TAMANHO);
       if (tam && !LivePdvService.LIVE_TAMANHOS.has(tam)) return false;
       const desc = this.norm(r.DESCRICAOCOMPLETA);
       if (desc.includes('MASCULIN') || desc.includes('INFANTIL')) return false;
@@ -2344,8 +2352,15 @@ export class LivePdvService {
     let priceReais = bestCodigo ? priceMap.get(bestCodigo) || 0 : 0;
     if (priceReais === 0) priceReais = await this.refPriceWithMirror(ref);
     const basePriceCents = this.reaisToCents(priceReais);
-    // Aplica preço promocional da live se houver pro REF nessa sessão
-    const promo = await this.getPromo(session.id, ref);
+    // Aplica preço promocional da live se houver pro REF nessa sessão.
+    // A célula da grade manda a REF da VARIANTE (24372-INV) mas a promo é
+    // gravada na REF BASE da grade (24372) — sem o fallback o item entrava
+    // a preço cheio (23/07, vestido 24372-INV a 129,90 com promo de 64,95).
+    let promo = await this.getPromo(session.id, ref);
+    if (promo == null) {
+      const base = ProductSearchService.refBaseOf(ref);
+      if (base && base !== ref) promo = await this.getPromo(session.id, base);
+    }
     const priceCents = promo != null && promo > 0 ? promo : basePriceCents;
 
     // Descrição — SÓ ESPELHO, ref EXATO (usa índice).

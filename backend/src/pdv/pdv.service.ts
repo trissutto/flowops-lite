@@ -1188,6 +1188,68 @@ export class PdvService {
   }
 
   /**
+   * FRETE À PARTE da venda online (dono 23/07): linha própria na venda —
+   * soma no total a cobrar, entra no caixa como receita da loja, aparece
+   * destacada no cupom/relatórios. ref='FRETE' garante:
+   *   - NÃO baixa estoque (isStockEligibleItem)
+   *   - FORA da base de comissão (Folha RH + fechamento abatem, igual vale)
+   * Chamar de novo ATUALIZA o valor; valor 0 REMOVE a linha.
+   */
+  async setFrete(saleId: string, valorRaw: number) {
+    const sale = await (this.prisma as any).pdvSale.findUnique({
+      where: { id: saleId },
+      select: { id: true, status: true },
+    });
+    if (!sale) throw new NotFoundException('Venda não encontrada');
+    if (sale.status !== 'open')
+      throw new BadRequestException(`Venda não está aberta (status=${sale.status})`);
+
+    const valor = Math.round((Number(valorRaw) || 0) * 100) / 100;
+    if (valor < 0) throw new BadRequestException('Frete não pode ser negativo');
+
+    const existente = await (this.prisma as any).pdvSaleItem.findFirst({
+      where: { saleId, ref: 'FRETE' },
+      select: { id: true },
+    });
+
+    if (valor === 0) {
+      if (existente) await (this.prisma as any).pdvSaleItem.delete({ where: { id: existente.id } });
+    } else if (existente) {
+      await (this.prisma as any).pdvSaleItem.update({
+        where: { id: existente.id },
+        data: { precoUnit: valor, total: valor, qty: 1 },
+      });
+    } else {
+      await (this.prisma as any).pdvSaleItem.create({
+        data: {
+          saleId,
+          sku: 'FRETE',
+          ean: null,
+          ref: 'FRETE',
+          cor: null,
+          tamanho: null,
+          descricao: 'FRETE — ENVIO',
+          ncm: null,
+          cfop: null,
+          dataCadastro: null,
+          qty: 1,
+          precoUnit: valor,
+          desconto: 0,
+          total: valor,
+          promoTag: 'FRETE',
+        },
+      });
+    }
+
+    await this.recalcTotals(saleId);
+    const fresh = await (this.prisma as any).pdvSale.findUnique({
+      where: { id: saleId },
+      select: { total: true },
+    });
+    return { ok: true, freteReais: valor, total: Number(fresh?.total) || 0 };
+  }
+
+  /**
    * VALE PRESENTE — vende um vale dentro da venda aberta do PDV.
    *
    * Como funciona (tudo em trilho existente, zero fluxo novo):
@@ -1272,6 +1334,51 @@ export class PdvService {
       `[pdv] Vale presente ${code} (R$ ${valor.toFixed(2)}) criado na venda ${sale.id} — ativa na finalização`,
     );
     return { ...r, voucher: { code, valor, validade: validade.toISOString() } };
+  }
+
+  /**
+   * RECALCULAR PREÇOS — reconsulta o preço ATUAL de cada item (mesmo preço do
+   * bipe, via catálogo/espelho, que já reflete a promoção vigente) e atualiza
+   * precoUnit/total. Motivo: itens puxados de MARCADO vêm com o preço CONGELADO
+   * na marcação (original), não o da promoção. Itens sem SKU resolvível
+   * (avulsos/manuais) são preservados. Mantém o desconto manual do item.
+   */
+  async recalcularPrecos(input: { saleId: string }): Promise<{
+    atualizados: number;
+    itens: Array<{ itemId: string; sku: string; descricao: string; antes: number; depois: number }>;
+  }> {
+    const sale = await (this.prisma as any).pdvSale.findUnique({
+      where: { id: input.saleId },
+      include: { items: true },
+    });
+    if (!sale) throw new BadRequestException('Venda não encontrada');
+    if (sale.status !== 'open') throw new BadRequestException('Só dá pra recalcular uma venda aberta');
+
+    const itens: Array<{ itemId: string; sku: string; descricao: string; antes: number; depois: number }> = [];
+    for (const it of sale.items as any[]) {
+      const sku = String(it.sku || '').trim();
+      // Sem código real (avulso/manual/placeholder) → mantém o preço digitado.
+      if (!sku || sku.startsWith('MARCADO-')) continue;
+      let info: any = null;
+      try { info = await this.catalog.getPdvProductInfo(sku); } catch { /* mantém */ }
+      const novo = info && Number(info.preco) > 0 ? Math.round(Number(info.preco) * 100) / 100 : null;
+      if (novo == null) continue;                       // não resolveu preço → mantém
+      const antes = Math.round((Number(it.precoUnit) || 0) * 100) / 100;
+      if (novo === antes) continue;                     // já está no preço atual
+      const desconto = Number(it.desconto) || 0;
+      const qty = Number(it.qty) || 1;
+      await (this.prisma as any).pdvSaleItem.update({
+        where: { id: it.id },
+        data: {
+          precoUnit: novo,
+          total: Math.max(0, Math.round((novo * qty - desconto) * 100) / 100),
+        },
+      });
+      itens.push({ itemId: it.id, sku, descricao: String(it.descricao || ''), antes, depois: novo });
+    }
+    await this.recalcTotals(input.saleId);
+    this.logger.log(`[pdv] recalcularPrecos venda ${input.saleId}: ${itens.length} item(ns) atualizado(s)`);
+    return { atualizados: itens.length, itens };
   }
 
   async updateItem(input: { saleId: string; itemId: string; qty?: number; desconto?: number; password?: string; motivo?: string; excludePromo?: boolean; forcePromo?: boolean }) {
@@ -2301,10 +2408,11 @@ export class PdvService {
         falhas.push(`REG ${reg}: ${r.error || 'falha'}`);
         continue;
       }
-      // Espelho nativo acompanha na hora (leituras já saem daqui)
+      // Espelho nativo acompanha na hora (leituras já saem daqui). Fecha tanto
+      // 'ativo' quanto 'puxado' (a peça vai virar venda de verdade).
       try {
         await (this.prisma as any).marcado.updateMany({
-          where: { registroGiga: BigInt(reg), status: 'ativo' },
+          where: { registroGiga: BigInt(reg), status: { in: ['ativo', 'puxado'] } },
           data: { status: 'fechado', saleId: sale.id, fechadoAt: new Date() },
         });
       } catch { /* sync horário reconcilia */ }
@@ -2418,6 +2526,7 @@ export class PdvService {
     if (it?.ref === 'MANUAL') return false;
     if (it?.ref === 'MARCADO') return false;
     if (it?.promoTag === 'MARCADO') return false;
+    if (it?.ref === 'FRETE') return false; // frete não é peça — sem estoque
     return true;
   }
 
@@ -2631,6 +2740,24 @@ export class PdvService {
         cancelReason: input.reason || null,
       },
     });
+
+    // Venda veio de "Puxar marcados" → DEVOLVE as peças pra tela de Marcados
+    // (status 'puxado' → 'ativo'). Sem isso ficariam presas fora da tela.
+    try {
+      const regsM = String((sale as any).marcadosRegistros || '')
+        .split(',')
+        .map((s: string) => Number(s.trim()))
+        .filter((n: number) => Number.isFinite(n) && n > 0);
+      if (regsM.length) {
+        const r = await (this.prisma as any).marcado.updateMany({
+          where: { registroGiga: { in: regsM.map((n) => BigInt(n)) }, status: 'puxado', saleId: sale.id },
+          data: { status: 'ativo', saleId: null },
+        });
+        if (r?.count) this.logger.log(`[pdv] cancel: ${r.count} marcado(s) devolvido(s) pra tela (venda ${sale.id})`);
+      }
+    } catch (e: any) {
+      this.logger.warn(`[pdv] cancel: erro ao devolver marcados pra tela: ${e?.message || e}`);
+    }
 
     // FIX: cancelar venda DEVOLVE o vale-troca usado nela. Sem isso, o cliente
     // que pagou com vale e teve a venda cancelada PERDIA o crédito (o vale
