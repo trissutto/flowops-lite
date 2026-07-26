@@ -146,6 +146,16 @@ export interface DreColuna {
    */
   despesaEmAberto: number;
 
+  /**
+   * Encargo sobre folha desta loja: quanto o regime do CNPJ dela manda pagar,
+   * quanto já foi lançado em guia e quanto a DRE completou. Null quando o
+   * CNPJ não tem percentual cadastrado.
+   */
+  encargoFolha: {
+    regime: string; pct: number; folha: number;
+    devido: number; jaLancado: number; complemento: number;
+  } | null;
+
   /** De onde veio cada real de despesa — espécie a espécie, do Contas a Pagar. */
   despesasDetalhe: Array<{ especie: string; grupo: DreGrupoEspecie; valor: number }>;
 }
@@ -508,7 +518,7 @@ export class DreService implements OnApplicationBootstrap {
       rateioRede: 0, despesasFinanceiras: 0, resultadoLiquido: 0, lucratividade: 0,
       pontoEquilibrio: null, pontoEquilibrioDia: null, faltaPraEquilibrio: null,
       cupons: 0, pecas: 0, ticketMedio: 0,
-      avisos: [], despesaEmAberto: 0, despesasDetalhe: [],
+      avisos: [], despesaEmAberto: 0, encargoFolha: null, despesasDetalhe: [],
     };
   }
 
@@ -803,6 +813,44 @@ export class DreService implements OnApplicationBootstrap {
           `(${[...t.faltando].join(', ')}) — essa parte entrou com taxa zero.`,
         );
       }
+    }
+
+    // ── 5c) ENCARGO SOBRE FOLHA, por CNPJ ────────────────────────────────
+    // Nasce NA LOJA (folha da loja × % do CNPJ dela), não como despesa da
+    // matriz rateada por faturamento — loja com mais gente paga mais.
+    // O que já estiver lançado (GPS/FGTS/ENCARGOS) MANDA: o cálculo só cobre
+    // a diferença, então quando a guia inteira entra, o complemento zera
+    // sozinho e ninguém conta duas vezes.
+    const encargos: any[] = await (this.prisma as any).dreEncargoFolha.findMany();
+    const pctPorCnpj = new Map<string, any>();
+    for (const e of encargos) pctPorCnpj.set(this.soDigitos(e.cnpj), e);
+
+    for (const col of colunas.values()) {
+      const cfg = col.cnpj ? pctPorCnpj.get(col.cnpj) : null;
+      if (!cfg) continue;
+
+      const folha = (col.despesasDetalhe || [])
+        .filter((d) => /SALARIO|^RH$|COMISS|ORDENADO|FOLHA/.test(this.semAcento(d.especie)))
+        .reduce((s, d) => s + d.valor, 0);
+      if (folha <= 0) continue;
+
+      const jaLancado = (col.despesasDetalhe || [])
+        .filter((d) => /FGTS|INSS|ENCARGO|GPS|DARF/.test(this.semAcento(d.especie)))
+        .reduce((s, d) => s + d.valor, 0);
+
+      const devido = folha * (Number(cfg.encargoPct) / 100);
+      const complemento = Math.max(0, devido - jaLancado);
+      if (complemento > 0.005) {
+        this.somaDespesa(col, `Encargos sobre folha (${cfg.regime})`, 'FIXA', complemento);
+      }
+      col.encargoFolha = {
+        regime: cfg.regime,
+        pct: Number(cfg.encargoPct),
+        folha,
+        devido,
+        jaLancado,
+        complemento,
+      };
     }
 
     // ── 5b) Despesa fixa GERENCIAL (o dono sabe que existe, não está lançada)
@@ -1809,6 +1857,51 @@ export class DreService implements OnApplicationBootstrap {
       update: { aliquotaPct: pct, observacao: input.observacao?.slice(0, 120) || null },
     });
     return { ok: true, id: row.id, cnpj, mes, aliquotaPct: pct };
+  }
+
+  /** Percentual de encargo sobre folha por CNPJ (Simples × Presumido). */
+  async upsertEncargoFolha(
+    input: { cnpj: string; regime?: string; encargoPct: number; observacao?: string },
+    usuario?: string,
+  ) {
+    const cnpj = this.soDigitos(input.cnpj);
+    if (cnpj.length !== 14) throw new BadRequestException('CNPJ inválido (14 dígitos)');
+    const pct = Number(input.encargoPct);
+    // Teto em 100%: encargo maior que a própria folha seria erro de digitação,
+    // não regime tributário.
+    if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
+      throw new BadRequestException('Percentual deve estar entre 0 e 100');
+    }
+    const regime = String(input.regime || 'PRESUMIDO').toUpperCase();
+    if (!['SIMPLES', 'PRESUMIDO', 'REAL'].includes(regime)) {
+      throw new BadRequestException('Regime inválido (SIMPLES | PRESUMIDO | REAL)');
+    }
+
+    const row = await (this.prisma as any).dreEncargoFolha.upsert({
+      where: { cnpj },
+      create: {
+        cnpj, regime, encargoPct: pct,
+        observacao: input.observacao?.slice(0, 160) || null,
+        criadoPor: usuario?.slice(0, 80) || null,
+      },
+      update: { regime, encargoPct: pct, observacao: input.observacao?.slice(0, 160) || null },
+    });
+    return { ok: true, id: row.id, cnpj, regime, encargoPct: pct };
+  }
+
+  async listEncargosFolha() {
+    const rows: any[] = await (this.prisma as any).dreEncargoFolha.findMany({
+      orderBy: { cnpj: 'asc' },
+    });
+    return rows.map((r) => ({
+      id: r.id, cnpj: r.cnpj, regime: r.regime,
+      encargoPct: Number(r.encargoPct), observacao: r.observacao,
+    }));
+  }
+
+  async deleteEncargoFolha(id: string) {
+    await (this.prisma as any).dreEncargoFolha.delete({ where: { id } });
+    return { ok: true };
   }
 
   async deleteAliquota(id: string) {

@@ -151,6 +151,29 @@ export class DreController {
     return this.svc.deleteAliquota(id);
   }
 
+  // ── encargo sobre folha por CNPJ (Simples × Presumido) ──
+
+  @Get('config/encargos-folha')
+  listEncargosFolha(@Req() req: any) {
+    this.requireAdmin(req);
+    return this.svc.listEncargosFolha();
+  }
+
+  @Post('config/encargo-folha')
+  upsertEncargoFolha(
+    @Req() req: any,
+    @Body() body: { cnpj: string; regime?: string; encargoPct: number; observacao?: string },
+  ) {
+    const usuario = this.requireAdmin(req);
+    return this.svc.upsertEncargoFolha(body, usuario);
+  }
+
+  @Delete('config/encargo-folha/:id')
+  deleteEncargoFolha(@Req() req: any, @Param('id') id: string) {
+    this.requireAdmin(req);
+    return this.svc.deleteEncargoFolha(id);
+  }
+
   // ── ajustes gerenciais (não tocam no Contas a Pagar) ──
 
   @Get('config/ajustes')
