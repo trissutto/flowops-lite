@@ -54,6 +54,16 @@ export interface DreColuna {
 
   faturamentoBruto: number;
   devolucoes: number;
+  /** Devolução em dinheiro/pix — cliente levou o dinheiro, não há venda nova. */
+  devolucoesDinheiro: number;
+  /** Devolução que virou vale/troca — a peça nova entra CHEIA no caixa depois. */
+  devolucoesTroca: number;
+  /**
+   * Ajuste negativo lançado DENTRO da venda (item manual com valor negativo,
+   * ex. "TROCA DEFEITO -39,90"). JÁ sai abatido do faturamento bruto porque o
+   * item negativo vai pro caixa do Giga — informativo, NÃO subtrai de novo.
+   */
+  ajustesNaVenda: number;
   receitaLiquida: number;
 
   cmv: number;
@@ -137,6 +147,10 @@ export class DreService {
     return parte / total;
   }
 
+  private brl(v: number): string {
+    return `R$ ${Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  }
+
   /**
    * Papel da loja na DRE. FILIAL (cadastro que já existe) vira FRANQUIA
    * automaticamente — franquia não é coluna de resultado do dono.
@@ -170,7 +184,8 @@ export class DreService {
   private colunaVazia(key: string, label: string, grupo: 'LOJA' | 'CANAL', cnpj: string | null): DreColuna {
     return {
       key, label, grupo, cnpj,
-      faturamentoBruto: 0, devolucoes: 0, receitaLiquida: 0,
+      faturamentoBruto: 0, devolucoes: 0, devolucoesDinheiro: 0, devolucoesTroca: 0,
+      ajustesNaVenda: 0, receitaLiquida: 0,
       cmv: 0, margemBruta: 0, margemBrutaPct: 0,
       impostos: 0, aliquotaPct: null, despesasVariaveis: 0,
       margemContribuicao: 0, margemContribuicaoPct: 0,
@@ -296,9 +311,18 @@ export class DreService {
       }
     }
 
-    // ── 3) Devoluções (Flow) — o caixa do Giga não registra devolução ──
+    // ── 3) Devoluções ────────────────────────────────────────────────────
+    // O caixa do Giga NÃO registra devolução (returns.service só mexe em
+    // estoque) e o vale-troca é FORMA DE PAGAMENTO — a peça nova entra CHEIA
+    // no caixa. Sem abater aqui, a mesma mercadoria contaria duas vezes:
+    // venda original + venda que consumiu o vale.
+    //
+    // Separado por modo porque são coisas diferentes: dinheiro/pix o cliente
+    // levou embora; troca/crédito volta como venda nova depois.
     const devolucoes: any[] = await this.prisma.$queryRawUnsafe(
-      `SELECT store_code AS "storeCode", SUM(valor_total)::float AS total
+      `SELECT store_code AS "storeCode",
+              SUM(CASE WHEN modo IN ('dinheiro','pix') THEN valor_total ELSE 0 END)::float AS dinheiro,
+              SUM(CASE WHEN modo NOT IN ('dinheiro','pix') THEN valor_total ELSE 0 END)::float AS troca
          FROM pdv_returns
         WHERE created_at >= $1 AND created_at <= $2 AND is_training = false
         GROUP BY store_code`,
@@ -308,9 +332,32 @@ export class DreService {
       const key = resolve(d.storeCode);
       if (!key) continue;
       const col = colunas.get(key)!;
-      col.devolucoes += Number(d.total || 0);
+      col.devolucoesDinheiro += Number(d.dinheiro || 0);
+      col.devolucoesTroca += Number(d.troca || 0);
+      col.devolucoes += Number(d.dinheiro || 0) + Number(d.troca || 0);
       // A peça voltou: o custo dela também sai do CMV.
-      col.cmv -= Number(d.total || 0) / MARKUP_FALLBACK;
+      col.cmv -= (Number(d.dinheiro || 0) + Number(d.troca || 0)) / MARKUP_FALLBACK;
+    }
+
+    // ── 3b) Ajuste negativo lançado DENTRO da venda ──────────────────────
+    // Item manual com valor negativo ("TROCA DEFEITO -39,90") vai pro caixa
+    // do Giga como linha negativa — ou seja, JÁ está abatido no faturamento
+    // bruto. É só medido pra aparecer na tela; abater de novo seria contar a
+    // mesma troca duas vezes (foi a suspeita do dono em 26/07).
+    const ajustes: any[] = await this.prisma.$queryRawUnsafe(
+      `SELECT s.store_code AS "storeCode", SUM(i.total)::float AS total
+         FROM pdv_sale_items i
+         JOIN pdv_sales s ON s.id = i.sale_id
+        WHERE s.finalized_at >= $1 AND s.finalized_at <= $2
+          AND s.status = 'finalized' AND s.is_training = false
+          AND i.total < 0
+        GROUP BY s.store_code`,
+      startDate, endDate,
+    );
+    for (const a of ajustes) {
+      const key = resolve(a.storeCode);
+      if (!key) continue;
+      colunas.get(key)!.ajustesNaVenda += Math.abs(Number(a.total || 0));
     }
 
     // ── 4) Canais digitais (LIVE / SITE) ──
@@ -415,6 +462,15 @@ export class DreService {
       if (!col.despesasFixas && col.faturamentoBruto) {
         col.avisos.push('Nenhuma despesa fixa lançada no Contas a Pagar pro período');
       }
+      // Os DOIS caminhos de troca em uso ao mesmo tempo: se a mesma troca foi
+      // lançada como item negativo E como devolução, ela é abatida em dobro.
+      if (col.ajustesNaVenda > 0 && col.devolucoesTroca > 0) {
+        col.avisos.push(
+          `Troca lançada dos 2 jeitos no período: ${this.brl(col.ajustesNaVenda)} como item negativo ` +
+          `dentro da venda (já abatido no faturamento) e ${this.brl(col.devolucoesTroca)} como devolução/vale. ` +
+          'Confira se alguma foi lançada duas vezes.',
+        );
+      }
     }
 
     for (const col of lista) col.despesasDetalhe.sort((a, b) => b.valor - a.valor);
@@ -495,6 +551,9 @@ export class DreService {
     for (const c of lista) {
       t.faturamentoBruto += c.faturamentoBruto;
       t.devolucoes += c.devolucoes;
+      t.devolucoesDinheiro += c.devolucoesDinheiro;
+      t.devolucoesTroca += c.devolucoesTroca;
+      t.ajustesNaVenda += c.ajustesNaVenda;
       t.cmv += c.cmv;
       t.impostos += c.impostos;
       t.despesasVariaveis += c.despesasVariaveis;
