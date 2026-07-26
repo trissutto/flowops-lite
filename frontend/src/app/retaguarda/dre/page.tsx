@@ -1126,6 +1126,24 @@ function BlocoTaxas({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void 
   const rotuloFaixa = (f: string) =>
     f === 'UNICA' ? '—' : f === '1' ? 'à vista' : f === '2-6' ? '2 a 6x' : '7 a 12x';
 
+  /**
+   * A tabela mostra a UNIÃO de: taxa já cadastrada + bandeira que APARECEU nas
+   * vendas do mês. Sem isso, quando o cadastro estava vazio a tela não tinha
+   * onde digitar — foi o que aconteceu no primeiro deploy. Agora as linhas
+   * nascem do movimento real: o que a rede passou, você tarifa.
+   */
+  const linhas = useMemo(() => {
+    const m = new Map<string, any>();
+    for (const b of bandeiras) {
+      m.set(`${b.bandeira}|${b.faixaParcela}`, {
+        id: null, forma: b.forma, bandeira: b.bandeira,
+        faixaParcela: b.faixaParcela, taxaPct: 0, novo: true,
+      });
+    }
+    for (const t of taxas) m.set(`${t.bandeira}|${t.faixaParcela}`, { ...t, novo: false });
+    return [...m.values()];
+  }, [taxas, bandeiras]);
+
   return (
     <Bloco
       titulo="Taxas de cartão e PIX"
@@ -1140,10 +1158,15 @@ function BlocoTaxas({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void 
       )}
 
       {porForma.map((forma) => {
-        const doGrupo = taxas.filter((t) => t.forma === forma);
+        // Maior volume primeiro: você começa pela taxa que mais dói.
+        const doGrupo = linhas
+          .filter((t) => t.forma === forma)
+          .sort((a, b) =>
+            (volumePor[`${b.bandeira}|${b.faixaParcela}`]?.volume || 0)
+            - (volumePor[`${a.bandeira}|${a.faixaParcela}`]?.volume || 0));
         if (!doGrupo.length) return null;
         return (
-          <div key={forma} className="mb-3">
+          <div key={forma} className="mb-4">
             <div className="text-[11px] font-bold text-slate-500 uppercase mb-1">
               {forma === 'PIX' ? 'PIX' : forma === 'DEBITO' ? 'Débito' : 'Crédito'}
             </div>
@@ -1151,29 +1174,35 @@ function BlocoTaxas({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void 
               <thead><tr className="text-xs text-slate-500 border-b border-[#E7E2D8]">
                 <th className="text-left py-1">Bandeira</th>
                 <th className="text-left">Parcelas</th>
-                <th className="text-right">Taxa %</th>
+                <th className="text-right w-24">Taxa %</th>
                 <th className="text-right">Volume no mês</th>
                 <th className="text-right">Custo estimado</th>
               </tr></thead>
               <tbody>
                 {doGrupo.map((t) => {
-                  const vol = volumePor[`${t.bandeira}|${t.faixaParcela}`];
-                  const valor = editando[t.id] ?? String(t.taxaPct).replace('.', ',');
-                  const custo = vol ? (vol.volume * Number(String(valor).replace(',', '.') || 0)) / 100 : 0;
+                  const chave = `${t.bandeira}|${t.faixaParcela}`;
+                  const vol = volumePor[chave];
+                  const valor = editando[chave] ?? (Number(t.taxaPct) ? String(t.taxaPct).replace('.', ',') : '');
+                  const num = Number(String(valor).replace(',', '.')) || 0;
+                  const custo = vol ? (vol.volume * num) / 100 : 0;
                   return (
-                    <tr key={t.id} className="border-b border-[#F5F2EB]">
+                    <tr key={chave} className="border-b border-[#F5F2EB]">
                       <td className="py-1 font-semibold">{t.bandeira}</td>
                       <td className="text-slate-500">{rotuloFaixa(t.faixaParcela)}</td>
                       <td className="text-right">
                         <input
                           value={valor}
-                          onChange={(e) => setEditando({ ...editando, [t.id]: e.target.value })}
+                          placeholder="0,00"
+                          inputMode="decimal"
+                          onChange={(e) => setEditando({ ...editando, [chave]: e.target.value })}
+                          onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
                           onBlur={() => {
-                            const v = editando[t.id];
-                            if (v != null && Number(v.replace(',', '.')) !== Number(t.taxaPct)) salvar(t, v);
+                            const v = editando[chave];
+                            if (v == null || v === '') return;
+                            if (Number(v.replace(',', '.')) !== Number(t.taxaPct)) salvar(t, v);
                           }}
                           className={`w-16 text-right px-1.5 py-0.5 rounded border text-sm ${
-                            Number(t.taxaPct) > 0 ? 'border-[#E7E2D8]' : 'border-amber-300 bg-amber-50'
+                            num > 0 ? 'border-[#E7E2D8]' : 'border-amber-300 bg-amber-50'
                           }`}
                         />
                         <span className="text-slate-400 ml-0.5">%</span>
@@ -1193,9 +1222,15 @@ function BlocoTaxas({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void 
         );
       })}
 
+      {linhas.length === 0 && (
+        <p className="text-xs text-slate-400">
+          Nenhuma venda com cartão/PIX no mês corrente — sem isso não há o que tarifar.
+        </p>
+      )}
+
       <p className="text-[11px] text-slate-400">
         As taxas valem pra rede toda. Volume e custo mostram o mês corrente, só pra você conferir a
-        ordem de grandeza — na DRE vale o período do filtro. Campo amarelo = taxa ainda em zero.
+        ordem de grandeza — na DRE vale o período do filtro. Campo amarelo = taxa ainda em branco. As linhas saem do que a rede passou no mês — digite e aperte Enter (ou clique fora) que salva sozinho.
       </p>
     </Bloco>
   );
