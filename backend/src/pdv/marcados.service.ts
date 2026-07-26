@@ -34,15 +34,38 @@ export class MarcadosService {
     private readonly catalog: WincredCatalogService,
   ) {}
 
-  /** Kill-switch: MARCADOS_NATIVE_READS=0 volta as consultas pro Giga ao vivo. */
+  /**
+   * MARCADOS_NATIVE_READS=1 liga as consultas pelo espelho nativo.
+   *
+   * DEFAULT OFF (26/07). Era `?? '' !== '0'` — ou seja, LIGADO quando a
+   * variável não existe no ambiente. Foi exatamente assim que o crediário
+   * sumiu do PDV em 25/07: a flag nunca foi criada no Railway e o deploy
+   * ativou a migração de leitura sozinho. Migração de leitura se liga por
+   * decisão, nunca por omissão.
+   */
   private get nativeReads(): boolean {
-    return String(process.env.MARCADOS_NATIVE_READS ?? '').trim() !== '0';
+    return String(process.env.MARCADOS_NATIVE_READS ?? '0').trim() === '1';
   }
 
   /** Leituras nativas valem se a flag está ligada E o espelho já foi importado. */
   private async useNative(): Promise<boolean> {
     if (!this.nativeReads) return false;
     try { return await this.mirror.hasMirror(); } catch { return false; }
+  }
+
+  /**
+   * Código do cliente no Giga tem padding de zero inconsistente ('01234' e
+   * '1234' são a MESMA pessoa). Comparar string crua contra o espelho devolve
+   * vazio e o marcado "some" — foi uma das causas do incidente do crediário.
+   */
+  private codVariants(cod: string | number): string[] {
+    const c = String(cod ?? '').trim();
+    const set = new Set<string>();
+    if (c) set.add(c);
+    const noZeros = c.replace(/^0+/, '');
+    if (noZeros) set.add(noZeros);
+    if (/^\d+$/.test(c)) set.add(String(Number(c)));
+    return [...set];
   }
 
   /** Converte a linha nativa pro shape UPPERCASE que as telas já consomem. */
@@ -385,7 +408,7 @@ export class MarcadosService {
     // 3. Busca marcados ativos do cliente — NATIVO primeiro (tabela marcados
     // no Postgres, "CHEGA DE GIGA" 21/07); Giga só se o espelho nunca rodou
     // ou com MARCADOS_NATIVE_READS=0.
-    let marcadosAtivos: any[];
+    let marcadosAtivos: any[] | null = null;
     if (await this.useNative()) {
       const nativos: any[] = await (this.prisma as any).marcado.findMany({
         where: {
@@ -393,14 +416,18 @@ export class MarcadosService {
           isTraining: false,
           OR: [
             ...(safeCpf ? [{ cpf: safeCpf }] : []),
-            ...(codCliente ? [{ codCliente: String(codCliente) }] : []),
+            ...(codCliente ? [{ codCliente: { in: this.codVariants(codCliente) } }] : []),
           ],
         },
         orderBy: [{ dataMarcacao: 'desc' }, { createdAt: 'desc' }],
         take: 200,
       });
-      marcadosAtivos = nativos.map((n) => this.toGigaShape(n));
-    } else {
+      // REDE DE SEGURANÇA: espelho SEM linhas pra este cliente NÃO é resposta —
+      // é possível mismatch/sync parcial. Cai pro Giga (a autoridade). Sem isso,
+      // o cliente aparece "sem marcado" e o PDV libera marcação acima do limite.
+      if (nativos.length > 0) marcadosAtivos = nativos.map((n) => this.toGigaShape(n));
+    }
+    if (marcadosAtivos == null) {
       const marcadosSql = `
         SELECT REGISTRO, NUMERO, CODIGO, DATA, DESCRICAO, QUANTIDADE, VALOR, VALORTOTAL, VENDEDOR, OPERADOR, LOJA
         FROM caixa
