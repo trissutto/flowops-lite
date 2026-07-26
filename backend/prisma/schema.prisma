@@ -4487,6 +4487,10 @@ model DreAjuste {
   grupo            String? @db.VarChar(12) // FIXA | VARIAVEL | FINANCEIRA
   /// Códigos de loja que NÃO pagam, separados por vírgula.
   lojasExcluidas   String? @map("lojas_excluidas") @db.VarChar(200)
+  /// Aplica SÓ nestas lojas (se preenchido, `lojasExcluidas` é ignorado).
+  /// Ex: marketing do SITE é 20% e o das lojas é 5% — dois ajustes, cada um
+  /// mirando o seu alvo, em vez de excluir todo o resto da rede na mão.
+  lojasIncluidas   String? @map("lojas_incluidas") @db.VarChar(200)
 
   ativo     Boolean  @default(true)
   criadoPor String?  @map("criado_por") @db.VarChar(80)

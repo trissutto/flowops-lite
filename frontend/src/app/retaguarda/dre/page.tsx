@@ -83,7 +83,7 @@ type Resultado = {
   };
   ajustes: Array<{
     id: string; tipo: string; descricao: string; fornecedorMatch: string | null;
-    valorMensal: number | null; percentual: number | null; grupo: string | null; lojasExcluidas: string | null;
+    valorMensal: number | null; percentual: number | null; grupo: string | null; lojasExcluidas: string | null; lojasIncluidas: string | null;
   }>;
   config: {
     markup: number;
@@ -1308,6 +1308,13 @@ function BlocoTaxas({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void 
   );
 }
 
+/** Descreve em quem o ajuste pega — whitelist tem precedência sobre exclusão. */
+function alvoDoAjuste(a: { lojasIncluidas: string | null; lojasExcluidas: string | null }) {
+  if (a.lojasIncluidas) return ` · só em ${a.lojasIncluidas}`;
+  if (a.lojasExcluidas) return ` · exceto ${a.lojasExcluidas}`;
+  return ' · todas as lojas';
+}
+
 /**
  * Ajustes gerenciais: corrigem o resultado SEM mexer no Contas a Pagar.
  * Dois casos reais que motivaram (26/07): tirar a VERISURE da DRE (contrato
@@ -1318,7 +1325,7 @@ function BlocoAjustes({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => voi
   const [lista, setLista] = useState<any[]>([]);
   const [novo, setNovo] = useState({
     tipo: 'DESPESA_FIXA', descricao: '', fornecedorMatch: '',
-    valorMensal: '', percentual: '', grupo: 'FIXA', lojasExcluidas: '',
+    valorMensal: '', percentual: '', grupo: 'FIXA', lojasExcluidas: '', lojasIncluidas: '',
   });
 
   const carregar = useCallback(() => {
@@ -1337,7 +1344,7 @@ function BlocoAjustes({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => voi
         }),
       });
       avisar('ok', 'Ajuste salvo');
-      setNovo({ ...novo, descricao: '', fornecedorMatch: '', valorMensal: '', percentual: '', lojasExcluidas: '' });
+      setNovo({ ...novo, descricao: '', fornecedorMatch: '', valorMensal: '', percentual: '', lojasExcluidas: '', lojasIncluidas: '' });
       carregar();
     } catch (e: any) { avisar('erro', e?.message || 'Falhou'); }
   };
@@ -1393,9 +1400,14 @@ function BlocoAjustes({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => voi
                 <option value="FINANCEIRA">Despesa financeira</option>
               </select>
             </Campo>
+            <Campo label="Só nestas lojas">
+              <input value={novo.lojasIncluidas} onChange={(e) => setNovo({ ...novo, lojasIncluidas: e.target.value })}
+                placeholder="SITE" title="Preenchido, o ajuste vale SÓ nestas — o campo ao lado é ignorado"
+                className="px-2 py-1.5 rounded-lg border border-[#E7E2D8] text-sm w-36" />
+            </Campo>
             <Campo label="Lojas que NÃO pagam">
               <input value={novo.lojasExcluidas} onChange={(e) => setNovo({ ...novo, lojasExcluidas: e.target.value })}
-                placeholder="SANTOS" className="px-2 py-1.5 rounded-lg border border-[#E7E2D8] text-sm w-44" />
+                placeholder="SANTOS" className="px-2 py-1.5 rounded-lg border border-[#E7E2D8] text-sm w-40" />
             </Campo>
           </>
         )}
@@ -1422,8 +1434,8 @@ function BlocoAjustes({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => voi
                   {a.tipo === 'EXCLUIR_FORNECEDOR'
                     ? `fornecedor contém “${a.fornecedorMatch}” → fora da DRE`
                     : a.tipo === 'DESPESA_PCT'
-                      ? `${a.percentual}% do faturamento de cada loja${a.lojasExcluidas ? ` · exceto ${a.lojasExcluidas}` : ''}`
-                      : `${brl(a.valorMensal || 0)}/mês por loja${a.lojasExcluidas ? ` · exceto ${a.lojasExcluidas}` : ''}`}
+                      ? `${a.percentual}% do faturamento${alvoDoAjuste(a)}`
+                      : `${brl(a.valorMensal || 0)}/mês por loja${alvoDoAjuste(a)}`}
                 </td>
                 <td className="text-right">
                   <button onClick={() => remover(a.id)} className="p-1 hover:bg-rose-50 rounded text-rose-500">
