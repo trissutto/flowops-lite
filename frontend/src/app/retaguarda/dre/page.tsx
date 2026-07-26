@@ -510,7 +510,7 @@ function Conciliacao({ data }: { data: Resultado }) {
       <p className="text-[11px] text-slate-400 mt-2">
         A DRE mostra o resultado das <b>lojas próprias</b>. Franquia entra só pelos royalties —
         o faturamento dela não é receita sua.
-        {temFora && ` Lojas sem papel definido na DRE: ${c.lojasForaDaDre.join(', ')}.`}
+        {temFora && ` Fora da DRE (depósito/CD ou marcada FORA): ${c.lojasForaDaDre.join(', ')}.`}
       </p>
     </div>
   );
