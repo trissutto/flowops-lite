@@ -205,6 +205,56 @@ export class DreService implements OnApplicationBootstrap {
         },
       },
       {
+        chave: 'dre_especies_limpeza_2607',
+        rotulo: 'espécies de despesa criadas + formas de pagamento inativadas',
+        run: async () => {
+          // 1) CRIA o que faltava. Sem isso, inativar OUTROS/BOLETO deixaria o
+          // dono sem onde lançar contador, marketing, tecnologia — o catálogo
+          // do Giga não tinha NENHUMA espécie de despesa real além de água,
+          // energia, internet, aluguel e folha.
+          const novas: Array<[string, DreGrupoEspecie]> = [
+            ['CONTADOR', 'FIXA'],
+            ['MARKETING', 'VARIAVEL'],
+            ['PUBLICIDADE', 'VARIAVEL'],
+            ['TECNOLOGIA', 'FIXA'],
+            ['MANUTENCAO', 'FIXA'],
+            ['LIMPEZA', 'FIXA'],
+            ['SEGURANCA', 'FIXA'],
+            ['SEGUROS', 'FIXA'],
+            ['MATERIAL ESCRITORIO', 'FIXA'],
+            ['TELEFONE', 'FIXA'],
+            ['CONDOMINIO', 'FIXA'],
+            ['IPTU', 'FIXA'],
+            ['ENCARGOS', 'FIXA'],
+            ['PRO-LABORE', 'FIXA'],
+            ['VEICULOS', 'FIXA'],
+            ['FRETE', 'VARIAVEL'],
+            ['TAXA BANCARIA', 'VARIAVEL'],
+            ['JURIDICO', 'FIXA'],
+            ['TARIFAS E JUROS', 'FINANCEIRA'],
+          ];
+          for (const [nome, dreGrupo] of novas) {
+            await (this.prisma as any).especieConta.upsert({
+              where: { nome },
+              create: { nome, dreGrupo },
+              update: { ativa: true },
+            });
+          }
+
+          // 2) INATIVA as formas de pagamento herdadas do Giga (pedido do dono
+          // 26/07). NÃO apaga: as contas históricas continuam apontando pra
+          // elas. Só somem do lançamento novo e da tela de classificação.
+          const aposentar = [
+            'CARNE', 'DEPOSITO', 'PROMISSORIA', 'SEM ESPECIE',
+            'CHEQUE', 'DUPLICATA', 'BOLETO', 'OUTROS',
+          ];
+          await (this.prisma as any).especieConta.updateMany({
+            where: { nome: { in: aposentar } },
+            data: { ativa: false },
+          });
+        },
+      },
+      {
         chave: 'dre_taxas_cartao_2607',
         rotulo: 'grade de taxas de cartão/PIX (percentual zerado)',
         run: async () => {
@@ -1198,12 +1248,17 @@ export class DreService implements OnApplicationBootstrap {
         dreGrupoEfetivo: this.grupoDaLoja(s),
         configurado: !!s.dreGrupo,
       })),
-      especies: especies.map((e: any) => ({
+      // Só as ATIVAS na tela de classificação — inativa não recebe conta nova,
+      // não faz sentido pedir pro dono classificar.
+      especies: especies.filter((e: any) => e.ativa !== false).map((e: any) => ({
         id: e.id,
         nome: e.nome,
         dreGrupo: e.dreGrupo || null,
         dreGrupoEfetivo: this.grupoDaEspecie(e),
         configurado: !!e.dreGrupo,
+      })),
+      especiesInativas: especies.filter((e: any) => e.ativa === false).map((e: any) => ({
+        id: e.id, nome: e.nome,
       })),
       aliquotas: aliquotas.map((a: any) => ({
         id: a.id, cnpj: a.cnpj, mes: a.mes,
@@ -1223,6 +1278,51 @@ export class DreService implements OnApplicationBootstrap {
     }
     await (this.prisma as any).store.update({ where: { code }, data: { dreGrupo: g } });
     return { ok: true, code, dreGrupo: g };
+  }
+
+  /**
+   * CRIA espécie de conta. Não existia no sistema: o catálogo era fechado nos
+   * 17 nomes herdados do Giga, e metade nem era natureza de despesa (BOLETO,
+   * CHEQUE, DEPOSITO…). Sem isso, toda despesa nova era obrigada a virar
+   * "OUTROS" — que cai em despesa FIXA e mente na DRE.
+   */
+  async criarEspecie(input: { nome: string; dreGrupo?: string; restrita?: boolean }, usuario?: string) {
+    const nome = String(input.nome || '').trim().toUpperCase().slice(0, 30);
+    if (nome.length < 2) throw new BadRequestException('Nome da espécie obrigatório');
+
+    const existente = await (this.prisma as any).especieConta.findUnique({ where: { nome } });
+    if (existente) {
+      // Já existe mas estava inativa → reativa em vez de estourar erro.
+      if (!existente.ativa) {
+        await (this.prisma as any).especieConta.update({ where: { nome }, data: { ativa: true } });
+        return { ok: true, id: existente.id, nome, reativada: true };
+      }
+      throw new BadRequestException(`Espécie "${nome}" já existe`);
+    }
+
+    const g = String(input.dreGrupo || '').toUpperCase();
+    const row = await (this.prisma as any).especieConta.create({
+      data: {
+        nome,
+        restrita: !!input.restrita,
+        dreGrupo: ['VARIAVEL', 'FIXA', 'FINANCEIRA', 'CMV', 'IMPOSTO', 'IGNORAR'].includes(g) ? g : null,
+      },
+    });
+    this.logger.log(`[dre] espécie "${nome}" criada por ${usuario || '—'}`);
+    return { ok: true, id: row.id, nome };
+  }
+
+  /**
+   * INATIVA a espécie (não apaga). As contas históricas continuam apontando
+   * pra ela — apagar de verdade quebraria 20 anos de Contas a Pagar migrado
+   * do Giga. Some do lançamento novo e da tela de classificação.
+   */
+  async setEspecieAtiva(id: string, ativa: boolean) {
+    const row = await (this.prisma as any).especieConta.update({
+      where: { id },
+      data: { ativa },
+    });
+    return { ok: true, id, nome: row.nome, ativa };
   }
 
   async setGrupoEspecie(id: string, grupo: string) {

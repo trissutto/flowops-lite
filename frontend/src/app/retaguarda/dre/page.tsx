@@ -922,6 +922,7 @@ const AJUDA_ESPECIE: Record<string, string> = {
 function AbaConfig({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
   const [cfg, setCfg] = useState<any>(null);
   const [loading, setLoading] = useState(false);
+  const [novaEspecie, setNovaEspecie] = useState({ nome: '', dreGrupo: 'FIXA' });
   const [novaAliq, setNovaAliq] = useState({ cnpj: '', mes: new Date().toISOString().slice(0, 7), aliquotaPct: '', observacao: '' });
 
   const carregar = useCallback(async () => {
@@ -939,6 +940,24 @@ function AbaConfig({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }
   const salvarEspecie = async (id: string, grupo: string) => {
     try { await api(`/dre/config/especie/${id}`, { method: 'PATCH', body: JSON.stringify({ grupo }) }); avisar('ok', 'Espécie classificada'); carregar(); }
     catch (e: any) { avisar('erro', e?.message || 'Falhou'); }
+  };
+  const criarEspecie = async () => {
+    const nome = novaEspecie.nome.trim();
+    if (nome.length < 2) return avisar('erro', 'Informe o nome da espécie');
+    try {
+      const r = await api<any>('/dre/config/especie', { method: 'POST', body: JSON.stringify(novaEspecie) });
+      avisar('ok', r?.reativada ? `${nome} voltou a ficar disponível` : `Espécie ${nome} criada`);
+      setNovaEspecie({ nome: '', dreGrupo: 'FIXA' });
+      carregar();
+    } catch (e: any) { avisar('erro', e?.message || 'Falhou'); }
+  };
+  const inativarEspecie = async (e: any) => {
+    try { await api(`/dre/config/especie/${e.id}`, { method: 'DELETE' }); avisar('ok', `${e.nome} saiu do lançamento`); carregar(); }
+    catch (err: any) { avisar('erro', err?.message || 'Falhou'); }
+  };
+  const reativarEspecie = async (e: any) => {
+    try { await api(`/dre/config/especie/${e.id}/reativar`, { method: 'PATCH' }); avisar('ok', `${e.nome} voltou`); carregar(); }
+    catch (err: any) { avisar('erro', err?.message || 'Falhou'); }
   };
   const addAliquota = async () => {
     try {
@@ -1055,9 +1074,34 @@ function AbaConfig({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }
         titulo="Classificação das espécies de conta"
         subtitulo="Onde cada tipo de despesa entra na DRE. Compra de mercadoria e DAS ficam FORA — entrariam duas vezes"
       >
+        {/* Criar espécie — não existia no sistema até 26/07. Sem isso, toda
+            despesa nova era obrigada a virar "OUTROS" e cair em FIXA. */}
+        <div className="flex flex-wrap items-end gap-2 mb-3">
+          <Campo label="Nova espécie">
+            <input
+              value={novaEspecie.nome}
+              onChange={(e) => setNovaEspecie({ ...novaEspecie, nome: e.target.value.toUpperCase() })}
+              onKeyDown={(e) => { if (e.key === 'Enter') criarEspecie(); }}
+              placeholder="ex: CONTADOR"
+              maxLength={30}
+              className="px-2 py-1.5 rounded-lg border border-[#E7E2D8] text-sm w-52"
+            />
+          </Campo>
+          <Campo label="Entra na DRE como">
+            <select value={novaEspecie.dreGrupo} onChange={(e) => setNovaEspecie({ ...novaEspecie, dreGrupo: e.target.value })}
+              className="px-2 py-1.5 rounded-lg border border-[#E7E2D8] text-sm">
+              {cfg.grupos.especie.map((g: string) => <option key={g} value={g}>{g}</option>)}
+            </select>
+          </Campo>
+          <button onClick={criarEspecie}
+            className="bg-[#B8912B] hover:bg-[#8C7325] text-white font-bold px-3 py-1.5 rounded-lg text-sm flex items-center gap-1.5">
+            <Plus className="w-4 h-4" /> Criar
+          </button>
+        </div>
+
         <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-2">
           {cfg.especies.map((e: any) => (
-            <div key={e.id} className="flex items-center gap-2 border border-[#E7E2D8] rounded-lg px-3 py-1.5">
+            <div key={e.id} className="flex items-center gap-1.5 border border-[#E7E2D8] rounded-lg pl-3 pr-1.5 py-1.5">
               <div className="flex-1 min-w-0 text-sm font-semibold truncate">{e.nome}</div>
               <select
                 value={e.dreGrupo || e.dreGrupoEfetivo}
@@ -1069,12 +1113,40 @@ function AbaConfig({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }
               >
                 {cfg.grupos.especie.map((g: string) => <option key={g} value={g}>{g}</option>)}
               </select>
+              <button
+                onClick={() => inativarEspecie(e)}
+                title="Tirar do lançamento novo (o histórico continua)"
+                className="p-1 hover:bg-rose-50 rounded text-slate-300 hover:text-rose-500"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
             </div>
           ))}
         </div>
         <p className="text-[11px] text-slate-400 mt-2">
           Fundo amarelo = ainda não confirmada por você (está valendo a classificação automática pelo nome).
+          Excluir só tira do lançamento novo — as contas antigas continuam apontando pra ela.
         </p>
+
+        {cfg.especiesInativas?.length > 0 && (
+          <div className="mt-3 pt-3 border-t border-[#F0EDE6]">
+            <div className="text-[11px] font-bold text-slate-400 uppercase mb-1.5">
+              Fora de uso ({cfg.especiesInativas.length})
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {cfg.especiesInativas.map((e: any) => (
+                <button
+                  key={e.id}
+                  onClick={() => reativarEspecie(e)}
+                  title="Voltar a usar"
+                  className="text-[11px] px-2 py-1 rounded-full border border-[#E7E2D8] text-slate-400 hover:bg-[#FBF6E6] hover:text-slate-600"
+                >
+                  {e.nome} ↩
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </Bloco>
     </div>
   );
