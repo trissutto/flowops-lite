@@ -345,6 +345,29 @@ export class DreService {
       col.devolucoes += Number(d.dinheiro || 0) + Number(d.troca || 0);
     }
 
+    // ── 3a) SANIDADE DA CONTAGEM DE CUPOM ────────────────────────────────
+    // O caixa do Giga é SUPERSET do PdvSale (tem as vendas do PDV via outbox
+    // MAIS as lançadas direto no Giga). Logo cupons do caixa < vendas do
+    // PdvSale é IMPOSSÍVEL — quando acontece, a chave do cupom está
+    // colapsando (foi assim que o ticket médio foi pra R$ 1.000 em 26/07).
+    // Fica no código como alarme permanente: se a numeração reiniciar por
+    // caixa/operador e (data, número) não bastar, a tela avisa sozinha.
+    const vendasFlow: any[] = await this.prisma.$queryRawUnsafe(
+      `SELECT store_code AS "storeCode", COUNT(*)::int AS vendas
+         FROM pdv_sales
+        WHERE finalized_at >= $1 AND finalized_at <= $2
+          AND status = 'finalized' AND is_training = false
+          AND (payment_method IS NULL OR payment_method <> 'MARCADO')
+        GROUP BY store_code`,
+      startDate, endDate,
+    );
+    const cuponsFlow = new Map<string, number>();
+    for (const v of vendasFlow) {
+      const key = resolve(v.storeCode);
+      if (!key) continue;
+      cuponsFlow.set(key, (cuponsFlow.get(key) || 0) + Number(v.vendas || 0));
+    }
+
     // ── 3b) Ajuste negativo lançado DENTRO da venda ──────────────────────
     // Item manual com valor negativo ("TROCA DEFEITO -39,90") vai pro caixa
     // do Giga como linha negativa — ou seja, JÁ está abatido no faturamento
@@ -464,6 +487,15 @@ export class DreService {
 
       if (!col.despesasFixas && col.faturamentoBruto) {
         col.avisos.push('Nenhuma despesa fixa lançada no Contas a Pagar pro período');
+      }
+      // Alarme de cupom colapsado (ver bloco 3a).
+      const noFlow = cuponsFlow.get(col.key) || 0;
+      if (noFlow > 0 && col.cupons > 0 && col.cupons < noFlow) {
+        col.avisos.push(
+          `Contagem de cupom suspeita: ${col.cupons} no caixa do Giga contra ${noFlow} vendas no PDV — ` +
+          'o caixa contém o PDV, então não pode ter menos. O ticket médio está inflado; ' +
+          'a numeração do cupom deve reiniciar por caixa/operador, não só por dia.',
+        );
       }
       // Os DOIS caminhos de troca em uso ao mesmo tempo: se a mesma troca foi
       // lançada como item negativo E como devolução, ela é abatida em dobro.
@@ -722,8 +754,10 @@ export class DreService {
 
     if (linha === 'FATURAMENTO') {
       const vendas: any[] = await this.prisma.$queryRawUnsafe(
+        // Aqui o GROUP BY já é por DIA, então DISTINCT numero basta — mas
+        // mantém a chave completa pra não virar armadilha se o agrupamento mudar.
         `SELECT to_char(data_fec, 'YYYY-MM-DD') AS dia,
-                COUNT(DISTINCT numero)::int AS cupons,
+                COUNT(DISTINCT (data_fec, numero))::int AS cupons,
                 COALESCE(SUM(valor_total), 0)::float8 AS total
            FROM giga_caixa_mov
           WHERE data_fec >= $1 AND data_fec < $2
