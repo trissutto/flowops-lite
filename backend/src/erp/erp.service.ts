@@ -9735,16 +9735,19 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     Array<{ storeCode: string; faturamento: number; cupons: number; pecas: number; ticketMedio: number }>
   > {
     const rows: any[] = await (this.prismaFlow as any).$queryRawUnsafe(
-      // CUPOM = (DATA DE FECHAMENTO, NÚMERO) — não só o NÚMERO.
-      // O NUMERO do cupom REINICIA (por dia/caixa), então `COUNT(DISTINCT
-      // numero)` num período de vários dias colapsava cupons diferentes num
-      // só: o mês fechava com ~1/3 dos cupons e o ticket médio ia pra
-      // R$ 1.000 numa loja de moda. Prova (26/07): no mesmo período o caixa
-      // do Giga contava 1.064 cupons e o PdvSale contava 2.685 — sendo que o
-      // caixa é SUPERSET do PdvSale, é impossível ter menos.
-      // A loja não entra na chave porque o GROUP BY já isola por loja.
+      // CHAVE HÍBRIDA — necessária porque o espelho guarda o NUMERO JÁ
+      // ACHATADO (string arredondada do FLOAT; ver getCaixaMovRaw). Enquanto
+      // não houver re-backfill, `numero` sozinho colapsa aqui.
+      //
+      //   obs_pedido = 'flowops-<id>' → identifica a venda do PDV sem
+      //     ambiguidade. É a maioria do movimento.
+      //   numero     → cobre a venda nativa do Wincred, cuja numeração está
+      //     na casa dos 295 mil (6 dígitos) e por isso SOBREVIVE ao float.
+      //
+      // Depois do re-backfill com CAST(NUMERO AS UNSIGNED), isto pode voltar
+      // a ser um COUNT(DISTINCT numero) simples.
       `SELECT loja AS "storeCode",
-              COUNT(DISTINCT (data_fec, numero))::int AS cupons,
+              COUNT(DISTINCT COALESCE(NULLIF(btrim(obs_pedido), ''), 'n:' || numero))::int AS cupons,
               COALESCE(SUM(quantidade), 0)::float8 AS pecas,
               COALESCE(SUM(valor_total), 0)::float8 AS faturamento
          FROM giga_caixa_mov
@@ -9788,11 +9791,15 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       // no dia X+1) ficavam fora no antigo filtro por DATA. Trocando pra
       // DATAFEC, bate exato com Wincred em todas as lojas.
       const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
-        // CUPOM = (DATAFEC, NUMERO) — o NUMERO reinicia e sozinho colapsa
-        // cupons de dias diferentes. Mesma correção do espelho acima.
+        // CUPOM = NUMERO lido como INTEIRO. Nada de CONCAT/CAST AS CHAR: a
+        // coluna é FLOAT de 4 bytes e qualquer conversão pra texto arredonda
+        // pra ~7 dígitos, achatando ~100 cupons num só (a numeração do Flow
+        // está em 11,4 milhões). E DATAFEC NÃO entra na chave — o NUMERO é
+        // sequencial global, nunca reinicia; misturar a data foi tentativa
+        // minha anterior e só piorou, porque o CONCAT forçava a string.
         `SELECT
             c.LOJA AS storeCode,
-            COUNT(DISTINCT CONCAT(c.DATAFEC, '|', c.NUMERO)) AS cupons,
+            COUNT(DISTINCT CAST(c.NUMERO AS UNSIGNED)) AS cupons,
             SUM(c.QUANTIDADE) AS pecas,
             SUM(c.VALORTOTAL) AS faturamento
          FROM caixa c
@@ -9872,8 +9879,22 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         throw new Error(`caixa sem coluna obrigatória ${req} — espelho caixa_mov não suportado neste schema`);
       }
     }
+    // NUMERO sai com CAST(... AS UNSIGNED) DE PROPÓSITO.
+    //
+    // A coluna `caixa.NUMERO` é FLOAT de 4 bytes — só ~7 dígitos exatos. A
+    // numeração que o Flow gera está em 11,4 MILHÕES (8 dígitos), então ao
+    // virar texto ela é ARREDONDADA: os cupons 11422647, 11422651 e 11422653
+    // viram todos "11422700". Cerca de 100 vendas colapsam num número só, e
+    // o espelho guarda esse texto achatado.
+    //
+    // Medido em 25/06–25/07/2026: a rede tinha 3.176 cupons e a leitura por
+    // texto devolvia 478 — colapso de 6,6×, que é a origem do ticket médio de
+    // R$ 2.722. O CAST resolve na ORIGEM, antes de o driver converter.
+    const selectCols = present.map((c) =>
+      c === 'NUMERO' ? 'CAST(NUMERO AS UNSIGNED) AS NUMERO' : c,
+    );
     const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
-      `SELECT ${present.join(', ')}
+      `SELECT ${selectCols.join(', ')}
          FROM caixa
         WHERE DATA >= ? AND DATA < ?`,
       [from, to],
