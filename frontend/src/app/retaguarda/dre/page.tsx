@@ -49,7 +49,7 @@ type Coluna = {
   lucratividade: number;
   pontoEquilibrio: number | null; pontoEquilibrioDia: string | null; faltaPraEquilibrio: number | null;
   cupons: number; pecas: number; ticketMedio: number;
-  avisos: string[]; cmvEstimadoPct: number;
+  avisos: string[];
   despesasDetalhe: Array<{ especie: string; grupo: string; valor: number }>;
 };
 
@@ -76,9 +76,8 @@ type Resultado = {
     semColuna: number; emFranquia: number; total: number;
   };
   config: {
-    markupFallback: number;
+    markup: number;
     aliquotaPadrao: number;
-    cmvIndisponivel: boolean;
     lojasSemGrupo: string[];
     especiesSemGrupo: number;
     contasSemEspecie: { valor: number; lojas: string[] };
@@ -98,7 +97,7 @@ const LINHAS: Array<{
   { campo: 'devolucoesDinheiro', label: '( - ) Devolução em dinheiro/pix', tipo: 'deducao', nota: 'Cliente levou o dinheiro' },
   { campo: 'devolucoesTroca', label: '( - ) Devolução que virou vale/troca', tipo: 'deducao', nota: 'A peça nova entra cheia no faturamento depois' },
   { campo: 'receitaLiquida', label: '( = ) Receita líquida', tipo: 'subtotal' },
-  { campo: 'cmv', label: '( - ) CMV (custo das peças vendidas)', tipo: 'deducao' },
+  { campo: 'cmv', label: '( - ) CMV (custo das peças vendidas)', tipo: 'deducao', nota: 'Venda ÷ 2,65 (markup)' },
   { campo: 'margemBruta', label: '( = ) Margem bruta', tipo: 'subtotal', pctCampo: 'margemBrutaPct' },
   { campo: 'impostos', label: '( - ) Impostos', tipo: 'deducao', nota: '10% da receita líquida' },
   { campo: 'despesasVariaveis', label: '( - ) Despesas variáveis', tipo: 'deducao', drill: 'VARIAVEL', grupoDespesa: 'VARIAVEL' },
@@ -595,12 +594,7 @@ function BlocoFranquias({ data }: { data: Resultado }) {
 /** Avisos de qualidade do dado — o painel diz onde ele está chutando. */
 function Qualidade({ data }: { data: Resultado }) {
   const itens: string[] = [];
-  if (data.config.cmvIndisponivel) {
-    itens.push(
-      'O espelho do caixa não cobre este período — o CMV (e portanto a margem) está zerado. ' +
-      'Rode a sincronização do espelho ou escolha um período mais recente.',
-    );
-  }
+
   if (data.config.lojasSemGrupo.length) {
     itens.push(
       `${data.config.lojasSemGrupo.length} loja(s) sem papel definido na DRE (${data.config.lojasSemGrupo.join(', ')}) — ` +
@@ -661,7 +655,7 @@ function Qualidade({ data }: { data: Resultado }) {
         ))}
       </ul>
       <div className="text-[11px] text-amber-700 mt-2">
-        Fonte: {data.fonte}. Imposto padrão de {data.config.aliquotaPadrao}% sobre a receita líquida
+        Fonte: {data.fonte}. CMV = venda ÷ {data.config.markup} · imposto de {data.config.aliquotaPadrao}% sobre a receita líquida
         (dá pra sobrepor por CNPJ/mês em Configuração).
       </div>
     </div>

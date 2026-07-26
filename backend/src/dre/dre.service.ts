@@ -15,7 +15,7 @@ import { ErpService } from '../erp/erp.service';
  * │ o caixa do Giga é SUPERSET: contém as vendas do PDV (via outbox) MAIS   │
  * │ as lançadas direto no Giga (WhatsApp, loja fora do PDV novo). Pro       │
  * │ resultado do dono não pode faltar venda.                                │
- * │ O CMV sai da MESMA linha de caixa (getCustoVendidoPorLoja).             │
+ * │ O CMV NAO vem do cadastro: e VENDA / 2,65 (markup do dono).             │
  * └─────────────────────────────────────────────────────────────────────────┘
  *
  * REDE × FRANQUIAS (decisão do dono 26/07): franquia NÃO é resultado dele.
@@ -28,8 +28,18 @@ import { ErpService } from '../erp/erp.service';
  * CNPJ/mês); resultado 4-WALL separado do rateio da matriz.
  */
 
-/** Markup padrão da planilha (preço = custo × 2,7) — último fallback de CMV. */
-const MARKUP_FALLBACK = 2.7;
+/**
+ * CMV = VENDA ÷ MARKUP (decisão do dono 26/07: markup 2,65).
+ *
+ * NÃO usa o campo CUSTO do cadastro do Giga de propósito — ele está
+ * desatualizado/zerado em parte da base, o que distorcia a margem sem aviso.
+ * Markup fixo é premissa gerencial explícita: todo mundo enxerga a regra.
+ *
+ * Consequência assumida: a margem BRUTA fica igual em todas as colunas
+ * (1 − 1/2,65 = 62,3%). Quem diferencia loja de loja daqui pra baixo é
+ * despesa, imposto e rateio — não o mix de produto.
+ */
+const MARKUP = 2.65;
 
 /** Alíquota efetiva padrão — decisão do dono 26/07 ("considere 10%"). */
 const ALIQUOTA_PADRAO = 10;
@@ -94,7 +104,6 @@ export interface DreColuna {
   ticketMedio: number;
 
   avisos: string[];
-  cmvEstimadoPct: number;
 
   /** De onde veio cada real de despesa — espécie a espécie, do Contas a Pagar. */
   despesasDetalhe: Array<{ especie: string; grupo: DreGrupoEspecie; valor: number }>;
@@ -203,7 +212,7 @@ export class DreService {
       rateioRede: 0, despesasFinanceiras: 0, resultadoLiquido: 0, lucratividade: 0,
       pontoEquilibrio: null, pontoEquilibrioDia: null, faltaPraEquilibrio: null,
       cupons: 0, pecas: 0, ticketMedio: 0,
-      avisos: [], cmvEstimadoPct: 0, despesasDetalhe: [],
+      avisos: [], despesasDetalhe: [],
     };
   }
 
@@ -306,20 +315,9 @@ export class DreService {
       col.pecas += g.pecas;
     }
 
-    // ── 2) CMV: mesma linha de caixa do faturamento ──
-    const custos = await this.erp.getCustoVendidoPorLoja(inicio, fimExclusive, MARKUP_FALLBACK);
-    const cmvIndisponivel = custos == null;
-    if (custos) {
-      for (const c of custos) {
-        const key = resolve(c.storeCode);
-        if (!key) continue;
-        const col = colunas.get(key)!;
-        col.cmv += c.cmv;
-        if (col.faturamentoBruto > 0) {
-          col.cmvEstimadoPct = Math.min(1, c.receitaSemCusto / col.faturamentoBruto);
-        }
-      }
-    }
+    // ── 2) CMV = receita ÷ markup ────────────────────────────────────────
+    // Aplicado no fim (depois das devoluções), sobre a RECEITA LÍQUIDA: peça
+    // devolvida não vendeu, então o custo dela sai junto automaticamente.
 
     // ── 3) Devoluções ────────────────────────────────────────────────────
     // O caixa do Giga NÃO registra devolução (returns.service só mexe em
@@ -345,8 +343,6 @@ export class DreService {
       col.devolucoesDinheiro += Number(d.dinheiro || 0);
       col.devolucoesTroca += Number(d.troca || 0);
       col.devolucoes += Number(d.dinheiro || 0) + Number(d.troca || 0);
-      // A peça voltou: o custo dela também sai do CMV.
-      col.cmv -= (Number(d.dinheiro || 0) + Number(d.troca || 0)) / MARKUP_FALLBACK;
     }
 
     // ── 3b) Ajuste negativo lançado DENTRO da venda ──────────────────────
@@ -437,6 +433,10 @@ export class DreService {
 
     for (const col of lista) {
       col.receitaLiquida = col.faturamentoBruto - col.devolucoes;
+      // CMV = venda ÷ 2,65 sobre a receita LÍQUIDA — peça devolvida não
+      // vendeu, então o custo dela já sai junto. Regra ÚNICA: vale pra loja
+      // física e pra canal digital (LIVE/SITE) igual.
+      col.cmv = col.receitaLiquida / MARKUP;
       col.margemBruta = col.receitaLiquida - col.cmv;
 
       const aliq = (col.cnpj ? overrides.get(col.cnpj) : undefined) ?? ALIQUOTA_PADRAO;
@@ -462,13 +462,6 @@ export class DreService {
         col.faltaPraEquilibrio = dia ? 0 : Math.max(0, col.pontoEquilibrio - col.receitaLiquida);
       }
 
-      if (cmvIndisponivel) {
-        col.avisos.push('CMV indisponível — o espelho do caixa não cobre este período');
-      } else if (col.cmvEstimadoPct > 0.05) {
-        col.avisos.push(
-          `CMV estimado em ${(col.cmvEstimadoPct * 100).toFixed(0)}% da receita (produto fora do espelho)`,
-        );
-      }
       if (!col.despesasFixas && col.faturamentoBruto) {
         col.avisos.push('Nenhuma despesa fixa lançada no Contas a Pagar pro período');
       }
@@ -545,9 +538,8 @@ export class DreService {
           + despesaSemColuna + despesaFranquia,
       },
       config: {
-        markupFallback: MARKUP_FALLBACK,
+        markup: MARKUP,
         aliquotaPadrao: ALIQUOTA_PADRAO,
-        cmvIndisponivel,
         lojasSemGrupo: stores.filter((s) => !s.dreGrupo).map((s) => s.code),
         especiesSemGrupo: especies.filter((e) => !e.dreGrupo).length,
         contasSemEspecie: { valor: semEspecie.valor, lojas: [...semEspecie.lojas] },
@@ -629,20 +621,16 @@ export class DreService {
       colLive.faturamentoBruto += Number(venda?.total || 0) / 100;
       colLive.cupons += Number(venda?.cupons || 0);
 
-      // Peça sai da loja a PREÇO DE CUSTO (decisão do dono): o canal assume o
-      // custo real, a loja de origem não fatura nada por ela.
-      const [cmv]: any[] = await this.prisma.$queryRawUnsafe(
-        `SELECT COALESCE(SUM(i.qty), 0)::int AS pecas,
-                COALESCE(SUM(COALESCE(wp.custo, i.custo_cents / 100.0, 0) * i.qty), 0)::float AS cmv
+      // Só as PEÇAS — o CMV do canal sai do markup, igual às lojas.
+      const [pc]: any[] = await this.prisma.$queryRawUnsafe(
+        `SELECT COALESCE(SUM(i.qty), 0)::int AS pecas
            FROM live_pdv_items i
            JOIN live_pdv_carts c ON c.id = i.cart_id
-           LEFT JOIN wincred_produtos wp ON wp.codigo = ltrim(i.codigo_bipado, '0')
           WHERE c.paid_at >= $1 AND c.paid_at <= $2
             AND c.status = ANY($3::text[]) AND i.status <> 'cancelled'`,
         startDate, endDate, LIVE_VENDIDO,
       );
-      colLive.cmv += Number(cmv?.cmv || 0);
-      colLive.pecas += Number(cmv?.pecas || 0);
+      colLive.pecas += Number(pc?.pecas || 0);
     }
 
     if (colSite) {
@@ -656,18 +644,15 @@ export class DreService {
       colSite.faturamentoBruto += Number(venda?.total || 0);
       colSite.cupons += Number(venda?.cupons || 0);
 
-      const [cmv]: any[] = await this.prisma.$queryRawUnsafe(
-        `SELECT COALESCE(SUM(oi.quantity), 0)::int AS pecas,
-                COALESCE(SUM(COALESCE(wp.custo, oi.unit_price / ${MARKUP_FALLBACK}, 0) * oi.quantity), 0)::float AS cmv
+      const [pc]: any[] = await this.prisma.$queryRawUnsafe(
+        `SELECT COALESCE(SUM(oi.quantity), 0)::int AS pecas
            FROM order_items oi
            JOIN orders o ON o.id = oi.order_id
-           LEFT JOIN wincred_produtos wp ON wp.codigo = ltrim(oi.sku, '0')
           WHERE o.created_at >= $1 AND o.created_at <= $2
             AND o.status = 'completed' AND o.source <> 'live'`,
         startDate, endDate,
       );
-      colSite.cmv += Number(cmv?.cmv || 0);
-      colSite.pecas += Number(cmv?.pecas || 0);
+      colSite.pecas += Number(pc?.pecas || 0);
 
       if (colLive && colSite.key === colLive.key) {
         colSite.avisos.push('LIVE e SITE na MESMA coluna — cadastre uma loja-canal pra cada um pra separar');
