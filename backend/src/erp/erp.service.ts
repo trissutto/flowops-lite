@@ -9812,6 +9812,54 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * CUSTO das peças vendidas (CMV) por loja — MESMA base e MESMO filtro do
+   * getFaturamentoPorLoja acima (espelho giga_caixa_mov, DATAFEC, sem
+   * MARCADO='SIM'). Fica coladinho nele DE PROPÓSITO: faturamento e CMV têm
+   * que sair da mesma linha de caixa, senão a margem da DRE vira ficção.
+   *
+   * Custo vem do espelho de produtos (`wincred_produtos.custo`). Linha cujo
+   * produto não está no espelho entra pelo markup informado (`markupFallback`)
+   * e é contabilizada em `receitaSemCusto` pra tela avisar que estimou.
+   *
+   * Retorna null quando o espelho detalhado não cobre o período — quem chama
+   * decide o que fazer (a DRE avisa em vez de mostrar margem inventada).
+   */
+  async getCustoVendidoPorLoja(
+    inicio: Date,
+    fim: Date,
+    markupFallback = 2.7,
+  ): Promise<Array<{
+    storeCode: string; cmv: number; pecasSemCusto: number; receitaSemCusto: number;
+  }> | null> {
+    if (!(await this.caixaMovUsable(inicio))) return null;
+    try {
+      const rows: any[] = await (this.prismaFlow as any).$queryRawUnsafe(
+        `SELECT m.loja AS "storeCode",
+                COALESCE(SUM(
+                  COALESCE(wp.custo, m.valor_total / NULLIF($3::numeric, 0)) * COALESCE(m.quantidade, 0)
+                ), 0)::float8 AS cmv,
+                COALESCE(SUM(CASE WHEN wp.custo IS NULL THEN m.quantidade ELSE 0 END), 0)::float8 AS "pecasSemCusto",
+                COALESCE(SUM(CASE WHEN wp.custo IS NULL THEN m.valor_total ELSE 0 END), 0)::float8 AS "receitaSemCusto"
+           FROM giga_caixa_mov m
+           LEFT JOIN wincred_produtos wp ON wp.codigo = ltrim(m.codigo, '0')
+          WHERE m.data_fec >= $1 AND m.data_fec < $2
+            AND (m.marcado IS NULL OR m.marcado <> 'SIM')
+          GROUP BY m.loja`,
+        inicio, fim, markupFallback,
+      );
+      return rows.map((r) => ({
+        storeCode: String(r.storeCode || '').trim().toUpperCase(),
+        cmv: Number(r.cmv) || 0,
+        pecasSemCusto: Number(r.pecasSemCusto) || 0,
+        receitaSemCusto: Number(r.receitaSemCusto) || 0,
+      }));
+    } catch (e: any) {
+      this.logger.warn(`getCustoVendidoPorLoja falhou: ${e?.message || e}`);
+      return null;
+    }
+  }
+
+  /**
    * SCHEMA DIAGNOSTIC â€” retorna as colunas da tabela `caixa` + soma de
    * TODAS as colunas numÃ©ricas pra uma loja num perÃ­odo. Usado pra
    * descobrir qual coluna bate com "TOTAL VENDAS R$" do Wincred.
