@@ -139,6 +139,23 @@ export interface DreColuna {
 
   avisos: string[];
 
+  /**
+   * Parte da despesa desta coluna que AINDA NÃO FOI PAGA. Já está somada na
+   * DRE (regime de competência = entra pelo vencimento), então isto é só pra
+   * tela deixar claro que a provisão está contemplada.
+   */
+  despesaEmAberto: number;
+
+  /**
+   * Encargo sobre folha desta loja: quanto o regime do CNPJ dela manda pagar,
+   * quanto já foi lançado em guia e quanto a DRE completou. Null quando o
+   * CNPJ não tem percentual cadastrado.
+   */
+  encargoFolha: {
+    regime: string; pct: number; folha: number;
+    devido: number; jaLancado: number; complemento: number;
+  } | null;
+
   /** De onde veio cada real de despesa — espécie a espécie, do Contas a Pagar. */
   despesasDetalhe: Array<{ especie: string; grupo: DreGrupoEspecie; valor: number }>;
 }
@@ -501,7 +518,7 @@ export class DreService implements OnApplicationBootstrap {
       rateioRede: 0, despesasFinanceiras: 0, resultadoLiquido: 0, lucratividade: 0,
       pontoEquilibrio: null, pontoEquilibrioDia: null, faltaPraEquilibrio: null,
       cupons: 0, pecas: 0, ticketMedio: 0,
-      avisos: [], despesasDetalhe: [],
+      avisos: [], despesaEmAberto: 0, encargoFolha: null, despesasDetalhe: [],
     };
   }
 
@@ -701,10 +718,15 @@ export class DreService implements OnApplicationBootstrap {
       // invisível no resultado. Vem numa coluna própria porque ele NÃO é da
       // natureza da conta: aluguel pago com atraso não gera "mais aluguel",
       // gera DESPESA FINANCEIRA.
+      // PAGO × EM ABERTO vem separado (26/07). A DRE é por COMPETÊNCIA: a
+      // conta entra pelo VENCIMENTO, tenha sido paga ou não — ou seja, já
+      // funciona como provisão. Mas isso era invisível na tela e o dono ficou
+      // na dúvida se só entrava depois de pago. Agora dá pra mostrar.
       `SELECT loja_code AS "lojaCode", especie_id AS "especieId",
               COALESCE(fornecedor_nome, seller_nome, '') AS "beneficiario",
               SUM(valor_cents)::bigint AS "valorCents",
-              SUM(juros_cents)::bigint AS "jurosCents"
+              SUM(juros_cents)::bigint AS "jurosCents",
+              SUM(CASE WHEN pagamento IS NULL THEN valor_cents ELSE 0 END)::bigint AS "abertoCents"
          FROM conta_pagar
         WHERE vencimento >= $1::date AND vencimento <= $2::date
           AND status <> 'cancelada' AND deleted_at IS NULL
@@ -732,6 +754,7 @@ export class DreService implements OnApplicationBootstrap {
     for (const c of contas) {
       const valor = Number(c.valorCents || 0) / 100;
       const juros = Number(c.jurosCents || 0) / 100;
+      const aberto = Number(c.abertoCents || 0) / 100;
       if (!valor && !juros) continue;
       // Fornecedor excluído por ajuste (ex: VERISURE, contrato encerrado):
       // sai da DRE mas NÃO some — vai pro bloco "o que ficou de fora".
@@ -775,6 +798,7 @@ export class DreService implements OnApplicationBootstrap {
       if (!col) { despesaSemColuna += valor; continue; }
 
       this.somaDespesa(col, nome, g, valor);
+      col.despesaEmAberto += aberto;
     }
 
     // ── 5a) TAXA DE CARTÃO — despesa variável calculada, não lançada ─────
@@ -789,6 +813,44 @@ export class DreService implements OnApplicationBootstrap {
           `(${[...t.faltando].join(', ')}) — essa parte entrou com taxa zero.`,
         );
       }
+    }
+
+    // ── 5c) ENCARGO SOBRE FOLHA, por CNPJ ────────────────────────────────
+    // Nasce NA LOJA (folha da loja × % do CNPJ dela), não como despesa da
+    // matriz rateada por faturamento — loja com mais gente paga mais.
+    // O que já estiver lançado (GPS/FGTS/ENCARGOS) MANDA: o cálculo só cobre
+    // a diferença, então quando a guia inteira entra, o complemento zera
+    // sozinho e ninguém conta duas vezes.
+    const encargos: any[] = await (this.prisma as any).dreEncargoFolha.findMany();
+    const pctPorCnpj = new Map<string, any>();
+    for (const e of encargos) pctPorCnpj.set(this.soDigitos(e.cnpj), e);
+
+    for (const col of colunas.values()) {
+      const cfg = col.cnpj ? pctPorCnpj.get(col.cnpj) : null;
+      if (!cfg) continue;
+
+      const folha = (col.despesasDetalhe || [])
+        .filter((d) => /SALARIO|^RH$|COMISS|ORDENADO|FOLHA/.test(this.semAcento(d.especie)))
+        .reduce((s, d) => s + d.valor, 0);
+      if (folha <= 0) continue;
+
+      const jaLancado = (col.despesasDetalhe || [])
+        .filter((d) => /FGTS|INSS|ENCARGO|GPS|DARF/.test(this.semAcento(d.especie)))
+        .reduce((s, d) => s + d.valor, 0);
+
+      const devido = folha * (Number(cfg.encargoPct) / 100);
+      const complemento = Math.max(0, devido - jaLancado);
+      if (complemento > 0.005) {
+        this.somaDespesa(col, `Encargos sobre folha (${cfg.regime})`, 'FIXA', complemento);
+      }
+      col.encargoFolha = {
+        regime: cfg.regime,
+        pct: Number(cfg.encargoPct),
+        folha,
+        devido,
+        jaLancado,
+        complemento,
+      };
     }
 
     // ── 5b) Despesa fixa GERENCIAL (o dono sabe que existe, não está lançada)
@@ -1210,6 +1272,7 @@ export class DreService implements OnApplicationBootstrap {
       t.despesasVariaveis += c.despesasVariaveis;
       t.despesasFixas += c.despesasFixas;
       t.despesasFinanceiras += c.despesasFinanceiras;
+      t.despesaEmAberto += c.despesaEmAberto;
       t.rateioRede += c.rateioRede;
       t.cupons += c.cupons;
       t.pecas += c.pecas;
@@ -1398,6 +1461,13 @@ export class DreService implements OnApplicationBootstrap {
         if (!especieAlvo) return true;
         return this.semAcento(c.especie?.nome || '(sem espécie)') === especieAlvo;
       });
+      const emAberto = filtradas
+        .filter((c) => !c.pagamento)
+        .reduce((s, c) => s + Number(c.valorCents || 0) / 100, 0);
+      const pago = filtradas
+        .filter((c) => !!c.pagamento)
+        .reduce((s, c) => s + Number(c.valorCents || 0) / 100, 0);
+
       return {
         tipo: 'despesas',
         linhas: filtradas.map((c) => ({
@@ -1408,8 +1478,12 @@ export class DreService implements OnApplicationBootstrap {
           especie: c.especie?.nome || '(sem espécie)',
           valor: Number(c.valorCents || 0) / 100,
           status: c.status,
+          pago: !!c.pagamento,
           notaFiscal: c.notaFiscal,
         })),
+        // Pago × em aberto: as duas partes entram na DRE (competência), mas
+        // ver a separação evita a dúvida "isso já está provisionado?".
+        resumo: { pago, emAberto, total: pago + emAberto },
         truncado: contas.length >= 500,
       };
     }
@@ -1715,19 +1789,24 @@ export class DreService implements OnApplicationBootstrap {
     }
 
     const paraMover = alvos.filter((a) => a.especieId !== input.especieDestinoId);
-    await (this.prisma as any).contaPagar.updateMany({
-      where: { id: { in: paraMover.map((a) => a.id) } },
-      data: { especieId: input.especieDestinoId, updatedBy: usuario?.slice(0, 80) || null },
-    });
 
-    // Rastro por conta — sem isso, uma reclassificação errada em 300 contas
-    // não teria como ser auditada nem desfeita com segurança.
+    // TRANSAÇÃO: mover e registrar têm que acontecer JUNTOS.
     //
-    // Os campos são curtos no schema (origem VarChar(20), usuario 80, valores
-    // 300) e estourar QUALQUER um derruba a operação inteira em 500. Já
-    // aconteceu: 'reclassificacao-massa' tem 21 caracteres. Corta tudo aqui.
-    try {
-      await (this.prisma as any).contaPagarLog.createMany({
+    // Antes eram dois awaits soltos e isso mordeu de verdade (26/07): o INSERT
+    // do log estourou um VarChar, a API devolveu 500 — mas as contas JÁ
+    // tinham sido movidas. O dono viu "erro", foi conferir e o filtro veio
+    // vazio, porque as contas não estavam mais na espécie de origem. Estado
+    // ambíguo é pior que falha limpa: agora, se o log não entra, o move volta
+    // atrás e ele pode simplesmente tentar de novo.
+    //
+    // Campos curtos no schema (origem 20, usuario 80, valores 300) — cortados
+    // aqui pra não estourar de novo.
+    await this.prisma.$transaction(async (tx: any) => {
+      await tx.contaPagar.updateMany({
+        where: { id: { in: paraMover.map((a) => a.id) } },
+        data: { especieId: input.especieDestinoId, updatedBy: usuario?.slice(0, 80) || null },
+      });
+      await tx.contaPagarLog.createMany({
         data: paraMover.map((a) => ({
           contaId: a.id,
           campo: 'especieId',
@@ -1737,11 +1816,7 @@ export class DreService implements OnApplicationBootstrap {
           origem: 'massa',
         })),
       });
-    } catch (e: any) {
-      // As contas JÁ foram movidas. Perder o log é ruim, mas devolver erro
-      // aqui faria o dono repetir a operação achando que não funcionou.
-      this.logger.error(`[dre] reclassificação aplicada mas o log falhou: ${e?.message || e}`);
-    }
+    }, { timeout: 30_000 });
 
     this.logger.log(
       `[dre] reclassificação em massa: ${paraMover.length} conta(s) → "${destino.nome}" por ${usuario || '—'}`,
@@ -1782,6 +1857,51 @@ export class DreService implements OnApplicationBootstrap {
       update: { aliquotaPct: pct, observacao: input.observacao?.slice(0, 120) || null },
     });
     return { ok: true, id: row.id, cnpj, mes, aliquotaPct: pct };
+  }
+
+  /** Percentual de encargo sobre folha por CNPJ (Simples × Presumido). */
+  async upsertEncargoFolha(
+    input: { cnpj: string; regime?: string; encargoPct: number; observacao?: string },
+    usuario?: string,
+  ) {
+    const cnpj = this.soDigitos(input.cnpj);
+    if (cnpj.length !== 14) throw new BadRequestException('CNPJ inválido (14 dígitos)');
+    const pct = Number(input.encargoPct);
+    // Teto em 100%: encargo maior que a própria folha seria erro de digitação,
+    // não regime tributário.
+    if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
+      throw new BadRequestException('Percentual deve estar entre 0 e 100');
+    }
+    const regime = String(input.regime || 'PRESUMIDO').toUpperCase();
+    if (!['SIMPLES', 'PRESUMIDO', 'REAL'].includes(regime)) {
+      throw new BadRequestException('Regime inválido (SIMPLES | PRESUMIDO | REAL)');
+    }
+
+    const row = await (this.prisma as any).dreEncargoFolha.upsert({
+      where: { cnpj },
+      create: {
+        cnpj, regime, encargoPct: pct,
+        observacao: input.observacao?.slice(0, 160) || null,
+        criadoPor: usuario?.slice(0, 80) || null,
+      },
+      update: { regime, encargoPct: pct, observacao: input.observacao?.slice(0, 160) || null },
+    });
+    return { ok: true, id: row.id, cnpj, regime, encargoPct: pct };
+  }
+
+  async listEncargosFolha() {
+    const rows: any[] = await (this.prisma as any).dreEncargoFolha.findMany({
+      orderBy: { cnpj: 'asc' },
+    });
+    return rows.map((r) => ({
+      id: r.id, cnpj: r.cnpj, regime: r.regime,
+      encargoPct: Number(r.encargoPct), observacao: r.observacao,
+    }));
+  }
+
+  async deleteEncargoFolha(id: string) {
+    await (this.prisma as any).dreEncargoFolha.delete({ where: { id } });
+    return { ok: true };
   }
 
   async deleteAliquota(id: string) {

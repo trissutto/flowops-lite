@@ -50,6 +50,8 @@ type Coluna = {
   pontoEquilibrio: number | null; pontoEquilibrioDia: string | null; faltaPraEquilibrio: number | null;
   cupons: number; pecas: number; ticketMedio: number;
   avisos: string[];
+  despesaEmAberto: number;
+  encargoFolha: { regime: string; pct: number; folha: number; devido: number; jaLancado: number; complemento: number } | null;
   despesasDetalhe: Array<{ especie: string; grupo: string; valor: number }>;
 };
 
@@ -651,7 +653,15 @@ function FichaLoja({ coluna: c, data, onDrill }: {
       {/* Onde vai a despesa desta loja */}
       {c.despesasDetalhe?.length > 0 && (
         <div className="bg-white border border-[#E7E2D8] rounded-xl p-5">
-          <h3 className="font-extrabold text-slate-800 mb-3">Onde vai a despesa</h3>
+          <div className="flex flex-wrap items-baseline gap-2 mb-3">
+            <h3 className="font-extrabold text-slate-800">Onde vai a despesa</h3>
+            {c.despesaEmAberto > 0 && (
+              <span className="text-[11px] text-slate-500">
+                — inclui <b className="text-amber-700">{brl(c.despesaEmAberto)}</b> ainda não pagos:
+                a DRE conta pelo vencimento, então a provisão já está aqui
+              </span>
+            )}
+          </div>
           <div className="space-y-1.5">
             {c.despesasDetalhe.slice(0, 12).map((d) => {
               const share = c.receitaLiquida ? d.valor / c.receitaLiquida : 0;
@@ -668,6 +678,44 @@ function FichaLoja({ coluna: c, data, onDrill }: {
                 </div>
               );
             })}
+          </div>
+        </div>
+      )}
+
+      {/* Encargo sobre folha — mostra a conta pra não virar caixa-preta. */}
+      {c.encargoFolha && c.encargoFolha.folha > 0 && (
+        <div className="bg-white border border-[#E7E2D8] rounded-xl px-5 py-4">
+          <h3 className="font-extrabold text-slate-800 mb-2">
+            Encargo sobre folha
+            <span className="ml-2 text-[11px] font-bold text-slate-500 uppercase">{c.encargoFolha.regime}</span>
+          </h3>
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
+            <span className="text-slate-500">
+              Folha da loja <b className="text-slate-800">{brl(c.encargoFolha.folha)}</b>
+            </span>
+            <span className="text-slate-400">×</span>
+            <span className="text-slate-500">
+              <b className="text-slate-800">{c.encargoFolha.pct.toFixed(2)}%</b> do regime
+            </span>
+            <span className="text-slate-400">=</span>
+            <span className="text-slate-500">
+              devido <b className="text-slate-800">{brl(c.encargoFolha.devido)}</b>
+            </span>
+            <div className="flex-1" />
+            {c.encargoFolha.jaLancado > 0 && (
+              <span className="text-xs text-slate-500">
+                guia lançada: <b>{brl(c.encargoFolha.jaLancado)}</b>
+              </span>
+            )}
+            <span className={`text-xs px-2 py-1 rounded-lg font-bold ${
+              c.encargoFolha.complemento > 0.005
+                ? 'bg-amber-50 text-amber-800 border border-amber-200'
+                : 'bg-[#F4F8F5] text-[#2E7D46] border border-[#2E7D46]/30'
+            }`}>
+              {c.encargoFolha.complemento > 0.005
+                ? `+ ${brl(c.encargoFolha.complemento)} provisionados`
+                : 'guia cobre o devido'}
+            </span>
           </div>
         </div>
       )}
@@ -1316,7 +1364,7 @@ function DrillModal({
                       <td className="truncate max-w-[220px]">{l.beneficiario}</td>
                       <td className="text-slate-500">{l.especie}</td>
                       <td className="text-right tabular-nums font-semibold">{brl(l.valor)}</td>
-                      <td className="pl-3 text-xs text-slate-500">{l.status}</td>
+                      <td className="pl-3 text-xs"><span className={l.pago ? 'text-slate-400' : 'text-amber-700 font-bold'}>{l.pago ? 'paga' : 'em aberto'}</span></td>
                     </tr>
                   ))}
                 </tbody>
@@ -1332,8 +1380,24 @@ function DrillModal({
           {data?.linhas?.length === 0 && <p className="text-slate-400 py-6 text-center">Nada no período.</p>}
         </div>
         {data?.linhas?.length > 0 && (
-          <div className="px-5 py-2.5 border-t border-[#E7E2D8] text-sm font-extrabold flex justify-between">
-            <span>Total listado</span><span className="tabular-nums">{brl(totalLinhas)}</span>
+          <div className="border-t border-[#E7E2D8]">
+            {data.resumo && data.resumo.emAberto > 0 && (
+              <div className="px-5 py-2 flex flex-wrap items-center gap-3 text-xs border-b border-[#F5F2EB] bg-[#FBF6E6]/40">
+                <span className="text-slate-500">
+                  <b className="text-slate-700">{brl(data.resumo.pago)}</b> já pago
+                </span>
+                <span className="text-slate-400">·</span>
+                <span className="text-slate-500">
+                  <b className="text-amber-700">{brl(data.resumo.emAberto)}</b> ainda em aberto
+                </span>
+                <span className="text-[11px] text-slate-400">
+                  — os dois entram na DRE: a conta pesa no mês do VENCIMENTO, pago ou não (provisão).
+                </span>
+              </div>
+            )}
+            <div className="px-5 py-2.5 text-sm font-extrabold flex justify-between">
+              <span>Total listado</span><span className="tabular-nums">{brl(totalLinhas)}</span>
+            </div>
           </div>
         )}
       </div>
@@ -1541,6 +1605,7 @@ function AbaConfig({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }
         </p>
       </Bloco>
 
+      <BlocoEncargoFolha cfg={cfg} avisar={avisar} />
       <BlocoReclassificar cfg={cfg} avisar={avisar} onMudou={carregar} />
       <BlocoTaxas avisar={avisar} />
       <BlocoAjustes avisar={avisar} />
@@ -1625,6 +1690,139 @@ function AbaConfig({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }
         )}
       </Bloco>
     </div>
+  );
+}
+
+/**
+ * ENCARGO SOBRE FOLHA por CNPJ. Os regimes do grupo são diferentes e isso
+ * muda o custo de cada funcionária: T.O. no Simples (INSS patronal dentro do
+ * DAS) × LURDS no Presumido (INSS 20% + RAT + Terceiros por fora).
+ */
+function BlocoEncargoFolha({ cfg, avisar }: { cfg: any; avisar: (t: 'ok' | 'erro', m: string) => void }) {
+  const [lista, setLista] = useState<any[]>([]);
+  const [novo, setNovo] = useState({ cnpj: '', regime: 'PRESUMIDO', encargoPct: '', observacao: '' });
+
+  const carregar = useCallback(() => {
+    api<any[]>('/dre/config/encargos-folha').then(setLista).catch(() => {});
+  }, []);
+  useEffect(() => { carregar(); }, [carregar]);
+
+  // CNPJs que as lojas usam — evita digitar errado e mostra quem falta.
+  const cnpjsDasLojas = useMemo(() => {
+    const m = new Map<string, string[]>();
+    for (const l of cfg.lojas || []) {
+      if (!l.cnpj) continue;
+      m.set(l.cnpj, [...(m.get(l.cnpj) || []), l.name]);
+    }
+    return [...m.entries()].map(([cnpj, lojas]) => ({ cnpj, lojas }));
+  }, [cfg.lojas]);
+
+  const salvar = async () => {
+    try {
+      await api('/dre/config/encargo-folha', {
+        method: 'POST',
+        body: JSON.stringify({ ...novo, encargoPct: Number(String(novo.encargoPct).replace(',', '.')) }),
+      });
+      avisar('ok', 'Encargo salvo');
+      setNovo({ cnpj: '', regime: 'PRESUMIDO', encargoPct: '', observacao: '' });
+      carregar();
+    } catch (e: any) { avisar('erro', e?.message || 'Falhou'); }
+  };
+  const remover = async (id: string) => {
+    try { await api(`/dre/config/encargo-folha/${id}`, { method: 'DELETE' }); carregar(); }
+    catch (e: any) { avisar('erro', e?.message || 'Falhou'); }
+  };
+
+  const semCadastro = cnpjsDasLojas.filter((c) => !lista.some((e) => e.cnpj === c.cnpj));
+
+  return (
+    <Bloco
+      titulo="Encargo sobre folha por CNPJ"
+      subtitulo="Aplicado sobre a folha DE CADA LOJA (salários + RH + comissão) — o encargo nasce na loja, não vira despesa da matriz"
+    >
+      <div className="mb-3 text-[11px] text-slate-500 bg-slate-50 border border-[#E7E2D8] rounded-lg px-3 py-2">
+        <b>Referência pra conferir com a contabilidade</b> (o número exato depende do seu FAP e do FPAS):
+        <span className="block mt-0.5">
+          • <b>Simples Nacional</b> — INSS patronal já está dentro do DAS. Sobra FGTS 8% + provisões.
+        </span>
+        <span className="block">
+          • <b>Lucro Presumido</b> — INSS 20% + RAT (1–3%) + Terceiros (~5,8%) + FGTS 8%, por fora.
+        </span>
+      </div>
+
+      {semCadastro.length > 0 && (
+        <div className="mb-3 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-900">
+          <b>CNPJ sem encargo cadastrado:</b>{' '}
+          {semCadastro.map((c) => `${c.cnpj} (${c.lojas.join(', ')})`).join(' · ')}.
+          Essas lojas estão sem encargo sobre folha na DRE.
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-end gap-2 mb-3">
+        <Campo label="CNPJ">
+          <select value={novo.cnpj} onChange={(e) => setNovo({ ...novo, cnpj: e.target.value })}
+            className="px-2 py-1.5 rounded-lg border border-[#E7E2D8] text-sm w-64">
+            <option value="">escolha…</option>
+            {cnpjsDasLojas.map((c) => (
+              <option key={c.cnpj} value={c.cnpj}>{c.cnpj} — {c.lojas.slice(0, 3).join(', ')}</option>
+            ))}
+          </select>
+        </Campo>
+        <Campo label="Regime">
+          <select value={novo.regime} onChange={(e) => setNovo({ ...novo, regime: e.target.value })}
+            className="px-2 py-1.5 rounded-lg border border-[#E7E2D8] text-sm">
+            <option value="SIMPLES">Simples Nacional</option>
+            <option value="PRESUMIDO">Lucro Presumido</option>
+            <option value="REAL">Lucro Real</option>
+          </select>
+        </Campo>
+        <Campo label="% sobre a folha">
+          <input value={novo.encargoPct} onChange={(e) => setNovo({ ...novo, encargoPct: e.target.value })}
+            placeholder="35,8" className="px-2 py-1.5 rounded-lg border border-[#E7E2D8] text-sm w-24" />
+        </Campo>
+        <Campo label="Observação">
+          <input value={novo.observacao} onChange={(e) => setNovo({ ...novo, observacao: e.target.value })}
+            placeholder="ex: INSS 20 + RAT 2 + terceiros 5,8 + FGTS 8"
+            className="px-2 py-1.5 rounded-lg border border-[#E7E2D8] text-sm w-72" />
+        </Campo>
+        <button onClick={salvar}
+          className="bg-[#B8912B] hover:bg-[#8C7325] text-white font-bold px-3 py-1.5 rounded-lg text-sm flex items-center gap-1.5">
+          <Plus className="w-4 h-4" /> Salvar
+        </button>
+      </div>
+
+      {lista.length === 0 ? (
+        <p className="text-xs text-slate-400">
+          Nenhum cadastrado — a DRE não está somando encargo sobre folha em loja nenhuma.
+        </p>
+      ) : (
+        <table className="w-full text-sm">
+          <thead><tr className="text-xs text-slate-500 border-b border-[#E7E2D8]">
+            <th className="text-left py-1.5">CNPJ</th><th className="text-left">Regime</th>
+            <th className="text-right">% da folha</th><th className="text-left pl-3">Como chegou nesse número</th><th />
+          </tr></thead>
+          <tbody>
+            {lista.map((e) => (
+              <tr key={e.id} className="border-b border-[#F5F2EB]">
+                <td className="py-1.5 tabular-nums">{e.cnpj}</td>
+                <td className="text-slate-600">{e.regime}</td>
+                <td className="text-right tabular-nums font-bold">{e.encargoPct.toFixed(2)}%</td>
+                <td className="pl-3 text-slate-500 text-xs">{e.observacao || '—'}</td>
+                <td className="text-right">
+                  <button onClick={() => remover(e.id)} className="p-1 hover:bg-rose-50 rounded text-rose-500">
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <p className="text-[11px] text-slate-400 mt-2">
+        Se a guia (GPS/FGTS/ENCARGOS) já estiver lançada no Contas a Pagar, o valor LANÇADO manda e o
+        cálculo cobre só a diferença — quando a guia inteira entra, o complemento zera sozinho.
+      </p>
+    </Bloco>
   );
 }
 
@@ -1730,7 +1928,14 @@ function BlocoReclassificar({ cfg, avisar, onMudou }: {
 
       {previa && (
         previa.total === 0 ? (
-          <p className="text-xs text-slate-500">Nenhuma conta encontrada com esse filtro.</p>
+          <div className="text-xs text-slate-500 space-y-1">
+            <p className="font-semibold">Nenhuma conta encontrada com esse filtro.</p>
+            <p className="text-slate-400">
+              Se você acabou de reclassificar, elas já saíram da espécie de origem — troque
+              “Espécie atual” pela de destino pra conferir. Vale checar também o período de
+              vencimento e se o texto bate com o que está escrito na conta.
+            </p>
+          </div>
         ) : (
           <div className="border border-[#E7E2D8] rounded-lg overflow-hidden">
             <div className="px-3 py-2 bg-[#FBF6E6]/60 border-b border-[#E7E2D8] flex flex-wrap items-center gap-3">
