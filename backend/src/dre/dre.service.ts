@@ -63,7 +63,9 @@ const LIVE_VENDIDO = ['paid', 'separating', 'shipped', 'delivered'];
 const RUBRICAS_PLANILHA: Array<{ rubrica: string; termos: string[]; grupo: 'FIXA' | 'VARIAVEL' | 'FINANCEIRA' }> = [
   { rubrica: 'Aluguel', termos: ['ALUGUE', 'LOCACAO'], grupo: 'FIXA' }, // 'ALUGUE' casa ALUGUEL e ALUGUEIS (nome real da especie)
   { rubrica: 'Salários', termos: ['SALARIO', 'FOLHA', 'ORDENADO'], grupo: 'FIXA' },
-  { rubrica: 'Encargos', termos: ['ENCARGO', 'FGTS', 'INSS', 'RESCISAO', 'FERIAS', 'DECIMO'], grupo: 'FIXA' },
+  { rubrica: 'Encargos', termos: ['ENCARGO', 'FGTS', 'INSS', 'RESCISAO', 'FERIAS', 'DECIMO', '13 SALARIO'], grupo: 'FIXA' },
+  { rubrica: 'Vale transporte/alimentação', termos: ['VALE TRANSP', 'VALE ALIM', 'VALE REFEI', 'BENEFICIO', 'CESTA'], grupo: 'FIXA' },
+  { rubrica: 'Uniformes', termos: ['UNIFORME'], grupo: 'FIXA' },
   { rubrica: 'Água', termos: ['AGUA', 'SABESP'], grupo: 'FIXA' },
   { rubrica: 'Telefone', termos: ['TELEFON', 'FONE', 'CELULAR', 'VIVO', 'CLARO'], grupo: 'FIXA' },
   { rubrica: 'Internet', termos: ['INTERNET', 'LINK', 'BANDA'], grupo: 'FIXA' },
@@ -312,6 +314,32 @@ export class DreService implements OnApplicationBootstrap {
         },
       },
       {
+        chave: 'dre_especies_rh_2607',
+        rotulo: 'espécies de encargo e benefício de RH',
+        run: async () => {
+          // O catálogo tinha RH/SALARIO/COMISSAO/VALE e mais nada — encargo e
+          // benefício não tinham onde ser lançados, e "VALE" sozinho é
+          // ambíguo (adiantamento ≠ vale-transporte).
+          const novas: Array<[string, DreGrupoEspecie]> = [
+            ['FGTS', 'FIXA'],
+            ['INSS', 'FIXA'],
+            ['VALE TRANSPORTE', 'FIXA'],
+            ['VALE ALIMENTACAO', 'FIXA'],
+            ['FERIAS', 'FIXA'],
+            ['13 SALARIO', 'FIXA'],
+            ['RESCISAO', 'FIXA'],
+            ['UNIFORMES', 'FIXA'],
+          ];
+          for (const [nome, dreGrupo] of novas) {
+            await (this.prisma as any).especieConta.upsert({
+              where: { nome },
+              create: { nome, dreGrupo, restrita: true },
+              update: { ativa: true, dreGrupo },
+            });
+          }
+        },
+      },
+      {
         chave: 'dre_marketing_por_canal_2607',
         rotulo: 'Meta/Google Ads separados por loja e SITE',
         run: async () => {
@@ -449,6 +477,14 @@ export class DreService implements OnApplicationBootstrap {
     if (/IMPOSTO|DAS\b|SIMPLES|ICMS|PIS|COFINS|IRPJ|CSLL|TRIBUT/.test(n)) return 'IMPOSTO';
     if (/JURO|MULTA|IOF|EMPRESTIMO|EMPRÉSTIMO|FINANCIAMENTO/.test(n)) return 'FINANCEIRA';
     if (/COMISS|TAXA|CARTAO|CARTÃO|FRETE|ROYALT|MARKETING|PUBLICID/.test(n)) return 'VARIAVEL';
+
+    // BENEFÍCIO É DESPESA — e tem que ser testado ANTES da regra do vale.
+    // "VALE TRANSPORTE" casava com /VALE\b/ e caía em IGNORAR, ou seja: VT e
+    // VA sumiam da DRE sem ninguém perceber. Só o VALE de ADIANTAMENTO de
+    // salário é que fica de fora (é antecipação, não custo do período).
+    if (/VALE.?(TRANSP|ALIM|REFEI|COMBUST)|^VT$|^VA$|^VR$|BENEFICIO|CESTA/.test(n)) return 'FIXA';
+    if (/ENCARGO|FGTS|INSS|RESCISAO|FERIAS|DECIMO|13|SINDICA/.test(n)) return 'FIXA';
+
     if (/TRANSFER|ADIANT|VALE\b|APORTE/.test(n)) return 'IGNORAR';
     return 'FIXA';
   }
@@ -1305,7 +1341,7 @@ export class DreService implements OnApplicationBootstrap {
 
   // ── drill-down ───────────────────────────────────────────────────────────
 
-  async drill(input: { de: string; ate: string; coluna: string; linha: string }) {
+  async drill(input: { de: string; ate: string; coluna: string; linha: string; especie?: string }) {
     const { de, ate } = this.validaPeriodo(input.de, input.ate);
     const { inicio, fimExclusive } = this.caixaRange(de, ate);
     const linha = String(input.linha || '').toUpperCase();
@@ -1352,10 +1388,16 @@ export class DreService implements OnApplicationBootstrap {
         take: 500,
         include: { especie: true },
       });
-      const filtradas = contas.filter(
-        (c) => (c.especieId && idsDoGrupo.has(c.especieId))
-          || (!c.especieId && linha !== 'VARIAVEL' && linha !== 'FINANCEIRA'),
-      );
+      // Filtro opcional por ESPÉCIE: é o segundo nível da cascata — clicou em
+      // ALUGUEIS dentro de Despesas fixas, vê só as contas de aluguel.
+      const especieAlvo = this.semAcento(input.especie || '');
+      const filtradas = contas.filter((c) => {
+        const doGrupo = (c.especieId && idsDoGrupo.has(c.especieId))
+          || (!c.especieId && linha !== 'VARIAVEL' && linha !== 'FINANCEIRA');
+        if (!doGrupo) return false;
+        if (!especieAlvo) return true;
+        return this.semAcento(c.especie?.nome || '(sem espécie)') === especieAlvo;
+      });
       return {
         tipo: 'despesas',
         linhas: filtradas.map((c) => ({

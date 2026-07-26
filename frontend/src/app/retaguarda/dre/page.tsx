@@ -194,7 +194,7 @@ function AbaDre({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
   // rede não cabe na tela — a DRE tem uma coluna por loja e o dono precisa
   // ver TODAS de uma vez, não metade atrás do scroll.
   const [compactoManual, setCompactoManual] = useState<boolean | null>(null);
-  const [drill, setDrill] = useState<{ coluna: Coluna; linha: string; label: string } | null>(null);
+  const [drill, setDrill] = useState<{ coluna: Coluna; linha: string; label: string; especie?: string } | null>(null);
   // Foco numa loja: '' = rede inteira (tabela larga). Com loja escolhida, a
   // tela vira FICHA — números grandes, um indicador por card.
   const [foco, setFoco] = useState('');
@@ -310,7 +310,7 @@ function AbaDre({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
         <FichaLoja
           coluna={colunas.find((c) => c.key === foco)!}
           data={data}
-          onDrill={(linha, label) => setDrill({ coluna: colunas.find((c) => c.key === foco)!, linha, label })}
+          onDrill={(linha, label, especie) => setDrill({ coluna: colunas.find((c) => c.key === foco)!, linha, label, especie })}
         />
       )}
 
@@ -462,10 +462,53 @@ function AbaDre({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
 function FichaLoja({ coluna: c, data, onDrill }: {
   coluna: Coluna;
   data: Resultado;
-  onDrill: (linha: string, label: string) => void;
+  onDrill: (linha: string, label: string, especie?: string) => void;
 }) {
   const positivo = c.resultadoLiquido >= 0;
   const bateuPE = !!c.pontoEquilibrioDia;
+  // Cascata: clica na linha e ela abre a composição ali mesmo.
+  const [aberta, setAberta] = useState<Set<string>>(new Set());
+  const alterna = (k: string) => setAberta((s) => {
+    const n = new Set(s);
+    if (n.has(k)) n.delete(k); else n.add(k);
+    return n;
+  });
+
+  /** O que compõe cada linha — o segundo nível da cascata. */
+  const composicao = (l: typeof LINHAS[number]): Array<{ rotulo: string; valor: number; especie?: string; nota?: string }> | null => {
+    if (l.grupoDespesa) {
+      return (c.despesasDetalhe || [])
+        .filter((d) => d.grupo === l.grupoDespesa)
+        .sort((a, b) => b.valor - a.valor)
+        .map((d) => ({ rotulo: d.especie, valor: d.valor, especie: d.especie }));
+    }
+    if (l.campo === 'cmv') {
+      return [{
+        rotulo: `Receita líquida ÷ ${String(c.markup).replace('.', ',')}`,
+        valor: c.cmv,
+        nota: `${brl(c.receitaLiquida)} ÷ ${String(c.markup).replace('.', ',')} — markup da loja, não custo de cadastro`,
+      }];
+    }
+    if (l.campo === 'impostos') {
+      return [{
+        rotulo: `${Number(c.aliquotaPct || 0).toFixed(1)}% da receita líquida`,
+        valor: c.impostos,
+        nota: `${brl(c.receitaLiquida)} × ${Number(c.aliquotaPct || 0).toFixed(1)}%`,
+      }];
+    }
+    if (l.campo === 'rateioRede' && c.rateioRede > 0) {
+      const share = data.total.faturamentoBruto ? c.faturamentoBruto / data.total.faturamentoBruto : 0;
+      return [{
+        rotulo: 'Parte da despesa da matriz',
+        valor: c.rateioRede,
+        nota: `${brl(data.rede.despesaTotal)} da matriz × ${pct(share)} (peso desta loja no faturamento da rede)`,
+      }];
+    }
+    if (l.campo === 'faturamentoBruto') {
+      return [{ rotulo: 'Ver venda por dia', valor: c.faturamentoBruto, especie: '__DIA__' }];
+    }
+    return null;
+  };
 
   return (
     <div className="space-y-4 max-w-[1200px]">
@@ -533,35 +576,72 @@ function FichaLoja({ coluna: c, data, onDrill }: {
               if (!v && !destaque && !sub) return null;
               const pctBase = c.receitaLiquida
                 ? (l.pctCampo ? Number(c[l.pctCampo] || 0) : v / c.receitaLiquida) : 0;
+              const filhos = v ? composicao(l) : null;
+              const podeAbrir = !!filhos?.length;
+              const estaAberta = aberta.has(String(l.campo));
               return (
-                <tr key={String(l.campo)} className={
-                  destaque ? 'bg-[#F4F8F5] border-y-2 border-[#E7E2D8]'
-                    : sub ? 'bg-slate-50 border-y border-[#F0EDE6]'
-                    : 'border-b border-[#F5F2EB]'
-                }>
-                  <td className={`px-5 py-2.5 ${destaque ? 'text-base font-extrabold' : sub ? 'font-bold' : info ? 'text-slate-400 italic text-sm' : 'text-slate-600'}`}>
-                    {l.label}
-                    {l.nota && <span className="block text-[11px] font-normal text-slate-400">{l.nota}</span>}
-                  </td>
-                  <td className="px-3 py-2.5 text-right text-sm text-slate-400 tabular-nums w-24">
-                    {v && !info ? pct(pctBase) : ''}
-                  </td>
-                  <td className={`px-5 py-2.5 text-right tabular-nums w-52 ${
-                    destaque ? `text-2xl font-extrabold ${v >= 0 ? 'text-[#2E7D46]' : 'text-rose-600'}`
-                      : sub ? 'text-lg font-bold'
-                      : info ? 'text-slate-400'
-                      : 'text-base'
-                  }`}>
-                    {l.drill && v ? (
-                      <button onClick={() => onDrill(l.drill!, l.label)}
-                        className="hover:underline decoration-dotted underline-offset-4">
-                        {l.tipo === 'deducao' ? `(${brl(v)})` : brl(v)}
-                      </button>
-                    ) : (
-                      v ? (l.tipo === 'deducao' ? `(${brl(v)})` : brl(v)) : <span className="text-slate-300">—</span>
-                    )}
-                  </td>
-                </tr>
+                <React.Fragment key={String(l.campo)}>
+                  <tr
+                    onClick={() => podeAbrir && alterna(String(l.campo))}
+                    className={`${
+                      destaque ? 'bg-[#F4F8F5] border-y-2 border-[#E7E2D8]'
+                        : sub ? 'bg-slate-50 border-y border-[#F0EDE6]'
+                        : 'border-b border-[#F5F2EB]'
+                    } ${podeAbrir ? 'cursor-pointer hover:bg-[#FBF6E6]/60' : ''}`}
+                  >
+                    <td className={`px-5 py-2.5 ${destaque ? 'text-base font-extrabold' : sub ? 'font-bold' : info ? 'text-slate-400 italic text-sm' : 'text-slate-600'}`}>
+                      <span className="flex items-center gap-1.5">
+                        {podeAbrir && (
+                          <ChevronRight className={`w-3.5 h-3.5 text-[#B8912B] transition-transform ${estaAberta ? 'rotate-90' : ''}`} />
+                        )}
+                        <span className={podeAbrir ? '' : 'ml-5'}>{l.label}</span>
+                      </span>
+                      {l.nota && <span className="block text-[11px] font-normal text-slate-400 ml-5">{l.nota}</span>}
+                    </td>
+                    <td className="px-3 py-2.5 text-right text-sm text-slate-400 tabular-nums w-24">
+                      {v && !info ? pct(pctBase) : ''}
+                    </td>
+                    <td className={`px-5 py-2.5 text-right tabular-nums w-52 ${
+                      destaque ? `text-2xl font-extrabold ${v >= 0 ? 'text-[#2E7D46]' : 'text-rose-600'}`
+                        : sub ? 'text-lg font-bold'
+                        : info ? 'text-slate-400'
+                        : 'text-base'
+                    }`}>
+                      {v ? (l.tipo === 'deducao' ? `(${brl(v)})` : brl(v)) : <span className="text-slate-300">—</span>}
+                    </td>
+                  </tr>
+
+                  {/* NÍVEL 2 — a composição da linha, aberta no lugar. */}
+                  {estaAberta && filhos!.map((f) => (
+                    <tr key={`${String(l.campo)}-${f.rotulo}`} className="bg-[#FDFCF9] border-b border-[#F5F2EB] text-sm">
+                      <td className="pl-14 pr-5 py-1.5">
+                        {f.especie && l.drill ? (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onDrill(
+                                f.especie === '__DIA__' ? 'FATURAMENTO' : l.drill!,
+                                f.especie === '__DIA__' ? l.label : `${l.label} · ${f.rotulo}`,
+                                f.especie === '__DIA__' ? undefined : f.especie,
+                              );
+                            }}
+                            className="text-slate-700 hover:text-[#B8912B] hover:underline decoration-dotted underline-offset-2 font-medium"
+                            title="Abrir conta a conta"
+                          >
+                            {f.rotulo} <span className="text-[10px] text-slate-400">ver lançamentos ›</span>
+                          </button>
+                        ) : (
+                          <span className="text-slate-600">{f.rotulo}</span>
+                        )}
+                        {f.nota && <span className="block text-[11px] text-slate-400">{f.nota}</span>}
+                      </td>
+                      <td className="px-3 py-1.5 text-right text-xs text-slate-400 tabular-nums">
+                        {c.receitaLiquida ? pct(f.valor / c.receitaLiquida) : ''}
+                      </td>
+                      <td className="px-5 py-1.5 text-right tabular-nums text-slate-700">{brl(f.valor)}</td>
+                    </tr>
+                  ))}
+                </React.Fragment>
               );
             })}
           </tbody>
@@ -1170,12 +1250,18 @@ function Qualidade({ data }: { data: Resultado }) {
 
 function DrillModal({
   de, ate, alvo, onClose,
-}: { de: string; ate: string; alvo: { coluna: Coluna; linha: string; label: string }; onClose: () => void }) {
+}: {
+  de: string; ate: string;
+  alvo: { coluna: Coluna; linha: string; label: string; especie?: string };
+  onClose: () => void;
+}) {
   const [data, setData] = useState<any>(null);
   const [erro, setErro] = useState<string | null>(null);
 
   useEffect(() => {
-    api<any>(`/dre/drill?de=${de}&ate=${ate}&coluna=${encodeURIComponent(alvo.coluna.key)}&linha=${alvo.linha}`)
+    // 3º nível da cascata: com `especie`, lista só as contas daquela rubrica.
+    const esp = alvo.especie ? `&especie=${encodeURIComponent(alvo.especie)}` : '';
+    api<any>(`/dre/drill?de=${de}&ate=${ate}&coluna=${encodeURIComponent(alvo.coluna.key)}&linha=${alvo.linha}${esp}`)
       .then(setData)
       .catch((e) => setErro(e?.message || 'Falha ao abrir o detalhe'));
   }, [de, ate, alvo]);
