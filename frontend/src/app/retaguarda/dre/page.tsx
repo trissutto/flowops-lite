@@ -19,7 +19,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import {
   ArrowLeft, BarChart3, Loader2, RefreshCw, Settings, AlertTriangle,
-  ChevronRight, Plus, Trash2, X, Percent, Target, ListTree, ClipboardList, Minimize2, Megaphone,
+  ChevronRight, Plus, Trash2, X, Percent, Target, ListTree, ClipboardList, Minimize2, Megaphone, Search, Check,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -1541,6 +1541,7 @@ function AbaConfig({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }
         </p>
       </Bloco>
 
+      <BlocoReclassificar cfg={cfg} avisar={avisar} onMudou={carregar} />
       <BlocoTaxas avisar={avisar} />
       <BlocoAjustes avisar={avisar} />
 
@@ -1624,6 +1625,168 @@ function AbaConfig({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }
         )}
       </Bloco>
     </div>
+  );
+}
+
+/**
+ * RECLASSIFICAR EM MASSA — muda a espécie de várias contas de uma vez.
+ *
+ * Caso que motivou (dono, 26/07): existem N contas de vale-transporte
+ * lançadas como VALE/OUTROS e ele quer todas em VALE TRANSPORTE sem abrir
+ * uma por uma. Mexe no Contas a Pagar de verdade, então: prévia obrigatória,
+ * confirmação e log por conta.
+ */
+function BlocoReclassificar({ cfg, avisar, onMudou }: {
+  cfg: any;
+  avisar: (t: 'ok' | 'erro', m: string) => void;
+  onMudou: () => void;
+}) {
+  const [filtro, setFiltro] = useState({ especieOrigemId: '', busca: '', de: '', ate: '' });
+  const [destino, setDestino] = useState('');
+  const [previa, setPrevia] = useState<any>(null);
+  const [buscando, setBuscando] = useState(false);
+  const [aplicando, setAplicando] = useState(false);
+
+  const buscar = async () => {
+    if (!filtro.busca.trim() && !filtro.especieOrigemId) {
+      return avisar('erro', 'Informe um texto ou uma espécie de origem — senão pegaria a base inteira');
+    }
+    setBuscando(true);
+    try {
+      const p = new URLSearchParams();
+      Object.entries(filtro).forEach(([k, v]) => { if (v) p.set(k, String(v)); });
+      setPrevia(await api<any>(`/dre/config/reclassificar/previa?${p}`));
+    } catch (e: any) { avisar('erro', e?.message || 'Falhou'); }
+    finally { setBuscando(false); }
+  };
+
+  const aplicar = async () => {
+    if (!destino) return avisar('erro', 'Escolha a espécie de destino');
+    const nome = cfg.especies.find((e: any) => e.id === destino)?.nome || '';
+    if (!confirm(
+      `Mover ${previa.total} conta(s), somando ${brl(previa.valor)}, para a espécie "${nome}"?\n\n`
+      + 'As contas continuam com o mesmo valor e vencimento — só muda a classificação. '
+      + 'Fica registrado quem mudou, e dá pra reclassificar de volta.',
+    )) return;
+
+    setAplicando(true);
+    try {
+      const r = await api<any>('/dre/config/reclassificar', {
+        method: 'POST',
+        body: JSON.stringify({ ...filtro, especieDestinoId: destino }),
+      });
+      avisar('ok', `${r.movidas} conta(s) movida(s) para ${r.destino}`);
+      setPrevia(null);
+      setFiltro({ especieOrigemId: '', busca: '', de: '', ate: '' });
+      onMudou();
+    } catch (e: any) { avisar('erro', e?.message || 'Falhou'); }
+    finally { setAplicando(false); }
+  };
+
+  return (
+    <Bloco
+      titulo="Reclassificar contas em massa"
+      subtitulo="Muda a espécie de várias contas de uma vez — ex: achar todo vale-transporte e jogar em VALE TRANSPORTE"
+    >
+      <div className="flex flex-wrap items-end gap-2 mb-3">
+        <Campo label="Texto na conta">
+          <input
+            value={filtro.busca}
+            onChange={(e) => { setFiltro({ ...filtro, busca: e.target.value }); setPrevia(null); }}
+            onKeyDown={(e) => { if (e.key === 'Enter') buscar(); }}
+            placeholder="vale transporte"
+            title="Procura no beneficiário, na observação e na nota fiscal"
+            className="px-2 py-1.5 rounded-lg border border-[#E7E2D8] text-sm w-56"
+          />
+        </Campo>
+        <Campo label="Espécie atual">
+          <select
+            value={filtro.especieOrigemId}
+            onChange={(e) => { setFiltro({ ...filtro, especieOrigemId: e.target.value }); setPrevia(null); }}
+            className="px-2 py-1.5 rounded-lg border border-[#E7E2D8] text-sm"
+          >
+            <option value="">qualquer uma</option>
+            <option value="__SEM__">(sem espécie)</option>
+            {[...cfg.especies, ...(cfg.especiesInativas || [])].map((e: any) => (
+              <option key={e.id} value={e.id}>{e.nome}</option>
+            ))}
+          </select>
+        </Campo>
+        <Campo label="Vencimento de">
+          <input type="date" value={filtro.de}
+            onChange={(e) => { setFiltro({ ...filtro, de: e.target.value }); setPrevia(null); }}
+            className="px-2 py-1.5 rounded-lg border border-[#E7E2D8] text-sm" />
+        </Campo>
+        <Campo label="até">
+          <input type="date" value={filtro.ate}
+            onChange={(e) => { setFiltro({ ...filtro, ate: e.target.value }); setPrevia(null); }}
+            className="px-2 py-1.5 rounded-lg border border-[#E7E2D8] text-sm" />
+        </Campo>
+        <button onClick={buscar} disabled={buscando}
+          className="px-3 py-1.5 rounded-lg border border-[#E7E2D8] hover:bg-[#FBF6E6] text-sm font-semibold flex items-center gap-1.5">
+          {buscando ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />} Procurar
+        </button>
+      </div>
+
+      {previa && (
+        previa.total === 0 ? (
+          <p className="text-xs text-slate-500">Nenhuma conta encontrada com esse filtro.</p>
+        ) : (
+          <div className="border border-[#E7E2D8] rounded-lg overflow-hidden">
+            <div className="px-3 py-2 bg-[#FBF6E6]/60 border-b border-[#E7E2D8] flex flex-wrap items-center gap-3">
+              <span className="font-extrabold text-sm">
+                {previa.total} conta(s) · {brl(previa.valor)}
+              </span>
+              <div className="flex-1" />
+              <span className="text-xs font-bold text-slate-500">mover para</span>
+              <select value={destino} onChange={(e) => setDestino(e.target.value)}
+                className="px-2 py-1.5 rounded-lg border border-[#E7E2D8] text-sm font-bold">
+                <option value="">escolha a espécie…</option>
+                {cfg.especies.map((e: any) => <option key={e.id} value={e.id}>{e.nome}</option>)}
+              </select>
+              <button onClick={aplicar} disabled={!destino || aplicando}
+                className="bg-[#B8912B] hover:bg-[#8C7325] disabled:opacity-40 text-white font-bold px-3 py-1.5 rounded-lg text-sm flex items-center gap-1.5">
+                {aplicando ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />} Aplicar
+              </button>
+            </div>
+            <div className="max-h-72 overflow-auto">
+              <table className="w-full text-sm">
+                <thead><tr className="text-xs text-slate-500 border-b border-[#E7E2D8] sticky top-0 bg-white">
+                  <th className="text-left px-3 py-1.5">Vencimento</th>
+                  <th className="text-left">Beneficiário</th>
+                  <th className="text-left">Observação</th>
+                  <th className="text-left">Espécie hoje</th>
+                  <th className="text-left">Loja</th>
+                  <th className="text-right px-3">Valor</th>
+                </tr></thead>
+                <tbody>
+                  {previa.amostra.map((c: any) => (
+                    <tr key={c.id} className="border-b border-[#F5F2EB]">
+                      <td className="px-3 py-1.5">{fmtDia(String(c.vencimento).slice(0, 10))}</td>
+                      <td className="truncate max-w-[200px]">{c.beneficiario}</td>
+                      <td className="truncate max-w-[200px] text-slate-500 text-xs">{c.observacao || '—'}</td>
+                      <td className="text-slate-500 text-xs">{c.especieAtual}</td>
+                      <td className="text-slate-500 text-xs">{c.lojaCode}</td>
+                      <td className="text-right px-3 tabular-nums">{brl(c.valor)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {previa.total > previa.amostra.length && (
+              <div className="px-3 py-1.5 text-[11px] text-slate-500 border-t border-[#F5F2EB]">
+                Mostrando {previa.amostra.length} das {previa.total} — <b>todas as {previa.total} serão movidas</b>.
+              </div>
+            )}
+          </div>
+        )
+      )}
+
+      <p className="text-[11px] text-slate-400 mt-2">
+        Só muda a classificação: valor, vencimento e beneficiário ficam intactos. Cada conta movida
+        registra quem mudou e de qual espécie veio — dá pra auditar e reclassificar de volta.
+      </p>
+    </Bloco>
   );
 }
 

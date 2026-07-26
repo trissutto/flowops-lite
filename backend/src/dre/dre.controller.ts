@@ -99,6 +99,33 @@ export class DreController {
     return this.svc.setEspecieAtiva(id, true);
   }
 
+  // ── reclassificação em massa (mexe no Contas a Pagar real) ──
+
+  /** Prévia: o que seria movido. SEMPRE consultada antes de aplicar. */
+  @Get('config/reclassificar/previa')
+  previaReclassificacao(
+    @Req() req: any,
+    @Query('especieOrigemId') especieOrigemId?: string,
+    @Query('busca') busca?: string,
+    @Query('de') de?: string,
+    @Query('ate') ate?: string,
+  ) {
+    this.requireAdmin(req);
+    return this.svc.previaReclassificacao({ especieOrigemId, busca, de, ate });
+  }
+
+  @Post('config/reclassificar')
+  reclassificar(
+    @Req() req: any,
+    @Body() body: {
+      especieOrigemId?: string; busca?: string; de?: string; ate?: string;
+      especieDestinoId: string;
+    },
+  ) {
+    const usuario = this.requireAdmin(req);
+    return this.svc.reclassificarEmMassa(body, usuario);
+  }
+
   @Post('config/aliquota')
   upsertAliquota(
     @Req() req: any,
