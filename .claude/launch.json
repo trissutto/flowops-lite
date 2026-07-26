@@ -7,6 +7,18 @@
       "runtimeArgs": ["run", "dev"],
       "cwd": "frontend",
       "port": 3000
+    },
+    {
+      "name": "prototipo-familia",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["-y", "http-server", "C:/Users/User/Documents/Claude/Projects/familia-plus", "-p", "4173", "-c-1"],
+      "port": 4173
+    },
+    {
+      "name": "familia-app-web",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["-y", "http-server", "C:/Users/User/Documents/Claude/Projects/familia-plus/app/build/web", "-p", "4174", "-c-1"],
+      "port": 4174
     }
   ]
 }
