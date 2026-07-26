@@ -139,6 +139,13 @@ export interface DreColuna {
 
   avisos: string[];
 
+  /**
+   * Parte da despesa desta coluna que AINDA NÃO FOI PAGA. Já está somada na
+   * DRE (regime de competência = entra pelo vencimento), então isto é só pra
+   * tela deixar claro que a provisão está contemplada.
+   */
+  despesaEmAberto: number;
+
   /** De onde veio cada real de despesa — espécie a espécie, do Contas a Pagar. */
   despesasDetalhe: Array<{ especie: string; grupo: DreGrupoEspecie; valor: number }>;
 }
@@ -501,7 +508,7 @@ export class DreService implements OnApplicationBootstrap {
       rateioRede: 0, despesasFinanceiras: 0, resultadoLiquido: 0, lucratividade: 0,
       pontoEquilibrio: null, pontoEquilibrioDia: null, faltaPraEquilibrio: null,
       cupons: 0, pecas: 0, ticketMedio: 0,
-      avisos: [], despesasDetalhe: [],
+      avisos: [], despesaEmAberto: 0, despesasDetalhe: [],
     };
   }
 
@@ -701,10 +708,15 @@ export class DreService implements OnApplicationBootstrap {
       // invisível no resultado. Vem numa coluna própria porque ele NÃO é da
       // natureza da conta: aluguel pago com atraso não gera "mais aluguel",
       // gera DESPESA FINANCEIRA.
+      // PAGO × EM ABERTO vem separado (26/07). A DRE é por COMPETÊNCIA: a
+      // conta entra pelo VENCIMENTO, tenha sido paga ou não — ou seja, já
+      // funciona como provisão. Mas isso era invisível na tela e o dono ficou
+      // na dúvida se só entrava depois de pago. Agora dá pra mostrar.
       `SELECT loja_code AS "lojaCode", especie_id AS "especieId",
               COALESCE(fornecedor_nome, seller_nome, '') AS "beneficiario",
               SUM(valor_cents)::bigint AS "valorCents",
-              SUM(juros_cents)::bigint AS "jurosCents"
+              SUM(juros_cents)::bigint AS "jurosCents",
+              SUM(CASE WHEN pagamento IS NULL THEN valor_cents ELSE 0 END)::bigint AS "abertoCents"
          FROM conta_pagar
         WHERE vencimento >= $1::date AND vencimento <= $2::date
           AND status <> 'cancelada' AND deleted_at IS NULL
@@ -732,6 +744,7 @@ export class DreService implements OnApplicationBootstrap {
     for (const c of contas) {
       const valor = Number(c.valorCents || 0) / 100;
       const juros = Number(c.jurosCents || 0) / 100;
+      const aberto = Number(c.abertoCents || 0) / 100;
       if (!valor && !juros) continue;
       // Fornecedor excluído por ajuste (ex: VERISURE, contrato encerrado):
       // sai da DRE mas NÃO some — vai pro bloco "o que ficou de fora".
@@ -775,6 +788,7 @@ export class DreService implements OnApplicationBootstrap {
       if (!col) { despesaSemColuna += valor; continue; }
 
       this.somaDespesa(col, nome, g, valor);
+      col.despesaEmAberto += aberto;
     }
 
     // ── 5a) TAXA DE CARTÃO — despesa variável calculada, não lançada ─────
@@ -1210,6 +1224,7 @@ export class DreService implements OnApplicationBootstrap {
       t.despesasVariaveis += c.despesasVariaveis;
       t.despesasFixas += c.despesasFixas;
       t.despesasFinanceiras += c.despesasFinanceiras;
+      t.despesaEmAberto += c.despesaEmAberto;
       t.rateioRede += c.rateioRede;
       t.cupons += c.cupons;
       t.pecas += c.pecas;
@@ -1398,6 +1413,13 @@ export class DreService implements OnApplicationBootstrap {
         if (!especieAlvo) return true;
         return this.semAcento(c.especie?.nome || '(sem espécie)') === especieAlvo;
       });
+      const emAberto = filtradas
+        .filter((c) => !c.pagamento)
+        .reduce((s, c) => s + Number(c.valorCents || 0) / 100, 0);
+      const pago = filtradas
+        .filter((c) => !!c.pagamento)
+        .reduce((s, c) => s + Number(c.valorCents || 0) / 100, 0);
+
       return {
         tipo: 'despesas',
         linhas: filtradas.map((c) => ({
@@ -1408,8 +1430,12 @@ export class DreService implements OnApplicationBootstrap {
           especie: c.especie?.nome || '(sem espécie)',
           valor: Number(c.valorCents || 0) / 100,
           status: c.status,
+          pago: !!c.pagamento,
           notaFiscal: c.notaFiscal,
         })),
+        // Pago × em aberto: as duas partes entram na DRE (competência), mas
+        // ver a separação evita a dúvida "isso já está provisionado?".
+        resumo: { pago, emAberto, total: pago + emAberto },
         truncado: contas.length >= 500,
       };
     }

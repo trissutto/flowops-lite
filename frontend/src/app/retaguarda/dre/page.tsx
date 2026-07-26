@@ -50,6 +50,7 @@ type Coluna = {
   pontoEquilibrio: number | null; pontoEquilibrioDia: string | null; faltaPraEquilibrio: number | null;
   cupons: number; pecas: number; ticketMedio: number;
   avisos: string[];
+  despesaEmAberto: number;
   despesasDetalhe: Array<{ especie: string; grupo: string; valor: number }>;
 };
 
@@ -651,7 +652,15 @@ function FichaLoja({ coluna: c, data, onDrill }: {
       {/* Onde vai a despesa desta loja */}
       {c.despesasDetalhe?.length > 0 && (
         <div className="bg-white border border-[#E7E2D8] rounded-xl p-5">
-          <h3 className="font-extrabold text-slate-800 mb-3">Onde vai a despesa</h3>
+          <div className="flex flex-wrap items-baseline gap-2 mb-3">
+            <h3 className="font-extrabold text-slate-800">Onde vai a despesa</h3>
+            {c.despesaEmAberto > 0 && (
+              <span className="text-[11px] text-slate-500">
+                — inclui <b className="text-amber-700">{brl(c.despesaEmAberto)}</b> ainda não pagos:
+                a DRE conta pelo vencimento, então a provisão já está aqui
+              </span>
+            )}
+          </div>
           <div className="space-y-1.5">
             {c.despesasDetalhe.slice(0, 12).map((d) => {
               const share = c.receitaLiquida ? d.valor / c.receitaLiquida : 0;
@@ -1316,7 +1325,7 @@ function DrillModal({
                       <td className="truncate max-w-[220px]">{l.beneficiario}</td>
                       <td className="text-slate-500">{l.especie}</td>
                       <td className="text-right tabular-nums font-semibold">{brl(l.valor)}</td>
-                      <td className="pl-3 text-xs text-slate-500">{l.status}</td>
+                      <td className="pl-3 text-xs"><span className={l.pago ? 'text-slate-400' : 'text-amber-700 font-bold'}>{l.pago ? 'paga' : 'em aberto'}</span></td>
                     </tr>
                   ))}
                 </tbody>
@@ -1332,8 +1341,24 @@ function DrillModal({
           {data?.linhas?.length === 0 && <p className="text-slate-400 py-6 text-center">Nada no período.</p>}
         </div>
         {data?.linhas?.length > 0 && (
-          <div className="px-5 py-2.5 border-t border-[#E7E2D8] text-sm font-extrabold flex justify-between">
-            <span>Total listado</span><span className="tabular-nums">{brl(totalLinhas)}</span>
+          <div className="border-t border-[#E7E2D8]">
+            {data.resumo && data.resumo.emAberto > 0 && (
+              <div className="px-5 py-2 flex flex-wrap items-center gap-3 text-xs border-b border-[#F5F2EB] bg-[#FBF6E6]/40">
+                <span className="text-slate-500">
+                  <b className="text-slate-700">{brl(data.resumo.pago)}</b> já pago
+                </span>
+                <span className="text-slate-400">·</span>
+                <span className="text-slate-500">
+                  <b className="text-amber-700">{brl(data.resumo.emAberto)}</b> ainda em aberto
+                </span>
+                <span className="text-[11px] text-slate-400">
+                  — os dois entram na DRE: a conta pesa no mês do VENCIMENTO, pago ou não (provisão).
+                </span>
+              </div>
+            )}
+            <div className="px-5 py-2.5 text-sm font-extrabold flex justify-between">
+              <span>Total listado</span><span className="tabular-nums">{brl(totalLinhas)}</span>
+            </div>
           </div>
         )}
       </div>
