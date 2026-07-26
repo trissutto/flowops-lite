@@ -1715,19 +1715,24 @@ export class DreService implements OnApplicationBootstrap {
     }
 
     const paraMover = alvos.filter((a) => a.especieId !== input.especieDestinoId);
-    await (this.prisma as any).contaPagar.updateMany({
-      where: { id: { in: paraMover.map((a) => a.id) } },
-      data: { especieId: input.especieDestinoId, updatedBy: usuario?.slice(0, 80) || null },
-    });
 
-    // Rastro por conta — sem isso, uma reclassificação errada em 300 contas
-    // não teria como ser auditada nem desfeita com segurança.
+    // TRANSAÇÃO: mover e registrar têm que acontecer JUNTOS.
     //
-    // Os campos são curtos no schema (origem VarChar(20), usuario 80, valores
-    // 300) e estourar QUALQUER um derruba a operação inteira em 500. Já
-    // aconteceu: 'reclassificacao-massa' tem 21 caracteres. Corta tudo aqui.
-    try {
-      await (this.prisma as any).contaPagarLog.createMany({
+    // Antes eram dois awaits soltos e isso mordeu de verdade (26/07): o INSERT
+    // do log estourou um VarChar, a API devolveu 500 — mas as contas JÁ
+    // tinham sido movidas. O dono viu "erro", foi conferir e o filtro veio
+    // vazio, porque as contas não estavam mais na espécie de origem. Estado
+    // ambíguo é pior que falha limpa: agora, se o log não entra, o move volta
+    // atrás e ele pode simplesmente tentar de novo.
+    //
+    // Campos curtos no schema (origem 20, usuario 80, valores 300) — cortados
+    // aqui pra não estourar de novo.
+    await this.prisma.$transaction(async (tx: any) => {
+      await tx.contaPagar.updateMany({
+        where: { id: { in: paraMover.map((a) => a.id) } },
+        data: { especieId: input.especieDestinoId, updatedBy: usuario?.slice(0, 80) || null },
+      });
+      await tx.contaPagarLog.createMany({
         data: paraMover.map((a) => ({
           contaId: a.id,
           campo: 'especieId',
@@ -1737,11 +1742,7 @@ export class DreService implements OnApplicationBootstrap {
           origem: 'massa',
         })),
       });
-    } catch (e: any) {
-      // As contas JÁ foram movidas. Perder o log é ruim, mas devolver erro
-      // aqui faria o dono repetir a operação achando que não funcionou.
-      this.logger.error(`[dre] reclassificação aplicada mas o log falhou: ${e?.message || e}`);
-    }
+    }, { timeout: 30_000 });
 
     this.logger.log(
       `[dre] reclassificação em massa: ${paraMover.length} conta(s) → "${destino.nome}" por ${usuario || '—'}`,

@@ -1730,7 +1730,14 @@ function BlocoReclassificar({ cfg, avisar, onMudou }: {
 
       {previa && (
         previa.total === 0 ? (
-          <p className="text-xs text-slate-500">Nenhuma conta encontrada com esse filtro.</p>
+          <div className="text-xs text-slate-500 space-y-1">
+            <p className="font-semibold">Nenhuma conta encontrada com esse filtro.</p>
+            <p className="text-slate-400">
+              Se você acabou de reclassificar, elas já saíram da espécie de origem — troque
+              “Espécie atual” pela de destino pra conferir. Vale checar também o período de
+              vencimento e se o texto bate com o que está escrito na conta.
+            </p>
+          </div>
         ) : (
           <div className="border border-[#E7E2D8] rounded-lg overflow-hidden">
             <div className="px-3 py-2 bg-[#FBF6E6]/60 border-b border-[#E7E2D8] flex flex-wrap items-center gap-3">
