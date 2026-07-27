@@ -92,7 +92,11 @@ export class PickOrdersService {
     //   3. Correios (default)
     const store: any = await this.prisma.store.findUnique({ where: { id: pick.storeId } });
     const mapped = MAISENVIOS_STORES[String(store?.code || '')];
-    const provider = store?.shippingProvider || (mapped ? 'maisenvios' : 'correios');
+    // KILL-SWITCH: roteamento Mais Envios só liga com MAISENVIOS_ROUTING=1 (a
+    // pré-postagem do Mais Envios ainda está em validação). Sem a flag, TUDO vai
+    // pelo Correios — estado estável.
+    const routingOn = String(process.env.MAISENVIOS_ROUTING || '').trim() === '1';
+    const provider = routingOn ? (store?.shippingProvider || (mapped ? 'maisenvios' : 'correios')) : 'correios';
     const senderId = store?.maisEnviosSenderId || mapped || null;
     let r: any;
     if (provider === 'maisenvios') {
