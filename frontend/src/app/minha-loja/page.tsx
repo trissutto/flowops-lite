@@ -722,7 +722,14 @@ export default function MinhaLojaPage() {
         ? { ...x, trackingCode: r.codigoRastreio, carrier: r.servico ? `Correios ${r.servico}` : 'Correios', correiosPrepostagemId: r.idPrepostagem ?? null }
         : x)));
       pushToast(`📮 Envio gerado (${r.servico ?? '—'}): ${r.codigoRastreio} — aguardando postagem`);
-      if (r.idPrepostagem) await baixarEtiquetaEDeclaracao(String(r.idPrepostagem), r.codigoRastreio);
+      if (r.etiquetaPdf) {
+        // Mais Envios já devolve o PDF da etiqueta na resposta
+        downloadPdf(r.etiquetaPdf, `etiqueta-${r.codigoRastreio}.pdf`);
+        pushToast('🏷️ Etiqueta baixada');
+      } else if (r.idPrepostagem) {
+        // Correios: etiqueta + declaração por chamada separada
+        await baixarEtiquetaEDeclaracao(String(r.idPrepostagem), r.codigoRastreio);
+      }
     } catch (err: any) {
       pushToast(`Erro no envio Correios: ${err?.message ?? 'falha'}`);
     }

@@ -5,7 +5,12 @@ import { WooCommerceService } from '../woocommerce/woocommerce.service';
 import { ErpService } from '../erp/erp.service';
 import { ManychatService } from '../live-pdv/manychat.service';
 import { LivePdvService } from '../live-pdv/live-pdv.service';
+import { MaisEnviosService } from '../mais-envios/mais-envios.service';
 import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service';
+
+// Lojas que despacham pelo MAIS ENVIOS (código Flow → sender id no Mais Envios).
+// As demais vão pelo Correios (CWS). Piracicaba/Sorocaba/Limeira/Moema.
+const MAISENVIOS_STORES: Record<string, number> = { '05': 3605, '06': 209, '11': 213, '15': 22908 };
 import { authorizeMinLevel } from '../auth/auth-levels.util';
 
 // Status LOGÍSTICO do pick-order (controlado pela loja):
@@ -61,6 +66,7 @@ export class PickOrdersService {
     private readonly manychat: ManychatService,
     private readonly catalog: WincredCatalogService,
     private readonly livePdv: LivePdvService,
+    private readonly maisEnvios: MaisEnviosService,
   ) {}
 
   /**
@@ -77,25 +83,65 @@ export class PickOrdersService {
     const order = await this.prisma.order.findUnique({ where: { id: pick.orderId } });
     if (!order) throw new NotFoundException('Pedido não encontrado');
     if (order.source !== 'live' || !order.liveCartId) {
-      throw new BadRequestException('Envio automático dos Correios: por ora só pedidos da live.');
+      throw new BadRequestException('Envio automático: por ora só pedidos da live.');
     }
 
-    const r: any = await this.livePdv.gerarEnvioCorreios(order.liveCartId);
-    if (!r?.codigoRastreio) throw new BadRequestException('Não foi possível gerar o código de rastreio nos Correios.');
+    // Roteia pelo provedor da LOJA de origem: Mais Envios (Sorocaba/Piracicaba/
+    // Limeira/Moema) ou Correios (demais).
+    const store = await this.prisma.store.findUnique({ where: { id: pick.storeId } });
+    const senderId = MAISENVIOS_STORES[String(store?.code || '')];
+    const r: any = senderId
+      ? await this.gerarEnvioMaisEnvios(order.liveCartId, senderId)
+      : await this.livePdv.gerarEnvioCorreios(order.liveCartId);
+    if (!r?.codigoRastreio) throw new BadRequestException('Não foi possível gerar o rastreio.');
 
     // MODEL B: NÃO marca enviado. Só grava a pré-postagem no pick-order — o
     // pedido CONTINUA na lista "aguardando postagem". Quem marca enviado (baixa
-    // Giga + WhatsApp) é o cron, quando os Correios registrarem a postagem.
+    // Giga + WhatsApp) é o cron/"Já postei", quando registrar a postagem.
     await this.prisma.pickOrder.update({
       where: { id },
       data: {
         trackingCode: r.codigoRastreio,
-        carrier: r.servico ? `Correios ${r.servico}` : 'Correios',
+        carrier: r.carrier || (r.servico ? `Correios ${r.servico}` : 'Correios'),
         correiosPrepostagemId: r.idPrepostagem ? String(r.idPrepostagem) : null,
         correiosGeneratedAt: new Date(),
       },
     });
-    return { ok: true, codigoRastreio: r.codigoRastreio, idPrepostagem: r.idPrepostagem ?? null, servico: r.servico ?? null };
+    return { ok: true, codigoRastreio: r.codigoRastreio, idPrepostagem: r.idPrepostagem ?? null, servico: r.servico ?? null, etiquetaPdf: r.etiquetaPdf ?? null };
+  }
+
+  /** Gera a pré-postagem no MAIS ENVIOS a partir do carrinho da live. */
+  private async gerarEnvioMaisEnvios(cartId: string, senderId: number) {
+    const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId }, include: { items: true } });
+    if (!cart) throw new NotFoundException('Carrinho não encontrado');
+    const itens = (cart.items || []).filter((i: any) => i.status !== 'cancelled');
+    if (!itens.length) throw new BadRequestException('Carrinho sem itens.');
+    const totalPecas = itens.reduce((s: number, i: any) => s + (Number(i.qty) || 1), 0);
+    const pesoGramas = Math.max(300, totalPecas * 200);
+    const resp: any = await this.maisEnvios.criarPrepost({
+      senderId,
+      servico: 'SEDEX', // +Expresso: mais barato e mais rápido na conta LURDS
+      destinatario: {
+        nome: cart.customerName || 'Cliente',
+        cpf: String(cart.customerCpf || '').replace(/\D/g, ''),
+        cep: String(cart.customerCep || '').replace(/\D/g, ''),
+        endereco: cart.customerEndereco || '',
+        numero: cart.customerNumero || 'S/N',
+        complemento: cart.customerComplemento || '',
+        bairro: cart.customerBairro || '',
+        cidade: cart.customerCidade || '',
+        uf: cart.customerUf || '',
+        telefone: String(cart.customerPhone || '').replace(/\D/g, ''),
+        email: cart.customerEmail || '',
+      },
+      pesoGramas,
+      valorDeclarado: cart.totalCents ? cart.totalCents / 100 : undefined,
+      itens: itens.map((i: any) => ({ conteudo: [i.refCode, i.descricao, i.cor, i.tamanho].filter(Boolean).join(' ').slice(0, 60) || 'Vestuário', quantidade: Number(i.qty) || 1 })),
+    });
+    if (!resp?.ok || !resp.tag) throw new BadRequestException(`Mais Envios recusou o envio: ${resp?.erro || 'sem tag'}`);
+    let etiquetaPdf: string | null = null;
+    try { const et = await this.maisEnvios.baixarEtiqueta(resp.tag); if (et?.ok && et.pdfBase64) etiquetaPdf = et.pdfBase64; } catch { /* etiqueta opcional */ }
+    return { codigoRastreio: resp.tag, idPrepostagem: resp.idPrepostagem ?? null, servico: 'SEDEX', carrier: 'Mais Envios SEDEX', etiquetaPdf };
   }
 
   /**
