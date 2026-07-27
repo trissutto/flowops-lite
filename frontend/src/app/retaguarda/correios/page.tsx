@@ -139,6 +139,7 @@ export default function CorreiosDiagnostico() {
   const [prepost, setPrepost] = useState<any>(null);
   const [loadingPP, setLoadingPP] = useState(false);
   const [erroPP, setErroPP] = useState<string | null>(null);
+  const [cepBuscando, setCepBuscando] = useState<'rem' | 'dest' | null>(null);
 
   // carrega remetente salvo (1x)
   useEffect(() => {
@@ -154,6 +155,21 @@ export default function CorreiosDiagnostico() {
     return next;
   });
   const setDest = (patch: Partial<Endereco>) => setDestinatario((d) => ({ ...d, ...patch }));
+
+  // CEP → endereço (ViaCEP via backend). Preenche logradouro/bairro/cidade/uf.
+  const buscarCep = async (cepRaw: string, alvo: 'rem' | 'dest') => {
+    const cep = cepRaw.replace(/\D/g, '');
+    if (cep.length !== 8) return;
+    setCepBuscando(alvo);
+    try {
+      const r = await api<any>(`/correios/cep?cep=${cep}`);
+      if (r && !r.erro) {
+        const patch = { endereco: r.logradouro || '', bairro: r.bairro || '', cidade: r.cidade || '', uf: r.uf || '' };
+        if (alvo === 'dest') setDest(patch); else setRem(patch);
+      }
+    } catch { /* silencioso — usuário digita manual se falhar */ }
+    finally { setCepBuscando(null); }
+  };
 
   const testarPrepostagem = useCallback(async () => {
     setLoadingPP(true);
@@ -307,7 +323,7 @@ export default function CorreiosDiagnostico() {
                 <Campo label="Bairro" value={remetente.bairro} onChange={(v) => setRem({ bairro: v })} />
                 <Campo label="Cidade" value={remetente.cidade} onChange={(v) => setRem({ cidade: v })} />
                 <Campo label="UF" value={remetente.uf} onChange={(v) => setRem({ uf: v })} />
-                <Campo label="CEP" value={remetente.cep} onChange={(v) => setRem({ cep: v })} className="col-span-2" />
+                <Campo label={cepBuscando === 'rem' ? 'CEP (buscando…)' : 'CEP'} value={remetente.cep} onChange={(v) => { setRem({ cep: v }); buscarCep(v, 'rem'); }} className="col-span-2" />
               </div>
             </div>
             <div>
@@ -322,7 +338,7 @@ export default function CorreiosDiagnostico() {
                 <Campo label="Bairro" value={destinatario.bairro} onChange={(v) => setDest({ bairro: v })} />
                 <Campo label="Cidade" value={destinatario.cidade} onChange={(v) => setDest({ cidade: v })} />
                 <Campo label="UF" value={destinatario.uf} onChange={(v) => setDest({ uf: v })} />
-                <Campo label="CEP" value={destinatario.cep} onChange={(v) => setDest({ cep: v })} />
+                <Campo label={cepBuscando === 'dest' ? 'CEP (buscando…)' : 'CEP'} value={destinatario.cep} onChange={(v) => { setDest({ cep: v }); buscarCep(v, 'dest'); }} />
               </div>
             </div>
           </div>

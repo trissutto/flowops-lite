@@ -35,6 +35,27 @@ export class CorreiosService {
     };
   }
 
+  /** Busca endereço por CEP (ViaCEP) — autopreenche remetente/destinatário. */
+  async buscarCep(cepRaw: string) {
+    const cep = String(cepRaw || '').replace(/\D/g, '');
+    if (cep.length !== 8) throw new BadRequestException('CEP inválido (8 dígitos).');
+    try {
+      const r = await axios.get(`https://viacep.com.br/ws/${cep}/json/`, { timeout: 8000, validateStatus: () => true });
+      if (r.status >= 200 && r.status < 300 && r.data && !r.data.erro) {
+        return {
+          cep,
+          logradouro: r.data.logradouro || '',
+          bairro: r.data.bairro || '',
+          cidade: r.data.localidade || '',
+          uf: r.data.uf || '',
+        };
+      }
+      return { erro: 'CEP não encontrado' };
+    } catch (e: any) {
+      return { erro: e?.message || 'falha ao buscar CEP' };
+    }
+  }
+
   /**
    * DEBUG PRC-124: autentica, decodifica o JWT devolvido pelos Correios e mostra
    * a QUE contrato/DR/cartão o token está amarrado — pra comparar com o que a
