@@ -69,10 +69,11 @@ export class PickOrdersService {
    * rastreio" — dispara baixa Giga + WhatsApp). Reusa gerarEnvioCorreios do
    * carrinho da live (via Order.liveCartId). Só live por enquanto.
    */
-  async gerarEnvioCorreios(id: string, storeId: string, userId: string) {
+  async gerarEnvioCorreios(id: string, storeId: string, _userId: string) {
     const pick = await this.prisma.pickOrder.findUnique({ where: { id } });
     if (!pick) throw new NotFoundException('Pick-order não encontrado');
     if (pick.storeId !== storeId) throw new ForbiddenException('Pick-order não pertence à sua loja');
+    if (pick.status === 'shipped') throw new BadRequestException('Pedido já enviado.');
     const order = await this.prisma.order.findUnique({ where: { id: pick.orderId } });
     if (!order) throw new NotFoundException('Pedido não encontrado');
     if (order.source !== 'live' || !order.liveCartId) {
@@ -82,15 +83,59 @@ export class PickOrdersService {
     const r: any = await this.livePdv.gerarEnvioCorreios(order.liveCartId);
     if (!r?.codigoRastreio) throw new BadRequestException('Não foi possível gerar o código de rastreio nos Correios.');
 
-    // Marca enviado pelo caminho testado (Giga + WhatsApp), só se ainda não enviado.
-    if (pick.status !== 'shipped') {
-      await this.updateStatus(id, storeId, userId, {
-        status: 'shipped' as PickStatus,
+    // MODEL B: NÃO marca enviado. Só grava a pré-postagem no pick-order — o
+    // pedido CONTINUA na lista "aguardando postagem". Quem marca enviado (baixa
+    // Giga + WhatsApp) é o cron, quando os Correios registrarem a postagem.
+    await this.prisma.pickOrder.update({
+      where: { id },
+      data: {
         trackingCode: r.codigoRastreio,
         carrier: r.servico ? `Correios ${r.servico}` : 'Correios',
-      });
-    }
+        correiosPrepostagemId: r.idPrepostagem ? String(r.idPrepostagem) : null,
+        correiosGeneratedAt: new Date(),
+      },
+    });
     return { ok: true, codigoRastreio: r.codigoRastreio, idPrepostagem: r.idPrepostagem ?? null, servico: r.servico ?? null };
+  }
+
+  /**
+   * REABRIR: desfaz a pré-postagem gerada (ex.: modalidade errada) pra refazer.
+   * Limpa o rastreio do pick-order E o envio do carrinho da live
+   * (correiosPrepostagemId + trackingCode dos itens) pra o "Gerar envio" criar do
+   * zero. NÃO mexe em estoque — no Model B a pré-postagem não baixou nada ainda.
+   * (Cancelar a pré-postagem antiga nos Correios é manual, no portal.)
+   */
+  async reabrirEnvioCorreios(id: string, storeId: string) {
+    const pick = await this.prisma.pickOrder.findUnique({ where: { id } });
+    if (!pick) throw new NotFoundException('Pick-order não encontrado');
+    if (pick.storeId !== storeId) throw new ForbiddenException('Pick-order não pertence à sua loja');
+    if (pick.status === 'shipped') {
+      throw new BadRequestException('Pedido já postado/enviado — reabrir só vale antes da postagem.');
+    }
+    const order = await this.prisma.order.findUnique({ where: { id: pick.orderId } });
+    if (order?.liveCartId) {
+      await (this.prisma as any).livePdvCart.update({ where: { id: order.liveCartId }, data: { correiosPrepostagemId: null } });
+      await (this.prisma as any).livePdvItem.updateMany({ where: { cartId: order.liveCartId }, data: { trackingCode: null } });
+    }
+    await this.prisma.pickOrder.update({
+      where: { id },
+      data: { trackingCode: null, carrier: null, correiosPrepostagemId: null, correiosGeneratedAt: null },
+    });
+    return { ok: true };
+  }
+
+  /**
+   * Cron: marca ENVIADO (Giga + WhatsApp, caminho testado) quando os Correios já
+   * registraram a postagem. Idempotente — ignora quem já está shipped.
+   */
+  async marcarEnviadoPorPostagem(id: string) {
+    const pick = await this.prisma.pickOrder.findUnique({ where: { id } });
+    if (!pick || pick.status === 'shipped' || !pick.trackingCode) return;
+    await this.updateStatus(id, pick.storeId, 'system-correios', {
+      status: 'shipped' as PickStatus,
+      trackingCode: pick.trackingCode,
+      carrier: pick.carrier || 'Correios',
+    });
   }
 
   /**
@@ -603,6 +648,8 @@ export class PickOrdersService {
         status: r.status,
         trackingCode: r.trackingCode,
         carrier: r.carrier,
+        correiosPrepostagemId: (r as any).correiosPrepostagemId ?? null,
+        correiosGeneratedAt: (r as any).correiosGeneratedAt ?? null,
         createdAt: r.createdAt,
         updatedAt: r.updatedAt,
         isTransfer: r.isTransfer,

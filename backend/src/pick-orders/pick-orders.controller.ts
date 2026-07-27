@@ -259,7 +259,8 @@ export class PickOrdersController {
     return this.svc.updateStatus(id, user.storeId, user.userId, body);
   }
 
-  /** Gera a pré-postagem dos Correios pro pedido da live e marca ENVIADO. */
+  /** Gera a pré-postagem dos Correios pro pedido da live (NÃO marca enviado —
+   *  o cron marca quando os Correios registram a postagem). */
   @Post(':id/correios-envio')
   correiosEnvio(@Req() req: any, @Param('id') id: string) {
     const user = req.user as AuthUser;
@@ -267,6 +268,16 @@ export class PickOrdersController {
       throw new ForbiddenException('Apenas usuários de loja postam');
     }
     return this.svc.gerarEnvioCorreios(id, user.storeId, user.userId);
+  }
+
+  /** Reabre (desfaz) a pré-postagem gerada pra refazer — ex.: modalidade errada. */
+  @Post(':id/correios-reabrir')
+  correiosReabrir(@Req() req: any, @Param('id') id: string) {
+    const user = req.user as AuthUser;
+    if (user.role !== 'store' || !user.storeId) {
+      throw new ForbiddenException('Apenas usuários de loja');
+    }
+    return this.svc.reabrirEnvioCorreios(id, user.storeId);
   }
 
   /**

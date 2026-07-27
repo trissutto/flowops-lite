@@ -756,6 +756,13 @@ model PickOrder {
   status       String   // new, separating, ready, shipped
   trackingCode String?  @map("tracking_code")
   carrier      String?
+  // ── CORREIOS: pré-postagem gerada mas AINDA NÃO postada fisicamente ──
+  // Model B: "Gerar envio" só cria a pré-postagem (trackingCode preenchido +
+  // correiosGeneratedAt). O cron acompanha o rastreio e, quando os Correios
+  // registram a postagem, marca shipped (baixa Giga + WhatsApp). Enquanto isso
+  // o pedido FICA na lista da loja (aguardando postagem).
+  correiosPrepostagemId String?   @map("correios_prepostagem_id")
+  correiosGeneratedAt   DateTime? @map("correios_generated_at")
   // ── Transferência entre lojas (quando pedido é retirada em loja e loja destino não tem estoque) ──
   isTransfer           Boolean @default(false) @map("is_transfer")             // true = separar e enviar pra outra loja, não pro cliente
   transferToStoreCode  String? @map("transfer_to_store_code")                   // loja que vai RECEBER a transferência (loja de retirada)
