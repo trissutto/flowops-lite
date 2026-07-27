@@ -1672,8 +1672,9 @@ function PickOrderCard({
 }) {
   const { order, status } = row;
   const items = order.items ?? [];
-  // Pedido da LIVE (número "LIVE-137") que não é retirada → pode gerar envio Correios.
-  const isLive = String(order.wcOrderNumber || '').toUpperCase().startsWith('LIVE') && !order.isPickup;
+  // Pode gerar envio Correios: qualquer pedido que NÃO é retirada em loja
+  // (live E site). Retirada não posta.
+  const podeGerarEnvio = !order.isPickup;
   const [corrBusy, setCorrBusy] = useState(false);
 
   const isTransfer = !!row.isTransfer;
@@ -1931,8 +1932,8 @@ function PickOrderCard({
             <Barcode className="w-6 h-6" /> Bipar peças
           </button>
         )}
-        {/* LIVE, pronto, SEM pré-postagem → gera (não marca enviado; fica na lista) */}
-        {(status === 'separated' || status === 'ready') && isLive && !row.trackingCode && (
+        {/* Pronto, SEM pré-postagem (live OU site) → gera (não marca enviado; fica na lista) */}
+        {(status === 'separated' || status === 'ready') && podeGerarEnvio && !row.trackingCode && (
           <button
             onClick={async (e) => { e.stopPropagation(); if (corrBusy) return; setCorrBusy(true); try { await onCorreios(); } finally { setCorrBusy(false); } }}
             disabled={corrBusy}
@@ -1942,8 +1943,8 @@ function PickOrderCard({
             <Truck className="w-6 h-6" /> {corrBusy ? 'Gerando...' : '📮 Gerar envio Correios'}
           </button>
         )}
-        {/* LIVE, pré-postagem gerada, aguardando postagem física */}
-        {isLive && row.trackingCode && status !== 'shipped' && (
+        {/* Pré-postagem gerada, aguardando postagem física */}
+        {podeGerarEnvio && row.trackingCode && status !== 'shipped' && (
           <div className="flex-1 flex flex-col gap-1">
             <div className="rounded-lg border-2 border-sky-300 bg-sky-50 px-3 py-1.5 text-center text-sm font-bold text-sky-800">
               📮 {row.trackingCode} · {row.carrier || 'Correios'}
@@ -1956,10 +1957,11 @@ function PickOrderCard({
             </div>
           </div>
         )}
-        {/* SITE (não-live) pronto → envio manual com rastreio digitado */}
-        {(status === 'separated' || status === 'ready') && !isLive && (
+        {/* Retirada em loja (não posta) OU fallback manual → envio com rastreio digitado */}
+        {(status === 'separated' || status === 'ready') && (order.isPickup || !row.trackingCode) && (
           <button
             onClick={(e) => { e.stopPropagation(); onShip(); }}
+            title="Digitar o rastreio manualmente (fallback se o Gerar envio falhar)"
             className="flex-1 bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white font-bold py-4 rounded-lg flex items-center justify-center gap-2 text-base shadow-md transition"
           >
             <Truck className="w-6 h-6" /> Enviar c/ rastreio

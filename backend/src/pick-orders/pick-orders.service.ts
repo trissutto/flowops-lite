@@ -6,6 +6,7 @@ import { ErpService } from '../erp/erp.service';
 import { ManychatService } from '../live-pdv/manychat.service';
 import { LivePdvService } from '../live-pdv/live-pdv.service';
 import { MaisEnviosService } from '../mais-envios/mais-envios.service';
+import { CorreiosService } from '../correios/correios.service';
 import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service';
 
 // Lojas que despacham pelo MAIS ENVIOS (código Flow → sender id no Mais Envios).
@@ -67,6 +68,7 @@ export class PickOrdersService {
     private readonly catalog: WincredCatalogService,
     private readonly livePdv: LivePdvService,
     private readonly maisEnvios: MaisEnviosService,
+    private readonly correios: CorreiosService,
   ) {}
 
   /**
@@ -80,30 +82,27 @@ export class PickOrdersService {
     if (!pick) throw new NotFoundException('Pick-order não encontrado');
     if (pick.storeId !== storeId) throw new ForbiddenException('Pick-order não pertence à sua loja');
     if (pick.status === 'shipped') throw new BadRequestException('Pedido já enviado.');
-    const order = await this.prisma.order.findUnique({ where: { id: pick.orderId } });
+    const order: any = await this.prisma.order.findUnique({ where: { id: pick.orderId }, include: { items: true } });
     if (!order) throw new NotFoundException('Pedido não encontrado');
-    if (order.source !== 'live' || !order.liveCartId) {
-      throw new BadRequestException('Envio automático: por ora só pedidos da live.');
-    }
 
-    // Roteia pelo provedor da LOJA de origem. Prioridade:
-    //   1. config da loja (Store.shippingProvider + maisEnviosSenderId)
-    //   2. mapa fixo MAISENVIOS_STORES (fallback pra não quebrar antes de configurar)
-    //   3. Correios (default)
     const store: any = await this.prisma.store.findUnique({ where: { id: pick.storeId } });
-    const mapped = MAISENVIOS_STORES[String(store?.code || '')];
-    // KILL-SWITCH: roteamento Mais Envios só liga com MAISENVIOS_ROUTING=1 (a
-    // pré-postagem do Mais Envios ainda está em validação). Sem a flag, TUDO vai
-    // pelo Correios — estado estável.
-    const routingOn = String(process.env.MAISENVIOS_ROUTING || '').trim() === '1';
-    const provider = routingOn ? (store?.shippingProvider || (mapped ? 'maisenvios' : 'correios')) : 'correios';
-    const senderId = store?.maisEnviosSenderId || mapped || null;
     let r: any;
-    if (provider === 'maisenvios') {
-      if (!senderId) throw new BadRequestException('Loja configurada como Mais Envios, mas sem "sender id" — configure na tela de Lojas.');
-      r = await this.gerarEnvioMaisEnvios(order.liveCartId, senderId);
+    if (order.source === 'live') {
+      // LIVE: roteia pelo provedor da loja (Mais Envios atrás de flag) ou Correios.
+      if (!order.liveCartId) throw new BadRequestException('Pedido da live sem carrinho vinculado.');
+      const mapped = MAISENVIOS_STORES[String(store?.code || '')];
+      const routingOn = String(process.env.MAISENVIOS_ROUTING || '').trim() === '1';
+      const provider = routingOn ? (store?.shippingProvider || (mapped ? 'maisenvios' : 'correios')) : 'correios';
+      const senderId = store?.maisEnviosSenderId || mapped || null;
+      if (provider === 'maisenvios') {
+        if (!senderId) throw new BadRequestException('Loja Mais Envios sem "sender id" — configure na tela de Lojas.');
+        r = await this.gerarEnvioMaisEnvios(order.liveCartId, senderId);
+      } else {
+        r = await this.livePdv.gerarEnvioCorreios(order.liveCartId);
+      }
     } else {
-      r = await this.livePdv.gerarEnvioCorreios(order.liveCartId);
+      // SITE: Correios a partir do próprio Order (endereço + itens do pedido).
+      r = await this.gerarEnvioCorreiosSite(order, pick);
     }
     if (!r?.codigoRastreio) throw new BadRequestException('Não foi possível gerar o rastreio.');
 
@@ -154,6 +153,69 @@ export class PickOrdersService {
     let etiquetaPdf: string | null = null;
     try { const et = await this.maisEnvios.baixarEtiqueta(resp.tag); if (et?.ok && et.pdfBase64) etiquetaPdf = et.pdfBase64; } catch { /* etiqueta opcional */ }
     return { codigoRastreio: resp.tag, idPrepostagem: resp.idPrepostagem ?? null, servico: 'SEDEX', carrier: 'Mais Envios SEDEX', etiquetaPdf };
+  }
+
+  /** Gera a pré-postagem dos Correios pro pedido do SITE (a partir do Order). */
+  private async gerarEnvioCorreiosSite(order: any, pick: any) {
+    if (order.isPickup) throw new BadRequestException('Retirada em loja não gera envio.');
+    let addr: any = {};
+    try { addr = JSON.parse(order.shippingAddress || '{}'); } catch { /* endereço cru */ }
+    const cep = String(order.shippingCep || addr.postcode || addr.cep || '').replace(/\D/g, '');
+    if (cep.length !== 8) throw new BadRequestException('Pedido sem CEP válido pra postar.');
+
+    // Endereço WooCommerce: número/bairro podem vir separados (plugin BR) ou
+    // dentro de address_1 ("Rua X, 123"). Extrai o número se não vier separado.
+    const address1 = String(addr.address_1 || addr.street || addr.logradouro || '').trim();
+    let endereco = address1;
+    let numero = String(addr.number || addr.numero || '').trim();
+    if (!numero && address1) {
+      const m = address1.match(/^(.*?),?\s*(\d+[A-Za-z]?)\s*$/);
+      if (m) { endereco = m[1].trim(); numero = m[2]; }
+    }
+    let uf = String(addr.state || addr.uf || '').trim().toUpperCase();
+    let cidade = String(addr.city || addr.cidade || '').trim();
+    let bairro = String(addr.neighborhood || addr.bairro || '').trim();
+    const complemento = String(addr.address_2 || addr.complemento || '').trim();
+
+    // CEP-authoritative (evita RTL-076): UF/cidade/bairro do ViaCEP sobrepõem.
+    try {
+      const via: any = await this.correios.buscarCep(cep);
+      if (via && !via.erro) {
+        if (via.uf) uf = String(via.uf).trim().toUpperCase();
+        if (via.cidade) cidade = via.cidade;
+        if (!bairro && via.bairro) bairro = via.bairro;
+        if (!endereco && via.logradouro) endereco = via.logradouro;
+      }
+    } catch { /* ViaCEP fora → usa o do pedido */ }
+
+    const itensLoja = (order.items || []).filter((i: any) => !i.assignedStoreId || i.assignedStoreId === pick.storeId);
+    const lista = itensLoja.length ? itensLoja : (order.items || []);
+    const totalPecas = lista.reduce((s: number, i: any) => s + (Number(i.quantity) || 1), 0) || 1;
+    const pesoGramas = Math.max(300, totalPecas * 200);
+    const servico: 'PAC' | 'SEDEX' = uf === 'SP' ? 'SEDEX' : 'PAC';
+    const rem = this.correios.remetentePadrao();
+
+    const resp: any = await this.correios.criarPrepostagem({
+      servico,
+      remetente: rem,
+      destinatario: {
+        nome: order.customerName || 'Cliente',
+        cpfCnpj: String(order.customerCpf || '').replace(/\D/g, '') || undefined,
+        endereco: endereco || '',
+        numero: numero || 'S/N',
+        complemento,
+        bairro: bairro || '',
+        cidade: cidade || '',
+        uf: uf || '',
+        cep,
+        telefone: String(order.customerPhone || '').replace(/\D/g, ''),
+      },
+      pesoGramas,
+      valorDeclarado: order.totalAmount ? Number(order.totalAmount) : undefined,
+      itensDeclaracao: lista.map((i: any) => ({ conteudo: String(i.productName || 'Vestuário').slice(0, 60), quantidade: String(i.quantity || 1) })),
+    });
+    if (!resp?.ok) throw new BadRequestException(`Correios recusou o envio: ${resp?.erro || 'erro'}`);
+    return { codigoRastreio: resp.codigoRastreio, idPrepostagem: resp.idPrepostagem ?? null, servico, carrier: `Correios ${servico}` };
   }
 
   /**
