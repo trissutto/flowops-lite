@@ -92,10 +92,15 @@ export class LivePdvService {
     if (!itens.length) throw new BadRequestException('Carrinho sem itens.');
     const totalPecas = itens.reduce((s: number, i: any) => s + (Number(i.qty) || 1), 0);
     const pesoGramas = Math.max(300, totalPecas * 200); // 200g por peça, mínimo 300g
-    // Modalidade = a MESMA que a cliente pagou: derivada do CEP (igual ao card
-    // "MODALIDADE DE ENVIO" e ao checkout). NÃO chumbar PAC — `cart` não tem
-    // coluna freteServico; a fonte é freteFromCep, que devolve 'SEDEX'|'PAC'.
-    const servico: 'PAC' | 'SEDEX' = this.freteFromCep(cart.customerCep)?.servico === 'SEDEX' ? 'SEDEX' : 'PAC';
+    // Modalidade de postagem:
+    //  1. REGRA DO DONO: estado de SÃO PAULO (UF=SP) vai SEMPRE de SEDEX —
+    //     mesmo que a cliente tenha escolhido PAC no checkout.
+    //  2. Fora de SP: segue a modalidade paga (derivada do CEP via freteFromCep,
+    //     a MESMA fonte do card "MODALIDADE DE ENVIO" e do checkout).
+    //  `cart` NÃO tem coluna freteServico — nunca chumbar PAC lendo campo vazio.
+    const uf = String(cart.customerUf || '').trim().toUpperCase();
+    const servico: 'PAC' | 'SEDEX' =
+      uf === 'SP' || this.freteFromCep(cart.customerCep)?.servico === 'SEDEX' ? 'SEDEX' : 'PAC';
     const rem = this.correios.remetentePadrao();
 
     const resp: any = await this.correios.criarPrepostagem({
