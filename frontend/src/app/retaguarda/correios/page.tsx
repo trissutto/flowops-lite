@@ -34,7 +34,7 @@ type Status = {
   servicos: Array<{ nome: string; codigo: string }>;
 };
 
-type FreteOpcao = { servico: string; codigo: string; precoReais: number | null; prazoDias: number | null; erro?: string };
+type FreteOpcao = { servico: string; codigo: string; precoReais: number | null; precoBase?: number | null; prazoDias: number | null; erro?: string; raw?: any };
 type FreteResp = { cepOrigem: string; cepDestino: string; pesoGramas: number; opcoes: FreteOpcao[] };
 
 type Endereco = {
@@ -48,6 +48,13 @@ const brl = (n: number | null | undefined) =>
 
 const REMETENTE_VAZIO: Endereco = {
   nome: '', cnpjCpf: '', endereco: '', numero: '', bairro: '', cidade: '', uf: '', cep: '', telefone: '',
+};
+// Pré-preenche o remetente com a matriz (CEP de origem do contrato). Editável e
+// salvo em localStorage — na Parte 2, o remetente vira a loja de origem do pedido.
+const REMETENTE_PADRAO: Endereco = {
+  nome: 'T O RISSUTTO EIRELI', cnpjCpf: '20104813000139',
+  endereco: 'Av Harry Forssell', numero: '159', bairro: 'Belas Artes',
+  cidade: 'Itanhaém', uf: 'SP', cep: '11746692', telefone: '',
 };
 const DESTINATARIO_VAZIO: Endereco = {
   nome: '', cnpjCpf: '', endereco: '', numero: '', complemento: '', bairro: '', cidade: '', uf: '', cep: '', telefone: '',
@@ -106,6 +113,7 @@ export default function CorreiosDiagnostico() {
   const [frete, setFrete] = useState<FreteResp | null>(null);
   const [loadingFrete, setLoadingFrete] = useState(false);
   const [erroFrete, setErroFrete] = useState<string | null>(null);
+  const [showFreteRaw, setShowFreteRaw] = useState(false);
 
   const testarFrete = useCallback(async () => {
     setLoadingFrete(true);
@@ -123,7 +131,7 @@ export default function CorreiosDiagnostico() {
   }, [cepFrete, pesoFrete]);
 
   // ── pré-postagem ──
-  const [remetente, setRemetente] = useState<Endereco>(REMETENTE_VAZIO);
+  const [remetente, setRemetente] = useState<Endereco>(REMETENTE_PADRAO);
   const [destinatario, setDestinatario] = useState<Endereco>(DESTINATARIO_VAZIO);
   const [servico, setServico] = useState<'PAC' | 'SEDEX'>('PAC');
   const [pesoPP, setPesoPP] = useState('500');
@@ -136,7 +144,7 @@ export default function CorreiosDiagnostico() {
   useEffect(() => {
     try {
       const raw = localStorage.getItem(REMETENTE_KEY);
-      if (raw) setRemetente({ ...REMETENTE_VAZIO, ...JSON.parse(raw) });
+      if (raw) setRemetente({ ...REMETENTE_PADRAO, ...JSON.parse(raw) });
     } catch { /* ignore */ }
   }, []);
 
@@ -245,24 +253,37 @@ export default function CorreiosDiagnostico() {
           </div>
           {erroFrete && <div className="mt-3 text-sm text-rose-600 flex items-center gap-2"><AlertTriangle size={15} /> {erroFrete}</div>}
           {frete && (
-            <div className="mt-4 grid sm:grid-cols-2 gap-3">
-              {frete.opcoes.map((o) => (
-                <div key={o.codigo} className={`rounded-lg border p-3 ${o.erro ? 'border-rose-200 bg-rose-50' : 'border-emerald-200 bg-emerald-50'}`}>
-                  <div className="flex items-center justify-between">
-                    <span className="font-medium">{o.servico} <span className="text-xs text-slate-400">({o.codigo})</span></span>
-                    {o.erro ? <AlertTriangle size={15} className="text-rose-500" /> : <CheckCircle2 size={15} className="text-emerald-600" />}
-                  </div>
-                  {o.erro ? (
-                    <div className="text-xs text-rose-600 mt-1">{o.erro}</div>
-                  ) : (
-                    <div className="text-sm mt-1">
-                      <b>{brl(o.precoReais)}</b>
-                      <span className="text-slate-500"> · {o.prazoDias != null ? `${o.prazoDias} dia(s)` : 'prazo —'}</span>
+            <>
+              <div className="mt-4 grid sm:grid-cols-2 gap-3">
+                {frete.opcoes.map((o) => (
+                  <div key={o.codigo} className={`rounded-lg border p-3 ${o.erro ? 'border-rose-200 bg-rose-50' : 'border-emerald-200 bg-emerald-50'}`}>
+                    <div className="flex items-center justify-between">
+                      <span className="font-medium">{o.servico} <span className="text-xs text-slate-400">({o.codigo})</span></span>
+                      {o.erro ? <AlertTriangle size={15} className="text-rose-500" /> : <CheckCircle2 size={15} className="text-emerald-600" />}
                     </div>
-                  )}
-                </div>
-              ))}
-            </div>
+                    {o.erro ? (
+                      <div className="text-xs text-rose-600 mt-1">{o.erro}</div>
+                    ) : (
+                      <div className="text-sm mt-1">
+                        <b>{brl(o.precoReais)}</b>
+                        <span className="text-slate-500"> · {o.prazoDias != null ? `${o.prazoDias} dia(s)` : 'prazo —'}</span>
+                        {o.precoBase != null && o.precoReais != null && o.precoBase !== o.precoReais && (
+                          <span className="ml-2 text-xs text-slate-400">tabela cheia <s>{brl(o.precoBase)}</s></span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <button onClick={() => setShowFreteRaw((v) => !v)} className="mt-2 text-xs text-sky-600 hover:underline">
+                {showFreteRaw ? 'ocultar' : 'ver'} resposta crua do preço (conferir desconto de contrato/tabela promocional)
+              </button>
+              {showFreteRaw && (
+                <pre className="mt-2 bg-slate-900 text-slate-100 text-xs rounded-lg p-3 overflow-auto max-h-96">
+                  {JSON.stringify(frete.opcoes.map((o) => ({ servico: o.servico, codigo: o.codigo, precoFinal: o.precoReais, precoBase: o.precoBase, raw: o.raw })), null, 2)}
+                </pre>
+              )}
+            </>
           )}
         </section>
 

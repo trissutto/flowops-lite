@@ -85,12 +85,26 @@ export class CorreiosService {
 
     const headers = await this.auth.authHeader();
     const base = this.auth.baseUrl;
-    const opcoes: Array<{ servico: string; codigo: string; precoReais: number | null; prazoDias: number | null; erro?: string }> = [];
+    // Parser robusto: aceita "15,45" (BR), "1.234,56" (BR c/ milhar) e 15.45 (número).
+    const parseBRL = (v: any): number | null => {
+      if (v == null) return null;
+      const s = String(v).trim();
+      if (!s) return null;
+      return s.includes(',') ? Number(s.replace(/\./g, '').replace(',', '.')) : Number(s);
+    };
+
+    const opcoes: Array<{
+      servico: string; codigo: string;
+      precoReais: number | null; precoBase: number | null; prazoDias: number | null;
+      erro?: string; raw?: any;
+    }> = [];
 
     for (const s of this.servicos) {
       let precoReais: number | null = null;
+      let precoBase: number | null = null;
       let prazoDias: number | null = null;
       let erro: string | undefined;
+      let raw: any = null;
       try {
         const qs =
           `?cepOrigem=${cepOrigem}&cepDestino=${cepDestino}&psObjeto=${peso}` +
@@ -101,9 +115,12 @@ export class CorreiosService {
           axios.get(`${base}/prazo/v1/nacional/${s.codigo}?cepOrigem=${cepOrigem}&cepDestino=${cepDestino}`, { headers, timeout: 20000, validateStatus: () => true }),
         ]);
         if (preco.status >= 200 && preco.status < 300) {
-          const pc = preco.data?.pcFinal ?? preco.data?.pcBase ?? null;
-          precoReais = pc != null ? Number(String(pc).replace('.', '').replace(',', '.')) : null;
+          raw = preco.data; // resposta crua — pra conferir desconto de contrato/tabela promocional
+          // pcFinal = preço COM contrato (o que a gente cobra); pcBase = tabela cheia (balcão).
+          precoReais = parseBRL(preco.data?.pcFinal ?? preco.data?.pcBase);
+          precoBase = parseBRL(preco.data?.pcBase);
         } else {
+          raw = preco.data;
           erro = preco.data?.msgs?.join('; ') || `preço HTTP ${preco.status}`;
         }
         if (prazo.status >= 200 && prazo.status < 300) {
@@ -112,7 +129,7 @@ export class CorreiosService {
       } catch (e: any) {
         erro = e?.message || 'falha';
       }
-      opcoes.push({ servico: s.nome, codigo: s.codigo, precoReais, prazoDias, erro });
+      opcoes.push({ servico: s.nome, codigo: s.codigo, precoReais, precoBase, prazoDias, erro, raw });
     }
     return { cepOrigem, cepDestino, pesoGramas: peso, opcoes };
   }
