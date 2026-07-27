@@ -299,6 +299,7 @@ export class LivePdvController {
 
   @Post('carts/:cartId/customer')
   updateCartCustomer(
+    @Req() req: any,
     @Param('cartId') cartId: string,
     @Body()
     body: {
@@ -316,7 +317,11 @@ export class LivePdvController {
       uf?: string;
     },
   ) {
-    return this.svc.updateCartCustomer(cartId, body);
+    return this.svc.updateCartCustomer(cartId, body, {
+      userId: req?.user?.userId ?? req?.user?.sub ?? null,
+      name: req?.user?.name ?? req?.user?.nome ?? req?.user?.username ?? null,
+      storeCode: req?.user?.storeCode ?? null,
+    });
   }
 
   @Post('carts/:cartId/cancel')
