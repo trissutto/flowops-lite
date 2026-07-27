@@ -57,6 +57,13 @@ export class MaisEnviosController {
     return this.svc.listarSenders();
   }
 
+  /** Descoberta: customer + tabelas de preço (pra tabela negociada na cotação). */
+  @Get('conta')
+  conta(@Req() req: any) {
+    this.requireRole(req);
+    return this.svc.descobrirConta();
+  }
+
   /** Rastreia um objeto pela tag/código. */
   @Get('rastreio')
   rastreio(@Req() req: any, @Query('codigo') codigo: string) {

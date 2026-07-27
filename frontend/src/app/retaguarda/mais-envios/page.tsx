@@ -71,7 +71,7 @@ export default function MaisEnviosDiagnostico() {
   // descoberta
   const [descoberta, setDescoberta] = useState<{ tipo: string; data: any } | null>(null);
   const [loadingDesc, setLoadingDesc] = useState<string | null>(null);
-  const descobrir = useCallback(async (tipo: 'services' | 'senders') => {
+  const descobrir = useCallback(async (tipo: 'services' | 'senders' | 'conta') => {
     setLoadingDesc(tipo); setDescoberta(null);
     try { setDescoberta({ tipo, data: await api<any>(`/mais-envios/${tipo}`) }); }
     catch (e: any) { setDescoberta({ tipo, data: { erro: e?.message || 'falha' } }); }
@@ -139,6 +139,9 @@ export default function MaisEnviosDiagnostico() {
             </button>
             <button onClick={() => descobrir('senders')} disabled={loadingDesc === 'senders'} className="bg-violet-600 text-white text-sm rounded-md px-4 py-2 hover:bg-violet-700 disabled:opacity-40 flex items-center gap-2">
               {loadingDesc === 'senders' ? <Loader2 size={15} className="animate-spin" /> : <Search size={15} />} Listar remetentes
+            </button>
+            <button onClick={() => descobrir('conta')} disabled={loadingDesc === 'conta'} className="bg-violet-600 text-white text-sm rounded-md px-4 py-2 hover:bg-violet-700 disabled:opacity-40 flex items-center gap-2">
+              {loadingDesc === 'conta' ? <Loader2 size={15} className="animate-spin" /> : <Search size={15} />} Customer / tabela
             </button>
           </div>
           {descoberta && (

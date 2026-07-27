@@ -91,6 +91,96 @@ export class MaisEnviosService {
     return { source, destiny, pesoGramas: peso, opcoes };
   }
 
+  /** Detalhe completo de um remetente (número/bairro/cidade/UF que a lista não traz). */
+  private async senderDetalhe(senderId: number | string): Promise<any> {
+    const headers = await this.auth.authHeader();
+    const r = await axios.get(`${this.auth.baseUrl}/senders/${senderId}`, { headers, timeout: 20000, validateStatus: () => true });
+    return (r.status >= 200 && r.status < 300) ? r.data : null;
+  }
+
+  /**
+   * Cria a PRÉ-POSTAGEM no Mais Envios (POST /prepost) a partir do pedido.
+   * ESQUELETO — o corpo segue a doc CWS do Mais Envios; devolve a resposta CRUA
+   * pra ajustar campos (customer/cardpost/pricetable e sub-objetos) no 1º teste,
+   * igual foi no Correios.
+   */
+  async criarPrepost(input: {
+    senderId: number | string;
+    servico: 'PAC' | 'SEDEX';
+    destinatario: { nome: string; cpf?: string; cep: string; endereco: string; numero: string; complemento?: string; bairro: string; cidade: string; uf: string; telefone?: string; email?: string };
+    pesoGramas: number;
+    valorDeclarado?: number;
+    itens: Array<{ conteudo: string; quantidade?: number }>;
+  }): Promise<any> {
+    const codigo = this.servicos.find((s) => s.nome === input.servico)?.codigo;
+    if (!codigo) throw new BadRequestException(`Serviço inválido: ${input.servico}`);
+    const headers = await this.auth.authHeader();
+    const base = this.auth.baseUrl;
+    const s = (await this.senderDetalhe(input.senderId)) || {};
+    const d = input.destinatario;
+    const onlyDigits = (v: any) => String(v || '').replace(/\D/g, '');
+
+    const body: any = {
+      customer: this.auth.customer || s.customer || undefined,
+      cardpost: this.auth.cardpost || undefined,
+      pricetable: this.auth.pricetable ? Number(this.auth.pricetable) : undefined,
+      service: codigo,
+      integratorId: 'flowops',
+      sender: {
+        contact: s.name || s.contact || 'LURDS',
+        federalId: onlyDigits(s.federalid || s.federalId),
+        cep: onlyDigits(s.zipcode || s.cep),
+        address: s.address || '',
+        number: String(s.number || 'S/N'),
+        neighborhood: s.neighborhood || '',
+        city: s.city || '',
+        state: s.state || '',
+        extent: s.complement || s.extent || '',
+      },
+      delivery: {
+        delivery: 'normal', contact: d.nome, department: '', name: d.nome, branch: '',
+        cep: onlyDigits(d.cep), address: d.endereco, number: String(d.numero || 'S/N'),
+        neighborhood: d.bairro || '', city: d.cidade || '', state: d.uf || '', extent: d.complemento || '',
+      },
+      contact: {
+        phone: onlyDigits(d.telefone), mail: d.email || '', federalid: onlyDigits(d.cpf),
+        invoice: '', care: '', note: '', request: '', observation: '', save: false, whatsapp: false,
+      },
+      object: {
+        object: 'Vestuário', package: '2', type: '1',
+        weight: Math.max(1, Math.round(input.pesoGramas)), quantity: 1,
+        ar: false, ardigital: false, ownhand: false, ap: false,
+      },
+      complement: {},
+      nf: { nfeKey: '', nfeNumber: 0, nfeSerie: 0, nfeValue: String(input.valorDeclarado ?? 0) },
+      dc: (input.itens || []).map((it) => ({ conteudo: String(it.conteudo || 'Vestuário').slice(0, 60), quantidade: String(it.quantidade ?? 1) })),
+    };
+
+    const resp = await axios.post(`${base}/prepost`, body, { headers, timeout: 30000, validateStatus: () => true });
+    if (resp.status < 200 || resp.status >= 300) {
+      return { ok: false, erro: resp.data?.message || resp.data?.error || (Array.isArray(resp.data?.msgs) ? resp.data.msgs.join('; ') : `HTTP ${resp.status}`), raw: resp.data };
+    }
+    return {
+      ok: true,
+      tag: resp.data?.tag ?? resp.data?.codigo ?? resp.data?.objeto ?? null,
+      idPrepostagem: resp.data?.id ?? null,
+      raw: resp.data,
+    };
+  }
+
+  /** Baixa a etiqueta (PDF) de uma pré-postagem pela tag. */
+  async baixarEtiqueta(tag: string): Promise<any> {
+    const t = String(tag || '').trim();
+    if (!t) throw new BadRequestException('tag obrigatória');
+    const headers = await this.auth.authHeader();
+    const resp = await axios.post(`${this.auth.baseUrl}/prepost/print`, { tag: [t], options: {}, customer: this.auth.customer || undefined }, { headers, timeout: 30000, validateStatus: () => true });
+    if (resp.status < 200 || resp.status >= 300) {
+      return { ok: false, erro: resp.data?.message || `HTTP ${resp.status}`, raw: resp.data };
+    }
+    const pdf = resp.data?.pdf ?? resp.data?.dados ?? resp.data?.base64 ?? (typeof resp.data === 'string' ? resp.data : null);
+    return pdf ? { ok: true, pdfBase64: String(pdf) } : { ok: false, erro: 'sem PDF na resposta', raw: resp.data };
+  }
+
   /** DESCOBERTA: lista os serviços disponíveis na conta. */
   async listarServices() {
     const headers = await this.auth.authHeader();
@@ -103,6 +193,23 @@ export class MaisEnviosService {
     const headers = await this.auth.authHeader();
     const r = await axios.get(`${this.auth.baseUrl}/senders`, { headers, timeout: 20000, validateStatus: () => true });
     return { ok: r.status >= 200 && r.status < 300, status: r.status, data: r.data };
+  }
+
+  /** DESCOBERTA: dados da conta (customer) + tabelas de preço — pra achar o
+   *  `customer` que faz a cotação usar a tabela NEGOCIADA (não a cheia). */
+  async descobrirConta() {
+    const headers = await this.auth.authHeader();
+    const base = this.auth.baseUrl;
+    const get = async (path: string) => {
+      try {
+        const r = await axios.get(`${base}${path}`, { headers, timeout: 20000, validateStatus: () => true });
+        return { status: r.status, data: r.data };
+      } catch (e: any) { return { erro: e?.message || 'falha' }; }
+    };
+    return {
+      me: await get('/customers/data/me'),
+      pricetables: await get('/pricetable'),
+    };
   }
 
   /** Rastreia um objeto pela tag/código. */
