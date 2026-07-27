@@ -3606,6 +3606,29 @@ export class LivePdvService {
           `Complete o endereço antes de enviar pra separação — falta: ${faltando.join(', ')}.`,
         );
       }
+
+      // Normaliza UF/cidade pelo CEP (fonte da verdade dos Correios) ANTES de ir
+      // pra loja — corrige cadastro torto (ex.: UF "CI" em Avaré-SP) sem a loja
+      // precisar mexer. NÃO bloqueia se o ViaCEP cair (não põe dependência
+      // externa no caminho crítico da separação — só normaliza quando dá).
+      try {
+        const via: any = await this.correios.buscarCep(String(cart.customerCep || '').replace(/\D/g, ''));
+        if (via && !via.erro) {
+          const patch: any = {};
+          const ufCep = String(via.uf || '').trim().toUpperCase();
+          const cidadeCep = String(via.cidade || '').trim();
+          if (ufCep && ufCep !== String(cart.customerUf || '').trim().toUpperCase()) patch.customerUf = ufCep;
+          if (cidadeCep && cidadeCep.toLowerCase() !== String(cart.customerCidade || '').trim().toLowerCase()) patch.customerCidade = cidadeCep;
+          if (!String(cart.customerBairro || '').trim() && via.bairro) patch.customerBairro = via.bairro;
+          if (Object.keys(patch).length) {
+            await (this.prisma as any).livePdvCart.update({ where: { id: cartId }, data: patch });
+            Object.assign(cart, patch);
+            this.logger.log(`[release] endereço normalizado pelo CEP (${cartId}): ${JSON.stringify(patch)}`);
+          }
+        }
+      } catch (e) {
+        this.logger.warn(`[release] normalização de CEP falhou (${cartId}), segue com o cadastro atual: ${(e as Error).message}`);
+      }
     }
 
     // ═══ TRILHO DO SITE (decisão do dono, 12/07) ═══
