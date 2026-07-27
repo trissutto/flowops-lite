@@ -3960,6 +3960,9 @@ model LivePdvCart {
   // baixa, envio). orderId aponta pro Order gerado; o cart vira só o registro
   // da venda na live (cobrança/pagamento) + espelho de status.
   orderId           String?  @unique @map("order_id")
+  // CORREIOS: id da pré-postagem gerada pra este carrinho (pra reimprimir a
+  // etiqueta). O código de rastreio fica em LivePdvItem.trackingCode.
+  correiosPrepostagemId String? @map("correios_prepostagem_id")
   createdAt         DateTime @default(now()) @map("created_at")
   updatedAt         DateTime @updatedAt @map("updated_at")
 

@@ -13,6 +13,7 @@ import { RealtimeGateway } from '../websocket/realtime.gateway';
 import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service';
 import { ProductSearchService } from '../product-search/product-search.service';
 import { ManychatService } from './manychat.service';
+import { CorreiosService } from '../correios/correios.service';
 import type { StoreInput, StockEntry } from '../routing/types';
 
 /**
@@ -55,7 +56,79 @@ export class LivePdvService {
     private readonly manychat: ManychatService,
     private readonly catalog: WincredCatalogService,
     private readonly productSearch: ProductSearchService,
+    private readonly correios: CorreiosService,
   ) {}
+
+  /**
+   * Gera a PRÉ-POSTAGEM dos Correios pra um carrinho da live (pacote = carrinho
+   * inteiro). Peso = nº de peças × 200g; declaração = itens do carrinho;
+   * destinatário = endereço do cliente no cart; remetente = matriz (env).
+   * Grava o código de rastreio em todos os itens e o id da pré-postagem no cart.
+   */
+  async gerarEnvioCorreios(cartId: string) {
+    const cart = await (this.prisma as any).livePdvCart.findUnique({
+      where: { id: cartId },
+      include: { items: true },
+    });
+    if (!cart) throw new NotFoundException('Carrinho não encontrado');
+    if (cart.isPickup) throw new BadRequestException('Retirada em loja não gera envio.');
+    if (cart.correiosPrepostagemId) {
+      // idempotente — já gerado; devolve o que tem
+      const j = (cart.items || []).find((i: any) => i.trackingCode);
+      return { ok: true, jaGerado: true, codigoRastreio: j?.trackingCode || null, idPrepostagem: cart.correiosPrepostagemId };
+    }
+
+    // Endereço completo + CPF válido (os Correios exigem pra postar).
+    const faltando: string[] = [];
+    if (String(cart.customerCep || '').replace(/\D/g, '').length !== 8) faltando.push('CEP');
+    if (!String(cart.customerEndereco || '').trim()) faltando.push('rua');
+    if (!String(cart.customerNumero || '').trim()) faltando.push('número');
+    if (!String(cart.customerCidade || '').trim()) faltando.push('cidade');
+    if (!String(cart.customerUf || '').trim()) faltando.push('UF');
+    if (!this.cpfValido(cart.customerCpf)) faltando.push('CPF válido');
+    if (faltando.length) throw new BadRequestException(`Complete o cadastro antes de gerar o envio — falta: ${faltando.join(', ')}.`);
+
+    const itens = (cart.items || []).filter((i: any) => i.status !== 'cancelled');
+    if (!itens.length) throw new BadRequestException('Carrinho sem itens.');
+    const totalPecas = itens.reduce((s: number, i: any) => s + (Number(i.qty) || 1), 0);
+    const pesoGramas = Math.max(300, totalPecas * 200); // 200g por peça, mínimo 300g
+    const servico: 'PAC' | 'SEDEX' = String(cart.freteServico || '').toUpperCase().includes('SEDEX') ? 'SEDEX' : 'PAC';
+    const rem = this.correios.remetentePadrao();
+
+    const resp: any = await this.correios.criarPrepostagem({
+      servico,
+      remetente: rem,
+      destinatario: {
+        nome: cart.customerName || 'Cliente',
+        cpfCnpj: String(cart.customerCpf || '').replace(/\D/g, '') || undefined,
+        endereco: cart.customerEndereco || '',
+        numero: cart.customerNumero || 'S/N',
+        complemento: cart.customerComplemento || '',
+        bairro: cart.customerBairro || '',
+        cidade: cart.customerCidade || '',
+        uf: cart.customerUf || '',
+        cep: String(cart.customerCep || '').replace(/\D/g, ''),
+        telefone: String(cart.customerPhone || '').replace(/\D/g, ''),
+      },
+      pesoGramas,
+      valorDeclarado: cart.totalCents ? cart.totalCents / 100 : undefined,
+      itensDeclaracao: itens.map((i: any) => ({
+        conteudo: [i.refCode, i.descricao, i.cor, i.tamanho].filter(Boolean).join(' ').slice(0, 60) || 'Vestuário',
+        quantidade: String(i.qty || 1),
+      })),
+    });
+    if (!resp?.ok) throw new BadRequestException(`Correios recusou o envio: ${resp?.erro || 'erro'}`);
+
+    const rastreio = resp.codigoRastreio || null;
+    await (this.prisma as any).livePdvCart.update({
+      where: { id: cartId },
+      data: { correiosPrepostagemId: resp.idPrepostagem ? String(resp.idPrepostagem) : null },
+    });
+    if (rastreio) {
+      await (this.prisma as any).livePdvItem.updateMany({ where: { cartId }, data: { trackingCode: rastreio } });
+    }
+    return { ok: true, codigoRastreio: rastreio, idPrepostagem: resp.idPrepostagem ?? null, servico, pesoGramas, totalPecas };
+  }
 
   /** FILTRO DE LIVE (13/07, decisão do dono): a live é SÓ plus size feminino.
    *  Tamanhos permitidos na grade — qualquer outro (P/M/G, 38/40/42, infantil…)

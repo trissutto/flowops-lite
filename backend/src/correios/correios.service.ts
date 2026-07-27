@@ -83,6 +83,26 @@ export class CorreiosService {
   }
 
   /**
+   * Remetente PADRÃO (matriz) — configurável por env. Usado pelo envio da live
+   * enquanto não há endereço de remetente por loja no banco. Defaults = matriz
+   * Itanhaém (T O RISSUTTO EIRELI).
+   */
+  remetentePadrao() {
+    const g = (k: string, d: string) => String(process.env[k] || d).trim();
+    return {
+      nome: g('CORREIOS_REMETENTE_NOME', 'T O RISSUTTO EIRELI'),
+      cnpjCpf: g('CORREIOS_REMETENTE_CNPJCPF', '20104813000139'),
+      endereco: g('CORREIOS_REMETENTE_ENDERECO', 'Av Harry Forssell'),
+      numero: g('CORREIOS_REMETENTE_NUMERO', '159'),
+      bairro: g('CORREIOS_REMETENTE_BAIRRO', 'Belas Artes'),
+      cidade: g('CORREIOS_REMETENTE_CIDADE', 'Itanhaém'),
+      uf: g('CORREIOS_REMETENTE_UF', 'SP'),
+      cep: g('CORREIOS_REMETENTE_CEP', this.auth.cepOrigem || '11746692'),
+      telefone: g('CORREIOS_REMETENTE_TELEFONE', ''),
+    };
+  }
+
+  /**
    * Calcula PREÇO + PRAZO por CEP destino pros serviços (PAC/SEDEX). Peso em
    * GRAMAS; dimensões em cm. Retorna uma opção por serviço.
    */
@@ -169,6 +189,7 @@ export class CorreiosService {
     comprimento?: number; largura?: number; altura?: number;
     nfeChave?: string; // chave da NF-e que acompanha (opcional mas recomendado)
     valorDeclarado?: number;
+    itensDeclaracao?: Array<{ conteudo: string; quantidade?: string | number; valor?: number }>;
   }) {
     const codigo = this.servicos.find((s) => s.nome === input.servico)?.codigo;
     if (!codigo) throw new BadRequestException(`Serviço inválido: ${input.servico}`);
@@ -224,9 +245,13 @@ export class CorreiosService {
       // ── Ciência de que o objeto não é proibido (PPN-330). ──
       cienteObjetoNaoProibido: 1,
       // ── Declaração de Conteúdo obrigatória (PPN-347). ──
-      itensDeclaracaoConteudo: [
-        { conteudo: 'Vestuário', quantidade: '1', valor: (input.valorDeclarado ?? 50).toFixed(2) },
-      ],
+      itensDeclaracaoConteudo: (input.itensDeclaracao && input.itensDeclaracao.length)
+        ? input.itensDeclaracao.map((it) => ({
+            conteudo: String(it.conteudo || 'Vestuário').slice(0, 60),
+            quantidade: String(it.quantidade ?? 1),
+            valor: (it.valor ?? (input.valorDeclarado ? input.valorDeclarado / input.itensDeclaracao!.length : 50)).toFixed(2),
+          }))
+        : [{ conteudo: 'Vestuário', quantidade: '1', valor: (input.valorDeclarado ?? 50).toFixed(2) }],
       observacao: '',
       ...(input.nfeChave ? { numeroNotaFiscal: input.nfeChave.replace(/\D/g, '') } : {}),
       ...(input.valorDeclarado ? { servicosAdicionais: [{ codigoServicoAdicional: '019', valorDeclarado: input.valorDeclarado.toFixed(2) }] } : {}),
