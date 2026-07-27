@@ -249,4 +249,61 @@ export class CorreiosService {
       throw new BadRequestException(`Falha ao criar pré-postagem: ${e?.message || e}`);
     }
   }
+
+  /**
+   * Baixa a ETIQUETA (rótulo PDF) de uma pré-postagem. No CWS é assíncrono:
+   * 1) solicita a geração → recebe idRecibo; 2) baixa por polling até ficar
+   * pronto. Retorna o PDF em base64. Estrutura conforme a doc CWS; devolve a
+   * resposta crua pra ajustar campos se a API divergir.
+   */
+  async baixarEtiqueta(idPrepostagem: string): Promise<any> {
+    const id = String(idPrepostagem || '').trim();
+    if (!id) throw new BadRequestException('idPrepostagem obrigatório');
+    const headers = await this.auth.authHeader();
+    const base = this.auth.baseUrl;
+
+    // 1) Solicita a geração assíncrona do rótulo
+    let idRecibo: string | null = null;
+    const sol = await axios.post(
+      `${base}/prepostagem/v1/prepostagens/rotulo/assincrono/pdf`,
+      { idsPrePostagem: [id], tipoRotulo: 'P', formatoRotulo: 'ETIQUETA', imprimeRemetente: 'S', layoutImpressao: 'PADRAO' },
+      { headers, timeout: 30000, validateStatus: () => true },
+    );
+    if (sol.status < 200 || sol.status >= 300) {
+      return { ok: false, etapa: 'solicitar', erro: sol.data?.msgs?.join('; ') || `HTTP ${sol.status}`, raw: sol.data };
+    }
+    idRecibo = sol.data?.idRecibo ?? sol.data?.id ?? null;
+    if (!idRecibo) return { ok: false, etapa: 'solicitar', erro: 'API não devolveu idRecibo', raw: sol.data };
+
+    // 2) Baixa por polling (o PDF leva alguns segundos pra ficar pronto)
+    for (let i = 0; i < 12; i++) {
+      const dl = await axios.get(
+        `${base}/prepostagem/v1/prepostagens/rotulo/download/assincrono/${idRecibo}?tipoArquivo=ETIQUETA`,
+        { headers, timeout: 30000, validateStatus: () => true },
+      );
+      if (dl.status >= 200 && dl.status < 300) {
+        const pdf = dl.data?.dados ?? dl.data?.arquivo ?? dl.data?.pdf ?? null;
+        if (pdf) return { ok: true, idRecibo, pdfBase64: String(pdf) };
+        // sem PDF ainda (processando) → espera
+      } else if (dl.status !== 404 && dl.status !== 425 && dl.status !== 202) {
+        return { ok: false, etapa: 'download', erro: dl.data?.msgs?.join('; ') || `HTTP ${dl.status}`, raw: dl.data };
+      }
+      await new Promise((r) => setTimeout(r, 2500));
+    }
+    return { ok: false, etapa: 'download', erro: 'rótulo não ficou pronto a tempo (tente de novo em alguns segundos)', idRecibo };
+  }
+
+  /** Rastreia um objeto pelo código (SRO/CWS). Devolve os eventos. */
+  async rastrear(codigo: string): Promise<any> {
+    const c = String(codigo || '').trim().toUpperCase();
+    if (!/^[A-Z]{2}\d{9}[A-Z]{2}$/.test(c)) throw new BadRequestException('Código de rastreio inválido (ex.: AD722716975BR).');
+    const headers = await this.auth.authHeader();
+    const base = this.auth.baseUrl;
+    const r = await axios.get(`${base}/srorastro/v1/objetos/${c}?resultado=T`, { headers, timeout: 20000, validateStatus: () => true });
+    if (r.status < 200 || r.status >= 300) {
+      return { ok: false, erro: r.data?.msgs?.join('; ') || `HTTP ${r.status}`, raw: r.data };
+    }
+    const obj = r.data?.objetos?.[0] ?? null;
+    return { ok: true, codigo: c, eventos: obj?.eventos ?? [], raw: r.data };
+  }
 }
