@@ -4139,6 +4139,8 @@ export class LivePdvService {
           isPickup: !!c?.isPickup,
           pickupStoreCode: c?.pickupStoreCode || null,
           pickupStoreName: c?.pickupStoreName || null,
+          // Correios: id da pré-postagem já gerada (pra reimprimir a etiqueta).
+          correiosPrepostagemId: c?.correiosPrepostagemId || null,
           paidAt: c?.paidAt,
           liveStoreCode: sess?.liveStoreCode || null,
           liveStoreName: sess?.liveStoreName || null,
