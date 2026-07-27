@@ -54,6 +54,7 @@ interface QueueGroup {
   isPickup?: boolean;
   pickupStoreCode?: string | null;
   pickupStoreName?: string | null;
+  correiosPrepostagemId?: string | null;
   paidAt: string | null;
   liveStoreCode: string | null;
   liveStoreName: string | null;
@@ -241,7 +242,7 @@ export default function LiveExpedicaoPage() {
                   </button>
                   {!g.isPickup && (() => {
                     const rastreio = g.items.find((i) => i.trackingCode)?.trackingCode || envioResult[g.cartId]?.codigoRastreio;
-                    const idPre = envioResult[g.cartId]?.idPrepostagem;
+                    const idPre = envioResult[g.cartId]?.idPrepostagem || g.correiosPrepostagemId;
                     if (rastreio) {
                       return (
                         <span className="flex items-center gap-1">
