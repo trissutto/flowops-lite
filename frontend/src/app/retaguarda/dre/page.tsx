@@ -35,7 +35,10 @@ const brlCurto = (n: number | null | undefined) => {
 const pct = (n: number | null | undefined, casas = 1) =>
   n == null ? '—' : `${(Number(n) * 100).toFixed(casas)}%`;
 const fmtDia = (iso?: string | null) => (iso ? iso.split('-').reverse().slice(0, 2).join('/') : null);
-const iso = (d: Date) => d.toISOString().slice(0, 10);
+// LOCAL, não UTC: `toISOString()` é UTC e em BRT (UTC-3) das ~21h à meia-noite
+// devolvia o DIA SEGUINTE — atalho "Hoje" abria a DRE vazia e "Ontem" mostrava
+// hoje. Subtrai o offset de fuso antes de fatiar (mesmo helper de campanhas/financeiro).
+const iso = (d: Date) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
 
 type Coluna = {
   key: string; label: string; grupo: 'LOJA' | 'CANAL'; cnpj: string | null; markup: number;
@@ -1430,7 +1433,7 @@ function AbaConfig({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }
   const [loading, setLoading] = useState(false);
   const [novaEspecie, setNovaEspecie] = useState({ nome: '', dreGrupo: 'FIXA' });
   const [markupEdit, setMarkupEdit] = useState<Record<string, string>>({});
-  const [novaAliq, setNovaAliq] = useState({ cnpj: '', mes: new Date().toISOString().slice(0, 7), aliquotaPct: '', observacao: '' });
+  const [novaAliq, setNovaAliq] = useState({ cnpj: '', mes: iso(new Date()).slice(0, 7), aliquotaPct: '', observacao: '' });
 
   const carregar = useCallback(async () => {
     setLoading(true);
