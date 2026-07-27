@@ -48,6 +48,13 @@ export interface StoreInput {
    * NUNCA chama Pagar.me/PagBank.
    */
   pixProvider?: 'auto' | 'pagbank' | 'pagarme' | 'externo';
+  /**
+   * Provedor de ENVIO da loja no "Gerar envio" da separação:
+   *   'correios' (default) ou 'maisenvios'. Quando maisenvios,
+   *   `maisEnviosSenderId` é o id do remetente da loja no portal Mais Envios.
+   */
+  shippingProvider?: 'correios' | 'maisenvios' | null;
+  maisEnviosSenderId?: number | null;
 }
 
 @Injectable()
@@ -226,6 +233,12 @@ export class StoresService {
         isOutlet: data.isOutlet !== undefined ? !!data.isOutlet : undefined,
         pixProvider: data.pixProvider && ['auto', 'pagbank', 'pagarme', 'externo'].includes(data.pixProvider)
           ? data.pixProvider
+          : undefined,
+        shippingProvider: data.shippingProvider !== undefined
+          ? (data.shippingProvider === 'maisenvios' ? 'maisenvios' : 'correios')
+          : undefined,
+        maisEnviosSenderId: data.maisEnviosSenderId !== undefined
+          ? (data.maisEnviosSenderId ? Number(data.maisEnviosSenderId) : null)
           : undefined,
       } as any,
     });

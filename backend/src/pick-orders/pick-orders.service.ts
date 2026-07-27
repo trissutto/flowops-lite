@@ -86,13 +86,21 @@ export class PickOrdersService {
       throw new BadRequestException('Envio automático: por ora só pedidos da live.');
     }
 
-    // Roteia pelo provedor da LOJA de origem: Mais Envios (Sorocaba/Piracicaba/
-    // Limeira/Moema) ou Correios (demais).
-    const store = await this.prisma.store.findUnique({ where: { id: pick.storeId } });
-    const senderId = MAISENVIOS_STORES[String(store?.code || '')];
-    const r: any = senderId
-      ? await this.gerarEnvioMaisEnvios(order.liveCartId, senderId)
-      : await this.livePdv.gerarEnvioCorreios(order.liveCartId);
+    // Roteia pelo provedor da LOJA de origem. Prioridade:
+    //   1. config da loja (Store.shippingProvider + maisEnviosSenderId)
+    //   2. mapa fixo MAISENVIOS_STORES (fallback pra não quebrar antes de configurar)
+    //   3. Correios (default)
+    const store: any = await this.prisma.store.findUnique({ where: { id: pick.storeId } });
+    const mapped = MAISENVIOS_STORES[String(store?.code || '')];
+    const provider = store?.shippingProvider || (mapped ? 'maisenvios' : 'correios');
+    const senderId = store?.maisEnviosSenderId || mapped || null;
+    let r: any;
+    if (provider === 'maisenvios') {
+      if (!senderId) throw new BadRequestException('Loja configurada como Mais Envios, mas sem "sender id" — configure na tela de Lojas.');
+      r = await this.gerarEnvioMaisEnvios(order.liveCartId, senderId);
+    } else {
+      r = await this.livePdv.gerarEnvioCorreios(order.liveCartId);
+    }
     if (!r?.codigoRastreio) throw new BadRequestException('Não foi possível gerar o rastreio.');
 
     // MODEL B: NÃO marca enviado. Só grava a pré-postagem no pick-order — o
