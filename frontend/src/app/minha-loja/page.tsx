@@ -697,15 +697,19 @@ export default function MinhaLojaPage() {
     a.download = name;
     document.body.appendChild(a); a.click(); a.remove();
   }
-  // A etiqueta dos Correios (pré-postagem) já traz a DECLARAÇÃO embutida — a
-  // "DACE Resumida" (Declaração Auxiliar de Conteúdo Eletrônica) com QR no rodapé
-  // do rótulo. Não precisa de documento separado.
+  // Baixa a ETIQUETA (rótulo) + a DECLARAÇÃO DE CONTEÚDO (documento separado,
+  // fluxo assíncrono do CWS). Os Correios exigem a declaração pra envio a CPF.
   async function baixarEtiquetaCorreios(idPre: string, rastreio: string) {
     try {
       const et = await api<any>('/correios/etiqueta', { method: 'POST', body: JSON.stringify({ idPrepostagem: idPre }) });
-      if (et?.ok && et.pdfBase64) { downloadPdf(et.pdfBase64, `etiqueta-${rastreio}.pdf`); pushToast('🏷️ Etiqueta baixada (com declaração/DACE)'); }
+      if (et?.ok && et.pdfBase64) { downloadPdf(et.pdfBase64, `etiqueta-${rastreio}.pdf`); pushToast('🏷️ Etiqueta baixada'); }
       else pushToast(`Etiqueta não ficou pronta: ${et?.erro ?? 'tente reimprimir'}`);
     } catch { pushToast('Etiqueta falhou (tente reimprimir).'); }
+    try {
+      const dc = await api<any>('/correios/declaracao', { method: 'POST', body: JSON.stringify({ idPrepostagem: idPre }) });
+      if (dc?.ok && dc.pdfBase64) { downloadPdf(dc.pdfBase64, `declaracao-${rastreio}.pdf`); pushToast('📄 Declaração de conteúdo baixada'); }
+      else pushToast(`Declaração: ${dc?.erro ?? 'não veio'}`);
+    } catch { pushToast('Declaração falhou.'); }
   }
 
   // MODEL B: gera a pré-postagem (modalidade correta), mostra o rastreio e baixa

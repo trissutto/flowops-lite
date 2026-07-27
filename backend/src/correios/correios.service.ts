@@ -343,16 +343,34 @@ export class CorreiosService {
     if (!id) throw new BadRequestException('idPrepostagem obrigatório');
     const headers = await this.auth.authHeader();
     const base = this.auth.baseUrl;
-    const r = await axios.get(
-      `${base}/prepostagem/v1/prepostagens/declaracaoconteudo/${id}`,
+
+    // Mesmo fluxo ASSÍNCRONO do rótulo (padrão confirmado do CWS): solicita a
+    // geração → idRecibo → baixa por polling. Emissão SEPARADA do rótulo.
+    const sol = await axios.post(
+      `${base}/prepostagem/v1/prepostagens/declaracaoconteudo/assincrono/pdf`,
+      { idsPrePostagem: [id] },
       { headers, timeout: 30000, validateStatus: () => true },
     );
-    if (r.status < 200 || r.status >= 300) {
-      return { ok: false, erro: r.data?.msgs?.join('; ') || `HTTP ${r.status}`, raw: r.data };
+    if (sol.status < 200 || sol.status >= 300) {
+      return { ok: false, etapa: 'solicitar', erro: sol.data?.msgs?.join('; ') || sol.data?.message || `HTTP ${sol.status}`, raw: sol.data };
     }
-    const pdf = r.data?.dados ?? r.data?.arquivo ?? r.data?.pdf ?? (typeof r.data === 'string' ? r.data : null);
-    if (!pdf) return { ok: false, erro: 'API não devolveu o PDF da declaração', raw: r.data };
-    return { ok: true, pdfBase64: String(pdf) };
+    const idRecibo = sol.data?.idRecibo ?? sol.data?.id ?? null;
+    if (!idRecibo) return { ok: false, etapa: 'solicitar', erro: 'API não devolveu idRecibo', raw: sol.data };
+
+    for (let i = 0; i < 12; i++) {
+      const dl = await axios.get(
+        `${base}/prepostagem/v1/prepostagens/declaracaoconteudo/download/assincrono/${idRecibo}`,
+        { headers, timeout: 30000, validateStatus: () => true },
+      );
+      if (dl.status >= 200 && dl.status < 300) {
+        const pdf = dl.data?.dados ?? dl.data?.arquivo ?? dl.data?.pdf ?? null;
+        if (pdf) return { ok: true, idRecibo, pdfBase64: String(pdf) };
+      } else if (dl.status !== 404 && dl.status !== 425 && dl.status !== 202) {
+        return { ok: false, etapa: 'download', erro: dl.data?.msgs?.join('; ') || `HTTP ${dl.status}`, raw: dl.data };
+      }
+      await new Promise((r) => setTimeout(r, 2500));
+    }
+    return { ok: false, etapa: 'download', erro: 'declaração não ficou pronta a tempo', idRecibo };
   }
 
   /** Rastreia um objeto pelo código (SRO/CWS). Devolve os eventos. */
