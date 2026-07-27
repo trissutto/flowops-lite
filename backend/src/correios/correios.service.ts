@@ -35,6 +35,53 @@ export class CorreiosService {
     };
   }
 
+  /** Busca endereço por CEP (ViaCEP) — autopreenche remetente/destinatário. */
+  async buscarCep(cepRaw: string) {
+    const cep = String(cepRaw || '').replace(/\D/g, '');
+    if (cep.length !== 8) throw new BadRequestException('CEP inválido (8 dígitos).');
+    try {
+      const r = await axios.get(`https://viacep.com.br/ws/${cep}/json/`, { timeout: 8000, validateStatus: () => true });
+      if (r.status >= 200 && r.status < 300 && r.data && !r.data.erro) {
+        return {
+          cep,
+          logradouro: r.data.logradouro || '',
+          bairro: r.data.bairro || '',
+          cidade: r.data.localidade || '',
+          uf: r.data.uf || '',
+        };
+      }
+      return { erro: 'CEP não encontrado' };
+    } catch (e: any) {
+      return { erro: e?.message || 'falha ao buscar CEP' };
+    }
+  }
+
+  /**
+   * DEBUG PRC-124: autentica, decodifica o JWT devolvido pelos Correios e mostra
+   * a QUE contrato/DR/cartão o token está amarrado — pra comparar com o que a
+   * gente MANDA no cálculo de frete. Se o contrato/DR do token != o enviado, é
+   * a causa do PRC-124. NÃO devolve o token cru (só os claims dele).
+   */
+  async tokenDebug() {
+    const token = await this.auth.getToken();
+    let claims: any = null;
+    try {
+      const parts = token.split('.');
+      if (parts.length >= 2) {
+        const b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+        claims = JSON.parse(Buffer.from(b64, 'base64').toString('utf8'));
+      }
+    } catch { /* token não é JWT decodificável */ }
+    return {
+      enviamosNoFrete: {
+        contrato: this.auth.contrato,
+        dr: this.auth.dr,
+        cartaoPostagem: this.auth.cartaoPostagem,
+      },
+      tokenPertenceA: claims ?? '(o token não é um JWT decodificável)',
+    };
+  }
+
   /**
    * Calcula PREÇO + PRAZO por CEP destino pros serviços (PAC/SEDEX). Peso em
    * GRAMAS; dimensões em cm. Retorna uma opção por serviço.
@@ -59,12 +106,26 @@ export class CorreiosService {
 
     const headers = await this.auth.authHeader();
     const base = this.auth.baseUrl;
-    const opcoes: Array<{ servico: string; codigo: string; precoReais: number | null; prazoDias: number | null; erro?: string }> = [];
+    // Parser robusto: aceita "15,45" (BR), "1.234,56" (BR c/ milhar) e 15.45 (número).
+    const parseBRL = (v: any): number | null => {
+      if (v == null) return null;
+      const s = String(v).trim();
+      if (!s) return null;
+      return s.includes(',') ? Number(s.replace(/\./g, '').replace(',', '.')) : Number(s);
+    };
+
+    const opcoes: Array<{
+      servico: string; codigo: string;
+      precoReais: number | null; precoBase: number | null; prazoDias: number | null;
+      erro?: string; raw?: any;
+    }> = [];
 
     for (const s of this.servicos) {
       let precoReais: number | null = null;
+      let precoBase: number | null = null;
       let prazoDias: number | null = null;
       let erro: string | undefined;
+      let raw: any = null;
       try {
         const qs =
           `?cepOrigem=${cepOrigem}&cepDestino=${cepDestino}&psObjeto=${peso}` +
@@ -75,9 +136,12 @@ export class CorreiosService {
           axios.get(`${base}/prazo/v1/nacional/${s.codigo}?cepOrigem=${cepOrigem}&cepDestino=${cepDestino}`, { headers, timeout: 20000, validateStatus: () => true }),
         ]);
         if (preco.status >= 200 && preco.status < 300) {
-          const pc = preco.data?.pcFinal ?? preco.data?.pcBase ?? null;
-          precoReais = pc != null ? Number(String(pc).replace('.', '').replace(',', '.')) : null;
+          raw = preco.data; // resposta crua — pra conferir desconto de contrato/tabela promocional
+          // pcFinal = preço COM contrato (o que a gente cobra); pcBase = tabela cheia (balcão).
+          precoReais = parseBRL(preco.data?.pcFinal ?? preco.data?.pcBase);
+          precoBase = parseBRL(preco.data?.pcBase);
         } else {
+          raw = preco.data;
           erro = preco.data?.msgs?.join('; ') || `preço HTTP ${preco.status}`;
         }
         if (prazo.status >= 200 && prazo.status < 300) {
@@ -86,7 +150,7 @@ export class CorreiosService {
       } catch (e: any) {
         erro = e?.message || 'falha';
       }
-      opcoes.push({ servico: s.nome, codigo: s.codigo, precoReais, prazoDias, erro });
+      opcoes.push({ servico: s.nome, codigo: s.codigo, precoReais, precoBase, prazoDias, erro, raw });
     }
     return { cepOrigem, cepDestino, pesoGramas: peso, opcoes };
   }

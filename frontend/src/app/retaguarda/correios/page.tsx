@@ -34,7 +34,7 @@ type Status = {
   servicos: Array<{ nome: string; codigo: string }>;
 };
 
-type FreteOpcao = { servico: string; codigo: string; precoReais: number | null; prazoDias: number | null; erro?: string };
+type FreteOpcao = { servico: string; codigo: string; precoReais: number | null; precoBase?: number | null; prazoDias: number | null; erro?: string; raw?: any };
 type FreteResp = { cepOrigem: string; cepDestino: string; pesoGramas: number; opcoes: FreteOpcao[] };
 
 type Endereco = {
@@ -48,6 +48,13 @@ const brl = (n: number | null | undefined) =>
 
 const REMETENTE_VAZIO: Endereco = {
   nome: '', cnpjCpf: '', endereco: '', numero: '', bairro: '', cidade: '', uf: '', cep: '', telefone: '',
+};
+// Pré-preenche o remetente com a matriz (CEP de origem do contrato). Editável e
+// salvo em localStorage — na Parte 2, o remetente vira a loja de origem do pedido.
+const REMETENTE_PADRAO: Endereco = {
+  nome: 'T O RISSUTTO EIRELI', cnpjCpf: '20104813000139',
+  endereco: 'Av Harry Forssell', numero: '159', bairro: 'Belas Artes',
+  cidade: 'Itanhaém', uf: 'SP', cep: '11746692', telefone: '',
 };
 const DESTINATARIO_VAZIO: Endereco = {
   nome: '', cnpjCpf: '', endereco: '', numero: '', complemento: '', bairro: '', cidade: '', uf: '', cep: '', telefone: '',
@@ -76,6 +83,17 @@ export default function CorreiosDiagnostico() {
   const [loadingStatus, setLoadingStatus] = useState(true);
   const [erroStatus, setErroStatus] = useState<string | null>(null);
 
+  // debug PRC-124: a que contrato/DR o token pertence
+  const [tokenDbg, setTokenDbg] = useState<any>(null);
+  const [loadingTok, setLoadingTok] = useState(false);
+  const verToken = useCallback(async () => {
+    setLoadingTok(true);
+    setTokenDbg(null);
+    try { setTokenDbg(await api('/correios/token-debug')); }
+    catch (e: any) { setTokenDbg({ erro: e?.message || 'falha' }); }
+    finally { setLoadingTok(false); }
+  }, []);
+
   const carregarStatus = useCallback(async () => {
     setLoadingStatus(true);
     setErroStatus(null);
@@ -95,6 +113,7 @@ export default function CorreiosDiagnostico() {
   const [frete, setFrete] = useState<FreteResp | null>(null);
   const [loadingFrete, setLoadingFrete] = useState(false);
   const [erroFrete, setErroFrete] = useState<string | null>(null);
+  const [showFreteRaw, setShowFreteRaw] = useState(false);
 
   const testarFrete = useCallback(async () => {
     setLoadingFrete(true);
@@ -112,7 +131,7 @@ export default function CorreiosDiagnostico() {
   }, [cepFrete, pesoFrete]);
 
   // ── pré-postagem ──
-  const [remetente, setRemetente] = useState<Endereco>(REMETENTE_VAZIO);
+  const [remetente, setRemetente] = useState<Endereco>(REMETENTE_PADRAO);
   const [destinatario, setDestinatario] = useState<Endereco>(DESTINATARIO_VAZIO);
   const [servico, setServico] = useState<'PAC' | 'SEDEX'>('PAC');
   const [pesoPP, setPesoPP] = useState('500');
@@ -120,12 +139,13 @@ export default function CorreiosDiagnostico() {
   const [prepost, setPrepost] = useState<any>(null);
   const [loadingPP, setLoadingPP] = useState(false);
   const [erroPP, setErroPP] = useState<string | null>(null);
+  const [cepBuscando, setCepBuscando] = useState<'rem' | 'dest' | null>(null);
 
   // carrega remetente salvo (1x)
   useEffect(() => {
     try {
       const raw = localStorage.getItem(REMETENTE_KEY);
-      if (raw) setRemetente({ ...REMETENTE_VAZIO, ...JSON.parse(raw) });
+      if (raw) setRemetente({ ...REMETENTE_PADRAO, ...JSON.parse(raw) });
     } catch { /* ignore */ }
   }, []);
 
@@ -135,6 +155,21 @@ export default function CorreiosDiagnostico() {
     return next;
   });
   const setDest = (patch: Partial<Endereco>) => setDestinatario((d) => ({ ...d, ...patch }));
+
+  // CEP → endereço (ViaCEP via backend). Preenche logradouro/bairro/cidade/uf.
+  const buscarCep = async (cepRaw: string, alvo: 'rem' | 'dest') => {
+    const cep = cepRaw.replace(/\D/g, '');
+    if (cep.length !== 8) return;
+    setCepBuscando(alvo);
+    try {
+      const r = await api<any>(`/correios/cep?cep=${cep}`);
+      if (r && !r.erro) {
+        const patch = { endereco: r.logradouro || '', bairro: r.bairro || '', cidade: r.cidade || '', uf: r.uf || '' };
+        if (alvo === 'dest') setDest(patch); else setRem(patch);
+      }
+    } catch { /* silencioso — usuário digita manual se falhar */ }
+    finally { setCepBuscando(null); }
+  };
 
   const testarPrepostagem = useCallback(async () => {
     setLoadingPP(true);
@@ -203,6 +238,19 @@ export default function CorreiosDiagnostico() {
               CORREIOS_CARTAO_POSTAGEM, CORREIOS_CONTRATO, CORREIOS_CEP_ORIGEM. Configure e faça deploy.
             </div>
           )}
+          {status?.configurado && (
+            <div className="mt-3 pt-3 border-t border-slate-100">
+              <button onClick={verToken} disabled={loadingTok} className="text-xs text-sky-600 hover:underline flex items-center gap-1 disabled:opacity-40">
+                {loadingTok ? <Loader2 size={13} className="animate-spin" /> : <AlertTriangle size={13} />}
+                Debug PRC-124: ver a que contrato/DR o token pertence
+              </button>
+              {tokenDbg && (
+                <pre className="mt-2 bg-slate-900 text-slate-100 text-xs rounded-lg p-3 overflow-auto max-h-80">
+                  {JSON.stringify(tokenDbg, null, 2)}
+                </pre>
+              )}
+            </div>
+          )}
         </section>
 
         {/* ── FRETE ── */}
@@ -221,24 +269,37 @@ export default function CorreiosDiagnostico() {
           </div>
           {erroFrete && <div className="mt-3 text-sm text-rose-600 flex items-center gap-2"><AlertTriangle size={15} /> {erroFrete}</div>}
           {frete && (
-            <div className="mt-4 grid sm:grid-cols-2 gap-3">
-              {frete.opcoes.map((o) => (
-                <div key={o.codigo} className={`rounded-lg border p-3 ${o.erro ? 'border-rose-200 bg-rose-50' : 'border-emerald-200 bg-emerald-50'}`}>
-                  <div className="flex items-center justify-between">
-                    <span className="font-medium">{o.servico} <span className="text-xs text-slate-400">({o.codigo})</span></span>
-                    {o.erro ? <AlertTriangle size={15} className="text-rose-500" /> : <CheckCircle2 size={15} className="text-emerald-600" />}
-                  </div>
-                  {o.erro ? (
-                    <div className="text-xs text-rose-600 mt-1">{o.erro}</div>
-                  ) : (
-                    <div className="text-sm mt-1">
-                      <b>{brl(o.precoReais)}</b>
-                      <span className="text-slate-500"> · {o.prazoDias != null ? `${o.prazoDias} dia(s)` : 'prazo —'}</span>
+            <>
+              <div className="mt-4 grid sm:grid-cols-2 gap-3">
+                {frete.opcoes.map((o) => (
+                  <div key={o.codigo} className={`rounded-lg border p-3 ${o.erro ? 'border-rose-200 bg-rose-50' : 'border-emerald-200 bg-emerald-50'}`}>
+                    <div className="flex items-center justify-between">
+                      <span className="font-medium">{o.servico} <span className="text-xs text-slate-400">({o.codigo})</span></span>
+                      {o.erro ? <AlertTriangle size={15} className="text-rose-500" /> : <CheckCircle2 size={15} className="text-emerald-600" />}
                     </div>
-                  )}
-                </div>
-              ))}
-            </div>
+                    {o.erro ? (
+                      <div className="text-xs text-rose-600 mt-1">{o.erro}</div>
+                    ) : (
+                      <div className="text-sm mt-1">
+                        <b>{brl(o.precoReais)}</b>
+                        <span className="text-slate-500"> · {o.prazoDias != null ? `${o.prazoDias} dia(s)` : 'prazo —'}</span>
+                        {o.precoBase != null && o.precoReais != null && o.precoBase !== o.precoReais && (
+                          <span className="ml-2 text-xs text-slate-400">tabela cheia <s>{brl(o.precoBase)}</s></span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <button onClick={() => setShowFreteRaw((v) => !v)} className="mt-2 text-xs text-sky-600 hover:underline">
+                {showFreteRaw ? 'ocultar' : 'ver'} resposta crua do preço (conferir desconto de contrato/tabela promocional)
+              </button>
+              {showFreteRaw && (
+                <pre className="mt-2 bg-slate-900 text-slate-100 text-xs rounded-lg p-3 overflow-auto max-h-96">
+                  {JSON.stringify(frete.opcoes.map((o) => ({ servico: o.servico, codigo: o.codigo, precoFinal: o.precoReais, precoBase: o.precoBase, raw: o.raw })), null, 2)}
+                </pre>
+              )}
+            </>
           )}
         </section>
 
@@ -262,7 +323,7 @@ export default function CorreiosDiagnostico() {
                 <Campo label="Bairro" value={remetente.bairro} onChange={(v) => setRem({ bairro: v })} />
                 <Campo label="Cidade" value={remetente.cidade} onChange={(v) => setRem({ cidade: v })} />
                 <Campo label="UF" value={remetente.uf} onChange={(v) => setRem({ uf: v })} />
-                <Campo label="CEP" value={remetente.cep} onChange={(v) => setRem({ cep: v })} className="col-span-2" />
+                <Campo label={cepBuscando === 'rem' ? 'CEP (buscando…)' : 'CEP'} value={remetente.cep} onChange={(v) => { setRem({ cep: v }); buscarCep(v, 'rem'); }} className="col-span-2" />
               </div>
             </div>
             <div>
@@ -277,7 +338,7 @@ export default function CorreiosDiagnostico() {
                 <Campo label="Bairro" value={destinatario.bairro} onChange={(v) => setDest({ bairro: v })} />
                 <Campo label="Cidade" value={destinatario.cidade} onChange={(v) => setDest({ cidade: v })} />
                 <Campo label="UF" value={destinatario.uf} onChange={(v) => setDest({ uf: v })} />
-                <Campo label="CEP" value={destinatario.cep} onChange={(v) => setDest({ cep: v })} />
+                <Campo label={cepBuscando === 'dest' ? 'CEP (buscando…)' : 'CEP'} value={destinatario.cep} onChange={(v) => { setDest({ cep: v }); buscarCep(v, 'dest'); }} />
               </div>
             </div>
           </div>

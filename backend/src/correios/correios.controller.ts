@@ -47,4 +47,18 @@ export class CorreiosController {
     this.requireRole(req);
     return this.svc.criarPrepostagem(body);
   }
+
+  /** Busca endereço por CEP (autopreenchimento de remetente/destinatário). */
+  @Get('cep')
+  cep(@Req() req: any, @Query('cep') cep: string) {
+    this.requireRole(req);
+    return this.svc.buscarCep(cep);
+  }
+
+  /** DEBUG PRC-124: mostra a que contrato/DR o token de acesso pertence. */
+  @Get('token-debug')
+  tokenDebug(@Req() req: any) {
+    this.requireRole(req);
+    return this.svc.tokenDebug();
+  }
 }
