@@ -54,6 +54,8 @@ interface PickOrderRow {
   status: PickStatus;
   trackingCode: string | null;
   carrier: string | null;
+  correiosPrepostagemId?: string | null;
+  correiosGeneratedAt?: string | null;
   createdAt: string;
   updatedAt?: string;
   isTransfer?: boolean;
@@ -689,47 +691,54 @@ export default function MinhaLojaPage() {
     }
   }
 
-  // Gera a pré-postagem dos Correios (só pedidos da LIVE), marca ENVIADO com o
-  // rastreio automático e baixa a etiqueta PDF — tudo em 1 clique.
+  function downloadPdf(b64: string, name: string) {
+    const a = document.createElement('a');
+    a.href = `data:application/pdf;base64,${b64}`;
+    a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+  }
+  async function baixarEtiquetaEDeclaracao(idPre: string, rastreio: string) {
+    try {
+      const et = await api<any>('/correios/etiqueta', { method: 'POST', body: JSON.stringify({ idPrepostagem: idPre }) });
+      if (et?.ok && et.pdfBase64) { downloadPdf(et.pdfBase64, `etiqueta-${rastreio}.pdf`); pushToast('🏷️ Etiqueta baixada'); }
+      else pushToast(`Etiqueta não ficou pronta: ${et?.erro ?? 'tente reimprimir'}`);
+    } catch { pushToast('Etiqueta falhou (tente reimprimir).'); }
+    try {
+      const dc = await api<any>('/correios/declaracao', { method: 'POST', body: JSON.stringify({ idPrepostagem: idPre }) });
+      if (dc?.ok && dc.pdfBase64) { downloadPdf(dc.pdfBase64, `declaracao-${rastreio}.pdf`); pushToast('📄 Declaração baixada'); }
+      else pushToast(`Declaração não veio: ${dc?.erro ?? 'tente de novo'}`);
+    } catch { pushToast('Declaração falhou.'); }
+  }
+
+  // MODEL B: gera a pré-postagem (modalidade correta), mostra o rastreio e baixa
+  // etiqueta + declaração. NÃO marca enviado — o pedido FICA na lista
+  // "aguardando postagem"; o cron marca enviado quando os Correios postarem.
   async function gerarEnvioCorreios(row: PickOrderRow) {
     cancelAutoMaximize(row.id);
     try {
       const r = await api<any>(`/pick-orders/${row.id}/correios-envio`, { method: 'POST', body: JSON.stringify({}) });
       if (!r?.codigoRastreio) { pushToast('Correios não devolveu rastreio.'); return; }
       setRows((prev) => prev.map((x) => (x.id === row.id
-        ? { ...x, status: 'shipped' as PickStatus, trackingCode: r.codigoRastreio, carrier: r.servico ? `Correios ${r.servico}` : 'Correios' }
+        ? { ...x, trackingCode: r.codigoRastreio, carrier: r.servico ? `Correios ${r.servico}` : 'Correios', correiosPrepostagemId: r.idPrepostagem ?? null }
         : x)));
-      pushToast(`📮 Envio gerado: ${r.codigoRastreio}`);
-      if (r.idPrepostagem) {
-        try {
-          const et = await api<any>('/correios/etiqueta', { method: 'POST', body: JSON.stringify({ idPrepostagem: r.idPrepostagem }) });
-          if (et?.ok && et.pdfBase64) {
-            const a = document.createElement('a');
-            a.href = `data:application/pdf;base64,${et.pdfBase64}`;
-            a.download = `etiqueta-${r.codigoRastreio}.pdf`;
-            document.body.appendChild(a); a.click(); a.remove();
-            pushToast('🏷️ Etiqueta baixada');
-          } else {
-            pushToast('Rastreio ok, mas a etiqueta não ficou pronta ainda — reimprima em alguns segundos.');
-          }
-        } catch { pushToast('Rastreio ok; a etiqueta falhou (tente reimprimir).'); }
-        // Declaração de conteúdo (documento separado da etiqueta)
-        try {
-          const dc = await api<any>('/correios/declaracao', { method: 'POST', body: JSON.stringify({ idPrepostagem: r.idPrepostagem }) });
-          if (dc?.ok && dc.pdfBase64) {
-            const a = document.createElement('a');
-            a.href = `data:application/pdf;base64,${dc.pdfBase64}`;
-            a.download = `declaracao-${r.codigoRastreio}.pdf`;
-            document.body.appendChild(a); a.click(); a.remove();
-            pushToast('📄 Declaração de conteúdo baixada');
-          } else {
-            pushToast(`Declaração de conteúdo não veio: ${dc?.erro ?? 'tente de novo'}`);
-          }
-        } catch { pushToast('Declaração de conteúdo falhou.'); }
-      }
+      pushToast(`📮 Envio gerado (${r.servico ?? '—'}): ${r.codigoRastreio} — aguardando postagem`);
+      if (r.idPrepostagem) await baixarEtiquetaEDeclaracao(String(r.idPrepostagem), r.codigoRastreio);
     } catch (err: any) {
       pushToast(`Erro no envio Correios: ${err?.message ?? 'falha'}`);
     }
+  }
+  async function reabrirEnvio(row: PickOrderRow) {
+    try {
+      await api(`/pick-orders/${row.id}/correios-reabrir`, { method: 'POST', body: JSON.stringify({}) });
+      setRows((prev) => prev.map((x) => (x.id === row.id ? { ...x, trackingCode: null, carrier: null, correiosPrepostagemId: null, correiosGeneratedAt: null } : x)));
+      pushToast('Envio reaberto — gere de novo. (Cancele a pré-postagem antiga no portal dos Correios.)');
+    } catch (err: any) { pushToast(`Erro ao reabrir: ${err?.message ?? 'falha'}`); }
+  }
+  // Override manual: força "enviado" agora com o rastreio já gerado (Giga +
+  // WhatsApp) — pra quando o cron ainda não pegou a postagem ou está desligado.
+  async function marcarEnviadoManual(row: PickOrderRow) {
+    if (!row.trackingCode) { pushToast('Gere o envio primeiro.'); return; }
+    await submitShipped(row, row.trackingCode, row.carrier || 'Correios');
   }
 
   function logout() {
@@ -985,6 +994,9 @@ export default function MinhaLojaPage() {
               onBip={() => setShowBipModal(row)}
               onShip={() => setShowShippedModal(row)}
               onCorreios={() => gerarEnvioCorreios(row)}
+              onReabrir={() => reabrirEnvio(row)}
+              onReimprimir={() => row.correiosPrepostagemId ? baixarEtiquetaEDeclaracao(String(row.correiosPrepostagemId), row.trackingCode || 'etiqueta') : pushToast('Sem pré-postagem pra reimprimir.')}
+              onMarcarEnviado={() => marcarEnviadoManual(row)}
               onPrint={() => openPrintWindow(row.id)}
               onReportIssue={() => setShowIssueModal(row)}
               onSeen={() => cancelAutoMaximize(row.id)}
@@ -1638,13 +1650,16 @@ function LiveBipModal({
 }
 
 function PickOrderCard({
-  row, onStart, onBip, onShip, onCorreios, onPrint, onReportIssue, onSeen, onSwapItem,
+  row, onStart, onBip, onShip, onCorreios, onReabrir, onReimprimir, onMarcarEnviado, onPrint, onReportIssue, onSeen, onSwapItem,
 }: {
   row: PickOrderRow;
   onStart: () => void;
   onBip: () => void;
   onShip: () => void;
   onCorreios: () => Promise<void> | void;
+  onReabrir: () => void;
+  onReimprimir: () => void;
+  onMarcarEnviado: () => void;
   onPrint: () => void;
   onReportIssue: () => void;
   onSeen: () => void;
@@ -1911,17 +1926,33 @@ function PickOrderCard({
             <Barcode className="w-6 h-6" /> Bipar peças
           </button>
         )}
-        {(status === 'separated' || status === 'ready') && isLive && (
+        {/* LIVE, pronto, SEM pré-postagem → gera (não marca enviado; fica na lista) */}
+        {(status === 'separated' || status === 'ready') && isLive && !row.trackingCode && (
           <button
             onClick={async (e) => { e.stopPropagation(); if (corrBusy) return; setCorrBusy(true); try { await onCorreios(); } finally { setCorrBusy(false); } }}
             disabled={corrBusy}
-            title="Gera a pré-postagem dos Correios, marca enviado e baixa a etiqueta"
+            title="Gera a pré-postagem (modalidade correta) e baixa etiqueta + declaração. O pedido fica na lista até postar."
             className="flex-1 bg-sky-600 hover:bg-sky-700 active:scale-[0.98] disabled:opacity-50 text-white font-bold py-4 rounded-lg flex items-center justify-center gap-2 text-base shadow-md transition"
           >
-            <Truck className="w-6 h-6" /> {corrBusy ? 'Gerando envio...' : '📮 Gerar envio Correios'}
+            <Truck className="w-6 h-6" /> {corrBusy ? 'Gerando...' : '📮 Gerar envio Correios'}
           </button>
         )}
-        {(status === 'separated' || status === 'ready') && (
+        {/* LIVE, pré-postagem gerada, aguardando postagem física */}
+        {isLive && row.trackingCode && status !== 'shipped' && (
+          <div className="flex-1 flex flex-col gap-1">
+            <div className="rounded-lg border-2 border-sky-300 bg-sky-50 px-3 py-1.5 text-center text-sm font-bold text-sky-800">
+              📮 {row.trackingCode} · {row.carrier || 'Correios'}
+              <div className="text-[11px] font-normal text-sky-600">aguardando postagem — a cliente é avisada quando os Correios postarem</div>
+            </div>
+            <div className="flex gap-1">
+              <button onClick={(e) => { e.stopPropagation(); onReimprimir(); }} className="flex-1 bg-white border-2 border-slate-300 text-slate-800 font-semibold py-2 rounded-lg text-sm hover:bg-slate-100">🏷️ Reimprimir</button>
+              <button onClick={(e) => { e.stopPropagation(); onMarcarEnviado(); }} title="Já postei — marcar enviado agora (baixa Giga + avisa cliente)" className="flex-1 bg-emerald-600 text-white font-semibold py-2 rounded-lg text-sm hover:bg-emerald-700">✓ Já postei</button>
+              <button onClick={(e) => { e.stopPropagation(); if (confirm('Reabrir e refazer o envio? A pré-postagem atual é desfeita — cancele-a no portal dos Correios.')) onReabrir(); }} className="flex-1 bg-white border-2 border-amber-300 text-amber-700 font-semibold py-2 rounded-lg text-sm hover:bg-amber-50">↩︎ Reabrir</button>
+            </div>
+          </div>
+        )}
+        {/* SITE (não-live) pronto → envio manual com rastreio digitado */}
+        {(status === 'separated' || status === 'ready') && !isLive && (
           <button
             onClick={(e) => { e.stopPropagation(); onShip(); }}
             className="flex-1 bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white font-bold py-4 rounded-lg flex items-center justify-center gap-2 text-base shadow-md transition"
