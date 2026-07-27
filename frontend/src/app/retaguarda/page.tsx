@@ -66,6 +66,7 @@ const GESTAO_ITEMS: GestaoItem[] = [
   { href: '/retaguarda/cadastro-produtos',    label: 'Cadastro Produtos', subtitle: 'Novo SKU',      description: 'Gerar SKUs no Wincred',         tone: 'purple', icon: Package         },
   { href: '/retaguarda/editor-produtos',      label: 'Editor Produtos',   subtitle: 'Padronizar',    description: 'REF, preço e descrição em bloco', tone: 'amber', icon: Package         },
   { href: '/retaguarda/remessas',             label: 'Remessas',          subtitle: 'Em trânsito',   description: 'Caixas + comprovantes PDF',     tone: 'sky',    icon: Truck           },
+  { href: '/retaguarda/correios',             label: 'Correios',          subtitle: 'Envios',        description: 'Frete + pré-postagem (diagnóstico)', tone: 'sky', icon: Truck           },
   { href: '/retaguarda/realinhamento',        label: 'Realinhamento',     subtitle: 'Criar',         description: 'Rebalancear estoque',           tone: 'amber',  icon: Shuffle         },
   { href: '/retaguarda/realinhamento/nao-encontrados', label: 'Não Encontradas', subtitle: 'Revisar', description: 'Filiais reportaram',           tone: 'rose',   icon: AlertTriangle  },
   { href: '/retaguarda/enviados-hoje',        label: 'Enviados Hoje',     subtitle: 'Pedidos WC',    description: 'Por filial',                    tone: 'green',  icon: ClipboardList   },
