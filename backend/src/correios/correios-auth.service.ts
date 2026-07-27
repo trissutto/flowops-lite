@@ -16,6 +16,7 @@ import axios from 'axios';
  *   CORREIOS_API_TOKEN         código de acesso à API (gerado no portal)
  *   CORREIOS_CARTAO_POSTAGEM   número do cartão de postagem
  *   CORREIOS_CONTRATO          número do contrato
+ *   CORREIOS_DR                DR do contrato (o (NN) do SUP. EST. no cartão) — bate com o token
  *   CORREIOS_AMBIENTE          'prod' (default) | 'hom'
  *   CORREIOS_CEP_ORIGEM        CEP de origem das postagens (8 dígitos)
  */
@@ -45,6 +46,12 @@ export class CorreiosAuthService {
   }
   get cepOrigem(): string {
     return String(process.env.CORREIOS_CEP_ORIGEM || '').replace(/\D/g, '');
+  }
+  /** DR (Diretoria Regional) do contrato — precisa BATER com a do token de acesso,
+   *  senão o cálculo de preço volta PRC-124. Vem no cartão como SUP. EST. XX/YYY(NN):
+   *  o (NN) é a DR. Ex.: SE/SPM(72) → CORREIOS_DR=72. */
+  get dr(): string {
+    return String(process.env.CORREIOS_DR || '').replace(/\D/g, '') || '0';
   }
 
   /** Token válido (renova se faltar < 5 min pra expirar). */

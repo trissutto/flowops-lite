@@ -67,7 +67,7 @@ export class CorreiosService {
         const qs =
           `?cepOrigem=${cepOrigem}&cepDestino=${cepDestino}&psObjeto=${peso}` +
           `&tpObjeto=2&comprimento=${comprimento}&largura=${largura}&altura=${altura}` +
-          `&nuContrato=${this.auth.contrato}&nuDR=0`;
+          `&nuContrato=${this.auth.contrato}&nuDR=${this.auth.dr}`;
         const [preco, prazo] = await Promise.all([
           axios.get(`${base}/preco/v1/nacional/${s.codigo}${qs}`, { headers, timeout: 20000, validateStatus: () => true }),
           axios.get(`${base}/prazo/v1/nacional/${s.codigo}?cepOrigem=${cepOrigem}&cepDestino=${cepDestino}`, { headers, timeout: 20000, validateStatus: () => true }),
