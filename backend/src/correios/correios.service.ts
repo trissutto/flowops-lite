@@ -116,13 +116,13 @@ export class CorreiosService {
 
     const opcoes: Array<{
       servico: string; codigo: string;
-      precoReais: number | null; precoBase: number | null; prazoDias: number | null;
+      precoReais: number | null; precoComSeguro: number | null; prazoDias: number | null;
       erro?: string; raw?: any;
     }> = [];
 
     for (const s of this.servicos) {
       let precoReais: number | null = null;
-      let precoBase: number | null = null;
+      let precoComSeguro: number | null = null;
       let prazoDias: number | null = null;
       let erro: string | undefined;
       let raw: any = null;
@@ -137,9 +137,10 @@ export class CorreiosService {
         ]);
         if (preco.status >= 200 && preco.status < 300) {
           raw = preco.data; // resposta crua — pra conferir desconto de contrato/tabela promocional
-          // pcFinal = preço COM contrato (o que a gente cobra); pcBase = tabela cheia (balcão).
-          precoReais = parseBRL(preco.data?.pcFinal ?? preco.data?.pcBase);
-          precoBase = parseBRL(preco.data?.pcBase);
+          // pcBase = TARIFA do contrato (tabela promocional — o que a gente cobra).
+          // pcFinal = pcBase + seguro automático (ad valorem) — guardado como referência.
+          precoReais = parseBRL(preco.data?.pcBase ?? preco.data?.pcFinal);
+          precoComSeguro = parseBRL(preco.data?.pcFinal);
         } else {
           raw = preco.data;
           erro = preco.data?.msgs?.join('; ') || `preço HTTP ${preco.status}`;
@@ -150,7 +151,7 @@ export class CorreiosService {
       } catch (e: any) {
         erro = e?.message || 'falha';
       }
-      opcoes.push({ servico: s.nome, codigo: s.codigo, precoReais, precoBase, prazoDias, erro, raw });
+      opcoes.push({ servico: s.nome, codigo: s.codigo, precoReais, precoComSeguro, prazoDias, erro, raw });
     }
     return { cepOrigem, cepDestino, pesoGramas: peso, opcoes };
   }
