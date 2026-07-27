@@ -98,9 +98,24 @@ export class LivePdvService {
     //  2. Fora de SP: segue a modalidade paga (derivada do CEP via freteFromCep,
     //     a MESMA fonte do card "MODALIDADE DE ENVIO" e do checkout).
     //  `cart` NÃO tem coluna freteServico — nunca chumbar PAC lendo campo vazio.
-    const uf = String(cart.customerUf || '').trim().toUpperCase();
+    // Endereço CEP-authoritative: os Correios validam UF/cidade contra o CEP
+    // (erro RTL-076). Resolve pelo ViaCEP e SOBREPÕE o que está gravado — evita
+    // UF torto (ex.: "CI" em vez de SP) bloquear a postagem. Fallback: cart.
+    const cepDest = String(cart.customerCep || '').replace(/\D/g, '');
+    let ufDest = String(cart.customerUf || '').trim().toUpperCase();
+    let cidadeDest = cart.customerCidade || '';
+    let bairroDest = cart.customerBairro || '';
+    try {
+      const via: any = await this.correios.buscarCep(cepDest);
+      if (via && !via.erro) {
+        if (via.uf) ufDest = String(via.uf).trim().toUpperCase();
+        if (via.cidade) cidadeDest = via.cidade;
+        if (!bairroDest && via.bairro) bairroDest = via.bairro;
+      }
+    } catch { /* ViaCEP fora → usa o do cart */ }
+
     const servico: 'PAC' | 'SEDEX' =
-      uf === 'SP' || this.freteFromCep(cart.customerCep)?.servico === 'SEDEX' ? 'SEDEX' : 'PAC';
+      ufDest === 'SP' || this.freteFromCep(cart.customerCep)?.servico === 'SEDEX' ? 'SEDEX' : 'PAC';
     const rem = this.correios.remetentePadrao();
 
     const resp: any = await this.correios.criarPrepostagem({
@@ -112,10 +127,10 @@ export class LivePdvService {
         endereco: cart.customerEndereco || '',
         numero: cart.customerNumero || 'S/N',
         complemento: cart.customerComplemento || '',
-        bairro: cart.customerBairro || '',
-        cidade: cart.customerCidade || '',
-        uf: cart.customerUf || '',
-        cep: String(cart.customerCep || '').replace(/\D/g, ''),
+        bairro: bairroDest || '',
+        cidade: cidadeDest || '',
+        uf: ufDest || '',
+        cep: cepDest,
         telefone: String(cart.customerPhone || '').replace(/\D/g, ''),
       },
       pesoGramas,

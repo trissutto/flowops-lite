@@ -15,7 +15,7 @@ import { CorreiosPostagemReconcileCron } from './correios-postagem-reconcile.cro
   // LivePdvModule → ManychatService (WhatsApp de rastreio pra cliente da LIVE)
   // WincredMirrorModule → WincredCatalogService (preço do espelho pra diferença na troca de peça)
   // CorreiosModule → CorreiosService (rastreio pro cron marcar enviado na postagem)
-  imports: [PrismaModule, WebsocketModule, forwardRef(() => WooCommerceModule), ErpModule, LivePdvModule, WincredMirrorModule, CorreiosModule],
+  imports: [PrismaModule, WebsocketModule, forwardRef(() => WooCommerceModule), ErpModule, LivePdvModule, WincredMirrorModule, CorreiosModule, MaisEnviosModule],
   controllers: [PickOrdersController],
   providers: [PickOrdersService, CorreiosPostagemReconcileCron],
   exports: [PickOrdersService],
