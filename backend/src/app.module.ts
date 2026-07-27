@@ -48,6 +48,7 @@ import { WhatsappModule } from './whatsapp/whatsapp.module';
 import { IntegrationLogsModule } from './integration-logs/integration-logs.module';
 import { TrackingModule } from './tracking/tracking.module';
 import { CorreiosModule } from './correios/correios.module';
+import { MaisEnviosModule } from './mais-envios/mais-envios.module';
 import { PilotModule } from './pilot/pilot.module';
 import { SellersModule } from './sellers/sellers.module';
 import { PontoModule } from './ponto/ponto.module';
@@ -127,6 +128,7 @@ import { OperadorPinModule } from './operador-pin/operador-pin.module';
     IntegrationLogsModule,
     TrackingModule,
     CorreiosModule,
+    MaisEnviosModule,
     PilotModule,
     SellersModule,
     PontoModule,
