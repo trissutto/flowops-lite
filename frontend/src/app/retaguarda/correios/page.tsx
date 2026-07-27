@@ -34,7 +34,7 @@ type Status = {
   servicos: Array<{ nome: string; codigo: string }>;
 };
 
-type FreteOpcao = { servico: string; codigo: string; precoReais: number | null; precoBase?: number | null; prazoDias: number | null; erro?: string; raw?: any };
+type FreteOpcao = { servico: string; codigo: string; precoReais: number | null; precoComSeguro?: number | null; prazoDias: number | null; erro?: string; raw?: any };
 type FreteResp = { cepOrigem: string; cepDestino: string; pesoGramas: number; opcoes: FreteOpcao[] };
 
 type Endereco = {
@@ -283,8 +283,8 @@ export default function CorreiosDiagnostico() {
                       <div className="text-sm mt-1">
                         <b>{brl(o.precoReais)}</b>
                         <span className="text-slate-500"> · {o.prazoDias != null ? `${o.prazoDias} dia(s)` : 'prazo —'}</span>
-                        {o.precoBase != null && o.precoReais != null && o.precoBase !== o.precoReais && (
-                          <span className="ml-2 text-xs text-slate-400">tabela cheia <s>{brl(o.precoBase)}</s></span>
+                        {o.precoComSeguro != null && o.precoReais != null && o.precoComSeguro !== o.precoReais && (
+                          <span className="ml-2 text-xs text-slate-400">c/ seguro {brl(o.precoComSeguro)}</span>
                         )}
                       </div>
                     )}
@@ -296,7 +296,7 @@ export default function CorreiosDiagnostico() {
               </button>
               {showFreteRaw && (
                 <pre className="mt-2 bg-slate-900 text-slate-100 text-xs rounded-lg p-3 overflow-auto max-h-96">
-                  {JSON.stringify(frete.opcoes.map((o) => ({ servico: o.servico, codigo: o.codigo, precoFinal: o.precoReais, precoBase: o.precoBase, raw: o.raw })), null, 2)}
+                  {JSON.stringify(frete.opcoes.map((o) => ({ servico: o.servico, codigo: o.codigo, preco: o.precoReais, precoComSeguro: o.precoComSeguro, raw: o.raw })), null, 2)}
                 </pre>
               )}
             </>
