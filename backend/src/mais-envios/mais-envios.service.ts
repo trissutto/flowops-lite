@@ -34,12 +34,13 @@ export class MaisEnviosService {
     };
   }
 
-  /** Cota preço + prazo (PAC/SEDEX) por CEP destino. Peso em GRAMAS. */
-  async calcularFrete(input: { cepDestino: string; pesoGramas?: number; comprimento?: number; largura?: number; altura?: number }) {
+  /** Cota preço + prazo (PAC/SEDEX). Peso em GRAMAS. `cepOrigem` vem por loja
+   *  (na Parte 2) ou digitado na tela de diagnóstico; cai pra env se não vier. */
+  async calcularFrete(input: { cepDestino: string; cepOrigem?: string; pesoGramas?: number; comprimento?: number; largura?: number; altura?: number }) {
     const destiny = String(input.cepDestino || '').replace(/\D/g, '');
-    const source = this.auth.cepOrigem;
+    const source = (String(input.cepOrigem || '').replace(/\D/g, '')) || this.auth.cepOrigem;
     if (destiny.length !== 8) throw new BadRequestException('CEP destino inválido (8 dígitos).');
-    if (source.length !== 8) throw new BadRequestException('CEP de origem não configurado (MAISENVIOS_CEP_ORIGEM).');
+    if (source.length !== 8) throw new BadRequestException('Informe o CEP de origem (cada loja tem o seu).');
 
     const peso = Math.max(300, Number(input.pesoGramas) || 500);
     const length = Number(input.comprimento) || 30;

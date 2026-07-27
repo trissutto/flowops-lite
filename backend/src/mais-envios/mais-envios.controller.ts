@@ -26,6 +26,7 @@ export class MaisEnviosController {
   frete(
     @Req() req: any,
     @Query('cep') cep: string,
+    @Query('origem') origem?: string,
     @Query('peso') peso?: string,
     @Query('comprimento') comprimento?: string,
     @Query('largura') largura?: string,
@@ -34,6 +35,7 @@ export class MaisEnviosController {
     this.requireRole(req);
     return this.svc.calcularFrete({
       cepDestino: cep,
+      cepOrigem: origem,
       pesoGramas: peso ? Number(peso) : undefined,
       comprimento: comprimento ? Number(comprimento) : undefined,
       largura: largura ? Number(largura) : undefined,

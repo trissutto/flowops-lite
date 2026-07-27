@@ -52,6 +52,7 @@ export default function MaisEnviosDiagnostico() {
   useEffect(() => { carregarStatus(); }, [carregarStatus]);
 
   // frete
+  const [origem, setOrigem] = useState('');
   const [cep, setCep] = useState('');
   const [peso, setPeso] = useState('500');
   const [frete, setFrete] = useState<FreteResp | null>(null);
@@ -61,11 +62,11 @@ export default function MaisEnviosDiagnostico() {
   const testarFrete = useCallback(async () => {
     setLoadingFrete(true); setErroFrete(null); setFrete(null);
     try {
-      const qs = `?cep=${cep.replace(/\D/g, '')}${peso ? `&peso=${peso.replace(/\D/g, '')}` : ''}`;
+      const qs = `?cep=${cep.replace(/\D/g, '')}&origem=${origem.replace(/\D/g, '')}${peso ? `&peso=${peso.replace(/\D/g, '')}` : ''}`;
       setFrete(await api<FreteResp>(`/mais-envios/frete${qs}`));
     } catch (e: any) { setErroFrete(e?.message || 'Falha ao calcular frete'); }
     finally { setLoadingFrete(false); }
-  }, [cep, peso]);
+  }, [cep, origem, peso]);
 
   // descoberta
   const [descoberta, setDescoberta] = useState<{ tipo: string; data: any } | null>(null);
@@ -123,7 +124,7 @@ export default function MaisEnviosDiagnostico() {
           )}
           {status && !status.configurado && (
             <div className="mt-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2">
-              Faltam as envs no serviço do backend: MAISENVIOS_USER, MAISENVIOS_PASS. Depois: MAISENVIOS_CUSTOMER, MAISENVIOS_CARDPOST, MAISENVIOS_PRICETABLE, MAISENVIOS_CEP_ORIGEM.
+              Faltam as envs no serviço do backend: <b>MAISENVIOS_USER</b>, <b>MAISENVIOS_PASS</b>. O CEP de origem NÃO é env (é por loja — digite na cotação). customer/cardpost/pricetable saem da descoberta abaixo.
             </div>
           )}
         </section>
@@ -150,12 +151,15 @@ export default function MaisEnviosDiagnostico() {
         {/* FRETE */}
         <section className="bg-white rounded-xl border border-slate-200 p-4 mb-5">
           <h2 className="font-medium flex items-center gap-2 mb-3"><Calculator size={16} /> Testar frete</h2>
+          <p className="text-xs text-slate-500 mb-3">Cada loja tem seu CEP de origem — digite o da loja que você quer testar (na Parte 2 vem automático da loja do pedido).</p>
           <div className="flex flex-wrap items-end gap-3">
+            <label className="flex flex-col gap-1 text-sm w-40"><span className="text-slate-500 text-xs">CEP origem (loja)</span>
+              <input className="border border-slate-300 rounded-md px-2 py-1.5 text-sm" value={origem} onChange={(e) => setOrigem(e.target.value)} placeholder="00000-000" /></label>
             <label className="flex flex-col gap-1 text-sm w-40"><span className="text-slate-500 text-xs">CEP destino</span>
               <input className="border border-slate-300 rounded-md px-2 py-1.5 text-sm" value={cep} onChange={(e) => setCep(e.target.value)} placeholder="00000-000" /></label>
             <label className="flex flex-col gap-1 text-sm w-28"><span className="text-slate-500 text-xs">Peso (g)</span>
               <input className="border border-slate-300 rounded-md px-2 py-1.5 text-sm" value={peso} onChange={(e) => setPeso(e.target.value)} /></label>
-            <button onClick={testarFrete} disabled={loadingFrete || cep.replace(/\D/g, '').length !== 8} className="bg-violet-600 text-white text-sm rounded-md px-4 py-2 hover:bg-violet-700 disabled:opacity-40 flex items-center gap-2">
+            <button onClick={testarFrete} disabled={loadingFrete || cep.replace(/\D/g, '').length !== 8 || origem.replace(/\D/g, '').length !== 8} className="bg-violet-600 text-white text-sm rounded-md px-4 py-2 hover:bg-violet-700 disabled:opacity-40 flex items-center gap-2">
               {loadingFrete ? <Loader2 size={15} className="animate-spin" /> : <Calculator size={15} />} Calcular
             </button>
           </div>
