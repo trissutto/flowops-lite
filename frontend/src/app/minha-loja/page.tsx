@@ -697,17 +697,15 @@ export default function MinhaLojaPage() {
     a.download = name;
     document.body.appendChild(a); a.click(); a.remove();
   }
-  async function baixarEtiquetaEDeclaracao(idPre: string, rastreio: string) {
+  // A etiqueta dos Correios (pré-postagem) já traz a DECLARAÇÃO embutida — a
+  // "DACE Resumida" (Declaração Auxiliar de Conteúdo Eletrônica) com QR no rodapé
+  // do rótulo. Não precisa de documento separado.
+  async function baixarEtiquetaCorreios(idPre: string, rastreio: string) {
     try {
       const et = await api<any>('/correios/etiqueta', { method: 'POST', body: JSON.stringify({ idPrepostagem: idPre }) });
-      if (et?.ok && et.pdfBase64) { downloadPdf(et.pdfBase64, `etiqueta-${rastreio}.pdf`); pushToast('🏷️ Etiqueta baixada'); }
+      if (et?.ok && et.pdfBase64) { downloadPdf(et.pdfBase64, `etiqueta-${rastreio}.pdf`); pushToast('🏷️ Etiqueta baixada (com declaração/DACE)'); }
       else pushToast(`Etiqueta não ficou pronta: ${et?.erro ?? 'tente reimprimir'}`);
     } catch { pushToast('Etiqueta falhou (tente reimprimir).'); }
-    try {
-      const dc = await api<any>('/correios/declaracao', { method: 'POST', body: JSON.stringify({ idPrepostagem: idPre }) });
-      if (dc?.ok && dc.pdfBase64) { downloadPdf(dc.pdfBase64, `declaracao-${rastreio}.pdf`); pushToast('📄 Declaração baixada'); }
-      else pushToast(`Declaração não veio: ${dc?.erro ?? 'tente de novo'}`);
-    } catch { pushToast('Declaração falhou.'); }
   }
 
   // MODEL B: gera a pré-postagem (modalidade correta), mostra o rastreio e baixa
@@ -728,7 +726,7 @@ export default function MinhaLojaPage() {
         pushToast('🏷️ Etiqueta baixada');
       } else if (r.idPrepostagem) {
         // Correios: etiqueta + declaração por chamada separada
-        await baixarEtiquetaEDeclaracao(String(r.idPrepostagem), r.codigoRastreio);
+        await baixarEtiquetaCorreios(String(r.idPrepostagem), r.codigoRastreio);
       }
     } catch (err: any) {
       pushToast(`Erro no envio Correios: ${err?.message ?? 'falha'}`);
@@ -1002,7 +1000,7 @@ export default function MinhaLojaPage() {
               onShip={() => setShowShippedModal(row)}
               onCorreios={() => gerarEnvioCorreios(row)}
               onReabrir={() => reabrirEnvio(row)}
-              onReimprimir={() => row.correiosPrepostagemId ? baixarEtiquetaEDeclaracao(String(row.correiosPrepostagemId), row.trackingCode || 'etiqueta') : pushToast('Sem pré-postagem pra reimprimir.')}
+              onReimprimir={() => row.correiosPrepostagemId ? baixarEtiquetaCorreios(String(row.correiosPrepostagemId), row.trackingCode || 'etiqueta') : pushToast('Sem pré-postagem pra reimprimir.')}
               onMarcarEnviado={() => marcarEnviadoManual(row)}
               onPrint={() => openPrintWindow(row.id)}
               onReportIssue={() => setShowIssueModal(row)}
