@@ -36,6 +36,32 @@ export class CorreiosService {
   }
 
   /**
+   * DEBUG PRC-124: autentica, decodifica o JWT devolvido pelos Correios e mostra
+   * a QUE contrato/DR/cartão o token está amarrado — pra comparar com o que a
+   * gente MANDA no cálculo de frete. Se o contrato/DR do token != o enviado, é
+   * a causa do PRC-124. NÃO devolve o token cru (só os claims dele).
+   */
+  async tokenDebug() {
+    const token = await this.auth.getToken();
+    let claims: any = null;
+    try {
+      const parts = token.split('.');
+      if (parts.length >= 2) {
+        const b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+        claims = JSON.parse(Buffer.from(b64, 'base64').toString('utf8'));
+      }
+    } catch { /* token não é JWT decodificável */ }
+    return {
+      enviamosNoFrete: {
+        contrato: this.auth.contrato,
+        dr: this.auth.dr,
+        cartaoPostagem: this.auth.cartaoPostagem,
+      },
+      tokenPertenceA: claims ?? '(o token não é um JWT decodificável)',
+    };
+  }
+
+  /**
    * Calcula PREÇO + PRAZO por CEP destino pros serviços (PAC/SEDEX). Peso em
    * GRAMAS; dimensões em cm. Retorna uma opção por serviço.
    */

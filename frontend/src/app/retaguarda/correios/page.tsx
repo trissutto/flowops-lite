@@ -76,6 +76,17 @@ export default function CorreiosDiagnostico() {
   const [loadingStatus, setLoadingStatus] = useState(true);
   const [erroStatus, setErroStatus] = useState<string | null>(null);
 
+  // debug PRC-124: a que contrato/DR o token pertence
+  const [tokenDbg, setTokenDbg] = useState<any>(null);
+  const [loadingTok, setLoadingTok] = useState(false);
+  const verToken = useCallback(async () => {
+    setLoadingTok(true);
+    setTokenDbg(null);
+    try { setTokenDbg(await api('/correios/token-debug')); }
+    catch (e: any) { setTokenDbg({ erro: e?.message || 'falha' }); }
+    finally { setLoadingTok(false); }
+  }, []);
+
   const carregarStatus = useCallback(async () => {
     setLoadingStatus(true);
     setErroStatus(null);
@@ -201,6 +212,19 @@ export default function CorreiosDiagnostico() {
             <div className="mt-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2">
               Faltam as envs no <b>serviço do backend</b> (não no Postgres): CORREIOS_API_USER, CORREIOS_API_TOKEN,
               CORREIOS_CARTAO_POSTAGEM, CORREIOS_CONTRATO, CORREIOS_CEP_ORIGEM. Configure e faça deploy.
+            </div>
+          )}
+          {status?.configurado && (
+            <div className="mt-3 pt-3 border-t border-slate-100">
+              <button onClick={verToken} disabled={loadingTok} className="text-xs text-sky-600 hover:underline flex items-center gap-1 disabled:opacity-40">
+                {loadingTok ? <Loader2 size={13} className="animate-spin" /> : <AlertTriangle size={13} />}
+                Debug PRC-124: ver a que contrato/DR o token pertence
+              </button>
+              {tokenDbg && (
+                <pre className="mt-2 bg-slate-900 text-slate-100 text-xs rounded-lg p-3 overflow-auto max-h-80">
+                  {JSON.stringify(tokenDbg, null, 2)}
+                </pre>
+              )}
             </div>
           )}
         </section>
