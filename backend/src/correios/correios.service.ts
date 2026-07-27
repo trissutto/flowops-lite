@@ -174,32 +174,61 @@ export class CorreiosService {
     const headers = await this.auth.authHeader();
     const base = this.auth.baseUrl;
 
+    // Telefone CWS quer DDD e número separados.
+    const splitFone = (tel?: string) => {
+      const d = (tel || '').replace(/\D/g, '');
+      if (d.length < 10) return { ddd: '', numero: d };
+      return { ddd: d.slice(0, 2), numero: d.slice(2) };
+    };
+    const foneRem = splitFone(input.remetente.telefone);
+    const foneDest = splitFone(input.destinatario.telefone);
+
     const body: any = {
-      idCorreios: '',
       remetente: {
         nome: input.remetente.nome.slice(0, 50),
         cpfCnpj: input.remetente.cnpjCpf.replace(/\D/g, ''),
-        endereco: { logradouro: input.remetente.endereco, numero: input.remetente.numero, bairro: input.remetente.bairro, cidade: input.remetente.cidade, uf: input.remetente.uf, cep: input.remetente.cep.replace(/\D/g, '') },
-        telefone: (input.remetente.telefone || '').replace(/\D/g, ''),
+        ...(foneRem.numero ? { dddCelular: foneRem.ddd, celular: foneRem.numero } : {}),
+        endereco: {
+          cep: input.remetente.cep.replace(/\D/g, ''),
+          logradouro: input.remetente.endereco,
+          numero: input.remetente.numero,
+          bairro: input.remetente.bairro,
+          cidade: input.remetente.cidade,
+          uf: input.remetente.uf,
+        },
       },
       destinatario: {
         nome: input.destinatario.nome.slice(0, 50),
         ...(input.destinatario.cpfCnpj ? { cpfCnpj: input.destinatario.cpfCnpj.replace(/\D/g, '') } : {}),
-        endereco: { logradouro: input.destinatario.endereco, numero: input.destinatario.numero, complemento: input.destinatario.complemento || '', bairro: input.destinatario.bairro, cidade: input.destinatario.cidade, uf: input.destinatario.uf, cep: input.destinatario.cep.replace(/\D/g, '') },
-        telefone: (input.destinatario.telefone || '').replace(/\D/g, ''),
+        ...(foneDest.numero ? { dddCelular: foneDest.ddd, celular: foneDest.numero } : {}),
+        endereco: {
+          cep: input.destinatario.cep.replace(/\D/g, ''),
+          logradouro: input.destinatario.endereco,
+          numero: input.destinatario.numero,
+          complemento: input.destinatario.complemento || '',
+          bairro: input.destinatario.bairro,
+          cidade: input.destinatario.cidade,
+          uf: input.destinatario.uf,
+        },
       },
       codigoServico: codigo,
       cartaoPostagem: this.auth.cartaoPostagem,
-      peso: String(Math.max(1, Math.round(input.pesoGramas))),
-      codigoFormatoObjetoInformado: '2', // 2 = pacote/caixa
-      dimensao: {
-        tipoObjeto: '002',
-        dimensaoAltura: String(input.altura || 10),
-        dimensaoLargura: String(input.largura || 20),
-        dimensaoComprimento: String(input.comprimento || 20),
-      },
-      ...(input.nfeChave ? { chaveNFe: input.nfeChave.replace(/\D/g, '') } : {}),
-      ...(input.valorDeclarado ? { listaServicoAdicional: [{ codigoServicoAdicional: '019', valorDeclarado: input.valorDeclarado.toFixed(2) }] } : {}),
+      // ── Peso e dimensões no formato do CWS (nomes "*Informado"). ──
+      pesoInformado: String(Math.max(1, Math.round(input.pesoGramas))),        // PPN peso
+      codigoFormatoObjetoInformado: '2',                                        // 2 = pacote/caixa
+      alturaInformada: String(input.altura || 10),
+      larguraInformada: String(input.largura || 20),
+      comprimentoInformado: String(input.comprimento || 20),                    // PPN-046
+      diametroInformado: '0',
+      // ── Ciência de que o objeto não é proibido (PPN-330). ──
+      cienteObjetoNaoProibido: 1,
+      // ── Declaração de Conteúdo obrigatória (PPN-347). ──
+      itensDeclaracaoConteudo: [
+        { conteudo: 'Vestuário', quantidade: '1', valor: (input.valorDeclarado ?? 50).toFixed(2) },
+      ],
+      observacao: '',
+      ...(input.nfeChave ? { numeroNotaFiscal: input.nfeChave.replace(/\D/g, '') } : {}),
+      ...(input.valorDeclarado ? { servicosAdicionais: [{ codigoServicoAdicional: '019', valorDeclarado: input.valorDeclarado.toFixed(2) }] } : {}),
     };
 
     try {
