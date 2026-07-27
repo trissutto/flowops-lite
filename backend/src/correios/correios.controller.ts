@@ -55,6 +55,13 @@ export class CorreiosController {
     return this.svc.baixarEtiqueta(body?.idPrepostagem);
   }
 
+  /** Baixa a declaração de conteúdo (PDF) de uma pré-postagem. */
+  @Post('declaracao')
+  declaracao(@Req() req: any, @Body() body: { idPrepostagem: string }) {
+    this.requireRole(req);
+    return this.svc.baixarDeclaracaoConteudo(body?.idPrepostagem);
+  }
+
   /** Rastreia um objeto pelo código. */
   @Get('rastreio')
   rastreio(@Req() req: any, @Query('codigo') codigo: string) {

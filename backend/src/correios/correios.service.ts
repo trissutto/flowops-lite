@@ -318,6 +318,28 @@ export class CorreiosService {
     return { ok: false, etapa: 'download', erro: 'rótulo não ficou pronto a tempo (tente de novo em alguns segundos)', idRecibo };
   }
 
+  /**
+   * Baixa a DECLARAÇÃO DE CONTEÚDO (PDF) de uma pré-postagem — documento
+   * separado da etiqueta, que lista os itens (obrigatório em envio pra CPF sem
+   * NF-e). Devolve base64. Estrutura conforme doc CWS; raw pra iterar se divergir.
+   */
+  async baixarDeclaracaoConteudo(idPrepostagem: string): Promise<any> {
+    const id = String(idPrepostagem || '').trim();
+    if (!id) throw new BadRequestException('idPrepostagem obrigatório');
+    const headers = await this.auth.authHeader();
+    const base = this.auth.baseUrl;
+    const r = await axios.get(
+      `${base}/prepostagem/v1/prepostagens/declaracaoconteudo/${id}`,
+      { headers, timeout: 30000, validateStatus: () => true },
+    );
+    if (r.status < 200 || r.status >= 300) {
+      return { ok: false, erro: r.data?.msgs?.join('; ') || `HTTP ${r.status}`, raw: r.data };
+    }
+    const pdf = r.data?.dados ?? r.data?.arquivo ?? r.data?.pdf ?? (typeof r.data === 'string' ? r.data : null);
+    if (!pdf) return { ok: false, erro: 'API não devolveu o PDF da declaração', raw: r.data };
+    return { ok: true, pdfBase64: String(pdf) };
+  }
+
   /** Rastreia um objeto pelo código (SRO/CWS). Devolve os eventos. */
   async rastrear(codigo: string): Promise<any> {
     const c = String(codigo || '').trim().toUpperCase();
