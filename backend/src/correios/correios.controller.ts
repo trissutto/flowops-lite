@@ -48,6 +48,20 @@ export class CorreiosController {
     return this.svc.criarPrepostagem(body);
   }
 
+  /** Baixa a etiqueta (rótulo PDF) de uma pré-postagem. */
+  @Post('etiqueta')
+  etiqueta(@Req() req: any, @Body() body: { idPrepostagem: string }) {
+    this.requireRole(req);
+    return this.svc.baixarEtiqueta(body?.idPrepostagem);
+  }
+
+  /** Rastreia um objeto pelo código. */
+  @Get('rastreio')
+  rastreio(@Req() req: any, @Query('codigo') codigo: string) {
+    this.requireRole(req);
+    return this.svc.rastrear(codigo);
+  }
+
   /** Busca endereço por CEP (autopreenchimento de remetente/destinatário). */
   @Get('cep')
   cep(@Req() req: any, @Query('cep') cep: string) {

@@ -68,6 +68,38 @@ export default function LiveExpedicaoPage() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [editCart, setEditCart] = useState<any | null>(null);
+  // Correios: gerar envio (pré-postagem) + baixar etiqueta por carrinho
+  const [envioBusy, setEnvioBusy] = useState<string | null>(null);
+  const [envioResult, setEnvioResult] = useState<Record<string, any>>({});
+  const [etqBusy, setEtqBusy] = useState<string | null>(null);
+
+  async function gerarEnvio(cartId: string) {
+    setEnvioBusy(cartId);
+    try {
+      const r = await api<any>(`/live-pdv/carts/${cartId}/correios/prepostagem`, { method: 'POST', body: JSON.stringify({}) });
+      setEnvioResult((p) => ({ ...p, [cartId]: r }));
+      await load();
+    } catch (e: any) {
+      alert('Erro ao gerar envio: ' + (e?.message || e));
+    } finally {
+      setEnvioBusy(null);
+    }
+  }
+  async function baixarEtiquetaCart(cartId: string, idPre: string) {
+    setEtqBusy(cartId);
+    try {
+      const r = await api<any>('/correios/etiqueta', { method: 'POST', body: JSON.stringify({ idPrepostagem: idPre }) });
+      if (r?.ok && r.pdfBase64) {
+        const a = document.createElement('a');
+        a.href = `data:application/pdf;base64,${r.pdfBase64}`;
+        a.download = `etiqueta-${cartId}.pdf`;
+        document.body.appendChild(a); a.click(); a.remove();
+      } else {
+        alert('Etiqueta ainda não ficou pronta: ' + (r?.erro || 'tente de novo em alguns segundos'));
+      }
+    } catch (e: any) { alert('Erro na etiqueta: ' + (e?.message || e)); }
+    finally { setEtqBusy(null); }
+  }
 
   // Abre o "Completar cadastro" — busca o carrinho completo pra prefill (o
   // endpoint de salvar sobrescreve tudo, então precisamos dos dados atuais).
@@ -207,6 +239,35 @@ export default function LiveExpedicaoPage() {
                   >
                     {g.customerCpf ? '✓ Cadastro' : 'Completar cadastro (CPF)'}
                   </button>
+                  {!g.isPickup && (() => {
+                    const rastreio = g.items.find((i) => i.trackingCode)?.trackingCode || envioResult[g.cartId]?.codigoRastreio;
+                    const idPre = envioResult[g.cartId]?.idPrepostagem;
+                    if (rastreio) {
+                      return (
+                        <span className="flex items-center gap-1">
+                          <span className="rounded-lg border border-emerald-300 bg-emerald-50 px-2 py-1 text-[11px] font-bold text-emerald-700">📮 {rastreio}</span>
+                          {idPre && (
+                            <button
+                              onClick={() => baixarEtiquetaCart(g.cartId, String(idPre))}
+                              disabled={etqBusy === g.cartId}
+                              className="rounded-lg border border-sky-300 px-2 py-1 text-xs font-semibold text-sky-700 hover:bg-sky-50 disabled:opacity-40"
+                            >
+                              {etqBusy === g.cartId ? '...' : 'Etiqueta'}
+                            </button>
+                          )}
+                        </span>
+                      );
+                    }
+                    return (
+                      <button
+                        onClick={() => gerarEnvio(g.cartId)}
+                        disabled={envioBusy === g.cartId}
+                        className="rounded-lg border border-sky-400 bg-sky-50 px-2.5 py-1 text-xs font-semibold text-sky-700 hover:bg-sky-100 disabled:opacity-40"
+                      >
+                        {envioBusy === g.cartId ? 'Gerando...' : '📮 Gerar envio Correios'}
+                      </button>
+                    );
+                  })()}
                   <span className="text-xs text-slate-400">{g.items.length} item(s)</span>
                 </div>
               </div>

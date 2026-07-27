@@ -463,6 +463,12 @@ export class LivePdvController {
     return this.svc.markDelivered(itemId);
   }
 
+  /** Gera a pré-postagem dos Correios pro carrinho inteiro (peso = peças×200g). */
+  @Post('carts/:cartId/correios/prepostagem')
+  gerarEnvioCorreios(@Param('cartId') cartId: string) {
+    return this.svc.gerarEnvioCorreios(cartId);
+  }
+
   // ── Dashboard ──
   @Get('sessions/:id/dashboard')
   dashboard(@Param('id') sessionId: string) {

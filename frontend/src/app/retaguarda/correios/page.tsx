@@ -18,7 +18,7 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import {
   ArrowLeft, Truck, RefreshCw, Loader2, CheckCircle2, AlertTriangle,
-  Calculator, PackagePlus, Copy,
+  Calculator, PackagePlus, Copy, Download, MapPin,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -140,6 +140,12 @@ export default function CorreiosDiagnostico() {
   const [loadingPP, setLoadingPP] = useState(false);
   const [erroPP, setErroPP] = useState<string | null>(null);
   const [cepBuscando, setCepBuscando] = useState<'rem' | 'dest' | null>(null);
+  const [etiqueta, setEtiqueta] = useState<any>(null);
+  const [loadingEtq, setLoadingEtq] = useState(false);
+  // rastreamento
+  const [rastCodigo, setRastCodigo] = useState('');
+  const [rast, setRast] = useState<any>(null);
+  const [loadingRast, setLoadingRast] = useState(false);
 
   // carrega remetente salvo (1x)
   useEffect(() => {
@@ -194,6 +200,34 @@ export default function CorreiosDiagnostico() {
   const copiarRaw = () => {
     try { navigator.clipboard.writeText(JSON.stringify(prepost, null, 2)); } catch { /* ignore */ }
   };
+
+  const baixarEtiqueta = async (idPre: string) => {
+    setLoadingEtq(true);
+    setEtiqueta(null);
+    try {
+      const r = await api<any>('/correios/etiqueta', { method: 'POST', body: JSON.stringify({ idPrepostagem: idPre }) });
+      setEtiqueta(r);
+      if (r?.ok && r.pdfBase64) {
+        const a = document.createElement('a');
+        a.href = `data:application/pdf;base64,${r.pdfBase64}`;
+        a.download = `etiqueta-${idPre}.pdf`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      }
+    } catch (e: any) { setEtiqueta({ erro: e?.message || 'falha' }); }
+    finally { setLoadingEtq(false); }
+  };
+
+  const rastrear = useCallback(async () => {
+    const c = rastCodigo.trim().toUpperCase();
+    if (!c) return;
+    setLoadingRast(true);
+    setRast(null);
+    try { setRast(await api<any>(`/correios/rastreio?codigo=${encodeURIComponent(c)}`)); }
+    catch (e: any) { setRast({ erro: e?.message || 'falha' }); }
+    finally { setLoadingRast(false); }
+  }, [rastCodigo]);
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800">
@@ -374,6 +408,16 @@ export default function CorreiosDiagnostico() {
                   {prepost.idPrepostagem ? <span className="text-slate-400"> · id {String(prepost.idPrepostagem)}</span> : null}
                 </div>
               )}
+              {prepost.idPrepostagem && (
+                <div className="mb-3">
+                  <button onClick={() => baixarEtiqueta(String(prepost.idPrepostagem))} disabled={loadingEtq}
+                    className="bg-sky-600 text-white text-xs rounded-md px-3 py-1.5 hover:bg-sky-700 disabled:opacity-40 inline-flex items-center gap-1">
+                    {loadingEtq ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />} Baixar etiqueta (PDF)
+                  </button>
+                  {etiqueta && !etiqueta.ok && <span className="ml-2 text-xs text-rose-600">{etiqueta.erro || 'falha na etiqueta'}</span>}
+                  {etiqueta?.ok && <span className="ml-2 text-xs text-emerald-600">etiqueta baixada ✓</span>}
+                </div>
+              )}
               <div className="flex items-center justify-between mb-1">
                 <span className="text-xs text-slate-500">Resposta crua da API</span>
                 <button onClick={copiarRaw} className="text-xs text-sky-600 hover:underline flex items-center gap-1"><Copy size={12} /> copiar</button>
@@ -381,6 +425,37 @@ export default function CorreiosDiagnostico() {
               <pre className="bg-slate-900 text-slate-100 text-xs rounded-lg p-3 overflow-auto max-h-96">
                 {JSON.stringify(prepost, null, 2)}
               </pre>
+            </div>
+          )}
+        </section>
+
+        {/* ── RASTREAMENTO ── */}
+        <section className="bg-white rounded-xl border border-slate-200 p-4 mb-5">
+          <h2 className="font-medium flex items-center gap-2 mb-3"><MapPin size={16} /> Rastrear objeto</h2>
+          <div className="flex flex-wrap items-end gap-3">
+            <Campo label="Código de rastreio" value={rastCodigo} onChange={setRastCodigo} placeholder="AD722716975BR" className="w-56" />
+            <button onClick={rastrear} disabled={loadingRast || !rastCodigo.trim()}
+              className="bg-sky-600 text-white text-sm rounded-md px-4 py-2 hover:bg-sky-700 disabled:opacity-40 flex items-center gap-2">
+              {loadingRast ? <Loader2 size={15} className="animate-spin" /> : <MapPin size={15} />} Rastrear
+            </button>
+          </div>
+          {rast && !rast.ok && <div className="mt-3 text-sm text-rose-600 flex items-center gap-2"><AlertTriangle size={15} /> {rast.erro || 'não encontrado'}</div>}
+          {rast?.ok && (
+            <div className="mt-4">
+              {(!rast.eventos || rast.eventos.length === 0) ? (
+                <div className="text-sm text-slate-500">Sem eventos ainda (objeto recém-criado costuma demorar a aparecer no rastreio).</div>
+              ) : (
+                <ol className="space-y-2">
+                  {rast.eventos.map((ev: any, i: number) => (
+                    <li key={i} className="text-sm border-l-2 border-sky-300 pl-3">
+                      <div className="font-medium">{ev.descricao || ev.status || '—'}</div>
+                      <div className="text-xs text-slate-500">
+                        {[ev.dtHrCriado || ev.data, ev.unidade?.endereco?.cidade, ev.unidade?.endereco?.uf].filter(Boolean).join(' · ')}
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+              )}
             </div>
           )}
         </section>
