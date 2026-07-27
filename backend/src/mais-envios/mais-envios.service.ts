@@ -76,8 +76,10 @@ export class MaisEnviosService {
             const t = String(v).trim();
             return t.includes(',') ? Number(t.replace(/\./g, '').replace(',', '.')) : Number(t);
           };
-          precoReais = parseBRL(d?.price ?? d?.value ?? d?.pcFinal ?? d?.valor ?? d?.total);
-          prazoDias = d?.deadline != null ? Number(d.deadline) : (d?.prazo != null ? Number(d.prazo) : null);
+          // Resposta do Mais Envios: preço em `pricetable`, prazo em `deadlineDays`.
+          precoReais = parseBRL(d?.pricetable ?? d?.price ?? d?.value ?? d?.valor ?? d?.total);
+          const pz = d?.deadlineDays ?? d?.deadline ?? d?.prazo;
+          prazoDias = pz != null ? Number(pz) : null;
         } else {
           erro = resp.data?.message || resp.data?.error || `HTTP ${resp.status}`;
         }
