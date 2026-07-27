@@ -38,6 +38,9 @@ export class CorreiosAuthService {
     );
   }
 
+  get usuario(): string {
+    return String(process.env.CORREIOS_API_USER || '').trim();
+  }
   get cartaoPostagem(): string {
     return String(process.env.CORREIOS_CARTAO_POSTAGEM || '').trim();
   }
