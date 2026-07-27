@@ -26,8 +26,10 @@ import { api } from '@/lib/api';
 type Status = {
   configurado: boolean;
   ambiente: string;
+  usuario?: string | null;
   cartaoPostagem: string | null;
   contrato: string | null;
+  dr?: string | null;
   cepOrigem: string | null;
   servicos: Array<{ nome: string; codigo: string }>;
 };
@@ -187,8 +189,10 @@ export default function CorreiosDiagnostico() {
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
               <Info label="Configurado" value={status.configurado ? 'sim' : 'NÃO'} ok={status.configurado} />
               <Info label="Ambiente" value={status.ambiente} />
+              <Info label="Usuário API" value={status.usuario || '—'} ok={!!status.usuario} />
               <Info label="Cartão postagem" value={status.cartaoPostagem || '—'} ok={!!status.cartaoPostagem} />
               <Info label="Contrato" value={status.contrato || '—'} ok={!!status.contrato} />
+              <Info label="DR" value={status.dr || '—'} ok={!!status.dr && status.dr !== '0'} />
               <Info label="CEP origem" value={status.cepOrigem || '—'} ok={!!status.cepOrigem} />
               <Info label="Serviços" value={status.servicos.map((s) => `${s.nome}:${s.codigo}`).join('  ')} />
             </div>

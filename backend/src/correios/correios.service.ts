@@ -26,8 +26,10 @@ export class CorreiosService {
     return {
       configurado: this.auth.configured,
       ambiente: process.env.CORREIOS_AMBIENTE === 'hom' ? 'homologação' : 'produção',
+      usuario: this.auth.usuario || null,
       cartaoPostagem: this.auth.cartaoPostagem ? '••••' + this.auth.cartaoPostagem.slice(-4) : null,
       contrato: this.auth.contrato || null,
+      dr: this.auth.dr,
       cepOrigem: this.auth.cepOrigem || null,
       servicos: this.servicos,
     };
