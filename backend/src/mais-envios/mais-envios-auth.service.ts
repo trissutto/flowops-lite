@@ -49,7 +49,12 @@ export class MaisEnviosAuthService {
         { username: String(process.env.MAISENVIOS_USER).trim(), password: String(process.env.MAISENVIOS_PASS) },
         { headers: { 'Content-Type': 'application/json' }, timeout: 20000, validateStatus: () => true },
       );
-      const token = resp.data?.token ?? resp.data?.access_token ?? resp.data?.accessToken ?? resp.data?.jwt ?? null;
+      // O Mais Envios devolve o JWT como TEXTO PURO (a string do token), não num
+      // objeto { token }. Aceita string crua (que começa com "ey...") também.
+      const raw = resp.data;
+      const token =
+        (typeof raw === 'string' && /^ey[A-Za-z0-9_-]+\.ey/.test(raw.trim()) ? raw.trim() : null) ??
+        raw?.token ?? raw?.access_token ?? raw?.accessToken ?? raw?.jwt ?? null;
       if (resp.status < 200 || resp.status >= 300 || !token) {
         const msg = resp.data?.message || resp.data?.error || (typeof resp.data === 'string' ? resp.data : JSON.stringify(resp.data || {}).slice(0, 300)) || `HTTP ${resp.status}`;
         throw new BadRequestException(`Mais Envios recusou a autenticação (HTTP ${resp.status}): ${msg}`);
