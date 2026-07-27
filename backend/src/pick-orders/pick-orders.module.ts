@@ -8,6 +8,7 @@ import { ErpModule } from '../erp/erp.module';
 import { LivePdvModule } from '../live-pdv/live-pdv.module';
 import { WincredMirrorModule } from '../wincred-mirror/wincred-mirror.module';
 import { CorreiosModule } from '../correios/correios.module';
+import { MaisEnviosModule } from '../mais-envios/mais-envios.module';
 import { CorreiosPostagemReconcileCron } from './correios-postagem-reconcile.cron';
 
 @Module({
