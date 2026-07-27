@@ -465,6 +465,168 @@ export class CrediarioBaixaService {
   }
 
   /**
+   * DIFF DE VALIDAÇÃO (read-only) — espelho (wincred_movimento_aberto) vs
+   * Giga ao vivo (movimento), pras parcelas EM ABERTO. Serve pra decidir com
+   * segurança se dá pra ligar CREDIARIO_NATIVE_READS=1 sem crediário sumir.
+   *
+   * Não escreve nada. Faz 2 varreduras completas (1 no Giga ~5-15k linhas,
+   * 1 no Postgres) e cruza em memória por chave `registro|controle`.
+   *
+   * Veredito `podeAtivar` = true SÓ quando nenhuma parcela aberta do Giga
+   * falta no espelho E nenhum valor diverge. Divergência de LOJA e parcelas
+   * "só no espelho" (paga no Wincred, ainda não ressincronizou) entram como
+   * AVISO, não como bloqueio — mas a loja órfã ('00') é o risco conhecido de
+   * a busca por cliente+loja não casar.
+   */
+  async diffAbertasEspelhoVsGiga(input: { storeCode?: string }): Promise<any> {
+    const t0 = Date.now();
+    const safeStore = input.storeCode
+      ? String(input.storeCode).replace(/[^0-9]/g, '').padStart(2, '0').slice(0, 2)
+      : null;
+
+    // O espelho tem `registro` como @id e o sync DEDUPLICA por registro (só a
+    // 1ª parcela sobrevive). Logo a unidade de comparação certa é o REGISTRO:
+    // pra cada registro medimos QUANTAS parcelas abertas o Giga tem e quanto o
+    // espelho guarda. É assim que se enxerga o dedup comendo parcela.
+    const norm = (v: any) => {
+      const s = String(v ?? '').trim();
+      return /^\d+$/.test(s) ? String(Number(s)) : s; // tira zero à esquerda p/ casar padding
+    };
+    const isCard = (cod: any) => {
+      const n = parseInt(String(cod || '').replace(/\D/g, ''), 10);
+      return isNaN(n) || n <= 3; // 0-3 = cartões clássicos, não são crediário
+    };
+    const normLoja = (l: any) => String(l ?? '').replace(/\D/g, '').padStart(2, '0').slice(0, 2);
+    const money = (n: number) => Math.round(n * 100) / 100;
+
+    // ── 1. ESPELHO (1 linha por registro, por construção) ─────────────────────
+    const espRows: any[] = await (this.prisma as any).wincredMovimentoAberto.findMany({
+      where: safeStore ? { loja: safeStore } : undefined,
+      select: { registro: true, loja: true, codCliente: true, valorParcela: true },
+      take: 50000,
+    });
+    const espMap = new Map<string, any>();
+    let lojaOrfaEspelho = 0;
+    for (const r of espRows) {
+      if (isCard(r.codCliente)) continue;
+      if (['', '0', '00'].includes(normLoja(r.loja))) lojaOrfaEspelho++;
+      espMap.set(norm(r.registro), r);
+    }
+
+    // ── 2. GIGA AO VIVO ───────────────────────────────────────────────────────
+    let map = await this.crediarios.detectColumns(true);
+    if (!map.registro || !map.codCliente || !map.vencimento || !map.valorParcela) {
+      return {
+        ok: false,
+        erro: 'Falha ao ler estrutura do Giga (detectColumns). Tente de novo.',
+        espelho: { registros: espMap.size, lojaOrfaEspelho },
+      };
+    }
+    const select: string[] = [];
+    const addCol = (logical: keyof typeof map, alias: string) => {
+      const col = map[logical];
+      if (col) select.push(`\`${col}\` AS ${alias}`);
+    };
+    addCol('registro', 'registro');
+    addCol('controle', 'controle');
+    addCol('loja', 'loja');
+    addCol('codCliente', 'codCliente');
+    addCol('vencimento', 'vencimento');
+    addCol('valorParcela', 'valorParcela');
+    const where: string[] = [];
+    if (map.pago) {
+      where.push(`(\`${map.pago}\` IS NULL OR \`${map.pago}\` = '' OR UPPER(\`${map.pago}\`) IN ('N','NAO','NÃO'))`);
+    } else if (map.dataPagamento) {
+      where.push(`(\`${map.dataPagamento}\` IS NULL OR \`${map.dataPagamento}\` = '0000-00-00')`);
+    }
+    if (safeStore && map.loja) where.push(`\`${map.loja}\` = '${safeStore}'`);
+    where.push(`\`${map.registro}\` IS NOT NULL`, `\`${map.codCliente}\` IS NOT NULL`, `\`${map.codCliente}\` <> ''`, `\`${map.codCliente}\` <> '0'`);
+    const sql = `SELECT ${select.join(', ')} FROM \`movimento\` WHERE ${where.join(' AND ')} LIMIT 50000`;
+    const result = await this.erp.runReadOnly(sql, { maxRows: 50000, timeoutMs: 60000 });
+
+    // agrupa parcelas do Giga por registro
+    const gigaByReg = new Map<string, { parcelas: number; valor: number; codCliente: string; loja: string }>();
+    let gigaParcelas = 0;
+    for (const r of result.rows as any[]) {
+      if (isCard(r.codCliente)) continue;
+      const valor = Number(r.valorParcela || 0);
+      if (!r.vencimento || !valor) continue; // mesma regra de "aberta válida" das telas
+      gigaParcelas++;
+      const k = norm(r.registro);
+      const g = gigaByReg.get(k) || { parcelas: 0, valor: 0, codCliente: String(r.codCliente), loja: normLoja(r.loja) };
+      g.parcelas++; g.valor += valor;
+      gigaByReg.set(k, g);
+    }
+
+    // ── 3. CRUZAMENTO POR REGISTRO ────────────────────────────────────────────
+    const registrosFaltando: any[] = [];     // registro inteiro sumido do espelho — BLOQUEIA
+    const parcelasPerdidasDedup: any[] = [];  // registro presente mas espelho só tem 1 de N — BLOQUEIA
+    const valorDivergente: any[] = [];        // registro 1-parcela com valor diferente — BLOQUEIA
+    const lojaDivergente: any[] = [];         // aviso (morde a busca por cliente+loja)
+    let parcelasPerdidasTotal = 0;
+    let valorPerdidoTotal = 0;
+
+    for (const [k, g] of gigaByReg) {
+      const e = espMap.get(k);
+      if (!e) {
+        registrosFaltando.push({ registro: k, codCliente: g.codCliente, loja: g.loja, parcelas: g.parcelas, valor: money(g.valor) });
+        parcelasPerdidasTotal += g.parcelas;
+        valorPerdidoTotal += g.valor;
+        continue;
+      }
+      if (g.parcelas > 1) {
+        // espelho guarda 1, Giga tem g.parcelas → faltam (g.parcelas - 1)
+        const perdidas = g.parcelas - 1;
+        const valorPerdido = g.valor - Number(e.valorParcela || 0);
+        parcelasPerdidasDedup.push({ registro: k, codCliente: g.codCliente, parcelasGiga: g.parcelas, parcelasEspelho: 1, valorGiga: money(g.valor), valorEspelho: money(Number(e.valorParcela || 0)) });
+        parcelasPerdidasTotal += perdidas;
+        valorPerdidoTotal += Math.max(0, valorPerdido);
+      } else if (Math.abs(g.valor - Number(e.valorParcela || 0)) > 0.01) {
+        valorDivergente.push({ registro: k, codCliente: g.codCliente, valorGiga: money(g.valor), valorEspelho: money(Number(e.valorParcela || 0)) });
+      }
+      if (normLoja(g.loja) !== normLoja(e.loja)) {
+        lojaDivergente.push({ registro: k, codCliente: g.codCliente, lojaGiga: normLoja(g.loja), lojaEspelho: normLoja(e.loja) });
+      }
+    }
+    // registros que estão no espelho e não no Giga (pagos no Wincred / sync atrasado)
+    let registrosSoNoEspelho = 0;
+    for (const k of espMap.keys()) if (!gigaByReg.has(k)) registrosSoNoEspelho++;
+
+    const podeAtivar = registrosFaltando.length === 0 && parcelasPerdidasDedup.length === 0 && valorDivergente.length === 0;
+
+    return {
+      ok: true,
+      escopo: safeStore ? `loja ${safeStore}` : 'rede inteira',
+      duracaoMs: Date.now() - t0,
+      totais: {
+        gigaRegistros: gigaByReg.size,
+        gigaParcelas,
+        espelhoRegistros: espMap.size,
+        gigaTruncado: result.rows.length >= 50000,
+        espelhoTruncado: espRows.length >= 50000,
+      },
+      // BLOQUEIOS — enquanto houver qualquer um > 0, NÃO ligar CREDIARIO_NATIVE_READS
+      bloqueios: {
+        registrosFaltando: { qtd: registrosFaltando.length, amostra: registrosFaltando.slice(0, 25) },
+        parcelasPerdidasDedup: { qtd: parcelasPerdidasDedup.length, amostra: parcelasPerdidasDedup.slice(0, 25) },
+        valorDivergente: { qtd: valorDivergente.length, amostra: valorDivergente.slice(0, 25) },
+        parcelasPerdidasTotal,
+        valorPerdidoTotal: money(valorPerdidoTotal),
+      },
+      // AVISOS — não bloqueiam por si só
+      avisos: {
+        registrosSoNoEspelho,   // pagos no Wincred desktop ou sync atrasado
+        lojaDivergente: { qtd: lojaDivergente.length, amostra: lojaDivergente.slice(0, 25) },
+        lojaOrfaEspelho,        // linhas '00' que não casam a busca por cliente+loja
+      },
+      podeAtivar,
+      veredito: podeAtivar
+        ? 'Espelho cobre 100% dos registros abertos do Giga, com valores batendo. Seguro ligar CREDIARIO_NATIVE_READS=1.'
+        : `NÃO ligar ainda: ${parcelasPerdidasTotal} parcela(s) sumiriam (R$ ${money(valorPerdidoTotal)}) — ${registrosFaltando.length} registro(s) faltando + ${parcelasPerdidasDedup.length} com parcela comida pelo dedup + ${valorDivergente.length} com valor divergente.`,
+    };
+  }
+
+  /**
    * Cauda COMPARTILHADA entre o caminho Giga e o caminho espelho:
    * calcula juros/multa por parcela e agrupa o resumo por cliente.
    */
