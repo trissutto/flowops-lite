@@ -713,6 +713,19 @@ export default function MinhaLojaPage() {
             pushToast('Rastreio ok, mas a etiqueta não ficou pronta ainda — reimprima em alguns segundos.');
           }
         } catch { pushToast('Rastreio ok; a etiqueta falhou (tente reimprimir).'); }
+        // Declaração de conteúdo (documento separado da etiqueta)
+        try {
+          const dc = await api<any>('/correios/declaracao', { method: 'POST', body: JSON.stringify({ idPrepostagem: r.idPrepostagem }) });
+          if (dc?.ok && dc.pdfBase64) {
+            const a = document.createElement('a');
+            a.href = `data:application/pdf;base64,${dc.pdfBase64}`;
+            a.download = `declaracao-${r.codigoRastreio}.pdf`;
+            document.body.appendChild(a); a.click(); a.remove();
+            pushToast('📄 Declaração de conteúdo baixada');
+          } else {
+            pushToast(`Declaração de conteúdo não veio: ${dc?.erro ?? 'tente de novo'}`);
+          }
+        } catch { pushToast('Declaração de conteúdo falhou.'); }
       }
     } catch (err: any) {
       pushToast(`Erro no envio Correios: ${err?.message ?? 'falha'}`);
