@@ -1220,7 +1220,7 @@ export class LivePdvService {
     bairro?: string;
     cidade?: string;
     uf?: string;
-  }) {
+  }, actor?: { userId?: string | null; name?: string | null; storeCode?: string | null }) {
     const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
     if (!cart) throw new NotFoundException('Carrinho não encontrado');
     const name = (input.name || '').trim();

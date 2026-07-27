@@ -291,7 +291,10 @@ export class CorreiosService {
     let idRecibo: string | null = null;
     const sol = await axios.post(
       `${base}/prepostagem/v1/prepostagens/rotulo/assincrono/pdf`,
-      { idsPrePostagem: [id], tipoRotulo: 'P', formatoRotulo: 'ETIQUETA', imprimeRemetente: 'S', layoutImpressao: 'PADRAO' },
+      // formatoRotulo 'PADRAO' traz a etiqueta + a DACE (declaração de conteúdo)
+      // na mesma página; 'ETIQUETA' vem só o rótulo compacto (sem declaração).
+      // Configurável por env pra iterar o valor sem deploy se a conta usar outro.
+      { idsPrePostagem: [id], tipoRotulo: 'P', formatoRotulo: String(process.env.CORREIOS_FORMATO_ROTULO || 'PADRAO').trim(), imprimeRemetente: 'S', layoutImpressao: 'PADRAO' },
       { headers, timeout: 30000, validateStatus: () => true },
     );
     if (sol.status < 200 || sol.status >= 300) {
