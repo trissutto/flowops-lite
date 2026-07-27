@@ -707,8 +707,15 @@ export default function MinhaLojaPage() {
     } catch { pushToast('Etiqueta falhou (tente reimprimir).'); }
     try {
       const dc = await api<any>('/correios/declaracao', { method: 'POST', body: JSON.stringify({ idPrepostagem: idPre }) });
-      if (dc?.ok && dc.pdfBase64) { downloadPdf(dc.pdfBase64, `declaracao-${rastreio}.pdf`); pushToast('📄 Declaração de conteúdo baixada'); }
-      else pushToast(`Declaração: ${dc?.erro ?? 'não veio'}`);
+      // A declaração vem em HTML (a mesma página que o QR code abre). Abre numa
+      // aba nova pra imprimir (Ctrl+P); se o popup for bloqueado, baixa o .html.
+      if (dc?.ok && dc.html) {
+        const blob = new Blob([dc.html], { type: 'text/html' });
+        const url = URL.createObjectURL(blob);
+        const w = window.open(url, '_blank');
+        if (!w) { const a = document.createElement('a'); a.href = url; a.download = `declaracao-${rastreio}.html`; document.body.appendChild(a); a.click(); a.remove(); }
+        pushToast('📄 Declaração aberta (imprima com Ctrl+P)');
+      } else pushToast(`Declaração: ${dc?.erro ?? 'não veio'}`);
     } catch { pushToast('Declaração falhou.'); }
   }
 

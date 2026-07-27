@@ -334,9 +334,13 @@ export class CorreiosService {
   }
 
   /**
-   * Baixa a DECLARAÇÃO DE CONTEÚDO (PDF) de uma pré-postagem — documento
+   * Baixa a DECLARAÇÃO DE CONTEÚDO (DACE) de uma pré-postagem — documento
    * separado da etiqueta, que lista os itens (obrigatório em envio pra CPF sem
-   * NF-e). Devolve base64. Estrutura conforme doc CWS; raw pra iterar se divergir.
+   * NF-e). É a mesma página que o QR code do rótulo abre.
+   *
+   * No CWS este endpoint é SÍNCRONO e devolve HTML (não é o fluxo assíncrono do
+   * rótulo — path confirmado na doc: GET .../declaracaoconteudo/{id}). Devolve o
+   * HTML pronto pra imprimir; raw pra iterar se a API divergir.
    */
   async baixarDeclaracaoConteudo(idPrepostagem: string): Promise<any> {
     const id = String(idPrepostagem || '').trim();
@@ -344,33 +348,22 @@ export class CorreiosService {
     const headers = await this.auth.authHeader();
     const base = this.auth.baseUrl;
 
-    // Mesmo fluxo ASSÍNCRONO do rótulo (padrão confirmado do CWS): solicita a
-    // geração → idRecibo → baixa por polling. Emissão SEPARADA do rótulo.
-    const sol = await axios.post(
-      `${base}/prepostagem/v1/prepostagens/declaracaoconteudo/assincrono/pdf`,
-      { idsPrePostagem: [id] },
-      { headers, timeout: 30000, validateStatus: () => true },
+    const dl = await axios.get(
+      `${base}/prepostagem/v1/prepostagens/declaracaoconteudo/${encodeURIComponent(id)}`,
+      // Aceita HTML; axios só faz JSON.parse quando o corpo é JSON (erro), então
+      // no sucesso dl.data vem como string (o HTML) e no erro como objeto.
+      { headers: { ...headers, Accept: 'text/html' }, timeout: 30000, validateStatus: () => true },
     );
-    if (sol.status < 200 || sol.status >= 300) {
-      return { ok: false, etapa: 'solicitar', erro: sol.data?.msgs?.join('; ') || sol.data?.message || `HTTP ${sol.status}`, raw: sol.data };
+    if (dl.status < 200 || dl.status >= 300) {
+      const d: any = dl.data;
+      const erro = (d && typeof d === 'object' ? (d.msgs?.join('; ') || d.detail || d.message) : null) || `HTTP ${dl.status}`;
+      return { ok: false, etapa: 'download', erro, raw: d };
     }
-    const idRecibo = sol.data?.idRecibo ?? sol.data?.id ?? null;
-    if (!idRecibo) return { ok: false, etapa: 'solicitar', erro: 'API não devolveu idRecibo', raw: sol.data };
-
-    for (let i = 0; i < 12; i++) {
-      const dl = await axios.get(
-        `${base}/prepostagem/v1/prepostagens/declaracaoconteudo/download/assincrono/${idRecibo}`,
-        { headers, timeout: 30000, validateStatus: () => true },
-      );
-      if (dl.status >= 200 && dl.status < 300) {
-        const pdf = dl.data?.dados ?? dl.data?.arquivo ?? dl.data?.pdf ?? null;
-        if (pdf) return { ok: true, idRecibo, pdfBase64: String(pdf) };
-      } else if (dl.status !== 404 && dl.status !== 425 && dl.status !== 202) {
-        return { ok: false, etapa: 'download', erro: dl.data?.msgs?.join('; ') || `HTTP ${dl.status}`, raw: dl.data };
-      }
-      await new Promise((r) => setTimeout(r, 2500));
+    const html = typeof dl.data === 'string' ? dl.data : (dl.data?.dados ?? dl.data?.html ?? null);
+    if (!html || !String(html).trim()) {
+      return { ok: false, etapa: 'download', erro: 'API não devolveu o HTML da declaração', raw: dl.data };
     }
-    return { ok: false, etapa: 'download', erro: 'declaração não ficou pronta a tempo', idRecibo };
+    return { ok: true, html: String(html) };
   }
 
   /** Rastreia um objeto pelo código (SRO/CWS). Devolve os eventos. */
