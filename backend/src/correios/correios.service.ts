@@ -294,7 +294,19 @@ export class CorreiosService {
       // formatoRotulo 'PADRAO' traz a etiqueta + a DACE (declaração de conteúdo)
       // na mesma página; 'ETIQUETA' vem só o rótulo compacto (sem declaração).
       // Configurável por env pra iterar o valor sem deploy se a conta usar outro.
-      { idsPrePostagem: [id], tipoRotulo: 'P', formatoRotulo: String(process.env.CORREIOS_FORMATO_ROTULO || 'PADRAO').trim(), imprimeRemetente: 'S', layoutImpressao: 'PADRAO' },
+      {
+        idsPrePostagem: [id],
+        tipoRotulo: 'P',
+        formatoRotulo: String(process.env.CORREIOS_FORMATO_ROTULO || 'PADRAO').trim(),
+        imprimeRemetente: 'S',
+        layoutImpressao: 'PADRAO',
+        // Pede a DECLARAÇÃO DE CONTEÚDO (DACE) junto do rótulo. Nomes variam por
+        // versão da API CWS — manda as variantes conhecidas (a API ignora as que
+        // não usa).
+        imprimeDeclaracaoConteudo: 'S',
+        imprimeDC: 'S',
+        declaracaoConteudo: 'S',
+      },
       { headers, timeout: 30000, validateStatus: () => true },
     );
     if (sol.status < 200 || sol.status >= 300) {

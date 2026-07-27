@@ -1288,6 +1288,22 @@ export class LivePdvService {
       }
     }
 
+    // AUDITORIA de ENDEREÇO: compara antes×depois (só campos de endereço) pra
+    // registrar quem editou e o de→para. Correção de endereço é sensível
+    // (a peça vai pro lugar errado se errar) — precisa de rastro.
+    const camposEndereco: Array<[string, any, any]> = [
+      ['cep', cart.customerCep, cep],
+      ['endereco', cart.customerEndereco, endereco],
+      ['numero', cart.customerNumero, numero],
+      ['complemento', cart.customerComplemento, complemento],
+      ['bairro', cart.customerBairro, bairro],
+      ['cidade', cart.customerCidade, cidade],
+      ['uf', cart.customerUf, uf],
+    ];
+    const mudancasEndereco = camposEndereco
+      .filter(([, de, para]) => String(de ?? '').trim() !== String(para ?? '').trim())
+      .map(([campo, de, para]) => ({ campo, de: de ?? null, para: para ?? null }));
+
     const updated = await (this.prisma as any).livePdvCart.update({
       where: { id: cartId },
       data: {
@@ -1306,6 +1322,23 @@ export class LivePdvService {
         customerUf: uf,
       },
     });
+
+    if (mudancasEndereco.length) {
+      await (this.prisma as any).integrationLog.create({
+        data: {
+          source: 'live-pdv',
+          direction: 'internal',
+          event: 'cart.address.edit',
+          payload: JSON.stringify({
+            cartId,
+            comanda: cart.cartNumber ?? null,
+            por: { userId: actor?.userId ?? null, nome: actor?.name ?? null, loja: actor?.storeCode ?? null },
+            mudancas: mudancasEndereco,
+          }),
+        },
+      }).catch((e: any) => this.logger.warn(`[audit endereço] falha ao logar (${cartId}): ${e?.message || e}`));
+    }
+
     this.gateway.emitToLiveOps('live-pdv:cart-updated', { cartId, sessionId: cart.sessionId });
     return this.getCart(updated.id);
   }
