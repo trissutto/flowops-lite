@@ -4,6 +4,7 @@ import { RealtimeGateway } from '../websocket/realtime.gateway';
 import { WooCommerceService } from '../woocommerce/woocommerce.service';
 import { ErpService } from '../erp/erp.service';
 import { ManychatService } from '../live-pdv/manychat.service';
+import { LivePdvService } from '../live-pdv/live-pdv.service';
 import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service';
 import { authorizeMinLevel } from '../auth/auth-levels.util';
 
@@ -59,7 +60,38 @@ export class PickOrdersService {
     private readonly erp: ErpService,
     private readonly manychat: ManychatService,
     private readonly catalog: WincredCatalogService,
+    private readonly livePdv: LivePdvService,
   ) {}
+
+  /**
+   * Gera a PRÉ-POSTAGEM dos Correios pro pedido da LIVE deste pick-order e o
+   * marca como ENVIADO com o rastreio gerado (mesmo caminho do "Enviar c/
+   * rastreio" — dispara baixa Giga + WhatsApp). Reusa gerarEnvioCorreios do
+   * carrinho da live (via Order.liveCartId). Só live por enquanto.
+   */
+  async gerarEnvioCorreios(id: string, storeId: string, userId: string) {
+    const pick = await this.prisma.pickOrder.findUnique({ where: { id } });
+    if (!pick) throw new NotFoundException('Pick-order não encontrado');
+    if (pick.storeId !== storeId) throw new ForbiddenException('Pick-order não pertence à sua loja');
+    const order = await this.prisma.order.findUnique({ where: { id: pick.orderId } });
+    if (!order) throw new NotFoundException('Pedido não encontrado');
+    if (order.source !== 'live' || !order.liveCartId) {
+      throw new BadRequestException('Envio automático dos Correios: por ora só pedidos da live.');
+    }
+
+    const r: any = await this.livePdv.gerarEnvioCorreios(order.liveCartId);
+    if (!r?.codigoRastreio) throw new BadRequestException('Não foi possível gerar o código de rastreio nos Correios.');
+
+    // Marca enviado pelo caminho testado (Giga + WhatsApp), só se ainda não enviado.
+    if (pick.status !== 'shipped') {
+      await this.updateStatus(id, storeId, userId, {
+        status: 'shipped' as PickStatus,
+        trackingCode: r.codigoRastreio,
+        carrier: r.servico ? `Correios ${r.servico}` : 'Correios',
+      });
+    }
+    return { ok: true, codigoRastreio: r.codigoRastreio, idPrepostagem: r.idPrepostagem ?? null, servico: r.servico ?? null };
+  }
 
   /**
    * TROCA MANUAL DE PEÇA na separação (pedido do site/WooCommerce).

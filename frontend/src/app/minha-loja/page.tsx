@@ -689,6 +689,36 @@ export default function MinhaLojaPage() {
     }
   }
 
+  // Gera a pré-postagem dos Correios (só pedidos da LIVE), marca ENVIADO com o
+  // rastreio automático e baixa a etiqueta PDF — tudo em 1 clique.
+  async function gerarEnvioCorreios(row: PickOrderRow) {
+    cancelAutoMaximize(row.id);
+    try {
+      const r = await api<any>(`/pick-orders/${row.id}/correios-envio`, { method: 'POST', body: JSON.stringify({}) });
+      if (!r?.codigoRastreio) { pushToast('Correios não devolveu rastreio.'); return; }
+      setRows((prev) => prev.map((x) => (x.id === row.id
+        ? { ...x, status: 'shipped' as PickStatus, trackingCode: r.codigoRastreio, carrier: r.servico ? `Correios ${r.servico}` : 'Correios' }
+        : x)));
+      pushToast(`📮 Envio gerado: ${r.codigoRastreio}`);
+      if (r.idPrepostagem) {
+        try {
+          const et = await api<any>('/correios/etiqueta', { method: 'POST', body: JSON.stringify({ idPrepostagem: r.idPrepostagem }) });
+          if (et?.ok && et.pdfBase64) {
+            const a = document.createElement('a');
+            a.href = `data:application/pdf;base64,${et.pdfBase64}`;
+            a.download = `etiqueta-${r.codigoRastreio}.pdf`;
+            document.body.appendChild(a); a.click(); a.remove();
+            pushToast('🏷️ Etiqueta baixada');
+          } else {
+            pushToast('Rastreio ok, mas a etiqueta não ficou pronta ainda — reimprima em alguns segundos.');
+          }
+        } catch { pushToast('Rastreio ok; a etiqueta falhou (tente reimprimir).'); }
+      }
+    } catch (err: any) {
+      pushToast(`Erro no envio Correios: ${err?.message ?? 'falha'}`);
+    }
+  }
+
   function logout() {
     try { localStorage.removeItem('flowops_token'); } catch {}
     try { disconnectSocket(); } catch {}
@@ -941,6 +971,7 @@ export default function MinhaLojaPage() {
               onStart={() => transitionStatus(row, 'separating')}
               onBip={() => setShowBipModal(row)}
               onShip={() => setShowShippedModal(row)}
+              onCorreios={() => gerarEnvioCorreios(row)}
               onPrint={() => openPrintWindow(row.id)}
               onReportIssue={() => setShowIssueModal(row)}
               onSeen={() => cancelAutoMaximize(row.id)}
@@ -1594,12 +1625,13 @@ function LiveBipModal({
 }
 
 function PickOrderCard({
-  row, onStart, onBip, onShip, onPrint, onReportIssue, onSeen, onSwapItem,
+  row, onStart, onBip, onShip, onCorreios, onPrint, onReportIssue, onSeen, onSwapItem,
 }: {
   row: PickOrderRow;
   onStart: () => void;
   onBip: () => void;
   onShip: () => void;
+  onCorreios: () => Promise<void> | void;
   onPrint: () => void;
   onReportIssue: () => void;
   onSeen: () => void;
@@ -1607,6 +1639,9 @@ function PickOrderCard({
 }) {
   const { order, status } = row;
   const items = order.items ?? [];
+  // Pedido da LIVE (número "LIVE-137") que não é retirada → pode gerar envio Correios.
+  const isLive = String(order.wcOrderNumber || '').toUpperCase().startsWith('LIVE') && !order.isPickup;
+  const [corrBusy, setCorrBusy] = useState(false);
 
   const isTransfer = !!row.isTransfer;
   const snap = row.customerSnapshot ?? null;
@@ -1861,6 +1896,16 @@ function PickOrderCard({
             className="flex-1 bg-blue-600 hover:bg-blue-700 active:scale-[0.98] text-white font-bold py-4 rounded-lg flex items-center justify-center gap-2 text-base shadow-md transition"
           >
             <Barcode className="w-6 h-6" /> Bipar peças
+          </button>
+        )}
+        {(status === 'separated' || status === 'ready') && isLive && (
+          <button
+            onClick={async (e) => { e.stopPropagation(); if (corrBusy) return; setCorrBusy(true); try { await onCorreios(); } finally { setCorrBusy(false); } }}
+            disabled={corrBusy}
+            title="Gera a pré-postagem dos Correios, marca enviado e baixa a etiqueta"
+            className="flex-1 bg-sky-600 hover:bg-sky-700 active:scale-[0.98] disabled:opacity-50 text-white font-bold py-4 rounded-lg flex items-center justify-center gap-2 text-base shadow-md transition"
+          >
+            <Truck className="w-6 h-6" /> {corrBusy ? 'Gerando envio...' : '📮 Gerar envio Correios'}
           </button>
         )}
         {(status === 'separated' || status === 'ready') && (

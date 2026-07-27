@@ -259,6 +259,16 @@ export class PickOrdersController {
     return this.svc.updateStatus(id, user.storeId, user.userId, body);
   }
 
+  /** Gera a pré-postagem dos Correios pro pedido da live e marca ENVIADO. */
+  @Post(':id/correios-envio')
+  correiosEnvio(@Req() req: any, @Param('id') id: string) {
+    const user = req.user as AuthUser;
+    if (user.role !== 'store' || !user.storeId) {
+      throw new ForbiddenException('Apenas usuários de loja postam');
+    }
+    return this.svc.gerarEnvioCorreios(id, user.storeId, user.userId);
+  }
+
   /**
    * Retorna items do pick-order com EAN13 resolvido do Gigasistemas.
    * Usado pela tela de bipagem — frontend monta mapa EAN→SKU pra validar bips.
