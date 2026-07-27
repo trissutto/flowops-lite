@@ -72,8 +72,18 @@ export class CorreiosAuthService {
         },
       );
       if (resp.status < 200 || resp.status >= 300 || !resp.data?.token) {
-        const msg = resp.data?.mensagens?.join('; ') || resp.data?.message || `HTTP ${resp.status}`;
-        throw new BadRequestException(`Correios recusou a autenticação: ${msg}`);
+        const d = resp.data;
+        // Surface a mensagem REAL dos Correios (o motivo do 401). Antes caía num
+        // genérico "HTTP 401" e a gente ficava no escuro.
+        const detalhe =
+          (Array.isArray(d?.mensagens) && d.mensagens.join('; ')) ||
+          (Array.isArray(d?.msgs) && d.msgs.join('; ')) ||
+          (Array.isArray(d?.errors) && d.errors.map((e: any) => e?.message || e?.msg || JSON.stringify(e)).join('; ')) ||
+          d?.message ||
+          d?.error ||
+          (typeof d === 'string' ? d : d ? JSON.stringify(d).slice(0, 400) : '') ||
+          '(corpo vazio)';
+        throw new BadRequestException(`Correios recusou a autenticação (HTTP ${resp.status}): ${detalhe}`);
       }
       // expiraEm vem em ISO ("2026-07-25T18:00:00") — cai pra +23h se ausente.
       const expIso = resp.data?.expiraEm;
