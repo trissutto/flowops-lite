@@ -150,6 +150,7 @@ export class PickOrdersService {
     // teste NÃO vai pra pré-postagem).
     let nfe: any = null;
     let nfeChave: string | undefined;
+    let nfeInfoME: any = null;
     if (String(process.env.NFE_ENVIO_ENABLED || '').trim() === '1' && !order.isPickup) {
       try {
         const dados = await this.montarDadosNfeEnvio(order, pick);
@@ -180,6 +181,12 @@ export class PickOrdersService {
           });
           nfe = { docId: r2?.doc?.id, status: r2?.ok ? 'authorized' : 'rejected', cStat: r2?.cStat, xMotivo: r2?.xMotivo, chave: r2?.doc?.chave, jaEmitida: !!r2?.jaEmitida };
           if (r2?.ok && r2?.doc?.chave && r2?.doc?.tpAmb === '1') nfeChave = String(r2.doc.chave);
+          // Mais Envios: a nota vai SEMPRE (mesmo homolog) — lá o nf.nfeKey é
+          // referência/unicidade da etiqueta (chave vazia COLIDE: "Etiqueta já
+          // cadastrada"); não é transmissão fiscal como a chaveNFe dos Correios.
+          if (r2?.ok && r2?.doc?.chave) {
+            nfeInfoME = { chave: String(r2.doc.chave), numero: r2.doc.numero, serie: r2.doc.serie, valor: (Number(r2.doc.valorTotalCents) || 0) / 100 };
+          }
         }
       } catch (e: any) {
         this.logger.warn(`[nfe-envio] falha pro pick ${id}: ${e?.message || e}`);
@@ -207,13 +214,13 @@ export class PickOrdersService {
     if (order.source === 'live') {
       if (!order.liveCartId) throw new BadRequestException('Pedido da live sem carrinho vinculado.');
       if (provider === 'maisenvios') {
-        r = await this.gerarEnvioMaisEnvios(order.liveCartId, senderId);
+        r = await this.gerarEnvioMaisEnvios(order.liveCartId, senderId, nfeInfoME);
       } else {
         r = await this.livePdv.gerarEnvioCorreios(order.liveCartId, nfeChave, remetenteLoja || undefined);
       }
     } else if (provider === 'maisenvios') {
       // SITE numa loja Mais Envios: pré-postagem lá, a partir do Order.
-      r = await this.gerarEnvioMaisEnviosSite(order, pick, senderId);
+      r = await this.gerarEnvioMaisEnviosSite(order, pick, senderId, nfeInfoME);
     } else {
       // SITE: Correios a partir do próprio Order (endereço + itens do pedido).
       r = await this.gerarEnvioCorreiosSite(order, pick, nfeChave, remetenteLoja || undefined);
@@ -424,7 +431,7 @@ export class PickOrdersService {
   }
 
   /** Gera a pré-postagem no MAIS ENVIOS a partir do carrinho da live. */
-  private async gerarEnvioMaisEnvios(cartId: string, senderId: number) {
+  private async gerarEnvioMaisEnvios(cartId: string, senderId: number, nfe?: any) {
     const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId }, include: { items: true } });
     if (!cart) throw new NotFoundException('Carrinho não encontrado');
     const itens = (cart.items || []).filter((i: any) => i.status !== 'cancelled');
@@ -449,6 +456,7 @@ export class PickOrdersService {
       },
       pesoGramas,
       valorDeclarado: cart.totalCents ? cart.totalCents / 100 : undefined,
+      ...(nfe ? { nfe } : {}),
       itens: itens.map((i: any) => ({ conteudo: [i.refCode, i.descricao, i.cor, i.tamanho].filter(Boolean).join(' ').slice(0, 60) || 'Vestuário', quantidade: Number(i.qty) || 1 })),
     });
     if (!resp?.ok || !resp.tag) throw new BadRequestException(`Mais Envios recusou o envio: ${resp?.erro || 'sem tag'}`);
@@ -458,7 +466,7 @@ export class PickOrdersService {
   }
 
   /** Pré-postagem no MAIS ENVIOS pro pedido do SITE (a partir do Order). */
-  private async gerarEnvioMaisEnviosSite(order: any, pick: any, senderId: number) {
+  private async gerarEnvioMaisEnviosSite(order: any, pick: any, senderId: number, nfe?: any) {
     if (order.isPickup) throw new BadRequestException('Retirada em loja não gera envio.');
     let addr: any = {};
     try { addr = JSON.parse(order.shippingAddress || '{}'); } catch { /* endereço cru */ }
@@ -510,6 +518,7 @@ export class PickOrdersService {
       },
       pesoGramas,
       valorDeclarado: order.totalAmount ? Number(order.totalAmount) : undefined,
+      ...(nfe ? { nfe } : {}),
       itens: lista.map((i: any) => ({ conteudo: String(i.productName || 'Vestuário').slice(0, 60), quantidade: Number(i.quantity) || 1 })),
     });
     if (!resp?.ok || !resp.tag) throw new BadRequestException(`Mais Envios recusou o envio: ${resp?.erro || 'sem tag'}`);
