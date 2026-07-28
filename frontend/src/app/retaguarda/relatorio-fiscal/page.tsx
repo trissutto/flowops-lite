@@ -534,6 +534,10 @@ function NfeTransferSection({ stores }: { stores: Store[] }) {
   const [statusFiltro, setStatusFiltro] = useState('authorized');
   const [rows, setRows] = useState<any[] | null>(null);
   const [loading, setLoading] = useState(false);
+  // Cancelamento (evento 110111): justificativa inline, obrigatória (15-255)
+  const [cancelId, setCancelId] = useState<string | null>(null);
+  const [justCancel, setJustCancel] = useState('');
+  const [cancelando, setCancelando] = useState(false);
 
   const API_URL =
     process.env.NEXT_PUBLIC_API_URL || 'https://flowops-lite-production.up.railway.app';
@@ -598,6 +602,23 @@ function NfeTransferSection({ stores }: { stores: Store[] }) {
     }
   };
 
+  const cancelarNota = async (d: any) => {
+    const just = justCancel.trim();
+    if (just.length < 15) { alert('Justificativa precisa de pelo menos 15 caracteres (regra da SEFAZ).'); return; }
+    if (!confirm(`Cancelar a NF-e ${d.numero}/${d.serie} (${d.tpAmb === '1' ? 'PRODUÇÃO — vale no fisco' : 'homologação'}) na SEFAZ?`)) return;
+    setCancelando(true);
+    try {
+      const r = await api<any>(`/nfe/${d.id}/cancel`, { method: 'POST', body: JSON.stringify({ justificativa: just }) });
+      const ok = r?.ok || r?.success || r?.cStat === '135' || r?.cStat === '136' || r?.status === 'cancelled' || r?.doc?.status === 'cancelled';
+      if (ok) alert(`NF-e ${d.numero} cancelada na SEFAZ.`);
+      else alert(`SEFAZ não cancelou (${r?.cStat ?? ''}): ${r?.xMotivo ?? r?.message ?? 'erro'}`);
+      setCancelId(null); setJustCancel('');
+      load(lojaFiltro, statusFiltro);
+    } catch (e: any) {
+      alert(`Erro ao cancelar: ${e?.message || e}`);
+    } finally { setCancelando(false); }
+  };
+
   const storeName = (code: string) => stores.find((s) => s.code === code)?.name || code;
 
   return (
@@ -629,6 +650,7 @@ function NfeTransferSection({ stores }: { stores: Store[] }) {
           >
             <option value="authorized">Autorizadas</option>
             <option value="rejected">Rejeitadas</option>
+            <option value="cancelled">Canceladas</option>
             <option value="">Todas</option>
           </select>
         </div>
@@ -686,20 +708,57 @@ function NfeTransferSection({ stores }: { stores: Store[] }) {
                     {d.status === 'authorized' ? d.chave : (d.xMotivo || d.chave || '—')}
                   </td>
                   <td className="py-1.5 whitespace-nowrap">
-                    <button
-                      onClick={() => abrirDanfe(d)}
-                      className="text-[10px] px-1.5 py-0.5 rounded border border-emerald-300 hover:bg-emerald-50 text-emerald-700 font-bold mr-1"
-                      title="Abrir DANFE em PDF"
-                    >
-                      📄 DANFE
-                    </button>
-                    <button
-                      onClick={() => baixarXml(d)}
-                      className="text-[10px] px-1.5 py-0.5 rounded border border-slate-300 hover:bg-slate-100 text-slate-600"
-                      title="Baixar o XML da NF-e"
-                    >
-                      ⬇ XML
-                    </button>
+                    {cancelId === d.id ? (
+                      <div className="flex items-center gap-1">
+                        <input
+                          value={justCancel}
+                          onChange={(e) => setJustCancel(e.target.value)}
+                          placeholder="Justificativa (mín. 15 caracteres)"
+                          className="border rounded px-1.5 py-0.5 text-[11px] w-52"
+                          autoFocus
+                        />
+                        <button
+                          disabled={cancelando}
+                          onClick={() => cancelarNota(d)}
+                          className="text-[10px] px-1.5 py-0.5 rounded bg-rose-600 text-white font-bold disabled:opacity-40"
+                        >
+                          {cancelando ? '…' : 'Confirmar'}
+                        </button>
+                        <button
+                          disabled={cancelando}
+                          onClick={() => { setCancelId(null); setJustCancel(''); }}
+                          className="text-[10px] px-1.5 py-0.5 rounded border border-slate-300 text-slate-600"
+                        >
+                          Voltar
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <button
+                          onClick={() => abrirDanfe(d)}
+                          className="text-[10px] px-1.5 py-0.5 rounded border border-emerald-300 hover:bg-emerald-50 text-emerald-700 font-bold mr-1"
+                          title="Abrir DANFE em PDF"
+                        >
+                          📄 DANFE
+                        </button>
+                        <button
+                          onClick={() => baixarXml(d)}
+                          className="text-[10px] px-1.5 py-0.5 rounded border border-slate-300 hover:bg-slate-100 text-slate-600"
+                          title="Baixar o XML da NF-e"
+                        >
+                          ⬇ XML
+                        </button>
+                        {d.status === 'authorized' && (
+                          <button
+                            onClick={() => { setCancelId(d.id); setJustCancel(''); }}
+                            className="text-[10px] px-1.5 py-0.5 rounded border border-rose-300 hover:bg-rose-50 text-rose-700 font-bold ml-1"
+                            title="Cancelar esta NF-e na SEFAZ (evento 110111 — prazo legal de 24h após a autorização)"
+                          >
+                            🚫 Cancelar
+                          </button>
+                        )}
+                      </>
+                    )}
                   </td>
                 </tr>
               ))}
