@@ -256,7 +256,11 @@ export class DceEmitService {
       (x.fone ? `<fone>${String(x.fone).replace(/\D/g, '').slice(0, 12)}</fone>` : '');
 
     const destCpfCnpj = (p.dest.cpfCnpj || '').replace(/\D/g, '');
-    const destDoc = destCpfCnpj.length === 14 ? `<CNPJ>${destCpfCnpj}</CNPJ>` : destCpfCnpj.length === 11 ? `<CPF>${destCpfCnpj}</CPF>` : '';
+    // O identificador do dest é OBRIGATÓRIO (choice CNPJ|CPF|idOutros, antes
+    // do xNome — cStat 215 sem ele). Sem documento → idOutros.
+    const destDoc = destCpfCnpj.length === 14 ? `<CNPJ>${destCpfCnpj}</CNPJ>`
+      : destCpfCnpj.length === 11 ? `<CPF>${destCpfCnpj}</CPF>`
+      : `<idOutros>NAO INFORMADO</idOutros>`;
     const destNome = homolog ? 'DCE EMITIDA EM AMBIENTE DE HOMOLOGACAO - SEM VALOR FISCAL' : (p.dest.nome || 'DESTINATARIO');
     // código IBGE do município do destinatário: se não veio, usa o da loja
     // (a homologação acusa se for obrigatório exato — ajustar depois)

@@ -45,7 +45,8 @@ export default function DcePage() {
           storeCode,
           ambiente: '2', // HOMOLOGAÇÃO — sem valor fiscal
           dest: {
-            nome: 'CLIENTE TESTE HOMOLOGACAO', cpfCnpj: '',
+            // CPF de teste com DV válido (padrão de homologação)
+            nome: 'CLIENTE TESTE HOMOLOGACAO', cpfCnpj: '11144477735',
             logradouro: 'Rua Teste', numero: '100', bairro: 'Centro',
             cidade: 'Sao Paulo', uf: 'SP', cep: '01001000',
           },
