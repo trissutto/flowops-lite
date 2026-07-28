@@ -305,9 +305,10 @@ export class DceEmitService {
       })}</enderDest>` +
       `</dest>` +
       det +
-      // ordem do schema (cStat 215 col 1107): depois do det vem transp, DEPOIS tot
+      // O grupo do total chama-se <total> (não <tot> — o validador recusou
+      // tot E transp depois do det; o exemplo do manual usava <total>).
+      `<total><vDC>${this.money(p.valorTotal)}</vDC></total>` +
       `<transp><modTrans>0</modTrans><CNPJTransp>${cnpjTransp}</CNPJTransp></transp>` +
-      `<tot><vDC>${this.money(p.valorTotal)}</vDC></tot>` +
       `<infDec><xObs1>${e(xObs1)}</xObs1><xObs2>${e(xObs2)}</xObs2></infDec>` +
       `</infDCe>` +
       `<infDCeSupl><qrCodDCe>${e(p.qrUrl)}</qrCodDCe><urlChave>${e(urlChave)}</urlChave></infDCeSupl>` +
