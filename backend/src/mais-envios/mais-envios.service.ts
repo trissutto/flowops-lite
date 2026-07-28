@@ -113,6 +113,8 @@ export class MaisEnviosService {
     /** Referência ÚNICA do envio (nº do pedido/pick) — vai no contact.invoice/
      *  request. Vazio repetido é suspeito de colidir ("Etiqueta já cadastrada"). */
     referencia?: string;
+    /** Nome da loja do envio — vira o "Departamento" na lista do portal. */
+    departamento?: string;
     /** NF-e do envio (emitida antes da etiqueta). Sem ela o nf.nfeKey vai vazio
      *  e o Mais Envios COLIDE ("Etiqueta já cadastrada" — visto 28/07: a chave
      *  vazia é única no sistema deles). */
@@ -179,7 +181,7 @@ export class MaisEnviosService {
       },
       delivery: {
         delivery: '',
-        department: '',
+        department: String(input.departamento || '').toUpperCase().slice(0, 30),
         contact: d.nome,
         name: d.nome,
         cep: cepDash(d.cep),
@@ -241,7 +243,10 @@ export class MaisEnviosService {
     // A pré-postagem CRIA com sucesso (2xx) — validado 28/07 — mas o nome do
     // campo da tag no retorno ainda não é conhecido: prova o máximo de nomes
     // e, se nada bater, devolve o CORPO CRU no erro pra tela mostrar o formato.
-    const d2: any = resp.data || {};
+    // A resposta vem como ARRAY [{ id, tag, status, ... }] (visto 28/07 no 1º
+    // sucesso real: tag AD731902123BR) — desembrulha antes de procurar a tag.
+    const dResp: any = resp.data || {};
+    const d2: any = Array.isArray(dResp) ? (dResp[0] || {}) : dResp;
     const tag = d2.tag ?? d2.codigo ?? d2.objeto ?? d2.tracking ?? d2.etiqueta ?? d2.code ??
       d2.prepost?.tag ?? d2.data?.tag ?? d2.data?.tracking ?? d2.data?.codigo ?? null;
     if (!tag) {

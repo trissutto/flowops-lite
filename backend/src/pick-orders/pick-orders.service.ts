@@ -214,13 +214,13 @@ export class PickOrdersService {
     if (order.source === 'live') {
       if (!order.liveCartId) throw new BadRequestException('Pedido da live sem carrinho vinculado.');
       if (provider === 'maisenvios') {
-        r = await this.gerarEnvioMaisEnvios(order.liveCartId, senderId, nfeInfoME, `${order.wcOrderNumber || order.id}/${String(pick.id).slice(0, 8)}`);
+        r = await this.gerarEnvioMaisEnvios(order.liveCartId, senderId, nfeInfoME, `${order.wcOrderNumber || order.id}/${String(pick.id).slice(0, 8)}`, String(store?.name || ''));
       } else {
         r = await this.livePdv.gerarEnvioCorreios(order.liveCartId, nfeChave, remetenteLoja || undefined);
       }
     } else if (provider === 'maisenvios') {
       // SITE numa loja Mais Envios: pré-postagem lá, a partir do Order.
-      r = await this.gerarEnvioMaisEnviosSite(order, pick, senderId, nfeInfoME, `${order.wcOrderNumber || order.id}/${String(pick.id).slice(0, 8)}`);
+      r = await this.gerarEnvioMaisEnviosSite(order, pick, senderId, nfeInfoME, `${order.wcOrderNumber || order.id}/${String(pick.id).slice(0, 8)}`, String(store?.name || ''));
     } else {
       // SITE: Correios a partir do próprio Order (endereço + itens do pedido).
       r = await this.gerarEnvioCorreiosSite(order, pick, nfeChave, remetenteLoja || undefined);
@@ -431,7 +431,7 @@ export class PickOrdersService {
   }
 
   /** Gera a pré-postagem no MAIS ENVIOS a partir do carrinho da live. */
-  private async gerarEnvioMaisEnvios(cartId: string, senderId: number, nfe?: any, referencia?: string) {
+  private async gerarEnvioMaisEnvios(cartId: string, senderId: number, nfe?: any, referencia?: string, departamento?: string) {
     const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId }, include: { items: true } });
     if (!cart) throw new NotFoundException('Carrinho não encontrado');
     const itens = (cart.items || []).filter((i: any) => i.status !== 'cancelled');
@@ -458,6 +458,7 @@ export class PickOrdersService {
       valorDeclarado: cart.totalCents ? cart.totalCents / 100 : undefined,
       ...(nfe ? { nfe } : {}),
       ...(referencia ? { referencia } : {}),
+      ...(departamento ? { departamento } : {}),
       itens: itens.map((i: any) => ({ conteudo: [i.refCode, i.descricao, i.cor, i.tamanho].filter(Boolean).join(' ').slice(0, 60) || 'Vestuário', quantidade: Number(i.qty) || 1 })),
     });
     if (!resp?.ok || !resp.tag) throw new BadRequestException(`Mais Envios recusou o envio: ${resp?.erro || 'sem tag'}`);
@@ -467,7 +468,7 @@ export class PickOrdersService {
   }
 
   /** Pré-postagem no MAIS ENVIOS pro pedido do SITE (a partir do Order). */
-  private async gerarEnvioMaisEnviosSite(order: any, pick: any, senderId: number, nfe?: any, referencia?: string) {
+  private async gerarEnvioMaisEnviosSite(order: any, pick: any, senderId: number, nfe?: any, referencia?: string, departamento?: string) {
     if (order.isPickup) throw new BadRequestException('Retirada em loja não gera envio.');
     let addr: any = {};
     try { addr = JSON.parse(order.shippingAddress || '{}'); } catch { /* endereço cru */ }
@@ -521,6 +522,7 @@ export class PickOrdersService {
       valorDeclarado: order.totalAmount ? Number(order.totalAmount) : undefined,
       ...(nfe ? { nfe } : {}),
       ...(referencia ? { referencia } : {}),
+      ...(departamento ? { departamento } : {}),
       itens: lista.map((i: any) => ({ conteudo: String(i.productName || 'Vestuário').slice(0, 60), quantidade: Number(i.quantity) || 1 })),
     });
     if (!resp?.ok || !resp.tag) throw new BadRequestException(`Mais Envios recusou o envio: ${resp?.erro || 'sem tag'}`);
