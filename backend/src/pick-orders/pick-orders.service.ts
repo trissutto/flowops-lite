@@ -137,8 +137,14 @@ export class PickOrdersService {
 
     let temNota = false;
     try {
-      const doc: any = await this.nfe.findEnvioDoc(id);
-      if (doc?.id && doc.status === 'authorized') {
+      // A AUTORIZADA mais recente — não a mais recente qualquer (uma tentativa
+      // rejeitada depois da autorizada escondia a nota do PDF; 28/07)
+      const doc: any = await (this.prisma as any).nfeDoc.findFirst({
+        where: { shipmentId: `envio:${id}`, status: 'authorized' },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true },
+      });
+      if (doc?.id) {
         const { buffer } = await this.danfePdf.generateForDoc(doc.id);
         pdfs.push(buffer);
         temNota = true;
@@ -179,7 +185,21 @@ export class PickOrdersService {
     // Já tem rastreio? devolve o existente — NUNCA cria outra pré-postagem.
     // Regenerar de verdade = Reabrir (limpa os campos) e gerar de novo.
     if (pick.trackingCode) {
-      return { ok: true, jaGerado: true, codigoRastreio: pick.trackingCode, idPrepostagem: pick.correiosPrepostagemId ?? null, servico: null, carrier: pick.carrier ?? null, etiquetaPdf: (pick as any).etiquetaPdf ?? null, dce: null, nfe: null };
+      // Garante a NOTA mesmo no "já gerado": se o pick ficou sem NF-e
+      // autorizada (falha numa tentativa anterior), emite agora — a emissão é
+      // idempotente por pick+ambiente, então NUNCA duplica nota nem etiqueta.
+      let nfe: any = null;
+      try {
+        const doc: any = await (this.prisma as any).nfeDoc.findFirst({
+          where: { shipmentId: `envio:${id}`, status: 'authorized' }, select: { id: true },
+        });
+        if (!doc) {
+          const order: any = await this.prisma.order.findUnique({ where: { id: pick.orderId }, include: { items: true } });
+          const store: any = await this.prisma.store.findUnique({ where: { id: pick.storeId } });
+          if (order) nfe = (await this.emitirNfeDoEnvio(id, order, pick, store)).nfe;
+        }
+      } catch { /* nota é best-effort aqui — o docs-envio avisa se faltar */ }
+      return { ok: true, jaGerado: true, codigoRastreio: pick.trackingCode, idPrepostagem: pick.correiosPrepostagemId ?? null, servico: null, carrier: pick.carrier ?? null, etiquetaPdf: (pick as any).etiquetaPdf ?? null, dce: null, nfe };
     }
     // Trava atômica contra cliques simultâneos: só o 1º request marca
     // correiosGeneratedAt e gera; os demais levam aviso. Falhou? solta a trava.
@@ -196,17 +216,14 @@ export class PickOrdersService {
     }
   }
 
-  private async gerarEnvioCorreiosInner(id: string, pick: any) {
-    const order: any = await this.prisma.order.findUnique({ where: { id: pick.orderId }, include: { items: true } });
-    if (!order) throw new NotFoundException('Pedido não encontrado');
-
-    const store: any = await this.prisma.store.findUnique({ where: { id: pick.storeId } });
-
-    // ── NF-e do ENVIO (ANTES da etiqueta: a chave vai na pré-postagem) ────
-    // Gated por NFE_ENVIO_ENABLED=1. CFOP/DIFAL automáticos (regra do
-    // contador). Falha na NF-e NÃO trava a etiqueta — segue sem chave e o
-    // front avisa. NFE_ENVIO_AMBIENTE=2 força homologação (e aí a chave de
-    // teste NÃO vai pra pré-postagem).
+  /**
+   * NF-e do ENVIO (ANTES da etiqueta: a chave vai na pré-postagem).
+   * Gated por NFE_ENVIO_ENABLED=1. CFOP/DIFAL automáticos (regra do
+   * contador). Falha na NF-e NÃO trava a etiqueta — segue sem chave e o
+   * front avisa. NFE_ENVIO_AMBIENTE=2 força homologação (e aí a chave de
+   * teste NÃO vai pra pré-postagem). Emissão idempotente por pick+ambiente.
+   */
+  private async emitirNfeDoEnvio(id: string, order: any, pick: any, store: any): Promise<{ nfe: any; nfeChave?: string; nfeInfoME: any }> {
     let nfe: any = null;
     let nfeChave: string | undefined;
     let nfeInfoME: any = null;
@@ -252,6 +269,16 @@ export class PickOrdersService {
         nfe = { status: 'error', erro: String(e?.message || e).slice(0, 300) };
       }
     }
+    return { nfe, nfeChave, nfeInfoME };
+  }
+
+  private async gerarEnvioCorreiosInner(id: string, pick: any) {
+    const order: any = await this.prisma.order.findUnique({ where: { id: pick.orderId }, include: { items: true } });
+    if (!order) throw new NotFoundException('Pedido não encontrado');
+
+    const store: any = await this.prisma.store.findUnique({ where: { id: pick.storeId } });
+
+    const { nfe, nfeChave, nfeInfoME } = await this.emitirNfeDoEnvio(id, order, pick, store);
 
     // Remetente da etiqueta = a PRÓPRIA loja do envio (endereço da config
     // fiscal). Fallback: remetente padrão (matriz Itanhaém) se a loja não
