@@ -171,7 +171,11 @@ export class MaisEnviosService {
       dc: (input.itens || []).map((it) => ({ conteudo: String(it.conteudo || 'Vestuário').slice(0, 60), quantidade: String(it.quantidade ?? 1) })),
     };
 
+    // DEBUG da homologação (28/07): payload e resposta CRUS nos logs do Railway
+    // pra enxergar a causa do "Etiqueta já cadastrada" (buscar "maisenvios").
+    console.log(`[maisenvios] prepost PAYLOAD: ${JSON.stringify(body).slice(0, 1500)}`);
     const resp = await axios.post(`${base}/prepost`, body, { headers, timeout: 30000, validateStatus: () => true });
+    console.log(`[maisenvios] prepost RESPOSTA HTTP ${resp.status}: ${JSON.stringify(resp.data).slice(0, 1500)}`);
     if (resp.status < 200 || resp.status >= 300) {
       return { ok: false, erro: resp.data?.message || resp.data?.error || (Array.isArray(resp.data?.msgs) ? resp.data.msgs.join('; ') : `HTTP ${resp.status}`), raw: resp.data };
     }
