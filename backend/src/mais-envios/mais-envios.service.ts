@@ -127,13 +127,46 @@ export class MaisEnviosService {
     const d = input.destinatario;
     const onlyDigits = (v: any) => String(v || '').replace(/\D/g, '');
 
+    // ═══ MOLDE DO PORTAL (payload REAL capturado no DevTools, 28/07) ═══
+    // customer/cardpost = UUIDs da conta (envs); package = UUID de embalagem;
+    // complement carrega DIMENSÕES + tipo + typeContent + nfeKey; pricetable é
+    // o PREÇO cotado; delivery.delivery vazio (destinatário inline). O formato
+    // aninhado antigo (da doc) meio-validava e morria com "Etiqueta já
+    // cadastrada" — este é o formato que o portal usa com sucesso diário.
+    const customer = this.auth.customer;
+    const cardpost = this.auth.cardpost;
+    if (!customer || !cardpost) {
+      throw new BadRequestException('Mais Envios: defina MAISENVIOS_CUSTOMER e MAISENVIOS_CARDPOST (UUIDs da conta) no Railway.');
+    }
+    const pacote = {
+      id: process.env.MAISENVIOS_PACKAGE_ID || 'c631a267-2cf5-4b93-a653-8ebc71830a64', // "Caixa 1" (M08 24×17×10)
+      height: Number(process.env.MAISENVIOS_PKG_ALTURA || 10),
+      length: Number(process.env.MAISENVIOS_PKG_COMPRIMENTO || 24),
+      width: Number(process.env.MAISENVIOS_PKG_LARGURA || 17),
+    };
+    // O portal manda o PREÇO do serviço escolhido no pricetable → cota antes
+    let pricetable = 0;
+    try {
+      const cot = await this.calcularFrete({
+        cepDestino: d.cep, cepOrigem: s.zipcode || s.cep, pesoGramas: input.pesoGramas,
+        comprimento: pacote.length, largura: pacote.width, altura: pacote.height,
+      });
+      const op = (cot.opcoes || []).find((o: any) => o.codigo === codigo);
+      if (op?.precoReais) pricetable = op.precoReais;
+    } catch { /* sem cotação → 0; a API acusa se exigir */ }
+
+    const chave = String(input.nfe?.chave || '').replace(/\D/g, '');
+    const cepDash = (v: any) => { const dd = onlyDigits(v); return dd.length === 8 ? `${dd.slice(0, 5)}-${dd.slice(5)}` : dd; };
+    const referencia = String(input.referencia || '').slice(0, 40);
+
     const body: any = {
-      customer: this.auth.customer || s.customer || undefined,
-      cardpost: this.auth.cardpost || undefined,
-      pricetable: this.auth.pricetable ? Number(this.auth.pricetable) : undefined,
+      customer,
+      cardpost,
       service: codigo,
-      integratorId: 'flowops',
+      pricetable,
+      primary: '',
       sender: {
+        sender: '',
         contact: s.name || s.contact || 'LURDS',
         federalId: onlyDigits(s.federalid || s.federalId),
         cep: onlyDigits(s.zipcode || s.cep),
@@ -145,32 +178,54 @@ export class MaisEnviosService {
         extent: s.complement || s.extent || '',
       },
       delivery: {
-        delivery: 'normal', contact: d.nome, department: '', name: d.nome, branch: '',
-        cep: onlyDigits(d.cep), address: d.endereco, number: String(d.numero || 'S/N'),
-        neighborhood: d.bairro || '', city: d.cidade || '', state: d.uf || '', extent: d.complemento || '',
+        delivery: '',
+        department: '',
+        contact: d.nome,
+        name: d.nome,
+        cep: cepDash(d.cep),
+        address: d.endereco,
+        number: String(d.numero || 'S/N'),
+        neighborhood: d.bairro || '',
+        city: d.cidade || '',
+        state: d.uf || '',
+        extent: d.complemento || '',
       },
       contact: {
-        phone: onlyDigits(d.telefone), mail: d.email || '', federalid: onlyDigits(d.cpf),
-        invoice: String(input.referencia || '').slice(0, 40), care: '', note: '',
-        request: String(input.referencia || '').slice(0, 40), observation: '', save: false, whatsapp: false,
+        save: false,
+        invoice: referencia,
+        request: referencia,
+        care: '',
+        mail: d.email || '',
+        phone: onlyDigits(d.telefone),
+        federalid: onlyDigits(d.cpf),
+        observation: '',
+        note: '',
+        whatsapp: false,
       },
       object: {
-        object: 'Vestuário', package: '2', type: '1',
-        weight: Math.max(1, Math.round(input.pesoGramas)), quantity: 1,
-        ar: false, ardigital: false, ownhand: false, ap: false,
+        ownhand: false,
+        ar: false,
+        ardigital: false,
+        ap: false,
+        weight: String(Math.max(1, Math.round(input.pesoGramas))),
+        quantity: 1,
+        package: pacote.id,
       },
-      // Tipo do complemento = formato do volume (validação da API, 28/07):
-      // 001 = Pacote/Caixa · 002 = Envelope · 003 = Rolo/Cilindro.
-      // Roupa vai em pacote → 001. Ajustável via MAISENVIOS_COMPLEMENT_JSON.
-      complement: (() => {
-        try { return JSON.parse(process.env.MAISENVIOS_COMPLEMENT_JSON || '{"type":"001"}'); }
-        catch { return { type: '001' }; }
-      })(),
+      complement: {
+        value: Number(input.valorDeclarado ?? input.nfe?.valor ?? 0),
+        height: pacote.height,
+        length: pacote.length,
+        width: pacote.width,
+        diameter: 1,
+        type: '001',
+        // typeContent (radio do portal): 1 = Com nota fiscal · 4 = Enviar NF-e depois
+        typeContent: chave ? '1' : '4',
+        nfeKey: chave,
+      },
       nf: {
-        nfeKey: String(input.nfe?.chave || '').replace(/\D/g, ''),
-        nfeNumber: Number(input.nfe?.numero || 0),
-        nfeSerie: Number(input.nfe?.serie || 0),
-        nfeValue: String(input.valorDeclarado ?? input.nfe?.valor ?? 0),
+        nfeKey: chave,
+        nfeNumber: input.nfe?.numero ? String(input.nfe.numero) : '',
+        nfeSerie: input.nfe?.serie ? String(input.nfe.serie) : '',
       },
       dc: (input.itens || []).map((it) => ({ conteudo: String(it.conteudo || 'Vestuário').slice(0, 60), quantidade: String(it.quantidade ?? 1) })),
     };
