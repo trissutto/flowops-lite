@@ -82,6 +82,14 @@ export interface RoutingContext {
    * single-store automático). Ignorado em estratégia pickup.
    */
   preferStoreCode?: string | null;
+  /**
+   * Kill-switch do SPLIT DE SKU entre lojas. Por padrão (undefined) o split
+   * está LIGADO: quando nenhuma loja tem a quantidade inteira de um SKU, a
+   * engine divide a quantidade entre várias lojas (o mínimo de pacotes) em vez
+   * de dar ruptura falsa. `true` volta ao comportamento antigo (1 SKU = 1 loja,
+   * ou ruptura). A service liga/desliga por env `ROUTING_SPLIT_SKU=0`.
+   */
+  disableSkuSplit?: boolean;
 }
 
 export interface PickAssignment {
