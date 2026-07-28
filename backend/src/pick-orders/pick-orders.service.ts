@@ -102,15 +102,27 @@ export class PickOrdersService {
     // (antes a falha da etiqueta engolia a nota junto — 28/07).
     const pdfs: Buffer[] = [];
     let etiquetaErro: string | null = null;
-    try {
-      const ehME = String(pick.carrier || '').includes('Mais Envios');
-      const et: any = ehME
-        ? await this.maisEnvios.baixarEtiqueta(String(pick.trackingCode || ''))
-        : await this.correios.baixarEtiqueta(String(pick.correiosPrepostagemId));
-      if (et?.ok && et.pdfBase64) pdfs.push(Buffer.from(String(et.pdfBase64), 'base64'));
-      else etiquetaErro = et?.erro || 'etiqueta indisponível';
-    } catch (e: any) {
-      etiquetaErro = String(e?.message || e);
+    const baixarEtiqueta = async (me: boolean): Promise<any> => {
+      try {
+        return me
+          ? await this.maisEnvios.baixarEtiqueta(String(pick.trackingCode || ''))
+          : await this.correios.baixarEtiqueta(String(pick.correiosPrepostagemId));
+      } catch (e: any) {
+        return { ok: false, erro: String(e?.message || e) };
+      }
+    };
+    const ehME = String(pick.carrier || '').includes('Mais Envios');
+    let et: any = await baixarEtiqueta(ehME);
+    if (!(et?.ok && et.pdfBase64)) {
+      // Picks antigos gravaram carrier "Correios SEDEX" mesmo sendo Mais
+      // Envios — se o provedor indicado falhar, tenta o outro antes de desistir.
+      const et2 = await baixarEtiqueta(!ehME);
+      if (et2?.ok && et2.pdfBase64) et = et2;
+    }
+    if (et?.ok && et.pdfBase64) pdfs.push(Buffer.from(String(et.pdfBase64), 'base64'));
+    else {
+      etiquetaErro = et?.erro || 'etiqueta indisponível';
+      this.logger.warn(`[docs-envio] etiqueta indisponível pro pick ${id} (carrier=${pick.carrier}, tag=${pick.trackingCode}): ${etiquetaErro}`);
     }
 
     let temNota = false;
