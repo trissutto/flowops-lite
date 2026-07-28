@@ -215,6 +215,11 @@ export class DceEmitService {
   private esc(s: string): string {
     return String(s || '')
       .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
+      // schema dos DF-e proíbe espaço no início/fim de QUALQUER campo texto
+      // (cStat 215 no xLgr "AV HARRY FORSSEL " do cadastro da loja) e também
+      // espaço duplo no meio
+      .replace(/\s+/g, ' ')
+      .trim()
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
