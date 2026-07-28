@@ -113,10 +113,12 @@ export class PickOrdersService {
     };
     const ehME = String(pick.carrier || '').includes('Mais Envios');
     let et: any = await baixarEtiqueta(ehME);
-    if (!(et?.ok && et.pdfBase64)) {
+    if (!ehME && !(et?.ok && et.pdfBase64)) {
       // Picks antigos gravaram carrier "Correios SEDEX" mesmo sendo Mais
-      // Envios — se o provedor indicado falhar, tenta o outro antes de desistir.
-      const et2 = await baixarEtiqueta(!ehME);
+      // Envios — tenta o ME (1 POST rápido). O inverso NÃO: carrier "Mais
+      // Envios" só é gravado pelo caminho ME, e cair no polling dos Correios
+      // com id inválido pendurava o request ~1min (lentidão 28/07).
+      const et2 = await baixarEtiqueta(true);
       if (et2?.ok && et2.pdfBase64) et = et2;
     }
     if (et?.ok && et.pdfBase64) pdfs.push(Buffer.from(String(et.pdfBase64), 'base64'));
