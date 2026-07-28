@@ -113,6 +113,8 @@ export class MaisEnviosService {
     /** Referência ÚNICA do envio (nº do pedido/pick) — vai no contact.invoice/
      *  request. Vazio repetido é suspeito de colidir ("Etiqueta já cadastrada"). */
     referencia?: string;
+    /** Nome da loja do envio — vira o "Departamento" na lista do portal. */
+    departamento?: string;
     /** NF-e do envio (emitida antes da etiqueta). Sem ela o nf.nfeKey vai vazio
      *  e o Mais Envios COLIDE ("Etiqueta já cadastrada" — visto 28/07: a chave
      *  vazia é única no sistema deles). */
@@ -179,7 +181,7 @@ export class MaisEnviosService {
       },
       delivery: {
         delivery: '',
-        department: '',
+        department: String(input.departamento || '').toUpperCase().slice(0, 30),
         contact: d.nome,
         name: d.nome,
         cep: cepDash(d.cep),
