@@ -705,7 +705,9 @@ export default function MinhaLojaPage() {
         const m = await api<any>(`/pick-orders/${pickId}/docs-envio`);
         if (m?.ok && m.pdfBase64) {
           downloadPdf(m.pdfBase64, `envio-${rastreio}.pdf`);
-          pushToast(m.temNota ? '📦 Etiqueta + NF-e num arquivo só' : '🏷️ Etiqueta baixada (envio sem NF-e autorizada)');
+          if (m.temNota && m.temEtiqueta === false) pushToast(`🧾 NF-e baixada — etiqueta pendente: ${m.etiquetaErro ?? 'tente de novo em instantes'}`);
+          else if (m.temNota) pushToast('📦 Etiqueta + NF-e num arquivo só');
+          else pushToast('🏷️ Etiqueta baixada (envio sem NF-e autorizada)');
           return;
         }
       } catch { /* cai no fluxo da etiqueta separada */ }

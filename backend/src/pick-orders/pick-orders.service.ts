@@ -98,15 +98,20 @@ export class PickOrdersService {
     if (!pick.correiosPrepostagemId) throw new BadRequestException('Envio ainda não gerado (sem pré-postagem).');
 
     // Etiqueta pelo provedor do envio: Mais Envios usa a TAG; Correios o id da
-    // pré-postagem (bug 28/07: pedido do ME não imprimia — só o CWS era tentado).
-    const ehME = String(pick.carrier || '').includes('Mais Envios');
-    const et: any = ehME
-      ? await this.maisEnvios.baixarEtiqueta(String(pick.trackingCode || ''))
-      : await this.correios.baixarEtiqueta(String(pick.correiosPrepostagemId));
-    if (!et?.ok || !et.pdfBase64) {
-      throw new BadRequestException(`Etiqueta não ficou pronta: ${et?.erro || 'tente de novo em alguns segundos'}`);
+    // pré-postagem. BEST-EFFORT: se a etiqueta falhar, a DANFE sai mesmo assim
+    // (antes a falha da etiqueta engolia a nota junto — 28/07).
+    const pdfs: Buffer[] = [];
+    let etiquetaErro: string | null = null;
+    try {
+      const ehME = String(pick.carrier || '').includes('Mais Envios');
+      const et: any = ehME
+        ? await this.maisEnvios.baixarEtiqueta(String(pick.trackingCode || ''))
+        : await this.correios.baixarEtiqueta(String(pick.correiosPrepostagemId));
+      if (et?.ok && et.pdfBase64) pdfs.push(Buffer.from(String(et.pdfBase64), 'base64'));
+      else etiquetaErro = et?.erro || 'etiqueta indisponível';
+    } catch (e: any) {
+      etiquetaErro = String(e?.message || e);
     }
-    const pdfs: Buffer[] = [Buffer.from(String(et.pdfBase64), 'base64')];
 
     let temNota = false;
     try {
@@ -120,6 +125,10 @@ export class PickOrdersService {
       this.logger.warn(`[docs-envio] DANFE indisponível pro pick ${id}: ${e?.message || e}`);
     }
 
+    if (!pdfs.length) {
+      throw new BadRequestException(`Nem etiqueta nem DANFE disponíveis${etiquetaErro ? ` (etiqueta: ${etiquetaErro})` : ''} — tente de novo em alguns segundos.`);
+    }
+
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { PDFDocument } = require('pdf-lib');
     const out = await PDFDocument.create();
@@ -129,7 +138,7 @@ export class PickOrdersService {
       for (const p of pages) out.addPage(p);
     }
     const bytes = await out.save();
-    return { ok: true, pdfBase64: Buffer.from(bytes).toString('base64'), temNota, trackingCode: pick.trackingCode || null };
+    return { ok: true, pdfBase64: Buffer.from(bytes).toString('base64'), temNota, temEtiqueta: !etiquetaErro, etiquetaErro, trackingCode: pick.trackingCode || null };
   }
 
   /**
