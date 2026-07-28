@@ -65,7 +65,7 @@ export class LivePdvService {
    * destinatário = endereço do cliente no cart; remetente = matriz (env).
    * Grava o código de rastreio em todos os itens e o id da pré-postagem no cart.
    */
-  async gerarEnvioCorreios(cartId: string, nfeChave?: string) {
+  async gerarEnvioCorreios(cartId: string, nfeChave?: string, remetenteLoja?: any) {
     const cart = await (this.prisma as any).livePdvCart.findUnique({
       where: { id: cartId },
       include: { items: true },
@@ -116,7 +116,9 @@ export class LivePdvService {
 
     const servico: 'PAC' | 'SEDEX' =
       ufDest === 'SP' || this.freteFromCep(cart.customerCep)?.servico === 'SEDEX' ? 'SEDEX' : 'PAC';
-    const rem = this.correios.remetentePadrao();
+    // Remetente = a loja do envio quando informada (pick-orders resolve pela
+    // config fiscal da loja); sem ela, o padrão da matriz (env).
+    const rem = remetenteLoja || this.correios.remetentePadrao();
 
     const resp: any = await this.correios.criarPrepostagem({
       servico,
