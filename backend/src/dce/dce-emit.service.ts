@@ -59,10 +59,11 @@ export class DceEmitService {
     const serie = '1';
     const numero = await this.seq.next(input.storeCode, serie, { modelo: '99' });
 
-    // cDC: código numérico aleatório de 8 dígitos (compõe a chave, como o cNF)
-    const cDC = String(Math.floor(Math.random() * 99999999)).padStart(8, '0');
+    // cDC: código numérico aleatório de 6 dígitos (schema exige [0-9]{6})
+    const cDC = String(Math.floor(Math.random() * 999999)).padStart(6, '0');
     const agora = new Date();
-    const chave = this.buildChave({ cUF: '35', cnpj: fiscal.cnpj, serie, numero, cDC, dataEmissao: agora });
+    const nSite = (process.env.DCE_NSITE || '0').slice(0, 1);
+    const chave = this.buildChave({ cUF: '35', cnpj: fiscal.cnpj, serie, numero, cDC, nSite, dataEmissao: agora });
     const dhEmi = this.dhEmiNow();
 
     const valorTotal = input.itens.reduce((s, it) => s + it.quantidade * it.valorUnit, 0);
@@ -195,12 +196,19 @@ export class DceEmitService {
     return String(resto < 2 ? 0 : 11 - resto);
   }
 
-  private buildChave(input: { cUF: string; cnpj: string; serie: string; numero: number; cDC: string; dataEmissao: Date }): string {
+  /**
+   * Chave da DC-e (44): cUF(2) AAMM(4) CNPJ(14) mod(2) série(3) nº(9)
+   * tpEmis(1) tpEmit(1) nSiteAutoriz(1) cDC(6) DV(1). Diferente da NF-e:
+   * inclui tpEmit e nSiteAutoriz, e o código numérico tem 6 dígitos
+   * (confirmado no schema — cDC pattern [0-9]{6} — e nos inputs do manual).
+   */
+  private buildChave(input: { cUF: string; cnpj: string; serie: string; numero: number; cDC: string; nSite: string; dataEmissao: Date }): string {
     const aamm = String(input.dataEmissao.getFullYear()).slice(-2) + String(input.dataEmissao.getMonth() + 1).padStart(2, '0');
     const semDv =
       input.cUF.padStart(2, '0') + aamm + input.cnpj.padStart(14, '0') +
       '99' + String(input.serie).padStart(3, '0') + String(input.numero).padStart(9, '0') +
-      '1' + input.cDC.padStart(8, '0');
+      '1' /* tpEmis */ + '2' /* tpEmit: emissor próprio */ + input.nSite +
+      input.cDC.padStart(6, '0');
     return semDv + this.calcDV(semDv);
   }
 
