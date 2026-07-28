@@ -734,24 +734,12 @@ export default function MinhaLojaPage() {
       if (r.dce?.status === 'error' || r.dce?.status === 'rejected') {
         pushToast(`DC-e falhou (${r.dce?.cStat ?? ''}): ${r.dce?.xMotivo ?? r.dce?.erro ?? 'ver retaguarda'}`);
       }
-      // NF-e do envio: falha vira aviso (a DANFE autorizada vem no PDF único abaixo)
+      // NF-e do envio: falha vira aviso (a DANFE autorizada vem no PDF único)
       if (r.nfe?.status === 'error' || r.nfe?.status === 'rejected') {
         pushToast(`NF-e do envio falhou (${r.nfe?.cStat ?? ''}): ${r.nfe?.xMotivo ?? r.nfe?.erro ?? 'ver retaguarda'}`);
       }
-      if (r.etiquetaPdf) {
-        // Mais Envios já devolve o PDF da etiqueta na resposta
-        downloadPdf(r.etiquetaPdf, `etiqueta-${r.codigoRastreio}.pdf`);
-        pushToast('🏷️ Etiqueta baixada');
-        if (r.dce?.id && r.dce.status === 'authorized') {
-          try {
-            const b = await api<any>(`/dce/${r.dce.id}/dace-b64`);
-            if (b?.ok && b.pdfBase64) { downloadPdf(b.pdfBase64, `dace-${r.codigoRastreio}.pdf`); pushToast('📄 DACE (declaração) baixada'); }
-          } catch { /* opcional */ }
-        }
-      } else if (r.idPrepostagem) {
-        // Correios: etiqueta + DACE por chamada separada
-        await baixarEtiquetaCorreios(String(r.idPrepostagem), r.codigoRastreio, row.id);
-      }
+      // Rotina do dono (28/07): Gerar SÓ gera — a impressão é o botão
+      // "Etiqueta + NF" na sequência (nada de preview/download automático aqui).
     } catch (err: any) {
       pushToast(`Erro no envio Correios: ${err?.message ?? 'falha'}`);
     }
@@ -1961,7 +1949,7 @@ function PickOrderCard({
           <button
             onClick={async (e) => { e.stopPropagation(); if (corrBusy) return; setCorrBusy(true); try { await onCorreios(); } finally { setCorrBusy(false); } }}
             disabled={corrBusy}
-            title="Gera a pré-postagem (modalidade correta) e baixa etiqueta + declaração. O pedido fica na lista até postar."
+            title="Gera a pré-postagem (modalidade correta). Depois clique em Etiqueta + NF pra imprimir. O pedido fica na lista até postar."
             className="flex-1 bg-sky-600 hover:bg-sky-700 active:scale-[0.98] disabled:opacity-50 text-white font-bold py-4 rounded-lg flex items-center justify-center gap-2 text-base shadow-md transition"
           >
             <Truck className="w-6 h-6" /> {corrBusy ? 'Gerando...' : '📮 Gerar envio Correios'}
@@ -1975,7 +1963,7 @@ function PickOrderCard({
               <div className="text-[11px] font-normal text-sky-600">aguardando postagem — a cliente é avisada quando os Correios postarem</div>
             </div>
             <div className="flex gap-1">
-              <button onClick={(e) => { e.stopPropagation(); onReimprimir(); }} className="flex-1 bg-white border-2 border-slate-300 text-slate-800 font-semibold py-2 rounded-lg text-sm hover:bg-slate-100">🏷️ Reimprimir</button>
+              <button onClick={(e) => { e.stopPropagation(); onReimprimir(); }} title="Baixa etiqueta + DANFE num PDF único" className="flex-1 bg-white border-2 border-slate-300 text-slate-800 font-semibold py-2 rounded-lg text-sm hover:bg-slate-100">🏷️ Etiqueta + NF</button>
               <button onClick={(e) => { e.stopPropagation(); onMarcarEnviado(); }} title="Já postei — marcar enviado agora (baixa Giga + avisa cliente)" className="flex-1 bg-emerald-600 text-white font-semibold py-2 rounded-lg text-sm hover:bg-emerald-700">✓ Já postei</button>
               <button onClick={(e) => { e.stopPropagation(); if (confirm('Reabrir e refazer o envio? A pré-postagem atual é desfeita — cancele-a no portal dos Correios.')) onReabrir(); }} className="flex-1 bg-white border-2 border-amber-300 text-amber-700 font-semibold py-2 rounded-lg text-sm hover:bg-amber-50">↩︎ Reabrir</button>
             </div>
@@ -1991,13 +1979,6 @@ function PickOrderCard({
             <Truck className="w-6 h-6" /> Enviar c/ rastreio
           </button>
         )}
-        <button
-          onClick={(e) => { e.stopPropagation(); onPrint(); }}
-          className="sm:w-auto bg-white hover:bg-slate-100 active:scale-[0.98] text-slate-800 font-semibold py-4 px-5 rounded-lg flex items-center justify-center gap-2 border-2 border-slate-300 transition"
-          title="Imprimir cupom"
-        >
-          <Printer className="w-5 h-5" /> Imprimir
-        </button>
         {(status === 'new' || status === 'separating') && (
           <button
             onClick={(e) => { e.stopPropagation(); onReportIssue(); }}
