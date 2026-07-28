@@ -151,13 +151,12 @@ export class MaisEnviosService {
         weight: Math.max(1, Math.round(input.pesoGramas)), quantity: 1,
         ar: false, ardigital: false, ownhand: false, ap: false,
       },
-      // "complement.Informe o tipo de pre-postagem" (1º teste real 28/07): o
-      // objeto complement precisa do tipo da pré-postagem. Chave/valor
-      // ajustáveis SEM deploy via MAISENVIOS_COMPLEMENT_JSON (default
-      // {"type":"1"} = normal) — o erro de validação da API guia o acerto.
+      // Tipo do complemento = formato do volume (validação da API, 28/07):
+      // 001 = Pacote/Caixa · 002 = Envelope · 003 = Rolo/Cilindro.
+      // Roupa vai em pacote → 001. Ajustável via MAISENVIOS_COMPLEMENT_JSON.
       complement: (() => {
-        try { return JSON.parse(process.env.MAISENVIOS_COMPLEMENT_JSON || '{"type":"1"}'); }
-        catch { return { type: '1' }; }
+        try { return JSON.parse(process.env.MAISENVIOS_COMPLEMENT_JSON || '{"type":"001"}'); }
+        catch { return { type: '001' }; }
       })(),
       nf: { nfeKey: '', nfeNumber: 0, nfeSerie: 0, nfeValue: String(input.valorDeclarado ?? 0) },
       dc: (input.itens || []).map((it) => ({ conteudo: String(it.conteudo || 'Vestuário').slice(0, 60), quantidade: String(it.quantidade ?? 1) })),
