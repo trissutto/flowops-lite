@@ -270,6 +270,16 @@ export class PickOrdersController {
     return this.svc.gerarEnvioCorreios(id, user.storeId, user.userId);
   }
 
+  /** Documentos do envio num PDF único: etiqueta + DANFE (nessa ordem). */
+  @Get(':id/docs-envio')
+  docsEnvio(@Req() req: any, @Param('id') id: string) {
+    const user = req.user as AuthUser;
+    if (user.role !== 'store' || !user.storeId) {
+      throw new ForbiddenException('Apenas usuários de loja');
+    }
+    return this.svc.docsEnvioMerged(id, user.storeId);
+  }
+
   /** Reabre (desfaz) a pré-postagem gerada pra refazer — ex.: modalidade errada. */
   @Post(':id/correios-reabrir')
   correiosReabrir(@Req() req: any, @Param('id') id: string) {

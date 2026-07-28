@@ -10,6 +10,7 @@ import { CorreiosService } from '../correios/correios.service';
 import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service';
 import { DceEmitService } from '../dce/dce-emit.service';
 import { NfeTransferService } from '../nfe/nfe-transfer.service';
+import { DanfePdfService } from '../nfe/danfe-pdf.service';
 
 // Lojas que despacham pelo MAIS ENVIOS (código Flow → sender id no Mais Envios).
 // As demais vão pelo Correios (CWS). Piracicaba/Sorocaba/Limeira/Moema.
@@ -73,7 +74,48 @@ export class PickOrdersService {
     private readonly correios: CorreiosService,
     private readonly dce: DceEmitService,
     private readonly nfe: NfeTransferService,
+    private readonly danfePdf: DanfePdfService,
   ) {}
+
+  /**
+   * DOCUMENTOS DO ENVIO num PDF ÚNICO: etiqueta dos Correios + DANFE da NF-e
+   * (quando autorizada), nessa ordem — a loja imprime um arquivo só.
+   */
+  async docsEnvioMerged(id: string, storeId: string) {
+    const pick = await this.prisma.pickOrder.findUnique({ where: { id } });
+    if (!pick) throw new NotFoundException('Pick-order não encontrado');
+    if (pick.storeId !== storeId) throw new ForbiddenException('Pick-order não pertence à sua loja');
+    if (!pick.correiosPrepostagemId) throw new BadRequestException('Envio ainda não gerado (sem pré-postagem).');
+
+    const et: any = await this.correios.baixarEtiqueta(String(pick.correiosPrepostagemId));
+    if (!et?.ok || !et.pdfBase64) {
+      throw new BadRequestException(`Etiqueta não ficou pronta: ${et?.erro || 'tente de novo em alguns segundos'}`);
+    }
+    const pdfs: Buffer[] = [Buffer.from(String(et.pdfBase64), 'base64')];
+
+    let temNota = false;
+    try {
+      const doc: any = await this.nfe.findEnvioDoc(id);
+      if (doc?.id && doc.status === 'authorized') {
+        const { buffer } = await this.danfePdf.generateForDoc(doc.id);
+        pdfs.push(buffer);
+        temNota = true;
+      }
+    } catch (e: any) {
+      this.logger.warn(`[docs-envio] DANFE indisponível pro pick ${id}: ${e?.message || e}`);
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { PDFDocument } = require('pdf-lib');
+    const out = await PDFDocument.create();
+    for (const b of pdfs) {
+      const src = await PDFDocument.load(b, { ignoreEncryption: true });
+      const pages = await out.copyPages(src, src.getPageIndices());
+      for (const p of pages) out.addPage(p);
+    }
+    const bytes = await out.save();
+    return { ok: true, pdfBase64: Buffer.from(bytes).toString('base64'), temNota, trackingCode: pick.trackingCode || null };
+  }
 
   /**
    * Gera a PRÉ-POSTAGEM dos Correios pro pedido da LIVE deste pick-order e o

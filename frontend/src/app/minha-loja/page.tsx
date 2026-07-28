@@ -697,36 +697,24 @@ export default function MinhaLojaPage() {
     a.download = name;
     document.body.appendChild(a); a.click(); a.remove();
   }
-  // Baixa a ETIQUETA (rótulo) + a DECLARAÇÃO DE CONTEÚDO (documento separado,
-  // fluxo assíncrono do CWS). Os Correios exigem a declaração pra envio a CPF.
+  // DOCUMENTOS DO ENVIO num PDF ÚNICO: etiqueta + DANFE (nessa ordem), pra
+  // loja imprimir um arquivo só. Fallback: etiqueta separada se o merge falhar.
   async function baixarEtiquetaCorreios(idPre: string, rastreio: string, pickId?: string) {
+    if (pickId) {
+      try {
+        const m = await api<any>(`/pick-orders/${pickId}/docs-envio`);
+        if (m?.ok && m.pdfBase64) {
+          downloadPdf(m.pdfBase64, `envio-${rastreio}.pdf`);
+          pushToast(m.temNota ? '📦 Etiqueta + NF-e num arquivo só' : '🏷️ Etiqueta baixada (envio sem NF-e autorizada)');
+          return;
+        }
+      } catch { /* cai no fluxo da etiqueta separada */ }
+    }
     try {
       const et = await api<any>('/correios/etiqueta', { method: 'POST', body: JSON.stringify({ idPrepostagem: idPre }) });
       if (et?.ok && et.pdfBase64) { downloadPdf(et.pdfBase64, `etiqueta-${rastreio}.pdf`); pushToast('🏷️ Etiqueta baixada'); }
       else pushToast(`Etiqueta não ficou pronta: ${et?.erro ?? 'tente reimprimir'}`);
     } catch { pushToast('Etiqueta falhou (tente reimprimir).'); }
-    // DACE (declaração de conteúdo eletrônica com QR) — se este envio tem DC-e autorizada
-    if (pickId) {
-      try {
-        const d = await api<any>(`/dce/by-pick/${pickId}`);
-        if (d?.id && d.status === 'authorized') {
-          const b = await api<any>(`/dce/${d.id}/dace-b64`);
-          if (b?.ok && b.pdfBase64) { downloadPdf(b.pdfBase64, `dace-${rastreio}.pdf`); pushToast('📄 DACE (declaração) baixada'); }
-        } else if (d?.id && d.status !== 'authorized') {
-          pushToast(`DC-e não autorizada (${d.cStat ?? d.status}): ${d.xMotivo ?? ''}`);
-        }
-      } catch { /* DACE opcional — sem DC-e pro envio */ }
-      // DANFE da NF-e do envio (Reimprimir)
-      try {
-        const n = await api<any>(`/nfe/by-envio/${pickId}`);
-        if (n?.id && n.status === 'authorized') {
-          const b = await api<any>(`/nfe/${n.id}/danfe-b64`);
-          if (b?.ok && b.pdfBase64) { downloadPdf(b.pdfBase64, `danfe-${rastreio}.pdf`); pushToast('🧾 DANFE (NF-e) baixada'); }
-        }
-      } catch { /* sem NF-e pro envio */ }
-    }
-    // (Declaração de papel dos Correios REMOVIDA do fluxo — as agências não
-    // aceitam mais; o documento do pacote agora é a NF-e/DANFE abaixo.)
   }
 
   // MODEL B: gera a pré-postagem (modalidade correta), mostra o rastreio e baixa
@@ -744,14 +732,9 @@ export default function MinhaLojaPage() {
       if (r.dce?.status === 'error' || r.dce?.status === 'rejected') {
         pushToast(`DC-e falhou (${r.dce?.cStat ?? ''}): ${r.dce?.xMotivo ?? r.dce?.erro ?? 'ver retaguarda'}`);
       }
-      // NF-e do envio: DANFE baixa junto da etiqueta; falha vira aviso
+      // NF-e do envio: falha vira aviso (a DANFE autorizada vem no PDF único abaixo)
       if (r.nfe?.status === 'error' || r.nfe?.status === 'rejected') {
         pushToast(`NF-e do envio falhou (${r.nfe?.cStat ?? ''}): ${r.nfe?.xMotivo ?? r.nfe?.erro ?? 'ver retaguarda'}`);
-      } else if (r.nfe?.docId && r.nfe.status === 'authorized') {
-        try {
-          const b = await api<any>(`/nfe/${r.nfe.docId}/danfe-b64`);
-          if (b?.ok && b.pdfBase64) { downloadPdf(b.pdfBase64, `danfe-${r.codigoRastreio}.pdf`); pushToast('🧾 DANFE (NF-e) baixada'); }
-        } catch { pushToast('DANFE não baixou — reimprime pra tentar de novo.'); }
       }
       if (r.etiquetaPdf) {
         // Mais Envios já devolve o PDF da etiqueta na resposta
