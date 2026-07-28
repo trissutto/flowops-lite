@@ -78,18 +78,104 @@ export function signXmlDceWithA1(input: { xml: string; pfxBase64: string; pfxPas
 // ── transmissão (mesmo padrão de agent/retry da NFC-e, local a este módulo
 //    pra não acoplar nos internals privados de nfce-sefaz) ────────────────
 const agentCache = new Map<string, any>();
-function getAgent(pfxBase64: string, pfxPassword: string): any {
+
+/**
+ * O autorizador SVD/PR exige a CADEIA COMPLETA do certificado cliente no
+ * handshake ("tlsv1 alert unknown ca" sem ela). O A1 das lojas vem SÓ com o
+ * cert final (sem intermediários) — visto na homologação de 28/07, onde nem o
+ * PFX inteiro resolveu. Solução: baixar os intermediários pela URL oficial
+ * embutida no próprio certificado (extensão AIA / caIssuers), montar a cadeia
+ * leaf→AC e apresentar no TLS. Cache por certificado.
+ */
+async function buildClientChain(pfxBase64: string, pfxPassword: string): Promise<{ keyPem: string; chainPem: string }> {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const forge = require('node-forge');
+  const pfxDer = forge.util.decode64(pfxBase64);
+  const pfx = forge.pkcs12.pkcs12FromAsn1(forge.asn1.fromDer(pfxDer), false, pfxPassword);
+  const keyBag = pfx.getBags({ bagType: forge.pki.oids.pkcs8ShroudedKeyBag })[forge.pki.oids.pkcs8ShroudedKeyBag]?.[0]
+    || pfx.getBags({ bagType: forge.pki.oids.keyBag })[forge.pki.oids.keyBag]?.[0];
+  if (!keyBag?.key) throw new Error('Chave privada não encontrada no PFX');
+  const keyPem = forge.pki.privateKeyToPem(keyBag.key);
+
+  const certBags = pfx.getBags({ bagType: forge.pki.oids.certBag })[forge.pki.oids.certBag] || [];
+  const certs: any[] = certBags.map((b: any) => b.cert).filter(Boolean);
+  if (!certs.length) throw new Error('Certificado não encontrado no PFX');
+
+  // Leaf = o cert cujo público casa com a chave privada (PFX pode ter mais de um)
+  const keyModulus = keyBag.key.n?.toString(16);
+  let leaf = certs.find((c) => c.publicKey?.n?.toString(16) === keyModulus) || certs[0];
+
+  const chain: any[] = [leaf];
+  const inChain = (c: any) => chain.some((x) => forge.pki.certificateToPem(x) === forge.pki.certificateToPem(c));
+  // intermediários que já vieram no PFX
+  for (const c of certs) if (!inChain(c)) chain.push(c);
+
+  // Sobe a cadeia pela AIA (caIssuers) até a raiz (máx 3 saltos)
+  const urlsFrom = (cert: any): string[] => {
+    try {
+      const ext = (cert.extensions || []).find((e: any) => e.name === 'authorityInfoAccess' || e.id === '1.3.6.1.5.5.7.1.1');
+      if (!ext?.value) return [];
+      const asn1 = forge.asn1.fromDer(forge.util.createBuffer(ext.value));
+      const out: string[] = [];
+      for (const d of asn1.value || []) {
+        try {
+          const oid = forge.asn1.derToOid(d.value[0].value);
+          if (oid === '1.3.6.1.5.5.7.48.2' && d.value[1]?.type === 6) out.push(String(d.value[1].value)); // caIssuers + URI
+        } catch { /* entrada não-URI */ }
+      }
+      return out;
+    } catch { return []; }
+  };
+  const parseCerts = (buf: Buffer): any[] => {
+    const der = forge.util.createBuffer(buf.toString('binary'));
+    try {
+      const p7 = forge.pkcs7.messageFromAsn1(forge.asn1.fromDer(der.copy()));
+      if (p7?.certificates?.length) return p7.certificates;
+    } catch { /* não é p7b */ }
+    try { return [forge.pki.certificateFromAsn1(forge.asn1.fromDer(der.copy()))]; } catch { /* nem DER puro */ }
+    try { return [forge.pki.certificateFromPem(buf.toString('utf8'))]; } catch { return []; }
+  };
+  const isSelfSigned = (c: any) => forge.pki.certificateToPem(c) && c.isIssuer(c);
+
+  let atual = chain[chain.length - 1];
+  for (let salto = 0; salto < 3 && !isSelfSigned(atual); salto++) {
+    const urls = urlsFrom(atual);
+    let proximo: any = null;
+    for (const url of urls) {
+      try {
+        const resp = await axios.get(url, { responseType: 'arraybuffer', timeout: 15000 });
+        const baixados = parseCerts(Buffer.from(resp.data));
+        proximo = baixados.find((c: any) => {
+          try { return c.isIssuer ? atual.isIssuer(c) : false; } catch { return false; }
+        }) || baixados[0] || null;
+        if (proximo) break;
+      } catch { /* tenta a próxima URL */ }
+    }
+    if (!proximo || inChain(proximo)) break;
+    chain.push(proximo);
+    atual = proximo;
+  }
+
+  const chainPem = chain.map((c) => forge.pki.certificateToPem(c)).join('\n');
+  console.log(`[dce] cadeia TLS montada com ${chain.length} certificado(s)`);
+  return { keyPem, chainPem };
+}
+
+async function getAgent(pfxBase64: string, pfxPassword: string): Promise<any> {
   const key = crypto.createHash('sha1').update(pfxBase64).digest('hex');
   const hit = agentCache.get(key);
   if (hit) return hit;
   const https = require('https');
-  // PFX INTEIRO no TLS (não só o cert final extraído): o autorizador do PR
-  // devolve "tlsv1 alert unknown ca" quando a CADEIA (intermediários) não vai
-  // no handshake — o Node manda a cadeia completa contida no PKCS#12.
-  // (A SEFAZ-SP aceita só o leaf; o SVD/PR não — visto na homologação 28/07.)
+  let opts: any;
+  try {
+    const { keyPem, chainPem } = await buildClientChain(pfxBase64, pfxPassword);
+    opts = { key: keyPem, cert: chainPem };
+  } catch (e: any) {
+    console.log(`[dce] cadeia AIA falhou (${e?.message}) — fallback pro PFX direto`);
+    opts = { pfx: Buffer.from(pfxBase64, 'base64'), passphrase: pfxPassword };
+  }
   const agent = new https.Agent({
-    pfx: Buffer.from(pfxBase64, 'base64'),
-    passphrase: pfxPassword,
+    ...opts,
     rejectUnauthorized: false,
     minVersion: 'TLSv1.2',
     keepAlive: true,
@@ -138,7 +224,7 @@ export async function transmitDceSvd(input: {
 
   const soap = `<?xml version="1.0" encoding="UTF-8"?><soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope"><soap:Body><${dadosTag} xmlns="${wsdlNs}">${payload}</${dadosTag}></soap:Body></soap:Envelope>`;
 
-  const agent = getAgent(input.pfxBase64, input.pfxPassword);
+  const agent = await getAgent(input.pfxBase64, input.pfxPassword);
   const timeout = Math.max(10000, parseInt(process.env.DCE_TIMEOUT_MS || '60000', 10) || 60000);
 
   let xmlResposta = '';
