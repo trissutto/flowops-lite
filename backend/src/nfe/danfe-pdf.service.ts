@@ -50,6 +50,13 @@ export class DanfePdfService {
     const d = String(c || '').replace(/\D/g, '');
     return d.length === 14 ? `${d.slice(0, 2)}.${d.slice(2, 5)}.${d.slice(5, 8)}/${d.slice(8, 12)}-${d.slice(12)}` : c;
   }
+  /** CNPJ (14) ou CPF (11) com máscara — destinatário pode ser qualquer um. */
+  private fmtDoc(c: string): string {
+    const d = String(c || '').replace(/\D/g, '');
+    if (d.length === 14) return this.fmtCnpj(d);
+    if (d.length === 11) return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`;
+    return c || '';
+  }
   private fmtCep(c: string): string {
     const d = String(c || '').replace(/\D/g, '');
     return d.length === 8 ? `${d.slice(0, 5)}-${d.slice(5)}` : c;
@@ -116,8 +123,12 @@ export class DanfePdfService {
         .text(label, x + 2, y + 1.5, { width: w - 4, lineBreak: false, ellipsis: true });
     }
     if (value != null && value !== '') {
+      // Colapsa \n e espaços múltiplos: valor com quebra embutida (endereço do
+      // site) estourava a célula e "comia" a linha de baixo — lineBreak:false
+      // do pdfkit NÃO ignora \n literais.
+      const texto = String(value).replace(/\s+/g, ' ').trim();
       doc.font(o.bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(o.fs || 7).fillColor('#000')
-        .text(String(value), x + 2, y + (o.vy ?? 8), { width: w - 4, align: o.align || 'left', lineBreak: false, ellipsis: true });
+        .text(texto, x + 2, y + (o.vy ?? 8), { width: w - 4, align: o.align || 'left', lineBreak: false, ellipsis: true });
     }
   }
   /** Título de seção (texto bold minúsculo acima de uma faixa de células). */
@@ -297,7 +308,7 @@ export class DanfePdfService {
         const rowH = 20;
         // linha A
         this.cell(doc, M, y, IW * 0.60, rowH, 'NOME / RAZÃO SOCIAL', this.tag(dest, 'xNome'), { bold: true, fs: 8 });
-        this.cell(doc, M + IW * 0.60, y, IW * 0.25, rowH, 'CNPJ / CPF', this.fmtCnpj(this.tag(dest, 'CNPJ')), { fs: 7 });
+        this.cell(doc, M + IW * 0.60, y, IW * 0.25, rowH, 'CNPJ / CPF', this.fmtDoc(this.tag(dest, 'CNPJ') || this.tag(dest, 'CPF')), { fs: 7 });
         this.cell(doc, M + IW * 0.85, y, IW * 0.15, rowH, 'DATA DA EMISSÃO', this.fmtDate(this.tag(ide, 'dhEmi')), { fs: 7 });
         y += rowH;
         // linha B
