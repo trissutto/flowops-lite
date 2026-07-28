@@ -82,11 +82,14 @@ function getAgent(pfxBase64: string, pfxPassword: string): any {
   const key = crypto.createHash('sha1').update(pfxBase64).digest('hex');
   const hit = agentCache.get(key);
   if (hit) return hit;
-  const { privateKeyPem, certPem } = extractA1FromPfx(pfxBase64, pfxPassword);
   const https = require('https');
+  // PFX INTEIRO no TLS (não só o cert final extraído): o autorizador do PR
+  // devolve "tlsv1 alert unknown ca" quando a CADEIA (intermediários) não vai
+  // no handshake — o Node manda a cadeia completa contida no PKCS#12.
+  // (A SEFAZ-SP aceita só o leaf; o SVD/PR não — visto na homologação 28/07.)
   const agent = new https.Agent({
-    cert: certPem,
-    key: privateKeyPem,
+    pfx: Buffer.from(pfxBase64, 'base64'),
+    passphrase: pfxPassword,
     rejectUnauthorized: false,
     minVersion: 'TLSv1.2',
     keepAlive: true,
