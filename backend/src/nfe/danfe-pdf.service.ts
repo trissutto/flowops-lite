@@ -260,8 +260,16 @@ export class DanfePdfService {
           const fsMod = require('fs');
           // eslint-disable-next-line @typescript-eslint/no-var-requires
           const pathMod = require('path');
-          const logoPath = process.env.DANFE_LOGO_PATH || pathMod.join(process.cwd(), 'assets', 'danfe-logo.png');
-          if (fsMod.existsSync(logoPath)) {
+          // No Railway o cwd NÃO é backend/ — mesmos candidatos do crediario-print
+          const candidatos = [
+            process.env.DANFE_LOGO_PATH,
+            pathMod.join(__dirname, '..', '..', 'assets', 'danfe-logo.png'),
+            pathMod.join(__dirname, '..', '..', '..', 'assets', 'danfe-logo.png'),
+            pathMod.join(process.cwd(), 'assets', 'danfe-logo.png'),
+            pathMod.join(process.cwd(), 'backend', 'assets', 'danfe-logo.png'),
+          ].filter(Boolean) as string[];
+          const logoPath = candidatos.find((p) => { try { return fsMod.existsSync(p); } catch { return false; } });
+          if (logoPath) {
             doc.image(logoPath, cx1 + 4, y + 16, { fit: [44, 44] });
             logoW = 48;
           }
