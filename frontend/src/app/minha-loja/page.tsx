@@ -726,7 +726,7 @@ export default function MinhaLojaPage() {
       const r = await api<any>(`/pick-orders/${row.id}/correios-envio`, { method: 'POST', body: JSON.stringify({}) });
       if (!r?.codigoRastreio) { pushToast('Correios não devolveu rastreio.'); return; }
       setRows((prev) => prev.map((x) => (x.id === row.id
-        ? { ...x, trackingCode: r.codigoRastreio, carrier: r.servico ? `Correios ${r.servico}` : 'Correios', correiosPrepostagemId: r.idPrepostagem ?? null }
+        ? { ...x, trackingCode: r.codigoRastreio, carrier: r.carrier || (r.servico ? `Correios ${r.servico}` : 'Correios'), correiosPrepostagemId: r.idPrepostagem ?? null }
         : x)));
       pushToast(`📮 Envio gerado (${r.servico ?? '—'}): ${r.codigoRastreio} — aguardando postagem`);
       if (r.dce?.status === 'error' || r.dce?.status === 'rejected') {

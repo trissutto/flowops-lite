@@ -275,11 +275,24 @@ export class MaisEnviosService {
     const t = String(tag || '').trim();
     if (!t) throw new BadRequestException('tag obrigatória');
     const headers = await this.auth.authHeader();
-    const resp = await axios.post(`${this.auth.baseUrl}/prepost/print`, { tag: [t], options: {}, customer: this.auth.customer || undefined }, { headers, timeout: 30000, validateStatus: () => true });
+    const printBody = { tag: [t], options: {}, customer: this.auth.customer || undefined };
+    console.log(`[maisenvios] print PAYLOAD: ${JSON.stringify(printBody)}`);
+    const resp = await axios.post(`${this.auth.baseUrl}/prepost/print`, printBody, { headers, timeout: 30000, validateStatus: () => true });
+    console.log(`[maisenvios] print RESPOSTA HTTP ${resp.status}: ${(typeof resp.data === 'string' ? resp.data : JSON.stringify(resp.data)).slice(0, 600)}`);
     if (resp.status < 200 || resp.status >= 300) {
       return { ok: false, erro: resp.data?.message || `HTTP ${resp.status}`, raw: resp.data };
     }
-    const pdf = resp.data?.pdf ?? resp.data?.dados ?? resp.data?.base64 ?? (typeof resp.data === 'string' ? resp.data : null);
+    // resposta pode vir objeto, ARRAY ou string; e o PDF pode vir base64 ou URL
+    const dRaw: any = resp.data;
+    const d: any = Array.isArray(dRaw) ? (dRaw[0] || {}) : dRaw;
+    let pdf = d?.pdf ?? d?.dados ?? d?.base64 ?? d?.file ?? d?.etiqueta ?? (typeof dRaw === 'string' && !/^https?:/.test(dRaw.trim()) ? dRaw : null);
+    const url = d?.url ?? d?.link ?? (typeof dRaw === 'string' && /^https?:/.test(dRaw.trim()) ? dRaw.trim() : null);
+    if (!pdf && url) {
+      try {
+        const bin = await axios.get(String(url), { responseType: 'arraybuffer', timeout: 30000 });
+        pdf = Buffer.from(bin.data).toString('base64');
+      } catch { /* segue sem */ }
+    }
     return pdf ? { ok: true, pdfBase64: String(pdf) } : { ok: false, erro: 'sem PDF na resposta', raw: resp.data };
   }
 

@@ -97,7 +97,12 @@ export class PickOrdersService {
     if (pick.storeId !== storeId) throw new ForbiddenException('Pick-order não pertence à sua loja');
     if (!pick.correiosPrepostagemId) throw new BadRequestException('Envio ainda não gerado (sem pré-postagem).');
 
-    const et: any = await this.correios.baixarEtiqueta(String(pick.correiosPrepostagemId));
+    // Etiqueta pelo provedor do envio: Mais Envios usa a TAG; Correios o id da
+    // pré-postagem (bug 28/07: pedido do ME não imprimia — só o CWS era tentado).
+    const ehME = String(pick.carrier || '').includes('Mais Envios');
+    const et: any = ehME
+      ? await this.maisEnvios.baixarEtiqueta(String(pick.trackingCode || ''))
+      : await this.correios.baixarEtiqueta(String(pick.correiosPrepostagemId));
     if (!et?.ok || !et.pdfBase64) {
       throw new BadRequestException(`Etiqueta não ficou pronta: ${et?.erro || 'tente de novo em alguns segundos'}`);
     }
@@ -266,7 +271,7 @@ export class PickOrdersService {
       }
     }
 
-    return { ok: true, codigoRastreio: r.codigoRastreio, idPrepostagem: r.idPrepostagem ?? null, servico: r.servico ?? null, etiquetaPdf: r.etiquetaPdf ?? null, dce, nfe };
+    return { ok: true, codigoRastreio: r.codigoRastreio, idPrepostagem: r.idPrepostagem ?? null, servico: r.servico ?? null, carrier: r.carrier ?? null, etiquetaPdf: r.etiquetaPdf ?? null, dce, nfe };
   }
 
   /**
