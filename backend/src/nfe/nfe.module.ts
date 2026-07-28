@@ -11,6 +11,6 @@ import { DanfePdfService } from './danfe-pdf.service';
   imports: [PrismaModule, WincredMirrorModule],
   controllers: [NfeController],
   providers: [NfeTransferService, NfeSequenceService, DanfePdfService],
-  exports: [NfeTransferService],
+  exports: [NfeTransferService, DanfePdfService],
 })
 export class NfeModule {}
