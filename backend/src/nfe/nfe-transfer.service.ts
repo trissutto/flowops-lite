@@ -1374,7 +1374,8 @@ export class NfeTransferService {
       `<vIPI>0.00</vIPI><vIPIDevol>0.00</vIPIDevol><vPIS>0.00</vPIS><vCOFINS>0.00</vCOFINS><vOutro>0.00</vOutro><vNF>${vTot}</vNF></ICMSTot></total>`;
 
     const transp = `<transp><modFrete>9</modFrete></transp>`;
-    const pag = `<pag><detPag><tPag>99</tPag><vPag>${vTot}</vPag></detPag></pag>`;
+    // cStat 441: tPag 99 (outros) exige a descrição <xPag> junto.
+    const pag = `<pag><detPag><tPag>99</tPag><xPag>OUTROS</xPag><vPag>${vTot}</vPag></detPag></pag>`;
     const cpl = crt3
       ? `Venda ref ${p.saleRef}.`
       : `Venda ref ${p.saleRef}. DOCUMENTO EMITIDO POR ME OU EPP OPTANTE PELO SIMPLES NACIONAL.`;

@@ -725,18 +725,8 @@ export default function MinhaLojaPage() {
         }
       } catch { /* sem NF-e pro envio */ }
     }
-    try {
-      const dc = await api<any>('/correios/declaracao', { method: 'POST', body: JSON.stringify({ idPrepostagem: idPre }) });
-      // A declaração vem em HTML (a mesma página que o QR code abre). Abre numa
-      // aba nova pra imprimir (Ctrl+P); se o popup for bloqueado, baixa o .html.
-      if (dc?.ok && dc.html) {
-        const blob = new Blob([dc.html], { type: 'text/html' });
-        const url = URL.createObjectURL(blob);
-        const w = window.open(url, '_blank');
-        if (!w) { const a = document.createElement('a'); a.href = url; a.download = `declaracao-${rastreio}.html`; document.body.appendChild(a); a.click(); a.remove(); }
-        pushToast('📄 Declaração aberta (imprima com Ctrl+P)');
-      } else pushToast(`Declaração: ${dc?.erro ?? 'não veio'}`);
-    } catch { pushToast('Declaração falhou.'); }
+    // (Declaração de papel dos Correios REMOVIDA do fluxo — as agências não
+    // aceitam mais; o documento do pacote agora é a NF-e/DANFE abaixo.)
   }
 
   // MODEL B: gera a pré-postagem (modalidade correta), mostra o rastreio e baixa
