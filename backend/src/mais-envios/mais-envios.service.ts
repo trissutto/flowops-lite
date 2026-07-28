@@ -110,6 +110,9 @@ export class MaisEnviosService {
     destinatario: { nome: string; cpf?: string; cep: string; endereco: string; numero: string; complemento?: string; bairro: string; cidade: string; uf: string; telefone?: string; email?: string };
     pesoGramas: number;
     valorDeclarado?: number;
+    /** Referência ÚNICA do envio (nº do pedido/pick) — vai no contact.invoice/
+     *  request. Vazio repetido é suspeito de colidir ("Etiqueta já cadastrada"). */
+    referencia?: string;
     /** NF-e do envio (emitida antes da etiqueta). Sem ela o nf.nfeKey vai vazio
      *  e o Mais Envios COLIDE ("Etiqueta já cadastrada" — visto 28/07: a chave
      *  vazia é única no sistema deles). */
@@ -148,7 +151,8 @@ export class MaisEnviosService {
       },
       contact: {
         phone: onlyDigits(d.telefone), mail: d.email || '', federalid: onlyDigits(d.cpf),
-        invoice: '', care: '', note: '', request: '', observation: '', save: false, whatsapp: false,
+        invoice: String(input.referencia || '').slice(0, 40), care: '', note: '',
+        request: String(input.referencia || '').slice(0, 40), observation: '', save: false, whatsapp: false,
       },
       object: {
         object: 'Vestuário', package: '2', type: '1',
