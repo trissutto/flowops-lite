@@ -110,6 +110,10 @@ export class MaisEnviosService {
     destinatario: { nome: string; cpf?: string; cep: string; endereco: string; numero: string; complemento?: string; bairro: string; cidade: string; uf: string; telefone?: string; email?: string };
     pesoGramas: number;
     valorDeclarado?: number;
+    /** NF-e do envio (emitida antes da etiqueta). Sem ela o nf.nfeKey vai vazio
+     *  e o Mais Envios COLIDE ("Etiqueta já cadastrada" — visto 28/07: a chave
+     *  vazia é única no sistema deles). */
+    nfe?: { chave: string; numero?: number; serie?: string | number; valor?: number };
     itens: Array<{ conteudo: string; quantidade?: number }>;
   }): Promise<any> {
     const codigo = this.servicos.find((s) => s.nome === input.servico)?.codigo;
@@ -158,7 +162,12 @@ export class MaisEnviosService {
         try { return JSON.parse(process.env.MAISENVIOS_COMPLEMENT_JSON || '{"type":"001"}'); }
         catch { return { type: '001' }; }
       })(),
-      nf: { nfeKey: '', nfeNumber: 0, nfeSerie: 0, nfeValue: String(input.valorDeclarado ?? 0) },
+      nf: {
+        nfeKey: String(input.nfe?.chave || '').replace(/\D/g, ''),
+        nfeNumber: Number(input.nfe?.numero || 0),
+        nfeSerie: Number(input.nfe?.serie || 0),
+        nfeValue: String(input.valorDeclarado ?? input.nfe?.valor ?? 0),
+      },
       dc: (input.itens || []).map((it) => ({ conteudo: String(it.conteudo || 'Vestuário').slice(0, 60), quantidade: String(it.quantidade ?? 1) })),
     };
 
