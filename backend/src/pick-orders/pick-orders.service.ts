@@ -9,6 +9,7 @@ import { MaisEnviosService } from '../mais-envios/mais-envios.service';
 import { CorreiosService } from '../correios/correios.service';
 import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service';
 import { DceEmitService } from '../dce/dce-emit.service';
+import { NfeTransferService } from '../nfe/nfe-transfer.service';
 
 // Lojas que despacham pelo MAIS ENVIOS (código Flow → sender id no Mais Envios).
 // As demais vão pelo Correios (CWS). Piracicaba/Sorocaba/Limeira/Moema.
@@ -71,6 +72,7 @@ export class PickOrdersService {
     private readonly maisEnvios: MaisEnviosService,
     private readonly correios: CorreiosService,
     private readonly dce: DceEmitService,
+    private readonly nfe: NfeTransferService,
   ) {}
 
   /**
@@ -88,6 +90,35 @@ export class PickOrdersService {
     if (!order) throw new NotFoundException('Pedido não encontrado');
 
     const store: any = await this.prisma.store.findUnique({ where: { id: pick.storeId } });
+
+    // ── NF-e do ENVIO (ANTES da etiqueta: a chave vai na pré-postagem) ────
+    // Gated por NFE_ENVIO_ENABLED=1. CFOP/DIFAL automáticos (regra do
+    // contador). Falha na NF-e NÃO trava a etiqueta — segue sem chave e o
+    // front avisa. NFE_ENVIO_AMBIENTE=2 força homologação (e aí a chave de
+    // teste NÃO vai pra pré-postagem).
+    let nfe: any = null;
+    let nfeChave: string | undefined;
+    if (String(process.env.NFE_ENVIO_ENABLED || '').trim() === '1' && !order.isPickup) {
+      try {
+        const dados = await this.montarDadosNfeEnvio(order, pick);
+        if (dados) {
+          const amb = process.env.NFE_ENVIO_AMBIENTE === '2' ? '2' : process.env.NFE_ENVIO_AMBIENTE === '1' ? '1' : undefined;
+          const r2: any = await this.nfe.emitVendaForEnvio({
+            pickOrderId: id,
+            storeCode: String(store?.code || ''),
+            dest: dados.dest,
+            items: dados.items,
+            ambienteOverride: amb as any,
+          });
+          nfe = { docId: r2?.doc?.id, status: r2?.ok ? 'authorized' : 'rejected', cStat: r2?.cStat, xMotivo: r2?.xMotivo, chave: r2?.doc?.chave, jaEmitida: !!r2?.jaEmitida };
+          if (r2?.ok && r2?.doc?.chave && r2?.doc?.tpAmb === '1') nfeChave = String(r2.doc.chave);
+        }
+      } catch (e: any) {
+        this.logger.warn(`[nfe-envio] falha pro pick ${id}: ${e?.message || e}`);
+        nfe = { status: 'error', erro: String(e?.message || e).slice(0, 300) };
+      }
+    }
+
     let r: any;
     if (order.source === 'live') {
       // LIVE: roteia pelo provedor da loja (Mais Envios atrás de flag) ou Correios.
@@ -100,11 +131,11 @@ export class PickOrdersService {
         if (!senderId) throw new BadRequestException('Loja Mais Envios sem "sender id" — configure na tela de Lojas.');
         r = await this.gerarEnvioMaisEnvios(order.liveCartId, senderId);
       } else {
-        r = await this.livePdv.gerarEnvioCorreios(order.liveCartId);
+        r = await this.livePdv.gerarEnvioCorreios(order.liveCartId, nfeChave);
       }
     } else {
       // SITE: Correios a partir do próprio Order (endereço + itens do pedido).
-      r = await this.gerarEnvioCorreiosSite(order, pick);
+      r = await this.gerarEnvioCorreiosSite(order, pick, nfeChave);
     }
     if (!r?.codigoRastreio) throw new BadRequestException('Não foi possível gerar o rastreio.');
 
@@ -147,7 +178,92 @@ export class PickOrdersService {
       }
     }
 
-    return { ok: true, codigoRastreio: r.codigoRastreio, idPrepostagem: r.idPrepostagem ?? null, servico: r.servico ?? null, etiquetaPdf: r.etiquetaPdf ?? null, dce };
+    return { ok: true, codigoRastreio: r.codigoRastreio, idPrepostagem: r.idPrepostagem ?? null, servico: r.servico ?? null, etiquetaPdf: r.etiquetaPdf ?? null, dce, nfe };
+  }
+
+  /**
+   * Destinatário + itens da NF-e do envio. CEP-authoritative (ViaCEP) pra
+   * UF/cidade e principalmente o código IBGE (cMun, obrigatório na NF-e).
+   */
+  private async montarDadosNfeEnvio(order: any, pick: any): Promise<{ dest: any; items: any[] } | null> {
+    let nome = '';
+    let cpfCnpj = '';
+    let endereco = '';
+    let numero = '';
+    let bairro = '';
+    let cidade = '';
+    let uf = '';
+    let cep = '';
+    let items: any[] = [];
+
+    if (order.source === 'live' && order.liveCartId) {
+      const cart: any = await (this.prisma as any).livePdvCart.findUnique({ where: { id: order.liveCartId }, include: { items: true } });
+      if (!cart) return null;
+      const itens = (cart.items || []).filter((i: any) => i.status !== 'cancelled');
+      if (!itens.length) return null;
+      nome = cart.customerName || 'Cliente';
+      cpfCnpj = String(cart.customerCpf || '').replace(/\D/g, '');
+      endereco = cart.customerEndereco || '';
+      numero = cart.customerNumero || 'S/N';
+      bairro = cart.customerBairro || '';
+      cidade = cart.customerCidade || '';
+      uf = String(cart.customerUf || '').trim().toUpperCase();
+      cep = String(cart.customerCep || '').replace(/\D/g, '');
+      items = itens.map((i: any) => ({
+        sku: i.sku || i.refCode || 'ITEM',
+        ean: String(i.sku || '').replace(/\D/g, '').length === 13 ? String(i.sku) : undefined,
+        descricao: [i.refCode, i.descricao, i.cor, i.tamanho].filter(Boolean).join(' ') || 'Vestuário',
+        qty: Number(i.qty) || 1,
+        vUn: (Number(i.priceCents) || 0) / 100,
+      }));
+    } else {
+      let addr: any = {};
+      try { addr = JSON.parse(order.shippingAddress || '{}'); } catch { /* cru */ }
+      cep = String(order.shippingCep || addr.postcode || addr.cep || '').replace(/\D/g, '');
+      const address1 = String(addr.address_1 || addr.street || addr.logradouro || '').trim();
+      endereco = address1;
+      numero = String(addr.number || addr.numero || '').trim();
+      if (!numero && address1) {
+        const m = address1.match(/^(.*?),?\s*(\d+[A-Za-z]?)\s*$/);
+        if (m) { endereco = m[1].trim(); numero = m[2]; }
+      }
+      uf = String(addr.state || addr.uf || '').trim().toUpperCase();
+      cidade = String(addr.city || addr.cidade || '').trim();
+      bairro = String(addr.neighborhood || addr.bairro || '').trim();
+      nome = order.customerName || 'Cliente';
+      cpfCnpj = String(order.customerCpf || '').replace(/\D/g, '');
+      const itensLoja = (order.items || []).filter((i: any) => !i.assignedStoreId || i.assignedStoreId === pick.storeId);
+      const lista = itensLoja.length ? itensLoja : (order.items || []);
+      if (!lista.length) return null;
+      const totalPecas = lista.reduce((s: number, i: any) => s + (Number(i.quantity) || 1), 0) || 1;
+      const fallbackUnit = order.totalAmount ? Number(order.totalAmount) / totalPecas : 0;
+      items = lista.map((i: any) => ({
+        sku: i.sku || 'ITEM',
+        ean: String(i.sku || '').replace(/\D/g, '').length === 13 ? String(i.sku) : undefined,
+        descricao: String(i.productName || 'Vestuário'),
+        qty: Number(i.quantity) || 1,
+        vUn: Number(i.unitPrice ?? i.baseUnitPrice ?? fallbackUnit) || 0,
+      }));
+    }
+
+    if (cep.length !== 8) return null;
+    // ViaCEP manda: UF/cidade/bairro + o código IBGE (cMun da NF-e)
+    let codMun = '';
+    try {
+      const via: any = await this.correios.buscarCep(cep);
+      if (via && !via.erro) {
+        if (via.uf) uf = String(via.uf).trim().toUpperCase();
+        if (via.cidade) cidade = via.cidade;
+        if (!bairro && via.bairro) bairro = via.bairro;
+        if (!endereco && via.logradouro) endereco = via.logradouro;
+        codMun = String(via.ibge || '').replace(/\D/g, '');
+      }
+    } catch { /* ViaCEP fora → sem cMun, a emissão acusa */ }
+
+    return {
+      dest: { cpfCnpj, nome, endereco, numero: numero || 'S/N', bairro, cidade, uf, cep, codMun },
+      items,
+    };
   }
 
   /**
@@ -233,7 +349,7 @@ export class PickOrdersService {
   }
 
   /** Gera a pré-postagem dos Correios pro pedido do SITE (a partir do Order). */
-  private async gerarEnvioCorreiosSite(order: any, pick: any) {
+  private async gerarEnvioCorreiosSite(order: any, pick: any, nfeChave?: string) {
     if (order.isPickup) throw new BadRequestException('Retirada em loja não gera envio.');
     let addr: any = {};
     try { addr = JSON.parse(order.shippingAddress || '{}'); } catch { /* endereço cru */ }
@@ -289,6 +405,8 @@ export class PickOrdersService {
       },
       pesoGramas,
       valorDeclarado: order.totalAmount ? Number(order.totalAmount) : undefined,
+      // NF-e do envio: chave na pré-postagem (obrigatória desde 04/2026)
+      ...(nfeChave ? { nfeChave } : {}),
       itensDeclaracao: lista.map((i: any) => ({ conteudo: String(i.productName || 'Vestuário').slice(0, 60), quantidade: String(i.quantity || 1) })),
     });
     if (!resp?.ok) throw new BadRequestException(`Correios recusou o envio: ${resp?.erro || 'erro'}`);

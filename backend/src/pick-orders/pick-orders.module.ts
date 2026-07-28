@@ -10,6 +10,7 @@ import { WincredMirrorModule } from '../wincred-mirror/wincred-mirror.module';
 import { CorreiosModule } from '../correios/correios.module';
 import { MaisEnviosModule } from '../mais-envios/mais-envios.module';
 import { DceModule } from '../dce/dce.module';
+import { NfeModule } from '../nfe/nfe.module';
 import { CorreiosPostagemReconcileCron } from './correios-postagem-reconcile.cron';
 
 @Module({
@@ -17,7 +18,8 @@ import { CorreiosPostagemReconcileCron } from './correios-postagem-reconcile.cro
   // WincredMirrorModule → WincredCatalogService (preço do espelho pra diferença na troca de peça)
   // CorreiosModule → CorreiosService (rastreio pro cron marcar enviado na postagem)
   // DceModule → DceEmitService (declaração de conteúdo eletrônica no "Gerar envio")
-  imports: [PrismaModule, WebsocketModule, forwardRef(() => WooCommerceModule), ErpModule, LivePdvModule, WincredMirrorModule, CorreiosModule, MaisEnviosModule, DceModule],
+  // NfeModule → NfeTransferService (NF-e da venda no "Gerar envio" + chave na pré-postagem)
+  imports: [PrismaModule, WebsocketModule, forwardRef(() => WooCommerceModule), ErpModule, LivePdvModule, WincredMirrorModule, CorreiosModule, MaisEnviosModule, DceModule, NfeModule],
   controllers: [PickOrdersController],
   providers: [PickOrdersService, CorreiosPostagemReconcileCron],
   exports: [PickOrdersService],

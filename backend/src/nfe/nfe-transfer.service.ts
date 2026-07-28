@@ -564,7 +564,35 @@ export class NfeTransferService {
     // origem e destino serem a MESMA empresa (transferência de verdade).
     if (opts.matchRaiz && opts.matchRaiz.length === 8 && this.digits(cnpjSrc).slice(0, 8) !== opts.matchRaiz) {
       const extras = this.parseIdentidadesExtras(cfg.nfeIdentidadesExtras);
-      const alt = extras.find((e) => this.digits(String(e.cnpj || '')).slice(0, 8) === opts.matchRaiz);
+      let alt: any = extras.find((e) => this.digits(String(e.cnpj || '')).slice(0, 8) === opts.matchRaiz) || null;
+
+      // REGRA DO DONO (28/07): se a PRÓPRIA loja origem não tem identidade da
+      // raiz do destino (ex.: Sorocaba raiz 20 → Limeira raiz 30), procura no
+      // GRUPO INTEIRO e emite pela empresa dessa raiz (ex.: LURDS Itanhaém).
+      // Preferência: config primária da matriz (/0001) da raiz → primária de
+      // qualquer irmã → identidade extra cadastrada em qualquer loja.
+      // SÓ A NOTA muda de emitente — etiqueta/transferência física seguem iguais.
+      if (!alt) {
+        const todas = await this.prisma.nfceConfig.findMany({
+          select: { storeCode: true, cnpj: true, ie: true, razaoSocial: true, fantasia: true, regime: true, endereco: true, nfeIdentidadesExtras: true },
+        });
+        const daRaiz = todas.filter((c) => this.digits(String(c.cnpj || '')).slice(0, 8) === opts.matchRaiz);
+        const prim = daRaiz.find((c) => this.digits(String(c.cnpj)).slice(8, 12) === '0001') || daRaiz[0];
+        if (prim) {
+          alt = { cnpj: prim.cnpj, ie: prim.ie, razaoSocial: prim.razaoSocial, fantasia: prim.fantasia, regime: prim.regime, endereco: prim.endereco };
+          this.logger.log(`[nfe] transferência ${storeCode} → raiz ${opts.matchRaiz}: nota emitida pela identidade da loja ${prim.storeCode} (mesma raiz do destino)`);
+        } else {
+          for (const c of todas) {
+            const ex = this.parseIdentidadesExtras(c.nfeIdentidadesExtras).find((e2: any) => this.digits(String(e2.cnpj || '')).slice(0, 8) === opts.matchRaiz);
+            if (ex) {
+              alt = ex;
+              this.logger.log(`[nfe] transferência ${storeCode} → raiz ${opts.matchRaiz}: nota emitida pela identidade extra cadastrada na loja ${c.storeCode}`);
+              break;
+            }
+          }
+        }
+      }
+
       if (alt) {
         cnpjSrc = this.digits(String(alt.cnpj || ''));
         ieSrc = this.digits(String(alt.ie || ''));
@@ -1126,6 +1154,116 @@ export class NfeTransferService {
       },
     });
     return { ok: autorizada, doc: this.publicDoc(updated), cStat: res.cStat, xMotivo: res.xMotivo };
+  }
+
+  /**
+   * NF-e de VENDA pro ENVIO (pick-order do "Gerar envio" — live/site).
+   * Mesmo motor da "nota grande" do PDV, mas alimentado pelos dados do envio:
+   * remetente = loja (identidade da NFC-e), destinatário = cliente, CFOP pela
+   * regra central do contador (5102/6102/6108 + DIFAL automático).
+   * Idempotente por pick (linkId `envio:<pickId>`). `ambienteOverride='2'`
+   * força homologação na fase de validação.
+   */
+  async emitVendaForEnvio(input: {
+    pickOrderId: string;
+    storeCode: string;
+    dest: { cpfCnpj: string; nome: string; endereco: string; numero: string; bairro: string; cidade: string; uf: string; cep: string; codMun: string };
+    items: Array<{ sku?: string; ean?: string; descricao: string; ncm?: string; qty: number; vUn: number }>;
+    ambienteOverride?: '1' | '2';
+  }) {
+    const linkId = `envio:${input.pickOrderId}`;
+    const ja = await this.prisma.nfeDoc.findFirst({ where: { shipmentId: linkId, status: 'authorized' } });
+    if (ja) return { ok: true, jaEmitida: true, doc: this.publicDoc(ja) };
+
+    const d = input.dest;
+    const cpfCnpj = this.digits(d.cpfCnpj || '');
+    const faltam: string[] = [];
+    if (cpfCnpj.length !== 11 && cpfCnpj.length !== 14) faltam.push('CPF/CNPJ');
+    if (!String(d.nome || '').trim()) faltam.push('nome');
+    if (!String(d.endereco || '').trim()) faltam.push('logradouro');
+    if (this.digits(d.cep).length !== 8) faltam.push('CEP');
+    if (this.digits(d.codMun).length !== 7) faltam.push('código IBGE do município');
+    if (d.uf?.length !== 2) faltam.push('UF');
+    if (faltam.length) throw new BadRequestException(`Dados da cliente incompletos pra NF-e do envio: ${faltam.join(', ')}.`);
+
+    const origem = await this.loadStoreFiscal(input.storeCode, { requireCert: true, identidade: 'base' });
+    const tpAmb = input.ambienteOverride || origem.ambiente;
+    const serie = '1';
+    const interestadual = origem.ender.uf !== d.uf;
+    // Cliente de envio não tem IE cadastrada → árvore do contador decide (6108 interestadual)
+    const { cfop, natOp } = cfopVenda(origem.ender.uf, d.uf, false);
+
+    const items = input.items.map((it) => ({
+      sku: String(it.sku || 'ITEM').trim().slice(0, 60),
+      ean: this.gtinValido(String(it.ean || '').trim()),
+      xProd: String(it.descricao || it.sku || 'Vestuário').trim().slice(0, 120),
+      ncm: this.normNcm(it.ncm, String(it.sku || ''), []),
+      cfop,
+      qty: it.qty || 1,
+      vUn: Math.round((it.vUn || 0) * 100) / 100,
+      vProd: Math.round((it.qty || 1) * (it.vUn || 0) * 100) / 100,
+    }));
+    const valorTotal = items.reduce((s, i) => s + i.vProd, 0);
+    if (valorTotal <= 0) throw new BadRequestException('NF-e do envio sem valor (itens zerados).');
+
+    await this.garantirContinuacao(origem.storeCode, origem.cnpj, serie);
+    let numero = await this.seq.next(origem.storeCode, serie, { start: this.startPadraoPara(origem.cnpj, serie) });
+    const cUF = CUF_BY_UF[origem.ender.uf] || origem.ender.codMunicipio.slice(0, 2);
+    const dest = { cpfCnpj, nome: d.nome, endereco: d.endereco, numero: d.numero || 'S/N', bairro: d.bairro || 'CENTRO', cidade: d.cidade, uf: d.uf, cep: this.digits(d.cep), codMun: this.digits(d.codMun) };
+
+    const doc = await this.prisma.nfeDoc.create({
+      data: {
+        shipmentId: linkId, fromStoreCode: input.storeCode, toStoreCode: input.storeCode,
+        modelo: '55', serie, numero, cNF: '', chave: '', tpAmb, natOp, cfop,
+        valorTotalCents: Math.round(valorTotal * 100), status: 'pending',
+      },
+    });
+
+    const MAX = Number(process.env.NFE_539_MAX_RETRY ?? 30);
+    let res: any = null;
+    let chave = '';
+    let cNF = '';
+    for (let t = 0; ; t++) {
+      const dhEmi = this.dhEmiNow();
+      cNF = crypto.randomInt(10_000_000, 99_999_999).toString();
+      chave = this.buildChave({ cUF, cnpj: origem.cnpj, serie, numero, cNF, dataEmissao: new Date() });
+      const xml = this.buildVendaXml({ chave, cUF, cNF, serie, numero, dhEmi, tpAmb, natOp, cfop, origem, dest, interestadual, items, valorTotal, saleRef: `envio ${String(input.pickOrderId).slice(0, 8)}` });
+      const xmlMin = xml.replace(/>\s+</g, '><').trim();
+      let xmlAssinado: string;
+      try {
+        xmlAssinado = signXmlNfeWithA1({ xml: xmlMin, pfxBase64: origem.certPfxB64, pfxPassword: origem.certPfxPass });
+      } catch (e: any) {
+        await this.prisma.nfeDoc.update({ where: { id: doc.id }, data: { status: 'error', numero, cNF, chave, erro: `Assinatura: ${e?.message || e}` } });
+        throw new BadRequestException(`Falha ao assinar NF-e do envio: ${e?.message || e}`);
+      }
+      await this.prisma.nfeDoc.update({ where: { id: doc.id }, data: { numero, cNF, chave, status: 'signed', xmlEnviado: xmlAssinado } });
+      res = await transmitNfeSefazSp({ xmlAssinado, ambiente: tpAmb, pfxBase64: origem.certPfxB64, pfxPassword: origem.certPfxPass, endpointOverride: SEFAZ_SP_NFE_ENDPOINTS[tpAmb].autorizacao });
+      const okk = res.success && (res.cStat === '100' || res.cStat === '150');
+      if (okk) break;
+      if ((res.cStat === '539' || res.cStat === '204') && t < MAX) { numero = await this.seq.next(origem.storeCode, serie); continue; }
+      if (res.cStat === '778' && t < MAX && this.corrigirNcmInvalido(items, res.xMotivo)) continue;
+      break;
+    }
+    const autorizada = res.success && (res.cStat === '100' || res.cStat === '150');
+    const updated = await this.prisma.nfeDoc.update({
+      where: { id: doc.id },
+      data: {
+        status: autorizada ? 'authorized' : 'rejected', cStat: res.cStat, xMotivo: res.xMotivo,
+        protocolo: res.protocolo ?? null, dhRecbto: res.dhRecbto ?? null,
+        xmlAutorizado: res.xmlAutorizado ?? null, xmlResposta: res.xmlResposta ?? null,
+        erro: autorizada ? null : res.xMotivo || res.error || 'Rejeitada',
+      },
+    });
+    return { ok: autorizada, doc: this.publicDoc(updated), cStat: res.cStat, xMotivo: res.xMotivo };
+  }
+
+  /** Última NF-e de envio de um pick-order (Reimprimir DANFE na loja). */
+  async findEnvioDoc(pickOrderId: string) {
+    return this.prisma.nfeDoc.findFirst({
+      where: { shipmentId: `envio:${pickOrderId}` },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, status: true, cStat: true, xMotivo: true, chave: true, tpAmb: true, numero: true },
+    });
   }
 
   private buildVendaXml(p: {

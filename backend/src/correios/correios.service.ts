@@ -48,6 +48,8 @@ export class CorreiosService {
           bairro: r.data.bairro || '',
           cidade: r.data.localidade || '',
           uf: r.data.uf || '',
+          // código IBGE do município — a NF-e do envio precisa (cMun do dest)
+          ibge: String(r.data.ibge || '').replace(/\D/g, ''),
         };
       }
       return { erro: 'CEP não encontrado' };
@@ -253,7 +255,13 @@ export class CorreiosService {
           }))
         : [{ conteudo: 'Vestuário', quantidade: '1', valor: (input.valorDeclarado ?? 50).toFixed(2) }],
       observacao: '',
-      ...(input.nfeChave ? { numeroNotaFiscal: input.nfeChave.replace(/\D/g, '') } : {}),
+      // NF-e do envio: chave de 44 dígitos vai em chaveNFe (obrigatória na
+      // pré-postagem desde 04/2026); valor curto (só o nº) cai no campo antigo.
+      ...(input.nfeChave
+        ? (input.nfeChave.replace(/\D/g, '').length === 44
+          ? { chaveNFe: input.nfeChave.replace(/\D/g, '') }
+          : { numeroNotaFiscal: input.nfeChave.replace(/\D/g, '') })
+        : {}),
       ...(input.valorDeclarado ? { servicosAdicionais: [{ codigoServicoAdicional: '019', valorDeclarado: input.valorDeclarado.toFixed(2) }] } : {}),
     };
 
