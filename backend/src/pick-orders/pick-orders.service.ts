@@ -13,8 +13,18 @@ import { NfeTransferService } from '../nfe/nfe-transfer.service';
 import { DanfePdfService } from '../nfe/danfe-pdf.service';
 
 // Lojas que despacham pelo MAIS ENVIOS (código Flow → sender id no Mais Envios).
-// As demais vão pelo Correios (CWS). Piracicaba/Sorocaba/Limeira/Moema.
+// As demais vão pelo Correios (CWS). Rede: Piracicaba/Sorocaba/Limeira/Moema;
+// franquias (Vinhedo/Jundiaí/Suzano/Anália Franco) entram via env sem deploy:
+// MAISENVIOS_STORES_JSON = {"10": 1234, "17": 5678, ...} (código → sender id).
 const MAISENVIOS_STORES: Record<string, number> = { '05': 3605, '06': 209, '11': 213, '15': 22908 };
+function maisEnviosStores(): Record<string, number> {
+  const base: Record<string, number> = { ...MAISENVIOS_STORES };
+  try {
+    const j = JSON.parse(process.env.MAISENVIOS_STORES_JSON || '{}');
+    for (const k of Object.keys(j)) { const v = Number(j[k]); if (v > 0) base[String(k)] = v; }
+  } catch { /* JSON inválido → só o mapa fixo */ }
+  return base;
+}
 import { authorizeMinLevel } from '../auth/auth-levels.util';
 
 // Status LOGÍSTICO do pick-order (controlado pela loja):
@@ -145,12 +155,28 @@ export class PickOrdersService {
         const dados = await this.montarDadosNfeEnvio(order, pick);
         if (dados) {
           const amb = process.env.NFE_ENVIO_AMBIENTE === '2' ? '2' : process.env.NFE_ENVIO_AMBIENTE === '1' ? '1' : undefined;
+          // Venda do SITE = empresa do site (LURDS matriz, raiz 30), não a loja
+          // separadora (regra do dono 28/07: "não temos código, seria site").
+          // Envs: NFE_SITE_EMITENTE_RAIZ (8 díg) + NFE_SITE_EMITENTE_STORE
+          // (loja cuja config guarda a identidade/numeração; default a própria).
+          const isSite = order.source !== 'live';
+          const siteRaiz = String(process.env.NFE_SITE_EMITENTE_RAIZ || '').replace(/\D/g, '');
+          const siteStore = String(process.env.NFE_SITE_EMITENTE_STORE || '').trim();
+          // FRANQUIAS emitem pela MDD CERQUEIRA (dono 28/07): mapa loja→raiz
+          // por env, ex. NFE_EMITENTE_RAIZ_POR_LOJA = {"10":"<raizMDD>",...}.
+          // Vale pra venda da LIVE da franquia; site continua LURDS.
+          let lojaRaiz = '';
+          try {
+            const mapa = JSON.parse(process.env.NFE_EMITENTE_RAIZ_POR_LOJA || '{}');
+            lojaRaiz = String(mapa[String(store?.code || '')] || '').replace(/\D/g, '');
+          } catch { /* JSON inválido → sem override */ }
           const r2: any = await this.nfe.emitVendaForEnvio({
             pickOrderId: id,
-            storeCode: String(store?.code || ''),
+            storeCode: isSite && siteRaiz.length === 8 && siteStore ? siteStore : String(store?.code || ''),
             dest: dados.dest,
             items: dados.items,
             ambienteOverride: amb as any,
+            emitirPorRaiz: isSite && siteRaiz.length === 8 ? siteRaiz : (lojaRaiz.length === 8 ? lojaRaiz : undefined),
           });
           nfe = { docId: r2?.doc?.id, status: r2?.ok ? 'authorized' : 'rejected', cStat: r2?.cStat, xMotivo: r2?.xMotivo, chave: r2?.doc?.chave, jaEmitida: !!r2?.jaEmitida };
           if (r2?.ok && r2?.doc?.chave && r2?.doc?.tpAmb === '1') nfeChave = String(r2.doc.chave);
@@ -167,20 +193,27 @@ export class PickOrdersService {
     // Itanhaém na etiqueta.
     const remetenteLoja = await this.remetenteDaLoja(String(store?.code || ''));
 
+    // Provedor da loja (vale pra LIVE **e** SITE — regra do dono 28/07):
+    // lojas do Mais Envios despacham TUDO por lá quando MAISENVIOS_ROUTING=1.
+    const mapped = maisEnviosStores()[String(store?.code || '')];
+    const routingOn = String(process.env.MAISENVIOS_ROUTING || '').trim() === '1';
+    const provider = routingOn ? (store?.shippingProvider || (mapped ? 'maisenvios' : 'correios')) : 'correios';
+    const senderId = store?.maisEnviosSenderId || mapped || null;
+    if (provider === 'maisenvios' && !senderId) {
+      throw new BadRequestException('Loja Mais Envios sem "sender id" — configure na tela de Lojas.');
+    }
+
     let r: any;
     if (order.source === 'live') {
-      // LIVE: roteia pelo provedor da loja (Mais Envios atrás de flag) ou Correios.
       if (!order.liveCartId) throw new BadRequestException('Pedido da live sem carrinho vinculado.');
-      const mapped = MAISENVIOS_STORES[String(store?.code || '')];
-      const routingOn = String(process.env.MAISENVIOS_ROUTING || '').trim() === '1';
-      const provider = routingOn ? (store?.shippingProvider || (mapped ? 'maisenvios' : 'correios')) : 'correios';
-      const senderId = store?.maisEnviosSenderId || mapped || null;
       if (provider === 'maisenvios') {
-        if (!senderId) throw new BadRequestException('Loja Mais Envios sem "sender id" — configure na tela de Lojas.');
         r = await this.gerarEnvioMaisEnvios(order.liveCartId, senderId);
       } else {
         r = await this.livePdv.gerarEnvioCorreios(order.liveCartId, nfeChave, remetenteLoja || undefined);
       }
+    } else if (provider === 'maisenvios') {
+      // SITE numa loja Mais Envios: pré-postagem lá, a partir do Order.
+      r = await this.gerarEnvioMaisEnviosSite(order, pick, senderId);
     } else {
       // SITE: Correios a partir do próprio Order (endereço + itens do pedido).
       r = await this.gerarEnvioCorreiosSite(order, pick, nfeChave, remetenteLoja || undefined);
@@ -417,6 +450,67 @@ export class PickOrdersService {
       pesoGramas,
       valorDeclarado: cart.totalCents ? cart.totalCents / 100 : undefined,
       itens: itens.map((i: any) => ({ conteudo: [i.refCode, i.descricao, i.cor, i.tamanho].filter(Boolean).join(' ').slice(0, 60) || 'Vestuário', quantidade: Number(i.qty) || 1 })),
+    });
+    if (!resp?.ok || !resp.tag) throw new BadRequestException(`Mais Envios recusou o envio: ${resp?.erro || 'sem tag'}`);
+    let etiquetaPdf: string | null = null;
+    try { const et = await this.maisEnvios.baixarEtiqueta(resp.tag); if (et?.ok && et.pdfBase64) etiquetaPdf = et.pdfBase64; } catch { /* etiqueta opcional */ }
+    return { codigoRastreio: resp.tag, idPrepostagem: resp.idPrepostagem ?? null, servico: 'SEDEX', carrier: 'Mais Envios SEDEX', etiquetaPdf };
+  }
+
+  /** Pré-postagem no MAIS ENVIOS pro pedido do SITE (a partir do Order). */
+  private async gerarEnvioMaisEnviosSite(order: any, pick: any, senderId: number) {
+    if (order.isPickup) throw new BadRequestException('Retirada em loja não gera envio.');
+    let addr: any = {};
+    try { addr = JSON.parse(order.shippingAddress || '{}'); } catch { /* endereço cru */ }
+    const cep = String(order.shippingCep || addr.postcode || addr.cep || '').replace(/\D/g, '');
+    if (cep.length !== 8) throw new BadRequestException('Pedido sem CEP válido pra postar.');
+
+    // Mesmo parse do caminho Correios: número dentro de address_1 + CEP-authoritative
+    const address1 = String(addr.address_1 || addr.street || addr.logradouro || '').trim();
+    let endereco = address1;
+    let numero = String(addr.number || addr.numero || '').trim();
+    if (!numero && address1) {
+      const m = address1.match(/^(.*?),?\s*(\d+[A-Za-z]?)\s*$/);
+      if (m) { endereco = m[1].trim(); numero = m[2]; }
+    }
+    let uf = String(addr.state || addr.uf || '').trim().toUpperCase();
+    let cidade = String(addr.city || addr.cidade || '').trim();
+    let bairro = String(addr.neighborhood || addr.bairro || '').trim();
+    const complemento = String(addr.address_2 || addr.complemento || '').trim();
+    try {
+      const via: any = await this.correios.buscarCep(cep);
+      if (via && !via.erro) {
+        if (via.uf) uf = String(via.uf).trim().toUpperCase();
+        if (via.cidade) cidade = via.cidade;
+        if (!bairro && via.bairro) bairro = via.bairro;
+        if (!endereco && via.logradouro) endereco = via.logradouro;
+      }
+    } catch { /* ViaCEP fora → usa o do pedido */ }
+
+    const itensLoja = (order.items || []).filter((i: any) => !i.assignedStoreId || i.assignedStoreId === pick.storeId);
+    const lista = itensLoja.length ? itensLoja : (order.items || []);
+    const totalPecas = lista.reduce((s: number, i: any) => s + (Number(i.quantity) || 1), 0) || 1;
+    const pesoGramas = Math.max(300, totalPecas * 200);
+
+    const resp: any = await this.maisEnvios.criarPrepost({
+      senderId,
+      servico: 'SEDEX',
+      destinatario: {
+        nome: order.customerName || 'Cliente',
+        cpf: String(order.customerCpf || '').replace(/\D/g, ''),
+        cep,
+        endereco: endereco || '',
+        numero: numero || 'S/N',
+        complemento,
+        bairro: bairro || '',
+        cidade: cidade || '',
+        uf: uf || '',
+        telefone: String(order.customerPhone || '').replace(/\D/g, ''),
+        email: String(order.customerEmail || ''),
+      },
+      pesoGramas,
+      valorDeclarado: order.totalAmount ? Number(order.totalAmount) : undefined,
+      itens: lista.map((i: any) => ({ conteudo: String(i.productName || 'Vestuário').slice(0, 60), quantidade: Number(i.quantity) || 1 })),
     });
     if (!resp?.ok || !resp.tag) throw new BadRequestException(`Mais Envios recusou o envio: ${resp?.erro || 'sem tag'}`);
     let etiquetaPdf: string | null = null;
