@@ -241,7 +241,10 @@ export class MaisEnviosService {
     // A pré-postagem CRIA com sucesso (2xx) — validado 28/07 — mas o nome do
     // campo da tag no retorno ainda não é conhecido: prova o máximo de nomes
     // e, se nada bater, devolve o CORPO CRU no erro pra tela mostrar o formato.
-    const d2: any = resp.data || {};
+    // A resposta vem como ARRAY [{ id, tag, status, ... }] (visto 28/07 no 1º
+    // sucesso real: tag AD731902123BR) — desembrulha antes de procurar a tag.
+    const dResp: any = resp.data || {};
+    const d2: any = Array.isArray(dResp) ? (dResp[0] || {}) : dResp;
     const tag = d2.tag ?? d2.codigo ?? d2.objeto ?? d2.tracking ?? d2.etiqueta ?? d2.code ??
       d2.prepost?.tag ?? d2.data?.tag ?? d2.data?.tracking ?? d2.data?.codigo ?? null;
     if (!tag) {
