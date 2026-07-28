@@ -174,6 +174,29 @@ export class PickOrdersService {
     if (!pick) throw new NotFoundException('Pick-order não encontrado');
     if (pick.storeId !== storeId) throw new ForbiddenException('Pick-order não pertence à sua loja');
     if (pick.status === 'shipped') throw new BadRequestException('Pedido já enviado.');
+    // ── IDEMPOTÊNCIA (28/07: 17 pré-postagens do MESMO pedido no Mais Envios,
+    // uma por clique enquanto o request anterior pendurava) ──────────────────
+    // Já tem rastreio? devolve o existente — NUNCA cria outra pré-postagem.
+    // Regenerar de verdade = Reabrir (limpa os campos) e gerar de novo.
+    if (pick.trackingCode) {
+      return { ok: true, jaGerado: true, codigoRastreio: pick.trackingCode, idPrepostagem: pick.correiosPrepostagemId ?? null, servico: null, carrier: pick.carrier ?? null, etiquetaPdf: (pick as any).etiquetaPdf ?? null, dce: null, nfe: null };
+    }
+    // Trava atômica contra cliques simultâneos: só o 1º request marca
+    // correiosGeneratedAt e gera; os demais levam aviso. Falhou? solta a trava.
+    const claim = await this.prisma.pickOrder.updateMany({
+      where: { id, trackingCode: null, correiosGeneratedAt: null },
+      data: { correiosGeneratedAt: new Date() },
+    });
+    if (claim.count === 0) throw new BadRequestException('Envio já está sendo gerado — aguarde uns segundos e clique Reimprimir.');
+    try {
+      return await this.gerarEnvioCorreiosInner(id, pick);
+    } catch (e) {
+      await this.prisma.pickOrder.updateMany({ where: { id, trackingCode: null }, data: { correiosGeneratedAt: null } }).catch(() => undefined);
+      throw e;
+    }
+  }
+
+  private async gerarEnvioCorreiosInner(id: string, pick: any) {
     const order: any = await this.prisma.order.findUnique({ where: { id: pick.orderId }, include: { items: true } });
     if (!order) throw new NotFoundException('Pedido não encontrado');
 
@@ -665,7 +688,7 @@ export class PickOrdersService {
     }
     await this.prisma.pickOrder.update({
       where: { id },
-      data: { trackingCode: null, carrier: null, correiosPrepostagemId: null, correiosGeneratedAt: null },
+      data: { trackingCode: null, carrier: null, correiosPrepostagemId: null, correiosGeneratedAt: null, etiquetaPdf: null },
     });
     return { ok: true };
   }
