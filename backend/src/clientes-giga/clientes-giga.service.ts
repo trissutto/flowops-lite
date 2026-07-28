@@ -787,7 +787,10 @@ export class ClientesGigaService {
     const avaliacao = String(base.avaliacao ?? raw.AVALIACAO ?? '').trim().toUpperCase() || null;
     const bloqueado = String(base.bloqueado ?? raw.BLOQUEADO ?? '').trim().toUpperCase() === 'SIM';
     const totalMarcado = marcados?.totalReais ?? 0;
-    const limiteDisponivel = Math.round((limiteTotal - totalMarcado) * 100) / 100;
+    // Disponível DE VERDADE = limite − marcados − CREDIÁRIO EM ABERTO (bug
+    // 28/07: cliente devendo R$4.632 aparecia com "R$5.000 disponível" — o
+    // PDV barrava e a tela dizia que tinha limite). Piso em zero.
+    const limiteDisponivel = Math.max(0, Math.round((limiteTotal - totalMarcado - crediarioAbertoReais) * 100) / 100);
 
     let podeMarcar = true;
     let motivoMarcar: string | null = null;

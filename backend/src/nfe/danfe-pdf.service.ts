@@ -252,12 +252,34 @@ export class DanfePdfService {
         doc.rect(cx2, y, cDanfeW, headH).stroke();
         doc.rect(cx3, y, cChaveW, headH).stroke();
 
-        // emitente
+        // emitente — LOGO + nome fantasia em destaque (dono 28/07) + razão + endereço
         doc.font('Helvetica').fontSize(4.6).text('IDENTIFICAÇÃO DO EMITENTE', cx1 + 3, y + 2);
-        doc.font('Helvetica-Bold').fontSize(10).fillColor('#000')
-          .text(emitNome, cx1 + 3, y + 16, { width: cEmitW - 6, align: 'center' });
+        let logoW = 0;
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-var-requires
+          const fsMod = require('fs');
+          // eslint-disable-next-line @typescript-eslint/no-var-requires
+          const pathMod = require('path');
+          const logoPath = process.env.DANFE_LOGO_PATH || pathMod.join(process.cwd(), 'assets', 'danfe-logo.png');
+          if (fsMod.existsSync(logoPath)) {
+            doc.image(logoPath, cx1 + 4, y + 16, { fit: [44, 44] });
+            logoW = 48;
+          }
+        } catch { /* sem logo — segue só texto */ }
+        const emitFant = this.tag(emit, 'xFant');
+        const ex = cx1 + 3 + logoW;
+        const ew = cEmitW - 6 - logoW;
+        if (emitFant && emitFant.toUpperCase() !== emitNome.toUpperCase()) {
+          doc.font('Helvetica-Bold').fontSize(9.5).fillColor('#000')
+            .text(emitFant, ex, y + 12, { width: ew, align: 'center' });
+          doc.font('Helvetica-Bold').fontSize(6)
+            .text(emitNome, ex, doc.y + 1, { width: ew, align: 'center' });
+        } else {
+          doc.font('Helvetica-Bold').fontSize(10).fillColor('#000')
+            .text(emitNome, ex, y + 16, { width: ew, align: 'center' });
+        }
         doc.font('Helvetica').fontSize(7).fillColor('#000')
-          .text(enderTxtE, cx1 + 3, y + 40, { width: cEmitW - 6, align: 'center' })
+          .text(enderTxtE, ex, Math.max(doc.y + 2, y + 40), { width: ew, align: 'center' })
           .text(cidadeE, cx1 + 3, doc.y + 1, { width: cEmitW - 6, align: 'center' })
           .text(
             `CNPJ: ${this.fmtCnpj(this.tag(emit, 'CNPJ'))}` +
