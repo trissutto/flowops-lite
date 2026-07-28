@@ -776,6 +776,10 @@ model PickOrder {
   // o pedido FICA na lista da loja (aguardando postagem).
   correiosPrepostagemId String?   @map("correios_prepostagem_id")
   correiosGeneratedAt   DateTime? @map("correios_generated_at")
+  // PDF da etiqueta (base64) capturado NA GERAÇÃO do envio — a reimpressão
+  // usa isso e não depende de re-baixar da API do provedor (Mais Envios
+  // falha/atrasa no re-print; 28/07)
+  etiquetaPdf           String?   @map("etiqueta_pdf")
   // ── Transferência entre lojas (quando pedido é retirada em loja e loja destino não tem estoque) ──
   isTransfer           Boolean @default(false) @map("is_transfer")             // true = separar e enviar pra outra loja, não pro cliente
   transferToStoreCode  String? @map("transfer_to_store_code")                   // loja que vai RECEBER a transferência (loja de retirada)

@@ -270,8 +270,19 @@ export class MaisEnviosService {
     return { status: resp.status, data: resp.data };
   }
 
-  /** Baixa a etiqueta (PDF) de uma pré-postagem pela tag. */
+  /** Baixa a etiqueta (PDF) de uma pré-postagem pela tag. Logo após a criação
+   *  a API pode ainda estar processando — repesca até 3× com 2s de espera. */
   async baixarEtiqueta(tag: string): Promise<any> {
+    let ultimo: any = null;
+    for (let i = 0; i < 3; i++) {
+      if (i > 0) await new Promise((r) => setTimeout(r, 2000));
+      ultimo = await this.baixarEtiquetaOnce(tag);
+      if (ultimo?.ok && ultimo.pdfBase64) return ultimo;
+    }
+    return ultimo;
+  }
+
+  private async baixarEtiquetaOnce(tag: string): Promise<any> {
     const t = String(tag || '').trim();
     if (!t) throw new BadRequestException('tag obrigatória');
     const headers = await this.auth.authHeader();

@@ -111,13 +111,23 @@ export class PickOrdersService {
         return { ok: false, erro: String(e?.message || e) };
       }
     };
-    const ehME = String(pick.carrier || '').includes('Mais Envios');
-    let et: any = await baixarEtiqueta(ehME);
-    if (!(et?.ok && et.pdfBase64)) {
-      // Picks antigos gravaram carrier "Correios SEDEX" mesmo sendo Mais
-      // Envios — se o provedor indicado falhar, tenta o outro antes de desistir.
-      const et2 = await baixarEtiqueta(!ehME);
-      if (et2?.ok && et2.pdfBase64) et = et2;
+    // 1º: etiqueta GRAVADA na geração do envio (não depende de API externa)
+    let et: any = (pick as any).etiquetaPdf ? { ok: true, pdfBase64: (pick as any).etiquetaPdf } : null;
+    if (!et) {
+      const ehME = String(pick.carrier || '').includes('Mais Envios');
+      et = await baixarEtiqueta(ehME);
+      if (!ehME && !(et?.ok && et.pdfBase64)) {
+        // Picks antigos gravaram carrier "Correios SEDEX" mesmo sendo Mais
+        // Envios — tenta o ME (1 POST rápido). O inverso NÃO: carrier "Mais
+        // Envios" só é gravado pelo caminho ME, e cair no polling dos Correios
+        // com id inválido pendurava o request ~1min (lentidão 28/07).
+        const et2 = await baixarEtiqueta(true);
+        if (et2?.ok && et2.pdfBase64) et = et2;
+      }
+      // Conseguiu agora? Grava pra próxima reimpressão não depender da API.
+      if (et?.ok && et.pdfBase64) {
+        try { await this.prisma.pickOrder.update({ where: { id }, data: { etiquetaPdf: String(et.pdfBase64) } }); } catch { /* best-effort */ }
+      }
     }
     if (et?.ok && et.pdfBase64) pdfs.push(Buffer.from(String(et.pdfBase64), 'base64'));
     else {
@@ -263,6 +273,8 @@ export class PickOrdersService {
         carrier: r.carrier || (r.servico ? `Correios ${r.servico}` : 'Correios'),
         correiosPrepostagemId: r.idPrepostagem ? String(r.idPrepostagem) : null,
         correiosGeneratedAt: new Date(),
+        // Etiqueta baixada AGORA (na geração funciona) — reimpressão usa daqui
+        ...(r.etiquetaPdf ? { etiquetaPdf: String(r.etiquetaPdf) } : {}),
       },
     });
 
