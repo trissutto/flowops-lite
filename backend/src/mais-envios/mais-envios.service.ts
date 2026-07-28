@@ -126,10 +126,6 @@ export class MaisEnviosService {
       pricetable: this.auth.pricetable ? Number(this.auth.pricetable) : undefined,
       service: codigo,
       integratorId: 'flowops',
-      // "complement.Informe o tipo de pre-postagem" (validação do 1º teste real
-      // 28/07): tipo da pré-postagem. Default '1' (normal); ajustável sem
-      // deploy via MAISENVIOS_COMPLEMENT se a API pedir outro valor.
-      complement: process.env.MAISENVIOS_COMPLEMENT || '1',
       sender: {
         contact: s.name || s.contact || 'LURDS',
         federalId: onlyDigits(s.federalid || s.federalId),
@@ -155,7 +151,14 @@ export class MaisEnviosService {
         weight: Math.max(1, Math.round(input.pesoGramas)), quantity: 1,
         ar: false, ardigital: false, ownhand: false, ap: false,
       },
-      complement: {},
+      // "complement.Informe o tipo de pre-postagem" (1º teste real 28/07): o
+      // objeto complement precisa do tipo da pré-postagem. Chave/valor
+      // ajustáveis SEM deploy via MAISENVIOS_COMPLEMENT_JSON (default
+      // {"type":"1"} = normal) — o erro de validação da API guia o acerto.
+      complement: (() => {
+        try { return JSON.parse(process.env.MAISENVIOS_COMPLEMENT_JSON || '{"type":"1"}'); }
+        catch { return { type: '1' }; }
+      })(),
       nf: { nfeKey: '', nfeNumber: 0, nfeSerie: 0, nfeValue: String(input.valorDeclarado ?? 0) },
       dc: (input.itens || []).map((it) => ({ conteudo: String(it.conteudo || 'Vestuário').slice(0, 60), quantidade: String(it.quantidade ?? 1) })),
     };
