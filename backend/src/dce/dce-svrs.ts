@@ -127,33 +127,47 @@ async function buildClientChain(pfxBase64: string, pfxPassword: string): Promise
     } catch { return []; }
   };
   const parseCerts = (buf: Buffer): any[] => {
-    const der = forge.util.createBuffer(buf.toString('binary'));
+    const bin = buf.toString('binary');
     try {
-      const p7 = forge.pkcs7.messageFromAsn1(forge.asn1.fromDer(der.copy()));
+      const p7 = forge.pkcs7.messageFromAsn1(forge.asn1.fromDer(forge.util.createBuffer(bin)));
       if (p7?.certificates?.length) return p7.certificates;
-    } catch { /* não é p7b */ }
-    try { return [forge.pki.certificateFromAsn1(forge.asn1.fromDer(der.copy()))]; } catch { /* nem DER puro */ }
+    } catch { /* não é p7b DER */ }
+    try {
+      // p7b re-embrulhado em PEM (alguns repositórios servem base64)
+      const pem = `-----BEGIN PKCS7-----\n${buf.toString('base64')}\n-----END PKCS7-----`;
+      const p7 = forge.pkcs7.messageFromPem(pem);
+      if (p7?.certificates?.length) return p7.certificates;
+    } catch { /* segue */ }
+    try { return [forge.pki.certificateFromAsn1(forge.asn1.fromDer(forge.util.createBuffer(bin)))]; } catch { /* nem DER puro */ }
     try { return [forge.pki.certificateFromPem(buf.toString('utf8'))]; } catch { return []; }
   };
-  const isSelfSigned = (c: any) => forge.pki.certificateToPem(c) && c.isIssuer(c);
+  const isSelfSigned = (c: any) => { try { return c.isIssuer(c); } catch { return false; } };
 
-  let atual = chain[chain.length - 1];
-  for (let salto = 0; salto < 3 && !isSelfSigned(atual); salto++) {
-    const urls = urlsFrom(atual);
-    let proximo: any = null;
-    for (const url of urls) {
-      try {
-        const resp = await axios.get(url, { responseType: 'arraybuffer', timeout: 15000 });
-        const baixados = parseCerts(Buffer.from(resp.data));
-        proximo = baixados.find((c: any) => {
-          try { return c.isIssuer ? atual.isIssuer(c) : false; } catch { return false; }
-        }) || baixados[0] || null;
-        if (proximo) break;
-      } catch { /* tenta a próxima URL */ }
+  // Subida best-effort: qualquer erro no caminho NÃO derruba a emissão — usa o
+  // que já montou (o log diz onde parou).
+  try {
+    let atual = chain[chain.length - 1];
+    for (let salto = 0; salto < 3 && !isSelfSigned(atual); salto++) {
+      const urls = urlsFrom(atual);
+      if (!urls.length) { console.log('[dce] cert sem AIA/caIssuers — parando a subida'); break; }
+      let proximo: any = null;
+      for (const url of urls) {
+        try {
+          const resp = await axios.get(url, { responseType: 'arraybuffer', timeout: 15000 });
+          const baixados = parseCerts(Buffer.from(resp.data));
+          console.log(`[dce] AIA ${url} → ${baixados.length} cert(s)`);
+          proximo = baixados.find((c: any) => { try { return atual.isIssuer(c); } catch { return false; } }) || baixados[0] || null;
+          if (proximo) break;
+        } catch (e: any) {
+          console.log(`[dce] AIA ${url} falhou: ${e?.message}`);
+        }
+      }
+      if (!proximo || inChain(proximo)) break;
+      chain.push(proximo);
+      atual = proximo;
     }
-    if (!proximo || inChain(proximo)) break;
-    chain.push(proximo);
-    atual = proximo;
+  } catch (e: any) {
+    console.log(`[dce] subida da cadeia interrompida: ${e?.message}`);
   }
 
   const chainPem = chain.map((c) => forge.pki.certificateToPem(c)).join('\n');
@@ -171,8 +185,13 @@ async function getAgent(pfxBase64: string, pfxPassword: string): Promise<any> {
     const { keyPem, chainPem } = await buildClientChain(pfxBase64, pfxPassword);
     opts = { key: keyPem, cert: chainPem };
   } catch (e: any) {
-    console.log(`[dce] cadeia AIA falhou (${e?.message}) — fallback pro PFX direto`);
-    opts = { pfx: Buffer.from(pfxBase64, 'base64'), passphrase: pfxPassword };
+    // NUNCA cair pro PFX cru: o OpenSSL do Node não aceita PFX com cifra
+    // legada ("Unsupported PKCS12 PFX data" — visto 28/07). O node-forge
+    // aceita, então extrai key+cert e apresenta só o final (pior caso = o
+    // mesmo comportamento do 1º teste).
+    console.log(`[dce] cadeia falhou (${e?.message}) — usando só o cert final via forge`);
+    const { privateKeyPem, certPem } = extractA1FromPfx(pfxBase64, pfxPassword);
+    opts = { key: privateKeyPem, cert: certPem };
   }
   const agent = new https.Agent({
     ...opts,
