@@ -271,7 +271,8 @@ export class DceEmitService {
       `<det nItem="${i + 1}"><prod>` +
       `<xProd>${e(String(it.descricao || 'Vestuário').slice(0, 120))}</xProd>` +
       `<NCM>${String(it.ncm || '61').replace(/\D/g, '').slice(0, 8) || '61'}</NCM>` +
-      `<qCom>${this.money(it.quantidade)}</qCom>` +
+      // TDec_1104Opc: inteiro sem decimais OU exatamente 4 casas ("1.00" rejeita)
+      `<qCom>${Number.isInteger(it.quantidade) ? String(it.quantidade) : it.quantidade.toFixed(4)}</qCom>` +
       `<vUnCom>${this.money(it.valorUnit)}</vUnCom>` +
       `<vProd>${this.money(it.quantidade * it.valorUnit)}</vProd>` +
       `</prod></det>`,
