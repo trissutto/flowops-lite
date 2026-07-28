@@ -147,6 +147,19 @@ export default function CorreiosDiagnostico() {
   const [rast, setRast] = useState<any>(null);
   const [loadingRast, setLoadingRast] = useState(false);
 
+  // DEBUG DC-e: puxa a pré-postagem crua da Correios pra ver se a DC-e/QR saiu.
+  const [ppDbgId, setPpDbgId] = useState('');
+  const [ppDbg, setPpDbg] = useState<any>(null);
+  const [loadingPpDbg, setLoadingPpDbg] = useState(false);
+  const buscarPpDbg = async () => {
+    const id = ppDbgId.trim();
+    if (!id) return;
+    setLoadingPpDbg(true); setPpDbg(null);
+    try { setPpDbg(await api<any>(`/correios/prepostagem-debug?id=${encodeURIComponent(id)}`)); }
+    catch (e: any) { setPpDbg({ erro: e?.message || 'falha' }); }
+    finally { setLoadingPpDbg(false); }
+  };
+
   // carrega remetente salvo (1x)
   useEffect(() => {
     try {
@@ -457,6 +470,27 @@ export default function CorreiosDiagnostico() {
                 </ol>
               )}
             </div>
+          )}
+        </section>
+
+        {/* ── DEBUG DC-e / QR ── */}
+        <section className="bg-white rounded-xl border border-slate-200 p-4 mb-5">
+          <h2 className="font-medium flex items-center gap-2 mb-1"><AlertTriangle size={16} /> Diagnóstico DC-e (QR)</h2>
+          <p className="text-xs text-slate-500 mb-3">
+            Cola o <b>idPrepostagem</b> de um envio já gerado. Puxa a pré-postagem crua da Correios pra ver se a
+            declaração eletrônica (DC-e) foi emitida — procura por chave/protocolo/QR no retorno.
+          </p>
+          <div className="flex flex-wrap items-end gap-3">
+            <Campo label="idPrepostagem" value={ppDbgId} onChange={setPpDbgId} placeholder="ex: 66b3f0..." className="w-72" />
+            <button onClick={buscarPpDbg} disabled={loadingPpDbg || !ppDbgId.trim()}
+              className="bg-slate-700 text-white text-sm rounded-md px-4 py-2 hover:bg-slate-800 disabled:opacity-40 flex items-center gap-2">
+              {loadingPpDbg ? <Loader2 size={15} className="animate-spin" /> : <AlertTriangle size={15} />} Puxar cru
+            </button>
+          </div>
+          {ppDbg && (
+            <pre className="mt-3 text-[11px] bg-slate-50 border border-slate-200 rounded-md p-3 overflow-auto max-h-96 whitespace-pre-wrap break-all">
+              {JSON.stringify(ppDbg, null, 2)}
+            </pre>
           )}
         </section>
       </div>
