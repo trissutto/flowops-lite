@@ -2022,6 +2022,45 @@ model NfeDoc {
   @@map("nfe_docs")
 }
 
+// ── DC-e modelo 99 (Declaração de Conteúdo eletrônica) ──────────────────
+// Documento do envio SEM nota fiscal (Ajuste SINIEF 22/2025, obrigatória
+// desde 06/04/2026). Autorizada no ambiente nacional (SVD/PR:
+// dce.fazenda.pr.gov.br); a DACE (impressa, com QR) é gerada por nós a
+// partir do XML autorizado. Identidade fiscal reaproveita NfceConfig por
+// storeCode; numeração reaproveita NfeSequence com modelo '99'.
+model DceDoc {
+  id            String   @id @default(uuid())
+  // Vínculo com o envio (pick-order do "Gerar envio"). Null se emissão avulsa.
+  pickOrderId   String?  @map("pick_order_id")
+  storeCode     String   @map("store_code")     // remetente = loja
+  modelo        String   @default("99")
+  serie         String
+  numero        Int
+  cDC           String?  @map("c_dc")           // código numérico da chave
+  chave         String?  @unique                // 44 dígitos
+  tpAmb         String   @map("tp_amb")         // '1' prod · '2' homolog
+  destNome      String?  @map("dest_nome")
+  destCpfCnpj   String?  @map("dest_cpf_cnpj")
+  valorCents    Int      @default(0) @map("valor_cents")
+  // pending → signed → authorized | rejected | error | cancelled
+  status        String   @default("pending")
+  cStat         String?  @map("c_stat")
+  xMotivo       String?  @map("x_motivo")
+  protocolo     String?
+  dhRecbto      String?
+  qrCodeUrl     String?  @map("qr_code_url")    // URL do QR da DACE
+  xmlEnviado    String?  @map("xml_enviado")    @db.Text
+  xmlAutorizado String?  @map("xml_autorizado") @db.Text
+  xmlResposta   String?  @map("xml_resposta")   @db.Text
+  erro          String?  @db.Text
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@index([pickOrderId])
+  @@index([storeCode, status])
+  @@map("dce_docs")
+}
+
 // Contador de numeração NF-e (por loja + modelo + série), separado do NFC-e.
 // `proximo` = próximo número livre; incremento atômico no service.
 model NfeSequence {

@@ -37,6 +37,7 @@ import { ReportsModule } from './reports/reports.module';
 import { UsersModule } from './users/users.module';
 import { PickOrdersModule } from './pick-orders/pick-orders.module';
 import { NfeModule } from './nfe/nfe.module';
+import { DceModule } from './dce/dce.module';
 import { ClientesGigaModule } from './clientes-giga/clientes-giga.module';
 import { CrediarioNativoModule } from './crediario-nativo/crediario-nativo.module';
 import { ConveniosModule } from './convenios/convenios.module';
@@ -117,6 +118,7 @@ import { OperadorPinModule } from './operador-pin/operador-pin.module';
     UsersModule,
     PickOrdersModule,
     NfeModule,
+    DceModule,
     ClientesGigaModule,
     CrediarioNativoModule,
     ConveniosModule,
