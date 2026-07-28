@@ -80,14 +80,16 @@ export class DceEmitService {
     });
 
     try {
-      const xml = this.buildXml({ chave, cDC, serie, numero, dhEmi, tpAmb, fiscal, dest: input.dest, itens: input.itens, valorTotal });
+      // O QR (infDCeSupl/qrCodDCe) faz parte do XML transmitido → calcula antes
+      const qrUrl = buildDceQrUrl(chave, tpAmb);
+      const xml = this.buildXml({ chave, cDC, serie, numero, dhEmi, tpAmb, fiscal, dest: input.dest, itens: input.itens, valorTotal, qrUrl });
       const xmlMin = xml.replace(/>\s+</g, '><').trim();
       const assinado = signXmlDceWithA1({ xml: xmlMin, pfxBase64: fiscal.certPfxB64, pfxPassword: fiscal.certPfxPass });
       await this.prisma.dceDoc.update({ where: { id: doc.id }, data: { status: 'signed', xmlEnviado: assinado } });
 
       const ret = await transmitDceSvd({ xmlAssinado: assinado, ambiente: tpAmb, pfxBase64: fiscal.certPfxB64, pfxPassword: fiscal.certPfxPass });
 
-      const qrCodeUrl = ret.success ? buildDceQrUrl(chave, tpAmb) : null;
+      const qrCodeUrl = ret.success ? qrUrl : null;
       const atualizado = await this.prisma.dceDoc.update({
         where: { id: doc.id },
         data: {
@@ -213,7 +215,7 @@ export class DceEmitService {
   private buildXml(p: {
     chave: string; cDC: string; serie: string; numero: number; dhEmi: string; tpAmb: '1' | '2';
     fiscal: { cnpj: string; razaoSocial: string; ender: any };
-    dest: DceDestInput; itens: DceItemInput[]; valorTotal: number;
+    dest: DceDestInput; itens: DceItemInput[]; valorTotal: number; qrUrl: string;
   }): string {
     const e = this.esc.bind(this);
     const homolog = p.tpAmb === '2';
@@ -221,12 +223,18 @@ export class DceEmitService {
 
     // nSiteAutoriz: site autorizador (SVD). Ajustável por env na homologação.
     const nSite = process.env.DCE_NSITE || '0';
-    // Observações obrigatórias do leiaute (xObs1 ICMS / xObs2 tributária) —
-    // TEXTO DEFINIDO PELO CONTADOR. Placeholders ajustáveis por env.
-    const xObs1 = process.env.DCE_XOBS1 || 'DECLARO QUE O CONTEUDO DESTA DECLARACAO E VERDADEIRO E ASSUMO RESPONSABILIDADE';
-    const xObs2 = process.env.DCE_XOBS2 || 'DOCUMENTO EMITIDO NOS TERMOS DO AJUSTE SINIEF 22/2025';
+    // infDec (declaração do emitente) — xObs1/xObs2 obrigatórios. Textos
+    // padrão da lei (LC 87/96 e 8.137/90); o contador pode trocar por env.
+    const xObs1 = process.env.DCE_XOBS1 ||
+      'O contribuinte de ICMS e qualquer pessoa fisica ou juridica que realize com habitualidade ou em volume que caracterize intuito comercial operacoes de circulacao de mercadoria (Lei Complementar 87/96)';
+    const xObs2 = process.env.DCE_XOBS2 ||
+      'Constitui crime contra a ordem tributaria suprimir ou reduzir tributo ou contribuicao social e qualquer acessorio (Lei 8.137/90 Art 1 V)';
+    // Transportadora: obrigatória. modTrans 0 = Correios → CNPJ da ECT.
+    const cnpjTransp = (process.env.DCE_CNPJ_TRANSP || '34028316000103').replace(/\D/g, '');
+    // urlChave do infDCeSupl (URL de consulta pública) — ajustável por env.
+    const urlChave = process.env.DCE_URL_CHAVE || 'https://www.fazenda.pr.gov.br/dce/consulta';
 
-    const endereco = (x: { logradouro: string; numero: string; complemento?: string; bairro: string; cMun: string; cidade: string; uf: string; cep: string; fone?: string; email?: string }) =>
+    const endereco = (x: { logradouro: string; numero: string; complemento?: string; bairro: string; cMun: string; cidade: string; uf: string; cep: string; fone?: string }) =>
       `<xLgr>${e(x.logradouro)}</xLgr><nro>${e(x.numero || 'SN')}</nro>` +
       (x.complemento ? `<xCpl>${e(x.complemento)}</xCpl>` : '') +
       `<xBairro>${e(x.bairro || 'CENTRO')}</xBairro><cMun>${x.cMun}</cMun><xMun>${e(x.cidade)}</xMun>` +
@@ -241,32 +249,35 @@ export class DceEmitService {
     // (a homologação acusa se for obrigatório exato — ajustar depois)
     const destCMun = String(p.dest.codMunicipio || enderLoja.codMunicipio);
 
+    // det: cada item com subgrupo <prod> (layout oficial)
     const det = p.itens.map((it, i) =>
-      `<det nItem="${i + 1}">` +
+      `<det nItem="${i + 1}"><prod>` +
       `<xProd>${e(String(it.descricao || 'Vestuário').slice(0, 120))}</xProd>` +
       `<NCM>${String(it.ncm || '61').replace(/\D/g, '').slice(0, 8) || '61'}</NCM>` +
       `<qCom>${this.money(it.quantidade)}</qCom>` +
       `<vUnCom>${this.money(it.valorUnit)}</vUnCom>` +
       `<vProd>${this.money(it.quantidade * it.valorUnit)}</vProd>` +
-      `</det>`,
+      `</prod></det>`,
     ).join('');
 
+    // Ordem oficial: ide → emit (com enderEmit; NÃO existe grupo rem) → dest →
+    // det → tot → transp → infDec; infDCeSupl (QR) fica FORA do infDCe,
+    // irmão dele (mesmo padrão do infNFeSupl da NFC-e), antes da Signature.
     return (
-      `<DCe xmlns="${DCE_NS}" versao="${DCE_VERSAO}">` +
+      `<DCe xmlns="${DCE_NS}">` +
       `<infDCe Id="DCe${p.chave}" versao="${DCE_VERSAO}">` +
       `<ide>` +
       `<cUF>35</cUF><cDC>${p.cDC}</cDC><mod>99</mod><serie>${p.serie}</serie><nDC>${p.numero}</nDC>` +
       `<dhEmi>${p.dhEmi}</dhEmi><tpEmis>1</tpEmis><tpEmit>2</tpEmit><nSiteAutoriz>${nSite}</nSiteAutoriz>` +
-      `<tpAmb>${p.tpAmb}</tpAmb><verProc>LurdsOrderOne-1.0</verProc>` +
+      `<cDV>${p.chave.slice(-1)}</cDV><tpAmb>${p.tpAmb}</tpAmb><verProc>LurdsOrderOne-1.0</verProc>` +
       `</ide>` +
-      `<emit><CNPJ>${p.fiscal.cnpj}</CNPJ><xNome>${e(p.fiscal.razaoSocial)}</xNome></emit>` +
-      `<rem>` +
+      `<emit>` +
       `<CNPJ>${p.fiscal.cnpj}</CNPJ><xNome>${e(p.fiscal.razaoSocial)}</xNome>` +
-      `<enderRem>${endereco({
+      `<enderEmit>${endereco({
         logradouro: enderLoja.logradouro, numero: enderLoja.numero, bairro: enderLoja.bairro,
         cMun: String(enderLoja.codMunicipio), cidade: enderLoja.municipio || enderLoja.cidade, uf: enderLoja.uf || 'SP', cep: enderLoja.cep,
-      })}</enderRem>` +
-      `</rem>` +
+      })}</enderEmit>` +
+      `</emit>` +
       `<dest>` +
       destDoc +
       `<xNome>${e(destNome)}</xNome>` +
@@ -276,10 +287,11 @@ export class DceEmitService {
       })}</enderDest>` +
       `</dest>` +
       det +
-      `<transp><modTrans>0</modTrans></transp>` + // 0 = Correios/ECT
       `<tot><vDC>${this.money(p.valorTotal)}</vDC></tot>` +
-      `<infAdic><xObs1>${e(xObs1)}</xObs1><xObs2>${e(xObs2)}</xObs2></infAdic>` +
+      `<transp><modTrans>0</modTrans><CNPJTransp>${cnpjTransp}</CNPJTransp></transp>` +
+      `<infDec><xObs1>${e(xObs1)}</xObs1><xObs2>${e(xObs2)}</xObs2></infDec>` +
       `</infDCe>` +
+      `<infDCeSupl><qrCodDCe>${e(p.qrUrl)}</qrCodDCe><urlChave>${e(urlChave)}</urlChave></infDCeSupl>` +
       `</DCe>`
     );
   }

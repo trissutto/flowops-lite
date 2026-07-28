@@ -340,10 +340,11 @@ function parseDceResponse(xml: string): {
   return { cStat: get('cStat'), xMotivo: get('xMotivo') };
 }
 
-/** URL do QR da DACE (base oficial PR; formato ajustável por env na homolog). */
+/**
+ * URL do QR da DACE — formato OFICIAL confirmado no manual (emissão normal):
+ *   https://www.fazenda.pr.gov.br/dce/qrcode?chDCe={44}&tpAmb={1|2}
+ */
 export function buildDceQrUrl(chave: string, ambiente: '1' | '2'): string {
   const base = process.env.DCE_QR_BASE || DCE_ENDPOINTS[ambiente].qrcode;
-  const fmt = process.env.DCE_QR_FORMAT || 'p'; // 'p' → ?p=chave|versao|tpAmb ; 'ch' → ?chDCe=...&tpAmb=...
-  if (fmt === 'ch') return `${base}?chDCe=${chave}&tpAmb=${ambiente}`;
-  return `${base}?p=${chave}|${DCE_VERSAO.replace('.', '')}|${ambiente}`;
+  return `${base}?chDCe=${chave}&tpAmb=${ambiente}`;
 }
