@@ -300,9 +300,11 @@ export class MaisEnviosService {
       try { msg = JSON.parse(buf.toString('utf8'))?.message || msg; } catch { /* binário */ }
       return { ok: false, erro: msg };
     }
-    if (buf.slice(0, 5).toString('utf8').startsWith('%PDF')) {
-      return { ok: true, pdfBase64: buf.toString('base64') };
-    }
+    // A resposta pode vir como PDF cru, PDF com lixo antes, base64 em texto,
+    // data-uri, gzip ou zip (28/07: 77KB que não começavam com %PDF) —
+    // extrairPdf cobre todos.
+    const direto = this.extrairPdf(buf);
+    if (direto) return { ok: true, pdfBase64: direto };
     // Não veio PDF: tenta interpretar como JSON (base64/url em algum campo)
     try {
       const dRaw: any = JSON.parse(buf.toString('utf8'));
@@ -311,13 +313,49 @@ export class MaisEnviosService {
       const url = d?.url ?? d?.link ?? null;
       if (!pdf && url) {
         const bin = await axios.get(String(url), { responseType: 'arraybuffer', timeout: 30000 });
-        pdf = Buffer.from(bin.data).toString('base64');
+        pdf = this.extrairPdf(Buffer.from(bin.data)) || Buffer.from(bin.data).toString('base64');
       }
       if (pdf) return { ok: true, pdfBase64: String(pdf) };
       return { ok: false, erro: 'sem PDF na resposta', raw: dRaw };
     } catch {
-      return { ok: false, erro: `resposta inesperada (${buf.length} bytes)` };
+      const head = buf.slice(0, 12).toString('utf8').replace(/[^\x20-\x7E]/g, '.');
+      return { ok: false, erro: `resposta inesperada (${buf.length} bytes, head="${head}" hex=${buf.slice(0, 8).toString('hex')})` };
     }
+  }
+
+  /** Acha um PDF dentro da resposta, em qualquer embrulho comum: PDF cru
+   *  (mesmo com bytes de lixo antes), base64 em texto puro (JVBERi...),
+   *  data-uri, gzip ou zip de 1 arquivo. Retorna base64 ou null. */
+  private extrairPdf(buf: Buffer, depth = 0): string | null {
+    if (!buf || buf.length < 8 || depth > 2) return null;
+    const idx = buf.indexOf('%PDF');
+    if (idx >= 0 && idx < 2048) return buf.slice(idx).toString('base64');
+    // base64 de PDF em texto ("JVBERi" = "%PDF" em base64), com/sem aspas
+    const inicio = buf.slice(0, 24).toString('utf8').replace(/^[\s"'﻿]+/, '');
+    if (inicio.startsWith('JVBERi')) return buf.toString('utf8').replace(/[\s"']/g, '');
+    if (inicio.startsWith('data:')) {
+      const m = buf.toString('utf8').match(/base64,([A-Za-z0-9+/=]+)/);
+      if (m) return m[1];
+    }
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const zlib = require('zlib');
+    if (buf[0] === 0x1f && buf[1] === 0x8b) {
+      try { return this.extrairPdf(zlib.gunzipSync(buf), depth + 1); } catch { return null; }
+    }
+    // zip: primeiro entry (PK\x03\x04 método deflate ou stored)
+    if (buf[0] === 0x50 && buf[1] === 0x4b && buf[2] === 0x03 && buf[3] === 0x04) {
+      try {
+        const metodo = buf.readUInt16LE(8);
+        const compSize = buf.readUInt32LE(18);
+        const nameLen = buf.readUInt16LE(26);
+        const extraLen = buf.readUInt16LE(28);
+        const ini = 30 + nameLen + extraLen;
+        const dados = compSize > 0 ? buf.slice(ini, ini + compSize) : buf.slice(ini);
+        const cru = metodo === 8 ? zlib.inflateRawSync(dados) : dados;
+        return this.extrairPdf(cru, depth + 1);
+      } catch { return null; }
+    }
+    return null;
   }
 
   /** DESCOBERTA: lista os serviços disponíveis na conta. */
