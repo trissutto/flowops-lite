@@ -275,25 +275,38 @@ export class MaisEnviosService {
     const t = String(tag || '').trim();
     if (!t) throw new BadRequestException('tag obrigatória');
     const headers = await this.auth.authHeader();
-    const printBody = { tag: [t], options: {}, customer: this.auth.customer || undefined };
-    console.log(`[maisenvios] print PAYLOAD: ${JSON.stringify(printBody)}`);
-    const resp = await axios.post(`${this.auth.baseUrl}/prepost/print`, printBody, { headers, timeout: 30000, validateStatus: () => true });
-    console.log(`[maisenvios] print RESPOSTA HTTP ${resp.status}: ${(typeof resp.data === 'string' ? resp.data : JSON.stringify(resp.data)).slice(0, 600)}`);
+    // MOLDE DO PORTAL (capturado 28/07): o options PRECISA vir preenchido —
+    // vazio, a API responde 201 com corpo null. Com ele, a resposta é o
+    // PRÓPRIO PDF binário (%PDF...), então baixamos como arraybuffer.
+    const printBody = { tag: [t], options: { declared: true, warning: true, model: '1', type: '1' } };
+    const resp = await axios.post(`${this.auth.baseUrl}/prepost/print`, printBody, {
+      headers, timeout: 30000, validateStatus: () => true, responseType: 'arraybuffer',
+    });
+    const buf = Buffer.from(resp.data || []);
+    console.log(`[maisenvios] print ${t}: HTTP ${resp.status}, ${buf.length} bytes, head="${buf.slice(0, 8).toString('utf8').replace(/[^\x20-\x7E]/g, '.')}"`);
     if (resp.status < 200 || resp.status >= 300) {
-      return { ok: false, erro: resp.data?.message || `HTTP ${resp.status}`, raw: resp.data };
+      let msg = `HTTP ${resp.status}`;
+      try { msg = JSON.parse(buf.toString('utf8'))?.message || msg; } catch { /* binário */ }
+      return { ok: false, erro: msg };
     }
-    // resposta pode vir objeto, ARRAY ou string; e o PDF pode vir base64 ou URL
-    const dRaw: any = resp.data;
-    const d: any = Array.isArray(dRaw) ? (dRaw[0] || {}) : dRaw;
-    let pdf = d?.pdf ?? d?.dados ?? d?.base64 ?? d?.file ?? d?.etiqueta ?? (typeof dRaw === 'string' && !/^https?:/.test(dRaw.trim()) ? dRaw : null);
-    const url = d?.url ?? d?.link ?? (typeof dRaw === 'string' && /^https?:/.test(dRaw.trim()) ? dRaw.trim() : null);
-    if (!pdf && url) {
-      try {
+    if (buf.slice(0, 5).toString('utf8').startsWith('%PDF')) {
+      return { ok: true, pdfBase64: buf.toString('base64') };
+    }
+    // Não veio PDF: tenta interpretar como JSON (base64/url em algum campo)
+    try {
+      const dRaw: any = JSON.parse(buf.toString('utf8'));
+      const d: any = Array.isArray(dRaw) ? (dRaw[0] || {}) : dRaw;
+      let pdf = d?.pdf ?? d?.dados ?? d?.base64 ?? d?.file ?? d?.etiqueta ?? null;
+      const url = d?.url ?? d?.link ?? null;
+      if (!pdf && url) {
         const bin = await axios.get(String(url), { responseType: 'arraybuffer', timeout: 30000 });
         pdf = Buffer.from(bin.data).toString('base64');
-      } catch { /* segue sem */ }
+      }
+      if (pdf) return { ok: true, pdfBase64: String(pdf) };
+      return { ok: false, erro: 'sem PDF na resposta', raw: dRaw };
+    } catch {
+      return { ok: false, erro: `resposta inesperada (${buf.length} bytes)` };
     }
-    return pdf ? { ok: true, pdfBase64: String(pdf) } : { ok: false, erro: 'sem PDF na resposta', raw: resp.data };
   }
 
   /** DESCOBERTA: lista os serviços disponíveis na conta. */
