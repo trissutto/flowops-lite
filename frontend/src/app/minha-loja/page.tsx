@@ -716,6 +716,14 @@ export default function MinhaLojaPage() {
           pushToast(`DC-e não autorizada (${d.cStat ?? d.status}): ${d.xMotivo ?? ''}`);
         }
       } catch { /* DACE opcional — sem DC-e pro envio */ }
+      // DANFE da NF-e do envio (Reimprimir)
+      try {
+        const n = await api<any>(`/nfe/by-envio/${pickId}`);
+        if (n?.id && n.status === 'authorized') {
+          const b = await api<any>(`/nfe/${n.id}/danfe-b64`);
+          if (b?.ok && b.pdfBase64) { downloadPdf(b.pdfBase64, `danfe-${rastreio}.pdf`); pushToast('🧾 DANFE (NF-e) baixada'); }
+        }
+      } catch { /* sem NF-e pro envio */ }
     }
     try {
       const dc = await api<any>('/correios/declaracao', { method: 'POST', body: JSON.stringify({ idPrepostagem: idPre }) });
@@ -745,6 +753,15 @@ export default function MinhaLojaPage() {
       pushToast(`📮 Envio gerado (${r.servico ?? '—'}): ${r.codigoRastreio} — aguardando postagem`);
       if (r.dce?.status === 'error' || r.dce?.status === 'rejected') {
         pushToast(`DC-e falhou (${r.dce?.cStat ?? ''}): ${r.dce?.xMotivo ?? r.dce?.erro ?? 'ver retaguarda'}`);
+      }
+      // NF-e do envio: DANFE baixa junto da etiqueta; falha vira aviso
+      if (r.nfe?.status === 'error' || r.nfe?.status === 'rejected') {
+        pushToast(`NF-e do envio falhou (${r.nfe?.cStat ?? ''}): ${r.nfe?.xMotivo ?? r.nfe?.erro ?? 'ver retaguarda'}`);
+      } else if (r.nfe?.docId && r.nfe.status === 'authorized') {
+        try {
+          const b = await api<any>(`/nfe/${r.nfe.docId}/danfe-b64`);
+          if (b?.ok && b.pdfBase64) { downloadPdf(b.pdfBase64, `danfe-${r.codigoRastreio}.pdf`); pushToast('🧾 DANFE (NF-e) baixada'); }
+        } catch { pushToast('DANFE não baixou — reimprime pra tentar de novo.'); }
       }
       if (r.etiquetaPdf) {
         // Mais Envios já devolve o PDF da etiqueta na resposta

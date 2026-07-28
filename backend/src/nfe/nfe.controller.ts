@@ -154,6 +154,27 @@ export class NfeController {
     }
   }
 
+  /** NF-e do ENVIO de um pick-order (Reimprimir DANFE na loja). */
+  @Get('by-envio/:pickId')
+  byEnvio(@Req() req: any, @Param('pickId') pickId: string) {
+    const role = req?.user?.role;
+    if (!['admin', 'operator', 'supervisor', 'contador', 'store'].includes(role)) {
+      throw new ForbiddenException('Sem permissão');
+    }
+    return this.transfer.findEnvioDoc(pickId);
+  }
+
+  /** DANFE em base64 (download via JSON no front, mesmo padrão da etiqueta). */
+  @Get(':id/danfe-b64')
+  async getDanfeB64(@Req() req: any, @Param('id') id: string) {
+    const role = req?.user?.role;
+    if (!['admin', 'operator', 'supervisor', 'contador', 'store'].includes(role)) {
+      throw new ForbiddenException('Sem permissão pra abrir o DANFE');
+    }
+    const { buffer, filename } = await this.danfe.generateForDoc(id);
+    return { ok: true, filename, pdfBase64: buffer.toString('base64') };
+  }
+
   /** Documento por id (com XMLs). */
   @Get(':id')
   getDoc(@Req() req: any, @Param('id') id: string) {

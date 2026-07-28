@@ -65,7 +65,7 @@ export class LivePdvService {
    * destinatário = endereço do cliente no cart; remetente = matriz (env).
    * Grava o código de rastreio em todos os itens e o id da pré-postagem no cart.
    */
-  async gerarEnvioCorreios(cartId: string) {
+  async gerarEnvioCorreios(cartId: string, nfeChave?: string) {
     const cart = await (this.prisma as any).livePdvCart.findUnique({
       where: { id: cartId },
       include: { items: true },
@@ -135,6 +135,8 @@ export class LivePdvService {
       },
       pesoGramas,
       valorDeclarado: cart.totalCents ? cart.totalCents / 100 : undefined,
+      // NF-e do envio: chave vai na pré-postagem (obrigatória desde 04/2026)
+      ...(nfeChave ? { nfeChave } : {}),
       itensDeclaracao: itens.map((i: any) => ({
         conteudo: [i.refCode, i.descricao, i.cor, i.tamanho].filter(Boolean).join(' ').slice(0, 60) || 'Vestuário',
         quantidade: String(i.qty || 1),
