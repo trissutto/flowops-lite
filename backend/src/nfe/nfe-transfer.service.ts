@@ -1170,6 +1170,8 @@ export class NfeTransferService {
     dest: { cpfCnpj: string; nome: string; endereco: string; numero: string; bairro: string; cidade: string; uf: string; cep: string; codMun: string };
     items: Array<{ sku?: string; ean?: string; descricao: string; ncm?: string; qty: number; vUn: number }>;
     ambienteOverride?: '1' | '2';
+    /** Emitir pela identidade DESSA raiz de CNPJ (ex.: site = LURDS matriz), buscada na config da loja/grupo. */
+    emitirPorRaiz?: string;
   }) {
     const linkId = `envio:${input.pickOrderId}`;
 
@@ -1184,7 +1186,14 @@ export class NfeTransferService {
     if (d.uf?.length !== 2) faltam.push('UF');
     if (faltam.length) throw new BadRequestException(`Dados da cliente incompletos pra NF-e do envio: ${faltam.join(', ')}.`);
 
-    const origem = await this.loadStoreFiscal(input.storeCode, { requireCert: true, identidade: 'base' });
+    const origem = await this.loadStoreFiscal(input.storeCode, {
+      requireCert: true,
+      identidade: 'base',
+      // Venda do SITE: a nota sai pela empresa do site (LURDS matriz) — a
+      // identidade da raiz pedida é buscada na loja e no grupo (mesma máquina
+      // da transferência). Etiqueta/separação NÃO mudam.
+      matchRaiz: input.emitirPorRaiz && input.emitirPorRaiz.length === 8 ? input.emitirPorRaiz : undefined,
+    });
     const tpAmb = input.ambienteOverride || origem.ambiente;
 
     // Idempotência POR AMBIENTE: nota de homologação do mesmo pick NÃO conta

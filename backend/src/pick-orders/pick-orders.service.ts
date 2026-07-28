@@ -145,12 +145,20 @@ export class PickOrdersService {
         const dados = await this.montarDadosNfeEnvio(order, pick);
         if (dados) {
           const amb = process.env.NFE_ENVIO_AMBIENTE === '2' ? '2' : process.env.NFE_ENVIO_AMBIENTE === '1' ? '1' : undefined;
+          // Venda do SITE = empresa do site (LURDS matriz, raiz 30), não a loja
+          // separadora (regra do dono 28/07: "não temos código, seria site").
+          // Envs: NFE_SITE_EMITENTE_RAIZ (8 díg) + NFE_SITE_EMITENTE_STORE
+          // (loja cuja config guarda a identidade/numeração; default a própria).
+          const isSite = order.source !== 'live';
+          const siteRaiz = String(process.env.NFE_SITE_EMITENTE_RAIZ || '').replace(/\D/g, '');
+          const siteStore = String(process.env.NFE_SITE_EMITENTE_STORE || '').trim();
           const r2: any = await this.nfe.emitVendaForEnvio({
             pickOrderId: id,
-            storeCode: String(store?.code || ''),
+            storeCode: isSite && siteRaiz.length === 8 && siteStore ? siteStore : String(store?.code || ''),
             dest: dados.dest,
             items: dados.items,
             ambienteOverride: amb as any,
+            emitirPorRaiz: isSite && siteRaiz.length === 8 ? siteRaiz : undefined,
           });
           nfe = { docId: r2?.doc?.id, status: r2?.ok ? 'authorized' : 'rejected', cStat: r2?.cStat, xMotivo: r2?.xMotivo, chave: r2?.doc?.chave, jaEmitida: !!r2?.jaEmitida };
           if (r2?.ok && r2?.doc?.chave && r2?.doc?.tpAmb === '1') nfeChave = String(r2.doc.chave);
