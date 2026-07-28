@@ -93,6 +93,12 @@ export class ShipmentPdfService {
         this.drawCover(doc, shipment, totalPecasCapa);
 
         // ── PÁGINA 2+: ROMANEIO (A4 RETRATO) ─────────────────────
+        // pdfkit: quebras AUTOMÁTICAS de página (lista comprida) chamam
+        // addPage() sem args, que herda as opções do CONSTRUTOR — paisagem,
+        // por causa da capa. Sem mudar o default aqui, a 1ª folha do romaneio
+        // saía retrato e as continuações voltavam pra paisagem (bug 28/07).
+        doc.options.layout = 'portrait';
+        doc.options.margin = 40;
         doc.addPage({ size: 'A4', layout: 'portrait', margin: 40 });
 
         // ── CABEÇALHO ────────────────────────────────────────────
