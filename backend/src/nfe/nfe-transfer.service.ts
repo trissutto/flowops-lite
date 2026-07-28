@@ -1172,8 +1172,6 @@ export class NfeTransferService {
     ambienteOverride?: '1' | '2';
   }) {
     const linkId = `envio:${input.pickOrderId}`;
-    const ja = await this.prisma.nfeDoc.findFirst({ where: { shipmentId: linkId, status: 'authorized' } });
-    if (ja) return { ok: true, jaEmitida: true, doc: this.publicDoc(ja) };
 
     const d = input.dest;
     const cpfCnpj = this.digits(d.cpfCnpj || '');
@@ -1188,6 +1186,13 @@ export class NfeTransferService {
 
     const origem = await this.loadStoreFiscal(input.storeCode, { requireCert: true, identidade: 'base' });
     const tpAmb = input.ambienteOverride || origem.ambiente;
+
+    // Idempotência POR AMBIENTE: nota de homologação do mesmo pick NÃO conta
+    // quando a emissão agora é produção (senão o teste de homolog "grudava"
+    // pra sempre no envio — visto 28/07).
+    const ja = await this.prisma.nfeDoc.findFirst({ where: { shipmentId: linkId, status: 'authorized', tpAmb } });
+    if (ja) return { ok: true, jaEmitida: true, doc: this.publicDoc(ja) };
+
     const serie = '1';
     const interestadual = origem.ender.uf !== d.uf;
     // Cliente de envio não tem IE cadastrada → árvore do contador decide (6108 interestadual)
