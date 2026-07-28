@@ -161,6 +161,12 @@ export class PickOrdersService {
       }
     }
 
+    // Remetente da etiqueta = a PRÓPRIA loja do envio (endereço da config
+    // fiscal). Fallback: remetente padrão (matriz Itanhaém) se a loja não
+    // tiver config completa. Bug 28/07: pacote de Moema saía com remetente
+    // Itanhaém na etiqueta.
+    const remetenteLoja = await this.remetenteDaLoja(String(store?.code || ''));
+
     let r: any;
     if (order.source === 'live') {
       // LIVE: roteia pelo provedor da loja (Mais Envios atrás de flag) ou Correios.
@@ -173,11 +179,11 @@ export class PickOrdersService {
         if (!senderId) throw new BadRequestException('Loja Mais Envios sem "sender id" — configure na tela de Lojas.');
         r = await this.gerarEnvioMaisEnvios(order.liveCartId, senderId);
       } else {
-        r = await this.livePdv.gerarEnvioCorreios(order.liveCartId, nfeChave);
+        r = await this.livePdv.gerarEnvioCorreios(order.liveCartId, nfeChave, remetenteLoja || undefined);
       }
     } else {
       // SITE: Correios a partir do próprio Order (endereço + itens do pedido).
-      r = await this.gerarEnvioCorreiosSite(order, pick, nfeChave);
+      r = await this.gerarEnvioCorreiosSite(order, pick, nfeChave, remetenteLoja || undefined);
     }
     if (!r?.codigoRastreio) throw new BadRequestException('Não foi possível gerar o rastreio.');
 
@@ -221,6 +227,34 @@ export class PickOrdersService {
     }
 
     return { ok: true, codigoRastreio: r.codigoRastreio, idPrepostagem: r.idPrepostagem ?? null, servico: r.servico ?? null, etiquetaPdf: r.etiquetaPdf ?? null, dce, nfe };
+  }
+
+  /**
+   * Remetente da etiqueta dos Correios = a própria loja (endereço da config
+   * fiscal/NfceConfig, que já é completo e validado). Null se a loja não tiver
+   * config — aí o chamador cai no remetente padrão.
+   */
+  private async remetenteDaLoja(storeCode: string): Promise<any | null> {
+    if (!storeCode) return null;
+    try {
+      const cfg: any = await this.prisma.nfceConfig.findUnique({ where: { storeCode } });
+      if (!cfg?.endereco) return null;
+      const e = JSON.parse(String(cfg.endereco));
+      const cep = String(e?.cep || '').replace(/\D/g, '');
+      if (!e?.logradouro || cep.length !== 8) return null;
+      return {
+        nome: String(cfg.fantasia || cfg.razaoSocial || 'LURDS PLUS SIZE').slice(0, 50),
+        cnpjCpf: String(cfg.cnpj || '').replace(/\D/g, ''),
+        endereco: String(e.logradouro),
+        numero: String(e.numero || 'S/N'),
+        bairro: String(e.bairro || ''),
+        cidade: String(e.municipio || e.cidade || ''),
+        uf: String(e.uf || 'SP'),
+        cep,
+      };
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -391,7 +425,7 @@ export class PickOrdersService {
   }
 
   /** Gera a pré-postagem dos Correios pro pedido do SITE (a partir do Order). */
-  private async gerarEnvioCorreiosSite(order: any, pick: any, nfeChave?: string) {
+  private async gerarEnvioCorreiosSite(order: any, pick: any, nfeChave?: string, remetenteLoja?: any) {
     if (order.isPickup) throw new BadRequestException('Retirada em loja não gera envio.');
     let addr: any = {};
     try { addr = JSON.parse(order.shippingAddress || '{}'); } catch { /* endereço cru */ }
@@ -428,7 +462,7 @@ export class PickOrdersService {
     const totalPecas = lista.reduce((s: number, i: any) => s + (Number(i.quantity) || 1), 0) || 1;
     const pesoGramas = Math.max(300, totalPecas * 200);
     const servico: 'PAC' | 'SEDEX' = uf === 'SP' ? 'SEDEX' : 'PAC';
-    const rem = this.correios.remetentePadrao();
+    const rem = remetenteLoja || this.correios.remetentePadrao();
 
     const resp: any = await this.correios.criarPrepostagem({
       servico,
