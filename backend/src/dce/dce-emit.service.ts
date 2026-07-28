@@ -117,6 +117,15 @@ export class DceEmitService {
     return doc;
   }
 
+  /** Última DC-e de um pick-order (pra Reimprimir a DACE na loja). */
+  async findByPickOrder(pickOrderId: string) {
+    return this.prisma.dceDoc.findFirst({
+      where: { pickOrderId },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, status: true, cStat: true, xMotivo: true, chave: true, qrCodeUrl: true, tpAmb: true },
+    });
+  }
+
   async list(opts: { storeCode?: string; limit?: number } = {}) {
     return this.prisma.dceDoc.findMany({
       where: opts.storeCode ? { storeCode: opts.storeCode } : undefined,

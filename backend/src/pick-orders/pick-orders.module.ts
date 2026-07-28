@@ -9,13 +9,15 @@ import { LivePdvModule } from '../live-pdv/live-pdv.module';
 import { WincredMirrorModule } from '../wincred-mirror/wincred-mirror.module';
 import { CorreiosModule } from '../correios/correios.module';
 import { MaisEnviosModule } from '../mais-envios/mais-envios.module';
+import { DceModule } from '../dce/dce.module';
 import { CorreiosPostagemReconcileCron } from './correios-postagem-reconcile.cron';
 
 @Module({
   // LivePdvModule → ManychatService (WhatsApp de rastreio pra cliente da LIVE)
   // WincredMirrorModule → WincredCatalogService (preço do espelho pra diferença na troca de peça)
   // CorreiosModule → CorreiosService (rastreio pro cron marcar enviado na postagem)
-  imports: [PrismaModule, WebsocketModule, forwardRef(() => WooCommerceModule), ErpModule, LivePdvModule, WincredMirrorModule, CorreiosModule, MaisEnviosModule],
+  // DceModule → DceEmitService (declaração de conteúdo eletrônica no "Gerar envio")
+  imports: [PrismaModule, WebsocketModule, forwardRef(() => WooCommerceModule), ErpModule, LivePdvModule, WincredMirrorModule, CorreiosModule, MaisEnviosModule, DceModule],
   controllers: [PickOrdersController],
   providers: [PickOrdersService, CorreiosPostagemReconcileCron],
   exports: [PickOrdersService],
