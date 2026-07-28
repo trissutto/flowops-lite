@@ -128,10 +128,24 @@ export class RoutingEngine {
     // REGRA 2 — mínimo de lojas (greedy set cover)
     const plan = this.greedySetCover(activeStores, ctx, stockMap);
     const coveredSkus = new Set(plan.flatMap((p) => p.items.map((i) => i.sku)));
-    const missing = ctx.items.filter((i) => !coveredSkus.has(i.sku));
+    let missing = ctx.items.filter((i) => !coveredSkus.has(i.sku));
+
+    // REGRA 4 (revisada 28/07) — SPLIT FALLBACK entre lojas.
+    // O greedy só atribui um SKU a uma loja que tenha a quantidade INTEIRA. Se
+    // sobrou SKU que nenhuma loja cobre sozinha (ex: pedido 2×, cada loja tem 1),
+    // a rede TINHA o estoque, só espalhado — antes isso virava ruptura falsa.
+    // Agora dividimos a quantidade entre lojas (priorizando as que já estão no
+    // plano, pra não criar pacote extra à toa; depois maior estoque). Só o que
+    // nem a rede inteira cobre continua como ruptura de verdade.
+    // Kill-switch: ctx.disableSkuSplit (env ROUTING_SPLIT_SKU=0 na service).
+    const splitEnabled =
+      ctx.disableSkuSplit != null ? !ctx.disableSkuSplit : process.env.ROUTING_SPLIT_SKU !== '0';
+    if (missing.length > 0 && splitEnabled) {
+      missing = this.splitFillAcrossStores(plan, missing, activeStores, ctx, stockMap);
+    }
 
     if (missing.length > 0) {
-      // ruptura total ou parcial
+      // ruptura total ou parcial (nem com split a rede cobre)
       return {
         success: false,
         strategy: 'insufficient-stock',
@@ -449,6 +463,75 @@ export class RoutingEngine {
     }
 
     return plan;
+  }
+
+  /**
+   * SPLIT FALLBACK — divide a quantidade de um SKU entre várias lojas quando
+   * nenhuma tem sozinha o total pedido. Muta `plan` (soma nas lojas) e debita
+   * o `stockMap` pra não realocar a mesma unidade. Devolve o que NEM a rede
+   * inteira cobriu (ruptura real).
+   *
+   * Ordem de escolha das lojas (por SKU), pra minimizar # de pacotes/frete:
+   *   1. Lojas que JÁ estão no plano (aproveita o pacote existente).
+   *   2. Maior estoque desse SKU (menos lojas envolvidas).
+   *   3. Score composto (distância/prioridade) como desempate.
+   */
+  private splitFillAcrossStores(
+    plan: PickAssignment[],
+    missingItems: OrderItemInput[],
+    stores: StoreInput[],
+    ctx: RoutingContext,
+    stockMap: Map<string, number>,
+  ): OrderItemInput[] {
+    const stillMissing: OrderItemInput[] = [];
+
+    for (const item of missingItems) {
+      let need = item.quantity;
+      const planStoreIds = new Set(plan.map((p) => p.storeId));
+
+      const candidates = stores
+        .filter((s) => (stockMap.get(this.stockKey(s.code, item.sku)) ?? 0) > 0)
+        .sort((a, b) => {
+          const aIn = planStoreIds.has(a.id) ? 1 : 0;
+          const bIn = planStoreIds.has(b.id) ? 1 : 0;
+          if (aIn !== bIn) return bIn - aIn;
+          const av = stockMap.get(this.stockKey(a.code, item.sku)) ?? 0;
+          const bv = stockMap.get(this.stockKey(b.code, item.sku)) ?? 0;
+          if (av !== bv) return bv - av;
+          return this.scoreStore(b, ctx, stockMap) - this.scoreStore(a, ctx, stockMap);
+        });
+
+      for (const store of candidates) {
+        if (need <= 0) break;
+        const avail = stockMap.get(this.stockKey(store.code, item.sku)) ?? 0;
+        if (avail <= 0) continue;
+        const take = Math.min(avail, need);
+        this.addToPlan(plan, store, item.sku, take);
+        stockMap.set(this.stockKey(store.code, item.sku), avail - take);
+        need -= take;
+      }
+
+      if (need > 0) stillMissing.push({ ...item, quantity: need });
+    }
+
+    return stillMissing;
+  }
+
+  /** Soma `quantity` do SKU na loja: mescla no assignment existente ou cria um novo. */
+  private addToPlan(plan: PickAssignment[], store: StoreInput, sku: string, quantity: number) {
+    const existing = plan.find((p) => p.storeId === store.id);
+    if (existing) {
+      const line = existing.items.find((i) => i.sku === sku);
+      if (line) line.quantity += quantity;
+      else existing.items.push({ sku, quantity });
+    } else {
+      plan.push({
+        storeId: store.id,
+        storeCode: store.code,
+        storeName: store.name,
+        items: [{ sku, quantity }],
+      });
+    }
   }
 
   private explainScores(stores: StoreInput[], ctx: RoutingContext, stockMap: Map<string, number>) {
