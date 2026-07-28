@@ -8,6 +8,7 @@ import { LivePdvService } from '../live-pdv/live-pdv.service';
 import { MaisEnviosService } from '../mais-envios/mais-envios.service';
 import { CorreiosService } from '../correios/correios.service';
 import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service';
+import { DceEmitService } from '../dce/dce-emit.service';
 
 // Lojas que despacham pelo MAIS ENVIOS (código Flow → sender id no Mais Envios).
 // As demais vão pelo Correios (CWS). Piracicaba/Sorocaba/Limeira/Moema.
@@ -69,6 +70,7 @@ export class PickOrdersService {
     private readonly livePdv: LivePdvService,
     private readonly maisEnvios: MaisEnviosService,
     private readonly correios: CorreiosService,
+    private readonly dce: DceEmitService,
   ) {}
 
   /**
@@ -118,7 +120,82 @@ export class PickOrdersService {
         correiosGeneratedAt: new Date(),
       },
     });
-    return { ok: true, codigoRastreio: r.codigoRastreio, idPrepostagem: r.idPrepostagem ?? null, servico: r.servico ?? null, etiquetaPdf: r.etiquetaPdf ?? null };
+
+    // ── DC-e (declaração de conteúdo eletrônica) do pacote ────────────────
+    // Gated por DCE_ENABLED=1. Cada envio/loja emite a SUA DC-e só com os
+    // itens deste pacote. Falha na DC-e NÃO derruba o envio (a etiqueta já
+    // saiu) — devolve o erro pro front avisar. DCE_AMBIENTE=2 força
+    // homologação durante a validação.
+    let dce: any = null;
+    if (String(process.env.DCE_ENABLED || '').trim() === '1') {
+      try {
+        const dados = await this.montarDadosDce(order, pick, r);
+        if (dados) {
+          const amb = process.env.DCE_AMBIENTE === '1' ? '1' : process.env.DCE_AMBIENTE === '2' ? '2' : undefined;
+          const doc: any = await this.dce.emitir({
+            storeCode: String(store?.code || ''),
+            dest: dados.dest,
+            itens: dados.itens,
+            pickOrderId: id,
+            ambienteOverride: amb as any,
+          });
+          dce = { id: doc.id, status: doc.status, cStat: doc.cStat, xMotivo: doc.xMotivo, chave: doc.chave };
+        }
+      } catch (e: any) {
+        this.logger.warn(`[dce] falha ao emitir pro pick ${id}: ${e?.message || e}`);
+        dce = { status: 'error', erro: String(e?.message || e).slice(0, 300) };
+      }
+    }
+
+    return { ok: true, codigoRastreio: r.codigoRastreio, idPrepostagem: r.idPrepostagem ?? null, servico: r.servico ?? null, etiquetaPdf: r.etiquetaPdf ?? null, dce };
+  }
+
+  /**
+   * Monta destinatário + itens da DC-e a partir do MESMO dado que gerou a
+   * etiqueta: carrinho da live (customer*) ou Order do site (r.destDce que o
+   * gerarEnvioCorreiosSite devolve já normalizado pelo CEP).
+   */
+  private async montarDadosDce(order: any, pick: any, r: any): Promise<{ dest: any; itens: any[] } | null> {
+    if (order.source === 'live' && order.liveCartId) {
+      const cart: any = await (this.prisma as any).livePdvCart.findUnique({ where: { id: order.liveCartId }, include: { items: true } });
+      if (!cart) return null;
+      const itens = (cart.items || []).filter((i: any) => i.status !== 'cancelled');
+      if (!itens.length) return null;
+      return {
+        dest: {
+          nome: cart.customerName || 'Cliente',
+          cpfCnpj: String(cart.customerCpf || '').replace(/\D/g, '') || undefined,
+          logradouro: cart.customerEndereco || '',
+          numero: cart.customerNumero || 'SN',
+          complemento: cart.customerComplemento || '',
+          bairro: cart.customerBairro || '',
+          cidade: cart.customerCidade || '',
+          uf: cart.customerUf || 'SP',
+          cep: String(cart.customerCep || '').replace(/\D/g, ''),
+          fone: String(cart.customerPhone || '').replace(/\D/g, ''),
+        },
+        itens: itens.map((i: any) => ({
+          descricao: [i.refCode, i.descricao, i.cor, i.tamanho].filter(Boolean).join(' ').slice(0, 120) || 'Vestuário',
+          quantidade: Number(i.qty) || 1,
+          valorUnit: (Number(i.priceCents) || 0) / 100,
+        })),
+      };
+    }
+    // SITE: o gerarEnvioCorreiosSite devolve destDce (endereço já CEP-authoritative)
+    if (!r?.destDce) return null;
+    const itensLoja = (order.items || []).filter((i: any) => !i.assignedStoreId || i.assignedStoreId === pick.storeId);
+    const lista = itensLoja.length ? itensLoja : (order.items || []);
+    if (!lista.length) return null;
+    const totalPecas = lista.reduce((s: number, i: any) => s + (Number(i.quantity) || 1), 0) || 1;
+    const fallbackUnit = order.totalAmount ? Number(order.totalAmount) / totalPecas : 0;
+    return {
+      dest: r.destDce,
+      itens: lista.map((i: any) => ({
+        descricao: String(i.productName || 'Vestuário').slice(0, 120),
+        quantidade: Number(i.quantity) || 1,
+        valorUnit: Number(i.unitPrice ?? i.baseUnitPrice ?? fallbackUnit) || 0,
+      })),
+    };
   }
 
   /** Gera a pré-postagem no MAIS ENVIOS a partir do carrinho da live. */
@@ -215,7 +292,17 @@ export class PickOrdersService {
       itensDeclaracao: lista.map((i: any) => ({ conteudo: String(i.productName || 'Vestuário').slice(0, 60), quantidade: String(i.quantity || 1) })),
     });
     if (!resp?.ok) throw new BadRequestException(`Correios recusou o envio: ${resp?.erro || 'erro'}`);
-    return { codigoRastreio: resp.codigoRastreio, idPrepostagem: resp.idPrepostagem ?? null, servico, carrier: `Correios ${servico}` };
+    return {
+      codigoRastreio: resp.codigoRastreio, idPrepostagem: resp.idPrepostagem ?? null, servico, carrier: `Correios ${servico}`,
+      // Destinatário já normalizado (CEP-authoritative) pra DC-e usar o MESMO endereço da etiqueta
+      destDce: {
+        nome: order.customerName || 'Cliente',
+        cpfCnpj: String(order.customerCpf || '').replace(/\D/g, '') || undefined,
+        logradouro: endereco || '', numero: numero || 'SN', complemento,
+        bairro: bairro || '', cidade: cidade || '', uf: uf || 'SP', cep,
+        fone: String(order.customerPhone || '').replace(/\D/g, ''),
+      },
+    };
   }
 
   /**

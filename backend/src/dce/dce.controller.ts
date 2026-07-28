@@ -50,6 +50,21 @@ export class DceController {
     return this.svc.list({ storeCode: store || undefined, limit: limit ? Number(limit) : undefined });
   }
 
+  /** Última DC-e de um pick-order (Reimprimir na loja). */
+  @Get('by-pick/:pickId')
+  byPick(@Req() req: any, @Param('pickId') pickId: string) {
+    this.requireRole(req);
+    return this.svc.findByPickOrder(pickId);
+  }
+
+  /** DACE em base64 (pro download via JSON no front, mesmo padrão da etiqueta). */
+  @Get(':id/dace-b64')
+  async daceB64(@Req() req: any, @Param('id') id: string) {
+    this.requireRole(req);
+    const pdf = await this.dace.gerar(id);
+    return { ok: true, pdfBase64: pdf.toString('base64') };
+  }
+
   /** Detalhe de uma DC-e (inclui XMLs pra diagnóstico). */
   @Get(':id')
   get(@Req() req: any, @Param('id') id: string) {

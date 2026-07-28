@@ -699,12 +699,24 @@ export default function MinhaLojaPage() {
   }
   // Baixa a ETIQUETA (rótulo) + a DECLARAÇÃO DE CONTEÚDO (documento separado,
   // fluxo assíncrono do CWS). Os Correios exigem a declaração pra envio a CPF.
-  async function baixarEtiquetaCorreios(idPre: string, rastreio: string) {
+  async function baixarEtiquetaCorreios(idPre: string, rastreio: string, pickId?: string) {
     try {
       const et = await api<any>('/correios/etiqueta', { method: 'POST', body: JSON.stringify({ idPrepostagem: idPre }) });
       if (et?.ok && et.pdfBase64) { downloadPdf(et.pdfBase64, `etiqueta-${rastreio}.pdf`); pushToast('🏷️ Etiqueta baixada'); }
       else pushToast(`Etiqueta não ficou pronta: ${et?.erro ?? 'tente reimprimir'}`);
     } catch { pushToast('Etiqueta falhou (tente reimprimir).'); }
+    // DACE (declaração de conteúdo eletrônica com QR) — se este envio tem DC-e autorizada
+    if (pickId) {
+      try {
+        const d = await api<any>(`/dce/by-pick/${pickId}`);
+        if (d?.id && d.status === 'authorized') {
+          const b = await api<any>(`/dce/${d.id}/dace-b64`);
+          if (b?.ok && b.pdfBase64) { downloadPdf(b.pdfBase64, `dace-${rastreio}.pdf`); pushToast('📄 DACE (declaração) baixada'); }
+        } else if (d?.id && d.status !== 'authorized') {
+          pushToast(`DC-e não autorizada (${d.cStat ?? d.status}): ${d.xMotivo ?? ''}`);
+        }
+      } catch { /* DACE opcional — sem DC-e pro envio */ }
+    }
     try {
       const dc = await api<any>('/correios/declaracao', { method: 'POST', body: JSON.stringify({ idPrepostagem: idPre }) });
       // A declaração vem em HTML (a mesma página que o QR code abre). Abre numa
@@ -731,13 +743,22 @@ export default function MinhaLojaPage() {
         ? { ...x, trackingCode: r.codigoRastreio, carrier: r.servico ? `Correios ${r.servico}` : 'Correios', correiosPrepostagemId: r.idPrepostagem ?? null }
         : x)));
       pushToast(`📮 Envio gerado (${r.servico ?? '—'}): ${r.codigoRastreio} — aguardando postagem`);
+      if (r.dce?.status === 'error' || r.dce?.status === 'rejected') {
+        pushToast(`DC-e falhou (${r.dce?.cStat ?? ''}): ${r.dce?.xMotivo ?? r.dce?.erro ?? 'ver retaguarda'}`);
+      }
       if (r.etiquetaPdf) {
         // Mais Envios já devolve o PDF da etiqueta na resposta
         downloadPdf(r.etiquetaPdf, `etiqueta-${r.codigoRastreio}.pdf`);
         pushToast('🏷️ Etiqueta baixada');
+        if (r.dce?.id && r.dce.status === 'authorized') {
+          try {
+            const b = await api<any>(`/dce/${r.dce.id}/dace-b64`);
+            if (b?.ok && b.pdfBase64) { downloadPdf(b.pdfBase64, `dace-${r.codigoRastreio}.pdf`); pushToast('📄 DACE (declaração) baixada'); }
+          } catch { /* opcional */ }
+        }
       } else if (r.idPrepostagem) {
-        // Correios: etiqueta + declaração por chamada separada
-        await baixarEtiquetaCorreios(String(r.idPrepostagem), r.codigoRastreio);
+        // Correios: etiqueta + DACE por chamada separada
+        await baixarEtiquetaCorreios(String(r.idPrepostagem), r.codigoRastreio, row.id);
       }
     } catch (err: any) {
       pushToast(`Erro no envio Correios: ${err?.message ?? 'falha'}`);
@@ -1011,7 +1032,7 @@ export default function MinhaLojaPage() {
               onShip={() => setShowShippedModal(row)}
               onCorreios={() => gerarEnvioCorreios(row)}
               onReabrir={() => reabrirEnvio(row)}
-              onReimprimir={() => row.correiosPrepostagemId ? baixarEtiquetaCorreios(String(row.correiosPrepostagemId), row.trackingCode || 'etiqueta') : pushToast('Sem pré-postagem pra reimprimir.')}
+              onReimprimir={() => row.correiosPrepostagemId ? baixarEtiquetaCorreios(String(row.correiosPrepostagemId), row.trackingCode || 'etiqueta', row.id) : pushToast('Sem pré-postagem pra reimprimir.')}
               onMarcarEnviado={() => marcarEnviadoManual(row)}
               onPrint={() => openPrintWindow(row.id)}
               onReportIssue={() => setShowIssueModal(row)}
