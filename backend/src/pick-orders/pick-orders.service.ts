@@ -13,8 +13,18 @@ import { NfeTransferService } from '../nfe/nfe-transfer.service';
 import { DanfePdfService } from '../nfe/danfe-pdf.service';
 
 // Lojas que despacham pelo MAIS ENVIOS (código Flow → sender id no Mais Envios).
-// As demais vão pelo Correios (CWS). Piracicaba/Sorocaba/Limeira/Moema.
+// As demais vão pelo Correios (CWS). Rede: Piracicaba/Sorocaba/Limeira/Moema;
+// franquias (Vinhedo/Jundiaí/Suzano/Anália Franco) entram via env sem deploy:
+// MAISENVIOS_STORES_JSON = {"10": 1234, "17": 5678, ...} (código → sender id).
 const MAISENVIOS_STORES: Record<string, number> = { '05': 3605, '06': 209, '11': 213, '15': 22908 };
+function maisEnviosStores(): Record<string, number> {
+  const base: Record<string, number> = { ...MAISENVIOS_STORES };
+  try {
+    const j = JSON.parse(process.env.MAISENVIOS_STORES_JSON || '{}');
+    for (const k of Object.keys(j)) { const v = Number(j[k]); if (v > 0) base[String(k)] = v; }
+  } catch { /* JSON inválido → só o mapa fixo */ }
+  return base;
+}
 import { authorizeMinLevel } from '../auth/auth-levels.util';
 
 // Status LOGÍSTICO do pick-order (controlado pela loja):
@@ -152,13 +162,21 @@ export class PickOrdersService {
           const isSite = order.source !== 'live';
           const siteRaiz = String(process.env.NFE_SITE_EMITENTE_RAIZ || '').replace(/\D/g, '');
           const siteStore = String(process.env.NFE_SITE_EMITENTE_STORE || '').trim();
+          // FRANQUIAS emitem pela MDD CERQUEIRA (dono 28/07): mapa loja→raiz
+          // por env, ex. NFE_EMITENTE_RAIZ_POR_LOJA = {"10":"<raizMDD>",...}.
+          // Vale pra venda da LIVE da franquia; site continua LURDS.
+          let lojaRaiz = '';
+          try {
+            const mapa = JSON.parse(process.env.NFE_EMITENTE_RAIZ_POR_LOJA || '{}');
+            lojaRaiz = String(mapa[String(store?.code || '')] || '').replace(/\D/g, '');
+          } catch { /* JSON inválido → sem override */ }
           const r2: any = await this.nfe.emitVendaForEnvio({
             pickOrderId: id,
             storeCode: isSite && siteRaiz.length === 8 && siteStore ? siteStore : String(store?.code || ''),
             dest: dados.dest,
             items: dados.items,
             ambienteOverride: amb as any,
-            emitirPorRaiz: isSite && siteRaiz.length === 8 ? siteRaiz : undefined,
+            emitirPorRaiz: isSite && siteRaiz.length === 8 ? siteRaiz : (lojaRaiz.length === 8 ? lojaRaiz : undefined),
           });
           nfe = { docId: r2?.doc?.id, status: r2?.ok ? 'authorized' : 'rejected', cStat: r2?.cStat, xMotivo: r2?.xMotivo, chave: r2?.doc?.chave, jaEmitida: !!r2?.jaEmitida };
           if (r2?.ok && r2?.doc?.chave && r2?.doc?.tpAmb === '1') nfeChave = String(r2.doc.chave);
@@ -177,7 +195,7 @@ export class PickOrdersService {
 
     // Provedor da loja (vale pra LIVE **e** SITE — regra do dono 28/07):
     // lojas do Mais Envios despacham TUDO por lá quando MAISENVIOS_ROUTING=1.
-    const mapped = MAISENVIOS_STORES[String(store?.code || '')];
+    const mapped = maisEnviosStores()[String(store?.code || '')];
     const routingOn = String(process.env.MAISENVIOS_ROUTING || '').trim() === '1';
     const provider = routingOn ? (store?.shippingProvider || (mapped ? 'maisenvios' : 'correios')) : 'correios';
     const senderId = store?.maisEnviosSenderId || mapped || null;
