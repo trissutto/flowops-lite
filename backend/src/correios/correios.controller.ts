@@ -62,6 +62,13 @@ export class CorreiosController {
     return this.svc.baixarDeclaracaoConteudo(body?.idPrepostagem);
   }
 
+  /** DEBUG: pré-postagem crua da Correios (pra inspecionar se a DC-e/QR foi emitida). */
+  @Get('prepostagem-debug')
+  prepostagemDebug(@Req() req: any, @Query('id') id: string) {
+    this.requireRole(req);
+    return this.svc.prepostagemRaw(id);
+  }
+
   /** Rastreia um objeto pelo código. */
   @Get('rastreio')
   rastreio(@Req() req: any, @Query('codigo') codigo: string) {

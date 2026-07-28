@@ -334,6 +334,23 @@ export class CorreiosService {
   }
 
   /**
+   * DEBUG: puxa a PRÉ-POSTAGEM CRUA da Correios (todos os campos) pra inspecionar
+   * se a DC-e foi emitida (procurar chave/protocolo/DACE/QR no retorno). Não muta
+   * nada. GET .../prepostagens/{id}.
+   */
+  async prepostagemRaw(idPrepostagem: string): Promise<any> {
+    const id = String(idPrepostagem || '').trim();
+    if (!id) throw new BadRequestException('idPrepostagem obrigatório');
+    const headers = await this.auth.authHeader();
+    const base = this.auth.baseUrl;
+    const dl = await axios.get(
+      `${base}/prepostagem/v1/prepostagens/${encodeURIComponent(id)}`,
+      { headers, timeout: 30000, validateStatus: () => true },
+    );
+    return { status: dl.status, data: dl.data };
+  }
+
+  /**
    * Baixa a DECLARAÇÃO DE CONTEÚDO (DACE) de uma pré-postagem — documento
    * separado da etiqueta, que lista os itens (obrigatório em envio pra CPF sem
    * NF-e). É a mesma página que o QR code do rótulo abre.
