@@ -271,25 +271,29 @@ export class MaisEnviosService {
   }
 
   /** Baixa a etiqueta (PDF) de uma pré-postagem pela tag. Logo após a criação
-   *  a API pode ainda estar processando — repesca até 3× com 2s de espera. */
+   *  a API pode ainda estar processando — repesca até 3× com 2s de espera.
+   *  1ª tentativa SEM a página de Declaração de Conteúdo (a gente manda NF-e
+   *  junto — a declaração genérica "R$ 0,10 / dispensado de nota" é errada,
+   *  28/07); se a API não imprimir sem ela, cai pro modo antigo. */
   async baixarEtiqueta(tag: string): Promise<any> {
-    let ultimo: any = null;
-    for (let i = 0; i < 3; i++) {
-      if (i > 0) await new Promise((r) => setTimeout(r, 2000));
-      ultimo = await this.baixarEtiquetaOnce(tag);
+    let ultimo: any = await this.baixarEtiquetaOnce(tag, false);
+    if (ultimo?.ok && ultimo.pdfBase64) return ultimo;
+    for (let i = 0; i < 2; i++) {
+      await new Promise((r) => setTimeout(r, 2000));
+      ultimo = await this.baixarEtiquetaOnce(tag, i > 0);
       if (ultimo?.ok && ultimo.pdfBase64) return ultimo;
     }
     return ultimo;
   }
 
-  private async baixarEtiquetaOnce(tag: string): Promise<any> {
+  private async baixarEtiquetaOnce(tag: string, declared = true): Promise<any> {
     const t = String(tag || '').trim();
     if (!t) throw new BadRequestException('tag obrigatória');
     const headers = await this.auth.authHeader();
     // MOLDE DO PORTAL (capturado 28/07): o options PRECISA vir preenchido —
     // vazio, a API responde 201 com corpo null. Com ele, a resposta é o
     // PRÓPRIO PDF binário (%PDF...), então baixamos como arraybuffer.
-    const printBody = { tag: [t], options: { declared: true, warning: true, model: '1', type: '1' } };
+    const printBody = { tag: [t], options: { declared, warning: true, model: '1', type: '1' } };
     const resp = await axios.post(`${this.auth.baseUrl}/prepost/print`, printBody, {
       headers, timeout: 30000, validateStatus: () => true, responseType: 'arraybuffer',
     });
