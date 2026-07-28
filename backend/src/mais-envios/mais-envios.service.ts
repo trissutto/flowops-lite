@@ -166,11 +166,20 @@ export class MaisEnviosService {
     if (resp.status < 200 || resp.status >= 300) {
       return { ok: false, erro: resp.data?.message || resp.data?.error || (Array.isArray(resp.data?.msgs) ? resp.data.msgs.join('; ') : `HTTP ${resp.status}`), raw: resp.data };
     }
+    // A pré-postagem CRIA com sucesso (2xx) — validado 28/07 — mas o nome do
+    // campo da tag no retorno ainda não é conhecido: prova o máximo de nomes
+    // e, se nada bater, devolve o CORPO CRU no erro pra tela mostrar o formato.
+    const d2: any = resp.data || {};
+    const tag = d2.tag ?? d2.codigo ?? d2.objeto ?? d2.tracking ?? d2.etiqueta ?? d2.code ??
+      d2.prepost?.tag ?? d2.data?.tag ?? d2.data?.tracking ?? d2.data?.codigo ?? null;
+    if (!tag) {
+      return { ok: false, erro: `pré-postagem criada mas sem tag no retorno — corpo: ${JSON.stringify(d2).slice(0, 250)}`, raw: d2 };
+    }
     return {
       ok: true,
-      tag: resp.data?.tag ?? resp.data?.codigo ?? resp.data?.objeto ?? null,
-      idPrepostagem: resp.data?.id ?? null,
-      raw: resp.data,
+      tag: String(tag),
+      idPrepostagem: d2.id ?? d2.data?.id ?? null,
+      raw: d2,
     };
   }
 
