@@ -301,6 +301,11 @@ model RealignmentShipment {
   totalQty          Int      @default(0) @map("total_qty")       // soma das quantidades
   receivedQty       Int      @default(0) @map("received_qty")    // qty efetivamente recebida
   missingQty        Int      @default(0) @map("missing_qty")     // qty marcada como faltante
+  // ── Envio físico da remessa (Correios/Mais Envios, SEDEX — dono 28/07) ──
+  trackingCode          String?   @map("tracking_code")
+  carrier               String?
+  correiosPrepostagemId String?   @map("correios_prepostagem_id")
+  envioGeneratedAt      DateTime? @map("envio_generated_at")
   // Marcador de baixa Giga: setado quando decreaseStock origem rodou com sucesso.
   // Permite reprocessar remessas que fecharam mas o estoque não baixou (idempotência).
   stockDecreasedAt  DateTime? @map("stock_decreased_at")

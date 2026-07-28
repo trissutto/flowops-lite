@@ -13,6 +13,10 @@ import { ShipmentPdfService } from './shipment-pdf.service';
 import { RealignmentReportController } from './realignment-report.controller';
 import { RealignmentReportService } from './realignment-report.service';
 import { RealignmentPricingService } from './realignment-pricing.service';
+import { RemessaEnvioService } from './remessa-envio.service';
+import { CorreiosModule } from '../correios/correios.module';
+import { MaisEnviosModule } from '../mais-envios/mais-envios.module';
+import { NfeModule } from '../nfe/nfe.module';
 
 /**
  * Nota: dependia de WhatsappModule (disparo de WhatsApp consolidado) até o
@@ -21,7 +25,9 @@ import { RealignmentPricingService } from './realignment-pricing.service';
  * WebsocketModule pra emitir `realignment:new` e `realignment:sent`.
  */
 @Module({
-  imports: [AuthModule, PrismaModule, ErpModule, WebsocketModule, WpDbModule],
+  // CorreiosModule/MaisEnviosModule/NfeModule → envio físico da remessa
+  // (etiqueta SEDEX + chave da NF-e 5152 + DANFE no PDF único)
+  imports: [AuthModule, PrismaModule, ErpModule, WebsocketModule, WpDbModule, CorreiosModule, MaisEnviosModule, NfeModule],
   controllers: [RealignmentController, RealignmentReportController],
   providers: [
     RealignmentService,
@@ -31,6 +37,7 @@ import { RealignmentPricingService } from './realignment-pricing.service';
     ShipmentPdfService,
     RealignmentReportService,
     RealignmentPricingService,
+    RemessaEnvioService,
   ],
   exports: [
     RealignmentService,

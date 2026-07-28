@@ -5,6 +5,7 @@ import { RealignmentShipmentService } from './shipment.service';
 import { RealignmentAutoService } from './realignment-auto.service';
 import { TriagemService } from './triage.service';
 import { ShipmentPdfService } from './shipment-pdf.service';
+import { RemessaEnvioService } from './remessa-envio.service';
 import { ErpService } from '../erp/erp.service';
 import type { Response } from 'express';
 
@@ -27,6 +28,7 @@ export class RealignmentController {
     private readonly triage: TriagemService,
     private readonly shipmentPdf: ShipmentPdfService,
     private readonly erp: ErpService,
+    private readonly remessaEnvio: RemessaEnvioService,
   ) {}
 
   // ════════════════════════════════════════════════════════════════════
@@ -554,6 +556,28 @@ export class RealignmentController {
     if (role !== 'store' || !storeId)
       throw new ForbiddenException('Apenas loja origem');
     return this.shipment.closeAndSend({ shipmentId: id, storeId, userId });
+  }
+
+  /**
+   * ENVIO FÍSICO da remessa (SEDEX, provedor pela loja; NF-e 5152 auto +
+   * chave na pré-postagem). POST /realignment/shipments/:id/gerar-envio · origem
+   */
+  @Post('shipments/:id/gerar-envio')
+  gerarEnvioRemessa(@Param('id') id: string, @Req() req: any) {
+    const role = req?.user?.role;
+    const storeId = req?.user?.storeId;
+    const userId = req?.user?.id || req?.user?.sub || null;
+    if (role !== 'store' || !storeId) throw new ForbiddenException('Apenas loja origem');
+    return this.remessaEnvio.gerarEnvio(id, storeId, userId);
+  }
+
+  /** Documentos do envio da remessa num PDF único (etiqueta + DANFE). */
+  @Get('shipments/:id/docs-envio')
+  docsEnvioRemessa(@Param('id') id: string, @Req() req: any) {
+    const role = req?.user?.role;
+    const storeId = req?.user?.storeId;
+    if (role !== 'store' || !storeId) throw new ForbiddenException('Apenas loja');
+    return this.remessaEnvio.docsEnvio(id, storeId);
   }
 
   /**
