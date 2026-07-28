@@ -15,6 +15,14 @@ export class MaisEnviosController {
   }
 
   /** Status da integração (configurado? conta?). */
+  /** DIAG: GET cru em qualquer path da API do Mais Envios (explorar/listar
+   *  as etiquetas criadas que não aparecem no painel). Só leitura. */
+  @Get('diag')
+  diag(@Req() req: any, @Query('path') path: string) {
+    this.requireRole(req);
+    return this.svc.diagGet(path);
+  }
+
   @Get('status')
   status(@Req() req: any) {
     this.requireRole(req);

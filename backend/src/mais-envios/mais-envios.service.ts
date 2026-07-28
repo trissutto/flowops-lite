@@ -200,6 +200,16 @@ export class MaisEnviosService {
     };
   }
 
+  /** DIAG: GET cru autenticado em qualquer path da API (ex.: /prepost) —
+   *  pra enxergar as etiquetas criadas que não aparecem no painel. */
+  async diagGet(path: string): Promise<any> {
+    const p = String(path || '').trim();
+    if (!p.startsWith('/')) throw new BadRequestException('path deve começar com /');
+    const headers = await this.auth.authHeader();
+    const resp = await axios.get(`${this.auth.baseUrl}${p}`, { headers, timeout: 20000, validateStatus: () => true });
+    return { status: resp.status, data: resp.data };
+  }
+
   /** Baixa a etiqueta (PDF) de uma pré-postagem pela tag. */
   async baixarEtiqueta(tag: string): Promise<any> {
     const t = String(tag || '').trim();
