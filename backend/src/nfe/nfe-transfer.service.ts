@@ -7,6 +7,40 @@ import { signXmlNfeWithA1, transmitNfeSefazSp, cancelNfceSefazSp } from '../pdv/
 import { SEFAZ_SP_NFE_ENDPOINTS, HOMOLOG_FRASE } from './nfe-sefaz-endpoints';
 
 /** UF → código IBGE (cUF). Só os estados que a rede opera; expandir se preciso. */
+// ═══ REGRAS FISCAIS DE VENDA (tabela do contador, 28/07/26) ══════════════
+// CFOP decidido AUTOMATICAMENTE (usuário nunca escolhe):
+//   mesmo estado → 5102 · interestadual c/ IE → 6102 · interestadual s/ IE → 6108
+// Alíquota interestadual a partir de SP: 7% pra N/NE/CO + ES; 12% pra S/SE.
+const UF_ALIQ_INTER_7 = new Set(['AC', 'AL', 'AM', 'AP', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MT', 'MS', 'PA', 'PB', 'PE', 'PI', 'RN', 'RO', 'RR', 'SE', 'TO']);
+// Alíquota INTERNA (modal) de cada UF pro DIFAL — CONFERIR COM O CONTADOR;
+// ajustável sem deploy via NFE_UF_ALIQ_JSON ('{"RJ":22,"BA":20.5,...}').
+const UF_ALIQ_INTERNA_DEFAULT: Record<string, number> = {
+  AC: 19, AL: 20, AM: 20, AP: 18, BA: 20.5, CE: 20, DF: 20, ES: 17, GO: 19,
+  MA: 23, MG: 18, MS: 17, MT: 17, PA: 19, PB: 20, PE: 20.5, PI: 22.5, PR: 19.5,
+  RJ: 22, RN: 20, RO: 19.5, RR: 20, RS: 17, SC: 17, SE: 20, SP: 18, TO: 20,
+};
+// FCP (fundo de combate à pobreza) por UF destino — default só RJ 2%;
+// ajustável via NFE_UF_FCP_JSON. Conferir com o contador.
+const UF_FCP_DEFAULT: Record<string, number> = { RJ: 2 };
+
+function aliqInternaUF(uf: string): number {
+  try { const j = JSON.parse(process.env.NFE_UF_ALIQ_JSON || '{}'); if (j[uf] != null) return Number(j[uf]); } catch { /* JSON inválido → default */ }
+  return UF_ALIQ_INTERNA_DEFAULT[uf] ?? 18;
+}
+function fcpUF(uf: string): number {
+  try { const j = JSON.parse(process.env.NFE_UF_FCP_JSON || '{}'); if (j[uf] != null) return Number(j[uf]); } catch { /* idem */ }
+  return UF_FCP_DEFAULT[uf] ?? 0;
+}
+function aliqInterSaidaSP(destUF: string): number {
+  return UF_ALIQ_INTER_7.has(destUF) ? 7 : 12;
+}
+/** Regra central do CFOP de venda (árvore do contador). */
+export function cfopVenda(origemUF: string, destUF: string, destTemIE: boolean): { cfop: string; natOp: string } {
+  if (origemUF === destUF) return { cfop: '5102', natOp: 'VENDA DE MERCADORIA ADQUIRIDA DE TERCEIROS' };
+  if (destTemIE) return { cfop: '6102', natOp: 'VENDA DE MERCADORIA ADQUIRIDA DE TERCEIROS' };
+  return { cfop: '6108', natOp: 'VENDA DE MERC. ADQ. DE TERCEIROS DESTINADA A NAO CONTRIBUINTE' };
+}
+
 const CUF_BY_UF: Record<string, string> = {
   SP: '35', RJ: '33', MG: '31', ES: '32', PR: '41', SC: '42', RS: '43',
   BA: '29', GO: '52', DF: '53', MS: '50', MT: '51', PE: '26', CE: '23',
@@ -1026,8 +1060,10 @@ export class NfeTransferService {
     }
 
     // Itens a PREÇO DE VENDA (não custo).
+    // CFOP pela regra central do contador (28/07): cliente de venda direta não
+    // tem IE cadastrada → interestadual vira 6108 (consumidor final + DIFAL).
     const interestadual = origem.ender.uf !== uf;
-    const cfop = interestadual ? '6102' : '5102';
+    const { cfop, natOp: natOpRegra } = cfopVenda(origem.ender.uf, uf, false);
     const items = (sale.items as any[]).map((it) => ({
       sku: String(it.sku || '').trim(),
       ean: this.gtinValido(String(it.ean || '').trim()),
@@ -1042,7 +1078,7 @@ export class NfeTransferService {
     await this.garantirContinuacao(origem.storeCode, origem.cnpj, serie);
     let numero = await this.seq.next(origem.storeCode, serie, { start: this.startPadraoPara(origem.cnpj, serie) });
     const cUF = CUF_BY_UF[origem.ender.uf] || origem.ender.codMunicipio.slice(0, 2);
-    const natOp = 'VENDA DE MERCADORIA';
+    const natOp = natOpRegra;
     const dest = { cpfCnpj, nome, endereco, numero: custNumero, bairro, cidade, uf, cep, codMun };
 
     const doc = await this.prisma.nfeDoc.create({
@@ -1098,6 +1134,8 @@ export class NfeTransferService {
     origem: StoreFiscal;
     dest: { cpfCnpj: string; nome: string; endereco: string; numero: string; bairro: string; cidade: string; uf: string; cep: string; codMun: string };
     interestadual: boolean;
+    /** IE do destinatário quando CONTRIBUINTE (CFOP 6102) — sem ela, consumidor final (indIEDest 9 + DIFAL). */
+    destIE?: string;
     items: Array<{ sku: string; ean: string; xProd: string; ncm: string; cfop: string; qty: number; vUn: number; vProd: number }>;
     valorTotal: number; saleRef: string;
   }): string {
@@ -1124,15 +1162,24 @@ export class NfeTransferService {
       `<enderDest><xLgr>${this.esc(p.dest.endereco)}</xLgr><nro>${this.esc(p.dest.numero || 'S/N')}</nro>` +
       `<xBairro>${this.esc(p.dest.bairro)}</xBairro><cMun>${p.dest.codMun}</cMun><xMun>${this.esc(p.dest.cidade)}</xMun>` +
       `<UF>${p.dest.uf}</UF><CEP>${p.dest.cep}</CEP><cPais>1058</cPais><xPais>BRASIL</xPais></enderDest>`;
-    const dest = `<dest>${docTag}<xNome>${this.esc(destNome)}</xNome>${enderDest}<indIEDest>9</indIEDest></dest>`;
+    const destIE = String(p.destIE || '').replace(/\D/g, '');
+    const dest = `<dest>${docTag}<xNome>${this.esc(destNome)}</xNome>${enderDest}<indIEDest>${destIE ? '1' : '9'}</indIEDest>${destIE ? `<IE>${destIE}</IE>` : ''}</dest>`;
 
     const autXmlCnpj = String(process.env.NFE_AUTXML_CNPJ ?? '11145597000189').replace(/\D/g, '');
     const autXML = autXmlCnpj ? `<autXML><CNPJ>${autXmlCnpj}</CNPJ></autXML>` : '';
 
     const aliqInterna = Number(process.env.NFE_ICMS_ALIQ_INTERNA ?? 18);
-    const aliqInter = Number(process.env.NFE_ICMS_ALIQ_INTERESTADUAL ?? 12);
+    // Interestadual por UF DESTINO (tabela do contador): 7% N/NE/CO+ES · 12% S/SE
+    const aliqInter = p.interestadual ? aliqInterSaidaSP(p.dest.uf) : 0;
+    // DIFAL (EC 87/15): interestadual pra CONSUMIDOR FINAL não contribuinte
+    // (CFOP 6108) → 100% da diferença pro estado destino + FCP quando houver.
+    const temDifal = crt3 && p.interestadual && !destIE;
+    const pIcmsUfDest = temDifal ? aliqInternaUF(p.dest.uf) : 0;
+    const pFcpDest = temDifal ? fcpUF(p.dest.uf) : 0;
     let totBC = 0;
     let totICMS = 0;
+    let totIcmsUfDest = 0;
+    let totFcpUfDest = 0;
     const det = p.items
       .map((it, idx) => {
         const xProd = homolog ? HOMOLOG_FRASE : it.xProd;
@@ -1143,6 +1190,7 @@ export class NfeTransferService {
           `<cEANTrib>${it.ean}</cEANTrib><uTrib>UN</uTrib><qTrib>${it.qty.toFixed(4)}</qTrib>` +
           `<vUnTrib>${this.money(it.vUn)}</vUnTrib><indTot>1</indTot></prod>`;
         let icms: string;
+        let icmsUfDest = '';
         if (crt3) {
           const pIcms = p.interestadual ? aliqInter : aliqInterna;
           const vBC = Math.round(it.vProd * 100) / 100;
@@ -1150,6 +1198,19 @@ export class NfeTransferService {
           totBC += vBC;
           totICMS += vIcms;
           icms = `<ICMS><ICMS00><orig>0</orig><CST>00</CST><modBC>3</modBC><vBC>${this.money(vBC)}</vBC><pICMS>${pIcms.toFixed(4)}</pICMS><vICMS>${this.money(vIcms)}</vICMS></ICMS00></ICMS>`;
+          if (temDifal) {
+            const vFcp = Math.round(vBC * pFcpDest) / 100;
+            const vDifal = Math.round(vBC * Math.max(0, pIcmsUfDest - pIcms)) / 100;
+            totFcpUfDest += vFcp;
+            totIcmsUfDest += vDifal;
+            icmsUfDest =
+              `<ICMSUFDest><vBCUFDest>${this.money(vBC)}</vBCUFDest>` +
+              (pFcpDest > 0 ? `<vBCFCPUFDest>${this.money(vBC)}</vBCFCPUFDest><pFCPUFDest>${pFcpDest.toFixed(4)}</pFCPUFDest>` : '') +
+              `<pICMSUFDest>${pIcmsUfDest.toFixed(4)}</pICMSUFDest><pICMSInter>${pIcms.toFixed(2)}</pICMSInter>` +
+              `<pICMSInterPart>100.00</pICMSInterPart>` +
+              (pFcpDest > 0 ? `<vFCPUFDest>${this.money(vFcp)}</vFCPUFDest>` : '') +
+              `<vICMSUFDest>${this.money(vDifal)}</vICMSUFDest><vICMSUFRemet>0.00</vICMSUFRemet></ICMSUFDest>`;
+          }
         } else {
           // Simples Nacional — CSOSN 102 (tributada, sem crédito), igual à NFC-e.
           icms = `<ICMS><ICMSSN102><orig>0</orig><CSOSN>102</CSOSN></ICMSSN102></ICMS>`;
@@ -1157,13 +1218,19 @@ export class NfeTransferService {
         const pisCofins = crt3
           ? `<PIS><PISAliq><CST>01</CST><vBC>0.00</vBC><pPIS>0.0000</pPIS><vPIS>0.00</vPIS></PISAliq></PIS><COFINS><COFINSAliq><CST>01</CST><vBC>0.00</vBC><pCOFINS>0.0000</pCOFINS><vCOFINS>0.00</vCOFINS></COFINSAliq></COFINS>`
           : `<PIS><PISNT><CST>07</CST></PISNT></PIS><COFINS><COFINSNT><CST>07</CST></COFINSNT></COFINS>`;
-        return `<det nItem="${idx + 1}">${prod}<imposto>${icms}${pisCofins}</imposto></det>`;
+        return `<det nItem="${idx + 1}">${prod}<imposto>${icms}${pisCofins}${icmsUfDest}</imposto></det>`;
       })
       .join('');
 
     const vTot = this.money(p.valorTotal);
+    // ICMSTot: os campos do DIFAL (vFCPUFDest/vICMSUFDest/vICMSUFRemet) entram
+    // logo após vICMSDeson quando a partilha existe.
+    const difalTot = temDifal
+      ? `<vFCPUFDest>${this.money(totFcpUfDest)}</vFCPUFDest><vICMSUFDest>${this.money(totIcmsUfDest)}</vICMSUFDest><vICMSUFRemet>0.00</vICMSUFRemet>`
+      : '';
     const total =
       `<total><ICMSTot><vBC>${this.money(totBC)}</vBC><vICMS>${this.money(totICMS)}</vICMS><vICMSDeson>0.00</vICMSDeson>` +
+      difalTot +
       `<vFCP>0.00</vFCP><vBCST>0.00</vBCST><vST>0.00</vST><vFCPST>0.00</vFCPST><vFCPSTRet>0.00</vFCPSTRet>` +
       `<vProd>${vTot}</vProd><vFrete>0.00</vFrete><vSeg>0.00</vSeg><vDesc>0.00</vDesc><vII>0.00</vII>` +
       `<vIPI>0.00</vIPI><vIPIDevol>0.00</vIPIDevol><vPIS>0.00</vPIS><vCOFINS>0.00</vCOFINS><vOutro>0.00</vOutro><vNF>${vTot}</vNF></ICMSTot></total>`;
