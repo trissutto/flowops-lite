@@ -126,6 +126,10 @@ export class MaisEnviosService {
       pricetable: this.auth.pricetable ? Number(this.auth.pricetable) : undefined,
       service: codigo,
       integratorId: 'flowops',
+      // "complement.Informe o tipo de pre-postagem" (validação do 1º teste real
+      // 28/07): tipo da pré-postagem. Default '1' (normal); ajustável sem
+      // deploy via MAISENVIOS_COMPLEMENT se a API pedir outro valor.
+      complement: process.env.MAISENVIOS_COMPLEMENT || '1',
       sender: {
         contact: s.name || s.contact || 'LURDS',
         federalId: onlyDigits(s.federalid || s.federalId),
