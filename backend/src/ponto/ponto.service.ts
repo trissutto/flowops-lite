@@ -78,7 +78,97 @@ export class PontoService {
   /** Janela mínima entre duas batidas IGUAIS (evita duplo-clique). */
   static readonly DEBOUNCE_MIN = 2; // 2 minutos
 
+  /** Idade máxima de um IP do PDV pra valer como referência do WiFi da loja. */
+  static readonly PDV_IP_FRESH_H = 48; // horas
+
   constructor(private readonly prisma: PrismaService) {}
+
+  // ── IP DO PDV (regra "só no WiFi da loja" pro celular) ───────────
+  //
+  // O navegador não enxerga o SSID do WiFi. O equivalente prático: o PDV
+  // Electron da loja manda heartbeat e a gente grava o IP público de saída.
+  // Quem está no MESMO WiFi sai pra internet com o mesmo IP — então a batida
+  // do celular (source pwa_selfie) só vale se vier de um IP recente do PDV.
+  // Celular no 4G ou fora da loja = IP diferente = bloqueado.
+  //
+  // Kill-switch: PONTO_IP_CHECK=0 desliga a validação (heartbeat segue gravando).
+  // Fail-open: sem IP fresco (<48h) a batida passa, com observação de audit —
+  // cobre o cenário "funcionária chega antes do PDV ligar" e IP renovado à noite.
+
+  /** Throttle em memória: evita UPDATE no Postgres a cada heartbeat repetido. */
+  private pdvIpLastWrite = new Map<string, number>();
+
+  /**
+   * Normaliza IP pra comparação:
+   *  - remove prefixo IPv4-mapeado (::ffff:1.2.3.4 → 1.2.3.4)
+   *  - IPv6: compara só o prefixo /64 (dois aparelhos no mesmo WiFi compartilham
+   *    o /64, mas cada um tem sufixo próprio — comparar o IP inteiro falharia)
+   */
+  static normalizeIp(raw?: string | null): string | null {
+    if (!raw) return null;
+    let ip = String(raw).trim().toLowerCase();
+    if (ip.startsWith('::ffff:')) ip = ip.slice(7);
+    if (!ip.includes(':')) return ip; // IPv4 → compara exato
+    // IPv6: expande '::' pra 8 grupos e pega os 4 primeiros (/64)
+    const parts = ip.split('::');
+    let groups: string[];
+    if (parts.length === 2) {
+      const head = parts[0] ? parts[0].split(':') : [];
+      const tail = parts[1] ? parts[1].split(':') : [];
+      const fill = new Array(Math.max(0, 8 - head.length - tail.length)).fill('0');
+      groups = [...head, ...fill, ...tail];
+    } else {
+      groups = ip.split(':');
+    }
+    return groups
+      .slice(0, 4)
+      .map((g) => g.replace(/^0+(?=.)/, '') || '0')
+      .join(':');
+  }
+
+  /**
+   * Grava o IP de saída do PDV da loja (chamado pelo heartbeat do Electron).
+   * Mantém lista [{ip, seenAt}] em stores.pdvIps: dedupe por IP normalizado,
+   * poda entradas com mais de 7 dias, no máximo 8 IPs.
+   */
+  async recordPdvIp(storeId: string, ip?: string | null) {
+    const norm = PontoService.normalizeIp(ip);
+    if (!storeId || !norm) return { ok: false };
+
+    // Throttle: mesmo IP da mesma loja só regrava a cada 5 min
+    const key = `${storeId}:${norm}`;
+    const last = this.pdvIpLastWrite.get(key) || 0;
+    if (Date.now() - last < 5 * 60_000) return { ok: true, throttled: true };
+    this.pdvIpLastWrite.set(key, Date.now());
+
+    const store = await (this.prisma as any).store.findUnique({
+      where: { id: storeId },
+      select: { pdvIps: true },
+    });
+    if (!store) return { ok: false };
+
+    let list: Array<{ ip: string; seenAt: string }> = [];
+    try {
+      list = JSON.parse(store.pdvIps || '[]') || [];
+    } catch {
+      list = [];
+    }
+    const nowIso = new Date().toISOString();
+    const cutoff = Date.now() - 7 * 24 * 3600_000;
+    list = list.filter(
+      (e) =>
+        PontoService.normalizeIp(e.ip) !== norm &&
+        new Date(e.seenAt).getTime() > cutoff,
+    );
+    list.unshift({ ip: String(ip), seenAt: nowIso });
+    list = list.slice(0, 8);
+
+    await (this.prisma as any).store.update({
+      where: { id: storeId },
+      data: { pdvIps: JSON.stringify(list) },
+    });
+    return { ok: true };
+  }
 
   // ── R2 helpers (mesmo padrão do imobiliário/seller-documents) ────
   private getR2Client(): S3Client {
@@ -383,9 +473,39 @@ export class PontoService {
       select: {
         id: true, name: true,
         pontoGeofence: true, pontoLat: true, pontoLng: true, pontoRaioM: true,
+        pdvIps: true,
       },
     });
     if (!store) throw new NotFoundException('Loja não encontrada');
+
+    // ── IP CHECK (só celular/pwa_selfie): tem que estar no WiFi da loja ──
+    // Compara o IP do request com os IPs recentes do PDV Electron (heartbeat).
+    // Kill-switch: PONTO_IP_CHECK=0. Fail-open sem referência fresca (<48h) —
+    // registra observação de audit em vez de travar a loja.
+    let ipCheckObs: string | null = null;
+    if (source === 'pwa_selfie' && process.env.PONTO_IP_CHECK !== '0') {
+      let ips: Array<{ ip: string; seenAt: string }> = [];
+      try {
+        ips = JSON.parse((store as any).pdvIps || '[]') || [];
+      } catch {
+        ips = [];
+      }
+      const freshCut = Date.now() - PontoService.PDV_IP_FRESH_H * 3600_000;
+      const fresh = ips.filter((e) => new Date(e.seenAt).getTime() > freshCut);
+      if (fresh.length === 0) {
+        ipCheckObs = 'ip-check: sem referência recente do PDV (fail-open)';
+      } else {
+        const reqNorm = PontoService.normalizeIp(input.ip);
+        const match = !!reqNorm &&
+          fresh.some((e) => PontoService.normalizeIp(e.ip) === reqNorm);
+        if (!match) {
+          throw new BadRequestException(
+            'O celular precisa estar conectado no WiFi da loja pra bater o ponto. ' +
+              'Conecte no WiFi (desligue o 4G) e tente de novo.',
+          );
+        }
+      }
+    }
 
     // ── GEOFENCE: só bate ponto perto da loja (anti "bati de casa") ──
     // Opt-in por loja: só valida se ligado E com coordenadas cadastradas.
@@ -441,7 +561,8 @@ export class PontoService {
         lat: input.lat ?? null,
         lng: input.lng ?? null,
         ip: input.ip ?? null,
-        observacoes: input.observacoes ?? null,
+        observacoes:
+          [input.observacoes, ipCheckObs].filter(Boolean).join(' · ') || null,
       },
     });
 
@@ -904,14 +1025,20 @@ export class PontoService {
   }
 
   // ── GEOFENCE (config por loja) ────────────────────────────────────
-  /** Lê a config de geofence do ponto de uma loja. */
+  /** Lê a config de geofence do ponto de uma loja (+ IPs recentes do PDV). */
   async getGeofence(storeId: string) {
     const s = await (this.prisma as any).store.findUnique({
       where: { id: storeId },
-      select: { id: true, name: true, pontoGeofence: true, pontoLat: true, pontoLng: true, pontoRaioM: true },
+      select: { id: true, name: true, pontoGeofence: true, pontoLat: true, pontoLng: true, pontoRaioM: true, pdvIps: true },
     });
     if (!s) throw new NotFoundException('Loja não encontrada');
-    return s;
+    let pdvIps: Array<{ ip: string; seenAt: string }> = [];
+    try {
+      pdvIps = JSON.parse(s.pdvIps || '[]') || [];
+    } catch {
+      pdvIps = [];
+    }
+    return { ...s, pdvIps };
   }
 
   /** Define coordenadas/raio e liga/desliga o geofence do ponto de uma loja. */
