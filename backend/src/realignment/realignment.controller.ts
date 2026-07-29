@@ -572,6 +572,19 @@ export class RealignmentController {
   }
 
   /**
+   * NF-e da remessa (Ponto a Ponto): emite se faltar (idempotente) e devolve
+   * a DANFE em base64. POST /realignment/shipments/:id/nfe · loja origem.
+   */
+  @Post('shipments/:id/nfe')
+  emitirNotaRemessa(@Param('id') id: string, @Req() req: any) {
+    const role = req?.user?.role;
+    const storeId = req?.user?.storeId;
+    const userId = req?.user?.id || req?.user?.sub || null;
+    if (role !== 'store' || !storeId) throw new ForbiddenException('Apenas loja origem');
+    return this.remessaEnvio.emitirNota(id, storeId, userId);
+  }
+
+  /**
    * Define o meio de transporte da remessa: correios | proprio.
    * POST /realignment/shipments/:id/transporte · admin/operator ou loja.
    * Regra default (sem escolha manual): até 10 peças → CORREIOS; acima → PRÓPRIO.

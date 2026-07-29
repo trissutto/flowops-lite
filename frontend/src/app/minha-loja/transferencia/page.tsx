@@ -49,6 +49,8 @@ export default function TransferenciaPage() {
   const [destino, setDestino] = useState('');
   const [codigo, setCodigo] = useState('');
   const [shipment, setShipment] = useState<OpenShip | null>(null);
+  // Última remessa ENVIADA nesta sessão — habilita o "Imprimir Nota Fiscal"
+  const [lastSent, setLastSent] = useState<{ id: string; code: string; dest: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ type: 'ok' | 'err' | 'warn'; text: string } | null>(null);
   const codeRef = useRef<HTMLInputElement>(null);
@@ -174,10 +176,41 @@ export default function TransferenciaPage() {
       await api(`/realignment/shipments/${shipId}/close-and-send`, { method: 'POST' });
       setMsg({ type: 'ok', text: `Remessa ${shipCode} enviada para ${dest} — imprimindo capa + romaneio…` });
       setShipment(null);
+      setLastSent({ id: shipId, code: shipCode, dest });
       // Imprime CAPA (A4 paisagem) + romaneio (lista de produtos) automaticamente.
       await imprimirRemessa(shipId, shipCode);
     } catch (err: any) {
       setMsg({ type: 'err', text: err?.message || 'Falha ao processar/enviar' });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // NF-e da remessa (dono 29/07): emite se faltar (idempotente) e imprime a
+  // DANFE em A4 — mesmo roteamento de impressora do romaneio.
+  async function imprimirNota() {
+    if (!lastSent) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      const r = await api<{ ok: boolean; numero?: number; serie?: string; danfeB64?: string }>(
+        `/realignment/shipments/${lastSent.id}/nfe`,
+        { method: 'POST', body: JSON.stringify({}) },
+      );
+      if (!r?.danfeB64) throw new Error('DANFE não retornou');
+      const bin = atob(r.danfeB64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const blobUrl = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+      const { printPdfA4 } = await import('@/lib/printer-router');
+      const res = await printPdfA4(blobUrl);
+      setMsg({
+        type: 'ok',
+        text: `NF-e ${r.numero}/${r.serie || '1'} — DANFE ${res.mode === 'popup-blocked' ? 'gerada (habilite popups pra imprimir)' : 'na impressora'}.`,
+      });
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+    } catch (err: any) {
+      setMsg({ type: 'err', text: `Nota fiscal: ${err?.message || 'falha ao emitir'}` });
     } finally {
       setBusy(false);
     }
@@ -262,6 +295,26 @@ export default function TransferenciaPage() {
             </div>
           )}
         </div>
+
+        {/* Remessa recém-enviada → opção de imprimir a NF-e (dono 29/07) */}
+        {lastSent && !shipment && (
+          <div className="mt-4 rounded-xl border border-emerald-200 bg-white p-4 shadow-sm">
+            <div className="flex items-center gap-2 text-sm font-bold text-slate-800">
+              <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+              Remessa {lastSent.code} enviada → {lastSent.dest}
+            </div>
+            <button
+              onClick={imprimirNota}
+              disabled={busy}
+              className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 py-2.5 font-bold text-white hover:bg-indigo-700 disabled:opacity-50"
+            >
+              🧾 {busy ? 'Emitindo…' : 'Imprimir Nota Fiscal'}
+            </button>
+            <p className="mt-1 text-center text-[11px] text-slate-400">
+              Emite a NF-e de transferência (se ainda não existir) e imprime a DANFE em A4 pra ir junto da caixa.
+            </p>
+          </div>
+        )}
 
         {/* Remessa em montagem */}
         {shipment && (

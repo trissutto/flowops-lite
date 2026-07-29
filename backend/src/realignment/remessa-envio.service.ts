@@ -57,6 +57,29 @@ export class RemessaEnvioService {
     };
   }
 
+  /** Botão "Imprimir Nota Fiscal" do Ponto a Ponto (dono 29/07): emite a
+   *  NF-e de transferência (idempotente — reusa a autorizada) e devolve a
+   *  DANFE em base64 pra loja imprimir na hora. */
+  async emitirNota(shipmentId: string, storeId: string, userId?: string | null) {
+    const shipment: any = await this.prisma.realignmentShipment.findUnique({ where: { id: shipmentId } });
+    if (!shipment) throw new NotFoundException('Remessa não encontrada');
+    await this.validarLojaOrigem(shipment, storeId);
+    if (shipment.status === 'open') {
+      throw new BadRequestException('Processe e envie a remessa primeiro — a nota sai na sequência.');
+    }
+    let doc: any = await this.prisma.nfeDoc.findFirst({ where: { shipmentId, status: 'authorized' } });
+    if (!doc) {
+      const r: any = await this.nfe.emitForShipment(shipmentId, { userId: userId ?? null });
+      if (!r?.ok) {
+        throw new BadRequestException(`NF-e não autorizada (${r?.cStat ?? ''}): ${r?.xMotivo ?? r?.erro ?? 'erro'}`);
+      }
+      doc = await this.prisma.nfeDoc.findFirst({ where: { shipmentId, status: 'authorized' } });
+    }
+    if (!doc) throw new BadRequestException('NF-e não encontrada após a emissão — tente de novo.');
+    const { buffer } = await this.danfePdf.generateForDoc(doc.id);
+    return { ok: true, numero: doc.numero, serie: doc.serie, chave: doc.chave, danfeB64: buffer.toString('base64') };
+  }
+
   /** 'correios' | 'proprio' — escolhido na tela, senão regra automática
    *  (até 10 peças → Correios; acima → próprio). Dono 29/07. */
   async transporteEfetivo(shipment: any): Promise<'correios' | 'proprio'> {
