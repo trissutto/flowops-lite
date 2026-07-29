@@ -627,13 +627,17 @@ export class SellersService {
         status: 'finalized',
         isTraining: false,
         finalizedAt: { gte: from, lte: to },
+        // MARCADO = "levou pra provar em casa" — NÃO é faturamento (no Giga
+        // fica fora do caixa). Contava e divergia do Giga (dono 29/07).
+        NOT: { paymentMethod: 'MARCADO' },
       },
       select: {
+        id: true,
         storeCode: true,
         sellerName: true,
         vendedorName: true,
         total: true,
-        items: { select: { total: true, sellerName: true } },
+        items: { select: { id: true, total: true, sellerName: true } },
       },
     });
 
@@ -651,15 +655,60 @@ export class SellersService {
       pdvBucket.set(key, cur);
     };
     let totalPdvGeral = 0;
+    // Mapas pra abater DEVOLUÇÕES da venda original (regra Giga, dono 29/07)
+    const fatorBySale = new Map<string, number>();
+    const infoBySale = new Map<string, { storeCode: string; principal: string }>();
+    const sellerByItemId = new Map<string, string>();
     for (const s of pdvSales) {
       const principal = s.sellerName || s.vendedorName || 'Sem vendedora';
       const itens = (s.items || []).filter((i: any) => Number(i.total) > 0);
       totalPdvGeral += Number(s.total || 0);
+      infoBySale.set(s.id, { storeCode: s.storeCode, principal });
       if (itens.length) {
+        // RATEIO do desconto de VENDA (dono 29/07: comissão é sobre o valor
+        // NEGOCIADO): o desconto avulso fica no total da venda, não nos itens
+        // — o fator ajusta cada item pra soma das vendedoras bater EXATAMENTE
+        // com o total da venda (o mesmo que vai pro caixa).
+        const somaItens = itens.reduce((a: number, i: any) => a + Number(i.total || 0), 0);
+        const fator = somaItens > 0 ? Number(s.total || 0) / somaItens : 1;
+        fatorBySale.set(s.id, fator);
         addPdv(principal, 0, s.storeCode, true); // conta a venda 1x
-        for (const it of itens) addPdv(it.sellerName || principal, Number(it.total || 0), s.storeCode, false);
+        for (const it of itens) {
+          if (it.id) sellerByItemId.set(it.id, it.sellerName || principal);
+          addPdv(it.sellerName || principal, Number(it.total || 0) * fator, s.storeCode, false);
+        }
       } else {
+        fatorBySale.set(s.id, 1);
         addPdv(principal, Number(s.total || 0), s.storeCode, true);
+      }
+    }
+
+    // ── DEVOLUÇÕES abatidas NA VENDA ORIGINAL (regra Giga, dono 29/07):
+    // peça devolvida sai do total da vendedora que vendeu, pelo valor
+    // NEGOCIADO (snapshot da devolução × fator de desconto da venda) —
+    // independente de QUANDO a devolução aconteceu. Devolução manual de
+    // peça do Giga antigo (sem venda no Flow) fica fora, igual ao Giga.
+    const saleIds = pdvSales.map((s: any) => s.id);
+    for (let i = 0; i < saleIds.length; i += 500) {
+      const chunk = saleIds.slice(i, i + 500);
+      const devolucoes: any[] = await (this.prisma as any).pdvReturn.findMany({
+        where: { isTraining: false, originalSaleId: { in: chunk } },
+        select: {
+          originalSaleId: true,
+          items: { select: { originalItemId: true, total: true } },
+        },
+      });
+      for (const dev of devolucoes) {
+        const info = infoBySale.get(dev.originalSaleId);
+        if (!info) continue;
+        const fator = fatorBySale.get(dev.originalSaleId) ?? 1;
+        for (const it of dev.items || []) {
+          const abatido = Number(it.total || 0) * fator;
+          if (!abatido) continue;
+          const nome = (it.originalItemId && sellerByItemId.get(it.originalItemId)) || info.principal;
+          addPdv(nome, -abatido, info.storeCode, false);
+          totalPdvGeral -= abatido;
+        }
       }
     }
 
