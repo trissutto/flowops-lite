@@ -616,7 +616,9 @@ export class SellersService {
     };
     for (const s of sales) {
       const principal = s.sellerName || s.vendedorName || 'Sem vendedora';
-      const itens = (s.items || []).filter((i: any) => Number(i.total) > 0);
+      // Inclui itens NEGATIVOS (abatimento lançado como produto — dono 29/07):
+      // o valor negativo abate da vendedora do PRÓPRIO item, não das outras.
+      const itens = (s.items || []).filter((i: any) => Number(i.total) !== 0);
       if (s.paymentMethod === 'MARCADO') {
         get(principal).marcados += Number(s.total || 0);
         continue;
@@ -742,18 +744,20 @@ export class SellersService {
     let totalPdvGeral = 0;
     for (const s of pdvSales) {
       const principal = s.sellerName || s.vendedorName || 'Sem vendedora';
-      const itens = (s.items || []).filter((i: any) => Number(i.total) > 0);
+      // Inclui itens NEGATIVOS (abatimento lançado como produto — dono 29/07):
+      // o valor negativo abate da vendedora do PRÓPRIO item, não das outras.
+      const itens = (s.items || []).filter((i: any) => Number(i.total) !== 0);
       // O que a cliente PAGOU: total da venda menos o abatido em vale-troca
       const vale = (s.payments || [])
         .filter((p: any) => p.method === 'vale_troca')
         .reduce((a: number, p: any) => a + Number(p.valor || 0), 0);
       const pago = Math.max(0, Number(s.total || 0) - vale);
       totalPdvGeral += pago;
-      if (itens.length) {
+      const somaItens = itens.reduce((a: number, i: any) => a + Number(i.total || 0), 0);
+      if (itens.length && somaItens > 0) {
         // Rateio proporcional do PAGO pelos itens de cada vendedora (override
-        // por item vale) — a soma das vendedoras = o que entrou no caixa.
-        const somaItens = itens.reduce((a: number, i: any) => a + Number(i.total || 0), 0);
-        const fator = somaItens > 0 ? pago / somaItens : 1;
+        // por item vale; item negativo entra com sinal e abate de quem é).
+        const fator = pago / somaItens;
         addPdv(principal, 0, s.storeCode, true); // conta a venda 1x
         for (const it of itens) addPdv(it.sellerName || principal, Number(it.total || 0) * fator, s.storeCode, false);
       } else {
