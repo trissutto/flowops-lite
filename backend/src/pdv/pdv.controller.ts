@@ -86,6 +86,22 @@ export class PdvController {
     }
   }
 
+  /** Loja da VENDA — contexto pros PINs com ESCOPO de loja (franqueado MASTER
+   *  só nas lojas dele; dono 29/07). Sessão de loja usa a própria; painel
+   *  admin/franquia resolve pela venda. */
+  private async storeCodeCtx(saleId: string, req: any): Promise<string | undefined> {
+    if (req?.user?.storeCode) return String(req.user.storeCode);
+    try {
+      const sale = await (this.svc as any).prisma.pdvSale.findUnique({
+        where: { id: saleId },
+        select: { storeCode: true },
+      });
+      return sale?.storeCode || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   // ── CACHE DE DESCOBERTA GIGA ─────────────────────────────────────────────
   // FLAG PDV_GIGA_CACHE (default: false):
   //   false → comportamento atual: delega direto pro crediarios.detectClientesTable()
@@ -392,7 +408,7 @@ export class PdvController {
       throw new ForbiddenException('Apenas admin/supervisor/operator');
     }
     if (this.ehPapelFranquia(role)) await this.assertSaleEhFranquia(id);
-    const nivel = validateMinLevel(body?.password, 'MASTER');
+    const nivel = validateMinLevel(body?.password, 'MASTER', await this.storeCodeCtx(id, req));
     const userName = req?.user?.name || req?.user?.email || req?.user?.username || 'admin';
     return this.svc.masterCancelZumbi({
       saleId: id,
@@ -426,7 +442,7 @@ export class PdvController {
       throw new ForbiddenException('Apenas admin/supervisor/operator');
     }
     if (this.ehPapelFranquia(role)) await this.assertSaleEhFranquia(id);
-    const nivel = validateMinLevel(body?.password, 'MASTER');
+    const nivel = validateMinLevel(body?.password, 'MASTER', await this.storeCodeCtx(id, req));
     const userName = req?.user?.name || req?.user?.email || req?.user?.username || 'admin';
     return this.svc.masterEstornarVenda({
       saleId: id,
@@ -454,7 +470,7 @@ export class PdvController {
       throw new ForbiddenException('Apenas admin/supervisor/operator');
     }
     if (this.ehPapelFranquia(role)) await this.assertSaleEhFranquia(id);
-    const nivel = validateMinLevel(body?.password, 'MASTER');
+    const nivel = validateMinLevel(body?.password, 'MASTER', await this.storeCodeCtx(id, req));
     const userName = req?.user?.name || req?.user?.email || req?.user?.username || 'admin';
     return this.svc.masterCancelDuplicada({
       saleId: id,
@@ -1738,7 +1754,7 @@ export class PdvController {
           let liberado = false;
           if (body?.overridePassword) {
             try {
-              const nivel = validateMinLevel(body.overridePassword, 'SUPERVISOR');
+              const nivel = validateMinLevel(body.overridePassword, 'SUPERVISOR', req?.user?.storeCode);
               liberado = true;
               this.logger.warn(
                 `[crediario] LIMITE liberado por override [${nivel}] — venda ${saleId} cliente=${info.cliente.codCliente} (${motivos.join('; ')})`,

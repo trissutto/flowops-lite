@@ -28,12 +28,12 @@ export class ReturnsController {
 
   // Devolução que SAI dinheiro do caixa (dinheiro/pix) exige senha de GERENTE
   // + justificativa. Troca/crédito (vale, não sai dinheiro) seguem livres.
-  private requireCashAuth(modo: string | undefined, motivo: string | undefined, password: string | undefined) {
+  private requireCashAuth(modo: string | undefined, motivo: string | undefined, password: string | undefined, storeCode?: string) {
     if (modo === 'dinheiro' || modo === 'pix') {
       if (!motivo || String(motivo).trim().length < 3) {
         throw new BadRequestException('Justificativa obrigatória (mín. 3 caracteres) para devolução em dinheiro/pix');
       }
-      validateMinLevel(password, 'GERENTE'); // lança se a senha não for ≥ GERENTE
+      validateMinLevel(password, 'GERENTE', storeCode); // lança se a senha não for ≥ GERENTE
     }
   }
 
@@ -140,7 +140,7 @@ export class ReturnsController {
     },
   ) {
     this.requireRole(req);
-    this.requireCashAuth(body.modo, body.motivo, body.password);
+    this.requireCashAuth(body.modo, body.motivo, body.password, req?.user?.storeCode);
     const { storeCode, storeName } = this.resolveStore(req, body);
     const u = req?.user || {};
     return this.svc.createManualReturn({
@@ -185,7 +185,7 @@ export class ReturnsController {
     },
   ) {
     this.requireRole(req);
-    this.requireCashAuth(body.modo, body.motivo, body.password);
+    this.requireCashAuth(body.modo, body.motivo, body.password, req?.user?.storeCode);
     const { storeCode, storeName } = this.resolveStore(req, body);
     return this.svc.createReturn({
       originalSaleId: body.originalSaleId,
@@ -243,7 +243,7 @@ export class ReturnsController {
     },
   ) {
     this.requireRole(req);
-    this.requireCashAuth(body.modo, body.motivo, body.password);
+    this.requireCashAuth(body.modo, body.motivo, body.password, req?.user?.storeCode);
     const { storeCode, storeName } = this.resolveStore(req, body);
     return this.svc.createReturnBatch({
       vendas: body.vendas,

@@ -117,7 +117,7 @@ export class ClientesGigaController {
   ) {
     this.requireAdmin(req);
     // Lança 403 se senha inválida ou nível < GERENTE; devolve quem autorizou.
-    const auth = authorizeMinLevel(String(body?.password || ''), 'GERENTE');
+    const auth = authorizeMinLevel(String(body?.password || ''), 'GERENTE', String(body?.loja || req?.user?.storeCode || '') || undefined);
     const permitidos: Record<string, any> = {};
     for (const k of ['LIMITECOMPRAS', 'AVALIACAO', 'BLOQUEADO'] as const) {
       if (body?.campos?.[k] !== undefined) permitidos[k] = body.campos[k];

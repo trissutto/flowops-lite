@@ -86,6 +86,10 @@ export interface OperatorPin {
   nivel: AccessLevel;
   salt: string;
   hash: string;
+  /** ESCOPO DE LOJAS (dono 29/07: franqueado MASTER só nas lojas DELE).
+   *  Vazio/ausente = vale em todas (comportamento original). Com lista, o PIN
+   *  só valida quando o call-site informa uma loja da lista. */
+  lojas?: string[];
 }
 export interface OperatorMatch {
   cpf: string;
@@ -103,12 +107,16 @@ export function setOperatorPins(list: OperatorPin[] | null | undefined): void {
  * Acha de QUEM é o PIN digitado (varre os operadores ativos). Retorna
  * {cpf, nome, nivel} ou null. O(n) com n pequeno (sha256 é rápido).
  */
-export function detectOperatorByPin(pin?: string): OperatorMatch | null {
+export function detectOperatorByPin(pin?: string, storeCode?: string): OperatorMatch | null {
   if (!pin || pin.length < 4) return null;
   for (const op of operatorPins) {
-    if (hashSecret(op.salt, pin) === op.hash) {
-      return { cpf: op.cpf, nome: op.nome, nivel: op.nivel };
+    if (hashSecret(op.salt, pin) !== op.hash) continue;
+    // PIN restrito a lojas: sem contexto de loja no call-site, ou loja fora
+    // da lista, o PIN NÃO passa (o escopo é a razão de existir do PIN).
+    if (op.lojas && op.lojas.length) {
+      if (!storeCode || !op.lojas.includes(String(storeCode))) continue;
     }
+    return { cpf: op.cpf, nome: op.nome, nivel: op.nivel };
   }
   return null;
 }
@@ -129,10 +137,10 @@ export function pinBelongsToOther(pin: string, exceptCpf?: string): boolean {
  * Precedência por nível: se há senha cadastrada no BANCO pra aquele nível,
  * ela manda (o env daquele nível é ignorado). Sem cadastro no banco, cai no env.
  */
-export function detectPasswordLevel(password?: string): AccessLevel | null {
+export function detectPasswordLevel(password?: string, storeCode?: string): AccessLevel | null {
   if (!password || password.length < 3) return null;
   // PIN pessoal primeiro (dá o "quem" via detectOperatorByPin nos call-sites novos).
-  const op = detectOperatorByPin(password);
+  const op = detectOperatorByPin(password, storeCode);
   if (op) return op.nivel;
   for (const level of LEVELS_DESC) {
     if (level === 'VENDEDOR') continue;
@@ -179,8 +187,8 @@ export function levelsWithEnv(): Record<Exclude<AccessLevel, 'VENDEDOR'>, boolea
  * Lanca ForbiddenException se senha invalida ou nivel insuficiente.
  * Retorna o nivel detectado (pra log/audit).
  */
-export function validateMinLevel(password: string | undefined, minLevel: AccessLevel): AccessLevel {
-  const level = detectPasswordLevel(password);
+export function validateMinLevel(password: string | undefined, minLevel: AccessLevel, storeCode?: string): AccessLevel {
+  const level = detectPasswordLevel(password, storeCode);
   if (!level) {
     throw new ForbiddenException('Senha invalida');
   }
@@ -208,8 +216,9 @@ export interface AuthorizeResult {
 export function authorizeMinLevel(
   password: string | undefined,
   minLevel: AccessLevel,
+  storeCode?: string,
 ): AuthorizeResult {
-  const op = detectOperatorByPin(password);
+  const op = detectOperatorByPin(password, storeCode);
   if (op) {
     if (LEVEL_RANK[op.nivel] < LEVEL_RANK[minLevel]) {
       throw new ForbiddenException(
@@ -219,7 +228,7 @@ export function authorizeMinLevel(
     return { level: op.nivel, byCpf: op.cpf, byNome: op.nome };
   }
   // Não é PIN pessoal → cai na senha de nível (mestra/compartilhada).
-  const level = validateMinLevel(password, minLevel); // lança se falhar
+  const level = validateMinLevel(password, minLevel, storeCode); // lança se falhar
   return { level, byCpf: null, byNome: null };
 }
 

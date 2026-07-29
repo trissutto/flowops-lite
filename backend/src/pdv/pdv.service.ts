@@ -1436,7 +1436,7 @@ export class PdvService {
         );
       }
       const pct = bruto > 0 ? (newDesconto / bruto) * 100 : 0;
-      await this.requireDiscountAuth(pct, input.password, input.motivo);
+      await this.requireDiscountAuth(pct, input.password, input.motivo, await this.storeCodeDaVenda(input.saleId));
     }
 
     const newTag = excluindoPromo
@@ -1487,17 +1487,30 @@ export class PdvService {
   // MD-1: desconto avulso em faixas. % sobre o subtotal BRUTO.
   //   0..livre = sem senha · >livre..caixa = senha CAIXA · >caixa = GERENTE + justificativa.
   //   As faixas (livre/caixa) são configuráveis na tela /retaguarda/descontos-senhas.
-  private async requireDiscountAuth(pct: number, password?: string, motivo?: string) {
+  private async requireDiscountAuth(pct: number, password?: string, motivo?: string, storeCode?: string) {
     const { freeUpToPct, caixaUpToPct } = await this.accessPolicy.getThresholds();
     if (pct > caixaUpToPct + 1e-9) {
-      validateMinLevel(password, 'GERENTE'); // lança se senha < GERENTE
+      validateMinLevel(password, 'GERENTE', storeCode); // lança se senha < GERENTE
       if (!motivo || String(motivo).trim().length < 3) {
         throw new BadRequestException(
           `Justificativa obrigatória para desconto acima de ${caixaUpToPct}%`,
         );
       }
     } else if (pct > freeUpToPct + 1e-9) {
-      validateMinLevel(password, 'CAIXA'); // lança se senha < CAIXA
+      validateMinLevel(password, 'CAIXA', storeCode); // lança se senha < CAIXA
+    }
+  }
+
+  /** Loja da venda — contexto pros PINs com escopo de loja (dono 29/07). */
+  private async storeCodeDaVenda(saleId: string): Promise<string | undefined> {
+    try {
+      const s = await (this.prisma as any).pdvSale.findUnique({
+        where: { id: saleId },
+        select: { storeCode: true },
+      });
+      return s?.storeCode || undefined;
+    } catch {
+      return undefined;
     }
   }
 

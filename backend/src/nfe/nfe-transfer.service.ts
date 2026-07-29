@@ -219,6 +219,24 @@ export class NfeTransferService {
     };
   }
 
+  /** Notas AUTORIZADAS do período pro DOWNLOAD EM LOTE (ZIP do contador).
+   *  De/Até em YYYY-MM-DD (fuso -03); sem datas = todas (cap 1000). */
+  async listDocsParaLote(p: { de?: string; ate?: string; storeCode?: string; emitRaiz?: string }) {
+    const where: any = { status: 'authorized' };
+    const iso = /^\d{4}-\d{2}-\d{2}$/;
+    const faixa: any = {};
+    if (p.de && iso.test(p.de)) faixa.gte = new Date(`${p.de}T00:00:00-03:00`);
+    if (p.ate && iso.test(p.ate)) faixa.lte = new Date(`${p.ate}T23:59:59.999-03:00`);
+    if (faixa.gte || faixa.lte) where.createdAt = faixa;
+    if (p.storeCode) where.fromStoreCode = p.storeCode;
+    let docs = await this.prisma.nfeDoc.findMany({ where, orderBy: { createdAt: 'asc' }, take: 1000 });
+    const raiz = String(p.emitRaiz || '').replace(/\D/g, '');
+    if (raiz.length === 8) {
+      docs = docs.filter((d: any) => String(d.chave || '').slice(6, 14) === raiz);
+    }
+    return docs;
+  }
+
   /** Documento por id (com XMLs, pra download/DANFE). */
   async getDoc(id: string) {
     const doc = await this.prisma.nfeDoc.findUnique({ where: { id } });
@@ -317,16 +335,46 @@ export class NfeTransferService {
   }
 
   /** Lista NF-e emitidas (filtro por loja/status). */
-  async list(params: { storeCode?: string; status?: string; limit?: number }) {
+  async list(params: { storeCode?: string; status?: string; limit?: number; emitRaiz?: string }) {
     const where: any = {};
     if (params.storeCode) where.fromStoreCode = params.storeCode;
     if (params.status) where.status = params.status;
-    const docs = await this.prisma.nfeDoc.findMany({
+    let docs = await this.prisma.nfeDoc.findMany({
       where,
       orderBy: { createdAt: 'desc' },
       take: Math.min(200, params.limit || 100),
     });
-    return docs.map((d) => this.publicDoc(d));
+    // Filtro pelo EMITENTE (dono 29/07): a raiz do CNPJ está na CHAVE
+    // (posições 6–13) — separa T.O. × LURDS × MDD mesmo quando a loja física
+    // é a mesma (ex.: 01 Itanhaém emite pelas duas empresas).
+    const raiz = String(params.emitRaiz || '').replace(/\D/g, '');
+    if (raiz.length === 8) {
+      docs = docs.filter((d: any) => String(d.chave || '').slice(6, 14) === raiz);
+    }
+    // EMITENTE REAL na lista (dono 29/07: "01→Anália deveria mostrar SUZANO"):
+    // resolve o CNPJ da CHAVE pra loja/empresa que assinou — a loja física
+    // (fromStoreCode) pode ter emitido pela identidade de outra (matchRaiz).
+    const cfgs = await this.prisma.nfceConfig.findMany({
+      select: { storeCode: true, cnpj: true, nfeCnpj: true, razaoSocial: true, fantasia: true },
+    });
+    const porCnpj = new Map<string, { storeCode: string; nome: string }>();
+    for (const c of cfgs as any[]) {
+      const nome = String(c.fantasia || c.razaoSocial || '').trim();
+      for (const doc of [c.nfeCnpj, c.cnpj]) {
+        const d14 = String(doc || '').replace(/\D/g, '');
+        if (d14.length === 14 && !porCnpj.has(d14)) porCnpj.set(d14, { storeCode: c.storeCode, nome });
+      }
+    }
+    return docs.map((d: any) => {
+      const emitCnpj = String(d.chave || '').slice(6, 20);
+      const cfg = emitCnpj.length === 14 ? porCnpj.get(emitCnpj) : undefined;
+      return {
+        ...this.publicDoc(d),
+        emitCnpj: emitCnpj.length === 14 ? emitCnpj : null,
+        emitStoreCode: cfg?.storeCode ?? null,
+        emitNome: cfg?.nome ?? null,
+      };
+    });
   }
 
   // ── helpers ─────────────────────────────────────────────────────────────
@@ -408,6 +456,8 @@ export class NfeTransferService {
     const origem = await this.loadStoreFiscal(shipment.fromStoreCode, {
       ...opts,
       matchRaiz: destino.cnpj.slice(0, 8),
+      // Raiz sem matriz cadastrada (MDD): emite pela config da PRÓPRIA loja destino
+      preferStoreCode: String(shipment.toStoreCode || ''),
     });
 
     // Itens da remessa (uma linha por unidade) → agrupa por SKU.
@@ -526,7 +576,7 @@ export class NfeTransferService {
 
   private async loadStoreFiscal(
     storeCode: string,
-    opts: { requireCert: boolean; identidade?: 'nfe' | 'base'; matchRaiz?: string } = { requireCert: true },
+    opts: { requireCert: boolean; identidade?: 'nfe' | 'base'; matchRaiz?: string; preferStoreCode?: string } = { requireCert: true },
   ): Promise<StoreFiscal> {
     const cfg = await this.prisma.nfceConfig.findUnique({ where: { storeCode } });
     if (!cfg) {
@@ -599,7 +649,13 @@ export class NfeTransferService {
           select: { storeCode: true, cnpj: true, ie: true, razaoSocial: true, fantasia: true, regime: true, endereco: true, nfeIdentidadesExtras: true },
         });
         const daRaiz = todas.filter((c) => this.digits(String(c.cnpj || '')).slice(0, 8) === opts.matchRaiz);
-        const prim = daRaiz.find((c) => this.digits(String(c.cnpj)).slice(8, 12) === '0001') || daRaiz[0];
+        // ORDEM (dono 29/07: "remetente EXATO — 01→Anália saiu como Suzano"):
+        // 1º matriz /0001 da raiz (regra LURDS) · 2º a config da PRÓPRIA LOJA
+        // DESTINO (raiz sem matriz cadastrada, ex. MDD) · 3º qualquer irmã.
+        const prim =
+          daRaiz.find((c) => this.digits(String(c.cnpj)).slice(8, 12) === '0001') ||
+          (opts.preferStoreCode ? daRaiz.find((c) => c.storeCode === opts.preferStoreCode) : undefined) ||
+          daRaiz[0];
         if (prim) {
           alt = { cnpj: prim.cnpj, ie: prim.ie, razaoSocial: prim.razaoSocial, fantasia: prim.fantasia, regime: prim.regime, endereco: prim.endereco };
           this.logger.log(`[nfe] transferência ${storeCode} → raiz ${opts.matchRaiz}: nota emitida pela identidade da loja ${prim.storeCode} (mesma raiz do destino)`);

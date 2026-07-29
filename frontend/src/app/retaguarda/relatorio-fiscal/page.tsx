@@ -529,11 +529,25 @@ export default function RelatorioFiscalPage() {
  * Filtro por LOJA DE ORIGEM (é o CNPJ emitente) + status. DANFE em PDF e
  * XML (enviado + resposta) direto na linha, pro contador baixar.
  */
+// Empresas do grupo (raiz do CNPJ, que fica nas posições 7–14 da chave) —
+// filtro pelo EMITENTE REAL da nota (dono 29/07: loja 01 emite pelas duas).
+const EMPRESAS_EMITENTES: Array<{ raiz: string; label: string }> = [
+  { raiz: '20104813', label: 'T.O. RISSUTTO (raiz 20)' },
+  { raiz: '30246592', label: 'LURDS (raiz 30)' },
+  { raiz: '50213437', label: 'MDD CERQUEIRA (franquias)' },
+];
+
 function NfeTransferSection({ stores }: { stores: Store[] }) {
   const [lojaFiltro, setLojaFiltro] = useState('');
+  const [emitenteFiltro, setEmitenteFiltro] = useState('');
   const [statusFiltro, setStatusFiltro] = useState('authorized');
   const [rows, setRows] = useState<any[] | null>(null);
   const [loading, setLoading] = useState(false);
+  // Download em LOTE pro contador (dono 29/07): período De/Até (vazio = tudo)
+  // + XMLs, DANFEs ou os dois num ZIP. Respeita o filtro de loja de origem.
+  const [loteDe, setLoteDe] = useState('');
+  const [loteAte, setLoteAte] = useState('');
+  const [baixandoLote, setBaixandoLote] = useState<string | null>(null);
   // Cancelamento (evento 110111): justificativa inline, obrigatória (15-255)
   const [cancelId, setCancelId] = useState<string | null>(null);
   const [justCancel, setJustCancel] = useState('');
@@ -546,13 +560,14 @@ function NfeTransferSection({ stores }: { stores: Store[] }) {
     return token ? { Authorization: `Bearer ${token}` } : {};
   };
 
-  const load = async (loja: string, status: string) => {
+  const load = async (loja: string, status: string, emitRaiz?: string) => {
     setLoading(true);
     try {
       const params = new URLSearchParams();
       params.set('limit', '200');
       if (loja) params.set('storeCode', loja);
       if (status) params.set('status', status);
+      if (emitRaiz) params.set('emitRaiz', emitRaiz);
       setRows(await api<any[]>(`/nfe?${params}`));
     } catch {
       setRows([]);
@@ -561,9 +576,9 @@ function NfeTransferSection({ stores }: { stores: Store[] }) {
     }
   };
   useEffect(() => {
-    load(lojaFiltro, statusFiltro);
+    load(lojaFiltro, statusFiltro, emitenteFiltro);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lojaFiltro, statusFiltro]);
+  }, [lojaFiltro, statusFiltro, emitenteFiltro]);
 
   const abrirDanfe = async (d: any) => {
     try {
@@ -613,10 +628,34 @@ function NfeTransferSection({ stores }: { stores: Store[] }) {
       if (ok) alert(`NF-e ${d.numero} cancelada na SEFAZ.`);
       else alert(`SEFAZ não cancelou (${r?.cStat ?? ''}): ${r?.xMotivo ?? r?.message ?? 'erro'}`);
       setCancelId(null); setJustCancel('');
-      load(lojaFiltro, statusFiltro);
+      load(lojaFiltro, statusFiltro, emitenteFiltro);
     } catch (e: any) {
       alert(`Erro ao cancelar: ${e?.message || e}`);
     } finally { setCancelando(false); }
+  };
+
+  const baixarLote = async (tipo: 'xml' | 'danfe' | 'tudo') => {
+    setBaixandoLote(tipo);
+    try {
+      const q = new URLSearchParams();
+      if (loteDe) q.set('de', loteDe);
+      if (loteAte) q.set('ate', loteAte);
+      q.set('tipo', tipo);
+      if (lojaFiltro) q.set('storeCode', lojaFiltro);
+      if (emitenteFiltro) q.set('emitRaiz', emitenteFiltro);
+      const r = await fetch(`${API_URL}/api/nfe/download-lote?${q}`, { headers: authHeaders() });
+      if (!r.ok) throw new Error((await r.json().catch(() => null))?.message || `HTTP ${r.status}`);
+      const blobUrl = URL.createObjectURL(await r.blob());
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = `nfe_${loteDe || 'inicio'}_a_${loteAte || 'hoje'}_${tipo}.zip`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+    } catch (e: any) {
+      alert(`Download em lote: ${e?.message || e}`);
+    } finally {
+      setBaixandoLote(null);
+    }
   };
 
   const storeName = (code: string) => stores.find((s) => s.code === code)?.name || code;
@@ -633,6 +672,17 @@ function NfeTransferSection({ stores }: { stores: Store[] }) {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <select
+            value={emitenteFiltro}
+            onChange={(e) => setEmitenteFiltro(e.target.value)}
+            className="p-2 border rounded-lg text-sm"
+            title="Filtra pelo CNPJ EMITENTE da nota (a raiz que está na chave) — a mesma loja física pode emitir por mais de uma empresa"
+          >
+            <option value="">Emitente: todas as empresas</option>
+            {EMPRESAS_EMITENTES.map((e2) => (
+              <option key={e2.raiz} value={e2.raiz}>{e2.label}</option>
+            ))}
+          </select>
           <select
             value={lojaFiltro}
             onChange={(e) => setLojaFiltro(e.target.value)}
@@ -654,6 +704,59 @@ function NfeTransferSection({ stores }: { stores: Store[] }) {
             <option value="">Todas</option>
           </select>
         </div>
+      </div>
+
+      {/* Download em LOTE pro contador: período livre + XML/DANFE/tudo (dono 29/07) */}
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-indigo-100 bg-indigo-50/60 px-3 py-2">
+        <span className="text-[11px] font-bold uppercase tracking-wide text-indigo-800">⬇ Download em lote</span>
+        <input
+          type="date"
+          value={loteDe}
+          onChange={(e) => setLoteDe(e.target.value)}
+          className="rounded-lg border p-1.5 text-xs"
+          title="De (vazio = desde o início)"
+        />
+        <span className="text-xs text-slate-400">→</span>
+        <input
+          type="date"
+          value={loteAte}
+          onChange={(e) => setLoteAte(e.target.value)}
+          className="rounded-lg border p-1.5 text-xs"
+          title="Até (vazio = hoje)"
+        />
+        <button
+          onClick={() => { setLoteDe(''); setLoteAte(''); }}
+          className="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-[11px] font-semibold text-slate-600 hover:bg-slate-100"
+          title="Limpar período = TODAS as notas autorizadas"
+        >
+          Todas
+        </button>
+        <div className="ml-auto flex gap-1.5">
+          <button
+            onClick={() => baixarLote('xml')}
+            disabled={!!baixandoLote}
+            className="rounded-md border border-indigo-300 bg-white px-2.5 py-1.5 text-[11px] font-bold text-indigo-700 hover:bg-indigo-100 disabled:opacity-50"
+          >
+            {baixandoLote === 'xml' ? 'Gerando…' : '🧾 XMLs (ZIP)'}
+          </button>
+          <button
+            onClick={() => baixarLote('danfe')}
+            disabled={!!baixandoLote}
+            className="rounded-md border border-indigo-300 bg-white px-2.5 py-1.5 text-[11px] font-bold text-indigo-700 hover:bg-indigo-100 disabled:opacity-50"
+          >
+            {baixandoLote === 'danfe' ? 'Gerando…' : '📄 DANFEs (ZIP)'}
+          </button>
+          <button
+            onClick={() => baixarLote('tudo')}
+            disabled={!!baixandoLote}
+            className="rounded-md bg-indigo-600 px-2.5 py-1.5 text-[11px] font-bold text-white hover:bg-indigo-700 disabled:opacity-50"
+          >
+            {baixandoLote === 'tudo' ? 'Gerando…' : '📦 Tudo (ZIP)'}
+          </button>
+        </div>
+        <p className="w-full text-[10px] text-slate-500">
+          Baixa as notas <b>autorizadas</b> do período (e da loja selecionada acima, se houver) — XMLs pro contador, DANFEs em PDF, ou os dois.
+        </p>
       </div>
 
       {loading || rows === null ? (
@@ -682,7 +785,21 @@ function NfeTransferSection({ stores }: { stores: Store[] }) {
                     {d.createdAt ? new Date(d.createdAt).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '—'}
                   </td>
                   <td className="py-1.5 pr-2 whitespace-nowrap">
-                    {d.fromStoreCode} {storeName(d.fromStoreCode)} → {d.toStoreCode} {storeName(d.toStoreCode)}
+                    {/* EMITENTE REAL da chave (dono 29/07): 01→Anália emitida
+                        pela MDD mostra "17 SUZANO", não a loja física */}
+                    {d.emitStoreCode ? (
+                      <>
+                        <span title={`Emitente: ${d.emitNome || ''} ${d.emitCnpj || ''} · loja física de origem: ${d.fromStoreCode}`}>
+                          {d.emitStoreCode} {d.emitNome || storeName(d.emitStoreCode)}
+                        </span>
+                        {d.emitStoreCode !== d.fromStoreCode && (
+                          <span className="text-slate-400 text-[10px]"> (saiu da {d.fromStoreCode})</span>
+                        )}
+                      </>
+                    ) : (
+                      <>{d.fromStoreCode} {storeName(d.fromStoreCode)}</>
+                    )}
+                    {' → '}{d.toStoreCode} {storeName(d.toStoreCode)}
                   </td>
                   <td className="py-1.5 pr-2 whitespace-nowrap font-mono font-bold">{d.numero}/{d.serie}</td>
                   <td className="py-1.5 pr-2">
