@@ -18,7 +18,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft, CheckCircle2, Loader2, AlertTriangle, PartyPopper,
-  MapPin, Wifi,
+  MapPin, Wifi, Download, Share,
 } from 'lucide-react';
 import Link from 'next/link';
 import FaceCapture, { FaceCaptureHandle } from '@/components/rh/FaceCapture';
@@ -105,6 +105,12 @@ export default function PontoCelularPage() {
   const [loadingDescriptors, setLoadingDescriptors] = useState(true);
   const [gpsStatus, setGpsStatus] = useState<'pending' | 'ok' | 'denied'>('pending');
   const [clock, setClock] = useState('');
+  // Instalação como app (ícone "Ponto" na tela inicial do celular da loja).
+  // Android/Chrome dispara beforeinstallprompt → botão de 1 clique.
+  // iPhone não tem esse evento → mostra a instrução do Safari.
+  const [installEvt, setInstallEvt] = useState<any>(null);
+  const [isStandalone, setIsStandalone] = useState(true); // true esconde tudo até detectar
+  const [isIos, setIsIos] = useState(false);
   const [debug, setDebug] = useState(false);
   const [diag, setDiag] = useState<{ ms: number; bestName: string | null; bestDist: number | null; rejected: string | null }>(
     { ms: 0, bestName: null, bestDist: null, rejected: null },
@@ -124,6 +130,31 @@ export default function PontoCelularPage() {
   useEffect(() => {
     if (typeof window !== 'undefined') setDebug(window.location.search.includes('debug=1'));
   }, []);
+
+  // Detecta se já roda como app instalado; senão, prepara o caminho de instalar
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const standalone =
+      window.matchMedia?.('(display-mode: standalone)')?.matches ||
+      (navigator as any).standalone === true;
+    setIsStandalone(!!standalone);
+    setIsIos(/iphone|ipad|ipod/i.test(navigator.userAgent));
+    const onPrompt = (e: any) => {
+      e.preventDefault(); // segura o prompt pro NOSSO botão disparar
+      setInstallEvt(e);
+    };
+    window.addEventListener('beforeinstallprompt', onPrompt);
+    return () => window.removeEventListener('beforeinstallprompt', onPrompt);
+  }, []);
+
+  async function instalarApp() {
+    if (!installEvt) return;
+    try {
+      installEvt.prompt();
+      const choice = await installEvt.userChoice;
+      if (choice?.outcome === 'accepted') setInstallEvt(null);
+    } catch {}
+  }
 
   // WAKE LOCK: celular-totem não pode apagar a tela. Reaquire ao voltar
   // do background (o browser solta o lock quando a aba perde visibilidade).
@@ -435,6 +466,28 @@ export default function PontoCelularPage() {
           <div className="bg-amber-100 border-2 border-amber-300 text-amber-800 rounded-xl p-4 text-center">
             <p className="font-bold">Nenhuma funcionária cadastrada com biometria</p>
             <p className="text-sm mt-1">Cadastre os rostos em Minha Loja → Rosto</p>
+          </div>
+        )}
+
+        {/* Instalar como app — cria o ícone "Ponto" na tela inicial */}
+        {!isStandalone && installEvt && (
+          <button
+            onClick={instalarApp}
+            className="w-full bg-[#D4AF37] hover:bg-[#B8912B] text-slate-900 font-bold rounded-xl p-4 flex items-center justify-center gap-2 text-base"
+          >
+            <Download className="w-5 h-5" />
+            Instalar app do Ponto neste celular
+          </button>
+        )}
+        {!isStandalone && !installEvt && isIos && (
+          <div className="bg-slate-800 text-white/80 rounded-xl p-4 text-sm text-center">
+            <p className="font-bold text-white mb-1 flex items-center justify-center gap-1.5">
+              <Share className="w-4 h-4" /> Criar o ícone "Ponto" neste iPhone
+            </p>
+            <p>
+              Toque em <span className="font-bold">Compartilhar</span> (quadrado com seta)
+              e depois em <span className="font-bold">Adicionar à Tela de Início</span>.
+            </p>
           </div>
         )}
 
