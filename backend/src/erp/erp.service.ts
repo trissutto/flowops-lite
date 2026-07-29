@@ -823,7 +823,9 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
               COALESCE(SUM(m.valor_total), 0)::float8 AS valor,
               COUNT(DISTINCT m.loja || '-' || COALESCE(m.numero, ''))::int AS vendas
          FROM giga_caixa_mov m
-         LEFT JOIN wincred_funcionarios f ON trim(f.codigo) = trim(m.vendedor)
+         LEFT JOIN wincred_funcionarios f
+                ON trim(f.codigo) = trim(m.vendedor)
+               AND ltrim(COALESCE(f.loja, ''), '0') = ltrim(COALESCE(m.loja, ''), '0')
         WHERE m.data >= $1 AND m.data < $2
           AND (m.marcado IS NULL OR m.marcado <> 'SIM')
           AND m.vendedor IS NOT NULL
@@ -5951,6 +5953,12 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         const codCol = cols.find((c: string) => /^codigo$/i.test(c) || /^cod/i.test(c) || /^id$/i.test(c));
         const nomeCol = cols.find((c: string) => /^nome$/i.test(c));
         if (codCol && nomeCol) {
+          // JOIN também pela LOJA (29/07): o CODIGO repete entre lojas no
+          // Wincred — sem a loja o nome vinha de OUTRA filial (Mirela de
+          // Campinas aparecia como Pamela) e o join multiplicava linhas.
+          const lojaJoin = cols.find((c: string) => /^loja$/i.test(c))
+            ? ` AND TRIM(LEADING '0' FROM CONCAT('', f.LOJA)) = TRIM(LEADING '0' FROM CONCAT('', c.LOJA))`
+            : '';
           sqlWithJoin = `
             SELECT CONCAT('', c.\`${vendedorCol}\`) AS codigo,
                    MAX(f.\`${nomeCol}\`) AS nome,
@@ -5958,7 +5966,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
                    SUM(c.VALORTOTAL) AS valor,
                    ${cupomCount} AS vendas
               FROM caixa c
-              LEFT JOIN funcionarios f ON CONCAT('', f.\`${codCol}\`) = CONCAT('', c.\`${vendedorCol}\`)
+              LEFT JOIN funcionarios f ON CONCAT('', f.\`${codCol}\`) = CONCAT('', c.\`${vendedorCol}\`)${lojaJoin}
              WHERE ${conds.join(' AND ')}
              GROUP BY CONCAT('', c.\`${vendedorCol}\`)
              ORDER BY valor DESC

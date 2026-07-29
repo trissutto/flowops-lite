@@ -276,12 +276,19 @@ export class ProductsEditorService {
     const vendCodes = Array.from(
       new Set(caixaRows.map((r) => String(r.VENDEDOR ?? '').trim()).filter(Boolean)),
     );
+    // O CODIGO repete entre lojas (espelho agora tem 1 linha por codigo×loja):
+    // chave codigo|loja primeiro; codigo solto fica como fallback.
     const nomeVend = new Map<string, string>();
     if (vendCodes.length) {
       const funcs = await (this.prisma as any).wincredFuncionario
-        .findMany({ where: { codigo: { in: vendCodes } }, select: { codigo: true, nome: true } })
+        .findMany({ where: { codigo: { in: vendCodes } }, select: { codigo: true, nome: true, loja: true } })
         .catch(() => []);
-      for (const f of funcs as any[]) nomeVend.set(String(f.codigo).trim(), f.nome || '');
+      for (const f of funcs as any[]) {
+        const cod = String(f.codigo).trim();
+        const loja = String(f.loja || '').trim().replace(/^0+/, '');
+        nomeVend.set(`${cod}|${loja}`, f.nome || '');
+        if (!nomeVend.has(cod)) nomeVend.set(cod, f.nome || '');
+      }
     }
     const stores = await (this.prisma as any).store
       .findMany({ select: { code: true, name: true } })
@@ -306,6 +313,7 @@ export class ProductsEditorService {
         loja: lojaNome(r.LOJA),
         cliente: (String(r.NOMECLIENTE || '').trim()) || null,
         vendedora:
+          nomeVend.get(`${String(r.VENDEDOR ?? '').trim()}|${String(r.LOJA ?? '').trim().replace(/^0+/, '')}`) ||
           nomeVend.get(String(r.VENDEDOR ?? '').trim()) ||
           (r.VENDEDOR ? `Cód ${r.VENDEDOR}` : null),
         qty: Math.abs(qty),

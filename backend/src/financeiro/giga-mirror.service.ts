@@ -287,8 +287,11 @@ export class GigaMirrorService implements OnModuleInit {
       loja: r.loja ? r.loja.slice(0, 4) : null,
       inativo: !!r.inativo,
     }));
-    const byCod = new Map(data.map((d) => [d.codigo, d]));
-    const unique = Array.from(byCod.values());
+    // Chave codigo|LOJA (29/07): o código repete entre lojas — dedup só por
+    // código descartava a funcionária das outras lojas e o ranking do Giga
+    // mostrava o nome errado (Mirela de Campinas virava Pamela).
+    const byCodLoja = new Map(data.map((d) => [`${d.codigo}|${d.loja || ''}`, d]));
+    const unique = Array.from(byCodLoja.values());
     await this.prisma.$transaction(async (tx: any) => {
       await tx.wincredFuncionario.deleteMany({});
       await tx.wincredFuncionario.createMany({ data: unique, skipDuplicates: true });

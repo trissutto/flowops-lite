@@ -3556,8 +3556,13 @@ model WincredCodigo {
 /// Espelho de wincred.funcionarios — vendedoras ativas por loja (login do PDV).
 /// Full replace de hora em hora junto com o GigaMirror. Tira o SELECT em
 /// `funcionarios` do caminho quente do login das lojas.
+/// PK sintética (29/07): o CÓDIGO repete entre lojas no Wincred — com
+/// codigo como @id o espelho guardava UMA funcionária por código e o
+/// ranking do Giga vestia o nome de OUTRA loja (Mirela de Campinas
+/// aparecia como Pamela). Agora 1 linha por (codigo, loja).
 model WincredFuncionario {
-  codigo   String  @id @db.VarChar(14)
+  id       Int     @id @default(autoincrement())
+  codigo   String  @db.VarChar(14)
   nome     String? @db.VarChar(80)
   apelido  String? @db.VarChar(40)
   loja     String? @db.VarChar(4)
@@ -3565,6 +3570,7 @@ model WincredFuncionario {
 
   syncedAt DateTime @default(now()) @map("synced_at")
 
+  @@index([codigo])
   @@index([loja])
   @@map("wincred_funcionarios")
 }
