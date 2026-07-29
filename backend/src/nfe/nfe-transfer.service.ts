@@ -918,11 +918,12 @@ export class NfeTransferService {
     const aliqInterna = Number(process.env.NFE_ICMS_ALIQ_INTERNA ?? 18);
     const aliqInter = Number(process.env.NFE_ICMS_ALIQ_INTERESTADUAL ?? 12);
 
-    // cBenef (SEFAZ-SP exige com CST 40/41 desde 2026 — cStat 930 sem ele).
-    // Vai no <prod>, entre NCM e CFOP. Default: convenção "SEM CBENEF"
-    // (aceita quando não há código específico); quando o contador passar o
-    // código da tabela de SP pra transferência, setar NFE_CBENEF_TRANSFERENCIA.
-    const cBenefTransf = String(process.env.NFE_CBENEF_TRANSFERENCIA ?? 'SEM CBENEF').trim();
+    // cBenef (SEFAZ-SP exige com CST 40/41 desde 04/2026 — cStat 930 sem ele;
+    // "SEM CBENEF" foi DESATIVADO em 01/07/2026 → cStat 946). Vai no <prod>,
+    // entre NCM e CFOP. Default SP099000 = "Remessas de mercadorias entre
+    // estabelecimentos do mesmo titular" (Tabela cBenef SP v2026-06-26;
+    // observar Anexo XI da Portaria SRE 41/2023). Override: NFE_CBENEF_TRANSFERENCIA.
+    const cBenefTransf = String(process.env.NFE_CBENEF_TRANSFERENCIA ?? 'SP099000').trim();
     const usaCBenef = crt3 && !icmsDestacado && cBenefTransf !== '0';
 
     let totBC = 0;
