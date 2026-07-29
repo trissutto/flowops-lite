@@ -618,83 +618,11 @@ export class SellersService {
       bucket.set(key, cur);
     }
 
-    // ── VENDAS DO PDV de TODAS AS LOJAS (dono 29/07: o relatório era só do
-    // site). Vendedora por ITEM (o override por item vale sobre a da venda),
-    // treino fora, valor = total do item. Cada venda conta 1x pra vendedora
-    // principal no nº de vendas.
-    const pdvSales: any[] = await (this.prisma as any).pdvSale.findMany({
-      where: {
-        status: 'finalized',
-        isTraining: false,
-        finalizedAt: { gte: from, lte: to },
-      },
-      select: {
-        storeCode: true,
-        sellerName: true,
-        vendedorName: true,
-        total: true,
-        items: { select: { total: true, sellerName: true } },
-      },
-    });
+    const sellers = Array.from(bucket.values()).sort((a, b) => b.totalAmount - a.totalAmount);
 
-    const normNome = (s: any) => String(s || '').trim().toUpperCase().replace(/\s+/g, ' ');
-    const pdvBucket = new Map<string, { sellerName: string; pdvCount: number; totalPdv: number; lojas: Set<string> }>();
-    const addPdv = (nome: string, valor: number, loja: string, contaVenda: boolean) => {
-      const key = normNome(nome) || 'SEM VENDEDORA';
-      const cur = pdvBucket.get(key) || { sellerName: nome || 'Sem vendedora', pdvCount: 0, totalPdv: 0, lojas: new Set<string>() };
-      if (contaVenda) cur.pdvCount += 1;
-      cur.totalPdv += valor;
-      if (loja) cur.lojas.add(loja);
-      pdvBucket.set(key, cur);
-    };
-    let totalPdvGeral = 0;
-    for (const s of pdvSales) {
-      const principal = s.sellerName || s.vendedorName || 'Sem vendedora';
-      const itens = (s.items || []).filter((i: any) => Number(i.total) > 0);
-      totalPdvGeral += Number(s.total || 0);
-      if (itens.length) {
-        addPdv(principal, 0, s.storeCode, true); // conta a venda 1x
-        for (const it of itens) addPdv(it.sellerName || principal, Number(it.total || 0), s.storeCode, false);
-      } else {
-        addPdv(principal, Number(s.total || 0), s.storeCode, true);
-      }
-    }
-
-    // Junta SITE + PDV por nome de vendedora
-    const merged = new Map<string, any>();
-    for (const s of bucket.values()) {
-      const key = normNome(s.sellerName);
-      merged.set(key, {
-        sellerId: s.sellerId,
-        sellerName: s.sellerName,
-        orderCount: s.orderCount,
-        totalSite: s.totalAmount,
-        pdvCount: 0,
-        totalPdv: 0,
-        lojas: [] as string[],
-        totalAmount: s.totalAmount,
-      });
-    }
-    for (const [key, p] of pdvBucket.entries()) {
-      const cur = merged.get(key) || {
-        sellerId: null, sellerName: p.sellerName,
-        orderCount: 0, totalSite: 0, pdvCount: 0, totalPdv: 0, lojas: [], totalAmount: 0,
-      };
-      cur.pdvCount = p.pdvCount;
-      cur.totalPdv = Math.round(p.totalPdv * 100) / 100;
-      cur.lojas = Array.from(p.lojas).sort();
-      cur.totalAmount = Math.round((cur.totalSite + p.totalPdv) * 100) / 100;
-      merged.set(key, cur);
-    }
-    const sellers = Array.from(merged.values()).sort((a, b) => b.totalAmount - a.totalAmount);
-
-    const totalSite = orders.reduce((a, o) => a + Number(o.totalAmount || 0), 0);
     const totals = {
       orderCount: orders.length,
-      pdvCount: pdvSales.length,
-      totalSite: Math.round(totalSite * 100) / 100,
-      totalPdv: Math.round(totalPdvGeral * 100) / 100,
-      totalAmount: Math.round((totalSite + totalPdvGeral) * 100) / 100,
+      totalAmount: orders.reduce((a, o) => a + Number(o.totalAmount || 0), 0),
     };
 
     return {
