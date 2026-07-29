@@ -108,8 +108,9 @@ export default function PontoCelularPage() {
   // Instalação como app (ícone "Ponto" na tela inicial do celular da loja).
   // Android/Chrome dispara beforeinstallprompt → botão de 1 clique.
   // iPhone não tem esse evento → mostra a instrução do Safari.
+  // null = ainda não detectou (não mostra nada até saber onde estamos)
   const [installEvt, setInstallEvt] = useState<any>(null);
-  const [isStandalone, setIsStandalone] = useState(true); // true esconde tudo até detectar
+  const [isStandalone, setIsStandalone] = useState<boolean | null>(null);
   const [isIos, setIsIos] = useState(false);
   const [debug, setDebug] = useState(false);
   const [diag, setDiag] = useState<{ ms: number; bestName: string | null; bestDist: number | null; rejected: string | null }>(
@@ -139,12 +140,24 @@ export default function PontoCelularPage() {
       (navigator as any).standalone === true;
     setIsStandalone(!!standalone);
     setIsIos(/iphone|ipad|ipod/i.test(navigator.userAgent));
+    // 1) Evento pode ter disparado ANTES do React montar — o layout guarda
+    //    em window.__pontoBip (script inline). Pega o que já chegou.
+    const grab = () => {
+      const e = (window as any).__pontoBip;
+      if (e) setInstallEvt(e);
+    };
+    grab();
+    // 2) E escuta os próximos (CustomEvent do layout + o evento nativo)
     const onPrompt = (e: any) => {
       e.preventDefault(); // segura o prompt pro NOSSO botão disparar
       setInstallEvt(e);
     };
+    window.addEventListener('ponto:bip', grab);
     window.addEventListener('beforeinstallprompt', onPrompt);
-    return () => window.removeEventListener('beforeinstallprompt', onPrompt);
+    return () => {
+      window.removeEventListener('ponto:bip', grab);
+      window.removeEventListener('beforeinstallprompt', onPrompt);
+    };
   }, []);
 
   async function instalarApp() {
@@ -152,7 +165,10 @@ export default function PontoCelularPage() {
     try {
       installEvt.prompt();
       const choice = await installEvt.userChoice;
-      if (choice?.outcome === 'accepted') setInstallEvt(null);
+      if (choice?.outcome === 'accepted') {
+        setInstallEvt(null);
+        try { (window as any).__pontoBip = null; } catch {}
+      }
     } catch {}
   }
 
@@ -482,8 +498,12 @@ export default function PontoCelularPage() {
           </div>
         )}
 
-        {/* Instalar como app — cria o ícone "Ponto" na tela inicial */}
-        {!isStandalone && installEvt && (
+        {/* Instalar como app — cria o ícone "Ponto" na tela inicial.
+            O botão aparece SEMPRE que o Chrome oferecer instalação (installEvt),
+            tanto pela URL no navegador quanto DENTRO do app Order One —
+            se o Ponto já estiver instalado, o Chrome para de oferecer e o
+            botão some sozinho. */}
+        {installEvt && (
           <button
             onClick={instalarApp}
             className="w-full bg-[#D4AF37] hover:bg-[#B8912B] text-slate-900 font-bold rounded-xl p-4 flex items-center justify-center gap-2 text-base"
@@ -492,7 +512,8 @@ export default function PontoCelularPage() {
             Instalar app do Ponto neste celular
           </button>
         )}
-        {!isStandalone && !installEvt && isIos && (
+        {/* iPhone (navegador): não existe evento de instalação — instrução manual */}
+        {!installEvt && isIos && isStandalone === false && (
           <div className="bg-slate-800 text-white/80 rounded-xl p-4 text-sm text-center">
             <p className="font-bold text-white mb-1 flex items-center justify-center gap-1.5">
               <Share className="w-4 h-4" /> Criar o ícone "Ponto" neste iPhone
@@ -502,6 +523,17 @@ export default function PontoCelularPage() {
               e depois em <span className="font-bold">Adicionar à Tela de Início</span>.
             </p>
           </div>
+        )}
+        {/* Dentro de um app instalado (Order One) sem oferta do Chrome:
+            manda abrir no navegador, onde a instalação sempre funciona */}
+        {!installEvt && !isIos && isStandalone === true && (
+          <button
+            onClick={() => { try { window.open(window.location.href, '_blank'); } catch {} }}
+            className="w-full bg-slate-800 hover:bg-slate-700 text-white/90 font-bold rounded-xl p-4 flex items-center justify-center gap-2 text-sm"
+          >
+            <Download className="w-5 h-5 text-[#D4AF37]" />
+            Criar o ícone "Ponto" — abrir no navegador pra instalar
+          </button>
         )}
 
         {/* Diagnóstico — só com ?debug=1 */}
