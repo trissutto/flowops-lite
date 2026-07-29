@@ -21,6 +21,11 @@ import {
 import { api } from '@/lib/api';
 
 type ReportSeller = {
+  // Site + PDV das lojas (dono 29/07)
+  totalSite?: number;
+  pdvCount?: number;
+  totalPdv?: number;
+  lojas?: string[];
   sellerId: string | null;
   sellerName: string;
   orderCount: number;
@@ -38,7 +43,7 @@ type ReportOrder = {
 
 type Report = {
   period: { from: string; to: string };
-  totals: { orderCount: number; totalAmount: number };
+  totals: { orderCount: number; totalAmount: number; pdvCount?: number; totalSite?: number; totalPdv?: number };
   sellers: ReportSeller[];
   orders: ReportOrder[];
 };
@@ -169,7 +174,7 @@ export default function RelatorioVendedorasPage() {
               Vendas por Vendedora
             </div>
             <div className="text-xs opacity-80">
-              Pedidos WC atribuídos no período (exclui cancelados/reembolsados)
+              Site (pedidos WC atribuídos) + PDV de TODAS as lojas no período — a lista detalhada abaixo é só do site
             </div>
           </div>
           <button
@@ -249,21 +254,45 @@ export default function RelatorioVendedorasPage() {
 
         {data && (
           <>
-            {/* KPIs totais */}
-            <div className="grid grid-cols-2 gap-2">
+            {/* KPIs totais — SITE + PDV de todas as lojas (dono 29/07) */}
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
               <div className="bg-white rounded-xl border border-slate-200 p-3">
                 <div className="text-[11px] uppercase font-semibold text-slate-500">
-                  Total de pedidos
+                  Pedidos site
                 </div>
                 <div className="text-2xl font-bold text-slate-800">
                   {data.totals.orderCount}
                 </div>
               </div>
-              <div className="bg-white rounded-xl border border-emerald-200 p-3">
-                <div className="text-[11px] uppercase font-semibold text-emerald-700">
-                  Total vendido
+              <div className="bg-white rounded-xl border border-slate-200 p-3">
+                <div className="text-[11px] uppercase font-semibold text-slate-500">
+                  Vendas lojas (PDV)
                 </div>
-                <div className="text-2xl font-bold text-emerald-700">
+                <div className="text-2xl font-bold text-slate-800">
+                  {data.totals.pdvCount ?? 0}
+                </div>
+              </div>
+              <div className="bg-white rounded-xl border border-slate-200 p-3">
+                <div className="text-[11px] uppercase font-semibold text-slate-500">
+                  Total site
+                </div>
+                <div className="text-xl font-bold text-slate-700">
+                  {formatBRL(data.totals.totalSite ?? data.totals.totalAmount)}
+                </div>
+              </div>
+              <div className="bg-white rounded-xl border border-slate-200 p-3">
+                <div className="text-[11px] uppercase font-semibold text-slate-500">
+                  Total lojas
+                </div>
+                <div className="text-xl font-bold text-slate-700">
+                  {formatBRL(data.totals.totalPdv ?? 0)}
+                </div>
+              </div>
+              <div className="col-span-2 sm:col-span-1 bg-white rounded-xl border border-emerald-200 p-3">
+                <div className="text-[11px] uppercase font-semibold text-emerald-700">
+                  Total geral
+                </div>
+                <div className="text-xl font-bold text-emerald-700">
                   {formatBRL(data.totals.totalAmount)}
                 </div>
               </div>
@@ -288,9 +317,11 @@ export default function RelatorioVendedorasPage() {
                     <thead className="bg-slate-50 text-xs text-slate-600 uppercase">
                       <tr>
                         <th className="text-left px-3 py-2">Vendedora</th>
-                        <th className="text-right px-3 py-2">Pedidos</th>
-                        <th className="text-right px-3 py-2">Total vendido</th>
-                        <th className="text-right px-3 py-2">Ticket médio</th>
+                        <th className="text-right px-3 py-2">Ped. site</th>
+                        <th className="text-right px-3 py-2">Vendas lojas</th>
+                        <th className="text-right px-3 py-2">R$ site</th>
+                        <th className="text-right px-3 py-2">R$ lojas</th>
+                        <th className="text-right px-3 py-2">Total</th>
                         <th className="text-right px-3 py-2">%</th>
                       </tr>
                     </thead>
@@ -300,8 +331,8 @@ export default function RelatorioVendedorasPage() {
                           data.totals.totalAmount > 0
                             ? Math.round((s.totalAmount / data.totals.totalAmount) * 100)
                             : 0;
-                        const ticket = s.orderCount > 0 ? s.totalAmount / s.orderCount : 0;
-                        const key = s.sellerId || '__none__';
+                        // Vendedoras do PDV não têm sellerId — chave pelo nome
+                        const key = s.sellerId || (s.orderCount > 0 ? '__none__' : `nome:${s.sellerName}`);
                         const isNone = !s.sellerId;
                         const isActive = filtroSeller === key;
                         return (
@@ -319,15 +350,24 @@ export default function RelatorioVendedorasPage() {
                                 <span className="text-xs mr-1" title="Líder do período">🏆</span>
                               )}
                               <span className="font-semibold">{s.sellerName}</span>
+                              {(s.lojas?.length ?? 0) > 0 && (
+                                <div className="text-[10px] text-slate-400 not-italic">lojas {s.lojas!.join(', ')}</div>
+                              )}
                             </td>
                             <td className="text-right px-3 py-2 font-mono">
                               {s.orderCount}
                             </td>
-                            <td className="text-right px-3 py-2 font-mono font-bold text-emerald-700">
-                              {formatBRL(s.totalAmount)}
+                            <td className="text-right px-3 py-2 font-mono">
+                              {s.pdvCount ?? 0}
                             </td>
                             <td className="text-right px-3 py-2 font-mono text-slate-600">
-                              {formatBRL(ticket)}
+                              {formatBRL(s.totalSite ?? 0)}
+                            </td>
+                            <td className="text-right px-3 py-2 font-mono text-slate-600">
+                              {formatBRL(s.totalPdv ?? 0)}
+                            </td>
+                            <td className="text-right px-3 py-2 font-mono font-bold text-emerald-700">
+                              {formatBRL(s.totalAmount)}
                             </td>
                             <td className="text-right px-3 py-2 font-mono text-slate-600">
                               {pct}%
