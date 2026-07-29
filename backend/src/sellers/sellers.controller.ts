@@ -71,6 +71,26 @@ export class SellersController {
     return this.svc.importFromWincred();
   }
 
+  /**
+   * UNIFICA GRAFIAS de uma vendedora numa loja (dono 29/07). Body:
+   *   { storeCode: '07', from: ['MIRELLA','MIRELA DA SILVA'], to: 'MIRELA', dryRun?: true }
+   * dryRun devolve o preview (contagens + fichas afetadas) sem alterar nada.
+   */
+  @Post('unify')
+  @AdminOnly()
+  unify(
+    @Body() body: { storeCode: string; from: string[]; to: string; dryRun?: boolean },
+    @Req() req: any,
+  ) {
+    return this.svc.unifySpellings({
+      storeCode: body?.storeCode,
+      from: Array.isArray(body?.from) ? body.from : [],
+      to: body?.to,
+      dryRun: !!body?.dryRun,
+      by: req?.user?.email || req?.user?.id || 'unknown',
+    });
+  }
+
   /** Detalhe completo do prontuario + documentos. */
   @Get(':id/detail')
   getDetail(@Param('id') id: string) {

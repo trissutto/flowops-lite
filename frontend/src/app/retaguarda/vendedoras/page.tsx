@@ -15,7 +15,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
-  ArrowLeft, RefreshCw, Plus, Users, Search, ChevronRight, Power,
+  ArrowLeft, RefreshCw, Plus, Users, Search, ChevronRight, Power, Merge, X,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -88,6 +88,42 @@ export default function VendedorasPage() {
   const [togglingId, setTogglingId] = useState<string | null>(null);
   // Edição inline de LOJA/FUNÇÃO direto na lista (sem abrir o prontuário)
   const [savingCell, setSavingCell] = useState<string | null>(null); // `${id}:loja` | `${id}:cargo`
+
+  // ── Unificar grafias (dono 29/07: "como vamos juntar as 3 Mirelas?") ──
+  const [unifyOpen, setUnifyOpen] = useState(false);
+  const [uLoja, setULoja] = useState('');
+  const [uFrom, setUFrom] = useState('');   // uma grafia por linha
+  const [uTo, setUTo] = useState('');
+  const [uPreview, setUPreview] = useState<any>(null);
+  const [uBusy, setUBusy] = useState(false);
+
+  async function unifyCall(dryRun: boolean) {
+    const from = uFrom.split('\n').map((s) => s.trim()).filter(Boolean);
+    if (!uLoja || !uTo.trim() || !from.length) {
+      alert('Preencha loja, as grafias antigas (uma por linha) e o nome final.');
+      return;
+    }
+    setUBusy(true);
+    try {
+      const r = await api<any>('/sellers/unify', {
+        method: 'POST',
+        body: JSON.stringify({ storeCode: uLoja, from, to: uTo.trim(), dryRun }),
+      });
+      setUPreview(r);
+      if (!dryRun) {
+        alert(`Unificado! ${r.vendasRenomeadas} vendas + ${r.itensRenomeados} itens agora são de "${r.nomeFinal}".`);
+        setUnifyOpen(false);
+        setUPreview(null);
+        setUFrom('');
+        setUTo('');
+        load();
+      }
+    } catch (e: any) {
+      alert('Erro: ' + (e?.message || e));
+    } finally {
+      setUBusy(false);
+    }
+  }
 
   const load = async () => {
     setLoading(true);
@@ -268,6 +304,94 @@ export default function VendedorasPage() {
             Nova funcionária
           </Link>
         </div>
+
+        {/* Unificar grafias — mesma pessoa digitada de vários jeitos no PDV */}
+        <div className="bg-white border border-violet-200 rounded-xl p-4 shadow-sm flex items-center gap-3">
+          <div className="w-10 h-10 rounded-lg bg-violet-100 flex items-center justify-center">
+            <Merge className="w-5 h-5 text-violet-700" />
+          </div>
+          <div className="flex-1">
+            <h3 className="font-bold text-slate-800 text-sm">Unificar grafias de vendedora</h3>
+            <p className="text-xs text-slate-500">
+              MIRELA / MIRELLA / MIRELA DA SILVA na mesma loja? Junta tudo numa só — vendas antigas, itens, whitelist do PDV e ficha RH.
+            </p>
+          </div>
+          <button
+            onClick={() => { setUnifyOpen(true); setUPreview(null); }}
+            className="bg-violet-600 hover:bg-violet-700 text-white font-bold px-4 py-2 rounded-lg text-sm"
+          >
+            Unificar
+          </button>
+        </div>
+
+        {unifyOpen && (
+          <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => !uBusy && setUnifyOpen(false)}>
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg p-5 space-y-3" onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-center justify-between">
+                <h3 className="font-black text-slate-800 flex items-center gap-2">
+                  <Merge className="w-5 h-5 text-violet-700" /> Unificar grafias
+                </h3>
+                <button onClick={() => setUnifyOpen(false)} className="p-1 hover:bg-slate-100 rounded" disabled={uBusy}>
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <div>
+                <label className="text-xs font-bold text-slate-500 uppercase">Loja</label>
+                <select value={uLoja} onChange={(e) => setULoja(e.target.value)} className="w-full border rounded-lg px-3 py-2 mt-1">
+                  <option value="">Selecione…</option>
+                  {stores.map((st) => (
+                    <option key={st.id} value={st.code}>{st.code} {st.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs font-bold text-slate-500 uppercase">Grafias erradas (uma por linha)</label>
+                <textarea
+                  value={uFrom}
+                  onChange={(e) => setUFrom(e.target.value)}
+                  rows={3}
+                  placeholder={'MIRELLA\nMIRELA DA SILVA'}
+                  className="w-full border rounded-lg px-3 py-2 mt-1 font-mono text-sm"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-slate-500 uppercase">Nome final (como deve ficar)</label>
+                <input
+                  value={uTo}
+                  onChange={(e) => setUTo(e.target.value)}
+                  placeholder="MIRELA"
+                  className="w-full border rounded-lg px-3 py-2 mt-1 font-mono text-sm"
+                />
+              </div>
+              {uPreview && (
+                <div className="bg-violet-50 border border-violet-200 rounded-lg p-3 text-xs space-y-1">
+                  <div className="font-bold text-violet-800">Preview — o que vai mudar:</div>
+                  <div>• {uPreview.vendasRenomeadas} vendas + {uPreview.itensRenomeados} itens renomeados</div>
+                  <div>• Whitelist do PDV: {uPreview.whitelistRenomeadas?.length ? uPreview.whitelistRenomeadas.join(', ') : 'nada a renomear'}</div>
+                  <div>• Fichas RH desativadas: {uPreview.fichasDesativadas?.length ? uPreview.fichasDesativadas.map((f: any) => f.name).join(', ') : 'nenhuma'}</div>
+                  <div>• Ficha mantida: {uPreview.fichaMantida?.name || '— (nenhuma ficha encontrada)'}</div>
+                </div>
+              )}
+              <div className="flex gap-2 pt-1">
+                <button
+                  onClick={() => unifyCall(true)}
+                  disabled={uBusy}
+                  className="flex-1 border border-violet-300 text-violet-700 hover:bg-violet-50 font-bold px-4 py-2 rounded-lg text-sm disabled:opacity-50"
+                >
+                  {uBusy ? '...' : '1º Prever'}
+                </button>
+                <button
+                  onClick={() => unifyCall(false)}
+                  disabled={uBusy || !uPreview}
+                  title={!uPreview ? 'Rode o Prever primeiro' : ''}
+                  className="flex-1 bg-violet-600 hover:bg-violet-700 text-white font-bold px-4 py-2 rounded-lg text-sm disabled:opacity-50"
+                >
+                  {uBusy ? '...' : '2º Unificar agora'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Filtros */}
         <div className="flex gap-2 flex-wrap items-center">

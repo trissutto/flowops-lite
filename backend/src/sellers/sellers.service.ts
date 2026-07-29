@@ -816,4 +816,125 @@ export class SellersService {
       })),
     };
   }
+
+  /**
+   * UNIFICA GRAFIAS de uma vendedora numa loja (dono 29/07: "como vamos
+   * juntar as 3 Mirelas?"). MIRELA / MIRELLA / MIRELA DA SILVA viram UMA,
+   * retroativo e daqui pra frente:
+   *   - pdv_sales.seller_name / vendedor_name da loja
+   *   - pdv_sale_items.seller_name (override por item)
+   *   - whitelist do PDV (renomeia grafias e apaga linhas que ficarem em dobro)
+   *   - fichas RH (Seller) DA LOJA com as grafias antigas: desativa e reaponta
+   *     o seller_id das vendas da loja pra ficha canônica
+   * Só mexe em fichas com storeCodeOrigin = loja (homônima de OUTRA loja não
+   * é tocada). dryRun=true só conta e lista o que seria alterado.
+   */
+  async unifySpellings(input: { storeCode: string; from: string[]; to: string; dryRun?: boolean; by?: string }) {
+    const storeCode = String(input.storeCode || '').trim();
+    const to = String(input.to || '').trim();
+    const norm = (s: any) => String(s || '').trim().toUpperCase().replace(/\s+/g, ' ');
+    const toNorm = norm(to);
+    const variants = Array.from(new Set((input.from || []).map(norm).filter((v) => v && v !== toNorm)));
+    if (!storeCode) throw new BadRequestException('storeCode obrigatório');
+    if (!toNorm) throw new BadRequestException('nome final obrigatório');
+    if (!variants.length) throw new BadRequestException('informe ao menos uma grafia DIFERENTE do nome final');
+
+    const p: any = this.prisma;
+    const n = async (sql: string, ...params: any[]) =>
+      Number((await p.$queryRawUnsafe(sql, ...params))[0]?.n) || 0;
+
+    // ── Contagens (sempre — é o preview do dryRun) ──
+    const [vendas, vendasVendedor, itens] = await Promise.all([
+      n(`SELECT COUNT(*)::int AS n FROM pdv_sales WHERE store_code = $1 AND UPPER(TRIM(seller_name)) = ANY($2)`, storeCode, variants),
+      n(`SELECT COUNT(*)::int AS n FROM pdv_sales WHERE store_code = $1 AND UPPER(TRIM(vendedor_name)) = ANY($2)`, storeCode, variants),
+      n(`SELECT COUNT(*)::int AS n FROM pdv_sale_items i JOIN pdv_sales s ON s.id = i.sale_id
+          WHERE s.store_code = $1 AND UPPER(TRIM(i.seller_name)) = ANY($2)`, storeCode, variants),
+    ]);
+
+    // Whitelist da loja: grafias antigas + canônica
+    const wlAll: any[] = await p.pdvActiveSeller.findMany({ where: { storeCode } });
+    const wlVariants = wlAll.filter((r: any) => variants.includes(norm(r.nome)));
+    const wlCanonicas = wlAll.filter((r: any) => norm(r.nome) === toNorm);
+
+    // Fichas RH DA LOJA com as grafias antigas + a canônica (qualquer origem)
+    const allSellers: any[] = await p.seller.findMany({});
+    const fichasVariantes = allSellers.filter(
+      (s: any) => variants.includes(norm(s.name)) && String(s.storeCodeOrigin || '') === storeCode,
+    );
+    const fichaCanonica = allSellers.find((s: any) => norm(s.name) === toNorm) || null;
+
+    const preview = {
+      dryRun: !!input.dryRun,
+      storeCode,
+      nomeFinal: to,
+      grafias: variants,
+      vendasRenomeadas: vendas,
+      vendasVendedorRenomeadas: vendasVendedor,
+      itensRenomeados: itens,
+      whitelistRenomeadas: wlVariants.map((r: any) => r.nome),
+      fichasDesativadas: fichasVariantes.map((s: any) => ({ id: s.id, name: s.name, loja: s.storeCodeOrigin })),
+      fichaMantida: fichaCanonica
+        ? { id: fichaCanonica.id, name: fichaCanonica.name }
+        : fichasVariantes.length
+          ? { id: fichasVariantes[0].id, name: `${fichasVariantes[0].name} → será renomeada pra "${to}"` }
+          : null,
+    };
+    if (input.dryRun) return preview;
+
+    await p.$transaction(async (tx: any) => {
+      // 1) Vendas + itens da loja
+      await tx.$executeRawUnsafe(
+        `UPDATE pdv_sales SET seller_name = $1 WHERE store_code = $2 AND UPPER(TRIM(seller_name)) = ANY($3)`,
+        to, storeCode, variants,
+      );
+      await tx.$executeRawUnsafe(
+        `UPDATE pdv_sales SET vendedor_name = $1 WHERE store_code = $2 AND UPPER(TRIM(vendedor_name)) = ANY($3)`,
+        to, storeCode, variants,
+      );
+      await tx.$executeRawUnsafe(
+        `UPDATE pdv_sale_items i SET seller_name = $1 FROM pdv_sales s
+          WHERE s.id = i.sale_id AND s.store_code = $2 AND UPPER(TRIM(i.seller_name)) = ANY($3)`,
+        to, storeCode, variants,
+      );
+
+      // 2) Ficha RH canônica: usa a existente ou promove a primeira variante
+      let keptId: string | null = fichaCanonica?.id || null;
+      if (!keptId && fichasVariantes.length) {
+        keptId = fichasVariantes[0].id;
+        await tx.seller.update({ where: { id: keptId }, data: { name: to } });
+      }
+      const dupIds = fichasVariantes.map((s: any) => s.id).filter((id: string) => id !== keptId);
+      if (dupIds.length) {
+        await tx.seller.updateMany({ where: { id: { in: dupIds } }, data: { active: false } });
+        if (keptId) {
+          await tx.$executeRawUnsafe(
+            `UPDATE pdv_sales SET seller_id = $1 WHERE store_code = $2 AND seller_id = ANY($3)`,
+            keptId, storeCode, dupIds,
+          );
+        }
+      }
+
+      // 3) Whitelist: renomeia as grafias e mantém UMA linha com o nome final
+      for (const r of wlVariants) {
+        await tx.pdvActiveSeller.update({ where: { id: r.id }, data: { nome: to } });
+      }
+      const todasCanonicas = [...wlCanonicas, ...wlVariants];
+      if (todasCanonicas.length > 1) {
+        const kept = allSellers.find((s: any) => s.id === keptId);
+        const keepRow =
+          todasCanonicas.find((r: any) => kept?.wincredCodigo && String(r.codigo).trim() === String(kept.wincredCodigo).trim()) ||
+          todasCanonicas[0];
+        const removeIds = todasCanonicas.filter((r: any) => r.id !== keepRow.id).map((r: any) => r.id);
+        if (removeIds.length) {
+          await tx.pdvActiveSeller.deleteMany({ where: { id: { in: removeIds } } });
+        }
+      }
+    });
+
+    this.logger.log(
+      `[sellers] unify loja=${storeCode} "${variants.join('", "')}" → "${to}" por ${input.by || '?'}: ` +
+        `${vendas} vendas, ${itens} itens, ${wlVariants.length} whitelist, ${fichasVariantes.length} fichas`,
+    );
+    return { ...preview, dryRun: false, aplicado: true };
+  }
 }
