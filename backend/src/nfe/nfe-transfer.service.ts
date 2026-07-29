@@ -859,6 +859,17 @@ export class NfeTransferService {
       .replace(/"/g, '&quot;');
   }
 
+  /** Descrição do item NA NOTA (dono 29/07): só a PRIMEIRA palavra — "BLUSA"
+   *  em vez de "BLUSA FEMININA MANGA CURTA...". A SEFAZ aceita (campo livre
+   *  1-120); a identificação fina segue no cProd/cEAN + NCM. Kill-switch:
+   *  NFE_XPROD=completo volta ao texto inteiro. */
+  private xProdNota(desc: string): string {
+    if (String(process.env.NFE_XPROD || '').trim() === 'completo') {
+      return String(desc || 'MERCADORIA');
+    }
+    return (String(desc || '').trim().split(/\s+/)[0] || 'MERCADORIA').slice(0, 120);
+  }
+
   /** Alíquotas PIS/COFINS do Lucro Presumido (cumulativo) — destaque exigido
    *  pelo contador (29/07): PIS 0,65% e COFINS 3% sobre o valor do item. */
   private aliqPisCofins() {
@@ -1017,7 +1028,7 @@ export class NfeTransferService {
     const ibTot = { vBC: 0, vIBSUF: 0, vIBSMun: 0, vCBS: 0 };
     const det = p.items
       .map((it, idx) => {
-        const xProd = homolog ? HOMOLOG_FRASE : it.xProd;
+        const xProd = homolog ? HOMOLOG_FRASE : this.xProdNota(it.xProd);
         const prod =
           `<prod>` +
           `<cProd>${this.esc(it.sku)}</cProd>` +
@@ -1453,7 +1464,7 @@ export class NfeTransferService {
     const ibTot = { vBC: 0, vIBSUF: 0, vIBSMun: 0, vCBS: 0 };
     const det = p.items
       .map((it, idx) => {
-        const xProd = homolog ? HOMOLOG_FRASE : it.xProd;
+        const xProd = homolog ? HOMOLOG_FRASE : this.xProdNota(it.xProd);
         const prod =
           `<prod><cProd>${this.esc(it.sku)}</cProd><cEAN>${it.ean}</cEAN><xProd>${this.esc(xProd)}</xProd>` +
           `<NCM>${it.ncm}</NCM><CFOP>${it.cfop}</CFOP><uCom>UN</uCom><qCom>${it.qty.toFixed(4)}</qCom>` +
