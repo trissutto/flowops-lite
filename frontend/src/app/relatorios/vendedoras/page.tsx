@@ -349,10 +349,10 @@ export default function RelatorioVendedorasPage() {
                     <thead className="bg-amber-50 text-[10px] uppercase text-amber-900">
                       <tr>
                         <th className="text-left px-2 py-1.5">Vendedora (Flow)</th>
-                        <th className="text-right px-2 py-1.5">Bruto</th>
+                        <th className="text-right px-2 py-1.5">Bruto (itens)</th>
                         <th className="text-right px-2 py-1.5">− Desc. avulso</th>
-                        <th className="text-right px-2 py-1.5">− Devoluções</th>
-                        <th className="text-right px-2 py-1.5">= Líquido Flow</th>
+                        <th className="text-right px-2 py-1.5">− Vale-troca</th>
+                        <th className="text-right px-2 py-1.5">= PAGO (Flow)</th>
                         <th className="text-right px-2 py-1.5">Marcados (fora)</th>
                         <th className="text-right px-2 py-1.5">Caixa Giga</th>
                         <th className="text-right px-2 py-1.5">Diferença</th>
@@ -369,7 +369,7 @@ export default function RelatorioVendedorasPage() {
                             <td className="px-2 py-1 font-semibold">{c.vendedora}</td>
                             <td className="text-right px-2 py-1 font-mono">{formatBRL(c.bruto)}</td>
                             <td className="text-right px-2 py-1 font-mono text-slate-500">{formatBRL(c.descontoAvulso)}</td>
-                            <td className="text-right px-2 py-1 font-mono text-slate-500">{formatBRL(c.devolucoes)}</td>
+                            <td className="text-right px-2 py-1 font-mono text-slate-500">{formatBRL(c.valeTroca)}</td>
                             <td className="text-right px-2 py-1 font-mono font-bold">{formatBRL(c.liquido)}</td>
                             <td className="text-right px-2 py-1 font-mono text-amber-700">{formatBRL(c.marcados)}</td>
                             <td className="text-right px-2 py-1 font-mono text-indigo-700">{gigaVal != null ? formatBRL(gigaVal) : '—'}</td>

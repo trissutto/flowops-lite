@@ -600,59 +600,47 @@ export class SellersService {
         id: true, sellerName: true, vendedorName: true, total: true,
         paymentMethod: true,
         items: { select: { id: true, total: true, sellerName: true } },
+        payments: { select: { method: true, valor: true } },
       },
     });
-    type Comp = { vendedora: string; bruto: number; marcados: number; descontoAvulso: number; devolucoes: number; liquido: number; vendas: number };
+    // REGRA DO DONO (29/07): valor da vendedora = o que a cliente PAGOU
+    // (total final − vale-troca abatido). Devolução posterior NÃO mexe.
+    type Comp = { vendedora: string; bruto: number; marcados: number; descontoAvulso: number; valeTroca: number; liquido: number; vendas: number };
     const bucket = new Map<string, Comp>();
     const norm = (s: any) => String(s || '').trim().toUpperCase().replace(/\s+/g, ' ') || 'SEM VENDEDORA';
     const get = (nome: string): Comp => {
       const k = norm(nome);
       let c = bucket.get(k);
-      if (!c) { c = { vendedora: nome || 'Sem vendedora', bruto: 0, marcados: 0, descontoAvulso: 0, devolucoes: 0, liquido: 0, vendas: 0 }; bucket.set(k, c); }
+      if (!c) { c = { vendedora: nome || 'Sem vendedora', bruto: 0, marcados: 0, descontoAvulso: 0, valeTroca: 0, liquido: 0, vendas: 0 }; bucket.set(k, c); }
       return c;
     };
-    const fatorBySale = new Map<string, number>();
-    const infoBySale = new Map<string, string>();
-    const sellerByItemId = new Map<string, string>();
     for (const s of sales) {
       const principal = s.sellerName || s.vendedorName || 'Sem vendedora';
-      infoBySale.set(s.id, principal);
       const itens = (s.items || []).filter((i: any) => Number(i.total) > 0);
-      const somaItens = itens.reduce((a: number, i: any) => a + Number(i.total || 0), 0) || Number(s.total || 0);
-      const ehMarcado = s.paymentMethod === 'MARCADO';
-      const fator = somaItens > 0 ? Number(s.total || 0) / somaItens : 1;
-      fatorBySale.set(s.id, fator);
-      if (ehMarcado) {
+      if (s.paymentMethod === 'MARCADO') {
         get(principal).marcados += Number(s.total || 0);
         continue;
       }
+      const vale = (s.payments || [])
+        .filter((p: any) => p.method === 'vale_troca')
+        .reduce((a: number, p: any) => a + Number(p.valor || 0), 0);
+      const total = Number(s.total || 0);
+      const pago = Math.max(0, total - vale);
       get(principal).vendas += 1;
-      if (itens.length) {
+      const somaItens = itens.reduce((a: number, i: any) => a + Number(i.total || 0), 0);
+      if (itens.length && somaItens > 0) {
         for (const it of itens) {
           const nome = it.sellerName || principal;
-          if (it.id) sellerByItemId.set(it.id, nome);
-          const cheio = Number(it.total || 0);
-          get(nome).bruto += cheio;
-          get(nome).descontoAvulso += cheio * (1 - fator);
+          const frac = Number(it.total || 0) / somaItens;
+          get(nome).bruto += Number(it.total || 0);
+          get(nome).descontoAvulso += Math.max(0, somaItens - total) * frac;
+          get(nome).valeTroca += vale * frac;
+          get(nome).liquido += pago * frac;
         }
       } else {
-        get(principal).bruto += Number(s.total || 0);
-      }
-    }
-    const ids = sales.filter((s) => s.paymentMethod !== 'MARCADO').map((s) => s.id);
-    for (let i = 0; i < ids.length; i += 500) {
-      const devs: any[] = await (this.prisma as any).pdvReturn.findMany({
-        where: { isTraining: false, originalSaleId: { in: ids.slice(i, i + 500) } },
-        select: { originalSaleId: true, items: { select: { originalItemId: true, total: true } } },
-      });
-      for (const dev of devs) {
-        const principal = infoBySale.get(dev.originalSaleId);
-        if (!principal) continue;
-        const fator = fatorBySale.get(dev.originalSaleId) ?? 1;
-        for (const it of dev.items || []) {
-          const nome = (it.originalItemId && sellerByItemId.get(it.originalItemId)) || principal;
-          get(nome).devolucoes += Number(it.total || 0) * fator;
-        }
+        get(principal).bruto += total;
+        get(principal).valeTroca += vale;
+        get(principal).liquido += pago;
       }
     }
     const flow = Array.from(bucket.values()).map((c) => ({
@@ -660,8 +648,8 @@ export class SellersService {
       bruto: Math.round(c.bruto * 100) / 100,
       marcados: Math.round(c.marcados * 100) / 100,
       descontoAvulso: Math.round(c.descontoAvulso * 100) / 100,
-      devolucoes: Math.round(c.devolucoes * 100) / 100,
-      liquido: Math.round((c.bruto - c.descontoAvulso - c.devolucoes) * 100) / 100,
+      valeTroca: Math.round(c.valeTroca * 100) / 100,
+      liquido: Math.round(c.liquido * 100) / 100,
     })).sort((a, b) => b.liquido - a.liquido);
 
     // Caixa do Giga (espelho) — a MESMA fonte do ranking do Wincred
@@ -716,13 +704,15 @@ export class SellersService {
     // site). Vendedora por ITEM (o override por item vale sobre a da venda),
     // treino fora, valor = total do item. Cada venda conta 1x pra vendedora
     // principal no nº de vendas.
+    // REGRA FINAL DO DONO (29/07): "se pagaram 1.000, ela vendeu 1.000" —
+    // o valor da vendedora é o que a cliente PAGOU na venda: total final
+    // (desconto já dentro) MENOS o abatido em vale-troca. Devolução
+    // POSTERIOR não mexe no número. Marcado (provar em casa) fica fora.
     const pdvSales: any[] = await (this.prisma as any).pdvSale.findMany({
       where: {
         status: 'finalized',
         isTraining: false,
         finalizedAt: { gte: from, lte: to },
-        // MARCADO = "levou pra provar em casa" — NÃO é faturamento (no Giga
-        // fica fora do caixa). Contava e divergia do Giga (dono 29/07).
         NOT: { paymentMethod: 'MARCADO' },
       },
       select: {
@@ -732,6 +722,7 @@ export class SellersService {
         vendedorName: true,
         total: true,
         items: { select: { id: true, total: true, sellerName: true } },
+        payments: { select: { method: true, valor: true } },
       },
     });
 
@@ -749,60 +740,24 @@ export class SellersService {
       pdvBucket.set(key, cur);
     };
     let totalPdvGeral = 0;
-    // Mapas pra abater DEVOLUÇÕES da venda original (regra Giga, dono 29/07)
-    const fatorBySale = new Map<string, number>();
-    const infoBySale = new Map<string, { storeCode: string; principal: string }>();
-    const sellerByItemId = new Map<string, string>();
     for (const s of pdvSales) {
       const principal = s.sellerName || s.vendedorName || 'Sem vendedora';
       const itens = (s.items || []).filter((i: any) => Number(i.total) > 0);
-      totalPdvGeral += Number(s.total || 0);
-      infoBySale.set(s.id, { storeCode: s.storeCode, principal });
+      // O que a cliente PAGOU: total da venda menos o abatido em vale-troca
+      const vale = (s.payments || [])
+        .filter((p: any) => p.method === 'vale_troca')
+        .reduce((a: number, p: any) => a + Number(p.valor || 0), 0);
+      const pago = Math.max(0, Number(s.total || 0) - vale);
+      totalPdvGeral += pago;
       if (itens.length) {
-        // RATEIO do desconto de VENDA (dono 29/07: comissão é sobre o valor
-        // NEGOCIADO): o desconto avulso fica no total da venda, não nos itens
-        // — o fator ajusta cada item pra soma das vendedoras bater EXATAMENTE
-        // com o total da venda (o mesmo que vai pro caixa).
+        // Rateio proporcional do PAGO pelos itens de cada vendedora (override
+        // por item vale) — a soma das vendedoras = o que entrou no caixa.
         const somaItens = itens.reduce((a: number, i: any) => a + Number(i.total || 0), 0);
-        const fator = somaItens > 0 ? Number(s.total || 0) / somaItens : 1;
-        fatorBySale.set(s.id, fator);
+        const fator = somaItens > 0 ? pago / somaItens : 1;
         addPdv(principal, 0, s.storeCode, true); // conta a venda 1x
-        for (const it of itens) {
-          if (it.id) sellerByItemId.set(it.id, it.sellerName || principal);
-          addPdv(it.sellerName || principal, Number(it.total || 0) * fator, s.storeCode, false);
-        }
+        for (const it of itens) addPdv(it.sellerName || principal, Number(it.total || 0) * fator, s.storeCode, false);
       } else {
-        fatorBySale.set(s.id, 1);
-        addPdv(principal, Number(s.total || 0), s.storeCode, true);
-      }
-    }
-
-    // ── DEVOLUÇÕES abatidas NA VENDA ORIGINAL (regra Giga, dono 29/07):
-    // peça devolvida sai do total da vendedora que vendeu, pelo valor
-    // NEGOCIADO (snapshot da devolução × fator de desconto da venda) —
-    // independente de QUANDO a devolução aconteceu. Devolução manual de
-    // peça do Giga antigo (sem venda no Flow) fica fora, igual ao Giga.
-    const saleIds = pdvSales.map((s: any) => s.id);
-    for (let i = 0; i < saleIds.length; i += 500) {
-      const chunk = saleIds.slice(i, i + 500);
-      const devolucoes: any[] = await (this.prisma as any).pdvReturn.findMany({
-        where: { isTraining: false, originalSaleId: { in: chunk } },
-        select: {
-          originalSaleId: true,
-          items: { select: { originalItemId: true, total: true } },
-        },
-      });
-      for (const dev of devolucoes) {
-        const info = infoBySale.get(dev.originalSaleId);
-        if (!info) continue;
-        const fator = fatorBySale.get(dev.originalSaleId) ?? 1;
-        for (const it of dev.items || []) {
-          const abatido = Number(it.total || 0) * fator;
-          if (!abatido) continue;
-          const nome = (it.originalItemId && sellerByItemId.get(it.originalItemId)) || info.principal;
-          addPdv(nome, -abatido, info.storeCode, false);
-          totalPdvGeral -= abatido;
-        }
+        addPdv(principal, pago, s.storeCode, true);
       }
     }
 
