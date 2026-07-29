@@ -114,7 +114,7 @@ export class MarcadosController {
     },
   ) {
     this.requireAdmin(req);
-    const auth = authorizeMinLevel(String(body?.password || ''), 'GERENTE');
+    const auth = authorizeMinLevel(String(body?.password || ''), 'GERENTE', String(body?.loja || req?.user?.storeCode || '') || undefined);
     const quem = auth.byNome || req?.user?.name || req?.user?.email || 'gerente';
     return this.svc.baixarMarcados({
       registros: body?.registros || [],

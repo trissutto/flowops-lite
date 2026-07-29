@@ -33,6 +33,9 @@ export interface OperadorUpsert {
   pin?: string;        // opcional no update (só quando quer (re)definir)
   storeCode?: string;
   ativo?: boolean;
+  /** ESCOPO DE VALIDADE (dono 29/07): códigos de loja onde o PIN FUNCIONA
+   *  (ex.: franqueado MASTER só nas lojas dele). Vazio = todas as lojas. */
+  lojas?: string[] | string;
 }
 
 /** Item retornado pra tela — NUNCA inclui hash/salt/PIN. */
@@ -43,6 +46,15 @@ export interface OperadorView {
   ativo: boolean;
   storeCode: string | null;
   temPin: boolean;
+  /** Lojas onde o PIN vale (null = todas). */
+  lojas: string[] | null;
+}
+
+/** "03, 10,17" | ['03','10'] → ['03','10','17'] (null se vazio). */
+function parseLojas(v: any): string[] | null {
+  const arr = Array.isArray(v) ? v : String(v || '').split(',');
+  const list = arr.map((s) => String(s || '').trim()).filter(Boolean);
+  return list.length ? Array.from(new Set(list)) : null;
 }
 
 /**
@@ -73,6 +85,7 @@ export class OperadorPinService implements OnModuleInit {
       nivel: r.nivel as AccessLevel,
       salt: r.pinSalt,
       hash: r.pinHash,
+      lojas: parseLojas(r.lojas) ?? undefined,
     }));
     setOperatorPins(list);
     this.logger.log(`[operador-pin] ${list.length} PIN(s) ativos carregados.`);
@@ -98,6 +111,7 @@ export class OperadorPinService implements OnModuleInit {
       ativo: r.ativo,
       storeCode: r.storeCode || null,
       temPin: !!r.pinHash,
+      lojas: parseLojas(r.lojas),
     }));
   }
 
@@ -214,6 +228,8 @@ export class OperadorPinService implements OnModuleInit {
       throw new BadRequestException(`Função inválida. Use uma de: ${OPERATOR_LEVELS.join(', ')}.`);
     }
     const storeCode = input.storeCode ? String(input.storeCode).trim().slice(0, 20) : null;
+    const lojasList = parseLojas(input.lojas);
+    const lojasCsv = lojasList ? lojasList.join(',').slice(0, 200) : null;
 
     const existing = await (this.prisma as any).operadorPin.findUnique({ where: { cpf } });
 
@@ -235,17 +251,17 @@ export class OperadorPinService implements OnModuleInit {
     if (existing) {
       await (this.prisma as any).operadorPin.update({
         where: { cpf },
-        data: { nome, nivel: input.nivel, storeCode, ativo, ...(pinFields || {}) },
+        data: { nome, nivel: input.nivel, storeCode, ativo, lojas: lojasCsv, ...(pinFields || {}) },
       });
     } else {
       await (this.prisma as any).operadorPin.create({
-        data: { cpf, nome, nivel: input.nivel, storeCode, ativo, ...(pinFields as any) },
+        data: { cpf, nome, nivel: input.nivel, storeCode, ativo, lojas: lojasCsv, ...(pinFields as any) },
       });
     }
     await this.reload();
-    this.logger.log(`[operador-pin] ${existing ? 'atualizada' : 'criada'} ${nome} (${input.nivel})`);
+    this.logger.log(`[operador-pin] ${existing ? 'atualizada' : 'criada'} ${nome} (${input.nivel})${lojasCsv ? ` · lojas ${lojasCsv}` : ''}`);
     return {
-      cpf, nome, nivel: input.nivel, ativo, storeCode, temPin: true,
+      cpf, nome, nivel: input.nivel, ativo, storeCode, temPin: true, lojas: lojasList,
     };
   }
 

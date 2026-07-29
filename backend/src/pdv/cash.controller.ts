@@ -464,8 +464,8 @@ export class CashController {
    * Lanca 403 se senha invalida ou nivel insuficiente.
    * Retorna o nivel detectado pra audit log.
    */
-  private validateLevel(password: string | undefined, minLevel: any) {
-    return validateMinLevel(password, minLevel);
+  private validateLevel(password: string | undefined, minLevel: any, storeCode?: string) {
+    return validateMinLevel(password, minLevel, storeCode);
   }
 
   // master_franquia também pode (segue exigindo a senha de nível MASTER/GERENTE);
@@ -499,7 +499,7 @@ export class CashController {
     @Body() body: { storeCode: string; valor: number; motivo: string; password: string; date?: string },
   ) {
     this.requireMasterRole(req);
-    const nivel = this.validateLevel(body?.password, 'MASTER');
+    const nivel = this.validateLevel(body?.password, 'MASTER', (body as any)?.storeCode || req?.user?.storeCode);
     if (!body?.storeCode) throw new BadRequestException('storeCode obrigatorio');
     await this.assertStoreEhFranquia(req, body.storeCode);
     const userName = req?.user?.name || req?.user?.email || req?.user?.username || 'admin';
@@ -530,7 +530,7 @@ export class CashController {
     },
   ) {
     this.requireMasterRole(req);
-    const nivel = this.validateLevel(body?.password, 'MASTER');
+    const nivel = this.validateLevel(body?.password, 'MASTER', (body as any)?.storeCode || req?.user?.storeCode);
     if (!body?.storeCode) throw new BadRequestException('storeCode obrigatorio');
     await this.assertStoreEhFranquia(req, body.storeCode);
     const userName = req?.user?.name || req?.user?.email || req?.user?.username || 'admin';
@@ -558,7 +558,7 @@ export class CashController {
     @Body() body: { password: string },
   ) {
     this.requireMasterRole(req);
-    const nivel = this.validateLevel(body?.password, 'MASTER');
+    const nivel = this.validateLevel(body?.password, 'MASTER', (body as any)?.storeCode || req?.user?.storeCode);
     const userName = req?.user?.name || req?.user?.email || req?.user?.username || 'admin';
     return this.svc.masterDeleteMovement({
       movementId: id,
@@ -578,7 +578,7 @@ export class CashController {
     @Body() body: { valor?: number; motivo?: string; password: string },
   ) {
     this.requireMasterRole(req);
-    const nivel = this.validateLevel(body?.password, 'MASTER');
+    const nivel = this.validateLevel(body?.password, 'MASTER', (body as any)?.storeCode || req?.user?.storeCode);
     const userName = req?.user?.name || req?.user?.email || req?.user?.username || 'admin';
     return this.svc.masterUpdateMovement({
       movementId: id,
@@ -632,7 +632,7 @@ export class CashController {
     @Body() body: { sellerName: string; motivo: string; password: string; keepItemOverrides?: boolean },
   ) {
     this.requireMasterRole(req);
-    const nivel = this.validateLevel(body?.password, 'GERENTE');
+    const nivel = this.validateLevel(body?.password, 'GERENTE', (body as any)?.storeCode || req?.user?.storeCode);
     const userName = req?.user?.name || req?.user?.email || req?.user?.username || 'admin';
     return this.svc.masterUpdateSaleSeller({
       saleId,
@@ -655,7 +655,7 @@ export class CashController {
     @Body() body: { sellerName: string | null; motivo: string; password: string },
   ) {
     this.requireMasterRole(req);
-    const nivel = this.validateLevel(body?.password, 'GERENTE');
+    const nivel = this.validateLevel(body?.password, 'GERENTE', (body as any)?.storeCode || req?.user?.storeCode);
     const userName = req?.user?.name || req?.user?.email || req?.user?.username || 'admin';
     return this.svc.masterUpdateItemSeller({
       itemId,
@@ -684,7 +684,7 @@ export class CashController {
     },
   ) {
     this.requireMasterRole(req);
-    const nivel = this.validateLevel(body?.password, 'MASTER');
+    const nivel = this.validateLevel(body?.password, 'MASTER', (body as any)?.storeCode || req?.user?.storeCode);
     const userName = req?.user?.name || req?.user?.email || req?.user?.username || 'admin';
     return this.svc.masterEditPayment({
       paymentId,

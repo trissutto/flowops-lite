@@ -421,6 +421,8 @@ export class NfeTransferService {
     const origem = await this.loadStoreFiscal(shipment.fromStoreCode, {
       ...opts,
       matchRaiz: destino.cnpj.slice(0, 8),
+      // Raiz sem matriz cadastrada (MDD): emite pela config da PRÓPRIA loja destino
+      preferStoreCode: String(shipment.toStoreCode || ''),
     });
 
     // Itens da remessa (uma linha por unidade) → agrupa por SKU.
@@ -539,7 +541,7 @@ export class NfeTransferService {
 
   private async loadStoreFiscal(
     storeCode: string,
-    opts: { requireCert: boolean; identidade?: 'nfe' | 'base'; matchRaiz?: string } = { requireCert: true },
+    opts: { requireCert: boolean; identidade?: 'nfe' | 'base'; matchRaiz?: string; preferStoreCode?: string } = { requireCert: true },
   ): Promise<StoreFiscal> {
     const cfg = await this.prisma.nfceConfig.findUnique({ where: { storeCode } });
     if (!cfg) {
@@ -612,7 +614,13 @@ export class NfeTransferService {
           select: { storeCode: true, cnpj: true, ie: true, razaoSocial: true, fantasia: true, regime: true, endereco: true, nfeIdentidadesExtras: true },
         });
         const daRaiz = todas.filter((c) => this.digits(String(c.cnpj || '')).slice(0, 8) === opts.matchRaiz);
-        const prim = daRaiz.find((c) => this.digits(String(c.cnpj)).slice(8, 12) === '0001') || daRaiz[0];
+        // ORDEM (dono 29/07: "remetente EXATO — 01→Anália saiu como Suzano"):
+        // 1º matriz /0001 da raiz (regra LURDS) · 2º a config da PRÓPRIA LOJA
+        // DESTINO (raiz sem matriz cadastrada, ex. MDD) · 3º qualquer irmã.
+        const prim =
+          daRaiz.find((c) => this.digits(String(c.cnpj)).slice(8, 12) === '0001') ||
+          (opts.preferStoreCode ? daRaiz.find((c) => c.storeCode === opts.preferStoreCode) : undefined) ||
+          daRaiz[0];
         if (prim) {
           alt = { cnpj: prim.cnpj, ie: prim.ie, razaoSocial: prim.razaoSocial, fantasia: prim.fantasia, regime: prim.regime, endereco: prim.endereco };
           this.logger.log(`[nfe] transferência ${storeCode} → raiz ${opts.matchRaiz}: nota emitida pela identidade da loja ${prim.storeCode} (mesma raiz do destino)`);

@@ -4344,6 +4344,10 @@ model OperadorPin {
   ativo     Boolean  @default(true)
   // Loja de origem — escopo de visualização (gerente vê só as da sua loja).
   storeCode String?  @map("store_code") @db.VarChar(20)
+  // ESCOPO DE VALIDADE do PIN (dono 29/07): CSV de códigos de loja onde o PIN
+  // FUNCIONA (ex.: "03,10,17,18" = franqueado MASTER só nas lojas dele).
+  // Null/vazio = vale em todas as lojas (comportamento original).
+  lojas     String?  @db.VarChar(200)
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 

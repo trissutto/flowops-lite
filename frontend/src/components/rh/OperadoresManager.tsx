@@ -72,6 +72,9 @@ export default function OperadoresManager({ backHref, backLabel }: { backHref: s
   const [cpf, setCpf] = useState('');
   const [nivel, setNivel] = useState<Nivel>('CAIXA');
   const [pin, setPin] = useState('');
+  // Escopo do PIN (dono 29/07): códigos de loja onde o PIN VALE, separados
+  // por vírgula (ex.: franqueado MASTER "03,10,17,18"). Vazio = todas.
+  const [lojasEscopo, setLojasEscopo] = useState('');
   const [editando, setEditando] = useState(false);
 
   // Equipe da loja — escolher em vez de digitar de novo
@@ -103,7 +106,7 @@ export default function OperadoresManager({ backHref, backLabel }: { backHref: s
   }, []);
 
   function limpar() {
-    setNome(''); setCpf(''); setNivel('CAIXA'); setPin(''); setEditando(false); setEquipeSel('');
+    setNome(''); setCpf(''); setNivel('CAIXA'); setPin(''); setLojasEscopo(''); setEditando(false); setEquipeSel('');
   }
 
   /** Escolheu alguém da equipe → preenche nome/CPF/função sugerida. */
@@ -119,7 +122,9 @@ export default function OperadoresManager({ backHref, backLabel }: { backHref: s
     setOkMsg(null); setErr(null);
   }
   function editar(o: Operador) {
-    setNome(o.nome); setCpf(maskCpf(o.cpf)); setNivel(o.nivel); setPin(''); setEditando(true);
+    setNome(o.nome); setCpf(maskCpf(o.cpf)); setNivel(o.nivel); setPin('');
+    setLojasEscopo(((o as any).lojas || []).join(','));
+    setEditando(true);
     setOkMsg(null); setErr(null);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
@@ -130,7 +135,7 @@ export default function OperadoresManager({ backHref, backLabel }: { backHref: s
     try {
       await api('/rh/operadores', {
         method: 'POST',
-        body: JSON.stringify({ nome, cpf: cpf.replace(/\D/g, ''), nivel, pin: pin.replace(/\D/g, '') || undefined }),
+        body: JSON.stringify({ nome, cpf: cpf.replace(/\D/g, ''), nivel, pin: pin.replace(/\D/g, '') || undefined, lojas: lojasEscopo }),
       });
       setOkMsg(`${nome.split(' ')[0]} salva! 💜`);
       limpar();
@@ -220,6 +225,16 @@ export default function OperadoresManager({ backHref, backLabel }: { backHref: s
             {pinFracoClient(pin) && (
               <p className="text-red-500 text-xs -mt-1">PIN muito óbvio — evite sequência (123456) ou repetição (000000).</p>
             )}
+            {role !== 'store' && (
+              <div>
+                <input value={lojasEscopo} onChange={(e) => setLojasEscopo(e.target.value)}
+                  placeholder="Lojas onde o PIN vale (ex.: 03,10,17,18) — vazio = todas"
+                  className="w-full px-3 py-2.5 rounded-xl border border-slate-300 focus:border-[#B8912B] outline-none" />
+                <p className="text-[11px] text-slate-400 mt-1">
+                  Escopo do PIN: com códigos de loja aqui, o PIN só libera NESSAS lojas (ex.: franqueado MASTER só nas lojas dele).
+                </p>
+              </div>
+            )}
           </div>
           {err && <p className="text-red-600 text-sm mt-3 flex items-center gap-1.5"><AlertCircle className="w-4 h-4" />{err}</p>}
           {okMsg && <p className="text-emerald-600 text-sm mt-3 flex items-center gap-1.5"><Check className="w-4 h-4" />{okMsg}</p>}
@@ -250,6 +265,9 @@ export default function OperadoresManager({ backHref, backLabel }: { backHref: s
                     <div className="font-semibold text-slate-800 truncate">{o.nome}</div>
                     <div className="text-xs text-slate-500">
                       {maskCpfShow(o.cpf)} · <span className="font-semibold text-[#8C7325]">{NIVEL_LABEL[o.nivel]}</span>
+                      {((o as any).lojas?.length ?? 0) > 0 && (
+                        <span className="text-indigo-600"> · só lojas {(o as any).lojas.join(', ')}</span>
+                      )}
                       {!o.ativo && ' · desativada'}
                     </div>
                   </div>
