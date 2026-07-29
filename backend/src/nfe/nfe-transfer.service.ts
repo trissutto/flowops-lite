@@ -1101,7 +1101,10 @@ export class NfeTransferService {
           pisCofins +
           ibi.xml +
           `</imposto>`;
-        return `<det nItem="${idx + 1}">${prod}${imposto}</det>`;
+        // vItem (grupo VB, NT 2025.002): OBRIGATÓRIO junto do IBSCBS — sem
+        // ele o lote caía com cStat 225 "Falha no Schema XML" (29/07).
+        const vItemTag = ib.on ? `<vItem>${vBCItem.toFixed(2)}</vItem>` : '';
+        return `<det nItem="${idx + 1}">${prod}${imposto}${vItemTag}</det>`;
       })
       .join('');
 
@@ -1520,7 +1523,8 @@ export class NfeTransferService {
           ibTot.vIBSMun += ibi.vIBSMun;
           ibTot.vCBS += ibi.vCBS;
         }
-        return `<det nItem="${idx + 1}">${prod}<imposto>${icms}${pisCofins}${icmsUfDest}${ibi.xml}</imposto></det>`;
+        // vItem (grupo VB): obrigatório junto do IBSCBS — cStat 225 sem ele
+        return `<det nItem="${idx + 1}">${prod}<imposto>${icms}${pisCofins}${icmsUfDest}${ibi.xml}</imposto>${ib.on ? `<vItem>${vBCItem.toFixed(2)}</vItem>` : ''}</det>`;
       })
       .join('');
 
