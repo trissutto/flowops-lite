@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
+import { CommissionEngineService } from './commission-engine.service';
 
 /**
  * CommissionsService — F4 do plano de migração 30/06.
@@ -38,6 +39,7 @@ export class CommissionsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly erp: ErpService,
+    private readonly engine: CommissionEngineService,
   ) {}
 
   // ── Rules CRUD ─────────────────────────────────────────────────────
@@ -149,40 +151,9 @@ export class CommissionsService {
     cargo: string,
     refDate: Date,
   ): Promise<any | null> {
-    const where = (extra: any) => ({
-      active: true,
-      validFrom: { lte: refDate },
-      OR: [{ validTo: null }, { validTo: { gte: refDate } }],
-      ...extra,
-    });
-
-    // 1. seller-specific (override raro pra vendedora especial)
-    let r = await (this.prisma as any).commissionRule.findFirst({
-      where: where({ scope: 'seller', sellerId }),
-      orderBy: { validFrom: 'desc' },
-    });
-    if (r) return r;
-
-    // 2. por cargo (caminho principal — modelo Lurd's)
-    r = await (this.prisma as any).commissionRule.findFirst({
-      where: where({ scope: 'cargo', cargo }),
-      orderBy: { validFrom: 'desc' },
-    });
-    if (r) return r;
-
-    // 3. store-specific
-    r = await (this.prisma as any).commissionRule.findFirst({
-      where: where({ scope: 'store', storeId }),
-      orderBy: { validFrom: 'desc' },
-    });
-    if (r) return r;
-
-    // 4. global
-    r = await (this.prisma as any).commissionRule.findFirst({
-      where: where({ scope: 'global' }),
-      orderBy: { validFrom: 'desc' },
-    });
-    return r;
+    // Delegado ao MOTOR ÚNICO (decisão 29/07) — a hierarquia
+    // seller > cargo > store > global mora só lá.
+    return this.engine.resolveRuleFor(sellerId, storeId, cargo, refDate);
   }
 
   /**
@@ -300,94 +271,41 @@ export class CommissionsService {
       this.logger.warn(`[commissions] Recalculando período CLOSED ${yearMonth} (override admin)`);
     }
 
-    // 1) Soma de vendas + trocas POR LOJA (pra cargo=on_responsible_store)
-    //
-    // NOTA: tabela real = pdv_sales / pdv_returns (@@map), colunas snake_case,
-    // status finalizado = 'finalized'. Aliases voltam em camelCase pro código
-    // downstream continuar lendo r.storeCode / r.sellerId / r.total.
-    // NOTA (22/07): exclui paymentMethod='MARCADO' (marcação não é venda —
-    // contar marcação + venda puxada dava comissão em dobro) e abate o
-    // VALE-TROCA usado NA PRÓPRIA VENDA (venda de 100 paga com vale de 23,90
-    // comissiona 76,10 — regra do dono).
-    const salesByStore: any[] = await this.prisma.$queryRawUnsafe(
-      `SELECT
-         store_code AS "storeCode",
-         COUNT(*)::int AS qtd,
-         SUM(total - COALESCE(vt.vale, 0) - COALESCE(fr.frete, 0))::float AS total
-       FROM pdv_sales s
-       ${CommissionsService.VALE_JOIN_SQL}
-       ${CommissionsService.FRETE_JOIN_SQL}
-       WHERE finalized_at >= $1
-         AND finalized_at <= $2
-         AND status = 'finalized'
-         AND is_training = false
-         ${CommissionsService.SEM_MARCACAO_SQL}
-       GROUP BY store_code`,
-      period.startDate,
-      period.endDate,
-    );
-    // Trocas/devoluções por LOJA — SÓ modo dinheiro/pix (22/07): devolução
-    // que vira vale abate quando o vale é USADO numa venda (join acima),
-    // não aqui — senão descontava duas vezes.
-    const trocasByStore: any[] = await this.prisma.$queryRawUnsafe(
-      `SELECT store_code AS "storeCode", SUM(valor_total)::float AS total
-       FROM pdv_returns
-       WHERE created_at >= $1 AND created_at <= $2
-         AND is_training = false
-         ${CommissionsService.TROCA_DINHEIRO_SQL}
-       GROUP BY store_code`,
-      period.startDate,
-      period.endDate,
-    );
+    // 1) Indicadores por LOJA + por VENDEDORA×LOJA — TUDO vem do MOTOR ÚNICO
+    // (CommissionEngine, decisão 29/07). A base de comissão continua a mesma
+    // conta de sempre (recebido − frete − devoluções dinheiro), mas os filtros
+    // canônicos (marcado fora, vale nas 3 grafias, devolução cancelada fora)
+    // moram SÓ no motor.
+    const [lojaRows, lojaDevs, sellerRows, sellerDevs] = await Promise.all([
+      this.engine.porLoja(period.startDate, period.endDate),
+      this.engine.devolucoesPorLoja(period.startDate, period.endDate),
+      this.engine.porVendedora(period.startDate, period.endDate),
+      this.engine.devolucoesPorVendedora(period.startDate, period.endDate),
+    ]);
+    // vendido = valorRecebido − frete (total − vale − frete): base pré-devolução
+    const vendidoDe = (r: any) =>
+      (Number(r.valorRecebido) || 0) - (Number(r.valorFrete) || 0);
     const storeTotals = new Map<string, { vendido: number; trocas: number; qtd: number }>();
-    for (const r of salesByStore) {
+    for (const r of lojaRows) {
       storeTotals.set(r.storeCode, {
-        vendido: Number(r.total) || 0,
+        vendido: vendidoDe(r),
         trocas: 0,
         qtd: Number(r.qtd) || 0,
       });
     }
-    for (const r of trocasByStore) {
+    for (const r of lojaDevs) {
       const cur = storeTotals.get(r.storeCode) || { vendido: 0, trocas: 0, qtd: 0 };
       cur.trocas = Number(r.total) || 0;
       storeTotals.set(r.storeCode, cur);
     }
 
-    // 2) Soma de vendas POR (vendedora × loja) (pra cargo=on_self da VENDEDORA)
-    const salesBySeller: any[] = await this.prisma.$queryRawUnsafe(
-      `SELECT seller_id AS "sellerId", store_code AS "storeCode",
-         COUNT(*)::int AS qtd,
-         SUM(total - COALESCE(vt.vale, 0) - COALESCE(fr.frete, 0))::float AS total
-       FROM pdv_sales s
-       ${CommissionsService.VALE_JOIN_SQL}
-       ${CommissionsService.FRETE_JOIN_SQL}
-       WHERE finalized_at >= $1
-         AND finalized_at <= $2
-         AND seller_id IS NOT NULL
-         AND status = 'finalized'
-         AND is_training = false
-         ${CommissionsService.SEM_MARCACAO_SQL}
-       GROUP BY seller_id, store_code`,
-      period.startDate,
-      period.endDate,
-    );
-    // Trocas/devoluções atribuídas à VENDEDORA da venda original (via
-    // original_sale_id → pdv_sales.seller_id). Devolução manual sem cupom
-    // (original_sale_id NULL) NÃO entra aqui — vira desconto só da loja.
-    // SÓ modo dinheiro/pix (22/07) — vale abate quando é usado.
-    const trocasBySeller: any[] = await this.prisma.$queryRawUnsafe(
-      `SELECT s.seller_id AS "sellerId", s.store_code AS "storeCode",
-         SUM(r.valor_total)::float AS total
-       FROM pdv_returns r
-       JOIN pdv_sales s ON s.id = r.original_sale_id
-       WHERE r.created_at >= $1 AND r.created_at <= $2
-         AND r.is_training = false
-         AND s.seller_id IS NOT NULL
-         AND r.modo IN ('dinheiro', 'pix')
-       GROUP BY s.seller_id, s.store_code`,
-      period.startDate,
-      period.endDate,
-    );
+    const salesBySeller: any[] = sellerRows.map((r: any) => ({
+      sellerId: r.sellerId,
+      storeCode: r.storeCode,
+      qtd: r.qtd,
+      total: vendidoDe(r),
+    }));
+    const trocasBySeller: any[] = sellerDevs;
     const stores = await this.prisma.store.findMany({ select: { id: true, code: true } });
     const storeCodeToId = new Map(stores.map((s) => [s.code, s.id]));
     const storeIdToCode = new Map(stores.map((s) => [s.id, s.code]));
@@ -483,40 +401,30 @@ export class CommissionsService {
 
       const vendidoLiquido = Math.max(0, totalVendido - totalTrocas);
 
-      let percentApplied = 0;
-      let comissaoBase = 0;
-      let metaAtingida = false;
-      let bonusValue = 0;
-      let metaValue: number | null = null;
-      let bonusPercent: number | null = null;
-      let ruleSnapshot: any = {
-        warning: 'sem regra aplicável — comissão zero',
-        cargo: sellerCargo,
-      };
-
-      if (rule) {
-        percentApplied = Number(rule.percentBase) || 0;
-        comissaoBase = (vendidoLiquido * percentApplied) / 100;
-        if (rule.meta != null && rule.bonusPercent != null) {
-          metaValue = Number(rule.meta);
-          bonusPercent = Number(rule.bonusPercent);
-          if (vendidoLiquido >= metaValue) {
-            metaAtingida = true;
-            bonusValue = (vendidoLiquido * bonusPercent) / 100;
+      // A fórmula (percentual × base, bônus por meta) mora SÓ no motor.
+      const calc = this.engine.aplicarRegra(rule, vendidoLiquido);
+      const percentApplied = calc.percentual;
+      const comissaoBase = calc.comissaoBase;
+      const metaAtingida = calc.metaAtingida;
+      const bonusValue = calc.bonusValue;
+      const metaValue = calc.metaValue;
+      const bonusPercent = calc.bonusPercent;
+      const ruleSnapshot: any = rule
+        ? {
+            id: rule.id,
+            scope: rule.scope,
+            cargo: rule.cargo,
+            calcMode: rule.calcMode,
+            percentBase: rule.percentBase,
+            meta: rule.meta,
+            bonusPercent: rule.bonusPercent,
           }
-        }
-        ruleSnapshot = {
-          id: rule.id,
-          scope: rule.scope,
-          cargo: rule.cargo,
-          calcMode: rule.calcMode,
-          percentBase: rule.percentBase,
-          meta: rule.meta,
-          bonusPercent: rule.bonusPercent,
-        };
-      }
+        : {
+            warning: 'sem regra aplicável — comissão zero',
+            cargo: sellerCargo,
+          };
 
-      const total = comissaoBase + bonusValue;
+      const total = calc.valorComissao;
       const storeIdResolved = storeCodeToId.get(storeCode);
       if (!storeIdResolved) return;
 
@@ -669,35 +577,9 @@ export class CommissionsService {
     return { startDate, endDate };
   }
 
-  /** Marcação (provar em casa) NÃO é venda: fecha com paymentMethod='MARCADO'
-   *  e a venda de verdade acontece DEPOIS, quando o marcado é puxado pra
-   *  venda — contar as duas seria comissão em dobro (bug 22/07). */
-  private static readonly SEM_MARCACAO_SQL = `AND (payment_method IS NULL OR payment_method <> 'MARCADO')`;
-
-  /**
-   * REGRA DO VALE-TROCA (dono 22/07): o vale abate NA VENDA QUE O USOU —
-   * venda de R$ 100 paga com vale de R$ 23,90 comissiona sobre R$ 76,10.
-   * Em contrapartida, devolução modo troca/crédito (que gera vale) NÃO abate
-   * mais da vendedora original — só devolução em DINHEIRO/PIX abate (cliente
-   * levou o dinheiro embora; não existe venda nova pra descontar).
-   */
-  private static readonly VALE_JOIN_SQL = `
-    LEFT JOIN (
-      SELECT sale_id, SUM(valor)::float AS vale
-        FROM pdv_sale_payments
-       WHERE method = 'vale_troca'
-       GROUP BY sale_id
-    ) vt ON vt.sale_id = s.id`;
-  /** FRETE (23/07): linha ref='FRETE' da venda online é receita da loja mas
-   *  NÃO comissiona — vendedora ganha sobre as peças, não sobre o correio. */
-  private static readonly FRETE_JOIN_SQL = `
-    LEFT JOIN (
-      SELECT sale_id, SUM(total)::float AS frete
-        FROM pdv_sale_items
-       WHERE ref = 'FRETE'
-       GROUP BY sale_id
-    ) fr ON fr.sale_id = s.id`;
-  private static readonly TROCA_DINHEIRO_SQL = `AND modo IN ('dinheiro', 'pix')`;
+  // Os fragmentos SQL canônicos (marcado fora, vale nas 3 grafias, frete,
+  // devolução que abate) moram no CommissionEngineService — motor único
+  // (decisão 29/07). Este service só compõe fechamento/folha em cima dele.
 
   async relatorioRh(input: { de: string; ate: string; storeCode?: string }): Promise<any> {
     const de = String(input.de || '').slice(0, 10);
@@ -708,100 +590,29 @@ export class CommissionsService {
     const { startDate, endDate } = this.brtRange(de, ate);
     const lojaFiltro = input.storeCode ? String(input.storeCode).trim() : null;
 
-    const storeFilterSql = lojaFiltro ? `AND store_code = $3` : '';
-    const params: any[] = lojaFiltro ? [startDate, endDate, lojaFiltro] : [startDate, endDate];
-
-    // Agregados por loja (base do líder/gerente) e por vendedora×loja
-    const salesByStore: any[] = await this.prisma.$queryRawUnsafe(
-      `SELECT store_code AS "storeCode", COUNT(*)::int AS qtd,
-              SUM(total)::float AS bruto,
-              SUM(COALESCE(vt.vale, 0))::float AS vale,
-              SUM(COALESCE(fr.frete, 0))::float AS frete
-         FROM pdv_sales s
-         ${CommissionsService.VALE_JOIN_SQL}
-         ${CommissionsService.FRETE_JOIN_SQL}
-        WHERE finalized_at >= $1 AND finalized_at <= $2
-          AND status = 'finalized' AND is_training = false
-          ${CommissionsService.SEM_MARCACAO_SQL} ${storeFilterSql}
-        GROUP BY store_code`,
-      ...params,
-    );
-    // Só devolução em DINHEIRO/PIX abate aqui — troca/crédito viram vale e o
-    // vale abate quando é USADO numa venda (regra do dono 22/07)
-    const trocasByStore: any[] = await this.prisma.$queryRawUnsafe(
-      `SELECT store_code AS "storeCode", SUM(valor_total)::float AS total
-         FROM pdv_returns
-        WHERE created_at >= $1 AND created_at <= $2 AND is_training = false
-          ${CommissionsService.TROCA_DINHEIRO_SQL} ${storeFilterSql}
-        GROUP BY store_code`,
-      ...params,
-    );
-    const salesBySeller: any[] = await this.prisma.$queryRawUnsafe(
-      `SELECT seller_id AS "sellerId", store_code AS "storeCode",
-              COUNT(*)::int AS qtd,
-              SUM(total)::float AS bruto,
-              SUM(COALESCE(vt.vale, 0))::float AS vale,
-              SUM(COALESCE(fr.frete, 0))::float AS frete
-         FROM pdv_sales s
-         ${CommissionsService.VALE_JOIN_SQL}
-         ${CommissionsService.FRETE_JOIN_SQL}
-        WHERE finalized_at >= $1 AND finalized_at <= $2
-          AND seller_id IS NOT NULL AND status = 'finalized' AND is_training = false
-          ${CommissionsService.SEM_MARCACAO_SQL} ${storeFilterSql}
-        GROUP BY seller_id, store_code`,
-      ...params,
-    );
-    const trocasBySeller: any[] = await this.prisma.$queryRawUnsafe(
-      `SELECT s.seller_id AS "sellerId", s.store_code AS "storeCode",
-              SUM(r.valor_total)::float AS total
-         FROM pdv_returns r
-         JOIN pdv_sales s ON s.id = r.original_sale_id
-        WHERE r.created_at >= $1 AND r.created_at <= $2
-          AND r.is_training = false AND s.seller_id IS NOT NULL
-          AND r.modo IN ('dinheiro', 'pix')
-          ${lojaFiltro ? 'AND r.store_code = $3' : ''}
-        GROUP BY s.seller_id, s.store_code`,
-      ...params,
-    );
-    // Detalhe venda a venda (cascata) — cap de 20k linhas por consulta
-    const vendasDetalhe: any[] = await this.prisma.$queryRawUnsafe(
-      `SELECT id, seller_id AS "sellerId", store_code AS "storeCode",
-              finalized_at AS "finalizedAt", total::float AS total,
-              COALESCE(vt.vale, 0)::float AS vale,
-              COALESCE(fr.frete, 0)::float AS frete,
-              payment_method AS "paymentMethod", customer_name AS "customerName"
-         FROM pdv_sales s
-         ${CommissionsService.VALE_JOIN_SQL}
-         ${CommissionsService.FRETE_JOIN_SQL}
-        WHERE finalized_at >= $1 AND finalized_at <= $2
-          AND seller_id IS NOT NULL AND status = 'finalized' AND is_training = false
-          ${CommissionsService.SEM_MARCACAO_SQL} ${storeFilterSql}
-        ORDER BY finalized_at
-        LIMIT 20000`,
-      ...params,
-    );
-    const trocasDetalhe: any[] = await this.prisma.$queryRawUnsafe(
-      `SELECT s.seller_id AS "sellerId", s.store_code AS "storeCode",
-              r.created_at AS "createdAt", r.valor_total::float AS total
-         FROM pdv_returns r
-         JOIN pdv_sales s ON s.id = r.original_sale_id
-        WHERE r.created_at >= $1 AND r.created_at <= $2
-          AND r.is_training = false AND s.seller_id IS NOT NULL
-          AND r.modo IN ('dinheiro', 'pix')
-          ${lojaFiltro ? 'AND r.store_code = $3' : ''}
-        ORDER BY r.created_at
-        LIMIT 20000`,
-      ...params,
-    );
-    // Vendas SEM vendedora — ficam FORA da folha, mas o RH precisa saber
-    const semVendedoraAgg: any[] = await this.prisma.$queryRawUnsafe(
-      `SELECT COUNT(*)::int AS qtd, COALESCE(SUM(total), 0)::float AS total
-         FROM pdv_sales
-        WHERE finalized_at >= $1 AND finalized_at <= $2
-          AND seller_id IS NULL AND status = 'finalized' AND is_training = false
-          ${CommissionsService.SEM_MARCACAO_SQL} ${storeFilterSql}`,
-      ...params,
-    );
+    // TODAS as agregações vêm do MOTOR ÚNICO (CommissionEngine, decisão
+    // 29/07) — este método só compõe folha/cascata em cima delas.
+    const [salesByStoreRows, trocasByStore, salesBySellerRows, trocasBySeller, vendasDetalhe, trocasDetalhe, semVendedora] =
+      await Promise.all([
+        this.engine.porLoja(startDate, endDate, lojaFiltro),
+        this.engine.devolucoesPorLoja(startDate, endDate, lojaFiltro),
+        this.engine.porVendedora(startDate, endDate, lojaFiltro),
+        this.engine.devolucoesPorVendedora(startDate, endDate, lojaFiltro),
+        this.engine.vendasDetalhe(startDate, endDate, lojaFiltro),
+        this.engine.devolucoesDetalhe(startDate, endDate, lojaFiltro),
+        this.engine.semVendedora(startDate, endDate, lojaFiltro),
+      ]);
+    // Mapeia o objeto canônico do motor pro shape histórico da Folha
+    // (bruto = faturamento; vale/frete separados).
+    const salesByStore: any[] = salesByStoreRows.map((r: any) => ({
+      storeCode: r.storeCode, qtd: r.qtd,
+      bruto: r.faturamento, vale: r.valorValeTroca, frete: r.valorFrete,
+    }));
+    const salesBySeller: any[] = salesBySellerRows.map((r: any) => ({
+      sellerId: r.sellerId, storeCode: r.storeCode, qtd: r.qtd,
+      bruto: r.faturamento, vale: r.valorValeTroca, frete: r.valorFrete,
+    }));
+    const semVendedoraAgg: any[] = [{ qtd: semVendedora.qtd, total: semVendedora.total }];
 
     const stores = await this.prisma.store.findMany({ select: { id: true, code: true, name: true } });
     const storeCodeToId = new Map(stores.map((s) => [s.code, s.id]));
@@ -903,28 +714,16 @@ export class CommissionsService {
         totalVendido = sl.vendido; totalVale = sl.vale; totalFrete = sl.frete; totalTrocas = sl.trocas; qtdVendas = sl.qtd;
       }
       // Base = vendido − vale usado (abate NA venda) − frete (não comissiona)
-      //        − devoluções em dinheiro
+      //        − devoluções em dinheiro. Fórmula do % mora SÓ no motor.
       const vendidoLiquido = Math.max(0, totalVendido - totalVale - totalFrete - totalTrocas);
-      let percentApplied = 0, comissaoBase = 0, bonusValue = 0;
-      let metaAtingida = false;
-      let metaValue: number | null = null, bonusPercent: number | null = null;
-      if (rule) {
-        percentApplied = Number(rule.percentBase) || 0;
-        comissaoBase = (vendidoLiquido * percentApplied) / 100;
-        if (rule.meta != null && rule.bonusPercent != null) {
-          metaValue = Number(rule.meta);
-          bonusPercent = Number(rule.bonusPercent);
-          if (vendidoLiquido >= metaValue) {
-            metaAtingida = true;
-            bonusValue = (vendidoLiquido * bonusPercent) / 100;
-          }
-        }
-      }
+      const calc = this.engine.aplicarRegra(rule, vendidoLiquido);
       linhas.push({
         sellerId, storeCode, cargo, calcMode,
         totalVendido, totalVale, totalFrete, totalTrocas, vendidoLiquido, qtdVendas,
-        percentApplied, comissaoBase, metaValue, metaAtingida, bonusPercent, bonusValue,
-        total: comissaoBase + bonusValue, semRegra: !rule,
+        percentApplied: calc.percentual, comissaoBase: calc.comissaoBase,
+        metaValue: calc.metaValue, metaAtingida: calc.metaAtingida,
+        bonusPercent: calc.bonusPercent, bonusValue: calc.bonusValue,
+        total: calc.valorComissao, semRegra: !rule,
       });
     };
 
@@ -1096,7 +895,7 @@ export class CommissionsService {
          FROM pdv_sales
         WHERE finalized_at >= $1 AND finalized_at <= $2
           AND status = 'finalized' AND is_training = false AND store_code = $3
-          ${CommissionsService.SEM_MARCACAO_SQL}
+          ${CommissionEngineService.SEM_MARCACAO_SQL}
         GROUP BY seller_id`,
       startDate, endDate, loja,
     );

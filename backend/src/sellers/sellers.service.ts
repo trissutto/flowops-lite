@@ -603,8 +603,9 @@ export class SellersService {
         payments: { select: { method: true, valor: true } },
       },
     });
-    // REGRA DO DONO (29/07): valor da vendedora = o que a cliente PAGOU
-    // (total final − vale-troca abatido). Devolução posterior NÃO mexe.
+    // ARQUITETURA 3 INDICADORES (dono 29/07): bruto = FATURAMENTO (compara
+    // com o caixa do Giga, que também é cheio); valeTroca e liquido
+    // (recebimento) são informativos — a comissão mora no CommissionEngine.
     type Comp = { vendedora: string; bruto: number; marcados: number; descontoAvulso: number; valeTroca: number; liquido: number; vendas: number };
     const bucket = new Map<string, Comp>();
     const norm = (s: any) => String(s || '').trim().toUpperCase().replace(/\s+/g, ' ') || 'SEM VENDEDORA';
@@ -616,13 +617,13 @@ export class SellersService {
     };
     for (const s of sales) {
       const principal = s.sellerName || s.vendedorName || 'Sem vendedora';
-      const itens = (s.items || []).filter((i: any) => Number(i.total) > 0);
+      const itens = (s.items || []).filter((i: any) => Number(i.total) !== 0);
       if (s.paymentMethod === 'MARCADO') {
         get(principal).marcados += Number(s.total || 0);
         continue;
       }
       const vale = (s.payments || [])
-        .filter((p: any) => p.method === 'vale_troca')
+        .filter((p: any) => ['vale_troca', 'vale', 'troca'].includes(String(p.method || '').toLowerCase().trim()))
         .reduce((a: number, p: any) => a + Number(p.valor || 0), 0);
       const total = Number(s.total || 0);
       const pago = Math.max(0, total - vale);
@@ -700,14 +701,12 @@ export class SellersService {
       bucket.set(key, cur);
     }
 
-    // ── VENDAS DO PDV de TODAS AS LOJAS (dono 29/07: o relatório era só do
-    // site). Vendedora por ITEM (o override por item vale sobre a da venda),
-    // treino fora, valor = total do item. Cada venda conta 1x pra vendedora
-    // principal no nº de vendas.
-    // REGRA FINAL DO DONO (29/07): "se pagaram 1.000, ela vendeu 1.000" —
-    // o valor da vendedora é o que a cliente PAGOU na venda: total final
-    // (desconto já dentro) MENOS o abatido em vale-troca. Devolução
-    // POSTERIOR não mexe no número. Marcado (provar em casa) fica fora.
+    // ── VENDAS DO PDV de TODAS AS LOJAS. DECISÃO OFICIAL (dono 29/07,
+    // arquitetura 3 indicadores): esta tela mostra FATURAMENTO — valor dos
+    // produtos vendidos, vale-troca NÃO reduz ("não desconta porra nenhuma").
+    // Recebimento e base de comissão são OUTROS números e moram no
+    // CommissionEngine (/retaguarda/comissoes). Marcado fica fora (Regra 1);
+    // devolução posterior não mexe; treino fora.
     const pdvSales: any[] = await (this.prisma as any).pdvSale.findMany({
       where: {
         status: 'finalized',
@@ -722,7 +721,6 @@ export class SellersService {
         vendedorName: true,
         total: true,
         items: { select: { id: true, total: true, sellerName: true } },
-        payments: { select: { method: true, valor: true } },
       },
     });
 
@@ -742,22 +740,21 @@ export class SellersService {
     let totalPdvGeral = 0;
     for (const s of pdvSales) {
       const principal = s.sellerName || s.vendedorName || 'Sem vendedora';
-      const itens = (s.items || []).filter((i: any) => Number(i.total) > 0);
-      // O que a cliente PAGOU: total da venda menos o abatido em vale-troca
-      const vale = (s.payments || [])
-        .filter((p: any) => p.method === 'vale_troca')
-        .reduce((a: number, p: any) => a + Number(p.valor || 0), 0);
-      const pago = Math.max(0, Number(s.total || 0) - vale);
-      totalPdvGeral += pago;
-      if (itens.length) {
-        // Rateio proporcional do PAGO pelos itens de cada vendedora (override
-        // por item vale) — a soma das vendedoras = o que entrou no caixa.
-        const somaItens = itens.reduce((a: number, i: any) => a + Number(i.total || 0), 0);
-        const fator = somaItens > 0 ? pago / somaItens : 1;
+      // Item NEGATIVO (abatimento lançado como produto) entra com sinal e
+      // abate da vendedora do PRÓPRIO item — não dilui nas outras.
+      const itens = (s.items || []).filter((i: any) => Number(i.total) !== 0);
+      // FATURAMENTO da venda: total final (desconto já dentro), vale NÃO reduz
+      const faturamento = Number(s.total || 0);
+      totalPdvGeral += faturamento;
+      const somaItens = itens.reduce((a: number, i: any) => a + Number(i.total || 0), 0);
+      if (itens.length && somaItens > 0) {
+        // Rateio proporcional do faturamento pelos itens de cada vendedora
+        // (override por item vale sobre a vendedora da venda)
+        const fator = faturamento / somaItens;
         addPdv(principal, 0, s.storeCode, true); // conta a venda 1x
         for (const it of itens) addPdv(it.sellerName || principal, Number(it.total || 0) * fator, s.storeCode, false);
       } else {
-        addPdv(principal, pago, s.storeCode, true);
+        addPdv(principal, faturamento, s.storeCode, true);
       }
     }
 
