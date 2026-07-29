@@ -612,13 +612,17 @@ export class CashService {
           detalhado = await this.getRelatorioDetalhado(s.code);
         } catch { /* loja sem caixa aberto — segue */ }
 
-        // Ranking de vendedoras (qtd vendas + total) — só vendas finalizadas
+        // Ranking de vendedoras (qtd vendas + total) — só vendas finalizadas.
+        // MARCADO fica FORA (Regra 1 do dono, 29/07: marcado não existe
+        // financeiramente até virar venda — contava aqui e inflava o ranking
+        // enquanto o total da sessão, correto, excluía).
         const sales = await (this.prisma as any).pdvSale.findMany({
           where: { cashSessionId: session.id, status: 'finalized', isTraining: false },
-          select: { sellerName: true, vendedorName: true, total: true },
+          select: { sellerName: true, vendedorName: true, total: true, paymentMethod: true },
         });
         const ranking: Record<string, { nome: string; qtd: number; total: number }> = {};
         for (const sale of sales as any[]) {
+          if (String(sale.paymentMethod || '').toUpperCase() === 'MARCADO') continue;
           const nome = (sale.sellerName || sale.vendedorName || 'Sem vendedora').trim();
           if (!ranking[nome]) ranking[nome] = { nome, qtd: 0, total: 0 };
           ranking[nome].qtd += 1;

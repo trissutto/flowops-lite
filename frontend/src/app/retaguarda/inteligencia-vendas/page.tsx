@@ -27,13 +27,13 @@ import { api } from '@/lib/api';
 type Summary = { pecas: number; valor: number; vendas: number; ticketMedio: number };
 type ByStore = { code: string; name: string; tipo: string | null; pecas: number; valor: number; ticketMedio: number };
 type ByDay = { date: string; pecas: number; valor: number };
-type Vendedora = { codigo: string; nome: string; pecas: number; valor: number; vendas: number; comissao: number; ticketMedio: number };
+type Vendedora = { codigo: string; nome: string; pecas: number; valor: number; vendas: number; comissao: number | null; ticketMedio: number };
 type Marca = { marca: string; pecas: number; valor: number };
 type Produto = { refCode: string; descricao: string | null; pecas: number; valor: number };
 
 type Report = {
   periodo: { from: string; to: string; dias: number };
-  filtros: { storeCode: string | null; comissaoPct: number; plusSize: boolean; compareYoY?: boolean };
+  filtros: { storeCode: string | null; comissaoPct?: number; plusSize: boolean; compareYoY?: boolean };
   summary: Summary;
   byStore: ByStore[];
   byDay: ByDay[];
@@ -92,7 +92,6 @@ export default function InteligenciaVendasPage() {
   const [from, setFrom] = useState(isoTodayMinusDays(30));
   const [to, setTo] = useState(isoToday());
   const [storeCode, setStoreCode] = useState('');
-  const [comissaoPct, setComissaoPct] = useState(2);
   const [plusSize, setPlusSize] = useState(false);
   const [compareYoY, setCompareYoY] = useState(true); // default ON — comparativo é a feature principal
   const [stores, setStores] = useState<Store[]>([]);
@@ -114,10 +113,7 @@ export default function InteligenciaVendasPage() {
     setLoading(true);
     setError(null);
     try {
-      const params = new URLSearchParams({
-        from, to,
-        comissaoPct: String(comissaoPct),
-      });
+      const params = new URLSearchParams({ from, to });
       if (storeCode) params.set('storeCode', storeCode);
       if (plusSize) params.set('plusSize', 'true');
       if (compareYoY) params.set('compareYoY', 'true');
@@ -240,18 +236,6 @@ export default function InteligenciaVendasPage() {
                   <option key={s.code} value={s.code}>{s.code} — {s.name}</option>
                 ))}
               </select>
-            </div>
-            <div>
-              <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1 block">Comissão %</label>
-              <input
-                type="number"
-                step="0.5"
-                min="0"
-                max="20"
-                value={comissaoPct}
-                onChange={(e) => setComissaoPct(Number(e.target.value) || 0)}
-                className="w-full border border-slate-200 rounded px-2 py-1.5 text-sm"
-              />
             </div>
             <div className="flex items-end gap-2">
               <button
@@ -458,7 +442,7 @@ export default function InteligenciaVendasPage() {
               <div className="px-4 py-3 border-b border-slate-100 flex items-center gap-2">
                 <Users className="w-4 h-4 text-violet-700" />
                 <h2 className="text-xs font-black uppercase tracking-wider text-violet-700">Top Vendedoras</h2>
-                <span className="text-[10px] text-slate-400 ml-auto">comissão {comissaoPct}%</span>
+                <span className="text-[10px] text-slate-400 ml-auto">comissão pela regra real (motor único)</span>
               </div>
               <div className="max-h-[420px] overflow-y-auto">
                 <div className="overflow-x-auto">
@@ -482,11 +466,11 @@ export default function InteligenciaVendasPage() {
                         </td>
                         <td className="px-3 py-2 text-right tabular-nums">{v.vendas}</td>
                         <td className="px-3 py-2 text-right tabular-nums text-slate-700">R$ {brl(v.valor)}</td>
-                        <td className="px-3 py-2 text-right tabular-nums font-bold text-emerald-700">R$ {brl(v.comissao)}</td>
+                        <td className="px-3 py-2 text-right tabular-nums font-bold text-emerald-700">{v.comissao != null ? <>R$ {brl(v.comissao)}</> : <span className="text-slate-400">—</span>}</td>
                       </tr>
                     ))}
                     {report.topVendedoras.length === 0 && (
-                      <tr><td colSpan={4} className="text-center text-slate-400 py-8 text-xs">Sem dados de vendedora no período<br /><span className="text-[10px]">(coluna VENDEDOR não detectada na caixa do Giga)</span></td></tr>
+                      <tr><td colSpan={4} className="text-center text-slate-400 py-8 text-xs">Sem dados de vendedora no período</td></tr>
                     )}
                   </tbody>
                 </table>
