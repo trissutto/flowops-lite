@@ -59,6 +59,9 @@ type ShipmentRow = {
   nfeEmitida?: boolean;
   nfeNumero?: number | null;
   nfeSerie?: string | null;
+  // Transporte (dono 29/07): efetivo = escolhido ou regra (≤10 peças → correios)
+  transportEfetivo?: 'correios' | 'proprio' | string;
+  transportManual?: boolean;
 };
 
 type ShipmentDetail = ShipmentRow & {
@@ -114,6 +117,19 @@ export default function RemessasAdminPage() {
   // Detalhe modal
   const [detail, setDetail] = useState<ShipmentDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+
+  // Troca CORREIOS ↔ PRÓPRIO (dono 29/07). Sem escolha manual vale a regra:
+  // até 10 peças → CORREIOS; acima → PRÓPRIO.
+  const toggleTransporte = async (r: ShipmentRow, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const novo = r.transportEfetivo === 'correios' ? 'proprio' : 'correios';
+    try {
+      await api(`/realignment/shipments/${r.id}/transporte`, { method: 'POST', body: JSON.stringify({ mode: novo }) });
+      setRows((prev) => prev.map((x) => (x.id === r.id ? { ...x, transportEfetivo: novo, transportManual: true } : x)));
+    } catch (err: any) {
+      alert(`Erro ao trocar transporte: ${err?.message ?? 'falha'}`);
+    }
+  };
 
   const load = async () => {
     setLoading(true);
@@ -510,6 +526,7 @@ export default function RemessasAdminPage() {
                   <th className="text-left px-3 py-2">Status</th>
                   <th className="text-right px-3 py-2">Itens</th>
                   <th className="text-right px-3 py-2">Peças</th>
+                  <th className="text-left px-3 py-2">Transporte</th>
                   <th className="text-left px-3 py-2">Aberta em</th>
                   <th className="text-left px-3 py-2">Enviada em</th>
                   <th className="text-left px-3 py-2">Tempo trânsito</th>
@@ -574,6 +591,20 @@ export default function RemessasAdminPage() {
                       </td>
                       <td className="px-3 py-2 text-right tabular-nums text-slate-700">
                         {r.totalQtyLive}
+                      </td>
+                      <td className="px-3 py-2">
+                        <button
+                          onClick={(e) => toggleTransporte(r, e)}
+                          title={`${r.transportManual ? 'Escolhido manualmente' : 'Regra automática: até 10 peças → CORREIOS; acima → PRÓPRIO'} — clique pra trocar`}
+                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold border transition ${
+                            r.transportEfetivo === 'correios'
+                              ? 'bg-sky-50 border-sky-300 text-sky-700 hover:bg-sky-100'
+                              : 'bg-amber-50 border-amber-300 text-amber-700 hover:bg-amber-100'
+                          }`}
+                        >
+                          {r.transportEfetivo === 'correios' ? '📮 CORREIOS' : '🚚 PRÓPRIO'}
+                          {!r.transportManual && <span className="font-normal text-[9px] opacity-70">auto</span>}
+                        </button>
                       </td>
                       <td className="px-3 py-2 text-xs text-slate-500">{fmtDate(r.openedAt)}</td>
                       <td className="px-3 py-2 text-xs text-slate-500">{fmtDate(r.sentAt)}</td>

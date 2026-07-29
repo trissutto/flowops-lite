@@ -571,6 +571,20 @@ export class RealignmentController {
     return this.remessaEnvio.gerarEnvio(id, storeId, userId);
   }
 
+  /**
+   * Define o meio de transporte da remessa: correios | proprio.
+   * POST /realignment/shipments/:id/transporte · admin/operator ou loja.
+   * Regra default (sem escolha manual): até 10 peças → CORREIOS; acima → PRÓPRIO.
+   */
+  @Post('shipments/:id/transporte')
+  setTransporteRemessa(@Param('id') id: string, @Body() body: { mode?: string }, @Req() req: any) {
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'operator' && role !== 'store') {
+      throw new ForbiddenException('Sem permissão');
+    }
+    return this.shipment.setTransportMode(id, String(body?.mode || '').trim());
+  }
+
   /** Documentos do envio da remessa num PDF único (etiqueta + DANFE). */
   @Get('shipments/:id/docs-envio')
   docsEnvioRemessa(@Param('id') id: string, @Req() req: any) {

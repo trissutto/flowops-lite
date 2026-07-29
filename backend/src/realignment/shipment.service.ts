@@ -1744,6 +1744,18 @@ export class RealignmentShipmentService {
     };
   }
 
+  /** Define o meio de transporte da remessa (botão CORREIOS/PRÓPRIO na tela). */
+  async setTransportMode(shipmentId: string, mode: string) {
+    if (mode !== 'correios' && mode !== 'proprio') {
+      throw new BadRequestException("Transporte deve ser 'correios' ou 'proprio'.");
+    }
+    const s = await (this.prisma as any).realignmentShipment.update({
+      where: { id: shipmentId },
+      data: { transportMode: mode },
+    });
+    return { ok: true, transportMode: s.transportMode };
+  }
+
   async listAllShipmentsAdmin(input: {
     status?: string;
     fromStoreCode?: string;
@@ -1820,6 +1832,12 @@ export class RealignmentShipmentService {
         nfeEmitida: !!nfe,
         nfeNumero: nfe?.numero ?? null,
         nfeSerie: nfe?.serie ?? null,
+        // Transporte EFETIVO: escolhido (transportMode) ou regra automática
+        // (até 10 peças → correios; acima → próprio). Dono 29/07.
+        transportEfetivo: (s.transportMode === 'correios' || s.transportMode === 'proprio')
+          ? s.transportMode
+          : (agg.totalQty <= 10 ? 'correios' : 'proprio'),
+        transportManual: s.transportMode === 'correios' || s.transportMode === 'proprio',
       };
     });
   }

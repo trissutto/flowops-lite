@@ -57,6 +57,19 @@ export class RemessaEnvioService {
     };
   }
 
+  /** 'correios' | 'proprio' — escolhido na tela, senão regra automática
+   *  (até 10 peças → Correios; acima → próprio). Dono 29/07. */
+  async transporteEfetivo(shipment: any): Promise<'correios' | 'proprio'> {
+    const m = String(shipment?.transportMode || '');
+    if (m === 'correios' || m === 'proprio') return m as any;
+    const rows: any[] = await this.prisma.transferOrder.findMany({
+      where: { shipmentId: shipment.id, realignmentStatus: { not: 'cancelled' } } as any,
+      select: { qtyOrigem: true } as any,
+    });
+    const pecas = rows.reduce((a, r) => a + (Number(r.qtyOrigem) || 1), 0);
+    return pecas <= 10 ? 'correios' : 'proprio';
+  }
+
   private async validarLojaOrigem(shipment: any, storeId: string) {
     const store: any = await this.prisma.store.findUnique({ where: { id: storeId } });
     if (!store || store.code !== shipment.fromStoreCode) {
@@ -75,6 +88,13 @@ export class RemessaEnvioService {
     }
     if (shipment.trackingCode) {
       return { ok: true, jaGerado: true, codigoRastreio: shipment.trackingCode, carrier: shipment.carrier };
+    }
+
+    // Regra do transporte (dono 29/07): até 10 peças → CORREIOS; acima →
+    // PRÓPRIO. Override manual: transportMode (botão na tela de remessas).
+    const modoTransporte = await this.transporteEfetivo(shipment);
+    if (modoTransporte !== 'correios') {
+      throw new BadRequestException('Remessa marcada como transporte PRÓPRIO — não gera etiqueta. Se for postar, troque o transporte pra CORREIOS na remessa.');
     }
 
     // 1) NF-e de transferência (5152) — auto-emite se ainda não existir
