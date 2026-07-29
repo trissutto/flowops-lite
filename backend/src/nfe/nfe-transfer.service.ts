@@ -867,6 +867,17 @@ export class NfeTransferService {
       .replace(/"/g, '&quot;');
   }
 
+  /** Descrição do item NA NOTA (dono 29/07): só a PRIMEIRA palavra — "BLUSA"
+   *  em vez de "BLUSA FEMININA MANGA CURTA...". A SEFAZ aceita (campo livre
+   *  1-120); a identificação fina segue no cProd/cEAN + NCM. Kill-switch:
+   *  NFE_XPROD=completo volta ao texto inteiro. */
+  private xProdNota(desc: string): string {
+    if (String(process.env.NFE_XPROD || '').trim() === 'completo') {
+      return String(desc || 'MERCADORIA');
+    }
+    return (String(desc || '').trim().split(/\s+/)[0] || 'MERCADORIA').slice(0, 120);
+  }
+
   /** Alíquotas PIS/COFINS do Lucro Presumido (cumulativo) — destaque exigido
    *  pelo contador (29/07): PIS 0,65% e COFINS 3% sobre o valor do item. */
   private aliqPisCofins() {
@@ -1025,7 +1036,7 @@ export class NfeTransferService {
     const ibTot = { vBC: 0, vIBSUF: 0, vIBSMun: 0, vCBS: 0 };
     const det = p.items
       .map((it, idx) => {
-        const xProd = homolog ? HOMOLOG_FRASE : it.xProd;
+        const xProd = homolog ? HOMOLOG_FRASE : this.xProdNota(it.xProd);
         const prod =
           `<prod>` +
           `<cProd>${this.esc(it.sku)}</cProd>` +
@@ -1090,7 +1101,10 @@ export class NfeTransferService {
           pisCofins +
           ibi.xml +
           `</imposto>`;
-        return `<det nItem="${idx + 1}">${prod}${imposto}</det>`;
+        // vItem (grupo VB, NT 2025.002): OBRIGATÓRIO junto do IBSCBS — sem
+        // ele o lote caía com cStat 225 "Falha no Schema XML" (29/07).
+        const vItemTag = ib.on ? `<vItem>${vBCItem.toFixed(2)}</vItem>` : '';
+        return `<det nItem="${idx + 1}">${prod}${imposto}${vItemTag}</det>`;
       })
       .join('');
 
@@ -1461,7 +1475,7 @@ export class NfeTransferService {
     const ibTot = { vBC: 0, vIBSUF: 0, vIBSMun: 0, vCBS: 0 };
     const det = p.items
       .map((it, idx) => {
-        const xProd = homolog ? HOMOLOG_FRASE : it.xProd;
+        const xProd = homolog ? HOMOLOG_FRASE : this.xProdNota(it.xProd);
         const prod =
           `<prod><cProd>${this.esc(it.sku)}</cProd><cEAN>${it.ean}</cEAN><xProd>${this.esc(xProd)}</xProd>` +
           `<NCM>${it.ncm}</NCM><CFOP>${it.cfop}</CFOP><uCom>UN</uCom><qCom>${it.qty.toFixed(4)}</qCom>` +
@@ -1509,7 +1523,8 @@ export class NfeTransferService {
           ibTot.vIBSMun += ibi.vIBSMun;
           ibTot.vCBS += ibi.vCBS;
         }
-        return `<det nItem="${idx + 1}">${prod}<imposto>${icms}${pisCofins}${icmsUfDest}${ibi.xml}</imposto></det>`;
+        // vItem (grupo VB): obrigatório junto do IBSCBS — cStat 225 sem ele
+        return `<det nItem="${idx + 1}">${prod}<imposto>${icms}${pisCofins}${icmsUfDest}${ibi.xml}</imposto>${ib.on ? `<vItem>${vBCItem.toFixed(2)}</vItem>` : ''}</det>`;
       })
       .join('');
 
