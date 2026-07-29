@@ -107,8 +107,11 @@ export class NfeTransferService {
     const ambiente = origem.ambiente;
     const tpAmb = ambiente;
     const serie = opts.serie || '1';
-    await this.garantirContinuacao(origem.storeCode, origem.cnpj, serie);
-    let numero = await this.seq.next(origem.storeCode, serie, {
+    await this.garantirContinuacao(this.digits(origem.cnpj), origem.cnpj, serie);
+    // NUMERAÇÃO POR CNPJ EMITENTE (dono 29/07): T.O. e LURDS têm sequências
+    // PRÓPRIAS — chavear pela loja física misturava as duas matrizes de
+    // Itanhaém no mesmo contador (2332 LURDS → 2334 T.O.).
+    let numero = await this.seq.next(this.digits(origem.cnpj), serie, {
       start: opts.startNumero ?? this.startPadraoPara(origem.cnpj, serie),
     });
     const valorTotalCents = Math.round(valorTotal * 100);
@@ -173,7 +176,7 @@ export class NfeTransferService {
         this.logger.warn(
           `[nfe] ${origem.storeCode} nº ${numero} já existe na SEFAZ (cStat ${res.cStat}) → tentando ${numero + 1}`,
         );
-        numero = await this.seq.next(origem.storeCode, serie);
+        numero = await this.seq.next(this.digits(origem.cnpj), serie);
         continue;
       }
       // 778 = NCM inexistente [nItem:X] → troca o NCM ruim por um válido
@@ -477,12 +480,12 @@ export class NfeTransferService {
     // do GigaNFe — nunca mostra número abaixo da última nota real)
     const serie = '1';
     const seqRow = await this.prisma.nfeSequence.findUnique({
-      where: { storeCode_modelo_serie: { storeCode: origem.storeCode, modelo: '55', serie } },
+      where: { storeCode_modelo_serie: { storeCode: this.digits(origem.cnpj), modelo: '55', serie } },
     });
     const startPadrao = this.startPadraoPara(origem.cnpj, serie);
     const proximoNumero = Math.max(seqRow?.proximo ?? 0, startPadrao ?? 0) || 1;
 
-    const icmsMode = String(process.env.NFE_TRANSFER_ICMS ?? 'sem').trim();
+    const icmsMode = String(process.env.NFE_TRANSFER_ICMS ?? 'destacado').trim();
     const crt3 = String(origem.regime || '1') === '3';
     const interEmpresa = origem.cnpj.slice(0, 8) !== destino.cnpj.slice(0, 8);
 
@@ -1213,8 +1216,8 @@ export class NfeTransferService {
     }));
     const valorTotal = items.reduce((s, i) => s + i.vProd, 0);
 
-    await this.garantirContinuacao(origem.storeCode, origem.cnpj, serie);
-    let numero = await this.seq.next(origem.storeCode, serie, { start: this.startPadraoPara(origem.cnpj, serie) });
+    await this.garantirContinuacao(this.digits(origem.cnpj), origem.cnpj, serie);
+    let numero = await this.seq.next(this.digits(origem.cnpj), serie, { start: this.startPadraoPara(origem.cnpj, serie) });
     const cUF = CUF_BY_UF[origem.ender.uf] || origem.ender.codMunicipio.slice(0, 2);
     const natOp = natOpRegra;
     const dest = { cpfCnpj, nome, endereco, numero: custNumero, bairro, cidade, uf, cep, codMun };
@@ -1249,7 +1252,7 @@ export class NfeTransferService {
       res = await transmitNfeSefazSp({ xmlAssinado, ambiente: tpAmb, pfxBase64: origem.certPfxB64, pfxPassword: origem.certPfxPass, endpointOverride: SEFAZ_SP_NFE_ENDPOINTS[tpAmb].autorizacao });
       const okk = res.success && (res.cStat === '100' || res.cStat === '150');
       if (okk) break;
-      if ((res.cStat === '539' || res.cStat === '204') && t < MAX) { numero = await this.seq.next(origem.storeCode, serie); continue; }
+      if ((res.cStat === '539' || res.cStat === '204') && t < MAX) { numero = await this.seq.next(this.digits(origem.cnpj), serie); continue; }
       if (res.cStat === '778' && t < MAX && this.corrigirNcmInvalido(items, res.xMotivo)) continue;
       break;
     }
@@ -1330,8 +1333,8 @@ export class NfeTransferService {
     const valorTotal = items.reduce((s, i) => s + i.vProd, 0);
     if (valorTotal <= 0) throw new BadRequestException('NF-e do envio sem valor (itens zerados).');
 
-    await this.garantirContinuacao(origem.storeCode, origem.cnpj, serie);
-    let numero = await this.seq.next(origem.storeCode, serie, { start: this.startPadraoPara(origem.cnpj, serie) });
+    await this.garantirContinuacao(this.digits(origem.cnpj), origem.cnpj, serie);
+    let numero = await this.seq.next(this.digits(origem.cnpj), serie, { start: this.startPadraoPara(origem.cnpj, serie) });
     const cUF = CUF_BY_UF[origem.ender.uf] || origem.ender.codMunicipio.slice(0, 2);
     const dest = { cpfCnpj, nome: d.nome, endereco: d.endereco, numero: d.numero || 'S/N', bairro: d.bairro || 'CENTRO', cidade: d.cidade, uf: d.uf, cep: this.digits(d.cep), codMun: this.digits(d.codMun) };
 
@@ -1364,7 +1367,7 @@ export class NfeTransferService {
       res = await transmitNfeSefazSp({ xmlAssinado, ambiente: tpAmb, pfxBase64: origem.certPfxB64, pfxPassword: origem.certPfxPass, endpointOverride: SEFAZ_SP_NFE_ENDPOINTS[tpAmb].autorizacao });
       const okk = res.success && (res.cStat === '100' || res.cStat === '150');
       if (okk) break;
-      if ((res.cStat === '539' || res.cStat === '204') && t < MAX) { numero = await this.seq.next(origem.storeCode, serie); continue; }
+      if ((res.cStat === '539' || res.cStat === '204') && t < MAX) { numero = await this.seq.next(this.digits(origem.cnpj), serie); continue; }
       if (res.cStat === '778' && t < MAX && this.corrigirNcmInvalido(items, res.xMotivo)) continue;
       break;
     }

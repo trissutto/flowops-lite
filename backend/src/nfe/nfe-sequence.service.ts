@@ -42,8 +42,28 @@ export class NfeSequenceService {
     return updated.proximo - 1;
   }
 
-  /** Status da numeração de uma loja (pra tela de config). */
+  /** A CHAVE da numeração é o CNPJ EMITENTE (dono 29/07: T.O. e LURDS têm
+   *  sequências próprias — por loja misturava as matrizes de Itanhaém).
+   *  Aceita código de loja (resolve o CNPJ da NF-e na config) ou o próprio
+   *  CNPJ com 14 dígitos. */
+  private async chaveDe(storeCodeOuCnpj: string): Promise<string> {
+    const d = String(storeCodeOuCnpj || '').replace(/\D/g, '');
+    if (d.length === 14) return d;
+    const cfg: any = await this.prisma.nfceConfig.findUnique({ where: { storeCode: storeCodeOuCnpj } });
+    const key = String(cfg?.nfeCnpj || cfg?.cnpj || '').replace(/\D/g, '');
+    return key.length === 14 ? key : storeCodeOuCnpj;
+  }
+
+  /** Status da numeração de uma loja/CNPJ (pra tela de config). */
   async status(storeCode: string, modelo = '55') {
+    const key = await this.chaveDe(storeCode);
+    const rows = await this.prisma.nfeSequence.findMany({
+      where: { storeCode: key, modelo },
+      select: { serie: true, proximo: true, updatedAt: true },
+      orderBy: { serie: 'asc' },
+    });
+    if (rows.length || key === storeCode) return rows;
+    // legado: linha antiga chaveada pelo código da loja
     return this.prisma.nfeSequence.findMany({
       where: { storeCode, modelo },
       select: { serie: true, proximo: true, updatedAt: true },
@@ -62,9 +82,10 @@ export class NfeSequenceService {
     const seqByStore = new Map(seqs.filter((s) => s.serie === '1').map((s) => [s.storeCode, s]));
     const cfgByStore = new Map(cfgs.map((c) => [c.storeCode, c]));
     return stores.map((st) => {
-      const seq = seqByStore.get(st.code);
       const cfg: any = cfgByStore.get(st.code);
       const cnpj = (cfg?.nfeCnpj || cfg?.cnpj || '').replace(/\D/g, '');
+      // Chave nova = CNPJ emitente; cai pra linha legada (código da loja)
+      const seq = (cnpj && seqByStore.get(cnpj)) || seqByStore.get(st.code);
       return {
         storeCode: st.code,
         storeName: st.name,
@@ -78,10 +99,11 @@ export class NfeSequenceService {
 
   /** Define/ajusta o próximo número de uma série (config inicial). */
   async setProximo(storeCode: string, serie: string, proximo: number, modelo = '55') {
-    const where = { storeCode_modelo_serie: { storeCode, modelo, serie } };
+    const key = await this.chaveDe(storeCode);
+    const where = { storeCode_modelo_serie: { storeCode: key, modelo, serie } };
     return this.prisma.nfeSequence.upsert({
       where,
-      create: { storeCode, modelo, serie, proximo: Math.max(1, proximo) },
+      create: { storeCode: key, modelo, serie, proximo: Math.max(1, proximo) },
       update: { proximo: Math.max(1, proximo) },
     });
   }
