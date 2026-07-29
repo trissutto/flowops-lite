@@ -627,6 +627,9 @@ export class SellersService {
         status: 'finalized',
         isTraining: false,
         finalizedAt: { gte: from, lte: to },
+        // MARCADO = "levou pra provar em casa" — NÃO é faturamento (no Giga
+        // fica fora do caixa). Contava e divergia do Giga (dono 29/07).
+        NOT: { paymentMethod: 'MARCADO' },
       },
       select: {
         storeCode: true,
@@ -656,8 +659,14 @@ export class SellersService {
       const itens = (s.items || []).filter((i: any) => Number(i.total) > 0);
       totalPdvGeral += Number(s.total || 0);
       if (itens.length) {
+        // RATEIO do desconto de VENDA (dono 29/07: divergia do Giga): o
+        // desconto avulso fica no total da venda, não nos itens — o fator
+        // ajusta cada item pra soma das vendedoras bater EXATAMENTE com o
+        // total da venda (o mesmo que vai pro caixa).
+        const somaItens = itens.reduce((a: number, i: any) => a + Number(i.total || 0), 0);
+        const fator = somaItens > 0 ? Number(s.total || 0) / somaItens : 1;
         addPdv(principal, 0, s.storeCode, true); // conta a venda 1x
-        for (const it of itens) addPdv(it.sellerName || principal, Number(it.total || 0), s.storeCode, false);
+        for (const it of itens) addPdv(it.sellerName || principal, Number(it.total || 0) * fator, s.storeCode, false);
       } else {
         addPdv(principal, Number(s.total || 0), s.storeCode, true);
       }
