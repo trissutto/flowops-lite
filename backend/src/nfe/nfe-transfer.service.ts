@@ -962,8 +962,11 @@ export class NfeTransferService {
             `<vBC>${this.money(vBC)}</vBC><pICMS>${pIcms.toFixed(4)}</pICMS><vICMS>${this.money(vIcms)}</vICMS>` +
             `</ICMS00></ICMS>`;
         } else if (crt3) {
-          // Transferência SEM destaque: CST 41 — operação não tributada
-          icms = `<ICMS><ICMS40><orig>0</orig><CST>41</CST></ICMS40></ICMS>`;
+          // Transferência SEM destaque: CST 90 + cBenef SP099000. A tabela
+          // cBenef de SP (v2026-06-26) só aceita o código de "remessas entre
+          // estabelecimentos do mesmo titular" com CST 90 — com CST 41 a SEFAZ
+          // rejeitava com cStat 931 (incompatível com CST e UF).
+          icms = `<ICMS><ICMS90><orig>0</orig><CST>90</CST></ICMS90></ICMS>`;
         } else {
           icms = `<ICMS><ICMSSN102><orig>0</orig><CSOSN>400</CSOSN></ICMSSN102></ICMS>`;
         }
