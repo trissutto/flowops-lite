@@ -534,6 +534,11 @@ function NfeTransferSection({ stores }: { stores: Store[] }) {
   const [statusFiltro, setStatusFiltro] = useState('authorized');
   const [rows, setRows] = useState<any[] | null>(null);
   const [loading, setLoading] = useState(false);
+  // Download em LOTE pro contador (dono 29/07): período De/Até (vazio = tudo)
+  // + XMLs, DANFEs ou os dois num ZIP. Respeita o filtro de loja de origem.
+  const [loteDe, setLoteDe] = useState('');
+  const [loteAte, setLoteAte] = useState('');
+  const [baixandoLote, setBaixandoLote] = useState<string | null>(null);
   // Cancelamento (evento 110111): justificativa inline, obrigatória (15-255)
   const [cancelId, setCancelId] = useState<string | null>(null);
   const [justCancel, setJustCancel] = useState('');
@@ -619,6 +624,29 @@ function NfeTransferSection({ stores }: { stores: Store[] }) {
     } finally { setCancelando(false); }
   };
 
+  const baixarLote = async (tipo: 'xml' | 'danfe' | 'tudo') => {
+    setBaixandoLote(tipo);
+    try {
+      const q = new URLSearchParams();
+      if (loteDe) q.set('de', loteDe);
+      if (loteAte) q.set('ate', loteAte);
+      q.set('tipo', tipo);
+      if (lojaFiltro) q.set('storeCode', lojaFiltro);
+      const r = await fetch(`${API_URL}/api/nfe/download-lote?${q}`, { headers: authHeaders() });
+      if (!r.ok) throw new Error((await r.json().catch(() => null))?.message || `HTTP ${r.status}`);
+      const blobUrl = URL.createObjectURL(await r.blob());
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = `nfe_${loteDe || 'inicio'}_a_${loteAte || 'hoje'}_${tipo}.zip`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+    } catch (e: any) {
+      alert(`Download em lote: ${e?.message || e}`);
+    } finally {
+      setBaixandoLote(null);
+    }
+  };
+
   const storeName = (code: string) => stores.find((s) => s.code === code)?.name || code;
 
   return (
@@ -654,6 +682,59 @@ function NfeTransferSection({ stores }: { stores: Store[] }) {
             <option value="">Todas</option>
           </select>
         </div>
+      </div>
+
+      {/* Download em LOTE pro contador: período livre + XML/DANFE/tudo (dono 29/07) */}
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-indigo-100 bg-indigo-50/60 px-3 py-2">
+        <span className="text-[11px] font-bold uppercase tracking-wide text-indigo-800">⬇ Download em lote</span>
+        <input
+          type="date"
+          value={loteDe}
+          onChange={(e) => setLoteDe(e.target.value)}
+          className="rounded-lg border p-1.5 text-xs"
+          title="De (vazio = desde o início)"
+        />
+        <span className="text-xs text-slate-400">→</span>
+        <input
+          type="date"
+          value={loteAte}
+          onChange={(e) => setLoteAte(e.target.value)}
+          className="rounded-lg border p-1.5 text-xs"
+          title="Até (vazio = hoje)"
+        />
+        <button
+          onClick={() => { setLoteDe(''); setLoteAte(''); }}
+          className="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-[11px] font-semibold text-slate-600 hover:bg-slate-100"
+          title="Limpar período = TODAS as notas autorizadas"
+        >
+          Todas
+        </button>
+        <div className="ml-auto flex gap-1.5">
+          <button
+            onClick={() => baixarLote('xml')}
+            disabled={!!baixandoLote}
+            className="rounded-md border border-indigo-300 bg-white px-2.5 py-1.5 text-[11px] font-bold text-indigo-700 hover:bg-indigo-100 disabled:opacity-50"
+          >
+            {baixandoLote === 'xml' ? 'Gerando…' : '🧾 XMLs (ZIP)'}
+          </button>
+          <button
+            onClick={() => baixarLote('danfe')}
+            disabled={!!baixandoLote}
+            className="rounded-md border border-indigo-300 bg-white px-2.5 py-1.5 text-[11px] font-bold text-indigo-700 hover:bg-indigo-100 disabled:opacity-50"
+          >
+            {baixandoLote === 'danfe' ? 'Gerando…' : '📄 DANFEs (ZIP)'}
+          </button>
+          <button
+            onClick={() => baixarLote('tudo')}
+            disabled={!!baixandoLote}
+            className="rounded-md bg-indigo-600 px-2.5 py-1.5 text-[11px] font-bold text-white hover:bg-indigo-700 disabled:opacity-50"
+          >
+            {baixandoLote === 'tudo' ? 'Gerando…' : '📦 Tudo (ZIP)'}
+          </button>
+        </div>
+        <p className="w-full text-[10px] text-slate-500">
+          Baixa as notas <b>autorizadas</b> do período (e da loja selecionada acima, se houver) — XMLs pro contador, DANFEs em PDF, ou os dois.
+        </p>
       </div>
 
       {loading || rows === null ? (

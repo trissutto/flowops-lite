@@ -134,6 +134,57 @@ export class NfeController {
     return this.seq.setProximo(storeCode, body?.serie || '1', Number(body?.proximo) || 1);
   }
 
+  /**
+   * DOWNLOAD EM LOTE (dono 29/07): ZIP com os XMLs e/ou DANFEs das notas
+   * AUTORIZADAS do período — pro contador. Query: de/ate (YYYY-MM-DD, vazio =
+   * tudo), tipo (xml | danfe | tudo), storeCode (loja origem, opcional).
+   * PRECISA vir antes de ':id' (senão o Nest casa 'download-lote' como id).
+   */
+  @Get('download-lote')
+  async downloadLote(
+    @Req() req: any,
+    @Res() res: Response,
+    @Query('de') de?: string,
+    @Query('ate') ate?: string,
+    @Query('tipo') tipo?: string,
+    @Query('storeCode') storeCode?: string,
+  ) {
+    this.requireLeitura(req);
+    const t = tipo === 'xml' || tipo === 'danfe' ? tipo : 'tudo';
+    const docs = await this.transfer.listDocsParaLote({ de, ate, storeCode });
+    if (!docs.length) {
+      res.status(404).json({ message: 'Nenhuma NF-e autorizada no período/filtro.' });
+      return;
+    }
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const archiver = require('archiver');
+    const nome = `nfe_${de || 'inicio'}_a_${ate || 'hoje'}_${t}.zip`;
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${nome}"`);
+    const zip = archiver('zip', { zlib: { level: 6 } });
+    zip.on('error', (e: any) => {
+      console.error('[nfe/download-lote] erro no zip', e?.message || e);
+      try { res.end(); } catch { /* stream já fechado */ }
+    });
+    zip.pipe(res);
+    for (const d of docs as any[]) {
+      const base = `NFe_${String(d.numero).padStart(9, '0')}-${d.serie || '1'}_${d.chave || d.id}`;
+      if (t !== 'danfe') {
+        const xml = d.xmlAutorizado || d.xmlEnviado;
+        if (xml) zip.append(String(xml), { name: `xml/${base}.xml` });
+      }
+      if (t !== 'xml') {
+        try {
+          const { buffer } = await this.danfe.generateForDoc(d.id);
+          zip.append(buffer, { name: `danfe/${base}.pdf` });
+        } catch (e: any) {
+          zip.append(`DANFE indisponível: ${e?.message || e}`, { name: `danfe/${base}.ERRO.txt` });
+        }
+      }
+    }
+    await zip.finalize();
+  }
+
   /** DANFE em PDF (A4, com código de barras da chave). */
   @Get(':id/danfe')
   async getDanfe(@Req() req: any, @Param('id') id: string, @Res() res: Response) {

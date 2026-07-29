@@ -219,6 +219,19 @@ export class NfeTransferService {
     };
   }
 
+  /** Notas AUTORIZADAS do período pro DOWNLOAD EM LOTE (ZIP do contador).
+   *  De/Até em YYYY-MM-DD (fuso -03); sem datas = todas (cap 1000). */
+  async listDocsParaLote(p: { de?: string; ate?: string; storeCode?: string }) {
+    const where: any = { status: 'authorized' };
+    const iso = /^\d{4}-\d{2}-\d{2}$/;
+    const faixa: any = {};
+    if (p.de && iso.test(p.de)) faixa.gte = new Date(`${p.de}T00:00:00-03:00`);
+    if (p.ate && iso.test(p.ate)) faixa.lte = new Date(`${p.ate}T23:59:59.999-03:00`);
+    if (faixa.gte || faixa.lte) where.createdAt = faixa;
+    if (p.storeCode) where.fromStoreCode = p.storeCode;
+    return this.prisma.nfeDoc.findMany({ where, orderBy: { createdAt: 'asc' }, take: 1000 });
+  }
+
   /** Documento por id (com XMLs, pra download/DANFE). */
   async getDoc(id: string) {
     const doc = await this.prisma.nfeDoc.findUnique({ where: { id } });
