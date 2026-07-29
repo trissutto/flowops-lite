@@ -529,8 +529,17 @@ export default function RelatorioFiscalPage() {
  * Filtro por LOJA DE ORIGEM (é o CNPJ emitente) + status. DANFE em PDF e
  * XML (enviado + resposta) direto na linha, pro contador baixar.
  */
+// Empresas do grupo (raiz do CNPJ, que fica nas posições 7–14 da chave) —
+// filtro pelo EMITENTE REAL da nota (dono 29/07: loja 01 emite pelas duas).
+const EMPRESAS_EMITENTES: Array<{ raiz: string; label: string }> = [
+  { raiz: '20104813', label: 'T.O. RISSUTTO (raiz 20)' },
+  { raiz: '30246592', label: 'LURDS (raiz 30)' },
+  { raiz: '50213437', label: 'MDD CERQUEIRA (franquias)' },
+];
+
 function NfeTransferSection({ stores }: { stores: Store[] }) {
   const [lojaFiltro, setLojaFiltro] = useState('');
+  const [emitenteFiltro, setEmitenteFiltro] = useState('');
   const [statusFiltro, setStatusFiltro] = useState('authorized');
   const [rows, setRows] = useState<any[] | null>(null);
   const [loading, setLoading] = useState(false);
@@ -551,13 +560,14 @@ function NfeTransferSection({ stores }: { stores: Store[] }) {
     return token ? { Authorization: `Bearer ${token}` } : {};
   };
 
-  const load = async (loja: string, status: string) => {
+  const load = async (loja: string, status: string, emitRaiz?: string) => {
     setLoading(true);
     try {
       const params = new URLSearchParams();
       params.set('limit', '200');
       if (loja) params.set('storeCode', loja);
       if (status) params.set('status', status);
+      if (emitRaiz) params.set('emitRaiz', emitRaiz);
       setRows(await api<any[]>(`/nfe?${params}`));
     } catch {
       setRows([]);
@@ -566,9 +576,9 @@ function NfeTransferSection({ stores }: { stores: Store[] }) {
     }
   };
   useEffect(() => {
-    load(lojaFiltro, statusFiltro);
+    load(lojaFiltro, statusFiltro, emitenteFiltro);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lojaFiltro, statusFiltro]);
+  }, [lojaFiltro, statusFiltro, emitenteFiltro]);
 
   const abrirDanfe = async (d: any) => {
     try {
@@ -618,7 +628,7 @@ function NfeTransferSection({ stores }: { stores: Store[] }) {
       if (ok) alert(`NF-e ${d.numero} cancelada na SEFAZ.`);
       else alert(`SEFAZ não cancelou (${r?.cStat ?? ''}): ${r?.xMotivo ?? r?.message ?? 'erro'}`);
       setCancelId(null); setJustCancel('');
-      load(lojaFiltro, statusFiltro);
+      load(lojaFiltro, statusFiltro, emitenteFiltro);
     } catch (e: any) {
       alert(`Erro ao cancelar: ${e?.message || e}`);
     } finally { setCancelando(false); }
@@ -632,6 +642,7 @@ function NfeTransferSection({ stores }: { stores: Store[] }) {
       if (loteAte) q.set('ate', loteAte);
       q.set('tipo', tipo);
       if (lojaFiltro) q.set('storeCode', lojaFiltro);
+      if (emitenteFiltro) q.set('emitRaiz', emitenteFiltro);
       const r = await fetch(`${API_URL}/api/nfe/download-lote?${q}`, { headers: authHeaders() });
       if (!r.ok) throw new Error((await r.json().catch(() => null))?.message || `HTTP ${r.status}`);
       const blobUrl = URL.createObjectURL(await r.blob());
@@ -661,6 +672,17 @@ function NfeTransferSection({ stores }: { stores: Store[] }) {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <select
+            value={emitenteFiltro}
+            onChange={(e) => setEmitenteFiltro(e.target.value)}
+            className="p-2 border rounded-lg text-sm"
+            title="Filtra pelo CNPJ EMITENTE da nota (a raiz que está na chave) — a mesma loja física pode emitir por mais de uma empresa"
+          >
+            <option value="">Emitente: todas as empresas</option>
+            {EMPRESAS_EMITENTES.map((e2) => (
+              <option key={e2.raiz} value={e2.raiz}>{e2.label}</option>
+            ))}
+          </select>
           <select
             value={lojaFiltro}
             onChange={(e) => setLojaFiltro(e.target.value)}
@@ -763,7 +785,21 @@ function NfeTransferSection({ stores }: { stores: Store[] }) {
                     {d.createdAt ? new Date(d.createdAt).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '—'}
                   </td>
                   <td className="py-1.5 pr-2 whitespace-nowrap">
-                    {d.fromStoreCode} {storeName(d.fromStoreCode)} → {d.toStoreCode} {storeName(d.toStoreCode)}
+                    {/* EMITENTE REAL da chave (dono 29/07): 01→Anália emitida
+                        pela MDD mostra "17 SUZANO", não a loja física */}
+                    {d.emitStoreCode ? (
+                      <>
+                        <span title={`Emitente: ${d.emitNome || ''} ${d.emitCnpj || ''} · loja física de origem: ${d.fromStoreCode}`}>
+                          {d.emitStoreCode} {d.emitNome || storeName(d.emitStoreCode)}
+                        </span>
+                        {d.emitStoreCode !== d.fromStoreCode && (
+                          <span className="text-slate-400 text-[10px]"> (saiu da {d.fromStoreCode})</span>
+                        )}
+                      </>
+                    ) : (
+                      <>{d.fromStoreCode} {storeName(d.fromStoreCode)}</>
+                    )}
+                    {' → '}{d.toStoreCode} {storeName(d.toStoreCode)}
                   </td>
                   <td className="py-1.5 pr-2 whitespace-nowrap font-mono font-bold">{d.numero}/{d.serie}</td>
                   <td className="py-1.5 pr-2">

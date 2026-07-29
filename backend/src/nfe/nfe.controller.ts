@@ -104,9 +104,10 @@ export class NfeController {
     @Query('storeCode') storeCode?: string,
     @Query('status') status?: string,
     @Query('limit') limit?: string,
+    @Query('emitRaiz') emitRaiz?: string,
   ) {
     this.requireLeitura(req);
-    return this.transfer.list({ storeCode, status, limit: Number(limit) || undefined });
+    return this.transfer.list({ storeCode, status, limit: Number(limit) || undefined, emitRaiz });
   }
 
   /** Numeração NF-e de TODAS as lojas (tela de gerência). */
@@ -148,10 +149,11 @@ export class NfeController {
     @Query('ate') ate?: string,
     @Query('tipo') tipo?: string,
     @Query('storeCode') storeCode?: string,
+    @Query('emitRaiz') emitRaiz?: string,
   ) {
     this.requireLeitura(req);
     const t = tipo === 'xml' || tipo === 'danfe' ? tipo : 'tudo';
-    const docs = await this.transfer.listDocsParaLote({ de, ate, storeCode });
+    const docs = await this.transfer.listDocsParaLote({ de, ate, storeCode, emitRaiz });
     if (!docs.length) {
       res.status(404).json({ message: 'Nenhuma NF-e autorizada no período/filtro.' });
       return;

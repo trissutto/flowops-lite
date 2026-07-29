@@ -221,7 +221,7 @@ export class NfeTransferService {
 
   /** Notas AUTORIZADAS do período pro DOWNLOAD EM LOTE (ZIP do contador).
    *  De/Até em YYYY-MM-DD (fuso -03); sem datas = todas (cap 1000). */
-  async listDocsParaLote(p: { de?: string; ate?: string; storeCode?: string }) {
+  async listDocsParaLote(p: { de?: string; ate?: string; storeCode?: string; emitRaiz?: string }) {
     const where: any = { status: 'authorized' };
     const iso = /^\d{4}-\d{2}-\d{2}$/;
     const faixa: any = {};
@@ -229,7 +229,12 @@ export class NfeTransferService {
     if (p.ate && iso.test(p.ate)) faixa.lte = new Date(`${p.ate}T23:59:59.999-03:00`);
     if (faixa.gte || faixa.lte) where.createdAt = faixa;
     if (p.storeCode) where.fromStoreCode = p.storeCode;
-    return this.prisma.nfeDoc.findMany({ where, orderBy: { createdAt: 'asc' }, take: 1000 });
+    let docs = await this.prisma.nfeDoc.findMany({ where, orderBy: { createdAt: 'asc' }, take: 1000 });
+    const raiz = String(p.emitRaiz || '').replace(/\D/g, '');
+    if (raiz.length === 8) {
+      docs = docs.filter((d: any) => String(d.chave || '').slice(6, 14) === raiz);
+    }
+    return docs;
   }
 
   /** Documento por id (com XMLs, pra download/DANFE). */
@@ -330,16 +335,46 @@ export class NfeTransferService {
   }
 
   /** Lista NF-e emitidas (filtro por loja/status). */
-  async list(params: { storeCode?: string; status?: string; limit?: number }) {
+  async list(params: { storeCode?: string; status?: string; limit?: number; emitRaiz?: string }) {
     const where: any = {};
     if (params.storeCode) where.fromStoreCode = params.storeCode;
     if (params.status) where.status = params.status;
-    const docs = await this.prisma.nfeDoc.findMany({
+    let docs = await this.prisma.nfeDoc.findMany({
       where,
       orderBy: { createdAt: 'desc' },
       take: Math.min(200, params.limit || 100),
     });
-    return docs.map((d) => this.publicDoc(d));
+    // Filtro pelo EMITENTE (dono 29/07): a raiz do CNPJ está na CHAVE
+    // (posições 6–13) — separa T.O. × LURDS × MDD mesmo quando a loja física
+    // é a mesma (ex.: 01 Itanhaém emite pelas duas empresas).
+    const raiz = String(params.emitRaiz || '').replace(/\D/g, '');
+    if (raiz.length === 8) {
+      docs = docs.filter((d: any) => String(d.chave || '').slice(6, 14) === raiz);
+    }
+    // EMITENTE REAL na lista (dono 29/07: "01→Anália deveria mostrar SUZANO"):
+    // resolve o CNPJ da CHAVE pra loja/empresa que assinou — a loja física
+    // (fromStoreCode) pode ter emitido pela identidade de outra (matchRaiz).
+    const cfgs = await this.prisma.nfceConfig.findMany({
+      select: { storeCode: true, cnpj: true, nfeCnpj: true, razaoSocial: true, fantasia: true },
+    });
+    const porCnpj = new Map<string, { storeCode: string; nome: string }>();
+    for (const c of cfgs as any[]) {
+      const nome = String(c.fantasia || c.razaoSocial || '').trim();
+      for (const doc of [c.nfeCnpj, c.cnpj]) {
+        const d14 = String(doc || '').replace(/\D/g, '');
+        if (d14.length === 14 && !porCnpj.has(d14)) porCnpj.set(d14, { storeCode: c.storeCode, nome });
+      }
+    }
+    return docs.map((d: any) => {
+      const emitCnpj = String(d.chave || '').slice(6, 20);
+      const cfg = emitCnpj.length === 14 ? porCnpj.get(emitCnpj) : undefined;
+      return {
+        ...this.publicDoc(d),
+        emitCnpj: emitCnpj.length === 14 ? emitCnpj : null,
+        emitStoreCode: cfg?.storeCode ?? null,
+        emitNome: cfg?.nome ?? null,
+      };
+    });
   }
 
   // ── helpers ─────────────────────────────────────────────────────────────
