@@ -235,6 +235,26 @@ export class PontoController {
     });
   }
 
+  // ── HEARTBEAT DE IP DO PDV (regra "só no WiFi da loja") ──────────
+  /**
+   * Chamado pelo app Electron da loja (gate isElectron() no frontend —
+   * impersonação de admin roda no navegador e nunca chega aqui). Grava o IP
+   * público de saída da loja; a batida pwa_selfie do celular só vale vindo
+   * de um IP recente dessa lista. Só aceita role=store (admin da matriz
+   * mandaria o IP da matriz e furaria a regra).
+   */
+  @Post('pdv-heartbeat')
+  pdvHeartbeat(@Req() req: any) {
+    if (req?.user?.role !== 'store' || !req?.user?.storeId) {
+      return { ok: false, ignored: true };
+    }
+    const ip =
+      req?.headers?.['x-forwarded-for']?.toString().split(',')[0]?.trim() ||
+      req?.ip ||
+      null;
+    return this.svc.recordPdvIp(req.user.storeId, ip);
+  }
+
   // ── GEOFENCE do ponto (config por loja — matriz) ──────────────────
   @Get('geofence/:storeId')
   getGeofence(@Param('storeId') storeId: string) {

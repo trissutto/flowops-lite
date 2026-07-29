@@ -52,6 +52,9 @@ interface StoreFiscal {
   ie: string;
   razaoSocial: string;
   fantasia: string;
+  /** true = emitindo pela identidade de OUTRA empresa (matchRaiz) — a
+   *  sequência legada da loja física NÃO vale pra esse CNPJ. */
+  identidadeEmprestada?: boolean;
   uf: string;
   ambiente: '1' | '2';
   regime: string;
@@ -113,6 +116,8 @@ export class NfeTransferService {
     // Itanhaém no mesmo contador (2332 LURDS → 2334 T.O.).
     let numero = await this.seq.next(this.digits(origem.cnpj), serie, {
       start: opts.startNumero ?? this.startPadraoPara(origem.cnpj, serie),
+      // herda o contador legado da loja — só quando a identidade é a DELA
+      legacyKey: origem.identidadeEmprestada ? undefined : origem.storeCode,
     });
     const valorTotalCents = Math.round(valorTotal * 100);
     const cUF = CUF_BY_UF[origem.ender.uf] || origem.ender.codMunicipio.slice(0, 2);
@@ -543,6 +548,7 @@ export class NfeTransferService {
     let fantasiaSrc: string;
     let regimeSrc: string;
     let enderecoSrc: string;
+    let identidadeEmprestada = false;
     if (identidadePropria) {
       cnpjSrc = String(cfg.nfeCnpj);
       ieSrc = String(cfg.nfeIe || '');
@@ -606,6 +612,7 @@ export class NfeTransferService {
       }
 
       if (alt) {
+        identidadeEmprestada = true;
         cnpjSrc = this.digits(String(alt.cnpj || ''));
         ieSrc = this.digits(String(alt.ie || ''));
         razaoSrc = String(alt.razaoSocial || '').trim();
@@ -698,6 +705,7 @@ export class NfeTransferService {
       ie: this.digits(ieSrc),
       razaoSocial: razaoSrc.trim(),
       fantasia: fantasiaSrc.trim(),
+      identidadeEmprestada,
       uf: (cfg.uf || ender.uf || 'SP').toUpperCase(),
       ambiente: (cfg.ambiente === '1' ? '1' : '2') as '1' | '2',
       regime: regimeSrc,
@@ -1217,7 +1225,7 @@ export class NfeTransferService {
     const valorTotal = items.reduce((s, i) => s + i.vProd, 0);
 
     await this.garantirContinuacao(this.digits(origem.cnpj), origem.cnpj, serie);
-    let numero = await this.seq.next(this.digits(origem.cnpj), serie, { start: this.startPadraoPara(origem.cnpj, serie) });
+    let numero = await this.seq.next(this.digits(origem.cnpj), serie, { start: this.startPadraoPara(origem.cnpj, serie), legacyKey: origem.identidadeEmprestada ? undefined : origem.storeCode });
     const cUF = CUF_BY_UF[origem.ender.uf] || origem.ender.codMunicipio.slice(0, 2);
     const natOp = natOpRegra;
     const dest = { cpfCnpj, nome, endereco, numero: custNumero, bairro, cidade, uf, cep, codMun };
@@ -1334,7 +1342,7 @@ export class NfeTransferService {
     if (valorTotal <= 0) throw new BadRequestException('NF-e do envio sem valor (itens zerados).');
 
     await this.garantirContinuacao(this.digits(origem.cnpj), origem.cnpj, serie);
-    let numero = await this.seq.next(this.digits(origem.cnpj), serie, { start: this.startPadraoPara(origem.cnpj, serie) });
+    let numero = await this.seq.next(this.digits(origem.cnpj), serie, { start: this.startPadraoPara(origem.cnpj, serie), legacyKey: origem.identidadeEmprestada ? undefined : origem.storeCode });
     const cUF = CUF_BY_UF[origem.ender.uf] || origem.ender.codMunicipio.slice(0, 2);
     const dest = { cpfCnpj, nome: d.nome, endereco: d.endereco, numero: d.numero || 'S/N', bairro: d.bairro || 'CENTRO', cidade: d.cidade, uf: d.uf, cep: this.digits(d.cep), codMun: this.digits(d.codMun) };
 

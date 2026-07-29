@@ -128,6 +128,10 @@ model Store {
   pontoLat      Float?  @map("ponto_lat")
   pontoLng      Float?  @map("ponto_lng")
   pontoRaioM    Int     @default(150) @map("ponto_raio_m")
+  // IPs de saída vistos nos heartbeats do PDV Electron da loja (JSON
+  // [{ip, seenAt}]). Batida pwa_selfie (celular da loja) só vale vindo de um
+  // desses IPs = "está no WiFi da loja". Resolve IP dinâmico da operadora.
+  pdvIps        String? @map("pdv_ips") @db.Text
 
   // ── Consolidação de Grade (Sprint 0) ──
   // Score que define o "peso" da loja como destino quando o sistema

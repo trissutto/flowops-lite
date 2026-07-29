@@ -58,6 +58,7 @@ Cron de 1h espelha transferências/vendas/estoque pro financeiro. Conta corrente
 | `PDV_ERP_OUTBOX` | on | `0` volta escrita da venda inline |
 | `ERP_WRITE_ENABLED` / `PDV_ERP_WRITE_ENABLED` | — | shadow mode das escritas no Wincred (loga SQL sem executar) |
 | `PDV_FINALIZE_ASYNC` | false | legado (só vale com outbox desligado) |
+| `PONTO_IP_CHECK` | on | `0` desliga a regra "celular só bate ponto no WiFi da loja" (batida `pwa_selfie` vs IPs do heartbeat do PDV Electron; fail-open se não há IP <48h) |
 
 ## Convenções de trabalho (Thiago)
 
