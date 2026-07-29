@@ -2806,6 +2806,8 @@ function PdvPageInner() {
           onLater={fecharDepois}
           onPaymentsChange={onPaymentsChanged}
           onAutoFlowTriggered={() => { autoFlowRef.current = true; }}
+          hasSeller={!!sale.sellerName}
+          onNeedSeller={() => setShowConfirmSale(true)}
         />
       )}
 
@@ -4222,6 +4224,19 @@ function PaymentModal({
   // VENDA ONLINE — sub-tipo (PIX direto ou Link externo). Vendedora informa
   // só pra ter no histórico. Sem geração de cobrança, sem NFC-e automática.
   const [vendaOnlineTipo, setVendaOnlineTipo] = useState<'pix' | 'link' | 'pagarme_link' | null>(null);
+
+  // VENDA ONLINE exige VENDEDORA ANTES (dono 29/07): o fechamento pode
+  // acontecer bem depois (link pago via webhook / "Liberar") — se não
+  // escolher agora, a venda fica sem dona e some da comissão.
+  useEffect(() => {
+    if (selected === 'venda_online' && !hasSeller) onNeedSeller?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected, hasSeller]);
+
+  // Botão "Gerar Link Pagar.me" ficava fora da área visível (embaixo, atrás
+  // do footer FINALIZAR) — rola a seção pra vista quando o tipo é escolhido
+  // e quando o link é gerado (o card cresce).
+  const pagarmeBoxRef = useRef<HTMLDivElement | null>(null);
   // Estado do Link Pagar.me gerado (URL + status)
   const [pagarmeLink, setPagarmeLink] = useState<{
     pagarmeOrderId: string;
@@ -4231,6 +4246,15 @@ function PaymentModal({
   const [pagarmeLinkLoading, setPagarmeLinkLoading] = useState(false);
   const [pagarmeLinkPaid, setPagarmeLinkPaid] = useState(false);
   const [pagarmeLinkCopied, setPagarmeLinkCopied] = useState(false);
+
+  useEffect(() => {
+    if (selected !== 'venda_online' || vendaOnlineTipo !== 'pagarme_link') return;
+    const t = setTimeout(
+      () => pagarmeBoxRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }),
+      80,
+    );
+    return () => clearTimeout(t);
+  }, [selected, vendaOnlineTipo, pagarmeLink]);
 
   // ── Adicionar pagamento (com auto-finalize quando completa) ──
   // Se o valor digitado fecha o total da venda (95% dos casos: 1 forma só),
@@ -4281,8 +4305,13 @@ function PaymentModal({
       toast('warning', 'Escolha a bandeira', 'Visa, Master, Elo, Hipercard…');
       return;
     }
-    // VENDA ONLINE — exige CPF do cliente + escolher PIX ou LINK
+    // VENDA ONLINE — exige VENDEDORA + CPF do cliente + escolher PIX ou LINK
     if (selected === 'venda_online') {
+      if (!hasSeller) {
+        toast('warning', 'Escolha a vendedora', 'Venda online também tem dona — selecione quem vendeu.');
+        onNeedSeller?.();
+        return;
+      }
       if (!customerCpf) {
         toast(
           'warning',
@@ -5525,7 +5554,7 @@ function PaymentModal({
 
             {/* ── PAINEL: Link Pagar.me — gera URL + cliente paga + webhook ── */}
             {vendaOnlineTipo === 'pagarme_link' && customerCpf && (
-              <div className="border-2 border-violet-300 rounded-lg p-2 bg-violet-50/30 space-y-2">
+              <div ref={pagarmeBoxRef} className="border-2 border-violet-300 rounded-lg p-2 bg-violet-50/30 space-y-2">
                 {!pagarmeLink ? (
                   <>
                     <button
