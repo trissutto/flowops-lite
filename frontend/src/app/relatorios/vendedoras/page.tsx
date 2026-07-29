@@ -351,11 +351,12 @@ export default function RelatorioVendedorasPage() {
                         <th className="text-left px-2 py-1.5">Vendedora (Flow)</th>
                         <th className="text-right px-2 py-1.5">Bruto (itens)</th>
                         <th className="text-right px-2 py-1.5">− Desc. avulso</th>
-                        <th className="text-right px-2 py-1.5">− Vale-troca</th>
-                        <th className="text-right px-2 py-1.5">= PAGO (Flow)</th>
+                        <th className="text-right px-2 py-1.5">= FATURAMENTO</th>
+                        <th className="text-right px-2 py-1.5">Vale-troca (só comissão)</th>
+                        <th className="text-right px-2 py-1.5">Recebido</th>
                         <th className="text-right px-2 py-1.5">Marcados (fora)</th>
                         <th className="text-right px-2 py-1.5">Caixa Giga</th>
-                        <th className="text-right px-2 py-1.5">Diferença</th>
+                        <th className="text-right px-2 py-1.5">Diferença (fat − Giga)</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -363,14 +364,19 @@ export default function RelatorioVendedorasPage() {
                         const normN = (s: any) => String(s || '').trim().toUpperCase().replace(/\s+/g, ' ');
                         const g = (confData.giga || []).find((x: any) => normN(x.nome) === normN(c.vendedora));
                         const gigaVal = g ? Number(g.valor) : null;
-                        const diff = gigaVal != null ? Math.round((c.liquido - gigaVal) * 100) / 100 : null;
+                        // Régua oficial (29/07): o caixa do Giga é CHEIO — compara
+                        // com o FATURAMENTO (bruto − desc). Vale-troca NÃO entra
+                        // aqui; ele só abate na BASE DE COMISSÃO.
+                        const fat = Math.round((c.bruto - c.descontoAvulso) * 100) / 100;
+                        const diff = gigaVal != null ? Math.round((fat - gigaVal) * 100) / 100 : null;
                         return (
                           <tr key={c.vendedora} className="border-t border-slate-100">
                             <td className="px-2 py-1 font-semibold">{c.vendedora}</td>
                             <td className="text-right px-2 py-1 font-mono">{formatBRL(c.bruto)}</td>
                             <td className="text-right px-2 py-1 font-mono text-slate-500">{formatBRL(c.descontoAvulso)}</td>
-                            <td className="text-right px-2 py-1 font-mono text-slate-500">{formatBRL(c.valeTroca)}</td>
-                            <td className="text-right px-2 py-1 font-mono font-bold">{formatBRL(c.liquido)}</td>
+                            <td className="text-right px-2 py-1 font-mono font-bold">{formatBRL(fat)}</td>
+                            <td className="text-right px-2 py-1 font-mono text-slate-400">{formatBRL(c.valeTroca)}</td>
+                            <td className="text-right px-2 py-1 font-mono text-slate-500">{formatBRL(c.liquido)}</td>
                             <td className="text-right px-2 py-1 font-mono text-amber-700">{formatBRL(c.marcados)}</td>
                             <td className="text-right px-2 py-1 font-mono text-indigo-700">{gigaVal != null ? formatBRL(gigaVal) : '—'}</td>
                             <td className={`text-right px-2 py-1 font-mono font-bold ${diff && Math.abs(diff) > 1 ? 'text-rose-600' : 'text-emerald-600'}`}>
@@ -385,7 +391,7 @@ export default function RelatorioVendedorasPage() {
                         .map((g2: any) => (
                           <tr key={`giga-${g2.codigo}`} className="border-t border-slate-100 bg-indigo-50/40">
                             <td className="px-2 py-1 font-semibold text-indigo-800">{g2.nome || g2.codigo} <span className="text-[10px] font-normal">(só no Giga)</span></td>
-                            <td className="text-right px-2 py-1 font-mono text-slate-400" colSpan={5}>sem venda no PDV Flow</td>
+                            <td className="text-right px-2 py-1 font-mono text-slate-400" colSpan={6}>sem venda no PDV Flow</td>
                             <td className="text-right px-2 py-1 font-mono text-indigo-700">{formatBRL(Number(g2.valor) || 0)}</td>
                             <td className="text-right px-2 py-1 font-mono font-bold text-rose-600">{formatBRL(-(Number(g2.valor) || 0))}</td>
                           </tr>
