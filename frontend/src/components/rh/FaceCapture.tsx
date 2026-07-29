@@ -59,7 +59,7 @@ function loadFaceApiScript(): Promise<void> {
   if (typeof window === 'undefined') return Promise.reject(new Error('SSR'));
   if (window.faceapi) return Promise.resolve();
   if (scriptLoadingPromise) return scriptLoadingPromise;
-  scriptLoadingPromise = new Promise((resolve, reject) => {
+  scriptLoadingPromise = new Promise<void>((resolve, reject) => {
     const s = document.createElement('script');
     s.src = FACE_API_CDN;
     s.async = true;
@@ -67,12 +67,18 @@ function loadFaceApiScript(): Promise<void> {
     s.onerror = () => reject(new Error('Falha ao carregar face-api.js'));
     document.head.appendChild(s);
   });
+  // Se falhar, LIMPA o cache da promise — senão a rejeição fica eterna e
+  // "Tentar de novo" nunca funciona (bug do carregando infinito no celular).
+  scriptLoadingPromise = scriptLoadingPromise.catch((e) => {
+    scriptLoadingPromise = null;
+    throw e;
+  });
   return scriptLoadingPromise;
 }
 
 async function loadModels(): Promise<void> {
   if (modelsLoadingPromise) return modelsLoadingPromise;
-  modelsLoadingPromise = (async () => {
+  const p = (async () => {
     const f = window.faceapi;
     if (!f) throw new Error('face-api.js não está carregado');
 
@@ -101,6 +107,11 @@ async function loadModels(): Promise<void> {
       f.nets.faceRecognitionNet.loadFromUri(MODELS_URL),
     ]);
   })();
+  // Mesmo padrão do script: falhou → limpa o cache pra retry funcionar.
+  modelsLoadingPromise = p.catch((e) => {
+    modelsLoadingPromise = null;
+    throw e;
+  });
   return modelsLoadingPromise;
 }
 
@@ -168,10 +179,36 @@ const FaceCapture = forwardRef<FaceCaptureHandle, Props>(function FaceCapture(
   const [statusMsg, setStatusMsg] = useState('Carregando engine facial...');
   // Avisa quando a máquina não tem WebGL (roda no CPU → reconhecimento lento).
   const [perfWarn, setPerfWarn] = useState(false);
+  // Incrementa a cada "Tentar de novo" — o useEffect de init re-roda.
+  const [attempt, setAttempt] = useState(0);
+
+  // Tempo máximo do init. Se câmera/modelos não responderem até aqui, mostra
+  // ERRO com o culpado + botão de retry — antes ficava "carregando" eterno
+  // (celular com câmera presa por outro app, WiFi que oscilou no download).
+  const INIT_TIMEOUT_MS = 25_000;
 
   useEffect(() => {
     if (!autoStart) return;
     let cancelled = false;
+    // Etapas pro watchdog saber O QUE travou (e pras msgs de progresso)
+    const done = { camera: false, engine: false };
+
+    const watchdog = setTimeout(() => {
+      if (cancelled || (done.camera && done.engine)) return;
+      cancelled = true; // stream que chegar atrasado é descartado (guard abaixo)
+      const travou = [
+        !done.camera ? 'a câmera' : null,
+        !done.engine ? 'o reconhecimento facial' : null,
+      ].filter(Boolean).join(' e ');
+      const msg =
+        `Não conseguimos iniciar ${travou}. ` +
+        (!done.camera
+          ? 'Feche outros apps que usam a câmera (WhatsApp, câmera do celular) e toque em Tentar de novo.'
+          : 'Verifique a internet e toque em Tentar de novo.');
+      setStatus('error');
+      setStatusMsg(msg);
+      onError?.(msg);
+    }, INIT_TIMEOUT_MS);
 
     (async () => {
       try {
@@ -189,7 +226,30 @@ const FaceCapture = forwardRef<FaceCaptureHandle, Props>(function FaceCapture(
             },
             audio: false,
           })
+          .then((stream) => {
+            done.camera = true;
+            if (!cancelled && !done.engine) {
+              setStatusMsg('Câmera OK — baixando reconhecimento facial...');
+            }
+            return stream;
+          })
           .catch((e) => {
+            done.camera = true; // respondeu (com erro) — watchdog não culpa ela
+            // Erros de getUserMedia têm .name padronizado — traduz pro humano
+            const name = e?.name || '';
+            if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
+              throw new Error(
+                'Permissão da câmera NEGADA. Permita a câmera nas configurações do navegador/app e tente de novo.',
+              );
+            }
+            if (name === 'NotReadableError' || name === 'TrackStartError') {
+              throw new Error(
+                'A câmera está em uso por outro aplicativo. Feche o outro app (ou reinicie o celular) e tente de novo.',
+              );
+            }
+            if (name === 'NotFoundError') {
+              throw new Error('Nenhuma câmera encontrada neste aparelho.');
+            }
             throw new Error(`Câmera: ${e?.message || e}`);
           });
 
@@ -200,6 +260,10 @@ const FaceCapture = forwardRef<FaceCaptureHandle, Props>(function FaceCapture(
           await loadModels();
           if (cancelled) return;
           await warmUp();
+          done.engine = true;
+          if (!cancelled && !done.camera) {
+            setStatusMsg('Aguardando permissão da câmera...');
+          }
         })();
 
         // 3) Aguarda ambos
@@ -209,6 +273,7 @@ const FaceCapture = forwardRef<FaceCaptureHandle, Props>(function FaceCapture(
           return;
         }
 
+        clearTimeout(watchdog);
         streamRef.current = stream;
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
@@ -220,6 +285,7 @@ const FaceCapture = forwardRef<FaceCaptureHandle, Props>(function FaceCapture(
         onReady?.(window.faceapi);
       } catch (e: any) {
         if (cancelled) return;
+        clearTimeout(watchdog);
         const msg = e?.message || String(e);
         setStatus('error');
         setStatusMsg(msg);
@@ -229,11 +295,12 @@ const FaceCapture = forwardRef<FaceCaptureHandle, Props>(function FaceCapture(
 
     return () => {
       cancelled = true;
+      clearTimeout(watchdog);
       streamRef.current?.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoStart]);
+  }, [autoStart, attempt]);
 
   useImperativeHandle(ref, () => ({
     async captureDescriptor() {
@@ -307,6 +374,18 @@ const FaceCapture = forwardRef<FaceCaptureHandle, Props>(function FaceCapture(
               {status === 'loading' ? 'Preparando câmera' : 'Erro'}
             </p>
             <p className="text-xs text-white/70">{statusMsg}</p>
+            {status === 'error' && (
+              <button
+                onClick={() => {
+                  setStatus('loading');
+                  setStatusMsg('Tentando de novo...');
+                  setAttempt((a) => a + 1);
+                }}
+                className="mt-3 bg-white text-slate-900 font-bold text-sm px-4 py-2 rounded-lg hover:bg-slate-100"
+              >
+                🔄 Tentar de novo
+              </button>
+            )}
           </div>
         )}
         {status === 'ready' && (
