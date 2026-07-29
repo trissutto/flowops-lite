@@ -189,6 +189,8 @@ export class NfeTransferService {
       if (res.cStat === '778' && tentativa < MAX_DUP_RETRY) {
         if (this.corrigirNcmInvalido(items, res.xMotivo)) continue;
       }
+      // 225 = Falha no Schema — loga o XML inteiro pra diagnóstico no Railway
+      if (res.cStat === '225') this.logger.error(`[nfe] 225 schema (${chave}): ${res.xMotivo} · XML: ${xmlAssinado}`);
       break;
     }
 
@@ -1276,6 +1278,8 @@ export class NfeTransferService {
       if (okk) break;
       if ((res.cStat === '539' || res.cStat === '204') && t < MAX) { numero = await this.seq.next(this.digits(origem.cnpj), serie); continue; }
       if (res.cStat === '778' && t < MAX && this.corrigirNcmInvalido(items, res.xMotivo)) continue;
+      // 225 = Falha no Schema — loga o XML inteiro pra diagnóstico no Railway
+      if (res.cStat === '225') this.logger.error(`[nfe] 225 schema (${chave}): ${res.xMotivo} · XML: ${xmlAssinado}`);
       break;
     }
     const autorizada = res.success && (res.cStat === '100' || res.cStat === '150');
@@ -1391,6 +1395,8 @@ export class NfeTransferService {
       if (okk) break;
       if ((res.cStat === '539' || res.cStat === '204') && t < MAX) { numero = await this.seq.next(this.digits(origem.cnpj), serie); continue; }
       if (res.cStat === '778' && t < MAX && this.corrigirNcmInvalido(items, res.xMotivo)) continue;
+      // 225 = Falha no Schema — loga o XML inteiro pra diagnóstico no Railway
+      if (res.cStat === '225') this.logger.error(`[nfe] 225 schema (${chave}): ${res.xMotivo} · XML: ${xmlAssinado}`);
       break;
     }
     const autorizada = res.success && (res.cStat === '100' || res.cStat === '150');
