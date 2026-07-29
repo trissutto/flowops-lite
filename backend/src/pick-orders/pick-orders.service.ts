@@ -229,7 +229,7 @@ export class PickOrdersService {
     let nfeInfoME: any = null;
     if (String(process.env.NFE_ENVIO_ENABLED || '').trim() === '1' && !order.isPickup) {
       try {
-        const dados = await this.montarDadosNfeEnvio(order, pick);
+        const dados = await this.montarDadosNfeEnvio(order, pick, String(store?.code || ''));
         if (dados) {
           const amb = process.env.NFE_ENVIO_AMBIENTE === '2' ? '2' : process.env.NFE_ENVIO_AMBIENTE === '1' ? '1' : undefined;
           // Venda do SITE = empresa do site (LURDS matriz, raiz 30), não a loja
@@ -368,7 +368,7 @@ export class PickOrdersService {
    * Destinatário + itens da NF-e do envio. CEP-authoritative (ViaCEP) pra
    * UF/cidade e principalmente o código IBGE (cMun, obrigatório na NF-e).
    */
-  private async montarDadosNfeEnvio(order: any, pick: any): Promise<{ dest: any; items: any[] } | null> {
+  private async montarDadosNfeEnvio(order: any, pick: any, storeCode?: string): Promise<{ dest: any; items: any[] } | null> {
     let nome = '';
     let cpfCnpj = '';
     let endereco = '';
@@ -379,10 +379,20 @@ export class PickOrdersService {
     let cep = '';
     let items: any[] = [];
 
+    // PEDIDO DIVIDIDO em 2+ lojas (dono 29/07): a NF-e de cada envio leva SÓ
+    // as peças daquela loja — filtro ESTRITO (sem fallback pro pedido inteiro;
+    // se não achar item da loja, não emite e o front avisa). Pedido de loja
+    // única mantém o comportamento de sempre (todos os itens).
+    const qtdPicks = await this.prisma.pickOrder.count({ where: { orderId: order.id } });
+    const dividido = qtdPicks > 1;
+    const normLoja = (s: any) => String(s || '').trim().toUpperCase().replace(/^LJ/, '').replace(/^0+/, '');
+
     if (order.source === 'live' && order.liveCartId) {
       const cart: any = await (this.prisma as any).livePdvCart.findUnique({ where: { id: order.liveCartId }, include: { items: true } });
       if (!cart) return null;
-      const itens = (cart.items || []).filter((i: any) => i.status !== 'cancelled');
+      const todos = (cart.items || []).filter((i: any) => i.status !== 'cancelled');
+      const daLoja = storeCode ? todos.filter((i: any) => normLoja(i.originStoreCode) === normLoja(storeCode)) : [];
+      const itens = dividido ? daLoja : (daLoja.length ? daLoja : todos);
       if (!itens.length) return null;
       nome = cart.customerName || 'Cliente';
       cpfCnpj = String(cart.customerCpf || '').replace(/\D/g, '');
@@ -415,11 +425,18 @@ export class PickOrdersService {
       bairro = String(addr.neighborhood || addr.bairro || '').trim();
       nome = order.customerName || 'Cliente';
       cpfCnpj = String(order.customerCpf || '').replace(/\D/g, '');
-      const itensLoja = (order.items || []).filter((i: any) => !i.assignedStoreId || i.assignedStoreId === pick.storeId);
-      const lista = itensLoja.length ? itensLoja : (order.items || []);
+      const atribuidos = (order.items || []).filter((i: any) => i.assignedStoreId === pick.storeId);
+      const semDono = (order.items || []).filter((i: any) => !i.assignedStoreId);
+      // Dividido: SÓ os itens atribuídos a esta loja. Loja única: mantém o
+      // comportamento antigo (atribuídos + sem dono; sem nada, o pedido todo).
+      const lista = dividido
+        ? atribuidos
+        : (atribuidos.length ? [...atribuidos, ...semDono] : (order.items || []));
       if (!lista.length) return null;
-      const totalPecas = lista.reduce((s: number, i: any) => s + (Number(i.quantity) || 1), 0) || 1;
-      const fallbackUnit = order.totalAmount ? Number(order.totalAmount) / totalPecas : 0;
+      // Rateio do fallback pelo TOTAL DE PEÇAS DO PEDIDO (não só da lista) —
+      // senão o pedido dividido inflava o unitário da loja com menos peças.
+      const totalPecasPedido = (order.items || []).reduce((s: number, i: any) => s + (Number(i.quantity) || 1), 0) || 1;
+      const fallbackUnit = order.totalAmount ? Number(order.totalAmount) / totalPecasPedido : 0;
       items = lista.map((i: any) => ({
         sku: i.sku || 'ITEM',
         ean: String(i.sku || '').replace(/\D/g, '').length === 13 ? String(i.sku) : undefined,
