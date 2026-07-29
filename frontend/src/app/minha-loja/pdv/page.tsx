@@ -4006,6 +4006,8 @@ function PaymentModal({
   onLater,
   onPaymentsChange,
   onAutoFlowTriggered,
+  hasSeller,
+  onNeedSeller,
 }: {
   saleId: string;
   total: number;
@@ -4029,6 +4031,10 @@ function PaymentModal({
   onPaymentsChange?: () => void;
   /** Sinaliza pro parent que entrou em fluxo automático (PIX confirmado) */
   onAutoFlowTriggered?: () => void;
+  /** Venda já tem vendedora gravada? (venda online exige escolher ANTES) */
+  hasSeller?: boolean;
+  /** Abre o popup de escolher vendedora no parent (sem finalizar) */
+  onNeedSeller?: () => void;
 }) {
   const { toast } = usePdvToast();
   // Lista de pagamentos parciais já adicionados
