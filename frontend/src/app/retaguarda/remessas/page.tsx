@@ -131,6 +131,61 @@ export default function RemessasAdminPage() {
     }
   };
 
+  // ── EMISSÃO EM MASSA (dono 29/07): seleciona remessas sem NF-e e emite
+  // UMA POR VEZ, da mais ANTIGA pra mais nova — fila sequencial garante a
+  // numeração contínua por CNPJ emitente (regras de CFOP/emitente/ambiente
+  // são as mesmas da emissão individual). Pula abertas/canceladas/já emitidas.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulk, setBulk] = useState<{ done: number; total: number; atual: string } | null>(null);
+
+  const selecionavel = (r: ShipmentRow) => !r.nfeEmitida && r.status !== 'cancelled' && r.status !== 'open';
+
+  const toggleSelect = (id: string) => {
+    setSelected((prev) => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id); else n.add(id);
+      return n;
+    });
+  };
+  const toggleSelectAll = () => {
+    const elegiveis = filteredRows.filter(selecionavel).map((r) => r.id);
+    setSelected((prev) => (prev.size >= elegiveis.length && elegiveis.length > 0 ? new Set() : new Set(elegiveis)));
+  };
+
+  const emitirEmMassa = async () => {
+    const fila = rows
+      .filter((r) => selected.has(r.id) && selecionavel(r))
+      .sort((a, b) => new Date(a.openedAt).getTime() - new Date(b.openedAt).getTime());
+    if (!fila.length) return;
+    if (!confirm(
+      `Emitir NF-e de ${fila.length} remessa(s), UMA POR VEZ (da mais antiga pra mais nova)?\n\n` +
+      `CFOP, emitente (raiz do destino) e ambiente seguem as regras automáticas de cada remessa.`,
+    )) return;
+    const falhas: string[] = [];
+    for (let i = 0; i < fila.length; i++) {
+      const r = fila[i];
+      setBulk({ done: i, total: fila.length, atual: r.code });
+      try {
+        const res = await api<any>(`/nfe/transfer/emit/${r.id}`, { method: 'POST', body: JSON.stringify({}) });
+        const d = res?.doc || {};
+        if (res?.ok && (d?.status === 'authorized' || res?.jaEmitida)) {
+          setRows((prev) => prev.map((x) => (x.id === r.id
+            ? { ...x, nfeEmitida: true, nfeNumero: d?.numero ?? x.nfeNumero, nfeSerie: d?.serie ?? x.nfeSerie }
+            : x)));
+          setSelected((prev) => { const n = new Set(prev); n.delete(r.id); return n; });
+        } else {
+          falhas.push(`${r.code}: ${d?.cStat ?? ''} ${d?.xMotivo ?? res?.xMotivo ?? 'não autorizada'}`);
+        }
+      } catch (e: any) {
+        falhas.push(`${r.code}: ${e?.message ?? 'falha'}`);
+      }
+    }
+    setBulk(null);
+    alert(falhas.length
+      ? `Emissão em massa: ${fila.length - falhas.length} autorizada(s), ${falhas.length} falha(s):\n\n${falhas.join('\n')}`
+      : `✅ ${fila.length} NF-e autorizada(s).`);
+  };
+
   const load = async () => {
     setLoading(true);
     setError(null);
@@ -505,6 +560,33 @@ export default function RemessasAdminPage() {
           </select>
         </div>
 
+        {/* Barra da emissão em massa */}
+        {(selected.size > 0 || bulk) && (
+          <div className="mb-3 flex items-center justify-between gap-3 rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-2">
+            <span className="text-sm font-semibold text-indigo-900">
+              {bulk
+                ? `🧾 Emitindo ${bulk.done + 1}/${bulk.total} — ${bulk.atual}… (uma por vez, numeração sequencial)`
+                : `${selected.size} remessa(s) selecionada(s) pra NF-e`}
+            </span>
+            <div className="flex shrink-0 gap-2">
+              <button
+                onClick={() => setSelected(new Set())}
+                disabled={!!bulk}
+                className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 disabled:opacity-50"
+              >
+                Limpar
+              </button>
+              <button
+                onClick={emitirEmMassa}
+                disabled={!!bulk || selected.size === 0}
+                className="rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-indigo-700 disabled:opacity-50"
+              >
+                {bulk ? <Loader2 className="inline h-3.5 w-3.5 animate-spin" /> : `🧾 Emitir NF-e em massa (${selected.size})`}
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Lista */}
         {error && (
           <div className="bg-red-50 border border-red-200 text-red-700 p-3 rounded-md text-sm">
@@ -528,6 +610,15 @@ export default function RemessasAdminPage() {
             <table className="w-full text-sm">
               <thead className="bg-slate-50 border-b text-xs uppercase text-slate-500">
                 <tr>
+                  <th className="w-8 px-3 py-2">
+                    <input
+                      type="checkbox"
+                      title="Selecionar todas SEM NF-e (visíveis no filtro)"
+                      checked={filteredRows.filter(selecionavel).length > 0 && filteredRows.filter(selecionavel).every((r) => selected.has(r.id))}
+                      onChange={toggleSelectAll}
+                      disabled={!!bulk}
+                    />
+                  </th>
                   <th className="text-left px-3 py-2">Código</th>
                   <th className="text-left px-3 py-2">Origem → Destino</th>
                   <th className="text-left px-3 py-2">Status</th>
@@ -550,6 +641,17 @@ export default function RemessasAdminPage() {
                       onClick={() => openDetail(r.id)}
                       className="border-b last:border-0 hover:bg-slate-50 cursor-pointer transition-colors"
                     >
+                      <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+                        {selecionavel(r) && (
+                          <input
+                            type="checkbox"
+                            checked={selected.has(r.id)}
+                            onChange={() => toggleSelect(r.id)}
+                            disabled={!!bulk}
+                            title="Selecionar pra emissão em massa"
+                          />
+                        )}
+                      </td>
                       <td className="px-3 py-2 font-mono text-xs font-semibold text-slate-700">
                         {r.code}
                         {r.nfeEmitida ? (
