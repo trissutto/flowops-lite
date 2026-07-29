@@ -38,7 +38,9 @@ function aliqInterSaidaSP(destUF: string): number {
 export function cfopVenda(origemUF: string, destUF: string, destTemIE: boolean): { cfop: string; natOp: string } {
   if (origemUF === destUF) return { cfop: '5102', natOp: 'VENDA DE MERCADORIA ADQUIRIDA DE TERCEIROS' };
   if (destTemIE) return { cfop: '6102', natOp: 'VENDA DE MERCADORIA ADQUIRIDA DE TERCEIROS' };
-  return { cfop: '6108', natOp: 'VENDA DE MERC. ADQ. DE TERCEIROS DESTINADA A NAO CONTRIBUINTE' };
+  // natOp tem LIMITE DE 60 CARACTERES no schema — o texto antigo tinha 61 e
+  // TODA venda interestadual caía com cStat 225 genérico (29/07, meio dia de caça).
+  return { cfop: '6108', natOp: 'VENDA DE MERC. ADQ. DE TERCEIROS A NAO CONTRIBUINTE' };
 }
 
 const CUF_BY_UF: Record<string, string> = {
