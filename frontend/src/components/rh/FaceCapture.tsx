@@ -22,6 +22,12 @@ import {
 } from 'react';
 import { Camera, Loader2, AlertTriangle } from 'lucide-react';
 
+// face-api.js SELF-HOSTED (jul/2026): a tag <script> pro CDN gera resposta
+// "opaque" que o Service Worker NÃO consegue cachear (res.ok=false) → os
+// 664KB eram re-baixados do jsdelivr TODA abertura, e o jsdelivr oscila no
+// Brasil (causa do "demorando muito" no celular). Local = mesmo domínio →
+// cai no cache-first do SW junto com os modelos. CDN vira só fallback.
+const FACE_API_LOCAL = '/face-models/face-api.min.js';
 const FACE_API_CDN = 'https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js';
 // Pesos hospedados LOCALMENTE no Vercel (/public/face-models/).
 // Antes vinha do CDN GitHub — agora vem do mesmo domínio:
@@ -55,24 +61,34 @@ let warmedUp = false;
 // o operador quando a máquina da loja cai pro CPU (causa de lentidão).
 let activeBackend = '';
 
+function injectScript(src: string): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.async = true;
+    s.onload = () => resolve();
+    s.onerror = () => {
+      s.remove();
+      reject(new Error(`Falha ao carregar ${src}`));
+    };
+    document.head.appendChild(s);
+  });
+}
+
 function loadFaceApiScript(): Promise<void> {
   if (typeof window === 'undefined') return Promise.reject(new Error('SSR'));
   if (window.faceapi) return Promise.resolve();
   if (scriptLoadingPromise) return scriptLoadingPromise;
-  scriptLoadingPromise = new Promise<void>((resolve, reject) => {
-    const s = document.createElement('script');
-    s.src = FACE_API_CDN;
-    s.async = true;
-    s.onload = () => resolve();
-    s.onerror = () => reject(new Error('Falha ao carregar face-api.js'));
-    document.head.appendChild(s);
-  });
-  // Se falhar, LIMPA o cache da promise — senão a rejeição fica eterna e
-  // "Tentar de novo" nunca funciona (bug do carregando infinito no celular).
-  scriptLoadingPromise = scriptLoadingPromise.catch((e) => {
-    scriptLoadingPromise = null;
-    throw e;
-  });
+  // Local primeiro (SW cacheia → aberturas seguintes instantâneas);
+  // CDN só se o arquivo local sumir (deploy antigo, 404).
+  scriptLoadingPromise = injectScript(FACE_API_LOCAL)
+    .catch(() => injectScript(FACE_API_CDN))
+    // Se falhar, LIMPA o cache da promise — senão a rejeição fica eterna e
+    // "Tentar de novo" nunca funciona (bug do carregando infinito no celular).
+    .catch((e) => {
+      scriptLoadingPromise = null;
+      throw e;
+    });
   return scriptLoadingPromise;
 }
 
@@ -229,7 +245,9 @@ const FaceCapture = forwardRef<FaceCaptureHandle, Props>(function FaceCapture(
           .then((stream) => {
             done.camera = true;
             if (!cancelled && !done.engine) {
-              setStatusMsg('Câmera OK — baixando reconhecimento facial...');
+              setStatusMsg(
+                'Câmera OK — baixando reconhecimento facial... (a 1ª vez baixa ~7MB, depois fica instantâneo)',
+              );
             }
             return stream;
           })

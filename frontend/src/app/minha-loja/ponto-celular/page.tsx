@@ -182,9 +182,22 @@ export default function PontoCelularPage() {
     };
   }, []);
 
+  // PERF celular: /auth/me é um round-trip no Railway ANTES de qualquer coisa
+  // (a lista de funcionárias precisa do storeId). Cacheia o "me" no aparelho:
+  // reabertura mostra a lista NA HORA (do cache) e revalida por trás.
   useEffect(() => {
+    try {
+      const cached = localStorage.getItem('ponto_me_cache');
+      if (cached) {
+        const m = JSON.parse(cached) as Me;
+        if (m?.storeId) setMe(m);
+      }
+    } catch {}
     api<Me>('/auth/me')
-      .then((m) => setMe(m))
+      .then((m) => {
+        setMe(m);
+        try { localStorage.setItem('ponto_me_cache', JSON.stringify(m)); } catch {}
+      })
       .catch((e) => setErrorMsg(e?.message || 'Falha ao carregar usuário'));
   }, []);
 
