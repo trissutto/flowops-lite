@@ -198,11 +198,16 @@ export class CorreiosService {
     const headers = await this.auth.authHeader();
     const base = this.auth.baseUrl;
 
-    // Telefone CWS quer DDD e número separados.
+    // Telefone CWS quer DDD e número separados — e o Correios VALIDA o
+    // celular (DDD + 9 dígitos). Formato quebrado (8 díg, +55, fixo) TRAVA a
+    // pré-postagem inteira (29/07) → só manda quando é celular VÁLIDO;
+    // senão OMITE o campo (é opcional — melhor sem celular do que sem etiqueta).
     const splitFone = (tel?: string) => {
-      const d = (tel || '').replace(/\D/g, '');
-      if (d.length < 10) return { ddd: '', numero: d };
-      return { ddd: d.slice(0, 2), numero: d.slice(2) };
+      let d = (tel || '').replace(/\D/g, '');
+      if ((d.length === 13 || d.length === 12) && d.startsWith('55')) d = d.slice(2); // +55
+      if (d.length === 10 && d[2] >= '6') d = `${d.slice(0, 2)}9${d.slice(2)}`; // celular antigo sem o 9
+      if (d.length === 11 && d[2] === '9') return { ddd: d.slice(0, 2), numero: d.slice(2) };
+      return { ddd: '', numero: '' }; // inválido/fixo → não manda
     };
     const foneRem = splitFone(input.remetente.telefone);
     const foneDest = splitFone(input.destinatario.telefone);
