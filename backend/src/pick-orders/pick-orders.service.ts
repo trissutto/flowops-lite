@@ -328,31 +328,10 @@ export class PickOrdersService {
       },
     });
 
-    // ── DC-e (declaração de conteúdo eletrônica) do pacote ────────────────
-    // Gated por DCE_ENABLED=1. Cada envio/loja emite a SUA DC-e só com os
-    // itens deste pacote. Falha na DC-e NÃO derruba o envio (a etiqueta já
-    // saiu) — devolve o erro pro front avisar. DCE_AMBIENTE=2 força
-    // homologação durante a validação.
-    let dce: any = null;
-    if (String(process.env.DCE_ENABLED || '').trim() === '1') {
-      try {
-        const dados = await this.montarDadosDce(order, pick, r);
-        if (dados) {
-          const amb = process.env.DCE_AMBIENTE === '1' ? '1' : process.env.DCE_AMBIENTE === '2' ? '2' : undefined;
-          const doc: any = await this.dce.emitir({
-            storeCode: String(store?.code || ''),
-            dest: dados.dest,
-            itens: dados.itens,
-            pickOrderId: id,
-            ambienteOverride: amb as any,
-          });
-          dce = { id: doc.id, status: doc.status, cStat: doc.cStat, xMotivo: doc.xMotivo, chave: doc.chave };
-        }
-      } catch (e: any) {
-        this.logger.warn(`[dce] falha ao emitir pro pick ${id}: ${e?.message || e}`);
-        dce = { status: 'error', erro: String(e?.message || e).slice(0, 300) };
-      }
-    }
+    // DC-e REMOVIDA do fluxo do envio (dono 29/07: "optamos pela NF-e") —
+    // a SEFAZ bloqueia contribuinte de ICMS de emitir DC-e (cStat 812) e a
+    // NF-e do envio já cumpre o papel. Módulo dce/ segue dormente no código.
+    const dce: any = null;
 
     return { ok: true, codigoRastreio: r.codigoRastreio, idPrepostagem: r.idPrepostagem ?? null, servico: r.servico ?? null, carrier: r.carrier ?? null, etiquetaPdf: r.etiquetaPdf ?? null, dce, nfe };
   }
