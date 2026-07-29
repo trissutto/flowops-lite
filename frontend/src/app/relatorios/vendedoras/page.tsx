@@ -26,6 +26,7 @@ type ReportSeller = {
   pdvCount?: number;
   totalPdv?: number;
   lojas?: string[];
+  lojaLabel?: string | null;
   sellerId: string | null;
   sellerName: string;
   orderCount: number;
@@ -331,8 +332,9 @@ export default function RelatorioVendedorasPage() {
                           data.totals.totalAmount > 0
                             ? Math.round((s.totalAmount / data.totals.totalAmount) * 100)
                             : 0;
-                        // Vendedoras do PDV não têm sellerId — chave pelo nome
-                        const key = s.sellerId || (s.orderCount > 0 ? '__none__' : `nome:${s.sellerName}`);
+                        // Vendedoras do PDV não têm sellerId — chave nome×loja
+                        // (homônimas em lojas diferentes são linhas separadas)
+                        const key = s.sellerId || (s.orderCount > 0 ? '__none__' : `nome:${s.sellerName}:${(s.lojas || []).join('-')}`);
                         const isNone = !s.sellerId;
                         const isActive = filtroSeller === key;
                         return (
@@ -350,8 +352,15 @@ export default function RelatorioVendedorasPage() {
                                 <span className="text-xs mr-1" title="Líder do período">🏆</span>
                               )}
                               <span className="font-semibold">{s.sellerName}</span>
-                              {(s.lojas?.length ?? 0) > 0 && (
-                                <div className="text-[10px] text-slate-400 not-italic">lojas {s.lojas!.join(', ')}</div>
+                              {/* Identificação da LOJA ao lado do nome (dono 29/07) */}
+                              {(s.lojaLabel || (s.lojas?.length ? `loja ${s.lojas.join(', ')}` : '')) !== '' && (
+                                <span className={`ml-2 inline-block align-middle rounded px-1.5 py-0.5 text-[10px] font-bold not-italic border ${
+                                  s.lojaLabel === 'SITE'
+                                    ? 'bg-indigo-50 border-indigo-200 text-indigo-700'
+                                    : 'bg-slate-100 border-slate-200 text-slate-600'
+                                }`}>
+                                  {s.lojaLabel || `loja ${s.lojas!.join(', ')}`}
+                                </span>
                               )}
                             </td>
                             <td className="text-right px-3 py-2 font-mono">
