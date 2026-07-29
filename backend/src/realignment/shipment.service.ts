@@ -1762,6 +1762,9 @@ export class RealignmentShipmentService {
     toStoreCode?: string;
     search?: string;
     daysAgo?: number;
+    /** Período LIVRE De/Até em YYYY-MM-DD (dono 29/07). Sem de/ate/daysAgo = TUDO. */
+    de?: string;
+    ate?: string;
   }) {
     const where: any = {};
     if (input.status) where.status = input.status;
@@ -1769,10 +1772,19 @@ export class RealignmentShipmentService {
     if (input.toStoreCode) where.toStoreCode = input.toStoreCode;
     if (input.search) where.code = { contains: input.search.trim(), mode: 'insensitive' };
 
-    const days = Number.isFinite(input.daysAgo) && (input.daysAgo as number) > 0 ? (input.daysAgo as number) : 30;
-    const since = new Date();
-    since.setDate(since.getDate() - days);
-    where.openedAt = { gte: since };
+    // Período: De/Até livres têm prioridade; daysAgo segue como legado; sem
+    // nenhum dos dois = SEM recorte (todo o histórico, limitado pelo take).
+    const isoDia = /^\d{4}-\d{2}-\d{2}$/;
+    const periodo: any = {};
+    if (input.de && isoDia.test(input.de)) periodo.gte = new Date(`${input.de}T00:00:00-03:00`);
+    if (input.ate && isoDia.test(input.ate)) periodo.lte = new Date(`${input.ate}T23:59:59.999-03:00`);
+    if (periodo.gte || periodo.lte) {
+      where.openedAt = periodo;
+    } else if (Number.isFinite(input.daysAgo) && (input.daysAgo as number) > 0) {
+      const since = new Date();
+      since.setDate(since.getDate() - (input.daysAgo as number));
+      where.openedAt = { gte: since };
+    }
 
     const shipments = await (this.prisma as any).realignmentShipment.findMany({
       where,
