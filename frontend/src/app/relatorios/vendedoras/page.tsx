@@ -331,8 +331,9 @@ export default function RelatorioVendedorasPage() {
                           data.totals.totalAmount > 0
                             ? Math.round((s.totalAmount / data.totals.totalAmount) * 100)
                             : 0;
-                        // Vendedoras do PDV não têm sellerId — chave pelo nome
-                        const key = s.sellerId || (s.orderCount > 0 ? '__none__' : `nome:${s.sellerName}`);
+                        // Vendedoras do PDV não têm sellerId — chave nome×loja
+                        // (homônimas em lojas diferentes são linhas separadas)
+                        const key = s.sellerId || (s.orderCount > 0 ? '__none__' : `nome:${s.sellerName}:${(s.lojas || []).join('-')}`);
                         const isNone = !s.sellerId;
                         const isActive = filtroSeller === key;
                         return (

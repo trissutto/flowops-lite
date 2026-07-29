@@ -638,9 +638,12 @@ export class SellersService {
     });
 
     const normNome = (s: any) => String(s || '').trim().toUpperCase().replace(/\s+/g, ' ');
+    // CHAVE = nome × LOJA (dono 29/07: "juntou a Elaine de Itanhaém com a de
+    // Campinas?" — cadastros do PDV usam só o primeiro nome; homônimas em
+    // lojas diferentes são pessoas DIFERENTES). Cada vendedora×loja = 1 linha.
     const pdvBucket = new Map<string, { sellerName: string; pdvCount: number; totalPdv: number; lojas: Set<string> }>();
     const addPdv = (nome: string, valor: number, loja: string, contaVenda: boolean) => {
-      const key = normNome(nome) || 'SEM VENDEDORA';
+      const key = `${normNome(nome) || 'SEM VENDEDORA'}|${String(loja || '')}`;
       const cur = pdvBucket.get(key) || { sellerName: nome || 'Sem vendedora', pdvCount: 0, totalPdv: 0, lojas: new Set<string>() };
       if (contaVenda) cur.pdvCount += 1;
       cur.totalPdv += valor;
@@ -660,11 +663,11 @@ export class SellersService {
       }
     }
 
-    // Junta SITE + PDV por nome de vendedora
-    const merged = new Map<string, any>();
+    // SEM fusão site×PDV nem entre lojas: linhas do site (por sellerId) +
+    // linhas do PDV (por vendedora×loja) — homônimas nunca se misturam.
+    const sellers: any[] = [];
     for (const s of bucket.values()) {
-      const key = normNome(s.sellerName);
-      merged.set(key, {
+      sellers.push({
         sellerId: s.sellerId,
         sellerName: s.sellerName,
         orderCount: s.orderCount,
@@ -675,18 +678,19 @@ export class SellersService {
         totalAmount: s.totalAmount,
       });
     }
-    for (const [key, p] of pdvBucket.entries()) {
-      const cur = merged.get(key) || {
-        sellerId: null, sellerName: p.sellerName,
-        orderCount: 0, totalSite: 0, pdvCount: 0, totalPdv: 0, lojas: [], totalAmount: 0,
-      };
-      cur.pdvCount = p.pdvCount;
-      cur.totalPdv = Math.round(p.totalPdv * 100) / 100;
-      cur.lojas = Array.from(p.lojas).sort();
-      cur.totalAmount = Math.round((cur.totalSite + p.totalPdv) * 100) / 100;
-      merged.set(key, cur);
+    for (const p of pdvBucket.values()) {
+      sellers.push({
+        sellerId: null,
+        sellerName: p.sellerName,
+        orderCount: 0,
+        totalSite: 0,
+        pdvCount: p.pdvCount,
+        totalPdv: Math.round(p.totalPdv * 100) / 100,
+        lojas: Array.from(p.lojas).sort(),
+        totalAmount: Math.round(p.totalPdv * 100) / 100,
+      });
     }
-    const sellers = Array.from(merged.values()).sort((a, b) => b.totalAmount - a.totalAmount);
+    sellers.sort((a, b) => b.totalAmount - a.totalAmount);
 
     const totalSite = orders.reduce((a, o) => a + Number(o.totalAmount || 0), 0);
     const totals = {
