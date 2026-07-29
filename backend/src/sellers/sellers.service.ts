@@ -665,6 +665,9 @@ export class SellersService {
 
     // SEM fusão site×PDV nem entre lojas: linhas do site (por sellerId) +
     // linhas do PDV (por vendedora×loja) — homônimas nunca se misturam.
+    // lojaLabel = etiqueta "código nome" pro chip ao lado do nome (dono 29/07).
+    const lojasCad = await this.prisma.store.findMany({ select: { code: true, name: true } });
+    const nomeLoja = new Map(lojasCad.map((l) => [l.code, l.name]));
     const sellers: any[] = [];
     for (const s of bucket.values()) {
       sellers.push({
@@ -675,10 +678,12 @@ export class SellersService {
         pdvCount: 0,
         totalPdv: 0,
         lojas: [] as string[],
+        lojaLabel: 'SITE',
         totalAmount: s.totalAmount,
       });
     }
     for (const p of pdvBucket.values()) {
+      const lojas = Array.from(p.lojas).sort();
       sellers.push({
         sellerId: null,
         sellerName: p.sellerName,
@@ -686,7 +691,8 @@ export class SellersService {
         totalSite: 0,
         pdvCount: p.pdvCount,
         totalPdv: Math.round(p.totalPdv * 100) / 100,
-        lojas: Array.from(p.lojas).sort(),
+        lojas,
+        lojaLabel: lojas.map((c) => `${c} ${nomeLoja.get(c) || ''}`.trim()).join(', ') || null,
         totalAmount: Math.round(p.totalPdv * 100) / 100,
       });
     }
