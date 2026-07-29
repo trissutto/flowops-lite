@@ -20,11 +20,22 @@ export class NfeSequenceService {
   async next(
     storeCode: string,
     serie: string,
-    opts: { modelo?: string; start?: number } = {},
+    opts: { modelo?: string; start?: number; legacyKey?: string } = {},
   ): Promise<number> {
     const modelo = opts.modelo || '55';
-    const start = Math.max(1, opts.start ?? 1);
+    let start = Math.max(1, opts.start ?? 1);
     const where = { storeCode_modelo_serie: { storeCode, modelo, serie } };
+
+    // MIGRAÇÃO 29/07 (numeração passou a ser POR CNPJ): na 1ª emissão da
+    // chave nova, herda o contador da linha LEGADA da loja (legacyKey) —
+    // senão a filial recomeçaria do 1 e dependeria do pula-pula de 539.
+    const existente = await this.prisma.nfeSequence.findUnique({ where });
+    if (!existente && opts.legacyKey && opts.legacyKey !== storeCode) {
+      const legado = await this.prisma.nfeSequence.findUnique({
+        where: { storeCode_modelo_serie: { storeCode: opts.legacyKey, modelo, serie } },
+      });
+      if (legado) start = Math.max(start, legado.proximo);
+    }
 
     // Garante a linha (não incrementa se já existe).
     await this.prisma.nfeSequence.upsert({
