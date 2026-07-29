@@ -340,6 +340,13 @@ export default function RemessasAdminPage() {
       // o doc pro painel (bug 23/07: lia no nível de cima e mostrava vazio)
       const d = r?.doc || r || {};
       setNfeResult({ ...d, ok: r?.ok, jaEmitida: r?.jaEmitida, warnings: r?.warnings });
+      // Selo "NF-e" da LISTA em tempo real (dono 29/07): autorizou → atualiza
+      // a linha na hora, sem esperar F5/Atualizar.
+      if (r?.ok && (d?.status === 'authorized' || r?.jaEmitida)) {
+        setRows((prev) => prev.map((x) => (x.id === detailId
+          ? { ...x, nfeEmitida: true, nfeNumero: d?.numero ?? x.nfeNumero, nfeSerie: d?.serie ?? x.nfeSerie }
+          : x)));
+      }
     } catch (e: any) {
       setNfeResult({ erro: e?.message || 'Falha na emissão' });
     } finally {

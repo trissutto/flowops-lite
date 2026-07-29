@@ -731,9 +731,7 @@ export default function MinhaLojaPage() {
         ? { ...x, trackingCode: r.codigoRastreio, carrier: r.carrier || (r.servico ? `Correios ${r.servico}` : 'Correios'), correiosPrepostagemId: r.idPrepostagem ?? null }
         : x)));
       pushToast(`📮 Envio gerado (${r.servico ?? '—'}): ${r.codigoRastreio} — aguardando postagem`);
-      if (r.dce?.status === 'error' || r.dce?.status === 'rejected') {
-        pushToast(`DC-e falhou (${r.dce?.cStat ?? ''}): ${r.dce?.xMotivo ?? r.dce?.erro ?? 'ver retaguarda'}`);
-      }
+      // DC-e saiu do fluxo (dono 29/07): a NF-e do envio cumpre o papel.
       // NF-e do envio: falha vira aviso (a DANFE autorizada vem no PDF único)
       if (r.nfe?.status === 'error' || r.nfe?.status === 'rejected') {
         pushToast(`NF-e do envio falhou (${r.nfe?.cStat ?? ''}): ${r.nfe?.xMotivo ?? r.nfe?.erro ?? 'ver retaguarda'}`);
