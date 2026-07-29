@@ -87,6 +87,17 @@ type KPIs = {
   total90d: number;
 };
 
+// Período De/Até (padrão da casa: datas livres + atalhos — nunca dropdown fixo)
+const diasAtrasISO = (n: number) => {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return d.toISOString().slice(0, 10);
+};
+const inicioDoMesISO = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
+};
+
 const STATUS_LABEL: Record<string, string> = {
   open: 'Em montagem',
   in_transit: 'Em trânsito',
@@ -112,7 +123,9 @@ export default function RemessasAdminPage() {
   const [origemFiltro, setOrigemFiltro] = useState<string>(''); // '' = todas
   const [destinoFiltro, setDestinoFiltro] = useState<string>('');
   const [search, setSearch] = useState('');
-  const [daysAgo, setDaysAgo] = useState(30);
+  // De/Até livres (dono 29/07). Vazio dos dois lados = TODO o histórico.
+  const [de, setDe] = useState(diasAtrasISO(30));
+  const [ate, setAte] = useState('');
 
   // Detalhe modal
   const [detail, setDetail] = useState<ShipmentDetail | null>(null);
@@ -193,7 +206,8 @@ export default function RemessasAdminPage() {
       const params = new URLSearchParams();
       if (statusFilter) params.set('status', statusFilter);
       if (search.trim()) params.set('search', search.trim());
-      params.set('daysAgo', String(daysAgo));
+      if (de) params.set('de', de);
+      if (ate) params.set('ate', ate);
 
       const [list, k] = await Promise.all([
         api<ShipmentRow[]>(`/realignment/shipments/admin/all?${params.toString()}`),
@@ -211,7 +225,7 @@ export default function RemessasAdminPage() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [statusFilter, daysAgo]);
+  }, [statusFilter, de, ate]);
 
   // Opções de loja pros selects (origem/destino) — deduplicadas das remessas
   const lojaOpcoes = useMemo(() => {
@@ -433,7 +447,7 @@ export default function RemessasAdminPage() {
               Remessas em trânsito
             </h1>
             <p className="text-xs text-slate-500">
-              Rastreio de todas as caixas de realinhamento entre lojas (últimos {daysAgo} dias)
+              Rastreio de todas as caixas de realinhamento entre lojas ({de || ate ? `${de ? de.split('-').reverse().join('/') : 'início'} → ${ate ? ate.split('-').reverse().join('/') : 'hoje'}` : 'todo o histórico'})
             </p>
           </div>
           <button
@@ -549,15 +563,41 @@ export default function RemessasAdminPage() {
             <option value="in_transit">Em trânsito</option>
             <option value="received">Recebidas</option>
           </select>
-          <select
-            value={daysAgo}
-            onChange={(e) => setDaysAgo(Number(e.target.value))}
-            className="text-sm border rounded-md px-3 py-2"
-          >
-            <option value={7}>Últimos 7 dias</option>
-            <option value={30}>Últimos 30 dias</option>
-            <option value={90}>Últimos 90 dias</option>
-          </select>
+          {/* Período De/Até livre + atalhos (dono 29/07 — sem dropdown fixo) */}
+          <div className="flex items-center gap-1">
+            <input
+              type="date"
+              value={de}
+              onChange={(e) => setDe(e.target.value)}
+              className="text-sm border rounded-md px-2 py-2"
+              title="De (vazio = desde o início)"
+            />
+            <span className="text-xs text-slate-400">→</span>
+            <input
+              type="date"
+              value={ate}
+              onChange={(e) => setAte(e.target.value)}
+              className="text-sm border rounded-md px-2 py-2"
+              title="Até (vazio = hoje)"
+            />
+          </div>
+          <div className="flex flex-wrap gap-1">
+            {([
+              ['Hoje', () => { setDe(diasAtrasISO(0)); setAte(''); }],
+              ['7 dias', () => { setDe(diasAtrasISO(7)); setAte(''); }],
+              ['Mês', () => { setDe(inicioDoMesISO()); setAte(''); }],
+              ['90 dias', () => { setDe(diasAtrasISO(90)); setAte(''); }],
+              ['Tudo', () => { setDe(''); setAte(''); }],
+            ] as Array<[string, () => void]>).map(([label, fn]) => (
+              <button
+                key={label}
+                onClick={fn}
+                className="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Barra da emissão em massa */}

@@ -889,6 +889,8 @@ export class RealignmentController {
     @Query('toStoreCode') toStoreCode?: string,
     @Query('search') search?: string,
     @Query('daysAgo') daysAgo?: string,
+    @Query('de') de?: string,
+    @Query('ate') ate?: string,
   ) {
     if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
     return this.shipment.listAllShipmentsAdmin({
@@ -897,6 +899,8 @@ export class RealignmentController {
       toStoreCode,
       search,
       daysAgo: daysAgo ? Number(daysAgo) : undefined,
+      de,
+      ate,
     });
   }
 

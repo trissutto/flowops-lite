@@ -1016,14 +1016,17 @@ export class NfeTransferService {
     //     das notas antigas do GigaNFe (nº 518). Confirmar com o contador.
     //   CRT 1 (Simples): CSOSN 400 sempre.
     // LUCRO PRESUMIDO (contador 29/07): DESTACAR ICMS 18% (transferência de
-    // crédito — Anexo XI Port. SRE 41/2023), PIS 0,65%, COFINS 3% e IBS/CBS.
+    // crédito — Anexo XI Port. SRE 41/2023), PIS 0,65% e COFINS 3%.
     // Kill-switch do destaque: NFE_TRANSFER_ICMS=sem (volta CST 90 + cBenef).
     const crt3 = String(p.origem.regime || '1') === '3';
     const icmsDestacado = crt3 && String(process.env.NFE_TRANSFER_ICMS ?? 'destacado').trim() === 'destacado';
     const aliqInterna = Number(process.env.NFE_ICMS_ALIQ_INTERNA ?? 18);
     const aliqInter = Number(process.env.NFE_ICMS_ALIQ_INTERESTADUAL ?? 12);
     const { pPIS, pCOFINS } = this.aliqPisCofins();
-    const ib = this.ibscbsCfg(crt3);
+    // IBS/CBS SÓ NAS VENDAS (contador 29/07): transferência entre mesmo
+    // titular NÃO leva o grupo (é zero) — as notas 2332/2334 autorizaram sem
+    // ele. Grupo desligado aqui; a VENDA (buildVendaXml) continua com ele.
+    const ib = this.ibscbsCfg(false);
 
     // cBenef (SEFAZ-SP exige com CST 40/41 desde 04/2026 — cStat 930 sem ele;
     // "SEM CBENEF" foi DESATIVADO em 01/07/2026 → cStat 946). Vai no <prod>,
