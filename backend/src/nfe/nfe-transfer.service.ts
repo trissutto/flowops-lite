@@ -253,7 +253,14 @@ export class NfeTransferService {
       throw new BadRequestException('Justificativa do cancelamento precisa ter entre 15 e 255 caracteres.');
     }
 
-    const origem = await this.loadStoreFiscal(doc.fromStoreCode, { requireCert: true });
+    // O AUTOR do evento tem que ser o EMITENTE da chave — transferência pode
+    // ter sido emitida pela raiz do DESTINO (matchRaiz), não pela identidade
+    // primária da loja origem. Sem isso a SEFAZ recusa com cStat 574 (29/07).
+    const cnpjEmitente = String(doc.chave).slice(6, 20);
+    const origem = await this.loadStoreFiscal(doc.fromStoreCode, {
+      requireCert: true,
+      matchRaiz: cnpjEmitente.slice(0, 8),
+    });
     const amb: '1' | '2' = doc.tpAmb === '1' ? '1' : '2';
     const endpoint = SEFAZ_SP_NFE_ENDPOINTS[amb].eventos;
 
@@ -261,7 +268,7 @@ export class NfeTransferService {
       chave: doc.chave,
       protocolo: doc.protocolo,
       justificativa: just,
-      cnpj: origem.cnpj,
+      cnpj: cnpjEmitente,
       ambiente: amb,
       pfxBase64: origem.certPfxB64,
       pfxPassword: origem.certPfxPass,
@@ -849,6 +856,63 @@ export class NfeTransferService {
       .replace(/"/g, '&quot;');
   }
 
+  /** Alíquotas PIS/COFINS do Lucro Presumido (cumulativo) — destaque exigido
+   *  pelo contador (29/07): PIS 0,65% e COFINS 3% sobre o valor do item. */
+  private aliqPisCofins() {
+    return {
+      pPIS: Number(process.env.NFE_ALIQ_PIS ?? 0.65),
+      pCOFINS: Number(process.env.NFE_ALIQ_COFINS ?? 3.0),
+    };
+  }
+
+  /** Reforma Tributária (NT 2025.002): grupo IBS/CBS da NF-e — MESMO molde do
+   *  NFC-e (validado em produção). CRT 3 desde 2026; alíquotas de teste da LC
+   *  214/2025 (IBS UF 0,10 + Mun 0,00 + CBS 0,90), POR FORA — não somam no
+   *  vNF. Kill-switch: NFE_IBSCBS=0. */
+  private ibscbsCfg(crt3: boolean) {
+    return {
+      on: crt3 && process.env.NFE_IBSCBS !== '0',
+      pIBSUF: Number(process.env.NFE_ALIQ_IBSUF ?? 0.10),
+      pIBSMun: Number(process.env.NFE_ALIQ_IBSMUN ?? 0.0),
+      pCBS: Number(process.env.NFE_ALIQ_CBS ?? 0.90),
+      cst: String(process.env.NFE_IBSCBS_CST || '000'),
+      cClassTrib: String(process.env.NFE_IBSCBS_CCLASSTRIB || '000001'),
+    };
+  }
+
+  private ibscbsItem(cfg: ReturnType<NfeTransferService['ibscbsCfg']>, vBC: number) {
+    if (!cfg.on) return { xml: '', vIBSUF: 0, vIBSMun: 0, vCBS: 0 };
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+    const vIBSUF = r2(vBC * (cfg.pIBSUF / 100));
+    const vIBSMun = r2(vBC * (cfg.pIBSMun / 100));
+    const vCBS = r2(vBC * (cfg.pCBS / 100));
+    const xml =
+      `<IBSCBS><CST>${cfg.cst}</CST><cClassTrib>${cfg.cClassTrib}</cClassTrib>` +
+      `<gIBSCBS><vBC>${vBC.toFixed(2)}</vBC>` +
+      `<gIBSUF><pIBSUF>${cfg.pIBSUF.toFixed(4)}</pIBSUF><vIBSUF>${vIBSUF.toFixed(2)}</vIBSUF></gIBSUF>` +
+      `<gIBSMun><pIBSMun>${cfg.pIBSMun.toFixed(4)}</pIBSMun><vIBSMun>${vIBSMun.toFixed(2)}</vIBSMun></gIBSMun>` +
+      `<vIBS>${(vIBSUF + vIBSMun).toFixed(2)}</vIBS>` +
+      `<gCBS><pCBS>${cfg.pCBS.toFixed(4)}</pCBS><vCBS>${vCBS.toFixed(2)}</vCBS></gCBS>` +
+      `</gIBSCBS></IBSCBS>`;
+    return { xml, vIBSUF, vIBSMun, vCBS };
+  }
+
+  private ibscbsTot(
+    cfg: ReturnType<NfeTransferService['ibscbsCfg']>,
+    t: { vBC: number; vIBSUF: number; vIBSMun: number; vCBS: number },
+    vNF: string,
+  ) {
+    if (!cfg.on) return '';
+    return (
+      `<IBSCBSTot><vBCIBSCBS>${t.vBC.toFixed(2)}</vBCIBSCBS>` +
+      `<gIBS><gIBSUF><vDif>0.00</vDif><vDevTrib>0.00</vDevTrib><vIBSUF>${t.vIBSUF.toFixed(2)}</vIBSUF></gIBSUF>` +
+      `<gIBSMun><vDif>0.00</vDif><vDevTrib>0.00</vDevTrib><vIBSMun>${t.vIBSMun.toFixed(2)}</vIBSMun></gIBSMun>` +
+      `<vIBS>${(t.vIBSUF + t.vIBSMun).toFixed(2)}</vIBS><vCredPres>0.00</vCredPres><vCredPresCondSus>0.00</vCredPresCondSus></gIBS>` +
+      `<gCBS><vDif>0.00</vDif><vDevTrib>0.00</vDevTrib><vCBS>${t.vCBS.toFixed(2)}</vCBS><vCredPres>0.00</vCredPres><vCredPresCondSus>0.00</vCredPresCondSus></gCBS>` +
+      `</IBSCBSTot><vNFTot>${vNF}</vNFTot>`
+    );
+  }
+
   /** Regra do transporte da remessa (dono 29/07): escolhido na tela
    *  (transportMode) ou automático — até 10 peças → Correios; acima → próprio. */
   private transporteDaRemessa(shipment: any, items: Array<{ qty: number }>): 'correios' | 'proprio' {
@@ -925,11 +989,15 @@ export class NfeTransferService {
     //   'destacado': ICMS00 CST 00 (18% interna / 12% interestadual) — modelo
     //     das notas antigas do GigaNFe (nº 518). Confirmar com o contador.
     //   CRT 1 (Simples): CSOSN 400 sempre.
-    // PIS/COFINS CST 01 zerados e IPI 999/99 nos dois modos (igual à real).
+    // LUCRO PRESUMIDO (contador 29/07): DESTACAR ICMS 18% (transferência de
+    // crédito — Anexo XI Port. SRE 41/2023), PIS 0,65%, COFINS 3% e IBS/CBS.
+    // Kill-switch do destaque: NFE_TRANSFER_ICMS=sem (volta CST 90 + cBenef).
     const crt3 = String(p.origem.regime || '1') === '3';
-    const icmsDestacado = crt3 && String(process.env.NFE_TRANSFER_ICMS ?? 'sem').trim() === 'destacado';
+    const icmsDestacado = crt3 && String(process.env.NFE_TRANSFER_ICMS ?? 'destacado').trim() === 'destacado';
     const aliqInterna = Number(process.env.NFE_ICMS_ALIQ_INTERNA ?? 18);
     const aliqInter = Number(process.env.NFE_ICMS_ALIQ_INTERESTADUAL ?? 12);
+    const { pPIS, pCOFINS } = this.aliqPisCofins();
+    const ib = this.ibscbsCfg(crt3);
 
     // cBenef (SEFAZ-SP exige com CST 40/41 desde 04/2026 — cStat 930 sem ele;
     // "SEM CBENEF" foi DESATIVADO em 01/07/2026 → cStat 946). Vai no <prod>,
@@ -941,6 +1009,9 @@ export class NfeTransferService {
 
     let totBC = 0;
     let totICMS = 0;
+    let totPIS = 0;
+    let totCOFINS = 0;
+    const ibTot = { vBC: 0, vIBSUF: 0, vIBSMun: 0, vCBS: 0 };
     const det = p.items
       .map((it, idx) => {
         const xProd = homolog ? HOMOLOG_FRASE : it.xProd;
@@ -983,16 +1054,30 @@ export class NfeTransferService {
         } else {
           icms = `<ICMS><ICMSSN102><orig>0</orig><CSOSN>400</CSOSN></ICMSSN102></ICMS>`;
         }
+        // Presumido: PIS 0,65% e COFINS 3% destacados sobre o item (contador 29/07)
+        const vBCItem = Math.round(it.vProd * 100) / 100;
+        const vPisItem = crt3 ? Math.round(vBCItem * pPIS) / 100 : 0;
+        const vCofItem = crt3 ? Math.round(vBCItem * pCOFINS) / 100 : 0;
+        totPIS += vPisItem;
+        totCOFINS += vCofItem;
         const pisCofins = crt3
-          ? `<PIS><PISAliq><CST>01</CST><vBC>0.00</vBC><pPIS>0.0000</pPIS><vPIS>0.00</vPIS></PISAliq></PIS>` +
-            `<COFINS><COFINSAliq><CST>01</CST><vBC>0.00</vBC><pCOFINS>0.0000</pCOFINS><vCOFINS>0.00</vCOFINS></COFINSAliq></COFINS>`
+          ? `<PIS><PISAliq><CST>01</CST><vBC>${this.money(vBCItem)}</vBC><pPIS>${pPIS.toFixed(4)}</pPIS><vPIS>${this.money(vPisItem)}</vPIS></PISAliq></PIS>` +
+            `<COFINS><COFINSAliq><CST>01</CST><vBC>${this.money(vBCItem)}</vBC><pCOFINS>${pCOFINS.toFixed(4)}</pCOFINS><vCOFINS>${this.money(vCofItem)}</vCOFINS></COFINSAliq></COFINS>`
           : `<PIS><PISOutr><CST>99</CST><vBC>0.00</vBC><pPIS>0.0000</pPIS><vPIS>0.00</vPIS></PISOutr></PIS>` +
             `<COFINS><COFINSOutr><CST>99</CST><vBC>0.00</vBC><pCOFINS>0.0000</pCOFINS><vCOFINS>0.00</vCOFINS></COFINSOutr></COFINS>`;
+        const ibi = this.ibscbsItem(ib, vBCItem);
+        if (ib.on) {
+          ibTot.vBC += vBCItem;
+          ibTot.vIBSUF += ibi.vIBSUF;
+          ibTot.vIBSMun += ibi.vIBSMun;
+          ibTot.vCBS += ibi.vCBS;
+        }
         const imposto =
           `<imposto>` +
           icms +
           `<IPI><cEnq>999</cEnq><IPITrib><CST>99</CST><vBC>0.00</vBC><pIPI>0.0000</pIPI><vIPI>0.00</vIPI></IPITrib></IPI>` +
           pisCofins +
+          ibi.xml +
           `</imposto>`;
         return `<det nItem="${idx + 1}">${prod}${imposto}</det>`;
       })
@@ -1005,9 +1090,9 @@ export class NfeTransferService {
       `<vFCP>0.00</vFCP><vBCST>0.00</vBCST><vST>0.00</vST><vFCPST>0.00</vFCPST><vFCPSTRet>0.00</vFCPSTRet>` +
       `<vProd>${vTot}</vProd>` +
       `<vFrete>0.00</vFrete><vSeg>0.00</vSeg><vDesc>0.00</vDesc><vII>0.00</vII>` +
-      `<vIPI>0.00</vIPI><vIPIDevol>0.00</vIPIDevol><vPIS>0.00</vPIS><vCOFINS>0.00</vCOFINS>` +
+      `<vIPI>0.00</vIPI><vIPIDevol>0.00</vIPIDevol><vPIS>${this.money(totPIS)}</vPIS><vCOFINS>${this.money(totCOFINS)}</vCOFINS>` +
       `<vOutro>0.00</vOutro><vNF>${vTot}</vNF>` +
-      `</ICMSTot></total>`;
+      `</ICMSTot>${this.ibscbsTot(ib, ibTot, vTot)}</total>`;
 
     // TRANSPORTE PRÓPRIO por conta do remetente (modFrete=3, "veículo próprio"
     // — dono 24/07) + VOLUME(S). Peso TOTAL = nº peças × 0,25 kg. Nº de volumes
@@ -1353,10 +1438,16 @@ export class NfeTransferService {
     const temDifal = crt3 && p.interestadual && !destIE;
     const pIcmsUfDest = temDifal ? aliqInternaUF(p.dest.uf) : 0;
     const pFcpDest = temDifal ? fcpUF(p.dest.uf) : 0;
+    // Presumido (contador 29/07): PIS 0,65 + COFINS 3 destacados + grupo IBS/CBS
+    const { pPIS, pCOFINS } = this.aliqPisCofins();
+    const ib = this.ibscbsCfg(crt3);
     let totBC = 0;
     let totICMS = 0;
     let totIcmsUfDest = 0;
     let totFcpUfDest = 0;
+    let totPIS = 0;
+    let totCOFINS = 0;
+    const ibTot = { vBC: 0, vIBSUF: 0, vIBSMun: 0, vCBS: 0 };
     const det = p.items
       .map((it, idx) => {
         const xProd = homolog ? HOMOLOG_FRASE : it.xProd;
@@ -1392,10 +1483,22 @@ export class NfeTransferService {
           // Simples Nacional — CSOSN 102 (tributada, sem crédito), igual à NFC-e.
           icms = `<ICMS><ICMSSN102><orig>0</orig><CSOSN>102</CSOSN></ICMSSN102></ICMS>`;
         }
+        const vBCItem = Math.round(it.vProd * 100) / 100;
+        const vPisItem = crt3 ? Math.round(vBCItem * pPIS) / 100 : 0;
+        const vCofItem = crt3 ? Math.round(vBCItem * pCOFINS) / 100 : 0;
+        totPIS += vPisItem;
+        totCOFINS += vCofItem;
         const pisCofins = crt3
-          ? `<PIS><PISAliq><CST>01</CST><vBC>0.00</vBC><pPIS>0.0000</pPIS><vPIS>0.00</vPIS></PISAliq></PIS><COFINS><COFINSAliq><CST>01</CST><vBC>0.00</vBC><pCOFINS>0.0000</pCOFINS><vCOFINS>0.00</vCOFINS></COFINSAliq></COFINS>`
+          ? `<PIS><PISAliq><CST>01</CST><vBC>${this.money(vBCItem)}</vBC><pPIS>${pPIS.toFixed(4)}</pPIS><vPIS>${this.money(vPisItem)}</vPIS></PISAliq></PIS><COFINS><COFINSAliq><CST>01</CST><vBC>${this.money(vBCItem)}</vBC><pCOFINS>${pCOFINS.toFixed(4)}</pCOFINS><vCOFINS>${this.money(vCofItem)}</vCOFINS></COFINSAliq></COFINS>`
           : `<PIS><PISNT><CST>07</CST></PISNT></PIS><COFINS><COFINSNT><CST>07</CST></COFINSNT></COFINS>`;
-        return `<det nItem="${idx + 1}">${prod}<imposto>${icms}${pisCofins}${icmsUfDest}</imposto></det>`;
+        const ibi = this.ibscbsItem(ib, vBCItem);
+        if (ib.on) {
+          ibTot.vBC += vBCItem;
+          ibTot.vIBSUF += ibi.vIBSUF;
+          ibTot.vIBSMun += ibi.vIBSMun;
+          ibTot.vCBS += ibi.vCBS;
+        }
+        return `<det nItem="${idx + 1}">${prod}<imposto>${icms}${pisCofins}${icmsUfDest}${ibi.xml}</imposto></det>`;
       })
       .join('');
 
@@ -1410,7 +1513,7 @@ export class NfeTransferService {
       difalTot +
       `<vFCP>0.00</vFCP><vBCST>0.00</vBCST><vST>0.00</vST><vFCPST>0.00</vFCPST><vFCPSTRet>0.00</vFCPSTRet>` +
       `<vProd>${vTot}</vProd><vFrete>0.00</vFrete><vSeg>0.00</vSeg><vDesc>0.00</vDesc><vII>0.00</vII>` +
-      `<vIPI>0.00</vIPI><vIPIDevol>0.00</vIPIDevol><vPIS>0.00</vPIS><vCOFINS>0.00</vCOFINS><vOutro>0.00</vOutro><vNF>${vTot}</vNF></ICMSTot></total>`;
+      `<vIPI>0.00</vIPI><vIPIDevol>0.00</vIPIDevol><vPIS>${this.money(totPIS)}</vPIS><vCOFINS>${this.money(totCOFINS)}</vCOFINS><vOutro>0.00</vOutro><vNF>${vTot}</vNF></ICMSTot>${this.ibscbsTot(ib, ibTot, vTot)}</total>`;
 
     const transp = `<transp><modFrete>9</modFrete></transp>`;
     // cStat 441: tPag 99 (outros) exige a descrição <xPag> junto.
