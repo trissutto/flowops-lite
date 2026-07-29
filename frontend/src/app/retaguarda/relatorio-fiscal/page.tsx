@@ -789,8 +789,10 @@ function NfeTransferSection({ stores }: { stores: Store[] }) {
                         pela MDD mostra "17 SUZANO", não a loja física */}
                     {d.emitStoreCode ? (
                       <>
-                        <span title={`Emitente: ${d.emitNome || ''} ${d.emitCnpj || ''} · loja física de origem: ${d.fromStoreCode}`}>
-                          {d.emitStoreCode} {d.emitNome || storeName(d.emitStoreCode)}
+                        {/* NOME DA LOJA (Suzano, Vinhedo...) — a fantasia fiscal é
+                            "LURDS PLUS SIZE" em todas e não distingue nada (dono 29/07) */}
+                        <span title={`Emitente: ${d.emitNome || ''} · CNPJ ${d.emitCnpj || ''} · loja física de origem: ${d.fromStoreCode}`}>
+                          {d.emitStoreCode} {storeName(d.emitStoreCode) || d.emitNome}
                         </span>
                         {d.emitStoreCode !== d.fromStoreCode && (
                           <span className="text-slate-400 text-[10px]"> (saiu da {d.fromStoreCode})</span>
