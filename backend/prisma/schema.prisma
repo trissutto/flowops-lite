@@ -306,6 +306,9 @@ model RealignmentShipment {
   carrier               String?
   correiosPrepostagemId String?   @map("correios_prepostagem_id")
   envioGeneratedAt      DateTime? @map("envio_generated_at")
+  // Meio de transporte da remessa: 'correios' | 'proprio'. Null = regra
+  // automática (até 10 peças → correios; acima → próprio). Dono 29/07.
+  transportMode         String?   @map("transport_mode")
   // Marcador de baixa Giga: setado quando decreaseStock origem rodou com sucesso.
   // Permite reprocessar remessas que fecharam mas o estoque não baixou (idempotência).
   stockDecreasedAt  DateTime? @map("stock_decreased_at")

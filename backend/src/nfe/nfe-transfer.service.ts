@@ -141,6 +141,8 @@ export class NfeTransferService {
       const xml = this.buildXml({
         chave, cUF, cNF, serie, numero, dhEmi, tpAmb, natOp,
         origem, destino, interestadual, items, valorTotal, remCode: shipment.code,
+        // Transporte da remessa (dono 29/07): Correios → modFrete 9; próprio → default (3)
+        modFrete: this.transporteDaRemessa(shipment, items) === 'correios' ? '9' : undefined,
       });
       const xmlMin = xml.replace(/>\s+</g, '><').trim();
       let xmlAssinado: string;
@@ -847,12 +849,23 @@ export class NfeTransferService {
       .replace(/"/g, '&quot;');
   }
 
+  /** Regra do transporte da remessa (dono 29/07): escolhido na tela
+   *  (transportMode) ou automático — até 10 peças → Correios; acima → próprio. */
+  private transporteDaRemessa(shipment: any, items: Array<{ qty: number }>): 'correios' | 'proprio' {
+    const m = String(shipment?.transportMode || '');
+    if (m === 'correios' || m === 'proprio') return m as any;
+    const pecas = items.reduce((s, it) => s + (Number(it.qty) || 0), 0);
+    return pecas <= 10 ? 'correios' : 'proprio';
+  }
+
   private buildXml(p: {
     chave: string; cUF: string; cNF: string; serie: string; numero: number;
     dhEmi: string; tpAmb: '1' | '2'; natOp: string;
     origem: StoreFiscal; destino: StoreFiscal; interestadual: boolean;
     items: Array<{ sku: string; ean: string; xProd: string; ncm: string; cfop: string; qty: number; vUn: number; vProd: number }>;
     valorTotal: number; remCode: string;
+    /** Override do modFrete (regra do transporte da remessa: correios → '9'). */
+    modFrete?: string;
   }): string {
     const homolog = p.tpAmb === '2';
     const destNome = homolog ? HOMOLOG_FRASE : (p.destino.razaoSocial || 'DESTINATARIO');
@@ -1005,7 +1018,7 @@ export class NfeTransferService {
     const pecasPorVol = Number(process.env.NFE_PECAS_POR_VOLUME ?? 40) || 40;
     const pesoKg = (totalPecas * pesoPorPeca).toFixed(3);
     const qVol = Math.max(1, Math.ceil(totalPecas / pecasPorVol));
-    const modFrete = String(process.env.NFE_MODFRETE ?? '3').trim();
+    const modFrete = String(p.modFrete || process.env.NFE_MODFRETE || '3').trim();
     const transp =
       `<transp><modFrete>${modFrete}</modFrete>` +
       `<vol><qVol>${qVol}</qVol><esp>VOLUME</esp><pesoL>${pesoKg}</pesoL><pesoB>${pesoKg}</pesoB></vol>` +
