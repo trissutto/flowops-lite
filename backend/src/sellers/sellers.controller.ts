@@ -169,6 +169,20 @@ export class SellersController {
     return this.cron.checkVacationAlerts();
   }
 
+  /** CONFERIDOR Flow × Giga por loja (dono 29/07): componentes do Flow
+   *  (bruto/marcados/desconto/devoluções) + caixa do Giga lado a lado. */
+  @Get('report-conferidor')
+  reportConferidor(
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('storeCode') storeCode?: string,
+  ) {
+    const now = new Date();
+    const f = from ? new Date(from) : new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+    const t = to ? new Date(to) : new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+    return this.svc.conferidorLoja(f, t, String(storeCode || '').trim());
+  }
+
   @Get('report')
   report(@Query('from') from?: string, @Query('to') to?: string) {
     // Default: mês corrente

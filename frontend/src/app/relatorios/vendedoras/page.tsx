@@ -77,6 +77,28 @@ export default function RelatorioVendedorasPage() {
   const [data, setData] = useState<Report | null>(null);
   const [filtroSeller, setFiltroSeller] = useState<string>('all');
 
+  // CONFERIDOR Flow × Giga (dono 29/07): por loja, componentes do Flow +
+  // caixa do Giga lado a lado — pra achar divergência com nome.
+  const [confLoja, setConfLoja] = useState('');
+  const [confData, setConfData] = useState<any | null>(null);
+  const [confLoading, setConfLoading] = useState(false);
+  const conferir = async () => {
+    const loja = confLoja.trim();
+    if (!loja) return;
+    setConfLoading(true);
+    setConfData(null);
+    try {
+      const fromISO = new Date(`${from}T00:00:00`).toISOString();
+      const toISO = new Date(`${to}T23:59:59`).toISOString();
+      const qs = new URLSearchParams({ from: fromISO, to: toISO, storeCode: loja });
+      setConfData(await api<any>(`/sellers/report-conferidor?${qs.toString()}`));
+    } catch (e: any) {
+      setConfData({ erro: e?.message || 'falha' });
+    } finally {
+      setConfLoading(false);
+    }
+  };
+
   const load = async () => {
     setLoading(true);
     setError(null);
@@ -297,6 +319,82 @@ export default function RelatorioVendedorasPage() {
                   {formatBRL(data.totals.totalAmount)}
                 </div>
               </div>
+            </div>
+
+            {/* CONFERIDOR Flow × Giga por loja (dono 29/07) */}
+            <div className="bg-white rounded-xl border border-amber-200 p-3 space-y-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm font-bold text-amber-800">🔍 Conferidor Flow × Giga</span>
+                <input
+                  value={confLoja}
+                  onChange={(e) => setConfLoja(e.target.value)}
+                  placeholder="Código da loja (ex.: 06)"
+                  className="border border-slate-300 rounded-lg text-sm py-1.5 px-2 w-40"
+                />
+                <button
+                  onClick={conferir}
+                  disabled={confLoading || !confLoja.trim()}
+                  className="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-amber-700 disabled:opacity-50"
+                >
+                  {confLoading ? 'Conferindo…' : 'Conferir período'}
+                </button>
+                <span className="text-[11px] text-slate-500">
+                  Abre os componentes do Flow por vendedora e traz o CAIXA do Giga ao lado — a diferença aparece com nome.
+                </span>
+              </div>
+              {confData?.erro && <div className="text-sm text-rose-600">{confData.erro}</div>}
+              {confData?.flow && (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead className="bg-amber-50 text-[10px] uppercase text-amber-900">
+                      <tr>
+                        <th className="text-left px-2 py-1.5">Vendedora (Flow)</th>
+                        <th className="text-right px-2 py-1.5">Bruto</th>
+                        <th className="text-right px-2 py-1.5">− Desc. avulso</th>
+                        <th className="text-right px-2 py-1.5">− Devoluções</th>
+                        <th className="text-right px-2 py-1.5">= Líquido Flow</th>
+                        <th className="text-right px-2 py-1.5">Marcados (fora)</th>
+                        <th className="text-right px-2 py-1.5">Caixa Giga</th>
+                        <th className="text-right px-2 py-1.5">Diferença</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {confData.flow.map((c: any) => {
+                        const normN = (s: any) => String(s || '').trim().toUpperCase().replace(/\s+/g, ' ');
+                        const g = (confData.giga || []).find((x: any) => normN(x.nome) === normN(c.vendedora));
+                        const gigaVal = g ? Number(g.valor) : null;
+                        const diff = gigaVal != null ? Math.round((c.liquido - gigaVal) * 100) / 100 : null;
+                        return (
+                          <tr key={c.vendedora} className="border-t border-slate-100">
+                            <td className="px-2 py-1 font-semibold">{c.vendedora}</td>
+                            <td className="text-right px-2 py-1 font-mono">{formatBRL(c.bruto)}</td>
+                            <td className="text-right px-2 py-1 font-mono text-slate-500">{formatBRL(c.descontoAvulso)}</td>
+                            <td className="text-right px-2 py-1 font-mono text-slate-500">{formatBRL(c.devolucoes)}</td>
+                            <td className="text-right px-2 py-1 font-mono font-bold">{formatBRL(c.liquido)}</td>
+                            <td className="text-right px-2 py-1 font-mono text-amber-700">{formatBRL(c.marcados)}</td>
+                            <td className="text-right px-2 py-1 font-mono text-indigo-700">{gigaVal != null ? formatBRL(gigaVal) : '—'}</td>
+                            <td className={`text-right px-2 py-1 font-mono font-bold ${diff && Math.abs(diff) > 1 ? 'text-rose-600' : 'text-emerald-600'}`}>
+                              {diff != null ? formatBRL(diff) : '—'}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {(confData.giga || [])
+                        .filter((g2: any) => !confData.flow.some((c: any) =>
+                          String(c.vendedora || '').trim().toUpperCase().replace(/\s+/g, ' ') === String(g2.nome || '').trim().toUpperCase().replace(/\s+/g, ' ')))
+                        .map((g2: any) => (
+                          <tr key={`giga-${g2.codigo}`} className="border-t border-slate-100 bg-indigo-50/40">
+                            <td className="px-2 py-1 font-semibold text-indigo-800">{g2.nome || g2.codigo} <span className="text-[10px] font-normal">(só no Giga)</span></td>
+                            <td className="text-right px-2 py-1 font-mono text-slate-400" colSpan={5}>sem venda no PDV Flow</td>
+                            <td className="text-right px-2 py-1 font-mono text-indigo-700">{formatBRL(Number(g2.valor) || 0)}</td>
+                            <td className="text-right px-2 py-1 font-mono font-bold text-rose-600">{formatBRL(-(Number(g2.valor) || 0))}</td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                  {confData.gigaErro && <p className="text-[11px] text-rose-600 mt-1">Caixa Giga indisponível: {confData.gigaErro}</p>}
+                </div>
+              )}
             </div>
 
             {/* Ranking */}

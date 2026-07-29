@@ -581,6 +581,100 @@ export class SellersService {
    *
    * Inclui linha "Sem atribuição" com pedidos do período que não tem sellerId.
    */
+  /**
+   * CONFERIDOR Flow × Giga (dono 29/07): pra UMA loja e período, abre os
+   * componentes do Flow por vendedora (bruto, marcados, desconto avulso
+   * rateado, devoluções) e traz AO LADO o caixa do Giga (getTopVendedoras,
+   * espelho da MESMA fonte do ranking do Wincred). É a ferramenta pra achar
+   * a divergência com nome: atribuição? marcado? venda fora do Flow?
+   */
+  async conferidorLoja(from: Date, to: Date, storeCode: string) {
+    const sales: any[] = await (this.prisma as any).pdvSale.findMany({
+      where: {
+        status: 'finalized',
+        isTraining: false,
+        finalizedAt: { gte: from, lte: to },
+        storeCode,
+      },
+      select: {
+        id: true, sellerName: true, vendedorName: true, total: true,
+        paymentMethod: true,
+        items: { select: { id: true, total: true, sellerName: true } },
+      },
+    });
+    type Comp = { vendedora: string; bruto: number; marcados: number; descontoAvulso: number; devolucoes: number; liquido: number; vendas: number };
+    const bucket = new Map<string, Comp>();
+    const norm = (s: any) => String(s || '').trim().toUpperCase().replace(/\s+/g, ' ') || 'SEM VENDEDORA';
+    const get = (nome: string): Comp => {
+      const k = norm(nome);
+      let c = bucket.get(k);
+      if (!c) { c = { vendedora: nome || 'Sem vendedora', bruto: 0, marcados: 0, descontoAvulso: 0, devolucoes: 0, liquido: 0, vendas: 0 }; bucket.set(k, c); }
+      return c;
+    };
+    const fatorBySale = new Map<string, number>();
+    const infoBySale = new Map<string, string>();
+    const sellerByItemId = new Map<string, string>();
+    for (const s of sales) {
+      const principal = s.sellerName || s.vendedorName || 'Sem vendedora';
+      infoBySale.set(s.id, principal);
+      const itens = (s.items || []).filter((i: any) => Number(i.total) > 0);
+      const somaItens = itens.reduce((a: number, i: any) => a + Number(i.total || 0), 0) || Number(s.total || 0);
+      const ehMarcado = s.paymentMethod === 'MARCADO';
+      const fator = somaItens > 0 ? Number(s.total || 0) / somaItens : 1;
+      fatorBySale.set(s.id, fator);
+      if (ehMarcado) {
+        get(principal).marcados += Number(s.total || 0);
+        continue;
+      }
+      get(principal).vendas += 1;
+      if (itens.length) {
+        for (const it of itens) {
+          const nome = it.sellerName || principal;
+          if (it.id) sellerByItemId.set(it.id, nome);
+          const cheio = Number(it.total || 0);
+          get(nome).bruto += cheio;
+          get(nome).descontoAvulso += cheio * (1 - fator);
+        }
+      } else {
+        get(principal).bruto += Number(s.total || 0);
+      }
+    }
+    const ids = sales.filter((s) => s.paymentMethod !== 'MARCADO').map((s) => s.id);
+    for (let i = 0; i < ids.length; i += 500) {
+      const devs: any[] = await (this.prisma as any).pdvReturn.findMany({
+        where: { isTraining: false, originalSaleId: { in: ids.slice(i, i + 500) } },
+        select: { originalSaleId: true, items: { select: { originalItemId: true, total: true } } },
+      });
+      for (const dev of devs) {
+        const principal = infoBySale.get(dev.originalSaleId);
+        if (!principal) continue;
+        const fator = fatorBySale.get(dev.originalSaleId) ?? 1;
+        for (const it of dev.items || []) {
+          const nome = (it.originalItemId && sellerByItemId.get(it.originalItemId)) || principal;
+          get(nome).devolucoes += Number(it.total || 0) * fator;
+        }
+      }
+    }
+    const flow = Array.from(bucket.values()).map((c) => ({
+      ...c,
+      bruto: Math.round(c.bruto * 100) / 100,
+      marcados: Math.round(c.marcados * 100) / 100,
+      descontoAvulso: Math.round(c.descontoAvulso * 100) / 100,
+      devolucoes: Math.round(c.devolucoes * 100) / 100,
+      liquido: Math.round((c.bruto - c.descontoAvulso - c.devolucoes) * 100) / 100,
+    })).sort((a, b) => b.liquido - a.liquido);
+
+    // Caixa do Giga (espelho) — a MESMA fonte do ranking do Wincred
+    let giga: any[] = [];
+    let gigaErro: string | null = null;
+    try {
+      giga = await this.erp.getTopVendedoras({ inicio: from, fim: to, storeCode, limit: 60 });
+    } catch (e: any) {
+      gigaErro = String(e?.message || e);
+    }
+    return { storeCode, period: { from: from.toISOString(), to: to.toISOString() }, flow, giga, gigaErro };
+  }
+
   async report(from: Date, to: Date) {
     const VALID_STATUSES = ['processing', 'separacao', 'separated', 'shipped', 'completed'];
 
