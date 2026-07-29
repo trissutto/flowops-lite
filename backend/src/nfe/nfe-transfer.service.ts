@@ -918,6 +918,13 @@ export class NfeTransferService {
     const aliqInterna = Number(process.env.NFE_ICMS_ALIQ_INTERNA ?? 18);
     const aliqInter = Number(process.env.NFE_ICMS_ALIQ_INTERESTADUAL ?? 12);
 
+    // cBenef (SEFAZ-SP exige com CST 40/41 desde 2026 — cStat 930 sem ele).
+    // Vai no <prod>, entre NCM e CFOP. Default: convenção "SEM CBENEF"
+    // (aceita quando não há código específico); quando o contador passar o
+    // código da tabela de SP pra transferência, setar NFE_CBENEF_TRANSFERENCIA.
+    const cBenefTransf = String(process.env.NFE_CBENEF_TRANSFERENCIA ?? 'SEM CBENEF').trim();
+    const usaCBenef = crt3 && !icmsDestacado && cBenefTransf !== '0';
+
     let totBC = 0;
     let totICMS = 0;
     const det = p.items
@@ -929,6 +936,7 @@ export class NfeTransferService {
           `<cEAN>${it.ean}</cEAN>` +
           `<xProd>${this.esc(xProd)}</xProd>` +
           `<NCM>${it.ncm}</NCM>` +
+          (usaCBenef ? `<cBenef>${this.esc(cBenefTransf)}</cBenef>` : '') +
           `<CFOP>${it.cfop}</CFOP>` +
           `<uCom>UN</uCom>` +
           `<qCom>${it.qty.toFixed(4)}</qCom>` +
