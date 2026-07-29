@@ -1,5 +1,6 @@
 import PixPaidListener from './PixPaidListener';
 import ImpersonateBanner from '@/components/ImpersonateBanner';
+import PdvIpHeartbeat from './PdvIpHeartbeat';
 
 /**
  * Layout de /minha-loja/* — engloba todas as telas da vendedora.
@@ -8,12 +9,15 @@ import ImpersonateBanner from '@/components/ImpersonateBanner';
  *    em qualquer tela (PDV, Caixa, Recebimentos, etc).
  *  - ImpersonateBanner: barra vermelha quando admin esta usando o PDV
  *    de uma loja em modo master (token temporario via /retaguarda/lojas).
+ *  - PdvIpHeartbeat: só no Electron — reporta o IP da loja pro backend
+ *    (regra "celular só bate ponto no WiFi da loja").
  */
 export default function MinhaLojaLayout({ children }: { children: React.ReactNode }) {
   return (
     <>
       <ImpersonateBanner />
       <PixPaidListener />
+      <PdvIpHeartbeat />
       {children}
     </>
   );
