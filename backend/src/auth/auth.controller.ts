@@ -60,6 +60,19 @@ export class AuthController {
     return this.auth.impersonateStore(adminUserId, dto.storeCode);
   }
 
+  /**
+   * TOKEN DO TOTEM DO PONTO (dono 30/07): o login normal expira em 24h e o
+   * celular do ponto acordava "EXPIRADO", caindo no login → menu da loja.
+   * Logado como LOJA, devolve um token de 365 dias com a MESMA identidade
+   * (flag kiosk no payload) — a tela do ponto grava no aparelho e o totem
+   * para de expirar. Só role=store.
+   */
+  @UseGuards(JwtAuthGuard)
+  @Post('kiosk-token')
+  kioskToken(@Req() req: any) {
+    return this.auth.kioskToken(req.user);
+  }
+
   @UseGuards(JwtAuthGuard)
   @Get('me')
   async me(@Req() req: any) {
