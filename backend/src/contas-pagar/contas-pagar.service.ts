@@ -79,17 +79,53 @@ export class ContasPagarService {
     });
   }
 
+  /**
+   * LOJAS do filtro (dono 30/07): o dropdown listava TODO código que já teve
+   * conta — inativas e até códigos-fantasma da migração do Giga (51, 50, 99,
+   * 48, 22, 60, 70). Agora as operacionais vêm em `ativa` e o resto em
+   * `historico` (só aparece quem TEM conta — a tela agrupa as duas listas,
+   * então nenhum histórico fica inacessível).
+   *
+   * A lista das operacionais é do dono e sai por env (muda no Railway sem
+   * deploy): CONTAS_PAGAR_LOJAS="01,02,...". Inclui a 20 PESSOA FÍSICA —
+   * não é loja, é o centro de custo das contas particulares.
+   */
+  private static readonly LOJAS_ATIVAS_DEFAULT =
+    '01,02,03,04,05,06,07,08,09,10,11,14,15,19,20';
+
   async lojas() {
     const [distinctRaw, stores] = await Promise.all([
       this.prisma.$queryRawUnsafe(`SELECT DISTINCT loja_code AS code FROM conta_pagar WHERE deleted_at IS NULL ORDER BY 1`),
       (this.prisma as any).store.findMany({ select: { code: true, name: true } }),
     ]);
     const distinct = distinctRaw as any[];
-    const nameByCode = new Map<string, string>(stores.map((s) => [String(s.code), s.name]));
-    return distinct.map((d) => ({
-      code: String(d.code),
-      nome: nameByCode.get(String(d.code)) || `LOJA ${d.code} — HISTÓRICO`,
-    }));
+    const nameByCode = new Map<string, string>(stores.map((s: any) => [String(s.code), s.name]));
+
+    const norm = (c: any) => String(c ?? '').trim().replace(/^0+/, '') || '0';
+    const ativasSet = new Set(
+      String(process.env.CONTAS_PAGAR_LOJAS || ContasPagarService.LOJAS_ATIVAS_DEFAULT)
+        .split(',')
+        .map((c) => norm(c))
+        .filter((c) => c && c !== '0'),
+    );
+
+    // Códigos com conta + os operacionais que ainda não têm nenhuma (pra dar
+    // pra LANÇAR neles — ex.: a 20 no primeiro uso).
+    const codes = new Set<string>(distinct.map((d) => String(d.code)));
+    for (const s of stores as any[]) {
+      if (ativasSet.has(norm(s.code))) codes.add(String(s.code));
+    }
+
+    return Array.from(codes)
+      .map((code) => ({
+        code,
+        nome: nameByCode.get(code) || `LOJA ${code} — HISTÓRICO`,
+        grupo: ativasSet.has(norm(code)) ? 'ativa' : 'historico',
+      }))
+      .sort((a, b) => {
+        if (a.grupo !== b.grupo) return a.grupo === 'ativa' ? -1 : 1;
+        return a.code.localeCompare(b.code, 'pt-BR', { numeric: true });
+      });
   }
 
   async fornecedoresOptions(q?: string) {

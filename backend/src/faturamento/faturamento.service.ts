@@ -55,16 +55,22 @@ export class FaturamentoService {
     // 2) PdvSale (flowops) por loja
     const lojasDb = await this.prisma.store.findMany({
       where: { active: true },
-      select: { code: true, name: true },
+      select: { code: true, name: true, nomesAntigos: true } as any,
     });
 
     const LOJAS_MIGRADAS = ['INDAIATUBA', 'ITANHAEM', 'MOEMA', 'SOROCABA', 'SANTOS'];
     const resultado: any[] = [];
 
-    for (const loja of lojasDb) {
+    for (const loja of lojasDb as any[]) {
       const code = (loja.code || '').toUpperCase();
       const name = (loja.name || '').toUpperCase();
-      const possibleCodes = [code, name].filter(Boolean);
+      // Nomes ANTERIORES entram no match: venda antiga gravou o nome velho
+      // em storeCode e sumiria do relatório depois de renomear a loja (30/07).
+      const antigos = String(loja.nomesAntigos || '')
+        .split(',')
+        .map((s: string) => s.trim().toUpperCase())
+        .filter(Boolean);
+      const possibleCodes = Array.from(new Set([code, name, ...antigos].filter(Boolean)));
 
       const flowAgg = await (this.prisma as any).pdvSale.aggregate({
         where: {
@@ -209,10 +215,17 @@ export class FaturamentoService {
     // - vendedoras antigas mexem em ambos os formatos
     const storeRecord = await (this.prisma as any).store.findUnique({
       where: { code: storeCodeUpper },
-      select: { code: true, name: true, id: true },
+      select: { code: true, name: true, id: true, nomesAntigos: true },
     });
     const storeName = storeRecord?.name?.toUpperCase() || '';
-    const possibleCodes = [storeCodeUpper, storeName].filter(Boolean);
+    // + nomes ANTERIORES (loja renomeada não perde o histórico — 30/07)
+    const nomesAnteriores = String(storeRecord?.nomesAntigos || '')
+      .split(',')
+      .map((s: string) => s.trim().toUpperCase())
+      .filter(Boolean);
+    const possibleCodes = Array.from(
+      new Set([storeCodeUpper, storeName, ...nomesAnteriores].filter(Boolean)),
+    );
 
     // Filtro de data ESTRITO: a venda precisa ter algum timestamp DENTRO do
     // período. Usa AND explícito pra evitar ambiguidade do Prisma com OR

@@ -456,6 +456,10 @@ export class DreService implements OnApplicationBootstrap {
     // Ponto logístico não é loja: não tem vitrine, não tem resultado próprio.
     // O que passar por ele aparece na CONCILIAÇÃO como "fora da DRE" — o
     // dinheiro não some da tela, só sai do resultado (pedido do dono 26/07).
+    // PESSOA FISICA (loja 20, ex-DEPOSITO) = contas PARTICULARES do dono.
+    // Não é despesa da empresa: fica FORA do resultado (decisão do dono
+    // 30/07) e aparece no bloco "fora da DRE" com o motivo.
+    if (/\bPESSOA FISICA\b|\bPARTICULAR\b|\bPF\b/.test(nome)) return 'FORA';
     if (/\bDEPOSITO\b|\bALMOXARIFADO\b|\bCD\b|\bCENTRO DE DISTRIBUICAO\b/.test(nome)) return 'FORA';
     if (/\bSITE\b|\bLIVE\b|E-?COMMERCE/.test(nome)) return 'CANAL';
     return 'LOJA';
