@@ -1064,6 +1064,70 @@ export class PontoService {
   }
 
   /**
+   * EDITA uma batida errada (admin): tipo e/ou horário. O registro fica
+   * marcado como justificado (auditoria embutida no modelo).
+   */
+  async editarRegistro(
+    id: string,
+    input: { tipo?: string; timestamp?: string; justificativa: string; userId?: string },
+  ) {
+    const reg = await (this.prisma as any).pontoRegistro.findUnique({
+      where: { id },
+      include: { seller: { select: { name: true } } },
+    });
+    if (!reg) throw new NotFoundException('Batida não encontrada');
+    if (!input.justificativa || input.justificativa.trim().length < 3) {
+      throw new BadRequestException('Justificativa obrigatória (mínimo 3 caracteres)');
+    }
+    const data: any = {
+      justificado: true,
+      justificativa: input.justificativa.trim(),
+      justificadoBy: input.userId || null,
+      justificadoAt: new Date(),
+    };
+    if (input.tipo) {
+      if (!PontoService.TIPOS_VALIDOS.includes(input.tipo)) {
+        throw new BadRequestException(`tipo inválido (${PontoService.TIPOS_VALIDOS.join(' | ')})`);
+      }
+      data.tipo = input.tipo;
+    }
+    if (input.timestamp) {
+      const ts = new Date(input.timestamp);
+      if (isNaN(ts.getTime())) throw new BadRequestException('timestamp inválido');
+      data.timestamp = ts;
+    }
+    const updated = await (this.prisma as any).pontoRegistro.update({ where: { id }, data });
+    this.logger.warn(
+      `[ponto] EDITADO registro ${id} (${reg.seller?.name || reg.sellerId}): ` +
+        `${reg.tipo}@${reg.timestamp?.toISOString()} → ${data.tipo || reg.tipo}@${(data.timestamp || reg.timestamp)?.toISOString()} ` +
+        `por ${input.userId || '?'} — ${input.justificativa.trim()}`,
+    );
+    return updated;
+  }
+
+  /**
+   * EXCLUI uma batida errada (admin). Motivo obrigatório; o registro apagado
+   * inteiro vai pro log do servidor (auditoria).
+   */
+  async excluirRegistro(id: string, motivo: string, userId?: string) {
+    const reg = await (this.prisma as any).pontoRegistro.findUnique({
+      where: { id },
+      include: { seller: { select: { name: true } }, store: { select: { code: true } } },
+    });
+    if (!reg) throw new NotFoundException('Batida não encontrada');
+    if (!motivo || motivo.trim().length < 3) {
+      throw new BadRequestException('Motivo obrigatório (mínimo 3 caracteres)');
+    }
+    await (this.prisma as any).pontoRegistro.delete({ where: { id } });
+    this.logger.warn(
+      `[ponto] EXCLUÍDO registro ${id}: ${reg.seller?.name || reg.sellerId} ` +
+        `${reg.tipo}@${reg.timestamp?.toISOString()} loja ${reg.store?.code || reg.storeId} ` +
+        `source=${reg.source} por ${userId || '?'} — ${motivo.trim()}`,
+    );
+    return { ok: true };
+  }
+
+  /**
    * TELA DO DIA (dono 30/07): todas as batidas de TODAS as funcionárias num
    * dia, agrupadas por loja — visão ao vivo pro RH acompanhar as entradas.
    * `data` YYYY-MM-DD (dia em horário de Brasília; default hoje).

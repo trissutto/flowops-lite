@@ -147,6 +147,64 @@ export default function EspelhoPontoPage() {
       .catch(() => setDia(null))
       .finally(() => setDiaLoading(false));
   };
+
+  // ── Corrigir/excluir batida errada (dono 30/07) ──
+  const [editBatida, setEditBatida] = useState<{
+    id: string; funcNome: string; tipo: string; hora: string;
+  } | null>(null);
+  const [editTipo, setEditTipo] = useState('entrada');
+  const [editHora, setEditHora] = useState('');
+  const [editJust, setEditJust] = useState('');
+  const [editBusy, setEditBusy] = useState(false);
+
+  const abrirEdicao = (f: DiaFunc, b: DiaFunc['batidas'][0]) => {
+    const hhmm = new Date(b.hora).toLocaleTimeString('pt-BR', {
+      hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo',
+    });
+    setEditBatida({ id: b.id, funcNome: f.nome, tipo: b.tipo, hora: hhmm });
+    setEditTipo(b.tipo);
+    setEditHora(hhmm);
+    setEditJust('');
+  };
+
+  const salvarEdicao = async () => {
+    if (!editBatida) return;
+    if (editJust.trim().length < 3) { alert('Escreva a justificativa (mínimo 3 letras).'); return; }
+    setEditBusy(true);
+    try {
+      // Horário editado é no dia selecionado, em horário de Brasília
+      const timestamp = new Date(`${diaData}T${editHora}:00-03:00`).toISOString();
+      await api(`/ponto/registro/${editBatida.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ tipo: editTipo, timestamp, justificativa: editJust.trim() }),
+      });
+      setEditBatida(null);
+      loadDia();
+    } catch (e: any) {
+      alert('Erro: ' + (e?.message || e));
+    } finally {
+      setEditBusy(false);
+    }
+  };
+
+  const excluirBatida = async () => {
+    if (!editBatida) return;
+    if (editJust.trim().length < 3) { alert('Escreva o motivo da exclusão (mínimo 3 letras).'); return; }
+    if (!confirm(`EXCLUIR a batida ${TIPO_LABEL[editBatida.tipo] || editBatida.tipo} ${editBatida.hora} de ${editBatida.funcNome}?`)) return;
+    setEditBusy(true);
+    try {
+      await api(`/ponto/registro/${editBatida.id}`, {
+        method: 'DELETE',
+        body: JSON.stringify({ motivo: editJust.trim() }),
+      });
+      setEditBatida(null);
+      loadDia();
+    } catch (e: any) {
+      alert('Erro: ' + (e?.message || e));
+    } finally {
+      setEditBusy(false);
+    }
+  };
   useEffect(() => {
     if (modo !== 'dia') return;
     loadDia();
@@ -307,10 +365,12 @@ export default function EspelhoPontoPage() {
                         </div>
                         <div className="flex items-center gap-1.5 font-mono text-xs">
                           {f.batidas.map((b) => (
-                            <span
+                            <button
                               key={b.id}
-                              title={`${b.tipo} · ${b.source}${b.justificado ? ' · justificado' : ''}`}
-                              className={`px-1.5 py-0.5 rounded border ${
+                              type="button"
+                              title={`${b.tipo} · ${b.source}${b.justificado ? ' · justificado' : ''} — clique pra corrigir/excluir`}
+                              onClick={(e) => { e.stopPropagation(); abrirEdicao(f, b); }}
+                              className={`px-1.5 py-0.5 rounded border hover:ring-2 hover:ring-slate-300 ${
                                 b.tipo === 'entrada'
                                   ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
                                   : b.tipo === 'saida'
@@ -320,7 +380,8 @@ export default function EspelhoPontoPage() {
                             >
                               {TIPO_LABEL[b.tipo] || b.tipo} {fmtHora(b.hora)}
                               {b.source === 'pwa_selfie' ? ' 📱' : b.source === 'manual_admin' ? ' ✍️' : ''}
-                            </span>
+                              {b.justificado ? ' *' : ''}
+                            </button>
                           ))}
                         </div>
                         <span className={`ml-auto text-[11px] font-bold px-2 py-0.5 rounded-full ${STATUS_PILL[f.status]?.cls || ''}`}>
@@ -334,8 +395,85 @@ export default function EspelhoPontoPage() {
 
             {dia && (
               <p className="text-[11px] text-slate-400 text-right">
-                Atualiza sozinho a cada 30s · E entrada · SA saída almoço · VA volta · S saída · 📱 celular · ✍️ manual
+                Atualiza sozinho a cada 30s · clique numa batida pra corrigir/excluir · E entrada · SA saída almoço · VA volta · S saída · 📱 celular · ✍️ manual · * corrigida
               </p>
+            )}
+
+            {/* Modal corrigir/excluir batida */}
+            {editBatida && (
+              <div
+                className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+                onClick={() => !editBusy && setEditBatida(null)}
+              >
+                <div
+                  className="bg-white rounded-xl shadow-2xl w-full max-w-sm p-5 space-y-3"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <h3 className="font-black text-slate-800 flex items-center gap-2">
+                    <Edit3 className="w-4 h-4 text-slate-600" />
+                    Corrigir batida — {editBatida.funcNome}
+                  </h3>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-bold uppercase text-slate-500 mb-1">Tipo</label>
+                      <select
+                        value={editTipo}
+                        onChange={(e) => setEditTipo(e.target.value)}
+                        className="w-full px-3 py-2 border rounded text-sm"
+                      >
+                        <option value="entrada">Entrada</option>
+                        <option value="saida_almoco">Saída almoço</option>
+                        <option value="volta_almoco">Volta almoço</option>
+                        <option value="saida">Saída</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold uppercase text-slate-500 mb-1">Horário</label>
+                      <input
+                        type="time"
+                        value={editHora}
+                        onChange={(e) => setEditHora(e.target.value)}
+                        className="w-full px-3 py-2 border rounded text-sm font-mono"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold uppercase text-slate-500 mb-1">
+                      Justificativa / motivo <span className="text-rose-600">*</span>
+                    </label>
+                    <textarea
+                      value={editJust}
+                      onChange={(e) => setEditJust(e.target.value)}
+                      rows={2}
+                      placeholder="Ex.: bateu duas vezes sem querer / horário errado"
+                      className="w-full px-3 py-2 border rounded text-sm"
+                    />
+                  </div>
+                  <div className="flex gap-2 pt-1">
+                    <button
+                      onClick={excluirBatida}
+                      disabled={editBusy}
+                      className="px-3 py-2 rounded-lg border border-rose-300 text-rose-700 hover:bg-rose-50 font-bold text-sm disabled:opacity-50"
+                    >
+                      Excluir
+                    </button>
+                    <button
+                      onClick={() => setEditBatida(null)}
+                      disabled={editBusy}
+                      className="flex-1 px-3 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 font-bold text-sm disabled:opacity-50"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      onClick={salvarEdicao}
+                      disabled={editBusy}
+                      className="flex-1 px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm disabled:opacity-50"
+                    >
+                      {editBusy ? '...' : 'Salvar'}
+                    </button>
+                  </div>
+                </div>
+              </div>
             )}
           </>
         )}
