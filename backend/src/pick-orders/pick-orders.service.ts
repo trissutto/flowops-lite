@@ -71,6 +71,13 @@ export class PickOrdersService {
   // Divisor do valor intercompany (regra do dono: VENDAUN ÷ 2,5 — NUNCA o CUSTO)
   private static readonly DIVISOR_CUSTO = 2.5;
 
+  /**
+   * Loja-canal que recebe TODA venda de site e de live (dono 30/07).
+   * A peça sai da loja física e entra aqui — é o destino único do acerto
+   * entre lojas, no lugar do antigo "loja que fez a live" / código 'SITE'.
+   */
+  private static readonly CANAL_STORE_CODE = '13';
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly gateway: RealtimeGateway,
@@ -2665,29 +2672,37 @@ export class PickOrdersService {
         .findUnique({ where: { code: po.transferToStoreCode } })
         .catch(() => null);
       if (st) destino = { code: st.code, name: st.name, tipo: st.tipo === 'FILIAL' ? 'FILIAL' : 'REDE' };
-    } else if (order.source === 'live' && order.liveCartId) {
-      liveCart = await (this.prisma as any).livePdvCart
-        .findUnique({ where: { id: order.liveCartId }, include: { session: true } })
-        .catch(() => null);
-      const liveStoreCode = liveCart?.session?.liveStoreCode;
-      if (liveStoreCode) {
-        const st = await (this.prisma as any).store
-          .findUnique({ where: { code: liveStoreCode } })
-          .catch(() => null);
-        destino = st
-          ? { code: st.code, name: st.name, tipo: st.tipo === 'FILIAL' ? 'FILIAL' : 'REDE' }
-          : { code: liveStoreCode, name: liveCart?.session?.liveStoreName || liveStoreCode, tipo: 'REDE' };
-      }
     } else {
-      destino = { code: 'SITE', name: 'VENDA SITE', tipo: 'REDE' }; // site é da REDE
+      // VENDA DE CANAL (site OU live) — dono 30/07: o destino é SEMPRE a
+      // loja-canal 13 (SITE). Antes a live acertava com a loja que fez a live
+      // (session.liveStoreCode) e o site usava um código fantasma 'SITE' que
+      // nem existe na tabela Store. Agora as duas convergem pra 13, que é a
+      // loja-canal de verdade — é o acerto normal REDE × franquia.
+      if (order.source === 'live' && order.liveCartId) {
+        liveCart = await (this.prisma as any).livePdvCart
+          .findUnique({ where: { id: order.liveCartId }, include: { session: true } })
+          .catch(() => null);
+      }
+      const canal = await (this.prisma as any).store
+        .findUnique({ where: { code: PickOrdersService.CANAL_STORE_CODE } })
+        .catch(() => null);
+      destino = canal
+        ? { code: canal.code, name: canal.name, tipo: canal.tipo === 'FILIAL' ? 'FILIAL' : 'REDE' }
+        : { code: PickOrdersService.CANAL_STORE_CODE, name: 'SITE', tipo: 'REDE' };
     }
 
     // ── 1) obrigação intercompany ÷2,5 ──
     try {
       const fromTipo = fromStore?.tipo === 'FILIAL' ? 'FILIAL' : 'REDE';
       const mesmaLoja = destino && fromStore?.code === destino.code;
-      const mesmoDono = !destino || (fromTipo === 'REDE' && destino.tipo === 'REDE');
-      if (destino && !mesmaLoja && !mesmoDono) {
+      // Dono 30/07: a TRANSFERÊNCIA é registrada por TODA loja que atende
+      // pedido de canal (é o rastro da peça saindo do estoque). Só a COBRANÇA
+      // (÷2,5) é que segue a regra antiga REDE × franquia — loja própria
+      // mandando pro canal não gera obrigação, mas agora deixa registro.
+      // Antes as duas coisas estavam presas na mesma condição e a saída de
+      // loja própria não aparecia em lugar nenhum.
+      const geraCobranca = !!destino && fromTipo !== destino.tipo;
+      if (destino && !mesmaLoja) {
         const mesReferencia = new Date().toISOString().slice(0, 7);
         for (const it of itens) {
           const transfer = await (this.prisma as any).transferOrder.create({
@@ -2707,6 +2722,10 @@ export class PickOrdersService {
           });
           const baseUnit = Number(it.baseUnitPrice ?? it.unitPrice ?? 0);
           const precoTotal = baseUnit * Number(it.quantity || 1);
+          // Sem cobrança (REDE → REDE): a transferência acima já registrou a
+          // saída da peça; obrigação financeira seria dinheiro trocando de
+          // bolso dentro da mesma empresa.
+          if (!geraCobranca) continue;
           await (this.prisma as any).interStoreObligation.create({
             data: {
               transferOrderId: transfer.id,
@@ -2730,7 +2749,9 @@ export class PickOrdersService {
           });
         }
         this.logger.log(
-          `[acerto-÷2,5] pedido ${order.wcOrderNumber}: ${itens.length} item(ns) ${fromStore?.code} → ${destino.code}`,
+          `[acerto-÷2,5] pedido ${order.wcOrderNumber}: ${itens.length} item(ns) ` +
+            `${fromStore?.code}(${fromTipo}) → ${destino.code}(${destino.tipo}) · ` +
+            `${geraCobranca ? 'COM cobrança ÷2,5' : 'só registro (mesma natureza, sem cobrança)'}`,
         );
       }
     } catch (e: any) {
