@@ -5589,7 +5589,9 @@ function PaymentModal({
                               customerName,
                               customerCpf,
                               customerEmail,
-                              maxInstallments: 6,
+                              // maxInstallments OMITIDO de propósito: o backend
+                              // usa PAGARME_MAX_PARCELAS (Railway) — mandar um
+                              // número aqui IGNORA a variável da rede.
                               expiresInMinutes: 1440, // 24h
                               acceptPix: true,
                               acceptCreditCard: true,
