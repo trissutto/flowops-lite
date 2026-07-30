@@ -230,6 +230,12 @@ export class PickOrdersService {
     if (String(process.env.NFE_ENVIO_ENABLED || '').trim() === '1' && !order.isPickup) {
       try {
         const dados = await this.montarDadosNfeEnvio(order, pick, String(store?.code || ''));
+        if (!dados) {
+          // montarDadosNfeEnvio já logou o motivo específico. Este registro
+          // fecha o rastro: a etiqueta VAI sair, mas sem nota — e antes disso
+          // acontecia em silêncio absoluto (caso Limeira/Piracicaba 30/07).
+          nfe = { status: 'skipped', motivo: 'dados da NF-e não puderam ser montados — ver log [nfe-envio] acima' };
+        }
         if (dados) {
           const amb = process.env.NFE_ENVIO_AMBIENTE === '2' ? '2' : process.env.NFE_ENVIO_AMBIENTE === '1' ? '1' : undefined;
           // Venda do SITE = empresa do site (LURDS matriz, raiz 30), não a loja
@@ -389,11 +395,25 @@ export class PickOrdersService {
 
     if (order.source === 'live' && order.liveCartId) {
       const cart: any = await (this.prisma as any).livePdvCart.findUnique({ where: { id: order.liveCartId }, include: { items: true } });
-      if (!cart) return null;
+      if (!cart) {
+        this.logger.warn(`[nfe-envio] SEM NOTA: carrinho da live ${order.liveCartId} não encontrado (pedido ${order.id})`);
+        return null;
+      }
       const todos = (cart.items || []).filter((i: any) => i.status !== 'cancelled');
       const daLoja = storeCode ? todos.filter((i: any) => normLoja(i.originStoreCode) === normLoja(storeCode)) : [];
       const itens = dividido ? daLoja : (daLoja.length ? daLoja : todos);
-      if (!itens.length) return null;
+      if (!itens.length) {
+        // Causa clássica: o originStoreCode dos itens não bate com o código da
+        // loja do pick (pedido dividido entre lojas). Loga os dois lados
+        // normalizados — sem isso a nota some sem deixar rastro.
+        this.logger.warn(
+          `[nfe-envio] SEM NOTA: nenhum item da loja ${storeCode} no carrinho ${order.liveCartId}. ` +
+            `dividido=${dividido} · itensNoCarrinho=${todos.length} · ` +
+            `originStoreCode dos itens=[${todos.map((i: any) => `${i.originStoreCode}→${normLoja(i.originStoreCode)}`).join(', ')}] · ` +
+            `loja do pick=${storeCode}→${normLoja(storeCode)}`,
+        );
+        return null;
+      }
       nome = cart.customerName || 'Cliente';
       cpfCnpj = String(cart.customerCpf || '').replace(/\D/g, '');
       endereco = cart.customerEndereco || '';
@@ -432,7 +452,13 @@ export class PickOrdersService {
       const lista = dividido
         ? atribuidos
         : (atribuidos.length ? [...atribuidos, ...semDono] : (order.items || []));
-      if (!lista.length) return null;
+      if (!lista.length) {
+        this.logger.warn(
+          `[nfe-envio] SEM NOTA: pedido ${order.id} sem itens atribuídos à loja ${storeCode} ` +
+            `(dividido=${dividido} · itensNoPedido=${(order.items || []).length})`,
+        );
+        return null;
+      }
       // Rateio do fallback pelo TOTAL DE PEÇAS DO PEDIDO (não só da lista) —
       // senão o pedido dividido inflava o unitário da loja com menos peças.
       const totalPecasPedido = (order.items || []).reduce((s: number, i: any) => s + (Number(i.quantity) || 1), 0) || 1;
@@ -446,7 +472,12 @@ export class PickOrdersService {
       }));
     }
 
-    if (cep.length !== 8) return null;
+    if (cep.length !== 8) {
+      this.logger.warn(
+        `[nfe-envio] SEM NOTA: CEP inválido no pedido ${order.id} — recebido "${cep}" (${cep.length} dígitos, precisa 8)`,
+      );
+      return null;
+    }
     // ViaCEP manda: UF/cidade/bairro + o código IBGE (cMun da NF-e)
     let codMun = '';
     try {
