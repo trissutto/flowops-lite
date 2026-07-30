@@ -5094,6 +5094,10 @@ model SiteProduto {
   seo               Json?
 
   /// Cadastro comercial (não existe no ERP)
+  /// Categoria COMERCIAL do site (vestidos, blusas, calcas…). Não é o grupo
+  /// do Giga: `nomeGrupo` é classificação fiscal/interna, quase sempre vazia
+  /// e com valor tipo "BLUSA FEMININA" — nunca casaria com o menu do site.
+  categoria         String?  @db.VarChar(30)
   colecao           String?  @db.VarChar(60)
   linha             String?  @db.VarChar(60)
 
@@ -5118,6 +5122,7 @@ model SiteProduto {
   updatedAt         DateTime @updatedAt @map("updated_at")
 
   @@index([publicado])
+  @@index([categoria])
   @@index([destaque])
   @@index([lancamento])
   @@map("site_produto")

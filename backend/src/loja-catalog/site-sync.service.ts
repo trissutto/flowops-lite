@@ -62,6 +62,50 @@ export class SiteSyncService {
     return base ? `${base}-${ref.toLowerCase()}` : `ref-${ref.toLowerCase()}`;
   }
 
+  /**
+   * CATEGORIA COMERCIAL do site. Vem das categorias do WooCommerce (que é
+   * onde a taxonomia de venda existe) e, se elas não resolverem, do próprio
+   * nome da peça. NÃO usa `nomeGrupo` do Giga: aquilo é grupo fiscal, quase
+   * sempre vazio e com valor tipo "BLUSA FEMININA" — o menu do site nunca
+   * casaria. Mesmo mapa que o front já usava.
+   */
+  private static readonly MAPA_CATEGORIA: Record<string, string> = {
+    vestido: 'vestidos', vestidos: 'vestidos',
+    blusa: 'blusas', blusas: 'blusas', camisa: 'blusas', camiseta: 'blusas',
+    tshirt: 'blusas', 'tshirts': 'blusas', cropped: 'blusas', regata: 'blusas',
+    body: 'blusas', bata: 'blusas',
+    calca: 'calcas', calcas: 'calcas', pantalona: 'calcas', legging: 'calcas',
+    conjunto: 'conjuntos', conjuntos: 'conjuntos',
+    macacao: 'macacoes', macacoes: 'macacoes', macaquinho: 'macacoes',
+    jaqueta: 'jaquetas', jaquetas: 'jaquetas', casaco: 'jaquetas',
+    blazer: 'jaquetas', cardigan: 'jaquetas', colete: 'jaquetas',
+    kimono: 'jaquetas', sobretudo: 'jaquetas',
+    saia: 'saias', saias: 'saias',
+    short: 'shorts', shorts: 'shorts', bermuda: 'shorts',
+    praia: 'moda-praia', biquini: 'moda-praia', maio: 'moda-praia', canga: 'moda-praia',
+    fitness: 'fitness', academia: 'fitness',
+  };
+
+  private semAcento(v: string): string {
+    return String(v || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+  }
+
+  private detectarCategoria(categoriasWc: string[], nome: string): string | null {
+    for (const bruta of categoriasWc) {
+      const limpo = this.semAcento(bruta);
+      for (const palavra of limpo.split(/[^a-z0-9]+/).filter(Boolean)) {
+        const achou = SiteSyncService.MAPA_CATEGORIA[palavra];
+        if (achou) return achou;
+      }
+    }
+    // Fallback pelo nome: "Blusa Feminina Manga Curta" → blusas
+    for (const palavra of this.semAcento(nome).split(/[^a-z0-9]+/).filter(Boolean)) {
+      const achou = SiteSyncService.MAPA_CATEGORIA[palavra];
+      if (achou) return achou;
+    }
+    return null;
+  }
+
   private stripHtml(html?: string | null): string {
     return String(html || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
   }
@@ -120,7 +164,10 @@ export class SiteSyncService {
               src: img.src, alt: img.alt || p.name, tipo: 'imagem' as const,
             }));
 
+            const categoriasWc: string[] = (p.categories ?? []).map((c: any) => String(c.name || ''));
+
             const dados = {
+              categoria: this.detectarCategoria(categoriasWc, String(p.name || '')),
               slug: p.slug ? String(p.slug).slice(0, 160) : this.slugify(p.name, ref),
               nome: String(p.name || ref).slice(0, 160),
               descricaoCurta: this.stripHtml(p.short_description).slice(0, 2000) || null,

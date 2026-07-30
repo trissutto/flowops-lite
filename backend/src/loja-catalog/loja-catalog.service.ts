@@ -135,7 +135,10 @@ export class LojaCatalogService {
       descricaoCurta: site?.descricaoCurta ?? null,
       descricaoCompleta: site?.descricaoCompleta ?? null,
       marca: linhas.find((l) => l.marca)?.marca ?? null,
-      categoria: linhas.find((l) => l.categoria)?.categoria ?? null,
+      // Categoria COMERCIAL (do cadastro do site). O grupo do Giga vai
+      // separado: é classificação fiscal, não serve pro menu da loja.
+      categoria: site?.categoria ?? null,
+      grupoErp: linhas.find((l) => l.categoria)?.categoria ?? null,
 
       preco,
       // Pix e parcelamento são convenção da marca (5% / 12x), não dado do ERP.
@@ -212,6 +215,7 @@ export class LojaCatalogService {
 
     // 1) REFs publicadas (curadoria) — a lista de saída nunca é maior que isso
     const wherePub: any = { publicado: true };
+    if (params.categoria) wherePub.categoria = String(params.categoria).trim().toLowerCase();
     if (params.soPromocao) wherePub.promocao = true;
     if (params.soNovidade) wherePub.lancamento = true;
     const publicadas: any[] = await (this.prisma as any).siteProduto.findMany({
@@ -247,7 +251,6 @@ export class LojaCatalogService {
         return termos.every((t) => alvo.includes(t));
       });
     }
-    if (params.categoria) pecas = pecas.filter((p) => norm(p.categoria) === norm(params.categoria));
     if (params.marca) pecas = pecas.filter((p) => norm(p.marca) === norm(params.marca));
     if (params.cor) pecas = pecas.filter((p) => p.cores.some((c) => norm(c.nome) === norm(params.cor)));
     if (params.tamanho) pecas = pecas.filter((p) => p.tamanhos.some((t) => norm(t.label) === norm(params.tamanho) && t.disponivel));
@@ -357,7 +360,6 @@ export class LojaCatalogService {
       conta(tamanhos, l.tamanho);
       if (!refsVistas.has(l.ref)) {
         refsVistas.add(l.ref);
-        conta(categorias, l.categoria);
         conta(marcas, l.marca);
       }
       if (l.preco > 0) {
@@ -365,6 +367,13 @@ export class LojaCatalogService {
         precoMax = Math.max(precoMax, l.preco);
       }
     }
+
+    // Categoria vem do cadastro comercial, não do grupo fiscal do Giga
+    const cadastros: any[] = await (this.prisma as any).siteProduto.findMany({
+      where: { ref: { in: Array.from(refsVistas) } },
+      select: { categoria: true },
+    });
+    for (const c of cadastros) conta(categorias, c.categoria);
 
     const fits: any[] = await (this.prisma as any).fitProduct.findMany({
       where: { ref: { in: Array.from(refsVistas) } },
