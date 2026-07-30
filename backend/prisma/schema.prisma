@@ -70,6 +70,11 @@ model Store {
   id            String   @id @default(uuid())
   code          String   @unique
   name          String
+  /// Nomes ANTERIORES da loja (CSV), preenchido sozinho quando o nome muda.
+  /// Existe porque venda antiga podia gravar o NOME em PdvSale.storeCode: sem
+  /// isso, renomear (ex.: 09 "SANTOS 2" → "MATRIZ LURDS") órfava o histórico
+  /// nos relatórios que casam por [code, name]. Ver faturamento.service.
+  nomesAntigos  String?  @map("nomes_antigos") @db.VarChar(300)
   cep           String?
   city          String?
   state         String?

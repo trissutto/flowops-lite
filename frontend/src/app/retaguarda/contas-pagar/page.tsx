@@ -25,6 +25,30 @@ const fmtData = (s: string | null | undefined) =>
   s ? new Date(s).toLocaleDateString('pt-BR', { timeZone: 'UTC' }) : '—';
 const hojeStr = () => new Date().toISOString().slice(0, 10);
 
+/**
+ * Opções do seletor de LOJA (dono 30/07): as operacionais primeiro; o que é
+ * loja fechada / código antigo da migração do Giga vai pro grupo "Histórico"
+ * (continua filtrável, mas sai da frente no dia a dia).
+ */
+function OpcoesLojas({ lojas }: { lojas: any[] }) {
+  const ativas = lojas.filter((l) => l.grupo !== 'historico');
+  const historico = lojas.filter((l) => l.grupo === 'historico');
+  return (
+    <>
+      {ativas.map((l) => (
+        <option key={l.code} value={l.code}>{l.code} · {l.nome}</option>
+      ))}
+      {historico.length > 0 && (
+        <optgroup label="── Histórico / lojas fechadas ──">
+          {historico.map((l) => (
+            <option key={l.code} value={l.code}>{l.code} · {l.nome}</option>
+          ))}
+        </optgroup>
+      )}
+    </>
+  );
+}
+
 type Aba = 'painel' | 'hoje' | 'funcionarias' | 'associacao' | 'divergencias';
 
 export default function ContasPagarPage() {
@@ -300,7 +324,7 @@ function Painel({ avisar }: { avisar: (t: 'ok' | 'erro', m: string) => void }) {
           <span className="w-px h-5 bg-[#E7E2D8] mx-1" />
           <select value={lojaCode} onChange={(e) => { setLojaCode(e.target.value); setPage(1); }} className="border border-[#E7E2D8] rounded-lg px-2 py-1">
             <option value="">Loja: todas</option>
-            {lojas.map((l) => <option key={l.code} value={l.code}>{l.code} · {l.nome}</option>)}
+            <OpcoesLojas lojas={lojas} />
           </select>
           <select value={especieId} onChange={(e) => { setEspecieId(e.target.value); setPage(1); }} className="border border-[#E7E2D8] rounded-lg px-2 py-1">
             <option value="">Espécie: todas</option>
@@ -568,7 +592,7 @@ function EditarModal({ conta, lojas, especies, onClose, onOk, avisar }: any) {
         <Campo label="Loja">
           <select value={lojaCode} onChange={(e) => setLojaCode(e.target.value)} className="inp">
             {!lojas.some((l: any) => l.code === lojaCode) && lojaCode && <option value={lojaCode}>{lojaCode}</option>}
-            {lojas.map((l: any) => <option key={l.code} value={l.code}>{l.code} · {l.nome}</option>)}
+            <OpcoesLojas lojas={lojas} />
           </select>
         </Campo>
         <Campo label="Espécie">
@@ -903,7 +927,7 @@ function NovaContaModal({ onClose, avisar }: any) {
           <Campo label="Loja">
             <select value={lojaCode} onChange={(e) => setLojaCode(e.target.value)} className="inp">
               <option value="">Selecione…</option>
-              {lojas.map((l) => <option key={l.code} value={l.code}>{l.code} · {l.nome}</option>)}
+              <OpcoesLojas lojas={lojas} />
             </select>
           </Campo>
           <Campo label="Espécie">

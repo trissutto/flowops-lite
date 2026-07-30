@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
 export interface StoreInput {
@@ -59,6 +59,7 @@ export interface StoreInput {
 
 @Injectable()
 export class StoresService {
+  private readonly logger = new Logger(StoresService.name);
   constructor(private readonly prisma: PrismaService) {}
 
   list() {
@@ -210,11 +211,32 @@ export class StoresService {
       if (conflict) throw new ConflictException(`Já existe uma loja com o código "${data.code}"`);
     }
 
+    // RENOMEAR SEM PERDER HISTÓRICO (30/07): venda antiga podia gravar o NOME
+    // da loja em PdvSale.storeCode. Guardando o nome anterior, os relatórios
+    // que casam por [code, name] continuam achando o histórico depois que a
+    // loja troca de nome (ex.: 09 "SANTOS 2" → "MATRIZ LURDS").
+    let nomesAntigos: string | undefined;
+    const novoNome = data.name?.trim();
+    if (novoNome && novoNome !== store.name) {
+      const antigos = String((store as any).nomesAntigos || '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (!antigos.some((n) => n.toUpperCase() === store.name.toUpperCase())) {
+        antigos.push(store.name);
+      }
+      nomesAntigos = antigos.join(',').slice(0, 300);
+      this.logger.log(
+        `[stores] loja ${store.code} renomeada "${store.name}" → "${novoNome}" (histórico preservado: ${nomesAntigos})`,
+      );
+    }
+
     return this.prisma.store.update({
       where: { id },
       data: {
         code: data.code?.trim() ?? undefined,
-        name: data.name?.trim() ?? undefined,
+        name: novoNome ?? undefined,
+        nomesAntigos,
         cep: data.cep !== undefined ? (data.cep.trim() || null) : undefined,
         city: data.city !== undefined ? (data.city.trim() || null) : undefined,
         state: data.state !== undefined ? (data.state.trim().toUpperCase() || null) : undefined,
