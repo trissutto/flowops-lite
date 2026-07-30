@@ -131,6 +131,20 @@ export default function PontoCelularPage() {
     if (typeof window !== 'undefined') setDebug(window.location.search.includes('debug=1'));
   }, []);
 
+  // TOKEN DE TOTEM (dono 30/07): o login normal expira em 24h e o celular
+  // acordava "EXPIRADO" (caía no login → menu da loja). Na abertura, troca o
+  // token da loja por um de 365 dias (POST /auth/kiosk-token) e grava no
+  // aparelho — o app do ponto para de expirar. Falhou (rede/permissão)? Segue
+  // com o token atual.
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await api<{ accessToken: string }>('/auth/kiosk-token', { method: 'POST' });
+        if (r?.accessToken) localStorage.setItem('flowops_token', r.accessToken);
+      } catch { /* segue com o token atual */ }
+    })();
+  }, []);
+
   // Detecta se já roda como app instalado; senão, prepara o caminho de instalar
   useEffect(() => {
     if (typeof window === 'undefined') return;

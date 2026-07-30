@@ -132,6 +132,30 @@ export class AuthService {
     };
   }
 
+  /**
+   * TOKEN DO TOTEM DO PONTO (dono 30/07): re-assina a MESMA identidade da
+   * loja com validade de 365 dias (+ flag kiosk pra audit). O celular do
+   * ponto troca o token de 24h por este e para de acordar "EXPIRADO".
+   * Só conta de loja — admin/operador continuam com o TTL normal.
+   */
+  async kioskToken(user: any) {
+    if (user?.role !== 'store') {
+      throw new UnauthorizedException('Token de totem é só pra conta de loja');
+    }
+    const payload = {
+      sub: user.userId || user.sub,
+      email: user.email,
+      name: user.name,
+      role: 'store' as const,
+      storeId: user.storeId,
+      storeCode: user.storeCode ?? null,
+      storeName: user.storeName ?? null,
+      kiosk: true,
+    };
+    const accessToken = await this.jwt.signAsync(payload, { expiresIn: '365d' });
+    return { accessToken, expiresInDays: 365 };
+  }
+
   async changePassword(input: {
     userId: string;
     oldPassword: string;

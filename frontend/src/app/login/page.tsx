@@ -26,6 +26,15 @@ export default function LoginPage() {
         body: JSON.stringify({ email, password }),
       });
       localStorage.setItem('flowops_token', res.accessToken);
+      // VOLTA PRA TELA DE ORIGEM (dono 30/07): o api.ts manda pro login com
+      // ?redirect=<rota> quando a sessão expira — o app do Ponto no celular
+      // caía aqui e, sem isso, aterrissava no menu da loja (PDV/live/etc).
+      // Só aceita caminho interno (começa com / e não //).
+      const redirect = new URLSearchParams(window.location.search).get('redirect');
+      if (redirect && redirect.startsWith('/') && !redirect.startsWith('//')) {
+        router.push(redirect);
+        return;
+      }
       // Redireciona por papel:
       //   store    → PDV direto (vendedora vive aqui)
       //   contador → relatório fiscal direto (acesso restrito a fiscal apenas)
