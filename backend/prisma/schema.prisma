@@ -4939,3 +4939,125 @@ model TrocaReversaConcessao {
   @@index([cpf])
   @@map("troca_reversa_concessoes")
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LURDS FIT AI — recomendação proprietária de tamanho
+//
+// Camada 100% da Lurd's (nada de terceiro). Fica SEPARADA de `Product` de
+// propósito: `Product` é espelho do Giga e é sobrescrito a cada sync — o que
+// a gente cadastra aqui (modelagem, elastano, caimento) nunca seria
+// preservado lá. Chave é a REF (a peça), não o código de cor/tamanho.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Ficha de CAIMENTO da peça — o que o algoritmo precisa saber do produto.
+model FitProduct {
+  ref         String   @id @db.VarChar(20)   // REF normalizada (upper, sem espaço)
+  categoria   String?  @db.VarChar(20)       // vestido|blusa|calca|legging|jaqueta|camisa|saia|macacao
+  marca       String?  @db.VarChar(30)
+  fornecedor  String?  @db.VarChar(40)
+  modelagem   String?  @db.VarChar(10)       // pequena | normal | grande
+  elastano    String?  @db.VarChar(10)       // sem | pouco | muito
+  caimento    String?  @db.VarChar(10)       // justo | normal | amplo
+  composicao  String?  @db.VarChar(120)      // "95% viscose, 5% elastano"
+  /// Medidas REAIS da peça por tamanho: { "54": { busto: 118, cintura: 104, quadril: 126, comprimento: 92 } }
+  medidas     Json?
+  observacao  String?  @db.Text
+
+  atualizadoPor String? @map("atualizado_por") @db.VarChar(80)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@index([categoria])
+  @@index([marca])
+  @@map("fit_product")
+}
+
+/// BODY PROFILE da cliente — nasce no widget, vive no CRM.
+model FitBodyProfile {
+  id          String   @id @default(uuid())
+  /// Liga no CRM quando a cliente é conhecida (telefone/CPF informado depois)
+  customerId  String?  @map("customer_id")
+  /// Identificador anônimo do navegador (localStorage) até virar cliente
+  anonId      String?  @map("anon_id") @db.VarChar(40)
+
+  alturaCm    Int      @map("altura_cm")
+  pesoKg      Int      @map("peso_kg")
+  idade       Int?
+  preferencia String   @db.VarChar(10)       // justa | normal | soltinha
+  formatoCorpo String? @map("formato_corpo") @db.VarChar(12) // ampulheta|pera|maca|retangulo|naosei
+  busto       String?  @db.VarChar(1)        // P | M | G
+  quadril     String?  @db.VarChar(1)        // P | M | G
+  tamanhoHabitual String? @map("tamanho_habitual") @db.VarChar(4)
+
+  ultimoRecomendado String? @map("ultimo_recomendado") @db.VarChar(4)
+  ultimoComprado    String? @map("ultimo_comprado") @db.VarChar(4)
+  ultimoTrocado     String? @map("ultimo_trocado") @db.VarChar(4)
+
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  recomendacoes FitRecommendation[]
+
+  @@index([customerId])
+  @@index([anonId])
+  @@map("fit_body_profile")
+}
+
+/// Cada recomendação entregue — é o dataset de treino do sistema.
+model FitRecommendation {
+  id          String   @id @default(uuid())
+  profileId   String?  @map("profile_id")
+  customerId  String?  @map("customer_id")
+  anonId      String?  @map("anon_id") @db.VarChar(40)
+
+  ref         String?  @db.VarChar(20)
+  categoria   String?  @db.VarChar(20)
+  marca       String?  @db.VarChar(30)
+  /// Snapshot do que a cliente respondeu + o que a peça informava
+  entrada     Json
+  /// Passo a passo do cálculo (auditoria: por que deu 54)
+  trilha      Json?
+
+  tamanho       String  @db.VarChar(4)
+  tamanhoAlt    String? @map("tamanho_alt") @db.VarChar(4)
+  confianca     Int
+  origem        String  @default("pdp") @db.VarChar(20)  // pdp | live | whatsapp | pdv
+
+  /// Fechamento do ciclo (alimenta o aprendizado)
+  desfecho        String?   @db.VarChar(12)  // comprou | trocou | devolveu | ignorou
+  tamanhoComprado String?   @map("tamanho_comprado") @db.VarChar(4)
+  tamanhoFinal    String?   @map("tamanho_final") @db.VarChar(4)
+  desfechoAt      DateTime? @map("desfecho_at")
+
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  profile FitBodyProfile? @relation(fields: [profileId], references: [id], onDelete: SetNull)
+
+  @@index([ref])
+  @@index([customerId])
+  @@index([createdAt])
+  @@index([desfecho])
+  @@map("fit_recommendation")
+}
+
+/// MODELO APRENDIDO — viés de tamanho por escopo (a "IA" treinada nas vendas
+/// reais da Lurd's). Ex.: escopo='ref' chave='12345' viesMedio=+0.8 → essa
+/// peça veste pequeno, recomenda um número acima.
+model FitStat {
+  id        String   @id @default(uuid())
+  escopo    String   @db.VarChar(12)   // ref | categoria | marca | modelagem | fornecedor
+  chave     String   @db.VarChar(40)
+
+  amostras  Int      @default(0)       // quantos desfechos alimentaram
+  viesSoma  Float    @default(0) @map("vies_soma")   // Σ (passos de correção)
+  viesMedio Float    @default(0) @map("vies_medio")
+  acertos   Int      @default(0)       // comprou e ficou
+  trocas    Int      @default(0)
+  devolucoes Int     @default(0)
+
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([escopo, chave])
+  @@index([escopo])
+  @@map("fit_stat")
+}
