@@ -22,5 +22,19 @@ export const viewport: Viewport = {
 };
 
 export default function PontoCelularLayout({ children }: { children: React.ReactNode }) {
-  return children;
+  return (
+    <>
+      {/* Captura o beforeinstallprompt ANTES do React hidratar. O Chrome
+          dispara esse evento cedo — se só o useEffect da página escutasse,
+          perdia o evento em celular lento e o botão "Instalar" nunca
+          aparecia (bug relatado 29/07). Guarda em window.__pontoBip e avisa
+          a página via CustomEvent caso ela já esteja montada. */}
+      <script
+        dangerouslySetInnerHTML={{
+          __html: `window.addEventListener('beforeinstallprompt',function(e){e.preventDefault();window.__pontoBip=e;try{window.dispatchEvent(new CustomEvent('ponto:bip'))}catch(x){}});`,
+        }}
+      />
+      {children}
+    </>
+  );
 }
