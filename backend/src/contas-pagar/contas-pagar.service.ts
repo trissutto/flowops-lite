@@ -93,6 +93,20 @@ export class ContasPagarService {
   private static readonly LOJAS_ATIVAS_DEFAULT =
     '01,02,03,04,05,06,07,08,09,10,11,14,15,19,20';
 
+  /**
+   * RÓTULO DO CENTRO DE CUSTO (dono 30/07) — vale SÓ AQUI.
+   *
+   * No financeiro a 01 é a matriz T.O. e a 09 é a matriz LURDS; no resto do
+   * sistema elas continuam sendo a loja de Itanhaém e o cadastro de origem.
+   * Por isso o nome fica nesta tabela, e não no cadastro da loja: trocar
+   * `Store.name` mudaria o PDV, o faturamento e o ranking junto.
+   */
+  private static readonly ROTULO_CONTAS_PAGAR: Record<string, string> = {
+    '1': 'MATRIZ T.O.',
+    '9': 'MATRIZ LURDS',
+    '20': 'PESSOA FISICA',
+  };
+
   async lojas() {
     const [distinctRaw, stores] = await Promise.all([
       this.prisma.$queryRawUnsafe(`SELECT DISTINCT loja_code AS code FROM conta_pagar WHERE deleted_at IS NULL ORDER BY 1`),
@@ -119,7 +133,11 @@ export class ContasPagarService {
     return Array.from(codes)
       .map((code) => ({
         code,
-        nome: nameByCode.get(code) || `LOJA ${code} — HISTÓRICO`,
+        // Rótulo do financeiro vence o nome do cadastro — só nesta tela.
+        nome:
+          ContasPagarService.ROTULO_CONTAS_PAGAR[norm(code)] ||
+          nameByCode.get(code) ||
+          `LOJA ${code} — HISTÓRICO`,
         grupo: ativasSet.has(norm(code)) ? 'ativa' : 'historico',
       }))
       .sort((a, b) => {
