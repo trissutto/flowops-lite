@@ -57,6 +57,7 @@ import { RealignmentModule } from './realignment/realignment.module';
 import { CrediariosModule } from './crediarios/crediarios.module';
 import { CommissionsModule } from './commissions/commissions.module';
 import { FitModule } from './fit/fit.module';
+import { LojaCatalogModule } from './loja-catalog/loja-catalog.module';
 import { CutoverModule } from './cutover/cutover.module';
 import { FinanceiroModule } from './financeiro/financeiro.module';
 import { IntelligenceModule } from './intelligence/intelligence.module';
@@ -139,6 +140,7 @@ import { OperadorPinModule } from './operador-pin/operador-pin.module';
     CrediariosModule,
     CommissionsModule,
     FitModule,
+    LojaCatalogModule,
     CutoverModule,
     FinanceiroModule,
     IntelligenceModule,

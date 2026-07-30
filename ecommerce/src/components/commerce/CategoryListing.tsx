@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { useInfiniteQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { SearchX, SlidersHorizontal } from 'lucide-react';
 import { Drawer } from '@/components/ui/Drawer';
 import { Button } from '@/components/ui/Button';
@@ -13,7 +13,7 @@ import { SmartBar } from './SmartBar';
 import { EditorialProductGrid, type GridInterruption } from './EditorialProductGrid';
 import { useProductFilters } from '@/hooks/useProductFilters';
 import { useDebounced, useIntersection } from '@/hooks';
-import { fetchProducts, filterGroups } from '@/services/products';
+import { fetchFacetas, fetchProducts, filterGroups } from '@/services/products';
 import type { Product } from '@/types';
 
 const PER_PAGE = 12;
@@ -46,7 +46,14 @@ export function CategoryListing({
   const [page, setPage] = useState(1);
   const debouncedSearch = useDebounced(state.search, 250);
 
-  const groups = useMemo(() => filterGroups(category), [category]);
+  // Facetas do catálogo REAL (cor, tamanho, marca com contagem). Enquanto
+  // não chegam, a sidebar usa o esqueleto — nunca fica vazia.
+  const { data: facetas } = useQuery({
+    queryKey: ['facetas'],
+    queryFn: fetchFacetas,
+    staleTime: 5 * 60_000,
+  });
+  const groups = useMemo(() => filterGroups(category, facetas), [category, facetas]);
 
   // Filtro/ordenação novos → volta pra primeira página.
   useEffect(() => {
