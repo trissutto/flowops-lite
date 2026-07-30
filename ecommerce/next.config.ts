@@ -15,8 +15,13 @@ const nextConfig: NextConfig = {
     imageSizes: [160, 240, 320, 420, 560, 720],
     minimumCacheTTL: 60 * 60 * 24 * 30,
     remotePatterns: [
-      // TEMPORÁRIO: fotos editoriais royalty-free enquanto o banco de imagens
-      // da marca não está pronto. Remover quando as fotos reais entrarem.
+      // Fotos REAIS do catálogo — hoje hospedadas no WordPress do site atual
+      // (`lurds.com.br/wp-content/uploads/...`). Sem estes hosts o next/image
+      // recusa a URL e o produto aparece sem foto nenhuma.
+      { protocol: 'https', hostname: 'lurds.com.br' },
+      { protocol: 'https', hostname: 'www.lurds.com.br' },
+      // TEMPORÁRIO: editoriais royalty-free enquanto o banco de imagens da
+      // marca não está pronto. Remover quando as fotos próprias entrarem.
       { protocol: 'https', hostname: 'images.unsplash.com' },
     ],
   },
