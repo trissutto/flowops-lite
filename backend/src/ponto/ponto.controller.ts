@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   Param,
+  Patch,
   Post,
   Query,
   Req,
@@ -220,6 +221,41 @@ export class PontoController {
       body.justificativa,
       this.currentUser(req) ?? undefined,
     );
+  }
+
+  /**
+   * EDITA batida errada (tipo e/ou horário) — justificativa obrigatória.
+   *   PATCH /ponto/registro/:id  { tipo?, timestamp?, justificativa }
+   */
+  @Patch('registro/:id')
+  @UseGuards(AdminOnlyGuard)
+  @AdminOnly()
+  editarRegistro(
+    @Param('id') id: string,
+    @Body() body: { tipo?: string; timestamp?: string; justificativa: string },
+    @Req() req: any,
+  ) {
+    return this.svc.editarRegistro(id, {
+      tipo: body?.tipo,
+      timestamp: body?.timestamp,
+      justificativa: body?.justificativa,
+      userId: this.currentUser(req) || undefined,
+    });
+  }
+
+  /**
+   * EXCLUI batida errada — motivo obrigatório (registro vai pro log).
+   *   DELETE /ponto/registro/:id  { motivo }
+   */
+  @Delete('registro/:id')
+  @UseGuards(AdminOnlyGuard)
+  @AdminOnly()
+  excluirRegistro(
+    @Param('id') id: string,
+    @Body() body: { motivo: string },
+    @Req() req: any,
+  ) {
+    return this.svc.excluirRegistro(id, body?.motivo || '', this.currentUser(req) || undefined);
   }
 
   @Post('manual')
