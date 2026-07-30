@@ -83,15 +83,15 @@ export class LojaCatalogService {
       NULLIF(TRIM(p.cor), '')                     AS cor,
       NULLIF(TRIM(p.tamanho), '')                 AS tamanho,
       NULLIF(TRIM(p.marca), '')                   AS marca,
-      NULLIF(TRIM(p.nome_grupo), '')              AS categoria,
-      NULLIF(TRIM(p.descricao_completa), '')      AS descricao,
-      COALESCE(p.venda_un, 0)::float8             AS preco,
+      NULLIF(TRIM(p."nomeGrupo"), '')              AS categoria,
+      NULLIF(TRIM(p."descricaoCompleta"), '')      AS descricao,
+      COALESCE(p."vendaUn", 0)::float8             AS preco,
       p.custo::float8                             AS custo,
       NULLIF(TRIM(p.ean), '')                     AS ean,
       NULLIF(TRIM(p.ncm), '')                     AS ncm,
       NULLIF(TRIM(p.cst), '')                     AS cst,
       COALESCE(e.total, 0)::int                   AS estoque,
-      p.data_alt                                  AS "dataAlt"
+      p."dataAlt"                                 AS "dataAlt"
     FROM wincred_produtos p
     LEFT JOIN (
       SELECT codigo, SUM(COALESCE(estoque, 0)) AS total

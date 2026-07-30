@@ -86,6 +86,7 @@ export class SiteSyncService {
     const semErp: string[] = [];
     const refsDuplicadas: string[] = [];
     const assumidas: string[] = [];
+    let nSemSku = 0, nSemErp = 0, nDup = 0, nAssumidas = 0;
     const vistos = new Set<string>();
 
     try {
@@ -110,9 +111,9 @@ export class SiteSyncService {
         for (const p of lista) {
           try {
             const ref = this.normRef(p.sku);
-            if (!ref) { ignorados++; if (semSku.length < 40) semSku.push(`#${p.id} ${p.name}`); continue; }
-            if (!refsErp.has(ref)) { ignorados++; if (semErp.length < 40) semErp.push(`${ref} (#${p.id})`); continue; }
-            if (vistos.has(ref)) { ignorados++; if (refsDuplicadas.length < 40) refsDuplicadas.push(`${ref} (#${p.id})`); continue; }
+            if (!ref) { ignorados++; nSemSku++; if (semSku.length < 40) semSku.push(`#${p.id} ${p.name}`); continue; }
+            if (!refsErp.has(ref)) { ignorados++; nSemErp++; if (semErp.length < 40) semErp.push(`${ref} (#${p.id})`); continue; }
+            if (vistos.has(ref)) { ignorados++; nDup++; if (refsDuplicadas.length < 40) refsDuplicadas.push(`${ref} (#${p.id})`); continue; }
             vistos.add(ref);
 
             const imagens = (p.images ?? []).map((img: any) => ({
@@ -148,6 +149,7 @@ export class SiteSyncService {
             if (existente?.origemConteudo === 'flow') {
               // Peça já assumida pelo Flow: o site antigo não manda mais nela.
               ignorados++;
+              nAssumidas++;
               if (assumidas.length < 40) assumidas.push(ref);
               continue;
             }
@@ -170,10 +172,10 @@ export class SiteSyncService {
 
       const duracaoMs = Date.now() - inicio;
       const detalhes = {
-        semSku: { qtd: semSku.length, exemplos: semSku },
-        semCorrespondenciaNoErp: { qtd: semErp.length, exemplos: semErp },
-        refsDuplicadasNoWc: { qtd: refsDuplicadas.length, exemplos: refsDuplicadas },
-        jaAssumidasPeloFlow: { qtd: assumidas.length, exemplos: assumidas },
+        semSku: { qtd: nSemSku, exemplos: semSku },
+        semCorrespondenciaNoErp: { qtd: nSemErp, exemplos: semErp },
+        refsDuplicadasNoWc: { qtd: nDup, exemplos: refsDuplicadas },
+        jaAssumidasPeloFlow: { qtd: nAssumidas, exemplos: assumidas },
       };
       await (this.prisma as any).siteSyncLog.create({
         data: { tipo: 'conteudo', duracaoMs, lidos, criados, atualizados, ignorados, falhas, detalhes, disparadoPor },
