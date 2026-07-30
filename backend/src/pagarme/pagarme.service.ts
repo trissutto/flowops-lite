@@ -770,7 +770,10 @@ export class PagarmeService {
     const valorCentavos = Math.round(input.valor * 100);
     const expiresInMin = Math.max(15, Math.min(10080, input.expiresInMinutes || 1440));
     const expiresAt = new Date(Date.now() + expiresInMin * 60 * 1000);
-    const maxInst = Math.max(1, Math.min(12, input.maxInstallments || 6));
+    // PAGARME_MAX_PARCELAS (Railway) = padrão da REDE quando o caller não
+    // manda maxInstallments (caso do link do PDV). Caller explícito vence.
+    const envMax = Number(process.env.PAGARME_MAX_PARCELAS) || 0;
+    const maxInst = Math.max(1, Math.min(12, input.maxInstallments || envMax || 6));
     const acceptPix = input.acceptPix !== false;
     const acceptCard = input.acceptCreditCard !== false;
     if (!acceptPix && !acceptCard) {

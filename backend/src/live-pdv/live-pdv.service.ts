@@ -3248,7 +3248,7 @@ export class LivePdvService {
       customerPhone: cart.customerPhone || undefined,
       customerEmail: cart.customerEmail || undefined,
       expiresInMinutes: 1440, // 24h pra cliente pagar
-      maxInstallments: 12, // até 12x sem juros no cartão
+      maxInstallments: Number(process.env.PAGARME_MAX_PARCELAS) || 12, // sem juros no cartão (PAGARME_MAX_PARCELAS ajusta a rede)
     });
 
     const updated = await (this.prisma as any).livePdvCart.update({
