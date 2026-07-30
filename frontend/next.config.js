@@ -14,6 +14,8 @@ const nextConfig = {
       // Hub órfão /sistema continha cadastros (Lojas/Usuários/Logs) — agora
       // tudo isso vive no novo hub /config.
       { source: '/sistema', destination: '/config', permanent: true },
+      // Landing pública de lojas — variação com hífen aponta pra URL canônica.
+      { source: '/nossas-lojas', destination: '/nossaslojas', permanent: true },
     ];
   },
 };
