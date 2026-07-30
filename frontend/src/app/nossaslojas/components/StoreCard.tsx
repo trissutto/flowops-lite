@@ -1,6 +1,5 @@
 'use client';
 
-import Image from 'next/image';
 import { motion } from 'framer-motion';
 import { MapPin, MessageCircle, Instagram, Clock, Phone } from 'lucide-react';
 import {
@@ -9,11 +8,8 @@ import {
   instagramUrl,
   directionsUrl,
   badgesFor,
-  imgSrc,
-  BLUR_DATA_URL,
   type Store,
 } from '../lib';
-import EditorialVisual from './EditorialVisual';
 
 interface Props {
   store: Store;
@@ -53,44 +49,32 @@ export default function StoreCard({ store, index, isSelected, isNearest, onSelec
           : 'border-[var(--lj-line)] shadow-[0_10px_40px_-30px_rgba(33,28,24,0.35)] hover:border-[var(--lj-gold)]/50 hover:shadow-[0_32px_70px_-30px_rgba(140,115,37,0.5)]'
       }`}
     >
-      {/* Fotografia editorial — zoom suave de 4% no hover */}
-      <div className="relative aspect-[4/3] w-full overflow-hidden">
-        {store.image ? (
-          <Image
-            src={imgSrc(store.image, 900)}
-            alt={`Moda plus size na Lurds ${store.unit} — editorial`}
-            fill
-            sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
-            placeholder="blur"
-            blurDataURL={BLUR_DATA_URL}
-            className="object-cover transition-transform duration-700 ease-out group-hover:scale-[1.04]"
-          />
-        ) : (
-          <EditorialVisual seed={index} initial={store.unit.charAt(0)} className="h-full w-full" />
-        )}
-        <div className="absolute inset-0 bg-gradient-to-t from-black/25 via-transparent to-transparent" />
-        <div className="absolute left-4 top-4 flex gap-2">
-          {isNearest && (
-            <span className="rounded-full bg-[var(--lj-ink)]/90 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--lj-gold-soft)] backdrop-blur-sm">
-              Mais perto de você
-            </span>
-          )}
-          {isSelected && (
-            <span className="rounded-full bg-[var(--lj-gold-strong)]/95 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-white backdrop-blur-sm">
-              No mapa
-            </span>
-          )}
-        </div>
-      </div>
-
       <div className="p-7">
-        <p className="text-[10px] font-medium uppercase tracking-[0.32em] text-[var(--lj-gold-strong)]">
-          {store.city} · {store.uf}
+        {(isNearest || isSelected) && (
+          <div className="mb-4 flex gap-2">
+            {isNearest && (
+              <span className="rounded-full bg-[var(--lj-ink)] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--lj-gold-soft)]">
+                Mais perto de você
+              </span>
+            )}
+            {isSelected && (
+              <span className="rounded-full bg-[var(--lj-gold-strong)] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-white">
+                No mapa
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Cidade/unidade é a protagonista do card — caixa alta, serif, grande */}
+        <p className="text-[10px] font-medium uppercase tracking-[0.32em] text-[var(--lj-ink-soft)]">
+          Lurds · {store.city}/{store.uf}
         </p>
-        <h3 className="lojas-serif mt-2.5 text-[1.7rem] font-medium leading-snug">
-          Lurds {store.unit}
+        <h3 className="lojas-serif mt-2.5 text-3xl font-semibold uppercase leading-tight tracking-[0.05em] text-[var(--lj-ink)] sm:text-[2.1rem]">
+          {store.unit}
         </h3>
-        <p className="mt-3 text-sm font-light leading-relaxed text-[var(--lj-ink-soft)]">
+        <div className="mt-4 h-[2px] w-12 bg-[var(--lj-gold)] transition-all duration-500 group-hover:w-20" />
+
+        <p className="mt-4 text-sm font-light leading-relaxed text-[var(--lj-ink-soft)]">
           {store.description}
         </p>
 
