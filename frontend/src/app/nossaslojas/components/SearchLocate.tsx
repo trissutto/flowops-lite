@@ -1,7 +1,9 @@
 'use client';
 
 import { useMemo, useRef, useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+// Sem AnimatePresence aqui: o unmount pós-exit não dispara com o React do
+// Next 14.1 (dropdown/banner ficavam órfãos no DOM) — animamos só a entrada.
+import { motion } from 'framer-motion';
 import { LocateFixed, Search, MapPin, MessageCircle, Instagram, Loader2 } from 'lucide-react';
 import { stores, whatsappUrl, instagramUrl, directionsUrl, type Store } from '../lib';
 import type { GeoState } from '../NossasLojasClient';
@@ -54,7 +56,7 @@ export default function SearchLocate({ geoState, nearest, onLocate, onPick }: Pr
   }
 
   return (
-    <section id="buscar" className="scroll-mt-8 px-6 pb-8 pt-20 sm:pt-24">
+    <section id="buscar" className="scroll-mt-8 border-t border-[var(--lj-line)] px-6 pb-10 pt-20 sm:pt-24">
       <div className="mx-auto max-w-3xl text-center">
         <motion.div
           initial={{ opacity: 0, y: 24 }}
@@ -91,14 +93,12 @@ export default function SearchLocate({ geoState, nearest, onLocate, onPick }: Pr
               placeholder="Busque por cidade ou bairro…"
               className="w-full rounded-full border border-[var(--lj-line)] bg-white py-3.5 pl-11 pr-4 text-sm outline-none transition-shadow placeholder:text-[var(--lj-ink-soft)]/60 focus:border-[var(--lj-gold)] focus:shadow-[0_0_0_3px_rgba(184,145,43,0.12)]"
             />
-            <AnimatePresence>
-              {open && results.length > 0 && (
+            {open && results.length > 0 && (
                 <motion.ul
                   id="lojas-autocomplete"
                   role="listbox"
                   initial={{ opacity: 0, y: 6 }}
                   animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: 6 }}
                   transition={{ duration: 0.18 }}
                   className="absolute left-0 right-0 top-full z-30 mt-2 overflow-hidden rounded-2xl border border-[var(--lj-line)] bg-white text-left shadow-xl shadow-black/5"
                 >
@@ -121,8 +121,7 @@ export default function SearchLocate({ geoState, nearest, onLocate, onPick }: Pr
                     </li>
                   ))}
                 </motion.ul>
-              )}
-            </AnimatePresence>
+            )}
           </div>
 
           {/* Geolocalização */}
@@ -147,12 +146,10 @@ export default function SearchLocate({ geoState, nearest, onLocate, onPick }: Pr
         )}
 
         {/* Banner da loja mais próxima — a experiência de 1 clique */}
-        <AnimatePresence>
-          {nearest && (
+        {nearest && (
             <motion.div
               initial={{ opacity: 0, y: 24, scale: 0.98 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0 }}
               transition={{ duration: 0.5 }}
               className="mx-auto mt-10 max-w-2xl rounded-3xl border border-[var(--lj-gold)]/40 bg-white p-8 shadow-[0_20px_60px_-30px_rgba(140,115,37,0.4)]"
             >
@@ -193,8 +190,7 @@ export default function SearchLocate({ geoState, nearest, onLocate, onPick }: Pr
                 </a>
               </div>
             </motion.div>
-          )}
-        </AnimatePresence>
+        )}
       </div>
     </section>
   );

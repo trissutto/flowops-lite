@@ -3,8 +3,10 @@
 import { useCallback, useMemo, useState } from 'react';
 import { stores, nearestStore, type Store } from './lib';
 import Hero from './components/Hero';
+import Manifesto from './components/Manifesto';
 import SearchLocate from './components/SearchLocate';
 import StoresSection from './components/StoresSection';
+import StoreDrawer from './components/StoreDrawer';
 import WhyVisit from './components/WhyVisit';
 import Testimonials from './components/Testimonials';
 import InstagramCta from './components/InstagramCta';
@@ -14,12 +16,17 @@ export type GeoState = 'idle' | 'loading' | 'ok' | 'error';
 
 export default function NossasLojasClient() {
   const [selectedSlug, setSelectedSlug] = useState<string>(stores[0].slug);
+  const [drawerSlug, setDrawerSlug] = useState<string | null>(null);
   const [nearest, setNearest] = useState<{ store: Store; km: number } | null>(null);
   const [geoState, setGeoState] = useState<GeoState>('idle');
 
   const selected = useMemo(
     () => stores.find((s) => s.slug === selectedSlug) ?? stores[0],
     [selectedSlug],
+  );
+  const drawerStore = useMemo(
+    () => stores.find((s) => s.slug === drawerSlug) ?? null,
+    [drawerSlug],
   );
 
   const scrollToId = useCallback((id: string) => {
@@ -57,7 +64,8 @@ export default function NossasLojasClient() {
 
   return (
     <main>
-      <Hero onFindStore={() => scrollToId('buscar')} />
+      <Hero onFindStore={() => scrollToId('buscar')} onLocate={locate} />
+      <Manifesto />
       <SearchLocate
         geoState={geoState}
         nearest={nearest}
@@ -68,15 +76,17 @@ export default function NossasLojasClient() {
         selected={selected}
         nearestSlug={nearest?.store.slug ?? null}
         onSelect={selectStore}
+        onOpen={(slug) => setDrawerSlug(slug)}
       />
+      <StoreDrawer store={drawerStore} onClose={() => setDrawerSlug(null)} />
       <WhyVisit />
       <Testimonials />
       <InstagramCta store={selected} />
       <FinalCta store={nearest?.store ?? selected} />
-      <footer className="border-t border-[var(--lj-line)] bg-[var(--lj-cream)] px-6 py-10 text-center">
+      <footer className="border-t border-[var(--lj-line)] bg-[var(--lj-cream)] px-6 py-12 text-center">
         <p className="lojas-serif text-lg tracking-wide">Lurd&apos;s Plus Size</p>
-        <p className="mt-2 text-xs uppercase tracking-[0.2em] text-[var(--lj-ink-soft)]">
-          Moda plus size elegante · 14 lojas em São Paulo e região ·{' '}
+        <p className="mt-3 text-xs uppercase tracking-[0.2em] text-[var(--lj-ink-soft)]">
+          Moda plus size elegante · {stores.length} lojas em São Paulo e região ·{' '}
           <a href="https://www.lurds.com.br" className="underline decoration-[var(--lj-gold)] underline-offset-4">
             lurds.com.br
           </a>

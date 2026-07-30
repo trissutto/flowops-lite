@@ -11,7 +11,7 @@ interface Props {
 
 export default function FinalCta({ store }: Props) {
   return (
-    <section className="relative overflow-hidden px-6 py-24 sm:py-32">
+    <section className="relative overflow-hidden px-6 py-28 sm:py-40">
       <div className="lojas-grain absolute inset-0 bg-gradient-to-br from-[var(--lj-champagne)] via-[var(--lj-ivory)] to-[var(--lj-cream)]" />
       <div className="relative z-10 mx-auto max-w-3xl text-center">
         <motion.div

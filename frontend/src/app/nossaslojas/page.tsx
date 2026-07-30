@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import NossasLojasClient from './NossasLojasClient';
-import { stores, SITE_URL, instagramUrl, directionsUrl, type Store } from './lib';
+import { stores, site, imgSrc, SITE_URL, instagramUrl, directionsUrl, type Store } from './lib';
 
 const PAGE_URL = `${SITE_URL}/nossaslojas`;
 const DESCRIPTION =
@@ -20,12 +20,20 @@ export const metadata: Metadata = {
     ...stores.map((s) => `plus size ${s.city}`),
   ],
   openGraph: {
-    title: 'Encontre a Lurds mais perto de você',
+    title: 'Encontre a Lurds mais próxima de você',
     description: DESCRIPTION,
     url: PAGE_URL,
     siteName: 'Lurds Plus Size',
     locale: 'pt_BR',
     type: 'website',
+    images: [
+      {
+        url: imgSrc(site.heroImage, 1200),
+        width: 1200,
+        height: 630,
+        alt: 'Lurds Plus Size — moda plus size elegante',
+      },
+    ],
   },
   twitter: {
     card: 'summary_large_image',
@@ -53,6 +61,7 @@ function storeJsonLd(s: Store) {
       addressCountry: 'BR',
     },
     geo: { '@type': 'GeoCoordinates', latitude: s.geo.lat, longitude: s.geo.lng },
+    ...(s.image ? { image: imgSrc(s.image, 1200) } : {}),
     hasMap: directionsUrl(s),
     sameAs: [instagramUrl(s)],
     openingHoursSpecification: s.hours.schema.map((h) => ({

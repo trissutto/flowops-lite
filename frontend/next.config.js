@@ -3,6 +3,12 @@ const nextConfig = {
   reactStrictMode: true,
   output: 'standalone',
 
+  // Fotos editoriais TEMPORÁRIAS da landing /nossaslojas (Unsplash, royalty-free).
+  // Quando as fotos reais das lojas entrarem em /public/lojas, dá pra remover.
+  images: {
+    remotePatterns: [{ protocol: 'https', hostname: 'images.unsplash.com' }],
+  },
+
   // === REORG · F2: redirects 301 ===
   // Bookmarks antigos continuam funcionando depois que a gente mover telas/hubs.
   // Só adicionar aqui DEPOIS que o destination existir (Next valida em build).
