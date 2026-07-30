@@ -7,10 +7,28 @@ import type { Product, Store } from '@/types';
  * e injetar o JSON-LD pertinente. Ver docs/seo.md.
  */
 
+/**
+ * URL canônica do site.
+ *
+ * Vem de `NEXT_PUBLIC_SITE_URL` (Vercel → Settings → Environment Variables).
+ * Enquanto o domínio definitivo não existe, a Vercel injeta `VERCEL_URL` com o
+ * endereço do deploy — assim canonical e Open Graph apontam pro lugar certo em
+ * qualquer preview, sem ninguém editar código.
+ *
+ * ⚠️ O fallback NÃO é `lurdsplussize.com.br`: esse domínio é do FlowOps
+ * (PDV/retaguarda/Live). Colocá-lo aqui faria o ecommerce se anunciar com a
+ * URL de outro sistema.
+ */
+function resolveSiteUrl(): string {
+  if (process.env.NEXT_PUBLIC_SITE_URL) return process.env.NEXT_PUBLIC_SITE_URL;
+  if (process.env.NEXT_PUBLIC_VERCEL_URL) return `https://${process.env.NEXT_PUBLIC_VERCEL_URL}`;
+  return 'http://localhost:3100';
+}
+
 export const SITE = {
   name: "Lurd's Plus Size",
   shortName: 'Lurds',
-  url: 'https://www.lurdsplussize.com.br',
+  url: resolveSiteUrl(),
   description:
     'Moda plus size elegante do 46 ao 60. Curadoria de peças que vestem super bem, atendimento acolhedor e 14 lojas em São Paulo e região.',
   locale: 'pt_BR',
