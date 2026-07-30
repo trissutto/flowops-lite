@@ -3,7 +3,6 @@
 import { motion } from 'framer-motion';
 import { stores, type Store } from '../lib';
 import StoreCard from './StoreCard';
-import MapPanel from './MapPanel';
 
 interface Props {
   selected: Store;
@@ -12,6 +11,10 @@ interface Props {
   onOpen: (slug: string) => void;
 }
 
+/**
+ * Grid das lojas — 3 por linha no desktop. O mapa vive dentro do drawer
+ * de cada unidade (decisão do dono 30/07: sem mapa lateral disputando coluna).
+ */
 export default function StoresSection({ selected, nearestSlug, onSelect, onOpen }: Props) {
   return (
     <section id="lojas" className="scroll-mt-8 px-6 py-20 sm:py-28">
@@ -30,28 +33,23 @@ export default function StoresSection({ selected, nearestSlug, onSelect, onOpen 
             {stores.length} endereços, o mesmo acolhimento
           </h2>
           <div className="lojas-rule mx-auto mt-5 w-24" />
+          <p className="mt-5 text-sm font-light text-[var(--lj-ink-soft)]">
+            Toque em uma loja pra ver fotos, mapa e falar direto com a equipe.
+          </p>
         </motion.div>
 
-        <div className="mt-16 grid gap-10 lg:grid-cols-[minmax(0,1fr)_420px] lg:items-start">
-          {/* Cards — selecionar um card sincroniza o mapa ao lado */}
-          <div className="order-2 grid gap-6 sm:grid-cols-2 lg:order-1">
-            {stores.map((s, i) => (
-              <StoreCard
-                key={s.slug}
-                store={s}
-                index={i}
-                isSelected={s.slug === selected.slug}
-                isNearest={s.slug === nearestSlug}
-                onSelect={() => onSelect(s.slug, false)}
-                onOpen={() => onOpen(s.slug)}
-              />
-            ))}
-          </div>
-
-          {/* Mapa sincronizado — sticky no desktop, acima dos cards no mobile */}
-          <div className="order-1 lg:order-2 lg:sticky lg:top-6">
-            <MapPanel store={selected} />
-          </div>
+        <div className="mt-16 grid gap-7 sm:grid-cols-2 lg:grid-cols-3">
+          {stores.map((s, i) => (
+            <StoreCard
+              key={s.slug}
+              store={s}
+              index={i}
+              isSelected={s.slug === selected.slug}
+              isNearest={s.slug === nearestSlug}
+              onSelect={() => onSelect(s.slug, false)}
+              onOpen={() => onOpen(s.slug)}
+            />
+          ))}
         </div>
       </div>
     </section>

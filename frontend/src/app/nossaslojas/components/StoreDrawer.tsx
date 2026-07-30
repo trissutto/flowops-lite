@@ -180,7 +180,7 @@ export default function StoreDrawer({ store, onClose }: Props) {
           <h3 className="mt-9 text-[11px] font-medium uppercase tracking-[0.3em] text-[var(--lj-gold-strong)]">
             Onde estamos
           </h3>
-          <div className="mt-4 overflow-hidden rounded-2xl border border-[var(--lj-line)]">
+          <div className="relative mt-4 overflow-hidden rounded-2xl border border-[var(--lj-line)]">
             <iframe
               src={mapEmbedUrl(s)}
               title={`Mapa — Lurds Plus Size ${s.unit}`}
@@ -188,6 +188,15 @@ export default function StoreDrawer({ store, onClose }: Props) {
               referrerPolicy="no-referrer-when-downgrade"
               className="h-52 w-full border-0"
             />
+            {/* Selo da unidade sobre o mapa */}
+            <div className="pointer-events-none absolute left-3 top-3 flex items-center gap-2 rounded-full bg-[var(--lj-ink)]/90 py-1 pl-1 pr-3 shadow-lg backdrop-blur-sm">
+              <span className="lojas-serif flex h-6 w-6 items-center justify-center rounded-full bg-[var(--lj-gold-soft)] text-xs font-semibold italic text-[var(--lj-ink)]">
+                L
+              </span>
+              <span className="text-[10px] font-medium uppercase tracking-[0.16em] text-white">
+                Lurds {s.unit}
+              </span>
+            </div>
           </div>
         </div>
 
