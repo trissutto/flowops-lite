@@ -63,57 +63,46 @@ export class StoresService implements OnModuleInit {
   constructor(private readonly prisma: PrismaService) {}
 
   /**
-   * NOMES OFICIAIS DAS LOJAS (dono 30/07). Aplica no boot, uma vez:
-   *   01 → MATRIZ T.O.      (era ITANHAÉM)
-   *   09 → MATRIZ LURDS     (era SANTOS 2 — mudou de Santos pra Itanhaém;
-   *                          nem estava no cadastro do Flow, só no Giga)
-   *   20 → PESSOA FISICA    (era DEPOSITO — contas particulares do dono)
+   * DESFAZ o rename global de 30/07 (decisão do dono no mesmo dia: "era pra
+   * colocar MATRIZ T.O. e MATRIZ LURDS SOMENTE no contas a pagar").
    *
-   * IDEMPOTENTE e RESPEITOSO: só renomeia se o nome atual ainda for um dos
-   * ANTIGOS. Se alguém renomear depois pela tela, o boot não desfaz.
-   * O nome anterior vai pra `nomesAntigos` (histórico de venda que gravou o
-   * nome em storeCode continua casando — ver faturamento.service).
+   * O nome da loja é global — aparece no PDV, no faturamento, no ranking.
+   * Rótulo de centro de custo não pode sequestrar isso. Os nomes oficiais
+   * viraram RÓTULO só no Contas a Pagar (ver ContasPagarService.lojas()).
+   *
+   * Restaura pelo `nomesAntigos`, que foi gravado justamente pra isso.
+   * Idempotente: se já está com o nome antigo, não faz nada.
    */
-  private static readonly NOMES_OFICIAIS = [
-    { code: '01', antigos: ['ITANHAEM', 'ITANHAÉM'], nome: 'MATRIZ T.O.' },
-    { code: '09', antigos: ['SANTOS 2', 'SANTOS2', 'SANTOS II'], nome: 'MATRIZ LURDS', criarSeFaltar: true },
-    { code: '20', antigos: ['DEPOSITO', 'DEPÓSITO', 'PF'], nome: 'PESSOA FISICA' },
+  private static readonly DESFAZER_RENAME = [
+    { code: '01', deveVoltarDe: 'MATRIZ T.O.' },
+    { code: '20', deveVoltarDe: 'PESSOA FISICA' },
   ];
 
   async onModuleInit() {
     try {
-      for (const alvo of StoresService.NOMES_OFICIAIS) {
-        const atual = await this.prisma.store.findUnique({ where: { code: alvo.code } });
+      for (const alvo of StoresService.DESFAZER_RENAME) {
+        const loja = await this.prisma.store.findUnique({ where: { code: alvo.code } });
+        if (!loja) continue;
+        if (String(loja.name || '').trim().toUpperCase() !== alvo.deveVoltarDe.toUpperCase()) continue;
 
-        if (!atual) {
-          if (!alvo.criarSeFaltar) continue;
-          // Centro de custo que só existia no Giga: entra INATIVA de propósito
-          // — aparece no Contas a Pagar (whitelist própria) sem virar loja
-          // fantasma no PDV/faturamento, que filtram por active=true.
-          await this.prisma.store.create({
-            data: { code: alvo.code, name: alvo.nome, active: false, tipo: 'REDE' } as any,
-          });
-          this.logger.log(`[stores] loja ${alvo.code} criada como "${alvo.nome}" (inativa — centro de custo)`);
-          continue;
-        }
-
-        const nomeAtual = String(atual.name || '').trim().toUpperCase();
-        if (nomeAtual === alvo.nome.toUpperCase()) continue;           // já está certo
-        if (!alvo.antigos.some((a) => a.toUpperCase() === nomeAtual)) continue; // renomeada à mão: não mexe
-
-        const antigos = String((atual as any).nomesAntigos || '')
+        const antigos = String((loja as any).nomesAntigos || '')
           .split(',').map((s) => s.trim()).filter(Boolean);
-        if (!antigos.some((n) => n.toUpperCase() === nomeAtual)) antigos.push(atual.name);
+        const original = antigos[antigos.length - 1];
+        if (!original) continue; // sem histórico: não chuta nome
 
+        const resto = antigos.slice(0, -1).join(',');
         await this.prisma.store.update({
           where: { code: alvo.code },
-          data: { name: alvo.nome, nomesAntigos: antigos.join(',').slice(0, 300) } as any,
+          data: { name: original, nomesAntigos: resto || null } as any,
         });
-        this.logger.log(`[stores] loja ${alvo.code}: "${atual.name}" → "${alvo.nome}" (histórico preservado)`);
+        this.logger.log(
+          `[stores] loja ${alvo.code} restaurada: "${loja.name}" -> "${original}" ` +
+          `(o rotulo do Contas a Pagar assumiu esse papel)`,
+        );
       }
     } catch (e) {
-      // Nome de loja não pode derrubar o boot do backend.
-      this.logger.warn(`[stores] nomes oficiais não aplicados: ${(e as Error).message}`);
+      // Nome de loja nunca pode derrubar o boot.
+      this.logger.warn(`[stores] restauracao de nome nao aplicada: ${(e as Error).message}`);
     }
   }
 
