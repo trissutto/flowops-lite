@@ -63,6 +63,8 @@ export interface Product {
   images: Media[];
   colors?: ProductColor[];
   sizes: ProductSize[];
+  /** REF/SKU da peça — chave da ficha de caimento do Lurds Fit AI. */
+  sku?: string;
   badges?: ProductBadge[];
   fabric?: string;
   fit?: string;

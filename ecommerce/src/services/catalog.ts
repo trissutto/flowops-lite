@@ -179,6 +179,7 @@ function toProduct(item: WcListItem, detail?: WcDetail): Product {
 
   return {
     id: String(item.id),
+    sku: item.sku ?? undefined,
     slug: item.slug,
     name: item.name,
     category: detectCategory(item.categories),

@@ -1,9 +1,10 @@
 'use client';
 
 import { useState } from 'react';
-import { Heart, MapPin, MessageCircle, Ruler, ShoppingBag, Star, Truck } from 'lucide-react';
+import { Heart, MapPin, MessageCircle, Ruler, ShoppingBag, Sparkles, Star, Truck } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { SizePill } from '@/components/ui/Choice';
+import { FitAssistant } from '@/components/fit/FitAssistant';
 import { ProductBadgeTag } from '@/components/ui/Badge';
 import { useToast } from '@/components/feedback/ToastProvider';
 import { useCartStore } from '@/store/cart';
@@ -25,6 +26,8 @@ import type { Product } from '@/types';
 export function BuyBox({ product }: { product: Product }) {
   const [size, setSize] = useState<string | null>(null);
   const [sizeError, setSizeError] = useState(false);
+  // LURDS FIT AI — assistente próprio de tamanho
+  const [fitOpen, setFitOpen] = useState(false);
   const { toast } = useToast();
   const mounted = useMounted();
   const addToCart = useCartStore((s) => s.add);
@@ -143,6 +146,21 @@ export function BuyBox({ product }: { product: Product }) {
           </a>
         </div>
 
+        {/* LURDS FIT AI — mata a objeção "será que serve?" antes do seletor */}
+        {!soldOut && (
+          <button
+            type="button"
+            onClick={() => setFitOpen(true)}
+            className="group mt-4 flex w-full items-center justify-center gap-2 rounded-sm border border-primary bg-primary-wash px-5 py-3.5 text-small font-medium text-primary-strong transition-all duration-[320ms] hover:border-primary-strong hover:bg-champagne"
+          >
+            <Sparkles
+              className="size-3.5 transition-transform duration-[320ms] group-hover:scale-110"
+              strokeWidth={1.75}
+            />
+            Descubra seu tamanho ideal
+          </button>
+        )}
+
         <div className="mt-4 flex flex-wrap gap-2">
           {product.sizes.map((option) => (
             <SizePill
@@ -215,6 +233,21 @@ export function BuyBox({ product }: { product: Product }) {
           Troca fácil em até 30 dias, sem burocracia
         </li>
       </ul>
+
+      <FitAssistant
+        open={fitOpen}
+        onClose={() => setFitOpen(false)}
+        productRef={product.sku ?? product.id}
+        productName={product.name}
+        categoria={product.category}
+        tamanhosDisponiveis={available.map((s) => s.label)}
+        onEscolherTamanho={(tamanho) => {
+          setSize(tamanho);
+          setSizeError(false);
+          toast({ message: `Tamanho ${tamanho} selecionado`, description: 'Recomendado pelo Lurd’s Fit AI' });
+          document.getElementById('seletor-tamanho')?.scrollIntoView({ block: 'center' });
+        }}
+      />
     </div>
   );
 }
