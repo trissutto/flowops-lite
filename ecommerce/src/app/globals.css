@@ -1,0 +1,299 @@
+@import 'tailwindcss';
+
+/* ============================================================================
+   LURDS PLUS SIZE — DESIGN TOKENS
+   Fonte única de verdade do sistema visual. Tailwind v4 gera as utilities
+   automaticamente a partir das variáveis declaradas em @theme:
+     --color-ink        → bg-ink / text-ink / border-ink
+     --font-display     → font-display
+     --spacing-section  → py-section
+   NUNCA usar cor/tamanho hardcoded em componente. Se falta um token, cria aqui.
+   Documentação: docs/design-system.md
+   ========================================================================== */
+
+@theme {
+  /* ---------------------------------------------------------------- CORES */
+  /* Neutros quentes — a base da marca é papel/creme, nunca cinza-azulado */
+  --color-ink: #1a1614; /* preto quente — texto principal, botão primário */
+  --color-ink-soft: #5c534b; /* texto secundário (AA sobre background) */
+  --color-ink-muted: #8a7f76; /* caption, placeholder (AA em 14px+) */
+  --color-background: #fcfaf7; /* fundo base da página */
+  --color-surface: #ffffff; /* cards, inputs, superfícies elevadas */
+  --color-surface-alt: #f5f0e8; /* seções alternadas (creme) */
+  --color-champagne: #ede3d3; /* superfícies quentes, gradientes */
+  --color-border: #e8dfd0; /* hairline padrão */
+  --color-border-strong: #d6c9b3; /* hairline de ênfase */
+
+  /* Primary — dourado Lurds. Acento, nunca área grande */
+  --color-primary: #b8912b;
+  --color-primary-strong: #8c7325; /* dourado legível sobre claro (AA) */
+  --color-primary-soft: #d4af37; /* dourado sobre fundo escuro */
+  --color-primary-wash: #fbf6e6; /* hover de superfície dourada */
+
+  /* Secondary — vinho da marca (herdado do PDV boutique) */
+  --color-secondary: #7a3b46;
+  --color-secondary-soft: #a35c68;
+  --color-secondary-wash: #f7edef;
+
+  /* Accent — sálvia, usada com muita parcimônia */
+  --color-accent: #4f7355;
+  --color-accent-wash: #eef3ef;
+
+  /* Semânticos */
+  --color-success: #2e7d46; /* CONVENÇÃO: verde só pra dinheiro/WhatsApp */
+  --color-success-strong: #256538;
+  --color-warning: #b45309;
+  --color-danger: #a63a3a;
+  --color-info: #2e75b6;
+
+  /* Extremos */
+  --color-dark: #100d0c;
+  --color-light: #ffffff;
+
+  /* ------------------------------------------------------------ TIPOGRAFIA */
+  --font-display: var(--font-playfair), 'Playfair Display', Georgia, serif;
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+
+  /* Escala tipográfica — clamp pra fluidez sem breakpoint */
+  --text-display: clamp(2.75rem, 7vw, 5.5rem);
+  --text-display--line-height: 1.04;
+  --text-display--letter-spacing: -0.02em;
+
+  --text-h1: clamp(2.25rem, 4.5vw, 3.5rem);
+  --text-h1--line-height: 1.1;
+  --text-h1--letter-spacing: -0.015em;
+
+  --text-h2: clamp(1.75rem, 3vw, 2.5rem);
+  --text-h2--line-height: 1.16;
+  --text-h2--letter-spacing: -0.01em;
+
+  --text-h3: clamp(1.375rem, 2vw, 1.75rem);
+  --text-h3--line-height: 1.25;
+
+  --text-h4: 1.125rem;
+  --text-h4--line-height: 1.4;
+
+  --text-body-lg: 1.0625rem;
+  --text-body-lg--line-height: 1.75;
+
+  --text-body: 0.9375rem;
+  --text-body--line-height: 1.7;
+
+  --text-small: 0.8125rem;
+  --text-small--line-height: 1.55;
+
+  --text-caption: 0.6875rem;
+  --text-caption--line-height: 1.4;
+  --text-caption--letter-spacing: 0.32em;
+
+  --text-button: 0.8125rem;
+  --text-button--line-height: 1;
+  --text-button--letter-spacing: 0.16em;
+
+  /* --------------------------------------------------------- ESPAÇAMENTO */
+  /* Base 4px do Tailwind + aliases semânticos pro ritmo vertical das seções */
+  --spacing-section: 7rem; /* 112px — respiro padrão entre seções */
+  --spacing-section-sm: 4.5rem;
+  --spacing-section-lg: 10rem;
+  --spacing-gutter: 1.5rem; /* padding lateral mobile */
+  --spacing-gutter-lg: 2.5rem; /* padding lateral desktop */
+
+  /* ------------------------------------------------------------- CONTAINER */
+  /* Nomes próprios (não sm/md/lg) pra não sobrescrever a escala padrão do
+     Tailwind — max-w-narrow, max-w-text, max-w-page, max-w-wide */
+  --container-narrow: 40rem;
+  --container-text: 56rem;
+  --container-page: 72rem;
+  --container-wide: 84rem;
+
+  /* ---------------------------------------------------------------- RADIUS */
+  --radius-xs: 2px;
+  --radius-sm: 6px;
+  --radius-md: 12px;
+  --radius-lg: 20px;
+  --radius-xl: 28px;
+  --radius-pill: 999px;
+
+  /* --------------------------------------------------------------- SOMBRAS */
+  /* Sombras quentes e difusas — nunca preto puro, nunca duras */
+  --shadow-xs: 0 1px 2px rgba(26, 22, 20, 0.04);
+  --shadow-sm: 0 4px 16px -8px rgba(26, 22, 20, 0.12);
+  --shadow-md: 0 12px 40px -24px rgba(26, 22, 20, 0.24);
+  --shadow-lg: 0 24px 64px -32px rgba(26, 22, 20, 0.28);
+  --shadow-xl: 0 40px 96px -48px rgba(26, 22, 20, 0.32);
+  --shadow-gold: 0 24px 60px -30px rgba(140, 115, 37, 0.42);
+
+  /* ---------------------------------------------------------------- MOTION */
+  /* Easing assinatura da marca — saída suave, nunca elástica */
+  --ease-lurds: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out-soft: cubic-bezier(0.4, 0, 0.2, 1);
+  --duration-fast: 180ms;
+  --duration-base: 320ms;
+  --duration-slow: 560ms;
+  --duration-editorial: 900ms;
+
+  /* ----------------------------------------------------------- BREAKPOINTS */
+  --breakpoint-xs: 26.25rem; /* 420px — large mobile */
+  --breakpoint-sm: 40rem; /* 640px */
+  --breakpoint-md: 48rem; /* 768px — tablet */
+  --breakpoint-lg: 64rem; /* 1024px — notebook */
+  --breakpoint-xl: 80rem; /* 1280px — desktop */
+  --breakpoint-2xl: 96rem; /* 1536px */
+}
+
+/* ============================================================================
+   Z-INDEX — escala única. Nunca inventar z-index solto no componente.
+   ========================================================================== */
+:root {
+  --z-base: 0;
+  --z-raised: 10;
+  --z-sticky: 20;
+  --z-header: 30;
+  --z-dropdown: 40;
+  --z-overlay: 50;
+  --z-drawer: 60;
+  --z-modal: 70;
+  --z-toast: 80;
+  --z-tooltip: 90;
+}
+
+/* ============================================================================
+   BASE
+   ========================================================================== */
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--color-background);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-weight: 300;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family: var(--font-display);
+    font-weight: 400;
+  }
+
+  /* Foco visível dourado — padrão único de acessibilidade do projeto.
+     Nunca remover outline sem repor um equivalente visível. */
+  :focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 3px;
+    border-radius: var(--radius-xs);
+  }
+
+  ::selection {
+    background: var(--color-primary-wash);
+    color: var(--color-ink);
+  }
+}
+
+/* ============================================================================
+   UTILITIES DE MARCA
+   ========================================================================== */
+@layer utilities {
+  /* Micro-label caixa-alta — o elemento que mais "assina" a marca */
+  .eyebrow {
+    font-size: var(--text-caption);
+    line-height: var(--text-caption--line-height);
+    letter-spacing: var(--text-caption--letter-spacing);
+    text-transform: uppercase;
+    font-weight: 500;
+  }
+
+  /* Fio dourado — divisor editorial */
+  .hairline-gold {
+    height: 1px;
+    background: linear-gradient(to right, transparent, var(--color-primary) 50%, transparent);
+  }
+
+  /* Números tabulares (preços alinham em coluna) */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Sublinhado que cresce no hover — assinatura da navegação */
+  .link-underline {
+    position: relative;
+  }
+  .link-underline::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    bottom: -4px;
+    height: 1px;
+    width: 0;
+    background: currentColor;
+    transition: width var(--duration-base) var(--ease-lurds);
+  }
+  .link-underline:hover::after,
+  .link-underline[data-active='true']::after {
+    width: 100%;
+  }
+
+  /* Grain sutil — textura de papel sobre artes/gradientes */
+  .grain::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0.45;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.04 0'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+
+  /* Esconde scrollbar mantendo o scroll (carrosséis touch) */
+  .no-scrollbar {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Shimmer dos skeletons premium */
+  .shimmer {
+    background: linear-gradient(
+      90deg,
+      var(--color-surface-alt) 0%,
+      var(--color-champagne) 40%,
+      var(--color-surface-alt) 80%
+    );
+    background-size: 300% 100%;
+    animation: shimmer 1.8s var(--ease-in-out-soft) infinite;
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: 150% 0;
+  }
+  100% {
+    background-position: -150% 0;
+  }
+}
+
+/* ============================================================================
+   ACESSIBILIDADE — respeita quem pediu menos movimento
+   ========================================================================== */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
