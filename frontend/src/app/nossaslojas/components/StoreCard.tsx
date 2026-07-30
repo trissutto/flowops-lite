@@ -28,7 +28,7 @@ export default function StoreCard({ store, index, isSelected, isNearest, onSelec
       initial={{ opacity: 0, y: 28 }}
       whileInView={{ opacity: 1, y: 0 }}
       viewport={{ once: true, margin: '-40px' }}
-      transition={{ duration: 0.6, delay: (index % 2) * 0.08 }}
+      transition={{ duration: 0.6, delay: (index % 3) * 0.07 }}
       onClick={() => {
         onSelect();
         onOpen();
@@ -50,18 +50,11 @@ export default function StoreCard({ store, index, isSelected, isNearest, onSelec
       }`}
     >
       <div className="p-7">
-        {(isNearest || isSelected) && (
+        {isNearest && (
           <div className="mb-4 flex gap-2">
-            {isNearest && (
-              <span className="rounded-full bg-[var(--lj-ink)] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--lj-gold-soft)]">
-                Mais perto de você
-              </span>
-            )}
-            {isSelected && (
-              <span className="rounded-full bg-[var(--lj-gold-strong)] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-white">
-                No mapa
-              </span>
-            )}
+            <span className="rounded-full bg-[var(--lj-ink)] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--lj-gold-soft)]">
+              Mais perto de você
+            </span>
           </div>
         )}
 

@@ -97,7 +97,7 @@ parágrafo font-light leading-loose ink-soft (max-w-2xl)
 | Card boutique (foto, badges, CTAs) | `components/StoreCard.tsx` |
 | Drawer lateral premium (40vw / fullscreen mobile) | `components/StoreDrawer.tsx` |
 | Autocomplete + geolocalização | `components/SearchLocate.tsx` |
-| Mapa integrado com selo da marca | `components/MapPanel.tsx` |
+| Mapa integrado com selo da marca | mapa dentro de `components/StoreDrawer.tsx` |
 | Carrossel de depoimentos | `components/Testimonials.tsx` |
 | Badges de diferenciais | pills caps 10px, borda dourada/30 |
 
