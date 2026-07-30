@@ -1062,6 +1062,97 @@ export class PontoService {
     await (this.prisma as any).store.update({ where: { id: storeId }, data });
     return this.getGeofence(storeId);
   }
+
+  /**
+   * TELA DO DIA (dono 30/07): todas as batidas de TODAS as funcionárias num
+   * dia, agrupadas por loja — visão ao vivo pro RH acompanhar as entradas.
+   * `data` YYYY-MM-DD (dia em horário de Brasília; default hoje).
+   */
+  async getDia(data?: string) {
+    const hojeBrt = new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10);
+    const dia = /^\d{4}-\d{2}-\d{2}$/.test(String(data || '')) ? String(data) : hojeBrt;
+    const start = new Date(`${dia}T03:00:00.000Z`); // 00:00 BRT
+    const end = new Date(start.getTime() + 24 * 3600_000);
+
+    const regs: any[] = await (this.prisma as any).pontoRegistro.findMany({
+      where: { timestamp: { gte: start, lt: end } },
+      orderBy: { timestamp: 'asc' },
+      include: {
+        seller: { select: { id: true, name: true, apelido: true, cargo: true } },
+        store: { select: { id: true, code: true, name: true } },
+      },
+    });
+
+    // Agrupa por funcionária×loja e deriva o status prático do momento
+    const porFunc = new Map<string, any>();
+    for (const r of regs) {
+      const k = `${r.sellerId}|${r.storeId}`;
+      let f = porFunc.get(k);
+      if (!f) {
+        f = {
+          sellerId: r.sellerId,
+          nome: r.seller?.apelido || r.seller?.name || '?',
+          nomeCompleto: r.seller?.name || null,
+          cargo: r.seller?.cargo || null,
+          storeId: r.storeId,
+          storeCode: r.store?.code || '',
+          storeName: r.store?.name || '',
+          batidas: [],
+        };
+        porFunc.set(k, f);
+      }
+      f.batidas.push({
+        id: r.id,
+        tipo: r.tipo,
+        hora: r.timestamp,
+        source: r.source,
+        justificado: r.justificado,
+        faceConfidence: r.faceConfidence ?? null,
+      });
+    }
+    const funcionarias = Array.from(porFunc.values()).map((f) => {
+      const tem = (t: string) => f.batidas.some((b: any) => b.tipo === t);
+      const status = tem('saida')
+        ? 'saiu'
+        : tem('saida_almoco') && !tem('volta_almoco')
+          ? 'almoco'
+          : tem('entrada')
+            ? 'trabalhando'
+            : 'incompleto';
+      const ultima = f.batidas[f.batidas.length - 1];
+      return { ...f, status, ultimaHora: ultima?.hora || null };
+    });
+
+    const lojasMap = new Map<string, any>();
+    for (const f of funcionarias) {
+      let l = lojasMap.get(f.storeId);
+      if (!l) {
+        l = { storeId: f.storeId, storeCode: f.storeCode, storeName: f.storeName, funcionarias: [] };
+        lojasMap.set(f.storeId, l);
+      }
+      l.funcionarias.push(f);
+    }
+    const lojas = Array.from(lojasMap.values())
+      .map((l) => ({
+        ...l,
+        funcionarias: l.funcionarias.sort((a: any, b: any) =>
+          String(a.nome).localeCompare(String(b.nome), 'pt-BR')),
+      }))
+      .sort((a, b) => String(a.storeCode).localeCompare(String(b.storeCode)));
+
+    return {
+      data: dia,
+      geradoEm: new Date().toISOString(),
+      totais: {
+        funcionarias: funcionarias.length,
+        trabalhando: funcionarias.filter((f) => f.status === 'trabalhando').length,
+        almoco: funcionarias.filter((f) => f.status === 'almoco').length,
+        sairam: funcionarias.filter((f) => f.status === 'saiu').length,
+        batidas: regs.length,
+      },
+      lojas,
+    };
+  }
 }
 
 /**

@@ -132,6 +132,18 @@ export class PontoController {
 
   // ── ESPELHO ───────────────────────────────────────────────────
 
+  /**
+   * TELA DO DIA — batidas de TODAS as funcionárias no dia, por loja,
+   * pro RH acompanhar as entradas em tempo real (a tela faz polling).
+   *   GET /ponto/dia?data=YYYY-MM-DD  (default: hoje em BRT)
+   */
+  @Get('dia')
+  @UseGuards(AdminOnlyGuard)
+  @AdminOnly()
+  dia(@Query('data') data?: string) {
+    return this.svc.getDia(data);
+  }
+
   @Get('espelho')
   espelho(
     @Query('sellerId') sellerId: string,
