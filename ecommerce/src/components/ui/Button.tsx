@@ -30,7 +30,10 @@ const VARIANTS: Record<ButtonVariant, string> = {
   secondary: 'border border-primary text-primary-strong hover:bg-primary-wash',
   ghost: 'text-ink hover:text-primary-strong',
   light: 'bg-light text-ink hover:bg-primary-soft',
-  outlineLight: 'border border-light/60 text-light hover:border-light hover:bg-light/10',
+  // Sobre foto o contorno sozinho some nas áreas claras da imagem — o véu
+  // escuro com blur garante legibilidade sem virar um botão sólido.
+  outlineLight:
+    'border border-light/70 bg-ink/25 text-light backdrop-blur-sm hover:border-light hover:bg-ink/40',
   whatsapp: 'bg-success text-light hover:bg-success-strong',
 };
 
