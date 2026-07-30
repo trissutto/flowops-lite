@@ -1,0 +1,223 @@
+'use client';
+
+import { useState } from 'react';
+import Image from 'next/image';
+import Link from 'next/link';
+import { motion } from 'framer-motion';
+import { Eye, Heart } from 'lucide-react';
+import { BLUR_DATA_URL, cn, discountPercent, formatInstallments, formatPrice } from '@/lib/utils';
+import { fadeUp, reveal } from '@/lib/motion';
+import { ProductBadgeTag } from '@/components/ui/Badge';
+import { useWishlistStore } from '@/store/wishlist';
+import { useMounted } from '@/hooks';
+import type { Product } from '@/types';
+
+/**
+ * PRODUCT CARD — o card definitivo do ecommerce. Nenhuma página cria o seu.
+ *
+ * Comportamento premium no hover (desktop):
+ *   - a segunda foto entra em crossfade (troca automática de imagem)
+ *   - a foto ativa dá zoom de 4%
+ *   - "Quick view" e os tamanhos disponíveis sobem por baixo
+ * No mobile nada disso dispara: o card fica limpo e o toque vai direto pro
+ * produto (hover em touch é armadilha de usabilidade).
+ *
+ * Preço: valor cheio riscado + preço atual + Pix + parcelamento. O desconto
+ * aparece como etiqueta calculada, nunca digitada à mão.
+ */
+
+interface ProductCardProps {
+  product: Product;
+  /** Índice na grade — usado só pro stagger da animação de entrada. */
+  index?: number;
+  /** Abre o Quick View (a página decide o que fazer). */
+  onQuickView?: (product: Product) => void;
+  /** Proporção da foto. 3/4 é o padrão editorial da marca. */
+  aspect?: '3/4' | '4/5' | '1/1';
+  className?: string;
+  /** Primeiras fotos da primeira dobra podem priorizar carregamento. */
+  priority?: boolean;
+}
+
+export function ProductCard({
+  product,
+  index = 0,
+  onQuickView,
+  aspect = '3/4',
+  className,
+  priority = false,
+}: ProductCardProps) {
+  const [hovered, setHovered] = useState(false);
+  const mounted = useMounted();
+  const toggleWishlist = useWishlistStore((s) => s.toggle);
+  const isFavorite = useWishlistStore((s) => s.ids.includes(product.id));
+
+  const href = `/produto/${product.slug}`;
+  const cover = product.images[0];
+  const alternate = product.images[1];
+  const discount = product.compareAtPrice
+    ? discountPercent(product.compareAtPrice, product.price)
+    : 0;
+  const availableSizes = product.sizes.filter((s) => s.available);
+
+  const aspectClass =
+    aspect === '3/4' ? 'aspect-3/4' : aspect === '4/5' ? 'aspect-4/5' : 'aspect-square';
+
+  return (
+    <motion.article
+      {...reveal(fadeUp, '-40px')}
+      transition={{ duration: 0.56, delay: (index % 4) * 0.06 }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      className={cn('group relative flex flex-col', className)}
+    >
+      {/* Mídia */}
+      <div className={cn('relative overflow-hidden rounded-md bg-surface-alt', aspectClass)}>
+        <Link href={href} className="absolute inset-0" aria-label={product.name}>
+          <Image
+            src={cover.src}
+            alt={cover.alt}
+            fill
+            priority={priority}
+            sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
+            placeholder="blur"
+            blurDataURL={BLUR_DATA_URL}
+            className={cn(
+              'object-cover transition-all duration-[900ms] ease-[cubic-bezier(0.22,1,0.36,1)]',
+              alternate && hovered ? 'opacity-0' : 'opacity-100',
+              'lg:group-hover:scale-[1.04]',
+            )}
+          />
+          {alternate && (
+            <Image
+              src={alternate.src}
+              alt=""
+              aria-hidden
+              fill
+              sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
+              placeholder="blur"
+              blurDataURL={BLUR_DATA_URL}
+              className={cn(
+                'hidden object-cover transition-all duration-[900ms] ease-[cubic-bezier(0.22,1,0.36,1)] lg:block',
+                hovered ? 'scale-[1.04] opacity-100' : 'opacity-0',
+              )}
+            />
+          )}
+        </Link>
+
+        {/* Etiquetas */}
+        <div className="pointer-events-none absolute top-3 left-3 flex flex-col items-start gap-1.5">
+          {discount > 0 && <ProductBadgeTag badge="promocao" />}
+          {product.badges?.slice(0, 2).map((badge) => (
+            <ProductBadgeTag key={badge} badge={badge} />
+          ))}
+        </div>
+
+        {/* Favoritar */}
+        <button
+          type="button"
+          onClick={() => toggleWishlist(product.id)}
+          aria-label={isFavorite ? `Remover ${product.name} dos favoritos` : `Salvar ${product.name} nos favoritos`}
+          aria-pressed={mounted ? isFavorite : undefined}
+          className="absolute top-3 right-3 flex size-9 items-center justify-center rounded-pill bg-surface/85 text-ink backdrop-blur transition-colors hover:bg-surface"
+        >
+          <Heart
+            className={cn(
+              'size-4 transition-colors',
+              mounted && isFavorite ? 'fill-secondary text-secondary' : 'text-ink-soft',
+            )}
+            strokeWidth={1.5}
+          />
+        </button>
+
+        {/* Camada de hover: quick view + tamanhos (desktop) */}
+        <div
+          className={cn(
+            'pointer-events-none absolute inset-x-3 bottom-3 hidden flex-col gap-2 transition-all duration-[320ms] ease-[cubic-bezier(0.22,1,0.36,1)] lg:flex',
+            hovered ? 'translate-y-0 opacity-100' : 'translate-y-3 opacity-0',
+          )}
+        >
+          {availableSizes.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              {availableSizes.slice(0, 6).map((size) => (
+                <span
+                  key={size.label}
+                  className="tabular rounded-xs bg-surface/90 px-2 py-1 text-[0.625rem] font-medium text-ink backdrop-blur"
+                >
+                  {size.label}
+                </span>
+              ))}
+            </div>
+          )}
+          {onQuickView && (
+            <button
+              type="button"
+              onClick={() => onQuickView(product)}
+              className="pointer-events-auto inline-flex items-center justify-center gap-2 rounded-pill bg-ink/90 px-4 py-2.5 text-[0.6875rem] font-medium tracking-[0.16em] text-light uppercase backdrop-blur transition-colors hover:bg-ink"
+            >
+              <Eye className="size-3.5" strokeWidth={1.75} />
+              Ver rápido
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Texto */}
+      <div className="mt-4 flex flex-1 flex-col">
+        {product.fabric && <p className="eyebrow text-ink-muted">{product.fabric}</p>}
+
+        <h3 className="mt-1.5">
+          <Link
+            href={href}
+            className="text-body font-normal text-ink transition-colors hover:text-primary-strong"
+          >
+            {product.name}
+          </Link>
+        </h3>
+
+        <div className="mt-2 flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
+          {product.compareAtPrice && (
+            <span className="tabular text-small text-ink-muted line-through">
+              {formatPrice(product.compareAtPrice)}
+            </span>
+          )}
+          <span className="tabular text-body font-medium text-ink">{formatPrice(product.price)}</span>
+          {discount > 0 && (
+            <span className="tabular text-small font-medium text-secondary">-{discount}%</span>
+          )}
+        </div>
+
+        <p className="mt-1 text-small font-light text-ink-soft">
+          {product.pixPrice && (
+            <>
+              <span className="tabular font-medium text-success">{formatPrice(product.pixPrice)}</span>{' '}
+              no Pix ·{' '}
+            </>
+          )}
+          <span className="tabular">
+            {product.installments
+              ? `${product.installments.times}x de ${formatPrice(product.installments.value)}`
+              : formatInstallments(product.price)}
+          </span>
+        </p>
+
+        {/* Cores disponíveis */}
+        {product.colors && product.colors.length > 1 && (
+          <div className="mt-3 flex items-center gap-1.5" aria-label="Cores disponíveis">
+            {product.colors.slice(0, 5).map((color) => (
+              <span
+                key={color.name}
+                title={color.name}
+                className="size-3.5 rounded-pill border border-border"
+                style={{ backgroundColor: color.hex }}
+              />
+            ))}
+            {product.colors.length > 5 && (
+              <span className="text-[0.625rem] text-ink-muted">+{product.colors.length - 5}</span>
+            )}
+          </div>
+        )}
+      </div>
+    </motion.article>
+  );
+}

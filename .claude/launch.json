@@ -9,6 +9,13 @@
       "port": 3000
     },
     {
+      "name": "ecommerce",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--", "-p", "3100"],
+      "cwd": "ecommerce",
+      "port": 3100
+    },
+    {
       "name": "prototipo-familia",
       "runtimeExecutable": "npx",
       "runtimeArgs": ["-y", "http-server", "C:/Users/User/Documents/Claude/Projects/familia-plus", "-p", "4173", "-c-1"],
