@@ -251,6 +251,15 @@ export class NfeTransferService {
    * transferência (CFOP 5152/6152 indevido). Kill-switch: NFE_ALLOW_INTER_EMPRESA=1.
    */
   private checarMesmaEmpresa(origem: StoreFiscal, destino: StoreFiscal) {
+    // ANTES do kill-switch, e sem exceção: nota em que remetente e destinatário
+    // são o MESMO CNPJ não é transferência de nada — é documento inválido.
+    // Rede de segurança do bug 30/07 (destino Suzano assinava a própria nota):
+    // se alguma regra futura voltar a escolher o destino, trava aqui.
+    if (origem.cnpj && origem.cnpj === destino.cnpj) {
+      throw new BadRequestException(
+        `NF-e inválida: remetente e destinatário são o mesmo estabelecimento (CNPJ ${origem.cnpj} — ${destino.razaoSocial || destino.storeCode}). Uma transferência precisa sair de um estabelecimento e entrar em outro. Ajuste a ordem de emitentes da raiz em NFE_TRANSFER_EMITENTE_RAIZ_JSON.`,
+      );
+    }
     if (String(process.env.NFE_ALLOW_INTER_EMPRESA ?? '') === '1') return;
     const raizO = origem.cnpj.slice(0, 8);
     const raizD = destino.cnpj.slice(0, 8);
@@ -456,8 +465,9 @@ export class NfeTransferService {
     const origem = await this.loadStoreFiscal(shipment.fromStoreCode, {
       ...opts,
       matchRaiz: destino.cnpj.slice(0, 8),
-      // Raiz sem matriz cadastrada (MDD): emite pela config da PRÓPRIA loja destino
       preferStoreCode: String(shipment.toStoreCode || ''),
+      // O destino nunca assina a própria nota (ver loadStoreFiscal).
+      excludeCnpj: destino.cnpj,
     });
 
     // Itens da remessa (uma linha por unidade) → agrupa por SKU.
@@ -564,6 +574,14 @@ export class NfeTransferService {
           ? { modo: 'destacado', descricao: `ICMS destacado (CST 00, ${data.interestadual ? '12' : '18'}%) — modelo das notas antigas do GigaNFe` }
           : { modo: 'sem', descricao: 'SEM destaque de ICMS (CST 41 — operação não tributada)' })
         : { modo: 'simples', descricao: 'Simples Nacional — CSOSN 400' },
+      // A prévia é onde a loja confere ANTES de transmitir — se por algum motivo
+      // o emitente voltar a cair no próprio destino, aparece aqui em vez de só
+      // estourar na emissão (bug 30/07).
+      mesmoEstabelecimento: origem.cnpj === destino.cnpj,
+      avisoMesmoEstabelecimento:
+        origem.cnpj === destino.cnpj
+          ? `ATENÇÃO: remetente e destinatário são o MESMO estabelecimento (CNPJ ${origem.cnpj}). A nota não pode ser emitida assim — defina a ordem de emitentes da raiz em NFE_TRANSFER_EMITENTE_RAIZ_JSON.`
+          : null,
       interEmpresa,
       avisoInterEmpresa: interEmpresa
         ? `ATENÇÃO: origem (raiz ${origem.cnpj.slice(0, 8)}) e destino (raiz ${destino.cnpj.slice(0, 8)}) são EMPRESAS DIFERENTES — juridicamente não é transferência (CFOP 5152/6152 pode ser indevido). Confirme a natureza da operação com o contador antes de emitir.`
@@ -574,9 +592,82 @@ export class NfeTransferService {
     };
   }
 
+  /**
+   * Devolve a identidade fiscal que ESTA loja tem da raiz pedida, ou null.
+   * Uma loja pode carregar a raiz em três lugares: na identidade de NF-e
+   * (nfeCnpj), na primária (cnpj) ou numa das extras. A busca antiga só olhava
+   * `cnpj` — e por isso considerava inelegível loja que só tem a raiz na
+   * identidade de NF-e. Identidade NUNCA se mistura (bug 24/07, Praia Grande
+   * saiu com endereço da matriz): CNPJ, razão, IE e endereço saem do MESMO
+   * estabelecimento.
+   */
+  private identidadeDaRaiz(
+    cfg: any,
+    raiz: string,
+    podeAssinar: (cnpj: string | null | undefined) => boolean,
+  ): { cnpj: string; ie: string; razaoSocial: string; fantasia: string; regime: string; endereco: any } | null {
+    const daRaiz = (c: string | null | undefined) =>
+      this.digits(String(c || '')).slice(0, 8) === raiz && podeAssinar(c);
+
+    if (daRaiz(cfg.nfeCnpj)) {
+      return {
+        cnpj: String(cfg.nfeCnpj), ie: String(cfg.nfeIe || ''),
+        razaoSocial: String(cfg.nfeRazaoSocial || ''), fantasia: String(cfg.nfeFantasia || cfg.nfeRazaoSocial || ''),
+        regime: String(cfg.nfeRegime || cfg.regime || '1'), endereco: cfg.nfeEndereco,
+      };
+    }
+    if (daRaiz(cfg.cnpj)) {
+      return {
+        cnpj: String(cfg.cnpj), ie: String(cfg.ie || ''),
+        razaoSocial: String(cfg.razaoSocial || ''), fantasia: String(cfg.fantasia || cfg.razaoSocial || ''),
+        regime: String(cfg.regime || '1'), endereco: cfg.endereco,
+      };
+    }
+    const ex = this.parseIdentidadesExtras(cfg.nfeIdentidadesExtras).find((e: any) => daRaiz(e.cnpj));
+    return ex
+      ? {
+          cnpj: String(ex.cnpj), ie: String(ex.ie || ''),
+          razaoSocial: String(ex.razaoSocial || ''), fantasia: String(ex.fantasia || ex.razaoSocial || ''),
+          regime: String(ex.regime || cfg.regime || '1'), endereco: ex.endereco,
+        }
+      : null;
+  }
+
+  /**
+   * ORDEM DE EMITENTE POR RAIZ (dono 30/07) — env, não hardcode:
+   *   NFE_TRANSFER_EMITENTE_RAIZ_JSON = {"<raiz 8 díg>": ["<code>", "<code>"]}
+   * Vale pra raiz que não tem /0001 cadastrado (MDD Cerqueira: Suzano e Anália
+   * Franco). Com ["17","<anália>"], Suzano assina as notas da raiz; quando o
+   * DESTINO é Suzano ele está vetado e a Anália assume — que é exatamente a
+   * regra pedida, sem citar loja nenhuma dentro do código.
+   */
+  private emitentePreferidoDaRaiz<T extends { c: { storeCode: string } }>(raiz: string, candidatas: T[]): T | undefined {
+    let mapa: Record<string, unknown>;
+    try {
+      mapa = JSON.parse(process.env.NFE_TRANSFER_EMITENTE_RAIZ_JSON || '{}');
+    } catch {
+      this.logger.warn('[nfe] NFE_TRANSFER_EMITENTE_RAIZ_JSON com JSON inválido — ignorada.');
+      return undefined;
+    }
+    const ordem = mapa[raiz];
+    if (!Array.isArray(ordem)) return undefined;
+    for (const code of ordem) {
+      const achou = candidatas.find((x) => x.c.storeCode === String(code));
+      if (achou) return achou;
+    }
+    return undefined;
+  }
+
   private async loadStoreFiscal(
     storeCode: string,
-    opts: { requireCert: boolean; identidade?: 'nfe' | 'base'; matchRaiz?: string; preferStoreCode?: string } = { requireCert: true },
+    opts: {
+      requireCert: boolean;
+      identidade?: 'nfe' | 'base';
+      matchRaiz?: string;
+      preferStoreCode?: string;
+      /** CNPJ do destinatário — jamais pode ser escolhido como emitente. */
+      excludeCnpj?: string;
+    } = { requireCert: true },
   ): Promise<StoreFiscal> {
     const cfg = await this.prisma.nfceConfig.findUnique({ where: { storeCode } });
     if (!cfg) {
@@ -635,39 +726,63 @@ export class NfeTransferService {
     // procura nas EXTRAS uma cujo CNPJ seja dessa raiz — e emite por ela, pra
     // origem e destino serem a MESMA empresa (transferência de verdade).
     if (opts.matchRaiz && opts.matchRaiz.length === 8 && this.digits(cnpjSrc).slice(0, 8) !== opts.matchRaiz) {
+      // NUNCA pode virar emitente: o CNPJ do próprio DESTINO da nota. Sem este
+      // veto, destino que é o estabelecimento principal da raiz era escolhido
+      // pra assinar a própria nota (bug 30/07: qualquer loja → Suzano saía com
+      // remetente = destinatário, porque a raiz MDD não tem /0001 cadastrado e
+      // a regra de recuo era "usa a config da própria loja destino").
+      const vetado = this.digits(String(opts.excludeCnpj || ''));
+      const podeAssinar = (c: string | null | undefined) => {
+        const d = this.digits(String(c || ''));
+        return d.length === 14 && (vetado.length !== 14 || d !== vetado);
+      };
+
       const extras = this.parseIdentidadesExtras(cfg.nfeIdentidadesExtras);
-      let alt: any = extras.find((e) => this.digits(String(e.cnpj || '')).slice(0, 8) === opts.matchRaiz) || null;
+      let alt: any =
+        extras.find(
+          (e) => this.digits(String(e.cnpj || '')).slice(0, 8) === opts.matchRaiz && podeAssinar(e.cnpj),
+        ) || null;
 
       // REGRA DO DONO (28/07): se a PRÓPRIA loja origem não tem identidade da
       // raiz do destino (ex.: Sorocaba raiz 20 → Limeira raiz 30), procura no
       // GRUPO INTEIRO e emite pela empresa dessa raiz (ex.: LURDS Itanhaém).
-      // Preferência: config primária da matriz (/0001) da raiz → primária de
-      // qualquer irmã → identidade extra cadastrada em qualquer loja.
       // SÓ A NOTA muda de emitente — etiqueta/transferência física seguem iguais.
       if (!alt) {
         const todas = await this.prisma.nfceConfig.findMany({
-          select: { storeCode: true, cnpj: true, ie: true, razaoSocial: true, fantasia: true, regime: true, endereco: true, nfeIdentidadesExtras: true },
+          select: {
+            storeCode: true, cnpj: true, ie: true, razaoSocial: true, fantasia: true, regime: true, endereco: true,
+            nfeCnpj: true, nfeIe: true, nfeRazaoSocial: true, nfeFantasia: true, nfeRegime: true, nfeEndereco: true,
+            nfeIdentidadesExtras: true,
+          },
         });
-        const daRaiz = todas.filter((c) => this.digits(String(c.cnpj || '')).slice(0, 8) === opts.matchRaiz);
-        // ORDEM (dono 29/07: "remetente EXATO — 01→Anália saiu como Suzano"):
-        // 1º matriz /0001 da raiz (regra LURDS) · 2º a config da PRÓPRIA LOJA
-        // DESTINO (raiz sem matriz cadastrada, ex. MDD) · 3º qualquer irmã.
-        const prim =
-          daRaiz.find((c) => this.digits(String(c.cnpj)).slice(8, 12) === '0001') ||
-          (opts.preferStoreCode ? daRaiz.find((c) => c.storeCode === opts.preferStoreCode) : undefined) ||
+
+        // Candidatas = lojas que TÊM alguma identidade da raiz do destino e que
+        // não são o próprio destino. Olha as três origens de identidade, porque
+        // a loja pode ter a raiz só na identidade de NF-e ou numa extra (a busca
+        // antiga só olhava `cnpj`, e por isso ignorava lojas elegíveis).
+        const candidata = (c: any) => this.identidadeDaRaiz(c, opts.matchRaiz!, podeAssinar);
+        const daRaiz = todas.map((c) => ({ c, id: candidata(c) })).filter((x) => x.id);
+
+        // ORDEM (dono 30/07). 1º a LISTA CONFIGURADA da raiz — é o que resolve
+        // raiz sem /0001 (MDD: Suzano assina pra Anália, Anália assina pra
+        // Suzano) sem hardcode e sem deploy. 2º matriz /0001 (regra LURDS).
+        // 3º qualquer irmã — último recurso, ordem do banco.
+        const escolhida =
+          this.emitentePreferidoDaRaiz(opts.matchRaiz, daRaiz) ||
+          daRaiz.find((x) => this.digits(String(x.id!.cnpj)).slice(8, 12) === '0001') ||
           daRaiz[0];
-        if (prim) {
-          alt = { cnpj: prim.cnpj, ie: prim.ie, razaoSocial: prim.razaoSocial, fantasia: prim.fantasia, regime: prim.regime, endereco: prim.endereco };
-          this.logger.log(`[nfe] transferência ${storeCode} → raiz ${opts.matchRaiz}: nota emitida pela identidade da loja ${prim.storeCode} (mesma raiz do destino)`);
-        } else {
-          for (const c of todas) {
-            const ex = this.parseIdentidadesExtras(c.nfeIdentidadesExtras).find((e2: any) => this.digits(String(e2.cnpj || '')).slice(0, 8) === opts.matchRaiz);
-            if (ex) {
-              alt = ex;
-              this.logger.log(`[nfe] transferência ${storeCode} → raiz ${opts.matchRaiz}: nota emitida pela identidade extra cadastrada na loja ${c.storeCode}`);
-              break;
-            }
-          }
+
+        if (escolhida) {
+          alt = escolhida.id;
+          this.logger.log(
+            `[nfe] transferência ${storeCode} → raiz ${opts.matchRaiz}: nota emitida pela identidade da loja ${escolhida.c.storeCode} (mesma raiz do destino)`,
+          );
+        } else if (vetado.length === 14) {
+          // Só existia UM estabelecimento elegível e ele é o destino. Emitir
+          // seria nota pra si mesmo — melhor travar com o motivo explícito.
+          throw new BadRequestException(
+            `Não há estabelecimento da raiz ${opts.matchRaiz} para assinar esta transferência: o único candidato é o próprio destino (CNPJ ${vetado}), e remetente não pode ser igual a destinatário. Cadastre outro estabelecimento da raiz ou defina a ordem em NFE_TRANSFER_EMITENTE_RAIZ_JSON.`,
+          );
         }
       }
 

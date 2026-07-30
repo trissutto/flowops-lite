@@ -1125,6 +1125,11 @@ export default function RemessasAdminPage() {
                               <div>CFOP <b>{nfePreview.cfop}</b> · {nfePreview.icms?.descricao}</div>
                             </div>
                           </div>
+                          {nfePreview.avisoMesmoEstabelecimento && (
+                            <div className="rounded bg-rose-50 border border-rose-300 px-2 py-1.5 text-rose-800 font-semibold">
+                              🚫 {nfePreview.avisoMesmoEstabelecimento}
+                            </div>
+                          )}
                           {nfePreview.avisoInterEmpresa && (
                             <div className="rounded bg-amber-50 border border-amber-300 px-2 py-1.5 text-amber-800 font-semibold">
                               ⚠️ {nfePreview.avisoInterEmpresa}
