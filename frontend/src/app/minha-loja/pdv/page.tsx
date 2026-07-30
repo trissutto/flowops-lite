@@ -4041,6 +4041,19 @@ function PaymentModal({
   const { toast } = usePdvToast();
   // Lista de pagamentos parciais já adicionados
   const [payments, setPayments] = useState(initialPayments || []);
+  // SINCRONIZA com o servidor ao abrir (29/07): o modal confiava só no
+  // initialPayments do parent — se um pagamento já tinha sido registrado e o
+  // modal reabria (ex.: frete aplicado depois do link), o front recobrava o
+  // TOTAL e a loja travava com 400 "maior que o restante".
+  useEffect(() => {
+    (async () => {
+      try {
+        const s = await api<any>(`/pdv/sales/${saleId}`);
+        if (Array.isArray(s?.payments)) setPayments(s.payments);
+      } catch { /* sem rede: mantém o estado local */ }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [saleId]);
   const jaPago = payments.reduce((s, p) => s + p.valor, 0);
   const restante = Math.max(0, Math.round((total - jaPago) * 100) / 100);
   const pago100 = restante < 0.01;

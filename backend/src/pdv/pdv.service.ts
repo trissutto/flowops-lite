@@ -710,11 +710,36 @@ export class PdvService {
     // Não deixa pagar mais que o total
     const jaPago = await this.sumPaidValue(input.saleId);
     const restante = sale.total - jaPago;
-    const valor = Math.round(input.valor * 100) / 100;
+    let valor = Math.round(input.valor * 100) / 100;
+    let details = input.details;
     if (valor > restante + 0.001) {
-      throw new BadRequestException(
-        `Valor R$${valor.toFixed(2)} maior que o restante R$${restante.toFixed(2)}`,
-      );
+      // VENDA ONLINE (29/07): o modal pode estar com estado velho — pagamento
+      // já registrado no servidor + frete aplicado depois → o front manda o
+      // TOTAL de novo e a loja travava com 400 "maior que o restante".
+      // venda_online é REGISTRO (a cobrança real já aconteceu fora): ajusta
+      // pro que falta; se não falta nada, devolve o último pagamento
+      // (idempotente) pra não travar o FINALIZAR.
+      if (input.method === 'venda_online') {
+        if (restante < 0.01) {
+          const existente = await (this.prisma as any).pdvSalePayment.findFirst({
+            where: { saleId: input.saleId },
+            orderBy: { createdAt: 'desc' },
+          });
+          if (existente) return existente;
+          throw new BadRequestException(
+            `Venda já está paga (restante R$${restante.toFixed(2)})`,
+          );
+        }
+        details = { ...(details || {}), ajustadoDe: valor };
+        valor = Math.round(restante * 100) / 100;
+        this.logger.warn(
+          `[pdv] venda_online ajustado ${Number(details.ajustadoDe).toFixed(2)} → ${valor.toFixed(2)} (restante) na venda ${input.saleId}`,
+        );
+      } else {
+        throw new BadRequestException(
+          `Valor R$${valor.toFixed(2)} maior que o restante R$${restante.toFixed(2)}`,
+        );
+      }
     }
 
     const payment = await (this.prisma as any).pdvSalePayment.create({
@@ -722,7 +747,7 @@ export class PdvService {
         saleId: input.saleId,
         method: input.method,
         valor,
-        details: input.details ? JSON.stringify(input.details) : null,
+        details: details ? JSON.stringify(details) : null,
       },
     });
 
