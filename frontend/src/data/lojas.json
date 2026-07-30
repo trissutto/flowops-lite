@@ -1,5 +1,31 @@
 {
-  "_comment": "Fonte unica de dados da pagina /nossaslojas. Para adicionar uma loja nova, basta acrescentar um objeto em 'stores' — a pagina, o mapa, a busca e o Schema.org se atualizam sozinhos. 'geo' e aproximado (usado so pra calcular a loja mais proxima). 'image' aceita um caminho em /public (ex: /lojas/campinas.webp) — enquanto for null a pagina usa a arte editorial padrao.",
+  "_comment": "Fonte unica de dados da pagina /nossaslojas. Para adicionar uma loja nova, basta acrescentar um objeto em 'stores' — a pagina, o mapa, a busca e o Schema.org se atualizam sozinhos. 'geo' e aproximado (usado so pra calcular a loja mais proxima). 'image'/'gallery' aceitam caminho em /public (ex: /lojas/campinas.webp) ou URL do Unsplash — as URLs atuais sao fotos royalty-free TEMPORARIAS, trocar pelas fotos reais das lojas. 'badges' e 'gallery' por loja sao opcionais (sem eles a pagina usa site.badgesDefault/site.galleryDefaults).",
+  "site": {
+    "heroImage": "https://images.unsplash.com/photo-1696483680003-1e2109b05ed3",
+    "peopleImage": "https://images.unsplash.com/photo-1546213290-e1b492ab3eee",
+    "manifesto": {
+      "title": "Desde 1979 vestindo autoestima.",
+      "text": "A Lurds nasceu pra provar que elegância não tem tamanho. São décadas de tradição em moda plus size, atendimento humanizado e consultoras que entendem de caimento — uma rede que cresce cidade a cidade com o mesmo propósito: receber bem mulheres reais.",
+      "stats": [
+        { "value": "14", "label": "Lojas" },
+        { "value": "500 mil+", "label": "Clientes" },
+        { "value": "46–60", "label": "Numeração" },
+        { "value": "1979", "label": "Desde" }
+      ]
+    },
+    "badgesDefault": [
+      "Atendimento personalizado",
+      "Novidades semanais",
+      "Numeração 46–60",
+      "Consultoras especializadas"
+    ],
+    "galleryDefaults": [
+      { "src": "https://images.unsplash.com/photo-1441986300917-64674bd600d8", "label": "O espaço" },
+      { "src": "https://images.unsplash.com/photo-1603400521630-9f2de124b33b", "label": "Novidades na arara" },
+      { "src": "https://images.unsplash.com/photo-1441984904996-e0b6ba687e04", "label": "O corner de looks" },
+      { "src": "https://images.unsplash.com/photo-1521335629791-ce4aec67dd15", "label": "Vitrine da semana" }
+    ]
+  },
   "stores": [
     {
       "slug": "analia-franco",
@@ -26,7 +52,7 @@
       },
       "mapsQuery": "Rua Padre Landell de Moura, 172, Jardim Anália Franco, São Paulo - SP",
       "geo": { "lat": -23.5606, "lng": -46.5587 },
-      "image": null
+      "image": "https://images.unsplash.com/photo-1657550853452-f13aa437f6c9"
     },
     {
       "slug": "campinas",
@@ -53,7 +79,7 @@
       },
       "mapsQuery": "Rua General Osório, 1989, Cambuí, Campinas - SP",
       "geo": { "lat": -22.8946, "lng": -47.0515 },
-      "image": null
+      "image": "https://images.unsplash.com/photo-1664893876112-64c308bf0d70"
     },
     {
       "slug": "indaiatuba",
@@ -80,7 +106,7 @@
       },
       "mapsQuery": "Rua Nove de Julho, 638, Centro, Indaiatuba - SP",
       "geo": { "lat": -23.0891, "lng": -47.211 },
-      "image": null
+      "image": "https://images.unsplash.com/photo-1582745140877-0480c22d91ee"
     },
     {
       "slug": "itanhaem",
@@ -106,7 +132,7 @@
       },
       "mapsQuery": "Av Harry Forssell, 159, Belas Artes, Itanhaém - SP",
       "geo": { "lat": -24.1701, "lng": -46.7757 },
-      "image": null
+      "image": "https://images.unsplash.com/photo-1664893875861-add8eb8fa072"
     },
     {
       "slug": "jundiai",
@@ -133,7 +159,7 @@
       },
       "mapsQuery": "Av Jundiaí, 285, Anhangabaú, Jundiaí - SP",
       "geo": { "lat": -23.1928, "lng": -46.8869 },
-      "image": null
+      "image": "https://images.unsplash.com/photo-1657549091422-3b748b8f72b2"
     },
     {
       "slug": "limeira",
@@ -160,7 +186,7 @@
       },
       "mapsQuery": "Rua Treze de Maio, 144, Centro, Limeira - SP",
       "geo": { "lat": -22.5647, "lng": -47.4008 },
-      "image": null
+      "image": "https://images.unsplash.com/photo-1652288832306-73735bbb94b3"
     },
     {
       "slug": "moema",
@@ -187,7 +213,7 @@
       },
       "mapsQuery": "Alameda dos Maracatins, 156, Indianópolis, São Paulo - SP",
       "geo": { "lat": -23.6006, "lng": -46.6653 },
-      "image": null
+      "image": "https://images.unsplash.com/photo-1657550853413-a646ba6a1877"
     },
     {
       "slug": "piracicaba",
@@ -214,7 +240,7 @@
       },
       "mapsQuery": "Rua do Rosário, 2405, Paulista, Piracicaba - SP",
       "geo": { "lat": -22.7139, "lng": -47.643 },
-      "image": null
+      "image": "https://images.unsplash.com/photo-1664893875908-a1e56db71082"
     },
     {
       "slug": "praia-grande",
@@ -240,7 +266,7 @@
       },
       "mapsQuery": "Av Presidente Kennedy, 6527, Vila Caiçara, Praia Grande - SP",
       "geo": { "lat": -24.029, "lng": -46.462 },
-      "image": null
+      "image": "https://images.unsplash.com/photo-1562887077-e086f7da6870"
     },
     {
       "slug": "santos",
@@ -267,7 +293,7 @@
       },
       "mapsQuery": "Av Ana Costa, 549, Gonzaga, Santos - SP",
       "geo": { "lat": -23.9638, "lng": -46.333 },
-      "image": null
+      "image": "https://images.unsplash.com/photo-1657550853399-19c48e1baed2"
     },
     {
       "slug": "sao-jose-dos-campos",
@@ -294,7 +320,7 @@
       },
       "mapsQuery": "Av Dr Adhemar de Barros, 1400, Jardim São Dimas, São José dos Campos - SP",
       "geo": { "lat": -23.1918, "lng": -45.879 },
-      "image": null
+      "image": "https://images.unsplash.com/photo-1657550853452-f13aa437f6c9"
     },
     {
       "slug": "sorocaba",
@@ -321,7 +347,7 @@
       },
       "mapsQuery": "Rua Duque de Caxias, 109, Vila Leão, Sorocaba - SP",
       "geo": { "lat": -23.51, "lng": -47.475 },
-      "image": null
+      "image": "https://images.unsplash.com/photo-1582745140877-0480c22d91ee"
     },
     {
       "slug": "suzano",
@@ -348,7 +374,7 @@
       },
       "mapsQuery": "Rua Dona Augusta Aparecida de Carvalho Moraes, 85, Centro, Suzano - SP",
       "geo": { "lat": -23.5399, "lng": -46.311 },
-      "image": null
+      "image": "https://images.unsplash.com/photo-1664893875861-add8eb8fa072"
     },
     {
       "slug": "vinhedo",
@@ -375,7 +401,7 @@
       },
       "mapsQuery": "Av Brasil, 598, Jardim Brasil, Vinhedo - SP",
       "geo": { "lat": -23.0217, "lng": -46.9829 },
-      "image": null
+      "image": "https://images.unsplash.com/photo-1664893876112-64c308bf0d70"
     }
   ],
   "testimonials": [

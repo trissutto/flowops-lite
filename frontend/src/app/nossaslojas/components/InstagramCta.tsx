@@ -11,7 +11,7 @@ interface Props {
 /** Painel do Instagram da loja selecionada — acompanha a seleção do grid/mapa. */
 export default function InstagramCta({ store }: Props) {
   return (
-    <section className="bg-[var(--lj-ink)] px-6 py-20 text-[var(--lj-ivory)] sm:py-24">
+    <section className="bg-[var(--lj-ink)] px-6 py-24 text-[var(--lj-ivory)] sm:py-32">
       <div className="mx-auto max-w-3xl text-center">
         <motion.div
           initial={{ opacity: 0, y: 24 }}

@@ -9,11 +9,12 @@ interface Props {
   selected: Store;
   nearestSlug: string | null;
   onSelect: (slug: string, scroll?: boolean) => void;
+  onOpen: (slug: string) => void;
 }
 
-export default function StoresSection({ selected, nearestSlug, onSelect }: Props) {
+export default function StoresSection({ selected, nearestSlug, onSelect, onOpen }: Props) {
   return (
-    <section id="lojas" className="scroll-mt-8 px-6 py-16 sm:py-20">
+    <section id="lojas" className="scroll-mt-8 px-6 py-20 sm:py-28">
       <div className="mx-auto max-w-7xl">
         <motion.div
           initial={{ opacity: 0, y: 24 }}
@@ -31,7 +32,7 @@ export default function StoresSection({ selected, nearestSlug, onSelect }: Props
           <div className="lojas-rule mx-auto mt-5 w-24" />
         </motion.div>
 
-        <div className="mt-12 grid gap-8 lg:grid-cols-[minmax(0,1fr)_420px] lg:items-start">
+        <div className="mt-16 grid gap-10 lg:grid-cols-[minmax(0,1fr)_420px] lg:items-start">
           {/* Cards — selecionar um card sincroniza o mapa ao lado */}
           <div className="order-2 grid gap-6 sm:grid-cols-2 lg:order-1">
             {stores.map((s, i) => (
@@ -42,6 +43,7 @@ export default function StoresSection({ selected, nearestSlug, onSelect }: Props
                 isSelected={s.slug === selected.slug}
                 isNearest={s.slug === nearestSlug}
                 onSelect={() => onSelect(s.slug, false)}
+                onOpen={() => onOpen(s.slug)}
               />
             ))}
           </div>
