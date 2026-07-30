@@ -5061,3 +5061,86 @@ model FitStat {
   @@index([escopo])
   @@map("fit_stat")
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CATÁLOGO DO E-COMMERCE (sprint 008 — ERP como fonte da verdade)
+//
+// Divisão de responsabilidade, decidida pelo que cada sistema REALMENTE tem:
+//   ERP (wincred_produtos/estoque) → código, REF, EAN, grade, cor, tamanho,
+//        marca, preço, custo, NCM, estoque por loja. É a VERDADE.
+//   Flow (site_produto)            → nome comercial, descrição, SEO, coleção,
+//        curadoria. É o CADASTRO, não cache: decisão do dono 30/07 — "criar
+//        os campos faltantes no Flow, 100% de integração site ↔ CRM".
+//   Flow (product_photos, R2)      → fotos por REF+cor (já existia, usada na Live).
+//   WooCommerce                    → APENAS origem de IMPORTAÇÃO enquanto o
+//        site antigo viver. Assim que alguém edita a peça no Flow, ela vira
+//        origemConteudo='flow' e o importador nunca mais a sobrescreve.
+//   FitProduct (Flow)              → modelagem, elastano, caimento, medidas.
+//
+// `SiteProduto` é CACHE + CURADORIA: 1 linha por REF publicada. Não duplica
+// dado do ERP (preço/estoque saem sempre do espelho na hora da consulta).
+// ═══════════════════════════════════════════════════════════════════════════
+
+model SiteProduto {
+  ref               String   @id @db.VarChar(20)
+  slug              String   @unique @db.VarChar(160)
+  nome              String   @db.VarChar(160)
+  descricaoCurta    String?  @map("descricao_curta") @db.Text
+  descricaoCompleta String?  @map("descricao_completa") @db.Text
+
+  /// Mídia do WC: [{ src, alt, tipo: 'imagem'|'video'|'360' }]
+  imagens           Json?
+  /// SEO importado: { metaTitle, metaDescription, canonical, ogImage }
+  seo               Json?
+
+  /// Cadastro comercial (não existe no ERP)
+  colecao           String?  @db.VarChar(60)
+  linha             String?  @db.VarChar(60)
+
+  /// Curadoria: o que a loja escolheu publicar
+  publicado         Boolean  @default(true)
+  destaque          Boolean  @default(false)
+  lancamento        Boolean  @default(false)
+  promocao          Boolean  @default(false)
+
+  /// TOMADA DE POSSE: 'woocommerce' = ainda espelha o site antigo; 'flow' =
+  /// alguém editou aqui e o Flow virou dono — o importador PULA essa peça
+  /// pra sempre. É o que permite migrar produto a produto, sem big-bang.
+  origemConteudo    String   @default("woocommerce") @map("origem_conteudo") @db.VarChar(20)
+  editadoPor        String?  @map("editado_por") @db.VarChar(80)
+  editadoEm         DateTime? @map("editado_em")
+
+  /// Rastreio de onde veio (nunca inventar vínculo)
+  wcId              Int?     @map("wc_id")
+  wcSlug            String?  @map("wc_slug") @db.VarChar(160)
+
+  syncedAt          DateTime @default(now()) @map("synced_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  @@index([publicado])
+  @@index([destaque])
+  @@index([lancamento])
+  @@map("site_produto")
+}
+
+/// LOG de cada rodada de sincronização — exigência do sprint 008 (auditoria).
+model SiteSyncLog {
+  id            String   @id @default(uuid())
+  tipo          String   @db.VarChar(20)   // conteudo | validacao
+  iniciadoEm    DateTime @default(now()) @map("iniciado_em")
+  duracaoMs     Int?     @map("duracao_ms")
+
+  lidos         Int      @default(0)
+  criados       Int      @default(0)
+  atualizados   Int      @default(0)
+  ignorados     Int      @default(0)
+  falhas        Int      @default(0)
+
+  /// Detalhe legível: o que foi ignorado e por quê, conflitos, divergências
+  detalhes      Json?
+  erro          String?  @db.Text
+  disparadoPor  String?  @map("disparado_por") @db.VarChar(80)
+
+  @@index([tipo, iniciadoEm])
+  @@map("site_sync_log")
+}

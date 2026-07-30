@@ -1,66 +1,89 @@
 import { normalize } from '@/lib/utils';
-import { bestSellers, newArrivals } from '@/data/content';
 import type { FilterGroup, FilterState, Paginated, Product, ProductQuery, SortOption } from '@/types';
 
 /**
- * SERVIÇO DE CATÁLOGO
+ * SERVIÇO DE CATÁLOGO — dados REAIS do ERP (sprint 008).
  *
- * Camada única de acesso a produto. Hoje resolve em memória sobre o conteúdo
- * placeholder; a assinatura (`fetchProducts` → `Paginated<Product>`) é a mesma
- * que a API do FlowOps vai expor, então nenhuma tela muda na migração.
+ * Fim dos mocks: `fetchProducts` fala com `/api/loja/produtos` (BFF), que
+ * fala com o backend, que monta a peça a partir do espelho do ERP (preço,
+ * grade, estoque), do cadastro do Flow (nome, descrição, SEO) e das fotos
+ * do R2. A assinatura não mudou — nenhuma tela precisou ser reescrita.
  *
- * Ordenação, filtro e paginação vivem AQUI, não no componente — é o que
- * permite trocar por query no servidor sem reescrever a página.
+ * Filtro/ordenação/paginação agora acontecem NO SERVIDOR: com catálogo real
+ * (milhares de SKUs) filtrar no navegador seria baixar tudo a cada clique.
  */
 
-/**
- * Catálogo simulado: repete a base variando preço/etiqueta pra dar volume
- * suficiente pra exercitar paginação e infinite scroll (≈24 peças por
- * categoria). Some quando a API real entrar.
- */
-const CATALOG: Product[] = (() => {
-  const base = [...newArrivals, ...bestSellers];
-  const multiplied: Product[] = [];
-  for (let round = 0; round < 12; round++) {
-    for (const [i, product] of base.entries()) {
-      if (round === 0) {
-        multiplied.push(product);
-        continue;
-      }
-      const factor = 1 + ((round * 7 + i * 3) % 40) / 100;
-      const price = Number((product.price * factor).toFixed(2));
-      multiplied.push({
-        ...product,
-        id: `${product.id}-v${round}`,
-        slug: `${product.slug}-v${round}`,
-        price,
-        pixPrice: Number((price * 0.95).toFixed(2)),
-        installments: { times: 12, value: Number((price / 12).toFixed(2)) },
-        compareAtPrice: round % 3 === 0 ? Number((price * 1.25).toFixed(2)) : undefined,
-        badges: round % 4 === 0 ? ['promocao'] : round % 5 === 0 ? ['ultimas-pecas'] : product.badges,
-        images: [product.images[1] ?? product.images[0], product.images[0]],
-      });
-    }
-  }
-  return multiplied;
-})();
+/** Cor → hex pro swatch. O ERP guarda o NOME da cor, não o código. */
+const HEX_POR_COR: Record<string, string> = {
+  preto: '#1a1614', branco: '#f7f5f2', 'off white': '#f1eadf', bege: '#d9cdb4',
+  areia: '#d9cdb4', nude: '#e0c9b8', marrom: '#6b4f3a', caramelo: '#a9713f',
+  vermelho: '#9b2c2c', vinho: '#7a3b46', rosa: '#d9a1ad', pink: '#c2185b',
+  laranja: '#c7622c', amarelo: '#d4a017', verde: '#4f7355', 'verde militar': '#4a5340',
+  azul: '#2f5573', 'azul marinho': '#1f3350', jeans: '#3f5c78', roxo: '#5c4a72',
+  lilas: '#a898c4', cinza: '#8a8079', prata: '#b9b6b0', dourado: '#b8912b',
+  estampado: '#c9bda8', floral: '#c9bda8',
+};
+
+function hexDaCor(nome: string): string {
+  const chave = normalize(nome);
+  if (HEX_POR_COR[chave]) return HEX_POR_COR[chave];
+  const parcial = Object.keys(HEX_POR_COR).find((k) => chave.includes(k));
+  return parcial ? HEX_POR_COR[parcial] : '#c9bda8';
+}
+
+/** Peça do backend → `Product` do site. Um lugar só faz essa tradução. */
+interface PecaApi {
+  ref: string; slug: string; nome: string;
+  descricaoCurta: string | null; descricaoCompleta: string | null;
+  marca: string | null; categoria: string | null;
+  preco: number; precoPix: number | null;
+  parcelamento: { vezes: number; valor: number } | null;
+  cores: Array<{ nome: string; estoque: number }>;
+  tamanhos: Array<{ label: string; estoque: number; disponivel: boolean }>;
+  estoqueTotal: number; disponivel: boolean;
+  imagens: Array<{ src: string; alt?: string }>;
+  modelagem: string | null; composicao: string | null;
+  destaque: boolean; lancamento: boolean; promocao: boolean;
+}
+
+export function mapPeca(p: PecaApi): Product {
+  const badges: Product['badges'] = [];
+  if (p.lancamento) badges.push('novo');
+  if (p.promocao) badges.push('promocao');
+  if (p.estoqueTotal > 0 && p.estoqueTotal <= 3) badges.push('ultimas-pecas');
+
+  return {
+    id: p.ref,
+    sku: p.ref,
+    slug: p.slug,
+    name: p.nome,
+    category: p.categoria ?? '',
+    price: p.preco,
+    pixPrice: p.precoPix ?? undefined,
+    installments: p.parcelamento ? { times: p.parcelamento.vezes, value: p.parcelamento.valor } : undefined,
+    images: (p.imagens ?? []).map((i) => ({ src: i.src, alt: i.alt ?? p.nome })),
+    sizes: (p.tamanhos ?? []).map((t) => ({ label: t.label, available: t.disponivel })),
+    colors: (p.cores ?? []).map((c) => ({ name: c.nome, hex: hexDaCor(c.nome) })),
+    badges: badges.length ? badges : undefined,
+    fabric: p.composicao ?? undefined,
+    fit: p.modelagem ?? undefined,
+    availability: { online: p.disponivel, stores: [], pickup: p.disponivel },
+  };
+}
+
+/** Ordenação do site → parâmetro que o backend entende. */
+const ORDENACAO: Record<SortOption, string> = {
+  relevancia: 'relevancia',
+  'mais-vendidos': 'relevancia',
+  novidades: 'novidades',
+  lancamentos: 'novidades',
+  'menor-preco': 'preco-asc',
+  'maior-preco': 'preco-desc',
+  'maior-desconto': 'preco-desc',
+  'mais-avaliados': 'relevancia',
+};
 
 /* --------------------------------------------------------------- ORDENAÇÃO */
-
-const SORTERS: Record<SortOption, (a: Product, b: Product) => number> = {
-  relevancia: () => 0,
-  'mais-vendidos': (a, b) => (b.rating?.count ?? 0) - (a.rating?.count ?? 0),
-  novidades: (a, b) => Number(b.badges?.includes('novo')) - Number(a.badges?.includes('novo')),
-  lancamentos: (a, b) => Number(b.badges?.includes('novo')) - Number(a.badges?.includes('novo')),
-  'menor-preco': (a, b) => a.price - b.price,
-  'maior-preco': (a, b) => b.price - a.price,
-  'maior-desconto': (a, b) => {
-    const da = a.compareAtPrice ? (a.compareAtPrice - a.price) / a.compareAtPrice : 0;
-    const db = b.compareAtPrice ? (b.compareAtPrice - b.price) / b.compareAtPrice : 0;
-    return db - da;
-  },
-  'mais-avaliados': (a, b) => (b.rating?.average ?? 0) - (a.rating?.average ?? 0),
-};
 
 export const SORT_OPTIONS: { value: SortOption; label: string }[] = [
   { value: 'relevancia', label: 'Relevância' },
@@ -74,37 +97,31 @@ export const SORT_OPTIONS: { value: SortOption; label: string }[] = [
 
 /* ------------------------------------------------------------------ FILTROS */
 
-/** Um predicado por grupo de filtro — adicionar filtro = adicionar entrada. */
-const PREDICATES: Record<string, (product: Product, value: unknown) => boolean> = {
-  subcategoria: (p, v) => (v as string[]).includes(p.subcategory ?? ''),
-  cor: (p, v) => (p.colors ?? []).some((c) => (v as string[]).includes(normalize(c.name))),
-  tamanho: (p, v) =>
-    p.sizes.some((s) => s.available && (v as string[]).includes(s.label)),
-  tecido: (p, v) => (v as string[]).includes(normalize(p.fabric ?? '')),
-  ocasiao: (p, v) => (p.occasions ?? []).some((o) => (v as string[]).includes(normalize(o))),
-  modelagem: (p, v) => (v as string[]).includes(normalize(p.fit ?? '')),
-  colecao: (p, v) => (v as string[]).includes(normalize(p.collection ?? '')),
-  preco: (p, v) => {
-    const [min, max] = v as [number, number];
-    return p.price >= min && p.price <= max;
-  },
-  promocao: (p, v) => !v || Boolean(p.compareAtPrice),
-  novidades: (p, v) => !v || Boolean(p.badges?.includes('novo')),
-  'mais-vendidos': (p, v) => !v || Boolean(p.badges?.includes('best-seller')),
-  exclusivos: (p, v) => !v || Boolean(p.badges?.includes('exclusivo')),
-  'na-minha-loja': (p, v) => !v || Boolean(p.availability?.stores.length),
-  'comprar-e-retirar': (p, v) => !v || Boolean(p.availability?.pickup),
-};
+/**
+ * Estado dos filtros → querystring da API. Filtro que o backend ainda não
+ * entende é IGNORADO de propósito (não some da UI, mas não mente no
+ * resultado) — ver o relatório do sprint 008 pra lista do que falta.
+ */
+function paramsDosFiltros(filters: FilterState): Record<string, string> {
+  const out: Record<string, string> = {};
+  const primeiro = (v: unknown) => (Array.isArray(v) && v.length ? String(v[0]) : undefined);
 
-function matches(product: Product, filters: FilterState): boolean {
-  for (const [key, value] of Object.entries(filters)) {
-    if (value === undefined) continue;
-    if (Array.isArray(value) && value.length === 0) continue;
-    if (value === false) continue;
-    const predicate = PREDICATES[key];
-    if (predicate && !predicate(product, value)) return false;
+  const cor = primeiro(filters.cor);
+  if (cor) out.cor = cor;
+  const tamanho = primeiro(filters.tamanho);
+  if (tamanho) out.tamanho = tamanho;
+  const modelagem = primeiro((filters as Record<string, unknown>).modelagem);
+  if (modelagem) out.modelagem = modelagem;
+
+  const preco = (filters as Record<string, unknown>).preco as [number, number] | undefined;
+  if (Array.isArray(preco) && preco.length === 2) {
+    out.precoMin = String(preco[0]);
+    out.precoMax = String(preco[1]);
   }
-  return true;
+  if ((filters as Record<string, unknown>).promocao) out.promocao = '1';
+  if ((filters as Record<string, unknown>).novidades) out.novidade = '1';
+
+  return out;
 }
 
 /* ----------------------------------------------------------------- CONSULTA */
@@ -112,48 +129,101 @@ function matches(product: Product, filters: FilterState): boolean {
 export async function fetchProducts(query: ProductQuery = {}): Promise<Paginated<Product>> {
   const { category, search, sort = 'relevancia', filters = {}, page = 1, perPage = 12 } = query;
 
-  let items = CATALOG;
+  const params = new URLSearchParams({
+    page: String(page),
+    perPage: String(perPage),
+    ordenar: ORDENACAO[sort] ?? 'relevancia',
+    ...paramsDosFiltros(filters),
+  });
+  if (category) params.set('categoria', category);
+  if (search && search.trim().length >= 2) params.set('busca', search.trim());
 
-  if (category) items = items.filter((p) => p.category === category);
-
-  if (search && search.trim().length >= 2) {
-    const term = normalize(search);
-    items = items.filter(
-      (p) => normalize(p.name).includes(term) || normalize(p.fabric ?? '').includes(term),
-    );
+  const resposta = await fetch(`/api/loja/produtos?${params.toString()}`);
+  if (!resposta.ok) {
+    // Catálogo fora do ar não pode quebrar a página: lista vazia + log.
+    console.error('[catalogo] falha ao listar', resposta.status);
+    return { items: [], total: 0, page, perPage, hasMore: false };
   }
-
-  items = items.filter((p) => matches(p, filters));
-  items = [...items].sort(SORTERS[sort]);
-
-  const total = items.length;
-  const start = (page - 1) * perPage;
+  const dados = await resposta.json();
+  const items: Product[] = (dados.itens ?? []).map(mapPeca);
 
   return {
-    items: items.slice(start, start + perPage),
-    total,
-    page,
-    perPage,
-    hasMore: start + perPage < total,
+    items,
+    total: dados.total ?? items.length,
+    page: dados.page ?? page,
+    perPage: dados.perPage ?? perPage,
+    hasMore: (dados.page ?? page) < (dados.totalPages ?? 1),
   };
 }
 
-/** Faixa real de preço do recorte — alimenta o filtro de preço. */
-export function priceRange(category?: string): { min: number; max: number } {
-  const items = category ? CATALOG.filter((p) => p.category === category) : CATALOG;
-  const prices = items.map((p) => p.price);
-  return {
-    min: Math.floor(Math.min(...prices) / 10) * 10,
-    max: Math.ceil(Math.max(...prices) / 10) * 10,
-  };
+/**
+ * Faixa de preço PADRÃO da sidebar. A faixa real vem das facetas
+ * (`/api/loja/filtros`) — esta serve só como esqueleto antes da resposta.
+ */
+export function priceRange(): { min: number; max: number } {
+  return { min: 0, max: 1000 };
 }
 
 /**
  * Grupos de filtro disponíveis. A ordem é a ordem da sidebar — do mais usado
  * (tamanho, preço) pro mais específico (elasticidade).
  */
-export function filterGroups(category?: string): FilterGroup[] {
-  const range = priceRange(category);
+export interface Facetas {
+  categorias: Array<{ valor: string; qtd: number }>;
+  marcas: Array<{ valor: string; qtd: number }>;
+  cores: Array<{ valor: string; qtd: number }>;
+  tamanhos: Array<{ valor: string; qtd: number }>;
+  modelagens: Array<{ valor: string; qtd: number }>;
+  preco: { min: number; max: number };
+}
+
+/** Facetas do catálogo REAL — o que existe publicado e com estoque. */
+export async function fetchFacetas(): Promise<Facetas | null> {
+  try {
+    const r = await fetch('/api/loja/filtros');
+    if (!r.ok) return null;
+    return await r.json();
+  } catch {
+    return null;
+  }
+}
+
+export function filterGroups(category?: string, facetas?: Facetas | null): FilterGroup[] {
+  const range = facetas?.preco ?? priceRange();
+
+  // Com facetas, tamanho e cor saem do catálogo real (com contagem) — some
+  // o filtro que não levaria a lugar nenhum.
+  if (facetas) {
+    const grupos: FilterGroup[] = [];
+    if (facetas.tamanhos?.length) {
+      grupos.push({
+        id: 'tamanho', label: 'Tamanho', type: 'size', defaultOpen: true,
+        options: facetas.tamanhos.map((t) => ({ value: t.valor, label: t.valor, count: t.qtd })),
+      });
+    }
+    grupos.push({ id: 'preco', label: 'Preço', type: 'range', defaultOpen: true, range });
+    if (facetas.cores?.length) {
+      grupos.push({
+        id: 'cor', label: 'Cor', type: 'swatch', defaultOpen: true,
+        options: facetas.cores.slice(0, 24).map((c) => ({
+          value: c.valor, label: c.valor, hex: hexDaCor(c.valor), count: c.qtd,
+        })),
+      });
+    }
+    if (facetas.modelagens?.length) {
+      grupos.push({
+        id: 'modelagem', label: 'Modelagem', type: 'checkbox',
+        options: facetas.modelagens.map((m) => ({ value: m.valor, label: m.valor, count: m.qtd })),
+      });
+    }
+    if (facetas.marcas?.length > 1) {
+      grupos.push({
+        id: 'marca', label: 'Marca', type: 'checkbox',
+        options: facetas.marcas.slice(0, 20).map((m) => ({ value: m.valor, label: m.valor, count: m.qtd })),
+      });
+    }
+    return grupos;
+  }
 
   return [
     {
