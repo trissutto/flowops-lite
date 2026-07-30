@@ -32,6 +32,103 @@ export class FaturamentoService {
   }
 
   /**
+   * FATURAMENTO EM TEMPO REAL (30/07) — a venda nasce no Flow, a tela tem que
+   * ler do Flow.
+   *
+   * Antes: 100% do espelho `giga_caixa_mov`, que sincroniza de HORA EM HORA.
+   * A caixa fechava a venda e o dono só via no faturamento até 1h depois.
+   *
+   * Agora é híbrido, e o total NÃO muda:
+   *   PdvSale (Postgres)            → a venda do PDV, no instante em que fecha
+   *   caixa do Giga SEM 'flowops-'  → o que só existe lá (lançamento manual,
+   *                                   recebimento de crediário, loja fora do
+   *                                   PDV). Esse pedaço mantém o atraso do
+   *                                   espelho, mas é a minoria.
+   *
+   * Sem risco de contar duas vezes: a réplica da venda do Flow no caixa é
+   * identificada por `obs_pedido = 'flowops-<id>'` e fica de fora.
+   * Vale pra QUALQUER período: em 2025 não existia venda do Flow, então o
+   * primeiro pedaço vem zero e o resultado é idêntico ao de antes.
+   */
+  private async faturamentoHibrido(
+    dInicio: Date,
+    dFimExclusive: Date,
+  ): Promise<Array<{ storeCode: string; faturamento: number; cupons: number; pecas: number; ticketMedio: number }>> {
+    const [flowRows, gigaRows, lojas] = await Promise.all([
+      // PDV do Flow — marcado fora (não é venda), treino fora, cancelada fora
+      this.prisma.$queryRawUnsafe<Array<any>>(
+        `SELECT store_code AS "storeCode",
+                COUNT(*)::int                              AS cupons,
+                COALESCE(SUM(it.pecas), 0)::float8         AS pecas,
+                COALESCE(SUM(s.total), 0)::float8          AS faturamento
+           FROM pdv_sales s
+           LEFT JOIN (
+             SELECT sale_id, SUM(qty)::float8 AS pecas FROM pdv_sale_items GROUP BY sale_id
+           ) it ON it.sale_id = s.id
+          WHERE s.finalized_at >= $1 AND s.finalized_at < $2
+            AND s.status = 'finalized'
+            AND s.is_training = false
+            AND (s.payment_method IS NULL OR s.payment_method <> 'MARCADO')
+          GROUP BY store_code`,
+        dInicio, dFimExclusive,
+      ),
+      // Caixa do Giga SEM a réplica do Flow
+      this.prisma.$queryRawUnsafe<Array<any>>(
+        `SELECT loja AS "storeCode",
+                COUNT(DISTINCT COALESCE(NULLIF(btrim(obs_pedido), ''), 'n:' || numero))::int AS cupons,
+                COALESCE(SUM(quantidade), 0)::float8 AS pecas,
+                COALESCE(SUM(valor_total), 0)::float8 AS faturamento
+           FROM giga_caixa_mov
+          WHERE data_fec >= $1 AND data_fec < $2
+            AND (marcado IS NULL OR marcado <> 'SIM')
+            AND COALESCE(obs_pedido, '') NOT LIKE 'flowops-%'
+          GROUP BY loja`,
+        dInicio, dFimExclusive,
+      ),
+      (this.prisma as any).store.findMany({ select: { code: true, name: true, nomesAntigos: true } }),
+    ]);
+
+    // PdvSale.storeCode ora guarda o código ('06'), ora o NOME ('SOROCABA') —
+    // e loja renomeada deixa o nome antigo no histórico. Resolve tudo pro code.
+    const paraCode = new Map<string, string>();
+    for (const l of lojas as any[]) {
+      const code = String(l.code || '').trim();
+      paraCode.set(code.toUpperCase(), code);
+      if (l.name) paraCode.set(String(l.name).trim().toUpperCase(), code);
+      for (const antigo of String(l.nomesAntigos || '').split(',')) {
+        const a = antigo.trim().toUpperCase();
+        if (a) paraCode.set(a, code);
+      }
+    }
+    const canon = (raw: any) => {
+      const k = String(raw ?? '').trim().toUpperCase();
+      return paraCode.get(k) ?? k;
+    };
+
+    const acc = new Map<string, { faturamento: number; cupons: number; pecas: number }>();
+    const soma = (raw: any, r: any) => {
+      const code = canon(raw);
+      const cur = acc.get(code) || { faturamento: 0, cupons: 0, pecas: 0 };
+      cur.faturamento += Number(r.faturamento) || 0;
+      cur.cupons += Number(r.cupons) || 0;
+      cur.pecas += Number(r.pecas) || 0;
+      acc.set(code, cur);
+    };
+    for (const r of flowRows) soma(r.storeCode, r);
+    for (const r of gigaRows) soma(r.storeCode, r);
+
+    return Array.from(acc.entries())
+      .map(([storeCode, v]) => ({
+        storeCode,
+        faturamento: v.faturamento,
+        cupons: v.cupons,
+        pecas: v.pecas,
+        ticketMedio: v.cupons > 0 ? v.faturamento / v.cupons : 0,
+      }))
+      .sort((a, b) => b.faturamento - a.faturamento);
+  }
+
+  /**
    * Auditoria de paridade Wincred vs Flowops por loja+dia.
    * Suporta migração 30/06 — detecta divergência > tolerância.
    * Foca nas 5 lojas migradas (INDAIATUBA, ITANHAEM, MOEMA, SOROCABA, SANTOS)
@@ -401,8 +498,14 @@ export class FaturamentoService {
    */
   async getResumo(from: string, to: string, granularity: 'day' | 'week' | 'month' = 'day') {
     const cacheKey = `${from}|${to}|${granularity}`;
+    // Período que inclui HOJE muda a cada venda: cache de 30s. Período
+    // fechado não muda mais: mantém os 5 min.
+    const hojeIso = new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10);
+    const incluiHoje = to >= hojeIso;
+    const ttl = incluiHoje ? 30_000 : this.CACHE_TTL_MS;
+
     const cached = this.cache.get(cacheKey);
-    if (cached && Date.now() - cached.at < this.CACHE_TTL_MS) {
+    if (cached && Date.now() - cached.at < ttl) {
       return { ...cached.data, cached: true };
     }
 
@@ -443,7 +546,7 @@ export class FaturamentoService {
 
     // ── 2) Giga: faturamento por loja, período atual + ano anterior em paralelo ──
     const [gigaAtual, gigaAnterior, gigaMetaMes, tsAtual, tsAnterior] = await Promise.all([
-      this.erp.getFaturamentoPorLoja(dInicio, dFimExclusive),
+      this.faturamentoHibrido(dInicio, dFimExclusive),
       this.erp.getFaturamentoPorLoja(dInicioAnterior, dFimAnterior),
       this.erp.getFaturamentoPorLoja(dInicioMetaMes, dFimMetaMesExclusive),
       this.erp.getFaturamentoTimeseries(dInicio, dFimExclusive, granularity),
