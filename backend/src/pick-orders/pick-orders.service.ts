@@ -407,7 +407,43 @@ export class PickOrdersService {
         return null;
       }
       const todos = (cart.items || []).filter((i: any) => i.status !== 'cancelled');
-      const daLoja = storeCode ? todos.filter((i: any) => normLoja(i.originStoreCode) === normLoja(storeCode)) : [];
+      let daLoja = storeCode ? todos.filter((i: any) => normLoja(i.originStoreCode) === normLoja(storeCode)) : [];
+
+      /**
+       * FONTE DA VERDADE DA DIVISÃO (fix 30/07 — Limeira e Piracicaba).
+       *
+       * Quem divide o pedido entre lojas é a migração live→site, que grava
+       * `orderItem.assignedStoreId` e cria um pick por loja
+       * (live-pdv.service.ts). O filtro acima usa OUTRA fonte — o
+       * `originStoreCode` do item do CARRINHO — e as duas podem divergir.
+       *
+       * Quando divergem num pedido DIVIDIDO não havia rede: `itens` vinha
+       * vazio e a nota morria em silêncio (o pedido de loja única escapava
+       * porque tinha o fallback `: todos`).
+       *
+       * Aqui, se o filtro do carrinho não achou nada, casamos pelos itens do
+       * PEDIDO atribuídos a esta loja — que é exatamente o critério que
+       * gerou este pick.
+       */
+      if (dividido && daLoja.length === 0 && pick?.storeId) {
+        const doPedido = (order.items || []).filter((i: any) => i.assignedStoreId === pick.storeId);
+        if (doPedido.length) {
+          this.logger.log(
+            `[nfe-envio] pedido ${order.id}: filtro por originStoreCode veio vazio na loja ${storeCode}; ` +
+              `usando ${doPedido.length} item(ns) do pedido com assignedStoreId desta loja.`,
+          );
+          // Normaliza pro mesmo formato dos itens do carrinho usado abaixo.
+          daLoja = doPedido.map((i: any) => ({
+            codigoBipado: i.sku,
+            itemKey: i.sku,
+            descricao: i.productName,
+            qty: i.quantity,
+            priceCents: Math.round(Number(i.unitPrice || 0) * 100),
+            basePriceCents: Math.round(Number(i.baseUnitPrice ?? i.unitPrice ?? 0) * 100),
+          }));
+        }
+      }
+
       const itens = dividido ? daLoja : (daLoja.length ? daLoja : todos);
       if (!itens.length) {
         // Causa clássica: o originStoreCode dos itens não bate com o código da
