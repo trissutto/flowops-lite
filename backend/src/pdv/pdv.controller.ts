@@ -349,7 +349,12 @@ export class PdvController {
    */
   @Get('sales/:id/nfce/xml')
   async nfceXml(@Req() req: any, @Param('id') id: string) {
-    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+    // Admin OU a própria loja (bug 31/07: o MODO MASTER impersona a loja —
+    // o token vira role 'store' — e o botão da tela de notas devolvia 403
+    // "Apenas admin" justamente pra quem mais precisa dele). A loja só
+    // enxerga venda DELA; o XML é a nota fiscal que ela mesma emitiu.
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'store') throw new ForbiddenException('Apenas admin ou loja');
     const sale: any = await (this.prisma as any).pdvSale.findUnique({
       where: { id },
       select: {
@@ -358,6 +363,9 @@ export class PdvController {
       },
     });
     if (!sale) throw new NotFoundException('Venda não encontrada');
+    if (role === 'store' && String(req?.user?.storeCode || '') !== String(sale.storeCode || '')) {
+      throw new ForbiddenException('Venda de outra loja');
+    }
     if (!sale.nfceXml) {
       throw new BadRequestException('Essa venda não tem XML guardado (nota nunca chegou a ser assinada).');
     }
