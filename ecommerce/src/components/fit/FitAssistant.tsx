@@ -60,6 +60,19 @@ const PERGUNTAS = [
 
 const GRADE = ['46', '48', '50', '52', '54', '56', '58', '60'];
 
+/**
+ * Painel do assistente.
+ *
+ * NÃO brigar com o posicionamento do Overlay: ele já aplica
+ * `inset-x-0 bottom-0 w-full` para side="bottom". Sobrescrever isso com
+ * `sm:inset-0 sm:m-auto` gerava conflito de utilitário no Tailwind e o painel
+ * abria achatado no desktop — só o cabeçalho aparecia. Aqui limitamos apenas
+ * LARGURA e altura; a âncora continua sendo do Overlay.
+ */
+const PAINEL =
+  'max-h-[88vh] min-h-[420px] overflow-y-auto rounded-t-lg bg-surface ' +
+  'sm:mx-auto sm:mb-8 sm:max-w-[460px] sm:rounded-lg';
+
 const STORAGE_PERFIL = 'lurds_fit_perfil';
 const STORAGE_ANON = 'lurds_fit_anon';
 
@@ -194,7 +207,7 @@ export function FitAssistant({
       label="Descubra seu tamanho ideal"
       layer="modal"
       showClose
-      className="max-h-[92vh] overflow-y-auto rounded-t-lg bg-surface sm:inset-0 sm:m-auto sm:h-fit sm:w-[min(460px,92vw)] sm:rounded-lg"
+      className={PAINEL}
     >
       <div className="px-6 pb-8 pt-7 sm:px-8">
         <p className="eyebrow flex items-center gap-1.5 text-primary-strong">
