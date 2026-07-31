@@ -282,6 +282,86 @@ export class RemessaEnvioService {
    * Correios/Mais Envios, sem a DANFE junto (o dono às vezes só quer colar a
    * etiqueta numa caixa cuja nota já foi impressa).
    */
+  /**
+   * REFAZER O ENVIO (31/07) — o que faltava pra correção de endereço servir
+   * pra alguma coisa.
+   *
+   * A etiqueta NÃO é gerada pelo Flow: ela é baixada da transportadora pelo
+   * `correiosPrepostagemId`. Uma pré-postagem criada com endereço errado
+   * continua errada pra sempre — baixar o PDF de novo devolve exatamente o
+   * mesmo papel. Era o caso da REM-2026-000602, que seguiu saindo Itanhaém →
+   * Itanhaém mesmo depois do fix.
+   *
+   * Isso aqui solta a remessa da pré-postagem velha e gera outra do zero, já
+   * com o endereço certo. A etiqueta antiga NÃO é cancelada nos Correios
+   * automaticamente — pré-postagem sem uso expira sozinha, e cancelar objeto
+   * postado é ato que tem custo. O código velho fica no log pra rastrear.
+   */
+  async refazerEnvio(shipmentId: string, userId?: string | null) {
+    const shipment: any = await this.prisma.realignmentShipment.findUnique({ where: { id: shipmentId } });
+    if (!shipment) throw new NotFoundException('Remessa não encontrada');
+    if (!shipment.trackingCode) {
+      throw new BadRequestException('Essa remessa ainda não tem envio gerado — use "Gerar etiqueta".');
+    }
+    const anterior = { tracking: shipment.trackingCode, carrier: shipment.carrier, prepostagem: shipment.correiosPrepostagemId };
+    this.logger.warn(
+      `[remessa-envio] REFAZENDO ${shipment.code}: descartando ${anterior.carrier} ${anterior.tracking} (pré-postagem ${anterior.prepostagem})`,
+    );
+    await this.prisma.realignmentShipment.update({
+      where: { id: shipmentId },
+      data: { trackingCode: null, carrier: null, correiosPrepostagemId: null, envioGeneratedAt: null },
+    });
+    const novo: any = await this.gerarEnvio(shipmentId, null, userId, { forcar: true });
+    return { ...novo, refeito: true, anterior };
+  }
+
+  /**
+   * DIAGNÓSTICO (31/07): mostra, loja a loja, o endereço que a etiqueta VAI
+   * usar e de qual identidade fiscal ele saiu. Existe porque a REM-2026-000602
+   * saiu endereçada pra origem e não dava pra saber, sem abrir o banco, se o
+   * problema era o código lendo o campo errado ou a config da loja com dado
+   * de outra. `colideCom` aponta as lojas que resolvem pro MESMO endereço —
+   * essas são exatamente as que mandam caixa pro lugar errado.
+   */
+  async enderecosEtiqueta() {
+    const stores: any[] = await this.prisma.store.findMany({
+      orderBy: { code: 'asc' },
+      select: { code: true, name: true, active: true } as any,
+    });
+    const linhas: any[] = [];
+    for (const s of stores) {
+      try {
+        const cfg: any = await this.prisma.nfceConfig.findUnique({ where: { storeCode: s.code } });
+        const d = await this.dadosLoja(s.code);
+        const digits = (v: any) => String(v ?? '').replace(/\D/g, '');
+        const nfeCnpj = digits(cfg?.nfeCnpj);
+        const identidade = nfeCnpj.length === 14 && nfeCnpj !== digits(cfg?.cnpj) ? 'NF-e' : 'NFC-e';
+        linhas.push({
+          loja: s.code, lojaNome: s.name, ativa: s.active !== false,
+          identidade, ...d,
+          chave: `${d.cep}|${d.endereco}|${d.numero}`.toUpperCase(),
+        });
+      } catch (e) {
+        linhas.push({ loja: s.code, lojaNome: s.name, ativa: s.active !== false, erro: (e as Error).message });
+      }
+    }
+    const porChave = new Map<string, string[]>();
+    for (const l of linhas) {
+      if (!l.chave) continue;
+      porChave.set(l.chave, [...(porChave.get(l.chave) || []), l.loja]);
+    }
+    for (const l of linhas) {
+      const iguais = (porChave.get(l.chave) || []).filter((c: string) => c !== l.loja);
+      l.colideCom = iguais.length ? iguais : null;
+      delete l.chave;
+    }
+    return {
+      linhas,
+      colisoes: linhas.filter((l) => l.colideCom).length,
+      semConfig: linhas.filter((l) => l.erro).length,
+    };
+  }
+
   async docsEnvio(shipmentId: string, storeId: string | null, opts?: { somenteEtiqueta?: boolean }) {
     const shipment: any = await this.prisma.realignmentShipment.findUnique({ where: { id: shipmentId } });
     if (!shipment) throw new NotFoundException('Remessa não encontrada');

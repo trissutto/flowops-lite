@@ -432,7 +432,7 @@ export default function RemessasAdminPage() {
   // Antes só a LOJA DE ORIGEM conseguia gerar, e só se a remessa caísse na
   // regra dos Correios (até 10 peças). Da retaguarda não dava de jeito nenhum.
   // Agora dá — e com "forçar" pra postar qualquer remessa quando ele quiser.
-  const [envioBusy, setEnvioBusy] = useState<'gerar' | 'etiqueta' | 'ambos' | null>(null);
+  const [envioBusy, setEnvioBusy] = useState<'gerar' | 'etiqueta' | 'ambos' | 'refazer' | null>(null);
   const [envioMsg, setEnvioMsg] = useState<{ tipo: 'ok' | 'erro'; texto: string } | null>(null);
 
   const gerarEtiqueta = async (forcar: boolean) => {
@@ -462,6 +462,34 @@ export default function RemessasAdminPage() {
       setRows((prev) => prev.map((x) => (x.id === detailId ? { ...x, ...patch } : x)));
     } catch (e: any) {
       setEnvioMsg({ tipo: 'erro', texto: e?.message || 'Falha ao gerar o envio' });
+    } finally {
+      setEnvioBusy(null);
+    }
+  };
+
+  // A etiqueta NÃO é gerada aqui: é baixada da transportadora pela
+  // pré-postagem. Uma criada com endereço errado continua errada pra sempre —
+  // baixar de novo devolve o mesmo papel. Refazer é o único jeito.
+  const refazerEnvio = async () => {
+    if (!detailId || envioBusy) return;
+    if (!confirm(
+      'Descartar a etiqueta atual e gerar OUTRA com o endereço de agora?\n\n' +
+      'O código de rastreio muda. A etiqueta antiga não é cancelada nos Correios — ' +
+      'se você já imprimiu, JOGUE FORA pra não postar com a errada.',
+    )) return;
+    setEnvioBusy('refazer');
+    setEnvioMsg(null);
+    try {
+      const r = await api<any>(`/realignment/shipments/${detailId}/refazer-envio`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+      setEnvioMsg({ tipo: 'ok', texto: `Etiqueta refeita: ${r?.carrier || ''} ${r?.codigoRastreio} (antiga ${r?.anterior?.tracking} descartada)` });
+      const patch = { trackingCode: r?.codigoRastreio ?? null, carrier: r?.carrier ?? null };
+      setDetail((prev) => (prev ? { ...prev, ...patch } : prev));
+      setRows((prev) => prev.map((x) => (x.id === detailId ? { ...x, ...patch } : x)));
+    } catch (e: any) {
+      setEnvioMsg({ tipo: 'erro', texto: e?.message || 'Falha ao refazer' });
     } finally {
       setEnvioBusy(null);
     }
@@ -1323,6 +1351,14 @@ export default function RemessasAdminPage() {
                               className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-sm font-bold disabled:opacity-50"
                             >
                               {envioBusy === 'ambos' ? 'Baixando…' : '🖨 Etiqueta + DANFE'}
+                            </button>
+                            <button
+                              onClick={refazerEnvio}
+                              disabled={!!envioBusy}
+                              title="Descarta a pré-postagem atual e cria outra com o endereço de agora"
+                              className="px-4 py-2 rounded-lg border-2 border-rose-300 text-rose-700 hover:bg-rose-50 text-sm font-bold disabled:opacity-50"
+                            >
+                              {envioBusy === 'refazer' ? 'Refazendo…' : '♻ Refazer etiqueta'}
                             </button>
                           </>
                         ) : (
