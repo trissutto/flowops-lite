@@ -736,11 +736,24 @@ export default function EditorProdutosPage() {
                                 <button
                                   onClick={() => setCellSel({ codigo: r.codigo, loja })}
                                   className={`w-8 h-6 rounded text-xs font-bold hover:ring-2 hover:ring-amber-300 ${
-                                    qtd > 0 ? 'text-slate-800' : 'text-slate-300'
+                                    qtd < 0
+                                      ? 'bg-rose-50 text-rose-700 ring-1 ring-rose-200'
+                                      : qtd > 0
+                                        ? 'text-slate-800'
+                                        : 'text-slate-300'
                                   }`}
-                                  title={`Loja ${loja} — clique pra digitar a quantidade`}
+                                  title={
+                                    qtd < 0
+                                      ? `Loja ${loja} — ESTOQUE NEGATIVO (${qtd}): peça vendida antes de dar entrada. `
+                                        + `Zera sozinho quando a remessa for recebida; se não houver remessa a caminho, é acerto de inventário.`
+                                      : `Loja ${loja} — clique pra digitar a quantidade`
+                                  }
                                 >
-                                  {qtd > 0 ? qtd : '·'}
+                                  {/* NEGATIVO PRECISA APARECER (31/07): a célula só imprimia
+                                      número > 0 e qualquer coisa ≤ 0 virava "·". Resultado: o
+                                      Giga mostrava −1 e o Flow mostrava ponto — o número mais
+                                      importante da tela era o único invisível. */}
+                                  {qtd !== 0 ? qtd : '·'}
                                 </button>
                               )}
                             </td>
