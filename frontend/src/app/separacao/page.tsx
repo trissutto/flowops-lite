@@ -236,9 +236,10 @@ function SeparacaoPageInner() {
   const [storeCode, setStoreCode] = useState<string>('');
   const [stores, setStores] = useState<Array<{ code: string; name: string; openOrders: number }>>([]);
 
-  // Filtro de ORIGEM: '' = todos · 'site' (WooCommerce) · 'live' (Live Commerce).
-  // Pedido da live entra na MESMA fila (source='live', nº "LIVE-<comanda>").
-  const [sourceFilter, setSourceFilter] = useState<'' | 'site' | 'live'>('');
+  // Filtro de ORIGEM: '' = todos · 'site' (WooCommerce antigo) · 'live' (Live
+  // Commerce) · 'ecommerce' (site NOVO, sprint 011 — nº "LP-xxxxxx").
+  // As três origens entram na MESMA fila: quem sabe rotear Order roteia todas.
+  const [sourceFilter, setSourceFilter] = useState<'' | 'site' | 'live' | 'ecommerce'>('');
 
   // Carrega lojas com contagem de pedidos em aberto
   useEffect(() => {
@@ -1085,9 +1086,9 @@ function SeparacaoPageInner() {
           </button>
         )}
 
-        {/* ─── FILTRO ORIGEM (SITE / LIVE) ─── */}
+        {/* ─── FILTRO ORIGEM (SITE / LIVE / ECOMMERCE) ─── */}
         <div className="flex items-center gap-1 ml-3">
-          {([['', 'Todos'], ['site', 'Site'], ['live', 'Live']] as const).map(([val, label]) => (
+          {([['', 'Todos'], ['site', 'Site'], ['live', 'Live'], ['ecommerce', 'Ecommerce']] as const).map(([val, label]) => (
             <button
               key={val || 'todos'}
               type="button"
@@ -1096,10 +1097,20 @@ function SeparacaoPageInner() {
                 sourceFilter === val
                   ? val === 'live'
                     ? 'bg-rose-600 border-rose-600 text-white'
-                    : 'bg-slate-800 border-slate-800 text-white'
+                    : val === 'ecommerce'
+                      ? 'bg-violet-600 border-violet-600 text-white'
+                      : 'bg-slate-800 border-slate-800 text-white'
                   : 'bg-white border-slate-300 text-slate-600 hover:bg-slate-100'
               }`}
-              title={val === 'live' ? 'Só pedidos da Live Commerce' : val === 'site' ? 'Só pedidos do site (WooCommerce)' : 'Site + Live'}
+              title={
+                val === 'live'
+                  ? 'Só pedidos da Live Commerce'
+                  : val === 'site'
+                    ? 'Só pedidos do site antigo (WooCommerce)'
+                    : val === 'ecommerce'
+                      ? 'Só pedidos do site novo (nº LP-xxxxxx)'
+                      : 'Todas as origens'
+              }
             >
               {val === 'live' ? '🔴 ' : ''}{label}
             </button>
@@ -1250,7 +1261,15 @@ function SeparacaoPageInner() {
         <CarrinhosTab />
       ) : !loading && orders.filter((o: any) => !sourceFilter || (o.orderSource || 'site') === sourceFilter).length === 0 ? (
         <div className="bg-white rounded-lg shadow p-8 text-center text-slate-400">
-          Nenhum pedido {sourceFilter === 'live' ? 'da LIVE ' : sourceFilter === 'site' ? 'do site ' : ''}com esse status no momento. 🎉
+          Nenhum pedido{' '}
+          {sourceFilter === 'live'
+            ? 'da LIVE '
+            : sourceFilter === 'site'
+              ? 'do site antigo '
+              : sourceFilter === 'ecommerce'
+                ? 'do site novo '
+                : ''}
+          com esse status no momento. 🎉
         </div>
       ) : (
         <div className="space-y-2">
@@ -1306,6 +1325,15 @@ function SeparacaoPageInner() {
                       {(o as any).orderSource === 'live' && (
                         <span className="ml-1 inline-block rounded bg-rose-600 px-1.5 py-0.5 text-[10px] font-bold text-white align-middle">
                           🔴 LIVE
+                        </span>
+                      )}
+                      {/* Site NOVO (sprint 011): pedido nasce no Postgres do Flow,
+                          não vem do WooCommerce. Roxo pra não confundir com o
+                          vermelho da live nem com o pedido do site antigo, que
+                          não tem selo nenhum. */}
+                      {(o as any).orderSource === 'ecommerce' && (
+                        <span className="ml-1 inline-block rounded bg-violet-600 px-1.5 py-0.5 text-[10px] font-bold text-white align-middle">
+                          ECOMMERCE
                         </span>
                       )}
                       <div className="text-xs text-slate-500">{fmtDate(o.dateCreatedGmt)} atrás</div>
