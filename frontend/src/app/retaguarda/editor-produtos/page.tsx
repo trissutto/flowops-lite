@@ -380,6 +380,44 @@ export default function EditorProdutosPage() {
     return Array.from(s).sort();
   }, [rows, lojaNomes]);
 
+  /**
+   * DIGITAR a quantidade final (pedido do dono 31/07: "colocar a quantidade
+   * sem precisar ir no mais e menos").
+   *
+   * A API é de MOVIMENTO (entrada/saída), não de "setar saldo" — de propósito,
+   * porque todo ajuste fica auditado. Então aqui a tela calcula a diferença
+   * entre o que está e o que a pessoa digitou e manda UM movimento com o
+   * tamanho certo. Digitar 13 onde havia 9 = uma entrada de 4.
+   */
+  const definirEstoqueCelula = async (row: Row, loja: string, novoValor: number) => {
+    const atual = row.estoqueLojas?.[loja] ?? 0;
+    const alvo = Math.max(0, Math.floor(Number(novoValor) || 0));
+    if (alvo === atual) { setCellSel(null); return; }
+    const diff = alvo - atual;
+    setCellBusy(true); setErr('');
+    try {
+      await api('/products-editor/movimentar', {
+        method: 'POST',
+        body: JSON.stringify({
+          movimentos: [{
+            codigo: row.codigo, loja,
+            qtd: Math.abs(diff),
+            tipo: diff > 0 ? 'entrada' : 'saida',
+            motivo: 'AJUSTE',
+          }],
+        }),
+      });
+      setRows((prev) => prev.map((r) => r.codigo === row.codigo
+        ? { ...r, estoqueLojas: { ...(r.estoqueLojas || {}), [loja]: alvo } }
+        : r));
+      setCellSel(null);
+    } catch (e: any) {
+      setErr(e?.message || 'Falha no movimento');
+    } finally {
+      setCellBusy(false);
+    }
+  };
+
   // Clique no stepper da célula: grava NA HORA (Flow fonte, Giga réplica)
   const aplicarMovCelula = async (row: Row, loja: string, delta: 1 | -1) => {
     if (cellBusy) return;
@@ -667,12 +705,32 @@ export default function EditorProdutosPage() {
                             <td key={loja} className="px-0.5 py-1 text-center tabular-nums">
                               {ativa ? (
                                 <span className="inline-flex items-center gap-0.5 bg-amber-50 border border-amber-300 rounded-md px-1">
-                                  <button onClick={() => aplicarMovCelula(r, loja, -1)} disabled={cellBusy || qtd <= 0}
+                                  <button onMouseDown={(e) => e.preventDefault()}
+                                    onClick={() => aplicarMovCelula(r, loja, -1)} disabled={cellBusy || qtd <= 0}
                                     className="w-5 h-5 text-rose-700 font-black disabled:opacity-30" aria-label="Tirar 1">−</button>
-                                  <span className="text-xs font-black min-w-[16px]">{qtd}</span>
-                                  <button onClick={() => aplicarMovCelula(r, loja, 1)} disabled={cellBusy}
+                                  {/* DIGITÁVEL: abre já selecionado, Enter grava, Esc cancela.
+                                      Os botões continuam pra quem prefere 1 a 1. */}
+                                  <input
+                                    key={`${r.codigo}-${loja}-${qtd}`}
+                                    autoFocus
+                                    defaultValue={qtd}
+                                    inputMode="numeric"
+                                    onFocus={(e) => e.currentTarget.select()}
+                                    onChange={(e) => { e.currentTarget.value = e.currentTarget.value.replace(/\D/g, '').slice(0, 5); }}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter') { e.preventDefault(); definirEstoqueCelula(r, loja, Number(e.currentTarget.value)); }
+                                      if (e.key === 'Escape') { e.preventDefault(); setCellSel(null); }
+                                    }}
+                                    onBlur={(e) => definirEstoqueCelula(r, loja, Number(e.currentTarget.value))}
+                                    disabled={cellBusy}
+                                    className="w-9 h-5 text-xs font-black text-center bg-white border border-amber-300 rounded outline-none focus:border-amber-500 disabled:opacity-50"
+                                    aria-label={`Quantidade na loja ${loja}`}
+                                  />
+                                  <button onMouseDown={(e) => e.preventDefault()}
+                                    onClick={() => aplicarMovCelula(r, loja, 1)} disabled={cellBusy}
                                     className="w-5 h-5 text-emerald-700 font-black disabled:opacity-30" aria-label="Somar 1">+</button>
-                                  <button onClick={() => setCellSel(null)} className="w-4 h-4 text-slate-400" aria-label="Fechar">×</button>
+                                  <button onMouseDown={(e) => e.preventDefault()} onClick={() => setCellSel(null)}
+                                    className="w-4 h-4 text-slate-400" aria-label="Fechar">×</button>
                                 </span>
                               ) : (
                                 <button
@@ -680,7 +738,7 @@ export default function EditorProdutosPage() {
                                   className={`w-8 h-6 rounded text-xs font-bold hover:ring-2 hover:ring-amber-300 ${
                                     qtd > 0 ? 'text-slate-800' : 'text-slate-300'
                                   }`}
-                                  title={`Loja ${loja} — clique pra ajustar`}
+                                  title={`Loja ${loja} — clique pra digitar a quantidade`}
                                 >
                                   {qtd > 0 ? qtd : '·'}
                                 </button>
