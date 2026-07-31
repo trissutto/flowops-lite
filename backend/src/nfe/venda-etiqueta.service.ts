@@ -152,10 +152,19 @@ export class VendaEtiquetaService {
 
     const origem = await this.remetente(String(sale.storeCode));
 
-    const senderId = maisEnviosStores()[String(sale.storeCode)];
+    // MESMA resolução de provedor dos pick-orders (que postam todo dia):
+    // shippingProvider/senderId da TELA DE LOJAS primeiro, mapa fixo depois.
+    const store: any = await this.prisma.store.findFirst({
+      where: { code: String(sale.storeCode) },
+      select: { shippingProvider: true, maisEnviosSenderId: true } as any,
+    }).catch(() => null);
+    const mapped = maisEnviosStores()[String(sale.storeCode)];
     const routingOn = String(process.env.MAISENVIOS_ROUTING || '').trim() === '1';
-    let r: { codigoRastreio: string; idPrepostagem: string | null; carrier: string; etiquetaPdf: string | null };
-    if (routingOn && senderId) {
+    const provider = routingOn ? (store?.shippingProvider || (mapped ? 'maisenvios' : 'correios')) : 'correios';
+    const senderId = store?.maisEnviosSenderId || mapped || null;
+    let r: { codigoRastreio: string; idPrepostagem: string | null; carrier: string; etiquetaPdf: string | null } | null = null;
+    let viaME = provider === 'maisenvios' && !!senderId;
+    if (viaME) {
       const resp: any = await this.maisEnvios.criarPrepost({
         senderId,
         servico,
@@ -179,10 +188,19 @@ export class VendaEtiquetaService {
         departamento: `LOJA ${sale.storeCode}`,
         itens: itensDeclaracao.map((i: any) => ({ conteudo: i.conteudo, quantidade: Number(i.quantidade) || 1 })),
       });
-      if (!resp?.ok || !resp.tag) throw new BadRequestException(`Mais Envios recusou: ${resp?.erro || 'sem tag'}`);
-      r = { codigoRastreio: resp.tag, idPrepostagem: resp.idPrepostagem ? String(resp.idPrepostagem) : null, carrier: `Mais Envios ${servico}`, etiquetaPdf: null };
-      try { const et = await this.maisEnvios.baixarEtiqueta(resp.tag); if (et?.ok && et.pdfBase64) r.etiquetaPdf = et.pdfBase64; } catch { /* opcional */ }
-    } else {
+      if (!resp?.ok || !resp.tag) {
+        // NÃO bloqueia a postagem da venda: loga a recusa (payload/resposta
+        // crus já saem no console com "maisenvios") e cai pros CORREIOS, que
+        // têm contrato próprio e funcionam pra qualquer loja. Caso real 31/07:
+        // Suzano com o Mais Envios devolvendo QueryFailedError de uuid.
+        this.logger.error(`[venda-etiqueta] Mais Envios recusou (${resp?.erro || 'sem tag'}) — caindo pros Correios`);
+        viaME = false;
+      } else {
+        r = { codigoRastreio: resp.tag, idPrepostagem: resp.idPrepostagem ? String(resp.idPrepostagem) : null, carrier: `Mais Envios ${servico}`, etiquetaPdf: null };
+        try { const et = await this.maisEnvios.baixarEtiqueta(resp.tag); if (et?.ok && et.pdfBase64) r.etiquetaPdf = et.pdfBase64; } catch { /* opcional */ }
+      }
+    }
+    if (!viaME) {
       const resp: any = await this.correios.criarPrepostagem({
         servico,
         remetente: origem,
@@ -199,6 +217,7 @@ export class VendaEtiquetaService {
       }
     }
 
+    if (!r) throw new BadRequestException('Nenhuma transportadora aceitou a pré-postagem — veja os logs (maisenvios/correios).');
     await this.prisma.nfeDoc.update({
       where: { id: doc.id },
       data: {
