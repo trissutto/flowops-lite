@@ -6,6 +6,19 @@ import type { CartLine } from '@/types';
  * Carrinho local — fonte da verdade do cliente até o checkout.
  * A linha é identificada por produto+tamanho+cor (a mesma peça em dois
  * tamanhos são duas linhas).
+ *
+ * Sprint 009 estendeu o store SEM mudar a API original (lines/add/remove/
+ * setQuantity/clear seguem intocados — nenhuma tela precisou ser reescrita):
+ *
+ * - `couponCode`/`cep`/`shippingQuoteId` guardam só a ESCOLHA da cliente,
+ *   nunca o valor calculado. Desconto e frete são recalculados a cada render
+ *   por `applyCoupon`/`findQuote` — persistir preço em localStorage é convite
+ *   pra cobrar frete de ontem com a regra de hoje.
+ * - `savedForLater` fica FORA de `lines` de propósito: não conta no subtotal,
+ *   não vai pro checkout e sobrevive ao `clear()` pós-compra.
+ *
+ * Tudo persiste no mesmo `lurds-cart` — estado antigo ({ lines }) migra
+ * sozinho: o merge do persist preenche as chaves novas com os defaults.
  */
 
 function lineKey(productId: string, size: string, color?: string): string {
@@ -14,16 +27,34 @@ function lineKey(productId: string, size: string, color?: string): string {
 
 interface CartState {
   lines: CartLine[];
+  /** Peças guardadas pra depois — fora do subtotal e do checkout. */
+  savedForLater: CartLine[];
+  /** Código do cupom aplicado. A validação mora em lib/commerce/cupom. */
+  couponCode: string | null;
+  /** CEP da última cotação — pré-preenche sacola e checkout. */
+  cep: string | null;
+  /** Id da `ShippingQuote` escolhida — recotada a cada uso, nunca o preço. */
+  shippingQuoteId: string | null;
   add: (line: Omit<CartLine, 'id'>) => void;
   remove: (id: string) => void;
   setQuantity: (id: string, quantity: number) => void;
   clear: () => void;
+  setCoupon: (code: string | null) => void;
+  setCep: (cep: string | null) => void;
+  setShippingQuote: (quoteId: string | null) => void;
+  saveForLater: (id: string) => void;
+  moveToCart: (id: string) => void;
+  removeSaved: (id: string) => void;
 }
 
 export const useCartStore = create<CartState>()(
   persist(
     (set) => ({
       lines: [],
+      savedForLater: [],
+      couponCode: null,
+      cep: null,
+      shippingQuoteId: null,
       add: (line) =>
         set((state) => {
           const id = lineKey(line.productId, line.size, line.color);
@@ -45,7 +76,43 @@ export const useCartStore = create<CartState>()(
               ? state.lines.filter((l) => l.id !== id)
               : state.lines.map((l) => (l.id === id ? { ...l, quantity } : l)),
         })),
-      clear: () => set({ lines: [] }),
+      // clear() zera o PEDIDO (linhas, cupom, frete escolhido) mas preserva o
+      // que pertence à CLIENTE: o CEP dela não muda porque ela comprou, e o
+      // "guardado para depois" existe justamente pra sobreviver à compra.
+      clear: () => set({ lines: [], couponCode: null, shippingQuoteId: null }),
+      setCoupon: (code) => set({ couponCode: code ? code.trim().toUpperCase() : null }),
+      setCep: (cep) => set({ cep }),
+      setShippingQuote: (quoteId) => set({ shippingQuoteId: quoteId }),
+      saveForLater: (id) =>
+        set((state) => {
+          const line = state.lines.find((l) => l.id === id);
+          if (!line) return state;
+          const saved = state.savedForLater.find((l) => l.id === id);
+          return {
+            lines: state.lines.filter((l) => l.id !== id),
+            savedForLater: saved
+              ? state.savedForLater.map((l) =>
+                  l.id === id ? { ...l, quantity: l.quantity + line.quantity } : l,
+                )
+              : [...state.savedForLater, line],
+          };
+        }),
+      moveToCart: (id) =>
+        set((state) => {
+          const line = state.savedForLater.find((l) => l.id === id);
+          if (!line) return state;
+          const existing = state.lines.find((l) => l.id === id);
+          return {
+            savedForLater: state.savedForLater.filter((l) => l.id !== id),
+            lines: existing
+              ? state.lines.map((l) =>
+                  l.id === id ? { ...l, quantity: l.quantity + line.quantity } : l,
+                )
+              : [...state.lines, line],
+          };
+        }),
+      removeSaved: (id) =>
+        set((state) => ({ savedForLater: state.savedForLater.filter((l) => l.id !== id) })),
     }),
     { name: 'lurds-cart' },
   ),

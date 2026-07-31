@@ -1,0 +1,357 @@
+'use client';
+
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
+import { Clock, MapPin, Truck } from 'lucide-react';
+import { cn, formatPrice } from '@/lib/utils';
+import { Input } from '@/components/ui/Input';
+import { Button } from '@/components/ui/Button';
+import { isValidCep, quoteShipping } from '@/lib/commerce/frete';
+import { stores } from '@/data/stores';
+import { trackAddShippingInfo, type TrackedItem } from '@/lib/tracking';
+import type { Address, ShippingQuote } from '@/types/checkout';
+import { maskCep, onlyDigits } from './masks';
+
+/**
+ * § 2 — ENTREGA. A ordem da seção é a ordem da decisão da cliente:
+ * CEP → "quanto custa e quando chega?" (cotações) → endereço completo.
+ *
+ * ViaCEP preenche rua/bairro/cidade/UF sozinho e o foco pula pro NÚMERO —
+ * o único campo que só a cliente sabe. Erro do ViaCEP é SILENCIOSO de
+ * propósito: o serviço é cortesia, e se ele cair a cliente simplesmente
+ * digita o endereço (os campos continuam editáveis).
+ *
+ * Retirada na loja dispensa endereço: a peça não viaja até ela.
+ */
+
+/** Resultado consolidado da etapa — o que a página guarda. */
+export interface ShippingSelection {
+  /** Só dígitos. */
+  cep: string;
+  /** undefined quando retirada na loja. */
+  address?: Address;
+  quote: ShippingQuote;
+}
+
+const addressSchema = z.object({
+  street: z.string().trim().min(2, 'Informe a rua.'),
+  number: z.string().trim().min(1, 'Informe o número.'),
+  complement: z.string().optional(),
+  neighborhood: z.string().trim().min(2, 'Informe o bairro.'),
+  city: z.string().trim().min(2, 'Informe a cidade.'),
+  uf: z.string().trim().length(2, 'UF.'),
+});
+
+type AddressValues = z.infer<typeof addressSchema>;
+
+interface ShippingStepProps {
+  subtotal: number;
+  /** Itens no formato de tracking — pro add_shipping_info. */
+  itemsTracked: TrackedItem[];
+  defaults?: ShippingSelection | null;
+  onDone: (selection: ShippingSelection) => void;
+}
+
+export function ShippingStep({ subtotal, itemsTracked, defaults, onDone }: ShippingStepProps) {
+  const [cep, setCep] = useState(defaults ? maskCep(defaults.cep) : '');
+  const [cepBuscando, setCepBuscando] = useState(false);
+  const [quoteId, setQuoteId] = useState<string | undefined>(defaults?.quote.id);
+  const [quoteError, setQuoteError] = useState<string | null>(null);
+
+  // Evita refetch do ViaCEP pro mesmo CEP (inclusive na volta da edição).
+  const ultimoCepBuscado = useRef<string | null>(defaults ? onlyDigits(defaults.cep) : null);
+
+  const {
+    register,
+    handleSubmit,
+    setValue,
+    setFocus,
+    formState: { errors },
+  } = useForm<AddressValues>({
+    resolver: zodResolver(addressSchema),
+    defaultValues: defaults?.address
+      ? {
+          street: defaults.address.street,
+          number: defaults.address.number,
+          complement: defaults.address.complement ?? '',
+          neighborhood: defaults.address.neighborhood,
+          city: defaults.address.city,
+          uf: defaults.address.uf,
+        }
+      : undefined,
+    mode: 'onTouched',
+  });
+
+  const cepValido = isValidCep(cep);
+  // Cotação é síncrona e barata (tabela local) — memo só pra estabilidade.
+  const quotes = useMemo(() => (cepValido ? quoteShipping(cep, subtotal) : []), [cep, cepValido, subtotal]);
+  const selectedQuote = quotes.find((q) => q.id === quoteId);
+  const precisaEndereco = selectedQuote ? selectedQuote.kind !== 'retirada' : false;
+
+  /* ViaCEP — dispara quando o CEP fica completo. */
+  useEffect(() => {
+    const digits = onlyDigits(cep);
+    if (digits.length !== 8 || ultimoCepBuscado.current === digits) return;
+    ultimoCepBuscado.current = digits;
+    setCepBuscando(true);
+
+    const controller = new AbortController();
+    fetch(`https://viacep.com.br/ws/${digits}/json/`, { signal: controller.signal })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        // ViaCEP devolve { erro: true } pra CEP inexistente — também silencioso.
+        if (data && !data.erro) {
+          setValue('street', data.logradouro ?? '', { shouldValidate: false });
+          setValue('neighborhood', data.bairro ?? '', { shouldValidate: false });
+          setValue('city', data.localidade ?? '', { shouldValidate: false });
+          setValue('uf', (data.uf ?? '').toUpperCase(), { shouldValidate: false });
+        }
+      })
+      .catch(() => {
+        /* silêncio combinado: a cliente digita na mão */
+      })
+      .finally(() => setCepBuscando(false));
+
+    return () => controller.abort();
+  }, [cep, setValue]);
+
+  /* Foco automático no número — o único campo que o ViaCEP não sabe. */
+  useEffect(() => {
+    if (precisaEndereco && !cepBuscando) setFocus('number');
+  }, [precisaEndereco, cepBuscando, setFocus]);
+
+  function confirmar(address?: AddressValues) {
+    if (!selectedQuote) {
+      setQuoteError('Escolha como você quer receber.');
+      return;
+    }
+    const selection: ShippingSelection = {
+      cep: onlyDigits(cep),
+      quote: selectedQuote,
+      address:
+        address && selectedQuote.kind !== 'retirada'
+          ? {
+              cep: onlyDigits(cep),
+              street: address.street.trim(),
+              number: address.number.trim(),
+              complement: address.complement?.trim() || undefined,
+              neighborhood: address.neighborhood.trim(),
+              city: address.city.trim(),
+              uf: address.uf.trim().toUpperCase(),
+            }
+          : undefined,
+    };
+    // Evento do funil só quando a etapa é CONFIRMADA (não a cada clique no rádio).
+    trackAddShippingInfo(itemsTracked, selectedQuote.label, selectedQuote.price);
+    onDone(selection);
+  }
+
+  function onSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!selectedQuote) {
+      setQuoteError('Escolha como você quer receber.');
+      return;
+    }
+    if (selectedQuote.kind === 'retirada') {
+      // Retirada não valida endereço — a peça espera na loja.
+      confirmar();
+      return;
+    }
+    void handleSubmit((values) => confirmar(values))();
+  }
+
+  return (
+    <form onSubmit={onSubmit} noValidate className="flex flex-col gap-6">
+      {/* CEP primeiro: é ele que define preço, prazo e lojas de retirada. */}
+      <div className="max-w-[220px]">
+        <Input
+          label="CEP"
+          inputMode="numeric"
+          autoComplete="postal-code"
+          placeholder="00000-000"
+          value={cep}
+          onChange={(e) => {
+            setCep(maskCep(e.target.value));
+            setQuoteError(null);
+          }}
+          // Altura reservada pro hint: o "Buscando…" não empurra o layout.
+          hint={cepBuscando ? 'Buscando endereço…' : ' '}
+        />
+      </div>
+
+      {/* Cotações — rádios elegantes, uma linha por opção. */}
+      {cepValido && quotes.length > 0 && (
+        <fieldset>
+          <legend className="eyebrow mb-3 text-ink-soft">Como você quer receber</legend>
+          <div className="flex flex-col gap-3" role="radiogroup">
+            {quotes.map((quote) => (
+              <QuoteOption
+                key={quote.id}
+                quote={quote}
+                checked={quoteId === quote.id}
+                onSelect={() => {
+                  setQuoteId(quote.id);
+                  setQuoteError(null);
+                }}
+              />
+            ))}
+          </div>
+          {quoteError && (
+            <p role="alert" className="mt-3 text-small text-danger">
+              {quoteError}
+            </p>
+          )}
+        </fieldset>
+      )}
+
+      {/* Endereço completo — só quando a entrega vai até a casa dela. */}
+      {precisaEndereco && (
+        <div className="grid gap-5 sm:grid-cols-6">
+          <Input
+            label="Rua"
+            autoComplete="address-line1"
+            className="sm:col-span-4"
+            error={errors.street?.message}
+            {...register('street')}
+          />
+          <Input
+            label="Número"
+            inputMode="numeric"
+            autoComplete="off"
+            className="sm:col-span-2"
+            error={errors.number?.message}
+            {...register('number')}
+          />
+          <Input
+            label="Complemento"
+            hint="Apartamento, bloco… (opcional)"
+            autoComplete="address-line2"
+            className="sm:col-span-3"
+            error={errors.complement?.message}
+            {...register('complement')}
+          />
+          <Input
+            label="Bairro"
+            autoComplete="address-level3"
+            className="sm:col-span-3"
+            error={errors.neighborhood?.message}
+            {...register('neighborhood')}
+          />
+          <Input
+            label="Cidade"
+            autoComplete="address-level2"
+            className="sm:col-span-4"
+            error={errors.city?.message}
+            {...register('city')}
+          />
+          <Input
+            label="UF"
+            autoComplete="address-level1"
+            maxLength={2}
+            className="sm:col-span-2"
+            error={errors.uf?.message}
+            {...register('uf', {
+              onChange: (e) => setValue('uf', e.target.value.toUpperCase().slice(0, 2)),
+            })}
+          />
+        </div>
+      )}
+
+      {cepValido && (
+        <div className="pt-1">
+          <Button type="submit" block className="sm:w-auto">
+            Continuar para o pagamento
+          </Button>
+        </div>
+      )}
+    </form>
+  );
+}
+
+/* ────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * Uma opção de frete. Retirada mostra o endereço da loja (a cliente decide
+ * pelo bairro, não pelo slug) e o "pronto em ~3h" — o argumento da retirada
+ * é a pressa.
+ */
+function QuoteOption({
+  quote,
+  checked,
+  onSelect,
+}: {
+  quote: ShippingQuote;
+  checked: boolean;
+  onSelect: () => void;
+}) {
+  const retirada = quote.kind === 'retirada';
+  const store = retirada ? stores.find((s) => s.slug === quote.storeSlug) : undefined;
+
+  return (
+    <label
+      className={cn(
+        'flex cursor-pointer items-start gap-4 rounded-md border px-4 py-3.5 transition-colors duration-[180ms]',
+        checked ? 'border-primary bg-primary-wash' : 'border-border bg-surface hover:border-border-strong',
+      )}
+    >
+      <input
+        type="radio"
+        name="frete"
+        checked={checked}
+        onChange={onSelect}
+        className="peer sr-only"
+      />
+      {/* Bolinha do rádio desenhada (o input nativo fica sr-only pro teclado). */}
+      <span
+        aria-hidden
+        className={cn(
+          'mt-1 flex size-[18px] shrink-0 items-center justify-center rounded-pill border transition-colors duration-[180ms]',
+          checked ? 'border-primary' : 'border-border-strong',
+          'peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-primary',
+        )}
+      >
+        <span
+          className={cn(
+            'size-2 rounded-pill bg-primary transition-transform duration-[180ms]',
+            checked ? 'scale-100' : 'scale-0',
+          )}
+        />
+      </span>
+
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className="flex items-center gap-2 text-body font-normal text-ink">
+          {retirada ? <MapPin className="size-4 text-primary-strong" /> : <Truck className="size-4 text-primary-strong" />}
+          {quote.label}
+        </span>
+        {retirada ? (
+          <>
+            {store && (
+              <span className="truncate text-small text-ink-soft">
+                {store.address.street} · {store.address.neighborhood}, {store.city}/{store.uf}
+              </span>
+            )}
+            <span className="flex items-center gap-1.5 text-small text-ink-muted">
+              <Clock className="size-3.5" /> Pronto em ~{quote.readyInHours ?? 3}h
+            </span>
+          </>
+        ) : (
+          quote.etaDays && (
+            <span className="text-small text-ink-soft">
+              {quote.etaDays.min === quote.etaDays.max
+                ? `${quote.etaDays.min} dia${quote.etaDays.min > 1 ? 's' : ''} útil`
+                : `${quote.etaDays.min} a ${quote.etaDays.max} dias úteis`}{' '}
+              · frete estimado
+            </span>
+          )
+        )}
+      </span>
+
+      {/* Preço: 0 = "Grátis" (verde de dinheiro), nunca "R$ 0,00". */}
+      <span className={cn('tabular shrink-0 text-body font-medium', quote.price === 0 ? 'text-success' : 'text-ink')}>
+        {quote.price === 0 ? 'Grátis' : formatPrice(quote.price)}
+      </span>
+    </label>
+  );
+}

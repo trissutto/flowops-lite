@@ -1,16 +1,30 @@
 import { navigation } from '@/data/navigation';
 import { normalize } from '@/lib/utils';
-import type { SearchResult, SearchResultKind } from '@/types';
+import {
+  createSearchIndex,
+  FALLBACK_SUGGESTIONS,
+  heuristicInterpreter,
+  rankSearch,
+  type SearchOutcome,
+} from '@/lib/search';
+import { mapPeca } from '@/services/products';
+import type { Product, SearchResult, SearchResultKind } from '@/types';
 
 /**
  * SERVIÇO DE BUSCA
  *
- * Hoje resolve localmente sobre a árvore de navegação + sinônimos que a
- * cliente realmente digita ("roupa igreja", "vestido casamento"). A assinatura
- * já é assíncrona e paginável, então trocar por chamada de API (Algolia,
- * Typesense ou endpoint do FlowOps) não muda nenhum componente.
+ * Duas camadas que CONVIVEM (uma não substitui a outra):
  *
- * Ver docs/search.md.
+ *   `search()`         — índice NAVEGACIONAL: categorias, ocasiões, coleções e
+ *                        páginas do site. Resolve local, síncrono na prática,
+ *                        e é o fallback permanente quando o catálogo falha.
+ *   `searchProducts()` — busca de PRODUTO de verdade: interpreta a intenção
+ *                        (sprint 008), pede um recorte generoso ao BFF e
+ *                        ranqueia no client com o motor de `@/lib/search`.
+ *
+ * A assinatura de tudo aqui é assíncrona de propósito: trocar qualquer camada
+ * por chamada de API (Algolia, Typesense, endpoint do FlowOps) não muda
+ * nenhum componente. Ver docs/search.md.
  */
 
 /** Sinônimos → destino. A cliente não busca pelo nome da categoria do ERP. */
@@ -154,4 +168,125 @@ export function clearRecentSearches(): void {
   } catch {
     /* idem */
   }
+}
+
+/* ------------------------------------------------------ Métricas de busca */
+
+/**
+ * Telemetria própria (além do GA/Meta): alimenta /debug/search com top
+ * termos, zero-results e CTR. Fire-and-forget SEMPRE — sendBeacon quando
+ * existe (sobrevive à navegação), fetch keepalive como plano B, e qualquer
+ * falha morre em silêncio. Métrica JAMAIS bloqueia ou quebra a busca.
+ */
+const METRICS_URL = '/api/search-metrics';
+
+function postMetric(body: { term: string; results?: number; clicked?: boolean }): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const json = JSON.stringify(body);
+    if (navigator.sendBeacon?.(METRICS_URL, new Blob([json], { type: 'application/json' }))) return;
+    void fetch(METRICS_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: json,
+      keepalive: true,
+    }).catch(() => {});
+  } catch {
+    /* telemetria é opcional por definição */
+  }
+}
+
+// Autocomplete dispara uma busca por pausa de digitação — reportar duas vezes
+// o MESMO termo com o MESMO resultado só inflaria o volume no painel.
+let lastReported = '';
+
+function reportSearch(term: string, results: number): void {
+  const key = `${normalize(term)}::${results}`;
+  if (key === lastReported) return;
+  lastReported = key;
+  postMetric({ term, results });
+}
+
+/** Chamar no clique de um resultado — é o numerador do CTR do painel. */
+export function reportSearchClicked(term: string): void {
+  if (term.trim().length < 2) return;
+  postMetric({ term, clicked: true });
+}
+
+/* ----------------------------------------------------- Busca de produtos */
+
+/**
+ * Busca de produto com intenção: "vestido preto pra festa até 200" vira
+ * filtros que o BFF entende + residual textual, e o resultado volta ranqueado
+ * pelo motor (relevância + merchandising + escada anti-vazio).
+ *
+ * Pedimos `limit * 2` ao BFF de propósito: o motor re-ranqueia e relaxa no
+ * client, então um recorte maior dá material pra escada trabalhar sem uma
+ * segunda viagem à rede.
+ *
+ * FALHA DO BFF NUNCA QUEBRA A BUSCA: devolve outcome vazio marcado como
+ * `relaxed` com sugestões — a UI segue de pé com o índice navegacional
+ * (`search()`), que resolve local e não depende de rede.
+ */
+export async function searchProducts(term: string, limit = 24): Promise<SearchOutcome> {
+  const intent = heuristicInterpreter.interpret(term);
+
+  const params = new URLSearchParams({
+    ordenar: 'relevancia',
+    page: '1',
+    perPage: String(Math.min(limit * 2, 60)),
+  });
+  // Facetas que o BFF entende viram filtro no SERVIDOR (menos tráfego);
+  // o que ele não entende (ocasião, tecido, atributos) o motor pontua aqui.
+  const residual = intent.residual.trim();
+  if (residual.length >= 2) params.set('busca', residual);
+  if (intent.facets.category) params.set('categoria', intent.facets.category);
+  if (intent.facets.color) params.set('cor', intent.facets.color);
+  if (intent.facets.fit) params.set('modelagem', intent.facets.fit);
+  if (intent.facets.priceMax !== undefined) params.set('precoMax', String(intent.facets.priceMax));
+
+  try {
+    const resposta = await fetch(`/api/loja/produtos?${params.toString()}`);
+    if (!resposta.ok) throw new Error(`HTTP ${resposta.status}`);
+    const dados = await resposta.json();
+    const produtos: Product[] = (dados.itens ?? []).map(mapPeca);
+
+    const outcome = rankSearch(createSearchIndex(produtos), { term, limit });
+    reportSearch(term, outcome.results.length);
+    return outcome;
+  } catch (error) {
+    console.error('[busca] catálogo indisponível, degradando pro índice navegacional', error);
+    reportSearch(term, 0);
+    return { results: [], intent, relaxed: true, suggestions: FALLBACK_SUGGESTIONS.slice(0, 4) };
+  }
+}
+
+/* ----------------------------------------------------- Produtos populares */
+
+/**
+ * Vitrine do estado vazio (overlay) e do zero-results (página de busca).
+ * UMA chamada por sessão de página: cache em memória de módulo, com a
+ * promise guardada pra colapsar chamadas concorrentes (dois consumidores
+ * abrindo ao mesmo tempo não duplicam a viagem).
+ */
+let popularCache: Product[] | null = null;
+let popularInflight: Promise<Product[]> | null = null;
+
+export async function fetchPopularProducts(): Promise<Product[]> {
+  if (popularCache) return popularCache;
+  popularInflight ??= (async () => {
+    try {
+      const resposta = await fetch('/api/loja/produtos?ordenar=relevancia&perPage=4&page=1');
+      if (!resposta.ok) return [];
+      const dados = await resposta.json();
+      popularCache = ((dados.itens ?? []) as Parameters<typeof mapPeca>[0][]).map(mapPeca);
+      return popularCache;
+    } catch {
+      // Sem populares não é erro de UX — a seção simplesmente não aparece.
+      return [];
+    } finally {
+      popularInflight = null;
+    }
+  })();
+  return popularInflight;
 }

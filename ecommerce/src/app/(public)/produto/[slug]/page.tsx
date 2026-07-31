@@ -7,10 +7,11 @@ import { Breadcrumb } from '@/components/navigation/Breadcrumb';
 import { Accordion, AccordionItem } from '@/components/ui/Accordion';
 import { ProductGallery } from '@/components/commerce/ProductGallery';
 import { BuyBox } from '@/components/commerce/BuyBox';
-import { ProductCarousel } from '@/components/sections/ProductCarousel';
+import { ProductPageSignals } from '@/components/commerce/ProductPageSignals';
+import { RecommendationRail } from '@/components/commerce/RecommendationRail';
 import { NewsletterBlock } from '@/components/sections/NewsletterBlock';
 import { TestimonialCarousel } from '@/components/sections/TestimonialCarousel';
-import { getProduct, getRelated } from '@/services/catalog';
+import { getProduct } from '@/services/catalog';
 import { testimonials } from '@/data/content';
 import { breadcrumbSchema, buildMetadata, jsonLdGraph, productSchema } from '@/lib/seo';
 
@@ -63,7 +64,6 @@ export default async function ProductPage({ params }: { params: Promise<{ slug: 
   if (!result) notFound();
 
   const { product, description, shortDescription } = result;
-  const related = await getRelated(slug);
 
   const categoryLabel = product.category
     .replace(/-/g, ' ')
@@ -174,21 +174,38 @@ export default async function ProductPage({ params }: { params: Promise<{ slug: 
         </div>
       </Section>
 
-      {/* Relacionados */}
-      {related.length > 0 && (
-        <Section tone="alt" width="wide" aria-labelledby="relacionados-titulo">
-          <SectionTitle
-            id="relacionados-titulo"
-            eyebrow="Combina com"
-            title="Você também vai amar"
-            cta={{ label: `Ver tudo em ${categoryLabel}`, href: `/categoria/${product.category}` }}
-            align="left"
-          />
-          <div className="mt-14">
-            <ProductCarousel products={related} ariaLabel="Produtos relacionados" />
-          </div>
-        </Section>
-      )}
+      {/*
+        Recomendações — client-side via motor (lib/recommendations/engine).
+        Cada rail se auto-remove quando não há o que mostrar, então a página
+        pode empilhar os três sem medo de seção vazia. O rail de relacionados
+        substituiu o antigo bloco server-side (getRelated/WooCommerce) — a
+        fonte agora é o endpoint nativo /public/loja/.../relacionados.
+      */}
+      <RecommendationRail
+        kind="voce-tambem-pode-gostar"
+        seed={product}
+        eyebrow="Combina com"
+        title="Você também pode gostar"
+        cta={{ label: `Ver tudo em ${categoryLabel}`, href: `/categoria/${product.category}` }}
+        tone="alt"
+      />
+      <RecommendationRail
+        kind="complete-seu-look"
+        seed={product}
+        eyebrow="Estilo completo"
+        title="Complete seu look"
+        description="Peças que fecham a produção com esta escolha — escolhidas pela curadoria, não pelo acaso."
+      />
+      <RecommendationRail
+        kind="ultimos-vistos"
+        seed={product}
+        eyebrow="Sua navegação"
+        title="Vistos por você"
+        tone="alt"
+      />
+
+      {/* Sinais locais: últimos vistos + personalização (client, invisível) */}
+      <ProductPageSignals product={product} />
 
       <NewsletterBlock tone="champagne" />
     </>

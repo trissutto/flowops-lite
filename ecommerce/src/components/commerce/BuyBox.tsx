@@ -8,7 +8,9 @@ import { FitAssistant } from '@/components/fit/FitAssistant';
 import { ProductBadgeTag } from '@/components/ui/Badge';
 import { useToast } from '@/components/feedback/ToastProvider';
 import { useCartStore } from '@/store/cart';
+import { useUiStore } from '@/store/ui';
 import { useWishlistStore } from '@/store/wishlist';
+import { trackAddToCart } from '@/lib/tracking';
 import { useMounted } from '@/hooks';
 import { cn, discountPercent, formatPrice } from '@/lib/utils';
 import type { Product } from '@/types';
@@ -31,6 +33,7 @@ export function BuyBox({ product }: { product: Product }) {
   const { toast } = useToast();
   const mounted = useMounted();
   const addToCart = useCartStore((s) => s.add);
+  const openOverlay = useUiStore((s) => s.openOverlay);
   const toggleWishlist = useWishlistStore((s) => s.toggle);
   const isFavorite = useWishlistStore((s) => s.ids.includes(product.id));
 
@@ -55,7 +58,17 @@ export function BuyBox({ product }: { product: Product }) {
       quantity: 1,
       unitPrice: product.price,
     });
+    // add_to_cart SÓ depois da peça entrar de fato no carrinho (contrato do
+    // tracking). Cor: a PDP não tem seletor — cada cor é uma peça própria, e
+    // quando o produto tem cor única ela vai junto no evento.
+    trackAddToCart(product, {
+      tamanho: size,
+      cor: product.colors?.length === 1 ? product.colors[0].name : undefined,
+    });
     toast({ message: 'Adicionado à sacola', description: `${product.name} · tamanho ${size}` });
+    // Abre o mini-cart: a cliente VÊ a peça entrar na sacola sem sair da
+    // página — e o próximo passo (finalizar) já está na mão dela.
+    openOverlay('cart');
   }
 
   const whatsapp = `https://api.whatsapp.com/send?phone=5513996050174&text=${encodeURIComponent(
