@@ -580,6 +580,28 @@ export class RealignmentController {
   }
 
   /**
+   * REFAZER a etiqueta: descarta a pré-postagem antiga e cria outra com o
+   * endereço atual. POST /realignment/shipments/:id/refazer-envio · retaguarda.
+   */
+  @Post('shipments/:id/refazer-envio')
+  refazerEnvioRemessa(@Param('id') id: string, @Req() req: any) {
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'operator') throw new ForbiddenException('Apenas retaguarda');
+    return this.remessaEnvio.refazerEnvio(id, req?.user?.id || req?.user?.sub || null);
+  }
+
+  /**
+   * Endereço que a etiqueta usa por loja + colisões (duas lojas no mesmo
+   * endereço = caixa indo pro lugar errado). GET /realignment/enderecos-etiqueta
+   */
+  @Get('enderecos-etiqueta')
+  enderecosEtiqueta(@Req() req: any) {
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'operator') throw new ForbiddenException('Apenas retaguarda');
+    return this.remessaEnvio.enderecosEtiqueta();
+  }
+
+  /**
    * NF-e da remessa (Ponto a Ponto): emite se faltar (idempotente) e devolve
    * a DANFE em base64. POST /realignment/shipments/:id/nfe · loja origem.
    */
