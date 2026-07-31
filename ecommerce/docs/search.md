@@ -1,77 +1,120 @@
-# Busca
+# Busca — motor de 3 camadas
 
-`components/navigation/SearchOverlay.tsx` + `services/search.ts`.
+`src/lib/search/` (motor puro, zero UI) + `src/lib/merchandising/` (boosts).
+A UI importa **só do barrel** `@/lib/search` — nunca dos arquivos internos.
 
-## Comportamento
+## Por que 3 camadas
 
-Desktop: painel full-width descendo do topo. Mobile: mesma estrutura ocupando
-a tela. Campo em Playfair grande — a busca é protagonista, não um acessório
-no canto.
+Cada camada é substituível sem tocar nas outras. É o desenho inteiro:
 
-| Estado | O que mostra |
+| Camada | Arquivo | Hoje | Amanhã |
+|---|---|---|---|
+| 1. Índice | `engine.ts` → `createSearchIndex` | produto achatado em memória | índice servido pela API quando o catálogo não couber no client |
+| 2. Motor | `engine.ts` → `rankSearch` | ranking síncrono no client | chamada a `/api/search` — a UI não muda |
+| 3. Intenção | `intent.ts` → `heuristicInterpreter` | dicionário + heurística | LLM via `/api/search/intent` (ver docs/ai-search.md) |
+
+O contrato entre elas está em `src/lib/search/types.ts` (`SearchDoc`,
+`SearchQuery`, `SearchOutcome`, `IntentInterpreter`). Vocabulário em
+`synonyms.ts` — **dados, não código**: sinônimo novo = uma linha no array.
+
+## O fluxo de uma busca
+
+```
+"Vestido pra casamento até 200"
+        │ heuristicInterpreter.interpret()
+        ▼
+Intent { facets: { category: 'vestidos', occasion: 'casamento', priceMax: 200 },
+         residual: '', label: 'vestidos para casamento até R$ 200', confidence: 'alta' }
+        │ rankSearch(docs, { term })
+        ▼
+1. facetas filtram/pontuam (estrito: TODA faceta precisa casar)
+2. residual pontua texto: exato > SKU > começa-com > contém > fuzzy (bigramas)
+3. applyBoosts: merchandising (regras) + personalização (≤ 1.3)
+4. vazio? relaxa em camadas e marca relaxed: true
+        ▼
+SearchOutcome { results, intent, relaxed, suggestions }
+```
+
+### Escada de score do texto
+
+| Match | Score |
 |---|---|
-| Vazio | pesquisas recentes (localStorage) + mais buscados |
-| ≥ 2 caracteres | resultados agrupados por tipo |
-| Sem resultado | mensagem + sugestão de buscar por ocasião/tecido + WhatsApp |
+| nome exato | 100 |
+| SKU exato | 95 |
+| nome começa com o termo | 60 |
+| palavra do nome começa com o termo | 55 |
+| nome contém | 40 |
+| multi-palavra parcial (proporcional) | até 30 |
+| doc contém | 25 |
+| fuzzy (Dice de bigramas ≥ 0.4, termo ≥ 4 letras) | até 20 |
 
-**Nunca uma caixa vazia.** Sem termo, a busca já sugere caminho.
+Facetas somam por fora: categoria +30, ocasião +20, tecido/cor +15,
+modelagem +12, atributos +8 cada (teto 3), preço +10.
 
-## Teclado
+O fuzzy é o que salva o typo: "vestdio" → bigramas em comum com "vestido"
+→ acha os vestidos sem nenhuma configuração.
 
-↓ ↑ navegam · Enter abre o resultado destacado (ou vai pra `/busca?q=`) ·
-Esc fecha. O cursor visual acompanha o mouse também, então teclado e mouse
-nunca discordam.
+## Zero results NUNCA
 
-## Resolução de intenção
+Quando o passo estrito devolve vazio, `rankSearch` relaxa **em camadas**,
+soltando a faceta menos confiável primeiro:
 
-O diferencial está em `INTENT_MAP` (`services/search.ts`): a cliente **não**
-digita o nome da categoria do ERP.
+```
+atributos → modelagem → cor → tecido → ocasião → preço → categoria → só texto
+```
 
-| Ela digita | A gente entrega |
-|---|---|
-| "vestido casamento", "madrinha", "convidada" | `/ocasioes/casamento` |
-| "roupa igreja", "culto", "missa" | `/ocasioes/igreja` |
-| "roupa elegante", "social" | `/colecoes/alfaiataria` |
-| "viscolycra", "visco" | `/tecidos/viscolycra-premium` |
-| "meu tamanho", "medidas", "numeração" | `/tamanhos/guia` |
-| "retirar na loja" | `/lojas/comprar-e-retirar` |
+No limite (nem texto acha nada), ranqueia o catálogo inteiro por
+aproximação fuzzy + boosts. Qualquer degrau acima do primeiro marca
+`relaxed: true` e preenche `suggestions` (termos do vocabulário próximos
+do que foi digitado). A UI usa isso pra dizer "não achamos exatamente X,
+veja parecidos" — nunca uma página morta.
 
-Sinônimo novo = uma entrada no array.
+Busca vazia (sem termo, sem faceta) devolve o catálogo ranqueado só por
+merchandising — vitrine, não caixa vazia.
 
-## Ranking
+## Como a UI consome
 
-1. Intenção (sinônimo contido no termo, ou vice-versa)
-2. Label que **começa** com o termo
-3. Label que **contém** o termo
+```ts
+import { createSearchIndex, rankSearch } from '@/lib/search';
 
-Depois deduplica por `href` e corta no limite. Tudo com texto normalizado
-(sem acento, minúsculo) — "itanhaem" acha "Itanhaém".
+// 1× por load do catálogo (memo/useMemo):
+const docs = createSearchIndex(products);
 
-## Tipos de resultado
+// A cada tecla (já é síncrono e barato — sem debounce de rede):
+const outcome = rankSearch(docs, {
+  term,
+  limit: 12,
+  personalization: { topCategories, topFabrics },  // opcional
+});
 
-`produto` · `categoria` · `look` · `colecao` · `ocasiao` · `loja` — cada um com
-ícone e rótulo de grupo próprios. O agrupamento é o que faz o painel parecer
-curadoria em vez de lista.
+outcome.intent?.label   // "vestidos para casamento" → mostrar "Buscando por…"
+outcome.relaxed         // true → mostrar "veja parecidos" + outcome.suggestions
+outcome.results[n].reasons  // por que subiu — painel de debug/merchandising
+```
 
-## Histórico
+Tracking: a UI que chama `rankSearch` dispara `trackSearch` de
+`@/lib/tracking` (o motor não trackeia — é lib pura).
 
-`localStorage` (`lurds-recent-searches`), máximo 6, com botão de limpar.
-Todas as leituras/escritas em `try/catch`: em modo privado o `localStorage`
-lança, e histórico é opcional — nunca deve quebrar a busca.
+## Personalização
 
-## Índice
+`PersonalizationContext` (`topCategories`, `topFabrics`, `nearStore`) são
+sinais **locais** da visitante, sem PII e sem login. O fator combinado é
+travado em **≤ 1.3** dentro de `applyBoosts`: personalização desempata
+entre resultados equivalentes, mas nunca vence um match de texto melhor.
+`nearStore` só passa a pontuar quando `availability.stores` vier populado
+do BFF (hoje chega vazio).
 
-Hoje o índice é a própria árvore de navegação (`navigationIndex()`), então
-qualquer eixo novo já é buscável sem trabalho extra.
+## Testes
 
-## Migração para busca real (Sprint 013)
+`src/lib/search/search.test.ts` — 26 testes: todas as frases naturais da
+spec, typo, escada de relaxamento, boosts e teto de personalização.
 
-`search(query, limit): Promise<SearchResponse>` já é assíncrona. Trocar o
-corpo por chamada a Algolia/Typesense/endpoint do FlowOps **não altera o
-componente**. O que entra nessa sprint:
+```
+npx vitest run src/lib/search/search.test.ts
+```
 
-- produtos de verdade nos resultados (com foto e preço)
-- correção de digitação ("vestidoo")
-- sinônimos gerenciáveis fora do código
-- página `/busca` com facetas (reusa `CategoryListing`)
-- telemetria: o que buscam e o que não encontra resultado
+## Documentos irmãos
+
+- `docs/ai-search.md` — o slot da IA (camada 3)
+- `docs/boost-rules.md` — cada regra de boost e como criar novas
+- `docs/merchandising.md` — visão de negócio do ranking

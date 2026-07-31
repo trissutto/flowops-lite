@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils';
 import { useMounted } from '@/hooks';
 import { useWishlistCount } from '@/store/wishlist';
 import { useCartCount } from '@/store/cart';
+import { useUiStore } from '@/store/ui';
 import { accountLinks } from '@/data/navigation';
 import { useClickOutside } from '@/hooks';
 import { useState } from 'react';
@@ -70,12 +71,21 @@ export function WishlistButton({ tone = 'dark' }: { tone?: Tone }) {
 export function CartButton({ tone = 'dark' }: { tone?: Tone }) {
   const mounted = useMounted();
   const count = useCartCount();
+  const openOverlay = useUiStore((s) => s.openOverlay);
 
+  // Botão, não Link: a sacola abre como mini-cart (drawer) sem tirar a
+  // cliente da página. A página completa continua existindo em /carrinho —
+  // o caminho até ela é pelo próprio drawer ("Ver sacola completa").
   return (
-    <Link href="/carrinho" aria-label={`Sacola${mounted && count ? ` (${count} itens)` : ''}`} className={actionClass(tone)}>
+    <button
+      type="button"
+      onClick={() => openOverlay('cart')}
+      aria-label={`Sacola${mounted && count ? ` (${count} itens)` : ''}`}
+      className={actionClass(tone)}
+    >
       <ShoppingBag className="size-[18px]" strokeWidth={1.5} />
       {mounted && <CountBadge count={count} />}
-    </Link>
+    </button>
   );
 }
 
