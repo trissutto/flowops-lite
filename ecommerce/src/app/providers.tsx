@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ToastProvider } from '@/components/feedback/ToastProvider';
+import { TrackingProvider } from '@/components/tracking/TrackingProvider';
 
 /**
  * Providers globais do app.
@@ -27,7 +28,11 @@ export function Providers({ children }: { children: React.ReactNode }) {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <ToastProvider>{children}</ToastProvider>
+      <ToastProvider>
+        {/* Envolve tudo: o tracking também vale pro checkout e pra conta, que
+            terão chrome próprio mas o mesmo funil. */}
+        <TrackingProvider>{children}</TrackingProvider>
+      </ToastProvider>
     </QueryClientProvider>
   );
 }
