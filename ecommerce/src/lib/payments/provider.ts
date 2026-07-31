@@ -1,17 +1,28 @@
 import 'server-only';
 
 /**
- * PROVIDER DE PAGAMENTO — a fronteira entre o pedido e o gateway.
+ * PROVIDER DE PAGAMENTO — FERRAMENTA DE DESENVOLVIMENTO/TESTE.
  *
- * O checkout não sabe quem cobra: pede uma cobrança PIX e recebe copia-e-cola,
- * txid e validade. Trocar de gateway (ou ligar o real) é implementar esta
- * interface e mudar a env `PAYMENT_PROVIDER` — nenhuma rota muda.
+ * ⚠️ ESTE MÓDULO SAIU DO CAMINHO DE PRODUÇÃO NA SPRINT 011.
  *
- * Providers:
- *   'mock'    (default) — payload EMV real com chave de sandbox + auto-confirm
- *              em dev. Demonstra o fluxo inteiro sem mover um centavo.
- *   'pagbank' — esqueleto. Ver o aviso GRANDE em `PagBankProvider` antes de
- *              pensar em ligar.
+ * Quem cobra de verdade é o BACKEND FlowOps: o pedido nasce em
+ * `POST /public/loja/pedido`, a cobrança na Pagar.me é criada lá (com a conta
+ * já configurada no `PagarmeService`) e o webhook do gateway chega lá. Nenhuma
+ * rota do ecommerce chama `getPaymentProvider()` no fluxo real — ver
+ * `src/lib/orders/store.ts` e `docs/payments.md`.
+ *
+ * Por que continua no repositório em vez de virar `git rm`:
+ *   - `pix-emv.ts` (e o teste dele) gera payload EMV BR Code correto e é
+ *     conhecimento útil que ninguém quer reescrever — conferir um copia-e-cola
+ *     de produção, montar um QR de teste, depurar valor/CRC;
+ *   - o `MockProvider` deixa qualquer pessoa gerar um PIX de mentira sem
+ *     backend rodando, o que é ouro pra mexer na UI do PixPanel;
+ *   - a interface documenta a fronteira caso um dia o ecommerce volte a cobrar
+ *     sozinho (não é o plano — dois sistemas cobrando na mesma conta é a
+ *     receita de confusão que esta sprint eliminou).
+ *
+ * REGRA: nada em `src/app/api/**` deve importar daqui. Se importar, o pedido
+ * voltou a ter dois donos.
  */
 
 import type { Order, OrderStatus } from '@/types/checkout';
@@ -33,9 +44,8 @@ export interface PaymentProvider {
   readonly id: string;
   createPixCharge(order: Order): Promise<PixCharge>;
   /**
-   * Consulta o status no gateway (opcional — gateway com webhook confiável
-   * pode viver sem poll). Deve devolver o status JÁ refletido no pedido:
-   * se o provider confirmar pagamento, ele mesmo chama `confirmPayment`.
+   * Consulta o status no gateway (opcional). Ninguém implementa hoje: o
+   * status do pedido é do backend, e o poll do PixPanel pergunta a ELE.
    */
   checkStatus?(order: Order): Promise<OrderStatus>;
 }

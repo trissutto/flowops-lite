@@ -48,9 +48,10 @@ import type {
  * próxima abre sozinha. Ver docs/checkout.md.
  *
  * O client NUNCA decide valor: subtotal/desconto/frete daqui são exibição.
- * O total que vale é recalculado pelo server no POST /api/checkout (cupom,
- * pixPrice, frete). Se divergirem, o do server vence — e é o que o PixPanel
- * mostra depois do pedido criado.
+ * O total que vale é recalculado no POST /api/checkout (cupom, pixPrice,
+ * frete) e conferido de novo pelo BACKEND FlowOps, dono do pedido desde a
+ * sprint 011. Se divergirem, o do backend vence — e é o que o PixPanel mostra
+ * depois do pedido criado.
  */
 
 type Step = 1 | 2 | 3 | 4;
@@ -62,8 +63,9 @@ type Step = 1 | 2 | 3 | 4;
  */
 const ERRO_GENERICO =
   'Não conseguimos concluir seu pedido agora. Fica tranquila: nada foi cobrado — tente de novo em instantes.';
+/** Cartão que nem chegou a ser tokenizado (gateway sem chave, rede caiu). */
 const ERRO_CARTAO =
-  'Estamos finalizando este meio de pagamento. Por enquanto, escolha PIX (com 5% off) ou boleto — rapidinho igual.';
+  'Não conseguimos validar seu cartão agora. Tente de novo ou finalize com Pix — sai com 5% off e cai na hora.';
 
 export default function CheckoutPage() {
   const router = useRouter();
@@ -144,6 +146,9 @@ export default function CheckoutPage() {
       couponCode: coupon?.ok ? coupon.code : undefined,
       paymentMethod: payment.method,
       installments: payment.installments,
+      // Token do cartão (quando houver): o número ficou no navegador, isto é
+      // a única coisa que viaja — ver CardForm.
+      cardToken: payment.cardToken,
       tracking: {
         anonymous_id: getAnonymousId(),
         session_id: getSessionId(),
@@ -161,10 +166,12 @@ export default function CheckoutPage() {
       const result = (await res.json().catch(() => null)) as CreateOrderResult | null;
 
       if (!result?.ok || !result.order) {
-        // Cartão sem gateway no MVP: o server recusa e a mensagem explica
-        // com elegância, sem culpar a cliente nem soar quebrado.
+        // A mensagem do server tem PRECEDÊNCIA: por contrato ela já vem
+        // elegante e é específica ("cartão recusado", "cupom expirou") — bem
+        // mais útil que o genérico. Os textos locais cobrem só o que acontece
+        // quando o server não conseguiu dizer nada.
         setSubmitError(
-          payment.method === 'card' ? ERRO_CARTAO : (result?.error ?? ERRO_GENERICO),
+          result?.error ?? (payment.method === 'card' ? ERRO_CARTAO : ERRO_GENERICO),
         );
         return;
       }

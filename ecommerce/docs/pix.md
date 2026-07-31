@@ -44,10 +44,16 @@ Teste: `npx vitest run src/lib/payments/pix-emv.test.ts` (9 casos).
 
 ## QR e copia-e-cola são o MESMO payload
 
-`POST /api/checkout` gera o payload uma vez e:
-- devolve em `order.payment.pix.copyPaste` (o texto que a cliente cola);
-- renderiza em `order.payment.pix.qrCode` via `qrcode` → data URI (o que a
-  câmera lê). Um payload, duas formas.
+⚠️ **Sprint 011: em produção quem gera o payload é o BACKEND FlowOps** — o
+`pix-emv.ts` daqui virou ferramenta de desenvolvimento/conferência (ver
+`docs/payments.md`). O que descrevemos acima continua valendo como referência
+do formato: é o mesmo padrão EMV dos dois lados.
+
+`POST /api/checkout` recebe do backend `payment.pix` e monta a resposta:
+- `copyPaste` — o texto que a cliente cola, sempre vindo do backend;
+- `qrCode` — data URI. Se o backend mandar o dele, usamos; se mandar só o
+  copia-e-cola, o BFF renderiza aqui com a lib `qrcode`. Os dois caminhos
+  funcionam, e nos dois o QR nasce do MESMO payload do copia-e-cola.
 
 ## Fluxo de confirmação: poll + webhook
 
@@ -55,32 +61,32 @@ Teste: `npx vitest run src/lib/payments/pix-emv.test.ts` (9 casos).
 cliente paga no app do banco
         │
         ▼
-[produção] gateway ──POST──► /api/webhooks/payment ──► confirmPayment()
-                                                          │ marca paid
-                                                          │ emite purchase
-[sempre]  PixPanel ──poll──► GET /api/checkout/:id/status │
-                              └─► provider.checkStatus() ◄┘
-                                  (devolve o status já refletido)
+Pagar.me ──webhook──► BACKEND FLOWOPS
+                        │ marca paid no Postgres
+                        │
+                        ├──POST──► /api/webhooks/payment (x-webhook-secret)
+                        │            └─► purchase (GA4 + Meta CAPI)
+                        │
+PixPanel ──poll 5s──► GET /api/checkout/:id/status
+                        └─► GET /public/loja/pedido/:id/status ◄┘
 ```
 
-- O **webhook** é o caminho canônico: o gateway avisa, `confirmPayment` marca
-  pago e emite o `purchase` (uma vez só — idempotente).
-- O **poll** é como a tela descobre: `GET /:id/status` a cada poucos
-  segundos. Ele também roda o `checkStatus` do provider — que no gateway real
-  pode ser uma consulta de cobrança (rede de segurança pra webhook perdido) e
-  no mock é a auto-confirmação.
-- PIX expira em 30min sem pagamento → pedido `expired` (no mock, o próprio
-  `checkStatus` expira; com gateway real, o webhook de expiração deles).
-  Pagamento que chega DEPOIS do expiry local ainda confirma — dinheiro que
-  entrou não se recusa (ver comentário em `confirm.ts`).
+- O **backend** é o único que confirma pagamento. O ecommerce não tem estado
+  de pedido pra transicionar — e é assim que se garante que "pago" significa
+  a mesma coisa pro site, pro CRM e pra separação.
+- O **poll** é só como a tela descobre. Erro de rede ou 502 no poll é tratado
+  como silêncio: tenta de novo no ciclo seguinte.
+- PIX expira em 30min sem pagamento → o backend marca `expired` e o poll
+  reflete. Pagamento que chega DEPOIS do expiry ainda confirma — dinheiro que
+  entrou não se recusa.
 
-## Auto-confirmação do mock
+## Mock de desenvolvimento
 
-| Ambiente | Comportamento |
-|---|---|
-| dev | pedido `awaiting_payment` com mais de `MOCK_PIX_CONFIRM_SECONDS` (25s) é confirmado no próximo poll |
-| produção | **nunca**, a menos que `MOCK_PIX_AUTOCONFIRM=1` (demo consciente) |
+`MockProvider` (`src/lib/payments/mock.ts`) gera um PIX de mentira **sem
+backend rodando**, útil pra mexer na UI do `PixPanel`. Ele não é chamado por
+rota nenhuma no fluxo real.
 
-A confirmação do mock chama o **mesmo** `confirmPayment` do webhook — o fluxo
-demonstrado em dev é, linha por linha, o de produção: transição de status,
-log `order_event`, emissão do `purchase` com dedup por `event_id`.
+A auto-confirmação do mock foi **removida** na sprint 011: ela marcava o pedido
+como pago num store local que não existe mais. Um "pago" inventado pelo
+ecommerce seria uma mentira que nem o backend nem o CRM conheceriam — e pedido
+"pago" sem dinheiro entrar é o pior bug possível num e-commerce.

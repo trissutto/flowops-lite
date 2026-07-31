@@ -61,7 +61,9 @@ Sem isto, a venda é atribuída a "direto" e a campanha que pagou por ela não r
 
 `event_id = purchase-${transaction_id}`. Derivado, não aleatório. Webhook repetido → mesmo id → a Meta conta uma venda só.
 
-Além disso, um `Set` em memória barra a repetição imediata. Ver a ressalva em [limitacoes.md](./limitacoes.md).
+Além disso, um guard em memória por `orderId` em `/api/webhooks/payment` barra a rajada de retry. Ver a ressalva em [limitacoes.md](./limitacoes.md).
+
+**Sprint 011 — quem chama:** o `purchase` é emitido no `POST /api/webhooks/payment`, e quem bate nessa porta é o **backend FlowOps** (não a Pagar.me), depois de confirmar o pagamento no Postgres. O corpo traz os dados da compra prontos, porque o ecommerce não guarda mais o pedido. A montagem do evento mora num lugar só: `emitirPurchaseConfirmado()` em `src/lib/orders/confirm.ts`.
 
 ## Estorno
 

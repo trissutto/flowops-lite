@@ -1,18 +1,22 @@
 /**
  * GET /api/checkout/:id/status — o endpoint que o PixPanel polla.
  *
+ * Sprint 011: pergunta ao BACKEND (`GET /public/loja/pedido/:id/status`). O
+ * ecommerce não guarda mais estado de pedido nenhum, e não fala com gateway:
+ * quem recebe o webhook da Pagar.me e marca `paid` é o backend.
+ *
  * Resposta mínima de propósito (`OrderStatusResult`): o poll roda a cada
  * poucos segundos — quanto menor o payload, melhor. O pedido completo a tela
  * já tem; aqui só interessa "pagou ou não pagou".
  *
- * É AQUI que o check do provider roda (mock: auto-confirmação por idade do
- * pedido). Com gateway real + webhook confiável, este endpoint vira leitura
- * pura do store — o provider pode nem implementar `checkStatus`.
+ * Falha de rede devolve `ok:true` com o status que a tela já conhecia? NÃO —
+ * não temos mais estado local pra devolver. Devolve 502, e o PixPanel trata
+ * erro de poll como silêncio (tenta de novo no ciclo seguinte). Rede instável
+ * nunca pode fazer a tela desistir de um PIX que a cliente vai pagar.
  */
 
 import { NextResponse } from 'next/server';
-import { getOrderStore } from '@/lib/orders/store';
-import { getPaymentProvider } from '@/lib/payments/provider';
+import { getOrderStore, OrderStoreError } from '@/lib/orders/store';
 import type { OrderStatusResult } from '@/types/checkout';
 
 export const runtime = 'nodejs';
@@ -23,30 +27,20 @@ export async function GET(
   ctx: { params: Promise<{ id: string }> },
 ): Promise<NextResponse<OrderStatusResult>> {
   const { id } = await ctx.params;
-  const store = getOrderStore();
-  const order = await store.get(id);
 
-  if (!order) {
-    return NextResponse.json({ ok: false }, { status: 404 });
-  }
-
-  let status = order.status;
-  const provider = getPaymentProvider();
-  if (provider.checkStatus) {
-    try {
-      status = await provider.checkStatus(order);
-    } catch (err) {
-      // Gateway fora do ar não pode derrubar o poll: devolve o que o store
-      // sabe e o próximo ciclo tenta de novo.
-      console.error('[checkout] checkStatus falhou (devolvendo status local):', err);
+  try {
+    const snapshot = await getOrderStore().status(id);
+    if (!snapshot) {
+      return NextResponse.json({ ok: false }, { status: 404, headers: { 'Cache-Control': 'no-store' } });
     }
+
+    return NextResponse.json(
+      { ok: true, status: snapshot.status, paidAt: snapshot.paidAt },
+      { headers: { 'Cache-Control': 'no-store' } },
+    );
+  } catch (err) {
+    const tecnico = err instanceof OrderStoreError ? err.message : String(err);
+    console.error(`[checkout] poll de status falhou para ${id}:`, tecnico);
+    return NextResponse.json({ ok: false }, { status: 502, headers: { 'Cache-Control': 'no-store' } });
   }
-
-  // `paidAt` sai do store (o checkStatus pode ter acabado de confirmar).
-  const atualizado = status === order.status ? order : await store.get(id);
-
-  return NextResponse.json(
-    { ok: true, status, paidAt: atualizado?.paidAt },
-    { headers: { 'Cache-Control': 'no-store' } },
-  );
 }

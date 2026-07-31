@@ -39,9 +39,11 @@ sempre visível — o formulário é o trabalho a fazer).
   editáveis na mão.
 - **Cartão**: Luhn + comprimento por bandeira; detecção de bandeira por
   prefixo (Elo testada ANTES da Visa — vários BINs Elo começam com 4);
-  validade MM/AA ≥ mês atual; CVV 3–4 dígitos. **Nenhum dado de cartão sai do
-  navegador no MVP** — `CreateOrderInput` nem tem o campo; quando o gateway
-  entrar, o form tokeniza via SDK e só o token viaja.
+  validade MM/AA ≥ mês atual; CVV 3–4 dígitos. **Número, CVV e validade nunca
+  saem do navegador**: desde a sprint 011 o form tokeniza direto na API da
+  Pagar.me (chave pública) e só o `cardToken` viaja no `CreateOrderInput`.
+  Sem `NEXT_PUBLIC_PAGARME_PUBLIC_KEY` configurada, o cartão é recusado com
+  mensagem elegante — ver `docs/payments.md`.
 - **Cupom**: `applyCoupon` de `lib/commerce/cupom.ts` (mesma função que roda
   no server). A UI exibe o `message`, nunca calcula desconto por conta.
 
@@ -51,9 +53,10 @@ stack nunca chegam na cliente.
 
 ## Totais
 
-O client soma subtotal − desconto + frete **só pra exibição**. O total que
-vale é recalculado pelo server no `POST /api/checkout` (cupom, `pixPrice`,
-frete). O desconto de 5% do PIX aparece como badge informativa na aba; o valor
+O client soma subtotal − desconto + frete **só pra exibição**. O total é
+recalculado no `POST /api/checkout` (cupom, `pixPrice`, frete) e reconferido
+pelo **backend FlowOps**, dono do pedido — em caso de divergência, o dele
+vence. O desconto de 5% do PIX aparece como badge informativa na aba; o valor
 real vem no `order.total` — e é ele que o `PixPanel` mostra.
 
 ## Tracking do funil

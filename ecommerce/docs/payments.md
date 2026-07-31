@@ -1,85 +1,149 @@
-# Pagamentos — arquitetura do provider
+# Pagamentos — quem cria, quem cobra, quem confirma
 
-Como o pedido cobra sem saber quem cobra — e o que falta pra ligar o gateway
-de verdade.
+Desde a **sprint 011** o ecommerce **não é dono do pedido nem da cobrança**.
+Quem cria, cobra e confirma é o **backend FlowOps** (NestJS + Postgres). O
+ecommerce faz a UI do checkout, tokeniza o cartão no navegador e dispara o
+evento de compra.
 
-## A fronteira
+## Quem faz o quê
+
+| Papel | Onde mora |
+|---|---|
+| Pedido (nasce, vive, muda de status) | Backend FlowOps — Postgres |
+| Cobrança na Pagar.me (PIX e cartão) | Backend FlowOps (`PagarmeService`) |
+| Webhook do gateway | Backend FlowOps |
+| Confirmação do pagamento | Backend FlowOps |
+| Recálculo de cupom/frete/total (1ª barreira) | Ecommerce — `POST /api/checkout` |
+| Tokenização do cartão | **Navegador** (chave pública Pagar.me) |
+| Evento `purchase` (GA4 + Meta CAPI) | Ecommerce — `POST /api/webhooks/payment` |
+
+**Por que o backend e não aqui:** o pedido precisa estar no Postgres pro resto
+da casa funcionar — CRM, roteamento pra loja, separação, NF-e. Pedido que só o
+ecommerce enxerga é pedido que ninguém despacha. E o backend já tem a conta
+Pagar.me configurada: dois sistemas cobrando na mesma conta seria pedir
+confusão (a casa já tem essa cicatriz com o token único do PagBank).
+
+## O caminho, ponta a ponta
 
 ```
-POST /api/checkout ──► getPaymentProvider() ──► createPixCharge(order)
-                                                  │
-GET  .../status    ──► checkStatus?(order) ───────┤   (mock: auto-confirm)
-POST /api/webhooks/payment ───────────────────────┴──► confirmPayment(orderId)
+NAVEGADOR                    ECOMMERCE (BFF)                BACKEND FLOWOPS
+─────────                    ───────────────                ───────────────
+cartão ─┐
+        └─► api.pagar.me/tokens  (número NUNCA passa por servidor nenhum)
+             └─► card_token ─┐
+                             ▼
+  FINALIZAR ───────► POST /api/checkout
+                       zod + rate-limit
+                       recálculo cupom/frete/total
+                       └────────────────────► POST /public/loja/pedido
+                                               x-loja-token
+                                               │ cria Order no Postgres
+                                               │ cobra na Pagar.me
+                                               ◄─ 201 { id, number, status,
+                                                        total, payment{pix?} }
+                       QR: usa o do backend ou gera do copia-e-cola
+                     ◄─ 201 { ok, order }
+  PixPanel
+   poll 5s ────────► GET /api/checkout/:id/status
+                       └────────────────────► GET /public/loja/pedido/:id/status
+
+                                    [fora da tela] cliente paga no banco
+                                               │
+                                    Pagar.me ──► webhook do BACKEND
+                                               │ marca paid no Postgres
+                                               ▼
+                     POST /api/webhooks/payment ◄─── backend chama o ecommerce
+                       x-webhook-secret                (com os dados da compra)
+                       └─► trackPurchase()  → GA4 + Meta CAPI
 ```
 
-O checkout conhece **uma interface** (`src/lib/payments/provider.ts`):
+## Contrato com o backend
 
-```ts
-interface PaymentProvider {
-  id: string;
-  createPixCharge(order: Order): Promise<{ copyPaste; txid; expiresAt }>;
-  checkStatus?(order: Order): Promise<OrderStatus>; // opcional
-}
-```
+Cliente em `src/lib/orders/store.ts` (`BackendOrderStore`). Todos os endpoints
+levam o header `x-loja-token: ${LOJA_ORDER_TOKEN}`.
 
-Trocar de gateway é implementar isso e mudar **uma env**. Nenhuma rota, tela
-ou store muda.
+| Endpoint | Uso |
+|---|---|
+| `POST /public/loja/pedido` | cria o pedido + a cobrança. `201 {ok:true, order}` ou `200 {ok:false, error}` (mensagem já elegante, vai direto pra tela) |
+| `GET /public/loja/pedido/:id` | pedido completo pra thank you page |
+| `GET /public/loja/pedido/:id/status` | `{ ok, status, paidAt? }` — o que o poll do PIX pergunta |
 
-A confirmação de pagamento tem **um caminho só**: `confirmPayment()`
-(`src/lib/orders/confirm.ts`). Webhook, auto-confirm do mock e qualquer
-conciliação futura passam por ele — é onde mora a idempotência e o único
-lugar do sistema que emite o evento `purchase` (ver `docs/purchase.md`).
+O `201` devolve só o que o backend acabou de decidir (id, número, status, total
+conferido, cobrança). Cliente, itens e endereço o BFF já tem em mãos e costura
+na resposta pra tela — não faz sentido o backend repetir o que a requisição
+acabou de mandar.
+
+**Sem `FLOWOPS_API_URL` ou `LOJA_ORDER_TOKEN` o checkout fica fora do ar**, com
+erro gritado no log e mensagem elegante na tela. Não existe fallback pra
+memória, de propósito: era exatamente o bug que a sprint 011 matou (pedido que
+sumia quando a instância serverless reciclava).
 
 ## Envs
 
 | Env | Default | Efeito |
 |---|---|---|
-| `PAYMENT_PROVIDER` | `mock` | `mock` \| `pagbank` (esqueleto — lança erro) |
-| `PIX_KEY` | chave de sandbox | Chave PIX do payload EMV. Sem a real, o QR abre no banco mas não acha destinatário |
-| `PIX_MERCHANT_NAME` | `LURDS PLUS SIZE` | Nome exibido no app do banco (máx 25 chars) |
-| `PIX_MERCHANT_CITY` | `ITANHAEM` | Cidade do recebedor (máx 15 chars) |
-| `PAYMENT_WEBHOOK_SECRET` | — | **Sem ela o webhook responde 404** (a rota não existe) |
-| `MOCK_PIX_CONFIRM_SECONDS` | `25` | Idade a partir da qual o mock confirma o pedido |
-| `MOCK_PIX_AUTOCONFIRM` | off | `1` liga a auto-confirmação do mock **em produção** (em dev é sempre ligada) |
-| `CUPONS_JSON` | tabela padrão | Substitui a tabela de cupons no server (ver `cupom.ts`) |
+| `FLOWOPS_API_URL` | — | URL do backend com `/api`. **Sem ela não há checkout** |
+| `LOJA_ORDER_TOKEN` | — | Segredo do header `x-loja-token`. **Sem ele não há checkout** |
+| `PAYMENT_WEBHOOK_SECRET` | — | Segredo COMPARTILHADO com o backend. Sem ela o webhook responde 404 (a rota não existe) |
+| `NEXT_PUBLIC_PAGARME_PUBLIC_KEY` | — | Chave `pk_` da Pagar.me pra tokenizar cartão no navegador. Sem ela o cartão é recusado com mensagem elegante; PIX segue normal |
+| `CUPONS_JSON` | tabela padrão | Substitui a tabela de cupons na 1ª barreira (ver `cupom.ts`) |
 
-## Mock (o default)
+Envs de PIX local (`PIX_KEY`, `PIX_MERCHANT_NAME`, `PIX_MERCHANT_CITY`) valem
+só pro mock de desenvolvimento — ver abaixo.
 
-Gera o payload EMV **real** com a chave de sandbox e auto-confirma pedidos
-`awaiting_payment` com mais de 25s — pelo mesmo `confirmPayment` do webhook,
-então o fluxo demonstrado é o fluxo de produção, incluindo o `purchase`.
-Detalhes em `docs/pix.md`.
+## Cartão: o número não passa por servidor nenhum
 
-## ⚠️ PagBank — LEIA ANTES DE LIGAR
+`CardForm.tsx` faz `POST api.pagar.me/core/v5/tokens?appId=<pk_>` **do
+navegador**, com a chave pública. Só o `card_token` viaja: pro BFF, e dele pro
+backend, que cobra. Nem o servidor do site nem o backend jamais veem o PAN —
+PCI-DSS não é opcional.
 
-O esqueleto `PagBankProvider` lança erro de propósito. Motivo, documentado na
-memória do projeto ("PagBank: token único por conta"):
+Se `NEXT_PUBLIC_PAGARME_PUBLIC_KEY` não estiver configurada, o form continua
+validando (Luhn, bandeira, validade, CVV) mas não gera token; o BFF então
+recusa cartão sem token com a frase elegante de "não conseguimos validar seu
+cartão agora". Melhor isso que uma tela que finge cobrar.
 
-> A conta PagBank da casa tem **token único de API, compartilhado com outro
-> sistema** (Reservas Ita divide a mesma conta). Gerar um token novo pra este
-> ecommerce **revoga o anterior e quebra o outro sistema em silêncio**.
+## O webhook mudou de remetente
 
-Ligar exige, nesta ordem:
+`POST /api/webhooks/payment` **não é mais chamado pela Pagar.me** — é chamado
+pelo **backend**, depois que ele confirmou o pagamento. Consequências:
 
-1. Decisão do dono: qual conta/token este ecommerce usa (conta separada? o
-   token atual compartilhado com cuidado?).
-2. Inventário de quem usa o token vigente (FlowOps live-pdv usa PagBank PIX).
-3. Implementar `createPixCharge` com a API de cobranças PIX do PagBank e
-   apontar o webhook deles pra `/api/webhooks/payment` (adaptando a validação
-   de assinatura pro esquema deles — hoje é segredo compartilhado simples).
-4. `PAYMENT_PROVIDER=pagbank` + envs do token.
+- a **validação HMAC da Pagar.me saiu**: o corpo não é mais deles, então não há
+  assinatura pra conferir. A autenticação é o segredo compartilhado
+  `PAYMENT_WEBHOOK_SECRET`, a mesma env dos dois lados;
+- o corpo traz os **dados da compra** (itens, cliente, tracking): o ecommerce
+  não tem mais o pedido em memória, e ir buscar no backend só pra montar o
+  evento seria um round-trip a mais no caminho do dinheiro;
+- a rota **não marca nada como pago** — não há mais o que marcar. Ela só emite
+  o `purchase` (ver `docs/purchase.md`).
 
-Enquanto isso não acontece, qualquer tentativa de usar o provider falha com
-erro claro — melhor que fingir que funciona.
+Idempotência em duas camadas: `event_id` derivado do `transaction_id` (a Meta
+conta uma venda só, mesmo com retry entre instâncias) + um guard em memória por
+`orderId` que corta a rajada de retry antes de gastar rede.
 
-## Pedidos: storage honesto
+## `src/lib/payments/` — ferramenta de desenvolvimento
 
-`src/lib/orders/store.ts` guarda pedidos **em memória por instância
-serverless** (mesmo padrão declarado do log de tracking). Serve pra
-desenvolver e demonstrar; **não** é storage de produção pra dinheiro. A
-interface `OrderStore` existe pra trocar por Postgres implementando 5 métodos
-— e cada transição de status já sai como `console.log` estruturado
-(tag `order_event`, sem PII) pra trilha durável no stdout da Vercel.
+`provider.ts`, `mock.ts` e `pix-emv.ts` **saíram do caminho de produção** e
+ficaram no repositório de propósito:
 
-O número do pedido (`LP-000123-K4`) também é sequencial em memória com sufixo
-aleatório de desempate — vira sequence do Postgres na mesma migração.
+- `pix-emv.ts` gera payload EMV BR Code correto (com teste) — serve pra
+  conferir um copia-e-cola de produção ou depurar valor/CRC;
+- `MockProvider` gera um PIX de mentira **sem backend rodando**, o que é ouro
+  pra mexer na UI do `PixPanel`.
+
+A auto-confirmação do mock foi **removida**: ela dependia de marcar o pedido
+como pago num store local que não existe mais, e um "pago" inventado pelo
+ecommerce seria uma mentira que nem o backend nem o CRM conheceriam.
+
+**Regra:** nada em `src/app/api/**` importa de `lib/payments/`. Se importar, o
+pedido voltou a ter dois donos.
+
+## O que o ecommerce deixou de fazer
+
+| Sumiu | Onde foi parar |
+|---|---|
+| `InMemoryOrderStore` | Postgres do FlowOps |
+| `nextOrderNumber()` (sequencial em memória) | o backend gera o número |
+| `confirmPayment(orderId)` | o backend confirma; aqui sobrou o helper que monta o `purchase` |
+| `provider.checkStatus()` no poll | `GET /public/loja/pedido/:id/status` |
+| Validação HMAC da Pagar.me | o webhook do gateway agora chega no backend |

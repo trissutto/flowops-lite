@@ -1,43 +1,30 @@
 import 'server-only';
 
 /**
- * MOCK PROVIDER — o gateway de mentira que se comporta como um de verdade.
+ * MOCK PROVIDER — FERRAMENTA DE DESENVOLVIMENTO (fora do caminho de produção).
  *
- * Gera o payload EMV REAL (pix-emv) com a chave de sandbox: o app do banco
- * lê o QR, mostra "LURDS PLUS SIZE" e o valor — só não encontra destinatário,
- * porque a chave não existe no DICT. Perfeito pra demonstrar o fluxo inteiro
- * sem mover um centavo.
+ * ⚠️ Sprint 011: quem cria a cobrança de verdade é o BACKEND FlowOps. Nenhuma
+ * rota chama este provider no fluxo real — ver o cabeçalho de `provider.ts`.
  *
- * AUTO-CONFIRMAÇÃO: pedido aguardando pagamento há mais de
- * `MOCK_PIX_CONFIRM_SECONDS` (default 25s) é confirmado no próximo check do
- * poll. Regras:
- *   - em DEV: sempre ligada (é o que faz a demo funcionar sozinha);
- *   - em PRODUÇÃO: DESLIGADA a menos que `MOCK_PIX_AUTOCONFIRM=1` — pedido
- *     "pago" sem dinheiro entrar é o pior bug possível num ecommerce.
+ * O que ele ainda serve: gerar um PIX de mentira SEM backend rodando, pra
+ * mexer na UI do PixPanel (QR, copia-e-cola, contagem regressiva) sem depender
+ * de ninguém. O payload EMV é REAL (pix-emv) com a chave de sandbox: o app do
+ * banco lê o QR, mostra "LURDS PLUS SIZE" e o valor — só não encontra
+ * destinatário, porque a chave não existe no DICT.
  *
- * A confirmação passa pelo MESMO caminho do webhook (`confirmPayment`) de
- * propósito: o purchase, a idempotência e o log são exercitados aqui do mesmo
- * jeito que serão com o gateway real.
+ * A AUTO-CONFIRMAÇÃO FOI REMOVIDA. Ela dependia de marcar o pedido como pago
+ * no store local, e store local não existe mais: o status do pedido é do
+ * Postgres do Flow, e um "pago" inventado por este arquivo seria uma mentira
+ * que nem o backend nem o CRM iriam conhecer. Pra testar o caminho de pago
+ * hoje, o gatilho certo é o backend (ou um POST no webhook com o segredo).
  */
 
-import { confirmPayment } from '@/lib/orders/confirm';
-import { getOrderStore } from '@/lib/orders/store';
-import type { Order, OrderStatus } from '@/types/checkout';
+import type { Order } from '@/types/checkout';
 import { buildPixPayload } from './pix-emv';
 import type { PaymentProvider, PixCharge } from './provider';
 
 /** Validade do PIX — 30min é o padrão de mercado pra cobrança de ecommerce. */
 const PIX_EXPIRES_MINUTES = 30;
-
-function confirmSeconds(): number {
-  const raw = Number(process.env.MOCK_PIX_CONFIRM_SECONDS);
-  return Number.isFinite(raw) && raw > 0 ? raw : 25;
-}
-
-function autoConfirmLigado(): boolean {
-  if (process.env.NODE_ENV !== 'production') return true;
-  return process.env.MOCK_PIX_AUTOCONFIRM === '1';
-}
 
 export class MockProvider implements PaymentProvider {
   readonly id = 'mock';
@@ -55,30 +42,5 @@ export class MockProvider implements PaymentProvider {
 
     const expiresAt = new Date(Date.now() + PIX_EXPIRES_MINUTES * 60_000).toISOString();
     return { copyPaste, txid, expiresAt };
-  }
-
-  /**
-   * O check que o poll do PixPanel dispara. Devolve o status já refletido no
-   * pedido — quando a auto-confirmação bate, quem roda é o `confirmPayment`,
-   * o mesmo do webhook.
-   */
-  async checkStatus(order: Order): Promise<OrderStatus> {
-    if (order.status !== 'awaiting_payment') return order.status;
-
-    const idadeMs = Date.now() - Date.parse(order.createdAt);
-    if (autoConfirmLigado() && idadeMs > confirmSeconds() * 1000) {
-      await confirmPayment(order.id);
-      return 'paid';
-    }
-
-    // PIX venceu sem pagamento → expira. Com o gateway real esse papel é do
-    // webhook de expiração; no mock somos nós.
-    const expiresAt = order.payment.pix?.expiresAt;
-    if (expiresAt && Date.now() > Date.parse(expiresAt)) {
-      await getOrderStore().markExpired(order.id);
-      return 'expired';
-    }
-
-    return 'awaiting_payment';
   }
 }

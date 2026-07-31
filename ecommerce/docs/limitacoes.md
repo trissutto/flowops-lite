@@ -20,11 +20,11 @@ A Sprint 007 entregou a arquitetura. Três coisas da spec ficaram **parciais por
 
 ## 3. Idempotência do purchase é de duas camadas, não três
 
-**O que existe:** `event_id` derivado do `transaction_id` (webhook repetido gera o mesmo id, e a Meta deduplica) + um `Set` em memória que barra a repetição imediata.
+**O que existe:** `event_id` derivado do `transaction_id` (webhook repetido gera o mesmo id, e a Meta deduplica) + um guard em memória por `orderId` em `/api/webhooks/payment` que barra a rajada de retry.
 
-**O que não existe:** trava no banco. O `Set` vale por instância.
+**O que não existe:** trava no banco **deste lado**. O guard vale por instância serverless.
 
-**Na prática:** a deduplicação da própria Meta já resolve o caso real (webhook repetido). A trava no banco entra junto com a tabela de pedidos, na Sprint de checkout.
+**Na prática:** a deduplicação da própria Meta já resolve o caso real (retry entre instâncias). Desde a sprint 011 o pedido vive no Postgres do backend, então a trava definitiva pode virar uma coluna `purchaseTrackedAt` lá — o backend saberia parar de reenviar o webhook em vez de o ecommerce ter que se defender.
 
 ## 4. Plataformas preparadas, não ligadas
 

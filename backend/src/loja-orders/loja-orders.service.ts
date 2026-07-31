@@ -1,0 +1,1130 @@
+import { Injectable, Logger } from '@nestjs/common';
+import { HttpService } from '@nestjs/axios';
+import { firstValueFrom } from 'rxjs';
+import { PrismaService } from '../prisma/prisma.service';
+import { PagarmeService } from '../pagarme/pagarme.service';
+import { computePersonKeyFromCpf } from '../customers/customer-aggregation.helper';
+
+/**
+ * PEDIDO DO E-COMMERCE NOVO (sprint 011).
+ *
+ * O pedido da loja nasce AQUI, no Postgres do Flow, no MESMO trilho do pedido
+ * do site/live: vira um `Order` com `source='loja'`, cai na tela Pedidos &
+ * Separação quando o pagamento confirma, e a matriz roteia igual a qualquer
+ * outro. Nada de tabela paralela — quem já sabe ler Order (roteamento,
+ * separação, etiqueta, NF-e, DRE, faturamento) passa a ver o e-commerce novo
+ * de graça.
+ *
+ * DECISÕES QUE VALEM COMENTÁRIO:
+ *
+ *  1. `wcOrderId` é sintético na faixa 950M+ (LOJA_WC_ID_BASE). O campo é
+ *     `@unique Int` herdado do WooCommerce e a casa já resolveu isso pra live
+ *     (900M+). Faixas separadas = dá pra saber a origem só olhando o número,
+ *     e nenhum sync do WC nunca vai colidir (pedido real do WC é < 1M).
+ *
+ *  2. Sequência tirada do MAIOR wcOrderId da faixa, não de `count()`. A live
+ *     usa count() porque nunca apaga pedido; aqui o cartão RECUSADO apaga o
+ *     Order (a spec manda "não cria pedido"), e count() regrediria — o
+ *     próximo pedido reusaria o número LP-xxxx do apagado. max+1 é monotônico.
+ *
+ *  3. Pagamento: reusa o `PagarmeService` que já roda o PDV/live. PIX sai
+ *     inteiro pelo `createPixCharge` (inclusive o polling do QR, que a API v5
+ *     gera async). Cartão não tem método pronto lá, então a cobrança é montada
+ *     aqui — mas grava o MESMO `PagarmePayment`, então o webhook público que
+ *     já existe (`POST /pagarme/webhook`, HMAC) enxerga os dois.
+ *
+ *  4. Confirmação de pagamento é SEMPRE por `confirmarPagamento()` —
+ *     idempotente. Webhook repete, e repete MESMO. Cartão aprovado chama
+ *     direto (síncrono) e o webhook que chega depois vira no-op.
+ */
+
+/* ─────────────────────────────── CONTRATO ─────────────────────────────── */
+
+export interface LojaCustomerInput {
+  name: string;
+  email: string;
+  /** Só dígitos. */
+  cpf: string;
+  /** Só dígitos, com DDD. */
+  phone: string;
+}
+
+export interface LojaAddressInput {
+  cep: string;
+  street: string;
+  number: string;
+  complement?: string;
+  neighborhood: string;
+  city: string;
+  uf: string;
+}
+
+export interface LojaShippingInput {
+  id: string;
+  /** correios | transportadora | expressa | retirada */
+  kind: string;
+  label: string;
+  /** Em REAIS. 0 = grátis. */
+  price: number;
+  etaDays?: { min: number; max: number };
+  /** Slug da loja quando kind='retirada'. */
+  storeSlug?: string;
+  storeLabel?: string;
+}
+
+export interface LojaItemInput {
+  productId: string;
+  sku: string;
+  slug: string;
+  name: string;
+  size: string;
+  color?: string;
+  quantity: number;
+  /** Em REAIS. */
+  unitPrice: number;
+}
+
+export interface LojaTrackingInput {
+  anonymous_id?: string;
+  session_id?: string;
+  fbp?: string;
+  fbc?: string;
+  attribution?: {
+    source?: string;
+    medium?: string;
+    campaign?: string;
+    content?: string;
+    id?: string;
+  };
+}
+
+export interface CriarPedidoInput {
+  customer: LojaCustomerInput;
+  shippingAddress?: LojaAddressInput;
+  shipping: LojaShippingInput;
+  items: LojaItemInput[];
+  couponCode?: string;
+  /** Todos em REAIS. */
+  subtotal: number;
+  discount: number;
+  shippingPrice: number;
+  total: number;
+  payment: {
+    method: 'pix' | 'card';
+    installments?: number;
+    cardToken?: string;
+  };
+  tracking?: LojaTrackingInput;
+}
+
+/** Resposta do POST — `ok:false` sempre vem com mensagem pronta pra cliente. */
+export interface CriarPedidoResult {
+  ok: boolean;
+  error?: string;
+  order?: any;
+}
+
+/* ─────────────────────────────── SERVICE ──────────────────────────────── */
+
+@Injectable()
+export class LojaOrdersService {
+  private readonly logger = new Logger(LojaOrdersService.name);
+
+  /** Base dos wcOrderId sintéticos da LOJA (live usa 900M, WC real usa < 1M). */
+  private static readonly LOJA_WC_ID_BASE = 950_000_000;
+
+  /** Validade do PIX. 30min é o que a cliente aguenta esperar sem desistir. */
+  private static readonly PIX_EXPIRA_MIN = 30;
+
+  /** Tolerância do recálculo: 1 centavo (arredondamento de float no front). */
+  private static readonly TOLERANCIA = 0.011;
+
+  private readonly BASE_URL = 'https://api.pagar.me/core/v5';
+
+  /** Cache das lojas pra resolver storeSlug→code sem bater no banco a cada pedido. */
+  private lojasCache: { at: number; rows: Array<{ code: string; name: string; city: string | null }> } | null = null;
+  private static readonly LOJAS_CACHE_TTL = 5 * 60 * 1000;
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly http: HttpService,
+    private readonly pagarme: PagarmeService,
+  ) {}
+
+  /* ───────────────────────── helpers de formato ───────────────────────── */
+
+  private digits(v: any): string {
+    return String(v ?? '').replace(/\D/g, '');
+  }
+
+  private dinheiro(v: any): number {
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.round(n * 100) / 100 : 0;
+  }
+
+  /**
+   * Máscara de CPF do GET público: `***.***.**9-10`. Só os 3 últimos dígitos
+   * aparecem — o suficiente pra cliente reconhecer o próprio pedido, longe de
+   * ser um documento reutilizável por quem pescar a URL.
+   */
+  private mascararCpf(cpf?: string | null): string | null {
+    const d = this.digits(cpf);
+    if (d.length !== 11) return null;
+    return `***.***.**${d[8]}-${d.slice(9)}`;
+  }
+
+  /** Slug canônico: sem acento, minúsculo, não-alfanumérico vira hífen. */
+  private slugify(v: any): string {
+    return String(v ?? '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '') // marcas de acento soltas pelo NFD
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+  }
+
+  private parseJson<T>(raw: any, fallback: T): T {
+    if (!raw) return fallback;
+    try {
+      return JSON.parse(String(raw)) as T;
+    } catch {
+      return fallback;
+    }
+  }
+
+  /* ─────────────────────── validação e recálculo ──────────────────────── */
+
+  /**
+   * Confere que os números que o e-commerce mandou fecham entre si.
+   *
+   * NÃO reconfere preço contra o catálogo — PENDÊNCIA CONHECIDA. Hoje o BFF do
+   * e-commerce é server-to-server e autenticado por token, então o preço que
+   * chega já veio do nosso próprio catálogo; mas se um dia esse token vazar,
+   * dá pra comprar com preço inventado. A trava certa é reler `unitPrice` do
+   * `WincredCatalogService`/`site_produto` por SKU antes de cobrar.
+   *
+   * Retorna a mensagem de erro (elegante) ou null se está tudo certo.
+   */
+  private validar(input: CriarPedidoInput): string | null {
+    if (!input?.customer) return 'Faltaram os seus dados de contato — pode preencher de novo?';
+    const cpf = this.digits(input.customer.cpf);
+    if (cpf.length !== 11) return 'O CPF informado não parece completo. Confere pra gente?';
+    if (!String(input.customer.name || '').trim()) return 'Faltou o seu nome no cadastro.';
+    if (!String(input.customer.email || '').includes('@')) return 'O e-mail informado não parece válido.';
+    if (this.digits(input.customer.phone).length < 10) return 'O telefone precisa vir com DDD.';
+
+    if (!Array.isArray(input.items) || input.items.length === 0) {
+      return 'Sua sacola está vazia.';
+    }
+    for (const it of input.items) {
+      if (!it?.sku || !Number(it.quantity) || Number(it.quantity) < 1) {
+        return 'Um dos itens da sacola veio incompleto. Pode montar a sacola de novo?';
+      }
+      if (!(Number(it.unitPrice) > 0)) {
+        return 'Um dos itens está sem preço. Atualize a página e tente de novo.';
+      }
+    }
+
+    if (!input.shipping?.id || !input.shipping?.kind) return 'Escolha uma forma de entrega.';
+    const retirada = input.shipping.kind === 'retirada';
+    if (!retirada) {
+      const e = input.shippingAddress;
+      if (!e || this.digits(e.cep).length !== 8 || !String(e.street || '').trim() || !String(e.city || '').trim()) {
+        return 'Precisamos do endereço completo pra entregar o seu pedido.';
+      }
+    }
+
+    if (input.payment?.method !== 'pix' && input.payment?.method !== 'card') {
+      return 'Forma de pagamento não disponível.';
+    }
+    if (input.payment.method === 'card' && !String(input.payment.cardToken || '').trim()) {
+      return 'Não conseguimos ler os dados do cartão. Tente preencher novamente.';
+    }
+
+    // Recálculo — a conta tem que fechar dos dois lados.
+    const somaItens = input.items.reduce(
+      (acc, it) => acc + this.dinheiro(it.unitPrice) * Number(it.quantity),
+      0,
+    );
+    const subtotal = this.dinheiro(input.subtotal);
+    const desconto = this.dinheiro(input.discount);
+    const frete = this.dinheiro(input.shippingPrice);
+    const total = this.dinheiro(input.total);
+    const T = LojaOrdersService.TOLERANCIA;
+
+    if (Math.abs(somaItens - subtotal) > T) {
+      this.logger.warn(`[loja] subtotal divergente: itens=${somaItens.toFixed(2)} informado=${subtotal.toFixed(2)}`);
+      return 'Os valores da sacola mudaram. Atualize a página e confira antes de fechar. 💜';
+    }
+    if (Math.abs(subtotal - desconto + frete - total) > T) {
+      this.logger.warn(
+        `[loja] total divergente: ${subtotal.toFixed(2)} - ${desconto.toFixed(2)} + ${frete.toFixed(2)} != ${total.toFixed(2)}`,
+      );
+      return 'Os valores da sacola mudaram. Atualize a página e confira antes de fechar. 💜';
+    }
+    if (total <= 0) return 'O valor do pedido ficou inválido. Confira a sacola.';
+    // O frete cotado tem que ser o mesmo que entra no total.
+    if (Math.abs(this.dinheiro(input.shipping.price) - frete) > T) {
+      return 'O frete mudou desde a cotação. Recalcule a entrega e tente de novo.';
+    }
+
+    return null;
+  }
+
+  /* ───────────────────────────── CRM ──────────────────────────────────── */
+
+  /**
+   * Cliente entra no CRM deduplicado por PESSOA (personKey = `cpf:<digits>`).
+   *
+   * REGRA DA CASA (clientes-pessoa-vs-cadastro): CPF é a PESSOA, cadastro é
+   * POR LOJA. Então NUNCA fundimos Customers fisicamente — se a pessoa já tem
+   * cadastro (feito na loja física, no Giga), a gente só COMPLETA o que está
+   * vazio. Cadastro de loja física foi digitado por vendedora olhando
+   * documento; formulário de site é a cliente com pressa. O da loja ganha.
+   *
+   * Falha aqui NUNCA derruba a venda (email é @unique no Customer e colisão é
+   * plausível) — o pedido carrega os dados denormalizados de qualquer jeito.
+   */
+  private async upsertCustomer(c: LojaCustomerInput): Promise<string | null> {
+    const cpf = this.digits(c.cpf);
+    const personKey = computePersonKeyFromCpf(cpf);
+    const nome = String(c.name || '').trim();
+    const email = String(c.email || '').trim().toLowerCase() || null;
+    const phone = this.digits(c.phone) || null;
+
+    try {
+      // CPF pode estar gravado com ou sem máscara (base histórica do Giga).
+      const cpfFmt = `${cpf.slice(0, 3)}.${cpf.slice(3, 6)}.${cpf.slice(6, 9)}-${cpf.slice(9)}`;
+      const existentes = await (this.prisma as any).customer.findMany({
+        where: {
+          OR: [
+            ...(personKey ? [{ personKey }] : []),
+            { cpf },
+            { cpf: cpfFmt },
+          ],
+        },
+        orderBy: { createdAt: 'asc' },
+      });
+
+      if (existentes.length) {
+        // Preferência pelo cadastro de loja física (originSource='giga'), que é
+        // o mais confiável; senão o mais antigo.
+        const alvo = existentes.find((x: any) => x.originSource === 'giga') || existentes[0];
+        const patch: any = {};
+        if (!String(alvo.name || '').trim() && nome) patch.name = nome;
+        if (!String(alvo.email || '').trim() && email) patch.email = email;
+        if (!String(alvo.phone || '').trim() && phone) patch.phone = phone;
+        if (!String(alvo.cpf || '').trim()) patch.cpf = cpf;
+        if (!alvo.personKey && personKey) patch.personKey = personKey;
+        if (Object.keys(patch).length) {
+          await (this.prisma as any).customer.update({ where: { id: alvo.id }, data: patch });
+        }
+        return alvo.id;
+      }
+
+      const criado = await (this.prisma as any).customer.create({
+        data: {
+          name: nome || null,
+          email,
+          phone,
+          cpf,
+          personKey,
+          originSource: 'site',
+        },
+      });
+      return criado.id;
+    } catch (e: any) {
+      this.logger.warn(`[loja] cliente não gravado no CRM (pedido segue): ${e?.message || e}`);
+      return null;
+    }
+  }
+
+  /* ──────────────────────── retirada em loja ──────────────────────────── */
+
+  /**
+   * storeSlug do e-commerce ('analia-franco', 'itanhaem'...) → `Store.code`.
+   * A tabela Store não tem slug: o e-commerce nasceu com os slugs em
+   * `src/data/stores.ts` e o Flow identifica loja por code/nome. Casamos por
+   * slug do NOME e, como rede, por slug da CIDADE.
+   * Sem match → null (o pedido vira entrega normal e a matriz resolve; melhor
+   * do que travar a venda por causa de um slug novo).
+   */
+  private async resolvePickupStoreCode(slug?: string): Promise<{ code: string; name: string } | null> {
+    const alvo = this.slugify(slug);
+    if (!alvo) return null;
+
+    if (!this.lojasCache || Date.now() - this.lojasCache.at > LojaOrdersService.LOJAS_CACHE_TTL) {
+      try {
+        const rows = await (this.prisma as any).store.findMany({
+          where: { active: true },
+          select: { code: true, name: true, city: true },
+        });
+        this.lojasCache = { at: Date.now(), rows };
+      } catch (e: any) {
+        this.logger.warn(`[loja] não consegui listar lojas pra retirada: ${e?.message || e}`);
+        return null;
+      }
+    }
+
+    const rows = this.lojasCache.rows;
+    const porNome = rows.find((s) => this.slugify(s.name) === alvo);
+    if (porNome) return { code: porNome.code, name: porNome.name };
+    const porCidade = rows.find((s) => this.slugify(s.city) === alvo);
+    if (porCidade) return { code: porCidade.code, name: porCidade.name };
+    // Último recurso: slug contido no nome (ex.: 'moema' em "LURDS MOEMA").
+    const parcial = rows.find((s) => this.slugify(s.name).includes(alvo));
+    if (parcial) return { code: parcial.code, name: parcial.name };
+
+    this.logger.warn(`[loja] storeSlug "${slug}" não casou com nenhuma loja ativa`);
+    return null;
+  }
+
+  /* ─────────────────────── criação do Order ───────────────────────────── */
+
+  /**
+   * Próxima sequência da faixa da loja. Pega o MAIOR wcOrderId já usado (ver
+   * decisão 2 no topo do arquivo) — não `count()`.
+   */
+  private async proximaSequencia(): Promise<number> {
+    const base = LojaOrdersService.LOJA_WC_ID_BASE;
+    const ultimo = await (this.prisma as any).order.findFirst({
+      where: { source: 'loja', wcOrderId: { gte: base } },
+      orderBy: { wcOrderId: 'desc' },
+      select: { wcOrderId: true },
+    });
+    return ultimo ? Number(ultimo.wcOrderId) - base : 0;
+  }
+
+  private numeroPedido(seq: number): string {
+    return `LP-${String(seq).padStart(6, '0')}`;
+  }
+
+  /** Endereço no formato do WooCommerce — é o shape que os cards da loja e a
+   *  impressão de etiqueta/separação já sabem ler (mesmo da live). */
+  private montarShippingWc(input: CriarPedidoInput) {
+    const e = input.shippingAddress;
+    const partesNome = String(input.customer.name || '').trim().split(/\s+/);
+    return {
+      first_name: partesNome[0] || '',
+      last_name: partesNome.slice(1).join(' '),
+      address_1: e ? [e.street, e.number].filter(Boolean).join(', ') : '',
+      address_2: e ? [e.complement, e.neighborhood].filter(Boolean).join(' - ') : '',
+      city: e?.city || '',
+      state: (e?.uf || '').toUpperCase().slice(0, 2),
+      postcode: this.digits(e?.cep),
+      phone: this.digits(input.customer.phone),
+    };
+  }
+
+  private async criarOrder(
+    input: CriarPedidoInput,
+    pickup: { code: string; name: string } | null,
+  ): Promise<any> {
+    const base = LojaOrdersService.LOJA_WC_ID_BASE;
+    const seq0 = await this.proximaSequencia();
+    const shipping = this.montarShippingWc(input);
+    const retirada = input.shipping.kind === 'retirada';
+    const attr = input.tracking?.attribution || {};
+
+    // Snapshot comercial: o que OrderItem/Order não têm campo pra guardar mas
+    // o GET do pedido e o evento purchase precisam de volta, item a item.
+    const checkoutInfo = {
+      shipping: {
+        id: input.shipping.id,
+        kind: input.shipping.kind,
+        label: input.shipping.label,
+        price: this.dinheiro(input.shipping.price),
+        etaDays: input.shipping.etaDays || null,
+        storeSlug: input.shipping.storeSlug || null,
+        storeLabel: input.shipping.storeLabel || pickup?.name || null,
+      },
+      // Endereço no formato do E-COMMERCE, não do WC. O `shippingAddress` do
+      // Order é o shape do WooCommerce (address_1 = "rua, número") porque é o
+      // que a separação/etiqueta lê — desmontar aquilo de volta em rua+número
+      // quebra em endereço com vírgula no nome. Aqui fica o original.
+      address: input.shippingAddress
+        ? {
+            cep: this.digits(input.shippingAddress.cep),
+            street: input.shippingAddress.street,
+            number: input.shippingAddress.number,
+            complement: input.shippingAddress.complement || null,
+            neighborhood: input.shippingAddress.neighborhood,
+            city: input.shippingAddress.city,
+            uf: (input.shippingAddress.uf || '').toUpperCase().slice(0, 2),
+          }
+        : null,
+      subtotal: this.dinheiro(input.subtotal),
+      discount: this.dinheiro(input.discount),
+      shippingPrice: this.dinheiro(input.shippingPrice),
+      couponCode: input.couponCode || null,
+      items: input.items.map((it) => ({
+        productId: it.productId,
+        sku: it.sku,
+        slug: it.slug,
+        name: it.name,
+        size: it.size,
+        color: it.color || null,
+        quantity: Number(it.quantity),
+        unitPrice: this.dinheiro(it.unitPrice),
+      })),
+    };
+
+    const trackingInfo = input.tracking
+      ? {
+          anonymous_id: input.tracking.anonymous_id || null,
+          session_id: input.tracking.session_id || null,
+          fbp: input.tracking.fbp || null,
+          fbc: input.tracking.fbc || null,
+          attribution: input.tracking.attribution || null,
+        }
+      : null;
+
+    // Retry em colisão de wcOrderId — mesma defesa da live: dois checkouts
+    // simultâneos leem a mesma sequência e um dos dois bate P2002.
+    for (let tent = 0; tent < 6; tent++) {
+      const seq = seq0 + 1 + tent;
+      try {
+        return await (this.prisma as any).order.create({
+          data: {
+            wcOrderId: base + seq,
+            wcOrderNumber: this.numeroPedido(seq),
+            source: 'loja',
+            // Enquanto não pagar, o pedido NÃO existe pra retaguarda: só vira
+            // 'processing' (= fila de roteamento) quando o dinheiro entra.
+            status: 'awaiting_payment',
+            customerName: String(input.customer.name || '').trim() || null,
+            customerEmail: String(input.customer.email || '').trim() || null,
+            customerPhone: this.digits(input.customer.phone) || null,
+            customerCpf: this.digits(input.customer.cpf) || null,
+            shippingCep: this.digits(input.shippingAddress?.cep) || null,
+            shippingAddress: JSON.stringify(shipping),
+            totalAmount: this.dinheiro(input.total),
+            isPickup: retirada,
+            pickupStoreCode: retirada ? pickup?.code || null : null,
+            shippingMethod: retirada
+              ? `Retirada em loja${pickup?.name ? ` (${pickup.name})` : ''}`
+              : input.shipping.label || 'Entrega',
+            wcDateCreated: new Date(),
+            utmSource: attr.source || null,
+            utmMedium: attr.medium || null,
+            utmCampaign: attr.campaign || null,
+            utmId: attr.id || null,
+            utmContent: attr.content || null,
+            checkoutInfo: JSON.stringify(checkoutInfo),
+            trackingInfo: trackingInfo ? JSON.stringify(trackingInfo) : null,
+            items: {
+              create: input.items.map((it) => ({
+                sku: String(it.sku),
+                productName: [it.name, it.color, it.size].filter(Boolean).join(' · '),
+                quantity: Number(it.quantity),
+                unitPrice: this.dinheiro(it.unitPrice),
+                // No site o preço praticado JÁ é o cheio — não há tabela
+                // promocional por peça como na live, então base = unitário.
+                baseUnitPrice: this.dinheiro(it.unitPrice),
+              })),
+            },
+          },
+        });
+      } catch (e: any) {
+        if (e?.code !== 'P2002') throw e; // P2002 = wcOrderId colidiu → próximo
+      }
+    }
+    throw new Error('não consegui gerar o número do pedido (colisão de wcOrderId)');
+  }
+
+  /* ───────────────────────────── PAGAMENTO ────────────────────────────── */
+
+  /**
+   * Loja pela qual o dinheiro do site entra. Cai no `PagarmeStoreConfig` dessa
+   * loja se houver; senão o próprio PagarmeService desce pro singleton da
+   * matriz. 'SITE' é o code que a casa já usa pro canal (customers-app/DRE).
+   */
+  private lojaDoDinheiro(): string {
+    return process.env.LOJA_PAGARME_STORE_CODE || 'SITE';
+  }
+
+  /** Config Pagar.me pra montar a cobrança de CARTÃO (o PIX vai pelo service).
+   *  Duplicado de propósito: o módulo `pagarme/` é caminho crítico de PDV e
+   *  live — a sprint só estende o webhook de lá, não mexe no resto. */
+  private async configPagarme(storeCode: string): Promise<{ apiKey: string; recipientId?: string }> {
+    try {
+      const sc = await (this.prisma as any).pagarmeStoreConfig.findUnique({ where: { storeCode } });
+      if (sc?.enabled && sc?.apiKey) return { apiKey: sc.apiKey, recipientId: sc.recipientId || undefined };
+    } catch {
+      /* tabela pode não existir em ambiente antigo — cai no singleton */
+    }
+    const cfg = await (this.prisma as any).pagarmeConfig.findUnique({ where: { id: 'singleton' } });
+    if (!cfg?.enabled || !cfg?.apiKey) throw new Error('Pagar.me não configurado/habilitado');
+    return { apiKey: cfg.apiKey, recipientId: cfg.recipientId || undefined };
+  }
+
+  private authHeader(apiKey: string): string {
+    return `Basic ${Buffer.from(`${apiKey}:`).toString('base64')}`;
+  }
+
+  /** DDD + número no formato que a Pagar.me exige. */
+  private telefonePagarme(raw: string): { area_code: string; number: string } {
+    const d = this.digits(raw);
+    if (d.length === 13 && d.startsWith('55')) return { area_code: d.slice(2, 4), number: d.slice(4) };
+    if (d.length === 11 || d.length === 10) return { area_code: d.slice(0, 2), number: d.slice(2) };
+    return { area_code: '13', number: '996218277' }; // fallback da matriz
+  }
+
+  /**
+   * PIX pelo `PagarmeService` (reuso puro): ele já faz split rule, retry do
+   * QR (a v5 gera o charge async) e grava o `PagarmePayment` que o webhook lê.
+   * `saleId` = Order.id — é essa chave que volta no webhook.
+   */
+  private async cobrarPix(order: any, input: CriarPedidoInput) {
+    const pix = await this.pagarme.createPixCharge({
+      saleId: order.id,
+      valor: this.dinheiro(input.total),
+      storeCode: this.lojaDoDinheiro(),
+      storeName: 'SITE',
+      customerName: String(input.customer.name || '').trim(),
+      customerCpf: this.digits(input.customer.cpf),
+      customerEmail: String(input.customer.email || '').trim(),
+      customerPhone: this.digits(input.customer.phone),
+      expiresInMinutes: LojaOrdersService.PIX_EXPIRA_MIN,
+    });
+    return {
+      gatewayOrderId: pix.pagarmeOrderId,
+      pix: {
+        // `qrCode` vem como URL da imagem hospedada pela Pagar.me — o backend
+        // NÃO gera dataURL (a dep `qrcode` não está instalada e não vale
+        // adicionar por isso). Quem quiser desenhar o QR localmente usa o
+        // `copyPaste`, que é o payload EMV completo.
+        qrCode: pix.qrCodeImageUrl || null,
+        copyPaste: pix.qrCodeText,
+        expiresAt: pix.expiresAt.toISOString(),
+      },
+    };
+  }
+
+  /**
+   * CARTÃO — cobrança síncrona com o token que o e-commerce já gerou no
+   * navegador (o número do cartão NUNCA passa por aqui).
+   * Aprovado → devolve ok; recusado → devolve o motivo já traduzido.
+   */
+  private async cobrarCartao(
+    order: any,
+    input: CriarPedidoInput,
+  ): Promise<{ ok: true; gatewayOrderId: string; gatewayChargeId: string | null } | { ok: false; error: string }> {
+    const storeCode = this.lojaDoDinheiro();
+    const cfg = await this.configPagarme(storeCode);
+    const valorCentavos = Math.round(this.dinheiro(input.total) * 100);
+    const parcelas = Math.max(1, Math.min(12, Number(input.payment.installments || 1)));
+    const cpf = this.digits(input.customer.cpf);
+    const end = input.shippingAddress;
+
+    const body: any = {
+      code: order.wcOrderNumber,
+      items: [
+        {
+          amount: valorCentavos,
+          description: `Pedido ${order.wcOrderNumber} — lurdsplussize.com.br`,
+          quantity: 1,
+          code: order.id.slice(-12),
+        },
+      ],
+      customer: {
+        name: String(input.customer.name || '').trim().slice(0, 64),
+        email: String(input.customer.email || '').trim(),
+        type: 'individual',
+        document: cpf,
+        document_type: 'cpf',
+        phones: { mobile_phone: { country_code: '55', ...this.telefonePagarme(input.customer.phone) } },
+        ...(end
+          ? {
+              address: {
+                line_1: [end.number, end.street, end.neighborhood].filter(Boolean).join(', '),
+                line_2: end.complement || '',
+                zip_code: this.digits(end.cep),
+                city: end.city,
+                state: (end.uf || '').toUpperCase().slice(0, 2),
+                country: 'BR',
+              },
+            }
+          : {}),
+      },
+      payments: [
+        {
+          payment_method: 'credit_card',
+          credit_card: {
+            installments: parcelas,
+            statement_descriptor: 'LURDS',
+            card_token: String(input.payment.cardToken),
+          },
+          ...(cfg.recipientId
+            ? {
+                split: [
+                  {
+                    recipient_id: cfg.recipientId,
+                    amount: valorCentavos,
+                    type: 'flat',
+                    options: { charge_processing_fee: true, charge_remainder_fee: true, liable: true },
+                  },
+                ],
+              }
+            : {}),
+        },
+      ],
+      // CHAVE DO WEBHOOK: é por aqui que o `POST /pagarme/webhook` sabe que o
+      // pagamento é de um pedido do e-commerce novo (além do PagarmePayment).
+      metadata: {
+        flowops_order_id: order.id,
+        order_number: order.wcOrderNumber,
+        saleId: order.id,
+        storeCode,
+        source: 'lurds-loja',
+      },
+    };
+
+    let resp: any;
+    try {
+      resp = await firstValueFrom(
+        this.http.post(`${this.BASE_URL}/orders`, body, {
+          headers: {
+            Authorization: this.authHeader(cfg.apiKey),
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+          },
+          timeout: 30000,
+        }),
+      );
+    } catch (e: any) {
+      const data = e?.response?.data;
+      this.logger.error(
+        `[loja] cartão HTTP ${e?.response?.status} pedido=${order.wcOrderNumber}: ${JSON.stringify(data || e?.message)}`,
+      );
+      return { ok: false, error: this.mensagemRecusa(data) };
+    }
+
+    const gw = resp.data;
+    const charge = (gw?.charges || [])[0];
+    const aprovado = gw?.status === 'paid' || charge?.status === 'paid';
+
+    // Registra no MESMO PagarmePayment do PDV/live — assim a conciliação, o
+    // painel de pagamentos e o webhook público enxergam a venda do site.
+    try {
+      await (this.prisma as any).pagarmePayment.create({
+        data: {
+          saleId: order.id,
+          storeCode,
+          pagarmeOrderId: gw.id,
+          pagarmeChargeId: charge?.id || null,
+          method: 'credit_card',
+          valor: this.dinheiro(input.total),
+          status: aprovado ? 'paid' : 'failed',
+          paidAt: aprovado ? new Date() : null,
+        },
+      });
+    } catch (e: any) {
+      this.logger.warn(`[loja] PagarmePayment não gravado (cobrança seguiu): ${e?.message || e}`);
+    }
+
+    if (!aprovado) {
+      this.logger.warn(
+        `[loja] cartão recusado pedido=${order.wcOrderNumber} order=${gw?.id} status=${gw?.status}/${charge?.status}`,
+      );
+      return { ok: false, error: this.mensagemRecusa(gw) };
+    }
+
+    return { ok: true, gatewayOrderId: gw.id, gatewayChargeId: charge?.id || null };
+  }
+
+  /**
+   * Motivo técnico da recusa → frase que a cliente pode ler.
+   * REGRA: nunca vazar código de adquirente, nome de gateway nem stack. A
+   * cliente precisa saber o que FAZER, não o que quebrou.
+   */
+  private mensagemRecusa(gw: any): string {
+    const charge = (gw?.charges || [])[0];
+    const tx = charge?.last_transaction || {};
+    const cru = [
+      tx.acquirer_message,
+      tx.gateway_response?.errors?.map((e: any) => e?.message).join(' '),
+      gw?.message,
+      typeof gw?.errors === 'object' ? JSON.stringify(gw.errors) : '',
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+
+    if (/insufficient|saldo|limite/.test(cru)) {
+      return 'O cartão não tinha limite disponível pra esse valor. Tente outro cartão ou pague com PIX. 💜';
+    }
+    if (/expired|expir/.test(cru)) {
+      return 'Esse cartão parece estar vencido. Confira a validade ou use outro. 💜';
+    }
+    if (/cvv|security code|invalid.*card|card.*invalid|numero|number/.test(cru)) {
+      return 'Confira os dados do cartão (número, validade e código de segurança) e tente de novo. 💜';
+    }
+    if (/timeout|indispon|unavailable|try again/.test(cru)) {
+      return 'A operadora do cartão não respondeu agora. Tente novamente em instantes ou pague com PIX. 💜';
+    }
+    return 'O pagamento não foi aprovado pela operadora do cartão. Tente outro cartão ou pague com PIX — leva 1 minutinho. 💜';
+  }
+
+  /* ─────────────────────────── POST /pedido ───────────────────────────── */
+
+  async criarPedido(input: CriarPedidoInput): Promise<CriarPedidoResult> {
+    const erro = this.validar(input);
+    if (erro) return { ok: false, error: erro };
+
+    // CRM antes da cobrança de propósito: mesmo que o cartão seja recusado, a
+    // cliente fica cadastrada (é lead, não venda) e a próxima tentativa dela
+    // já cai no mesmo cadastro em vez de duplicar.
+    await this.upsertCustomer(input.customer);
+
+    const pickup =
+      input.shipping.kind === 'retirada'
+        ? await this.resolvePickupStoreCode(input.shipping.storeSlug)
+        : null;
+
+    let order: any;
+    try {
+      order = await this.criarOrder(input, pickup);
+    } catch (e: any) {
+      this.logger.error(`[loja] falha ao criar pedido: ${e?.message || e}`);
+      return { ok: false, error: 'Não conseguimos abrir o seu pedido agora. Tente de novo em instantes. 💜' };
+    }
+
+    // ── Cobrança ──
+    let paymentInfo: any = {
+      method: input.payment.method,
+      installments: input.payment.method === 'card' ? Number(input.payment.installments || 1) : null,
+      gatewayOrderId: null,
+      gatewayChargeId: null,
+      pix: null,
+    };
+
+    try {
+      if (input.payment.method === 'pix') {
+        const r = await this.cobrarPix(order, input);
+        paymentInfo = { ...paymentInfo, gatewayOrderId: r.gatewayOrderId, pix: r.pix };
+      } else {
+        const r = await this.cobrarCartao(order, input);
+        if (!r.ok) {
+          // "Cartão recusado NÃO cria pedido": apaga o Order recém-criado (os
+          // itens caem por cascade; ainda não há histórico/pick-order pendurado)
+          // pra retaguarda não encher de pedido fantasma. Se o delete falhar,
+          // pelo menos cancela — nunca deixa em awaiting_payment eterno.
+          // O PagarmePayment status='failed' FICA (não tem FK): é registro de
+          // tentativa e é justamente o que a conciliação quer enxergar.
+          await this.descartarPedido(order.id);
+          return { ok: false, error: r.error };
+        }
+        paymentInfo = {
+          ...paymentInfo,
+          gatewayOrderId: r.gatewayOrderId,
+          gatewayChargeId: r.gatewayChargeId,
+        };
+      }
+    } catch (e: any) {
+      this.logger.error(`[loja] cobrança falhou pedido=${order.wcOrderNumber}: ${e?.message || e}`);
+      await this.descartarPedido(order.id);
+      return {
+        ok: false,
+        error: 'Não conseguimos iniciar o pagamento agora. Tente de novo em instantes. 💜',
+      };
+    }
+
+    await (this.prisma as any).order.update({
+      where: { id: order.id },
+      data: { paymentInfo: JSON.stringify(paymentInfo) },
+    });
+
+    this.logger.log(
+      `[loja] pedido ${order.wcOrderNumber} criado (${input.payment.method}) R$ ${this.dinheiro(input.total).toFixed(2)}`,
+    );
+
+    // Cartão aprovado paga na hora — o webhook que chega depois vira no-op.
+    if (input.payment.method === 'card') {
+      await this.confirmarPagamento(order.id);
+    }
+
+    const fresh = await (this.prisma as any).order.findUnique({
+      where: { id: order.id },
+      include: { items: true },
+    });
+
+    return {
+      ok: true,
+      order: {
+        id: fresh.id,
+        number: fresh.wcOrderNumber,
+        status: this.statusPublico(fresh),
+        total: this.dinheiro(fresh.totalAmount),
+        payment: {
+          method: paymentInfo.method,
+          ...(paymentInfo.installments ? { installments: paymentInfo.installments } : {}),
+          ...(paymentInfo.pix ? { pix: paymentInfo.pix } : {}),
+        },
+      },
+    };
+  }
+
+  /** Remove o pedido que não virou venda. Falhou o delete → marca cancelado. */
+  private async descartarPedido(orderId: string): Promise<void> {
+    try {
+      await (this.prisma as any).order.delete({ where: { id: orderId } });
+    } catch (e: any) {
+      this.logger.warn(`[loja] pedido ${orderId} não pôde ser apagado, cancelando: ${e?.message || e}`);
+      await (this.prisma as any).order
+        .update({ where: { id: orderId }, data: { status: 'cancelled' } })
+        .catch(() => undefined);
+    }
+  }
+
+  /* ───────────────────── status público do pedido ─────────────────────── */
+
+  /**
+   * Traduz o status interno (vocabulário da retaguarda) pro vocabulário do
+   * e-commerce: awaiting_payment | paid | expired | cancelled.
+   * Tudo que já passou pelo pagamento (processing, routing, separating,
+   * shipped, delivered...) é `paid` pra cliente — o rastreio detalhado é outra
+   * tela.
+   */
+  private statusPublico(order: any): 'awaiting_payment' | 'paid' | 'expired' | 'cancelled' {
+    const s = String(order?.status || '');
+    if (s === 'cancelled' || s === 'canceled') return 'cancelled';
+    if (s === 'awaiting_payment') {
+      // PIX vencido sem pagamento vira `expired` (o pedido segue no banco pra
+      // eventual pagamento tardio — o webhook ainda confirma se cair).
+      const pi = this.parseJson<any>(order?.paymentInfo, null);
+      const exp = pi?.pix?.expiresAt ? new Date(pi.pix.expiresAt).getTime() : 0;
+      if (exp && Date.now() > exp) return 'expired';
+      return 'awaiting_payment';
+    }
+    return order?.paidAt ? 'paid' : 'awaiting_payment';
+  }
+
+  /** GET /public/loja/pedido/:id — sem PII inteira, sem tracking, sem gateway. */
+  async buscarPedido(id: string): Promise<{ ok: boolean; order?: any; error?: string }> {
+    const order = await (this.prisma as any).order
+      .findFirst({ where: { id, source: 'loja' }, include: { items: true } })
+      .catch(() => null);
+    if (!order) return { ok: false, error: 'Pedido não encontrado.' };
+
+    const ck = this.parseJson<any>(order.checkoutInfo, {});
+    const pi = this.parseJson<any>(order.paymentInfo, {});
+    const end = this.parseJson<any>(order.shippingAddress, {});
+
+    return {
+      ok: true,
+      order: {
+        id: order.id,
+        number: order.wcOrderNumber,
+        status: this.statusPublico(order),
+        createdAt: order.createdAt?.toISOString?.() ?? null,
+        ...(order.paidAt ? { paidAt: order.paidAt.toISOString() } : {}),
+        customer: {
+          name: order.customerName,
+          email: order.customerEmail,
+          // CPF MASCARADO — a URL do pedido é um link que a cliente
+          // compartilha sem pensar; documento inteiro nunca sai daqui.
+          cpf: this.mascararCpf(order.customerCpf),
+          phone: order.customerPhone,
+        },
+        // Endereço sai do snapshot do checkout (original, sem round-trip pelo
+        // formato do WC). Pedido antigo/sem snapshot cai no melhor esforço.
+        ...(order.isPickup
+          ? {}
+          : {
+              shippingAddress: ck.address || {
+                cep: order.shippingCep,
+                street: String(end.address_1 || '').split(',')[0]?.trim() || '',
+                number: String(end.address_1 || '').split(',').slice(1).join(',').trim(),
+                complement: String(end.address_2 || '').split(' - ')[0]?.trim() || '',
+                neighborhood: String(end.address_2 || '').split(' - ').slice(1).join(' - ').trim(),
+                city: end.city || '',
+                uf: end.state || '',
+              },
+            }),
+        shipping: ck.shipping || {
+          id: 'entrega',
+          kind: order.isPickup ? 'retirada' : 'correios',
+          label: order.shippingMethod || 'Entrega',
+          price: 0,
+        },
+        items: Array.isArray(ck.items) && ck.items.length
+          ? ck.items
+          : (order.items || []).map((it: any) => ({
+              sku: it.sku,
+              name: it.productName,
+              quantity: it.quantity,
+              unitPrice: it.unitPrice,
+            })),
+        subtotal: ck.subtotal ?? null,
+        discount: ck.discount ?? 0,
+        ...(ck.couponCode ? { couponCode: ck.couponCode } : {}),
+        shippingPrice: ck.shippingPrice ?? 0,
+        total: this.dinheiro(order.totalAmount),
+        payment: {
+          method: pi.method || 'pix',
+          ...(pi.installments ? { installments: pi.installments } : {}),
+          // Só o que a cliente usa pra pagar. gatewayOrderId NÃO sai.
+          ...(pi.pix ? { pix: pi.pix } : {}),
+        },
+      },
+    };
+  }
+
+  /** GET /public/loja/pedido/:id/status — o poll do PIX bate aqui. */
+  async statusPedido(id: string): Promise<{ ok: boolean; status?: string; paidAt?: string; error?: string }> {
+    const order = await (this.prisma as any).order
+      .findFirst({
+        where: { id, source: 'loja' },
+        select: { id: true, status: true, paidAt: true, paymentInfo: true },
+      })
+      .catch(() => null);
+    if (!order) return { ok: false, error: 'Pedido não encontrado.' };
+    return {
+      ok: true,
+      status: this.statusPublico(order),
+      ...(order.paidAt ? { paidAt: order.paidAt.toISOString() } : {}),
+    };
+  }
+
+  /* ────────────────── confirmação de pagamento (webhook) ──────────────── */
+
+  /**
+   * O ÚNICO caminho que marca um pedido da loja como pago.
+   *
+   * IDEMPOTENTE: já pago → no-op. O webhook da Pagar.me repete, e repete
+   * MESMO; cartão aprovado ainda chama daqui direto e o webhook chega depois.
+   *
+   * `status='processing'` é o que faz o pedido cair na tela Pedidos &
+   * Separação da retaguarda pro roteamento — exatamente como o pedido da live
+   * (handoffToSiteFlow). NÃO roteia aqui: roteamento é 100% da matriz.
+   *
+   * Recebe qualquer id (o webhook devolve o `saleId` do PagarmePayment, que
+   * também pode ser venda de PDV ou carrinho de live) — id que não é pedido da
+   * loja sai em silêncio.
+   */
+  async confirmarPagamento(orderId: string): Promise<{ ok: boolean; already?: boolean; reason?: string }> {
+    if (!orderId) return { ok: false, reason: 'sem id' };
+
+    const order = await (this.prisma as any).order
+      .findFirst({ where: { id: orderId, source: 'loja' }, include: { items: true } })
+      .catch(() => null);
+    if (!order) return { ok: false, reason: 'não é pedido da loja' };
+
+    if (order.paidAt) return { ok: true, already: true };
+    if (order.status === 'cancelled') return { ok: false, reason: 'pedido cancelado' };
+
+    const paidAt = new Date();
+    const atualizado = await (this.prisma as any).order.update({
+      where: { id: order.id },
+      data: { paidAt, status: 'processing' },
+      include: { items: true },
+    });
+
+    await (this.prisma as any).orderHistory
+      .create({
+        data: {
+          orderId: order.id,
+          fromStatus: order.status,
+          toStatus: 'processing',
+          note: 'Pagamento confirmado (e-commerce)',
+        },
+      })
+      .catch(() => undefined);
+
+    this.logger.log(`[loja] pedido ${order.wcOrderNumber} PAGO — aguardando roteamento na retaguarda`);
+
+    // Tracking nunca desfaz pagamento — fire-and-forget DE VERDADE (sem await):
+    // quem chama isto é o webhook da Pagar.me, e segurar o ack esperando o
+    // e-commerce responder é convite pro gateway dar timeout e reenfileirar.
+    // `notificarEcommerce` engole os próprios erros, então nunca rejeita.
+    void this.notificarEcommerce(atualizado);
+
+    return { ok: true };
+  }
+
+  /**
+   * Avisa o e-commerce que o dinheiro entrou, pra ele disparar o `purchase`
+   * server-side (Meta CAPI / GA4) com os sinais do navegador que só ele tem.
+   *
+   * FIRE-AND-FORGET: falha de tracking NUNCA desfaz pagamento (o pedido já
+   * está pago no banco). Sem `ECOMMERCE_URL`/`PAYMENT_WEBHOOK_SECRET`
+   * configuradas, pula em silêncio (debug) — é o caso do ambiente que ainda
+   * não subiu o site novo.
+   */
+  private async notificarEcommerce(order: any): Promise<void> {
+    const url = (process.env.ECOMMERCE_URL || '').replace(/\/+$/, '');
+    const secret = process.env.PAYMENT_WEBHOOK_SECRET || '';
+    if (!url || !secret) {
+      this.logger.debug(`[loja] purchase não notificado (ECOMMERCE_URL/PAYMENT_WEBHOOK_SECRET ausentes)`);
+      return;
+    }
+
+    try {
+      const ck = this.parseJson<any>(order.checkoutInfo, {});
+      const pi = this.parseJson<any>(order.paymentInfo, {});
+      const tr = this.parseJson<any>(order.trackingInfo, {});
+      const itensSnapshot: any[] = Array.isArray(ck.items) ? ck.items : [];
+
+      const items = itensSnapshot.length
+        ? itensSnapshot.map((it) => ({
+            product_id: it.productId,
+            sku: it.sku,
+            name: it.name,
+            cor: it.color || undefined,
+            tamanho: it.size || undefined,
+            quantidade: it.quantity,
+            valor: it.unitPrice,
+          }))
+        : (order.items || []).map((it: any) => ({
+            product_id: it.sku,
+            sku: it.sku,
+            name: it.productName,
+            quantidade: it.quantity,
+            valor: it.unitPrice,
+          }));
+
+      const payload = {
+        orderId: order.id,
+        status: 'paid' as const,
+        paidAt: order.paidAt?.toISOString?.() ?? new Date().toISOString(),
+        purchase: {
+          number: order.wcOrderNumber,
+          total: this.dinheiro(order.totalAmount),
+          ...(ck.couponCode ? { coupon: ck.couponCode } : {}),
+          payment_method: pi.method === 'card' ? 'credit_card' : 'pix',
+          items,
+          customer: {
+            email: order.customerEmail,
+            phone: order.customerPhone,
+            cpf: order.customerCpf,
+          },
+          tracking: {
+            anonymous_id: tr.anonymous_id || undefined,
+            session_id: tr.session_id || undefined,
+            fbp: tr.fbp || undefined,
+            fbc: tr.fbc || undefined,
+            attribution: tr.attribution || undefined,
+          },
+          // Retirada em loja: o slug segue junto pro evento de compra carimbar
+          // a loja física. É o que liga a venda online ao acerto entre lojas —
+          // sem ele, a peça sai da loja e a venda fica só "do site".
+          ...(ck.storeSlug ? { store_slug: ck.storeSlug } : {}),
+        },
+      };
+
+      await firstValueFrom(
+        this.http.post(`${url}/api/webhooks/payment`, payload, {
+          headers: { 'Content-Type': 'application/json', 'x-webhook-secret': secret },
+          timeout: 8000,
+        }),
+      );
+      this.logger.log(`[loja] purchase notificado ao e-commerce (pedido ${order.wcOrderNumber})`);
+    } catch (e: any) {
+      // Só loga: o pedido está pago, a Meta que espere o retry manual.
+      this.logger.warn(
+        `[loja] purchase NÃO notificado (pedido ${order?.wcOrderNumber} segue pago): ${e?.response?.status || ''} ${e?.message || e}`,
+      );
+    }
+  }
+}

@@ -58,31 +58,36 @@ telefone (Advanced Matching padrão).
 
 ## O que está PREPARADO (desenho pronto, implementação pendente)
 
-- **Tokenização de cartão**: o fluxo correto é o SDK do gateway tokenizar no
-  browser e o server só ver o token. O contrato (`CardInput` + comentário) e
-  a recusa atual do método já apontam pra isso. **Falta**: escolher gateway
-  de cartão, integrar SDK, PCI-DSS SAQ-A.
-- **3DS (autenticação da portadora)**: nada implementado — depende do gateway
-  escolhido. Entra no `PaymentProvider` como um passo do `createCardCharge`
-  que ainda não existe.
+- **Tokenização de cartão**: ✅ FEITO na sprint 011. `CardForm.tsx` chama a API
+  de tokens da Pagar.me **do navegador** com a chave pública
+  (`NEXT_PUBLIC_PAGARME_PUBLIC_KEY`); só o `card_token` viaja pro BFF e dele
+  pro backend, que cobra. O PAN não toca servidor nenhum. **Falta**: formalizar
+  o PCI-DSS SAQ-A.
+- **3DS (autenticação da portadora)**: nada implementado. Agora é decisão do
+  BACKEND, que é quem cria a transação na Pagar.me.
 - **Antifraude**: nada implementado. O desenho natural: score na criação do
   pedido (device fingerprint + histórico do CPF/CEP) antes de gerar cobrança.
   Os sinais já capturados (fbp, session, attribution) ajudariam, mas **não há
   motor nenhum hoje**.
-- **Persistência real de pedidos**: store em memória (declarado em
-  `docs/payments.md`). Postgres é pré-requisito pra ir ao ar de verdade —
-  pedido pago que some da memória é passivo jurídico, não bug.
-- **Assinatura de webhook do gateway real**: o segredo compartilhado atual é
-  suficiente pro mock e pra parceiro que suporte header custom; PagBank/
-  Pagar.me assinam com esquema próprio (HMAC do corpo) — a validação troca
-  quando o provider real entrar.
+- **Persistência real de pedidos**: ✅ FEITO na sprint 011. O pedido nasce no
+  Postgres do backend FlowOps (`POST /public/loja/pedido`); o ecommerce não
+  guarda pedido nenhum e **não tem fallback pra memória** — sem as envs do
+  backend o checkout sai do ar com aviso, em vez de fingir que funciona.
+- **Assinatura de webhook do gateway**: o webhook da Pagar.me chega no
+  **backend** agora, e é lá que a assinatura deles é conferida. O
+  `/api/webhooks/payment` daqui é chamada interna backend→ecommerce,
+  autenticada pelo segredo compartilhado `PAYMENT_WEBHOOK_SECRET`.
 
 ## Checklist antes de ligar produção com dinheiro real
 
-1. Postgres no `OrderStore` (a interface já isola a troca).
-2. `PIX_KEY` real + decisão do token PagBank (ver aviso em `docs/payments.md`).
-3. `PAYMENT_WEBHOOK_SECRET` forte configurada no Railway/Vercel E no gateway.
-4. `MOCK_PIX_AUTOCONFIRM` **ausente** do ambiente (conferir duas vezes).
-5. Validação de preço por item contra o catálogo (fecha a exceção declarada).
-6. Revisar retenção de logs: `order_event` fica no stdout da Vercel — ok; se
-   um dia logar mais campos, voltar aqui.
+1. `FLOWOPS_API_URL` + `LOJA_ORDER_TOKEN` configuradas na Vercel (sem elas não
+   há checkout — de propósito).
+2. `PAYMENT_WEBHOOK_SECRET` forte, com o **mesmo valor** no Railway (backend) e
+   na Vercel (ecommerce).
+3. `NEXT_PUBLIC_PAGARME_PUBLIC_KEY` da conta certa — a chave pública é do
+   ambiente (test/live) e trocar de ambiente sem trocar a chave gera token que
+   o backend não consegue usar.
+4. Validação de preço por item contra o catálogo (fecha a exceção declarada) —
+   agora é responsabilidade do backend, que tem o catálogo na mão.
+5. Revisar retenção de logs: `order_event` e `payment_webhook` ficam no stdout
+   da Vercel, sem PII — ok; se um dia logar mais campos, voltar aqui.
