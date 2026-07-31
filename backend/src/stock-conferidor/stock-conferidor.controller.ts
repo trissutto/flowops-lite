@@ -41,6 +41,20 @@ export class StockConferidorController {
     return this.svc.historico(String(codigo || ''), String(loja || ''));
   }
 
+  /**
+   * POST /stock-conferidor/importar-negativos { loja?, simular? }
+   * Traz de uma vez o passivo negativo que o Giga tem e o Flow nunca viu.
+   */
+  @Post('importar-negativos')
+  async importarNegativos(@Req() req: any, @Body() body: { loja?: string; simular?: boolean }) {
+    this.requireAdmin(req);
+    return this.svc.importarNegativos({
+      loja: body?.loja || undefined,
+      simular: !!body?.simular,
+      userName: req?.user?.name || req?.user?.email || null,
+    });
+  }
+
   /** POST /stock-conferidor/puxar-giga { codigo, loja } */
   @Post('puxar-giga')
   async puxarGiga(@Req() req: any, @Body() body: { codigo?: string; loja?: string }) {

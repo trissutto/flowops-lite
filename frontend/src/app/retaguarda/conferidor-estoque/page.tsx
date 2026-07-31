@@ -97,6 +97,33 @@ export default function ConferidorEstoquePage() {
     }
   };
 
+  // Passivo negativo que o Giga tem e o Flow nunca viu (os dois filtros que
+  // escondiam negativo caíram em 31/07, mas só valem daqui pra frente).
+  const [impBusy, setImpBusy] = useState(false);
+  const [impRes, setImpRes] = useState<any>(null);
+
+  const importarNegativos = async (simular: boolean) => {
+    if (impBusy) return;
+    if (!simular && !confirm(
+      `Trazer ${impRes?.encontrados ?? 'os'} negativo(s) do Giga pro Flow?\n\n` +
+      'Só mexe em SKU/loja que está NEGATIVO no Giga e não bate no Flow.\n' +
+      'Nada positivo é tocado. Tudo fica registrado no histórico.',
+    )) return;
+    setImpBusy(true);
+    try {
+      const r = await api<any>('/stock-conferidor/importar-negativos', {
+        method: 'POST',
+        body: JSON.stringify({ loja: loja || undefined, simular }),
+      });
+      setImpRes(r);
+      if (!simular) await conferir();
+    } catch (e: any) {
+      setErr(e?.message || 'Falha na importação');
+    } finally {
+      setImpBusy(false);
+    }
+  };
+
   const puxar = async (l: Linha) => {
     const k = `${l.codigo}|${l.loja}`;
     setPuxando(k);
@@ -221,6 +248,52 @@ export default function ConferidorEstoquePage() {
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /> {err}
           </div>
         )}
+
+        {/* Passivo negativo do Giga que o Flow nunca enxergou */}
+        <div className="mb-4 rounded-xl border-2 border-amber-200 bg-amber-50/60 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="text-sm">
+              <div className="font-bold text-amber-900">Negativos que o Flow nunca viu</div>
+              <p className="text-xs text-amber-800">
+                O espelho descartava linha negativa e o write-through gravava 0 — por isso a tela
+                mostrava “·” onde a loja devia peça. Os dois filtros caíram, mas só valem daqui pra
+                frente. Isso traz o passivo antigo. Só mexe no que está negativo no Giga.
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => importarNegativos(true)} disabled={impBusy}
+                className="rounded-lg border border-amber-400 px-4 py-2 text-sm font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+              >
+                {impBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Simular'}
+              </button>
+              <button
+                onClick={() => importarNegativos(false)} disabled={impBusy}
+                className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-50"
+              >
+                Importar negativos
+              </button>
+            </div>
+          </div>
+          {impRes && (
+            <div className="mt-3 rounded-lg border border-amber-200 bg-white p-3 text-sm">
+              <b>{impRes.encontrados}</b> negativo(s) no Giga ·{' '}
+              <b>{impRes.jaBatiam}</b> já batiam no Flow ·{' '}
+              <b className="text-amber-700">
+                {impRes.simulado ? `${impRes.encontrados - impRes.jaBatiam} a importar` : `${impRes.importados} importados`}
+              </b>
+              {impRes.amostra?.length > 0 && (
+                <div className="mt-2 max-h-40 overflow-y-auto font-mono text-xs text-slate-600">
+                  {impRes.amostra.map((a: any, i: number) => (
+                    <div key={i}>
+                      {a.codigo} · loja {a.loja} · Flow {a.flow} → <b className="text-red-600">{a.giga}</b>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
 
         {r && (
           <>
