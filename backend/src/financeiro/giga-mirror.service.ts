@@ -41,6 +41,20 @@ export class GigaMirrorService implements OnModuleInit {
     return d;
   }
 
+  /**
+   * Início do espelho da CAIXA DETALHADA — env PRÓPRIA (31/07, incidente do
+   * "faturamento do ano anterior R$ 0,00"): a comparação anual da tela de
+   * faturamento precisa de 2024, mas esticar a GIGA_MIRROR_FROM esticaria
+   * JUNTO o sync HORÁRIO de transferências/caixa diário (que recarrega a
+   * janela inteira toda hora) — 2,5 anos do Giga a cada hora, não.
+   * O caixa_mov só recarrega 3 dias no incremental; o histórico extra é
+   * backfill único (maybeExtendCaixaMovBackfill). Default: GIGA_MIRROR_FROM.
+   */
+  private caixaMovFrom(): Date {
+    const s = (process.env.GIGA_CAIXA_MOV_FROM || '').trim();
+    return s ? new Date(`${s}T00:00:00Z`) : this.windowFrom();
+  }
+
   async onModuleInit() {
     // Backfill no boot se o espelho estiver vazio (1º deploy). Fire-and-forget +
     // pequeno atraso pra não travar o startup numa ida ao Giga.
@@ -53,9 +67,15 @@ export class GigaMirrorService implements OnModuleInit {
     // GIGA_MIRROR_FROM quando a tabela está vazia. Atraso maior pra não
     // competir com o boot nem com o backfill acima.
     setTimeout(() => {
-      this.maybeBackfillCaixaMov().catch((e) =>
-        this.logger.error(`backfill caixa_mov falhou: ${e?.message || e}`),
-      );
+      this.maybeBackfillCaixaMov()
+        .then(() =>
+          // Depois do backfill de tabela-vazia (no-op quando já cheia): estende
+          // o histórico pra trás se GIGA_CAIXA_MOV_FROM recuou (ex.: 2024 pra
+          // comparação anual do faturamento). Sequencial de propósito — nunca
+          // duas cargas pesadas no Giga ao mesmo tempo.
+          this.maybeExtendCaixaMovBackfill(),
+        )
+        .catch((e) => this.logger.error(`backfill caixa_mov falhou: ${e?.message || e}`));
     }, 30_000);
     // Backfill da REF-BASE (13/07): preenche ref_base nas linhas que ainda não
     // têm (coluna nova entra via prisma db push; o sync completo do catálogo só
@@ -248,7 +268,7 @@ export class GigaMirrorService implements OnModuleInit {
       await (this.prisma as any).gigaCaixaMov.deleteMany({});
     }
     this.logger.log('[caixa_mov] tabela vazia — backfill histórico em chunks mensais');
-    const start = this.windowFrom();
+    const start = this.caixaMovFrom();
     const end = this.windowTo();
     let cursor = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), 1));
     let total = 0;
@@ -273,6 +293,56 @@ export class GigaMirrorService implements OnModuleInit {
         update: { lastOkAt: new Date(), rows: total },
       })
       .catch(() => null);
+  }
+
+  /**
+   * ESTENDE o histórico do caixa_mov pra trás quando `GIGA_CAIXA_MOV_FROM`
+   * recua (31/07: comparação anual do faturamento precisa de 2024). O
+   * backfill original só roda com a tabela VAZIA; este roda com ela cheia,
+   * puxando SÓ os meses entre a env e o início real do espelho.
+   *
+   * Idempotente por natureza: depois de estendido, o início real <= env e o
+   * método vira no-op no próximo boot. Meses são processados do MAIS RECENTE
+   * pro mais antigo — se o deploy reiniciar no meio, o pedaço que falta é o
+   * mais velho (e o mais raro de consultar).
+   */
+  private async maybeExtendCaixaMovBackfill(): Promise<void> {
+    const alvo = this.caixaMovFrom();
+
+    // Início REAL do espelho — mesmo critério robusto do erp.service (OFFSET
+    // pula linhas com data lixo do incidente DATAALT; MIN cru mentiria aqui).
+    const rows: any[] = await (this.prisma as any)
+      .$queryRawUnsafe(
+        `SELECT data FROM giga_caixa_mov WHERE data IS NOT NULL ORDER BY data ASC OFFSET 100 LIMIT 1`,
+      )
+      .catch(() => []);
+    const inicioReal = rows?.[0]?.data ? new Date(rows[0].data) : null;
+    if (!inicioReal) return; // tabela vazia/ilegível — o backfill do boot cuida
+
+    // Primeiro dia do mês do início real — o chunk mensal alinha aqui.
+    const fimExtensao = new Date(Date.UTC(inicioReal.getUTCFullYear(), inicioReal.getUTCMonth(), 1));
+    if (alvo.getTime() >= fimExtensao.getTime()) return; // já coberto
+
+    this.logger.log(
+      `[caixa_mov] extensão de histórico: ${alvo.toISOString().slice(0, 10)} → ${fimExtensao.toISOString().slice(0, 10)} (mensal, do recente pro antigo)`,
+    );
+    let cursor = fimExtensao;
+    let total = 0;
+    while (cursor > alvo) {
+      const anterior = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth() - 1, 1));
+      const chunkFrom = anterior > alvo ? anterior : alvo;
+      try {
+        const n = await this.syncCaixaMovRange(chunkFrom, cursor);
+        total += n;
+        this.logger.log(`[caixa_mov] extensão ${chunkFrom.toISOString().slice(0, 7)}: ${n} linhas (total ${total})`);
+      } catch (e: any) {
+        // Um mês que falhou não interrompe os demais — o boot seguinte tenta
+        // de novo só o que continuar faltando (idempotência pelo início real).
+        this.logger.error(`[caixa_mov] extensão ${chunkFrom.toISOString().slice(0, 7)} falhou: ${e?.message || e}`);
+      }
+      cursor = chunkFrom;
+    }
+    this.logger.log(`[caixa_mov] extensão concluída: ${total} linhas`);
   }
 
   // ── FUNCIONÁRIOS (wincred_funcionarios) ───────────────────────────────────
