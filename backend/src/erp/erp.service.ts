@@ -621,10 +621,19 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   private async mirrorCaixaMovCovers(inicio: Date): Promise<boolean> {
     const now = Date.now();
     if (!this.mirrorCaixaMovMinCache || now - this.mirrorCaixaMovMinCache.at > 60_000) {
-      const row = await (this.prismaFlow as any).gigaCaixaMov
-        .findFirst({ orderBy: { data: 'asc' }, select: { data: true } })
-        .catch(() => null);
-      this.mirrorCaixaMovMinCache = { min: row?.data ? new Date(row.data) : null, at: now };
+      // INÍCIO ROBUSTO, não MIN(data) cru (incidente 31/07: "faturamento do
+      // ano anterior R$ 0,00"). Bastava UMA linha com data errada lá atrás
+      // (sobra do incidente DATAALT) pro espelho "achar que cobre" um período
+      // que está vazio — e responder ZERO sem erro, em vez de cair pro Giga
+      // vivo. O OFFSET pula até 100 linhas perdidas antes do backfill real;
+      // um mês de verdade tem dezenas de milhares.
+      const rows: any[] = await (this.prismaFlow as any)
+        .$queryRawUnsafe(
+          `SELECT data FROM giga_caixa_mov WHERE data IS NOT NULL ORDER BY data ASC OFFSET 100 LIMIT 1`,
+        )
+        .catch(() => []);
+      const min = rows?.[0]?.data ? new Date(rows[0].data) : null;
+      this.mirrorCaixaMovMinCache = { min, at: now };
     }
     const min = this.mirrorCaixaMovMinCache.min;
     if (!min) return false;
@@ -9786,7 +9795,14 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     // não estiver pronto/cobrindo o período.
     try {
       if (await this.caixaMovUsable(inicio)) {
-        return await this.getFaturamentoPorLojaFromMirror(inicio, fim);
+        const doEspelho = await this.getFaturamentoPorLojaFromMirror(inicio, fim);
+        // Rede de segurança: 14 lojas não faturam ZERO num período inteiro.
+        // Espelho "cobrindo" mas vazio = cobertura enganada (data lixo) →
+        // melhor UMA consulta ao vivo do que um zero errado na tela do dono.
+        if (doEspelho.length > 0) return doEspelho;
+        this.logger.warn(
+          `[mirror-reads] getFaturamentoPorLoja: espelho vazio pra ${inicio.toISOString().slice(0, 10)}..${fim.toISOString().slice(0, 10)} — conferindo no Giga ao vivo`,
+        );
       }
     } catch (e) {
       this.logger.warn(`[mirror-reads] getFaturamentoPorLoja: ${(e as Error).message} → Giga ao vivo`);
