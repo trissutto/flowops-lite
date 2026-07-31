@@ -339,6 +339,35 @@ export class PdvController {
    *        q (busca: número, CPF, nome),
    *        limit (default 100, max 500)
    */
+  /**
+   * GET /pdv/sales/:id/nfce/xml — XML da NFC-e dessa venda (só admin).
+   *
+   * Existe por causa do cStat 225 ("Falha no Schema XML"): a SEFAZ diz QUE
+   * falhou, nunca ONDE. O XML assinado já era gravado em `nfceXml` na
+   * rejeição, mas só dava pra ler indo no log do Railway — na prática,
+   * ninguém lia, e cada 225 virava adivinhação. Agora sai num clique.
+   */
+  @Get('sales/:id/nfce/xml')
+  async nfceXml(@Req() req: any, @Param('id') id: string) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+    const sale: any = await (this.prisma as any).pdvSale.findUnique({
+      where: { id },
+      select: {
+        id: true, storeCode: true, total: true, nfceXml: true,
+        nfceStatus: true, nfceCStat: true, nfceXMotivo: true, nfceNumero: true,
+      },
+    });
+    if (!sale) throw new NotFoundException('Venda não encontrada');
+    if (!sale.nfceXml) {
+      throw new BadRequestException('Essa venda não tem XML guardado (nota nunca chegou a ser assinada).');
+    }
+    return {
+      saleId: sale.id, loja: sale.storeCode, total: sale.total,
+      status: sale.nfceStatus, cStat: sale.nfceCStat, xMotivo: sale.nfceXMotivo,
+      numero: sale.nfceNumero, xml: sale.nfceXml,
+    };
+  }
+
   @Get('nfces')
   async listNfces(
     @Req() req: any,
