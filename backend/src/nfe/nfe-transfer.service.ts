@@ -1017,6 +1017,15 @@ export class NfeTransferService {
     return (Math.round(v * 100) / 100).toFixed(2);
   }
 
+  /** vUnCom/vUnTrib aceitam ate 10 casas (TDec_1110). Usa a precisao toda
+   *  quando o valor nao fecha em 2 casas — e o que faz qCom x vUnCom bater
+   *  com o vProd liquido (ex.: 79,95 / 2 pecas = 39,975). */
+  private moneyUn(v: number): string {
+    const n = Number(v) || 0;
+    if (Math.abs(Math.round(n * 100) / 100 - n) < 1e-9) return n.toFixed(2);
+    return n.toFixed(10).replace(/0+$/, '');
+  }
+
   private buildEnder(e: StoreFiscal['ender']): string {
     return (
       `<xLgr>${this.esc(e.logradouro)}</xLgr>` +
@@ -1033,9 +1042,26 @@ export class NfeTransferService {
   }
 
   private esc(s: string): string {
-    return String(s || '')
-      // caractere de controle (lixo de cadastro) é XML inválido → fora
-      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
+    // O TString da SEFAZ so aceita U+0020..U+00FF — travessao (—), aspas
+    // curvas e afins derrubam a nota com 225 (mesmo bug do cupom, 31/07:
+    // "FRETE — ENVIO"). Translitera o que tem equivalente e joga fora o resto.
+    const TRANSLITERA: Record<string, string> = {
+      '–': '-', '—': '-', '―': '-',
+      '‘': "'", '’': "'", '‚': "'",
+      '“': '"', '”': '"', '„': '"',
+      '…': '...', '•': '-', ' ': ' ', '™': 'TM',
+    };
+    const dentroDoCharset = Array.from(String(s || ''))
+      .map((c) => {
+        if (TRANSLITERA[c] !== undefined) return TRANSLITERA[c];
+        const code = c.charCodeAt(0);
+        if (code < 32 || code === 127) return '';
+        if (code > 0xff) return ' ';
+        return c;
+      })
+      .join('')
+      .replace(/ {2,}/g, ' ');
+    return dentroDoCharset
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
@@ -1411,7 +1437,12 @@ export class NfeTransferService {
       xProd: String(it.descricao || it.sku).trim().slice(0, 120),
       ncm: this.normNcm(it.ncm, it.sku, []),
       cfop, qty: it.qty || 1,
-      vUn: Math.round((it.precoUnit || 0) * 100) / 100,
+      // vUn LIQUIDO (total/qty), NAO o precoUnit cheio (rejeicao 31/07:
+      // "Valor do Produto difere do produto Valor Unitario ... e Quantidade"):
+      // item com desconto tinha vUnCom=159,90 e vProd=79,95 — a SEFAZ exige
+      // vProd = qCom x vUnCom. A unidade fica em precisao alta (ate 10 casas
+      // no vUnCom, moneyUn) pra fechar mesmo quando total/qty nao e exato.
+      vUn: (Number(it.total) || 0) / (it.qty || 1),
       vProd: Math.round((it.total || 0) * 100) / 100,
     }));
     const valorTotal = items.reduce((s, i) => s + i.vProd, 0);
@@ -1661,9 +1692,9 @@ export class NfeTransferService {
         const prod =
           `<prod><cProd>${this.esc(it.sku)}</cProd><cEAN>${it.ean}</cEAN><xProd>${this.esc(xProd)}</xProd>` +
           `<NCM>${it.ncm}</NCM><CFOP>${it.cfop}</CFOP><uCom>UN</uCom><qCom>${it.qty.toFixed(4)}</qCom>` +
-          `<vUnCom>${this.money(it.vUn)}</vUnCom><vProd>${this.money(it.vProd)}</vProd>` +
+          `<vUnCom>${this.moneyUn(it.vUn)}</vUnCom><vProd>${this.money(it.vProd)}</vProd>` +
           `<cEANTrib>${it.ean}</cEANTrib><uTrib>UN</uTrib><qTrib>${it.qty.toFixed(4)}</qTrib>` +
-          `<vUnTrib>${this.money(it.vUn)}</vUnTrib><indTot>1</indTot></prod>`;
+          `<vUnTrib>${this.moneyUn(it.vUn)}</vUnTrib><indTot>1</indTot></prod>`;
         let icms: string;
         let icmsUfDest = '';
         if (crt3) {
