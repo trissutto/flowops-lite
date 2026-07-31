@@ -359,7 +359,7 @@ export class PdvController {
       where: { id },
       select: {
         id: true, storeCode: true, total: true, nfceXml: true,
-        nfceStatus: true, nfceCStat: true, nfceXMotivo: true, nfceNumero: true,
+        nfceStatus: true, nfceMotivo: true, nfceNumber: true,
       },
     });
     if (!sale) throw new NotFoundException('Venda não encontrada');
@@ -371,8 +371,8 @@ export class PdvController {
     }
     return {
       saleId: sale.id, loja: sale.storeCode, total: sale.total,
-      status: sale.nfceStatus, cStat: sale.nfceCStat, xMotivo: sale.nfceXMotivo,
-      numero: sale.nfceNumero, xml: sale.nfceXml,
+      status: sale.nfceStatus, motivo: sale.nfceMotivo,
+      numero: sale.nfceNumber, xml: sale.nfceXml,
     };
   }
 
