@@ -721,7 +721,12 @@ export default function EditorProdutosPage() {
                                       if (e.key === 'Enter') { e.preventDefault(); definirEstoqueCelula(r, loja, Number(e.currentTarget.value)); }
                                       if (e.key === 'Escape') { e.preventDefault(); setCellSel(null); }
                                     }}
-                                    onBlur={(e) => definirEstoqueCelula(r, loja, Number(e.currentTarget.value))}
+                                    // NUNCA gravar no blur (31/07): clicar fora com o campo
+                                    // APAGADO virava "quantidade 0" e mandava uma saída de
+                                    // estoque que ninguém pediu. Estoque só muda com ato
+                                    // explícito: Enter, ou os botões +/−. Sair fecha a célula
+                                    // sem tocar em nada.
+                                    onBlur={() => setCellSel(null)}
                                     disabled={cellBusy}
                                     className="w-9 h-5 text-xs font-black text-center bg-white border border-amber-300 rounded outline-none focus:border-amber-500 disabled:opacity-50"
                                     aria-label={`Quantidade na loja ${loja}`}
