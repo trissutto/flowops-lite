@@ -36,7 +36,8 @@ import { Client as PgClient } from 'pg';
 import { from as copyFrom } from 'pg-copy-streams';
 import { pipeline } from 'stream/promises';
 import { Readable } from 'stream';
-import { ColunaMysql, limparValor, nomeSeguro, tipoPostgres } from './tipos';
+import { ColunaMysql, expressaoSelect, limparValor, nomeSeguro, tipoPostgres } from './tipos';
+import { mascarar, nomeDatabaseMysql, urlMysql, urlPostgres } from './conexoes';
 
 const SCHEMA = 'giga_raw';
 /** Linhas por lote no COPY. 5k equilibra memória e round-trip. */
@@ -58,14 +59,19 @@ function log(msg: string) {
 }
 
 async function main() {
-  const mysqlUrl = process.env.GIGA_ETL_MYSQL_URL;
-  const pgUrl = process.env.GIGA_ETL_PG_URL;
-  if (!mysqlUrl || !pgUrl) {
-    console.error('Faltam GIGA_ETL_MYSQL_URL e/ou GIGA_ETL_PG_URL no ambiente.');
-    console.error('Ex.: mysql://user:senha@162.215.213.154:3306/banco');
-    console.error('     postgresql://user:senha@host:5432/railway');
+  // Le do backend/.env por padrao (ERP_* e DATABASE_URL) — ninguem precisa
+  // redigitar senha, e ela nao vai parar no historico do shell.
+  let mysqlUrl: string;
+  let pgUrl: string;
+  try {
+    mysqlUrl = urlMysql();
+    pgUrl = urlPostgres();
+  } catch (e: any) {
+    console.error(e.message);
     process.exit(1);
   }
+  log(`MySQL:    ${mascarar(mysqlUrl)}`);
+  log(`Postgres: ${mascarar(pgUrl)}`);
 
   const my = await mysql.createConnection({
     uri: mysqlUrl,
@@ -76,11 +82,19 @@ async function main() {
     rowsAsArray: false,
   });
 
-  const pg = new PgClient({ connectionString: pgUrl });
-  await pg.connect();
+  // O inventário (--so-listar) só LÊ o MySQL: não faz sentido exigir Postgres
+  // pra listar tabela. Conectar antes da hora só criaria motivo pra falhar
+  // sem necessidade — foi o que aconteceu na primeira execução, com o .env
+  // local apontando pro SQLite de desenvolvimento.
+  // `!` (definite assignment): o caminho --so-listar retorna antes de qualquer
+  // uso do pg, então pra todo o resto do arquivo ele existe.
+  let pg!: PgClient;
+  if (!SO_LISTAR) {
+    pg = new PgClient({ connectionString: pgUrl });
+    await pg.connect();
+  }
 
-  const dbNome = (mysqlUrl.split('/').pop() || '').split('?')[0];
-  log(`MySQL: ${dbNome}`);
+  const dbNome = nomeDatabaseMysql(mysqlUrl);
 
   /* ── 1. Inventário ─────────────────────────────────────────────────────── */
 
@@ -106,10 +120,21 @@ async function main() {
   console.log('');
 
   if (SO_LISTAR) {
-    const engines = [...new Set(tabelasRaw.map((t) => t.engine).filter(Boolean))];
-    log(`Engines: ${engines.join(', ')}`);
+    const porEngine = new Map<string, number>();
+    for (const t of tabelasRaw) {
+      const e = String(t.engine || 'desconhecido');
+      porEngine.set(e, (porEngine.get(e) ?? 0) + 1);
+    }
+    log('Engines em uso:');
+    for (const [e, n] of porEngine) log(`  ${e}: ${n} tabela(s)`);
+
+    // A estratégia do dump/carga sai daqui, não de palpite.
+    if (porEngine.has('MyISAM')) {
+      log('ATENCAO: ha MyISAM — foto consistente exige travar as tabelas.');
+    } else {
+      log('So InnoDB — a copia roda sem travar nada, com a loja operando.');
+    }
     await my.end();
-    await pg.end();
     return;
   }
 
@@ -265,8 +290,14 @@ async function copiarTabela(
   // O wrapper `mysql2/promise` não expõe `.stream()`; quem tem é a conexão
   // core por baixo (`.connection`). O cast é necessário porque o tipo público
   // do pacote esconde esse campo.
+  //
+  // NÃO usa `SELECT *`: coluna FLOAT/DOUBLE precisa de CAST explícito, senão o
+  // MySQL manda o valor com ~6 dígitos e ele chega achatado (ver
+  // `expressaoSelect`). Foi o que corrompeu 5.220 números de venda na primeira
+  // carga — e passou pela contagem de linhas sem levantar suspeita.
+  const listaSelect = cols.map(expressaoSelect).join(', ');
   const core = (my as any).connection;
-  const queryStream = core.query(`SELECT * FROM \`${origem}\``).stream();
+  const queryStream = core.query(`SELECT ${listaSelect} FROM \`${origem}\``).stream();
 
   let n = 0;
   const origemNode = new Readable({

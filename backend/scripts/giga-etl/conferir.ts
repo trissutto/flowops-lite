@@ -34,6 +34,7 @@
 import * as mysql from 'mysql2/promise';
 import { Client as PgClient } from 'pg';
 import { nomeSeguro } from './tipos';
+import { mascarar, nomeDatabaseMysql, urlMysql, urlPostgres } from './conexoes';
 
 const SCHEMA = 'giga_raw';
 
@@ -60,18 +61,23 @@ function log(m: string) {
 }
 
 async function main() {
-  const mysqlUrl = process.env.GIGA_ETL_MYSQL_URL;
-  const pgUrl = process.env.GIGA_ETL_PG_URL;
-  if (!mysqlUrl || !pgUrl) {
-    console.error('Faltam GIGA_ETL_MYSQL_URL e/ou GIGA_ETL_PG_URL.');
+  let mysqlUrl: string;
+  let pgUrl: string;
+  try {
+    mysqlUrl = urlMysql();
+    pgUrl = urlPostgres();
+  } catch (e: any) {
+    console.error(e.message);
     process.exit(1);
   }
+  log(`MySQL:    ${mascarar(mysqlUrl)}`);
+  log(`Postgres: ${mascarar(pgUrl)}`);
 
   const my = await mysql.createConnection({ uri: mysqlUrl, dateStrings: true });
   const pg = new PgClient({ connectionString: pgUrl });
   await pg.connect();
 
-  const dbNome = (mysqlUrl.split('/').pop() || '').split('?')[0];
+  const dbNome = nomeDatabaseMysql(mysqlUrl);
 
   const [tabelas] = await my.query<any[]>(
     `SELECT TABLE_NAME AS nome FROM information_schema.TABLES
