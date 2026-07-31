@@ -105,6 +105,8 @@ export interface Order {
     /** Dados do PIX quando method = pix. */
     pix?: { qrCode: string; copyPaste: string; expiresAt: string };
     installments?: number;
+    /** Id da order no gateway (Pagar.me) — chave do poll e da conciliação. */
+    gatewayOrderId?: string;
   };
   /** Sinais de tracking capturados no checkout — ver docs/purchase.md. */
   tracking?: {
@@ -128,6 +130,12 @@ export interface CreateOrderInput {
   couponCode?: string;
   paymentMethod: PaymentMethod;
   installments?: number;
+  /**
+   * Token de uso único gerado pelo NAVEGADOR direto na Pagar.me (checkout
+   * transparente). O número do cartão nunca passa por aqui — é o token que
+   * viaja, e ele só serve pra UMA cobrança.
+   */
+  cardToken?: string;
   tracking?: Order['tracking'];
 }
 
