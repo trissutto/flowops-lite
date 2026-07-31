@@ -93,7 +93,9 @@ export class RemessaEnvioService {
     return pecas <= 10 ? 'correios' : 'proprio';
   }
 
-  private async validarLojaOrigem(shipment: any, storeId: string) {
+  /** `storeId` nulo = retaguarda (admin), que enxerga todas as remessas. */
+  private async validarLojaOrigem(shipment: any, storeId: string | null) {
+    if (!storeId) return null;
     const store: any = await this.prisma.store.findUnique({ where: { id: storeId } });
     if (!store || store.code !== shipment.fromStoreCode) {
       throw new ForbiddenException('Só a loja ORIGEM gera o envio da remessa.');
@@ -101,8 +103,21 @@ export class RemessaEnvioService {
     return store;
   }
 
-  /** Gera NF-e (se faltar) + pré-postagem SEDEX com a chave. Idempotente. */
-  async gerarEnvio(shipmentId: string, storeId: string, userId?: string | null) {
+  /**
+   * Gera NF-e (se faltar) + pré-postagem SEDEX com a chave. Idempotente.
+   *
+   * `storeId` nulo → chamada da retaguarda. `forcar` → emite a etiqueta mesmo
+   * quando o transporte estava como PRÓPRIO (pedido do dono 31/07: poder
+   * postar qualquer remessa quando ele quiser, sem depender da regra das 10
+   * peças). Nesse caso o transporte da remessa VIRA 'correios' — senão a tela
+   * ficaria mostrando 🚚 PRÓPRIO numa remessa que tem código de rastreio.
+   */
+  async gerarEnvio(
+    shipmentId: string,
+    storeId: string | null,
+    userId?: string | null,
+    opts?: { forcar?: boolean },
+  ) {
     const shipment: any = await this.prisma.realignmentShipment.findUnique({ where: { id: shipmentId } });
     if (!shipment) throw new NotFoundException('Remessa não encontrada');
     await this.validarLojaOrigem(shipment, storeId);
@@ -116,8 +131,15 @@ export class RemessaEnvioService {
     // Regra do transporte (dono 29/07): até 10 peças → CORREIOS; acima →
     // PRÓPRIO. Override manual: transportMode (botão na tela de remessas).
     const modoTransporte = await this.transporteEfetivo(shipment);
-    if (modoTransporte !== 'correios') {
+    if (modoTransporte !== 'correios' && !opts?.forcar) {
       throw new BadRequestException('Remessa marcada como transporte PRÓPRIO — não gera etiqueta. Se for postar, troque o transporte pra CORREIOS na remessa.');
+    }
+    if (modoTransporte !== 'correios') {
+      await this.prisma.realignmentShipment.update({
+        where: { id: shipmentId },
+        data: { transportMode: 'correios' },
+      });
+      this.logger.warn(`[remessa-envio] ${shipment.code}: transporte forçado PRÓPRIO → CORREIOS pela retaguarda`);
     }
 
     // 1) NF-e de transferência (5152) — auto-emite se ainda não existir
@@ -208,13 +230,20 @@ export class RemessaEnvioService {
     return { ok: true, codigoRastreio: r.codigoRastreio, carrier: r.carrier, idPrepostagem: r.idPrepostagem, etiquetaPdf: r.etiquetaPdf, nfeNumero: doc.numero };
   }
 
-  /** PDF ÚNICO: etiqueta + DANFE da transferência (pra imprimir de uma vez). */
-  async docsEnvio(shipmentId: string, storeId: string) {
+  /**
+   * PDF ÚNICO: etiqueta + DANFE da transferência (pra imprimir de uma vez).
+   * `storeId` nulo = retaguarda. `somenteEtiqueta` = só a etiqueta dos
+   * Correios/Mais Envios, sem a DANFE junto (o dono às vezes só quer colar a
+   * etiqueta numa caixa cuja nota já foi impressa).
+   */
+  async docsEnvio(shipmentId: string, storeId: string | null, opts?: { somenteEtiqueta?: boolean }) {
     const shipment: any = await this.prisma.realignmentShipment.findUnique({ where: { id: shipmentId } });
     if (!shipment) throw new NotFoundException('Remessa não encontrada');
-    const store: any = await this.prisma.store.findUnique({ where: { id: storeId } });
-    if (!store || (store.code !== shipment.fromStoreCode && store.code !== shipment.toStoreCode)) {
-      throw new ForbiddenException('Remessa de outra loja.');
+    if (storeId) {
+      const store: any = await this.prisma.store.findUnique({ where: { id: storeId } });
+      if (!store || (store.code !== shipment.fromStoreCode && store.code !== shipment.toStoreCode)) {
+        throw new ForbiddenException('Remessa de outra loja.');
+      }
     }
     if (!shipment.trackingCode) throw new BadRequestException('Envio ainda não gerado.');
 
@@ -231,18 +260,27 @@ export class RemessaEnvioService {
     } catch (e: any) {
       this.logger.warn(`[remessa-envio] etiqueta indisponível (${shipment.code}): ${e?.message || e}`);
     }
+    const temEtiqueta = pdfs.length > 0;
     let temNota = false;
-    try {
-      const doc: any = await this.prisma.nfeDoc.findFirst({ where: { shipmentId, status: 'authorized' } });
-      if (doc?.id) {
-        const { buffer } = await this.danfePdf.generateForDoc(doc.id);
-        pdfs.push(buffer);
-        temNota = true;
+    if (!opts?.somenteEtiqueta) {
+      try {
+        const doc: any = await this.prisma.nfeDoc.findFirst({ where: { shipmentId, status: 'authorized' } });
+        if (doc?.id) {
+          const { buffer } = await this.danfePdf.generateForDoc(doc.id);
+          pdfs.push(buffer);
+          temNota = true;
+        }
+      } catch (e: any) {
+        this.logger.warn(`[remessa-envio] DANFE indisponível (${shipment.code}): ${e?.message || e}`);
       }
-    } catch (e: any) {
-      this.logger.warn(`[remessa-envio] DANFE indisponível (${shipment.code}): ${e?.message || e}`);
     }
-    if (!pdfs.length) throw new BadRequestException('Nem etiqueta nem DANFE disponíveis ainda — tente de novo em alguns segundos.');
+    if (!pdfs.length) {
+      throw new BadRequestException(
+        opts?.somenteEtiqueta
+          ? 'A transportadora ainda não devolveu o PDF da etiqueta — tente de novo em alguns segundos.'
+          : 'Nem etiqueta nem DANFE disponíveis ainda — tente de novo em alguns segundos.',
+      );
+    }
 
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { PDFDocument } = require('pdf-lib');
@@ -253,6 +291,13 @@ export class RemessaEnvioService {
       for (const p of pages) out.addPage(p);
     }
     const bytes = await out.save();
-    return { ok: true, pdfBase64: Buffer.from(bytes).toString('base64'), temNota, trackingCode: shipment.trackingCode, carrier: shipment.carrier };
+    return {
+      ok: true,
+      pdfBase64: Buffer.from(bytes).toString('base64'),
+      temEtiqueta,
+      temNota,
+      trackingCode: shipment.trackingCode,
+      carrier: shipment.carrier,
+    };
   }
 }
