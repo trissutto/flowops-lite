@@ -113,7 +113,7 @@ export default function NotasEmitidasPage() {
       const blob = new Blob([r.xml], { type: 'application/xml' });
       const a2 = document.createElement('a');
       a2.href = URL.createObjectURL(blob);
-      a2.download = `nfce-rejeitada-${r.cStat || 'x'}-${saleId.slice(0, 8)}.xml`;
+      a2.download = `nfce-rejeitada-${r.numero || saleId.slice(0, 8)}.xml`;
       a2.click();
       setTimeout(() => URL.revokeObjectURL(a2.href), 30_000);
     } catch (e: any) {

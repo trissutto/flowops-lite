@@ -610,7 +610,7 @@ export class NfceService {
 
         // xPag — obrigatório quando tPag=99 (Outros), senão cStat 441.
         const xPag = tPag === '99'
-          ? `<xPag>${this.esc(this.descreveMetodoPag(p.method))}</xPag>`
+          ? `<xPag>${this.xmlTexto(this.descreveMetodoPag(p.method), 60, 'OUTROS')}</xPag>`
           : '';
 
         // indPag=0 (à vista). xPag entra ENTRE tPag e vPag; card depois de vPag.
@@ -756,10 +756,26 @@ export class NfceService {
    * edição automatizada e virou byte NUL no arquivo.
    */
   private xmlTexto(valor: any, max: number, fallback = 'ITEM'): string {
+    // O TString da SEFAZ é `[!-ÿ]...` — só aceita U+0020..U+00FF. Qualquer
+    // caractere ACIMA disso (travessão —, aspas curvas “”, reticências …)
+    // derruba o cupom inteiro com 225 "Falha no Schema". Caso real 31/07:
+    // a linha "FRETE — ENVIO" (travessão U+2014) rejeitou a venda de Suzano
+    // enquanto as notas sem frete autorizavam normal. Primeiro translitera o
+    // que tem equivalente ASCII; o resto acima de U+00FF vira espaço.
+    const TRANSLITERA: Record<string, string> = {
+      '–': '-', '—': '-', '―': '-', // – — ―
+      '‘': "'", '’': "'", '‚': "'", // ' ' ‚
+      '“': '"', '”': '"', '„': '"', // " " „
+      '…': '...', '•': '-', '·': '-', // … • ·
+      '™': 'TM', ' ': ' ', // ™ nbsp
+    };
     const semControle = Array.from(String(valor ?? ''))
       .map((c) => {
+        if (TRANSLITERA[c] !== undefined) return TRANSLITERA[c];
         const code = c.charCodeAt(0);
-        return code < 32 || code === 127 ? ' ' : c;
+        if (code < 32 || code === 127) return ' ';
+        if (code > 0xff) return ' '; // fora do TString — sem exceção
+        return c;
       })
       .join('');
     const limpo = semControle.replace(/\s+/g, ' ').trim().slice(0, max).trim();

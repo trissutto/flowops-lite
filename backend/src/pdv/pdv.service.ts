@@ -1253,7 +1253,9 @@ export class PdvService {
           ref: 'FRETE',
           cor: null,
           tamanho: null,
-          descricao: 'FRETE — ENVIO',
+          // Sem travessao U+2014: derrubava a NFC-e com 225 (TString da
+          // SEFAZ so aceita ate U+00FF) e o Giga e latin1.
+          descricao: 'FRETE - ENVIO',
           ncm: null,
           cfop: null,
           dataCadastro: null,
