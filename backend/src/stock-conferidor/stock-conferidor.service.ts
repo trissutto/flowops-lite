@@ -312,6 +312,114 @@ export class StockConferidorService {
   }
 
   /**
+   * IMPORTAR NEGATIVOS DO GIGA — de uma vez só.
+   *
+   * O espelho do Flow nunca recebeu linha negativa: o sync descartava
+   * `ESTOQUE <= 0` e o write-through gravava `Math.max(0, ...)`. Resultado: o
+   * Giga tinha 1.443 linhas negativas e a tela do Flow mostrava "·" em todas —
+   * a loja devia peça e ninguém enxergava. Os dois filtros caíram em 31/07,
+   * mas isso só vale dali pra frente; o passivo antigo precisa ser trazido.
+   *
+   * Traz SÓ o que está negativo no Giga e ainda não bate no Flow. Não mexe em
+   * nada positivo — o Flow segue sendo a fonte, essa é uma importação
+   * pontual e auditada (StockMovement motivo IMPORTA_NEGATIVO_GIGA).
+   */
+  async importarNegativos(input: { loja?: string; simular?: boolean; userName?: string | null }) {
+    const lojaFiltro = input.loja ? this.loja2(input.loja) : null;
+    const gigaRows = await this.erp.getEstoqueGigaCompleto();
+    if (!gigaRows.length) throw new BadRequestException('Giga não respondeu — nada foi importado.');
+
+    // Agrega o negativo por SKU/loja (a tabela do Giga tem linha repetida).
+    const negativos = new Map<string, number>();
+    for (const r of gigaRows) {
+      const lj = this.loja2(r.loja);
+      if (lojaFiltro && lj !== lojaFiltro) continue;
+      const k = `${this.norm(r.codigo)}|${lj}`;
+      negativos.set(k, (negativos.get(k) || 0) + (Number(r.estoque) || 0));
+    }
+    const alvos = Array.from(negativos.entries())
+      .filter(([, v]) => v < 0)
+      .map(([k, v]) => {
+        const [codigo, loja] = k.split('|');
+        return { codigo, loja, giga: v };
+      });
+    if (!alvos.length) return { ok: true, encontrados: 0, importados: 0, jaBatiam: 0, simulado: !!input.simular, amostra: [] };
+
+    // Valor atual no Flow (chunk pra não estourar o IN).
+    const atual = new Map<string, number>();
+    const cods = Array.from(new Set(alvos.map((a) => a.codigo)));
+    for (let i = 0; i < cods.length; i += 500) {
+      const rows: any[] = await (this.prisma as any).wincredEstoque.findMany({
+        where: { codigo: { in: cods.slice(i, i + 500) } },
+        select: { codigo: true, loja: true, estoque: true },
+      });
+      for (const r of rows) atual.set(`${this.norm(r.codigo)}|${this.loja2(r.loja)}`, Number(r.estoque) || 0);
+    }
+
+    const mudar = alvos.filter((a) => (atual.get(`${a.codigo}|${a.loja}`) ?? 0) !== a.giga);
+    const amostra = mudar.slice(0, 30).map((a) => ({
+      codigo: a.codigo,
+      loja: a.loja,
+      flow: atual.get(`${a.codigo}|${a.loja}`) ?? 0,
+      giga: a.giga,
+    }));
+    if (input.simular) {
+      return { ok: true, encontrados: alvos.length, importados: 0, jaBatiam: alvos.length - mudar.length, simulado: true, amostra };
+    }
+
+    for (let i = 0; i < mudar.length; i += 200) {
+      const lote = mudar.slice(i, i + 200);
+      await this.prisma.$transaction(
+        lote.flatMap((a) => [
+          (this.prisma as any).wincredEstoque.upsert({
+            where: { codigo_loja: { codigo: a.codigo, loja: a.loja } },
+            create: { codigo: a.codigo, loja: a.loja, estoque: a.giga },
+            update: { estoque: a.giga, syncedAt: new Date() },
+          }),
+          (this.prisma as any).gigaEstoque.updateMany({
+            where: { codigo: { in: [a.codigo, a.codigo.padStart(6, '0'), a.codigo.padStart(13, '0')] }, loja: a.loja },
+            data: { estoque: a.giga, syncedAt: new Date() },
+          }),
+        ]),
+      );
+      // giga_estoque sem a linha ainda: cria (o updateMany acima não cria).
+      const semLinha: any[] = await (this.prisma as any).gigaEstoque.findMany({
+        where: { codigo: { in: lote.map((a) => a.codigo) } },
+        select: { codigo: true, loja: true },
+      });
+      const tem = new Set(semLinha.map((r) => `${this.norm(r.codigo)}|${this.loja2(r.loja)}`));
+      const faltando = lote.filter((a) => !tem.has(`${a.codigo}|${a.loja}`));
+      if (faltando.length) {
+        await (this.prisma as any).gigaEstoque.createMany({
+          data: faltando.map((a) => ({ codigo: a.codigo, loja: a.loja, estoque: a.giga })),
+        }).catch(() => null);
+      }
+    }
+
+    for (let i = 0; i < mudar.length; i += 1000) {
+      await (this.prisma as any).stockMovement.createMany({
+        data: mudar.slice(i, i + 1000).map((a) => {
+          const antes = atual.get(`${a.codigo}|${a.loja}`) ?? 0;
+          return {
+            storeCode: a.loja,
+            sku: a.codigo,
+            delta: a.giga - antes,
+            qtyBefore: antes,
+            qtyAfter: a.giga,
+            reason: 'IMPORTA_NEGATIVO_GIGA',
+            note: `Passivo negativo trazido do Giga por ${input.userName || 'admin'}`,
+          };
+        }),
+      }).catch(() => null);
+    }
+
+    this.logger.warn(
+      `[conferidor] IMPORTOU ${mudar.length} negativos do Giga (${alvos.length} encontrados) — ${input.userName || 'admin'}`,
+    );
+    return { ok: true, encontrados: alvos.length, importados: mudar.length, jaBatiam: alvos.length - mudar.length, simulado: false, amostra };
+  }
+
+  /**
    * HISTÓRICO do SKU/loja — o "por quê" de cada divergência. Junta os
    * movimentos que o Flow registrou (venda, devolução, ajuste, transferência)
    * com a última venda no Giga.

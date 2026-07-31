@@ -191,7 +191,10 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         const lojaRaw = String(a.storeCode || '').trim();
         const loja2 = /^\d{1}$/.test(lojaRaw) ? lojaRaw.padStart(2, '0') : lojaRaw;
         const lojas = Array.from(new Set([lojaRaw, loja2, lojaRaw.replace(/^0+/, '') || lojaRaw]));
-        const novo = Math.max(0, Number(a.newStock) || 0);
+        // NAO clampa em 0 (31/07): quando a venda levava o Giga a -1, o Flow
+        // recebia 0 e o negativo ficava INVISIVEL na tela — ninguem sabia que a
+        // loja devia peca. Espelho tem que espelhar, inclusive o que incomoda.
+        const novo = Number(a.newStock) || 0;
         const variants = this.skuVariants(String(a.sku || '').trim());
         if (!variants.length || !lojas.length) continue;
 
@@ -1294,9 +1297,9 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   /**
    * ESTOQUE COMPLETO DO GIGA — inclui ZERO e NEGATIVO.
    *
-   * O `getGigaEstoque()` filtra `ESTOQUE > 0` porque serve pro sync (linha
-   * zerada não precisa ir pro espelho). Pra CONFERIR Flow × Giga isso não
-   * serve: negativo é justamente o que a gente quer enxergar.
+   * O `getGigaEstoque()` agrega por SKU/loja e descarta só a linha ZERADA
+   * (ausência já significa zero). Pra CONFERIR Flow × Giga a gente quer a
+   * tabela crua, linha a linha, inclusive os zeros.
    */
   async getEstoqueGigaCompleto(): Promise<Array<{ codigo: string; loja: string; estoque: number }>> {
     if (!this.pool) return [];
@@ -1327,7 +1330,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       const [rows] = await this.pool.query<mysql.RowDataPacket[]>({
         sql: `SELECT CODIGO AS codigo, LOJA AS loja, SUM(ESTOQUE) AS estoque
            FROM estoque
-          WHERE ESTOQUE > 0
+          WHERE ESTOQUE <> 0
           GROUP BY CODIGO, LOJA`,
         timeout: 300_000,
       } as any);
@@ -1337,7 +1340,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           loja: String(r.loja ?? '').trim(),
           estoque: Number(r.estoque) || 0,
         }))
-        .filter((r) => r.codigo && r.loja && r.estoque > 0);
+        .filter((r) => r.codigo && r.loja && r.estoque !== 0);
     } catch (e) {
       this.logger.error(`getGigaEstoque falhou: ${(e as Error).message}`);
       return [];
