@@ -15,7 +15,8 @@ import { CardForm } from './CardForm';
  *
  * O desconto do PIX aparece como badge informativa; o VALOR real com desconto
  * quem calcula é o SERVER na criação do pedido (o client nunca inventa total
- * — mesma filosofia do cupom em lib/commerce/cupom.ts).
+ * — mesma filosofia do cupom em lib/commerce/cupom.ts). Desde a sprint 011 o
+ * "server" que fecha a conta é o backend FlowOps, dono do pedido.
  *
  * `add_payment_info` dispara na ESCOLHA da aba (é aí que a decisão acontece),
  * uma vez por método — trocar de aba de novo pro mesmo método não re-dispara.
@@ -24,7 +25,10 @@ import { CardForm } from './CardForm';
 export interface PaymentSelection {
   method: PaymentMethod;
   installments?: number;
-  /** Token de uso único da Pagar.me (transparente) — nunca o cartão em si. */
+  /**
+   * Token do cartão, gerado pelo `CardForm` direto na Pagar.me. Único dado de
+   * cartão que sai do navegador — ver o cabeçalho do CardForm.
+   */
   cardToken?: string;
 }
 

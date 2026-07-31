@@ -1,19 +1,27 @@
 /**
- * POST /api/checkout — cria o pedido.
+ * POST /api/checkout — cria o pedido NO BACKEND FLOWOPS.
+ *
+ * Sprint 011: esta rota deixou de ser dona do pedido. Ela continua sendo a
+ * PRIMEIRA BARREIRA (zod, rate-limit, recálculo de cupom/frete/total) e passou
+ * a ser um BFF: monta o payload e chama `POST /public/loja/pedido`. Quem cria
+ * o pedido no Postgres, cobra na Pagar.me e confirma o pagamento é o backend —
+ * ver `src/lib/orders/store.ts` pro porquê.
+ *
+ * Por que manter o recálculo se o backend reconfere: barreira dupla é barata e
+ * pega coisa diferente. Aqui o cupom é o da vitrine (mesma função da sacola, o
+ * que garante que a conta mostrada é a conta cobrada) e o frete sai da tabela
+ * do site. Se um dos dois divergir do backend, o do BACKEND vence no total
+ * final — ele é o dono do pedido — e a divergência sai no log pra alguém olhar.
  *
  * NADA que veio do cliente é confiável: subtotal, desconto, frete e total são
  * RECALCULADOS aqui com as mesmas funções que a UI usa (`applyCoupon`,
- * `findQuote`). O client manda os fatos (itens, CEP, cupom, escolha de frete);
- * o server refaz a conta e é a conta dele que vale.
+ * `findQuote`). O client manda os fatos (itens, CEP, cupom, escolha de frete).
  *
- * ⚠️ PENDÊNCIA HONESTA — preço unitário dos itens: no MVP o `unitPrice` do
- * client NÃO é reconferido contra o catálogo. Validar exigiria buscar cada
- * SKU no backend (`/public/loja/produtos?busca=` acha por sku, mas é uma
- * chamada por item — sem endpoint batch fica caro e frágil no meio do
- * checkout). Enquanto o endpoint de preço em lote não existe, aplicamos teto
- * de sanidade (> R$ 0 e < R$ 10.000 por peça) e o pedido nasce como
- * `awaiting_payment` — nenhum estoque baixa e nenhum real se move antes de
- * gente ver o dinheiro. Quando o endpoint existir, a validação entra AQUI.
+ * ⚠️ PENDÊNCIA HONESTA — preço unitário dos itens: o `unitPrice` do client não
+ * é reconferido contra o catálogo AQUI (exigiria uma chamada por SKU no meio
+ * do checkout). Aplicamos teto de sanidade (> R$ 0 e < R$ 10.000 por peça) e
+ * confiamos na reconferência do backend, que tem o catálogo na mão — é
+ * justamente uma das coisas que a migração do pedido pro Flow desbloqueia.
  */
 
 import { NextResponse } from 'next/server';
@@ -21,10 +29,7 @@ import QRCode from 'qrcode';
 import { z } from 'zod';
 import { applyCoupon } from '@/lib/commerce/cupom';
 import { findQuote } from '@/lib/commerce/frete';
-import { confirmPayment } from '@/lib/orders/confirm';
-import { nextOrderNumber } from '@/lib/orders/number';
-import { getOrderStore } from '@/lib/orders/store';
-import { getPaymentProvider } from '@/lib/payments/provider';
+import { getOrderStore, OrderStoreError, type NewOrderPayload } from '@/lib/orders/store';
 import type { CreateOrderResult, Order } from '@/types/checkout';
 
 export const runtime = 'nodejs';
@@ -89,10 +94,10 @@ const bodySchema = z.object({
   items: z.array(cartLineSchema).min(1).max(50),
   couponCode: z.string().max(30).optional(),
   paymentMethod: z.enum(['pix', 'card', 'boleto']),
-  // 12 acompanha o CardForm (MAX_PARCELAS) — os dois limites andam JUNTOS.
   installments: z.number().int().min(1).max(12).optional(),
-  // Token de uso único da Pagar.me, gerado no navegador — nunca é o cartão.
-  cardToken: z.string().min(8).max(120).optional(),
+  // Token da Pagar.me gerado NO NAVEGADOR (PCI: o número do cartão não passa
+  // por este servidor nem pelo backend). Só o token trafega.
+  cardToken: z.string().min(5).max(200).optional(),
   tracking: trackingSchema,
 });
 
@@ -156,7 +161,7 @@ export async function POST(req: Request): Promise<NextResponse<CreateOrderResult
   }
   const input = parsed.data;
 
-  /* ── RECÁLCULO SERVER-SIDE — a conta que vale é esta ── */
+  /* ── RECÁLCULO SERVER-SIDE — a primeira barreira ── */
 
   const subtotal = round2(input.items.reduce((soma, l) => soma + l.unitPrice * l.quantity, 0));
 
@@ -209,28 +214,124 @@ export async function POST(req: Request): Promise<NextResponse<CreateOrderResult
 
   /* ── Meio de pagamento ── */
 
-  const provider = getPaymentProvider();
-
-  // Boleto ainda não tem provider; cartão exige provider com o método E token
-  // (transparente: sem token não há o que cobrar — provavelmente a Public Key
-  // não está configurada no client).
-  const cartaoDisponivel = typeof provider.createCardCharge === 'function';
-  if (
-    input.paymentMethod === 'boleto' ||
-    (input.paymentMethod === 'card' && (!cartaoDisponivel || !input.cardToken))
-  ) {
+  if (input.paymentMethod === 'boleto') {
+    // Boleto ainda não existe no contrato do backend — recusa elegante, e o
+    // contrato `ok:false` já cobre a UI.
     return NextResponse.json({
       ok: false,
       error: 'Estamos finalizando este meio de pagamento — por enquanto, o Pix garante seu pedido (e com desconto).',
     });
   }
 
-  /* ── Cria o pedido + cobrança ── */
+  if (input.paymentMethod === 'card' && !input.cardToken) {
+    // Cartão sem token = a tokenização no navegador não rodou (chave pública
+    // ausente ou falha na Pagar.me). Não adianta mandar pro backend: ele não
+    // tem como cobrar, e o número do cartão nunca vai trafegar por aqui.
+    return NextResponse.json({
+      ok: false,
+      error: 'Não conseguimos validar seu cartão agora. Tente de novo ou finalize com Pix (com 5% off).',
+    });
+  }
+
+  /* ── O pedido nasce NO BACKEND ── */
+
+  const payload: NewOrderPayload = {
+    customer: input.customer,
+    shippingAddress: input.shippingAddress,
+    shipping: quote,
+    // `sku` é o que a separação usa na loja; enquanto o carrinho não carrega
+    // SKU próprio, o productId é a identidade da peça (mesma escolha do
+    // tracking em `itemsTracked`).
+    items: input.items.map((l) => ({
+      productId: l.productId,
+      sku: l.productId,
+      slug: l.slug,
+      name: l.name,
+      size: l.size,
+      color: l.color,
+      quantity: l.quantity,
+      unitPrice: l.unitPrice,
+    })),
+    couponCode,
+    subtotal,
+    discount,
+    shippingPrice,
+    total,
+    payment: {
+      method: input.paymentMethod,
+      installments: input.paymentMethod === 'card' ? (input.installments ?? 1) : undefined,
+      cardToken: input.cardToken,
+    },
+    tracking: input.tracking,
+  };
+
+  let ack;
+  try {
+    ack = await getOrderStore().create(payload);
+  } catch (err) {
+    if (err instanceof OrderStoreError) {
+      console.error('[checkout] backend recusou/falhou ao criar pedido:', err.message);
+      return NextResponse.json({ ok: false, error: err.publico }, { status: err.status });
+    }
+    console.error('[checkout] falha inesperada ao criar pedido:', err);
+    return NextResponse.json(
+      { ok: false, error: 'Não conseguimos concluir seu pedido agora. Fica tranquila: nada foi cobrado — tente de novo em instantes.' },
+      { status: 502 },
+    );
+  }
+
+  /* ── PIX: QR Code ── */
+
+  let pix: Order['payment']['pix'];
+  if (ack.payment.pix) {
+    // Dois caminhos, os dois válidos: se o backend mandou o QR, usamos o
+    // dele; se mandou só o copia-e-cola, renderizamos aqui em data URI. O QR
+    // e o copia-e-cola nascem do MESMO payload — o que a câmera lê é o que a
+    // cliente cola no app.
+    //
+    // ⚠️ Hoje o backend manda a URL da imagem hospedada pela Pagar.me, não um
+    // data URI. Funciona (o PixPanel usa `<img>` puro), mas faz o QR depender
+    // do CDN deles carregar no navegador da cliente. Se isso virar problema, a
+    // correção é uma linha: ignorar o que não começar com `data:` e gerar
+    // local — o copia-e-cola, que é o caminho crítico, já vem sempre do
+    // backend e não depende de rede nenhuma pra aparecer.
+    let qrCode = ack.payment.pix.qrCode ?? '';
+    if (!qrCode) {
+      try {
+        qrCode = await QRCode.toDataURL(ack.payment.pix.copyPaste, { margin: 1, width: 320 });
+      } catch (err) {
+        // Sem QR a tela ainda funciona pelo copia-e-cola — degradar é melhor
+        // que derrubar um pedido que JÁ EXISTE e já tem cobrança criada.
+        console.error('[checkout] falha ao gerar QR do PIX (segue com copia-e-cola):', err);
+      }
+    }
+    pix = { qrCode, copyPaste: ack.payment.pix.copyPaste, expiresAt: ack.payment.pix.expiresAt };
+  } else if (ack.payment.method === 'pix') {
+    // Pedido PIX sem cobrança é pedido que a cliente não tem como pagar.
+    console.error(`[checkout] backend criou pedido PIX ${ack.id} sem dados de cobrança`);
+    return NextResponse.json(
+      { ok: false, error: 'Não conseguimos gerar seu Pix agora. Tente novamente em instantes.' },
+      { status: 502 },
+    );
+  }
+
+  /**
+   * O `Order` devolvido pra tela é a costura de duas fontes: o que o BACKEND
+   * decidiu (id, número, status, total, cobrança) + o que este BFF já tem em
+   * mãos (cliente, itens, endereço, frete). O backend não repete o que a
+   * requisição acabou de mandar, e não faz sentido pedir de volta.
+   */
+  const totalBackend = ack.total > 0 ? ack.total : total;
+  if (ack.total > 0 && Math.abs(ack.total - total) > 0.01) {
+    // Divergência não derruba a venda (o dono do pedido é o backend), mas
+    // precisa aparecer: é sintoma de tabela de cupom/frete fora de sincronia.
+    console.warn(`[checkout] total divergente — BFF ${total} vs backend ${ack.total} no pedido ${ack.id}`);
+  }
 
   const order: Order = {
-    id: crypto.randomUUID(),
-    number: nextOrderNumber(),
-    status: 'awaiting_payment',
+    id: ack.id,
+    number: ack.number,
+    status: ack.status,
     createdAt: new Date().toISOString(),
     customer: input.customer,
     shippingAddress: input.shippingAddress,
@@ -240,57 +341,15 @@ export async function POST(req: Request): Promise<NextResponse<CreateOrderResult
     discount,
     couponCode,
     shippingPrice,
-    total,
-    payment: { method: input.paymentMethod, installments: input.installments },
-    tracking: input.tracking,
+    total: totalBackend,
+    payment: {
+      method: ack.payment.method,
+      installments: ack.payment.installments ?? payload.payment.installments,
+      pix,
+    },
+    // `tracking` NÃO volta pra fora: o client já tem os próprios sinais, e
+    // devolver economiza um vazamento bobo em log de rede.
   };
 
-  if (input.paymentMethod === 'card') {
-    /* CARTÃO — resposta síncrona: pago ou recusado, sem tela de espera. */
-    try {
-      const cobranca = await provider.createCardCharge!(order, input.cardToken!, input.installments ?? 1);
-      if (cobranca.status === 'refused') {
-        // Recusa NÃO cria pedido: a cliente ajusta o cartão e tenta de novo
-        // sem deixar rastro de pedido morto (e sem furar o rate-limit à toa).
-        return NextResponse.json({ ok: false, error: cobranca.reason ?? 'O cartão não foi autorizado. Tente outro cartão — ou o Pix, que aprova na hora.' });
-      }
-      order.payment.gatewayOrderId = cobranca.gatewayOrderId;
-      await getOrderStore().create(order);
-      // Dinheiro confirmado pelo gateway → o MESMO caminho do webhook marca
-      // pago e dispara o purchase (uma vez, server-side).
-      await confirmPayment(order.id);
-      const pago = await getOrderStore().get(order.id);
-      const { tracking: _t, ...semTracking } = pago ?? order;
-      return NextResponse.json({ ok: true, order: semTracking as Order }, { status: 201 });
-    } catch (err) {
-      console.error('[checkout] falha na cobrança de cartão:', err);
-      return NextResponse.json(
-        { ok: false, error: 'Não conseguimos processar o cartão agora. Tente novamente — ou o Pix, que aprova na hora.' },
-        { status: 502 },
-      );
-    }
-  }
-
-  /* PIX */
-  try {
-    const charge = await provider.createPixCharge(order);
-    // QR e copia-e-cola nascem do MESMO payload — o que a câmera lê é o que
-    // a cliente cola no app.
-    const qrCode = await QRCode.toDataURL(charge.copyPaste, { margin: 1, width: 320 });
-    order.payment.pix = { qrCode, copyPaste: charge.copyPaste, expiresAt: charge.expiresAt };
-    order.payment.gatewayOrderId = charge.gatewayOrderId;
-  } catch (err) {
-    console.error('[checkout] falha ao criar cobrança PIX:', err);
-    return NextResponse.json(
-      { ok: false, error: 'Não conseguimos gerar seu Pix agora. Tente novamente em instantes.' },
-      { status: 502 },
-    );
-  }
-
-  await getOrderStore().create(order);
-
-  // O tracking volta pra fora? Não — o client já tem os próprios sinais, e
-  // devolver economiza um vazamento bobo em log de rede.
-  const { tracking: _tracking, ...semTracking } = order;
-  return NextResponse.json({ ok: true, order: semTracking as Order }, { status: 201 });
+  return NextResponse.json({ ok: true, order }, { status: 201 });
 }

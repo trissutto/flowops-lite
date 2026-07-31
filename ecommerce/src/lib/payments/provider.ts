@@ -1,27 +1,35 @@
 import 'server-only';
 
 /**
- * PROVIDER DE PAGAMENTO — a fronteira entre o pedido e o gateway.
+ * PROVIDER DE PAGAMENTO — FERRAMENTA DE DESENVOLVIMENTO/TESTE.
  *
- * O checkout não sabe quem cobra: pede uma cobrança PIX e recebe copia-e-cola,
- * txid e validade. Trocar de gateway (ou ligar o real) é implementar esta
- * interface e mudar a env `PAYMENT_PROVIDER` — nenhuma rota muda.
+ * ⚠️ ESTE MÓDULO SAIU DO CAMINHO DE PRODUÇÃO NA SPRINT 011.
  *
- * Providers:
- *   'pagarme' — o gateway REAL (decisão do dono 31/07: mesma estrutura do
- *              WordPress atual, checkout transparente). Liga sozinho quando
- *              `PAGARME_SECRET_KEY` existe.
- *   'mock'    — payload EMV real com chave de sandbox + auto-confirm em dev.
- *              Demonstra o fluxo inteiro sem mover um centavo.
- *   'pagbank' — esqueleto. Ver o aviso GRANDE em `PagBankProvider` antes de
- *              pensar em ligar.
+ * Quem cobra de verdade é o BACKEND FlowOps: o pedido nasce em
+ * `POST /public/loja/pedido`, a cobrança na Pagar.me é criada lá (com a conta
+ * já configurada no `PagarmeService`) e o webhook do gateway chega lá. Nenhuma
+ * rota do ecommerce chama `getPaymentProvider()` no fluxo real — ver
+ * `src/lib/orders/store.ts` e `docs/payments.md`.
+ *
+ * Por que continua no repositório em vez de virar `git rm`:
+ *   - `pix-emv.ts` (e o teste dele) gera payload EMV BR Code correto e é
+ *     conhecimento útil que ninguém quer reescrever — conferir um copia-e-cola
+ *     de produção, montar um QR de teste, depurar valor/CRC;
+ *   - o `MockProvider` deixa qualquer pessoa gerar um PIX de mentira sem
+ *     backend rodando, o que é ouro pra mexer na UI do PixPanel;
+ *   - a interface documenta a fronteira caso um dia o ecommerce volte a cobrar
+ *     sozinho (não é o plano — dois sistemas cobrando na mesma conta é a
+ *     receita de confusão que esta sprint eliminou).
+ *
+ * REGRA: nada em `src/app/api/**` deve importar daqui. Se importar, o pedido
+ * voltou a ter dois donos.
  */
 
 import type { Order, OrderStatus } from '@/types/checkout';
-// Imports de valor só dos providers locais. Mock e Pagar.me importam deste
-// arquivo apenas TIPOS — import type é apagado na compilação, sem ciclo.
+// Import de valor só do mock (o PagBank é esqueleto local). O mock importa
+// deste arquivo apenas TIPOS — import type é apagado na compilação, então não
+// há ciclo em runtime.
 import { MockProvider } from './mock';
-import { isPagarmeConfigured, PagarmeProvider } from './pagarme';
 
 export interface PixCharge {
   /** Payload EMV completo — o que a cliente copia pro app do banco. */
@@ -29,28 +37,15 @@ export interface PixCharge {
   txid: string;
   /** ISO — depois disso o pedido expira sem pagamento. */
   expiresAt: string;
-  /** Id da order NO GATEWAY — é a chave do checkStatus e da conciliação. */
-  gatewayOrderId?: string;
-}
-
-/** Cartão responde na hora: pago ou recusado (recusa é fluxo, não exceção). */
-export interface CardChargeResult {
-  status: 'paid' | 'refused';
-  gatewayOrderId: string;
-  /** Mensagem ELEGANTE pra UI quando recusado. */
-  reason?: string;
 }
 
 export interface PaymentProvider {
   /** Nome curto pra log — nunca exibido pra cliente. */
   readonly id: string;
   createPixCharge(order: Order): Promise<PixCharge>;
-  /** Cobrança de cartão com token (transparente). Ausente = método desligado. */
-  createCardCharge?(order: Order, cardToken: string, installments: number): Promise<CardChargeResult>;
   /**
-   * Consulta o status no gateway (opcional — gateway com webhook confiável
-   * pode viver sem poll). Deve devolver o status JÁ refletido no pedido:
-   * se o provider confirmar pagamento, ele mesmo chama `confirmPayment`.
+   * Consulta o status no gateway (opcional). Ninguém implementa hoje: o
+   * status do pedido é do backend, e o poll do PixPanel pergunta a ELE.
    */
   checkStatus?(order: Order): Promise<OrderStatus>;
 }
@@ -77,17 +72,8 @@ class PagBankProvider implements PaymentProvider {
 }
 
 export function getPaymentProvider(): PaymentProvider {
-  // Sem PAYMENT_PROVIDER explícita, a presença da chave decide: configurou a
-  // Pagar.me → ela assume. `PAYMENT_PROVIDER=mock` força o mock mesmo com
-  // chave (útil pra testar o fluxo sem cobrar ninguém).
-  const escolhido = process.env.PAYMENT_PROVIDER ?? (isPagarmeConfigured() ? 'pagarme' : 'mock');
+  const escolhido = process.env.PAYMENT_PROVIDER ?? 'mock';
 
-  if (escolhido === 'pagarme') {
-    if (!isPagarmeConfigured()) {
-      throw new Error('PAYMENT_PROVIDER=pagarme exige a env PAGARME_SECRET_KEY (sk_test_* ou sk_*).');
-    }
-    return new PagarmeProvider();
-  }
   if (escolhido === 'pagbank') return new PagBankProvider();
 
   return new MockProvider();

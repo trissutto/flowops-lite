@@ -379,9 +379,11 @@ model Order {
   id              String   @id @default(uuid())
   wcOrderId       Int      @unique @map("wc_order_id")
   wcOrderNumber   String?  @map("wc_order_number")
-  // Origem do pedido: 'site' (WooCommerce) ou 'live' (Live Commerce).
+  // Origem do pedido: 'site' (WooCommerce), 'live' (Live Commerce) ou
+  // 'loja' (e-commerce novo, sprint 011 — nasce no Postgres do Flow).
   // Pedido da LIVE entra no MESMO trilho do site (decisão do dono, 12/07):
   // wcOrderId sintético (900M+), sem sync com WooCommerce (guards por source).
+  // Pedido da LOJA idem, na faixa 950M+ (longe do WC e da live).
   source          String   @default("site")
   liveCartId      String?  @unique @map("live_cart_id") // LivePdvCart.id de origem
   status          String   // pending, routing, awaiting_stock, separating, ready, shipped, delivered, cancelled
@@ -416,6 +418,27 @@ model Order {
   sellerName      String?   @map("seller_name") // cache denormalizado pra relatório não depender de JOIN
   sellerAssignedAt DateTime? @map("seller_assigned_at")
   sellerAssignedBy String?   @map("seller_assigned_by") // email do usuário matriz que atribuiu
+  // ── E-COMMERCE NOVO (source='loja', sprint 011) ──────────────────────
+  // JSON em String é a convenção da casa (mesma de shippingAddress e
+  // routingResult): o pedido é 1 linha, não vale espalhar em 3 tabelas que
+  // ninguém mais lê. Todos opcionais — pedido do WC/live nunca preenche.
+  //   paymentInfo  → { method, installments, gatewayOrderId, gatewayChargeId,
+  //                    pix: { copyPaste, qrCodeUrl, expiresAt } }
+  //                  (dado de gateway; NUNCA sai no GET público)
+  //   checkoutInfo → snapshot comercial do checkout: cotação de frete
+  //                  escolhida, subtotal, desconto, cupom, frete e o detalhe
+  //                  por item (productId/slug/cor/tamanho) que OrderItem não
+  //                  guarda. É o que permite reexibir o pedido pra cliente e
+  //                  montar o evento purchase server-side sem inventar dado.
+  //   trackingInfo → { anonymous_id, session_id, fbp, fbc } — sinais do
+  //                  navegador pro Meta CAPI/GA4 (o purchase dispara
+  //                  server-side depois do pagamento confirmado).
+  paymentInfo     String?  @map("payment_info") @db.Text
+  checkoutInfo    String?  @map("checkout_info") @db.Text
+  trackingInfo    String?  @map("tracking_info") @db.Text
+  // Quando o dinheiro entrou de verdade (webhook/aprovação do cartão).
+  // Distinto de createdAt: o PIX pode ser pago horas depois.
+  paidAt          DateTime? @map("paid_at")
   createdAt       DateTime @default(now()) @map("created_at") // data que chegou no FlowOps
   updatedAt       DateTime @updatedAt @map("updated_at")
 

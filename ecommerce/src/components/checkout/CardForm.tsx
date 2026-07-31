@@ -18,43 +18,20 @@ import {
 } from './masks';
 
 /**
- * Formulário de cartão — CHECKOUT TRANSPARENTE Pagar.me (o modelo do plugin
- * do WordPress que a loja já usa hoje).
+ * Formulário de cartão — validação COMPLETA no client (Luhn, bandeira,
+ * validade, CVV) e TOKENIZAÇÃO no navegador.
  *
- * ⚠️ PCI: o número do cartão NUNCA passa pelo nosso servidor. O submit chama
- * a API de tokens da Pagar.me DIRETO DO NAVEGADOR, com a Public Key (pk_) —
- * volta um token de uso único, e é SÓ ele que segue no pedido. Nosso servidor
- * vê `tok_...`, cobra com ele e joga fora. `CreateOrderInput` não tem campo
- * de número de cartão de propósito.
+ * ⚠️ PCI-DSS, a regra que não se negocia: número, CVV e validade NUNCA saem
+ * deste navegador. Eles vão direto pra API de tokens da Pagar.me (chave
+ * PÚBLICA, `NEXT_PUBLIC_PAGARME_PUBLIC_KEY`), que devolve um `card_token`. Só
+ * o token viaja pro nosso BFF e, dele, pro backend FlowOps — que cobra. Nem o
+ * servidor do site nem o backend jamais veem o PAN.
  *
- * Sem `NEXT_PUBLIC_PAGARME_PUBLIC_KEY` configurada, o form segue validando
- * mas envia sem token — e o server responde com a mensagem elegante de método
- * indisponível (comportamento de antes do gateway).
+ * Sem a chave pública configurada o form segue funcionando (validação e UX
+ * intactas) mas não gera token: o BFF recusa cartão sem token com a mensagem
+ * elegante de "estamos finalizando este meio de pagamento". Melhor isso do que
+ * uma tela que finge cobrar.
  */
-
-const PAGARME_PK = process.env.NEXT_PUBLIC_PAGARME_PUBLIC_KEY;
-
-/** Tokeniza o cartão navegador→Pagar.me. Lança em falha de rede/recusa. */
-async function tokenizeCard(values: { number: string; holder: string; expiry: string; cvv: string }): Promise<string> {
-  const [mes, ano] = values.expiry.split('/');
-  const res = await fetch(`https://api.pagar.me/core/v5/tokens?appId=${PAGARME_PK}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      type: 'card',
-      card: {
-        number: onlyDigits(values.number),
-        holder_name: values.holder.trim(),
-        exp_month: Number(mes),
-        exp_year: Number(`20${ano}`),
-        cvv: values.cvv,
-      },
-    }),
-  });
-  const json = (await res.json().catch(() => null)) as { id?: string } | null;
-  if (!res.ok || !json?.id) throw new Error('tokenização recusada');
-  return json.id;
-}
 
 const schema = z.object({
   number: z.string().refine(isValidCardNumber, 'Confira o número do cartão.'),
@@ -68,6 +45,9 @@ type FormValues = z.infer<typeof schema>;
 
 export const MAX_PARCELAS = 12;
 
+/** Endpoint público de tokenização da Pagar.me (v5) — autentica pela chave `pk_`. */
+const PAGARME_TOKENS_URL = 'https://api.pagar.me/core/v5/tokens';
+
 interface CardFormProps {
   /** Total estimado do pedido (o server recalcula — isto é só exibição). */
   total: number;
@@ -75,8 +55,6 @@ interface CardFormProps {
 }
 
 export function CardForm({ total, onDone }: CardFormProps) {
-  const [tokenizing, setTokenizing] = useState(false);
-  const [tokenError, setTokenError] = useState<string | null>(null);
   const {
     register,
     handleSubmit,
@@ -88,6 +66,9 @@ export function CardForm({ total, onDone }: CardFormProps) {
     defaultValues: { installments: '1' },
     mode: 'onTouched',
   });
+
+  const [tokenizando, setTokenizando] = useState(false);
+  const [erroToken, setErroToken] = useState<string | null>(null);
 
   const brand = detectCardBrand(watch('number') ?? '');
 
@@ -101,30 +82,65 @@ export function CardForm({ total, onDone }: CardFormProps) {
     };
   });
 
-  async function submit(values: FormValues) {
-    setTokenError(null);
+  /**
+   * Troca os dados do cartão por um token. O `fetch` vai do NAVEGADOR direto
+   * pra Pagar.me — não passa pelo nosso servidor de propósito (é literalmente
+   * o ponto do PCI). A chave é pública: ela só cria token, não movimenta nada.
+   */
+  async function tokenizar(values: FormValues): Promise<string> {
+    const publicKey = process.env.NEXT_PUBLIC_PAGARME_PUBLIC_KEY;
+    if (!publicKey) throw new Error('sem chave pública');
 
-    // Sem Public Key não há como tokenizar — segue sem token e o server
-    // responde com a mensagem de método indisponível.
-    if (!PAGARME_PK) {
-      onDone({ method: 'card', installments: Number(values.installments) });
+    const [mm, yy] = values.expiry.split('/');
+    const res = await fetch(`${PAGARME_TOKENS_URL}?appId=${encodeURIComponent(publicKey)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        type: 'card',
+        card: {
+          number: onlyDigits(values.number),
+          holder_name: values.holder.trim(),
+          exp_month: Number(mm),
+          exp_year: Number(yy),
+          cvv: values.cvv,
+        },
+      }),
+    });
+
+    if (!res.ok) throw new Error(`pagarme respondeu ${res.status}`);
+    const data = (await res.json()) as { id?: string };
+    if (!data?.id) throw new Error('resposta sem token');
+    return data.id;
+  }
+
+  async function submit(values: FormValues) {
+    setErroToken(null);
+    const installments = Number(values.installments);
+
+    // Sem chave configurada: segue sem token. O server recusa com elegância —
+    // e a cliente não fica presa num botão que não faz nada.
+    if (!process.env.NEXT_PUBLIC_PAGARME_PUBLIC_KEY) {
+      onDone({ method: 'card', installments });
       return;
     }
 
-    setTokenizing(true);
+    setTokenizando(true);
     try {
-      // Navegador → Pagar.me. O número NÃO sai daqui pra nenhum outro lugar.
-      const cardToken = await tokenizeCard(values);
-      onDone({ method: 'card', installments: Number(values.installments), cardToken });
-    } catch {
-      setTokenError('Não conseguimos validar o cartão. Confira os dados e tente de novo — ou escolha o Pix, que aprova na hora.');
+      const cardToken = await tokenizar(values);
+      onDone({ method: 'card', installments, cardToken });
+    } catch (err) {
+      // Log sem NENHUM dado do cartão — só o motivo técnico.
+      console.error('[checkout] tokenização do cartão falhou:', err instanceof Error ? err.message : err);
+      setErroToken(
+        'Não conseguimos validar esse cartão agora. Confira os dados e tente de novo — ou finalize com Pix (com 5% off).',
+      );
     } finally {
-      setTokenizing(false);
+      setTokenizando(false);
     }
   }
 
   return (
-    <form onSubmit={handleSubmit((v) => void submit(v))} noValidate className="flex flex-col gap-5">
+    <form onSubmit={handleSubmit(submit)} noValidate className="flex flex-col gap-5">
       <Input
         label="Número do cartão"
         inputMode="numeric"
@@ -175,15 +191,15 @@ export function CardForm({ total, onDone }: CardFormProps) {
         {...register('installments')}
       />
 
-      {tokenError && (
-        <p role="alert" className="rounded-sm border border-secondary/30 bg-secondary/5 px-4 py-3 text-small text-secondary">
-          {tokenError}
+      {erroToken && (
+        <p role="alert" className="text-small text-danger">
+          {erroToken}
         </p>
       )}
 
       <div className="pt-1">
-        <Button type="submit" block className="sm:w-auto" disabled={tokenizing}>
-          {tokenizing ? 'Validando cartão…' : 'Continuar para a revisão'}
+        <Button type="submit" block className="sm:w-auto" disabled={tokenizando}>
+          {tokenizando ? 'Validando cartão…' : 'Continuar para a revisão'}
         </Button>
       </div>
     </form>

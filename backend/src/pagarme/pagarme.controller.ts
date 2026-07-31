@@ -14,14 +14,19 @@ import {
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { PagarmeService } from './pagarme.service';
 import { CrediarioBaixaService } from '../crediarios/crediario-baixa.service';
-import { Inject, forwardRef } from '@nestjs/common';
+import { LojaOrdersService } from '../loja-orders/loja-orders.service';
+import { Inject, forwardRef, Logger } from '@nestjs/common';
 
 @Controller('pagarme')
 export class PagarmeController {
+  private readonly logger = new Logger(PagarmeController.name);
+
   constructor(
     private readonly svc: PagarmeService,
     @Inject(forwardRef(() => CrediarioBaixaService))
     private readonly crediarioBaixa: CrediarioBaixaService,
+    @Inject(forwardRef(() => LojaOrdersService))
+    private readonly lojaOrders: LojaOrdersService,
   ) {}
 
   @UseGuards(JwtAuthGuard)
@@ -272,19 +277,47 @@ export class PagarmeController {
     const rawBody = JSON.stringify(body);
     const sig = signature || signature256;
     const result = await this.svc.handleWebhook(body, rawBody, sig);
+    const eventType = String(body?.type || '');
+    const pagou = eventType === 'order.paid' || eventType === 'charge.paid';
+
     // FIX PIX-LINK: se webhook reportou paid, dispara baixa Giga automaticamente.
     // Antes desse fix, baixas via PIX-LINK ficavam pending — webhook só marcava
     // PagarmePayment=paid mas nunca chamava confirmBaixaPix → Wincred não atualizava.
-    if (result.ok && result.saleId) {
-      const eventType = String(body?.type || '');
-      if (eventType === 'order.paid' || eventType === 'charge.paid') {
+    if (result.ok && result.saleId && pagou) {
+      try {
+        await this.crediarioBaixa.confirmBaixaPixIfExists(result.saleId);
+      } catch (e: any) {
+        // Não bloqueia ack do webhook — só loga
+      }
+    }
+
+    // ── E-COMMERCE NOVO (sprint 011) ──────────────────────────────────
+    // Pedido da loja (Order source='loja') confirma o pagamento por aqui:
+    // grava paidAt, joga o pedido em 'processing' (= cai na tela Pedidos &
+    // Separação pro roteamento) e avisa o site pro purchase server-side.
+    //
+    // Duas chaves porque as duas existem: o PIX é criado pelo próprio
+    // createPixCharge (metadata leva `saleId` = Order.id, e o PagarmePayment
+    // devolve esse saleId aqui), e o cartão é montado pelo loja-orders com
+    // `flowops_order_id` no metadata. `confirmarPagamento` é idempotente e
+    // ignora em silêncio id que não é pedido da loja (venda de PDV, live...).
+    //
+    // TRY/CATCH LARGO DE PROPÓSITO: nada aqui pode impedir o ack do webhook —
+    // Pagar.me reenfileira em erro e o crediário/PDV acima já rodou.
+    if (pagou) {
+      const idsCandidatos = [result.saleId, body?.data?.metadata?.flowops_order_id].filter(
+        (v): v is string => typeof v === 'string' && !!v,
+      );
+      for (const id of Array.from(new Set(idsCandidatos))) {
         try {
-          await this.crediarioBaixa.confirmBaixaPixIfExists(result.saleId);
+          const r = await this.lojaOrders.confirmarPagamento(id);
+          if (r.ok) break; // achou o pedido da loja — não tenta o outro id
         } catch (e: any) {
-          // Não bloqueia ack do webhook — só loga
+          this.logger.warn(`[pagarme] confirmação do pedido da loja falhou (${id}): ${e?.message || e}`);
         }
       }
     }
+
     return { received: true, ...result };
   }
 

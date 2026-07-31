@@ -1,93 +1,142 @@
 import 'server-only';
 
 /**
- * CONFIRMAÇÃO DE PAGAMENTO — o ÚNICO caminho que marca um pedido como pago.
+ * PURCHASE A PARTIR DO WEBHOOK DO BACKEND (Sprint 011).
  *
- * Webhook do gateway, auto-confirm do mock, futura conciliação manual: todos
- * chamam esta função. Concentrar aqui garante que:
- *   1. a idempotência mora num lugar só (pedido já pago → no-op — webhook
- *      repete, e repete MESMO);
- *   2. o `purchase` dispara exatamente uma vez por venda, e SÓ com pagamento
- *      confirmado — a regra da spec que o tracking inteiro protege.
+ * ── POR QUE ESTE ARQUIVO SOBREVIVEU (e o que mudou) ─────────────────────────
+ * O antigo `confirmPayment(orderId)` marcava o pedido como pago no store local
+ * E emitia o `purchase`. A primeira metade morreu: quem confirma pagamento
+ * agora é o backend FlowOps, dono do pedido no Postgres — o ecommerce não tem
+ * mais estado nenhum pra transicionar.
+ *
+ * A segunda metade continua valendo, e por isso o arquivo não virou lixo: o
+ * `purchase` é o evento mais delicado do sistema (é ele que alimenta ROAS de
+ * Meta e GA4), e ele merece UM lugar só onde é montado. Se essa montagem
+ * morasse dentro da rota do webhook, o dia em que existir um segundo gatilho
+ * (conciliação manual, reprocessamento de fila) alguém ia copiar e colar a
+ * lógica — e purchase copiado e colado é purchase duplicado.
+ *
+ * Então: virou um HELPER que traduz o corpo do webhook em `trackPurchase`.
+ * Zero acesso a store, zero decisão sobre estado de pedido. Ver docs/purchase.md.
  */
 
-import { getOrderStore } from '@/lib/orders/store';
 import { trackPurchase } from '@/lib/tracking/server/track-server';
 import type { TrackedItem } from '@/lib/tracking/types';
-import type { Order } from '@/types/checkout';
+
+/** Item como o backend manda no webhook (vocabulário do tracking, não do carrinho). */
+export interface WebhookPurchaseItem {
+  product_id: string;
+  sku?: string;
+  name: string;
+  cor?: string;
+  tamanho?: string;
+  quantidade: number;
+  valor: number;
+}
+
+/** O bloco `purchase` do corpo do webhook backend → ecommerce. */
+export interface WebhookPurchase {
+  number: string;
+  total: number;
+  coupon?: string;
+  payment_method: string;
+  items: WebhookPurchaseItem[];
+  customer: { email?: string; phone?: string; cpf?: string };
+  tracking?: {
+    anonymous_id?: string;
+    session_id?: string;
+    fbp?: string;
+    fbc?: string;
+    attribution?: Record<string, string | undefined>;
+  };
+  /**
+   * Slug da loja quando o pedido é retirada — liga a venda online ao acerto da
+   * loja física. Fora do contrato mínimo: se o backend mandar, usamos; se não,
+   * o purchase sai sem `loja` (perde-se o corte por unidade, não a venda).
+   */
+  store_slug?: string;
+}
 
 export interface ConfirmResult {
   ok: boolean;
-  /** true = já estava pago; a chamada foi um no-op (idempotência). */
-  already?: boolean;
   reason?: string;
 }
 
-/** CartLine → TrackedItem: o vocabulário do pedido vira o do tracking. */
-function toTrackedItems(order: Order): TrackedItem[] {
-  return order.items.map((line) => ({
-    product_id: line.productId,
-    name: line.name,
-    cor: line.color,
-    tamanho: line.size,
-    quantidade: line.quantity,
-    valor: line.unitPrice,
+/**
+ * `card` no vocabulário do checkout é `credit_card` no do tracking (GA4/Meta).
+ * Tolerante a já vir traduzido — webhook de backend em evolução manda os dois.
+ */
+function metodoPurchase(method: string): 'pix' | 'credit_card' | 'boleto' {
+  if (method === 'pix') return 'pix';
+  if (method === 'boleto') return 'boleto';
+  return 'credit_card';
+}
+
+function toTrackedItems(items: WebhookPurchaseItem[]): TrackedItem[] {
+  return items.map((i) => ({
+    product_id: i.product_id,
+    sku: i.sku,
+    name: i.name,
+    cor: i.cor,
+    tamanho: i.tamanho,
+    quantidade: i.quantidade,
+    valor: i.valor,
   }));
 }
 
-function metodoPurchase(method: Order['payment']['method']): 'pix' | 'credit_card' | 'boleto' {
-  return method === 'card' ? 'credit_card' : method;
-}
-
-export async function confirmPayment(orderId: string): Promise<ConfirmResult> {
-  const store = getOrderStore();
-  const order = await store.get(orderId);
-
-  if (!order) return { ok: false, reason: 'pedido não encontrado' };
-  if (order.status === 'paid') return { ok: true, already: true };
-  if (order.status === 'cancelled') return { ok: false, reason: 'pedido cancelado não pode ser pago' };
-  // `expired` NÃO recusa de propósito: PIX pago no último segundo chega ao
-  // webhook depois do nosso relógio expirar o pedido. Dinheiro entrou → pago.
-
-  const pago = await store.markPaid(orderId);
-  if (!pago) return { ok: false, reason: 'pedido sumiu entre o get e o markPaid' };
-
-  // ── purchase — emitido AQUI e em nenhum outro lugar ──────────────────────
-  // Falha no tracking NUNCA desfaz o pagamento: o pedido está pago, a Meta
-  // que espere o retry. Por isso o try/catch engole e só loga.
+/**
+ * Emite o purchase de um pedido JÁ CONFIRMADO pelo backend.
+ *
+ * Não valida pagamento — quem valida é o `trackPurchase` (recusa qualquer
+ * coisa que não seja `status: 'paid'`) e, antes dele, o backend, que só chama
+ * este webhook quando o dinheiro entrou.
+ *
+ * Idempotência em duas camadas: o `event_id` é derivado do `transaction_id`
+ * (retry manda o mesmo id, a Meta conta uma venda só) e a rota do webhook tem
+ * um guard em memória pra nem chegar aqui numa rajada de retry.
+ */
+export async function emitirPurchaseConfirmado(
+  orderId: string,
+  paidAt: string,
+  purchase: WebhookPurchase,
+): Promise<ConfirmResult> {
   try {
-    await trackPurchase({
-      transaction_id: pago.id,
-      value: pago.total,
-      items: toTrackedItems(pago),
-      cupom: pago.couponCode,
+    const resultado = await trackPurchase({
+      // O UUID do pedido é a chave de idempotência — o mesmo dos dois lados.
+      transaction_id: orderId,
+      value: purchase.total,
+      items: toTrackedItems(purchase.items ?? []),
+      cupom: purchase.coupon,
       context: {
         // Sem tracking capturado no checkout, um id derivado do pedido mantém
         // o evento válido — a atribuição se perde, a venda não.
-        anonymous_id: pago.tracking?.anonymous_id ?? `order-${pago.id}`,
-        session_id: pago.tracking?.session_id,
-        attribution: pago.tracking?.attribution,
-        // Retirada em loja liga a venda online ao acerto da loja física.
-        loja: pago.shipping.storeSlug ?? null,
+        anonymous_id: purchase.tracking?.anonymous_id ?? `order-${orderId}`,
+        session_id: purchase.tracking?.session_id,
+        attribution: purchase.tracking?.attribution,
+        loja: purchase.store_slug ?? null,
       },
       user: {
-        email: pago.customer.email,
-        phone: pago.customer.phone,
+        email: purchase.customer?.email,
+        phone: purchase.customer?.phone,
         // CPF como external_id: identifica a PESSOA entre pedidos e canais.
         // Pode ir porque `trackPurchase` → meta-capi faz SHA-256 de TODO
         // external_id antes de sair do servidor — o CPF nunca viaja em claro.
-        external_id: pago.customer.cpf,
+        external_id: purchase.customer?.cpf,
       },
-      meta: { fbp: pago.tracking?.fbp, fbc: pago.tracking?.fbc },
+      meta: { fbp: purchase.tracking?.fbp, fbc: purchase.tracking?.fbc },
       payment: {
         status: 'paid',
-        method: metodoPurchase(pago.payment.method),
-        confirmed_at: pago.paidAt ?? new Date().toISOString(),
+        method: metodoPurchase(purchase.payment_method),
+        confirmed_at: paidAt || new Date().toISOString(),
       },
     });
-  } catch (err) {
-    console.error('[orders] purchase não despachado (pedido segue pago):', err);
-  }
 
-  return { ok: true };
+    return { ok: resultado.ok, reason: resultado.reason };
+  } catch (err) {
+    // Falha no tracking NUNCA vira erro pro backend: o pedido está pago no
+    // Postgres, e devolver erro só faria o backend reenfileirar um retry que
+    // não conserta nada. A Meta que espere o próximo ciclo.
+    console.error('[orders] purchase não despachado (pedido segue pago):', err);
+    return { ok: false, reason: 'falha ao despachar purchase' };
+  }
 }

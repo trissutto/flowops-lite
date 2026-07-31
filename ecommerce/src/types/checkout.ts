@@ -1,5 +1,9 @@
 /**
- * CONTRATO DO CHECKOUT — Sprints 009/010.
+ * CONTRATO DO CHECKOUT — Sprints 009/010, revisado na 011.
+ *
+ * Na 011 o pedido passou a nascer no backend FlowOps (Postgres). Estes tipos
+ * continuam sendo o contrato ENTRE O NAVEGADOR E O BFF (`/api/checkout/*`); o
+ * contrato do BFF com o backend mora em `src/lib/orders/store.ts`.
  *
  * Tipos compartilhados entre carrinho, checkout, APIs de pedido e pagamento.
  * Como em `types/index.ts`: preços SEMPRE em reais (number), nunca centavos.
@@ -85,8 +89,9 @@ export type OrderStatus =
   | 'expired';
 
 export interface Order {
+  /** UUID do Order no Postgres do FlowOps — quem manda é o backend (sprint 011). */
   id: string;
-  /** Número curto exibido pra cliente (LP-000123). */
+  /** Número curto exibido pra cliente, gerado pelo backend. */
   number: string;
   status: OrderStatus;
   createdAt: string;
@@ -105,8 +110,6 @@ export interface Order {
     /** Dados do PIX quando method = pix. */
     pix?: { qrCode: string; copyPaste: string; expiresAt: string };
     installments?: number;
-    /** Id da order no gateway (Pagar.me) — chave do poll e da conciliação. */
-    gatewayOrderId?: string;
   };
   /** Sinais de tracking capturados no checkout — ver docs/purchase.md. */
   tracking?: {
@@ -131,9 +134,9 @@ export interface CreateOrderInput {
   paymentMethod: PaymentMethod;
   installments?: number;
   /**
-   * Token de uso único gerado pelo NAVEGADOR direto na Pagar.me (checkout
-   * transparente). O número do cartão nunca passa por aqui — é o token que
-   * viaja, e ele só serve pra UMA cobrança.
+   * Token do cartão gerado NO NAVEGADOR pelo SDK do gateway. É o único dado de
+   * cartão que existe fora do navegador: número, CVV e validade nunca chegam a
+   * servidor nenhum — nem o nosso BFF, nem o backend FlowOps (PCI-DSS).
    */
   cardToken?: string;
   tracking?: Order['tracking'];
