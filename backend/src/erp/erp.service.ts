@@ -1,9 +1,10 @@
-﻿import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+﻿import { Injectable, Logger, Optional, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'crypto';
 import * as mysql from 'mysql2/promise';
 import { StockEntry } from '../routing/types';
 import { PrismaService } from '../prisma/prisma.service';
+import { SombraService } from './sombra.service';
 
 /**
  * Cliente para o MySQL do ERP gigasistemas21 (WinCred).
@@ -28,6 +29,10 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly config: ConfigService,
     private readonly prismaFlow: PrismaService,
+    // Modo sombra da migração pro Postgres (GIGA_SOMBRA=1). Opcional de
+    // propósito: se não estiver disponível, o ErpService funciona igual —
+    // a comparação simplesmente não acontece.
+    @Optional() private readonly sombra?: SombraService,
   ) {}
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -6791,7 +6796,41 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    *   2. Match com LIKE (cobre variaÃ§Ãµes tipo "BEGE" vs "XADREZ BEGE")
    *   3. Match sÃ³ por REF + tamanho (ignora cor â€” fallback)
    */
+  /**
+   * PILOTO DA FASE 1 DA SAÍDA DO GIGA (31/07) — MODO SOMBRA.
+   *
+   * Quem responde continua sendo o GIGA, sempre. Com `GIGA_SOMBRA=1`, a versão
+   * Postgres roda em paralelo e as duas respostas são comparadas; divergência
+   * vira log e placar em `GET /erp/sombra`.
+   *
+   * Escolhido como piloto por ser leitura pura, de alto volume (12 pontos só
+   * no realinhamento) e com o dado já nos espelhos curados. Se a consulta nova
+   * errar, ninguém percebe — ela não responde nada ainda.
+   *
+   * Vira de vez só depois de dias com 100% de igualdade. Ver
+   * docs/PLANO-SAIDA-GIGA-NATIVO.md.
+   */
   async findCodigoByRefCorTam(
+    refCode: string,
+    cor: string | null,
+    tamanho: string | null,
+  ): Promise<string | null> {
+    const doGiga = await this.findCodigoByRefCorTamGiga(refCode, cor, tamanho);
+
+    // `void`: não espera pela comparação. O usuário já tem a resposta, e a
+    // validação não pode custar latência nem derrubar a tela se falhar.
+    if (this.sombra?.ligado) {
+      void this.sombra.comparar(
+        'findCodigoByRefCorTam',
+        { refCode, cor, tamanho },
+        doGiga,
+        () => this.sombra!.findCodigoByRefCorTam(refCode, cor, tamanho),
+      );
+    }
+    return doGiga;
+  }
+
+  private async findCodigoByRefCorTamGiga(
     refCode: string,
     cor: string | null,
     tamanho: string | null,
