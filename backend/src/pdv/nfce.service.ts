@@ -317,9 +317,9 @@ export class NfceService {
     const docDest = (sale.customerCpf || '').replace(/\D/g, '');
     let dest = '';
     if (docDest.length === 11) {
-      dest = `<dest><CPF>${docDest}</CPF><xNome>${this.esc(sale.customerName || 'CONSUMIDOR')}</xNome><indIEDest>9</indIEDest></dest>`;
+      dest = `<dest><CPF>${docDest}</CPF><xNome>${this.xmlTexto(sale.customerName, 60, 'CONSUMIDOR')}</xNome><indIEDest>9</indIEDest></dest>`;
     } else if (docDest.length === 14) {
-      dest = `<dest><CNPJ>${docDest}</CNPJ><xNome>${this.esc(sale.customerName || 'CONSUMIDOR')}</xNome><indIEDest>9</indIEDest></dest>`;
+      dest = `<dest><CNPJ>${docDest}</CNPJ><xNome>${this.xmlTexto(sale.customerName, 60, 'CONSUMIDOR')}</xNome><indIEDest>9</indIEDest></dest>`;
     } else if (docDest.length > 0) {
       this.logger.warn(`[nfce] customerCpf com ${docDest.length} digitos invalidos: ${docDest}. Emitindo sem destinatario.`);
     }
@@ -502,9 +502,9 @@ export class NfceService {
         return `
     <det nItem="${nItem}">
       <prod>
-        <cProd>${this.esc(cProd)}</cProd>
+        <cProd>${this.xmlTexto(cProd, 60, 'SEM-CODIGO')}</cProd>
         <cEAN>${cEAN}</cEAN>
-        <xProd>${this.esc(xProd)}</xProd>
+        <xProd>${this.xmlTexto(xProd, 120, 'PRODUTO')}</xProd>
         <NCM>${ncm}</NCM>
         <CFOP>${cfop}</CFOP>
         <uCom>UN</uCom>
@@ -710,6 +710,34 @@ export class NfceService {
     return `<infNFeSupl><qrCode><![CDATA[${qrUrl}]]></qrCode><urlChave>${urlChave}</urlChave></infNFeSupl>`;
   }
 
+  /**
+   * TEXTO SEGURO PRO SCHEMA (cStat 225 — Falha no Schema XML).
+   *
+   * O `esc()` sozinho só escapa & < > " ' e não protege contra as duas coisas
+   * que mais derrubam cupom por falha de schema:
+   *
+   *   1. campo passando do MaxLength — xProd 120, cProd 60, xNome 60. Uma
+   *      descrição longa colada no cadastro derruba o LOTE inteiro.
+   *   2. caractere de controle (quebra de linha, tab, 0x00–0x1F, 0x7F) vindo
+   *      de texto copiado — XML 1.0 não aceita e o parser da SEFAZ recusa.
+   *
+   * Também colapsa espaço repetido e devolve o fallback quando sobra string
+   * vazia (o schema exige minLength 1 nesses campos).
+   *
+   * Filtra por charCode de propósito: escape unicode em regex já se perdeu em
+   * edição automatizada e virou byte NUL no arquivo.
+   */
+  private xmlTexto(valor: any, max: number, fallback = 'ITEM'): string {
+    const semControle = Array.from(String(valor ?? ''))
+      .map((c) => {
+        const code = c.charCodeAt(0);
+        return code < 32 || code === 127 ? ' ' : c;
+      })
+      .join('');
+    const limpo = semControle.replace(/\s+/g, ' ').trim().slice(0, max).trim();
+    return this.esc(limpo || fallback);
+  }
+
   private esc(s: string): string {
     return String(s || '')
       .replace(/&/g, '&amp;')
@@ -908,6 +936,14 @@ export class NfceService {
       this.logger.error(
         `[nfce] SEFAZ rejeitou: cStat=${transmit.cStat} ${transmit.xMotivo}`,
       );
+      // 225 = falha de SCHEMA. Sem o XML na mão, achar o campo torto vira
+      // adivinhação (foi o que aconteceu em Jundiaí 31/07). É documento
+      // fiscal da própria loja — nada de terceiro no log.
+      if (String(transmit.cStat) === '225') {
+        this.logger.error(
+          `[nfce] 225 schema · venda=${sale.id} loja=${sale.storeCode} · XML: ${xmlAssinado}`,
+        );
+      }
       await (this.prisma as any).pdvSale.update({
         where: { id: sale.id },
         data: {
