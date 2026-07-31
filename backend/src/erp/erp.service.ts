@@ -1291,6 +1291,35 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * que não existirem (robusto a nomes diferentes). PROPAGA o erro (com retry).
    */
   /** Espelho de estoque do Giga: CODIGO x LOJA x ESTOQUE (só > 0) pro mirror. */
+  /**
+   * ESTOQUE COMPLETO DO GIGA — inclui ZERO e NEGATIVO.
+   *
+   * O `getGigaEstoque()` filtra `ESTOQUE > 0` porque serve pro sync (linha
+   * zerada não precisa ir pro espelho). Pra CONFERIR Flow × Giga isso não
+   * serve: negativo é justamente o que a gente quer enxergar.
+   */
+  async getEstoqueGigaCompleto(): Promise<Array<{ codigo: string; loja: string; estoque: number }>> {
+    if (!this.pool) return [];
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>({
+        sql: `SELECT CODIGO AS codigo, LOJA AS loja, SUM(ESTOQUE) AS estoque
+                FROM estoque
+               GROUP BY CODIGO, LOJA`,
+        timeout: 300_000,
+      } as any);
+      return (rows as any[])
+        .map((r) => ({
+          codigo: String(r.codigo ?? '').trim(),
+          loja: String(r.loja ?? '').trim(),
+          estoque: Number(r.estoque) || 0,
+        }))
+        .filter((r) => r.codigo && r.loja);
+    } catch (e) {
+      this.logger.error(`getEstoqueGigaCompleto falhou: ${(e as Error).message}`);
+      return [];
+    }
+  }
+
   async getGigaEstoque(): Promise<Array<{ codigo: string; loja: string; estoque: number }>> {
     if (!this.pool) return [];
     try {
