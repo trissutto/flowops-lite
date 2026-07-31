@@ -1,18 +1,16 @@
-<#
-  RESTORE NO MYSQL NOVO — passo A4 do RUNBOOK-SAIDA-KINGHOST.md
-
-  Restaura o dump no MySQL provisionado no Railway (ou onde for o destino novo).
-
-  Rode PRIMEIRO com o dump de ENSAIO, ainda hoje. O restore de ensaio é o que
-  descobre problema de charset, engine indisponível ou permissão — e descobrir
-  isso amanhã à noite, com as lojas fechadas esperando, é o pior momento
-  possível.
-
-  USO:
-    .\03-restore.ps1 -Arquivo .\saida\giga-ensaio-20260731-2200.sql `
-                     -DestHost <host> -DestPort <porta> `
-                     -DestUser <user> -DestDatabase <db>
-#>
+# RESTORE NO MYSQL NOVO - passo A4 do RUNBOOK-SAIDA-KINGHOST.md
+#
+# ARQUIVO EM ASCII PURO (sem acento): PowerShell 5.1 le .ps1 como ANSI e acento
+# em UTF-8 sem BOM quebra o parser. Nao acrescente acento aqui.
+#
+# Rode PRIMEIRO com o dump de ENSAIO. O restore de ensaio e o que descobre
+# problema de charset, engine indisponivel ou permissao - e descobrir isso na
+# janela da noite, com as lojas fechadas esperando, e o pior momento possivel.
+#
+# USO:
+#   powershell -ExecutionPolicy Bypass -File .\03-restore.ps1 `
+#     -Arquivo .\saida\giga-ensaio-20260731-2200.sql `
+#     -DestHost HOST -DestPort PORTA -DestUser USUARIO -DestDatabase BANCO
 
 param(
   [Parameter(Mandatory = $true)][string]$Arquivo,
@@ -29,48 +27,48 @@ if (-not (Test-Path $Arquivo)) {
   exit 1
 }
 
-# Mesma checagem do 02: dump truncado parece válido até a metade.
+# Mesma checagem do 02: dump truncado parece valido ate a metade.
 if ((Get-Content $Arquivo -Tail 1) -notmatch 'Dump completed') {
-  Write-Host "O dump nao termina com 'Dump completed' — arquivo truncado." -ForegroundColor Red
-  Write-Host "Restaurar isso deixa o banco pela metade sem avisar. Abortado." -ForegroundColor Red
+  Write-Host 'O dump nao termina com Dump completed - arquivo truncado.' -ForegroundColor Red
+  Write-Host 'Restaurar isso deixa o banco pela metade sem avisar. Abortado.' -ForegroundColor Red
   exit 1
 }
 
 if (-not (Get-Command mysql -ErrorAction SilentlyContinue)) {
-  Write-Host "mysql.exe nao encontrado no PATH." -ForegroundColor Red
+  Write-Host 'mysql.exe nao encontrado no PATH.' -ForegroundColor Red
   exit 1
 }
 
-$senha = Read-Host -AsSecureString "Senha do MySQL de DESTINO"
-$senhaPlain = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
-  [Runtime.InteropServices.Marshal]::SecureStringToBSTR($senha))
+$senhaSegura = Read-Host -AsSecureString 'Senha do MySQL de DESTINO'
+$bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($senhaSegura)
+$senha = [Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
 
 $mb = [math]::Round((Get-Item $Arquivo).Length / 1MB, 1)
 Write-Host "Restaurando $mb MB em $DestHost/$DestDatabase" -ForegroundColor Cyan
-Write-Host "(um banco grande leva MAIS tempo pra restaurar do que levou pra dumpar —"
-Write-Host " o restore reconstroi indice linha a linha)"
+Write-Host '(restore costuma demorar MAIS que o dump: reconstroi indice linha a linha)'
 
 $inicio = Get-Date
 
-# O database precisa existir antes. utf8mb4 + collation geral: o Giga tem
-# acento em descrição de produto e nome de cliente, e charset errado no
-# destino transforma isso em lixo silenciosamente.
+# utf8mb4: o Giga tem acento em descricao de produto e nome de cliente.
+# Charset errado no destino transforma isso em lixo silenciosamente.
 $criar = "CREATE DATABASE IF NOT EXISTS ``$DestDatabase`` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;"
-& mysql --host=$DestHost --port=$DestPort --user=$DestUser --password=$senhaPlain --execute=$criar
-if ($LASTEXITCODE -ne 0) { Write-Host "Falha ao criar o database." -ForegroundColor Red; exit 1 }
+& mysql "--host=$DestHost" "--port=$DestPort" "--user=$DestUser" "--password=$senha" "--execute=$criar"
+if ($LASTEXITCODE -ne 0) {
+  Write-Host 'Falha ao criar o database no destino.' -ForegroundColor Red
+  exit 1
+}
 
-# Get-Content | mysql funciona, mas em arquivo grande o PowerShell processa
-# linha a linha e fica LENTO. `cmd /c <` usa redirecionamento nativo.
-$cmd = "mysql --host=$DestHost --port=$DestPort --user=$DestUser --password=$senhaPlain --default-character-set=utf8mb4 $DestDatabase < `"$Arquivo`""
+# cmd /c com redirecionamento nativo: Get-Content | mysql funciona, mas em
+# arquivo grande o PowerShell processa linha a linha e fica lentissimo.
+$cmd = "mysql --host=$DestHost --port=$DestPort --user=$DestUser --password=$senha --default-character-set=utf8mb4 $DestDatabase < `"$Arquivo`""
 & cmd /c $cmd
-
 if ($LASTEXITCODE -ne 0) {
   Write-Host "Restore falhou (exit $LASTEXITCODE)." -ForegroundColor Red
   exit 1
 }
 
-$dur = (Get-Date) - $inicio
-Write-Host ""
-Write-Host "Restore concluido em $([math]::Round($dur.TotalMinutes,1)) min" -ForegroundColor Green
-Write-Host "PROXIMO PASSO OBRIGATORIO: .\04-verificar.ps1 — sem conferir contagem," -ForegroundColor Yellow
-Write-Host "'restaurou sem erro' nao significa 'restaurou tudo'." -ForegroundColor Yellow
+$dur = [math]::Round(((Get-Date) - $inicio).TotalMinutes, 1)
+Write-Host ''
+Write-Host "Restore concluido em $dur min" -ForegroundColor Green
+Write-Host 'PROXIMO PASSO OBRIGATORIO: .\04-verificar.ps1' -ForegroundColor Yellow
+Write-Host 'Sem conferir contagem, "restaurou sem erro" nao significa "restaurou tudo".' -ForegroundColor Yellow
