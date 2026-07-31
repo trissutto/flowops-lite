@@ -53,6 +53,17 @@ export class NfeController {
    * pré-postagem. Idempotente: já gerada → devolve a mesma (reimpressão).
    * POST /nfe/venda/:saleId/etiqueta · { servico?: 'PAC' | 'SEDEX' }
    */
+  /**
+   * Status da NF-e da venda — o modal "nota grande" checa ISSO ao abrir:
+   * já autorizada → mostra o verde na hora, sem pedir os dados de novo
+   * (dono 31/07: clicava NF-e numa venda já emitida e via o formulário vazio).
+   */
+  @Get('venda/:saleId')
+  statusVenda(@Req() req: any, @Param('saleId') saleId: string) {
+    this.requireVenda(req);
+    return this.transfer.findVendaDoc(saleId);
+  }
+
   @Post('venda/:saleId/etiqueta')
   etiquetaVenda(
     @Req() req: any,

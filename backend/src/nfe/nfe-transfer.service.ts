@@ -1641,6 +1641,15 @@ export class NfeTransferService {
     return { ok: autorizada, doc: this.publicDoc(updated), cStat: res.cStat, xMotivo: res.xMotivo };
   }
 
+  /** NF-e autorizada de uma VENDA (modal da nota grande checa antes de pedir os dados). */
+  async findVendaDoc(saleId: string) {
+    const doc = await this.prisma.nfeDoc.findFirst({
+      where: { shipmentId: `venda:${saleId}`, status: 'authorized' },
+      orderBy: { createdAt: 'desc' } as any,
+    });
+    return { jaEmitida: !!doc, doc: doc ? this.publicDoc(doc) : null };
+  }
+
   /** Última NF-e de envio de um pick-order (Reimprimir DANFE na loja). */
   async findEnvioDoc(pickOrderId: string) {
     return this.prisma.nfeDoc.findFirst({
