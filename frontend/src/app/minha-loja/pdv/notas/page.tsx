@@ -185,6 +185,12 @@ export default function NotasEmitidasPage() {
       nome: r.customerName || '',
       endereco: '', numero: '', bairro: '', cidade: '', uf: '', cep: '', codMunicipio: '',
     });
+    // Já tem NF-e autorizada? Mostra o VERDE direto, sem formulário — emitir
+    // de novo nem é opção (o backend devolveria a mesma, mas a tela pedia
+    // endereço à toa e parecia que precisava refazer).
+    api<any>(`/nfe/venda/${r.id}`)
+      .then((res) => { if (res?.jaEmitida && res.doc) setVOkDoc(res.doc); })
+      .catch(() => { /* sem NF-e ainda — segue o formulário normal */ });
   }
   // CEP → ViaCEP → preenche endereço + código IBGE do município (a NF-e exige)
   async function buscarCep(cep: string) {
@@ -841,7 +847,7 @@ export default function NotasEmitidasPage() {
 
             {vOkDoc ? (
               <div className="rounded-lg bg-emerald-50 border border-emerald-200 p-3 text-sm text-emerald-800">
-                ✅ NF-e nº <b>{vOkDoc.numero}</b> autorizada!
+                ✅ Essa venda JÁ TEM a NF-e nº <b>{vOkDoc.numero}</b> autorizada — não precisa emitir de novo.
                 <button
                   onClick={() => abrirDanfeVenda(vOkDoc.id, vOkDoc.numero)}
                   className="mt-2 block px-4 py-2 rounded-lg bg-indigo-600 text-white font-bold hover:bg-indigo-700"
