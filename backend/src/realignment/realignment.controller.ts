@@ -563,12 +563,42 @@ export class RealignmentController {
    * chave na pré-postagem). POST /realignment/shipments/:id/gerar-envio · origem
    */
   @Post('shipments/:id/gerar-envio')
-  gerarEnvioRemessa(@Param('id') id: string, @Req() req: any) {
+  gerarEnvioRemessa(@Param('id') id: string, @Body() body: { forcar?: boolean }, @Req() req: any) {
     const role = req?.user?.role;
     const storeId = req?.user?.storeId;
     const userId = req?.user?.id || req?.user?.sub || null;
-    if (role !== 'store' || !storeId) throw new ForbiddenException('Apenas loja origem');
-    return this.remessaEnvio.gerarEnvio(id, storeId, userId);
+    // RETAGUARDA (dono 31/07): admin/operator geram a etiqueta de QUALQUER
+    // remessa, sem estar logado na loja de origem — e com `forcar` passam por
+    // cima da regra das 10 peças quando quiserem postar mesmo assim.
+    const ehRetaguarda = role === 'admin' || role === 'operator';
+    if (!ehRetaguarda && (role !== 'store' || !storeId)) {
+      throw new ForbiddenException('Apenas loja origem ou retaguarda');
+    }
+    return this.remessaEnvio.gerarEnvio(id, ehRetaguarda ? null : storeId, userId, {
+      forcar: ehRetaguarda && !!body?.forcar,
+    });
+  }
+
+  /**
+   * REFAZER a etiqueta: descarta a pré-postagem antiga e cria outra com o
+   * endereço atual. POST /realignment/shipments/:id/refazer-envio · retaguarda.
+   */
+  @Post('shipments/:id/refazer-envio')
+  refazerEnvioRemessa(@Param('id') id: string, @Req() req: any) {
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'operator') throw new ForbiddenException('Apenas retaguarda');
+    return this.remessaEnvio.refazerEnvio(id, req?.user?.id || req?.user?.sub || null);
+  }
+
+  /**
+   * Endereço que a etiqueta usa por loja + colisões (duas lojas no mesmo
+   * endereço = caixa indo pro lugar errado). GET /realignment/enderecos-etiqueta
+   */
+  @Get('enderecos-etiqueta')
+  enderecosEtiqueta(@Req() req: any) {
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'operator') throw new ForbiddenException('Apenas retaguarda');
+    return this.remessaEnvio.enderecosEtiqueta();
   }
 
   /**
@@ -598,13 +628,24 @@ export class RealignmentController {
     return this.shipment.setTransportMode(id, String(body?.mode || '').trim());
   }
 
-  /** Documentos do envio da remessa num PDF único (etiqueta + DANFE). */
+  /**
+   * Documentos do envio da remessa num PDF único (etiqueta + DANFE).
+   * `?somenteEtiqueta=1` devolve só a etiqueta da transportadora.
+   * Loja (origem/destino) ou retaguarda.
+   */
   @Get('shipments/:id/docs-envio')
-  docsEnvioRemessa(@Param('id') id: string, @Req() req: any) {
+  docsEnvioRemessa(
+    @Param('id') id: string,
+    @Query('somenteEtiqueta') somenteEtiqueta: string | undefined,
+    @Req() req: any,
+  ) {
     const role = req?.user?.role;
     const storeId = req?.user?.storeId;
-    if (role !== 'store' || !storeId) throw new ForbiddenException('Apenas loja');
-    return this.remessaEnvio.docsEnvio(id, storeId);
+    const ehRetaguarda = role === 'admin' || role === 'operator';
+    if (!ehRetaguarda && (role !== 'store' || !storeId)) throw new ForbiddenException('Apenas loja ou retaguarda');
+    return this.remessaEnvio.docsEnvio(id, ehRetaguarda ? null : storeId, {
+      somenteEtiqueta: somenteEtiqueta === '1' || somenteEtiqueta === 'true',
+    });
   }
 
   /**

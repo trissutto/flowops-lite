@@ -191,7 +191,10 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         const lojaRaw = String(a.storeCode || '').trim();
         const loja2 = /^\d{1}$/.test(lojaRaw) ? lojaRaw.padStart(2, '0') : lojaRaw;
         const lojas = Array.from(new Set([lojaRaw, loja2, lojaRaw.replace(/^0+/, '') || lojaRaw]));
-        const novo = Math.max(0, Number(a.newStock) || 0);
+        // NAO clampa em 0 (31/07): quando a venda levava o Giga a -1, o Flow
+        // recebia 0 e o negativo ficava INVISIVEL na tela — ninguem sabia que a
+        // loja devia peca. Espelho tem que espelhar, inclusive o que incomoda.
+        const novo = Number(a.newStock) || 0;
         const variants = this.skuVariants(String(a.sku || '').trim());
         if (!variants.length || !lojas.length) continue;
 
@@ -1291,6 +1294,35 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * que não existirem (robusto a nomes diferentes). PROPAGA o erro (com retry).
    */
   /** Espelho de estoque do Giga: CODIGO x LOJA x ESTOQUE (só > 0) pro mirror. */
+  /**
+   * ESTOQUE COMPLETO DO GIGA — inclui ZERO e NEGATIVO.
+   *
+   * O `getGigaEstoque()` agrega por SKU/loja e descarta só a linha ZERADA
+   * (ausência já significa zero). Pra CONFERIR Flow × Giga a gente quer a
+   * tabela crua, linha a linha, inclusive os zeros.
+   */
+  async getEstoqueGigaCompleto(): Promise<Array<{ codigo: string; loja: string; estoque: number }>> {
+    if (!this.pool) return [];
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>({
+        sql: `SELECT CODIGO AS codigo, LOJA AS loja, SUM(ESTOQUE) AS estoque
+                FROM estoque
+               GROUP BY CODIGO, LOJA`,
+        timeout: 300_000,
+      } as any);
+      return (rows as any[])
+        .map((r) => ({
+          codigo: String(r.codigo ?? '').trim(),
+          loja: String(r.loja ?? '').trim(),
+          estoque: Number(r.estoque) || 0,
+        }))
+        .filter((r) => r.codigo && r.loja);
+    } catch (e) {
+      this.logger.error(`getEstoqueGigaCompleto falhou: ${(e as Error).message}`);
+      return [];
+    }
+  }
+
   async getGigaEstoque(): Promise<Array<{ codigo: string; loja: string; estoque: number }>> {
     if (!this.pool) return [];
     try {
@@ -1298,7 +1330,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       const [rows] = await this.pool.query<mysql.RowDataPacket[]>({
         sql: `SELECT CODIGO AS codigo, LOJA AS loja, SUM(ESTOQUE) AS estoque
            FROM estoque
-          WHERE ESTOQUE > 0
+          WHERE ESTOQUE <> 0
           GROUP BY CODIGO, LOJA`,
         timeout: 300_000,
       } as any);
@@ -1308,7 +1340,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           loja: String(r.loja ?? '').trim(),
           estoque: Number(r.estoque) || 0,
         }))
-        .filter((r) => r.codigo && r.loja && r.estoque > 0);
+        .filter((r) => r.codigo && r.loja && r.estoque !== 0);
     } catch (e) {
       this.logger.error(`getGigaEstoque falhou: ${(e as Error).message}`);
       return [];
@@ -5323,6 +5355,55 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    *
    * Retorna columns + rows + meta (executionMs, truncated).
    */
+  /**
+   * LEITURA COMPLETA PAGINADA (31/07) — pro sync que NAO pode truncar.
+   *
+   * O padrao antigo era `... LIMIT 50000` numa tacada so. Quando a tabela
+   * passou do limite, o resto sumiu CALADO: o crediario tinha 72.831 parcelas
+   * em aberto e o espelho guardava 50.000 — 22.831 parcelas (R$ 2,3 mi)
+   * simplesmente nao existiam pro Flow, e ninguem via erro nenhum.
+   *
+   * Aqui a leitura vai em paginas ate acabar. `teto` existe só como
+   * paraquedas contra loop infinito — quando ele e atingido isso volta em
+   * `truncado: true`, pra quem chamou poder GRITAR em vez de seguir achando
+   * que leu tudo.
+   *
+   * `orderBy` tem que ser uma coluna UNICA e estavel — OFFSET sem ordem
+   * definida repete e pula linha.
+   */
+  async readAllPages(
+    baseSql: string,
+    opts: { orderBy: string; batch?: number; teto?: number; timeoutMs?: number },
+  ): Promise<{ rows: any[]; paginas: number; truncado: boolean }> {
+    if (!this.pool) throw new Error('Pool ERP nao inicializado');
+    const batch = Math.min(Math.max(1000, opts.batch ?? 10_000), 20_000);
+    const teto = opts.teto ?? 500_000;
+    const timeout = opts.timeoutMs ?? 120_000;
+    const rows: any[] = [];
+    let paginas = 0;
+    let offset = 0;
+    for (;;) {
+      const [page] = await this.pool.query<mysql.RowDataPacket[]>({
+        sql: `${baseSql} ORDER BY ${opts.orderBy} LIMIT ${batch} OFFSET ${offset}`,
+        timeout,
+      } as any);
+      const lote = page as any[];
+      paginas++;
+      rows.push(...lote);
+      if (lote.length < batch) break;
+      offset += batch;
+      if (rows.length >= teto) {
+        this.logger.error(
+          `[readAllPages] TETO de ${teto} atingido — leitura INCOMPLETA: ${baseSql.slice(0, 120)}`,
+        );
+        return { rows, paginas, truncado: true };
+      }
+      // Respira entre paginas: o pool do Giga e o mesmo que atende a loja.
+      await new Promise((r) => setTimeout(r, 40));
+    }
+    return { rows, paginas, truncado: false };
+  }
+
   async runReadOnly(
     sqlRaw: string,
     opts: { maxRows?: number; timeoutMs?: number } = {},

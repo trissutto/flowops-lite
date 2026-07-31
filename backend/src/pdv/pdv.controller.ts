@@ -339,6 +339,43 @@ export class PdvController {
    *        q (busca: número, CPF, nome),
    *        limit (default 100, max 500)
    */
+  /**
+   * GET /pdv/sales/:id/nfce/xml — XML da NFC-e dessa venda (só admin).
+   *
+   * Existe por causa do cStat 225 ("Falha no Schema XML"): a SEFAZ diz QUE
+   * falhou, nunca ONDE. O XML assinado já era gravado em `nfceXml` na
+   * rejeição, mas só dava pra ler indo no log do Railway — na prática,
+   * ninguém lia, e cada 225 virava adivinhação. Agora sai num clique.
+   */
+  @Get('sales/:id/nfce/xml')
+  async nfceXml(@Req() req: any, @Param('id') id: string) {
+    // Admin OU a própria loja (bug 31/07: o MODO MASTER impersona a loja —
+    // o token vira role 'store' — e o botão da tela de notas devolvia 403
+    // "Apenas admin" justamente pra quem mais precisa dele). A loja só
+    // enxerga venda DELA; o XML é a nota fiscal que ela mesma emitiu.
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'store') throw new ForbiddenException('Apenas admin ou loja');
+    const sale: any = await (this.prisma as any).pdvSale.findUnique({
+      where: { id },
+      select: {
+        id: true, storeCode: true, total: true, nfceXml: true,
+        nfceStatus: true, nfceMotivo: true, nfceNumber: true,
+      },
+    });
+    if (!sale) throw new NotFoundException('Venda não encontrada');
+    if (role === 'store' && String(req?.user?.storeCode || '') !== String(sale.storeCode || '')) {
+      throw new ForbiddenException('Venda de outra loja');
+    }
+    if (!sale.nfceXml) {
+      throw new BadRequestException('Essa venda não tem XML guardado (nota nunca chegou a ser assinada).');
+    }
+    return {
+      saleId: sale.id, loja: sale.storeCode, total: sale.total,
+      status: sale.nfceStatus, motivo: sale.nfceMotivo,
+      numero: sale.nfceNumber, xml: sale.nfceXml,
+    };
+  }
+
   @Get('nfces')
   async listNfces(
     @Req() req: any,

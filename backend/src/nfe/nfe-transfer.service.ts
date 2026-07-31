@@ -1017,6 +1017,15 @@ export class NfeTransferService {
     return (Math.round(v * 100) / 100).toFixed(2);
   }
 
+  /** vUnCom/vUnTrib aceitam ate 10 casas (TDec_1110). Usa a precisao toda
+   *  quando o valor nao fecha em 2 casas — e o que faz qCom x vUnCom bater
+   *  com o vProd liquido (ex.: 79,95 / 2 pecas = 39,975). */
+  private moneyUn(v: number): string {
+    const n = Number(v) || 0;
+    if (Math.abs(Math.round(n * 100) / 100 - n) < 1e-9) return n.toFixed(2);
+    return n.toFixed(10).replace(/0+$/, '');
+  }
+
   private buildEnder(e: StoreFiscal['ender']): string {
     return (
       `<xLgr>${this.esc(e.logradouro)}</xLgr>` +
@@ -1033,9 +1042,26 @@ export class NfeTransferService {
   }
 
   private esc(s: string): string {
-    return String(s || '')
-      // caractere de controle (lixo de cadastro) é XML inválido → fora
-      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
+    // O TString da SEFAZ so aceita U+0020..U+00FF — travessao (—), aspas
+    // curvas e afins derrubam a nota com 225 (mesmo bug do cupom, 31/07:
+    // "FRETE — ENVIO"). Translitera o que tem equivalente e joga fora o resto.
+    const TRANSLITERA: Record<string, string> = {
+      '–': '-', '—': '-', '―': '-',
+      '‘': "'", '’': "'", '‚': "'",
+      '“': '"', '”': '"', '„': '"',
+      '…': '...', '•': '-', ' ': ' ', '™': 'TM',
+    };
+    const dentroDoCharset = Array.from(String(s || ''))
+      .map((c) => {
+        if (TRANSLITERA[c] !== undefined) return TRANSLITERA[c];
+        const code = c.charCodeAt(0);
+        if (code < 32 || code === 127) return '';
+        if (code > 0xff) return ' ';
+        return c;
+      })
+      .join('')
+      .replace(/ {2,}/g, ' ');
+    return dentroDoCharset
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
@@ -1405,13 +1431,28 @@ export class NfeTransferService {
     // tem IE cadastrada → interestadual vira 6108 (consumidor final + DIFAL).
     const interestadual = origem.ender.uf !== uf;
     const { cfop, natOp: natOpRegra } = cfopVenda(origem.ender.uf, uf, false);
-    const items = (sale.items as any[]).map((it) => ({
+    // FRETE vai no campo vFrete da nota (dono 31/07), NAO como linha de
+    // produto — na NF-e mod 55 o campo existe pra isso. So o CUPOM (mod 65)
+    // mantem a linha, porque a NFC-e PROIBE frete destacado (modFrete=9
+    // obrigatorio no schema da 65).
+    const ehFrete = (it: any) => String(it.ref || it.sku || '').trim().toUpperCase() === 'FRETE';
+    const vFrete = Math.round(
+      (sale.items as any[]).filter(ehFrete).reduce((s2, it) => s2 + (Number(it.total) || 0), 0) * 100,
+    ) / 100;
+    const itensProduto = (sale.items as any[]).filter((it) => !ehFrete(it));
+    if (!itensProduto.length) throw new BadRequestException('Venda sem itens de produto (só frete) — nada a faturar na NF-e.');
+    const items = itensProduto.map((it) => ({
       sku: String(it.sku || '').trim(),
       ean: this.gtinValido(String(it.ean || '').trim()),
       xProd: String(it.descricao || it.sku).trim().slice(0, 120),
       ncm: this.normNcm(it.ncm, it.sku, []),
       cfop, qty: it.qty || 1,
-      vUn: Math.round((it.precoUnit || 0) * 100) / 100,
+      // vUn LIQUIDO (total/qty), NAO o precoUnit cheio (rejeicao 31/07:
+      // "Valor do Produto difere do produto Valor Unitario ... e Quantidade"):
+      // item com desconto tinha vUnCom=159,90 e vProd=79,95 — a SEFAZ exige
+      // vProd = qCom x vUnCom. A unidade fica em precisao alta (ate 10 casas
+      // no vUnCom, moneyUn) pra fechar mesmo quando total/qty nao e exato.
+      vUn: (Number(it.total) || 0) / (it.qty || 1),
       vProd: Math.round((it.total || 0) * 100) / 100,
     }));
     const valorTotal = items.reduce((s, i) => s + i.vProd, 0);
@@ -1426,7 +1467,7 @@ export class NfeTransferService {
       data: {
         shipmentId: linkId, fromStoreCode: sale.storeCode, toStoreCode: sale.storeCode,
         modelo: '55', serie, numero, cNF: '', chave: '', tpAmb, natOp, cfop,
-        valorTotalCents: Math.round(valorTotal * 100), status: 'pending',
+        valorTotalCents: Math.round((valorTotal + vFrete) * 100), status: 'pending',
         emittedByUserId: opts.userId ?? null,
       },
     });
@@ -1439,7 +1480,7 @@ export class NfeTransferService {
       const dhEmi = this.dhEmiNow();
       cNF = crypto.randomInt(10_000_000, 99_999_999).toString();
       chave = this.buildChave({ cUF, cnpj: origem.cnpj, serie, numero, cNF, dataEmissao: new Date() });
-      const xml = this.buildVendaXml({ chave, cUF, cNF, serie, numero, dhEmi, tpAmb, natOp, cfop, origem, dest, interestadual, items, valorTotal, saleRef: String(sale.id).slice(0, 8) });
+      const xml = this.buildVendaXml({ chave, cUF, cNF, serie, numero, dhEmi, tpAmb, natOp, cfop, origem, dest, interestadual, items, valorTotal, vFrete, saleRef: String(sale.id).slice(0, 8) });
       const xmlMin = xml.replace(/>\s+</g, '><').trim();
       let xmlAssinado: string;
       try {
@@ -1468,6 +1509,18 @@ export class NfeTransferService {
         erro: autorizada ? null : res.xMotivo || res.error || 'Rejeitada',
       },
     });
+    if (autorizada) {
+      // A tela de notas mostra o status do CUPOM — sem isso a linha seguia
+      // "REJEITADA" com a NF-e já autorizada (caso real 31/07, nota 19 de
+      // Suzano). 'substituida_nfe' vira o selo "NF-e EMITIDA" na lista.
+      await (this.prisma as any).pdvSale.update({
+        where: { id: saleId },
+        data: {
+          nfceStatus: 'substituida_nfe',
+          nfceMotivo: `NF-e ${numero} (nota grande) autorizada no lugar do cupom`,
+        },
+      }).catch(() => null);
+    }
     return { ok: autorizada, doc: this.publicDoc(updated), cStat: res.cStat, xMotivo: res.xMotivo };
   }
 
@@ -1588,6 +1641,15 @@ export class NfeTransferService {
     return { ok: autorizada, doc: this.publicDoc(updated), cStat: res.cStat, xMotivo: res.xMotivo };
   }
 
+  /** NF-e autorizada de uma VENDA (modal da nota grande checa antes de pedir os dados). */
+  async findVendaDoc(saleId: string) {
+    const doc = await this.prisma.nfeDoc.findFirst({
+      where: { shipmentId: `venda:${saleId}`, status: 'authorized' },
+      orderBy: { createdAt: 'desc' } as any,
+    });
+    return { jaEmitida: !!doc, doc: doc ? this.publicDoc(doc) : null };
+  }
+
   /** Última NF-e de envio de um pick-order (Reimprimir DANFE na loja). */
   async findEnvioDoc(pickOrderId: string) {
     return this.prisma.nfeDoc.findFirst({
@@ -1607,6 +1669,8 @@ export class NfeTransferService {
     destIE?: string;
     items: Array<{ sku: string; ean: string; xProd: string; ncm: string; cfop: string; qty: number; vUn: number; vProd: number }>;
     valorTotal: number; saleRef: string;
+    /** Frete cobrado da cliente — sai no vFrete (item 1 + ICMSTot), nunca como linha. */
+    vFrete?: number;
   }): string {
     const homolog = p.tpAmb === '2';
     const destNome = homolog ? HOMOLOG_FRASE : (p.dest.nome || 'CONSUMIDOR');
@@ -1655,20 +1719,27 @@ export class NfeTransferService {
     let totPIS = 0;
     let totCOFINS = 0;
     const ibTot = { vBC: 0, vIBSUF: 0, vIBSMun: 0, vCBS: 0 };
+    const freteNota = Math.round((p.vFrete || 0) * 100) / 100;
     const det = p.items
       .map((it, idx) => {
         const xProd = homolog ? HOMOLOG_FRASE : this.xProdNota(it.xProd);
+        // O rateio do frete e todo no PRIMEIRO item (a soma dos vFrete de
+        // item tem que bater com o do ICMSTot — num item so, bate sempre).
+        const freteItem = idx === 0 ? freteNota : 0;
         const prod =
           `<prod><cProd>${this.esc(it.sku)}</cProd><cEAN>${it.ean}</cEAN><xProd>${this.esc(xProd)}</xProd>` +
           `<NCM>${it.ncm}</NCM><CFOP>${it.cfop}</CFOP><uCom>UN</uCom><qCom>${it.qty.toFixed(4)}</qCom>` +
-          `<vUnCom>${this.money(it.vUn)}</vUnCom><vProd>${this.money(it.vProd)}</vProd>` +
+          `<vUnCom>${this.moneyUn(it.vUn)}</vUnCom><vProd>${this.money(it.vProd)}</vProd>` +
           `<cEANTrib>${it.ean}</cEANTrib><uTrib>UN</uTrib><qTrib>${it.qty.toFixed(4)}</qTrib>` +
-          `<vUnTrib>${this.money(it.vUn)}</vUnTrib><indTot>1</indTot></prod>`;
+          `<vUnTrib>${this.moneyUn(it.vUn)}</vUnTrib>` +
+          (freteItem > 0 ? `<vFrete>${this.money(freteItem)}</vFrete>` : '') +
+          `<indTot>1</indTot></prod>`;
         let icms: string;
         let icmsUfDest = '';
         if (crt3) {
           const pIcms = p.interestadual ? aliqInter : aliqInterna;
-          const vBC = Math.round(it.vProd * 100) / 100;
+          // Frete integra a base do ICMS (art. 13 LC 87/96)
+          const vBC = Math.round((it.vProd + freteItem) * 100) / 100;
           const vIcms = Math.round(vBC * pIcms) / 100;
           totBC += vBC;
           totICMS += vIcms;
@@ -1690,7 +1761,7 @@ export class NfeTransferService {
           // Simples Nacional — CSOSN 102 (tributada, sem crédito), igual à NFC-e.
           icms = `<ICMS><ICMSSN102><orig>0</orig><CSOSN>102</CSOSN></ICMSSN102></ICMS>`;
         }
-        const vBCItem = Math.round(it.vProd * 100) / 100;
+        const vBCItem = Math.round((it.vProd + freteItem) * 100) / 100;
         const vPisItem = crt3 ? Math.round(vBCItem * pPIS) / 100 : 0;
         const vCofItem = crt3 ? Math.round(vBCItem * pCOFINS) / 100 : 0;
         totPIS += vPisItem;
@@ -1711,6 +1782,7 @@ export class NfeTransferService {
       .join('');
 
     const vTot = this.money(p.valorTotal);
+    const vNF = this.money(p.valorTotal + freteNota);
     // ICMSTot: os campos do DIFAL (vFCPUFDest/vICMSUFDest/vICMSUFRemet) entram
     // logo após vICMSDeson quando a partilha existe.
     const difalTot = temDifal
@@ -1720,12 +1792,14 @@ export class NfeTransferService {
       `<total><ICMSTot><vBC>${this.money(totBC)}</vBC><vICMS>${this.money(totICMS)}</vICMS><vICMSDeson>0.00</vICMSDeson>` +
       difalTot +
       `<vFCP>0.00</vFCP><vBCST>0.00</vBCST><vST>0.00</vST><vFCPST>0.00</vFCPST><vFCPSTRet>0.00</vFCPSTRet>` +
-      `<vProd>${vTot}</vProd><vFrete>0.00</vFrete><vSeg>0.00</vSeg><vDesc>0.00</vDesc><vII>0.00</vII>` +
-      `<vIPI>0.00</vIPI><vIPIDevol>0.00</vIPIDevol><vPIS>${this.money(totPIS)}</vPIS><vCOFINS>${this.money(totCOFINS)}</vCOFINS><vOutro>0.00</vOutro><vNF>${vTot}</vNF></ICMSTot>${this.ibscbsTot(ib, ibTot, vTot)}</total>`;
+      `<vProd>${vTot}</vProd><vFrete>${this.money(freteNota)}</vFrete><vSeg>0.00</vSeg><vDesc>0.00</vDesc><vII>0.00</vII>` +
+      `<vIPI>0.00</vIPI><vIPIDevol>0.00</vIPIDevol><vPIS>${this.money(totPIS)}</vPIS><vCOFINS>${this.money(totCOFINS)}</vCOFINS><vOutro>0.00</vOutro><vNF>${vNF}</vNF></ICMSTot>${this.ibscbsTot(ib, ibTot, vNF)}</total>`;
 
-    const transp = `<transp><modFrete>9</modFrete></transp>`;
+    // Com frete, modFrete=0 (emitente contrata os Correios e repassa) — 9
+    // ("sem transporte") com vFrete > 0 e rejeicao na regra de validacao.
+    const transp = `<transp><modFrete>${freteNota > 0 ? '0' : '9'}</modFrete></transp>`;
     // cStat 441: tPag 99 (outros) exige a descrição <xPag> junto.
-    const pag = `<pag><detPag><tPag>99</tPag><xPag>OUTROS</xPag><vPag>${vTot}</vPag></detPag></pag>`;
+    const pag = `<pag><detPag><tPag>99</tPag><xPag>OUTROS</xPag><vPag>${vNF}</vPag></detPag></pag>`;
     const cpl = crt3
       ? `Venda ref ${p.saleRef}.`
       : `Venda ref ${p.saleRef}. DOCUMENTO EMITIDO POR ME OU EPP OPTANTE PELO SIMPLES NACIONAL.`;

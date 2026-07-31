@@ -6,6 +6,7 @@ import { JwtAuthGuard } from '../auth/jwt.guard';
 import { NfeTransferService } from './nfe-transfer.service';
 import { NfeSequenceService } from './nfe-sequence.service';
 import { DanfePdfService } from './danfe-pdf.service';
+import { VendaEtiquetaService } from './venda-etiqueta.service';
 
 /**
  * /nfe — emissão de NF-e modelo 55 (transferência entre lojas). Matriz-only.
@@ -18,6 +19,7 @@ export class NfeController {
     private readonly transfer: NfeTransferService,
     private readonly seq: NfeSequenceService,
     private readonly danfe: DanfePdfService,
+    private readonly vendaEtiqueta: VendaEtiquetaService,
   ) {}
 
   private requireMatriz(req: any) {
@@ -43,6 +45,38 @@ export class NfeController {
     if (!['admin', 'operator', 'store'].includes(role)) {
       throw new ForbiddenException('Sem permissão pra emitir NF-e de venda');
     }
+  }
+
+  /**
+   * ETIQUETA da venda online (Correios/Mais Envios). Exige NF-e autorizada —
+   * o destinatário sai do <dest> da própria nota e a chave vai na
+   * pré-postagem. Idempotente: já gerada → devolve a mesma (reimpressão).
+   * POST /nfe/venda/:saleId/etiqueta · { servico?: 'PAC' | 'SEDEX' }
+   */
+  /**
+   * Status da NF-e da venda — o modal "nota grande" checa ISSO ao abrir:
+   * já autorizada → mostra o verde na hora, sem pedir os dados de novo
+   * (dono 31/07: clicava NF-e numa venda já emitida e via o formulário vazio).
+   */
+  @Get('venda/:saleId')
+  statusVenda(@Req() req: any, @Param('saleId') saleId: string) {
+    this.requireVenda(req);
+    return this.transfer.findVendaDoc(saleId);
+  }
+
+  @Post('venda/:saleId/etiqueta')
+  etiquetaVenda(
+    @Req() req: any,
+    @Param('saleId') saleId: string,
+    @Body() body: { servico?: 'PAC' | 'SEDEX' },
+  ) {
+    this.requireVenda(req);
+    const role = req?.user?.role;
+    return this.vendaEtiqueta.gerar(saleId, {
+      servico: body?.servico,
+      lojaPermitida: role === 'store' ? String(req?.user?.storeCode || '') : null,
+      userName: req?.user?.name || req?.user?.email || null,
+    });
   }
 
   /** Emite a NF-e (mod 55) de uma VENDA do PDV — caso extremo (cliente pede a

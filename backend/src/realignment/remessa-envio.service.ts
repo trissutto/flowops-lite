@@ -37,23 +37,55 @@ export class RemessaEnvioService {
     private readonly danfePdf: DanfePdfService,
   ) {}
 
-  /** Endereço/identidade de uma loja pela config fiscal (NfceConfig). */
+  /**
+   * Endereço/identidade de uma loja pela config fiscal (NfceConfig).
+   *
+   * IDENTIDADE DA NF-e, NÃO a da NFC-e (bug 31/07): a `NfceConfig` guarda DUAS
+   * identidades. Quando a loja emite NF-e por um CNPJ diferente do da NFC-e
+   * (alinhamento de máquina de cartão), os dados reais dela ficam nos campos
+   * `nfe*` — e é isso que a NF-e de transferência usa (`loadStoreFiscal`).
+   * Aqui lia só `cfg.endereco`, então a etiqueta de uma remessa pra SOROCABA
+   * saiu endereçada pra ITANHAÉM: nota e etiqueta contando histórias
+   * diferentes da mesma caixa. Mesma regra do `loadStoreFiscal` — se o CNPJ
+   * da NF-e existe e é OUTRO, a identidade INTEIRA é a da NF-e (razão +
+   * endereço juntos, nunca misturados).
+   */
   private async dadosLoja(storeCode: string) {
     const cfg: any = await this.prisma.nfceConfig.findUnique({ where: { storeCode } });
-    if (!cfg?.endereco) throw new BadRequestException(`Loja ${storeCode} sem endereço na config fiscal (NfceConfig) — necessário pro envio da remessa.`);
-    let e: any = {};
-    try { e = JSON.parse(String(cfg.endereco)); } catch { /* valida abaixo */ }
-    const cep = String(e?.cep || '').replace(/\D/g, '');
-    if (!e?.logradouro || cep.length !== 8) throw new BadRequestException(`Loja ${storeCode} com endereço fiscal incompleto (logradouro/CEP).`);
+    if (!cfg) throw new BadRequestException(`Loja ${storeCode} sem config fiscal (NfceConfig) — necessário pro envio da remessa.`);
+
+    const digits = (v: any) => String(v ?? '').replace(/\D/g, '');
+    const nfeCnpj = digits(cfg.nfeCnpj);
+    const baseCnpj = digits(cfg.cnpj);
+    const identidadePropria = nfeCnpj.length === 14 && nfeCnpj !== baseCnpj;
+
+    const parse = (raw: any) => {
+      if (!raw) return null;
+      let e: any = null;
+      try { e = JSON.parse(String(raw)); } catch { return null; }
+      const cep = digits(e?.cep);
+      if (!e?.logradouro || cep.length !== 8) return null;
+      return { ...e, cep };
+    };
+
+    // Endereço da identidade escolhida; cai no da NFC-e se o `nfeEndereco`
+    // estiver vazio/incompleto (loja que só herdou o CNPJ).
+    const e = (identidadePropria ? parse(cfg.nfeEndereco) : null) ?? parse(cfg.endereco);
+    if (!e) throw new BadRequestException(`Loja ${storeCode} com endereço fiscal incompleto (logradouro/CEP).`);
+
+    const nome = identidadePropria
+      ? String(cfg.nfeFantasia || cfg.nfeRazaoSocial || cfg.fantasia || cfg.razaoSocial || `LOJA ${storeCode}`)
+      : String(cfg.fantasia || cfg.razaoSocial || `LOJA ${storeCode}`);
+
     return {
-      nome: String(cfg.fantasia || cfg.razaoSocial || `LOJA ${storeCode}`).slice(0, 50),
-      cnpj: String(cfg.cnpj || '').replace(/\D/g, ''),
+      nome: nome.slice(0, 50),
+      cnpj: identidadePropria ? nfeCnpj : baseCnpj,
       endereco: String(e.logradouro),
       numero: String(e.numero || 'S/N'),
       bairro: String(e.bairro || ''),
       cidade: String(e.municipio || e.cidade || ''),
       uf: String(e.uf || 'SP'),
-      cep,
+      cep: e.cep,
     };
   }
 
@@ -93,7 +125,9 @@ export class RemessaEnvioService {
     return pecas <= 10 ? 'correios' : 'proprio';
   }
 
-  private async validarLojaOrigem(shipment: any, storeId: string) {
+  /** `storeId` nulo = retaguarda (admin), que enxerga todas as remessas. */
+  private async validarLojaOrigem(shipment: any, storeId: string | null) {
+    if (!storeId) return null;
     const store: any = await this.prisma.store.findUnique({ where: { id: storeId } });
     if (!store || store.code !== shipment.fromStoreCode) {
       throw new ForbiddenException('Só a loja ORIGEM gera o envio da remessa.');
@@ -101,8 +135,21 @@ export class RemessaEnvioService {
     return store;
   }
 
-  /** Gera NF-e (se faltar) + pré-postagem SEDEX com a chave. Idempotente. */
-  async gerarEnvio(shipmentId: string, storeId: string, userId?: string | null) {
+  /**
+   * Gera NF-e (se faltar) + pré-postagem SEDEX com a chave. Idempotente.
+   *
+   * `storeId` nulo → chamada da retaguarda. `forcar` → emite a etiqueta mesmo
+   * quando o transporte estava como PRÓPRIO (pedido do dono 31/07: poder
+   * postar qualquer remessa quando ele quiser, sem depender da regra das 10
+   * peças). Nesse caso o transporte da remessa VIRA 'correios' — senão a tela
+   * ficaria mostrando 🚚 PRÓPRIO numa remessa que tem código de rastreio.
+   */
+  async gerarEnvio(
+    shipmentId: string,
+    storeId: string | null,
+    userId?: string | null,
+    opts?: { forcar?: boolean },
+  ) {
     const shipment: any = await this.prisma.realignmentShipment.findUnique({ where: { id: shipmentId } });
     if (!shipment) throw new NotFoundException('Remessa não encontrada');
     await this.validarLojaOrigem(shipment, storeId);
@@ -116,8 +163,15 @@ export class RemessaEnvioService {
     // Regra do transporte (dono 29/07): até 10 peças → CORREIOS; acima →
     // PRÓPRIO. Override manual: transportMode (botão na tela de remessas).
     const modoTransporte = await this.transporteEfetivo(shipment);
-    if (modoTransporte !== 'correios') {
+    if (modoTransporte !== 'correios' && !opts?.forcar) {
       throw new BadRequestException('Remessa marcada como transporte PRÓPRIO — não gera etiqueta. Se for postar, troque o transporte pra CORREIOS na remessa.');
+    }
+    if (modoTransporte !== 'correios') {
+      await this.prisma.realignmentShipment.update({
+        where: { id: shipmentId },
+        data: { transportMode: 'correios' },
+      });
+      this.logger.warn(`[remessa-envio] ${shipment.code}: transporte forçado PRÓPRIO → CORREIOS pela retaguarda`);
     }
 
     // 1) NF-e de transferência (5152) — auto-emite se ainda não existir
@@ -139,6 +193,20 @@ export class RemessaEnvioService {
     const valor = (Number(doc?.valorTotalCents) || 0) / 100;
     const origem = await this.dadosLoja(shipment.fromStoreCode);
     const destino = await this.dadosLoja(shipment.toStoreCode);
+    // TRAVA (31/07): duas lojas diferentes NUNCA podem resolver pro mesmo
+    // endereço. Quando isso acontece é config fiscal errada, e a etiqueta sai
+    // mandando a caixa de volta pra própria origem — foi assim que a remessa
+    // 01 → SOROCABA saiu endereçada pra Itanhaém. Melhor travar que postar.
+    const mesmoEndereco =
+      `${origem.cep}|${origem.endereco}|${origem.numero}`.toUpperCase() ===
+      `${destino.cep}|${destino.endereco}|${destino.numero}`.toUpperCase();
+    if (mesmoEndereco) {
+      throw new BadRequestException(
+        `Config fiscal errada: loja ${shipment.fromStoreCode} e loja ${shipment.toStoreCode} têm o MESMO endereço ` +
+        `(${destino.endereco}, ${destino.numero} — CEP ${destino.cep}). A etiqueta iria pro lugar errado. ` +
+        `Corrija o endereço da loja ${shipment.toStoreCode} em Retaguarda → Config NFC-e antes de gerar o envio.`,
+      );
+    }
     const itensDeclaracao = itens.slice(0, 50).map((it) => ({
       conteudo: [it.refCode, it.cor, it.tamanho].filter(Boolean).join(' ').slice(0, 60) || 'Vestuário',
       quantidade: String(it.qtyOrigem || 1),
@@ -208,13 +276,100 @@ export class RemessaEnvioService {
     return { ok: true, codigoRastreio: r.codigoRastreio, carrier: r.carrier, idPrepostagem: r.idPrepostagem, etiquetaPdf: r.etiquetaPdf, nfeNumero: doc.numero };
   }
 
-  /** PDF ÚNICO: etiqueta + DANFE da transferência (pra imprimir de uma vez). */
-  async docsEnvio(shipmentId: string, storeId: string) {
+  /**
+   * PDF ÚNICO: etiqueta + DANFE da transferência (pra imprimir de uma vez).
+   * `storeId` nulo = retaguarda. `somenteEtiqueta` = só a etiqueta dos
+   * Correios/Mais Envios, sem a DANFE junto (o dono às vezes só quer colar a
+   * etiqueta numa caixa cuja nota já foi impressa).
+   */
+  /**
+   * REFAZER O ENVIO (31/07) — o que faltava pra correção de endereço servir
+   * pra alguma coisa.
+   *
+   * A etiqueta NÃO é gerada pelo Flow: ela é baixada da transportadora pelo
+   * `correiosPrepostagemId`. Uma pré-postagem criada com endereço errado
+   * continua errada pra sempre — baixar o PDF de novo devolve exatamente o
+   * mesmo papel. Era o caso da REM-2026-000602, que seguiu saindo Itanhaém →
+   * Itanhaém mesmo depois do fix.
+   *
+   * Isso aqui solta a remessa da pré-postagem velha e gera outra do zero, já
+   * com o endereço certo. A etiqueta antiga NÃO é cancelada nos Correios
+   * automaticamente — pré-postagem sem uso expira sozinha, e cancelar objeto
+   * postado é ato que tem custo. O código velho fica no log pra rastrear.
+   */
+  async refazerEnvio(shipmentId: string, userId?: string | null) {
     const shipment: any = await this.prisma.realignmentShipment.findUnique({ where: { id: shipmentId } });
     if (!shipment) throw new NotFoundException('Remessa não encontrada');
-    const store: any = await this.prisma.store.findUnique({ where: { id: storeId } });
-    if (!store || (store.code !== shipment.fromStoreCode && store.code !== shipment.toStoreCode)) {
-      throw new ForbiddenException('Remessa de outra loja.');
+    if (!shipment.trackingCode) {
+      throw new BadRequestException('Essa remessa ainda não tem envio gerado — use "Gerar etiqueta".');
+    }
+    const anterior = { tracking: shipment.trackingCode, carrier: shipment.carrier, prepostagem: shipment.correiosPrepostagemId };
+    this.logger.warn(
+      `[remessa-envio] REFAZENDO ${shipment.code}: descartando ${anterior.carrier} ${anterior.tracking} (pré-postagem ${anterior.prepostagem})`,
+    );
+    await this.prisma.realignmentShipment.update({
+      where: { id: shipmentId },
+      data: { trackingCode: null, carrier: null, correiosPrepostagemId: null, envioGeneratedAt: null },
+    });
+    const novo: any = await this.gerarEnvio(shipmentId, null, userId, { forcar: true });
+    return { ...novo, refeito: true, anterior };
+  }
+
+  /**
+   * DIAGNÓSTICO (31/07): mostra, loja a loja, o endereço que a etiqueta VAI
+   * usar e de qual identidade fiscal ele saiu. Existe porque a REM-2026-000602
+   * saiu endereçada pra origem e não dava pra saber, sem abrir o banco, se o
+   * problema era o código lendo o campo errado ou a config da loja com dado
+   * de outra. `colideCom` aponta as lojas que resolvem pro MESMO endereço —
+   * essas são exatamente as que mandam caixa pro lugar errado.
+   */
+  async enderecosEtiqueta() {
+    const stores: any[] = await this.prisma.store.findMany({
+      orderBy: { code: 'asc' },
+      select: { code: true, name: true, active: true } as any,
+    });
+    const linhas: any[] = [];
+    for (const s of stores) {
+      try {
+        const cfg: any = await this.prisma.nfceConfig.findUnique({ where: { storeCode: s.code } });
+        const d = await this.dadosLoja(s.code);
+        const digits = (v: any) => String(v ?? '').replace(/\D/g, '');
+        const nfeCnpj = digits(cfg?.nfeCnpj);
+        const identidade = nfeCnpj.length === 14 && nfeCnpj !== digits(cfg?.cnpj) ? 'NF-e' : 'NFC-e';
+        linhas.push({
+          loja: s.code, lojaNome: s.name, ativa: s.active !== false,
+          identidade, ...d,
+          chave: `${d.cep}|${d.endereco}|${d.numero}`.toUpperCase(),
+        });
+      } catch (e) {
+        linhas.push({ loja: s.code, lojaNome: s.name, ativa: s.active !== false, erro: (e as Error).message });
+      }
+    }
+    const porChave = new Map<string, string[]>();
+    for (const l of linhas) {
+      if (!l.chave) continue;
+      porChave.set(l.chave, [...(porChave.get(l.chave) || []), l.loja]);
+    }
+    for (const l of linhas) {
+      const iguais = (porChave.get(l.chave) || []).filter((c: string) => c !== l.loja);
+      l.colideCom = iguais.length ? iguais : null;
+      delete l.chave;
+    }
+    return {
+      linhas,
+      colisoes: linhas.filter((l) => l.colideCom).length,
+      semConfig: linhas.filter((l) => l.erro).length,
+    };
+  }
+
+  async docsEnvio(shipmentId: string, storeId: string | null, opts?: { somenteEtiqueta?: boolean }) {
+    const shipment: any = await this.prisma.realignmentShipment.findUnique({ where: { id: shipmentId } });
+    if (!shipment) throw new NotFoundException('Remessa não encontrada');
+    if (storeId) {
+      const store: any = await this.prisma.store.findUnique({ where: { id: storeId } });
+      if (!store || (store.code !== shipment.fromStoreCode && store.code !== shipment.toStoreCode)) {
+        throw new ForbiddenException('Remessa de outra loja.');
+      }
     }
     if (!shipment.trackingCode) throw new BadRequestException('Envio ainda não gerado.');
 
@@ -231,18 +386,27 @@ export class RemessaEnvioService {
     } catch (e: any) {
       this.logger.warn(`[remessa-envio] etiqueta indisponível (${shipment.code}): ${e?.message || e}`);
     }
+    const temEtiqueta = pdfs.length > 0;
     let temNota = false;
-    try {
-      const doc: any = await this.prisma.nfeDoc.findFirst({ where: { shipmentId, status: 'authorized' } });
-      if (doc?.id) {
-        const { buffer } = await this.danfePdf.generateForDoc(doc.id);
-        pdfs.push(buffer);
-        temNota = true;
+    if (!opts?.somenteEtiqueta) {
+      try {
+        const doc: any = await this.prisma.nfeDoc.findFirst({ where: { shipmentId, status: 'authorized' } });
+        if (doc?.id) {
+          const { buffer } = await this.danfePdf.generateForDoc(doc.id);
+          pdfs.push(buffer);
+          temNota = true;
+        }
+      } catch (e: any) {
+        this.logger.warn(`[remessa-envio] DANFE indisponível (${shipment.code}): ${e?.message || e}`);
       }
-    } catch (e: any) {
-      this.logger.warn(`[remessa-envio] DANFE indisponível (${shipment.code}): ${e?.message || e}`);
     }
-    if (!pdfs.length) throw new BadRequestException('Nem etiqueta nem DANFE disponíveis ainda — tente de novo em alguns segundos.');
+    if (!pdfs.length) {
+      throw new BadRequestException(
+        opts?.somenteEtiqueta
+          ? 'A transportadora ainda não devolveu o PDF da etiqueta — tente de novo em alguns segundos.'
+          : 'Nem etiqueta nem DANFE disponíveis ainda — tente de novo em alguns segundos.',
+      );
+    }
 
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { PDFDocument } = require('pdf-lib');
@@ -253,6 +417,13 @@ export class RemessaEnvioService {
       for (const p of pages) out.addPage(p);
     }
     const bytes = await out.save();
-    return { ok: true, pdfBase64: Buffer.from(bytes).toString('base64'), temNota, trackingCode: shipment.trackingCode, carrier: shipment.carrier };
+    return {
+      ok: true,
+      pdfBase64: Buffer.from(bytes).toString('base64'),
+      temEtiqueta,
+      temNota,
+      trackingCode: shipment.trackingCode,
+      carrier: shipment.carrier,
+    };
   }
 }

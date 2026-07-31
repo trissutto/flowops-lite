@@ -2054,6 +2054,12 @@ model NfeDoc {
   dhRecbto        String?
   xmlEnviado      String?  @map("xml_enviado")     @db.Text
   xmlAutorizado   String?  @map("xml_autorizado")  @db.Text
+
+  // ── Envio físico da venda online (etiqueta Correios/Mais Envios, 31/07) ──
+  trackingCode          String?   @map("tracking_code")
+  correiosPrepostagemId String?   @map("correios_prepostagem_id")
+  carrier               String?
+  envioGeneratedAt      DateTime? @map("envio_generated_at")
   xmlResposta     String?  @map("xml_resposta")    @db.Text
   erro            String?  @db.Text
   emittedByUserId String?  @map("emitted_by_user_id")

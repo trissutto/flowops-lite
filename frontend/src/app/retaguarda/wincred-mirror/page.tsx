@@ -220,6 +220,9 @@ export default function WincredMirrorPage() {
           pagas) — a ficha da cliente passa a mostrar o crediário completo. */}
       <CrediarioNativoBox />
 
+      {/* Espelho das ABERTAS + veredito de ativação da CREDIARIO_NATIVE_READS */}
+      <CrediarioVereditoBox />
+
       <MarcadosNativoBox />
 
       {/* Teste rapido: peek de uma REF no Postgres */}
@@ -702,6 +705,126 @@ function PeekRefBox() {
         <pre className="mt-3 bg-slate-900 text-emerald-300 p-3 rounded text-[11px] overflow-x-auto font-mono">
 {JSON.stringify(result, null, 2)}
         </pre>
+      )}
+    </div>
+  );
+}
+
+/**
+ * CREDIÁRIO — ESPELHO DAS ABERTAS + "POSSO ATIVAR?"
+ *
+ * A CREDIARIO_NATIVE_READS já foi ligada às cegas uma vez e crediário SUMIU
+ * da tela (o sync cortava em 50.000 de 72.831 parcelas — R$ 2,3 mi
+ * invisíveis). Este box existe pra NUNCA mais ligar no escuro:
+ *   1. Sincronizar agora → recarrega o espelho (sem esperar o cron de 10min)
+ *   2. Posso ativar? → diff registro a registro espelho × Giga, com veredito
+ * Verde de verdade = pode ir no Railway ligar a flag.
+ */
+function CrediarioVereditoBox() {
+  const [st, setSt] = useState<any>(null);
+  const [syncBusy, setSyncBusy] = useState(false);
+  const [verBusy, setVerBusy] = useState(false);
+  const [ver, setVer] = useState<any>(null);
+  const [erro, setErro] = useState('');
+
+  const carregarStatus = () => {
+    api<any>('/crediarios/baixa/espelho/status').then(setSt).catch(() => {});
+  };
+  useEffect(() => { carregarStatus(); }, []);
+
+  const sincronizar = async () => {
+    if (syncBusy) return;
+    setSyncBusy(true); setErro(''); setVer(null);
+    try {
+      await api<any>('/crediarios/baixa/espelho/sync', { method: 'POST' });
+      carregarStatus();
+    } catch (e: any) {
+      setErro(e?.message || 'Falha no sync');
+    } finally { setSyncBusy(false); }
+  };
+
+  const conferir = async () => {
+    if (verBusy) return;
+    setVerBusy(true); setErro(''); setVer(null);
+    try {
+      setVer(await api<any>('/crediarios/baixa/diff/abertas'));
+    } catch (e: any) {
+      setErro(e?.message || 'Falha na conferência');
+    } finally { setVerBusy(false); }
+  };
+
+  // status() devolve { abertas: { count, lastSyncedAt }, clientes: {...} }
+  const abertas = st?.abertas?.count ?? null;
+  const ultimoSync = st?.abertas?.lastSyncedAt ?? null;
+  return (
+    <div className="bg-gradient-to-br from-teal-50 to-emerald-50 border border-teal-200 rounded-xl p-5">
+      <div className="flex items-center gap-4 flex-wrap">
+        <div className="flex-1 min-w-[280px]">
+          <h2 className="font-bold text-teal-900 mb-1">Crediário — posso ativar a leitura nativa?</h2>
+          <p className="text-xs text-teal-700">
+            Espelho das parcelas EM ABERTO (o que a tela de recebimentos usa com{' '}
+            <b>CREDIARIO_NATIVE_READS=1</b>). O Giga tem ~72,8 mil abertas — se o espelho
+            mostrar menos, NÃO ligue. Conferir compara registro a registro.
+          </p>
+          {st && (
+            <div className="mt-2 text-[11px] font-bold text-teal-800">
+              {typeof abertas === 'number' ? `${abertas.toLocaleString('pt-BR')} parcelas no espelho` : '—'}
+              {ultimoSync && (
+                <span className="font-normal text-teal-600"> · último sync: {new Date(ultimoSync).toLocaleString('pt-BR')}</span>
+              )}
+            </div>
+          )}
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={sincronizar} disabled={syncBusy || verBusy}
+            className="px-4 py-2 rounded-lg border-2 border-teal-500 text-teal-800 text-sm font-bold hover:bg-teal-100 disabled:opacity-50"
+          >
+            {syncBusy ? 'Sincronizando… (~1min)' : '1 · Sincronizar agora'}
+          </button>
+          <button
+            onClick={conferir} disabled={syncBusy || verBusy}
+            className="px-4 py-2 rounded-lg bg-teal-600 hover:bg-teal-700 text-white text-sm font-bold disabled:opacity-50"
+          >
+            {verBusy ? 'Conferindo… (~1min)' : '2 · Posso ativar?'}
+          </button>
+        </div>
+      </div>
+      {erro && <div className="mt-2 text-sm text-red-700">{erro}</div>}
+      {ver && (
+        <div className={`mt-3 rounded-lg border-2 p-4 ${ver.podeAtivar ? 'bg-emerald-50 border-emerald-400' : 'bg-rose-50 border-rose-300'}`}>
+          <div className={`font-bold text-lg ${ver.podeAtivar ? 'text-emerald-800' : 'text-rose-800'}`}>
+            {ver.podeAtivar ? '✅ PODE ATIVAR' : '⛔ NÃO ATIVE AINDA'}
+          </div>
+          <p className="text-sm mt-1 text-slate-700">{ver.veredito}</p>
+          <div className="mt-2 grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+            <div className="bg-white rounded p-2 border">
+              <div className="text-slate-500">Registros no Giga</div>
+              <div className="font-bold tabular-nums">{(ver.totais?.gigaRegistros ?? 0).toLocaleString('pt-BR')}</div>
+            </div>
+            <div className="bg-white rounded p-2 border">
+              <div className="text-slate-500">No espelho</div>
+              <div className="font-bold tabular-nums">{(ver.totais?.espelhoRegistros ?? 0).toLocaleString('pt-BR')}</div>
+            </div>
+            <div className="bg-white rounded p-2 border">
+              <div className="text-slate-500">Faltando no espelho</div>
+              <div className={`font-bold tabular-nums ${ver.bloqueios?.registrosFaltando?.qtd ? 'text-rose-700' : 'text-emerald-700'}`}>
+                {(ver.bloqueios?.registrosFaltando?.qtd ?? 0).toLocaleString('pt-BR')}
+              </div>
+            </div>
+            <div className="bg-white rounded p-2 border">
+              <div className="text-slate-500">Valor em risco</div>
+              <div className={`font-bold tabular-nums ${ver.bloqueios?.valorPerdidoTotal ? 'text-rose-700' : 'text-emerald-700'}`}>
+                R$ {(ver.bloqueios?.valorPerdidoTotal ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+              </div>
+            </div>
+          </div>
+          {ver.podeAtivar && (
+            <p className="mt-2 text-xs text-emerald-800">
+              Railway → flowops-lite → Variables → <b>CREDIARIO_NATIVE_READS=1</b> (o deploy reinicia em ~30s — evite horário de pico).
+            </p>
+          )}
+        </div>
       )}
     </div>
   );

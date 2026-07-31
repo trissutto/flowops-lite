@@ -62,6 +62,10 @@ type ShipmentRow = {
   // Transporte (dono 29/07): efetivo = escolhido ou regra (≤10 peças → correios)
   transportEfetivo?: 'correios' | 'proprio' | string;
   transportManual?: boolean;
+  // Envio físico (pré-postagem Correios / Mais Envios)
+  trackingCode?: string | null;
+  carrier?: string | null;
+  envioGeneratedAt?: string | null;
 };
 
 type ShipmentDetail = ShipmentRow & {
@@ -259,6 +263,7 @@ export default function RemessasAdminPage() {
     setDetailId(id);
     setNfeResult(null);
     setNfePreview(null);
+    setEnvioMsg(null);
     setDetailLoading(true);
     try {
       const d = await api<ShipmentDetail>(`/realignment/shipments/admin/${id}`);
@@ -420,6 +425,101 @@ export default function RemessasAdminPage() {
       setNfeResult({ erro: e?.message || 'Falha na emissão' });
     } finally {
       setNfeEmitting(false);
+    }
+  };
+
+  // ── ETIQUETA DE ENVIO (dono 31/07) ────────────────────────────────────────
+  // Antes só a LOJA DE ORIGEM conseguia gerar, e só se a remessa caísse na
+  // regra dos Correios (até 10 peças). Da retaguarda não dava de jeito nenhum.
+  // Agora dá — e com "forçar" pra postar qualquer remessa quando ele quiser.
+  const [envioBusy, setEnvioBusy] = useState<'gerar' | 'etiqueta' | 'ambos' | 'refazer' | null>(null);
+  const [envioMsg, setEnvioMsg] = useState<{ tipo: 'ok' | 'erro'; texto: string } | null>(null);
+
+  const gerarEtiqueta = async (forcar: boolean) => {
+    if (!detailId || envioBusy) return;
+    if (forcar && !confirm(
+      'Essa remessa está marcada como transporte PRÓPRIO.\n\n' +
+      'Gerar a etiqueta dos Correios vai:\n' +
+      '· emitir a NF-e de transferência se ainda não existir\n' +
+      '· criar a pré-postagem SEDEX com a chave da nota\n' +
+      '· passar o transporte da remessa pra CORREIOS\n\nConfirma?',
+    )) return;
+    setEnvioBusy('gerar');
+    setEnvioMsg(null);
+    try {
+      const r = await api<any>(`/realignment/shipments/${detailId}/gerar-envio`, {
+        method: 'POST',
+        body: JSON.stringify({ forcar }),
+      });
+      setEnvioMsg({
+        tipo: 'ok',
+        texto: r?.jaGerado
+          ? `Essa remessa já tinha envio: ${r.carrier || 'transportadora'} ${r.codigoRastreio}`
+          : `${r?.carrier || 'Envio'} gerado — rastreio ${r?.codigoRastreio}`,
+      });
+      const patch = { trackingCode: r?.codigoRastreio ?? null, carrier: r?.carrier ?? null, transportEfetivo: 'correios', transportManual: true };
+      setDetail((prev) => (prev ? { ...prev, ...patch } : prev));
+      setRows((prev) => prev.map((x) => (x.id === detailId ? { ...x, ...patch } : x)));
+    } catch (e: any) {
+      setEnvioMsg({ tipo: 'erro', texto: e?.message || 'Falha ao gerar o envio' });
+    } finally {
+      setEnvioBusy(null);
+    }
+  };
+
+  // A etiqueta NÃO é gerada aqui: é baixada da transportadora pela
+  // pré-postagem. Uma criada com endereço errado continua errada pra sempre —
+  // baixar de novo devolve o mesmo papel. Refazer é o único jeito.
+  const refazerEnvio = async () => {
+    if (!detailId || envioBusy) return;
+    if (!confirm(
+      'Descartar a etiqueta atual e gerar OUTRA com o endereço de agora?\n\n' +
+      'O código de rastreio muda. A etiqueta antiga não é cancelada nos Correios — ' +
+      'se você já imprimiu, JOGUE FORA pra não postar com a errada.',
+    )) return;
+    setEnvioBusy('refazer');
+    setEnvioMsg(null);
+    try {
+      const r = await api<any>(`/realignment/shipments/${detailId}/refazer-envio`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+      setEnvioMsg({ tipo: 'ok', texto: `Etiqueta refeita: ${r?.carrier || ''} ${r?.codigoRastreio} (antiga ${r?.anterior?.tracking} descartada)` });
+      const patch = { trackingCode: r?.codigoRastreio ?? null, carrier: r?.carrier ?? null };
+      setDetail((prev) => (prev ? { ...prev, ...patch } : prev));
+      setRows((prev) => prev.map((x) => (x.id === detailId ? { ...x, ...patch } : x)));
+    } catch (e: any) {
+      setEnvioMsg({ tipo: 'erro', texto: e?.message || 'Falha ao refazer' });
+    } finally {
+      setEnvioBusy(null);
+    }
+  };
+
+  const baixarDocsEnvio = async (somenteEtiqueta: boolean) => {
+    if (!detailId || envioBusy) return;
+    setEnvioBusy(somenteEtiqueta ? 'etiqueta' : 'ambos');
+    setEnvioMsg(null);
+    try {
+      const r = await api<any>(
+        `/realignment/shipments/${detailId}/docs-envio${somenteEtiqueta ? '?somenteEtiqueta=1' : ''}`,
+      );
+      if (!r?.pdfBase64) throw new Error('PDF não veio');
+      const a = document.createElement('a');
+      a.href = `data:application/pdf;base64,${r.pdfBase64}`;
+      a.download = `${detail?.code || 'remessa'}${somenteEtiqueta ? '-etiqueta' : '-etiqueta-danfe'}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setEnvioMsg({
+        tipo: 'ok',
+        texto: somenteEtiqueta
+          ? 'Etiqueta baixada.'
+          : `PDF baixado${r?.temNota ? ' (etiqueta + DANFE)' : ' (só a etiqueta — DANFE não disponível)'}.`,
+      });
+    } catch (e: any) {
+      setEnvioMsg({ tipo: 'erro', texto: e?.message || 'Falha ao baixar' });
+    } finally {
+      setEnvioBusy(null);
     }
   };
 
@@ -1210,6 +1310,94 @@ export default function RemessasAdminPage() {
                           </>
                         )}
                       </div>
+                    )}
+                  </div>
+
+                  {/* ENVIO PELOS CORREIOS — etiqueta sob demanda (dono 31/07) */}
+                  <div className="mb-4 rounded-lg border-2 border-amber-200 bg-amber-50/50 p-3">
+                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                      <div className="text-sm">
+                        <div className="font-bold text-amber-900">📮 Etiqueta de envio (SEDEX)</div>
+                        <div className="text-xs text-amber-800">
+                          {detail.trackingCode ? (
+                            <>
+                              {detail.carrier || 'Transportadora'} ·{' '}
+                              <span className="font-mono font-bold">{detail.trackingCode}</span>
+                              {detail.envioGeneratedAt && <> · gerada {fmtDate(detail.envioGeneratedAt)}</>}
+                            </>
+                          ) : detail.status !== 'in_transit' ? (
+                            <>Disponível com a remessa <b>em trânsito</b> — feche e envie primeiro.</>
+                          ) : (
+                            <>
+                              Emite a NF-e de transferência se faltar e cria a pré-postagem com a chave.
+                              Transporte atual: <b>{detail.transportEfetivo === 'correios' ? 'CORREIOS' : 'PRÓPRIO'}</b>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex gap-2 flex-wrap">
+                        {detail.trackingCode ? (
+                          <>
+                            <button
+                              onClick={() => baixarDocsEnvio(true)}
+                              disabled={!!envioBusy}
+                              className="px-4 py-2 rounded-lg border-2 border-amber-400 text-amber-800 hover:bg-amber-100 text-sm font-bold disabled:opacity-50"
+                            >
+                              {envioBusy === 'etiqueta' ? 'Baixando…' : '🏷 Só a etiqueta'}
+                            </button>
+                            <button
+                              onClick={() => baixarDocsEnvio(false)}
+                              disabled={!!envioBusy}
+                              className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-sm font-bold disabled:opacity-50"
+                            >
+                              {envioBusy === 'ambos' ? 'Baixando…' : '🖨 Etiqueta + DANFE'}
+                            </button>
+                            <button
+                              onClick={refazerEnvio}
+                              disabled={!!envioBusy}
+                              title="Descarta a pré-postagem atual e cria outra com o endereço de agora"
+                              className="px-4 py-2 rounded-lg border-2 border-rose-300 text-rose-700 hover:bg-rose-50 text-sm font-bold disabled:opacity-50"
+                            >
+                              {envioBusy === 'refazer' ? 'Refazendo…' : '♻ Refazer etiqueta'}
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            onClick={() => gerarEtiqueta(detail.transportEfetivo !== 'correios')}
+                            disabled={!!envioBusy || detail.status !== 'in_transit'}
+                            title={detail.status !== 'in_transit' ? 'A remessa precisa estar em trânsito' : undefined}
+                            className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-sm font-bold disabled:opacity-50"
+                          >
+                            {envioBusy === 'gerar'
+                              ? 'Gerando…'
+                              : detail.transportEfetivo === 'correios'
+                                ? '📮 Gerar etiqueta'
+                                : '📮 Gerar etiqueta mesmo assim'}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    {envioMsg && (
+                      <div
+                        className={`mt-2 rounded px-3 py-2 text-xs border ${
+                          envioMsg.tipo === 'ok'
+                            ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                            : 'bg-rose-50 border-rose-200 text-rose-800'
+                        }`}
+                      >
+                        {envioMsg.tipo === 'ok' ? '✅ ' : '⚠️ '}
+                        {envioMsg.texto}
+                      </div>
+                    )}
+                    {detail.trackingCode && (
+                      <a
+                        href={`https://rastreamento.correios.com.br/app/index.php?objeto=${detail.trackingCode}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="mt-2 inline-block text-xs text-amber-800 underline"
+                      >
+                        Rastrear {detail.trackingCode} nos Correios
+                      </a>
                     )}
                   </div>
 

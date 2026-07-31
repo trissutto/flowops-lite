@@ -74,17 +74,20 @@ export class MarcadosMirrorService {
     this.running = true;
     const t0 = Date.now();
     try {
-      const r = await this.erp.runReadOnly(
+      // Paginado (31/07): eram 6.912 linhas contra um teto de 50.000, então
+      // ainda não cortava — mas marcado que some do espelho é PDV liberando
+      // venda acima do limite da cliente. Não fica no "ainda cabe".
+      const r = await this.erp.readAllPages(
         `SELECT REGISTRO, NUMERO, CODIGO, DATA, DESCRICAO, QUANTIDADE, VALOR, VALORTOTAL,
                 VENDEDOR, CLIENTE, LOJA
            FROM caixa
-          WHERE UPPER(MARCADO) = 'SIM'
-          ORDER BY REGISTRO`,
-        { maxRows: 50000, timeoutMs: 90000 },
+          WHERE UPPER(MARCADO) = 'SIM'`,
+        { orderBy: 'REGISTRO', batch: 10_000, timeoutMs: 90_000 },
       );
       const rows: any[] = r.rows || [];
-      if ((r as any).truncated) {
-        this.logger.warn(`[marcados-mirror] ATENÇÃO: caixa tem MAIS de ${rows.length} linhas MARCADO=SIM — import truncado`);
+      if (r.truncado) {
+        // Espelho pela metade = limite de crediário errado no PDV. Aborta.
+        throw new Error(`leitura de marcados truncada no teto (${rows.length} linhas) — espelho preservado`);
       }
       const vivos = new Set<string>();
 

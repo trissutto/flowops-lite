@@ -317,9 +317,9 @@ export class NfceService {
     const docDest = (sale.customerCpf || '').replace(/\D/g, '');
     let dest = '';
     if (docDest.length === 11) {
-      dest = `<dest><CPF>${docDest}</CPF><xNome>${this.esc(sale.customerName || 'CONSUMIDOR')}</xNome><indIEDest>9</indIEDest></dest>`;
+      dest = `<dest><CPF>${docDest}</CPF><xNome>${this.xmlTexto(sale.customerName, 60, 'CONSUMIDOR')}</xNome><indIEDest>9</indIEDest></dest>`;
     } else if (docDest.length === 14) {
-      dest = `<dest><CNPJ>${docDest}</CNPJ><xNome>${this.esc(sale.customerName || 'CONSUMIDOR')}</xNome><indIEDest>9</indIEDest></dest>`;
+      dest = `<dest><CNPJ>${docDest}</CNPJ><xNome>${this.xmlTexto(sale.customerName, 60, 'CONSUMIDOR')}</xNome><indIEDest>9</indIEDest></dest>`;
     } else if (docDest.length > 0) {
       this.logger.warn(`[nfce] customerCpf com ${docDest.length} digitos invalidos: ${docDest}. Emitindo sem destinatario.`);
     }
@@ -365,25 +365,53 @@ export class NfceService {
       descontoEfetivoTotal - somaDescontosItens,
     );
 
+    // ── RATEIO DO DESCONTO POR ITEM ──────────────────────────────────────
+    //
+    // Dois bugs reais corrigidos aqui (rejeição 225 em Jundiaí, 28/07, nota
+    // 164 de R$ 2.483,15 — o XML salvo tinha `<vDesc>-3.47</vDesc>`):
+    //
+    //  1. vDesc NEGATIVO derruba o lote. O schema define vDesc como decimal
+    //     não-negativo. Item com `desconto` negativo no PDV (acréscimo
+    //     lançado como desconto ao contrário) ia direto pro XML.
+    //  2. ÍNDICE DESALINHADO: o mapa era preenchido percorrendo `items`
+    //     (lista completa) e lido percorrendo `itensFiscais` (sem as linhas
+    //     de valor negativo). Com uma linha de desconto no meio, o desconto
+    //     de um item caía em outro.
+    //
+    // Agora percorre a MESMA lista do <det> e distribui o desconto efetivo
+    // proporcional ao bruto, sempre dentro de [0, bruto do item]. O resíduo
+    // de arredondamento vai pro item que tiver folga — a soma dos vDesc
+    // precisa bater com o vDesc do total (senão cai em cStat 537).
     const descontoPorItem = new Map<number, number>();
-    let descAcumulado = 0;
-    items.forEach((it: any, idx: number) => {
+    const alvoDesconto = Math.min(
+      Math.max(0, descontoEfetivoTotal),
+      brutoTotal, // desconto nunca passa do bruto: vBC não pode ficar negativo
+    );
+    let distribuido = 0;
+    itensFiscais.forEach((it: any, idx: number) => {
       const bruto = (it.qty || 0) * (it.precoUnit || 0);
-      const descItemOriginal = Number(it.desconto || 0);
-      let parcelaExtra: number;
-      if (idx === items.length - 1) {
-        // Último item: pega o resíduo pra fechar o total exato (anti-rounding)
-        parcelaExtra = Math.max(0, descontoVendaExtra - descAcumulado);
-      } else if (brutoTotal > 0) {
-        parcelaExtra = Number(
-          ((bruto / brutoTotal) * descontoVendaExtra).toFixed(2),
-        );
-        descAcumulado += parcelaExtra;
-      } else {
-        parcelaExtra = 0;
+      let parcela = 0;
+      if (alvoDesconto > 0 && brutoTotal > 0) {
+        parcela = Number(((bruto / brutoTotal) * alvoDesconto).toFixed(2));
+        parcela = Math.min(Math.max(0, parcela), bruto);
       }
-      descontoPorItem.set(idx, descItemOriginal + parcelaExtra);
+      descontoPorItem.set(idx, parcela);
+      distribuido += parcela;
     });
+
+    // Resíduo do arredondamento (centavos): joga em quem tem espaço.
+    let residuo = Number((alvoDesconto - distribuido).toFixed(2));
+    if (Math.abs(residuo) >= 0.01) {
+      for (let idx = 0; idx < itensFiscais.length && Math.abs(residuo) >= 0.01; idx++) {
+        const it: any = itensFiscais[idx];
+        const bruto = (it.qty || 0) * (it.precoUnit || 0);
+        const atual = descontoPorItem.get(idx) || 0;
+        const novo = Math.min(Math.max(0, Number((atual + residuo).toFixed(2))), bruto);
+        residuo = Number((residuo - (novo - atual)).toFixed(2));
+        descontoPorItem.set(idx, novo);
+      }
+    }
+    void descontoVendaExtra; // mantido acima só pra leitura do cálculo
 
     // Regime tributário define que tipo de bloco ICMS/PIS/COFINS gera:
     //   CRT=1: Simples Nacional       → CSOSN/PISNT/COFINSNT
@@ -502,9 +530,9 @@ export class NfceService {
         return `
     <det nItem="${nItem}">
       <prod>
-        <cProd>${this.esc(cProd)}</cProd>
+        <cProd>${this.xmlTexto(cProd, 60, 'SEM-CODIGO')}</cProd>
         <cEAN>${cEAN}</cEAN>
-        <xProd>${this.esc(xProd)}</xProd>
+        <xProd>${this.xmlTexto(xProd, 120, 'PRODUTO')}</xProd>
         <NCM>${ncm}</NCM>
         <CFOP>${cfop}</CFOP>
         <uCom>UN</uCom>
@@ -582,7 +610,7 @@ export class NfceService {
 
         // xPag — obrigatório quando tPag=99 (Outros), senão cStat 441.
         const xPag = tPag === '99'
-          ? `<xPag>${this.esc(this.descreveMetodoPag(p.method))}</xPag>`
+          ? `<xPag>${this.xmlTexto(this.descreveMetodoPag(p.method), 60, 'OUTROS')}</xPag>`
           : '';
 
         // indPag=0 (à vista). xPag entra ENTRE tPag e vPag; card depois de vPag.
@@ -708,6 +736,50 @@ export class NfceService {
     const urlChave = buildUrlConsultaNfce(ambiente as '1' | '2');
     // CDATA pra escapar `&` da URL (SEFAZ exige)
     return `<infNFeSupl><qrCode><![CDATA[${qrUrl}]]></qrCode><urlChave>${urlChave}</urlChave></infNFeSupl>`;
+  }
+
+  /**
+   * TEXTO SEGURO PRO SCHEMA (cStat 225 — Falha no Schema XML).
+   *
+   * O `esc()` sozinho só escapa & < > " ' e não protege contra as duas coisas
+   * que mais derrubam cupom por falha de schema:
+   *
+   *   1. campo passando do MaxLength — xProd 120, cProd 60, xNome 60. Uma
+   *      descrição longa colada no cadastro derruba o LOTE inteiro.
+   *   2. caractere de controle (quebra de linha, tab, 0x00–0x1F, 0x7F) vindo
+   *      de texto copiado — XML 1.0 não aceita e o parser da SEFAZ recusa.
+   *
+   * Também colapsa espaço repetido e devolve o fallback quando sobra string
+   * vazia (o schema exige minLength 1 nesses campos).
+   *
+   * Filtra por charCode de propósito: escape unicode em regex já se perdeu em
+   * edição automatizada e virou byte NUL no arquivo.
+   */
+  private xmlTexto(valor: any, max: number, fallback = 'ITEM'): string {
+    // O TString da SEFAZ é `[!-ÿ]...` — só aceita U+0020..U+00FF. Qualquer
+    // caractere ACIMA disso (travessão —, aspas curvas “”, reticências …)
+    // derruba o cupom inteiro com 225 "Falha no Schema". Caso real 31/07:
+    // a linha "FRETE — ENVIO" (travessão U+2014) rejeitou a venda de Suzano
+    // enquanto as notas sem frete autorizavam normal. Primeiro translitera o
+    // que tem equivalente ASCII; o resto acima de U+00FF vira espaço.
+    const TRANSLITERA: Record<string, string> = {
+      '–': '-', '—': '-', '―': '-', // – — ―
+      '‘': "'", '’': "'", '‚': "'", // ' ' ‚
+      '“': '"', '”': '"', '„': '"', // " " „
+      '…': '...', '•': '-', '·': '-', // … • ·
+      '™': 'TM', ' ': ' ', // ™ nbsp
+    };
+    const semControle = Array.from(String(valor ?? ''))
+      .map((c) => {
+        if (TRANSLITERA[c] !== undefined) return TRANSLITERA[c];
+        const code = c.charCodeAt(0);
+        if (code < 32 || code === 127) return ' ';
+        if (code > 0xff) return ' '; // fora do TString — sem exceção
+        return c;
+      })
+      .join('');
+    const limpo = semControle.replace(/\s+/g, ' ').trim().slice(0, max).trim();
+    return this.esc(limpo || fallback);
   }
 
   private esc(s: string): string {
@@ -908,6 +980,14 @@ export class NfceService {
       this.logger.error(
         `[nfce] SEFAZ rejeitou: cStat=${transmit.cStat} ${transmit.xMotivo}`,
       );
+      // 225 = falha de SCHEMA. Sem o XML na mão, achar o campo torto vira
+      // adivinhação (foi o que aconteceu em Jundiaí 31/07). É documento
+      // fiscal da própria loja — nada de terceiro no log.
+      if (String(transmit.cStat) === '225') {
+        this.logger.error(
+          `[nfce] 225 schema · venda=${sale.id} loja=${sale.storeCode} · XML: ${xmlAssinado}`,
+        );
+      }
       await (this.prisma as any).pdvSale.update({
         where: { id: sale.id },
         data: {

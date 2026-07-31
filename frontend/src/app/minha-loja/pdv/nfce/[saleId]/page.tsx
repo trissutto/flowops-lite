@@ -221,6 +221,9 @@ function ReimprimirNfceInner() {
         .nfce .sep-solid { border-top: 2px solid #000; margin: 4px 0; }
         .nfce .chave { font-size: 10px; font-weight: 900; word-break: break-all; line-height: 1.4; letter-spacing: 0.3px; color: #000; }
         .nfce .qr { display: block; margin: 6px auto; }
+        /* QR + chave andam JUNTOS e nunca quebram de página (na térmica é
+           irrelevante; em A4 era o que jogava o QR pra folha 2). */
+        .nfce .qr-bloco { break-inside: avoid; page-break-inside: avoid; }
         .nfce .item { margin: 3px 0; }
         .nfce .item-line1 { font-weight: 900; font-size: 11px; color: #000; }
         .nfce .item-var { font-size: 10px; color: #000; padding-left: 12px; font-weight: 600; }
@@ -235,7 +238,13 @@ function ReimprimirNfceInner() {
           box-shadow: 0 2px 8px rgba(0,0,0,0.15);
         }
         .reprint-btn:hover { background: #1d4ed8; }
-        @media print { .reprint-btn { display: none; } }
+        @media print {
+          .reprint-btn { display: none; }
+          /* A faixa "MODO MASTER ATIVO" e qualquer barra do app vazavam pro
+             cupom (aparecia empurrando o DANFE na folha). No cupom fiscal só
+             pode existir o cupom. */
+          [data-app-chrome], .app-chrome, .master-banner { display: none !important; }
+        }
       `}</style>
 
       <button className="reprint-btn" onClick={() => window.print()}>
@@ -325,28 +334,33 @@ function ReimprimirNfceInner() {
         <div className="center xs">Via Consumidor — REIMPRESSÃO</div>
         <div className="sep" />
 
-        {/* Chave de acesso */}
-        <div className="center xs">Consulte pela Chave de Acesso em:</div>
-        <div className="center xs bold">www.nfce.fazenda.sp.gov.br</div>
-        <div className="chave center">{sale.nfceChave || ''}</div>
-        <div className="sep" />
+        {/* QR CODE PRIMEIRO — é a ordem do layout oficial da NFC-e e evita que
+            ele seja o último elemento da página: em impressora A4 o cupom
+            paginava e o QR caía sozinho na folha 2 (relato do dono 31/07).
+            Gerado LOCALMENTE (data URL inline, não depende de internet). */}
+        <div className="qr-bloco">
+          {qrDataUrl && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={qrDataUrl}
+              className="qr"
+              alt="QR Code NFC-e"
+              width={200}
+              height={200}
+            />
+          )}
+          {!qrUrl && (
+            <div className="center xs" style={{ padding: '20px', border: '1px dashed #999' }}>
+              ⚠️ QR Code não disponível (XML/URL ausentes no banco)
+            </div>
+          )}
 
-        {/* QR Code — gerado LOCALMENTE (data URL inline, sem internet). */}
-        {qrDataUrl && (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={qrDataUrl}
-            className="qr"
-            alt="QR Code NFC-e"
-            width={200}
-            height={200}
-          />
-        )}
-        {!qrUrl && (
-          <div className="center xs" style={{ padding: '20px', border: '1px dashed #999' }}>
-            ⚠️ QR Code não disponível (XML/URL ausentes no banco)
-          </div>
-        )}
+          {/* Chave de acesso */}
+          <div className="center xs">Consulte pela Chave de Acesso em:</div>
+          <div className="center xs bold">www.nfce.fazenda.sp.gov.br</div>
+          <div className="chave center">{sale.nfceChave || ''}</div>
+        </div>
+        <div className="sep" />
 
         {/* Protocolo */}
         <div className="center xs">Protocolo de autorização:</div>
