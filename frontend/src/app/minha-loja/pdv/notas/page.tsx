@@ -102,6 +102,38 @@ export default function NotasEmitidasPage() {
   const [cancelando, setCancelando] = useState(false);
   const [cancelError, setCancelError] = useState<string | null>(null);
 
+  // ETIQUETA DA VENDA ONLINE — exige a NF-e autorizada (o endereço da
+  // cliente sai do <dest> da nota; a chave vai na pré-postagem).
+  const [etqTarget, setEtqTarget] = useState<NfceRow | null>(null);
+  const [etqBusy, setEtqBusy] = useState(false);
+  const [etqRes, setEtqRes] = useState<any>(null);
+
+  const gerarEtiqueta = async (servico: 'PAC' | 'SEDEX') => {
+    if (!etqTarget || etqBusy) return;
+    setEtqBusy(true);
+    setEtqRes(null);
+    try {
+      const r = await api<any>(`/nfe/venda/${etqTarget.id}/etiqueta`, {
+        method: 'POST',
+        body: JSON.stringify({ servico }),
+      });
+      setEtqRes(r);
+      if (r?.etiquetaPdf) baixarEtiquetaPdf(r);
+    } catch (e: any) {
+      setEtqRes({ erro: e?.message || 'Falha ao gerar a etiqueta' });
+    } finally {
+      setEtqBusy(false);
+    }
+  };
+
+  const baixarEtiquetaPdf = (r: any) => {
+    if (!r?.etiquetaPdf) return;
+    const a3 = document.createElement('a');
+    a3.href = `data:application/pdf;base64,${r.etiquetaPdf}`;
+    a3.download = `etiqueta-${r.codigoRastreio || 'venda'}.pdf`;
+    a3.click();
+  };
+
   // BAIXAR O XML REJEITADO — a SEFAZ no 225 diz QUE falhou, nunca ONDE.
   // Sem o XML na mão, cada rejeição vira adivinhação.
   const [xmlBusy, setXmlBusy] = useState(false);
@@ -332,6 +364,11 @@ export default function NotasEmitidasPage() {
     if (status === 'rejected' || status === 'error') return (
       <span className="text-[10px] px-2 py-0.5 bg-amber-100 text-amber-800 rounded font-bold">REJEITADA</span>
     );
+    // Cupom substituído pela NF-e mod 55 (nota grande) — a venda TEM nota,
+    // só que a grande. Sem esse selo a linha seguia "REJEITADA" pra sempre.
+    if (status === 'substituida_nfe') return (
+      <span className="text-[10px] px-2 py-0.5 bg-indigo-100 text-indigo-800 rounded font-bold">NF-e EMITIDA</span>
+    );
     return <span className="text-[10px] px-2 py-0.5 bg-slate-100 text-slate-700 rounded font-bold">{status?.toUpperCase()}</span>;
   }
 
@@ -553,6 +590,15 @@ export default function NotasEmitidasPage() {
                       <FileText className="w-3 h-3" />
                       Não fiscal
                     </button>
+                    {/* Etiqueta dos Correios — venda online. Precisa da NF-e
+                        autorizada (endereço/chave saem da nota). */}
+                    <button
+                      onClick={() => { setEtqTarget(r); setEtqRes(null); }}
+                      className="px-2 py-1 bg-sky-50 hover:bg-sky-100 text-sky-800 rounded text-xs font-bold border border-sky-200 flex items-center gap-1"
+                      title="Etiqueta dos Correios da venda online (usa o endereço da NF-e)"
+                    >
+                      📮 Etiqueta
+                    </button>
                     {/* NF-e "nota grande" — caso EXTREMO (cliente pede). Substitui
                         o cupom (cancela se dentro de 30min); nunca os dois. */}
                     <button
@@ -636,6 +682,58 @@ export default function NotasEmitidasPage() {
       )}
 
       {/* Modal Corrigir & Reemitir (notas rejeitadas) */}
+      {/* ETIQUETA DOS CORREIOS da venda online */}
+      {etqTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setEtqTarget(null)}>
+          <div className="w-full max-w-md rounded-xl bg-white p-5 space-y-3" onClick={(e) => e.stopPropagation()}>
+            <h2 className="font-bold text-slate-900 flex items-center gap-2">📮 Etiqueta dos Correios</h2>
+            <p className="text-xs text-slate-500">
+              Venda de <b>R$ {Number(etqTarget.total || 0).toFixed(2).replace('.', ',')}</b>. O endereço da
+              cliente e a chave saem da <b>NF-e da venda</b> — se ainda não emitiu, o botão NF-e vem primeiro.
+            </p>
+            {!etqRes?.codigoRastreio && (
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => gerarEtiqueta('PAC')} disabled={etqBusy}
+                  className="px-3 py-2.5 rounded-lg border-2 border-sky-300 text-sky-800 font-bold text-sm hover:bg-sky-50 disabled:opacity-50"
+                >
+                  {etqBusy ? '…' : 'PAC'}
+                </button>
+                <button
+                  onClick={() => gerarEtiqueta('SEDEX')} disabled={etqBusy}
+                  className="px-3 py-2.5 rounded-lg bg-sky-600 text-white font-bold text-sm hover:bg-sky-700 disabled:opacity-50"
+                >
+                  {etqBusy ? 'Gerando…' : 'SEDEX'}
+                </button>
+              </div>
+            )}
+            {etqRes?.erro && (
+              <div className="rounded bg-rose-50 border border-rose-200 p-2 text-xs text-rose-800">⚠️ {etqRes.erro}</div>
+            )}
+            {etqRes?.codigoRastreio && (
+              <div className="rounded bg-emerald-50 border border-emerald-200 p-3 text-sm text-emerald-900 space-y-2">
+                <div>
+                  ✅ {etqRes.jaGerado ? 'Etiqueta já existia' : 'Etiqueta gerada'}: <b>{etqRes.carrier}</b>
+                  <div className="font-mono font-bold text-base">{etqRes.codigoRastreio}</div>
+                </div>
+                {etqRes.etiquetaPdf ? (
+                  <button onClick={() => baixarEtiquetaPdf(etqRes)} className="w-full px-3 py-2 rounded bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-700">
+                    ⬇ Baixar etiqueta (PDF)
+                  </button>
+                ) : (
+                  <p className="text-xs">PDF ainda não disponível na transportadora — abra de novo em instantes.</p>
+                )}
+                <a
+                  href={`https://rastreamento.correios.com.br/app/index.php?objeto=${etqRes.codigoRastreio}`}
+                  target="_blank" rel="noreferrer" className="block text-xs underline"
+                >Rastrear nos Correios</a>
+              </div>
+            )}
+            <button onClick={() => setEtqTarget(null)} className="w-full px-3 py-2 border rounded text-sm">Fechar</button>
+          </div>
+        </div>
+      )}
+
       {fixTarget && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-lg w-full max-w-md p-4 space-y-3 max-h-[90vh] overflow-y-auto">
