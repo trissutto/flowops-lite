@@ -83,7 +83,9 @@ export default function ImpersonateBanner() {
   };
 
   return (
-    <div className="sticky top-0 z-50 bg-red-600 text-white shadow-lg">
+    // data-app-chrome: cupom fiscal/recibo escondem tudo que e do app na
+    // impressao. Sem isso a faixa vazava pro DANFE (relato do dono 31/07).
+    <div data-app-chrome className="sticky top-0 z-50 bg-red-600 text-white shadow-lg print:hidden">
       <div className="max-w-screen-2xl mx-auto px-3 py-2 flex items-center gap-3">
         <ShieldAlert className="w-5 h-5 shrink-0" />
         <div className="flex-1 min-w-0">
