@@ -411,13 +411,26 @@ export class CrediarioBaixaService {
     where.push(`\`${map.codCliente}\` <> ''`);
     where.push(`\`${map.codCliente}\` <> '0'`);
 
-    // LIMIT conservador pra não saturar o pool MySQL.
-    // 5000 cobre uns 800-1500 clientes em aberto — suficiente pra Lurd's.
-    const sql = `SELECT ${select.join(', ')} FROM \`movimento\` WHERE ${where.join(' AND ')} ORDER BY \`${map.vencimento}\` ASC LIMIT 5000`;
-    this.logger.log(`[crediario-baixa] listAllOpen SQL: ${sql.slice(0, 500)}`);
+    // LEITURA PAGINADA (31/07). Era `LIMIT 5000` com o comentário "5000 cobre
+    // uns 800-1500 clientes — suficiente pra Lurd's". Não cobria: a rede tem
+    // 72.831 parcelas em aberto, então a tela mostrava as 5.000 mais antigas e
+    // escondia o resto sem avisar. Páginas de 10k, ordenadas por REGISTRO
+    // (único) — vencimento repete e OFFSET pularia linha.
+    const baseSql = `SELECT ${select.join(', ')} FROM \`movimento\` WHERE ${where.join(' AND ')}`;
+    this.logger.log(`[crediario-baixa] listAllOpen SQL: ${baseSql.slice(0, 500)}`);
     const t0 = Date.now();
-    const result = await this.erp.runReadOnly(sql, { maxRows: 5000, timeoutMs: 30000 });
-    this.logger.log(`[crediario-baixa] listAllOpen retornou ${result.rows.length} linhas em ${Date.now() - t0}ms`);
+    const leitura = await this.erp.readAllPages(baseSql, {
+      orderBy: `\`${map.registro}\``,
+      batch: 10_000,
+      timeoutMs: 60_000,
+    });
+    const result = { rows: leitura.rows, truncated: leitura.truncado };
+    if (leitura.truncado) {
+      this.logger.error(`[crediario-baixa] listAllOpen TRUNCADO no teto — a lista está incompleta`);
+    }
+    this.logger.log(
+      `[crediario-baixa] listAllOpen retornou ${result.rows.length} linhas (${leitura.paginas} página(s)) em ${Date.now() - t0}ms`,
+    );
 
     // Filtra códigos 0-3 (cartões clássicos: CREDICARD, REDESHOP, AMEX, etc)
     const filteredRows = result.rows.filter((r: any) => {
@@ -500,11 +513,21 @@ export class CrediarioBaixaService {
     const money = (n: number) => Math.round(n * 100) / 100;
 
     // ── 1. ESPELHO (1 linha por registro, por construção) ─────────────────────
-    const espRows: any[] = await (this.prisma as any).wincredMovimentoAberto.findMany({
-      where: safeStore ? { loja: safeStore } : undefined,
-      select: { registro: true, loja: true, codCliente: true, valorParcela: true },
-      take: 50000,
-    });
+    // Paginado (31/07): `take: 50000` fazia o diff comparar 50k com 50k e dizer
+    // que estava tudo certo justamente quando faltava gente dos dois lados.
+    const espRows: any[] = [];
+    for (let cursor: string | null = null; ; ) {
+      const pagina: any[] = await (this.prisma as any).wincredMovimentoAberto.findMany({
+        where: safeStore ? { loja: safeStore } : undefined,
+        select: { registro: true, loja: true, codCliente: true, valorParcela: true },
+        orderBy: { registro: 'asc' },
+        take: 10_000,
+        ...(cursor ? { skip: 1, cursor: { registro: cursor } } : {}),
+      });
+      espRows.push(...pagina);
+      if (pagina.length < 10_000) break;
+      cursor = String(pagina[pagina.length - 1].registro);
+    }
     const espMap = new Map<string, any>();
     let lojaOrfaEspelho = 0;
     for (const r of espRows) {
@@ -541,8 +564,11 @@ export class CrediarioBaixaService {
     }
     if (safeStore && map.loja) where.push(`\`${map.loja}\` = '${safeStore}'`);
     where.push(`\`${map.registro}\` IS NOT NULL`, `\`${map.codCliente}\` IS NOT NULL`, `\`${map.codCliente}\` <> ''`, `\`${map.codCliente}\` <> '0'`);
-    const sql = `SELECT ${select.join(', ')} FROM \`movimento\` WHERE ${where.join(' AND ')} LIMIT 50000`;
-    const result = await this.erp.runReadOnly(sql, { maxRows: 50000, timeoutMs: 60000 });
+    const leituraGiga = await this.erp.readAllPages(
+      `SELECT ${select.join(', ')} FROM \`movimento\` WHERE ${where.join(' AND ')}`,
+      { orderBy: `\`${map.registro}\``, batch: 10_000, timeoutMs: 60_000 },
+    );
+    const result = { rows: leituraGiga.rows, truncated: leituraGiga.truncado };
 
     // agrupa parcelas do Giga por registro
     const gigaByReg = new Map<string, { parcelas: number; valor: number; codCliente: string; loja: string }>();
@@ -602,8 +628,8 @@ export class CrediarioBaixaService {
         gigaRegistros: gigaByReg.size,
         gigaParcelas,
         espelhoRegistros: espMap.size,
-        gigaTruncado: result.rows.length >= 50000,
-        espelhoTruncado: espRows.length >= 50000,
+        gigaTruncado: leituraGiga.truncado,
+        espelhoTruncado: false,
       },
       // BLOQUEIOS — enquanto houver qualquer um > 0, NÃO ligar CREDIARIO_NATIVE_READS
       bloqueios: {
@@ -906,12 +932,19 @@ export class CrediarioBaixaService {
     // Filtro por LOJA — cada loja tem sua base de clientes e seu crediário.
     const whereLoja = safeStore && cm.loja ? ` AND \`${cm.loja}\` = '${safeStore}'` : '';
 
-    // LIMIT conservador — 15000 cobre Lurd's (7k clientes hoje, espaço pra crescer)
-    // sem segurar conexão MySQL por muito tempo.
-    const sql = `SELECT ${cols.join(', ')} FROM \`${cm.table}\` WHERE \`${cm.nome}\` IS NOT NULL AND \`${cm.nome}\` <> ''${whereLoja} ORDER BY \`${cm.nome}\` ASC LIMIT 15000`;
-    this.logger.log(`[crediario-baixa] listAllClientes SQL: ${sql.slice(0, 300)}`);
+    // Paginado (31/07). Era `LIMIT 15000` — hoje são 7.701 clientes, então
+    // ainda não cortava; mas era o mesmo teto silencioso que comeu 22 mil
+    // parcelas do crediário. Cliente que some é venda que não acontece.
+    const baseSql = `SELECT ${cols.join(', ')} FROM \`${cm.table}\` WHERE \`${cm.nome}\` IS NOT NULL AND \`${cm.nome}\` <> ''${whereLoja}`;
+    this.logger.log(`[crediario-baixa] listAllClientes SQL: ${baseSql.slice(0, 300)}`);
     const t0 = Date.now();
-    const result = await this.erp.runReadOnly(sql, { maxRows: 15000, timeoutMs: 20000 });
+    const leituraCli = await this.erp.readAllPages(baseSql, {
+      orderBy: `\`${cm.codCliente}\``,
+      batch: 10_000,
+      timeoutMs: 30_000,
+    });
+    const result = { rows: leituraCli.rows };
+    if (leituraCli.truncado) this.logger.error('[crediario-baixa] listAllClientes TRUNCADO no teto');
     this.logger.log(`[crediario-baixa] listAllClientes retornou ${result.rows.length} em ${Date.now() - t0}ms`);
 
     const cardRegex = CARD_NAME_REGEX;
@@ -984,8 +1017,13 @@ export class CrediarioBaixaService {
     const cols = [`\`${cm.codCliente}\` AS cod`, `\`${cm.nome}\` AS nome`];
     if (cm.cpf) cols.push(`\`${cm.cpf}\` AS cpf`);
     if (cm.telefone) cols.push(`\`${cm.telefone}\` AS tel`);
-    const sql = `SELECT ${cols.join(', ')} FROM \`${cm.table}\` WHERE \`${cm.loja}\` = '${loja}' AND \`${cm.nome}\` IS NOT NULL AND \`${cm.nome}\` <> '' LIMIT 15000`;
-    const r = await this.erp.runReadOnly(sql, { maxRows: 15000, timeoutMs: 20000 });
+    // Paginado (31/07) — mesmo teto silencioso de 15.000 dos outros.
+    const leituraLoja = await this.erp.readAllPages(
+      `SELECT ${cols.join(', ')} FROM \`${cm.table}\` WHERE \`${cm.loja}\` = '${loja}' AND \`${cm.nome}\` IS NOT NULL AND \`${cm.nome}\` <> ''`,
+      { orderBy: `\`${cm.codCliente}\``, batch: 10_000, timeoutMs: 30_000 },
+    );
+    const r = { rows: leituraLoja.rows };
+    if (leituraLoja.truncado) this.logger.error(`[crediario-baixa] clientes da loja ${loja} TRUNCADO no teto`);
 
     type Cli = { codCliente: string; nome: string; cpf: string | null; telefone: string | null; parcelasAbertas: number };
     const clientes: Cli[] = [];
