@@ -8,17 +8,20 @@ import 'server-only';
  * interface e mudar a env `PAYMENT_PROVIDER` — nenhuma rota muda.
  *
  * Providers:
- *   'mock'    (default) — payload EMV real com chave de sandbox + auto-confirm
- *              em dev. Demonstra o fluxo inteiro sem mover um centavo.
+ *   'pagarme' — o gateway REAL (decisão do dono 31/07: mesma estrutura do
+ *              WordPress atual, checkout transparente). Liga sozinho quando
+ *              `PAGARME_SECRET_KEY` existe.
+ *   'mock'    — payload EMV real com chave de sandbox + auto-confirm em dev.
+ *              Demonstra o fluxo inteiro sem mover um centavo.
  *   'pagbank' — esqueleto. Ver o aviso GRANDE em `PagBankProvider` antes de
  *              pensar em ligar.
  */
 
 import type { Order, OrderStatus } from '@/types/checkout';
-// Import de valor só do mock (o PagBank é esqueleto local). O mock importa
-// deste arquivo apenas TIPOS — import type é apagado na compilação, então não
-// há ciclo em runtime.
+// Imports de valor só dos providers locais. Mock e Pagar.me importam deste
+// arquivo apenas TIPOS — import type é apagado na compilação, sem ciclo.
 import { MockProvider } from './mock';
+import { isPagarmeConfigured, PagarmeProvider } from './pagarme';
 
 export interface PixCharge {
   /** Payload EMV completo — o que a cliente copia pro app do banco. */
@@ -26,12 +29,24 @@ export interface PixCharge {
   txid: string;
   /** ISO — depois disso o pedido expira sem pagamento. */
   expiresAt: string;
+  /** Id da order NO GATEWAY — é a chave do checkStatus e da conciliação. */
+  gatewayOrderId?: string;
+}
+
+/** Cartão responde na hora: pago ou recusado (recusa é fluxo, não exceção). */
+export interface CardChargeResult {
+  status: 'paid' | 'refused';
+  gatewayOrderId: string;
+  /** Mensagem ELEGANTE pra UI quando recusado. */
+  reason?: string;
 }
 
 export interface PaymentProvider {
   /** Nome curto pra log — nunca exibido pra cliente. */
   readonly id: string;
   createPixCharge(order: Order): Promise<PixCharge>;
+  /** Cobrança de cartão com token (transparente). Ausente = método desligado. */
+  createCardCharge?(order: Order, cardToken: string, installments: number): Promise<CardChargeResult>;
   /**
    * Consulta o status no gateway (opcional — gateway com webhook confiável
    * pode viver sem poll). Deve devolver o status JÁ refletido no pedido:
@@ -62,8 +77,17 @@ class PagBankProvider implements PaymentProvider {
 }
 
 export function getPaymentProvider(): PaymentProvider {
-  const escolhido = process.env.PAYMENT_PROVIDER ?? 'mock';
+  // Sem PAYMENT_PROVIDER explícita, a presença da chave decide: configurou a
+  // Pagar.me → ela assume. `PAYMENT_PROVIDER=mock` força o mock mesmo com
+  // chave (útil pra testar o fluxo sem cobrar ninguém).
+  const escolhido = process.env.PAYMENT_PROVIDER ?? (isPagarmeConfigured() ? 'pagarme' : 'mock');
 
+  if (escolhido === 'pagarme') {
+    if (!isPagarmeConfigured()) {
+      throw new Error('PAYMENT_PROVIDER=pagarme exige a env PAGARME_SECRET_KEY (sk_test_* ou sk_*).');
+    }
+    return new PagarmeProvider();
+  }
   if (escolhido === 'pagbank') return new PagBankProvider();
 
   return new MockProvider();

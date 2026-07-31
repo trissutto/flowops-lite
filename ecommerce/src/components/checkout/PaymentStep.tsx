@@ -24,6 +24,8 @@ import { CardForm } from './CardForm';
 export interface PaymentSelection {
   method: PaymentMethod;
   installments?: number;
+  /** Token de uso único da Pagar.me (transparente) — nunca o cartão em si. */
+  cardToken?: string;
 }
 
 const TABS: Array<{ method: PaymentMethod; label: string; icon: React.ElementType }> = [

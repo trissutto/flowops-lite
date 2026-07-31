@@ -21,6 +21,7 @@ import QRCode from 'qrcode';
 import { z } from 'zod';
 import { applyCoupon } from '@/lib/commerce/cupom';
 import { findQuote } from '@/lib/commerce/frete';
+import { confirmPayment } from '@/lib/orders/confirm';
 import { nextOrderNumber } from '@/lib/orders/number';
 import { getOrderStore } from '@/lib/orders/store';
 import { getPaymentProvider } from '@/lib/payments/provider';
@@ -88,7 +89,10 @@ const bodySchema = z.object({
   items: z.array(cartLineSchema).min(1).max(50),
   couponCode: z.string().max(30).optional(),
   paymentMethod: z.enum(['pix', 'card', 'boleto']),
-  installments: z.number().int().min(1).max(10).optional(),
+  // 12 acompanha o CardForm (MAX_PARCELAS) — os dois limites andam JUNTOS.
+  installments: z.number().int().min(1).max(12).optional(),
+  // Token de uso único da Pagar.me, gerado no navegador — nunca é o cartão.
+  cardToken: z.string().min(8).max(120).optional(),
   tracking: trackingSchema,
 });
 
@@ -205,15 +209,23 @@ export async function POST(req: Request): Promise<NextResponse<CreateOrderResult
 
   /* ── Meio de pagamento ── */
 
-  if (input.paymentMethod !== 'pix') {
-    // Cartão e boleto ficam pra próxima fase — contrato suporta ok:false.
+  const provider = getPaymentProvider();
+
+  // Boleto ainda não tem provider; cartão exige provider com o método E token
+  // (transparente: sem token não há o que cobrar — provavelmente a Public Key
+  // não está configurada no client).
+  const cartaoDisponivel = typeof provider.createCardCharge === 'function';
+  if (
+    input.paymentMethod === 'boleto' ||
+    (input.paymentMethod === 'card' && (!cartaoDisponivel || !input.cardToken))
+  ) {
     return NextResponse.json({
       ok: false,
       error: 'Estamos finalizando este meio de pagamento — por enquanto, o Pix garante seu pedido (e com desconto).',
     });
   }
 
-  /* ── Cria o pedido + cobrança PIX ── */
+  /* ── Cria o pedido + cobrança ── */
 
   const order: Order = {
     id: crypto.randomUUID(),
@@ -229,17 +241,44 @@ export async function POST(req: Request): Promise<NextResponse<CreateOrderResult
     couponCode,
     shippingPrice,
     total,
-    payment: { method: 'pix' },
+    payment: { method: input.paymentMethod, installments: input.installments },
     tracking: input.tracking,
   };
 
+  if (input.paymentMethod === 'card') {
+    /* CARTÃO — resposta síncrona: pago ou recusado, sem tela de espera. */
+    try {
+      const cobranca = await provider.createCardCharge!(order, input.cardToken!, input.installments ?? 1);
+      if (cobranca.status === 'refused') {
+        // Recusa NÃO cria pedido: a cliente ajusta o cartão e tenta de novo
+        // sem deixar rastro de pedido morto (e sem furar o rate-limit à toa).
+        return NextResponse.json({ ok: false, error: cobranca.reason ?? 'O cartão não foi autorizado. Tente outro cartão — ou o Pix, que aprova na hora.' });
+      }
+      order.payment.gatewayOrderId = cobranca.gatewayOrderId;
+      await getOrderStore().create(order);
+      // Dinheiro confirmado pelo gateway → o MESMO caminho do webhook marca
+      // pago e dispara o purchase (uma vez, server-side).
+      await confirmPayment(order.id);
+      const pago = await getOrderStore().get(order.id);
+      const { tracking: _t, ...semTracking } = pago ?? order;
+      return NextResponse.json({ ok: true, order: semTracking as Order }, { status: 201 });
+    } catch (err) {
+      console.error('[checkout] falha na cobrança de cartão:', err);
+      return NextResponse.json(
+        { ok: false, error: 'Não conseguimos processar o cartão agora. Tente novamente — ou o Pix, que aprova na hora.' },
+        { status: 502 },
+      );
+    }
+  }
+
+  /* PIX */
   try {
-    const provider = getPaymentProvider();
     const charge = await provider.createPixCharge(order);
     // QR e copia-e-cola nascem do MESMO payload — o que a câmera lê é o que
     // a cliente cola no app.
     const qrCode = await QRCode.toDataURL(charge.copyPaste, { margin: 1, width: 320 });
     order.payment.pix = { qrCode, copyPaste: charge.copyPaste, expiresAt: charge.expiresAt };
+    order.payment.gatewayOrderId = charge.gatewayOrderId;
   } catch (err) {
     console.error('[checkout] falha ao criar cobrança PIX:', err);
     return NextResponse.json(

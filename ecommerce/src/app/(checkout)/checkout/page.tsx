@@ -144,6 +144,7 @@ export default function CheckoutPage() {
       couponCode: coupon?.ok ? coupon.code : undefined,
       paymentMethod: payment.method,
       installments: payment.installments,
+      cardToken: payment.cardToken,
       tracking: {
         anonymous_id: getAnonymousId(),
         session_id: getSessionId(),
@@ -161,11 +162,9 @@ export default function CheckoutPage() {
       const result = (await res.json().catch(() => null)) as CreateOrderResult | null;
 
       if (!result?.ok || !result.order) {
-        // Cartão sem gateway no MVP: o server recusa e a mensagem explica
-        // com elegância, sem culpar a cliente nem soar quebrado.
-        setSubmitError(
-          payment.method === 'card' ? ERRO_CARTAO : (result?.error ?? ERRO_GENERICO),
-        );
+        // A mensagem do server já é elegante por contrato (recusa da
+        // operadora, método indisponível…) — repassa; fallback só sem corpo.
+        setSubmitError(result?.error ?? (payment.method === 'card' ? ERRO_CARTAO : ERRO_GENERICO));
         return;
       }
 
