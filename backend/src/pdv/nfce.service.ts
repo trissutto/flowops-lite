@@ -365,25 +365,53 @@ export class NfceService {
       descontoEfetivoTotal - somaDescontosItens,
     );
 
+    // ── RATEIO DO DESCONTO POR ITEM ──────────────────────────────────────
+    //
+    // Dois bugs reais corrigidos aqui (rejeição 225 em Jundiaí, 28/07, nota
+    // 164 de R$ 2.483,15 — o XML salvo tinha `<vDesc>-3.47</vDesc>`):
+    //
+    //  1. vDesc NEGATIVO derruba o lote. O schema define vDesc como decimal
+    //     não-negativo. Item com `desconto` negativo no PDV (acréscimo
+    //     lançado como desconto ao contrário) ia direto pro XML.
+    //  2. ÍNDICE DESALINHADO: o mapa era preenchido percorrendo `items`
+    //     (lista completa) e lido percorrendo `itensFiscais` (sem as linhas
+    //     de valor negativo). Com uma linha de desconto no meio, o desconto
+    //     de um item caía em outro.
+    //
+    // Agora percorre a MESMA lista do <det> e distribui o desconto efetivo
+    // proporcional ao bruto, sempre dentro de [0, bruto do item]. O resíduo
+    // de arredondamento vai pro item que tiver folga — a soma dos vDesc
+    // precisa bater com o vDesc do total (senão cai em cStat 537).
     const descontoPorItem = new Map<number, number>();
-    let descAcumulado = 0;
-    items.forEach((it: any, idx: number) => {
+    const alvoDesconto = Math.min(
+      Math.max(0, descontoEfetivoTotal),
+      brutoTotal, // desconto nunca passa do bruto: vBC não pode ficar negativo
+    );
+    let distribuido = 0;
+    itensFiscais.forEach((it: any, idx: number) => {
       const bruto = (it.qty || 0) * (it.precoUnit || 0);
-      const descItemOriginal = Number(it.desconto || 0);
-      let parcelaExtra: number;
-      if (idx === items.length - 1) {
-        // Último item: pega o resíduo pra fechar o total exato (anti-rounding)
-        parcelaExtra = Math.max(0, descontoVendaExtra - descAcumulado);
-      } else if (brutoTotal > 0) {
-        parcelaExtra = Number(
-          ((bruto / brutoTotal) * descontoVendaExtra).toFixed(2),
-        );
-        descAcumulado += parcelaExtra;
-      } else {
-        parcelaExtra = 0;
+      let parcela = 0;
+      if (alvoDesconto > 0 && brutoTotal > 0) {
+        parcela = Number(((bruto / brutoTotal) * alvoDesconto).toFixed(2));
+        parcela = Math.min(Math.max(0, parcela), bruto);
       }
-      descontoPorItem.set(idx, descItemOriginal + parcelaExtra);
+      descontoPorItem.set(idx, parcela);
+      distribuido += parcela;
     });
+
+    // Resíduo do arredondamento (centavos): joga em quem tem espaço.
+    let residuo = Number((alvoDesconto - distribuido).toFixed(2));
+    if (Math.abs(residuo) >= 0.01) {
+      for (let idx = 0; idx < itensFiscais.length && Math.abs(residuo) >= 0.01; idx++) {
+        const it: any = itensFiscais[idx];
+        const bruto = (it.qty || 0) * (it.precoUnit || 0);
+        const atual = descontoPorItem.get(idx) || 0;
+        const novo = Math.min(Math.max(0, Number((atual + residuo).toFixed(2))), bruto);
+        residuo = Number((residuo - (novo - atual)).toFixed(2));
+        descontoPorItem.set(idx, novo);
+      }
+    }
+    void descontoVendaExtra; // mantido acima só pra leitura do cálculo
 
     // Regime tributário define que tipo de bloco ICMS/PIS/COFINS gera:
     //   CRT=1: Simples Nacional       → CSOSN/PISNT/COFINSNT
