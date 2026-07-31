@@ -37,23 +37,55 @@ export class RemessaEnvioService {
     private readonly danfePdf: DanfePdfService,
   ) {}
 
-  /** Endereço/identidade de uma loja pela config fiscal (NfceConfig). */
+  /**
+   * Endereço/identidade de uma loja pela config fiscal (NfceConfig).
+   *
+   * IDENTIDADE DA NF-e, NÃO a da NFC-e (bug 31/07): a `NfceConfig` guarda DUAS
+   * identidades. Quando a loja emite NF-e por um CNPJ diferente do da NFC-e
+   * (alinhamento de máquina de cartão), os dados reais dela ficam nos campos
+   * `nfe*` — e é isso que a NF-e de transferência usa (`loadStoreFiscal`).
+   * Aqui lia só `cfg.endereco`, então a etiqueta de uma remessa pra SOROCABA
+   * saiu endereçada pra ITANHAÉM: nota e etiqueta contando histórias
+   * diferentes da mesma caixa. Mesma regra do `loadStoreFiscal` — se o CNPJ
+   * da NF-e existe e é OUTRO, a identidade INTEIRA é a da NF-e (razão +
+   * endereço juntos, nunca misturados).
+   */
   private async dadosLoja(storeCode: string) {
     const cfg: any = await this.prisma.nfceConfig.findUnique({ where: { storeCode } });
-    if (!cfg?.endereco) throw new BadRequestException(`Loja ${storeCode} sem endereço na config fiscal (NfceConfig) — necessário pro envio da remessa.`);
-    let e: any = {};
-    try { e = JSON.parse(String(cfg.endereco)); } catch { /* valida abaixo */ }
-    const cep = String(e?.cep || '').replace(/\D/g, '');
-    if (!e?.logradouro || cep.length !== 8) throw new BadRequestException(`Loja ${storeCode} com endereço fiscal incompleto (logradouro/CEP).`);
+    if (!cfg) throw new BadRequestException(`Loja ${storeCode} sem config fiscal (NfceConfig) — necessário pro envio da remessa.`);
+
+    const digits = (v: any) => String(v ?? '').replace(/\D/g, '');
+    const nfeCnpj = digits(cfg.nfeCnpj);
+    const baseCnpj = digits(cfg.cnpj);
+    const identidadePropria = nfeCnpj.length === 14 && nfeCnpj !== baseCnpj;
+
+    const parse = (raw: any) => {
+      if (!raw) return null;
+      let e: any = null;
+      try { e = JSON.parse(String(raw)); } catch { return null; }
+      const cep = digits(e?.cep);
+      if (!e?.logradouro || cep.length !== 8) return null;
+      return { ...e, cep };
+    };
+
+    // Endereço da identidade escolhida; cai no da NFC-e se o `nfeEndereco`
+    // estiver vazio/incompleto (loja que só herdou o CNPJ).
+    const e = (identidadePropria ? parse(cfg.nfeEndereco) : null) ?? parse(cfg.endereco);
+    if (!e) throw new BadRequestException(`Loja ${storeCode} com endereço fiscal incompleto (logradouro/CEP).`);
+
+    const nome = identidadePropria
+      ? String(cfg.nfeFantasia || cfg.nfeRazaoSocial || cfg.fantasia || cfg.razaoSocial || `LOJA ${storeCode}`)
+      : String(cfg.fantasia || cfg.razaoSocial || `LOJA ${storeCode}`);
+
     return {
-      nome: String(cfg.fantasia || cfg.razaoSocial || `LOJA ${storeCode}`).slice(0, 50),
-      cnpj: String(cfg.cnpj || '').replace(/\D/g, ''),
+      nome: nome.slice(0, 50),
+      cnpj: identidadePropria ? nfeCnpj : baseCnpj,
       endereco: String(e.logradouro),
       numero: String(e.numero || 'S/N'),
       bairro: String(e.bairro || ''),
       cidade: String(e.municipio || e.cidade || ''),
       uf: String(e.uf || 'SP'),
-      cep,
+      cep: e.cep,
     };
   }
 
@@ -161,6 +193,20 @@ export class RemessaEnvioService {
     const valor = (Number(doc?.valorTotalCents) || 0) / 100;
     const origem = await this.dadosLoja(shipment.fromStoreCode);
     const destino = await this.dadosLoja(shipment.toStoreCode);
+    // TRAVA (31/07): duas lojas diferentes NUNCA podem resolver pro mesmo
+    // endereço. Quando isso acontece é config fiscal errada, e a etiqueta sai
+    // mandando a caixa de volta pra própria origem — foi assim que a remessa
+    // 01 → SOROCABA saiu endereçada pra Itanhaém. Melhor travar que postar.
+    const mesmoEndereco =
+      `${origem.cep}|${origem.endereco}|${origem.numero}`.toUpperCase() ===
+      `${destino.cep}|${destino.endereco}|${destino.numero}`.toUpperCase();
+    if (mesmoEndereco) {
+      throw new BadRequestException(
+        `Config fiscal errada: loja ${shipment.fromStoreCode} e loja ${shipment.toStoreCode} têm o MESMO endereço ` +
+        `(${destino.endereco}, ${destino.numero} — CEP ${destino.cep}). A etiqueta iria pro lugar errado. ` +
+        `Corrija o endereço da loja ${shipment.toStoreCode} em Retaguarda → Config NFC-e antes de gerar o envio.`,
+      );
+    }
     const itensDeclaracao = itens.slice(0, 50).map((it) => ({
       conteudo: [it.refCode, it.cor, it.tamanho].filter(Boolean).join(' ').slice(0, 60) || 'Vestuário',
       quantidade: String(it.qtyOrigem || 1),
