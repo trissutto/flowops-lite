@@ -3,6 +3,29 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeGateway } from '../websocket/realtime.gateway';
 import { WooCommerceService } from '../woocommerce/woocommerce.service';
 import { ErpService } from '../erp/erp.service';
+import { ManychatService } from '../live-pdv/manychat.service';
+import { LivePdvService } from '../live-pdv/live-pdv.service';
+import { MaisEnviosService } from '../mais-envios/mais-envios.service';
+import { CorreiosService } from '../correios/correios.service';
+import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service';
+import { DceEmitService } from '../dce/dce-emit.service';
+import { NfeTransferService } from '../nfe/nfe-transfer.service';
+import { DanfePdfService } from '../nfe/danfe-pdf.service';
+
+// Lojas que despacham pelo MAIS ENVIOS (código Flow → sender id no Mais Envios).
+// As demais vão pelo Correios (CWS). Rede: Piracicaba/Sorocaba/Limeira/Moema;
+// franquias (Vinhedo/Jundiaí/Suzano/Anália Franco) entram via env sem deploy:
+// MAISENVIOS_STORES_JSON = {"10": 1234, "17": 5678, ...} (código → sender id).
+const MAISENVIOS_STORES: Record<string, number> = { '05': 3605, '06': 209, '11': 213, '15': 22908 };
+function maisEnviosStores(): Record<string, number> {
+  const base: Record<string, number> = { ...MAISENVIOS_STORES };
+  try {
+    const j = JSON.parse(process.env.MAISENVIOS_STORES_JSON || '{}');
+    for (const k of Object.keys(j)) { const v = Number(j[k]); if (v > 0) base[String(k)] = v; }
+  } catch { /* JSON inválido → só o mapa fixo */ }
+  return base;
+}
+import { authorizeMinLevel } from '../auth/auth-levels.util';
 
 // Status LOGÍSTICO do pick-order (controlado pela loja):
 //   new          → chegou, filial não começou
@@ -45,13 +68,889 @@ const WC_STATUS_SHIPPED = 'completed';
 @Injectable()
 export class PickOrdersService {
   private readonly logger = new Logger(PickOrdersService.name);
+  // Divisor do valor intercompany (regra do dono: VENDAUN ÷ 2,5 — NUNCA o CUSTO)
+  private static readonly DIVISOR_CUSTO = 2.5;
+
+  /**
+   * Loja-canal que recebe TODA venda de site e de live (dono 30/07).
+   * A peça sai da loja física e entra aqui — é o destino único do acerto
+   * entre lojas, no lugar do antigo "loja que fez a live" / código 'SITE'.
+   */
+  private static readonly CANAL_STORE_CODE = '13';
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly gateway: RealtimeGateway,
     @Inject(forwardRef(() => WooCommerceService))
     private readonly wc: WooCommerceService,
     private readonly erp: ErpService,
+    private readonly manychat: ManychatService,
+    private readonly catalog: WincredCatalogService,
+    private readonly livePdv: LivePdvService,
+    private readonly maisEnvios: MaisEnviosService,
+    private readonly correios: CorreiosService,
+    private readonly dce: DceEmitService,
+    private readonly nfe: NfeTransferService,
+    private readonly danfePdf: DanfePdfService,
   ) {}
+
+  /**
+   * DOCUMENTOS DO ENVIO num PDF ÚNICO: etiqueta dos Correios + DANFE da NF-e
+   * (quando autorizada), nessa ordem — a loja imprime um arquivo só.
+   */
+  async docsEnvioMerged(id: string, storeId: string) {
+    const pick = await this.prisma.pickOrder.findUnique({ where: { id } });
+    if (!pick) throw new NotFoundException('Pick-order não encontrado');
+    if (pick.storeId !== storeId) throw new ForbiddenException('Pick-order não pertence à sua loja');
+    if (!pick.correiosPrepostagemId) throw new BadRequestException('Envio ainda não gerado (sem pré-postagem).');
+
+    // Etiqueta pelo provedor do envio: Mais Envios usa a TAG; Correios o id da
+    // pré-postagem. BEST-EFFORT: se a etiqueta falhar, a DANFE sai mesmo assim
+    // (antes a falha da etiqueta engolia a nota junto — 28/07).
+    const pdfs: Buffer[] = [];
+    let etiquetaErro: string | null = null;
+    const baixarEtiqueta = async (me: boolean): Promise<any> => {
+      try {
+        return me
+          ? await this.maisEnvios.baixarEtiqueta(String(pick.trackingCode || ''))
+          : await this.correios.baixarEtiqueta(String(pick.correiosPrepostagemId));
+      } catch (e: any) {
+        return { ok: false, erro: String(e?.message || e) };
+      }
+    };
+    // 1º: etiqueta GRAVADA na geração do envio (não depende de API externa)
+    let et: any = (pick as any).etiquetaPdf ? { ok: true, pdfBase64: (pick as any).etiquetaPdf } : null;
+    if (!et) {
+      const ehME = String(pick.carrier || '').includes('Mais Envios');
+      et = await baixarEtiqueta(ehME);
+      if (!ehME && !(et?.ok && et.pdfBase64)) {
+        // Picks antigos gravaram carrier "Correios SEDEX" mesmo sendo Mais
+        // Envios — tenta o ME (1 POST rápido). O inverso NÃO: carrier "Mais
+        // Envios" só é gravado pelo caminho ME, e cair no polling dos Correios
+        // com id inválido pendurava o request ~1min (lentidão 28/07).
+        const et2 = await baixarEtiqueta(true);
+        if (et2?.ok && et2.pdfBase64) et = et2;
+      }
+      // Conseguiu agora? Grava pra próxima reimpressão não depender da API.
+      if (et?.ok && et.pdfBase64) {
+        try { await this.prisma.pickOrder.update({ where: { id }, data: { etiquetaPdf: String(et.pdfBase64) } }); } catch { /* best-effort */ }
+      }
+    }
+    if (et?.ok && et.pdfBase64) pdfs.push(Buffer.from(String(et.pdfBase64), 'base64'));
+    else {
+      etiquetaErro = et?.erro || 'etiqueta indisponível';
+      this.logger.warn(`[docs-envio] etiqueta indisponível pro pick ${id} (carrier=${pick.carrier}, tag=${pick.trackingCode}): ${etiquetaErro}`);
+    }
+
+    let temNota = false;
+    try {
+      // A AUTORIZADA mais recente — não a mais recente qualquer (uma tentativa
+      // rejeitada depois da autorizada escondia a nota do PDF; 28/07)
+      const doc: any = await (this.prisma as any).nfeDoc.findFirst({
+        where: { shipmentId: `envio:${id}`, status: 'authorized' },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true },
+      });
+      if (doc?.id) {
+        const { buffer } = await this.danfePdf.generateForDoc(doc.id);
+        pdfs.push(buffer);
+        temNota = true;
+      }
+    } catch (e: any) {
+      this.logger.warn(`[docs-envio] DANFE indisponível pro pick ${id}: ${e?.message || e}`);
+    }
+
+    if (!pdfs.length) {
+      throw new BadRequestException(`Nem etiqueta nem DANFE disponíveis${etiquetaErro ? ` (etiqueta: ${etiquetaErro})` : ''} — tente de novo em alguns segundos.`);
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { PDFDocument } = require('pdf-lib');
+    const out = await PDFDocument.create();
+    for (const b of pdfs) {
+      const src = await PDFDocument.load(b, { ignoreEncryption: true });
+      const pages = await out.copyPages(src, src.getPageIndices());
+      for (const p of pages) out.addPage(p);
+    }
+    const bytes = await out.save();
+    return { ok: true, pdfBase64: Buffer.from(bytes).toString('base64'), temNota, temEtiqueta: !etiquetaErro, etiquetaErro, trackingCode: pick.trackingCode || null };
+  }
+
+  /**
+   * Gera a PRÉ-POSTAGEM dos Correios pro pedido da LIVE deste pick-order e o
+   * marca como ENVIADO com o rastreio gerado (mesmo caminho do "Enviar c/
+   * rastreio" — dispara baixa Giga + WhatsApp). Reusa gerarEnvioCorreios do
+   * carrinho da live (via Order.liveCartId). Só live por enquanto.
+   */
+  async gerarEnvioCorreios(id: string, storeId: string, _userId: string) {
+    const pick = await this.prisma.pickOrder.findUnique({ where: { id } });
+    if (!pick) throw new NotFoundException('Pick-order não encontrado');
+    if (pick.storeId !== storeId) throw new ForbiddenException('Pick-order não pertence à sua loja');
+    if (pick.status === 'shipped') throw new BadRequestException('Pedido já enviado.');
+    // ── IDEMPOTÊNCIA (28/07: 17 pré-postagens do MESMO pedido no Mais Envios,
+    // uma por clique enquanto o request anterior pendurava) ──────────────────
+    // Já tem rastreio? devolve o existente — NUNCA cria outra pré-postagem.
+    // Regenerar de verdade = Reabrir (limpa os campos) e gerar de novo.
+    if (pick.trackingCode) {
+      // Garante a NOTA mesmo no "já gerado": se o pick ficou sem NF-e
+      // autorizada (falha numa tentativa anterior), emite agora — a emissão é
+      // idempotente por pick+ambiente, então NUNCA duplica nota nem etiqueta.
+      let nfe: any = null;
+      try {
+        const doc: any = await (this.prisma as any).nfeDoc.findFirst({
+          where: { shipmentId: `envio:${id}`, status: 'authorized' }, select: { id: true },
+        });
+        if (!doc) {
+          const order: any = await this.prisma.order.findUnique({ where: { id: pick.orderId }, include: { items: true } });
+          const store: any = await this.prisma.store.findUnique({ where: { id: pick.storeId } });
+          if (order) nfe = (await this.emitirNfeDoEnvio(id, order, pick, store)).nfe;
+        }
+      } catch { /* nota é best-effort aqui — o docs-envio avisa se faltar */ }
+      return { ok: true, jaGerado: true, codigoRastreio: pick.trackingCode, idPrepostagem: pick.correiosPrepostagemId ?? null, servico: null, carrier: pick.carrier ?? null, etiquetaPdf: (pick as any).etiquetaPdf ?? null, dce: null, nfe };
+    }
+    // Trava atômica contra cliques simultâneos: só o 1º request marca
+    // correiosGeneratedAt e gera; os demais levam aviso. Falhou? solta a trava.
+    const claim = await this.prisma.pickOrder.updateMany({
+      where: { id, trackingCode: null, correiosGeneratedAt: null },
+      data: { correiosGeneratedAt: new Date() },
+    });
+    if (claim.count === 0) throw new BadRequestException('Envio já está sendo gerado — aguarde uns segundos e clique Reimprimir.');
+    try {
+      return await this.gerarEnvioCorreiosInner(id, pick);
+    } catch (e) {
+      await this.prisma.pickOrder.updateMany({ where: { id, trackingCode: null }, data: { correiosGeneratedAt: null } }).catch(() => undefined);
+      throw e;
+    }
+  }
+
+  /**
+   * NF-e do ENVIO (ANTES da etiqueta: a chave vai na pré-postagem).
+   * Gated por NFE_ENVIO_ENABLED=1. CFOP/DIFAL automáticos (regra do
+   * contador). Falha na NF-e NÃO trava a etiqueta — segue sem chave e o
+   * front avisa. NFE_ENVIO_AMBIENTE=2 força homologação (e aí a chave de
+   * teste NÃO vai pra pré-postagem). Emissão idempotente por pick+ambiente.
+   */
+  private async emitirNfeDoEnvio(id: string, order: any, pick: any, store: any): Promise<{ nfe: any; nfeChave?: string; nfeInfoME: any }> {
+    let nfe: any = null;
+    let nfeChave: string | undefined;
+    let nfeInfoME: any = null;
+    if (String(process.env.NFE_ENVIO_ENABLED || '').trim() === '1' && !order.isPickup) {
+      try {
+        const dados = await this.montarDadosNfeEnvio(order, pick, String(store?.code || ''));
+        if (!dados) {
+          // montarDadosNfeEnvio já logou o motivo específico. Este registro
+          // fecha o rastro: a etiqueta VAI sair, mas sem nota — e antes disso
+          // acontecia em silêncio absoluto (caso Limeira/Piracicaba 30/07).
+          nfe = { status: 'skipped', motivo: 'dados da NF-e não puderam ser montados — ver log [nfe-envio] acima' };
+        }
+        if (dados) {
+          const amb = process.env.NFE_ENVIO_AMBIENTE === '2' ? '2' : process.env.NFE_ENVIO_AMBIENTE === '1' ? '1' : undefined;
+          // Venda do SITE = empresa do site (LURDS matriz, raiz 30), não a loja
+          // separadora (regra do dono 28/07: "não temos código, seria site").
+          // Envs: NFE_SITE_EMITENTE_RAIZ (8 díg) + NFE_SITE_EMITENTE_STORE
+          // (loja cuja config guarda a identidade/numeração; default a própria).
+          const isSite = order.source !== 'live';
+          const siteRaiz = String(process.env.NFE_SITE_EMITENTE_RAIZ || '').replace(/\D/g, '');
+          const siteStore = String(process.env.NFE_SITE_EMITENTE_STORE || '').trim();
+          // FRANQUIAS emitem pela MDD CERQUEIRA (dono 28/07): mapa loja→raiz
+          // por env, ex. NFE_EMITENTE_RAIZ_POR_LOJA = {"10":"<raizMDD>",...}.
+          // Vale pra venda da LIVE da franquia; site continua LURDS.
+          let lojaRaiz = '';
+          try {
+            const mapa = JSON.parse(process.env.NFE_EMITENTE_RAIZ_POR_LOJA || '{}');
+            lojaRaiz = String(mapa[String(store?.code || '')] || '').replace(/\D/g, '');
+          } catch { /* JSON inválido → sem override */ }
+          const r2: any = await this.nfe.emitVendaForEnvio({
+            pickOrderId: id,
+            storeCode: isSite && siteRaiz.length === 8 && siteStore ? siteStore : String(store?.code || ''),
+            dest: dados.dest,
+            items: dados.items,
+            ambienteOverride: amb as any,
+            emitirPorRaiz: isSite && siteRaiz.length === 8 ? siteRaiz : (lojaRaiz.length === 8 ? lojaRaiz : undefined),
+          });
+          nfe = { docId: r2?.doc?.id, status: r2?.ok ? 'authorized' : 'rejected', cStat: r2?.cStat, xMotivo: r2?.xMotivo, chave: r2?.doc?.chave, jaEmitida: !!r2?.jaEmitida };
+          if (r2?.ok && r2?.doc?.chave && r2?.doc?.tpAmb === '1') nfeChave = String(r2.doc.chave);
+          // Mais Envios: a nota vai SEMPRE (mesmo homolog) — lá o nf.nfeKey é
+          // referência/unicidade da etiqueta (chave vazia COLIDE: "Etiqueta já
+          // cadastrada"); não é transmissão fiscal como a chaveNFe dos Correios.
+          if (r2?.ok && r2?.doc?.chave) {
+            nfeInfoME = { chave: String(r2.doc.chave), numero: r2.doc.numero, serie: r2.doc.serie, valor: (Number(r2.doc.valorTotalCents) || 0) / 100 };
+          }
+        }
+      } catch (e: any) {
+        this.logger.warn(`[nfe-envio] falha pro pick ${id}: ${e?.message || e}`);
+        nfe = { status: 'error', erro: String(e?.message || e).slice(0, 300) };
+      }
+    }
+    return { nfe, nfeChave, nfeInfoME };
+  }
+
+  private async gerarEnvioCorreiosInner(id: string, pick: any) {
+    const order: any = await this.prisma.order.findUnique({ where: { id: pick.orderId }, include: { items: true } });
+    if (!order) throw new NotFoundException('Pedido não encontrado');
+
+    const store: any = await this.prisma.store.findUnique({ where: { id: pick.storeId } });
+
+    const { nfe, nfeChave, nfeInfoME } = await this.emitirNfeDoEnvio(id, order, pick, store);
+
+    // Remetente da etiqueta = a PRÓPRIA loja do envio (endereço da config
+    // fiscal). Fallback: remetente padrão (matriz Itanhaém) se a loja não
+    // tiver config completa. Bug 28/07: pacote de Moema saía com remetente
+    // Itanhaém na etiqueta.
+    const remetenteLoja = await this.remetenteDaLoja(String(store?.code || ''));
+
+    // Provedor da loja (vale pra LIVE **e** SITE — regra do dono 28/07):
+    // lojas do Mais Envios despacham TUDO por lá quando MAISENVIOS_ROUTING=1.
+    const mapped = maisEnviosStores()[String(store?.code || '')];
+    const routingOn = String(process.env.MAISENVIOS_ROUTING || '').trim() === '1';
+    const provider = routingOn ? (store?.shippingProvider || (mapped ? 'maisenvios' : 'correios')) : 'correios';
+    const senderId = store?.maisEnviosSenderId || mapped || null;
+    if (provider === 'maisenvios' && !senderId) {
+      throw new BadRequestException('Loja Mais Envios sem "sender id" — configure na tela de Lojas.');
+    }
+
+    let r: any;
+    if (order.source === 'live') {
+      if (!order.liveCartId) throw new BadRequestException('Pedido da live sem carrinho vinculado.');
+      if (provider === 'maisenvios') {
+        r = await this.gerarEnvioMaisEnvios(order.liveCartId, senderId, nfeInfoME, `${order.wcOrderNumber || order.id}/${String(pick.id).slice(0, 8)}`, String(store?.name || ''));
+      } else {
+        r = await this.livePdv.gerarEnvioCorreios(order.liveCartId, nfeChave, remetenteLoja || undefined);
+      }
+    } else if (provider === 'maisenvios') {
+      // SITE numa loja Mais Envios: pré-postagem lá, a partir do Order.
+      r = await this.gerarEnvioMaisEnviosSite(order, pick, senderId, nfeInfoME, `${order.wcOrderNumber || order.id}/${String(pick.id).slice(0, 8)}`, String(store?.name || ''));
+    } else {
+      // SITE: Correios a partir do próprio Order (endereço + itens do pedido).
+      r = await this.gerarEnvioCorreiosSite(order, pick, nfeChave, remetenteLoja || undefined);
+    }
+    if (!r?.codigoRastreio) throw new BadRequestException('Não foi possível gerar o rastreio.');
+
+    // MODEL B: NÃO marca enviado. Só grava a pré-postagem no pick-order — o
+    // pedido CONTINUA na lista "aguardando postagem". Quem marca enviado (baixa
+    // Giga + WhatsApp) é o cron/"Já postei", quando registrar a postagem.
+    await this.prisma.pickOrder.update({
+      where: { id },
+      data: {
+        trackingCode: r.codigoRastreio,
+        carrier: r.carrier || (r.servico ? `Correios ${r.servico}` : 'Correios'),
+        correiosPrepostagemId: r.idPrepostagem ? String(r.idPrepostagem) : null,
+        correiosGeneratedAt: new Date(),
+        // Etiqueta baixada AGORA (na geração funciona) — reimpressão usa daqui
+        ...(r.etiquetaPdf ? { etiquetaPdf: String(r.etiquetaPdf) } : {}),
+      },
+    });
+
+    // DC-e REMOVIDA do fluxo do envio (dono 29/07: "optamos pela NF-e") —
+    // a SEFAZ bloqueia contribuinte de ICMS de emitir DC-e (cStat 812) e a
+    // NF-e do envio já cumpre o papel. Módulo dce/ segue dormente no código.
+    const dce: any = null;
+
+    return { ok: true, codigoRastreio: r.codigoRastreio, idPrepostagem: r.idPrepostagem ?? null, servico: r.servico ?? null, carrier: r.carrier ?? null, etiquetaPdf: r.etiquetaPdf ?? null, dce, nfe };
+  }
+
+  /**
+   * Remetente da etiqueta dos Correios = a própria loja (endereço da config
+   * fiscal/NfceConfig, que já é completo e validado). Null se a loja não tiver
+   * config — aí o chamador cai no remetente padrão.
+   */
+  private async remetenteDaLoja(storeCode: string): Promise<any | null> {
+    if (!storeCode) return null;
+    try {
+      const cfg: any = await this.prisma.nfceConfig.findUnique({ where: { storeCode } });
+      if (!cfg?.endereco) return null;
+      const e = JSON.parse(String(cfg.endereco));
+      const cep = String(e?.cep || '').replace(/\D/g, '');
+      if (!e?.logradouro || cep.length !== 8) return null;
+      return {
+        nome: String(cfg.fantasia || cfg.razaoSocial || 'LURDS PLUS SIZE').slice(0, 50),
+        cnpjCpf: String(cfg.cnpj || '').replace(/\D/g, ''),
+        endereco: String(e.logradouro),
+        numero: String(e.numero || 'S/N'),
+        bairro: String(e.bairro || ''),
+        cidade: String(e.municipio || e.cidade || ''),
+        uf: String(e.uf || 'SP'),
+        cep,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Destinatário + itens da NF-e do envio. CEP-authoritative (ViaCEP) pra
+   * UF/cidade e principalmente o código IBGE (cMun, obrigatório na NF-e).
+   */
+  private async montarDadosNfeEnvio(order: any, pick: any, storeCode?: string): Promise<{ dest: any; items: any[] } | null> {
+    let nome = '';
+    let cpfCnpj = '';
+    let endereco = '';
+    let numero = '';
+    let bairro = '';
+    let cidade = '';
+    let uf = '';
+    let cep = '';
+    let items: any[] = [];
+
+    // PEDIDO DIVIDIDO em 2+ lojas (dono 29/07): a NF-e de cada envio leva SÓ
+    // as peças daquela loja — filtro ESTRITO (sem fallback pro pedido inteiro;
+    // se não achar item da loja, não emite e o front avisa). Pedido de loja
+    // única mantém o comportamento de sempre (todos os itens).
+    const qtdPicks = await this.prisma.pickOrder.count({ where: { orderId: order.id } });
+    const dividido = qtdPicks > 1;
+    const normLoja = (s: any) => String(s || '').trim().toUpperCase().replace(/^LJ/, '').replace(/^0+/, '');
+
+    if (order.source === 'live' && order.liveCartId) {
+      const cart: any = await (this.prisma as any).livePdvCart.findUnique({ where: { id: order.liveCartId }, include: { items: true } });
+      if (!cart) {
+        this.logger.warn(`[nfe-envio] SEM NOTA: carrinho da live ${order.liveCartId} não encontrado (pedido ${order.id})`);
+        return null;
+      }
+      const todos = (cart.items || []).filter((i: any) => i.status !== 'cancelled');
+      let daLoja = storeCode ? todos.filter((i: any) => normLoja(i.originStoreCode) === normLoja(storeCode)) : [];
+
+      /**
+       * FONTE DA VERDADE DA DIVISÃO (fix 30/07 — Limeira e Piracicaba).
+       *
+       * Quem divide o pedido entre lojas é a migração live→site, que grava
+       * `orderItem.assignedStoreId` e cria um pick por loja
+       * (live-pdv.service.ts). O filtro acima usa OUTRA fonte — o
+       * `originStoreCode` do item do CARRINHO — e as duas podem divergir.
+       *
+       * Quando divergem num pedido DIVIDIDO não havia rede: `itens` vinha
+       * vazio e a nota morria em silêncio (o pedido de loja única escapava
+       * porque tinha o fallback `: todos`).
+       *
+       * Aqui, se o filtro do carrinho não achou nada, casamos pelos itens do
+       * PEDIDO atribuídos a esta loja — que é exatamente o critério que
+       * gerou este pick.
+       */
+      if (dividido && daLoja.length === 0 && pick?.storeId) {
+        const doPedido = (order.items || []).filter((i: any) => i.assignedStoreId === pick.storeId);
+        if (doPedido.length) {
+          this.logger.log(
+            `[nfe-envio] pedido ${order.id}: filtro por originStoreCode veio vazio na loja ${storeCode}; ` +
+              `usando ${doPedido.length} item(ns) do pedido com assignedStoreId desta loja.`,
+          );
+          // Normaliza pro mesmo formato dos itens do carrinho usado abaixo.
+          daLoja = doPedido.map((i: any) => ({
+            codigoBipado: i.sku,
+            itemKey: i.sku,
+            descricao: i.productName,
+            qty: i.quantity,
+            priceCents: Math.round(Number(i.unitPrice || 0) * 100),
+            basePriceCents: Math.round(Number(i.baseUnitPrice ?? i.unitPrice ?? 0) * 100),
+          }));
+        }
+      }
+
+      const itens = dividido ? daLoja : (daLoja.length ? daLoja : todos);
+      if (!itens.length) {
+        // Causa clássica: o originStoreCode dos itens não bate com o código da
+        // loja do pick (pedido dividido entre lojas). Loga os dois lados
+        // normalizados — sem isso a nota some sem deixar rastro.
+        this.logger.warn(
+          `[nfe-envio] SEM NOTA: nenhum item da loja ${storeCode} no carrinho ${order.liveCartId}. ` +
+            `dividido=${dividido} · itensNoCarrinho=${todos.length} · ` +
+            `originStoreCode dos itens=[${todos.map((i: any) => `${i.originStoreCode}→${normLoja(i.originStoreCode)}`).join(', ')}] · ` +
+            `loja do pick=${storeCode}→${normLoja(storeCode)}`,
+        );
+        return null;
+      }
+      nome = cart.customerName || 'Cliente';
+      cpfCnpj = String(cart.customerCpf || '').replace(/\D/g, '');
+      endereco = cart.customerEndereco || '';
+      numero = cart.customerNumero || 'S/N';
+      bairro = cart.customerBairro || '';
+      cidade = cart.customerCidade || '';
+      uf = String(cart.customerUf || '').trim().toUpperCase();
+      cep = String(cart.customerCep || '').replace(/\D/g, '');
+      items = itens.map((i: any) => ({
+        sku: i.sku || i.refCode || 'ITEM',
+        ean: String(i.sku || '').replace(/\D/g, '').length === 13 ? String(i.sku) : undefined,
+        descricao: [i.refCode, i.descricao, i.cor, i.tamanho].filter(Boolean).join(' ') || 'Vestuário',
+        qty: Number(i.qty) || 1,
+        vUn: (Number(i.priceCents) || 0) / 100,
+      }));
+    } else {
+      let addr: any = {};
+      try { addr = JSON.parse(order.shippingAddress || '{}'); } catch { /* cru */ }
+      cep = String(order.shippingCep || addr.postcode || addr.cep || '').replace(/\D/g, '');
+      const address1 = String(addr.address_1 || addr.street || addr.logradouro || '').trim();
+      endereco = address1;
+      numero = String(addr.number || addr.numero || '').trim();
+      if (!numero && address1) {
+        const m = address1.match(/^(.*?),?\s*(\d+[A-Za-z]?)\s*$/);
+        if (m) { endereco = m[1].trim(); numero = m[2]; }
+      }
+      uf = String(addr.state || addr.uf || '').trim().toUpperCase();
+      cidade = String(addr.city || addr.cidade || '').trim();
+      bairro = String(addr.neighborhood || addr.bairro || '').trim();
+      nome = order.customerName || 'Cliente';
+      cpfCnpj = String(order.customerCpf || '').replace(/\D/g, '');
+      const atribuidos = (order.items || []).filter((i: any) => i.assignedStoreId === pick.storeId);
+      const semDono = (order.items || []).filter((i: any) => !i.assignedStoreId);
+      // Dividido: SÓ os itens atribuídos a esta loja. Loja única: mantém o
+      // comportamento antigo (atribuídos + sem dono; sem nada, o pedido todo).
+      const lista = dividido
+        ? atribuidos
+        : (atribuidos.length ? [...atribuidos, ...semDono] : (order.items || []));
+      if (!lista.length) {
+        this.logger.warn(
+          `[nfe-envio] SEM NOTA: pedido ${order.id} sem itens atribuídos à loja ${storeCode} ` +
+            `(dividido=${dividido} · itensNoPedido=${(order.items || []).length})`,
+        );
+        return null;
+      }
+      // Rateio do fallback pelo TOTAL DE PEÇAS DO PEDIDO (não só da lista) —
+      // senão o pedido dividido inflava o unitário da loja com menos peças.
+      const totalPecasPedido = (order.items || []).reduce((s: number, i: any) => s + (Number(i.quantity) || 1), 0) || 1;
+      const fallbackUnit = order.totalAmount ? Number(order.totalAmount) / totalPecasPedido : 0;
+      items = lista.map((i: any) => ({
+        sku: i.sku || 'ITEM',
+        ean: String(i.sku || '').replace(/\D/g, '').length === 13 ? String(i.sku) : undefined,
+        descricao: String(i.productName || 'Vestuário'),
+        qty: Number(i.quantity) || 1,
+        vUn: Number(i.unitPrice ?? i.baseUnitPrice ?? fallbackUnit) || 0,
+      }));
+    }
+
+    if (cep.length !== 8) {
+      this.logger.warn(
+        `[nfe-envio] SEM NOTA: CEP inválido no pedido ${order.id} — recebido "${cep}" (${cep.length} dígitos, precisa 8)`,
+      );
+      return null;
+    }
+    // ViaCEP manda: UF/cidade/bairro + o código IBGE (cMun da NF-e)
+    let codMun = '';
+    try {
+      const via: any = await this.correios.buscarCep(cep);
+      if (via && !via.erro) {
+        if (via.uf) uf = String(via.uf).trim().toUpperCase();
+        if (via.cidade) cidade = via.cidade;
+        if (!bairro && via.bairro) bairro = via.bairro;
+        if (!endereco && via.logradouro) endereco = via.logradouro;
+        codMun = String(via.ibge || '').replace(/\D/g, '');
+      }
+    } catch { /* ViaCEP fora → sem cMun, a emissão acusa */ }
+
+    return {
+      dest: { cpfCnpj, nome, endereco, numero: numero || 'S/N', bairro, cidade, uf, cep, codMun },
+      items,
+    };
+  }
+
+  /**
+   * Monta destinatário + itens da DC-e a partir do MESMO dado que gerou a
+   * etiqueta: carrinho da live (customer*) ou Order do site (r.destDce que o
+   * gerarEnvioCorreiosSite devolve já normalizado pelo CEP).
+   */
+  private async montarDadosDce(order: any, pick: any, r: any): Promise<{ dest: any; itens: any[] } | null> {
+    if (order.source === 'live' && order.liveCartId) {
+      const cart: any = await (this.prisma as any).livePdvCart.findUnique({ where: { id: order.liveCartId }, include: { items: true } });
+      if (!cart) return null;
+      const itens = (cart.items || []).filter((i: any) => i.status !== 'cancelled');
+      if (!itens.length) return null;
+      return {
+        dest: {
+          nome: cart.customerName || 'Cliente',
+          cpfCnpj: String(cart.customerCpf || '').replace(/\D/g, '') || undefined,
+          logradouro: cart.customerEndereco || '',
+          numero: cart.customerNumero || 'SN',
+          complemento: cart.customerComplemento || '',
+          bairro: cart.customerBairro || '',
+          cidade: cart.customerCidade || '',
+          uf: cart.customerUf || 'SP',
+          cep: String(cart.customerCep || '').replace(/\D/g, ''),
+          fone: String(cart.customerPhone || '').replace(/\D/g, ''),
+        },
+        itens: itens.map((i: any) => ({
+          descricao: [i.refCode, i.descricao, i.cor, i.tamanho].filter(Boolean).join(' ').slice(0, 120) || 'Vestuário',
+          quantidade: Number(i.qty) || 1,
+          valorUnit: (Number(i.priceCents) || 0) / 100,
+        })),
+      };
+    }
+    // SITE: o gerarEnvioCorreiosSite devolve destDce (endereço já CEP-authoritative)
+    if (!r?.destDce) return null;
+    const itensLoja = (order.items || []).filter((i: any) => !i.assignedStoreId || i.assignedStoreId === pick.storeId);
+    const lista = itensLoja.length ? itensLoja : (order.items || []);
+    if (!lista.length) return null;
+    const totalPecas = lista.reduce((s: number, i: any) => s + (Number(i.quantity) || 1), 0) || 1;
+    const fallbackUnit = order.totalAmount ? Number(order.totalAmount) / totalPecas : 0;
+    return {
+      dest: r.destDce,
+      itens: lista.map((i: any) => ({
+        descricao: String(i.productName || 'Vestuário').slice(0, 120),
+        quantidade: Number(i.quantity) || 1,
+        valorUnit: Number(i.unitPrice ?? i.baseUnitPrice ?? fallbackUnit) || 0,
+      })),
+    };
+  }
+
+  /** Gera a pré-postagem no MAIS ENVIOS a partir do carrinho da live. */
+  private async gerarEnvioMaisEnvios(cartId: string, senderId: number, nfe?: any, referencia?: string, departamento?: string) {
+    const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId }, include: { items: true } });
+    if (!cart) throw new NotFoundException('Carrinho não encontrado');
+    const itens = (cart.items || []).filter((i: any) => i.status !== 'cancelled');
+    if (!itens.length) throw new BadRequestException('Carrinho sem itens.');
+    const totalPecas = itens.reduce((s: number, i: any) => s + (Number(i.qty) || 1), 0);
+    const pesoGramas = Math.max(300, totalPecas * 200);
+    const resp: any = await this.maisEnvios.criarPrepost({
+      senderId,
+      servico: 'SEDEX', // +Expresso: mais barato e mais rápido na conta LURDS
+      destinatario: {
+        nome: cart.customerName || 'Cliente',
+        cpf: String(cart.customerCpf || '').replace(/\D/g, ''),
+        cep: String(cart.customerCep || '').replace(/\D/g, ''),
+        endereco: cart.customerEndereco || '',
+        numero: cart.customerNumero || 'S/N',
+        complemento: cart.customerComplemento || '',
+        bairro: cart.customerBairro || '',
+        cidade: cart.customerCidade || '',
+        uf: cart.customerUf || '',
+        telefone: String(cart.customerPhone || '').replace(/\D/g, ''),
+        email: cart.customerEmail || '',
+      },
+      pesoGramas,
+      valorDeclarado: cart.totalCents ? cart.totalCents / 100 : undefined,
+      ...(nfe ? { nfe } : {}),
+      ...(referencia ? { referencia } : {}),
+      ...(departamento ? { departamento } : {}),
+      itens: itens.map((i: any) => ({ conteudo: [i.refCode, i.descricao, i.cor, i.tamanho].filter(Boolean).join(' ').slice(0, 60) || 'Vestuário', quantidade: Number(i.qty) || 1 })),
+    });
+    if (!resp?.ok || !resp.tag) throw new BadRequestException(`Mais Envios recusou o envio: ${resp?.erro || 'sem tag'}`);
+    let etiquetaPdf: string | null = null;
+    try { const et = await this.maisEnvios.baixarEtiqueta(resp.tag); if (et?.ok && et.pdfBase64) etiquetaPdf = et.pdfBase64; } catch { /* etiqueta opcional */ }
+    return { codigoRastreio: resp.tag, idPrepostagem: resp.idPrepostagem ?? null, servico: 'SEDEX', carrier: 'Mais Envios SEDEX', etiquetaPdf };
+  }
+
+  /** Pré-postagem no MAIS ENVIOS pro pedido do SITE (a partir do Order). */
+  private async gerarEnvioMaisEnviosSite(order: any, pick: any, senderId: number, nfe?: any, referencia?: string, departamento?: string) {
+    if (order.isPickup) throw new BadRequestException('Retirada em loja não gera envio.');
+    let addr: any = {};
+    try { addr = JSON.parse(order.shippingAddress || '{}'); } catch { /* endereço cru */ }
+    const cep = String(order.shippingCep || addr.postcode || addr.cep || '').replace(/\D/g, '');
+    if (cep.length !== 8) throw new BadRequestException('Pedido sem CEP válido pra postar.');
+
+    // Mesmo parse do caminho Correios: número dentro de address_1 + CEP-authoritative
+    const address1 = String(addr.address_1 || addr.street || addr.logradouro || '').trim();
+    let endereco = address1;
+    let numero = String(addr.number || addr.numero || '').trim();
+    if (!numero && address1) {
+      const m = address1.match(/^(.*?),?\s*(\d+[A-Za-z]?)\s*$/);
+      if (m) { endereco = m[1].trim(); numero = m[2]; }
+    }
+    let uf = String(addr.state || addr.uf || '').trim().toUpperCase();
+    let cidade = String(addr.city || addr.cidade || '').trim();
+    let bairro = String(addr.neighborhood || addr.bairro || '').trim();
+    const complemento = String(addr.address_2 || addr.complemento || '').trim();
+    try {
+      const via: any = await this.correios.buscarCep(cep);
+      if (via && !via.erro) {
+        if (via.uf) uf = String(via.uf).trim().toUpperCase();
+        if (via.cidade) cidade = via.cidade;
+        if (!bairro && via.bairro) bairro = via.bairro;
+        if (!endereco && via.logradouro) endereco = via.logradouro;
+      }
+    } catch { /* ViaCEP fora → usa o do pedido */ }
+
+    const itensLoja = (order.items || []).filter((i: any) => !i.assignedStoreId || i.assignedStoreId === pick.storeId);
+    const lista = itensLoja.length ? itensLoja : (order.items || []);
+    const totalPecas = lista.reduce((s: number, i: any) => s + (Number(i.quantity) || 1), 0) || 1;
+    const pesoGramas = Math.max(300, totalPecas * 200);
+
+    const resp: any = await this.maisEnvios.criarPrepost({
+      senderId,
+      servico: 'SEDEX',
+      destinatario: {
+        nome: order.customerName || 'Cliente',
+        cpf: String(order.customerCpf || '').replace(/\D/g, ''),
+        cep,
+        endereco: endereco || '',
+        numero: numero || 'S/N',
+        complemento,
+        bairro: bairro || '',
+        cidade: cidade || '',
+        uf: uf || '',
+        telefone: String(order.customerPhone || '').replace(/\D/g, ''),
+        email: String(order.customerEmail || ''),
+      },
+      pesoGramas,
+      valorDeclarado: order.totalAmount ? Number(order.totalAmount) : undefined,
+      ...(nfe ? { nfe } : {}),
+      ...(referencia ? { referencia } : {}),
+      ...(departamento ? { departamento } : {}),
+      itens: lista.map((i: any) => ({ conteudo: String(i.productName || 'Vestuário').slice(0, 60), quantidade: Number(i.quantity) || 1 })),
+    });
+    if (!resp?.ok || !resp.tag) throw new BadRequestException(`Mais Envios recusou o envio: ${resp?.erro || 'sem tag'}`);
+    let etiquetaPdf: string | null = null;
+    try { const et = await this.maisEnvios.baixarEtiqueta(resp.tag); if (et?.ok && et.pdfBase64) etiquetaPdf = et.pdfBase64; } catch { /* etiqueta opcional */ }
+    return { codigoRastreio: resp.tag, idPrepostagem: resp.idPrepostagem ?? null, servico: 'SEDEX', carrier: 'Mais Envios SEDEX', etiquetaPdf };
+  }
+
+  /** Gera a pré-postagem dos Correios pro pedido do SITE (a partir do Order). */
+  private async gerarEnvioCorreiosSite(order: any, pick: any, nfeChave?: string, remetenteLoja?: any) {
+    if (order.isPickup) throw new BadRequestException('Retirada em loja não gera envio.');
+    let addr: any = {};
+    try { addr = JSON.parse(order.shippingAddress || '{}'); } catch { /* endereço cru */ }
+    const cep = String(order.shippingCep || addr.postcode || addr.cep || '').replace(/\D/g, '');
+    if (cep.length !== 8) throw new BadRequestException('Pedido sem CEP válido pra postar.');
+
+    // Endereço WooCommerce: número/bairro podem vir separados (plugin BR) ou
+    // dentro de address_1 ("Rua X, 123"). Extrai o número se não vier separado.
+    const address1 = String(addr.address_1 || addr.street || addr.logradouro || '').trim();
+    let endereco = address1;
+    let numero = String(addr.number || addr.numero || '').trim();
+    if (!numero && address1) {
+      const m = address1.match(/^(.*?),?\s*(\d+[A-Za-z]?)\s*$/);
+      if (m) { endereco = m[1].trim(); numero = m[2]; }
+    }
+    let uf = String(addr.state || addr.uf || '').trim().toUpperCase();
+    let cidade = String(addr.city || addr.cidade || '').trim();
+    let bairro = String(addr.neighborhood || addr.bairro || '').trim();
+    const complemento = String(addr.address_2 || addr.complemento || '').trim();
+
+    // CEP-authoritative (evita RTL-076): UF/cidade/bairro do ViaCEP sobrepõem.
+    try {
+      const via: any = await this.correios.buscarCep(cep);
+      if (via && !via.erro) {
+        if (via.uf) uf = String(via.uf).trim().toUpperCase();
+        if (via.cidade) cidade = via.cidade;
+        if (!bairro && via.bairro) bairro = via.bairro;
+        if (!endereco && via.logradouro) endereco = via.logradouro;
+      }
+    } catch { /* ViaCEP fora → usa o do pedido */ }
+
+    const itensLoja = (order.items || []).filter((i: any) => !i.assignedStoreId || i.assignedStoreId === pick.storeId);
+    const lista = itensLoja.length ? itensLoja : (order.items || []);
+    const totalPecas = lista.reduce((s: number, i: any) => s + (Number(i.quantity) || 1), 0) || 1;
+    const pesoGramas = Math.max(300, totalPecas * 200);
+    const servico: 'PAC' | 'SEDEX' = uf === 'SP' ? 'SEDEX' : 'PAC';
+    const rem = remetenteLoja || this.correios.remetentePadrao();
+
+    const resp: any = await this.correios.criarPrepostagem({
+      servico,
+      remetente: rem,
+      destinatario: {
+        nome: order.customerName || 'Cliente',
+        cpfCnpj: String(order.customerCpf || '').replace(/\D/g, '') || undefined,
+        endereco: endereco || '',
+        numero: numero || 'S/N',
+        complemento,
+        bairro: bairro || '',
+        cidade: cidade || '',
+        uf: uf || '',
+        cep,
+        telefone: String(order.customerPhone || '').replace(/\D/g, ''),
+      },
+      pesoGramas,
+      valorDeclarado: order.totalAmount ? Number(order.totalAmount) : undefined,
+      // NF-e do envio: chave na pré-postagem (obrigatória desde 04/2026)
+      ...(nfeChave ? { nfeChave } : {}),
+      itensDeclaracao: lista.map((i: any) => ({ conteudo: String(i.productName || 'Vestuário').slice(0, 60), quantidade: String(i.quantity || 1) })),
+    });
+    if (!resp?.ok) throw new BadRequestException(`Correios recusou o envio: ${resp?.erro || 'erro'}`);
+    return {
+      codigoRastreio: resp.codigoRastreio, idPrepostagem: resp.idPrepostagem ?? null, servico, carrier: `Correios ${servico}`,
+      // Destinatário já normalizado (CEP-authoritative) pra DC-e usar o MESMO endereço da etiqueta
+      destDce: {
+        nome: order.customerName || 'Cliente',
+        cpfCnpj: String(order.customerCpf || '').replace(/\D/g, '') || undefined,
+        logradouro: endereco || '', numero: numero || 'SN', complemento,
+        bairro: bairro || '', cidade: cidade || '', uf: uf || 'SP', cep,
+        fone: String(order.customerPhone || '').replace(/\D/g, ''),
+      },
+    };
+  }
+
+  /**
+   * REABRIR: desfaz a pré-postagem gerada (ex.: modalidade errada) pra refazer.
+   * Limpa o rastreio do pick-order E o envio do carrinho da live
+   * (correiosPrepostagemId + trackingCode dos itens) pra o "Gerar envio" criar do
+   * zero. NÃO mexe em estoque — no Model B a pré-postagem não baixou nada ainda.
+   * (Cancelar a pré-postagem antiga nos Correios é manual, no portal.)
+   */
+  async reabrirEnvioCorreios(id: string, storeId: string) {
+    const pick = await this.prisma.pickOrder.findUnique({ where: { id } });
+    if (!pick) throw new NotFoundException('Pick-order não encontrado');
+    if (pick.storeId !== storeId) throw new ForbiddenException('Pick-order não pertence à sua loja');
+    if (pick.status === 'shipped') {
+      throw new BadRequestException('Pedido já postado/enviado — reabrir só vale antes da postagem.');
+    }
+    const order = await this.prisma.order.findUnique({ where: { id: pick.orderId } });
+    if (order?.liveCartId) {
+      await (this.prisma as any).livePdvCart.update({ where: { id: order.liveCartId }, data: { correiosPrepostagemId: null } });
+      await (this.prisma as any).livePdvItem.updateMany({ where: { cartId: order.liveCartId }, data: { trackingCode: null } });
+    }
+    await this.prisma.pickOrder.update({
+      where: { id },
+      data: { trackingCode: null, carrier: null, correiosPrepostagemId: null, correiosGeneratedAt: null, etiquetaPdf: null },
+    });
+    return { ok: true };
+  }
+
+  /**
+   * Cron: marca ENVIADO (Giga + WhatsApp, caminho testado) quando os Correios já
+   * registraram a postagem. Idempotente — ignora quem já está shipped.
+   */
+  async marcarEnviadoPorPostagem(id: string) {
+    const pick = await this.prisma.pickOrder.findUnique({ where: { id } });
+    if (!pick || pick.status === 'shipped' || !pick.trackingCode) return;
+    await this.updateStatus(id, pick.storeId, 'system-correios', {
+      status: 'shipped' as PickStatus,
+      trackingCode: pick.trackingCode,
+      carrier: pick.carrier || 'Correios',
+    });
+  }
+
+  /**
+   * TROCA MANUAL DE PEÇA na separação (pedido do site/WooCommerce).
+   *
+   * A vendedora clica na descrição da peça e escolhe outra no espelho. Regras:
+   *  - Só ANTES da baixa de estoque (status new/separating e sem debitApprovedAt).
+   *    A baixa acontece no finish-separation/ship SOBRE O SKU ATUAL do item — então
+   *    trocar o SKU aqui faz a baixa cair no produto novo e o antigo nunca é baixado.
+   *    Já baixado/enviado → recusa e manda usar devolução/troca (não reconcilia estoque
+   *    síncrono no Giga de propósito — fora do caminho crítico).
+   *  - Se o PREÇO do produto novo difere do antigo (≥ R$0,01), EXIGE senha de nível
+   *    GERENTE ou acima (authorizeMinLevel). Sem senha → devolve needsPassword + a
+   *    diferença pra tela pedir a autorização. Registra QUEM autorizou no log.
+   */
+  async swapItem(
+    pickOrderId: string,
+    storeId: string,
+    input: {
+      orderItemId: string;
+      codigo: string;
+      ref?: string | null;
+      cor?: string | null;
+      tamanho?: string | null;
+      descricao?: string | null;
+      password?: string | null;
+    },
+    userId?: string,
+  ): Promise<any> {
+    const po = await this.prisma.pickOrder.findUnique({ where: { id: pickOrderId } });
+    if (!po) throw new NotFoundException('Pedido não encontrado');
+    if (po.storeId !== storeId) throw new ForbiddenException('Pedido de outra loja');
+    if (po.status !== 'new' && po.status !== 'separating') {
+      throw new BadRequestException(
+        'Só dá pra trocar a peça ANTES de finalizar a separação. Se já foi separado/enviado, use Devolução/Troca.',
+      );
+    }
+    if ((po as any).debitApprovedAt) {
+      throw new BadRequestException('Estoque já baixado — use Devolução/Troca em vez de trocar aqui.');
+    }
+
+    const newSku = String(input.codigo || '').trim();
+    if (!newSku) throw new BadRequestException('Selecione a peça nova');
+
+    const item = await this.prisma.orderItem.findUnique({ where: { id: input.orderItemId } });
+    if (!item) throw new NotFoundException('Item não encontrado');
+    if (item.orderId !== po.orderId || (item as any).assignedStoreId !== storeId) {
+      throw new BadRequestException('Item não pertence a este pedido/loja');
+    }
+    const oldSku = item.sku;
+    if (newSku === oldSku) throw new BadRequestException('É a mesma peça — nada pra trocar');
+
+    // Preços do ESPELHO (em REAIS — não dividir por 100). Diferença ⇒ exige senha.
+    const oldInfo = await this.catalog.getPdvProductInfo(oldSku).catch(() => null);
+    const newInfo = await this.catalog.getPdvProductInfo(newSku).catch(() => null);
+    if (!newInfo) {
+      throw new BadRequestException('Peça nova não encontrada no catálogo — confira o código.');
+    }
+    const oldPrice = oldInfo?.preco ?? (item.unitPrice ?? 0);
+    const newPrice = newInfo.preco ?? 0;
+    const diff = Math.round((newPrice - oldPrice) * 100) / 100;
+    const hasDiff = Math.abs(diff) >= 0.01;
+
+    // Diferença de valor SEM senha → não aplica; devolve pra tela pedir autorização.
+    let authorizedByCpf: string | null = null;
+    let authorizedByNome: string | null = null;
+    if (hasDiff) {
+      const pwd = String(input.password || '').trim();
+      if (!pwd) {
+        return {
+          ok: false,
+          needsPassword: true,
+          oldSku,
+          newSku,
+          oldPrice,
+          newPrice,
+          diff,
+          newDescricao: this.buildItemName(input, newInfo),
+        };
+      }
+      // Lança ForbiddenException (403) se senha inválida ou nível < GERENTE.
+      const auth = authorizeMinLevel(pwd, 'GERENTE');
+      authorizedByCpf = auth.byCpf;
+      authorizedByNome = auth.byNome;
+    }
+
+    const newName = this.buildItemName(input, newInfo);
+    const updated = await this.prisma.orderItem.update({
+      where: { id: item.id },
+      data: {
+        sku: newSku,
+        productName: newName,
+        unitPrice: newPrice,
+        baseUnitPrice: newPrice,
+      },
+    });
+
+    await this.prisma.integrationLog.create({
+      data: {
+        source: 'pick-order',
+        direction: 'internal',
+        event: 'item.swap',
+        payload: JSON.stringify({
+          pickOrderId,
+          orderItemId: item.id,
+          storeId,
+          userId: userId ?? null,
+          oldSku,
+          newSku,
+          oldPrice,
+          newPrice,
+          diff,
+          authorizedByCpf,
+          authorizedByNome,
+        }),
+        status: 200,
+      },
+    });
+
+    return {
+      ok: true,
+      oldSku,
+      newSku,
+      oldPrice,
+      newPrice,
+      diff,
+      authorizedBy: authorizedByNome,
+      item: {
+        id: updated.id,
+        sku: updated.sku,
+        productName: updated.productName,
+        quantity: updated.quantity,
+        unitPrice: updated.unitPrice,
+      },
+    };
+  }
+
+  /** Nome de exibição da peça nova: prioriza o que a tela mandou, cai no espelho. */
+  private buildItemName(
+    input: { ref?: string | null; cor?: string | null; tamanho?: string | null; descricao?: string | null; codigo: string },
+    info: { descricao?: string | null; ref?: string | null; cor?: string | null; tamanho?: string | null } | null,
+  ): string {
+    const desc = (input.descricao || info?.descricao || '').trim();
+    if (desc) return desc;
+    const ref = (input.ref || info?.ref || input.codigo || '').trim();
+    const cor = (input.cor || info?.cor || '').trim();
+    const tam = (input.tamanho || info?.tamanho || '').trim();
+    return [ref, cor, tam].filter(Boolean).join(' ') || input.codigo;
+  }
 
   /**
    * Retorna os items desse pick-order com o EAN resolvido do ERP.
@@ -283,7 +1182,7 @@ export class PickOrdersService {
       select: { sku: true, quantity: true, productName: true },
     });
 
-    const result = await this.erp.decreaseStock(
+    const result = await this.erp.decreaseStockAsync(
       items.map((i) => ({ sku: i.sku, qty: i.quantity, storeCode })),
       { allowNegative: true, skipNotFound: true },
     );
@@ -415,6 +1314,8 @@ export class PickOrdersService {
         status: r.status,
         trackingCode: r.trackingCode,
         carrier: r.carrier,
+        correiosPrepostagemId: (r as any).correiosPrepostagemId ?? null,
+        correiosGeneratedAt: (r as any).correiosGeneratedAt ?? null,
         createdAt: r.createdAt,
         updatedAt: r.updatedAt,
         isTransfer: r.isTransfer,
@@ -738,7 +1639,7 @@ export class PickOrdersService {
         );
       }
 
-      const result = await this.erp.decreaseStock(
+      const result = await this.erp.decreaseStockAsync(
         items.map((i) => ({ sku: i.sku, qty: i.quantity, storeCode })),
       );
 
@@ -1211,6 +2112,25 @@ export class PickOrdersService {
         store: { select: { id: true, code: true, name: true, city: true } },
       },
     });
+    // ITENS de cada loja (14/07 skus p/ "Trocar loja"; 15/07 lista completa p/
+    // a operadora VER quais peças cada loja separa e decidir consolidar). Item
+    // vai pra loja onde foi assignado; sem assignação (pedido de loja única)
+    // conta pra loja se for a única pick-order.
+    const itens = await this.prisma.orderItem.findMany({
+      where: { orderId: order.id },
+      select: { sku: true, productName: true, quantity: true, assignedStoreId: true },
+    });
+    const soUmaLoja = rows.length === 1;
+    const itensDaStore = (storeId: string) =>
+      itens.filter((i) => i.assignedStoreId === storeId || (soUmaLoja && !i.assignedStoreId));
+    const skusPorStore = (storeId: string): string[] =>
+      Array.from(new Set(itensDaStore(storeId).map((i) => String(i.sku || '').trim()).filter(Boolean)));
+    const itemsPorStore = (storeId: string) =>
+      itensDaStore(storeId).map((i) => ({
+        sku: String(i.sku || '').trim(),
+        descricao: i.productName || null,
+        qty: Number(i.quantity) || 1,
+      }));
     const reasonLabels: Record<string, string> = {
       out_of_stock: 'Sem estoque físico',
       defective: 'Peça com defeito',
@@ -1241,6 +2161,11 @@ export class PickOrdersService {
         storeCode: r.store?.code ?? null,
         storeName: r.store?.name ?? null,
         storeCity: r.store?.city ?? null,
+        // SKUs desta loja (pra cobertura do "Trocar loja" — ver acima).
+        skus: skusPorStore(r.storeId),
+        // Peças que ESTA loja separa (descrição + qtd) — a operadora vê o que
+        // foi roteado pra cada uma e decide consolidar (evitar 2 SEDEX).
+        items: itemsPorStore(r.storeId),
         isTransfer: (r as any).isTransfer ?? false,
         transferToStoreCode: (r as any).transferToStoreCode ?? null,
         issueReason,
@@ -1549,7 +2474,7 @@ export class PickOrdersService {
           : {}),
       },
       include: {
-        order: { select: { wcOrderNumber: true, wcOrderId: true, customerName: true } },
+        order: { select: { wcOrderNumber: true, wcOrderId: true, customerName: true, source: true, liveCartId: true } },
         store: { select: { code: true, name: true } },
       },
     });
@@ -1594,7 +2519,33 @@ export class PickOrdersService {
     //
     //  Falha aqui NÃO derruba a ação da loja — só loga e anexa warning na resposta.
     // ════════════════════════════════════════════════════════════════════════
-    const wcOrderId = updated.order?.wcOrderId ? Number(updated.order.wcOrderId) : null;
+    const isLiveOrder = (updated.order as any)?.source === 'live';
+    // Pedido da LIVE: espelha o status de volta no carrinho da live (console
+    // da operadora/dashboards) — e NUNCA sincroniza com o WooCommerce (o
+    // wcOrderId é sintético; não existe no site).
+    if (isLiveOrder && (updated.order as any)?.liveCartId) {
+      const liveCartId = (updated.order as any).liveCartId as string;
+      if (input.status === 'shipped' && allShipped) {
+        await (this.prisma as any).livePdvCart
+          .update({ where: { id: liveCartId }, data: { status: 'shipped' } })
+          .catch(() => {});
+      }
+    }
+
+    // ═══ EFEITOS DO ENVIO (best-effort — falha NUNCA desfaz o shipped) ═══
+    //  1. Acerto intercompany ÷2,5: quem cedeu a peça recebe da "dona" da venda
+    //     (LIVE → loja da live; SITE → REDE, decisão do dono 12/07). REDE→REDE
+    //     não gera (mesmo dono).
+    //  2. Cliente da LIVE recebe WhatsApp com o rastreio (o site já avisa via
+    //     hook completed do WooCommerce).
+    if (input.status === 'shipped') {
+      this.afterShippedSideEffects(id, input).catch((e) =>
+        this.logger.warn(`[shipped-effects] pick ${id}: ${e?.message || e}`),
+      );
+    }
+
+    const wcOrderId =
+      !isLiveOrder && updated.order?.wcOrderId ? Number(updated.order.wcOrderId) : null;
     const storeLabel = updated.store
       ? `${updated.store.name} (${updated.store.code})`
       : 'Loja';
@@ -1715,6 +2666,169 @@ export class PickOrdersService {
   }
 
   /**
+   * EFEITOS DO ENVIO (best-effort, roda depois do shipped ser gravado):
+   *
+   * 1. ACERTO INTERCOMPANY ÷2,5 (decisão do dono 12/07 — "o site entra sim,
+   *    entra como REDE"): quando a loja que despachou NÃO é a dona da venda,
+   *    registra TransferOrder + InterStoreObligation por item, valor = preço
+   *    CHEIO ÷ 2,5 (OrderItem.baseUnitPrice — a live grava o preço cheio;
+   *    site usa o unitPrice, que já é o cheio).
+   *      - dona da venda: LIVE → loja anfitriã da live · SITE → REDE (pseudo
+   *        destino "SITE") · pickup-transfer → loja de retirada.
+   *      - mesmo dono (REDE→REDE) ou a própria loja da live despachando =
+   *        NÃO gera nada (regra do markShipped legado da live).
+   * 2. WHATSAPP DE RASTREIO pra cliente da LIVE via ManyChat (o site avisa
+   *    pelo hook completed do WooCommerce; a live não tem WC). Gated por
+   *    MANYCHAT_RASTREIO_FLOW_NS + MANYCHAT_API_TOKEN — sem envs, pula.
+   */
+  private async afterShippedSideEffects(
+    pickOrderId: string,
+    input: { trackingCode?: string; carrier?: string },
+  ) {
+    const po: any = await (this.prisma as any).pickOrder.findUnique({
+      where: { id: pickOrderId },
+      include: {
+        store: true,
+        order: { include: { items: true } },
+      },
+    });
+    if (!po?.order) return;
+    const order: any = po.order;
+    const fromStore: any = po.store;
+    const itens: any[] = (order.items || []).filter(
+      (i: any) => i.assignedStoreId === po.storeId,
+    );
+    if (!itens.length) return;
+
+    // ── resolve a "dona" da venda (destino do acerto) ──
+    let destino: { code: string; name: string; tipo: string } | null = null;
+    let liveCart: any = null;
+    if (po.isTransfer && po.transferToStoreCode) {
+      const st = await (this.prisma as any).store
+        .findUnique({ where: { code: po.transferToStoreCode } })
+        .catch(() => null);
+      if (st) destino = { code: st.code, name: st.name, tipo: st.tipo === 'FILIAL' ? 'FILIAL' : 'REDE' };
+    } else {
+      // VENDA DE CANAL (site OU live) — dono 30/07: o destino é SEMPRE a
+      // loja-canal 13 (SITE). Antes a live acertava com a loja que fez a live
+      // (session.liveStoreCode) e o site usava um código fantasma 'SITE' que
+      // nem existe na tabela Store. Agora as duas convergem pra 13, que é a
+      // loja-canal de verdade — é o acerto normal REDE × franquia.
+      if (order.source === 'live' && order.liveCartId) {
+        liveCart = await (this.prisma as any).livePdvCart
+          .findUnique({ where: { id: order.liveCartId }, include: { session: true } })
+          .catch(() => null);
+      }
+      const canal = await (this.prisma as any).store
+        .findUnique({ where: { code: PickOrdersService.CANAL_STORE_CODE } })
+        .catch(() => null);
+      destino = canal
+        ? { code: canal.code, name: canal.name, tipo: canal.tipo === 'FILIAL' ? 'FILIAL' : 'REDE' }
+        : { code: PickOrdersService.CANAL_STORE_CODE, name: 'SITE', tipo: 'REDE' };
+    }
+
+    // ── 1) obrigação intercompany ÷2,5 ──
+    try {
+      const fromTipo = fromStore?.tipo === 'FILIAL' ? 'FILIAL' : 'REDE';
+      const mesmaLoja = destino && fromStore?.code === destino.code;
+      // Dono 30/07: a TRANSFERÊNCIA é registrada por TODA loja que atende
+      // pedido de canal (é o rastro da peça saindo do estoque). Só a COBRANÇA
+      // (÷2,5) é que segue a regra antiga REDE × franquia — loja própria
+      // mandando pro canal não gera obrigação, mas agora deixa registro.
+      // Antes as duas coisas estavam presas na mesma condição e a saída de
+      // loja própria não aparecia em lugar nenhum.
+      const geraCobranca = !!destino && fromTipo !== destino.tipo;
+      if (destino && !mesmaLoja) {
+        const mesReferencia = new Date().toISOString().slice(0, 7);
+        for (const it of itens) {
+          const transfer = await (this.prisma as any).transferOrder.create({
+            data: {
+              tipo: order.source === 'live' ? 'LIVE' : 'SITE',
+              refCode: String(it.sku || ''),
+              codigoBipado: String(it.sku || ''),
+              descricao: it.productName || null,
+              qtyOrigem: Number(it.quantity || 1),
+              lojaOrigemCode: fromStore?.code,
+              lojaOrigemName: fromStore?.name,
+              lojaDestinoCode: destino.code,
+              lojaDestinoName: destino.name,
+              solicitanteNome: order.source === 'live' ? 'LIVE COMMERCE' : 'VENDA SITE',
+              mensagem: `Pedido ${order.wcOrderNumber} expedido${input.trackingCode ? ` (rastreio ${input.trackingCode})` : ''}`,
+            },
+          });
+          const baseUnit = Number(it.baseUnitPrice ?? it.unitPrice ?? 0);
+          const precoTotal = baseUnit * Number(it.quantity || 1);
+          // Sem cobrança (REDE → REDE): a transferência acima já registrou a
+          // saída da peça; obrigação financeira seria dinheiro trocando de
+          // bolso dentro da mesma empresa.
+          if (!geraCobranca) continue;
+          await (this.prisma as any).interStoreObligation.create({
+            data: {
+              transferOrderId: transfer.id,
+              fromStoreCode: fromStore?.code,
+              fromStoreName: fromStore?.name,
+              fromStoreTipo: fromTipo,
+              toStoreCode: destino.code,
+              toStoreName: destino.name,
+              toStoreTipo: destino.tipo,
+              refCode: String(it.sku || ''),
+              sku: String(it.sku || ''),
+              descricao: it.productName || null,
+              qty: Number(it.quantity || 1),
+              precoUnitario: baseUnit,
+              precoTotal,
+              divisor: PickOrdersService.DIVISOR_CUSTO,
+              valorObrigacao: precoTotal / PickOrdersService.DIVISOR_CUSTO,
+              mesReferencia,
+              status: 'pending',
+            },
+          });
+        }
+        this.logger.log(
+          `[acerto-÷2,5] pedido ${order.wcOrderNumber}: ${itens.length} item(ns) ` +
+            `${fromStore?.code}(${fromTipo}) → ${destino.code}(${destino.tipo}) · ` +
+            `${geraCobranca ? 'COM cobrança ÷2,5' : 'só registro (mesma natureza, sem cobrança)'}`,
+        );
+      }
+    } catch (e: any) {
+      this.logger.warn(`[acerto-÷2,5] pedido ${order.wcOrderNumber}: ${e?.message || e}`);
+    }
+
+    // ── 2) WhatsApp de rastreio pra cliente da LIVE ──
+    if (order.source === 'live') {
+      try {
+        const flowNs = (process.env.MANYCHAT_RASTREIO_FLOW_NS || '').trim();
+        if (!flowNs || !this.manychat.enabled) return;
+        const digits = String(order.customerPhone || '').replace(/\D/g, '');
+        const phone =
+          digits.length === 10 || digits.length === 11
+            ? '55' + digits
+            : digits.startsWith('55') && (digits.length === 12 || digits.length === 13)
+              ? digits
+              : null;
+        if (!phone) return;
+        let subId = await this.manychat.findWhatsAppSubscriber(phone);
+        if (!subId) {
+          const created = await this.manychat.createWhatsAppSubscriber(phone, order.customerName);
+          subId = created.id;
+        }
+        if (!subId) return;
+        const primeiroNome = String(order.customerName || '').trim().split(/\s+/)[0] || 'cliente';
+        await this.manychat.setCustomFieldByName(subId, 'rastreio_nome', primeiroNome);
+        await this.manychat.setCustomFieldByName(subId, 'rastreio_codigo', String(input.trackingCode || ''));
+        await this.manychat.setCustomFieldByName(subId, 'rastreio_transportadora', String(input.carrier || 'Correios'));
+        await this.manychat.setCustomFieldByName(subId, 'rastreio_pedido', String(order.wcOrderNumber || ''));
+        const r = await this.manychat.sendFlow(subId, flowNs);
+        this.logger.log(
+          `[rastreio-whats] pedido ${order.wcOrderNumber}: ${r.ok ? 'enviado' : `falhou (${r.error})`}`,
+        );
+      } catch (e: any) {
+        this.logger.warn(`[rastreio-whats] pedido ${order.wcOrderNumber}: ${e?.message || e}`);
+      }
+    }
+  }
+
+  /**
    * AUTO-BAIXA disparada pelo `shipped`.
    *
    * Diferente de approveDebit (que é a rota manual da matriz), esse método:
@@ -1826,7 +2940,7 @@ export class PickOrdersService {
         return { attempted: true, applied: false, skipped: false, shadow: false, reason: 'loja sem código configurado' };
       }
 
-      const result = await this.erp.decreaseStock(
+      const result = await this.erp.decreaseStockAsync(
         items.map((i) => ({ sku: i.sku, qty: i.quantity, storeCode })),
       );
 

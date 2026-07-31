@@ -53,11 +53,24 @@ export class AuthController {
   @Post('impersonate-store')
   async impersonateStore(@Req() req: any, @Body() dto: ImpersonateStoreDto) {
     const role = req?.user?.role;
-    if (role !== 'admin' && role !== 'master') {
+    if (role !== 'admin' && role !== 'master' && role !== 'master_franquia') {
       throw new ForbiddenException('Apenas admin/master pode entrar como loja');
     }
     const adminUserId = req.user.userId || req.user.sub;
     return this.auth.impersonateStore(adminUserId, dto.storeCode);
+  }
+
+  /**
+   * TOKEN DO TOTEM DO PONTO (dono 30/07): o login normal expira em 24h e o
+   * celular do ponto acordava "EXPIRADO", caindo no login → menu da loja.
+   * Logado como LOJA, devolve um token de 365 dias com a MESMA identidade
+   * (flag kiosk no payload) — a tela do ponto grava no aparelho e o totem
+   * para de expirar. Só role=store.
+   */
+  @UseGuards(JwtAuthGuard)
+  @Post('kiosk-token')
+  kioskToken(@Req() req: any) {
+    return this.auth.kioskToken(req.user);
   }
 
   @UseGuards(JwtAuthGuard)

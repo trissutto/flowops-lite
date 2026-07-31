@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 
 /**
  * /vitrine/[slug] — Página de DETALHE do produto (PDP).
@@ -27,6 +28,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
+import FitModal from '@/components/fit/FitModal';
 import {
   ShoppingBag, Heart, ChevronLeft, ChevronRight, Star, Truck, Shield,
   Undo2, MessageCircle, Check, ZoomIn, Sparkles, Flame,
@@ -134,6 +136,8 @@ export default function ProductDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [activeImgIdx, setActiveImgIdx] = useState(0);
   const [selectedSize, setSelectedSize] = useState<string | null>(null);
+  // LURDS FIT AI — assistente proprietário de tamanho
+  const [fitAberto, setFitAberto] = useState(false);
   const [quantity, setQuantity] = useState(1);
   const [zoomOpen, setZoomOpen] = useState(false);
 
@@ -444,6 +448,23 @@ export default function ProductDetailPage() {
                   Guia de medidas
                 </button>
               </div>
+
+              {/* LURDS FIT AI — o botão que mata a objeção "será que serve?" */}
+              <button
+                onClick={() => setFitAberto(true)}
+                className="w-full mb-3 group relative overflow-hidden rounded-xl border-2 px-4 py-3
+                           flex items-center justify-center gap-2 font-bold text-sm transition
+                           hover:shadow-md active:scale-[.99]"
+                style={{ borderColor: '#D4AF37', color: '#8C7325', background: '#FBF6E6' }}
+              >
+                <span className="text-base">✨</span>
+                Descubra seu tamanho ideal
+                <span
+                  className="absolute inset-0 -translate-x-full group-hover:translate-x-full transition-transform duration-[900ms]"
+                  style={{ background: 'linear-gradient(90deg,transparent,rgba(255,255,255,.65),transparent)' }}
+                />
+              </button>
+
               <div className="flex flex-wrap gap-2">
                 {sizeAttr.options.map((sz) => {
                   const hasStock = sizeHasStock(product.variations, sizeAttr.name, sz);
@@ -555,7 +576,7 @@ export default function ProductDetailPage() {
       {zoomOpen && mainImg && (
         <div
           className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4 cursor-zoom-out"
-          onClick={() => setZoomOpen(false)}
+          {...overlayClose(() => setZoomOpen(false))}
         >
           <img src={mainImg} alt={product.name} className="max-w-full max-h-full object-contain" />
           <button
@@ -579,6 +600,25 @@ export default function ProductDetailPage() {
           COMPRAR
         </button>
       </div>
+
+      {/* LURDS FIT AI — assistente de tamanho (sistema próprio) */}
+      <FitModal
+        aberto={fitAberto}
+        onClose={() => setFitAberto(false)}
+        apiBase={apiBase}
+        ref_={product.sku}
+        nomeProduto={product.name}
+        categoria={product.categories?.[0] || null}
+        tamanhosDisponiveis={
+          sizeAttr
+            ? sizeAttr.options.filter((sz) => sizeHasStock(product.variations, sizeAttr.name, sz))
+            : null
+        }
+        onEscolherTamanho={(t) => {
+          setSelectedSize(t);
+          document.getElementById('size-picker')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }}
+      />
     </div>
   );
 }

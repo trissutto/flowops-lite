@@ -70,6 +70,11 @@ model Store {
   id            String   @id @default(uuid())
   code          String   @unique
   name          String
+  /// Nomes ANTERIORES da loja (CSV), preenchido sozinho quando o nome muda.
+  /// Existe porque venda antiga podia gravar o NOME em PdvSale.storeCode: sem
+  /// isso, renomear (ex.: 09 "SANTOS 2" → "MATRIZ LURDS") órfava o histórico
+  /// nos relatórios que casam por [code, name]. Ver faturamento.service.
+  nomesAntigos  String?  @map("nomes_antigos") @db.VarChar(300)
   cep           String?
   city          String?
   state         String?
@@ -85,6 +90,30 @@ model Store {
   // Usado pra gerar obrigações financeiras automáticas em transferências mistas
   // REDE↔FILIAL. Default REDE pra não quebrar lojas existentes.
   tipo          String   @default("REDE")  // REDE | FILIAL
+
+  // ── Papel na DRE (painel /retaguarda/dre) ──
+  // Separa o que é COLUNA de resultado do que é despesa da rede a ratear:
+  //   LOJA  = loja física → coluna própria, avaliada pelo resultado 4-wall
+  //   CANAL = LIVE/SITE   → coluna própria; a peça que sai da loja entra aqui
+  //                         a PREÇO DE CUSTO (a loja de origem não fatura)
+  //   REDE  = matriz/holding → NÃO é coluna; tudo que é lançado nela é
+  //                         rateado por faturamento entre LOJA+CANAL
+  //   FORA  = ignorada na DRE (CD, loja fechada, cadastro de teste)
+  // NULL = ainda não configurada → o service aplica heurística (SITE/LIVE
+  // viram CANAL, o resto vira LOJA) e a tela pede a configuração.
+  dreGrupo      String?  @map("dre_grupo") @db.VarChar(6)
+
+  /// Markup da loja pro CMV da DRE (custo = venda ÷ markup). NULL = usa o
+  /// padrão da rede (2,7). Existe porque nem toda loja compra igual —
+  /// ITANHAÉM trabalha com 2,35 (dono, 26/07).
+  dreMarkup     Decimal? @map("dre_markup") @db.Decimal(5, 3)
+
+  /// Encargo sobre a FOLHA desta loja (% sobre salários + RH + comissão).
+  /// É por LOJA e não por CNPJ porque nem toda loja tem CNPJ cadastrado — e
+  /// é assim que o dono raciocina. O regime fica junto só pra tela explicar
+  /// de onde vem o número (T.O. no Simples × LURDS no Presumido).
+  dreEncargoPct Decimal? @map("dre_encargo_pct") @db.Decimal(6, 3)
+  dreRegime     String?  @map("dre_regime") @db.VarChar(12) // SIMPLES | PRESUMIDO | REAL
 
   // ── Config de Realinhamento ──
   // Controla se a loja participa do balanço automático de estoque entre lojas.
@@ -104,6 +133,10 @@ model Store {
   pontoLat      Float?  @map("ponto_lat")
   pontoLng      Float?  @map("ponto_lng")
   pontoRaioM    Int     @default(150) @map("ponto_raio_m")
+  // IPs de saída vistos nos heartbeats do PDV Electron da loja (JSON
+  // [{ip, seenAt}]). Batida pwa_selfie (celular da loja) só vale vindo de um
+  // desses IPs = "está no WiFi da loja". Resolve IP dinâmico da operadora.
+  pdvIps        String? @map("pdv_ips") @db.Text
 
   // ── Consolidação de Grade (Sprint 0) ──
   // Score que define o "peso" da loja como destino quando o sistema
@@ -134,6 +167,14 @@ model Store {
   // Em todos os casos, se o provider escolhido falhar, cai pro PIX local
   // (chave celular) como ultima opcao.
   pixProvider       String   @default("auto") @map("pix_provider")
+
+  // ── Provedor de ENVIO por loja ──
+  // Define qual transportadora a loja usa no "Gerar envio" da separação:
+  //   'correios'   = Correios/CWS (default quando null)
+  //   'maisenvios' = portalmaisenvios.com.br (Sorocaba/Piracicaba/Limeira/Moema)
+  // Quando maisenvios, `maisEnviosSenderId` é o id do remetente da loja lá.
+  shippingProvider   String? @map("shipping_provider")
+  maisEnviosSenderId Int?    @map("mais_envios_sender_id")
 
   users          User[]
   pickOrders     PickOrder[]
@@ -269,6 +310,14 @@ model RealignmentShipment {
   totalQty          Int      @default(0) @map("total_qty")       // soma das quantidades
   receivedQty       Int      @default(0) @map("received_qty")    // qty efetivamente recebida
   missingQty        Int      @default(0) @map("missing_qty")     // qty marcada como faltante
+  // ── Envio físico da remessa (Correios/Mais Envios, SEDEX — dono 28/07) ──
+  trackingCode          String?   @map("tracking_code")
+  carrier               String?
+  correiosPrepostagemId String?   @map("correios_prepostagem_id")
+  envioGeneratedAt      DateTime? @map("envio_generated_at")
+  // Meio de transporte da remessa: 'correios' | 'proprio'. Null = regra
+  // automática (até 10 peças → correios; acima → próprio). Dono 29/07.
+  transportMode         String?   @map("transport_mode")
   // Marcador de baixa Giga: setado quando decreaseStock origem rodou com sucesso.
   // Permite reprocessar remessas que fecharam mas o estoque não baixou (idempotência).
   stockDecreasedAt  DateTime? @map("stock_decreased_at")
@@ -330,6 +379,11 @@ model Order {
   id              String   @id @default(uuid())
   wcOrderId       Int      @unique @map("wc_order_id")
   wcOrderNumber   String?  @map("wc_order_number")
+  // Origem do pedido: 'site' (WooCommerce) ou 'live' (Live Commerce).
+  // Pedido da LIVE entra no MESMO trilho do site (decisão do dono, 12/07):
+  // wcOrderId sintético (900M+), sem sync com WooCommerce (guards por source).
+  source          String   @default("site")
+  liveCartId      String?  @unique @map("live_cart_id") // LivePdvCart.id de origem
   status          String   // pending, routing, awaiting_stock, separating, ready, shipped, delivered, cancelled
   customerName    String?  @map("customer_name")
   customerEmail   String?  @map("customer_email")
@@ -346,6 +400,16 @@ model Order {
   pickupStoreCode String?  @map("pickup_store_code")                   // código da loja onde cliente vai retirar (LJ05 etc)
   shippingMethod  String?  @map("shipping_method")                      // título do método de envio do WC (pra UI)
   wcDateCreated   DateTime? @map("wc_date_created") // data que o cliente fez o pedido no site
+  // ── Atribuição de MARKETING (de qual campanha/anúncio veio o pedido) ──
+  // Capturado do Order Attribution nativo do WooCommerce (_wc_order_attribution_*)
+  // no momento do sync. Só vem preenchido se o anúncio carregar UTMs na URL
+  // (Meta → Parâmetros de URL com {{campaign.name}}/{{campaign.id}}). Base do
+  // relatório "Vendas por campanha". NÃO é retroativo (só a partir do sync novo).
+  utmSource       String? @map("utm_source")     // facebook, instagram, google...
+  utmMedium       String? @map("utm_medium")      // paid, cpc, social...
+  utmCampaign     String? @map("utm_campaign")    // NOME da campanha ({{campaign.name}})
+  utmId           String? @map("utm_id")          // ID da campanha ({{campaign.id}})
+  utmContent      String? @map("utm_content")     // anúncio/criativo ({{ad.name}})
   // ── Atribuição de venda (atendente que iniciou o contato — cliente fecha no site) ──
   // Marcação manual via UI (operadora matriz). Relatório mensal soma por vendedora.
   sellerId        String?   @map("seller_id")
@@ -362,6 +426,8 @@ model Order {
 
   @@index([status])
   @@index([sellerId])
+  @@index([source])
+  @@index([utmCampaign])
   @@map("orders")
 }
 
@@ -372,6 +438,9 @@ model Order {
 model Seller {
   id        String   @id @default(uuid())
   name      String   @unique
+  // APELIDO (22/07): é o que aparece na escolha da vendedora no PDV —
+  // nome completo fica pra folha/RH.
+  apelido   String?  @db.VarChar(40)
   whatsapp  String?  // opcional — pra matriz saber contato da vendedora
   active    Boolean  @default(true)
   createdAt DateTime @default(now()) @map("created_at")
@@ -396,6 +465,10 @@ model Seller {
   wincredCodigo      String? @map("wincred_codigo")
   // Loja onde foi originalmente importada (pra agrupamento). Pode mudar.
   storeCodeOrigin    String? @map("store_code_origin")
+  // MULTI-LOJA (dono 24/07): vendedora que atende em VÁRIAS lojas sem precisar
+  // ser recriada em cada uma. JSON array de storeCodes — aparece no PDV de
+  // TODAS. Comissão soma sozinha (é por nome). Vazio = só a storeCodeOrigin.
+  lojasAtuacao       String? @map("lojas_atuacao") @db.Text
 
   // ── PRONTUARIO RH ────────────────────────────────────────────────
   cpf                String?  @db.VarChar(14)
@@ -689,6 +762,9 @@ model OrderItem {
   productName     String? @map("product_name")
   quantity        Int
   unitPrice       Float?  @map("unit_price")
+  // Preço CHEIO (sem promoção) — base da obrigação intercompany ÷2,5.
+  // Pedido da LIVE grava o basePriceCents; site fica null (unitPrice é o cheio).
+  baseUnitPrice   Float?  @map("base_unit_price")
   assignedStoreId String? @map("assigned_store_id")
 
   order         Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
@@ -705,6 +781,17 @@ model PickOrder {
   status       String   // new, separating, ready, shipped
   trackingCode String?  @map("tracking_code")
   carrier      String?
+  // ── CORREIOS: pré-postagem gerada mas AINDA NÃO postada fisicamente ──
+  // Model B: "Gerar envio" só cria a pré-postagem (trackingCode preenchido +
+  // correiosGeneratedAt). O cron acompanha o rastreio e, quando os Correios
+  // registram a postagem, marca shipped (baixa Giga + WhatsApp). Enquanto isso
+  // o pedido FICA na lista da loja (aguardando postagem).
+  correiosPrepostagemId String?   @map("correios_prepostagem_id")
+  correiosGeneratedAt   DateTime? @map("correios_generated_at")
+  // PDF da etiqueta (base64) capturado NA GERAÇÃO do envio — a reimpressão
+  // usa isso e não depende de re-baixar da API do provedor (Mais Envios
+  // falha/atrasa no re-print; 28/07)
+  etiquetaPdf           String?   @map("etiqueta_pdf")
   // ── Transferência entre lojas (quando pedido é retirada em loja e loja destino não tem estoque) ──
   isTransfer           Boolean @default(false) @map("is_transfer")             // true = separar e enviar pra outra loja, não pro cliente
   transferToStoreCode  String? @map("transfer_to_store_code")                   // loja que vai RECEBER a transferência (loja de retirada)
@@ -1544,6 +1631,35 @@ model PdvCashMovement {
   @@map("pdv_cash_movements")
 }
 
+// ADIANTAMENTO DE FUNCIONÁRIA — dinheiro adiantado via sangria do caixa, que
+// vira débito no extrato da funcionária e é abatido no PRÓXIMO pagamento dela
+// (vale dia 20 OU salário dia 05, o que vier primeiro). Sem senha pra liberar
+// (registra o operador). Extrato mostrado na aba Funcionárias do Contas a Pagar.
+model AdiantamentoFuncionaria {
+  id             String    @id @default(uuid())
+  sellerId       String?   @map("seller_id")
+  sellerNome     String    @map("seller_nome")
+  sellerCpf      String?   @map("seller_cpf")
+  storeCode      String    @map("store_code")
+  valorCents     Int       @map("valor_cents")
+  // Rastreio da origem: a sangria (PdvCashMovement) que tirou o dinheiro do caixa
+  cashMovementId String?   @map("cash_movement_id")
+  // pendente = ainda deve · abatido = descontado num pagamento · cancelado
+  status         String    @default("pendente")
+  // Quando abatido: a conta (ContaPagar) de vale/salário onde entrou o desconto
+  abatidoEmContaId String? @map("abatido_em_conta_id")
+  abatidoAt      DateTime? @map("abatido_at")
+  motivo         String?
+  userId         String?   @map("user_id")
+  userName       String?   @map("user_name")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  @@index([sellerId, status])
+  @@index([storeCode, status])
+  @@map("adiantamentos_funcionaria")
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // DEVOLUÇÃO / TROCA
 // ═══════════════════════════════════════════════════════════════════════
@@ -1863,11 +1979,121 @@ model NfceConfig {
   // Certificado A1
   certPfxB64      String?  @map("cert_pfx_b64") @db.Text
   certPfxPass     String?  @map("cert_pfx_pass")
+  // ── Identidade da NF-e (mod 55) quando DIFERE da NFC-e (dono 24/07) ──
+  // Algumas lojas emitem NFC-e sob o CNPJ de OUTRA empresa (alinhamento da
+  // máquina de cartão), mas a NF-e/DANFE precisa ser o CNPJ REAL da loja na
+  // Receita. Se nfeCnpj estiver preenchido, a NF-e usa estes campos (cada um
+  // com fallback pro campo principal). Vazio = NF-e usa os mesmos dados da NFC-e.
+  nfeCnpj         String?  @map("nfe_cnpj")
+  nfeIe           String?  @map("nfe_ie")
+  nfeRazaoSocial  String?  @map("nfe_razao_social")
+  nfeFantasia     String?  @map("nfe_fantasia")
+  nfeEndereco     String?  @map("nfe_endereco") @db.Text
+  nfeRegime       String?  @map("nfe_regime")
+  // ── Identidades fiscais EXTRAS da loja (dono 24/07) ──
+  // Loja que abriga MAIS DE UMA empresa (ex.: Itanhaém tem T.O. RISSUTTO 20 E
+  // LURDS 30). JSON array de { cnpj, ie, razaoSocial, fantasia, regime,
+  // endereco:{...} }. Na TRANSFERÊNCIA, a emissão escolhe a identidade da
+  // ORIGEM cuja RAIZ de CNPJ casa com a do DESTINO (vira transferência real).
+  nfeIdentidadesExtras String? @map("nfe_identidades_extras") @db.Text
   // Auditoria
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
 
   @@map("nfce_configs")
+}
+
+// ── NF-e modelo 55 (transferência entre lojas) ──────────────────────────
+// Documento fiscal emitido quando mercadoria sai de uma loja/CNPJ pra outra
+// (RealignmentShipment tipo TRANSFERENCIA/REALINHAMENTO, transição in_transit).
+// A identidade fiscal (CNPJ/IE/endereço/certificado/ambiente) reaproveita o
+// NfceConfig por storeCode; aqui fica só o documento emitido e seu retorno.
+model NfeDoc {
+  id              String   @id @default(uuid())
+  // Origem do documento (remessa de transferência). Null se emitido avulso.
+  shipmentId      String?  @map("shipment_id")
+  fromStoreCode   String   @map("from_store_code")  // emitente
+  toStoreCode     String   @map("to_store_code")    // destinatário
+  modelo          String   @default("55")
+  serie           String
+  numero          Int
+  cNF             String?  @map("c_nf")             // código numérico (8 díg) da chave
+  chave           String?  @unique                  // 44 dígitos
+  tpAmb           String   @map("tp_amb")           // '1' prod · '2' homolog
+  natOp           String   @map("nat_op")
+  cfop            String
+  valorTotalCents Int      @default(0) @map("valor_total_cents")
+  // pending → signed → authorized | rejected | error | cancelled
+  status          String   @default("pending")
+  cStat           String?  @map("c_stat")
+  xMotivo         String?  @map("x_motivo")
+  protocolo       String?
+  dhRecbto        String?
+  xmlEnviado      String?  @map("xml_enviado")     @db.Text
+  xmlAutorizado   String?  @map("xml_autorizado")  @db.Text
+  xmlResposta     String?  @map("xml_resposta")    @db.Text
+  erro            String?  @db.Text
+  emittedByUserId String?  @map("emitted_by_user_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@index([shipmentId])
+  @@index([status])
+  @@index([fromStoreCode, status])
+  @@map("nfe_docs")
+}
+
+// ── DC-e modelo 99 (Declaração de Conteúdo eletrônica) ──────────────────
+// Documento do envio SEM nota fiscal (Ajuste SINIEF 22/2025, obrigatória
+// desde 06/04/2026). Autorizada no ambiente nacional (SVD/PR:
+// dce.fazenda.pr.gov.br); a DACE (impressa, com QR) é gerada por nós a
+// partir do XML autorizado. Identidade fiscal reaproveita NfceConfig por
+// storeCode; numeração reaproveita NfeSequence com modelo '99'.
+model DceDoc {
+  id            String   @id @default(uuid())
+  // Vínculo com o envio (pick-order do "Gerar envio"). Null se emissão avulsa.
+  pickOrderId   String?  @map("pick_order_id")
+  storeCode     String   @map("store_code")     // remetente = loja
+  modelo        String   @default("99")
+  serie         String
+  numero        Int
+  cDC           String?  @map("c_dc")           // código numérico da chave
+  chave         String?  @unique                // 44 dígitos
+  tpAmb         String   @map("tp_amb")         // '1' prod · '2' homolog
+  destNome      String?  @map("dest_nome")
+  destCpfCnpj   String?  @map("dest_cpf_cnpj")
+  valorCents    Int      @default(0) @map("valor_cents")
+  // pending → signed → authorized | rejected | error | cancelled
+  status        String   @default("pending")
+  cStat         String?  @map("c_stat")
+  xMotivo       String?  @map("x_motivo")
+  protocolo     String?
+  dhRecbto      String?
+  qrCodeUrl     String?  @map("qr_code_url")    // URL do QR da DACE
+  xmlEnviado    String?  @map("xml_enviado")    @db.Text
+  xmlAutorizado String?  @map("xml_autorizado") @db.Text
+  xmlResposta   String?  @map("xml_resposta")   @db.Text
+  erro          String?  @db.Text
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@index([pickOrderId])
+  @@index([storeCode, status])
+  @@map("dce_docs")
+}
+
+// Contador de numeração NF-e (por loja + modelo + série), separado do NFC-e.
+// `proximo` = próximo número livre; incremento atômico no service.
+model NfeSequence {
+  id         String   @id @default(uuid())
+  storeCode  String   @map("store_code")
+  modelo     String   @default("55")
+  serie      String
+  proximo    Int      @default(1)
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  @@unique([storeCode, modelo, serie])
+  @@map("nfe_sequences")
 }
 
 model PdvReturnItem {
@@ -1954,11 +2180,30 @@ model PdvSaleItem {
   precoUnit   Float    @map("preco_unit")
   desconto    Float    @default(0)
   promoTag    String?  @map("promo_tag")         // ex: "PROMO 30% · 2022" ou "4 LEVA 3"
+  // FORÇAR PROMO (15/07): botão AZUL "colocar na promoção" — o item entra na
+  // campanha mesmo sendo BÁSICO. Ignora SÓ o filtro básico; data e coleção
+  // (-INV/-VER) continuam valendo (item novo forçado não ganha desconto).
+  // Flag separada do promoTag porque o recálculo automático sobrescreve a tag.
+  forcarPromo Boolean  @default(false) @map("forcar_promo")
   total       Float
   // Override de vendedora POR ITEM. NULL = usa sale.sellerName (padrao).
   // Usado quando 2 vendedoras atendem na mesma compra — uma operou tudo
   // e depois a comissao eh dividida item por item.
   sellerName  String?  @map("seller_name")
+  // CUSTO CONGELADO NO ATO DA VENDA (26/07) — base do CMV da DRE.
+  // O custo do produto muda com o tempo (recompra, reajuste do fornecedor);
+  // sem este carimbo a margem de um mês FECHADO mudava sozinha depois.
+  // Preenchido no bipe com o custo do espelho Wincred. NULL = venda antiga
+  // (antes desta mudança) ou item manual → a DRE cai pro custo ATUAL do
+  // produto e marca a coluna como ESTIMADA na tela.
+  custoUnitCents Int? @map("custo_unit_cents")
+  // Baixa de estoque POR ITEM (16/07). A flag da VENDA (sale.stockDecreasedAt)
+  // marca "a venda passou pela baixa", mas ITENS excluidos do filtro (ex:
+  // produto real com desconto manual — promoTag='MANUAL' — que o filtro antigo
+  // pulava por engano) ficavam SEM baixa e SEM como detectar (flag da venda ja
+  // marcada). Esta flag por item deixa o backfill de manuais (reconcileManual)
+  // achar e baixar so o que faltou, de forma idempotente.
+  stockDecreasedAt DateTime? @map("stock_decreased_at")
   createdAt   DateTime @default(now()) @map("created_at")
 
   sale        PdvSale  @relation(fields: [saleId], references: [id], onDelete: Cascade)
@@ -3225,6 +3470,9 @@ model WincredProduto {
   cst               String?   @db.Char(3)
   csosn             String?   @db.Char(3)
   cfop              Int?
+  // EAN/código de barras (primeira coluna EAN-like preenchida no Giga —
+  // EAN13/EAN/CODBARRAS variam por instalação; o sync sonda e copia).
+  ean               String?   @db.VarChar(20)
 
   // Metadata de sync
   syncedAt          DateTime  @default(now()) @map("synced_at")
@@ -3310,6 +3558,70 @@ model WincredCodigo {
   @@map("wincred_codigos")
 }
 
+/// Espelho de wincred.funcionarios — vendedoras ativas por loja (login do PDV).
+/// Full replace de hora em hora junto com o GigaMirror. Tira o SELECT em
+/// `funcionarios` do caminho quente do login das lojas.
+/// PK sintética (29/07): o CÓDIGO repete entre lojas no Wincred — com
+/// codigo como @id o espelho guardava UMA funcionária por código e o
+/// ranking do Giga vestia o nome de OUTRA loja (Mirela de Campinas
+/// aparecia como Pamela). Agora 1 linha por (codigo, loja).
+model WincredFuncionario {
+  id       Int     @id @default(autoincrement())
+  codigo   String  @db.VarChar(14)
+  nome     String? @db.VarChar(80)
+  apelido  String? @db.VarChar(40)
+  loja     String? @db.VarChar(4)
+  inativo  Boolean @default(false)
+
+  syncedAt DateTime @default(now()) @map("synced_at")
+
+  @@index([codigo])
+  @@index([loja])
+  @@map("wincred_funcionarios")
+}
+
+/// Espelho DETALHADO de wincred.caixa — venda item a item (1 linha por item).
+/// Janela deslizante: cron horário re-copia os últimos 3 dias; backfill desde
+/// GIGA_MIRROR_FROM roda no boot quando a tabela está vazia (chunks mensais).
+/// Destrava: dashboards ricos (top REFs/vendedoras/marcas/heatmap), consulta
+/// de venda antiga/devolução manual e resumos de vendas SEM tocar o Giga.
+model GigaCaixaMov {
+  registro   String    @id @db.VarChar(20)
+  numero     String?   @db.VarChar(20)
+  controle   String?   @db.VarChar(20)
+  codigo     String?   @db.VarChar(14)
+  data       DateTime? @db.Date
+  dataFec    DateTime? @map("data_fec") @db.Date
+  hora       String?   @db.VarChar(10)
+  descricao  String?   @db.VarChar(120)
+  quantidade Decimal?  @db.Decimal(10, 2)
+  valor      Decimal?  @db.Decimal(10, 2)
+  valorTotal Decimal?  @map("valor_total") @db.Decimal(10, 2)
+  operador   String?   @db.VarChar(30)
+  vendedor   String?   @db.VarChar(40)
+  cliente    String?   @db.VarChar(80)
+  loja       String?   @db.VarChar(4)
+  marcado    String?   @db.VarChar(4)
+  // Colunas ricas do schema Lurd's (v2 14/07) — usadas pela tela de vendas
+  // do caixa, clientes únicos e vendedoras. Sonda: ausentes viram NULL.
+  codCliente    String?  @map("cod_cliente") @db.VarChar(20)
+  nomeCliente   String?  @map("nome_cliente") @db.VarChar(80)
+  cpf           String?  @db.VarChar(20)
+  vendedora     String?  @db.VarChar(40)
+  vendedoraCode String?  @map("vendedora_code") @db.VarChar(14)
+  fpag          String?  @db.VarChar(30)
+  obsPedido     String?  @map("obs_pedido") @db.VarChar(200)
+  valorUnitario Decimal? @map("valor_unitario") @db.Decimal(10, 2)
+
+  syncedAt DateTime @default(now()) @map("synced_at")
+
+  @@index([data])
+  @@index([loja, data])
+  @@index([codigo])
+  @@index([dataFec])
+  @@map("giga_caixa_mov")
+}
+
 /// Espelho ENXUTO de wincred.movimento — SÓ parcelas de crediário EM ABERTO.
 /// Full replace de hora em hora + write-through nas baixas do Flow. A tela
 /// de cobrança (listAllOpenInstallments) lê daqui — a query que varria a
@@ -3353,6 +3665,241 @@ model WincredCliente {
   @@id([loja, codCliente])
   @@index([codCliente])
   @@map("wincred_clientes")
+}
+
+/// CLIENTES DO GIGA — importação COMPLETA da tabela `clientes` (dono, 21/07:
+/// "puxe a tabela exatamente igual ao Giga com todos os campos e importe tudo").
+/// Base da futura tela de Consulta de Clientes nativa (substitui a do Giga) e
+/// do crediário nativo. Colunas conhecidas viram campos estruturados/indexados;
+/// a LINHA ORIGINAL INTEIRA fica em rawJson — NENHUM campo se perde, mesmo os
+/// que o mapeamento não reconhece (RG/exp, cônjuge, pai/mãe, autorizados,
+/// referências, etc). Chave (loja, codigo): o CODIGO se repete entre lojas.
+model GigaCliente {
+  loja            String    @default("00") @db.VarChar(4)
+  codigo          String    @db.VarChar(20)
+  nome            String?   @db.VarChar(120)
+  cpf             String?   @db.VarChar(20)
+  rg              String?   @db.VarChar(30)
+  nascimento      DateTime? @db.Date
+  email           String?   @db.VarChar(120)
+  foneRes         String?   @map("fone_res") @db.VarChar(30)
+  foneCel         String?   @map("fone_cel") @db.VarChar(30)
+  foneRec         String?   @map("fone_rec") @db.VarChar(30)
+  falarCom        String?   @map("falar_com") @db.VarChar(60)
+  endereco        String?   @db.VarChar(120)
+  numero          String?   @db.VarChar(15)
+  complemento     String?   @db.VarChar(60)
+  bairro          String?   @db.VarChar(60)
+  cidade          String?   @db.VarChar(60)
+  uf              String?   @db.VarChar(2)
+  cep             String?   @db.VarChar(12)
+  bloqueado       String?   @db.VarChar(5)
+  avaliacao       String?   @db.VarChar(4)
+  situacao        String?   @db.VarChar(30)
+  pontos          Decimal?  @db.Decimal(12, 2)
+  limiteCompras   Decimal?  @map("limite_compras") @db.Decimal(12, 2)
+  aberturaCredito DateTime? @map("abertura_credito") @db.Date
+  localTrabalho   String?   @map("local_trabalho") @db.VarChar(120)
+  salario         Decimal?  @db.Decimal(12, 2)
+  admissao        DateTime? @db.Date
+  observacao      String?   @db.Text
+  rawJson         Json      @map("raw_json")
+  // ── INTEGRAÇÃO (uma PESSOA só — site + lojas + live) ──
+  // personKey = "cpf:<dígitos>" (MESMA convenção do CRM/customer-aggregation).
+  // Registros da mesma pessoa em N lojas compartilham o personKey; customerId
+  // aponta pro Customer mestre do CRM quando o CPF/fone casa.
+  personKey       String?   @map("person_key")
+  customerId      String?   @map("customer_id")
+  // ── FONTE DA VERDADE (mesmo padrão do Product) ──
+  // flowIsSource=true → ficha editada/criada NO FLOW; o sync do Giga NUNCA
+  // sobrescreve; a réplica vai Flow→Giga pelo outbox (kind cliente_upsert).
+  flowIsSource    Boolean   @default(false) @map("flow_is_source")
+  editedAt        DateTime? @map("edited_at")
+  editedBy        String?   @map("edited_by")
+  syncedAt        DateTime  @default(now()) @map("synced_at")
+
+  @@id([loja, codigo])
+  @@index([nome])
+  @@index([cpf])
+  @@index([codigo])
+  @@index([personKey])
+  @@index([customerId])
+  @@map("giga_clientes")
+}
+
+/// CREDIÁRIO NATIVO — FASE 1 do Tier 3 do "sair da Giga" (21/07).
+/// Ledger COMPLETO de parcelas importado do `movimento` do Giga (abertas E
+/// pagas — todo o histórico), com a camada nativa pro Flow virar fonte:
+///   flowIsSource=true → parcela criada/baixada NO FLOW (fase 2); o sync do
+///   Giga nunca sobrescreve; réplica vai Flow→Giga pelo outbox.
+///   saleId/baixaId → rastreio da venda PDV e da baixa que quitou (fase 2).
+/// Chave = REGISTRO do Giga. Parcela nova do Flow (fase 2) usará faixa própria.
+model CrediarioParcela {
+  registro      String    @id @db.VarChar(20)
+  controle      String?   @db.VarChar(20)
+  numeroCompra  String?   @map("numero_compra") @db.VarChar(20)
+  loja          String    @default("00") @db.VarChar(4)
+  codCliente    String?   @map("cod_cliente") @db.VarChar(20)
+  nomeCliente   String?   @map("nome_cliente") @db.VarChar(120)
+  parcela       Int?
+  totalParcelas Int?      @map("total_parcelas")
+  dataCompra    DateTime? @map("data_compra") @db.Date
+  valorCompra   Decimal?  @map("valor_compra") @db.Decimal(10, 2)
+  vencimento    DateTime? @db.Date
+  valorParcela  Decimal?  @map("valor_parcela") @db.Decimal(10, 2)
+  pago          Boolean   @default(false)
+  dataPagamento DateTime? @map("data_pagamento") @db.Date
+  valorPago     Decimal?  @map("valor_pago") @db.Decimal(10, 2)
+  juros         Decimal?  @db.Decimal(10, 2)
+  multa         Decimal?  @db.Decimal(10, 2)
+  obs           String?   @db.VarChar(300)
+  // ── Camada NATIVA (fase 2: Flow fonte da verdade) ──
+  flowIsSource  Boolean   @default(false) @map("flow_is_source")
+  saleId        String?   @map("sale_id")
+  baixaId       String?   @map("baixa_id")
+  editedAt      DateTime? @map("edited_at")
+  syncedAt      DateTime  @default(now()) @map("synced_at")
+
+  @@index([loja, codCliente])
+  @@index([codCliente])
+  @@index([pago, vencimento])
+  @@index([numeroCompra])
+  @@index([flowIsSource])
+  @@map("crediario_parcelas")
+}
+
+/// ══════════ CONVÊNIO (sindicato — dono 21/07) ══════════
+/// "Cartão de crédito" da loja conveniada (ex.: Indaiatuba × sindicato):
+/// associado compra sem pagar na hora; a loja FATURA O SINDICATO no dia de
+/// fechamento (consolidado, por associado); sindicato paga e desconta em
+/// folha. Limite POR CICLO: disponível = limite − compras ainda não faturadas
+/// (fechou a fatura → sindicato assume → limite renova).
+model Convenio {
+  id            String   @id @default(uuid())
+  nome          String   @db.VarChar(80)
+  storeCode     String   @map("store_code") @db.VarChar(4)  // SÓ vale nesta loja
+  diaFechamento Int      @default(20) @map("dia_fechamento")
+  ativo         Boolean  @default(true)
+  obs           String?  @db.VarChar(300)
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  membros ConvenioMembro[]
+  compras ConvenioCompra[]
+  faturas ConvenioFatura[]
+
+  @@index([storeCode, ativo])
+  @@map("convenios")
+}
+
+/// Associado — SÓ a lista que o sindicato manda (nome + limite). Sem ficha.
+model ConvenioMembro {
+  id          String   @id @default(uuid())
+  convenioId  String   @map("convenio_id")
+  nome        String   @db.VarChar(120)
+  matricula   String?  @db.VarChar(30)
+  limiteCents Int      @default(0) @map("limite_cents")
+  ativo       Boolean  @default(true)
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  convenio Convenio         @relation(fields: [convenioId], references: [id], onDelete: Cascade)
+  compras  ConvenioCompra[]
+
+  @@index([convenioId, ativo])
+  @@index([convenioId, nome])
+  @@map("convenio_membros")
+}
+
+/// Compra no convênio (criada quando a venda PDV finaliza com pgto 'convenio').
+/// faturaId null = ciclo aberto (conta no limite do associado).
+model ConvenioCompra {
+  id         String   @id @default(uuid())
+  convenioId String   @map("convenio_id")
+  membroId   String   @map("membro_id")
+  storeCode  String   @map("store_code") @db.VarChar(4)
+  saleId     String?  @map("sale_id")
+  valorCents Int      @map("valor_cents")
+  faturaId   String?  @map("fatura_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  convenio Convenio        @relation(fields: [convenioId], references: [id], onDelete: Cascade)
+  membro   ConvenioMembro  @relation(fields: [membroId], references: [id])
+  fatura   ConvenioFatura? @relation(fields: [faturaId], references: [id])
+
+  @@index([convenioId, faturaId])
+  @@index([membroId, faturaId])
+  @@index([saleId])
+  @@map("convenio_compras")
+}
+
+/// Fatura mensal pro sindicato (consolidada, por associado no detalhe).
+model ConvenioFatura {
+  id         String    @id @default(uuid())
+  convenioId String    @map("convenio_id")
+  de         DateTime  @db.Date
+  ate        DateTime  @db.Date
+  totalCents Int       @default(0) @map("total_cents")
+  status     String    @default("aberta") // aberta | paga
+  geradaEm   DateTime  @default(now()) @map("gerada_em")
+  pagaEm     DateTime? @map("paga_em")
+  obs        String?   @db.VarChar(300)
+
+  convenio Convenio         @relation(fields: [convenioId], references: [id], onDelete: Cascade)
+  compras  ConvenioCompra[]
+
+  @@index([convenioId, status])
+  @@map("convenio_faturas")
+}
+
+/// Sequência de CÓDIGO pra cliente NOVO cadastrado no Flow (por loja).
+/// Começa em 500001 — faixa alta que NUNCA colide com a numeração do Giga
+/// (mesma ideia do EAN prefixo-8 dos produtos: o Flow é dono do código novo).
+model GigaClienteSeq {
+  loja      String   @id @db.VarChar(4)
+  proximo   Int      @default(500001)
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("giga_cliente_seq")
+}
+
+/// MARCADOS NATIVOS (provar em casa) — fonte de leitura no Flow (21/07).
+/// Import da caixa do Giga (MARCADO='SIM') + atualizado na hora pelas
+/// operações do Flow (marcar / puxar pra venda / devolver). registroGiga
+/// amarra na linha da caixa pra réplica (fechar = DELETE lá).
+model Marcado {
+  id           String    @id @default(cuid())
+  registroGiga BigInt?   @unique @map("registro_giga")
+  storeCode    String    @map("store_code") @db.VarChar(4)
+  codCliente   String    @map("cod_cliente") @db.VarChar(20)
+  clienteNome  String?   @map("cliente_nome") @db.VarChar(120)
+  cpf          String?   @db.VarChar(20)
+  numero       Int?      // CONTROLE/NUMERO do Giga (agrupa a marcação)
+  sku          String    @db.VarChar(60)
+  descricao    String?   @db.VarChar(160)
+  qty          Int       @default(1)
+  valorUnit    Decimal   @default(0) @map("valor_unit") @db.Decimal(12, 2)
+  valorTotal   Decimal   @default(0) @map("valor_total") @db.Decimal(12, 2)
+  vendedor     String?   @db.VarChar(80)
+  dataMarcacao DateTime? @map("data_marcacao") @db.Date
+  /// ativo | fechado (virou venda no Flow) | devolvido | fechado_giga (sumiu do Giga)
+  /// | baixado (write-off SEM financeiro/estoque — defeito, furto, perda)
+  status       String    @default("ativo") @db.VarChar(16)
+  saleId       String?   @map("sale_id")
+  fechadoAt    DateTime? @map("fechado_at")
+  devolvidoAt  DateTime? @map("devolvido_at")
+  baixadoAt    DateTime? @map("baixado_at")
+  baixaMotivo  String?   @map("baixa_motivo") @db.VarChar(160)
+  baixaPor     String?   @map("baixa_por") @db.VarChar(120)
+  /// giga (import/sync) | flow (marcado criado pelo PDV)
+  origem       String    @default("giga") @db.VarChar(10)
+  isTraining   Boolean   @default(false) @map("is_training")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  @@index([status, codCliente])
+  @@index([status, storeCode])
+  @@index([status, cpf])
+  @@map("marcados")
 }
 
 /// Estado do sync incremental. 1 linha por tabela.
@@ -3419,6 +3966,9 @@ model LivePdvAtalho {
   atalho    String   // código curto normalizado (trim + UPPER) — único por sessão
   refCode   String   @map("ref_code")  // referência COMPLETA validada (o termo que o operador digitaria)
   descricao String?  // snapshot da descrição na validação (exibição na lista)
+  // Cor VENDIDA nesta legenda (13/07): digitar o atalho abre a grade SÓ dessa
+  // cor. Null = todas as cores (comportamento antigo).
+  cor       String?  @db.VarChar(40)
   position  Int      @default(0)
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -3465,11 +4015,35 @@ model LivePdvCart {
   // Quando a DM automática de cobrança (ManyChat) foi enviada — a cobrança em
   // massa PULA quem já recebeu (não repete DM); o botão individual reenvia.
   dmSentAt          DateTime? @map("dm_sent_at")
+  // COBRANÇA AUTOMÁTICA POR WHATSAPP (11/07): carrinho parado → template
+  // individual com o link exato via ManyChat API. 1 envio por carrinho;
+  // tentativas limita retry em falha (não vira spam de erro).
+  cobrancaWhatsEnviadaAt  DateTime? @map("cobranca_whats_enviada_at")
+  cobrancaWhatsTentativas Int       @default(0) @map("cobranca_whats_tentativas")
+  cobrancaWhatsCount      Int       @default(0) @map("cobranca_whats_count")
+  cobrancaDirectCount     Int       @default(0) @map("cobranca_direct_count")
+  // SACOLA PELA DM (16/07): a cliente montou o carrinho sozinha pelo ManyChat.
+  // selfCart marca a origem (apresentadora confere com atenção). awaitingReview
+  // = cliente digitou FECHAR e a sacola está na FILA DE REVISÃO — a cobrança NÃO
+  // sai sozinha; a apresentadora confere e libera (liberarCobranca). É a
+  // "verificação antes de finalizar" exigida pelo dono. clientClosedAt = quando
+  // ela fechou. Gated por LIVE_DM_SELFCART=1.
+  selfCart          Boolean   @default(false) @map("self_cart")
+  awaitingReview    Boolean   @default(false) @map("awaiting_review")
+  clientClosedAt    DateTime? @map("client_closed_at")
   // RETIRADA EM LOJA (igual ao site): frete zero, prazo de até 7 dias úteis.
   // A cliente escolhe a loja no checkout; endereço deixa de ser obrigatório.
   isPickup          Boolean  @default(false) @map("is_pickup")
   pickupStoreCode   String?  @map("pickup_store_code")
   pickupStoreName   String?  @map("pickup_store_name")
+  // TRILHO DO SITE (12/07): ao liberar a separação, a venda da live vira um
+  // Order normal (source='live') e segue o fluxo do site (pick-orders, bip,
+  // baixa, envio). orderId aponta pro Order gerado; o cart vira só o registro
+  // da venda na live (cobrança/pagamento) + espelho de status.
+  orderId           String?  @unique @map("order_id")
+  // CORREIOS: id da pré-postagem gerada pra este carrinho (pra reimprimir a
+  // etiqueta). O código de rastreio fica em LivePdvItem.trackingCode.
+  correiosPrepostagemId String? @map("correios_prepostagem_id")
   createdAt         DateTime @default(now()) @map("created_at")
   updatedAt         DateTime @updatedAt @map("updated_at")
 
@@ -3508,6 +4082,8 @@ model LivePdvItem {
   shippedAt         DateTime? @map("shipped_at")
   deliveredAt       DateTime? @map("delivered_at")
   trackingCode      String?  @map("tracking_code")
+  // Carimbo do aviso de rastreio pra cliente (WhatsApp/DM) — 1 msg por código
+  trackingNotifiedAt DateTime? @map("tracking_notified_at")
   transferOrderId   String?  @map("transfer_order_id")   // transferência interna gerada no despacho
   obligationId      String?  @map("obligation_id")        // obrigação intercompany gerada
   cancelledAt       DateTime? @map("cancelled_at")
@@ -3635,6 +4211,12 @@ model GigaProduto {
   id        String   @id @default(cuid())
   codigo    String
   ref       String?
+  // REF-BASE canônica (13/07): a REF sem o sufixo de variante que o cadastro
+  // da Giga inventa na mão ("VLM-222P"/"VLM-222 VD" → "VLM-222"; "900658M" →
+  // "900658"). Regra: corta o que vem DEPOIS do último dígito — "VLM-2225"
+  // fica inteiro (dígito é parte do núcleo, produto DIFERENTE). A grade da
+  // live agrupa a família por esta coluna. Preenchida no sync + backfill boot.
+  refBase   String?  @map("ref_base")
   descricao String?
   cor       String?
   tamanho   String?
@@ -3645,6 +4227,7 @@ model GigaProduto {
 
   @@index([codigo])
   @@index([ref])
+  @@index([refBase])
   @@map("giga_produto")
 }
 
@@ -3683,6 +4266,79 @@ model ProductClassification {
   @@map("product_classification")
 }
 
+/// Auditoria do EDITOR DE PRODUTOS (/retaguarda/editor-produtos): cada campo
+/// alterado vira uma linha ANTES→DEPOIS, agrupada por batchId (um "Confirmar").
+/// applied=false = shadow mode (EDITOR_PRODUTOS_WRITE=0, só logou sem gravar).
+model ProductEditAudit {
+  id        String   @id @default(cuid())
+  batchId   String   @map("batch_id")
+  codigo    String   @db.VarChar(20)
+  ref       String?  @db.VarChar(20)
+  field     String   @db.VarChar(30)
+  oldValue  String?  @map("old_value") @db.VarChar(200)
+  newValue  String?  @map("new_value") @db.VarChar(200)
+  userName  String?  @map("user_name") @db.VarChar(120)
+  applied   Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([batchId])
+  @@index([codigo])
+  @@index([createdAt])
+  @@map("product_edit_audit")
+}
+
+/// PRODUTO NATIVO DO FLOW (migração "sair da Giga", fase produtos P1-P3).
+/// Nasce como cópia curada do espelho wincred_produtos (catálogo inteiro) e
+/// ganha a camada que o Giga nunca teve: genero, categoria, liveOk, ativo.
+/// Campos do espelho usam os MESMOS nomes do WincredProduto — permite trocar
+/// o model nas leituras (flag PRODUCT_NATIVE_READS) sem reescrever queries.
+/// flowIsSource=true → a linha foi editada NO FLOW (fonte da verdade); o sync
+/// do espelho NUNCA mais sobrescreve os campos dela (replicação vai Flow→Giga).
+/// curadoManual=true → genero/liveOk definidos na mão; sync não recalcula.
+model Product {
+  codigo            String    @id @db.VarChar(14)
+  grupo             Int?
+  nomeGrupo         String?   @db.VarChar(30)
+  descricaoPdv      String?   @db.VarChar(50)
+  descricaoCompleta String?   @db.VarChar(100)
+  custo             Decimal?  @db.Decimal(10, 2)
+  vendaUn           Decimal?  @db.Decimal(10, 2)
+  fornecedor        String?   @db.VarChar(18)
+  unidade           String?   @db.VarChar(2)
+  estoque           Int?
+  margem            Decimal?  @db.Decimal(10, 2)
+  dataAlt           DateTime? @db.Date
+  subgrupo          Int?
+  cor               String?   @db.VarChar(15)
+  tamanho           String?   @db.VarChar(20)
+  marca             String?   @db.VarChar(30)
+  ref               String?   @db.VarChar(10)
+  ncm               String?   @db.VarChar(8)
+  tributo           String?   @db.VarChar(4)
+  cfop              Int?
+  plusSize          Int?
+  ean               String?   @db.VarChar(20)
+
+  // ── Camada NATIVA (não existe no Giga) ──
+  genero       String?   @db.VarChar(12) // FEMININO | MASCULINO | INFANTIL
+  categoria    String?   @db.VarChar(30)
+  liveOk       Boolean   @default(false) // apto pra busca da LIVE (plus feminino)
+  ativo        Boolean   @default(true)
+  curadoManual Boolean   @default(false) @map("curado_manual")
+  flowIsSource Boolean   @default(false) @map("flow_is_source")
+  editedAt     DateTime? @map("edited_at")
+
+  syncedAt  DateTime @default(now()) @map("synced_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([ref])
+  @@index([ref, cor])
+  @@index([liveOk])
+  @@index([genero])
+  @@index([flowIsSource])
+  @@map("product")
+}
+
 /// OperadorPin — PIN pessoal de liberação no PDV, por PESSOA (CPF), global (vale
 /// em qualquer loja). Substitui a "senha compartilhada de nível" pelo PIN de cada
 /// funcionária, mantendo a hierarquia (nivel) — e passa a saber QUEM autorizou.
@@ -3699,10 +4355,797 @@ model OperadorPin {
   ativo     Boolean  @default(true)
   // Loja de origem — escopo de visualização (gerente vê só as da sua loja).
   storeCode String?  @map("store_code") @db.VarChar(20)
+  // ESCOPO DE VALIDADE do PIN (dono 29/07): CSV de códigos de loja onde o PIN
+  // FUNCIONA (ex.: "03,10,17,18" = franqueado MASTER só nas lojas dele).
+  // Null/vazio = vale em todas as lojas (comportamento original).
+  lojas     String?  @db.VarChar(200)
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@index([ativo])
   @@index([storeCode])
   @@map("operador_pin")
+}
+
+/// ═══════════════ CONTAS A PAGAR (100% Flow — GIGA congelado) ═══════════════
+/// Decisões do dono 11/07/2026 + dossiê docs/GIGA-CONTAS-DESCOBERTA.md.
+/// GigaPagar = espelho RAW fiel da tabela `pagar` (só pra migração/conferência
+/// do congelamento — NUNCA é fonte de tela). ContaPagar = o modelo novo.
+
+model GigaPagar {
+  registro Int      @id // pagar.REGISTRO (PK do GIGA)
+  pnum     String?  @db.VarChar(30)
+  pesp     String?  @db.VarChar(10)
+  pser     String?  @db.VarChar(5)
+  pfav     Int?
+  pemi     DateTime? @db.Date
+  pban     String?  @db.VarChar(20)
+  pval     Decimal? @db.Decimal(10, 2)
+  pven     DateTime? @db.Date
+  paga     DateTime? @db.Date
+  pjur     Decimal? @db.Decimal(10, 2)
+  pdes     Decimal? @db.Decimal(10, 2)
+  pobs     String?  @db.VarChar(50)
+  nnota    String?  @db.VarChar(10)
+  ncheque  String?  @db.VarChar(12)
+  pend     String?  @db.VarChar(3)
+  loja     String?  @db.VarChar(2)
+  syncedAt DateTime @default(now()) @map("synced_at")
+
+  @@index([loja])
+  @@index([pven])
+  @@index([pesp])
+  @@map("giga_pagar")
+}
+
+/// Catálogo de espécies — editável na tela. Semente = 11 do GIGA + as variantes
+/// promovidas (CHEQUE, PROMISSORIA, CARNE, SEM ESPECIE) + as novas de
+/// funcionárias (SALARIO, COMISSAO). `restrita` = só perfis autorizados veem
+/// contas dessa espécie (RH/SALARIO/VALE/COMISSAO — salário é dado sensível).
+model EspecieConta {
+  id        String   @id @default(cuid())
+  nome      String   @unique @db.VarChar(30)
+  restrita  Boolean  @default(false)
+  ativa     Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // ── Classificação na DRE (painel /retaguarda/dre) ──
+  //   VARIAVEL   = varia com a venda (comissão, taxa de cartão, frete)
+  //   FIXA       = fixa da loja (aluguel, folha, luz, contador…)
+  //   FINANCEIRA = juros, multa, IOF, encargo de empréstimo
+  //   CMV        = compra de MERCADORIA → NÃO entra como despesa. O CMV da
+  //                DRE sai do custo das peças VENDIDAS; contar a compra
+  //                também seria contar estoque duas vezes.
+  //   IMPOSTO    = DAS/Simples → NÃO entra: o imposto vem da alíquota por
+  //                CNPJ configurada no painel (regime de competência).
+  //   IGNORAR    = transferência entre contas, adiantamento, etc.
+  // NULL = o service classifica por heurística no nome e a tela sinaliza.
+  dreGrupo  String?  @map("dre_grupo") @db.VarChar(10)
+
+  contas ContaPagar[]
+
+  @@map("especie_conta")
+}
+
+/// A conta a pagar do Flow. Migrada do GIGA (gigaRegistro preenchido) ou
+/// nascida aqui. Soft delete (deletedAt/deletedBy) — nada some de verdade.
+/// Beneficiário: FORNECEDOR (fornecedorGigaCodigo/nome) OU FUNCIONARIA
+/// (sellerId/CPF do RH). Parcelas REAIS via grupoParcelaId + parcelaNum/Total.
+model ContaPagar {
+  id       String @id @default(cuid())
+  numero   Int    @unique @default(autoincrement())
+  lojaCode String @map("loja_code") @db.VarChar(4)
+
+  beneficiarioTipo    String  @default("fornecedor") @map("beneficiario_tipo") @db.VarChar(12) // fornecedor | funcionaria
+  fornecedorGigaCodigo Int?   @map("fornecedor_giga_codigo")
+  fornecedorNome      String? @map("fornecedor_nome") @db.VarChar(120)
+  sellerId            String? @map("seller_id")
+  sellerNome          String? @map("seller_nome") @db.VarChar(120)
+  sellerCpf           String? @map("seller_cpf") @db.VarChar(14)
+
+  especieId       String? @map("especie_id")
+  especie         EspecieConta? @relation(fields: [especieId], references: [id])
+  especieOriginal String? @map("especie_original") @db.VarChar(10) // PESP cru do GIGA
+
+  notaFiscal String? @map("nota_fiscal") @db.VarChar(40)
+  banco      String? @db.VarChar(40)
+  cheque     String? @db.VarChar(20)
+  emissao    DateTime? @db.Date
+  vencimento DateTime  @db.Date
+  valorCents Int       @map("valor_cents")
+
+  // Baixa (P3 do dono: juros e desconto SÃO preenchidos no pagamento)
+  pagamento      DateTime? @db.Date
+  jurosCents     Int       @default(0) @map("juros_cents")
+  descontoCents  Int       @default(0) @map("desconto_cents")
+  pagoPor        String?   @map("pago_por") @db.VarChar(80)
+
+  emMaos         Boolean @default(false) @map("em_maos")
+  emMaosOriginal String? @map("em_maos_original") @db.VarChar(3) // PEND cru do GIGA
+  observacao     String? @db.VarChar(200)
+
+  parcelaNum     Int?    @map("parcela_num")
+  parcelaTotal   Int?    @map("parcela_total")
+  grupoParcelaId String? @map("grupo_parcela_id")
+
+  status String @default("aberta") @db.VarChar(12) // aberta | paga | cancelada
+
+  // Migração/qualidade (dossiê §4)
+  gigaRegistro    Int?    @unique @map("giga_registro")
+  favorecidoOrfao Boolean @default(false) @map("favorecido_orfao")
+  dataSuspeita    Boolean @default(false) @map("data_suspeita")
+
+  createdBy String?   @map("created_by") @db.VarChar(80)
+  updatedBy String?   @map("updated_by") @db.VarChar(80)
+  deletedAt DateTime? @map("deleted_at")
+  deletedBy String?   @map("deleted_by") @db.VarChar(80)
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+
+  logs ContaPagarLog[]
+
+  @@index([lojaCode, vencimento])
+  @@index([status, vencimento])
+  @@index([especieId])
+  @@index([sellerId])
+  @@index([grupoParcelaId])
+  @@index([fornecedorNome])
+  @@index([deletedAt])
+  @@map("conta_pagar")
+}
+
+/// Auditoria POR CAMPO de toda alteração (quem, o quê, antes → depois).
+model ContaPagarLog {
+  id         String   @id @default(cuid())
+  contaId    String   @map("conta_id")
+  conta      ContaPagar @relation(fields: [contaId], references: [id])
+  campo      String   @db.VarChar(40)
+  valorAntigo String? @map("valor_antigo") @db.VarChar(300)
+  valorNovo   String? @map("valor_novo") @db.VarChar(300)
+  usuario    String?  @db.VarChar(80)
+  origem     String   @default("tela") @db.VarChar(20) // tela | migracao | sistema
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([contaId])
+  @@index([createdAt])
+  @@map("conta_pagar_log")
+}
+
+/// Associação Fornecedor(GIGA) → Funcionária (decisão do dono 11/07): os
+/// ~440 "fornecedores" que são PESSOAS (folha RH/VALE de 20 anos) viram
+/// beneficiário FUNCIONÁRIA nas contas e somem do autocomplete de
+/// fornecedores. Persistente (o espelho wincred_fornecedores é truncado a
+/// cada sync — flag lá se perderia). naoEhPessoa=true = descartado da
+/// conciliação (ex.: CONTABILIDADE). Reversível (desfazer apaga a linha).
+model ContaPagarAssociacao {
+  id                   String   @id @default(cuid())
+  fornecedorGigaCodigo Int      @unique @map("fornecedor_giga_codigo")
+  fornecedorNome       String?  @map("fornecedor_nome") @db.VarChar(120)
+  sellerId             String?  @map("seller_id")
+  sellerNome           String?  @map("seller_nome") @db.VarChar(120)
+  naoEhPessoa          Boolean  @default(false) @map("nao_eh_pessoa")
+  contasConvertidas    Int      @default(0) @map("contas_convertidas")
+  criadoPor            String?  @map("criado_por") @db.VarChar(80)
+  createdAt            DateTime @default(now()) @map("created_at")
+
+  @@index([sellerId])
+  @@map("conta_pagar_associacao")
+}
+
+/// Alíquota efetiva de imposto por CNPJ × mês (painel /retaguarda/dre).
+/// O grupo tem VÁRIOS CNPJs e cada um está numa faixa diferente do Simples
+/// (a faixa muda com o RBT12) — por isso a alíquota é por CNPJ e por MÊS, não
+/// um percentual único da rede. A loja herda pelo `Store.expectedCnpj`.
+/// Mês sem linha própria usa a alíquota mais recente ANTERIOR do mesmo CNPJ;
+/// CNPJ sem nenhuma linha entra com imposto zero e a tela avisa.
+model DreAliquota {
+  id          String   @id @default(cuid())
+  cnpj        String   @db.VarChar(14)   // só dígitos
+  mes         String   @db.VarChar(7)    // YYYY-MM
+  aliquotaPct Decimal  @map("aliquota_pct") @db.Decimal(5, 2)
+  observacao  String?  @db.VarChar(120)
+  criadoPor   String?  @map("criado_por") @db.VarChar(80)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@unique([cnpj, mes])
+  @@index([cnpj, mes])
+  @@map("dre_aliquota")
+}
+
+/// Ajuste GERENCIAL da DRE (painel /retaguarda/dre).
+///
+/// Existe pra corrigir o resultado SEM mexer no Contas a Pagar — o financeiro
+/// real continua intocado (a conta da VERISURE segue lá, e segue sendo paga).
+/// Dois tipos:
+///
+///   EXCLUIR_FORNECEDOR — tira da DRE tudo de um fornecedor (ex: VERISURE,
+///     contrato encerrado). O valor não some: aparece no bloco "o que ficou
+///     de fora" com o motivo.
+///
+///   DESPESA_FIXA — soma uma despesa que o dono sabe que existe mas que não
+///     está lançada no Contas a Pagar (ex: segurança R$ 200/loja). Valor é
+///     MENSAL e entra proporcional aos dias do período. `lojasExcluidas`
+///     lista quem NÃO paga (ex: SANTOS).
+///
+///   DESPESA_PCT — despesa que acompanha a venda, em % do FATURAMENTO BRUTO
+///     de cada coluna (ex: marketing 5%). Não precisa de rateio nem de
+///     proporção por dias: se a loja vendeu mais, gastou mais.
+model DreAjuste {
+  id        String  @id @default(cuid())
+  tipo      String  @db.VarChar(20) // EXCLUIR_FORNECEDOR | DESPESA_FIXA | DESPESA_PCT
+  descricao String  @db.VarChar(60) // rótulo que aparece na DRE
+
+  /// DESPESA_PCT: % sobre o faturamento bruto da coluna.
+  percentual Decimal? @db.Decimal(6, 3)
+
+  /// EXCLUIR_FORNECEDOR: casa por "contém", sem acento e case-insensitive.
+  fornecedorMatch String? @map("fornecedor_match") @db.VarChar(60)
+
+  /// DESPESA_FIXA: valor MENSAL por loja.
+  valorMensalCents Int?    @map("valor_mensal_cents")
+  grupo            String? @db.VarChar(12) // FIXA | VARIAVEL | FINANCEIRA
+  /// Códigos de loja que NÃO pagam, separados por vírgula.
+  lojasExcluidas   String? @map("lojas_excluidas") @db.VarChar(200)
+  /// Aplica SÓ nestas lojas (se preenchido, `lojasExcluidas` é ignorado).
+  /// Ex: marketing do SITE é 20% e o das lojas é 5% — dois ajustes, cada um
+  /// mirando o seu alvo, em vez de excluir todo o resto da rede na mão.
+  lojasIncluidas   String? @map("lojas_incluidas") @db.VarChar(200)
+
+  ativo     Boolean  @default(true)
+  criadoPor String?  @map("criado_por") @db.VarChar(80)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  realizados DreAjusteRealizado[]
+
+  @@index([tipo, ativo])
+  @@map("dre_ajuste")
+}
+
+/// Taxa da adquirente por BANDEIRA × FAIXA DE PARCELA (dono, 26/07).
+///
+/// A DRE cruza isto com os pagamentos reais da venda (`PdvSalePayment`, que
+/// guarda bandeira e nº de parcelas em `details`) e joga o resultado em
+/// DESPESA VARIÁVEL — sem depender de ninguém lançar no Contas a Pagar.
+///
+/// Taxa vale pra rede toda (decisão do dono: as maquininhas são negociadas
+/// junto). `faixaParcela`: UNICA (pix/débito) | 1 | 2-6 | 7-12.
+model TaxaCartao {
+  id           String  @id @default(cuid())
+  forma        String  @db.VarChar(10) // PIX | DEBITO | CREDITO
+  bandeira     String  @db.VarChar(20) // VISA, MASTERCARD, ELO, AMEX…
+  faixaParcela String  @map("faixa_parcela") @db.VarChar(6)
+  /// % sobre o valor pago. 3 casas: adquirente cobra 2,49%, 3,199%…
+  taxaPct      Decimal @map("taxa_pct") @db.Decimal(6, 3)
+  ativo        Boolean @default(true)
+
+  criadoPor String?  @map("criado_por") @db.VarChar(80)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([bandeira, faixaParcela])
+  @@index([ativo])
+  @@map("taxa_cartao")
+}
+
+/// VALOR REALIZADO de um ajuste percentual, por MÊS (dono, 26/07).
+///
+/// O percentual do `DreAjuste` é uma SIMULAÇÃO — serve pro mês corrente, antes
+/// de fechar a fatura da mídia. Quando o dono lança aqui o que gastou de
+/// verdade, este valor SOBREPÕE o percentual naquele mês, e a DRE para de
+/// simular. Enquanto não houver linha, vale o coeficiente.
+///
+/// O valor é o TOTAL do mês; a DRE distribui entre as colunas-alvo do ajuste
+/// proporcional ao faturamento de cada uma (mesmo critério do percentual).
+model DreAjusteRealizado {
+  id       String @id @default(cuid())
+  ajusteId String @map("ajuste_id")
+  mes      String @db.VarChar(7) // YYYY-MM
+
+  valorCents Int    @map("valor_cents")
+  observacao String? @db.VarChar(160)
+
+  lancadoPor String?  @map("lancado_por") @db.VarChar(80)
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  ajuste DreAjuste @relation(fields: [ajusteId], references: [id], onDelete: Cascade)
+
+  @@unique([ajusteId, mes])
+  @@index([mes])
+  @@map("dre_ajuste_realizado")
+}
+
+
+
+/// DEMANDAS (15/07): backlog do dono na aba Gestao - prompt + prints colados,
+/// criticidade em 3 niveis e datas de criacao/finalizacao. So admin.
+model Demanda {
+  id          String    @id @default(uuid())
+  titulo      String?   @db.VarChar(120)
+  prompt      String
+  criticidade String    @db.VarChar(12)
+  status      String    @default("aberta")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  finishedAt  DateTime? @map("finished_at")
+  userName    String?   @map("user_name") @db.VarChar(60)
+  tags        String[]  @default([])
+  imagens     DemandaImagem[]
+
+  @@index([status, criticidade])
+  @@map("demandas")
+}
+
+model DemandaImagem {
+  id        String   @id @default(uuid())
+  demandaId String   @map("demanda_id")
+  demanda   Demanda  @relation(fields: [demandaId], references: [id], onDelete: Cascade)
+  mime      String   @db.VarChar(40)
+  dataB64   String   @map("data_b64")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([demandaId])
+  @@map("demanda_imagens")
+}
+
+/// Tags das demandas (17/07): catalogo criado pelo dono (RH, CONTAS A PAGAR,
+/// PDV...). A demanda guarda os nomes em array (filtro via has).
+model DemandaTag {
+  id        String   @id @default(uuid())
+  nome      String   @unique @db.VarChar(30)
+  cor       String   @db.VarChar(20)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("demanda_tags")
+}
+
+/// ═══════════ CONCILIACAO FINANCEIRA (aprovado 17/07) ═══════════
+/// Espinha do modulo: toda transacao de gateway (PagBank/Pagarme/Stone) vira
+/// uma linha aqui, com o JSON BRUTO guardado (nunca perder informacao).
+model FinancialTransaction {
+  id                String    @id @default(uuid())
+  gateway           String    @db.VarChar(12)
+  origem            String?   @db.VarChar(10)
+  pedidoRef         String?   @map("pedido_ref") @db.VarChar(40)
+  storeCode         String?   @map("store_code") @db.VarChar(4)
+  paymentId         String?   @map("payment_id") @db.VarChar(80)
+  chargeId          String?   @map("charge_id") @db.VarChar(80)
+  transactionId     String?   @map("transaction_id") @db.VarChar(80)
+  authorizationCode String?   @map("authorization_code") @db.VarChar(40)
+  nsu               String?   @db.VarChar(40)
+  tid               String?   @db.VarChar(40)
+  pixTxid           String?   @map("pix_txid") @db.VarChar(80)
+  statusGateway     String?   @map("status_gateway") @db.VarChar(30)
+  statusInterno     String    @default("pendente") @map("status_interno") @db.VarChar(20)
+  valorBrutoCents   Int?      @map("valor_bruto_cents")
+  valorLiquidoCents Int?      @map("valor_liquido_cents")
+  taxaCents         Int?      @map("taxa_cents")
+  parcelas          Int?
+  bandeira          String?   @db.VarChar(20)
+  tipoPagamento     String?   @map("tipo_pagamento") @db.VarChar(20)
+  cartaoFinal       String?   @map("cartao_final") @db.VarChar(4)
+  dataVenda         DateTime? @map("data_venda")
+  dataAutorizacao   DateTime? @map("data_autorizacao")
+  dataCaptura       DateTime? @map("data_captura")
+  dataCancelamento  DateTime? @map("data_cancelamento")
+  dataRecebimento   DateTime? @map("data_recebimento")
+  rawJson           Json?     @map("raw_json")
+  rawHash           String?   @map("raw_hash") @db.VarChar(64)
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  @@unique([gateway, chargeId, transactionId])
+  @@index([gateway, dataVenda])
+  @@index([pedidoRef])
+  @@index([nsu])
+  @@index([pixTxid])
+  @@index([statusInterno])
+  @@map("financial_transactions")
+}
+
+/// Creditos efetivamente pagos pela adquirente (extrato/recebiveis).
+model FinancialRecebimento {
+  id            String    @id @default(uuid())
+  gateway       String    @db.VarChar(12)
+  transactionId String?   @map("transaction_id") @db.VarChar(80)
+  chargeId      String?   @map("charge_id") @db.VarChar(80)
+  dataCredito   DateTime? @map("data_credito")
+  valorCents    Int?      @map("valor_cents")
+  taxaCents     Int?      @map("taxa_cents")
+  liquidoCents  Int?      @map("liquido_cents")
+  lote          String?   @db.VarChar(40)
+  banco         String?   @db.VarChar(40)
+  status        String?   @db.VarChar(20)
+  rawJson       Json?     @map("raw_json")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  @@index([gateway, dataCredito])
+  @@index([transactionId])
+  @@map("financial_recebimentos")
+}
+
+/// Resultado do motor: cada transacao casada (ou nao) com venda e recebimento.
+model FinancialConciliacao {
+  id               String    @id @default(uuid())
+  transactionId    String    @unique @map("transaction_id")
+  pedidoRef        String?   @map("pedido_ref") @db.VarChar(40)
+  gateway          String    @db.VarChar(12)
+  status           String    @db.VarChar(20)
+  valorSistemaCents  Int?    @map("valor_sistema_cents")
+  valorGatewayCents  Int?    @map("valor_gateway_cents")
+  valorRecebidoCents Int?    @map("valor_recebido_cents")
+  diferencaCents     Int?    @map("diferenca_cents")
+  motivo           String?   @db.VarChar(200)
+  ultimaConciliacao DateTime @default(now()) @map("ultima_conciliacao")
+  createdAt        DateTime  @default(now()) @map("created_at")
+
+  @@index([status])
+  @@index([gateway, status])
+  @@map("financial_conciliacoes")
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// PORTAL DE TROCAS — self-service do e-commerce (cliente solicita sozinha)
+// ═══════════════════════════════════════════════════════════════════════
+//
+// Diferente do WcReturnRequest (troca registrada PELA EQUIPE quando a peça
+// já está na loja), aqui a SOLICITAÇÃO nasce no portal público /trocas e
+// atravessa um fluxo com status até a conclusão. O valor usado em qualquer
+// vale/reembolso é o LÍQUIDO PAGO pela cliente (congelado no momento da
+// solicitação — mudança de preço futura não afeta).
+//
+// Encadeamento (troca da troca): parentId aponta pra troca de origem;
+// wcOrderId SEMPRE aponta pro pedido original (nunca se perde o vínculo).
+
+model TrocaSolicitacao {
+  id            String   @id @default(uuid())
+  // Numeração sequencial exibida como T0001, T0002...
+  numero        Int      @unique @default(autoincrement())
+  // Pedido WC original (raiz do encadeamento)
+  wcOrderId     Int      @map("wc_order_id")
+  wcOrderNumber String?  @map("wc_order_number")
+  // Troca de origem (quando é troca da troca)
+  parentId      String?  @map("parent_id")
+  parent        TrocaSolicitacao?  @relation("TrocaEncadeada", fields: [parentId], references: [id])
+  filhas        TrocaSolicitacao[] @relation("TrocaEncadeada")
+  // Cliente (snapshot do pedido)
+  customerName  String?  @map("customer_name")
+  customerCpf   String?  @map("customer_cpf")
+  customerEmail String?  @map("customer_email")
+  customerPhone String?  @map("customer_phone")
+  // Motivo
+  motivo        String
+  motivoDetalhe String?  @map("motivo_detalhe") @db.Text
+  // Fluxo: solicitada | aguardando_postagem | aguardando_envio_cliente |
+  //   postada | em_transporte | recebida | em_conferencia |
+  //   aguardando_decisao | produto_reservado | aguardando_pagamento_diferenca |
+  //   reembolso_andamento | finalizada | cancelada
+  status        String   @default("solicitada")
+  // Validação do prazo (snapshot na solicitação)
+  trackingCodePedido String?   @map("tracking_code_pedido")
+  deliveredAt        DateTime? @map("delivered_at")
+  // 'rastreio' (entrega detectada) | 'data_pedido' (fallback) | 'nao_verificado'
+  prazoVerificadoVia String?   @map("prazo_verificado_via")
+  diasDesdeEntrega   Int?      @map("dias_desde_entrega")
+  dentroDoPrazo      Boolean?  @map("dentro_do_prazo")
+  // Declaração da cliente (checkboxes obrigatórios do portal)
+  declaracaoAceitaAt DateTime? @map("declaracao_aceita_at")
+  declaracaoIp       String?   @map("declaracao_ip")
+  // Logística reversa
+  reversaGratis    Boolean   @default(false) @map("reversa_gratis")
+  reversaCodigo    String?   @map("reversa_codigo")
+  reversaPrazo     DateTime? @map("reversa_prazo")
+  reversaEnviadaAt DateTime? @map("reversa_enviada_at")
+  // Lembrete de vencimento do código reverso (cron manda 1x)
+  reversaLembreteAt DateTime? @map("reversa_lembrete_at")
+  // Devolução por conta da cliente (benefício já usado): rastreio informado
+  clienteTrackingCode String? @map("cliente_tracking_code")
+  // Soma do líquido pago dos itens selecionados
+  valorTotalPago Float    @map("valor_total_pago")
+
+  // ── FASE 2: recebimento → conferência → decisão → envio ──
+  recebidaAt         DateTime? @map("recebida_at")
+  conferenciaAt      DateTime? @map("conferencia_at")
+  conferenciaAprovada Boolean? @map("conferencia_aprovada")
+  conferenciaChecklist Json?   @map("conferencia_checklist")
+  conferenciaReprovadaMotivo String? @map("conferencia_reprovada_motivo")
+  // Loja que recebeu a peça fisicamente (entrada de estoque nela)
+  receivingStoreCode String?   @map("receiving_store_code")
+  receivingStoreName String?   @map("receiving_store_name")
+  // Decisão da cliente: trocar_tamanho | trocar_cor | vale | reembolso
+  decisao            String?
+  decisaoAt          DateTime? @map("decisao_at")
+  // Nova peça escolhida (reserva LÓGICA — desconta da disponibilidade
+  // mostrada a outras trocas; Giga só baixa no envio real)
+  novaSku            String?   @map("nova_sku")
+  novaProductName    String?   @map("nova_product_name")
+  novaCor            String?   @map("nova_cor")
+  novaTamanho        String?   @map("nova_tamanho")
+  reservaAt          DateTime? @map("reserva_at")
+  // Vale-compras (cupom WC + registro local, 90 dias)
+  valeCode           String?   @unique @map("vale_code")
+  valeValidade       DateTime? @map("vale_validade")
+  // Reembolso (sistema ORGANIZA; equipe executa no gateway)
+  reembolsoForma     String?   @map("reembolso_forma")     // pix | cartao | outro
+  reembolsoChavePix  String?   @map("reembolso_chave_pix")
+  reembolsoConcluidoAt DateTime? @map("reembolso_concluido_at")
+  // Envio da nova peça
+  envioTrackingCode  String?   @map("envio_tracking_code")
+  envioAt            DateTime? @map("envio_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @default(now()) @updatedAt @map("updated_at")
+
+  items   TrocaItem[]
+  eventos TrocaEvento[]
+
+  @@index([wcOrderId])
+  @@index([customerCpf])
+  @@index([status, createdAt(sort: Desc)])
+  @@map("troca_solicitacoes")
+}
+
+model TrocaItem {
+  id          String  @id @default(uuid())
+  trocaId     String  @map("troca_id")
+  sku         String
+  productName String? @map("product_name")
+  qty         Int     @default(1)
+  // Preço cheio unitário (subtotal do WC, antes de qualquer desconto)
+  valorOriginalUnit Float @map("valor_original_unit")
+  // LÍQUIDO pago unitário (promoção + cupom rateado + desconto PIX rateado)
+  valorPagoUnit     Float @map("valor_pago_unit")
+  totalPago         Float @map("total_pago")
+  // Entrada de estoque na conferência aprovada (via increaseStock)
+  stockReturnedAt   DateTime? @map("stock_returned_at")
+  stockError        String?   @map("stock_error")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  troca TrocaSolicitacao @relation(fields: [trocaId], references: [id], onDelete: Cascade)
+
+  @@index([trocaId])
+  @@index([sku])
+  @@map("troca_itens")
+}
+
+// Linha do tempo auditável — nunca apagar (regra da política)
+model TrocaEvento {
+  id         String   @id @default(uuid())
+  trocaId    String   @map("troca_id")
+  tipo       String   // solicitacao | status | reversa | rastreio_cliente | concessao | email | nota
+  descricao  String   @db.Text
+  statusDe   String?  @map("status_de")
+  statusPara String?  @map("status_para")
+  userId     String?  @map("user_id")
+  userName   String?  @map("user_name")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  troca TrocaSolicitacao @relation(fields: [trocaId], references: [id], onDelete: Cascade)
+
+  @@index([trocaId, createdAt])
+  @@map("troca_eventos")
+}
+
+// Concessão EXTRA de reversa grátis (além da 1 por CPF) — exige justificativa
+model TrocaReversaConcessao {
+  id            String   @id @default(uuid())
+  cpf           String
+  trocaId       String?  @map("troca_id")
+  justificativa String   @db.Text
+  userId        String?  @map("user_id")
+  userName      String?  @map("user_name")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@index([cpf])
+  @@map("troca_reversa_concessoes")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LURDS FIT AI — recomendação proprietária de tamanho
+//
+// Camada 100% da Lurd's (nada de terceiro). Fica SEPARADA de `Product` de
+// propósito: `Product` é espelho do Giga e é sobrescrito a cada sync — o que
+// a gente cadastra aqui (modelagem, elastano, caimento) nunca seria
+// preservado lá. Chave é a REF (a peça), não o código de cor/tamanho.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Ficha de CAIMENTO da peça — o que o algoritmo precisa saber do produto.
+model FitProduct {
+  ref         String   @id @db.VarChar(20)   // REF normalizada (upper, sem espaço)
+  categoria   String?  @db.VarChar(20)       // vestido|blusa|calca|legging|jaqueta|camisa|saia|macacao
+  marca       String?  @db.VarChar(30)
+  fornecedor  String?  @db.VarChar(40)
+  modelagem   String?  @db.VarChar(10)       // pequena | normal | grande
+  elastano    String?  @db.VarChar(10)       // sem | pouco | muito
+  caimento    String?  @db.VarChar(10)       // justo | normal | amplo
+  composicao  String?  @db.VarChar(120)      // "95% viscose, 5% elastano"
+  /// Medidas REAIS da peça por tamanho: { "54": { busto: 118, cintura: 104, quadril: 126, comprimento: 92 } }
+  medidas     Json?
+  observacao  String?  @db.Text
+
+  atualizadoPor String? @map("atualizado_por") @db.VarChar(80)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@index([categoria])
+  @@index([marca])
+  @@map("fit_product")
+}
+
+/// BODY PROFILE da cliente — nasce no widget, vive no CRM.
+model FitBodyProfile {
+  id          String   @id @default(uuid())
+  /// Liga no CRM quando a cliente é conhecida (telefone/CPF informado depois)
+  customerId  String?  @map("customer_id")
+  /// Identificador anônimo do navegador (localStorage) até virar cliente
+  anonId      String?  @map("anon_id") @db.VarChar(40)
+
+  alturaCm    Int      @map("altura_cm")
+  pesoKg      Int      @map("peso_kg")
+  idade       Int?
+  preferencia String   @db.VarChar(10)       // justa | normal | soltinha
+  formatoCorpo String? @map("formato_corpo") @db.VarChar(12) // ampulheta|pera|maca|retangulo|naosei
+  busto       String?  @db.VarChar(1)        // P | M | G
+  quadril     String?  @db.VarChar(1)        // P | M | G
+  tamanhoHabitual String? @map("tamanho_habitual") @db.VarChar(4)
+
+  ultimoRecomendado String? @map("ultimo_recomendado") @db.VarChar(4)
+  ultimoComprado    String? @map("ultimo_comprado") @db.VarChar(4)
+  ultimoTrocado     String? @map("ultimo_trocado") @db.VarChar(4)
+
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  recomendacoes FitRecommendation[]
+
+  @@index([customerId])
+  @@index([anonId])
+  @@map("fit_body_profile")
+}
+
+/// Cada recomendação entregue — é o dataset de treino do sistema.
+model FitRecommendation {
+  id          String   @id @default(uuid())
+  profileId   String?  @map("profile_id")
+  customerId  String?  @map("customer_id")
+  anonId      String?  @map("anon_id") @db.VarChar(40)
+
+  ref         String?  @db.VarChar(20)
+  categoria   String?  @db.VarChar(20)
+  marca       String?  @db.VarChar(30)
+  /// Snapshot do que a cliente respondeu + o que a peça informava
+  entrada     Json
+  /// Passo a passo do cálculo (auditoria: por que deu 54)
+  trilha      Json?
+
+  tamanho       String  @db.VarChar(4)
+  tamanhoAlt    String? @map("tamanho_alt") @db.VarChar(4)
+  confianca     Int
+  origem        String  @default("pdp") @db.VarChar(20)  // pdp | live | whatsapp | pdv
+
+  /// Fechamento do ciclo (alimenta o aprendizado)
+  desfecho        String?   @db.VarChar(12)  // comprou | trocou | devolveu | ignorou
+  tamanhoComprado String?   @map("tamanho_comprado") @db.VarChar(4)
+  tamanhoFinal    String?   @map("tamanho_final") @db.VarChar(4)
+  desfechoAt      DateTime? @map("desfecho_at")
+
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  profile FitBodyProfile? @relation(fields: [profileId], references: [id], onDelete: SetNull)
+
+  @@index([ref])
+  @@index([customerId])
+  @@index([createdAt])
+  @@index([desfecho])
+  @@map("fit_recommendation")
+}
+
+/// MODELO APRENDIDO — viés de tamanho por escopo (a "IA" treinada nas vendas
+/// reais da Lurd's). Ex.: escopo='ref' chave='12345' viesMedio=+0.8 → essa
+/// peça veste pequeno, recomenda um número acima.
+model FitStat {
+  id        String   @id @default(uuid())
+  escopo    String   @db.VarChar(12)   // ref | categoria | marca | modelagem | fornecedor
+  chave     String   @db.VarChar(40)
+
+  amostras  Int      @default(0)       // quantos desfechos alimentaram
+  viesSoma  Float    @default(0) @map("vies_soma")   // Σ (passos de correção)
+  viesMedio Float    @default(0) @map("vies_medio")
+  acertos   Int      @default(0)       // comprou e ficou
+  trocas    Int      @default(0)
+  devolucoes Int     @default(0)
+
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([escopo, chave])
+  @@index([escopo])
+  @@map("fit_stat")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CATÁLOGO DO E-COMMERCE (sprint 008 — ERP como fonte da verdade)
+//
+// Divisão de responsabilidade, decidida pelo que cada sistema REALMENTE tem:
+//   ERP (wincred_produtos/estoque) → código, REF, EAN, grade, cor, tamanho,
+//        marca, preço, custo, NCM, estoque por loja. É a VERDADE.
+//   Flow (site_produto)            → nome comercial, descrição, SEO, coleção,
+//        curadoria. É o CADASTRO, não cache: decisão do dono 30/07 — "criar
+//        os campos faltantes no Flow, 100% de integração site ↔ CRM".
+//   Flow (product_photos, R2)      → fotos por REF+cor (já existia, usada na Live).
+//   WooCommerce                    → APENAS origem de IMPORTAÇÃO enquanto o
+//        site antigo viver. Assim que alguém edita a peça no Flow, ela vira
+//        origemConteudo='flow' e o importador nunca mais a sobrescreve.
+//   FitProduct (Flow)              → modelagem, elastano, caimento, medidas.
+//
+// `SiteProduto` é CACHE + CURADORIA: 1 linha por REF publicada. Não duplica
+// dado do ERP (preço/estoque saem sempre do espelho na hora da consulta).
+// ═══════════════════════════════════════════════════════════════════════════
+
+model SiteProduto {
+  ref               String   @id @db.VarChar(20)
+  slug              String   @unique @db.VarChar(160)
+  nome              String   @db.VarChar(160)
+  descricaoCurta    String?  @map("descricao_curta") @db.Text
+  descricaoCompleta String?  @map("descricao_completa") @db.Text
+
+  /// Mídia do WC: [{ src, alt, tipo: 'imagem'|'video'|'360' }]
+  imagens           Json?
+  /// SEO importado: { metaTitle, metaDescription, canonical, ogImage }
+  seo               Json?
+
+  /// Cadastro comercial (não existe no ERP)
+  /// Categoria COMERCIAL do site (vestidos, blusas, calcas…). Não é o grupo
+  /// do Giga: `nomeGrupo` é classificação fiscal/interna, quase sempre vazia
+  /// e com valor tipo "BLUSA FEMININA" — nunca casaria com o menu do site.
+  categoria         String?  @db.VarChar(30)
+  colecao           String?  @db.VarChar(60)
+  linha             String?  @db.VarChar(60)
+
+  /// Curadoria: o que a loja escolheu publicar
+  publicado         Boolean  @default(true)
+  destaque          Boolean  @default(false)
+  lancamento        Boolean  @default(false)
+  promocao          Boolean  @default(false)
+
+  /// TOMADA DE POSSE: 'woocommerce' = ainda espelha o site antigo; 'flow' =
+  /// alguém editou aqui e o Flow virou dono — o importador PULA essa peça
+  /// pra sempre. É o que permite migrar produto a produto, sem big-bang.
+  origemConteudo    String   @default("woocommerce") @map("origem_conteudo") @db.VarChar(20)
+  editadoPor        String?  @map("editado_por") @db.VarChar(80)
+  editadoEm         DateTime? @map("editado_em")
+
+  /// Rastreio de onde veio (nunca inventar vínculo)
+  wcId              Int?     @map("wc_id")
+  wcSlug            String?  @map("wc_slug") @db.VarChar(160)
+
+  syncedAt          DateTime @default(now()) @map("synced_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  @@index([publicado])
+  @@index([categoria])
+  @@index([destaque])
+  @@index([lancamento])
+  @@map("site_produto")
+}
+
+/// LOG de cada rodada de sincronização — exigência do sprint 008 (auditoria).
+model SiteSyncLog {
+  id            String   @id @default(uuid())
+  tipo          String   @db.VarChar(20)   // conteudo | validacao
+  iniciadoEm    DateTime @default(now()) @map("iniciado_em")
+  duracaoMs     Int?     @map("duracao_ms")
+
+  lidos         Int      @default(0)
+  criados       Int      @default(0)
+  atualizados   Int      @default(0)
+  ignorados     Int      @default(0)
+  falhas        Int      @default(0)
+
+  /// Detalhe legível: o que foi ignorado e por quê, conflitos, divergências
+  detalhes      Json?
+  erro          String?  @db.Text
+  disparadoPor  String?  @map("disparado_por") @db.VarChar(80)
+
+  @@index([tipo, iniciadoEm])
+  @@map("site_sync_log")
 }

@@ -2,6 +2,8 @@ import { HttpService } from '@nestjs/axios';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { firstValueFrom } from 'rxjs';
+import { PrismaService } from '../prisma/prisma.service';
+import { extractAttributionRaw } from '../woocommerce/attribution.util';
 
 /**
  * Service pra ler dados do plugin "Cart Abandonment Recovery for WooCommerce"
@@ -21,7 +23,40 @@ export class AbandonedCartsService {
   constructor(
     private readonly http: HttpService,
     private readonly config: ConfigService,
+    private readonly prisma: PrismaService,
   ) {}
+
+  /**
+   * Enriquece cada carrinho com a CAMPANHA de origem (utmCampaign) quando ele
+   * tem `order_id` — cruzando com o Order local (que guarda a atribuição do WC).
+   * Carrinho sem pedido (só e-mail capturado antes de "Finalizar compra") não
+   * tem campanha: o CartFlows não guarda UTM, e o WC ainda não gerou o pedido.
+   */
+  private async enrichCampaign(items: any[]): Promise<void> {
+    if (!Array.isArray(items) || !items.length) return;
+    const ids = Array.from(
+      new Set(
+        items
+          .map((it) => Number(it?.order_id))
+          .filter((n) => Number.isFinite(n) && n > 0),
+      ),
+    );
+    if (!ids.length) return;
+    try {
+      const orders = await (this.prisma as any).order.findMany({
+        where: { wcOrderId: { in: ids } },
+        select: { wcOrderId: true, utmCampaign: true },
+      });
+      const byId = new Map<number, string | null>();
+      for (const o of orders) byId.set(Number(o.wcOrderId), o.utmCampaign ?? null);
+      for (const it of items) {
+        const oid = Number(it?.order_id);
+        if (byId.has(oid)) it.utmCampaign = byId.get(oid);
+      }
+    } catch (e: any) {
+      this.logger.warn(`[carrinhos] enrichCampaign falhou: ${e?.message ?? e}`);
+    }
+  }
 
   private get base(): string | null {
     const b = this.config.get<string>('FLOWOPS_WP_BASE');
@@ -147,7 +182,11 @@ export class AbandonedCartsService {
       until: params.until,
       search: params.search,
     });
-    if (!this.isFailed(primary)) return primary;
+    if (!this.isFailed(primary)) {
+      // Cruza order_id → campanha (Order local com atribuição do WC).
+      await this.enrichCampaign((primary as any)?.items);
+      return primary;
+    }
 
     // Plugin WP indisponível (404/401/sem env/site fora) → cai pro WooCommerce
     // REST, que não depende do plugin .php. Antes a aba ficava EM BRANCO aqui.
@@ -329,6 +368,8 @@ export class AbandonedCartsService {
         time: o.date_created_gmt ?? o.date_created ?? null,
         order_id: o.id,
         source: 'woocommerce',
+        // Campanha de origem — meta_data do próprio pedido WC já está à mão aqui.
+        utmCampaign: extractAttributionRaw(o.meta_data ?? []).utmCampaign,
       };
     });
 
@@ -468,6 +509,8 @@ export class AbandonedCartsService {
   async detailFull(id: number) {
     const base = (await this.detail(id)) as any;
     if (!base || base.ok === false || !this.wcBase) return base;
+    // Campanha de origem (via order_id → Order local com atribuição do WC).
+    await this.enrichCampaign([base]);
     const items: any[] = Array.isArray(base?.cart_items) ? base.cart_items : [];
     if (items.length === 0) return base;
 

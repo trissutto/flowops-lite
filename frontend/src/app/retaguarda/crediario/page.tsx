@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 
 /**
  * /retaguarda/crediario — Cobrança de parcelas vencidas (loja 01 default).
@@ -730,7 +731,7 @@ export default function CrediarioPage() {
 
       {/* Modal diagnóstico */}
       {showDiag && diagnose && (
-        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={() => setShowDiag(false)}>
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" {...overlayClose(() => setShowDiag(false))}>
           <div
             className="bg-white rounded-2xl max-w-5xl w-full max-h-[85vh] overflow-y-auto p-5"
             onClick={(e) => e.stopPropagation()}
@@ -908,7 +909,7 @@ export default function CrediarioPage() {
 
       {/* Modal Campanha WhatsApp */}
       {showCampanha && (
-        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" onClick={() => !enviando && !campanhaLoading && setShowCampanha(false)}>
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" {...overlayClose(() => !enviando && !campanhaLoading && setShowCampanha(false))}>
           <div
             className="bg-white rounded-2xl max-w-5xl w-full max-h-[90vh] overflow-y-auto p-5"
             onClick={(e) => e.stopPropagation()}

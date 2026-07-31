@@ -6,6 +6,8 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { ErpService } from '../erp/erp.service';
+import { CommissionEngineService } from './commission-engine.service';
 
 /**
  * CommissionsService — F4 do plano de migração 30/06.
@@ -34,7 +36,11 @@ import { PrismaService } from '../prisma/prisma.service';
 export class CommissionsService {
   private readonly logger = new Logger(CommissionsService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly erp: ErpService,
+    private readonly engine: CommissionEngineService,
+  ) {}
 
   // ── Rules CRUD ─────────────────────────────────────────────────────
 
@@ -145,40 +151,9 @@ export class CommissionsService {
     cargo: string,
     refDate: Date,
   ): Promise<any | null> {
-    const where = (extra: any) => ({
-      active: true,
-      validFrom: { lte: refDate },
-      OR: [{ validTo: null }, { validTo: { gte: refDate } }],
-      ...extra,
-    });
-
-    // 1. seller-specific (override raro pra vendedora especial)
-    let r = await (this.prisma as any).commissionRule.findFirst({
-      where: where({ scope: 'seller', sellerId }),
-      orderBy: { validFrom: 'desc' },
-    });
-    if (r) return r;
-
-    // 2. por cargo (caminho principal — modelo Lurd's)
-    r = await (this.prisma as any).commissionRule.findFirst({
-      where: where({ scope: 'cargo', cargo }),
-      orderBy: { validFrom: 'desc' },
-    });
-    if (r) return r;
-
-    // 3. store-specific
-    r = await (this.prisma as any).commissionRule.findFirst({
-      where: where({ scope: 'store', storeId }),
-      orderBy: { validFrom: 'desc' },
-    });
-    if (r) return r;
-
-    // 4. global
-    r = await (this.prisma as any).commissionRule.findFirst({
-      where: where({ scope: 'global' }),
-      orderBy: { validFrom: 'desc' },
-    });
-    return r;
+    // Delegado ao MOTOR ÚNICO (decisão 29/07) — a hierarquia
+    // seller > cargo > store > global mora só lá.
+    return this.engine.resolveRuleFor(sellerId, storeId, cargo, refDate);
   }
 
   /**
@@ -231,8 +206,10 @@ export class CommissionsService {
     if (existing) return existing;
 
     const [y, m] = yearMonth.split('-').map((s) => parseInt(s, 10));
-    const startDate = new Date(y, m - 1, 1, 0, 0, 0);
-    const endDate = new Date(y, m, 0, 23, 59, 59); // último dia do mês
+    // Mês em HORÁRIO DE BRASÍLIA (UTC-3) — no servidor (UTC) o `new Date(y,m,d)`
+    // cortava o mês 3h mais cedo: venda do dia 30 à noite caía no mês seguinte.
+    const startDate = new Date(Date.UTC(y, m - 1, 1, 3, 0, 0));
+    const endDate = new Date(Date.UTC(y, m, 1, 2, 59, 59, 999)); // 23:59:59.999 BRT do último dia
 
     return (this.prisma as any).commissionPeriod.create({
       data: {
@@ -294,80 +271,41 @@ export class CommissionsService {
       this.logger.warn(`[commissions] Recalculando período CLOSED ${yearMonth} (override admin)`);
     }
 
-    // 1) Soma de vendas + trocas POR LOJA (pra cargo=on_responsible_store)
-    //
-    // NOTA: tabela real = pdv_sales / pdv_returns (@@map), colunas snake_case,
-    // status finalizado = 'finalized'. Aliases voltam em camelCase pro código
-    // downstream continuar lendo r.storeCode / r.sellerId / r.total.
-    const salesByStore: any[] = await this.prisma.$queryRawUnsafe(
-      `SELECT
-         store_code AS "storeCode",
-         COUNT(*)::int AS qtd,
-         SUM(total)::float AS total
-       FROM pdv_sales
-       WHERE finalized_at >= $1
-         AND finalized_at <= $2
-         AND status = 'finalized'
-         AND is_training = false
-       GROUP BY store_code`,
-      period.startDate,
-      period.endDate,
-    );
-    // Trocas/devoluções por LOJA: TODAS as devoluções da loja no período
-    // (com e sem cupom flowops), pra reduzir a base do líder/gerente.
-    const trocasByStore: any[] = await this.prisma.$queryRawUnsafe(
-      `SELECT store_code AS "storeCode", SUM(valor_total)::float AS total
-       FROM pdv_returns
-       WHERE created_at >= $1 AND created_at <= $2
-         AND is_training = false
-       GROUP BY store_code`,
-      period.startDate,
-      period.endDate,
-    );
+    // 1) Indicadores por LOJA + por VENDEDORA×LOJA — TUDO vem do MOTOR ÚNICO
+    // (CommissionEngine, decisão 29/07). A base de comissão continua a mesma
+    // conta de sempre (recebido − frete − devoluções dinheiro), mas os filtros
+    // canônicos (marcado fora, vale nas 3 grafias, devolução cancelada fora)
+    // moram SÓ no motor.
+    const [lojaRows, lojaDevs, sellerRows, sellerDevs] = await Promise.all([
+      this.engine.porLoja(period.startDate, period.endDate),
+      this.engine.devolucoesPorLoja(period.startDate, period.endDate),
+      this.engine.porVendedora(period.startDate, period.endDate),
+      this.engine.devolucoesPorVendedora(period.startDate, period.endDate),
+    ]);
+    // vendido = valorRecebido − frete (total − vale − frete): base pré-devolução
+    const vendidoDe = (r: any) =>
+      (Number(r.valorRecebido) || 0) - (Number(r.valorFrete) || 0);
     const storeTotals = new Map<string, { vendido: number; trocas: number; qtd: number }>();
-    for (const r of salesByStore) {
+    for (const r of lojaRows) {
       storeTotals.set(r.storeCode, {
-        vendido: Number(r.total) || 0,
+        vendido: vendidoDe(r),
         trocas: 0,
         qtd: Number(r.qtd) || 0,
       });
     }
-    for (const r of trocasByStore) {
+    for (const r of lojaDevs) {
       const cur = storeTotals.get(r.storeCode) || { vendido: 0, trocas: 0, qtd: 0 };
       cur.trocas = Number(r.total) || 0;
       storeTotals.set(r.storeCode, cur);
     }
 
-    // 2) Soma de vendas POR (vendedora × loja) (pra cargo=on_self da VENDEDORA)
-    const salesBySeller: any[] = await this.prisma.$queryRawUnsafe(
-      `SELECT seller_id AS "sellerId", store_code AS "storeCode",
-         COUNT(*)::int AS qtd,
-         SUM(total)::float AS total
-       FROM pdv_sales
-       WHERE finalized_at >= $1
-         AND finalized_at <= $2
-         AND seller_id IS NOT NULL
-         AND status = 'finalized'
-         AND is_training = false
-       GROUP BY seller_id, store_code`,
-      period.startDate,
-      period.endDate,
-    );
-    // Trocas/devoluções atribuídas à VENDEDORA da venda original (via
-    // original_sale_id → pdv_sales.seller_id). Devolução manual sem cupom
-    // (original_sale_id NULL) NÃO entra aqui — vira desconto só da loja.
-    const trocasBySeller: any[] = await this.prisma.$queryRawUnsafe(
-      `SELECT s.seller_id AS "sellerId", s.store_code AS "storeCode",
-         SUM(r.valor_total)::float AS total
-       FROM pdv_returns r
-       JOIN pdv_sales s ON s.id = r.original_sale_id
-       WHERE r.created_at >= $1 AND r.created_at <= $2
-         AND r.is_training = false
-         AND s.seller_id IS NOT NULL
-       GROUP BY s.seller_id, s.store_code`,
-      period.startDate,
-      period.endDate,
-    );
+    const salesBySeller: any[] = sellerRows.map((r: any) => ({
+      sellerId: r.sellerId,
+      storeCode: r.storeCode,
+      qtd: r.qtd,
+      total: vendidoDe(r),
+    }));
+    const trocasBySeller: any[] = sellerDevs;
     const stores = await this.prisma.store.findMany({ select: { id: true, code: true } });
     const storeCodeToId = new Map(stores.map((s) => [s.code, s.id]));
     const storeIdToCode = new Map(stores.map((s) => [s.id, s.code]));
@@ -463,40 +401,30 @@ export class CommissionsService {
 
       const vendidoLiquido = Math.max(0, totalVendido - totalTrocas);
 
-      let percentApplied = 0;
-      let comissaoBase = 0;
-      let metaAtingida = false;
-      let bonusValue = 0;
-      let metaValue: number | null = null;
-      let bonusPercent: number | null = null;
-      let ruleSnapshot: any = {
-        warning: 'sem regra aplicável — comissão zero',
-        cargo: sellerCargo,
-      };
-
-      if (rule) {
-        percentApplied = Number(rule.percentBase) || 0;
-        comissaoBase = (vendidoLiquido * percentApplied) / 100;
-        if (rule.meta != null && rule.bonusPercent != null) {
-          metaValue = Number(rule.meta);
-          bonusPercent = Number(rule.bonusPercent);
-          if (vendidoLiquido >= metaValue) {
-            metaAtingida = true;
-            bonusValue = (vendidoLiquido * bonusPercent) / 100;
+      // A fórmula (percentual × base, bônus por meta) mora SÓ no motor.
+      const calc = this.engine.aplicarRegra(rule, vendidoLiquido);
+      const percentApplied = calc.percentual;
+      const comissaoBase = calc.comissaoBase;
+      const metaAtingida = calc.metaAtingida;
+      const bonusValue = calc.bonusValue;
+      const metaValue = calc.metaValue;
+      const bonusPercent = calc.bonusPercent;
+      const ruleSnapshot: any = rule
+        ? {
+            id: rule.id,
+            scope: rule.scope,
+            cargo: rule.cargo,
+            calcMode: rule.calcMode,
+            percentBase: rule.percentBase,
+            meta: rule.meta,
+            bonusPercent: rule.bonusPercent,
           }
-        }
-        ruleSnapshot = {
-          id: rule.id,
-          scope: rule.scope,
-          cargo: rule.cargo,
-          calcMode: rule.calcMode,
-          percentBase: rule.percentBase,
-          meta: rule.meta,
-          bonusPercent: rule.bonusPercent,
-        };
-      }
+        : {
+            warning: 'sem regra aplicável — comissão zero',
+            cargo: sellerCargo,
+          };
 
-      const total = comissaoBase + bonusValue;
+      const total = calc.valorComissao;
       const storeIdResolved = storeCodeToId.get(storeCode);
       if (!storeIdResolved) return;
 
@@ -627,6 +555,403 @@ export class CommissionsService {
         vendido: Number(skippedVendido.toFixed(2)),
         sellerIds: Array.from(skippedSellerIds).slice(0, 50),
       },
+    };
+  }
+
+  /**
+   * RELATÓRIO FOLHA RH (dono 22/07) — comissão por FUNCIONÁRIA em período
+   * LIVRE (De/Até + loja opcional), com detalhe venda a venda.
+   *
+   * MESMA matemática do calculateForPeriod (líquido = vendas − trocas, regra
+   * por cargo/loja/vendedora, bônus por meta, líder/gerente sobre a loja que
+   * responde) — mas SEM persistir nada: é consulta, não fechamento.
+   * Só PDV com vendedora identificada (decisão do dono); o que ficou de fora
+   * aparece em `semAtribuicao` pra conferência.
+   */
+  /** Janela do dia em HORÁRIO DE BRASÍLIA (UTC-3). O corte em UTC puro
+   *  jogava venda depois das 21h pro dia seguinte (bug 22/07 — a Folha não
+   *  batia com o Faturamento nem com o próprio Flow). */
+  private brtRange(de: string, ate: string): { startDate: Date; endDate: Date } {
+    const startDate = new Date(`${de}T03:00:00.000Z`); // 00:00 BRT
+    const endDate = new Date(new Date(`${ate}T03:00:00.000Z`).getTime() + 24 * 3600 * 1000 - 1); // 23:59:59.999 BRT
+    return { startDate, endDate };
+  }
+
+  // Os fragmentos SQL canônicos (marcado fora, vale nas 3 grafias, frete,
+  // devolução que abate) moram no CommissionEngineService — motor único
+  // (decisão 29/07). Este service só compõe fechamento/folha em cima dele.
+
+  async relatorioRh(input: { de: string; ate: string; storeCode?: string }): Promise<any> {
+    const de = String(input.de || '').slice(0, 10);
+    const ate = String(input.ate || '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(de) || !/^\d{4}-\d{2}-\d{2}$/.test(ate)) {
+      throw new BadRequestException('Período inválido — use De/Até (YYYY-MM-DD)');
+    }
+    const { startDate, endDate } = this.brtRange(de, ate);
+    const lojaFiltro = input.storeCode ? String(input.storeCode).trim() : null;
+
+    // TODAS as agregações vêm do MOTOR ÚNICO (CommissionEngine, decisão
+    // 29/07) — este método só compõe folha/cascata em cima delas.
+    const [salesByStoreRows, trocasByStore, salesBySellerRows, trocasBySeller, vendasDetalhe, trocasDetalhe, semVendedora] =
+      await Promise.all([
+        this.engine.porLoja(startDate, endDate, lojaFiltro),
+        this.engine.devolucoesPorLoja(startDate, endDate, lojaFiltro),
+        this.engine.porVendedora(startDate, endDate, lojaFiltro),
+        this.engine.devolucoesPorVendedora(startDate, endDate, lojaFiltro),
+        this.engine.vendasDetalhe(startDate, endDate, lojaFiltro),
+        this.engine.devolucoesDetalhe(startDate, endDate, lojaFiltro),
+        this.engine.semVendedora(startDate, endDate, lojaFiltro),
+      ]);
+    // Mapeia o objeto canônico do motor pro shape histórico da Folha
+    // (bruto = faturamento; vale/frete separados).
+    const salesByStore: any[] = salesByStoreRows.map((r: any) => ({
+      storeCode: r.storeCode, qtd: r.qtd,
+      bruto: r.faturamento, vale: r.valorValeTroca, frete: r.valorFrete,
+    }));
+    const salesBySeller: any[] = salesBySellerRows.map((r: any) => ({
+      sellerId: r.sellerId, storeCode: r.storeCode, qtd: r.qtd,
+      bruto: r.faturamento, vale: r.valorValeTroca, frete: r.valorFrete,
+    }));
+    const semVendedoraAgg: any[] = [{ qtd: semVendedora.qtd, total: semVendedora.total }];
+
+    const stores = await this.prisma.store.findMany({ select: { id: true, code: true, name: true } });
+    const storeCodeToId = new Map(stores.map((s) => [s.code, s.id]));
+    const storeIdToCode = new Map(stores.map((s) => [s.id, s.code]));
+
+    const allSellersAny: any[] = await (this.prisma as any).seller.findMany({});
+    const sellersById = new Map(allSellersAny.map((s) => [s.id, s]));
+    const sellersByCodigo = new Map(
+      allSellersAny.filter((s) => s.wincredCodigo).map((s) => [String(s.wincredCodigo).trim(), s]),
+    );
+    const resolveSeller = (raw: any): any | null => {
+      const key = String(raw ?? '').trim();
+      if (!key) return null;
+      return sellersById.get(key) || sellersByCodigo.get(key) || null;
+    };
+
+    const storeTotals = new Map<string, { vendido: number; vale: number; frete: number; trocas: number; qtd: number }>();
+    for (const r of salesByStore) {
+      storeTotals.set(r.storeCode, {
+        vendido: Number(r.bruto) || 0,
+        vale: Number(r.vale) || 0,
+        frete: Number(r.frete) || 0,
+        trocas: 0,
+        qtd: Number(r.qtd) || 0,
+      });
+    }
+    for (const r of trocasByStore) {
+      const cur = storeTotals.get(r.storeCode) || { vendido: 0, vale: 0, frete: 0, trocas: 0, qtd: 0 };
+      cur.trocas = Number(r.total) || 0;
+      storeTotals.set(r.storeCode, cur);
+    }
+
+    const sellerSalesMap = new Map<string, { vendido: number; vale: number; frete: number; trocas: number; qtd: number }>();
+    let skippedVendido = 0;
+    const skippedSellerIds = new Set<string>();
+    for (const r of salesBySeller) {
+      const seller = resolveSeller(r.sellerId);
+      if (!seller) {
+        skippedVendido += (Number(r.bruto) || 0) - (Number(r.vale) || 0) - (Number(r.frete) || 0);
+        skippedSellerIds.add(String(r.sellerId));
+        continue;
+      }
+      const k = `${seller.id}|${r.storeCode}`;
+      const cur = sellerSalesMap.get(k) || { vendido: 0, vale: 0, frete: 0, trocas: 0, qtd: 0 };
+      cur.vendido += Number(r.bruto) || 0;
+      cur.vale += Number(r.vale) || 0;
+      cur.frete += Number(r.frete) || 0;
+      cur.qtd += Number(r.qtd) || 0;
+      sellerSalesMap.set(k, cur);
+    }
+    for (const r of trocasBySeller) {
+      const seller = resolveSeller(r.sellerId);
+      if (!seller) continue;
+      const k = `${seller.id}|${r.storeCode}`;
+      const cur = sellerSalesMap.get(k) || { vendido: 0, vale: 0, frete: 0, trocas: 0, qtd: 0 };
+      cur.trocas += Number(r.total) || 0;
+      sellerSalesMap.set(k, cur);
+    }
+
+    // Detalhe agrupado por vendedora REAL
+    const vendasPorSeller = new Map<string, any[]>();
+    for (const v of vendasDetalhe) {
+      const seller = resolveSeller(v.sellerId);
+      if (!seller) continue;
+      if (!vendasPorSeller.has(seller.id)) vendasPorSeller.set(seller.id, []);
+      vendasPorSeller.get(seller.id)!.push(v);
+    }
+    const trocasPorSeller = new Map<string, any[]>();
+    for (const t of trocasDetalhe) {
+      const seller = resolveSeller(t.sellerId);
+      if (!seller) continue;
+      if (!trocasPorSeller.has(seller.id)) trocasPorSeller.set(seller.id, []);
+      trocasPorSeller.get(seller.id)!.push(t);
+    }
+
+    // Uma "linha de cálculo" por vendedora×loja — MESMA regra do fechamento
+    type Linha = {
+      sellerId: string; storeCode: string; cargo: string; calcMode: string;
+      totalVendido: number; totalVale: number; totalFrete: number; totalTrocas: number; vendidoLiquido: number; qtdVendas: number;
+      percentApplied: number; comissaoBase: number;
+      metaValue: number | null; metaAtingida: boolean; bonusPercent: number | null; bonusValue: number;
+      total: number; semRegra: boolean;
+    };
+    const linhas: Linha[] = [];
+
+    const calcular = async (sellerId: string, cargo: string, storeCode: string) => {
+      const storeId = storeCodeToId.get(storeCode);
+      if (!storeId) return;
+      const rule = await this.resolveRuleFor(sellerId, storeId, cargo, endDate);
+      const calcMode = rule?.calcMode || 'on_self';
+      let totalVendido = 0, totalVale = 0, totalFrete = 0, totalTrocas = 0, qtdVendas = 0;
+      if (calcMode === 'on_responsible_store') {
+        const st = storeTotals.get(storeCode);
+        if (!st) return;
+        totalVendido = st.vendido; totalVale = st.vale; totalFrete = st.frete; totalTrocas = st.trocas; qtdVendas = st.qtd;
+      } else {
+        const sl = sellerSalesMap.get(`${sellerId}|${storeCode}`);
+        if (!sl) return;
+        totalVendido = sl.vendido; totalVale = sl.vale; totalFrete = sl.frete; totalTrocas = sl.trocas; qtdVendas = sl.qtd;
+      }
+      // Base = vendido − vale usado (abate NA venda) − frete (não comissiona)
+      //        − devoluções em dinheiro. Fórmula do % mora SÓ no motor.
+      const vendidoLiquido = Math.max(0, totalVendido - totalVale - totalFrete - totalTrocas);
+      const calc = this.engine.aplicarRegra(rule, vendidoLiquido);
+      linhas.push({
+        sellerId, storeCode, cargo, calcMode,
+        totalVendido, totalVale, totalFrete, totalTrocas, vendidoLiquido, qtdVendas,
+        percentApplied: calc.percentual, comissaoBase: calc.comissaoBase,
+        metaValue: calc.metaValue, metaAtingida: calc.metaAtingida,
+        bonusPercent: calc.bonusPercent, bonusValue: calc.bonusValue,
+        total: calc.valorComissao, semRegra: !rule,
+      });
+    };
+
+    // Fluxo 1: vendedoras/caixa (on_self) por loja onde venderam
+    for (const [key] of sellerSalesMap) {
+      const [sellerId, storeCode] = key.split('|');
+      const seller = sellersById.get(sellerId);
+      const cargo = seller?.cargo || 'VENDEDORA';
+      if (cargo !== 'VENDEDORA' && cargo !== 'CAIXA') continue;
+      await calcular(sellerId, cargo, storeCode);
+    }
+    // Fluxo 2: líderes/gerentes pela loja responsável
+    for (const seller of allSellersAny.filter((s) => s.active)) {
+      const cargo = seller.cargo || 'VENDEDORA';
+      if (cargo === 'VENDEDORA' || cargo === 'CAIXA') continue;
+      if (!seller.responsibleStoreId) continue;
+      const storeCode = storeIdToCode.get(seller.responsibleStoreId);
+      if (!storeCode) continue;
+      if (lojaFiltro && storeCode !== lojaFiltro) continue;
+      await calcular(seller.id, cargo, storeCode);
+    }
+
+    // Consolida POR FUNCIONÁRIA (soma as lojas onde vendeu)
+    const porFunc = new Map<string, any>();
+    for (const l of linhas) {
+      const seller = sellersById.get(l.sellerId);
+      let f = porFunc.get(l.sellerId);
+      if (!f) {
+        f = {
+          sellerId: l.sellerId,
+          nome: seller?.name || '(vendedora removida)',
+          cargo: l.cargo,
+          ativa: !!seller?.active,
+          lojas: [],
+          totalVendido: 0, totalVale: 0, totalFrete: 0, totalTrocas: 0, vendidoLiquido: 0, qtdVendas: 0,
+          comissaoBase: 0, bonusValue: 0, total: 0,
+          linhas: [], vendas: [], trocas: [],
+          semRegra: false,
+        };
+        porFunc.set(l.sellerId, f);
+      }
+      if (!f.lojas.includes(l.storeCode)) f.lojas.push(l.storeCode);
+      f.totalVendido += l.totalVendido;
+      f.totalVale += l.totalVale;
+      f.totalFrete += l.totalFrete;
+      f.totalTrocas += l.totalTrocas;
+      f.vendidoLiquido += l.vendidoLiquido;
+      f.qtdVendas += l.qtdVendas;
+      f.comissaoBase += l.comissaoBase;
+      f.bonusValue += l.bonusValue;
+      f.total += l.total;
+      f.semRegra = f.semRegra || l.semRegra;
+      f.linhas.push(l);
+    }
+    // Cascata: vendas próprias (só faz sentido pra on_self; líder/gerente vê
+    // a linha da loja no breakdown `linhas`)
+    for (const [sellerId, f] of porFunc) {
+      const vendas = vendasPorSeller.get(sellerId) || [];
+      const percentDe = (storeCode: string) =>
+        f.linhas.find((l: Linha) => l.storeCode === storeCode && l.calcMode !== 'on_responsible_store')?.percentApplied ?? 0;
+      f.vendas = vendas.map((v: any) => {
+        const valor = Number(v.total) || 0;
+        const vale = Number(v.vale) || 0;
+        const frete = Number(v.frete) || 0;
+        // Regra do dono: vale-troca e frete abatem NA venda — comissão sobre a base
+        const base = Math.max(0, valor - vale - frete);
+        const pct = percentDe(v.storeCode);
+        return {
+          id: v.id,
+          data: v.finalizedAt,
+          loja: v.storeCode,
+          cliente: v.customerName || null,
+          pagamento: v.paymentMethod || null,
+          valor,
+          vale,
+          frete,
+          base,
+          percent: pct,
+          comissao: Math.round((base * pct) / 100 * 100) / 100,
+        };
+      });
+      f.trocas = (trocasPorSeller.get(sellerId) || []).map((t: any) => ({
+        data: t.createdAt, loja: t.storeCode, valor: Number(t.total) || 0,
+      }));
+    }
+
+    const funcionarias = Array.from(porFunc.values())
+      .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+    const round2 = (n: number) => Math.round(n * 100) / 100;
+    for (const f of funcionarias) {
+      f.totalVendido = round2(f.totalVendido);
+      f.totalVale = round2(f.totalVale);
+      f.totalFrete = round2(f.totalFrete);
+      f.totalTrocas = round2(f.totalTrocas);
+      f.vendidoLiquido = round2(f.vendidoLiquido);
+      f.comissaoBase = round2(f.comissaoBase);
+      f.bonusValue = round2(f.bonusValue);
+      f.total = round2(f.total);
+    }
+
+    return {
+      de, ate, loja: lojaFiltro,
+      funcionarias,
+      totais: {
+        funcionarias: funcionarias.length,
+        vendido: round2(funcionarias.reduce((s, f) => s + f.totalVendido, 0)),
+        valeTroca: round2(funcionarias.reduce((s, f) => s + f.totalVale, 0)),
+        frete: round2(funcionarias.reduce((s, f) => s + f.totalFrete, 0)),
+        trocas: round2(funcionarias.reduce((s, f) => s + f.totalTrocas, 0)),
+        vendidoLiquido: round2(funcionarias.reduce((s, f) => s + f.vendidoLiquido, 0)),
+        comissao: round2(funcionarias.reduce((s, f) => s + f.total, 0)),
+      },
+      semAtribuicao: {
+        semVendedoraQtd: Number(semVendedoraAgg[0]?.qtd) || 0,
+        semVendedoraValor: round2(Number(semVendedoraAgg[0]?.total) || 0),
+        naoCadastradaQtd: skippedSellerIds.size,
+        naoCadastradaValor: round2(skippedVendido),
+      },
+    };
+  }
+
+  /**
+   * CONFERÊNCIA Flow × Wincred (22/07): o ranking do Wincred lê a CAIXA do
+   * Giga, que tem as vendas do Flow (replicadas via outbox) E vendas que só
+   * existem lá — principalmente MARCADO fechado na tela do Wincred (a linha
+   * vira venda sem nunca passar pelo PDV do Flow) e lançamento manual.
+   * Compara vendedora a vendedora pro RH ver EXATAMENTE onde está a diferença.
+   *
+   * Exige LOJA (query na caixa filtrada por LOJA+DATA — sem full scan).
+   * Marcados ativos (MARCADO='SIM') ficam FORA dos dois lados (reserva ≠ venda).
+   */
+  async relatorioRhConferencia(input: { de: string; ate: string; storeCode: string }): Promise<any> {
+    const de = String(input.de || '').slice(0, 10);
+    const ate = String(input.ate || '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(de) || !/^\d{4}-\d{2}-\d{2}$/.test(ate)) {
+      throw new BadRequestException('Período inválido — use De/Até (YYYY-MM-DD)');
+    }
+    const loja = String(input.storeCode || '').replace(/\D/g, '').padStart(2, '0');
+    if (!loja || loja === '00') {
+      throw new BadRequestException('Escolha UMA loja pra conferir com o Wincred');
+    }
+
+    // Lado GIGA: caixa por VENDEDOR (mesma base do ranking do Wincred).
+    // Teto duro de 20s no app — se o Giga pendurar, responde com erro claro.
+    // DATAFEC (data de FECHAMENTO do cupom) — é o que as telas do Wincred
+    // usam; filtrar por DATA deixava cupom fechado no dia seguinte de fora.
+    const p = this.erp.runReadOnly(
+      `SELECT VENDEDOR, COUNT(*) AS qtd, COALESCE(SUM(VALORTOTAL), 0) AS total
+         FROM caixa
+        WHERE LOJA = '${loja}'
+          AND DATAFEC >= '${de}' AND DATAFEC <= '${ate}'
+          AND UPPER(COALESCE(MARCADO, '')) <> 'SIM'
+        GROUP BY VENDEDOR`,
+      { maxRows: 500, timeoutMs: 15000 },
+    );
+    const giga: any = await Promise.race([
+      p.catch((e: any) => ({ __erro: e?.message || 'falha' })),
+      new Promise((res) => setTimeout(res, 20000, { __erro: 'Giga não respondeu em 20s' })),
+    ]);
+    if ((giga as any).__erro) {
+      return { ok: false, error: `Wincred indisponível pra conferência: ${(giga as any).__erro}` };
+    }
+
+    // Lado FLOW: pdv_sales por vendedora na mesma janela/loja (dia em BRT,
+    // sem marcação — mesmos critérios da Folha)
+    const { startDate, endDate } = this.brtRange(de, ate);
+    const flowRows: any[] = await this.prisma.$queryRawUnsafe(
+      `SELECT seller_id AS "sellerId", COUNT(*)::int AS qtd, SUM(total)::float AS total
+         FROM pdv_sales
+        WHERE finalized_at >= $1 AND finalized_at <= $2
+          AND status = 'finalized' AND is_training = false AND store_code = $3
+          ${CommissionEngineService.SEM_MARCACAO_SQL}
+        GROUP BY seller_id`,
+      startDate, endDate, loja,
+    );
+
+    const allSellers: any[] = await (this.prisma as any).seller.findMany({});
+    const sellersById = new Map(allSellers.map((s) => [s.id, s]));
+    const sellersByCodigo = new Map(
+      allSellers.filter((s) => s.wincredCodigo).map((s) => [String(Number(s.wincredCodigo)), s]),
+    );
+
+    // Consolida por "pessoa": chave = codigo Wincred quando existe, senão nome
+    type Comp = { nome: string; codigoWincred: string | null; wincredQtd: number; wincredTotal: number; flowQtd: number; flowTotal: number };
+    const porChave = new Map<string, Comp>();
+    const chaveDe = (codigo: string | null, nome: string) => codigo ? `cod:${codigo}` : `nome:${nome}`;
+
+    for (const r of (giga.rows || [])) {
+      const codigo = r.VENDEDOR != null ? String(Number(r.VENDEDOR)) : '0';
+      const seller = sellersByCodigo.get(codigo);
+      const nome = seller?.name || (codigo === '0' ? '(sem vendedora no Wincred)' : `VENDEDOR cód ${codigo}`);
+      const k = chaveDe(codigo, nome);
+      const c = porChave.get(k) || { nome, codigoWincred: codigo, wincredQtd: 0, wincredTotal: 0, flowQtd: 0, flowTotal: 0 };
+      c.wincredQtd += Number(r.qtd) || 0;
+      c.wincredTotal += Number(r.total) || 0;
+      porChave.set(k, c);
+    }
+    for (const r of flowRows) {
+      const seller = r.sellerId ? (sellersById.get(String(r.sellerId).trim()) || sellersByCodigo.get(String(Number(r.sellerId)) || '')) : null;
+      const codigo = seller?.wincredCodigo ? String(Number(seller.wincredCodigo)) : null;
+      const nome = seller?.name || (r.sellerId ? `seller ${String(r.sellerId).slice(0, 8)}…` : '(sem vendedora no Flow)');
+      const k = chaveDe(codigo, nome);
+      const c = porChave.get(k) || { nome, codigoWincred: codigo, wincredQtd: 0, wincredTotal: 0, flowQtd: 0, flowTotal: 0 };
+      c.flowQtd += Number(r.qtd) || 0;
+      c.flowTotal += Number(r.total) || 0;
+      porChave.set(k, c);
+    }
+
+    const round2 = (n: number) => Math.round(n * 100) / 100;
+    const linhas = Array.from(porChave.values())
+      .map((c) => ({
+        ...c,
+        wincredTotal: round2(c.wincredTotal),
+        flowTotal: round2(c.flowTotal),
+        diferenca: round2(c.wincredTotal - c.flowTotal),
+      }))
+      .sort((a, b) => Math.abs(b.diferenca) - Math.abs(a.diferenca));
+
+    return {
+      ok: true,
+      de, ate, loja,
+      linhas,
+      totais: {
+        wincred: round2(linhas.reduce((s, l) => s + l.wincredTotal, 0)),
+        flow: round2(linhas.reduce((s, l) => s + l.flowTotal, 0)),
+        diferenca: round2(linhas.reduce((s, l) => s + l.diferenca, 0)),
+      },
+      nota: 'Diferença positiva = venda que só existe na caixa do Wincred (marcado fechado por lá, venda manual, ou data divergente — linha de marcado fechado mantém a DATA da marcação).',
     };
   }
 

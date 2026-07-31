@@ -41,10 +41,31 @@ export class ProdutosVendidosController {
       effectiveStoreCode = userStoreCode;
     }
 
+    // Papéis de franquia (master_franquia + franquias) → SÓ lojas FRANQUIA
+    // (tipo=FILIAL). Se pediu uma loja específica, ela precisa ser franquia;
+    // sem loja, restringe ao conjunto. (15/07: 'franquias' também escopado —
+    // antes via tudo neste endpoint.)
+    let storeCodesScope: string[] | undefined;
+    if (role === 'master_franquia' || role === 'franquias') {
+      const rows = await (this.svc as any).prisma.store.findMany({
+        where: { tipo: 'FILIAL', active: true },
+        select: { code: true },
+      });
+      const franquia = (rows as any[]).map((r) => r.code);
+      if (effectiveStoreCode?.trim()) {
+        if (!franquia.includes(effectiveStoreCode.trim())) {
+          throw new ForbiddenException(`Loja ${effectiveStoreCode} não é franquia — acesso negado`);
+        }
+      } else {
+        storeCodesScope = franquia;
+      }
+    }
+
     const filters: ProdutosVendidosFilters = {
       from: from?.trim() || undefined,
       to: to?.trim() || undefined,
       storeCode: effectiveStoreCode?.trim() || undefined,
+      storeCodes: storeCodesScope,
       sellerName: sellerName?.trim() || undefined,
       sku: sku?.trim() || undefined,
       customerCpf: customerCpf?.trim() || undefined,

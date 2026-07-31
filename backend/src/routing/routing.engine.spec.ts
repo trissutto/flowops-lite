@@ -85,12 +85,12 @@ describe('RoutingEngine', () => {
     expect(covered.has('C')).toBe(true);
   });
 
-  test('REGRA 4: um SKU nunca é dividido entre lojas', () => {
+  test('REGRA 4 (split): divide um SKU entre lojas quando nenhuma tem o total, mas a rede tem', () => {
     const ctx: RoutingContext = {
       items: [{ sku: 'A', quantity: 10 }, { sku: 'B', quantity: 1 }],
       stores: stores.slice(0, 3),
       stock: [
-        // nenhuma loja sozinha tem 10 de A
+        // nenhuma loja sozinha tem 10 de A, mas 6+6=12 na rede
         { storeCode: 'LJ01', sku: 'A', availableQty: 6 },
         { storeCode: 'LJ02', sku: 'A', availableQty: 6 },
         { storeCode: 'LJ01', sku: 'B', availableQty: 5 },
@@ -98,11 +98,59 @@ describe('RoutingEngine', () => {
       shippingCep: '01000-000',
     };
     const result = engine.route(ctx);
-    // Como nenhuma loja tem 10 de A sozinha, a engine deve reportar ruptura do SKU A.
-    // B pode ser atribuído, A fica missing.
+    // Agora a engine divide A entre LJ01 e LJ02 em vez de dar ruptura falsa.
+    expect(result.success).toBe(true);
+    expect(result.missing).toHaveLength(0);
+    // A soma de A entre todas as lojas tem que fechar as 10 pedidas.
+    const totalA = result.assignments
+      .flatMap((a) => a.items)
+      .filter((i) => i.sku === 'A')
+      .reduce((s, i) => s + i.quantity, 0);
+    expect(totalA).toBe(10);
+    // A foi de fato dividido em pelo menos 2 lojas.
+    const lojasComA = result.assignments.filter((a) => a.items.some((i) => i.sku === 'A'));
+    expect(lojasComA.length).toBeGreaterThanOrEqual(2);
+  });
+
+  test('REGRA 4 (kill-switch): com disableSkuSplit=true volta a dar ruptura', () => {
+    const ctx: RoutingContext = {
+      items: [{ sku: 'A', quantity: 10 }, { sku: 'B', quantity: 1 }],
+      stores: stores.slice(0, 3),
+      stock: [
+        { storeCode: 'LJ01', sku: 'A', availableQty: 6 },
+        { storeCode: 'LJ02', sku: 'A', availableQty: 6 },
+        { storeCode: 'LJ01', sku: 'B', availableQty: 5 },
+      ],
+      shippingCep: '01000-000',
+      disableSkuSplit: true,
+    };
+    const result = engine.route(ctx);
     expect(result.success).toBe(false);
     expect(result.strategy).toBe('insufficient-stock');
     expect(result.missing.some((m) => m.sku === 'A')).toBe(true);
+  });
+
+  test('REGRA 4 (split parcial): rede não cobre o total → sobra vira ruptura do restante', () => {
+    const ctx: RoutingContext = {
+      items: [{ sku: 'A', quantity: 10 }],
+      stores: stores.slice(0, 3),
+      stock: [
+        // 6+3=9 na rede, faltam 10 → 1 fica missing
+        { storeCode: 'LJ01', sku: 'A', availableQty: 6 },
+        { storeCode: 'LJ02', sku: 'A', availableQty: 3 },
+      ],
+      shippingCep: '01000-000',
+    };
+    const result = engine.route(ctx);
+    expect(result.success).toBe(false);
+    const miss = result.missing.find((m) => m.sku === 'A');
+    expect(miss?.quantity).toBe(1);
+    // mesmo em ruptura parcial, o plano já aproveita as 9 disponíveis
+    const totalA = result.assignments
+      .flatMap((a) => a.items)
+      .filter((i) => i.sku === 'A')
+      .reduce((s, i) => s + i.quantity, 0);
+    expect(totalA).toBe(9);
   });
 
   test('ignora lojas inativas', () => {

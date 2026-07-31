@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 
 /**
  * /minha-loja/pdv — Frente de caixa.
@@ -29,13 +30,18 @@ import {
   Send, Mail, MessageSquare, FileText, RotateCcw, History, Percent,
   Clock, ChevronRight, Pause, DollarSign, ArrowRightLeft, Search, Sparkles,
   Receipt, Globe, Shuffle, Tag, Wallet, ArrowUpRight, Printer,
-  RefreshCw,
+  RefreshCw, Handshake,
   type LucideIcon,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { loadPrinterConfig } from '@/lib/printer-router';
+// Import ESTÁTICO (igual à página DANFE de reimpressão, que sempre imprimiu
+// QR) — o import dinâmico devolvia o módulo sem .default em alguns bundles
+// e o QR morria num catch silencioso (caso Moema 21/07, round 2).
+import QRCode from 'qrcode';
 import { PdvToastProvider, usePdvToast, humanizeError } from '@/components/PdvToast';
 import ValeTrocaModal from './ValeTrocaModal';
+import { appPrompt } from '@/lib/app-prompt';
 import { HUB_TONES, type HubTone } from '@/components/HubCard';
 import StorePickOrderAlert from '@/components/StorePickOrderAlert';
 import TrainingModeBanner from '@/components/TrainingModeBanner';
@@ -125,6 +131,8 @@ type Sale = {
     precoUnit: number;
     desconto: number;
     promoTag: string | null;
+    // Item BÁSICO que a operadora forçou pra dentro da promoção (botão azul).
+    forcarPromo?: boolean;
     total: number;
   }>;
 };
@@ -251,9 +259,10 @@ async function postCrediarioComOverride(saleId: string, payload: any): Promise<a
     const msg = String(e?.message || '');
     const ehLimite = /^403/.test(msg) && /limite de cr[eé]dito/i.test(msg);
     if (!ehLimite || typeof window === 'undefined') throw e;
-    const senha = window.prompt(
+    const senha = await appPrompt(
       'Cliente acima do LIMITE DE CRÉDITO.\n\n' +
         'Digite a senha de SUPERVISOR para liberar o crediário (ou cancele para abortar):',
+      { password: true },
     );
     if (!senha) throw e;
     return await api<any>(`/pdv/sales/${saleId}/crediario`, {
@@ -1103,7 +1112,7 @@ function PdvPageInner() {
   };
 
   // ── Atualizar qty/desconto do item ──
-  const updateItem = async (itemId: string, patch: { qty?: number; desconto?: number; excludePromo?: boolean }) => {
+  const updateItem = async (itemId: string, patch: { qty?: number; desconto?: number; excludePromo?: boolean; forcePromo?: boolean }) => {
     if (!sale) return;
     // MD-1: desconto manual por item em faixas (% sobre o BRUTO do item):
     // 0–7% livre · >7–10% CAIXA · >10% GERENTE + justificativa. Campanha ativa bloqueia.
@@ -1119,14 +1128,14 @@ function PdvPageInner() {
       const bruto = (item?.precoUnit ?? 0) * qty;
       const pct = bruto > 0 ? (patch.desconto / bruto) * 100 : 0;
       if (pct > discountBands.caixaUpToPct + 1e-9) {
-        const pw = window.prompt(`Desconto de ${pct.toFixed(1)}% no item — exige senha de GERENTE:`);
+        const pw = await appPrompt(`Desconto de ${pct.toFixed(1)}% no item — exige senha de GERENTE:`, { password: true });
         if (!pw) return;
         password = pw;
-        const m = window.prompt('Justificativa do desconto (obrigatória):');
+        const m = await appPrompt('Justificativa do desconto (obrigatória):');
         if (!m || !m.trim()) return;
         motivo = m.trim();
       } else if (pct > discountBands.freeUpToPct + 1e-9) {
-        const pw = window.prompt(`Desconto de ${pct.toFixed(1)}% no item — exige senha do CAIXA:`);
+        const pw = await appPrompt(`Desconto de ${pct.toFixed(1)}% no item — exige senha do CAIXA:`, { password: true });
         if (!pw) return;
         password = pw;
       }
@@ -1157,6 +1166,19 @@ function PdvPageInner() {
         } else {
           toast('success', 'Item de volta na promoção', item?.descricao || item?.ref || item?.sku);
         }
+      }
+      // Feedback de FORÇAR promo (botão azul): avisa se a data/coleção barrou
+      // (item novo forçado não ganha desconto — o filtro de data ainda vale).
+      if (patch.forcePromo === true) {
+        const item = fresh.items.find((i) => i.id === itemId);
+        if (item && item.desconto > 0) {
+          toast('success', 'Item colocado na promoção', `${item.descricao || item.ref || item.sku} · ${brl(item.desconto)} off`);
+        } else {
+          toast('warning', 'Sem desconto pra este item', 'Forçado, mas a data/coleção não se enquadra na campanha.');
+        }
+      } else if (patch.forcePromo === false) {
+        const item = fresh.items.find((i) => i.id === itemId);
+        toast('info', 'Item voltou a básico', item?.descricao || item?.ref || item?.sku);
       }
     } catch (e: any) {
       const h = humanizeError(e);
@@ -1196,14 +1218,14 @@ function PdvPageInner() {
       const subtotalBruto = sale.items.reduce((s, i) => s + i.precoUnit * i.qty, 0);
       const pct = subtotalBruto > 0 ? (desconto / subtotalBruto) * 100 : 0;
       if (pct > discountBands.caixaUpToPct + 1e-9) {
-        const pw = window.prompt(`Desconto de ${pct.toFixed(1)}% — exige senha de GERENTE:`);
+        const pw = await appPrompt(`Desconto de ${pct.toFixed(1)}% — exige senha de GERENTE:`, { password: true });
         if (!pw) return;
         password = pw;
-        const m = window.prompt('Justificativa do desconto (obrigatória):');
+        const m = await appPrompt('Justificativa do desconto (obrigatória):');
         if (!m || !m.trim()) return;
         motivo = m.trim();
       } else if (pct > discountBands.freeUpToPct + 1e-9) {
-        const pw = window.prompt(`Desconto de ${pct.toFixed(1)}% — exige senha do CAIXA:`);
+        const pw = await appPrompt(`Desconto de ${pct.toFixed(1)}% — exige senha do CAIXA:`, { password: true });
         if (!pw) return;
         password = pw;
       }
@@ -1223,6 +1245,31 @@ function PdvPageInner() {
     } catch (e: any) {
       const h = humanizeError(e);
       toast('error', h.title, h.hint);
+    }
+  };
+
+  // ── Recalcular preços (promoção) — reconsulta o preço atual de cada item ──
+  // Útil pra itens puxados de MARCADO, que vêm com o preço original congelado.
+  const [recalculando, setRecalculando] = useState(false);
+  const recalcularPrecos = async () => {
+    if (!sale) return;
+    setRecalculando(true);
+    try {
+      const r = await api<{ atualizados: number }>(`/pdv/sales/${sale.id}/recalcular-precos`, {
+        method: 'POST',
+      });
+      const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
+      setSale(fresh);
+      if (r.atualizados > 0) {
+        toast('success', `${r.atualizados} preço(s) atualizado(s)`, `Total: ${brl(fresh.total)}`);
+      } else {
+        toast('info', 'Nada a recalcular', 'Todos os itens já estão no preço atual.');
+      }
+    } catch (e: any) {
+      const h = humanizeError(e);
+      toast('error', h.title, h.hint);
+    } finally {
+      setRecalculando(false);
     }
   };
 
@@ -1591,6 +1638,8 @@ function PdvPageInner() {
       // Cartão/crediário/marcado/vale NÃO imprimem cupom auto.
       // Roteado via printer-router → vai SEMPRE pra impressora térmica
       // configurada em /minha-loja/pdv/config-impressora.
+      // (Removida em 23/07 a pedido do dono e RESTAURADA no mesmo dia —
+      // as lojas usam o cupom em dinheiro/PIX.)
       const isDirectDinheiro = paymentMethod === 'dinheiro';
       const allPaymentsDinheiro = (fresh?.payments?.length ?? 0) > 0 &&
         (fresh.payments || []).every((p: any) => String(p.method).toLowerCase() === 'dinheiro');
@@ -2041,6 +2090,17 @@ function PdvPageInner() {
                   <div className="text-[9px] font-normal">até 31/12/2023 = 50% off</div>
                 </button>
               </div>
+              {/* Recalcular preços — resgata o preço ATUAL (promoção) de cada
+                  item. Itens puxados de MARCADO vêm com o preço original. */}
+              <button
+                type="button"
+                onClick={recalcularPrecos}
+                disabled={recalculando}
+                className="mt-1.5 w-full text-xs py-1.5 px-1 rounded font-bold border border-[#D4AF37] bg-white text-[#8C7325] hover:bg-[#FBF6E6] transition-colors disabled:opacity-50 flex items-center justify-center gap-1.5"
+                title="Reconsulta o preço atual (promoção vigente) de cada item — corrige peças marcadas que vieram com o preço original"
+              >
+                {recalculando ? '⏳ Recalculando…' : '🔄 Recalcular preços (promoção)'}
+              </button>
             </div>
             )}
             <div className="divide-y divide-[#F0EEE6]">
@@ -2112,26 +2172,31 @@ function PdvPageInner() {
                       <span className="text-sm font-bold text-slate-900 truncate">
                         {it.descricao || it.ref || it.sku}
                       </span>
-                      {it.promoTag && (
-                        <span
-                          className={`text-[9px] font-bold px-1.5 py-0.5 rounded shrink-0 ${
-                            it.promoTag === 'SEM_PROMO'
-                              ? 'bg-slate-200 text-slate-600 border border-slate-300'
-                              : it.promoTag.includes('4 LEVA 3')
-                              ? 'bg-[#8C7325] text-white border border-[#8C7325]'
+                      {/* Badge de promoção (pedido do dono 14/07): 30% maior e
+                          código de cor fixo — AZUL = fora/sem promoção (básico),
+                          VERMELHO = participando de promoção. MANUAL segue cinza. */}
+                      {it.promoTag && (() => {
+                        const semPromo =
+                          it.promoTag === 'SEM_PROMO' || /SEM PROMO/i.test(it.promoTag);
+                        return (
+                          <span
+                            className={`text-[12px] font-bold px-2 py-1 rounded shrink-0 ${
+                              semPromo
+                                ? 'bg-blue-600 text-white border border-blue-700'
+                                : it.promoTag === 'MANUAL'
+                                ? 'bg-slate-600 text-white border border-slate-600'
+                                : 'bg-red-600 text-white border border-red-700'
+                            }`}
+                            title={semPromo ? 'Fora da promoção (não participa)' : `Desconto: ${brl(it.desconto)}`}
+                          >
+                            {semPromo
+                              ? (it.promoTag === 'SEM_PROMO' ? '🚫 Fora da promo' : `🚫 ${it.promoTag}`)
                               : it.promoTag === 'MANUAL'
-                              ? 'bg-slate-600 text-white border border-slate-600'
-                              : 'bg-[#FAF6E8] text-[#8C7325] border border-[#D4AF37]/40'
-                          }`}
-                          title={it.promoTag === 'SEM_PROMO' ? 'Fora da promoção (não participa)' : `Desconto: ${brl(it.desconto)}`}
-                        >
-                          {it.promoTag === 'SEM_PROMO'
-                            ? '🚫 Fora da promo'
-                            : it.promoTag === 'MANUAL'
-                            ? '✏️ MANUAL'
-                            : `🎁 ${it.promoTag}`}
-                        </span>
-                      )}
+                              ? '✏️ MANUAL'
+                              : `🎁 ${it.promoTag}`}
+                          </span>
+                        );
+                      })()}
                     </div>
                     <div className="text-xs text-slate-400 font-medium mt-0.5 truncate">
                       ref {it.ref || it.sku}
@@ -2202,26 +2267,56 @@ function PdvPageInner() {
                       >
                         <Percent className="w-3.5 h-3.5" />
                       </button>
-                      {/* Tirar/voltar item da PROMOÇÃO ativa (peça que não participa).
-                          Só aparece com campanha ativa e item que tem promo OU já foi excluído. */}
-                      {sale.activePromotion && sale.activePromotion !== 'NONE' &&
-                        (it.promoTag === 'SEM_PROMO' || (it.desconto > 0 && /^(PROMO|4 LEVA)/.test(it.promoTag || ''))) && (
-                        <button
-                          onClick={() => updateItem(it.id, { excludePromo: it.promoTag !== 'SEM_PROMO' })}
-                          className={`w-6 h-6 rounded flex items-center justify-center text-[11px] leading-none transition active:scale-95 ${
-                            it.promoTag === 'SEM_PROMO'
-                              ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
-                              : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
-                          }`}
-                          title={
-                            it.promoTag === 'SEM_PROMO'
-                              ? 'Incluir este item na promoção'
-                              : 'Tirar este item da promoção (não participa)'
-                          }
-                        >
-                          {it.promoTag === 'SEM_PROMO' ? '🎁' : '🚫'}
-                        </button>
-                      )}
+                      {/* Botão de PROMOÇÃO por item (campanha ativa). Um só botão,
+                          conforme o estado:
+                            🎁 verde  = SEM_PROMO → voltar ao automático
+                            ⬆️ azul   = BÁSICO → COLOCAR na promoção (força, ignora
+                                        só o filtro básico; data/coleção seguem)
+                            ⬇️ azul   = FORÇADO → tirar da promo forçada (volta básico)
+                            🚫 cinza  = promo automática → tirar da promoção */}
+                      {sale.activePromotion && sale.activePromotion !== 'NONE' && (() => {
+                        const semPromoTag = it.promoTag === 'SEM_PROMO';
+                        const isForced = !!it.forcarPromo;
+                        const basicoTag = !isForced && /b[áa]sico/i.test(it.promoTag || '');
+                        const autoPromo = !isForced && it.desconto > 0 && /^(PROMO|4 LEVA)/.test(it.promoTag || '');
+                        if (semPromoTag) {
+                          return (
+                            <button
+                              onClick={() => updateItem(it.id, { excludePromo: false })}
+                              className="w-6 h-6 rounded flex items-center justify-center text-[11px] leading-none transition active:scale-95 bg-emerald-100 text-emerald-700 hover:bg-emerald-200"
+                              title="Incluir este item na promoção (volta ao automático)"
+                            >🎁</button>
+                          );
+                        }
+                        if (isForced) {
+                          return (
+                            <button
+                              onClick={() => updateItem(it.id, { forcePromo: false })}
+                              className="w-6 h-6 rounded flex items-center justify-center text-[11px] leading-none transition active:scale-95 bg-blue-600 text-white hover:bg-blue-700"
+                              title="Tirar da promoção forçada (volta a básico)"
+                            >⬇️</button>
+                          );
+                        }
+                        if (basicoTag) {
+                          return (
+                            <button
+                              onClick={() => updateItem(it.id, { forcePromo: true })}
+                              className="w-6 h-6 rounded flex items-center justify-center text-[11px] leading-none transition active:scale-95 bg-blue-100 text-blue-700 hover:bg-blue-200"
+                              title="Colocar este item na promoção (aplica o desconto mesmo sendo básico)"
+                            >⬆️</button>
+                          );
+                        }
+                        if (autoPromo) {
+                          return (
+                            <button
+                              onClick={() => updateItem(it.id, { excludePromo: true })}
+                              className="w-6 h-6 rounded flex items-center justify-center text-[11px] leading-none transition active:scale-95 bg-slate-200 text-slate-700 hover:bg-slate-300"
+                              title="Tirar este item da promoção (não participa)"
+                            >🚫</button>
+                          );
+                        }
+                        return null;
+                      })()}
                       <button
                         onClick={() => removeItem(it.id)}
                         className="w-6 h-6 rounded text-slate-300 hover:text-rose-600 hover:bg-rose-50 flex items-center justify-center transition active:scale-95"
@@ -2711,6 +2806,8 @@ function PdvPageInner() {
           onLater={fecharDepois}
           onPaymentsChange={onPaymentsChanged}
           onAutoFlowTriggered={() => { autoFlowRef.current = true; }}
+          hasSeller={!!sale.sellerName}
+          onNeedSeller={() => setShowConfirmSale(true)}
         />
       )}
 
@@ -2730,7 +2827,7 @@ function PdvPageInner() {
       {showOnlinePending && (
         <div
           className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4"
-          onClick={() => setShowOnlinePending(false)}
+          {...overlayClose(() => setShowOnlinePending(false))}
         >
           <div
             className="bg-white rounded-xl w-full max-w-2xl max-h-[90vh] flex flex-col"
@@ -3140,7 +3237,9 @@ function ConfirmSaleModal({
     String(m || '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 
   const [searchTerm, setSearchTerm] = useState('');
-  const [results, setResults] = useState<Array<{ codigo: string; nome: string; loja?: string }>>([]);
+  // apelido: definido no cadastro da funcionária (retaguarda/vendedoras) —
+  // é o que aparece e o que fica gravado na venda como nome da vendedora
+  const [results, setResults] = useState<Array<{ codigo: string; nome: string; apelido?: string | null; loja?: string }>>([]);
   const [searching, setSearching] = useState(false);
   const [tabelaOk, setTabelaOk] = useState<boolean | null>(null);
   const [lojaFiltered, setLojaFiltered] = useState(false);
@@ -3163,7 +3262,7 @@ function ConfirmSaleModal({
     (async () => {
       setSearching(true);
       try {
-        const ativas = await api<Array<{ codigo: string; nome: string }>>(
+        const ativas = await api<Array<{ codigo: string; nome: string; apelido?: string | null }>>(
           `/pdv/vendedoras-ativas?storeCode=${encodeURIComponent(storeCode)}`,
         );
         if (cancelled) return;
@@ -3225,7 +3324,9 @@ function ConfirmSaleModal({
     if (usingActiveList && whitelist) {
       const term = searchTerm.trim().toLowerCase();
       if (!term) return whitelist;
-      return whitelist.filter((f) => f.nome.toLowerCase().includes(term));
+      return whitelist.filter((f) =>
+        f.nome.toLowerCase().includes(term) || (f.apelido || '').toLowerCase().includes(term),
+      );
     }
     return results;
   }, [usingActiveList, whitelist, results, searchTerm]);
@@ -3249,7 +3350,7 @@ function ConfirmSaleModal({
     } else if (e.key === 'Enter') {
       e.preventDefault();
       const pick = visibleResults[highlight];
-      if (pick) setSelected({ codigo: pick.codigo, nome: pick.nome });
+      if (pick) setSelected({ codigo: pick.codigo, nome: pick.apelido || pick.nome });
     } else if (e.key === 'Escape') {
       e.preventDefault();
       onCancel();
@@ -3330,14 +3431,16 @@ function ConfirmSaleModal({
           {visibleResults.length > 0 && (
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
               {visibleResults.map((f, idx) => {
-                const isSel = selected?.codigo === f.codigo && selected?.nome === f.nome;
-                const primeiroNome = f.nome.split(/\s+/)[0];
+                // APELIDO do cadastro vence; senão primeiro nome
+                const rotulo = (f as any).apelido || f.nome.split(/\s+/)[0];
+                const nomeEscolhido = (f as any).apelido || f.nome;
+                const isSel = selected?.codigo === f.codigo && selected?.nome === nomeEscolhido;
                 return (
                   <button
                     key={f.codigo + f.nome}
                     type="button"
                     data-vendedora-idx={idx}
-                    onClick={() => setSelected({ codigo: f.codigo, nome: f.nome })}
+                    onClick={() => setSelected({ codigo: f.codigo, nome: nomeEscolhido })}
                     title={f.nome}
                     className={`relative flex flex-col items-center justify-center gap-2 rounded-2xl border-2 p-4 min-h-[112px] transition active:scale-[0.97] ${
                       isSel
@@ -3358,7 +3461,7 @@ function ConfirmSaleModal({
                     <span className={`text-[13px] font-bold text-center leading-tight line-clamp-2 ${
                       isSel ? 'text-[#7A5E0E]' : 'text-slate-700'
                     }`} title={f.nome}>
-                      {primeiroNome}
+                      {rotulo}
                     </span>
                   </button>
                 );
@@ -3508,7 +3611,13 @@ function CustomerModal({
     const t = setTimeout(async () => {
       setSearching(true);
       try {
-        const r = await api<{ results: typeof results }>(`/pdv/customer-search?q=${encodeURIComponent(term)}&limit=20`);
+        // Escopo por loja: só clientes DESTA loja (RESERVAS etc repetem por loja)
+        let lojaParam = '';
+        try {
+          const lj = localStorage.getItem('lurds_pdv_store') || '';
+          if (lj) lojaParam = `&loja=${encodeURIComponent(lj)}`;
+        } catch { /* backend usa a loja do token */ }
+        const r = await api<{ results: typeof results }>(`/pdv/customer-search?q=${encodeURIComponent(term)}&limit=20${lojaParam}`);
         setResults(r.results || []);
         setShowResults(true);
       } catch {
@@ -3899,6 +4008,8 @@ function PaymentModal({
   onLater,
   onPaymentsChange,
   onAutoFlowTriggered,
+  hasSeller,
+  onNeedSeller,
 }: {
   saleId: string;
   total: number;
@@ -3922,10 +4033,27 @@ function PaymentModal({
   onPaymentsChange?: () => void;
   /** Sinaliza pro parent que entrou em fluxo automático (PIX confirmado) */
   onAutoFlowTriggered?: () => void;
+  /** Venda já tem vendedora gravada? (venda online exige escolher ANTES) */
+  hasSeller?: boolean;
+  /** Abre o popup de escolher vendedora no parent (sem finalizar) */
+  onNeedSeller?: () => void;
 }) {
   const { toast } = usePdvToast();
   // Lista de pagamentos parciais já adicionados
   const [payments, setPayments] = useState(initialPayments || []);
+  // SINCRONIZA com o servidor ao abrir (29/07): o modal confiava só no
+  // initialPayments do parent — se um pagamento já tinha sido registrado e o
+  // modal reabria (ex.: frete aplicado depois do link), o front recobrava o
+  // TOTAL e a loja travava com 400 "maior que o restante".
+  useEffect(() => {
+    (async () => {
+      try {
+        const s = await api<any>(`/pdv/sales/${saleId}`);
+        if (Array.isArray(s?.payments)) setPayments(s.payments);
+      } catch { /* sem rede: mantém o estado local */ }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [saleId]);
   const jaPago = payments.reduce((s, p) => s + p.valor, 0);
   const restante = Math.max(0, Math.round((total - jaPago) * 100) / 100);
   const pago100 = restante < 0.01;
@@ -3957,6 +4085,28 @@ function PaymentModal({
   const [valorParcial, setValorParcial] = useState('');
   const [addingPayment, setAddingPayment] = useState(false);
 
+  // ── CONVÊNIO (sindicato) ── a forma só aparece se a loja tem convênio ativo.
+  // Associado vem da lista que o sindicato mandou (sem ficha de cliente).
+  const [convenioAtivo, setConvenioAtivo] = useState<{ id: string; nome: string } | null>(null);
+  const [convBusca, setConvBusca] = useState('');
+  const [convResultados, setConvResultados] = useState<any[]>([]);
+  const [convMembro, setConvMembro] = useState<any | null>(null);
+  useEffect(() => {
+    if (!storeCode) return;
+    api<any>(`/pdv/convenio/ativo?storeCode=${encodeURIComponent(storeCode)}`)
+      .then((c) => setConvenioAtivo(c && c.id ? c : null))
+      .catch(() => setConvenioAtivo(null));
+  }, [storeCode]);
+  useEffect(() => {
+    if (!convenioAtivo || selected !== 'convenio') return;
+    const t = setTimeout(() => {
+      api<any[]>(`/pdv/convenio/${convenioAtivo.id}/membros?q=${encodeURIComponent(convBusca)}`)
+        .then((r) => setConvResultados(Array.isArray(r) ? r : []))
+        .catch(() => setConvResultados([]));
+    }, 300);
+    return () => clearTimeout(t);
+  }, [convBusca, convenioAtivo, selected]);
+
   // ── Crediário ──
   // Entrada (pagamento avulso descontado do total antes de parcelar)
   const [credEntrada, setCredEntrada] = useState('');
@@ -3967,6 +4117,11 @@ function PaymentModal({
     return d.toISOString().slice(0, 10);
   });
   const [credObs, setCredObs] = useState('');
+  // Cópia 1-clique da ficha de outra loja (banner "cliente é de outra loja")
+  const [copiandoFicha, setCopiandoFicha] = useState(false);
+  // FRETE à parte (venda online) — vira linha própria na venda
+  const [freteStr, setFreteStr] = useState('');
+  const [aplicandoFrete, setAplicandoFrete] = useState(false);
   // Info do cliente vinda do Giga + pendências (pra banner de inadimplência)
   const [credCustomerInfo, setCredCustomerInfo] = useState<{
     found: boolean;
@@ -4082,6 +4237,19 @@ function PaymentModal({
   // VENDA ONLINE — sub-tipo (PIX direto ou Link externo). Vendedora informa
   // só pra ter no histórico. Sem geração de cobrança, sem NFC-e automática.
   const [vendaOnlineTipo, setVendaOnlineTipo] = useState<'pix' | 'link' | 'pagarme_link' | null>(null);
+
+  // VENDA ONLINE exige VENDEDORA ANTES (dono 29/07): o fechamento pode
+  // acontecer bem depois (link pago via webhook / "Liberar") — se não
+  // escolher agora, a venda fica sem dona e some da comissão.
+  useEffect(() => {
+    if (selected === 'venda_online' && !hasSeller) onNeedSeller?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected, hasSeller]);
+
+  // Botão "Gerar Link Pagar.me" ficava fora da área visível (embaixo, atrás
+  // do footer FINALIZAR) — rola a seção pra vista quando o tipo é escolhido
+  // e quando o link é gerado (o card cresce).
+  const pagarmeBoxRef = useRef<HTMLDivElement | null>(null);
   // Estado do Link Pagar.me gerado (URL + status)
   const [pagarmeLink, setPagarmeLink] = useState<{
     pagarmeOrderId: string;
@@ -4091,6 +4259,15 @@ function PaymentModal({
   const [pagarmeLinkLoading, setPagarmeLinkLoading] = useState(false);
   const [pagarmeLinkPaid, setPagarmeLinkPaid] = useState(false);
   const [pagarmeLinkCopied, setPagarmeLinkCopied] = useState(false);
+
+  useEffect(() => {
+    if (selected !== 'venda_online' || vendaOnlineTipo !== 'pagarme_link') return;
+    const t = setTimeout(
+      () => pagarmeBoxRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }),
+      80,
+    );
+    return () => clearTimeout(t);
+  }, [selected, vendaOnlineTipo, pagarmeLink]);
 
   // ── Adicionar pagamento (com auto-finalize quando completa) ──
   // Se o valor digitado fecha o total da venda (95% dos casos: 1 forma só),
@@ -4125,12 +4302,29 @@ function PaymentModal({
       toast('warning', 'Defina o primeiro vencimento');
       return;
     }
+    if (selected === 'convenio') {
+      if (!convMembro) {
+        toast('warning', 'Informe o associado', 'Digite o nome e confirme (conferência do limite é online no sindicato)');
+        return;
+      }
+      // Limite só trava se foi cadastrado na retaguarda (limite > 0).
+      // Associado sem limite no Flow = conferência online no sindicato.
+      if (convMembro.id && (convMembro.limiteCents || 0) > 0 && Math.round(valor * 100) > (convMembro.disponivelCents ?? 0)) {
+        toast('error', 'Limite do convênio insuficiente', `Disponível pra ${convMembro.nome}: ${brl((convMembro.disponivelCents || 0) / 100)}`);
+        return;
+      }
+    }
     if (needsBandeira && !bandeira) {
       toast('warning', 'Escolha a bandeira', 'Visa, Master, Elo, Hipercard…');
       return;
     }
-    // VENDA ONLINE — exige CPF do cliente + escolher PIX ou LINK
+    // VENDA ONLINE — exige VENDEDORA + CPF do cliente + escolher PIX ou LINK
     if (selected === 'venda_online') {
+      if (!hasSeller) {
+        toast('warning', 'Escolha a vendedora', 'Venda online também tem dona — selecione quem vendeu.');
+        onNeedSeller?.();
+        return;
+      }
       if (!customerCpf) {
         toast(
           'warning',
@@ -4223,6 +4417,14 @@ function PaymentModal({
       const trocoP = recebidoNum > valor ? recebidoNum - valor : 0;
       details.recebido = recebidoNum || valor;
       details.troco = trocoP;
+    }
+    if (selected === 'convenio' && convMembro && convenioAtivo) {
+      details.convenioId = convenioAtivo.id;
+      details.convenioNome = convenioAtivo.nome;
+      // Sem id = nome digitado no caixa; o backend cria/acha o associado
+      if (convMembro.id) details.membroId = convMembro.id;
+      details.membroNome = convMembro.nome;
+      if (convMembro.matricula) details.membroMatricula = convMembro.matricula;
     }
     if (selected === 'pix') {
       if (pixExterno) {
@@ -4817,6 +5019,8 @@ function PaymentModal({
     setParcelas(1);
     setValorParcial('');
     setEffectiveFilter('all');
+    setConvMembro(null);
+    setConvBusca('');
   };
 
   const canConfirm = useMemo(() => {
@@ -4827,8 +5031,9 @@ function PaymentModal({
     if (selected === 'dinheiro' && recebidoNum < restante) return false;
     if (needsBandeira && !bandeira) return false;
     if (selected === 'venda_online' && (!customerCpf || !vendaOnlineTipo)) return false;
+    if (selected === 'convenio' && !convMembro) return false;
     return true;
-  }, [selected, bandeira, needsBandeira, recebidoNum, restante, customerCpf, vendaOnlineTipo]);
+  }, [selected, bandeira, needsBandeira, recebidoNum, restante, customerCpf, vendaOnlineTipo, convMembro]);
 
   const confirm = async () => {
     if (!selected) return;
@@ -4849,6 +5054,17 @@ function PaymentModal({
       }
       if (!credVencto) {
         toast('warning', 'Defina o primeiro vencimento');
+        return;
+      }
+    }
+    if (selected === 'convenio') {
+      if (!convMembro) {
+        toast('warning', 'Informe o associado do convênio');
+        return;
+      }
+      const cobrar = restante > 0 ? restante : total;
+      if (convMembro.id && (convMembro.limiteCents || 0) > 0 && Math.round(cobrar * 100) > (convMembro.disponivelCents ?? 0)) {
+        toast('error', 'Limite do convênio insuficiente', `Disponível pra ${convMembro.nome}: ${brl((convMembro.disponivelCents || 0) / 100)}`);
         return;
       }
     }
@@ -4878,6 +5094,14 @@ function PaymentModal({
     if (selected === 'pix' && pixCharge) {
       details.pixTxid = pixCharge.txid;
       details.pixChave = pixCharge.chave;
+    }
+    if (selected === 'convenio' && convMembro && convenioAtivo) {
+      details.convenioId = convenioAtivo.id;
+      details.convenioNome = convenioAtivo.nome;
+      // Sem id = nome digitado no caixa; o backend cria/acha o associado
+      if (convMembro.id) details.membroId = convMembro.id;
+      details.membroNome = convMembro.nome;
+      if (convMembro.matricula) details.membroMatricula = convMembro.matricula;
     }
     if (needsBandeira) details.bandeira = bandeira;
 
@@ -5091,7 +5315,11 @@ function PaymentModal({
               )}
             </div>
             <div className="grid grid-cols-2 gap-2">
-              {PAYMENT_METHODS
+              {[
+                ...PAYMENT_METHODS,
+                // CONVÊNIO só aparece na loja que tem convênio ativo (ex.: Indaiatuba)
+                ...(convenioAtivo ? [{ id: 'convenio', label: 'Convênio', icon: Handshake } as any] : []),
+              ]
                 .filter((p) => {
                   if (effectiveFilter === 'all') return true;
                   if (effectiveFilter === 'pix') return p.id === 'pix';
@@ -5288,9 +5516,58 @@ function PaymentModal({
               </div>
             )}
 
+            {/* ── FRETE À PARTE (dono 23/07): vira linha própria na venda —
+                soma no total, entra no caixa como receita e fica FORA da
+                base de comissão da vendedora ── */}
+            <div className="bg-white border-2 border-teal-200 rounded-lg p-2.5">
+              <label className="text-[10px] text-slate-600 uppercase font-semibold tracking-wider">
+                Frete cobrado da cliente (R$) — opcional
+              </label>
+              <div className="flex gap-2 mt-1">
+                <input
+                  value={freteStr}
+                  onChange={(e) => setFreteStr(e.target.value.replace(/[^\d.,]/g, ''))}
+                  placeholder="0,00"
+                  inputMode="decimal"
+                  className="flex-1 rounded-lg border-2 border-slate-200 px-3 py-2 text-sm text-right tabular-nums focus:border-teal-400 focus:outline-none"
+                />
+                <button
+                  type="button"
+                  disabled={aplicandoFrete}
+                  onClick={async () => {
+                    const v = Math.round((Number((freteStr || '0').replace(/\./g, '').replace(',', '.')) || 0) * 100) / 100;
+                    setAplicandoFrete(true);
+                    try {
+                      const r = await api<{ ok: boolean; freteReais: number; total: number }>(
+                        `/pdv/sales/${saleId}/frete`,
+                        { method: 'POST', body: JSON.stringify({ valor: v }) },
+                      );
+                      onPaymentsChange?.();
+                      toast(
+                        'success',
+                        v > 0 ? `Frete de ${brl(v)} aplicado` : 'Frete removido',
+                        `Total da venda: ${brl(r.total)} — a linha FRETE aparece no carrinho`,
+                      );
+                    } catch (e: any) {
+                      const h = humanizeError(e);
+                      toast('error', h.title, h.hint);
+                    } finally {
+                      setAplicandoFrete(false);
+                    }
+                  }}
+                  className="rounded-lg bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold px-4 disabled:opacity-50"
+                >
+                  {aplicandoFrete ? '...' : 'Aplicar frete'}
+                </button>
+              </div>
+              <p className="text-[10px] text-slate-400 mt-1">
+                Soma no total a cobrar · não baixa estoque · fora da comissão da vendedora.
+              </p>
+            </div>
+
             {/* ── PAINEL: Link Pagar.me — gera URL + cliente paga + webhook ── */}
             {vendaOnlineTipo === 'pagarme_link' && customerCpf && (
-              <div className="border-2 border-violet-300 rounded-lg p-2 bg-violet-50/30 space-y-2">
+              <div ref={pagarmeBoxRef} className="border-2 border-violet-300 rounded-lg p-2 bg-violet-50/30 space-y-2">
                 {!pagarmeLink ? (
                   <>
                     <button
@@ -5312,7 +5589,9 @@ function PaymentModal({
                               customerName,
                               customerCpf,
                               customerEmail,
-                              maxInstallments: 6,
+                              // maxInstallments OMITIDO de propósito: o backend
+                              // usa PAGARME_MAX_PARCELAS (Railway) — mandar um
+                              // número aqui IGNORA a variável da rede.
                               expiresInMinutes: 1440, // 24h
                               acceptPix: true,
                               acceptCreditCard: true,
@@ -5475,6 +5754,80 @@ function PaymentModal({
         })()}
 
         {/* CREDIÁRIO — banner pendências + entrada + primeiro vencimento */}
+        {/* ── CONVÊNIO: busca e seleção do associado (lista do sindicato) ── */}
+        {selected === 'convenio' && convenioAtivo && (
+          <div className="space-y-2 bg-[#FBF6E6] border-2 border-[#E6DFC8] rounded-xl p-3">
+            <div className="text-xs font-bold text-[#8C7325] flex items-center gap-1.5">
+              <Handshake className="w-4 h-4" /> {convenioAtivo.nome}
+            </div>
+            {convMembro ? (
+              <div className="bg-white border-2 border-emerald-300 rounded-lg p-2.5 flex items-center justify-between gap-2">
+                <div>
+                  <div className="font-bold text-sm text-slate-800">{convMembro.nome}</div>
+                  <div className="text-[11px] text-slate-500">
+                    {convMembro.matricula ? `Mat. ${convMembro.matricula} · ` : ''}
+                    {convMembro.id && (convMembro.limiteCents || 0) > 0 ? (
+                      <>Disponível: <b className="text-emerald-700">{brl((convMembro.disponivelCents || 0) / 100)}</b></>
+                    ) : (
+                      <b className="text-[#8C7325]">Confira o limite no sistema do sindicato (online)</b>
+                    )}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => { setConvMembro(null); setConvBusca(''); }}
+                  className="text-[11px] font-bold text-slate-500 underline decoration-dotted shrink-0"
+                >
+                  trocar
+                </button>
+              </div>
+            ) : (
+              <>
+                <input
+                  value={convBusca}
+                  onChange={(e) => setConvBusca(e.target.value.toUpperCase())}
+                  placeholder="Nome do associado…"
+                  autoFocus
+                  className="w-full rounded-lg border-2 border-[#E6DFC8] px-3 py-2 text-sm focus:border-[#D4AF37] focus:outline-none"
+                />
+                <div className="max-h-44 overflow-y-auto space-y-1">
+                  {convResultados.map((m) => (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => setConvMembro(m)}
+                      disabled={(m.limiteCents || 0) > 0 && (m.disponivelCents || 0) <= 0}
+                      className="w-full text-left bg-white border border-[#E7E2D8] rounded-lg px-3 py-2 hover:border-[#D4AF37] disabled:opacity-40 flex items-center justify-between gap-2"
+                    >
+                      <span className="text-sm font-medium text-slate-700">{m.nome}</span>
+                      <span className={`text-xs font-bold tabular-nums ${(m.limiteCents || 0) <= 0 ? 'text-[#8C7325]' : (m.disponivelCents || 0) > 0 ? 'text-emerald-700' : 'text-rose-600'}`}>
+                        {(m.limiteCents || 0) <= 0 ? 'online' : brl((m.disponivelCents || 0) / 100)}
+                      </span>
+                    </button>
+                  ))}
+                  {/* Sem lista do sindicato — conferência é ONLINE: o caixa digita
+                      o nome, confere o limite no sistema do sindicato e usa direto */}
+                  {convBusca.trim().length >= 3 &&
+                    !convResultados.some((m) => m.nome === convBusca.trim().toUpperCase()) && (
+                    <button
+                      type="button"
+                      onClick={() => setConvMembro({ id: null, nome: convBusca.trim().toUpperCase() })}
+                      className="w-full text-left bg-white border-2 border-dashed border-[#D4AF37] rounded-lg px-3 py-2 hover:bg-[#FBF6E6] text-sm font-bold text-[#8C7325]"
+                    >
+                      ➕ Usar &quot;{convBusca.trim().toUpperCase()}&quot; — conferido online no sindicato
+                    </button>
+                  )}
+                  {convResultados.length === 0 && convBusca.trim().length < 3 && (
+                    <div className="text-[11px] text-slate-400 px-1 py-2">
+                      Digite o nome do associado (a conferência do limite é online, no sistema do sindicato).
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
         {selected === 'crediario' && customerCpf && (
           <div className="space-y-2 pt-2 border-t">
             {credLoading && (
@@ -5507,6 +5860,60 @@ function PaymentModal({
                     Cadastro encontrado: <b>{credCustomerInfo.outraLoja.nome || '—'}</b> · cód{' '}
                     {credCustomerInfo.outraLoja.codCliente} · loja {credCustomerInfo.outraLoja.lojas.join(', ')}
                   </div>
+                )}
+                {/* CÓPIA 1-CLIQUE (caso Jéssica 23/07): cria a ficha NESTA loja
+                    copiando a da outra (sem limite/avaliação — crédito é por
+                    loja). Réplica pro Wincred leva ~30s; re-busca automática. */}
+                {credCustomerInfo.outraLoja && (
+                  <button
+                    type="button"
+                    disabled={copiandoFicha}
+                    onClick={async () => {
+                      setCopiandoFicha(true);
+                      try {
+                        const r = await api<any>('/pdv/clientes-giga/copiar-para-loja', {
+                          method: 'POST',
+                          body: JSON.stringify({
+                            lojaOrigem: credCustomerInfo.outraLoja!.lojas[0],
+                            codigoOrigem: credCustomerInfo.outraLoja!.codCliente,
+                            lojaDestino: storeCode,
+                            nome: credCustomerInfo.outraLoja!.nome,
+                            cpf: customerCpf,
+                          }),
+                        });
+                        if (r?.ok && r.replicado) {
+                          // Gravou no Wincred na hora — re-busca rapidinho
+                          toast(
+                            'success',
+                            r.jaExistia ? 'Ficha já existia nesta loja' : `Ficha criada nesta loja (cód ${r.codigo})`,
+                            'Gravada no Wincred ✓ — buscando de novo…',
+                          );
+                          setTimeout(() => setCredRefresh((n) => n + 1), 3000);
+                        } else if (r?.ok) {
+                          // Criou no Flow mas a gravação no Wincred falhou agora —
+                          // o outbox segue tentando; mostra o motivo real
+                          toast(
+                            'warning',
+                            `Ficha criada (cód ${r.codigo}) — Wincred pendente`,
+                            r.replicaErro
+                              ? `Erro na gravação: ${String(r.replicaErro).slice(0, 120)} — re-tento automático; busque de novo em ~1 min`
+                              : 'Gravando no Wincred — busco de novo em ~35s',
+                          );
+                          setTimeout(() => setCredRefresh((n) => n + 1), 35000);
+                        } else {
+                          toast('error', 'Não deu pra copiar a ficha', r?.erro || 'Tente cadastrar no Wincred');
+                        }
+                      } catch (e: any) {
+                        const h = humanizeError(e);
+                        toast('error', h.title, h.hint);
+                      } finally {
+                        setCopiandoFicha(false);
+                      }
+                    }}
+                    className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs disabled:opacity-50"
+                  >
+                    {copiandoFicha ? '⏳ Copiando ficha…' : '🏪 Copiar cadastro pra ESTA loja (1 clique)'}
+                  </button>
                 )}
                 <button
                   type="button"
@@ -5924,7 +6331,8 @@ function PaymentModal({
                   addingPayment ||
                   !valorParcial ||
                   (needsBandeira && !bandeira) ||
-                  (selected === 'crediario' && !customerCpf)
+                  (selected === 'crediario' && !customerCpf) ||
+                  (selected === 'convenio' && !convMembro)
                 }
                 className={`w-full px-3 py-4 font-black rounded-xl text-base disabled:opacity-40 flex items-center justify-center gap-2 transition-all shadow-md ${
                   vaiFinalizar
@@ -6439,6 +6847,41 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
     // ── Quantidade total de itens ────────────────────────────────────
     const qtdItens = sale.items.reduce((s, it) => s + (Number(it.qty) || 0), 0);
 
+    // ── VALE-TROCA no cupom = DESCONTO (espelha o XML da nota) ────────
+    // O total da NOTA é sale.total − vale; os pagamentos exibidos são só os
+    // reais (PIX/cartão/dinheiro). Sem isso o cupom saía "VALOR TOTAL R$
+    // 1.429 / MULTIPLO" numa troca com vale de R$ 559,80 (nota 94, 21/07).
+    const salePays = ((sale as any).payments || []) as Array<{ method: string; valor: number }>;
+    const isVale = (m: string) => ['vale_troca', 'vale', 'troca'].includes(String(m || '').toLowerCase());
+    const cupomVale = salePays.filter((p) => isVale(p.method)).reduce((s, p) => s + (Number(p.valor) || 0), 0);
+    const cupomTotalNota = Math.max(0, Math.round((sale.total - cupomVale) * 100) / 100);
+    const cupomPagsReais = salePays.filter((p) => !isVale(p.method));
+    const nomePag = (m: string) => String(m || '').replace(/_/g, ' ').toUpperCase();
+    const cupomPagLinhas = cupomPagsReais.length
+      ? cupomPagsReais
+          .map((p) => `<div class="row sm bold"><span>${nomePag(p.method)}</span><span>${brl(Number(p.valor) || 0)}</span></div>`)
+          .join('')
+      : `<div class="row sm bold"><span>${(sale.paymentMethod || 'SPLIT').toUpperCase()}</span><span>${brl(cupomTotalNota)}</span></div>`;
+
+    // QR gerado AQUI (lib local 'qrcode', mesma da página DANFE) e embutido
+    // como <img data:>. O script antigo no HTML nunca rodava certo: referenciava
+    // qrUrl sem interpolação (ReferenceError engolido pelo catch → cupom SEM QR,
+    // caso Moema 21/07) e ainda dependia de CDN externo na janela do Electron.
+    let qrDataUrl = '';
+    if (qrUrl) {
+      try {
+        qrDataUrl = await QRCode.toDataURL(qrUrl, { errorCorrectionLevel: 'M', margin: 0, width: 220 });
+      } catch (e) {
+        // Cupom sai sem QR, mas sai — e agora o erro aparece no console
+        // pra diagnóstico em vez de morrer calado.
+        console.error('[nfce] falha ao gerar QR do cupom:', e);
+      }
+    }
+    if (!qrDataUrl) {
+      console.warn('[nfce] cupom SEM QR: qrUrl=', qrUrl ? 'ok' : 'VAZIO',
+        'chave=', sale.nfceChave ? 'ok' : 'VAZIA', 'xml=', xmlForQr ? 'ok' : 'VAZIO');
+    }
+
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>NFC-e ${sale.nfceNumber || ''}</title>
 <style>
   @page { size: 80mm auto; margin: 0; }
@@ -6448,7 +6891,11 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
     font-family: 'Courier New', monospace;
     font-size: 11px;
     font-weight: 600;  /* mais grosso que normal */
-    width: 78mm;
+    /* Papel 80mm tem área imprimível ~72mm — 78mm cortava a direita
+       (valores "comidos" no cupom de Moema 21/07; mesma correção da
+       página DANFE de reimpressão). */
+    width: 72mm;
+    max-width: 72mm;
     margin: 0;
     padding: 2mm;
     color: #000;
@@ -6504,16 +6951,20 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
   ${itensHtml}
   <div class="sep"></div>
 
-  <!-- Totais -->
+  <!-- Totais — VALE-TROCA é DESCONTO na nota (não pagamento): o cupom tem
+       que espelhar o XML (vNF = total − vale; caso NFC-e 94 Moema 21/07) -->
   <div class="row sm"><span>QTD. TOTAL DE ITENS</span><span>${qtdItens}</span></div>
-  <div class="row bold lg"><span>VALOR TOTAL R$</span><span>${brl(sale.total)}</span></div>
+  ${cupomVale > 0 ? `
+  <div class="row sm"><span>SUBTOTAL R$</span><span>${brl(sale.total)}</span></div>
+  <div class="row sm bold"><span>DESCONTO VALE-TROCA</span><span>-${brl(cupomVale)}</span></div>` : ''}
+  <div class="row bold lg"><span>VALOR TOTAL R$</span><span>${brl(cupomTotalNota)}</span></div>
   <div class="row sm"><span>FORMA PAGAMENTO</span><span>VALOR PAGO</span></div>
-  <div class="row sm bold"><span>${(sale.paymentMethod || 'SPLIT').toUpperCase()}</span><span>${brl(sale.total)}</span></div>
+  ${cupomPagLinhas}
   <div class="sep"></div>
 
   <!-- Tributos (Lei 12.741) -->
   <div class="center xs">Tributos totais incidentes (Lei Federal 12.741/2012):</div>
-  <div class="center xs bold">R$ ${(sale.total * 0.0996).toFixed(2).replace('.', ',')} (Fonte: IBPT)</div>
+  <div class="center xs bold">R$ ${(cupomTotalNota * 0.0996).toFixed(2).replace('.', ',')} (Fonte: IBPT)</div>
   <div class="sep"></div>
 
   <!-- Identificação do consumidor -->
@@ -6536,8 +6987,8 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
   <div class="chave center">${sale.nfceChave || ''}</div>
   <div class="sep"></div>
 
-  <!-- QR Code -->
-  ${qrUrl ? `<canvas id="qr" width="180" height="180" style="display:block;margin:0 auto;image-rendering:pixelated;"></canvas>` : ''}
+  <!-- QR Code (imagem embutida — sem script, sem CDN, sem corrida) -->
+  ${qrDataUrl ? `<img src="${qrDataUrl}" width="180" height="180" class="qr" style="image-rendering:pixelated;" />` : ''}
 
   <!-- Protocolo -->
   <div class="center xs">Protocolo de autorização:</div>
@@ -6548,41 +6999,9 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
   <div class="center sm bold">Obrigado pela preferência!</div>
   <div class="center xs">Volte sempre 💖</div>
 
-  <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
-  <script>
-    (function() {
-      function renderAndPrint() {
-        try {
-          var canvas = document.getElementById('qr');
-          var url = JSON.stringify(qrUrl);
-          if (canvas && url && typeof qrcode === 'function') {
-            var qr = qrcode(0, 'M');
-            qr.addData(url);
-            qr.make();
-            var ctx = canvas.getContext('2d');
-            ctx.fillStyle = '#fff';
-            ctx.fillRect(0, 0, 180, 180);
-            ctx.fillStyle = '#000';
-            var n = qr.getModuleCount();
-            var size = Math.floor(180 / n);
-            var offset = Math.floor((180 - size * n) / 2);
-            for (var r = 0; r < n; r++) {
-              for (var col = 0; col < n; col++) {
-                if (qr.isDark(r, col)) {
-                  ctx.fillRect(offset + col * size, offset + r * size, size, size);
-                }
-              }
-            }
-          }
-        } catch (e) {
-          // Se gerar QR falhar, segue pra impressao (cupom sai sem QR, mas sai)
-        }
-        setTimeout(function() { window.print(); }, 200);
-      }
-      if (document.readyState === 'complete') renderAndPrint();
-      else window.addEventListener('load', renderAndPrint);
-    })();
-  </script>
+  <!-- SEM script: QR já vem como <img data:> embutida (gerada antes do HTML).
+       SEM window.print() (10/07): quem imprime é o main do Electron
+       (silencioso, térmica 80mm configurada). -->
 </body></html>`;
 
     // NFC-e SEMPRE vai direto pra impressora fiscal térmica 80mm configurada.
@@ -6592,21 +7011,38 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
       const electron = (window as any).electronAPI;
       if (isElectron() && electron?.silentPrintHTML) {
         const cfg = loadPrinterConfig();
-        if (cfg.termica) {
-          await electron.setConfig({ printer: cfg.termica });
-        }
+        // Força modo SILENCIOSO + térmica 80mm configurada (10/07): o toggle
+        // "com diálogo" do tray do app NÃO vale pra NFC-e — o diálogo/preview
+        // abria com margens de A4 e o cupom saía desalinhado. Nota fiscal vai
+        // SEMPRE direto pra impressora cadastrada.
+        await electron.setConfig({
+          ...(cfg.termica ? { printer: cfg.termica } : {}),
+          silentPrint: true,
+        });
         await electron.silentPrintHTML(html);
         return;
       }
-      // Fora do Electron (Chrome puro) — sem app desktop não tem como imprimir
-      // silencioso. Mostra erro claro com link pra config.
-      toast(
-        'warning',
-        'App desktop necessário',
-        'Pra imprimir NFC-e direto na térmica, abra pelo app desktop (LURDS ORDER ONE). No Chrome puro não dá pra mandar pra impressora sem preview.',
-      );
+      // APP ANTIGO (sem silentPrintHTML) ou Chrome puro (10/07, caso Suzano
+      // PDV-17): antes só mostrava toast "App desktop necessário" e a NFC-e
+      // NÃO saía na emissão — só na reimpressão. Agora imprime pelo MESMO
+      // caminho da reimpressão que funciona: routePrint na página da DANFE
+      // (app antigo com silentPrintUrl sai silencioso; sem nada, diálogo do
+      // Chrome — que lembra a ELGIN escolhida na 1ª vez).
+      const { routePrint } = await import('@/lib/printer-router');
+      const r = await routePrint({
+        kind: 'nfce',
+        url: `/minha-loja/pdv/nfce/${sale.id}?autoprint=1`,
+        warnIfMissing: true,
+      });
+      if (!r.ok) {
+        toast(
+          'warning',
+          'Impressão NFC-e',
+          'Não consegui mandar pra impressora. Atualize o app desktop (fechar e abrir instala a atualização) e confira a térmica em /pdv/config-impressora.',
+        );
+      }
     } catch (e: any) {
-      console.warn('[nfce] silentPrintHTML falhou:', e);
+      console.warn('[nfce] impressão falhou:', e);
       toast(
         'error',
         'Impressão NFC-e falhou',
@@ -7796,7 +8232,7 @@ function SimularParcelasModal({
   const valorParcela = (n: number) => total / n;
 
   return (
-    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-2 sm:p-4" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-2 sm:p-4" {...overlayClose(onClose)}>
       <div
         className="bg-white rounded-xl w-full max-w-md p-3 space-y-2 max-h-[95vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
@@ -7929,7 +8365,7 @@ function DiscountModal({
   const valorFinal = Math.max(0, base - (parseNum(reaisStr) || 0));
 
   return (
-    <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-4" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-4" {...overlayClose(onClose)}>
       <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-md p-5 space-y-4 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between">
           <h2 className="font-black text-lg text-amber-700 flex items-center gap-2">
@@ -8080,7 +8516,7 @@ function GiftVoucherModal({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-4" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-4" {...overlayClose(onClose)}>
       <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-md p-5 space-y-4 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between">
           <h2 className="font-black text-lg text-[#8C7325] flex items-center gap-2">
@@ -8218,7 +8654,7 @@ function ManualItemModal({
   const total = (parseNum(valor) || 0) * (Number(qty) || 0);
 
   return (
-    <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-4" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-4" {...overlayClose(onClose)}>
       <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-md p-5 space-y-4 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between">
           <h2 className="font-black text-lg text-rose-700 flex items-center gap-2">
@@ -8344,7 +8780,7 @@ function ShortcutsHelpModal({ onClose }: { onClose: () => void }) {
   return (
     <div
       className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4"
-      onClick={onClose}
+      {...overlayClose(onClose)}
     >
       <div
         onClick={(e) => e.stopPropagation()}

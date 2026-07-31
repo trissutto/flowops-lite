@@ -411,13 +411,26 @@ export class CrediarioBaixaService {
     where.push(`\`${map.codCliente}\` <> ''`);
     where.push(`\`${map.codCliente}\` <> '0'`);
 
-    // LIMIT conservador pra não saturar o pool MySQL.
-    // 5000 cobre uns 800-1500 clientes em aberto — suficiente pra Lurd's.
-    const sql = `SELECT ${select.join(', ')} FROM \`movimento\` WHERE ${where.join(' AND ')} ORDER BY \`${map.vencimento}\` ASC LIMIT 5000`;
-    this.logger.log(`[crediario-baixa] listAllOpen SQL: ${sql.slice(0, 500)}`);
+    // LEITURA PAGINADA (31/07). Era `LIMIT 5000` com o comentário "5000 cobre
+    // uns 800-1500 clientes — suficiente pra Lurd's". Não cobria: a rede tem
+    // 72.831 parcelas em aberto, então a tela mostrava as 5.000 mais antigas e
+    // escondia o resto sem avisar. Páginas de 10k, ordenadas por REGISTRO
+    // (único) — vencimento repete e OFFSET pularia linha.
+    const baseSql = `SELECT ${select.join(', ')} FROM \`movimento\` WHERE ${where.join(' AND ')}`;
+    this.logger.log(`[crediario-baixa] listAllOpen SQL: ${baseSql.slice(0, 500)}`);
     const t0 = Date.now();
-    const result = await this.erp.runReadOnly(sql, { maxRows: 5000, timeoutMs: 30000 });
-    this.logger.log(`[crediario-baixa] listAllOpen retornou ${result.rows.length} linhas em ${Date.now() - t0}ms`);
+    const leitura = await this.erp.readAllPages(baseSql, {
+      orderBy: `\`${map.registro}\``,
+      batch: 10_000,
+      timeoutMs: 60_000,
+    });
+    const result = { rows: leitura.rows, truncated: leitura.truncado };
+    if (leitura.truncado) {
+      this.logger.error(`[crediario-baixa] listAllOpen TRUNCADO no teto — a lista está incompleta`);
+    }
+    this.logger.log(
+      `[crediario-baixa] listAllOpen retornou ${result.rows.length} linhas (${leitura.paginas} página(s)) em ${Date.now() - t0}ms`,
+    );
 
     // Filtra códigos 0-3 (cartões clássicos: CREDICARD, REDESHOP, AMEX, etc)
     const filteredRows = result.rows.filter((r: any) => {
@@ -462,6 +475,181 @@ export class CrediarioBaixaService {
     });
 
     return response;
+  }
+
+  /**
+   * DIFF DE VALIDAÇÃO (read-only) — espelho (wincred_movimento_aberto) vs
+   * Giga ao vivo (movimento), pras parcelas EM ABERTO. Serve pra decidir com
+   * segurança se dá pra ligar CREDIARIO_NATIVE_READS=1 sem crediário sumir.
+   *
+   * Não escreve nada. Faz 2 varreduras completas (1 no Giga ~5-15k linhas,
+   * 1 no Postgres) e cruza em memória por chave `registro|controle`.
+   *
+   * Veredito `podeAtivar` = true SÓ quando nenhuma parcela aberta do Giga
+   * falta no espelho E nenhum valor diverge. Divergência de LOJA e parcelas
+   * "só no espelho" (paga no Wincred, ainda não ressincronizou) entram como
+   * AVISO, não como bloqueio — mas a loja órfã ('00') é o risco conhecido de
+   * a busca por cliente+loja não casar.
+   */
+  async diffAbertasEspelhoVsGiga(input: { storeCode?: string }): Promise<any> {
+    const t0 = Date.now();
+    const safeStore = input.storeCode
+      ? String(input.storeCode).replace(/[^0-9]/g, '').padStart(2, '0').slice(0, 2)
+      : null;
+
+    // O espelho tem `registro` como @id e o sync DEDUPLICA por registro (só a
+    // 1ª parcela sobrevive). Logo a unidade de comparação certa é o REGISTRO:
+    // pra cada registro medimos QUANTAS parcelas abertas o Giga tem e quanto o
+    // espelho guarda. É assim que se enxerga o dedup comendo parcela.
+    const norm = (v: any) => {
+      const s = String(v ?? '').trim();
+      return /^\d+$/.test(s) ? String(Number(s)) : s; // tira zero à esquerda p/ casar padding
+    };
+    const isCard = (cod: any) => {
+      const n = parseInt(String(cod || '').replace(/\D/g, ''), 10);
+      return isNaN(n) || n <= 3; // 0-3 = cartões clássicos, não são crediário
+    };
+    const normLoja = (l: any) => String(l ?? '').replace(/\D/g, '').padStart(2, '0').slice(0, 2);
+    const money = (n: number) => Math.round(n * 100) / 100;
+
+    // ── 1. ESPELHO (1 linha por registro, por construção) ─────────────────────
+    // Paginado (31/07): `take: 50000` fazia o diff comparar 50k com 50k e dizer
+    // que estava tudo certo justamente quando faltava gente dos dois lados.
+    const espRows: any[] = [];
+    for (let cursor: string | null = null; ; ) {
+      const pagina: any[] = await (this.prisma as any).wincredMovimentoAberto.findMany({
+        where: safeStore ? { loja: safeStore } : undefined,
+        select: { registro: true, loja: true, codCliente: true, valorParcela: true },
+        orderBy: { registro: 'asc' },
+        take: 10_000,
+        ...(cursor ? { skip: 1, cursor: { registro: cursor } } : {}),
+      });
+      espRows.push(...pagina);
+      if (pagina.length < 10_000) break;
+      cursor = String(pagina[pagina.length - 1].registro);
+    }
+    const espMap = new Map<string, any>();
+    let lojaOrfaEspelho = 0;
+    for (const r of espRows) {
+      if (isCard(r.codCliente)) continue;
+      if (['', '0', '00'].includes(normLoja(r.loja))) lojaOrfaEspelho++;
+      espMap.set(norm(r.registro), r);
+    }
+
+    // ── 2. GIGA AO VIVO ───────────────────────────────────────────────────────
+    let map = await this.crediarios.detectColumns(true);
+    if (!map.registro || !map.codCliente || !map.vencimento || !map.valorParcela) {
+      return {
+        ok: false,
+        erro: 'Falha ao ler estrutura do Giga (detectColumns). Tente de novo.',
+        espelho: { registros: espMap.size, lojaOrfaEspelho },
+      };
+    }
+    const select: string[] = [];
+    const addCol = (logical: keyof typeof map, alias: string) => {
+      const col = map[logical];
+      if (col) select.push(`\`${col}\` AS ${alias}`);
+    };
+    addCol('registro', 'registro');
+    addCol('controle', 'controle');
+    addCol('loja', 'loja');
+    addCol('codCliente', 'codCliente');
+    addCol('vencimento', 'vencimento');
+    addCol('valorParcela', 'valorParcela');
+    const where: string[] = [];
+    if (map.pago) {
+      where.push(`(\`${map.pago}\` IS NULL OR \`${map.pago}\` = '' OR UPPER(\`${map.pago}\`) IN ('N','NAO','NÃO'))`);
+    } else if (map.dataPagamento) {
+      where.push(`(\`${map.dataPagamento}\` IS NULL OR \`${map.dataPagamento}\` = '0000-00-00')`);
+    }
+    if (safeStore && map.loja) where.push(`\`${map.loja}\` = '${safeStore}'`);
+    where.push(`\`${map.registro}\` IS NOT NULL`, `\`${map.codCliente}\` IS NOT NULL`, `\`${map.codCliente}\` <> ''`, `\`${map.codCliente}\` <> '0'`);
+    const leituraGiga = await this.erp.readAllPages(
+      `SELECT ${select.join(', ')} FROM \`movimento\` WHERE ${where.join(' AND ')}`,
+      { orderBy: `\`${map.registro}\``, batch: 10_000, timeoutMs: 60_000 },
+    );
+    const result = { rows: leituraGiga.rows, truncated: leituraGiga.truncado };
+
+    // agrupa parcelas do Giga por registro
+    const gigaByReg = new Map<string, { parcelas: number; valor: number; codCliente: string; loja: string }>();
+    let gigaParcelas = 0;
+    for (const r of result.rows as any[]) {
+      if (isCard(r.codCliente)) continue;
+      const valor = Number(r.valorParcela || 0);
+      if (!r.vencimento || !valor) continue; // mesma regra de "aberta válida" das telas
+      gigaParcelas++;
+      const k = norm(r.registro);
+      const g = gigaByReg.get(k) || { parcelas: 0, valor: 0, codCliente: String(r.codCliente), loja: normLoja(r.loja) };
+      g.parcelas++; g.valor += valor;
+      gigaByReg.set(k, g);
+    }
+
+    // ── 3. CRUZAMENTO POR REGISTRO ────────────────────────────────────────────
+    const registrosFaltando: any[] = [];     // registro inteiro sumido do espelho — BLOQUEIA
+    const parcelasPerdidasDedup: any[] = [];  // registro presente mas espelho só tem 1 de N — BLOQUEIA
+    const valorDivergente: any[] = [];        // registro 1-parcela com valor diferente — BLOQUEIA
+    const lojaDivergente: any[] = [];         // aviso (morde a busca por cliente+loja)
+    let parcelasPerdidasTotal = 0;
+    let valorPerdidoTotal = 0;
+
+    for (const [k, g] of gigaByReg) {
+      const e = espMap.get(k);
+      if (!e) {
+        registrosFaltando.push({ registro: k, codCliente: g.codCliente, loja: g.loja, parcelas: g.parcelas, valor: money(g.valor) });
+        parcelasPerdidasTotal += g.parcelas;
+        valorPerdidoTotal += g.valor;
+        continue;
+      }
+      if (g.parcelas > 1) {
+        // espelho guarda 1, Giga tem g.parcelas → faltam (g.parcelas - 1)
+        const perdidas = g.parcelas - 1;
+        const valorPerdido = g.valor - Number(e.valorParcela || 0);
+        parcelasPerdidasDedup.push({ registro: k, codCliente: g.codCliente, parcelasGiga: g.parcelas, parcelasEspelho: 1, valorGiga: money(g.valor), valorEspelho: money(Number(e.valorParcela || 0)) });
+        parcelasPerdidasTotal += perdidas;
+        valorPerdidoTotal += Math.max(0, valorPerdido);
+      } else if (Math.abs(g.valor - Number(e.valorParcela || 0)) > 0.01) {
+        valorDivergente.push({ registro: k, codCliente: g.codCliente, valorGiga: money(g.valor), valorEspelho: money(Number(e.valorParcela || 0)) });
+      }
+      if (normLoja(g.loja) !== normLoja(e.loja)) {
+        lojaDivergente.push({ registro: k, codCliente: g.codCliente, lojaGiga: normLoja(g.loja), lojaEspelho: normLoja(e.loja) });
+      }
+    }
+    // registros que estão no espelho e não no Giga (pagos no Wincred / sync atrasado)
+    let registrosSoNoEspelho = 0;
+    for (const k of espMap.keys()) if (!gigaByReg.has(k)) registrosSoNoEspelho++;
+
+    const podeAtivar = registrosFaltando.length === 0 && parcelasPerdidasDedup.length === 0 && valorDivergente.length === 0;
+
+    return {
+      ok: true,
+      escopo: safeStore ? `loja ${safeStore}` : 'rede inteira',
+      duracaoMs: Date.now() - t0,
+      totais: {
+        gigaRegistros: gigaByReg.size,
+        gigaParcelas,
+        espelhoRegistros: espMap.size,
+        gigaTruncado: leituraGiga.truncado,
+        espelhoTruncado: false,
+      },
+      // BLOQUEIOS — enquanto houver qualquer um > 0, NÃO ligar CREDIARIO_NATIVE_READS
+      bloqueios: {
+        registrosFaltando: { qtd: registrosFaltando.length, amostra: registrosFaltando.slice(0, 25) },
+        parcelasPerdidasDedup: { qtd: parcelasPerdidasDedup.length, amostra: parcelasPerdidasDedup.slice(0, 25) },
+        valorDivergente: { qtd: valorDivergente.length, amostra: valorDivergente.slice(0, 25) },
+        parcelasPerdidasTotal,
+        valorPerdidoTotal: money(valorPerdidoTotal),
+      },
+      // AVISOS — não bloqueiam por si só
+      avisos: {
+        registrosSoNoEspelho,   // pagos no Wincred desktop ou sync atrasado
+        lojaDivergente: { qtd: lojaDivergente.length, amostra: lojaDivergente.slice(0, 25) },
+        lojaOrfaEspelho,        // linhas '00' que não casam a busca por cliente+loja
+      },
+      podeAtivar,
+      veredito: podeAtivar
+        ? 'Espelho cobre 100% dos registros abertos do Giga, com valores batendo. Seguro ligar CREDIARIO_NATIVE_READS=1.'
+        : `NÃO ligar ainda: ${parcelasPerdidasTotal} parcela(s) sumiriam (R$ ${money(valorPerdidoTotal)}) — ${registrosFaltando.length} registro(s) faltando + ${parcelasPerdidasDedup.length} com parcela comida pelo dedup + ${valorDivergente.length} com valor divergente.`,
+    };
   }
 
   /**
@@ -744,12 +932,19 @@ export class CrediarioBaixaService {
     // Filtro por LOJA — cada loja tem sua base de clientes e seu crediário.
     const whereLoja = safeStore && cm.loja ? ` AND \`${cm.loja}\` = '${safeStore}'` : '';
 
-    // LIMIT conservador — 15000 cobre Lurd's (7k clientes hoje, espaço pra crescer)
-    // sem segurar conexão MySQL por muito tempo.
-    const sql = `SELECT ${cols.join(', ')} FROM \`${cm.table}\` WHERE \`${cm.nome}\` IS NOT NULL AND \`${cm.nome}\` <> ''${whereLoja} ORDER BY \`${cm.nome}\` ASC LIMIT 15000`;
-    this.logger.log(`[crediario-baixa] listAllClientes SQL: ${sql.slice(0, 300)}`);
+    // Paginado (31/07). Era `LIMIT 15000` — hoje são 7.701 clientes, então
+    // ainda não cortava; mas era o mesmo teto silencioso que comeu 22 mil
+    // parcelas do crediário. Cliente que some é venda que não acontece.
+    const baseSql = `SELECT ${cols.join(', ')} FROM \`${cm.table}\` WHERE \`${cm.nome}\` IS NOT NULL AND \`${cm.nome}\` <> ''${whereLoja}`;
+    this.logger.log(`[crediario-baixa] listAllClientes SQL: ${baseSql.slice(0, 300)}`);
     const t0 = Date.now();
-    const result = await this.erp.runReadOnly(sql, { maxRows: 15000, timeoutMs: 20000 });
+    const leituraCli = await this.erp.readAllPages(baseSql, {
+      orderBy: `\`${cm.codCliente}\``,
+      batch: 10_000,
+      timeoutMs: 30_000,
+    });
+    const result = { rows: leituraCli.rows };
+    if (leituraCli.truncado) this.logger.error('[crediario-baixa] listAllClientes TRUNCADO no teto');
     this.logger.log(`[crediario-baixa] listAllClientes retornou ${result.rows.length} em ${Date.now() - t0}ms`);
 
     const cardRegex = CARD_NAME_REGEX;
@@ -822,8 +1017,13 @@ export class CrediarioBaixaService {
     const cols = [`\`${cm.codCliente}\` AS cod`, `\`${cm.nome}\` AS nome`];
     if (cm.cpf) cols.push(`\`${cm.cpf}\` AS cpf`);
     if (cm.telefone) cols.push(`\`${cm.telefone}\` AS tel`);
-    const sql = `SELECT ${cols.join(', ')} FROM \`${cm.table}\` WHERE \`${cm.loja}\` = '${loja}' AND \`${cm.nome}\` IS NOT NULL AND \`${cm.nome}\` <> '' LIMIT 15000`;
-    const r = await this.erp.runReadOnly(sql, { maxRows: 15000, timeoutMs: 20000 });
+    // Paginado (31/07) — mesmo teto silencioso de 15.000 dos outros.
+    const leituraLoja = await this.erp.readAllPages(
+      `SELECT ${cols.join(', ')} FROM \`${cm.table}\` WHERE \`${cm.loja}\` = '${loja}' AND \`${cm.nome}\` IS NOT NULL AND \`${cm.nome}\` <> ''`,
+      { orderBy: `\`${cm.codCliente}\``, batch: 10_000, timeoutMs: 30_000 },
+    );
+    const r = { rows: leituraLoja.rows };
+    if (leituraLoja.truncado) this.logger.error(`[crediario-baixa] clientes da loja ${loja} TRUNCADO no teto`);
 
     type Cli = { codCliente: string; nome: string; cpf: string | null; telefone: string | null; parcelasAbertas: number };
     const clientes: Cli[] = [];
@@ -1074,6 +1274,36 @@ export class CrediarioBaixaService {
     const q = String(input.q || '').trim();
     if (q.length < 2) return [];
 
+    // ── ESPELHO PRIMEIRO (wincred_clientes). Só quando populado. ──
+    if (this.nativeReads && (await (this.prisma as any).wincredCliente.count()) > 0) {
+      const safeQ = q.replace(/['"\\;]/g, '').slice(0, 100);
+      const onlyDigits = /^\d+$/.test(safeQ);
+      const safeStoreS = input.storeCode
+        ? String(input.storeCode).replace(/[^0-9]/g, '').padStart(2, '0').slice(0, 2)
+        : null;
+      const rows: any[] = await (this.prisma as any).wincredCliente.findMany({
+        where: {
+          ...(onlyDigits ? { codCliente: { in: this.codVariants(safeQ) } } : { nome: { contains: safeQ, mode: 'insensitive' } }),
+          ...(safeStoreS ? { loja: safeStoreS } : {}),
+        },
+        orderBy: { nome: 'asc' },
+        take: 60,
+      });
+      const outS: Array<{ codCliente: string; nome: string; telefone: string | null }> = [];
+      for (const c of rows) {
+        const cod = String(c.codCliente || '');
+        const n = parseInt(cod.replace(/\D/g, ''), 10);
+        if (isNaN(n) || n <= 3) continue;
+        const nome = String(c.nome || '').trim();
+        if (CARD_NAME_REGEX.test(nome)) continue;
+        const tel = String(c.telefone || '').trim() || String(c.telefone2 || '').trim() || null;
+        outS.push({ codCliente: cod, nome, telefone: tel });
+        if (outS.length >= 30) break;
+      }
+      // REDE DE SEGURANÇA: nada no espelho → cai pro Giga (não retorna vazio à toa).
+      if (outS.length > 0) return outS;
+    }
+
     const cm = await this.crediarios.detectClientesTable();
     if (!cm || !cm.nome) {
       throw new BadRequestException(
@@ -1136,6 +1366,51 @@ export class CrediarioBaixaService {
   }): Promise<OpenInstallment[]> {
     const cod = String(input.codCliente || '').trim();
     if (!cod) throw new BadRequestException('codCliente obrigatório');
+
+    const safeStoreN = input.storeCode
+      ? String(input.storeCode).replace(/[^0-9]/g, '').padStart(2, '0').slice(0, 2)
+      : null;
+
+    // ── ESPELHO DE ABERTAS PRIMEIRO (wincred_movimento_aberto). Só quando populado. ──
+    if (this.nativeReads && (await (this.prisma as any).wincredMovimentoAberto.count()) > 0) {
+      const rows: any[] = await (this.prisma as any).wincredMovimentoAberto.findMany({
+        where: { codCliente: { in: this.codVariants(cod) }, ...(safeStoreN ? { loja: safeStoreN } : {}) },
+        orderBy: { vencimento: 'asc' },
+        take: 500,
+      });
+      // REDE DE SEGURANÇA: espelho SEM linhas pra este cliente → NÃO retorna
+      // vazio; cai pro Giga (a fonte). Evita o "crediário sumiu" por mismatch.
+      if (rows.length > 0) {
+        const phonesN = await this.crediarios.fetchPhonesByClienteIds([cod], safeStoreN || undefined);
+        const phoneInfoN = phonesN.get(cod) || null;
+        const cfgN = await this.getConfig();
+        const outN: OpenInstallment[] = [];
+        for (const row of rows) {
+          const valor = Number(row.valorParcela || 0);
+          if (!row.vencimento || !valor) continue;
+          const venc = new Date(row.vencimento);
+          const { diasAtraso, juros } = this.calcJuros(venc, valor, cfgN);
+          outN.push({
+            registro: String(row.registro),
+            controle: String(row.controle),
+            numeroCompra: row.numeroCompra ? String(row.numeroCompra) : null,
+            parcela: row.parcela != null ? Number(row.parcela) : null,
+            totalParcelas: row.totalParcelas != null ? Number(row.totalParcelas) : null,
+            vencimento: venc.toISOString().slice(0, 10),
+            valorParcela: valor,
+            diasAtraso,
+            jurosCalculado: juros,
+            valorComJuros: Math.round((valor + juros) * 100) / 100,
+            codCliente: String(row.codCliente),
+            nome: row.nome ? String(row.nome) : phoneInfoN?.nome || null,
+            telefone: phoneInfoN?.telefone || null,
+            obs: null,
+          });
+        }
+        if (outN.length > 0) return outN;
+      }
+      // else: segue pro Giga abaixo (rede de segurança).
+    }
 
     let map = await this.crediarios.detectColumns();
     if (!map.codCliente || !map.vencimento || !map.valorParcela) {
@@ -1401,6 +1676,68 @@ export class CrediarioBaixaService {
 
   // ── Preview ────────────────────────────────────────────────────────
 
+  /** Leituras do crediário pelo Postgres (nativo/espelho) em vez do Giga ao vivo.
+   *  DEFAULT OFF (revertido 25/07 após incidente "crediários sumiram do PDV" —
+   *  a validar contra dados reais antes de reativar). CREDIARIO_NATIVE_READS=1 liga. */
+  private get nativeReads(): boolean {
+    return String(process.env.CREDIARIO_NATIVE_READS ?? '0') === '1';
+  }
+
+  /** Variantes do codCliente pra casar o espelho (padding de zeros varia entre
+   *  as tabelas do Giga — clientes vs movimento). */
+  private codVariants(cod: string): string[] {
+    const c = String(cod || '').trim();
+    const set = new Set<string>();
+    if (c) set.add(c);
+    const noZeros = c.replace(/^0+/, '');
+    if (noZeros) set.add(noZeros);
+    if (/^\d+$/.test(c)) set.add(String(Number(c)));
+    return Array.from(set);
+  }
+
+  /** Escrita da baixa/estorno no Giga via erp_outbox (assíncrona) em vez de
+   *  inline. DEFAULT OFF (write-path financeiro) — CREDIARIO_ERP_OUTBOX=1 liga.
+   *  O recibo (crediarioBaixa) já é a fonte; o espelho de abertas já tem
+   *  write-through — o outbox só replica o UPDATE no Giga com retry. */
+  private get crediarioOutboxEnabled(): boolean {
+    return String(process.env.CREDIARIO_ERP_OUTBOX ?? '0') === '1';
+  }
+
+  /** Lê 1 parcela ABERTA do espelho (wincred_movimento_aberto) por REGISTRO+
+   *  CONTROLE. Esse espelho tem write-through na baixa (marcarPagasNoEspelho):
+   *  parcela paga SOME dele na hora — logo "presente = em aberto AGORA", sem
+   *  risco de baixa dupla. Ausente (paga ou não-sincronizada) → undefined, e o
+   *  caller confere no Giga (autoridade sobre PAGO). */
+  private async previewParcelaEspelho(
+    registro: string,
+    controle: string,
+    cfg: JurosConfig,
+  ): Promise<OpenInstallment | undefined> {
+    const row: any = await (this.prisma as any).wincredMovimentoAberto.findFirst({
+      where: { registro: String(registro), controle: String(controle) },
+    });
+    if (!row) return undefined;
+    const valor = Number(row.valorParcela || 0);
+    const venc = new Date(row.vencimento);
+    const { diasAtraso, juros } = this.calcJuros(venc, valor, cfg);
+    return {
+      registro: String(row.registro),
+      controle: String(row.controle),
+      numeroCompra: row.numeroCompra ? String(row.numeroCompra) : null,
+      parcela: row.parcela != null ? Number(row.parcela) : null,
+      totalParcelas: row.totalParcelas != null ? Number(row.totalParcelas) : null,
+      vencimento: venc.toISOString().slice(0, 10),
+      valorParcela: valor,
+      diasAtraso,
+      jurosCalculado: juros,
+      valorComJuros: Math.round((valor + juros) * 100) / 100,
+      codCliente: String(row.codCliente),
+      nome: row.nome ? String(row.nome) : null,
+      telefone: null,
+      obs: null,
+    };
+  }
+
   async previewBaixa(input: {
     parcelas: Array<{ registro: string; controle: string }>;
     storeCode?: string;
@@ -1410,17 +1747,32 @@ export class CrediarioBaixaService {
     totalJuros: number;
     totalPago: number;
   }> {
-    const map = await this.crediarios.detectColumns();
-    if (!map.registro || !map.controle) {
-      throw new BadRequestException('Coluna REGISTRO/CONTROLE não detectada');
-    }
     if (!input.parcelas?.length) throw new BadRequestException('Selecione pelo menos 1 parcela');
 
     const cfg = await this.getConfig();
 
-    // Busca cada parcela no Giga
+    // ── ESPELHO DE ABERTAS PRIMEIRO: parcela presente = em aberto agora
+    // (write-through remove na baixa). Ausente → confere no Giga (autoridade). ──
+    const espelhoOk = this.nativeReads
+      ? (await (this.prisma as any).wincredMovimentoAberto.count()) > 0
+      : false;
+
+    const map = await this.crediarios.detectColumns();
+    if (!espelhoOk && (!map.registro || !map.controle)) {
+      throw new BadRequestException('Coluna REGISTRO/CONTROLE não detectada');
+    }
+
+    // Busca cada parcela (espelho → fallback Giga)
     const result: OpenInstallment[] = [];
     for (const p of input.parcelas) {
+      if (espelhoOk) {
+        const nat = await this.previewParcelaEspelho(p.registro, p.controle, cfg);
+        if (nat) { result.push(nat); continue; }
+        // não achou no espelho de abertas → confere no Giga (pode estar paga lá)
+        if (!map.registro || !map.controle) {
+          throw new BadRequestException(`Parcela não encontrada: ${p.registro}/${p.controle}`);
+        }
+      }
       const safeReg = String(p.registro).replace(/['"\\]/g, '');
       const safeCtl = String(p.controle).replace(/['"\\]/g, '');
 
@@ -1889,6 +2241,36 @@ export class CrediarioBaixaService {
     // ERP_MULTA_PERCENT se outra loja precisar de percentual diferente.
     const multaPct = Number(process.env.ERP_MULTA_PERCENT ?? '2.0') || 2.0;
 
+    // ── OUTBOX (default OFF): finaliza no Postgres + write-through no espelho e
+    // enfileira a réplica pro Giga. O worker faz o markCrediarioParcelaPaid. ──
+    if (this.crediarioOutboxEnabled) {
+      const jobItems = items.map((it: any) => ({
+        baixaItemId: it.id,
+        registro: it.registro,
+        controle: it.controle,
+        valorPago: it.valorPago,
+        juros: Number(it.jurosCalculado) || 0,
+        multa: (Number(it.diasAtraso) > 0)
+          ? Math.round(Number(it.valorParcela) * (multaPct / 100) * 100) / 100
+          : 0,
+        dataPagamento: new Date().toISOString(),
+      }));
+      // Write-through imediato: parcela paga sai do espelho de abertas já.
+      void this.crediarioMirror
+        .marcarPagasNoEspelho(items.map((it: any) => it.registro))
+        .catch(() => { /* cron corrige */ });
+      await (this.prisma as any).erpOutbox.create({
+        data: {
+          kind: 'crediario_baixa',
+          saleId: `credbaixa-${baixaId}`,
+          payload: { items: jobItems, columns: cols },
+          status: 'pending',
+        },
+      });
+      this.logger.log(`[crediario-baixa] baixa ${baixaId}: ${items.length} parcela(s) enfileirada(s) pro Giga (outbox)`);
+      return;
+    }
+
     for (const it of items) {
       const multa = (Number(it.diasAtraso) > 0)
         ? Math.round(Number(it.valorParcela) * (multaPct / 100) * 100) / 100
@@ -2108,14 +2490,34 @@ export class CrediarioBaixaService {
       multa: map.multa,
     };
 
+    // OUTBOX (default OFF): enfileira a reversão no Giga; o UPDATE PAGO='N' roda
+    // no worker com retry. O estorno "vale" no Flow na hora (write-through abaixo).
+    const useOutbox = this.crediarioOutboxEnabled;
+    if (useOutbox) {
+      await (this.prisma as any).erpOutbox.create({
+        data: {
+          kind: 'crediario_estorno',
+          saleId: `credestorno-${input.baixaId}`,
+          payload: {
+            items: (baixa.items as any[]).map((it) => ({ registro: it.registro, controle: it.controle })),
+            columns: cols,
+          },
+          status: 'pending',
+        },
+      });
+    }
+
     const details: any[] = [];
     let revertidos = 0, falhas = 0;
     for (const it of baixa.items as any[]) {
-      const r = await this.erp.markCrediarioParcelaUnpaid({
-        registro: it.registro,
-        controle: it.controle,
-        columns: cols,
-      });
+      // Inline: reverte no Giga na hora. Outbox: otimista (worker replica).
+      const r = useOutbox
+        ? { success: true, error: undefined as string | undefined }
+        : await this.erp.markCrediarioParcelaUnpaid({
+            registro: it.registro,
+            controle: it.controle,
+            columns: cols,
+          });
       details.push({
         registro: it.registro,
         controle: it.controle,
@@ -2128,7 +2530,7 @@ export class CrediarioBaixaService {
         where: { id: it.id },
         data: {
           gigaUpdateOk: false,
-          gigaError: r.success ? 'ESTORNADA' : `ESTORNO FALHOU: ${r.error || 'erro'}`,
+          gigaError: r.success ? (useOutbox ? 'ESTORNADA (outbox)' : 'ESTORNADA') : `ESTORNO FALHOU: ${r.error || 'erro'}`,
         },
       });
     }

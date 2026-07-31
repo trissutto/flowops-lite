@@ -153,6 +153,20 @@ export function setTrainingMode(on: boolean): void {
  */
 export function getAuthToken(): string | null {
   if (typeof window === 'undefined') return null;
+  // JANELA DE IMPRESSÃO do app desktop (fix 14/07 — "teste imprime, venda não"):
+  // a hidden window do silentPrintUrl roda numa SESSÃO SEM LOGIN (partition
+  // própria do Electron), então recibo/NFC-e tomavam 401 e a janela fechava
+  // sem imprimir. O printer-router passa o JWT no FRAGMENT da URL (#ptk=…,
+  // fragment nunca vai pro servidor/log). Persiste em sessionStorage pras
+  // próximas chamadas da mesma janela.
+  try {
+    const m = /[#&]ptk=([^&]+)/.exec(window.location.hash || '');
+    if (m && m[1]) {
+      const tk = decodeURIComponent(m[1]);
+      try { window.sessionStorage.setItem('flowops_token', tk); } catch {}
+      return tk;
+    }
+  } catch { /* segue pro storage */ }
   try {
     const sessionTok = window.sessionStorage.getItem('flowops_token');
     if (sessionTok) return sessionTok;

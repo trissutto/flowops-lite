@@ -318,7 +318,7 @@ export class WcReturnsService {
     // Estorna estoque Giga na loja receptora
     const stockAttempts: Array<{ sku: string; ok: boolean; error?: string }> = [];
     try {
-      const result = await this.erp.increaseStock(
+      const result = await this.erp.increaseStockAsync(
         itemsToCreate.map((it) => ({
           sku: it.sku,
           qty: it.qty,

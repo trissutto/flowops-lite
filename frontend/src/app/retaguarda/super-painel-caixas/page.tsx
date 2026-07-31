@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 
 /**
  * /retaguarda/super-painel-caixas
@@ -209,12 +210,13 @@ export default function SuperPainelCaixas() {
   const [pixConc, setPixConc] = useState<Record<string, PixConcStatus>>({});
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Detecta role do user (admin pode editar bandeira)
+  // Quem pode EDITAR no painel (bandeira, ajustes master, conferir sessão).
+  // 15/07: papéis de franquia editam igual admin — o backend escopa às FILIAIS.
   useEffect(() => {
     (async () => {
       try {
         const me = await api<{ role: string }>('/auth/me');
-        setIsAdmin(me?.role === 'admin');
+        setIsAdmin(['admin', 'master_franquia', 'franquias'].includes(me?.role));
       } catch { /* ignora */ }
     })();
   }, []);
@@ -445,9 +447,10 @@ export default function SuperPainelCaixas() {
                 <ConsolidadoItem label="Crediário" valor={data.consolidado.totalCrediario} icon={<TrendingUp size={14} />} />
               </div>
 
-              {/* CONCILIACAO GLOBAL V4 — todas as lojas
-                  Vendido liquido = totalVendas - vale_troca aplicado
-                  Recebido = dinheiro + pix + credito + debito + crediario (SEM vale) */}
+              {/* CONCILIACAO GLOBAL V5 (15/07) — todas as lojas
+                  Vendido liquido = totalVendas - vale_troca (vale abate, não é $)
+                  Recebido = dinheiro + pix + credito + debito + crediario + VENDA ONLINE
+                  (venda online É dinheiro recebido — só não entra na gaveta física) */}
               {(() => {
                 const c: any = data.consolidado;
                 const valeTroca = c.totalValeTroca || 0;
@@ -456,7 +459,8 @@ export default function SuperPainelCaixas() {
                   (c.totalPix || 0) +
                   (c.totalCartaoCredito || 0) +
                   (c.totalCartaoDebito || 0) +
-                  (c.totalCrediario || 0);
+                  (c.totalCrediario || 0) +
+                  (c.totalVendaOnline || 0);
                 const vendidoLiquido = (c.totalVendas || 0) - valeTroca;
                 const diff = Number((vendidoLiquido - recebido).toFixed(2));
                 const bate = Math.abs(diff) < 0.02;
@@ -757,9 +761,9 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo }: { lo
             onClick={loja.detalhado && t.totalCrediario > 0 ? () => setExpanded(expanded === 'crediario' ? null : 'crediario') : undefined} />
         </div>
 
-        {/* CONCILIACAO INLINE V4 — Vendido liquido vs Recebido (sem vale_troca).
-            Vendido liquido = totalVendas - vale_troca aplicado
-            Recebido = dinheiro + pix + credito + debito + crediario
+        {/* CONCILIACAO INLINE V5 (15/07) — Vendido liquido vs Recebido.
+            Vendido liquido = totalVendas - vale_troca (vale abate, não é $)
+            Recebido = dinheiro + pix + credito + debito + crediario + VENDA ONLINE
             Click leva pra /produtos-vendidos com filtro de data + loja. */}
         {t.totalVendas > 0 && (() => {
           const valeTroca = (t as any).totalValeTroca || 0;
@@ -768,7 +772,8 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo }: { lo
             (t.totalPix || 0) +
             (t.totalCartaoCredito || 0) +
             (t.totalCartaoDebito || 0) +
-            (t.totalCrediario || 0);
+            (t.totalCrediario || 0) +
+            ((t as any).totalVendaOnline || 0);
           const vendidoLiquido = (t.totalVendas || 0) - valeTroca;
           const diff = Number((vendidoLiquido - somaModalidades).toFixed(2));
           const bate = Math.abs(diff) < 0.02;
@@ -1322,7 +1327,7 @@ function EditBandeiraModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" {...overlayClose(onClose)}>
       <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-5 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <h2 className="text-lg font-black mb-1">Trocar bandeira do cartão</h2>
         <p className="text-xs text-slate-500 mb-3">{saleHint}</p>
@@ -1478,7 +1483,7 @@ function MasterAdjustModal({
   if (!mounted) return null;
 
   return createPortal(
-    <div className="fixed inset-0 z-[9998] bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-[9998] bg-black/60 flex items-center justify-center p-4" {...overlayClose(onClose)}>
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-5 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-start justify-between mb-3">
           <div>
@@ -1646,7 +1651,7 @@ function MovementEditModal({
   const busy = saving || deleting;
 
   return createPortal(
-    <div className="fixed inset-0 z-[9998] bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-[9998] bg-black/60 flex items-center justify-center p-4" {...overlayClose(onClose)}>
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-5 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-start justify-between mb-3">
           <div>
@@ -1793,7 +1798,7 @@ function MasterEditPaymentModal({
   if (!mounted) return null;
 
   return createPortal(
-    <div className="fixed inset-0 z-[9998] bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-[9998] bg-black/60 flex items-center justify-center p-4" {...overlayClose(onClose)}>
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-5 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-start justify-between mb-3">
           <div>

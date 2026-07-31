@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  ForbiddenException,
   Get,
   Param,
   Post,
@@ -11,6 +12,7 @@ import {
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { LivePdvService } from './live-pdv.service';
+import { LivePdvCobrancaWhatsCron } from './live-pdv-cobranca-whats.cron';
 
 /**
  * /api/live-pdv — Console de Live Commerce operado pela apresentadora +
@@ -22,7 +24,60 @@ export class LivePdvController {
   constructor(
     private readonly svc: LivePdvService,
     private readonly prisma: PrismaService,
+    private readonly cobrancaWhats: LivePdvCobrancaWhatsCron,
   ) {}
+
+  private requireAdmin(req: any) {
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'master') {
+      throw new ForbiddenException('Apenas admin/master');
+    }
+  }
+
+  /** Matriz = admin/master/operator (mesmo público que opera o console da live). */
+  private requireMatriz(req: any) {
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'master' && role !== 'operator') {
+      throw new ForbiddenException('Apenas matriz');
+    }
+  }
+
+  // ── Cobrança automática por WhatsApp (admin) ──
+  /** Lista os carrinhos que o próximo ciclo cobraria (conferência humana). */
+  @Get('cobranca-whats/preview')
+  async cobrancaWhatsPreview(@Req() req: any) {
+    this.requireAdmin(req);
+    const carts = await this.cobrancaWhats.elegiveis(100);
+    return carts.map((c: any) => ({
+      cartId: c.id,
+      nome: c.customerName,
+      telefone: c.customerPhone,
+      valorCents: c.totalCents,
+      status: c.status,
+      paradoDesde: c.updatedAt,
+      tentativas: c.cobrancaWhatsTentativas,
+    }));
+  }
+
+  /** Roda um ciclo de cobrança AGORA (sem esperar o cron de 30min). */
+  @Post('cobranca-whats/run')
+  cobrancaWhatsRun(@Req() req: any) {
+    this.requireAdmin(req);
+    return this.cobrancaWhats.executarCiclo();
+  }
+
+  /**
+   * Cobrança MANUAL de UM carrinho pela API do ManyChat (botão "WhatsApp" da
+   * fila Cobrar Todas) — nada de abrir o app do WhatsApp na mão.
+   * SEM gate de papel (só JWT, como as demais ações do console): a operadora
+   * da live loga com o perfil da LOJA anfitriã (role 'store') — caso real
+   * 12/07: 'admin/master' e depois 'matriz' bloquearam a operadora (403).
+   * Cobrar 1 carrinho é ação do console, igual charge-dm/mark-charged.
+   */
+  @Post('carts/:cartId/cobranca-whats')
+  cobrancaWhatsManual(@Param('cartId') cartId: string) {
+    return this.cobrancaWhats.cobrarManual(cartId);
+  }
 
   // ── Sessões ──
   @Post('sessions')
@@ -48,6 +103,12 @@ export class LivePdvController {
     return this.svc.endSession(id);
   }
 
+  // Reabre live encerrada (nada foi apagado — só volta o status).
+  @Post('sessions/:id/reopen')
+  reopenSession(@Param('id') id: string) {
+    return this.svc.reopenSession(id);
+  }
+
   // Troca a loja anfitriã da live ABERTA (ex.: abriu com a loja padrão errada)
   @Post('sessions/:id/store')
   changeSessionStore(@Param('id') id: string, @Body() body: { storeCode: string }) {
@@ -58,6 +119,13 @@ export class LivePdvController {
   @Get('search')
   search(@Query('term') term: string, @Query('sessionId') sessionId?: string) {
     return this.svc.searchGrade(term, sessionId);
+  }
+
+  // Botão "Atualizar estoque" da grade: força o refresh pontual do espelho
+  // (só os códigos da peça, direto do Giga) e devolve a grade recalculada.
+  @Post('search/refresh-stock')
+  refreshStock(@Body() body: { term: string; sessionId?: string }) {
+    return this.svc.searchGradeFresh(body?.term, body?.sessionId);
   }
 
   // ── Legenda da Live (atalhos 01, 02... → referência completa) ──
@@ -72,18 +140,25 @@ export class LivePdvController {
   @Post('sessions/:id/atalhos')
   saveAtalho(
     @Param('id') sessionId: string,
-    @Body() body: { id?: string | null; atalho: string; refCode: string },
+    @Body() body: { id?: string | null; atalho: string; refCode: string; cor?: string | null },
   ) {
     return this.svc.saveAtalho(sessionId, {
       id: body?.id || null,
       atalho: body?.atalho || '',
       refCode: body?.refCode || '',
+      cor: body?.cor ?? null,
     });
   }
 
   @Post('sessions/:id/atalhos/:atalhoId/delete')
   deleteAtalho(@Param('id') sessionId: string, @Param('atalhoId') atalhoId: string) {
     return this.svc.deleteAtalho(sessionId, atalhoId);
+  }
+
+  // Botão "Limpar tudo" da tela de legendas (as legendas NUNCA zeram sozinhas)
+  @Post('sessions/:id/atalhos/limpar-tudo')
+  clearAtalhos(@Param('id') sessionId: string) {
+    return this.svc.clearAtalhos(sessionId);
   }
 
   // ── Preço promocional da live ──
@@ -133,6 +208,13 @@ export class LivePdvController {
     return this.svc.pendingLiveRegistrations(id);
   }
 
+  // Recorrentes: clientes que já criaram carrinho em qualquer live (busca por
+  // nome/@/telefone). Puxa pra live atual via add-customer.
+  @Get('sessions/:id/recurring')
+  recurring(@Param('id') id: string, @Query('q') q?: string) {
+    return this.svc.recurringLiveCustomers(id, q);
+  }
+
   // Cobrança em massa AUTOMÁTICA via DM (API ManyChat) — carrinhos abertos da
   // sessão. body.resend=true ignora o "já enviada" (corrigir link errado etc).
   @Post('sessions/:id/charge-all-dm')
@@ -146,6 +228,14 @@ export class LivePdvController {
     return this.svc.chargeCartViaDm(cartId);
   }
 
+  // SACOLA PELA DM: apresentadora confere a sacola fechada pela cliente e
+  // LIBERA — tira da fila de revisão e manda o link. Verificação humana antes
+  // de finalizar (exigência do dono).
+  @Post('carts/:cartId/liberar-cobranca')
+  liberarCobranca(@Param('cartId') cartId: string) {
+    return this.svc.liberarCobranca(cartId);
+  }
+
   // Backfill de vínculos ManyChat pros carrinhos abertos (API findByName)
   @Post('sessions/:id/backfill-manychat')
   backfillManychat(@Param('id') id: string) {
@@ -153,9 +243,11 @@ export class LivePdvController {
   }
 
   // Carimbo de cobrança MANUAL (Direct/WhatsApp) — sincroniza o ✓ entre PCs
+  // + contador de tentativas por canal (body.canal: 'direct' | 'whats')
   @Post('carts/:cartId/mark-charged')
-  markCharged(@Param('cartId') cartId: string) {
-    return this.svc.markCartCharged(cartId);
+  markCharged(@Param('cartId') cartId: string, @Body() body: { canal?: 'direct' | 'whats' }) {
+    const canal = body?.canal === 'whats' ? 'whats' : body?.canal === 'direct' ? 'direct' : undefined;
+    return this.svc.markCartCharged(cartId, canal);
   }
 
   // Edita o PREÇO de um item do carrinho (negociação na hora, item ainda não pago)
@@ -207,6 +299,7 @@ export class LivePdvController {
 
   @Post('carts/:cartId/customer')
   updateCartCustomer(
+    @Req() req: any,
     @Param('cartId') cartId: string,
     @Body()
     body: {
@@ -224,7 +317,11 @@ export class LivePdvController {
       uf?: string;
     },
   ) {
-    return this.svc.updateCartCustomer(cartId, body);
+    return this.svc.updateCartCustomer(cartId, body, {
+      userId: req?.user?.userId ?? req?.user?.sub ?? null,
+      name: req?.user?.name ?? req?.user?.nome ?? req?.user?.username ?? null,
+      storeCode: req?.user?.storeCode ?? null,
+    });
   }
 
   @Post('carts/:cartId/cancel')
@@ -236,6 +333,32 @@ export class LivePdvController {
   @Post('carts/:cartId/release-separation')
   releaseSeparation(@Param('cartId') cartId: string) {
     return this.svc.releaseSeparation(cartId);
+  }
+
+  // RECOLHE o pedido das lojas de volta pra UMA loja só (ex.: matriz) — inverso
+  // do release-separation, pra repensar o roteamento antes de gerar remessa/frete.
+  // Só vale pro fluxo LEGADO (cart sem orderId) — no trilho do site é na tela
+  // Pedidos & Separação.
+  @Post('carts/:cartId/retract-separation')
+  retractSeparation(@Param('cartId') cartId: string, @Body() body: { storeCode: string }) {
+    return this.svc.retractSeparation(cartId, body?.storeCode || '');
+  }
+
+  // MIGRAÇÃO (12/07, admin): move os pedidos da live do fluxo antigo de
+  // separação pro trilho do site (cancela ordem nas lojas + recalcula do zero).
+  @Post('admin/migrate-to-site-flow')
+  migrateToSiteFlow(@Req() req: any) {
+    this.requireAdmin(req);
+    return this.svc.migrateSeparatingToSiteFlow();
+  }
+
+  // MIGRAÇÃO DOS BIPADOS (12/07, admin): pedidos que a migração normal pulou
+  // por já terem peça bipada — mantém a loja, cria pick-order 'separated' com
+  // baixa reconhecida (sem duplicar estoque). body.desde = ISO (só pagos ≥).
+  @Post('admin/migrate-bipados-to-site-flow')
+  migrateBipadosToSiteFlow(@Req() req: any, @Body() body: { desde?: string }) {
+    this.requireAdmin(req);
+    return this.svc.migrateBipadosToSiteFlow(body?.desde);
   }
 
   // Bip de conferência da separação (loja bipa o EAN/código; confere e baixa estoque)
@@ -283,11 +406,12 @@ export class LivePdvController {
     return this.svc.startPaymentLink(cartId);
   }
 
-  // Confirmação manual pra lojas com PIX externo (franquias sem gateway):
-  // a cliente pagou por fora e a operadora marca pago → dispara a separação.
+  // Confirmação manual "JÁ PAGOU por fora" — liberada pra QUALQUER loja
+  // (dono 18/07). Registra quem confirmou no log pra auditoria.
   @Post('carts/:cartId/pay-external')
-  payExternal(@Param('cartId') cartId: string) {
-    return this.svc.confirmExternalPayment(cartId);
+  payExternal(@Param('cartId') cartId: string, @Req() req: any) {
+    const who = req?.user?.name || req?.user?.email || req?.user?.sub || null;
+    return this.svc.confirmExternalPayment(cartId, who);
   }
 
   @Get('carts/:cartId/payment-status')
@@ -300,6 +424,29 @@ export class LivePdvController {
   async storeQueue(@Req() req: any, @Query('storeCode') storeCode?: string) {
     const code = storeCode || (await this.resolveStoreCode(req));
     return this.svc.storeQueue(code);
+  }
+
+  // LOJA troca uma peça manualmente na separação do pedido da live. Só antes de
+  // conferir/enviar. Diferença de preço ⇒ a service devolve needsPassword e a
+  // tela pede senha GERENTE+ (reenviada no body.password).
+  @Post('items/:itemId/swap')
+  async swapItem(
+    @Req() req: any,
+    @Param('itemId') itemId: string,
+    @Body()
+    body: {
+      codigo: string;
+      ref?: string;
+      cor?: string;
+      tamanho?: string;
+      descricao?: string;
+      password?: string;
+    },
+  ) {
+    const role = req?.user?.role;
+    const isAdmin = role === 'admin' || role === 'operator' || role === 'supervisor';
+    const storeCode = isAdmin ? null : await this.resolveStoreCode(req);
+    return this.svc.swapItem(itemId, body ?? ({} as any), { storeCode, isAdmin });
   }
 
   @Post('items/:itemId/separated')
@@ -319,6 +466,12 @@ export class LivePdvController {
   @Post('items/:itemId/delivered')
   markDelivered(@Param('itemId') itemId: string) {
     return this.svc.markDelivered(itemId);
+  }
+
+  /** Gera a pré-postagem dos Correios pro carrinho inteiro (peso = peças×200g). */
+  @Post('carts/:cartId/correios/prepostagem')
+  gerarEnvioCorreios(@Param('cartId') cartId: string) {
+    return this.svc.gerarEnvioCorreios(cartId);
   }
 
   // ── Dashboard ──

@@ -88,6 +88,15 @@ export class NfceService {
       certificadoCarregado: !!cfg.certPfxB64,
       ready:
         !!cfg.cnpj && !!cfg.ie && !!cfg.cscToken && !!cfg.certPfxB64,
+      // Identidade da NF-e quando difere da NFC-e (vazio = usa os mesmos dados)
+      nfeCnpj: cfg.nfeCnpj || '',
+      nfeIe: cfg.nfeIe || '',
+      nfeRazaoSocial: cfg.nfeRazaoSocial || '',
+      nfeFantasia: cfg.nfeFantasia || '',
+      nfeRegime: cfg.nfeRegime || '',
+      nfeEndereco: cfg.nfeEndereco ? JSON.parse(cfg.nfeEndereco) : null,
+      // Razões extras da loja (multi-empresa, ex.: Itanhaém 20+30)
+      nfeIdentidadesExtras: (() => { try { return cfg.nfeIdentidadesExtras ? JSON.parse(cfg.nfeIdentidadesExtras) : []; } catch { return []; } })(),
     };
   }
 
@@ -140,6 +149,14 @@ export class NfceService {
       numeroAtual: number;
       certPfxB64: string;
       certPfxPass: string;
+      // Identidade da NF-e quando difere da NFC-e (todos opcionais)
+      nfeCnpj: string;
+      nfeIe: string;
+      nfeRazaoSocial: string;
+      nfeFantasia: string;
+      nfeRegime: string;
+      nfeEndereco: any;
+      nfeIdentidadesExtras: any;
     }>,
   ) {
     if (!storeCode) throw new BadRequestException('storeCode obrigatório');
@@ -177,6 +194,23 @@ export class NfceService {
     if (input.cscToken) data.cscToken = input.cscToken.replace(/[^\x21-\x7E]/g, '');
     if (input.certPfxB64) data.certPfxB64 = input.certPfxB64;
     if (input.certPfxPass) data.certPfxPass = input.certPfxPass;
+    // Identidade da NF-e (nota grande) quando difere da NFC-e — string vazia
+    // limpa o override (volta a usar os dados da NFC-e).
+    if (input.nfeCnpj != null) data.nfeCnpj = input.nfeCnpj.replace(/\D/g, '') || null;
+    if (input.nfeIe != null) data.nfeIe = input.nfeIe.replace(/\D/g, '') || null;
+    if (input.nfeRazaoSocial != null) data.nfeRazaoSocial = input.nfeRazaoSocial.trim() || null;
+    if (input.nfeFantasia != null) data.nfeFantasia = input.nfeFantasia.trim() || null;
+    if (input.nfeRegime != null) data.nfeRegime = input.nfeRegime || null;
+    if (input.nfeEndereco != null) {
+      const hasEnd = input.nfeEndereco && Object.values(input.nfeEndereco).some((v) => String(v || '').trim());
+      data.nfeEndereco = hasEnd ? JSON.stringify(input.nfeEndereco) : null;
+    }
+    if (input.nfeIdentidadesExtras != null) {
+      // Só guarda identidades com CNPJ preenchido (14 dígitos); vazio limpa.
+      const arr = Array.isArray(input.nfeIdentidadesExtras) ? input.nfeIdentidadesExtras : [];
+      const limpas = arr.filter((e: any) => String(e?.cnpj || '').replace(/\D/g, '').length === 14);
+      data.nfeIdentidadesExtras = limpas.length ? JSON.stringify(limpas) : null;
+    }
 
     if (existing) {
       await (this.prisma as any).nfceConfig.update({
@@ -283,9 +317,9 @@ export class NfceService {
     const docDest = (sale.customerCpf || '').replace(/\D/g, '');
     let dest = '';
     if (docDest.length === 11) {
-      dest = `<dest><CPF>${docDest}</CPF><xNome>${this.esc(sale.customerName || 'CONSUMIDOR')}</xNome><indIEDest>9</indIEDest></dest>`;
+      dest = `<dest><CPF>${docDest}</CPF><xNome>${this.xmlTexto(sale.customerName, 60, 'CONSUMIDOR')}</xNome><indIEDest>9</indIEDest></dest>`;
     } else if (docDest.length === 14) {
-      dest = `<dest><CNPJ>${docDest}</CNPJ><xNome>${this.esc(sale.customerName || 'CONSUMIDOR')}</xNome><indIEDest>9</indIEDest></dest>`;
+      dest = `<dest><CNPJ>${docDest}</CNPJ><xNome>${this.xmlTexto(sale.customerName, 60, 'CONSUMIDOR')}</xNome><indIEDest>9</indIEDest></dest>`;
     } else if (docDest.length > 0) {
       this.logger.warn(`[nfce] customerCpf com ${docDest.length} digitos invalidos: ${docDest}. Emitindo sem destinatario.`);
     }
@@ -305,11 +339,22 @@ export class NfceService {
     // Lógica: o desconto EFETIVO total = brutoTotal − sale.total. Subtrai a
     // soma dos descontos JÁ aplicados nos itens — o que sobra é o desconto
     // adicional na venda toda, que distribuímos proporcionalmente.
-    const brutoTotal = items.reduce(
+    // ITENS FISCAIS: só valores >= 0. Linha manual de DESCONTO (valor negativo,
+    // ex.: "desconto df" -R$29,90) NÃO pode virar <det> com vProd negativo (o
+    // schema rejeita, cStat 225) — ela entra como DESCONTO, rateado nos itens
+    // pela lógica abaixo (brutoFiscal − total = desconto a distribuir).
+    const itensFiscais = items.filter((it: any) => Number(it.precoUnit || 0) >= 0 && Number(it.qty || 0) > 0);
+    const brutoTotal = itensFiscais.reduce(
       (s: number, it: any) => s + (it.qty || 0) * (it.precoUnit || 0),
       0,
     );
-    const totalLiquido = Number(sale.total || 0);
+    // VALE-TROCA entra como DESCONTO (não pagamento) — o líquido tributável
+    // é o que a cliente pagou de verdade. SEFAZ exige vDesc(itens) somando
+    // o vDesc total (cStat 537), então o vale precisa ser rateado aqui.
+    const valeDesconto = ((sale.payments || []) as any[])
+      .filter((p: any) => ['vale_troca', 'vale', 'troca'].includes(String(p.method || '').toLowerCase()))
+      .reduce((s: number, p: any) => s + (Number(p.valor) || 0), 0);
+    const totalLiquido = Math.max(0, Number(sale.total || 0) - valeDesconto);
     const descontoEfetivoTotal = Math.max(0, brutoTotal - totalLiquido);
     const somaDescontosItens = items.reduce(
       (s: number, it: any) => s + Number(it.desconto || 0),
@@ -320,25 +365,53 @@ export class NfceService {
       descontoEfetivoTotal - somaDescontosItens,
     );
 
+    // ── RATEIO DO DESCONTO POR ITEM ──────────────────────────────────────
+    //
+    // Dois bugs reais corrigidos aqui (rejeição 225 em Jundiaí, 28/07, nota
+    // 164 de R$ 2.483,15 — o XML salvo tinha `<vDesc>-3.47</vDesc>`):
+    //
+    //  1. vDesc NEGATIVO derruba o lote. O schema define vDesc como decimal
+    //     não-negativo. Item com `desconto` negativo no PDV (acréscimo
+    //     lançado como desconto ao contrário) ia direto pro XML.
+    //  2. ÍNDICE DESALINHADO: o mapa era preenchido percorrendo `items`
+    //     (lista completa) e lido percorrendo `itensFiscais` (sem as linhas
+    //     de valor negativo). Com uma linha de desconto no meio, o desconto
+    //     de um item caía em outro.
+    //
+    // Agora percorre a MESMA lista do <det> e distribui o desconto efetivo
+    // proporcional ao bruto, sempre dentro de [0, bruto do item]. O resíduo
+    // de arredondamento vai pro item que tiver folga — a soma dos vDesc
+    // precisa bater com o vDesc do total (senão cai em cStat 537).
     const descontoPorItem = new Map<number, number>();
-    let descAcumulado = 0;
-    items.forEach((it: any, idx: number) => {
+    const alvoDesconto = Math.min(
+      Math.max(0, descontoEfetivoTotal),
+      brutoTotal, // desconto nunca passa do bruto: vBC não pode ficar negativo
+    );
+    let distribuido = 0;
+    itensFiscais.forEach((it: any, idx: number) => {
       const bruto = (it.qty || 0) * (it.precoUnit || 0);
-      const descItemOriginal = Number(it.desconto || 0);
-      let parcelaExtra: number;
-      if (idx === items.length - 1) {
-        // Último item: pega o resíduo pra fechar o total exato (anti-rounding)
-        parcelaExtra = Math.max(0, descontoVendaExtra - descAcumulado);
-      } else if (brutoTotal > 0) {
-        parcelaExtra = Number(
-          ((bruto / brutoTotal) * descontoVendaExtra).toFixed(2),
-        );
-        descAcumulado += parcelaExtra;
-      } else {
-        parcelaExtra = 0;
+      let parcela = 0;
+      if (alvoDesconto > 0 && brutoTotal > 0) {
+        parcela = Number(((bruto / brutoTotal) * alvoDesconto).toFixed(2));
+        parcela = Math.min(Math.max(0, parcela), bruto);
       }
-      descontoPorItem.set(idx, descItemOriginal + parcelaExtra);
+      descontoPorItem.set(idx, parcela);
+      distribuido += parcela;
     });
+
+    // Resíduo do arredondamento (centavos): joga em quem tem espaço.
+    let residuo = Number((alvoDesconto - distribuido).toFixed(2));
+    if (Math.abs(residuo) >= 0.01) {
+      for (let idx = 0; idx < itensFiscais.length && Math.abs(residuo) >= 0.01; idx++) {
+        const it: any = itensFiscais[idx];
+        const bruto = (it.qty || 0) * (it.precoUnit || 0);
+        const atual = descontoPorItem.get(idx) || 0;
+        const novo = Math.min(Math.max(0, Number((atual + residuo).toFixed(2))), bruto);
+        residuo = Number((residuo - (novo - atual)).toFixed(2));
+        descontoPorItem.set(idx, novo);
+      }
+    }
+    void descontoVendaExtra; // mantido acima só pra leitura do cálculo
 
     // Regime tributário define que tipo de bloco ICMS/PIS/COFINS gera:
     //   CRT=1: Simples Nacional       → CSOSN/PISNT/COFINSNT
@@ -375,7 +448,7 @@ export class NfceService {
     let vIBSMunTot = 0;
     let vCBSTot = 0;
 
-    const detLines = items
+    const detLines = itensFiscais
       .map((it: any, idx: number) => {
         const nItem = idx + 1;
         const cProd = it.sku || `SEM-CODIGO-${nItem}`;
@@ -404,6 +477,11 @@ export class NfceService {
         const ncm = isValidNcm(ncmFromErp) && !ncmFallbackItems?.has(idx)
           ? ncmFromErp
           : (isSimples ? '00000000' : '61099000');
+        // cEAN/cEANTrib: o schema só aceita "SEM GTIN" ou 8/12/13/14 dígitos.
+        // EAN torto no cadastro (7/9/10/11 díg, letra, espaço) derrubava o cupom
+        // inteiro com cStat 225 (mesmo bug que a NF-e tinha). Fora do padrão → SEM GTIN.
+        const eanRaw = String(it.ean || '').trim();
+        const cEAN = /^(\d{8}|\d{12,14})$/.test(eanRaw) ? eanRaw : 'SEM GTIN';
         const cfop = it.cfop || '5102';
         const vUnCom = (it.precoUnit || 0).toFixed(2);
         // vProd = bruto sem descontos (qty × precoUnit). vDesc é separado.
@@ -452,16 +530,16 @@ export class NfceService {
         return `
     <det nItem="${nItem}">
       <prod>
-        <cProd>${this.esc(cProd)}</cProd>
-        <cEAN>${this.esc(it.ean || 'SEM GTIN')}</cEAN>
-        <xProd>${this.esc(xProd)}</xProd>
+        <cProd>${this.xmlTexto(cProd, 60, 'SEM-CODIGO')}</cProd>
+        <cEAN>${cEAN}</cEAN>
+        <xProd>${this.xmlTexto(xProd, 120, 'PRODUTO')}</xProd>
         <NCM>${ncm}</NCM>
         <CFOP>${cfop}</CFOP>
         <uCom>UN</uCom>
         <qCom>${(it.qty || 1).toFixed(4)}</qCom>
         <vUnCom>${vUnCom}</vUnCom>
         <vProd>${vProd}</vProd>
-        <cEANTrib>${this.esc(it.ean || 'SEM GTIN')}</cEANTrib>
+        <cEANTrib>${cEAN}</cEANTrib>
         <uTrib>UN</uTrib>
         <qTrib>${(it.qty || 1).toFixed(4)}</qTrib>
         <vUnTrib>${vUnCom}</vUnTrib>
@@ -476,22 +554,41 @@ export class NfceService {
       })
       .join('\n');
 
-    // vProd = soma dos (qty × precoUnit) sem descontos — bruto
-    const vTotProdNum = items.reduce(
+    // vProd = soma dos (qty × precoUnit) dos itens FISCAIS (sem as linhas de
+    // desconto negativas). vDesc absorve a diferença pro vNF (= sale.total).
+    const vTotProdNum = itensFiscais.reduce(
       (s, it) => s + (it.qty || 0) * (it.precoUnit || 0),
       0,
     );
-    const vNFNum = Number(sale.total || 0);
+    // ⚠ VALE-TROCA é DESCONTO fiscal, NÃO pagamento (GRAVÍSSIMO da NFC-e 94
+    // Moema 21/07: nota saiu com vNF CHEIO R$ 1.429 com o vale de R$ 559,80
+    // dentro do "MULTIPLO"). A peça devolvida já pagou ICMS na nota original —
+    // a nota nova só pode tributar o que a cliente efetivamente pagou:
+    //   vNF = sale.total − vale · vale entra no vDesc · detPag SEM o vale.
+    const valeTrocaTotal = ((sale.payments || []) as any[])
+      .filter((p: any) => ['vale_troca', 'vale', 'troca'].includes(String(p.method || '').toLowerCase()))
+      .reduce((s: number, p: any) => s + (Number(p.valor) || 0), 0);
+    const vNFNum = Math.round((Number(sale.total || 0) - valeTrocaTotal) * 100) / 100;
+    if (vNFNum <= 0.009) {
+      // Troca PAR (vale cobre 100%): a NFC-e original já cobriu o ICMS —
+      // não há fato gerador novo, NÃO se emite nota com vNF zero.
+      throw new BadRequestException(
+        'Venda coberta 100% pelo vale-troca (troca par) — sem valor a tributar, NFC-e não deve ser emitida.',
+      );
+    }
     // SEFAZ valida: vNF = vProd - vDesc. Calcula vDesc TOTAL como diferença
-    // entre o bruto e o que cliente realmente pagou. Cobre tanto descontos
-    // por item quanto descontos aplicados na venda inteira (ex: -R$ 22,90
-    // aplicados via /sales/:id/discount).
+    // entre o bruto e o que cliente realmente pagou (inclui o vale-troca,
+    // descontos por item e descontos na venda inteira).
     const vDescTotNum = Math.max(0, vTotProdNum - vNFNum);
     const vTotProd = vTotProdNum.toFixed(2);
     const vDescTot = vDescTotNum.toFixed(2);
     const vNF = vNFNum.toFixed(2);
 
-    const payments = (sale.payments || []) as any[];
+    // detPag SEM os pagamentos de vale (viraram vDesc acima) — soma dos
+    // <vPag> tem que bater com o vNF.
+    const payments = ((sale.payments || []) as any[]).filter(
+      (p: any) => !['vale_troca', 'vale', 'troca'].includes(String(p.method || '').toLowerCase()),
+    );
     // CNPJ usado como "instituição de pagamento" no grupo <card>. Usa o CNPJ do
     // próprio emitente como genérico (comprovado em produção: SEFAZ ACEITA — a
     // nota 110 com esse formato passou no cartão; só caiu por outro motivo).
@@ -639,6 +736,34 @@ export class NfceService {
     const urlChave = buildUrlConsultaNfce(ambiente as '1' | '2');
     // CDATA pra escapar `&` da URL (SEFAZ exige)
     return `<infNFeSupl><qrCode><![CDATA[${qrUrl}]]></qrCode><urlChave>${urlChave}</urlChave></infNFeSupl>`;
+  }
+
+  /**
+   * TEXTO SEGURO PRO SCHEMA (cStat 225 — Falha no Schema XML).
+   *
+   * O `esc()` sozinho só escapa & < > " ' e não protege contra as duas coisas
+   * que mais derrubam cupom por falha de schema:
+   *
+   *   1. campo passando do MaxLength — xProd 120, cProd 60, xNome 60. Uma
+   *      descrição longa colada no cadastro derruba o LOTE inteiro.
+   *   2. caractere de controle (quebra de linha, tab, 0x00–0x1F, 0x7F) vindo
+   *      de texto copiado — XML 1.0 não aceita e o parser da SEFAZ recusa.
+   *
+   * Também colapsa espaço repetido e devolve o fallback quando sobra string
+   * vazia (o schema exige minLength 1 nesses campos).
+   *
+   * Filtra por charCode de propósito: escape unicode em regex já se perdeu em
+   * edição automatizada e virou byte NUL no arquivo.
+   */
+  private xmlTexto(valor: any, max: number, fallback = 'ITEM'): string {
+    const semControle = Array.from(String(valor ?? ''))
+      .map((c) => {
+        const code = c.charCodeAt(0);
+        return code < 32 || code === 127 ? ' ' : c;
+      })
+      .join('');
+    const limpo = semControle.replace(/\s+/g, ' ').trim().slice(0, max).trim();
+    return this.esc(limpo || fallback);
   }
 
   private esc(s: string): string {
@@ -839,6 +964,14 @@ export class NfceService {
       this.logger.error(
         `[nfce] SEFAZ rejeitou: cStat=${transmit.cStat} ${transmit.xMotivo}`,
       );
+      // 225 = falha de SCHEMA. Sem o XML na mão, achar o campo torto vira
+      // adivinhação (foi o que aconteceu em Jundiaí 31/07). É documento
+      // fiscal da própria loja — nada de terceiro no log.
+      if (String(transmit.cStat) === '225') {
+        this.logger.error(
+          `[nfce] 225 schema · venda=${sale.id} loja=${sale.storeCode} · XML: ${xmlAssinado}`,
+        );
+      }
       await (this.prisma as any).pdvSale.update({
         where: { id: sale.id },
         data: {

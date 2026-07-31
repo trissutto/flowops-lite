@@ -17,7 +17,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import {
   ArrowLeft, Loader2, FileText, Calendar, CheckCircle2, AlertTriangle,
-  Edit3, Plus, Clock,
+  Edit3, Plus, Clock, Users, RefreshCw, Search, Smartphone, Monitor,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -89,6 +89,41 @@ const MESES = [
   'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro',
 ];
 
+// ── TELA DO DIA (dono 30/07): batidas de todas em tempo real ──
+type DiaFunc = {
+  sellerId: string;
+  nome: string;
+  nomeCompleto: string | null;
+  cargo: string | null;
+  storeCode: string;
+  storeName: string;
+  status: 'trabalhando' | 'almoco' | 'saiu' | 'incompleto';
+  ultimaHora: string | null;
+  batidas: Array<{ id: string; tipo: string; hora: string; source: string; justificado: boolean }>;
+};
+type DiaView = {
+  data: string;
+  geradoEm: string;
+  totais: { funcionarias: number; trabalhando: number; almoco: number; sairam: number; batidas: number };
+  lojas: Array<{ storeId: string; storeCode: string; storeName: string; funcionarias: DiaFunc[] }>;
+};
+
+const TIPO_LABEL: Record<string, string> = {
+  entrada: 'E', saida_almoco: 'SA', volta_almoco: 'VA', saida: 'S',
+};
+const STATUS_PILL: Record<string, { label: string; cls: string }> = {
+  trabalhando: { label: '🟢 Trabalhando', cls: 'bg-emerald-100 text-emerald-800' },
+  almoco: { label: '🍽️ Almoço', cls: 'bg-amber-100 text-amber-800' },
+  saiu: { label: 'Saiu', cls: 'bg-slate-100 text-slate-600' },
+  incompleto: { label: '⚠️ Incompleto', cls: 'bg-rose-100 text-rose-700' },
+};
+
+const hojeInput = () => {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+};
+
 export default function EspelhoPontoPage() {
   const now = new Date();
   const [sellers, setSellers] = useState<Seller[]>([]);
@@ -97,6 +132,91 @@ export default function EspelhoPontoPage() {
   const [mes, setMes] = useState(now.getMonth() + 1);
   const [espelho, setEspelho] = useState<Espelho | null>(null);
   const [loading, setLoading] = useState(false);
+
+  // ── TELA DO DIA (default): todas as batidas, ao vivo ──
+  const [modo, setModo] = useState<'dia' | 'mes'>('dia');
+  const [diaData, setDiaData] = useState(hojeInput());
+  const [dia, setDia] = useState<DiaView | null>(null);
+  const [diaLoading, setDiaLoading] = useState(false);
+  const [diaBusca, setDiaBusca] = useState('');
+
+  const loadDia = () => {
+    setDiaLoading(true);
+    api<DiaView>(`/ponto/dia?data=${diaData}`)
+      .then(setDia)
+      .catch(() => setDia(null))
+      .finally(() => setDiaLoading(false));
+  };
+
+  // ── Corrigir/excluir batida errada (dono 30/07) ──
+  const [editBatida, setEditBatida] = useState<{
+    id: string; funcNome: string; tipo: string; hora: string;
+  } | null>(null);
+  const [editTipo, setEditTipo] = useState('entrada');
+  const [editHora, setEditHora] = useState('');
+  const [editJust, setEditJust] = useState('');
+  const [editBusy, setEditBusy] = useState(false);
+
+  const abrirEdicao = (f: DiaFunc, b: DiaFunc['batidas'][0]) => {
+    const hhmm = new Date(b.hora).toLocaleTimeString('pt-BR', {
+      hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo',
+    });
+    setEditBatida({ id: b.id, funcNome: f.nome, tipo: b.tipo, hora: hhmm });
+    setEditTipo(b.tipo);
+    setEditHora(hhmm);
+    setEditJust('');
+  };
+
+  const salvarEdicao = async () => {
+    if (!editBatida) return;
+    if (editJust.trim().length < 3) { alert('Escreva a justificativa (mínimo 3 letras).'); return; }
+    setEditBusy(true);
+    try {
+      // Horário editado é no dia selecionado, em horário de Brasília
+      const timestamp = new Date(`${diaData}T${editHora}:00-03:00`).toISOString();
+      await api(`/ponto/registro/${editBatida.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ tipo: editTipo, timestamp, justificativa: editJust.trim() }),
+      });
+      setEditBatida(null);
+      loadDia();
+    } catch (e: any) {
+      alert('Erro: ' + (e?.message || e));
+    } finally {
+      setEditBusy(false);
+    }
+  };
+
+  const excluirBatida = async () => {
+    if (!editBatida) return;
+    if (editJust.trim().length < 3) { alert('Escreva o motivo da exclusão (mínimo 3 letras).'); return; }
+    if (!confirm(`EXCLUIR a batida ${TIPO_LABEL[editBatida.tipo] || editBatida.tipo} ${editBatida.hora} de ${editBatida.funcNome}?`)) return;
+    setEditBusy(true);
+    try {
+      await api(`/ponto/registro/${editBatida.id}`, {
+        method: 'DELETE',
+        body: JSON.stringify({ motivo: editJust.trim() }),
+      });
+      setEditBatida(null);
+      loadDia();
+    } catch (e: any) {
+      alert('Erro: ' + (e?.message || e));
+    } finally {
+      setEditBusy(false);
+    }
+  };
+  useEffect(() => {
+    if (modo !== 'dia') return;
+    loadDia();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modo, diaData]);
+  // Tempo real prático: repuxa a cada 30s enquanto a aba Dia está aberta
+  useEffect(() => {
+    if (modo !== 'dia') return;
+    const t = setInterval(loadDia, 30_000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modo, diaData]);
 
   useEffect(() => {
     api<Seller[]>('/sellers?includeInactive=0')
@@ -130,6 +250,236 @@ export default function EspelhoPontoPage() {
       </header>
 
       <div className="max-w-6xl mx-auto p-4 space-y-4">
+        {/* Abas: Dia (ao vivo) × Espelho mensal */}
+        <div className="flex gap-2">
+          <button
+            onClick={() => setModo('dia')}
+            className={`px-4 py-2 rounded-lg font-bold text-sm flex items-center gap-2 ${
+              modo === 'dia' ? 'bg-emerald-600 text-white shadow' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+            }`}
+          >
+            <Clock className="w-4 h-4" /> Dia (ao vivo)
+          </button>
+          <button
+            onClick={() => setModo('mes')}
+            className={`px-4 py-2 rounded-lg font-bold text-sm flex items-center gap-2 ${
+              modo === 'mes' ? 'bg-emerald-600 text-white shadow' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+            }`}
+          >
+            <Calendar className="w-4 h-4" /> Espelho mensal
+          </button>
+        </div>
+
+        {/* ── TELA DO DIA ── */}
+        {modo === 'dia' && (
+          <>
+            <div className="bg-white border border-slate-200 rounded-xl p-3 flex flex-wrap items-center gap-3">
+              <input
+                type="date"
+                value={diaData}
+                onChange={(e) => setDiaData(e.target.value)}
+                className="px-3 py-2 border rounded text-sm"
+              />
+              <button
+                onClick={() => setDiaData(hojeInput())}
+                className="px-3 py-2 rounded border border-slate-200 text-sm font-bold text-slate-600 hover:bg-slate-50"
+              >
+                Hoje
+              </button>
+              <div className="relative flex-1 min-w-[180px]">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                <input
+                  value={diaBusca}
+                  onChange={(e) => setDiaBusca(e.target.value)}
+                  placeholder="Buscar funcionária ou loja…"
+                  className="w-full pl-8 pr-3 py-2 border rounded text-sm"
+                />
+              </div>
+              <button
+                onClick={loadDia}
+                className="p-2 rounded border border-slate-200 hover:bg-slate-50"
+                title="Atualizar agora (atualiza sozinho a cada 30s)"
+              >
+                <RefreshCw className={`w-4 h-4 text-slate-600 ${diaLoading ? 'animate-spin' : ''}`} />
+              </button>
+            </div>
+
+            {dia && (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <StatBox label="Bateram ponto" value={String(dia.totais.funcionarias)} color="slate" />
+                <StatBox label="🟢 Trabalhando" value={String(dia.totais.trabalhando)} color="emerald" />
+                <StatBox label="🍽️ No almoço" value={String(dia.totais.almoco)} color="slate" />
+                <StatBox label="Já saíram" value={String(dia.totais.sairam)} color="slate" />
+              </div>
+            )}
+
+            {diaLoading && !dia && (
+              <div className="text-center py-8">
+                <Loader2 className="w-6 h-6 animate-spin mx-auto text-emerald-600" />
+              </div>
+            )}
+
+            {dia && dia.lojas.length === 0 && (
+              <div className="bg-white border border-dashed border-slate-300 rounded-xl p-8 text-center text-sm text-slate-500">
+                Nenhuma batida registrada neste dia (ainda).
+              </div>
+            )}
+
+            {dia && dia.lojas
+              .map((l) => ({
+                ...l,
+                funcionarias: l.funcionarias.filter((f) => {
+                  const q = diaBusca.trim().toUpperCase();
+                  if (!q) return true;
+                  return (
+                    f.nome.toUpperCase().includes(q) ||
+                    (f.nomeCompleto || '').toUpperCase().includes(q) ||
+                    l.storeName.toUpperCase().includes(q) ||
+                    l.storeCode.toUpperCase().includes(q)
+                  );
+                }),
+              }))
+              .filter((l) => l.funcionarias.length > 0)
+              .map((l) => (
+                <div key={l.storeId} className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+                  <div className="px-4 py-2 bg-slate-100 border-b border-slate-200 flex items-center gap-2">
+                    <Users className="w-4 h-4 text-slate-600" />
+                    <span className="font-bold text-sm text-slate-800">
+                      {l.storeCode} {l.storeName}
+                    </span>
+                    <span className="text-xs text-slate-500">({l.funcionarias.length})</span>
+                  </div>
+                  <div className="divide-y divide-slate-100">
+                    {l.funcionarias.map((f) => (
+                      <div
+                        key={f.sellerId}
+                        className="px-4 py-2 flex flex-wrap items-center gap-x-4 gap-y-1 hover:bg-slate-50 cursor-pointer"
+                        title="Clique pra abrir o espelho mensal"
+                        onClick={() => { setSellerId(f.sellerId); setModo('mes'); }}
+                      >
+                        <div className="min-w-[160px]">
+                          <span className="font-bold text-sm text-slate-800">{f.nome}</span>
+                          {f.cargo && f.cargo !== 'VENDEDORA' && (
+                            <span className="ml-2 text-[10px] uppercase text-slate-400">{f.cargo}</span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1.5 font-mono text-xs">
+                          {f.batidas.map((b) => (
+                            <button
+                              key={b.id}
+                              type="button"
+                              title={`${b.tipo} · ${b.source}${b.justificado ? ' · justificado' : ''} — clique pra corrigir/excluir`}
+                              onClick={(e) => { e.stopPropagation(); abrirEdicao(f, b); }}
+                              className={`px-1.5 py-0.5 rounded border hover:ring-2 hover:ring-slate-300 ${
+                                b.tipo === 'entrada'
+                                  ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                                  : b.tipo === 'saida'
+                                    ? 'border-slate-200 bg-slate-50 text-slate-600'
+                                    : 'border-amber-200 bg-amber-50 text-amber-800'
+                              }`}
+                            >
+                              {TIPO_LABEL[b.tipo] || b.tipo} {fmtHora(b.hora)}
+                              {b.source === 'pwa_selfie' ? ' 📱' : b.source === 'manual_admin' ? ' ✍️' : ''}
+                              {b.justificado ? ' *' : ''}
+                            </button>
+                          ))}
+                        </div>
+                        <span className={`ml-auto text-[11px] font-bold px-2 py-0.5 rounded-full ${STATUS_PILL[f.status]?.cls || ''}`}>
+                          {STATUS_PILL[f.status]?.label || f.status}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+
+            {dia && (
+              <p className="text-[11px] text-slate-400 text-right">
+                Atualiza sozinho a cada 30s · clique numa batida pra corrigir/excluir · E entrada · SA saída almoço · VA volta · S saída · 📱 celular · ✍️ manual · * corrigida
+              </p>
+            )}
+
+            {/* Modal corrigir/excluir batida */}
+            {editBatida && (
+              <div
+                className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+                onClick={() => !editBusy && setEditBatida(null)}
+              >
+                <div
+                  className="bg-white rounded-xl shadow-2xl w-full max-w-sm p-5 space-y-3"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <h3 className="font-black text-slate-800 flex items-center gap-2">
+                    <Edit3 className="w-4 h-4 text-slate-600" />
+                    Corrigir batida — {editBatida.funcNome}
+                  </h3>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-bold uppercase text-slate-500 mb-1">Tipo</label>
+                      <select
+                        value={editTipo}
+                        onChange={(e) => setEditTipo(e.target.value)}
+                        className="w-full px-3 py-2 border rounded text-sm"
+                      >
+                        <option value="entrada">Entrada</option>
+                        <option value="saida_almoco">Saída almoço</option>
+                        <option value="volta_almoco">Volta almoço</option>
+                        <option value="saida">Saída</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold uppercase text-slate-500 mb-1">Horário</label>
+                      <input
+                        type="time"
+                        value={editHora}
+                        onChange={(e) => setEditHora(e.target.value)}
+                        className="w-full px-3 py-2 border rounded text-sm font-mono"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold uppercase text-slate-500 mb-1">
+                      Justificativa / motivo <span className="text-rose-600">*</span>
+                    </label>
+                    <textarea
+                      value={editJust}
+                      onChange={(e) => setEditJust(e.target.value)}
+                      rows={2}
+                      placeholder="Ex.: bateu duas vezes sem querer / horário errado"
+                      className="w-full px-3 py-2 border rounded text-sm"
+                    />
+                  </div>
+                  <div className="flex gap-2 pt-1">
+                    <button
+                      onClick={excluirBatida}
+                      disabled={editBusy}
+                      className="px-3 py-2 rounded-lg border border-rose-300 text-rose-700 hover:bg-rose-50 font-bold text-sm disabled:opacity-50"
+                    >
+                      Excluir
+                    </button>
+                    <button
+                      onClick={() => setEditBatida(null)}
+                      disabled={editBusy}
+                      className="flex-1 px-3 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 font-bold text-sm disabled:opacity-50"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      onClick={salvarEdicao}
+                      disabled={editBusy}
+                      className="flex-1 px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm disabled:opacity-50"
+                    >
+                      {editBusy ? '...' : 'Salvar'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+
+        {modo === 'mes' && (
+        <>
         {/* Filtros */}
         <div className="bg-white border border-slate-200 rounded-xl p-4 grid grid-cols-1 md:grid-cols-3 gap-3">
           <div>
@@ -322,6 +672,8 @@ export default function EspelhoPontoPage() {
               Selecione uma funcionária pra ver o espelho mensal
             </p>
           </div>
+        )}
+        </>
         )}
       </div>
     </div>

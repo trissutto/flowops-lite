@@ -44,8 +44,10 @@ export class CrediarioMirrorService {
 
   // ── CRONS ────────────────────────────────────────────────────────────────
 
-  /** Parcelas abertas — de hora em hora (min 41). */
-  @Cron('41 * * * *', { name: 'crediario-mirror-abertas' })
+  /** Parcelas abertas — A CADA 10 MINUTOS (14/07, pedido do dono: espelho do
+   *  crediário fresco pras telas de baixa/cobrança). Guard `running` evita
+   *  overlap se o Giga demorar. */
+  @Cron('*/10 * * * *', { name: 'crediario-mirror-abertas' })
   async cronAbertas(): Promise<void> {
     if (!this.cronEnabled) return;
     if (this.running) return;
@@ -123,17 +125,28 @@ export class CrediarioMirrorService {
     where.push(`\`${map.codCliente}\` <> ''`);
     where.push(`\`${map.codCliente}\` <> '0'`);
 
-    // Busca TUDO em memória (tipicamente 5-15k linhas) e faz replace atômico.
-    const [rows] = await pool.query({
-      sql: `SELECT ${sel.join(', ')} FROM \`movimento\` WHERE ${where.join(' AND ')} LIMIT 50000`,
-      timeout: 120_000,
-    });
+    // LEITURA PAGINADA, SEM TETO (31/07). Antes era `LIMIT 50000` numa tacada
+    // só, com o comentário "tipicamente 5-15k linhas". A realidade era 72.831
+    // parcelas em aberto: 22.831 (R$ 2,3 mi) nunca entravam no espelho, sem
+    // erro nenhum. Quem ligava CREDIARIO_NATIVE_READS via crediário sumir.
+    const leitura = await this.erp.readAllPages(
+      `SELECT ${sel.join(', ')} FROM \`movimento\` WHERE ${where.join(' AND ')}`,
+      { orderBy: `\`${map.registro}\``, batch: 10_000, timeoutMs: 120_000 },
+    );
+    const rows = leitura.rows;
+    if (leitura.truncado) {
+      // NUNCA substituir o espelho por uma leitura incompleta — melhor o
+      // espelho velho inteiro que um novo pela metade.
+      throw new Error(`leitura do movimento truncada no teto (${rows.length} linhas) — espelho preservado`);
+    }
 
     const seen = new Set<string>();
+    let duplicados = 0;
     const data = (rows as any[])
       .filter((r) => {
         const reg = String(r.registro ?? '').trim();
-        if (!reg || seen.has(reg)) return false;
+        if (!reg) return false;
+        if (seen.has(reg)) { duplicados++; return false; }
         seen.add(reg);
         return true;
       })
@@ -163,7 +176,16 @@ export class CrediarioMirrorService {
       }
     }, { timeout: 60_000 });
 
-    this.logger.log(`[abertas] OK — ${data.length} parcelas em ${Date.now() - t0}ms`);
+    if (duplicados) {
+      // `registro` é @id no espelho. Se o Giga tiver o mesmo registro em mais
+      // de uma linha, o espelho só guarda uma — e a diferença some calada.
+      this.logger.error(
+        `[abertas] ${duplicados} linha(s) descartada(s) por REGISTRO repetido — o espelho perde essas parcelas. Investigar antes de confiar no CREDIARIO_NATIVE_READS.`,
+      );
+    }
+    this.logger.log(
+      `[abertas] OK — ${data.length} parcelas de ${rows.length} lidas (${leitura.paginas} página(s)) em ${Date.now() - t0}ms`,
+    );
     return { processed: data.length, durationMs: Date.now() - t0 };
   }
 

@@ -45,7 +45,7 @@ export class SellersController {
 
   @Post()
   @AdminOnly()
-  create(@Body() body: { name: string; whatsapp?: string }) {
+  create(@Body() body: { name: string; apelido?: string; whatsapp?: string }) {
     return this.svc.create(body);
   }
 
@@ -71,6 +71,26 @@ export class SellersController {
     return this.svc.importFromWincred();
   }
 
+  /**
+   * UNIFICA GRAFIAS de uma vendedora numa loja (dono 29/07). Body:
+   *   { storeCode: '07', from: ['MIRELLA','MIRELA DA SILVA'], to: 'MIRELA', dryRun?: true }
+   * dryRun devolve o preview (contagens + fichas afetadas) sem alterar nada.
+   */
+  @Post('unify')
+  @AdminOnly()
+  unify(
+    @Body() body: { storeCode: string; from: string[]; to: string; dryRun?: boolean },
+    @Req() req: any,
+  ) {
+    return this.svc.unifySpellings({
+      storeCode: body?.storeCode,
+      from: Array.isArray(body?.from) ? body.from : [],
+      to: body?.to,
+      dryRun: !!body?.dryRun,
+      by: req?.user?.email || req?.user?.id || 'unknown',
+    });
+  }
+
   /** Detalhe completo do prontuario + documentos. */
   @Get(':id/detail')
   getDetail(@Param('id') id: string) {
@@ -81,7 +101,7 @@ export class SellersController {
   @AdminOnly()
   update(
     @Param('id') id: string,
-    @Body() body: { name?: string; whatsapp?: string | null; active?: boolean; cargo?: string; responsibleStoreId?: string | null },
+    @Body() body: { name?: string; apelido?: string | null; whatsapp?: string | null; active?: boolean; cargo?: string; responsibleStoreId?: string | null; storeCodeOrigin?: string | null; lojasAtuacao?: string[] | null },
   ) {
     return this.svc.update(id, body);
   }
@@ -167,6 +187,20 @@ export class SellersController {
   @Get('ferias/check')
   checkFerias() {
     return this.cron.checkVacationAlerts();
+  }
+
+  /** CONFERIDOR Flow × Giga por loja (dono 29/07): componentes do Flow
+   *  (bruto/marcados/desconto/devoluções) + caixa do Giga lado a lado. */
+  @Get('report-conferidor')
+  reportConferidor(
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('storeCode') storeCode?: string,
+  ) {
+    const now = new Date();
+    const f = from ? new Date(from) : new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+    const t = to ? new Date(to) : new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+    return this.svc.conferidorLoja(f, t, String(storeCode || '').trim());
   }
 
   @Get('report')

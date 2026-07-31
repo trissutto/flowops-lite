@@ -30,8 +30,9 @@ Var PasswordInput
 
 ; Página custom de senha
 Function PasswordPageCreate
-  !insertmacro MUI_HEADER_TEXT "Senha de Instalação" "Digite a senha autorizada pra instalar o LURDS ORDER ONE."
-
+  ; (Removido MUI_HEADER_TEXT: o installer.nsh é incluído ANTES do MUI2.nsh,
+  ;  então a macro não existe ainda e quebra o build. O texto do topo é só
+  ;  cosmético — a página custom abaixo já explica tudo.)
   nsDialogs::Create 1018
   Pop $Dialog
   ${If} $Dialog == error

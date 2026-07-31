@@ -58,12 +58,15 @@ const fmtDate = (s: string | null) => s ? new Date(s).toLocaleDateString('pt-BR'
 
 type ClienteMatch = {
   codCliente: string;
+  loja?: string;
   nome: string;
   cpf: string;
   classificacao: string;
   limiteTotal: number;
-  qtdMarcados: number;
-  totalMarcados: number;
+  // null = Giga não respondeu a tempo (a busca vem do espelho e não trava);
+  // abre o cliente pra ver os marcados
+  qtdMarcados: number | null;
+  totalMarcados: number | null;
 };
 
 export default function MarcadosPage() {
@@ -78,6 +81,8 @@ export default function MarcadosPage() {
   const [processing, setProcessing] = useState(false);
   const [puxando, setPuxando] = useState(false);
   const [processResult, setProcessResult] = useState<{ ok: number; falhas: string[] } | null>(null);
+  const [dedupPlan, setDedupPlan] = useState<any>(null);
+  const [dedupBusy, setDedupBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { inputRef.current?.focus(); }, []);
@@ -100,7 +105,13 @@ export default function MarcadosPage() {
     const t = setTimeout(async () => {
       setSearching(true);
       try {
-        const r = await api<ClienteMatch[]>(`/pdv/marcados/search?q=${encodeURIComponent(q)}`);
+        // Escopo por loja: só clientes DESTA loja (cadastros repetem por loja)
+        let lojaParam = '';
+        try {
+          const lj = localStorage.getItem('lurds_pdv_store') || '';
+          if (lj) lojaParam = `&loja=${encodeURIComponent(lj)}`;
+        } catch { /* backend usa a loja do token */ }
+        const r = await api<ClienteMatch[]>(`/pdv/marcados/search?q=${encodeURIComponent(q)}${lojaParam}`);
         setMatches(Array.isArray(r) ? r : []);
       } catch {
         setMatches([]);
@@ -125,6 +136,43 @@ export default function MarcadosPage() {
       setErr(e?.message || 'Falha ao buscar cliente');
     } finally {
       setBusy(false);
+    }
+  }
+
+  // ── Corrigir duplicados: preview + aplicar ──
+  // Manda cpf E codCliente — a ficha conta os marcados por cpf OU codCliente,
+  // então a limpeza precisa enxergar exatamente o mesmo conjunto (senão sobra).
+  async function previewDedup() {
+    const cpf = (info?.cliente?.cpf || '').replace(/\D/g, '');
+    const codCliente = info?.cliente?.codCliente || undefined;
+    if (!cpf && !codCliente) { setErr('Cliente sem CPF/código — não dá pra analisar'); return; }
+    setDedupBusy(true); setErr(null); setDedupPlan(null);
+    try {
+      const r = await api<any>('/pdv/marcados/desduplicar', {
+        method: 'POST', body: JSON.stringify({ cpf: cpf || undefined, codCliente, dryRun: true }),
+      });
+      setDedupPlan(r);
+    } catch (e: any) {
+      setErr(e?.message || 'Falha ao analisar duplicados');
+    } finally {
+      setDedupBusy(false);
+    }
+  }
+  async function aplicarDedup() {
+    const cpf = (info?.cliente?.cpf || '').replace(/\D/g, '');
+    const codCliente = info?.cliente?.codCliente || undefined;
+    if (!cpf && !codCliente) return;
+    setDedupBusy(true); setErr(null);
+    try {
+      await api('/pdv/marcados/desduplicar', {
+        method: 'POST', body: JSON.stringify({ cpf: cpf || undefined, codCliente, dryRun: false }),
+      });
+      setDedupPlan(null);
+      if (cpf) await buscarPorCpf(cpf); // recarrega a ficha já corrigida
+    } catch (e: any) {
+      setErr(e?.message || 'Falha ao aplicar correção');
+    } finally {
+      setDedupBusy(false);
     }
   }
 
@@ -299,12 +347,12 @@ export default function MarcadosPage() {
         {matches.length > 0 && !info && (
           <div className="mt-2 border rounded-lg overflow-hidden bg-white shadow-md">
             <div className="px-3 py-2 bg-slate-50 border-b text-[11px] uppercase font-bold tracking-wider text-slate-600">
-              {matches.length} cliente(s) com marcados ativos — clique pra abrir
+              {matches.length} cliente(s) — clique pra abrir os marcados
             </div>
             <div className="max-h-[400px] overflow-y-auto">
               {matches.map((m) => (
                 <button
-                  key={m.codCliente}
+                  key={`${m.loja || ''}:${m.codCliente}`}
                   type="button"
                   onClick={() => escolherCliente(m)}
                   className="w-full px-3 py-2.5 hover:bg-blue-50 border-b last:border-b-0 text-left flex items-center gap-3 transition"
@@ -315,8 +363,14 @@ export default function MarcadosPage() {
                   </div>
                   <div className="text-right shrink-0">
                     <div className="text-[10px] uppercase font-bold text-slate-500">Em marca</div>
-                    <div className="font-black text-rose-700 tabular-nums">{brl(m.totalMarcados)}</div>
-                    <div className="text-[10px] text-slate-500">{m.qtdMarcados} peça(s)</div>
+                    {m.totalMarcados == null ? (
+                      <div className="text-[11px] text-slate-400 italic">abre pra ver</div>
+                    ) : (
+                      <>
+                        <div className="font-black text-rose-700 tabular-nums">{brl(m.totalMarcados)}</div>
+                        <div className="text-[10px] text-slate-500">{m.qtdMarcados} peça(s)</div>
+                      </>
+                    )}
                   </div>
                   {m.classificacao === 'A' && (
                     <span className="text-[10px] font-black bg-emerald-600 text-white px-1.5 py-0.5 rounded">A</span>
@@ -368,7 +422,58 @@ export default function MarcadosPage() {
                 </span>
               )}
             </div>
+            {/* Corrigir duplicados (admin) — marcação repetida no PDV */}
+            {info.marcadosAtivos.length > 0 && (
+              <div className="mt-3 pt-3 border-t border-emerald-200/60">
+                <button
+                  onClick={previewDedup}
+                  disabled={dedupBusy}
+                  className="text-xs px-3 py-1.5 rounded font-bold border border-amber-400 bg-white text-amber-700 hover:bg-amber-50 disabled:opacity-50"
+                  title="Detecta marcações repetidas (mesma peça marcada várias vezes) e devolve as duplicadas ao estoque"
+                >
+                  {dedupBusy ? '⏳ Analisando…' : '🔧 Corrigir duplicados'}
+                </button>
+              </div>
+            )}
           </div>
+
+          {/* Plano de correção de duplicados (preview antes de aplicar) */}
+          {dedupPlan && (
+            <div className="border-2 border-amber-300 bg-amber-50 rounded-lg p-4">
+              {dedupPlan.pecasRemovidas > 0 ? (
+                <>
+                  <div className="font-bold text-amber-900 mb-1">
+                    Vão sobrar <b>{dedupPlan.produtosMantidos} produto(s)</b> — total{' '}
+                    <b>{brl(dedupPlan.valorMantido || 0)}</b>.
+                  </div>
+                  <div className="text-sm text-amber-800 mb-3">
+                    Vou <b>devolver ao estoque</b> {dedupPlan.pecasRemovidas} peça(s) duplicada(s){' '}
+                    (<b>{brl(dedupPlan.valorRemovido || 0)}</b> das cópias).
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={aplicarDedup}
+                      disabled={dedupBusy}
+                      className="text-xs px-4 py-2 rounded font-bold bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50"
+                    >
+                      {dedupBusy ? '⏳ Aplicando…' : `Aplicar — deixar em ${brl(dedupPlan.valorMantido || 0)}`}
+                    </button>
+                    <button
+                      onClick={() => setDedupPlan(null)}
+                      className="text-xs px-4 py-2 rounded font-bold bg-white border text-slate-600 hover:bg-slate-50"
+                    >
+                      Cancelar
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <div className="text-sm text-emerald-800 flex items-center justify-between gap-2">
+                  <span>✓ Nenhum produto duplicado — está tudo certo ({dedupPlan.produtosMantidos} produto(s)).</span>
+                  <button onClick={() => setDedupPlan(null)} className="text-xs px-3 py-1 rounded border bg-white hover:bg-slate-50">OK</button>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Lista de marcados */}
           {info.marcadosAtivos.length === 0 ? (

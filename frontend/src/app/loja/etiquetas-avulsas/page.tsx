@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 
 /**
  * /loja/etiquetas-avulsas — Imprimir etiquetas avulsas a partir de SKUs/REFs/EANs.
@@ -430,7 +431,7 @@ export default function EtiquetasAvulsasPage() {
 
       {/* MODAL Configurar Etiqueta — parametros visuais persistidos */}
       {showConfig && (
-        <div className="fixed inset-0 bg-black/60 z-50 flex items-start justify-center p-4 overflow-y-auto print:hidden" onClick={() => setShowConfig(false)}>
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-start justify-center p-4 overflow-y-auto print:hidden" {...overlayClose(() => setShowConfig(false))}>
           <div className="bg-white rounded-2xl w-full max-w-2xl my-8 overflow-hidden shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <div className="px-5 py-3 bg-gradient-to-r from-slate-700 to-slate-900 text-white flex items-center justify-between">
               <div>

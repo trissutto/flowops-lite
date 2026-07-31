@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 
 /**
  * Botão "🎓 Modo Treinamento" pro topo do PDV. Clica → modal pede senha →
@@ -59,7 +60,7 @@ export default function TrainingModeButton({ className }: { className?: string }
       </button>
 
       {showModal && (
-        <div className="fixed inset-0 z-[9999] bg-black/60 flex items-center justify-center p-4" onClick={() => !busy && setShowModal(false)}>
+        <div className="fixed inset-0 z-[9999] bg-black/60 flex items-center justify-center p-4" {...overlayClose(() => !busy && setShowModal(false))}>
           <div
             className="bg-white rounded-xl shadow-2xl max-w-sm w-full p-6"
             onClick={(e) => e.stopPropagation()}

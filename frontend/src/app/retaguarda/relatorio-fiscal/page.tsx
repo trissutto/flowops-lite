@@ -227,9 +227,13 @@ export default function RelatorioFiscalPage() {
       </div>
 
       <div className="max-w-7xl mx-auto px-6 py-6 space-y-6">
+        {/* NF-e de transferência entre lojas (mod. 55) — no TOPO pro contador
+            achar sem rolar a tabela gigante de NFC-e */}
+        <NfeTransferSection stores={stores} />
+
         {/* Filtros */}
         <div className="bg-white rounded-xl shadow p-5 space-y-4">
-          <h2 className="text-sm font-bold text-slate-700 uppercase">Filtros</h2>
+          <h2 className="text-sm font-bold text-slate-700 uppercase">Filtros — NFC-e (cupons de venda)</h2>
           <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
             <div>
               <label className="block text-xs font-semibold text-slate-600 mb-1">De</label>
@@ -516,6 +520,371 @@ export default function RelatorioFiscalPage() {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * NF-e modelo 55 (transferência entre lojas) — emitidas pelo Flow.
+ * Filtro por LOJA DE ORIGEM (é o CNPJ emitente) + status. DANFE em PDF e
+ * XML (enviado + resposta) direto na linha, pro contador baixar.
+ */
+// Empresas do grupo (raiz do CNPJ, que fica nas posições 7–14 da chave) —
+// filtro pelo EMITENTE REAL da nota (dono 29/07: loja 01 emite pelas duas).
+const EMPRESAS_EMITENTES: Array<{ raiz: string; label: string }> = [
+  { raiz: '20104813', label: 'T.O. RISSUTTO (raiz 20)' },
+  { raiz: '30246592', label: 'LURDS (raiz 30)' },
+  { raiz: '50213437', label: 'MDD CERQUEIRA (franquias)' },
+];
+
+function NfeTransferSection({ stores }: { stores: Store[] }) {
+  const [lojaFiltro, setLojaFiltro] = useState('');
+  const [emitenteFiltro, setEmitenteFiltro] = useState('');
+  const [statusFiltro, setStatusFiltro] = useState('authorized');
+  const [rows, setRows] = useState<any[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  // Download em LOTE pro contador (dono 29/07): período De/Até (vazio = tudo)
+  // + XMLs, DANFEs ou os dois num ZIP. Respeita o filtro de loja de origem.
+  const [loteDe, setLoteDe] = useState('');
+  const [loteAte, setLoteAte] = useState('');
+  const [baixandoLote, setBaixandoLote] = useState<string | null>(null);
+  // Cancelamento (evento 110111): justificativa inline, obrigatória (15-255)
+  const [cancelId, setCancelId] = useState<string | null>(null);
+  const [justCancel, setJustCancel] = useState('');
+  const [cancelando, setCancelando] = useState(false);
+
+  const API_URL =
+    process.env.NEXT_PUBLIC_API_URL || 'https://flowops-lite-production.up.railway.app';
+  const authHeaders = (): Record<string, string> => {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('flowops_token') : null;
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  };
+
+  const load = async (loja: string, status: string, emitRaiz?: string) => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams();
+      params.set('limit', '200');
+      if (loja) params.set('storeCode', loja);
+      if (status) params.set('status', status);
+      if (emitRaiz) params.set('emitRaiz', emitRaiz);
+      setRows(await api<any[]>(`/nfe?${params}`));
+    } catch {
+      setRows([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+  useEffect(() => {
+    load(lojaFiltro, statusFiltro, emitenteFiltro);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lojaFiltro, statusFiltro, emitenteFiltro]);
+
+  const abrirDanfe = async (d: any) => {
+    try {
+      const r = await fetch(`${API_URL}/api/nfe/${d.id}/danfe`, { headers: authHeaders() });
+      if (!r.ok) throw new Error((await r.json().catch(() => null))?.message || `HTTP ${r.status}`);
+      const blobUrl = URL.createObjectURL(await r.blob());
+      const w = window.open(blobUrl, '_blank');
+      if (!w) {
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = `danfe-${d.numero}.pdf`;
+        a.click();
+      }
+    } catch (e: any) {
+      alert(`Erro ao gerar DANFE: ${e?.message || e}`);
+    }
+  };
+
+  const baixarXml = async (d: any) => {
+    try {
+      const r = await fetch(`${API_URL}/api/nfe/${d.id}`, { headers: authHeaders() });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const doc = await r.json();
+      const xml = doc?.xmlAutorizado || doc?.xmlEnviado;
+      if (!xml) {
+        alert('Esta NF-e não tem XML gravado.');
+        return;
+      }
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([xml], { type: 'application/xml' }));
+      a.download = `nfe-${d.numero}.xml`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } catch (e: any) {
+      alert(`Erro ao baixar XML: ${e?.message || e}`);
+    }
+  };
+
+  const cancelarNota = async (d: any) => {
+    const just = justCancel.trim();
+    if (just.length < 15) { alert('Justificativa precisa de pelo menos 15 caracteres (regra da SEFAZ).'); return; }
+    if (!confirm(`Cancelar a NF-e ${d.numero}/${d.serie} (${d.tpAmb === '1' ? 'PRODUÇÃO — vale no fisco' : 'homologação'}) na SEFAZ?`)) return;
+    setCancelando(true);
+    try {
+      const r = await api<any>(`/nfe/${d.id}/cancel`, { method: 'POST', body: JSON.stringify({ justificativa: just }) });
+      const ok = r?.ok || r?.success || r?.cStat === '135' || r?.cStat === '136' || r?.status === 'cancelled' || r?.doc?.status === 'cancelled';
+      if (ok) alert(`NF-e ${d.numero} cancelada na SEFAZ.`);
+      else alert(`SEFAZ não cancelou (${r?.cStat ?? ''}): ${r?.xMotivo ?? r?.message ?? 'erro'}`);
+      setCancelId(null); setJustCancel('');
+      load(lojaFiltro, statusFiltro, emitenteFiltro);
+    } catch (e: any) {
+      alert(`Erro ao cancelar: ${e?.message || e}`);
+    } finally { setCancelando(false); }
+  };
+
+  const baixarLote = async (tipo: 'xml' | 'danfe' | 'tudo') => {
+    setBaixandoLote(tipo);
+    try {
+      const q = new URLSearchParams();
+      if (loteDe) q.set('de', loteDe);
+      if (loteAte) q.set('ate', loteAte);
+      q.set('tipo', tipo);
+      if (lojaFiltro) q.set('storeCode', lojaFiltro);
+      if (emitenteFiltro) q.set('emitRaiz', emitenteFiltro);
+      const r = await fetch(`${API_URL}/api/nfe/download-lote?${q}`, { headers: authHeaders() });
+      if (!r.ok) throw new Error((await r.json().catch(() => null))?.message || `HTTP ${r.status}`);
+      const blobUrl = URL.createObjectURL(await r.blob());
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = `nfe_${loteDe || 'inicio'}_a_${loteAte || 'hoje'}_${tipo}.zip`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+    } catch (e: any) {
+      alert(`Download em lote: ${e?.message || e}`);
+    } finally {
+      setBaixandoLote(null);
+    }
+  };
+
+  const storeName = (code: string) => stores.find((s) => s.code === code)?.name || code;
+
+  return (
+    <div className="bg-white rounded-xl shadow p-5 space-y-4 border-2 border-indigo-200">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-bold text-indigo-800 uppercase">
+            📄 Notas fiscais de transferência entre lojas (NF-e mod. 55)
+          </h2>
+          <p className="text-[11px] text-slate-500 mt-0.5">
+            As "notas grandes" emitidas pelo Flow — DANFE em PDF e XML pro contador.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <select
+            value={emitenteFiltro}
+            onChange={(e) => setEmitenteFiltro(e.target.value)}
+            className="p-2 border rounded-lg text-sm"
+            title="Filtra pelo CNPJ EMITENTE da nota (a raiz que está na chave) — a mesma loja física pode emitir por mais de uma empresa"
+          >
+            <option value="">Emitente: todas as empresas</option>
+            {EMPRESAS_EMITENTES.map((e2) => (
+              <option key={e2.raiz} value={e2.raiz}>{e2.label}</option>
+            ))}
+          </select>
+          <select
+            value={lojaFiltro}
+            onChange={(e) => setLojaFiltro(e.target.value)}
+            className="p-2 border rounded-lg text-sm"
+          >
+            <option value="">Todas as lojas (origem)</option>
+            {stores.map((s) => (
+              <option key={s.code} value={s.code}>{s.code} — {s.name}</option>
+            ))}
+          </select>
+          <select
+            value={statusFiltro}
+            onChange={(e) => setStatusFiltro(e.target.value)}
+            className="p-2 border rounded-lg text-sm"
+          >
+            <option value="authorized">Autorizadas</option>
+            <option value="rejected">Rejeitadas</option>
+            <option value="cancelled">Canceladas</option>
+            <option value="">Todas</option>
+          </select>
+        </div>
+      </div>
+
+      {/* Download em LOTE pro contador: período livre + XML/DANFE/tudo (dono 29/07) */}
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-indigo-100 bg-indigo-50/60 px-3 py-2">
+        <span className="text-[11px] font-bold uppercase tracking-wide text-indigo-800">⬇ Download em lote</span>
+        <input
+          type="date"
+          value={loteDe}
+          onChange={(e) => setLoteDe(e.target.value)}
+          className="rounded-lg border p-1.5 text-xs"
+          title="De (vazio = desde o início)"
+        />
+        <span className="text-xs text-slate-400">→</span>
+        <input
+          type="date"
+          value={loteAte}
+          onChange={(e) => setLoteAte(e.target.value)}
+          className="rounded-lg border p-1.5 text-xs"
+          title="Até (vazio = hoje)"
+        />
+        <button
+          onClick={() => { setLoteDe(''); setLoteAte(''); }}
+          className="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-[11px] font-semibold text-slate-600 hover:bg-slate-100"
+          title="Limpar período = TODAS as notas autorizadas"
+        >
+          Todas
+        </button>
+        <div className="ml-auto flex gap-1.5">
+          <button
+            onClick={() => baixarLote('xml')}
+            disabled={!!baixandoLote}
+            className="rounded-md border border-indigo-300 bg-white px-2.5 py-1.5 text-[11px] font-bold text-indigo-700 hover:bg-indigo-100 disabled:opacity-50"
+          >
+            {baixandoLote === 'xml' ? 'Gerando…' : '🧾 XMLs (ZIP)'}
+          </button>
+          <button
+            onClick={() => baixarLote('danfe')}
+            disabled={!!baixandoLote}
+            className="rounded-md border border-indigo-300 bg-white px-2.5 py-1.5 text-[11px] font-bold text-indigo-700 hover:bg-indigo-100 disabled:opacity-50"
+          >
+            {baixandoLote === 'danfe' ? 'Gerando…' : '📄 DANFEs (ZIP)'}
+          </button>
+          <button
+            onClick={() => baixarLote('tudo')}
+            disabled={!!baixandoLote}
+            className="rounded-md bg-indigo-600 px-2.5 py-1.5 text-[11px] font-bold text-white hover:bg-indigo-700 disabled:opacity-50"
+          >
+            {baixandoLote === 'tudo' ? 'Gerando…' : '📦 Tudo (ZIP)'}
+          </button>
+        </div>
+        <p className="w-full text-[10px] text-slate-500">
+          Baixa as notas <b>autorizadas</b> do período (e da loja selecionada acima, se houver) — XMLs pro contador, DANFEs em PDF, ou os dois.
+        </p>
+      </div>
+
+      {loading || rows === null ? (
+        <div className="text-center py-6 text-slate-400 text-sm">Carregando…</div>
+      ) : rows.length === 0 ? (
+        <div className="text-center py-6 text-slate-400 text-sm">Nenhuma NF-e com esse filtro.</div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-[10px] uppercase text-slate-400 border-b">
+                <th className="text-left py-1.5 pr-2">Quando</th>
+                <th className="text-left py-1.5 pr-2">Origem → Destino</th>
+                <th className="text-left py-1.5 pr-2">Nº / Série</th>
+                <th className="text-left py-1.5 pr-2">Amb.</th>
+                <th className="text-left py-1.5 pr-2">Status</th>
+                <th className="text-right py-1.5 pr-2">Valor</th>
+                <th className="text-left py-1.5 pr-2">Chave / Motivo</th>
+                <th className="text-left py-1.5">Arquivos</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((d) => (
+                <tr key={d.id} className="border-b last:border-0 align-top">
+                  <td className="py-1.5 pr-2 whitespace-nowrap text-slate-500">
+                    {d.createdAt ? new Date(d.createdAt).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '—'}
+                  </td>
+                  <td className="py-1.5 pr-2 whitespace-nowrap">
+                    {/* EMITENTE REAL da chave (dono 29/07): 01→Anália emitida
+                        pela MDD mostra "17 SUZANO", não a loja física */}
+                    {d.emitStoreCode ? (
+                      <>
+                        {/* NOME DA LOJA (Suzano, Vinhedo...) — a fantasia fiscal é
+                            "LURDS PLUS SIZE" em todas e não distingue nada (dono 29/07) */}
+                        <span title={`Emitente: ${d.emitNome || ''} · CNPJ ${d.emitCnpj || ''} · loja física de origem: ${d.fromStoreCode}`}>
+                          {d.emitStoreCode} {storeName(d.emitStoreCode) || d.emitNome}
+                        </span>
+                        {d.emitStoreCode !== d.fromStoreCode && (
+                          <span className="text-slate-400 text-[10px]"> (saiu da {d.fromStoreCode})</span>
+                        )}
+                      </>
+                    ) : (
+                      <>{d.fromStoreCode} {storeName(d.fromStoreCode)}</>
+                    )}
+                    {' → '}{d.toStoreCode} {storeName(d.toStoreCode)}
+                  </td>
+                  <td className="py-1.5 pr-2 whitespace-nowrap font-mono font-bold">{d.numero}/{d.serie}</td>
+                  <td className="py-1.5 pr-2">
+                    <span className={`font-bold ${d.tpAmb === '1' ? 'text-rose-700' : 'text-emerald-700'}`}>
+                      {d.tpAmb === '1' ? 'PROD' : 'HOMOL'}
+                    </span>
+                  </td>
+                  <td className="py-1.5 pr-2">
+                    <span className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-bold border ${
+                      d.status === 'authorized'
+                        ? 'bg-emerald-50 border-emerald-300 text-emerald-700'
+                        : d.status === 'rejected'
+                        ? 'bg-rose-50 border-rose-300 text-rose-700'
+                        : 'bg-amber-50 border-amber-300 text-amber-700'
+                    }`}>
+                      {d.status === 'authorized' ? 'AUTORIZADA' : d.status === 'rejected' ? 'REJEITADA' : (d.status || '?').toUpperCase()}
+                    </span>
+                  </td>
+                  <td className="py-1.5 pr-2 text-right tabular-nums whitespace-nowrap">
+                    {brl(Number(d.valorTotalCents || 0) / 100)}
+                  </td>
+                  <td className="py-1.5 pr-2 font-mono text-[10px] break-all max-w-[240px]">
+                    {d.status === 'authorized' ? d.chave : (d.xMotivo || d.chave || '—')}
+                  </td>
+                  <td className="py-1.5 whitespace-nowrap">
+                    {cancelId === d.id ? (
+                      <div className="flex items-center gap-1">
+                        <input
+                          value={justCancel}
+                          onChange={(e) => setJustCancel(e.target.value)}
+                          placeholder="Justificativa (mín. 15 caracteres)"
+                          className="border rounded px-1.5 py-0.5 text-[11px] w-52"
+                          autoFocus
+                        />
+                        <button
+                          disabled={cancelando}
+                          onClick={() => cancelarNota(d)}
+                          className="text-[10px] px-1.5 py-0.5 rounded bg-rose-600 text-white font-bold disabled:opacity-40"
+                        >
+                          {cancelando ? '…' : 'Confirmar'}
+                        </button>
+                        <button
+                          disabled={cancelando}
+                          onClick={() => { setCancelId(null); setJustCancel(''); }}
+                          className="text-[10px] px-1.5 py-0.5 rounded border border-slate-300 text-slate-600"
+                        >
+                          Voltar
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <button
+                          onClick={() => abrirDanfe(d)}
+                          className="text-[10px] px-1.5 py-0.5 rounded border border-emerald-300 hover:bg-emerald-50 text-emerald-700 font-bold mr-1"
+                          title="Abrir DANFE em PDF"
+                        >
+                          📄 DANFE
+                        </button>
+                        <button
+                          onClick={() => baixarXml(d)}
+                          className="text-[10px] px-1.5 py-0.5 rounded border border-slate-300 hover:bg-slate-100 text-slate-600"
+                          title="Baixar o XML da NF-e"
+                        >
+                          ⬇ XML
+                        </button>
+                        {d.status === 'authorized' && (
+                          <button
+                            onClick={() => { setCancelId(d.id); setJustCancel(''); }}
+                            className="text-[10px] px-1.5 py-0.5 rounded border border-rose-300 hover:bg-rose-50 text-rose-700 font-bold ml-1"
+                            title="Cancelar esta NF-e na SEFAZ (evento 110111 — prazo legal de 24h após a autorização)"
+                          >
+                            🚫 Cancelar
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

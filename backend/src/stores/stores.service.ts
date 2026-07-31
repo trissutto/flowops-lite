@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
 export interface StoreInput {
@@ -48,11 +48,63 @@ export interface StoreInput {
    * NUNCA chama Pagar.me/PagBank.
    */
   pixProvider?: 'auto' | 'pagbank' | 'pagarme' | 'externo';
+  /**
+   * Provedor de ENVIO da loja no "Gerar envio" da separação:
+   *   'correios' (default) ou 'maisenvios'. Quando maisenvios,
+   *   `maisEnviosSenderId` é o id do remetente da loja no portal Mais Envios.
+   */
+  shippingProvider?: 'correios' | 'maisenvios' | null;
+  maisEnviosSenderId?: number | null;
 }
 
 @Injectable()
-export class StoresService {
+export class StoresService implements OnModuleInit {
+  private readonly logger = new Logger(StoresService.name);
   constructor(private readonly prisma: PrismaService) {}
+
+  /**
+   * DESFAZ o rename global de 30/07 (decisão do dono no mesmo dia: "era pra
+   * colocar MATRIZ T.O. e MATRIZ LURDS SOMENTE no contas a pagar").
+   *
+   * O nome da loja é global — aparece no PDV, no faturamento, no ranking.
+   * Rótulo de centro de custo não pode sequestrar isso. Os nomes oficiais
+   * viraram RÓTULO só no Contas a Pagar (ver ContasPagarService.lojas()).
+   *
+   * Restaura pelo `nomesAntigos`, que foi gravado justamente pra isso.
+   * Idempotente: se já está com o nome antigo, não faz nada.
+   */
+  private static readonly DESFAZER_RENAME = [
+    { code: '01', deveVoltarDe: 'MATRIZ T.O.' },
+    { code: '20', deveVoltarDe: 'PESSOA FISICA' },
+  ];
+
+  async onModuleInit() {
+    try {
+      for (const alvo of StoresService.DESFAZER_RENAME) {
+        const loja = await this.prisma.store.findUnique({ where: { code: alvo.code } });
+        if (!loja) continue;
+        if (String(loja.name || '').trim().toUpperCase() !== alvo.deveVoltarDe.toUpperCase()) continue;
+
+        const antigos = String((loja as any).nomesAntigos || '')
+          .split(',').map((s) => s.trim()).filter(Boolean);
+        const original = antigos[antigos.length - 1];
+        if (!original) continue; // sem histórico: não chuta nome
+
+        const resto = antigos.slice(0, -1).join(',');
+        await this.prisma.store.update({
+          where: { code: alvo.code },
+          data: { name: original, nomesAntigos: resto || null } as any,
+        });
+        this.logger.log(
+          `[stores] loja ${alvo.code} restaurada: "${loja.name}" -> "${original}" ` +
+          `(o rotulo do Contas a Pagar assumiu esse papel)`,
+        );
+      }
+    } catch (e) {
+      // Nome de loja nunca pode derrubar o boot.
+      this.logger.warn(`[stores] restauracao de nome nao aplicada: ${(e as Error).message}`);
+    }
+  }
 
   list() {
     return this.prisma.store.findMany({ orderBy: { code: 'asc' } });
@@ -203,11 +255,32 @@ export class StoresService {
       if (conflict) throw new ConflictException(`Já existe uma loja com o código "${data.code}"`);
     }
 
+    // RENOMEAR SEM PERDER HISTÓRICO (30/07): venda antiga podia gravar o NOME
+    // da loja em PdvSale.storeCode. Guardando o nome anterior, os relatórios
+    // que casam por [code, name] continuam achando o histórico depois que a
+    // loja troca de nome (ex.: 09 "SANTOS 2" → "MATRIZ LURDS").
+    let nomesAntigos: string | undefined;
+    const novoNome = data.name?.trim();
+    if (novoNome && novoNome !== store.name) {
+      const antigos = String((store as any).nomesAntigos || '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (!antigos.some((n) => n.toUpperCase() === store.name.toUpperCase())) {
+        antigos.push(store.name);
+      }
+      nomesAntigos = antigos.join(',').slice(0, 300);
+      this.logger.log(
+        `[stores] loja ${store.code} renomeada "${store.name}" → "${novoNome}" (histórico preservado: ${nomesAntigos})`,
+      );
+    }
+
     return this.prisma.store.update({
       where: { id },
       data: {
         code: data.code?.trim() ?? undefined,
-        name: data.name?.trim() ?? undefined,
+        name: novoNome ?? undefined,
+        nomesAntigos,
         cep: data.cep !== undefined ? (data.cep.trim() || null) : undefined,
         city: data.city !== undefined ? (data.city.trim() || null) : undefined,
         state: data.state !== undefined ? (data.state.trim().toUpperCase() || null) : undefined,
@@ -226,6 +299,12 @@ export class StoresService {
         isOutlet: data.isOutlet !== undefined ? !!data.isOutlet : undefined,
         pixProvider: data.pixProvider && ['auto', 'pagbank', 'pagarme', 'externo'].includes(data.pixProvider)
           ? data.pixProvider
+          : undefined,
+        shippingProvider: data.shippingProvider !== undefined
+          ? (data.shippingProvider === 'maisenvios' ? 'maisenvios' : 'correios')
+          : undefined,
+        maisEnviosSenderId: data.maisEnviosSenderId !== undefined
+          ? (data.maisEnviosSenderId ? Number(data.maisEnviosSenderId) : null)
           : undefined,
       } as any,
     });

@@ -47,7 +47,7 @@ type Dashboard = {
   }>;
   mediaRede: number;
   lojasResumo: { ativas: number; acimaMedia: number; abaixoMedia: number };
-  topVendedoras: Array<{ codigo: string; nome: string; pecas: number; valor: number; vendas: number; comissao: number }>;
+  topVendedoras: Array<{ codigo: string; nome: string; pecas: number; valor: number; vendas: number; comissao: number | null }>;
   topProdutos: Array<{ refCode: string; descricao: string | null; pecas: number; valor: number }>;
   topMarcas: Array<{ marca: string; pecas: number; valor: number }>;
   insights: Array<{ tone: 'success' | 'warning' | 'info' | 'danger'; text: string }>;
@@ -131,9 +131,9 @@ export default function DashboardEstrategicoPage() {
     }
     lines.push('');
     lines.push('Top Vendedoras');
-    lines.push('Nome;Código;Vendas;Faturamento;Comissão 2%');
+    lines.push('Nome;Código;Vendas;Faturamento;Comissão (regra real)');
     for (const v of data.topVendedoras) {
-      lines.push(`${v.nome || ''};${v.codigo};${v.vendas};${v.valor.toFixed(2)};${v.comissao.toFixed(2)}`);
+      lines.push(`${v.nome || ''};${v.codigo};${v.vendas};${v.valor.toFixed(2)};${v.comissao != null ? v.comissao.toFixed(2) : ''}`);
     }
     const csv = '﻿' + lines.join('\n'); // BOM pra Excel pegar UTF-8
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
@@ -519,7 +519,7 @@ export default function DashboardEstrategicoPage() {
                           }`}>{i + 1}º</div>
                           <div className="flex-1 min-w-0">
                             <div className="font-bold text-slate-800 truncate text-sm">{v.nome || `cód ${v.codigo}`}</div>
-                            <div className="text-[10px] text-slate-500">{v.vendas} venda(s) · R$ {brl(v.comissao)} comissão</div>
+                            <div className="text-[10px] text-slate-500">{v.vendas} venda(s){v.comissao != null ? <> · R$ {brl(v.comissao)} comissão</> : null}</div>
                           </div>
                           <div className="text-right shrink-0">
                             <div className="font-black text-emerald-700 tabular-nums text-sm">R$ {brl(v.valor)}</div>

@@ -212,8 +212,23 @@ export default function WincredMirrorPage() {
         </button>
       </div>
 
+      {/* Importação COMPLETA da tabela clientes do Giga (base da consulta
+          nativa de clientes + crediário nativo). Botão pedido do dono 21/07. */}
+      <ClientesGigaBox />
+
+      {/* CREDIÁRIO NATIVO fase 1: importa o `movimento` INTEIRO (abertas e
+          pagas) — a ficha da cliente passa a mostrar o crediário completo. */}
+      <CrediarioNativoBox />
+
+      <MarcadosNativoBox />
+
       {/* Teste rapido: peek de uma REF no Postgres */}
       <PeekRefBox />
+
+      {/* Incidente DATAALT 13/07: corrigir a data na tabela NATIVA `product`
+          (fonte do bipe com PRODUCT_NATIVE_READS=1) copiando do espelho já
+          restaurado. Dry-run primeiro; execução só no segundo clique. */}
+      <FixDataAltNativoBox />
 
       {/* Status por tabela */}
       <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
@@ -322,6 +337,324 @@ export default function WincredMirrorPage() {
   );
 }
 
+
+/**
+ * INCIDENTE DATAALT (13/07): a tabela nativa `product` guardou a data suja e o
+ * bipe do PDV lê dela (PRODUCT_NATIVE_READS=1) — promo "Liquida antigos"
+ * mostrava "Sem promo · 2026" em peça de 2023. Este box corrige copiando a
+ * data DO ESPELHO (já restaurado do backup 12/07), SÓ nas linhas sujas.
+ * Passo 1 (dry-run) mostra contagem+amostra sem escrever; passo 2 executa.
+ */
+function FixDataAltNativoBox() {
+  const [loading, setLoading] = useState(false);
+  const [dry, setDry] = useState<any | null>(null);
+  const [done, setDone] = useState<any | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const run = async (executar: boolean) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const r = await api('/products-editor/restaurar-dataalt-nativo-espelho', {
+        method: 'POST',
+        body: JSON.stringify({ executar }),
+      });
+      if (executar) { setDone(r); setDry(null); }
+      else { setDry(r); setDone(null); }
+    } catch (e: any) {
+      setError(e?.message || 'erro');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="bg-rose-50 border border-rose-200 rounded-xl p-4">
+      <h2 className="font-bold text-rose-900 mb-1">Incidente DATAALT — corrigir tabela nativa (bipe do PDV)</h2>
+      <p className="text-xs text-rose-700 mb-3">
+        Copia a data de cadastro do ESPELHO (restaurado do backup 12/07) pra tabela nativa
+        `product`, só nas linhas com data ≥ 13/07 cujo espelho tem data anterior. Não toca no
+        Giga nem em datas já corretas. Rode o dry-run primeiro.
+      </p>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => run(false)}
+          disabled={loading}
+          className="px-4 py-2 rounded-lg border border-rose-400 text-rose-700 text-sm font-bold hover:bg-rose-100 disabled:opacity-50"
+        >
+          {loading ? 'Verificando…' : '1. Ver o que seria corrigido (dry-run)'}
+        </button>
+        <button
+          onClick={() => run(true)}
+          disabled={loading || !dry?.candidatos}
+          className="px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-sm font-bold disabled:opacity-50"
+        >
+          2. Executar correção{dry?.candidatos ? ` (${dry.candidatos} linhas)` : ''}
+        </button>
+      </div>
+      {error && <div className="mt-2 text-sm text-red-700">{error}</div>}
+      {dry && (
+        <pre className="mt-3 bg-slate-900 text-amber-300 p-3 rounded text-[11px] overflow-x-auto font-mono">
+{JSON.stringify(dry, null, 2)}
+        </pre>
+      )}
+      {done && (
+        <div className="mt-3 rounded-lg bg-emerald-100 px-3 py-2 text-sm font-bold text-emerald-800">
+          ✅ {done.atualizados} linha(s) corrigidas na tabela nativa. Rebipe a peça pra conferir a promo.
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─── Importação COMPLETA da tabela `clientes` do Giga ───────────────────────
+   Base da Consulta de Clientes nativa + crediário nativo (sair da Giga).
+   POST dispara em background; a caixa faz poll do status a cada 4s. */
+function ClientesGigaBox() {
+  const [st, setSt] = useState<{
+    total: number; comCpf: number; pessoasUnicas: number; vinculadosAoCrm: number;
+    porLoja?: Array<{ loja: string; fichas: number }>;
+    ultimoSync: string | null; rodando: boolean;
+    ultimoResultado?: { erro?: string } | null;
+  } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = async () => {
+    try { setSt(await api('/admin/clientes-giga/status')); } catch { /* mantém último */ }
+  };
+  useEffect(() => { load(); }, []);
+
+  const rodar = async () => {
+    if (busy) return;
+    setBusy(true); setErr(null);
+    try {
+      const r = await api<{ started: boolean; alreadyRunning: boolean }>(
+        '/admin/clientes-giga/sync', { method: 'POST' },
+      );
+      if (!r.started && r.alreadyRunning) setErr('Já tem uma importação rodando — acompanhando.');
+      // Poll até terminar (guarda de 15min)
+      const t0 = Date.now();
+      while (Date.now() - t0 < 15 * 60 * 1000) {
+        await new Promise((res) => setTimeout(res, 4000));
+        await load();
+        const cur = await api<any>('/admin/clientes-giga/status').catch(() => null);
+        if (cur && !cur.rodando) {
+          setSt(cur);
+          if (cur.ultimoResultado?.erro) setErr(`Importação falhou: ${cur.ultimoResultado.erro}`);
+          break;
+        }
+      }
+    } catch (e: any) {
+      setErr(e?.message || 'Erro ao iniciar a importação');
+    } finally {
+      setBusy(false);
+      load();
+    }
+  };
+
+  return (
+    <div className="bg-gradient-to-br from-emerald-50 to-teal-50 border border-emerald-200 rounded-xl p-5">
+      <div className="flex items-center gap-4 flex-wrap">
+        <div className="flex-1 min-w-[260px]">
+          <h2 className="font-bold text-emerald-900 mb-1">Clientes do Giga — importação completa</h2>
+          <p className="text-xs text-emerald-700">
+            Traz a tabela <b>clientes</b> inteira (todos os campos e lojas) pro Flow e vincula ao CRM por CPF.
+            Base da Consulta de Clientes nativa. Demora alguns minutos na primeira carga.
+          </p>
+          {st && (
+            <div className="mt-2 flex gap-3 flex-wrap text-[11px] font-bold text-emerald-800">
+              <span>{st.total.toLocaleString('pt-BR')} fichas</span>
+              <span>· {st.pessoasUnicas.toLocaleString('pt-BR')} pessoas (CPF)</span>
+              <span>· {st.vinculadosAoCrm.toLocaleString('pt-BR')} no CRM</span>
+              {st.ultimoSync && <span className="text-emerald-600 font-normal">· último: {new Date(st.ultimoSync).toLocaleString('pt-BR')}</span>}
+            </div>
+          )}
+          {/* POR LOJA — confere que TODAS as lojas vieram (a tabela do Giga é
+              uma só pra rede; aqui dá pra ver se alguma loja veio zerada) */}
+          {st?.porLoja && st.porLoja.length > 0 && (
+            <div className="mt-2 flex gap-1.5 flex-wrap">
+              {st.porLoja.map((l) => (
+                <span key={l.loja} className="rounded-md bg-white/70 border border-emerald-200 px-1.5 py-0.5 text-[10px] font-bold text-emerald-800 tabular-nums">
+                  LJ{l.loja}: {l.fichas.toLocaleString('pt-BR')}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+        <button
+          onClick={rodar}
+          disabled={busy || !!st?.rodando}
+          className="shrink-0 px-5 py-3 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold flex items-center gap-2 shadow disabled:opacity-50"
+        >
+          {busy || st?.rodando ? (
+            <><Loader2 className="w-4 h-4 animate-spin" /> Importando clientes...</>
+          ) : (
+            <><Play className="w-4 h-4" /> Importar clientes do Giga</>
+          )}
+        </button>
+      </div>
+      {err && <div className="mt-2 text-xs font-bold text-red-700">{err}</div>}
+    </div>
+  );
+}
+
+/* ─── CREDIÁRIO NATIVO (fase 1) — importa o movimento inteiro do Giga ────── */
+function CrediarioNativoBox() {
+  const [st, setSt] = useState<{
+    total: number; abertas: number; pagas: number; vencidas: number;
+    ultimoSync: string | null; rodando: boolean;
+    ultimoResultado?: { erro?: string } | null;
+  } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = async () => {
+    try { setSt(await api('/admin/crediario-nativo/status')); } catch { /* mantém */ }
+  };
+  useEffect(() => { load(); }, []);
+
+  const rodar = async () => {
+    if (busy) return;
+    setBusy(true); setErr(null);
+    try {
+      const r = await api<{ started: boolean; alreadyRunning: boolean }>(
+        '/admin/crediario-nativo/sync', { method: 'POST' },
+      );
+      if (!r.started && r.alreadyRunning) setErr('Já tem uma importação rodando — acompanhando.');
+      const t0 = Date.now();
+      while (Date.now() - t0 < 20 * 60 * 1000) {
+        await new Promise((res) => setTimeout(res, 4000));
+        const cur = await api<any>('/admin/crediario-nativo/status').catch(() => null);
+        if (cur) setSt(cur);
+        if (cur && !cur.rodando) {
+          if (cur.ultimoResultado?.erro) setErr(`Importação falhou: ${cur.ultimoResultado.erro}`);
+          break;
+        }
+      }
+    } catch (e: any) {
+      setErr(e?.message || 'Erro ao iniciar a importação');
+    } finally { setBusy(false); load(); }
+  };
+
+  return (
+    <div className="bg-gradient-to-br from-sky-50 to-blue-50 border border-sky-200 rounded-xl p-5">
+      <div className="flex items-center gap-4 flex-wrap">
+        <div className="flex-1 min-w-[260px]">
+          <h2 className="font-bold text-sky-900 mb-1">Crediário nativo — importação do movimento</h2>
+          <p className="text-xs text-sky-700">
+            Traz o <b>movimento</b> inteiro (parcelas abertas E pagas — todo o histórico) pro Flow.
+            A ficha da cliente passa a mostrar o crediário completo. Fase 2: venda/baixa gravam no Flow.
+          </p>
+          {st && (
+            <div className="mt-2 flex gap-3 flex-wrap text-[11px] font-bold text-sky-800">
+              <span>{st.total.toLocaleString('pt-BR')} parcelas</span>
+              <span>· {st.abertas.toLocaleString('pt-BR')} abertas</span>
+              <span className="text-red-700">· {st.vencidas.toLocaleString('pt-BR')} vencidas</span>
+              <span className="text-emerald-700">· {st.pagas.toLocaleString('pt-BR')} pagas</span>
+              {st.ultimoSync && <span className="text-sky-600 font-normal">· último: {new Date(st.ultimoSync).toLocaleString('pt-BR')}</span>}
+            </div>
+          )}
+        </div>
+        <button
+          onClick={rodar}
+          disabled={busy || !!st?.rodando}
+          className="shrink-0 px-5 py-3 rounded-lg bg-sky-600 hover:bg-sky-700 text-white font-bold flex items-center gap-2 shadow disabled:opacity-50"
+        >
+          {busy || st?.rodando ? (
+            <><Loader2 className="w-4 h-4 animate-spin" /> Importando crediário...</>
+          ) : (
+            <><Play className="w-4 h-4" /> Importar crediário do Giga</>
+          )}
+        </button>
+      </div>
+      {err && <div className="mt-2 text-xs font-bold text-red-700">{err}</div>}
+    </div>
+  );
+}
+
+function MarcadosNativoBox() {
+  const [st, setSt] = useState<{
+    total: number; ativos: number; fechados: number; devolvidos: number; fechadosGiga: number;
+    porLoja: Array<{ loja: string; ativos: number }>;
+    running: boolean;
+    lastResult?: { at?: string; importados?: number; error?: string } | null;
+  } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = async () => {
+    try { setSt(await api('/pdv/marcados/sync/status')); } catch { /* mantém */ }
+  };
+  useEffect(() => { load(); }, []);
+
+  const rodar = async () => {
+    if (busy) return;
+    setBusy(true); setErr(null);
+    try {
+      await api('/pdv/marcados/sync', { method: 'POST' });
+      const t0 = Date.now();
+      while (Date.now() - t0 < 10 * 60 * 1000) {
+        await new Promise((res) => setTimeout(res, 4000));
+        const cur = await api<any>('/pdv/marcados/sync/status').catch(() => null);
+        if (cur) setSt(cur);
+        if (cur && !cur.running) {
+          if (cur.lastResult?.error) setErr(`Importação falhou: ${cur.lastResult.error}`);
+          break;
+        }
+      }
+    } catch (e: any) {
+      setErr(e?.message || 'Erro ao iniciar a importação');
+    } finally { setBusy(false); load(); }
+  };
+
+  return (
+    <div className="bg-gradient-to-br from-amber-50 to-yellow-50 border border-amber-200 rounded-xl p-5">
+      <div className="flex items-center gap-4 flex-wrap">
+        <div className="flex-1 min-w-[260px]">
+          <h2 className="font-bold text-amber-900 mb-1">Marcados nativos — provar em casa no Flow</h2>
+          <p className="text-xs text-amber-700">
+            Importa tudo que está <b>em marca</b> (caixa MARCADO=SIM) pro Flow. Depois disso as
+            consultas de marcados (PDV e retaguarda) leem daqui — sem Giga no caminho. Sync
+            automático de hora em hora + atualização na hora ao marcar/devolver/fechar.
+          </p>
+          {st && (
+            <div className="mt-2 flex gap-3 flex-wrap text-[11px] font-bold text-amber-800">
+              <span>{st.ativos.toLocaleString('pt-BR')} em marca</span>
+              <span className="text-emerald-700">· {st.fechados.toLocaleString('pt-BR')} fechados</span>
+              <span>· {st.devolvidos.toLocaleString('pt-BR')} devolvidos</span>
+              {st.fechadosGiga > 0 && <span className="text-slate-500">· {st.fechadosGiga} fechados no Giga</span>}
+              {st.lastResult?.at && (
+                <span className="text-amber-600 font-normal">· último: {new Date(st.lastResult.at).toLocaleString('pt-BR')}</span>
+              )}
+            </div>
+          )}
+          {st && st.porLoja?.length > 0 && (
+            <div className="mt-1.5 flex gap-1.5 flex-wrap">
+              {st.porLoja.map((l) => (
+                <span key={l.loja} className="text-[10px] font-bold bg-white border border-amber-200 rounded px-1.5 py-0.5 text-amber-800">
+                  LJ {l.loja}: {l.ativos}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+        <button
+          onClick={rodar}
+          disabled={busy || !!st?.running}
+          className="shrink-0 px-5 py-3 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold flex items-center gap-2 shadow disabled:opacity-50"
+        >
+          {busy || st?.running ? (
+            <><Loader2 className="w-4 h-4 animate-spin" /> Importando marcados...</>
+          ) : (
+            <><Play className="w-4 h-4" /> Importar marcados do Giga</>
+          )}
+        </button>
+      </div>
+      {err && <div className="mt-2 text-xs font-bold text-red-700">{err}</div>}
+    </div>
+  );
+}
 
 function PeekRefBox() {
   const [ref, setRef] = useState('VLM-222');

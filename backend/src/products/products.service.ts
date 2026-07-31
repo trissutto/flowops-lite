@@ -2604,20 +2604,33 @@ export class ProductsService {
     }
 
     // Modo SKU/COD — acha a linha, pega a REF, expande TODA a REF.
-    // Também dispara quando parece código/EAN no modo ref (vendedora bipou
-    // etiqueta na aba REF/Descrição — comportamento mais comum na prática).
     let rawRows: any[] = [];
-    if (effectiveMode === 'sku' || (effectiveMode === 'ref' && isLikelyCodeOrEan)) {
+    if (effectiveMode === 'sku') {
+      // Aba "Cód. Etiqueta" / bipe → código PRIMEIRO (intencional).
       if (isLikelyEan) detectedAs = 'ean';
-      // Guarda o código exato que a vendedora passou — marca a variante no resultado
       matchedSkuForResult = term;
       rawRows = await this.catalog.searchByCodeAndExpandRef(term);
-      // Fallback: se não achou pelo código, tenta como REF direto
-      if (!rawRows.length) {
-        rawRows = await this.catalog.searchByRef(term);
+      if (!rawRows.length) rawRows = await this.catalog.searchByRef(term);
+    } else if (effectiveMode === 'ref' && isLikelyCodeOrEan) {
+      // Aba REF/Descrição com termo SÓ NÚMEROS: pode ser uma REF numérica
+      // (ex.: "223263" = família MARRIE) OU o código de etiqueta bipado por
+      // engano. O número colide entre os dois namespaces do Giga — "223263"
+      // é REF do MARRIE E TAMBÉM o CÓDIGO de uma peça do REF 6168.
+      // REF EXATA tem prioridade (igual à consulta da Giga); só cai pro código
+      // se NÃO existir REF com esse número (aí é etiqueta bipada na aba errada).
+      rawRows = await this.catalog.searchByRef(term);
+      const temRefExata = rawRows.some((r) => String(r.REF ?? '').trim() === term);
+      if (!temRefExata) {
+        const porCodigo = await this.catalog.searchByCodeAndExpandRef(term);
+        if (porCodigo.length) {
+          if (isLikelyEan) detectedAs = 'ean';
+          matchedSkuForResult = term;
+          rawRows = porCodigo;
+        }
+        // porCodigo vazio → mantém o searchByRef (pode ter match por prefixo)
       }
     } else {
-      // Modo REF — busca exata + prefixo
+      // Modo REF puro (não-numérico) — busca exata + prefixo
       rawRows = await this.catalog.searchByRef(term);
     }
     if (!rawRows.length) {
@@ -2641,7 +2654,7 @@ export class ProductsService {
 
     // 3. Coleta SKUs únicos e agrupa por REF
     const skus = Array.from(new Set(rawRows.map((r) => String(r.CODIGO)).filter(Boolean)));
-    const skuToMeta = new Map<string, { ref: string; descricao: string; cor: string; tamanho: string }>();
+    const skuToMeta = new Map<string, { ref: string; descricao: string; cor: string; tamanho: string; preco: number | null; fornecedor: string }>();
     for (const r of rawRows) {
       const sku = String(r.CODIGO);
       if (!sku || skuToMeta.has(sku)) continue;
@@ -2650,6 +2663,11 @@ export class ProductsService {
         descricao: String(r.DESCRICAOCOMPLETA ?? ''),
         cor: String(r.COR ?? ''),
         tamanho: String(r.TAMANHO ?? ''),
+        // VENDAUN em REAIS (espelho e Giga) — NUNCA dividir por 100
+        preco: r.VENDAUN != null && Number(r.VENDAUN) > 0 ? Number(r.VENDAUN) : null,
+        // REF é RECICLADA entre fornecedores no Giga ("8709" = calça MANIFESTO
+        // e vestido RIU KIU) — o fornecedor separa os baldes
+        fornecedor: String(r.FORNECEDOR ?? '').trim().toUpperCase(),
       });
     }
 
@@ -2719,7 +2737,7 @@ export class ProductsService {
     const byRef = new Map<string, {
       ref: string;
       name: string;
-      variants: Map<string, { sku: string; cor: string; tamanho: string; myStoreQty: number }>;
+      variants: Map<string, { sku: string; cor: string; tamanho: string; myStoreQty: number; preco: number | null }>;
       otherStoresMap: Map<string, {
         code: string;
         name: string;
@@ -2732,15 +2750,20 @@ export class ProductsService {
     for (const sku of skus) {
       const meta = skuToMeta.get(sku)!;
       const ref = normalizeBaseRef(meta.ref);
-      if (!byRef.has(ref)) {
-        byRef.set(ref, {
+      // Chave do balde = REF + FORNECEDOR: a mesma REF numérica é reusada
+      // por fornecedores diferentes no Giga (calça MANIFESTO e vestido
+      // RIU KIU ambos "8709") — sem o fornecedor os produtos se misturam e
+      // a grade mostra o nome/preço de um com as variações do outro.
+      const bucketKey = `${ref}|${meta.fornecedor}`;
+      if (!byRef.has(bucketKey)) {
+        byRef.set(bucketKey, {
           ref,
           name: cleanProductName(meta.descricao) || ref,
           variants: new Map(),
           otherStoresMap: new Map(),
         });
       }
-      const bucket = byRef.get(ref)!;
+      const bucket = byRef.get(bucketKey)!;
 
       // cria/atualiza variant da minha loja (qty = 0 se não tiver estoque)
       if (!bucket.variants.has(sku)) {
@@ -2749,6 +2772,7 @@ export class ProductsService {
           cor: meta.cor,
           tamanho: meta.tamanho,
           myStoreQty: 0,
+          preco: meta.preco,
         });
       }
 

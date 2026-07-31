@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 
 /**
  * /retaguarda/live-pro — Painel Mestre de Live Commerce (versão Pro)
@@ -445,7 +446,7 @@ function ProductDrawer({
     <>
       <div
         className="fixed inset-0 bg-black/50 z-30"
-        onClick={onClose}
+        {...overlayClose(onClose)}
       />
       <aside className="fixed right-0 top-0 bottom-0 w-[420px] bg-white shadow-2xl z-40 overflow-y-auto">
         <div className="p-5 border-b border-stone-200 flex items-center justify-between sticky top-0 bg-white">

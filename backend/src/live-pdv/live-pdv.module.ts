@@ -8,14 +8,17 @@ import { PagbankModule } from '../pagbank/pagbank.module';
 import { ProductPhotosModule } from '../product-photos/product-photos.module';
 import { RealignmentModule } from '../realignment/realignment.module';
 import { WincredMirrorModule } from '../wincred-mirror/wincred-mirror.module';
+import { ProductSearchModule } from '../product-search/product-search.module';
 import { WebsocketModule } from '../websocket/websocket.module';
+import { CorreiosModule } from '../correios/correios.module';
 import { LivePdvController } from './live-pdv.controller';
-import { LivePublicController, ManychatHookController } from './live-public.controller';
+import { LivePublicController, ManychatHookController, ManychatInboundController } from './live-public.controller';
 import { LivePayPublicController } from './live-pay-public.controller';
 import { LivePdvService } from './live-pdv.service';
 import { ManychatService } from './manychat.service';
 import { LivePdvExpiryCron } from './live-pdv-expiry.cron';
 import { LivePdvPayReconcileCron } from './live-pdv-pay-reconcile.cron';
+import { LivePdvCobrancaWhatsCron } from './live-pdv-cobranca-whats.cron';
 
 /**
  * Módulo de Live Commerce operado pela apresentadora (Live PDV).
@@ -34,10 +37,14 @@ import { LivePdvPayReconcileCron } from './live-pdv-pay-reconcile.cron';
     ProductPhotosModule,
     RealignmentModule,
     WincredMirrorModule,
+    ProductSearchModule,
     WebsocketModule,
+    CorreiosModule,
   ],
-  controllers: [LivePdvController, LivePublicController, ManychatHookController, LivePayPublicController],
-  providers: [LivePdvService, ManychatService, LivePdvExpiryCron, LivePdvPayReconcileCron],
-  exports: [LivePdvService],
+  controllers: [LivePdvController, LivePublicController, ManychatHookController, ManychatInboundController, LivePayPublicController],
+  providers: [LivePdvService, ManychatService, LivePdvExpiryCron, LivePdvPayReconcileCron, LivePdvCobrancaWhatsCron],
+  // ManychatService exportado pro PickOrdersModule mandar o WhatsApp de
+  // rastreio pra cliente da LIVE no envio (pedido do site avisa via WC).
+  exports: [LivePdvService, ManychatService],
 })
 export class LivePdvModule {}

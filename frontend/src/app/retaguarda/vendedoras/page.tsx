@@ -15,14 +15,15 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
-  ArrowLeft, RefreshCw, Plus, Users, Search, ChevronRight, Power,
+  ArrowLeft, RefreshCw, Plus, Users, Search, ChevronRight, Power, Merge, X,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
-type Cargo = 'VENDEDORA' | 'LIDER_B' | 'LIDER_A' | 'GERENTE_B' | 'GERENTE_A';
+type Cargo = 'VENDEDORA' | 'CAIXA' | 'LIDER_B' | 'LIDER_A' | 'GERENTE_B' | 'GERENTE_A';
 
 const CARGO_LABELS: Record<string, string> = {
   VENDEDORA: 'Vendedora',
+  CAIXA: 'Caixa',
   LIDER_B: 'Líder B',
   LIDER_A: 'Líder A',
   GERENTE_B: 'Gerente B',
@@ -31,11 +32,15 @@ const CARGO_LABELS: Record<string, string> = {
 
 const CARGO_COLORS: Record<string, string> = {
   VENDEDORA: 'bg-emerald-100 text-emerald-700',
+  CAIXA: 'bg-amber-100 text-amber-700',
   LIDER_B: 'bg-blue-100 text-blue-700',
   LIDER_A: 'bg-blue-200 text-blue-800',
   GERENTE_B: 'bg-violet-100 text-violet-700',
   GERENTE_A: 'bg-violet-200 text-violet-800',
 };
+
+/** Vendedora e Caixa não respondem por loja (comissão é sobre as próprias vendas). */
+const cargoSemLoja = (c: string) => c === 'VENDEDORA' || c === 'CAIXA';
 
 type Seller = {
   id: string;
@@ -81,6 +86,44 @@ export default function VendedorasPage() {
   const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'inactive'>('active');
 
   const [togglingId, setTogglingId] = useState<string | null>(null);
+  // Edição inline de LOJA/FUNÇÃO direto na lista (sem abrir o prontuário)
+  const [savingCell, setSavingCell] = useState<string | null>(null); // `${id}:loja` | `${id}:cargo`
+
+  // ── Unificar grafias (dono 29/07: "como vamos juntar as 3 Mirelas?") ──
+  const [unifyOpen, setUnifyOpen] = useState(false);
+  const [uLoja, setULoja] = useState('');
+  const [uFrom, setUFrom] = useState('');   // uma grafia por linha
+  const [uTo, setUTo] = useState('');
+  const [uPreview, setUPreview] = useState<any>(null);
+  const [uBusy, setUBusy] = useState(false);
+
+  async function unifyCall(dryRun: boolean) {
+    const from = uFrom.split('\n').map((s) => s.trim()).filter(Boolean);
+    if (!uLoja || !uTo.trim() || !from.length) {
+      alert('Preencha loja, as grafias antigas (uma por linha) e o nome final.');
+      return;
+    }
+    setUBusy(true);
+    try {
+      const r = await api<any>('/sellers/unify', {
+        method: 'POST',
+        body: JSON.stringify({ storeCode: uLoja, from, to: uTo.trim(), dryRun }),
+      });
+      setUPreview(r);
+      if (!dryRun) {
+        alert(`Unificado! ${r.vendasRenomeadas} vendas + ${r.itensRenomeados} itens agora são de "${r.nomeFinal}".`);
+        setUnifyOpen(false);
+        setUPreview(null);
+        setUFrom('');
+        setUTo('');
+        load();
+      }
+    } catch (e: any) {
+      alert('Erro: ' + (e?.message || e));
+    } finally {
+      setUBusy(false);
+    }
+  }
 
   const load = async () => {
     setLoading(true);
@@ -128,14 +171,82 @@ export default function VendedorasPage() {
     }
   }
 
+  /** Troca a LOJA inline. Grava storeCodeOrigin sempre; líder/gerente também
+   *  passa a responder pela loja escolhida (responsibleStoreId). */
+  async function changeLoja(seller: Seller, code: string) {
+    const store = stores.find((st) => st.code === code) || null;
+    const cargo = seller.cargo || 'VENDEDORA';
+    const body: any = { storeCodeOrigin: code || null };
+    if (!cargoSemLoja(cargo)) body.responsibleStoreId = store?.id || null;
+    setSavingCell(`${seller.id}:loja`);
+    try {
+      await api(`/sellers/${seller.id}`, { method: 'PATCH', body: JSON.stringify(body) });
+      setItems((prev) =>
+        prev.map((x) =>
+          x.id === seller.id
+            ? { ...x, storeCodeOrigin: code || null, responsibleStoreId: !cargoSemLoja(cargo) ? (store?.id || null) : x.responsibleStoreId }
+            : x,
+        ),
+      );
+    } catch (e: any) {
+      alert('Erro ao trocar loja: ' + (e?.message || e));
+    } finally {
+      setSavingCell(null);
+    }
+  }
+
+  /** Troca a FUNÇÃO inline. Virou líder/gerente → responde pela loja atual;
+   *  virou vendedora → backend zera responsibleStoreId (mantém a loja de origem). */
+  async function changeCargo(seller: Seller, cargo: Cargo) {
+    const respStore = stores.find((st) => st.id === seller.responsibleStoreId);
+    const lojaCode = respStore?.code || seller.storeCodeOrigin || null;
+    const lojaStore = lojaCode ? stores.find((st) => st.code === lojaCode) || null : null;
+    const body: any = { cargo };
+    if (!cargoSemLoja(cargo) && lojaStore) body.responsibleStoreId = lojaStore.id;
+    // Virando vendedora/caixa, preserva a loja visível como origem (o backend zera o responsible)
+    if (cargoSemLoja(cargo) && !seller.storeCodeOrigin && lojaCode) body.storeCodeOrigin = lojaCode;
+    setSavingCell(`${seller.id}:cargo`);
+    try {
+      await api(`/sellers/${seller.id}`, { method: 'PATCH', body: JSON.stringify(body) });
+      setItems((prev) =>
+        prev.map((x) =>
+          x.id === seller.id
+            ? {
+                ...x,
+                cargo,
+                responsibleStoreId: cargoSemLoja(cargo) ? null : (lojaStore?.id || x.responsibleStoreId),
+                storeCodeOrigin: x.storeCodeOrigin || lojaCode,
+              }
+            : x,
+        ),
+      );
+    } catch (e: any) {
+      alert('Erro ao trocar função: ' + (e?.message || e));
+    } finally {
+      setSavingCell(null);
+    }
+  }
+
   // Indexa loja por code pra mostrar nome
   const storeByCode = new Map<string, Store>();
   for (const s of stores) storeByCode.set(s.code, s);
 
+  // Contagem do dropdown com os MESMOS critérios da lista (status atual +
+  // loja de origem OU loja responsável) — antes contava todas (ativas +
+  // desligadas) só por origem e o número "não batia" com o mostrando.
+  const totalNoStatus = items.filter((s) =>
+    filterStatus === 'active' ? s.active : filterStatus === 'inactive' ? !s.active : true,
+  ).length;
   const countByStore = new Map<string, number>();
   for (const s of items) {
-    if (s.storeCodeOrigin) {
-      countByStore.set(s.storeCodeOrigin, (countByStore.get(s.storeCodeOrigin) || 0) + 1);
+    if (filterStatus === 'active' && !s.active) continue;
+    if (filterStatus === 'inactive' && s.active) continue;
+    const codes = new Set<string>();
+    if (s.storeCodeOrigin) codes.add(s.storeCodeOrigin);
+    const respStore = stores.find((st) => st.id === s.responsibleStoreId);
+    if (respStore?.code) codes.add(respStore.code);
+    for (const c of codes) {
+      countByStore.set(c, (countByStore.get(c) || 0) + 1);
     }
   }
 
@@ -194,6 +305,94 @@ export default function VendedorasPage() {
           </Link>
         </div>
 
+        {/* Unificar grafias — mesma pessoa digitada de vários jeitos no PDV */}
+        <div className="bg-white border border-violet-200 rounded-xl p-4 shadow-sm flex items-center gap-3">
+          <div className="w-10 h-10 rounded-lg bg-violet-100 flex items-center justify-center">
+            <Merge className="w-5 h-5 text-violet-700" />
+          </div>
+          <div className="flex-1">
+            <h3 className="font-bold text-slate-800 text-sm">Unificar grafias de vendedora</h3>
+            <p className="text-xs text-slate-500">
+              MIRELA / MIRELLA / MIRELA DA SILVA na mesma loja? Junta tudo numa só — vendas antigas, itens, whitelist do PDV e ficha RH.
+            </p>
+          </div>
+          <button
+            onClick={() => { setUnifyOpen(true); setUPreview(null); }}
+            className="bg-violet-600 hover:bg-violet-700 text-white font-bold px-4 py-2 rounded-lg text-sm"
+          >
+            Unificar
+          </button>
+        </div>
+
+        {unifyOpen && (
+          <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => !uBusy && setUnifyOpen(false)}>
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg p-5 space-y-3" onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-center justify-between">
+                <h3 className="font-black text-slate-800 flex items-center gap-2">
+                  <Merge className="w-5 h-5 text-violet-700" /> Unificar grafias
+                </h3>
+                <button onClick={() => setUnifyOpen(false)} className="p-1 hover:bg-slate-100 rounded" disabled={uBusy}>
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <div>
+                <label className="text-xs font-bold text-slate-500 uppercase">Loja</label>
+                <select value={uLoja} onChange={(e) => setULoja(e.target.value)} className="w-full border rounded-lg px-3 py-2 mt-1">
+                  <option value="">Selecione…</option>
+                  {stores.map((st) => (
+                    <option key={st.id} value={st.code}>{st.code} {st.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs font-bold text-slate-500 uppercase">Grafias erradas (uma por linha)</label>
+                <textarea
+                  value={uFrom}
+                  onChange={(e) => setUFrom(e.target.value)}
+                  rows={3}
+                  placeholder={'MIRELLA\nMIRELA DA SILVA'}
+                  className="w-full border rounded-lg px-3 py-2 mt-1 font-mono text-sm"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-slate-500 uppercase">Nome final (como deve ficar)</label>
+                <input
+                  value={uTo}
+                  onChange={(e) => setUTo(e.target.value)}
+                  placeholder="MIRELA"
+                  className="w-full border rounded-lg px-3 py-2 mt-1 font-mono text-sm"
+                />
+              </div>
+              {uPreview && (
+                <div className="bg-violet-50 border border-violet-200 rounded-lg p-3 text-xs space-y-1">
+                  <div className="font-bold text-violet-800">Preview — o que vai mudar:</div>
+                  <div>• {uPreview.vendasRenomeadas} vendas + {uPreview.itensRenomeados} itens renomeados</div>
+                  <div>• Whitelist do PDV: {uPreview.whitelistRenomeadas?.length ? uPreview.whitelistRenomeadas.join(', ') : 'nada a renomear'}</div>
+                  <div>• Fichas RH desativadas: {uPreview.fichasDesativadas?.length ? uPreview.fichasDesativadas.map((f: any) => f.name).join(', ') : 'nenhuma'}</div>
+                  <div>• Ficha mantida: {uPreview.fichaMantida?.name || '— (nenhuma ficha encontrada)'}</div>
+                </div>
+              )}
+              <div className="flex gap-2 pt-1">
+                <button
+                  onClick={() => unifyCall(true)}
+                  disabled={uBusy}
+                  className="flex-1 border border-violet-300 text-violet-700 hover:bg-violet-50 font-bold px-4 py-2 rounded-lg text-sm disabled:opacity-50"
+                >
+                  {uBusy ? '...' : '1º Prever'}
+                </button>
+                <button
+                  onClick={() => unifyCall(false)}
+                  disabled={uBusy || !uPreview}
+                  title={!uPreview ? 'Rode o Prever primeiro' : ''}
+                  className="flex-1 bg-violet-600 hover:bg-violet-700 text-white font-bold px-4 py-2 rounded-lg text-sm disabled:opacity-50"
+                >
+                  {uBusy ? '...' : '2º Unificar agora'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Filtros */}
         <div className="flex gap-2 flex-wrap items-center">
           <div className="relative flex-1 min-w-[200px]">
@@ -211,7 +410,7 @@ export default function VendedorasPage() {
             onChange={(e) => setFilterStore(e.target.value)}
             className="px-3 py-2 border rounded-lg bg-white font-bold text-sm min-w-[220px]"
           >
-            <option value="">Todas as lojas ({items.length})</option>
+            <option value="">Todas as lojas ({totalNoStatus})</option>
             {stores.map((st) => {
               const count = countByStore.get(st.code) || 0;
               return (
@@ -288,26 +487,40 @@ export default function VendedorasPage() {
                         </span>
                       )}
                     </td>
-                    <td className="px-3 py-2">
-                      {lojaShow ? (
-                        <span className="inline-flex items-center gap-1">
-                          <span className="text-xs font-mono bg-slate-100 px-1.5 py-0.5 rounded">
-                            {lojaShow}
-                          </span>
-                          {lojaInfo && (
-                            <span className="text-xs text-slate-600">{lojaInfo.name}</span>
-                          )}
-                        </span>
-                      ) : (
-                        <span className="text-xs text-slate-400">—</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-2">
-                      <span
-                        className={`text-xs font-bold px-2 py-0.5 rounded uppercase ${CARGO_COLORS[cargo] || 'bg-slate-100 text-slate-600'}`}
+                    <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+                      <select
+                        value={lojaShow || ''}
+                        disabled={savingCell === `${s.id}:loja`}
+                        onChange={(e) => changeLoja(s, e.target.value)}
+                        className={`text-xs border border-slate-200 rounded-lg px-1.5 py-1 bg-white hover:border-emerald-400 cursor-pointer max-w-[180px] ${
+                          savingCell === `${s.id}:loja` ? 'opacity-50' : ''
+                        }`}
+                        title="Trocar a loja direto aqui"
                       >
-                        {CARGO_LABELS[cargo] || cargo}
-                      </span>
+                        <option value="">—</option>
+                        {stores.map((st) => (
+                          <option key={st.id} value={st.code}>
+                            {st.code} {st.name}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+                      <select
+                        value={cargo}
+                        disabled={savingCell === `${s.id}:cargo`}
+                        onChange={(e) => changeCargo(s, e.target.value as Cargo)}
+                        className={`text-xs font-bold rounded-lg px-1.5 py-1 border border-slate-200 cursor-pointer uppercase ${CARGO_COLORS[cargo] || 'bg-slate-100 text-slate-600'} ${
+                          savingCell === `${s.id}:cargo` ? 'opacity-50' : ''
+                        }`}
+                        title="Trocar a função direto aqui"
+                      >
+                        {(Object.keys(CARGO_LABELS) as Cargo[]).map((c) => (
+                          <option key={c} value={c}>
+                            {CARGO_LABELS[c]}
+                          </option>
+                        ))}
+                      </select>
                       {s.cargoFuncao && (
                         <div className="text-[10px] text-slate-500 mt-0.5">{s.cargoFuncao}</div>
                       )}

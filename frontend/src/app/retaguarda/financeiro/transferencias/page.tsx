@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 
 /**
  * /retaguarda/financeiro/transferencias
@@ -713,7 +714,7 @@ export default function FinanceiroTransferenciasPage() {
       {pdfModal && (
         <div
           className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
-          onClick={() => setPdfModal(null)}
+          {...overlayClose(() => setPdfModal(null))}
         >
           <div
             className="bg-white rounded-xl shadow-2xl max-w-md w-full p-5 space-y-4 max-h-[80vh] overflow-y-auto"

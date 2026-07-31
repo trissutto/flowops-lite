@@ -1,4 +1,32 @@
 /**
+ * Extrai os campos CRUS de atribuição do WooCommerce (Order Attribution nativo,
+ * `_wc_order_attribution_*`). Usado pra PERSISTIR no Order local (relatório de
+ * campanhas). Retorna strings normalizadas (undefined vira null no Prisma).
+ */
+export function extractAttributionRaw(meta: any[]): {
+  utmSource: string | null;
+  utmMedium: string | null;
+  utmCampaign: string | null;
+  utmId: string | null;
+  utmContent: string | null;
+  sourceType: string | null;
+} {
+  const get = (key: string): string | null => {
+    const m = (meta ?? []).find((x) => x?.key === key);
+    const v = m ? String(m.value ?? '').trim() : '';
+    return v || null;
+  };
+  return {
+    utmSource: get('_wc_order_attribution_utm_source'),
+    utmMedium: get('_wc_order_attribution_utm_medium'),
+    utmCampaign: get('_wc_order_attribution_utm_campaign'),
+    utmId: get('_wc_order_attribution_utm_id'),
+    utmContent: get('_wc_order_attribution_utm_content'),
+    sourceType: (get('_wc_order_attribution_source_type') || '').toLowerCase() || null,
+  };
+}
+
+/**
  * Extrai "Origem" e "Source" dos meta_data de attribution do WooCommerce.
  * Usa os campos `_wc_order_attribution_*` (plugin nativo do WC desde 2024).
  */

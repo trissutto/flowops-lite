@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 
 /**
  * /minha-loja/live-pdv — Console de Live Commerce (operado pela apresentadora/loja)
@@ -24,6 +25,7 @@ import {
   Pencil,
   Percent,
   QrCode,
+  RefreshCw,
   Search,
   History,
   ShoppingCart,
@@ -62,6 +64,7 @@ interface GradeResult {
   totalRede?: number;
   cells?: GradeCell[];
   fromMirror?: boolean; // produto/estoque vieram do espelho (Giga fora do ar)
+  viaAtalho?: { atalho: string; refCode: string; cor?: string | null } | null; // busca veio da legenda (01, 02…)
 }
 interface CartItem {
   id: string;
@@ -75,6 +78,7 @@ interface CartItem {
   originStoreName: string;
   status: string;
   trackingCode?: string | null; // rastreio informado pela loja no despacho
+  legenda?: string | null; // nº da legenda (atalho) da live — pra conferir a peça
 }
 interface Cart {
   id: string;
@@ -101,6 +105,9 @@ interface Cart {
   qrCodeImageUrl?: string | null;
   hasManychat?: boolean; // cliente tem vínculo ManyChat → DM automática funciona
   dmSentAt?: string | null; // carimbo de cobrança enviada (sincroniza os ✓ entre PCs)
+  selfCart?: boolean; // cliente montou a sacola sozinha pela DM (ManyChat)
+  awaitingReview?: boolean; // cliente digitou FECHAR → aguarda a apresentadora liberar
+  clientClosedAt?: string | null;
   items: CartItem[];
 }
 interface ActiveCustomer {
@@ -112,6 +119,40 @@ interface ActiveCustomer {
 
 const brl = (cents: number) =>
   ((cents || 0) / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+/** Máscara 000.000.000-00 pro CPF. */
+const maskCpf = (v: string) =>
+  v
+    .replace(/\D/g, '')
+    .slice(0, 11)
+    .replace(/(\d{3})(\d)/, '$1.$2')
+    .replace(/(\d{3})\.(\d{3})(\d)/, '$1.$2.$3')
+    .replace(/\.(\d{3})(\d{1,2})$/, '.$1-$2');
+
+/** CPF válido de verdade (dígitos verificadores) — Correios exigem pra postar. */
+function cpfValido(raw: string): boolean {
+  const d = (raw || '').replace(/\D/g, '');
+  if (d.length !== 11 || /^(\d)\1{10}$/.test(d)) return false;
+  let s = 0;
+  for (let i = 0; i < 9; i++) s += Number(d[i]) * (10 - i);
+  let dv1 = (s * 10) % 11;
+  if (dv1 === 10) dv1 = 0;
+  if (dv1 !== Number(d[9])) return false;
+  s = 0;
+  for (let i = 0; i < 10; i++) s += Number(d[i]) * (11 - i);
+  let dv2 = (s * 10) % 11;
+  if (dv2 === 10) dv2 = 0;
+  return dv2 === Number(d[10]);
+}
+
+// Base dos LINKS QUE A CLIENTE RECEBE (cobrança/pagamento). O domínio oficial
+// é www.lurdsplussize.com.br — o console pode estar rodando na vercel.app
+// (app desktop), então NUNCA usar window.location.origin pra link de cliente.
+// Em localhost (dev/preview) mantém o origin pra testar.
+const publicBase = () =>
+  typeof window !== 'undefined' && /localhost|127\.0\.0\.1/.test(window.location.hostname)
+    ? window.location.origin
+    : 'https://www.lurdsplussize.com.br';
 
 const STATUS_LABEL: Record<string, string> = {
   open: 'Aberto',
@@ -184,6 +225,16 @@ export default function LivePdvPage() {
   const [sessionTitle, setSessionTitle] = useState('');
   const [sessionStoreName, setSessionStoreName] = useState('');
   const [activeLive, setActiveLive] = useState<{ id: string; title: string; storeName?: string } | null>(null);
+  // LIVES PASSADAS (14/07, pedido do dono): a tela inicial lista as últimas
+  // lives (encerradas ou não) com filtro — abrir uma encerrada entra em MODO
+  // CONSULTA/COBRANÇA: sem busca/grade (não vende), mas com carrinhos,
+  // cobrança (PIX/link/DM), marcar pago, separação e dashboard funcionando.
+  const [pastLives, setPastLives] = useState<
+    Array<{ id: string; title: string; status: string; liveStoreName?: string | null; createdAt?: string }>
+  >([]);
+  const [liveFilter, setLiveFilter] = useState('');
+  const [sessionStatus, setSessionStatus] = useState<string>('live');
+  const consulta = sessionStatus !== 'live';
   // Modal "nova live": título + LOJA ANFITRIÃ (obrigatório escolher — antes o
   // backend caía num padrão fixo e toda live saía como Anália Franco).
   const [newLiveOpen, setNewLiveOpen] = useState(false);
@@ -213,11 +264,17 @@ export default function LivePdvPage() {
 
   // Busca / grade
   const [term, setTerm] = useState('');
-  const [product, setProduct] = useState<GradeResult | null>(null);
+  // Até 4 GRADES ABERTAS ao mesmo tempo (pedido do dono 13/07): a apresentadora
+  // mostra as legendas 01–04 juntas e a operadora clica nas células de todas
+  // sem re-buscar. Busca nova preenche o próximo espaço; a 5ª derruba a mais
+  // antiga; ✕ fecha na mão. Busca sem resultado NÃO fecha as grades abertas.
+  const [products, setProducts] = useState<GradeResult[]>([]);
+  const [searchMiss, setSearchMiss] = useState<string | null>(null);
   const [searching, setSearching] = useState(false);
-  const [promoEditing, setPromoEditing] = useState(false);
+  // Edição de promo/cupom é POR GRADE (guarda a ref da grade em edição)
+  const [promoEditingRef, setPromoEditingRef] = useState<string | null>(null);
   const [promoInput, setPromoInput] = useState('');
-  const [cupomEditing, setCupomEditing] = useState(false);
+  const [cupomEditingRef, setCupomEditingRef] = useState<string | null>(null);
   const [cupomInput, setCupomInput] = useState('20,00');
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -225,13 +282,20 @@ export default function LivePdvPage() {
   const [activeCustomer, setActiveCustomer] = useState<ActiveCustomer | null>(null);
   const [cart, setCart] = useState<Cart | null>(null);
   const [carts, setCarts] = useState<Cart[]>([]);
+  const [liberando, setLiberando] = useState<string | null>(null); // sacola da DM sendo liberada
   const [clientFilter, setClientFilter] = useState(''); // busca de cliente por nome/@ na lista
   // Despoluição da grade: por padrão só quem TEM PEÇAS; vazios ficam atrás
   // de um chip (cliente puxada da fila que ainda não comprou = R$0 · 0 itens).
-  const [cartView, setCartView] = useState<'pecas' | 'vazios' | 'todos'>('pecas');
+  const [cartView, setCartView] = useState<'pecas' | 'vazios' | 'todos' | 'recorrentes'>('pecas');
+  // RECORRENTES (15/07): clientes que já criaram carrinho em qualquer live.
+  // Busca por nome/@/telefone (reusa o mesmo campo de busca); puxa pra live.
+  const [recorrentes, setRecorrentes] = useState<Array<{ customerId: string; name: string | null; instagram: string | null; phone: string | null; lastAt: string }>>([]);
+  const [recLoading, setRecLoading] = useState(false);
   const [clearingEmpty, setClearingEmpty] = useState(false);
   const [showCustomerModal, setShowCustomerModal] = useState(false);
-  const [pendingCell, setPendingCell] = useState<GradeCell | null>(null);
+  // Célula clicada aguardando identificação da cliente — leva junto a REF da
+  // grade de origem (com 4 grades abertas, o fallback não pode ser global).
+  const [pendingCell, setPendingCell] = useState<{ cell: GradeCell; refCode: string; gkey: string } | null>(null);
   // Aviso rápido "adicionado a Fulana" após fechar o carrinho.
   const [addedFlash, setAddedFlash] = useState<string | null>(null);
   // Aviso âmbar "QR da Fulana venceu" (cobrança resetada pelo backend).
@@ -258,6 +322,7 @@ export default function LivePdvPage() {
         const list = await api<any[]>('/live-pdv/sessions');
         const live = (list || []).find((s) => s.status === 'live');
         if (live) setActiveLive({ id: live.id, title: live.title, storeName: live.liveStoreName || '' });
+        setPastLives(list || []);
       } catch {}
       setBooting(false);
     })();
@@ -304,12 +369,34 @@ export default function LivePdvPage() {
       });
       await refreshCarts();
       await refreshPending();
+      // some da lista de recorrentes (agora tem carrinho na live)
+      setRecorrentes((prev) => prev.filter((r) => r.customerId !== customerId));
     } catch {
       alert('Não consegui puxar a cliente agora. Tenta de novo.');
     } finally {
       setPullingId(null);
     }
   }
+
+  // Busca de recorrentes (só quando o chip "Recorrentes" está ativo). Debounce
+  // leve pra não bater a cada tecla; reusa o campo de busca (clientFilter).
+  useEffect(() => {
+    if (cartView !== 'recorrentes' || !sessionId) return;
+    let alive = true;
+    setRecLoading(true);
+    const t = setTimeout(async () => {
+      try {
+        const q = clientFilter.trim();
+        const r = await api<any[]>(`/live-pdv/sessions/${sessionId}/recurring${q ? `?q=${encodeURIComponent(q)}` : ''}`);
+        if (alive) setRecorrentes(r || []);
+      } catch {
+        if (alive) setRecorrentes([]);
+      } finally {
+        if (alive) setRecLoading(false);
+      }
+    }, 300);
+    return () => { alive = false; clearTimeout(t); };
+  }, [cartView, clientFilter, sessionId]);
 
   // Loja da sessão usa PIX externo? (franquia sem gateway Pagar.me/PagBank)
   // → esconde "Cobrar PIX/Link" e mostra confirmação manual "pagou por fora".
@@ -378,6 +465,10 @@ export default function LivePdvPage() {
     socket.on('live-pdv:item-shipped', onChange);
     socket.on('live-pdv:promo', onChange);
     socket.on('live-pdv:charge-expired', onChargeExpired);
+    // SACOLA PELA DM: cliente montando/fechando o carrinho sozinha → atualiza a
+    // fila (item-reserved cobre o add via DM; cart-review é o FECHAR pra revisão).
+    socket.on('live-pdv:item-reserved', onChange);
+    socket.on('live-pdv:cart-review', onChange);
 
     // Cinto de segurança: se socket E webhook falharem, a lista ainda
     // atualiza sozinha a cada 90s.
@@ -391,6 +482,8 @@ export default function LivePdvPage() {
       socket.off('live-pdv:item-shipped', onChange);
       socket.off('live-pdv:promo', onChange);
       socket.off('live-pdv:charge-expired', onChargeExpired);
+      socket.off('live-pdv:item-reserved', onChange);
+      socket.off('live-pdv:cart-review', onChange);
       clearInterval(safety);
     };
   }, [sessionId, refreshCarts]);
@@ -471,8 +564,8 @@ export default function LivePdvPage() {
         if (j?.message) msg = Array.isArray(j.message) ? j.message[0] : j.message;
       } catch { /* mensagem crua */ }
       alert(msg);
-      // Falta endereço → abre o cadastro direto pra completar
-      if (/endereço|CEP|rua|número|cidade|UF/i.test(msg)) setEditCustomerOpen(true);
+      // Falta endereço/CPF → abre o cadastro direto pra completar
+      if (/endereço|CEP|rua|número|cidade|UF|CPF/i.test(msg)) setEditCustomerOpen(true);
     } finally {
       setReleasing(false);
     }
@@ -517,28 +610,73 @@ export default function LivePdvPage() {
     }
   }
 
-  // Cobra UMA cliente da fila: copia a mensagem personalizada (link curto /p/)
-  // e abre o canal — Direct (perfil, colar Ctrl+V) ou WhatsApp (texto já vai).
-  function chargeOne(c: Cart, canal: 'direct' | 'whats') {
+  // Estado do envio WhatsApp por carrinho — feedback visual + trava de
+  // duplo clique (sem isso o sucesso era silencioso e cada clique reenviava).
+  const [whatsState, setWhatsState] = useState<Record<string, 'sending' | 'sent' | undefined>>({});
+  // Contador local de tentativas por canal (soma com o do servidor até o refresh)
+  const [tentativasLocal, setTentativasLocal] = useState<Record<string, { direct: number; whats: number }>>({});
+  const nTentativas = (c: any, canal: 'direct' | 'whats') =>
+    (Number(canal === 'direct' ? c.cobrancaDirectCount : c.cobrancaWhatsCount) || 0) +
+    (tentativasLocal[c.id]?.[canal] || 0);
+
+  // Cobra UMA cliente da fila: Direct abre o perfil (colar Ctrl+V);
+  // WhatsApp dispara DIRETO pela API do ManyChat (template aprovado — chega
+  // sozinho, sem abrir app). Se a API falhar, cai no wa.me como plano B.
+  async function chargeOne(c: Cart, canal: 'direct' | 'whats') {
+    let whatsViaApi = false; // API do ManyChat já conta a tentativa no servidor
     const link = c.payCode
-      ? `${window.location.origin}/p/${c.payCode}`
-      : `${window.location.origin}/pagar/${c.id}`;
+      ? `${publicBase()}/p/${c.payCode}`
+      : `${publicBase()}/pagar/${c.id}`;
     const first = (c.customerName || '').trim().split(/\s+/)[0] || 'cliente';
     const msg = `Oi, ${first}! 💜 Suas peças da live deram ${brl(c.totalCents)} + frete. Fecha sua compra aqui: ${link}`;
-    navigator.clipboard?.writeText(msg);
     if (canal === 'direct' && c.customerInstagram) {
+      navigator.clipboard?.writeText(msg);
       window.open(
         `https://www.instagram.com/${String(c.customerInstagram).replace(/^@/, '')}/`,
         '_blank',
         'noopener,noreferrer',
       );
     } else if (canal === 'whats' && c.customerPhone) {
-      const d = String(c.customerPhone).replace(/\D/g, '');
-      window.open(`https://wa.me/55${d}?text=${encodeURIComponent(msg)}`, '_blank', 'noopener,noreferrer');
+      if (whatsState[c.id] === 'sending') return; // trava duplo clique
+      if (whatsState[c.id] === 'sent' && !confirm(`Já foi enviado o WhatsApp pra ${c.customerName}. Enviar DE NOVO?`)) {
+        return;
+      }
+      setWhatsState((s) => ({ ...s, [c.id]: 'sending' }));
+      try {
+        await api(`/live-pdv/carts/${c.id}/cobranca-whats`, { method: 'POST', body: JSON.stringify({}) });
+        whatsViaApi = true;
+        setWhatsState((s) => ({ ...s, [c.id]: 'sent' }));
+      } catch (e: any) {
+        setWhatsState((s) => ({ ...s, [c.id]: undefined }));
+        // API indisponível/recusou → plano B: wa.me manual (comportamento antigo)
+        const raw = String(e?.message || '');
+        let m = 'ManyChat indisponível';
+        try {
+          const j = JSON.parse(raw.slice(raw.indexOf(': ') + 2));
+          if (j?.message) m = Array.isArray(j.message) ? j.message[0] : j.message;
+        } catch { /* cru */ }
+        alert(`Não consegui enviar pela API (${m}).\nAbrindo o WhatsApp manual como plano B — a mensagem já está copiada.`);
+        navigator.clipboard?.writeText(msg);
+        const d = String(c.customerPhone).replace(/\D/g, '');
+        window.open(`https://wa.me/55${d}?text=${encodeURIComponent(msg)}`, '_blank', 'noopener,noreferrer');
+      }
     }
     setChargeAllDone((s) => ({ ...s, [c.id]: true }));
-    // Carimba no servidor — o ✓ aparece nos outros PCs também
-    api(`/live-pdv/carts/${c.id}/mark-charged`, { method: 'POST', body: JSON.stringify({}) }).catch(() => {});
+    // Carimba no servidor com o CANAL — o ✓ e o contador aparecem nos outros
+    // PCs. WhatsApp via API NÃO manda canal (o endpoint cobranca-whats já
+    // somou a tentativa no servidor — evita contar 2×).
+    api(`/live-pdv/carts/${c.id}/mark-charged`, {
+      method: 'POST',
+      body: JSON.stringify(whatsViaApi ? {} : { canal }),
+    }).catch(() => {});
+    // Contadorzinho local imediato (o servidor confirma no próximo refresh)
+    setTentativasLocal((s) => ({
+      ...s,
+      [c.id]: {
+        direct: (s[c.id]?.direct || 0) + (canal === 'direct' ? 1 : 0),
+        whats: (s[c.id]?.whats || 0) + (canal === 'whats' ? 1 : 0),
+      },
+    }));
   }
 
   // "JÁ PAGOU por fora" direto na fila: vira PAGO → SAI da lista de cobrança
@@ -624,9 +762,46 @@ export default function LivePdvPage() {
   // Continua a live que já estava aberta (sem fechar nada).
   function continueLive() {
     if (!activeLive) return;
+    setSessionStatus('live');
     setSessionId(activeLive.id);
     setSessionTitle(activeLive.title);
     setSessionStoreName(activeLive.storeName || '');
+  }
+
+  // Abre uma live PASSADA em modo consulta/cobrança (encerrada) ou normal (ao vivo).
+  function openPastLive(s: { id: string; title: string; status: string; liveStoreName?: string | null }) {
+    setSessionStatus(s.status || 'ended');
+    setSessionId(s.id);
+    setSessionTitle(s.title);
+    setSessionStoreName(s.liveStoreName || '');
+  }
+
+  // REABRE uma live encerrada (14/07): nada foi apagado no encerramento —
+  // volta o status e o console recupera busca/grades/venda na hora.
+  async function reopenLive() {
+    if (!sessionId) return;
+    if (!confirm(`Reabrir a live "${sessionTitle}"? Ela volta AO VIVO com busca e venda liberadas.`)) return;
+    try {
+      await api(`/live-pdv/sessions/${sessionId}/reopen`, { method: 'POST' });
+      setSessionStatus('live');
+      setActiveLive({ id: sessionId, title: sessionTitle, storeName: sessionStoreName });
+      setPastLives((prev) => prev.map((s) => (s.id === sessionId ? { ...s, status: 'live' } : s)));
+      await refreshCarts();
+    } catch (e: any) {
+      alert('Erro ao reabrir: ' + (e?.message || e));
+    }
+  }
+
+  // Sai da live aberta SEM encerrar nada — volta pra tela de escolha.
+  function backToPicker() {
+    setSessionId(null);
+    setSessionTitle('');
+    setCart(null);
+    setActiveCustomer(null);
+    setQr(null);
+    setPaid(false);
+    setProducts([]);
+    setSessionStatus('live');
   }
 
   // Fecha a live atual: guarda os carrinhos na sessão (não apaga) e volta pra
@@ -647,15 +822,15 @@ export default function LivePdvPage() {
       setSessionTitle('');
       setActiveLive(null);
       setCart(null);
-      setProduct(null);
+      setProducts([]);
     } catch (e: any) {
       alert('Erro ao fechar live: ' + (e?.message || e));
     }
   }
 
-  // ─── Preço promocional da live ──────────────────────────────────────────────
-  async function applyPromo() {
-    if (!sessionId || !product?.ref) return;
+  // ─── Preço promocional da live (por grade) ──────────────────────────────────
+  async function applyPromo(p: GradeResult) {
+    if (!sessionId || !p?.ref) return;
     const reais = parseFloat(promoInput.replace(',', '.'));
     if (isNaN(reais) || reais <= 0) {
       alert('Informe um preço promocional válido.');
@@ -664,10 +839,10 @@ export default function LivePdvPage() {
     try {
       await api(`/live-pdv/sessions/${sessionId}/promo`, {
         method: 'POST',
-        body: JSON.stringify({ refCode: product.ref, priceCents: Math.round(reais * 100) }),
+        body: JSON.stringify({ refCode: p.ref, priceCents: Math.round(reais * 100) }),
       });
-      setPromoEditing(false);
-      await doSearch();
+      setPromoEditingRef(null);
+      await refreshGradesOfRef(p.ref);
       await refreshCarts();
       await syncOpenCartAfterPriceChange();
     } catch (e: any) {
@@ -675,15 +850,15 @@ export default function LivePdvPage() {
     }
   }
 
-  async function removePromo() {
-    if (!sessionId || !product?.ref) return;
+  async function removePromo(p: GradeResult) {
+    if (!sessionId || !p?.ref) return;
     try {
       await api(`/live-pdv/sessions/${sessionId}/promo`, {
         method: 'POST',
-        body: JSON.stringify({ refCode: product.ref, priceCents: 0 }),
+        body: JSON.stringify({ refCode: p.ref, priceCents: 0 }),
       });
-      setPromoEditing(false);
-      await doSearch();
+      setPromoEditingRef(null);
+      await refreshGradesOfRef(p.ref);
       await refreshCarts();
       await syncOpenCartAfterPriceChange();
     } catch (e: any) {
@@ -693,37 +868,37 @@ export default function LivePdvPage() {
 
   // Preço ORIGINAL (base) — referência pros descontos rápidos. Quando já tem
   // promo ativa, usa o basePriceCents (o riscado); senão o preço atual.
-  function baseCents(): number {
-    if (!product) return 0;
-    return product.basePriceCents || product.priceCents || 0;
+  function baseCents(p: GradeResult): number {
+    if (!p) return 0;
+    return p.basePriceCents || p.priceCents || 0;
   }
 
   // Grava um preço final (centavos) como promo da live — usado pelos atalhos
   // "50% OFF" e "Cupom relâmpago". Mesmo endpoint do applyPromo.
-  async function setPromoCents(cents: number) {
-    if (!sessionId || !product?.ref) return;
+  async function setPromoCents(p: GradeResult, cents: number) {
+    if (!sessionId || !p?.ref) return;
     const safe = Math.max(0, Math.round(cents));
-    const full = product.basePriceCents || product.priceCents || 0;
+    const full = p.basePriceCents || p.priceCents || 0;
     try {
       await api(`/live-pdv/sessions/${sessionId}/promo`, {
         method: 'POST',
-        body: JSON.stringify({ refCode: product.ref, priceCents: safe }),
+        body: JSON.stringify({ refCode: p.ref, priceCents: safe }),
       });
-      setPromoEditing(false);
-      setCupomEditing(false);
-      // Atualiza o preço NA TELA imediatamente — NÃO depende do doSearch (que
-      // por sua vez exige o termo ainda estar no campo de busca). Sem isso, o
-      // desconto "não abatia" quando o campo de busca já tinha sido limpo.
-      setProduct((p) =>
-        p
-          ? {
-              ...p,
-              priceCents: safe,
-              basePriceCents: p.basePriceCents || p.priceCents,
-              promoActive: safe > 0 && safe < full,
-              cells: (p.cells || []).map((c) => ({ ...c, priceCents: safe })),
-            }
-          : p,
+      setPromoEditingRef(null);
+      setCupomEditingRef(null);
+      // Atualiza o preço NA TELA imediatamente — não depende de nova busca.
+      setProducts((list) =>
+        list.map((x) =>
+          x.ref === p.ref
+            ? {
+                ...x,
+                priceCents: safe,
+                basePriceCents: x.basePriceCents || x.priceCents,
+                promoActive: safe > 0 && safe < full,
+                cells: (x.cells || []).map((c) => ({ ...c, priceCents: safe })),
+              }
+            : x,
+        ),
       );
       await refreshCarts();
       await syncOpenCartAfterPriceChange();
@@ -733,15 +908,15 @@ export default function LivePdvPage() {
   }
 
   // 50% sobre o preço ORIGINAL.
-  function applyMetade() {
-    const base = baseCents();
+  function applyMetade(p: GradeResult) {
+    const base = baseCents(p);
     if (!base) return;
-    setPromoCents(Math.round(base / 2));
+    setPromoCents(p, Math.round(base / 2));
   }
 
   // Cupom relâmpago: desconta R$ X do preço ORIGINAL.
-  function applyCupom() {
-    const base = baseCents();
+  function applyCupom(p: GradeResult) {
+    const base = baseCents(p);
     const off = parseFloat(cupomInput.replace(',', '.'));
     if (isNaN(off) || off <= 0) {
       alert('Informe o valor do cupom em reais (ex: 20,00).');
@@ -752,7 +927,7 @@ export default function LivePdvPage() {
       alert('O desconto não pode ser maior ou igual ao preço.');
       return;
     }
-    setPromoCents(base - offCents);
+    setPromoCents(p, base - offCents);
   }
 
   // ─── Frete pelo CEP ──────────────────────────────────────────────────────
@@ -818,12 +993,84 @@ export default function LivePdvPage() {
     });
   }
 
-  // ─── Busca ────────────────────────────────────────────────────────────────
+  // ─── Busca / grades abertas (até 4) ──────────────────────────────────────
+  const MAX_GRADES = 4;
+
+  /** Identidade de um cartão aberto: a LEGENDA (atalho) manda — cada legenda é
+   *  um cartão próprio, mesmo que duas apontem pra MESMA referência (com ou sem
+   *  cor). Identificar só por REF fazia a 2ª legenda substituir a 1ª (live
+   *  13/07). Busca direta por REF (sem legenda) usa a REF como identidade. */
+  const gradeKey = (g: Pick<GradeResult, 'ref' | 'viaAtalho'>) =>
+    `${g.viaAtalho?.atalho || ''}::${g.ref || ''}::${g.viaAtalho?.cor || ''}`;
+
+  /** Insere/atualiza a grade na lista: mesmo cartão (REF+cor) substitui no
+   *  lugar; novo entra no fim; passou de 4, a MAIS ANTIGA sai. */
+  function upsertProduct(res: GradeResult) {
+    if (!res?.found || !res.ref) return;
+    setProducts((prev) => {
+      const idx = prev.findIndex((p) => gradeKey(p) === gradeKey(res));
+      if (idx >= 0) {
+        const c = [...prev];
+        c[idx] = res;
+        return c;
+      }
+      const next = [...prev, res];
+      return next.length > MAX_GRADES ? next.slice(next.length - MAX_GRADES) : next;
+    });
+  }
+
+  function closeGrade(g: GradeResult) {
+    setProducts((prev) => prev.filter((p) => gradeKey(p) !== gradeKey(g)));
+    if (promoEditingRef === g.ref) setPromoEditingRef(null);
+    if (cupomEditingRef === g.ref) setCupomEditingRef(null);
+  }
+
+  /**
+   * Recarrega EM SILÊNCIO a grade de um cartão JÁ ABERTO (estoque/reservas
+   * mudaram). NUNCA adiciona cartão novo nem derruba os abertos — bug real
+   * 13/07 (na live): após jogar no carrinho uma variante de cor (cell.ref
+   * com sufixo, ex. "…M"), o refresh buscava pela VARIANTE, o upsert criava
+   * um cartão novo ("abriu outra aleatória") e empurrava o antigo pra fora.
+   * Busca pelo ATALHO quando o cartão veio da legenda (preserva o filtro de
+   * cor da legenda); senão pela REF base do próprio cartão.
+   */
+  async function refreshGradeFor(key?: string | null) {
+    const alvo = String(key || '').trim();
+    if (!alvo) return;
+    const atual = products.find((p) => gradeKey(p) === alvo);
+    if (!atual) return; // cartão já fechado — nada a atualizar
+    const termo = atual.viaAtalho?.atalho || atual.ref || '';
+    if (!termo) return;
+    try {
+      const sid = sessionId ? `&sessionId=${sessionId}` : '';
+      const res = await api<GradeResult>(`/live-pdv/search?term=${encodeURIComponent(termo)}${sid}`);
+      if (res?.found && gradeKey(res) === alvo) {
+        setProducts((prev) => prev.map((p) => (gradeKey(p) === alvo ? res : p)));
+      }
+    } catch {
+      /* mantém a grade como está */
+    }
+  }
+
+  /** Recarrega os cartões de uma REF (promo muda o preço de TODOS os cartões
+   *  daquela referência, mesmo com cores diferentes abertas). */
+  async function refreshGradesOfRef(ref?: string | null) {
+    const alvoRef = String(ref || '').trim();
+    if (!alvoRef) return;
+    for (const p of products.filter((g) => g.ref === alvoRef)) {
+      await refreshGradeFor(gradeKey(p));
+    }
+  }
+
+  /** Recarrega TODAS as grades abertas (ex.: carrinho cancelado liberou reservas). */
+  async function refreshAllGrades() {
+    for (const p of products) await refreshGradeFor(gradeKey(p));
+  }
+
   async function runSearch(q: string) {
     if (!q) return;
     setSearching(true);
-    setProduct(null);
-    setPromoEditing(false);
+    setSearchMiss(null);
     setHistoryOpen(false);
     try {
       const sid = sessionId ? `&sessionId=${sessionId}` : '';
@@ -835,14 +1082,18 @@ export default function LivePdvPage() {
           setTimeout(() => reject(new Error('__timeout__')), 12000),
         ),
       ]);
-      setProduct(res);
-      if (res?.found) pushRefHistory(res.ref || q);
+      if (res?.found) {
+        upsertProduct(res);
+        pushRefHistory(res.ref || q);
+        setTerm(''); // limpa pra próxima legenda — as grades ficam abertas
+      } else {
+        setSearchMiss(q);
+      }
     } catch (err: any) {
       if (err?.message === '__timeout__') {
-        setProduct(null);
         alert('A busca demorou demais (o Giga pode estar lento). Tente de novo.');
       } else {
-        setProduct({ found: false });
+        setSearchMiss(q);
       }
     } finally {
       setSearching(false);
@@ -852,6 +1103,29 @@ export default function LivePdvPage() {
   async function doSearch(e?: React.FormEvent) {
     e?.preventDefault();
     await runSearch(term.trim());
+  }
+
+  // Botão "Atualizar estoque" (por grade): força o refresh pontual no Giga (só
+  // os códigos da peça) e re-renderiza a grade fresca. Nunca trava: o backend
+  // devolve a grade do espelho se o Giga não responder em 8s.
+  const [refreshingRef, setRefreshingRef] = useState<string | null>(null);
+  async function refreshStock(p: GradeResult) {
+    // Busca pelo ATALHO quando o cartão veio da legenda — mantém o filtro de
+    // cor; buscar pela REF devolveria a grade com TODAS as cores (outro cartão).
+    const q = (p.viaAtalho?.atalho || p.ref || '').trim();
+    if (!q || refreshingRef) return;
+    setRefreshingRef(q);
+    try {
+      const res = await api<GradeResult>(`/live-pdv/search/refresh-stock`, {
+        method: 'POST',
+        body: JSON.stringify({ term: q, sessionId }),
+      });
+      if (res?.found) upsertProduct(res);
+    } catch {
+      alert('Não consegui atualizar agora (Giga lento?). A grade continua a do espelho.');
+    } finally {
+      setRefreshingRef(null);
+    }
   }
 
   /** Rollback: clica numa REF do histórico → preenche a busca e reabre a grade. */
@@ -876,26 +1150,26 @@ export default function LivePdvPage() {
     searchRef.current?.focus();
   }
 
-  async function clickCell(cell: GradeCell) {
+  async function clickCell(cell: GradeCell, refCode: string, gkey: string) {
     if (cell.available <= 0) return;
     if (!sessionId) {
       alert('Crie/abra uma sessão de live primeiro.');
       return;
     }
     if (!activeCustomer) {
-      setPendingCell(cell);
+      setPendingCell({ cell, refCode, gkey });
       setShowCustomerModal(true);
       return;
     }
-    await addItem(cell);
+    await addItem(cell, refCode, gkey);
   }
 
-  async function addItem(cell: GradeCell) {
-    if (!sessionId || !product?.ref) return;
+  async function addItem(cell: GradeCell, refCode: string, gkey: string) {
+    if (!sessionId || !(cell.ref || refCode)) return;
     setAdding(cell.itemKey);
     try {
       const body: any = {
-        refCode: cell.ref || product.ref,
+        refCode: cell.ref || refCode,
         cor: cell.cor,
         tamanho: cell.tamanho,
         qty: 1,
@@ -917,7 +1191,7 @@ export default function LivePdvPage() {
       setCart(res.cart);
       setQr(null);
       setPaid(false);
-      await doSearch(); // atualiza estoque exibido
+      await refreshGradeFor(gkey); // atualiza SÓ o cartão da peça — nunca cria/derruba cartão
       await refreshCarts();
       closeAfterAdd(res.cart?.customerName); // fecha o carrinho por segurança
     } catch (e: any) {
@@ -942,19 +1216,19 @@ export default function LivePdvPage() {
       setActiveCustomer(c);
       setCart(null);
       setShowCustomerModal(false);
-      const cell = pendingCell;
+      const pending = pendingCell;
       setPendingCell(null);
-      if (cell) {
+      if (pending) {
         // addItem precisa do customer atualizado
-        setTimeout(() => addItemWith(c, cell), 0);
+        setTimeout(() => addItemWith(c, pending.cell, pending.refCode, pending.gkey), 0);
       }
     } catch (e: any) {
       alert(e?.message || 'Erro ao salvar cliente');
     }
   }
 
-  async function addItemWith(customer: ActiveCustomer, cell: GradeCell) {
-    if (!sessionId || !product?.ref) return;
+  async function addItemWith(customer: ActiveCustomer, cell: GradeCell, refCode: string, gkey: string) {
+    if (!sessionId || !(cell.ref || refCode)) return;
     setAdding(cell.itemKey);
     try {
       const res = await api<{ cart: Cart }>(`/live-pdv/sessions/${sessionId}/items`, {
@@ -966,14 +1240,14 @@ export default function LivePdvPage() {
             phone: customer.phone,
             instagram: customer.instagram,
           },
-          refCode: cell.ref || product.ref,
+          refCode: cell.ref || refCode,
           cor: cell.cor,
           tamanho: cell.tamanho,
           qty: 1,
         }),
       });
       setCart(res.cart);
-      await doSearch();
+      await refreshGradeFor(gkey);
       await refreshCarts();
       closeAfterAdd(res.cart?.customerName); // fecha o carrinho por segurança
     } catch (e: any) {
@@ -987,28 +1261,28 @@ export default function LivePdvPage() {
   // @) em vez de criar outro — abre ele e adiciona a peça pendente nele.
   function handleUseExisting(existing: Cart) {
     setShowCustomerModal(false);
-    const cell = pendingCell;
+    const pending = pendingCell;
     setPendingCell(null);
     openCart(existing);
-    if (cell) setTimeout(() => addItemToCart(existing, cell), 0);
+    if (pending) setTimeout(() => addItemToCart(existing, pending.cell, pending.refCode, pending.gkey), 0);
   }
 
-  async function addItemToCart(targetCart: Cart, cell: GradeCell) {
-    if (!sessionId || !product?.ref) return;
+  async function addItemToCart(targetCart: Cart, cell: GradeCell, refCode: string, gkey: string) {
+    if (!sessionId || !(cell.ref || refCode)) return;
     setAdding(cell.itemKey);
     try {
       const res = await api<{ cart: Cart }>(`/live-pdv/sessions/${sessionId}/items`, {
         method: 'POST',
         body: JSON.stringify({
           cartId: targetCart.id,
-          refCode: cell.ref || product.ref,
+          refCode: cell.ref || refCode,
           cor: cell.cor,
           tamanho: cell.tamanho,
           qty: 1,
         }),
       });
       setCart(res.cart);
-      await doSearch();
+      await refreshGradeFor(gkey);
       await refreshCarts();
       closeAfterAdd(res.cart?.customerName);
     } catch (e: any) {
@@ -1034,7 +1308,7 @@ export default function LivePdvPage() {
       await api(`/live-pdv/carts/${cart.id}/cancel`, { method: 'POST', body: JSON.stringify({}) });
       newClient();
       await refreshCarts();
-      await doSearch(); // atualiza estoque (reservas liberadas)
+      await refreshAllGrades(); // atualiza estoque (reservas liberadas)
     } catch (e: any) {
       alert('Erro ao excluir: ' + (e?.message || e));
     }
@@ -1048,7 +1322,7 @@ export default function LivePdvPage() {
       await api(`/live-pdv/carts/${c.id}/cancel`, { method: 'POST', body: JSON.stringify({}) });
       if (cart?.id === c.id) newClient(); // se era a que estava aberta no painel, limpa
       await refreshCarts();
-      await doSearch(); // atualiza estoque (reservas liberadas)
+      await refreshAllGrades(); // atualiza estoque (reservas liberadas)
     } catch (e: any) {
       alert('Erro ao excluir: ' + (e?.message || e));
     }
@@ -1330,6 +1604,66 @@ export default function LivePdvPage() {
             </button>
           </>
         )}
+        {/* LIVES ANTERIORES — consulta e cobrança de lives já encerradas.
+            (14/07, pedido do dono): encerrar a live não pode esconder os
+            carrinhos; aqui reabre qualquer live pra cobrar ou só conferir. */}
+        {pastLives.length > 0 && (
+          <div className="mt-2 w-full max-w-lg rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="mb-2 flex items-center justify-between">
+              <h2 className="text-sm font-bold uppercase tracking-wide text-slate-500">
+                Lives anteriores
+              </h2>
+              <span className="text-[11px] text-slate-400">consultar · cobrar</span>
+            </div>
+            <input
+              value={liveFilter}
+              onChange={(e) => setLiveFilter(e.target.value)}
+              placeholder="Filtrar por nome ou data (ex: 13/07)…"
+              className="mb-2 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+            />
+            <div className="max-h-72 space-y-1 overflow-y-auto">
+              {pastLives
+                .filter((s) => {
+                  const f = liveFilter.trim().toLowerCase();
+                  if (!f) return true;
+                  const data = s.createdAt
+                    ? new Date(s.createdAt).toLocaleDateString('pt-BR')
+                    : '';
+                  return (
+                    (s.title || '').toLowerCase().includes(f) ||
+                    (s.liveStoreName || '').toLowerCase().includes(f) ||
+                    data.includes(f)
+                  );
+                })
+                .slice(0, 20)
+                .map((s) => (
+                  <button
+                    key={s.id}
+                    onClick={() => openPastLive(s)}
+                    className="flex w-full items-center gap-2 rounded-lg border border-slate-100 px-3 py-2 text-left hover:border-rose-300 hover:bg-rose-50"
+                  >
+                    <span
+                      className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                        s.status === 'live'
+                          ? 'bg-rose-100 text-rose-700'
+                          : 'bg-slate-100 text-slate-500'
+                      }`}
+                    >
+                      {s.status === 'live' ? '● AO VIVO' : 'ENCERRADA'}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-sm font-semibold text-slate-700">
+                      {s.title}
+                    </span>
+                    <span className="shrink-0 text-[11px] text-slate-400">
+                      {s.liveStoreName ? `🏬 ${s.liveStoreName} · ` : ''}
+                      {s.createdAt ? new Date(s.createdAt).toLocaleDateString('pt-BR') : ''}
+                    </span>
+                  </button>
+                ))}
+            </div>
+          </div>
+        )}
+
         <Link href="/minha-loja" className="text-sm text-slate-400 hover:text-slate-600">
           Voltar
         </Link>
@@ -1435,7 +1769,10 @@ export default function LivePdvPage() {
   // Partição da grade: com peças × vazios (0 itens). Busca ativa ignora o chip.
   const nComPecas = clientesFiltradas.filter((c) => (c.items?.length || 0) > 0).length;
   const nVazios = clientesFiltradas.length - nComPecas;
-  const viewEfetiva: 'pecas' | 'vazios' | 'todos' = clientFilter.trim() ? 'todos' : cartView;
+  // No modo recorrentes o filtro alimenta a busca de recorrentes (não força
+  // 'todos' na lista da sessão). Nos demais, busca ativa mostra todos.
+  const viewEfetiva: 'pecas' | 'vazios' | 'todos' | 'recorrentes' =
+    cartView === 'recorrentes' ? 'recorrentes' : clientFilter.trim() ? 'todos' : cartView;
   const gridCarts = clientesFiltradas.filter((c) =>
     viewEfetiva === 'todos'
       ? true
@@ -1483,6 +1820,31 @@ export default function LivePdvPage() {
   // Cobrada = marcada neste navegador OU carimbo do servidor (dmSentAt) — o
   // carimbo sincroniza entre PCs: quem cobrou em outra máquina aparece ✓ aqui.
   const cobradas = cobraveis.filter((c) => chargeAllDone[c.id] || c.dmSentAt).length;
+
+  // SACOLA PELA DM: carrinhos que a cliente FECHOU e aguardam a apresentadora
+  // conferir e liberar a cobrança (verificação humana antes de finalizar).
+  const pendentesRevisao = cartsAtivos.filter(
+    (c) => c.awaitingReview && (c.items?.length || 0) > 0,
+  );
+
+  async function liberarSacola(c: Cart) {
+    if (
+      !confirm(
+        `Conferiu a sacola de ${c.customerName || 'cliente'} (${(c.items?.length || 0)} peça(s), ` +
+          `${brl(c.totalCents)})?\n\nAo liberar, o link de pagamento vai automático pra cliente.`,
+      )
+    )
+      return;
+    setLiberando(c.id);
+    try {
+      await api(`/live-pdv/carts/${c.id}/liberar-cobranca`, { method: 'POST', body: JSON.stringify({}) });
+      await refreshCarts();
+    } catch (e: any) {
+      alert(e?.message || 'Falha ao liberar a cobrança.');
+    } finally {
+      setLiberando(null);
+    }
+  }
 
   return (
     <div className="min-h-screen bg-slate-100">
@@ -1545,6 +1907,53 @@ export default function LivePdvPage() {
           </div>
         </div>
       )}
+      {/* SACOLAS PELA DM — fila de REVISÃO (verificação humana antes de cobrar).
+          A cliente montou e fechou sozinha pelo ManyChat; a apresentadora confere
+          e libera → só então o link de pagamento vai pra cliente. */}
+      {pendentesRevisao.length > 0 && (
+        <div className="mx-auto mt-3 w-full max-w-3xl px-3">
+          <div className="rounded-xl border-2 border-amber-300 bg-amber-50 p-3">
+            <div className="mb-1 flex items-center gap-2">
+              <span className="text-lg">🔔</span>
+              <h3 className="text-sm font-bold text-amber-900">
+                {pendentesRevisao.length} sacola(s) da cliente pra conferir
+              </h3>
+            </div>
+            <p className="mb-3 text-xs text-amber-800">
+              Montadas pela cliente na DM. Confira as peças e libere — só então o link de pagamento é enviado.
+            </p>
+            <div className="space-y-2">
+              {pendentesRevisao.map((c) => (
+                <div key={c.id} className="flex items-center justify-between gap-3 rounded-lg bg-white p-2.5 shadow-sm">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-semibold text-slate-800">
+                      {c.customerName || 'cliente'}
+                      {c.customerInstagram ? ` · @${c.customerInstagram}` : ''}
+                    </div>
+                    <div className="truncate text-xs text-slate-500">
+                      {(c.items || [])
+                        .map((it) => `${it.descricao || it.refCode}${it.tamanho ? ' ' + it.tamanho : ''}`)
+                        .join(' · ')}
+                    </div>
+                    <div className="text-xs font-bold text-emerald-700">
+                      {c.items?.length || 0} peça(s) · {brl(c.totalCents)}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => liberarSacola(c)}
+                    disabled={liberando === c.id}
+                    className="shrink-0 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-700 disabled:opacity-60"
+                  >
+                    {liberando === c.id ? 'Liberando…' : '✅ Conferi — Liberar'}
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* COBRAR TODAS — fila semi-automática de cobrança em massa */}
       {chargeAllOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
@@ -1626,19 +2035,38 @@ export default function LivePdvPage() {
                         type="button"
                         onClick={() => chargeOne(c, 'direct')}
                         title="Copia a mensagem e abre o perfil — clique em Mensagem e cole"
-                        className="shrink-0 rounded-lg bg-gradient-to-r from-purple-600 to-pink-500 px-2.5 py-1.5 text-[11px] font-bold text-white hover:opacity-90"
+                        className="shrink-0 rounded-lg bg-gradient-to-r from-purple-600 to-pink-500 px-2.5 py-1.5 text-[11px] font-bold text-white hover:opacity-90 inline-flex items-center gap-1"
                       >
                         Direct
+                        {nTentativas(c, 'direct') > 0 && (
+                          <span className="rounded-full bg-white/25 px-1.5 text-[10px] font-black tabular-nums" title={`${nTentativas(c, 'direct')} cobrança(s) por Direct`}>
+                            {nTentativas(c, 'direct')}
+                          </span>
+                        )}
                       </button>
                     )}
                     {c.customerPhone && (
                       <button
                         type="button"
                         onClick={() => chargeOne(c, 'whats')}
-                        title="Abre o WhatsApp da cliente com a mensagem pronta"
-                        className="shrink-0 rounded-lg bg-emerald-600 px-2.5 py-1.5 text-[11px] font-bold text-white hover:bg-emerald-700"
+                        disabled={whatsState[c.id] === 'sending'}
+                        title="Envia a cobrança DIRETO no WhatsApp da cliente pela API do ManyChat (template aprovado) — sem abrir app"
+                        className={`shrink-0 rounded-lg px-2.5 py-1.5 text-[11px] font-bold text-white disabled:opacity-60 ${
+                          whatsState[c.id] === 'sent'
+                            ? 'bg-emerald-800'
+                            : 'bg-emerald-600 hover:bg-emerald-700'
+                        }`}
                       >
-                        WhatsApp
+                        {whatsState[c.id] === 'sending'
+                          ? '⏳ enviando…'
+                          : whatsState[c.id] === 'sent'
+                            ? '✓ WhatsApp enviado'
+                            : 'WhatsApp 🤖'}
+                        {nTentativas(c, 'whats') > 0 && (
+                          <span className="ml-1 rounded-full bg-white/25 px-1.5 text-[10px] font-black tabular-nums" title={`${nTentativas(c, 'whats')} cobrança(s) por WhatsApp`}>
+                            {nTentativas(c, 'whats')}
+                          </span>
+                        )}
                       </button>
                     )}
                     <button
@@ -1669,9 +2097,18 @@ export default function LivePdvPage() {
         </Link>
         <Zap className="h-5 w-5 text-rose-500" />
         <span className="font-bold text-slate-800">Live Commerce</span>
-        <span className="rounded-full bg-rose-100 px-2 py-0.5 text-xs font-semibold text-rose-700">
-          ● {sessionTitle}
+        <span
+          className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+            consulta ? 'bg-slate-200 text-slate-600' : 'bg-rose-100 text-rose-700'
+          }`}
+        >
+          {consulta ? '◼ ' : '● '}{sessionTitle}
         </span>
+        {consulta && (
+          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-700">
+            ENCERRADA · consulta e cobrança
+          </span>
+        )}
         <button
           type="button"
           onClick={openSwapStore}
@@ -1680,20 +2117,41 @@ export default function LivePdvPage() {
         >
           🏬 {sessionStoreName || 'definir loja'}
         </button>
-        <button
-          onClick={closeLive}
-          title="Fechar esta live — guarda os carrinhos e libera pra abrir uma nova"
-          className="rounded-md border border-slate-200 px-2 py-1 text-xs font-medium text-slate-500 hover:border-rose-300 hover:text-rose-600"
-        >
-          Fechar live
-        </button>
-        <button
-          onClick={() => setShowLegenda(true)}
-          title="Legenda da live — atalhos curtos (01, 02...) pra cada referência, com validação"
-          className="rounded-md border border-violet-300 bg-violet-50 px-2 py-1 text-xs font-bold text-violet-700 hover:bg-violet-100"
-        >
-          📋 Legenda
-        </button>
+        {consulta ? (
+          <>
+            <button
+              onClick={reopenLive}
+              title="Reabre esta live (nada foi apagado — volta busca, grades e venda)"
+              className="rounded-md border border-emerald-400 bg-emerald-50 px-2 py-1 text-xs font-bold text-emerald-700 hover:bg-emerald-100"
+            >
+              ▶ Reabrir live
+            </button>
+            <button
+              onClick={backToPicker}
+              title="Voltar pra lista de lives (não mexe em nada)"
+              className="rounded-md border border-slate-200 px-2 py-1 text-xs font-medium text-slate-500 hover:border-rose-300 hover:text-rose-600"
+            >
+              ← Trocar de live
+            </button>
+          </>
+        ) : (
+          <button
+            onClick={closeLive}
+            title="Fechar esta live — guarda os carrinhos e libera pra abrir uma nova"
+            className="rounded-md border border-slate-200 px-2 py-1 text-xs font-medium text-slate-500 hover:border-rose-300 hover:text-rose-600"
+          >
+            Fechar live
+          </button>
+        )}
+        {!consulta && (
+          <button
+            onClick={() => setShowLegenda(true)}
+            title="Legenda da live — atalhos curtos (01, 02...) pra cada referência, com validação"
+            className="rounded-md border border-violet-300 bg-violet-50 px-2 py-1 text-xs font-bold text-violet-700 hover:bg-violet-100"
+          >
+            📋 Legenda
+          </button>
+        )}
         <div className="ml-auto flex items-center gap-1 rounded-lg border border-slate-200 p-0.5">
           <button
             onClick={() => setTab('console')}
@@ -1716,9 +2174,10 @@ export default function LivePdvPage() {
         // Proporção 1.3fr:1fr (~56/44) — antes era [1fr_460px]: a coluna da
         // busca+grade encolheu ~25% pra dar mais espaço aos carrinhos
         // (Carrinho + Clientes da Live).
-        <div className="grid grid-cols-1 gap-4 p-4 lg:grid-cols-[1.3fr_1fr]">
-          {/* Coluna principal: busca + grade */}
-          <div>
+        <div className={`grid grid-cols-1 gap-4 p-4 ${consulta ? 'mx-auto w-full max-w-3xl' : 'lg:grid-cols-[1.3fr_1fr]'}`}>
+          {/* Coluna principal: busca + grade — some no modo consulta (live
+              encerrada não vende; só carrinhos/cobrança/separação) */}
+          <div className={consulta ? 'hidden' : ''}>
             <form onSubmit={doSearch} className="mb-4 flex flex-col sm:flex-row gap-2">
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" />
@@ -1765,7 +2224,7 @@ export default function LivePdvPage() {
                   {historyOpen && (
                     <>
                       {/* backdrop invisível — clique fora fecha */}
-                      <div className="fixed inset-0 z-30" onClick={() => setHistoryOpen(false)} />
+                      <div className="fixed inset-0 z-30" {...overlayClose(() => setHistoryOpen(false))} />
                       <div className="absolute right-0 z-40 mt-1 max-h-[50vh] w-64 overflow-y-auto rounded-xl border border-slate-200 bg-white py-1 shadow-xl">
                         {refHistory.map((r) => (
                           <button
@@ -1796,266 +2255,256 @@ export default function LivePdvPage() {
               )}
             </form>
 
-            {product && !product.found && (
-              <div className="rounded-xl border border-amber-200 bg-amber-50 p-6 text-center text-amber-700">
-                Nada encontrado para “{term}”.
+            {searchMiss && (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-center text-sm text-amber-700">
+                Nada encontrado para “{searchMiss}” — as grades abertas continuam aí.
               </div>
             )}
 
-            {product && product.found && (
-              <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-                {product.fromMirror && (
-                  <div className="mb-3 inline-flex items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-medium text-slate-500">
-                    <Package className="h-3 w-3" /> Estoque do espelho · atualiza de hora em hora
-                  </div>
-                )}
-                <div className="mb-4 flex gap-4">
-                  <div className="h-28 w-28 shrink-0 overflow-hidden rounded-lg bg-slate-100">
-                    {product.photoUrl ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={product.photoUrl} alt={product.descricao || ''} className="h-full w-full object-cover" />
-                    ) : (
-                      <div className="flex h-full w-full items-center justify-center text-slate-300">
-                        <Package className="h-10 w-10" />
-                      </div>
-                    )}
-                  </div>
-                  <div className="min-w-0">
-                    <div className="text-xs font-semibold text-rose-600">{product.ref}</div>
-                    <h2 className="truncate text-lg font-bold text-slate-800">{product.descricao}</h2>
-
-                    {/* Preço + preço promocional da live */}
-                    {promoEditing ? (
-                      <div className="mt-1 flex flex-wrap items-center gap-2">
-                        <div className="relative">
-                          <span className="absolute left-2 top-1/2 -translate-y-1/2 text-sm text-slate-400">R$</span>
-                          <input
-                            autoFocus
-                            value={promoInput}
-                            onChange={(e) => setPromoInput(e.target.value)}
-                            onKeyDown={(e) => e.key === 'Enter' && applyPromo()}
-                            inputMode="decimal"
-                            placeholder="0,00"
-                            className="w-28 rounded-lg border border-rose-300 py-1.5 pl-8 pr-2 text-lg font-bold focus:outline-none focus:ring-2 focus:ring-rose-200"
-                          />
-                        </div>
-                        <button
-                          onClick={applyPromo}
-                          className="rounded-lg bg-rose-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-rose-700"
-                        >
-                          Aplicar
-                        </button>
-                        {product.promoActive && (
-                          <button
-                            onClick={removePromo}
-                            className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-50"
-                          >
-                            Remover promo
-                          </button>
-                        )}
-                        <button
-                          onClick={() => setPromoEditing(false)}
-                          className="text-sm text-slate-400 hover:text-slate-600"
-                        >
-                          Cancelar
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="mt-1 space-y-2">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className={`text-2xl font-extrabold ${product.promoActive ? 'text-rose-600' : 'text-slate-900'}`}>
-                            {brl(product.priceCents || 0)}
-                          </span>
-                          {product.promoActive && (
-                            <>
-                              <span className="text-sm text-slate-400 line-through">
-                                {brl(product.basePriceCents || 0)}
-                              </span>
-                              <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-bold uppercase text-rose-700">
-                                <Tag className="h-3 w-3" /> Promo Live
-                              </span>
-                            </>
-                          )}
-                          <button
-                            onClick={() => {
-                              setPromoInput(((product.priceCents || 0) / 100).toFixed(2).replace('.', ','));
-                              setCupomEditing(false);
-                              setPromoEditing(true);
-                            }}
-                            title="Definir preço promocional da live"
-                            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-1 text-xs font-medium text-slate-600 hover:border-rose-300 hover:text-rose-600"
-                          >
-                            <Pencil className="h-3.5 w-3.5" /> Preço
-                          </button>
-                          {/* 50% sobre o preço ORIGINAL */}
-                          <button
-                            onClick={applyMetade}
-                            title="Aplicar 50% de desconto sobre o preço original"
-                            className="inline-flex items-center gap-1 rounded-lg border border-amber-300 bg-amber-50 px-2 py-1 text-xs font-bold text-amber-700 hover:bg-amber-100"
-                          >
-                            <Percent className="h-3.5 w-3.5" /> 50% OFF
-                          </button>
-                          {/* Cupom relâmpago — R$ X off editável */}
-                          <button
-                            onClick={() => {
-                              setPromoEditing(false);
-                              setCupomEditing((v) => !v);
-                            }}
-                            title="Cupom relâmpago — desconto em reais sobre o preço original"
-                            className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-xs font-bold ${
-                              cupomEditing
-                                ? 'border-rose-400 bg-rose-50 text-rose-700'
-                                : 'border-rose-300 text-rose-600 hover:bg-rose-50'
-                            }`}
-                          >
-                            <Zap className="h-3.5 w-3.5" /> Cupom relâmpago
-                          </button>
-                          {product.promoActive && (
-                            <button
-                              onClick={removePromo}
-                              className="text-xs text-slate-400 underline hover:text-slate-600"
-                            >
-                              remover
-                            </button>
-                          )}
-                        </div>
-
-                        {cupomEditing && (
-                          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-rose-200 bg-rose-50/50 p-2">
-                            <span className="text-xs font-bold uppercase tracking-wide text-rose-700">
-                              Cupom relâmpago
-                            </span>
-                            <div className="relative">
-                              <span className="absolute left-2 top-1/2 -translate-y-1/2 text-sm text-slate-400">−R$</span>
-                              <input
-                                autoFocus
-                                value={cupomInput}
-                                onChange={(e) => setCupomInput(e.target.value)}
-                                onKeyDown={(e) => e.key === 'Enter' && applyCupom()}
-                                inputMode="decimal"
-                                placeholder="20,00"
-                                className="w-28 rounded-lg border border-rose-300 py-1.5 pl-9 pr-2 text-base font-bold focus:outline-none focus:ring-2 focus:ring-rose-200"
-                              />
-                            </div>
-                            <button
-                              onClick={applyCupom}
-                              className="rounded-lg bg-rose-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-rose-700"
-                            >
-                              Aplicar
-                            </button>
-                            <span className="text-xs text-slate-500">
-                              sobre {brl(product.basePriceCents || product.priceCents || 0)}
-                            </span>
-                            <button
-                              onClick={() => setCupomEditing(false)}
-                              className="text-sm text-slate-400 hover:text-slate-600"
-                            >
-                              Cancelar
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    <div className="mt-1 inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700">
-                      <Package className="h-3 w-3" /> {product.totalRede} na rede
-                    </div>
-                  </div>
-                </div>
-
-                {/* Grade — matriz cor × tamanho (clique na célula adiciona ao carrinho) */}
-                {(() => {
-                  const g = buildGrade(product);
-                  if (!g.colors.length) {
-                    return <div className="text-sm text-slate-400">Sem grade disponível.</div>;
-                  }
+            {/* ATÉ 4 GRADES ABERTAS lado a lado (2×2 em monitor grande, coluna
+                no notebook). Cada cartão é compacto e independente: promo,
+                atualizar estoque e fechar são POR PEÇA. */}
+            {products.length > 0 && (
+              <div className={`grid grid-cols-1 gap-3 ${products.length > 1 ? '2xl:grid-cols-2' : ''}`}>
+                {products.map((p) => {
+                  const promoEditing = promoEditingRef === p.ref;
+                  const cupomEditing = cupomEditingRef === p.ref;
+                  const refreshing = refreshingRef === (p.viaAtalho?.atalho || p.ref);
+                  const g = buildGrade(p);
                   return (
-                    <div className="overflow-x-auto rounded-lg border border-slate-200">
-                      <table className="w-full border-collapse text-sm">
-                        <thead>
-                          <tr className="border-b border-slate-200 bg-slate-100">
-                            <th className="sticky left-0 z-10 min-w-[90px] bg-slate-100 px-3 py-2 text-left font-bold text-slate-700">
-                              Cor
-                            </th>
-                            {g.sizes.map((s) => (
-                              <th key={s} className="min-w-[42px] px-2 py-1.5 text-center font-bold text-slate-700">
-                                {s}
-                              </th>
-                            ))}
-                            <th className="min-w-[48px] bg-slate-200 px-2 py-2 text-center font-bold text-slate-700">
-                              Total
-                            </th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {g.colors.map((cor) => {
-                            const colorTotal = g.totalsByColor.get(cor) || 0;
-                            return (
-                              <tr key={cor} className="border-b border-slate-100 hover:bg-slate-50">
-                                <td className="sticky left-0 z-10 border-r border-slate-100 bg-white px-3 py-2 font-semibold text-slate-800">
-                                  <span className="flex items-center gap-2">
-                                    <span className={`h-2 w-2 rounded-full ${colorTotal > 0 ? 'bg-emerald-500' : 'bg-slate-300'}`} />
-                                    <span className="max-w-[110px] truncate" title={cor}>{cor}</span>
-                                  </span>
-                                </td>
-                                {g.sizes.map((s) => {
-                                  const cell = g.cellByKey.get(`${cor}|${s}`);
-                                  const qty = cell?.available ?? 0;
-                                  const busy = !!cell && adding === cell.itemKey;
-                                  const low = qty > 0 && qty <= 2;
-                                  const title =
-                                    cell && cell.perStore.length
-                                      ? cell.perStore.map((ps) => `${ps.storeName}: ${ps.qty}`).join('  ·  ')
-                                      : 'Sem estoque';
-                                  return (
-                                    <td key={s} className="p-0.5 text-center">
-                                      <button
-                                        type="button"
-                                        disabled={!cell || qty <= 0 || busy}
-                                        onClick={() => cell && clickCell(cell)}
-                                        title={title}
-                                        className={`mx-auto flex h-9 w-full items-center justify-center rounded font-extrabold transition ${
-                                          qty <= 0
-                                            ? 'cursor-not-allowed bg-slate-50 text-slate-300'
-                                            : low
-                                            ? 'border border-amber-300 bg-amber-100 text-amber-900 hover:bg-amber-200 active:scale-95'
-                                            : 'border border-emerald-300 bg-emerald-100 text-emerald-900 hover:bg-emerald-200 active:scale-95'
-                                        }`}
-                                      >
-                                        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : qty > 0 ? qty : '—'}
-                                      </button>
-                                    </td>
-                                  );
-                                })}
-                                <td className={`bg-slate-50 px-2 py-2 text-center font-bold ${colorTotal > 0 ? 'text-emerald-700' : 'text-slate-400'}`}>
-                                  {colorTotal}
-                                </td>
+                    <div key={gradeKey(p)} className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+                      {/* Cabeçalho compacto: atalho · foto · desc · preço · ações */}
+                      <div className="mb-2 flex items-center gap-2">
+                        {p.viaAtalho?.atalho && (
+                          <span className="shrink-0 rounded-full bg-rose-100 px-2.5 py-1 font-mono text-lg font-black leading-none text-rose-700">
+                            {p.viaAtalho.atalho}
+                          </span>
+                        )}
+                        {p.viaAtalho?.cor && (
+                          <span
+                            title="Cor fixada na legenda — a grade mostra só essa cor"
+                            className="shrink-0 max-w-[110px] truncate rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-bold text-violet-700"
+                          >
+                            🎨 {p.viaAtalho.cor}
+                          </span>
+                        )}
+                        <div className="h-10 w-10 shrink-0 overflow-hidden rounded-lg bg-slate-100">
+                          {p.photoUrl ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={p.photoUrl} alt={p.descricao || ''} className="h-full w-full object-cover" />
+                          ) : (
+                            <div className="flex h-full w-full items-center justify-center text-slate-300">
+                              <Package className="h-5 w-5" />
+                            </div>
+                          )}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-[10px] font-semibold text-rose-600">{p.ref}</div>
+                          <div className="truncate text-sm font-bold text-slate-800" title={p.descricao || ''}>
+                            {p.descricao}
+                          </div>
+                        </div>
+                        <span className="shrink-0 whitespace-nowrap rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">
+                          {p.totalRede} na rede
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => refreshStock(p)}
+                          disabled={!!refreshingRef}
+                          title="Busca o estoque desta peça direto no Giga agora"
+                          className="shrink-0 rounded-md border border-rose-200 bg-rose-50 p-1.5 text-rose-600 hover:bg-rose-100 disabled:opacity-50"
+                        >
+                          <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => closeGrade(p)}
+                          title="Fechar esta grade"
+                          className="shrink-0 rounded-md border border-slate-200 p-1.5 text-slate-400 hover:bg-slate-50 hover:text-slate-600"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+
+                      {/* Preço + promo (compacto, por peça) */}
+                      {promoEditing ? (
+                        <div className="mb-2 flex flex-wrap items-center gap-2">
+                          <div className="relative">
+                            <span className="absolute left-2 top-1/2 -translate-y-1/2 text-sm text-slate-400">R$</span>
+                            <input
+                              autoFocus
+                              value={promoInput}
+                              onChange={(e) => setPromoInput(e.target.value)}
+                              onKeyDown={(e) => e.key === 'Enter' && applyPromo(p)}
+                              inputMode="decimal"
+                              placeholder="0,00"
+                              className="w-24 rounded-lg border border-rose-300 py-1 pl-8 pr-2 text-base font-bold focus:outline-none focus:ring-2 focus:ring-rose-200"
+                            />
+                          </div>
+                          <button onClick={() => applyPromo(p)} className="rounded-lg bg-rose-600 px-3 py-1 text-sm font-semibold text-white hover:bg-rose-700">
+                            Aplicar
+                          </button>
+                          {p.promoActive && (
+                            <button onClick={() => removePromo(p)} className="rounded-lg border border-slate-300 px-3 py-1 text-sm text-slate-600 hover:bg-slate-50">
+                              Remover promo
+                            </button>
+                          )}
+                          <button onClick={() => setPromoEditingRef(null)} className="text-sm text-slate-400 hover:text-slate-600">
+                            Cancelar
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="mb-2 space-y-1.5">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className={`text-lg font-extrabold ${p.promoActive ? 'text-rose-600' : 'text-slate-900'}`}>
+                              {brl(p.priceCents || 0)}
+                            </span>
+                            {p.promoActive && (
+                              <>
+                                <span className="text-xs text-slate-400 line-through">{brl(p.basePriceCents || 0)}</span>
+                                <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-1.5 py-0.5 text-[9px] font-bold uppercase text-rose-700">
+                                  <Tag className="h-2.5 w-2.5" /> Promo
+                                </span>
+                              </>
+                            )}
+                            <button
+                              onClick={() => {
+                                setPromoInput(((p.priceCents || 0) / 100).toFixed(2).replace('.', ','));
+                                setCupomEditingRef(null);
+                                setPromoEditingRef(p.ref || null);
+                              }}
+                              title="Definir preço promocional da live"
+                              className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-1.5 py-0.5 text-[11px] font-medium text-slate-600 hover:border-rose-300 hover:text-rose-600"
+                            >
+                              <Pencil className="h-3 w-3" /> Preço
+                            </button>
+                            <button
+                              onClick={() => applyMetade(p)}
+                              title="Aplicar 50% de desconto sobre o preço original"
+                              className="inline-flex items-center gap-1 rounded-lg border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[11px] font-bold text-amber-700 hover:bg-amber-100"
+                            >
+                              <Percent className="h-3 w-3" /> 50%
+                            </button>
+                            <button
+                              onClick={() => {
+                                setPromoEditingRef(null);
+                                setCupomEditingRef(cupomEditing ? null : p.ref || null);
+                              }}
+                              title="Cupom relâmpago — desconto em reais sobre o preço original"
+                              className={`inline-flex items-center gap-1 rounded-lg border px-1.5 py-0.5 text-[11px] font-bold ${
+                                cupomEditing ? 'border-rose-400 bg-rose-50 text-rose-700' : 'border-rose-300 text-rose-600 hover:bg-rose-50'
+                              }`}
+                            >
+                              <Zap className="h-3 w-3" /> Cupom
+                            </button>
+                            {p.promoActive && (
+                              <button onClick={() => removePromo(p)} className="text-[11px] text-slate-400 underline hover:text-slate-600">
+                                remover
+                              </button>
+                            )}
+                          </div>
+
+                          {cupomEditing && (
+                            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-rose-200 bg-rose-50/50 p-1.5">
+                              <div className="relative">
+                                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-sm text-slate-400">−R$</span>
+                                <input
+                                  autoFocus
+                                  value={cupomInput}
+                                  onChange={(e) => setCupomInput(e.target.value)}
+                                  onKeyDown={(e) => e.key === 'Enter' && applyCupom(p)}
+                                  inputMode="decimal"
+                                  placeholder="20,00"
+                                  className="w-24 rounded-lg border border-rose-300 py-1 pl-9 pr-2 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-rose-200"
+                                />
+                              </div>
+                              <button onClick={() => applyCupom(p)} className="rounded-lg bg-rose-600 px-3 py-1 text-sm font-semibold text-white hover:bg-rose-700">
+                                Aplicar
+                              </button>
+                              <span className="text-[11px] text-slate-500">sobre {brl(p.basePriceCents || p.priceCents || 0)}</span>
+                              <button onClick={() => setCupomEditingRef(null)} className="text-sm text-slate-400 hover:text-slate-600">
+                                Cancelar
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Grade compacta — SEM coluna Total (o total está no chip "na
+                          rede"); Cor mais larga; célula menor pro 46–60 caber no 2×2 */}
+                      {g.colors.length === 0 ? (
+                        <div className="text-sm text-slate-400">Sem grade disponível.</div>
+                      ) : (
+                        <div className="overflow-x-auto rounded-lg border border-slate-200">
+                          <table className="w-full border-collapse text-sm">
+                            <thead>
+                              <tr className="border-b border-slate-200 bg-slate-100">
+                                <th className="sticky left-0 z-10 min-w-[110px] bg-slate-100 px-2 py-1.5 text-left text-xs font-bold text-slate-700">
+                                  Cor
+                                </th>
+                                {g.sizes.map((s) => (
+                                  <th key={s} className="min-w-[38px] px-1 py-1 text-center text-xs font-bold text-slate-700">
+                                    {s}
+                                  </th>
+                                ))}
                               </tr>
-                            );
-                          })}
-                          <tr className="border-t-2 border-slate-300 bg-slate-100">
-                            <td className="sticky left-0 z-10 border-r border-slate-200 bg-slate-100 px-3 py-2 font-bold text-slate-700">
-                              Total
-                            </td>
-                            {g.sizes.map((s) => {
-                              const t = g.totalsBySize.get(s) || 0;
-                              return (
-                                <td key={s} className={`px-2 py-2 text-center font-bold ${t > 0 ? 'text-slate-800' : 'text-slate-400'}`}>
-                                  {t}
-                                </td>
-                              );
-                            })}
-                            <td className="bg-slate-200 px-2 py-2 text-center font-extrabold text-emerald-700">
-                              {product.totalRede}
-                            </td>
-                          </tr>
-                        </tbody>
-                      </table>
+                            </thead>
+                            <tbody>
+                              {g.colors.map((cor) => {
+                                const colorTotal = g.totalsByColor.get(cor) || 0;
+                                return (
+                                  <tr key={cor} className="border-b border-slate-100 hover:bg-slate-50">
+                                    <td className="sticky left-0 z-10 border-r border-slate-100 bg-white px-2 py-1 text-xs font-semibold text-slate-800">
+                                      <span className="flex items-center gap-1.5">
+                                        <span className={`h-2 w-2 shrink-0 rounded-full ${colorTotal > 0 ? 'bg-emerald-500' : 'bg-slate-300'}`} />
+                                        <span className="max-w-[120px] truncate" title={cor}>{cor}</span>
+                                      </span>
+                                    </td>
+                                    {g.sizes.map((s) => {
+                                      const cell = g.cellByKey.get(`${cor}|${s}`);
+                                      const qty = cell?.available ?? 0;
+                                      const busy = !!cell && adding === cell.itemKey;
+                                      const low = qty > 0 && qty <= 2;
+                                      const title =
+                                        cell && cell.perStore.length
+                                          ? cell.perStore.map((ps) => `${ps.storeName}: ${ps.qty}`).join('  ·  ')
+                                          : 'Sem estoque';
+                                      return (
+                                        <td key={s} className="p-0.5 text-center">
+                                          <button
+                                            type="button"
+                                            disabled={!cell || qty <= 0 || busy}
+                                            onClick={() => cell && clickCell(cell, p.ref || '', gradeKey(p))}
+                                            title={title}
+                                            className={`mx-auto flex h-8 w-full items-center justify-center rounded text-sm font-extrabold transition ${
+                                              qty <= 0
+                                                ? 'cursor-not-allowed bg-slate-50 text-slate-300'
+                                                : low
+                                                ? 'border border-amber-300 bg-amber-100 text-amber-900 hover:bg-amber-200 active:scale-95'
+                                                : 'border border-emerald-300 bg-emerald-100 text-emerald-900 hover:bg-emerald-200 active:scale-95'
+                                            }`}
+                                          >
+                                            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : qty > 0 ? qty : '—'}
+                                          </button>
+                                        </td>
+                                      );
+                                    })}
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
                     </div>
                   );
-                })()}
+                })}
+              </div>
+            )}
 
-                <div className="mt-2 flex flex-wrap items-center gap-3 px-1 text-[11px] text-slate-500">
+            {products.length > 0 && (
+              <>
+                <div className="mt-1 flex flex-wrap items-center gap-3 px-1 text-[11px] text-slate-500">
                   <span className="inline-flex items-center gap-1">
                     <span className="inline-block h-3 w-3 rounded border border-emerald-300 bg-emerald-100" /> disponível
                   </span>
@@ -2065,12 +2514,12 @@ export default function LivePdvPage() {
                   <span className="inline-flex items-center gap-1">
                     <span className="inline-block h-3 w-3 rounded border border-slate-200 bg-slate-50" /> sem estoque
                   </span>
-                  <span>· clique na célula pra adicionar · passe o mouse pra ver por loja</span>
+                  <span>· clique na célula pra adicionar · até {MAX_GRADES} grades abertas (a mais antiga sai) · v2</span>
                 </div>
 
-                {/* Novo carrinho — logo abaixo da grade, pra começar a próxima
+                {/* Novo carrinho — abaixo das grades, pra começar a próxima
                     cliente rápido sem sair da mão. */}
-                <div className="mt-4 flex justify-center">
+                <div className="mt-3 flex justify-center">
                   <button
                     onClick={newClient}
                     className="inline-flex items-center gap-2 rounded-xl bg-rose-600 px-6 py-2.5 font-bold text-white shadow hover:bg-rose-700"
@@ -2078,7 +2527,7 @@ export default function LivePdvPage() {
                     <ShoppingCart className="h-5 w-5" /> Novo carrinho
                   </button>
                 </div>
-              </div>
+              </>
             )}
 
           </div>
@@ -2091,6 +2540,7 @@ export default function LivePdvPage() {
               qr={qr}
               paid={paid}
               paying={paying}
+              consulta={consulta}
               onNewClient={newClient}
               onRemoveItem={removeItem}
               onSetItemPrice={setItemPrice}
@@ -2106,11 +2556,16 @@ export default function LivePdvPage() {
               onConfirmExternal={confirmExternalPay}
               onReleaseSeparation={releaseSeparation}
               releasing={releasing}
+              onRetracted={async (fresh) => {
+                setCart(fresh);
+                await refreshCarts();
+              }}
             />
 
             {/* Cadastradas pelo link (ManyChat) aguardando — SEMPRE visível durante a
-                live (mesmo vazia) pra ficar claro que o recurso está ali. */}
-            {sessionId && (
+                live (mesmo vazia) pra ficar claro que o recurso está ali.
+                No modo consulta (live encerrada) some: fila é coisa de live no ar. */}
+            {sessionId && !consulta && (
               <div>
                 <div className="mb-1 flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
@@ -2252,7 +2707,9 @@ export default function LivePdvPage() {
               </button>
             )}
 
-            {cartsAtivos.length > 0 && (
+            {/* SEMPRE visível (15/07): dá acesso ao chip "Recorrentes" mesmo com
+                a live vazia — o operador puxa clientes de lives passadas. */}
+            {true && (
               <div>
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
@@ -2306,6 +2763,18 @@ export default function LivePdvPage() {
                   >
                     Todos ({clientesFiltradas.length})
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => setCartView('recorrentes')}
+                    title="Clientes que já compraram em lives anteriores — busque e puxe pra live"
+                    className={`rounded-full px-2.5 py-1 text-[11px] font-bold transition ${
+                      viewEfetiva === 'recorrentes'
+                        ? 'bg-violet-600 text-white'
+                        : 'border border-violet-200 bg-white text-violet-600 hover:border-violet-400'
+                    }`}
+                  >
+                    🔁 Recorrentes
+                  </button>
                   {nVazios > 0 && (
                     <button
                       type="button"
@@ -2337,9 +2806,47 @@ export default function LivePdvPage() {
                     </button>
                   )}
                 </div>
+                {/* RECORRENTES (15/07): clientes de lives anteriores — busca +
+                    puxa pra live num clique. Só quando o chip está ativo. */}
+                {viewEfetiva === 'recorrentes' && (
+                  <div className="max-h-[60vh] space-y-1.5 overflow-y-auto rounded-xl border border-violet-200 bg-white p-1.5">
+                    {recLoading && (
+                      <div className="px-3 py-4 text-center text-sm text-slate-400">Buscando…</div>
+                    )}
+                    {!recLoading && recorrentes.length === 0 && (
+                      <div className="px-3 py-6 text-center text-sm text-slate-400">
+                        {clientFilter.trim()
+                          ? 'Nenhuma cliente recorrente pra essa busca.'
+                          : 'Digite nome, @ ou telefone pra achar clientes de lives anteriores — ou veja as mais recentes abaixo.'}
+                      </div>
+                    )}
+                    {recorrentes.map((r) => (
+                      <div key={r.customerId} className="flex items-center gap-2 rounded-lg border border-slate-100 px-2 py-1.5 hover:border-violet-200">
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-sm font-semibold text-slate-800">{r.name || r.instagram || 'Cliente'}</div>
+                          <div className="truncate text-[11px] text-slate-500">
+                            {r.instagram ? `@${r.instagram}` : ''}
+                            {r.instagram && r.phone ? ' · ' : ''}
+                            {r.phone || ''}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => pullRegisteredCustomer(r.customerId)}
+                          disabled={pullingId === r.customerId}
+                          title="Puxar esta cliente pra live atual"
+                          className="shrink-0 rounded-lg bg-violet-600 px-2.5 py-1 text-xs font-bold text-white hover:bg-violet-700 disabled:opacity-50"
+                        >
+                          {pullingId === r.customerId ? '…' : '↑ Puxar'}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 {/* GRID em LINHAS, 3 colunas (08/07): o dono trocou as 6 colunas
                     por linhas maiores pra ver o NOME COMPLETO da cliente.
                     Em telas menores cai pra 2/1. */}
+                {viewEfetiva !== 'recorrentes' && (
                 <div className="grid max-h-[60vh] grid-cols-1 content-start gap-1.5 overflow-y-auto rounded-xl border border-slate-200 bg-white p-1.5 sm:grid-cols-2 xl:grid-cols-3">
                   {gridCarts.length === 0 && (
                     <div className="col-span-full px-3 py-4 text-center text-sm text-slate-400">
@@ -2416,6 +2923,7 @@ export default function LivePdvPage() {
                     );
                   })}
                 </div>
+                )}
               </div>
             )}
           </div>
@@ -2482,6 +2990,7 @@ function CartPanel({
   qr,
   paid,
   paying,
+  consulta = false,
   onNewClient,
   onRemoveItem,
   onSetItemPrice,
@@ -2497,12 +3006,15 @@ function CartPanel({
   onConfirmExternal,
   onReleaseSeparation,
   releasing,
+  onRetracted,
 }: {
   cart: Cart | null;
   activeCustomer: ActiveCustomer | null;
   qr: { text: string; img: string; valor: number; link?: string } | null;
   paid: boolean;
   paying: boolean;
+  /** Live encerrada (consulta/cobrança): esconde "Novo carrinho". */
+  consulta?: boolean;
   onNewClient: () => void;
   onRemoveItem: (id: string) => void;
   onSetItemPrice: (id: string, priceCents: number) => Promise<void> | void;
@@ -2518,6 +3030,7 @@ function CartPanel({
   onConfirmExternal: () => void;
   onReleaseSeparation: () => void;
   releasing: boolean;
+  onRetracted: (fresh: Cart) => void | Promise<void>;
 }) {
   const [linkCopied, setLinkCopied] = useState(false);
   // Rastreio copiado (feedback visual por item)
@@ -2536,6 +3049,51 @@ function CartPanel({
   const [dmStatus, setDmStatus] = useState<string | null>(null);
   // Carrinho já pago/em separação: esconde ações de cobrança (link /pagar, frete)
   const cartPago = !!cart && ['paid', 'separating', 'shipped', 'delivered'].includes(cart.status);
+
+  // RECOLHER pedido: puxa TODOS os itens de volta pra UMA loja (ex.: matriz)
+  // e tira das filas de separação — pra repensar roteamento/frete de remessa.
+  const [retractOpen, setRetractOpen] = useState(false);
+  const [retractStores, setRetractStores] = useState<{ code: string; name: string }[]>([]);
+  const [retractCode, setRetractCode] = useState('');
+  const [retracting, setRetracting] = useState(false);
+  const podeRecolher = !!cart && ['paid', 'separating'].includes(cart.status);
+  async function openRetract() {
+    setRetractOpen(true);
+    try {
+      const stores = await api<any[]>('/stores');
+      const act = (stores || [])
+        .filter((s: any) => s.active !== false)
+        .map((s: any) => ({ code: String(s.code), name: String(s.name) }));
+      setRetractStores(act);
+      // pré-seleciona a matriz se existir (é o caso de uso típico)
+      const matriz = act.find((s) => /matriz/i.test(s.name));
+      setRetractCode(matriz?.code || act[0]?.code || '');
+    } catch {
+      setRetractStores([]);
+    }
+  }
+  async function confirmRetract() {
+    if (!cart || !retractCode || retracting) return;
+    setRetracting(true);
+    try {
+      const fresh = await api<Cart>(`/live-pdv/carts/${cart.id}/retract-separation`, {
+        method: 'POST',
+        body: JSON.stringify({ storeCode: retractCode }),
+      });
+      setRetractOpen(false);
+      await onRetracted(fresh);
+    } catch (e: any) {
+      const raw = String(e?.message || '');
+      let msg = 'Não consegui recolher o pedido.';
+      try {
+        const j = JSON.parse(raw.slice(raw.indexOf(': ') + 2));
+        if (j?.message) msg = Array.isArray(j.message) ? j.message[0] : j.message;
+      } catch { /* mensagem crua */ }
+      alert(msg);
+    } finally {
+      setRetracting(false);
+    }
+  }
 
   // Manda a DM sozinho pela API do ManyChat — chega mesmo com o Insta fechado,
   // porque sai da conta da loja (janela de 24h de quem comentou/se cadastrou).
@@ -2561,23 +3119,65 @@ function CartPanel({
   // Link curto (/p/<code>) quando o carrinho tem payCode; senão o longo (/pagar/<uuid>)
   const payLink = cart && !cartPago && typeof window !== 'undefined'
     ? (cart.payCode
-        ? `${window.location.origin}/p/${cart.payCode}`
-        : `${window.location.origin}/pagar/${cart.id}`)
+        ? `${publicBase()}/p/${cart.payCode}`
+        : `${publicBase()}/pagar/${cart.id}`)
     : '';
   const payMsg = `Oi! 💜 É pra fechar sua compra da live: ${payLink}`;
   return (
     <div className="lg:sticky lg:top-16 lg:h-fit">
+      {/* Modal RECOLHER PEDIDO: junta todos os itens numa loja só */}
+      {retractOpen && cart && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-sm rounded-xl bg-white p-4 shadow-xl">
+            <div className="mb-1 text-base font-bold text-slate-800">↩ Recolher pedido</div>
+            <p className="mb-3 text-xs text-slate-500">
+              Todos os itens saem das filas das lojas e ficam com origem numa loja só.
+              O pedido volta pra <b>PAGO</b> — você envia pra separação de novo quando decidir.
+              Peça já bipada bloqueia (estoque já baixou na loja).
+            </p>
+            <label className="mb-1 block text-xs font-semibold text-slate-600">Levar tudo pra:</label>
+            <select
+              value={retractCode}
+              onChange={(e) => setRetractCode(e.target.value)}
+              className="mb-3 w-full rounded-lg border border-slate-300 p-2 text-sm"
+            >
+              {retractStores.map((s) => (
+                <option key={s.code} value={s.code}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setRetractOpen(false)}
+                className="flex-1 rounded-lg border border-slate-300 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={confirmRetract}
+                disabled={retracting || !retractCode}
+                className="flex-1 rounded-lg bg-amber-500 py-2 text-sm font-bold text-white hover:bg-amber-600 disabled:opacity-50"
+              >
+                {retracting ? 'Recolhendo…' : 'Recolher'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
         <div className="flex items-center justify-between border-b border-slate-100 p-3">
           <div className="flex items-center gap-2 font-semibold text-slate-800">
             <ShoppingCart className="h-5 w-5 text-rose-500" /> Carrinho
           </div>
-          <button
-            onClick={onNewClient}
-            className="inline-flex items-center gap-1 rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-200"
-          >
-            <ShoppingCart className="h-3.5 w-3.5" /> Novo carrinho
-          </button>
+          {!consulta && (
+            <button
+              onClick={onNewClient}
+              className="inline-flex items-center gap-1 rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-200"
+            >
+              <ShoppingCart className="h-3.5 w-3.5" /> Novo carrinho
+            </button>
+          )}
         </div>
 
         {!activeCustomer && !cart && (
@@ -2618,13 +3218,8 @@ function CartPanel({
                   >
                     <Pencil className="h-3.5 w-3.5" /> Editar
                   </button>
-                  <button
-                    onClick={onDeleteCart}
-                    title="Excluir o carrinho desta cliente (libera as reservas)"
-                    className="inline-flex items-center gap-1 rounded-lg border border-rose-200 px-2 py-1 text-xs font-medium text-rose-600 hover:border-rose-400 hover:bg-rose-50"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" /> Excluir
-                  </button>
+                  {/* Excluir carrinho ficava aqui — mudou pro RODAPÉ do carrinho
+                      (14/07): colado no "Novo carrinho" dava clique errado. */}
                 </div>
               )}
             </div>
@@ -2633,8 +3228,18 @@ function CartPanel({
               {(cart?.items || []).map((it) => (
                 <div key={it.id} className="flex items-center gap-2 rounded-lg border border-slate-100 p-2">
                   <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-medium text-slate-800">
-                      {it.refCode} · {it.cor} {it.tamanho}
+                    {/* DESCRIÇÃO COMPLETA da peça (15/07): não só a legenda/ref.
+                        ref · cor · tamanho vira subtítulo pra conferência rápida. */}
+                    <div className="text-sm font-medium text-slate-800 leading-snug flex items-start gap-1.5" title={it.descricao || it.refCode}>
+                      {it.legenda && (
+                        <span className="shrink-0 rounded-md bg-fuchsia-600 px-1.5 py-0.5 text-[11px] font-black leading-none text-white" title={`Legenda ${it.legenda}`}>
+                          #{it.legenda}
+                        </span>
+                      )}
+                      <span className="min-w-0">{it.descricao || it.refCode}</span>
+                    </div>
+                    <div className="truncate text-[11px] font-semibold text-slate-500">
+                      {it.refCode}{it.cor ? ` · ${it.cor}` : ''}{it.tamanho ? ` · ${it.tamanho}` : ''}
                     </div>
                     <div className="flex items-center gap-1 text-[11px] text-slate-500">
                       <Store className="h-3 w-3" /> {it.originStoreName}
@@ -2824,18 +3429,36 @@ function CartPanel({
                 >
                   Conferir / completar dados
                 </button>
+                <button
+                  onClick={openRetract}
+                  className="w-full rounded-lg border border-amber-300 bg-white py-1.5 text-xs font-semibold text-amber-700 hover:bg-amber-100"
+                  title="Junta todos os itens numa loja só (ex.: matriz) antes de liberar — evita remessa/frete de várias lojas"
+                >
+                  ↩ Recolher pedido pra UMA loja
+                </button>
               </div>
             ) : paid ? (
               <div className="mt-3 flex flex-col items-center gap-1 rounded-lg bg-emerald-50 p-4 text-emerald-700">
                 <Check className="h-8 w-8" />
                 <span className="font-bold">Pagamento confirmado!</span>
-                <span className="text-xs">Ordem de separação enviada à loja de origem.</span>
+                <span className="text-center text-xs">
+                  Pedido enviado pra <b>Pedidos &amp; Separação</b> — o roteamento pra loja é feito lá (aba Processando).
+                </span>
                 <button
                   onClick={onContinue}
                   className="mt-2 rounded-lg bg-emerald-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700"
                 >
                   Continuar atendendo →
                 </button>
+                {podeRecolher && (
+                  <button
+                    onClick={openRetract}
+                    className="mt-1 w-full rounded-lg border border-emerald-300 bg-white py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
+                    title="Tira o pedido das filas das lojas e junta tudo numa loja só (ex.: matriz) — o pedido volta pra PAGO e você libera de novo quando decidir"
+                  >
+                    ↩ Recolher pedido das lojas
+                  </button>
+                )}
               </div>
             ) : qr?.link ? (
               <div className="mt-3 flex flex-col gap-2 rounded-lg border border-slate-200 p-3">
@@ -2956,6 +3579,18 @@ function CartPanel({
                   </div>
                 )
               )
+            )}
+
+            {/* Excluir carrinho — no RODAPÉ de propósito (14/07): antes ficava
+                no topo, colado no "Novo carrinho", e dava clique errado. */}
+            {cart && (
+              <button
+                onClick={onDeleteCart}
+                title="Excluir o carrinho desta cliente (libera as reservas)"
+                className="mt-4 flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-rose-200 py-1.5 text-xs font-medium text-rose-500 hover:border-rose-400 hover:bg-rose-50"
+              >
+                <Trash2 className="h-3.5 w-3.5" /> Excluir carrinho (libera as reservas)
+              </button>
             )}
           </div>
         )}
@@ -3193,7 +3828,23 @@ function CustomerModal({
               <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Nome (opcional)" className="w-full rounded-lg border border-slate-300 px-3 py-2" />
               <input value={phone} onChange={(e) => setPhone(maskPhoneBR(e.target.value))} placeholder="Telefone (opcional)" inputMode="tel" maxLength={15} className="w-full rounded-lg border border-slate-300 px-3 py-2" />
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                <input value={cpf} onChange={(e) => setCpf(e.target.value)} placeholder="CPF (opcional)" className="rounded-lg border border-slate-300 px-3 py-2" />
+                <div className="flex flex-col">
+                  <input
+                    value={cpf}
+                    onChange={(e) => setCpf(maskCpf(e.target.value))}
+                    placeholder="CPF (obrigatório pra ENVIO — Correios)"
+                    className={`rounded-lg border px-3 py-2 ${
+                      cpf.replace(/\D/g, '').length === 11 && !cpfValido(cpf)
+                        ? 'border-red-400 bg-red-50'
+                        : 'border-slate-300'
+                    }`}
+                  />
+                  {cpf.replace(/\D/g, '').length === 11 && !cpfValido(cpf) && (
+                    <span className="mt-0.5 text-[10px] font-semibold text-red-600">
+                      CPF não confere — verifique os números (o envio pra separação vai travar).
+                    </span>
+                  )}
+                </div>
                 <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="E-mail (opcional)" className="rounded-lg border border-slate-300 px-3 py-2" />
               </div>
             </>
@@ -3271,8 +3922,17 @@ function Dashboard({ sessionId }: { sessionId: string }) {
     { label: 'Ticket médio', value: brl(k.ticketMedioCents) },
     { label: 'Peças vendidas', value: k.pecasVendidas },
     { label: 'Reservas ativas', value: k.reservasAtivas },
-    { label: 'Conversão', value: `${k.conversao}%` },
+    // Sem funil (backend antigo) mantém o card simples de conversão
+    ...(k.funil ? [] : [{ label: 'Conversão', value: `${k.conversao}%` }]),
   ];
+  // Funil em camadas: criados → com produto → pagos (cada barra é % dos criados)
+  const funilRows = k.funil
+    ? [
+        { label: 'Carrinhos criados', n: k.funil.criados, pctBar: 100, detalhe: 'comentou e abriu carrinho' },
+        { label: 'Com produto', n: k.funil.comProduto, pctBar: k.funil.pctComProduto, detalhe: `${k.funil.pctComProduto}% dos criados` },
+        { label: 'Pagos', n: k.funil.pagos, pctBar: k.funil.pctPagosDoTotal, detalhe: `${k.funil.pctPagosDosComProduto}% dos com produto · ${k.funil.pctPagosDoTotal}% do total` },
+      ]
+    : [];
   return (
     <div className="p-4">
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
@@ -3283,6 +3943,33 @@ function Dashboard({ sessionId }: { sessionId: string }) {
           </div>
         ))}
       </div>
+
+      {/* Funil de conversão em camadas: criados → com produto → pagos */}
+      {funilRows.length > 0 && (
+        <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="mb-3 flex items-center justify-between">
+            <span className="text-xs uppercase tracking-wide text-slate-400">Conversão — funil da live</span>
+            <span className="text-xs text-slate-400">cada barra é % dos carrinhos criados</span>
+          </div>
+          <div className="space-y-2.5">
+            {funilRows.map((r, i) => (
+              <div key={r.label} className="flex items-center gap-3">
+                <span className="w-36 shrink-0 text-sm font-semibold text-slate-700">{r.label}</span>
+                <div className="relative h-7 flex-1 overflow-hidden rounded-lg bg-slate-100">
+                  <div
+                    className={`h-full rounded-lg transition-all ${i === 0 ? 'bg-slate-300' : i === 1 ? 'bg-amber-300' : 'bg-emerald-400'}`}
+                    style={{ width: `${Math.max(r.pctBar, r.n > 0 ? 3 : 0)}%` }}
+                  />
+                  <span className="absolute inset-y-0 left-2 flex items-center text-sm font-extrabold text-slate-800 tabular-nums">
+                    {r.n}
+                  </span>
+                </div>
+                <span className="w-64 shrink-0 text-right text-xs text-slate-500">{r.detalhe}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Quem já pagou — conferência ao vivo (nome, valor, forma, status) */}
       <div className="mt-4 rounded-xl border border-emerald-200 bg-white p-4 shadow-sm">
@@ -3363,11 +4050,15 @@ type LegendaRow = {
   id: string | null;
   atalho: string;
   refCode: string;
+  cor: string | null;  // cor VENDIDA nesta legenda (null = todas as cores)
   status: LegendaStatus;
   grade: any | null;
   erro: string | null;
   salva: boolean;      // true = persistida e sem edição pendente
   salvando: boolean;
+  precoEdit?: string | null;   // editor de preço da live aberto (string = valor digitado; null/undefined = fechado)
+  precoSalvando?: boolean;     // aplicando/removendo a promo da live
+  sel?: boolean;               // marcada pro desconto em massa (checkbox de seleção)
 };
 
 function LegendaModal({ sessionId, onClose }: { sessionId: string; onClose: () => void }) {
@@ -3417,11 +4108,11 @@ function LegendaModal({ sessionId, onClose }: { sessionId: string; onClose: () =
         const salvos = await api<any[]>(`/live-pdv/sessions/${sessionId}/atalhos`);
         if (cancelled) return;
         const iniciais: LegendaRow[] = (salvos || []).map((a) => ({
-          id: a.id, atalho: a.atalho, refCode: a.refCode,
+          id: a.id, atalho: a.atalho, refCode: a.refCode, cor: a.cor || null,
           status: 'buscando' as LegendaStatus, grade: null, erro: null, salva: true, salvando: false,
         }));
         if (iniciais.length === 0) {
-          iniciais.push({ id: null, atalho: '01', refCode: '', status: 'vazia', grade: null, erro: null, salva: false, salvando: false });
+          iniciais.push({ id: null, atalho: '01', refCode: '', cor: null, status: 'vazia', grade: null, erro: null, salva: false, salvando: false });
         }
         setRows(iniciais);
         setLoading(false);
@@ -3440,7 +4131,8 @@ function LegendaModal({ sessionId, onClose }: { sessionId: string; onClose: () =
   }, [sessionId]);
 
   const onRefChange = (idx: number, value: string) => {
-    patchRow(idx, { refCode: value, salva: false, status: value.trim() ? 'buscando' : 'vazia', grade: null });
+    // Trocou a referência → a cor escolhida era da peça antiga; limpa.
+    patchRow(idx, { refCode: value, cor: null, salva: false, status: value.trim() ? 'buscando' : 'vazia', grade: null });
     if (timersRef.current[idx]) clearTimeout(timersRef.current[idx]);
     timersRef.current[idx] = setTimeout(() => validarLinha(idx, value), 700);
   };
@@ -3453,7 +4145,7 @@ function LegendaModal({ sessionId, onClose }: { sessionId: string; onClose: () =
 
   const addLinha = () =>
     setRows((prev) => [...prev, {
-      id: null, atalho: proximoAtalho(prev), refCode: '',
+      id: null, atalho: proximoAtalho(prev), refCode: '', cor: null,
       status: 'vazia' as LegendaStatus, grade: null, erro: null, salva: false, salvando: false,
     }]);
 
@@ -3464,11 +4156,114 @@ function LegendaModal({ sessionId, onClose }: { sessionId: string; onClose: () =
     try {
       const r = await api<any>(`/live-pdv/sessions/${sessionId}/atalhos`, {
         method: 'POST',
-        body: JSON.stringify({ id: row.id, atalho: row.atalho, refCode: row.refCode.trim() }),
+        body: JSON.stringify({ id: row.id, atalho: row.atalho, refCode: row.refCode.trim(), cor: row.cor }),
       });
-      patchRow(idx, { id: r?.atalho?.id || row.id, atalho: r?.atalho?.atalho || row.atalho, salva: true, salvando: false });
+      // Se o operador deixou o editor de PREÇO aberto e clicou "Salvar" (em vez
+      // do "OK" do preço), aplica a promo junto — senão o preço se perdia
+      // silenciosamente (o "Salvar" só gravava a referência/cor).
+      let precoAplicado = false;
+      if (row.precoEdit != null && row.grade?.ref) {
+        const raw = String(row.precoEdit).trim().replace(/\./g, '').replace(',', '.');
+        const reais = parseFloat(raw);
+        if (isFinite(reais) && reais > 0) {
+          await api(`/live-pdv/sessions/${sessionId}/promo`, {
+            method: 'POST',
+            body: JSON.stringify({ refCode: row.grade.ref, priceCents: Math.round(reais * 100) }),
+          });
+          precoAplicado = true;
+        }
+      }
+      patchRow(idx, {
+        id: r?.atalho?.id || row.id,
+        atalho: r?.atalho?.atalho || row.atalho,
+        salva: true,
+        salvando: false,
+        precoEdit: null,
+      });
+      if (precoAplicado) await validarLinha(idx, row.refCode); // reflete o preço novo na hora
     } catch (e: any) {
       patchRow(idx, { salvando: false, erro: e?.message || 'Falha ao salvar' });
+    }
+  };
+
+  // ── Preço da LIVE (promo da sessão) direto na legenda ────────────────────
+  // Mesmo endpoint da grade (POST sessions/:id/promo por REF). Vale SÓ nesta
+  // live e não toca no cadastro. Depois de aplicar, revalida a linha pra o
+  // preço novo (e o "promo da live") aparecer na hora — inclusive nos cartões.
+  const aplicarPrecoLive = async (idx: number) => {
+    const row = rows[idx];
+    if (!row.grade?.ref) return;
+    const raw = String(row.precoEdit ?? '').trim().replace(/\./g, '').replace(',', '.');
+    const reais = parseFloat(raw);
+    if (!isFinite(reais) || reais <= 0) {
+      patchRow(idx, { erro: 'Informe um preço válido (ex.: 59,90)' });
+      return;
+    }
+    patchRow(idx, { precoSalvando: true, erro: null });
+    try {
+      await api(`/live-pdv/sessions/${sessionId}/promo`, {
+        method: 'POST',
+        body: JSON.stringify({ refCode: row.grade.ref, priceCents: Math.round(reais * 100) }),
+      });
+      patchRow(idx, { precoEdit: null, precoSalvando: false });
+      await validarLinha(idx, row.refCode); // recarrega a grade com o preço novo
+    } catch (e: any) {
+      patchRow(idx, { precoSalvando: false, erro: e?.message || 'Falha ao aplicar preço da live' });
+    }
+  };
+
+  // Volta ao preço normal (remove a promo da live desta REF).
+  const removerPrecoLive = async (idx: number) => {
+    const row = rows[idx];
+    if (!row.grade?.ref) return;
+    patchRow(idx, { precoSalvando: true, erro: null });
+    try {
+      await api(`/live-pdv/sessions/${sessionId}/promo`, {
+        method: 'POST',
+        body: JSON.stringify({ refCode: row.grade.ref, priceCents: 0 }),
+      });
+      patchRow(idx, { precoEdit: null, precoSalvando: false });
+      await validarLinha(idx, row.refCode);
+    } catch (e: any) {
+      patchRow(idx, { precoSalvando: false, erro: e?.message || 'Falha ao remover preço da live' });
+    }
+  };
+
+  // ── DESCONTO EM MASSA (50%) nas legendas selecionadas ────────────────────
+  // Checkbox por peça válida + botão que aplica metade do PREÇO CHEIO
+  // (basePriceCents) como promo da live em todas as marcadas de uma vez.
+  const [aplicandoMassa, setAplicandoMassa] = useState(false);
+  const selecionaveis = rows.filter((r) => r.status === 'ok' && r.grade?.ref);
+  const selCount = selecionaveis.filter((r) => r.sel).length;
+
+  const toggleSelTodas = (on: boolean) =>
+    setRows((prev) => prev.map((r) => (r.status === 'ok' && r.grade?.ref ? { ...r, sel: on } : r)));
+
+  // pct = 50 (metade) ou 0 (remove a promo, volta ao preço cheio).
+  const aplicarDescontoMassa = async (pct: number) => {
+    const alvos = rows
+      .map((r, i) => ({ r, i }))
+      .filter(({ r }) => r.sel && r.status === 'ok' && r.grade?.ref && (r.grade.basePriceCents || 0) > 0);
+    if (!alvos.length) {
+      setTopErr('Marque ao menos uma peça válida (verde) pra aplicar o desconto.');
+      return;
+    }
+    setAplicandoMassa(true);
+    setTopErr(null);
+    try {
+      for (const { r, i } of alvos) {
+        const base = r.grade.basePriceCents || 0;
+        const novo = pct > 0 ? Math.round(base * (1 - pct / 100)) : 0; // 0 = remove promo
+        await api(`/live-pdv/sessions/${sessionId}/promo`, {
+          method: 'POST',
+          body: JSON.stringify({ refCode: r.grade.ref, priceCents: novo }),
+        });
+        await validarLinha(i, r.refCode); // reflete o preço novo na hora (cartões inclusive)
+      }
+    } catch (e: any) {
+      setTopErr(e?.message || 'Falha ao aplicar o desconto em massa');
+    } finally {
+      setAplicandoMassa(false);
     }
   };
 
@@ -3487,8 +4282,63 @@ function LegendaModal({ sessionId, onClose }: { sessionId: string; onClose: () =
 
   const pendentes = rows.filter((r) => r.refCode.trim() && (!r.salva || r.status !== 'ok')).length;
 
+  // CARTÕES IMPRESSOS pra apresentadora mostrar na câmera — 8 POR FOLHA A4
+  // (ajuste do dono 13/07: a 1ª versão saiu gigante com 2/folha). Grade 2×4
+  // com linhas de corte: cada cartão tem 10,5×7,42cm, nº da legenda ~3,5cm de
+  // altura e valor ~2,2cm, Arial Black, centralizados e ESPELHADOS (a câmera
+  // da live inverte a imagem). Número e valor encolhem sozinhos se não
+  // couberem na largura do cartão.
+  function imprimirCartoes() {
+    const prontas = rows.filter((r) => r.status === 'ok' && r.grade?.found && r.atalho.trim());
+    if (!prontas.length) {
+      alert('Nenhuma linha válida (verde) pra imprimir — cadastre e valide os atalhos primeiro.');
+      return;
+    }
+    const valor = (cents: number) => ((cents || 0) / 100).toFixed(2).replace('.', ',');
+    const cards = prontas
+      .map(
+        (r) =>
+          `<div class="card"><div class="mirror"><div class="num">${r.atalho}</div><div class="val">${valor(r.grade.priceCents)}</div></div></div>`,
+      )
+      .join('');
+    const w = window.open('', 'lurds_legenda_print', 'width=820,height=640');
+    if (!w) {
+      alert('Popup bloqueado — libere popups pra imprimir.');
+      return;
+    }
+    w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Legendas da live (espelhado)</title>
+      <style>
+        /* Margem de 6mm no @page: sem ela o grid ocupava os 21cm cravados e a
+           borda física NÃO-IMPRIMÍVEL da impressora cortava/desenquadrava as
+           colunas (bug real 13/07). Grid útil: 19.8 × 28.5cm → cartão 9.9 × 7.12cm. */
+        @page { size: A4 portrait; margin: 6mm; }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Arial Black', 'Arial Bold', Arial, sans-serif; font-weight: 900; display: flex; flex-wrap: wrap; width: 19.8cm; }
+        .card { width: 9.9cm; height: 7.12cm; display: flex; align-items: center; justify-content: center; overflow: hidden; page-break-inside: avoid; border-bottom: 1px dashed #bbb; }
+        .card:nth-child(2n+1) { border-right: 1px dashed #bbb; }
+        .card:nth-child(8n) { page-break-after: always; }
+        .mirror { transform: scaleX(-1); text-align: center; }
+        /* Conteúdo: 3.3 + 0.4 + 2.1 = 5.8cm num cartão de 7.12cm — folga. */
+        .num { font-size: 3.3cm; line-height: 0.95; letter-spacing: 0.05cm; }
+        .val { font-size: 2.1cm; line-height: 1; margin-top: 0.4cm; white-space: nowrap; }
+        .ver { position: absolute; left: 2px; top: 2px; font-family: Arial; font-weight: 400; font-size: 8px; color: #999; }
+      </style></head><body><span class="ver">L8-v3</span>${cards}
+      <script>
+        // Encolhe nº/valor até caberem na largura do cartão (atalhos de 4+
+        // dígitos e preços longos não podem vazar pro cartão vizinho).
+        document.querySelectorAll('.num, .val').forEach(function (el) {
+          var max = el.closest('.card').clientWidth - 16;
+          var size = parseFloat(getComputedStyle(el).fontSize) / 37.8; // px → cm
+          while (el.scrollWidth > max && size > 1) { size -= 0.1; el.style.fontSize = size + 'cm'; }
+        });
+        window.print();
+      <\/script></body></html>`);
+    w.document.close();
+    w.focus();
+  }
+
   return (
-    <div className="fixed inset-0 z-40 flex items-start justify-center bg-black/60 p-3 sm:p-6 overflow-y-auto" onClick={onClose}>
+    <div className="fixed inset-0 z-40 flex items-start justify-center bg-black/60 p-3 sm:p-6 overflow-y-auto" {...overlayClose(onClose)}>
       <div className="w-full max-w-3xl rounded-2xl bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3">
           <div>
@@ -3498,7 +4348,29 @@ function LegendaModal({ sessionId, onClose }: { sessionId: string; onClose: () =
               a grade abaixo é exatamente o que o operador vai ver ao digitar o atalho.
             </p>
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X className="h-5 w-5" /></button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={imprimirCartoes}
+              title="Cartões com nº da legenda + valor, espelhados pra câmera — 8 por folha A4 (2×4)"
+              className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-rose-300 bg-rose-50 px-3 py-1.5 text-xs font-bold text-rose-600 hover:bg-rose-100"
+            >
+              🖨️ Imprimir cartões (espelhado)
+            </button>
+            <button
+              onClick={async () => {
+                if (!confirm('LIMPAR TODAS as legendas desta live?\n\n(As legendas nunca somem sozinhas — só por este botão.)')) return;
+                try {
+                  await api(`/live-pdv/sessions/${sessionId}/atalhos/limpar-tudo`, { method: 'POST', body: JSON.stringify({}) });
+                  setRows([]);
+                } catch (e: any) { setTopErr(e?.message || 'Falha ao limpar'); }
+              }}
+              title="Apaga TODAS as legendas desta live (elas nunca zeram sozinhas ao abrir live nova)"
+              className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-bold text-slate-500 hover:bg-slate-100"
+            >
+              🧹 Limpar tudo
+            </button>
+            <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X className="h-5 w-5" /></button>
+          </div>
         </div>
 
         {topErr && <div className="mx-5 mt-3 rounded-lg bg-rose-50 border border-rose-200 px-3 py-2 text-xs text-rose-800">{topErr}</div>}
@@ -3507,6 +4379,43 @@ function LegendaModal({ sessionId, onClose }: { sessionId: string; onClose: () =
           {loading && (
             <div className="flex items-center gap-2 py-8 justify-center text-sm text-slate-500">
               <Loader2 className="h-4 w-4 animate-spin" /> Carregando legenda…
+            </div>
+          )}
+
+          {/* Barra de desconto em massa — só quando há peças válidas */}
+          {!loading && selecionaveis.length > 0 && (
+            <div className="sticky top-0 z-10 -mx-1 flex flex-wrap items-center gap-2 rounded-lg border-2 border-violet-200 bg-violet-50 px-3 py-2">
+              <label className="flex items-center gap-1.5 text-xs font-bold text-violet-800 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 accent-violet-600"
+                  checked={selCount === selecionaveis.length && selCount > 0}
+                  ref={(el) => { if (el) el.indeterminate = selCount > 0 && selCount < selecionaveis.length; }}
+                  onChange={(e) => toggleSelTodas(e.target.checked)}
+                />
+                Selecionar todas ({selecionaveis.length})
+              </label>
+              <span className="text-xs font-bold text-violet-700">{selCount} marcada(s)</span>
+              <div className="ml-auto flex items-center gap-1.5">
+                <button
+                  type="button"
+                  disabled={aplicandoMassa || selCount === 0}
+                  onClick={() => aplicarDescontoMassa(50)}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-1.5 text-xs font-black text-white hover:bg-violet-700 disabled:opacity-40"
+                  title="Aplica metade do preço cheio como promo da live nas peças marcadas"
+                >
+                  {aplicandoMassa ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : '%'} Aplicar 50% nas marcadas
+                </button>
+                <button
+                  type="button"
+                  disabled={aplicandoMassa || selCount === 0}
+                  onClick={() => aplicarDescontoMassa(0)}
+                  className="rounded-lg border border-violet-300 bg-white px-2.5 py-1.5 text-xs font-bold text-violet-700 hover:bg-violet-100 disabled:opacity-40"
+                  title="Remove a promo da live das peças marcadas (volta ao preço cheio)"
+                >
+                  Tirar promo
+                </button>
+              </div>
             </div>
           )}
 
@@ -3570,16 +4479,112 @@ function LegendaModal({ sessionId, onClose }: { sessionId: string; onClose: () =
               {row.status === 'ok' && row.grade && (
                 <div className="rounded-lg bg-white border border-emerald-200 p-2.5 space-y-1.5">
                   <div className="flex items-center justify-between gap-2">
-                    <div className="text-xs font-bold text-emerald-700">🟢 Referência validada</div>
-                    <div className="text-xs font-black text-emerald-700 tabular-nums">
-                      {((row.grade.priceCents || 0) / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                      {row.grade.promoActive ? ' (promo da live)' : ''}
-                    </div>
+                    <label className="flex items-center gap-1.5 text-xs font-bold text-emerald-700 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 accent-violet-600"
+                        checked={!!row.sel}
+                        onChange={(e) => patchRow(idx, { sel: e.target.checked })}
+                        title="Marcar pra desconto em massa"
+                      />
+                      🟢 Referência validada
+                    </label>
+                    {row.precoEdit == null ? (
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs font-black text-emerald-700 tabular-nums">
+                          {((row.grade.priceCents || 0) / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                        </span>
+                        {row.grade.promoActive && (
+                          <span className="rounded bg-amber-100 px-1 py-0.5 text-[9px] font-bold text-amber-700">promo da live</span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => patchRow(idx, { precoEdit: ((row.grade.priceCents || 0) / 100).toFixed(2).replace('.', ','), erro: null, salva: false })}
+                          className="rounded-md border border-emerald-300 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700 hover:bg-emerald-50"
+                          title="Editar o preço desta peça só nesta live"
+                        >
+                          ✎ preço
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1">
+                        <span className="text-[11px] font-bold text-slate-500">R$</span>
+                        <input
+                          autoFocus
+                          value={row.precoEdit}
+                          onChange={(e) => patchRow(idx, { precoEdit: e.target.value })}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') aplicarPrecoLive(idx);
+                            if (e.key === 'Escape') patchRow(idx, { precoEdit: null, erro: null });
+                          }}
+                          inputMode="decimal"
+                          placeholder="59,90"
+                          className="w-20 rounded-md border-2 border-emerald-300 px-2 py-1 text-xs font-bold text-slate-800 focus:border-emerald-500 focus:outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => aplicarPrecoLive(idx)}
+                          disabled={row.precoSalvando}
+                          className="rounded-md bg-emerald-600 px-2 py-1 text-xs font-bold text-white hover:bg-emerald-700 disabled:opacity-40"
+                          title="Aplicar preço nesta live"
+                        >
+                          {row.precoSalvando ? <Loader2 className="h-3 w-3 animate-spin" /> : 'OK'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => patchRow(idx, { precoEdit: null, erro: null })}
+                          disabled={row.precoSalvando}
+                          className="rounded-md border border-slate-300 px-1.5 py-1 text-xs font-bold text-slate-500 hover:bg-slate-50 disabled:opacity-40"
+                          title="Cancelar"
+                        >
+                          ✕
+                        </button>
+                        {row.grade.promoActive && (
+                          <button
+                            type="button"
+                            onClick={() => removerPrecoLive(idx)}
+                            disabled={row.precoSalvando}
+                            className="rounded-md border border-amber-300 px-1.5 py-1 text-[10px] font-bold text-amber-700 hover:bg-amber-50 disabled:opacity-40"
+                            title="Voltar ao preço normal (tira a promo da live)"
+                          >
+                            normal
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </div>
                   <div className="text-sm font-bold text-slate-800">{row.grade.descricao}</div>
                   <div className="text-[11px] text-slate-500">
                     Referência: <b>{row.grade.ref}</b> · {row.grade.totalRede} peças na rede
                   </div>
+                  {/* COR VENDIDA nesta legenda — digitar o atalho abre a grade
+                      SÓ dessa cor (menos poluição, zero bipe de cor errada) */}
+                  {(() => {
+                    const cores = Array.from(
+                      new Set((row.grade.cells || []).map((c: any) => c.cor).filter(Boolean)),
+                    ) as string[];
+                    if (cores.length < 2 && !row.cor) return null;
+                    return (
+                      <div className="flex flex-wrap items-center gap-2 rounded-lg bg-violet-50 border border-violet-200 px-2 py-1.5 text-xs">
+                        <span className="font-bold text-violet-800">🎨 Cor desta legenda:</span>
+                        <select
+                          value={row.cor || ''}
+                          onChange={(e) => patchRow(idx, { cor: e.target.value || null, salva: false })}
+                          className="rounded-lg border-2 border-violet-300 bg-white px-2 py-1 text-xs font-bold text-slate-700 focus:border-violet-500 focus:outline-none"
+                        >
+                          <option value="">Todas as cores</option>
+                          {cores.map((c) => (
+                            <option key={c} value={c}>{c}</option>
+                          ))}
+                        </select>
+                        {row.cor && (
+                          <span className="text-[10px] font-bold text-violet-700">
+                            o atalho {row.atalho || ''} vai abrir SÓ {row.cor}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })()}
                   {/* Grade por cor × tamanho — mesmo dado que abre na live */}
                   {(() => {
                     const porCor = new Map<string, any[]>();
@@ -3589,8 +4594,8 @@ function LegendaModal({ sessionId, onClose }: { sessionId: string; onClose: () =
                       porCor.get(cor)!.push(c);
                     }
                     return Array.from(porCor.entries()).map(([cor, cells]) => (
-                      <div key={cor} className="text-xs">
-                        <span className="font-bold text-slate-600">{cor}:</span>{' '}
+                      <div key={cor} className={`text-xs ${row.cor && cor !== row.cor ? 'opacity-40' : ''}`}>
+                        <span className={`font-bold ${row.cor === cor ? 'text-violet-700' : 'text-slate-600'}`}>{cor}:</span>{' '}
                         <span className="tabular-nums">
                           {cells.map((c: any) => `${c.tamanho || '—'} ${c.available} pç`).join(' · ')}
                         </span>

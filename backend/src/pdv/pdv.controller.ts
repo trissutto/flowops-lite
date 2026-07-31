@@ -22,6 +22,7 @@ import { isValidTrainingPassword, isTrainingRequest } from './training.util';
 import { PdvService } from './pdv.service';
 import { ErpOutboxService } from './erp-outbox.service';
 import { ErpService } from '../erp/erp.service';
+import { PrismaService } from '../prisma/prisma.service';
 import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service';
 import { PixService } from './pix.service';
 import { NfceService } from './nfce.service';
@@ -54,12 +55,51 @@ export class PdvController {
     private readonly crediarioPrint: CrediarioPrintService,
     private readonly woo: WooCommerceService,
     private readonly returns: ReturnsService,
+    private readonly prisma: PrismaService,
   ) {}
 
   private requireRole(req: any) {
     const role = req?.user?.role;
     if (role !== 'admin' && role !== 'store')
       throw new ForbiddenException('Apenas admin ou loja');
+  }
+
+  /** Papéis de franquia (editam ações de venda, escopados às lojas FILIAL). */
+  private ehPapelFranquia(role: string | undefined): boolean {
+    return role === 'master_franquia' || role === 'franquias';
+  }
+
+  /** Papel de franquia só age em venda de loja FRANQUIA (tipo=FILIAL). */
+  private async assertSaleEhFranquia(saleId: string) {
+    const prisma = (this.svc as any).prisma;
+    const sale = await prisma.pdvSale.findUnique({
+      where: { id: saleId },
+      select: { storeCode: true },
+    });
+    const franquia = await prisma.store.findMany({
+      where: { tipo: 'FILIAL', active: true },
+      select: { code: true },
+    });
+    const codes = new Set((franquia as any[]).map((s) => s.code));
+    if (!sale?.storeCode || !codes.has(sale.storeCode)) {
+      throw new ForbiddenException(`Venda de loja ${sale?.storeCode || '?'} não é franquia — acesso negado`);
+    }
+  }
+
+  /** Loja da VENDA — contexto pros PINs com ESCOPO de loja (franqueado MASTER
+   *  só nas lojas dele; dono 29/07). Sessão de loja usa a própria; painel
+   *  admin/franquia resolve pela venda. */
+  private async storeCodeCtx(saleId: string, req: any): Promise<string | undefined> {
+    if (req?.user?.storeCode) return String(req.user.storeCode);
+    try {
+      const sale = await (this.svc as any).prisma.pdvSale.findUnique({
+        where: { id: saleId },
+        select: { storeCode: true },
+      });
+      return sale?.storeCode || undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   // ── CACHE DE DESCOBERTA GIGA ─────────────────────────────────────────────
@@ -309,20 +349,20 @@ export class PdvController {
     @Query('q') q?: string,
     @Query('limit') limit?: string,
   ) {
-    // READ-ONLY: admin/store (requireRole) + 'franquias' (só leitura).
+    // READ-ONLY: admin/store (requireRole) + 'franquias'/'master_franquia'.
     const role = req?.user?.role;
-    if (role !== 'admin' && role !== 'store' && role !== 'franquias') {
+    if (role !== 'admin' && role !== 'store' && role !== 'franquias' && role !== 'master_franquia') {
       throw new ForbiddenException('Apenas admin, loja ou administrador de franquias');
     }
 
     // ESCOPO POR PAPEL:
     //  - store      → SÓ a própria loja (ignora storeCode da query).
-    //  - franquias  → SÓ as lojas FILIAL (franqueadas).
+    //  - franquias/master_franquia → SÓ as lojas FILIAL (franqueadas).
     //  - admin/master → todas (ou filtra pelo storeCode escolhido).
     const userStoreCode = req?.user?.storeCode;
     let effectiveStoreCode = role === 'store' && userStoreCode ? userStoreCode : storeCode;
     let storeCodes: string[] | undefined;
-    if (role === 'franquias') {
+    if (role === 'franquias' || role === 'master_franquia') {
       const franq = await (this.svc as any).prisma.store.findMany({
         where: { tipo: 'FILIAL', active: true },
         select: { code: true },
@@ -364,10 +404,11 @@ export class PdvController {
     @Body() body: { motivo: string; password: string },
   ) {
     const role = req?.user?.role;
-    if (role !== 'admin' && role !== 'supervisor' && role !== 'operator') {
+    if (role !== 'admin' && role !== 'supervisor' && role !== 'operator' && !this.ehPapelFranquia(role)) {
       throw new ForbiddenException('Apenas admin/supervisor/operator');
     }
-    const nivel = validateMinLevel(body?.password, 'MASTER');
+    if (this.ehPapelFranquia(role)) await this.assertSaleEhFranquia(id);
+    const nivel = validateMinLevel(body?.password, 'MASTER', await this.storeCodeCtx(id, req));
     const userName = req?.user?.name || req?.user?.email || req?.user?.username || 'admin';
     return this.svc.masterCancelZumbi({
       saleId: id,
@@ -397,10 +438,11 @@ export class PdvController {
     @Body() body: { motivo: string; password: string },
   ) {
     const role = req?.user?.role;
-    if (role !== 'admin' && role !== 'supervisor' && role !== 'operator') {
+    if (role !== 'admin' && role !== 'supervisor' && role !== 'operator' && !this.ehPapelFranquia(role)) {
       throw new ForbiddenException('Apenas admin/supervisor/operator');
     }
-    const nivel = validateMinLevel(body?.password, 'MASTER');
+    if (this.ehPapelFranquia(role)) await this.assertSaleEhFranquia(id);
+    const nivel = validateMinLevel(body?.password, 'MASTER', await this.storeCodeCtx(id, req));
     const userName = req?.user?.name || req?.user?.email || req?.user?.username || 'admin';
     return this.svc.masterEstornarVenda({
       saleId: id,
@@ -424,10 +466,11 @@ export class PdvController {
     @Body() body: { motivo: string; password: string },
   ) {
     const role = req?.user?.role;
-    if (role !== 'admin' && role !== 'supervisor' && role !== 'operator') {
+    if (role !== 'admin' && role !== 'supervisor' && role !== 'operator' && !this.ehPapelFranquia(role)) {
       throw new ForbiddenException('Apenas admin/supervisor/operator');
     }
-    const nivel = validateMinLevel(body?.password, 'MASTER');
+    if (this.ehPapelFranquia(role)) await this.assertSaleEhFranquia(id);
+    const nivel = validateMinLevel(body?.password, 'MASTER', await this.storeCodeCtx(id, req));
     const userName = req?.user?.name || req?.user?.email || req?.user?.username || 'admin';
     return this.svc.masterCancelDuplicada({
       saleId: id,
@@ -454,6 +497,17 @@ export class PdvController {
   }
 
   /**
+   * POST /pdv/sales/:id/recalcular-precos
+   * Reconsulta o preço ATUAL (promoção vigente) de cada item e atualiza.
+   * Usado quando itens puxados de MARCADO vêm com o preço original congelado.
+   */
+  @Post('sales/:id/recalcular-precos')
+  recalcularPrecos(@Req() req: any, @Param('id') id: string) {
+    this.requireRole(req);
+    return this.svc.recalcularPrecos({ saleId: id });
+  }
+
+  /**
    * POST /pdv/sales/:id/items/manual { descricao, valor, qty? }
    * Adiciona item MANUAL — usado quando o produto não passa pelo bipe.
    * Vendedora digita descrição + valor livres pra não travar o caixa.
@@ -471,6 +525,20 @@ export class PdvController {
       valor: body?.valor,
       qty: body?.qty,
     });
+  }
+
+  /**
+   * POST /pdv/sales/:id/frete { valor }
+   * FRETE À PARTE (venda online) — linha própria na venda; valor 0 remove.
+   */
+  @Post('sales/:id/frete')
+  setFrete(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: { valor: number },
+  ) {
+    this.requireRole(req);
+    return this.svc.setFrete(id, Number(body?.valor));
   }
 
   /**
@@ -502,7 +570,7 @@ export class PdvController {
     @Req() req: any,
     @Param('id') id: string,
     @Param('itemId') itemId: string,
-    @Body() body: { qty?: number; desconto?: number; password?: string; motivo?: string; excludePromo?: boolean },
+    @Body() body: { qty?: number; desconto?: number; password?: string; motivo?: string; excludePromo?: boolean; forcePromo?: boolean },
   ) {
     this.requireRole(req);
     return this.svc.updateItem({
@@ -513,6 +581,7 @@ export class PdvController {
       password: body?.password,
       motivo: body?.motivo,
       excludePromo: body?.excludePromo,
+      forcePromo: body?.forcePromo,
     });
   }
 
@@ -1110,8 +1179,13 @@ export class PdvController {
     @Req() req: any,
     @Query('q') q: string,
     @Query('limit') limitStr?: string,
+    @Query('loja') loja?: string,
   ) {
     this.requireRole(req);
+    // ESCOPO POR LOJA (23/07): cadastros do Giga são POR LOJA (RESERVAS,
+    // DEFEITOS etc existem em todas) — o PDV só vê as fichas da PRÓPRIA
+    // loja. Clientes do CRM (pessoas com CPF, site/live) seguem da rede.
+    const lojaScope = String(loja || req?.user?.storeCode || '').replace(/\D/g, '');
     const term = String(q || '').trim();
     if (term.length < 2) {
       return { results: [] };
@@ -1234,7 +1308,11 @@ export class PdvController {
 
         if (wheres.length > 0) {
           const orderBy = cm.nome ? `ORDER BY \`${cm.nome}\` ASC` : `ORDER BY \`${cm.codCliente}\` ASC`;
-          const sql = `SELECT ${selectCols.join(', ')} FROM \`${cm.table}\` WHERE ${wheres.join(' OR ')} ${orderBy} LIMIT ${restante * 2}`;
+          // CAST dos dois lados: padding da LOJA é inconsistente no Giga ('1' × '01')
+          const lojaAnd = lojaScope && cm.loja
+            ? ` AND CAST(\`${cm.loja}\` AS UNSIGNED) = ${Number(lojaScope)}`
+            : '';
+          const sql = `SELECT ${selectCols.join(', ')} FROM \`${cm.table}\` WHERE (${wheres.join(' OR ')})${lojaAnd} ${orderBy} LIMIT ${restante * 2}`;
 
           try {
             const r = await this.erp.runReadOnly(sql, { maxRows: restante * 2, timeoutMs: 8000 });
@@ -1479,14 +1557,37 @@ export class PdvController {
       console.warn('[funcionarios-search] erro:', e?.message);
     }
 
+    // APELIDO (22/07): loja SEM whitelist configurada cai neste fallback e o
+    // popup não via o apelido do cadastro. Casa pelo código do Wincred e, na
+    // falta dele na ficha, pelo NOME (os dois vêm da mesma tabela do Giga).
+    const normCod = (s: any) => String(s ?? '').replace(/\D/g, '').replace(/^0+/, '') || '0';
+    const normNome = (s: any) => String(s ?? '').trim().toUpperCase().replace(/\s+/g, ' ');
+    let apelidoPorCodigo = new Map<string, string>();
+    let apelidoPorNome = new Map<string, string>();
+    try {
+      const sellers: any[] = await (this.prisma as any).seller.findMany({
+        where: { apelido: { not: null } },
+        select: { wincredCodigo: true, name: true, apelido: true },
+      });
+      apelidoPorCodigo = new Map(
+        sellers.filter((s) => s.wincredCodigo).map((s) => [normCod(s.wincredCodigo), s.apelido]),
+      );
+      apelidoPorNome = new Map(sellers.map((s) => [normNome(s.name), s.apelido]));
+    } catch { /* segue sem apelido */ }
+
     return {
       table,
       lojaFiltered: !!(lojaCol && safeLoja),
-      results: rows.map((r) => ({
-        codigo: String(r.codigo ?? '').trim(),
-        nome: String(r.nome ?? '').trim(),
-        loja: r.loja !== undefined ? String(r.loja ?? '').trim() : '',
-      })).filter((r) => r.nome),
+      results: rows.map((r) => {
+        const codigo = String(r.codigo ?? '').trim();
+        const nome = String(r.nome ?? '').trim();
+        return {
+          codigo,
+          nome,
+          apelido: apelidoPorCodigo.get(normCod(codigo)) || apelidoPorNome.get(normNome(nome)) || null,
+          loja: r.loja !== undefined ? String(r.loja ?? '').trim() : '',
+        };
+      }).filter((r) => r.nome),
     };
   }
 
@@ -1653,7 +1754,7 @@ export class PdvController {
           let liberado = false;
           if (body?.overridePassword) {
             try {
-              const nivel = validateMinLevel(body.overridePassword, 'SUPERVISOR');
+              const nivel = validateMinLevel(body.overridePassword, 'SUPERVISOR', req?.user?.storeCode);
               liberado = true;
               this.logger.warn(
                 `[crediario] LIMITE liberado por override [${nivel}] — venda ${saleId} cliente=${info.cliente.codCliente} (${motivos.join('; ')})`,
@@ -1983,6 +2084,50 @@ export class PdvController {
       untilIso: body?.until,
       storeCode: body?.storeCode,
       limit: body?.limit || 100,
+      dryRun: false,
+    });
+  }
+
+  /**
+   * GET /pdv/admin/reconcile-manual-stock/preview — estoque fantasma "MANUAL":
+   * produto REAL vendido com desconto manual (promoTag='MANUAL' + sku/ref reais)
+   * que o filtro antigo pulava na baixa. Invisível ao reconcile normal (a venda
+   * marcava stockDecreasedAt). Dry-run: só conta/lista, não baixa nada.
+   */
+  @Get('admin/reconcile-manual-stock/preview')
+  async previewReconcileManualStock(
+    @Req() req: any,
+    @Query('since') since?: string,
+    @Query('until') until?: string,
+    @Query('storeCode') storeCode?: string,
+    @Query('limit') limit?: string,
+  ) {
+    if (req?.user?.role !== 'admin') {
+      throw new ForbiddenException('Apenas admin pode reconciliar estoque');
+    }
+    return this.svc.reconcileManualStockBacklog({
+      sinceIso: since,
+      untilIso: until,
+      storeCode,
+      limit: limit ? Number(limit) : 1000,
+      dryRun: true,
+    });
+  }
+
+  /** POST /pdv/admin/reconcile-manual-stock/execute — baixa os fantasmas MANUAL. */
+  @Post('admin/reconcile-manual-stock/execute')
+  async executeReconcileManualStock(
+    @Req() req: any,
+    @Body() body: { since?: string; until?: string; storeCode?: string; limit?: number },
+  ) {
+    if (req?.user?.role !== 'admin') {
+      throw new ForbiddenException('Apenas admin pode reconciliar estoque');
+    }
+    return this.svc.reconcileManualStockBacklog({
+      sinceIso: body?.since,
+      untilIso: body?.until,
+      storeCode: body?.storeCode,
+      limit: body?.limit || 1000,
       dryRun: false,
     });
   }

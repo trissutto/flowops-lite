@@ -17,6 +17,7 @@ import {
   Power, AlertTriangle,
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import { appPrompt } from '@/lib/app-prompt';
 
 type ConfigState = {
   ambiente: 'sandbox' | 'production';
@@ -87,7 +88,7 @@ export default function PagbankConfigPage() {
         setTimeout(() => setSecretCopied(false), 2000);
       }
     } catch {
-      window.prompt('Copia manualmente (Ctrl+C):', text);
+      await appPrompt('Copia manualmente (Ctrl+C):', { defaultValue: text });
     }
   }
 

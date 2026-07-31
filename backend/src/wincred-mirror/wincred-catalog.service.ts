@@ -38,6 +38,18 @@ export class WincredCatalogService {
   }
 
   /**
+   * P2 da migração de produtos: PRODUCT_NATIVE_READS=1 → catálogo lido da
+   * tabela NATIVA `product` (curada no Flow) em vez do espelho
+   * wincred_produtos. Os campos têm os MESMOS nomes nos dois models, então
+   * só o model troca. Kill-switch: remover a env volta pro espelho na hora.
+   * (Estoque/EAN continuam nos espelhos — só o CADASTRO migra aqui.)
+   */
+  private get produtoTable(): any {
+    const nativo = String(process.env.PRODUCT_NATIVE_READS ?? '').trim() === '1';
+    return nativo ? (this.prisma as any).product : (this.prisma as any).wincredProduto;
+  }
+
+  /**
    * Mesma normalização do sync (WincredMirrorService.normalizeCodigo):
    * o espelho guarda CODIGO como string numérica SEM zeros à esquerda.
    */
@@ -108,7 +120,7 @@ export class WincredCatalogService {
     const codigo = this.normalizeCodigo(skuOrEan);
     if (!codigo) return null; // termo com letras (EAN alfanum etc) → Giga resolve
 
-    const p: any = await (this.prisma as any).wincredProduto.findUnique({
+    const p: any = await this.produtoTable.findUnique({
       where: { codigo },
     });
     if (!p) return null;
@@ -173,9 +185,9 @@ export class WincredCatalogService {
 
     let products: any[] = [];
     if (isNumericRef) {
-      // 1) CODIGO exato (normalizado) OU REF exata — CODIGO primeiro
+      // 1) CODIGO exato (normalizado) OU REF exata.
       const codigo = this.normalizeCodigo(cleanTerm);
-      products = await prisma.wincredProduto.findMany({
+      products = await this.produtoTable.findMany({
         where: {
           OR: [
             ...(codigo ? [{ codigo }] : []),
@@ -185,12 +197,22 @@ export class WincredCatalogService {
         orderBy: [{ descricaoCompleta: 'asc' }, { tamanho: 'asc' }, { cor: 'asc' }],
         take: 80,
       });
-      if (codigo) {
+      // PRIORIDADE: se o número existe como REF (ex.: "223263" = família MARRIE),
+      // a REF vem PRIMEIRO — senão colide com o CÓDIGO homônimo de outra peça
+      // ("223263" também é o CÓDIGO de uma peça do REF 6168). Só afeta a busca
+      // por REF (erp-search/dropdown); o BIPE do leitor usa getPdvProductInfo e
+      // segue CÓDIGO-primeiro (scanner intocado). Sem REF exata → código primeiro.
+      const temRefExata = products.some((p: any) => String(p.ref ?? '').trim() === cleanTerm);
+      if (temRefExata) {
+        products.sort((a: any, b: any) =>
+          (String(a.ref ?? '').trim() === cleanTerm ? 0 : 1) -
+          (String(b.ref ?? '').trim() === cleanTerm ? 0 : 1));
+      } else if (codigo) {
         products.sort((a: any, b: any) => (a.codigo === codigo ? 0 : 1) - (b.codigo === codigo ? 0 : 1));
       }
       // 2) REF por prefixo
       if (!products.length) {
-        products = await prisma.wincredProduto.findMany({
+        products = await this.produtoTable.findMany({
           where: { ref: { startsWith: cleanTerm } },
           orderBy: [{ ref: 'asc' }, { tamanho: 'asc' }, { cor: 'asc' }],
           take: 30,
@@ -198,7 +220,7 @@ export class WincredCatalogService {
       }
       // 3) contains genérico
       if (!products.length) {
-        products = await prisma.wincredProduto.findMany({
+        products = await this.produtoTable.findMany({
           where: {
             OR: [
               { codigo: { contains: cleanTerm } },
@@ -212,7 +234,7 @@ export class WincredCatalogService {
     } else {
       const words = cleanTerm.split(/\s+/).map((w) => w.trim()).filter((w) => w.length >= 2);
       if (words.length >= 2) {
-        products = await prisma.wincredProduto.findMany({
+        products = await this.produtoTable.findMany({
           where: {
             OR: [
               { AND: words.map((w) => ({ descricaoCompleta: { contains: w, mode: 'insensitive' } })) },
@@ -223,7 +245,7 @@ export class WincredCatalogService {
           take: 20,
         });
       } else {
-        products = await prisma.wincredProduto.findMany({
+        products = await this.produtoTable.findMany({
           where: {
             OR: [
               { codigo: { contains: cleanTerm } },
@@ -304,7 +326,7 @@ export class WincredCatalogService {
     if (!clean) return [];
     const prisma: any = this.prisma;
 
-    const produtos: any[] = await prisma.wincredProduto.findMany({
+    const produtos: any[] = await this.produtoTable.findMany({
       where: { OR: [{ ref: clean }, { ref: { startsWith: clean } }] },
       orderBy: [{ cor: 'asc' }, { tamanho: 'asc' }],
       take: 1000,
@@ -320,7 +342,11 @@ export class WincredCatalogService {
       if (!foundRef.startsWith(baseRef)) return false;
       const suffix = foundRef.slice(baseRef.length);
       if (suffix.startsWith(' ') || suffix.startsWith('-')) return true;
-      if (/^[A-Za-z]/.test(suffix)) return true;
+      // Letras COLADAS: só sufixo curto de cor (1-2 letras, ex.: "223P",
+      // "223VN"). 3+ letras é OUTRA REF ("8709RIU" ≠ variação de "8709") —
+      // regra alinhada com o normalizeBaseRef da consulta (velho erro de
+      // "adivinhar a referência", dono 21/07).
+      if (/^[A-Za-z]{1,2}$/.test(suffix)) return true;
       return false;
     };
     const filtered = produtos.filter((p) => isVariationOf(String(p.ref || '').trim(), clean));
@@ -359,6 +385,9 @@ export class WincredCatalogService {
       ESTOQUE: p.estoque != null ? Number(p.estoque) : null,
       TOTAL_EST: totalEst,
       ID: p.idWincred != null ? Number(p.idWincred) : null,
+      // vendaUn no espelho é DECIMAL em REAIS — NUNCA dividir por 100
+      VENDAUN: p.vendaUn != null ? Number(p.vendaUn) : null,
+      FORNECEDOR: p.fornecedor ? String(p.fornecedor).trim() : null,
     }));
   }
 
@@ -371,7 +400,7 @@ export class WincredCatalogService {
       try {
         const codigo = this.normalizeCodigo(code);
         if (codigo) {
-          const p: any = await (this.prisma as any).wincredProduto.findUnique({
+          const p: any = await this.produtoTable.findUnique({
             where: { codigo },
             select: { ref: true },
           });
@@ -415,12 +444,12 @@ export class WincredCatalogService {
 
     const isRefLike = /^[A-Z0-9]+(-[A-Z0-9]+)*$/i.test(trimmed) && !trimmed.includes(' ');
     if (isRefLike) {
-      let rows: any[] = await prisma.wincredProduto.findMany({
+      let rows: any[] = await this.produtoTable.findMany({
         where: { ref: trimmed },
         select: { ref: true, descricaoCompleta: true },
       });
       if (!rows.length) {
-        rows = await prisma.wincredProduto.findMany({
+        rows = await this.produtoTable.findMany({
           where: { ref: { startsWith: trimmed, not: '' } },
           select: { ref: true, descricaoCompleta: true },
           orderBy: { ref: 'asc' },
@@ -434,7 +463,7 @@ export class WincredCatalogService {
 
     const words = trimmed.split(/\s+/).filter((w) => w.length >= 2).slice(0, 6);
     if (!words.length) return [];
-    const rows: any[] = await prisma.wincredProduto.findMany({
+    const rows: any[] = await this.produtoTable.findMany({
       where: {
         AND: [
           ...words.map((w) => ({ descricaoCompleta: { contains: w, mode: 'insensitive' } })),

@@ -1,13 +1,16 @@
 'use client';
 
 /**
- * /franquias — Hub do ADMINISTRADOR FRANQUIAS (role='franquias').
+ * /franquias — Hub da FRANQUIA.
  *
- * Perfil READ-ONLY que só enxerga dados das lojas FRANQUEADAS (tipo='FILIAL').
- * O escopo é forçado no backend por papel — aqui é só a navegação.
+ * Dois papéis usam esta tela (escopo forçado no backend, aqui é só navegação):
+ *   - 'franquias'       → READ-ONLY dos dados das lojas FRANQUEADAS (tipo='FILIAL').
+ *   - 'master_franquia' → funções de MASTER, porém SOMENTE nas lojas FILIAL:
+ *                         botão "Entrar PDV" abre o PDV das franquias em aba nova
+ *                         (o backend recusa loja REDE no impersonate).
  *
  * Áreas (conforme liberação):
- *   - Notas (NFC-e)      → /minha-loja/pdv/notas  (ATIVO — já escopado read-only)
+ *   - Notas (NFC-e)      → /minha-loja/pdv/notas  (ATIVO — já escopado)
  *   - Faturamento/Vendas → em breve
  *   - Estoque/Produtos   → em breve
  */
@@ -15,13 +18,15 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { FileText, BarChart3, Package2, ArrowUpRight, LogOut, Lock, Building2 } from 'lucide-react';
+import { FileText, BarChart3, Package2, ArrowUpRight, LogOut, Lock, Building2, ShoppingBag } from 'lucide-react';
 import { api } from '@/lib/api';
+import StoreSwitcher from '@/components/StoreSwitcher';
 
 export default function FranquiasHub() {
   const router = useRouter();
   const [name, setName] = useState('');
   const [checking, setChecking] = useState(true);
+  const [isMaster, setIsMaster] = useState(false);
 
   useEffect(() => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('flowops_token') : null;
@@ -31,11 +36,12 @@ export default function FranquiasHub() {
     }
     api<{ role: string; name?: string }>('/auth/me')
       .then((me) => {
-        // Só franquias (e admin, pra conseguir conferir a tela) entram aqui.
-        if (me.role !== 'franquias' && me.role !== 'admin') {
+        // Só franquias/master_franquia (e admin, pra conferir a tela) entram aqui.
+        if (me.role !== 'franquias' && me.role !== 'master_franquia' && me.role !== 'admin') {
           router.push('/');
           return;
         }
+        setIsMaster(me.role === 'master_franquia');
         if (me.name) setName(me.name);
         setChecking(false);
       })
@@ -68,33 +74,53 @@ export default function FranquiasHub() {
             </div>
             <div>
               <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-amber-700/80">
-                Administrador de Franquias
+                {isMaster ? 'Master Franquia' : 'Administrador de Franquias'}
               </div>
               <div className="font-bold text-slate-800 leading-tight">
                 {name || 'Lurds Order One'}
               </div>
             </div>
           </div>
-          <button
-            onClick={logout}
-            className="px-3 py-2 rounded-lg bg-white border border-slate-200 text-sm font-semibold text-slate-600 hover:bg-slate-50 flex items-center gap-1.5"
-          >
-            <LogOut className="w-4 h-4" /> Sair
-          </button>
+          <div className="flex items-center gap-2">
+            {isMaster && <StoreSwitcher />}
+            <button
+              onClick={logout}
+              className="px-3 py-2 rounded-lg bg-white border border-slate-200 text-sm font-semibold text-slate-600 hover:bg-slate-50 flex items-center gap-1.5"
+            >
+              <LogOut className="w-4 h-4" /> Sair
+            </button>
+          </div>
         </div>
       </header>
 
       <main className="max-w-4xl mx-auto px-4 py-6">
-        {/* Aviso read-only */}
+        {/* Aviso de escopo */}
         <div className="mb-5 flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-800">
           <Lock className="w-4 h-4 shrink-0" />
-          <span>
-            Acesso <b>somente leitura</b> aos dados das <b>lojas franqueadas</b>.
-          </span>
+          {isMaster ? (
+            <span>
+              Acesso <b>master</b> restrito às <b>lojas franqueadas</b> — use{' '}
+              <b>Entrar PDV</b> pra abrir uma loja da franquia em aba nova.
+            </span>
+          ) : (
+            <span>
+              Acesso <b>somente leitura</b> aos dados das <b>lojas franqueadas</b>.
+            </span>
+          )}
         </div>
 
         {/* Áreas */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {/* Faturamento = o MESMO Super Painel da retaguarda (15/07, decisão
+              do dono: "100% idêntico, inclusive as cascatas"). O backend escopa
+              os papéis de franquia só às lojas FILIAL automaticamente. */}
+          <AreaCard
+            href="/retaguarda/super-painel-caixas"
+            label="Faturamento · Super Painel"
+            description="Caixas, vendas e formas — com as cascatas, ao vivo e por período"
+            icon={BarChart3}
+            tone="sky"
+          />
           <AreaCard
             href="/minha-loja/pdv/notas"
             label="Notas (NFC-e)"
@@ -103,18 +129,25 @@ export default function FranquiasHub() {
             tone="emerald"
           />
           <AreaCard
-            label="Faturamento"
-            description="Vendas e faturamento das franquias"
-            icon={BarChart3}
-            tone="sky"
-            soon
-          />
-          <AreaCard
+            href="/franquias/estoque"
             label="Estoque"
-            description="Estoque e produtos das franquias"
+            description="Peças, valor por loja, grupos e consulta de produto"
             icon={Package2}
             tone="violet"
-            soon
+          />
+          <AreaCard
+            href="/franquias/faturamento"
+            label="Resumo & Ranking"
+            description="Bruto oficial por dia, ranking das franquias e mais vendidos"
+            icon={BarChart3}
+            tone="emerald"
+          />
+          <AreaCard
+            href="/retaguarda/produtos-vendidos"
+            label="Produtos Vendidos · Editar"
+            description="Vendas das franquias: editar vendedora/pagamento e excluir venda"
+            icon={ShoppingBag}
+            tone="sky"
           />
         </div>
       </main>

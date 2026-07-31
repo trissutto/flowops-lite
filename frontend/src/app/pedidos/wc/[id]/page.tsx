@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -225,6 +226,11 @@ export default function PedidoDetailPage() {
     storeCode: string | null;
     storeName: string | null;
     storeCity: string | null;
+    // SKUs desta loja — usados pra medir a cobertura do "Trocar loja" só
+    // contra os itens que realmente vão mudar de loja.
+    skus?: string[];
+    // Peças que esta loja separa (descrição + qtd) — mostradas no card.
+    items?: Array<{ sku: string; descricao: string | null; qty: number }>;
     updatedAt: string;
     issueReason?: string | null;
     issueReasonLabel?: string | null;
@@ -457,6 +463,54 @@ export default function PedidoDetailPage() {
   }
 
   /**
+   * "Recalcular automático" do banner de PROBLEMA: re-roteia SÓ os pick-orders
+   * das lojas que reportaram issue (swap cirúrgico via pickOrderId, um a um).
+   * As outras lojas do pedido — inclusive as que JÁ ENVIARAM — não são tocadas.
+   * Bug real 13/07: o botão recalculava o pedido INTEIRO e "trocava tudo".
+   */
+  async function recalcularLojasComProblema() {
+    const issues = liveStatus.filter((r) => r.issueReason && r.id);
+    if (!issues.length) return;
+    const nomes = issues.map((r) => `${r.storeName || r.storeCode}`).join(', ');
+    if (!confirm(
+      `Re-rotear SÓ as peças de: ${nomes}?\n\n` +
+      `O sistema escolhe outra loja automaticamente (excluindo a que reportou o problema). ` +
+      `As demais lojas deste pedido NÃO são tocadas.`,
+    )) return;
+    setSepLoading(true);
+    setSepError(null);
+    try {
+      const resumo: string[] = [];
+      for (const r of issues) {
+        const res = await api<{
+          ok: boolean;
+          message?: string;
+          pickOrders?: Array<{ storeCode: string }>;
+          newStoreCode?: string;
+        }>(`/orders/wc/${wcId}/recalculate-separation`, {
+          method: 'POST',
+          body: JSON.stringify({ pickOrderId: r.id }),
+        });
+        if (res.ok) {
+          const destino = res.newStoreCode || res.pickOrders?.map((p) => p.storeCode).join('+') || 'nova loja';
+          resumo.push(`${r.storeCode} → ${destino}`);
+        } else {
+          resumo.push(`${r.storeCode}: ${res.message || 'nenhuma loja com estoque'}`);
+        }
+      }
+      setFlash(`✓ ${resumo.join(' · ')}`);
+      setTimeout(() => setFlash(null), 6000);
+      api<typeof liveStatus>(`/pick-orders/by-wc/${wcId}`)
+        .then((data) => setLiveStatus(Array.isArray(data) ? data : []))
+        .catch(() => {});
+    } catch (e: any) {
+      setSepError(e?.message || 'Falha ao re-rotear a loja com problema.');
+    } finally {
+      setSepLoading(false);
+    }
+  }
+
+  /**
    * Troca manual da loja de origem — usuário escolhe pular uma loja específica
    * (ex: "não quero MOEMA enviar, quero outra loja"). Chama o mesmo
    * recalculate-separation mas forçando `excludeStoreCodes: [storeCode]`.
@@ -595,6 +649,18 @@ export default function PedidoDetailPage() {
       preview.missing.forEach((m) => allSkus.add(m.sku));
       Object.keys(preview.alternativesBySku ?? {}).forEach((sku) => allSkus.add(sku));
 
+      // MODO SWAP (14/07): "Trocar loja" de UM pick-order considera SÓ os SKUs
+      // DAQUELA loja — não o pedido inteiro. Sem isso a cobertura "cobre X/9"
+      // contava contra TODOS os itens do pedido (inclusive os de outra loja que
+      // nem vão mudar), e uma loja que cobre 100% do que será trocado aparecia
+      // como "⚠ cobre 6/9". Fallback: sem os SKUs da loja, usa o pedido inteiro.
+      let relevantSkus = allSkus;
+      if (swapTarget?.pickOrderId) {
+        const po = liveStatus.find((p) => p.id === swapTarget.pickOrderId);
+        const swapSkus = (po?.skus ?? []).filter((s) => allSkus.has(s));
+        if (swapSkus.length) relevantSkus = new Set(swapSkus);
+      }
+
       // Quantidades pedidas (pra comparar com availableQty)
       const qtyBySku = new Map<string, number>();
       preview.groups.forEach((g) => g.items.forEach((it) => {
@@ -604,50 +670,37 @@ export default function PedidoDetailPage() {
         qtyBySku.set(m.sku, (qtyBySku.get(m.sku) ?? 0) + m.quantity);
       });
 
-      // Monta mapa storeCode → { skusCovered, totalQty, missingSkus }
+      // Cobertura por loja, escopada aos relevantSkus. Uma passagem só: monta o
+      // conjunto de SKUs cobertos por loja (group assignee + alternativa com
+      // estoque suficiente) e deriva skusCovered/missing/totalQty dele.
+      const skusArr = Array.from(relevantSkus);
       const byStore = new Map<string, { skusCovered: number; totalQty: number; missing: string[] }>();
-      for (const code of activeStores.map((s) => s.code)) {
-        byStore.set(code, { skusCovered: 0, totalQty: 0, missing: [] });
-      }
-      // Também considera loja que está num group (tem tudo daquele grupo)
-      preview.groups.forEach((g) => {
-        const rec = byStore.get(g.storeCode);
-        if (!rec) return;
-        g.items.forEach((it) => {
-          rec.skusCovered += 1;
-          rec.totalQty += it.quantity;
-        });
-      });
-      // Adiciona o que aparece em alternativesBySku (qty disponível por loja/SKU)
-      Object.entries(preview.alternativesBySku ?? {}).forEach(([sku, alts]) => {
-        const need = qtyBySku.get(sku) ?? 1;
-        alts.forEach((alt) => {
-          const rec = byStore.get(alt.storeCode);
-          if (!rec) return;
-          if (alt.availableQty >= need) {
-            // Evita dupla contagem se a loja já está como group assignee
-            const alreadyInGroup = preview.groups.some(
-              (g) => g.storeCode === alt.storeCode && g.items.some((it) => it.sku === sku),
-            );
-            if (!alreadyInGroup) {
-              rec.skusCovered += 1;
-              rec.totalQty += alt.availableQty;
-            }
-          }
-        });
-      });
-
-      // Calcula missingSkus por loja
-      const skusArr = Array.from(allSkus);
-      for (const [code, rec] of byStore.entries()) {
+      for (const s of activeStores) {
+        const code = s.code;
         const covered = new Set<string>();
-        preview.groups.filter((g) => g.storeCode === code).forEach((g) => g.items.forEach((it) => covered.add(it.sku)));
+        let totalQty = 0;
+        preview.groups.filter((g) => g.storeCode === code).forEach((g) =>
+          g.items.forEach((it) => {
+            if (relevantSkus.has(it.sku) && !covered.has(it.sku)) {
+              covered.add(it.sku);
+              totalQty += it.quantity;
+            }
+          }),
+        );
         Object.entries(preview.alternativesBySku ?? {}).forEach(([sku, alts]) => {
+          if (!relevantSkus.has(sku) || covered.has(sku)) return;
           const need = qtyBySku.get(sku) ?? 1;
           const alt = alts.find((a) => a.storeCode === code);
-          if (alt && alt.availableQty >= need) covered.add(sku);
+          if (alt && alt.availableQty >= need) {
+            covered.add(sku);
+            totalQty += alt.availableQty;
+          }
         });
-        rec.missing = skusArr.filter((sku) => !covered.has(sku));
+        byStore.set(code, {
+          skusCovered: covered.size,
+          totalQty,
+          missing: skusArr.filter((sku) => !covered.has(sku)),
+        });
       }
 
       const candidates = activeStores
@@ -661,7 +714,7 @@ export default function PedidoDetailPage() {
             state: s.state,
             active: s.active,
             skusCovered: rec.skusCovered,
-            skusTotal: allSkus.size,
+            skusTotal: relevantSkus.size,
             totalQty: rec.totalQty,
             missingSkus: rec.missing,
             hasReportedIssue: issueCodes.has(s.code),
@@ -687,12 +740,18 @@ export default function PedidoDetailPage() {
    * excluindo-loja e matriz decide.
    */
   async function applyPickStore(pickedCode: string, pickedName: string) {
-    if (!confirm(
-      `Forçar o pedido pra ${pickedName} (${pickedCode})?\n\n` +
-      `O sistema vai excluir TODAS as outras lojas do roteamento. Se ` +
-      `${pickedCode} não tiver estoque suficiente do que falta, o pedido ` +
-      `fica pending.`,
-    )) return;
+    // Texto do confirm reflete o MODO: swap cirúrgico (só a loja de origem
+    // muda) × recalculate total (pedido inteiro forçado pra loja escolhida).
+    const msg = swapTarget
+      ? `Trocar ${swapTarget.fromStoreCode} por ${pickedName} (${pickedCode})?\n\n` +
+        `SÓ as peças que estavam com ${swapTarget.fromStoreCode} mudam de loja — ` +
+        `as outras lojas deste pedido NÃO são tocadas. Se ${pickedCode} não ` +
+        `tiver estoque, nada muda.`
+      : `Forçar o pedido INTEIRO pra ${pickedName} (${pickedCode})?\n\n` +
+        `O sistema vai excluir TODAS as outras lojas do roteamento. Se ` +
+        `${pickedCode} não tiver estoque suficiente do que falta, o pedido ` +
+        `fica pending.`;
+    if (!confirm(msg)) return;
 
     setPickStoreApplying(pickedCode);
     setPickStoreError(null);
@@ -1235,19 +1294,33 @@ export default function PedidoDetailPage() {
                     </div>
                   ))}
                 <div className="mt-3 flex flex-wrap gap-2">
+                  {/* CIRÚRGICO: os dois botões agem SÓ na(s) loja(s) que reportou(aram)
+                      problema — as outras lojas do pedido (inclusive as que já
+                      enviaram) ficam intocadas. Bug real 13/07: recalculava tudo. */}
                   <button
-                    onClick={loadSeparation}
+                    onClick={recalcularLojasComProblema}
                     disabled={sepLoading}
                     className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-semibold bg-white border border-red-400 text-red-800 hover:bg-red-50 disabled:opacity-60"
-                    title="Deixa o sistema escolher automaticamente (exclui a loja que reportou)"
+                    title="Re-roteia SÓ as peças da loja com problema (exclui ela); as outras lojas não mudam"
                   >
-                    🔁 Recalcular automático
+                    🔁 Recalcular automático (só a loja com problema)
                   </button>
                   <button
-                    onClick={openPickStoreModal}
+                    onClick={() => {
+                      const issue = liveStatus.find((r) => r.issueReason && r.id);
+                      if (issue) {
+                        setSwapTarget({
+                          pickOrderId: issue.id,
+                          fromStoreCode: issue.storeCode!,
+                          fromStoreName: issue.storeName,
+                          fromStatus: issue.status,
+                        });
+                      }
+                      openPickStoreModal();
+                    }}
                     disabled={sepLoading}
                     className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-semibold bg-red-600 text-white hover:bg-red-700 disabled:opacity-60"
-                    title="Abre lista de lojas candidatas pra você escolher manualmente"
+                    title="Escolhe a loja que assume SÓ as peças da loja com problema; as outras lojas não mudam"
                   >
                     🎯 Escolher outra loja manualmente
                   </button>
@@ -1382,6 +1455,25 @@ export default function PedidoDetailPage() {
                         );
                       })()}
                     </div>
+                    {/* PEÇAS desta loja (15/07): a operadora vê o que foi
+                        roteado pra cada loja e decide se dá pra consolidar
+                        (juntar tudo numa só via ↔ Trocar loja, evitando 2 SEDEX). */}
+                    {(r.items?.length ?? 0) > 0 && (
+                      <div className="mt-1.5 pl-6">
+                        <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400 mb-0.5">
+                          {r.items!.reduce((s, it) => s + (it.qty || 1), 0)} peça(s) nesta loja
+                        </div>
+                        <ul className="space-y-0.5">
+                          {r.items!.map((it, i) => (
+                            <li key={`${it.sku}-${i}`} className="text-xs text-slate-600 flex gap-1.5">
+                              <span className="font-bold tabular-nums text-slate-500 shrink-0">{it.qty}×</span>
+                              <span className="truncate">{it.descricao || it.sku}</span>
+                              <span className="text-slate-300 shrink-0 font-mono">· {it.sku}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
                     {r.status === 'shipped' && r.trackingCode && (
                       <div className="mt-1 pl-6 text-xs text-slate-700">
                         <Truck className="w-3 h-3 inline mr-1" />
@@ -1969,7 +2061,7 @@ export default function PedidoDetailPage() {
       {pickStoreOpen && (
         <div
           className="fixed inset-0 z-[80] bg-black/60 flex items-center justify-center p-4"
-          onClick={() => !pickStoreApplying && (setPickStoreOpen(false), setSwapTarget(null))}
+          {...overlayClose(() => !pickStoreApplying && (setPickStoreOpen(false), setSwapTarget(null)))}
         >
           <div
             className="bg-white rounded-lg shadow-2xl max-w-2xl w-full max-h-[85vh] flex flex-col"
@@ -2031,8 +2123,11 @@ export default function PedidoDetailPage() {
               {!pickStoreLoading && pickStoreCandidates.length > 0 && (
                 <div className="space-y-2">
                   <div className="text-xs text-slate-500 mb-2">
-                    Ordenado por <b>maior cobertura</b> (mais SKUs do pedido disponíveis).
-                    A loja <b>✓ verde</b> cobre o pedido todo. <b>⚠ amarelo</b> cobre parcialmente
+                    Ordenado por <b>maior cobertura</b> (mais SKUs disponíveis)
+                    {swapTarget
+                      ? <> — <b>só dos itens de {swapTarget.fromStoreName || swapTarget.fromStoreCode}</b> (as outras lojas do pedido não entram na conta).</>
+                      : ' do pedido.'}
+                    {' '}A loja <b>✓ verde</b> cobre tudo. <b>⚠ amarelo</b> cobre parcialmente
                     (vai faltar peça — ia precisar transferir ou quebrar de novo).
                   </div>
                   {pickStoreCandidates.map((c) => {
@@ -2219,7 +2314,7 @@ function SkuDiagnoseModal({
   return (
     <div
       className="fixed inset-0 bg-black/60 z-50 flex items-start justify-center p-4 overflow-y-auto"
-      onClick={onClose}
+      {...overlayClose(onClose)}
     >
       <div
         className="bg-white rounded-2xl w-full max-w-3xl my-8 overflow-hidden"

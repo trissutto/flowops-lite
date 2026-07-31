@@ -60,6 +60,10 @@ export class CashService {
       credito: 0,
       debito: 0,
       crediario: 0,
+      // 15/07: separados de 'outros' pra conciliação — venda online É dinheiro
+      // recebido (entra no Recebido); vale-troca NÃO é (abate do Vendido).
+      venda_online: 0,
+      vale_troca: 0,
       outros: 0,
     };
 
@@ -76,7 +80,11 @@ export class CashService {
       for (const p of s.payments || []) {
         const method = String(p.method || '').toLowerCase();
         const valor = Number(p.valor) || 0;
-        if (method in byMethod) {
+        if (method === 'vale_troca' || method === 'vale' || method === 'troca') {
+          byMethod.vale_troca += valor;
+        } else if (method === 'venda_online' || method === 'online') {
+          byMethod.venda_online += valor;
+        } else if (method in byMethod) {
           byMethod[method] += valor;
         } else {
           byMethod.outros += valor;
@@ -139,6 +147,8 @@ export class CashService {
       totalCartaoCredito: byMethod.credito,
       totalCartaoDebito: byMethod.debito,
       totalCrediario: byMethod.crediario,
+      totalVendaOnline: byMethod.venda_online,
+      totalValeTroca: byMethod.vale_troca,
       totalOutros: byMethod.outros,
       totalMarcados,
       qtdMarcados,
@@ -475,7 +485,9 @@ export class CashService {
   // Retorna agregado de TODAS as lojas ativas com totais do caixa do dia.
   // Usado pela tela /retaguarda/super-painel-caixas com polling 60s.
 
-  async getSuperPainelCaixas(): Promise<{
+  // `storeCodes` restringe o painel a um CONJUNTO de lojas (ex: master da
+  // franquia só vê as lojas tipo=FILIAL). undefined = todas.
+  async getSuperPainelCaixas(storeCodes?: string[]): Promise<{
     lojas: Array<{
       storeCode: string;
       storeName: string;
@@ -541,7 +553,10 @@ export class CashService {
   }> {
     // Lista todas lojas ativas (Postgres)
     const stores = await this.prisma.store.findMany({
-      where: { active: true } as any,
+      where: {
+        active: true,
+        ...(storeCodes?.length ? { code: { in: storeCodes } } : {}),
+      } as any,
       orderBy: { code: 'asc' },
       select: { code: true, name: true } as any,
     });
@@ -549,6 +564,7 @@ export class CashService {
     const emptyTotais = {
       totalVendas: 0, totalDinheiro: 0, totalPix: 0,
       totalCartaoCredito: 0, totalCartaoDebito: 0, totalCrediario: 0,
+      totalVendaOnline: 0, totalValeTroca: 0,
       totalSangrias: 0, totalSuprimentos: 0, dinheiroEsperado: 0, qtdVendas: 0,
     };
 
@@ -596,13 +612,17 @@ export class CashService {
           detalhado = await this.getRelatorioDetalhado(s.code);
         } catch { /* loja sem caixa aberto — segue */ }
 
-        // Ranking de vendedoras (qtd vendas + total) — só vendas finalizadas
+        // Ranking de vendedoras (qtd vendas + total) — só vendas finalizadas.
+        // MARCADO fica FORA (Regra 1 do dono, 29/07: marcado não existe
+        // financeiramente até virar venda — contava aqui e inflava o ranking
+        // enquanto o total da sessão, correto, excluía).
         const sales = await (this.prisma as any).pdvSale.findMany({
           where: { cashSessionId: session.id, status: 'finalized', isTraining: false },
-          select: { sellerName: true, vendedorName: true, total: true },
+          select: { sellerName: true, vendedorName: true, total: true, paymentMethod: true },
         });
         const ranking: Record<string, { nome: string; qtd: number; total: number }> = {};
         for (const sale of sales as any[]) {
+          if (String(sale.paymentMethod || '').toUpperCase() === 'MARCADO') continue;
           const nome = (sale.sellerName || sale.vendedorName || 'Sem vendedora').trim();
           if (!ranking[nome]) ranking[nome] = { nome, qtd: 0, total: 0 };
           ranking[nome].qtd += 1;
@@ -694,6 +714,8 @@ export class CashService {
             totalCartaoCredito: t.totalCartaoCredito,
             totalCartaoDebito: t.totalCartaoDebito,
             totalCrediario: t.totalCrediario,
+            totalVendaOnline: t.totalVendaOnline,
+            totalValeTroca: t.totalValeTroca,
             totalSangrias: t.totalSangrias,
             totalSuprimentos: t.totalSuprimentos,
             dinheiroEsperado: t.dinheiroEsperado,
@@ -711,6 +733,7 @@ export class CashService {
     const consolidado: any = {
       totalVendas: 0, totalDinheiro: 0, totalPix: 0,
       totalCartaoCredito: 0, totalCartaoDebito: 0, totalCrediario: 0,
+      totalVendaOnline: 0, totalValeTroca: 0,
       totalMarcados: 0, qtdMarcados: 0,
       totalSangrias: 0, totalSuprimentos: 0, qtdVendas: 0,
       qtdLojasAbertas: 0, qtdLojasFechadas: 0,
@@ -723,6 +746,8 @@ export class CashService {
       consolidado.totalCartaoCredito += l.totais.totalCartaoCredito;
       consolidado.totalCartaoDebito += l.totais.totalCartaoDebito;
       consolidado.totalCrediario += l.totais.totalCrediario;
+      consolidado.totalVendaOnline += (l.totais as any).totalVendaOnline || 0;
+      consolidado.totalValeTroca += (l.totais as any).totalValeTroca || 0;
       consolidado.totalMarcados += (l.totais as any).totalMarcados || 0;
       consolidado.qtdMarcados += (l.totais as any).qtdMarcados || 0;
       consolidado.totalSangrias += l.totais.totalSangrias;
@@ -747,7 +772,7 @@ export class CashService {
    * Estrutura compativel com o painel ao vivo pra reutilizar componentes
    * do frontend, mas sem detalhamento por sessao (aberta=false sempre).
    */
-  async getSuperPainelHistorico(from: Date, to: Date): Promise<any> {
+  async getSuperPainelHistorico(from: Date, to: Date, storeCodes?: string[]): Promise<any> {
     // Normaliza range: from=00:00:00, to=23:59:59 do dia
     // Limites no fuso BR. `from`/`to` chegam como meia-noite UTC da data
     // escolhida (controller: new Date('YYYY-MM-DD'+'T00:00:00')) → lê o YMD.
@@ -755,7 +780,10 @@ export class CashService {
     const toEnd = dayBoundsFromUtcDate(to).end;
 
     const stores = await this.prisma.store.findMany({
-      where: { active: true } as any,
+      where: {
+        active: true,
+        ...(storeCodes?.length ? { code: { in: storeCodes } } : {}),
+      } as any,
       orderBy: { code: 'asc' },
       select: { code: true, name: true } as any,
     });
@@ -792,6 +820,7 @@ export class CashService {
           ELO_DEBITO: mkSlot(),                // ELO no debito (slot proprio)
           CREDITO_GENERICO: mkSlot(), DEBITO_GENERICO: mkSlot(),
           VALE_TROCA: mkSlot(),
+          VENDA_ONLINE: mkSlot(),
           OUTROS: mkSlot(),
         };
         const bandeiraMap: Record<string, string> = {
@@ -824,7 +853,7 @@ export class CashService {
         let totalMarcados = 0;
         let qtdMarcados = 0;
         let qtdVendasReais = 0;
-        let totalDinheiro = 0, totalPix = 0, totalCartaoCredito = 0, totalCartaoDebito = 0, totalCrediario = 0, totalValeTroca = 0;
+        let totalDinheiro = 0, totalPix = 0, totalCartaoCredito = 0, totalCartaoDebito = 0, totalCrediario = 0, totalValeTroca = 0, totalVendaOnline = 0;
         const ranking: Record<string, { nome: string; qtd: number; total: number }> = {};
 
         for (const sale of sales as any[]) {
@@ -860,6 +889,10 @@ export class CashService {
             else if (m === 'vale_troca' || m === 'vale' || m === 'troca') {
               totalValeTroca += v;
               pushVenda('VALE_TROCA' as any, sale, p, v);
+            }
+            else if (m === 'venda_online' || m === 'online') {
+              totalVendaOnline += v;
+              pushVenda('VENDA_ONLINE' as any, sale, p, v);
             }
             else if (m === 'credito' || m === 'credit') {
               totalCartaoCredito += v;
@@ -1007,6 +1040,7 @@ export class CashService {
             totalCartaoDebito,
             totalCrediario,
             totalValeTroca,
+            totalVendaOnline,
             totalMarcados,
             qtdMarcados,
             totalSangrias,
@@ -1031,6 +1065,7 @@ export class CashService {
     const consolidado = {
       totalVendas: 0, totalDinheiro: 0, totalPix: 0,
       totalCartaoCredito: 0, totalCartaoDebito: 0, totalCrediario: 0,
+      totalValeTroca: 0, totalVendaOnline: 0,
       totalMarcados: 0, qtdMarcados: 0,
       totalSangrias: 0, totalSuprimentos: 0, qtdVendas: 0,
       qtdLojasAbertas: 0, qtdLojasFechadas: lojas.length,
@@ -1042,6 +1077,8 @@ export class CashService {
       consolidado.totalCartaoCredito += l.totais.totalCartaoCredito;
       consolidado.totalCartaoDebito += l.totais.totalCartaoDebito;
       consolidado.totalCrediario += l.totais.totalCrediario;
+      consolidado.totalValeTroca += (l.totais as any).totalValeTroca || 0;
+      consolidado.totalVendaOnline += (l.totais as any).totalVendaOnline || 0;
       consolidado.totalMarcados += l.totais.totalMarcados;
       consolidado.qtdMarcados += l.totais.qtdMarcados;
       consolidado.totalSangrias += l.totais.totalSangrias;
@@ -2158,13 +2195,25 @@ export class CashService {
       throw new BadRequestException('Não há caixa aberto nesta loja.');
     }
 
-    // Bloqueia fechamento se houver venda em aberto na sessão
-    const openSales = await (this.prisma as any).pdvSale.count({
+    // Venda em aberto NÃO bloqueia mais o fechamento (dono 21/07 — o erro
+    // "Existem N venda(s) em aberto" atrapalhava todo fim de dia). Vendas
+    // abertas nessa hora são zumbis (carrinho não finalizado): cancela
+    // automaticamente, registra na observação e segue o fechamento — mesmo
+    // comportamento do antigo botão "Cancelar pendências e fechar caixa".
+    // Venda finalizada NUNCA é tocada aqui.
+    const zumbis = await (this.prisma as any).pdvSale.updateMany({
       where: { cashSessionId: session.id, status: 'open' },
+      data: {
+        status: 'cancelled',
+        cancelledAt: new Date(),
+        cancelReason: 'Cancelamento automático no fechamento do caixa (venda não finalizada)',
+      },
     });
-    if (openSales > 0) {
-      throw new BadRequestException(
-        `Existem ${openSales} venda(s) em aberto. Finalize ou cancele antes de fechar o caixa.`,
+    let obsZumbis = '';
+    if (zumbis.count > 0) {
+      obsZumbis = `[fechamento: ${zumbis.count} venda(s) em aberto cancelada(s) automaticamente]`;
+      this.logger.warn(
+        `[caixa] closeCash ${storeCode}: ${zumbis.count} venda(s) zumbi canceladas na sessão ${session.id}`,
       );
     }
 
@@ -2186,9 +2235,10 @@ export class CashService {
         status: 'closed',
         closedAt: new Date(),
         closedByName: closedByName || null,
-        observacao: observacao
-          ? (session.observacao ? `${session.observacao}\n---\n${observacao}` : observacao)
-          : session.observacao,
+        observacao: (() => {
+          const partes = [session.observacao, observacao, obsZumbis].filter(Boolean);
+          return partes.length ? partes.join('\n---\n') : null;
+        })(),
         totalVendas: totals.totalVendas,
         totalDinheiro: totals.totalDinheiro,
         totalPix: totals.totalPix,

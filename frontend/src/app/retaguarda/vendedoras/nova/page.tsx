@@ -41,6 +41,7 @@ export default function NovaFuncionariaPage() {
 
   // Dados pessoais
   const [name, setName] = useState('');
+  const [apelido, setApelido] = useState('');
   const [cpf, setCpf] = useState('');
   const [rg, setRg] = useState('');
   const [dataNascimento, setDataNascimento] = useState('');
@@ -112,6 +113,7 @@ export default function NovaFuncionariaPage() {
     try {
       const body: any = {
         name: nome,
+        apelido: apelido.trim() || undefined,
         cargo,
         responsibleStoreId: responsibleStoreId || null,
         cpf: cpf.replace(/\D/g, '') || undefined,
@@ -181,6 +183,9 @@ export default function NovaFuncionariaPage() {
           <Grid>
             <Field label="Nome completo *" required>
               <Input value={name} onChange={setName} placeholder="Ex: Maria Silva" autoFocus />
+            </Field>
+            <Field label="Apelido (aparece no PDV)">
+              <Input value={apelido} onChange={(v) => setApelido(v.toUpperCase())} placeholder="Ex.: LETICIA 2, JÔ, MARI" />
             </Field>
             <Field label="CPF">
               <Input value={cpf} onChange={setCpf} placeholder="000.000.000-00" />
@@ -264,13 +269,13 @@ export default function NovaFuncionariaPage() {
           )}
 
           <div className="mt-3">
-            <Field label="Loja de origem (PDV)">
+            <Field label="Loja onde trabalha">
               <select
                 value={storeCodeOrigin}
                 onChange={(e) => setStoreCodeOrigin(e.target.value)}
                 className="w-full px-3 py-2 border rounded text-sm"
               >
-                <option value="">— não vincular —</option>
+                <option value="">— sem loja —</option>
                 {stores.map((s) => (
                   <option key={s.id} value={s.code}>
                     {s.code} {s.name}
@@ -279,7 +284,7 @@ export default function NovaFuncionariaPage() {
               </select>
             </Field>
             <p className="text-xs text-slate-400 mt-1">
-              Loja onde aparece na lista do PDV. Pode ser igual à loja responsável.
+              Ela entra sozinha na escolha de vendedora no PDV desta loja.
             </p>
           </div>
 

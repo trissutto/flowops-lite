@@ -18,7 +18,7 @@ import {
   LayoutDashboard, BarChart3, DollarSign, Users, ShoppingBag,
   Shuffle, Truck, AlertTriangle, FileSearch, Activity, ArrowLeft,
   Globe2, Store, Settings, Megaphone, CreditCard, ClipboardList,
-  Package, Bell, Network,
+  Package, Bell, Network, Tag,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import AdminShell, { type AdminNavItem } from '@/components/AdminShell';
@@ -42,23 +42,33 @@ interface GestaoItem {
 }
 
 const GESTAO_ITEMS: GestaoItem[] = [
+  { href: '/retaguarda/demandas',             label: 'Demandas',          subtitle: 'Backlog',       description: 'Prompt + prints · criticidade', tone: 'amber',  icon: ClipboardList },
+  { href: '/retaguarda/conciliacao',          label: 'Conciliação',       subtitle: 'Financeiro',    description: 'Stone · PagBank · Pagar.me × vendas', tone: 'green', icon: DollarSign },
   { href: '/retaguarda/dashboard',            label: 'Dashboard',         subtitle: 'KPIs',          description: 'Visão geral em tempo real',     tone: 'teal',   icon: LayoutDashboard },
   { href: '/retaguarda/super-painel-caixas',  label: 'Super Painel',      subtitle: 'Caixas ao vivo', description: 'Vendas em tempo real (todas lojas)', tone: 'rose', icon: DollarSign      },
   { href: '/retaguarda/faturamento',          label: 'Faturamento',       subtitle: 'Por loja',      description: 'Gráfico + comparação ano anterior', tone: 'green',  icon: DollarSign     },
+  { href: '/retaguarda/dre',                  label: 'Resultado (DRE)',   subtitle: 'Por loja',      description: 'Margem, 4-wall e ponto de equilíbrio', tone: 'teal', icon: BarChart3      },
+  { href: '/retaguarda/campanhas',            label: 'Campanhas',         subtitle: 'Vendas por anúncio', description: 'Receita real do site por campanha (UTM)', tone: 'purple', icon: Megaphone   },
   { href: '/retaguarda/relatorio-fiscal',     label: 'Relatório Fiscal',  subtitle: 'NFC-e',          description: 'Auditoria por CNPJ/série + inconsistências', tone: 'purple', icon: ClipboardList },
   { href: '/retaguarda/inteligencia-estoque', label: 'Inteligência',      subtitle: 'Estoque',       description: 'Análise de produto + venda',    tone: 'purple', icon: BarChart3       },
   { href: '/retaguarda/distribuicao-estoque', label: 'Distribuição',      subtitle: 'Estoque PLUS',  description: 'Detecta desequilíbrios entre lojas', tone: 'rose',   icon: Package         },
   // "Financeiro" (analítico WC) movido pro hub /site — é financeiro do e-commerce.
+  { href: '/retaguarda/contas-pagar',         label: 'Contas a Pagar',    subtitle: 'Financeiro',    description: 'Vencimentos, fornecedores e funcionárias', tone: 'green', icon: DollarSign },
   { href: '/retaguarda/financeiro/transferencias', label: 'Transferências', subtitle: 'Inter-lojas',  description: 'Royalties + fechamento',        tone: 'green',  icon: DollarSign      },
   { href: '/retaguarda/transferencias-rede-franquia', label: 'REDE × Franquia', subtitle: 'Conta corrente', description: 'Acerto da franqueada + extrato analítico', tone: 'teal', icon: Network },
   { href: '/relatorios/vendedoras',           label: 'Vendedoras',        subtitle: 'Ranking',       description: 'Vendas por mês',                tone: 'rose',   icon: Users           },
   { href: '/retaguarda/crediario/automatico', label: 'Cobrança',          subtitle: 'Crediário',     description: 'Campanhas automáticas',         tone: 'orange', icon: CreditCard      },
   { href: '/retaguarda/crediario',            label: 'Crediário',         subtitle: 'Manual',        description: 'Lista + WhatsApp bulk',         tone: 'orange', icon: CreditCard      },
+  { href: '/retaguarda/marcados',             label: 'Marcados',          subtitle: 'Provar em casa', description: 'Peças em marca por cliente (rede toda)', tone: 'amber', icon: Tag        },
   { href: '/clientes',                        label: 'Clientes',          subtitle: 'CRM',           description: 'Histórico + segmentos',         tone: 'sky',    icon: Users           },
   { href: '/marketing',                       label: 'Marketing',         subtitle: 'Campanhas',     description: 'Recuperação + WhatsApp',        tone: 'rose',   icon: Megaphone       },
   { href: '/retaguarda/notificacoes',         label: 'Notificações',      subtitle: 'Push Central',  description: 'Avisar lojas: promoção, reunião…', tone: 'purple', icon: Bell           },
   { href: '/retaguarda/cadastro-produtos',    label: 'Cadastro Produtos', subtitle: 'Novo SKU',      description: 'Gerar SKUs no Wincred',         tone: 'purple', icon: Package         },
+  { href: '/retaguarda/editor-produtos',      label: 'Editor Produtos',   subtitle: 'Padronizar',    description: 'REF, preço e descrição em bloco', tone: 'amber', icon: Package         },
+  { href: '/retaguarda/conferidor-estoque',   label: 'Conferir Estoque',  subtitle: 'Flow × Giga',  description: 'Lista só o que diverge entre os dois', tone: 'amber', icon: Package         },
   { href: '/retaguarda/remessas',             label: 'Remessas',          subtitle: 'Em trânsito',   description: 'Caixas + comprovantes PDF',     tone: 'sky',    icon: Truck           },
+  { href: '/retaguarda/correios',             label: 'Correios',          subtitle: 'Envios',        description: 'Frete + pré-postagem (diagnóstico)', tone: 'sky', icon: Truck           },
+  { href: '/retaguarda/mais-envios',          label: 'Mais Envios',       subtitle: 'Envios',        description: 'Frete + descoberta de conta (diagnóstico)', tone: 'purple', icon: Truck   },
   { href: '/retaguarda/realinhamento',        label: 'Realinhamento',     subtitle: 'Criar',         description: 'Rebalancear estoque',           tone: 'amber',  icon: Shuffle         },
   { href: '/retaguarda/realinhamento/nao-encontrados', label: 'Não Encontradas', subtitle: 'Revisar', description: 'Filiais reportaram',           tone: 'rose',   icon: AlertTriangle  },
   { href: '/retaguarda/enviados-hoje',        label: 'Enviados Hoje',     subtitle: 'Pedidos WC',    description: 'Por filial',                    tone: 'green',  icon: ClipboardList   },
@@ -84,6 +94,9 @@ export default function GestaoHub() {
         if (me.role === 'store') router.push('/minha-loja/pdv');
         // Contador só tem acesso ao relatório fiscal — bloqueia hub geral
         else if (me.role === 'contador') router.push('/retaguarda/relatorio-fiscal');
+        // Franquia NUNCA vê o hub completo da retaguarda — vai pro portal dela
+        // (bug 15/07: voltar do painel de caixas caía no menu de admin inteiro)
+        else if (me.role === 'franquias' || me.role === 'master_franquia') router.push('/franquias');
       })
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -1,0 +1,33 @@
+{
+  "name": "Ponto Lurd's",
+  "short_name": "Ponto",
+  "description": "Bater ponto por reconhecimento facial — celular da loja",
+  "start_url": "/minha-loja/ponto-celular",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "categories": ["business"],
+  "lang": "pt-BR",
+  "scope": "/",
+  "icons": [
+    {
+      "src": "/ponto-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/ponto-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/ponto-icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

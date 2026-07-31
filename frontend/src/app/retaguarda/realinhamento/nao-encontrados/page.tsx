@@ -17,6 +17,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { api } from '@/lib/api';
+import { appPrompt } from '@/lib/app-prompt';
 import {
   ArrowLeft, AlertTriangle, RefreshCw, X, Undo2, Shuffle,
   Loader2, Package, Store, Clock,
@@ -111,13 +112,12 @@ export default function NaoEncontradosPage() {
       .filter((s) => s.code !== item.lojaOrigemCode && s.code !== item.lojaDestinoCode)
       .map((s) => `${s.code} - ${s.name}`)
       .join('\n');
-    const newCode = window.prompt(
+    const newCode = await appPrompt(
       `Trocar origem de ${item.refCode} ${item.cor || ''}/${item.tamanho || ''}\n\n` +
         `Atual: ${item.lojaOrigemCode} - ${item.lojaOrigemName}\n` +
         `Destino: ${item.lojaDestinoCode} - ${item.lojaDestinoName}\n\n` +
         `Lojas disponíveis:\n${opcoes}\n\n` +
         `Digite o código da nova loja origem:`,
-      '',
     );
     if (!newCode) return;
     const newCodeClean = newCode.trim();

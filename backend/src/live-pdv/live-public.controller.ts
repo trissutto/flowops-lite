@@ -116,6 +116,76 @@ export class ManychatHookController {
   }
 }
 
+/**
+ * WEBHOOK de MENSAGEM da cliente (SACOLA PELA DM, 16/07).
+ *
+ * O ManyChat, em cada mensagem da cliente durante a live, faz um External
+ * Request pra cá com { ig, text, name?, phone? } e devolve o campo `reply`
+ * pra mandar de volta no DM. A cliente monta o carrinho sem sair do Instagram.
+ *
+ * Segurança:
+ *  - Token via MANYCHAT_HOOK_TOKEN (mesmo do link).
+ *  - Rate-limit POR @ (não por IP — o ManyChat manda tudo do mesmo IP): trava o
+ *    troll que floda sozinho sem afetar o resto da live.
+ *  - A lógica só liga com LIVE_DM_SELFCART=1 (o service devolve aviso educado
+ *    se estiver OFF). FECHAR NÃO cobra: cai na fila de revisão da apresentadora.
+ */
+const IG_RL_WINDOW_MS = 60_000;
+const IG_RL_MAX = 30; // msgs por @ por minuto (cliente real manda bem menos)
+const igHits = new Map<string, number[]>();
+
+@Controller('public/manychat-inbound')
+export class ManychatInboundController {
+  constructor(private readonly svc: LivePdvService) {}
+
+  @Post()
+  async inbound(
+    @Query('t') t: string | undefined,
+    @Body() body: any,
+  ): Promise<{ reply: string }> {
+    const expected = (
+      process.env.MANYCHAT_HOOK_TOKEN || process.env.CADASTRO_LIVE_TOKEN || ''
+    ).trim();
+    const got = String(t || body?.token || '').trim();
+    if (expected && got !== expected) {
+      // Não vaza detalhe pro flow do ManyChat — resposta genérica.
+      return { reply: '' };
+    }
+
+    const ig = String(body?.ig || body?.ig_username || '').trim().replace(/^@/, '');
+    const text = String(body?.text ?? body?.last_input_text ?? body?.message ?? '').trim();
+
+    // Rate-limit por @ (troll não derruba a live inteira)
+    const rlKey = (ig || 'anon').toLowerCase();
+    const now = Date.now();
+    const arr = (igHits.get(rlKey) || []).filter((ts) => now - ts < IG_RL_WINDOW_MS);
+    arr.push(now);
+    igHits.set(rlKey, arr);
+    if (igHits.size > 10000) {
+      for (const [k, v] of igHits) {
+        if (!v.some((ts) => now - ts < IG_RL_WINDOW_MS)) igHits.delete(k);
+      }
+    }
+    if (arr.length > IG_RL_MAX) {
+      return { reply: 'Opa, muitas mensagens seguidas! Aguarda um segundinho e tenta de novo. 💛' };
+    }
+
+    // Nunca lança pro ManyChat — erro vira reply amigável.
+    try {
+      const r = await this.svc.manychatInbound({
+        ig,
+        text,
+        name: body?.name,
+        phone: body?.phone || body?.whatsapp_phone,
+        sid: body?.sid || body?.id, // subscriber id p/ vincular e mandar o link depois
+      });
+      return { reply: r.reply };
+    } catch {
+      return { reply: 'Tivemos um probleminha aqui. Tenta de novo em instantes, tá? 💛' };
+    }
+  }
+}
+
 /** Celular BR: 10 dígitos (fixo antigo) ou 11 (com 9). Aceita DDD 11–99. */
 function isValidBrCell(digits: string): boolean {
   if (digits.length !== 10 && digits.length !== 11) return false;

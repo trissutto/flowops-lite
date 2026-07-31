@@ -200,6 +200,17 @@ export class CrediarioBaixaController {
     return this.svc.listAllOpenInstallments({ storeCode });
   }
 
+  // ── Admin: DIFF de validação espelho vs Giga (read-only) ──────────
+  // Cruza wincred_movimento_aberto (espelho) com movimento (Giga ao vivo) e
+  // devolve um veredito de se dá pra ligar CREDIARIO_NATIVE_READS=1 sem
+  // crediário sumir. Não escreve nada. `?storeCode=NN` limita a uma loja
+  // (recomendado — a query da rede inteira é pesada no Giga).
+  @Get('diff/abertas')
+  async diffAbertas(@Req() req: any, @Query('storeCode') storeCode?: string) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+    return this.svc.diffAbertasEspelhoVsGiga({ storeCode });
+  }
+
   // ── Autocomplete cliente (rápido) ─────────────────────────────────
   // Mesmo kill-switch que /todas — protege contra saturação do pool MySQL
   @Get('clientes-autocomplete')

@@ -28,12 +28,12 @@ export class ReturnsController {
 
   // Devolução que SAI dinheiro do caixa (dinheiro/pix) exige senha de GERENTE
   // + justificativa. Troca/crédito (vale, não sai dinheiro) seguem livres.
-  private requireCashAuth(modo: string | undefined, motivo: string | undefined, password: string | undefined) {
+  private requireCashAuth(modo: string | undefined, motivo: string | undefined, password: string | undefined, storeCode?: string) {
     if (modo === 'dinheiro' || modo === 'pix') {
       if (!motivo || String(motivo).trim().length < 3) {
         throw new BadRequestException('Justificativa obrigatória (mín. 3 caracteres) para devolução em dinheiro/pix');
       }
-      validateMinLevel(password, 'GERENTE'); // lança se a senha não for ≥ GERENTE
+      validateMinLevel(password, 'GERENTE', storeCode); // lança se a senha não for ≥ GERENTE
     }
   }
 
@@ -80,16 +80,13 @@ export class ReturnsController {
   async lookupBySku(
     @Req() req: any,
     @Query('sku') sku: string,
-    @Query('crossStore') crossStore?: string,
   ) {
     this.requireRole(req);
-    const role = req?.user?.role;
-    const userStoreCode = req?.user?.storeCode || null;
-    // crossStore=1 sÃ³ funciona se for admin/operator. Vendedora comum sempre filtra.
-    const isAdmin = role === 'admin' || role === 'operator';
-    const wantsCross = crossStore === '1' || crossStore === 'true';
-    const storeCodeFilter = isAdmin && wantsCross ? null : userStoreCode;
-    return this.svc.lookupSalesBySku(sku, storeCodeFilter);
+    // Regra do dono: SEMPRE traz a rede — vendas da loja ATUAL em destaque e as
+    // outras lojas abaixo. A loja do JWT vira a "casa" (sameStore) pro destaque.
+    // A devolução em si segue pedindo confirmação cross-store (createReturn).
+    const homeStoreCode = req?.user?.storeCode || null;
+    return this.svc.lookupSalesBySku(sku, homeStoreCode);
   }
 
   /**
@@ -143,7 +140,7 @@ export class ReturnsController {
     },
   ) {
     this.requireRole(req);
-    this.requireCashAuth(body.modo, body.motivo, body.password);
+    this.requireCashAuth(body.modo, body.motivo, body.password, req?.user?.storeCode);
     const { storeCode, storeName } = this.resolveStore(req, body);
     const u = req?.user || {};
     return this.svc.createManualReturn({
@@ -188,7 +185,7 @@ export class ReturnsController {
     },
   ) {
     this.requireRole(req);
-    this.requireCashAuth(body.modo, body.motivo, body.password);
+    this.requireCashAuth(body.modo, body.motivo, body.password, req?.user?.storeCode);
     const { storeCode, storeName } = this.resolveStore(req, body);
     return this.svc.createReturn({
       originalSaleId: body.originalSaleId,
@@ -241,10 +238,12 @@ export class ReturnsController {
       storeName?: string;
       attachToSaleId?: string | null;
       password?: string;
+      /** Frontend manda true quando user confirma o alerta cross-store. */
+      confirmCrossStore?: boolean;
     },
   ) {
     this.requireRole(req);
-    this.requireCashAuth(body.modo, body.motivo, body.password);
+    this.requireCashAuth(body.modo, body.motivo, body.password, req?.user?.storeCode);
     const { storeCode, storeName } = this.resolveStore(req, body);
     return this.svc.createReturnBatch({
       vendas: body.vendas,
@@ -259,6 +258,7 @@ export class ReturnsController {
       // TRAVA DE SEGURANÃ‡A: sessÃ£o em treino (header) â†’ batch inteiro tratado
       // como treino MESMO que as vendas originais sejam reais.
       trainingRequest: isTrainingRequest(req),
+      confirmCrossStore: !!body.confirmCrossStore,
     });
   }
 

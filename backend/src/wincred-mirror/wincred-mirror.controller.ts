@@ -60,7 +60,9 @@ export class WincredMirrorController {
   @Post('sync/estoque')
   syncEstoque(@Req() req: any) {
     this.requireAdmin(req);
-    return this.mirror.syncEstoque();
+    // Botão manual = recuperação consciente: força mesmo com o cron desligado
+    // (constituição 14/07: Flow é a fonte; usar só pra reconciliar após incidente).
+    return this.mirror.syncEstoque(true);
   }
 
   @Post('sync/grupos')

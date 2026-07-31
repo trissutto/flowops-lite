@@ -259,6 +259,37 @@ export class PickOrdersController {
     return this.svc.updateStatus(id, user.storeId, user.userId, body);
   }
 
+  /** Gera a pré-postagem dos Correios pro pedido da live (NÃO marca enviado —
+   *  o cron marca quando os Correios registram a postagem). */
+  @Post(':id/correios-envio')
+  correiosEnvio(@Req() req: any, @Param('id') id: string) {
+    const user = req.user as AuthUser;
+    if (user.role !== 'store' || !user.storeId) {
+      throw new ForbiddenException('Apenas usuários de loja postam');
+    }
+    return this.svc.gerarEnvioCorreios(id, user.storeId, user.userId);
+  }
+
+  /** Documentos do envio num PDF único: etiqueta + DANFE (nessa ordem). */
+  @Get(':id/docs-envio')
+  docsEnvio(@Req() req: any, @Param('id') id: string) {
+    const user = req.user as AuthUser;
+    if (user.role !== 'store' || !user.storeId) {
+      throw new ForbiddenException('Apenas usuários de loja');
+    }
+    return this.svc.docsEnvioMerged(id, user.storeId);
+  }
+
+  /** Reabre (desfaz) a pré-postagem gerada pra refazer — ex.: modalidade errada. */
+  @Post(':id/correios-reabrir')
+  correiosReabrir(@Req() req: any, @Param('id') id: string) {
+    const user = req.user as AuthUser;
+    if (user.role !== 'store' || !user.storeId) {
+      throw new ForbiddenException('Apenas usuários de loja');
+    }
+    return this.svc.reabrirEnvioCorreios(id, user.storeId);
+  }
+
   /**
    * Retorna items do pick-order com EAN13 resolvido do Gigasistemas.
    * Usado pela tela de bipagem — frontend monta mapa EAN→SKU pra validar bips.
@@ -329,6 +360,34 @@ export class PickOrdersController {
       throw new ForbiddenException('Apenas usuários de loja reportam problema');
     }
     return this.svc.reportIssue(id, user.storeId, user.userId, body ?? { reason: '' });
+  }
+
+  /**
+   * LOJA troca uma peça manualmente na separação (produto não encontrado / trocar
+   * por outro). Só antes da baixa de estoque. Se o preço da peça nova difere,
+   * exige senha GERENTE+ (a service devolve needsPassword quando falta senha).
+   * Body: { orderItemId, codigo, ref?, cor?, tamanho?, descricao?, password? }
+   */
+  @Post(':id/swap-item')
+  swapItem(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body()
+    body: {
+      orderItemId: string;
+      codigo: string;
+      ref?: string;
+      cor?: string;
+      tamanho?: string;
+      descricao?: string;
+      password?: string;
+    },
+  ) {
+    const user = req.user as AuthUser;
+    if (user.role !== 'store' || !user.storeId) {
+      throw new ForbiddenException('Apenas usuários de loja trocam peça na separação');
+    }
+    return this.svc.swapItem(id, user.storeId, body ?? ({} as any), user.userId);
   }
 
   /**

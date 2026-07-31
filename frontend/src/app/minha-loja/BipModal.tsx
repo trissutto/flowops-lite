@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 
 /**
  * BipModal — tela de bipagem por código de barras (EAN13) pra finalizar separação.
@@ -503,7 +504,7 @@ export default function BipModal({
       {debug && !debug.found && (
         <div
           className="fixed inset-0 bg-black/70 z-[60] flex items-center justify-center p-3"
-          onClick={() => setDebug(null)}
+          {...overlayClose(() => setDebug(null))}
         >
           <div
             className="bg-white rounded-lg shadow-2xl w-full max-w-xl max-h-[90vh] flex flex-col"

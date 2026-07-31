@@ -30,11 +30,12 @@ import TrackingTimeline from '@/components/TrackingTimeline';
 import ProductThumb from '@/components/ProductThumb';
 import PushActivateButton from '@/components/PushActivateButton';
 import BipModal from './BipModal';
+import SwapModal, { SwapPayload, SwapResponse } from './SwapModal';
 import {
   Clock, PlayCircle, CheckCircle2, Truck, Printer, RefreshCw,
   Wifi, WifiOff, X, LogOut, AlertCircle, Barcode, Search, History,
   Package2, ClipboardList, Shuffle, Inbox, Package, ShoppingCart,
-  Fingerprint, Zap, Radio, ArrowLeftRight, KeyRound,
+  Fingerprint, Zap, Radio, ArrowLeftRight, KeyRound, ScanFace, Smartphone,
 } from 'lucide-react';
 
 type PickStatus = 'new' | 'separating' | 'separated' | 'ready' | 'shipped';
@@ -53,6 +54,8 @@ interface PickOrderRow {
   status: PickStatus;
   trackingCode: string | null;
   carrier: string | null;
+  correiosPrepostagemId?: string | null;
+  correiosGeneratedAt?: string | null;
   createdAt: string;
   updatedAt?: string;
   isTransfer?: boolean;
@@ -119,6 +122,7 @@ interface LiveQueueGroup {
   paymentMethod?: string | null; // 'pix' | 'link'
   subtotalCents?: number | null;
   freteCents?: number | null;
+  freteServico?: 'SEDEX' | 'PAC' | null; // forma de envio derivada do CEP
   totalCents?: number | null;
   isPickup?: boolean;
   pickupStoreCode?: string | null;
@@ -169,6 +173,12 @@ export default function MinhaLojaPage() {
   const [showShippedModal, setShowShippedModal] = useState<PickOrderRow | null>(null);
   const [showBipModal, setShowBipModal] = useState<PickOrderRow | null>(null);
   const [showIssueModal, setShowIssueModal] = useState<PickOrderRow | null>(null);
+  // Troca manual de peça na separação (pedido do site OU da live).
+  const [swapCtx, setSwapCtx] = useState<
+    | { kind: 'pick'; pickOrderId: string; itemId: string; label: string }
+    | { kind: 'live'; itemId: string; label: string }
+    | null
+  >(null);
   // Filtro de aba: null = todos | 'new' | 'separating' | 'ready' (separados+ready)
   const [filterTab, setFilterTab] = useState<'new' | 'separating' | 'ready' | null>(null);
   const [toasts, setToasts] = useState<Array<{ id: string; msg: string }>>([]);
@@ -509,6 +519,13 @@ export default function MinhaLojaPage() {
       }
     };
 
+    // Pedido da LIVE RECOLHIDO pela matriz (roteamento repensado) — some da fila
+    const onLiveSeparationRemoved = (payload: any) => {
+      loadLiveRows();
+      const quem = payload?.customerName || 'Cliente';
+      pushToast(`↩ Pedido da LIVE de ${quem} foi recolhido pela matriz — pode ignorar.`);
+    };
+
     socket.on('connect', onConnect);
     socket.on('disconnect', onDisconnect);
     socket.on('pick-order:new', onNew);
@@ -518,6 +535,7 @@ export default function MinhaLojaPage() {
     socket.on('realignment:new', onRealignmentNew);
     socket.on('realignment:sent', onRealignmentSent);
     socket.on('live-pdv:separation-new', onLiveSeparationNew);
+    socket.on('live-pdv:separation-removed', onLiveSeparationRemoved);
     if (socket.connected) setConnected(true);
 
     return () => {
@@ -530,6 +548,7 @@ export default function MinhaLojaPage() {
       socket.off('realignment:new', onRealignmentNew);
       socket.off('realignment:sent', onRealignmentSent);
       socket.off('live-pdv:separation-new', onLiveSeparationNew);
+      socket.off('live-pdv:separation-removed', onLiveSeparationRemoved);
     };
   }, [me, loadLiveRows]);
 
@@ -670,6 +689,71 @@ export default function MinhaLojaPage() {
     } catch (err: any) {
       pushToast(`Erro: ${err?.message ?? 'falha ao enviar'}`);
     }
+  }
+
+  function downloadPdf(b64: string, name: string) {
+    const a = document.createElement('a');
+    a.href = `data:application/pdf;base64,${b64}`;
+    a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+  }
+  // DOCUMENTOS DO ENVIO num PDF ÚNICO: etiqueta + DANFE (nessa ordem), pra
+  // loja imprimir um arquivo só. Fallback: etiqueta separada se o merge falhar.
+  async function baixarEtiquetaCorreios(idPre: string, rastreio: string, pickId?: string) {
+    if (pickId) {
+      try {
+        const m = await api<any>(`/pick-orders/${pickId}/docs-envio`);
+        if (m?.ok && m.pdfBase64) {
+          downloadPdf(m.pdfBase64, `envio-${rastreio}.pdf`);
+          if (m.temNota && m.temEtiqueta === false) pushToast(`🧾 NF-e baixada — etiqueta pendente: ${m.etiquetaErro ?? 'tente de novo em instantes'}`);
+          else if (m.temNota) pushToast('📦 Etiqueta + NF-e num arquivo só');
+          else pushToast('🏷️ Etiqueta baixada (envio sem NF-e autorizada)');
+          return;
+        }
+      } catch { /* cai no fluxo da etiqueta separada */ }
+    }
+    try {
+      const et = await api<any>('/correios/etiqueta', { method: 'POST', body: JSON.stringify({ idPrepostagem: idPre }) });
+      if (et?.ok && et.pdfBase64) { downloadPdf(et.pdfBase64, `etiqueta-${rastreio}.pdf`); pushToast('🏷️ Etiqueta baixada'); }
+      else pushToast(`Etiqueta não ficou pronta: ${et?.erro ?? 'tente reimprimir'}`);
+    } catch { pushToast('Etiqueta falhou (tente reimprimir).'); }
+  }
+
+  // MODEL B: gera a pré-postagem (modalidade correta), mostra o rastreio e baixa
+  // etiqueta + declaração. NÃO marca enviado — o pedido FICA na lista
+  // "aguardando postagem"; o cron marca enviado quando os Correios postarem.
+  async function gerarEnvioCorreios(row: PickOrderRow) {
+    cancelAutoMaximize(row.id);
+    try {
+      const r = await api<any>(`/pick-orders/${row.id}/correios-envio`, { method: 'POST', body: JSON.stringify({}) });
+      if (!r?.codigoRastreio) { pushToast('Correios não devolveu rastreio.'); return; }
+      setRows((prev) => prev.map((x) => (x.id === row.id
+        ? { ...x, trackingCode: r.codigoRastreio, carrier: r.carrier || (r.servico ? `Correios ${r.servico}` : 'Correios'), correiosPrepostagemId: r.idPrepostagem ?? null }
+        : x)));
+      pushToast(`📮 Envio gerado (${r.servico ?? '—'}): ${r.codigoRastreio} — aguardando postagem`);
+      // DC-e saiu do fluxo (dono 29/07): a NF-e do envio cumpre o papel.
+      // NF-e do envio: falha vira aviso (a DANFE autorizada vem no PDF único)
+      if (r.nfe?.status === 'error' || r.nfe?.status === 'rejected') {
+        pushToast(`NF-e do envio falhou (${r.nfe?.cStat ?? ''}): ${r.nfe?.xMotivo ?? r.nfe?.erro ?? 'ver retaguarda'}`);
+      }
+      // Rotina do dono (28/07): Gerar SÓ gera — a impressão é o botão
+      // "Etiqueta + NF" na sequência (nada de preview/download automático aqui).
+    } catch (err: any) {
+      pushToast(`Erro no envio Correios: ${err?.message ?? 'falha'}`);
+    }
+  }
+  async function reabrirEnvio(row: PickOrderRow) {
+    try {
+      await api(`/pick-orders/${row.id}/correios-reabrir`, { method: 'POST', body: JSON.stringify({}) });
+      setRows((prev) => prev.map((x) => (x.id === row.id ? { ...x, trackingCode: null, carrier: null, correiosPrepostagemId: null, correiosGeneratedAt: null } : x)));
+      pushToast('Envio reaberto — gere de novo. (Cancele a pré-postagem antiga no portal dos Correios.)');
+    } catch (err: any) { pushToast(`Erro ao reabrir: ${err?.message ?? 'falha'}`); }
+  }
+  // Override manual: força "enviado" agora com o rastreio já gerado (Giga +
+  // WhatsApp) — pra quando o cron ainda não pegou a postagem ou está desligado.
+  async function marcarEnviadoManual(row: PickOrderRow) {
+    if (!row.trackingCode) { pushToast('Gere o envio primeiro.'); return; }
+    await submitShipped(row, row.trackingCode, row.carrier || 'Correios');
   }
 
   function logout() {
@@ -881,12 +965,37 @@ export default function MinhaLojaPage() {
             onBip={() => setLiveBipCart(g)}
             onSeparated={liveMarkSeparated}
             onShipped={liveMarkShipped}
+            onSwapItem={(it) =>
+              setSwapCtx({
+                kind: 'live',
+                itemId: it.id,
+                label: `${it.refCode}${it.cor ? ` · ${it.cor}` : ''}${it.tamanho ? ` ${it.tamanho}` : ''}`,
+              })
+            }
           />
         ))}
         {liveBipCart && (
           <LiveBipModal
             group={liveBipCart}
             onClose={() => { setLiveBipCart(null); loadLiveRows(); }}
+          />
+        )}
+        {swapCtx && (
+          <SwapModal
+            currentLabel={swapCtx.label}
+            onClose={() => setSwapCtx(null)}
+            onDone={() => { loadRows(); loadLiveRows(); }}
+            onSwap={(p: SwapPayload): Promise<SwapResponse> =>
+              swapCtx.kind === 'pick'
+                ? api<SwapResponse>(`/pick-orders/${swapCtx.pickOrderId}/swap-item`, {
+                    method: 'POST',
+                    body: JSON.stringify({ orderItemId: swapCtx.itemId, ...p }),
+                  })
+                : api<SwapResponse>(`/live-pdv/items/${swapCtx.itemId}/swap`, {
+                    method: 'POST',
+                    body: JSON.stringify(p),
+                  })
+            }
           />
         )}
         {visibleRows.length === 0 && liveRows.length === 0 ? (
@@ -899,9 +1008,21 @@ export default function MinhaLojaPage() {
               onStart={() => transitionStatus(row, 'separating')}
               onBip={() => setShowBipModal(row)}
               onShip={() => setShowShippedModal(row)}
+              onCorreios={() => gerarEnvioCorreios(row)}
+              onReabrir={() => reabrirEnvio(row)}
+              onReimprimir={() => row.correiosPrepostagemId ? baixarEtiquetaCorreios(String(row.correiosPrepostagemId), row.trackingCode || 'etiqueta', row.id) : pushToast('Sem pré-postagem pra reimprimir.')}
+              onMarcarEnviado={() => marcarEnviadoManual(row)}
               onPrint={() => openPrintWindow(row.id)}
               onReportIssue={() => setShowIssueModal(row)}
               onSeen={() => cancelAutoMaximize(row.id)}
+              onSwapItem={(it) =>
+                setSwapCtx({
+                  kind: 'pick',
+                  pickOrderId: row.id,
+                  itemId: it.id ?? '',
+                  label: it.productName ?? it.sku,
+                })
+              }
             />
           ))
         )}
@@ -1026,7 +1147,9 @@ function QuickActionGrid({ realignmentPending = 0, shipmentsIncoming = 0 }: { re
     { href: '/minha-loja/transferencia', icon: ArrowLeftRight, label: 'Transferir',    subtitle: 'Ponto a ponto', description: 'Mandar pra outra loja',    tone: 'sky'    },
     { href: '/minha-loja/recebimento',   icon: Inbox,        label: 'Receber',        subtitle: 'Mercadoria',  description: 'Dar entrada de remessa',   tone: 'green',   badge: shipmentsIncoming },
     { href: '/minha-loja/ponto',         icon: Fingerprint,  label: 'Ponto',          subtitle: 'Bater',       description: 'Entrada · almoço · saída', tone: 'indigo' },
+    { href: '/minha-loja/ponto-celular', icon: Smartphone,   label: 'Ponto Celular',  subtitle: 'Totem',       description: 'Bater no celular da loja', tone: 'indigo' },
     { href: '/minha-loja/funcionarias',  icon: KeyRound,     label: 'Funcionárias',   subtitle: 'Função & PIN', description: 'Liberar desconto no PDV',   tone: 'amber'  },
+    { href: '/minha-loja/rosto',         icon: ScanFace,     label: 'Rosto',          subtitle: 'Ponto facial', description: 'Cadastrar rosto pro ponto', tone: 'indigo' },
   ];
 
   const TONES: Record<Tone, { from: string; to: string }> = {
@@ -1211,12 +1334,14 @@ function LiveOrderCard({
   onBip,
   onSeparated,
   onShipped,
+  onSwapItem,
 }: {
   group: LiveQueueGroup;
   busy: string | null;
   onBip: () => void;
   onSeparated: (itemId: string) => void;
   onShipped: (itemId: string) => void;
+  onSwapItem: (it: LiveQueueItem) => void;
 }) {
   const pendentes = group.items.filter((it) => it.status === 'separating');
   const enviados = group.items.filter((it) => it.status === 'shipped');
@@ -1227,13 +1352,27 @@ function LiveOrderCard({
       <div className="w-1.5 flex-shrink-0 bg-rose-500" />
       <div className="flex-1 min-w-0">
         {/* Banner LIVE — mesmo padrão do banner de transferência */}
-        <div className="bg-rose-600 text-white px-4 py-2.5">
-          <div className="font-bold text-sm flex items-center gap-2">
-            🔴 PEDIDO DA LIVE{group.liveStoreName ? ` ${group.liveStoreName.toUpperCase()}` : ''}
+        <div className="bg-rose-600 text-white px-4 py-2.5 flex items-center justify-between gap-2">
+          <div>
+            <div className="font-bold text-sm flex items-center gap-2">
+              🔴 PEDIDO DA LIVE{group.liveStoreName ? ` ${group.liveStoreName.toUpperCase()}` : ''}
+            </div>
+            <div className="text-xs opacity-95 mt-0.5">
+              Venda da live — separar e postar pra cliente no endereço abaixo.
+            </div>
           </div>
-          <div className="text-xs opacity-95 mt-0.5">
-            Venda da live — separar e postar pra cliente no endereço abaixo.
-          </div>
+          <button
+            onClick={async () => {
+              // Imprime o ROMANEIO na térmica configurada (app desktop = silencioso;
+              // Chrome puro = diálogo). Mesma rota de impressão dos cupons.
+              const { routePrint } = await import('@/lib/printer-router');
+              await routePrint({ kind: 'cupom', url: `/minha-loja/live-romaneio/${group.cartId}?autoprint=1`, warnIfMissing: true });
+            }}
+            className="shrink-0 rounded-lg bg-white/15 hover:bg-white/25 px-3 py-1.5 text-xs font-bold"
+            title="Imprimir romaneio do pedido (térmica)"
+          >
+            🖨 Imprimir pedido
+          </button>
         </div>
 
         {/* Cliente */}
@@ -1277,6 +1416,11 @@ function LiveOrderCard({
                 ⚠ SEM ENDEREÇO — NÃO postar. Avise a matriz pra completar o cadastro da cliente.
               </div>
             )}
+            {!group.isPickup && group.freteServico && (
+              <div className="mt-1.5 inline-block rounded-md bg-indigo-50 px-2 py-1 text-[11px] font-extrabold text-indigo-700">
+                📮 Enviar por {group.freteServico}
+              </div>
+            )}
             {group.customerPhone && <div className="mt-1">Tel: {group.customerPhone}</div>}
             {group.customerEmail && <div className="break-all">✉️ {group.customerEmail}</div>}
           </div>
@@ -1294,7 +1438,12 @@ function LiveOrderCard({
               )}
             </div>
             {group.subtotalCents != null && <div>Peças: {liveBrl(group.subtotalCents)}</div>}
-            {(group.freteCents ?? 0) > 0 && <div>Frete: {liveBrl(group.freteCents)}</div>}
+            {(group.freteCents ?? 0) > 0 && (
+              <div>
+                Frete: {liveBrl(group.freteCents)}
+                {group.freteServico && <span className="font-bold text-indigo-700"> · {group.freteServico}</span>}
+              </div>
+            )}
             {group.totalCents != null && (
               <div className="font-bold text-emerald-700">Total: {liveBrl(group.totalCents)}</div>
             )}
@@ -1303,13 +1452,31 @@ function LiveOrderCard({
 
         {/* Itens */}
         <div className="divide-y divide-slate-50">
-          {group.items.map((it) => (
+          {group.items.map((it) => {
+            const podeTrocar = it.status === 'separating' && !it.separatedAt;
+            return (
             <div key={it.id} className="flex items-center gap-3 px-4 py-2.5">
               <div className="min-w-0 flex-1">
-                <div className="font-medium text-slate-800">
-                  {it.refCode} · {it.cor} {it.tamanho} <span className="text-slate-400">×{it.qty}</span>
-                </div>
-                <div className="truncate text-xs text-slate-500">{it.descricao}</div>
+                {podeTrocar ? (
+                  <button
+                    onClick={() => onSwapItem(it)}
+                    title="Trocar esta peça por outra"
+                    className="group/troca text-left w-full"
+                  >
+                    <div className="font-medium text-slate-800 group-hover/troca:text-[#8C7325] group-hover/troca:underline decoration-dotted underline-offset-2">
+                      {it.refCode} · {it.cor} {it.tamanho} <span className="text-slate-400">×{it.qty}</span>
+                      <span className="ml-1 text-[10px] font-bold uppercase tracking-wide text-[#B8912B] opacity-0 group-hover/troca:opacity-100">✎ trocar</span>
+                    </div>
+                    <div className="truncate text-xs text-slate-500">{it.descricao}</div>
+                  </button>
+                ) : (
+                  <>
+                    <div className="font-medium text-slate-800">
+                      {it.refCode} · {it.cor} {it.tamanho} <span className="text-slate-400">×{it.qty}</span>
+                    </div>
+                    <div className="truncate text-xs text-slate-500">{it.descricao}</div>
+                  </>
+                )}
                 {it.trackingCode && (
                   <div className="text-xs text-emerald-600">Rastreio: {it.trackingCode}</div>
                 )}
@@ -1353,7 +1520,8 @@ function LiveOrderCard({
                 </span>
               )}
             </div>
-          ))}
+            );
+          })}
         </div>
 
         {/* Bip de conferência — mesmo rito do pedido do site */}
@@ -1498,18 +1666,27 @@ function LiveBipModal({
 }
 
 function PickOrderCard({
-  row, onStart, onBip, onShip, onPrint, onReportIssue, onSeen,
+  row, onStart, onBip, onShip, onCorreios, onReabrir, onReimprimir, onMarcarEnviado, onPrint, onReportIssue, onSeen, onSwapItem,
 }: {
   row: PickOrderRow;
   onStart: () => void;
   onBip: () => void;
   onShip: () => void;
+  onCorreios: () => Promise<void> | void;
+  onReabrir: () => void;
+  onReimprimir: () => void;
+  onMarcarEnviado: () => void;
   onPrint: () => void;
   onReportIssue: () => void;
   onSeen: () => void;
+  onSwapItem: (it: PickOrderItem) => void;
 }) {
   const { order, status } = row;
   const items = order.items ?? [];
+  // Pode gerar envio Correios: qualquer pedido que NÃO é retirada em loja
+  // (live E site). Retirada não posta.
+  const podeGerarEnvio = !order.isPickup;
+  const [corrBusy, setCorrBusy] = useState(false);
 
   const isTransfer = !!row.isTransfer;
   const snap = row.customerSnapshot ?? null;
@@ -1649,9 +1826,22 @@ function PickOrderCard({
                 {it.quantity}x
               </span>
               <div className="flex-1 min-w-0">
-                <div className="text-slate-900 font-semibold leading-tight">
-                  {it.productName ?? it.sku}
-                </div>
+                {(status === 'new' || status === 'separating') ? (
+                  <button
+                    onClick={() => onSwapItem(it)}
+                    title="Trocar esta peça por outra"
+                    className="group/troca text-left w-full"
+                  >
+                    <div className="text-slate-900 font-semibold leading-tight group-hover/troca:text-[#8C7325] group-hover/troca:underline decoration-dotted underline-offset-2">
+                      {it.productName ?? it.sku}
+                      <span className="ml-1 text-[10px] font-bold uppercase tracking-wide text-[#B8912B] opacity-0 group-hover/troca:opacity-100">✎ trocar</span>
+                    </div>
+                  </button>
+                ) : (
+                  <div className="text-slate-900 font-semibold leading-tight">
+                    {it.productName ?? it.sku}
+                  </div>
+                )}
                 {it.variant && (
                   <div className="text-xs text-slate-500 mt-0.5">{it.variant}</div>
                 )}
@@ -1753,21 +1943,41 @@ function PickOrderCard({
             <Barcode className="w-6 h-6" /> Bipar peças
           </button>
         )}
-        {(status === 'separated' || status === 'ready') && (
+        {/* Pronto, SEM pré-postagem (live OU site) → gera (não marca enviado; fica na lista) */}
+        {(status === 'separated' || status === 'ready') && podeGerarEnvio && !row.trackingCode && (
+          <button
+            onClick={async (e) => { e.stopPropagation(); if (corrBusy) return; setCorrBusy(true); try { await onCorreios(); } finally { setCorrBusy(false); } }}
+            disabled={corrBusy}
+            title="Gera a pré-postagem (modalidade correta). Depois clique em Etiqueta + NF pra imprimir. O pedido fica na lista até postar."
+            className="flex-1 bg-sky-600 hover:bg-sky-700 active:scale-[0.98] disabled:opacity-50 text-white font-bold py-4 rounded-lg flex items-center justify-center gap-2 text-base shadow-md transition"
+          >
+            <Truck className="w-6 h-6" /> {corrBusy ? 'Gerando...' : '📮 Gerar envio Correios'}
+          </button>
+        )}
+        {/* Pré-postagem gerada, aguardando postagem física */}
+        {podeGerarEnvio && row.trackingCode && status !== 'shipped' && (
+          <div className="flex-1 flex flex-col gap-1">
+            <div className="rounded-lg border-2 border-sky-300 bg-sky-50 px-3 py-1.5 text-center text-sm font-bold text-sky-800">
+              📮 {row.trackingCode} · {row.carrier || 'Correios'}
+              <div className="text-[11px] font-normal text-sky-600">aguardando postagem — a cliente é avisada quando os Correios postarem</div>
+            </div>
+            <div className="flex gap-1">
+              <button onClick={(e) => { e.stopPropagation(); onReimprimir(); }} title="Baixa etiqueta + DANFE num PDF único" className="flex-1 bg-white border-2 border-slate-300 text-slate-800 font-semibold py-2 rounded-lg text-sm hover:bg-slate-100">🏷️ Etiqueta + NF</button>
+              <button onClick={(e) => { e.stopPropagation(); onMarcarEnviado(); }} title="Já postei — marcar enviado agora (baixa Giga + avisa cliente)" className="flex-1 bg-emerald-600 text-white font-semibold py-2 rounded-lg text-sm hover:bg-emerald-700">✓ Já postei</button>
+              <button onClick={(e) => { e.stopPropagation(); if (confirm('Reabrir e refazer o envio? A pré-postagem atual é desfeita — cancele-a no portal dos Correios.')) onReabrir(); }} className="flex-1 bg-white border-2 border-amber-300 text-amber-700 font-semibold py-2 rounded-lg text-sm hover:bg-amber-50">↩︎ Reabrir</button>
+            </div>
+          </div>
+        )}
+        {/* Retirada em loja (não posta) OU fallback manual → envio com rastreio digitado */}
+        {(status === 'separated' || status === 'ready') && (order.isPickup || !row.trackingCode) && (
           <button
             onClick={(e) => { e.stopPropagation(); onShip(); }}
+            title="Digitar o rastreio manualmente (fallback se o Gerar envio falhar)"
             className="flex-1 bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white font-bold py-4 rounded-lg flex items-center justify-center gap-2 text-base shadow-md transition"
           >
             <Truck className="w-6 h-6" /> Enviar c/ rastreio
           </button>
         )}
-        <button
-          onClick={(e) => { e.stopPropagation(); onPrint(); }}
-          className="sm:w-auto bg-white hover:bg-slate-100 active:scale-[0.98] text-slate-800 font-semibold py-4 px-5 rounded-lg flex items-center justify-center gap-2 border-2 border-slate-300 transition"
-          title="Imprimir cupom"
-        >
-          <Printer className="w-5 h-5" /> Imprimir
-        </button>
         {(status === 'new' || status === 'separating') && (
           <button
             onClick={(e) => { e.stopPropagation(); onReportIssue(); }}

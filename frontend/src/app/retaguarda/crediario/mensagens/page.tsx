@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 
 /**
  * /retaguarda/crediario/mensagens — Editor dos templates de cobrança WhatsApp.
@@ -296,7 +297,7 @@ export default function MensagensCobrancaPage() {
 
       {/* Preview Modal */}
       {previewIdx !== null && templates[previewIdx] && (
-        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" onClick={() => setPreviewIdx(null)}>
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" {...overlayClose(() => setPreviewIdx(null))}>
           <div className="bg-white rounded-2xl max-w-md w-full p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-start justify-between mb-3">
               <div>

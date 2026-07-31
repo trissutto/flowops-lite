@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 
 /**
  * /minha-loja/pdv/produtos-vendidos
@@ -648,7 +649,7 @@ function EditSellerModal({
   }
 
   return (
-    <div className="fixed inset-0 z-[9998] bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-[9998] bg-black/60 flex items-center justify-center p-4" {...overlayClose(onClose)}>
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-5 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-start justify-between mb-3">
           <div>

@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 
 /**
  * /retaguarda/inteligencia-estoque
@@ -728,7 +729,7 @@ export default function InteligenciaEstoquePage() {
       {detailCode && (
         <div
           className="fixed inset-0 bg-black/60 z-50 flex items-start justify-center p-4 overflow-y-auto"
-          onClick={() => setDetailCode(null)}
+          {...overlayClose(() => setDetailCode(null))}
         >
           <div
             className="bg-white rounded-lg max-w-5xl w-full my-8 overflow-hidden max-h-[90vh] overflow-y-auto"

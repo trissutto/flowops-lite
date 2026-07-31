@@ -13,6 +13,7 @@ import { CashService } from './cash.service';
 import { NfceService } from './nfce.service';
 import { PromoConfigService } from '../promo-config/promo-config.service';
 import { AccessPolicyService } from '../access-policy/access-policy.service';
+import { ConveniosService } from '../convenios/convenios.service';
 import { validateMinLevel } from '../auth/auth-levels.util';
 import * as crypto from 'crypto';
 
@@ -42,6 +43,7 @@ export class PdvService {
     private readonly nfce: NfceService,
     private readonly promoConfig: PromoConfigService,
     private readonly accessPolicy: AccessPolicyService,
+    private readonly convenios: ConveniosService,
   ) {}
 
   /**
@@ -354,6 +356,11 @@ export class PdvService {
             descricao: String(it.descricao || ''),
           })),
           pagamentos: [{ metodo: 'estorno', valor: -Math.abs(Number(sale.total) || 0) }],
+          // MESMA vendedora da venda original (22/07): sem isso o negativo caía
+          // em VENDEDOR=0 e o ranking do Wincred deixava o valor CHEIO da venda
+          // cancelada no nome da vendedora (bucket "sem vendedora" negativo na
+          // conferência da Folha RH).
+          vendedorName: sale.vendedorName || undefined,
           obsPedido: `estorno-${saleId.slice(0, 8)}`,
         } as any);
         passos.push({
@@ -568,7 +575,7 @@ export class PdvService {
 
     const sale = await (this.prisma as any).pdvSale.findUnique({
       where: { id: input.saleId },
-      select: { id: true, status: true, total: true, customerCpf: true },
+      select: { id: true, status: true, total: true, customerCpf: true, storeCode: true },
     });
     if (!sale) throw new NotFoundException('Venda não encontrada');
     if (sale.status !== 'open') throw new BadRequestException('Venda já fechada');
@@ -576,6 +583,33 @@ export class PdvService {
     // Crediário precisa de cliente
     if (input.method === 'crediario' && !sale.customerCpf) {
       throw new BadRequestException('Crediário exige CPF do cliente');
+    }
+
+    // CONVÊNIO (sindicato): só na loja conveniada, associado ativo e dentro do
+    // limite do ciclo. Lança com a mensagem do limite se estourar.
+    if (input.method === 'convenio') {
+      const det = input.details || {};
+      if (!det.convenioId || (!det.membroId && !det.membroNome)) {
+        throw new BadRequestException('Convênio: informe o associado');
+      }
+      // Sem membroId = associado digitado no caixa (não tem lista — a
+      // conferência do limite é online no sindicato). Cria/acha pelo nome.
+      if (!det.membroId) {
+        const membro = await this.convenios.obterOuCriarMembro(
+          String(det.convenioId),
+          String(det.membroNome),
+          det.membroMatricula ? String(det.membroMatricula) : null,
+        );
+        det.membroId = membro.id;
+        det.membroNome = membro.nome;
+        input.details = det;
+      }
+      await this.convenios.validarCompra({
+        convenioId: String(det.convenioId),
+        membroId: String(det.membroId),
+        storeCode: String(sale.storeCode || ''),
+        valorCents: Math.round(Number(input.valor) * 100),
+      });
     }
 
     // VENDA ONLINE — pagamento já recebido por fora (PIX direto / link externo).
@@ -676,11 +710,36 @@ export class PdvService {
     // Não deixa pagar mais que o total
     const jaPago = await this.sumPaidValue(input.saleId);
     const restante = sale.total - jaPago;
-    const valor = Math.round(input.valor * 100) / 100;
+    let valor = Math.round(input.valor * 100) / 100;
+    let details = input.details;
     if (valor > restante + 0.001) {
-      throw new BadRequestException(
-        `Valor R$${valor.toFixed(2)} maior que o restante R$${restante.toFixed(2)}`,
-      );
+      // VENDA ONLINE (29/07): o modal pode estar com estado velho — pagamento
+      // já registrado no servidor + frete aplicado depois → o front manda o
+      // TOTAL de novo e a loja travava com 400 "maior que o restante".
+      // venda_online é REGISTRO (a cobrança real já aconteceu fora): ajusta
+      // pro que falta; se não falta nada, devolve o último pagamento
+      // (idempotente) pra não travar o FINALIZAR.
+      if (input.method === 'venda_online') {
+        if (restante < 0.01) {
+          const existente = await (this.prisma as any).pdvSalePayment.findFirst({
+            where: { saleId: input.saleId },
+            orderBy: { createdAt: 'desc' },
+          });
+          if (existente) return existente;
+          throw new BadRequestException(
+            `Venda já está paga (restante R$${restante.toFixed(2)})`,
+          );
+        }
+        details = { ...(details || {}), ajustadoDe: valor };
+        valor = Math.round(restante * 100) / 100;
+        this.logger.warn(
+          `[pdv] venda_online ajustado ${Number(details.ajustadoDe).toFixed(2)} → ${valor.toFixed(2)} (restante) na venda ${input.saleId}`,
+        );
+      } else {
+        throw new BadRequestException(
+          `Valor R$${valor.toFixed(2)} maior que o restante R$${restante.toFixed(2)}`,
+        );
+      }
     }
 
     const payment = await (this.prisma as any).pdvSalePayment.create({
@@ -688,7 +747,7 @@ export class PdvService {
         saleId: input.saleId,
         method: input.method,
         valor,
-        details: input.details ? JSON.stringify(input.details) : null,
+        details: details ? JSON.stringify(details) : null,
       },
     });
 
@@ -1067,6 +1126,13 @@ export class PdvService {
           precoUnit: info.preco,
           desconto: 0,
           total: info.preco * qty,
+          // Congela o CUSTO do produto no ato da venda — base do CMV da DRE.
+          // Sem isso a margem de um mês já fechado mudava quando o custo do
+          // produto era reajustado no cadastro.
+          custoUnitCents:
+            info.custo != null && Number.isFinite(info.custo) && info.custo > 0
+              ? Math.round(info.custo * 100)
+              : null,
         },
       });
     }
@@ -1144,6 +1210,68 @@ export class PdvService {
 
     await this.recalcTotals(sale.id);
     return { ok: true, item };
+  }
+
+  /**
+   * FRETE À PARTE da venda online (dono 23/07): linha própria na venda —
+   * soma no total a cobrar, entra no caixa como receita da loja, aparece
+   * destacada no cupom/relatórios. ref='FRETE' garante:
+   *   - NÃO baixa estoque (isStockEligibleItem)
+   *   - FORA da base de comissão (Folha RH + fechamento abatem, igual vale)
+   * Chamar de novo ATUALIZA o valor; valor 0 REMOVE a linha.
+   */
+  async setFrete(saleId: string, valorRaw: number) {
+    const sale = await (this.prisma as any).pdvSale.findUnique({
+      where: { id: saleId },
+      select: { id: true, status: true },
+    });
+    if (!sale) throw new NotFoundException('Venda não encontrada');
+    if (sale.status !== 'open')
+      throw new BadRequestException(`Venda não está aberta (status=${sale.status})`);
+
+    const valor = Math.round((Number(valorRaw) || 0) * 100) / 100;
+    if (valor < 0) throw new BadRequestException('Frete não pode ser negativo');
+
+    const existente = await (this.prisma as any).pdvSaleItem.findFirst({
+      where: { saleId, ref: 'FRETE' },
+      select: { id: true },
+    });
+
+    if (valor === 0) {
+      if (existente) await (this.prisma as any).pdvSaleItem.delete({ where: { id: existente.id } });
+    } else if (existente) {
+      await (this.prisma as any).pdvSaleItem.update({
+        where: { id: existente.id },
+        data: { precoUnit: valor, total: valor, qty: 1 },
+      });
+    } else {
+      await (this.prisma as any).pdvSaleItem.create({
+        data: {
+          saleId,
+          sku: 'FRETE',
+          ean: null,
+          ref: 'FRETE',
+          cor: null,
+          tamanho: null,
+          descricao: 'FRETE — ENVIO',
+          ncm: null,
+          cfop: null,
+          dataCadastro: null,
+          qty: 1,
+          precoUnit: valor,
+          desconto: 0,
+          total: valor,
+          promoTag: 'FRETE',
+        },
+      });
+    }
+
+    await this.recalcTotals(saleId);
+    const fresh = await (this.prisma as any).pdvSale.findUnique({
+      where: { id: saleId },
+      select: { total: true },
+    });
+    return { ok: true, freteReais: valor, total: Number(fresh?.total) || 0 };
   }
 
   /**
@@ -1233,7 +1361,52 @@ export class PdvService {
     return { ...r, voucher: { code, valor, validade: validade.toISOString() } };
   }
 
-  async updateItem(input: { saleId: string; itemId: string; qty?: number; desconto?: number; password?: string; motivo?: string; excludePromo?: boolean }) {
+  /**
+   * RECALCULAR PREÇOS — reconsulta o preço ATUAL de cada item (mesmo preço do
+   * bipe, via catálogo/espelho, que já reflete a promoção vigente) e atualiza
+   * precoUnit/total. Motivo: itens puxados de MARCADO vêm com o preço CONGELADO
+   * na marcação (original), não o da promoção. Itens sem SKU resolvível
+   * (avulsos/manuais) são preservados. Mantém o desconto manual do item.
+   */
+  async recalcularPrecos(input: { saleId: string }): Promise<{
+    atualizados: number;
+    itens: Array<{ itemId: string; sku: string; descricao: string; antes: number; depois: number }>;
+  }> {
+    const sale = await (this.prisma as any).pdvSale.findUnique({
+      where: { id: input.saleId },
+      include: { items: true },
+    });
+    if (!sale) throw new BadRequestException('Venda não encontrada');
+    if (sale.status !== 'open') throw new BadRequestException('Só dá pra recalcular uma venda aberta');
+
+    const itens: Array<{ itemId: string; sku: string; descricao: string; antes: number; depois: number }> = [];
+    for (const it of sale.items as any[]) {
+      const sku = String(it.sku || '').trim();
+      // Sem código real (avulso/manual/placeholder) → mantém o preço digitado.
+      if (!sku || sku.startsWith('MARCADO-')) continue;
+      let info: any = null;
+      try { info = await this.catalog.getPdvProductInfo(sku); } catch { /* mantém */ }
+      const novo = info && Number(info.preco) > 0 ? Math.round(Number(info.preco) * 100) / 100 : null;
+      if (novo == null) continue;                       // não resolveu preço → mantém
+      const antes = Math.round((Number(it.precoUnit) || 0) * 100) / 100;
+      if (novo === antes) continue;                     // já está no preço atual
+      const desconto = Number(it.desconto) || 0;
+      const qty = Number(it.qty) || 1;
+      await (this.prisma as any).pdvSaleItem.update({
+        where: { id: it.id },
+        data: {
+          precoUnit: novo,
+          total: Math.max(0, Math.round((novo * qty - desconto) * 100) / 100),
+        },
+      });
+      itens.push({ itemId: it.id, sku, descricao: String(it.descricao || ''), antes, depois: novo });
+    }
+    await this.recalcTotals(input.saleId);
+    this.logger.log(`[pdv] recalcularPrecos venda ${input.saleId}: ${itens.length} item(ns) atualizado(s)`);
+    return { atualizados: itens.length, itens };
+  }
+
+  async updateItem(input: { saleId: string; itemId: string; qty?: number; desconto?: number; password?: string; motivo?: string; excludePromo?: boolean; forcePromo?: boolean }) {
     const item = await (this.prisma as any).pdvSaleItem.findUnique({
       where: { id: input.itemId },
     });
@@ -1256,9 +1429,15 @@ export class PdvService {
     // =false → re-inclui na promoção (volta ao automático, tag null).
     const excluindoPromo = input.excludePromo === true;
     const reincluindoPromo = input.excludePromo === false;
+    // FORÇAR PROMO (15/07): botão AZUL — coloca o item BÁSICO na promoção
+    // (ignora só o filtro básico; data/coleção seguem valendo no recálculo).
+    const forcandoPromo = input.forcePromo === true;
+    const desforcandoPromo = input.forcePromo === false;
 
     const newDesconto = excluindoPromo
       ? 0
+      : forcandoPromo || desforcandoPromo
+      ? (item.desconto || 0) // o applyAutoDiscounts recalcula
       : input.desconto != null ? Math.max(0, input.desconto) : (item.desconto || 0);
     const bruto = item.precoUnit * newQty;
     if (newDesconto > bruto) {
@@ -1268,7 +1447,8 @@ export class PdvService {
     // Desconto MANUAL (>0) — só conta como manual se NÃO está excluindo/reincluindo
     // a promoção. marca 'MANUAL' pra applyAutoDiscounts não sobrescrever.
     const isManualDiscount =
-      !excluindoPromo && !reincluindoPromo && input.desconto != null && newDesconto > 0;
+      !excluindoPromo && !reincluindoPromo && !forcandoPromo && !desforcandoPromo &&
+      input.desconto != null && newDesconto > 0;
 
     // MD-1: desconto manual por item em faixas (% sobre o BRUTO do item).
     //   0–7% livre · >7–10% senha CAIXA · >10% senha GERENTE + justificativa.
@@ -1281,18 +1461,26 @@ export class PdvService {
         );
       }
       const pct = bruto > 0 ? (newDesconto / bruto) * 100 : 0;
-      await this.requireDiscountAuth(pct, input.password, input.motivo);
+      await this.requireDiscountAuth(pct, input.password, input.motivo, await this.storeCodeDaVenda(input.saleId));
     }
 
     const newTag = excluindoPromo
       ? 'SEM_PROMO'
-      : reincluindoPromo
-      ? null
+      : reincluindoPromo || forcandoPromo || desforcandoPromo
+      ? null // volta pro automático — o applyAutoDiscounts define a tag final
       : isManualDiscount
       ? 'MANUAL'
       : input.desconto != null && newDesconto === 0
       ? null
       : item.promoTag;
+
+    // forcarPromo: liga no forçar, desliga no des-forçar E no excluir (tirar da
+    // promo un-força também). Edição de qty/desconto não mexe na flag.
+    const newForcar = forcandoPromo
+      ? true
+      : desforcandoPromo || excluindoPromo
+      ? false
+      : (item.forcarPromo ?? false);
 
     const updated = await (this.prisma as any).pdvSaleItem.update({
       where: { id: item.id },
@@ -1301,6 +1489,7 @@ export class PdvService {
         desconto: newDesconto,
         total: bruto - newDesconto,
         promoTag: newTag,
+        forcarPromo: newForcar,
       },
     });
     await this.applyAutoDiscounts(input.saleId);
@@ -1323,17 +1512,30 @@ export class PdvService {
   // MD-1: desconto avulso em faixas. % sobre o subtotal BRUTO.
   //   0..livre = sem senha · >livre..caixa = senha CAIXA · >caixa = GERENTE + justificativa.
   //   As faixas (livre/caixa) são configuráveis na tela /retaguarda/descontos-senhas.
-  private async requireDiscountAuth(pct: number, password?: string, motivo?: string) {
+  private async requireDiscountAuth(pct: number, password?: string, motivo?: string, storeCode?: string) {
     const { freeUpToPct, caixaUpToPct } = await this.accessPolicy.getThresholds();
     if (pct > caixaUpToPct + 1e-9) {
-      validateMinLevel(password, 'GERENTE'); // lança se senha < GERENTE
+      validateMinLevel(password, 'GERENTE', storeCode); // lança se senha < GERENTE
       if (!motivo || String(motivo).trim().length < 3) {
         throw new BadRequestException(
           `Justificativa obrigatória para desconto acima de ${caixaUpToPct}%`,
         );
       }
     } else if (pct > freeUpToPct + 1e-9) {
-      validateMinLevel(password, 'CAIXA'); // lança se senha < CAIXA
+      validateMinLevel(password, 'CAIXA', storeCode); // lança se senha < CAIXA
+    }
+  }
+
+  /** Loja da venda — contexto pros PINs com escopo de loja (dono 29/07). */
+  private async storeCodeDaVenda(saleId: string): Promise<string | undefined> {
+    try {
+      const s = await (this.prisma as any).pdvSale.findUnique({
+        where: { id: saleId },
+        select: { storeCode: true },
+      });
+      return s?.storeCode || undefined;
+    } catch {
+      return undefined;
     }
   }
 
@@ -1455,7 +1657,10 @@ export class PdvService {
         }
       }
     } else if (activePromotion === 'YEAR_BASED') {
-      // Regra: tudo cadastrado ATE 31/12/2023 = 50% off (liquida antigos)
+      // Regra: tudo cadastrado ATE 31/12/2023 = 50% off (liquida antigos).
+      // Coleções marcadas na REF também entram, independente do ano de
+      // cadastro: sufixo -INV (inverno) ou -VER (verão) — regra do dono 10/07/2026.
+      const isColecaoPromo = (it: any) => /-(INV|VER)$/i.test(String(it.ref || '').trim());
       const promoByYear = (data: string | null): { pct: number; tag: string } | null => {
         if (!data) return null;
         const dataStr = data.slice(0, 10);
@@ -1492,12 +1697,17 @@ export class PdvService {
       for (const it of items as any[]) {
         if (isManual(it)) continue; // preserva manual
         const bruto = it.precoUnit * it.qty;
-        // Peça básica: fica fora da promoção de 50% (preço cheio)
-        if (isBasico(it)) {
+        // Peça básica: fica fora da promoção de 50% (preço cheio) — SALVO se a
+        // operadora FORÇOU a entrada (botão azul). Forçar ignora só o filtro
+        // básico; data e coleção (-INV/-VER) continuam decidindo abaixo, então
+        // um básico NOVO forçado não ganha desconto (cai no 'Sem promo · ano').
+        if (isBasico(it) && !it.forcarPromo) {
           updates.push({ id: it.id, desconto: 0, total: bruto, tag: 'Básico · sem promo' });
           continue;
         }
-        const promo = promoByYear(it.dataCadastro || null);
+        const promo = isColecaoPromo(it)
+          ? { pct: 0.50, tag: 'PROMO 50% · coleção' }
+          : promoByYear(it.dataCadastro || null);
         if (promo) {
           const desconto = Math.round(bruto * promo.pct * 100) / 100;
           updates.push({
@@ -2040,6 +2250,29 @@ export class PdvService {
       }
     }
 
+    // CONVÊNIO — registra a(s) compra(s) do associado no ciclo (conta no
+    // limite e entra na fatura do sindicato). Idempotente por saleId+membro.
+    // Treino NUNCA registra (senão entra na fatura REAL do sindicato).
+    try {
+      const convenioPayments = (sale as any).isTraining
+        ? []
+        : (payments as any[]).filter((p: any) => p.method === 'convenio');
+      for (const p of convenioPayments) {
+        let det: any = null;
+        try { det = typeof p.details === 'string' ? JSON.parse(p.details) : p.details; } catch { /* ignora */ }
+        if (!det?.convenioId || !det?.membroId) continue;
+        await this.convenios.registrarCompra({
+          convenioId: String(det.convenioId),
+          membroId: String(det.membroId),
+          storeCode: String((sale as any).storeCode || ''),
+          saleId: sale.id,
+          valorCents: Math.round(Number(p.valor) * 100),
+        });
+      }
+    } catch (e: any) {
+      this.logger.error(`[pdv] falha ao registrar compra de convênio da venda ${sale.id}: ${e?.message || e}`);
+    }
+
     // VALE-TROCA — marca como USED todo pdvReturn cujo creditoCode foi usado
     // como pagamento nessa venda. Idempotente: se já tava 'used', segue.
     try {
@@ -2168,6 +2401,62 @@ export class PdvService {
         `[pdv→estoque] Venda ${sale.id}: falha na baixa de estoque — ${estoque.error}. Venda no flowops segue OK.`,
       );
     }
+    const marcados = await this.erpStepFecharMarcados(sale);
+    if (!marcados.ok) {
+      this.logger.warn(
+        `[pdv→marcados] Venda ${sale.id}: falha ao fechar marcados puxados — ${marcados.error}.`,
+      );
+    }
+  }
+
+  /**
+   * PASSO 3 do sync ERP: fecha os MARCADOS PUXADOS pra essa venda.
+   *
+   * BUG (21/07, Indaiatuba): a venda puxada de marcados gravava linha NOVA na
+   * caixa (gravarVendaPdv manda todos os itens) mas a linha marcada antiga
+   * ficava com MARCADO='SIM' pra sempre — a peça continuava "em marca" no nome
+   * da cliente E contava 2x na caixa. O campo sale.marcadosRegistros era
+   * gravado no puxarParaVenda e nunca lido.
+   *
+   * Fecha = DELETE da linha antiga (a linha nova da venda é a que vale).
+   * Estoque NÃO é tocado: a marcação já baixou; a venda pulou os itens
+   * MARCADO (isStockEligibleItem). Idempotente: o DELETE só pega
+   * MARCADO='SIM' — retry com 0 linhas afetadas conta como ok.
+   */
+  async erpStepFecharMarcados(sale: any): Promise<{ ok: boolean; error?: string }> {
+    const regs = String(sale?.marcadosRegistros || '')
+      .split(',')
+      .map((s: string) => Number(s.trim()))
+      .filter((n: number) => Number.isFinite(n) && n > 0);
+    if (!regs.length) return { ok: true };
+    if (!this.erp.isWriteEnabled) {
+      this.logger.warn(
+        `[pdv→marcados] Venda ${sale.id}: ERP_WRITE_ENABLED=false — marcados ${regs.join(',')} NÃO fechados no Wincred.`,
+      );
+      return { ok: true };
+    }
+    const falhas: string[] = [];
+    for (const reg of regs) {
+      const r = await this.erp.deleteCaixaMarcadoRow({ registro: reg });
+      if (r.success) {
+        this.logger.log(`[pdv→marcados] Venda ${sale.id}: marcado REGISTRO=${reg} fechado (linha removida).`);
+      } else if (/Nenhuma linha/i.test(r.error || '')) {
+        // Já fechado num retry anterior (ou devolvido) — idempotente, segue.
+      } else {
+        falhas.push(`REG ${reg}: ${r.error || 'falha'}`);
+        continue;
+      }
+      // Espelho nativo acompanha na hora (leituras já saem daqui). Fecha tanto
+      // 'ativo' quanto 'puxado' (a peça vai virar venda de verdade).
+      try {
+        await (this.prisma as any).marcado.updateMany({
+          where: { registroGiga: BigInt(reg), status: { in: ['ativo', 'puxado'] } },
+          data: { status: 'fechado', saleId: sale.id, fechadoAt: new Date() },
+        });
+      } catch { /* sync horário reconcilia */ }
+    }
+    if (falhas.length) return { ok: false, error: falhas.join(' | ') };
+    return { ok: true };
   }
 
   /**
@@ -2255,6 +2544,36 @@ export class PdvService {
   }
 
   /**
+   * Um item baixa estoque no ERP? Exclui SÓ o que não é produto de catálogo:
+   *   - sku vazio
+   *   - sku 'MANUAL-...' e ref 'MANUAL' → linha avulsa (vale presente, peça sem
+   *     cadastro, ajuste manual) — não existe no estoque.
+   *   - ref/promoTag 'MARCADO' → item "provar em casa", estoque já tratado.
+   *
+   * IMPORTANTE (16/07): NÃO excluir por promoTag==='MANUAL'. Produto real que
+   * recebeu desconto manual por item ganha promoTag='MANUAL' (pra fugir do
+   * applyAutoDiscounts) mas TEM sku/ref reais e PRECISA baixar estoque. O filtro
+   * antigo pulava esses → estoque fantasma (ex: casaco 700961/46 em São José,
+   * vendido 14/07 e ainda em estoque). Como a venda marcava stockDecreasedAt
+   * mesmo assim, o reconcile normal nunca achava.
+   */
+  private isStockEligibleItem(it: any): boolean {
+    const sku = String(it?.sku || '').trim();
+    if (!sku) return false;
+    if (sku.startsWith('MANUAL-')) return false;
+    if (it?.ref === 'MANUAL') return false;
+    if (it?.ref === 'MARCADO') return false;
+    if (it?.promoTag === 'MARCADO') return false;
+    if (it?.ref === 'FRETE') return false; // frete não é peça — sem estoque
+    return true;
+  }
+
+  /** Item real (sku/ref de catálogo) que só virou MANUAL por desconto manual. */
+  private isManualPricedRealItem(it: any): boolean {
+    return it?.promoTag === 'MANUAL' && this.isStockEligibleItem(it);
+  }
+
+  /**
    * PASSO 2 do sync ERP: baixa de estoque no Wincred.
    * PULA items MANUAL/MARCADO. allowNegative + skipNotFound (divergências não
    * bloqueiam). Marca sale.stockDecreasedAt no sucesso — mesma flag usada pelo
@@ -2282,22 +2601,17 @@ export class PdvService {
       }
 
       const saleItems = (sale.items || []) as any[];
-      const stockItems = saleItems
-        .filter((it: any) => {
-          const sku = String(it.sku || '').trim();
-          if (!sku) return false;
-          if (sku.startsWith('MANUAL-')) return false;
-          if (it.ref === 'MANUAL') return false;
-          if (it.ref === 'MARCADO') return false;
-          if (it.promoTag === 'MARCADO') return false;
-          if (it.promoTag === 'MANUAL') return false;
-          return true;
-        })
-        .map((it: any) => ({
-          sku: String(it.sku || '').trim(),
-          qty: Math.max(1, Number(it.qty) || 1),
-          storeCode: sale.storeCode,
-        }));
+      // Itens que BAIXAM estoque. NOTA (16/07): NÃO filtrar por
+      // promoTag==='MANUAL' — isso pulava produto REAL que só recebeu desconto
+      // manual por item (sku/ref reais), deixando estoque fantasma. O item
+      // avulso de verdade (vale presente / sem cadastro) já é excluído pelo
+      // sku 'MANUAL-...' e ref 'MANUAL'. Ver isStockEligibleItem().
+      const eligible = saleItems.filter((it: any) => this.isStockEligibleItem(it));
+      const stockItems = eligible.map((it: any) => ({
+        sku: String(it.sku || '').trim(),
+        qty: Math.max(1, Number(it.qty) || 1),
+        storeCode: sale.storeCode,
+      }));
 
       if (stockItems.length === 0) {
         try {
@@ -2324,10 +2638,20 @@ export class PdvService {
         `(loja ${sale.storeCode}) em ${r.attempts || 1} tentativa(s).`,
       );
       try {
+        const nowStamp = new Date();
         await (this.prisma as any).pdvSale.update({
           where: { id: sale.id },
-          data: { stockDecreasedAt: new Date() },
+          data: { stockDecreasedAt: nowStamp },
         });
+        // Marca a flag POR ITEM nos que baixaram — o backfill de manuais
+        // (reconcileManualStockBacklog) usa isso pra não re-baixar.
+        const ids = eligible.map((it: any) => it.id).filter(Boolean);
+        if (ids.length > 0) {
+          await (this.prisma as any).pdvSaleItem.updateMany({
+            where: { id: { in: ids } },
+            data: { stockDecreasedAt: nowStamp },
+          });
+        }
       } catch { /* segue */ }
       return { ok: true };
     } catch (e: any) {
@@ -2454,6 +2778,24 @@ export class PdvService {
         cancelReason: input.reason || null,
       },
     });
+
+    // Venda veio de "Puxar marcados" → DEVOLVE as peças pra tela de Marcados
+    // (status 'puxado' → 'ativo'). Sem isso ficariam presas fora da tela.
+    try {
+      const regsM = String((sale as any).marcadosRegistros || '')
+        .split(',')
+        .map((s: string) => Number(s.trim()))
+        .filter((n: number) => Number.isFinite(n) && n > 0);
+      if (regsM.length) {
+        const r = await (this.prisma as any).marcado.updateMany({
+          where: { registroGiga: { in: regsM.map((n) => BigInt(n)) }, status: 'puxado', saleId: sale.id },
+          data: { status: 'ativo', saleId: null },
+        });
+        if (r?.count) this.logger.log(`[pdv] cancel: ${r.count} marcado(s) devolvido(s) pra tela (venda ${sale.id})`);
+      }
+    } catch (e: any) {
+      this.logger.warn(`[pdv] cancel: erro ao devolver marcados pra tela: ${e?.message || e}`);
+    }
 
     // FIX: cancelar venda DEVOLVE o vale-troca usado nela. Sem isso, o cliente
     // que pagou com vale e teve a venda cancelada PERDIA o crédito (o vale
@@ -2628,7 +2970,7 @@ export class PdvService {
       take: limit,
       include: {
         items: {
-          select: { sku: true, qty: true, ref: true, promoTag: true },
+          select: { id: true, sku: true, qty: true, ref: true, promoTag: true },
         },
       },
     });
@@ -2640,22 +2982,14 @@ export class PdvService {
 
     for (const sale of sales as any[]) {
       try {
-        const stockItems = (sale.items as any[])
-          .filter((it) => {
-            const sku = String(it.sku || '').trim();
-            if (!sku) return false;
-            if (sku.startsWith('MANUAL-')) return false;
-            if (it.ref === 'MANUAL') return false;
-            if (it.ref === 'MARCADO') return false;
-            if (it.promoTag === 'MANUAL') return false;
-            if (it.promoTag === 'MARCADO') return false;
-            return true;
-          })
-          .map((it) => ({
-            sku: String(it.sku || '').trim(),
-            qty: Math.max(1, Number(it.qty) || 1),
-            storeCode: sale.storeCode,
-          }));
+        // Mesmo critério do bipe (isStockEligibleItem): produto real com
+        // desconto manual (promoTag='MANUAL' + sku/ref reais) TAMBÉM baixa.
+        const eligible = (sale.items as any[]).filter((it) => this.isStockEligibleItem(it));
+        const stockItems = eligible.map((it) => ({
+          sku: String(it.sku || '').trim(),
+          qty: Math.max(1, Number(it.qty) || 1),
+          storeCode: sale.storeCode,
+        }));
 
         if (stockItems.length === 0) {
           if (!dryRun) {
@@ -2694,10 +3028,18 @@ export class PdvService {
           });
         } else {
           aplicados++;
+          const nowStamp = new Date();
           await (this.prisma as any).pdvSale.update({
             where: { id: sale.id },
-            data: { stockDecreasedAt: new Date() },
+            data: { stockDecreasedAt: nowStamp },
           });
+          const ids = eligible.map((it: any) => it.id).filter(Boolean);
+          if (ids.length > 0) {
+            await (this.prisma as any).pdvSaleItem.updateMany({
+              where: { id: { in: ids } },
+              data: { stockDecreasedAt: nowStamp },
+            });
+          }
         }
       } catch (e: any) {
         falhas.push({
@@ -2721,6 +3063,157 @@ export class PdvService {
       aplicados,
       finished: (sales as any[]).length < limit,
     };
+  }
+
+  // ═════════════════════════════════════════════════════════════════════════
+  // BACKFILL de ESTOQUE FANTASMA "MANUAL" (16/07)
+  //
+  // Caso invisível ao reconcile normal: produto REAL (sku/ref de catálogo)
+  // vendido com DESCONTO MANUAL por item ganhou promoTag='MANUAL' e o filtro
+  // antigo o excluía da baixa — MAS a venda marcava sale.stockDecreasedAt do
+  // mesmo jeito. Resultado: item nunca baixou e o reconcile (que busca
+  // sale.stockDecreasedAt=null) nunca o via.
+  //
+  // Aqui a busca é POR ITEM: promoTag='MANUAL' + sku/ref reais + a flag NOVA
+  // item.stockDecreasedAt=null. Idempotente via essa flag por item — a baixa
+  // do bipe/reconcile (já corrigidos) também a marca, então nada roda 2x.
+  // ═════════════════════════════════════════════════════════════════════════
+  async reconcileManualStockBacklog(input: {
+    sinceIso?: string;
+    untilIso?: string;
+    storeCode?: string;
+    dryRun?: boolean;
+    limit?: number;
+  }): Promise<{
+    mode: 'dry-run' | 'executed';
+    sinceIso: string;
+    untilIso: string;
+    storeCode: string | null;
+    itemsEncontrados: number;
+    qtdTotal: number;
+    porLoja: Record<string, { itens: number; qtd: number }>;
+    amostra: Array<{ saleId: string; storeCode: string; sku: string; ref: string | null; qty: number; finalizedAt: string | null }>;
+    aplicados: number;
+    falhas: Array<{ itemId: string; sku: string; storeCode: string; error: string }>;
+    finished: boolean;
+  }> {
+    const sinceIso = input.sinceIso
+      || new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString();
+    const since = new Date(sinceIso);
+    const untilIso = input.untilIso || new Date().toISOString();
+    const until = new Date(untilIso);
+    const limit = Math.max(1, Math.min(2000, input.limit || 1000));
+    const dryRun = !!input.dryRun;
+    const storeCode = input.storeCode?.trim() || null;
+
+    // Itens MANUAL de produto real ainda não baixados, em vendas finalizadas
+    // (não treino) na janela. O sku/ref reais separam do avulso (MANUAL-...).
+    const where: any = {
+      promoTag: 'MANUAL',
+      stockDecreasedAt: null,
+      NOT: [
+        { sku: { startsWith: 'MANUAL-' } },
+        { ref: 'MANUAL' },
+        { ref: 'MARCADO' },
+      ],
+      sale: {
+        is: {
+          status: 'finalized',
+          isTraining: false,
+          finalizedAt: { gte: since, lte: until },
+          ...(storeCode ? { storeCode } : {}),
+        },
+      },
+    };
+
+    const items: any[] = await (this.prisma as any).pdvSaleItem.findMany({
+      where,
+      orderBy: { createdAt: 'asc' },
+      take: limit,
+      select: {
+        id: true, sku: true, ref: true, qty: true,
+        sale: { select: { id: true, storeCode: true, finalizedAt: true } },
+      },
+    });
+
+    const porLoja: Record<string, { itens: number; qtd: number }> = {};
+    let qtdTotal = 0;
+    for (const it of items) {
+      const loja = String(it.sale?.storeCode || '??');
+      const q = Math.max(1, Number(it.qty) || 1);
+      qtdTotal += q;
+      if (!porLoja[loja]) porLoja[loja] = { itens: 0, qtd: 0 };
+      porLoja[loja].itens += 1;
+      porLoja[loja].qtd += q;
+    }
+    const amostra = items.slice(0, 30).map((it) => ({
+      saleId: it.sale?.id,
+      storeCode: it.sale?.storeCode,
+      sku: it.sku,
+      ref: it.ref,
+      qty: it.qty,
+      finalizedAt: it.sale?.finalizedAt ? new Date(it.sale.finalizedAt).toISOString() : null,
+    }));
+
+    const base = {
+      sinceIso, untilIso, storeCode,
+      itemsEncontrados: items.length,
+      qtdTotal, porLoja, amostra,
+      finished: items.length < limit,
+    };
+
+    if (dryRun) {
+      return { mode: 'dry-run', ...base, aplicados: 0, falhas: [] };
+    }
+
+    if (!this.erp.isWriteEnabled) {
+      return {
+        mode: 'executed', ...base, aplicados: 0,
+        falhas: items.map((it) => ({
+          itemId: it.id, sku: it.sku, storeCode: it.sale?.storeCode,
+          error: 'ERP_WRITE_ENABLED=false — sem permissao pra baixar estoque',
+        })),
+      };
+    }
+
+    let aplicados = 0;
+    const falhas: Array<{ itemId: string; sku: string; storeCode: string; error: string }> = [];
+
+    // Baixa item a item (cada um pode ser de loja diferente) e marca a flag
+    // POR ITEM só quando a baixa dá certo — retry seguro.
+    for (const it of items) {
+      const loja = String(it.sale?.storeCode || '').trim();
+      const sku = String(it.sku || '').trim();
+      const qty = Math.max(1, Number(it.qty) || 1);
+      if (!loja || !sku) {
+        falhas.push({ itemId: it.id, sku, storeCode: loja, error: 'sku/loja ausente' });
+        continue;
+      }
+      try {
+        const r = await this.erp.decreaseStock(
+          [{ sku, qty, storeCode: loja }],
+          { allowNegative: true, skipNotFound: true },
+        );
+        if (!r.success) {
+          falhas.push({ itemId: it.id, sku, storeCode: loja, error: r.error || 'falha desconhecida' });
+          continue;
+        }
+        await (this.prisma as any).pdvSaleItem.update({
+          where: { id: it.id },
+          data: { stockDecreasedAt: new Date() },
+        });
+        aplicados++;
+      } catch (e: any) {
+        falhas.push({ itemId: it.id, sku, storeCode: loja, error: e?.message || String(e) });
+      }
+    }
+
+    this.logger.log(
+      `[pdv/reconcile-manual] ${aplicados} item(s) MANUAL baixado(s), ${falhas.length} falha(s) ` +
+      `(janela ${sinceIso}..${untilIso})`,
+    );
+
+    return { mode: 'executed', ...base, aplicados, falhas };
   }
 
   /**

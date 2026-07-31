@@ -26,6 +26,15 @@ export default function LoginPage() {
         body: JSON.stringify({ email, password }),
       });
       localStorage.setItem('flowops_token', res.accessToken);
+      // VOLTA PRA TELA DE ORIGEM (dono 30/07): o api.ts manda pro login com
+      // ?redirect=<rota> quando a sessão expira — o app do Ponto no celular
+      // caía aqui e, sem isso, aterrissava no menu da loja (PDV/live/etc).
+      // Só aceita caminho interno (começa com / e não //).
+      const redirect = new URLSearchParams(window.location.search).get('redirect');
+      if (redirect && redirect.startsWith('/') && !redirect.startsWith('//')) {
+        router.push(redirect);
+        return;
+      }
       // Redireciona por papel:
       //   store    → PDV direto (vendedora vive aqui)
       //   contador → relatório fiscal direto (acesso restrito a fiscal apenas)
@@ -34,6 +43,11 @@ export default function LoginPage() {
         router.push('/minha-loja/pdv');
       } else if (res.user?.role === 'contador') {
         router.push('/retaguarda/relatorio-fiscal');
+      } else if (res.user?.role === 'master_franquia') {
+        // Master da franquia vive no super painel (só com as lojas FRANQUIA)
+        router.push('/retaguarda/super-painel-caixas');
+      } else if (res.user?.role === 'franquias') {
+        router.push('/franquias');
       } else {
         router.push('/');
       }
@@ -72,6 +86,12 @@ export default function LoginPage() {
           <LogIn className="w-4 h-4" />
           {loading ? 'Entrando...' : 'Entrar'}
         </button>
+
+        {/* Saída pra cliente que caiu aqui por engano (link antigo, etc.):
+            manda pra landing pública em vez de deixar numa tela de sistema. */}
+        <a href="/" className="mt-5 block text-center text-xs text-slate-400 hover:text-brand">
+          É cliente da Lurd&apos;s? Ver minha sacolinha / comprar →
+        </a>
       </form>
     </div>
   );

@@ -20,6 +20,8 @@
  *   routePrint({ kind: 'cupom', url: '/minha-loja/pdv/recibo/abc?autoprint=1' });
  */
 
+import { getAuthToken } from './api';
+
 export type PrinterKind = 'cupom' | 'nfce' | 'vale' | 'sangria' | 'recibo_pix' | 'carne';
 
 /**
@@ -81,7 +83,12 @@ export async function listAvailablePrinters(): Promise<Array<{ name: string; isD
 /** Detecta se está rodando dentro do Electron (PC desktop) */
 export function isElectron(): boolean {
   if (typeof window === 'undefined') return false;
-  return !!(window as any).electronAPI?.isElectron;
+  // App ANTIGO instalado na loja pode não expor a flag isElectron (preload
+  // velho), mas já ter alguma API de impressão — conta como app mesmo assim.
+  // Caso real (Suzano PDV-17, 10/07): app antigo caía no ramo "Chrome puro"
+  // e a NFC-e não saía na emissão.
+  const api = (window as any).electronAPI;
+  return !!(api && (api.isElectron || api.silentPrintUrl || api.silentPrintHTML || api.notifyPrintReady));
 }
 
 /**
@@ -113,9 +120,17 @@ export async function routePrint(input: {
         console.warn(`[printer-router] Sem impressora configurada pra "${profile}". Usando padrão do Windows.`);
       }
 
-      const absoluteUrl = input.url.startsWith('http')
+      let absoluteUrl = input.url.startsWith('http')
         ? input.url
         : window.location.origin + input.url;
+      // FIX 14/07 ("teste imprime, venda não"): a hidden window do app roda
+      // numa sessão SEM o login → recibo/NFC-e tomavam 401 e nada saía. O JWT
+      // vai no FRAGMENT (#ptk=) — não aparece em servidor/log — e a página de
+      // impressão autentica (ver getAuthToken em api.ts).
+      try {
+        const tk = getAuthToken();
+        if (tk) absoluteUrl += `${absoluteUrl.includes('#') ? '&' : '#'}ptk=${encodeURIComponent(tk)}`;
+      } catch { /* sem token, segue como antes */ }
       await electron.silentPrintUrl(absoluteUrl);
       return { ok: true, mode: 'electron-silent' };
     } catch (e: any) {
@@ -170,6 +185,37 @@ function printViaIframe(url: string): Promise<{ ok: boolean; mode: string; error
       resolve({ ok: false, mode: 'error', error: e?.message || String(e) });
     }
   });
+}
+
+/**
+ * Imprime um PDF (blob URL) na impressora A4 CONFIGURADA.
+ *
+ * Usado pelo ROMANEIO DE REMESSA/TRANSFERÊNCIA (capa A4 paisagem + lista). Esse
+ * impresso vinha sendo mandado direto no `silentPrintUrl` SEM escolher a
+ * impressora → ia pra impressora ATIVA do momento (quase sempre a térmica do
+ * último cupom) e saía como um rolo comprido/esticado. Aqui a gente seleciona a
+ * impressora A4 antes. No navegador, abre popup pra escolher a impressora na mão.
+ *
+ * Retorna { ok, mode }. mode 'popup-blocked' → o caller avisa pra liberar popup.
+ */
+export async function printPdfA4(blobUrl: string): Promise<{ ok: boolean; mode: string }> {
+  if (isElectron()) {
+    const electron = (window as any).electronAPI;
+    try {
+      const a4 = loadPrinterConfig().a4;
+      if (a4 && electron.setConfig) {
+        await electron.setConfig({ printer: a4 }); // seleciona a A4 (HP/Brother)
+      }
+      await electron.silentPrintUrl(blobUrl);
+      return { ok: true, mode: 'electron-silent' };
+    } catch {
+      /* cai no popup abaixo */
+    }
+  }
+  const w = window.open(blobUrl, 'lurds_remessa_print', 'width=1000,height=700,resizable=yes');
+  if (!w) return { ok: false, mode: 'popup-blocked' };
+  setTimeout(() => { try { w.focus(); w.print(); } catch { /* Ctrl+P manual */ } }, 800);
+  return { ok: true, mode: 'popup' };
 }
 
 /** Retorna o profile (termica/a4) que um KIND usa — útil pra UI */

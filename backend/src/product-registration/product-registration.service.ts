@@ -1,6 +1,8 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
+import { ProductSearchService } from '../product-search/product-search.service';
 import { generateEan13Batch } from './ean.util';
 
 /**
@@ -84,7 +86,7 @@ export class ProductRegistrationService {
    * todos os produtos no Wincred numa transação MySQL. Idempotente por
    * CODIGO (INSERT IGNORE).
    */
-  async processar(input: ProcessarInput) {
+  async processar(input: ProcessarInput, opts?: { gigaAsync?: boolean }) {
     this.validarInput(input);
     const linhas = this.expandirCombinacoes(input);
     if (!linhas.length) throw new BadRequestException('Nenhuma combinação cor×tamanho gerada.');
@@ -116,17 +118,77 @@ export class ProductRegistrationService {
       estoqueInicial: 0,
     }));
 
-    // 3) Insere no Wincred (transação MySQL)
-    const result = await this.erp.inserirProdutosBatch(produtos);
+    // 3) FLOW PRIMEIRO (incidente da live 14/07: produto cadastrado não
+    //    aparecia na separação porque só existia no Giga e os espelhos
+    //    demoravam 10min-6h). Grava na `product` nativa + espelho
+    //    `wincred_produtos` NA HORA — grade da live, bipe e separação
+    //    enxergam em segundos, e o cadastro não depende do Giga estar vivo.
+    await this.gravarNoFlow(produtos);
+
+    // 4) Réplica pro Giga: tenta inline (best effort); se o Giga estiver
+    //    pendurado/fora, enfileira no erp_outbox (kind produto_cadastro,
+    //    INSERT IGNORE = retry idempotente) e o cadastro NÃO trava.
+    //    gigaAsync=true (fluxo em LOTE, ex: recebimento de compra): NÃO tenta
+    //    inline — enfileira direto pra não pendurar a tela no Giga lento.
+    let inseridos = produtos.length;
+    let ignorados = 0;
+    let gigaEnfileirado = false;
+    if (opts?.gigaAsync) {
+      await (this.prisma as any).erpOutbox.create({
+        data: {
+          kind: 'produto_cadastro',
+          saleId: `cad-${randomUUID()}`,
+          payload: { produtos },
+          status: 'pending',
+        },
+      });
+      gigaEnfileirado = true;
+      this.logger.log(
+        `Cadastro Dinâmico: ref=${input.ref} — réplica Giga enfileirada no outbox (modo assíncrono/lote)`,
+      );
+    } else {
+      try {
+        const result = await this.erp.inserirProdutosBatch(produtos);
+        inseridos = result.inseridos;
+        ignorados = result.ignorados;
+      } catch (e) {
+        gigaEnfileirado = true;
+        await (this.prisma as any).erpOutbox.create({
+          data: {
+            kind: 'produto_cadastro',
+            saleId: `cad-${randomUUID()}`,
+            payload: { produtos },
+            status: 'pending',
+          },
+        });
+        this.logger.warn(
+          `Cadastro Dinâmico: Giga indisponível (${(e as Error).message}) — réplica enfileirada no outbox (ref=${input.ref})`,
+        );
+      }
+    }
     this.logger.log(
-      `Cadastro Dinâmico: ref=${input.ref} grupo=${input.grupoCodigo} → ${result.inseridos}/${produtos.length} produtos inseridos`,
+      `Cadastro Dinâmico: ref=${input.ref} grupo=${input.grupoCodigo} → ${produtos.length} no Flow` +
+        (gigaEnfileirado ? ' + Giga via outbox' : ` + ${inseridos} no Giga`),
     );
+
+    // 4) ESPELHO IMEDIATO (14/07, caso VOGUE BEGE na live): sem isso, a peça
+    // recém-cadastrada só aparecia na busca da live/PDV depois da corrente de
+    // syncs (espelho 10min → nativa no minuto 38 — até ~1h de espera). Semeia
+    // as três cópias do Postgres AGORA; os syncs seguintes só confirmam.
+    // Falha aqui NUNCA desfaz o cadastro (o Giga é a fonte) — só loga.
+    try {
+      await this.espelhoImediato(produtos);
+      this.logger.log(`Cadastro Dinâmico: ${produtos.length} produto(s) espelhados na hora (wincred+giga+nativa)`);
+    } catch (e) {
+      this.logger.warn(`Cadastro Dinâmico: espelho imediato falhou (syncs normais cobrem): ${(e as Error).message}`);
+    }
     return {
-      inseridos: result.inseridos,
-      ignorados: result.ignorados,
+      inseridos,
+      ignorados,
       total: produtos.length,
       seqInicial: seq.toString(),
       seqFinal: (seq + BigInt(produtos.length - 1)).toString(),
+      gigaEnfileirado,
       itens: produtos.map((p) => ({
         codigo: p.codigo,
         descricaoCompleta: p.descricaoCompleta,
@@ -136,9 +198,172 @@ export class ProductRegistrationService {
     };
   }
 
+  /**
+   * Write-through do cadastro no Flow: `product` nativa (flowIsSource — o sync
+   * nunca sobrescreve) + espelho `wincred_produtos` (bipe/busca/separação leem
+   * daqui). O EAN prefixo 8 É o próprio código.
+   */
+  private async gravarNoFlow(
+    produtos: Array<{
+      codigo: string; grupo: number; nomeGrupo: string; subgrupo?: number;
+      descricaoCompleta: string; descricaoPdv?: string; custo: number;
+      precoVenda: number; margem: number; fornecedor: string; cor: string;
+      tamanho: string; ref: string; plusSize: boolean; ncm?: string;
+      cfop?: number; tributo?: string; marca?: string;
+    }>,
+  ): Promise<void> {
+    const hoje = new Date();
+    for (const p of produtos) {
+      const base = {
+        grupo: p.grupo,
+        nomeGrupo: p.nomeGrupo?.slice(0, 30) || null,
+        descricaoPdv: p.descricaoPdv?.slice(0, 50) || null,
+        descricaoCompleta: p.descricaoCompleta?.slice(0, 100) || null,
+        custo: p.custo,
+        vendaUn: p.precoVenda,
+        fornecedor: p.fornecedor?.slice(0, 18) || null,
+        estoque: 0,
+        margem: p.margem,
+        dataAlt: hoje,
+        subgrupo: p.subgrupo ?? null,
+        cor: p.cor?.slice(0, 15) || null,
+        tamanho: p.tamanho?.slice(0, 20) || null,
+        marca: p.marca?.slice(0, 30) || null,
+        ref: p.ref?.slice(0, 10) || null,
+        ncm: p.ncm?.slice(0, 8) || null,
+        tributo: p.tributo?.slice(0, 4) || null,
+        plusSize: p.plusSize ? 1 : 0,
+        ean: p.codigo,
+      };
+      await (this.prisma as any).product.upsert({
+        where: { codigo: p.codigo },
+        create: {
+          codigo: p.codigo, ...base, cfop: p.cfop ?? null,
+          liveOk: !!p.plusSize, ativo: true,
+          flowIsSource: true, editedAt: hoje,
+        },
+        update: { ...base, cfop: p.cfop ?? null, flowIsSource: true, editedAt: hoje },
+      }).catch((e: any) => this.logger.warn(`gravarNoFlow product ${p.codigo}: ${e?.message}`));
+      await (this.prisma as any).wincredProduto.upsert({
+        where: { codigo: p.codigo },
+        create: { codigo: p.codigo, ...base },
+        update: base,
+      }).catch((e: any) => this.logger.warn(`gravarNoFlow espelho ${p.codigo}: ${e?.message}`));
+    }
+  }
+
   // ───────────────────────────────────────────────────────────────────────
   // Helpers privados
   // ───────────────────────────────────────────────────────────────────────
+
+  /** Tamanhos aceitos na live — mesma whitelist do LivePdvService/nativa. */
+  private static readonly LIVE_TAMANHOS = new Set([
+    '46', '48', '50', '52', '54', '56', '58', '60', '46/48', '50/52',
+  ]);
+
+  /**
+   * ESPELHO IMEDIATO (14/07): grava o cadastro novo nas TRÊS cópias do
+   * Postgres (wincred_produtos, giga_produto e a nativa `product`), com as
+   * MESMAS regras de curadoria do ProductNativeService (genero/liveOk). A
+   * peça recém-cadastrada aparece na busca da live/PDV na hora, sem esperar
+   * a corrente de syncs. Idempotente: upsert por codigo; linha nativa com
+   * flowIsSource=true nunca é sobrescrita.
+   */
+  private async espelhoImediato(
+    produtos: Array<{
+      codigo: string;
+      grupo: number;
+      nomeGrupo: string;
+      subgrupo?: number;
+      descricaoCompleta: string;
+      descricaoPdv: string;
+      custo: number;
+      precoVenda: number;
+      margem: number;
+      fornecedor: string;
+      cor: string;
+      tamanho: string;
+      ref: string;
+      plusSize: boolean;
+      ncm?: string;
+      cfop?: number | string;
+      tributo?: string;
+      marca?: string;
+    }>,
+  ) {
+    const p: any = this.prisma;
+    const hoje = new Date();
+    for (const item of produtos) {
+      const codigo = String(item.codigo).trim();
+      const desc = item.descricaoCompleta || '';
+      const plus = item.plusSize ? 1 : 0;
+      const cfop = item.cfop != null && String(item.cfop).trim() !== '' ? Number(item.cfop) : null;
+      const tam = String(item.tamanho || '').trim();
+      const mascInf = /MASCULIN|INFANTIL/i.test(desc);
+      const liveOk =
+        plus === 1 && !mascInf && (!tam || ProductRegistrationService.LIVE_TAMANHOS.has(tam));
+
+      const base = {
+        grupo: item.grupo ?? null,
+        nomeGrupo: item.nomeGrupo || null,
+        descricaoPdv: item.descricaoPdv || null,
+        descricaoCompleta: desc || null,
+        custo: item.custo ?? null,
+        vendaUn: item.precoVenda ?? null,
+        fornecedor: item.fornecedor || null,
+        estoque: 0,
+        margem: item.margem ?? null,
+        dataAlt: hoje,
+        subgrupo: item.subgrupo ?? null,
+        cor: item.cor || null,
+        tamanho: tam || null,
+        marca: item.marca || null,
+        ref: item.ref || null,
+        ncm: item.ncm || null,
+        tributo: item.tributo || null,
+        plusSize: plus,
+      };
+
+      // 1) Espelho Wincred (PK codigo) — upsert direto.
+      await p.wincredProduto.upsert({
+        where: { codigo },
+        create: { codigo, ...base },
+        update: base,
+      });
+
+      // 2) Espelho giga_produto (sem unique em codigo) — delete + create.
+      await p.gigaProduto.deleteMany({ where: { codigo } });
+      await p.gigaProduto.create({
+        data: {
+          codigo,
+          ref: item.ref || null,
+          refBase: item.ref ? ProductSearchService.refBaseOf(item.ref) : null,
+          descricao: desc || null,
+          cor: item.cor || null,
+          tamanho: tam || null,
+          grupo: item.nomeGrupo || null,
+          ncm: item.ncm || null,
+          vendaUn: item.precoVenda ?? null,
+        },
+      });
+
+      // 3) Tabela NATIVA `product` — respeita flowIsSource (nunca sobrescreve).
+      const existente = await p.product.findUnique({ where: { codigo }, select: { flowIsSource: true } });
+      const nativa = {
+        ...base,
+        cfop,
+        ean: null,
+        genero: mascInf ? (/MASCULIN/i.test(desc) ? 'MASCULINO' : 'INFANTIL') : plus === 1 ? 'FEMININO' : null,
+        liveOk,
+        ativo: true,
+      };
+      if (!existente) {
+        await p.product.create({ data: { codigo, ...nativa } });
+      } else if (!existente.flowIsSource) {
+        await p.product.update({ where: { codigo }, data: nativa });
+      }
+    }
+  }
 
   private validarInput(input: PreviewInput) {
     if (!input.grupoCodigo) throw new BadRequestException('Grupo é obrigatório.');

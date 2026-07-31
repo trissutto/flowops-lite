@@ -8,7 +8,7 @@ import { RoutingService } from '../routing/routing.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { WooCommerceService } from '../woocommerce/woocommerce.service';
 import { ErpService } from '../erp/erp.service';
-import { extractAttribution } from '../woocommerce/attribution.util';
+import { extractAttribution, extractAttributionRaw } from '../woocommerce/attribution.util';
 import { extractCpf, detectPickup, extractVariantFromLineItem } from '../woocommerce/wc-order-extract.util';
 
 @Controller('orders')
@@ -47,6 +47,26 @@ export class OrdersController {
       return await this.orders.analytics(from, to);
     } catch (e: any) {
       throw new BadRequestException(e?.message ?? 'Falha ao gerar analítico');
+    }
+  }
+
+  /**
+   * Relatório VENDAS POR CAMPANHA (De/Até). Agrupa pedidos do site pela
+   * campanha de origem (utmCampaign do Order Attribution do WC).
+   * Ex: GET /orders/report/campanhas?from=2026-07-01&to=2026-07-25
+   */
+  @Get('report/campanhas')
+  async campanhasReport(
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    if (!from || !to) {
+      throw new BadRequestException('Parâmetros "from" e "to" são obrigatórios (YYYY-MM-DD).');
+    }
+    try {
+      return await this.orders.campanhasReport(from, to);
+    } catch (e: any) {
+      throw new BadRequestException(e?.message ?? 'Falha ao gerar relatório de campanhas');
     }
   }
 
@@ -149,9 +169,90 @@ export class OrdersController {
         // Vendedora atribuída (cache denormalizado no Order local)
         sellerId: sellerByWcId.get(Number(o.id))?.id ?? null,
         sellerName: sellerByWcId.get(Number(o.id))?.name ?? null,
+        // Origem do pedido (site/live) — 'source' já é a atribuição UTM do WC
+        orderSource: 'site',
         ...extractAttribution(o.meta_data ?? []),
+        // NOME cru da campanha (pra badge de "veio da campanha X" na separação)
+        utmCampaign: extractAttributionRaw(o.meta_data ?? []).utmCampaign,
       };
     });
+
+    // ── Pedidos da LIVE (source='live') — MESMA fila, MESMA linha ──
+    // Vivem só no Flow (wcOrderId sintético). Mapeia o slug da aba pro status
+    // local equivalente e devolve no formato idêntico ao das linhas do WC.
+    const LIVE_STATUS_BY_SLUG: Record<string, string[]> = {
+      processing: ['processing'],
+      separacao: ['separating'],
+      'em-separacao': ['separating'],
+      completed: ['shipped', 'delivered'],
+    };
+    const liveStatuses = status ? LIVE_STATUS_BY_SLUG[status] : undefined;
+    let liveRows: any[] = [];
+    if (liveStatuses?.length) {
+      const liveOrders = await (this.prisma as any).order.findMany({
+        where: {
+          source: 'live',
+          status: { in: liveStatuses },
+          ...(search
+            ? {
+                OR: [
+                  { wcOrderNumber: { contains: search, mode: 'insensitive' } },
+                  { customerName: { contains: search, mode: 'insensitive' } },
+                  { customerPhone: { contains: search } },
+                ],
+              }
+            : {}),
+          ...(after ? { wcDateCreated: { gte: new Date(after) } } : {}),
+          ...(before ? { wcDateCreated: { lte: new Date(before) } } : {}),
+        },
+        include: {
+          pickOrders: {
+            select: {
+              status: true,
+              trackingCode: true,
+              carrier: true,
+              store: { select: { code: true, name: true } },
+            },
+          },
+        },
+        orderBy: { wcDateCreated: 'desc' },
+        take: 100,
+      });
+      liveRows = liveOrders.map((o: any) => {
+        const pickOrders = (o.pickOrders || []).map((p: any) => ({
+          storeCode: p.store?.code ?? null,
+          storeName: p.store?.name ?? null,
+          status: p.status,
+          trackingCode: p.trackingCode ?? null,
+          carrier: p.carrier ?? null,
+        }));
+        const allShipped =
+          pickOrders.length > 0 && pickOrders.every((p: any) => p.status === 'shipped');
+        const firstTracking = pickOrders.find((p: any) => !!p.trackingCode);
+        let addrState: string | null = null;
+        try { addrState = JSON.parse(o.shippingAddress || '{}')?.state ?? null; } catch {}
+        return {
+          id: o.wcOrderId,
+          number: o.wcOrderNumber,
+          status,
+          dateCreatedGmt: (o.wcDateCreated ?? o.createdAt)?.toISOString?.() ?? null,
+          total: String(o.totalAmount ?? 0),
+          currency: 'BRL',
+          customerName: o.customerName ?? '',
+          shippingMethod: o.shippingMethod ?? 'LIVE',
+          shippingState: addrState,
+          pickOrders,
+          shipped: allShipped,
+          trackingCode: firstTracking?.trackingCode ?? null,
+          trackingCarrier: firstTracking?.carrier ?? null,
+          sellerId: o.sellerId ?? null,
+          sellerName: o.sellerName ?? null,
+          orderSource: 'live',
+          origem: 'Live Commerce',
+        };
+      });
+    }
+    const dataMerged = [...liveRows, ...data];
 
     // Filtro por loja responsável (aplicado APÓS enriquecer com pickOrders)
     // Match flexível: normaliza removendo acentos + uppercase + compara code OU name
@@ -163,18 +264,18 @@ export class OrdersController {
         .trim();
     const targetNorm = normalize(storeCode);
     const filteredData = storeCode
-      ? data.filter((o: any) =>
+      ? dataMerged.filter((o: any) =>
           (o.pickOrders || []).some((p: any) => {
             const codeN = normalize(p.storeCode);
             const nameN = normalize(p.storeName);
             return codeN === targetNorm || nameN === targetNorm;
           }),
         )
-      : data;
+      : dataMerged;
 
     return {
       data: filteredData,
-      total: storeCode ? filteredData.length : res.total,
+      total: storeCode ? filteredData.length : res.total + liveRows.length,
       totalPages: storeCode ? 1 : res.totalPages,
       filteredByStore: !!storeCode,
     };
@@ -351,6 +452,27 @@ export class OrdersController {
       byStatus[t.slug] = { name: t.name, total: t.total };
       grand += t.total;
     }
+    // Soma os pedidos da LIVE (source='live', só existem no Flow) nos badges
+    // das abas equivalentes: processing → Processando · separating → Em
+    // separação · shipped/delivered → Concluídos.
+    try {
+      const liveCounts = await (this.prisma as any).order.groupBy({
+        by: ['status'],
+        where: { source: 'live' },
+        _count: { _all: true },
+      });
+      const add = (slug: string, n: number) => {
+        if (!n) return;
+        byStatus[slug] = { name: byStatus[slug]?.name ?? slug, total: (byStatus[slug]?.total ?? 0) + n };
+        grand += n;
+      };
+      for (const c of liveCounts) {
+        const n = c._count._all;
+        if (c.status === 'processing') add('processing', n);
+        else if (c.status === 'separating') add('separacao', n);
+        else if (c.status === 'shipped' || c.status === 'delivered') add('completed', n);
+      }
+    } catch { /* badge sem live é melhor que quebrar a tela */ }
     return { byStatus, grand };
   }
 
@@ -377,6 +499,89 @@ export class OrdersController {
   /** Detalhe de 1 pedido direto do WC. */
   @Get('wc/:wcId')
   async wcGetOne(@Param('wcId') wcId: string) {
+    // Pedido da LIVE: monta o MESMO payload de detalhe a partir do Order local
+    // (wcOrderId sintético — não existe no WooCommerce; buscar lá dava 500).
+    const liveLocal = await (this.prisma as any).order.findUnique({
+      where: { wcOrderId: Number(wcId) },
+      include: {
+        items: true,
+        pickOrders: { select: { trackingCode: true, carrier: true } },
+      },
+    });
+    if (liveLocal?.source === 'live') {
+      let addr: any = {};
+      try { addr = JSON.parse(liveLocal.shippingAddress || '{}'); } catch {}
+      const liveCart = liveLocal.liveCartId
+        ? await (this.prisma as any).livePdvCart
+            .findUnique({ where: { id: liveLocal.liveCartId }, select: { freteCents: true, customerInstagram: true } })
+            .catch(() => null)
+        : null;
+      const STATUS_SLUG: Record<string, string> = {
+        processing: 'processing',
+        separating: 'separacao',
+        shipped: 'completed',
+        delivered: 'completed',
+        pending: 'pending',
+        cancelled: 'cancelled',
+      };
+      const track = (liveLocal.pickOrders || []).find((p: any) => p.trackingCode);
+      const stores = await this.prisma.store.findMany({
+        where: { active: true },
+        select: { code: true, name: true },
+      });
+      return {
+        id: liveLocal.wcOrderId,
+        number: liveLocal.wcOrderNumber,
+        status: STATUS_SLUG[liveLocal.status] ?? liveLocal.status,
+        dateCreatedGmt: (liveLocal.wcDateCreated ?? liveLocal.createdAt)?.toISOString?.() ?? null,
+        dateModifiedGmt: liveLocal.updatedAt?.toISOString?.() ?? null,
+        total: String(liveLocal.totalAmount ?? 0),
+        currency: 'BRL',
+        paymentMethodTitle: 'PIX (Live Commerce)',
+        customerNote: liveCart?.customerInstagram ? `Instagram: @${liveCart.customerInstagram}` : '',
+        billing: {
+          first_name: liveLocal.customerName || '',
+          last_name: '',
+          email: liveLocal.customerEmail || '',
+          phone: liveLocal.customerPhone || '',
+        },
+        shipping: addr,
+        customerCpf: liveLocal.customerCpf || '',
+        lineItems: (liveLocal.items || []).map((it: any) => ({
+          id: it.id,
+          name: it.productName,
+          sku: it.sku,
+          quantity: it.quantity,
+          total: String((it.unitPrice ?? 0) * (it.quantity ?? 1)),
+          price: it.unitPrice,
+          image: null,
+        })),
+        shippingLines: [
+          {
+            method: liveLocal.shippingMethod ?? 'LIVE',
+            total: liveCart ? String((liveCart.freteCents || 0) / 100) : '0',
+          },
+        ],
+        tracking: {
+          number: track?.trackingCode ?? '',
+          carrier: track?.carrier ?? '',
+          url: '',
+        },
+        pickup: {
+          isPickup: !!liveLocal.isPickup,
+          storeCode: liveLocal.pickupStoreCode ?? null,
+          storeName: liveLocal.pickupStoreCode
+            ? stores.find((s) => s.code === liveLocal.pickupStoreCode)?.name ?? null
+            : null,
+          shippingMethodTitle: liveLocal.shippingMethod ?? 'LIVE',
+          unresolvedCityName: null,
+        },
+        attribution: { origem: 'Live Commerce', source: '(Live) ()' },
+        sellerId: liveLocal.sellerId ?? null,
+        sellerName: liveLocal.sellerName ?? null,
+      };
+    }
+
     const o = await this.wc.getOrder(Number(wcId));
 
     const getMeta = (key: string) => {
@@ -472,6 +677,15 @@ export class OrdersController {
   ) {
     const wcOrderId = Number(wcId);
 
+    // Pedido da LIVE (source='live', wcOrderId sintético 900M+): existe SÓ no
+    // Flow — nunca toca o WooCommerce. As mesmas ações (gerar separação, nota)
+    // são aplicadas localmente.
+    const localForSource = await (this.prisma as any).order.findUnique({
+      where: { wcOrderId },
+      select: { id: true, source: true, status: true },
+    });
+    const isLive = localForSource?.source === 'live';
+
     // 1) Se está indo pra 'separacao', garante pick-orders criados ANTES.
     //    Se não conseguir (sem estoque etc), aborta sem mexer no WC — não faz
     //    sentido marcar "separação" se ninguém vai separar.
@@ -494,6 +708,32 @@ export class OrdersController {
       }
       ensuredPickOrders = ensured.pickOrders;
       alreadyHadPickOrders = !!ensured.already;
+    }
+
+    if (isLive) {
+      // Nota vira histórico local; status já foi aplicado pelo confirmRoute
+      // (processing→separating). Nada de WooCommerce.
+      if (body.addNote?.text?.trim()) {
+        await (this.prisma as any).orderHistory
+          .create({
+            data: {
+              orderId: localForSource!.id,
+              fromStatus: localForSource!.status,
+              toStatus: localForSource!.status,
+              note: body.addNote.text.trim(),
+            },
+          })
+          .catch(() => {});
+      }
+      return {
+        ok: true,
+        id: wcOrderId,
+        status: body.status ?? localForSource!.status,
+        requestedStatus: body.status,
+        statusApplied: true,
+        pickOrdersCreated: ensuredPickOrders && !alreadyHadPickOrders ? ensuredPickOrders : undefined,
+        pickOrdersAlreadyExisted: alreadyHadPickOrders,
+      };
     }
 
     const updated = await this.wc.updateOrder(wcOrderId, {
@@ -570,6 +810,35 @@ export class OrdersController {
           storeName: p.store.name,
         })),
       };
+    }
+
+    // Pedido da LIVE: já existe local com itens — roteia direto, sem WC.
+    if (existing && (existing as any).source === 'live') {
+      try {
+        const preview = await this.routing.previewRoute(existing.id);
+        if (!preview.success) {
+          const missingLabel = preview.missing?.length
+            ? `${preview.missing.length} SKU(s) sem estoque (${preview.missing.slice(0, 3).map((m: any) => m.sku).join(', ')}${preview.missing.length > 3 ? '…' : ''})`
+            : `estratégia ${preview.strategy}`;
+          return { ok: false, message: missingLabel };
+        }
+        await this.routing.confirmRoute(existing.id, preview as any);
+        const pickOrders = await this.prisma.pickOrder.findMany({
+          where: { orderId: existing.id },
+          include: { store: { select: { code: true, name: true } } },
+          orderBy: { createdAt: 'desc' },
+        });
+        return {
+          ok: true,
+          pickOrders: pickOrders.map((p) => ({
+            id: p.id,
+            storeCode: p.store.code,
+            storeName: p.store.name,
+          })),
+        };
+      } catch (e: any) {
+        return { ok: false, message: e?.message || 'erro no routing do pedido da live' };
+      }
     }
 
     // Não tem — puxa do WC e roteia
@@ -695,6 +964,48 @@ export class OrdersController {
     @Query('preferStoreCode') preferStoreCode?: string,
   ) {
     const wcOrderId = Number(wcId);
+
+    // Pedido da LIVE: monta o MESMO preview a partir do Order local — não
+    // existe no WooCommerce (wcOrderId sintético 900M+).
+    const local = await (this.prisma as any).order.findUnique({
+      where: { wcOrderId },
+      include: { items: true },
+    });
+    if (local?.source === 'live') {
+      let addr: any = {};
+      try { addr = JSON.parse(local.shippingAddress || '{}'); } catch { /* endereço cru */ }
+      return this.routing.previewSeparationForWc({
+        wcOrderId,
+        wcOrderNumber: String(local.wcOrderNumber ?? wcOrderId),
+        orderDateIso: (local.wcDateCreated ?? local.createdAt).toISOString(),
+        totalAmount: Number(local.totalAmount ?? 0),
+        paymentMethod: 'PIX (Live)',
+        items: (local.items || []).map((li: any) => ({
+          sku: String(li.sku ?? '').trim(),
+          quantity: Number(li.quantity ?? 0),
+          productName: String(li.productName ?? ''),
+          variant: undefined,
+        })),
+        customerName: local.customerName ?? '',
+        customerPhone: local.customerPhone ?? null,
+        customerEmail: local.customerEmail ?? null,
+        customerCpf: local.customerCpf ?? null,
+        shippingMethod: local.shippingMethod ?? 'LIVE',
+        isPickup: !!local.isPickup,
+        pickupStoreCode: local.pickupStoreCode ?? null,
+        preferStoreCode: preferStoreCode?.trim() || null,
+        address: {
+          street: addr.address_1 ?? null,
+          number: null, // já embutido em address_1 ("Rua X, 123")
+          complement: addr.address_2 ?? null,
+          neighborhood: null,
+          city: addr.city ?? null,
+          state: addr.state ?? null,
+          postcode: addr.postcode ?? null,
+        },
+      });
+    }
+
     const o = await this.wc.getOrder(wcOrderId);
 
     // Monta items com variante (tamanho/cor) vindo do meta_data
@@ -1091,10 +1402,17 @@ export class OrdersController {
       };
     }
 
-    const o = await this.wc.getOrder(wcOrderId);
-
-    // 1) Upsert local do pedido (cria Order + items se ainda não existir)
-    const { orderId } = await this.orders.upsertFromWooCommerce(o);
+    // 1) Garante o Order local com items.
+    //    Pedido da LIVE (source='live') JÁ existe local — não busca no WC
+    //    (wcOrderId sintético; buscar lá dava 500 na aprovação da quebra).
+    let orderId: string;
+    if (existing && (existing as any).source === 'live') {
+      orderId = existing.id;
+    } else {
+      const o = await this.wc.getOrder(wcOrderId);
+      const up = await this.orders.upsertFromWooCommerce(o);
+      orderId = up.orderId;
+    }
 
     // 2) Roda o preview oficial (consulta estoque e roteia)
     //    Respeita `preferStoreCode` se o usuário escolheu via radio button no

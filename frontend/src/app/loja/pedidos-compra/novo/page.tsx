@@ -86,6 +86,11 @@ const GRADE_PRESETS: Array<{ id: string; label: string; tamanhos: string[]; plus
     clsActive: 'bg-fuchsia-600 text-white border-fuchsia-700',
     clsIdle: 'bg-white text-fuchsia-700 border-fuchsia-300 hover:bg-fuchsia-50',
   },
+  {
+    id: 'g1-g5', label: 'G1→G5', tamanhos: ['G1','G2','G3','G4','G5'], plusSize: false, markup: MARKUP_REGULAR,
+    clsActive: 'bg-amber-600 text-white border-amber-700',
+    clsIdle: 'bg-white text-amber-700 border-amber-300 hover:bg-amber-50',
+  },
 ];
 
 const newTempId = () => Math.random().toString(36).slice(2, 10);

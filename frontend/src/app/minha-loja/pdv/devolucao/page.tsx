@@ -20,6 +20,7 @@ import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, Search, Check, X, Banknote, ArrowRightLeft, CreditCard } from 'lucide-react';
 import { api } from '@/lib/api';
+import { appPrompt } from '@/lib/app-prompt';
 
 type Item = {
   id: string;
@@ -63,6 +64,9 @@ export default function DevolucaoPage() {
   const [vendasExtras, setVendasExtras] = useState<LookupResult[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  // Peça de OUTRA loja: backend pede confirmação explícita (a peça entra no
+  // estoque da loja atual). Modal próprio — confirm() nativo não rola no app.
+  const [crossAlert, setCrossAlert] = useState<{ message: string } | null>(null);
   const [selected, setSelected] = useState<Record<string, number>>({});
 
   // Helper: encontra item pelo SKU/REF em data + vendasExtras
@@ -133,6 +137,8 @@ export default function DevolucaoPage() {
     saleId: string;
     nfceNumber?: string;
     storeName?: string;
+    storeCode?: string;
+    sameStore?: boolean;
     customerName?: string;
     customerCpf?: string;
     finalizedAt: string;
@@ -284,12 +290,12 @@ export default function DevolucaoPage() {
   async function exigirSenhaGerente(): Promise<{ password: string; motivoFinal: string } | null> {
     let motivoFinal = motivo.trim();
     if (!motivoFinal) {
-      const m = window.prompt('Justificativa da devolução em dinheiro/pix (obrigatória):');
+      const m = await appPrompt('Justificativa da devolução em dinheiro/pix (obrigatória):');
       if (!m || !m.trim()) return null;
       motivoFinal = m.trim();
       setMotivo(motivoFinal);
     }
-    const pw = window.prompt('Senha do GERENTE para liberar devolução em dinheiro/pix:');
+    const pw = await appPrompt('Senha do GERENTE para liberar devolução em dinheiro/pix:', { password: true });
     if (!pw) return null;
     return { password: pw, motivoFinal };
   }
@@ -407,7 +413,25 @@ export default function DevolucaoPage() {
       return s + valorUnit * (selected[it.id] || 0);
     }, 0);
 
-  async function confirm() {
+  /** Erro da API pode vir como "400: {json}" — extrai a mensagem legível e
+   *  detecta o alerta cross-store (peça de outra loja precisa de confirmação). */
+  function parseApiErr(e: any): { message: string; crossStoreAlert: boolean } {
+    const raw = String(e?.message || '');
+    const i = raw.indexOf('{');
+    if (i >= 0) {
+      try {
+        const j = JSON.parse(raw.slice(i));
+        if (j && typeof j === 'object') {
+          return { message: String(j.message || raw), crossStoreAlert: !!j.crossStoreAlert };
+        }
+      } catch { /* mensagem crua mesmo */ }
+    }
+    return { message: raw, crossStoreAlert: false };
+  }
+
+  async function confirm(confirmCross?: boolean) {
+    const confirmCrossStore = confirmCross === true; // onClick passa event — coage
+    setCrossAlert(null);
     setErr('');
     const items = Object.entries(selected).map(([originalItemId, qty]) => ({
       originalItemId,
@@ -470,6 +494,7 @@ export default function DevolucaoPage() {
             creditoValidadeDias: modo === 'credito' ? validade : undefined,
             attachToSaleId: modo === 'troca' ? attachToSaleId : null,
             password: gerentePassword,
+            confirmCrossStore,
           }),
         });
       } else {
@@ -483,6 +508,7 @@ export default function DevolucaoPage() {
             creditoValidadeDias: modo === 'credito' ? validade : undefined,
             attachToSaleId: modo === 'troca' ? attachToSaleId : null,
             password: gerentePassword,
+            confirmCrossStore,
           }),
         });
       }
@@ -521,7 +547,13 @@ export default function DevolucaoPage() {
         } catch { /* segue — botão fica disponível se falhar */ }
       }
     } catch (e: any) {
-      setErr(e?.message || 'Falha na devolução');
+      const pe = parseApiErr(e);
+      if (pe.crossStoreAlert) {
+        // Peça de outra loja — abre o modal de confirmação em vez de erro cru
+        setCrossAlert({ message: pe.message });
+      } else {
+        setErr(pe.message || 'Falha na devolução');
+      }
     } finally {
       setBusy(false);
     }
@@ -639,77 +671,98 @@ export default function DevolucaoPage() {
         )}
 
         {/* Lista de vendas encontradas pela busca por SKU */}
-        {salesBySku && salesBySku.length > 0 && !success && (
-          <div className="bg-white rounded-2xl shadow-md p-5 mb-6">
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="font-bold text-rose-900">
-                {salesBySku.length} venda(s) encontrada(s) com essa peça
-              </h2>
-              <span className="text-xs text-slate-500">Ordenado da mais recente</span>
-            </div>
-            <div className="text-xs text-slate-600 mb-3">
-              Click na venda do cliente que está devolvendo (geralmente é a mais recente).
-            </div>
-            <div className="space-y-2">
-              {salesBySku.map((s) => {
-                const item = s.matchedItems[0]; // primeiro match
-                const dataFmt = new Date(s.finalizedAt).toLocaleString('pt-BR');
-                const disabled = s.totalmenteDevolvido;
-                return (
-                  <button
-                    key={s.saleId}
-                    onClick={() => !disabled && escolherVendaDoSku(s.saleId, item.sku)}
-                    disabled={disabled || busy}
-                    className={`w-full text-left p-3 rounded-lg border-2 transition ${
-                      disabled
-                        ? 'bg-slate-50 border-slate-200 cursor-not-allowed opacity-60'
-                        : 'bg-white border-rose-200 hover:border-rose-500 hover:bg-rose-50 cursor-pointer'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between gap-3 flex-wrap">
-                      <div className="flex-1 min-w-0">
-                        <div className="font-bold text-slate-800">
-                          {s.customerName || <span className="text-slate-400 italic">Sem identificação</span>}
-                          {s.customerCpf && <span className="ml-2 text-xs text-slate-500 font-mono">{s.customerCpf}</span>}
-                        </div>
-                        <div className="text-xs text-slate-600 mt-0.5">
-                          {dataFmt} · {s.storeName || '—'}
-                          {s.nfceNumber && <> · NFC-e {s.nfceNumber}</>}
-                          {s.sellerName && <> · {s.sellerName}</>}
-                        </div>
-                        <div className="text-xs text-slate-700 mt-1">
-                          <span className="font-mono bg-slate-100 px-1.5 py-0.5 rounded">{item.sku}</span>
-                          {' '}{item.descricao || item.ref}
-                          {item.cor && <> · {item.cor}</>}
-                          {item.tamanho && <> · {item.tamanho}</>}
-                          {' · '}<b>{item.qty}× R$ {fmt(item.precoUnit)}</b>
-                          {item.jaDevolvido > 0 && (
-                            <span className="ml-2 text-amber-700">
-                              ({item.jaDevolvido} já devolvida{item.jaDevolvido > 1 ? 's' : ''})
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <div className="text-xs text-slate-500">Venda total</div>
-                        <div className="font-bold text-emerald-700 tabular-nums">R$ {fmt(s.totalVenda)}</div>
-                        {disabled && (
-                          <div className="text-[10px] text-rose-700 mt-1 font-bold">JÁ DEVOLVIDA</div>
-                        )}
-                      </div>
+        {salesBySku && salesBySku.length > 0 && !success && (() => {
+          const nestaLoja = salesBySku.filter((s: any) => s.sameStore);
+          const outrasLojas = salesBySku.filter((s: any) => !s.sameStore);
+          const renderVenda = (s: any) => {
+            const item = s.matchedItems[0]; // primeiro match
+            const dataFmt = new Date(s.finalizedAt).toLocaleString('pt-BR');
+            const disabled = s.totalmenteDevolvido;
+            return (
+              <button
+                key={s.saleId}
+                onClick={() => !disabled && escolherVendaDoSku(s.saleId, item.sku)}
+                disabled={disabled || busy}
+                className={`w-full text-left p-3 rounded-lg border-2 transition ${
+                  disabled
+                    ? 'bg-slate-50 border-slate-200 cursor-not-allowed opacity-60'
+                    : 'bg-white border-rose-200 hover:border-rose-500 hover:bg-rose-50 cursor-pointer'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <div className="flex-1 min-w-0">
+                    <div className="font-bold text-slate-800">
+                      {s.customerName || <span className="text-slate-400 italic">Sem identificação</span>}
+                      {s.customerCpf && <span className="ml-2 text-xs text-slate-500 font-mono">{s.customerCpf}</span>}
                     </div>
-                  </button>
-                );
-              })}
+                    <div className="text-xs text-slate-600 mt-0.5">
+                      {dataFmt} · <b className={s.sameStore ? '' : 'text-amber-700'}>{s.storeName || '—'}</b>
+                      {s.nfceNumber && <> · NFC-e {s.nfceNumber}</>}
+                      {s.sellerName && <> · {s.sellerName}</>}
+                    </div>
+                    <div className="text-xs text-slate-700 mt-1">
+                      <span className="font-mono bg-slate-100 px-1.5 py-0.5 rounded">{item.sku}</span>
+                      {' '}{item.descricao || item.ref}
+                      {item.cor && <> · {item.cor}</>}
+                      {item.tamanho && <> · {item.tamanho}</>}
+                      {' · '}<b>{item.qty}× R$ {fmt(item.precoUnit)}</b>
+                      {item.jaDevolvido > 0 && (
+                        <span className="ml-2 text-amber-700">
+                          ({item.jaDevolvido} já devolvida{item.jaDevolvido > 1 ? 's' : ''})
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-xs text-slate-500">Venda total</div>
+                    <div className="font-bold text-emerald-700 tabular-nums">R$ {fmt(s.totalVenda)}</div>
+                    {disabled && (
+                      <div className="text-[10px] text-rose-700 mt-1 font-bold">JÁ DEVOLVIDA</div>
+                    )}
+                  </div>
+                </div>
+              </button>
+            );
+          };
+          return (
+            <div className="bg-white rounded-2xl shadow-md p-5 mb-6">
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="font-bold text-rose-900">
+                  {salesBySku.length} venda(s) encontrada(s) com essa peça
+                </h2>
+                <span className="text-xs text-slate-500">Mais recente primeiro</span>
+              </div>
+
+              {/* NESTA LOJA — destaque (regra: devolução é na loja que vendeu) */}
+              {nestaLoja.length > 0 && (
+                <>
+                  <div className="text-xs font-extrabold uppercase tracking-wide text-rose-800 mb-2">
+                    Nesta loja
+                  </div>
+                  <div className="space-y-2">{nestaLoja.map(renderVenda)}</div>
+                </>
+              )}
+
+              {/* OUTRAS LOJAS DA REDE — sem destaque, abaixo. Ao escolher uma
+                  daqui, a devolução ainda pede confirmação de outra loja. */}
+              {outrasLojas.length > 0 && (
+                <>
+                  <div className="text-[11px] font-bold uppercase tracking-wide text-slate-400 mt-5 mb-2">
+                    Outras lojas da rede {nestaLoja.length === 0 && '(não vendida nesta loja)'}
+                  </div>
+                  <div className="space-y-2 opacity-75">{outrasLojas.map(renderVenda)}</div>
+                </>
+              )}
+
+              <button
+                onClick={() => { setSalesBySku(null); setQuery(''); inputRef.current?.focus(); }}
+                className="mt-4 text-sm text-slate-600 hover:underline"
+              >
+                ← Buscar outra peça
+              </button>
             </div>
-            <button
-              onClick={() => { setSalesBySku(null); setQuery(''); inputRef.current?.focus(); }}
-              className="mt-4 text-sm text-slate-600 hover:underline"
-            >
-              ← Buscar outra peça
-            </button>
-          </div>
-        )}
+          );
+        })()}
 
         {/* ─── DEVOLUÇÃO MANUAL GIGA ─── */}
         {/* Bloqueada: peça não tem histórico de venda nesta loja */}
@@ -1124,7 +1177,7 @@ export default function DevolucaoPage() {
                     {err && <div className="mt-2 text-xs text-red-600">{err}</div>}
 
                     <button
-                      onClick={confirm}
+                      onClick={() => confirm()}
                       disabled={busy || !Object.keys(selected).length}
                       className="mt-2 w-full py-3 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-base disabled:opacity-50 shadow-md"
                     >
@@ -1134,6 +1187,44 @@ export default function DevolucaoPage() {
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {/* MODAL cross-store: peça vendida em OUTRA loja — confirmação explícita
+            (a peça entra no estoque DESTA loja). Modal próprio: confirm()
+            nativo não funciona no app desktop. */}
+        {crossAlert && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+            <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl overflow-hidden">
+              <div className="px-5 py-3 bg-amber-50 border-b border-amber-200">
+                <h3 className="font-bold text-amber-900 flex items-center gap-2">
+                  <ArrowRightLeft className="w-4 h-4" /> Peça de OUTRA loja
+                </h3>
+              </div>
+              <div className="p-5 space-y-3">
+                <p className="text-sm text-slate-700">{crossAlert.message}</p>
+                <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-[11px] text-amber-800">
+                  O estoque da loja que vendeu NÃO muda — a peça fica aqui. Confirme só se a
+                  peça está fisicamente nesta loja.
+                </div>
+                <div className="flex justify-end gap-2 pt-1">
+                  <button
+                    onClick={() => setCrossAlert(null)}
+                    disabled={busy}
+                    className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-bold text-slate-600"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    onClick={() => confirm(true)}
+                    disabled={busy}
+                    className="rounded-lg bg-rose-600 hover:bg-rose-700 text-white px-4 py-2 text-sm font-bold disabled:opacity-50"
+                  >
+                    {busy ? 'Processando…' : 'Confirmar mesmo assim'}
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
         )}
 

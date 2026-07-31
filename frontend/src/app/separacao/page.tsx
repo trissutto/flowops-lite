@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 
 /**
  * Central de Emissão de Separações.
@@ -89,6 +90,9 @@ interface WcOrderListItem {
   // Vendedora atribuída (tag pra relatório de vendas online por atendente)
   sellerId?: string | null;
   sellerName?: string | null;
+  // Marketing: nome da campanha de origem (Order Attribution do WC). Só vem
+  // preenchido se o anúncio carregou UTM na URL. null = direto/sem campanha.
+  utmCampaign?: string | null;
 }
 
 interface SeparationGroup {
@@ -231,6 +235,10 @@ function SeparacaoPageInner() {
   // Filtro de LOJA RESPONSÁVEL pela separação
   const [storeCode, setStoreCode] = useState<string>('');
   const [stores, setStores] = useState<Array<{ code: string; name: string; openOrders: number }>>([]);
+
+  // Filtro de ORIGEM: '' = todos · 'site' (WooCommerce) · 'live' (Live Commerce).
+  // Pedido da live entra na MESMA fila (source='live', nº "LIVE-<comanda>").
+  const [sourceFilter, setSourceFilter] = useState<'' | 'site' | 'live'>('');
 
   // Carrega lojas com contagem de pedidos em aberto
   useEffect(() => {
@@ -1077,6 +1085,27 @@ function SeparacaoPageInner() {
           </button>
         )}
 
+        {/* ─── FILTRO ORIGEM (SITE / LIVE) ─── */}
+        <div className="flex items-center gap-1 ml-3">
+          {([['', 'Todos'], ['site', 'Site'], ['live', 'Live']] as const).map(([val, label]) => (
+            <button
+              key={val || 'todos'}
+              type="button"
+              onClick={() => setSourceFilter(val)}
+              className={`px-3 py-1.5 rounded-full text-xs font-bold border transition ${
+                sourceFilter === val
+                  ? val === 'live'
+                    ? 'bg-rose-600 border-rose-600 text-white'
+                    : 'bg-slate-800 border-slate-800 text-white'
+                  : 'bg-white border-slate-300 text-slate-600 hover:bg-slate-100'
+              }`}
+              title={val === 'live' ? 'Só pedidos da Live Commerce' : val === 'site' ? 'Só pedidos do site (WooCommerce)' : 'Site + Live'}
+            >
+              {val === 'live' ? '🔴 ' : ''}{label}
+            </button>
+          ))}
+        </div>
+
         {/* ─── FILTRO LOJA RESPONSÁVEL ─── */}
         <div className="flex items-center gap-2 ml-auto">
           <span className="text-xs font-bold uppercase tracking-wider text-slate-600">
@@ -1219,13 +1248,13 @@ function SeparacaoPageInner() {
       {/* Lista */}
       {status === 'carrinhos' ? (
         <CarrinhosTab />
-      ) : !loading && orders.length === 0 ? (
+      ) : !loading && orders.filter((o: any) => !sourceFilter || (o.orderSource || 'site') === sourceFilter).length === 0 ? (
         <div className="bg-white rounded-lg shadow p-8 text-center text-slate-400">
-          Nenhum pedido com esse status no momento. 🎉
+          Nenhum pedido {sourceFilter === 'live' ? 'da LIVE ' : sourceFilter === 'site' ? 'do site ' : ''}com esse status no momento. 🎉
         </div>
       ) : (
         <div className="space-y-2">
-          {orders.map((o) => {
+          {orders.filter((o: any) => !sourceFilter || (o.orderSource || 'site') === sourceFilter).map((o) => {
             const p = preview[o.id];
             const err = errorByOrder[o.id];
             const isBusy = busy[o.id];
@@ -1274,6 +1303,11 @@ function SeparacaoPageInner() {
                       >
                         #{o.number}
                       </Link>
+                      {(o as any).orderSource === 'live' && (
+                        <span className="ml-1 inline-block rounded bg-rose-600 px-1.5 py-0.5 text-[10px] font-bold text-white align-middle">
+                          🔴 LIVE
+                        </span>
+                      )}
                       <div className="text-xs text-slate-500">{fmtDate(o.dateCreatedGmt)} atrás</div>
                     </div>
                     <div className="sm:col-span-4 sm:truncate min-w-0">
@@ -1327,6 +1361,16 @@ function SeparacaoPageInner() {
                           }}
                         />
                       </span>
+
+                      {/* Campanha de origem (Order Attribution do WC) */}
+                      {o.utmCampaign && (
+                        <span
+                          className="ml-2 inline-flex items-center gap-1 px-2 py-0.5 bg-violet-100 text-violet-800 text-[10px] font-bold rounded align-middle max-w-[220px] truncate"
+                          title={`Veio da campanha: ${o.utmCampaign}`}
+                        >
+                          📣 {o.utmCampaign}
+                        </span>
+                      )}
 
                       {/* Badge da(s) loja(s) responsável(is) pela separação */}
                       {o.pickOrders && o.pickOrders.length > 0 && (
@@ -1743,6 +1787,9 @@ type CarrinhoAB = {
   // Pedido WC vinculado (quando o CartFlows registrou que o carrinho virou
   // pedido). Usado pra deduplicar contra os itens do fallback WooCommerce.
   order_id?: number | null;
+  // Campanha de origem (via order_id → Order local com atribuição do WC).
+  // null/undefined = carrinho sem pedido ainda ou sem UTM (não atribuível).
+  utmCampaign?: string | null;
 };
 
 type StatsAB = {
@@ -2079,6 +2126,14 @@ function CarrinhosTab() {
                     {c.phone && <span>{c.phone}</span>}
                     <span>{fmt(c.time)}</span>
                     {Number(c.items_count) > 0 && <span>{c.items_count} {Number(c.items_count) === 1 ? 'item' : 'itens'}</span>}
+                    {c.utmCampaign && (
+                      <span
+                        className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-violet-100 text-violet-800 font-bold rounded max-w-[200px] truncate"
+                        title={`Veio da campanha: ${c.utmCampaign}`}
+                      >
+                        📣 {c.utmCampaign}
+                      </span>
+                    )}
                   </div>
                 </div>
                 <div className="font-black text-rose-700 tabular-nums text-lg whitespace-nowrap">{BRL(valor)}</div>
@@ -2093,7 +2148,7 @@ function CarrinhosTab() {
 
       {/* Modal detalhes do carrinho */}
       {selected && (
-        <div className="fixed inset-0 bg-black/60 z-50 flex items-start justify-center p-4 overflow-y-auto" onClick={closeCart}>
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-start justify-center p-4 overflow-y-auto" {...overlayClose(closeCart)}>
           <div className="bg-white rounded-2xl w-full max-w-3xl my-8 overflow-hidden shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <div className="px-5 py-3 bg-gradient-to-r from-rose-600 to-pink-600 text-white flex items-center justify-between">
               <div>
@@ -2120,6 +2175,12 @@ function CarrinhosTab() {
                   <div><span className="text-slate-500">Total:</span> <b className="text-rose-700">{BRL(Number(selected.total ?? selected.cart_total ?? selected.cart_total_brl ?? 0))}</b></div>
                   <div><span className="text-slate-500">Abandonado em:</span> {fmt(selected.time)}</div>
                   <div><span className="text-slate-500">Status:</span> {selected.order_status || selected.status || '-'}</div>
+                  {(selected.utmCampaign || detail?.utmCampaign) && (
+                    <div className="sm:col-span-2">
+                      <span className="text-slate-500">Campanha:</span>{' '}
+                      <b className="text-violet-700">📣 {selected.utmCampaign || detail?.utmCampaign}</b>
+                    </div>
+                  )}
                 </div>
               </section>
 

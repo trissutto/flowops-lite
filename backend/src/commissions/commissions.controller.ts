@@ -47,6 +47,39 @@ export class CommissionsController {
     }
   }
 
+  // ── Relatório FOLHA RH — período livre De/Até + loja, por funcionária ──
+
+  @Get('relatorio-rh')
+  relatorioRh(
+    @Req() req: any,
+    @Query('de') de?: string,
+    @Query('ate') ate?: string,
+    @Query('loja') loja?: string,
+  ) {
+    this.requireAdmin(req);
+    return this.svc.relatorioRh({
+      de: String(de || ''),
+      ate: String(ate || ''),
+      storeCode: loja || undefined,
+    });
+  }
+
+  /** Conferência Flow × caixa do Wincred, vendedora a vendedora (exige loja). */
+  @Get('relatorio-rh/conferencia')
+  relatorioRhConferencia(
+    @Req() req: any,
+    @Query('de') de?: string,
+    @Query('ate') ate?: string,
+    @Query('loja') loja?: string,
+  ) {
+    this.requireAdmin(req);
+    return this.svc.relatorioRhConferencia({
+      de: String(de || ''),
+      ate: String(ate || ''),
+      storeCode: String(loja || ''),
+    });
+  }
+
   // ── Rules ──────────────────────────────────────────────────────────
 
   @Get('rules')

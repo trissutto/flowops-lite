@@ -5,6 +5,7 @@ import { RealignmentShipmentService } from './shipment.service';
 import { RealignmentAutoService } from './realignment-auto.service';
 import { TriagemService } from './triage.service';
 import { ShipmentPdfService } from './shipment-pdf.service';
+import { RemessaEnvioService } from './remessa-envio.service';
 import { ErpService } from '../erp/erp.service';
 import type { Response } from 'express';
 
@@ -27,6 +28,7 @@ export class RealignmentController {
     private readonly triage: TriagemService,
     private readonly shipmentPdf: ShipmentPdfService,
     private readonly erp: ErpService,
+    private readonly remessaEnvio: RemessaEnvioService,
   ) {}
 
   // ════════════════════════════════════════════════════════════════════
@@ -557,6 +559,74 @@ export class RealignmentController {
   }
 
   /**
+   * ENVIO FÍSICO da remessa (SEDEX, provedor pela loja; NF-e 5152 auto +
+   * chave na pré-postagem). POST /realignment/shipments/:id/gerar-envio · origem
+   */
+  @Post('shipments/:id/gerar-envio')
+  gerarEnvioRemessa(@Param('id') id: string, @Body() body: { forcar?: boolean }, @Req() req: any) {
+    const role = req?.user?.role;
+    const storeId = req?.user?.storeId;
+    const userId = req?.user?.id || req?.user?.sub || null;
+    // RETAGUARDA (dono 31/07): admin/operator geram a etiqueta de QUALQUER
+    // remessa, sem estar logado na loja de origem — e com `forcar` passam por
+    // cima da regra das 10 peças quando quiserem postar mesmo assim.
+    const ehRetaguarda = role === 'admin' || role === 'operator';
+    if (!ehRetaguarda && (role !== 'store' || !storeId)) {
+      throw new ForbiddenException('Apenas loja origem ou retaguarda');
+    }
+    return this.remessaEnvio.gerarEnvio(id, ehRetaguarda ? null : storeId, userId, {
+      forcar: ehRetaguarda && !!body?.forcar,
+    });
+  }
+
+  /**
+   * NF-e da remessa (Ponto a Ponto): emite se faltar (idempotente) e devolve
+   * a DANFE em base64. POST /realignment/shipments/:id/nfe · loja origem.
+   */
+  @Post('shipments/:id/nfe')
+  emitirNotaRemessa(@Param('id') id: string, @Req() req: any) {
+    const role = req?.user?.role;
+    const storeId = req?.user?.storeId;
+    const userId = req?.user?.id || req?.user?.sub || null;
+    if (role !== 'store' || !storeId) throw new ForbiddenException('Apenas loja origem');
+    return this.remessaEnvio.emitirNota(id, storeId, userId);
+  }
+
+  /**
+   * Define o meio de transporte da remessa: correios | proprio.
+   * POST /realignment/shipments/:id/transporte · admin/operator ou loja.
+   * Regra default (sem escolha manual): até 10 peças → CORREIOS; acima → PRÓPRIO.
+   */
+  @Post('shipments/:id/transporte')
+  setTransporteRemessa(@Param('id') id: string, @Body() body: { mode?: string }, @Req() req: any) {
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'operator' && role !== 'store') {
+      throw new ForbiddenException('Sem permissão');
+    }
+    return this.shipment.setTransportMode(id, String(body?.mode || '').trim());
+  }
+
+  /**
+   * Documentos do envio da remessa num PDF único (etiqueta + DANFE).
+   * `?somenteEtiqueta=1` devolve só a etiqueta da transportadora.
+   * Loja (origem/destino) ou retaguarda.
+   */
+  @Get('shipments/:id/docs-envio')
+  docsEnvioRemessa(
+    @Param('id') id: string,
+    @Query('somenteEtiqueta') somenteEtiqueta: string | undefined,
+    @Req() req: any,
+  ) {
+    const role = req?.user?.role;
+    const storeId = req?.user?.storeId;
+    const ehRetaguarda = role === 'admin' || role === 'operator';
+    if (!ehRetaguarda && (role !== 'store' || !storeId)) throw new ForbiddenException('Apenas loja ou retaguarda');
+    return this.remessaEnvio.docsEnvio(id, ehRetaguarda ? null : storeId, {
+      somenteEtiqueta: somenteEtiqueta === '1' || somenteEtiqueta === 'true',
+    });
+  }
+
+  /**
    * Gera PDF (romaneio) de uma remessa específica.
    * GET /realignment/shipments/:id/pdf · loja origem, destino ou admin
    *
@@ -838,6 +908,8 @@ export class RealignmentController {
     @Query('toStoreCode') toStoreCode?: string,
     @Query('search') search?: string,
     @Query('daysAgo') daysAgo?: string,
+    @Query('de') de?: string,
+    @Query('ate') ate?: string,
   ) {
     if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
     return this.shipment.listAllShipmentsAdmin({
@@ -846,6 +918,8 @@ export class RealignmentController {
       toStoreCode,
       search,
       daysAgo: daysAgo ? Number(daysAgo) : undefined,
+      de,
+      ate,
     });
   }
 

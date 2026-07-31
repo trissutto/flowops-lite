@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 
 /**
  * /minha-loja/consultar — Consulta de produto pela vendedora.
@@ -51,7 +52,12 @@ interface Variant {
   cor: string;
   tamanho: string;
   myStoreQty: number;
+  /** Preço de venda (REAIS) — null quando o cadastro não tem preço */
+  preco?: number | null;
 }
+
+const fmtBRL = (v: number) =>
+  v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
 interface OtherStoreVariant { sku: string; cor: string; tamanho: string; qty: number }
 interface OtherStore {
@@ -256,15 +262,33 @@ function ConsultarInner() {
     if (!loadingProfile && !authError) inputRef.current?.focus();
   }, [loadingProfile, authError, mode]);
 
-  // ao clicar numa REF do resultado de descrição → busca detalhe
-  const loadRefDetail = useCallback(async (ref: string) => {
+  // ao clicar numa REF do resultado de descrição → busca detalhe.
+  // A MESMA REF pode ter 2+ produtos (fornecedores diferentes, ex.: "8709"
+  // calça MANIFESTO e vestido RIU KIU) — escolhe o resultado cujo NOME mais
+  // parece com o item que a vendedora CLICOU, nunca o results[0] às cegas.
+  const loadRefDetail = useCallback(async (ref: string, clickedName?: string) => {
     setLoadingRefFromDesc(true);
     setSearchError(null);
     try {
       const resp = await apiRetry<StoreSearchResult>(
         `/products/store-search?mode=ref&q=${encodeURIComponent(ref)}`,
       );
-      const first = resp.results[0] ?? null;
+      let first = resp.results[0] ?? null;
+      if (clickedName && resp.results.length > 1) {
+        const words = new Set(
+          clickedName.toUpperCase().split(/\s+/).filter((w) => w.length > 2),
+        );
+        let best = first;
+        let bestScore = -1;
+        for (const r of resp.results) {
+          const score = r.name
+            .toUpperCase()
+            .split(/\s+/)
+            .filter((w) => words.has(w)).length;
+          if (score > bestScore) { bestScore = score; best = r; }
+        }
+        first = best;
+      }
       setPickedRefFromDesc(first);
     } catch (err: any) {
       setSearchError(err?.message ?? 'Falha ao carregar REF.');
@@ -316,7 +340,7 @@ function ConsultarInner() {
     <div className="min-h-screen bg-[#f4f1ec]">
       {/* Header */}
       <header className="bg-brand text-white sticky top-0 z-30 shadow">
-        <div className="px-4 py-3 flex items-center justify-between max-w-4xl mx-auto gap-3">
+        <div className="px-4 py-3 flex items-center justify-between max-w-6xl mx-auto gap-3">
           <div className="flex items-center gap-2 min-w-0">
             <Link href="/minha-loja" className="p-2 -ml-2 hover:bg-white/10 rounded" title="Voltar"><ArrowLeft className="w-5 h-5" /></Link>
             <Logo height={28} className="brightness-0 invert hidden sm:block" />
@@ -330,7 +354,7 @@ function ConsultarInner() {
       </header>
 
       {/* Tabs + search */}
-      <section className="max-w-4xl mx-auto px-3 pt-3">
+      <section className="max-w-6xl mx-auto px-3 pt-3">
         <ModeTabs mode={mode} onChange={(m) => { setMode(m); setData(null); setPickedRefFromDesc(null); }} />
 
         <div className="relative">
@@ -365,7 +389,7 @@ function ConsultarInner() {
       </section>
 
       {connStatus === 'offline' && (
-        <div className="max-w-4xl mx-auto px-3 mt-3">
+        <div className="max-w-6xl mx-auto px-3 mt-3">
           <div className="bg-red-50 border border-red-300 rounded-lg p-3 flex items-center gap-2 text-red-800 text-sm">
             <AlertCircle className="w-5 h-5 flex-shrink-0" />
             <div><strong>Sem conexão com o servidor.</strong> A busca pode demorar ou falhar. Assim que voltar, roda sozinha.</div>
@@ -373,7 +397,7 @@ function ConsultarInner() {
         </div>
       )}
 
-      <main className="max-w-4xl mx-auto p-3 pb-10">
+      <main className="max-w-6xl mx-auto p-3 pb-10">
         {searchError && <ErrorBox message={searchError} onRetry={() => runSearch(mode, query)} />}
 
         {/* Modo DESC: lista de REFs clicáveis OU detalhe de uma REF escolhida */}
@@ -481,7 +505,7 @@ function DescResults({
 }: {
   data: StoreSearchResult;
   loading: boolean;
-  onPickRef: (ref: string) => void;
+  onPickRef: (ref: string, clickedName?: string) => void;
 }) {
   const refs = data.refMatches ?? [];
   if (refs.length === 0) return null;
@@ -508,7 +532,7 @@ function DescResults({
         {refs.map((r) => (
           <button
             key={r.ref}
-            onClick={() => onPickRef(r.ref)}
+            onClick={() => onPickRef(r.ref, r.name)}
             disabled={loading}
             className="w-full text-left bg-white rounded-xl border border-slate-200 hover:border-brand hover:bg-brand/5 shadow-sm p-4 flex items-start gap-3 transition disabled:opacity-50"
           >
@@ -641,11 +665,35 @@ function ProductCard({ item, highlightSku, myStore }: {
     const cellsByColor = new Map<string, Variant[]>();
     for (const c of colors) {
       cellsByColor.set(c, sizes.map((s) => cellByColorSize.get(c)?.get(s) || {
-        sku: '', cor: c, tamanho: s, myStoreQty: 0,
+        sku: '', cor: c, tamanho: s, myStoreQty: 0, preco: null,
       }));
     }
 
     return { sizes, colors, cellsByColor, totalsBySize, totalsByColor, cellByColorSize };
+  }, [item.variants]);
+
+  // Preços da REF: 1 preço só → mostra no cabeçalho; muda por cor → preço na
+  // linha; muda por tamanho dentro da cor → faixa na linha + exato na célula
+  // clicada (regra do dono 21/07).
+  const priceInfo = useMemo(() => {
+    const all = item.variants
+      .map((v) => v.preco)
+      .filter((p): p is number => p != null && p > 0);
+    const uniq = Array.from(new Set(all.map((p) => Math.round(p * 100))));
+    const min = all.length ? Math.min(...all) : null;
+    const max = all.length ? Math.max(...all) : null;
+    const byColor = new Map<string, { min: number; max: number }>();
+    for (const v of item.variants) {
+      if (v.preco == null || v.preco <= 0) continue;
+      const c = (v.cor || '—').trim();
+      const cur = byColor.get(c);
+      if (!cur) byColor.set(c, { min: v.preco, max: v.preco });
+      else {
+        cur.min = Math.min(cur.min, v.preco);
+        cur.max = Math.max(cur.max, v.preco);
+      }
+    }
+    return { min, max, varies: uniq.length > 1, byColor };
   }, [item.variants]);
 
   // Cor pré-selecionada: se tem SKU bipado, seleciona a cor do SKU.
@@ -664,6 +712,9 @@ function ProductCard({ item, highlightSku, myStore }: {
 
   const [selectedColor, setSelectedColor] = useState<string | null>(highlightedColor);
   const [selectedSize, setSelectedSize] = useState<string | null>(highlightedSize);
+  // Hover na célula da grade → mostra o CÓDIGO DE BARRAS da variante
+  // (cor+tamanho) abaixo do preço da linha da cor (pedido do dono 23/07)
+  const [hoverCell, setHoverCell] = useState<{ cor: string; tamanho: string; sku: string } | null>(null);
   useEffect(() => { setSelectedColor(highlightedColor); }, [highlightedColor]);
   useEffect(() => { setSelectedSize(highlightedSize); }, [highlightedSize]);
 
@@ -719,6 +770,18 @@ function ProductCard({ item, highlightSku, myStore }: {
             <div className="text-xs text-slate-500 mt-0.5">
               {colors.length} cor{colors.length === 1 ? '' : 'es'} · {sizes.length} tamanho{sizes.length === 1 ? '' : 's'}
             </div>
+            {priceInfo.min != null && (
+              <div className="text-lg font-extrabold text-emerald-700 mt-1 leading-none">
+                {!priceInfo.varies
+                  ? fmtBRL(priceInfo.min)
+                  : `${fmtBRL(priceInfo.min)} – ${fmtBRL(priceInfo.max!)}`}
+                {priceInfo.varies && (
+                  <span className="ml-2 text-[10px] font-bold text-amber-600 uppercase tracking-wide align-middle">
+                    preço varia — veja por linha
+                  </span>
+                )}
+              </div>
+            )}
           </div>
           <div className={`text-right flex-shrink-0 ${hasInMyStore ? 'text-emerald-700' : 'text-slate-400'}`}>
             <div className="text-3xl font-extrabold leading-none">{item.myStoreTotal}</div>
@@ -739,7 +802,18 @@ function ProductCard({ item, highlightSku, myStore }: {
               className="text-xs text-brand font-medium hover:underline flex items-center gap-1"
             >
               <X className="w-3 h-3" /> Limpar filtro
-              {selectedColor && <span className="font-normal">({selectedColor}{selectedSize ? ` · ${selectedSize}` : ''})</span>}
+              {selectedColor && (
+                <span className="font-normal">
+                  ({selectedColor}
+                  {selectedSize ? ` · ${selectedSize}` : ''}
+                  {(() => {
+                    // Preço EXATO da célula selecionada (cor + tamanho)
+                    if (!selectedSize) return null;
+                    const v = cellByColorSize.get(selectedColor)?.get(selectedSize);
+                    return v?.preco != null && v.preco > 0 ? ` · ${fmtBRL(v.preco)}` : null;
+                  })()})
+                </span>
+              )}
             </button>
           )}
         </div>
@@ -748,7 +822,7 @@ function ProductCard({ item, highlightSku, myStore }: {
           <table className="w-full text-sm border-collapse">
             <thead>
               <tr className="bg-slate-100 border-b border-slate-200">
-                <th className="text-left px-3 py-2 font-bold text-slate-700 sticky left-0 bg-slate-100 z-10 min-w-[90px]">
+                <th className="text-left px-3 py-2 font-bold text-slate-700 sticky left-0 bg-slate-100 z-10 min-w-[150px]">
                   Cor
                 </th>
                 {sizes.map((s) => (
@@ -788,8 +862,24 @@ function ProductCard({ item, highlightSku, myStore }: {
                         <span className={`w-2 h-2 rounded-full ${
                           colorTotal > 0 ? 'bg-emerald-500' : 'bg-slate-300'
                         }`} />
-                        <span className="truncate max-w-[100px]" title={cor}>{cor}</span>
+                        <span className="truncate max-w-[200px]" title={cor}>{cor}</span>
                       </div>
+                      {priceInfo.varies && (() => {
+                        const pr = priceInfo.byColor.get(cor);
+                        if (!pr) return null;
+                        return (
+                          <div className="text-[10px] font-bold text-emerald-700 mt-0.5 whitespace-nowrap">
+                            {pr.min === pr.max
+                              ? fmtBRL(pr.min)
+                              : `${fmtBRL(pr.min)}–${fmtBRL(pr.max)}`}
+                          </div>
+                        );
+                      })()}
+                      {hoverCell?.cor === cor && (
+                        <div className="text-[10px] font-mono text-slate-500 mt-0.5 whitespace-nowrap">
+                          ||| {hoverCell.sku} · tam {hoverCell.tamanho}
+                        </div>
+                      )}
                     </td>
                     {sizes.map((s) => {
                       const v = cellByColorSize.get(cor)?.get(s);
@@ -797,11 +887,17 @@ function ProductCard({ item, highlightSku, myStore }: {
                       const matched = !!v && highlightSku === v.sku;
                       const isCellSel = isColorSel && selectedSize === s;
                       return (
-                        <td key={s} className="p-0.5 text-center">
+                        <td
+                          key={s}
+                          className="p-0.5 text-center"
+                          onMouseEnter={() => v?.sku && setHoverCell({ cor, tamanho: s, sku: v.sku })}
+                          onMouseLeave={() => setHoverCell((cur) => (cur?.cor === cor && cur?.tamanho === s ? null : cur))}
+                        >
                           <MatrixCell
                             qty={qty}
                             matched={matched}
                             selected={isCellSel}
+                            preco={v?.preco}
                             onClick={() => handleCellClick(cor, s)}
                           />
                         </td>
@@ -1058,7 +1154,7 @@ function StockByStoreMatrix({ item, myStore }: {
                   >
                     <td className="px-2 py-1 sticky left-0 z-10 bg-white border-r border-slate-100 whitespace-nowrap">
                       <span className="inline-flex items-center gap-1 rounded bg-slate-100 px-1.5 py-0.5 font-semibold text-slate-800">
-                        <span className="truncate max-w-[110px]" title={r.cor}>{r.cor}</span>
+                        <span className="truncate max-w-[200px]" title={r.cor}>{r.cor}</span>
                         <span className="text-slate-400 font-normal">·</span>
                         <span>{r.tamanho}</span>
                       </span>
@@ -1121,10 +1217,12 @@ function StockByStoreMatrix({ item, myStore }: {
  *  - ring vinho grosso quando selecionada (filtra outras lojas por essa combinação)
  */
 function MatrixCell({
-  qty, matched, selected, onClick,
-}: { qty: number; matched: boolean; selected: boolean; onClick: () => void }) {
+  qty, matched, selected, onClick, preco,
+}: { qty: number; matched: boolean; selected: boolean; onClick: () => void; preco?: number | null }) {
   const base =
     'mx-auto w-full h-10 rounded flex items-center justify-center font-extrabold relative cursor-pointer transition hover:scale-[1.04] active:scale-95 select-none';
+  // Tooltip: preço na frente (passar o mouse no número mostra o valor)
+  const precoTip = preco != null && preco > 0 ? `${fmtBRL(preco)} · ` : '';
 
   if (qty === 0) {
     // ZERO: sem estoque aqui. Mas clicável — abre o filtro pra ver quem tem.
@@ -1132,7 +1230,7 @@ function MatrixCell({
       <button
         type="button"
         onClick={onClick}
-        title="Sem estoque aqui — clique pra ver quem tem"
+        title={`${precoTip}Sem estoque aqui — clique pra ver quem tem`}
         className={`${base} text-base ${
           selected
             ? 'ring-2 ring-brand bg-brand/10 text-brand'
@@ -1151,7 +1249,7 @@ function MatrixCell({
     <button
       type="button"
       onClick={onClick}
-      title={critico ? 'ÚLTIMA peça deste tamanho/cor — clique pra ver outras lojas' : 'Clique pra filtrar outras lojas por este tamanho/cor'}
+      title={`${precoTip}${critico ? 'ÚLTIMA peça deste tamanho/cor — clique pra ver outras lojas' : 'Clique pra filtrar outras lojas por este tamanho/cor'}`}
       className={`${base} text-base ${
         critico
           ? 'bg-orange-300 text-orange-900 border border-orange-500 hover:bg-orange-400'
@@ -1603,7 +1701,7 @@ function TransferModal({
   return (
     <div
       className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-slate-900/60 backdrop-blur-sm"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      {...overlayClose(onClose)}
     >
       <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl max-w-lg w-full p-5 space-y-4 max-h-[92vh] overflow-y-auto">
         <div className="flex items-start justify-between gap-2">

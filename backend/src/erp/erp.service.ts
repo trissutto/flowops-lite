@@ -1,7 +1,9 @@
 ﻿import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { randomUUID } from 'crypto';
 import * as mysql from 'mysql2/promise';
 import { StockEntry } from '../routing/types';
+import { PrismaService } from '../prisma/prisma.service';
 
 /**
  * Cliente para o MySQL do ERP gigasistemas21 (WinCred).
@@ -23,7 +25,949 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(ErpService.name);
   private pool: mysql.Pool;
 
-  constructor(private readonly config: ConfigService) {}
+  constructor(
+    private readonly config: ConfigService,
+    private readonly prismaFlow: PrismaService,
+  ) {}
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // LEITURAS PELO ESPELHO — GIGA_MIRROR_READS=1 (pacote 1 da migração 13/07)
+  //
+  // Intercepta as consultas de ESTOQUE (giga_estoque) e de FATURAMENTO BRUTO
+  // (giga_caixa_diario) DENTRO do ErpService: todos os consumidores (products,
+  // stock, catalog, live, routing, intelligence, financeiro, faturamento)
+  // trocam de fonte de uma vez, sem tocar em tela nenhuma.
+  //
+  // Segurança: qualquer erro OU espelho vazio (nunca sincronizado) → cai pro
+  // Giga ao vivo, query original intocada. Kill-switch: remover a env.
+  // ═══════════════════════════════════════════════════════════════════════
+
+  private get mirrorReadsEnabled(): boolean {
+    return String(process.env.GIGA_MIRROR_READS ?? '').trim() === '1' && !!this.prismaFlow;
+  }
+
+  /** Cache 60s: espelho de estoque tem dados? (vazio = nunca sincronizou → Giga) */
+  private mirrorStockReadyCache: { ok: boolean; at: number } | null = null;
+  private async mirrorStockReady(): Promise<boolean> {
+    const now = Date.now();
+    if (this.mirrorStockReadyCache && now - this.mirrorStockReadyCache.at < 60_000) {
+      return this.mirrorStockReadyCache.ok;
+    }
+    const n = await (this.prismaFlow as any).gigaEstoque.count().catch(() => 0);
+    const ok = Number(n) > 1000;
+    this.mirrorStockReadyCache = { ok, at: now };
+    return ok;
+  }
+
+  private mirrorCaixaReadyCache: { ok: boolean; at: number } | null = null;
+  private async mirrorCaixaReady(): Promise<boolean> {
+    const now = Date.now();
+    if (this.mirrorCaixaReadyCache && now - this.mirrorCaixaReadyCache.at < 60_000) {
+      return this.mirrorCaixaReadyCache.ok;
+    }
+    const n = await (this.prismaFlow as any).gigaCaixaDiario.count().catch(() => 0);
+    const ok = Number(n) > 10;
+    this.mirrorCaixaReadyCache = { ok, at: now };
+    return ok;
+  }
+
+  /**
+   * COBERTURA DE PERÍODO (fix 13/07): o espelho giga_caixa_diario só guarda o
+   * histórico recente. Consulta que começa ANTES da data mais antiga do
+   * espelho (ex.: comparação "ano anterior" do faturamento) tem que ir pro
+   * Giga ao vivo — senão volta vazio e o gráfico compara com R$ 0,00.
+   */
+  private mirrorCaixaMinCache: { min: Date | null; at: number } | null = null;
+  private async mirrorCaixaCovers(inicio: Date): Promise<boolean> {
+    const now = Date.now();
+    if (!this.mirrorCaixaMinCache || now - this.mirrorCaixaMinCache.at > 60_000) {
+      const row = await (this.prismaFlow as any).gigaCaixaDiario
+        .findFirst({ orderBy: { data: 'asc' }, select: { data: true } })
+        .catch(() => null);
+      this.mirrorCaixaMinCache = { min: row?.data ? new Date(row.data) : null, at: now };
+    }
+    const min = this.mirrorCaixaMinCache.min;
+    if (!min) return false;
+    return inicio.getTime() >= min.getTime();
+  }
+
+  /** getStock (roteamento) pelo espelho — replica a resolução anti-colisão. */
+  private async getStockFromMirror(skus: string[], storeCodes: string[]): Promise<StockEntry[]> {
+    const uniqueOriginals = Array.from(
+      new Set(skus.map((s) => String(s || '').trim()).filter(Boolean)),
+    );
+    if (!uniqueOriginals.length) return [];
+    const { allVariants, variantToOriginal } = this.expandSkus(uniqueOriginals);
+    if (!allVariants.length) return [];
+
+    // PASSO 1 — resolve o CODIGO real no cadastro (espelho giga_produto), com a
+    // mesma regra anti-colisão do caminho ao vivo (prioriza padding mais longo).
+    const prodRows: any[] = await (this.prismaFlow as any).gigaProduto.findMany({
+      where: { codigo: { in: allVariants } },
+      select: { codigo: true },
+    });
+    const codigoGigaToOriginal = new Map<string, string>();
+    for (const r of prodRows) {
+      const codigoGiga = String(r.codigo).trim();
+      const originalSku = variantToOriginal.get(codigoGiga);
+      if (!originalSku) continue;
+      const previous = Array.from(codigoGigaToOriginal.entries()).find(([, o]) => o === originalSku)?.[0];
+      if (!previous) codigoGigaToOriginal.set(codigoGiga, originalSku);
+      else if (codigoGiga.length > previous.length) {
+        codigoGigaToOriginal.delete(previous);
+        codigoGigaToOriginal.set(codigoGiga, originalSku);
+      }
+    }
+    // EAN prefixo 8 (gerado pelo Flow): namespace próprio, sem colisão de
+    // padding — não precisa (nem pode) esperar aparecer no espelho de
+    // cadastro giga_produto (~6h). Entra direto na resolução de estoque.
+    const jaResolvidos = new Set(codigoGigaToOriginal.values());
+    for (const s of uniqueOriginals) {
+      if (/^8\d{12}$/.test(s) && !jaResolvidos.has(s)) codigoGigaToOriginal.set(s, s);
+    }
+    if (!codigoGigaToOriginal.size) return [];
+
+    // PASSO 2 — estoque de TODAS as variantes de padding dos códigos reais.
+    const codigoVariantToOriginal = new Map<string, string>();
+    const codigosVariants: string[] = [];
+    for (const [codigoGiga, originalSku] of codigoGigaToOriginal.entries()) {
+      for (const v of this.skuVariants(codigoGiga)) {
+        codigosVariants.push(v);
+        if (!codigoVariantToOriginal.has(v)) codigoVariantToOriginal.set(v, originalSku);
+      }
+    }
+
+    // Lojas com e sem zero à esquerda (mesma tolerância do caminho ao vivo).
+    const lojaToStoreCode = new Map<string, string>();
+    for (const sc of storeCodes) {
+      const s = String(sc ?? '').trim();
+      if (!s) continue;
+      if (!lojaToStoreCode.has(s)) lojaToStoreCode.set(s, s);
+      if (/^\d{1,2}$/.test(s)) {
+        const padded = s.padStart(2, '0');
+        if (!lojaToStoreCode.has(padded)) lojaToStoreCode.set(padded, s);
+        const stripped = s.replace(/^0+/, '') || s;
+        if (!lojaToStoreCode.has(stripped)) lojaToStoreCode.set(stripped, s);
+      }
+    }
+
+    const rows: any[] = await (this.prismaFlow as any).gigaEstoque.findMany({
+      where: {
+        codigo: { in: codigosVariants },
+        loja: { in: Array.from(lojaToStoreCode.keys()) },
+        estoque: { gt: 0 },
+      },
+      select: { codigo: true, loja: true, estoque: true },
+    });
+    const agg = new Map<string, number>();
+    for (const r of rows) {
+      const storeCode = lojaToStoreCode.get(String(r.loja).trim()) ?? String(r.loja).trim();
+      const originalSku = codigoVariantToOriginal.get(String(r.codigo).trim());
+      if (!originalSku) continue;
+      const key = `${storeCode}::${originalSku}`;
+      agg.set(key, (agg.get(key) || 0) + (Number(r.estoque) || 0));
+    }
+    const out: StockEntry[] = [];
+    for (const [key, qty] of agg.entries()) {
+      const [storeCode, originalSku] = key.split('::');
+      out.push({ storeCode, sku: originalSku, availableQty: qty });
+    }
+    return out;
+  }
+
+  /**
+   * WRITE-THROUGH de estoque nos espelhos (giga_estoque + wincred_estoque).
+   * Entrada/baixa no Giga refletem NA HORA no Flow — sem esperar o full de
+   * hora em hora. Incidente VOGUE VINHO 14/07: entrada de 1un pela tela de
+   * pedidos gravou no Giga, a grade da live (que esconde estoque 0) só veria
+   * o saldo na virada da hora. Best effort: falha aqui NUNCA quebra a
+   * operação principal (o cron continua sendo a fonte de reconciliação).
+   */
+  private async mirrorStockWriteThrough(
+    applied: Array<{ sku: string; storeCode: string; newStock: number }>,
+  ): Promise<void> {
+    for (const a of applied) {
+      try {
+        const lojaRaw = String(a.storeCode || '').trim();
+        const loja2 = /^\d{1}$/.test(lojaRaw) ? lojaRaw.padStart(2, '0') : lojaRaw;
+        const lojas = Array.from(new Set([lojaRaw, loja2, lojaRaw.replace(/^0+/, '') || lojaRaw]));
+        // NAO clampa em 0 (31/07): quando a venda levava o Giga a -1, o Flow
+        // recebia 0 e o negativo ficava INVISIVEL na tela — ninguem sabia que a
+        // loja devia peca. Espelho tem que espelhar, inclusive o que incomoda.
+        const novo = Number(a.newStock) || 0;
+        const variants = this.skuVariants(String(a.sku || '').trim());
+        if (!variants.length || !lojas.length) continue;
+
+        const upd = await (this.prismaFlow as any).gigaEstoque.updateMany({
+          where: { codigo: { in: variants }, loja: { in: lojas } },
+          data: { estoque: novo, syncedAt: new Date() },
+        });
+        if (!upd.count) {
+          await (this.prismaFlow as any).gigaEstoque.create({
+            data: { codigo: String(a.sku).trim(), loja: loja2, estoque: novo },
+          });
+        }
+
+        const codNorm = this.wincredCodigo(String(a.sku).trim());
+        await (this.prismaFlow as any).wincredEstoque.upsert({
+          where: { codigo_loja: { codigo: codNorm, loja: loja2 } },
+          create: { codigo: codNorm, loja: loja2, estoque: novo },
+          update: { estoque: novo, syncedAt: new Date() },
+        });
+      } catch (e) {
+        this.logger.warn(
+          `[mirror-writethrough] estoque ${a.sku}/${a.storeCode}: ${(e as Error).message}`,
+        );
+      }
+    }
+  }
+
+  /**
+   * CONSTITUIÇÃO 14/07 (Flow = fonte): aplica o DELTA de estoque direto nos
+   * espelhos (giga_estoque + wincred_estoque) ANTES do Giga. Retorna o
+   * "applied" no mesmo formato do caminho Giga.
+   */
+  private async mirrorStockApplyDelta(
+    items: Array<{ sku: string; qty: number; storeCode: string }>,
+    sign: 1 | -1,
+    allowNegative: boolean,
+  ): Promise<Array<{ sku: string; storeCode: string; qty: number; previousStock: number; newStock: number }>> {
+    const applied: Array<{ sku: string; storeCode: string; qty: number; previousStock: number; newStock: number }> = [];
+    for (const it of items) {
+      try {
+        const sku = String(it.sku || '').trim();
+        const qty = Math.abs(Number(it.qty) || 0);
+        const lojaRaw = String(it.storeCode || '').trim().toUpperCase().replace(/^LJ/i, '');
+        if (!sku || !qty || !lojaRaw) continue;
+        const loja2 = /^\d{1,2}$/.test(lojaRaw) ? lojaRaw.padStart(2, '0') : lojaRaw;
+        const lojas = Array.from(new Set([lojaRaw, loja2, lojaRaw.replace(/^0+/, '') || lojaRaw]));
+        const variants = this.skuVariants(sku);
+
+        const row: any = await (this.prismaFlow as any).gigaEstoque.findFirst({
+          where: { codigo: { in: variants }, loja: { in: lojas } },
+        });
+        const previousStock = Number(row?.estoque) || 0;
+        let newStock = previousStock + sign * qty;
+        if (newStock < 0 && !allowNegative) newStock = 0;
+
+        if (row) {
+          await (this.prismaFlow as any).gigaEstoque.update({
+            where: { id: row.id },
+            data: { estoque: newStock, syncedAt: new Date() },
+          });
+        } else {
+          await (this.prismaFlow as any).gigaEstoque.create({
+            data: { codigo: sku, loja: loja2, estoque: newStock },
+          });
+        }
+        const codNorm = this.wincredCodigo(sku);
+        await (this.prismaFlow as any).wincredEstoque.upsert({
+          where: { codigo_loja: { codigo: codNorm, loja: loja2 } },
+          create: { codigo: codNorm, loja: loja2, estoque: newStock },
+          update: { estoque: newStock, syncedAt: new Date() },
+        });
+        applied.push({ sku, storeCode: loja2, qty, previousStock, newStock });
+      } catch (e) {
+        this.logger.warn(`[flow-estoque] delta ${it.sku}/${it.storeCode}: ${(e as Error).message}`);
+      }
+    }
+    return applied;
+  }
+
+  /** Enfileira a réplica de estoque pro Giga no erp_outbox (kind estoque_delta).
+   *  `deferred=true` = enfileirado POR DESIGN (fluxo em lote não espera o Giga),
+   *  não por indisponibilidade — só muda o texto do log. */
+  private async enqueueStockDelta(
+    op: 'inc' | 'dec',
+    items: Array<{ sku: string; qty: number; storeCode: string }>,
+    opts?: { allowNegative?: boolean; skipNotFound?: boolean },
+    lastError?: string,
+    deferred = false,
+  ): Promise<void> {
+    try {
+      await (this.prismaFlow as any).erpOutbox.create({
+        data: {
+          kind: 'estoque_delta',
+          saleId: `stk-${randomUUID()}`,
+          payload: { op, items, opts: opts || null },
+          status: 'pending',
+          lastError: lastError ? String(lastError).slice(0, 300) : null,
+        },
+      });
+      if (deferred) {
+        this.logger.log(
+          `[flow-estoque] ${op} de ${items.length} item(ns) enfileirado no outbox (réplica Giga assíncrona)`,
+        );
+      } else {
+        this.logger.warn(
+          `[flow-estoque] Giga indisponível — ${op} de ${items.length} item(ns) enfileirado no outbox (${lastError || 'erro'})`,
+        );
+      }
+    } catch (e) {
+      this.logger.error(`[flow-estoque] falha ao enfileirar ${op}: ${(e as Error).message}`);
+    }
+  }
+
+  /**
+   * Réplica de CLIENTE pro Giga (kind cliente_upsert do outbox). O Flow já é a
+   * fonte da verdade da ficha (giga_clientes flowIsSource) — aqui só mantém a
+   * tabela `clientes` do Giga em dia pro PDV legado/crediário enquanto ele
+   * viver. UPDATE por (CODIGO, LOJA); se não existe (cadastro novo do Flow,
+   * faixa 500001+), INSERT com as colunas conhecidas. Best-effort com retry
+   * do outbox — falha não afeta a ficha no Flow.
+   */
+  async upsertClienteGiga(input: {
+    loja: string;
+    codigo: string;
+    set: Record<string, any>;
+  }): Promise<{ success: boolean; error?: string }> {
+    if (!this.isWriteEnabled) return { success: false, error: 'ERP_WRITE_ENABLED não habilitado' };
+    if (!this.pool) return { success: false, error: 'Pool ERP não inicializado' };
+    const loja = String(input.loja || '').replace(/^LJ/i, '').padStart(2, '0');
+    const codigo = String(input.codigo || '').trim();
+    // Só nomes de coluna seguros (A-Z0-9_) — payload vem do whitelist do Flow.
+    const entries = Object.entries(input.set || {}).filter(([k]) => /^[A-Z0-9_]+$/.test(k));
+    if (!codigo || !entries.length) return { success: false, error: 'payload inválido' };
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT COUNT(*) AS n FROM clientes WHERE CODIGO = ? AND LOJA = ?`,
+        [codigo, loja],
+      );
+      const existe = Number((rows[0] as any)?.n) > 0;
+      if (existe) {
+        const sets = entries.map(([k]) => `\`${k}\` = ?`).join(', ');
+        await this.pool.query(
+          `UPDATE clientes SET ${sets} WHERE CODIGO = ? AND LOJA = ? LIMIT 5`,
+          [...entries.map(([, v]) => v), codigo, loja],
+        );
+      } else {
+        const cols = ['LOJA', 'CODIGO', ...entries.map(([k]) => k)];
+        const placeholders = cols.map(() => '?').join(', ');
+        await this.pool.query(
+          `INSERT INTO clientes (${cols.map((c) => `\`${c}\``).join(', ')}) VALUES (${placeholders})`,
+          [loja, codigo, ...entries.map(([, v]) => v)],
+        );
+      }
+      this.logger.log(`[cliente-giga] réplica ${existe ? 'UPDATE' : 'INSERT'} ${loja}/${codigo} (${entries.length} campo(s))`);
+      return { success: true };
+    } catch (e: any) {
+      const msg = String(e?.message || e);
+      this.logger.error(`[cliente-giga] réplica falhou ${loja}/${codigo}: ${msg}`);
+      return { success: false, error: msg };
+    }
+  }
+
+  /** Réplica Giga-only usada pelo outbox (kind estoque_delta). O delta já foi
+   *  aplicado no Flow no momento da operação — aqui NÃO mexe no espelho de
+   *  novo (o writeThrough absoluto pós-sucesso reconcilia). */
+  async applyStockDeltaGigaOnly(
+    op: 'inc' | 'dec',
+    items: Array<{ sku: string; qty: number; storeCode: string }>,
+    opts?: { allowNegative?: boolean; skipNotFound?: boolean },
+  ): Promise<{ success: boolean; error?: string }> {
+    const r = op === 'inc'
+      ? await this.increaseStockGigaOnly(items)
+      : await this.decreaseStockGigaOnly(items, opts);
+    return { success: r.success, error: r.error };
+  }
+
+  /** getStockTotalBySkus pelo espelho — inclui a regra "existe no cadastro = 0". */
+  private async getStockTotalBySkusFromMirror(skus: string[]): Promise<Record<string, number>> {
+    const unique = Array.from(new Set(skus.filter((s) => s && s.trim()))).map((s) => s.trim());
+    if (!unique.length) return {};
+    const { allVariants, variantToOriginal } = this.expandSkus(unique);
+    if (!allVariants.length) return {};
+
+    const existsInProducts = new Set<string>();
+    const prodRows: any[] = await (this.prismaFlow as any).gigaProduto.findMany({
+      where: { codigo: { in: allVariants } },
+      select: { codigo: true },
+    });
+    for (const r of prodRows) {
+      const codigoGiga = String(r.codigo).trim();
+      existsInProducts.add(variantToOriginal.get(codigoGiga) || codigoGiga);
+    }
+
+    const rows: any[] = await (this.prismaFlow as any).gigaEstoque.findMany({
+      where: { codigo: { in: allVariants } },
+      select: { codigo: true, estoque: true },
+    });
+    const result: Record<string, number> = {};
+    for (const r of rows) {
+      const original = variantToOriginal.get(String(r.codigo).trim()) || String(r.codigo).trim();
+      result[original] = (result[original] || 0) + (Number(r.estoque) || 0);
+    }
+    for (const sku of existsInProducts) {
+      if (!(sku in result)) result[sku] = 0;
+    }
+    return result;
+  }
+
+  /** getStockBySkusDetailed pelo espelho (por loja, só positivos). */
+  private async getStockBySkusDetailedFromMirror(
+    skus: string[],
+  ): Promise<Record<string, Array<{ storeCode: string; qty: number }>>> {
+    const unique = Array.from(new Set(skus.filter((s) => s && s.trim()))).map((s) => s.trim());
+    if (!unique.length) return {};
+    const { allVariants, variantToOriginal } = this.expandSkus(unique);
+    if (!allVariants.length) return {};
+    const rows: any[] = await (this.prismaFlow as any).gigaEstoque.findMany({
+      where: { codigo: { in: allVariants }, estoque: { gt: 0 } },
+      select: { codigo: true, loja: true, estoque: true },
+    });
+    const agg = new Map<string, Map<string, number>>();
+    for (const r of rows) {
+      const original = variantToOriginal.get(String(r.codigo).trim()) || String(r.codigo).trim();
+      const storeCode = String(r.loja).trim();
+      const qty = Number(r.estoque) || 0;
+      if (qty <= 0) continue;
+      if (!agg.has(original)) agg.set(original, new Map());
+      const lojaMap = agg.get(original)!;
+      lojaMap.set(storeCode, (lojaMap.get(storeCode) || 0) + qty);
+    }
+    const map: Record<string, Array<{ storeCode: string; qty: number }>> = {};
+    for (const [sku, lojaMap] of agg.entries()) {
+      map[sku] = Array.from(lojaMap.entries())
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([storeCode, qty]) => ({ storeCode, qty }));
+    }
+    return map;
+  }
+
+  /** getStockBySkuAndStores pelo espelho (soma por loja das variantes do SKU). */
+  private async getStockBySkuAndStoresFromMirror(
+    sku: string,
+    storeCodes: string[],
+  ): Promise<Map<string, number>> {
+    const out = new Map<string, number>();
+    const variants = this.skuVariants(sku);
+    if (!variants.length) return out;
+    const lojaToStoreCode = new Map<string, string>();
+    for (const sc of storeCodes) {
+      const s = String(sc ?? '').trim();
+      if (!s) continue;
+      if (!lojaToStoreCode.has(s)) lojaToStoreCode.set(s, s);
+      if (/^\d{1,2}$/.test(s)) {
+        const padded = s.padStart(2, '0');
+        if (!lojaToStoreCode.has(padded)) lojaToStoreCode.set(padded, s);
+        const stripped = s.replace(/^0+/, '') || s;
+        if (!lojaToStoreCode.has(stripped)) lojaToStoreCode.set(stripped, s);
+      }
+    }
+    const rows: any[] = await (this.prismaFlow as any).gigaEstoque.findMany({
+      where: { codigo: { in: variants }, loja: { in: Array.from(lojaToStoreCode.keys()) } },
+      select: { loja: true, estoque: true },
+    });
+    for (const r of rows) {
+      const storeCode = lojaToStoreCode.get(String(r.loja).trim()) ?? String(r.loja).trim();
+      out.set(storeCode, (out.get(storeCode) || 0) + (Number(r.estoque) || 0));
+    }
+    return out;
+  }
+
+  /** Espelho de funcionarios pronto? (vazio = nunca sincronizou → Giga) */
+  private mirrorFuncReadyCache: { ok: boolean; at: number } | null = null;
+  private async mirrorFuncReady(): Promise<boolean> {
+    const now = Date.now();
+    if (this.mirrorFuncReadyCache && now - this.mirrorFuncReadyCache.at < 60_000) {
+      return this.mirrorFuncReadyCache.ok;
+    }
+    const n = await (this.prismaFlow as any).wincredFuncionario.count().catch(() => 0);
+    const ok = Number(n) > 5;
+    this.mirrorFuncReadyCache = { ok, at: now };
+    return ok;
+  }
+
+  /** Espelho tem EANs preenchidos? (coluna nova — só usa depois do 1º sync) */
+  private mirrorEanReadyCache: { ok: boolean; at: number } | null = null;
+  private async mirrorEanReady(): Promise<boolean> {
+    const now = Date.now();
+    if (this.mirrorEanReadyCache && now - this.mirrorEanReadyCache.at < 300_000) {
+      return this.mirrorEanReadyCache.ok;
+    }
+    const n = await (this.prismaFlow as any).wincredProduto
+      .count({ where: { ean: { not: null } } })
+      .catch(() => 0);
+    const ok = Number(n) > 100;
+    this.mirrorEanReadyCache = { ok, at: now };
+    return ok;
+  }
+
+  /** normalização de codigo padrão wincred (sem zeros à esquerda). */
+  private wincredCodigo(raw: string): string {
+    const s = String(raw ?? '').trim();
+    if (!s || !/^\d+$/.test(s)) return s;
+    return s.replace(/^0+/, '') || '0';
+  }
+
+  private async getEansBySkusFromMirror(skus: string[]): Promise<Record<string, string>> {
+    const originals = skus.map((s) => String(s || '').trim()).filter(Boolean);
+    const normToOriginal = new Map<string, string>();
+    for (const s of originals) {
+      const n = this.wincredCodigo(s);
+      if (!normToOriginal.has(n)) normToOriginal.set(n, s);
+    }
+    const rows: any[] = await (this.prismaFlow as any).wincredProduto.findMany({
+      where: { codigo: { in: Array.from(normToOriginal.keys()) }, ean: { not: null } },
+      select: { codigo: true, ean: true },
+    });
+    const map: Record<string, string> = {};
+    for (const r of rows) {
+      const original = normToOriginal.get(String(r.codigo).trim());
+      const ean = r.ean ? String(r.ean).trim() : '';
+      if (original && ean && ean.length >= 8 && !map[original]) map[original] = ean;
+    }
+    return map;
+  }
+
+  private async findSkuByAnyEanFromMirror(list: string[]): Promise<string | null> {
+    // 1) codigo primeiro (mesma prioridade do caminho ao vivo: etiquetas da
+    //    Lurd's carregam o CODIGO interno como barcode).
+    const norms = Array.from(new Set(list.map((v) => this.wincredCodigo(v))));
+    const byCodigo: any = await (this.prismaFlow as any).wincredProduto.findFirst({
+      where: { codigo: { in: norms } },
+      select: { codigo: true },
+    });
+    if (byCodigo?.codigo) return String(byCodigo.codigo).trim();
+    // 2) colunas de EAN propriamente ditas.
+    const byEan: any = await (this.prismaFlow as any).wincredProduto.findFirst({
+      where: { ean: { in: list } },
+      select: { codigo: true },
+    });
+    return byEan?.codigo ? String(byEan.codigo).trim() : null;
+  }
+
+  /** getSalesGrossByStores pelo espelho giga_caixa_diario (bruto por loja/dia). */
+  private async getSalesGrossByStoresFromMirror(
+    storeCodes: string[],
+    inicio: Date,
+    fim: Date,
+  ): Promise<Map<string, number>> {
+    const out = new Map<string, number>();
+    const lojaToStoreCode = new Map<string, string>();
+    for (const sc of storeCodes) {
+      const s = String(sc ?? '').trim();
+      if (!s) continue;
+      lojaToStoreCode.set(s, s);
+      if (/^\d{1,2}$/.test(s)) lojaToStoreCode.set(s.padStart(2, '0'), s);
+    }
+    const rows: any[] = await (this.prismaFlow as any).gigaCaixaDiario.findMany({
+      where: {
+        loja: { in: Array.from(lojaToStoreCode.keys()) },
+        data: { gte: inicio, lte: fim },
+      },
+      select: { loja: true, bruto: true },
+    });
+    for (const r of rows) {
+      const storeCode = lojaToStoreCode.get(String(r.loja).trim()) ?? String(r.loja).trim();
+      out.set(storeCode, (out.get(storeCode) || 0) + (Number(r.bruto) || 0));
+    }
+    return out;
+  }
+
+  /** getFaturamentoTimeseries pelo espelho (bucket dia/semana/mês por loja). */
+  private async getFaturamentoTimeseriesFromMirror(
+    inicio: Date,
+    fim: Date,
+    granularity: 'day' | 'week' | 'month',
+  ): Promise<Array<{ bucket: string; storeCode: string; faturamento: number }>> {
+    const rows: any[] = await (this.prismaFlow as any).gigaCaixaDiario.findMany({
+      where: { data: { gte: inicio, lte: fim } },
+      select: { loja: true, data: true, bruto: true },
+    });
+    const bucketOf = (d: Date): string => {
+      const ymd = new Date(d);
+      if (granularity === 'month') {
+        return `${ymd.getUTCFullYear()}-${String(ymd.getUTCMonth() + 1).padStart(2, '0')}-01`;
+      }
+      if (granularity === 'week') {
+        // Bucket = segunda-feira da semana (aprox. do %x-%v do MySQL).
+        const day = ymd.getUTCDay() || 7;
+        const monday = new Date(ymd);
+        monday.setUTCDate(ymd.getUTCDate() - (day - 1));
+        return monday.toISOString().slice(0, 10);
+      }
+      return ymd.toISOString().slice(0, 10);
+    };
+    const agg = new Map<string, number>();
+    for (const r of rows) {
+      const key = `${bucketOf(new Date(r.data))}::${String(r.loja).trim()}`;
+      agg.set(key, (agg.get(key) || 0) + (Number(r.bruto) || 0));
+    }
+    return Array.from(agg.entries())
+      .map(([key, faturamento]) => {
+        const [bucket, storeCode] = key.split('::');
+        return { bucket, storeCode, faturamento: Number(faturamento.toFixed(2)) };
+      })
+      .sort((a, b) => a.bucket.localeCompare(b.bucket) || a.storeCode.localeCompare(b.storeCode));
+  }
+
+  // ── CAIXA DETALHADA (giga_caixa_mov) — Dia 2 da migração 14/07 ────────────
+  // Versões-espelho dos relatórios de vendas. Mesmos filtros do Giga:
+  // MARCADO<>'SIM', DATA em [inicio, fim), loja com/sem zero à esquerda.
+  // JOIN com a tabela nativa `product` substitui o JOIN caixa×produtos
+  // (ltrim(codigo,'0') = codigo normalizado do nativo).
+
+  private mirrorCaixaMovReadyCache: { ok: boolean; at: number } | null = null;
+  private async mirrorCaixaMovReady(): Promise<boolean> {
+    const now = Date.now();
+    if (this.mirrorCaixaMovReadyCache && now - this.mirrorCaixaMovReadyCache.at < 60_000) {
+      return this.mirrorCaixaMovReadyCache.ok;
+    }
+    const n = await (this.prismaFlow as any).gigaCaixaMov.count().catch(() => 0);
+    const ok = Number(n) > 1000;
+    this.mirrorCaixaMovReadyCache = { ok, at: now };
+    return ok;
+  }
+
+  private mirrorCaixaMovMinCache: { min: Date | null; at: number } | null = null;
+  private async mirrorCaixaMovCovers(inicio: Date): Promise<boolean> {
+    const now = Date.now();
+    if (!this.mirrorCaixaMovMinCache || now - this.mirrorCaixaMovMinCache.at > 60_000) {
+      // INÍCIO ROBUSTO, não MIN(data) cru (incidente 31/07: "faturamento do
+      // ano anterior R$ 0,00"). Bastava UMA linha com data errada lá atrás
+      // (sobra do incidente DATAALT) pro espelho "achar que cobre" um período
+      // que está vazio — e responder ZERO sem erro, em vez de cair pro Giga
+      // vivo. O OFFSET pula até 100 linhas perdidas antes do backfill real;
+      // um mês de verdade tem dezenas de milhares.
+      const rows: any[] = await (this.prismaFlow as any)
+        .$queryRawUnsafe(
+          `SELECT data FROM giga_caixa_mov WHERE data IS NOT NULL ORDER BY data ASC OFFSET 100 LIMIT 1`,
+        )
+        .catch(() => []);
+      const min = rows?.[0]?.data ? new Date(rows[0].data) : null;
+      this.mirrorCaixaMovMinCache = { min, at: now };
+    }
+    const min = this.mirrorCaixaMovMinCache.min;
+    if (!min) return false;
+    return inicio.getTime() >= min.getTime();
+  }
+
+  /** true quando o espelho detalhado pode responder o período pedido. */
+  private async caixaMovUsable(inicio: Date): Promise<boolean> {
+    if (!this.mirrorReadsEnabled) return false;
+    return (await this.mirrorCaixaMovReady()) && (await this.mirrorCaixaMovCovers(inicio));
+  }
+
+  private lojaVariants2(loja?: string | null): string[] | null {
+    if (!loja) return null;
+    const s = String(loja).trim().toUpperCase();
+    const set = new Set<string>([s]);
+    if (/^\d{1,2}$/.test(s)) {
+      set.add(s.padStart(2, '0'));
+      set.add(s.replace(/^0+/, '') || s);
+    }
+    return Array.from(set);
+  }
+
+  private async salesByStoreLastDaysFromMirror(n: number) {
+    const rows: any[] = await (this.prismaFlow as any).$queryRawUnsafe(
+      `SELECT loja AS "storeCode",
+              COALESCE(SUM(quantidade), 0)::float8 AS units,
+              COUNT(DISTINCT numero)::int AS orders
+         FROM giga_caixa_mov
+        WHERE data >= CURRENT_DATE - $1::int
+          AND (marcado IS NULL OR marcado <> 'SIM')
+        GROUP BY loja`,
+      n,
+    );
+    return rows.map((r) => ({
+      storeCode: String(r.storeCode || '').trim(),
+      units: Number(r.units) || 0,
+      orders: Number(r.orders) || 0,
+    }));
+  }
+
+  private async salesByStoresInRangeFromMirror(inicio: Date, fim: Date, plusSize: boolean) {
+    const out = new Map<string, { pecas: number; valor: number }>();
+    const join = plusSize
+      ? `INNER JOIN product p ON p.codigo = ltrim(m.codigo, '0')
+           AND (COALESCE(p."plusSize", 0) > 0 OR upper(COALESCE(p."descricaoCompleta", '')) LIKE '%PLUS SIZE%')`
+      : '';
+    const rows: any[] = await (this.prismaFlow as any).$queryRawUnsafe(
+      `SELECT m.loja AS "storeCode",
+              COALESCE(SUM(m.quantidade), 0)::float8 AS pecas,
+              COALESCE(SUM(m.valor_total), 0)::float8 AS valor
+         FROM giga_caixa_mov m
+         ${join}
+        WHERE m.data >= $1 AND m.data < $2
+          AND (m.marcado IS NULL OR m.marcado <> 'SIM')
+        GROUP BY m.loja`,
+      inicio, fim,
+    );
+    for (const r of rows) {
+      const code = String(r.storeCode || '').trim();
+      if (!code) continue;
+      out.set(code, { pecas: Number(r.pecas) || 0, valor: Number(r.valor) || 0 });
+    }
+    return out;
+  }
+
+  private async salesSummaryFromMirror(inicio: Date, fim: Date, storeCode?: string | null) {
+    const lojas = this.lojaVariants2(storeCode);
+    const lojaCond = lojas ? `AND loja = ANY($3)` : '';
+    const rows: any[] = await (this.prismaFlow as any).$queryRawUnsafe(
+      `SELECT COALESCE(SUM(quantidade), 0)::float8 AS pecas,
+              COALESCE(SUM(valor_total), 0)::float8 AS valor,
+              COUNT(DISTINCT loja || '-' || COALESCE(numero, ''))::int AS vendas
+         FROM giga_caixa_mov
+        WHERE data >= $1 AND data < $2
+          AND (marcado IS NULL OR marcado <> 'SIM')
+          ${lojaCond}`,
+      ...(lojas ? [inicio, fim, lojas] : [inicio, fim]),
+    );
+    const r: any = rows[0] || {};
+    const pecas = Number(r.pecas) || 0;
+    const valor = Number(r.valor) || 0;
+    const vendas = Number(r.vendas) || 0;
+    return { pecas, valor, vendas, ticketMedio: vendas > 0 ? valor / vendas : 0 };
+  }
+
+  private async salesByDayFromMirror(inicio: Date, fim: Date, storeCode?: string | null) {
+    const lojas = this.lojaVariants2(storeCode);
+    const lojaCond = lojas ? `AND loja = ANY($3)` : '';
+    const rows: any[] = await (this.prismaFlow as any).$queryRawUnsafe(
+      `SELECT data AS d,
+              COALESCE(SUM(quantidade), 0)::float8 AS pecas,
+              COALESCE(SUM(valor_total), 0)::float8 AS valor
+         FROM giga_caixa_mov
+        WHERE data >= $1 AND data < $2
+          AND (marcado IS NULL OR marcado <> 'SIM')
+          ${lojaCond}
+        GROUP BY data
+        ORDER BY data ASC`,
+      ...(lojas ? [inicio, fim, lojas] : [inicio, fim]),
+    );
+    return rows.map((r) => ({
+      date: r.d instanceof Date ? r.d.toISOString().slice(0, 10) : String(r.d).slice(0, 10),
+      pecas: Number(r.pecas) || 0,
+      valor: Number(r.valor) || 0,
+    }));
+  }
+
+  private async salesMonthAggFromMirror(inicio: Date, fim: Date, storeCode?: string | null) {
+    const lojas = this.lojaVariants2(storeCode);
+    const lojaCond = lojas ? `AND loja = ANY($3)` : '';
+    const rows: any[] = await (this.prismaFlow as any).$queryRawUnsafe(
+      `SELECT EXTRACT(YEAR FROM data)::int AS y,
+              EXTRACT(MONTH FROM data)::int AS m,
+              COALESCE(SUM(quantidade), 0)::float8 AS pecas,
+              COALESCE(SUM(valor_total), 0)::float8 AS valor
+         FROM giga_caixa_mov
+        WHERE data >= $1 AND data < $2
+          AND (marcado IS NULL OR marcado <> 'SIM')
+          ${lojaCond}
+        GROUP BY 1, 2
+        ORDER BY 1, 2`,
+      ...(lojas ? [inicio, fim, lojas] : [inicio, fim]),
+    );
+    return rows.map((r) => ({
+      y: Number(r.y), m: Number(r.m),
+      pecas: Number(r.pecas) || 0, valor: Number(r.valor) || 0,
+    }));
+  }
+
+  private async uniqueClientesFromMirror(inicio: Date, fim: Date, storeCode?: string | null) {
+    const lojas = this.lojaVariants2(storeCode);
+    const lojaCond = lojas ? `AND loja = ANY($3)` : '';
+    const rows: any[] = await (this.prismaFlow as any).$queryRawUnsafe(
+      `SELECT COUNT(DISTINCT cod_cliente)::int AS clientes
+         FROM giga_caixa_mov
+        WHERE data >= $1 AND data < $2
+          AND (marcado IS NULL OR marcado <> 'SIM')
+          AND NULLIF(trim(cod_cliente), '') IS NOT NULL
+          AND trim(cod_cliente) <> '0'
+          ${lojaCond}`,
+      ...(lojas ? [inicio, fim, lojas] : [inicio, fim]),
+    );
+    return Number(rows[0]?.clientes) || 0;
+  }
+
+  private async topRefsFromMirror(input: {
+    inicio: Date; fim: Date; storeCode?: string | null; plusSize?: boolean;
+    orderBy: 'pecas' | 'valor'; limit: number;
+  }) {
+    const lojas = this.lojaVariants2(input.storeCode);
+    const lojaCond = lojas ? `AND m.loja = ANY($3)` : '';
+    const plusCond = input.plusSize
+      ? `AND (COALESCE(p."plusSize", 0) > 0 OR upper(COALESCE(p."descricaoCompleta", '')) LIKE '%PLUS SIZE%')`
+      : '';
+    const rows: any[] = await (this.prismaFlow as any).$queryRawUnsafe(
+      `SELECT p.ref AS "refCode",
+              MAX(p."descricaoCompleta") AS descricao,
+              COALESCE(SUM(agg.pecas), 0)::float8 AS pecas,
+              COALESCE(SUM(agg.valor), 0)::float8 AS valor
+         FROM (
+           SELECT m.codigo,
+                  SUM(m.quantidade) AS pecas,
+                  SUM(m.valor_total) AS valor
+             FROM giga_caixa_mov m
+            WHERE m.data >= $1 AND m.data < $2
+              AND (m.marcado IS NULL OR m.marcado <> 'SIM')
+              ${lojaCond}
+            GROUP BY m.codigo
+         ) agg
+         INNER JOIN product p ON p.codigo = ltrim(agg.codigo, '0')
+        WHERE p.ref IS NOT NULL AND p.ref <> ''
+          ${plusCond}
+        GROUP BY p.ref
+        ORDER BY ${input.orderBy === 'valor' ? 'valor' : 'pecas'} DESC
+        LIMIT ${input.limit}`,
+      ...(lojas ? [input.inicio, input.fim, lojas] : [input.inicio, input.fim]),
+    );
+    return rows.map((r) => ({
+      refCode: String(r.refCode || '').trim(),
+      descricao: r.descricao ? String(r.descricao).trim() : null,
+      pecas: Number(r.pecas) || 0,
+      valor: Number(r.valor) || 0,
+    }));
+  }
+
+  private async topVendedorasFromMirror(input: {
+    inicio: Date; fim: Date; storeCode?: string | null; limit: number;
+  }) {
+    const lojas = this.lojaVariants2(input.storeCode);
+    const lojaCond = lojas ? `AND m.loja = ANY($3)` : '';
+    const rows: any[] = await (this.prismaFlow as any).$queryRawUnsafe(
+      `SELECT trim(m.vendedor) AS codigo,
+              MAX(COALESCE(f.nome, '')) AS nome,
+              COALESCE(SUM(m.quantidade), 0)::float8 AS pecas,
+              COALESCE(SUM(m.valor_total), 0)::float8 AS valor,
+              COUNT(DISTINCT m.loja || '-' || COALESCE(m.numero, ''))::int AS vendas
+         FROM giga_caixa_mov m
+         LEFT JOIN wincred_funcionarios f
+                ON trim(f.codigo) = trim(m.vendedor)
+               AND ltrim(COALESCE(f.loja, ''), '0') = ltrim(COALESCE(m.loja, ''), '0')
+        WHERE m.data >= $1 AND m.data < $2
+          AND (m.marcado IS NULL OR m.marcado <> 'SIM')
+          AND m.vendedor IS NOT NULL
+          ${lojaCond}
+        GROUP BY trim(m.vendedor)
+        ORDER BY valor DESC
+        LIMIT ${input.limit}`,
+      ...(lojas ? [input.inicio, input.fim, lojas] : [input.inicio, input.fim]),
+    );
+    return rows.map((r) => ({
+      codigo: String(r.codigo || '').trim(),
+      nome: String(r.nome || '').trim(),
+      pecas: Number(r.pecas) || 0,
+      valor: Number(r.valor) || 0,
+      vendas: Number(r.vendas) || 0,
+    }));
+  }
+
+  private async topMarcasFromMirror(input: {
+    inicio: Date; fim: Date; storeCode?: string | null; limit: number;
+  }) {
+    const lojas = this.lojaVariants2(input.storeCode);
+    const lojaCond = lojas ? `AND m.loja = ANY($3)` : '';
+    const rows: any[] = await (this.prismaFlow as any).$queryRawUnsafe(
+      `SELECT upper(trim(p.marca)) AS marca,
+              COALESCE(SUM(agg.pecas), 0)::float8 AS pecas,
+              COALESCE(SUM(agg.valor), 0)::float8 AS valor
+         FROM (
+           SELECT m.codigo,
+                  SUM(m.quantidade) AS pecas,
+                  SUM(m.valor_total) AS valor
+             FROM giga_caixa_mov m
+            WHERE m.data >= $1 AND m.data < $2
+              AND (m.marcado IS NULL OR m.marcado <> 'SIM')
+              ${lojaCond}
+            GROUP BY m.codigo
+         ) agg
+         INNER JOIN product p ON p.codigo = ltrim(agg.codigo, '0')
+        WHERE p.marca IS NOT NULL AND trim(p.marca) <> ''
+        GROUP BY upper(trim(p.marca))
+        ORDER BY valor DESC
+        LIMIT ${input.limit}`,
+      ...(lojas ? [input.inicio, input.fim, lojas] : [input.inicio, input.fim]),
+    );
+    return rows.map((r) => ({
+      marca: String(r.marca || '').trim(),
+      pecas: Number(r.pecas) || 0,
+      valor: Number(r.valor) || 0,
+    }));
+  }
+
+  private async lookupSaleHistoryFromMirror(storeCode: string, sku: string, dias: number) {
+    const lojaClean = String(storeCode).trim().toUpperCase();
+    const lojas = this.lojaVariants2(lojaClean)!;
+    const variants = this.skuVariants(String(sku).trim());
+    // Produto/preço atual: tabela nativa (codigo normalizado)
+    const norms = Array.from(new Set(variants.map((v) => this.wincredCodigo(v))));
+    const prod: any = await (this.prismaFlow as any).product.findFirst({
+      where: { codigo: { in: norms } },
+      select: { codigo: true, descricaoCompleta: true, cor: true, tamanho: true, vendaUn: true },
+    });
+    const produto = prod
+      ? {
+          codigo: String(prod.codigo).trim(),
+          descricao: String(prod.descricaoCompleta || '').trim(),
+          cor: prod.cor ? String(prod.cor).trim() : null,
+          tamanho: prod.tamanho ? String(prod.tamanho).trim() : null,
+          preco: prod.vendaUn != null ? Math.round(Number(prod.vendaUn) * 100) / 100 : 0,
+        }
+      : null;
+    const rows: any[] = await (this.prismaFlow as any).gigaCaixaMov.findMany({
+      where: {
+        loja: { in: lojas },
+        codigo: { in: variants },
+        data: { gte: new Date(Date.now() - dias * 86400_000) },
+        OR: [{ marcado: null }, { marcado: { not: 'SIM' } }],
+        quantidade: { gt: 0 },
+      },
+      orderBy: { data: 'desc' },
+      take: 20,
+      select: { data: true, numero: true, quantidade: true, valorTotal: true },
+    });
+    const vendas = rows.map((r) => ({
+      data: r.data ? new Date(r.data).toISOString().slice(0, 10) : '',
+      numero: String(r.numero || ''),
+      quantidade: Number(r.quantidade) || 0,
+      valor: Number(r.valorTotal) || 0,
+    }));
+    return { found: vendas.length > 0, salesCount: vendas.length, vendas, produto };
+  }
+
+  private async vendasCaixaFromMirror(loja: string, from: string, toExclusive: string) {
+    const lojas = this.lojaVariants2(loja)!;
+    const rows: any[] = await (this.prismaFlow as any).$queryRawUnsafe(
+      `SELECT numero AS "NUMERO",
+              data_fec AS "DATAFEC",
+              data AS "DATA",
+              loja AS "LOJA",
+              MAX(nome_cliente) AS "NOME_CLIENTE",
+              MAX(cpf) AS "CPFCNPJ",
+              MAX(vendedora) AS "VENDEDORA",
+              MAX(fpag) AS "FPAG",
+              MAX(vendedora_code) AS "CODFUNCIONARIO",
+              MAX(obs_pedido) AS "OBS_PEDIDO",
+              ROUND(SUM(COALESCE(valor_unitario, 0) * COALESCE(quantidade, 0))::numeric, 2)::float8 AS "VALOR_TOTAL",
+              COALESCE(SUM(quantidade), 0)::float8 AS "QTD_ITENS"
+         FROM giga_caixa_mov
+        WHERE loja = ANY($1)
+          AND data_fec >= $2::date
+          AND data_fec < $3::date
+          AND (marcado IS NULL OR marcado <> 'SIM')
+        GROUP BY numero, data_fec, data, loja
+        ORDER BY data_fec DESC, numero DESC
+        LIMIT 500`,
+      lojas, from, toExclusive,
+    );
+    return rows.map((r) => ({
+      numero: r.NUMERO,
+      data: r.DATAFEC || r.DATA,
+      loja: r.LOJA,
+      cliente: r.NOME_CLIENTE,
+      cpf: r.CPFCNPJ,
+      vendedora: r.VENDEDORA,
+      fpag: r.FPAG,
+      codFuncionario: r.CODFUNCIONARIO,
+      obsPedido: r.OBS_PEDIDO,
+      total: Number(r.VALOR_TOTAL) || 0,
+      qtdItens: Number(r.QTD_ITENS) || 0,
+    }));
+  }
 
   // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
   // HELPERS DE NORMALIZAÃ‡ÃƒO DE SKU
@@ -350,6 +1294,35 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * que não existirem (robusto a nomes diferentes). PROPAGA o erro (com retry).
    */
   /** Espelho de estoque do Giga: CODIGO x LOJA x ESTOQUE (só > 0) pro mirror. */
+  /**
+   * ESTOQUE COMPLETO DO GIGA — inclui ZERO e NEGATIVO.
+   *
+   * O `getGigaEstoque()` agrega por SKU/loja e descarta só a linha ZERADA
+   * (ausência já significa zero). Pra CONFERIR Flow × Giga a gente quer a
+   * tabela crua, linha a linha, inclusive os zeros.
+   */
+  async getEstoqueGigaCompleto(): Promise<Array<{ codigo: string; loja: string; estoque: number }>> {
+    if (!this.pool) return [];
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>({
+        sql: `SELECT CODIGO AS codigo, LOJA AS loja, SUM(ESTOQUE) AS estoque
+                FROM estoque
+               GROUP BY CODIGO, LOJA`,
+        timeout: 300_000,
+      } as any);
+      return (rows as any[])
+        .map((r) => ({
+          codigo: String(r.codigo ?? '').trim(),
+          loja: String(r.loja ?? '').trim(),
+          estoque: Number(r.estoque) || 0,
+        }))
+        .filter((r) => r.codigo && r.loja);
+    } catch (e) {
+      this.logger.error(`getEstoqueGigaCompleto falhou: ${(e as Error).message}`);
+      return [];
+    }
+  }
+
   async getGigaEstoque(): Promise<Array<{ codigo: string; loja: string; estoque: number }>> {
     if (!this.pool) return [];
     try {
@@ -357,7 +1330,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       const [rows] = await this.pool.query<mysql.RowDataPacket[]>({
         sql: `SELECT CODIGO AS codigo, LOJA AS loja, SUM(ESTOQUE) AS estoque
            FROM estoque
-          WHERE ESTOQUE > 0
+          WHERE ESTOQUE <> 0
           GROUP BY CODIGO, LOJA`,
         timeout: 300_000,
       } as any);
@@ -367,7 +1340,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           loja: String(r.loja ?? '').trim(),
           estoque: Number(r.estoque) || 0,
         }))
-        .filter((r) => r.codigo && r.loja && r.estoque > 0);
+        .filter((r) => r.codigo && r.loja && r.estoque !== 0);
     } catch (e) {
       this.logger.error(`getGigaEstoque falhou: ${(e as Error).message}`);
       return [];
@@ -456,7 +1429,34 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * O `storeCode` deve estar padronizado no formato Giga: 2 dÃ­gitos (01..20).
    * A funÃ§Ã£o normaliza strings tipo "LJ01" â†’ "01" automaticamente.
    */
+  /**
+   * BAIXA de estoque — CONSTITUIÇÃO 14/07: TUDO NO FLOW, GIGA SÓ ESPELHO.
+   * O Flow (espelhos giga_estoque/wincred_estoque) é a FONTE: o delta aplica
+   * aqui NA HORA (grade/separação/PDV veem em segundos). O Giga recebe a
+   * réplica em seguida; se estiver pendurado/fora, vai pra fila do outbox
+   * (kind estoque_delta) e a operação NÃO trava nem falha.
+   */
   async decreaseStock(
+    items: Array<{ sku: string; qty: number; storeCode: string }>,
+    opts?: { allowNegative?: boolean; skipNotFound?: boolean },
+  ): Promise<{
+    success: boolean;
+    applied: Array<{ sku: string; storeCode: string; qty: number; previousStock: number; newStock: number }>;
+    error?: string;
+    attempts?: number;
+    gigaEnfileirado?: boolean;
+  }> {
+    if (!this.isWriteEnabled || !this.pool || !items.length) {
+      return this.decreaseStockGigaOnly(items, opts); // shadow/sem pool: comportamento legado
+    }
+    const flowApplied = await this.mirrorStockApplyDelta(items, -1, !!opts?.allowNegative);
+    const giga = await this.decreaseStockGigaOnly(items, opts);
+    if (giga.success) return giga;
+    await this.enqueueStockDelta('dec', items, opts, giga.error);
+    return { success: true, applied: flowApplied, gigaEnfileirado: true };
+  }
+
+  private async decreaseStockGigaOnly(
     items: Array<{ sku: string; qty: number; storeCode: string }>,
     opts?: { allowNegative?: boolean; skipNotFound?: boolean },
   ): Promise<{
@@ -660,6 +1660,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           applied.slice(0, 5).map((a) => `${a.sku}/${a.storeCode}: ${a.previousStock}â†’${a.newStock}`).join(', ') +
           (applied.length > 5 ? ` â€¦ (+${applied.length - 5} mais)` : ''),
       );
+      void this.mirrorStockWriteThrough(applied);
       return { success: true, applied };
     } catch (e: any) {
       try { await conn.rollback(); } catch { /* ignore */ }
@@ -688,7 +1689,84 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    *    INSERIDO (peÃ§a que nunca passou por essa loja antes â€” comum em
    *    realinhamento. SÃ³ o INSERT, sem mexer em produtos.)
    */
+  /** ENTRADA de estoque — mesmo modelo da baixa: Flow primeiro (fonte),
+   *  Giga réplica inline com fallback pro outbox. */
   async increaseStock(
+    items: Array<{ sku: string; qty: number; storeCode: string }>,
+  ): Promise<{
+    success: boolean;
+    applied: Array<{ sku: string; storeCode: string; qty: number; previousStock: number; newStock: number }>;
+    error?: string;
+    attempts?: number;
+    gigaEnfileirado?: boolean;
+  }> {
+    if (!this.isWriteEnabled || !this.pool || !items.length) {
+      return this.increaseStockGigaOnly(items);
+    }
+    const flowApplied = await this.mirrorStockApplyDelta(items, +1, true);
+    const giga = await this.increaseStockGigaOnly(items);
+    if (giga.success) return giga;
+    await this.enqueueStockDelta('inc', items, undefined, giga.error);
+    return { success: true, applied: flowApplied, gigaEnfileirado: true };
+  }
+
+  /**
+   * ENTRADA de estoque ASSÍNCRONA — aplica o delta no Flow (fonte) na hora e
+   * enfileira a réplica pro Giga no outbox SEM tentar inline. Usada em fluxos
+   * de LOTE (recebimento de compra), onde esperar o Giga item-a-item pendura a
+   * tela: o estoque já vale no Flow em ms e o cron do outbox grava no Giga com
+   * retry/backoff. Não depende do Giga estar rápido nem vivo.
+   */
+  async increaseStockAsync(
+    items: Array<{ sku: string; qty: number; storeCode: string }>,
+  ): Promise<{
+    success: boolean;
+    applied: Array<{ sku: string; storeCode: string; qty: number; previousStock: number; newStock: number }>;
+    gigaEnfileirado: boolean;
+    error?: string;
+    attempts?: number;
+  }> {
+    // Kill-switch mestre das escritas de estoque secundárias (devoluções, trocas,
+    // marcados, realinhamento, recebimento…): ERP_STOCK_WRITES_ASYNC=0 volta TODAS
+    // ao inline (espera o Giga), sem tocar nos call-sites.
+    if (String(process.env.ERP_STOCK_WRITES_ASYNC ?? '1') === '0') {
+      const r = await this.increaseStock(items);
+      return { success: r.success, applied: r.applied, gigaEnfileirado: !!r.gigaEnfileirado };
+    }
+    if (!items.length) return { success: true, applied: [], gigaEnfileirado: false };
+    const flowApplied = await this.mirrorStockApplyDelta(items, +1, true);
+    await this.enqueueStockDelta('inc', items, undefined, undefined, true);
+    return { success: true, applied: flowApplied, gigaEnfileirado: true };
+  }
+
+  /**
+   * BAIXA de estoque ASSÍNCRONA — simétrica ao increaseStockAsync. Aplica o
+   * delta no Flow (fonte) na hora e enfileira a réplica pro Giga no outbox, sem
+   * esperar o Giga inline. Usada em fluxos secundários de baixa (marcar peça,
+   * ajuste manual, separação) pra não pendurar a UI no MySQL lento.
+   * `allowNegative`/`skipNotFound` continuam valendo no espelho e na réplica.
+   */
+  async decreaseStockAsync(
+    items: Array<{ sku: string; qty: number; storeCode: string }>,
+    opts?: { allowNegative?: boolean; skipNotFound?: boolean },
+  ): Promise<{
+    success: boolean;
+    applied: Array<{ sku: string; storeCode: string; qty: number; previousStock: number; newStock: number }>;
+    gigaEnfileirado: boolean;
+    error?: string;
+    attempts?: number;
+  }> {
+    if (String(process.env.ERP_STOCK_WRITES_ASYNC ?? '1') === '0') {
+      const r = await this.decreaseStock(items, opts);
+      return { success: r.success, applied: r.applied, gigaEnfileirado: !!(r as any).gigaEnfileirado };
+    }
+    if (!items.length) return { success: true, applied: [], gigaEnfileirado: false };
+    const flowApplied = await this.mirrorStockApplyDelta(items, -1, !!opts?.allowNegative);
+    await this.enqueueStockDelta('dec', items, opts, undefined, true);
+    return { success: true, applied: flowApplied, gigaEnfileirado: true };
+  }
+
+  private async increaseStockGigaOnly(
     items: Array<{ sku: string; qty: number; storeCode: string }>,
   ): Promise<{
     success: boolean;
@@ -903,6 +1981,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           applied.slice(0, 5).map((a) => `${a.sku}/${a.storeCode}: ${a.previousStock}â†’${a.newStock}`).join(', ') +
           (applied.length > 5 ? ` â€¦ (+${applied.length - 5} mais)` : ''),
       );
+      void this.mirrorStockWriteThrough(applied);
       return { success: true, applied };
     } catch (e: any) {
       try { await conn.rollback(); } catch { /* ignore */ }
@@ -1538,7 +2617,15 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    *      o formato que enviou)
    */
   async getStock(skus: string[], storeCodes: string[]): Promise<StockEntry[]> {
-    if (!skus.length || !storeCodes.length || !this.pool) return [];
+    if (!skus.length || !storeCodes.length) return [];
+    if (this.mirrorReadsEnabled) {
+      try {
+        if (await this.mirrorStockReady()) return await this.getStockFromMirror(skus, storeCodes);
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] getStock: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
+    if (!this.pool) return [];
 
     // Normaliza SKUs originais (sem duplicatas, sem strings vazias)
     const uniqueOriginals = Array.from(
@@ -1940,15 +3027,34 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       this.logger.log(
         `[erp] getRefCatalogSnapshot: ${(rows as any[]).length} REF(s) em ${Date.now() - t0}ms`,
       );
-      return (rows as any[]).map((r) => ({
-        ref: String(r.ref || '').trim(),
-        descricao: String(r.descricao || '').trim(),
-        busca: String(r.busca || '').trim(),
-        marca: String(r.marca || '').trim(),
-        fornecedor: String(r.fornecedor || '').trim(),
-        categoria: String(r.categoria || '').trim(),
-        plusSize: Number(r.plus_size) === 1,
-      }));
+      // produtos.FORNECEDOR guarda o CNPJ — traduz pro NOME em memória
+      // (JOIN no SQL quebrava: collation/charset misto nas tabelas legadas).
+      const fornNome = new Map<string, string>();
+      try {
+        const [fs] = await conn.query<mysql.RowDataPacket[]>({
+          sql: 'SELECT CNPJ, FANTASIA, RAZAOSOCIAL FROM fornecedores',
+          timeout: 15_000,
+        });
+        for (const f of fs as any[]) {
+          const cnpj = String(f.CNPJ || '').trim();
+          const nome = String(f.FANTASIA || '').trim() || String(f.RAZAOSOCIAL || '').trim();
+          if (cnpj && nome) fornNome.set(cnpj, nome);
+        }
+      } catch (e) {
+        this.logger.warn(`[erp] snapshot: mapa de fornecedores falhou (${(e as Error).message}) — mantendo CNPJ cru`);
+      }
+      return (rows as any[]).map((r) => {
+        const fornRaw = String(r.fornecedor || '').trim();
+        return {
+          ref: String(r.ref || '').trim(),
+          descricao: String(r.descricao || '').trim(),
+          busca: String(r.busca || '').trim(),
+          marca: String(r.marca || '').trim(),
+          fornecedor: fornNome.get(fornRaw) || fornRaw,
+          categoria: String(r.categoria || '').trim(),
+          plusSize: Number(r.plus_size) === 1,
+        };
+      });
     } catch (e) {
       this.logger.error(`getRefCatalogSnapshot falhou: ${(e as Error).message}`);
       throw e;
@@ -2171,7 +3277,15 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * Usado pela tela /produtos pra comparar estoque WooCommerce x ERP fÃ­sico.
    */
   async getStockTotalBySkus(skus: string[]): Promise<Record<string, number>> {
-    if (!skus.length || !this.pool) return {};
+    if (!skus.length) return {};
+    if (this.mirrorReadsEnabled) {
+      try {
+        if (await this.mirrorStockReady()) return await this.getStockTotalBySkusFromMirror(skus);
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] getStockTotalBySkus: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
+    if (!this.pool) return {};
 
     // Normaliza: tira duplicados e strings vazias
     const unique = Array.from(new Set(skus.filter((s) => s && s.trim()))).map((s) => s.trim());
@@ -2243,7 +3357,15 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * Ãštil pra detalhamento por filial na tela de produto.
    */
   async getStockBySkusDetailed(skus: string[]): Promise<Record<string, Array<{ storeCode: string; qty: number }>>> {
-    if (!skus.length || !this.pool) return {};
+    if (!skus.length) return {};
+    if (this.mirrorReadsEnabled) {
+      try {
+        if (await this.mirrorStockReady()) return await this.getStockBySkusDetailedFromMirror(skus);
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] getStockBySkusDetailed: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
+    if (!this.pool) return {};
     const unique = Array.from(new Set(skus.filter((s) => s && s.trim()))).map((s) => s.trim());
     if (!unique.length) return {};
 
@@ -2535,7 +3657,17 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     opts: { throwOnError?: boolean } = {},
   ): Promise<Map<string, number>> {
     const out = new Map<string, number>();
-    if (!this.pool || !storeCodes.length) return out;
+    if (!storeCodes.length) return out;
+    if (this.mirrorReadsEnabled) {
+      try {
+        if ((await this.mirrorCaixaReady()) && (await this.mirrorCaixaCovers(inicio))) {
+          return await this.getSalesGrossByStoresFromMirror(storeCodes, inicio, fim);
+        }
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] getSalesGrossByStores: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
+    if (!this.pool) return out;
     // RETRY: um blip transitório (uma das 2 conexões paralelas da conta corrente
     // cai) não pode zerar a venda. Tenta de novo antes de desistir.
     let lastErr: any = null;
@@ -2620,8 +3752,15 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   async getSalesByStoreLastDays(
     days: number = 30,
   ): Promise<Array<{ storeCode: string; units: number; orders: number }>> {
-    if (!this.pool) return [];
     const n = Math.max(1, Math.min(365, Number(days) || 30));
+    try {
+      if (await this.caixaMovUsable(new Date(Date.now() - n * 86400_000))) {
+        return await this.salesByStoreLastDaysFromMirror(n);
+      }
+    } catch (e) {
+      this.logger.warn(`[mirror-reads] getSalesByStoreLastDays: ${(e as Error).message} → Giga ao vivo`);
+    }
+    if (!this.pool) return [];
     try {
       const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
         `SELECT c.LOJA       AS storeCode,
@@ -2971,7 +4110,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
         `SELECT p.CODIGO, p.REF, p.DESCRICAOCOMPLETA, p.COR, p.TAMANHO, p.ESTOQUE,
                 COALESCE((SELECT SUM(e.ESTOQUE) FROM estoque e WHERE e.CODIGO = p.CODIGO), 0) AS TOTAL_EST,
-                p.ID
+                p.ID, p.VENDAUN, p.FORNECEDOR
            FROM produtos p
           WHERE p.REF = ? OR p.REF LIKE ?
           ORDER BY p.COR, p.TAMANHO
@@ -2986,7 +4125,9 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         if (!foundRef.startsWith(baseRef)) return false;
         const suffix = foundRef.slice(baseRef.length);
         if (suffix.startsWith(' ') || suffix.startsWith('-')) return true;
-        if (/^[A-Za-z]/.test(suffix)) return true;
+        // Letras COLADAS: só sufixo curto de cor (1-2). 3+ letras = OUTRA REF
+        // ("8709RIU" não é variação de "8709") — igual ao espelho.
+        if (/^[A-Za-z]{1,2}$/.test(suffix)) return true;
         return false;
       };
 
@@ -3273,7 +4414,31 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * qual SKU Ã© via esse mapa invertido.
    */
   async getEansBySkus(skus: string[]): Promise<Record<string, string>> {
-    if (!skus.length || !this.pool) return {};
+    if (!skus.length) return {};
+    // EAN-13 prefixo 8 é GERADO PELO FLOW (EanSequence): o código É o próprio
+    // EAN. Resolve local, sem espelho nem Giga — produto cadastrado na live
+    // aparece na separação na hora (incidente 14/07).
+    const selfEan: Record<string, string> = {};
+    for (const s of skus) {
+      const t = String(s || '').trim();
+      if (/^8\d{12}$/.test(t)) selfEan[t] = t;
+    }
+    const pendentes = skus.filter((s) => !selfEan[String(s || '').trim()]);
+    if (!pendentes.length) return selfEan;
+    if (this.mirrorReadsEnabled) {
+      try {
+        if (await this.mirrorEanReady()) {
+          const m = (await this.getEansBySkusFromMirror(pendentes)) as Record<string, string>;
+          return { ...m, ...selfEan };
+        }
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] getEansBySkus: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
+    if (!this.pool) return selfEan;
+    const skusVivos = pendentes;
+    {
+      const skus = skusVivos; // caminho vivo abaixo intacto (só sem os prefixo-8)
 
     const candidates = ['EAN13', 'EAN', 'CODBARRAS', 'CODIGOBARRAS', 'COD_BARRAS', 'CODIGO_BARRAS'];
 
@@ -3312,7 +4477,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     if (totalSet.size === 0) {
       this.logger.warn(`getEansBySkus: nenhuma coluna resolveu EANs pros SKUs ${skus.slice(0, 3).join(',')}...`);
     }
-    return map;
+    return { ...map, ...selfEan };
+    }
   }
 
   /**
@@ -3325,9 +4491,29 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * diferente de zeros).
    */
   async findSkuByAnyEan(ean: string): Promise<string | null> {
-    if (!this.pool || !ean) return null;
+    if (!ean) return null;
     const raw = ean.trim();
     if (!raw) return null;
+    // EAN prefixo 8 = gerado pelo Flow: o EAN É o código. Resolve local.
+    if (/^8\d{12}$/.test(raw)) return raw;
+    if (this.mirrorReadsEnabled) {
+      try {
+        if (await this.mirrorEanReady()) {
+          const strippedM = raw.replace(/^0+/, '');
+          const variantsM = new Set<string>([raw, strippedM]);
+          if (/^\d+$/.test(raw)) {
+            variantsM.add(raw.padStart(13, '0'));
+            variantsM.add(raw.padStart(14, '0'));
+          }
+          const hit = await this.findSkuByAnyEanFromMirror(Array.from(variantsM).filter(Boolean));
+          if (hit) return hit;
+          // miss no espelho → deixa o Giga tentar (EAN recém-cadastrado)
+        }
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] findSkuByAnyEan: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
+    if (!this.pool) return null;
 
     // Gera variantes: cru, sem zeros Ã  esquerda, padded pra 13/14 dÃ­gitos
     const stripped = raw.replace(/^0+/, '');
@@ -4169,6 +5355,55 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    *
    * Retorna columns + rows + meta (executionMs, truncated).
    */
+  /**
+   * LEITURA COMPLETA PAGINADA (31/07) — pro sync que NAO pode truncar.
+   *
+   * O padrao antigo era `... LIMIT 50000` numa tacada so. Quando a tabela
+   * passou do limite, o resto sumiu CALADO: o crediario tinha 72.831 parcelas
+   * em aberto e o espelho guardava 50.000 — 22.831 parcelas (R$ 2,3 mi)
+   * simplesmente nao existiam pro Flow, e ninguem via erro nenhum.
+   *
+   * Aqui a leitura vai em paginas ate acabar. `teto` existe só como
+   * paraquedas contra loop infinito — quando ele e atingido isso volta em
+   * `truncado: true`, pra quem chamou poder GRITAR em vez de seguir achando
+   * que leu tudo.
+   *
+   * `orderBy` tem que ser uma coluna UNICA e estavel — OFFSET sem ordem
+   * definida repete e pula linha.
+   */
+  async readAllPages(
+    baseSql: string,
+    opts: { orderBy: string; batch?: number; teto?: number; timeoutMs?: number },
+  ): Promise<{ rows: any[]; paginas: number; truncado: boolean }> {
+    if (!this.pool) throw new Error('Pool ERP nao inicializado');
+    const batch = Math.min(Math.max(1000, opts.batch ?? 10_000), 20_000);
+    const teto = opts.teto ?? 500_000;
+    const timeout = opts.timeoutMs ?? 120_000;
+    const rows: any[] = [];
+    let paginas = 0;
+    let offset = 0;
+    for (;;) {
+      const [page] = await this.pool.query<mysql.RowDataPacket[]>({
+        sql: `${baseSql} ORDER BY ${opts.orderBy} LIMIT ${batch} OFFSET ${offset}`,
+        timeout,
+      } as any);
+      const lote = page as any[];
+      paginas++;
+      rows.push(...lote);
+      if (lote.length < batch) break;
+      offset += batch;
+      if (rows.length >= teto) {
+        this.logger.error(
+          `[readAllPages] TETO de ${teto} atingido — leitura INCOMPLETA: ${baseSql.slice(0, 120)}`,
+        );
+        return { rows, paginas, truncado: true };
+      }
+      // Respira entre paginas: o pool do Giga e o mesmo que atende a loja.
+      await new Promise((r) => setTimeout(r, 40));
+    }
+    return { rows, paginas, truncado: false };
+  }
+
   async runReadOnly(
     sqlRaw: string,
     opts: { maxRows?: number; timeoutMs?: number } = {},
@@ -4453,6 +5688,16 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     year?: string,
   ): Promise<Map<string, { pecas: number; valor: number }>> {
     const out = new Map<string, { pecas: number; valor: number }>();
+    // Espelho não implementa o filtro `year` (raro/admin) — esse segue no Giga.
+    if (!year) {
+      try {
+        if (await this.caixaMovUsable(inicio)) {
+          return await this.salesByStoresInRangeFromMirror(inicio, fim, plusSize);
+        }
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] getSalesByStoresInRange: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
     if (!this.pool) return out;
     try {
       const yf = await this.buildYearFilter(year, 'p');
@@ -4517,9 +5762,19 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     orderBy?: 'pecas' | 'valor';
     limit?: number;
   }): Promise<Array<{ refCode: string; descricao: string | null; pecas: number; valor: number }>> {
-    if (!this.pool) return [];
     const orderBy = input.orderBy === 'valor' ? 'valor' : 'pecas';
     const limit = Math.max(1, Math.min(100, input.limit || 10));
+    try {
+      if (await this.caixaMovUsable(input.inicio)) {
+        return await this.topRefsFromMirror({
+          inicio: input.inicio, fim: input.fim, storeCode: input.storeCode,
+          plusSize: input.plusSize, orderBy, limit,
+        });
+      }
+    } catch (e) {
+      this.logger.warn(`[mirror-reads] getTopRefsBySales: ${(e as Error).message} → Giga ao vivo`);
+    }
+    if (!this.pool) return [];
 
     // OtimizaÃ§Ã£o: agrega `caixa` por CODIGO PRIMEIRO (subquery filtrada),
     // depois faz JOIN com produtos. Reduz drasticamente o tamanho do JOIN.
@@ -4642,6 +5897,13 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     fim: Date;
     storeCode?: string | null;
   }): Promise<{ pecas: number; valor: number; vendas: number; ticketMedio: number }> {
+    try {
+      if (await this.caixaMovUsable(input.inicio)) {
+        return await this.salesSummaryFromMirror(input.inicio, input.fim, input.storeCode);
+      }
+    } catch (e) {
+      this.logger.warn(`[mirror-reads] getSalesSummary: ${(e as Error).message} → Giga ao vivo`);
+    }
     if (!this.pool) return { pecas: 0, valor: 0, vendas: 0, ticketMedio: 0 };
     const { numCupom } = await this.detectSalesColumns();
     const conds: string[] = [
@@ -4688,6 +5950,13 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     fim: Date;
     storeCode?: string | null;
   }): Promise<Array<{ date: string; pecas: number; valor: number }>> {
+    try {
+      if (await this.caixaMovUsable(input.inicio)) {
+        return await this.salesByDayFromMirror(input.inicio, input.fim, input.storeCode);
+      }
+    } catch (e) {
+      this.logger.warn(`[mirror-reads] getSalesByDay: ${(e as Error).message} → Giga ao vivo`);
+    }
     if (!this.pool) return [];
     const conds: string[] = [
       'c.DATA >= ?',
@@ -4732,6 +6001,16 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     storeCode?: string | null;
     limit?: number;
   }): Promise<Array<{ codigo: string; nome: string; pecas: number; valor: number; vendas: number }>> {
+    try {
+      if (await this.caixaMovUsable(input.inicio)) {
+        return await this.topVendedorasFromMirror({
+          inicio: input.inicio, fim: input.fim, storeCode: input.storeCode,
+          limit: Math.max(1, Math.min(100, input.limit || 20)),
+        });
+      }
+    } catch (e) {
+      this.logger.warn(`[mirror-reads] getTopVendedoras: ${(e as Error).message} → Giga ao vivo`);
+    }
     if (!this.pool) return [];
     const { vendedor: vendedorCol, numCupom } = await this.detectSalesColumns();
     if (!vendedorCol) {
@@ -4764,6 +6043,12 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         const codCol = cols.find((c: string) => /^codigo$/i.test(c) || /^cod/i.test(c) || /^id$/i.test(c));
         const nomeCol = cols.find((c: string) => /^nome$/i.test(c));
         if (codCol && nomeCol) {
+          // JOIN também pela LOJA (29/07): o CODIGO repete entre lojas no
+          // Wincred — sem a loja o nome vinha de OUTRA filial (Mirela de
+          // Campinas aparecia como Pamela) e o join multiplicava linhas.
+          const lojaJoin = cols.find((c: string) => /^loja$/i.test(c))
+            ? ` AND TRIM(LEADING '0' FROM CONCAT('', f.LOJA)) = TRIM(LEADING '0' FROM CONCAT('', c.LOJA))`
+            : '';
           sqlWithJoin = `
             SELECT CONCAT('', c.\`${vendedorCol}\`) AS codigo,
                    MAX(f.\`${nomeCol}\`) AS nome,
@@ -4771,7 +6056,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
                    SUM(c.VALORTOTAL) AS valor,
                    ${cupomCount} AS vendas
               FROM caixa c
-              LEFT JOIN funcionarios f ON CONCAT('', f.\`${codCol}\`) = CONCAT('', c.\`${vendedorCol}\`)
+              LEFT JOIN funcionarios f ON CONCAT('', f.\`${codCol}\`) = CONCAT('', c.\`${vendedorCol}\`)${lojaJoin}
              WHERE ${conds.join(' AND ')}
              GROUP BY CONCAT('', c.\`${vendedorCol}\`)
              ORDER BY valor DESC
@@ -4818,9 +6103,17 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     month: number; // 1-12
     storeCode?: string | null;
   }): Promise<{ pecas: number; valor: number }> {
-    if (!this.pool) return { pecas: 0, valor: 0 };
     const inicio = new Date(input.year, input.month - 1, 1);
     const fim = new Date(input.year, input.month, 1);
+    try {
+      if (await this.caixaMovUsable(inicio)) {
+        const s = await this.salesSummaryFromMirror(inicio, fim, input.storeCode);
+        return { pecas: s.pecas, valor: s.valor };
+      }
+    } catch (e) {
+      this.logger.warn(`[mirror-reads] getMonthSalesByYear: ${(e as Error).message} → Giga ao vivo`);
+    }
+    if (!this.pool) return { pecas: 0, valor: 0 };
     const conds: string[] = [
       'c.DATA >= ?', 'c.DATA < ?',
       "(c.MARCADO IS NULL OR c.MARCADO <> 'SIM')",
@@ -4849,10 +6142,30 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     months: number;
     storeCode?: string | null;
   }): Promise<Array<{ year: number; month: number; pecas: number; valor: number }>> {
-    if (!this.pool) return [];
     const months = Math.max(1, Math.min(36, input.months));
     const out: Array<{ year: number; month: number; pecas: number; valor: number }> = [];
     const now = new Date();
+    {
+      const inicioM = new Date(now.getFullYear(), now.getMonth() - months + 1, 1);
+      const fimM = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+      try {
+        if (await this.caixaMovUsable(inicioM)) {
+          const rows = await this.salesMonthAggFromMirror(inicioM, fimM, input.storeCode);
+          const map = new Map<string, any>();
+          for (const r of rows) map.set(`${r.y}-${r.m}`, { pecas: r.pecas, valor: r.valor });
+          for (let i = months - 1; i >= 0; i--) {
+            const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+            const k = `${d.getFullYear()}-${d.getMonth() + 1}`;
+            const v = map.get(k) || { pecas: 0, valor: 0 };
+            out.push({ year: d.getFullYear(), month: d.getMonth() + 1, pecas: v.pecas, valor: v.valor });
+          }
+          return out;
+        }
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] getSalesByMonth: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
+    if (!this.pool) return [];
 
     // Promise.all com N queries seria mais rÃ¡pido mas pode estourar conexÃ£o.
     // Uma sÃ³ query com agregaÃ§Ã£o por YEAR/MONTH Ã© melhor.
@@ -4904,6 +6217,13 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     fim: Date;
     storeCode?: string | null;
   }): Promise<number> {
+    try {
+      if (await this.caixaMovUsable(input.inicio)) {
+        return await this.uniqueClientesFromMirror(input.inicio, input.fim, input.storeCode);
+      }
+    } catch (e) {
+      this.logger.warn(`[mirror-reads] getUniqueClientesCount: ${(e as Error).message} → Giga ao vivo`);
+    }
     if (!this.pool) return 0;
     const conds: string[] = [
       'c.DATA >= ?', 'c.DATA < ?',
@@ -4932,6 +6252,16 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     storeCode?: string | null;
     limit?: number;
   }): Promise<Array<{ marca: string; pecas: number; valor: number }>> {
+    try {
+      if (await this.caixaMovUsable(input.inicio)) {
+        return await this.topMarcasFromMirror({
+          inicio: input.inicio, fim: input.fim, storeCode: input.storeCode,
+          limit: Math.max(1, Math.min(100, input.limit || 15)),
+        });
+      }
+    } catch (e) {
+      this.logger.warn(`[mirror-reads] getTopMarcas: ${(e as Error).message} → Giga ao vivo`);
+    }
     if (!this.pool) return [];
     const { marca: marcaCol } = await this.detectSalesColumns();
     if (!marcaCol) {
@@ -6073,7 +7403,15 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    */
   async getStockBySkuAndStores(sku: string, storeCodes: string[]): Promise<Map<string, number>> {
     const out = new Map<string, number>();
-    if (!this.pool || !sku || !storeCodes.length) return out;
+    if (!sku || !storeCodes.length) return out;
+    if (this.mirrorReadsEnabled) {
+      try {
+        if (await this.mirrorStockReady()) return await this.getStockBySkuAndStoresFromMirror(sku, storeCodes);
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] getStockBySkuAndStores: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
+    if (!this.pool) return out;
     const variants = this.skuVariants(sku);
     if (!variants.length) return out;
     try {
@@ -6350,6 +7688,20 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * Tabela `grupos` (CODIGO PK + GRUPO nome).
    */
   async listarGrupos(): Promise<Array<{ codigo: number; nome: string }>> {
+    // Espelho primeiro (wincred_grupos) — cai pro Giga se vazio/erro.
+    if (this.mirrorReadsEnabled) {
+      try {
+        const rows: any[] = await (this.prismaFlow as any).wincredGrupo.findMany({
+          orderBy: { grupo: 'asc' },
+        });
+        const mapped = rows
+          .map((r) => ({ codigo: Number(r.codigo), nome: String(r.grupo || '').trim() || `GRUPO-${r.codigo}` }))
+          .filter((g) => g.codigo);
+        if (mapped.length) return mapped;
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] listarGrupos: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
     if (!this.pool) return [];
     try {
       const [rows] = await this.pool.query(
@@ -6373,6 +7725,24 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * Tabela `subgrupos` (CODIGO PK + SUBGRUPO nome + GRUPO FK).
    */
   async listarSubgrupos(grupoCodigo: number): Promise<Array<{ codigo: number; nome: string }>> {
+    // Espelho primeiro (wincred_subgrupos). Um grupo pode ter 0 subgrupos, então
+    // o fallback é gated pela tabela estar POPULADA (count>0), não pelo resultado.
+    if (this.mirrorReadsEnabled) {
+      try {
+        const total = await (this.prismaFlow as any).wincredSubgrupo.count();
+        if (total > 0) {
+          const rows: any[] = await (this.prismaFlow as any).wincredSubgrupo.findMany({
+            where: { grupo: grupoCodigo },
+            orderBy: { subgrupo: 'asc' },
+          });
+          return rows
+            .map((r) => ({ codigo: Number(r.codigo), nome: String(r.subgrupo || '').trim() || `SUBGRUPO-${r.codigo}` }))
+            .filter((s) => s.codigo);
+        }
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] listarSubgrupos: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
     if (!this.pool) return [];
     try {
       const [rows] = await this.pool.query(
@@ -6807,6 +8177,21 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * de cores com sugestÃµes + permitir digitar nova.
    */
   async listarCoresDistintas(limit = 200): Promise<string[]> {
+    if (this.mirrorReadsEnabled) {
+      try {
+        const rows: any[] = await (this.prismaFlow as any).wincredProduto.groupBy({
+          by: ['cor'],
+          where: { cor: { not: null } },
+          _count: { cor: true },
+          orderBy: { _count: { cor: 'desc' } },
+          take: limit + 5,
+        });
+        const out = rows.map((r) => String(r.cor || '').trim()).filter(Boolean).slice(0, limit);
+        if (out.length) return out;
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] listarCoresDistintas: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
     if (!this.pool) return [];
     try {
       const [rows] = await this.pool.query(
@@ -6830,6 +8215,21 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * de tamanhos com sugestÃµes.
    */
   async listarTamanhosDistintos(limit = 200): Promise<string[]> {
+    if (this.mirrorReadsEnabled) {
+      try {
+        const rows: any[] = await (this.prismaFlow as any).wincredProduto.groupBy({
+          by: ['tamanho'],
+          where: { tamanho: { not: null } },
+          _count: { tamanho: true },
+          orderBy: { _count: { tamanho: 'desc' } },
+          take: limit + 5,
+        });
+        const out = rows.map((r) => String(r.tamanho || '').trim()).filter(Boolean).slice(0, limit);
+        if (out.length) return out;
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] listarTamanhosDistintos: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
     if (!this.pool) return [];
     try {
       const [rows] = await this.pool.query(
@@ -6854,8 +8254,43 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * fallback LIKE.
    */
   async findFornecedorCnpjByNome(nome: string): Promise<string | null> {
-    if (!this.pool || !nome?.trim()) return null;
+    if (!nome?.trim()) return null;
     const n = nome.trim();
+    if (this.mirrorReadsEnabled) {
+      try {
+        const total = await (this.prismaFlow as any).wincredFornecedor.count();
+        if (total > 0) {
+          // Exato (case-insensitive) em fantasia OU razão social; fallback contains.
+          const exato: any = await (this.prismaFlow as any).wincredFornecedor.findFirst({
+            where: {
+              OR: [
+                { fantasia: { equals: n, mode: 'insensitive' } },
+                { razaoSocial: { equals: n, mode: 'insensitive' } },
+              ],
+              cnpj: { not: null },
+            },
+            select: { cnpj: true },
+          });
+          if (exato?.cnpj) return String(exato.cnpj).trim() || null;
+          const like: any = await (this.prismaFlow as any).wincredFornecedor.findFirst({
+            where: {
+              OR: [
+                { fantasia: { contains: n, mode: 'insensitive' } },
+                { razaoSocial: { contains: n, mode: 'insensitive' } },
+              ],
+              cnpj: { not: null },
+            },
+            orderBy: { fantasia: 'asc' },
+            select: { cnpj: true },
+          });
+          if (like?.cnpj) return String(like.cnpj).trim() || null;
+          return null; // mirror populado e não achou = não existe
+        }
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] findFornecedorCnpjByNome: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
+    if (!this.pool) return null;
     try {
       // Match exato (FANTASIA ou RAZAOSOCIAL)
       const [rows1] = await this.pool.query(
@@ -6891,6 +8326,27 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * Lista fornecedores cadastrados em produtos (CNPJ + nome se disponÃ­vel).
    */
   async listarFornecedores(limit = 5000): Promise<Array<{ cnpj: string; nome: string; fantasia?: string }>> {
+    // Espelho primeiro (wincred_fornecedores). FANTASIA = MARCA no Lurd's.
+    if (this.mirrorReadsEnabled) {
+      try {
+        const rows: any[] = await (this.prismaFlow as any).wincredFornecedor.findMany({
+          where: { OR: [{ razaoSocial: { not: null } }, { fantasia: { not: null } }] },
+          select: { cnpj: true, razaoSocial: true, fantasia: true },
+          take: limit,
+        });
+        const result = rows
+          .map((r) => {
+            const fant = r.fantasia ? String(r.fantasia).trim() : '';
+            const nomeReal = String(r.razaoSocial || '').trim();
+            return { cnpj: String(r.cnpj || '').trim(), nome: fant || nomeReal, fantasia: fant || undefined };
+          })
+          .filter((f) => f.nome)
+          .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+        if (result.length) return result;
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] listarFornecedores: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
     if (!this.pool) return [];
     // FANTASIA = MARCA no Lurd's â€” preferir FANTASIA na exibicao quando houver.
     // SCHEMA REAL: fornecedores tem CNPJ + RAZAOSOCIAL + FANTASIA (nao CGC nem NOME)
@@ -7058,6 +8514,210 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    *
    * Requer ERP_WRITE_ENABLED='true'. SenÃ£o lanÃ§a erro sem tocar no banco.
    */
+  /**
+   * EDITOR DE PRODUTOS (/retaguarda/editor-produtos): UPDATE de campos do
+   * cadastro direto no Giga (fonte da verdade) - REF/descricao/marca/cor/
+   * tamanho/preco. DESCRICAOPDV acompanha a descricao completa (50 chars),
+   * igual ao cadastro. DATAALT=CURDATE() SEMPRE: e o campo que o sync
+   * incremental do espelho usa pra enxergar a mudanca.
+   * Transacao unica: ou grava o lote inteiro, ou nada (nunca meio-gravado).
+   * WHERE por CODIGO EXATO (string vinda da propria busca) - sem CAST, porque
+   * padding inconsistente poderia casar outra linha.
+   */
+  async updateProdutosCampos(rows: Array<{
+    codigo: string;
+    set: {
+      ref?: string;
+      descricaoCompleta?: string;
+      marca?: string;
+      cor?: string;
+      tamanho?: string;
+      vendaUn?: number;
+    };
+  }>): Promise<{ atualizados: number }> {
+    if (!this.isWriteEnabled) {
+      throw new Error('ERP_WRITE_ENABLED=false. Setar env=true pra liberar edicao de produtos.');
+    }
+    if (!this.pool) throw new Error('ERP MySQL nao esta conectado');
+    if (!rows.length) return { atualizados: 0 };
+
+    // PERF (13/07): agrupa por payload IGUAL de SET → ação em bloco (ex: marca
+    // igual em 400 variações) vira UMA query "UPDATE ... WHERE CODIGO IN (...)"
+    // em vez de 400 roundtrips WAN ao MySQL (era o "preenchimento lento").
+    const grupos = new Map<string, { sets: string[]; params: any[]; codigos: string[] }>();
+    for (const r of rows) {
+      const sets: string[] = [];
+      const params: any[] = [];
+      const s = r.set || {};
+      if (s.ref !== undefined) { sets.push('REF = ?'); params.push(String(s.ref).slice(0, 10)); }
+      if (s.descricaoCompleta !== undefined) {
+        sets.push('DESCRICAOCOMPLETA = ?'); params.push(String(s.descricaoCompleta).slice(0, 100));
+        sets.push('DESCRICAOPDV = ?'); params.push(String(s.descricaoCompleta).slice(0, 50));
+      }
+      if (s.marca !== undefined) { sets.push('MARCA = ?'); params.push(String(s.marca).slice(0, 30)); }
+      if (s.cor !== undefined) { sets.push('COR = ?'); params.push(String(s.cor).slice(0, 15)); }
+      if (s.tamanho !== undefined) { sets.push('TAMANHO = ?'); params.push(String(s.tamanho).slice(0, 20)); }
+      if (s.vendaUn !== undefined) { sets.push('VENDAUN = ?'); params.push(Number(s.vendaUn)); }
+      if (!sets.length) continue;
+      const key = JSON.stringify([sets, params]);
+      const g = grupos.get(key);
+      if (g) g.codigos.push(r.codigo);
+      else grupos.set(key, { sets, params, codigos: [r.codigo] });
+    }
+    if (!grupos.size) return { atualizados: 0 };
+
+    const conn = await this.pool.getConnection();
+    let atualizados = 0;
+    try {
+      await conn.beginTransaction();
+      for (const g of grupos.values()) {
+        // ⚠️ INCIDENTE 14/07: NUNCA tocar DATAALT aqui. DATAALT é a DATA DE
+        // CADASTRO que a promoção "Liquida antigos" usa pra decidir quem é
+        // antigo — carimbar CURDATE() tirou milhares de peças da promo.
+        // O espelho/nativa são atualizados direto pelo editor; não precisamos
+        // do DATAALT pro sync enxergar a mudança.
+        const sets = [...g.sets, `OPERADOR = 'FLOWOPS'`];
+        // Lotes de 500 códigos por IN() pra não estourar tamanho de query.
+        for (let i = 0; i < g.codigos.length; i += 500) {
+          const chunk = g.codigos.slice(i, i + 500);
+          const placeholders = chunk.map(() => '?').join(',');
+          const [result]: any = await conn.query(
+            `UPDATE produtos SET ${sets.join(', ')} WHERE CODIGO IN (${placeholders})`,
+            [...g.params, ...chunk],
+          );
+          atualizados += Number(result.affectedRows) || 0;
+        }
+      }
+      await conn.commit();
+      this.logger.log(
+        `updateProdutosCampos: ${atualizados}/${rows.length} produtos atualizados no Giga (${grupos.size} grupo(s) de UPDATE)`,
+      );
+      return { atualizados };
+    } catch (e) {
+      await conn.rollback();
+      this.logger.error(`updateProdutosCampos falhou - rollback: ${(e as Error).message}`);
+      throw e;
+    } finally {
+      conn.release();
+    }
+  }
+
+  /**
+   * EXCLUSÃO de produtos no Giga (editor de produtos). Apaga da tabela
+   * `produtos` E as linhas de `estoque` dos códigos. Variantes de zero-padding
+   * cobertas. Gated por ERP_WRITE_ENABLED.
+   */
+  async deleteProdutos(codigos: string[]): Promise<{ excluidos: number }> {
+    if (!this.isWriteEnabled) {
+      throw new Error('ERP_WRITE_ENABLED=false. Setar env=true pra liberar exclusão.');
+    }
+    if (!this.pool) throw new Error('ERP MySQL nao esta conectado');
+    const variants: string[] = [];
+    for (const c of codigos) {
+      const t = String(c || '').trim();
+      if (t) variants.push(...this.skuVariants(t));
+    }
+    if (!variants.length) return { excluidos: 0 };
+    let excluidos = 0;
+    for (let i = 0; i < variants.length; i += 500) {
+      const chunk = variants.slice(i, i + 500);
+      const placeholders = chunk.map(() => '?').join(',');
+      const [r]: any = await this.pool.query(
+        `DELETE FROM produtos WHERE CODIGO IN (${placeholders})`,
+        chunk,
+      );
+      excluidos += Number(r?.affectedRows) || 0;
+      await this.pool.query(
+        `DELETE FROM estoque WHERE CODIGO IN (${placeholders})`,
+        chunk,
+      ).catch((e: any) => this.logger.warn(`deleteProdutos estoque: ${e?.message}`));
+    }
+    this.logger.log(`deleteProdutos: ${excluidos} produto(s) excluído(s) no Giga`);
+    return { excluidos };
+  }
+
+  /**
+   * RESTAURAÇÃO DO INCIDENTE 14/07: devolve a DATA DE CADASTRO (DATAALT)
+   * original de produtos que o editor carimbou com a data da edição —
+   * o que tirou peças antigas da promoção Liquida Antigos.
+   * Agrupa por data (poucos UPDATEs) e cobre variantes de zero-padding.
+   */
+  async restoreDataAlt(pairs: Array<{ codigo: string; dataAlt: string }>): Promise<{ atualizados: number }> {
+    if (!this.isWriteEnabled) {
+      throw new Error('ERP_WRITE_ENABLED=false. Setar env=true pra liberar restauração.');
+    }
+    if (!this.pool) throw new Error('ERP MySQL nao esta conectado');
+    const clean = pairs.filter((p) => p.codigo && /^\d{4}-\d{2}-\d{2}$/.test(String(p.dataAlt || '')));
+    if (!clean.length) return { atualizados: 0 };
+
+    // Agrupa por DATA → 1 UPDATE por data (com IN de todas as variantes).
+    const porData = new Map<string, string[]>();
+    for (const p of clean) {
+      const list = porData.get(p.dataAlt) || [];
+      for (const v of this.skuVariants(String(p.codigo).trim())) list.push(v);
+      porData.set(p.dataAlt, list);
+    }
+
+    // AUTOCOMMIT por statement (SEM transação gigante): incidente 14/07 mostrou
+    // que 88k updates numa transação única = commit invisível + timeout de
+    // gateway + lock gigante. Cada UPDATE commita sozinho — progresso visível
+    // e re-execução é idempotente (regrava o mesmo valor).
+    let atualizados = 0;
+    for (const [dataAlt, codigos] of porData.entries()) {
+      for (let i = 0; i < codigos.length; i += 500) {
+        const chunk = codigos.slice(i, i + 500);
+        const placeholders = chunk.map(() => '?').join(',');
+        const [result]: any = await this.pool.query(
+          `UPDATE produtos SET DATAALT = ? WHERE CODIGO IN (${placeholders})`,
+          [dataAlt, ...chunk],
+        );
+        atualizados += Number(result.affectedRows) || 0;
+      }
+    }
+    this.logger.log(`restoreDataAlt: ${atualizados} produtos restaurados no Giga (${porData.size} data(s))`);
+    return { atualizados };
+  }
+
+  /** Leva 4 (incidente DATAALT): a caixa tem índice em CODIGO? Sem índice a
+   *  varredura por chunks viraria full-scan repetido — aí só usamos o espelho. */
+  async caixaCodigoIndexed(): Promise<boolean> {
+    if (!this.pool) return false;
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>({ sql: 'SHOW INDEX FROM caixa', timeout: 15_000 });
+      return (rows as any[]).some((r) => String(r.Column_name || '').toUpperCase() === 'CODIGO');
+    } catch {
+      return false;
+    }
+  }
+
+  /** Leva 4: primeira venda (MIN(DATA)) por código na caixa do Giga, em um
+   *  chunk pequeno. Read-only, IN-list com variantes de zero-padding. */
+  async getFirstSaleDatesChunk(codigos: string[]): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    if (!this.pool || !codigos.length) return out;
+    const { allVariants, variantToOriginal } = this.expandSkus(codigos);
+    if (!allVariants.length) return out;
+    const placeholders = allVariants.map(() => '?').join(',');
+    const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+      {
+        sql: `SELECT CODIGO, DATE_FORMAT(MIN(DATA), '%Y-%m-%d') AS d
+                FROM caixa
+               WHERE CODIGO IN (${placeholders})
+               GROUP BY CODIGO`,
+        timeout: 30_000,
+      },
+      allVariants,
+    );
+    for (const r of rows as any[]) {
+      const orig = variantToOriginal.get(String(r.CODIGO || '').trim());
+      const d = String(r.d || '');
+      if (!orig || !/^\d{4}-\d{2}-\d{2}$/.test(d)) continue;
+      const prev = out.get(orig);
+      if (!prev || d < prev) out.set(orig, d);
+    }
+    return out;
+  }
+
   async inserirProdutosBatch(produtos: Array<{
     codigo: string;
     grupo: number;
@@ -8077,9 +9737,17 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     produto: { codigo: string; descricao: string; cor: string | null; tamanho: string | null; preco: number } | null;
   }> {
     const empty = { found: false, salesCount: 0, vendas: [], produto: null };
-    if (!this.pool || !storeCode?.trim() || !sku?.trim()) return empty;
+    if (!storeCode?.trim() || !sku?.trim()) return empty;
     const lojaClean = String(storeCode).trim().toUpperCase();
     const diasClamped = Math.max(1, Math.min(3650, Math.round(dias) || 60));
+    try {
+      if (await this.caixaMovUsable(new Date(Date.now() - diasClamped * 86400_000))) {
+        return await this.lookupSaleHistoryFromMirror(lojaClean, sku.trim(), diasClamped) as any;
+      }
+    } catch (e) {
+      this.logger.warn(`[mirror-reads] lookupSaleHistoryByStoreAndSku: ${(e as Error).message} → Giga ao vivo`);
+    }
+    if (!this.pool) return empty;
 
     // Gera variantes de zero-padding (igual ao resto do sistema)
     const variants = this.skuVariants(sku.trim());
@@ -8158,9 +9826,68 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
      NÃ£o inclui composiÃ§Ã£o SITE (Giga + Flowops) â€” quem combina Ã© o caller
      (controller), pra deixar service genÃ©rico.
      â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+  /** Espelho do getFaturamentoPorLoja via giga_caixa_mov — MESMA regra da query
+   *  viva: filtra por DATAFEC, exclui MARCADO='SIM', cupons = DISTINCT numero.
+   *  Bate exato com o Wincred (o espelho copia a `caixa` linha a linha). */
+  private async getFaturamentoPorLojaFromMirror(inicio: Date, fim: Date): Promise<
+    Array<{ storeCode: string; faturamento: number; cupons: number; pecas: number; ticketMedio: number }>
+  > {
+    const rows: any[] = await (this.prismaFlow as any).$queryRawUnsafe(
+      // CHAVE HÍBRIDA — necessária porque o espelho guarda o NUMERO JÁ
+      // ACHATADO (string arredondada do FLOAT; ver getCaixaMovRaw). Enquanto
+      // não houver re-backfill, `numero` sozinho colapsa aqui.
+      //
+      //   obs_pedido = 'flowops-<id>' → identifica a venda do PDV sem
+      //     ambiguidade. É a maioria do movimento.
+      //   numero     → cobre a venda nativa do Wincred, cuja numeração está
+      //     na casa dos 295 mil (6 dígitos) e por isso SOBREVIVE ao float.
+      //
+      // Depois do re-backfill com CAST(NUMERO AS UNSIGNED), isto pode voltar
+      // a ser um COUNT(DISTINCT numero) simples.
+      `SELECT loja AS "storeCode",
+              COUNT(DISTINCT COALESCE(NULLIF(btrim(obs_pedido), ''), 'n:' || numero))::int AS cupons,
+              COALESCE(SUM(quantidade), 0)::float8 AS pecas,
+              COALESCE(SUM(valor_total), 0)::float8 AS faturamento
+         FROM giga_caixa_mov
+        WHERE data_fec >= $1 AND data_fec < $2
+          AND (marcado IS NULL OR marcado <> 'SIM')
+        GROUP BY loja
+        ORDER BY faturamento DESC`,
+      inicio, fim,
+    );
+    return rows.map((r) => {
+      const faturamento = Number(r.faturamento) || 0;
+      const cupons = Number(r.cupons) || 0;
+      const pecas = Number(r.pecas) || 0;
+      return {
+        storeCode: String(r.storeCode || '').trim().toUpperCase(),
+        faturamento,
+        cupons,
+        pecas,
+        ticketMedio: cupons > 0 ? faturamento / cupons : 0,
+      };
+    });
+  }
+
   async getFaturamentoPorLoja(inicio: Date, fim: Date): Promise<
     Array<{ storeCode: string; faturamento: number; cupons: number; pecas: number; ticketMedio: number }>
   > {
+    // Espelho primeiro (mesma regra DATAFEC); cai pro Giga ao vivo se o espelho
+    // não estiver pronto/cobrindo o período.
+    try {
+      if (await this.caixaMovUsable(inicio)) {
+        const doEspelho = await this.getFaturamentoPorLojaFromMirror(inicio, fim);
+        // Rede de segurança: 14 lojas não faturam ZERO num período inteiro.
+        // Espelho "cobrindo" mas vazio = cobertura enganada (data lixo) →
+        // melhor UMA consulta ao vivo do que um zero errado na tela do dono.
+        if (doEspelho.length > 0) return doEspelho;
+        this.logger.warn(
+          `[mirror-reads] getFaturamentoPorLoja: espelho vazio pra ${inicio.toISOString().slice(0, 10)}..${fim.toISOString().slice(0, 10)} — conferindo no Giga ao vivo`,
+        );
+      }
+    } catch (e) {
+      this.logger.warn(`[mirror-reads] getFaturamentoPorLoja: ${(e as Error).message} → Giga ao vivo`);
+    }
     if (!this.pool) return [];
     try {
       // IMPORTANTE: usa DATAFEC (data de fechamento do cupom), nÃ£o DATA.
@@ -8169,9 +9896,15 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       // no dia X+1) ficavam fora no antigo filtro por DATA. Trocando pra
       // DATAFEC, bate exato com Wincred em todas as lojas.
       const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+        // CUPOM = NUMERO lido como INTEIRO. Nada de CONCAT/CAST AS CHAR: a
+        // coluna é FLOAT de 4 bytes e qualquer conversão pra texto arredonda
+        // pra ~7 dígitos, achatando ~100 cupons num só (a numeração do Flow
+        // está em 11,4 milhões). E DATAFEC NÃO entra na chave — o NUMERO é
+        // sequencial global, nunca reinicia; misturar a data foi tentativa
+        // minha anterior e só piorou, porque o CONCAT forçava a string.
         `SELECT
             c.LOJA AS storeCode,
-            COUNT(DISTINCT c.NUMERO) AS cupons,
+            COUNT(DISTINCT CAST(c.NUMERO AS UNSIGNED)) AS cupons,
             SUM(c.QUANTIDADE) AS pecas,
             SUM(c.VALORTOTAL) AS faturamento
          FROM caixa c
@@ -8200,6 +9933,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+
   /**
    * SCHEMA DIAGNOSTIC â€” retorna as colunas da tabela `caixa` + soma de
    * TODAS as colunas numÃ©ricas pra uma loja num perÃ­odo. Usado pra
@@ -8214,15 +9948,137 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * Filtra por status ativo + LOJA. Usado pelo sync /retaguarda/vendedoras
    * pra popular PdvActiveSeller.
    */
+  /**
+   * FONTE DO ESPELHO giga_caixa_mov: linhas cruas da `caixa` num intervalo
+   * [from, to). Usado SÓ pelo GigaMirrorService (janela de 3 dias no cron +
+   * backfill mensal no boot).
+   */
+  /** Colunas realmente existentes na `caixa` (o schema Wincred varia por
+   *  instalação — ex.: CONTROLE não existe na da Lurd's e derrubou o backfill
+   *  de 14/07). Sonda uma vez e monta o SELECT só com o que existe. */
+  private caixaColsCache: { cols: Set<string>; at: number } | null = null;
+  private async caixaColumns(): Promise<Set<string>> {
+    const now = Date.now();
+    if (this.caixaColsCache && now - this.caixaColsCache.at < 6 * 3600_000) {
+      return this.caixaColsCache.cols;
+    }
+    const [rows] = await this.pool.query<mysql.RowDataPacket[]>(`SHOW COLUMNS FROM caixa`);
+    const cols = new Set((rows as any[]).map((c) => String(c.Field || '').toUpperCase()));
+    this.caixaColsCache = { cols, at: now };
+    return cols;
+  }
+
+  async getCaixaMovRows(from: Date, to: Date): Promise<any[]> {
+    if (!this.pool) return [];
+    const cols = await this.caixaColumns();
+    const wanted = [
+      'REGISTRO', 'NUMERO', 'CONTROLE', 'CODIGO', 'DATA', 'DATAFEC', 'HORA', 'DESCRICAO',
+      'QUANTIDADE', 'VALOR', 'VALORTOTAL', 'OPERADOR', 'VENDEDOR', 'CLIENTE', 'LOJA', 'MARCADO',
+      // v2 — colunas ricas do schema Lurd's (tela de vendas do caixa etc.)
+      'CODCLIENTE', 'NOMECLIENTE', 'CPF', 'VENDEDORA', 'VENDEDORACODE', 'FPAG',
+      'OBS_PEDIDO', 'VALORUNITARIO',
+    ];
+    const present = wanted.filter((c) => cols.has(c));
+    for (const req of ['REGISTRO', 'CODIGO', 'DATA', 'LOJA']) {
+      if (!present.includes(req)) {
+        throw new Error(`caixa sem coluna obrigatória ${req} — espelho caixa_mov não suportado neste schema`);
+      }
+    }
+    // NUMERO sai com CAST(... AS UNSIGNED) DE PROPÓSITO.
+    //
+    // A coluna `caixa.NUMERO` é FLOAT de 4 bytes — só ~7 dígitos exatos. A
+    // numeração que o Flow gera está em 11,4 MILHÕES (8 dígitos), então ao
+    // virar texto ela é ARREDONDADA: os cupons 11422647, 11422651 e 11422653
+    // viram todos "11422700". Cerca de 100 vendas colapsam num número só, e
+    // o espelho guarda esse texto achatado.
+    //
+    // Medido em 25/06–25/07/2026: a rede tinha 3.176 cupons e a leitura por
+    // texto devolvia 478 — colapso de 6,6×, que é a origem do ticket médio de
+    // R$ 2.722. O CAST resolve na ORIGEM, antes de o driver converter.
+    const selectCols = present.map((c) =>
+      c === 'NUMERO' ? 'CAST(NUMERO AS UNSIGNED) AS NUMERO' : c,
+    );
+    const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+      `SELECT ${selectCols.join(', ')}
+         FROM caixa
+        WHERE DATA >= ? AND DATA < ?`,
+      [from, to],
+    );
+    return rows as any[];
+  }
+
+  /**
+   * FONTE DO ESPELHO wincred_funcionarios: todas as vendedoras (com flag de
+   * inatividade quando a coluna existir). Usado SÓ pelo GigaMirrorService.
+   */
+  async getFuncionariosRawAll(): Promise<Array<{ codigo: string; nome: string | null; apelido: string | null; loja: string | null; inativo: boolean }>> {
+    if (!this.pool) return [];
+    let rows: mysql.RowDataPacket[] = [];
+    let hasFlag = true;
+    try {
+      const [r] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT CODIGO, NOME, APELIDO, LOJA, FLAG_INATIVO FROM funcionarios`,
+      );
+      rows = r;
+    } catch {
+      hasFlag = false;
+      const [r] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT CODIGO, NOME, APELIDO, LOJA FROM funcionarios`,
+      );
+      rows = r;
+    }
+    return (rows as any[])
+      .map((r) => ({
+        codigo: String(r.CODIGO || '').trim(),
+        nome: r.NOME ? String(r.NOME).trim() : null,
+        apelido: r.APELIDO ? String(r.APELIDO).trim() : null,
+        loja: r.LOJA ? String(r.LOJA).trim().toUpperCase() : null,
+        inativo: hasFlag
+          ? !(r.FLAG_INATIVO == null || r.FLAG_INATIVO === 'N' || r.FLAG_INATIVO === 0 || r.FLAG_INATIVO === '0')
+          : false,
+      }))
+      .filter((r) => r.codigo);
+  }
+
   async getFuncionariosAtivosByLoja(storeCodes: string[]): Promise<Array<{
     codigo: string;
     nome: string;
     apelido: string | null;
     storeCode: string;
   }>> {
-    if (!this.pool) return [];
     const codes = storeCodes.filter(Boolean);
     if (codes.length === 0) return [];
+    if (this.mirrorReadsEnabled) {
+      try {
+        if (await this.mirrorFuncReady()) {
+          // Lojas com e sem zero à esquerda (mesma tolerância dos outros paths).
+          const lojaSet = new Set<string>();
+          for (const c of codes) {
+            const s = String(c).trim().toUpperCase();
+            lojaSet.add(s);
+            if (/^\d{1,2}$/.test(s)) {
+              lojaSet.add(s.padStart(2, '0'));
+              lojaSet.add(s.replace(/^0+/, '') || s);
+            }
+          }
+          const rows: any[] = await (this.prismaFlow as any).wincredFuncionario.findMany({
+            where: { loja: { in: Array.from(lojaSet) }, inativo: false },
+            orderBy: [{ loja: 'asc' }, { nome: 'asc' }],
+          });
+          return rows
+            .map((r) => ({
+              codigo: String(r.codigo || '').trim(),
+              nome: String(r.nome || '').trim(),
+              apelido: r.apelido ? String(r.apelido).trim() : null,
+              storeCode: String(r.loja || '').trim().toUpperCase(),
+            }))
+            .filter((r) => r.codigo && r.nome);
+        }
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] getFuncionariosAtivosByLoja: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
+    if (!this.pool) return [];
     try {
       // Tenta primeiro com FLAG_INATIVO (estrutura comum do Wincred).
       // Se nÃ£o existir essa coluna, cai pro select sem filtro e o caller filtra.
@@ -8333,6 +10189,13 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * mÃºltiplos itens na tabela caixa.
    */
   async getVendasCaixa(loja: string, from: string, toExclusive: string): Promise<any[]> {
+    try {
+      if (await this.caixaMovUsable(new Date(`${from}T00:00:00`))) {
+        return await this.vendasCaixaFromMirror(loja, from, toExclusive);
+      }
+    } catch (e) {
+      this.logger.warn(`[mirror-reads] getVendasCaixa: ${(e as Error).message} → Giga ao vivo`);
+    }
     if (!this.pool) return [];
     // Tenta com o code passado E com padding pra 2 dÃ­gitos (cobre "6" vs "06")
     const codeAsIs = String(loja).trim().toUpperCase();
@@ -8520,6 +10383,15 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     fim: Date,
     granularity: 'day' | 'week' | 'month' = 'day',
   ): Promise<Array<{ bucket: string; storeCode: string; faturamento: number }>> {
+    if (this.mirrorReadsEnabled) {
+      try {
+        if ((await this.mirrorCaixaReady()) && (await this.mirrorCaixaCovers(inicio))) {
+          return await this.getFaturamentoTimeseriesFromMirror(inicio, fim, granularity);
+        }
+      } catch (e) {
+        this.logger.warn(`[mirror-reads] getFaturamentoTimeseries: ${(e as Error).message} → Giga ao vivo`);
+      }
+    }
     if (!this.pool) return [];
     // MySQL DATE_FORMAT pra agrupar
     const fmt =

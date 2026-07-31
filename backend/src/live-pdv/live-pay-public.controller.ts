@@ -12,6 +12,18 @@ import {
 import { LivePdvService } from './live-pdv.service';
 import { PrismaService } from '../prisma/prisma.service';
 
+/** CPF válido de verdade (dígitos verificadores) — Correios/NF rejeitam CPF inventado. */
+function cpfValido(v: string): boolean {
+  const d = String(v || '').replace(/\D/g, '');
+  if (d.length !== 11 || /^(\d)\1{10}$/.test(d)) return false;
+  for (const n of [9, 10]) {
+    let soma = 0;
+    for (let i = 0; i < n; i++) soma += Number(d[i]) * (n + 1 - i);
+    if (((soma * 10) % 11) % 10 !== Number(d[n])) return false;
+  }
+  return true;
+}
+
 /**
  * Controller PÚBLICO (SEM JwtAuthGuard) — página de fechamento da cliente.
  *
@@ -116,8 +128,9 @@ export class LivePayPublicController {
 
   // Endereço + dados de contato — a cliente preenche NO checkout (a loja
   // recebe o pedido pronto pra postar, sem caçar dados pelo Direct).
-  // Celular é OBRIGATÓRIO pra pagar (validado aqui e no guardPayable);
-  // CPF/e-mail são opcionais mas validados quando enviados.
+  // Celular e CPF são OBRIGATÓRIOS pra pagar (validados aqui e no
+  // guardPayable — o Correio exige o CPF da destinatária pra postar);
+  // e-mail é opcional mas validado quando enviado.
   @Post(':cartId/endereco')
   async endereco(
     @Param('cartId') key: string,
@@ -133,6 +146,9 @@ export class LivePayPublicController {
       celular?: string;
       cpf?: string;
       email?: string;
+      // CEP: no fluxo normal vem do cálculo de frete; no completar-depois-de-
+      // pago (PIX/link gerado no console) a cliente informa aqui.
+      cep?: string;
     },
   ) {
     const cartId = await this.svc.resolvePublicCartId(key);
@@ -156,6 +172,10 @@ export class LivePayPublicController {
       String(cart.customerCidade || '').trim() &&
       String(cart.customerUf || '').trim()
     );
+    // CEP enviado direto (completar-depois-de-pago): salva se válido.
+    const cepDigits = String(body?.cep || '').replace(/\D/g, '');
+    if (cepDigits.length === 8) data.customerCep = cepDigits;
+
     // Endereço: obrigatório só no modo ENTREGA (retirada em loja dispensa)
     if (!cart.isPickup && (enderecoEnviado || !jaTemEndereco)) {
       data.customerEndereco = clean(body?.endereco, 160);
@@ -185,11 +205,15 @@ export class LivePayPublicController {
     } else if (!jaTemFone) {
       throw new BadRequestException('Informe seu celular (com DDD) pra gente falar com você sobre a entrega.');
     }
-    // CPF/e-mail: opcionais, mas validados quando preenchidos
+    // CPF: obrigatório se o carrinho ainda não tem um válido (Correios exige
+    // o CPF da destinatária pra postar a encomenda).
+    const jaTemCpf = cpfValido(String(cart.customerCpf || ''));
     const cpfDigits = String(body?.cpf || '').replace(/\D/g, '');
     if (cpfDigits) {
-      if (cpfDigits.length !== 11) throw new BadRequestException('CPF inválido — são 11 números.');
+      if (!cpfValido(cpfDigits)) throw new BadRequestException('CPF inválido — confere os números e tenta de novo.');
       data.customerCpf = cpfDigits;
+    } else if (!jaTemCpf) {
+      throw new BadRequestException('Informe seu CPF — o Correio exige pra postar sua encomenda.');
     }
     const email = clean(body?.email, 120);
     if (email) {
@@ -198,6 +222,38 @@ export class LivePayPublicController {
     }
 
     await (this.prisma as any).livePdvCart.update({ where: { id: cartId }, data });
+
+    // WHATSAPP DE VOLTA PRO CADASTRO MESTRE (15/07): o celular digitado aqui
+    // alimentava só o carrinho — na live seguinte a cliente aparecia de novo
+    // sem telefone e o "Cobrar todas" ficava sem o botão WhatsApp. Agora:
+    //  - cliente SEM telefone no mestre → grava;
+    //  - número já usado por OUTRA cliente → aceita no carrinho (venda nunca
+    //    trava) e só registra o aviso no log (decisão do dono 15/07).
+    if (data.customerPhone && cart.customerId) {
+      try {
+        const dona: any = await (this.prisma as any).customer.findUnique({
+          where: { id: cart.customerId },
+          select: { id: true, phone: true },
+        });
+        const donaTemFone = String(dona?.phone || '').replace(/\D/g, '').length >= 10;
+        if (dona && !donaTemFone) {
+          const outra: any = await (this.prisma as any).customer.findFirst({
+            where: { id: { not: dona.id }, phone: { endsWith: data.customerPhone.slice(-10) } },
+            select: { id: true, name: true },
+          });
+          if (outra) {
+            console.warn(
+              `[live-pay] celular ${data.customerPhone} do carrinho ${cartId} já pertence à cliente ${outra.id} (${outra.name}) — mestre não atualizado`,
+            );
+          } else {
+            await (this.prisma as any).customer.update({
+              where: { id: dona.id },
+              data: { phone: data.customerPhone },
+            });
+          }
+        }
+      } catch { /* best-effort — nunca quebra o checkout */ }
+    }
     return { ok: true };
   }
 
@@ -245,6 +301,11 @@ export class LivePayPublicController {
     }
     if (String(cart.customerPhone || '').replace(/\D/g, '').length < 10) {
       throw new BadRequestException('Informe seu celular (com DDD) antes de pagar. 💜');
+    }
+    // CPF obrigatório: o Correio exige o CPF da destinatária pra postar (e a
+    // NF também usa). Vale pros dois modos — retirada em loja idem.
+    if (!cpfValido(String(cart.customerCpf || ''))) {
+      throw new BadRequestException('Informe seu CPF antes de pagar — o Correio exige pra postar. 💜');
     }
     // Nome completo obrigatório: sem ele a loja não tem em nome de quem postar.
     // "Real" = tem nome + sobrenome e não é só o @ do Instagram.

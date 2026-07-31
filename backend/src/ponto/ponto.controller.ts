@@ -4,11 +4,13 @@ import {
   Delete,
   Get,
   Param,
+  Patch,
   Post,
   Query,
   Req,
   UseGuards,
   BadRequestException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { AdminOnly, AdminOnlyGuard } from '../auth/admin-only.guard';
@@ -44,21 +46,35 @@ export class PontoController {
   }
 
   // ── FACE ENROLL ───────────────────────────────────────────────
+  // Matriz (admin/op) enrolla qualquer uma; a GERENTE (role=store) enrolla só
+  // as funcionárias da SUA loja (verificado por CPF/loja). A loja não acessa a
+  // retaguarda, então precisa poder cadastrar rosto pelo módulo Loja.
+  private async assertPodeMexerNaFuncionaria(req: any, sellerId: string) {
+    if (req?.user?.role !== 'store') return; // matriz: liberado
+    const ok = await this.svc.sellerBelongsToStoreCode(sellerId, req?.user?.storeCode);
+    if (!ok) throw new ForbiddenException('Essa funcionária não é da sua loja.');
+  }
+
   @Post('face/enroll/:sellerId')
-  @UseGuards(AdminOnlyGuard)
-  @AdminOnly()
-  enroll(
+  async enroll(
     @Param('sellerId') sellerId: string,
     @Body() body: { descriptors: number[][]; snapshot?: string },
+    @Req() req: any,
   ) {
+    await this.assertPodeMexerNaFuncionaria(req, sellerId);
     return this.svc.enrollFace(sellerId, body.descriptors, body.snapshot);
   }
 
   @Delete('face/:sellerId')
-  @UseGuards(AdminOnlyGuard)
-  @AdminOnly()
-  clearFace(@Param('sellerId') sellerId: string) {
+  async clearFace(@Param('sellerId') sellerId: string, @Req() req: any) {
+    await this.assertPodeMexerNaFuncionaria(req, sellerId);
     return this.svc.clearFace(sellerId);
+  }
+
+  /** Lista as funcionárias da loja + status do rosto (pro enroll da gerente). */
+  @Get('face/store-sellers/:storeId')
+  storeSellers(@Param('storeId') storeId: string) {
+    return this.svc.listStoreSellers(storeId);
   }
 
   // ── BATER PONTO ───────────────────────────────────────────────
@@ -116,6 +132,18 @@ export class PontoController {
   }
 
   // ── ESPELHO ───────────────────────────────────────────────────
+
+  /**
+   * TELA DO DIA — batidas de TODAS as funcionárias no dia, por loja,
+   * pro RH acompanhar as entradas em tempo real (a tela faz polling).
+   *   GET /ponto/dia?data=YYYY-MM-DD  (default: hoje em BRT)
+   */
+  @Get('dia')
+  @UseGuards(AdminOnlyGuard)
+  @AdminOnly()
+  dia(@Query('data') data?: string) {
+    return this.svc.getDia(data);
+  }
 
   @Get('espelho')
   espelho(
@@ -195,6 +223,41 @@ export class PontoController {
     );
   }
 
+  /**
+   * EDITA batida errada (tipo e/ou horário) — justificativa obrigatória.
+   *   PATCH /ponto/registro/:id  { tipo?, timestamp?, justificativa }
+   */
+  @Patch('registro/:id')
+  @UseGuards(AdminOnlyGuard)
+  @AdminOnly()
+  editarRegistro(
+    @Param('id') id: string,
+    @Body() body: { tipo?: string; timestamp?: string; justificativa: string },
+    @Req() req: any,
+  ) {
+    return this.svc.editarRegistro(id, {
+      tipo: body?.tipo,
+      timestamp: body?.timestamp,
+      justificativa: body?.justificativa,
+      userId: this.currentUser(req) || undefined,
+    });
+  }
+
+  /**
+   * EXCLUI batida errada — motivo obrigatório (registro vai pro log).
+   *   DELETE /ponto/registro/:id  { motivo }
+   */
+  @Delete('registro/:id')
+  @UseGuards(AdminOnlyGuard)
+  @AdminOnly()
+  excluirRegistro(
+    @Param('id') id: string,
+    @Body() body: { motivo: string },
+    @Req() req: any,
+  ) {
+    return this.svc.excluirRegistro(id, body?.motivo || '', this.currentUser(req) || undefined);
+  }
+
   @Post('manual')
   @UseGuards(AdminOnlyGuard)
   @AdminOnly()
@@ -218,6 +281,26 @@ export class PontoController {
       ...body,
       userId: this.currentUser(req) || undefined,
     });
+  }
+
+  // ── HEARTBEAT DE IP DO PDV (regra "só no WiFi da loja") ──────────
+  /**
+   * Chamado pelo app Electron da loja (gate isElectron() no frontend —
+   * impersonação de admin roda no navegador e nunca chega aqui). Grava o IP
+   * público de saída da loja; a batida pwa_selfie do celular só vale vindo
+   * de um IP recente dessa lista. Só aceita role=store (admin da matriz
+   * mandaria o IP da matriz e furaria a regra).
+   */
+  @Post('pdv-heartbeat')
+  pdvHeartbeat(@Req() req: any) {
+    if (req?.user?.role !== 'store' || !req?.user?.storeId) {
+      return { ok: false, ignored: true };
+    }
+    const ip =
+      req?.headers?.['x-forwarded-for']?.toString().split(',')[0]?.trim() ||
+      req?.ip ||
+      null;
+    return this.svc.recordPdvIp(req.user.storeId, ip);
   }
 
   // ── GEOFENCE do ponto (config por loja — matriz) ──────────────────

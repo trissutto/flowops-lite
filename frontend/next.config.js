@@ -3,6 +3,12 @@ const nextConfig = {
   reactStrictMode: true,
   output: 'standalone',
 
+  // Fotos editoriais TEMPORÁRIAS da landing /nossaslojas (Unsplash, royalty-free).
+  // Quando as fotos reais das lojas entrarem em /public/lojas, dá pra remover.
+  images: {
+    remotePatterns: [{ protocol: 'https', hostname: 'images.unsplash.com' }],
+  },
+
   // === REORG · F2: redirects 301 ===
   // Bookmarks antigos continuam funcionando depois que a gente mover telas/hubs.
   // Só adicionar aqui DEPOIS que o destination existir (Next valida em build).
@@ -14,6 +20,8 @@ const nextConfig = {
       // Hub órfão /sistema continha cadastros (Lojas/Usuários/Logs) — agora
       // tudo isso vive no novo hub /config.
       { source: '/sistema', destination: '/config', permanent: true },
+      // Landing pública de lojas — variação com hífen aponta pra URL canônica.
+      { source: '/nossas-lojas', destination: '/nossaslojas', permanent: true },
     ];
   },
 };

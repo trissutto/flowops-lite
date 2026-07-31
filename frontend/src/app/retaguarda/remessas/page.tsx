@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 
 /**
  * /retaguarda/remessas
@@ -31,7 +32,7 @@ import {
   Loader2,
   PackageCheck,
 } from 'lucide-react';
-import { api } from '@/lib/api';
+import { api, API_URL, getAuthToken } from '@/lib/api';
 
 type ShipmentRow = {
   id: string;
@@ -55,6 +56,16 @@ type ShipmentRow = {
   missingCount: number;
   pendingScanCount: number;
   hoursInTransit: number | null;
+  nfeEmitida?: boolean;
+  nfeNumero?: number | null;
+  nfeSerie?: string | null;
+  // Transporte (dono 29/07): efetivo = escolhido ou regra (≤10 peças → correios)
+  transportEfetivo?: 'correios' | 'proprio' | string;
+  transportManual?: boolean;
+  // Envio físico (pré-postagem Correios / Mais Envios)
+  trackingCode?: string | null;
+  carrier?: string | null;
+  envioGeneratedAt?: string | null;
 };
 
 type ShipmentDetail = ShipmentRow & {
@@ -80,6 +91,17 @@ type KPIs = {
   total90d: number;
 };
 
+// Período De/Até (padrão da casa: datas livres + atalhos — nunca dropdown fixo)
+const diasAtrasISO = (n: number) => {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return d.toISOString().slice(0, 10);
+};
+const inicioDoMesISO = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
+};
+
 const STATUS_LABEL: Record<string, string> = {
   open: 'Em montagem',
   in_transit: 'Em trânsito',
@@ -102,12 +124,84 @@ export default function RemessasAdminPage() {
 
   // Filtros
   const [statusFilter, setStatusFilter] = useState<string>(''); // '' = todos
+  const [origemFiltro, setOrigemFiltro] = useState<string>(''); // '' = todas
+  const [destinoFiltro, setDestinoFiltro] = useState<string>('');
   const [search, setSearch] = useState('');
-  const [daysAgo, setDaysAgo] = useState(30);
+  // De/Até livres (dono 29/07). Vazio dos dois lados = TODO o histórico.
+  const [de, setDe] = useState(diasAtrasISO(30));
+  const [ate, setAte] = useState('');
 
   // Detalhe modal
   const [detail, setDetail] = useState<ShipmentDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+
+  // Troca CORREIOS ↔ PRÓPRIO (dono 29/07). Sem escolha manual vale a regra:
+  // até 10 peças → CORREIOS; acima → PRÓPRIO.
+  const toggleTransporte = async (r: ShipmentRow, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const novo = r.transportEfetivo === 'correios' ? 'proprio' : 'correios';
+    try {
+      await api(`/realignment/shipments/${r.id}/transporte`, { method: 'POST', body: JSON.stringify({ mode: novo }) });
+      setRows((prev) => prev.map((x) => (x.id === r.id ? { ...x, transportEfetivo: novo, transportManual: true } : x)));
+    } catch (err: any) {
+      alert(`Erro ao trocar transporte: ${err?.message ?? 'falha'}`);
+    }
+  };
+
+  // ── EMISSÃO EM MASSA (dono 29/07): seleciona remessas sem NF-e e emite
+  // UMA POR VEZ, da mais ANTIGA pra mais nova — fila sequencial garante a
+  // numeração contínua por CNPJ emitente (regras de CFOP/emitente/ambiente
+  // são as mesmas da emissão individual). Pula abertas/canceladas/já emitidas.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulk, setBulk] = useState<{ done: number; total: number; atual: string } | null>(null);
+
+  const selecionavel = (r: ShipmentRow) => !r.nfeEmitida && r.status !== 'cancelled' && r.status !== 'open';
+
+  const toggleSelect = (id: string) => {
+    setSelected((prev) => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id); else n.add(id);
+      return n;
+    });
+  };
+  const toggleSelectAll = () => {
+    const elegiveis = filteredRows.filter(selecionavel).map((r) => r.id);
+    setSelected((prev) => (prev.size >= elegiveis.length && elegiveis.length > 0 ? new Set() : new Set(elegiveis)));
+  };
+
+  const emitirEmMassa = async () => {
+    const fila = rows
+      .filter((r) => selected.has(r.id) && selecionavel(r))
+      .sort((a, b) => new Date(a.openedAt).getTime() - new Date(b.openedAt).getTime());
+    if (!fila.length) return;
+    if (!confirm(
+      `Emitir NF-e de ${fila.length} remessa(s), UMA POR VEZ (da mais antiga pra mais nova)?\n\n` +
+      `CFOP, emitente (raiz do destino) e ambiente seguem as regras automáticas de cada remessa.`,
+    )) return;
+    const falhas: string[] = [];
+    for (let i = 0; i < fila.length; i++) {
+      const r = fila[i];
+      setBulk({ done: i, total: fila.length, atual: r.code });
+      try {
+        const res = await api<any>(`/nfe/transfer/emit/${r.id}`, { method: 'POST', body: JSON.stringify({}) });
+        const d = res?.doc || {};
+        if (res?.ok && (d?.status === 'authorized' || res?.jaEmitida)) {
+          setRows((prev) => prev.map((x) => (x.id === r.id
+            ? { ...x, nfeEmitida: true, nfeNumero: d?.numero ?? x.nfeNumero, nfeSerie: d?.serie ?? x.nfeSerie }
+            : x)));
+          setSelected((prev) => { const n = new Set(prev); n.delete(r.id); return n; });
+        } else {
+          falhas.push(`${r.code}: ${d?.cStat ?? ''} ${d?.xMotivo ?? res?.xMotivo ?? 'não autorizada'}`);
+        }
+      } catch (e: any) {
+        falhas.push(`${r.code}: ${e?.message ?? 'falha'}`);
+      }
+    }
+    setBulk(null);
+    alert(falhas.length
+      ? `Emissão em massa: ${fila.length - falhas.length} autorizada(s), ${falhas.length} falha(s):\n\n${falhas.join('\n')}`
+      : `✅ ${fila.length} NF-e autorizada(s).`);
+  };
 
   const load = async () => {
     setLoading(true);
@@ -116,7 +210,8 @@ export default function RemessasAdminPage() {
       const params = new URLSearchParams();
       if (statusFilter) params.set('status', statusFilter);
       if (search.trim()) params.set('search', search.trim());
-      params.set('daysAgo', String(daysAgo));
+      if (de) params.set('de', de);
+      if (ate) params.set('ate', ate);
 
       const [list, k] = await Promise.all([
         api<ShipmentRow[]>(`/realignment/shipments/admin/all?${params.toString()}`),
@@ -134,13 +229,25 @@ export default function RemessasAdminPage() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [statusFilter, daysAgo]);
+  }, [statusFilter, de, ate]);
 
-  // Filtro de busca client-side adicional (substring no código + lojas)
+  // Opções de loja pros selects (origem/destino) — deduplicadas das remessas
+  const lojaOpcoes = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const r of rows) {
+      m.set(r.fromStoreCode, `${r.fromStoreCode} ${r.fromStoreName}`);
+      m.set(r.toStoreCode, `${r.toStoreCode} ${r.toStoreName}`);
+    }
+    return Array.from(m.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+  }, [rows]);
+
+  // Filtro de busca client-side adicional (substring no código + lojas + origem/destino)
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return rows;
     return rows.filter((r) => {
+      if (origemFiltro && r.fromStoreCode !== origemFiltro) return false;
+      if (destinoFiltro && r.toStoreCode !== destinoFiltro) return false;
+      if (!q) return true;
       return (
         r.code.toLowerCase().includes(q) ||
         r.fromStoreCode.toLowerCase().includes(q) ||
@@ -149,10 +256,14 @@ export default function RemessasAdminPage() {
         r.toStoreName.toLowerCase().includes(q)
       );
     });
-  }, [rows, search]);
+  }, [rows, search, origemFiltro, destinoFiltro]);
 
   const openDetail = async (id: string) => {
     setDetail(null);
+    setDetailId(id);
+    setNfeResult(null);
+    setNfePreview(null);
+    setEnvioMsg(null);
     setDetailLoading(true);
     try {
       const d = await api<ShipmentDetail>(`/realignment/shipments/admin/${id}`);
@@ -161,6 +272,226 @@ export default function RemessasAdminPage() {
       alert(e?.message || 'Erro ao carregar detalhe');
     } finally {
       setDetailLoading(false);
+    }
+  };
+
+  // ── NF-e de transferência (Fase 3, 23/07): emite direto do detalhe ──
+  const [detailId, setDetailId] = useState<string | null>(null);
+  const [nfeEmitting, setNfeEmitting] = useState(false);
+  const [nfeResult, setNfeResult] = useState<any | null>(null);
+  const [nfePreview, setNfePreview] = useState<any | null>(null);
+  const [nfePreviewLoading, setNfePreviewLoading] = useState(false);
+  // Lista de NF-e emitidas ("será que foi?" — resposta definitiva num lugar só)
+  const [nfeList, setNfeList] = useState<any[] | null>(null);
+  const [nfeListOpen, setNfeListOpen] = useState(false);
+  const [nfeLojaFiltro, setNfeLojaFiltro] = useState(''); // filtro por loja de ORIGEM (emitente)
+  // Cancelamento de NF-e (evento 110111, prazo SEFAZ 24h)
+  const [cancelTarget, setCancelTarget] = useState<any | null>(null);
+  const [cancelJust, setCancelJust] = useState('');
+  const [cancelBusy, setCancelBusy] = useState(false);
+  const confirmarCancelamento = async () => {
+    if (!cancelTarget || cancelBusy) return;
+    const just = cancelJust.trim();
+    if (just.length < 15) return;
+    setCancelBusy(true);
+    try {
+      await api(`/nfe/${cancelTarget.id}/cancel`, {
+        method: 'POST',
+        body: JSON.stringify({ justificativa: just }),
+      });
+      setCancelTarget(null);
+      setCancelJust('');
+      await abrirNfeList(); // recarrega a lista (status vira CANCELADA)
+    } catch (e: any) {
+      alert(`Não foi possível cancelar: ${e?.message || e}`);
+    } finally {
+      setCancelBusy(false);
+    }
+  };
+  const abrirNfeList = async () => {
+    setNfeListOpen(true);
+    setNfeList(null);
+    try {
+      setNfeList(await api<any[]>('/nfe?limit=100'));
+    } catch {
+      setNfeList([]);
+    }
+  };
+
+  // ── Numeração NF-e por loja (gerência) ────────────────────────────────────
+  const [seqOpen, setSeqOpen] = useState(false);
+  const [seqList, setSeqList] = useState<any[] | null>(null);
+  const [seqEdit, setSeqEdit] = useState<Record<string, string>>({});
+  const abrirSeq = async () => {
+    setSeqOpen(true);
+    setSeqList(null);
+    try {
+      setSeqList(await api<any[]>('/nfe/sequences'));
+    } catch {
+      setSeqList([]);
+    }
+  };
+  const salvarSeq = async (storeCode: string) => {
+    const val = parseInt((seqEdit[storeCode] || '').replace(/\D/g, ''), 10);
+    if (!val || val < 1) return;
+    try {
+      await api(`/nfe/sequence/${storeCode}`, {
+        method: 'POST',
+        body: JSON.stringify({ serie: '1', proximo: val }),
+      });
+      setSeqEdit((p) => ({ ...p, [storeCode]: '' }));
+      setSeqList(await api<any[]>('/nfe/sequences'));
+    } catch (e: any) {
+      alert(`Erro ao salvar: ${e?.message || e}`);
+    }
+  };
+
+  // DANFE em PDF — fetch com bearer (rota autenticada) → abre em nova aba
+  const abrirDanfe = async (docId: string, numero: any) => {
+    try {
+      const token = getAuthToken();
+      const r = await fetch(`${API_URL}/api/nfe/${docId}/danfe`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!r.ok) throw new Error((await r.json().catch(() => null))?.message || `HTTP ${r.status}`);
+      const blobUrl = URL.createObjectURL(await r.blob());
+      const w = window.open(blobUrl, '_blank');
+      if (!w) {
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = `danfe-${numero}.pdf`;
+        a.click();
+      }
+    } catch (e: any) {
+      alert(`Erro ao gerar DANFE: ${e?.message || e}`);
+    }
+  };
+
+  // Baixa o XML EXATO que foi à SEFAZ (diagnóstico de rejeição sem queimar número)
+  const baixarXmlNfe = async (d: any) => {
+    try {
+      const doc = await api<any>(`/nfe/${d.id}`);
+      const partes: Array<[string, string | null]> = [
+        [`nfe-${d.numero}-enviado.xml`, doc?.xmlEnviado],
+        [`nfe-${d.numero}-resposta.xml`, d.status !== 'authorized' ? doc?.xmlResposta : null],
+      ];
+      let baixou = false;
+      for (const [nome, xml] of partes) {
+        if (!xml) continue;
+        const blob = new Blob([xml], { type: 'application/xml' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = nome;
+        a.click();
+        URL.revokeObjectURL(a.href);
+        baixou = true;
+      }
+      if (!baixou) alert('Esta NF-e não tem XML gravado (falhou antes de assinar).');
+    } catch (e: any) {
+      alert(`Erro ao buscar XML: ${e?.message || e}`);
+    }
+  };
+
+  const carregarPreview = async () => {
+    if (!detailId || nfePreviewLoading) return;
+    setNfePreviewLoading(true);
+    try {
+      setNfePreview(await api<any>(`/nfe/transfer/preview/${detailId}`));
+    } catch (e: any) {
+      setNfePreview({ erro: e?.message || 'Falha na prévia' });
+    } finally {
+      setNfePreviewLoading(false);
+    }
+  };
+  const emitirNfe = async () => {
+    if (!detailId || nfeEmitting) return;
+    if (!confirm('Emitir NF-e de transferência desta remessa?\n\nO ambiente (homologação/produção) vem da config fiscal da loja de ORIGEM.')) return;
+    setNfeEmitting(true);
+    setNfeResult(null);
+    try {
+      const r = await api<any>(`/nfe/transfer/emit/${detailId}`, { method: 'POST', body: JSON.stringify({}) });
+      // Backend devolve { ok, jaEmitida, doc: {...}, warnings } — desembrulha
+      // o doc pro painel (bug 23/07: lia no nível de cima e mostrava vazio)
+      const d = r?.doc || r || {};
+      setNfeResult({ ...d, ok: r?.ok, jaEmitida: r?.jaEmitida, warnings: r?.warnings });
+      // Selo "NF-e" da LISTA em tempo real (dono 29/07): autorizou → atualiza
+      // a linha na hora, sem esperar F5/Atualizar.
+      if (r?.ok && (d?.status === 'authorized' || r?.jaEmitida)) {
+        setRows((prev) => prev.map((x) => (x.id === detailId
+          ? { ...x, nfeEmitida: true, nfeNumero: d?.numero ?? x.nfeNumero, nfeSerie: d?.serie ?? x.nfeSerie }
+          : x)));
+      }
+    } catch (e: any) {
+      setNfeResult({ erro: e?.message || 'Falha na emissão' });
+    } finally {
+      setNfeEmitting(false);
+    }
+  };
+
+  // ── ETIQUETA DE ENVIO (dono 31/07) ────────────────────────────────────────
+  // Antes só a LOJA DE ORIGEM conseguia gerar, e só se a remessa caísse na
+  // regra dos Correios (até 10 peças). Da retaguarda não dava de jeito nenhum.
+  // Agora dá — e com "forçar" pra postar qualquer remessa quando ele quiser.
+  const [envioBusy, setEnvioBusy] = useState<'gerar' | 'etiqueta' | 'ambos' | null>(null);
+  const [envioMsg, setEnvioMsg] = useState<{ tipo: 'ok' | 'erro'; texto: string } | null>(null);
+
+  const gerarEtiqueta = async (forcar: boolean) => {
+    if (!detailId || envioBusy) return;
+    if (forcar && !confirm(
+      'Essa remessa está marcada como transporte PRÓPRIO.\n\n' +
+      'Gerar a etiqueta dos Correios vai:\n' +
+      '· emitir a NF-e de transferência se ainda não existir\n' +
+      '· criar a pré-postagem SEDEX com a chave da nota\n' +
+      '· passar o transporte da remessa pra CORREIOS\n\nConfirma?',
+    )) return;
+    setEnvioBusy('gerar');
+    setEnvioMsg(null);
+    try {
+      const r = await api<any>(`/realignment/shipments/${detailId}/gerar-envio`, {
+        method: 'POST',
+        body: JSON.stringify({ forcar }),
+      });
+      setEnvioMsg({
+        tipo: 'ok',
+        texto: r?.jaGerado
+          ? `Essa remessa já tinha envio: ${r.carrier || 'transportadora'} ${r.codigoRastreio}`
+          : `${r?.carrier || 'Envio'} gerado — rastreio ${r?.codigoRastreio}`,
+      });
+      const patch = { trackingCode: r?.codigoRastreio ?? null, carrier: r?.carrier ?? null, transportEfetivo: 'correios', transportManual: true };
+      setDetail((prev) => (prev ? { ...prev, ...patch } : prev));
+      setRows((prev) => prev.map((x) => (x.id === detailId ? { ...x, ...patch } : x)));
+    } catch (e: any) {
+      setEnvioMsg({ tipo: 'erro', texto: e?.message || 'Falha ao gerar o envio' });
+    } finally {
+      setEnvioBusy(null);
+    }
+  };
+
+  const baixarDocsEnvio = async (somenteEtiqueta: boolean) => {
+    if (!detailId || envioBusy) return;
+    setEnvioBusy(somenteEtiqueta ? 'etiqueta' : 'ambos');
+    setEnvioMsg(null);
+    try {
+      const r = await api<any>(
+        `/realignment/shipments/${detailId}/docs-envio${somenteEtiqueta ? '?somenteEtiqueta=1' : ''}`,
+      );
+      if (!r?.pdfBase64) throw new Error('PDF não veio');
+      const a = document.createElement('a');
+      a.href = `data:application/pdf;base64,${r.pdfBase64}`;
+      a.download = `${detail?.code || 'remessa'}${somenteEtiqueta ? '-etiqueta' : '-etiqueta-danfe'}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setEnvioMsg({
+        tipo: 'ok',
+        texto: somenteEtiqueta
+          ? 'Etiqueta baixada.'
+          : `PDF baixado${r?.temNota ? ' (etiqueta + DANFE)' : ' (só a etiqueta — DANFE não disponível)'}.`,
+      });
+    } catch (e: any) {
+      setEnvioMsg({ tipo: 'erro', texto: e?.message || 'Falha ao baixar' });
+    } finally {
+      setEnvioBusy(null);
     }
   };
 
@@ -188,9 +519,22 @@ export default function RemessasAdminPage() {
               Remessas em trânsito
             </h1>
             <p className="text-xs text-slate-500">
-              Rastreio de todas as caixas de realinhamento entre lojas (últimos {daysAgo} dias)
+              Rastreio de todas as caixas de realinhamento entre lojas ({de || ate ? `${de ? de.split('-').reverse().join('/') : 'início'} → ${ate ? ate.split('-').reverse().join('/') : 'hoje'}` : 'todo o histórico'})
             </p>
           </div>
+          <button
+            onClick={abrirNfeList}
+            className="px-3 py-2 rounded-lg border-2 border-indigo-300 text-indigo-700 hover:bg-indigo-50 text-sm font-bold"
+          >
+            📄 NF-e emitidas
+          </button>
+          <button
+            onClick={abrirSeq}
+            className="px-3 py-2 rounded-lg border-2 border-slate-300 text-slate-700 hover:bg-slate-50 text-sm font-bold"
+            title="Numeração da NF-e por loja — ajuste o próximo número real de cada CNPJ"
+          >
+            🔢 Numeração
+          </button>
           <button
             onClick={load}
             disabled={loading}
@@ -260,6 +604,28 @@ export default function RemessasAdminPage() {
             />
           </div>
           <select
+            value={origemFiltro}
+            onChange={(e) => setOrigemFiltro(e.target.value)}
+            className="text-sm border rounded-md px-3 py-2"
+            title="Filtrar por loja de ORIGEM"
+          >
+            <option value="">Origem: todas</option>
+            {lojaOpcoes.map(([code, label]) => (
+              <option key={code} value={code}>➜ {label}</option>
+            ))}
+          </select>
+          <select
+            value={destinoFiltro}
+            onChange={(e) => setDestinoFiltro(e.target.value)}
+            className="text-sm border rounded-md px-3 py-2"
+            title="Filtrar por loja de DESTINO"
+          >
+            <option value="">Destino: todas</option>
+            {lojaOpcoes.map(([code, label]) => (
+              <option key={code} value={code}>⇥ {label}</option>
+            ))}
+          </select>
+          <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
             className="text-sm border rounded-md px-3 py-2"
@@ -269,16 +635,69 @@ export default function RemessasAdminPage() {
             <option value="in_transit">Em trânsito</option>
             <option value="received">Recebidas</option>
           </select>
-          <select
-            value={daysAgo}
-            onChange={(e) => setDaysAgo(Number(e.target.value))}
-            className="text-sm border rounded-md px-3 py-2"
-          >
-            <option value={7}>Últimos 7 dias</option>
-            <option value={30}>Últimos 30 dias</option>
-            <option value={90}>Últimos 90 dias</option>
-          </select>
+          {/* Período De/Até livre + atalhos (dono 29/07 — sem dropdown fixo) */}
+          <div className="flex items-center gap-1">
+            <input
+              type="date"
+              value={de}
+              onChange={(e) => setDe(e.target.value)}
+              className="text-sm border rounded-md px-2 py-2"
+              title="De (vazio = desde o início)"
+            />
+            <span className="text-xs text-slate-400">→</span>
+            <input
+              type="date"
+              value={ate}
+              onChange={(e) => setAte(e.target.value)}
+              className="text-sm border rounded-md px-2 py-2"
+              title="Até (vazio = hoje)"
+            />
+          </div>
+          <div className="flex flex-wrap gap-1">
+            {([
+              ['Hoje', () => { setDe(diasAtrasISO(0)); setAte(''); }],
+              ['7 dias', () => { setDe(diasAtrasISO(7)); setAte(''); }],
+              ['Mês', () => { setDe(inicioDoMesISO()); setAte(''); }],
+              ['90 dias', () => { setDe(diasAtrasISO(90)); setAte(''); }],
+              ['Tudo', () => { setDe(''); setAte(''); }],
+            ] as Array<[string, () => void]>).map(([label, fn]) => (
+              <button
+                key={label}
+                onClick={fn}
+                className="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
+
+        {/* Barra da emissão em massa */}
+        {(selected.size > 0 || bulk) && (
+          <div className="mb-3 flex items-center justify-between gap-3 rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-2">
+            <span className="text-sm font-semibold text-indigo-900">
+              {bulk
+                ? `🧾 Emitindo ${bulk.done + 1}/${bulk.total} — ${bulk.atual}… (uma por vez, numeração sequencial)`
+                : `${selected.size} remessa(s) selecionada(s) pra NF-e`}
+            </span>
+            <div className="flex shrink-0 gap-2">
+              <button
+                onClick={() => setSelected(new Set())}
+                disabled={!!bulk}
+                className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 disabled:opacity-50"
+              >
+                Limpar
+              </button>
+              <button
+                onClick={emitirEmMassa}
+                disabled={!!bulk || selected.size === 0}
+                className="rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-indigo-700 disabled:opacity-50"
+              >
+                {bulk ? <Loader2 className="inline h-3.5 w-3.5 animate-spin" /> : `🧾 Emitir NF-e em massa (${selected.size})`}
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Lista */}
         {error && (
@@ -303,11 +722,21 @@ export default function RemessasAdminPage() {
             <table className="w-full text-sm">
               <thead className="bg-slate-50 border-b text-xs uppercase text-slate-500">
                 <tr>
+                  <th className="w-8 px-3 py-2">
+                    <input
+                      type="checkbox"
+                      title="Selecionar todas SEM NF-e (visíveis no filtro)"
+                      checked={filteredRows.filter(selecionavel).length > 0 && filteredRows.filter(selecionavel).every((r) => selected.has(r.id))}
+                      onChange={toggleSelectAll}
+                      disabled={!!bulk}
+                    />
+                  </th>
                   <th className="text-left px-3 py-2">Código</th>
                   <th className="text-left px-3 py-2">Origem → Destino</th>
                   <th className="text-left px-3 py-2">Status</th>
                   <th className="text-right px-3 py-2">Itens</th>
                   <th className="text-right px-3 py-2">Peças</th>
+                  <th className="text-left px-3 py-2">Transporte</th>
                   <th className="text-left px-3 py-2">Aberta em</th>
                   <th className="text-left px-3 py-2">Enviada em</th>
                   <th className="text-left px-3 py-2">Tempo trânsito</th>
@@ -324,8 +753,31 @@ export default function RemessasAdminPage() {
                       onClick={() => openDetail(r.id)}
                       className="border-b last:border-0 hover:bg-slate-50 cursor-pointer transition-colors"
                     >
+                      <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+                        {selecionavel(r) && (
+                          <input
+                            type="checkbox"
+                            checked={selected.has(r.id)}
+                            onChange={() => toggleSelect(r.id)}
+                            disabled={!!bulk}
+                            title="Selecionar pra emissão em massa"
+                          />
+                        )}
+                      </td>
                       <td className="px-3 py-2 font-mono text-xs font-semibold text-slate-700">
                         {r.code}
+                        {r.nfeEmitida ? (
+                          <div
+                            className="mt-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-50 border border-emerald-300 text-emerald-700 text-[10px] font-bold"
+                            title={`NF-e nº ${r.nfeNumero}/${r.nfeSerie || '1'} autorizada`}
+                          >
+                            📄 NF-e {r.nfeNumero}
+                          </div>
+                        ) : (
+                          <div className="mt-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-50 border border-slate-200 text-slate-400 text-[10px] font-semibold" title="Sem NF-e emitida">
+                            sem NF-e
+                          </div>
+                        )}
                       </td>
                       <td className="px-3 py-2">
                         <div className="text-slate-700">
@@ -361,6 +813,20 @@ export default function RemessasAdminPage() {
                       <td className="px-3 py-2 text-right tabular-nums text-slate-700">
                         {r.totalQtyLive}
                       </td>
+                      <td className="px-3 py-2">
+                        <button
+                          onClick={(e) => toggleTransporte(r, e)}
+                          title={`${r.transportManual ? 'Escolhido manualmente' : 'Regra automática: até 10 peças → CORREIOS; acima → PRÓPRIO'} — clique pra trocar`}
+                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold border transition ${
+                            r.transportEfetivo === 'correios'
+                              ? 'bg-sky-50 border-sky-300 text-sky-700 hover:bg-sky-100'
+                              : 'bg-amber-50 border-amber-300 text-amber-700 hover:bg-amber-100'
+                          }`}
+                        >
+                          {r.transportEfetivo === 'correios' ? '📮 CORREIOS' : '🚚 PRÓPRIO'}
+                          {!r.transportManual && <span className="font-normal text-[9px] opacity-70">auto</span>}
+                        </button>
+                      </td>
                       <td className="px-3 py-2 text-xs text-slate-500">{fmtDate(r.openedAt)}</td>
                       <td className="px-3 py-2 text-xs text-slate-500">{fmtDate(r.sentAt)}</td>
                       <td className="px-3 py-2 text-xs">
@@ -390,11 +856,250 @@ export default function RemessasAdminPage() {
         )}
       </main>
 
+      {/* Modal NF-e emitidas */}
+      {nfeListOpen && (
+        <div
+          className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+          {...overlayClose(() => setNfeListOpen(false))}
+        >
+          <div
+            className="bg-white rounded-lg max-w-4xl w-full max-h-[85vh] overflow-hidden flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-4 py-3 border-b flex items-center justify-between gap-3 bg-indigo-50">
+              <h2 className="font-semibold text-indigo-900">📄 NF-e de transferência emitidas</h2>
+              <div className="flex items-center gap-2">
+                <select
+                  value={nfeLojaFiltro}
+                  onChange={(e) => setNfeLojaFiltro(e.target.value)}
+                  className="text-xs p-1.5 border rounded-lg bg-white"
+                  title="Filtrar pela loja de ORIGEM (o CNPJ emitente da nota)"
+                >
+                  <option value="">Todas as lojas</option>
+                  {Array.from(new Set((nfeList || []).map((d: any) => String(d.fromStoreCode))))
+                    .sort()
+                    .map((c) => (
+                      <option key={c} value={c}>Loja {c}</option>
+                    ))}
+                </select>
+                <button onClick={() => setNfeListOpen(false)} className="p-1.5 hover:bg-white rounded">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-auto p-4">
+              {nfeList === null ? (
+                <div className="text-center py-8 text-slate-400">
+                  <Loader2 className="w-6 h-6 animate-spin inline-block" />
+                </div>
+              ) : nfeList.length === 0 ? (
+                <div className="text-center py-8 text-slate-400 text-sm">Nenhuma NF-e emitida ainda.</div>
+              ) : (
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="text-[10px] uppercase text-slate-400 border-b">
+                      <th className="text-left py-1.5 pr-2">Quando</th>
+                      <th className="text-left py-1.5 pr-2">Rota</th>
+                      <th className="text-left py-1.5 pr-2">Nº / Série</th>
+                      <th className="text-left py-1.5 pr-2">Amb.</th>
+                      <th className="text-left py-1.5 pr-2">Status</th>
+                      <th className="text-right py-1.5 pr-2">Valor</th>
+                      <th className="text-left py-1.5">Chave / Motivo</th>
+                      <th className="text-left py-1.5 pl-2">XML</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {nfeList
+                      .filter((d: any) => !nfeLojaFiltro || String(d.fromStoreCode) === nfeLojaFiltro)
+                      .map((d) => (
+                      <tr key={d.id} className="border-b last:border-0 align-top">
+                        <td className="py-1.5 pr-2 whitespace-nowrap text-slate-500">{fmtDate(d.createdAt)}</td>
+                        <td className="py-1.5 pr-2 whitespace-nowrap">{d.fromStoreCode} → {d.toStoreCode}</td>
+                        <td className="py-1.5 pr-2 whitespace-nowrap font-mono font-bold">{d.numero}/{d.serie}</td>
+                        <td className="py-1.5 pr-2">
+                          <span className={`font-bold ${d.tpAmb === '1' ? 'text-rose-700' : 'text-emerald-700'}`}>
+                            {d.tpAmb === '1' ? 'PROD' : 'HOMOL'}
+                          </span>
+                        </td>
+                        <td className="py-1.5 pr-2">
+                          <span className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-bold border ${
+                            d.status === 'authorized'
+                              ? 'bg-emerald-50 border-emerald-300 text-emerald-700'
+                              : d.status === 'rejected'
+                              ? 'bg-rose-50 border-rose-300 text-rose-700'
+                              : d.status === 'cancelled'
+                              ? 'bg-slate-100 border-slate-300 text-slate-600 line-through'
+                              : 'bg-amber-50 border-amber-300 text-amber-700'
+                          }`}>
+                            {d.status === 'authorized' ? 'AUTORIZADA' : d.status === 'rejected' ? 'REJEITADA' : d.status === 'cancelled' ? 'CANCELADA' : (d.status || '?').toUpperCase()}
+                          </span>
+                          {d.cStat && <div className="text-[10px] text-slate-400 mt-0.5">cStat {d.cStat}</div>}
+                        </td>
+                        <td className="py-1.5 pr-2 text-right tabular-nums whitespace-nowrap">
+                          R$ {(Number(d.valorTotalCents || 0) / 100).toFixed(2)}
+                        </td>
+                        <td className="py-1.5 font-mono text-[10px] break-all max-w-[260px]">
+                          {d.status === 'authorized' ? d.chave : (d.xMotivo || d.chave || '—')}
+                        </td>
+                        <td className="py-1.5 pl-2 whitespace-nowrap">
+                          <button
+                            onClick={() => abrirDanfe(d.id, d.numero)}
+                            className={`text-[10px] px-1.5 py-0.5 rounded border mr-1 ${
+                              d.status === 'authorized'
+                                ? 'border-emerald-300 hover:bg-emerald-50 text-emerald-700 font-bold'
+                                : 'border-slate-300 hover:bg-slate-100 text-slate-500'
+                            }`}
+                            title={d.status === 'authorized' ? 'Abrir DANFE em PDF' : 'DANFE de conferência (sai com tarja SEM VALOR FISCAL)'}
+                          >
+                            📄 DANFE
+                          </button>
+                          <button
+                            onClick={() => baixarXmlNfe(d)}
+                            className="text-[10px] px-1.5 py-0.5 rounded border border-slate-300 hover:bg-slate-100 text-slate-600 mr-1"
+                            title="Baixar o XML enviado à SEFAZ (e a resposta, se rejeitada)"
+                          >
+                            ⬇ XML
+                          </button>
+                          {d.status === 'authorized' && (
+                            <button
+                              onClick={() => setCancelTarget(d)}
+                              className="text-[10px] px-1.5 py-0.5 rounded border border-rose-300 hover:bg-rose-50 text-rose-700 font-bold"
+                              title="Cancelar esta NF-e na SEFAZ (prazo 24h)"
+                            >
+                              ✕ Cancelar
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de NUMERAÇÃO NF-e por loja */}
+      {seqOpen && (
+        <div
+          className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+          {...overlayClose(() => setSeqOpen(false))}
+        >
+          <div className="bg-white rounded-lg max-w-3xl w-full max-h-[85vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="px-4 py-3 border-b flex items-center justify-between bg-slate-50">
+              <h2 className="font-semibold text-slate-800">🔢 Numeração da NF-e por loja</h2>
+              <button onClick={() => setSeqOpen(false)} className="p-1.5 hover:bg-white rounded"><X className="w-4 h-4" /></button>
+            </div>
+            <div className="px-4 py-2 text-xs text-slate-600 bg-amber-50 border-b border-amber-200">
+              <b>"Próximo nº"</b> é o número que o Flow vai usar na próxima emissão de cada loja. Se a filial já
+              emitia notas no GigaNFe, coloque aqui o <b>último número real + 1</b> (do GigaNFe / contador / portal SEFAZ).
+              Se errar pra baixo, a SEFAZ recusa o número já usado e o Flow <b>avança sozinho</b> até achar o livre.
+            </div>
+            <div className="flex-1 overflow-auto p-4">
+              {seqList === null ? (
+                <div className="text-center py-8 text-slate-400"><Loader2 className="w-6 h-6 animate-spin inline-block" /></div>
+              ) : (
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="text-[10px] uppercase text-slate-400 border-b">
+                      <th className="text-left py-1.5 pr-2">Loja</th>
+                      <th className="text-left py-1.5 pr-2">CNPJ (NF-e)</th>
+                      <th className="text-right py-1.5 pr-2">Próximo nº</th>
+                      <th className="text-left py-1.5">Ajustar</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {seqList.map((s) => (
+                      <tr key={s.storeCode} className="border-b last:border-0">
+                        <td className="py-1.5 pr-2 whitespace-nowrap font-semibold">{s.storeCode} {s.storeName}</td>
+                        <td className="py-1.5 pr-2 font-mono text-[10px] text-slate-500">
+                          {s.cnpj ? s.cnpj.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5') : '—'}
+                        </td>
+                        <td className="py-1.5 pr-2 text-right font-mono font-bold tabular-nums">
+                          {s.proximo ?? <span className="text-slate-400 font-normal">nunca emitiu</span>}
+                        </td>
+                        <td className="py-1.5">
+                          <div className="flex items-center gap-1">
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              value={seqEdit[s.storeCode] || ''}
+                              onChange={(e) => setSeqEdit((p) => ({ ...p, [s.storeCode]: e.target.value }))}
+                              placeholder="nº real"
+                              className="w-20 p-1 border rounded text-xs text-right"
+                            />
+                            <button
+                              onClick={() => salvarSeq(s.storeCode)}
+                              disabled={!seqEdit[s.storeCode]}
+                              className="text-[10px] px-2 py-1 rounded bg-slate-700 text-white font-bold hover:bg-slate-800 disabled:opacity-30"
+                            >
+                              OK
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de CANCELAMENTO de NF-e */}
+      {cancelTarget && (
+        <div
+          className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4"
+          {...overlayClose(() => !cancelBusy && setCancelTarget(null))}
+        >
+          <div className="bg-white rounded-lg max-w-md w-full p-5" onClick={(e) => e.stopPropagation()}>
+            <h2 className="font-bold text-rose-800 text-lg mb-1">Cancelar NF-e nº {cancelTarget.numero}/{cancelTarget.serie}</h2>
+            <p className="text-xs text-slate-500 mb-3">
+              Envia o evento de cancelamento à SEFAZ. <b>Prazo legal: 24h</b> após a autorização —
+              fora disso a SEFAZ recusa (aí só carta de correção/estorno pelo contador).
+            </p>
+            <label className="block text-xs font-semibold text-slate-600 mb-1">
+              Justificativa (mín. 15 caracteres)
+            </label>
+            <textarea
+              value={cancelJust}
+              onChange={(e) => setCancelJust(e.target.value.slice(0, 255))}
+              rows={3}
+              autoFocus
+              placeholder="Ex.: Remessa cancelada — mercadoria não seguiu para a loja destino."
+              className="w-full p-2 border rounded-lg text-sm resize-none"
+            />
+            <div className={`text-[11px] mt-1 ${cancelJust.trim().length < 15 ? 'text-rose-600' : 'text-emerald-600'}`}>
+              {cancelJust.trim().length}/255 {cancelJust.trim().length < 15 ? '— faltam ' + (15 - cancelJust.trim().length) : '✓'}
+            </div>
+            <div className="flex justify-end gap-2 mt-4">
+              <button
+                onClick={() => !cancelBusy && setCancelTarget(null)}
+                disabled={cancelBusy}
+                className="px-3 py-2 rounded-lg border text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+              >
+                Voltar
+              </button>
+              <button
+                onClick={confirmarCancelamento}
+                disabled={cancelBusy || cancelJust.trim().length < 15}
+                className="px-4 py-2 rounded-lg bg-rose-600 text-white text-sm font-bold hover:bg-rose-700 disabled:opacity-40 inline-flex items-center gap-2"
+              >
+                {cancelBusy && <Loader2 className="w-4 h-4 animate-spin" />}
+                {cancelBusy ? 'Cancelando…' : 'Cancelar NF-e na SEFAZ'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Modal detalhe */}
       {(detailLoading || detail) && (
         <div
           className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
-          onClick={() => setDetail(null)}
+          {...overlayClose(() => setDetail(null))}
         >
           <div
             className="bg-white rounded-lg max-w-3xl w-full max-h-[85vh] overflow-hidden flex flex-col"
@@ -440,6 +1145,224 @@ export default function RemessasAdminPage() {
                       <div className="text-xs text-slate-500">Recebida</div>
                       <div className="font-medium">{fmtDate(detail.receivedAt)}</div>
                     </div>
+                  </div>
+
+                  {/* NF-e de transferência — emite pelo CNPJ da loja de origem */}
+                  <div className="mb-4 rounded-lg border-2 border-indigo-200 bg-indigo-50/50 p-3">
+                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                      <div className="text-sm">
+                        <div className="font-bold text-indigo-900">NF-e de transferência (mod. 55)</div>
+                        <div className="text-xs text-indigo-700">
+                          Emite pelo CNPJ da loja de origem ({detail.fromStoreCode}) · itens a preço de custo · CFOP 5152/6152
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={carregarPreview}
+                          disabled={nfePreviewLoading}
+                          className="px-4 py-2 rounded-lg border-2 border-indigo-400 text-indigo-700 hover:bg-indigo-100 text-sm font-bold disabled:opacity-50"
+                        >
+                          {nfePreviewLoading ? 'Carregando…' : '👁 Prévia'}
+                        </button>
+                        <button
+                          onClick={emitirNfe}
+                          disabled={nfeEmitting}
+                          className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-bold disabled:opacity-50"
+                        >
+                          {nfeEmitting ? 'Emitindo…' : '📄 Emitir NF-e'}
+                        </button>
+                      </div>
+                    </div>
+                    {nfePreview && (
+                      nfePreview.erro ? (
+                        <div className="mt-2 rounded px-3 py-2 text-xs bg-rose-50 border border-rose-200 text-rose-800">⚠️ {nfePreview.erro}</div>
+                      ) : (
+                        <div className="mt-2 rounded-lg bg-white border border-indigo-200 p-3 text-xs space-y-2">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            <div>
+                              <div className="text-[10px] uppercase font-bold text-slate-400">Emitente</div>
+                              <div className="font-semibold">{nfePreview.emitente.razaoSocial}</div>
+                              <div className="font-mono">{nfePreview.emitente.cnpj} · IE {nfePreview.emitente.ie}</div>
+                              <div>
+                                nº <b>{nfePreview.proximoNumero}</b> série {nfePreview.serie} ·{' '}
+                                <b className={nfePreview.emitente.ambiente === '1' ? 'text-rose-700' : 'text-emerald-700'}>
+                                  {nfePreview.emitente.ambiente === '1' ? 'PRODUÇÃO' : 'HOMOLOGAÇÃO'}
+                                </b>
+                              </div>
+                            </div>
+                            <div>
+                              <div className="text-[10px] uppercase font-bold text-slate-400">Destinatário</div>
+                              <div className="font-semibold">{nfePreview.destinatario.razaoSocial}</div>
+                              <div className="font-mono">{nfePreview.destinatario.cnpj} · IE {nfePreview.destinatario.ie}</div>
+                              <div>CFOP <b>{nfePreview.cfop}</b> · {nfePreview.icms?.descricao}</div>
+                            </div>
+                          </div>
+                          {nfePreview.avisoMesmoEstabelecimento && (
+                            <div className="rounded bg-rose-50 border border-rose-300 px-2 py-1.5 text-rose-800 font-semibold">
+                              🚫 {nfePreview.avisoMesmoEstabelecimento}
+                            </div>
+                          )}
+                          {nfePreview.avisoInterEmpresa && (
+                            <div className="rounded bg-amber-50 border border-amber-300 px-2 py-1.5 text-amber-800 font-semibold">
+                              ⚠️ {nfePreview.avisoInterEmpresa}
+                            </div>
+                          )}
+                          {nfePreview.jaEmitida && (
+                            <div className="rounded bg-emerald-50 border border-emerald-300 px-2 py-1.5 text-emerald-800 font-semibold">
+                              ✅ Essa remessa JÁ tem NF-e autorizada — Emitir devolve a existente.
+                            </div>
+                          )}
+                          <div className="overflow-x-auto max-h-56 overflow-y-auto">
+                            <table className="w-full">
+                              <thead>
+                                <tr className="text-[10px] uppercase text-slate-400 border-b">
+                                  <th className="text-left py-1 pr-2">SKU</th>
+                                  <th className="text-left py-1 pr-2">Produto</th>
+                                  <th className="text-left py-1 pr-2">NCM</th>
+                                  <th className="text-right py-1 pr-2">Qtd</th>
+                                  <th className="text-right py-1 pr-2">Custo un.</th>
+                                  <th className="text-right py-1">Total</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {nfePreview.items.map((it: any) => (
+                                  <tr key={it.sku} className="border-b last:border-0">
+                                    <td className="py-1 pr-2 font-mono">{it.sku}</td>
+                                    <td className="py-1 pr-2 truncate max-w-[220px]">{it.xProd}</td>
+                                    <td className="py-1 pr-2 font-mono">{it.ncm}</td>
+                                    <td className="py-1 pr-2 text-right">{it.qty}</td>
+                                    <td className="py-1 pr-2 text-right tabular-nums">R$ {Number(it.vUn).toFixed(2)}</td>
+                                    <td className="py-1 text-right tabular-nums font-semibold">R$ {Number(it.vProd).toFixed(2)}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                          <div className="flex justify-between font-bold text-sm border-t pt-1.5">
+                            <span>TOTAL DA NOTA ({nfePreview.items.length} item(ns))</span>
+                            <span>R$ {Number(nfePreview.valorTotal).toFixed(2)}</span>
+                          </div>
+                          {nfePreview.warnings?.length > 0 && (
+                            <div className="rounded bg-amber-50 border border-amber-200 px-2 py-1.5 text-amber-800">
+                              {nfePreview.warnings.map((w: string, i: number) => <div key={i}>⚠ {w}</div>)}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    )}
+                    {nfeResult && (
+                      <div className={`mt-2 rounded px-3 py-2 text-xs ${nfeResult.erro || nfeResult.status === 'rejected' ? 'bg-rose-50 border border-rose-200 text-rose-800' : 'bg-emerald-50 border border-emerald-200 text-emerald-800'}`}>
+                        {nfeResult.erro ? (
+                          <>⚠️ {nfeResult.erro}</>
+                        ) : (
+                          <>
+                            {nfeResult.status === 'authorized'
+                              ? `✅ AUTORIZADA${nfeResult.jaEmitida ? ' (já existia — não reemitiu)' : ''}`
+                              : nfeResult.status === 'rejected'
+                              ? '❌ REJEITADA pela SEFAZ'
+                              : `Status: ${nfeResult.status || '—'}`}
+                            {nfeResult.numero != null && <> · nº <b>{nfeResult.numero}</b> série {nfeResult.serie || '1'}</>}
+                            {nfeResult.tpAmb && <> · <b>{nfeResult.tpAmb === '1' ? 'PRODUÇÃO' : 'HOMOLOGAÇÃO'}</b></>}
+                            {nfeResult.cStat && <> · cStat {nfeResult.cStat}</>}
+                            {nfeResult.xMotivo && <> · {nfeResult.xMotivo}</>}
+                            {nfeResult.chave && <div className="font-mono mt-1 break-all">{nfeResult.chave}</div>}
+                            {nfeResult.status === 'authorized' && nfeResult.id && (
+                              <button
+                                onClick={() => abrirDanfe(nfeResult.id, nfeResult.numero)}
+                                className="mt-2 px-3 py-1.5 rounded border-2 border-emerald-400 bg-white hover:bg-emerald-50 text-emerald-700 font-bold"
+                              >
+                                📄 Abrir DANFE (PDF)
+                              </button>
+                            )}
+                            {Array.isArray(nfeResult.warnings) && nfeResult.warnings.length > 0 && (
+                              <div className="mt-1 text-amber-800">
+                                {nfeResult.warnings.map((w: string, i: number) => <div key={i}>⚠ {w}</div>)}
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* ENVIO PELOS CORREIOS — etiqueta sob demanda (dono 31/07) */}
+                  <div className="mb-4 rounded-lg border-2 border-amber-200 bg-amber-50/50 p-3">
+                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                      <div className="text-sm">
+                        <div className="font-bold text-amber-900">📮 Etiqueta de envio (SEDEX)</div>
+                        <div className="text-xs text-amber-800">
+                          {detail.trackingCode ? (
+                            <>
+                              {detail.carrier || 'Transportadora'} ·{' '}
+                              <span className="font-mono font-bold">{detail.trackingCode}</span>
+                              {detail.envioGeneratedAt && <> · gerada {fmtDate(detail.envioGeneratedAt)}</>}
+                            </>
+                          ) : detail.status !== 'in_transit' ? (
+                            <>Disponível com a remessa <b>em trânsito</b> — feche e envie primeiro.</>
+                          ) : (
+                            <>
+                              Emite a NF-e de transferência se faltar e cria a pré-postagem com a chave.
+                              Transporte atual: <b>{detail.transportEfetivo === 'correios' ? 'CORREIOS' : 'PRÓPRIO'}</b>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex gap-2 flex-wrap">
+                        {detail.trackingCode ? (
+                          <>
+                            <button
+                              onClick={() => baixarDocsEnvio(true)}
+                              disabled={!!envioBusy}
+                              className="px-4 py-2 rounded-lg border-2 border-amber-400 text-amber-800 hover:bg-amber-100 text-sm font-bold disabled:opacity-50"
+                            >
+                              {envioBusy === 'etiqueta' ? 'Baixando…' : '🏷 Só a etiqueta'}
+                            </button>
+                            <button
+                              onClick={() => baixarDocsEnvio(false)}
+                              disabled={!!envioBusy}
+                              className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-sm font-bold disabled:opacity-50"
+                            >
+                              {envioBusy === 'ambos' ? 'Baixando…' : '🖨 Etiqueta + DANFE'}
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            onClick={() => gerarEtiqueta(detail.transportEfetivo !== 'correios')}
+                            disabled={!!envioBusy || detail.status !== 'in_transit'}
+                            title={detail.status !== 'in_transit' ? 'A remessa precisa estar em trânsito' : undefined}
+                            className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-sm font-bold disabled:opacity-50"
+                          >
+                            {envioBusy === 'gerar'
+                              ? 'Gerando…'
+                              : detail.transportEfetivo === 'correios'
+                                ? '📮 Gerar etiqueta'
+                                : '📮 Gerar etiqueta mesmo assim'}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    {envioMsg && (
+                      <div
+                        className={`mt-2 rounded px-3 py-2 text-xs border ${
+                          envioMsg.tipo === 'ok'
+                            ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                            : 'bg-rose-50 border-rose-200 text-rose-800'
+                        }`}
+                      >
+                        {envioMsg.tipo === 'ok' ? '✅ ' : '⚠️ '}
+                        {envioMsg.texto}
+                      </div>
+                    )}
+                    {detail.trackingCode && (
+                      <a
+                        href={`https://rastreamento.correios.com.br/app/index.php?objeto=${detail.trackingCode}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="mt-2 inline-block text-xs text-amber-800 underline"
+                      >
+                        Rastrear {detail.trackingCode} nos Correios
+                      </a>
+                    )}
                   </div>
 
                   <div className="text-xs uppercase text-slate-500 font-semibold mb-2">

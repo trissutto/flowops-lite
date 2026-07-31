@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 
 /**
  * Cadastros → Classificação de Produtos (BÁSICO / MODA).
@@ -527,7 +528,7 @@ export default function ClassificacaoProdutosPage() {
 
       {/* Confirmação de lote */}
       {confirm && (
-        <div className="fixed inset-0 bg-black/40 grid place-items-center z-50 p-4" onClick={() => setConfirm(null)}>
+        <div className="fixed inset-0 bg-black/40 grid place-items-center z-50 p-4" {...overlayClose(() => setConfirm(null))}>
           <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-5" onClick={(e) => e.stopPropagation()}>
             <h3 className="font-bold text-slate-900 mb-1">Confirmar alteração em lote</h3>
             <p className="text-sm text-slate-600 mb-4">

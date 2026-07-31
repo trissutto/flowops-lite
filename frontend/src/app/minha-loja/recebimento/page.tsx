@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 
 /**
  * /minha-loja/recebimento — tela de recebimento de remessa de realinhamento.
@@ -452,7 +453,7 @@ export default function RecebimentoPage() {
         {showCelebration && (
           <div
             className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
-            onClick={() => setShowCelebration(false)}
+            {...overlayClose(() => setShowCelebration(false))}
             role="dialog"
             aria-label="Recebimento 100% conferido"
           >

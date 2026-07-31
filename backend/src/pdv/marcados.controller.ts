@@ -1,6 +1,8 @@
 import { Body, Controller, ForbiddenException, Get, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt.guard';
+import { authorizeMinLevel } from '../auth/auth-levels.util';
 import { MarcadosService } from './marcados.service';
+import { MarcadosMirrorService } from './marcados-mirror.service';
 import { isTrainingRequest } from './training.util';
 
 /**
@@ -14,12 +16,113 @@ import { isTrainingRequest } from './training.util';
 @Controller('pdv/marcados')
 @UseGuards(JwtAuthGuard)
 export class MarcadosController {
-  constructor(private readonly svc: MarcadosService) {}
+  constructor(
+    private readonly svc: MarcadosService,
+    private readonly mirror: MarcadosMirrorService,
+  ) {}
 
   private requireRole(req: any) {
     const role = req?.user?.role;
     if (role !== 'admin' && role !== 'operator' && role !== 'store')
       throw new ForbiddenException('Acesso negado');
+  }
+
+  private requireAdmin(req: any) {
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'operator')
+      throw new ForbiddenException('Acesso negado');
+  }
+
+  /**
+   * POST /pdv/marcados/sync — dispara o import Giga → tabela nativa `marcados`
+   * em background (acompanha pelo status). Admin/operator.
+   */
+  @Post('sync')
+  startSync(@Req() req: any) {
+    this.requireAdmin(req);
+    void this.mirror.syncFromGiga();
+    return { started: true };
+  }
+
+  /** GET /pdv/marcados/sync/status — contadores + último resultado. */
+  @Get('sync/status')
+  syncStatus(@Req() req: any) {
+    this.requireAdmin(req);
+    return this.mirror.status();
+  }
+
+  /**
+   * POST /pdv/marcados/dedup { codCliente?, cpf?, dryRun? }
+   * Limpa marcações DUPLICADAS de um cliente (linhas-fantasma que o sync criou).
+   * dryRun=true (default) só mostra o que fecharia. Admin.
+   */
+  @Post('dedup')
+  dedup(
+    @Req() req: any,
+    @Body() body: { codCliente?: string; cpf?: string; dryRun?: boolean },
+  ) {
+    this.requireRole(req);
+    return this.svc.dedupMarcadosCliente({
+      codCliente: body?.codCliente,
+      cpf: body?.cpf,
+      dryRun: body?.dryRun,
+    });
+  }
+
+  /**
+   * GET /pdv/marcados/analise?cpf=...  (read-only)
+   * Agrupa os marcados ativos do cliente por NUMERO — enxerga a duplicação.
+   */
+  @Get('analise')
+  analise(@Req() req: any, @Query('cpf') cpf?: string, @Query('codCliente') codCliente?: string) {
+    this.requireRole(req);
+    return this.svc.analisarMarcadosCliente({ cpf, codCliente });
+  }
+
+  /**
+   * POST /pdv/marcados/desduplicar { cpf?, codCliente?, keepNumero?, dryRun? }
+   * Mantém 1 marcação e DEVOLVE as duplicadas (retorna estoque). Admin.
+   * dryRun=true (default) só mostra o plano.
+   */
+  @Post('desduplicar')
+  desduplicar(
+    @Req() req: any,
+    @Body() body: { cpf?: string; codCliente?: string; dryRun?: boolean },
+  ) {
+    this.requireRole(req);
+    return this.svc.desduplicarMarcadosCliente({
+      cpf: body?.cpf,
+      codCliente: body?.codCliente,
+      dryRun: body?.dryRun,
+    });
+  }
+
+  /**
+   * POST /pdv/marcados/baixar — BAIXA SEM FINANCEIRO (clientes-bin: DEFEITOS,
+   * FURTO, reservas). Remove a marcação do Giga sem venda/caixa/estoque.
+   * Exige senha GERENTE+ (auditável: motivo + quem autorizou).
+   */
+  @Post('baixar')
+  baixar(
+    @Req() req: any,
+    @Body() body: {
+      registros: Array<number | string>;
+      codCliente?: string;
+      loja?: string;
+      motivo: string;
+      password: string;
+    },
+  ) {
+    this.requireAdmin(req);
+    const auth = authorizeMinLevel(String(body?.password || ''), 'GERENTE', String(body?.loja || req?.user?.storeCode || '') || undefined);
+    const quem = auth.byNome || req?.user?.name || req?.user?.email || 'gerente';
+    return this.svc.baixarMarcados({
+      registros: body?.registros || [],
+      codCliente: body?.codCliente,
+      loja: body?.loja,
+      motivo: String(body?.motivo || ''),
+      autorizadoPor: `[${auth.level}] ${quem}`,
+    });
   }
 
   /**
@@ -39,9 +142,12 @@ export class MarcadosController {
    * o CPF e quer achar pelo nome.
    */
   @Get('search')
-  searchClientes(@Req() req: any, @Query('q') q: string) {
+  searchClientes(@Req() req: any, @Query('q') q: string, @Query('loja') loja?: string) {
     this.requireRole(req);
-    return this.svc.searchClientesByNameOrCpf(q || '');
+    // ESCOPO POR LOJA (23/07): o PDV só vê clientes da própria loja —
+    // RESERVAS/DEFEITOS existem em toda loja e misturavam.
+    const lojaScope = String(loja || req?.user?.storeCode || '').replace(/\D/g, '');
+    return this.svc.searchClientesByNameOrCpf(q || '', lojaScope || undefined);
   }
 
   /**
@@ -55,6 +161,7 @@ export class MarcadosController {
     @Query('dataInicial') dataInicial?: string,
     @Query('dataFinal') dataFinal?: string,
     @Query('limit') limit?: string,
+    @Query('status') status?: string,
   ) {
     this.requireRole(req);
     return this.svc.listAllMarcados({
@@ -62,6 +169,7 @@ export class MarcadosController {
       dataInicial,
       dataFinal,
       limit: limit ? Number(limit) : 100,
+      status,
     });
   }
 

@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 
 /**
  * /retaguarda/transferencias-report — Relatório de Transferências Entre Lojas
@@ -1187,7 +1188,7 @@ function StoreDrawer({
 
   return (
     <>
-      <div className="fixed inset-0 bg-black/40 z-30 backdrop-blur-sm" onClick={onClose} />
+      <div className="fixed inset-0 bg-black/40 z-30 backdrop-blur-sm" {...overlayClose(onClose)} />
       <aside className="fixed right-0 top-0 bottom-0 w-full md:w-[800px] bg-white shadow-2xl z-40 overflow-y-auto">
         {/* Header */}
         <div className="sticky top-0 bg-white border-b border-stone-200 px-6 py-4 flex items-center justify-between z-10">

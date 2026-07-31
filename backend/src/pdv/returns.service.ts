@@ -138,7 +138,7 @@ export class ReturnsService {
    *                  loja passa storeCode=null (controller só permite
    *                  isso se role=admin/operator E ?crossStore=1).
    */
-  async lookupSalesBySku(sku: string, storeCode?: string | null) {
+  async lookupSalesBySku(sku: string, homeStoreCode?: string | null) {
     const cleanSku = String(sku || '').trim();
     if (!cleanSku) throw new BadRequestException('Informe o SKU/REF da peça');
 
@@ -147,10 +147,10 @@ export class ReturnsService {
     const dataLimite = new Date();
     dataLimite.setDate(dataLimite.getDate() - 90);
 
-    // ── Filtro por loja (modo A2) ──
-    // Se storeCode vier setado, restringe ao PDV daquela loja.
-    // Se vier null/undefined, vê vendas de TODAS as lojas (override admin).
-    const storeFilter: any = storeCode ? { storeCode } : {};
+    // ── Vendas de TODA a rede, loja local em DESTAQUE (regra do dono) ──
+    // O bipe traz as vendas da LOJA ATUAL em cima e as das OUTRAS lojas
+    // embaixo (cada bloco da mais nova pra mais velha). homeStoreCode marca
+    // qual é a "casa" (sameStore=true). Sem Giga — só FlowOps.
 
     // VARIANTES: gera todas variacoes do SKU com/sem zeros a esquerda
     // (ex: '5210367', '0005210367', '00000005210367', ...). Sem isso, peca
@@ -175,51 +175,40 @@ export class ReturnsService {
       ],
     };
 
-    // 1ª busca: VENDAS FINALIZADAS na janela
-    let sales = await (this.prisma as any).pdvSale.findMany({
-      where: {
-        status: 'finalized',
-        finalizedAt: { gte: dataLimite },
-        items: { some: itemFilter },
-        ...storeFilter, // modo A2 — filtra por loja se vier definido
-      },
-      orderBy: { finalizedAt: 'desc' },
-      take: 20,
-      include: {
-        items: { where: itemFilter },
-      },
-    });
+    const home = (homeStoreCode || '').trim() || null;
+    const findFinalized = (extra: any, take: number) =>
+      (this.prisma as any).pdvSale.findMany({
+        where: { status: 'finalized', finalizedAt: { gte: dataLimite }, items: { some: itemFilter }, ...extra },
+        orderBy: { finalizedAt: 'desc' },
+        take,
+        include: { items: { where: itemFilter } },
+      });
 
-    // 2ª tentativa (fallback): se não achou finalized, tenta vendas RECENTES
-    // em qualquer status (open/cancelled). Cobre venda PIX que ainda não
-    // confirmou via webhook, ou venda cancelada por engano.
+    // LOJA LOCAL (destaque) em cima, REDE (outras lojas) embaixo. Cada bloco
+    // já vem da mais nova pra mais velha (orderBy finalizedAt desc).
+    let localSales: any[] = home ? await findFinalized({ storeCode: home }, 20) : [];
+    let otherSales: any[] = await findFinalized(home ? { storeCode: { not: home } } : {}, 20);
+    let sales = [...localSales, ...otherSales];
+
+    // Fallback: se NADA finalized, tenta vendas recentes (7d) em qualquer status
+    // (PIX ainda não confirmado, venda cancelada por engano) — mesma ordem.
     if (sales.length === 0) {
       const dataRecente = new Date();
       dataRecente.setDate(dataRecente.getDate() - 7);
-      const fallback = await (this.prisma as any).pdvSale.findMany({
-        where: {
-          createdAt: { gte: dataRecente },
-          items: { some: itemFilter },
-          ...storeFilter, // mesmo filtro no fallback
-        },
-        orderBy: { createdAt: 'desc' },
-        take: 5,
-        include: {
-          items: { where: itemFilter },
-        },
-      });
-      if (fallback.length > 0) {
-        this.logger.log(
-          `[devolucao/lookup-by-sku] q="${cleanSku}" sem finalized, ` +
-          `mas achou ${fallback.length} venda(s) recente(s) status: ` +
-          `${fallback.map((f: any) => f.status).join(',')}`,
-        );
-      }
-      sales = fallback;
+      const findRecent = (extra: any, take: number) =>
+        (this.prisma as any).pdvSale.findMany({
+          where: { createdAt: { gte: dataRecente }, items: { some: itemFilter }, ...extra },
+          orderBy: { createdAt: 'desc' },
+          take,
+          include: { items: { where: itemFilter } },
+        });
+      const localR = home ? await findRecent({ storeCode: home }, 5) : [];
+      const otherR = await findRecent(home ? { storeCode: { not: home } } : {}, 5);
+      sales = [...localR, ...otherR];
     }
 
     if (sales.length === 0) {
-      return { sku: cleanSku, sales: [] };
+      return { sku: cleanSku, homeStoreCode: home, sales: [] };
     }
 
     // Pra cada venda, calcula quanto desse SKU ainda pode ser devolvido
@@ -261,6 +250,8 @@ export class ReturnsService {
         nfceNumber: s.nfceNumber,
         storeCode: s.storeCode,
         storeName: s.storeName,
+        // sameStore: venda foi na loja ATUAL (destaque) vs outra loja da rede (abaixo)
+        sameStore: !!home && s.storeCode === home,
         customerName: s.customerName,
         customerCpf: s.customerCpf,
         finalizedAt: s.finalizedAt || s.createdAt, // fallback p/ vendas open
@@ -273,7 +264,7 @@ export class ReturnsService {
       };
     });
 
-    return { sku: cleanSku, sales: result };
+    return { sku: cleanSku, homeStoreCode: home, sales: result };
   }
 
   // ── Criar devolução ─────────────────────────────────────────────────
@@ -421,7 +412,7 @@ export class ReturnsService {
       this.logger.log(`[returns→TREINO] devolução simulada — skip increaseStock`);
     } else
     try {
-      const erpResult = await this.erp.increaseStock(
+      const erpResult = await this.erp.increaseStockAsync(
         itemsToCreate.map((it) => ({
           sku: it.sku,
           qty: it.qty,
@@ -1256,7 +1247,7 @@ export class ReturnsService {
 
     for (const [sc, items] of byStore) {
       try {
-        const r = await this.erp.increaseStock(
+        const r = await this.erp.increaseStockAsync(
           items.map((i) => ({ sku: i.sku, qty: i.qty, storeCode: sc })),
         );
         if (r.success) {
@@ -1430,7 +1421,7 @@ export class ReturnsService {
       this.logger.log(`[devolucao/manual→TREINO] devolução simulada — skip increaseStock`);
     } else
     try {
-      const r = await this.erp.increaseStock([
+      const r = await this.erp.increaseStockAsync([
         { sku: produto.codigo, qty: 1, storeCode },
       ]);
       estoqueOk = r.success;
@@ -1606,6 +1597,9 @@ export class ReturnsService {
     userName?: string;
     /** MODO TREINAMENTO — sessão com header x-training-mode (união com sale.isTraining) */
     trainingRequest?: boolean;
+    /** CONFIRMAÇÃO cross-store — igual ao createReturn (gap corrigido 22/07:
+     *  o batch entrava sem avisar que a peça era de outra loja). */
+    confirmCrossStore?: boolean;
   }) {
     const { vendas, storeCode, storeName, modo, motivo, userId, userName } = input;
     const attachToSaleId = input.attachToSaleId || null;
@@ -1617,6 +1611,28 @@ export class ReturnsService {
     for (const v of vendas) {
       if (!v.originalSaleId) throw new BadRequestException('originalSaleId faltando em uma das vendas');
       if (!v.items?.length) throw new BadRequestException(`Venda ${v.originalSaleId.slice(0, 8)} sem itens`);
+    }
+
+    // ── ALERTA CROSS-STORE (mesma regra do createReturn) ──
+    if (!input.confirmCrossStore && storeCode) {
+      const salesLojas: any[] = await (this.prisma as any).pdvSale.findMany({
+        where: { id: { in: vendas.map((v) => v.originalSaleId) } },
+        select: { storeCode: true, storeName: true },
+      });
+      const outra = salesLojas.find((s) => s.storeCode && s.storeCode !== storeCode);
+      if (outra) {
+        throw new BadRequestException({
+          crossStoreAlert: true,
+          message:
+            `Tem peça vendida na loja ${outra.storeName || outra.storeCode}, ` +
+            `mas a devolução está sendo feita na loja ${storeName || storeCode}. ` +
+            `Se confirmar, as peças entrarão no estoque da loja ${storeName || storeCode}.`,
+          originalStoreCode: outra.storeCode,
+          originalStoreName: outra.storeName,
+          currentStoreCode: storeCode,
+          currentStoreName: storeName,
+        });
+      }
     }
 
     // 1. Pré-carrega todas as vendas + valida items + monta itemsToCreate por venda
@@ -1711,7 +1727,7 @@ export class ReturnsService {
       if (alguemTreino) this.logger.log(`[returns/batch→TREINO] devolução simulada — skip increaseStock`);
     } else {
       try {
-        const erpResult = await this.erp.increaseStock(allItemsForStock);
+        const erpResult = await this.erp.increaseStockAsync(allItemsForStock);
         if (erpResult.success) {
           for (const it of allItemsForStock) stockOkBySku.set(it.sku, { ok: true });
         } else {

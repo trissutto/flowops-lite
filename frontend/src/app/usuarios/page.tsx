@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { Plus, Pencil, Trash2, Users as UsersIcon, X, KeyRound } from 'lucide-react';
 
-type Role = 'admin' | 'operator' | 'store' | 'supervisor' | 'contador' | 'franquias';
+type Role = 'admin' | 'operator' | 'store' | 'supervisor' | 'contador' | 'franquias' | 'master_franquia';
 
 interface Store {
   id: string;
@@ -49,6 +49,7 @@ const ROLE_LABELS: Record<Role, string> = {
   supervisor: 'Supervisor',
   contador: 'Contador',
   franquias: 'Adm. Franquias',
+  master_franquia: 'Master Franquia',
 };
 
 const ROLE_COLORS: Record<Role, string> = {
@@ -58,6 +59,7 @@ const ROLE_COLORS: Record<Role, string> = {
   supervisor: 'bg-amber-100 text-amber-700',
   contador: 'bg-violet-100 text-violet-700',
   franquias: 'bg-amber-100 text-amber-800',
+  master_franquia: 'bg-orange-100 text-orange-800',
 };
 
 export default function UsuariosPage() {
@@ -329,6 +331,7 @@ export default function UsuariosPage() {
                   <option value="supervisor">Supervisor — ve fiscal + operacional (sem config)</option>
                   <option value="contador">Contador — só relatório fiscal (notas + XMLs)</option>
                   <option value="franquias">Adm. Franquias — só leitura dos dados das franquias</option>
+                  <option value="master_franquia">Master Franquia — abre o PDV das lojas FRANQUIA (só elas)</option>
                 </select>
               </div>
 

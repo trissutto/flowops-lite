@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 
 /**
  * /retaguarda/baixa-estoque
@@ -476,7 +477,7 @@ export default function BaixaEstoquePage() {
       {selected && action && (
         <div
           className="fixed inset-0 z-50 bg-black/50 flex items-end sm:items-center justify-center p-0 sm:p-4"
-          onClick={closeModal}
+          {...overlayClose(closeModal)}
         >
           <div
             className="bg-white rounded-t-xl sm:rounded-xl w-full max-w-3xl max-h-[92vh] overflow-y-auto"
@@ -630,7 +631,7 @@ export default function BaixaEstoquePage() {
       {bulkConfirmOpen && (
         <div
           className="fixed inset-0 z-50 bg-black/50 flex items-end sm:items-center justify-center p-0 sm:p-4"
-          onClick={closeBulkConfirm}
+          {...overlayClose(closeBulkConfirm)}
         >
           <div
             className="bg-white rounded-t-xl sm:rounded-xl w-full max-w-2xl max-h-[92vh] overflow-y-auto"

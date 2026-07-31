@@ -1,15 +1,19 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { randomBytes } from 'crypto';
+import { authorizeMinLevel } from '../auth/auth-levels.util';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
 import { RoutingEngine } from '../routing/routing.engine';
+import { RoutingService } from '../routing/routing.service';
 import { PagarmeService } from '../pagarme/pagarme.service';
 import { PagbankService } from '../pagbank/pagbank.service';
 import { ProductPhotosService } from '../product-photos/product-photos.service';
 import { RealignmentPricingService } from '../realignment/realignment-pricing.service';
 import { RealtimeGateway } from '../websocket/realtime.gateway';
 import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service';
+import { ProductSearchService } from '../product-search/product-search.service';
 import { ManychatService } from './manychat.service';
+import { CorreiosService } from '../correios/correios.service';
 import type { StoreInput, StockEntry } from '../routing/types';
 
 /**
@@ -35,11 +39,15 @@ export class LivePdvService {
   private readonly COMMITTED = ['reserved', 'paid', 'separating'];
   /** Throttle da checagem AO VIVO no gateway por carrinho (anti-flood de polling). */
   private readonly lastLiveCheck = new Map<string, number>();
+  /** Throttle do refresh PONTUAL do espelho de estoque (por conjunto de códigos). */
+  private readonly lastStockRefresh = new Map<string, number>();
+  private static readonly STOCK_REFRESH_TTL_MS = 45_000;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly erp: ErpService,
     private readonly routing: RoutingEngine,
+    private readonly routingService: RoutingService,
     private readonly pagarme: PagarmeService,
     private readonly pagbank: PagbankService,
     private readonly photos: ProductPhotosService,
@@ -47,7 +55,142 @@ export class LivePdvService {
     private readonly gateway: RealtimeGateway,
     private readonly manychat: ManychatService,
     private readonly catalog: WincredCatalogService,
+    private readonly productSearch: ProductSearchService,
+    private readonly correios: CorreiosService,
   ) {}
+
+  /**
+   * Gera a PRÉ-POSTAGEM dos Correios pra um carrinho da live (pacote = carrinho
+   * inteiro). Peso = nº de peças × 200g; declaração = itens do carrinho;
+   * destinatário = endereço do cliente no cart; remetente = matriz (env).
+   * Grava o código de rastreio em todos os itens e o id da pré-postagem no cart.
+   */
+  async gerarEnvioCorreios(cartId: string, nfeChave?: string, remetenteLoja?: any) {
+    const cart = await (this.prisma as any).livePdvCart.findUnique({
+      where: { id: cartId },
+      include: { items: true },
+    });
+    if (!cart) throw new NotFoundException('Carrinho não encontrado');
+    if (cart.isPickup) throw new BadRequestException('Retirada em loja não gera envio.');
+    if (cart.correiosPrepostagemId) {
+      // idempotente — já gerado; devolve o que tem
+      const j = (cart.items || []).find((i: any) => i.trackingCode);
+      return { ok: true, jaGerado: true, codigoRastreio: j?.trackingCode || null, idPrepostagem: cart.correiosPrepostagemId };
+    }
+
+    // Endereço completo + CPF válido (os Correios exigem pra postar).
+    const faltando: string[] = [];
+    if (String(cart.customerCep || '').replace(/\D/g, '').length !== 8) faltando.push('CEP');
+    if (!String(cart.customerEndereco || '').trim()) faltando.push('rua');
+    if (!String(cart.customerNumero || '').trim()) faltando.push('número');
+    if (!String(cart.customerCidade || '').trim()) faltando.push('cidade');
+    if (!String(cart.customerUf || '').trim()) faltando.push('UF');
+    if (!this.cpfValido(cart.customerCpf)) faltando.push('CPF válido');
+    if (faltando.length) throw new BadRequestException(`Complete o cadastro antes de gerar o envio — falta: ${faltando.join(', ')}.`);
+
+    const itens = (cart.items || []).filter((i: any) => i.status !== 'cancelled');
+    if (!itens.length) throw new BadRequestException('Carrinho sem itens.');
+    const totalPecas = itens.reduce((s: number, i: any) => s + (Number(i.qty) || 1), 0);
+    const pesoGramas = Math.max(300, totalPecas * 200); // 200g por peça, mínimo 300g
+    // Modalidade de postagem:
+    //  1. REGRA DO DONO: estado de SÃO PAULO (UF=SP) vai SEMPRE de SEDEX —
+    //     mesmo que a cliente tenha escolhido PAC no checkout.
+    //  2. Fora de SP: segue a modalidade paga (derivada do CEP via freteFromCep,
+    //     a MESMA fonte do card "MODALIDADE DE ENVIO" e do checkout).
+    //  `cart` NÃO tem coluna freteServico — nunca chumbar PAC lendo campo vazio.
+    // Endereço CEP-authoritative: os Correios validam UF/cidade contra o CEP
+    // (erro RTL-076). Resolve pelo ViaCEP e SOBREPÕE o que está gravado — evita
+    // UF torto (ex.: "CI" em vez de SP) bloquear a postagem. Fallback: cart.
+    const cepDest = String(cart.customerCep || '').replace(/\D/g, '');
+    let ufDest = String(cart.customerUf || '').trim().toUpperCase();
+    let cidadeDest = cart.customerCidade || '';
+    let bairroDest = cart.customerBairro || '';
+    try {
+      const via: any = await this.correios.buscarCep(cepDest);
+      if (via && !via.erro) {
+        if (via.uf) ufDest = String(via.uf).trim().toUpperCase();
+        if (via.cidade) cidadeDest = via.cidade;
+        if (!bairroDest && via.bairro) bairroDest = via.bairro;
+      }
+    } catch { /* ViaCEP fora → usa o do cart */ }
+
+    const servico: 'PAC' | 'SEDEX' =
+      ufDest === 'SP' || this.freteFromCep(cart.customerCep)?.servico === 'SEDEX' ? 'SEDEX' : 'PAC';
+    // Remetente = a loja do envio quando informada (pick-orders resolve pela
+    // config fiscal da loja); sem ela, o padrão da matriz (env).
+    const rem = remetenteLoja || this.correios.remetentePadrao();
+
+    const resp: any = await this.correios.criarPrepostagem({
+      servico,
+      remetente: rem,
+      destinatario: {
+        nome: cart.customerName || 'Cliente',
+        cpfCnpj: String(cart.customerCpf || '').replace(/\D/g, '') || undefined,
+        endereco: cart.customerEndereco || '',
+        numero: cart.customerNumero || 'S/N',
+        complemento: cart.customerComplemento || '',
+        bairro: bairroDest || '',
+        cidade: cidadeDest || '',
+        uf: ufDest || '',
+        cep: cepDest,
+        telefone: String(cart.customerPhone || '').replace(/\D/g, ''),
+      },
+      pesoGramas,
+      valorDeclarado: cart.totalCents ? cart.totalCents / 100 : undefined,
+      // NF-e do envio: chave vai na pré-postagem (obrigatória desde 04/2026)
+      ...(nfeChave ? { nfeChave } : {}),
+      itensDeclaracao: itens.map((i: any) => ({
+        conteudo: [i.refCode, i.descricao, i.cor, i.tamanho].filter(Boolean).join(' ').slice(0, 60) || 'Vestuário',
+        quantidade: String(i.qty || 1),
+      })),
+    });
+    if (!resp?.ok) throw new BadRequestException(`Correios recusou o envio: ${resp?.erro || 'erro'}`);
+
+    const rastreio = resp.codigoRastreio || null;
+    await (this.prisma as any).livePdvCart.update({
+      where: { id: cartId },
+      data: { correiosPrepostagemId: resp.idPrepostagem ? String(resp.idPrepostagem) : null },
+    });
+    if (rastreio) {
+      await (this.prisma as any).livePdvItem.updateMany({ where: { cartId }, data: { trackingCode: rastreio } });
+    }
+    return { ok: true, codigoRastreio: rastreio, idPrepostagem: resp.idPrepostagem ?? null, servico, pesoGramas, totalPecas };
+  }
+
+  /** FILTRO DE LIVE (13/07, decisão do dono): a live é SÓ plus size feminino.
+   *  Tamanhos permitidos na grade — qualquer outro (P/M/G, 38/40/42, infantil…)
+   *  é ruído de cadastro e não vira célula. Vale SÓ na busca da live
+   *  (searchGrade); PDV e consulta continuam vendo o catálogo inteiro. */
+  private static readonly LIVE_TAMANHOS = new Set([
+    '46', '48', '50', '52', '54', '56', '58', '60',
+    '46/48', '50/52', '54/56', '58/60',
+  ]);
+
+  /** Tamanho canônico pra whitelist: "46 48", "46-48" e "46 / 48" viram
+   *  "46/48" (o cadastro da Giga grava composto de todo jeito — 23/07, S01092
+   *  "46 48" sumia da grade da live). */
+  private tamCanon(s: any): string {
+    return this.norm(s).replace(/\s*[/-]\s*/g, '/').replace(/\s+/g, '/');
+  }
+
+  /**
+   * Título de exibição da grade SEM a cor/tamanho da linha (14/07): a
+   * DESCRICAOCOMPLETA da Giga é por variação ("CASACO ... 14538 PRETO 46
+   * JULIA PLUS") e confundia — legenda fixada em TERRACOTA com "PRETO 46" no
+   * título. Remove a ÚLTIMA ocorrência da cor e do tamanho DESTA linha (só a
+   * última: "SAIDA DE PRAIA ACQUA ROSA ROSA 46" mantém o "ACQUA ROSA" do nome
+   * e perde só o " ROSA 46" da variação).
+   */
+  private tituloSemVariacao(desc: any, cor: any, tamanho: any): string {
+    let out = ` ${String(desc || '').trim()} `;
+    for (const tok of [this.norm(cor), this.norm(tamanho)]) {
+      if (!tok) continue;
+      const alvo = ` ${tok} `;
+      const idx = out.toUpperCase().lastIndexOf(alvo);
+      if (idx >= 0) out = `${out.slice(0, idx)} ${out.slice(idx + alvo.length)}`;
+    }
+    return out.replace(/\s{2,}/g, ' ').trim();
+  }
 
   // ─── helpers ──────────────────────────────────────────────────────────────
   private norm(s: any): string {
@@ -93,45 +236,88 @@ export class LivePdvService {
   }
 
   // Resolve as linhas do produto (REF/código/nome) — SÓ ESPELHO (giga_produto no
-  // Postgres). Em CAMADAS pra usar os índices (@@index codigo/ref) e NÃO varrer a
-  // tabela toda: código exato → ref exato/prefixo → (só se nada) insensitive/nome.
+  // Postgres). A cascata (código exato → ref exato/prefixo → insensitive/nome)
+  // foi EXTRAÍDA pro ProductSearchService (diretriz 10/07: busca única, outras
+  // telas reutilizam a MESMA rotina da live). Comportamento idêntico ao antigo.
   private async resolveRowsWithMirror(q: string): Promise<{ rows: any[]; fromMirror: boolean }> {
-    const mk = (rows: any[]) =>
-      (rows as any[]).map((r) => ({
+    const rows = await this.productSearch.resolveRows(q);
+    return {
+      rows: rows.map((r) => ({
         CODIGO: r.codigo,
         REF: r.ref,
         DESCRICAOCOMPLETA: r.descricao,
         COR: r.cor,
         TAMANHO: r.tamanho,
-      }));
-    const find = (where: any, take = 1000) =>
-      (this.prisma as any).gigaProduto.findMany({ where, take }).catch(() => []);
+      })),
+      fromMirror: true,
+    };
+  }
 
-    // 1) Código exato (índice) — cobre bipar código/EAN.
-    let rows = await find({ codigo: q });
-    if (rows.length) return { rows: mk(rows), fromMirror: true };
-
-    // 2) REF pelo índice: exato/prefixo em MAIÚSCULA (padrão Giga) e como digitado.
-    const up = q.toUpperCase();
-    rows = await find({
-      OR: [{ ref: up }, { ref: q }, { ref: { startsWith: up } }, { ref: { startsWith: q } }],
-    });
-    if (rows.length) return { rows: mk(rows), fromMirror: true };
-
-    // 3) Fallback (raro) — ref/nome case-insensitive (varredura). Só quando 1 e 2
-    //    não acharam: busca por nome/descrição ou ref gravada em minúscula.
-    if (q.length >= 2) {
-      rows = await find(
-        {
-          OR: [
-            { ref: { startsWith: q, mode: 'insensitive' } },
-            { descricao: { contains: q, mode: 'insensitive' } },
-          ],
-        },
-        300,
-      );
+  /**
+   * Refresh PONTUAL do espelho giga_estoque só pros CODIGOs de UMA peça — query
+   * indexada e minúscula no Giga (nada do full de 283k linhas do cron horário).
+   * Timeout de 8s + catch total: se o Giga pendurar, o espelho fica como está e
+   * a grade segue sendo servida por ele. Retorna true se atualizou.
+   *
+   * Formato: reescreve o codigo NO FORMATO QUE A GRADE CONSULTA (o codigo do
+   * giga_produto), casando pelo valor numérico — padding de zeros é
+   * inconsistente entre produtos e estoque no Giga (convenção do projeto:
+   * JOIN sempre via CAST AS UNSIGNED).
+   */
+  private async refreshMirrorStock(codigos: string[], opts?: { force?: boolean }): Promise<boolean> {
+    const uniq = Array.from(
+      new Set(codigos.map((c) => String(c).trim()).filter((c) => /^\d+$/.test(c))),
+    ).slice(0, 80);
+    if (!uniq.length) return false;
+    const key = uniq.slice().sort().join(',');
+    const now = Date.now();
+    if (!opts?.force && now - (this.lastStockRefresh.get(key) || 0) < LivePdvService.STOCK_REFRESH_TTL_MS) {
+      return false;
     }
-    return { rows: mk(rows), fromMirror: true };
+    this.lastStockRefresh.set(key, now);
+    if (this.lastStockRefresh.size > 1000) {
+      for (const [k, t] of this.lastStockRefresh) {
+        if (now - t > LivePdvService.STOCK_REFRESH_TTL_MS) this.lastStockRefresh.delete(k);
+      }
+    }
+    const pool: any = (this.erp as any).pool;
+    if (!pool) return false;
+    try {
+      const nums = uniq.map((c) => Number(c));
+      const placeholders = nums.map(() => '?').join(',');
+      const [rows] = await pool.query(
+        {
+          sql: `SELECT CODIGO AS codigo, LOJA AS loja, SUM(ESTOQUE) AS estoque
+                  FROM estoque
+                 WHERE CAST(CODIGO AS UNSIGNED) IN (${placeholders})
+                 GROUP BY CODIGO, LOJA`,
+          timeout: 8_000,
+        },
+        nums,
+      );
+      const byNum = new Map<number, string>(uniq.map((c) => [Number(c), c]));
+      const data = (rows as any[])
+        .map((r) => ({
+          codigo: byNum.get(Number(r.codigo)) || String(r.codigo ?? '').trim(),
+          loja: String(r.loja ?? '').trim(),
+          estoque: Number(r.estoque) || 0,
+        }))
+        .filter((r) => r.codigo && r.loja && r.estoque > 0);
+      // Apaga nos DOIS formatos (pedido e cru do Giga) e regrava — código que
+      // zerou o estoque sai do espelho (a grade passa a mostrar esgotado).
+      const apagar = Array.from(
+        new Set([...uniq, ...(rows as any[]).map((r) => String(r.codigo ?? '').trim())]),
+      ).filter(Boolean);
+      await this.prisma.$transaction([
+        (this.prisma as any).gigaEstoque.deleteMany({ where: { codigo: { in: apagar } } }),
+        ...(data.length ? [(this.prisma as any).gigaEstoque.createMany({ data })] : []),
+      ]);
+      this.logger.log(`[live] estoque pontual: ${uniq.length} código(s) → ${data.length} linha(s) frescas`);
+      return true;
+    } catch (e) {
+      this.logger.warn(`[live] refresh pontual de estoque falhou (espelho preservado): ${(e as Error).message}`);
+      return false;
+    }
   }
 
   // Estoque por loja — ESPELHO PRIMEIRO (giga_estoque no Postgres). Só encosta no
@@ -178,16 +364,34 @@ export class LivePdvService {
   /**
    * Reservas ATIVAS por itemKey e por (itemKey, loja). Usado pra calcular
    * disponibilidade real durante a live (ERP − reservas em andamento).
+   *
+   * ESCOPO POR SESSÃO (bug 16/07): SÓ conta itens da PRÓPRIA live (sessionId).
+   * Sem esse filtro, itens de lives PASSADAS com o mesmo itemKey (paid/reserved
+   * presos) descontavam do estoque de hoje — caso DISNEY-014 54: 7 itens da live
+   * de 03/07 (5 paid já baixados no Giga + 2 reserved órfãos) zeravam as 6 peças
+   * físicas → o tamanho sumia da grade. Sem sessionId, cai na live ATIVA (a
+   * relevante nas operações ao vivo); sem live ativa, não desconta nada.
    */
-  private async committed(itemKeys: string[]): Promise<{
+  private async committed(itemKeys: string[], sessionId?: string): Promise<{
     byKey: Map<string, number>;
     byKeyStore: Map<string, number>;
   }> {
     const byKey = new Map<string, number>();
     const byKeyStore = new Map<string, number>();
     if (itemKeys.length === 0) return { byKey, byKeyStore };
+    let scopeSid = sessionId;
+    if (!scopeSid) {
+      const active = await (this.prisma as any).livePdvSession.findFirst({
+        where: { status: 'live' },
+        orderBy: { startedAt: 'desc' },
+        select: { id: true },
+      });
+      scopeSid = active?.id;
+    }
+    // Sem sessão de escopo → nada a descontar (grade mostra o estoque cheio).
+    if (!scopeSid) return { byKey, byKeyStore };
     const rows = await (this.prisma as any).livePdvItem.findMany({
-      where: { itemKey: { in: itemKeys }, status: { in: this.COMMITTED } },
+      where: { itemKey: { in: itemKeys }, status: { in: this.COMMITTED }, sessionId: scopeSid },
       select: { itemKey: true, originStoreCode: true, qty: true },
     });
     for (const r of rows as any[]) {
@@ -217,9 +421,24 @@ export class LivePdvService {
         select: { codigo: true, cor: true, tamanho: true },
       })
       .catch(() => []);
-    const matched = (prods as any[]).filter(
+    let matched = (prods as any[]).filter(
       (r) => this.norm(r.cor) === this.norm(cor) && this.norm(r.tamanho) === this.norm(tam),
     );
+    // FALLBACK NA NATIVA (14/07, caso VOGUE BEGE): produto recém-cadastrado
+    // ainda não está no espelho giga_produto (full de ~6h), mas o catálogo
+    // nativo já tem (espelho imediato do cadastro). Sem isso a GRADE mostrava
+    // o estoque e o CLIQUE respondia "sem estoque em nenhuma loja".
+    if (!matched.length) {
+      const nativos = await (this.prisma as any).product
+        .findMany({
+          where: { ref: refCode },
+          select: { codigo: true, cor: true, tamanho: true },
+        })
+        .catch(() => []);
+      matched = (nativos as any[]).filter(
+        (r) => this.norm(r.cor) === this.norm(cor) && this.norm(r.tamanho) === this.norm(tam),
+      );
+    }
     const codigos = Array.from(
       new Set(matched.map((r) => String(r.codigo || '').trim()).filter(Boolean)),
     );
@@ -285,7 +504,40 @@ export class LivePdvService {
         createdByUserId: input.userId || null,
       },
     });
+    // LEGENDAS PERSISTEM ENTRE LIVES (dono 17/07: "nunca zere automaticamente"):
+    // copia os atalhos da última live pra nova. Limpar é ação humana — botão
+    // "Limpar tudo" na tela de legendas.
+    try {
+      const anterior = await (this.prisma as any).livePdvSession.findFirst({
+        where: { id: { not: session.id } },
+        orderBy: { startedAt: 'desc' },
+        select: { id: true },
+      });
+      if (anterior) {
+        const atalhos: any[] = await (this.prisma as any).livePdvAtalho.findMany({
+          where: { sessionId: anterior.id },
+        });
+        if (atalhos.length) {
+          await (this.prisma as any).livePdvAtalho.createMany({
+            data: atalhos.map(({ id: _id, sessionId: _s, createdAt: _c, updatedAt: _u, ...resto }: any) => ({
+              ...resto,
+              sessionId: session.id,
+            })),
+            skipDuplicates: true,
+          });
+          this.logger.log(`[live] ${atalhos.length} legenda(s) copiada(s) da live anterior pra ${session.id}`);
+        }
+      }
+    } catch (e) {
+      this.logger.warn(`[live] cópia de legendas falhou (segue sem): ${(e as Error).message}`);
+    }
     return session;
+  }
+
+  /** Limpa TODAS as legendas da live (botão "Limpar tudo" — ação humana). */
+  async clearAtalhos(sessionId: string) {
+    const r = await (this.prisma as any).livePdvAtalho.deleteMany({ where: { sessionId } });
+    return { ok: true, removidos: r.count };
   }
 
   /**
@@ -347,6 +599,29 @@ export class LivePdvService {
     });
   }
 
+  /**
+   * REABRE uma live encerrada (14/07, pedido do dono: live encerrou sem querer
+   * no meio da operação). Nada foi apagado no encerramento — reabrir só volta
+   * o status, e o console recupera busca/grades/venda. Trava: não deixa duas
+   * lives abertas ao mesmo tempo (o modelo do console é uma por vez).
+   */
+  async reopenSession(id: string) {
+    const s = await this.getSession(id);
+    if (s.status === 'live') return s;
+    const outra = await (this.prisma as any).livePdvSession.findFirst({
+      where: { status: 'live', id: { not: id } },
+    });
+    if (outra) {
+      throw new BadRequestException(
+        `Já existe uma live aberta ("${outra.title}") — feche-a antes de reabrir esta.`,
+      );
+    }
+    return (this.prisma as any).livePdvSession.update({
+      where: { id },
+      data: { status: 'live', endedAt: null },
+    });
+  }
+
   // ─── Busca + Grade ──────────────────────────────────────────────────────────
   /**
    * Busca produto e devolve a grade com estoque consolidado + por loja
@@ -362,7 +637,7 @@ export class LivePdvService {
     let q = (term || '').trim();
     if (!q) throw new BadRequestException('Informe referência, código, SKU ou nome');
 
-    let viaAtalho: { atalho: string; refCode: string } | null = null;
+    let viaAtalho: { atalho: string; refCode: string; cor?: string | null } | null = null;
     if (sessionId && !opts?.skipAtalho) {
       const key = this.normAtalho(q);
       // Tolerância de digitação: "1" acha o atalho "01" e vice-versa.
@@ -376,7 +651,7 @@ export class LivePdvService {
         where: { sessionId, atalho: { in: Array.from(candidates) } },
       });
       if (at) {
-        viaAtalho = { atalho: at.atalho, refCode: at.refCode };
+        viaAtalho = { atalho: at.atalho, refCode: at.refCode, cor: at.cor || null };
         q = String(at.refCode).trim();
       }
     }
@@ -398,24 +673,194 @@ export class LivePdvService {
     // dono: buscar "VLM-222" agora também traz "VLM-222EST" (estampado).
     const qn = this.norm(q);
     const exact = rows.filter((r) => this.norm(r.REF) === qn);
-    const productRows = exact.length
-      ? rows.filter((r) => this.norm(r.REF).startsWith(qn))
-      : rows.filter((r) => this.norm(r.REF) === this.norm(rows[0].REF));
+
+    // FAMÍLIA POR REF-BASE (13/07, decisão do dono): REF composta ("VLM-222",
+    // "VLM-222P", "VLM-222 VD") é o MESMO produto — qualquer forma digitada
+    // (base, variante ou código bipado) abre a família INTEIRA, agrupada pela
+    // coluna ref_base do espelho. Resolve os 3 sintomas que pareciam bug:
+    //   1) variante digitada abria sozinha (sem as irmãs);
+    //   2) base SEM cadastro exato mostrava só a 1ª cor;
+    //   3) prefixo arrastava REF numérica maior (VLM-222 puxava VLM-2225 —
+    //      ref_base preserva dígitos, então VLM-2225 é outra família).
+    // Sufixo NÃO vira cor (sem padrão no cadastro — dono, 13/07): a cor é
+    // sempre o campo COR da linha; o sufixo só agrupa.
+    const baseAlvo = ProductSearchService.refBaseOf(exact.length ? qn : String(rows[0].REF || ''));
+    let familia: any[] = [];
+    if (baseAlvo) {
+      try {
+        const fam = await (this.prisma as any).gigaProduto.findMany({
+          where: { refBase: baseAlvo },
+          take: 1000,
+        });
+        familia = fam.map((r: any) => ({
+          CODIGO: r.codigo,
+          REF: r.ref,
+          DESCRICAOCOMPLETA: r.descricao,
+          COR: r.cor,
+          TAMANHO: r.tamanho,
+        }));
+      } catch {
+        /* coluna ainda não populada/erro → fallback por prefixo abaixo */
+      }
+      // UNE com as linhas que a BUSCA acabou de resolver (nativa/espelho
+      // frescos): o giga_produto full-synca a cada ~6h, então produto
+      // recém-cadastrado (caso VOGUE BEGE, 14/07) já aparece na busca mas
+      // ainda não na família do espelho — sem a união, a família "engolia"
+      // a cor nova da grade. Dedup por CODIGO normalizado (padding de zeros
+      // varia entre fontes; linha duplicada contaria estoque 2x).
+      const keyCod = (c: any) => String(c ?? '').trim().replace(/^0+/, '');
+      const vistos = new Set(familia.map((r) => keyCod(r.CODIGO)));
+      for (const r of rows) {
+        if (ProductSearchService.refBaseOf(r.REF) !== baseAlvo) continue;
+        const k = keyCod(r.CODIGO);
+        if (vistos.has(k)) continue;
+        vistos.add(k);
+        familia.push(r);
+      }
+    }
+    // Fallback (espelho sem ref_base ainda): junção por prefixo antiga, com a
+    // TRAVA DO PREFIXO NUMÉRICO — sufixo de variante começa com letra/espaço/
+    // separador, então "VLM-222" NUNCA arrasta "VLM-2225"/"VLM-22201".
+    let productRows = familia.length
+      ? familia
+      : exact.length
+        ? rows.filter((r) => {
+            const ref = this.norm(r.REF);
+            return ref.startsWith(qn) && !/^\d/.test(ref.slice(qn.length));
+          })
+        : rows.filter((r) => this.norm(r.REF) === this.norm(rows[0].REF));
+
+    // REF AMBÍGUA (14/07, caso 14538): a MESMA REF cobre produtos DIFERENTES
+    // na Giga (SAÍDA DE PRAIA ACQUA + CASACO JULIA) — sem separar, a grade
+    // vira Frankenstein: descrição de um, preço do outro, cores misturadas.
+    // Divide por FAMÍLIA de descrição (regra do caso 2319, já usada nas outras
+    // telas) e fica com UMA:
+    //   - o termo tem palavra além da REF ("14538 JULIA") → família que casa;
+    //   - senão → família DOMINANTE (mais variações).
+    // Pra vender a OUTRA família, digita a REF + uma palavra dela
+    // ("14538 ACQUA") — na busca ou no refCode da legenda.
+    const porFamilia = new Map<string, any[]>();
+    for (const r of productRows) {
+      const f = ProductSearchService.familiaOf(r.DESCRICAOCOMPLETA);
+      const list = porFamilia.get(f) || [];
+      list.push(r);
+      porFamilia.set(f, list);
+    }
+    if (porFamilia.size > 1) {
+      const palavrasDoTermo = this.norm(q)
+        .split(/\s+/)
+        .filter((w) => w.length >= 3 && !/^\d+$/.test(w) && this.norm(w) !== qn);
+      let escolhida: any[] | null = null;
+
+      // 0) BIPE (16/07, pedido do dono): quando o termo é um CÓDIGO que casa
+      // com UMA linha (a peça foi passada no leitor), a família certa é a DA
+      // PRÓPRIA PEÇA bipada — não a dominante. Sem isso, bipar uma peça da
+      // família menor de uma REF homônima trazia o produto da família maior
+      // ("passo o leitor e vem outro produto"). A descrição da peça bipada é
+      // a "similaridade" que desambigua.
+      const codBipado = String(q).replace(/\D/g, '').replace(/^0+/, '');
+      if (codBipado) {
+        const scanRow = productRows.find(
+          (r) => String(r.CODIGO ?? '').trim().replace(/^0+/, '') === codBipado,
+        );
+        if (scanRow) {
+          const famBipada = ProductSearchService.familiaOf(scanRow.DESCRICAOCOMPLETA);
+          const lista = porFamilia.get(famBipada);
+          if (lista?.length) {
+            escolhida = lista;
+            this.logger.log(
+              `[grade] REF ambígua "${qn}": código ${codBipado} bipado → ancorando na família da peça "${famBipada}" (${lista.length} linhas)`,
+            );
+          }
+        }
+      }
+
+      if (!escolhida && palavrasDoTermo.length) {
+        for (const list of porFamilia.values()) {
+          const casa = list.some((r) => {
+            const d = this.norm(r.DESCRICAOCOMPLETA);
+            return palavrasDoTermo.every((w) => d.includes(w));
+          });
+          if (casa) { escolhida = list; break; }
+        }
+      }
+      if (!escolhida) {
+        for (const list of porFamilia.values()) {
+          if (!escolhida || list.length > escolhida.length) escolhida = list;
+        }
+      }
+      if (escolhida?.length) {
+        this.logger.log(
+          `[grade] REF ambígua "${qn}": ${porFamilia.size} famílias (${Array.from(porFamilia.keys()).join(', ')}) → exibindo "${ProductSearchService.familiaOf(escolhida[0].DESCRICAOCOMPLETA)}" (${escolhida.length} linhas)`,
+        );
+        productRows = escolhida;
+      }
+    }
+
+    // FILTRO DE LIVE (13/07, decisão do dono): live é SÓ plus size FEMININO.
+    // 1) tamanho fora da whitelist (46–60, 46/48, 50/52) não vira célula —
+    //    linha sem tamanho preenchido passa (cadastro incompleto não some);
+    // 2) descrição MASCULIN…/INFANTIL sai.
+    // Mesmo padrão do filtro de cor da legenda: se zerar tudo, mostra tudo
+    // (cadastro fora do padrão nunca trava a live).
+    const soPlusFeminino = productRows.filter((r) => {
+      const tam = this.tamCanon(r.TAMANHO);
+      if (tam && !LivePdvService.LIVE_TAMANHOS.has(tam)) return false;
+      const desc = this.norm(r.DESCRICAOCOMPLETA);
+      if (desc.includes('MASCULIN') || desc.includes('INFANTIL')) return false;
+      return true;
+    });
+    if (soPlusFeminino.length) productRows = soPlusFeminino;
+
+    // COR DA LEGENDA (13/07): o atalho pode fixar a cor vendida naquela
+    // legenda — a grade abre SÓ com as linhas dessa cor (menos poluição e
+    // zero risco de bipar a cor errada). Fallback: se a cor sumiu do
+    // cadastro desde o cadastro da legenda, mostra todas (não trava a live).
+    if (viaAtalho?.cor) {
+      const corAlvo = this.norm(viaAtalho.cor);
+      const daCor = productRows.filter((r) => this.norm(r.COR) === corAlvo);
+      if (daCor.length) productRows = daCor;
+    }
     // Metadados pra VALIDAÇÃO da legenda: quais REFs distintas o termo trouxe
-    // e se houve match exato. Campos ADITIVOS — não mudam o comportamento.
+    // e se o termo identifica UM produto. Com a família por ref_base, várias
+    // REFs da MESMA família não são ambiguidade ("VLM-222" sem cadastro exato
+    // achando VLM-222P + VLM-222 VD é 1 produto só) — a legenda pode salvar.
     const matchedRefs = Array.from(new Set(rows.map((r) => String(r.REF || '').trim()).filter(Boolean)));
-    const exactMatch = exact.length > 0;
-    // Cabeçalho/foto/preço-base/promo usam a REF BASE exata (ex.: 900658), não a
-    // variante de cor (900658M) — que pode vir antes na ordem do Giga. As células
+    const mesmaFamilia =
+      matchedRefs.length > 0 &&
+      matchedRefs.every((r) => ProductSearchService.refBaseOf(r) === baseAlvo);
+    const exactMatch = exact.length > 0 || (familia.length > 0 && mesmaFamilia);
+    // Cabeçalho/foto/preço-base/promo usam a REF BASE (ex.: VLM-222), não a
+    // variante de cor (VLM-222P) — que pode vir antes na ordem do Giga. As células
     // da grade continuam agrupadas sob a base; cada uma guarda seu próprio código.
-    const headRow = exact[0] || productRows[0];
-    const ref = String(headRow.REF).trim();
-    const descricao = headRow.DESCRICAOCOMPLETA || ref;
+    // headRow SEMPRE dentro das linhas exibidas — exact[0] pode ser da família
+    // DESCARTADA (caso 14538: a saída de praia também tem REF exata "14538",
+    // e a descrição/foto do cabeçalho viravam as dela com a grade do casaco).
+    const headRow = productRows.find((r) => this.norm(r.REF) === qn) || productRows[0];
+    const ref = (familia.length ? baseAlvo : String(headRow.REF).trim()) || String(headRow.REF).trim();
+    // TÍTULO SEM COR/TAMANHO (14/07, pedido do dono): a descrição da Giga é da
+    // LINHA e embute a cor/tamanho dela ("... PRETO 46 JULIA PLUS") — legenda
+    // fixada em TERRACOTA exibia "PRETO 46" no título e confundia. A grade
+    // abaixo é quem informa cor×tamanho; o título fica só com o produto.
+    const descricao = this.tituloSemVariacao(
+      headRow.DESCRICAOCOMPLETA || ref,
+      headRow.COR,
+      headRow.TAMANHO,
+    );
 
     // 2) Estoque por loja (1 query batch p/ todos os CODIGOs do produto).
     const codigos = Array.from(
       new Set(productRows.map((r) => String(r.CODIGO || '').trim()).filter(Boolean)),
     );
+    // Peça no ar SEMPRE fresca: refresh pontual do espelho direto do Giga
+    // (query minúscula indexada, throttle 45s). Espera no MÁXIMO 2,5s — caso
+    // normal responde em ms e a grade já sai fresca; se o Giga estiver lento,
+    // a grade sai do espelho e o refresh termina em background (a próxima
+    // busca da mesma peça pega o estoque novo).
+    await Promise.race([
+      this.refreshMirrorStock(codigos).catch(() => false),
+      new Promise((r) => setTimeout(r, 2_500)),
+    ]);
     const stockRes = await this.stockWithMirror(codigos);
     const detailed = stockRes.detailed;
     const fromMirror = resolved.fromMirror || stockRes.fromMirror;
@@ -431,7 +876,7 @@ export class LivePdvService {
     const itemKeys = productRows.map((r) =>
       this.keyOf(String(r.REF || ref).trim(), r.COR, r.TAMANHO),
     );
-    const { byKey, byKeyStore } = await this.committed(Array.from(new Set(itemKeys)));
+    const { byKey, byKeyStore } = await this.committed(Array.from(new Set(itemKeys)), sessionId);
 
     // 4) Monta células da grade (cor × tamanho), deduplicando por REF|COR|TAM.
     const cellMap = new Map<string, any>();
@@ -572,10 +1017,30 @@ export class LivePdvService {
    *   - o termo não é AMBÍGUO (várias REFs sem match exato).
    * Retorna a grade da validação pro front exibir a prévia idêntica à live.
    */
-  async saveAtalho(sessionId: string, input: { id?: string | null; atalho: string; refCode: string }) {
+  /**
+   * Botão "Atualizar estoque" da grade: FORÇA o refresh pontual (ignora o
+   * throttle de 45s) e devolve a grade recalculada. Se o Giga não responder
+   * em 8s, devolve a grade do espelho mesmo — nunca trava a live.
+   */
+  async searchGradeFresh(term: string, sessionId?: string) {
+    const q = String(term || '').trim();
+    if (!q) throw new BadRequestException('Informe a referência');
+    const resolved = await this.resolveRowsWithMirror(q);
+    const codigos = Array.from(
+      new Set(resolved.rows.map((r) => String(r.CODIGO || '').trim()).filter(Boolean)),
+    );
+    if (codigos.length) await this.refreshMirrorStock(codigos, { force: true });
+    return this.searchGrade(q, sessionId);
+  }
+
+  async saveAtalho(
+    sessionId: string,
+    input: { id?: string | null; atalho: string; refCode: string; cor?: string | null },
+  ) {
     await this.getSession(sessionId);
     const atalho = this.normAtalho(input.atalho);
     const refCode = String(input.refCode || '').trim();
+    const cor = String(input.cor || '').trim() || null;
     if (!atalho) throw new BadRequestException('Informe o atalho (ex: 01)');
     if (atalho.length > 10) throw new BadRequestException('Atalho muito longo (máx 10 caracteres)');
     if (!refCode) throw new BadRequestException('Informe a referência');
@@ -592,6 +1057,17 @@ export class LivePdvService {
       );
     }
 
+    // Cor escolhida precisa EXISTIR na grade validada (proteção contra typo;
+    // a UI manda a cor vinda do select, mas o backend revalida).
+    if (cor) {
+      const cores = new Set(
+        (grade.cells || []).map((c: any) => this.norm(c.cor)).filter(Boolean),
+      );
+      if (!cores.has(this.norm(cor))) {
+        throw new BadRequestException(`Cor "${cor}" não existe na grade dessa referência.`);
+      }
+    }
+
     // Atalho duplicado na mesma live (em OUTRA linha) — erro amigável
     const dup = await (this.prisma as any).livePdvAtalho.findUnique({
       where: { sessionId_atalho: { sessionId, atalho } },
@@ -604,12 +1080,12 @@ export class LivePdvService {
     if (input.id) {
       row = await (this.prisma as any).livePdvAtalho.update({
         where: { id: input.id },
-        data: { atalho, refCode, descricao: grade.descricao || null },
+        data: { atalho, refCode, descricao: grade.descricao || null, cor },
       });
     } else {
       const count = await (this.prisma as any).livePdvAtalho.count({ where: { sessionId } });
       row = await (this.prisma as any).livePdvAtalho.create({
-        data: { sessionId, atalho, refCode, descricao: grade.descricao || null, position: count },
+        data: { sessionId, atalho, refCode, descricao: grade.descricao || null, cor, position: count },
       });
     }
     return { ok: true, atalho: row, grade };
@@ -748,7 +1224,7 @@ export class LivePdvService {
     bairro?: string;
     cidade?: string;
     uf?: string;
-  }) {
+  }, actor?: { userId?: string | null; name?: string | null; storeCode?: string | null }) {
     const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
     if (!cart) throw new NotFoundException('Carrinho não encontrado');
     const name = (input.name || '').trim();
@@ -816,6 +1292,22 @@ export class LivePdvService {
       }
     }
 
+    // AUDITORIA de ENDEREÇO: compara antes×depois (só campos de endereço) pra
+    // registrar quem editou e o de→para. Correção de endereço é sensível
+    // (a peça vai pro lugar errado se errar) — precisa de rastro.
+    const camposEndereco: Array<[string, any, any]> = [
+      ['cep', cart.customerCep, cep],
+      ['endereco', cart.customerEndereco, endereco],
+      ['numero', cart.customerNumero, numero],
+      ['complemento', cart.customerComplemento, complemento],
+      ['bairro', cart.customerBairro, bairro],
+      ['cidade', cart.customerCidade, cidade],
+      ['uf', cart.customerUf, uf],
+    ];
+    const mudancasEndereco = camposEndereco
+      .filter(([, de, para]) => String(de ?? '').trim() !== String(para ?? '').trim())
+      .map(([campo, de, para]) => ({ campo, de: de ?? null, para: para ?? null }));
+
     const updated = await (this.prisma as any).livePdvCart.update({
       where: { id: cartId },
       data: {
@@ -834,6 +1326,23 @@ export class LivePdvService {
         customerUf: uf,
       },
     });
+
+    if (mudancasEndereco.length) {
+      await (this.prisma as any).integrationLog.create({
+        data: {
+          source: 'live-pdv',
+          direction: 'internal',
+          event: 'cart.address.edit',
+          payload: JSON.stringify({
+            cartId,
+            comanda: cart.cartNumber ?? null,
+            por: { userId: actor?.userId ?? null, nome: actor?.name ?? null, loja: actor?.storeCode ?? null },
+            mudancas: mudancasEndereco,
+          }),
+        },
+      }).catch((e: any) => this.logger.warn(`[audit endereço] falha ao logar (${cartId}): ${e?.message || e}`));
+    }
+
     this.gateway.emitToLiveOps('live-pdv:cart-updated', { cartId, sessionId: cart.sessionId });
     return this.getCart(updated.id);
   }
@@ -855,15 +1364,45 @@ export class LivePdvService {
       });
       if (open) return open;
     }
+
+    // PUXA o cadastro mestre (CRM/lives anteriores): quem já comprou em live
+    // passada NÃO preenche nada de novo — a abertura de carrinho na live manda
+    // só a @, então nome/telefone/CPF/e-mail/endereço vêm do que já existe.
+    // Falha aqui nunca trava a live: segue com o que veio da tela.
+    let mestre: any = null;
+    let mestreAddr: any = null;
+    if (customer.id) {
+      try {
+        mestre = await (this.prisma as any).customer.findUnique({ where: { id: customer.id } });
+        mestreAddr = await (this.prisma as any).customerAddress.findFirst({
+          where: { customerId: customer.id, active: true },
+          orderBy: [{ isPrimary: 'desc' }, { updatedAt: 'desc' }],
+        });
+      } catch { /* segue sem hidratar */ }
+    }
+    const ig = customer.instagram || mestre?.igUsername || null;
+    // Nome: o modal da live usa a @ como nome quando vem vazio — se o mestre
+    // tem um nome de verdade (diferente da @), prefere ele.
+    const nomeTela = (customer.name || '').trim();
+    const nomeMestre = (mestre?.name || '').trim();
+    const telaEraSoArroba = !nomeTela || nomeTela === (ig || '').replace(/^@/, '');
+    const name = (telaEraSoArroba && nomeMestre ? nomeMestre : nomeTela) || nomeMestre || ig || 'cliente';
+
     return this.createCartWithNumber(sessionId, {
       sessionId,
       customerId: customer.id || null,
-      customerName: customer.name,
-      customerPhone: (customer.phone || '').replace(/\D/g, ''),
-      customerInstagram: customer.instagram || null,
-      customerCpf: customer.cpf || null,
-      customerEmail: customer.email || null,
-      customerCep: customer.cep || null,
+      customerName: name,
+      customerPhone: (customer.phone || '').replace(/\D/g, '') || (mestre?.phone || '').replace(/\D/g, ''),
+      customerInstagram: ig,
+      customerCpf: customer.cpf || mestre?.cpf || null,
+      customerEmail: customer.email || mestre?.email || null,
+      customerCep: customer.cep || mestreAddr?.cep || null,
+      customerEndereco: mestreAddr?.street || null,
+      customerNumero: mestreAddr?.number || null,
+      customerComplemento: mestreAddr?.complement || null,
+      customerBairro: mestreAddr?.district || null,
+      customerCidade: mestreAddr?.city || null,
+      customerUf: mestreAddr?.state || null,
       status: 'open',
     });
   }
@@ -1215,18 +1754,23 @@ export class LivePdvService {
    * cobrar essa cliente. Grava dmSentAt (mesmo carimbo do automático) — o ✓
    * sincroniza entre PCs e a cobrança em massa não repete pra ela.
    */
-  async markCartCharged(cartId: string) {
+  async markCartCharged(cartId: string, canal?: 'direct' | 'whats') {
     const cart = await (this.prisma as any).livePdvCart.findUnique({
       where: { id: cartId },
       select: { id: true, dmSentAt: true },
     });
     if (!cart) throw new NotFoundException('Carrinho não encontrado');
-    if (!cart.dmSentAt) {
-      await (this.prisma as any).livePdvCart.update({
-        where: { id: cartId },
-        data: { dmSentAt: new Date() },
-      });
-    }
+    // Contador de tentativas por canal (17/07): cada clique soma 1 — o número
+    // aparece dentro do botão Direct/WhatsApp da tela Cobrar todas. Sem canal
+    // = só o carimbo (WhatsApp via API já contou no endpoint cobranca-whats).
+    const data: any = canal === 'whats'
+      ? { cobrancaWhatsCount: { increment: 1 } }
+      : canal === 'direct'
+        ? { cobrancaDirectCount: { increment: 1 } }
+        : {};
+    if (!cart.dmSentAt) data.dmSentAt = new Date();
+    if (!Object.keys(data).length) return { ok: true };
+    await (this.prisma as any).livePdvCart.update({ where: { id: cartId }, data });
     return { ok: true };
   }
 
@@ -1246,6 +1790,48 @@ export class LivePdvService {
    * Retorna { ok: false, reason } em vez de lançar — a massa acumula em
    * "skipped" e o individual transforma em erro amigável.
    */
+  /** Endereço de entrega incompleto pra postagem (mesma régua do releaseSeparation). */
+  private enderecoIncompleto(cart: any): boolean {
+    return (
+      String(cart.customerCep || '').replace(/\D/g, '').length !== 8 ||
+      !String(cart.customerEndereco || '').trim() ||
+      !String(cart.customerNumero || '').trim() ||
+      !String(cart.customerCidade || '').trim() ||
+      !String(cart.customerUf || '').trim()
+    );
+  }
+
+  /**
+   * DM automática pós-pagamento pedindo o ENDEREÇO — pro carrinho pago sem
+   * endereço completo (PIX/link gerado no console, cliente nunca passou pelo
+   * checkout). A cliente completa no mesmo link público; a operadora para de
+   * caçar endereço no Direct. Best-effort: falha nunca trava o pagamento.
+   */
+  private async sendAddressRequestDm(cart: any): Promise<void> {
+    if (!this.manychat.enabled) return;
+    let sid: string | null = null;
+    if (cart.customerId) {
+      const cust = await (this.prisma as any).customer.findUnique({
+        where: { id: cart.customerId },
+        select: { manychatSubscriberId: true },
+      });
+      sid = cust?.manychatSubscriberId || null;
+    }
+    if (!sid) sid = await this.lookupManychatSidByIg(cart.customerInstagram);
+    if (!sid) return;
+    const base = (process.env.FRONTEND_URL || 'https://flowops-lite.vercel.app')
+      .split(',')[0]
+      .trim()
+      .replace(/\/$/, '');
+    const link = cart.payCode ? `${base}/p/${cart.payCode}` : `${base}/pagar/${cart.id}`;
+    const first = String(cart.customerName || 'cliente').trim().split(/\s+/)[0] || 'cliente';
+    const msg =
+      `Pagamento confirmado, ${first}! 💜 Só falta seu ENDEREÇO pra gente postar suas peças. ` +
+      `Preenche aqui rapidinho: ${link}`;
+    const r = await this.manychat.sendText(sid, msg);
+    if (r.ok) this.logger.log(`[live-dm] pedido de endereço enviado (carrinho ${cart.id})`);
+  }
+
   private async sendCartDm(cart: any): Promise<{ ok: boolean; reason?: string }> {
     const name = cart.customerName || 'cliente';
     if ((cart.totalCents || 0) <= 0) return { ok: false, reason: 'carrinho vazio' };
@@ -1298,7 +1884,7 @@ export class LivePdvService {
     if (r.ok) {
       // Carimba o envio — a cobrança em massa não repete DM pra quem já recebeu
       await (this.prisma as any).livePdvCart
-        .update({ where: { id: cart.id }, data: { dmSentAt: new Date() } })
+        .update({ where: { id: cart.id }, data: { dmSentAt: new Date(), cobrancaDirectCount: { increment: 1 } } })
         .catch(() => {});
       return { ok: true };
     }
@@ -1325,6 +1911,236 @@ export class LivePdvService {
     if (!r.ok) throw new BadRequestException(`DM não enviada: ${r.reason}`);
     this.logger.log(`[live-dm] cobrança individual carrinho=${cartId} (${cart.customerName || 's/nome'}) enviada`);
     return { ok: true, customerName: cart.customerName || 'cliente' };
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // SACOLA PELA DM (16/07) — a cliente monta o próprio carrinho pelo ManyChat.
+  // A cliente NÃO sai da live: manda "<número da legenda> <tamanho>" no direct,
+  // o bot confirma cada peça pelo NOME (some o erro de transcrição da
+  // apresentadora) e mostra a sacola. No FECHAR a sacola vai pra FILA DE
+  // REVISÃO — a cobrança só sai quando a apresentadora LIBERA (liberarCobranca).
+  // Isso é a "verificação antes de finalizar" exigida pelo dono.
+  //
+  // Gated por LIVE_DM_SELFCART=1 (default OFF — merge não muda nada na live).
+  // Segurança: identidade = @ que mandou a msg (ManyChat), então "cliente
+  // errada" não acontece; "peça errada" é pega pelo eco + revisão humana.
+  // ═══════════════════════════════════════════════════════════════════════
+
+  get selfCartEnabled(): boolean {
+    return String(process.env.LIVE_DM_SELFCART ?? '').trim() === '1';
+  }
+
+  private brl(cents: number): string {
+    return `R$ ${(Math.max(0, Number(cents) || 0) / 100).toFixed(2).replace('.', ',')}`;
+  }
+
+  /** Resumo curto da sacola pro DM (nomes + tamanho + total). */
+  private async sacolaResumo(cartId: string): Promise<string> {
+    const itens = await (this.prisma as any).livePdvItem.findMany({
+      where: { cartId, status: { in: this.COMMITTED } },
+      orderBy: { createdAt: 'asc' },
+      select: { descricao: true, refCode: true, cor: true, tamanho: true, qty: true, priceCents: true },
+    });
+    if (!itens.length) return 'Sua sacola está vazia. Manda o número da peça + tamanho (ex: 7 48).';
+    const linhas = (itens as any[]).map((it, i) => {
+      const nome = (it.descricao || it.refCode || 'peça').toString().trim();
+      const det = [it.cor, it.tamanho].filter(Boolean).join(' ');
+      return `${i + 1}) ${nome}${det ? ` — ${det}` : ''} · ${this.brl(it.priceCents * (it.qty || 1))}`;
+    });
+    const total = (itens as any[]).reduce((s, it) => s + (it.priceCents || 0) * (it.qty || 1), 0);
+    return `🛍️ Sua sacola:\n${linhas.join('\n')}\n\nTotal: ${this.brl(total)}`;
+  }
+
+  /**
+   * Webhook do ManyChat: recebe a mensagem da cliente no DM e responde.
+   * Retorna SEMPRE { reply } (texto pro ManyChat mandar de volta). Nunca lança
+   * pro webhook — erro vira mensagem amigável (o ManyChat não trava o flow).
+   */
+  async manychatInbound(input: {
+    ig?: string | null;
+    phone?: string | null;
+    name?: string | null;
+    text?: string | null;
+    sid?: string | null;
+  }): Promise<{ reply: string; cartId?: string; awaitingReview?: boolean }> {
+    if (!this.selfCartEnabled) {
+      return { reply: 'A sacola pela DM está desativada no momento. Fala com a gente que a gente monta pra você. 💛' };
+    }
+    const ig = String(input.ig || '').trim().replace(/^@/, '');
+    const raw = String(input.text || '').trim();
+    if (!raw) return { reply: 'Manda o número da peça + tamanho (ex: 7 48). Ou digite SACOLA pra ver o que já tem.' };
+
+    // Vincula o subscriber do ManyChat (idempotente) — sem isso, a apresentadora
+    // não consegue mandar o link no liberar (chargeCartViaDm precisa do vínculo).
+    if (ig && input.sid) {
+      await this.upsertManychatLink({
+        sid: String(input.sid),
+        ig,
+        name: input.name || undefined,
+        phone: input.phone || undefined,
+      }).catch(() => null);
+    }
+
+    // Sessão ativa
+    const session = await (this.prisma as any).livePdvSession.findFirst({
+      where: { status: 'live' },
+      orderBy: { startedAt: 'desc' },
+      select: { id: true },
+    });
+    if (!session) return { reply: 'Não tem live rolando agora. Assim que começar, é só mandar o número da peça. 💛' };
+
+    // Comando normalizado (sem acento, upper)
+    const cmd = this.norm(raw);
+    const primeira = cmd.split(/\s+/)[0];
+
+    // Acha/gera o carrinho da @ (identidade = quem mandou a msg)
+    let cart: any = null;
+    if (ig) {
+      const found = await this.findActiveLiveCart({
+        customerInstagram: { equals: ig, mode: 'insensitive' },
+      });
+      cart = found.cart || null;
+    }
+
+    // Ajuda / lista
+    if (['AJUDA', 'HELP', 'MENU'].includes(primeira)) {
+      return { reply: 'Como comprar na live:\n• Manda o NÚMERO da peça + tamanho (ex: 7 48)\n• SACOLA — ver o que já tem\n• TIRAR 7 — remover uma peça\n• LISTA — números das peças\n• FECHAR — finalizar (a gente confere e te manda o link)' };
+    }
+    if (['LISTA', 'CATALOGO', 'CATÁLOGO', 'PECAS', 'PEÇAS'].includes(primeira)) {
+      const atalhos = await (this.prisma as any).livePdvAtalho.findMany({
+        where: { sessionId: session.id },
+        orderBy: { position: 'asc' },
+        take: 60,
+        select: { atalho: true, descricao: true },
+      });
+      if (!atalhos.length) return { reply: 'Ainda não tem peças numeradas nesta live. Aguarda a apresentadora. 💛' };
+      const linhas = (atalhos as any[]).map((a) => `${a.atalho} — ${(a.descricao || '').toString().trim() || 'peça'}`);
+      return { reply: `Peças da live:\n${linhas.join('\n')}\n\nManda o número + tamanho (ex: 7 48).` };
+    }
+
+    // SACOLA
+    if (['SACOLA', 'CARRINHO'].includes(primeira)) {
+      if (!cart) return { reply: 'Você ainda não tem sacola. Manda o número da peça + tamanho (ex: 7 48).' };
+      return { reply: await this.sacolaResumo(cart.id), cartId: cart.id };
+    }
+
+    // FECHAR → fila de revisão (NÃO manda link — verificação humana antes)
+    if (['FECHAR', 'FINALIZAR', 'PAGAR', 'FIM', 'ACABOU'].includes(primeira)) {
+      if (!cart) return { reply: 'Você ainda não tem sacola pra fechar. Manda o número da peça + tamanho (ex: 7 48).' };
+      const temItem = await (this.prisma as any).livePdvItem.count({
+        where: { cartId: cart.id, status: { in: this.COMMITTED } },
+      });
+      if (!temItem) return { reply: 'Sua sacola está vazia. Manda o número da peça + tamanho (ex: 7 48).' };
+      await (this.prisma as any).livePdvCart.update({
+        where: { id: cart.id },
+        data: { awaitingReview: true, clientClosedAt: new Date(), selfCart: true },
+      });
+      this.gateway.emitToLiveOps('live-pdv:cart-review', { cartId: cart.id });
+      const resumo = await this.sacolaResumo(cart.id);
+      return {
+        reply: `${resumo}\n\n✅ Sacola enviada pra conferência! Assim que a Lurd's confirmar, te mando o link de pagamento aqui. 💛`,
+        cartId: cart.id,
+        awaitingReview: true,
+      };
+    }
+
+    // TIRAR <número>
+    if (['TIRAR', 'REMOVER', 'REMOVE', 'CANCELA', 'CANCELAR'].includes(primeira)) {
+      if (!cart) return { reply: 'Você ainda não tem sacola.' };
+      const numero = cmd.split(/\s+/)[1];
+      if (!numero) return { reply: 'Qual número tirar? Ex: TIRAR 7.' };
+      const at = await this.acharAtalho(session.id, numero);
+      if (!at) return { reply: `Não achei a peça ${numero} na sua sacola.` };
+      const refBase = this.norm(at.refCode);
+      const itens = await (this.prisma as any).livePdvItem.findMany({
+        where: { cartId: cart.id, status: { in: this.COMMITTED } },
+        select: { id: true, refCode: true },
+      });
+      const alvo = (itens as any[]).filter((it) => this.norm(it.refCode) === refBase);
+      if (!alvo.length) return { reply: `A peça ${numero} não está na sua sacola.` };
+      for (const it of alvo) await this.cancelItem(it.id, 'removido pela cliente (DM)').catch(() => null);
+      return { reply: `Ok, tirei a peça ${numero}. \n\n${await this.sacolaResumo(cart.id)}`, cartId: cart.id };
+    }
+
+    // ADD — "<número> <tamanho>" (ou só número → pede o tamanho)
+    const partes = cmd.split(/\s+/).filter(Boolean);
+    const numero = partes[0];
+    if (!/^\d{1,4}[A-Z]?$/.test(numero)) {
+      return { reply: 'Não entendi. Manda o NÚMERO da peça + tamanho (ex: 7 48), ou digite AJUDA.' };
+    }
+    const at = await this.acharAtalho(session.id, numero);
+    if (!at) return { reply: `Não achei a peça ${numero}. Confere o número que a apresentadora falou (ou digite LISTA).` };
+    const tamanho = partes.slice(1).join(' ').trim();
+    if (!tamanho) {
+      return { reply: `Peça ${numero}${at.descricao ? ` (${at.descricao})` : ''}: qual tamanho? Ex: ${numero} 48.` };
+    }
+
+    // Garante carrinho (cria com a identidade da @ se ainda não tem)
+    try {
+      if (!cart) {
+        cart = await this.ensureCart(session.id, {
+          id: null,
+          name: (input.name || ig || 'Cliente da Live').toString().trim(),
+          phone: String(input.phone || '').replace(/\D/g, ''),
+          instagram: ig || null,
+        } as any);
+      }
+      const res = await this.addItem({
+        sessionId: session.id,
+        cartId: cart.id,
+        refCode: at.refCode,
+        cor: at.cor || null,
+        tamanho,
+        qty: 1,
+      });
+      await (this.prisma as any).livePdvCart.update({
+        where: { id: cart.id },
+        data: { selfCart: true, awaitingReview: false },
+      }).catch(() => null);
+      const nome = (res?.item?.descricao || at.descricao || at.refCode || 'peça').toString().trim();
+      return {
+        reply: `✅ ${nome} — ${at.cor ? at.cor + ' ' : ''}${tamanho} na sua sacola.\n\n${await this.sacolaResumo(cart.id)}\n\nManda mais ou digite FECHAR.`,
+        cartId: cart.id,
+      };
+    } catch (e: any) {
+      const msg = String(e?.message || e || '').toLowerCase();
+      if (msg.includes('estoque')) {
+        return { reply: `Poxa, a peça ${numero} no ${tamanho} está sem estoque. 😔 Tenta outro tamanho ou outra peça.` };
+      }
+      return { reply: `Não consegui adicionar a peça ${numero} no ${tamanho}. Confere o tamanho (ex: ${numero} 48) ou digite LISTA.` };
+    }
+  }
+
+  /** Acha a legenda (atalho) tolerando zeros à esquerda, igual ao searchGrade. */
+  private async acharAtalho(sessionId: string, numeroRaw: string): Promise<any | null> {
+    const key = this.normAtalho(numeroRaw);
+    const cand = new Set<string>([key]);
+    if (/^\d+$/.test(key)) {
+      const semZeros = key.replace(/^0+/, '');
+      if (semZeros) cand.add(semZeros);
+      cand.add(key.padStart(2, '0'));
+    }
+    return (this.prisma as any).livePdvAtalho.findFirst({
+      where: { sessionId, atalho: { in: Array.from(cand) } },
+    });
+  }
+
+  /**
+   * LIBERAR COBRANÇA — a apresentadora confere a sacola fechada pela cliente e
+   * libera: tira da fila de revisão e manda o link de pagamento pela DM.
+   * É a "verificação antes de finalizar". Sem isso, a cobrança nunca sai
+   * sozinha de uma sacola montada pela cliente.
+   */
+  async liberarCobranca(cartId: string) {
+    const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
+    if (!cart) throw new NotFoundException('Carrinho não encontrado');
+    await (this.prisma as any).livePdvCart.update({
+      where: { id: cartId },
+      data: { awaitingReview: false },
+    });
+    const r = await this.chargeCartViaDm(cartId);
+    this.logger.log(`[live-dm] sacola ${cartId} (${cart.customerName || 's/nome'}) revisada e liberada → link enviado`);
+    return { ...r };
   }
 
   /**
@@ -1475,6 +2291,58 @@ export class LivePdvService {
   }
 
   /**
+   * RECORRENTES (15/07): clientes que já criaram carrinho em QUALQUER live
+   * (mesmo sem pagar). Busca por nome/@/telefone nos snapshots dos carrinhos.
+   * Dedup por cliente (fica o mais recente), exclui quem já está na live atual.
+   * A operadora puxa pra live com 1 clique (add-customer). Sem termo → mostra
+   * os mais recentes.
+   */
+  async recurringLiveCustomers(sessionId: string, term?: string) {
+    const q = String(term || '').trim();
+    const igq = q.replace(/^@/, '');
+    const digits = q.replace(/\D/g, '');
+    const carts = await (this.prisma as any).livePdvCart.findMany({
+      where: {
+        customerId: { not: null },
+        ...(q
+          ? {
+              OR: [
+                { customerName: { contains: q, mode: 'insensitive' } },
+                { customerInstagram: { contains: igq, mode: 'insensitive' } },
+                ...(digits ? [{ customerPhone: { contains: digits } }] : []),
+              ],
+            }
+          : {}),
+      },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        customerId: true, customerName: true, customerInstagram: true,
+        customerPhone: true, createdAt: true, sessionId: true,
+      },
+      take: 500,
+    });
+    // Clientes que JÁ têm carrinho na live atual (não repropor).
+    const naSessao = new Set(
+      (carts as any[]).filter((c) => c.sessionId === sessionId).map((c) => c.customerId),
+    );
+    const seen = new Set<string>();
+    const out: any[] = [];
+    for (const c of carts as any[]) {
+      if (c.sessionId === sessionId || naSessao.has(c.customerId) || seen.has(c.customerId)) continue;
+      seen.add(c.customerId);
+      out.push({
+        customerId: c.customerId,
+        name: c.customerName || null,
+        instagram: c.customerInstagram || null,
+        phone: c.customerPhone || null,
+        lastAt: c.createdAt,
+      });
+      if (out.length >= 30) break;
+    }
+    return out;
+  }
+
+  /**
    * Puxa uma cliente já existente (de live anterior) para a sessão de live
    * ATUAL: cria (ou reusa) o carrinho aberto dela na sessão. Usa os dados mais
    * frescos do cadastro mestre, com fallback no snapshot do último carrinho.
@@ -1552,7 +2420,7 @@ export class LivePdvService {
     // Estoque por loja + reservas ativas → disponibilidade real
     const { byStore, bestCodigo } = await this.erpStockByStoreForItem(ref, cor, tam);
     if (byStore.size === 0) throw new BadRequestException('Produto sem estoque em nenhuma loja');
-    const { byKeyStore } = await this.committed([itemKey]);
+    const { byKeyStore } = await this.committed([itemKey], session.id);
 
     // Monta entradas pro RoutingEngine (sku sintético = itemKey)
     const storesMap = await this.storesMap();
@@ -1617,8 +2485,15 @@ export class LivePdvService {
     let priceReais = bestCodigo ? priceMap.get(bestCodigo) || 0 : 0;
     if (priceReais === 0) priceReais = await this.refPriceWithMirror(ref);
     const basePriceCents = this.reaisToCents(priceReais);
-    // Aplica preço promocional da live se houver pro REF nessa sessão
-    const promo = await this.getPromo(session.id, ref);
+    // Aplica preço promocional da live se houver pro REF nessa sessão.
+    // A célula da grade manda a REF da VARIANTE (24372-INV) mas a promo é
+    // gravada na REF BASE da grade (24372) — sem o fallback o item entrava
+    // a preço cheio (23/07, vestido 24372-INV a 129,90 com promo de 64,95).
+    let promo = await this.getPromo(session.id, ref);
+    if (promo == null) {
+      const base = ProductSearchService.refBaseOf(ref);
+      if (base && base !== ref) promo = await this.getPromo(session.id, base);
+    }
     const priceCents = promo != null && promo > 0 ? promo : basePriceCents;
 
     // Descrição — SÓ ESPELHO, ref EXATO (usa índice).
@@ -1697,6 +2572,36 @@ export class LivePdvService {
     await (this.prisma as any).livePdvCart.update({ where: { id: cartId }, data });
   }
 
+  /**
+   * LEGENDA POR ITEM (16/07, pedido do dono): mapeia cada item do carrinho pro
+   * número da legenda (atalho) da live — pra conferir a peça na linha do
+   * carrinho. Casa por refCode (+cor quando a legenda fixa a cor).
+   */
+  private async atalhosByRef(sessionId: string): Promise<Map<string, any[]>> {
+    const byRef = new Map<string, any[]>();
+    if (!sessionId) return byRef;
+    const atalhos = await (this.prisma as any).livePdvAtalho
+      .findMany({ where: { sessionId }, select: { atalho: true, refCode: true, cor: true } })
+      .catch(() => []);
+    for (const a of atalhos as any[]) {
+      const k = this.norm(a.refCode);
+      if (!byRef.has(k)) byRef.set(k, []);
+      byRef.get(k)!.push(a);
+    }
+    return byRef;
+  }
+
+  private legendaDeItem(it: any, byRef: Map<string, any[]>): string | null {
+    const cands = byRef.get(this.norm(it?.refCode)) || [];
+    if (!cands.length) return null;
+    const corN = this.norm(it?.cor);
+    const match =
+      cands.find((a: any) => a.cor && this.norm(a.cor) === corN) ||
+      cands.find((a: any) => !a.cor) ||
+      cands[0];
+    return match?.atalho ?? null;
+  }
+
   async getCart(cartId: string) {
     const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
     if (!cart) throw new NotFoundException('Carrinho não encontrado');
@@ -1727,7 +2632,9 @@ export class LivePdvService {
     if (!hasManychat) {
       hasManychat = !!(await this.lookupManychatSidByIg(cart.customerInstagram));
     }
-    return { ...cart, items, hasManychat };
+    const byRef = await this.atalhosByRef(cart.sessionId);
+    const itemsLeg = items.map((it: any) => ({ ...it, legenda: this.legendaDeItem(it, byRef) }));
+    return { ...cart, items: itemsLeg, hasManychat };
   }
 
   // Statuses que contam como "já pago" (não deixa cobrar de novo).
@@ -1871,9 +2778,11 @@ export class LivePdvService {
       });
       for (const s of subs as any[]) linkedIg.add(s.igUsername);
     }
+    // Legenda por item (mesma sessão pra todos os carrinhos → 1 query só).
+    const byRef = await this.atalhosByRef(sessionId);
     return carts.map((c: any) => ({
       ...c,
-      items: byCart.get(c.id) || [],
+      items: (byCart.get(c.id) || []).map((it: any) => ({ ...it, legenda: this.legendaDeItem(it, byRef) })),
       hasManychat:
         !!(c.customerId && linked.has(c.customerId)) ||
         linkedIg.has(String(c.customerInstagram || '').trim().replace(/^@/, '').toLowerCase()),
@@ -2005,7 +2914,7 @@ export class LivePdvService {
     if (!store) throw new BadRequestException('Loja não encontrada');
     // Valida estoque disponível na nova loja
     const { byStore } = await this.erpStockByStoreForItem(item.refCode, item.cor, item.tamanho);
-    const { byKeyStore } = await this.committed([item.itemKey]);
+    const { byKeyStore } = await this.committed([item.itemKey], item.sessionId);
     const raw = byStore.get(storeCode) || 0;
     const reserved = byKeyStore.get(`${item.itemKey}::${storeCode}`) || 0;
     // desconta a própria reserva atual se já era nessa loja (não é o caso, mas seguro)
@@ -2017,6 +2926,132 @@ export class LivePdvService {
       where: { id: itemId },
       data: { originStoreCode: store.code, originStoreName: store.name, originManual: true },
     });
+  }
+
+  /**
+   * TROCA MANUAL DE PEÇA na separação do pedido da LIVE.
+   *
+   * Mesma regra do pedido do site: só ANTES da baixa de estoque (item ainda
+   * 'separating' e sem separatedAt — a baixa roda no bip/marcar-separado sobre
+   * o codigoBipado ATUAL, então trocar aqui faz a baixa cair no produto novo e
+   * o antigo nunca é baixado). Diferença de preço ⇒ exige senha GERENTE+.
+   * Mantém a MESMA loja de origem (não reroteia) — só troca qual peça vai.
+   */
+  async swapItem(
+    itemId: string,
+    input: {
+      codigo: string;
+      ref?: string | null;
+      cor?: string | null;
+      tamanho?: string | null;
+      descricao?: string | null;
+      password?: string | null;
+    },
+    ctx: { storeCode?: string | null; isAdmin?: boolean } = {},
+  ): Promise<any> {
+    const item = await (this.prisma as any).livePdvItem.findUnique({ where: { id: itemId } });
+    if (!item) throw new NotFoundException('Item não encontrado');
+    if (!ctx.isAdmin && ctx.storeCode && item.originStoreCode !== ctx.storeCode) {
+      throw new ForbiddenException('Peça de outra loja');
+    }
+    if (item.status !== 'separating' || item.separatedAt) {
+      throw new BadRequestException(
+        'Só dá pra trocar a peça ANTES de conferir/enviar. Se já conferiu/enviou, use Devolução/Troca.',
+      );
+    }
+
+    const newSku = String(input.codigo || '').trim();
+    if (!newSku) throw new BadRequestException('Selecione a peça nova');
+    const oldSku = item.codigoBipado || '';
+    if (newSku === oldSku) throw new BadRequestException('É a mesma peça — nada pra trocar');
+
+    // Preços do espelho (REAIS — não dividir por 100). Diferença ⇒ exige senha.
+    const oldInfo = oldSku ? await this.catalog.getPdvProductInfo(oldSku).catch(() => null) : null;
+    const newInfo = await this.catalog.getPdvProductInfo(newSku).catch(() => null);
+    if (!newInfo) {
+      throw new BadRequestException('Peça nova não encontrada no catálogo — confira o código.');
+    }
+    const oldPrice = oldInfo?.preco ?? (item.priceCents ? item.priceCents / 100 : 0);
+    const newPrice = newInfo.preco ?? 0;
+    const diff = Math.round((newPrice - oldPrice) * 100) / 100;
+    const hasDiff = Math.abs(diff) >= 0.01;
+
+    const ref = String(input.ref || item.refCode || '').trim();
+    const cor = input.cor != null ? String(input.cor).trim() || null : item.cor;
+    const tam = input.tamanho != null ? String(input.tamanho).trim() || null : item.tamanho;
+    const descricao = (input.descricao || newInfo.descricao || ref).trim() || ref;
+
+    let authorizedByCpf: string | null = null;
+    let authorizedByNome: string | null = null;
+    if (hasDiff) {
+      const pwd = String(input.password || '').trim();
+      if (!pwd) {
+        return {
+          ok: false,
+          needsPassword: true,
+          oldSku,
+          newSku,
+          oldPrice,
+          newPrice,
+          diff,
+          newDescricao: descricao,
+        };
+      }
+      const auth = authorizeMinLevel(pwd, 'GERENTE'); // 403 se inválida/insuficiente
+      authorizedByCpf = auth.byCpf;
+      authorizedByNome = auth.byNome;
+    }
+
+    const basePriceCents = this.reaisToCents(newPrice);
+    await (this.prisma as any).livePdvItem.update({
+      where: { id: itemId },
+      data: {
+        refCode: ref,
+        itemKey: this.keyOf(ref, cor, tam),
+        codigoBipado: newSku,
+        cor,
+        tamanho: tam,
+        descricao,
+        priceCents: basePriceCents,
+        basePriceCents,
+      },
+    });
+
+    await (this.prisma as any).integrationLog.create({
+      data: {
+        source: 'live-pdv',
+        direction: 'internal',
+        event: 'item.swap',
+        payload: JSON.stringify({
+          itemId,
+          cartId: item.cartId,
+          storeCode: item.originStoreCode,
+          oldSku,
+          newSku,
+          oldPrice,
+          newPrice,
+          diff,
+          authorizedByCpf,
+          authorizedByNome,
+        }),
+        status: 200,
+      },
+    });
+
+    try {
+      this.gateway.emitToLiveOps('live-pdv:cart-updated', { cartId: item.cartId });
+    } catch { /* socket best-effort */ }
+
+    return {
+      ok: true,
+      oldSku,
+      newSku,
+      oldPrice,
+      newPrice,
+      diff,
+      authorizedBy: authorizedByNome,
+      item: { id: itemId, refCode: ref, cor, tamanho: tam, descricao, codigoBipado: newSku },
+    };
   }
 
   async setFrete(cartId: string, freteCents: number) {
@@ -2213,7 +3248,7 @@ export class LivePdvService {
       customerPhone: cart.customerPhone || undefined,
       customerEmail: cart.customerEmail || undefined,
       expiresInMinutes: 1440, // 24h pra cliente pagar
-      maxInstallments: 12, // até 12x sem juros no cartão
+      maxInstallments: Number(process.env.PAGARME_MAX_PARCELAS) || 12, // sem juros no cartão (PAGARME_MAX_PARCELAS ajusta a rede)
     });
 
     const updated = await (this.prisma as any).livePdvCart.update({
@@ -2261,20 +3296,17 @@ export class LivePdvService {
    * Guard: só permitido em loja 'externo'. Numa loja COM gateway isso seria
    * marcar pago "no escuro" — lá a confirmação tem que vir do PagBank/Pagar.me.
    */
-  async confirmExternalPayment(cartId: string) {
+  async confirmExternalPayment(cartId: string, confirmedBy?: string | null) {
     const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
     if (!cart) throw new NotFoundException('Carrinho não encontrado');
-    const session = await this.getSession(cart.sessionId);
-    const store = await (this.prisma as any).store.findUnique({
-      where: { code: session.liveStoreCode },
-      select: { pixProvider: true },
-    });
-    if ((store as any)?.pixProvider !== 'externo') {
-      throw new BadRequestException(
-        'Confirmação manual só vale em loja com PIX externo. Esta loja tem gateway — ' +
-          'a confirmação tem que vir do pagamento real.',
-      );
+    if (['paid', 'separating', 'shipped', 'delivered'].includes(cart.status)) {
+      return { paid: true, cart };
     }
+    // LIBERADO PRA QUALQUER LOJA (dono, 18/07): cliente que paga "por fora"
+    // (PIX direto na chave da loja) existe também em loja COM gateway — a
+    // trava antiga por pixProvider='externo' impedia a operadora de marcar
+    // pago e a cliente era recobrada. Dupla confirmação fica no front; aqui
+    // registramos QUEM confirmou pra auditoria.
     const items = await (this.prisma as any).livePdvItem.findMany({
       where: { cartId, status: 'reserved' },
     });
@@ -2285,6 +3317,11 @@ export class LivePdvService {
       where: { id: cartId },
       data: { paymentMethod: 'externo' },
     });
+    this.logger.log(
+      `[live] pagamento EXTERNO confirmado manualmente cart=${cartId} ` +
+        `(@${cart.customerInstagram || '?'} · R$ ${((cart.totalCents || 0) / 100).toFixed(2)}) ` +
+        `por ${confirmedBy || 'operador não identificado'}`,
+    );
     const paidCart = await this.onCartPaid(cartId);
     return { paid: true, cart: paidCart };
   }
@@ -2389,6 +3426,137 @@ export class LivePdvService {
    * Pipeline pós-pagamento: marca pago, gera ordens de separação por loja de
    * origem e avisa cada loja em tempo real.
    */
+  /**
+   * RE-CONSOLIDAÇÃO AUTOMÁTICA DE ORIGEM (decisão do dono, 11/07):
+   * cada peça escolhe a loja NA HORA que entra no carrinho (item a item), e o
+   * agrupador de frete só olha lojas JÁ usadas — ninguém reavalia o carrinho
+   * completo no fim. Caso real: 3 peças em ITANHAÉM + SÃO JOSÉ + PRAIA GRANDE
+   * sendo que PRAIA GRANDE cobria as 3 sozinha (3 fretes em vez de 1).
+   *
+   * Roda no PAGAMENTO CONFIRMADO (antes da conferência/separação): roteia o
+   * carrinho INTEIRO no RoutingEngine (Regra 1: uma loja só; senão mínimo de
+   * lojas) e SÓ APLICA se reduzir o número de lojas envolvidas. Regras:
+   *   - item com origem trocada NA MÃO (originManual) não se move; manuais em
+   *     2+ lojas = não mexe em nada (operadora assumiu o controle); manual em
+   *     1 loja vira preferStoreCode (o motor gravita pra ela).
+   *   - disponibilidade = estoque espelho − reservas de OUTROS carrinhos (as
+   *     reservas do próprio carrinho voltam pro saldo — são as peças movidas).
+   *   - QUALQUER erro → loga e mantém as origens atuais (nunca trava pagamento).
+   */
+  private async reconsolidateCartOrigins(cartId: string): Promise<void> {
+    try {
+      const items: any[] = await (this.prisma as any).livePdvItem.findMany({
+        where: { cartId, status: { in: ['reserved', 'paid'] } },
+      });
+      if (items.length < 2) return;
+      const currentStores = new Set(
+        items.map((i) => String(i.originStoreCode || '')).filter(Boolean),
+      );
+      if (currentStores.size <= 1) return; // já está numa loja só
+
+      const movable = items.filter((i) => !i.originManual);
+      if (!movable.length) return;
+      const manualStores = new Set(
+        items
+          .filter((i) => i.originManual)
+          .map((i) => String(i.originStoreCode || ''))
+          .filter(Boolean),
+      );
+      if (manualStores.size > 1) return; // operadora espalhou de propósito
+
+      // Demanda agregada por itemKey (só itens móveis)
+      const demand = new Map<string, number>();
+      const itemMeta = new Map<string, { refCode: string; cor: string | null; tamanho: string | null }>();
+      for (const it of movable) {
+        demand.set(it.itemKey, (demand.get(it.itemKey) || 0) + Number(it.qty || 1));
+        if (!itemMeta.has(it.itemKey)) {
+          itemMeta.set(it.itemKey, { refCode: it.refCode, cor: it.cor, tamanho: it.tamanho });
+        }
+      }
+
+      // Reservas do PRÓPRIO carrinho por key::loja — voltam pro saldo disponível
+      const ownByKeyStore = new Map<string, number>();
+      for (const it of movable) {
+        const k = `${it.itemKey}::${it.originStoreCode}`;
+        ownByKeyStore.set(k, (ownByKeyStore.get(k) || 0) + Number(it.qty || 1));
+      }
+
+      const keys = Array.from(demand.keys());
+      const { byKeyStore } = await this.committed(keys);
+      const storesMap = await this.storesMap();
+
+      const storeInputs: StoreInput[] = [];
+      const seenStores = new Set<string>();
+      const stock: StockEntry[] = [];
+      for (const key of keys) {
+        const meta = itemMeta.get(key)!;
+        const { byStore } = await this.erpStockByStoreForItem(meta.refCode, meta.cor, meta.tamanho);
+        for (const [storeCode, raw] of byStore.entries()) {
+          const st = storesMap.get(storeCode);
+          if (!st) continue;
+          if (!seenStores.has(storeCode)) {
+            seenStores.add(storeCode);
+            storeInputs.push({
+              id: st.id,
+              code: st.code,
+              name: st.name,
+              cep: st.cep,
+              priorityScore: st.priorityScore ?? 50,
+              active: true,
+            });
+          }
+          const reserved = byKeyStore.get(`${key}::${storeCode}`) || 0;
+          const own = ownByKeyStore.get(`${key}::${storeCode}`) || 0;
+          stock.push({ storeCode, sku: key, availableQty: Math.max(0, raw - reserved + own) });
+        }
+      }
+      if (!storeInputs.length) return;
+
+      const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
+      const session = cart ? await this.getSession(cart.sessionId).catch(() => null) : null;
+      const preferStoreCode = manualStores.size === 1 ? Array.from(manualStores)[0] : undefined;
+
+      const result = this.routing.route({
+        items: keys.map((k) => ({ sku: k, quantity: demand.get(k)! })),
+        stores: storeInputs,
+        stock,
+        shippingCep: cart?.customerCep || session?.liveStoreCode || null,
+        preferStoreCode,
+      });
+      if (!result.success || !result.assignments.length) return;
+
+      const newStores = new Set<string>([...manualStores]);
+      for (const a of result.assignments) newStores.add(a.storeCode);
+      if (newStores.size >= currentStores.size) return; // só aplica se REDUZIU
+
+      // Aplica: move cada item móvel pra loja do plano (por itemKey)
+      const targetByKey = new Map<string, { code: string; name: string }>();
+      for (const a of result.assignments) {
+        for (const it of a.items) targetByKey.set(it.sku, { code: a.storeCode, name: a.storeName });
+      }
+      let moved = 0;
+      for (const it of movable) {
+        const target = targetByKey.get(it.itemKey);
+        if (!target || target.code === it.originStoreCode) continue;
+        await (this.prisma as any).livePdvItem.update({
+          where: { id: it.id },
+          data: { originStoreCode: target.code, originStoreName: target.name },
+        });
+        moved++;
+      }
+      if (moved > 0) {
+        this.logger.log(
+          `[reconsolida] carrinho ${cartId}: ${currentStores.size} loja(s) → ${newStores.size} ` +
+            `(${Array.from(newStores).join(', ')}), ${moved} item(ns) movido(s)`,
+        );
+      }
+    } catch (e) {
+      this.logger.warn(
+        `[reconsolida] carrinho ${cartId}: falhou, mantendo origens atuais — ${(e as Error).message}`,
+      );
+    }
+  }
+
   async onCartPaid(cartId: string) {
     const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
     if (!cart) throw new NotFoundException('Carrinho não encontrado');
@@ -2404,11 +3572,44 @@ export class LivePdvService {
       where: { id: cartId },
       data: { status: 'paid', paidAt: now },
     });
-    // DECISÃO DO DONO (07/07): pagamento confirmado NÃO manda direto pra loja.
-    // A operadora primeiro CONFERE/COMPLETA os dados da cliente (endereço) e
-    // só então libera — releaseSeparation() abaixo. Igual ao fluxo do site.
+    // RE-CONSOLIDAÇÃO AUTOMÁTICA (11/07): junta as origens do carrinho no
+    // MÍNIMO de lojas possível (ideal: uma só) antes da conferência/separação.
+    // Nunca lança — em erro, mantém as origens escolhidas durante a live.
+    await this.reconsolidateCartOrigins(cartId);
+    // Pagou SEM endereço de entrega (PIX/link do console — não passou pelo
+    // checkout)? Pede automaticamente por DM. Best-effort, nunca trava.
+    if (!cart.isPickup && this.enderecoIncompleto(cart)) {
+      this.sendAddressRequestDm(cart).catch((e) =>
+        this.logger.warn(`[live-dm] pedido de endereço falhou: ${(e as Error).message}`),
+      );
+    }
     const session = await this.getSession(cart.sessionId);
     this.gateway.emitToLiveOps('live-pdv:cart-paid', { sessionId: session.id, cartId });
+    // AUTO-SEPARAÇÃO (dono 17/07, revoga a decisão de 07/07): pagou → vira
+    // demanda na tela de separação NA HORA, sem conferência um a um — DESDE
+    // que os dados obrigatórios estejam completos (só COMPLEMENTO pode
+    // faltar). Incompleto (pagou por link do console sem checkout) permanece
+    // na fila "PAGAS — conferir" e a DM já pediu o endereço acima.
+    try {
+      const fresco = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
+      const completo =
+        !!fresco &&
+        (fresco.isPickup ||
+          (String(fresco.customerCep || '').replace(/\D/g, '').length === 8 &&
+            String(fresco.customerEndereco || '').trim() &&
+            String(fresco.customerNumero || '').trim() &&
+            String(fresco.customerCidade || '').trim() &&
+            String(fresco.customerUf || '').trim() &&
+            this.cpfValido(fresco.customerCpf)));
+      if (completo) {
+        await this.releaseSeparation(cartId);
+        this.logger.log(`[live] carrinho ${cartId} pago → separação AUTOMÁTICA (dados completos)`);
+      } else {
+        this.logger.log(`[live] carrinho ${cartId} pago com dados incompletos → fica na conferência manual`);
+      }
+    } catch (e) {
+      this.logger.warn(`[live] auto-separação do ${cartId} falhou (fica na conferência): ${(e as Error).message}`);
+    }
     return this.getCart(cartId);
   }
 
@@ -2420,13 +3621,15 @@ export class LivePdvService {
   async releaseSeparation(cartId: string) {
     const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
     if (!cart) throw new NotFoundException('Carrinho não encontrado');
-    if (cart.status === 'separating') return this.getCart(cartId); // idempotente
+    if (cart.orderId) return this.getCart(cartId); // idempotente — já virou pedido do trilho do site
+    if (cart.status === 'separating') return this.getCart(cartId); // idempotente (fluxo legado)
     if (cart.status !== 'paid') {
       throw new BadRequestException('Só carrinho PAGO pode ir pra separação.');
     }
 
-    // Endereço completo obrigatório (formato do site: loja recebe pronto pra
-    // postar) — EXCETO retirada em loja, que não tem postagem pro cliente.
+    // Endereço completo + CPF VÁLIDO obrigatórios (formato do site: loja
+    // recebe pronto pra postar; os Correios EXIGEM o CPF da destinatária) —
+    // EXCETO retirada em loja, que não tem postagem.
     if (!cart.isPickup) {
       const faltando: string[] = [];
       if (String(cart.customerCep || '').replace(/\D/g, '').length !== 8) faltando.push('CEP');
@@ -2434,57 +3637,534 @@ export class LivePdvService {
       if (!String(cart.customerNumero || '').trim()) faltando.push('número');
       if (!String(cart.customerCidade || '').trim()) faltando.push('cidade');
       if (!String(cart.customerUf || '').trim()) faltando.push('UF');
+      if (!this.cpfValido(cart.customerCpf)) faltando.push('CPF válido (os Correios exigem pra postar)');
       if (faltando.length) {
         throw new BadRequestException(
           `Complete o endereço antes de enviar pra separação — falta: ${faltando.join(', ')}.`,
         );
       }
+
+      // Normaliza UF/cidade pelo CEP (fonte da verdade dos Correios) ANTES de ir
+      // pra loja — corrige cadastro torto (ex.: UF "CI" em Avaré-SP) sem a loja
+      // precisar mexer. NÃO bloqueia se o ViaCEP cair (não põe dependência
+      // externa no caminho crítico da separação — só normaliza quando dá).
+      try {
+        const via: any = await this.correios.buscarCep(String(cart.customerCep || '').replace(/\D/g, ''));
+        if (via && !via.erro) {
+          const patch: any = {};
+          const ufCep = String(via.uf || '').trim().toUpperCase();
+          const cidadeCep = String(via.cidade || '').trim();
+          if (ufCep && ufCep !== String(cart.customerUf || '').trim().toUpperCase()) patch.customerUf = ufCep;
+          if (cidadeCep && cidadeCep.toLowerCase() !== String(cart.customerCidade || '').trim().toLowerCase()) patch.customerCidade = cidadeCep;
+          if (!String(cart.customerBairro || '').trim() && via.bairro) patch.customerBairro = via.bairro;
+          if (Object.keys(patch).length) {
+            await (this.prisma as any).livePdvCart.update({ where: { id: cartId }, data: patch });
+            Object.assign(cart, patch);
+            this.logger.log(`[release] endereço normalizado pelo CEP (${cartId}): ${JSON.stringify(patch)}`);
+          }
+        }
+      } catch (e) {
+        this.logger.warn(`[release] normalização de CEP falhou (${cartId}), segue com o cadastro atual: ${(e as Error).message}`);
+      }
     }
 
-    // Ordem de separação por loja de origem → emite pra cada loja
+    // ═══ TRILHO DO SITE (decisão do dono, 12/07) ═══
+    // A venda da live NÃO tem mais fluxo próprio de separação: vira um Order
+    // normal (source='live') e segue EXATAMENTE o caminho do pedido do site —
+    // RoutingEngine (Regra 1: UMA loja só; quebra em 2+ lojas exige aprovação
+    // na tela Pedidos & Separação), PickOrder por loja com card+push, bip,
+    // fila de aprovação de baixa e envio com rastreio obrigatório.
     const items = await (this.prisma as any).livePdvItem.findMany({
       where: { cartId, status: 'paid' },
     });
     if (!items.length) throw new BadRequestException('Carrinho sem itens pagos.');
-    const byStore = new Map<string, any[]>();
-    for (const it of items as any[]) {
-      if (!byStore.has(it.originStoreCode)) byStore.set(it.originStoreCode, []);
-      byStore.get(it.originStoreCode)!.push(it);
+    return this.handoffToSiteFlow(cart, items as any[]);
+  }
+
+  /**
+   * CPF válido de verdade (dígitos verificadores) — mesmo algoritmo do
+   * checkout público /pagar. Correios/NF rejeitam CPF inventado.
+   */
+  private cpfValido(raw?: string | null): boolean {
+    const d = String(raw || '').replace(/\D/g, '');
+    if (d.length !== 11 || /^(\d)\1{10}$/.test(d)) return false;
+    let s = 0;
+    for (let i = 0; i < 9; i++) s += Number(d[i]) * (10 - i);
+    let dv1 = (s * 10) % 11;
+    if (dv1 === 10) dv1 = 0;
+    if (dv1 !== Number(d[9])) return false;
+    s = 0;
+    for (let i = 0; i < 10; i++) s += Number(d[i]) * (11 - i);
+    let dv2 = (s * 10) % 11;
+    if (dv2 === 10) dv2 = 0;
+    return dv2 === Number(d[10]);
+  }
+
+  /** Base dos wcOrderId sintéticos de pedidos da LIVE (longe do range real do WC). */
+  private static readonly LIVE_WC_ID_BASE = 900_000_000;
+
+  /**
+   * Converte o carrinho PAGO da live num Order do trilho do site.
+   *  - Order source='live', liveCartId, wcOrderId sintético (900M+, sequencial
+   *    com retry em colisão), número exibido "LIVE-<comanda>".
+   *  - SKU do item = codigoBipado (CODIGO Giga da grade) — mesmo formato que o
+   *    estoque/bipagem do site usam.
+   *  - NÃO roteia: o pedido fica em 'processing' e o roteamento é 100% da
+   *    retaguarda (Pedidos & Separação — 1-CLIQUE/Prévia/massa). A loja só é
+   *    avisada quando a MATRIZ roteia (igual pedido do site sem piloto).
+   *  - NUNCA volta pro fluxo antigo: o cart guarda orderId e vira espelho.
+   */
+  private async handoffToSiteFlow(cart: any, items: any[]) {
+    // shipping no formato do WC — os cards da loja e a impressão leem esse JSON
+    const shipping = {
+      first_name: cart.customerName || '',
+      last_name: '',
+      address_1: [cart.customerEndereco, cart.customerNumero].filter(Boolean).join(', '),
+      address_2: [cart.customerComplemento, cart.customerBairro].filter(Boolean).join(' - '),
+      city: cart.customerCidade || '',
+      state: cart.customerUf || '',
+      postcode: cart.customerCep || '',
+      phone: cart.customerPhone || '',
+    };
+    const frete = this.freteFromCep(cart.customerCep);
+
+    let order: any = null;
+    const seq = await (this.prisma as any).order.count({ where: { source: 'live' } });
+    for (let tent = 0; tent < 5 && !order; tent++) {
+      try {
+        order = await (this.prisma as any).order.create({
+          data: {
+            wcOrderId: LivePdvService.LIVE_WC_ID_BASE + seq + 1 + tent,
+            wcOrderNumber: `LIVE-${cart.cartNumber ?? seq + 1 + tent}`,
+            source: 'live',
+            liveCartId: cart.id,
+            status: 'processing',
+            customerName: cart.customerName,
+            customerEmail: cart.customerEmail,
+            customerPhone: cart.customerPhone,
+            customerCpf: cart.customerCpf,
+            shippingCep: String(cart.customerCep || '').replace(/\D/g, ''),
+            shippingAddress: JSON.stringify(shipping),
+            totalAmount: (cart.totalCents || 0) / 100,
+            isPickup: !!cart.isPickup,
+            pickupStoreCode: cart.pickupStoreCode || null,
+            shippingMethod: cart.isPickup
+              ? 'Retirada em loja (LIVE)'
+              : `LIVE${frete ? ` · ${frete.servico}` : ''}`,
+            wcDateCreated: cart.paidAt ?? cart.createdAt,
+            items: {
+              create: items.map((it) => ({
+                sku: String(it.codigoBipado || it.itemKey),
+                productName: [it.descricao || it.refCode, it.cor, it.tamanho]
+                  .filter(Boolean)
+                  .join(' · '),
+                quantity: Number(it.qty || 1),
+                unitPrice: (it.priceCents || 0) / 100,
+                // preço CHEIO — base da obrigação ÷2,5 na expedição
+                baseUnitPrice: (it.basePriceCents || it.priceCents || 0) / 100,
+              })),
+            },
+          },
+        });
+      } catch (e: any) {
+        if (e?.code !== 'P2002') throw e; // P2002 = wcOrderId colidiu → tenta o próximo
+      }
     }
-    const session = await this.getSession(cart.sessionId);
-    for (const [storeCode, storeItems] of byStore.entries()) {
-      const store = await (this.prisma as any).store.findUnique({ where: { code: storeCode } });
-      // marca como em separação
-      await (this.prisma as any).livePdvItem.updateMany({
-        where: { id: { in: storeItems.map((i: any) => i.id) } },
-        data: { status: 'separating' },
-      });
-      if (store?.id) {
-        this.gateway.emitToStore(store.id, 'live-pdv:separation-new', {
-          sessionId: session.id,
+    if (!order) {
+      throw new BadRequestException('Não consegui gerar o nº do pedido da live — tente de novo.');
+    }
+
+    // DECISÃO DO DONO (12/07, corrigida no mesmo dia): o release NÃO roteia —
+    // TODO roteamento acontece na retaguarda (tela Pedidos & Separação), como
+    // nos pedidos do site: o pedido cai em "Processando" e a matriz decide
+    // (1-CLIQUE, Prévia ou em massa). Nada de card/alerta pra loja aqui.
+    // Caso real: release automático roteou single-store e alertou Itanhaém
+    // sem a matriz ter visto o pedido.
+    const aviso = 'Aguardando roteamento na tela Pedidos & Separação (aba Processando).';
+
+    await (this.prisma as any).livePdvCart.update({
+      where: { id: cart.id },
+      data: { status: 'separating', orderId: order.id },
+    });
+    this.gateway.emitToLiveOps('live-pdv:cart-updated', { sessionId: cart.sessionId, cartId: cart.id });
+    this.logger.log(
+      `[live→site] carrinho #${cart.cartNumber ?? cart.id} virou pedido ${order.wcOrderNumber} — aguardando roteamento na retaguarda`,
+    );
+    const fresh = await this.getCart(cart.id);
+    return { ...(fresh as any), siteFlow: { orderNumber: order.wcOrderNumber, roteado: false, aviso } };
+  }
+
+  /**
+   * MIGRAÇÃO (12/07): move os pedidos da live que estavam no fluxo ANTIGO de
+   * separação pro trilho do site, recalculando a loja do zero.
+   *  - Cancela a ordem antiga nas lojas (itens separating→paid + socket
+   *    live-pdv:separation-removed pra fila sumir da tela).
+   *  - Refaz o release pelo trilho novo (Order + roteamento do site).
+   *  - Pula com aviso: peça já bipada/enviada (estoque já mexeu — manual) e
+   *    endereço incompleto (volta pra PAGO pro operador completar e liberar).
+   */
+  async migrateSeparatingToSiteFlow() {
+    const carts = await (this.prisma as any).livePdvCart.findMany({
+      where: { status: 'separating', orderId: null },
+      orderBy: { paidAt: 'asc' },
+    });
+    const resultado: any[] = [];
+    for (const cart of carts as any[]) {
+      const label = `#${cart.cartNumber ?? cart.id.slice(0, 8)} ${cart.customerName || ''}`.trim();
+      try {
+        const items = await (this.prisma as any).livePdvItem.findMany({
+          where: { cartId: cart.id, status: { in: ['paid', 'separating'] } },
+        });
+        if (!items.length) {
+          resultado.push({ cart: label, ok: false, motivo: 'sem itens ativos' });
+          continue;
+        }
+        if ((items as any[]).some((i) => i.separatedAt)) {
+          resultado.push({
+            cart: label,
+            ok: false,
+            motivo: 'peça já bipada na loja (estoque baixou) — resolver manualmente',
+          });
+          continue;
+        }
+        // 1) cancela a ordem de separação antiga nas lojas envolvidas
+        const lojas = new Set<string>(
+          (items as any[])
+            .filter((i) => i.status === 'separating')
+            .map((i) => String(i.originStoreCode || ''))
+            .filter(Boolean),
+        );
+        await (this.prisma as any).livePdvItem.updateMany({
+          where: { id: { in: (items as any[]).map((i: any) => i.id) } },
+          data: { status: 'paid' },
+        });
+        for (const code of lojas) {
+          const st = await (this.prisma as any).store
+            .findUnique({ where: { code } })
+            .catch(() => null);
+          if (st?.id) {
+            this.gateway.emitToStore(st.id, 'live-pdv:separation-removed', {
+              sessionId: cart.sessionId,
+              cartId: cart.id,
+              storeCode: code,
+              customerName: cart.customerName,
+              toStoreName: 'Pedidos & Separação (matriz)',
+            });
+          }
+        }
+        await (this.prisma as any).livePdvCart.update({
+          where: { id: cart.id },
+          data: { status: 'paid' },
+        });
+        // 2) refaz o release pelo trilho novo (valida endereço de novo)
+        try {
+          const r: any = await this.releaseSeparation(cart.id);
+          resultado.push({
+            cart: label,
+            ok: true,
+            pedido: r?.siteFlow?.orderNumber,
+            roteado: r?.siteFlow?.roteado ?? false,
+            aviso: r?.siteFlow?.aviso ?? null,
+          });
+        } catch (e: any) {
+          resultado.push({
+            cart: label,
+            ok: false,
+            motivo: `voltou pra PAGO: ${e?.message || e}`,
+          });
+        }
+      } catch (e: any) {
+        resultado.push({ cart: label, ok: false, motivo: String(e?.message || e).slice(0, 200) });
+      }
+    }
+    const migrados = resultado.filter((r) => r.ok).length;
+    this.logger.log(`[live→site] migração: ${migrados}/${resultado.length} carrinho(s) movidos pro trilho do site`);
+    return { total: resultado.length, migrados, detalhes: resultado };
+  }
+
+  /**
+   * MIGRAÇÃO DOS BIPADOS (12/07, pedido do dono): move pro trilho do site os
+   * pedidos da live que a migração normal PULOU porque a loja já tinha bipado
+   * peça (estoque já baixou no Giga). Aqui NÃO roteia de novo — mantém a loja
+   * que já está com a peça na mão:
+   *  - PickOrder criado direto na(s) loja(s) de origem em status 'separated'
+   *    com debitApprovedAt marcado (baixa JÁ aconteceu no bip da live —
+   *    o fluxo do site NÃO baixa de novo; loja só clica Enviar c/ rastreio).
+   *  - Peça do carrinho que ainda NÃO tinha sido bipada: baixa agora (mesmo
+   *    padrão allowNegative+skipNotFound, respeita ERP_WRITE_ENABLED).
+   *  - Carrinho com peça JÁ ENVIADA (shipped) fica no fluxo antigo (não mexe).
+   *  - `desde`: só carrinhos PAGOS a partir desse instante (ex.: live de
+   *    ontem ≥16h).
+   */
+  async migrateBipadosToSiteFlow(desdeIso?: string) {
+    const desde = desdeIso ? new Date(desdeIso) : null;
+    if (desdeIso && isNaN(desde!.getTime())) {
+      throw new BadRequestException('Parâmetro "desde" inválido — use ISO (2026-07-11T19:00:00Z).');
+    }
+    const carts = await (this.prisma as any).livePdvCart.findMany({
+      where: {
+        status: 'separating',
+        orderId: null,
+        ...(desde ? { paidAt: { gte: desde } } : {}),
+      },
+      orderBy: { paidAt: 'asc' },
+    });
+    const storesAll = await (this.prisma as any).store.findMany({
+      select: { id: true, code: true, name: true },
+    });
+    const storeByCode = new Map<string, any>(storesAll.map((s: any) => [s.code, s]));
+    const erpWriteOn = ['1', 'true'].includes(
+      String(process.env.ERP_WRITE_ENABLED ?? process.env.PDV_ERP_WRITE_ENABLED ?? '').toLowerCase(),
+    );
+
+    const resultado: any[] = [];
+    for (const cart of carts as any[]) {
+      const label = `#${cart.cartNumber ?? cart.id.slice(0, 8)} ${cart.customerName || ''}`.trim();
+      try {
+        const shippedCount = await (this.prisma as any).livePdvItem.count({
+          where: { cartId: cart.id, status: { in: ['shipped', 'delivered'] } },
+        });
+        if (shippedCount > 0) {
+          resultado.push({ cart: label, ok: false, motivo: `${shippedCount} peça(s) já ENVIADA(s) — fica no fluxo antigo` });
+          continue;
+        }
+        const items: any[] = await (this.prisma as any).livePdvItem.findMany({
+          where: { cartId: cart.id, status: { in: ['paid', 'separating'] } },
+        });
+        if (!items.length) {
+          resultado.push({ cart: label, ok: false, motivo: 'sem itens ativos' });
+          continue;
+        }
+
+        // grupos por loja de origem (a loja que está com a peça)
+        const grupos = new Map<string, any[]>();
+        for (const it of items) {
+          const code = String(it.originStoreCode || '');
+          if (!storeByCode.get(code)) {
+            throw new Error(`loja de origem "${code}" não cadastrada`);
+          }
+          if (!grupos.has(code)) grupos.set(code, []);
+          grupos.get(code)!.push(it);
+        }
+
+        // 1) cancela a fila antiga nas lojas (card antigo some)
+        const lojasAvisar = new Set<string>(
+          items.filter((i) => i.status === 'separating').map((i) => String(i.originStoreCode || '')).filter(Boolean),
+        );
+        await (this.prisma as any).livePdvItem.updateMany({
+          where: { id: { in: items.map((i) => i.id) } },
+          data: { status: 'paid' },
+        });
+        for (const code of lojasAvisar) {
+          const st = storeByCode.get(code);
+          if (st?.id) {
+            this.gateway.emitToStore(st.id, 'live-pdv:separation-removed', {
+              sessionId: cart.sessionId,
+              cartId: cart.id,
+              storeCode: code,
+              customerName: cart.customerName,
+              toStoreName: 'Pedidos & Separação (trilho do site)',
+            });
+          }
+        }
+
+        // 2) Order SEM re-roteamento (loja mantida = quem tem a peça)
+        const shipping = {
+          first_name: cart.customerName || '',
+          last_name: '',
+          address_1: [cart.customerEndereco, cart.customerNumero].filter(Boolean).join(', '),
+          address_2: [cart.customerComplemento, cart.customerBairro].filter(Boolean).join(' - '),
+          city: cart.customerCidade || '',
+          state: cart.customerUf || '',
+          postcode: cart.customerCep || '',
+          phone: cart.customerPhone || '',
+        };
+        const frete = this.freteFromCep(cart.customerCep);
+        let order: any = null;
+        const seq = await (this.prisma as any).order.count({ where: { source: 'live' } });
+        for (let tent = 0; tent < 5 && !order; tent++) {
+          try {
+            order = await (this.prisma as any).order.create({
+              data: {
+                wcOrderId: LivePdvService.LIVE_WC_ID_BASE + seq + 1 + tent,
+                wcOrderNumber: `LIVE-${cart.cartNumber ?? seq + 1 + tent}`,
+                source: 'live',
+                liveCartId: cart.id,
+                status: 'separating',
+                customerName: cart.customerName,
+                customerEmail: cart.customerEmail,
+                customerPhone: cart.customerPhone,
+                customerCpf: cart.customerCpf,
+                shippingCep: String(cart.customerCep || '').replace(/\D/g, ''),
+                shippingAddress: JSON.stringify(shipping),
+                totalAmount: (cart.totalCents || 0) / 100,
+                isPickup: !!cart.isPickup,
+                pickupStoreCode: cart.pickupStoreCode || null,
+                shippingMethod: cart.isPickup
+                  ? 'Retirada em loja (LIVE)'
+                  : `LIVE${frete ? ` · ${frete.servico}` : ''}`,
+                wcDateCreated: cart.paidAt ?? cart.createdAt,
+              },
+            });
+          } catch (e: any) {
+            if (e?.code !== 'P2002') throw e;
+          }
+        }
+        if (!order) throw new Error('não consegui gerar o nº do pedido');
+
+        // 3) items + pick-order por loja (separated + baixa reconhecida)
+        const agora = new Date();
+        for (const [code, grupo] of grupos.entries()) {
+          const st = storeByCode.get(code)!;
+          for (const it of grupo) {
+            await (this.prisma as any).orderItem.create({
+              data: {
+                orderId: order.id,
+                sku: String(it.codigoBipado || it.itemKey),
+                productName: [it.descricao || it.refCode, it.cor, it.tamanho].filter(Boolean).join(' · '),
+                quantity: Number(it.qty || 1),
+                unitPrice: (it.priceCents || 0) / 100,
+                baseUnitPrice: (it.basePriceCents || it.priceCents || 0) / 100,
+                assignedStoreId: st.id,
+              },
+            });
+          }
+          const po = await (this.prisma as any).pickOrder.create({
+            data: {
+              orderId: order.id,
+              storeId: st.id,
+              status: 'separated',
+              debitApprovedAt: agora,
+              debitApprovedBy: 'migração live→site (baixa feita no bip da live)',
+            },
+          });
+          // baixa das peças que a live ainda NÃO tinha bipado
+          const naoBipadas = grupo.filter((i: any) => !i.separatedAt && i.codigoBipado);
+          if (naoBipadas.length) {
+            if (erpWriteOn) {
+              try {
+                await (this.erp as any).decreaseStock(
+                  naoBipadas.map((i: any) => ({ sku: i.codigoBipado, qty: i.qty, storeCode: code })),
+                  { allowNegative: true, skipNotFound: true },
+                );
+              } catch (e: any) {
+                this.logger.warn(`[migra-bipados] baixa pendente ${order.wcOrderNumber}/${code}: ${e?.message || e}`);
+              }
+            } else {
+              this.logger.log(`[migra-bipados] SHADOW: ${naoBipadas.length} peça(s) sem baixa em ${code} (${order.wcOrderNumber})`);
+            }
+          }
+          this.gateway.emitPickOrderToStore(st.id, {
+            id: po.id,
+            orderId: order.id,
+            status: 'separated',
+            storeId: st.id,
+            order: { wcOrderNumber: order.wcOrderNumber, customerName: order.customerName },
+          });
+        }
+        await (this.prisma as any).orderHistory.create({
+          data: {
+            orderId: order.id,
+            toStatus: 'separating',
+            note: 'Migrado do fluxo antigo da live JÁ CONFERIDO (peça bipada — baixa reconhecida, sem re-bipar). Loja só precisa Enviar com rastreio.',
+          },
+        }).catch(() => {});
+        await (this.prisma as any).livePdvCart.update({
+          where: { id: cart.id },
+          data: { status: 'separating', orderId: order.id },
+        });
+        resultado.push({ cart: label, ok: true, pedido: order.wcOrderNumber, lojas: Array.from(grupos.keys()) });
+      } catch (e: any) {
+        resultado.push({ cart: label, ok: false, motivo: String(e?.message || e).slice(0, 200) });
+      }
+    }
+    const migrados = resultado.filter((r) => r.ok).length;
+    this.logger.log(`[migra-bipados] ${migrados}/${resultado.length} carrinho(s) bipado(s) movidos pro trilho do site`);
+    return { total: resultado.length, migrados, detalhes: resultado };
+  }
+
+  /**
+   * RECOLHE o pedido das lojas — o inverso do releaseSeparation. Caso real de
+   * 12/07: pedido roteado pra 6+ lojas geraria uma remessa/frete por loja; o
+   * supervisor puxa tudo pra UMA loja (ex.: matriz) e decide com calma antes
+   * de liberar de novo.
+   * - Vale pra carrinho 'paid' (só re-ancora a origem) ou 'separating' (tira
+   *   das filas das lojas e volta pra 'paid').
+   * - Peça já BIPADA (separatedAt) bloqueia: o estoque já baixou na loja de
+   *   origem — depois do bip o caminho é devolução, não recolha.
+   * - Origem gravada com originManual: a re-consolidação automática nunca
+   *   desfaz decisão humana.
+   * - SEM validação de estoque na loja destino, de propósito: é uma decisão
+   *   administrativa (a loja destino pode nem ter a peça — o dono resolve).
+   */
+  async retractSeparation(cartId: string, storeCode: string) {
+    const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
+    if (!cart) throw new NotFoundException('Carrinho não encontrado');
+    if (cart.orderId) {
+      throw new BadRequestException(
+        'Este pedido já está no trilho do site — gerencie (recalcular/trocar loja) na tela Pedidos & Separação.',
+      );
+    }
+    if (!['paid', 'separating'].includes(cart.status)) {
+      throw new BadRequestException('Só pedido PAGO ou EM SEPARAÇÃO pode ser recolhido.');
+    }
+    const store = await (this.prisma as any).store.findUnique({ where: { code: storeCode } });
+    if (!store) throw new BadRequestException('Loja destino não encontrada');
+
+    const items = await (this.prisma as any).livePdvItem.findMany({
+      where: { cartId, status: { in: ['paid', 'separating'] } },
+    });
+    if (!items.length) throw new BadRequestException('Pedido sem itens ativos.');
+    const bipados = (items as any[]).filter((i) => i.separatedAt);
+    if (bipados.length) {
+      const lojas = Array.from(
+        new Set(bipados.map((i: any) => i.originStoreName || i.originStoreCode)),
+      );
+      throw new BadRequestException(
+        `${bipados.length} peça(s) já bipada(s) em ${lojas.join(', ')} — o estoque já baixou lá; resolva essas peças (devolução) antes de recolher.`,
+      );
+    }
+
+    // Lojas que tinham itens NA FILA de separação → avisa pra sumir da tela
+    const affected = new Set<string>(
+      (items as any[])
+        .filter((i) => i.status === 'separating')
+        .map((i) => String(i.originStoreCode || ''))
+        .filter(Boolean),
+    );
+
+    await (this.prisma as any).livePdvItem.updateMany({
+      where: { id: { in: (items as any[]).map((i: any) => i.id) } },
+      data: {
+        status: 'paid',
+        originStoreCode: store.code,
+        originStoreName: store.name,
+        originManual: true,
+      },
+    });
+    await (this.prisma as any).livePdvCart.update({
+      where: { id: cartId },
+      data: { status: 'paid' },
+    });
+
+    for (const code of affected) {
+      const st = await (this.prisma as any).store
+        .findUnique({ where: { code } })
+        .catch(() => null);
+      if (st?.id) {
+        this.gateway.emitToStore(st.id, 'live-pdv:separation-removed', {
+          sessionId: cart.sessionId,
           cartId,
-          storeCode,
-          liveStoreCode: session.liveStoreCode,
-          liveStoreName: session.liveStoreName,
+          storeCode: code,
           customerName: cart.customerName,
-          customerPhone: cart.customerPhone,
-          count: storeItems.length,
-          items: storeItems.map((i: any) => ({
-            id: i.id,
-            ref: i.refCode,
-            descricao: i.descricao,
-            cor: i.cor,
-            tamanho: i.tamanho,
-            qty: i.qty,
-          })),
+          toStoreName: store.name,
         });
       }
     }
-    await (this.prisma as any).livePdvCart.update({
-      where: { id: cartId },
-      data: { status: 'separating' },
-    });
-    this.gateway.emitToLiveOps('live-pdv:cart-updated', { sessionId: session.id, cartId });
+    this.gateway.emitToLiveOps('live-pdv:cart-updated', { sessionId: cart.sessionId, cartId });
+    this.logger.log(
+      `[recolher] carrinho ${cartId}: ${affected.size || 'nenhuma'} loja(s) em separação → tudo pra ${store.code} (${store.name})`,
+    );
     return this.getCart(cartId);
   }
 
@@ -2534,11 +4214,16 @@ export class LivePdvService {
           paymentMethod: c?.paymentMethod || null, // 'pix' | 'link'
           subtotalCents: c?.subtotalCents ?? null,
           freteCents: c?.freteCents ?? null,
+          // FORMA DE ENVIO (11/07): a loja precisa saber se posta SEDEX ou PAC.
+          // Derivada do CEP (mesma regra do cálculo do frete); pickup = null.
+          freteServico: c?.isPickup ? null : this.freteFromCep(c?.customerCep)?.servico ?? null,
           totalCents: c?.totalCents ?? null,
           // Retirada em loja (frete zero, até 7 dias úteis)
           isPickup: !!c?.isPickup,
           pickupStoreCode: c?.pickupStoreCode || null,
           pickupStoreName: c?.pickupStoreName || null,
+          // Correios: id da pré-postagem já gerada (pra reimprimir a etiqueta).
+          correiosPrepostagemId: c?.correiosPrepostagemId || null,
           paidAt: c?.paidAt,
           liveStoreCode: sess?.liveStoreCode || null,
           liveStoreName: sess?.liveStoreName || null,
@@ -2712,6 +4397,10 @@ export class LivePdvService {
         itemId: input.itemId,
         transferOrderId: null,
       });
+      // Rastreio AUTOMÁTICO pra cliente (WhatsApp template / DM) — best-effort
+      this.notifyTracking(item.cartId, input.trackingCode).catch((e) =>
+        this.logger.warn(`[rastreio] aviso falhou: ${(e as Error).message}`),
+      );
       return updatedSelf;
     }
 
@@ -2792,7 +4481,95 @@ export class LivePdvService {
       itemId: input.itemId,
       transferOrderId: transfer.id,
     });
+    // Rastreio AUTOMÁTICO pra cliente (WhatsApp template / DM) — best-effort
+    this.notifyTracking(item.cartId, input.trackingCode).catch((e) =>
+      this.logger.warn(`[rastreio] aviso falhou: ${(e as Error).message}`),
+    );
     return updated;
+  }
+
+  /**
+   * Avisa a CLIENTE do rastreio assim que a loja despacha (mesmo canal da
+   * cobrança automática — pedidos do site já têm isso via WooCommerce; a live
+   * não tinha nada e a operadora mandava rastreio na mão).
+   *
+   * Camadas:
+   *  1. WhatsApp com TEMPLATE de utilidade (flow ManyChat) — chega SEMPRE,
+   *     sem janela de 24h. Requer env MANYCHAT_RASTREIO_FLOW_NS (flow lendo os
+   *     custom fields rastreio_nome / rastreio_codigo / rastreio_link).
+   *  2. Fallback: DM no Instagram (sendText já retenta com HUMAN_AGENT).
+   *
+   * Dedup: 1 mensagem por CÓDIGO por carrinho — a loja despachando 5 peças no
+   * mesmo pacote gera 1 aviso; 2 pacotes (2 lojas) geram 2, um por rastreio.
+   * Best-effort: nenhuma falha aqui trava o despacho.
+   */
+  private async notifyTracking(cartId: string, trackingCode?: string | null): Promise<void> {
+    const code = String(trackingCode || '').trim().toUpperCase();
+    if (!code || !this.manychat.enabled) return;
+    const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
+    if (!cart) return;
+    // Dedup por (carrinho, código)
+    const jaAvisado = await (this.prisma as any).livePdvItem.findFirst({
+      where: { cartId, trackingCode: code, trackingNotifiedAt: { not: null } },
+      select: { id: true },
+    });
+    if (jaAvisado) return;
+    await (this.prisma as any).livePdvItem.updateMany({
+      where: { cartId, trackingCode: { equals: code, mode: 'insensitive' } },
+      data: { trackingNotifiedAt: new Date() },
+    });
+
+    const primeiroNome = String(cart.customerName || 'cliente').trim().split(/\s+/)[0] || 'cliente';
+    const link = `https://rastreamento.correios.com.br/app/index.php?objetos=${encodeURIComponent(code)}`;
+
+    // 1) WhatsApp template (utilidade — sem janela de 24h)
+    const flowNs = (process.env.MANYCHAT_RASTREIO_FLOW_NS || '').trim();
+    let phone = String(cart.customerPhone || '').replace(/\D/g, '').replace(/^0+/, '');
+    if (phone.length === 10 || phone.length === 11) phone = '55' + phone;
+    const phoneOk = (phone.length === 12 || phone.length === 13) && phone.startsWith('55');
+    if (flowNs && phoneOk) {
+      try {
+        let subId = await this.manychat.findWhatsAppSubscriber(phone);
+        if (!subId) subId = (await this.manychat.createWhatsAppSubscriber(phone, cart.customerName)).id;
+        if (subId) {
+          await this.manychat.setCustomFieldByName(subId, 'rastreio_nome', primeiroNome);
+          await this.manychat.setCustomFieldByName(subId, 'rastreio_codigo', code);
+          await this.manychat.setCustomFieldByName(subId, 'rastreio_link', link);
+          const r = await this.manychat.sendFlow(subId, flowNs);
+          if (r.ok) {
+            this.logger.log(`[rastreio] carrinho ${cartId}: WhatsApp enviado (${code})`);
+            return;
+          }
+          this.logger.warn(`[rastreio] carrinho ${cartId}: WhatsApp falhou (${r.error}) — tentando DM`);
+        }
+      } catch (e) {
+        this.logger.warn(`[rastreio] carrinho ${cartId}: WhatsApp falhou (${(e as Error).message}) — tentando DM`);
+      }
+    }
+
+    // 2) Fallback: DM no Instagram
+    let sid: string | null = null;
+    if (cart.customerId) {
+      const cust = await (this.prisma as any).customer.findUnique({
+        where: { id: cart.customerId },
+        select: { manychatSubscriberId: true },
+      });
+      sid = cust?.manychatSubscriberId || null;
+    }
+    if (!sid) sid = await this.lookupManychatSidByIg(cart.customerInstagram);
+    if (!sid) {
+      this.logger.log(`[rastreio] carrinho ${cartId}: sem canal automático — avisar manual (${code})`);
+      return;
+    }
+    const msg =
+      `Oi, ${primeiroNome}! 📦 Suas peças da live foram postadas!\n` +
+      `Rastreio: ${code}\nAcompanhe aqui: ${link} 💜`;
+    const r = await this.manychat.sendText(sid, msg);
+    this.logger.log(
+      r.ok
+        ? `[rastreio] carrinho ${cartId}: DM enviada (${code})`
+        : `[rastreio] carrinho ${cartId}: DM falhou (${r.error}) — avisar manual`,
+    );
   }
 
   async markDelivered(itemId: string) {
@@ -2850,6 +4627,20 @@ export class LivePdvService {
     const carrinhosAbertos = openCarts.length;
     const valorNosCarrinhosCents = openCarts.reduce((s, c) => s + (c.totalCents || 0), 0);
 
+    // Funil de conversão em CAMADAS (pedido do dono 11/07): criados → com
+    // produto dentro → pagos. Carrinho sem item = cliente comentou mas nada
+    // foi bipado pra ela; medir as camadas separa "não engajou" de "desistiu".
+    const carrinhosComProduto = (carts as any[]).filter((c) => cartsComItem.has(c.id)).length;
+    const pct = (parte: number, todo: number) => (todo ? Math.round((parte / todo) * 100) : 0);
+    const funil = {
+      criados: carts.length,
+      comProduto: carrinhosComProduto,
+      pagos: paidCarts.length,
+      pctComProduto: pct(carrinhosComProduto, carts.length),
+      pctPagosDosComProduto: pct(paidCarts.length, carrinhosComProduto),
+      pctPagosDoTotal: pct(paidCarts.length, carts.length),
+    };
+
     // produtos mais vendidos
     const prodMap = new Map<string, { ref: string; descricao: string; qty: number; valorCents: number }>();
     for (const i of paidItems) {
@@ -2888,6 +4679,7 @@ export class LivePdvService {
         conversao: carts.length ? Math.round((paidCarts.length / carts.length) * 100) : 0,
         carrinhosAbertos,
         valorNosCarrinhosCents,
+        funil,
       },
       topProducts,
     };

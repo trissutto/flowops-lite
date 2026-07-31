@@ -78,7 +78,97 @@ export class PontoService {
   /** Janela mínima entre duas batidas IGUAIS (evita duplo-clique). */
   static readonly DEBOUNCE_MIN = 2; // 2 minutos
 
+  /** Idade máxima de um IP do PDV pra valer como referência do WiFi da loja. */
+  static readonly PDV_IP_FRESH_H = 48; // horas
+
   constructor(private readonly prisma: PrismaService) {}
+
+  // ── IP DO PDV (regra "só no WiFi da loja" pro celular) ───────────
+  //
+  // O navegador não enxerga o SSID do WiFi. O equivalente prático: o PDV
+  // Electron da loja manda heartbeat e a gente grava o IP público de saída.
+  // Quem está no MESMO WiFi sai pra internet com o mesmo IP — então a batida
+  // do celular (source pwa_selfie) só vale se vier de um IP recente do PDV.
+  // Celular no 4G ou fora da loja = IP diferente = bloqueado.
+  //
+  // Kill-switch: PONTO_IP_CHECK=0 desliga a validação (heartbeat segue gravando).
+  // Fail-open: sem IP fresco (<48h) a batida passa, com observação de audit —
+  // cobre o cenário "funcionária chega antes do PDV ligar" e IP renovado à noite.
+
+  /** Throttle em memória: evita UPDATE no Postgres a cada heartbeat repetido. */
+  private pdvIpLastWrite = new Map<string, number>();
+
+  /**
+   * Normaliza IP pra comparação:
+   *  - remove prefixo IPv4-mapeado (::ffff:1.2.3.4 → 1.2.3.4)
+   *  - IPv6: compara só o prefixo /64 (dois aparelhos no mesmo WiFi compartilham
+   *    o /64, mas cada um tem sufixo próprio — comparar o IP inteiro falharia)
+   */
+  static normalizeIp(raw?: string | null): string | null {
+    if (!raw) return null;
+    let ip = String(raw).trim().toLowerCase();
+    if (ip.startsWith('::ffff:')) ip = ip.slice(7);
+    if (!ip.includes(':')) return ip; // IPv4 → compara exato
+    // IPv6: expande '::' pra 8 grupos e pega os 4 primeiros (/64)
+    const parts = ip.split('::');
+    let groups: string[];
+    if (parts.length === 2) {
+      const head = parts[0] ? parts[0].split(':') : [];
+      const tail = parts[1] ? parts[1].split(':') : [];
+      const fill = new Array(Math.max(0, 8 - head.length - tail.length)).fill('0');
+      groups = [...head, ...fill, ...tail];
+    } else {
+      groups = ip.split(':');
+    }
+    return groups
+      .slice(0, 4)
+      .map((g) => g.replace(/^0+(?=.)/, '') || '0')
+      .join(':');
+  }
+
+  /**
+   * Grava o IP de saída do PDV da loja (chamado pelo heartbeat do Electron).
+   * Mantém lista [{ip, seenAt}] em stores.pdvIps: dedupe por IP normalizado,
+   * poda entradas com mais de 7 dias, no máximo 8 IPs.
+   */
+  async recordPdvIp(storeId: string, ip?: string | null) {
+    const norm = PontoService.normalizeIp(ip);
+    if (!storeId || !norm) return { ok: false };
+
+    // Throttle: mesmo IP da mesma loja só regrava a cada 5 min
+    const key = `${storeId}:${norm}`;
+    const last = this.pdvIpLastWrite.get(key) || 0;
+    if (Date.now() - last < 5 * 60_000) return { ok: true, throttled: true };
+    this.pdvIpLastWrite.set(key, Date.now());
+
+    const store = await (this.prisma as any).store.findUnique({
+      where: { id: storeId },
+      select: { pdvIps: true },
+    });
+    if (!store) return { ok: false };
+
+    let list: Array<{ ip: string; seenAt: string }> = [];
+    try {
+      list = JSON.parse(store.pdvIps || '[]') || [];
+    } catch {
+      list = [];
+    }
+    const nowIso = new Date().toISOString();
+    const cutoff = Date.now() - 7 * 24 * 3600_000;
+    list = list.filter(
+      (e) =>
+        PontoService.normalizeIp(e.ip) !== norm &&
+        new Date(e.seenAt).getTime() > cutoff,
+    );
+    list.unshift({ ip: String(ip), seenAt: nowIso });
+    list = list.slice(0, 8);
+
+    await (this.prisma as any).store.update({
+      where: { id: storeId },
+      data: { pdvIps: JSON.stringify(list) },
+    });
+    return { ok: true };
+  }
 
   // ── R2 helpers (mesmo padrão do imobiliário/seller-documents) ────
   private getR2Client(): S3Client {
@@ -383,9 +473,39 @@ export class PontoService {
       select: {
         id: true, name: true,
         pontoGeofence: true, pontoLat: true, pontoLng: true, pontoRaioM: true,
+        pdvIps: true,
       },
     });
     if (!store) throw new NotFoundException('Loja não encontrada');
+
+    // ── IP CHECK (só celular/pwa_selfie): tem que estar no WiFi da loja ──
+    // Compara o IP do request com os IPs recentes do PDV Electron (heartbeat).
+    // Kill-switch: PONTO_IP_CHECK=0. Fail-open sem referência fresca (<48h) —
+    // registra observação de audit em vez de travar a loja.
+    let ipCheckObs: string | null = null;
+    if (source === 'pwa_selfie' && process.env.PONTO_IP_CHECK !== '0') {
+      let ips: Array<{ ip: string; seenAt: string }> = [];
+      try {
+        ips = JSON.parse((store as any).pdvIps || '[]') || [];
+      } catch {
+        ips = [];
+      }
+      const freshCut = Date.now() - PontoService.PDV_IP_FRESH_H * 3600_000;
+      const fresh = ips.filter((e) => new Date(e.seenAt).getTime() > freshCut);
+      if (fresh.length === 0) {
+        ipCheckObs = 'ip-check: sem referência recente do PDV (fail-open)';
+      } else {
+        const reqNorm = PontoService.normalizeIp(input.ip);
+        const match = !!reqNorm &&
+          fresh.some((e) => PontoService.normalizeIp(e.ip) === reqNorm);
+        if (!match) {
+          throw new BadRequestException(
+            'O celular precisa estar conectado no WiFi da loja pra bater o ponto. ' +
+              'Conecte no WiFi (desligue o 4G) e tente de novo.',
+          );
+        }
+      }
+    }
 
     // ── GEOFENCE: só bate ponto perto da loja (anti "bati de casa") ──
     // Opt-in por loja: só valida se ligado E com coordenadas cadastradas.
@@ -441,7 +561,8 @@ export class PontoService {
         lat: input.lat ?? null,
         lng: input.lng ?? null,
         ip: input.ip ?? null,
-        observacoes: input.observacoes ?? null,
+        observacoes:
+          [input.observacoes, ipCheckObs].filter(Boolean).join(' · ') || null,
       },
     });
 
@@ -856,15 +977,68 @@ export class PontoService {
     });
   }
 
+  // ── LISTA DE FUNCIONÁRIAS DA LOJA (pro enroll facial da gerente) ──
+  /**
+   * Todas as funcionárias ATIVAS de uma loja + se já têm rosto cadastrado.
+   * Mesmo escopo do listDescriptorsForStore (responsibleStoreId OU
+   * storeCodeOrigin=code). Usado pela tela da gerente pra saber quem falta.
+   */
+  async listStoreSellers(storeId: string) {
+    const store = await (this.prisma as any).store.findUnique({
+      where: { id: storeId },
+      select: { code: true },
+    });
+    if (!store) return [];
+    const sellers = await (this.prisma as any).seller.findMany({
+      where: {
+        active: true,
+        OR: [{ responsibleStoreId: storeId }, { storeCodeOrigin: store.code }],
+      },
+      select: { id: true, name: true, cargo: true, faceDescriptors: true, faceEnrolledAt: true },
+      orderBy: { name: 'asc' },
+    });
+    return sellers.map((s: any) => ({
+      id: s.id,
+      name: s.name,
+      cargo: s.cargo,
+      hasFace: !!s.faceDescriptors,
+      faceEnrolledAt: s.faceEnrolledAt || null,
+    }));
+  }
+
+  /** True se a funcionária pertence à loja (por code) — pro escopo do enroll. */
+  async sellerBelongsToStoreCode(sellerId: string, storeCode: string): Promise<boolean> {
+    if (!storeCode) return false;
+    const store = await (this.prisma as any).store.findUnique({
+      where: { code: storeCode },
+      select: { id: true },
+    });
+    if (!store) return false;
+    const s = await (this.prisma as any).seller.findFirst({
+      where: {
+        id: sellerId,
+        OR: [{ responsibleStoreId: store.id }, { storeCodeOrigin: storeCode }],
+      },
+      select: { id: true },
+    });
+    return !!s;
+  }
+
   // ── GEOFENCE (config por loja) ────────────────────────────────────
-  /** Lê a config de geofence do ponto de uma loja. */
+  /** Lê a config de geofence do ponto de uma loja (+ IPs recentes do PDV). */
   async getGeofence(storeId: string) {
     const s = await (this.prisma as any).store.findUnique({
       where: { id: storeId },
-      select: { id: true, name: true, pontoGeofence: true, pontoLat: true, pontoLng: true, pontoRaioM: true },
+      select: { id: true, name: true, pontoGeofence: true, pontoLat: true, pontoLng: true, pontoRaioM: true, pdvIps: true },
     });
     if (!s) throw new NotFoundException('Loja não encontrada');
-    return s;
+    let pdvIps: Array<{ ip: string; seenAt: string }> = [];
+    try {
+      pdvIps = JSON.parse(s.pdvIps || '[]') || [];
+    } catch {
+      pdvIps = [];
+    }
+    return { ...s, pdvIps };
   }
 
   /** Define coordenadas/raio e liga/desliga o geofence do ponto de uma loja. */
@@ -887,6 +1061,161 @@ export class PontoService {
     }
     await (this.prisma as any).store.update({ where: { id: storeId }, data });
     return this.getGeofence(storeId);
+  }
+
+  /**
+   * EDITA uma batida errada (admin): tipo e/ou horário. O registro fica
+   * marcado como justificado (auditoria embutida no modelo).
+   */
+  async editarRegistro(
+    id: string,
+    input: { tipo?: string; timestamp?: string; justificativa: string; userId?: string },
+  ) {
+    const reg = await (this.prisma as any).pontoRegistro.findUnique({
+      where: { id },
+      include: { seller: { select: { name: true } } },
+    });
+    if (!reg) throw new NotFoundException('Batida não encontrada');
+    if (!input.justificativa || input.justificativa.trim().length < 3) {
+      throw new BadRequestException('Justificativa obrigatória (mínimo 3 caracteres)');
+    }
+    const data: any = {
+      justificado: true,
+      justificativa: input.justificativa.trim(),
+      justificadoBy: input.userId || null,
+      justificadoAt: new Date(),
+    };
+    if (input.tipo) {
+      if (!PontoService.TIPOS_VALIDOS.includes(input.tipo)) {
+        throw new BadRequestException(`tipo inválido (${PontoService.TIPOS_VALIDOS.join(' | ')})`);
+      }
+      data.tipo = input.tipo;
+    }
+    if (input.timestamp) {
+      const ts = new Date(input.timestamp);
+      if (isNaN(ts.getTime())) throw new BadRequestException('timestamp inválido');
+      data.timestamp = ts;
+    }
+    const updated = await (this.prisma as any).pontoRegistro.update({ where: { id }, data });
+    this.logger.warn(
+      `[ponto] EDITADO registro ${id} (${reg.seller?.name || reg.sellerId}): ` +
+        `${reg.tipo}@${reg.timestamp?.toISOString()} → ${data.tipo || reg.tipo}@${(data.timestamp || reg.timestamp)?.toISOString()} ` +
+        `por ${input.userId || '?'} — ${input.justificativa.trim()}`,
+    );
+    return updated;
+  }
+
+  /**
+   * EXCLUI uma batida errada (admin). Motivo obrigatório; o registro apagado
+   * inteiro vai pro log do servidor (auditoria).
+   */
+  async excluirRegistro(id: string, motivo: string, userId?: string) {
+    const reg = await (this.prisma as any).pontoRegistro.findUnique({
+      where: { id },
+      include: { seller: { select: { name: true } }, store: { select: { code: true } } },
+    });
+    if (!reg) throw new NotFoundException('Batida não encontrada');
+    if (!motivo || motivo.trim().length < 3) {
+      throw new BadRequestException('Motivo obrigatório (mínimo 3 caracteres)');
+    }
+    await (this.prisma as any).pontoRegistro.delete({ where: { id } });
+    this.logger.warn(
+      `[ponto] EXCLUÍDO registro ${id}: ${reg.seller?.name || reg.sellerId} ` +
+        `${reg.tipo}@${reg.timestamp?.toISOString()} loja ${reg.store?.code || reg.storeId} ` +
+        `source=${reg.source} por ${userId || '?'} — ${motivo.trim()}`,
+    );
+    return { ok: true };
+  }
+
+  /**
+   * TELA DO DIA (dono 30/07): todas as batidas de TODAS as funcionárias num
+   * dia, agrupadas por loja — visão ao vivo pro RH acompanhar as entradas.
+   * `data` YYYY-MM-DD (dia em horário de Brasília; default hoje).
+   */
+  async getDia(data?: string) {
+    const hojeBrt = new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10);
+    const dia = /^\d{4}-\d{2}-\d{2}$/.test(String(data || '')) ? String(data) : hojeBrt;
+    const start = new Date(`${dia}T03:00:00.000Z`); // 00:00 BRT
+    const end = new Date(start.getTime() + 24 * 3600_000);
+
+    const regs: any[] = await (this.prisma as any).pontoRegistro.findMany({
+      where: { timestamp: { gte: start, lt: end } },
+      orderBy: { timestamp: 'asc' },
+      include: {
+        seller: { select: { id: true, name: true, apelido: true, cargo: true } },
+        store: { select: { id: true, code: true, name: true } },
+      },
+    });
+
+    // Agrupa por funcionária×loja e deriva o status prático do momento
+    const porFunc = new Map<string, any>();
+    for (const r of regs) {
+      const k = `${r.sellerId}|${r.storeId}`;
+      let f = porFunc.get(k);
+      if (!f) {
+        f = {
+          sellerId: r.sellerId,
+          nome: r.seller?.apelido || r.seller?.name || '?',
+          nomeCompleto: r.seller?.name || null,
+          cargo: r.seller?.cargo || null,
+          storeId: r.storeId,
+          storeCode: r.store?.code || '',
+          storeName: r.store?.name || '',
+          batidas: [],
+        };
+        porFunc.set(k, f);
+      }
+      f.batidas.push({
+        id: r.id,
+        tipo: r.tipo,
+        hora: r.timestamp,
+        source: r.source,
+        justificado: r.justificado,
+        faceConfidence: r.faceConfidence ?? null,
+      });
+    }
+    const funcionarias = Array.from(porFunc.values()).map((f) => {
+      const tem = (t: string) => f.batidas.some((b: any) => b.tipo === t);
+      const status = tem('saida')
+        ? 'saiu'
+        : tem('saida_almoco') && !tem('volta_almoco')
+          ? 'almoco'
+          : tem('entrada')
+            ? 'trabalhando'
+            : 'incompleto';
+      const ultima = f.batidas[f.batidas.length - 1];
+      return { ...f, status, ultimaHora: ultima?.hora || null };
+    });
+
+    const lojasMap = new Map<string, any>();
+    for (const f of funcionarias) {
+      let l = lojasMap.get(f.storeId);
+      if (!l) {
+        l = { storeId: f.storeId, storeCode: f.storeCode, storeName: f.storeName, funcionarias: [] };
+        lojasMap.set(f.storeId, l);
+      }
+      l.funcionarias.push(f);
+    }
+    const lojas = Array.from(lojasMap.values())
+      .map((l) => ({
+        ...l,
+        funcionarias: l.funcionarias.sort((a: any, b: any) =>
+          String(a.nome).localeCompare(String(b.nome), 'pt-BR')),
+      }))
+      .sort((a, b) => String(a.storeCode).localeCompare(String(b.storeCode)));
+
+    return {
+      data: dia,
+      geradoEm: new Date().toISOString(),
+      totais: {
+        funcionarias: funcionarias.length,
+        trabalhando: funcionarias.filter((f) => f.status === 'trabalhando').length,
+        almoco: funcionarias.filter((f) => f.status === 'almoco').length,
+        sairam: funcionarias.filter((f) => f.status === 'saiu').length,
+        batidas: regs.length,
+      },
+      lojas,
+    };
   }
 }
 

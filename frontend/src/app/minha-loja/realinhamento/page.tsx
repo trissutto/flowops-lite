@@ -1,4 +1,5 @@
 'use client';
+import { overlayClose } from '@/lib/overlayClose';
 
 /**
  * /minha-loja/realinhamento — Tela onde a FILIAL separa as ordens de
@@ -24,6 +25,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { api } from '@/lib/api';
+import { appPrompt } from '@/lib/app-prompt';
 import { getSocket } from '@/lib/socket';
 import ProductThumb from '@/components/ProductThumb';
 import {
@@ -273,40 +275,19 @@ export default function MinhaLojaRealinhamentoPage() {
       const blob = await r.blob();
       const blobUrl = URL.createObjectURL(blob);
 
-      // 1) Tenta Electron silent print (PC com app desktop instalado)
-      const electron = (window as any).electronAPI;
-      if (electron?.silentPrintUrl) {
-        try {
-          await electron.silentPrintUrl(blobUrl);
-          pushToast(`🖨️ Romaneio ${code} enviado pra impressora.`);
-          setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
-          return;
-        } catch (e) {
-          console.warn('Electron silent print falhou, caindo no popup:', e);
-        }
-      }
-
-      // 2) Fallback browser: abre popup que dispara print()
-      const w = window.open(blobUrl, 'lurds_remessa_print', 'width=900,height=650,resizable=yes');
-      if (!w) {
+      // Romaneio é A4 (capa + lista) → imprime na impressora A4 CONFIGURADA.
+      // Antes ia direto no silentPrint (impressora ativa = quase sempre a
+      // térmica) e saía esticado no rolo. printPdfA4 escolhe a A4 antes.
+      const { printPdfA4 } = await import('@/lib/printer-router');
+      const res = await printPdfA4(blobUrl);
+      if (res.mode === 'popup-blocked') {
         alert(
           'Popup bloqueado. Habilite popups pra imprimir automático,\n' +
           'ou clica em "PDF" pra baixar e imprimir manualmente.',
         );
-        setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
-        return;
+      } else if (res.mode === 'electron-silent') {
+        pushToast(`🖨️ Romaneio ${code} enviado pra impressora.`);
       }
-      // Espera carregar e dispara print
-      const tryPrint = () => {
-        try {
-          w.focus();
-          w.print();
-        } catch {
-          // ignora — usuário pode dar Ctrl+P manual
-        }
-      };
-      // PDFs no Chrome às vezes precisam de delay pra renderizar antes do print
-      setTimeout(tryPrint, 800);
       setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
     } catch (e: any) {
       alert(`Erro ao imprimir: ${e?.message || e}`);
@@ -551,11 +532,10 @@ export default function MinhaLojaRealinhamentoPage() {
   /** Filial reporta que não encontrou a peça fisicamente (estoque divergente,
    *  etiqueta errada, peça sumida). Pede motivo e marca pra matriz revisar. */
   async function reportNotFound(item: RealignmentItem) {
-    const motivo = window.prompt(
+    const motivo = await appPrompt(
       `❌ Não achou a peça?\n\n` +
         `${item.refCode} ${item.cor || ''} ${item.tamanho || ''}\n\n` +
         `Por que? (ex: peça não está na arara, etiqueta errada, estoque divergente)`,
-      '',
     );
     if (motivo === null) return; // cancelou
     try {
@@ -1154,7 +1134,7 @@ export default function MinhaLojaRealinhamentoPage() {
       {problemasShipment && (
         <div
           className="fixed inset-0 bg-black/60 z-50 flex items-start justify-center p-4 overflow-y-auto"
-          onClick={() => setProblemasShipment(null)}
+          {...overlayClose(() => setProblemasShipment(null))}
         >
           <div
             className="bg-white rounded-2xl w-full max-w-2xl my-8 overflow-hidden"

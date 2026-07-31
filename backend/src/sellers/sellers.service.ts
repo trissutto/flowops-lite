@@ -267,6 +267,7 @@ export class SellersService {
 
   async create(input: {
     name: string;
+    apelido?: string;
     whatsapp?: string;
     cargo?: string;
     responsibleStoreId?: string | null;
@@ -287,6 +288,7 @@ export class SellersService {
     horarioTrabalho?: any;
     observacoes?: string;
     storeCodeOrigin?: string;
+    lojasAtuacao?: string[];
   }) {
     const name = (input.name || '').trim();
     if (!name) throw new BadRequestException('Nome é obrigatório.');
@@ -310,9 +312,10 @@ export class SellersService {
     }
 
     try {
-      return await this.prisma.seller.create({
+      const created = await this.prisma.seller.create({
         data: {
           name: normalized,
+          apelido: input.apelido?.trim().toUpperCase().slice(0, 40) || null,
           whatsapp: input.whatsapp?.trim() || null,
           cargo,
           responsibleStoreId: cargo !== 'VENDEDORA' ? input.responsibleStoreId || null : null,
@@ -338,8 +341,14 @@ export class SellersService {
               : null,
           observacoes: input.observacoes || null,
           storeCodeOrigin: input.storeCodeOrigin || null,
+          lojasAtuacao: Array.isArray(input.lojasAtuacao) && input.lojasAtuacao.length
+            ? JSON.stringify(input.lojasAtuacao.map((s) => String(s).trim()).filter(Boolean))
+            : null,
         } as any,
       });
+      // Loja(s) onde trabalha → entra sozinha na escolha de vendedora do PDV
+      await this.syncPdvWhitelist(created.id, null);
+      return created;
     } catch (e: any) {
       if (e?.code === 'P2002') {
         throw new BadRequestException(`Já existe uma vendedora com o nome "${normalized}".`);
@@ -348,14 +357,74 @@ export class SellersService {
     }
   }
 
+  /**
+   * LOJA ONDE TRABALHA → PDV (22/07): selecionar a loja no cadastro coloca a
+   * funcionária AUTOMATICAMENTE na escolha de vendedora do PDV daquela loja
+   * (whitelist pdv_active_sellers) — sem depender da tela vendedoras-ativas.
+   * Trocou de loja → sai da anterior e entra na nova; inativou → sai de todas.
+   * Entradas manuais em OUTRAS lojas (multi-loja via vendedoras-ativas) são
+   * preservadas, exceto quando a funcionária é inativada.
+   */
+  private async syncPdvWhitelist(sellerId: string, prevStoreCode: string | null) {
+    try {
+      const s: any = await this.prisma.seller.findUnique({ where: { id: sellerId } });
+      if (!s) return;
+      const realCodigo = String(s.wincredCodigo || s.id).trim();
+      const nome = String((s as any).apelido || s.name).trim();
+      const origin = String(s.storeCodeOrigin || '').trim();
+      const normNome = (x: any) => String(x ?? '').trim().toUpperCase().replace(/\s+/g, ' ');
+      const nomesDela = new Set([normNome(s.name), normNome((s as any).apelido)].filter(Boolean));
+      // Código SINTÉTICO pras lojas VISITADAS (multi-loja): o wincredCodigo é da
+      // loja de origem e REPETE entre lojas (colidiria com outra vendedora).
+      // Prefixo "F" não-numérico nunca bate com código do Wincred. A comissão é
+      // por NOME, então o código aqui só identifica a linha da whitelist.
+      const codigoGuest = `F${String(s.id).replace(/-/g, '').slice(0, 18)}`;
+
+      // Conjunto de lojas onde ela aparece no PDV (lojasAtuacao ∪ origem).
+      const lojas = new Set<string>();
+      if (s.active) {
+        let arr: any[] = [];
+        try { arr = s.lojasAtuacao ? JSON.parse(s.lojasAtuacao) : []; } catch { arr = []; }
+        if (Array.isArray(arr)) arr.forEach((l) => { const v = String(l || '').trim(); if (v) lojas.add(v); });
+        if (origin) lojas.add(origin);
+      }
+      const codigoPara = (loja: string) => (loja === origin ? realCodigo : codigoGuest);
+
+      // Linhas atuais DELA (por código real, sintético ou nome) — pra reconciliar.
+      const todas: any[] = await (this.prisma as any).pdvActiveSeller.findMany({
+        where: { OR: [{ codigo: realCodigo }, { codigo: codigoGuest }] },
+      });
+      const delas = todas.filter((r) => nomesDela.has(normNome(r.nome)) || lojas.has(r.storeCode));
+      // Remove as linhas dela que NÃO estão mais nas lojas-alvo (ou todas, se inativa).
+      const remover = delas.filter((r) => !lojas.has(r.storeCode)).map((r) => r.id);
+      if (remover.length) {
+        await (this.prisma as any).pdvActiveSeller.deleteMany({ where: { id: { in: remover } } });
+      }
+      // Garante uma linha por loja-alvo.
+      for (const loja of lojas) {
+        const codigo = codigoPara(loja);
+        await (this.prisma as any).pdvActiveSeller.upsert({
+          where: { storeCode_codigo: { storeCode: loja, codigo } },
+          create: { storeCode: loja, codigo, nome },
+          update: { nome },
+        });
+      }
+    } catch (e: any) {
+      this.logger.warn(`[sellers] syncPdvWhitelist falhou (${sellerId}): ${e?.message || e}`);
+    }
+  }
+
   async update(
     id: string,
     input: {
       name?: string;
+      apelido?: string | null;
       whatsapp?: string | null;
       active?: boolean;
       cargo?: string;
       responsibleStoreId?: string | null;
+      storeCodeOrigin?: string | null;
+      lojasAtuacao?: string[] | null;
       // Prontuario RH
       cpf?: string | null;
       rg?: string | null;
@@ -388,22 +457,36 @@ export class SellersService {
         .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
         .join(' ');
     }
+    if (input.apelido !== undefined) data.apelido = input.apelido?.trim().toUpperCase().slice(0, 40) || null;
     if (input.whatsapp !== undefined) data.whatsapp = input.whatsapp?.trim() || null;
     if (input.active !== undefined) data.active = !!input.active;
 
     if (input.cargo !== undefined) {
-      const validCargos = ['VENDEDORA', 'LIDER_B', 'LIDER_A', 'GERENTE_B', 'GERENTE_A'];
+      // CAIXA existe no motor de comissão (2% próprias on/off, ver
+      // CommissionsService.seedDefaultCargoRules) e no dropdown das telas —
+      // faltava aqui na validação (erro 400 "cargo inválido" de 11/07).
+      const validCargos = ['VENDEDORA', 'CAIXA', 'LIDER_B', 'LIDER_A', 'GERENTE_B', 'GERENTE_A'];
       if (!validCargos.includes(input.cargo)) {
         throw new BadRequestException(`cargo inválido. Use: ${validCargos.join(', ')}`);
       }
       data.cargo = input.cargo;
-      // Se virou VENDEDORA, zera responsibleStoreId (não responde por loja)
-      if (input.cargo === 'VENDEDORA' && input.responsibleStoreId === undefined) {
+      // VENDEDORA/CAIXA não respondem por loja → zera responsibleStoreId
+      if ((input.cargo === 'VENDEDORA' || input.cargo === 'CAIXA') && input.responsibleStoreId === undefined) {
         data.responsibleStoreId = null;
       }
     }
     if (input.responsibleStoreId !== undefined) {
       data.responsibleStoreId = input.responsibleStoreId || null;
+    }
+    // Loja "de origem" (agrupamento/lista) — editável inline na lista de
+    // funcionárias. É a loja mostrada pra VENDEDORA (que não tem responsibleStore).
+    if (input.storeCodeOrigin !== undefined) {
+      data.storeCodeOrigin = String(input.storeCodeOrigin || '').trim() || null;
+    }
+    if (input.lojasAtuacao !== undefined) {
+      data.lojasAtuacao = Array.isArray(input.lojasAtuacao) && input.lojasAtuacao.length
+        ? JSON.stringify(input.lojasAtuacao.map((s) => String(s).trim()).filter(Boolean))
+        : null;
     }
 
     // ── PRONTUARIO RH ──
@@ -431,7 +514,11 @@ export class SellersService {
     }
 
     try {
-      return await this.prisma.seller.update({ where: { id }, data });
+      const updated = await this.prisma.seller.update({ where: { id }, data });
+      // Loja onde trabalha / apelido / ativo mudaram → reflete na escolha de
+      // vendedora do PDV (whitelist), tirando da loja anterior se trocou.
+      await this.syncPdvWhitelist(id, seller.storeCodeOrigin || null);
+      return updated;
     } catch (e: any) {
       if (e?.code === 'P2002') {
         throw new BadRequestException('Já existe uma vendedora com esse nome.');
@@ -494,6 +581,89 @@ export class SellersService {
    *
    * Inclui linha "Sem atribuição" com pedidos do período que não tem sellerId.
    */
+  /**
+   * CONFERIDOR Flow × Giga (dono 29/07): pra UMA loja e período, abre os
+   * componentes do Flow por vendedora (bruto, marcados, desconto avulso
+   * rateado, devoluções) e traz AO LADO o caixa do Giga (getTopVendedoras,
+   * espelho da MESMA fonte do ranking do Wincred). É a ferramenta pra achar
+   * a divergência com nome: atribuição? marcado? venda fora do Flow?
+   */
+  async conferidorLoja(from: Date, to: Date, storeCode: string) {
+    const sales: any[] = await (this.prisma as any).pdvSale.findMany({
+      where: {
+        status: 'finalized',
+        isTraining: false,
+        finalizedAt: { gte: from, lte: to },
+        storeCode,
+      },
+      select: {
+        id: true, sellerName: true, vendedorName: true, total: true,
+        paymentMethod: true,
+        items: { select: { id: true, total: true, sellerName: true } },
+        payments: { select: { method: true, valor: true } },
+      },
+    });
+    // ARQUITETURA 3 INDICADORES (dono 29/07): bruto = FATURAMENTO (compara
+    // com o caixa do Giga, que também é cheio); valeTroca e liquido
+    // (recebimento) são informativos — a comissão mora no CommissionEngine.
+    type Comp = { vendedora: string; bruto: number; marcados: number; descontoAvulso: number; valeTroca: number; liquido: number; vendas: number };
+    const bucket = new Map<string, Comp>();
+    const norm = (s: any) => String(s || '').trim().toUpperCase().replace(/\s+/g, ' ') || 'SEM VENDEDORA';
+    const get = (nome: string): Comp => {
+      const k = norm(nome);
+      let c = bucket.get(k);
+      if (!c) { c = { vendedora: nome || 'Sem vendedora', bruto: 0, marcados: 0, descontoAvulso: 0, valeTroca: 0, liquido: 0, vendas: 0 }; bucket.set(k, c); }
+      return c;
+    };
+    for (const s of sales) {
+      const principal = s.sellerName || s.vendedorName || 'Sem vendedora';
+      const itens = (s.items || []).filter((i: any) => Number(i.total) !== 0);
+      if (s.paymentMethod === 'MARCADO') {
+        get(principal).marcados += Number(s.total || 0);
+        continue;
+      }
+      const vale = (s.payments || [])
+        .filter((p: any) => ['vale_troca', 'vale', 'troca'].includes(String(p.method || '').toLowerCase().trim()))
+        .reduce((a: number, p: any) => a + Number(p.valor || 0), 0);
+      const total = Number(s.total || 0);
+      const pago = Math.max(0, total - vale);
+      get(principal).vendas += 1;
+      const somaItens = itens.reduce((a: number, i: any) => a + Number(i.total || 0), 0);
+      if (itens.length && somaItens > 0) {
+        for (const it of itens) {
+          const nome = it.sellerName || principal;
+          const frac = Number(it.total || 0) / somaItens;
+          get(nome).bruto += Number(it.total || 0);
+          get(nome).descontoAvulso += Math.max(0, somaItens - total) * frac;
+          get(nome).valeTroca += vale * frac;
+          get(nome).liquido += pago * frac;
+        }
+      } else {
+        get(principal).bruto += total;
+        get(principal).valeTroca += vale;
+        get(principal).liquido += pago;
+      }
+    }
+    const flow = Array.from(bucket.values()).map((c) => ({
+      ...c,
+      bruto: Math.round(c.bruto * 100) / 100,
+      marcados: Math.round(c.marcados * 100) / 100,
+      descontoAvulso: Math.round(c.descontoAvulso * 100) / 100,
+      valeTroca: Math.round(c.valeTroca * 100) / 100,
+      liquido: Math.round(c.liquido * 100) / 100,
+    })).sort((a, b) => b.liquido - a.liquido);
+
+    // Caixa do Giga (espelho) — a MESMA fonte do ranking do Wincred
+    let giga: any[] = [];
+    let gigaErro: string | null = null;
+    try {
+      giga = await this.erp.getTopVendedoras({ inicio: from, fim: to, storeCode, limit: 60 });
+    } catch (e: any) {
+      gigaErro = String(e?.message || e);
+    }
+    return { storeCode, period: { from: from.toISOString(), to: to.toISOString() }, flow, giga, gigaErro };
+  }
+
   async report(from: Date, to: Date) {
     const VALID_STATUSES = ['processing', 'separacao', 'separated', 'shipped', 'completed'];
 
@@ -531,11 +701,105 @@ export class SellersService {
       bucket.set(key, cur);
     }
 
-    const sellers = Array.from(bucket.values()).sort((a, b) => b.totalAmount - a.totalAmount);
+    // ── VENDAS DO PDV de TODAS AS LOJAS. DECISÃO OFICIAL (dono 29/07,
+    // arquitetura 3 indicadores): esta tela mostra FATURAMENTO — valor dos
+    // produtos vendidos, vale-troca NÃO reduz ("não desconta porra nenhuma").
+    // Recebimento e base de comissão são OUTROS números e moram no
+    // CommissionEngine (/retaguarda/comissoes). Marcado fica fora (Regra 1);
+    // devolução posterior não mexe; treino fora.
+    const pdvSales: any[] = await (this.prisma as any).pdvSale.findMany({
+      where: {
+        status: 'finalized',
+        isTraining: false,
+        finalizedAt: { gte: from, lte: to },
+        NOT: { paymentMethod: 'MARCADO' },
+      },
+      select: {
+        id: true,
+        storeCode: true,
+        sellerName: true,
+        vendedorName: true,
+        total: true,
+        items: { select: { id: true, total: true, sellerName: true } },
+      },
+    });
 
+    const normNome = (s: any) => String(s || '').trim().toUpperCase().replace(/\s+/g, ' ');
+    // CHAVE = nome × LOJA (dono 29/07: "juntou a Elaine de Itanhaém com a de
+    // Campinas?" — cadastros do PDV usam só o primeiro nome; homônimas em
+    // lojas diferentes são pessoas DIFERENTES). Cada vendedora×loja = 1 linha.
+    const pdvBucket = new Map<string, { sellerName: string; pdvCount: number; totalPdv: number; lojas: Set<string> }>();
+    const addPdv = (nome: string, valor: number, loja: string, contaVenda: boolean) => {
+      const key = `${normNome(nome) || 'SEM VENDEDORA'}|${String(loja || '')}`;
+      const cur = pdvBucket.get(key) || { sellerName: nome || 'Sem vendedora', pdvCount: 0, totalPdv: 0, lojas: new Set<string>() };
+      if (contaVenda) cur.pdvCount += 1;
+      cur.totalPdv += valor;
+      if (loja) cur.lojas.add(loja);
+      pdvBucket.set(key, cur);
+    };
+    let totalPdvGeral = 0;
+    for (const s of pdvSales) {
+      const principal = s.sellerName || s.vendedorName || 'Sem vendedora';
+      // Item NEGATIVO (abatimento lançado como produto) entra com sinal e
+      // abate da vendedora do PRÓPRIO item — não dilui nas outras.
+      const itens = (s.items || []).filter((i: any) => Number(i.total) !== 0);
+      // FATURAMENTO da venda: total final (desconto já dentro), vale NÃO reduz
+      const faturamento = Number(s.total || 0);
+      totalPdvGeral += faturamento;
+      const somaItens = itens.reduce((a: number, i: any) => a + Number(i.total || 0), 0);
+      if (itens.length && somaItens > 0) {
+        // Rateio proporcional do faturamento pelos itens de cada vendedora
+        // (override por item vale sobre a vendedora da venda)
+        const fator = faturamento / somaItens;
+        addPdv(principal, 0, s.storeCode, true); // conta a venda 1x
+        for (const it of itens) addPdv(it.sellerName || principal, Number(it.total || 0) * fator, s.storeCode, false);
+      } else {
+        addPdv(principal, faturamento, s.storeCode, true);
+      }
+    }
+
+    // SEM fusão site×PDV nem entre lojas: linhas do site (por sellerId) +
+    // linhas do PDV (por vendedora×loja) — homônimas nunca se misturam.
+    // lojaLabel = etiqueta "código nome" pro chip ao lado do nome (dono 29/07).
+    const lojasCad = await this.prisma.store.findMany({ select: { code: true, name: true } });
+    const nomeLoja = new Map(lojasCad.map((l) => [l.code, l.name]));
+    const sellers: any[] = [];
+    for (const s of bucket.values()) {
+      sellers.push({
+        sellerId: s.sellerId,
+        sellerName: s.sellerName,
+        orderCount: s.orderCount,
+        totalSite: s.totalAmount,
+        pdvCount: 0,
+        totalPdv: 0,
+        lojas: [] as string[],
+        lojaLabel: 'SITE',
+        totalAmount: s.totalAmount,
+      });
+    }
+    for (const p of pdvBucket.values()) {
+      const lojas = Array.from(p.lojas).sort();
+      sellers.push({
+        sellerId: null,
+        sellerName: p.sellerName,
+        orderCount: 0,
+        totalSite: 0,
+        pdvCount: p.pdvCount,
+        totalPdv: Math.round(p.totalPdv * 100) / 100,
+        lojas,
+        lojaLabel: lojas.map((c) => `${c} ${nomeLoja.get(c) || ''}`.trim()).join(', ') || null,
+        totalAmount: Math.round(p.totalPdv * 100) / 100,
+      });
+    }
+    sellers.sort((a, b) => b.totalAmount - a.totalAmount);
+
+    const totalSite = orders.reduce((a, o) => a + Number(o.totalAmount || 0), 0);
     const totals = {
       orderCount: orders.length,
-      totalAmount: orders.reduce((a, o) => a + Number(o.totalAmount || 0), 0),
+      pdvCount: pdvSales.length,
+      totalSite: Math.round(totalSite * 100) / 100,
+      totalPdv: Math.round(totalPdvGeral * 100) / 100,
+      totalAmount: Math.round((totalSite + totalPdvGeral) * 100) / 100,
     };
 
     return {
@@ -551,5 +815,126 @@ export class SellersService {
         date: o.wcDateCreated || o.createdAt,
       })),
     };
+  }
+
+  /**
+   * UNIFICA GRAFIAS de uma vendedora numa loja (dono 29/07: "como vamos
+   * juntar as 3 Mirelas?"). MIRELA / MIRELLA / MIRELA DA SILVA viram UMA,
+   * retroativo e daqui pra frente:
+   *   - pdv_sales.seller_name / vendedor_name da loja
+   *   - pdv_sale_items.seller_name (override por item)
+   *   - whitelist do PDV (renomeia grafias e apaga linhas que ficarem em dobro)
+   *   - fichas RH (Seller) DA LOJA com as grafias antigas: desativa e reaponta
+   *     o seller_id das vendas da loja pra ficha canônica
+   * Só mexe em fichas com storeCodeOrigin = loja (homônima de OUTRA loja não
+   * é tocada). dryRun=true só conta e lista o que seria alterado.
+   */
+  async unifySpellings(input: { storeCode: string; from: string[]; to: string; dryRun?: boolean; by?: string }) {
+    const storeCode = String(input.storeCode || '').trim();
+    const to = String(input.to || '').trim();
+    const norm = (s: any) => String(s || '').trim().toUpperCase().replace(/\s+/g, ' ');
+    const toNorm = norm(to);
+    const variants = Array.from(new Set((input.from || []).map(norm).filter((v) => v && v !== toNorm)));
+    if (!storeCode) throw new BadRequestException('storeCode obrigatório');
+    if (!toNorm) throw new BadRequestException('nome final obrigatório');
+    if (!variants.length) throw new BadRequestException('informe ao menos uma grafia DIFERENTE do nome final');
+
+    const p: any = this.prisma;
+    const n = async (sql: string, ...params: any[]) =>
+      Number((await p.$queryRawUnsafe(sql, ...params))[0]?.n) || 0;
+
+    // ── Contagens (sempre — é o preview do dryRun) ──
+    const [vendas, vendasVendedor, itens] = await Promise.all([
+      n(`SELECT COUNT(*)::int AS n FROM pdv_sales WHERE store_code = $1 AND UPPER(TRIM(seller_name)) = ANY($2)`, storeCode, variants),
+      n(`SELECT COUNT(*)::int AS n FROM pdv_sales WHERE store_code = $1 AND UPPER(TRIM(vendedor_name)) = ANY($2)`, storeCode, variants),
+      n(`SELECT COUNT(*)::int AS n FROM pdv_sale_items i JOIN pdv_sales s ON s.id = i.sale_id
+          WHERE s.store_code = $1 AND UPPER(TRIM(i.seller_name)) = ANY($2)`, storeCode, variants),
+    ]);
+
+    // Whitelist da loja: grafias antigas + canônica
+    const wlAll: any[] = await p.pdvActiveSeller.findMany({ where: { storeCode } });
+    const wlVariants = wlAll.filter((r: any) => variants.includes(norm(r.nome)));
+    const wlCanonicas = wlAll.filter((r: any) => norm(r.nome) === toNorm);
+
+    // Fichas RH DA LOJA com as grafias antigas + a canônica (qualquer origem)
+    const allSellers: any[] = await p.seller.findMany({});
+    const fichasVariantes = allSellers.filter(
+      (s: any) => variants.includes(norm(s.name)) && String(s.storeCodeOrigin || '') === storeCode,
+    );
+    const fichaCanonica = allSellers.find((s: any) => norm(s.name) === toNorm) || null;
+
+    const preview = {
+      dryRun: !!input.dryRun,
+      storeCode,
+      nomeFinal: to,
+      grafias: variants,
+      vendasRenomeadas: vendas,
+      vendasVendedorRenomeadas: vendasVendedor,
+      itensRenomeados: itens,
+      whitelistRenomeadas: wlVariants.map((r: any) => r.nome),
+      fichasDesativadas: fichasVariantes.map((s: any) => ({ id: s.id, name: s.name, loja: s.storeCodeOrigin })),
+      fichaMantida: fichaCanonica
+        ? { id: fichaCanonica.id, name: fichaCanonica.name }
+        : fichasVariantes.length
+          ? { id: fichasVariantes[0].id, name: `${fichasVariantes[0].name} → será renomeada pra "${to}"` }
+          : null,
+    };
+    if (input.dryRun) return preview;
+
+    await p.$transaction(async (tx: any) => {
+      // 1) Vendas + itens da loja
+      await tx.$executeRawUnsafe(
+        `UPDATE pdv_sales SET seller_name = $1 WHERE store_code = $2 AND UPPER(TRIM(seller_name)) = ANY($3)`,
+        to, storeCode, variants,
+      );
+      await tx.$executeRawUnsafe(
+        `UPDATE pdv_sales SET vendedor_name = $1 WHERE store_code = $2 AND UPPER(TRIM(vendedor_name)) = ANY($3)`,
+        to, storeCode, variants,
+      );
+      await tx.$executeRawUnsafe(
+        `UPDATE pdv_sale_items i SET seller_name = $1 FROM pdv_sales s
+          WHERE s.id = i.sale_id AND s.store_code = $2 AND UPPER(TRIM(i.seller_name)) = ANY($3)`,
+        to, storeCode, variants,
+      );
+
+      // 2) Ficha RH canônica: usa a existente ou promove a primeira variante
+      let keptId: string | null = fichaCanonica?.id || null;
+      if (!keptId && fichasVariantes.length) {
+        keptId = fichasVariantes[0].id;
+        await tx.seller.update({ where: { id: keptId }, data: { name: to } });
+      }
+      const dupIds = fichasVariantes.map((s: any) => s.id).filter((id: string) => id !== keptId);
+      if (dupIds.length) {
+        await tx.seller.updateMany({ where: { id: { in: dupIds } }, data: { active: false } });
+        if (keptId) {
+          await tx.$executeRawUnsafe(
+            `UPDATE pdv_sales SET seller_id = $1 WHERE store_code = $2 AND seller_id = ANY($3)`,
+            keptId, storeCode, dupIds,
+          );
+        }
+      }
+
+      // 3) Whitelist: renomeia as grafias e mantém UMA linha com o nome final
+      for (const r of wlVariants) {
+        await tx.pdvActiveSeller.update({ where: { id: r.id }, data: { nome: to } });
+      }
+      const todasCanonicas = [...wlCanonicas, ...wlVariants];
+      if (todasCanonicas.length > 1) {
+        const kept = allSellers.find((s: any) => s.id === keptId);
+        const keepRow =
+          todasCanonicas.find((r: any) => kept?.wincredCodigo && String(r.codigo).trim() === String(kept.wincredCodigo).trim()) ||
+          todasCanonicas[0];
+        const removeIds = todasCanonicas.filter((r: any) => r.id !== keepRow.id).map((r: any) => r.id);
+        if (removeIds.length) {
+          await tx.pdvActiveSeller.deleteMany({ where: { id: { in: removeIds } } });
+        }
+      }
+    });
+
+    this.logger.log(
+      `[sellers] unify loja=${storeCode} "${variants.join('", "')}" → "${to}" por ${input.by || '?'}: ` +
+        `${vendas} vendas, ${itens} itens, ${wlVariants.length} whitelist, ${fichasVariantes.length} fichas`,
+    );
+    return { ...preview, dryRun: false, aplicado: true };
   }
 }

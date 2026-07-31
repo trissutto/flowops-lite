@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { StoresService, StoreInput } from './stores.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { RealtimeGateway } from '../websocket/realtime.gateway';
@@ -11,9 +11,17 @@ export class StoresController {
     private readonly gateway: RealtimeGateway,
   ) {}
 
+  // Papéis da franquia só enxergam as lojas franqueadas (tipo=FILIAL).
+  private scopeByRole(role: string | undefined, stores: any[]) {
+    if (role === 'franquias' || role === 'master_franquia') {
+      return stores.filter((s) => s.tipo === 'FILIAL');
+    }
+    return stores;
+  }
+
   @Get()
-  list() {
-    return this.stores.list();
+  async list(@Req() req: any) {
+    return this.scopeByRole(req?.user?.role, await this.stores.list());
   }
 
   /**
@@ -21,11 +29,12 @@ export class StoresController {
    * Merge com a lista de lojas cadastradas pra o admin ver TODAS, com flag online/offline.
    */
   @Get('presence')
-  async presence() {
-    const [all, snapshot] = await Promise.all([
+  async presence(@Req() req: any) {
+    const [allStores, snapshot] = await Promise.all([
       this.stores.list(),
       Promise.resolve(this.gateway.getPresence()),
     ]);
+    const all = this.scopeByRole(req?.user?.role, allStores);
     const byId = new Map(snapshot.map((p) => [p.storeId, p]));
     return all.map((s) => {
       const p = byId.get(s.id);

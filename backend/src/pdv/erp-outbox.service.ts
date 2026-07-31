@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
+import { ErpService } from '../erp/erp.service';
 import { PdvService } from './pdv.service';
 
 /**
@@ -38,6 +39,7 @@ export class ErpOutboxService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly pdv: PdvService,
+    private readonly erp: ErpService,
   ) {}
 
   @Cron(CronExpression.EVERY_30_SECONDS, { name: 'erp-outbox-processor' })
@@ -86,6 +88,12 @@ export class ErpOutboxService {
 
   /** true = job concluído; false = re-agendado (ou failed). */
   private async processJob(job: any): Promise<boolean> {
+    if (job.kind === 'produto_cadastro') return this.processProdutoCadastro(job);
+    if (job.kind === 'produto_exclusao') return this.processProdutoExclusao(job);
+    if (job.kind === 'estoque_delta') return this.processEstoqueDelta(job);
+    if (job.kind === 'cliente_upsert') return this.processClienteUpsert(job);
+    if (job.kind === 'crediario_baixa') return this.processCrediarioBaixa(job);
+    if (job.kind === 'crediario_estorno') return this.processCrediarioEstorno(job);
     if (job.kind !== 'venda') {
       await this.markFailed(job, `kind desconhecido: ${job.kind}`);
       return false;
@@ -135,7 +143,16 @@ export class ErpOutboxService {
       else stepError = `estoque: ${r.error || 'falha'}`;
     }
 
-    if (caixaDoneAt && stockDoneAt) {
+    // ── Passo 3: fecha marcados PUXADOS (DELETE da linha MARCADO='SIM') ──
+    // Idempotente por natureza (só apaga se ainda for SIM) — sem coluna de
+    // progresso; retry re-executa sem risco. Sem isso a peça puxada pro PDV
+    // ficava "em marca" pra sempre (bug 21/07 Indaiatuba).
+    if (!stepError) {
+      const r = await this.pdv.erpStepFecharMarcados(sale);
+      if (!r.ok) stepError = `marcados: ${r.error || 'falha'}`;
+    }
+
+    if (caixaDoneAt && stockDoneAt && !stepError) {
       await (this.prisma as any).erpOutbox.update({
         where: { id: job.id },
         data: {
@@ -180,6 +197,264 @@ export class ErpOutboxService {
       `[outbox] venda ${job.saleId} re-agendada (+${delayS}s, tentativa ${attempts}): ${stepError}`,
     );
     return false;
+  }
+
+  /**
+   * Réplica do CADASTRO DE PRODUTO pro Giga (o cadastro já gravou no Flow —
+   * `product` + `wincred_produtos` — e só a cópia legada fica na fila quando
+   * o Giga está fora). INSERT IGNORE no Wincred = retry idempotente.
+   */
+  private async processProdutoCadastro(job: any): Promise<boolean> {
+    const produtos = Array.isArray(job.payload?.produtos) ? job.payload.produtos : null;
+    if (!produtos?.length) {
+      await this.markFailed(job, 'payload sem produtos');
+      return false;
+    }
+    try {
+      const r = await this.erp.inserirProdutosBatch(produtos);
+      await (this.prisma as any).erpOutbox.update({
+        where: { id: job.id },
+        data: { status: 'done', doneAt: new Date(), lastError: null },
+      });
+      this.logger.log(
+        `[outbox] cadastro ${job.saleId}: ${r.inseridos}/${produtos.length} replicado(s) no Wincred (tentativa ${job.attempts + 1})`,
+      );
+      return true;
+    } catch (e: any) {
+      const attempts = (job.attempts || 0) + 1;
+      if (attempts >= ErpOutboxService.MAX_ATTEMPTS) {
+        await (this.prisma as any).erpOutbox.update({
+          where: { id: job.id },
+          data: { status: 'failed', attempts, lastError: String(e?.message || e).slice(0, 300) },
+        });
+        return false;
+      }
+      const delayS =
+        ErpOutboxService.BACKOFF_S[Math.min(attempts - 1, ErpOutboxService.BACKOFF_S.length - 1)] ??
+        ErpOutboxService.BACKOFF_CAP_S;
+      await (this.prisma as any).erpOutbox.update({
+        where: { id: job.id },
+        data: {
+          status: 'pending',
+          attempts,
+          lastError: String(e?.message || e).slice(0, 300),
+          nextRetryAt: new Date(Date.now() + Math.min(delayS, ErpOutboxService.BACKOFF_CAP_S) * 1000),
+        },
+      });
+      this.logger.warn(`[outbox] cadastro ${job.saleId} re-agendado (+${delayS}s): ${e?.message}`);
+      return false;
+    }
+  }
+
+  /** Réplica da EXCLUSÃO de produto pro Giga (o Flow já apagou). Idempotente. */
+  private async processProdutoExclusao(job: any): Promise<boolean> {
+    const codigos = Array.isArray(job.payload?.codigos) ? job.payload.codigos : null;
+    if (!codigos?.length) {
+      await this.markFailed(job, 'payload sem codigos');
+      return false;
+    }
+    try {
+      const r = await this.erp.deleteProdutos(codigos);
+      await (this.prisma as any).erpOutbox.update({
+        where: { id: job.id },
+        data: { status: 'done', doneAt: new Date(), lastError: null },
+      });
+      this.logger.log(`[outbox] exclusão ${job.saleId}: ${r.excluidos} apagado(s) no Wincred`);
+      return true;
+    } catch (e: any) {
+      const attempts = (job.attempts || 0) + 1;
+      const delayS =
+        ErpOutboxService.BACKOFF_S[Math.min(attempts - 1, ErpOutboxService.BACKOFF_S.length - 1)] ??
+        ErpOutboxService.BACKOFF_CAP_S;
+      await (this.prisma as any).erpOutbox.update({
+        where: { id: job.id },
+        data: attempts >= ErpOutboxService.MAX_ATTEMPTS
+          ? { status: 'failed', attempts, lastError: String(e?.message || e).slice(0, 300) }
+          : {
+              status: 'pending', attempts,
+              lastError: String(e?.message || e).slice(0, 300),
+              nextRetryAt: new Date(Date.now() + Math.min(delayS, ErpOutboxService.BACKOFF_CAP_S) * 1000),
+            },
+      });
+      return false;
+    }
+  }
+
+  /**
+   * Réplica de DELTA DE ESTOQUE pro Giga (constituição 14/07: Flow é a fonte
+   * — o delta já foi aplicado nos espelhos na hora da operação; aqui só a
+   * cópia legada, com retry).
+   */
+  private async processEstoqueDelta(job: any): Promise<boolean> {
+    const op = job.payload?.op === 'inc' ? 'inc' : job.payload?.op === 'dec' ? 'dec' : null;
+    const items = Array.isArray(job.payload?.items) ? job.payload.items : null;
+    if (!op || !items?.length) {
+      await this.markFailed(job, 'payload sem op/items');
+      return false;
+    }
+    try {
+      const r = await this.erp.applyStockDeltaGigaOnly(op, items, job.payload?.opts || undefined);
+      if (!r.success) throw new Error(r.error || 'falha na réplica de estoque');
+      await (this.prisma as any).erpOutbox.update({
+        where: { id: job.id },
+        data: { status: 'done', doneAt: new Date(), lastError: null },
+      });
+      this.logger.log(`[outbox] estoque ${job.saleId} (${op}) replicado no Wincred`);
+      return true;
+    } catch (e: any) {
+      const attempts = (job.attempts || 0) + 1;
+      const delayS =
+        ErpOutboxService.BACKOFF_S[Math.min(attempts - 1, ErpOutboxService.BACKOFF_S.length - 1)] ??
+        ErpOutboxService.BACKOFF_CAP_S;
+      await (this.prisma as any).erpOutbox.update({
+        where: { id: job.id },
+        data: attempts >= ErpOutboxService.MAX_ATTEMPTS
+          ? { status: 'failed', attempts, lastError: String(e?.message || e).slice(0, 300) }
+          : {
+              status: 'pending', attempts,
+              lastError: String(e?.message || e).slice(0, 300),
+              nextRetryAt: new Date(Date.now() + Math.min(delayS, ErpOutboxService.BACKOFF_CAP_S) * 1000),
+            },
+      });
+      return false;
+    }
+  }
+
+  /** Réplica de CLIENTE editado/criado no Flow pro Giga (kind cliente_upsert).
+   *  O Flow é a fonte (giga_clientes flowIsSource) — aqui só espelha na tabela
+   *  `clientes` legada. Idempotente: UPDATE por (CODIGO, LOJA) ou INSERT. */
+  private async processClienteUpsert(job: any): Promise<boolean> {
+    const p = job.payload || {};
+    if (!p.codigo || !p.set) {
+      await this.markFailed(job, 'cliente_upsert sem payload válido');
+      return false;
+    }
+    try {
+      const r = await this.erp.upsertClienteGiga({ loja: p.loja, codigo: p.codigo, set: p.set });
+      if (!r.success) throw new Error(r.error || 'falha na réplica de cliente');
+      await (this.prisma as any).erpOutbox.update({
+        where: { id: job.id },
+        data: { status: 'done', doneAt: new Date(), lastError: null },
+      });
+      this.logger.log(`[outbox] cliente ${p.loja}/${p.codigo} replicado no Giga`);
+      return true;
+    } catch (e: any) {
+      const attempts = (job.attempts || 0) + 1;
+      const delayS =
+        ErpOutboxService.BACKOFF_S[Math.min(attempts - 1, ErpOutboxService.BACKOFF_S.length - 1)] ??
+        ErpOutboxService.BACKOFF_CAP_S;
+      await (this.prisma as any).erpOutbox.update({
+        where: { id: job.id },
+        data: attempts >= ErpOutboxService.MAX_ATTEMPTS
+          ? { status: 'failed', attempts, lastError: String(e?.message || e).slice(0, 300) }
+          : {
+              status: 'pending', attempts,
+              lastError: String(e?.message || e).slice(0, 300),
+              nextRetryAt: new Date(Date.now() + Math.min(delayS, ErpOutboxService.BACKOFF_CAP_S) * 1000),
+            },
+      });
+      return false;
+    }
+  }
+
+  /** Re-agenda um job com backoff (ou marca failed no teto). Helper comum. */
+  private async requeueOrFail(job: any, err: any): Promise<boolean> {
+    const attempts = (job.attempts || 0) + 1;
+    const msg = String(err?.message || err).slice(0, 300);
+    if (attempts >= ErpOutboxService.MAX_ATTEMPTS) {
+      await (this.prisma as any).erpOutbox.update({
+        where: { id: job.id },
+        data: { status: 'failed', attempts, lastError: msg },
+      });
+      return false;
+    }
+    const delayS =
+      ErpOutboxService.BACKOFF_S[Math.min(attempts - 1, ErpOutboxService.BACKOFF_S.length - 1)] ??
+      ErpOutboxService.BACKOFF_CAP_S;
+    await (this.prisma as any).erpOutbox.update({
+      where: { id: job.id },
+      data: {
+        status: 'pending', attempts, lastError: msg,
+        nextRetryAt: new Date(Date.now() + Math.min(delayS, ErpOutboxService.BACKOFF_CAP_S) * 1000),
+      },
+    });
+    return false;
+  }
+
+  /**
+   * Réplica da BAIXA de crediário pro Giga (o recibo já é fonte no Postgres e o
+   * espelho de abertas já foi atualizado por write-through). UPDATE PAGO='S' em
+   * `movimento` por REGISTRO+CONTROLE — idempotente (rodar 2x é inofensivo).
+   * As colunas resolvidas vêm no payload, então NÃO precisa detectar schema.
+   */
+  private async processCrediarioBaixa(job: any): Promise<boolean> {
+    const items = Array.isArray(job.payload?.items) ? job.payload.items : null;
+    const columns = job.payload?.columns;
+    if (!items?.length || !columns) {
+      await this.markFailed(job, 'crediario_baixa sem items/columns');
+      return false;
+    }
+    try {
+      let lastErr = '';
+      for (const it of items) {
+        const r = await (this.erp as any).markCrediarioParcelaPaid({
+          registro: it.registro,
+          controle: it.controle,
+          valorPago: it.valorPago,
+          dataPagamento: it.dataPagamento ? new Date(it.dataPagamento) : new Date(),
+          juros: Number(it.juros) || 0,
+          multa: Number(it.multa) || 0,
+          columns,
+        });
+        if (it.baixaItemId) {
+          await (this.prisma as any).crediarioBaixaItem
+            .update({ where: { id: it.baixaItemId }, data: { gigaUpdateOk: !!r.success, gigaError: r.error || null } })
+            .catch(() => {});
+        }
+        if (!r.success) lastErr = r.error || 'falha na baixa';
+      }
+      if (lastErr) throw new Error(lastErr);
+      await (this.prisma as any).erpOutbox.update({
+        where: { id: job.id },
+        data: { status: 'done', doneAt: new Date(), lastError: null },
+      });
+      this.logger.log(`[outbox] crediario_baixa ${job.saleId}: ${items.length} parcela(s) no Giga`);
+      return true;
+    } catch (e: any) {
+      this.logger.warn(`[outbox] crediario_baixa ${job.saleId} re-agendado: ${e?.message}`);
+      return this.requeueOrFail(job, e);
+    }
+  }
+
+  /** Réplica do ESTORNO de crediário pro Giga. UPDATE PAGO='N' — idempotente. */
+  private async processCrediarioEstorno(job: any): Promise<boolean> {
+    const items = Array.isArray(job.payload?.items) ? job.payload.items : null;
+    const columns = job.payload?.columns;
+    if (!items?.length || !columns) {
+      await this.markFailed(job, 'crediario_estorno sem items/columns');
+      return false;
+    }
+    try {
+      let lastErr = '';
+      for (const it of items) {
+        const r = await (this.erp as any).markCrediarioParcelaUnpaid({
+          registro: it.registro,
+          controle: it.controle,
+          columns,
+        });
+        if (!r.success) lastErr = r.error || 'falha no estorno';
+      }
+      if (lastErr) throw new Error(lastErr);
+      await (this.prisma as any).erpOutbox.update({
+        where: { id: job.id },
+        data: { status: 'done', doneAt: new Date(), lastError: null },
+      });
+      this.logger.log(`[outbox] crediario_estorno ${job.saleId}: ${items.length} parcela(s) revertidas no Giga`);
+      return true;
+    } catch (e: any) {
+      this.logger.warn(`[outbox] crediario_estorno ${job.saleId} re-agendado: ${e?.message}`);
+      return this.requeueOrFail(job, e);
+    }
   }
 
   private async markFailed(job: any, error: string): Promise<void> {

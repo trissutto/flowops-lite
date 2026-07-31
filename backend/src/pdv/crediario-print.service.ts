@@ -874,12 +874,21 @@ export class CrediarioPrintService {
       .map((p: any) => String(p || '').trim()).filter(Boolean);
     const endFull = partes.join(', ');
     if (endFull && f.endereco) {
-      doc.text(
+      const maxW = (f.endereco as any).w ?? 280;
+      // Encolhe a fonte do endereço até caber na largura em UMA linha só, pra
+      // endereço longo não estourar nem colidir com o CEP logo abaixo. Restaura
+      // 10pt depois — o CEP (desenhado na sequência) fica intocado.
+      let addrSize = 10;
+      while (addrSize > 6.5 && doc.fontSize(addrSize).widthOfString(endFull) > maxW) {
+        addrSize -= 0.5;
+      }
+      doc.fontSize(addrSize).text(
         endFull,
         f.endereco.x,
         blocoTopY + f.endereco.dy,
-        { width: (f.endereco as any).w ?? 280, lineBreak: false },
+        { width: maxW, lineBreak: false },
       );
+      doc.fontSize(10);
     }
     // CEP — só desenha se tiver dado e config tiver o campo
     if (data.cliente.cep && f.cep) {

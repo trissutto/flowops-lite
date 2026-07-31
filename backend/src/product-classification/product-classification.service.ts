@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
+import { ProductSearchService } from '../product-search/product-search.service';
 
 /**
  * Serviço da tela "Classificação de Produtos" (Cadastros).
@@ -51,6 +52,10 @@ const UPSERT_CHUNK = 500;
 // esta tela mostra o preço promocional pra planejamento/etiquetagem.
 const PROMO_JULHO_CUTOFF = '2023-12-31';
 const PROMO_JULHO_PCT = 0.5;
+// Coleções marcadas na REF entram na promo independente do ano de cadastro:
+// sufixo -INV (inverno) / -VER (verão) — regra do dono, 10/07/2026. A MESMA
+// regra existe no PDV (applyAutoDiscounts / YEAR_BASED).
+const PROMO_COLECAO_RE = /-(INV|VER)$/i;
 
 @Injectable()
 export class ProductClassificationService {
@@ -65,6 +70,7 @@ export class ProductClassificationService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly erp: ErpService,
+    private readonly productSearch: ProductSearchService,
   ) {}
 
   // ── Helpers ──────────────────────────────────────────────────────────────
@@ -119,8 +125,46 @@ export class ProductClassificationService {
     this.clsMap = null;
   }
 
+  /**
+   * ORDEM EXPLÍCITA DO DONO (10/07): a busca desta tela usa SOMENTE A
+   * DESCRIÇÃO — todas as palavras digitadas, em QUALQUER ordem e QUALQUER
+   * posição da DESCRICAOCOMPLETA ("VESTIDO 48", "30333", "MANGA CURTA 48
+   * PRETO" acham "VESTIDO LONGO MANGA CURTA REF 30333 PRETO 48"). SEM
+   * cascata código/REF, SEM fallback no Giga vivo. Produtos a mais que
+   * contenham as mesmas palavras entram mesmo (decisão do dono).
+   *
+   * Devolve o conjunto de REFs cujas variações casaram (a tela é por REF).
+   * null = sem termo, ou espelho vazio/erro → applyFilters cai no match
+   * textual local (que também é descrição: GROUP_CONCAT de todas por REF).
+   */
+  private async resolveSearchRefs(search?: string): Promise<Set<string> | null> {
+    const term = String(search || '').trim();
+    if (!term) return null;
+    try {
+      const rows = await this.productSearch.searchDescricaoOnly(term);
+      const set = new Set<string>();
+      for (const r of rows) {
+        // Produto sem REF entra no snapshot com chave sintética "#<codigo>".
+        const ref = this.normRef(r.ref || '') || (r.codigo ? this.normRef(`#${r.codigo}`) : '');
+        if (ref) set.add(ref);
+      }
+      if (set.size) return set;
+      this.logger.log(`[classificacao] busca "${term}": espelho sem match → texto local`);
+    } catch (e) {
+      this.logger.warn(`[classificacao] busca no espelho falhou, usando texto local: ${(e as Error).message}`);
+    }
+    return null; // fallback: applyFilters cai no match textual local (descrições)
+  }
+
   // ── Filtro em memória ────────────────────────────────────────────────────
-  private applyFilters(rows: RefRow[], cls: Map<string, ClsRow>, f: CatalogFilters): RefRow[] {
+  // searchRefs: quando presente, o match de busca é POR REF (as REFs cujas
+  // variações casaram a busca POR DESCRIÇÃO). null + termo = fallback textual local.
+  private applyFilters(
+    rows: RefRow[],
+    cls: Map<string, ClsRow>,
+    f: CatalogFilters,
+    searchRefs?: Set<string> | null,
+  ): RefRow[] {
     const words = String(f.search || '')
       .trim()
       .toUpperCase()
@@ -137,14 +181,17 @@ export class ProductClassificationService {
       if (categoria && r.categoria.toUpperCase() !== categoria) return false;
 
       if (words.length) {
-        // Busca por texto = REF + descrições + MARCA (igual às telas de consulta/
-        // realinhamento, onde o dono busca por "REF MARCA", ex.: "2319 KASUAL").
-        // A MARCA precisa entrar: antes "2319 KASUAL" dava ZERO porque "KASUAL"
-        // é a marca do 2319 e não estava em nenhuma descrição.
-        // Fornecedor SEGUE de fora (dado sujo: CNPJ/ruído poluía o resultado).
-        // `busca` cobre TODAS as variações da REF (não só uma).
-        const hay = `${r.ref} ${r.busca || r.descricao} ${r.marca || ''}`.toUpperCase();
-        for (const w of words) if (!hay.includes(w)) return false;
+        if (searchRefs) {
+          // Busca resolvida pelo Giga (rotina do Realinhamento): filtra por REF.
+          if (!searchRefs.has(r.ref)) return false;
+        } else {
+          // Fallback local (ERP indisponível): texto em ref + descrições + MARCA.
+          // A MARCA precisa entrar: "2319 KASUAL" dava ZERO porque KASUAL é a
+          // marca do 2319 e não aparecia em descrição nenhuma. Fornecedor segue
+          // de fora (dado sujo: CNPJ/ruído poluía o resultado).
+          const hay = `${r.ref} ${r.busca || r.descricao} ${r.marca || ''}`.toUpperCase();
+          for (const w of words) if (!hay.includes(w)) return false;
+        }
       }
 
       if (f.quick && f.quick !== 'todos') {
@@ -161,8 +208,12 @@ export class ProductClassificationService {
 
   // ── API pública ──────────────────────────────────────────────────────────
   async list(f: CatalogFilters, page: number, perPage: number) {
-    const [snap, cls] = await Promise.all([this.getSnapshot(), this.getClsMap()]);
-    const filtered = this.applyFilters(snap, cls, f);
+    const [snap, cls, searchRefs] = await Promise.all([
+      this.getSnapshot(),
+      this.getClsMap(),
+      this.resolveSearchRefs(f.search),
+    ]);
+    const filtered = this.applyFilters(snap, cls, f, searchRefs);
     const total = filtered.length;
     const p = Math.max(1, page || 1);
     const pp = Math.min(200, Math.max(1, perPage || 50));
@@ -174,22 +225,37 @@ export class ProductClassificationService {
     // (DATAALT mais recente). Regra da promoção de julho: cadastro até
     // 31/12/2023 = 50% OFF, EXCETO linha BÁSICA — a MESMA regra YEAR_BASED
     // que o PDV aplica na venda.
-    const precoByRef = await this.getPrecoEDataByRefs(pageRows.map((r) => r.ref));
+    //
+    // ── EXIBIÇÃO (10/07) — descrição/preço da REF vindos do espelho
+    // giga_produto (a MESMA fonte da live). Com BUSCA ativa, mostra a família
+    // QUE CASOU com a busca (caso REF 321: "KASUAL VEST" achava o VESTIDO 321
+    // KASUAL mas exibia a BERMUDA YACIMA, família dominante da mesma REF);
+    // sem busca, mostra a FAMÍLIA DOMINANTE (caso REF 2319: helicóptero 2016
+    // × blusão atual — MAX alfabético montava linha Frankenstein).
+    const searchWords = String(f.search || '').trim().split(/\s+/).filter((w) => w.length >= 2);
+    const [precoByRef, displayByRef] = await Promise.all([
+      this.getPrecoEDataByRefs(pageRows.map((r) => r.ref)),
+      this.productSearch.displayInfoByRefs(pageRows.map((r) => r.ref), { matchWords: searchWords }),
+    ]);
 
     const rows = pageRows.map((r) => {
       const c = cls.get(r.ref);
       const tipoProduto = c ? c.tipoProduto : 0;
       const info = precoByRef.get(r.ref) || null;
-      const preco = info?.preco ?? null;
+      const display = displayByRef.get(r.ref) || null;
+      // Preço: família dominante (giga_produto, fonte da live) > wincred_produtos.
+      const preco = display?.preco ?? info?.preco ?? null;
       const dataCadastro = info?.dataCadastro ?? null;
       const isBasico = tipoProduto === 1;
-      const elegivel = !!dataCadastro && dataCadastro <= PROMO_JULHO_CUTOFF;
+      const elegivel =
+        (!!dataCadastro && dataCadastro <= PROMO_JULHO_CUTOFF) ||
+        PROMO_COLECAO_RE.test(r.ref);
       const precoPromo = !isBasico && elegivel && preco != null
         ? Math.round(preco * (1 - PROMO_JULHO_PCT) * 100) / 100
         : null;
       return {
         ref: r.ref,
-        descricao: r.descricao,
+        descricao: display?.descricao || r.descricao,
         marca: r.marca,
         fornecedor: r.fornecedor,
         categoria: r.categoria,
@@ -375,8 +441,12 @@ export class ProductClassificationService {
     if (input.refs && input.refs.length) {
       refs = input.refs.map((r) => this.normRef(r)).filter(Boolean);
     } else if (input.filtro) {
-      const [snap, cls] = await Promise.all([this.getSnapshot(), this.getClsMap()]);
-      refs = this.applyFilters(snap, cls, input.filtro).map((r) => r.ref);
+      const [snap, cls, searchRefs] = await Promise.all([
+        this.getSnapshot(),
+        this.getClsMap(),
+        this.resolveSearchRefs(input.filtro.search),
+      ]);
+      refs = this.applyFilters(snap, cls, input.filtro, searchRefs).map((r) => r.ref);
     } else {
       return { ok: false, error: 'informe refs[] ou filtro', alterados: 0 };
     }

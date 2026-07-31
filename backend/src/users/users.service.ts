@@ -13,7 +13,10 @@ import { PrismaService } from '../prisma/prisma.service';
 // 'supervisor' = pode ver relatorios fiscais mas nao mexe em config.
 // 'franquias' = ADMINISTRADOR FRANQUIAS — read-only, só enxerga dados das lojas
 // franqueadas (tipo='FILIAL'): Notas/NFC-e, Faturamento e Estoque. Não age.
-const VALID_ROLES = ['admin', 'operator', 'store', 'supervisor', 'contador', 'franquias'] as const;
+// 'master_franquia' = MASTER DA FRANQUIA — mesmas funções de master (entra no PDV
+// de qualquer loja via impersonate), porém SOMENTE nas lojas tipo='FILIAL'.
+// Não enxerga lojas REDE nem telas da matriz.
+const VALID_ROLES = ['admin', 'operator', 'store', 'supervisor', 'contador', 'franquias', 'master_franquia'] as const;
 type Role = (typeof VALID_ROLES)[number];
 
 export interface UserInput {

@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
+import { CommissionEngineService } from '../commissions/commission-engine.service';
 
 /**
  * IntelligenceService — junta dados Giga (estoque + venda) com Postgres
@@ -21,6 +22,7 @@ export class IntelligenceService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly erp: ErpService,
+    private readonly commissionEngine: CommissionEngineService,
   ) {}
 
   /**
@@ -549,7 +551,9 @@ export class IntelligenceService {
       }), [], 'parados'),
       // ─── NOVOS ENRIQUECIMENTOS ───
       safe(this.erp.getSalesByDay({ inicio, fim, storeCode: input.storeCode }), [] as Array<{ date: string; pecas: number; valor: number }>, 'byDay'),
-      safe(this.erp.getTopVendedoras({ inicio, fim, storeCode: input.storeCode, limit: 10 }), [] as any[], 'topVendedoras'),
+      // MOTOR ÚNICO (decisão 29/07): ranking de vendedoras vem do PdvSale com
+      // comissão pela regra REAL — o 2% chapado sobre o caixa do Giga morreu.
+      safe(this.commissionEngine.rankingVendedoras({ inicio, fim, storeCode: input.storeCode, limit: 10 }), [] as any[], 'topVendedoras'),
       safe(this.erp.getTopMarcas({ inicio, fim, storeCode: input.storeCode, limit: 10 }), [] as any[], 'topMarcas'),
       safe(this.erp.getSalesSummary({ inicio, fim, storeCode: input.storeCode }), { pecas: 0, valor: 0, vendas: 0, ticketMedio: 0 }, 'summary'),
     ]);
@@ -562,13 +566,8 @@ export class IntelligenceService {
     const vendaDiaria = vendas.pecas / dias;
     const cobertura = vendaDiaria > 0 ? estoque / vendaDiaria : null;
 
-    // Calcula vendedoras com comissão (default 2%)
-    const COMISSAO_PCT = 2;
-    const topVendedorasComComissao = (topVendedoras as any[]).map((v) => ({
-      ...v,
-      comissao: Math.round(v.valor * (COMISSAO_PCT / 100) * 100) / 100,
-      ticketMedio: v.vendas > 0 ? v.valor / v.vendas : 0,
-    }));
+    // Comissão já vem CALCULADA pelo motor (regra real por cargo/vendedora)
+    const topVendedorasComComissao = topVendedoras as any[];
 
     // Variação % vs período anterior
     const pct = (atual: number, prev: number): number | null => {
@@ -652,12 +651,13 @@ export class IntelligenceService {
     from?: string;
     to?: string;
     storeCode?: string;
-    comissaoPct?: number; // % comissão padrão pra cálculo (ex: 2 = 2%)
+    comissaoPct?: number; // DEPRECIADO (29/07): ignorado — comissão vem do motor único
     plusSize?: boolean;
     compareYoY?: boolean; // se true, busca também o mesmo período do ano anterior
   }) {
     const { inicio, fim } = this.parseRange({ from: input.from, to: input.to });
-    const comissaoPct = input.comissaoPct ?? 2;
+    // comissaoPct DEPRECIADO (decisão 29/07): a comissão vem do motor único
+    // com a regra real de cada vendedora — % da URL é ignorado.
 
     // Lista de lojas ativas pra montar tabela by-store
     const stores = await (this.prisma as any).store.findMany({
@@ -671,7 +671,7 @@ export class IntelligenceService {
         this.erp.getSalesSummary({ inicio, fim, storeCode: input.storeCode || null }),
         this.erp.getSalesByDay({ inicio, fim, storeCode: input.storeCode || null }),
         this.erp.getSalesByStoresInRange(inicio, fim, !!input.plusSize),
-        this.erp.getTopVendedoras({ inicio, fim, storeCode: input.storeCode || null, limit: 30 }),
+        this.commissionEngine.rankingVendedoras({ inicio, fim, storeCode: input.storeCode || null, limit: 30 }),
         this.erp.getTopMarcas({ inicio, fim, storeCode: input.storeCode || null, limit: 15 }),
         this.erp.getTopRefsBySales({
           inicio, fim,
@@ -699,12 +699,8 @@ export class IntelligenceService {
     }).filter((s: any) => s.valor > 0 || s.pecas > 0)
       .sort((a: any, b: any) => b.valor - a.valor);
 
-    // Adiciona comissão a cada vendedora
-    const vendedorasComComissao = topVendedoras.map((v) => ({
-      ...v,
-      comissao: Math.round(v.valor * (comissaoPct / 100) * 100) / 100,
-      ticketMedio: v.vendas > 0 ? v.valor / v.vendas : 0,
-    }));
+    // Comissão já vem do MOTOR ÚNICO (regra real) — nada a recalcular aqui
+    const vendedorasComComissao = topVendedoras as any[];
 
     // ─── COMPARATIVO YoY ─────────────────────────────────────────────
     // Calcula mesmo período exatamente -1 ano (mantendo o número de dias).
@@ -751,7 +747,6 @@ export class IntelligenceService {
       },
       filtros: {
         storeCode: input.storeCode || null,
-        comissaoPct,
         plusSize: !!input.plusSize,
         compareYoY: !!input.compareYoY,
       },
@@ -819,7 +814,7 @@ export class IntelligenceService {
       safe(this.erp.getSalesSummary({ inicio: inicioYoY, fim: fimYoY }), { pecas: 0, valor: 0, vendas: 0, ticketMedio: 0 }, 'summaryYoY'),
       safe(this.erp.getSalesByStoresInRange(inicio, fim, plusSize), new Map<string, { pecas: number; valor: number }>(), 'byStore'),
       safe(this.erp.getSalesByStoresInRange(inicioYoY, fimYoY, plusSize), new Map<string, { pecas: number; valor: number }>(), 'byStoreYoY'),
-      safe(this.erp.getTopVendedoras({ inicio, fim, limit: 5 }), [] as any[], 'topVendedoras'),
+      safe(this.commissionEngine.rankingVendedoras({ inicio, fim, limit: 5 }), [] as any[], 'topVendedoras'),
       safe(this.erp.getTopMarcas({ inicio, fim, limit: 10 }), [] as any[], 'topMarcas'),
       safe(this.erp.getTopRefsBySales({ inicio, fim, plusSize, orderBy: 'valor', limit: 10 }), [] as any[], 'topProdutos'),
       safe(this.erp.getSalesByMonth({ months: 12 }), [] as any[], 'byMonth'),
@@ -863,12 +858,8 @@ export class IntelligenceService {
       ? lojasComVenda.reduce((s: number, l: any) => s + l.valor, 0) / lojasComVenda.length
       : 0;
 
-    // Comissão (2%) pras vendedoras
-    const COMISSAO_PCT = 2;
-    const topVendedorasComComissao = (topVendedoras as any[]).map((v) => ({
-      ...v,
-      comissao: Math.round(v.valor * (COMISSAO_PCT / 100) * 100) / 100,
-    }));
+    // Comissão vem CALCULADA do motor único (regra real por vendedora)
+    const topVendedorasComComissao = topVendedoras as any[];
 
     // ─── INSIGHTS AUTOMÁTICOS ─────────────────────────────────────────
     const insights: Array<{ tone: 'success' | 'warning' | 'info' | 'danger'; text: string }> = [];
@@ -919,7 +910,7 @@ export class IntelligenceService {
       const nome = top.nome || `cód ${top.codigo}`;
       insights.push({
         tone: 'success',
-        text: `${nome} é a top vendedora — R$ ${top.valor.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} em ${top.vendas} venda(s). Comissão: R$ ${top.comissao.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}.`,
+        text: `${nome} é a top vendedora — R$ ${top.valor.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} em ${top.vendas} venda(s).${top.comissao != null ? ` Comissão: R$ ${Number(top.comissao).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}.` : ''}`,
       });
     }
 

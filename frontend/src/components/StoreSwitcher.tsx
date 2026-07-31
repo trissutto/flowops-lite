@@ -36,11 +36,13 @@ export default function StoreSwitcher() {
   const [entering, setEntering] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
 
-  // Checa role uma vez no mount — so renderiza pra admin/master.
+  // Checa role uma vez no mount — so renderiza pra admin/master e master da
+  // franquia (este ve so as lojas FILIAL: o backend ja filtra /stores e o
+  // impersonate recusa loja REDE).
   useEffect(() => {
     api<Me>('/auth/me')
       .then((me) => {
-        setAllowed(me?.role === 'admin' || me?.role === 'master');
+        setAllowed(me?.role === 'admin' || me?.role === 'master' || me?.role === 'master_franquia');
       })
       .catch(() => setAllowed(false));
   }, []);

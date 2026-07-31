@@ -10,11 +10,28 @@ export class AuthService {
     private readonly jwt: JwtService,
   ) {}
 
+  /** E-mail do DONO — papel admin é blindado (ver guardião no login). */
+  private static readonly OWNER_EMAIL = 'trissutto@gmail.com';
+
   async login(email: string, password: string) {
-    const user = await this.prisma.user.findUnique({ where: { email } });
+    let user = await this.prisma.user.findUnique({ where: { email } });
     if (!user || !user.active) throw new UnauthorizedException('Credenciais invalidas');
     const ok = await bcrypt.compare(password, user.passwordHash);
     if (!ok) throw new UnauthorizedException('Credenciais invalidas');
+
+    // GUARDIÃO DO DONO (15/07): a conta do dono NUNCA pode perder o papel
+    // admin — um ajuste errado de cadastro rebaixou pra 'franquias' e trancou
+    // o dono no portal (e, sendo o único admin, ninguém conseguia desfazer
+    // pela tela). Se o papel estiver diferente, restaura no ato do login.
+    if (
+      user.email.trim().toLowerCase() === AuthService.OWNER_EMAIL &&
+      user.role !== 'admin'
+    ) {
+      user = await this.prisma.user.update({
+        where: { id: user.id },
+        data: { role: 'admin' },
+      });
+    }
 
     let storeCode: string | null = null;
     let storeName: string | null = null;
@@ -65,16 +82,20 @@ export class AuthService {
   async impersonateStore(adminUserId: string, storeCode: string) {
     const admin = await this.prisma.user.findUnique({ where: { id: adminUserId } });
     if (!admin || !admin.active) throw new UnauthorizedException('Admin invalido');
-    if (admin.role !== 'admin' && admin.role !== 'master') {
+    if (admin.role !== 'admin' && admin.role !== 'master' && admin.role !== 'master_franquia') {
       throw new UnauthorizedException('Apenas admin/master pode impersonar loja');
     }
 
     const store = await this.prisma.store.findUnique({
       where: { code: storeCode },
-      select: { id: true, code: true, name: true, active: true },
+      select: { id: true, code: true, name: true, active: true, tipo: true },
     });
     if (!store) throw new NotFoundException(`Loja ${storeCode} nao cadastrada`);
     if (!store.active) throw new BadRequestException(`Loja ${storeCode} esta inativa`);
+    // MASTER DA FRANQUIA: só abre lojas franqueadas (tipo=FILIAL) — nunca REDE.
+    if (admin.role === 'master_franquia' && store.tipo !== 'FILIAL') {
+      throw new UnauthorizedException(`Loja ${store.code} nao e franquia — acesso negado`);
+    }
 
     const payload = {
       sub: admin.id,
@@ -109,6 +130,30 @@ export class AuthService {
         impersonated: true,
       },
     };
+  }
+
+  /**
+   * TOKEN DO TOTEM DO PONTO (dono 30/07): re-assina a MESMA identidade da
+   * loja com validade de 365 dias (+ flag kiosk pra audit). O celular do
+   * ponto troca o token de 24h por este e para de acordar "EXPIRADO".
+   * Só conta de loja — admin/operador continuam com o TTL normal.
+   */
+  async kioskToken(user: any) {
+    if (user?.role !== 'store') {
+      throw new UnauthorizedException('Token de totem é só pra conta de loja');
+    }
+    const payload = {
+      sub: user.userId || user.sub,
+      email: user.email,
+      name: user.name,
+      role: 'store' as const,
+      storeId: user.storeId,
+      storeCode: user.storeCode ?? null,
+      storeName: user.storeName ?? null,
+      kiosk: true,
+    };
+    const accessToken = await this.jwt.signAsync(payload, { expiresIn: '365d' });
+    return { accessToken, expiresInDays: 365 };
   }
 
   async changePassword(input: {

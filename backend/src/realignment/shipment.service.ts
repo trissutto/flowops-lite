@@ -1744,12 +1744,27 @@ export class RealignmentShipmentService {
     };
   }
 
+  /** Define o meio de transporte da remessa (botão CORREIOS/PRÓPRIO na tela). */
+  async setTransportMode(shipmentId: string, mode: string) {
+    if (mode !== 'correios' && mode !== 'proprio') {
+      throw new BadRequestException("Transporte deve ser 'correios' ou 'proprio'.");
+    }
+    const s = await (this.prisma as any).realignmentShipment.update({
+      where: { id: shipmentId },
+      data: { transportMode: mode },
+    });
+    return { ok: true, transportMode: s.transportMode };
+  }
+
   async listAllShipmentsAdmin(input: {
     status?: string;
     fromStoreCode?: string;
     toStoreCode?: string;
     search?: string;
     daysAgo?: number;
+    /** Período LIVRE De/Até em YYYY-MM-DD (dono 29/07). Sem de/ate/daysAgo = TUDO. */
+    de?: string;
+    ate?: string;
   }) {
     const where: any = {};
     if (input.status) where.status = input.status;
@@ -1757,10 +1772,19 @@ export class RealignmentShipmentService {
     if (input.toStoreCode) where.toStoreCode = input.toStoreCode;
     if (input.search) where.code = { contains: input.search.trim(), mode: 'insensitive' };
 
-    const days = Number.isFinite(input.daysAgo) && (input.daysAgo as number) > 0 ? (input.daysAgo as number) : 30;
-    const since = new Date();
-    since.setDate(since.getDate() - days);
-    where.openedAt = { gte: since };
+    // Período: De/Até livres têm prioridade; daysAgo segue como legado; sem
+    // nenhum dos dois = SEM recorte (todo o histórico, limitado pelo take).
+    const isoDia = /^\d{4}-\d{2}-\d{2}$/;
+    const periodo: any = {};
+    if (input.de && isoDia.test(input.de)) periodo.gte = new Date(`${input.de}T00:00:00-03:00`);
+    if (input.ate && isoDia.test(input.ate)) periodo.lte = new Date(`${input.ate}T23:59:59.999-03:00`);
+    if (periodo.gte || periodo.lte) {
+      where.openedAt = periodo;
+    } else if (Number.isFinite(input.daysAgo) && (input.daysAgo as number) > 0) {
+      const since = new Date();
+      since.setDate(since.getDate() - (input.daysAgo as number));
+      where.openedAt = { gte: since };
+    }
 
     const shipments = await (this.prisma as any).realignmentShipment.findMany({
       where,
@@ -1789,6 +1813,18 @@ export class RealignmentShipmentService {
       else if (it.realignmentStatus === 'sent') agg.sent += 1;
     }
 
+    // NF-e AUTORIZADA por remessa (selo "nota emitida" na lista, dono 24/07).
+    const nfeDocs = await (this.prisma as any).nfeDoc.findMany({
+      where: { shipmentId: { in: ids }, status: 'authorized' },
+      select: { shipmentId: true, numero: true, serie: true },
+    });
+    const nfeByShipment = new Map<string, { numero: number; serie: string }>();
+    for (const d of nfeDocs as any[]) {
+      if (d.shipmentId && !nfeByShipment.has(d.shipmentId)) {
+        nfeByShipment.set(d.shipmentId, { numero: d.numero, serie: d.serie });
+      }
+    }
+
     return shipments.map((s: any) => {
       const agg = summary.get(s.id) || { totalItems: 0, totalQty: 0, received: 0, missing: 0, sent: 0 };
       // Tempo em trânsito (em horas) pra alertar remessas paradas
@@ -1796,6 +1832,7 @@ export class RealignmentShipmentService {
       if (s.status === 'in_transit' && s.sentAt) {
         hoursInTransit = (Date.now() - new Date(s.sentAt).getTime()) / 1000 / 60 / 60;
       }
+      const nfe = nfeByShipment.get(s.id);
       return {
         ...s,
         totalItemsLive: agg.totalItems,
@@ -1804,6 +1841,15 @@ export class RealignmentShipmentService {
         missingCount: agg.missing,
         pendingScanCount: agg.sent,
         hoursInTransit,
+        nfeEmitida: !!nfe,
+        nfeNumero: nfe?.numero ?? null,
+        nfeSerie: nfe?.serie ?? null,
+        // Transporte EFETIVO: escolhido (transportMode) ou regra automática
+        // (até 10 peças → correios; acima → próprio). Dono 29/07.
+        transportEfetivo: (s.transportMode === 'correios' || s.transportMode === 'proprio')
+          ? s.transportMode
+          : (agg.totalQty <= 10 ? 'correios' : 'proprio'),
+        transportManual: s.transportMode === 'correios' || s.transportMode === 'proprio',
       };
     });
   }

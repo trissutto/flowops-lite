@@ -2,6 +2,8 @@ import { BadRequestException, Injectable, Logger, NotFoundException } from '@nes
 import { ErpService } from '../erp/erp.service';
 import { CrediariosService } from '../crediarios/crediarios.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { MarcadosMirrorService } from './marcados-mirror.service';
+import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service';
 
 /**
  * MARCADOS — sistema de "leva pra provar em casa" da Lurd's.
@@ -28,7 +30,60 @@ export class MarcadosService {
     private readonly erp: ErpService,
     private readonly crediarios: CrediariosService,
     private readonly prisma: PrismaService,
+    private readonly mirror: MarcadosMirrorService,
+    private readonly catalog: WincredCatalogService,
   ) {}
+
+  /**
+   * MARCADOS_NATIVE_READS=1 liga as consultas pelo espelho nativo.
+   *
+   * DEFAULT OFF (26/07). Era `?? '' !== '0'` — ou seja, LIGADO quando a
+   * variável não existe no ambiente. Foi exatamente assim que o crediário
+   * sumiu do PDV em 25/07: a flag nunca foi criada no Railway e o deploy
+   * ativou a migração de leitura sozinho. Migração de leitura se liga por
+   * decisão, nunca por omissão.
+   */
+  private get nativeReads(): boolean {
+    return String(process.env.MARCADOS_NATIVE_READS ?? '0').trim() === '1';
+  }
+
+  /** Leituras nativas valem se a flag está ligada E o espelho já foi importado. */
+  private async useNative(): Promise<boolean> {
+    if (!this.nativeReads) return false;
+    try { return await this.mirror.hasMirror(); } catch { return false; }
+  }
+
+  /**
+   * Código do cliente no Giga tem padding de zero inconsistente ('01234' e
+   * '1234' são a MESMA pessoa). Comparar string crua contra o espelho devolve
+   * vazio e o marcado "some" — foi uma das causas do incidente do crediário.
+   */
+  private codVariants(cod: string | number): string[] {
+    const c = String(cod ?? '').trim();
+    const set = new Set<string>();
+    if (c) set.add(c);
+    const noZeros = c.replace(/^0+/, '');
+    if (noZeros) set.add(noZeros);
+    if (/^\d+$/.test(c)) set.add(String(Number(c)));
+    return [...set];
+  }
+
+  /** Converte a linha nativa pro shape UPPERCASE que as telas já consomem. */
+  private toGigaShape(m: any): any {
+    return {
+      REGISTRO: m.registroGiga != null ? Number(m.registroGiga) : null,
+      NUMERO: m.numero ?? null,
+      CODIGO: m.sku,
+      DATA: m.dataMarcacao,
+      DESCRICAO: m.descricao || '',
+      QUANTIDADE: m.qty,
+      VALOR: Number(m.valorUnit) || 0,
+      VALORTOTAL: Number(m.valorTotal) || 0,
+      VENDEDOR: m.vendedor ?? null,
+      OPERADOR: 0,
+      LOJA: m.storeCode,
+    };
+  }
 
   /**
    * Cria UM marcado a partir de uma venda PDV existente.
@@ -79,6 +134,15 @@ export class MarcadosService {
     }
     if (!sale.items || sale.items.length === 0) {
       throw new BadRequestException('Venda sem items');
+    }
+    // TRAVA ANTI-DUPLICAÇÃO: venda que veio de "Puxar pra venda" já tem as peças
+    // EM MARCA (marcadosRegistros). Marcar de novo re-insere tudo e duplica (o
+    // que aconteceu na Leticia). Pra vender é só finalizar — não re-marcar.
+    if (sale.marcadosRegistros) {
+      throw new BadRequestException(
+        'Essa venda foi PUXADA de marcados — as peças já estão em marca. Pra concluir, ' +
+        'FINALIZE a venda (vender). Não dá pra marcar de novo (evita duplicar).',
+      );
     }
 
     // ── MODO TREINAMENTO ──
@@ -159,6 +223,54 @@ export class MarcadosService {
       throw new BadRequestException(`Falha ao inserir marcados no Giga: ${insertResult.error}`);
     }
 
+    // Grava o NATIVO na hora (a consulta já lê daqui). Best-effort: captura
+    // os REGISTROs recém-inseridos pelo CONTROLE; se o Giga demorar, cria sem
+    // registroGiga e o sync horário casa por NUMERO+loja+sku.
+    try {
+      const lojaCode = String(input.storeCode || '').trim().toUpperCase().replace(/^LJ/i, '').padStart(2, '0');
+      const controle = Number(insertResult.controle) || null;
+      const regPorSku = new Map<string, number[]>();
+      if (controle) {
+        try {
+          const cap = await this.erp.runReadOnly(
+            `SELECT REGISTRO, CODIGO FROM caixa
+              WHERE NUMERO = ${controle} AND CLIENTE = ${codCliente} AND UPPER(MARCADO) = 'SIM'`,
+            { maxRows: 100, timeoutMs: 8000 },
+          );
+          for (const row of cap.rows || []) {
+            const k = String(row.CODIGO || '').trim();
+            if (!regPorSku.has(k)) regPorSku.set(k, []);
+            regPorSku.get(k)!.push(Number(row.REGISTRO));
+          }
+        } catch { /* segue sem registro — sync casa depois */ }
+      }
+      for (const it of sale.items) {
+        const sku = String(it.sku || it.ref || '').trim();
+        const fila = regPorSku.get(sku);
+        const reg = fila && fila.length ? fila.shift()! : null;
+        await (this.prisma as any).marcado.create({
+          data: {
+            registroGiga: reg ? BigInt(reg) : null,
+            storeCode: lojaCode,
+            codCliente: String(codCliente),
+            clienteNome: info.cliente?.nome || null,
+            cpf: String(sale.customerCpf || '').replace(/\D/g, '') || null,
+            numero: controle,
+            sku: sku.slice(0, 60),
+            descricao: String(it.descricao || '').slice(0, 160) || null,
+            qty: Number(it.qty) || 1,
+            valorUnit: Number(it.precoUnit) || 0,
+            valorTotal: Number(it.total) || 0,
+            dataMarcacao: new Date(),
+            status: 'ativo',
+            origem: 'flow',
+          },
+        });
+      }
+    } catch (e: any) {
+      this.logger.warn(`[marcados] nativo não gravado na criação (sync horário pega): ${e?.message}`);
+    }
+
     // 4. Baixa estoque Giga (igual venda — peças saem do estoque físico)
     if (this.erp.isWriteEnabled) {
       const stockItems = sale.items.map((it: any) => ({
@@ -166,7 +278,7 @@ export class MarcadosService {
         qty: Number(it.qty) || 1,
         storeCode: input.storeCode,
       }));
-      const stockResult = await this.erp.decreaseStock(stockItems);
+      const stockResult = await this.erp.decreaseStockAsync(stockItems);
       if (!stockResult.success) {
         this.logger.error(
           `[marcados] INSERT em caixa OK, mas falha ao baixar estoque: ${stockResult.error}. ` +
@@ -222,34 +334,66 @@ export class MarcadosService {
   }> {
     if (!cpf) throw new BadRequestException('CPF obrigatório');
     const safeCpf = String(cpf).replace(/\D/g, '');
-
-    // 1. Detecta tabela de clientes (já existe esse helper no crediarios)
-    const cm = await this.crediarios.detectClientesTable();
-    if (!cm) {
-      throw new BadRequestException('Tabela de clientes não detectada no Giga');
-    }
-
-    // 2. Busca cliente — UMA query so com OR cobrindo 3 formatos possiveis
-    // (digito puro, formatado XXX.XXX.XXX-XX, e qualquer formato no banco
-    // via REPLACE). Antes eram 3 queries serial — agora 1 round-trip so.
-    // Economiza ~300-500ms na busca por cliente.
     const formattedCpf = safeCpf.length === 11
       ? `${safeCpf.slice(0,3)}.${safeCpf.slice(3,6)}.${safeCpf.slice(6,9)}-${safeCpf.slice(9)}`
       : safeCpf;
 
-    const sql = `
-      SELECT * FROM \`${cm.table}\`
-      WHERE \`CPF\` = '${safeCpf}'
-         OR \`CPF\` = '${formattedCpf}'
-         OR REPLACE(REPLACE(REPLACE(\`CPF\`,'.',''),'-',''),'/','') = '${safeCpf}'
-      LIMIT 1
-    `;
-    const r = await this.erp.runReadOnly(sql, { maxRows: 1, timeoutMs: 10000 });
-    const row: any = r.rows[0] || null;
+    // 2. Busca cliente — ESPELHO Postgres primeiro (giga_clientes, importado).
+    // O caminho antigo batia no Giga ao vivo e pendurava a tela quando o pool
+    // travava. Giga só entra como fallback (recém-cadastrado que o sync ainda
+    // não trouxe). Se a pessoa tem ficha em várias lojas, vale a com
+    // classificação 'A' e maior limite (o antigo LIMIT 1 pegava uma qualquer).
+    let row: any = null;
+    try {
+      const fichas: any[] = await (this.prisma as any).gigaCliente.findMany({
+        where: { OR: [{ personKey: `cpf:${safeCpf}` }, { cpf: safeCpf }, { cpf: formattedCpf }] },
+      });
+      if (fichas.length) {
+        const f = fichas.slice().sort((a, b) => {
+          const aA = String(a.avaliacao || '').trim().toUpperCase() === 'A' ? 1 : 0;
+          const bA = String(b.avaliacao || '').trim().toUpperCase() === 'A' ? 1 : 0;
+          if (aA !== bA) return bA - aA;
+          return Number(b.limiteCompras || 0) - Number(a.limiteCompras || 0);
+        })[0];
+        row = {
+          CODIGO: f.codigo,
+          NOME: f.nome,
+          CPF: f.cpf || safeCpf,
+          AVALIACAO: f.avaliacao || '',
+          LIMITECOMPRAS: Number(f.limiteCompras || 0),
+          ULTCOMPRA: (f.rawJson as any)?.ULTCOMPRA ?? null,
+        };
+      }
+    } catch (e: any) {
+      this.logger.warn(`[marcados] espelho giga_clientes falhou, caindo pro Giga: ${e?.message}`);
+    }
+
+    if (!row) {
+      const cm = await this.crediarios.detectClientesTable();
+      if (!cm) {
+        throw new BadRequestException('Tabela de clientes não detectada no Giga');
+      }
+      const sql = `
+        SELECT * FROM \`${cm.table}\`
+        WHERE \`CPF\` = '${safeCpf}'
+           OR \`CPF\` = '${formattedCpf}'
+           OR REPLACE(REPLACE(REPLACE(\`CPF\`,'.',''),'-',''),'/','') = '${safeCpf}'
+        LIMIT 1
+      `;
+      const r = await this.erp.runReadOnly(sql, { maxRows: 1, timeoutMs: 10000 });
+      const giga: any = r.rows[0] || null;
+      if (giga) {
+        row = {
+          ...giga,
+          CODIGO: cm.codCliente ? giga[cm.codCliente] : (giga.CODCLIENTE ?? giga.CODIGO ?? ''),
+        };
+      }
+    }
+
     if (!row) {
       return {
         permitido: false,
-        motivo: 'Cliente não encontrado no Giga (precisa cadastrar antes)',
+        motivo: 'Cliente não encontrado (nem no espelho, nem no Giga — precisa cadastrar antes)',
         cliente: null,
         marcadosAtivos: [],
         totalMarcadosAtivos: 0,
@@ -257,22 +401,43 @@ export class MarcadosService {
       };
     }
 
-    const codCliente = String(
-      cm.codCliente ? row[cm.codCliente] : (row.CODCLIENTE ?? row.CODIGO ?? ''),
-    ).trim();
+    const codCliente = String(row.CODIGO ?? '').trim();
     const classificacao = String(row.AVALIACAO || row.avaliacao || '').trim().toUpperCase();
     const limiteTotal = Number(row.LIMITECOMPRAS || row.limitecompras || 0);
 
-    // 3. Busca marcados ativos do cliente na tabela `caixa`
-    const marcadosSql = `
-      SELECT REGISTRO, NUMERO, CODIGO, DATA, DESCRICAO, QUANTIDADE, VALOR, VALORTOTAL, VENDEDOR, OPERADOR, LOJA
-      FROM caixa
-      WHERE UPPER(MARCADO) = 'SIM' AND CLIENTE = ${Number(codCliente) || 0}
-      ORDER BY DATA DESC, REGISTRO DESC
-      LIMIT 200
-    `;
-    const m = await this.erp.runReadOnly(marcadosSql, { maxRows: 200, timeoutMs: 10000 });
-    const marcadosAtivos = m.rows;
+    // 3. Busca marcados ativos do cliente — NATIVO primeiro (tabela marcados
+    // no Postgres, "CHEGA DE GIGA" 21/07); Giga só se o espelho nunca rodou
+    // ou com MARCADOS_NATIVE_READS=0.
+    let marcadosAtivos: any[] | null = null;
+    if (await this.useNative()) {
+      const nativos: any[] = await (this.prisma as any).marcado.findMany({
+        where: {
+          status: 'ativo',
+          isTraining: false,
+          OR: [
+            ...(safeCpf ? [{ cpf: safeCpf }] : []),
+            ...(codCliente ? [{ codCliente: { in: this.codVariants(codCliente) } }] : []),
+          ],
+        },
+        orderBy: [{ dataMarcacao: 'desc' }, { createdAt: 'desc' }],
+        take: 200,
+      });
+      // REDE DE SEGURANÇA: espelho SEM linhas pra este cliente NÃO é resposta —
+      // é possível mismatch/sync parcial. Cai pro Giga (a autoridade). Sem isso,
+      // o cliente aparece "sem marcado" e o PDV libera marcação acima do limite.
+      if (nativos.length > 0) marcadosAtivos = nativos.map((n) => this.toGigaShape(n));
+    }
+    if (marcadosAtivos == null) {
+      const marcadosSql = `
+        SELECT REGISTRO, NUMERO, CODIGO, DATA, DESCRICAO, QUANTIDADE, VALOR, VALORTOTAL, VENDEDOR, OPERADOR, LOJA
+        FROM caixa
+        WHERE UPPER(MARCADO) = 'SIM' AND CLIENTE = ${Number(codCliente) || 0}
+        ORDER BY DATA DESC, REGISTRO DESC
+        LIMIT 200
+      `;
+      const m = await this.erp.runReadOnly(marcadosSql, { maxRows: 200, timeoutMs: 10000 });
+      marcadosAtivos = m.rows;
+    }
     const totalMarcadosAtivos = marcadosAtivos.reduce(
       (s: number, r: any) => s + (Number(r.VALORTOTAL) || Number(r.VALOR) || 0),
       0,
@@ -307,6 +472,66 @@ export class MarcadosService {
   }
 
   /**
+   * LIMPA DUPLICADOS de marcação de um cliente. Fecha (status='fechado') as
+   * linhas-FANTASMA: registros nativos EXATAMENTE iguais (mesma loja+numero+sku+
+   * qty+valorTotal) que o sync criou por não casar o órfão do Flow. Mantém 1 por
+   * peça — de preferência a ligada ao Giga (registroGiga != null).
+   * `dryRun` (default true): só mostra o que FECHARIA, sem tocar em nada.
+   * NÃO mexe em marcações com numero diferente (marcação separada de verdade).
+   */
+  async dedupMarcadosCliente(input: {
+    codCliente?: string;
+    cpf?: string;
+    dryRun?: boolean;
+  }): Promise<{ grupos: number; duplicados: number; dryRun: boolean; fechados: any[] }> {
+    const or: any[] = [];
+    if (input.cpf) or.push({ cpf: String(input.cpf).replace(/\D/g, '') });
+    if (input.codCliente) or.push({ codCliente: String(input.codCliente).trim() });
+    if (!or.length) throw new BadRequestException('Informe codCliente ou cpf');
+    const dryRun = input.dryRun !== false; // default TRUE (seguro)
+
+    const rows: any[] = await (this.prisma as any).marcado.findMany({
+      where: { status: 'ativo', isTraining: false, OR: or },
+      orderBy: [{ registroGiga: 'asc' }, { createdAt: 'asc' }],
+    });
+
+    const groups = new Map<string, any[]>();
+    for (const r of rows) {
+      const key = `${r.storeCode}|${r.sku}|${r.numero ?? ''}|${r.qty}|${Number(r.valorTotal)}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(r);
+    }
+
+    const fechados: any[] = [];
+    for (const g of groups.values()) {
+      if (g.length <= 1) continue; // sem duplicata exata
+      const keep = g.find((x) => x.registroGiga != null) || g[0];
+      for (const x of g) {
+        if (x.id === keep.id) continue;
+        fechados.push({
+          id: x.id,
+          sku: x.sku,
+          descricao: x.descricao,
+          valorTotal: Number(x.valorTotal),
+          numero: x.numero,
+          registroGiga: x.registroGiga != null ? String(x.registroGiga) : null,
+          mantido: keep.id,
+        });
+      }
+    }
+
+    if (!dryRun && fechados.length) {
+      await (this.prisma as any).marcado.updateMany({
+        where: { id: { in: fechados.map((f) => f.id) } },
+        data: { status: 'fechado', fechadoAt: new Date() },
+      });
+      this.logger.warn(`[marcados/dedup] ${fechados.length} duplicado(s) fechado(s) pra ${input.cpf || input.codCliente}`);
+    }
+
+    return { grupos: groups.size, duplicados: fechados.length, dryRun, fechados };
+  }
+
+  /**
    * Busca clientes por nome OU CPF parcial. Retorna ate 20 matches pra
    * vendedora escolher. Filtro: clientes que TEM pelo menos 1 marcado
    * ativo (status='SIM' na tabela `caixa`).
@@ -314,77 +539,185 @@ export class MarcadosService {
    * Usado na tela /pdv/marcados quando vendedora nao tem o CPF em maos
    * e quer pesquisar pelo nome (ex: "MARIA SILVA").
    */
-  async searchClientesByNameOrCpf(query: string): Promise<Array<{
+  async searchClientesByNameOrCpf(query: string, lojaScope?: string): Promise<Array<{
     codCliente: string;
+    loja?: string;
     nome: string;
     cpf: string;
     classificacao: string;
     limiteTotal: number;
-    qtdMarcados: number;
-    totalMarcados: number;
+    qtdMarcados: number | null;
+    totalMarcados: number | null;
   }>> {
     const q = String(query || '').trim();
     if (q.length < 2) return [];
 
-    const cm = await this.crediarios.detectClientesTable();
-    if (!cm) return [];
-
     // Detecta se eh CPF (so digitos, 5+ chars) ou nome (com letras)
     const onlyDigits = q.replace(/\D/g, '');
-    const isCpfLike = onlyDigits.length >= 5 && /^\d+$/.test(q.replace(/[.\-]/g, ''));
+    const isCpfLike = onlyDigits.length >= 5 && /^\d+$/.test(q.replace(/[.\-\s/]/g, ''));
 
-    const nomeCol = cm.nome || 'NOME';
-    const cpfCol = cm.cpf || 'CPF';
-    const codCol = cm.codCliente || 'CODIGO';
+    // 1) ESPELHO Postgres (giga_clientes) — a versão antiga batia no Giga ao
+    //    vivo com INNER JOIN na caixa INTEIRA (full scan sem índice em
+    //    MARCADO) e PENDURAVA a busca por nome (caso ELISA 21/07, Indaiatuba).
+    //    O espelho responde na hora e não depende do Giga estar de pé.
+    // ESCOPO POR LOJA (23/07): PDV só enxerga fichas da própria loja —
+    // cadastros repetem por loja (RESERVAS etc). Sem lojaScope (retaguarda),
+    // segue rede toda.
+    const lojaFiltro = lojaScope ? String(lojaScope).replace(/\D/g, '').padStart(2, '0') : null;
+    const fichas: any[] = await (this.prisma as any).gigaCliente.findMany({
+      where: {
+        ...(lojaFiltro ? { loja: lojaFiltro } : {}),
+        ...(isCpfLike
+          ? { OR: [{ personKey: { contains: onlyDigits } }, { cpf: { contains: onlyDigits } }] }
+          : { nome: { contains: q, mode: 'insensitive' } }),
+      },
+      select: {
+        loja: true, codigo: true, nome: true, cpf: true,
+        avaliacao: true, limiteCompras: true, personKey: true,
+      },
+      orderBy: [{ nome: 'asc' }],
+      take: 80,
+    });
 
-    // Valor da busca vai como PLACEHOLDER (?) — mysql2 escapa. Fim do risco de
-    // SQL injection (o replace(/'/g,"''") anterior nao cobria o bypass por
-    // backslash no MySQL). Nome de coluna/tabela vem da deteccao interna, nao
-    // do usuario.
-    // 1) Lista candidatos por nome/cpf; 2) filtra quem tem MARCADO='SIM' na caixa
-    let where: string;
-    const params: any[] = [];
-    if (isCpfLike) {
-      // Busca por CPF parcial (tolera com ou sem formatacao)
-      where = `(REPLACE(REPLACE(REPLACE(\`${cpfCol}\`,'.',''),'-',''),'/','') LIKE ?)`;
-      params.push(`%${onlyDigits}%`);
-    } else {
-      // Busca por nome (case-insensitive via UPPER)
-      where = `(UPPER(\`${nomeCol}\`) LIKE UPPER(?))`;
-      params.push(`%${q}%`);
+    // Dedup por PESSOA (mesma cliente tem ficha em várias lojas):
+    // vale a ficha com classificação 'A' / maior limite.
+    const porPessoa = new Map<string, any>();
+    for (const f of fichas) {
+      const key = f.personKey || `${f.loja}:${f.codigo}`;
+      const atual = porPessoa.get(key);
+      if (!atual) { porPessoa.set(key, { ...f }); continue; }
+      const novoA = String(f.avaliacao || '').trim().toUpperCase() === 'A';
+      const atualA = String(atual.avaliacao || '').trim().toUpperCase() === 'A';
+      const trocar = (novoA && !atualA) ||
+        (novoA === atualA && Number(f.limiteCompras || 0) > Number(atual.limiteCompras || 0));
+      if (trocar) porPessoa.set(key, { ...f, cpf: atual.cpf || f.cpf });
+      else if (!atual.cpf && f.cpf) atual.cpf = f.cpf;
     }
+    const lista = Array.from(porPessoa.values()).slice(0, 20);
+    if (!lista.length) return [];
 
-    const sql = `
-      SELECT c.\`${codCol}\` AS codCliente,
-             c.\`${nomeCol}\` AS nome,
-             c.\`${cpfCol}\` AS cpf,
-             c.AVALIACAO AS classificacao,
-             c.LIMITECOMPRAS AS limiteTotal,
-             COUNT(cx.REGISTRO) AS qtdMarcados,
-             COALESCE(SUM(cx.VALORTOTAL), 0) AS totalMarcados
-        FROM \`${cm.table}\` c
-        INNER JOIN caixa cx ON cx.CLIENTE = c.\`${codCol}\` AND UPPER(cx.MARCADO) = 'SIM'
-       WHERE ${where}
-       GROUP BY c.\`${codCol}\`, c.\`${nomeCol}\`, c.\`${cpfCol}\`, c.AVALIACAO, c.LIMITECOMPRAS
-       ORDER BY MAX(cx.DATA) DESC
-       LIMIT 20
-    `;
-
-    try {
-      const r = await this.erp.runReadOnly(sql, { maxRows: 20, timeoutMs: 10000 }, params);
-      return (r.rows || []).map((row: any) => ({
-        codCliente: String(row.codCliente || '').trim(),
-        nome: String(row.nome || '').trim(),
-        cpf: String(row.cpf || '').trim(),
-        classificacao: String(row.classificacao || '').trim().toUpperCase(),
-        limiteTotal: Number(row.limiteTotal) || 0,
-        qtdMarcados: Number(row.qtdMarcados) || 0,
-        totalMarcados: Math.round((Number(row.totalMarcados) || 0) * 100) / 100,
-      }));
+    // 2) Badge "em marca" — NATIVO quando o espelho de marcados existe
+    //    (zero Giga na busca); senão cai na agregada Giga com teto de 6s.
+    let agg = new Map<string, { qtd: number; total: number }>();
+    let aggOk = false;
+    if (await this.useNative()) {
+      try {
+        const cpfs = lista.map((m) => String(m.cpf || '').replace(/\D/g, '')).filter((c) => c.length === 11);
+        const codes = lista.map((m) => String(m.codigo || '').trim()).filter(Boolean);
+        const [porCpf, porCod]: any[][] = await Promise.all([
+          cpfs.length
+            ? (this.prisma as any).marcado.groupBy({
+                by: ['cpf'], _count: { _all: true }, _sum: { valorTotal: true },
+                where: { status: 'ativo', isTraining: false, cpf: { in: cpfs } },
+              })
+            : [],
+          codes.length
+            ? (this.prisma as any).marcado.groupBy({
+                by: ['codCliente'], _count: { _all: true }, _sum: { valorTotal: true },
+                where: { status: 'ativo', isTraining: false, codCliente: { in: codes } },
+              })
+            : [],
+        ]);
+        aggOk = true;
+        const byCpf = new Map(porCpf.map((x: any) => [x.cpf, x]));
+        const byCod = new Map(porCod.map((x: any) => [x.codCliente, x]));
+        for (const m of lista) {
+          const hit = byCpf.get(String(m.cpf || '').replace(/\D/g, '')) || byCod.get(String(m.codigo || '').trim());
+          if (hit) {
+            agg.set(String(Number(m.codigo)), {
+              qtd: Number(hit._count?._all) || 0,
+              total: Number(hit._sum?.valorTotal) || 0,
+            });
+          }
+        }
+      } catch (e: any) {
+        this.logger.warn(`[marcados] agregada nativa falhou: ${e?.message}`);
+        aggOk = false;
+      }
+    }
+    if (!aggOk) try {
+      const codes = Array.from(new Set(
+        lista.map((m) => Number(m.codigo)).filter((n) => Number.isFinite(n) && n > 0),
+      ));
+      if (codes.length) {
+        const p = this.erp.runReadOnly(
+          `SELECT CLIENTE, COUNT(*) AS qtd, COALESCE(SUM(VALORTOTAL),0) AS total
+             FROM caixa
+            WHERE UPPER(MARCADO) = 'SIM' AND CLIENTE IN (${codes.join(',')})
+            GROUP BY CLIENTE`,
+          { maxRows: 100, timeoutMs: 5000 },
+        );
+        const r: any = await Promise.race([
+          p.catch(() => null),
+          new Promise((res) => setTimeout(res, 6000, null)),
+        ]);
+        if (r?.rows) {
+          aggOk = true;
+          agg = new Map(r.rows.map((x: any) => [
+            String(Number(x.CLIENTE)),
+            { qtd: Number(x.qtd) || 0, total: Number(x.total) || 0 },
+          ]));
+        }
+      }
     } catch (e: any) {
-      this.logger.warn(`[marcados] searchClientesByNameOrCpf falhou: ${e?.message}`);
-      return [];
+      this.logger.warn(`[marcados] agregada de marcados falhou (segue sem badge): ${e?.message}`);
     }
+
+    // Quem tem marcado aparece primeiro (era o filtro da versão antiga)
+    const out = lista.map((m) => {
+      const a = agg.get(String(Number(m.codigo)));
+      return {
+        codCliente: String(m.codigo || '').trim(),
+        loja: String(m.loja || ''),
+        nome: String(m.nome || '').trim(),
+        cpf: String(m.cpf || '').trim(),
+        classificacao: String(m.avaliacao || '').trim().toUpperCase(),
+        limiteTotal: Number(m.limiteCompras) || 0,
+        qtdMarcados: aggOk ? (a?.qtd ?? 0) : null,
+        totalMarcados: aggOk ? Math.round((a?.total ?? 0) * 100) / 100 : null,
+      };
+    });
+    out.sort((a, b) => (b.totalMarcados || 0) - (a.totalMarcados || 0));
+    return out;
+  }
+
+  /**
+   * DIAGNÓSTICO read-only: agrupa os marcados ATIVOS de um cliente por NUMERO
+   * (cada "marcar" gera um NUMERO/controle). Serve pra enxergar a duplicação
+   * (ex.: 4 grupos ~iguais = marcaram 4× a mesma peça). NÃO altera nada.
+   */
+  async analisarMarcadosCliente(input: { cpf?: string; codCliente?: string }): Promise<{
+    totalPecas: number;
+    totalValor: number;
+    grupos: Array<{ numero: number | null; pecas: number; qtd: number; valor: number; comGiga: number; semGiga: number; data: any }>;
+  }> {
+    const or: any[] = [];
+    if (input.cpf) or.push({ cpf: String(input.cpf).replace(/\D/g, '') });
+    if (input.codCliente) or.push({ codCliente: String(input.codCliente).trim() });
+    if (!or.length) throw new BadRequestException('Informe codCliente ou cpf');
+
+    const rows: any[] = await (this.prisma as any).marcado.findMany({
+      where: { status: 'ativo', isTraining: false, OR: or },
+      orderBy: [{ dataMarcacao: 'asc' }, { createdAt: 'asc' }],
+    });
+
+    const byNumero = new Map<string, any>();
+    for (const r of rows) {
+      const k = r.numero != null ? String(r.numero) : 'sem-numero';
+      if (!byNumero.has(k)) {
+        byNumero.set(k, { numero: r.numero ?? null, pecas: 0, qtd: 0, valor: 0, comGiga: 0, semGiga: 0, data: r.dataMarcacao });
+      }
+      const g = byNumero.get(k);
+      g.pecas++;
+      g.qtd += Number(r.qty) || 0;
+      g.valor += Number(r.valorTotal) || 0;
+      if (r.registroGiga != null) g.comGiga++; else g.semGiga++;
+    }
+    const grupos = Array.from(byNumero.values())
+      .map((g) => ({ ...g, valor: Math.round(g.valor * 100) / 100 }))
+      .sort((a, b) => b.valor - a.valor);
+    const totalValor = Math.round(rows.reduce((s, r) => s + (Number(r.valorTotal) || 0), 0) * 100) / 100;
+    return { totalPecas: rows.length, totalValor, grupos };
   }
 
   /**
@@ -417,22 +750,29 @@ export class MarcadosService {
       };
     }
 
-    // 1. Estorna estoque Giga (peça volta pra loja)
-    const stockResult = await this.erp.increaseStock([
-      { sku: input.sku, qty: input.qty, storeCode: input.loja },
-    ]);
-    if (!stockResult.success) {
-      return {
-        ok: false,
-        error: `Falha ao estornar estoque Giga: ${stockResult.error}`,
-      };
-    }
-    const appliedCount = stockResult.applied?.length || 0;
-    if (appliedCount === 0) {
-      return {
-        ok: false,
-        error: `increaseStock retornou success mas 0 SKUs aplicados. Possível mismatch storeCode "${input.loja}" vs LOJA Giga.`,
-      };
+    // 1. Estorna estoque Giga (peça volta pra loja).
+    // Item AVULSO (sku MANUAL-...) não existe no estoque do Giga — pula o
+    // estorno e só remove a marcação (senão o increaseStock devolvia 0
+    // aplicados e travava a devolução do item de teste/avulso).
+    const isAvulso = String(input.sku).trim().toUpperCase().startsWith('MANUAL-');
+    let appliedCount = 0;
+    if (!isAvulso) {
+      const stockResult = await this.erp.increaseStock([
+        { sku: input.sku, qty: input.qty, storeCode: input.loja },
+      ]);
+      if (!stockResult.success) {
+        return {
+          ok: false,
+          error: `Falha ao estornar estoque Giga: ${stockResult.error}`,
+        };
+      }
+      appliedCount = stockResult.applied?.length || 0;
+      if (appliedCount === 0) {
+        return {
+          ok: false,
+          error: `increaseStock retornou success mas 0 SKUs aplicados. Possível mismatch storeCode "${input.loja}" vs LOJA Giga.`,
+        };
+      }
     }
 
     // 2. DELETE da linha caixa (tira do nome da pessoa marcada)
@@ -453,7 +793,196 @@ export class MarcadosService {
       `[marcados.devolver] REGISTRO=${reg} OK · estoque +${appliedCount}/${input.qty} em ${input.loja} · caixa.MARCADO removido`,
     );
 
+    // Atualiza o NATIVO na hora (a tela reflete sem esperar o sync horário)
+    try {
+      await (this.prisma as any).marcado.updateMany({
+        where: { registroGiga: BigInt(reg), status: 'ativo' },
+        data: { status: 'devolvido', devolvidoAt: new Date() },
+      });
+    } catch (e: any) {
+      this.logger.warn(`[marcados.devolver] nativo não atualizado (sync pega): ${e?.message}`);
+    }
+
     return { ok: true };
+  }
+
+  /**
+   * DESDUPLICA por PRODUTO (SKU): o cliente teve a MESMA peça marcada várias
+   * vezes (marcação repetida no PDV). Mantém 1 marcado de cada SKU (o ligado ao
+   * Giga / mais antigo) e DEVOLVE o resto ao estoque via devolverItemMarcado
+   * (increaseStock). Estoque é delta: as devoluções compensam as baixas extras.
+   * Peça sem linha no Giga (registroGiga null = fantasma do sync) só fecha o
+   * nativo (não mexe estoque). `dryRun` (default true): só mostra o plano.
+   */
+  async desduplicarMarcadosCliente(input: {
+    cpf?: string;
+    codCliente?: string;
+    dryRun?: boolean;
+  }): Promise<{
+    dryRun: boolean;
+    produtosMantidos: number;
+    valorMantido: number;
+    pecasRemovidas: number;
+    valorRemovido: number;
+    estoqueDevolvido: number;
+    falhas: string[];
+  }> {
+    const or: any[] = [];
+    if (input.cpf) or.push({ cpf: String(input.cpf).replace(/\D/g, '') });
+    if (input.codCliente) or.push({ codCliente: String(input.codCliente).trim() });
+    if (!or.length) throw new BadRequestException('Informe codCliente ou cpf');
+    const dryRun = input.dryRun !== false;
+
+    const rows: any[] = await (this.prisma as any).marcado.findMany({
+      where: { status: 'ativo', isTraining: false, OR: or },
+      orderBy: [{ dataMarcacao: 'asc' }, { createdAt: 'asc' }],
+    });
+    if (!rows.length) throw new BadRequestException('Cliente sem marcados ativos');
+
+    // Agrupa por SKU (mesmo produto = duplicidade). Mantém 1 por SKU.
+    const bySku = new Map<string, any[]>();
+    for (const r of rows) {
+      const k = String(r.sku || '').trim().toUpperCase() || `sem-sku-${r.id}`;
+      if (!bySku.has(k)) bySku.set(k, []);
+      bySku.get(k)!.push(r);
+    }
+
+    const remover: any[] = [];
+    let valorMantido = 0;
+    for (const g of bySku.values()) {
+      // Ordena: com registroGiga primeiro (real), depois mais antigo → mantém g[0].
+      g.sort((a, b) => {
+        const ga = a.registroGiga != null ? 0 : 1;
+        const gb = b.registroGiga != null ? 0 : 1;
+        if (ga !== gb) return ga - gb;
+        return new Date(a.dataMarcacao || 0).getTime() - new Date(b.dataMarcacao || 0).getTime();
+      });
+      valorMantido += Number(g[0].valorTotal) || 0;
+      for (let i = 1; i < g.length; i++) remover.push(g[i]);
+    }
+
+    const falhas: string[] = [];
+    let pecasRemovidas = 0;
+    let valorRemovido = 0;
+    let estoqueDevolvido = 0;
+
+    for (const m of remover) {
+      pecasRemovidas++;
+      valorRemovido += Number(m.valorTotal) || 0;
+      if (dryRun) continue;
+      try {
+        if (m.registroGiga != null) {
+          // Devolve de verdade: retorna estoque + remove linha no Giga + nativo.
+          const r = await this.devolverItemMarcado({
+            registro: Number(m.registroGiga),
+            sku: m.sku,
+            qty: Number(m.qty) || 1,
+            loja: m.storeCode,
+          });
+          if (r.ok) estoqueDevolvido += Number(m.qty) || 1;
+          else falhas.push(`REGISTRO ${m.registroGiga} (${m.sku}): ${r.error}`);
+        } else {
+          // Fantasma sem linha no Giga → só fecha o nativo (quem baixou estoque
+          // foi a marcação com Giga; este registro nunca tocou o estoque).
+          await (this.prisma as any).marcado.update({
+            where: { id: m.id },
+            data: { status: 'fechado', fechadoAt: new Date() },
+          });
+        }
+      } catch (e: any) {
+        falhas.push(`${m.sku}: ${e?.message || e}`);
+      }
+    }
+
+    if (!dryRun) {
+      this.logger.warn(
+        `[marcados/desdup] cliente ${input.cpf || input.codCliente}: manteve ${bySku.size} produto(s) único(s) ` +
+        `(R$${Math.round(valorMantido * 100) / 100}), removeu ${pecasRemovidas} peça(s) duplicada(s), ` +
+        `estoque devolvido=${estoqueDevolvido}, falhas=${falhas.length}`,
+      );
+    }
+
+    return {
+      dryRun,
+      produtosMantidos: bySku.size,
+      valorMantido: Math.round(valorMantido * 100) / 100,
+      pecasRemovidas,
+      valorRemovido: Math.round(valorRemovido * 100) / 100,
+      estoqueDevolvido,
+      falhas,
+    };
+  }
+
+  /**
+   * BAIXA SEM FINANCEIRO (dono 21/07): clientes-bin (DEFEITOS, FURTO, PEÇAS
+   * NÃO ENCONTRADAS, reservas...) acumulam marcado que NUNCA vira venda.
+   * A baixa remove a marcação do Giga (DELETE, só linha MARCADO='SIM') e
+   * marca o nativo como 'baixado' — SEM venda, SEM caixa, SEM devolver
+   * estoque (peça com defeito/furtada não volta pro estoque).
+   * Auditável: motivo + quem autorizou (senha GERENTE no controller).
+   */
+  async baixarMarcados(input: {
+    registros: Array<number | string>;
+    codCliente?: string;
+    loja?: string;
+    motivo: string;
+    autorizadoPor: string;
+  }): Promise<{ ok: boolean; baixados: number; falhas: string[] }> {
+    const motivo = String(input.motivo || '').trim().toUpperCase().slice(0, 160);
+    if (!motivo) throw new BadRequestException('Informe o motivo da baixa');
+    const regs = (input.registros || [])
+      .map((r) => Number(r))
+      .filter((n) => Number.isFinite(n) && n > 0);
+    if (!regs.length && !input.codCliente) {
+      throw new BadRequestException('Nada pra baixar');
+    }
+    if (!this.erp.isWriteEnabled) {
+      throw new BadRequestException('ERP_WRITE_ENABLED desabilitado — baixa não removeria do Giga');
+    }
+
+    let baixados = 0;
+    const falhas: string[] = [];
+    const agora = new Date();
+    const dadosBaixa = {
+      status: 'baixado',
+      baixadoAt: agora,
+      baixaMotivo: motivo,
+      baixaPor: String(input.autorizadoPor || '').slice(0, 120),
+    };
+
+    for (const reg of regs) {
+      const r = await this.erp.deleteCaixaMarcadoRow({ registro: reg });
+      if (!r.success && !/Nenhuma linha/i.test(r.error || '')) {
+        falhas.push(`REG ${reg}: ${r.error || 'falha'}`);
+        continue;
+      }
+      await (this.prisma as any).marcado.updateMany({
+        where: { registroGiga: BigInt(reg), status: 'ativo' },
+        data: dadosBaixa,
+      }).catch(() => { /* sync reconcilia */ });
+      baixados++;
+    }
+
+    // Linhas nativas do cliente SEM registroGiga (flow recém-criado) — baixa
+    // direto no nativo (não existem no Giga ainda; o sync não vai recriar).
+    if (input.codCliente) {
+      const loja = String(input.loja || '').replace(/\D/g, '').padStart(2, '0');
+      const r = await (this.prisma as any).marcado.updateMany({
+        where: {
+          status: 'ativo', registroGiga: null,
+          codCliente: String(input.codCliente),
+          ...(input.loja ? { storeCode: loja } : {}),
+        },
+        data: dadosBaixa,
+      });
+      baixados += Number(r?.count) || 0;
+    }
+
+    this.logger.log(
+      `[marcados.baixa] ${baixados} baixado(s) SEM financeiro · motivo="${motivo}" · por=${input.autorizadoPor}` +
+      (falhas.length ? ` · falhas=${falhas.length}` : ''),
+    );
+    return { ok: falhas.length === 0, baixados, falhas };
   }
 
   /**
@@ -465,34 +994,106 @@ export class MarcadosService {
     dataInicial?: string;
     dataFinal?: string;
     limit?: number;
+    /** ativo (default) | fechado | devolvido | baixado | fechado_giga | todos — só no NATIVO */
+    status?: string;
   } = {}): Promise<any> {
-    const limit = Math.min(500, input.limit || 100);
+    // Teto: nativo aguenta MUITO mais (Postgres indexado); o cap de 500 valia
+    // pro full-scan do Giga e escondia clientes antigos (caso Itanhaém 21/07).
+    const limitGiga = Math.min(500, input.limit || 100);
+    const limit = Math.min(10000, input.limit || 100);
+
+    // NATIVO primeiro — a versão Giga era full-scan da caixa POR REQUEST.
+    if (await this.useNative()) {
+      const st = String(input.status || 'ativo').trim();
+      const where: any = { isTraining: false };
+      if (st !== 'todos') where.status = st;
+      if (input.loja) where.storeCode = String(input.loja).replace(/[^0-9]/g, '').padStart(2, '0');
+      if (input.dataInicial || input.dataFinal) {
+        where.dataMarcacao = {
+          ...(input.dataInicial ? { gte: new Date(`${input.dataInicial}T00:00:00.000Z`) } : {}),
+          ...(input.dataFinal ? { lte: new Date(`${input.dataFinal}T23:59:59.999Z`) } : {}),
+        };
+      }
+      const [nativos, totalCount]: [any[], number] = await Promise.all([
+        (this.prisma as any).marcado.findMany({
+          where,
+          orderBy: [{ dataMarcacao: 'desc' }, { createdAt: 'desc' }],
+          take: limit,
+        }),
+        (this.prisma as any).marcado.count({ where }),
+      ]);
+      // Nome na HORA pros que o sync ainda não enriqueceu (casamento
+      // normalizado com giga_clientes — padding de zeros varia no Giga)
+      let nomes: Map<string, { nome: string | null; cpf: string | null }> | null = null;
+      const semNome = nativos.filter((n) => !n.clienteNome);
+      if (semNome.length) {
+        try {
+          nomes = await this.mirror.lookupNomes(
+            semNome.map((n) => ({ storeCode: n.storeCode, codCliente: n.codCliente })),
+          );
+        } catch { /* segue sem nome */ }
+      }
+      const normNum = (s: any) => String(s ?? '').replace(/\D/g, '').replace(/^0+/, '') || '0';
+      const rows = nativos.map((n) => ({
+        ...this.toGigaShape(n),
+        codCliente: n.codCliente,
+        clienteNome: n.clienteNome
+          || nomes?.get(`${normNum(n.storeCode)}|${normNum(n.codCliente)}`)?.nome
+          || null,
+        classificacao: null,
+        // Histórico: além dos ativos, a tela mostra o que aconteceu com cada peça
+        status: n.status,
+        fechadoAt: n.fechadoAt,
+        devolvidoAt: n.devolvidoAt,
+        baixadoAt: n.baixadoAt,
+        baixaMotivo: n.baixaMotivo,
+        baixaPor: n.baixaPor,
+        saleId: n.saleId,
+      }));
+      return { rows, total: totalCount, truncado: totalCount > rows.length, fonte: 'flow' };
+    }
+    // Fallback GIGA ao vivo (espelho vazio / MARCADOS_NATIVE_READS=0)
     const where: string[] = [`UPPER(c.MARCADO) = 'SIM'`];
-    if (input.loja) where.push(`c.LOJA = '${input.loja.replace(/[^0-9]/g, '')}'`);
-    if (input.dataInicial) where.push(`c.DATA >= '${input.dataInicial}'`);
-    if (input.dataFinal) where.push(`c.DATA <= '${input.dataFinal}'`);
+    if (input.loja) where.push(`c.LOJA = '${input.loja.replace(/[^0-9]/g, '').padStart(2, '0')}'`);
+    if (input.dataInicial) where.push(`c.DATA >= '${input.dataInicial.replace(/[^0-9-]/g, '')}'`);
+    if (input.dataFinal) where.push(`c.DATA <= '${input.dataFinal.replace(/[^0-9-]/g, '')}'`);
 
-    const cm = await this.crediarios.detectClientesTable();
-    const joinClientes = cm
-      ? `LEFT JOIN \`${cm.table}\` cli ON cli.\`${cm.codCliente}\` = c.CLIENTE`
-      : '';
-    const selectNome = cm?.nome ? `cli.\`${cm.nome}\` AS clienteNome,` : '';
+    try {
+      const cm = await this.crediarios.detectClientesTable();
+      // BUG FIX (21/07): o JOIN era só por CÓDIGO — como o código de cliente
+      // REPETE em cada loja (cód 2 existe em todas), cada linha da caixa
+      // multiplicava com o nome do cliente de OUTRAS lojas (aparecia "VISA
+      // ELECTRON"/"CIELO" como cliente). JOIN agora casa LOJA também.
+      // CAST dos dois lados: padding de zeros da LOJA é inconsistente no Giga
+      // ('1' × '01') — igualdade direta anulava o nome (LEFT JOIN sem match).
+      const joinClientes = cm
+        ? `LEFT JOIN \`${cm.table}\` cli ON cli.\`${cm.codCliente}\` = c.CLIENTE AND CAST(cli.LOJA AS UNSIGNED) = CAST(c.LOJA AS UNSIGNED)`
+        : '';
+      const selectNome = cm?.nome ? `cli.\`${cm.nome}\` AS clienteNome,` : '';
 
-    const sql = `
-      SELECT
-        c.REGISTRO, c.NUMERO, c.CODIGO, c.DATA, c.DESCRICAO,
-        c.QUANTIDADE, c.VALOR, c.VALORTOTAL, c.VENDEDOR, c.LOJA,
-        c.CLIENTE AS codCliente,
-        ${selectNome}
-        cli.AVALIACAO AS classificacao
-      FROM caixa c
-      ${joinClientes}
-      WHERE ${where.join(' AND ')}
-      ORDER BY c.DATA DESC, c.REGISTRO DESC
-      LIMIT ${limit}
-    `;
-    const r = await this.erp.runReadOnly(sql, { maxRows: limit, timeoutMs: 15000 });
-    return { rows: r.rows, total: r.rows.length };
+      const sql = `
+        SELECT
+          c.REGISTRO, c.NUMERO, c.CODIGO, c.DATA, c.DESCRICAO,
+          c.QUANTIDADE, c.VALOR, c.VALORTOTAL, c.VENDEDOR, c.LOJA,
+          c.CLIENTE AS codCliente,
+          ${selectNome}
+          cli.AVALIACAO AS classificacao
+        FROM caixa c
+        ${joinClientes}
+        WHERE ${where.join(' AND ')}
+        ORDER BY c.DATA DESC, c.REGISTRO DESC
+        LIMIT ${limitGiga}
+      `;
+      const r = await this.erp.runReadOnly(sql, { maxRows: limitGiga, timeoutMs: 15000 });
+      return { rows: r.rows, total: r.rows.length, fonte: 'giga' };
+    } catch (e: any) {
+      // NUNCA 500 na tela — devolve vazio com aviso acionável.
+      this.logger.warn(`[marcados] listAll (Giga ao vivo) falhou: ${e?.message}`);
+      return {
+        rows: [], total: 0, fonte: 'giga',
+        error: 'Giga demorou/caiu nessa consulta. Rode "Importar marcados do Giga" na tela do espelho Wincred — aí essa tela lê o Flow e responde na hora.',
+      };
+    }
   }
 
   // ── PUXAR MARCADOS PRA VENDA NO PDV ──────────────────────────────
@@ -525,14 +1126,25 @@ export class MarcadosService {
     const regsCsv = input.registros.map((r) => Number(r)).filter((r) => Number.isFinite(r) && r > 0);
     if (regsCsv.length === 0) throw new BadRequestException('REGISTROs invalidos');
 
-    const sql = `
-      SELECT REGISTRO, CODIGO, DESCRICAO, QUANTIDADE, VALOR, VALORTOTAL, LOJA
-      FROM caixa
-      WHERE REGISTRO IN (${regsCsv.join(',')})
-        AND UPPER(MARCADO) = 'SIM'
-    `;
-    const r = await this.erp.runReadOnly(sql, { maxRows: 100, timeoutMs: 15000 });
-    const rows: any[] = r.rows || [];
+    // NATIVO primeiro; se o espelho não tiver os REGISTROs (defasado), cai
+    // pro Giga ao vivo — puxar pra venda não pode falhar por espelho velho.
+    let rows: any[] = [];
+    if (await this.useNative()) {
+      const nativos: any[] = await (this.prisma as any).marcado.findMany({
+        where: { status: 'ativo', registroGiga: { in: regsCsv.map((n) => BigInt(n)) } },
+      });
+      rows = nativos.map((n) => this.toGigaShape(n));
+    }
+    if (rows.length === 0) {
+      const sql = `
+        SELECT REGISTRO, CODIGO, DESCRICAO, QUANTIDADE, VALOR, VALORTOTAL, LOJA
+        FROM caixa
+        WHERE REGISTRO IN (${regsCsv.join(',')})
+          AND UPPER(MARCADO) = 'SIM'
+      `;
+      const r = await this.erp.runReadOnly(sql, { maxRows: 100, timeoutMs: 15000 });
+      rows = r.rows || [];
+    }
     if (rows.length === 0) {
       throw new BadRequestException('Nenhum marcado ativo encontrado pros REGISTROs informados');
     }
@@ -579,19 +1191,25 @@ export class MarcadosService {
       const precoUnit = qty > 0 ? Math.round((valorTotal / qty) * 100) / 100 : Number(row.VALOR) || 0;
       const descricao = String(row.DESCRICAO || row.CODIGO || 'Item marcado').slice(0, 80);
       const sku = String(row.CODIGO || `MARCADO-${row.REGISTRO}`);
+      // Resolve REF real + dataCadastro (+cor/tam/ncm/cfop/ean) pelo catálogo,
+      // igual ao bipe. SEM isso a campanha (liquida antigos por data / coleção
+      // -INV/-VER por REF) não consegue avaliar a peça e o desconto não aplica.
+      // precoUnit fica o da marcação (a campanha aplica o % em cima dele).
+      let info: any = null;
+      try { info = await this.catalog.getPdvProductInfo(sku); } catch { /* mantém básico */ }
       try {
         await (this.prisma as any).pdvSaleItem.create({
           data: {
             saleId: sale.id,
             sku,
-            ean: null,
-            ref: 'MARCADO',
-            cor: null,
-            tamanho: null,
+            ean: info?.ean ?? null,
+            ref: info?.ref || 'MARCADO',
+            cor: info?.cor ?? null,
+            tamanho: info?.tamanho ?? null,
             descricao,
-            ncm: null,
-            cfop: null,
-            dataCadastro: null,
+            ncm: info?.ncm ?? null,
+            cfop: info?.cfop ?? null,
+            dataCadastro: info?.dataCadastro ?? null,
             qty,
             precoUnit,
             desconto: 0,
@@ -613,6 +1231,26 @@ export class MarcadosService {
         total,
       },
     });
+
+    // TIRA da tela de Marcados JÁ (status 'puxado') — peça não pode ficar nas
+    // DUAS telas ao mesmo tempo. Cancelar a venda devolve pra 'ativo'
+    // (pdv.cancel); finalizar fecha de vez (erpStepFecharMarcados). Treino não
+    // grava marcadosRegistros, então nem entra aqui.
+    if (!input.isTraining) {
+      const regsPuxados = rows
+        .map((x: any) => Number(x.REGISTRO))
+        .filter((n: number) => Number.isFinite(n) && n > 0);
+      if (regsPuxados.length) {
+        try {
+          await (this.prisma as any).marcado.updateMany({
+            where: { registroGiga: { in: regsPuxados.map((n) => BigInt(n)) }, status: 'ativo' },
+            data: { status: 'puxado', saleId: sale.id },
+          });
+        } catch (e: any) {
+          this.logger.warn(`[marcados/puxar] não marcou como 'puxado': ${e?.message}`);
+        }
+      }
+    }
 
     return { saleId: sale.id, itemsAdded, total };
   }
