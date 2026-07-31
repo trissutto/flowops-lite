@@ -3,6 +3,7 @@ import { Inter, Playfair_Display } from 'next/font/google';
 import './globals.css';
 import { Providers } from './providers';
 import { buildMetadata, jsonLdGraph, organizationSchema, websiteSchema } from '@/lib/seo';
+import { consentBootstrapSnippet } from '@/lib/tracking/consent';
 
 /**
  * Playfair Display — títulos. Pesos 400/500/600 e itálico (a palavra de ênfase
@@ -42,6 +43,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="pt-BR" className={`${playfair.variable} ${inter.variable}`}>
       <head>
+        {/* CONSENT MODE V2 — PRECISA ser o primeiro script da página. O Google
+            exige que o estado `default: denied` chegue ANTES do gtag.js; se
+            esta ordem inverter, ele assume consentimento concedido e a
+            conformidade com a LGPD vira ficção. Não mover daqui. */}
+        <script dangerouslySetInnerHTML={{ __html: consentBootstrapSnippet() }} />
         {/* JSON-LD global: Organization + WebSite (SearchAction). Nós de página
             são injetados pela própria página. */}
         <script
