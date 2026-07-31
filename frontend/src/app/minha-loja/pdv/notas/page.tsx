@@ -102,6 +102,27 @@ export default function NotasEmitidasPage() {
   const [cancelando, setCancelando] = useState(false);
   const [cancelError, setCancelError] = useState<string | null>(null);
 
+  // BAIXAR O XML REJEITADO — a SEFAZ no 225 diz QUE falhou, nunca ONDE.
+  // Sem o XML na mão, cada rejeição vira adivinhação.
+  const [xmlBusy, setXmlBusy] = useState(false);
+  const baixarXml = async (saleId: string) => {
+    if (xmlBusy) return;
+    setXmlBusy(true);
+    try {
+      const r = await api<any>(`/pdv/sales/${saleId}/nfce/xml`);
+      const blob = new Blob([r.xml], { type: 'application/xml' });
+      const a2 = document.createElement('a');
+      a2.href = URL.createObjectURL(blob);
+      a2.download = `nfce-rejeitada-${r.cStat || 'x'}-${saleId.slice(0, 8)}.xml`;
+      a2.click();
+      setTimeout(() => URL.revokeObjectURL(a2.href), 30_000);
+    } catch (e: any) {
+      alert(e?.message || 'Falha ao baixar o XML');
+    } finally {
+      setXmlBusy(false);
+    }
+  };
+
   // Corrigir & reemitir (notas rejeitadas)
   const [fixTarget, setFixTarget] = useState<NfceRow | null>(null);
   const [fixDoc, setFixDoc] = useState('');
@@ -671,6 +692,15 @@ export default function NotasEmitidasPage() {
               <div className={`rounded p-2 text-xs border ${fixResult.ok ? 'bg-emerald-50 border-emerald-300 text-emerald-800' : 'bg-rose-50 border-rose-300 text-rose-800'}`}>
                 {fixResult.ok ? '✅ ' : '❌ '}{fixResult.msg}
               </div>
+            )}
+            {(fixTarget.nfceStatus === 'rejected' || fixTarget.nfceStatus === 'error') && (
+              <button
+                onClick={() => baixarXml(fixTarget.id)}
+                disabled={xmlBusy}
+                className="w-full px-3 py-2 border border-slate-300 rounded text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+              >
+                {xmlBusy ? 'Baixando…' : '⬇ Baixar o XML rejeitado (pra achar a tag errada)'}
+              </button>
             )}
             <div className="flex gap-2">
               <button
