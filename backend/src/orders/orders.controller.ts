@@ -177,9 +177,16 @@ export class OrdersController {
       };
     });
 
-    // ── Pedidos da LIVE (source='live') — MESMA fila, MESMA linha ──
-    // Vivem só no Flow (wcOrderId sintético). Mapeia o slug da aba pro status
-    // local equivalente e devolve no formato idêntico ao das linhas do WC.
+    // ── Pedidos NATIVOS do Flow — MESMA fila, MESMA linha ──
+    // Duas origens vivem só no Postgres (wcOrderId sintético, sem WooCommerce):
+    //   'live'      → Live Commerce, nº "LIVE-<comanda>", faixa 900M
+    //   'ecommerce' → site NOVO (sprint 011), nº "LP-xxxxxx", faixa 950M
+    // Mapeia o slug da aba pro status local equivalente e devolve no formato
+    // idêntico ao das linhas do WC, pra tela não saber de onde veio.
+    //
+    // Pedido do e-commerce só entra aqui depois de PAGO: ele nasce
+    // 'awaiting_payment' e vira 'processing' na confirmação — separar o que
+    // não foi pago seria pedir prejuízo.
     const LIVE_STATUS_BY_SLUG: Record<string, string[]> = {
       processing: ['processing'],
       separacao: ['separating'],
@@ -191,7 +198,7 @@ export class OrdersController {
     if (liveStatuses?.length) {
       const liveOrders = await (this.prisma as any).order.findMany({
         where: {
-          source: 'live',
+          source: { in: ['live', 'ecommerce'] },
           status: { in: liveStatuses },
           ...(search
             ? {
@@ -239,7 +246,7 @@ export class OrdersController {
           total: String(o.totalAmount ?? 0),
           currency: 'BRL',
           customerName: o.customerName ?? '',
-          shippingMethod: o.shippingMethod ?? 'LIVE',
+          shippingMethod: o.shippingMethod ?? (o.source === 'ecommerce' ? 'SITE' : 'LIVE'),
           shippingState: addrState,
           pickOrders,
           shipped: allShipped,
@@ -247,8 +254,10 @@ export class OrdersController {
           trackingCarrier: firstTracking?.carrier ?? null,
           sellerId: o.sellerId ?? null,
           sellerName: o.sellerName ?? null,
-          orderSource: 'live',
-          origem: 'Live Commerce',
+          // A origem sai do REGISTRO, não fixa: a mesma consulta agora traz
+          // live e e-commerce, e a tela filtra/pinta por este campo.
+          orderSource: o.source,
+          origem: o.source === 'ecommerce' ? 'Site (novo)' : 'Live Commerce',
         };
       });
     }

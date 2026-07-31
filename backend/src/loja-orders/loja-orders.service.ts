@@ -9,7 +9,7 @@ import { computePersonKeyFromCpf } from '../customers/customer-aggregation.helpe
  * PEDIDO DO E-COMMERCE NOVO (sprint 011).
  *
  * O pedido da loja nasce AQUI, no Postgres do Flow, no MESMO trilho do pedido
- * do site/live: vira um `Order` com `source='loja'`, cai na tela Pedidos &
+ * do site/live: vira um `Order` com `source='ecommerce'`, cai na tela Pedidos &
  * Separação quando o pagamento confirma, e a matriz roteia igual a qualquer
  * outro. Nada de tabela paralela — quem já sabe ler Order (roteamento,
  * separação, etiqueta, NF-e, DRE, faturamento) passa a ver o e-commerce novo
@@ -388,7 +388,7 @@ export class LojaOrdersService {
   private async proximaSequencia(): Promise<number> {
     const base = LojaOrdersService.LOJA_WC_ID_BASE;
     const ultimo = await (this.prisma as any).order.findFirst({
-      where: { source: 'loja', wcOrderId: { gte: base } },
+      where: { source: 'ecommerce', wcOrderId: { gte: base } },
       orderBy: { wcOrderId: 'desc' },
       select: { wcOrderId: true },
     });
@@ -488,7 +488,7 @@ export class LojaOrdersService {
           data: {
             wcOrderId: base + seq,
             wcOrderNumber: this.numeroPedido(seq),
-            source: 'loja',
+            source: 'ecommerce',
             // Enquanto não pagar, o pedido NÃO existe pra retaguarda: só vira
             // 'processing' (= fila de roteamento) quando o dinheiro entra.
             status: 'awaiting_payment',
@@ -903,7 +903,7 @@ export class LojaOrdersService {
   /** GET /public/loja/pedido/:id — sem PII inteira, sem tracking, sem gateway. */
   async buscarPedido(id: string): Promise<{ ok: boolean; order?: any; error?: string }> {
     const order = await (this.prisma as any).order
-      .findFirst({ where: { id, source: 'loja' }, include: { items: true } })
+      .findFirst({ where: { id, source: 'ecommerce' }, include: { items: true } })
       .catch(() => null);
     if (!order) return { ok: false, error: 'Pedido não encontrado.' };
 
@@ -975,7 +975,7 @@ export class LojaOrdersService {
   async statusPedido(id: string): Promise<{ ok: boolean; status?: string; paidAt?: string; error?: string }> {
     const order = await (this.prisma as any).order
       .findFirst({
-        where: { id, source: 'loja' },
+        where: { id, source: 'ecommerce' },
         select: { id: true, status: true, paidAt: true, paymentInfo: true },
       })
       .catch(() => null);
@@ -1007,7 +1007,7 @@ export class LojaOrdersService {
     if (!orderId) return { ok: false, reason: 'sem id' };
 
     const order = await (this.prisma as any).order
-      .findFirst({ where: { id: orderId, source: 'loja' }, include: { items: true } })
+      .findFirst({ where: { id: orderId, source: 'ecommerce' }, include: { items: true } })
       .catch(() => null);
     if (!order) return { ok: false, reason: 'não é pedido da loja' };
 
