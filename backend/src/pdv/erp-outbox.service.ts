@@ -98,6 +98,8 @@ export class ErpOutboxService {
     if (job.kind === 'crediario_estorno') return this.processCrediarioEstorno(job);
     if (job.kind === 'marcado_criar') return this.processMarcadoCriar(job);
     if (job.kind === 'marcado_remover') return this.processMarcadoRemover(job);
+    if (job.kind === 'categoria_criar') return this.processCategoriaCriar(job);
+    if (job.kind === 'bandeira_fechamento') return this.processBandeiraFechamento(job);
     if (job.kind !== 'venda') {
       await this.markFailed(job, `kind desconhecido: ${job.kind}`);
       return false;
@@ -131,30 +133,42 @@ export class ErpOutboxService {
 
     let caixaDoneAt: Date | null = job.caixaDoneAt ? new Date(job.caixaDoneAt) : null;
     let stockDoneAt: Date | null = job.stockDoneAt ? new Date(job.stockDoneAt) : null;
-    let stepError: string | null = null;
+    const erros: string[] = [];
 
     // ── Passo 1: caixa (NUNCA re-executa depois de done — duplicaria a venda) ──
     if (!caixaDoneAt) {
       const r = await this.pdv.erpStepGravarCaixa(sale, payments, finalMethod);
       if (r.ok) caixaDoneAt = new Date();
-      else stepError = `caixa: ${r.error || 'falha'}`;
+      else erros.push(`caixa: ${r.error || 'falha'}`);
     }
 
     // ── Passo 2: estoque (guard extra via sale.stockDecreasedAt) ──
-    if (!stockDoneAt && !stepError) {
+    // INDEPENDENTE DO PASSO 1 (31/07). Antes era `if (!stockDoneAt && !stepError)`:
+    // se a gravação na caixa do GIGA falhasse, a baixa de estoque nem rodava.
+    // Como `erpStepBaixarEstoque` chama `decreaseStock`, que é FLOW-PRIMEIRO,
+    // isso segurava a baixa no PRÓPRIO FLOW por causa de uma falha na réplica —
+    // a loja vendia e o estoque não baixava em lugar nenhum enquanto o Giga
+    // estivesse fora. A verdade do Flow não pode ficar refém do espelho.
+    // Os dois passos são operações independentes: cada um tem seu próprio
+    // marcador de idempotência e o job só encerra quando ambos passam.
+    if (!stockDoneAt) {
       const r = await this.pdv.erpStepBaixarEstoque(sale);
       if (r.ok) stockDoneAt = new Date();
-      else stepError = `estoque: ${r.error || 'falha'}`;
+      else erros.push(`estoque: ${r.error || 'falha'}`);
     }
 
     // ── Passo 3: fecha marcados PUXADOS (DELETE da linha MARCADO='SIM') ──
     // Idempotente por natureza (só apaga se ainda for SIM) — sem coluna de
     // progresso; retry re-executa sem risco. Sem isso a peça puxada pro PDV
     // ficava "em marca" pra sempre (bug 21/07 Indaiatuba).
-    if (!stepError) {
+    // Segue atrás dos erros de propósito: é DELETE no Giga, então não adianta
+    // tentar quando ele já se mostrou indisponível nos passos acima.
+    if (!erros.length) {
       const r = await this.pdv.erpStepFecharMarcados(sale);
-      if (!r.ok) stepError = `marcados: ${r.error || 'falha'}`;
+      if (!r.ok) erros.push(`marcados: ${r.error || 'falha'}`);
     }
+
+    const stepError = erros.length ? erros.join(' · ') : null;
 
     if (caixaDoneAt && stockDoneAt && !stepError) {
       await (this.prisma as any).erpOutbox.update({
@@ -529,6 +543,89 @@ export class ErpOutboxService {
       return true;
     } catch (e: any) {
       this.logger.warn(`[outbox] marcado_remover ${registro} re-agendado: ${e?.message}`);
+      return this.requeueOrFail(job, e);
+    }
+  }
+
+  /**
+   * Réplica de GRUPO / SUBGRUPO de produto no Giga.
+   *
+   * A categoria já existe no Flow (faixa 9000+, numerada pela sequência do
+   * Postgres) — este job só espelha. `INSERT IGNORE` com o código já definido
+   * torna o retry inofensivo: repetir não duplica nem sobrescreve.
+   */
+  private async processCategoriaCriar(job: any): Promise<boolean> {
+    const tipo = String(job.payload?.tipo || '');
+    const codigo = Number(job.payload?.codigo) || 0;
+    const nome = String(job.payload?.nome || '');
+    const grupo = job.payload?.grupo != null ? Number(job.payload.grupo) : null;
+
+    if (!codigo || !nome || (tipo !== 'grupo' && tipo !== 'subgrupo')) {
+      await this.markFailed(job, 'categoria_criar com payload inválido');
+      return false;
+    }
+    if (tipo === 'subgrupo' && !grupo) {
+      await this.markFailed(job, 'categoria_criar: subgrupo sem grupo pai');
+      return false;
+    }
+
+    try {
+      await (this.erp as any).replicarCategoriaInline(tipo, { codigo, nome, grupo });
+      await this.prisma.erpOutbox.update({
+        where: { id: job.id },
+        data: { status: 'done', doneAt: new Date(), lastError: null },
+      });
+      this.logger.log(`[outbox] categoria_criar ${tipo} ${codigo} (${nome}) replicado no Giga`);
+      return true;
+    } catch (e: any) {
+      this.logger.warn(`[outbox] categoria_criar ${tipo} ${codigo} re-agendado: ${e?.message}`);
+      return this.requeueOrFail(job, e);
+    }
+  }
+
+  /**
+   * Réplica da TROCA DE BANDEIRA de cartão na tabela `fechamento` do Giga.
+   *
+   * Idempotente pela própria consulta: o UPDATE localiza a linha pela FORMA
+   * ANTIGA. Depois de aplicado, a FORMA já é a nova e o retry não acha nada
+   * pra mexer — não há como aplicar duas vezes.
+   */
+  private async processBandeiraFechamento(job: any): Promise<boolean> {
+    const p = job.payload || {};
+    if (!p.saleId || !p.storeCode || !p.newBandeira) {
+      await this.markFailed(job, 'bandeira_fechamento sem payload completo');
+      return false;
+    }
+    try {
+      const r = await (this.erp as any).atualizarBandeiraFechamento({
+        saleId: p.saleId,
+        storeCode: p.storeCode,
+        oldBandeira: p.oldBandeira || '',
+        newBandeira: p.newBandeira,
+        valor: Number(p.valor) || 0,
+      });
+
+      // "Linha não encontrada" aqui quase sempre significa JÁ APLICADO (a FORMA
+      // antiga não existe mais) — insistir só gastaria o Giga até as 100
+      // tentativas. Encerra registrando o motivo em vez de fingir sucesso.
+      if (!r.ok && /não (localizada|encontrada)/i.test(String(r.error || ''))) {
+        await this.prisma.erpOutbox.update({
+          where: { id: job.id },
+          data: { status: 'done', doneAt: new Date(), lastError: `encerrado sem aplicar: ${r.error}` },
+        });
+        this.logger.warn(`[outbox] bandeira_fechamento ${p.saleId}: ${r.error} — provavelmente já aplicado`);
+        return true;
+      }
+      if (!r.ok) throw new Error(r.error || 'falha no UPDATE');
+
+      await this.prisma.erpOutbox.update({
+        where: { id: job.id },
+        data: { status: 'done', doneAt: new Date(), lastError: null },
+      });
+      this.logger.log(`[outbox] bandeira_fechamento ${p.saleId}: ${p.oldBandeira}→${p.newBandeira} no Giga`);
+      return true;
+    } catch (e: any) {
+      this.logger.warn(`[outbox] bandeira_fechamento ${p.saleId} re-agendado: ${e?.message}`);
       return this.requeueOrFail(job, e);
     }
   }

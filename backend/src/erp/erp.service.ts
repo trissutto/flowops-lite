@@ -8352,18 +8352,32 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * Reserva prÃ³ximo CODIGO via MAX+1 dentro de uma transaÃ§Ã£o.
    */
   async inserirGrupo(nome: string): Promise<{ codigo: number; nome: string }> {
+    const nomeNormalizado = String(nome || '').trim().toUpperCase().slice(0, 30);
+    if (!nomeNormalizado) throw new Error('Nome do grupo vazio');
+
+    if (this.categoriaFlowFirst) {
+      const codigo = await this.proximoCodigoCategoria('grupo');
+      await (this.prismaFlow as any).wincredGrupo.create({
+        data: { codigo, grupo: nomeNormalizado, flowIsSource: true },
+      });
+      await this.replicarCategoriaNoGiga('grupo', { codigo, nome: nomeNormalizado });
+      return { codigo, nome: nomeNormalizado };
+    }
+
+    // ── Caminho legado: o Giga numera e grava ──
     if (!this.isWriteEnabled) {
       throw new Error('ERP_WRITE_ENABLED=false. Setar env=true pra criar grupo no Wincred.');
     }
-    if (!this.pool) throw new Error('ERP MySQL nÃ£o estÃ¡ conectado');
-    const nomeNormalizado = String(nome || '').trim().toUpperCase().slice(0, 30);
-    if (!nomeNormalizado) throw new Error('Nome do grupo vazio');
+    if (!this.pool) throw new Error('ERP MySQL não está conectado');
 
     const conn = await this.pool.getConnection();
     try {
       await conn.beginTransaction();
+      // `< FAIXA_FLOW` é obrigatório: sem isso o MAX+1 do Giga passaria a
+      // alocar DENTRO da faixa reservada assim que a primeira categoria do
+      // Flow fosse replicada, e as duas numerações colidiriam.
       const [maxRows]: any = await conn.query(
-        `SELECT COALESCE(MAX(CODIGO), 0) + 1 AS prox FROM grupos FOR UPDATE`,
+        `SELECT COALESCE(MAX(CODIGO), 0) + 1 AS prox FROM grupos WHERE CODIGO < ${ErpService.FAIXA_CATEGORIA_FLOW} FOR UPDATE`,
       );
       const codigo = Number(maxRows[0]?.prox) || 1;
       await conn.query(
@@ -8381,22 +8395,124 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Faixa reservada pros códigos de categoria criados no Flow.
+   *
+   * O Giga usa até 433 hoje e as colunas são int(11) dos dois lados, inclusive
+   * em `produtos.GRUPO`/`SUBGRUPO`, que é quem referencia (medido em
+   * `scripts/giga-etl/medir-grupos.js`). 9000 fica longe do uso atual, longe do
+   * teto, e denuncia na tela que a categoria nasceu aqui.
+   */
+  private static readonly FAIXA_CATEGORIA_FLOW = 9000;
+
+  private get categoriaFlowFirst(): boolean {
+    return String(process.env.CATEGORIA_FLOW_FIRST ?? '1') !== '0';
+  }
+
+  /**
+   * Próximo código de categoria, da sequência do Flow. Transacional: duas
+   * vendedoras criando categoria ao mesmo tempo nunca pegam o mesmo número.
+   */
+  private async proximoCodigoCategoria(tipo: 'grupo' | 'subgrupo'): Promise<number> {
+    return (this.prismaFlow as any).$transaction(async (tx: any) => {
+      const cur = await tx.categoriaSequence.findUnique({ where: { tipo } });
+      const proximo = cur
+        ? Number(cur.lastSeq) + 1
+        : ErpService.FAIXA_CATEGORIA_FLOW;
+      if (cur) {
+        await tx.categoriaSequence.update({ where: { tipo }, data: { lastSeq: proximo } });
+      } else {
+        await tx.categoriaSequence.create({ data: { tipo, lastSeq: proximo } });
+      }
+      return proximo;
+    });
+  }
+
+  /**
+   * Réplica da categoria no Giga. Tenta inline e cai pra fila — nunca lança:
+   * a categoria já existe no Flow, e derrubar aqui impediria o cadastro do
+   * produto por causa de um banco que é só espelho.
+   */
+  /**
+   * O INSERT da categoria no Giga, isolado. Público porque o cron do outbox
+   * chama isto quando a réplica atrasada finalmente sai.
+   *
+   * `INSERT IGNORE` com o código já decidido pelo Flow: repetir é inofensivo,
+   * então o retry não precisa de marcador de progresso.
+   */
+  async replicarCategoriaInline(
+    tipo: 'grupo' | 'subgrupo',
+    dados: { codigo: number; nome: string; grupo?: number | null },
+  ): Promise<void> {
+    if (!this.isWriteEnabled || !this.pool) throw new Error('escrita no Giga desabilitada');
+    if (tipo === 'grupo') {
+      await this.pool.query(`INSERT IGNORE INTO grupos (CODIGO, GRUPO) VALUES (?, ?)`, [
+        dados.codigo, dados.nome,
+      ]);
+    } else {
+      await this.pool.query(`INSERT IGNORE INTO subgrupos (CODIGO, SUBGRUPO, GRUPO) VALUES (?, ?, ?)`, [
+        dados.codigo, dados.nome, dados.grupo,
+      ]);
+    }
+  }
+
+  private async replicarCategoriaNoGiga(
+    tipo: 'grupo' | 'subgrupo',
+    dados: { codigo: number; nome: string; grupo?: number },
+  ): Promise<void> {
+    try {
+      await this.replicarCategoriaInline(tipo, dados);
+    } catch (e: any) {
+      try {
+        await (this.prismaFlow as any).erpOutbox.create({
+          data: {
+            kind: 'categoria_criar',
+            saleId: `categoria-${tipo}-${dados.codigo}`,
+            payload: { tipo, ...dados },
+            status: 'pending',
+          },
+        });
+        this.logger.warn(
+          `[categoria] Giga indisponível (${e?.message}) — ${tipo} ${dados.codigo} vale no Flow, réplica enfileirada`,
+        );
+      } catch (e2: any) {
+        this.logger.error(
+          `[categoria] ${tipo} ${dados.codigo} criado no Flow mas NÃO consegui enfileirar a réplica: ${e2?.message}`,
+        );
+      }
+    }
+  }
+
+  /**
    * Cria um novo subgrupo dentro de um grupo existente (tabela subgrupos).
    */
   async inserirSubgrupo(grupoCodigo: number, nome: string): Promise<{ codigo: number; nome: string; grupo: number }> {
+    if (!grupoCodigo) throw new Error('grupoCodigo é obrigatório');
+    const nomeNormalizado = String(nome || '').trim().toUpperCase().slice(0, 30);
+    if (!nomeNormalizado) throw new Error('Nome do subgrupo vazio');
+
+    if (this.categoriaFlowFirst) {
+      const codigo = await this.proximoCodigoCategoria('subgrupo');
+      await (this.prismaFlow as any).wincredSubgrupo.create({
+        data: { codigo, subgrupo: nomeNormalizado, grupo: grupoCodigo, flowIsSource: true },
+      });
+      await this.replicarCategoriaNoGiga('subgrupo', {
+        codigo, nome: nomeNormalizado, grupo: grupoCodigo,
+      });
+      return { codigo, nome: nomeNormalizado, grupo: grupoCodigo };
+    }
+
+    // ── Caminho legado: o Giga numera e grava ──
     if (!this.isWriteEnabled) {
       throw new Error('ERP_WRITE_ENABLED=false. Setar env=true pra criar subgrupo no Wincred.');
     }
-    if (!this.pool) throw new Error('ERP MySQL nÃ£o estÃ¡ conectado');
-    if (!grupoCodigo) throw new Error('grupoCodigo Ã© obrigatÃ³rio');
-    const nomeNormalizado = String(nome || '').trim().toUpperCase().slice(0, 30);
-    if (!nomeNormalizado) throw new Error('Nome do subgrupo vazio');
+    if (!this.pool) throw new Error('ERP MySQL não está conectado');
 
     const conn = await this.pool.getConnection();
     try {
       await conn.beginTransaction();
+      // Mesmo motivo do inserirGrupo: o MAX+1 tem que ignorar a faixa do Flow.
       const [maxRows]: any = await conn.query(
-        `SELECT COALESCE(MAX(CODIGO), 0) + 1 AS prox FROM subgrupos FOR UPDATE`,
+        `SELECT COALESCE(MAX(CODIGO), 0) + 1 AS prox FROM subgrupos WHERE CODIGO < ${ErpService.FAIXA_CATEGORIA_FLOW} FOR UPDATE`,
       );
       const codigo = Number(maxRows[0]?.prox) || 1;
       await conn.query(
@@ -9282,7 +9398,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     oldBandeira: string;
     newBandeira: string;
     valor: number;
-  }): Promise<{ ok: boolean; mode: 'shadow' | 'real'; numero?: number; error?: string; sqlExecuted: string[] }> {
+  }): Promise<{ ok: boolean; mode: 'shadow' | 'real'; numero?: number; error?: string; sqlExecuted: string[]; enfileirado?: boolean }> {
     const sqlExecuted: string[] = [];
     const mode: 'shadow' | 'real' = this.isPdvWriteEnabled ? 'real' : 'shadow';
 
@@ -9343,8 +9459,37 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       this.logger.log(`atualizarBandeiraFechamento OK: NUMERO=${numero} LOJA=${lojaCode} ${oldMap.forma}â†’${newMap.forma} valor=${valor} (${affected} linha)`);
       return { ok: true, mode, numero, sqlExecuted };
     } catch (e: any) {
+      // ENFILEIRA (31/07): os dois chamadores em cash.service.ts são
+      // best-effort e devolvem ok mesmo com o Giga fora — então a troca de
+      // bandeira valia no Flow e SUMIA da réplica, deixando só um log. A
+      // conciliação de cartão do mês fechava errada e ninguém sabia por quê.
+      // A tabela `fechamento` não tem espelho, mas não precisa: o pagamento já
+      // é do Flow; o que faltava era a fila garantir que a correção chegue lá.
       this.logger.error(`atualizarBandeiraFechamento ERRO: ${e?.message}`);
-      return { ok: false, mode, sqlExecuted, error: e?.message };
+      await this.enfileirarBandeiraFechamento(input, e?.message || String(e));
+      return { ok: false, mode, sqlExecuted, error: e?.message, enfileirado: true };
+    }
+  }
+
+  /** Fila da troca de bandeira. Idempotente: o UPDATE busca a linha pela
+   *  FORMA antiga, então repetir depois de aplicado não afeta nada. */
+  private async enfileirarBandeiraFechamento(
+    input: { saleId: string; storeCode: string; oldBandeira: string; newBandeira: string; valor: number },
+    erro: string,
+  ): Promise<void> {
+    try {
+      await (this.prismaFlow as any).erpOutbox.create({
+        data: {
+          kind: 'bandeira_fechamento',
+          saleId: `bandeira-${input.saleId}-${input.newBandeira}`.slice(0, 190),
+          payload: { ...input },
+          status: 'pending',
+        },
+      });
+      this.logger.warn(`[bandeira] réplica da venda ${input.saleId} enfileirada (${erro})`);
+    } catch (e: any) {
+      if (String(e?.code) === 'P2002') return; // já enfileirado
+      this.logger.error(`[bandeira] não consegui enfileirar a venda ${input.saleId}: ${e?.message}`);
     }
   }
 

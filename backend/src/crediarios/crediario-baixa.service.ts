@@ -2537,8 +2537,12 @@ export class CrediarioBaixaService {
 
     // WRITE-THROUGH do estorno: re-sincroniza as abertas do espelho em
     // background pra parcela estornada voltar à lista sem esperar o cron.
+    // Os registros vão junto pra desfazer também em `crediario_parcelas` — a
+    // ficha da cliente lê de lá e ficaria mostrando "pago" numa parcela que
+    // acabou de ser estornada.
     if (revertidos > 0) {
-      void this.crediarioMirror.reinserirAposEstorno().catch(() => { /* cron corrige */ });
+      const estornados = (details || []).filter((d: any) => d.success).map((d: any) => d.registro);
+      void this.crediarioMirror.reinserirAposEstorno(estornados).catch(() => { /* cron corrige */ });
     }
 
     // Marca a baixa como cancelada
