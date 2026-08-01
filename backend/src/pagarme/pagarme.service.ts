@@ -788,15 +788,86 @@ export class PagarmeService {
     const customerName = (
       input.customerName || `VENDA LOJA ${storeNameLink.toUpperCase()}_${this.getHorarioBr()}`
     ).slice(0, 64);
-    const customerEmail = input.customerEmail
-      || `pdv-${input.saleId.slice(-12)}@lurds.com.br`;
+    // ── DADO REAL É OBRIGATÓRIO NO CARTÃO (01/08) ────────────────────────
+    // O antifraude da Pagar.me pontua o CLIENTE, e a gente estava inventando
+    // o cliente: e-mail `pdv-<id>@lurds.com.br`, CPF gerado por seed e SEMPRE
+    // o mesmo telefone (13 996218277) em toda cobrança da rede. Pro modelo
+    // dele, centenas de compras com o mesmo telefone é assinatura de fraude.
+    //
+    // Medido no extrato de 8 dias (141 tentativas de cartão):
+    //   e-mail sintético → 22,8% de aprovação · antifraude reprovou 43,9%
+    //   e-mail real      → 63,1% de aprovação · antifraude reprovou  8,3%
+    // Das 32 reprovadas pelo antifraude, 25 (78%) eram do grupo sintético.
+    //
+    // Então: no CARTÃO, sem dado real a gente não gera o link — é melhor a
+    // vendedora pedir o e-mail pra cliente do que queimar a cobrança. No PIX
+    // não há antifraude, e ali o fallback segue valendo (não custa nada).
+    let emailInformado = String(input.customerEmail || '').trim();
+    let phoneRaw = (input.customerPhone || '').replace(/\D/g, '');
     let customerDoc = (input.customerCpf || '').replace(/\D/g, '');
-    if (!customerDoc || (customerDoc.length !== 11 && customerDoc.length !== 14)) {
+
+    const ehEmail = (e: string) => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(e);
+    const ehFone = (d: string) =>
+      d.length === 10 || d.length === 11 || (d.length === 13 && d.startsWith('55'));
+
+    // O caller nem sempre carrega e-mail/telefone (a venda do PDV grava os dois
+    // como null na maioria dos casos), mas o CRM costuma ter. Busca por CPF
+    // antes de barrar — resolve sem pedir nada pra vendedora.
+    if (acceptCard && (customerDoc.length === 11 || customerDoc.length === 14)
+        && (!ehEmail(emailInformado) || !ehFone(phoneRaw))) {
+      try {
+        // CPF no CRM ora vem com pontuação, ora sem — comparar por dígitos.
+        // `contains` com a string crua erraria justamente o caso que importa.
+        const achados: any[] = await this.prisma.$queryRawUnsafe(
+          `SELECT email, phone FROM customers
+            WHERE regexp_replace(COALESCE(cpf,''), '\\D', '', 'g') = $1
+              AND (email IS NOT NULL OR phone IS NOT NULL)
+            LIMIT 5`,
+          customerDoc,
+        );
+        // Mesma pessoa pode ter cadastro em várias lojas: pega o 1º que tiver
+        // cada campo, em vez de descartar a linha inteira por causa de um nulo.
+        const doCrm = {
+          email: achados.find((a) => a.email)?.email || null,
+          phone: achados.find((a) => a.phone)?.phone || null,
+        };
+        if (achados.length) {
+          if (!ehEmail(emailInformado) && ehEmail(String(doCrm.email || '').trim())) {
+            emailInformado = String(doCrm.email).trim();
+          }
+          const foneCrm = String(doCrm.phone || '').replace(/\D/g, '');
+          if (!ehFone(phoneRaw) && ehFone(foneCrm)) phoneRaw = foneCrm;
+        }
+      } catch { /* CRM indisponível não pode derrubar a venda */ }
+    }
+
+    const emailValido = ehEmail(emailInformado);
+    const phoneValido = ehFone(phoneRaw);
+    const cpfValido = customerDoc.length === 11 || customerDoc.length === 14;
+
+    if (acceptCard) {
+      const faltando: string[] = [];
+      if (!emailValido) faltando.push('e-mail');
+      if (!phoneValido) faltando.push('telefone');
+      if (!cpfValido) faltando.push('CPF');
+      if (faltando.length) {
+        throw new BadRequestException(
+          `Cartão exige dado real da cliente — falta ${faltando.join(', ')}. ` +
+          `Peça pra ela e preencha ali no link: dado inventado faz o antifraude ` +
+          `reprovar (22,8% de aprovação contra 63,1% com dado real).`,
+        );
+      }
+    }
+
+    const customerEmail = emailValido
+      ? emailInformado
+      // PIX-only: sem antifraude no caminho, o sintético não atrapalha.
+      : `pdv-${input.saleId.slice(-12)}@lurds.com.br`;
+    if (!cpfValido) {
       customerDoc = generateValidCpfFromSeed(input.saleId);
     }
 
-    // Phone — fallback igual ao PIX
-    const phoneRaw = (input.customerPhone || '').replace(/\D/g, '');
+    // Phone — fallback só sobrevive no PIX-only (ver bloco acima)
     let phoneAreaCode = '13';
     let phoneNumber = '996218277';
     if (phoneRaw.length === 11) {

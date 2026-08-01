@@ -4317,6 +4317,15 @@ function PaymentModal({
   const [pagarmeLinkLoading, setPagarmeLinkLoading] = useState(false);
   const [pagarmeLinkPaid, setPagarmeLinkPaid] = useState(false);
   const [pagarmeLinkCopied, setPagarmeLinkCopied] = useState(false);
+  // E-mail/telefone usados NA COBRANÇA. Vêm do cadastro quando existe; quando
+  // não, a vendedora digita aqui — é o dado que o antifraude pontua, e sem ele
+  // o Flow mandava e-mail inventado e um telefone fixo igual pra rede inteira.
+  const [linkEmail, setLinkEmail] = useState('');
+  const [linkPhone, setLinkPhone] = useState('');
+  useEffect(() => { setLinkEmail(customerEmail || ''); }, [customerEmail]);
+  useEffect(() => { setLinkPhone(customerPhone || ''); }, [customerPhone]);
+  const linkEmailOk = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(linkEmail.trim());
+  const linkPhoneOk = [10, 11].includes(linkPhone.replace(/\D/g, '').length);
 
   useEffect(() => {
     if (selected !== 'venda_online' || vendaOnlineTipo !== 'pagarme_link') return;
@@ -5626,11 +5635,47 @@ function PaymentModal({
             {/* ── PAINEL: Link Pagar.me — gera URL + cliente paga + webhook ── */}
             {vendaOnlineTipo === 'pagarme_link' && customerCpf && (
               <div ref={pagarmeBoxRef} className="border-2 border-violet-300 rounded-lg p-2 bg-violet-50/30 space-y-2">
+                {/* Cartão só passa com dado REAL da cliente. Medido em 01/08:
+                    cobrança com dado inventado aprova 22,8%; com dado real,
+                    63,1%. Preenchível AQUI — travar sem deixar preencher
+                    pararia 69% dos links. */}
+                {!pagarmeLink && (
+                  <div className="bg-white border-2 border-violet-200 rounded-lg p-2 space-y-1.5">
+                    <div className="text-[10px] uppercase font-bold text-slate-600 tracking-wider">
+                      Dados da cliente pra cobrança
+                    </div>
+                    <input
+                      value={linkEmail}
+                      onChange={(e) => setLinkEmail(e.target.value)}
+                      placeholder="e-mail da cliente"
+                      type="email"
+                      inputMode="email"
+                      className={`w-full rounded-lg border-2 px-3 py-2 text-sm focus:outline-none ${
+                        linkEmailOk ? 'border-emerald-300' : 'border-amber-300 bg-amber-50'
+                      }`}
+                    />
+                    <input
+                      value={linkPhone}
+                      onChange={(e) => setLinkPhone(e.target.value)}
+                      placeholder="celular com DDD"
+                      inputMode="tel"
+                      className={`w-full rounded-lg border-2 px-3 py-2 text-sm focus:outline-none ${
+                        linkPhoneOk ? 'border-emerald-300' : 'border-amber-300 bg-amber-50'
+                      }`}
+                    />
+                    {(!linkEmailOk || !linkPhoneOk) && (
+                      <p className="text-[10px] text-amber-800 leading-snug">
+                        Peça pra cliente. Sem esse dado o antifraude reprova a maioria
+                        das cobranças — <b>não é falha do link</b>.
+                      </p>
+                    )}
+                  </div>
+                )}
                 {!pagarmeLink ? (
                   <>
                     <button
                       type="button"
-                      disabled={pagarmeLinkLoading}
+                      disabled={pagarmeLinkLoading || !linkEmailOk || !linkPhoneOk}
                       onClick={async () => {
                         setPagarmeLinkLoading(true);
                         try {
@@ -5646,7 +5691,13 @@ function PaymentModal({
                               storeCode,
                               customerName,
                               customerCpf,
-                              customerEmail,
+                              // Do cadastro quando existe, digitado quando não.
+                              // O telefone nunca era enviado daqui — o backend
+                              // então mandava um número FIXO pra Pagar.me em
+                              // toda cobrança da rede, e o antifraude lia isso
+                              // como fraude.
+                              customerEmail: linkEmail.trim(),
+                              customerPhone: linkPhone.replace(/\D/g, ''),
                               // maxInstallments OMITIDO de propósito: o backend
                               // usa PAGARME_MAX_PARCELAS (Railway) — mandar um
                               // número aqui IGNORA a variável da rede.
