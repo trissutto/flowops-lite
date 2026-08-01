@@ -513,6 +513,11 @@ model Seller {
   // Ferias
   dataInicioFerias   DateTime? @map("data_inicio_ferias") @db.Date
   dataFimFerias      DateTime? @map("data_fim_ferias") @db.Date
+  // Desligamento (dono 01/08/2026). O motivo e lista FECHADA — os codigos
+  // validos estao em common/motivos-desligamento.ts e nunca mudam, so o
+  // rotulo da tela muda. Campo livre viraria dez jeitos de escrever "acordo".
+  dataDesligamento   DateTime? @map("data_desligamento") @db.Date
+  motivoDesligamento String?   @map("motivo_desligamento") @db.VarChar(40)
   // Saude/dados sensiveis
   observacoes        String?  @db.Text
   documents          SellerDocument[]

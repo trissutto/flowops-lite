@@ -19,6 +19,7 @@ import { AdminOnly, AdminOnlyGuard } from '../auth/admin-only.guard';
 import { SellersService } from './sellers.service';
 import { SellerDocumentsService } from './seller-documents.service';
 import { SellersCronService } from './sellers-cron.service';
+import { MOTIVOS_DESLIGAMENTO } from '../common/motivos-desligamento';
 
 /**
  * Rotas de vendedoras.
@@ -101,7 +102,23 @@ export class SellersController {
   @AdminOnly()
   update(
     @Param('id') id: string,
-    @Body() body: { name?: string; apelido?: string | null; whatsapp?: string | null; active?: boolean; cargo?: string; responsibleStoreId?: string | null; storeCodeOrigin?: string | null; lojasAtuacao?: string[] | null },
+    // O ValidationPipe global tem whitelist, mas ela só corta campo em DTO com
+    // decorators — este body é tipo inline, então tudo passa. A lista abaixo
+    // existe pra documentar o que a rota realmente aceita.
+    @Body() body: {
+      name?: string; apelido?: string | null; whatsapp?: string | null;
+      active?: boolean; cargo?: string; responsibleStoreId?: string | null;
+      storeCodeOrigin?: string | null; lojasAtuacao?: string[] | null;
+      // Prontuário RH
+      cpf?: string | null; rg?: string | null; email?: string | null;
+      endereco?: string | null; cidade?: string | null; uf?: string | null; cep?: string | null;
+      dataNascimento?: string | null; dataAdmissao?: string | null;
+      contratoTipo?: string | null; cargoFuncao?: string | null; salarioBase?: number | null;
+      horarioTrabalho?: any; observacoes?: string | null;
+      dataInicioFerias?: string | null; dataFimFerias?: string | null;
+      // Desligamento (dono 01/08). Data até hoje INATIVA a funcionária.
+      dataDesligamento?: string | null; motivoDesligamento?: string | null;
+    },
   ) {
     return this.svc.update(id, body);
   }
@@ -187,6 +204,28 @@ export class SellersController {
   @Get('ferias/check')
   checkFerias() {
     return this.cron.checkVacationAlerts();
+  }
+
+  /** Lista fechada de motivos de desligamento — a tela monta o select com ela,
+   *  pra a opção nunca divergir do que o backend aceita. */
+  @Get('desligamento/motivos')
+  motivosDesligamento() {
+    return { motivos: MOTIVOS_DESLIGAMENTO };
+  }
+
+  /**
+   * MAPA DE FÉRIAS — período aquisitivo, concessivo e a data limite de cada uma.
+   *
+   * Diferente do `ferias/check`, que só devolve quem está perto de vencer. Aqui
+   * vem a folha inteira, ordenada pelo prazo mais apertado, pra o RH programar
+   * ao invés de apagar incêndio.
+   */
+  @Get('ferias/mapa')
+  mapaFerias(@Query('storeCode') storeCode?: string, @Query('incluirInativas') incluirInativas?: string) {
+    return this.svc.mapaFerias({
+      storeCode: storeCode || undefined,
+      incluirInativas: incluirInativas === '1' || incluirInativas === 'true',
+    });
   }
 
   /** CONFERIDOR Flow × Giga por loja (dono 29/07): componentes do Flow

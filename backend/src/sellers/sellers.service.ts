@@ -1,6 +1,9 @@
 import { Injectable, Logger, BadRequestException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
+import { calcularFerias, rotuloSituacao } from '../common/ferias-clt';
+import { motivoValido, rotuloMotivo, MOTIVOS_DESLIGAMENTO } from '../common/motivos-desligamento';
+import { hojeBrasilia } from '../common/tz';
 
 /**
  * SellersService — CRUD de vendedoras + atribuição de pedido + relatório.
@@ -441,6 +444,8 @@ export class SellersService {
       horarioTrabalho?: any;
       dataInicioFerias?: string | null;
       dataFimFerias?: string | null;
+      dataDesligamento?: string | null;
+      motivoDesligamento?: string | null;
       observacoes?: string | null;
     },
   ) {
@@ -505,6 +510,31 @@ export class SellersService {
     if (input.dataAdmissao !== undefined) data.dataAdmissao = input.dataAdmissao ? new Date(input.dataAdmissao) : null;
     if (input.dataInicioFerias !== undefined) data.dataInicioFerias = input.dataInicioFerias ? new Date(input.dataInicioFerias) : null;
     if (input.dataFimFerias !== undefined) data.dataFimFerias = input.dataFimFerias ? new Date(input.dataFimFerias) : null;
+
+    // ── DESLIGAMENTO ──
+    if (input.motivoDesligamento !== undefined) {
+      if (input.motivoDesligamento && !motivoValido(input.motivoDesligamento)) {
+        throw new BadRequestException('Motivo de desligamento inválido.');
+      }
+      data.motivoDesligamento = input.motivoDesligamento || null;
+    }
+    if (input.dataDesligamento !== undefined) {
+      data.dataDesligamento = input.dataDesligamento ? new Date(input.dataDesligamento) : null;
+
+      // Marcou desligamento com data até hoje → sai da operação junto.
+      // Sem isso ela continuaria aparecendo no PDV e nas listas de comissão,
+      // e alguém teria que lembrar de desativar num segundo passo.
+      //
+      // Limpar a data NÃO reativa: reativar é ato deliberado, e ninguém espera
+      // que apagar um campo devolva acesso a quem saiu.
+      if (data.dataDesligamento && data.dataDesligamento <= new Date(`${hojeBrasilia()}T23:59:59.999Z`)) {
+        if (input.active === undefined) data.active = false;
+        this.logger.warn(
+          `[rh] ${seller.name} desligada em ${input.dataDesligamento}` +
+          `${input.motivoDesligamento ? ` (${rotuloMotivo(input.motivoDesligamento)})` : ''} — inativada`,
+        );
+      }
+    }
     if (input.horarioTrabalho !== undefined) {
       data.horarioTrabalho = input.horarioTrabalho
         ? typeof input.horarioTrabalho === 'string'
@@ -936,5 +966,117 @@ export class SellersService {
         `${vendas} vendas, ${itens} itens, ${wlVariants.length} whitelist, ${fichasVariantes.length} fichas`,
     );
     return { ...preview, dryRun: false, aplicado: true };
+  }
+
+  /**
+   * MAPA DE FÉRIAS da folha inteira.
+   *
+   * O cálculo mora em `common/ferias-clt.ts`. Aqui só é feita a leitura e a
+   * ordenação pelo prazo mais apertado.
+   *
+   * FREELA/PJ entram na lista mas com `regime` marcado: férias na forma da CLT
+   * são do contrato CLT. Aparecem porque sumir com elas da tela faria o RH
+   * achar que a folha é menor do que é — mas o prazo delas não é obrigação
+   * legal do mesmo tipo, e a tela precisa dizer isso.
+   */
+  async mapaFerias(opts: { storeCode?: string; incluirInativas?: boolean } = {}) {
+    const where: any = {};
+    if (!opts.incluirInativas) where.active = true;
+    if (opts.storeCode) {
+      where.OR = [
+        { storeCodeOrigin: opts.storeCode },
+        { lojasAtuacao: { contains: `"${opts.storeCode}"` } },
+      ];
+    }
+
+    const sellers = await (this.prisma as any).seller.findMany({
+      where,
+      select: {
+        id: true, name: true, active: true, cargo: true, cargoFuncao: true,
+        contratoTipo: true, storeCodeOrigin: true, dataAdmissao: true,
+        dataInicioFerias: true, dataFimFerias: true,
+      },
+      orderBy: { name: 'asc' },
+    });
+
+    // Meio-dia UTC do dia de Brasília: prazo de férias é dia cheio, e ancorar
+    // no meio do dia evita que o cálculo vire a data por causa do fuso.
+    const hoje = new Date(`${hojeBrasilia()}T12:00:00.000Z`);
+    const comAdmissao: any[] = [];
+    const semAdmissao: any[] = [];
+
+    for (const s of sellers) {
+      const base = {
+        sellerId: s.id,
+        nome: s.name,
+        ativa: s.active,
+        cargo: s.cargoFuncao || s.cargo || null,
+        regime: s.contratoTipo || null,
+        // Férias na forma da CLT valem pro contrato CLT. Sem regime marcado
+        // assumimos CLT (61 das 72 são) — mas a tela mostra "não informado"
+        // pra ninguém achar que o sistema conferiu.
+        regimeCLT: !s.contratoTipo || String(s.contratoTipo).toUpperCase() === 'CLT',
+        loja: s.storeCodeOrigin || null,
+        admissao: s.dataAdmissao ? this.iso(s.dataAdmissao) : null,
+        feriasMarcadas: s.dataInicioFerias
+          ? { inicio: this.iso(s.dataInicioFerias), fim: s.dataFimFerias ? this.iso(s.dataFimFerias) : null }
+          : null,
+      };
+
+      if (!s.dataAdmissao) {
+        // Sem data de admissão não há cálculo — e isso é um problema de
+        // cadastro, não um "sem férias". Vai numa lista separada pra alguém
+        // preencher, em vez de sumir no meio da tabela.
+        semAdmissao.push(base);
+        continue;
+      }
+
+      const f = calcularFerias(new Date(s.dataAdmissao), { hoje });
+      comAdmissao.push({
+        ...base,
+        ciclo: f.ciclo,
+        periodoAquisitivo: { inicio: this.iso(f.inicioAquisitivo), fim: this.iso(f.fimAquisitivo) },
+        periodoConcessivo: { inicio: this.iso(f.fimAquisitivo), fim: this.iso(f.fimConcessivo) },
+        limiteInicio: this.iso(f.limiteInicio),
+        diasAteLimite: f.diasAteLimite,
+        situacao: f.situacao,
+        situacaoLabel: rotuloSituacao(f.situacao),
+        emDobra: f.emDobra,
+      });
+    }
+
+    // Prazo mais apertado primeiro — é a ordem em que o RH precisa agir.
+    comAdmissao.sort((a, b) => a.diasAteLimite - b.diasAteLimite);
+
+    const conta = (s: string) => comAdmissao.filter((x) => x.situacao === s).length;
+    return {
+      hoje: this.iso(hoje),
+      // Registrado na resposta pra a tela poder explicar o número que mostra.
+      regra: {
+        aquisitivoMeses: 12,
+        concessivoMeses: 12,
+        limiteInicioMeses: 11,
+        nota:
+          'A CLT dá 12 meses de período concessivo (art. 134). O limite de ' +
+          'INÍCIO é 11 meses porque as férias precisam ser usufruídas dentro ' +
+          'do prazo — 30 dias iniciados no 12º mês estourariam. Passado o ' +
+          'concessivo, o pagamento é em dobro (art. 137).',
+      },
+      totais: {
+        funcionarias: comAdmissao.length,
+        emDobra: conta('dobra'),
+        vencendo: conta('vencendo'),
+        programarAgora: conta('proximo'),
+        noPrazo: conta('no_prazo'),
+        aindaAdquirindo: conta('aquisitivo'),
+        semDataAdmissao: semAdmissao.length,
+      },
+      lista: comAdmissao,
+      semDataAdmissao: semAdmissao,
+    };
+  }
+
+  private iso(d: Date | string): string {
+    return new Date(d).toISOString().slice(0, 10);
   }
 }

@@ -3,6 +3,7 @@ import { ErpService } from '../erp/erp.service';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { sqlParcelaAberta } from '../common/crediario-pago';
+import { ehFichaNaoPessoa } from '../common/fichas-operadora';
 import {
   CobrancaContext, ParcelaCobranca, renderCobranca, TEMPLATES,
   DEFAULT_TEMPLATE_STRINGS,
@@ -604,6 +605,21 @@ export class CrediariosService {
       }
     } catch (e: any) {
       this.logger.warn(`Enrichment de telefone falhou: ${e?.message}`);
+    }
+
+    // ── FORA DA COBRANÇA: ficha que não é pessoa ──
+    // A VISANET aparecia aqui com 37 parcelas vencidas e um botão de WhatsApp
+    // do lado. Cartão, CONSUMIDOR e VENDA ONLINE são repasse, não dívida de
+    // alguém — e cobrar repasse é mandar mensagem pra ninguém.
+    //
+    // Filtra pelo NOME já enriquecido. Se o enriquecimento falhou, `nome` vem
+    // vazio e a linha PASSA: esconder cliente de verdade por falha de leitura
+    // é pior do que deixar uma operadora aparecer.
+    const antesDoFiltro = rows.length;
+    rows = rows.filter((r: any) => !r.nome || !ehFichaNaoPessoa(r.nome));
+    const ocultadas = antesDoFiltro - rows.length;
+    if (ocultadas > 0) {
+      this.logger.log(`[cobranca] ${ocultadas} parcela(s) de ficha não-pessoa fora da lista`);
     }
 
     // Sumário
