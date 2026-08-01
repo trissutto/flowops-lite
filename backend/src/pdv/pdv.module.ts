@@ -1,6 +1,7 @@
 import { forwardRef, Module } from '@nestjs/common';
 import { PrismaModule } from '../prisma/prisma.module';
 import { ErpModule } from '../erp/erp.module';
+import { CrediarioNativoModule } from '../crediario-nativo/crediario-nativo.module';
 import { PagarmeModule } from '../pagarme/pagarme.module';
 import { CrediariosModule } from '../crediarios/crediarios.module';
 import { WooCommerceModule } from '../woocommerce/woocommerce.module';
@@ -35,7 +36,7 @@ import { ProdutosVendidosService } from './produtos-vendidos.service';
 import { ProdutosVendidosController } from './produtos-vendidos.controller';
 
 @Module({
-  imports: [PrismaModule, ErpModule, PagarmeModule, forwardRef(() => CrediariosModule), WooCommerceModule, PromoConfigModule, AccessPolicyModule, WincredMirrorModule, AdiantamentosModule, ConveniosModule],
+  imports: [PrismaModule, ErpModule, PagarmeModule, forwardRef(() => CrediariosModule), WooCommerceModule, PromoConfigModule, AccessPolicyModule, WincredMirrorModule, AdiantamentosModule, ConveniosModule, CrediarioNativoModule],
   controllers: [PdvController, CashController, ReturnsController, ReturnsPublicController, PdvDiagController, MarcadosController, ActiveSellersController, CarneCoordsController, FiscalReportController, ProdutosVendidosController],
   providers: [PdvService, ErpOutboxService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, CoordsDbService, MarcadosService, MarcadosMirrorService, ActiveSellersService, CarneCoordsService, FiscalReportService, ProdutosVendidosService],
   exports: [PdvService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, CoordsDbService, MarcadosService, MarcadosMirrorService, ActiveSellersService, CarneCoordsService, FiscalReportService, ProdutosVendidosService],

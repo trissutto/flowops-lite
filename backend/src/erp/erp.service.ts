@@ -7,6 +7,17 @@ import { PrismaService } from '../prisma/prisma.service';
 import { SombraService } from './sombra.service';
 
 /**
+ * Início da faixa de REGISTRO/CONTROLE reservada às parcelas de crediário
+ * criadas no FLOW (`CrediarioCriacaoService`). Vive aqui como constante solta,
+ * e não importada do serviço, pra não criar dependência do ErpService num
+ * módulo que depende dele.
+ *
+ * Medido em 31/07: `movimento.REGISTRO` e `CONTROLE` são int(11) com maior
+ * valor em uso 712.606 e 341.518.
+ */
+const CREDIARIO_FAIXA_FLOW = 900_000_000;
+
+/**
  * Cliente para o MySQL do ERP gigasistemas21 (WinCred).
  *
  * LEITURA: sempre habilitada.
@@ -2196,8 +2207,15 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       // Pega Ãºltimo REGISTRO + Ãºltimo CONTROLE pra incrementar.
       // FOR UPDATE serializa contra outra venda criando crediÃ¡rio ao mesmo
       // tempo â€” evita 2 vendas pegarem o mesmo CONTROLE/REGISTRO.
+      // A faixa 900.000.000+ pertence ao Flow. Sem excluí-la aqui, o MAX+1
+      // passaria a alocar DENTRO dela assim que a primeira parcela criada no
+      // Flow fosse replicada — e as duas numerações começariam a se sobrepor,
+      // gerando REGISTRO repetido em dívida de cliente.
       const [maxRows]: any = await conn.execute(
-        `SELECT COALESCE(MAX(\`${c.registro}\`), 0) AS maxReg, COALESCE(MAX(\`${c.controle}\`), 0) AS maxCtl FROM \`movimento\` FOR UPDATE`,
+        `SELECT COALESCE(MAX(\`${c.registro}\`), 0) AS maxReg, COALESCE(MAX(\`${c.controle}\`), 0) AS maxCtl
+           FROM \`movimento\`
+          WHERE \`${c.registro}\` < ${CREDIARIO_FAIXA_FLOW} AND \`${c.controle}\` < ${CREDIARIO_FAIXA_FLOW}
+          FOR UPDATE`,
       );
       const startRegistro = Number(maxRows[0]?.maxReg || 0) + 1;
       const novoControle = Number(maxRows[0]?.maxCtl || 0) + 1;
@@ -8392,6 +8410,81 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     } finally {
       conn.release();
     }
+  }
+
+  /**
+   * Réplica no Giga de parcelas que JÁ EXISTEM no Flow, com o REGISTRO e o
+   * CONTROLE que o Flow decidiu — ao contrário do `createCrediarioParcelas`,
+   * que numera sozinho.
+   *
+   * `INSERT IGNORE`: como o REGISTRO já vem definido e é chave, repetir não
+   * duplica. É o que torna o retry do outbox seguro sem marcador de progresso.
+   *
+   * Devolve os registros que entraram, pra quem chamou carimbar `gigaOk`.
+   */
+  async replicarParcelasNoGiga(
+    parcelas: Array<{
+      registro: string | number;
+      controle: string | number;
+      codCliente: string;
+      nomeCliente?: string | null;
+      loja?: string | null;
+      dataCompra?: Date | null;
+      valorCompra?: number | null;
+      parcela: number;
+      totalParcelas?: number | null;
+      vencimento: Date;
+      valorParcela: number;
+      obs?: string | null;
+    }>,
+    c: any,
+  ): Promise<{ ok: boolean; aplicados: string[]; error?: string }> {
+    if (!this.isWriteEnabled) return { ok: false, aplicados: [], error: 'ERP_WRITE_ENABLED=false' };
+    if (!this.pool) return { ok: false, aplicados: [], error: 'ERP MySQL não está conectado' };
+    if (!c?.registro || !c?.controle || !c?.codCliente || !c?.vencimento || !c?.valorParcela || !c?.parcela) {
+      return { ok: false, aplicados: [], error: 'mapa de colunas da movimento incompleto' };
+    }
+
+    const aplicados: string[] = [];
+    for (const p of parcelas) {
+      const fields: string[] = [];
+      const placeholders: string[] = [];
+      const values: any[] = [];
+      const add = (col: string | null, val: any) => {
+        if (col == null) return;
+        fields.push(`\`${col}\``);
+        placeholders.push('?');
+        values.push(val);
+      };
+
+      add(c.registro, Number(p.registro));
+      add(c.controle, Number(p.controle));
+      if (c.numeroCompra) add(c.numeroCompra, Number(p.controle));
+      add(c.codCliente, p.codCliente);
+      if (c.nome) add(c.nome, p.nomeCliente || '');
+      if (c.loja) add(c.loja, p.loja || '');
+      if (c.dataCompra) add(c.dataCompra, p.dataCompra || new Date());
+      if (c.valorCompra) add(c.valorCompra, Number(p.valorCompra) || 0);
+      add(c.parcela, Number(p.parcela));
+      if (c.totalParcelas) add(c.totalParcelas, Number(p.totalParcelas) || null);
+      add(c.vencimento, p.vencimento);
+      add(c.valorParcela, Number(p.valorParcela));
+      // 'N' explícito: PAGO nulo é lido como dívida ABERTA pelo WinCred, mas
+      // deixar nulo esconde a baixa depois. Ver o incidente de 31/07.
+      if (c.pago) add(c.pago, 'N');
+      if (c.obs && p.obs) add(c.obs, String(p.obs).slice(0, 200));
+
+      const sql = `INSERT IGNORE INTO \`movimento\` (${fields.join(', ')}) VALUES (${placeholders.join(', ')})`;
+      try {
+        await this.pool.query(sql, values);
+        aplicados.push(String(p.registro));
+      } catch (e: any) {
+        // Para no primeiro erro: as que já entraram ficam carimbadas e o retry
+        // continua daí. Insistir nas seguintes com o Giga instável só empilha.
+        return { ok: false, aplicados, error: e?.message || String(e) };
+      }
+    }
+    return { ok: true, aplicados };
   }
 
   /**

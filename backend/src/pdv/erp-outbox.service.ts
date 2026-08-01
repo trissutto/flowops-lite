@@ -1,4 +1,5 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, forwardRef } from '@nestjs/common';
+import { CrediariosService } from '../crediarios/crediarios.service';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
@@ -42,6 +43,8 @@ export class ErpOutboxService {
     private readonly pdv: PdvService,
     private readonly erp: ErpService,
     private readonly marcados: MarcadosService,
+    @Inject(forwardRef(() => CrediariosService))
+    private readonly crediarios: CrediariosService,
   ) {}
 
   @Cron(CronExpression.EVERY_30_SECONDS, { name: 'erp-outbox-processor' })
@@ -100,6 +103,7 @@ export class ErpOutboxService {
     if (job.kind === 'marcado_remover') return this.processMarcadoRemover(job);
     if (job.kind === 'categoria_criar') return this.processCategoriaCriar(job);
     if (job.kind === 'bandeira_fechamento') return this.processBandeiraFechamento(job);
+    if (job.kind === 'crediario_criacao') return this.processCrediarioCriacao(job);
     if (job.kind !== 'venda') {
       await this.markFailed(job, `kind desconhecido: ${job.kind}`);
       return false;
@@ -626,6 +630,80 @@ export class ErpOutboxService {
       return true;
     } catch (e: any) {
       this.logger.warn(`[outbox] bandeira_fechamento ${p.saleId} re-agendado: ${e?.message}`);
+      return this.requeueOrFail(job, e);
+    }
+  }
+
+  /**
+   * Réplica das parcelas de crediário CRIADAS NO FLOW pra `movimento` do Giga.
+   *
+   * As parcelas já existem no Postgres com REGISTRO da faixa 900.000.000+ e a
+   * cliente já deve — este job só espelha.
+   *
+   * IDEMPOTÊNCIA: o REGISTRO vem definido pelo Flow e é chave na `movimento`,
+   * então `INSERT IGNORE` torna a repetição inofensiva. Cada linha carimba
+   * `gigaOk` ao entrar, e o retry recomeça só do que faltou.
+   */
+  private async processCrediarioCriacao(job: any): Promise<boolean> {
+    const saleId = String(job.payload?.saleId || '');
+    if (!saleId) {
+      await this.markFailed(job, 'crediario_criacao sem saleId');
+      return false;
+    }
+
+    try {
+      const pendentes: any[] = await (this.prisma as any).crediarioParcela.findMany({
+        where: { saleId, gigaOk: false, cancelado: false },
+        orderBy: { parcela: 'asc' },
+      });
+
+      if (!pendentes.length) {
+        await this.prisma.erpOutbox.update({
+          where: { id: job.id },
+          data: { status: 'done', doneAt: new Date(), lastError: null },
+        });
+        this.logger.log(`[outbox] crediario_criacao ${saleId}: nada pendente (já replicado ou cancelado)`);
+        return true;
+      }
+
+      const cols = await this.crediarios.detectColumns();
+      const r = await (this.erp as any).replicarParcelasNoGiga(
+        pendentes.map((p) => ({
+          registro: p.registro,
+          controle: p.controle,
+          codCliente: p.codCliente,
+          nomeCliente: p.nomeCliente,
+          loja: p.loja,
+          dataCompra: p.dataCompra,
+          valorCompra: Number(p.valorCompra) || 0,
+          parcela: p.parcela,
+          totalParcelas: p.totalParcelas,
+          vencimento: p.vencimento,
+          valorParcela: Number(p.valorParcela) || 0,
+          obs: p.obs,
+        })),
+        cols,
+      );
+
+      // Carimba o que ENTROU, mesmo em falha parcial: sem isso o retry
+      // reinseriria as mesmas linhas e dependeria só do INSERT IGNORE.
+      if (r.aplicados?.length) {
+        await (this.prisma as any).crediarioParcela.updateMany({
+          where: { registro: { in: r.aplicados } },
+          data: { gigaOk: true, gigaAt: new Date(), gigaError: null },
+        });
+      }
+
+      if (!r.ok) throw new Error(r.error || 'falha ao replicar parcelas');
+
+      await this.prisma.erpOutbox.update({
+        where: { id: job.id },
+        data: { status: 'done', doneAt: new Date(), lastError: null },
+      });
+      this.logger.log(`[outbox] crediario_criacao ${saleId}: ${r.aplicados.length} parcela(s) na movimento do Giga`);
+      return true;
+    } catch (e: any) {
+      this.logger.warn(`[outbox] crediario_criacao ${saleId} re-agendado: ${e?.message}`);
       return this.requeueOrFail(job, e);
     }
   }

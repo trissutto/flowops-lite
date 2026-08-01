@@ -60,6 +60,8 @@ Cron de 1h espelha transferências/vendas/estoque pro financeiro. Conta corrente
 | `PDV_MIRROR_READS` | on | `0` desliga leitura pelo espelho (bipe/busca voltam 100% Giga) |
 | `PDV_ERP_OUTBOX` | on | `0` volta escrita da venda inline |
 | `MARCADOS_FLOW_FIRST` | on | `0` volta o marcado a gravar no Giga PRIMEIRO — incluindo o `throw` que derrubava a operação inteira com o Giga fora. Com a flag ligada (padrão) o Flow grava, o Giga é réplica via outbox (`marcado_criar`/`marcado_remover`) |
+| `CREDIARIO_FLOW_FIRST` | on | `0` volta a criar as parcelas direto na `movimento` do Giga (síncrono — não vende a crediário com o Giga fora). Ligada: parcelas nascem em `crediario_parcelas` com REGISTRO/CONTROLE da faixa **900.000.000+**, réplica via outbox `crediario_criacao` |
+| `CATEGORIA_FLOW_FIRST` | on | `0` volta grupo/subgrupo a numerar com `MAX+1` no Giga. Ligada: faixa **9000+** do Flow, réplica via outbox `categoria_criar` |
 | `ERP_STOCK_WRITES_ASYNC` | on | `0` volta TODAS as escritas de estoque secundárias (devoluções, trocas, marcados, realinhamento) ao inline — espera o Giga |
 | `ERP_WRITE_ENABLED` / `PDV_ERP_WRITE_ENABLED` | — | shadow mode das escritas no Wincred (loga SQL sem executar) |
 | `PDV_FINALIZE_ASYNC` | false | legado (só vale com outbox desligado) |
