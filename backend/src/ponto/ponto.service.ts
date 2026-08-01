@@ -297,6 +297,18 @@ export class PontoService {
         OR: [
           { responsibleStoreId: storeId },   // líderes/gerentes dessa loja
           { storeCodeOrigin: store.code },    // vendedoras importadas dessa loja
+          // MULTI-LOJA (01/08/2026 — decisão do dono): quem atua em mais de
+          // uma loja bate ponto em QUALQUER uma marcada.
+          //
+          // A Brenda é de Jundiaí (10) e também atua em Vinhedo (03). Estando
+          // em Vinhedo, o rosto dela nem era CARREGADO — a câmera não tinha
+          // como reconhecer alguém que não estava na lista, e o erro parecia
+          // falha de biometria.
+          //
+          // `lojasAtuacao` é um JSON de códigos em texto (["03","10"]). O
+          // `contains` com as aspas evita que o código "03" case dentro de
+          // "030" ou de um "13" mal formatado.
+          { lojasAtuacao: { contains: `"${store.code}"` } },
         ],
       },
       select: {
