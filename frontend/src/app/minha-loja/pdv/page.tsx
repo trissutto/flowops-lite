@@ -3550,6 +3550,47 @@ function CustomerModal({
   const [cepLoading, setCepLoading] = useState(false);
   const [cepError, setCepError] = useState<string | null>(null);
 
+  // ── O QUE JÁ SE SABE DA CLIENTE ───────────────────────────────────────
+  // Assim que o CPF fica completo, busca a ficha dela e preenche e-mail e
+  // endereço. O CPF é a pessoa: se ela já comprou em QUALQUER loja ou no site,
+  // o dado existe e não faz sentido pedir de novo.
+  //
+  // Sem isto o cadastro único guardava o endereço e nunca devolvia: a
+  // atendente digitava, salvava certo, e na venda seguinte a tela vinha em
+  // branco porque só lia da VENDA — e venda nova nasce vazia. Foi o "não
+  // salvou" relatado três vezes.
+  //
+  // NUNCA sobrescreve o que a atendente já digitou: só preenche campo vazio.
+  const [buscandoFicha, setBuscandoFicha] = useState(false);
+  const cpfDigitos = cpf.replace(/\D/g, '');
+  useEffect(() => {
+    if (cpfDigitos.length !== 11) return;
+    let cancelado = false;
+    setBuscandoFicha(true);
+    api<any>(`/pdv/customer-resume?cpf=${cpfDigitos}`)
+      .then((r) => {
+        if (cancelado || !r?.found) return;
+        const c = r.customer || {};
+        if (!email && c.email) setEmail(c.email);
+        if (!phone && c.whatsapp) setPhone(c.whatsapp);
+        const e = c.endereco;
+        if (!e) return;
+        if (!cep && e.cep) setCep(e.cep);
+        if (!endereco && e.logradouro) setEndereco(e.logradouro);
+        if (!numero && e.numero) setNumero(e.numero);
+        if (!complemento && e.complemento) setComplemento(e.complemento);
+        if (!bairro && e.bairro) setBairro(e.bairro);
+        if (!cidade && e.cidade) setCidade(e.cidade);
+        if (!uf && e.uf) setUf(e.uf);
+        // Abre a seção pra atendente VER que já veio preenchido — senão ela
+        // acha que está vazio e digita tudo de novo.
+        if (e.cep || e.logradouro || e.cidade) setShowEndereco(true);
+      })
+      .catch(() => { /* silencioso: é conveniência, não pode atrapalhar a venda */ })
+      .finally(() => { if (!cancelado) setBuscandoFicha(false); });
+    return () => { cancelado = true; };
+  }, [cpfDigitos]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── ViaCEP lookup ─────────────────────────────────────────────────────
   // Chama API pública gratuita https://viacep.com.br quando CEP completo (8
   // dígitos). Preenche logradouro/bairro/cidade/UF — vendedora só completa
