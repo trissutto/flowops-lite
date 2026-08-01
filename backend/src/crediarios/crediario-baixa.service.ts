@@ -30,6 +30,7 @@ import { CrediariosService } from './crediarios.service';
 import { CrediarioMirrorService } from './crediario-mirror.service';
 import { PagarmeService } from '../pagarme/pagarme.service';
 import { PagbankService } from '../pagbank/pagbank.service';
+import { sqlParcelaAberta } from '../common/crediario-pago';
 
 export interface JurosConfig {
   diasCarencia: number;
@@ -402,16 +403,8 @@ export class CrediarioBaixaService {
     addCol('valorParcela', 'valorParcela');
 
     const where: string[] = [];
-    // PAGO em aberto — aceita: N, n, NAO, nao, NÃO, vazio ou NULL.
-    // Lurd's usa SIM/NAO (varchar3). Outras instalações usam S/N (char1).
-    if (map.pago) {
-      where.push(
-        `(\`${map.pago}\` IS NULL OR \`${map.pago}\` = '' ` +
-        `OR UPPER(\`${map.pago}\`) IN ('N','NAO','NÃO'))`,
-      );
-    } else if (map.dataPagamento) {
-      where.push(`(\`${map.dataPagamento}\` IS NULL OR \`${map.dataPagamento}\` = '0000-00-00')`);
-    }
+    // Em aberto: regra unica em common/crediario-pago.ts (vale R$ 2,9 mi).
+    where.push(sqlParcelaAberta(map.pago, map.dataPagamento));
     // Filtro por loja (opcional)
     if (safeStore && map.loja) {
       where.push(`\`${map.loja}\` = '${safeStore}'`);
@@ -568,11 +561,7 @@ export class CrediarioBaixaService {
     addCol('vencimento', 'vencimento');
     addCol('valorParcela', 'valorParcela');
     const where: string[] = [];
-    if (map.pago) {
-      where.push(`(\`${map.pago}\` IS NULL OR \`${map.pago}\` = '' OR UPPER(\`${map.pago}\`) IN ('N','NAO','NÃO'))`);
-    } else if (map.dataPagamento) {
-      where.push(`(\`${map.dataPagamento}\` IS NULL OR \`${map.dataPagamento}\` = '0000-00-00')`);
-    }
+    where.push(sqlParcelaAberta(map.pago, map.dataPagamento));
     if (safeStore && map.loja) where.push(`\`${map.loja}\` = '${safeStore}'`);
     where.push(`\`${map.registro}\` IS NOT NULL`, `\`${map.codCliente}\` IS NOT NULL`, `\`${map.codCliente}\` <> ''`, `\`${map.codCliente}\` <> '0'`);
     const leituraGiga = await this.erp.readAllPages(
@@ -1155,11 +1144,7 @@ export class CrediarioBaixaService {
         const inList = cods.map((c) => `'${c.replace(/'/g, '')}'`).join(',');
         const conds = [`\`${map.codCliente}\` IN (${inList})`];
         if (map.loja) conds.push(`\`${map.loja}\` = '${loja}'`);
-        if (map.pago) {
-          conds.push(`(\`${map.pago}\` IS NULL OR \`${map.pago}\` = '' OR UPPER(\`${map.pago}\`) IN ('N','NAO','NÃO'))`);
-        } else if (map.dataPagamento) {
-          conds.push(`(\`${map.dataPagamento}\` IS NULL OR \`${map.dataPagamento}\` = '0000-00-00')`);
-        }
+        conds.push(sqlParcelaAberta(map.pago, map.dataPagamento));
         const sqlCnt = `SELECT \`${map.codCliente}\` AS cod, COUNT(*) AS n FROM \`movimento\` WHERE ${conds.join(' AND ')} GROUP BY \`${map.codCliente}\``;
         const rc = await this.erp.runReadOnly(sqlCnt, { maxRows: cods.length + 10, timeoutMs: 20000 });
         const cnt = new Map((rc.rows as any[]).map((x) => [String(x.cod), Number(x.n) || 0]));
@@ -1217,9 +1202,7 @@ export class CrediarioBaixaService {
     const movimentoLinhas = await count(
       `SELECT COUNT(*) AS n FROM \`movimento\` WHERE \`${map.codCliente}\` = '${codOrigem}'${condLojaMov}`,
     );
-    let abertasCond = '';
-    if (map.pago) abertasCond = ` AND (\`${map.pago}\` IS NULL OR \`${map.pago}\` = '' OR UPPER(\`${map.pago}\`) IN ('N','NAO','NÃO'))`;
-    else if (map.dataPagamento) abertasCond = ` AND (\`${map.dataPagamento}\` IS NULL OR \`${map.dataPagamento}\` = '0000-00-00')`;
+    const abertasCond = ` AND ${sqlParcelaAberta(map.pago, map.dataPagamento)}`;
     const parcelasAbertas = await count(
       `SELECT COUNT(*) AS n FROM \`movimento\` WHERE \`${map.codCliente}\` = '${codOrigem}'${condLojaMov}${abertasCond}`,
     );
@@ -1525,11 +1508,7 @@ export class CrediarioBaixaService {
     addCol('obs', 'obs');
 
     const where: string[] = [`\`${map.codCliente}\` = '${safeCod}'`];
-    if (map.pago) {
-      where.push(`(\`${map.pago}\` IS NULL OR \`${map.pago}\` = '' OR UPPER(\`${map.pago}\`) IN ('N','NAO','NÃO'))`);
-    } else if (map.dataPagamento) {
-      where.push(`(\`${map.dataPagamento}\` IS NULL OR \`${map.dataPagamento}\` = '0000-00-00')`);
-    }
+    where.push(sqlParcelaAberta(map.pago, map.dataPagamento));
     if (safeStore && map.loja) {
       where.push(`\`${map.loja}\` = '${safeStore}'`);
     }
@@ -1712,13 +1691,7 @@ export class CrediarioBaixaService {
 
     const inList = codClientes.map((c) => `'${c}'`).join(',');
     const where: string[] = [`\`${map.codCliente}\` IN (${inList})`];
-    if (map.pago) {
-      where.push(`(\`${map.pago}\` IS NULL OR \`${map.pago}\` = '' OR UPPER(\`${map.pago}\`) IN ('N','NAO','NÃO'))`);
-    } else if (map.dataPagamento) {
-      where.push(
-        `(\`${map.dataPagamento}\` IS NULL OR \`${map.dataPagamento}\` = '0000-00-00')`,
-      );
-    }
+    where.push(sqlParcelaAberta(map.pago, map.dataPagamento));
     if (safeStore && map.loja) {
       where.push(`\`${map.loja}\` = '${safeStore}'`);
     }

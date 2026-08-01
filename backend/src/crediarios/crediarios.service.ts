@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ErpService } from '../erp/erp.service';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { sqlParcelaAberta } from '../common/crediario-pago';
 import {
   CobrancaContext, ParcelaCobranca, renderCobranca, TEMPLATES,
   DEFAULT_TEMPLATE_STRINGS,
@@ -570,11 +571,7 @@ export class CrediariosService {
     }
     if (dataInicio) where.push(`\`${map.vencimento}\` >= '${dataInicio}'`);
     if (dataFim)    where.push(`\`${map.vencimento}\` <= '${dataFim}'`);
-    if (map.pago) {
-      where.push(`(\`${map.pago}\` IS NULL OR \`${map.pago}\` = '' OR UPPER(\`${map.pago}\`) IN ('N','NAO','NÃO'))`);
-    } else if (map.dataPagamento) {
-      where.push(`(\`${map.dataPagamento}\` IS NULL OR \`${map.dataPagamento}\` = '0000-00-00' OR \`${map.dataPagamento}\` = '0000-00-00 00:00:00')`);
-    }
+    where.push(sqlParcelaAberta(map.pago, map.dataPagamento));
     // Excluir cliente 0 (cartão / avulso / VISANET / CREDICARD / REDESHOP)
     where.push(`\`${map.codCliente}\` IS NOT NULL`);
     where.push(`\`${map.codCliente}\` <> 0`);
