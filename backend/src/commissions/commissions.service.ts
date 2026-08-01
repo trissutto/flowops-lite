@@ -62,6 +62,28 @@ export class CommissionsService {
       .normalize('NFD').replace(CommissionsService.ACENTOS, '');
   }
 
+  /**
+   * Lojas em que a ficha vale: a de origem + as de atuação.
+   * `lojasAtuacao` é JSON (ex: ["10","03"]) — existe justamente pra
+   * funcionária que roda em mais de uma loja.
+   */
+  private static lojasDaFicha(s: any): string[] {
+    const lojas = new Set<string>();
+    const origem = String(s.storeCodeOrigin ?? '').trim();
+    if (origem) lojas.add(origem);
+    const bruto = s.lojasAtuacao;
+    try {
+      const arr = typeof bruto === 'string' ? JSON.parse(bruto) : bruto;
+      if (Array.isArray(arr)) {
+        for (const l of arr) {
+          const c = String(l ?? '').trim();
+          if (c) lojas.add(c);
+        }
+      }
+    } catch { /* campo mal formado não pode derrubar a folha */ }
+    return [...lojas];
+  }
+
   /** Índices (loja|código) e (loja|nome) — ficha ATIVA tem precedência. */
   private montarIndicesPorLoja(sellers: any[]): {
     porCodigoLoja: Map<string, any>;
@@ -75,17 +97,20 @@ export class CommissionsService {
       (a, b) => Number(!!b.active) - Number(!!a.active),
     );
     for (const s of ordenadas) {
-      const loja = String(s.storeCodeOrigin ?? '').trim();
-      if (!loja) continue;
-      if (s.wincredCodigo != null && String(s.wincredCodigo).trim()) {
-        const k = `${loja}|${String(s.wincredCodigo).trim()}`;
-        if (!porCodigoLoja.has(k)) porCodigoLoja.set(k, s);
-      }
-      for (const nome of [s.apelido, s.name]) {
-        const chave = CommissionsService.chaveNome(nome);
-        if (!chave) continue;
-        const k = `${loja}|${chave}`;
-        if (!porNomeLoja.has(k)) porNomeLoja.set(k, s);
+      // Loja de origem MAIS as lojas de atuação: tem funcionária que roda em
+      // duas lojas (Brenda: origem 03, lojasAtuacao ["10","03"]). Indexar só
+      // pela origem fazia a venda dela na outra loja não resolver.
+      for (const loja of CommissionsService.lojasDaFicha(s)) {
+        if (s.wincredCodigo != null && String(s.wincredCodigo).trim()) {
+          const k = `${loja}|${String(s.wincredCodigo).trim()}`;
+          if (!porCodigoLoja.has(k)) porCodigoLoja.set(k, s);
+        }
+        for (const nome of [s.apelido, s.name]) {
+          const chave = CommissionsService.chaveNome(nome);
+          if (!chave) continue;
+          const k = `${loja}|${chave}`;
+          if (!porNomeLoja.has(k)) porNomeLoja.set(k, s);
+        }
       }
     }
     return { porCodigoLoja, porNomeLoja };
