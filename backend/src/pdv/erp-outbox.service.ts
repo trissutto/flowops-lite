@@ -3,6 +3,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
 import { PdvService } from './pdv.service';
+import { MarcadosService } from './marcados.service';
 
 /**
  * ErpOutboxService — processa a fila `erp_outbox` de escrita no Giga/Wincred.
@@ -40,6 +41,7 @@ export class ErpOutboxService {
     private readonly prisma: PrismaService,
     private readonly pdv: PdvService,
     private readonly erp: ErpService,
+    private readonly marcados: MarcadosService,
   ) {}
 
   @Cron(CronExpression.EVERY_30_SECONDS, { name: 'erp-outbox-processor' })
@@ -94,6 +96,8 @@ export class ErpOutboxService {
     if (job.kind === 'cliente_upsert') return this.processClienteUpsert(job);
     if (job.kind === 'crediario_baixa') return this.processCrediarioBaixa(job);
     if (job.kind === 'crediario_estorno') return this.processCrediarioEstorno(job);
+    if (job.kind === 'marcado_criar') return this.processMarcadoCriar(job);
+    if (job.kind === 'marcado_remover') return this.processMarcadoRemover(job);
     if (job.kind !== 'venda') {
       await this.markFailed(job, `kind desconhecido: ${job.kind}`);
       return false;
@@ -422,6 +426,109 @@ export class ErpOutboxService {
       return true;
     } catch (e: any) {
       this.logger.warn(`[outbox] crediario_baixa ${job.saleId} re-agendado: ${e?.message}`);
+      return this.requeueOrFail(job, e);
+    }
+  }
+
+  /**
+   * Réplica do MARCADO no Giga (INSERT em `caixa` com MARCADO='SIM').
+   *
+   * O marcado já está gravado no Flow, que é a fonte — este job só espelha.
+   *
+   * IDEMPOTÊNCIA: `insertCaixaMarcado` é INSERT puro, então repetir o job
+   * duplicaria a linha na caixa e a cliente apareceria devendo o dobro. A trava
+   * é a própria linha nativa: quando a réplica passa, `registroGiga` é
+   * carimbado. Se QUALQUER uma das linhas deste job já tem carimbo, a réplica
+   * já aconteceu e o job encerra sem tocar no Giga.
+   */
+  private async processMarcadoCriar(job: any): Promise<boolean> {
+    const ids: string[] = Array.isArray(job.payload?.idsCriados) ? job.payload.idsCriados : [];
+    const itensGiga = Array.isArray(job.payload?.itensGiga) ? job.payload.itensGiga : [];
+    const codCliente = Number(job.payload?.codCliente) || 0;
+    const loja = String(job.payload?.loja || '');
+
+    if (!ids.length || !itensGiga.length || !codCliente || !loja) {
+      await this.markFailed(job, 'marcado_criar sem payload completo');
+      return false;
+    }
+
+    try {
+      const linhas: any[] = await (this.prisma as any).marcado.findMany({
+        where: { id: { in: ids } },
+        select: { id: true, registroGiga: true, numero: true, status: true },
+      });
+
+      if (!linhas.length) {
+        // As linhas nativas sumiram (marcado cancelado antes da réplica sair).
+        // Replicar agora criaria no Giga uma dívida que não existe no Flow.
+        await this.prisma.erpOutbox.update({
+          where: { id: job.id },
+          data: { status: 'done', doneAt: new Date(), lastError: 'linhas nativas não existem mais — réplica descartada' },
+        });
+        this.logger.warn(`[outbox] marcado_criar ${job.saleId}: linhas nativas sumiram, réplica descartada`);
+        return true;
+      }
+
+      if (linhas.some((l) => l.registroGiga != null || l.numero != null)) {
+        await this.prisma.erpOutbox.update({
+          where: { id: job.id },
+          data: { status: 'done', doneAt: new Date(), lastError: null },
+        });
+        this.logger.log(`[outbox] marcado_criar ${job.saleId}: já replicado antes, nada a fazer`);
+        return true;
+      }
+
+      // Marcado devolvido/baixado antes da réplica sair: o Giga nunca chegou a
+      // ter a linha, então não há o que espelhar nem o que estornar.
+      if (linhas.every((l) => l.status !== 'ativo')) {
+        await this.prisma.erpOutbox.update({
+          where: { id: job.id },
+          data: { status: 'done', doneAt: new Date(), lastError: `marcado já ${linhas[0].status} — réplica descartada` },
+        });
+        this.logger.log(`[outbox] marcado_criar ${job.saleId}: marcado não está mais ativo, réplica descartada`);
+        return true;
+      }
+
+      const r = await this.erp.insertCaixaMarcado({ items: itensGiga, cliente: codCliente, loja });
+      if (!r.success) throw new Error(r.error || 'insertCaixaMarcado sem sucesso');
+
+      await this.marcados.carimbarRetornoDoGiga(ids, Number(r.controle) || null, codCliente);
+
+      await this.prisma.erpOutbox.update({
+        where: { id: job.id },
+        data: { status: 'done', doneAt: new Date(), lastError: null },
+      });
+      this.logger.log(`[outbox] marcado_criar ${job.saleId}: ${ids.length} peça(s) na caixa do Giga (controle ${r.controle})`);
+      return true;
+    } catch (e: any) {
+      this.logger.warn(`[outbox] marcado_criar ${job.saleId} re-agendado: ${e?.message}`);
+      return this.requeueOrFail(job, e);
+    }
+  }
+
+  /**
+   * Remoção da linha de marcado na caixa do Giga (peça devolvida).
+   *
+   * IDEMPOTÊNCIA de graça: DELETE de linha que já sumiu é sucesso, não erro —
+   * ao contrário do INSERT do `marcado_criar`, repetir não causa dano.
+   */
+  private async processMarcadoRemover(job: any): Promise<boolean> {
+    const registro = Number(job.payload?.registro) || 0;
+    if (!registro) {
+      await this.markFailed(job, 'marcado_remover sem registro');
+      return false;
+    }
+    try {
+      const r = await (this.erp as any).deleteCaixaMarcadoRow({ registro });
+      if (!r.success) throw new Error(r.error || 'DELETE sem sucesso');
+      await this.prisma.erpOutbox.update({
+        where: { id: job.id },
+        data: { status: 'done', doneAt: new Date(), lastError: null },
+      });
+      this.logger.log(`[outbox] marcado_remover REGISTRO=${registro}: removido da caixa do Giga`);
+      return true;
+    } catch (e: any) {
+      this.logger.warn(`[outbox] marcado_remover ${registro} re-agendado: ${e?.message}`);
       return this.requeueOrFail(job, e);
     }
   }
