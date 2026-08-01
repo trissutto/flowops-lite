@@ -100,6 +100,89 @@ export class CommissionEngineService {
   // ── Agregações canônicas ────────────────────────────────────────────
 
   /**
+   * Status de Order que contam como venda. MESMA lista do FaturamentoService —
+   * se as duas divergirem, faturamento e comissão param de bater.
+   */
+  private static readonly ORDER_STATUSES_VENDA = [
+    'processing', 'routing', 'awaiting_stock', 'separating',
+    'ready', 'shipped', 'delivered', 'completed',
+  ];
+
+  /**
+   * Fichas de CANAL (decisão do dono, 01/08). A loja 13 mistura três negócios
+   * e ele quer os três identificados na folha, não somados nem sumidos:
+   *   LIVE → o que vem da tela da live
+   *   SITE → o que vem 100% do WooCommerce (cliente comprou sozinha)
+   * O terceiro é a venda de WhatsApp (Karine, Manu, Grazi), que já entra como
+   * venda normal do PDV na loja 13 e vai pra ficha de cada uma.
+   *
+   * ⚠️ Estas duas fichas caem na regra global de 2% como qualquer vendedora.
+   * Se a intenção for NÃO pagar comissão sobre elas, criar regra de 0% pra
+   * cada uma na aba Regras — o motor respeita regra por vendedora.
+   */
+  static readonly SELLER_LIVE = 'LIVE';
+  static readonly SELLER_SITE = 'SITE';
+
+  /**
+   * VENDA DO SITE E DA LIVE — vive na tabela `orders`, não em `pdv_sales`
+   * (01/08). O motor lia só o PDV, então em julho R$ 104.910,43 de site+live
+   * não geravam comissão pra ninguém: 279 pedidos de WooCommerce e 204 da
+   * live. Decisão do dono:
+   *   - `source='live'`  → tudo vai pra ficha "LIVE"
+   *   - `source='site'` COM vendedora atribuída → vai pra ela (é venda de
+   *     WhatsApp que a menina lançou pelo site em vez do PDV)
+   *   - `source='site'` SEM vendedora → ninguém (é WooCommerce orgânico, a
+   *     cliente comprou sozinha; não existe vendedora pra pagar)
+   *
+   * Valor = SÓ ITENS (quantidade × preço), sem frete — mesmo critério do
+   * faturamento e da comissão do PDV, onde frete também não comissiona.
+   */
+  async porVendedoraOrders(
+    start: Date,
+    end: Date,
+    storeCode?: string | null,
+  ): Promise<Array<{ sellerId: string | null; sellerName: string | null; storeCode: string; qtd: number; total: number; origem: string }>> {
+    // O site é a loja 13 no cadastro. Se a folha estiver filtrada por outra
+    // loja, orders não entra.
+    const lojaSite = await this.prisma.store
+      .findFirst({ where: { OR: [{ name: 'SITE' }, { code: 'SITE' }] }, select: { code: true } })
+      .catch(() => null);
+    const code = lojaSite?.code || '13';
+    if (storeCode && storeCode !== code) return [];
+
+    const rows: any[] = await this.prisma.$queryRawUnsafe(
+      `SELECT o.source AS origem,
+              o.seller_id AS "sellerId",
+              o.seller_name AS "sellerName",
+              COUNT(DISTINCT o.id)::int AS qtd,
+              COALESCE(SUM(i.quantity * i.unit_price), 0)::float8 AS total
+         FROM orders o
+         JOIN order_items i ON i.order_id = o.id
+        WHERE o.wc_date_created >= $1 AND o.wc_date_created < $2
+          AND o.status = ANY($3)
+        GROUP BY o.source, o.seller_id, o.seller_name`,
+      start, end, CommissionEngineService.ORDER_STATUSES_VENDA,
+    );
+
+    return rows.map((r) => {
+      const ehLive = String(r.origem) === 'live';
+      // Site COM vendedora = venda de WhatsApp lançada pelo site → é dela.
+      // Site SEM vendedora = WooCommerce puro → ficha de canal SITE.
+      const canal = ehLive
+        ? CommissionEngineService.SELLER_LIVE
+        : (r.sellerId ? null : CommissionEngineService.SELLER_SITE);
+      return {
+        sellerId: canal ? null : r.sellerId,
+        sellerName: canal || r.sellerName,
+        storeCode: code,
+        qtd: Number(r.qtd) || 0,
+        total: Number(r.total) || 0,
+        origem: String(r.origem),
+      };
+    });
+  }
+
+  /**
    * Indicadores por VENDEDORA×LOJA (seller_id cru — resolver no consumidor).
    *
    * `sellerName` vai junto de propósito (01/08): o `seller_id` gravado na venda
