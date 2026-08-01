@@ -185,8 +185,11 @@ export class ProductClassificationService {
           // Busca resolvida pelo Giga (rotina do Realinhamento): filtra por REF.
           if (!searchRefs.has(r.ref)) return false;
         } else {
-          // Fallback local (ERP indisponível): texto em ref + descrições.
-          const hay = `${r.ref} ${r.busca || r.descricao}`.toUpperCase();
+          // Fallback local (ERP indisponível): texto em ref + descrições + MARCA.
+          // A MARCA precisa entrar: "2319 KASUAL" dava ZERO porque KASUAL é a
+          // marca do 2319 e não aparecia em descrição nenhuma. Fornecedor segue
+          // de fora (dado sujo: CNPJ/ruído poluía o resultado).
+          const hay = `${r.ref} ${r.busca || r.descricao} ${r.marca || ''}`.toUpperCase();
           for (const w of words) if (!hay.includes(w)) return false;
         }
       }
@@ -369,7 +372,7 @@ export class ProductClassificationService {
     const snapAntes = this.snapshot || [];
     const idadeMin = this.snapshotAt ? Math.round((Date.now() - this.snapshotAt) / 60000) : null;
     const matchAntes = snapAntes
-      .filter((r) => `${r.ref} ${r.busca || ''} ${r.descricao}`.toUpperCase().includes(term))
+      .filter((r) => `${r.ref} ${r.busca || ''} ${r.descricao} ${r.marca || ''}`.toUpperCase().includes(term))
       .slice(0, 10)
       .map((r) => ({ ref: r.ref, descricao: r.descricao.slice(0, 80) }));
 
@@ -381,7 +384,7 @@ export class ProductClassificationService {
       const snap = await this.getSnapshot(true);
       totalDepois = snap.length;
       matchDepois = snap
-        .filter((r) => `${r.ref} ${r.busca || ''} ${r.descricao}`.toUpperCase().includes(term))
+        .filter((r) => `${r.ref} ${r.busca || ''} ${r.descricao} ${r.marca || ''}`.toUpperCase().includes(term))
         .slice(0, 10)
         .map((r) => ({ ref: r.ref, descricao: r.descricao.slice(0, 80) }));
     } catch (e: any) {
