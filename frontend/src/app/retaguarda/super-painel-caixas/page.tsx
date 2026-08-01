@@ -73,6 +73,9 @@ type Loja = {
   storeName: string;
   sessionId: string | null;
   aberta: boolean;
+  // Vendeu hoje mas o caixa já foi fechado. Antes essa loja aparecia zerada e
+  // ficava FORA do total da rede (01/08: R$ 12.991,17 escondidos em 3 lojas).
+  caixaFechadoComVenda?: boolean;
   sessaoPendente?: boolean;            // sessão de outro dia ainda não fechada
   sessaoPendenteAbertaEm?: string | null;
   openedAt: string | null;
@@ -657,11 +660,17 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo }: { lo
   const recPixBaixas = rec.baixas.filter((b) => b.forma === 'pix' || (b.forma === 'misto' && (b.valorPix || 0) > 0));
   return (
     <div className={`rounded-xl shadow-lg overflow-hidden border-2 ${
-      loja.aberta ? 'bg-white border-emerald-300' : 'bg-slate-100 border-slate-300 opacity-75'
+      loja.aberta
+        ? 'bg-white border-emerald-300'
+        // Caixa fechado MAS vendeu: não é loja parada — o valor conta no total
+        // da rede, então não pode ficar apagada igual a quem não abriu.
+        : loja.caixaFechadoComVenda
+          ? 'bg-white border-slate-400'
+          : 'bg-slate-100 border-slate-300 opacity-75'
     }`}>
       {/* Header da loja */}
       <div className={`px-3 py-2 flex items-center justify-between ${
-        loja.aberta ? 'bg-emerald-600 text-white' : 'bg-slate-400 text-white'
+        loja.aberta ? 'bg-emerald-600 text-white' : 'bg-slate-500 text-white'
       }`}>
         <div className="flex items-center gap-1.5">
           {loja.aberta ? <Unlock size={14} /> : <Lock size={14} />}
@@ -672,7 +681,9 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo }: { lo
           {loja.aberta ? (
             <span className="text-[10px] opacity-90 font-bold">desde {fmtTime(loja.openedAt)}</span>
           ) : (
-            <span className="text-[10px] opacity-90 font-bold uppercase">Fechado</span>
+            <span className="text-[10px] opacity-90 font-bold uppercase">
+              {loja.caixaFechadoComVenda ? 'Caixa fechado' : 'Fechado'}
+            </span>
           )}
           <a
             href={`/retaguarda/produtos-vendidos?storeCode=${encodeURIComponent(loja.storeCode)}${dateFrom ? `&from=${dateFrom}` : ''}${dateTo ? `&to=${dateTo}` : ''}`}
@@ -729,9 +740,18 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo }: { lo
         <div className="flex items-end justify-between">
           <div>
             <div className="text-[10px] uppercase font-bold text-slate-500">Vendas hoje</div>
-            <div className={`text-3xl font-black tabular-nums ${loja.aberta ? 'text-emerald-700' : 'text-slate-400'}`}>
+            <div className={`text-3xl font-black tabular-nums ${
+              loja.aberta
+                ? 'text-emerald-700'
+                : loja.caixaFechadoComVenda ? 'text-slate-700' : 'text-slate-400'
+            }`}>
               {brl(t.totalVendas)}
             </div>
+            {loja.caixaFechadoComVenda && (
+              <div className="text-[10px] text-slate-500 font-semibold">
+                caixa já fechado · valor conta no total da rede
+              </div>
+            )}
           </div>
           <div className="text-right">
             <div className="text-[10px] text-slate-500 font-bold">{t.qtdVendas} ticket{t.qtdVendas !== 1 ? 's' : ''}</div>
