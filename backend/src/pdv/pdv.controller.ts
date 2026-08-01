@@ -380,6 +380,15 @@ export class PdvController {
     };
   }
 
+  /**
+   * GET /pdv/promo-check?codigo= — "essa peça entra na promoção?"
+   * Consulta pura: não cria venda, não lança item, não mexe em estoque.
+   */
+  @Get('promo-check')
+  promoCheck(@Query('codigo') codigo?: string) {
+    return this.svc.consultarPromocao(String(codigo || ''));
+  }
+
   @Get('nfces')
   async listNfces(
     @Req() req: any,
