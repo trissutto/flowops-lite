@@ -117,6 +117,8 @@ export class MarcadosService {
   }): Promise<{
     ok: boolean;
     controle?: number | string;
+    /** true = marcado válido no Flow, réplica pro Giga ainda na fila. */
+    gigaPendente?: boolean;
     totalItems?: number;
     totalValor?: number;
     forced?: boolean;
@@ -199,76 +201,78 @@ export class MarcadosService {
       );
     }
 
-    // 3. INSERT linhas em caixa do Giga
+    // 3. Grava o marcado — FLOW PRIMEIRO, Giga é réplica
     const codCliente = Number(info.cliente.codCliente) || 0;
     if (!codCliente) {
       throw new BadRequestException('Código do cliente não encontrado');
     }
 
-    const insertResult = await this.erp.insertCaixaMarcado({
-      items: sale.items.map((it: any) => ({
-        codigo: String(it.sku || it.ref || '').trim(),
-        descricao: String(it.descricao || '').slice(0, 100),
-        quantidade: Number(it.qty) || 1,
-        valor: Number(it.precoUnit) || 0,
-        valorTotal: Number(it.total) || 0,
-        vendedor: 0, // TODO: mapear sellerId pro código numérico do vendedor Giga
-        operador: 0,
-      })),
-      cliente: codCliente,
-      loja: input.storeCode,
-    });
+    const itensGiga = sale.items.map((it: any) => ({
+      codigo: String(it.sku || it.ref || '').trim(),
+      descricao: String(it.descricao || '').slice(0, 100),
+      quantidade: Number(it.qty) || 1,
+      valor: Number(it.precoUnit) || 0,
+      valorTotal: Number(it.total) || 0,
+      vendedor: 0, // TODO: mapear sellerId pro código numérico do vendedor Giga
+      operador: 0,
+    }));
 
-    if (!insertResult.success) {
-      throw new BadRequestException(`Falha ao inserir marcados no Giga: ${insertResult.error}`);
-    }
+    // ORDEM INVERTIDA (31/07). Antes o INSERT no Giga vinha primeiro e um
+    // `throw` derrubava a operação inteira — era a ÚNICA escrita do sistema que
+    // fazia isso; todas as outras degradam pra fila ou log. Com o Giga
+    // pendurado (o firewall da KingHost derruba o IP do Railway e o MySQL trava
+    // sem dar erro), a peça saía com a cliente e não ficava registrada em lugar
+    // nenhum — nem no Flow, porque a gravação nativa vinha DEPOIS do throw.
+    //
+    // A identidade do marcado é `Marcado.id` (cuid do Flow). `numero` e
+    // `registroGiga` são detalhe da réplica: nascem nulos e são preenchidos
+    // quando o Giga confirma. O schema já os declara opcionais e as leituras já
+    // tratam a ausência.
+    //
+    // Por que não dar um número do Flow pro `numero`: ele vai pra `caixa.NUMERO`,
+    // que é FLOAT de precisão simples no Giga — inteiro só é exato até
+    // 16.777.216. Uma faixa alta (900.000.001, 900.000.002) colapsaria no MESMO
+    // valor e fundiria marcados diferentes. Medido em
+    // `scripts/giga-etl/medir-numero-caixa.js`.
+    //
+    // Kill-switch: MARCADOS_FLOW_FIRST=0 volta o Giga pra frente (comportamento
+    // antigo, incluindo o throw).
+    const flowFirst = String(process.env.MARCADOS_FLOW_FIRST ?? '1') !== '0';
+    const lojaCode = String(input.storeCode || '').trim().toUpperCase().replace(/^LJ/i, '').padStart(2, '0');
 
-    // Grava o NATIVO na hora (a consulta já lê daqui). Best-effort: captura
-    // os REGISTROs recém-inseridos pelo CONTROLE; se o Giga demorar, cria sem
-    // registroGiga e o sync horário casa por NUMERO+loja+sku.
-    try {
-      const lojaCode = String(input.storeCode || '').trim().toUpperCase().replace(/^LJ/i, '').padStart(2, '0');
-      const controle = Number(insertResult.controle) || null;
-      const regPorSku = new Map<string, number[]>();
-      if (controle) {
-        try {
-          const cap = await this.erp.runReadOnly(
-            `SELECT REGISTRO, CODIGO FROM caixa
-              WHERE NUMERO = ${controle} AND CLIENTE = ${codCliente} AND UPPER(MARCADO) = 'SIM'`,
-            { maxRows: 100, timeoutMs: 8000 },
-          );
-          for (const row of cap.rows || []) {
-            const k = String(row.CODIGO || '').trim();
-            if (!regPorSku.has(k)) regPorSku.set(k, []);
-            regPorSku.get(k)!.push(Number(row.REGISTRO));
-          }
-        } catch { /* segue sem registro — sync casa depois */ }
+    let controleGiga: number | null = null;
+    let gigaEnfileirado = false;
+
+    if (!flowFirst) {
+      const insertResult = await this.erp.insertCaixaMarcado({
+        items: itensGiga,
+        cliente: codCliente,
+        loja: input.storeCode,
+      });
+      if (!insertResult.success) {
+        throw new BadRequestException(`Falha ao inserir marcados no Giga: ${insertResult.error}`);
       }
-      for (const it of sale.items) {
-        const sku = String(it.sku || it.ref || '').trim();
-        const fila = regPorSku.get(sku);
-        const reg = fila && fila.length ? fila.shift()! : null;
-        await (this.prisma as any).marcado.create({
-          data: {
-            registroGiga: reg ? BigInt(reg) : null,
-            storeCode: lojaCode,
-            codCliente: String(codCliente),
-            clienteNome: info.cliente?.nome || null,
-            cpf: String(sale.customerCpf || '').replace(/\D/g, '') || null,
-            numero: controle,
-            sku: sku.slice(0, 60),
-            descricao: String(it.descricao || '').slice(0, 160) || null,
-            qty: Number(it.qty) || 1,
-            valorUnit: Number(it.precoUnit) || 0,
-            valorTotal: Number(it.total) || 0,
-            dataMarcacao: new Date(),
-            status: 'ativo',
-            origem: 'flow',
-          },
-        });
-      }
-    } catch (e: any) {
-      this.logger.warn(`[marcados] nativo não gravado na criação (sync horário pega): ${e?.message}`);
+      controleGiga = Number(insertResult.controle) || null;
+      await this.gravarMarcadosNativos({
+        sale, info, codCliente, lojaCode, controle: controleGiga,
+      }).catch((e) =>
+        this.logger.warn(`[marcados] nativo não gravado (sync horário pega): ${e?.message}`),
+      );
+    } else {
+      // 3a. O Flow é a fonte: se ESTA gravação falhar, aí sim aborta — não há
+      // onde registrar o marcado, e deixar a peça sair sem registro é pior que
+      // recusar a operação.
+      const idsCriados = await this.gravarMarcadosNativos({
+        sale, info, codCliente, lojaCode, controle: null,
+      });
+
+      // 3b. Réplica pro Giga: tenta inline (o caso comum, milissegundos) e cai
+      // pra fila se falhar. Nunca derruba a operação.
+      const rep = await this.replicarMarcadoNoGiga({
+        idsCriados, itensGiga, codCliente, loja: input.storeCode, saleId: input.saleId,
+      });
+      controleGiga = rep.controle;
+      gigaEnfileirado = rep.enfileirado;
     }
 
     // 4. Baixa estoque Giga (igual venda — peças saem do estoque físico)
@@ -300,17 +304,230 @@ export class MarcadosService {
 
     this.logger.log(
       `[marcados] Marcado criado: cliente=${info.cliente.nome} (cod ${codCliente}) ` +
-      `controle=${insertResult.controle} total=R$${Number(sale.total).toFixed(2)} ` +
-      `items=${sale.items.length}`,
+      `controle=${controleGiga ?? '(pendente no Giga)'} total=R$${Number(sale.total).toFixed(2)} ` +
+      `items=${sale.items.length}${gigaEnfileirado ? ' · réplica na fila' : ''}`,
     );
 
+    // `controle` é o comprovante que a vendedora vê. Com o Giga na fila ele
+    // ainda não existe, então cai pro final do código da venda — que identifica
+    // o marcado do mesmo jeito na consulta e não deixa a tela sem referência.
     return {
       ok: true,
-      controle: insertResult.controle,
+      controle: controleGiga ?? `V-${String(input.saleId).slice(-6).toUpperCase()}`,
+      gigaPendente: gigaEnfileirado,
       totalItems: sale.items.length,
       totalValor: Number(sale.total),
       forced: Number(sale.total) > info.limiteDisponivel,
     };
+  }
+
+  /**
+   * Cria as linhas NATIVAS do marcado (a fonte). Uma por item da venda.
+   *
+   * `controle` só vem preenchido no caminho legado (Giga primeiro), onde os
+   * REGISTROs já podem ser capturados na hora. No caminho Flow-primeiro nasce
+   * nulo e é preenchido depois, quando a réplica confirma.
+   *
+   * Devolve os ids criados — a réplica precisa deles pra saber quais linhas
+   * carimbar.
+   */
+  private async gravarMarcadosNativos(input: {
+    sale: any;
+    info: any;
+    codCliente: number;
+    lojaCode: string;
+    controle: number | null;
+  }): Promise<string[]> {
+    const { sale, info, codCliente, lojaCode, controle } = input;
+
+    // No caminho legado dá pra casar REGISTRO com SKU lendo de volta a caixa.
+    const regPorSku = new Map<string, number[]>();
+    if (controle) {
+      try {
+        const cap = await this.erp.runReadOnly(
+          `SELECT REGISTRO, CODIGO FROM caixa
+            WHERE NUMERO = ${controle} AND CLIENTE = ${codCliente} AND UPPER(MARCADO) = 'SIM'`,
+          { maxRows: 100, timeoutMs: 8000 },
+        );
+        for (const row of cap.rows || []) {
+          const k = String(row.CODIGO || '').trim();
+          if (!regPorSku.has(k)) regPorSku.set(k, []);
+          regPorSku.get(k)!.push(Number(row.REGISTRO));
+        }
+      } catch { /* segue sem registro — a réplica ou o sync casam depois */ }
+    }
+
+    const ids: string[] = [];
+    for (const it of sale.items) {
+      const sku = String(it.sku || it.ref || '').trim();
+      const fila = regPorSku.get(sku);
+      const reg = fila && fila.length ? fila.shift()! : null;
+      const criado = await (this.prisma as any).marcado.create({
+        data: {
+          registroGiga: reg ? BigInt(reg) : null,
+          storeCode: lojaCode,
+          codCliente: String(codCliente),
+          clienteNome: info.cliente?.nome || null,
+          cpf: String(sale.customerCpf || '').replace(/\D/g, '') || null,
+          numero: controle,
+          sku: sku.slice(0, 60),
+          descricao: String(it.descricao || '').slice(0, 160) || null,
+          qty: Number(it.qty) || 1,
+          valorUnit: Number(it.precoUnit) || 0,
+          valorTotal: Number(it.total) || 0,
+          dataMarcacao: new Date(),
+          status: 'ativo',
+          origem: 'flow',
+          saleId: sale.id,
+        },
+        select: { id: true },
+      });
+      ids.push(criado.id);
+    }
+    return ids;
+  }
+
+  /**
+   * Réplica do marcado no Giga. Tenta inline; se falhar, enfileira e segue.
+   *
+   * NUNCA lança: o marcado já está gravado no Flow quando isto roda, e derrubar
+   * a operação aqui só apagaria da tela algo que já é verdade.
+   */
+  private async replicarMarcadoNoGiga(input: {
+    idsCriados: string[];
+    itensGiga: any[];
+    codCliente: number;
+    loja: string;
+    saleId: string;
+  }): Promise<{ controle: number | null; enfileirado: boolean }> {
+    const { idsCriados, itensGiga, codCliente, loja, saleId } = input;
+
+    try {
+      const r = await this.erp.insertCaixaMarcado({ items: itensGiga, cliente: codCliente, loja });
+      if (r.success) {
+        const controle = Number(r.controle) || null;
+        await this.carimbarRetornoDoGiga(idsCriados, controle, codCliente);
+        return { controle, enfileirado: false };
+      }
+      await this.enfileirarMarcado(input, r.error || 'insertCaixaMarcado sem sucesso');
+      return { controle: null, enfileirado: true };
+    } catch (e: any) {
+      await this.enfileirarMarcado(input, e?.message || String(e));
+      return { controle: null, enfileirado: true };
+    }
+  }
+
+  private async enfileirarMarcado(
+    input: { idsCriados: string[]; itensGiga: any[]; codCliente: number; loja: string; saleId: string },
+    erro: string,
+  ): Promise<void> {
+    try {
+      await (this.prisma as any).erpOutbox.create({
+        data: {
+          kind: 'marcado_criar',
+          // `saleId` do outbox é chave de correlação genérica; o prefixo evita
+          // colidir com o job 'venda' da MESMA venda (unique [kind, saleId]).
+          saleId: `marcado-${input.saleId}`,
+          payload: {
+            idsCriados: input.idsCriados,
+            itensGiga: input.itensGiga,
+            codCliente: input.codCliente,
+            loja: input.loja,
+          },
+          status: 'pending',
+        },
+      });
+      this.logger.warn(
+        `[marcados] Giga indisponível (${erro}) — marcado gravado no Flow e réplica enfileirada ` +
+        `(venda ${input.saleId}, ${input.idsCriados.length} peça(s))`,
+      );
+    } catch (e: any) {
+      // Fila indisponível é grave: o Giga vai ficar sem a linha e ninguém avisa.
+      // O marcado no Flow continua válido — a loja cobra e a retaguarda concilia.
+      this.logger.error(
+        `[marcados] NÃO consegui enfileirar a réplica do marcado da venda ${input.saleId}: ${e?.message}. ` +
+        `O marcado VALE no Flow; a caixa do Giga vai ficar sem essa linha até alguém reconciliar.`,
+      );
+    }
+  }
+
+  /**
+   * Enfileira a REMOÇÃO da linha da caixa do Giga quando o DELETE inline falha.
+   *
+   * O marcado já está devolvido no Flow quando isto roda. A linha órfã no Giga
+   * faria a cliente aparecer devendo uma peça que ela já trouxe de volta — por
+   * isso a fila insiste, em vez de mandar a vendedora "resolver no Wincred".
+   */
+  private async enfileirarRemocaoMarcado(registro: number, erro: string): Promise<void> {
+    try {
+      await (this.prisma as any).erpOutbox.create({
+        data: {
+          kind: 'marcado_remover',
+          // Chave por REGISTRO: se a mesma remoção for enfileirada duas vezes,
+          // o unique [kind, saleId] recusa a segunda em vez de duplicar o job.
+          saleId: `marcrem-${registro}`,
+          payload: { registro },
+          status: 'pending',
+        },
+      });
+      this.logger.warn(
+        `[marcados.devolver] DELETE da caixa REGISTRO=${registro} falhou (${erro}) — ` +
+        `devolução VALE no Flow, remoção no Giga enfileirada`,
+      );
+    } catch (e: any) {
+      const jaExiste = String(e?.code) === 'P2002';
+      if (jaExiste) return; // já tem job pendente pro mesmo registro
+      this.logger.error(
+        `[marcados.devolver] não consegui enfileirar a remoção do REGISTRO=${registro}: ${e?.message}. ` +
+        `A linha vai ficar na caixa do Giga até alguém reconciliar.`,
+      );
+    }
+  }
+
+  /**
+   * Carimba nas linhas nativas o NUMERO e os REGISTROs que o Giga devolveu.
+   * Público porque o cron do outbox chama isto quando a réplica atrasada
+   * finalmente passa.
+   */
+  async carimbarRetornoDoGiga(ids: string[], controle: number | null, codCliente: number): Promise<void> {
+    if (!ids.length) return;
+    try {
+      if (controle) {
+        await (this.prisma as any).marcado.updateMany({
+          where: { id: { in: ids } },
+          data: { numero: controle },
+        });
+      }
+      if (!controle) return;
+
+      const cap = await this.erp.runReadOnly(
+        `SELECT REGISTRO, CODIGO FROM caixa
+          WHERE NUMERO = ${controle} AND CLIENTE = ${codCliente} AND UPPER(MARCADO) = 'SIM'`,
+        { maxRows: 100, timeoutMs: 8000 },
+      );
+      const regPorSku = new Map<string, number[]>();
+      for (const row of cap.rows || []) {
+        const k = String(row.CODIGO || '').trim();
+        if (!regPorSku.has(k)) regPorSku.set(k, []);
+        regPorSku.get(k)!.push(Number(row.REGISTRO));
+      }
+      const linhas: any[] = await (this.prisma as any).marcado.findMany({
+        where: { id: { in: ids } },
+        select: { id: true, sku: true },
+      });
+      for (const l of linhas) {
+        const fila = regPorSku.get(String(l.sku).trim());
+        const reg = fila && fila.length ? fila.shift() : null;
+        if (reg) {
+          await (this.prisma as any).marcado
+            .update({ where: { id: l.id }, data: { registroGiga: BigInt(reg) } })
+            .catch(() => { /* unique de registroGiga: já carimbado, ignora */ });
+        }
+      }
+    } catch (e: any) {
+      // Carimbo é conveniência: sem ele o sync horário casa por NUMERO+loja+sku.
+      this.logger.warn(`[marcados] carimbo do retorno do Giga falhou: ${e?.message}`);
+    }
   }
 
   /**
@@ -757,20 +974,22 @@ export class MarcadosService {
     const isAvulso = String(input.sku).trim().toUpperCase().startsWith('MANUAL-');
     let appliedCount = 0;
     if (!isAvulso) {
-      const stockResult = await this.erp.increaseStock([
+      // ASSÍNCRONO (31/07): aplica no Flow (a fonte do estoque desde 14/07) e
+      // enfileira a réplica pro Giga. Antes era `increaseStock` inline e o
+      // retorno de erro travava a devolução — a cliente estava com a peça na
+      // mão, no balcão, e a vendedora não conseguia concluir porque um MySQL
+      // em outro servidor não respondeu.
+      const stockResult = await this.erp.increaseStockAsync([
         { sku: input.sku, qty: input.qty, storeCode: input.loja },
       ]);
-      if (!stockResult.success) {
-        return {
-          ok: false,
-          error: `Falha ao estornar estoque Giga: ${stockResult.error}`,
-        };
-      }
       appliedCount = stockResult.applied?.length || 0;
       if (appliedCount === 0) {
+        // Zero aplicado é problema de CADASTRO (SKU não existe naquela loja),
+        // não de disponibilidade do Giga — este continua bloqueando de
+        // propósito, senão a peça "volta" pra um lugar que não existe.
         return {
           ok: false,
-          error: `increaseStock retornou success mas 0 SKUs aplicados. Possível mismatch storeCode "${input.loja}" vs LOJA Giga.`,
+          error: `Estoque não aplicado em nenhum SKU. Confira se "${input.sku}" existe na loja ${input.loja}.`,
         };
       }
     }
@@ -778,15 +997,11 @@ export class MarcadosService {
     // 2. DELETE da linha caixa (tira do nome da pessoa marcada)
     const deleteResult = await this.erp.deleteCaixaMarcadoRow({ registro: reg });
     if (!deleteResult.success) {
-      // Estoque já voltou, mas remoção da marcação falhou.
-      // Loga AVISO e retorna ERRO pra admin investigar — meio-caminho é pior que falhar limpo.
-      this.logger.error(
-        `[marcados.devolver] estoque OK porém DELETE caixa REGISTRO=${reg} falhou: ${deleteResult.error}`,
-      );
-      return {
-        ok: false,
-        error: `Estoque voltou mas marcação não foi removida do nome do cliente: ${deleteResult.error}. Remova manualmente no Wincred.`,
-      };
+      // Antes isto devolvia ERRO e a devolução falhava pela metade: o estoque
+      // já tinha voltado e a vendedora via "remova manualmente no Wincred" —
+      // num Wincred que ninguém mais usa. Agora o Flow marca como devolvido
+      // (é a fonte) e a remoção no Giga vai pra fila com retry.
+      await this.enfileirarRemocaoMarcado(reg, deleteResult.error || 'falha no DELETE');
     }
 
     this.logger.log(

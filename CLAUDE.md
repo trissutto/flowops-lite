@@ -59,6 +59,8 @@ Cron de 1h espelha transferências/vendas/estoque pro financeiro. Conta corrente
 | `ESTOQUE_SYNC_GIGA` | **off** | `1` reativa o pull de estoque Giga→Flow (full + incremental). **Deixar off**: o Flow é a fonte do estoque desde 14/07; ligar sobrescreve a verdade do Flow na janela da fila |
 | `PDV_MIRROR_READS` | on | `0` desliga leitura pelo espelho (bipe/busca voltam 100% Giga) |
 | `PDV_ERP_OUTBOX` | on | `0` volta escrita da venda inline |
+| `MARCADOS_FLOW_FIRST` | on | `0` volta o marcado a gravar no Giga PRIMEIRO — incluindo o `throw` que derrubava a operação inteira com o Giga fora. Com a flag ligada (padrão) o Flow grava, o Giga é réplica via outbox (`marcado_criar`/`marcado_remover`) |
+| `ERP_STOCK_WRITES_ASYNC` | on | `0` volta TODAS as escritas de estoque secundárias (devoluções, trocas, marcados, realinhamento) ao inline — espera o Giga |
 | `ERP_WRITE_ENABLED` / `PDV_ERP_WRITE_ENABLED` | — | shadow mode das escritas no Wincred (loga SQL sem executar) |
 | `PDV_FINALIZE_ASYNC` | false | legado (só vale com outbox desligado) |
 | `PONTO_IP_CHECK` | on | `0` desliga a regra "celular só bate ponto no WiFi da loja" (batida `pwa_selfie` vs IPs do heartbeat do PDV Electron; fail-open se não há IP <48h) |
