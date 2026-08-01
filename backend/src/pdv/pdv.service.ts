@@ -1944,10 +1944,100 @@ export class PdvService {
     if (input.cidade !== undefined) data.customerCidade = input.cidade?.trim() || null;
     if (input.uf !== undefined) data.customerUf = input.uf?.trim().toUpperCase().slice(0, 2) || null;
 
-    return (this.prisma as any).pdvSale.update({
+    const atualizada = await (this.prisma as any).pdvSale.update({
       where: { id: sale.id },
       data,
     });
+
+    // GRAVA NA CLIENTE, não só na venda (01/08). Antes o endereço ficava só
+    // nesta venda: a atendente digitava, salvava, e na compra seguinte estava
+    // vazio de novo — e a ficha do CRM nunca via. Foi o que o dono relatou.
+    //
+    // Agora o CPF é a chave: os dados sobem pra base mestra e valem em
+    // QUALQUER loja e no site, que é o cadastro único desenhado hoje.
+    //
+    // Best-effort de propósito: se isto falhar, a venda continua. Travar o
+    // atendimento porque o CRM não respondeu seria trocar um problema pequeno
+    // por um grande.
+    void this.persistirClienteNoCrm(input).catch((e) =>
+      this.logger.warn(`[pdv] cliente não replicado no CRM: ${e?.message}`),
+    );
+
+    return atualizada;
+  }
+
+  /**
+   * Sobe os dados digitados no PDV pra base mestra de clientes (CRM), usando o
+   * CPF como identidade da pessoa.
+   *
+   * Só grava o que veio preenchido — nunca apaga dado existente com vazio. A
+   * atendente que preenche só o telefone não pode zerar o e-mail que já estava
+   * lá.
+   */
+  private async persistirClienteNoCrm(input: {
+    cpf?: string; name?: string; email?: string; phone?: string;
+    cep?: string; endereco?: string; numero?: string; complemento?: string;
+    bairro?: string; cidade?: string; uf?: string;
+  }): Promise<void> {
+    const cpf = String(input.cpf || '').replace(/\D/g, '');
+    if (cpf.length !== 11) return; // sem CPF não há identidade de pessoa
+
+    const nome = String(input.name || '').trim();
+    const email = String(input.email || '').trim().toLowerCase();
+    const fone = String(input.phone || '').replace(/\D/g, '');
+
+    const existente = await (this.prisma as any).customer.findFirst({ where: { cpf } });
+
+    const cliente = existente
+      ? await (this.prisma as any).customer.update({
+          where: { id: existente.id },
+          data: {
+            ...(nome ? { name: nome } : {}),
+            ...(email ? { email } : {}),
+            ...(fone ? { whatsapp: fone } : {}),
+          },
+        })
+      : await (this.prisma as any).customer.create({
+          data: {
+            cpf,
+            name: nome || null,
+            email: email || null,
+            whatsapp: fone || null,
+            originSource: 'physical',
+          },
+        });
+
+    // Endereço: só grava se veio algo além do CEP solto.
+    const temEndereco = [input.endereco, input.cidade, input.bairro].some(
+      (v) => String(v || '').trim(),
+    );
+    if (!temEndereco) return;
+
+    const cep = String(input.cep || '').replace(/\D/g, '') || null;
+    const dados = {
+      cep,
+      street: String(input.endereco || '').trim() || null,
+      number: String(input.numero || '').trim() || null,
+      complement: String(input.complemento || '').trim() || null,
+      district: String(input.bairro || '').trim() || null,
+      city: String(input.cidade || '').trim() || null,
+      state: String(input.uf || '').trim().toUpperCase() || null,
+    };
+
+    // Atualiza o endereço principal em vez de empilhar um novo a cada venda —
+    // senão a ficha vira uma lista de repetições do mesmo lugar.
+    const principal = await (this.prisma as any).customerAddress.findFirst({
+      where: { customerId: cliente.id, isPrimary: true, active: true },
+    });
+    if (principal) {
+      await (this.prisma as any).customerAddress.update({
+        where: { id: principal.id }, data: dados,
+      });
+    } else {
+      await (this.prisma as any).customerAddress.create({
+        data: { customerId: cliente.id, type: 'entrega', isPrimary: true, ...dados },
+      });
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════════════

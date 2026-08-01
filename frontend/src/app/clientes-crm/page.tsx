@@ -832,9 +832,132 @@ function CustomerDetailDrawer({
 // ══════════════════════════════════════════════════════════════════════════
 // ABA Perfil
 // ══════════════════════════════════════════════════════════════════════════
+/**
+ * Aba Perfil — leitura e EDIÇÃO.
+ *
+ * A atendente completa a ficha aqui: muita cliente veio do Giga só com nome e
+ * telefone, e o que falta (manequim, estilo, aniversário) é justamente o que
+ * alimenta mailing, cashback e recomendação.
+ *
+ * O que NÃO é editável, de propósito:
+ *  · Métricas (LTV, ticket, nº de compras) — são calculadas das vendas. Campo
+ *    editável aqui viraria número inventado convivendo com número real.
+ *  · Atribuição (loja de origem, fonte, quem captou) — é histórico de como a
+ *    cliente entrou. Reescrever apaga a origem da comissão e do LTV por loja.
+ *  · Registro Giga — chave da ficha do ERP, não é dado de cadastro.
+ */
 function PerfilTab({ d, onUpdate }: { d: CustomerDetail; onUpdate: () => void }) {
+  const [editando, setEditando] = useState(false);
+  const [salvando, setSalvando] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+  const [f, setF] = useState<any>({});
+
+  const abrir = () => {
+    setF({
+      name: d.name ?? '', nameSocial: d.nameSocial ?? '', cpf: d.cpf ?? '',
+      birthDate: d.birthDate ? String(d.birthDate).slice(0, 10) : '',
+      gender: d.gender ?? '', maritalStatus: d.maritalStatus ?? '',
+      whatsapp: d.whatsapp ?? '', phone: d.phone ?? '', email: d.email ?? '',
+      sizeDefault: d.sizeDefault ?? '', sizeSecondary: d.sizeSecondary ?? '',
+      bodyType: d.bodyType ?? '', preferredStyle: d.preferredStyle ?? '',
+      favoriteColors: d.favoriteColors ?? '', avoidedPieces: d.avoidedPieces ?? '',
+      notes: d.notes ?? '',
+    });
+    setErro(null);
+    setEditando(true);
+  };
+
+  const salvar = async () => {
+    if (!String(f.name || '').trim()) { setErro('Nome é obrigatório'); return; }
+    setSalvando(true); setErro(null);
+    try {
+      // Vazio vira null pra limpar o campo — string vazia deixaria lixo no banco.
+      const body: any = {};
+      for (const [k, v] of Object.entries(f)) {
+        const s = typeof v === 'string' ? v.trim() : v;
+        body[k] = s === '' ? null : s;
+      }
+      await api(`/customers-crm/${d.id}`, { method: 'PATCH', body: JSON.stringify(body) });
+      setEditando(false);
+      onUpdate();
+    } catch (e: any) {
+      setErro(e?.message || 'Falha ao salvar');
+    } finally {
+      setSalvando(false);
+    }
+  };
+
+  const Inp = ({ k, label, tipo }: { k: string; label: string; tipo?: string }) => (
+    <div>
+      <div className="text-[11px] uppercase tracking-wide text-gray-400 mb-1">{label}</div>
+      <input
+        type={tipo || 'text'}
+        value={f[k] ?? ''}
+        onChange={(e) => setF({ ...f, [k]: e.target.value })}
+        className="w-full rounded border border-gray-300 px-2 py-1.5 text-sm outline-none focus:border-[#B8912B]"
+      />
+    </div>
+  );
+
+  if (editando) {
+    return (
+      <div className="space-y-6 text-sm">
+        <div className="flex items-center justify-between rounded bg-amber-50 px-3 py-2">
+          <span className="text-xs text-amber-800">Editando a ficha de {d.name}</span>
+          <div className="flex gap-2">
+            <button onClick={() => setEditando(false)} className="rounded border border-gray-300 px-3 py-1 text-xs hover:bg-gray-50">Cancelar</button>
+            <button onClick={() => void salvar()} disabled={salvando}
+              className="rounded bg-[#2E7D46] px-4 py-1 text-xs font-semibold text-white hover:bg-[#256238] disabled:opacity-50">
+              {salvando ? 'Salvando…' : 'Salvar'}
+            </button>
+          </div>
+        </div>
+
+        {erro && <div className="rounded bg-red-50 px-3 py-2 text-xs text-red-800">{erro}</div>}
+
+        <Section title="Identificação">
+          <Inp k="name" label="Nome completo *" />
+          <Inp k="nameSocial" label="Como prefere ser chamada" />
+          <Inp k="cpf" label="CPF" />
+          <Inp k="birthDate" label="Data nascimento" tipo="date" />
+          <Inp k="gender" label="Gênero" />
+          <Inp k="maritalStatus" label="Estado civil" />
+        </Section>
+
+        <Section title="Contato">
+          <Inp k="whatsapp" label="WhatsApp" />
+          <Inp k="phone" label="Telefone fixo" />
+          <Inp k="email" label="E-mail" tipo="email" />
+        </Section>
+
+        <Section title="Perfil Plus Size">
+          <Inp k="sizeDefault" label="Manequim principal" />
+          <Inp k="sizeSecondary" label="Manequim secundário" />
+          <Inp k="bodyType" label="Tipo de corpo" />
+          <Inp k="preferredStyle" label="Estilo preferido" />
+          <Inp k="favoriteColors" label="Cores favoritas" />
+          <Inp k="avoidedPieces" label="Peças que evita" />
+        </Section>
+
+        <Section title="Observações">
+          <div className="col-span-2">
+            <textarea rows={3} value={f.notes ?? ''} onChange={(e) => setF({ ...f, notes: e.target.value })}
+              className="w-full rounded border border-gray-300 px-2 py-1.5 text-sm outline-none focus:border-[#B8912B]" />
+          </div>
+        </Section>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6 text-sm">
+      <div className="flex justify-end">
+        <button onClick={abrir}
+          className="rounded border border-[#B8912B] px-4 py-1.5 text-xs font-semibold text-[#8C7325] hover:bg-[#FBF6E6]">
+          Completar dados
+        </button>
+      </div>
+
       <Section title="Identificação">
         <Field label="Nome completo" value={d.name} />
         <Field label="Como prefere ser chamada" value={d.nameSocial} />
