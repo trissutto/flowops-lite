@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
+import { startOfDayBRFromYmd } from '../lib/date-br';
 
 /**
  * FaturamentoService — agrega faturamento da rede toda.
@@ -70,7 +71,8 @@ export class FaturamentoService {
             AND s.is_training = false
             AND (s.payment_method IS NULL OR s.payment_method <> 'MARCADO')
           GROUP BY store_code`,
-        dInicio, dFimExclusive,
+        // finalized_at é TIMESTAMP → limites no fuso BR (ver brInstant).
+        this.brInstant(dInicio), this.brInstant(dFimExclusive),
       ),
       // Caixa do Giga SEM a réplica do Flow
       this.prisma.$queryRawUnsafe<Array<any>>(
@@ -83,6 +85,7 @@ export class FaturamentoService {
             AND (marcado IS NULL OR marcado <> 'SIM')
             AND COALESCE(obs_pedido, '') NOT LIKE 'flowops-%'
           GROUP BY loja`,
+        // data_fec é DATE (sem hora) → segue no parseDate. Ver brInstant.
         dInicio, dFimExclusive,
       ),
       (this.prisma as any).store.findMany({ select: { code: true, name: true, nomesAntigos: true } }),
@@ -710,6 +713,13 @@ export class FaturamentoService {
    *  regra do SITE. Reimplementar ja custou R$ 48k de divergencia entre as
    *  duas telas (status, data e frete diferentes). Um lugar so. */
   async getFlowopsSiteFaturamento(inicio: Date, fimExclusive: Date) {
+    // wc_date_created é TIMESTAMP → o dia tem que ser o dia BR, senão o pedido
+    // feito depois das 21:00 cai no dia seguinte (ver brInstant). Converter aqui
+    // é idempotente: limite que já vem em meia-noite BR sai igual. O CUTOFF
+    // abaixo não passa por isso — ele é um instante próprio, não um dia.
+    inicio = this.brInstant(inicio);
+    fimExclusive = this.brInstant(fimExclusive);
+
     const cutoff = this.getFlowopsSiteCutoff();
     // inicio efetivo = max(inicio do filtro, cutoff)
     const inicioEfetivo = inicio < cutoff ? cutoff : inicio;
@@ -1023,6 +1033,26 @@ export class FaturamentoService {
   }
 
   /** Parseia YYYY-MM-DD em Date local. Se endExclusive=true, adiciona 1 dia. */
+  /**
+   * O MESMO dia do `parseDate`, mas como INSTANTE no fuso BR (01/08 → 03:00Z).
+   *
+   * POR QUE OS DOIS EXISTEM (01/08): o `parseDate` monta o dia com
+   * `new Date(y, m-1, d)`, que é meia-noite NO FUSO DO SERVIDOR — e o Railway
+   * roda em UTC, ou seja 21:00 do dia anterior em São Paulo.
+   *
+   *   • Coluna de DATA (`giga_caixa_mov.data_fec`, `DATAFEC` do Giga): não tem
+   *     hora, então o que importa é só o YYYY-MM-DD — e ele sai certo. Manter
+   *     `parseDate` aí. Passar meia-noite BR (03:00Z) faria o Postgres comparar
+   *     `date >= timestamptz` e DERRUBAR o primeiro dia inteiro.
+   *   • Coluna de TIMESTAMP (`pdv_sales.finalized_at`, `order.wc_date_created`):
+   *     aí a hora conta, e a janela do servidor jogava a venda entre 21:00 e
+   *     23:59 BR pro dia seguinte. Justamente o horário da LIVE. É aqui que
+   *     entra este helper.
+   */
+  private brInstant(d: Date): Date {
+    return startOfDayBRFromYmd(d.toISOString().slice(0, 10));
+  }
+
   private parseDate(s: string, endExclusive: boolean): Date {
     const [y, m, d] = s.split('-').map(Number);
     const date = new Date(y, (m || 1) - 1, d || 1);

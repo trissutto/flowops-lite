@@ -1,7 +1,7 @@
 import { Injectable, Logger, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
-import { startOfDayBR, dayBoundsFromUtcDate } from '../lib/date-br';
+import { startOfDayBR, endOfDayBR, dayBoundsFromUtcDate } from '../lib/date-br';
 
 /**
  * Caixa diário do PDV — abertura, sangria/suprimento, fechamento.
@@ -487,6 +487,77 @@ export class CashService {
 
   // `storeCodes` restringe o painel a um CONJUNTO de lojas (ex: master da
   // franquia só vê as lojas tipo=FILIAL). undefined = todas.
+  /**
+   * VENDAS DO DIA POR LOJA, sem passar por sessão de caixa (01/08).
+   *
+   * POR QUE EXISTE: o super-painel montava o total somando só a sessão ABERTA
+   * de cada loja. Loja que fechou o caixa saía do total — aparecia cinza, com
+   * R$ 0,00, mesmo tendo vendido. Em 01/08 isso escondeu R$ 12.991,17 (Campinas
+   * 07, Jundiaí 10, Vinhedo 03, todas com caixa `closed`): o painel mostrava
+   * R$ 31.899,61 e o dia real era R$ 44.890,78. Também perdia a venda de uma
+   * sessão anterior quando a loja fechava e reabria o caixa no mesmo dia.
+   *
+   * Aqui a chave é a VENDA (finalizedAt no dia BR), não a sessão — é o mesmo
+   * critério do FaturamentoService, então as duas telas passam a bater.
+   *
+   * NÃO substitui `computeSessionTotals`: a conferência de gaveta (fundo,
+   * sangria, dinheiro esperado) continua sendo por sessão, que é o que ela
+   * mede. Este número é o de VENDA.
+   */
+  private async computeDayTotalsByStore(
+    storeCodes?: string[],
+  ): Promise<Map<string, any>> {
+    const sales = await (this.prisma as any).pdvSale.findMany({
+      where: {
+        status: 'finalized',
+        isTraining: false,
+        finalizedAt: { gte: startOfDayBR(), lte: endOfDayBR() },
+        ...(storeCodes?.length ? { storeCode: { in: storeCodes } } : {}),
+      },
+      select: {
+        storeCode: true,
+        total: true,
+        paymentMethod: true,
+        payments: { select: { method: true, valor: true } },
+      },
+    });
+
+    const novo = () => ({
+      totalVendas: 0, totalDinheiro: 0, totalPix: 0,
+      totalCartaoCredito: 0, totalCartaoDebito: 0, totalCrediario: 0,
+      totalVendaOnline: 0, totalValeTroca: 0, totalOutros: 0,
+      totalMarcados: 0, qtdMarcados: 0, qtdVendas: 0,
+    });
+
+    const mapa = new Map<string, any>();
+    for (const s of sales as any[]) {
+      const cur = mapa.get(s.storeCode) || novo();
+      // MARCADO não é venda (mesma Regra 1 do dono usada na sessão).
+      if (String(s.paymentMethod || '').toUpperCase() === 'MARCADO') {
+        cur.totalMarcados += Number(s.total) || 0;
+        cur.qtdMarcados += 1;
+        mapa.set(s.storeCode, cur);
+        continue;
+      }
+      cur.totalVendas += Number(s.total) || 0;
+      cur.qtdVendas += 1;
+      for (const p of s.payments || []) {
+        const m = String(p.method || '').toLowerCase();
+        const v = Number(p.valor) || 0;
+        if (m === 'dinheiro') cur.totalDinheiro += v;
+        else if (m === 'pix') cur.totalPix += v;
+        else if (m === 'credito' || m === 'credit') cur.totalCartaoCredito += v;
+        else if (m === 'debito' || m === 'debit') cur.totalCartaoDebito += v;
+        else if (m === 'crediario') cur.totalCrediario += v;
+        else if (m === 'venda_online' || m === 'online') cur.totalVendaOnline += v;
+        else if (m === 'vale_troca' || m === 'vale' || m === 'troca') cur.totalValeTroca += v;
+        else cur.totalOutros += v;
+      }
+      mapa.set(s.storeCode, cur);
+    }
+    return mapa;
+  }
+
   async getSuperPainelCaixas(storeCodes?: string[]): Promise<{
     lojas: Array<{
       storeCode: string;
@@ -568,6 +639,19 @@ export class CashService {
       totalSangrias: 0, totalSuprimentos: 0, dinheiroEsperado: 0, qtdVendas: 0,
     };
 
+    // Venda do DIA por loja (independe de sessão) — é o que alimenta o
+    // consolidado e a loja de caixa fechado. Ver computeDayTotalsByStore.
+    const vendasDoDia = await this.computeDayTotalsByStore(
+      (stores as any[]).map((s) => s.code),
+    );
+    const diaDaLoja = (code: string) =>
+      vendasDoDia.get(code) || {
+        totalVendas: 0, totalDinheiro: 0, totalPix: 0,
+        totalCartaoCredito: 0, totalCartaoDebito: 0, totalCrediario: 0,
+        totalVendaOnline: 0, totalValeTroca: 0, totalOutros: 0,
+        totalMarcados: 0, qtdMarcados: 0, qtdVendas: 0,
+      };
+
     // Pra cada loja, busca sessão aberta + RELATORIO DETALHADO (paralelo)
     const lojas = await Promise.all(
       (stores as any[]).map(async (s) => {
@@ -587,17 +671,26 @@ export class CashService {
           : null;
 
         if (!session) {
+          // SEM caixa aberto — mas a loja pode ter vendido e fechado o caixa.
+          // Antes voltava tudo zero e a venda sumia do painel (R$ 12.991,17
+          // escondidos em 01/08). Agora mostra a venda do dia; os campos de
+          // GAVETA seguem zerados, que é a verdade: o caixa está fechado.
+          const dia = diaDaLoja(s.code);
           return {
             storeCode: s.code,
             storeName: s.name,
             sessionId: rawSession?.id || null,
             aberta: false,
+            // Vendeu hoje e não tem caixa aberto agora → a tela precisa
+            // distinguir isso de "loja parada", senão vira R$ 0,00 mentiroso.
+            caixaFechadoComVenda: dia.totalVendas > 0,
             sessaoPendente,
             sessaoPendenteAbertaEm,
             openedAt: null,
             openedByName: null,
             fundoTroco: 0,
-            totais: emptyTotais,
+            totais: { ...emptyTotais, ...dia },
+            totaisDia: dia,
             vendedoras: [],
             movimentos: [],
             recebimentosCrediario: { totalGeral: 0, totalDinheiro: 0, totalPix: 0, baixas: [] },
@@ -721,6 +814,10 @@ export class CashService {
             dinheiroEsperado: t.dinheiroEsperado,
             qtdVendas: t.qtdVendas,
           },
+          // Venda do DIA da loja (todas as sessões, aberta ou fechada). Difere
+          // de `totais` quando a loja fechou e reabriu o caixa no mesmo dia:
+          // `totais` é a sessão atual (conferência de gaveta), este é o dia.
+          totaisDia: diaDaLoja(s.code),
           vendedoras,
           movimentos, // sangria + suprimento — lancamento por lancamento (cascata)
           recebimentosCrediario, // baixas de crediario do dia (dinheiro/PIX) — cascata
@@ -740,19 +837,25 @@ export class CashService {
     };
     for (const l of lojas) {
       if (l.aberta) consolidado.qtdLojasAbertas++; else consolidado.qtdLojasFechadas++;
-      consolidado.totalVendas += l.totais.totalVendas;
-      consolidado.totalDinheiro += l.totais.totalDinheiro;
-      consolidado.totalPix += l.totais.totalPix;
-      consolidado.totalCartaoCredito += l.totais.totalCartaoCredito;
-      consolidado.totalCartaoDebito += l.totais.totalCartaoDebito;
-      consolidado.totalCrediario += l.totais.totalCrediario;
-      consolidado.totalVendaOnline += (l.totais as any).totalVendaOnline || 0;
-      consolidado.totalValeTroca += (l.totais as any).totalValeTroca || 0;
-      consolidado.totalMarcados += (l.totais as any).totalMarcados || 0;
-      consolidado.qtdMarcados += (l.totais as any).qtdMarcados || 0;
+      // VENDA vem do DIA (todas as sessões da loja, aberta ou fechada) — antes
+      // vinha da sessão aberta e a loja que fechou o caixa sumia do total.
+      // Como TODAS as formas saem do mesmo conjunto de vendas, a conciliação
+      // "Vendido − vale = Recebido" continua fechando.
+      const d = (l as any).totaisDia || l.totais;
+      consolidado.totalVendas += d.totalVendas || 0;
+      consolidado.totalDinheiro += d.totalDinheiro || 0;
+      consolidado.totalPix += d.totalPix || 0;
+      consolidado.totalCartaoCredito += d.totalCartaoCredito || 0;
+      consolidado.totalCartaoDebito += d.totalCartaoDebito || 0;
+      consolidado.totalCrediario += d.totalCrediario || 0;
+      consolidado.totalVendaOnline += d.totalVendaOnline || 0;
+      consolidado.totalValeTroca += d.totalValeTroca || 0;
+      consolidado.totalMarcados += d.totalMarcados || 0;
+      consolidado.qtdMarcados += d.qtdMarcados || 0;
+      consolidado.qtdVendas += d.qtdVendas || 0;
+      // Sangria/suprimento são movimento de GAVETA: seguem por sessão aberta.
       consolidado.totalSangrias += l.totais.totalSangrias;
       consolidado.totalSuprimentos += l.totais.totalSuprimentos;
-      consolidado.qtdVendas += l.totais.qtdVendas;
     }
 
     return {
