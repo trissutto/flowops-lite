@@ -8,6 +8,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
 import { CommissionEngineService } from './commission-engine.service';
+import { hojeBrasilia, periodoBrasiliaEmUtc } from '../common/tz';
 
 /**
  * CommissionsService — F4 do plano de migração 30/06.
@@ -1142,17 +1143,24 @@ export class CommissionsService {
     if (input.to && !isDate(input.to)) {
       throw new BadRequestException('to inválido (formato YYYY-MM-DD)');
     }
-    const now = new Date();
-    const mk = (s: string, end: boolean) => {
-      const [y, m, d] = s.split('-').map((n) => parseInt(n, 10));
-      return new Date(y, m - 1, d, end ? 23 : 0, end ? 59 : 0, end ? 59 : 0);
-    };
-    const startDate = input.from
-      ? mk(input.from, false)
-      : new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0);
-    const endDate = input.to
-      ? mk(input.to, true)
-      : new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+    // FUSO (01/08/2026) — isto define O QUE ENTRA NA COMISSÃO da vendedora.
+    //
+    // Estava errado dos dois lados. As vendas são gravadas em UTC e o servidor
+    // roda em UTC, mas o dia da loja é Brasília: meia-noite daqui são 03:00 em
+    // UTC. O `new Date(y, m-1, d, 0, 0, 0)` montava a borda em 00:00 UTC — três
+    // horas cedo demais. Resultado: o período pegava as vendas das 21h às 24h
+    // do dia ANTERIOR ao início e perdia as mesmas três horas do último dia.
+    // Venda de sábado à noite caía na comissão da semana seguinte.
+    //
+    // E o padrão sem filtro usava `now.getMonth()`, que depois das 21h do
+    // último dia do mês já apontava pro mês seguinte — a tela abria zerada.
+    const hoje = hojeBrasilia();
+    const de = input.from || hoje.slice(0, 8) + '01';
+    const ate = input.to || hoje;
+    const { inicio: startDate, fimExclusivo: endExclusivo } = periodoBrasiliaEmUtc(de, ate);
+    // Guardado só pra validação e mensagem de erro — a consulta usa `lt` com o
+    // fim exclusivo, que é o jeito correto de fechar um intervalo de dia.
+    const endDate = new Date(endExclusivo.getTime() - 1);
     if (startDate > endDate) {
       throw new BadRequestException('Data inicial não pode ser maior que a final');
     }
@@ -1160,7 +1168,7 @@ export class CommissionsService {
     const where: any = {
       status: 'finalized',
       isTraining: false,
-      finalizedAt: { gte: startDate, lte: endDate },
+      finalizedAt: { gte: startDate, lt: endExclusivo },
     };
     if (input.storeCode) where.storeCode = input.storeCode;
     if (input.sellerId === 'none') where.sellerId = null;

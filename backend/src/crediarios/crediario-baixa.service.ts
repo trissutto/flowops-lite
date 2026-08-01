@@ -265,13 +265,24 @@ export class CrediarioBaixaService {
     today = new Date(),
   ): { diasAtraso: number; juros: number } {
     const oneDay = 86400000;
-    const venc = new Date(
-      vencimento.getFullYear(),
-      vencimento.getMonth(),
-      vencimento.getDate(),
-    );
-    const t = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-    const diasAtraso = Math.max(0, Math.floor((t.getTime() - venc.getTime()) / oneDay));
+
+    // FUSO (01/08/2026): usa o dia de BRASÍLIA, não o do servidor.
+    //
+    // Era `new Date(today.getFullYear(), today.getMonth(), today.getDate())`
+    // com `today = new Date()`. O Railway roda em UTC: das 21h à meia-noite,
+    // getDate() já devolve o DIA SEGUINTE. Toda parcela ganhava um dia a mais
+    // de atraso nessa janela — a cliente pagava juros indevidos, e quem estava
+    // no último dia de carência começava a ser cobrada antes da hora.
+    //
+    // Os dois lados leem com getUTC*: `vencimento` vem de coluna DATE (chega
+    // como meia-noite UTC) e `hoje` é deslocado pra Brasília antes. Ler um em
+    // fuso local e outro em UTC daria diferença de um dia sozinho.
+    const diaDe = (d: Date) => Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+    const hojeBrasilia = new Date(today.getTime() - 3 * 60 * 60 * 1000);
+
+    const venc = diaDe(vencimento);
+    const t = diaDe(hojeBrasilia);
+    const diasAtraso = Math.max(0, Math.floor((t - venc) / oneDay));
 
     if (!cfg.enabled) return { diasAtraso, juros: 0 };
     if (diasAtraso <= cfg.diasCarencia) return { diasAtraso, juros: 0 };
