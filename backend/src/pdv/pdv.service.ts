@@ -16,6 +16,7 @@ import { AccessPolicyService } from '../access-policy/access-policy.service';
 import { ConveniosService } from '../convenios/convenios.service';
 import { validateMinLevel } from '../auth/auth-levels.util';
 import * as crypto from 'crypto';
+import { CashbackService } from '../cashback/cashback.service';
 
 /**
  * PdvService — frente de caixa (MVP).
@@ -44,6 +45,7 @@ export class PdvService {
     private readonly promoConfig: PromoConfigService,
     private readonly accessPolicy: AccessPolicyService,
     private readonly convenios: ConveniosService,
+    private readonly cashback: CashbackService,
   ) {}
 
   /**
@@ -2282,6 +2284,29 @@ export class PdvService {
       }
       this.logger.log(`[pdv→TREINO] Venda ${sale.id} é treinamento — pulando Wincred, estoque, Giga, NFC-e.`);
       return { ok: true, sale: updated, nfcePreview: null, training: true };
+    }
+
+    // ── CASHBACK DA REDE ──
+    // Nasce desligado; com a chave fora, `creditarVenda` devolve null e não
+    // toca em nada. O try/catch é redundante (o service já não lança) e fica
+    // de propósito: nenhuma linha depois de "venda finalizada" pode derrubar
+    // uma venda que já entrou no caixa.
+    try {
+      const cb = await this.cashback.creditarVenda({
+        saleId: sale.id,
+        cpf: (sale as any).customerCpf,
+        storeCode: sale.storeCode,
+        total: sale.total,
+        isTraining: (sale as any).isTraining,
+      });
+      if (cb) {
+        this.logger.log(
+          `[pdv] cashback de R$ ${cb.creditado.toFixed(2)} creditado na venda ${sale.id}` +
+          `${cb.primeira ? ' (primeira compra)' : ''}`,
+        );
+      }
+    } catch (e: any) {
+      this.logger.error(`[pdv] cashback da venda ${sale.id} falhou: ${e?.message || e}`);
     }
 
     // ── VALE PRESENTE: ativa os vales comprados NESTA venda ──

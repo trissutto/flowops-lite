@@ -2,6 +2,7 @@ import { Injectable, Logger, BadRequestException, NotFoundException } from '@nes
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
 import { CashService } from './cash.service';
+import { CashbackService } from '../cashback/cashback.service';
 
 /**
  * Devolução / Troca de venda finalizada.
@@ -26,6 +27,7 @@ export class ReturnsService {
     private readonly prisma: PrismaService,
     private readonly erp: ErpService,
     private readonly cash: CashService,
+    private readonly cashback: CashbackService,
   ) {}
 
   // ── Lookup ─────────────────────────────────────────────────────────
@@ -480,6 +482,24 @@ export class ReturnsService {
       },
       include: { items: true },
     });
+
+    // ── CASHBACK: a peça voltou, o cashback dela some ──
+    // Decisão do dono (01/08). Se já foi gasto, o saldo fica NEGATIVO — é o que
+    // fecha a brecha de comprar caro, pegar 10%, gastar e devolver.
+    // Devolução parcial cancela proporcionalmente ao que voltou.
+    // Best-effort: cashback nunca derruba uma devolução com a cliente no balcão.
+    if (!isTraining) {
+      try {
+        await this.cashback.estornarDevolucao({
+          saleId: originalSaleId,
+          returnId: ret.id,
+          valorDevolvido: valorTotal,
+          storeCode,
+        });
+      } catch (e: any) {
+        this.logger.error(`[devolução] estorno de cashback falhou: ${e?.message || e}`);
+      }
+    }
 
     // Sangria automatica se for em dinheiro OU pix (saiu valor do caixa).
     // PULA se treinamento (não mexe no caixa real).
