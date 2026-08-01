@@ -206,25 +206,32 @@ export class CustomersCrmService {
     // retorna 409 com mensagem amigável + id do cliente existente pro frontend
     // poder oferecer "abrir cliente existente".
     //
-    // REGRA (jun/2026): mesma pessoa pode ter cadastro em N lojas Giga.
-    // Só bloqueia se o CPF já existe NA MESMA LOJA do actor (evita
-    // duplicar cadastro dentro da própria loja). Loja diferente: permite.
+    // REGRA NOVA (01/08/2026 — decisão do dono): O CPF É A PESSOA.
+    //
+    // A regra anterior (jun/2026) permitia cadastro da mesma pessoa em N lojas
+    // e só bloqueava duplicata dentro da própria loja. Isso é o oposto do
+    // cadastro único: a cliente de Itanhaém que compra em Sorocaba virava duas
+    // pessoas, e LTV e cashback ficavam partidos ao meio — justamente o que o
+    // cadastro único existe pra resolver.
+    //
+    // Agora a busca é na REDE INTEIRA. Não funde nada do que já existe: só
+    // impede que NASÇA duplicata nova. A resposta diz em qual loja ela já está,
+    // pra atendente abrir o cadastro existente em vez de criar outro.
     if (cpf) {
       const cpfDigits = cpf.replace(/\D/g, '');
-      const scopeStoreId = actor && !isMatrix(actor) ? actor.storeId : (dto.originStoreId || null);
-      const whereScope: any = {
-        OR: [{ cpf }, { cpf: cpfDigits }],
-      };
-      if (scopeStoreId) whereScope.originStoreId = scopeStoreId;
       const existing = await this.prisma.customer.findFirst({
-        where: whereScope,
-        select: { id: true, name: true, cpf: true },
+        where: { OR: [{ cpf }, { cpf: cpfDigits }] },
+        select: { id: true, name: true, cpf: true, originStore: { select: { name: true } } },
       });
       if (existing) {
+        const onde = existing.originStore?.name ? ` (cadastrada em ${existing.originStore.name})` : '';
         throw new ConflictException({
-          message: `CPF já cadastrado nesta loja: ${existing.name} (${existing.cpf})`,
+          message:
+            `Esta cliente já existe${onde}: ${existing.name}. ` +
+            `Use o cadastro dela — ela pode comprar em qualquer loja.`,
           customerId: existing.id,
           customerName: existing.name,
+          lojaOrigem: existing.originStore?.name || null,
         });
       }
     }
