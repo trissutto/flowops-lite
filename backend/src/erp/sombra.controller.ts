@@ -33,11 +33,18 @@ export class SombraController {
       total: linhas.reduce(
         (acc, l) => ({
           iguais: acc.iguais + l.iguais,
+          formato: acc.formato + l.formato,
           diferentes: acc.diferentes + l.diferentes,
           erros: acc.erros + l.erros,
         }),
-        { iguais: 0, diferentes: 0, erros: 0 },
+        { iguais: 0, formato: 0, diferentes: 0, erros: 0 },
       ),
+      // Achado da validação offline (31/07): o desempate "quem tem mais
+      // estoque" usa `wincred_estoque`, que sincroniza de hora em hora. Em
+      // produto duplicado (mesma REF+COR+TAM em códigos diferentes), estoque
+      // defasado escolhe outro código. É a causa mais provável de divergência
+      // aqui — e some quando o estoque virar nativo (Fase 2/3 do plano).
+      nota: 'Divergencia em produto DUPLICADO costuma ser latencia do espelho de estoque (1h), nao erro de traducao.',
     };
   }
 

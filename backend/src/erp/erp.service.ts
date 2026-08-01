@@ -6987,6 +6987,24 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   async batchFindCodigosByRefCorTam(
     items: Array<{ refCode: string; cor?: string | null; tamanho?: string | null }>,
   ): Promise<Map<string, string>> {
+    const doGiga = await this.batchFindCodigosByRefCorTamGiga(items);
+
+    // Sombra: Map não serializa em JSON, então compara como par ordenado —
+    // senão toda comparação daria "{}" dos dois lados e passaria batido.
+    if (this.sombra?.ligado) {
+      void this.sombra.comparar(
+        'batchFindCodigosByRefCorTam',
+        { itens: items.length },
+        [...doGiga.entries()].sort(),
+        async () => [...(await this.sombra!.batchFindCodigosByRefCorTam(items)).entries()].sort(),
+      );
+    }
+    return doGiga;
+  }
+
+  private async batchFindCodigosByRefCorTamGiga(
+    items: Array<{ refCode: string; cor?: string | null; tamanho?: string | null }>,
+  ): Promise<Map<string, string>> {
     const out = new Map<string, string>();
     if (!this.pool || !items.length) return out;
 
