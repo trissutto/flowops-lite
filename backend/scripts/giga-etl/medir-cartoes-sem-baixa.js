@@ -24,18 +24,24 @@ const BRL = (n) => `R$ ${Number(n || 0).toLocaleString('pt-BR', { minimumFractio
 
 // Nome na ficha → como a operação chama. Casamos por NOME e não por código:
 // o código se repete entre lojas (cada loja tem sua própria numeração).
+// NOME EXATO. A primeira versão usava LIKE '%...%' e o '%ELO%' casou com
+// MARCELO, MELO, ANGELO, BARCELOS, VELOSO, RABELO, VASCONCELOS — mais de 100
+// PESSOAS entraram na conta de "cartão". O total que isso produziu
+// (R$ 3.759.502) estava inflado com dívida de gente de verdade.
 const CARTAO = [
-  'CREDICARD', 'VISANET', 'VISA ELECTRON', 'VISAELECTRON', 'REDESHOP', 'REDE SHOP',
-  'CIELO', 'ELO', 'AMEX', 'HIPERCARD', 'SOROCRED', 'CREDSYSTEM', 'SISPUMI',
-  'GREMIO', 'MASTERCARD', 'MAESTRO', 'BANRICOMPRAS', 'GETNET', 'STONE',
+  'CREDICARD', 'VISANET', 'VISA ELECTRON', 'VISAELECTRON',
+  'REDESHOP', 'REDE SHOP', 'CIELO', 'CIELODEB',
+  'ELO', 'ELO (ANTIGO)', 'AMEX', 'HIPERCARD',
+  'SOROCRED', 'CREDSYSTEM', 'SISPUMI', 'SISPUMI - BANCRED CARD',
+  'MASTERCARD', 'MAESTRO', 'BANRICOMPRAS', 'GETNET', 'STONE',
 ];
 
 (async () => {
   const c = new Client({ connectionString: process.env.DATABASE_PUBLIC_URL });
   await c.connect();
 
-  const like = CARTAO.map((_, i) => `UPPER(COALESCE(g.nome,'')) LIKE $${i + 1}`).join(' OR ');
-  const params = CARTAO.map((n) => `%${n}%`);
+  const like = `UPPER(TRIM(COALESCE(g.nome,''))) IN (${CARTAO.map((_, i) => `$${i + 1}`).join(',')})`;
+  const params = CARTAO;
 
   console.log('══════ QUEM SEGURA O "CREDIARIO EM ABERTO" ══════');
   console.log('');
