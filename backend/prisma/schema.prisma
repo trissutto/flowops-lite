@@ -5277,3 +5277,92 @@ model SiteSyncLog {
   @@index([tipo, iniciadoEm])
   @@map("site_sync_log")
 }
+
+// ===========================================================================
+// CASHBACK DA REDE — chave é o CPF (a PESSOA), não o cadastro
+// ===========================================================================
+//
+// Regra do dono (01/08/2026):
+//   · 10% na PRIMEIRA compra da pessoa, 3% nas seguintes
+//   · libera no 5º dia e vale por 30 dias a partir daí
+//   · vale na rede inteira + site + live (cadastro único por CPF)
+//   · paga no máximo 30% de uma compra
+//   · devolveu a peça, perde o cashback dela — e pode ficar NEGATIVA
+//   · crediário/marcado credita conforme a parcela é PAGA, não no fechamento
+//   · SEM acerto entre lojas "por enquanto" — mas o dado de quem gerou e quem
+//     usou é gravado desde o primeiro dia, senão não dá pra reconstruir depois
+//
+// ── POR QUE TABELA NOVA, E NÃO UMA DAS TRÊS QUE JÁ EXISTEM ──
+//
+// Medição de 01/08 (`scripts/giga-etl/medir-cashback-existente.js`):
+//   · cashback_balances/cashback_transactions → chave Customer.id, que é o
+//     cadastro POR LOJA. A mesma pessoa tem N deles. Saldo: R$ 131 em 3 fichas,
+//     tudo crédito manual de admin. Chave errada pra regra da rede.
+//   · customer_accounts.cashback_balance_cents → chave certa (pessoa), mas só
+//     existe pra quem instalou o app: 13 contas, R$ 20 de saldo.
+// Nenhuma das duas serve, e adaptar qualquer uma quebraria o que já usa. As
+// duas ficam de pé (o saldo de R$ 151 é dívida com cliente, não se apaga).
+// Unificar o app pra ler DESTE motor é o passo seguinte, e é barato: são R$ 20.
+
+/// Um crédito ganho. `valor` pode ser NEGATIVO: é assim que a devolução cobra
+/// de volta um cashback já gasto (o saldo fica devendo e o próximo ganho abate).
+model CashbackCredito {
+  id             String   @id @default(uuid())
+  /// Só dígitos. É a chave da PESSOA — a mesma em qualquer loja ou no site.
+  cpf            String   @db.VarChar(11)
+  /// Ficha que originou, só pra rastreio. NÃO é chave de nada.
+  customerId     String?  @map("customer_id")
+  /// 'venda' | 'crediario_parcela' | 'estorno_devolucao' | 'ajuste'
+  origem         String   @db.VarChar(24)
+  saleId         String?  @map("sale_id")
+  parcelaId      String?  @map("parcela_id")
+  returnId       String?  @map("return_id")
+  /// Loja que GEROU. Guardado pro acerto que o dono ainda não quis ligar.
+  storeCode      String   @map("store_code") @db.VarChar(4)
+  percentual     Float    @default(0)
+  base           Float    @default(0)
+  valor          Float
+  /// Quanto desse crédito já foi gasto.
+  usado          Float    @default(0)
+  /// Quanto foi cancelado por devolução da venda que o gerou.
+  cancelado      Float    @default(0)
+  /// D+5: antes disso o saldo aparece como "a liberar" e não pode ser usado.
+  liberaEm       DateTime @map("libera_em")
+  /// D+35: depois disso vira pó. Estorno negativo NÃO expira (senão a dívida
+  /// sumiria sozinha e a brecha da devolução voltaria a valer).
+  expiraEm       DateTime @map("expira_em")
+  primeiraCompra Boolean  @default(false) @map("primeira_compra")
+  isTraining     Boolean  @default(false) @map("is_training")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  usos           CashbackUso[]
+
+  /// Idempotência: a mesma venda não credita duas vezes, mesmo se o finalize
+  /// rodar de novo. (NULLs no Postgres não colidem — vale pra cada origem.)
+  @@unique([origem, saleId, parcelaId], name: "cashback_credito_origem_unico")
+  @@index([cpf, liberaEm])
+  @@index([expiraEm])
+  @@index([storeCode, createdAt])
+  @@map("cashback_creditos")
+}
+
+/// Um resgate. Uma venda pode gerar VÁRIAS linhas: o saldo é consumido em FIFO
+/// pelo que vence primeiro, e cada linha aponta pro crédito (logo, pra loja)
+/// que bancou aquele pedaço. É esse detalhe que torna o acerto possível depois.
+model CashbackUso {
+  id          String    @id @default(uuid())
+  cpf         String    @db.VarChar(11)
+  creditoId   String    @map("credito_id")
+  credito     CashbackCredito @relation(fields: [creditoId], references: [id], onDelete: Cascade)
+  saleId      String    @map("sale_id")
+  /// Loja que USOU (deu o desconto). Hoje absorve sozinha, por decisão do dono.
+  storeCode   String    @map("store_code") @db.VarChar(4)
+  valor       Float
+  estornadoEm DateTime? @map("estornado_em")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  @@index([cpf, createdAt])
+  @@index([saleId])
+  @@index([storeCode, createdAt])
+  @@map("cashback_usos")
+}
