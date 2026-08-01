@@ -215,18 +215,43 @@ export class CrediarioNativoService {
       const pool: any = (this.erp as any).pool;
       if (!pool) throw new Error('pool Giga não inicializado');
 
-      // Preserva as parcelas do FLOW (fase 2); refaz só o que veio do Giga.
+      // LÊ ANTES DE APAGAR (31/07). O DELETE vinha primeiro: com o Giga fora na
+      // hora do cron (04:10), ele passava, o SELECT estourava e a tabela ficava
+      // VAZIA. Como a ficha da cliente lê daqui SEM flag nenhuma, TODA cliente
+      // passaria a mostrar dívida zero — e a execução seguinte apagaria o vazio
+      // de novo, então não se corrigia sozinho.
+      //
+      // São 710k linhas, grandes demais pra segurar inteiras na memória antes
+      // do replace. A garantia possível é esta: buscar a PRIMEIRA página e só
+      // apagar se ela vier. Cobre o caso real — Giga indisponível — sem inchar
+      // a memória. Se ele cair no meio da paginação, a conferência do fim do
+      // método grita e a próxima execução refaz.
+      const primeira = await pool.query({
+        sql: `SELECT * FROM \`movimento\` ORDER BY \`REGISTRO\` LIMIT ${CrediarioNativoService.PAGE} OFFSET 0`,
+        timeout: 120_000,
+      });
+      const primeiraPagina = primeira[0] as any[];
+      if (!primeiraPagina.length) {
+        // Vazio não é resposta válida: a `movimento` nunca está vazia de
+        // verdade. Preserva o que está lá e sai.
+        throw new Error('SELECT movimento veio vazio — Giga indisponível, parcelas preservadas');
+      }
+
+      // Só agora, com a leitura provada, refaz o que veio do Giga.
+      // Parcelas nascidas no Flow (flowIsSource) são preservadas sempre.
       await (this.prisma as any).crediarioParcela.deleteMany({ where: { flowIsSource: false } });
 
       let total = 0;
       let abertas = 0;
       let paginas = 0;
       for (let offset = 0; offset < CrediarioNativoService.MAX_ROWS; offset += CrediarioNativoService.PAGE) {
-        const [rows] = await pool.query({
-          sql: `SELECT * FROM \`movimento\` ORDER BY \`REGISTRO\` LIMIT ${CrediarioNativoService.PAGE} OFFSET ${offset}`,
-          timeout: 120_000,
-        });
-        const batch = rows as any[];
+        // A primeira página já está na mão — não relê.
+        const batch = offset === 0
+          ? primeiraPagina
+          : ((await pool.query({
+              sql: `SELECT * FROM \`movimento\` ORDER BY \`REGISTRO\` LIMIT ${CrediarioNativoService.PAGE} OFFSET ${offset}`,
+              timeout: 120_000,
+            }))[0] as any[]);
         if (!batch.length) break;
         paginas++;
 
