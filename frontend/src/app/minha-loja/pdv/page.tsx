@@ -3550,6 +3550,22 @@ function CustomerModal({
   const [cepLoading, setCepLoading] = useState(false);
   const [cepError, setCepError] = useState<string | null>(null);
 
+  // ── FOCO NA BUSCA AO ABRIR ────────────────────────────────────────────
+  // A vendedora abre o modal e já digita o CPF, sem clicar. Vai na BUSCA e não
+  // no campo CPF de baixo de propósito: buscar ACHA a cliente que já existe
+  // (trazendo cashback, endereço e histórico), enquanto o campo de baixo só
+  // preenche a venda — e digitar ali uma cliente que já existe é como nasce
+  // cadastro duplicado.
+  //
+  // `autoFocus` sozinho é instável em modal que entra com animação: o navegador
+  // foca antes de o elemento estar posicionado e o teclado do PDV às vezes
+  // perde. O timer curto espera a montagem terminar.
+  const buscaRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    const t = setTimeout(() => buscaRef.current?.focus(), 80);
+    return () => clearTimeout(t);
+  }, []);
+
   // ── O QUE JÁ SE SABE DA CLIENTE ───────────────────────────────────────
   // Assim que o CPF fica completo, busca a ficha dela e preenche e-mail e
   // endereço. O CPF é a pessoa: se ela já comprou em QUALQUER loja ou no site,
@@ -3710,6 +3726,7 @@ function CustomerModal({
           <div className="flex items-center gap-2 border-2 border-violet-300 bg-violet-50 rounded px-2 py-2 focus-within:border-violet-500">
             <Search className="w-4 h-4 text-violet-600 shrink-0" />
             <input
+              ref={buscaRef}
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               onFocus={() => results.length > 0 && setShowResults(true)}
