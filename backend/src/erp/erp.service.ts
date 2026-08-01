@@ -6815,6 +6815,21 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     cor: string | null,
     tamanho: string | null,
   ): Promise<string | null> {
+    // MODO RESPOSTA (GIGA_LEITURA_FLOW=1): o Postgres responde, com recuo pro
+    // Giga quando não acha ou falha. É o mesmo padrão do GIGA_MIRROR_READS.
+    if (this.sombra?.respondeDoFlow) {
+      try {
+        const doFlow = await this.sombra.findCodigoByRefCorTam(refCode, cor, tamanho);
+        if (doFlow) return doFlow;
+        // Vazio não é resposta: pode ser tradução incompleta. Pergunta ao Giga
+        // antes de dizer "não existe" — dizer isso errado trava o bipe da loja.
+        this.logger.warn(`[flow-leitura] sem resultado pra ${refCode}/${cor}/${tamanho} — recorrendo ao Giga`);
+      } catch (e) {
+        this.logger.warn(`[flow-leitura] falhou (${(e as Error).message}) — recorrendo ao Giga`);
+      }
+      return this.findCodigoByRefCorTamGiga(refCode, cor, tamanho);
+    }
+
     const doGiga = await this.findCodigoByRefCorTamGiga(refCode, cor, tamanho);
 
     // `void`: não espera pela comparação. O usuário já tem a resposta, e a
@@ -6987,6 +7002,28 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   async batchFindCodigosByRefCorTam(
     items: Array<{ refCode: string; cor?: string | null; tamanho?: string | null }>,
   ): Promise<Map<string, string>> {
+    if (this.sombra?.respondeDoFlow) {
+      try {
+        const doFlow = await this.sombra.batchFindCodigosByRefCorTam(items);
+        // No batch o recuo é POR ITEM, não tudo-ou-nada: a entrada de remessa
+        // resolve dezenas de peças de uma vez, e se uma não casar no espelho
+        // não faz sentido jogar fora as outras que casaram.
+        const faltando = items.filter((it) => {
+          const k = `${String(it.refCode ?? '').trim().toUpperCase()}|${String(it.cor ?? '').trim().toUpperCase()}|${String(it.tamanho ?? '').trim().toUpperCase()}`;
+          return !doFlow.has(k);
+        });
+        if (!faltando.length) return doFlow;
+
+        this.logger.warn(`[flow-leitura] batch: ${faltando.length}/${items.length} sem resultado — completando pelo Giga`);
+        const doGigaFalta = await this.batchFindCodigosByRefCorTamGiga(faltando);
+        for (const [k, v] of doGigaFalta) doFlow.set(k, v);
+        return doFlow;
+      } catch (e) {
+        this.logger.warn(`[flow-leitura] batch falhou (${(e as Error).message}) — recorrendo ao Giga`);
+        return this.batchFindCodigosByRefCorTamGiga(items);
+      }
+    }
+
     const doGiga = await this.batchFindCodigosByRefCorTamGiga(items);
 
     // Sombra: Map não serializa em JSON, então compara como par ordenado —

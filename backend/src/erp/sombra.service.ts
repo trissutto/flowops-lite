@@ -63,6 +63,24 @@ export class SombraService {
     return String(process.env.GIGA_SOMBRA ?? '') === '1';
   }
 
+  /**
+   * `GIGA_LEITURA_FLOW=1` — o Postgres passa a RESPONDER, não só comparar.
+   *
+   * ⚠️ ISTO MUDA O QUE O SISTEMA DEVOLVE. Só ligue depois de olhar o placar
+   * da sombra em /retaguarda/giga-sombra.
+   *
+   * O recuo pro Giga continua valendo (resposta vazia ou erro), então
+   * tradução incompleta não deixa a loja sem resposta. O que o recuo NÃO
+   * cobre é o Postgres achar OUTRO cadastro do mesmo produto — acontece em
+   * produto duplicado quando o estoque do espelho está defasado (sincroniza
+   * de hora em hora). Nesse caso a peça sai do cadastro errado.
+   *
+   * Desligar: apagar a env. Volta na hora, sem deploy de código.
+   */
+  get respondeDoFlow(): boolean {
+    return String(process.env.GIGA_LEITURA_FLOW ?? '') === '1';
+  }
+
   private get verboso(): boolean {
     return String(process.env.GIGA_SOMBRA_VERBOSE ?? '') === '1';
   }
