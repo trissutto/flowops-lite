@@ -147,7 +147,7 @@ export class NfeTransferService {
     for (let tentativa = 0; ; tentativa++) {
       const dhEmi = this.dhEmiNow();
       cNF = crypto.randomInt(10_000_000, 99_999_999).toString();
-      chave = this.buildChave({ cUF, cnpj: origem.cnpj, serie, numero, cNF, dataEmissao: new Date() });
+      chave = this.buildChave({ cUF, cnpj: origem.cnpj, serie, numero, cNF, dataEmissao: this.agoraBrasilia() });
       const xml = this.buildXml({
         chave, cUF, cNF, serie, numero, dhEmi, tpAmb, natOp,
         origem, destino, interestadual, items, valorTotal, remCode: shipment.code,
@@ -977,11 +977,29 @@ export class NfeTransferService {
     return n > 0;
   }
 
+  /**
+   * "Agora" em Brasília, como Date cujos campos UTC já são a hora local.
+   *
+   * Existe porque a chave de acesso e a `dhEmi` PRECISAM sair da mesma data.
+   * O servidor roda em UTC: às 21h de Brasília o UTC já virou o dia seguinte, e
+   * no último dia do mês vira o MÊS seguinte. Quem lê `new Date()` cru pega
+   * agosto enquanto a `dhEmi` diz julho — e a SEFAZ rejeita com cStat 502
+   * ("Campo Id não corresponde à concatenação dos campos").
+   *
+   * Aconteceu em produção em 31/07/2026 22:49, na NF-e de transferência.
+   * Só quebra no último dia do mês depois das 21h: nos outros dias o UTC muda o
+   * dia mas não o mês, e o AAMM da chave continua batendo.
+   *
+   * Leia os campos com getUTC* — nunca com getMonth()/getFullYear(), que
+   * dependem do fuso do servidor.
+   */
+  private agoraBrasilia(): Date {
+    return new Date(Date.now() - 3 * 60 * 60 * 1000);
+  }
+
   private dhEmiNow(): string {
     // ISO com offset -03:00 (Brasília sem DST). SEFAZ 4.00 rejeita 'Z'.
-    const now = new Date();
-    const local = new Date(now.getTime() - 3 * 60 * 60 * 1000);
-    return local.toISOString().slice(0, 19) + '-03:00';
+    return this.agoraBrasilia().toISOString().slice(0, 19) + '-03:00';
   }
 
   private calcDV(chave43: string): string {
@@ -998,9 +1016,12 @@ export class NfeTransferService {
   private buildChave(input: {
     cUF: string; cnpj: string; serie: string; numero: number; cNF: string; dataEmissao: Date;
   }): string {
+    // getUTC*, não getMonth(): `dataEmissao` vem de `agoraBrasilia()`, cujos
+    // campos UTC já são a hora de Brasília. Ler em fuso local devolveria o mês
+    // do servidor (UTC) e a chave sairia divergente da dhEmi.
     const aamm =
-      String(input.dataEmissao.getFullYear()).slice(-2) +
-      String(input.dataEmissao.getMonth() + 1).padStart(2, '0');
+      String(input.dataEmissao.getUTCFullYear()).slice(-2) +
+      String(input.dataEmissao.getUTCMonth() + 1).padStart(2, '0');
     const semDv =
       input.cUF.padStart(2, '0') +
       aamm +
@@ -1479,7 +1500,7 @@ export class NfeTransferService {
     for (let t = 0; ; t++) {
       const dhEmi = this.dhEmiNow();
       cNF = crypto.randomInt(10_000_000, 99_999_999).toString();
-      chave = this.buildChave({ cUF, cnpj: origem.cnpj, serie, numero, cNF, dataEmissao: new Date() });
+      chave = this.buildChave({ cUF, cnpj: origem.cnpj, serie, numero, cNF, dataEmissao: this.agoraBrasilia() });
       const xml = this.buildVendaXml({ chave, cUF, cNF, serie, numero, dhEmi, tpAmb, natOp, cfop, origem, dest, interestadual, items, valorTotal, vFrete, saleRef: String(sale.id).slice(0, 8) });
       const xmlMin = xml.replace(/>\s+</g, '><').trim();
       let xmlAssinado: string;
@@ -1608,7 +1629,7 @@ export class NfeTransferService {
     for (let t = 0; ; t++) {
       const dhEmi = this.dhEmiNow();
       cNF = crypto.randomInt(10_000_000, 99_999_999).toString();
-      chave = this.buildChave({ cUF, cnpj: origem.cnpj, serie, numero, cNF, dataEmissao: new Date() });
+      chave = this.buildChave({ cUF, cnpj: origem.cnpj, serie, numero, cNF, dataEmissao: this.agoraBrasilia() });
       const xml = this.buildVendaXml({ chave, cUF, cNF, serie, numero, dhEmi, tpAmb, natOp, cfop, origem, dest, interestadual, items, valorTotal, saleRef: `envio ${String(input.pickOrderId).slice(0, 8)}` });
       const xmlMin = xml.replace(/>\s+</g, '><').trim();
       let xmlAssinado: string;
