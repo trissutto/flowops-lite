@@ -2,19 +2,29 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { PushService } from '../push/push.service';
+import { calcularFerias } from '../common/ferias-clt';
 
 /**
  * SellersCronService — alertas RH automáticos.
  *
- * Rotina diária (8h da manhã):
- *  - Vê funcionárias com dataAdmissão preenchida
- *  - Calcula o aniversário do ciclo (12 meses após admissão, ano corrente)
- *  - Se aniversário está em <= 60 dias E não tem dataInicioFerias marcada
- *    pro ciclo corrente → manda push pros admins
+ * Rotina diária (8h da manhã): funcionárias cujo prazo de CONCEDER férias está
+ * a 90 dias ou menos, sem `dataInicioFerias` marcada → push pros admins.
  *
- * Por que 60 dias?  Período legal CLT: férias podem ser concedidas até 11 meses
- * após início do período aquisitivo. Avisar 2 meses antes dá folga pra montar
- * escala sem cair em férias coletivas / multa.
+ * ── O QUE ESTAVA ERRADO AQUI ATÉ 01/08/2026 ──
+ *
+ * O alerta olhava o aniversário do período AQUISITIVO — a data em que a
+ * funcionária GANHA o direito. Nessa data não há nada a fazer: o prazo pra
+ * conceder só começa aí e vai até 12 meses depois (art. 134). Ou seja, ele
+ * avisava com mais de um ano de antecedência do que importa, e o comentário
+ * antigo desta seção dizia "11 meses após o INÍCIO do aquisitivo" — é após o
+ * FIM dele.
+ *
+ * Pior: com `diasRestantes < 0` ele parava de avisar assim que a data passava.
+ * O aviso sumia exatamente quando o problema começava a custar dinheiro.
+ *
+ * Agora o marco é o `limiteInicio` de `common/ferias-clt.ts` — o último dia
+ * pra INICIAR 30 dias sem estourar o concessivo — e o alerta não some depois
+ * de vencido.
  *
  * Liga/desliga via env:  RH_CRON_ENABLED=1 (default OFF em dev).
  */
@@ -96,17 +106,26 @@ export class SellersCronService {
       if (!s.dataAdmissao) continue;
       const adm: Date = new Date(s.dataAdmissao);
 
-      // Próximo aniversário do ciclo (12 meses pós-admissão, depois 24, 36...)
-      const anosCompletos = this.diffInYears(adm, now);
-      const proximoCiclo = new Date(adm);
-      proximoCiclo.setFullYear(adm.getFullYear() + anosCompletos + 1);
+      // ── CORRIGIDO 01/08: este alerta olhava o marco ERRADO ──
+      //
+      // Ele avisava quando o PERÍODO AQUISITIVO ia fechar — ou seja, quando a
+      // funcionária estava PRESTES A GANHAR o direito. Isso é mais de um ano
+      // antes do prazo real, e não há nada a fazer nessa data.
+      //
+      // O prazo que importa é o do período CONCESSIVO: o último dia pra
+      // INICIAR as férias sem estourar. Passado ele, art. 137 — dobra.
+      const f = calcularFerias(adm, { hoje: now });
 
-      // Quantos dias até vencer
-      const diasRestantes = Math.ceil(
-        (proximoCiclo.getTime() - now.getTime()) / (1000 * 60 * 60 * 24),
-      );
+      // Ainda no primeiro ano de casa: não há prazo a cobrar.
+      if (f.situacao === 'aquisitivo') continue;
 
-      if (diasRestantes > 60 || diasRestantes < 0) continue;
+      const diasRestantes = f.diasAteLimite;
+      const proximoCiclo = f.limiteInicio;
+
+      // Alerta a partir de 90 dias do limite — e NUNCA para de alertar depois
+      // de vencido. Antes, `diasRestantes < 0` fazia o aviso sumir justamente
+      // no dia em que passou a custar dinheiro.
+      if (diasRestantes > 90) continue;
 
       // Já tem férias marcadas no ciclo atual?
       if (s.dataInicioFerias) {

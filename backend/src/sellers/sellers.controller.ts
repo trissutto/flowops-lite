@@ -189,6 +189,21 @@ export class SellersController {
     return this.cron.checkVacationAlerts();
   }
 
+  /**
+   * MAPA DE FÉRIAS — período aquisitivo, concessivo e a data limite de cada uma.
+   *
+   * Diferente do `ferias/check`, que só devolve quem está perto de vencer. Aqui
+   * vem a folha inteira, ordenada pelo prazo mais apertado, pra o RH programar
+   * ao invés de apagar incêndio.
+   */
+  @Get('ferias/mapa')
+  mapaFerias(@Query('storeCode') storeCode?: string, @Query('incluirInativas') incluirInativas?: string) {
+    return this.svc.mapaFerias({
+      storeCode: storeCode || undefined,
+      incluirInativas: incluirInativas === '1' || incluirInativas === 'true',
+    });
+  }
+
   /** CONFERIDOR Flow × Giga por loja (dono 29/07): componentes do Flow
    *  (bruto/marcados/desconto/devoluções) + caixa do Giga lado a lado. */
   @Get('report-conferidor')
