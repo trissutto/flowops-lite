@@ -941,7 +941,10 @@ export class WincredMirrorService {
     }, async (data, tx) => {
       if (data.length) await tx.wincredFornecedor.createMany({ data, skipDuplicates: true });
       return data.length;
-    });
+      // preservarFlow: fornecedor cadastrado no Flow (faixa 90.000+) pode ainda
+      // não existir no Giga. Sem isto ele sumiria no próximo sync — e junto o
+      // vínculo dele nas contas a pagar já lançadas.
+    }, { preservarFlow: true });
   }
 
   async syncCodigos(): Promise<SyncResult> {

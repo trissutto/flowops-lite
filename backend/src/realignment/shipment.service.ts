@@ -9,6 +9,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
 import { RealignmentPricingService } from './realignment-pricing.service';
 import { RealtimeGateway } from '../websocket/realtime.gateway';
+import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service';
 
 /**
  * RealignmentShipmentService — gerencia o ciclo de REMESSA entre lojas.
@@ -35,6 +36,7 @@ export class RealignmentShipmentService {
     private readonly erp: ErpService,
     private readonly pricing: RealignmentPricingService,
     private readonly gateway: RealtimeGateway,
+    private readonly catalog: WincredCatalogService,
   ) {}
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -268,8 +270,16 @@ export class RealignmentShipmentService {
     // Isso elimina a chamada ao pool de preço separado (getPricesByCodigos), que
     // era justamente o que PENDURAVA a transferência durante a reconstrução das
     // tabelas do Giga — a triagem/PDV não passam por aquele pool, por isso iam de boa.
-    const info = await this.erp.getPdvProductInfo(codigo);
-    if (!info) throw new NotFoundException(`Código ${codigo} não encontrado no Giga`);
+    // ESPELHO PRIMEIRO (01/08). Era `this.erp.getPdvProductInfo`, indo direto no
+    // MySQL — o ÚNICO bipe do sistema fora do espelho: os outros dez já passam
+    // pelo WincredCatalogService. Resultado: com o Giga pendurado, a triagem
+    // travava no primeiro bipe enquanto o PDV da mesma loja bipava normalmente.
+    //
+    // O catálogo tem a MESMA assinatura e já traz o recuo pro Giga embutido
+    // (miss, EAN, produto recém-cadastrado, preço zerado) — a troca não muda o
+    // que a triagem enxerga, só de onde vem primeiro.
+    const info = await this.catalog.getPdvProductInfo(codigo);
+    if (!info) throw new NotFoundException(`Código ${codigo} não encontrado`);
 
     const codigoReal = info.sku; // CODIGO real resolvido pela rotina do PDV
     const ref = String(info.ref || codigoReal).trim();

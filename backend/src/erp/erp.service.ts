@@ -3315,8 +3315,24 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         const originalSku = variantToOriginal.get(codigoGiga) || codigoGiga;
         const preco = Number(r.preco);
         if (!Number.isNaN(preco) && preco > 0) {
-          // VENDAUN Ã© em centavos â€” divide por 100 (consistente com getPdvProductInfo)
-          const precoFinal = (precoCol || '').toUpperCase() === 'VENDAUN' ? preco / 100 : preco;
+          // ÷100 REMOVIDO (01/08). O comentário antigo dizia "VENDAUN é em
+          // centavos" — não é. A coluna guarda REAIS, e o driver do MySQL já
+          // devolve número (59.90 → 59.9), então dividir gerava R$ 0,599.
+          //
+          // MEDIDO em `scripts/giga-etl/medir-coluna-preco.js`: 12 de 12 peças
+          // batem com o espelho SEM dividir, 0 batem dividindo.
+          //
+          // Isso era dinheiro saindo errado: `realignment.service.ts:1199` usa
+          // este método pra precificar a OBRIGAÇÃO INTERCOMPANY — a loja que
+          // recebia a peça era cobrada 100× a menos. Outros dois pontos
+          // (`financeiro.service.ts:134`, `shipment.service.ts:873`) já
+          // desviavam daqui de propósito, com comentário registrando o sintoma
+          // ("R$ 1,90 em vez de R$ 190") sem chegar na causa.
+          //
+          // Efeito colateral bom: o espelho também não divide, então os dois
+          // caminhos passam a concordar e `GIGA_LEITURA_FLOW` deixa de mudar a
+          // escala do preço ao ser ligada.
+          const precoFinal = preco;
           // Se jÃ¡ tem o SKU no map, mantÃ©m o maior preÃ§o (defensivo contra duplicatas)
           const existing = out.get(originalSku);
           if (!existing || precoFinal > existing) {
@@ -8525,6 +8541,35 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * a categoria já existe no Flow, e derrubar aqui impediria o cadastro do
    * produto por causa de um banco que é só espelho.
    */
+  /**
+   * Réplica do FORNECEDOR na tabela `fornecedores` do Giga.
+   *
+   * `INSERT ... ON DUPLICATE KEY UPDATE` porque o mesmo código pode voltar aqui
+   * numa edição — e o retry do outbox precisa ser inofensivo. O CODIGO já vem
+   * decidido pelo Flow (faixa 90.000+), então não há disputa de numeração.
+   */
+  async replicarFornecedorInline(f: any): Promise<void> {
+    if (!this.isWriteEnabled || !this.pool) throw new Error('escrita no Giga desabilitada');
+    if (!f?.codigo) throw new Error('fornecedor sem codigo');
+
+    const cols = [
+      'CODIGO', 'RAZAOSOCIAL', 'FANTASIA', 'CNPJ', 'IE', 'DATACADASTRO', 'ENDERECO',
+      'BAIRRO', 'CIDADE', 'UF', 'DDD', 'FONE', 'FAX', 'CEP', 'EMAIL', 'CONTATO', 'OBS',
+    ];
+    const vals = [
+      Number(f.codigo), f.razaoSocial, f.fantasia, f.cnpj, f.ie,
+      f.dataCadastro ? new Date(f.dataCadastro) : new Date(),
+      f.endereco, f.bairro, f.cidade, f.uf, f.ddd, f.fone, f.fax, f.cep,
+      f.email, f.contato, f.obs ?? null,
+    ];
+    // CODIGO fora do UPDATE: é a chave, atualizar não faz sentido.
+    const updates = cols.slice(1).map((c) => `\`${c}\` = VALUES(\`${c}\`)`).join(', ');
+    const sql =
+      `INSERT INTO \`fornecedores\` (${cols.map((c) => `\`${c}\``).join(', ')}) ` +
+      `VALUES (${cols.map(() => '?').join(', ')}) ON DUPLICATE KEY UPDATE ${updates}`;
+    await this.pool.query(sql, vals);
+  }
+
   /**
    * O INSERT da categoria no Giga, isolado. Público porque o cron do outbox
    * chama isto quando a réplica atrasada finalmente sai.

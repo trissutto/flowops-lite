@@ -17,6 +17,7 @@ import { RemessaEnvioService } from './remessa-envio.service';
 import { CorreiosModule } from '../correios/correios.module';
 import { MaisEnviosModule } from '../mais-envios/mais-envios.module';
 import { NfeModule } from '../nfe/nfe.module';
+import { WincredMirrorModule } from '../wincred-mirror/wincred-mirror.module';
 
 /**
  * Nota: dependia de WhatsappModule (disparo de WhatsApp consolidado) até o
@@ -27,7 +28,7 @@ import { NfeModule } from '../nfe/nfe.module';
 @Module({
   // CorreiosModule/MaisEnviosModule/NfeModule → envio físico da remessa
   // (etiqueta SEDEX + chave da NF-e 5152 + DANFE no PDF único)
-  imports: [AuthModule, PrismaModule, ErpModule, WebsocketModule, WpDbModule, CorreiosModule, MaisEnviosModule, NfeModule],
+  imports: [AuthModule, PrismaModule, ErpModule, WebsocketModule, WpDbModule, CorreiosModule, MaisEnviosModule, NfeModule, WincredMirrorModule],
   controllers: [RealignmentController, RealignmentReportController],
   providers: [
     RealignmentService,

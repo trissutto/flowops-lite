@@ -3556,8 +3556,13 @@ model WincredGrupo {
 /// int(11) nos dois lados (medido em scripts/giga-etl/medir-grupos.js), então
 /// as duas numerações nunca se encontram. Código a partir de 9000 também
 /// identifica de olho que a categoria nasceu no Flow.
+/// Sequências dos cadastros criados no FLOW que precisam de código numérico
+/// compatível com o Giga. Cada `tipo` tem sua faixa reservada, sempre muito
+/// acima do que o Giga já usa, pra as duas numerações nunca se cruzarem.
+///   grupo/subgrupo → 9.000+  (Giga usa até 433)
+///   fornecedor     → 90.000+ (Giga usa até 10.526)
 model CategoriaSequence {
-  /// 'grupo' | 'subgrupo'
+  /// 'grupo' | 'subgrupo' | 'fornecedor'
   tipo      String   @id @db.VarChar(12)
   lastSeq   Int      @default(8999) @map("last_seq")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -3600,9 +3605,18 @@ model WincredFornecedor {
   contato       String?   @db.VarChar(50)
   obs           Bytes?
 
+  /// Nasceu no FLOW e pode ainda não existir no Giga. O sync desta tabela
+  /// refaz o que veio de lá; sem esta marca, um fornecedor cadastrado aqui
+  /// sumiria no ciclo seguinte — junto com o vínculo dele em Contas a Pagar.
+  flowIsSource  Boolean   @default(false) @map("flow_is_source")
+  /// Já replicado na `fornecedores` do Giga.
+  gigaOk        Boolean   @default(false) @map("giga_ok")
+  editedAt      DateTime? @map("edited_at")
+
   syncedAt      DateTime  @default(now()) @map("synced_at")
 
   @@index([cnpj])
+  @@index([flowIsSource])
   @@map("wincred_fornecedores")
 }
 

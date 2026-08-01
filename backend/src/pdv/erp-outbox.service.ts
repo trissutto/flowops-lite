@@ -104,6 +104,7 @@ export class ErpOutboxService {
     if (job.kind === 'categoria_criar') return this.processCategoriaCriar(job);
     if (job.kind === 'bandeira_fechamento') return this.processBandeiraFechamento(job);
     if (job.kind === 'crediario_criacao') return this.processCrediarioCriacao(job);
+    if (job.kind === 'fornecedor_upsert') return this.processFornecedorUpsert(job);
     if (job.kind !== 'venda') {
       await this.markFailed(job, `kind desconhecido: ${job.kind}`);
       return false;
@@ -704,6 +705,44 @@ export class ErpOutboxService {
       return true;
     } catch (e: any) {
       this.logger.warn(`[outbox] crediario_criacao ${saleId} re-agendado: ${e?.message}`);
+      return this.requeueOrFail(job, e);
+    }
+  }
+
+  /**
+   * Réplica do FORNECEDOR cadastrado/editado no Flow.
+   *
+   * Relê a linha do Postgres em vez de usar o payload: se houve edição enquanto
+   * o job esperava na fila, o Giga recebe a versão FINAL, não a do momento em
+   * que falhou. `INSERT ... ON DUPLICATE KEY UPDATE` torna o retry inofensivo.
+   */
+  private async processFornecedorUpsert(job: any): Promise<boolean> {
+    const codigo = Number(job.payload?.codigo) || 0;
+    if (!codigo) {
+      await this.markFailed(job, 'fornecedor_upsert sem codigo');
+      return false;
+    }
+    try {
+      const f = await (this.prisma as any).wincredFornecedor.findUnique({ where: { codigo } });
+      if (!f) {
+        await this.prisma.erpOutbox.update({
+          where: { id: job.id },
+          data: { status: 'done', doneAt: new Date(), lastError: 'fornecedor não existe mais — réplica descartada' },
+        });
+        return true;
+      }
+
+      await (this.erp as any).replicarFornecedorInline(f);
+      await (this.prisma as any).wincredFornecedor.update({ where: { codigo }, data: { gigaOk: true } });
+
+      await this.prisma.erpOutbox.update({
+        where: { id: job.id },
+        data: { status: 'done', doneAt: new Date(), lastError: null },
+      });
+      this.logger.log(`[outbox] fornecedor_upsert ${codigo} replicado no Giga`);
+      return true;
+    } catch (e: any) {
+      this.logger.warn(`[outbox] fornecedor_upsert ${codigo} re-agendado: ${e?.message}`);
       return this.requeueOrFail(job, e);
     }
   }
