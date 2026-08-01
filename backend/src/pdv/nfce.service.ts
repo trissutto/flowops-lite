@@ -262,6 +262,23 @@ export class NfceService {
    * Monta a chave de acesso NFe (44 dígitos):
    *   cUF(2) + AAMM(4) + CNPJ(14) + mod(2)=65 + serie(3) + nNF(9) + tpEmis(1)=1 + cNF(8) + DV(1)
    */
+  /**
+   * "Agora" em Brasília, como Date cujos campos UTC já são a hora local.
+   *
+   * A chave de acesso e a `dhEmi` PRECISAM sair da mesma data. O servidor roda
+   * em UTC: às 21h de Brasília o UTC já virou o dia seguinte e, no último dia
+   * do mês, o MÊS seguinte. Quem lê `new Date()` cru monta a chave com agosto
+   * enquanto a dhEmi diz julho, e a SEFAZ rejeita com cStat 502.
+   *
+   * Aconteceu em produção em 31/07/2026 22:49 (na NF-e de transferência, mesmo
+   * bug). Só quebra no último dia do mês depois das 21h — nos outros dias o UTC
+   * muda o dia mas não o mês, e o AAMM da chave continua batendo. É por isso
+   * que passou despercebido.
+   */
+  private agoraBrasilia(): Date {
+    return new Date(Date.now() - 3 * 60 * 60 * 1000);
+  }
+
   private buildChave(input: {
     cUF: string;
     cnpj: string;
@@ -269,9 +286,13 @@ export class NfceService {
     numero: number;
     dataEmissao: Date;
   }): string {
+    // getUTC*, não getMonth(): `dataEmissao` vem de `agoraBrasilia()`, cujos
+    // campos UTC já são a hora de Brasília. Ler em fuso local devolveria o mês
+    // do SERVIDOR (Railway roda em UTC) e a chave sairia divergente da dhEmi —
+    // rejeição cStat 502 da SEFAZ. Ver o comentário de `agoraBrasilia()`.
     const aamm =
-      String(input.dataEmissao.getFullYear()).slice(-2) +
-      String(input.dataEmissao.getMonth() + 1).padStart(2, '0');
+      String(input.dataEmissao.getUTCFullYear()).slice(-2) +
+      String(input.dataEmissao.getUTCMonth() + 1).padStart(2, '0');
     const mod = '65';
     const serie = String(input.serie).padStart(3, '0');
     const nNF = String(input.numero).padStart(9, '0');
@@ -305,12 +326,7 @@ export class NfceService {
     // NÃO com Z. SEFAZ NF-e 4.00 (TDateTimeUTC) só aceita os offsets
     // -01:00, -02:00, -03:00, -04:00, -05:00 ou +00:00. Usar Z resulta
     // em rejeição cStat 225 (Falha no Schema XML).
-    const dhEmi = (() => {
-      const now = new Date();
-      // Brasília UTC-3 (sem horário de verão desde 2019)
-      const local = new Date(now.getTime() - 3 * 60 * 60 * 1000);
-      return local.toISOString().slice(0, 19) + '-03:00';
-    })();
+    const dhEmi = this.agoraBrasilia().toISOString().slice(0, 19) + '-03:00';
     const items = sale.items as any[];
 
     // CPF tem 11 digitos, CNPJ tem 14. SEFAZ rejeita CNPJ na tag <CPF>.
@@ -884,7 +900,7 @@ export class NfceService {
       cnpj: config.cnpj.replace(/\D/g, ''),
       serie: config.serie,
       numero,
-      dataEmissao: new Date(),
+      dataEmissao: this.agoraBrasilia(),
     });
 
     const xml = await this.buildXml(sale, config, chave, numero);
@@ -1123,7 +1139,7 @@ export class NfceService {
       cnpj: config.cnpj.replace(/\D/g, ''),
       serie: config.serie,
       numero,
-      dataEmissao: new Date(),
+      dataEmissao: this.agoraBrasilia(),
     });
 
     let xml: string;

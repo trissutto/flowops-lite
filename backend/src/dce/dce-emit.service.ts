@@ -61,7 +61,9 @@ export class DceEmitService {
 
     // cDC: código numérico aleatório de 6 dígitos (schema exige [0-9]{6})
     const cDC = String(Math.floor(Math.random() * 999999)).padStart(6, '0');
-    const agora = new Date();
+    // Brasília, não o fuso do servidor — a chave tem que sair da MESMA data que
+    // a dhEmi. Ver o comentário de `dhEmiNow()`.
+    const agora = this.agoraBrasilia();
     const nSite = (process.env.DCE_NSITE || '0').slice(0, 1);
     const chave = this.buildChave({ cUF: '35', cnpj: fiscal.cnpj, serie, numero, cDC, nSite, dataEmissao: agora });
     const dhEmi = this.dhEmiNow();
@@ -181,9 +183,23 @@ export class DceEmitService {
   }
 
   // ── helpers (mesmo padrão da NF-e) ──────────────────────────────────────
+
+  /**
+   * "Agora" em Brasília, como Date cujos campos UTC já são a hora local.
+   *
+   * A chave de acesso e a `dhEmi` têm que sair da MESMA data. O servidor roda
+   * em UTC: às 21h de Brasília o UTC já virou o dia seguinte e, no último dia
+   * do mês, o MÊS seguinte — a chave sairia com agosto e a dhEmi com julho,
+   * e a SEFAZ rejeita (cStat 502). Aconteceu em produção em 31/07/2026 22:49.
+   *
+   * Ler os campos com getUTC*, nunca com getMonth()/getFullYear().
+   */
+  private agoraBrasilia(): Date {
+    return new Date(Date.now() - 3 * 60 * 60 * 1000);
+  }
+
   private dhEmiNow(): string {
-    const local = new Date(Date.now() - 3 * 60 * 60 * 1000);
-    return local.toISOString().slice(0, 19) + '-03:00';
+    return this.agoraBrasilia().toISOString().slice(0, 19) + '-03:00';
   }
 
   private calcDV(chave43: string): string {
@@ -203,7 +219,10 @@ export class DceEmitService {
    * (confirmado no schema — cDC pattern [0-9]{6} — e nos inputs do manual).
    */
   private buildChave(input: { cUF: string; cnpj: string; serie: string; numero: number; cDC: string; nSite: string; dataEmissao: Date }): string {
-    const aamm = String(input.dataEmissao.getFullYear()).slice(-2) + String(input.dataEmissao.getMonth() + 1).padStart(2, '0');
+    // getUTC*: `dataEmissao` vem de `agoraBrasilia()`, cujos campos UTC já são
+    // a hora local. Ler em fuso do servidor (UTC no Railway) daria o mês errado
+    // no último dia do mês depois das 21h — chave divergente da dhEmi, cStat 502.
+    const aamm = String(input.dataEmissao.getUTCFullYear()).slice(-2) + String(input.dataEmissao.getUTCMonth() + 1).padStart(2, '0');
     const semDv =
       input.cUF.padStart(2, '0') + aamm + input.cnpj.padStart(14, '0') +
       '99' + String(input.serie).padStart(3, '0') + String(input.numero).padStart(9, '0') +
