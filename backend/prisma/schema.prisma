@@ -1506,6 +1506,12 @@ model PdvSale {
   // (evita duplicação por retry de rede, duplo-clique ou os 2 fluxos do front).
   crediarioControle  String?   @map("crediario_controle")
   crediarioCriadoEm  DateTime? @map("crediario_criado_em")
+  /// SENTINELA (31/07) — gravada ANTES de qualquer escrita externa, inclusive
+  /// no caminho legado. Hoje `crediarioControle` só é gravado DEPOIS que as
+  /// parcelas já existem: se o processo morre nessa janela, a repetição cria
+  /// tudo de novo e a cliente deve em dobro. A sentinela fecha a janela.
+  crediarioLockId    String?   @map("crediario_lock_id")
+  crediarioLockAt    DateTime? @map("crediario_lock_at")
   // Timestamps
   createdAt       DateTime @default(now()) @map("created_at")
   finalizedAt     DateTime? @map("finalized_at")
@@ -3813,12 +3819,67 @@ model CrediarioParcela {
   editedAt      DateTime? @map("edited_at")
   syncedAt      DateTime  @default(now()) @map("synced_at")
 
+  // ══════ RÉPLICA PRO GIGA (31/07) — ack POR LINHA ══════
+  /// A linha já foi replicada na `movimento` do Giga.
+  gigaOk      Boolean   @default(false) @map("giga_ok")
+  gigaAt      DateTime? @map("giga_at")
+  gigaError   String?   @map("giga_error") @db.VarChar(300)
+  /// A BAIXA desta parcela já foi replicada. O full-replace nunca pode apagar
+  /// uma linha com baixa ainda não replicada — perderia o pagamento.
+  baixaGigaOk Boolean   @default(false) @map("baixa_giga_ok")
+
+  /// Venda cancelada. A linha NUNCA é deletada — some das leituras e o worker
+  /// se recusa a replicar. Apagar dívida é irreversível; esconder não é.
+  cancelado    Boolean   @default(false)
+  canceladoEm  DateTime? @map("cancelado_em")
+  canceladoPor String?   @map("cancelado_por") @db.VarChar(80)
+
   @@index([loja, codCliente])
   @@index([codCliente])
   @@index([pago, vencimento])
   @@index([numeroCompra])
   @@index([flowIsSource])
+  /// ANTI-DUPLICATA determinístico, imposto pelo BANCO. É a defesa principal
+  /// contra cobrar a cliente duas vezes: clique duplo, timeout com repetição,
+  /// retry do outbox ou dois PDVs na mesma loja esbarram todos aqui, sem
+  /// depender de sonda nem de janela de tempo.
+  /// As 710.589 linhas legadas têm saleId NULL, e o Postgres trata NULLs como
+  /// distintos — o índice sobe sem conflito com o histórico.
+  @@unique([saleId, parcela], name: "uniq_parcela_por_venda")
+  @@index([saleId])
+  @@index([flowIsSource, gigaOk])
+  @@index([flowIsSource, pago, cancelado])
   @@map("crediario_parcelas")
+}
+
+/// SEQUÊNCIA DO CREDIÁRIO CRIADO NO FLOW.
+///
+/// REGISTRO e CONTROLE numerados aqui, numa faixa alta reservada — mesma ideia
+/// do EAN prefixo 8 e do pedido do ecommerce na faixa 950M.
+///
+/// Medido em 31/07 (`scripts/giga-etl/medir-numeracao-crediario.js`):
+///   REGISTRO  int(11)  maior em uso 712.606   teto 2.147.483.647
+///   CONTROLE  int(11)  maior em uso 341.518   teto 2.147.483.647
+/// Base 900.000.000 fica 899 milhões acima do uso e 1,2 bilhão abaixo do teto.
+///
+/// SEM @default nos contadores DE PROPÓSITO: se a linha não existir, o update
+/// estoura e o endpoint cai no caminho legado. Começar do zero criaria códigos
+/// que colidem com o histórico — vazio não é resposta válida.
+model CrediarioSeq {
+  /// 'registro' | 'controle'
+  escopo    String   @id @db.VarChar(20)
+  /// Início da faixa do Flow. O alocador LEGADO lê daqui pra EXCLUIR a faixa
+  /// do seu MAX+1 — sem isso as duas numerações colidem assim que a primeira
+  /// parcela do Flow for replicada.
+  base      BigInt
+  proximo   BigInt
+  /// Teto do tipo no MySQL, com margem.
+  teto      BigInt
+  /// Auditoria: os MAX medidos e quando.
+  seedFonte String?  @map("seed_fonte") @db.VarChar(400)
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("crediario_seq")
 }
 
 /// ══════════ CONVÊNIO (sindicato — dono 21/07) ══════════

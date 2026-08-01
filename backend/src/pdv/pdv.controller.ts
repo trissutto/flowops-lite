@@ -23,6 +23,7 @@ import { PdvService } from './pdv.service';
 import { ErpOutboxService } from './erp-outbox.service';
 import { ErpService } from '../erp/erp.service';
 import { SombraService } from '../erp/sombra.service';
+import { CrediarioCriacaoService } from '../crediario-nativo/crediario-criacao.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service';
 import { PixService } from './pix.service';
@@ -58,6 +59,7 @@ export class PdvController {
     private readonly returns: ReturnsService,
     private readonly prisma: PrismaService,
     private readonly sombra: SombraService,
+    private readonly crediarioCriacao: CrediarioCriacaoService,
   ) {}
 
   private requireRole(req: any) {
@@ -1893,6 +1895,37 @@ export class PdvController {
       // travar a venda — segue sem limite (fail-open, comportamento legado).
       if (e instanceof ForbiddenException) throw e;
       this.logger.warn(`[crediario] checagem de limite ignorada (erro lendo config): ${e?.message}`);
+    }
+
+    // ── CAMINHO FLOW-PRIMEIRO (CREDIARIO_FLOW_FIRST, padrão ligado) ────────
+    // As parcelas nascem no Postgres e o Giga recebe réplica pela fila. Esta
+    // era a última escrita síncrona que impedia vender com o Giga fora.
+    //
+    // Repare que `detectColumns()` fica DEPOIS: ele mesmo bate no MySQL
+    // (SHOW COLUMNS + SELECT + COUNT numa `movimento` de 700k linhas), então
+    // deixá-lo antes gastaria justamente a espera que este caminho evita.
+    if (this.crediarioCriacao.flowFirst) {
+      const r = await this.crediarioCriacao.criarParcelas({
+        saleId,
+        codCliente: info.cliente.codCliente,
+        nomeCliente: info.cliente.nome || sale.customerName || '',
+        loja: sale.storeCode,
+        valorTotal: valorFinanciado,
+        parcelas: body.parcelas,
+        primeiroVencimento: new Date(`${body.primeiroVencimento}T00:00:00.000Z`),
+        dataCompra: new Date(),
+        observacao: body.observacao || `PDV venda #${sale.id.slice(-6).toUpperCase()}`,
+      });
+      return {
+        ok: true,
+        parcelas: r.parcelas,
+        controle: r.controle,
+        registroInicial: r.registros[0],
+        valorFinanciado,
+        entrada,
+        // A tela mostra isso pra vendedora não achar que criou duas vezes.
+        jaExistia: r.jaExistia,
+      };
     }
 
     const cols = await this.crediarios.detectColumns();

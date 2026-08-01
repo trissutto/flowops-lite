@@ -734,13 +734,86 @@ export class CrediarioBaixaService {
       ? String(storeCode).replace(/[^0-9]/g, '').padStart(2, '0').slice(0, 2)
       : null;
 
+    // SEM TETO DE 5.000 (31/07). A ordem é por vencimento CRESCENTE, então o
+    // que passava do teto eram as parcelas de vencimento mais DISTANTE — ou
+    // seja, as vendas mais RECENTES sumiam da cobrança, caladas.
+    //
+    // Não era hipótese: 8 lojas passavam de 5.000 (loja 06 com 8.143), somando
+    // R$ 826.180,86 invisíveis por loja, e R$ 6,58 milhões na visão da rede.
+    // Medido em `scripts/giga-etl/diag-teto-recebimentos.js`.
+    //
+    // É a mesma família do teto de 50.000 que o espelho carregava e que foi
+    // removido hoje — lá o dado não ENTRAVA, aqui ele não SAÍA. O teto que fica
+    // é só uma barreira de sanidade, e se for atingido o log grita: truncar em
+    // silêncio numa tela de cobrança é pior que demorar.
+    const TETO_SANIDADE = 200_000;
     const abertas: any[] = await (this.prisma as any).wincredMovimentoAberto.findMany({
       where: safeStore ? { loja: safeStore } : undefined,
       orderBy: { vencimento: 'asc' },
-      take: 5000,
+      take: TETO_SANIDADE,
     });
+    if (abertas.length >= TETO_SANIDADE) {
+      this.logger.error(
+        `[crediario-baixa] lista de abertas bateu o teto de sanidade (${TETO_SANIDADE}) ` +
+        `na loja ${safeStore || 'TODAS'} — há dívida FORA da tela. Paginar esta leitura.`,
+      );
+    }
+    // ── UNIÃO ADITIVA (31/07) ──────────────────────────────────────────────
+    // Parcela criada no Flow (CrediarioCriacaoService) NÃO é escrita neste
+    // espelho de propósito: ele é apagado inteiro a cada 10 minutos e, com a
+    // ordenação por vencimento, a parcela nova — de vencimento mais distante —
+    // seria a primeira a sumir. Some aqui, na leitura, pra dívida aparecer na
+    // cobrança no mesmo instante da venda, sem esperar réplica nem sync.
+    //
+    // Dedup por `registro`: quando a réplica chegar no Giga e o espelho
+    // recarregar, a mesma parcela existe dos dois lados. O Flow ganha, porque é
+    // a fonte.
+    let nativasAbertas: any[] = [];
+    try {
+      nativasAbertas = await (this.prisma as any).crediarioParcela.findMany({
+        where: {
+          flowIsSource: true,
+          pago: false,
+          cancelado: false,
+          ...(safeStore ? { loja: safeStore } : {}),
+        },
+        orderBy: { vencimento: 'asc' },
+      });
+    } catch (e: any) {
+      // Falhar aqui esconderia dívida recém-criada; o log é o que denuncia.
+      this.logger.error(`[crediario-baixa] união com parcelas nativas falhou: ${e?.message}`);
+    }
+
+    if (nativasAbertas.length) {
+      const jaTem = new Set(abertas.map((r: any) => String(r.registro)));
+      for (const p of nativasAbertas) {
+        if (jaTem.has(String(p.registro))) continue;
+        abertas.push({
+          registro: String(p.registro),
+          controle: String(p.controle ?? ''),
+          numeroCompra: p.numeroCompra ?? null,
+          parcela: p.parcela,
+          totalParcelas: p.totalParcelas,
+          vencimento: p.vencimento,
+          valorParcela: p.valorParcela,
+          codCliente: p.codCliente,
+          nome: p.nomeCliente,
+          loja: p.loja,
+        });
+      }
+      abertas.sort((a: any, b: any) => {
+        const va = a.vencimento ? new Date(a.vencimento).getTime() : 0;
+        const vb = b.vencimento ? new Date(b.vencimento).getTime() : 0;
+        return va - vb;
+      });
+    }
+
+    // A checagem de vazio vem DEPOIS da união de propósito: se o espelho ainda
+    // não carregou mas já existe parcela criada no Flow, ela tem que aparecer.
+    // Antes esta guarda ficava logo após a leitura do espelho e devolvia null
+    // (recuo pro Giga) mesmo havendo dívida nativa pra mostrar.
     if (!abertas.length) {
-      // Espelho pode estar vazio por 1ª carga pendente OU realmente não haver
+      // Espelho vazio pode ser 1ª carga pendente OU realmente não haver
       // parcelas. Distingue: se a tabela inteira está vazia → null (fallback).
       const totalEspelho = await (this.prisma as any).wincredMovimentoAberto.count();
       if (totalEspelho === 0) return null;
