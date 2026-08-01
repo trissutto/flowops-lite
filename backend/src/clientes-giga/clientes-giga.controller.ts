@@ -170,4 +170,75 @@ export class ClientesGigaPdvController {
       userName: req?.user?.name || req?.user?.email || null,
     });
   }
+
+  /**
+   * NÍVEL 3 — ficha de CREDIÁRIO criada do BALCÃO (01/08/2026).
+   *
+   * Até agora o cadastro completo era `requireAdmin`, então a vendedora via
+   * "cadastre no Wincred antes de fazer crediário" — num Wincred que ninguém
+   * usa mais. A ficha de crediário é por loja (o crediário é cobrado por loja),
+   * por isso nasce aqui e não no CRM.
+   *
+   * ── POR QUE O LIMITE PEDE SENHA ──
+   * Preencher emprego e renda é trabalho de atendimento. Definir LIMITE e
+   * AVALIAÇÃO é decisão de crédito — quanto a cliente pode dever. Deixar isso
+   * na mão de quem está com a cliente na frente é pressão que não se deve
+   * colocar em ninguém. A senha põe a decisão em quem responde por ela, sem
+   * mandar a cliente voltar outro dia.
+   *
+   * Sem senha, a ficha é criada com limite ZERO e avaliação em branco: a
+   * cliente fica cadastrada e a retaguarda libera depois.
+   */
+  @Post('cadastro-crediario')
+  async cadastroCrediario(
+    @Req() req: any,
+    @Body() body: {
+      loja?: string;
+      campos: Record<string, any>;
+      /** Senha de supervisor — obrigatória só pra definir limite/avaliação. */
+      senhaSupervisor?: string;
+    },
+  ) {
+    this.requireRole(req);
+    const loja = String(body?.loja || req?.user?.storeCode || '');
+    if (!loja) throw new ForbiddenException('Usuário sem loja vinculada');
+
+    const campos = { ...(body?.campos || {}) };
+    const querLimite =
+      Number(String(campos.LIMITECOMPRAS ?? '').replace(',', '.')) > 0 ||
+      String(campos.AVALIACAO ?? '').trim() !== '';
+
+    let liberadoPor: string | null = null;
+    if (querLimite) {
+      if (!body?.senhaSupervisor) {
+        // Não recusa a ficha: cria sem crédito e avisa. A cliente sai
+        // cadastrada e a venda à vista segue normal.
+        delete campos.LIMITECOMPRAS;
+        delete campos.AVALIACAO;
+      } else {
+        // Lança 403 se a senha for inválida ou de nível insuficiente.
+        // Mesmo mecanismo que a retaguarda já usa pra editar limite —
+        // e registra QUEM liberou, não só que alguém liberou.
+        const auth = authorizeMinLevel(String(body.senhaSupervisor), 'SUPERVISOR', loja);
+        liberadoPor = `[${auth.level}] ${auth.byNome || 'supervisor'}`;
+      }
+    }
+
+    const r = await this.svc.cadastrar(
+      loja,
+      campos,
+      req?.user?.name || req?.user?.email || null,
+    );
+
+    return {
+      ...r,
+      // A tela usa isto pra dizer à vendedora o que de fato aconteceu, em vez
+      // de ela descobrir na hora de fechar o crediário.
+      limiteDefinido: !!liberadoPor,
+      liberadoPor,
+      aviso: querLimite && !liberadoPor
+        ? 'Ficha criada SEM limite de crédito — precisa de senha de supervisor. A retaguarda pode liberar depois.'
+        : null,
+    };
+  }
 }
