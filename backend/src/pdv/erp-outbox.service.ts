@@ -131,30 +131,42 @@ export class ErpOutboxService {
 
     let caixaDoneAt: Date | null = job.caixaDoneAt ? new Date(job.caixaDoneAt) : null;
     let stockDoneAt: Date | null = job.stockDoneAt ? new Date(job.stockDoneAt) : null;
-    let stepError: string | null = null;
+    const erros: string[] = [];
 
     // ── Passo 1: caixa (NUNCA re-executa depois de done — duplicaria a venda) ──
     if (!caixaDoneAt) {
       const r = await this.pdv.erpStepGravarCaixa(sale, payments, finalMethod);
       if (r.ok) caixaDoneAt = new Date();
-      else stepError = `caixa: ${r.error || 'falha'}`;
+      else erros.push(`caixa: ${r.error || 'falha'}`);
     }
 
     // ── Passo 2: estoque (guard extra via sale.stockDecreasedAt) ──
-    if (!stockDoneAt && !stepError) {
+    // INDEPENDENTE DO PASSO 1 (31/07). Antes era `if (!stockDoneAt && !stepError)`:
+    // se a gravação na caixa do GIGA falhasse, a baixa de estoque nem rodava.
+    // Como `erpStepBaixarEstoque` chama `decreaseStock`, que é FLOW-PRIMEIRO,
+    // isso segurava a baixa no PRÓPRIO FLOW por causa de uma falha na réplica —
+    // a loja vendia e o estoque não baixava em lugar nenhum enquanto o Giga
+    // estivesse fora. A verdade do Flow não pode ficar refém do espelho.
+    // Os dois passos são operações independentes: cada um tem seu próprio
+    // marcador de idempotência e o job só encerra quando ambos passam.
+    if (!stockDoneAt) {
       const r = await this.pdv.erpStepBaixarEstoque(sale);
       if (r.ok) stockDoneAt = new Date();
-      else stepError = `estoque: ${r.error || 'falha'}`;
+      else erros.push(`estoque: ${r.error || 'falha'}`);
     }
 
     // ── Passo 3: fecha marcados PUXADOS (DELETE da linha MARCADO='SIM') ──
     // Idempotente por natureza (só apaga se ainda for SIM) — sem coluna de
     // progresso; retry re-executa sem risco. Sem isso a peça puxada pro PDV
     // ficava "em marca" pra sempre (bug 21/07 Indaiatuba).
-    if (!stepError) {
+    // Segue atrás dos erros de propósito: é DELETE no Giga, então não adianta
+    // tentar quando ele já se mostrou indisponível nos passos acima.
+    if (!erros.length) {
       const r = await this.pdv.erpStepFecharMarcados(sale);
-      if (!r.ok) stepError = `marcados: ${r.error || 'falha'}`;
+      if (!r.ok) erros.push(`marcados: ${r.error || 'falha'}`);
     }
+
+    const stepError = erros.length ? erros.join(' · ') : null;
 
     if (caixaDoneAt && stockDoneAt && !stepError) {
       await (this.prisma as any).erpOutbox.update({
