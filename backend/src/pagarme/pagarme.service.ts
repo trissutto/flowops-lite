@@ -760,6 +760,10 @@ export class PagarmeService {
     paymentUrl: string;
     expiresAt: Date;
     valor: number;
+    /** Qual tentativa de cartão é esta, nesta venda. */
+    tentativa: number;
+    /** Da 3ª em diante nenhuma passou (0 de 21 medidas) — tela avisa. */
+    retentativaImprodutiva: boolean;
   }> {
     if (!input.saleId) throw new BadRequestException('saleId obrigatório');
     if (!input.valor || input.valor <= 0)
@@ -839,6 +843,43 @@ export class PagarmeService {
           if (!ehFone(phoneRaw) && ehFone(foneCrm)) phoneRaw = foneCrm;
         }
       } catch { /* CRM indisponível não pode derrubar a venda */ }
+    }
+
+    // ENDEREÇO (01/08) — vem do CRM só pra cliente NÃO redigitar no checkout.
+    // Conferido na API: hoje 22 de 22 cobranças de cartão já chegam COM
+    // endereço (ela digita lá), então isto é ATRITO, não aprovação. E só
+    // cobre ~20% de quem compra por link — o resto é cadastro novo sem
+    // endereço. `billing_address_editable` segue true: ela pode corrigir.
+    let enderecoPagarme: any = undefined;
+    if (customerDoc.length === 11 || customerDoc.length === 14) {
+      try {
+        const ends: any[] = await this.prisma.$queryRawUnsafe(
+          `SELECT a.cep, a.street, a.number, a.district, a.city, a.state
+             FROM customer_addresses a
+             JOIN customers c ON c.id = a.customer_id
+            WHERE regexp_replace(COALESCE(c.cpf,''), '\\D', '', 'g') = $1
+              AND a.active = true
+            ORDER BY a.is_primary DESC
+            LIMIT 5`,
+          customerDoc,
+        );
+        const e = ends.find(
+          (x) => String(x.cep || '').replace(/\D/g, '').length === 8
+            && String(x.street || '').trim()
+            && String(x.city || '').trim()
+            && String(x.state || '').trim(),
+        );
+        if (e) {
+          enderecoPagarme = {
+            country: 'BR',
+            state: String(e.state).trim().toUpperCase().slice(0, 2),
+            city: String(e.city).trim(),
+            zip_code: String(e.cep).replace(/\D/g, ''),
+            line_1: [String(e.number || '').trim(), String(e.street).trim(), String(e.district || '').trim()]
+              .filter(Boolean).join(', ').slice(0, 256),
+          };
+        }
+      } catch { /* endereço é bônus: nunca derruba a venda */ }
     }
 
     const emailValido = ehEmail(emailInformado);
@@ -965,6 +1006,8 @@ export class PagarmeService {
             number: phoneNumber,
           },
         },
+        // Só quando o CRM tem — evita a cliente redigitar (ver bloco acima).
+        ...(enderecoPagarme ? { address: enderecoPagarme } : {}),
       },
       payments: [checkoutPayment],
       metadata: {
@@ -1050,12 +1093,40 @@ export class PagarmeService {
       );
     }
 
+    // TENTATIVA Nª desta venda — insistir no cartão é o que mais derruba a
+    // aprovação. Medido no extrato de 8 dias: 1ª 69% · 2ª 35% · 3ª-4ª ZERO
+    // (0 de 21) · 5ª+ 7%, e 41% de TODAS as tentativas são reenvio. A partir
+    // da 3ª a cobrança não passa mais e ainda queima o score da próxima
+    // ("recusada por excesso de retentativas" apareceu 3× no extrato).
+    // Não bloqueia — devolve o número pra tela avisar e oferecer PIX.
+    let tentativa = 1;
+    try {
+      tentativa = await (this.prisma as any).pagarmePayment.count({
+        where: { saleId: input.saleId, method: 'checkout' },
+      });
+    } catch { /* contagem é informativa: nunca derruba a venda */ }
+
     return {
       pagarmeOrderId: orderId,
       paymentUrl,
       expiresAt,
       valor: input.valor,
+      tentativa,
+      // A tela decide o que fazer com isso (avisar + oferecer PIX).
+      retentativaImprodutiva: tentativa >= 3,
     };
+  }
+
+  /**
+   * Quantos links de cartão já foram gerados pra esta venda.
+   * A tela usa pra avisar ANTES de gerar mais um (ver createCheckoutLink).
+   */
+  async contarTentativasCheckout(saleId: string): Promise<{ tentativas: number }> {
+    if (!saleId) return { tentativas: 0 };
+    const tentativas = await (this.prisma as any).pagarmePayment.count({
+      where: { saleId, method: 'checkout' },
+    });
+    return { tentativas };
   }
 
   /**

@@ -171,6 +171,21 @@ export class PagarmeController {
   }
 
   /**
+   * GET /pagarme/checkout/tentativas/:saleId
+   * Quantos links de cartão já rodaram nesta venda. A tela avisa ANTES de
+   * gerar mais um: da 3ª tentativa em diante nenhuma passou (0 de 21 medidas
+   * em 01/08) e cada reenvio ainda piora o score da próxima.
+   */
+  @Get('checkout/tentativas/:saleId')
+  async tentativasCheckout(@Req() req: any, @Param('saleId') saleId: string) {
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'store') {
+      throw new ForbiddenException('Apenas admin ou loja');
+    }
+    return this.svc.contarTentativasCheckout(saleId);
+  }
+
+  /**
    * POST /pagarme/admin/force-link-paid
    * RESGATE: cria/atualiza um PagarmePayment manualmente quando o link
    * Pagar.me foi gerado mas NÃO foi salvo no banco (bug do storeCode

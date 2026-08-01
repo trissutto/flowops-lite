@@ -4326,6 +4326,18 @@ function PaymentModal({
   useEffect(() => { setLinkPhone(customerPhone || ''); }, [customerPhone]);
   const linkEmailOk = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(linkEmail.trim());
   const linkPhoneOk = [10, 11].includes(linkPhone.replace(/\D/g, '').length);
+  // Quantos links de cartão já rodaram NESTA venda. Insistir é o que mais
+  // derruba: medido em 01/08, 1ª tentativa aprova 69%, 2ª 35% e da 3ª em
+  // diante ZERO (0 de 21). Avisa antes de queimar mais uma.
+  const [linkTentativas, setLinkTentativas] = useState(0);
+  useEffect(() => {
+    if (selected !== 'venda_online' || vendaOnlineTipo !== 'pagarme_link' || !saleId) return;
+    let vivo = true;
+    api<{ tentativas: number }>(`/pagarme/checkout/tentativas/${saleId}`)
+      .then((r) => { if (vivo) setLinkTentativas(r.tentativas || 0); })
+      .catch(() => { /* contador é aviso, não pode travar a venda */ });
+    return () => { vivo = false; };
+  }, [selected, vendaOnlineTipo, saleId]);
 
   useEffect(() => {
     if (selected !== 'venda_online' || vendaOnlineTipo !== 'pagarme_link') return;
@@ -5639,6 +5651,24 @@ function PaymentModal({
                     cobrança com dado inventado aprova 22,8%; com dado real,
                     63,1%. Preenchível AQUI — travar sem deixar preencher
                     pararia 69% dos links. */}
+                {/* Reenviar cartão é o que MAIS derrubou aprovação: 3ª tentativa
+                    em diante, zero passou em 21 medidas. Avisa e oferece saída
+                    — mas não bloqueia, a decisão continua da vendedora. */}
+                {!pagarmeLink && linkTentativas >= 2 && (
+                  <div className="bg-rose-50 border-2 border-rose-300 rounded-lg p-2.5 text-[11px] text-rose-900">
+                    <div className="font-bold mb-1">
+                      ⚠ Já foram {linkTentativas} tentativas de cartão nesta venda
+                    </div>
+                    <p className="leading-snug mb-1.5">
+                      Da 3ª em diante <b>nenhuma passou</b> (0 de 21 medidas) — e cada
+                      reenvio piora a chance da próxima. O cartão dela não vai passar
+                      insistindo.
+                    </p>
+                    <p className="leading-snug font-semibold">
+                      Ofereça <b>PIX</b> (aprova 67%) ou a maquininha da loja.
+                    </p>
+                  </div>
+                )}
                 {!pagarmeLink && (
                   <div className="bg-white border-2 border-violet-200 rounded-lg p-2 space-y-1.5">
                     <div className="text-[10px] uppercase font-bold text-slate-600 tracking-wider">
@@ -5683,6 +5713,7 @@ function PaymentModal({
                             pagarmeOrderId: string;
                             paymentUrl: string;
                             expiresAt: string;
+                            tentativa?: number;
                           }>('/pagarme/checkout/create', {
                             method: 'POST',
                             body: JSON.stringify({
@@ -5707,6 +5738,7 @@ function PaymentModal({
                             }),
                           });
                           setPagarmeLink(r);
+                          if (r.tentativa) setLinkTentativas(r.tentativa);
                         } catch (e: any) {
                           toast('error', 'Erro ao gerar link Pagar.me', e?.message || 'Tente de novo');
                         } finally {
