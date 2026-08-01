@@ -111,6 +111,9 @@ export default function PontoCelularPage() {
   const [installEvt, setInstallEvt] = useState<any>(null);
   const [isStandalone, setIsStandalone] = useState(true); // true esconde tudo até detectar
   const [isIos, setIsIos] = useState(false);
+  /** 'app' = navegador interno (WhatsApp/Instagram) · 'outro' = Chrome/Edge/Firefox
+   *  no iPhone · null = Safari, onde a instalação funciona de verdade. */
+  const [navegadorRuim, setNavegadorRuim] = useState<'app' | 'outro' | null>(null);
   const [debug, setDebug] = useState(false);
   const [diag, setDiag] = useState<{ ms: number; bestName: string | null; bestDist: number | null; rejected: string | null }>(
     { ms: 0, bestName: null, bestDist: null, rejected: null },
@@ -152,7 +155,23 @@ export default function PontoCelularPage() {
       window.matchMedia?.('(display-mode: standalone)')?.matches ||
       (navigator as any).standalone === true;
     setIsStandalone(!!standalone);
-    setIsIos(/iphone|ipad|ipod/i.test(navigator.userAgent));
+    const ua = navigator.userAgent;
+    setIsIos(/iphone|ipad|ipod/i.test(ua));
+
+    // ── ONDE A LOJA ESTÁ ABRINDO ISTO? (01/08/2026) ──────────────────────
+    // Uma loja não conseguiu criar o ícone e jurou que estava no Safari. E
+    // estava, do ponto de vista dela: abriu o link que chegou pelo WhatsApp.
+    //
+    // O navegador interno do WhatsApp/Instagram parece Safari pra quem usa,
+    // mas NÃO tem "Adicionar à Tela de Início" — a opção não existe. A pessoa
+    // segue a instrução, não acha, e desiste achando que o sistema é ruim.
+    //
+    // No iPhone só o Safari instala de verdade. Chrome e Edge criam um atalho
+    // que perde o comportamento de app — inclusive a permissão de câmera
+    // persistente, de que o ponto facial depende.
+    const inApp = /(FBAN|FBAV|Instagram|Line|WhatsApp)/i.test(ua);
+    const outroNavegador = /(CriOS|FxiOS|EdgiOS|OPiOS)/i.test(ua);
+    setNavegadorRuim(inApp ? 'app' : outroNavegador ? 'outro' : null);
     const onPrompt = (e: any) => {
       e.preventDefault(); // segura o prompt pro NOSSO botão disparar
       setInstallEvt(e);
@@ -498,10 +517,31 @@ export default function PontoCelularPage() {
             <p className="font-bold text-white mb-1 flex items-center justify-center gap-1.5">
               <Share className="w-4 h-4" /> Criar o ícone "Ponto" neste iPhone
             </p>
-            <p>
-              Toque em <span className="font-bold">Compartilhar</span> (quadrado com seta)
-              e depois em <span className="font-bold">Adicionar à Tela de Início</span>.
-            </p>
+            {navegadorRuim === 'app' ? (
+              // O caso que travou a loja de Suzano: link aberto pelo WhatsApp.
+              // Parece Safari pra quem usa, mas não tem a opção — a pessoa
+              // procura, não acha, e conclui que o sistema não funciona.
+              <p className="text-amber-200">
+                Esta tela está aberta <span className="font-bold">dentro do WhatsApp</span>,
+                e por aqui o iPhone não deixa criar o ícone.
+                <br />
+                Toque em <span className="font-bold">•••</span> e escolha
+                <span className="font-bold"> Abrir no Safari</span> — depois é só seguir o
+                passo do Compartilhar.
+              </p>
+            ) : navegadorRuim === 'outro' ? (
+              <p className="text-amber-200">
+                Abra este endereço no <span className="font-bold">Safari</span>.
+                <br />
+                No iPhone, só o Safari cria o ícone de verdade — nos outros o atalho perde
+                a permissão da câmera e o ponto para de bater.
+              </p>
+            ) : (
+              <p>
+                Toque em <span className="font-bold">Compartilhar</span> (quadrado com seta)
+                e depois em <span className="font-bold">Adicionar à Tela de Início</span>.
+              </p>
+            )}
           </div>
         )}
 
