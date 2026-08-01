@@ -17,11 +17,23 @@ import { ErpService } from '../erp/erp.service';
  * Sync: manual (botão no /retaguarda/wincred-mirror) + cron diário 04:10
  * gated WINCRED_MIRROR_CRON_ENABLED=1.
  */
+
+/**
+ * Resultado da autoconferência do sync: quantas parcelas em aberto foram
+ * gravadas contra quantas o Giga diz ter. `diferenca` diferente de zero é
+ * dívida sumindo (negativa) ou sobrando (positiva) na ficha da cliente.
+ */
+type Conferencia = {
+  abertasGravadas: number;
+  abertasNoGiga: number;
+  diferenca: number;
+};
+
 @Injectable()
 export class CrediarioNativoService {
   private readonly logger = new Logger(CrediarioNativoService.name);
   private running = false;
-  private lastResult: { at: Date; total: number; erro?: string } | null = null;
+  private lastResult: { at: Date; total: number; erro?: string; conferencia?: Conferencia | null } | null = null;
 
   private static readonly PAGE = 10_000;
   private static readonly CHUNK = 1_000;
@@ -80,12 +92,84 @@ export class CrediarioNativoService {
     return d;
   }
 
-  /** Regra de PAGO — mesma do espelho de abertas: 'S'/'SIM' ou dataPagamento. */
+  /**
+   * A coluna EXISTE na tabela? Diferente de "o valor veio nulo" — e a distinção
+   * decide se a data de pagamento pode servir de critério. `pick` devolve
+   * `undefined` nos dois casos, então ela sozinha não resolve.
+   */
+  private temColuna(row: Record<string, any>, ...res: RegExp[]): boolean {
+    return Object.keys(row).some((k) => res.some((re) => re.test(k)));
+  }
+
+  /**
+   * Regra de PAGO — a MESMA de `crediario-mirror.service.ts:118`, que é o
+   * critério oficial de "em aberto" do sistema:
+   *
+   *   aberto  ⇔  PAGO IS NULL  OR  PAGO = ''  OR  UPPER(PAGO) IN ('N','NAO','NÃO')
+   *
+   * INCIDENTE 31/07 — esta função DIZIA no comentário que seguia o espelho, e
+   * não seguia. Ela caía na data de pagamento sempre que o VALOR de PAGO era
+   * nulo, sem distinguir isso de "a coluna PAGO não existe nesta instalação".
+   *
+   * No Giga a coluna existe e tem 11.001 linhas nulas — todas com PAGAMENTO
+   * preenchido por um bug antigo da baixa, registrado em `erp.service.ts:2420`:
+   * "PAGO é o campo que o WinCred consulta; se ficar nulo, a baixa NÃO aparece
+   * na UI mesmo com data preenchida". Ou seja: nulo é dívida ABERTA.
+   *
+   * Efeito do bug: R$ 2,9 milhões em 11.001 parcelas abertas entravam no Flow
+   * como PAGAS — e a ficha da cliente lê desta tabela
+   * (`clientes-giga.service.ts:388`), sem flag nenhuma no caminho.
+   *
+   * A data de pagamento só vale como critério quando a coluna PAGO NÃO EXISTE,
+   * espelhando o `else if (map.dataPagamento)` do serviço de espelho.
+   */
+  /**
+   * Quantas parcelas o Giga considera EM ABERTO agora, pelo critério oficial
+   * (`crediario-mirror.service.ts:118`). Devolve null se não deu pra perguntar
+   * — aí a conferência é omitida em vez de inventar um veredito.
+   */
+  private async contarAbertasNoGiga(pool: any): Promise<number | null> {
+    try {
+      const [cols] = await pool.query('SHOW COLUMNS FROM `movimento`');
+      const nomes = (cols as any[]).map((c) => String(c.Field));
+      const colPago = nomes.find((n) => /^(pago|pg|baixado|quitado)$/i.test(n));
+      const colData = nomes.find((n) => /^(pagamento|data_?pagamento|datapagto|data_?baixa|datapag)$/i.test(n));
+
+      let cond: string;
+      if (colPago) {
+        cond = `(\`${colPago}\` IS NULL OR \`${colPago}\` = '' OR UPPER(\`${colPago}\`) IN ('N','NAO','NÃO'))`;
+      } else if (colData) {
+        cond = `(\`${colData}\` IS NULL OR \`${colData}\` = '0000-00-00')`;
+      } else {
+        return null;
+      }
+
+      const [r] = await pool.query({
+        sql: `SELECT COUNT(*) AS n FROM \`movimento\` WHERE ${cond}`,
+        timeout: 120_000,
+      });
+      return Number((r as any[])[0]?.n ?? 0);
+    } catch (e) {
+      this.logger.warn(`[crediario-nativo] conferência não pôde ser feita: ${(e as Error).message}`);
+      return null;
+    }
+  }
+
   private pagoOf(row: Record<string, any>): { pago: boolean; dataPagamento: Date | null } {
-    const flag = this.str(this.pick(row, /^pago$/i, /^pg$/i, /^baixado$/i, /^quitado$/i), 5);
-    const dataPag = this.dateOf(this.pick(row, /^pagamento$/i, /^data_?pagamento$/i, /^datapagto$/i, /^data_?baixa$/i, /^datapag$/i));
-    const pagoFlag = flag != null && ['S', 'SIM'].includes(flag.toUpperCase());
-    return { pago: pagoFlag || (flag == null && !!dataPag), dataPagamento: dataPag };
+    const RE_PAGO = [/^pago$/i, /^pg$/i, /^baixado$/i, /^quitado$/i];
+    const dataPag = this.dateOf(
+      this.pick(row, /^pagamento$/i, /^data_?pagamento$/i, /^datapagto$/i, /^data_?baixa$/i, /^datapag$/i),
+    );
+
+    if (this.temColuna(row, ...RE_PAGO)) {
+      // `str` já devolve null pra string vazia, então '' cai no mesmo ramo que
+      // NULL — igual ao `PAGO = ''` do critério do espelho.
+      const flag = this.str(this.pick(row, ...RE_PAGO), 5);
+      const aberto = flag == null || ['N', 'NAO', 'NÃO'].includes(flag.toUpperCase());
+      return { pago: !aberto, dataPagamento: dataPag };
+    }
+
+    return { pago: !!dataPag, dataPagamento: dataPag };
   }
 
   private mapRow(row: Record<string, any>): Record<string, any> | null {
@@ -123,7 +207,7 @@ export class CrediarioNativoService {
     return { started: true, alreadyRunning: false };
   }
 
-  async syncAll(): Promise<{ ok: boolean; total: number; paginas: number; erro?: string }> {
+  async syncAll(): Promise<{ ok: boolean; total: number; paginas: number; erro?: string; conferencia?: Conferencia | null }> {
     if (this.running) return { ok: false, total: 0, paginas: 0, erro: 'sync já em andamento' };
     this.running = true;
     const t0 = Date.now();
@@ -135,6 +219,7 @@ export class CrediarioNativoService {
       await (this.prisma as any).crediarioParcela.deleteMany({ where: { flowIsSource: false } });
 
       let total = 0;
+      let abertas = 0;
       let paginas = 0;
       for (let offset = 0; offset < CrediarioNativoService.MAX_ROWS; offset += CrediarioNativoService.PAGE) {
         const [rows] = await pool.query({
@@ -156,13 +241,37 @@ export class CrediarioNativoService {
           });
         }
         total += data.length;
+        abertas += data.filter((d) => d.pago === false).length;
         if (paginas % 5 === 0) this.logger.log(`[crediario-nativo] página ${paginas}: total ${total}`);
         if (batch.length < CrediarioNativoService.PAGE) break;
       }
 
-      this.lastResult = { at: new Date(), total };
+      // ── CONFERÊNCIA (31/07) ────────────────────────────────────────────
+      // A tabela desta classe é lida pela ficha da cliente SEM flag nenhuma
+      // (clientes-giga.service.ts:388 usa "tem alguma linha?" como gate). Uma
+      // regra de mapeamento errada aqui vira dívida sumindo do PDV, calada —
+      // foi o que aconteceu com 11.001 parcelas (R$ 2,9 mi) até 31/07.
+      // Contar de novo não conserta a regra, mas impede que ela erre EM
+      // SILÊNCIO: se o número de abertas não bate com o do Giga, o log grita e
+      // o status carrega o aviso.
+      const abertasNoGiga = await this.contarAbertasNoGiga(pool);
+      const conferencia =
+        abertasNoGiga == null
+          ? null
+          : { abertasGravadas: abertas, abertasNoGiga, diferenca: abertas - abertasNoGiga };
+      if (conferencia && conferencia.diferenca !== 0) {
+        this.logger.error(
+          `[crediario-nativo] CONFERÊNCIA FALHOU — gravei ${abertas} parcelas em aberto, ` +
+            `o Giga tem ${abertasNoGiga} (diferença ${conferencia.diferenca}). ` +
+            `A ficha da cliente lê desta tabela: dívida pode estar sumindo ou sobrando.`,
+        );
+      } else if (conferencia) {
+        this.logger.log(`[crediario-nativo] conferência OK — ${abertas} em aberto, igual ao Giga`);
+      }
+
+      this.lastResult = { at: new Date(), total, conferencia };
       this.logger.log(`[crediario-nativo] sync completo: ${total} parcelas em ${Math.round((Date.now() - t0) / 1000)}s`);
-      return { ok: true, total, paginas };
+      return { ok: true, total, paginas, conferencia };
     } catch (e: any) {
       const erro = String(e?.message || e);
       this.lastResult = { at: new Date(), total: 0, erro };
