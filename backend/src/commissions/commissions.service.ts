@@ -424,6 +424,9 @@ export class CommissionsService {
     const salesBySeller: any[] = sellerRows.map((r: any) => ({
       sellerId: r.sellerId,
       storeCode: r.storeCode,
+      // Mesmo motivo da Folha: sem o nome, o resolveSeller perde o último
+      // recurso e a venda vira "vendedora não cadastrada".
+      sellerName: r.sellerName,
       qtd: r.qtd,
       total: vendidoDe(r),
     }));
@@ -756,7 +759,13 @@ export class CommissionsService {
       bruto: r.faturamento, vale: r.valorValeTroca, frete: r.valorFrete,
     }));
     const salesBySeller: any[] = salesBySellerRows.map((r: any) => ({
-      sellerId: r.sellerId, storeCode: r.storeCode, qtd: r.qtd,
+      sellerId: r.sellerId, storeCode: r.storeCode,
+      // sellerName TEM que atravessar: é o último recurso do resolveSeller
+      // (nome dentro da loja). Sem ele aqui, o campo chegava undefined e a
+      // Folha jogava fora tudo que não resolvia por id nem por código —
+      // R$ 240.938,11 em julho, sendo R$ 44.577,17 só da LIVIA em Piracicaba.
+      sellerName: r.sellerName,
+      qtd: r.qtd,
       bruto: r.faturamento, vale: r.valorValeTroca, frete: r.valorFrete,
     }));
     const semVendedoraAgg: any[] = [{ qtd: semVendedora.qtd, total: semVendedora.total }];
