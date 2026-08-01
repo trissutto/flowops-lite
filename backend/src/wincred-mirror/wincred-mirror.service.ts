@@ -502,7 +502,10 @@ export class WincredMirrorService {
   /** Grava estado do sync — upsert. */
   private async setSyncState(
     tabela: string,
-    state: { lastDataAlt?: Date | null; rowCount: number; status: 'OK' | 'FAIL'; error?: string | null },
+    // 'OFF' (31/07): terceiro estado, distinto de OK e de FAIL — o sync não
+    // rodou porque foi DESLIGADO por decisão, não porque falhou nem porque
+    // deu certo. Sem ele, um sync desligado se disfarçaria de sync saudável.
+    state: { lastDataAlt?: Date | null; rowCount: number; status: 'OK' | 'FAIL' | 'OFF'; error?: string | null },
   ): Promise<void> {
     try {
       await this.prisma.$executeRawUnsafe(
@@ -636,9 +639,20 @@ export class WincredMirrorService {
       // TRAVA (14/07): se o FULL de estoque está rodando agora, pula esta parte
       // — mexer nas mesmas linhas durante o replace atômico só cria conflito;
       // o próprio full já traz o estoque fresco de tudo.
+      //
+      // TRAVA 2 (31/07): mesma constituição do syncEstoque acima — o FLOW é a
+      // fonte do estoque. Ninguém mais digita no Wincred desktop (confirmado
+      // pelo dono em 31/07), então o estoque do Giga só muda porque o outbox
+      // do Flow escreveu lá. Puxar de volta não traz informação nova: na
+      // janela da fila, troca o valor fresco do Flow pelo valor velho do Giga.
+      // É o mesmo estrago que o full foi desligado pra evitar — o incremental
+      // tinha ficado de fora da trava.
       let estoqueAtualizado = 0;
-      const estoqueLivre = this.acquireLock('estoque');
-      if (!estoqueLivre) {
+      const gigaSyncOn = String(process.env.ESTOQUE_SYNC_GIGA ?? '').trim() === '1';
+      const estoqueLivre = gigaSyncOn && this.acquireLock('estoque');
+      if (!gigaSyncOn) {
+        this.logger.log('[incremental] estoque Giga→Flow desligado — Flow é a fonte (ESTOQUE_SYNC_GIGA=1 reativa)');
+      } else if (!estoqueLivre) {
         this.logger.warn('[incremental] full de estoque em andamento — parte de estoque pulada');
       }
       try {
@@ -712,10 +726,15 @@ export class WincredMirrorService {
         rowCount: produtosAtualizados,
         status: 'OK',
       });
+      // Status honesto: com o pull do Giga desligado, gravar 'OK' faria a tela
+      // de status jurar que o estoque sincronizou — o mesmo "espelho congelado
+      // que não avisa" que já mordeu o financeiro. Quem lê tem que saber que
+      // aqui não vem nada do Giga por decisão, e que a fonte é o Flow.
       await this.setSyncState('estoque', {
         lastDataAlt: maxDataAlt,
         rowCount: estoqueAtualizado,
-        status: 'OK',
+        status: gigaSyncOn ? 'OK' : 'OFF',
+        error: gigaSyncOn ? null : 'Giga→Flow desligado — o Flow é a fonte do estoque (ESTOQUE_SYNC_GIGA=1 reativa)',
       });
 
       const durationMs = Date.now() - t0;

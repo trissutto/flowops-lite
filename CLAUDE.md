@@ -21,7 +21,9 @@ O Giga MySQL **PENDURA** (não dá erro — `.catch` não pega) quando o firewal
 
 ### Espelho Wincred (Postgres) — `backend/src/wincred-mirror/`
 - Tabelas `wincred_produtos`, `wincred_estoque`, grupos/subgrupos/fornecedores/codigos.
-- Sync: incremental **10min** (por DATAALT), estoque **full de hora em hora** (minuto 23 — venda no Giga muda estoque SEM tocar DATAALT), full geral **3h da manhã**.
+- Sync: incremental **10min** (por DATAALT) para PRODUTOS, full geral **3h da manhã**.
+- ⚠️ **ESTOQUE Giga→Flow está DESLIGADO** (env `ESTOQUE_SYNC_GIGA=1` reativa). Desde 14/07 o **FLOW é a FONTE do estoque** — puxar do Giga só sobrescreveria a verdade do Flow na janela da fila do outbox. O Giga recebe réplica de tudo (backup) e **ninguém digita mais no Wincred desktop** (confirmado pelo dono em 31/07), então o pull não teria informação nova pra trazer. Vale pro full **e pro trecho de estoque do incremental** (esse ficou de fora da trava até 31/07). Recuperação: botão manual da tela (`force=true`) ou a env.
+- Conferência (não sync): `backend/scripts/giga-etl/divergencia-estoque.js` compara os dois bancos peça por peça. Medição de 31/07: **99,70% idênticos**, 0,1% de diferença em peças.
 - Gated por env **`WINCRED_MIRROR_CRON_ENABLED=1`** (sem ela o espelho NÃO atualiza).
 - **Espelha o catálogo INTEIRO** (filtro PLUS_SIZE removido em 02/07) — o fallback Giga cobre só EAN/recém-cadastrado/preço zerado.
 - `codigo` normalizado SEM zeros à esquerda (`normalizeCodigo`).
@@ -54,6 +56,7 @@ Cron de 1h espelha transferências/vendas/estoque pro financeiro. Conta corrente
 | Flag | Default | Efeito |
 |---|---|---|
 | `WINCRED_MIRROR_CRON_ENABLED` | off | `1` liga os crons do espelho (OBRIGATÓRIA em prod) |
+| `ESTOQUE_SYNC_GIGA` | **off** | `1` reativa o pull de estoque Giga→Flow (full + incremental). **Deixar off**: o Flow é a fonte do estoque desde 14/07; ligar sobrescreve a verdade do Flow na janela da fila |
 | `PDV_MIRROR_READS` | on | `0` desliga leitura pelo espelho (bipe/busca voltam 100% Giga) |
 | `PDV_ERP_OUTBOX` | on | `0` volta escrita da venda inline |
 | `ERP_WRITE_ENABLED` / `PDV_ERP_WRITE_ENABLED` | — | shadow mode das escritas no Wincred (loga SQL sem executar) |

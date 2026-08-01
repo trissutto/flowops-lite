@@ -22,6 +22,7 @@ import { isValidTrainingPassword, isTrainingRequest } from './training.util';
 import { PdvService } from './pdv.service';
 import { ErpOutboxService } from './erp-outbox.service';
 import { ErpService } from '../erp/erp.service';
+import { SombraService } from '../erp/sombra.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service';
 import { PixService } from './pix.service';
@@ -56,6 +57,7 @@ export class PdvController {
     private readonly woo: WooCommerceService,
     private readonly returns: ReturnsService,
     private readonly prisma: PrismaService,
+    private readonly sombra: SombraService,
   ) {}
 
   private requireRole(req: any) {
@@ -898,6 +900,14 @@ export class PdvController {
    *   4. LIKE do CPF + LOJA (chars invisíveis)
    *   5. Nada na loja? Procura o CPF SEM loja só pra AVISAR "cadastro é da
    *      loja YY" — não usa, porque crediário é por loja.
+   *
+   * ⚡ LATÊNCIA / `GIGA_LEITURA_FLOW=1`: a ordem acima são 9 consultas EM
+   * CASCATA no MySQL do Giga, 10s de timeout cada. Com o firewall da KingHost
+   * derrubando o IP do Railway o MySQL PENDURA (não dá erro) e o PDV fica
+   * parado até ~90s. Com a flag ligada, a busca roda primeiro no espelho
+   * Postgres `giga_clientes` (SombraService.buscarClienteCustomerInfo) e o
+   * Giga só é procurado se o espelho NÃO achar ou falhar. Desligar = apagar a
+   * env; volta na hora, sem deploy.
    */
   @Get('customer-info')
   async getCustomerInfo(
@@ -930,6 +940,43 @@ export class PdvController {
       ? String(lojaRaw).replace(/\D/g, '').padStart(2, '0').slice(0, 2)
       : null;
 
+    // ── CAMINHO POSTGRES (GIGA_LEITURA_FLOW=1) ───────────────────────────
+    // Vem ANTES do detectClientesTableCached de propósito: a detecção de
+    // tabela também bate no MySQL (getTableSchema), então deixá-la na frente
+    // desperdiçaria justamente a espera que este caminho existe pra evitar.
+    //
+    // Achou no espelho → responde e o Giga nem é tocado (9 consultas de 10s a
+    // menos). Não achou ou deu erro → cai pro Giga logo abaixo, INTEIRO, do
+    // jeito que sempre foi. Vazio não é resposta: ficha cadastrada hoje ainda
+    // não está no espelho (sync diário 04:40) e dizer "não existe" errado faz
+    // a vendedora recadastrar quem já tem crediário aberto.
+    if (this.sombra?.respondeDoFlow) {
+      try {
+        const doFlow = await this.sombra.buscarClienteCustomerInfo({
+          cpf: cleanCpf,
+          loja,
+          nome: nomeBusca,
+          telefone: telBusca,
+        });
+        if (doFlow) {
+          return await this.montarCustomerInfo({
+            codCliente: doFlow.codigo,
+            nome: doFlow.nome,
+            lojaCliente: doFlow.loja || loja,
+            viaFallback: doFlow.viaFallback,
+            raw: doFlow.raw,
+            cleanCpf,
+            loja,
+          });
+        }
+        this.logger.warn(
+          `[customer-info][flow-leitura] sem resultado no espelho (cpf=${cleanCpf} loja=${loja || 'todas'}) — recorrendo ao Giga`,
+        );
+      } catch (e: any) {
+        this.logger.warn(`[customer-info][flow-leitura] falhou (${e?.message}) — recorrendo ao Giga`);
+      }
+    }
+
     // Busca cliente no Giga (tabela clientes detectada dinamicamente —
     // com cache opcional de 1h via flag PDV_GIGA_CACHE)
     const cm = await this.detectClientesTableCached();
@@ -937,7 +984,7 @@ export class PdvController {
       // Detecção falha quando o Giga está fora (firewall/rede) e não há cache —
       // é erro de conexão, não "cliente não existe".
       return {
-        found: false,
+        found: false as const,
         gigaError: true,
         message: 'Giga indisponível no momento — tente de novo em instantes',
       };
@@ -1078,7 +1125,7 @@ export class PdvController {
     if (!cliente && !queryOk) {
       console.warn(`[customer-info] GIGA FORA: nenhuma query respondeu (cpf=${safeCpf})`);
       return {
-        found: false,
+        found: false as const,
         gigaError: true,
         message: 'Falha consultando o Giga — tente de novo (NÃO significa que o cliente não existe)',
       };
@@ -1099,7 +1146,7 @@ export class PdvController {
             .filter(Boolean);
           console.log(`[customer-info] CPF ${safeCpf} tem cadastro nas lojas [${lojas.join(',')}] mas não na ${loja}`);
           return {
-            found: false,
+            found: false as const,
             outraLoja: {
               lojas,
               codCliente: String(rOutra.rows[0].cod || ''),
@@ -1139,7 +1186,7 @@ export class PdvController {
         } catch {/* diagnóstico é best-effort */}
       }
       return {
-        found: false,
+        found: false as const,
         message: `Cliente não encontrado no Giga${loja ? ` (loja ${loja})` : ''} — cadastre no Wincred antes de fazer crediário`,
       };
     }
@@ -1147,6 +1194,36 @@ export class PdvController {
     const codCliente = String(cliente[cm.codCliente] || '').trim();
     const nome = cm.nome ? String(cliente[cm.nome] || '').trim() : null;
     const lojaCliente = cm.loja ? String(cliente[cm.loja] || '').trim() : loja;
+
+    return this.montarCustomerInfo({
+      codCliente,
+      nome,
+      lojaCliente,
+      viaFallback,
+      raw: cliente, // dados completos pra preencher form de cadastro se precisar
+      cleanCpf,
+      loja,
+    });
+  }
+
+  /**
+   * Cauda COMPARTILHADA do customer-info: pendências + shape da resposta.
+   *
+   * Os DOIS caminhos (Giga ao vivo e espelho Postgres) passam por aqui de
+   * propósito — o PaymentModal do PDV consome este shape e não pode existir
+   * uma segunda versão dele que saia de sincronia. Quem muda entre os
+   * caminhos é só DE ONDE vieram codCliente/nome/loja/raw.
+   */
+  private async montarCustomerInfo(input: {
+    codCliente: string;
+    nome: string | null;
+    lojaCliente: string | null;
+    viaFallback: 'telefone' | 'nome' | null;
+    raw: any;
+    cleanCpf: string;
+    loja: string | null;
+  }) {
+    const { codCliente, nome, lojaCliente, viaFallback, raw, cleanCpf, loja } = input;
 
     // Lista pendências (parcelas em aberto) — ESCOPADAS pela loja do cadastro.
     // Sem o filtro, o mesmo código em outra loja é OUTRA pessoa e as parcelas
@@ -1167,7 +1244,10 @@ export class PdvController {
     }
 
     return {
-      found: true,
+      // `as const`: `found` é o DISCRIMINANTE da união de retorno do endpoint —
+      // sem o literal, o TS alarga pra boolean e o `if (!info.found ||
+      // !info.cliente)` de quem chama internamente para de estreitar.
+      found: true as const,
       cliente: {
         codCliente,
         nome,
@@ -1176,7 +1256,7 @@ export class PdvController {
         // 'telefone' | 'nome' quando o cadastro foi achado SEM bater o CPF
         // (Wincred com CPF vazio/errado) — a tela avisa pra completar depois.
         viaFallback,
-        raw: cliente, // dados completos pra preencher form de cadastro se precisar
+        raw,
       },
       pendencias: pendencias.map((p) => ({
         registro: p.registro,

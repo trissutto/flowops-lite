@@ -9,6 +9,9 @@ import {
 
 const TEMPLATES_KEY = 'cobranca_templates';
 const LOJA_NOME_KEY = 'cobranca_loja_nome';
+// Cache PERSISTENTE do mapa de colunas da tabela `movimento` do Giga.
+// Ver detectColumns() — evita SHOW COLUMNS no MySQL frágil a cada chamada.
+const COLUMN_MAP_KEY = 'crediario_movimento_column_map';
 
 /**
  * CrediariosService — cobrança de parcelas vencidas direto da tabela
@@ -121,13 +124,54 @@ export class CrediariosService {
   /**
    * Lê SHOW COLUMNS FROM movimento e tenta mapear nomes da instalação local
    * pros nossos nomes lógicos (parcela, vencimento, valorParcela, etc).
-   * Cache em memória: detecção é feita 1x por boot.
+   *
+   * CACHE EM 2 NÍVEIS — memória do processo → SystemSetting no Postgres:
+   *   1. `columnMapCache`: zero I/O, morre no restart.
+   *   2. `system_settings[crediario_movimento_column_map]`: sobrevive a deploy
+   *      (o backend reinicia a cada deploy, então o nível 1 sozinho zerava).
+   *
+   * Por que: cada detecção custa 3 queries no Giga (`getTableSchema` faz
+   * SHOW COLUMNS + SELECT * LIMIT 1 + COUNT(*) — e `movimento` tem 700k+
+   * linhas), e detectColumns é chamado em 5 caminhos quentes, vários com
+   * force=true. Nome de coluna do Gigasistemas praticamente nunca muda, então
+   * não vale pagar essa viagem toda hora num MySQL que PENDURA quando o
+   * firewall por IP da KingHost derruba o IP do Railway.
+   *
+   * `force = true` mantém o contrato antigo: vai no Giga e REESCREVE os dois
+   * níveis de cache. Também exposto por `GET /crediarios/schema` (admin).
+   *
+   * Degradação com o Giga fora:
+   *   - sem nenhum cache  → EMPTY_MAP + log de erro, IGUAL a hoje.
+   *   - com cache gravado → devolve o último mapa bom (melhor, nunca pior).
+   *
+   * Só mapa íntegro entra no cache (ver isUsableColumnMap): EMPTY_MAP ou
+   * detecção pela metade NUNCA é persistida — era justamente o medo do
+   * comentário de force=true em crediario-baixa.service.ts.
    */
   async detectColumns(force = false): Promise<ColumnMap> {
     if (this.columnMapCache && !force) return this.columnMapCache;
 
+    // Nível 2: mapa de uma detecção anterior, sem tocar no Giga.
+    if (!force) {
+      const stored = await this.readStoredColumnMap();
+      if (stored) {
+        this.columnMapCache = stored;
+        return stored;
+      }
+    }
+
     const schema = await this.erp.getTableSchema('movimento', 1);
     if (!schema) {
+      // Giga fora/pendurado. Se já detectamos alguma vez, é melhor usar o
+      // último mapa bom do que derrubar o crediário inteiro com EMPTY_MAP.
+      const fallback = this.columnMapCache ?? (await this.readStoredColumnMap());
+      if (fallback) {
+        this.logger.warn(
+          'detectColumns: Giga não respondeu — seguindo com o mapa de colunas em cache',
+        );
+        this.columnMapCache = fallback;
+        return fallback;
+      }
       this.logger.error('detectColumns: tabela movimento não encontrada');
       return EMPTY_MAP;
     }
@@ -169,8 +213,65 @@ export class CrediariosService {
       ),
     };
     this.columnMapCache = map;
+    await this.writeStoredColumnMap(map);
     this.logger.log(`detectColumns mapeamento: ${JSON.stringify(map)}`);
     return map;
+  }
+
+  /**
+   * Lê o mapa de colunas persistido no Postgres. Devolve null (= "vai no
+   * Giga") se não existir, estiver ilegível ou vier incompleto — nunca deixa
+   * um cache podre substituir a detecção ao vivo.
+   */
+  private async readStoredColumnMap(): Promise<ColumnMap | null> {
+    try {
+      const rec = await (this.prisma as any).systemSetting.findUnique({
+        where: { key: COLUMN_MAP_KEY },
+      });
+      if (!rec?.value) return null;
+      const parsed = JSON.parse(rec.value);
+      if (!parsed || typeof parsed !== 'object') return null;
+
+      // Normaliza contra a forma canônica: campo novo que ainda não existia
+      // quando o cache foi gravado vira null, campo estranho é descartado.
+      const map: ColumnMap = { ...EMPTY_MAP };
+      for (const k of Object.keys(EMPTY_MAP) as Array<keyof ColumnMap>) {
+        const v = (parsed as any)[k];
+        map[k] = typeof v === 'string' && v.length > 0 ? v : null;
+      }
+      return isUsableColumnMap(map) ? map : null;
+    } catch (e: any) {
+      this.logger.warn(
+        `detectColumns: cache de colunas ilegível (${e?.message}) — vai no Giga`,
+      );
+      return null;
+    }
+  }
+
+  /**
+   * Persiste o mapa detectado. Detecção incompleta não é gravada (senão o
+   * cache congelaria justamente o estado ruim). Falha ao gravar não quebra
+   * nada: o caminho segue funcionando, só sem cache.
+   */
+  private async writeStoredColumnMap(map: ColumnMap): Promise<void> {
+    if (!isUsableColumnMap(map)) {
+      this.logger.warn(
+        'detectColumns: mapa incompleto — NÃO persistido (segue detectando ao vivo)',
+      );
+      return;
+    }
+    try {
+      const value = JSON.stringify(map);
+      await (this.prisma as any).systemSetting.upsert({
+        where: { key: COLUMN_MAP_KEY },
+        update: { value },
+        create: { key: COLUMN_MAP_KEY, value },
+      });
+    } catch (e: any) {
+      this.logger.warn(
+        `detectColumns: não consegui salvar o cache de colunas (${e?.message}) — segue sem`,
+      );
+    }
   }
 
   /**
@@ -922,6 +1023,16 @@ const EMPTY_MAP: ColumnMap = {
   dataPagamento: null, valorPago: null, pago: null, status: null, tipo: null, telefone: null,
   obs: null, juros: null, multa: null,
 };
+
+/**
+ * Detecção "saudável" o bastante pra virar cache: as 4 colunas que TODO
+ * caminho do crediário exige (crediario-baixa.service e crediario-mirror
+ * abortam sem elas). Gate só do cache — o valor RETORNADO por detectColumns
+ * continua sendo exatamente o que a detecção produziu, passando ou não aqui.
+ */
+function isUsableColumnMap(map: ColumnMap | null): map is ColumnMap {
+  return !!map && !!map.registro && !!map.codCliente && !!map.vencimento && !!map.valorParcela;
+}
 
 function pickColumn(cols: string[], ...patterns: RegExp[]): string | null {
   for (const re of patterns) {
