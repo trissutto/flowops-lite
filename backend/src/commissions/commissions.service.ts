@@ -632,7 +632,17 @@ export class CommissionsService {
       const seller = sellersById.get(sellerId);
       const cargo = seller?.cargo || 'VENDEDORA';
       // Vendedoras + Caixa entram aqui (calcMode=on_self). Lideres/gerentes no fluxo 2.
-      if (cargo !== 'VENDEDORA' && cargo !== 'CAIXA') continue;
+      if (cargo !== 'VENDEDORA' && cargo !== 'CAIXA') {
+        // ...MAS só na loja que ela responde. Vendendo em OUTRA loja ela é
+        // vendedora comum e caía no vão entre os dois fluxos (mesma correção
+        // da Folha, 01/08 — R$ 13.397,40 sumidos em julho).
+        const lojaQueResponde = seller?.responsibleStoreId
+          ? storeIdToCode.get(seller.responsibleStoreId)
+          : null;
+        if (lojaQueResponde === storeCode) continue;
+        await processEntry(sellerId, 'VENDEDORA', storeCode);
+        continue;
+      }
       await processEntry(sellerId, cargo, storeCode);
     }
 
@@ -907,11 +917,27 @@ export class CommissionsService {
     };
 
     // Fluxo 1: vendedoras/caixa (on_self) por loja onde venderam
+    //
+    // LÍDER/GERENTE VENDENDO EM OUTRA LOJA (01/08): o Fluxo 2 abaixo só cobre
+    // a loja que ela RESPONDE. Quem tem cargo de liderança e vende numa loja
+    // diferente caía no vão entre os dois fluxos e a venda sumia da folha —
+    // R$ 13.397,40 em julho (Brenda: responde por Jundiaí, vendeu em Vinhedo).
+    // Fora da loja dela, ela é vendedora comum: entra aqui como on_self.
     for (const [key] of sellerSalesMap) {
       const [sellerId, storeCode] = key.split('|');
       const seller = sellersById.get(sellerId);
       const cargo = seller?.cargo || 'VENDEDORA';
-      if (cargo !== 'VENDEDORA' && cargo !== 'CAIXA') continue;
+      if (cargo !== 'VENDEDORA' && cargo !== 'CAIXA') {
+        const lojaQueResponde = seller?.responsibleStoreId
+          ? storeIdToCode.get(seller.responsibleStoreId)
+          : null;
+        // Na loja dela quem paga é o Fluxo 2 (base da loja toda) — não duplica.
+        if (lojaQueResponde === storeCode) continue;
+        // Cargo VENDEDORA de propósito: fora da loja dela a regra é sobre as
+        // próprias vendas, nunca sobre o faturamento da loja visitada.
+        await calcular(sellerId, 'VENDEDORA', storeCode);
+        continue;
+      }
       await calcular(sellerId, cargo, storeCode);
     }
     // Fluxo 2: líderes/gerentes pela loja responsável
