@@ -33,6 +33,22 @@ export class CustomerResumeController {
     const agg = aggregatePerson(customers, storeId);
     const c = agg.primary;
 
+    // ENDEREÇO (01/08/2026) — a vendedora redigitava a cada venda.
+    //
+    // O modal do PDV só lia da VENDA, e venda nova nasce em branco. Como o
+    // endereço agora sobe pra ficha da pessoa, é daqui que ele volta: a
+    // atendente digita uma vez e o sistema oferece nas próximas, em qualquer
+    // loja. Sem isso o cadastro único guarda o dado e não o devolve, que é
+    // metade do problema resolvido.
+    //
+    // Procura entre TODOS os cadastros da pessoa (ela pode ter endereço numa
+    // loja e não noutra), preferindo o marcado como principal.
+    const enderecos = customers
+      .flatMap((x: any) => x.addresses || [])
+      .filter((a: any) => a && a.active !== false);
+    const end =
+      enderecos.find((a: any) => a.isPrimary) || enderecos[0] || null;
+
     return {
       found: true,
       customer: {
@@ -41,6 +57,17 @@ export class CustomerResumeController {
         cpf: c.cpf,
         whatsapp: c.whatsapp,
         email: c.email,
+        endereco: end
+          ? {
+              cep: end.cep || null,
+              logradouro: end.street || null,
+              numero: end.number || null,
+              complemento: end.complement || null,
+              bairro: end.district || null,
+              cidade: end.city || null,
+              uf: end.state || null,
+            }
+          : null,
         vipTier: agg.vipTier,
         ltvCents: agg.ltvCents,
         orderCount: agg.orderCount,

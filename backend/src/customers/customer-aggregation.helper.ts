@@ -71,6 +71,10 @@ export async function findAllCustomersByCpf(
     include: {
       cashbackBalance: true,
       originStore: { select: { id: true, code: true, name: true } },
+      // Endereço (01/08): o PDV precisa devolver pra atendente o que já foi
+      // digitado antes, em qualquer loja — senão o cadastro único guarda o
+      // dado e nunca o oferece de volta.
+      addresses: { where: { active: true }, orderBy: { isPrimary: 'desc' } },
     },
   });
   return customers as any[];
