@@ -2,6 +2,7 @@ import { BadRequestException, Controller, ForbiddenException, Get, Param, Query,
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { FaturamentoService } from './faturamento.service';
 import { ErpService } from '../erp/erp.service';
+import { hojeBrasilia, primeiroDiaDoMesBrasilia } from '../common/tz';
 
 /**
  * /faturamento — admin only. Tela de gráfico de faturamento por loja.
@@ -61,13 +62,13 @@ export class FaturamentoController {
   ) {
     this.requireAdmin(req);
     if (refresh === '1') this.svc.clearCache();
-    const today = new Date();
-    const firstOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
-    const fmt = (d: Date) =>
-      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-
-    const f = from || fmt(firstOfMonth);
-    const t = to || fmt(today);
+    // BRASÍLIA, não o relógio do servidor (31/07). O Railway roda em UTC: às
+    // 21h o `new Date()` daqui já estava no dia seguinte, e no último dia do
+    // mês o período padrão pulava pro mês seguinte inteiro. Foi o que zerou a
+    // tela de faturamento em 31/07/2026 às 22h — o ranking passou a somar o
+    // dia 1º de agosto, que mal tinha começado.
+    const f = from || primeiroDiaDoMesBrasilia();
+    const t = to || hojeBrasilia();
     this.validatePeriod(f, t);
     const g = (granularity === 'week' || granularity === 'month') ? granularity : 'day';
     return this.svc.getResumo(f, t, g);
@@ -86,11 +87,9 @@ export class FaturamentoController {
     @Query('to') to?: string,
   ) {
     this.requireAdmin(req);
-    const today = new Date();
-    const fmt = (d: Date) =>
-      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-    const f = from || fmt(today);
-    const t = to || fmt(today);
+    // Mesmo motivo do getResumo acima: "hoje" é o dia da LOJA, não do servidor.
+    const f = from || hojeBrasilia();
+    const t = to || hojeBrasilia();
     this.validatePeriod(f, t);
     return this.svc.auditoriaParidade(f, t);
   }

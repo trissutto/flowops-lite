@@ -892,8 +892,8 @@ export class WincredMirrorService {
         codigo: Number(r.CODIGO),
         grupo: r.GRUPO || null,
       }));
-    }, async (data) => {
-      if (data.length) await (this.prisma as any).wincredGrupo.createMany({ data, skipDuplicates: true });
+    }, async (data, tx) => {
+      if (data.length) await tx.wincredGrupo.createMany({ data, skipDuplicates: true });
       return data.length;
     }, { preservarFlow: true });
   }
@@ -906,8 +906,8 @@ export class WincredMirrorService {
         subgrupo: r.SUBGRUPO || null,
         grupo: r.GRUPO != null ? Number(r.GRUPO) : null,
       }));
-    }, async (data) => {
-      if (data.length) await (this.prisma as any).wincredSubgrupo.createMany({ data, skipDuplicates: true });
+    }, async (data, tx) => {
+      if (data.length) await tx.wincredSubgrupo.createMany({ data, skipDuplicates: true });
       return data.length;
     }, { preservarFlow: true });
   }
@@ -938,8 +938,8 @@ export class WincredMirrorService {
         contato: r.CONTATO || null,
         obs: r.OBS ? Buffer.from(r.OBS) : null,
       }));
-    }, async (data) => {
-      if (data.length) await (this.prisma as any).wincredFornecedor.createMany({ data, skipDuplicates: true });
+    }, async (data, tx) => {
+      if (data.length) await tx.wincredFornecedor.createMany({ data, skipDuplicates: true });
       return data.length;
     });
   }
@@ -956,8 +956,8 @@ export class WincredMirrorService {
           return true;
         })
         .map((codigo) => ({ codigo }));
-    }, async (data) => {
-      if (data.length) await (this.prisma as any).wincredCodigo.createMany({ data, skipDuplicates: true });
+    }, async (data, tx) => {
+      if (data.length) await tx.wincredCodigo.createMany({ data, skipDuplicates: true });
       return data.length;
     });
   }
@@ -1189,7 +1189,10 @@ export class WincredMirrorService {
     tableName: string,
     pgTable: string,
     fetcher: (pool: any) => Promise<T[]>,
-    inserter: (data: T[]) => Promise<number>,
+    // Recebe o client da TRANSAÇÃO. Usar `this.prisma` aqui dentro abriria uma
+    // segunda conexão, que ficaria esperando o lock do DELETE da transação —
+    // trava até o timeout.
+    inserter: (data: T[], tx: any) => Promise<number>,
     // `preservarFlow` (31/07): a tabela tem linhas que NASCERAM no Flow e podem
     // ainda não existir no Giga — categoria criada no cadastro de produto com a
     // réplica na fila. TRUNCATE apagaria essas linhas antes de a réplica sair, e
@@ -1201,13 +1204,34 @@ export class WincredMirrorService {
     const pool: any = (this.erp as any).pool;
     if (!pool) return { table: tableName, success: false, processed: 0, durationMs: 0, error: 'MySQL pool nao inicializado' };
     try {
-      if (opts?.preservarFlow) {
-        await this.prisma.$executeRawUnsafe(`DELETE FROM "${pgTable}" WHERE flow_is_source = false`);
-      } else {
-        await this.prisma.$executeRawUnsafe(`TRUNCATE TABLE "${pgTable}"`);
-      }
+      // LÊ ANTES DE APAGAR (31/07). A ordem era inversa: apagava e só então
+      // buscava no Giga. Com o Giga fora na hora do cron, o DELETE passava, o
+      // fetch estourava e a tabela ficava VAZIA — e assim continuava, porque a
+      // próxima execução apagaria o vazio de novo. Grupo, subgrupo e fornecedor
+      // somem juntos, e o cadastro de produto exige os três: em menos de 24h
+      // ninguém cadastra peça nova.
+      //
+      // Mesma regra que `syncEstoque` e o espelho de crediário já seguem:
+      // melhor a cópia velha inteira que uma nova pela metade.
       const data = await fetcher(pool);
-      const processed = await inserter(data);
+
+      // Vazio não é resposta válida: estas tabelas nunca estão vazias de
+      // verdade. Vazio significa Giga indisponível — preserva o que está lá.
+      if (!data.length) {
+        throw new Error('SELECT veio vazio — Giga indisponível, cópia preservada');
+      }
+
+      // Só agora troca, e numa transação: quem estiver lendo vê a cópia antiga
+      // inteira até o commit, nunca um estado intermediário.
+      const processed = await this.prisma.$transaction(async (tx: any) => {
+        if (opts?.preservarFlow) {
+          await tx.$executeRawUnsafe(`DELETE FROM "${pgTable}" WHERE flow_is_source = false`);
+        } else {
+          await tx.$executeRawUnsafe(`DELETE FROM "${pgTable}"`);
+        }
+        return inserter(data, tx);
+      }, { timeout: 120_000 });
+
       const durationMs = Date.now() - t0;
       this.logger.log(`[${tableName}] OK — ${processed} linhas em ${durationMs}ms`);
       return { table: tableName, success: true, processed, durationMs };
