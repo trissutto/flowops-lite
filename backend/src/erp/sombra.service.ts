@@ -524,6 +524,207 @@ export class SombraService {
     return { totalQty: total, codigos };
   }
 
+  /* ────────────── customer-info do PDV (crediário) — Postgres ────────────── */
+
+  /**
+   * Versão Postgres da busca de cliente do `GET /pdv/customer-info`.
+   *
+   * PORQUÊ: o caminho do Giga dispara ATÉ 9 CONSULTAS EM CASCATA no MySQL,
+   * cada uma com timeout de 10s. Quando o firewall por IP da KingHost derruba
+   * o IP dinâmico do Railway, o MySQL PENDURA (não dá erro — `.catch` não
+   * pega) e o PDV da loja fica parado até ~90s no meio do fechamento de um
+   * crediário. É o pior ponto de latência do sistema.
+   *
+   * O dado já está todo aqui: `giga_clientes` é a importação COMPLETA da
+   * tabela `clientes` do Giga — colunas conhecidas viram campos estruturados e
+   * a LINHA ORIGINAL INTEIRA fica em `raw_json`. É `raw_json` que devolvemos
+   * como `raw`, com as MESMAS CHAVES que o `SELECT *` do Giga devolveria, pra
+   * o formulário de cadastro do PDV continuar preenchendo igual.
+   *
+   * ⚠️ COLUNAS — a pegadinha aqui é a INVERSA de `wincred_produtos`. Lá o
+   * campo camelCase virou coluna camelCase e precisa de aspas
+   * (p."descricaoCompleta"). Em `GigaCliente` TODOS os campos camelCase têm
+   * `@map`, então as colunas são snake_case: fone_cel, fone_res, raw_json.
+   * Sem aspas e em minúsculo — escrever g."foneCel" aqui quebra.
+   *
+   * A ORDEM das tentativas é a MESMA do Giga (CRM link → CPF → código →
+   * CPF LIKE → telefone → nome), e as regras de ambiguidade também: telefone
+   * e nome só valem quando a correspondência é ÚNICA (2+ = não arrisca).
+   *
+   * Devolve `null` quando não acha — e quem chama TEM que cair pro Giga.
+   * Vazio não é resposta: pode ser ficha nova que o espelho (sync diário
+   * 04:40) ainda não viu, e dizer "cliente não existe" errado faz a vendedora
+   * recadastrar alguém que já tem crediário aberto.
+   */
+  async buscarClienteCustomerInfo(input: {
+    /** só dígitos, como o controller já normalizou */
+    cpf: string;
+    /** 2 dígitos com zero à esquerda, ou null quando não há escopo de loja */
+    loja: string | null;
+    /** já em UPPER e sanitizado pelo controller */
+    nome?: string;
+    /** só dígitos */
+    telefone?: string;
+  }): Promise<{
+    codigo: string;
+    nome: string | null;
+    loja: string | null;
+    raw: any;
+    viaFallback: 'telefone' | 'nome' | null;
+  } | null> {
+    const cpf = String(input.cpf ?? '').replace(/\D/g, '').slice(0, 14);
+    const loja = input.loja ? String(input.loja).replace(/\D/g, '').padStart(2, '0').slice(0, 2) : null;
+    const nome = String(input.nome ?? '').trim();
+    const tel = String(input.telefone ?? '').replace(/\D/g, '');
+
+    // 1. CRM determinístico — o Customer do Flow já conhece o (loja, codigo)
+    //    do Giga via CustomerGigaLink. Resolve mesmo quando o cadastro do
+    //    Wincred está com CPF vazio/errado (cadastro rápido de balcão).
+    if (loja && cpf.length === 11) {
+      const cpfFmt = `${cpf.slice(0, 3)}.${cpf.slice(3, 6)}.${cpf.slice(6, 9)}-${cpf.slice(9)}`;
+      const clientes: Array<{ gigaLinks?: Array<{ gigaLoja: string; gigaCodigo: number }> }> =
+        await (this.prisma as any).customer.findMany({
+          where: { cpf: { in: [cpf, cpfFmt] } },
+          include: { gigaLinks: true },
+          take: 20,
+        });
+      const link = clientes
+        .flatMap((c) => c.gigaLinks || [])
+        .find((l) => String(l.gigaLoja || '').replace(/\D/g, '').padStart(2, '0') === loja);
+      if (link) {
+        const achado = await this.umCliente(
+          `${this.CODIGO_NUCLEO} = $1`,
+          [String(Number(link.gigaCodigo))],
+          loja,
+        );
+        if (achado) return { ...achado, viaFallback: null };
+      }
+    }
+
+    // 2. CPF normalizado igual exato (na loja).
+    if (cpf) {
+      const achado = await this.umCliente(`${this.CPF_NUCLEO} = $1`, [cpf], loja);
+      if (achado) return { ...achado, viaFallback: null };
+    }
+
+    // 3. Código direto (caso tenham digitado o código em vez do CPF).
+    if (cpf) {
+      const achado = await this.umCliente(`${this.CODIGO_NUCLEO} = $1`, [cpf.replace(/^0+/, '') || '0'], loja);
+      if (achado) return { ...achado, viaFallback: null };
+    }
+
+    // 4. CPF como LIKE — pega mesmo com char escondido no meio (zero-width,
+    //    BOM, tab). Aqui a normalização já tira tudo que não é dígito, então
+    //    isto cobre sobretudo o cadastro que guardou CPF junto de outra coisa.
+    // `$1::text`: dentro de uma concatenação o Postgres não consegue inferir o
+    // tipo do parâmetro sozinho ('%' || $1 é unknown || unknown) — o cast
+    // explícito evita "could not determine data type of parameter".
+    if (cpf.length >= 11) {
+      const achado = await this.umCliente(`${this.CPF_NUCLEO} LIKE '%' || $1::text || '%'`, [cpf], loja);
+      if (achado) return { ...achado, viaFallback: null };
+    }
+
+    // Daqui pra baixo é cadastro do Wincred SEM CPF (balcão) — só com escopo
+    // de loja e só quando a correspondência é ÚNICA.
+    if (!loja) return null;
+
+    // 5. Telefone: últimos 9 dígitos cobrem celular com e sem DDD.
+    if (tel.length >= 8) {
+      const last9 = tel.slice(-9);
+      const linhas = await this.clientes(
+        `(regexp_replace(COALESCE(g.fone_cel,''), '[^0-9]', '', 'g') LIKE '%' || $1::text || '%'
+          OR regexp_replace(COALESCE(g.fone_res,''), '[^0-9]', '', 'g') LIKE '%' || $1::text || '%')`,
+        [last9],
+        loja,
+        2,
+      );
+      if (linhas.length === 1) return { ...this.comoCliente(linhas[0]), viaFallback: 'telefone' };
+      // 2+ = ambíguo. Igual ao Giga: não arrisca, segue pro nome.
+    }
+
+    // 6. Nome exato e depois LIKE — também só match único.
+    if (nome.length >= 5) {
+      const exato = await this.clientes(
+        `UPPER(TRIM(COALESCE(g.nome,''))) = $1`,
+        [nome],
+        loja,
+        2,
+      );
+      if (exato.length === 1) return { ...this.comoCliente(exato[0]), viaFallback: 'nome' };
+      if (exato.length === 0) {
+        const like = await this.clientes(
+          `UPPER(COALESCE(g.nome,'')) LIKE '%' || $1::text || '%'`,
+          [nome],
+          loja,
+          2,
+        );
+        if (like.length === 1) return { ...this.comoCliente(like[0]), viaFallback: 'nome' };
+      }
+    }
+
+    return null;
+  }
+
+  /** CPF só com dígitos — normaliza o lado do BANCO igual o controller
+   *  normaliza o lado da busca (o Giga guarda 108.458.788-24, 10845878824,
+   *  com espaço invisível... tudo isso é o mesmo CPF). */
+  private readonly CPF_NUCLEO = `regexp_replace(COALESCE(g.cpf,''), '[^0-9]', '', 'g')`;
+
+  /** Código sem zero à esquerda — o padding do Giga é inconsistente e o
+   *  CustomerGigaLink guarda Int (sem zeros). Compara núcleo com núcleo. */
+  private readonly CODIGO_NUCLEO = `COALESCE(NULLIF(LTRIM(TRIM(g.codigo),'0'),''),'0')`;
+
+  /** Loja normalizada pra 2 dígitos: o Giga grava '05' e '5' conforme a época. */
+  private readonly LOJA_NUCLEO = `LPAD(COALESCE(NULLIF(regexp_replace(COALESCE(g.loja,''), '[^0-9]', '', 'g'),''),'0'), 2, '0')`;
+
+  /**
+   * Roda uma condição contra `giga_clientes`, sempre com o filtro de loja
+   * quando há escopo — o CODIGO de cliente do Wincred SE REPETE entre lojas
+   * (incidente Piracicaba 03/07: sem o filtro, o LIMIT 1 pegava a ficha de
+   * outra loja e listava o crediário de OUTRA pessoa).
+   */
+  private async clientes(
+    condicao: string,
+    params: string[],
+    loja: string | null,
+    limite: number,
+  ): Promise<Array<{ codigo: string; nome: string | null; loja: string | null; raw_json: any }>> {
+    const filtroLoja = loja ? ` AND ${this.LOJA_NUCLEO} = $${params.length + 1}` : '';
+    const args = loja ? [...params, loja] : params;
+    // ORDER BY determinístico: o Giga faz LIMIT 1 sem ORDER BY (pega arbitrário).
+    // LENGTH antes do texto dá a ordem numérica sem CAST — '9' não passa na
+    // frente de '10' e código de 20 dígitos não estoura bigint.
+    return (this.prisma as any).$queryRawUnsafe(
+      `SELECT g.codigo, g.nome, g.loja, g.raw_json
+         FROM giga_clientes g
+        WHERE ${condicao}${filtroLoja}
+        ORDER BY LENGTH(TRIM(g.codigo)), g.codigo
+        LIMIT ${Math.max(1, Math.floor(limite))}`,
+      ...args,
+    );
+  }
+
+  private async umCliente(
+    condicao: string,
+    params: string[],
+    loja: string | null,
+  ): Promise<{ codigo: string; nome: string | null; loja: string | null; raw: any } | null> {
+    const linhas = await this.clientes(condicao, params, loja, 1);
+    return linhas.length ? this.comoCliente(linhas[0]) : null;
+  }
+
+  /** Linha do espelho → mesmo formato que o controller já monta do Giga. */
+  private comoCliente(l: { codigo: string; nome: string | null; loja: string | null; raw_json: any }) {
+    return {
+      codigo: String(l.codigo ?? '').trim(),
+      nome: l.nome != null ? String(l.nome).trim() : null,
+      loja: l.loja != null ? String(l.loja).trim() : null,
+      // A linha ORIGINAL do Giga, chave por chave. É o que vai em `raw` — o
+      // formulário de cadastro do PDV lê dele.
+      raw: l.raw_json ?? {},
+    };
+  }
+
   /* ──────────────────────────── utilitários ─────────────────────────────── */
 
   /** JSON com chaves ordenadas — comparação não pode depender da ordem. */

@@ -3216,6 +3216,47 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * detectada) NÃƒO aparecem no map â†’ caller deve tratar como 0.
    */
   async getProductPricesBySkus(skus: string[]): Promise<Map<string, number>> {
+    if (this.sombra?.respondeDoFlow) {
+      try {
+        const doFlow = await this.sombra.getProductPricesBySkus(skus);
+        // Recuo POR ITEM, não tudo-ou-nada (mesmo raciocínio do
+        // batchFindCodigosByRefCorTam): o caller usa o preço pra montar a
+        // obrigação intercompany, e um SKU fora do espelho não pode jogar fora
+        // os que estavam lá — nem virar R$ 0,00 silencioso.
+        const pedidos = [...new Set((skus ?? []).map((s) => String(s ?? '').trim()).filter(Boolean))];
+        const faltando = pedidos.filter((s) => !doFlow.has(s));
+        if (!faltando.length) return doFlow;
+
+        this.logger.warn(
+          `[flow-leitura] precos: ${faltando.length}/${pedidos.length} sem resultado — completando pelo Giga`,
+        );
+        const doGigaFalta = await this.getProductPricesBySkusGiga(faltando);
+        for (const [k, v] of doGigaFalta) doFlow.set(k, v);
+        return doFlow;
+      } catch (e) {
+        this.logger.warn(`[flow-leitura] precos falhou (${(e as Error).message}) — recorrendo ao Giga`);
+        return this.getProductPricesBySkusGiga(skus);
+      }
+    }
+
+    const doGiga = await this.getProductPricesBySkusGiga(skus);
+
+    // Map não serializa em JSON — compara como par ordenado, igual ao batch de
+    // códigos. ⚠️ Divergência de ESCALA aqui (100×) é esperada se o Giga estiver
+    // usando a coluna VENDAUN: o caminho do Giga divide por 100, o espelho não
+    // (o Decimal de `vendaUn` já vem em reais). Ver a nota no sombra.service.
+    if (this.sombra?.ligado) {
+      void this.sombra.comparar(
+        'getProductPricesBySkus',
+        { skus: skus?.length ?? 0 },
+        [...doGiga.entries()].sort(),
+        async () => [...(await this.sombra!.getProductPricesBySkus(skus)).entries()].sort(),
+      );
+    }
+    return doGiga;
+  }
+
+  private async getProductPricesBySkusGiga(skus: string[]): Promise<Map<string, number>> {
     const out = new Map<string, number>();
     if (!skus.length || !this.pool) return out;
 
@@ -6574,6 +6615,60 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     tamanho: string | null;
     descricao: string | null;
   } | null> {
+    // MODO RESPOSTA (GIGA_LEITURA_FLOW=1): o espelho responde, com recuo pro
+    // Giga. Aqui o recuo é ESSENCIAL: o espelho não tem as colunas de EAN, e
+    // este método é o que aceita EAN13 bipado. Produto recém-cadastrado (que
+    // ainda não entrou no sync) cairia como "não existe" — e quem chama
+    // transforma isso em 404 na cara da vendedora.
+    if (this.sombra?.respondeDoFlow) {
+      try {
+        const doFlow = await this.sombra.resolveSkuInfo(sku);
+        if (doFlow?.codigo) {
+          // Mesmo pós-processamento do caminho do Giga (trim + vazio vira
+          // null): o espelho guarda REF/COR/TAMANHO crus do ERP e o contrato
+          // deste método sempre entregou os campos aparados.
+          const limpa = (v: any) => {
+            const s = v == null ? '' : String(v).trim();
+            return s ? s : null;
+          };
+          return {
+            // ⚠️ `codigo` sai SEM zero à esquerda (normalizeCodigo do espelho),
+            // enquanto o Giga devolve com padding. Quem consome tem que ser
+            // tolerante — hoje é (skuVariants / stripZeros).
+            codigo: String(doFlow.codigo).trim(),
+            ref: limpa(doFlow.ref),
+            cor: limpa(doFlow.cor),
+            tamanho: limpa(doFlow.tamanho),
+            descricao: limpa(doFlow.descricao),
+          };
+        }
+        this.logger.warn(`[flow-leitura] sem resultado pro SKU "${sku}" — recorrendo ao Giga`);
+      } catch (e) {
+        this.logger.warn(`[flow-leitura] resolveSkuInfo falhou (${(e as Error).message}) — recorrendo ao Giga`);
+      }
+      return this.resolveSkuInfoGiga(sku);
+    }
+
+    const doGiga = await this.resolveSkuInfoGiga(sku);
+
+    if (this.sombra?.ligado) {
+      void this.sombra.comparar(
+        'resolveSkuInfo',
+        { sku },
+        doGiga,
+        () => this.sombra!.resolveSkuInfo(sku),
+      );
+    }
+    return doGiga;
+  }
+
+  private async resolveSkuInfoGiga(sku: string): Promise<{
+    codigo: string;
+    ref: string | null;
+    cor: string | null;
+    tamanho: string | null;
+    descricao: string | null;
+  } | null> {
     // Wrapper bulletproof â€” NUNCA propaga erro pra cima.
     // Qualquer erro de conexÃ£o / timeout / SQL â†’ loga + retorna null.
     // Caller (triage, etc) trata null como "produto nÃ£o cadastrado" e mostra
@@ -7449,6 +7544,52 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     tamanho: string | null,
     storeCode: string,
   ): Promise<{ totalQty: number; codigos: string[] }> {
+    if (this.sombra?.respondeDoFlow) {
+      try {
+        const doFlow = await this.sombra.getStockByRefCorTamInStore(refCode, cor, tamanho, storeCode);
+        // Só aceita a resposta do espelho quando ela AFIRMA alguma coisa.
+        // Zero é indistinguível de "ainda não sincronizei" — e o espelho de
+        // estoque só roda de hora em hora. Zero errado aqui barra o
+        // fechamento da remessa com "sem estoque na origem", que é o mesmo
+        // sintoma do incidente de produto sumido.
+        if (doFlow && doFlow.totalQty > 0 && doFlow.codigos.length > 0) return doFlow;
+        this.logger.warn(
+          `[flow-leitura] sem estoque no espelho pra ${refCode}/${cor}/${tamanho} na loja ${storeCode} — recorrendo ao Giga`,
+        );
+      } catch (e) {
+        this.logger.warn(`[flow-leitura] estoque por REF falhou (${(e as Error).message}) — recorrendo ao Giga`);
+      }
+      return this.getStockByRefCorTamInStoreGiga(refCode, cor, tamanho, storeCode);
+    }
+
+    const doGiga = await this.getStockByRefCorTamInStoreGiga(refCode, cor, tamanho, storeCode);
+
+    if (this.sombra?.ligado) {
+      // Ordena os códigos pelo núcleo (sem zero à esquerda) antes de comparar:
+      // os dois lados devolvem em ordem de query e com padding diferente, e sem
+      // isso toda comparação viraria divergência de mentira.
+      const ordena = (r: { totalQty: number; codigos: string[] }) => ({
+        totalQty: r.totalQty,
+        codigos: [...r.codigos].sort((a, b) =>
+          (a.replace(/^0+/, '') || '0').localeCompare(b.replace(/^0+/, '') || '0'),
+        ),
+      });
+      void this.sombra.comparar(
+        'getStockByRefCorTamInStore',
+        { refCode, cor, tamanho, storeCode },
+        ordena(doGiga),
+        async () => ordena(await this.sombra!.getStockByRefCorTamInStore(refCode, cor, tamanho, storeCode)),
+      );
+    }
+    return doGiga;
+  }
+
+  private async getStockByRefCorTamInStoreGiga(
+    refCode: string,
+    cor: string | null,
+    tamanho: string | null,
+    storeCode: string,
+  ): Promise<{ totalQty: number; codigos: string[] }> {
     if (!this.pool || !refCode || !storeCode) return { totalQty: 0, codigos: [] };
     const ref = String(refCode).trim();
     const corClean = (cor || '').trim();
@@ -7634,9 +7775,14 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
 
     let extra: any = {};
     try {
+      // CODIGO IN (variantes) em vez de `= ?`: com GIGA_LEITURA_FLOW ligada o
+      // resolveSkuInfo devolve o código do ESPELHO, que é normalizado SEM zero
+      // à esquerda. Igualdade exata não acharia a linha no Giga (que tem
+      // padding) e o bipe sairia com preço 0 — o mesmo sintoma do incidente de
+      // 01/07. `skuVariants` cobre os dois formatos.
       const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
-        `SELECT ${selects.join(', ')} FROM produtos WHERE CODIGO = ? LIMIT 1`,
-        [info.codigo],
+        `SELECT ${selects.join(', ')} FROM produtos WHERE CODIGO IN (?) LIMIT 1`,
+        [this.skuVariants(info.codigo)],
       );
       const r = (rows as any[])[0];
       if (r) extra = r;
@@ -7679,15 +7825,16 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     if (preco <= 0) {
       try {
         const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+          // IN (variantes) pelo mesmo motivo da query de `produtos` acima.
           `SELECT VALORTOTAL / NULLIF(QUANTIDADE, 0) AS unitario
              FROM caixa
-            WHERE CODIGO = ?
+            WHERE CODIGO IN (?)
               AND VALORTOTAL > 0
               AND QUANTIDADE > 0
               AND (MARCADO IS NULL OR MARCADO <> 'SIM')
             ORDER BY DATA DESC
             LIMIT 1`,
-          [info.codigo],
+          [this.skuVariants(info.codigo)],
         );
         const u = parsePrice((rows as any[])[0]?.unitario);
         if (u > 0) {
