@@ -1458,7 +1458,38 @@ export class PdvController {
       }
     }
 
-    return { results: results.slice(0, limit) };
+    // ── RELEVÂNCIA ANTES DE ALFABETO (01/08/2026) ────────────────────────
+    // A consulta ordenava por nome A-Z. Buscar "celio da silva" devolvia
+    // ARACELI, Ayara, Beatriz e BIANCA antes do CELIO — quem a vendedora
+    // procurava ficava em QUINTO, fora da primeira olhada. Numa tela de
+    // identificação isso não é só incômodo: ela clica no primeiro e a venda
+    // sai no nome de outra pessoa.
+    //
+    // Ordem: CPF exato > nome exato > nome que COMEÇA com o termo > contém >
+    // resto. Empate desempata por quem tem CPF (dá pra fazer crediário e nota)
+    // e depois por quem já comprou mais — cliente antiga é o palpite melhor
+    // que uma homônima sem histórico.
+    const termoNorm = term.toLowerCase().trim();
+    const digitos = onlyDigits;
+    const peso = (r: any): number => {
+      const nome = String(r?.nome || '').toLowerCase().trim();
+      const cpfR = String(r?.cpf || '').replace(/\D/g, '');
+      if (digitos.length === 11 && cpfR === digitos) return 0;
+      if (nome === termoNorm) return 1;
+      if (nome.startsWith(termoNorm)) return 2;
+      if (nome.includes(termoNorm)) return 3;
+      return 4;
+    };
+    const ordenados = results.slice().sort((a: any, b: any) => {
+      const d = peso(a) - peso(b);
+      if (d !== 0) return d;
+      const temCpf = (x: any) => (String(x?.cpf || '').replace(/\D/g, '').length === 11 ? 0 : 1);
+      const c = temCpf(a) - temCpf(b);
+      if (c !== 0) return c;
+      return (Number(b?.orderCount) || 0) - (Number(a?.orderCount) || 0);
+    });
+
+    return { results: ordenados.slice(0, limit) };
   }
 
   /**
