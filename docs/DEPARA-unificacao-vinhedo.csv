@@ -1,0 +1,67 @@
+﻿venda_id;dia;valor;nome_na_venda;seller_id_antes;seller_id_depois;ficha_destino
+6c31e861-76ee-4997-8811-4954569e6f5c;2026-07-07;284.85;BRENDA;42;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+37b91da0-3f3f-404a-a519-cd0f6dcdfd58;2026-07-08;49.95;BRENDA;42;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+b6e57ad2-58a9-41b8-9ef3-ac27e0f735fd;2026-07-10;199.90;BRENDA;42;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+ba94242a-f6b2-45b6-8ef9-6d8af23302c4;2026-07-10;489.70;BRENDA;42;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+ea24275b-f08f-4b6b-981d-a4e343c22bbe;2026-07-13;139.90;BRENDA;42;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+3402c670-cba5-4e3e-9f99-42c4d92ad4dd;2026-07-13;120.53;BRENDA;42;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+a16c77f1-d26c-438d-b987-436fd91feb86;2026-07-13;179.80;BRENDA;42;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+5323de3f-8792-4555-ac4b-e070770ac220;2026-07-17;94.90;BRENDA;42;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+7f46ebd9-4af0-404a-92c5-2724b07f653a;2026-07-17;259.80;BRENDA;42;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+242dda34-f7f8-4a17-bd47-0877183b3350;2026-07-17;179.90;BRENDA;42;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+7856df0a-5bce-45d2-b6c8-0051320c1203;2026-07-17;179.90;BRENDA;42;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+5e12c290-3a57-4a5d-8187-4cd299bbfd34;2026-07-17;263.41;BRENDA;42;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+b31f0634-0532-49a2-90aa-d7b25d634f3a;2026-07-18;999.50;BRENDA;42;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+20aaf7fd-710f-48b6-9e9c-bbda88a8cf17;2026-07-18;79.90;BRENDA;42;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+67472f4e-333f-4643-917c-93c4a6bf9cd6;2026-07-20;49.95;BRENDA;42;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+09646385-415d-43c0-aa6e-f4c2b04d7c40;2026-07-21;163.80;BRENDA;42;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+06e1d5bc-1132-4315-8320-60c0454686bb;2026-07-21;259.85;BRENDA;42;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+5a91f7cc-2631-42bd-9291-d6d0139300ca;2026-07-21;79.90;BRENDA;42;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+1d869750-5099-437a-a641-66ff6bc0958e;2026-07-21;159.80;BRENDA;42;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+ce32bbed-ff43-45aa-ba09-d31dee50630d;2026-07-21;69.95;BRENDA;42;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+3ca11d76-7716-42cf-8199-3901638416f7;2026-07-22;64.95;BRENDA;42;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+8e817fdf-ba37-48e6-bf51-f478d4bd01c6;2026-07-22;39.95;BRENDA;42;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+a88086a9-418a-4055-91be-6cce80de5c79;2026-07-22;259.80;BRENDA;42;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+5fc6cadd-7af0-4eb0-b0d3-036a20e8e46c;2026-07-22;189.90;BRENDA;42;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+30ad3013-b9d7-4dd2-8b3b-2d85843d5205;2026-07-28;259.90;BRENDA;Fab1328adbc27453399;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+be1225b7-6b9a-4f7e-a253-5f36748012df;2026-07-28;289.90;BRENDA;Fab1328adbc27453399;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+e389c296-88c6-4ea3-8f6b-788094b960f5;2026-07-29;170.81;BRENDA;Fab1328adbc27453399;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+2a67f69d-8f5b-48ea-ad29-a5fa41287e5e;2026-07-30;559.70;BRENDA;Fab1328adbc27453399;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+63ebd5c9-b5ae-47a5-824f-809d7729db92;2026-07-30;259.90;BRENDA;Fab1328adbc27453399;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+a263e620-af34-4c48-b715-3eef22c1f9a7;2026-07-31;69.95;BRENDA;Fab1328adbc27453399;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+442dfc34-077e-4b2e-908e-7c7f842cdafa;2026-07-31;194.85;BRENDA;Fab1328adbc27453399;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+7e3170df-e77a-41cb-8801-3008e90dcdf8;2026-07-31;339.80;BRENDA;Fab1328adbc27453399;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+01d70fe6-2a55-4bb6-b27d-f1a675be1942;2026-07-31;119.95;BRENDA;Fab1328adbc27453399;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+fb90d36b-d6b2-4a3b-9792-55336775e9c6;2026-07-31;349.80;BRENDA;Fab1328adbc27453399;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+7bb521d8-c5d9-44b7-a53d-60f68ca64061;2026-07-23;84.95;BRENDA;eb5166dd-c6d4-4086-8ec5-f878f705616a;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+826b4635-b2ea-41ed-bba4-0e2de3ff87bd;2026-07-23;99.90;BRENDA;eb5166dd-c6d4-4086-8ec5-f878f705616a;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+2375bd7f-aa48-4afe-9a03-2eaab21d78bc;2026-07-23;70.00;BRENDA;eb5166dd-c6d4-4086-8ec5-f878f705616a;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+0e6a16da-7162-4340-a71b-a0a9919d9aa5;2026-07-23;559.80;BRENDA;eb5166dd-c6d4-4086-8ec5-f878f705616a;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+3d52a4f4-e6d9-4092-a81c-210e0711df4a;2026-07-23;529.70;BRENDA;eb5166dd-c6d4-4086-8ec5-f878f705616a;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+e3720201-f131-433f-9369-932a9f869385;2026-07-24;259.90;BRENDA;eb5166dd-c6d4-4086-8ec5-f878f705616a;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+4514aa6d-9179-48df-a682-25bff4eadcbf;2026-07-24;429.65;BRENDA;eb5166dd-c6d4-4086-8ec5-f878f705616a;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+9e42300b-de6c-4443-b868-c38791f85ccc;2026-07-24;1908.90;BRENDA;eb5166dd-c6d4-4086-8ec5-f878f705616a;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+f0884e34-01ba-4ac2-9d8a-55d8666fd88d;2026-07-25;469.60;BRENDA;eb5166dd-c6d4-4086-8ec5-f878f705616a;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+cb8c7191-6eec-4bf5-9f00-2acecd86833c;2026-07-25;66.40;BRENDA;eb5166dd-c6d4-4086-8ec5-f878f705616a;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+b3beb2a1-c04d-4b4d-99a6-73f63fa0990f;2026-07-25;229.90;BRENDA;eb5166dd-c6d4-4086-8ec5-f878f705616a;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+d4185d11-4ea5-4349-a7f3-8e3c3a01f727;2026-07-27;269.90;BRENDA;eb5166dd-c6d4-4086-8ec5-f878f705616a;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+3e6f293a-f104-40ef-8374-92c6d2c1b201;2026-07-27;119.90;BRENDA;eb5166dd-c6d4-4086-8ec5-f878f705616a;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+654ff1f4-be22-4de0-b675-558a581596c2;2026-07-27;499.70;BRENDA;eb5166dd-c6d4-4086-8ec5-f878f705616a;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+d07eaac9-e311-4343-8bdd-85dea7078692;2026-07-27;324.85;BRENDA;eb5166dd-c6d4-4086-8ec5-f878f705616a;ab1328ad-bc27-4533-99ce-22a0471eee25;Brenda Pires De Carvalho Oliveira
+e72df549-2af9-45a1-87ce-ee5b93351aae;2026-07-13;84.90;POLIANNE;74;b23f99c3-03cf-4bac-a8f1-a2fbc2b926b5;Polianne Vitoria Soares Bastos
+5ed01ef6-5248-4784-a215-356839e6f07c;2026-07-14;49.95;POLIANNE;74;b23f99c3-03cf-4bac-a8f1-a2fbc2b926b5;Polianne Vitoria Soares Bastos
+1b54283f-9c00-47d6-a315-81edcb098815;2026-07-14;239.90;POLIANNE;74;b23f99c3-03cf-4bac-a8f1-a2fbc2b926b5;Polianne Vitoria Soares Bastos
+59356b3e-800a-46eb-869d-4c6e5d1de54e;2026-07-16;2378.60;POLIANNE;74;b23f99c3-03cf-4bac-a8f1-a2fbc2b926b5;Polianne Vitoria Soares Bastos
+8e7a36b6-f406-4174-9666-f67443a61696;2026-07-16;309.80;POLIANNE;74;b23f99c3-03cf-4bac-a8f1-a2fbc2b926b5;Polianne Vitoria Soares Bastos
+bb869bbb-5d6e-4879-8970-45ea288b0c3e;2026-07-16;64.95;POLIANNE;74;b23f99c3-03cf-4bac-a8f1-a2fbc2b926b5;Polianne Vitoria Soares Bastos
+7b3d42c1-dc5f-48aa-aea9-d021fa39a1cb;2026-07-17;349.80;POLIANNE;74;b23f99c3-03cf-4bac-a8f1-a2fbc2b926b5;Polianne Vitoria Soares Bastos
+a91b63bd-e1b9-4fb4-983b-a806fd1a4d4b;2026-07-17;189.91;POLIANNE;74;b23f99c3-03cf-4bac-a8f1-a2fbc2b926b5;Polianne Vitoria Soares Bastos
+b3431c95-73ea-49b7-9344-756f645249e8;2026-07-18;360.81;POLIANNE;74;b23f99c3-03cf-4bac-a8f1-a2fbc2b926b5;Polianne Vitoria Soares Bastos
+53e1bb9f-cc7d-48c5-849d-50985ba6a687;2026-07-18;219.80;POLIANNE;74;b23f99c3-03cf-4bac-a8f1-a2fbc2b926b5;Polianne Vitoria Soares Bastos
+3596ea9c-ebf8-46a6-b85f-2e58580f78b6;2026-07-18;404.75;POLIANNE;74;b23f99c3-03cf-4bac-a8f1-a2fbc2b926b5;Polianne Vitoria Soares Bastos
+19ced8d6-8232-44dc-8354-d736ce765c7b;2026-07-18;429.75;POLIANNE;74;b23f99c3-03cf-4bac-a8f1-a2fbc2b926b5;Polianne Vitoria Soares Bastos
+90f5e130-f249-4e0f-be3e-c9207ed20cc6;2026-07-20;599.60;POLIANNE;74;b23f99c3-03cf-4bac-a8f1-a2fbc2b926b5;Polianne Vitoria Soares Bastos
+46ad24ed-14cf-43b9-af0b-9cf9074493f3;2026-07-21;79.95;POLIANNE;74;b23f99c3-03cf-4bac-a8f1-a2fbc2b926b5;Polianne Vitoria Soares Bastos
+f8465a35-e1e4-4a1b-b94b-cc0a99bf0417;2026-07-22;489.80;POLIANNE;74;b23f99c3-03cf-4bac-a8f1-a2fbc2b926b5;Polianne Vitoria Soares Bastos
+6671f6a3-07d9-48bf-a69b-4dcd1d911861;2026-07-08;379.60;LIOMARA KELLY;44;eb5166dd-c6d4-4086-8ec5-f878f705616a;Liomara Kelly Braga Laranjeira
+da00214b-84e3-497d-bcbb-e8cc6386c13d;2026-07-11;669.65;LIOMARA KELLY;44;eb5166dd-c6d4-4086-8ec5-f878f705616a;Liomara Kelly Braga Laranjeira
