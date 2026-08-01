@@ -3533,9 +3533,30 @@ model WincredGrupo {
   codigo Int    @id
   grupo  String? @db.VarChar(30)
 
+  /// Nasceu no FLOW (31/07) e ainda pode não existir no Giga. O sync desta
+  /// tabela é TRUNCATE + reinsere tudo do Giga; sem esta marca, uma categoria
+  /// criada aqui seria APAGADA no ciclo seguinte, antes de a réplica sair.
+  flowIsSource Boolean @default(false) @map("flow_is_source")
+
   syncedAt DateTime @default(now()) @map("synced_at")
 
+  @@index([flowIsSource])
   @@map("wincred_grupos")
+}
+
+/// Sequência do Flow pros códigos de grupo/subgrupo de produto.
+///
+/// Faixa reservada a partir de 9000: o Giga usa até 433 hoje e as colunas são
+/// int(11) nos dois lados (medido em scripts/giga-etl/medir-grupos.js), então
+/// as duas numerações nunca se encontram. Código a partir de 9000 também
+/// identifica de olho que a categoria nasceu no Flow.
+model CategoriaSequence {
+  /// 'grupo' | 'subgrupo'
+  tipo      String   @id @db.VarChar(12)
+  lastSeq   Int      @default(8999) @map("last_seq")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("categoria_sequence")
 }
 
 /// Espelho de wincred.subgrupos. Sub-categorias.
@@ -3543,6 +3564,9 @@ model WincredSubgrupo {
   codigo   Int     @id
   subgrupo String? @db.VarChar(30)
   grupo    Int?
+
+  /// Mesma razão do WincredGrupo: protege do TRUNCATE do sync.
+  flowIsSource Boolean @default(false) @map("flow_is_source")
 
   syncedAt DateTime @default(now()) @map("synced_at")
 

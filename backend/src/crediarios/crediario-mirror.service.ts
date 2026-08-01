@@ -256,11 +256,45 @@ export class CrediarioMirrorService {
     } catch (e: any) {
       this.logger.warn(`[write-through] falha ao remover ${regs.join(',')}: ${e?.message || e}`);
     }
+
+    // SEGUNDA TABELA (31/07). São DUAS cópias de crediário no Postgres com
+    // leitores diferentes, e só uma estava recebendo a baixa:
+    //   wincred_movimento_aberto → tela de RECEBIMENTOS (era atualizada)
+    //   crediario_parcelas       → FICHA DA CLIENTE (não era)
+    // A ficha lê `crediario_parcelas` sem flag nenhuma
+    // (clientes-giga.service.ts:388) e o full-replace dessa tabela só roda
+    // 04:10. Sem isto, a cliente pagava e a ficha dela seguia dizendo que
+    // devia até o dia seguinte — mesma família do incidente das 11.001
+    // parcelas.
+    try {
+      await (this.prisma as any).crediarioParcela.updateMany({
+        where: { registro: { in: regs } },
+        data: { pago: true, dataPagamento: new Date() },
+      });
+    } catch (e: any) {
+      this.logger.warn(`[write-through] falha ao baixar no nativo ${regs.join(',')}: ${e?.message || e}`);
+    }
   }
 
   /** Estorno (markUnpaid) — o próximo ciclo horário re-insere a parcela;
-   *  best-effort imediato pra não esperar 1h. */
-  async reinserirAposEstorno(): Promise<void> {
+   *  best-effort imediato pra não esperar 1h.
+   *
+   *  `registros` desfaz a baixa também em `crediario_parcelas` (a tabela da
+   *  ficha da cliente). Sem isso o estorno só aparecia na tela de recebimentos
+   *  e a ficha seguia dizendo "pago" — o espelho de abertas e o nativo têm
+   *  leitores diferentes e precisam ser desfeitos juntos. */
+  async reinserirAposEstorno(registros?: Array<string | number>): Promise<void> {
+    const regs = (registros || []).map((r) => String(r).trim()).filter(Boolean);
+    if (regs.length) {
+      try {
+        await (this.prisma as any).crediarioParcela.updateMany({
+          where: { registro: { in: regs } },
+          data: { pago: false, dataPagamento: null, valorPago: null },
+        });
+      } catch (e: any) {
+        this.logger.warn(`[write-through] estorno no nativo falhou (${regs.join(',')}): ${e?.message || e}`);
+      }
+    }
     try {
       await this.syncAbertas();
     } catch (e: any) {

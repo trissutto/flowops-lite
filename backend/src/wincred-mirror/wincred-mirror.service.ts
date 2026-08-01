@@ -895,7 +895,7 @@ export class WincredMirrorService {
     }, async (data) => {
       if (data.length) await (this.prisma as any).wincredGrupo.createMany({ data, skipDuplicates: true });
       return data.length;
-    });
+    }, { preservarFlow: true });
   }
 
   async syncSubgrupos(): Promise<SyncResult> {
@@ -909,7 +909,7 @@ export class WincredMirrorService {
     }, async (data) => {
       if (data.length) await (this.prisma as any).wincredSubgrupo.createMany({ data, skipDuplicates: true });
       return data.length;
-    });
+    }, { preservarFlow: true });
   }
 
   async syncFornecedores(): Promise<SyncResult> {
@@ -1190,12 +1190,22 @@ export class WincredMirrorService {
     pgTable: string,
     fetcher: (pool: any) => Promise<T[]>,
     inserter: (data: T[]) => Promise<number>,
+    // `preservarFlow` (31/07): a tabela tem linhas que NASCERAM no Flow e podem
+    // ainda não existir no Giga — categoria criada no cadastro de produto com a
+    // réplica na fila. TRUNCATE apagaria essas linhas antes de a réplica sair, e
+    // o produto ficaria apontando pra uma categoria que sumiu. Com a opção
+    // ligada, o refresh derruba só o que veio do Giga.
+    opts?: { preservarFlow?: boolean },
   ): Promise<SyncResult> {
     const t0 = Date.now();
     const pool: any = (this.erp as any).pool;
     if (!pool) return { table: tableName, success: false, processed: 0, durationMs: 0, error: 'MySQL pool nao inicializado' };
     try {
-      await this.prisma.$executeRawUnsafe(`TRUNCATE TABLE "${pgTable}"`);
+      if (opts?.preservarFlow) {
+        await this.prisma.$executeRawUnsafe(`DELETE FROM "${pgTable}" WHERE flow_is_source = false`);
+      } else {
+        await this.prisma.$executeRawUnsafe(`TRUNCATE TABLE "${pgTable}"`);
+      }
       const data = await fetcher(pool);
       const processed = await inserter(data);
       const durationMs = Date.now() - t0;
