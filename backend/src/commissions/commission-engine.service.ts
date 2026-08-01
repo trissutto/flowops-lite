@@ -99,19 +99,28 @@ export class CommissionEngineService {
 
   // ── Agregações canônicas ────────────────────────────────────────────
 
-  /** Indicadores por VENDEDORA×LOJA (seller_id cru — resolver no consumidor). */
+  /**
+   * Indicadores por VENDEDORA×LOJA (seller_id cru — resolver no consumidor).
+   *
+   * `sellerName` vai junto de propósito (01/08): o `seller_id` gravado na venda
+   * as vezes e o CODIGO do Wincred, que e numerado POR LOJA — e o codigo 25 de
+   * Campinas nao e a mesma pessoa que o 25 de Santos. O nome gravado NA VENDA e
+   * o desempate confiavel, porque foi escrito no momento em que a venda saiu.
+   * Ver resolveSeller em commissions.service.ts.
+   */
   async porVendedora(start: Date, end: Date, storeCode?: string | null): Promise<any[]> {
     const extra = storeCode ? `AND store_code = $3` : '';
     const params: any[] = storeCode ? [start, end, storeCode] : [start, end];
     return this.prisma.$queryRawUnsafe(
       `SELECT seller_id AS "sellerId", store_code AS "storeCode",
+              seller_name AS "sellerName",
          ${CommissionEngineService.COLUNAS_SQL}
        FROM pdv_sales s
        ${CommissionEngineService.JOINS_SQL}
        ${CommissionEngineService.VENDA_VALIDA_SQL}
          AND seller_id IS NOT NULL
          ${extra}
-       GROUP BY seller_id, store_code`,
+       GROUP BY seller_id, store_code, seller_name`,
       ...params,
     );
   }
@@ -138,6 +147,7 @@ export class CommissionEngineService {
     const params: any[] = storeCode ? [start, end, storeCode] : [start, end];
     return this.prisma.$queryRawUnsafe(
       `SELECT s.seller_id AS "sellerId", s.store_code AS "storeCode",
+              s.seller_name AS "sellerName",
               SUM(r.valor_total)::float AS total
          FROM pdv_returns r
          JOIN pdv_sales s ON s.id = r.original_sale_id
@@ -146,7 +156,7 @@ export class CommissionEngineService {
           AND s.seller_id IS NOT NULL
           ${CommissionEngineService.DEVOLUCAO_ABATE_R_SQL}
           ${extra}
-        GROUP BY s.seller_id, s.store_code`,
+        GROUP BY s.seller_id, s.store_code, s.seller_name`,
       ...params,
     );
   }
@@ -173,6 +183,7 @@ export class CommissionEngineService {
     const params: any[] = storeCode ? [start, end, storeCode] : [start, end];
     return this.prisma.$queryRawUnsafe(
       `SELECT id, seller_id AS "sellerId", store_code AS "storeCode",
+              seller_name AS "sellerName",
               finalized_at AS "finalizedAt", total::float AS total,
               COALESCE(vt.vale, 0)::float AS vale,
               COALESCE(fr.frete, 0)::float AS frete,
@@ -195,6 +206,7 @@ export class CommissionEngineService {
     const params: any[] = storeCode ? [start, end, storeCode] : [start, end];
     return this.prisma.$queryRawUnsafe(
       `SELECT s.seller_id AS "sellerId", s.store_code AS "storeCode",
+              s.seller_name AS "sellerName",
               r.created_at AS "createdAt", r.valor_total::float AS total
          FROM pdv_returns r
          JOIN pdv_sales s ON s.id = r.original_sale_id

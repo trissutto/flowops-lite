@@ -43,6 +43,64 @@ export class CommissionsService {
     private readonly engine: CommissionEngineService,
   ) {}
 
+  // ── Resolução de vendedora POR LOJA (01/08) ─────────────────────────
+  //
+  // POR QUE EXISTE: `pdv_sales.seller_id` nem sempre é o Seller.id — em muitas
+  // vendas é o CÓDIGO da funcionária no Wincred, e esse código é numerado POR
+  // LOJA (cada loja começa do 1). Procurar esse número num mapa global faz o
+  // código 25 de Campinas encontrar a dona do 25 de Santos. Medido em 120 dias:
+  // R$ 181.031,91 de base de comissão caindo na colega de outra loja e
+  // R$ 172.805,93 sem dona. Com a resolução por loja: R$ 0,00 errado e o
+  // não-atribuído cai pra R$ 65.059,73 (o que sobra é venda sem vendedora e
+  // gente que não tem ficha na loja — precisa de cadastro, não de código).
+
+  /** Normaliza nome pra comparar: sem acento, sem caixa, sem espaço sobrando. */
+  private static readonly ACENTOS = new RegExp('[\\u0300-\\u036f]', 'g');
+
+  private static chaveNome(s: any): string {
+    return String(s ?? '').trim().toUpperCase()
+      .normalize('NFD').replace(CommissionsService.ACENTOS, '');
+  }
+
+  /** Índices (loja|código) e (loja|nome) — ficha ATIVA tem precedência. */
+  private montarIndicesPorLoja(sellers: any[]): {
+    porCodigoLoja: Map<string, any>;
+    porNomeLoja: Map<string, any>;
+  } {
+    const porCodigoLoja = new Map<string, any>();
+    const porNomeLoja = new Map<string, any>();
+    // Ativa primeiro: quando duas fichas disputam a mesma chave, a que está
+    // trabalhando vence (as inativas são homônimas antigas da mesma pessoa).
+    const ordenadas = [...sellers].sort(
+      (a, b) => Number(!!b.active) - Number(!!a.active),
+    );
+    for (const s of ordenadas) {
+      const loja = String(s.storeCodeOrigin ?? '').trim();
+      if (!loja) continue;
+      if (s.wincredCodigo != null && String(s.wincredCodigo).trim()) {
+        const k = `${loja}|${String(s.wincredCodigo).trim()}`;
+        if (!porCodigoLoja.has(k)) porCodigoLoja.set(k, s);
+      }
+      for (const nome of [s.apelido, s.name]) {
+        const chave = CommissionsService.chaveNome(nome);
+        if (!chave) continue;
+        const k = `${loja}|${chave}`;
+        if (!porNomeLoja.has(k)) porNomeLoja.set(k, s);
+      }
+    }
+    return { porCodigoLoja, porNomeLoja };
+  }
+
+  private static buscarPorNomeLoja(
+    porNomeLoja: Map<string, any>,
+    storeCode: string,
+    sellerName?: string,
+  ): any | null {
+    const chave = CommissionsService.chaveNome(sellerName);
+    if (!chave) return null;
+    return porNomeLoja.get(`${storeCode}|${chave}`) || null;
+  }
+
   // ── Rules CRUD ─────────────────────────────────────────────────────
 
   async listRules(filters?: {
@@ -316,21 +374,32 @@ export class CommissionsService {
     const allSellersAny: any[] = await (this.prisma as any).seller.findMany({});
     const allSellers: any[] = allSellersAny.filter((s) => s.active);
     const sellersById = new Map(allSellersAny.map((s) => [s.id, s]));
-    const sellersByCodigo = new Map(
-      allSellersAny
-        .filter((s) => s.wincredCodigo)
-        .map((s) => [String(s.wincredCodigo).trim(), s]),
-    );
+    const { porCodigoLoja, porNomeLoja } = this.montarIndicesPorLoja(allSellersAny);
 
     // Resolve o seller_id gravado na venda pra um Seller REAL.
     // Vendas antigas podem ter gravado o CÓDIGO do Giga em seller_id (fluxo
     // /pdv/sales/:id/vendedora), não o Seller.id. Sem resolver, o upsert da
     // entry estoura o FK (CommissionEntry.sellerId → Seller.id) e derruba o
-    // cálculo inteiro (era o 500). Resolve por id; senão por wincredCodigo.
-    const resolveSeller = (raw: any): any | null => {
+    // cálculo inteiro (era o 500).
+    //
+    // ⚠️ A RESOLUÇÃO É POR LOJA (01/08). Antes o código do Wincred era
+    // procurado num mapa GLOBAL — e esse código é numerado POR LOJA, cada uma
+    // começando do 1. O código 25 de Campinas encontrava a dona do 25 de
+    // Santos: R$ 181.031,91 de base de comissão em 120 dias caindo na colega
+    // de outra loja, e mais R$ 172.805,93 sem dona nenhuma.
+    const resolveSeller = (raw: any, storeCode?: string, sellerName?: string): any | null => {
       const key = String(raw ?? '').trim();
-      if (!key) return null;
-      return sellersById.get(key) || sellersByCodigo.get(key) || null;
+      if (key && sellersById.has(key)) return sellersById.get(key);
+      if (!storeCode) return null;
+      // Código SÓ vale dentro da loja da venda.
+      if (key) {
+        const porCod = porCodigoLoja.get(`${storeCode}|${key}`);
+        if (porCod) return porCod;
+      }
+      // Último recurso: o NOME gravado na venda, dentro da loja da venda. É
+      // confiável porque foi escrito no instante em que a venda saiu — e é o
+      // que salva a vendedora cujo código nunca foi vinculado à ficha dela.
+      return CommissionsService.buscarPorNomeLoja(porNomeLoja, storeCode, sellerName) || null;
     };
 
     // Monta sellerSalesMap JÁ keyed pelo Seller.id REAL (agrega múltiplos raw
@@ -339,10 +408,10 @@ export class CommissionsService {
     let skippedVendido = 0;
     const skippedSellerIds = new Set<string>();
     for (const r of salesBySeller) {
-      const seller = resolveSeller(r.sellerId);
+      const seller = resolveSeller(r.sellerId, r.storeCode, r.sellerName);
       if (!seller) {
         skippedVendido += Number(r.total) || 0;
-        skippedSellerIds.add(String(r.sellerId));
+        skippedSellerIds.add(`${r.sellerId} (${r.sellerName || 'sem nome'} · loja ${r.storeCode})`);
         continue;
       }
       const k = `${seller.id}|${r.storeCode}`;
@@ -352,7 +421,7 @@ export class CommissionsService {
       sellerSalesMap.set(k, cur);
     }
     for (const r of trocasBySeller) {
-      const seller = resolveSeller(r.sellerId);
+      const seller = resolveSeller(r.sellerId, r.storeCode, r.sellerName);
       if (!seller) continue;
       const k = `${seller.id}|${r.storeCode}`;
       const cur = sellerSalesMap.get(k) || { vendido: 0, trocas: 0, qtd: 0 };
@@ -621,13 +690,18 @@ export class CommissionsService {
 
     const allSellersAny: any[] = await (this.prisma as any).seller.findMany({});
     const sellersById = new Map(allSellersAny.map((s) => [s.id, s]));
-    const sellersByCodigo = new Map(
-      allSellersAny.filter((s) => s.wincredCodigo).map((s) => [String(s.wincredCodigo).trim(), s]),
-    );
-    const resolveSeller = (raw: any): any | null => {
+    // MESMA regra por loja do cálculo (ver montarIndicesPorLoja): o código do
+    // Wincred é por loja, e resolver global joga a venda na colega errada.
+    const { porCodigoLoja, porNomeLoja } = this.montarIndicesPorLoja(allSellersAny);
+    const resolveSeller = (raw: any, storeCode?: string, sellerName?: string): any | null => {
       const key = String(raw ?? '').trim();
-      if (!key) return null;
-      return sellersById.get(key) || sellersByCodigo.get(key) || null;
+      if (key && sellersById.has(key)) return sellersById.get(key);
+      if (!storeCode) return null;
+      if (key) {
+        const porCod = porCodigoLoja.get(`${storeCode}|${key}`);
+        if (porCod) return porCod;
+      }
+      return CommissionsService.buscarPorNomeLoja(porNomeLoja, storeCode, sellerName) || null;
     };
 
     const storeTotals = new Map<string, { vendido: number; vale: number; frete: number; trocas: number; qtd: number }>();
@@ -650,10 +724,10 @@ export class CommissionsService {
     let skippedVendido = 0;
     const skippedSellerIds = new Set<string>();
     for (const r of salesBySeller) {
-      const seller = resolveSeller(r.sellerId);
+      const seller = resolveSeller(r.sellerId, r.storeCode, r.sellerName);
       if (!seller) {
         skippedVendido += (Number(r.bruto) || 0) - (Number(r.vale) || 0) - (Number(r.frete) || 0);
-        skippedSellerIds.add(String(r.sellerId));
+        skippedSellerIds.add(`${r.sellerId} (${r.sellerName || 'sem nome'} · loja ${r.storeCode})`);
         continue;
       }
       const k = `${seller.id}|${r.storeCode}`;
@@ -665,7 +739,7 @@ export class CommissionsService {
       sellerSalesMap.set(k, cur);
     }
     for (const r of trocasBySeller) {
-      const seller = resolveSeller(r.sellerId);
+      const seller = resolveSeller(r.sellerId, r.storeCode, r.sellerName);
       if (!seller) continue;
       const k = `${seller.id}|${r.storeCode}`;
       const cur = sellerSalesMap.get(k) || { vendido: 0, vale: 0, frete: 0, trocas: 0, qtd: 0 };
@@ -676,14 +750,14 @@ export class CommissionsService {
     // Detalhe agrupado por vendedora REAL
     const vendasPorSeller = new Map<string, any[]>();
     for (const v of vendasDetalhe) {
-      const seller = resolveSeller(v.sellerId);
+      const seller = resolveSeller(v.sellerId, v.storeCode, v.sellerName);
       if (!seller) continue;
       if (!vendasPorSeller.has(seller.id)) vendasPorSeller.set(seller.id, []);
       vendasPorSeller.get(seller.id)!.push(v);
     }
     const trocasPorSeller = new Map<string, any[]>();
     for (const t of trocasDetalhe) {
-      const seller = resolveSeller(t.sellerId);
+      const seller = resolveSeller(t.sellerId, t.storeCode, t.sellerName);
       if (!seller) continue;
       if (!trocasPorSeller.has(seller.id)) trocasPorSeller.set(seller.id, []);
       trocasPorSeller.get(seller.id)!.push(t);
@@ -892,20 +966,27 @@ export class CommissionsService {
     // sem marcação — mesmos critérios da Folha)
     const { startDate, endDate } = this.brtRange(de, ate);
     const flowRows: any[] = await this.prisma.$queryRawUnsafe(
-      `SELECT seller_id AS "sellerId", COUNT(*)::int AS qtd, SUM(total)::float AS total
+      `SELECT seller_id AS "sellerId", seller_name AS "sellerName",
+              COUNT(*)::int AS qtd, SUM(total)::float AS total
          FROM pdv_sales
         WHERE finalized_at >= $1 AND finalized_at <= $2
           AND status = 'finalized' AND is_training = false AND store_code = $3
           ${CommissionEngineService.SEM_MARCACAO_SQL}
-        GROUP BY seller_id`,
+        GROUP BY seller_id, seller_name`,
       startDate, endDate, loja,
     );
 
     const allSellers: any[] = await (this.prisma as any).seller.findMany({});
     const sellersById = new Map(allSellers.map((s) => [s.id, s]));
+    // Código do Wincred é POR LOJA — aqui a comparação já é de UMA loja, então
+    // restringe o mapa a ela. Global fazia o código 25 desta loja encontrar a
+    // dona do 25 de outra (ver montarIndicesPorLoja).
     const sellersByCodigo = new Map(
-      allSellers.filter((s) => s.wincredCodigo).map((s) => [String(Number(s.wincredCodigo)), s]),
+      allSellers
+        .filter((s) => s.wincredCodigo && String(s.storeCodeOrigin ?? '').trim() === String(loja ?? '').trim())
+        .map((s) => [String(Number(s.wincredCodigo)), s]),
     );
+    const { porNomeLoja: nomesDaLoja } = this.montarIndicesPorLoja(allSellers);
 
     // Consolida por "pessoa": chave = codigo Wincred quando existe, senão nome
     type Comp = { nome: string; codigoWincred: string | null; wincredQtd: number; wincredTotal: number; flowQtd: number; flowTotal: number };
@@ -923,7 +1004,12 @@ export class CommissionsService {
       porChave.set(k, c);
     }
     for (const r of flowRows) {
-      const seller = r.sellerId ? (sellersById.get(String(r.sellerId).trim()) || sellersByCodigo.get(String(Number(r.sellerId)) || '')) : null;
+      const seller = r.sellerId
+        ? (sellersById.get(String(r.sellerId).trim())
+           || sellersByCodigo.get(String(Number(r.sellerId)) || '')
+           // Código não vinculado à ficha: cai no nome gravado na venda.
+           || CommissionsService.buscarPorNomeLoja(nomesDaLoja, String(loja ?? ''), r.sellerName))
+        : null;
       const codigo = seller?.wincredCodigo ? String(Number(seller.wincredCodigo)) : null;
       const nome = seller?.name || (r.sellerId ? `seller ${String(r.sellerId).slice(0, 8)}…` : '(sem vendedora no Flow)');
       const k = chaveDe(codigo, nome);
