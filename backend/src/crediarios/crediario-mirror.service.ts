@@ -3,6 +3,7 @@ import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
 import { CrediariosService } from './crediarios.service';
+import { sqlParcelaAberta } from '../common/crediario-pago';
 
 /**
  * CrediarioMirrorService — espelha no Postgres o que a COBRANÇA precisa do
@@ -113,13 +114,7 @@ export class CrediarioMirrorService {
 
     // MESMO critério de "em aberto" do listAllOpenInstallments
     const where: string[] = [];
-    if (map.pago) {
-      where.push(
-        `(\`${map.pago}\` IS NULL OR \`${map.pago}\` = '' OR UPPER(\`${map.pago}\`) IN ('N','NAO','NÃO'))`,
-      );
-    } else if (map.dataPagamento) {
-      where.push(`(\`${map.dataPagamento}\` IS NULL OR \`${map.dataPagamento}\` = '0000-00-00')`);
-    }
+    where.push(sqlParcelaAberta(map.pago, map.dataPagamento));
     where.push(`\`${map.registro}\` IS NOT NULL`);
     where.push(`\`${map.codCliente}\` IS NOT NULL`);
     where.push(`\`${map.codCliente}\` <> ''`);

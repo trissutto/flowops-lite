@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
+import { sqlParcelaAberta } from '../common/crediario-pago';
 
 /**
  * CREDIÁRIO NATIVO — FASE 1: importação COMPLETA do `movimento` do Giga
@@ -102,26 +103,33 @@ export class CrediarioNativoService {
   }
 
   /**
-   * Regra de PAGO — a MESMA de `crediario-mirror.service.ts:118`, que é o
-   * critério oficial de "em aberto" do sistema:
+   * Regra de PAGO. Quem manda é a DATA DE PAGAMENTO; a flag só decide quando
+   * ela é um "N" explícito.
    *
-   *   aberto  ⇔  PAGO IS NULL  OR  PAGO = ''  OR  UPPER(PAGO) IN ('N','NAO','NÃO')
+   *   paga  ⇔  PAGO = 'S'
+   *         ⇔  OU tem data de pagamento e PAGO não é 'N' explícito
    *
-   * INCIDENTE 31/07 — esta função DIZIA no comentário que seguia o espelho, e
-   * não seguia. Ela caía na data de pagamento sempre que o VALOR de PAGO era
-   * nulo, sem distinguir isso de "a coluna PAGO não existe nesta instalação".
+   * ── POR QUE ASSIM, DEPOIS DE DUAS VIRADAS ──
    *
-   * No Giga a coluna existe e tem 11.001 linhas nulas — todas com PAGAMENTO
-   * preenchido por um bug antigo da baixa, registrado em `erp.service.ts:2420`:
-   * "PAGO é o campo que o WinCred consulta; se ficar nulo, a baixa NÃO aparece
-   * na UI mesmo com data preenchida". Ou seja: nulo é dívida ABERTA.
+   * 31/07: mudei pra "nulo é ABERTO", citando o aviso de `erp.service.ts:2429`
+   * — "se PAGO ficar nulo, a baixa não aparece na UI do WinCred mesmo com data
+   * preenchida". Parecia prova de que nulo significa dívida viva.
    *
-   * Efeito do bug: R$ 2,9 milhões em 11.001 parcelas abertas entravam no Flow
-   * como PAGAS — e a ficha da cliente lê desta tabela
-   * (`clientes-giga.service.ts:388`), sem flag nenhuma no caminho.
+   * 01/08: o dono conferiu na tela. Parcela com data e PAGO nulo aparecia como
+   * PAGA na ficha da cliente. Os dois fatos convivem porque são telas
+   * diferentes: o aviso do erp.service fala do RELATÓRIO DE RECEBIDOS, que
+   * filtra por PAGO='S'; a FICHA lê pela data. Dinheiro que entrou por esse
+   * caminho sumia do relatório e continuava certo no carnê.
    *
-   * A data de pagamento só vale como critério quando a coluna PAGO NÃO EXISTE,
-   * espelhando o `else if (map.dataPagamento)` do serviço de espelho.
+   * O que estava em jogo: 11.001 parcelas, R$ 2.910.515,44. Com a regra de
+   * 31/07 elas entravam como dívida de cliente que já tinha pago.
+   *
+   * Os 17 casos de PAGO='N' COM data (R$ 1.595,90) ficam ABERTOS: um "N"
+   * escrito é uma afirmação, e afirmação vence data solta. Se algum dia
+   * aparecer cliente reclamando de parcela paga nessa faixa, é aqui que se
+   * olha.
+   *
+   * Sem a coluna PAGO na instalação, sobra a data — que é o mesmo resultado.
    */
   /**
    * Quantas parcelas o Giga considera EM ABERTO agora, pelo critério oficial
@@ -135,14 +143,10 @@ export class CrediarioNativoService {
       const colPago = nomes.find((n) => /^(pago|pg|baixado|quitado)$/i.test(n));
       const colData = nomes.find((n) => /^(pagamento|data_?pagamento|datapagto|data_?baixa|datapag)$/i.test(n));
 
-      let cond: string;
-      if (colPago) {
-        cond = `(\`${colPago}\` IS NULL OR \`${colPago}\` = '' OR UPPER(\`${colPago}\`) IN ('N','NAO','NÃO'))`;
-      } else if (colData) {
-        cond = `(\`${colData}\` IS NULL OR \`${colData}\` = '0000-00-00')`;
-      } else {
-        return null;
-      }
+      // MESMO critério do `pagoOf` — vem do helper compartilhado, senão a
+      // conferência acusa erro que não existe (ou deixa passar um que existe).
+      if (!colPago && !colData) return null;
+      const cond = sqlParcelaAberta(colPago, colData);
 
       const [r] = await pool.query({
         sql: `SELECT COUNT(*) AS n FROM \`movimento\` WHERE ${cond}`,
@@ -162,11 +166,13 @@ export class CrediarioNativoService {
     );
 
     if (this.temColuna(row, ...RE_PAGO)) {
-      // `str` já devolve null pra string vazia, então '' cai no mesmo ramo que
-      // NULL — igual ao `PAGO = ''` do critério do espelho.
+      // `str` devolve null pra string vazia, então '' e NULL caem juntos — e
+      // os dois deixam a DATA decidir, que é como a ficha da cliente lê.
       const flag = this.str(this.pick(row, ...RE_PAGO), 5);
-      const aberto = flag == null || ['N', 'NAO', 'NÃO'].includes(flag.toUpperCase());
-      return { pago: !aberto, dataPagamento: dataPag };
+      const negadoExplicito = flag != null && ['N', 'NAO', 'NÃO'].includes(flag.toUpperCase());
+      if (negadoExplicito) return { pago: false, dataPagamento: dataPag };
+      const marcadoPago = flag != null && ['S', 'SIM', 'Y'].includes(flag.toUpperCase());
+      return { pago: marcadoPago || !!dataPag, dataPagamento: dataPag };
     }
 
     return { pago: !!dataPag, dataPagamento: dataPag };
