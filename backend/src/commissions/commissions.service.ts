@@ -84,6 +84,44 @@ export class CommissionsService {
     return [...lojas];
   }
 
+  /**
+   * Joga a venda de SITE/LIVE (tabela `orders`) dentro do mapa de vendas por
+   * vendedora×loja, do mesmo jeito que a venda do PDV (01/08).
+   *
+   * A live tem ficha própria ("LIVE", decisão do dono) e é resolvida PELO NOME,
+   * não pelo índice por loja: a ficha dela está cadastrada com origem noutra
+   * loja e o pedido é da loja SITE.
+   *
+   * Devolve quanto entrou e quanto ficou de fora, pra tela poder avisar.
+   */
+  private mesclarOrders(
+    ordersRows: any[],
+    sellers: any[],
+    resolveSeller: (raw: any, storeCode?: string, sellerName?: string) => any | null,
+    aplicar: (sellerId: string, storeCode: string, total: number, qtd: number) => void,
+  ): { entrou: number; foraSemFicha: number } {
+    const fichaCanal = (nome: string) => sellers.find(
+      (s) => CommissionsService.chaveNome(s.name) === nome
+        || CommissionsService.chaveNome(s.apelido) === nome,
+    );
+    const CANAIS = new Map<string, any>([
+      [CommissionEngineService.SELLER_LIVE, fichaCanal(CommissionEngineService.SELLER_LIVE)],
+      [CommissionEngineService.SELLER_SITE, fichaCanal(CommissionEngineService.SELLER_SITE)],
+    ]);
+    let entrou = 0;
+    let foraSemFicha = 0;
+    for (const r of ordersRows) {
+      // Canal (LIVE/SITE) resolve PELO NOME — a ficha de canal pode estar
+      // cadastrada com outra loja de origem, e o pedido é sempre da loja SITE.
+      const canal = CANAIS.get(CommissionsService.chaveNome(r.sellerName));
+      const seller = canal || resolveSeller(r.sellerId, r.storeCode, r.sellerName);
+      if (!seller) { foraSemFicha += Number(r.total) || 0; continue; }
+      aplicar(seller.id, r.storeCode, Number(r.total) || 0, Number(r.qtd) || 0);
+      entrou += Number(r.total) || 0;
+    }
+    return { entrou, foraSemFicha };
+  }
+
   /** Índices (loja|código) e (loja|nome) — ficha ATIVA tem precedência. */
   private montarIndicesPorLoja(sellers: any[]): {
     porCodigoLoja: Map<string, any>;
@@ -445,6 +483,20 @@ export class CommissionsService {
       cur.qtd += Number(r.qtd) || 0;
       sellerSalesMap.set(k, cur);
     }
+    // SITE e LIVE (tabela orders) — mesma inclusão da Folha, pro fechamento
+    // gravar o mesmo número que a tela mostra.
+    const ordersRowsCalc = await this.engine.porVendedoraOrders(period.startDate, period.endDate);
+    this.mesclarOrders(
+      ordersRowsCalc, allSellersAny, resolveSeller,
+      (sellerId, storeCode, total, qtd) => {
+        const k = `${sellerId}|${storeCode}`;
+        const cur = sellerSalesMap.get(k) || { vendido: 0, trocas: 0, qtd: 0 };
+        cur.vendido += total;
+        cur.qtd += qtd;
+        sellerSalesMap.set(k, cur);
+      },
+    );
+
     for (const r of trocasBySeller) {
       const seller = resolveSeller(r.sellerId, r.storeCode, r.sellerName);
       if (!seller) continue;
@@ -763,6 +815,24 @@ export class CommissionsService {
       cur.qtd += Number(r.qtd) || 0;
       sellerSalesMap.set(k, cur);
     }
+    // SITE e LIVE (tabela orders) entram aqui — antes ficavam 100% de fora.
+    const ordersRows = await this.engine.porVendedoraOrders(startDate, endDate, lojaFiltro);
+    const resumoOrders = this.mesclarOrders(
+      ordersRows, allSellersAny, resolveSeller,
+      (sellerId, storeCode, total, qtd) => {
+        const k = `${sellerId}|${storeCode}`;
+        const cur = sellerSalesMap.get(k) || { vendido: 0, vale: 0, frete: 0, trocas: 0, qtd: 0 };
+        cur.vendido += total;
+        cur.qtd += qtd;
+        sellerSalesMap.set(k, cur);
+      },
+    );
+    if (resumoOrders.foraSemFicha > 0) {
+      this.logger.warn(
+        `[commissions] site/live sem ficha correspondente: R$ ${resumoOrders.foraSemFicha.toFixed(2)}`,
+      );
+    }
+
     for (const r of trocasBySeller) {
       const seller = resolveSeller(r.sellerId, r.storeCode, r.sellerName);
       if (!seller) continue;
