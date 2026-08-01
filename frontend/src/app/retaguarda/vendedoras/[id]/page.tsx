@@ -53,6 +53,8 @@ type Seller = {
   horarioTrabalho?: any;
   dataInicioFerias?: string | null;
   dataFimFerias?: string | null;
+  dataDesligamento?: string | null;
+  motivoDesligamento?: string | null;
   observacoes?: string | null;
   documents?: Array<{
     id: string;
@@ -88,12 +90,34 @@ const inputDate = (s?: string | null) => {
 
 const CONTRATO_TIPOS = ['CLT', 'PJ', 'ESTAGIO', 'FREELA', 'OUTROS'];
 
+/**
+ * Motivos de desligamento — a lista de verdade vem do backend
+ * (`GET /sellers/desligamento/motivos`), porque ele REJEITA código
+ * desconhecido. Se as duas listas divergirem, a tela ofereceria uma opção que
+ * o servidor recusa, e a atendente veria "erro" sem entender.
+ *
+ * Isto aqui é só o socorro pra quando a chamada falha — sem ele o select
+ * ficaria vazio e ninguém conseguiria registrar desligamento nenhum.
+ */
+const MOTIVOS_FALLBACK = [
+  { codigo: 'SEM_JUSTA_CAUSA', label: 'Demissão sem justa causa' },
+  { codigo: 'PEDIDO_DEMISSAO', label: 'Pedido de demissão' },
+  { codigo: 'TERMINO_CONTRATO', label: 'Término de contrato' },
+  { codigo: 'ACORDO_PARTES', label: 'Acordo entre as partes' },
+  { codigo: 'ACORDO_INFORMAL', label: 'Acordo "informal"' },
+  { codigo: 'TERMINO_ANTECIPADO_EMPRESA', label: 'Término de contrato antecipado — Empresa' },
+  { codigo: 'TERMINO_ANTECIPADO_EMPREGADA', label: 'Término de contrato antecipado — Empregada' },
+  { codigo: 'COM_JUSTA_CAUSA', label: 'Demissão com justa causa' },
+  { codigo: 'FALECIMENTO', label: 'Falecimento' },
+];
+
 export default function ProntuarioPage() {
   const params = useParams();
   const router = useRouter();
   const id = params?.id as string;
 
   const [data, setData] = useState<Seller | null>(null);
+  const [motivos, setMotivos] = useState(MOTIVOS_FALLBACK);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -117,6 +141,10 @@ export default function ProntuarioPage() {
       if (Array.isArray(raw)) la = raw;
       else if (typeof raw === 'string' && raw.trim()) { try { const p = JSON.parse(raw); if (Array.isArray(p)) la = p; } catch { /* ignora */ } }
       setData({ ...r, lojasAtuacao: la });
+      // Motivos são a lista que o backend valida. Falhou? fica o fallback.
+      api<{ motivos: Array<{ codigo: string; label: string }> }>('/sellers/desligamento/motivos')
+        .then((m) => { if (m?.motivos?.length) setMotivos(m.motivos); })
+        .catch(() => { /* fallback já está no estado */ });
     } catch (e: any) {
       setError(e?.message || 'Erro');
     } finally {
@@ -162,6 +190,8 @@ export default function ProntuarioPage() {
           salarioBase: data.salarioBase ? Number(data.salarioBase) : null,
           dataInicioFerias: data.dataInicioFerias || null,
           dataFimFerias: data.dataFimFerias || null,
+          dataDesligamento: data.dataDesligamento || null,
+          motivoDesligamento: data.motivoDesligamento || null,
           horarioTrabalho: data.horarioTrabalho ?? null,
           observacoes: data.observacoes,
         }),
@@ -457,6 +487,46 @@ export default function ProntuarioPage() {
               admissao={data.dataAdmissao}
               dataFimFerias={data.dataFimFerias || null}
             />
+          )}
+        </Section>
+
+        {/* DESLIGAMENTO */}
+        <Section icon={<Power className="w-4 h-4" />} title="Desligamento">
+          <Grid>
+            <Field label="Data de desligamento">
+              <Input
+                type="date"
+                value={inputDate(data.dataDesligamento)}
+                onChange={(v) => update('dataDesligamento', v)}
+              />
+            </Field>
+            <Field label="Motivo">
+              <select
+                value={data.motivoDesligamento || ''}
+                onChange={(e) => update('motivoDesligamento', e.target.value)}
+                className="w-full px-3 py-2 border rounded"
+              >
+                <option value="">—</option>
+                {motivos.map((m) => (
+                  <option key={m.codigo} value={m.codigo}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          </Grid>
+          {data.dataDesligamento ? (
+            <p className="mt-3 text-sm text-rose-800 bg-rose-50 border border-rose-200 rounded px-3 py-2">
+              Ao salvar com data até hoje, ela sai do PDV e das listas de
+              comissão automaticamente. O histórico de vendas continua intacto.
+              {' '}Apagar a data <b>não</b> reativa — pra voltar, use o botão de
+              reativar.
+            </p>
+          ) : (
+            <p className="mt-3 text-xs text-slate-500">
+              Preencher só quando a funcionária sair de fato. O motivo é o que
+              permite separar quem pediu pra sair de quem foi desligada.
+            </p>
           )}
         </Section>
 

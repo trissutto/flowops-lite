@@ -2,6 +2,7 @@ import { Injectable, Logger, BadRequestException, NotFoundException } from '@nes
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
 import { calcularFerias, rotuloSituacao } from '../common/ferias-clt';
+import { motivoValido, rotuloMotivo, MOTIVOS_DESLIGAMENTO } from '../common/motivos-desligamento';
 import { hojeBrasilia } from '../common/tz';
 
 /**
@@ -443,6 +444,8 @@ export class SellersService {
       horarioTrabalho?: any;
       dataInicioFerias?: string | null;
       dataFimFerias?: string | null;
+      dataDesligamento?: string | null;
+      motivoDesligamento?: string | null;
       observacoes?: string | null;
     },
   ) {
@@ -507,6 +510,31 @@ export class SellersService {
     if (input.dataAdmissao !== undefined) data.dataAdmissao = input.dataAdmissao ? new Date(input.dataAdmissao) : null;
     if (input.dataInicioFerias !== undefined) data.dataInicioFerias = input.dataInicioFerias ? new Date(input.dataInicioFerias) : null;
     if (input.dataFimFerias !== undefined) data.dataFimFerias = input.dataFimFerias ? new Date(input.dataFimFerias) : null;
+
+    // ── DESLIGAMENTO ──
+    if (input.motivoDesligamento !== undefined) {
+      if (input.motivoDesligamento && !motivoValido(input.motivoDesligamento)) {
+        throw new BadRequestException('Motivo de desligamento inválido.');
+      }
+      data.motivoDesligamento = input.motivoDesligamento || null;
+    }
+    if (input.dataDesligamento !== undefined) {
+      data.dataDesligamento = input.dataDesligamento ? new Date(input.dataDesligamento) : null;
+
+      // Marcou desligamento com data até hoje → sai da operação junto.
+      // Sem isso ela continuaria aparecendo no PDV e nas listas de comissão,
+      // e alguém teria que lembrar de desativar num segundo passo.
+      //
+      // Limpar a data NÃO reativa: reativar é ato deliberado, e ninguém espera
+      // que apagar um campo devolva acesso a quem saiu.
+      if (data.dataDesligamento && data.dataDesligamento <= new Date(`${hojeBrasilia()}T23:59:59.999Z`)) {
+        if (input.active === undefined) data.active = false;
+        this.logger.warn(
+          `[rh] ${seller.name} desligada em ${input.dataDesligamento}` +
+          `${input.motivoDesligamento ? ` (${rotuloMotivo(input.motivoDesligamento)})` : ''} — inativada`,
+        );
+      }
+    }
     if (input.horarioTrabalho !== undefined) {
       data.horarioTrabalho = input.horarioTrabalho
         ? typeof input.horarioTrabalho === 'string'
