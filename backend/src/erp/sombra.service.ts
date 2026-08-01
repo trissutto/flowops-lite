@@ -33,6 +33,17 @@ import { PrismaService } from '../prisma/prisma.service';
 
 interface Contador {
   iguais: number;
+  /**
+   * Mesma resposta, grafia diferente: o espelho guarda `codigo` SEM zeros à
+   * esquerda (`normalizeCodigo`, decisão do projeto) e o Giga devolve com o
+   * padding — '0000269439917' e '269439917' são o MESMO produto.
+   *
+   * Conta separado de propósito. Se entrasse como divergência, o ruído de
+   * formatação afogaria a divergência de verdade; se entrasse como igual,
+   * esconderia que o formato muda — e quem consome o retorno precisa saber
+   * disso ANTES da virada.
+   */
+  formato: number;
   diferentes: number;
   erros: number;
   ultimaDivergencia?: string;
@@ -75,7 +86,7 @@ export class SombraService {
   ): Promise<void> {
     if (!this.ligado) return;
 
-    const c = this.placar.get(metodo) ?? { iguais: 0, diferentes: 0, erros: 0 };
+    const c = this.placar.get(metodo) ?? { iguais: 0, formato: 0, diferentes: 0, erros: 0 };
     this.placar.set(metodo, c);
 
     try {
@@ -90,6 +101,15 @@ export class SombraService {
         c.iguais++;
         if (this.verboso) {
           this.logger.log(`[${metodo}] igual · entrada=${this.curto(entrada)} · valor=${this.curto(doGiga)}`);
+        }
+        return;
+      }
+
+      // Só o zero à esquerda difere? Mesmo produto, outra grafia.
+      if (this.soZeroAEsquerda(a, b)) {
+        c.formato++;
+        if (this.verboso) {
+          this.logger.log(`[${metodo}] formato · giga=${this.curto(doGiga)} flow=${this.curto(doFlow)}`);
         }
         return;
       }
@@ -111,21 +131,44 @@ export class SombraService {
   }
 
   /** Placar acumulado — alimenta o endpoint de acompanhamento da migração. */
-  relatorio(): Array<{ metodo: string; iguais: number; diferentes: number; erros: number; taxa: string; ultimaDivergencia?: string; ultimaEm?: string }> {
+  relatorio(): Array<{
+    metodo: string;
+    iguais: number;
+    formato: number;
+    diferentes: number;
+    erros: number;
+    taxa: string;
+    ultimaDivergencia?: string;
+    ultimaEm?: string;
+  }> {
     return [...this.placar.entries()]
       .map(([metodo, c]) => {
-        const total = c.iguais + c.diferentes;
+        const total = c.iguais + c.formato + c.diferentes;
+        // `formato` conta como acerto na taxa: é o mesmo produto. Fica na
+        // coluna própria pra ninguém esquecer que a grafia muda.
+        const acertos = c.iguais + c.formato;
         return {
           metodo,
           iguais: c.iguais,
+          formato: c.formato,
           diferentes: c.diferentes,
           erros: c.erros,
-          taxa: total ? `${((c.iguais / total) * 100).toFixed(2)}%` : '—',
+          taxa: total ? `${((acertos / total) * 100).toFixed(2)}%` : '—',
           ultimaDivergencia: c.ultimaDivergencia,
           ultimaEm: c.ultimaEm,
         };
       })
       .sort((a, b) => b.diferentes - a.diferentes);
+  }
+
+  /**
+   * True quando os dois valores só diferem por zero à esquerda.
+   * Compara token a token pra funcionar tanto em resposta única ('000123' vs
+   * '123') quanto em lista serializada do batch.
+   */
+  private soZeroAEsquerda(a: string, b: string): boolean {
+    const limpa = (s: string) => s.replace(/(^|[^0-9])0+(\d)/g, '$1$2');
+    return limpa(a) === limpa(b);
   }
 
   zerar(): void {
@@ -225,6 +268,94 @@ export class SombraService {
     }
 
     return null;
+  }
+
+  /**
+   * Versão Postgres de `batchFindCodigosByRefCorTam`.
+   *
+   * Resolve N itens (REF+cor+tamanho) numa consulta só. Duas sutilezas do
+   * original que PRECISAM ser reproduzidas, ou a sombra acusa divergência que
+   * é culpa da tradução:
+   *
+   *  1. TOLERÂNCIA DE ZERO À ESQUERDA na REF. O Giga tem '012467' e o
+   *     TransferOrder tem '12467' (ou o contrário). O original gera variantes
+   *     de padding; aqui comparo pelo NÚCLEO (ref sem zeros à esquerda) dos
+   *     dois lados, que cobre o mesmo caso sem inventar 5 variantes.
+   *
+   *  2. DESEMPATE quando a mesma REF+COR+TAM tem CÓDIGOS diferentes (produto
+   *     recadastrado): ganha o de maior estoque; empate resolve pelo código
+   *     NUMERICAMENTE maior — não pelo texto, senão '9' venceria '10'.
+   */
+  async batchFindCodigosByRefCorTam(
+    items: Array<{ refCode: string; cor?: string | null; tamanho?: string | null }>,
+  ): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    if (!items?.length) return out;
+
+    const norm = (s: any) => String(s ?? '').trim().toUpperCase();
+    const semZeros = (s: string) => s.replace(/^0+/, '') || '0';
+
+    // Dedup na entrada, igual ao original — item repetido não multiplica a
+    // consulta.
+    const chaves = new Set<string>();
+    const alvos: Array<{ ref: string; nucleo: string; cor: string; tam: string }> = [];
+    for (const it of items) {
+      const ref = norm(it.refCode);
+      if (!ref) continue;
+      const cor = norm(it.cor);
+      const tam = norm(it.tamanho);
+      const k = `${ref}|${cor}|${tam}`;
+      if (chaves.has(k)) continue;
+      chaves.add(k);
+      alvos.push({ ref, nucleo: semZeros(ref), cor, tam });
+    }
+    if (!alvos.length) return out;
+
+    // Uma consulta por lote de 500, mesma fatia do original.
+    const melhor = new Map<string, { codigo: string; estoque: number }>();
+    for (let i = 0; i < alvos.length; i += 500) {
+      const lote = alvos.slice(i, i + 500);
+
+      // Casa pelo núcleo da REF nos DOIS lados: LTRIM(p.ref,'0') = núcleo do
+      // alvo. Resolve o padding sem enumerar variantes.
+      const nucleos = [...new Set(lote.map((a) => a.nucleo))];
+
+      const linhas: Array<{ ref: string; cor: string; tamanho: string; codigo: string; total_est: string }> =
+        await (this.prisma as any).$queryRawUnsafe(
+          `SELECT COALESCE(p.ref,'') AS ref,
+                  COALESCE(p.cor,'') AS cor,
+                  COALESCE(p.tamanho,'') AS tamanho,
+                  p.codigo,
+                  COALESCE((SELECT SUM(e.estoque) FROM wincred_estoque e WHERE e.codigo = p.codigo),0)::text AS total_est
+             FROM wincred_produtos p
+            WHERE COALESCE(NULLIF(LTRIM(UPPER(TRIM(COALESCE(p.ref,''))),'0'),''),'0') = ANY($1::text[])`,
+          nucleos,
+        );
+
+      for (const r of linhas) {
+        const nucleoLinha = semZeros(norm(r.ref));
+        const cor = norm(r.cor);
+        const tam = norm(r.tamanho);
+        const estoque = Number(r.total_est) || 0;
+        const codigo = String(r.codigo).trim();
+
+        for (const a of lote) {
+          if (a.nucleo !== nucleoLinha || a.cor !== cor || a.tam !== tam) continue;
+          const k = `${a.ref}|${a.cor}|${a.tam}`;
+          const atual = melhor.get(k);
+          if (
+            !atual ||
+            estoque > atual.estoque ||
+            (estoque === atual.estoque && Number(codigo) > Number(atual.codigo))
+          ) {
+            melhor.set(k, { codigo, estoque });
+          }
+        }
+      }
+    }
+
+    for (const [k, v] of melhor) out.set(k, v.codigo);
+    return out;
   }
 
   /**
