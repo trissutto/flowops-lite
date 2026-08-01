@@ -396,6 +396,134 @@ export class SombraService {
     return linhas?.[0]?.codigo ? String(linhas[0].codigo).trim() : null;
   }
 
+  /**
+   * Versão Postgres de `resolveSkuInfo`. SKU → identidade do produto.
+   *
+   * O espelho guarda `codigo` SEM zero à esquerda (`normalizeCodigo`), então
+   * normalizo a entrada do mesmo jeito em vez de gerar variantes de padding —
+   * é o que o original faz com `skuVariants` contra a tabela crua.
+   */
+  async resolveSkuInfo(sku: string): Promise<{
+    codigo: string;
+    ref: string | null;
+    cor: string | null;
+    tamanho: string | null;
+    descricao: string | null;
+  } | null> {
+    const bruto = String(sku ?? '').trim();
+    if (!bruto) return null;
+    const nucleo = bruto.replace(/^0+/, '') || '0';
+
+    const linhas: Array<{
+      codigo: string;
+      ref: string | null;
+      cor: string | null;
+      tamanho: string | null;
+      descricao: string | null;
+    }> = await (this.prisma as any).$queryRawUnsafe(
+      // ⚠️ COLUNAS ENTRE ASPAS: o Prisma criou esta tabela sem @map, então o
+      // campo camelCase virou coluna camelCase no Postgres — "descricaoCompleta",
+      // não descricao_completa. Sem as aspas, o Postgres rebaixa pra minúsculo
+      // e a consulta falha com "column does not exist".
+      `SELECT p.codigo,
+              p.ref,
+              p.cor,
+              p.tamanho,
+              COALESCE(NULLIF(TRIM(p."descricaoCompleta"),''), p."descricaoPdv") AS descricao
+         FROM wincred_produtos p
+        WHERE COALESCE(NULLIF(LTRIM(TRIM(p.codigo),'0'),''),'0') = $1
+        LIMIT 1`,
+      nucleo,
+    );
+    return linhas?.[0] ?? null;
+  }
+
+  /**
+   * Versão Postgres de `getProductPricesBySkus`.
+   *
+   * ⚠️ `vendaUn` está em REAIS — NUNCA dividir por 100. O caminho do Giga
+   * PARECE centavos porque o `parsePrice` de lá tira o ponto de "80.00" e
+   * divide de volta; o Decimal do espelho já vem certo. Dividir aqui derrubaria
+   * preço 100× — foi o bug de 01/07 que fez blusa de R$ 80 virar R$ 0,80.
+   *
+   * O original escolhe a coluna de preço dinamicamente (PRECOVENDA, PRECO,
+   * VENDAUN…, com override por GIGA_PRECO_COL). O espelho só tem `venda_un`,
+   * então divergência de preço aqui significa que o Giga está usando OUTRA
+   * coluna — e é exatamente o tipo de coisa que a sombra existe pra revelar
+   * antes da virada.
+   */
+  async getProductPricesBySkus(skus: string[]): Promise<Map<string, number>> {
+    const out = new Map<string, number>();
+    const limpos = [...new Set((skus ?? []).map((s) => String(s ?? '').trim()).filter(Boolean))];
+    if (!limpos.length) return out;
+
+    // núcleo (sem zero à esquerda) → SKU como o chamador pediu, pra devolver
+    // a chave no formato que ele espera.
+    const porNucleo = new Map<string, string>();
+    for (const s of limpos) porNucleo.set(s.replace(/^0+/, '') || '0', s);
+
+    // "vendaUn" entre aspas — ver a nota em resolveSkuInfo sobre camelCase.
+    const linhas: Array<{ nucleo: string; preco: string | null }> = await (this.prisma as any).$queryRawUnsafe(
+      `SELECT COALESCE(NULLIF(LTRIM(TRIM(p.codigo),'0'),''),'0') AS nucleo,
+              p."vendaUn"::text AS preco
+         FROM wincred_produtos p
+        WHERE COALESCE(NULLIF(LTRIM(TRIM(p.codigo),'0'),''),'0') = ANY($1::text[])`,
+      [...porNucleo.keys()],
+    );
+
+    for (const l of linhas) {
+      const original = porNucleo.get(l.nucleo);
+      const preco = Number(l.preco);
+      if (original && Number.isFinite(preco) && preco > 0) out.set(original, preco);
+    }
+    return out;
+  }
+
+  /**
+   * Versão Postgres de `getStockByRefCorTamInStore`.
+   *
+   * Devolve o total e TODOS os códigos daquela REF+cor+tamanho na loja — o
+   * plural importa: produto recadastrado tem estoque espalhado em códigos
+   * diferentes, e somar só um mostraria menos peça do que a loja tem.
+   */
+  async getStockByRefCorTamInStore(
+    refCode: string,
+    cor: string | null,
+    tamanho: string | null,
+    storeCode: string,
+  ): Promise<{ totalQty: number; codigos: string[] }> {
+    const vazio = { totalQty: 0, codigos: [] as string[] };
+    const ref = String(refCode ?? '').trim();
+    const loja = String(storeCode ?? '').trim();
+    if (!ref || !loja) return vazio;
+
+    // Loja com e sem zero à esquerda: o Giga grava '05' e '5' conforme a época.
+    const lojas = [...new Set([loja, loja.replace(/^0+/, '') || '0', loja.padStart(2, '0')])];
+
+    const linhas: Array<{ codigo: string; qtd: string }> = await (this.prisma as any).$queryRawUnsafe(
+      `SELECT p.codigo, COALESCE(SUM(e.estoque),0)::text AS qtd
+         FROM wincred_produtos p
+         JOIN wincred_estoque e ON e.codigo = p.codigo AND e.loja = ANY($4::text[])
+        WHERE UPPER(TRIM(COALESCE(p.ref,''))) = UPPER(TRIM($1))
+          AND UPPER(TRIM(COALESCE(p.cor,''))) = UPPER(TRIM($2))
+          AND UPPER(TRIM(COALESCE(p.tamanho,''))) = UPPER(TRIM($3))
+        GROUP BY p.codigo`,
+      ref,
+      (cor || '').trim(),
+      (tamanho || '').trim(),
+      lojas,
+    );
+
+    if (!linhas?.length) return vazio;
+    let total = 0;
+    const codigos: string[] = [];
+    for (const l of linhas) {
+      total += Number(l.qtd) || 0;
+      codigos.push(String(l.codigo).trim());
+    }
+    return { totalQty: total, codigos };
+  }
+
   /* ──────────────────────────── utilitários ─────────────────────────────── */
 
   /** JSON com chaves ordenadas — comparação não pode depender da ordem. */
