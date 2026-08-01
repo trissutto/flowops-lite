@@ -69,6 +69,90 @@ export class PdvService {
     }
   }
 
+  /**
+   * CONSULTA DE PROMOÇÃO (dono 01/08) — bipa a peça e responde se ela entra
+   * nos 50%, SEM lançar nada na venda.
+   *
+   * Por que existe: a regra tem três partes (ano de cadastro, coleção -INV/-VER
+   * e o filtro de BÁSICO) e a vendedora tinha que lembrar das três de cabeça
+   * pra responder "essa entra na promoção?" com a cliente na frente. O sistema
+   * já sabe — só não contava.
+   *
+   * A regra abaixo é a MESMA do applyAutoDiscounts (YEAR_BASED). Se mudar lá,
+   * muda aqui: as duas leem o mesmo corte (2023-12-31), o mesmo sufixo de
+   * coleção e a mesma classificação Básico/Moda.
+   */
+  async consultarPromocao(codigo: string) {
+    const termo = String(codigo || '').trim();
+    if (!termo) throw new BadRequestException('Bipe ou digite o código da peça');
+
+    const info = await this.catalog.getPdvProductInfo(termo);
+    if (!info) {
+      return { achou: false, termo };
+    }
+
+    const ref = String(info.ref || '').trim();
+    const data = info.dataCadastro ? String(info.dataCadastro).slice(0, 10) : null;
+    const ano = data ? Number(data.slice(0, 4)) : null;
+
+    // Mesmas 3 pernas da regra da venda
+    const porColecao = /-(INV|VER)$/i.test(ref);
+    const porData = !!data && data <= '2023-12-31';
+
+    const clsKey = ref ? ref.toUpperCase() : (info.sku ? `#${info.sku}`.toUpperCase() : '');
+    let ehBasico = false;
+    let filtroBasicoLigado = false;
+    try {
+      const cfg = await this.promoConfig.getConfig();
+      filtroBasicoLigado = !!cfg.excluirBasicoNa50;
+      if (filtroBasicoLigado && clsKey) {
+        ehBasico = (await this.basicoRefsIn([clsKey])).has(clsKey);
+      }
+    } catch { /* fail-open: igual à venda */ }
+
+    const bloqueadoPorBasico = ehBasico && filtroBasicoLigado;
+    const entra = (porColecao || porData) && !bloqueadoPorBasico;
+
+    let motivo: string;
+    if (bloqueadoPorBasico) {
+      motivo = porColecao || porData
+        ? 'A data entra, mas a peça está classificada como BÁSICO — fora da promoção de 50%.'
+        : 'Peça BÁSICA e sem data/coleção de promoção.';
+    } else if (porColecao) {
+      motivo = `Coleção ${ref.slice(-3).toUpperCase()} entra independente do ano de cadastro.`;
+    } else if (porData) {
+      motivo = `Cadastrada em ${ano} (até 2023) — entra na liquidação de peças antigas.`;
+    } else if (!data) {
+      motivo = 'Produto sem data de cadastro no ERP — não dá pra decidir pela data.';
+    } else {
+      motivo = `Cadastrada em ${ano} (de 2024 em diante) — fora da promoção.`;
+    }
+
+    const preco = Number(info.preco) || 0;
+    return {
+      achou: true,
+      sku: info.sku,
+      ref: ref || null,
+      descricao: info.descricao,
+      cor: info.cor,
+      tamanho: info.tamanho,
+      dataCadastro: data,
+      classificacao: ehBasico ? 'BASICO' : 'MODA',
+      entra,
+      motivo,
+      porColecao,
+      porData,
+      bloqueadoPorBasico,
+      preco,
+      precoPromo: entra ? Math.round(preco * 50) / 100 : preco,
+      // A ÚNICA data do produto no Giga é a DATAALT, e ela MUDA quando alguém
+      // edita o cadastro (preço, descrição). Peça velha reeditada aparece
+      // nova e perde a promo. Só avisa quando a data é o que reprovou —
+      // é a hora em que isso muda a resposta.
+      avisoData: !entra && !porColecao && !!data && !bloqueadoPorBasico,
+    };
+  }
+
   // ═══════════════════════════════════════════════════════════════════════
   // VENDA — ciclo de vida
   // ═══════════════════════════════════════════════════════════════════════

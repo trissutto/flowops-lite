@@ -303,10 +303,11 @@ type ScanBarProps = {
   onScanResult: (fresh: Sale) => void;     // pai faz flashAddedItem + setSale
   onError: (msg: string | null) => void;   // pai faz setError
   onRequestManualItem: () => void;         // pai abre o modal de item manual
+  onAbrirPromoCheck: () => void;           // pai abre "essa peça entra na promo?"
 };
 
 const ScanBar = forwardRef<ScanBarHandle, ScanBarProps>(function ScanBar(
-  { saleId, onScanResult, onError, onRequestManualItem },
+  { saleId, onScanResult, onError, onRequestManualItem, onAbrirPromoCheck },
   ref,
 ) {
   type ErpSearchHit = {
@@ -540,6 +541,17 @@ const ScanBar = forwardRef<ScanBarHandle, ScanBarProps>(function ScanBar(
         {searchLoading && (
           <Loader2 className="w-4 h-4 text-slate-400 animate-spin shrink-0" />
         )}
+        {/* Consulta de promoção: bipa e responde "entra nos 50%?" sem lançar
+            nada na venda. A regra tem 3 partes (ano, coleção -INV/-VER e
+            básico) e ninguém decora as três com a cliente na frente. */}
+        <button
+          type="button"
+          onClick={onAbrirPromoCheck}
+          className="w-11 h-11 rounded-lg flex items-center justify-center shrink-0 border-2 border-[#E5E2D9] text-[#8C7325] hover:bg-[#FBF6E6] transition"
+          title="Essa peça entra na promoção?"
+        >
+          <Tag className="w-5 h-5" />
+        </button>
         <button
           type="submit"
           disabled={!scanInput || scanLoading}
@@ -731,6 +743,7 @@ function PdvPageInner() {
   // Barra de bipagem isolada — o estado digitado vive DENTRO do componente
   // ScanBar (ver definição acima). O pai fala com ela só via ref imperativo.
   const scanBarRef = useRef<ScanBarHandle>(null);
+  const [promoCheckOpen, setPromoCheckOpen] = useState(false);
   // SKU pendente quando vendedora ainda nao foi escolhida — bipe fica em
   // espera. Apos saveVendedora, dispara handleScan automatico com esse SKU
   // (vendedora nao precisa voltar e clicar de novo na setinha).
@@ -2007,6 +2020,7 @@ function PdvPageInner() {
             }}
             onError={setError}
             onRequestManualItem={() => setShowManualItem(true)}
+            onAbrirPromoCheck={() => setPromoCheckOpen(true)}
           />
         )}
 
@@ -3195,6 +3209,7 @@ function PdvPageInner() {
           }}
         />
       )}
+      <PromoCheckModal open={promoCheckOpen} onClose={() => setPromoCheckOpen(false)} />
     </div>
   );
 }
@@ -8945,6 +8960,138 @@ function ShortcutsHelpModal({ onClose }: { onClose: () => void }) {
         </div>
         <div className="px-5 py-2.5 bg-slate-50 border-t border-slate-100 text-[11px] text-slate-400 text-center">
           Pressione Esc ou F12 pra fechar
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * "Essa peça entra na promoção?" — consulta pura (dono 01/08).
+ *
+ * Não cria venda, não lança item, não mexe em estoque. A regra dos 50% tem
+ * três partes (ano de cadastro ≤ 2023, coleção -INV/-VER e o filtro de
+ * BÁSICO) e a vendedora tinha que lembrar das três de cabeça com a cliente
+ * na frente. O backend responde o veredito pronto — a mesma regra da venda.
+ */
+function PromoCheckModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const [codigo, setCodigo] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [res, setRes] = useState<any>(null);
+  const [erro, setErro] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!open) { setCodigo(''); setRes(null); setErro(''); return; }
+    const t = setTimeout(() => inputRef.current?.focus(), 60);
+    return () => clearTimeout(t);
+  }, [open]);
+
+  const consultar = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    const termo = codigo.trim();
+    if (!termo || busy) return;
+    setBusy(true); setErro('');
+    try {
+      const r = await api<any>(`/pdv/promo-check?codigo=${encodeURIComponent(termo)}`);
+      if (!r?.achou) { setRes(null); setErro(`Não achei nada com "${termo}"`); }
+      else setRes(r);
+      // Pronto pro próximo bipe sem tirar a mão do leitor.
+      setCodigo('');
+      inputRef.current?.focus();
+    } catch (e: any) {
+      setRes(null);
+      setErro(e?.message || 'Falha na consulta');
+    } finally { setBusy(false); }
+  };
+
+  if (!open) return null;
+  const brlv = (n: number) => Number(n || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/40 flex items-start justify-center p-4 pt-16" onClick={onClose}>
+      <div className="w-full max-w-lg bg-[#FAFAF7] rounded-2xl shadow-xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+        <div className="px-5 py-3.5 bg-white border-b border-[#E5E2D9] flex items-center gap-2.5">
+          <Tag className="w-5 h-5 text-[#8C7325]" />
+          <span className="font-bold text-slate-900">Consulta de promoção</span>
+          <span className="ml-auto text-[11px] text-slate-400">não lança na venda</span>
+          <button onClick={onClose} className="p-1 rounded hover:bg-slate-100 text-slate-400"><X className="w-4 h-4" /></button>
+        </div>
+
+        <div className="p-5">
+          <form onSubmit={consultar} className="flex items-center gap-2 bg-white rounded-xl border-2 border-[#E5E2D9] px-3 py-2 focus-within:border-[#D4AF37]">
+            <Barcode className="w-5 h-5 text-slate-400 shrink-0" />
+            <input
+              ref={inputRef}
+              value={codigo}
+              onChange={(e) => setCodigo(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Escape') onClose(); }}
+              placeholder="Bipe a peça"
+              className="flex-1 min-w-0 py-1.5 text-base font-semibold bg-transparent focus:outline-none text-slate-900 placeholder:font-normal placeholder:text-slate-400"
+              autoComplete="off" spellCheck={false}
+            />
+            {busy && <Loader2 className="w-4 h-4 animate-spin text-slate-400" />}
+          </form>
+          <p className="mt-1.5 text-[11px] text-slate-400">O resultado troca a cada leitura · Esc fecha</p>
+
+          {erro && (
+            <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">{erro}</div>
+          )}
+
+          {res && (
+            <div className="mt-4 bg-white rounded-xl border border-[#E5E2D9] p-4">
+              <div className="flex items-start gap-3">
+                <div className="flex-1 min-w-0">
+                  <p className="font-bold text-slate-900 leading-snug">{res.descricao}</p>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    SKU {res.sku}{res.ref ? ` · ref ${res.ref}` : ''}
+                    {res.cor ? ` · ${res.cor}` : ''}{res.tamanho ? ` · ${res.tamanho}` : ''}
+                  </p>
+                </div>
+                <span className={`shrink-0 px-3 py-1 rounded-lg text-xs font-bold ${
+                  res.entra ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-900'
+                }`}>
+                  {res.entra ? 'Entra · 50%' : 'Fora · preço cheio'}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2 mt-4">
+                <div className="bg-[#FAFAF7] rounded-lg px-3 py-2">
+                  <div className="text-[11px] text-slate-500">Data de cadastro</div>
+                  <div className="text-lg font-bold text-slate-900">
+                    {res.dataCadastro ? res.dataCadastro.split('-').reverse().join('/') : '—'}
+                  </div>
+                </div>
+                <div className="bg-[#FAFAF7] rounded-lg px-3 py-2">
+                  <div className="text-[11px] text-slate-500">Classificação</div>
+                  <div className={`text-lg font-bold ${res.classificacao === 'BASICO' ? 'text-amber-800' : 'text-slate-900'}`}>
+                    {res.classificacao === 'BASICO' ? 'Básico' : 'Moda'}
+                  </div>
+                </div>
+                <div className="bg-[#FAFAF7] rounded-lg px-3 py-2">
+                  <div className="text-[11px] text-slate-500">{res.entra ? 'Preço na promoção' : 'Preço'}</div>
+                  <div className="text-lg font-bold text-[#2E7D46]">
+                    {brlv(res.precoPromo)}
+                    {res.entra && <span className="ml-1.5 text-xs font-normal text-slate-400 line-through">{brlv(res.preco)}</span>}
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-3 pt-3 border-t border-slate-100 text-xs text-slate-600 flex items-start gap-2">
+                {res.entra
+                  ? <Check className="w-4 h-4 text-emerald-600 shrink-0 mt-px" />
+                  : <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-px" />}
+                <span>{res.motivo}</span>
+              </div>
+
+              {res.avisoData && (
+                <div className="mt-2 rounded-lg bg-slate-50 border border-slate-200 px-3 py-2 text-[11px] text-slate-500">
+                  A data do ERP muda quando alguém edita o cadastro (preço, descrição).
+                  Peça antiga reeditada aparece nova aqui — confirme com a matriz antes de dar o desconto na mão.
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>
