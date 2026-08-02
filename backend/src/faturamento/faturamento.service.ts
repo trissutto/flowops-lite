@@ -55,17 +55,39 @@ export class FaturamentoService {
     dInicio: Date,
     dFimExclusive: Date,
   ): Promise<Array<{ storeCode: string; faturamento: number; cupons: number; pecas: number; ticketMedio: number }>> {
-    const [flowRows, gigaRows, lojas] = await Promise.all([
+    const [flowRows, gigaRows, devolucoes, lojas] = await Promise.all([
       // PDV do Flow — marcado fora (não é venda), treino fora, cancelada fora
+      //
+      // ⚠️ FATURAMENTO = A MESMA BASE DA COMISSÃO (decisão do dono, 01/08).
+      // Antes era SUM(total) cru, e isso INFLAVA o número: o vale-troca entrava
+      // como venda nova, mas é crédito de uma peça devolvida cuja venda original
+      // já tinha sido contada — a mesma peça aparecia duas vezes. Frete não é
+      // peça vendida. Devolução em dinheiro é dinheiro que saiu.
+      //
+      // Consequência aceita pelo dono: a comparação com 2025 passa a confrontar
+      // réguas diferentes (o histórico do Giga não separa o vale do mesmo jeito),
+      // então as lojas parecem cair no comparativo. É critério, não queda.
       this.prisma.$queryRawUnsafe<Array<any>>(
         `SELECT store_code AS "storeCode",
                 COUNT(*)::int                              AS cupons,
                 COALESCE(SUM(it.pecas), 0)::float8         AS pecas,
-                COALESCE(SUM(s.total), 0)::float8          AS faturamento
+                COALESCE(SUM(
+                  s.total - COALESCE(vt.vale, 0) - COALESCE(fr.frete, 0)
+                ), 0)::float8                              AS faturamento
            FROM pdv_sales s
            LEFT JOIN (
-             SELECT sale_id, SUM(qty)::float8 AS pecas FROM pdv_sale_items GROUP BY sale_id
+             SELECT sale_id, SUM(qty)::float8 AS pecas FROM pdv_sale_items
+              WHERE COALESCE(ref, '') <> 'FRETE' GROUP BY sale_id
            ) it ON it.sale_id = s.id
+           LEFT JOIN (
+             SELECT sale_id, SUM(valor)::float8 AS vale FROM pdv_sale_payments
+              WHERE LOWER(TRIM(method)) IN ('vale_troca', 'vale', 'troca')
+              GROUP BY sale_id
+           ) vt ON vt.sale_id = s.id
+           LEFT JOIN (
+             SELECT sale_id, SUM(total)::float8 AS frete FROM pdv_sale_items
+              WHERE ref = 'FRETE' GROUP BY sale_id
+           ) fr ON fr.sale_id = s.id
           WHERE s.finalized_at >= $1 AND s.finalized_at < $2
             AND s.status = 'finalized'
             AND s.is_training = false
@@ -87,6 +109,21 @@ export class FaturamentoService {
           GROUP BY loja`,
         // data_fec é DATE (sem hora) → segue no parseDate. Ver brInstant.
         dInicio, dFimExclusive,
+      ),
+      // Devolução em DINHEIRO/PIX abate o faturamento — é dinheiro que saiu da
+      // loja. Troca/crédito NÃO abate aqui: vira vale, e o vale já é descontado
+      // acima no dia em que a cliente USA. Devolução cancelada não conta.
+      // Mesma regra do CommissionEngineService (DEVOLUCAO_ABATE_SQL).
+      this.prisma.$queryRawUnsafe<Array<any>>(
+        `SELECT store_code AS "storeCode",
+                COALESCE(SUM(valor_total), 0)::float8 AS total
+           FROM pdv_returns
+          WHERE created_at >= $1 AND created_at < $2
+            AND is_training = false
+            AND modo IN ('dinheiro', 'pix')
+            AND COALESCE(status, '') <> 'cancelled'
+          GROUP BY store_code`,
+        this.brInstant(dInicio), this.brInstant(dFimExclusive),
       ),
       (this.prisma as any).store.findMany({ select: { code: true, name: true, nomesAntigos: true } }),
     ]);
@@ -119,6 +156,13 @@ export class FaturamentoService {
     };
     for (const r of flowRows) soma(r.storeCode, r);
     for (const r of gigaRows) soma(r.storeCode, r);
+    // Devolução em dinheiro sai do faturamento da loja onde foi devolvida.
+    for (const r of devolucoes as any[]) {
+      const code = canon(r.storeCode);
+      const cur = acc.get(code) || { faturamento: 0, cupons: 0, pecas: 0 };
+      cur.faturamento -= Number(r.total) || 0;
+      acc.set(code, cur);
+    }
 
     return Array.from(acc.entries())
       .map(([storeCode, v]) => ({
