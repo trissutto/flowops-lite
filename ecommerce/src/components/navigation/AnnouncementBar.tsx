@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import Link from 'next/link';
+import { AppLink as Link } from '@/components/ui/AppLink';
 import { motion } from 'framer-motion';
 import { announcements } from '@/data/navigation';
 import { transition } from '@/lib/motion';

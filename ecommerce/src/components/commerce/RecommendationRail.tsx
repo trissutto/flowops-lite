@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Section, type SectionTone } from '@/components/layout/Section';
 import { SectionTitle } from '@/components/sections/SectionTitle';
 import { LuxuryCarousel } from '@/components/ui/LuxuryCarousel';
-import { ProductCard } from '@/components/cards/ProductCard';
+import { CAROUSEL_PRODUCT_SIZES, ProductCard } from '@/components/cards/ProductCard';
 import { ProductCardSkeleton } from '@/components/ui/Skeleton';
 import { getRecommendations } from '@/lib/recommendations/engine';
 import { trackSelectItem, trackViewItemList } from '@/lib/tracking';
@@ -110,7 +110,7 @@ export function RecommendationRail({
           <LuxuryCarousel ariaLabel={title} perView={{ base: 1.35, sm: 2, lg: 3, xl: 4 }} gap="md" arrows>
             {products.map((product, index) => (
               <div key={product.id} onClickCapture={aoClicar(product, index)}>
-                <ProductCard product={product} index={index} />
+                <ProductCard product={product} index={index} sizes={CAROUSEL_PRODUCT_SIZES} />
               </div>
             ))}
           </LuxuryCarousel>

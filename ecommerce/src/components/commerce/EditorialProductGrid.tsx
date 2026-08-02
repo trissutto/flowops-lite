@@ -2,7 +2,7 @@
 
 import { Fragment } from 'react';
 import Image from 'next/image';
-import Link from 'next/link';
+import { AppLink as Link } from '@/components/ui/AppLink';
 import { ArrowRight } from 'lucide-react';
 import { ProductCard } from '@/components/cards/ProductCard';
 import { LookCard } from '@/components/cards/LookCard';
@@ -80,7 +80,8 @@ function Interruption({ block }: { block: GridInterruption }) {
   if (block.kind === 'look') {
     return (
       <div className="col-span-2 lg:col-span-2">
-        <LookCard look={block.look} />
+        {/* Aqui o card ocupa 2 colunas da grade editorial, não o carrossel. */}
+        <LookCard look={block.look} sizes="(max-width: 1024px) 100vw, 50vw" />
       </div>
     );
   }

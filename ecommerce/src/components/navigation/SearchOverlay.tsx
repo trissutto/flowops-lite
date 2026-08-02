@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Image from 'next/image';
-import Link from 'next/link';
+import { AppLink as Link } from '@/components/ui/AppLink';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
 import {

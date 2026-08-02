@@ -1,7 +1,7 @@
 'use client';
 
 import { LuxuryCarousel } from '@/components/ui/LuxuryCarousel';
-import { ProductCard } from '@/components/cards/ProductCard';
+import { CAROUSEL_PRODUCT_SIZES, ProductCard } from '@/components/cards/ProductCard';
 import type { Product } from '@/types';
 
 /**
@@ -30,6 +30,7 @@ export function ProductCarousel({
           product={product}
           index={index}
           onQuickView={onQuickView}
+          sizes={CAROUSEL_PRODUCT_SIZES}
         />
       ))}
     </LuxuryCarousel>

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import Link from 'next/link';
+import { AppLink as Link } from '@/components/ui/AppLink';
 import { motion } from 'framer-motion';
 import { ChevronDown, Heart, MapPin, MessageCircle, Package, ShoppingBag, User } from 'lucide-react';
 import { Drawer } from '@/components/ui/Drawer';

@@ -21,23 +21,39 @@ import type {
  * fica apenas com as taxonomias e os textos editoriais.
  */
 
+/**
+ * Sem parâmetro, o Unsplash devolve o ORIGINAL — 4 a 6 MB, 5.000+ px de
+ * largura. Isso não chega no navegador (o next/image redimensiona), mas o
+ * otimizador da Vercel precisa baixar e decodificar esses megabytes a cada
+ * cache miss, e é esse tempo que aparece como atraso no primeiro byte da
+ * imagem do hero — ou seja, direto no LCP.
+ *
+ * `fit=max` limita a largura sem cortar nem ampliar; `q=85` deixa folga pro
+ * Next reencodar em AVIF/WebP sem compressão dupla visível.
+ */
+function unsplash(id: string, width = 1600): string {
+  return `https://images.unsplash.com/${id}?w=${width}&q=85&fm=jpg&fit=max`;
+}
+
 const IMG = {
-  model1: 'https://images.unsplash.com/photo-1657550853452-f13aa437f6c9',
-  model2: 'https://images.unsplash.com/photo-1664893876112-64c308bf0d70',
-  model3: 'https://images.unsplash.com/photo-1582745140877-0480c22d91ee',
-  model4: 'https://images.unsplash.com/photo-1664893875861-add8eb8fa072',
-  model5: 'https://images.unsplash.com/photo-1657549091422-3b748b8f72b2',
-  model6: 'https://images.unsplash.com/photo-1652288832306-73735bbb94b3',
-  model7: 'https://images.unsplash.com/photo-1664893875908-a1e56db71082',
-  model8: 'https://images.unsplash.com/photo-1657550853399-19c48e1baed2',
-  model9: 'https://images.unsplash.com/photo-1562887077-e086f7da6870',
-  model10: 'https://images.unsplash.com/photo-1657550853413-a646ba6a1877',
-  duo: 'https://images.unsplash.com/photo-1696483680003-1e2109b05ed3',
-  storeInterior: 'https://images.unsplash.com/photo-1441986300917-64674bd600d8',
-  rack: 'https://images.unsplash.com/photo-1603400521630-9f2de124b33b',
-  corner: 'https://images.unsplash.com/photo-1441984904996-e0b6ba687e04',
-  window: 'https://images.unsplash.com/photo-1521335629791-ce4aec67dd15',
-  consultant: 'https://images.unsplash.com/photo-1546213290-e1b492ab3eee',
+  model1: unsplash('photo-1657550853452-f13aa437f6c9'),
+  model2: unsplash('photo-1664893876112-64c308bf0d70'),
+  model3: unsplash('photo-1582745140877-0480c22d91ee'),
+  model4: unsplash('photo-1664893875861-add8eb8fa072'),
+  model5: unsplash('photo-1657549091422-3b748b8f72b2'),
+  model6: unsplash('photo-1652288832306-73735bbb94b3'),
+  model7: unsplash('photo-1664893875908-a1e56db71082'),
+  model8: unsplash('photo-1657550853399-19c48e1baed2'),
+  model9: unsplash('photo-1562887077-e086f7da6870'),
+  model10: unsplash('photo-1657550853413-a646ba6a1877'),
+  // Hero da home: é a única que ocupa 100vw em tela grande, então merece
+  // mais largura de origem que os cards.
+  duo: unsplash('photo-1696483680003-1e2109b05ed3', 2000),
+  storeInterior: unsplash('photo-1441986300917-64674bd600d8'),
+  rack: unsplash('photo-1603400521630-9f2de124b33b'),
+  corner: unsplash('photo-1441984904996-e0b6ba687e04'),
+  window: unsplash('photo-1521335629791-ce4aec67dd15'),
+  consultant: unsplash('photo-1546213290-e1b492ab3eee'),
 } as const;
 
 /* ------------------------------------------------------------------ HERO/VÍDEO */

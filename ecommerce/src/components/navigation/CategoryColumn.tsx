@@ -1,4 +1,4 @@
-import Link from 'next/link';
+import { AppLink as Link } from '@/components/ui/AppLink';
 import { cn } from '@/lib/utils';
 import type { MenuColumn } from '@/types';
 

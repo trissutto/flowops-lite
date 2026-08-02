@@ -15,11 +15,9 @@ import type { InstagramPost } from '@/types';
 
 export function InstagramCard({
   post,
-  index = 0,
   className,
 }: {
   post: InstagramPost;
-  index?: number;
   className?: string;
 }) {
   const tagged = post.taggedProducts ?? [];
@@ -35,8 +33,12 @@ export function InstagramCard({
         src={post.image.src}
         alt={post.image.alt}
         fill
-        loading={index < 4 ? 'eager' : 'lazy'}
-        sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 20vw"
+        // Sempre lazy. Antes as 4 primeiras eram `eager`, e o next/image
+        // transforma isso em <link rel=preload>: quatro preloads da 12ª seção
+        // da home competindo com a imagem do hero, que é o LCP. Esta grade
+        // vive no fim da página — nunca vale a pena adiantar.
+        loading="lazy"
+        sizes="(max-width: 640px) 45vw, (max-width: 1024px) 31vw, 16vw"
         placeholder="blur"
         blurDataURL={BLUR_DATA_URL}
         className="object-cover transition-transform duration-[900ms] ease-[cubic-bezier(0.22,1,0.36,1)] group-hover:scale-[1.04]"

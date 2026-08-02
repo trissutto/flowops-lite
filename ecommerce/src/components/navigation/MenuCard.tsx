@@ -1,5 +1,5 @@
 import Image from 'next/image';
-import Link from 'next/link';
+import { AppLink as Link } from '@/components/ui/AppLink';
 import { ArrowRight } from 'lucide-react';
 import { BLUR_DATA_URL, cn } from '@/lib/utils';
 import type { MenuFeature } from '@/types';

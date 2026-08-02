@@ -6,6 +6,7 @@ import { motion } from 'framer-motion';
 import { Pause, Play, Volume2, VolumeX } from 'lucide-react';
 import { BLUR_DATA_URL, cn } from '@/lib/utils';
 import { fadeUp, reveal } from '@/lib/motion';
+import { useNearViewport } from '@/hooks';
 import type { VideoMedia } from '@/types';
 
 /**
@@ -17,6 +18,13 @@ import type { VideoMedia } from '@/types';
  *
  * Controles mínimos (play/pause e som) porque autoplay sem controle de pausa
  * é violação de acessibilidade (WCAG 2.2.2).
+ *
+ * ⚠️ NUNCA passar `poster` pro <video>. O atributo aceita só uma URL crua, sem
+ * passar pelo next/image, e o browser baixa o original inteiro — a foto do
+ * Unsplash usada aqui pesa 4,9 MB e sozinha respondia por 90% do peso da home
+ * (PageSpeed de 31/07: 5.448 KB no total). O poster é o <Image> abaixo, que
+ * sai otimizado e no tamanho certo. O <video> só monta quando o bloco chega
+ * perto da viewport, então no carregamento da home ele não custa nada.
  */
 
 interface VideoBlockProps {
@@ -40,8 +48,14 @@ export function VideoBlock({
   className,
 }: VideoBlockProps) {
   const ref = useRef<HTMLVideoElement>(null);
+  const [figureRef, near] = useNearViewport<HTMLElement>();
   const [playing, setPlaying] = useState(autoPlay);
   const [muted, setMuted] = useState(true);
+  // O src pode simplesmente não existir mais (o vídeo institucional de hoje é
+  // um placeholder do Pexels que responde 403). Quando falha, o bloco vira o
+  // poster — sem retângulo preto e sem controles que não controlam nada.
+  const [failed, setFailed] = useState(false);
+  const showVideo = near && !failed;
 
   const aspectClass =
     aspect === '16/9' ? 'aspect-video' : aspect === '21/9' ? 'aspect-21/9' : 'aspect-4/3';
@@ -66,31 +80,33 @@ export function VideoBlock({
   }
 
   return (
-    <motion.figure {...reveal(fadeUp)} className={cn('relative', className)}>
+    <motion.figure ref={figureRef} {...reveal(fadeUp)} className={cn('relative', className)}>
       <div className={cn('relative overflow-hidden rounded-lg bg-ink', aspectClass)}>
         {/* Poster por baixo — evita frame preto antes do vídeo montar */}
         <Image
           src={video.poster}
-          alt=""
-          aria-hidden
+          alt={failed ? video.alt : ''}
+          aria-hidden={failed ? undefined : true}
           fill
-          sizes="100vw"
+          sizes="(max-width: 1024px) 100vw, 1280px"
           placeholder="blur"
           blurDataURL={BLUR_DATA_URL}
           className="object-cover"
         />
-        <video
-          ref={ref}
-          src={video.src}
-          poster={video.poster}
-          autoPlay={autoPlay}
-          muted
-          loop
-          playsInline
-          preload="metadata"
-          aria-label={video.alt}
-          className="relative size-full object-cover"
-        />
+        {showVideo && (
+          <video
+            ref={ref}
+            src={video.src}
+            autoPlay={autoPlay}
+            muted
+            loop
+            playsInline
+            preload="none"
+            aria-label={video.alt}
+            onError={() => setFailed(true)}
+            className="relative size-full object-cover"
+          />
+        )}
 
         {(eyebrow || title) && (
           <div className="pointer-events-none absolute inset-0 flex flex-col justify-end bg-gradient-to-t from-ink/70 via-transparent to-transparent p-8 lg:p-14">
@@ -99,8 +115,8 @@ export function VideoBlock({
           </div>
         )}
 
-        {/* Controles */}
-        <div className="absolute right-5 bottom-5 flex gap-2">
+        {/* Controles — só quando existe vídeo pra controlar */}
+        <div className={cn('absolute right-5 bottom-5 flex gap-2', !showVideo && 'hidden')}>
           <button
             type="button"
             onClick={togglePlay}
