@@ -26,6 +26,9 @@ import { api } from '@/lib/api';
 import {
   ChevronDown, ChevronRight, Image as ImageIcon, Loader2, Package, Save, Search,
 } from 'lucide-react';
+import {
+  SelectAtributoPeca, type Atributo, type AtributosPorTipo, type TipoAtributo,
+} from '@/components/SelectAtributoPeca';
 
 /* ─────────────────────────────── Tipos ─────────────────────────────── */
 
@@ -42,8 +45,6 @@ type SkuRow = {
 };
 
 type AtributoRef = { id: string; nome: string };
-type Atributo = { id: string; nome: string };
-type AtributosPorTipo = Partial<Record<'ocasiao' | 'tecido' | 'modelagem' | 'colecao', Atributo[]>>;
 
 type Grade = { id: string; nome: string; linhas: unknown[] };
 
@@ -184,6 +185,11 @@ export default function ProdutoMasterPage() {
     return [...mapa.entries()].map(([chave, v]) => ({ chave, ...v }));
   }, [linhas]);
 
+  /** Cadastro criado pelo "+ novo" entra na lista sem recarregar a tela. */
+  const aoCriarAtributo = useCallback((tipo: TipoAtributo, novo: Atributo) => {
+    setAtributos((p) => ({ ...p, [tipo]: [...(p[tipo] ?? []), novo] }));
+  }, []);
+
   const carregarFicha = useCallback(async (ref: string, marca: string) => {
     const chave = `${ref}|${marca}`;
     if (fichas[chave] !== undefined) return;
@@ -279,6 +285,7 @@ export default function ProdutoMasterPage() {
                   ficha={ficha}
                   atributos={atributos}
                   grades={grades}
+                  onCriarAtributo={aoCriarAtributo}
                   onSalvo={(f) => setFichas((p) => ({ ...p, [grupo.chave]: f }))}
                 />
               )}
@@ -337,7 +344,7 @@ export default function ProdutoMasterPage() {
 /* ─────────────── Nível 1: o que vale pra todas as cores ─────────────── */
 
 function FichaComum({
-  ref_, marca, ficha, atributos, grades, onSalvo,
+  ref_, marca, ficha, atributos, grades, onSalvo, onCriarAtributo,
 }: {
   ref_: string;
   marca: string;
@@ -345,6 +352,7 @@ function FichaComum({
   atributos: AtributosPorTipo;
   grades: Grade[];
   onSalvo: (f: Ficha) => void;
+  onCriarAtributo: (tipo: TipoAtributo, novo: Atributo) => void;
 }) {
   const [form, setForm] = useState({
     descricao: '', tecidoId: '', colecaoId: '', gradeMedidasId: '', elasticidade: '',
@@ -424,13 +432,17 @@ function FichaComum({
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-        <SelectAtributo label="Tecido" opcoes={atributos.tecido} value={form.tecidoId}
+        <SelectAtributoPeca tipo="tecido" label="Tecido" opcoes={atributos.tecido}
+          value={form.tecidoId} onCriado={onCriarAtributo}
           onChange={(v) => setForm((f) => ({ ...f, tecidoId: v }))} />
-        <SelectAtributo label="Coleção" opcoes={atributos.colecao} value={form.colecaoId}
+        <SelectAtributoPeca tipo="colecao" label="Coleção" opcoes={atributos.colecao}
+          value={form.colecaoId} onCriado={onCriarAtributo}
           onChange={(v) => setForm((f) => ({ ...f, colecaoId: v }))} />
-        <SelectAtributo label="Ocasião" multiplo opcoes={atributos.ocasiao} values={form.ocasiaoIds}
+        <SelectAtributoPeca tipo="ocasiao" label="Ocasião" multiplo opcoes={atributos.ocasiao}
+          values={form.ocasiaoIds} onCriado={onCriarAtributo}
           onChangeMany={(v) => setForm((f) => ({ ...f, ocasiaoIds: v }))} />
-        <SelectAtributo label="Modelagem" multiplo opcoes={atributos.modelagem} values={form.modelagemIds}
+        <SelectAtributoPeca tipo="modelagem" label="Modelagem" multiplo opcoes={atributos.modelagem}
+          values={form.modelagemIds} onCriado={onCriarAtributo}
           onChangeMany={(v) => setForm((f) => ({ ...f, modelagemIds: v }))} />
       </div>
 
@@ -618,56 +630,6 @@ function FichaDaCor({
         {salvando ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
         Salvar cor
       </button>
-    </div>
-  );
-}
-
-/* ─────────────── Select de atributo (igual ao do pedido) ─────────────── */
-
-function SelectAtributo({
-  label, opcoes, value, values, onChange, onChangeMany, multiplo,
-}: {
-  label: string;
-  opcoes?: Atributo[];
-  value?: string;
-  values?: string[];
-  onChange?: (v: string) => void;
-  onChangeMany?: (v: string[]) => void;
-  multiplo?: boolean;
-}) {
-  const lista = opcoes ?? [];
-  const escolhidos = values ?? [];
-  const disponiveis = multiplo ? lista.filter((o) => !escolhidos.includes(o.id)) : lista;
-  const vazio = lista.length === 0;
-
-  return (
-    <div>
-      <label className="text-[10px] font-bold text-slate-600 uppercase">{label}</label>
-      <select
-        value={multiplo ? '' : (value ?? '')}
-        disabled={vazio || (multiplo && disponiveis.length === 0)}
-        title={vazio ? 'Cadastre em Cadastros → Classificação da Peça' : undefined}
-        onChange={(e) => {
-          if (!multiplo) { onChange?.(e.target.value); return; }
-          if (e.target.value) onChangeMany?.([...escolhidos, e.target.value]);
-        }}
-        className="w-full px-2 py-2 border rounded text-sm bg-white disabled:opacity-50"
-      >
-        <option value="">{multiplo ? '+ adicionar' : '— nenhum —'}</option>
-        {disponiveis.map((o) => <option key={o.id} value={o.id}>{o.nome}</option>)}
-      </select>
-      {multiplo && escolhidos.length > 0 && (
-        <div className="flex flex-wrap gap-1 mt-1">
-          {escolhidos.map((id) => (
-            <span key={id} className="inline-flex items-center gap-1 text-[11px] bg-violet-50 text-violet-800 border border-violet-200 rounded px-1.5 py-0.5">
-              {lista.find((o) => o.id === id)?.nome ?? id}
-              <button type="button" aria-label="Remover"
-                onClick={() => onChangeMany?.(escolhidos.filter((x) => x !== id))}
-                className="text-violet-500 hover:text-violet-900 leading-none">×</button>
-            </span>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
