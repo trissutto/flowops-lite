@@ -134,7 +134,14 @@ export default function ProdutoMasterPage() {
     setBuscando(true);
     setErro(null);
     try {
-      setLinhas(await api<SkuRow[]>(`/products-editor/search?q=${encodeURIComponent(q)}`));
+      // ⚠️ O endpoint devolve { rows, fonte, warnings } — NÃO o array puro.
+      // Jogar a resposta inteira no estado fazia o `for...of` do useMemo
+      // estourar ("a is not iterable") e derrubar a tela inteira no boundary
+      // do Next, com "Application error" e nada mais.
+      const resp = await api<{ rows?: SkuRow[] }>(`/products-editor/search?q=${encodeURIComponent(q)}`);
+      const rows = resp?.rows ?? [];
+      setLinhas(rows);
+      if (rows.length === 0) setErro(`Nada encontrado pra "${q}"`);
     } catch (e: any) {
       setErro(e?.message || 'Busca falhou');
       setLinhas([]);
@@ -150,6 +157,10 @@ export default function ProdutoMasterPage() {
    */
   const porRef = useMemo(() => {
     const mapa = new Map<string, { ref: string; marca: string; nomeCurto: string; produtos: Produto[] }>();
+    // Guarda de forma: se a API mudar de formato de novo, a tela fica vazia em
+    // vez de morrer inteira. Um useMemo que estoura sobe pro error boundary e
+    // apaga a página — inclusive a busca, que é o único jeito de sair do erro.
+    if (!Array.isArray(linhas)) return [];
     for (const row of linhas) {
       const marca = (row.marca || 'SEM MARCA').toUpperCase();
       const chaveRef = `${row.ref}|${marca}`;
@@ -277,7 +288,10 @@ export default function ProdutoMasterPage() {
                 {grupo.produtos.map((prod) => {
                   const aberta = corAberta === prod.chave;
                   const fichaCor = ficha?.cores?.find((c) => c.cor.toUpperCase() === prod.cor);
-                  const status = STATUS_LABEL[fichaCor?.statusPublicacao ?? 'sem_fotos'];
+                  // Status desconhecido não pode derrubar a tela — mesma lição
+                  // do useMemo acima.
+                  const status = STATUS_LABEL[fichaCor?.statusPublicacao ?? 'sem_fotos']
+                    ?? STATUS_LABEL.sem_fotos;
                   const total = prod.skus.reduce((s, r) => s + (r.estoque || 0), 0);
                   return (
                     <div key={prod.chave} className="border-b border-slate-100 last:border-0">
