@@ -23,8 +23,8 @@ import { pushToDataLayer } from './data-layer';
 import { getConsent, isAllowed, subscribeConsent } from './consent';
 import { buildContext, getMetaBrowserIds, uuid } from './identity';
 import {
+  ALL_EVENTS,
   SERVER_ONLY_EVENTS,
-  trackingEventSchema,
   type DispatchLog,
   type EventName,
   type TrackedItem,
@@ -144,12 +144,12 @@ export function track(name: EventName, params: Record<string, unknown> = {}, opt
       source: 'browser',
     };
 
-    const parsed = trackingEventSchema.safeParse(candidate);
-    if (!parsed.success) {
-      console.warn(`[tracking] evento "${name}" recusado na validação:`, parsed.error.issues);
+    const problema = validarEvento(candidate);
+    if (problema) {
+      console.warn(`[tracking] evento "${name}" recusado na validação: ${problema}`);
       return;
     }
-    const event = parsed.data;
+    const event = candidate;
 
     if (isDuplicate(event, options.dedupe_key)) {
       debug(`evento "${name}" ignorado (duplicado na janela de ${DEDUP_WINDOW_MS}ms)`);
@@ -168,6 +168,40 @@ export function track(name: EventName, params: Record<string, unknown> = {}, opt
   } catch (err) {
     console.warn('[tracking] falha ao registrar evento:', msg(err));
   }
+}
+
+/**
+ * Guarda do evento antes de despachar. Devolve a descrição do problema, ou
+ * `undefined` quando está tudo certo.
+ *
+ * Aqui o objeto é construído pelo próprio app e já passou pelo TypeScript, e o
+ * `/api/events` revalida tudo com zod na chegada — esta checagem existe pra
+ * pegar o que o tipo não pega: número que virou `NaN` ou `Infinity` no meio de
+ * uma conta de preço. É o risco real que o cabeçalho de `types.ts` descreve:
+ * valor quebrado entra em silêncio na plataforma de anúncio e o ROAS some sem
+ * ninguém notar. Escrita à mão pra não trazer o zod (74 KB) pro navegador.
+ */
+function numeroInvalido(n: unknown): boolean {
+  return typeof n !== 'number' || !Number.isFinite(n) || n < 0;
+}
+
+function validarEvento(e: TrackingEvent): string | undefined {
+  if (!ALL_EVENTS.includes(e.event)) return `evento fora da taxonomia`;
+  if (typeof e.event_id !== 'string' || e.event_id.length < 8) return 'event_id inválido';
+  if (e.value !== undefined && numeroInvalido(e.value)) return `value inválido (${e.value})`;
+
+  for (const item of e.items ?? []) {
+    if (numeroInvalido(item.valor)) {
+      return `item "${item.product_id}" com valor inválido (${item.valor})`;
+    }
+    if (!Number.isInteger(item.quantidade) || item.quantidade < 1) {
+      return `item "${item.product_id}" com quantidade inválida (${item.quantidade})`;
+    }
+    if (item.desconto !== undefined && numeroInvalido(item.desconto)) {
+      return `item "${item.product_id}" com desconto inválido (${item.desconto})`;
+    }
+  }
+  return undefined;
 }
 
 /** Deduplicação: mesmo evento, mesma carga, dentro da janela = um só. */

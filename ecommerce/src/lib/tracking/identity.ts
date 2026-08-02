@@ -14,7 +14,7 @@
  * pode derrubar a loja — na dúvida, devolve valor efêmero e segue.
  */
 
-import type { EventContext } from './types';
+import type { Attribution, EventContext } from './types';
 
 const ANON_KEY = 'lurds_anonymous_id';
 const SESSION_KEY = 'lurds_session';
@@ -139,16 +139,11 @@ export function setLoja(code: string | null): void {
  * Atribuição
  * ──────────────────────────────────────────────────────────────────────────── */
 
-export interface Attribution {
-  source?: string;
-  medium?: string;
-  campaign?: string;
-  term?: string;
-  content?: string;
-  gclid?: string;
-  fbclid?: string;
-  landing_page?: string;
-}
+/**
+ * A forma da atribuição mora em `types.ts`, junto do resto do contrato de
+ * evento — antes existia uma cópia aqui, e cópia de tipo diverge.
+ */
+export type { Attribution } from './types';
 
 /**
  * Captura a origem UMA vez por sessão, na primeira página. Reescrever a cada

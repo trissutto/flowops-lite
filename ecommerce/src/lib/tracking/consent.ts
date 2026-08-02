@@ -13,7 +13,40 @@
  * a conformidade vira ficção.
  */
 
-import { consentStateSchema, type ConsentCategory, type ConsentState } from './types';
+import type { ConsentCategory, ConsentState } from './types';
+
+/**
+ * Guarda do estado de consentimento vindo do localStorage.
+ *
+ * Aqui o dado É não confiável (a visitante pode ter editado o storage, ou o
+ * registro pode ser de uma versão antiga do app), então a checagem é campo a
+ * campo — o equivalente exato do `consentStateSchema` de `schemas.ts`, escrito
+ * à mão pra não arrastar o zod (74 KB) pro bundle de todas as páginas.
+ *
+ * Qualquer coisa fora do formato devolve `null`, e quem chama cai no default
+ * TUDO NEGADO. Na dúvida, não rastreia — é o lado seguro da LGPD.
+ */
+function parseConsentState(valor: unknown): ConsentState | null {
+  if (typeof valor !== 'object' || valor === null) return null;
+  const v = valor as Record<string, unknown>;
+
+  // `necessary` é literal `true`: nem `false` nem "true" passam.
+  if (v.necessary !== true) return null;
+  if (typeof v.analytics !== 'boolean') return null;
+  if (typeof v.marketing !== 'boolean') return null;
+  if (typeof v.personalization !== 'boolean') return null;
+  if (v.decided_at !== null && typeof v.decided_at !== 'string') return null;
+  if (typeof v.version !== 'number' || !Number.isInteger(v.version)) return null;
+
+  return {
+    necessary: true,
+    analytics: v.analytics,
+    marketing: v.marketing,
+    personalization: v.personalization,
+    decided_at: v.decided_at,
+    version: v.version,
+  };
+}
 
 const STORAGE_KEY = 'lurds_consent';
 
@@ -50,10 +83,10 @@ export function hydrateConsent(): ConsentState {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (raw) {
-      const parsed = consentStateSchema.safeParse(JSON.parse(raw));
+      const parsed = parseConsentState(JSON.parse(raw));
       // Versão antiga = consentimento de outro texto: não vale mais.
-      if (parsed.success && parsed.data.version === CONSENT_VERSION) {
-        current = parsed.data;
+      if (parsed && parsed.version === CONSENT_VERSION) {
+        current = parsed;
       }
     }
   } catch {

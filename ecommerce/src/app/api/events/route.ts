@@ -14,7 +14,8 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { dispatchBatch } from '@/lib/tracking/server/dispatch';
 import { getLogStore } from '@/lib/tracking/server/log-store';
-import { consentStateSchema, SERVER_ONLY_EVENTS, trackingEventSchema } from '@/lib/tracking/types';
+import { consentStateSchema, trackingEventSchema } from '@/lib/tracking/schemas';
+import { SERVER_ONLY_EVENTS } from '@/lib/tracking/types';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
