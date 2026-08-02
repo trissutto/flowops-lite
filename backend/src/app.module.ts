@@ -25,6 +25,7 @@ import { RoutingModule } from './routing/routing.module';
 import { WooCommerceModule } from './woocommerce/woocommerce.module';
 import { ErpModule } from './erp/erp.module';
 import { ProductClassificationModule } from './product-classification/product-classification.module';
+import { AtributosPecaModule } from './atributos-peca/atributos-peca.module';
 import { ContasPagarModule } from './contas-pagar/contas-pagar.module';
 import { FornecedoresModule } from './fornecedores/fornecedores.module';
 import { LimiteRedeModule } from './limite-rede/limite-rede.module';
@@ -114,6 +115,7 @@ import { OperadorPinModule } from './operador-pin/operador-pin.module';
     WooCommerceModule,
     ErpModule,
     ProductClassificationModule,
+    AtributosPecaModule,
     ContasPagarModule,
     FornecedoresModule,
     LimiteRedeModule,

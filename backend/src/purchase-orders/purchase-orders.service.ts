@@ -7,6 +7,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
 import { ProductRegistrationService } from '../product-registration/product-registration.service';
+import { AtributosPecaService } from '../atributos-peca/atributos-peca.service';
 
 /**
  * PurchaseOrdersService — pedidos de compra do fornecedor.
@@ -33,7 +34,46 @@ export class PurchaseOrdersService {
     private readonly prisma: PrismaService,
     private readonly erp: ErpService,
     private readonly productReg: ProductRegistrationService,
+    private readonly atributos: AtributosPecaService,
   ) {}
+
+  /**
+   * Classificação da peça (tecido/modelagem/coleção/ocasião) escolhida na
+   * compra. Recebe só os ids do frontend e resolve o nome pelo cadastro —
+   * assim o nome gravado no pedido nunca é o que o navegador mandou.
+   *
+   * Devolve `{}` quando nada foi informado, pra `updateItem` conseguir
+   * distinguir "não mexeu" de "limpou".
+   */
+  private async montarClassificacao(input: {
+    tecidoId?: string | null;
+    colecaoId?: string | null;
+    ocasiaoIds?: string[];
+    modelagemIds?: string[];
+  }): Promise<Record<string, unknown>> {
+    const data: Record<string, unknown> = {};
+
+    if (input.tecidoId !== undefined) {
+      const tecido = await this.atributos.resolveRef('tecido', input.tecidoId);
+      data.tecidoId = tecido?.id ?? null;
+      data.tecidoNome = tecido?.nome ?? null;
+    }
+    if (input.colecaoId !== undefined) {
+      const colecao = await this.atributos.resolveRef('colecao', input.colecaoId);
+      data.colecaoId = colecao?.id ?? null;
+      data.colecaoNome = colecao?.nome ?? null;
+    }
+    if (input.ocasiaoIds !== undefined) {
+      const refs = await this.atributos.resolveRefs('ocasiao', input.ocasiaoIds);
+      data.ocasioes = refs.length ? JSON.stringify(refs) : null;
+    }
+    if (input.modelagemIds !== undefined) {
+      const refs = await this.atributos.resolveRefs('modelagem', input.modelagemIds);
+      data.modelagens = refs.length ? JSON.stringify(refs) : null;
+    }
+
+    return data;
+  }
 
   // ── Categorias (mapeamento descrição → grupo/subgrupo) ──
 
@@ -193,6 +233,11 @@ export class PurchaseOrdersService {
       tributoPct?: number;
       descontoPct?: number;
       tamanhosQty: Record<string, number>;
+      // Classificação da peça — vai direto pro addItem, que resolve os nomes.
+      tecidoId?: string | null;
+      colecaoId?: string | null;
+      ocasiaoIds?: string[];
+      modelagemIds?: string[];
     }>;
   }, userId?: string) {
     if (!input.fornecedorNome?.trim()) {
@@ -259,6 +304,11 @@ export class PurchaseOrdersService {
     tributoPct?: number;
     descontoPct?: number;
     tamanhosQty: Record<string, number>;
+    // Classificação da peça — opcional, preenchida na compra.
+    tecidoId?: string | null;
+    colecaoId?: string | null;
+    ocasiaoIds?: string[];
+    modelagemIds?: string[];
   }) {
     if (!input.ref?.trim()) throw new BadRequestException('REF obrigatória');
     if (!input.cor?.trim()) throw new BadRequestException('COR obrigatória');
@@ -277,8 +327,10 @@ export class PurchaseOrdersService {
     if (Object.keys(tamanhosQtyFiltrado).length === 0) {
       throw new BadRequestException('Nenhum tamanho com qty > 0 (todos zerados)');
     }
+    const classificacao = await this.montarClassificacao(input);
     const it = await (this.prisma as any).purchaseOrderItem.create({
       data: {
+        ...classificacao,
         orderId,
         ref: input.ref.trim().toUpperCase(),
         descricaoBase: input.descricaoBase.trim().toUpperCase(),
@@ -352,6 +404,9 @@ export class PurchaseOrdersService {
       }
       data.tamanhosQty = JSON.stringify(filt);
     }
+    // Só toca na classificação se o campo veio no payload — undefined é "não
+    // mexeu", null/[] é "limpou".
+    Object.assign(data, await this.montarClassificacao(input));
     const updated = await (this.prisma as any).purchaseOrderItem.update({
       where: { id: itemId },
       data,
