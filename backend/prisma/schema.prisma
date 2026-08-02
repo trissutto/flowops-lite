@@ -3397,10 +3397,15 @@ model ProductPhoto {
   url             String   @db.Text                   // URL publica no R2
   objectKey       String?  @map("object_key") @db.Text // chave no bucket pra delete
   uploadedByUserId String? @map("uploaded_by_user_id")
+  // A vitrine do site precisa de GALERIA (até 6 por cor), não de uma foto só —
+  // por isso a unicidade passou a incluir a ordem. `ordem` 0 é a capa.
+  // Quem lê uma foto só (Reposição, PDV, Separação, Realinhamento) continua
+  // funcionando: `getPhoto` ordena por `ordem` e devolve a capa.
+  ordem           Int      @default(0)
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
 
-  @@unique([ref, cor], name: "ref_cor_unique")
+  @@unique([ref, cor, ordem], name: "ref_cor_ordem_unique")
   @@index([ref])
   @@map("product_photos")
 }
@@ -4412,6 +4417,105 @@ model ProductClassification {
   @@index([tipoProduto])
   @@index([classificacaoRevisada])
   @@map("product_classification")
+}
+
+/// GRADE DE MEDIDAS — template reutilizável (busto/cintura/quadril por tamanho).
+///
+/// Digitar matriz de medidas em cada peça é o caminho garantido pra ficar tudo
+/// vazio. Aqui a grade é cadastrada uma vez ("Vestido viscolycra 46-60") e a
+/// ficha só aponta pra ela; quando aquela peça foge do padrão, a própria ficha
+/// guarda o ajuste em `medidasAjuste`.
+model GradeMedidas {
+  id         String   @id @default(uuid())
+  nome       String   @unique
+  observacao String?  @db.Text
+  /// JSON: [{ tamanho: "46", busto: 96, cintura: 80, quadril: 104, comprimento: 112 }]
+  /// Medidas em centímetros. Campo ausente = não se aplica àquela peça.
+  linhas     String   @db.Text
+  ativo      Boolean  @default(true)
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  fichas     ProdutoFicha[]
+
+  @@map("grades_medidas")
+}
+
+/// FICHA DO PRODUTO — nível REF (o que vale pra TODAS as cores).
+///
+/// A cascata da tela master é REF → COR → grade. Sem este nível, tecido e
+/// modelagem teriam que ser redigitados em cada cor da mesma peça.
+///
+/// Chave é REF + MARCA, nunca REF sozinha: REF numérica é reciclada entre
+/// fornecedores (dois "222" de marcas diferentes são peças diferentes).
+///
+/// Só guarda o que o Flow ACRESCENTA. Preço, estoque, grupo/subgrupo e EANs
+/// continuam vindo do catálogo — aqui é a camada de enriquecimento.
+model ProdutoFicha {
+  id            String   @id @default(uuid())
+  ref           String
+  marca         String
+  /// Derivado da descrição (sem cor/tamanho/ref/marca), editável.
+  nomeCurto     String?  @map("nome_curto")
+  /// Descrição de venda. UMA por REF: as cores da mesma peça têm o mesmo
+  /// tecido e o mesmo caimento, e escrever três vezes quase a mesma coisa é o
+  /// que faz o campo ficar vazio.
+  descricao     String?  @db.Text
+
+  // Classificação — mesma convenção do pedido de compra: id + nome ao lado.
+  tecidoId      String?  @map("tecido_id")
+  tecidoNome    String?  @map("tecido_nome")
+  colecaoId     String?  @map("colecao_id")
+  colecaoNome   String?  @map("colecao_nome")
+  /// JSON [{id,nome}] — aceitam várias por peça.
+  ocasioes      String?  @db.Text
+  modelagens    String?  @db.Text
+
+  // Caimento
+  gradeMedidasId String? @map("grade_medidas_id")
+  gradeMedidas   GradeMedidas? @relation(fields: [gradeMedidasId], references: [id])
+  /// Ajuste da grade só pra esta peça. Mesmo formato de `GradeMedidas.linhas`;
+  /// o que estiver aqui sobrescreve a linha do template.
+  medidasAjuste  String? @map("medidas_ajuste") @db.Text
+  /// 'nao' | 'pouco' | 'muito' — pergunta que a cliente mais faz.
+  elasticidade   String?
+
+  atualizadoPor String?  @map("atualizado_por")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  cores         ProdutoFichaCor[]
+
+  @@unique([ref, marca])
+  @@index([tecidoId])
+  @@index([colecaoId])
+  @@map("produto_ficha")
+}
+
+/// FICHA DO PRODUTO — nível COR. É a página do site: uma por cor.
+///
+/// Preço mora aqui e não na REF porque varia mesmo por cor (VLM-222 laranja e
+/// marinho a R$ 179,90, marrom a R$ 189,90) — mas quem manda no preço é o
+/// catálogo; esta tabela só guarda o que o site acrescenta.
+model ProdutoFichaCor {
+  id             String   @id @default(uuid())
+  fichaId        String   @map("ficha_id")
+  ficha          ProdutoFicha @relation(fields: [fichaId], references: [id], onDelete: Cascade)
+  cor            String
+  /// Título da página no site. Vazio = monta com nome curto + cor.
+  tituloComercial String? @map("titulo_comercial")
+  /// Vídeo da peça. Guarda a URL como veio; o site extrai o id.
+  youtubeUrl     String?  @map("youtube_url")
+  /// 'publicado' | 'pronto' | 'sem_fotos' | 'nao_publicar'
+  /// ⚠️ 'sem_fotos' é CALCULADO na leitura (não tem foto no R2), nunca
+  /// escolhido a dedo — status digitado desatualiza no dia seguinte.
+  statusPublicacao String @default("nao_publicar") @map("status_publicacao")
+
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@unique([fichaId, cor])
+  @@map("produto_ficha_cor")
 }
 
 /// CLASSIFICAÇÃO DA PEÇA — Ocasião, Tecido, Modelagem e Coleção.
