@@ -48,6 +48,7 @@ const LOJA_ITEMS: LojaItem[] = [
   { href: '/retaguarda/realinhamento',        label: 'Realinhamento',  subtitle: 'Matriz',      description: 'Rebalancear entre lojas',       tone: 'orange', icon: Shuffle      },
   { href: '/retaguarda/remessas',             label: 'Remessas',       subtitle: 'Trânsito',    description: 'Caixas em rota',                tone: 'sky',    icon: Truck        },
   { href: '/cadastros/classificacao-produtos', label: 'Produtos Loja',  subtitle: 'Classificação', description: 'Básico/Moda + plus size',     tone: 'purple', icon: Tags         },
+  { href: '/retaguarda/produto-master',       label: 'Produto (ficha)', subtitle: 'Tela master', description: 'REF → cor → grade · fotos · site', tone: 'purple', icon: Package2 },
   { href: '/cadastros/classificacao-peca',    label: 'Classificação Peça', subtitle: 'Cadastros', description: 'Ocasião · tecido · modelagem · coleção', tone: 'purple', icon: Shirt },
   { href: '/retaguarda/promocoes-config',     label: 'Promoções PDV',  subtitle: 'Config',      description: '50% · básico fora · 4 leva 3',  tone: 'amber',  icon: Percent      },
   { href: '/retaguarda/descontos-senhas',     label: 'Descontos & Senhas', subtitle: 'Config',  description: 'Faixas de desconto + senhas',   tone: 'amber',  icon: KeyRound     },

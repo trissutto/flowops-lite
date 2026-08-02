@@ -23,8 +23,13 @@ export class ProductPhotosService {
   constructor(private readonly prisma: PrismaService) {}
 
   /**
-   * Busca foto por REF (+ COR opcional).
+   * Busca A CAPA da REF (+ COR opcional).
    * Se não achar foto da COR específica, tenta foto genérica da REF.
+   *
+   * ⚠️ `orderBy: ordem` é obrigatório, não cosmético: desde que a galeria
+   * passou a aceitar até 6 fotos por cor, existe mais de uma linha por
+   * (ref, cor) e `findFirst` sem ordem devolveria uma qualquer — a foto do
+   * produto no PDV mudaria sozinha entre uma consulta e outra.
    */
   async getPhoto(ref: string, cor?: string) {
     const refUp = (ref || '').trim().toUpperCase();
@@ -34,12 +39,25 @@ export class ProductPhotosService {
     if (corUp) {
       const specific = await (this.prisma as any).productPhoto.findFirst({
         where: { ref: refUp, cor: corUp },
+        orderBy: { ordem: 'asc' },
       });
       if (specific) return specific;
     }
     // Fallback: foto genérica (cor = null)
     return (this.prisma as any).productPhoto.findFirst({
       where: { ref: refUp, cor: null },
+      orderBy: { ordem: 'asc' },
+    });
+  }
+
+  /** Galeria completa de uma cor, na ordem de exibição (capa primeiro). */
+  async listPhotos(ref: string, cor?: string) {
+    const refUp = (ref || '').trim().toUpperCase();
+    if (!refUp) return [];
+    const corUp = (cor || '').trim().toUpperCase() || null;
+    return (this.prisma as any).productPhoto.findMany({
+      where: { ref: refUp, cor: corUp },
+      orderBy: { ordem: 'asc' },
     });
   }
 

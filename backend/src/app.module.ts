@@ -26,6 +26,7 @@ import { WooCommerceModule } from './woocommerce/woocommerce.module';
 import { ErpModule } from './erp/erp.module';
 import { ProductClassificationModule } from './product-classification/product-classification.module';
 import { AtributosPecaModule } from './atributos-peca/atributos-peca.module';
+import { ProdutoFichaModule } from './produto-ficha/produto-ficha.module';
 import { ContasPagarModule } from './contas-pagar/contas-pagar.module';
 import { FranquiasModule } from './franquias/franquias.module';
 import { QueueModule } from './queue/queue.module';
@@ -113,6 +114,7 @@ import { OperadorPinModule } from './operador-pin/operador-pin.module';
     ErpModule,
     ProductClassificationModule,
     AtributosPecaModule,
+    ProdutoFichaModule,
     ContasPagarModule,
     FranquiasModule,
     QueueModule,
