@@ -18,6 +18,9 @@ import {
   AlertCircle, Copy, X, Eye,
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import {
+  SelectAtributoPeca, type Atributo, type AtributosPorTipo, type TipoAtributo,
+} from '@/components/SelectAtributoPeca';
 
 type Fornecedor = { cnpj: string; nome: string; fantasia?: string };
 type Grupo = { codigo: number; nome: string };
@@ -31,10 +34,6 @@ type Categoria = {
   cfopDefault: string | null;
   plusSizeDefault: boolean;
 };
-
-/** Cadastros → Classificação da Peça. Chega agrupado por tipo. */
-type Atributo = { id: string; nome: string };
-type AtributosPorTipo = Partial<Record<'ocasiao' | 'tecido' | 'modelagem' | 'colecao', Atributo[]>>;
 
 type ItemForm = {
   tempId: string;
@@ -159,6 +158,11 @@ export default function NovoPedidoPage() {
     // vazios — e classificar é opcional aqui, então nunca trava o pedido.
     api<AtributosPorTipo>('/atributos-peca').then(setAtributos).catch(() => {});
   }, []);
+
+  /** Cadastro criado pelo "+ novo" entra na lista sem recarregar a tela. */
+  const aoCriarAtributo = (tipo: TipoAtributo, novo: Atributo) => {
+    setAtributos((p) => ({ ...p, [tipo]: [...(p[tipo] ?? []), novo] }));
+  };
 
   // Refetch da lista de grupos (chamado após criar grupo novo inline)
   const refetchGrupos = async () => {
@@ -731,6 +735,7 @@ export default function NovoPedidoPage() {
               grupos={grupos}
               categorias={categorias}
               atributos={atributos}
+              onCriarAtributo={aoCriarAtributo}
               markup={markup}
               getSubgrupos={getSubgrupos}
               onRefreshGrupos={refetchGrupos}
@@ -761,91 +766,19 @@ export default function NovoPedidoPage() {
 }
 
 // ─── ItemEditor ─────────────────────────────────────────────────────────
-/**
- * Select da classificação da peça. Mesmo peso visual do GRUPO/SUBGRUPO — os
- * quatro cabem numa linha só.
- *
- * O caso `multiplo` (ocasião, modelagem) NÃO usa <select multiple>: aquilo fica
- * três linhas mais alto que os vizinhos e exige ctrl+clique, que ninguém acerta
- * no balcão. Aqui é um select normal que vai empilhando chips embaixo, então a
- * linha continua uniforme e só cresce quando de fato tem escolha feita.
- */
-function ClassificacaoSelect({
-  label, opcoes, value, values, onChange, onChangeMany, multiplo,
-}: {
-  label: string;
-  opcoes?: Atributo[];
-  value?: string;
-  values?: string[];
-  onChange?: (v: string) => void;
-  onChangeMany?: (v: string[]) => void;
-  multiplo?: boolean;
-}) {
-  const lista = opcoes ?? [];
-  const vazio = lista.length === 0;
-  const escolhidos = values ?? [];
-  const semTitulo = vazio ? 'Cadastre em Cadastros → Classificação da Peça' : undefined;
-
-  // Só oferece o que ainda não foi escolhido.
-  const disponiveis = multiplo ? lista.filter((o) => !escolhidos.includes(o.id)) : lista;
-
-  return (
-    <div>
-      <label className="text-[10px] font-bold text-slate-600 uppercase">{label}</label>
-      <select
-        // No modo múltiplo o select é só o "adicionar": volta pro vazio a cada
-        // escolha, e o que foi escolhido vira chip.
-        value={multiplo ? '' : (value ?? '')}
-        disabled={vazio || (multiplo && disponiveis.length === 0)}
-        title={semTitulo}
-        onChange={(e) => {
-          if (!multiplo) { onChange?.(e.target.value); return; }
-          if (e.target.value) onChangeMany?.([...escolhidos, e.target.value]);
-        }}
-        className="w-full px-2 py-2 border rounded text-sm bg-white disabled:opacity-50 disabled:cursor-not-allowed"
-      >
-        <option value="">{multiplo ? '+ adicionar' : '— nenhum —'}</option>
-        {disponiveis.map((o) => (
-          <option key={o.id} value={o.id}>{o.nome}</option>
-        ))}
-      </select>
-
-      {multiplo && escolhidos.length > 0 && (
-        <div className="flex flex-wrap gap-1 mt-1">
-          {escolhidos.map((id) => (
-            <span
-              key={id}
-              className="inline-flex items-center gap-1 text-[11px] bg-violet-50 text-violet-800 border border-violet-200 rounded px-1.5 py-0.5"
-            >
-              {lista.find((o) => o.id === id)?.nome ?? id}
-              <button
-                type="button"
-                aria-label="Remover"
-                onClick={() => onChangeMany?.(escolhidos.filter((x) => x !== id))}
-                className="text-violet-500 hover:text-violet-900 leading-none"
-              >
-                ×
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 function ItemEditor({
   item, index, grupos, categorias, markup,
   getSubgrupos,
   onUpdate, onRemove, onDuplicate, onAplicarCategoria,
   onAddCor, onRemoveCor, onAddTam, onRemoveTam, onGrade,
-  onAdicionarNova, onRefreshGrupos, atributos,
+  onAdicionarNova, onRefreshGrupos, atributos, onCriarAtributo,
 }: {
   item: ItemForm;
   index: number;
   grupos: Grupo[];
   categorias: Categoria[];
   atributos: AtributosPorTipo;
+  onCriarAtributo: (tipo: TipoAtributo, novo: Atributo) => void;
   markup: string;
   getSubgrupos: (grupoCode: number) => Promise<Grupo[]>;
   onUpdate: (patch: Partial<ItemForm>) => void;
@@ -1080,32 +1013,41 @@ function ItemEditor({
           Preenchida aqui porque quem compra tem a peça na mão e sabe o tecido;
           deixar pra depois é o que faz o campo ficar vazio pra sempre.
           Opcional: nada aqui trava o pedido. Ocasião e modelagem aceitam mais
-          de uma (Ctrl/⌘ + clique) — um vestido serve casamento e jantar. */}
+          de uma — escolher empilha chips embaixo do campo. O "+ novo" ao lado
+          do rótulo cadastra sem sair da tela, igual GRUPO/SUBGRUPO acima. */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-        <ClassificacaoSelect
+        <SelectAtributoPeca
+          tipo="tecido"
           label="Tecido"
           opcoes={atributos.tecido}
           value={item.tecidoId}
+          onCriado={onCriarAtributo}
           onChange={(v) => onUpdate({ tecidoId: v })}
         />
-        <ClassificacaoSelect
+        <SelectAtributoPeca
+          tipo="colecao"
           label="Coleção"
           opcoes={atributos.colecao}
           value={item.colecaoId}
+          onCriado={onCriarAtributo}
           onChange={(v) => onUpdate({ colecaoId: v })}
         />
-        <ClassificacaoSelect
+        <SelectAtributoPeca
+          tipo="ocasiao"
           label="Ocasião"
           multiplo
           opcoes={atributos.ocasiao}
           values={item.ocasiaoIds}
+          onCriado={onCriarAtributo}
           onChangeMany={(v) => onUpdate({ ocasiaoIds: v })}
         />
-        <ClassificacaoSelect
+        <SelectAtributoPeca
+          tipo="modelagem"
           label="Modelagem"
           multiplo
           opcoes={atributos.modelagem}
           values={item.modelagemIds}
+          onCriado={onCriarAtributo}
           onChangeMany={(v) => onUpdate({ modelagemIds: v })}
         />
       </div>
