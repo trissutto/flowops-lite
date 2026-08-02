@@ -3297,6 +3297,21 @@ model PurchaseOrderItem {
   ncm             String?
   cfop            String?  @default("5102")
   plusSize        Boolean  @default(true) @map("plus_size")
+  // Classificação da peça (AtributoPeca) — preenchida NA COMPRA, porque quem
+  // compra tem a peça na mão e sabe o tecido. Evita a segunda passada em
+  // milhares de itens depois. O nome é gravado junto (mesma convenção do
+  // grupoNome/subgrupoNome acima): se o cadastro for renomeado, o pedido
+  // histórico continua mostrando o que foi escolhido na época.
+  tecidoId        String?  @map("tecido_id")
+  tecidoNome      String?  @map("tecido_nome")
+  colecaoId       String?  @map("colecao_id")
+  colecaoNome     String?  @map("colecao_nome")
+  // Ocasião e modelagem aceitam VÁRIAS por peça (um vestido serve casamento e
+  // jantar; valoriza cintura e alonga silhueta). JSON [{id,nome}] — mesma
+  // escolha de `tamanhosQty`/`skusGerados`: o pedido de compra é registro
+  // transacional, quem consulta por ocasião é a ficha do produto.
+  ocasioes        String?  @db.Text
+  modelagens      String?  @db.Text
   // Valores comerciais
   custoUnit       Float    @map("custo_unit")
   precoUnit       Float    @map("preco_unit")
@@ -4293,6 +4308,38 @@ model ProductClassification {
   @@index([tipoProduto])
   @@index([classificacaoRevisada])
   @@map("product_classification")
+}
+
+/// CLASSIFICAÇÃO DA PEÇA — Ocasião, Tecido, Modelagem e Coleção.
+///
+/// Uma tabela só, separada por `tipo`, porque os quatro têm exatamente a mesma
+/// forma (nome, slug, descrição, foto de capa). São QUATRO telas de cadastro
+/// distintas na retaguarda; o que é compartilhado é o armazenamento. Eixo novo
+/// (ex.: "estampa") nasce sem migration.
+///
+/// O `slug` é o que vira URL no site (/ocasioes/casamento), então é único por
+/// tipo. `fotoUrl` é a capa da página desse eixo na vitrine.
+///
+/// ⚠️ Como não há FK por tipo, quem grava `tecidoId` num pedido tem que validar
+/// que o id é mesmo de um tecido — a checagem vive no AtributosPecaService.
+model AtributoPeca {
+  id        String   @id @default(uuid())
+  /// 'ocasiao' | 'tecido' | 'modelagem' | 'colecao'
+  tipo      String
+  nome      String
+  slug      String
+  descricao String?  @db.Text
+  fotoUrl   String?  @map("foto_url")
+  /// Desativar esconde do site e dos selects, sem apagar o histórico de quem
+  /// já foi classificado com ele.
+  ativo     Boolean  @default(true)
+  ordem     Int      @default(0)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([tipo, slug])
+  @@index([tipo, ativo, ordem])
+  @@map("atributos_peca")
 }
 
 /// Auditoria do EDITOR DE PRODUTOS (/retaguarda/editor-produtos): cada campo

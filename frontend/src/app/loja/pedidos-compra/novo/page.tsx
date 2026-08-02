@@ -32,6 +32,10 @@ type Categoria = {
   plusSizeDefault: boolean;
 };
 
+/** Cadastros → Classificação da Peça. Chega agrupado por tipo. */
+type Atributo = { id: string; nome: string };
+type AtributosPorTipo = Partial<Record<'ocasiao' | 'tecido' | 'modelagem' | 'colecao', Atributo[]>>;
+
 type ItemForm = {
   tempId: string;
   ref: string;
@@ -43,6 +47,13 @@ type ItemForm = {
   ncm: string;
   cfop: string;
   plusSize: boolean;
+  // Classificação da peça (Cadastros → Classificação da Peça). Preenchida aqui,
+  // na compra, porque quem compra tem a peça na mão e sabe o tecido — evita a
+  // segunda passada em milhares de itens depois.
+  tecidoId: string;
+  colecaoId: string;
+  ocasiaoIds: string[];
+  modelagemIds: string[];
   custoUnit: string;
   precoUnit: string;
   tributoPct: string;
@@ -101,6 +112,7 @@ export default function NovoPedidoPage() {
   // Lookups
   const [fornecedores, setFornecedores] = useState<Fornecedor[]>([]);
   const [grupos, setGrupos] = useState<Grupo[]>([]);
+  const [atributos, setAtributos] = useState<AtributosPorTipo>({});
   const [categorias, setCategorias] = useState<Categoria[]>([]);
 
   // Header
@@ -143,6 +155,9 @@ export default function NovoPedidoPage() {
     api<Fornecedor[]>('/purchase-orders/lookups/fornecedores').then(setFornecedores).catch(() => {});
     api<Grupo[]>('/purchase-orders/lookups/grupos').then(setGrupos).catch(() => {});
     api<Categoria[]>('/purchase-orders/categorias').then(setCategorias).catch(() => {});
+    // Classificação da peça. Se o cadastro estiver vazio os selects aparecem
+    // vazios — e classificar é opcional aqui, então nunca trava o pedido.
+    api<AtributosPorTipo>('/atributos-peca').then(setAtributos).catch(() => {});
   }, []);
 
   // Refetch da lista de grupos (chamado após criar grupo novo inline)
@@ -259,6 +274,12 @@ export default function NovoPedidoPage() {
           ncm: last?.ncm ?? '',
           cfop: last?.cfop || '5102',
           plusSize: last?.plusSize ?? true,
+          // Herda a classificação: numa mesma compra o fornecedor costuma
+          // mandar várias REFs do mesmo tecido e da mesma coleção.
+          tecidoId: last?.tecidoId ?? '',
+          colecaoId: last?.colecaoId ?? '',
+          ocasiaoIds: last?.ocasiaoIds ? [...last.ocasiaoIds] : [],
+          modelagemIds: last?.modelagemIds ? [...last.modelagemIds] : [],
           custoUnit: '',
           precoUnit: '',
           tributoPct: last?.tributoPct ?? '0',
@@ -496,6 +517,12 @@ export default function NovoPedidoPage() {
             tributoPct: Number(it.tributoPct.replace(',', '.') || 0),
             descontoPct: Number(it.descontoPct.replace(',', '.') || 0),
             tamanhosQty,
+            // Só os ids — o backend resolve o nome pelo cadastro, pra não
+            // gravar no pedido um texto que veio do navegador.
+            tecidoId: it.tecidoId || null,
+            colecaoId: it.colecaoId || null,
+            ocasiaoIds: it.ocasiaoIds,
+            modelagemIds: it.modelagemIds,
           });
         }
       }
@@ -703,6 +730,7 @@ export default function NovoPedidoPage() {
               index={idx + 1}
               grupos={grupos}
               categorias={categorias}
+              atributos={atributos}
               markup={markup}
               getSubgrupos={getSubgrupos}
               onRefreshGrupos={refetchGrupos}
@@ -733,17 +761,91 @@ export default function NovoPedidoPage() {
 }
 
 // ─── ItemEditor ─────────────────────────────────────────────────────────
+/**
+ * Select da classificação da peça. Mesmo peso visual do GRUPO/SUBGRUPO — os
+ * quatro cabem numa linha só.
+ *
+ * O caso `multiplo` (ocasião, modelagem) NÃO usa <select multiple>: aquilo fica
+ * três linhas mais alto que os vizinhos e exige ctrl+clique, que ninguém acerta
+ * no balcão. Aqui é um select normal que vai empilhando chips embaixo, então a
+ * linha continua uniforme e só cresce quando de fato tem escolha feita.
+ */
+function ClassificacaoSelect({
+  label, opcoes, value, values, onChange, onChangeMany, multiplo,
+}: {
+  label: string;
+  opcoes?: Atributo[];
+  value?: string;
+  values?: string[];
+  onChange?: (v: string) => void;
+  onChangeMany?: (v: string[]) => void;
+  multiplo?: boolean;
+}) {
+  const lista = opcoes ?? [];
+  const vazio = lista.length === 0;
+  const escolhidos = values ?? [];
+  const semTitulo = vazio ? 'Cadastre em Cadastros → Classificação da Peça' : undefined;
+
+  // Só oferece o que ainda não foi escolhido.
+  const disponiveis = multiplo ? lista.filter((o) => !escolhidos.includes(o.id)) : lista;
+
+  return (
+    <div>
+      <label className="text-[10px] font-bold text-slate-600 uppercase">{label}</label>
+      <select
+        // No modo múltiplo o select é só o "adicionar": volta pro vazio a cada
+        // escolha, e o que foi escolhido vira chip.
+        value={multiplo ? '' : (value ?? '')}
+        disabled={vazio || (multiplo && disponiveis.length === 0)}
+        title={semTitulo}
+        onChange={(e) => {
+          if (!multiplo) { onChange?.(e.target.value); return; }
+          if (e.target.value) onChangeMany?.([...escolhidos, e.target.value]);
+        }}
+        className="w-full px-2 py-2 border rounded text-sm bg-white disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        <option value="">{multiplo ? '+ adicionar' : '— nenhum —'}</option>
+        {disponiveis.map((o) => (
+          <option key={o.id} value={o.id}>{o.nome}</option>
+        ))}
+      </select>
+
+      {multiplo && escolhidos.length > 0 && (
+        <div className="flex flex-wrap gap-1 mt-1">
+          {escolhidos.map((id) => (
+            <span
+              key={id}
+              className="inline-flex items-center gap-1 text-[11px] bg-violet-50 text-violet-800 border border-violet-200 rounded px-1.5 py-0.5"
+            >
+              {lista.find((o) => o.id === id)?.nome ?? id}
+              <button
+                type="button"
+                aria-label="Remover"
+                onClick={() => onChangeMany?.(escolhidos.filter((x) => x !== id))}
+                className="text-violet-500 hover:text-violet-900 leading-none"
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ItemEditor({
   item, index, grupos, categorias, markup,
   getSubgrupos,
   onUpdate, onRemove, onDuplicate, onAplicarCategoria,
   onAddCor, onRemoveCor, onAddTam, onRemoveTam, onGrade,
-  onAdicionarNova, onRefreshGrupos,
+  onAdicionarNova, onRefreshGrupos, atributos,
 }: {
   item: ItemForm;
   index: number;
   grupos: Grupo[];
   categorias: Categoria[];
+  atributos: AtributosPorTipo;
   markup: string;
   getSubgrupos: (grupoCode: number) => Promise<Grupo[]>;
   onUpdate: (patch: Partial<ItemForm>) => void;
@@ -972,6 +1074,40 @@ function ItemEditor({
           />
           <span className="text-xs font-bold text-violet-700 mb-2">PLUS SIZE</span>
         </label>
+      </div>
+
+      {/* Linha 4: CLASSIFICAÇÃO DA PEÇA — o que o site usa pra montar vitrine.
+          Preenchida aqui porque quem compra tem a peça na mão e sabe o tecido;
+          deixar pra depois é o que faz o campo ficar vazio pra sempre.
+          Opcional: nada aqui trava o pedido. Ocasião e modelagem aceitam mais
+          de uma (Ctrl/⌘ + clique) — um vestido serve casamento e jantar. */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        <ClassificacaoSelect
+          label="Tecido"
+          opcoes={atributos.tecido}
+          value={item.tecidoId}
+          onChange={(v) => onUpdate({ tecidoId: v })}
+        />
+        <ClassificacaoSelect
+          label="Coleção"
+          opcoes={atributos.colecao}
+          value={item.colecaoId}
+          onChange={(v) => onUpdate({ colecaoId: v })}
+        />
+        <ClassificacaoSelect
+          label="Ocasião"
+          multiplo
+          opcoes={atributos.ocasiao}
+          values={item.ocasiaoIds}
+          onChangeMany={(v) => onUpdate({ ocasiaoIds: v })}
+        />
+        <ClassificacaoSelect
+          label="Modelagem"
+          multiplo
+          opcoes={atributos.modelagem}
+          values={item.modelagemIds}
+          onChangeMany={(v) => onUpdate({ modelagemIds: v })}
+        />
       </div>
 
       {/* PRECIFICAÇÃO — Custo → Desconto → Imposto → Líquido → Sugerido → Preço */}
