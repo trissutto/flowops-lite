@@ -24,7 +24,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@/lib/api';
 import {
-  ChevronDown, ChevronRight, Image as ImageIcon, Loader2, Package, Save, Search,
+  ChevronDown, ChevronRight, Image as ImageIcon, Loader2, Package, Save, Search, Truck,
 } from 'lucide-react';
 import {
   SelectAtributoPeca, type Atributo, type AtributosPorTipo, type TipoAtributo,
@@ -88,6 +88,23 @@ const STATUS_LABEL: Record<string, { texto: string; cor: string }> = {
   nao_publicar: { texto: 'Fora do site', cor: 'bg-slate-100 text-slate-600' },
 };
 
+/**
+ * Um movimento = UMA peça saindo de uma loja pra outra. Arrastar de novo
+ * empilha outra linha; é assim que "de 1 em 1" fica literal e o desfazer
+ * volta exatamente um passo.
+ */
+type Movimento = {
+  codigo: string;
+  ref: string;
+  cor: string;
+  tamanho: string;
+  desc: string;
+  de: string;
+  para: string;
+  /** Estoque na origem ANTES de qualquer movimento — o backend pede. */
+  estoqueOrigemAntes: number;
+};
+
 const ELASTICIDADE_LABEL: [string, string][] = [
   ['', '— não informado —'],
   ['nao', 'Não estica'],
@@ -123,6 +140,14 @@ export default function ProdutoMasterPage() {
   const [corAberta, setCorAberta] = useState<string | null>(null);
 
   const [fichas, setFichas] = useState<Record<string, Ficha | null>>({});
+
+  // Rascunho de remessa: acumula os arrastos e só vira ordem quando autoriza.
+  // Arrastar erra fácil e remessa mexe em peça física e no acerto entre lojas.
+  const [movimentos, setMovimentos] = useState<Movimento[]>([]);
+  const [autorizando, setAutorizando] = useState(false);
+  const [aviso, setAviso] = useState<string | null>(null);
+  /** Origem escolhida no modo clique (alternativa ao arrasto, serve em tablet). */
+  const [origemSel, setOrigemSel] = useState<{ codigo: string; loja: string } | null>(null);
 
   useEffect(() => {
     api<AtributosPorTipo>('/atributos-peca').then(setAtributos).catch(() => {});
@@ -185,6 +210,75 @@ export default function ProdutoMasterPage() {
     return [...mapa.entries()].map(([chave, v]) => ({ chave, ...v }));
   }, [linhas]);
 
+  /**
+   * Move UMA peça. Recusa quando origem = destino ou quando a origem já ficou
+   * sem saldo — sem essa checagem dá pra arrastar estoque que não existe e a
+   * ordem nasce impossível de separar.
+   */
+  const moverUma = useCallback((row: SkuRow, de: string, para: string) => {
+    if (de === para) return;
+    setMovimentos((atuais) => {
+      const saldoOrigem = (row.estoqueLojas?.[de] ?? 0)
+        - atuais.filter((m) => m.codigo === row.codigo && m.de === de).length
+        + atuais.filter((m) => m.codigo === row.codigo && m.para === de).length;
+      if (saldoOrigem <= 0) {
+        setAviso(`${row.tamanho} não tem mais saldo na loja ${de}`);
+        return atuais;
+      }
+      setAviso(null);
+      return [...atuais, {
+        codigo: row.codigo, ref: row.ref, cor: row.cor, tamanho: row.tamanho,
+        desc: row.descricao, de, para,
+        estoqueOrigemAntes: row.estoqueLojas?.[de] ?? 0,
+      }];
+    });
+  }, []);
+
+  /** Clique: primeiro na origem, depois no destino. Arrasto não vai em tablet. */
+  const aoClicarCelula = useCallback((row: SkuRow, loja: string) => {
+    setOrigemSel((sel) => {
+      if (!sel) return { codigo: row.codigo, loja };
+      if (sel.codigo !== row.codigo) return { codigo: row.codigo, loja };
+      if (sel.loja === loja) return null;
+      moverUma(row, sel.loja, loja);
+      return null;
+    });
+  }, [moverUma]);
+
+  /**
+   * Vira ordens de separação. Agrupa por (sku, origem, destino) — cinco peças
+   * do mesmo caminho viram UMA ordem de 5, não cinco ordens de 1.
+   */
+  async function autorizar() {
+    if (!movimentos.length) return;
+    setAutorizando(true);
+    setAviso(null);
+    try {
+      const agrupado = new Map<string, { m: Movimento; qty: number }>();
+      for (const m of movimentos) {
+        const k = `${m.codigo}|${m.de}|${m.para}`;
+        const atual = agrupado.get(k);
+        if (atual) atual.qty += 1;
+        else agrupado.set(k, { m, qty: 1 });
+      }
+      const plan = [...agrupado.values()].map(({ m, qty }) => ({
+        sku: m.codigo, ref: m.ref, cor: m.cor, tamanho: m.tamanho, desc: m.desc,
+        fromCode: m.de, toCode: m.para, qty, stockFromBefore: m.estoqueOrigemAntes,
+      }));
+      await api('/realignment/confirm', {
+        method: 'POST',
+        body: JSON.stringify({ plan, note: 'Realinhamento pela ficha do produto' }),
+      });
+      setMovimentos([]);
+      setOrigemSel(null);
+      setAviso(`${plan.length} ordem(ns) de separação gerada(s).`);
+    } catch (e: any) {
+      setAviso(e?.message || 'Não consegui gerar as ordens');
+    } finally {
+      setAutorizando(false);
+    }
+  }
+
   /** Cadastro criado pelo "+ novo" entra na lista sem recarregar a tela. */
   const aoCriarAtributo = useCallback((tipo: TipoAtributo, novo: Atributo) => {
     setAtributos((p) => ({ ...p, [tipo]: [...(p[tipo] ?? []), novo] }));
@@ -238,6 +332,9 @@ export default function ProdutoMasterPage() {
 
       {erro && (
         <div className="mb-3 text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">{erro}</div>
+      )}
+      {aviso && (
+        <div className="mb-3 text-xs text-slate-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">{aviso}</div>
       )}
 
       {porRef.length === 0 && !buscando && (
@@ -319,7 +416,13 @@ export default function ProdutoMasterPage() {
                       {/* NÍVEL 3 — grade + campos da cor */}
                       {aberta && (
                         <div className="pl-10 pr-3 pb-4 space-y-3">
-                          <GradeEstoque skus={prod.skus} />
+                          <GradeEstoque
+                            skus={prod.skus}
+                            movimentos={movimentos}
+                            origemSel={origemSel}
+                            onMover={moverUma}
+                            onClicarCelula={aoClicarCelula}
+                          />
                           <FichaDaCor
                             ref_={prod.ref}
                             marca={prod.marca}
@@ -337,6 +440,47 @@ export default function ProdutoMasterPage() {
           );
         })}
       </div>
+
+      {/* Rascunho de remessa — só existe enquanto houver arrasto pendente.
+          Nada sai daqui sem autorizar: remessa mexe em peça física e no acerto
+          entre lojas, e arrasto erra fácil. */}
+      {movimentos.length > 0 && (
+        <div className="fixed inset-x-0 bottom-0 z-40 border-t border-violet-200 bg-white/95 backdrop-blur shadow-[0_-4px_16px_rgba(0,0,0,0.08)]">
+          <div className="max-w-7xl mx-auto px-3 sm:px-6 py-3 flex flex-wrap items-center gap-3">
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-bold text-slate-800">
+                {movimentos.length} peça(s) para mover — ainda não enviado
+              </p>
+              <p className="text-[11px] text-slate-500 truncate">
+                {[...new Set(movimentos.map((m) => `${m.de}→${m.para}`))].join(' · ')}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => { setMovimentos((m) => m.slice(0, -1)); setAviso(null); }}
+              className="text-xs font-bold px-3 py-2 rounded-lg border border-slate-300 hover:bg-slate-50"
+            >
+              Desfazer
+            </button>
+            <button
+              type="button"
+              onClick={() => { setMovimentos([]); setOrigemSel(null); setAviso(null); }}
+              className="text-xs font-bold px-3 py-2 rounded-lg border border-slate-300 hover:bg-slate-50"
+            >
+              Descartar tudo
+            </button>
+            <button
+              type="button"
+              onClick={() => void autorizar()}
+              disabled={autorizando}
+              className="inline-flex items-center gap-1.5 text-xs font-bold px-5 py-2.5 rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50"
+            >
+              {autorizando ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Truck className="w-3.5 h-3.5" />}
+              Autorizar e gerar ordens
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -489,12 +633,28 @@ function FichaComum({
 
 /* ─────────────── Nível 3: grade de estoque (leitura) ─────────────── */
 
-function GradeEstoque({ skus }: { skus: SkuRow[] }) {
+function GradeEstoque({
+  skus, movimentos, origemSel, onMover, onClicarCelula,
+}: {
+  skus: SkuRow[];
+  movimentos: Movimento[];
+  origemSel: { codigo: string; loja: string } | null;
+  onMover: (row: SkuRow, de: string, para: string) => void;
+  onClicarCelula: (row: SkuRow, loja: string) => void;
+}) {
   const lojas = useMemo(() => {
     const s = new Set<string>();
     for (const r of skus) for (const l of Object.keys(r.estoqueLojas ?? {})) s.add(l);
     return [...s].sort();
   }, [skus]);
+
+  /** Saldo já com o rascunho aplicado, e o delta pra decidir a cor. */
+  function saldo(row: SkuRow, loja: string) {
+    const base = row.estoqueLojas?.[loja] ?? 0;
+    const saiu = movimentos.filter((m) => m.codigo === row.codigo && m.de === loja).length;
+    const entrou = movimentos.filter((m) => m.codigo === row.codigo && m.para === loja).length;
+    return { valor: base - saiu + entrou, delta: entrou - saiu };
+  }
 
   return (
     <div className="overflow-x-auto border border-slate-200 rounded-lg bg-white">
@@ -507,25 +667,64 @@ function GradeEstoque({ skus }: { skus: SkuRow[] }) {
           </tr>
         </thead>
         <tbody>
-          {skus.map((r) => (
-            <tr key={r.codigo} className="border-t border-slate-100">
-              <td className="px-2 py-1.5 font-bold text-slate-700">{r.tamanho}</td>
-              {lojas.map((l) => {
-                const q = r.estoqueLojas?.[l] ?? 0;
-                return (
-                  <td key={l} className={`px-2 py-1.5 text-center tabular-nums ${q ? 'text-slate-800' : 'text-slate-300'}`}>
-                    {q || '·'}
-                  </td>
-                );
-              })}
-              <td className="px-2 py-1.5 text-center font-bold tabular-nums">{r.estoque ?? 0}</td>
-            </tr>
-          ))}
+          {skus.map((r) => {
+            const total = lojas.reduce((s, l) => s + saldo(r, l).valor, 0);
+            return (
+              <tr key={r.codigo} className="border-t border-slate-100">
+                <td className="px-2 py-1.5 font-bold text-slate-700">{r.tamanho}</td>
+                {lojas.map((l) => {
+                  const { valor, delta } = saldo(r, l);
+                  const selecionada = origemSel?.codigo === r.codigo && origemSel.loja === l;
+                  // Vermelho onde saiu, azul onde entrou — o preview pedido.
+                  const cor = delta < 0 ? 'text-rose-600 font-bold'
+                    : delta > 0 ? 'text-blue-600 font-bold'
+                    : valor ? 'text-slate-800' : 'text-slate-300';
+                  return (
+                    <td
+                      key={l}
+                      // Arrasta a peça; o drop decide o destino.
+                      draggable={valor > 0}
+                      onDragStart={(e) => {
+                        e.dataTransfer.setData('text/plain', JSON.stringify({ codigo: r.codigo, de: l }));
+                        e.dataTransfer.effectAllowed = 'move';
+                      }}
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        try {
+                          const d = JSON.parse(e.dataTransfer.getData('text/plain'));
+                          if (d?.codigo === r.codigo) onMover(r, d.de, l);
+                        } catch { /* payload de outro lugar — ignora */ }
+                      }}
+                      onClick={() => onClicarCelula(r, l)}
+                      title={valor > 0 ? 'Arraste (ou clique aqui e depois no destino)' : undefined}
+                      className={`px-2 py-1.5 text-center tabular-nums cursor-pointer select-none hover:bg-violet-50 ${cor} ${
+                        selecionada ? 'ring-2 ring-violet-500 ring-inset bg-violet-50' : ''
+                      }`}
+                    >
+                      {/* Zero vira "·" só quando não houve movimento — com
+                          delta, mostrar "0" deixa claro que zerou de propósito
+                          (senão sai "·-3", que parece defeito). */}
+                      {delta !== 0 ? valor : (valor || '·')}
+                      {delta !== 0 && (
+                        <span className="ml-0.5 text-[9px] align-super">
+                          {delta > 0 ? `+${delta}` : delta}
+                        </span>
+                      )}
+                    </td>
+                  );
+                })}
+                <td className="px-2 py-1.5 text-center font-bold tabular-nums">{total}</td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
       <p className="text-[10px] text-slate-400 px-2 py-1.5 border-t border-slate-100">
-        Somente leitura por enquanto — editar a grade, entrada/saída, etiquetas e o
-        arrastar-pra-remessa entram num próximo passo.
+        Arraste um número de uma loja para outra para mover 1 peça (ou clique na origem
+        e depois no destino). <span className="text-rose-600">Vermelho</span> saiu ·{' '}
+        <span className="text-blue-600">azul</span> entrou. Nada acontece de verdade até
+        autorizar. Entrada/saída e etiquetas entram num próximo passo.
       </p>
     </div>
   );
