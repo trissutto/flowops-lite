@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import Image from 'next/image';
-import Link from 'next/link';
+import { AppLink as Link } from '@/components/ui/AppLink';
 import { motion } from 'framer-motion';
 import { Eye, Heart } from 'lucide-react';
 import { BLUR_DATA_URL, cn, discountPercent, formatInstallments, formatPrice } from '@/lib/utils';
@@ -37,7 +37,23 @@ interface ProductCardProps {
   className?: string;
   /** Primeiras fotos da primeira dobra podem priorizar carregamento. */
   priority?: boolean;
+  /**
+   * `sizes` do next/image. O padrão descreve a GRADE (categoria, busca). Num
+   * carrossel o card é bem mais largo — quem monta o carrossel passa o seu,
+   * senão o Next escolhe uma variante pequena demais e a foto sai borrada.
+   */
+  sizes?: string;
 }
+
+/** Largura do card na grade padrão de catálogo. */
+const GRID_SIZES = '(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw';
+
+/**
+ * Largura do card no carrossel `perView={{ base: 1.35, sm: 2, lg: 3, xl: 4 }}`
+ * — no mobile ele ocupa ~2/3 da tela, muito mais que os 50vw da grade.
+ */
+export const CAROUSEL_PRODUCT_SIZES =
+  '(max-width: 640px) 68vw, (max-width: 1024px) 46vw, (max-width: 1280px) 31vw, 23vw';
 
 export function ProductCard({
   product,
@@ -46,6 +62,7 @@ export function ProductCard({
   aspect = '3/4',
   className,
   priority = false,
+  sizes = GRID_SIZES,
 }: ProductCardProps) {
   const [hovered, setHovered] = useState(false);
   const mounted = useMounted();
@@ -79,7 +96,7 @@ export function ProductCard({
             alt={cover.alt}
             fill
             priority={priority}
-            sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
+            sizes={sizes}
             placeholder="blur"
             blurDataURL={BLUR_DATA_URL}
             className={cn(
@@ -94,7 +111,7 @@ export function ProductCard({
               alt=""
               aria-hidden
               fill
-              sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
+              sizes={sizes}
               placeholder="blur"
               blurDataURL={BLUR_DATA_URL}
               className={cn(

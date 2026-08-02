@@ -1,5 +1,5 @@
 import { forwardRef } from 'react';
-import Link from 'next/link';
+import { AppLink as Link } from '@/components/ui/AppLink';
 import { cn } from '@/lib/utils';
 
 /**

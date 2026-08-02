@@ -108,25 +108,50 @@ export function Hero({
           initial={{ scale: 1.08 }}
           animate={{ scale: 1 }}
           transition={{ duration: 2.2, ease: EASE_LURDS }}
-          className="size-full"
+          // `relative` é obrigatório: a mídia usa <Image fill>, que precisa de
+          // um pai posicionado. Sem isto o next/image reclama no console e a
+          // foto passa a se ancorar no avô — funcionava por coincidência de
+          // tamanho, não por desenho.
+          className="relative size-full"
         >
           {video ? (
-            <video
-              src={video.src}
-              poster={video.poster}
-              autoPlay
-              muted
-              loop
-              playsInline
-              aria-label={video.alt}
-              className="size-full object-cover"
-            />
+            <>
+              {/* Poster pelo next/image, nunca pelo atributo `poster` do
+                  <video> — ver o aviso no VideoBlock: o atributo baixa o
+                  original cru (megabytes) sem passar pelo otimizador. */}
+              <Image
+                src={video.poster}
+                alt={video.alt}
+                fill
+                priority={priority}
+                fetchPriority={priority ? 'high' : undefined}
+                sizes="100vw"
+                placeholder="blur"
+                blurDataURL={BLUR_DATA_URL}
+                className="object-cover object-center"
+              />
+              <video
+                src={video.src}
+                autoPlay
+                muted
+                loop
+                playsInline
+                preload="metadata"
+                aria-label={video.alt}
+                className="relative size-full object-cover"
+              />
+            </>
           ) : image ? (
             <Image
               src={image.src}
               alt={image.alt}
               fill
               priority={priority}
+              // `priority` sozinho emite o <link rel=preload> SEM
+              // fetchpriority (conferido no fonte do next/image 15.5). Sem
+              // isto o hero disputa banda em pé de igualdade com todo o resto
+              // e o LCP desaba — era o caso da home.
+              fetchPriority={priority ? 'high' : undefined}
               sizes="100vw"
               placeholder="blur"
               blurDataURL={BLUR_DATA_URL}

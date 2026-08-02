@@ -160,6 +160,44 @@ export function useClickOutside<T extends HTMLElement>(active: boolean, onOutsid
   return ref;
 }
 
+/**
+ * `true` a partir do momento em que o elemento chega perto da viewport, e
+ * nunca mais volta a `false` (o observer se desliga na primeira vez).
+ *
+ * Serve pra adiar mídia pesada — vídeo, sobretudo — até que ela tenha alguma
+ * chance de ser vista. Diferente de `useIntersection`, que dispara um efeito,
+ * aqui o valor entra no render: o `<video>` só é montado depois, então nem a
+ * requisição sai enquanto a cliente estiver no topo da página.
+ */
+export function useNearViewport<T extends HTMLElement>(rootMargin = '300px') {
+  const ref = useRef<T>(null);
+  const [near, setNear] = useState(false);
+
+  useEffect(() => {
+    const node = ref.current;
+    if (!node || near) return;
+    // Sem suporte a IntersectionObserver, carrega logo — degradar pra "nunca
+    // carrega" seria pior do que degradar pra "carrega cedo".
+    if (typeof IntersectionObserver === 'undefined') {
+      setNear(true);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          setNear(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [near, rootMargin]);
+
+  return [ref, near] as const;
+}
+
 /** Evita hydration mismatch em componentes que dependem de localStorage. */
 export function useMounted(): boolean {
   const [mounted, setMounted] = useState(false);

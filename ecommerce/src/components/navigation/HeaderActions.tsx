@@ -1,6 +1,6 @@
 'use client';
 
-import Link from 'next/link';
+import { AppLink as Link } from '@/components/ui/AppLink';
 import { Heart, MapPin, Search, ShoppingBag, User } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useMounted } from '@/hooks';

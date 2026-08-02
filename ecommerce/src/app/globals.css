@@ -16,7 +16,12 @@
   /* Neutros quentes — a base da marca é papel/creme, nunca cinza-azulado */
   --color-ink: #1a1614; /* preto quente — texto principal, botão primário */
   --color-ink-soft: #5c534b; /* texto secundário (AA sobre background) */
-  --color-ink-muted: #8a7f76; /* caption, placeholder (AA em 14px+) */
+  /* caption, placeholder, .eyebrow. Era #8a7f76, que dava 3,75:1 sobre o
+     background — reprovava AA apesar do comentário antigo dizer o contrário
+     (a .eyebrow tem 11px, então precisa de 4,5:1, não de 3:1). Este valor
+     passa nas TRÊS superfícies claras: 5,56 sobre background, 5,11 sobre
+     surface-alt e 4,56 sobre champagne. */
+  --color-ink-muted: #6d645b;
   --color-background: #fcfaf7; /* fundo base da página */
   --color-surface: #ffffff; /* cards, inputs, superfícies elevadas */
   --color-surface-alt: #f5f0e8; /* seções alternadas (creme) */
@@ -26,7 +31,13 @@
 
   /* Primary — dourado Lurds. Acento, nunca área grande */
   --color-primary: #b8912b;
-  --color-primary-strong: #8c7325; /* dourado legível sobre claro (AA) */
+  /* dourado legível sobre claro. Era #8c7325, que dava 4,39:1 sobre o
+     background — reprovava AA justamente onde mais aparece, em 11px ("Ver
+     tudo em…", eyebrow do menu). O fundo que aperta é o champagne, e sobre
+     ele o valor antigo caía pra 3,6. Este passa nos quatro: 5,84 sobre
+     background, 6,09 sobre surface, 5,37 sobre surface-alt e 4,79 sobre
+     champagne. Para acento não-textual continue usando --color-primary. */
+  --color-primary-strong: #756020;
   --color-primary-soft: #d4af37; /* dourado sobre fundo escuro */
   --color-primary-wash: #fbf6e6; /* hover de superfície dourada */
 

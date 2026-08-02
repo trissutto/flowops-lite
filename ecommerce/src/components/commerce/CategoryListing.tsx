@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/feedback/EmptyState';
 import { ProductGridSkeleton } from '@/components/ui/Skeleton';
 import { Pagination } from '@/components/navigation/Pagination';
+import { CatalogQueryProvider } from './CatalogQueryProvider';
 import { FilterPanel } from './FilterPanel';
 import { SmartBar } from './SmartBar';
 import { EditorialProductGrid, type GridInterruption } from './EditorialProductGrid';
@@ -29,17 +30,32 @@ const PER_PAGE = 12;
  *
  * Ver docs/category-page.md.
  */
-export function CategoryListing({
-  category,
-  categoryName,
-  interruptions = [],
-  mode = 'infinite',
-}: {
+interface CategoryListingProps {
   category: string;
   categoryName: string;
   interruptions?: GridInterruption[];
   mode?: 'infinite' | 'pages';
-}) {
+}
+
+/**
+ * O provider do react-query vive AQUI, colado em quem usa, e não no layout
+ * raiz — senão a biblioteca inteira entra no bundle compartilhado de todas as
+ * páginas. Ver `CatalogQueryProvider`.
+ */
+export function CategoryListing(props: CategoryListingProps) {
+  return (
+    <CatalogQueryProvider>
+      <CategoryListingInner {...props} />
+    </CatalogQueryProvider>
+  );
+}
+
+function CategoryListingInner({
+  category,
+  categoryName,
+  interruptions = [],
+  mode = 'infinite',
+}: CategoryListingProps) {
   const state = useProductFilters();
   const [view, setView] = useState<'editorial' | 'grid'>('editorial');
   const [drawerOpen, setDrawerOpen] = useState(false);

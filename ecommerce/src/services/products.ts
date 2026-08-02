@@ -341,7 +341,7 @@ const CATEGORY_META: Record<string, CategoryMeta> = {
     title: 'Vestidos plus size',
     intro:
       'Do envelope clássico ao midi de festa: modelagens que valorizam o corpo real, em tecidos que aguentam o dia inteiro. Do 46 ao 60.',
-    heroImage: 'https://images.unsplash.com/photo-1657550853452-f13aa437f6c9',
+    heroImage: 'https://images.unsplash.com/photo-1657550853452-f13aa437f6c9?w=2000&q=85&fm=jpg&fit=max',
     guide: {
       title: 'Como escolher o vestido ideal',
       paragraphs: [
@@ -362,7 +362,7 @@ export function categoryMeta(slug: string): CategoryMeta {
       title: `${slug.charAt(0).toUpperCase() + slug.slice(1).replace(/-/g, ' ')} plus size`,
       intro:
         'Curadoria Lurds do 46 ao 60: peças escolhidas pelo caimento, pelo tecido e pela forma como vestem o corpo real.',
-      heroImage: 'https://images.unsplash.com/photo-1603400521630-9f2de124b33b',
+      heroImage: 'https://images.unsplash.com/photo-1603400521630-9f2de124b33b?w=2000&q=85&fm=jpg&fit=max',
       guide: {
         title: 'Como escolher a peça ideal',
         paragraphs: [

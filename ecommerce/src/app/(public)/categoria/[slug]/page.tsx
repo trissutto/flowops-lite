@@ -166,8 +166,8 @@ export default async function CategoryPage({ params }: { params: Promise<{ slug:
           align="left"
         />
         <div className="mt-14 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-          {instagramPosts.map((post, index) => (
-            <InstagramCard key={post.id} post={post} index={index} />
+          {instagramPosts.map((post) => (
+            <InstagramCard key={post.id} post={post} />
           ))}
         </div>
       </Section>

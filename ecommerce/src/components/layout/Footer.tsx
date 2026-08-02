@@ -1,4 +1,4 @@
-import Link from 'next/link';
+import { AppLink as Link } from '@/components/ui/AppLink';
 import { MapPin, MessageCircle } from 'lucide-react';
 import { InstagramIcon } from '@/components/ui/icons';
 import { Container } from './Container';

@@ -11,15 +11,24 @@ import type { NavItem } from '@/types';
  * pelas fotos de campanha da marca. Ver docs/navigation.md.
  */
 
+/**
+ * Cards do mega menu: nunca passam de ~340px de largura. Pedir o original de
+ * 5 MB ao Unsplash só pra devolver 320px é desperdício puro no otimizador —
+ * ver a explicação completa em `data/content.ts`.
+ */
+function unsplash(id: string, width = 800): string {
+  return `https://images.unsplash.com/${id}?w=${width}&q=85&fm=jpg&fit=max`;
+}
+
 const EDITORIAL = {
-  novidades: 'https://images.unsplash.com/photo-1657550853452-f13aa437f6c9',
-  looks: 'https://images.unsplash.com/photo-1664893876112-64c308bf0d70',
-  ocasioes: 'https://images.unsplash.com/photo-1582745140877-0480c22d91ee',
-  categorias: 'https://images.unsplash.com/photo-1603400521630-9f2de124b33b',
-  tecidos: 'https://images.unsplash.com/photo-1441984904996-e0b6ba687e04',
-  colecoes: 'https://images.unsplash.com/photo-1652288832306-73735bbb94b3',
-  tamanhos: 'https://images.unsplash.com/photo-1657549091422-3b748b8f72b2',
-  outlet: 'https://images.unsplash.com/photo-1441986300917-64674bd600d8',
+  novidades: unsplash('photo-1657550853452-f13aa437f6c9'),
+  looks: unsplash('photo-1664893876112-64c308bf0d70'),
+  ocasioes: unsplash('photo-1582745140877-0480c22d91ee'),
+  categorias: unsplash('photo-1603400521630-9f2de124b33b'),
+  tecidos: unsplash('photo-1441984904996-e0b6ba687e04'),
+  colecoes: unsplash('photo-1652288832306-73735bbb94b3'),
+  tamanhos: unsplash('photo-1657549091422-3b748b8f72b2'),
+  outlet: unsplash('photo-1441986300917-64674bd600d8'),
 } as const;
 
 export const navigation: NavItem[] = [

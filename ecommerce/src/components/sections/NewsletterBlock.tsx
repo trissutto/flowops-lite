@@ -1,9 +1,6 @@
 'use client';
 
 import { useState } from 'react';
-import { useForm } from 'react-hook-form';
-import { zodResolver } from '@hookform/resolvers/zod';
-import { z } from 'zod';
 import { motion } from 'framer-motion';
 import { Check } from 'lucide-react';
 import { Input } from '@/components/ui/Input';
@@ -19,14 +16,16 @@ import { fadeUp, reveal } from '@/lib/motion';
  * é de curadoria, não de desconto. Pop-up interrompendo a navegação é o
  * oposto do que uma marca premium faz.
  *
- * Validação com Zod + react-hook-form (padrão de formulários do projeto).
+ * ⚠️ EXCEÇÃO CONSCIENTE ao padrão de formulários do projeto (react-hook-form
+ * + Zod). Este bloco fecha a HOME, e arrastar as três bibliotecas
+ * (react-hook-form, zod e @hookform/resolvers) pra dentro do bundle da página
+ * mais visitada do site custava ~80 kB — por UM campo de e-mail. O checkout,
+ * que tem formulário de verdade, continua no padrão. Se este bloco algum dia
+ * ganhar mais campos, volte pro react-hook-form.
  */
 
-const schema = z.object({
-  email: z.string().min(1, 'Informe seu e-mail').email('Confira o e-mail digitado'),
-});
-
-type FormValues = z.infer<typeof schema>;
+/** Suficiente pra um campo de newsletter: o servidor valida de novo. */
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
 interface NewsletterBlockProps {
   eyebrow?: string;
@@ -53,17 +52,33 @@ export function NewsletterBlock({
   className,
 }: NewsletterBlockProps) {
   const [done, setDone] = useState(false);
-  const {
-    register,
-    handleSubmit,
-    formState: { errors, isSubmitting },
-  } = useForm<FormValues>({ resolver: zodResolver(schema) });
+  const [email, setEmail] = useState('');
+  const [error, setError] = useState<string>();
+  const [submitting, setSubmitting] = useState(false);
 
   const isDark = tone === 'dark';
 
-  async function submit(values: FormValues) {
-    await onSubscribe?.(values.email);
-    setDone(true);
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const value = email.trim();
+    const problema = !value
+      ? 'Informe seu e-mail'
+      : !EMAIL.test(value)
+        ? 'Confira o e-mail digitado'
+        : undefined;
+
+    setError(problema);
+    if (problema) return;
+
+    setSubmitting(true);
+    try {
+      await onSubscribe?.(value);
+      setDone(true);
+    } catch {
+      setError('Não deu pra cadastrar agora. Tente de novo em instantes.');
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -104,22 +119,28 @@ export function NewsletterBlock({
             </p>
           ) : (
             <form
-              onSubmit={handleSubmit(submit)}
+              onSubmit={submit}
               className="mx-auto mt-10 flex max-w-md flex-col gap-3 sm:flex-row"
               noValidate
             >
               <Input
-                {...register('email')}
+                name="email"
                 type="email"
                 label="Seu e-mail"
                 hideLabel
                 placeholder="seu@email.com"
                 autoComplete="email"
-                error={errors.email?.message}
+                value={email}
+                onChange={(e) => {
+                  setEmail(e.target.value);
+                  // Some com o erro assim que ela começa a corrigir.
+                  if (error) setError(undefined);
+                }}
+                error={error}
                 className="flex-1 text-left"
               />
-              <Button type="submit" disabled={isSubmitting} className="sm:w-auto" block>
-                {isSubmitting ? 'Enviando…' : 'Quero receber'}
+              <Button type="submit" disabled={submitting} className="sm:w-auto" block>
+                {submitting ? 'Enviando…' : 'Quero receber'}
               </Button>
             </form>
           )}

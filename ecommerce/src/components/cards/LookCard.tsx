@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import Image from 'next/image';
-import Link from 'next/link';
+import { AppLink as Link } from '@/components/ui/AppLink';
 import { motion } from 'framer-motion';
 import { Bookmark, Plus, Share2, ShoppingBag } from 'lucide-react';
 import { BLUR_DATA_URL, cn, formatPrice } from '@/lib/utils';
@@ -26,9 +26,26 @@ interface LookCardProps {
   onBuyLook?: (look: Look) => void;
   onSaveLook?: (look: Look) => void;
   className?: string;
+  /**
+   * `sizes` do next/image. O padrão descreve o carrossel do Shop the Look
+   * (`perView={{ base: 1.1, sm: 1.6, lg: 2.4, xl: 3 }}`), que é onde este card
+   * quase sempre vive. Quem usar em grade passa o seu.
+   */
+  sizes?: string;
 }
 
-export function LookCard({ look, index = 0, onBuyLook, onSaveLook, className }: LookCardProps) {
+/** Largura do card no carrossel do Shop the Look. */
+const CAROUSEL_SIZES =
+  '(max-width: 640px) 88vw, (max-width: 1024px) 60vw, (max-width: 1280px) 40vw, 32vw';
+
+export function LookCard({
+  look,
+  index = 0,
+  onBuyLook,
+  onSaveLook,
+  className,
+  sizes = CAROUSEL_SIZES,
+}: LookCardProps) {
   const [hovered, setHovered] = useState(false);
   const { toast } = useToast();
 
@@ -59,7 +76,7 @@ export function LookCard({ look, index = 0, onBuyLook, onSaveLook, className }: 
           src={look.image.src}
           alt={look.image.alt}
           fill
-          sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
+          sizes={sizes}
           placeholder="blur"
           blurDataURL={BLUR_DATA_URL}
           className="object-cover transition-transform duration-[900ms] ease-[cubic-bezier(0.22,1,0.36,1)] group-hover:scale-[1.04]"

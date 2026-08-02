@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import Link from 'next/link';
+import { AppLink as Link } from '@/components/ui/AppLink';
 import { Search, Sparkles } from 'lucide-react';
 import { Section } from '@/components/layout/Section';
 import { ProductCard } from '@/components/cards/ProductCard';
