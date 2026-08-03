@@ -1,9 +1,12 @@
 import { Module } from '@nestjs/common';
+import { PrismaModule } from '../prisma/prisma.module';
+import { DiagnosticoBancoController } from './diagnostico-banco.controller';
 import { HealthController } from './health.controller';
 import { MigrationFlagsService } from './migration-flags.service';
 
 @Module({
-  controllers: [HealthController],
+  imports: [PrismaModule],
+  controllers: [HealthController, DiagnosticoBancoController],
   providers: [MigrationFlagsService],
   exports: [MigrationFlagsService],
 })
