@@ -193,6 +193,16 @@ export class RealignmentController {
     return this.svc.preview(body);
   }
 
+  /**
+   * Pendências por SKU pra ficha do produto — "esta peça já foi pedida?".
+   * POST em vez de GET porque a grade de uma REF pode ter dezenas de códigos
+   * e query string tem limite.
+   */
+  @Post('pendencias')
+  pendencias(@Body() body: { skus?: string[] }) {
+    return this.svc.pendenciasPorSku(body?.skus);
+  }
+
   @Post('confirm')
   confirm(
     @Body()
