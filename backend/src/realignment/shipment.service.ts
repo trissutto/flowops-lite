@@ -196,8 +196,25 @@ export class RealignmentShipmentService {
     const shipments = await (this.prisma as any).realignmentShipment.findMany({
       where: {
         fromStoreCode: (store as any).code,
-        status: { in: ['in_transit', 'received'] },
+        /**
+         * SÓ `in_transit`. Eu tinha incluído `received` ao alargar o filtro, e
+         * isso trouxe caixa VELHA de volta pra tela: quando o destino confirma
+         * o recebimento, o `updatedAt` da remessa é tocado ali — então uma
+         * caixa de semanas atrás, recebida hoje, entrava na janela de 7 dias
+         * como se fosse trabalho pendente. Caixa recebida já chegou; não há o
+         * que postar.
+         */
+        status: 'in_transit',
         updatedAt: { gte: seteDias },
+        /**
+         * Envio próprio não tem etiqueta dos Correios pra pedir.
+         *
+         * Escrito com o nulo EXPLÍCITO. A primeira versão usava
+         * `NOT: { transportMode: 'proprio' }` e sumia com a lista inteira,
+         * porque `NULL <> 'proprio'` em SQL não é verdadeiro, é desconhecido —
+         * e null aqui é o caso mais comum (regra automática).
+         */
+        OR: [{ transportMode: null }, { transportMode: { not: 'proprio' } }],
       },
       orderBy: [{ sentAt: 'desc' }, { updatedAt: 'desc' }],
       take: 15,
