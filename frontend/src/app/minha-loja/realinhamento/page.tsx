@@ -636,8 +636,27 @@ export default function MinhaLojaRealinhamentoPage() {
    * caixa aparecia nas duas abas: amarela como "em montagem" e verde como
    * pilha de peças.
    */
-  const currentItems =
-    view === 'pending' ? items : sentItems.filter((i) => !(i as any).shipmentId);
+  const currentItems = useMemo(() => {
+    if (view === 'sent') {
+      // Verde: só peça que não está em caixa nenhuma (acervo antigo). O resto
+      // mora na caixa, e a caixa é que escolhe a aba.
+      return sentItems.filter((i) => !(i as any).shipmentId);
+    }
+    /**
+     * Amarela: a grade INTEIRA do destino — o que falta pegar (célula aberta)
+     * MAIS o que já está na caixa (célula verde, com o horário e o desfazer).
+     *
+     * É o formato que a vendedora já conhecia, e é o que faz sentido enquanto
+     * a caixa está aberta: ela olha a grade e vê o que ainda tem que buscar na
+     * arara. Depois de reabrir uma caixa, é isso que devolve o contexto — sem
+     * a grade, a caixa reaberta era uma lista de códigos sem o "falta o quê".
+     */
+    const abertas = new Set(openShipments.map((s) => s.id));
+    const naCaixaAberta = sentItems.filter(
+      (i) => (i as any).shipmentId && abertas.has((i as any).shipmentId),
+    );
+    return [...items, ...naCaixaAberta];
+  }, [view, items, sentItems, openShipments]);
 
 
   // Agrupa por destino → dentro dele, por REF, com grade Cor × Tamanho
@@ -973,12 +992,15 @@ export default function MinhaLojaRealinhamentoPage() {
                           mais depois de reabrir, que é quando a pessoa precisa
                           checar o que voltou pra dentro. Os itens já vêm no
                           payload da lista — não custa uma ida ao servidor. */}
+                      {/* Alvo de toque de verdade: isto é usado em pé, no
+                          balcão, muitas vezes no celular — link fininho ali
+                          não se acerta com a caixa na mão. */}
                       <button
                         type="button"
                         onClick={() => setCaixaAberta((atual) => (atual === s.id ? null : s.id))}
-                        className="mt-2 inline-flex items-center gap-1.5 text-xs font-bold text-amber-900 hover:text-amber-950 underline decoration-amber-400 underline-offset-2"
+                        className="mt-2.5 inline-flex items-center gap-2 bg-white hover:bg-amber-100 text-amber-900 border-2 border-amber-400 px-4 py-2 rounded-xl text-sm font-bold shadow-sm"
                       >
-                        <Package className="w-3.5 h-3.5" />
+                        <Package className="w-4 h-4" />
                         {caixaAberta === s.id ? 'Ocultar conteúdo' : 'Verificar conteúdo'}
                       </button>
                     </div>
@@ -1023,31 +1045,31 @@ export default function MinhaLojaRealinhamentoPage() {
                   {caixaAberta === s.id && (
                     <div className="mt-3 rounded-xl border border-amber-200 bg-white overflow-hidden">
                       {(s.items || []).length === 0 ? (
-                        <p className="text-xs text-slate-500 p-3">Caixa ainda vazia.</p>
+                        <p className="text-sm text-slate-500 p-4">Caixa ainda vazia.</p>
                       ) : (
-                        <table className="w-full text-xs">
-                          <thead className="bg-slate-50 text-slate-500 uppercase tracking-wide">
+                        <table className="w-full text-sm">
+                          <thead className="bg-slate-50 text-slate-500 uppercase tracking-wide text-xs">
                             <tr>
-                              <th className="text-left px-3 py-2 font-bold">Ref</th>
-                              <th className="text-left px-3 py-2 font-bold">Cor</th>
-                              <th className="text-left px-3 py-2 font-bold">Tam</th>
-                              <th className="text-right px-3 py-2 font-bold">Qtd</th>
+                              <th className="text-left px-4 py-2.5 font-bold">Ref</th>
+                              <th className="text-left px-4 py-2.5 font-bold">Cor</th>
+                              <th className="text-left px-4 py-2.5 font-bold">Tam</th>
+                              <th className="text-right px-4 py-2.5 font-bold">Qtd</th>
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-100">
                             {(s.items || []).map((i: any) => (
                               <tr key={i.id}>
-                                <td className="px-3 py-2 font-mono font-bold text-slate-900">{i.refCode}</td>
-                                <td className="px-3 py-2 text-slate-700">{i.cor || '—'}</td>
-                                <td className="px-3 py-2 text-slate-700">{i.tamanho || '—'}</td>
-                                <td className="px-3 py-2 text-right font-bold text-slate-900">{i.qtyOrigem ?? 1}</td>
+                                <td className="px-4 py-3 font-mono font-black text-slate-900">{i.refCode}</td>
+                                <td className="px-4 py-3 text-slate-700 font-semibold">{i.cor || '—'}</td>
+                                <td className="px-4 py-3 text-slate-700 font-semibold">{i.tamanho || '—'}</td>
+                                <td className="px-4 py-3 text-right font-black text-slate-900">{i.qtyOrigem ?? 1}</td>
                               </tr>
                             ))}
                           </tbody>
                           <tfoot className="bg-slate-50">
                             <tr>
-                              <td colSpan={3} className="px-3 py-2 font-bold text-slate-600">Total</td>
-                              <td className="px-3 py-2 text-right font-black text-slate-900">{totalQty}</td>
+                              <td colSpan={3} className="px-4 py-3 font-bold text-slate-600">Total</td>
+                              <td className="px-4 py-3 text-right font-black text-slate-900">{totalQty}</td>
                             </tr>
                           </tfoot>
                         </table>
@@ -1216,8 +1238,10 @@ export default function MinhaLojaRealinhamentoPage() {
                 <>
                   <b className="text-sm">Como operar:</b><br />
                   Pegue a peça na arara · toque na célula com a quantidade e{' '}
-                  <b>&quot;ENVIEI&quot;</b> · ela some desta aba e aparece na
-                  aba <b>Enviados hoje</b> com o horário, pra conferência.
+                  <b>&quot;ENVIEI&quot;</b> · ela fica <b className="text-emerald-700">verde</b>{' '}
+                  com o horário, já dentro da caixa daquela loja. As células
+                  claras são o que ainda falta buscar. Errou? toque na verde pra
+                  voltar. Quando a caixa estiver completa, <b>Fechar e enviar</b>.
                 </>
               ) : (
                 <>
@@ -1703,10 +1727,18 @@ function RealignCell({
     );
   }
 
-  // Modo CONFERÊNCIA — peça já foi enviada. Célula verde clicável pra permitir
-  // REVERTER caso a vendedora tenha clicado errado em "Enviei". Volta o item
-  // pra fila de pendentes. Título e ícone Undo2 deixam a affordance explícita.
-  if (viewMode === 'sent') {
+  /**
+   * Célula VERDE — peça já bipada. Clicável pra REVERTER o clique errado.
+   *
+   * A decisão é do ITEM (`sentAt`), não mais só da aba. Na aba amarela a grade
+   * agora mistura os dois estados: o que falta pegar em célula aberta e o que
+   * já está na caixa em verde, com o horário. Amarrado só à aba, a peça da
+   * caixa aberta apareceria como se ainda estivesse na arara — e a vendedora
+   * ia buscar de novo o que já tinha separado.
+   *
+   * Reverter continua seguro: o backend recusa se a remessa já fechou.
+   */
+  if (viewMode === 'sent' || item.sentAt) {
     const time = formatTime(item.sentAt);
     if (reverting) {
       return (
