@@ -23,6 +23,14 @@ const nextConfig: NextConfig = {
       // TEMPORÁRIO: editoriais royalty-free enquanto o banco de imagens da
       // marca não está pronto. Remover quando as fotos próprias entrarem.
       { protocol: 'https', hostname: 'images.unsplash.com' },
+      // R2 da Lurd's — fotos de produto (por cor) e banners da vitrine. O
+      // subdomínio padrão é `pub-<id>.r2.dev`; se o bucket for servido por
+      // domínio próprio, informe em R2_PUBLIC_HOST na Vercel (sem https://),
+      // senão o next/image recusa a URL e o banner some da home.
+      { protocol: 'https', hostname: '**.r2.dev' },
+      ...(process.env.R2_PUBLIC_HOST
+        ? [{ protocol: 'https' as const, hostname: process.env.R2_PUBLIC_HOST }]
+        : []),
     ],
   },
 

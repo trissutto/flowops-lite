@@ -25,7 +25,21 @@ import type { Product } from '@/types';
  * Sem tamanho escolhido o botão não some nem fica desabilitado em silêncio:
  * ele avisa. Botão morto sem explicação é o erro clássico de PDP.
  */
-export function BuyBox({ product }: { product: Product }) {
+export interface CorEscolhivel {
+  nome: string;
+  swatch: { tipo: 'cor' | 'foto'; hex: string | null; focoX: number | null; focoY: number | null; imagem: string | null };
+  estoque: number;
+}
+
+export function BuyBox({
+  product, cores, corSelecionada, onSelecionarCor,
+}: {
+  product: Product;
+  /** Cores da peça. Vazio = peça de cor única (ou catálogo sem ficha ainda). */
+  cores?: CorEscolhivel[];
+  corSelecionada?: string | null;
+  onSelecionarCor?: (nome: string) => void;
+}) {
   const [size, setSize] = useState<string | null>(null);
   const [sizeError, setSizeError] = useState(false);
   // LURDS FIT AI — assistente próprio de tamanho
@@ -49,23 +63,25 @@ export function BuyBox({ product }: { product: Product }) {
       document.getElementById('seletor-tamanho')?.scrollIntoView({ block: 'center' });
       return;
     }
+    // A cor escolhida vai junto no carrinho: sem ela a separação não sabe qual
+    // peça tirar da arara (mesma REF, cores diferentes).
+    const cor = corSelecionada ?? (cores?.length === 1 ? cores[0].nome : undefined);
     addToCart({
       productId: product.id,
       slug: product.slug,
-      name: product.name,
+      name: cor ? `${product.name} · ${cor}` : product.name,
       image: product.images[0] ?? { src: '', alt: product.name },
       size,
       quantity: 1,
       unitPrice: product.price,
     });
     // add_to_cart SÓ depois da peça entrar de fato no carrinho (contrato do
-    // tracking). Cor: a PDP não tem seletor — cada cor é uma peça própria, e
-    // quando o produto tem cor única ela vai junto no evento.
-    trackAddToCart(product, {
-      tamanho: size,
-      cor: product.colors?.length === 1 ? product.colors[0].name : undefined,
+    // tracking).
+    trackAddToCart(product, { tamanho: size, cor });
+    toast({
+      message: 'Adicionado à sacola',
+      description: `${product.name} · ${cor ? `${cor} · ` : ''}tamanho ${size}`,
     });
-    toast({ message: 'Adicionado à sacola', description: `${product.name} · tamanho ${size}` });
     // Abre o mini-cart: a cliente VÊ a peça entrar na sacola sem sair da
     // página — e o próximo passo (finalizar) já está na mão dela.
     openOverlay('cart');
@@ -145,6 +161,52 @@ export function BuyBox({ product }: { product: Product }) {
           )}
         </p>
       </div>
+
+      {/* COR — vem ANTES do tamanho: a cliente escolhe a cor e só então vê a
+          grade daquela cor (cada cor tem estoque próprio). Escolher o 48 e
+          depois descobrir que ele só existe no preto é o pior caminho. */}
+      {cores && cores.length > 1 && (
+        <div className="mt-9">
+          <p className="eyebrow text-ink">
+            Cor
+            {corSelecionada && <span className="ml-2 text-ink-soft normal-case">{corSelecionada}</span>}
+          </p>
+          <div className="mt-4 flex flex-wrap gap-3">
+            {cores.map((c) => {
+              const escolhida = corSelecionada === c.nome;
+              const esgotada = c.estoque <= 0;
+              const estilo: React.CSSProperties =
+                c.swatch.tipo === 'foto' && c.swatch.imagem
+                  ? {
+                      backgroundImage: `url(${c.swatch.imagem})`,
+                      backgroundSize: '400%',
+                      backgroundPosition: `${(c.swatch.focoX ?? 0.5) * 100}% ${(c.swatch.focoY ?? 0.5) * 100}%`,
+                    }
+                  : { backgroundColor: c.swatch.hex || '#D9D4CC' };
+
+              return (
+                <button
+                  key={c.nome}
+                  type="button"
+                  onClick={() => onSelecionarCor?.(c.nome)}
+                  aria-pressed={escolhida}
+                  aria-label={`Cor ${c.nome}${esgotada ? ' (esgotada)' : ''}`}
+                  title={c.nome}
+                  className={cn(
+                    'relative size-9 rounded-full border transition-all duration-[320ms]',
+                    escolhida
+                      ? 'border-ink ring-2 ring-ink ring-offset-2 ring-offset-background'
+                      : 'border-border hover:border-ink-soft',
+                    esgotada && 'opacity-40',
+                  )}
+                >
+                  <span style={estilo} className="absolute inset-[3px] rounded-full" />
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Tamanho */}
       <div id="seletor-tamanho" className="mt-9 scroll-mt-28">

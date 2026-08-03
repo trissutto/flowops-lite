@@ -31,14 +31,35 @@ function hexDaCor(nome: string): string {
   return parcial ? HEX_POR_COR[parcial] : '#c9bda8';
 }
 
+/**
+ * COR como variação escolhível — o que muda quando a cliente clica na bolinha:
+ * fotos, grade e preço daquela cor. Vem da ficha do CRM (`produto_ficha_cor`).
+ */
+export interface CorApi {
+  nome: string;
+  estoque: number;
+  preco: number;
+  swatch: {
+    tipo: 'cor' | 'foto';
+    hex: string | null;
+    focoX: number | null;
+    focoY: number | null;
+    imagem: string | null;
+  };
+  fotos: Array<{ src: string; alt?: string }>;
+  titulo: string | null;
+  youtubeUrl: string | null;
+  tamanhos: Array<{ label: string; sku: string; estoque: number; disponivel: boolean; preco: number }>;
+}
+
 /** Peça do backend → `Product` do site. Um lugar só faz essa tradução. */
-interface PecaApi {
+export interface PecaApi {
   ref: string; slug: string; nome: string;
   descricaoCurta: string | null; descricaoCompleta: string | null;
   marca: string | null; categoria: string | null;
   preco: number; precoPix: number | null;
   parcelamento: { vezes: number; valor: number } | null;
-  cores: Array<{ nome: string; estoque: number }>;
+  cores: CorApi[];
   tamanhos: Array<{ label: string; estoque: number; disponivel: boolean }>;
   estoqueTotal: number; disponivel: boolean;
   imagens: Array<{ src: string; alt?: string }>;
@@ -63,7 +84,13 @@ export function mapPeca(p: PecaApi): Product {
     installments: p.parcelamento ? { times: p.parcelamento.vezes, value: p.parcelamento.valor } : undefined,
     images: (p.imagens ?? []).map((i) => ({ src: i.src, alt: i.alt ?? p.nome })),
     sizes: (p.tamanhos ?? []).map((t) => ({ label: t.label, available: t.disponivel })),
-    colors: (p.cores ?? []).map((c) => ({ name: c.nome, hex: hexDaCor(c.nome) })),
+    // O hex do conta-gotas (tirado da foto real) vence a tabela de nomes —
+    // "MUSGO" e "ROSA QUEIMADO" nunca teriam entrada decente numa tabela.
+    colors: (p.cores ?? []).map((c) => ({
+      name: c.nome,
+      hex: c.swatch?.hex || hexDaCor(c.nome),
+      ...(c.fotos?.[0] ? { image: { src: c.fotos[0].src, alt: c.fotos[0].alt ?? c.nome } } : {}),
+    })),
     badges: badges.length ? badges : undefined,
     fabric: p.composicao ?? undefined,
     fit: p.modelagem ?? undefined,

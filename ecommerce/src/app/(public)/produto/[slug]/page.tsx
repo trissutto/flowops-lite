@@ -12,6 +12,8 @@ import { RecommendationRail } from '@/components/commerce/RecommendationRail';
 import { NewsletterBlock } from '@/components/sections/NewsletterBlock';
 import { TestimonialCarousel } from '@/components/sections/TestimonialCarousel';
 import { getProduct } from '@/services/catalog';
+import { fetchPeca } from '@/services/peca';
+import { EscolhaDaPeca } from '@/components/commerce/EscolhaDaPeca';
 import { testimonials } from '@/data/content';
 import { breadcrumbSchema, buildMetadata, jsonLdGraph, productSchema } from '@/lib/seo';
 
@@ -35,13 +37,18 @@ export async function generateMetadata({
   params: Promise<{ slug: string }>;
 }): Promise<Metadata> {
   const { slug } = await params;
-  const result = await getProduct(slug);
+  // Mesma ordem de fontes da página — título e OG têm que descrever o que a
+  // cliente vai ver, não o que o catálogo antigo tinha.
+  const peca = await fetchPeca(slug);
+  const result = peca ?? (await getProduct(slug));
 
   if (!result) {
     return buildMetadata({ title: 'Produto não encontrado', path: `/produto/${slug}`, noIndex: true });
   }
 
-  const { product, shortDescription } = result;
+  const { product } = result;
+  const shortDescription =
+    'descricaoCurta' in result ? result.descricaoCurta : result.shortDescription;
 
   return buildMetadata({
     title: product.name,
@@ -58,12 +65,21 @@ export async function generateMetadata({
 
 export default async function ProductPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
-  const result = await getProduct(slug);
+
+  // CATÁLOGO NOVO primeiro (ficha do CRM: cor com foto, grade e preço por
+  // cor). A vitrine antiga do WooCommerce fica como rede enquanto a migração
+  // de conteúdo não termina.
+  const peca = await fetchPeca(slug);
+  const result = peca ?? (await getProduct(slug));
 
   // Produto inexistente OU catálogo fora do ar: 404 é melhor que página quebrada.
   if (!result) notFound();
 
-  const { product, description, shortDescription } = result;
+  const { product } = result;
+  const description = 'descricao' in result ? result.descricao : result.description;
+  const shortDescription =
+    'descricaoCurta' in result ? result.descricaoCurta : result.shortDescription;
+  const cores = peca?.cores ?? [];
 
   const categoryLabel = product.category
     .replace(/-/g, ' ')
@@ -95,12 +111,16 @@ export default async function ProductPage({ params }: { params: Promise<{ slug: 
 
       {/* Galeria + decisão de compra */}
       <Container width="wide" className="pb-16">
-        <div className="grid gap-10 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)] lg:gap-16">
-          <ProductGallery images={product.images} name={product.name} />
-          <div className="lg:sticky lg:top-28 lg:self-start">
-            <BuyBox product={product} />
+        {cores.length > 0 ? (
+          <EscolhaDaPeca product={product} cores={cores} />
+        ) : (
+          <div className="grid gap-10 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)] lg:gap-16">
+            <ProductGallery images={product.images} name={product.name} />
+            <div className="lg:sticky lg:top-28 lg:self-start">
+              <BuyBox product={product} />
+            </div>
           </div>
-        </div>
+        )}
       </Container>
 
       {/* Detalhes */}
