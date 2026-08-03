@@ -155,7 +155,12 @@ export class ProductPhotosService {
           Bucket: bucket,
           Key: objectKey,
           Body: input.file.buffer,
-          ContentType: input.file.mimetype || 'image/jpeg',
+          // Content-type CONFIAVEL: o multer devolve 'application/octet-stream'
+          // quando o navegador nao informa, e a foto fica no bucket com um tipo
+          // que a API de visao recusa ("media_type: Input should be image/...").
+          ContentType: (input.file.mimetype || '').startsWith('image/')
+            ? input.file.mimetype
+            : 'image/jpeg',
           ContentDisposition: `inline; filename="${input.file.originalname}"`,
         }),
       );

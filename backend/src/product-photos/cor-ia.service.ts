@@ -53,6 +53,33 @@ export class CorIaService {
     return !!this.apiKey;
   }
 
+  /**
+   * Tipo da imagem pelos BYTES, não pelo cabeçalho do servidor.
+   *
+   * Medido em produção: o R2 devolve `binary/octet-stream` em parte do acervo
+   * (o arquivo subiu sem content-type), e a API recusa com
+   * "media_type: Input should be 'image/jpeg', 'image/png'...". Repassar o
+   * cabeçalho cru fazia TODA leitura de cor falhar naquelas fotos.
+   *
+   * A assinatura no início do arquivo não mente — é o que o próprio navegador
+   * usa quando o servidor erra o tipo.
+   */
+  private tipoDaImagem(bytes: Buffer, cabecalho: string): string {
+    const aceitos = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+    if (bytes.length >= 12) {
+      if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg';
+      if (bytes.toString('ascii', 1, 4) === 'PNG') return 'image/png';
+      if (bytes.toString('ascii', 0, 3) === 'GIF') return 'image/gif';
+      if (bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP') {
+        return 'image/webp';
+      }
+    }
+    const doCabecalho = cabecalho.split(';')[0].trim().toLowerCase();
+    if (aceitos.includes(doCabecalho)) return doCabecalho;
+    // JPEG é o formato de 99% do acervo — chute menos ruim que devolver erro.
+    return 'image/jpeg';
+  }
+
   private readonly PROMPT = `Você olha a foto de uma peça de roupa feminina plus size e responde a COR DA PEÇA.
 
 Regras:
@@ -85,8 +112,9 @@ Responda SOMENTE com um JSON válido, sem texto em volta, neste formato:
       this.http.get(url, { responseType: 'arraybuffer', timeout: 20000 }),
     ).catch(() => null);
     if (!baixada) throw new BadRequestException('Não consegui abrir a foto pra ler a cor.');
-    const mime = String((baixada.headers as any)?.['content-type'] || 'image/jpeg').split(';')[0];
-    const base64 = Buffer.from(baixada.data as ArrayBuffer).toString('base64');
+    const bytes = Buffer.from(baixada.data as ArrayBuffer);
+    const mime = this.tipoDaImagem(bytes, String((baixada.headers as any)?.['content-type'] || ''));
+    const base64 = bytes.toString('base64');
 
     const body = {
       model:
