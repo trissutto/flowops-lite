@@ -424,70 +424,58 @@ export class RealignmentShipmentService {
       obrigacoes = upd.count ?? 0;
     }
 
-    /**
-     * 3. Volta pra montagem — JUNTANDO na caixa aberta do destino, se houver.
-     *
-     * O par origem→destino só pode ter UMA caixa aberta: é assim que o
-     * "Enviei" acumula peça na mesma caixa (`findFirst status:'open'`). Se o
-     * reabrir criasse uma segunda aberta pro mesmo destino, o `findFirst`
-     * passaria a escolher uma das duas sem critério e as peças do dia se
-     * espalhariam entre elas — voltando a dar várias caixas (e várias
-     * etiquetas) pro mesmo lugar, que é justamente o que o dono não quer.
-     *
-     * Então: se já existe caixa aberta pra esse destino, as peças mudam de
-     * caixa e a reaberta é encerrada como 'cancelled'. Uma caixa, uma etiqueta.
-     */
-    const jaAberta = await (this.prisma as any).realignmentShipment.findFirst({
-      where: {
-        fromStoreCode: shipment.fromStoreCode,
-        toStoreCode: shipment.toStoreCode,
-        status: 'open',
-        NOT: { id: shipment.id },
-      },
-      orderBy: { openedAt: 'asc' },
-    });
-
     const carimbo =
       `Reaberta em ${new Date().toISOString()} por ${input.userId ?? 'loja'}` +
       (etiquetaDescartada ? ` — etiqueta ${etiquetaDescartada} descartada` : '');
-    let juntouEm: string | null = null;
 
-    // Limpa o envio: sem isto a caixa reaberta continuaria "com etiqueta" e o
-    // próximo fechamento reusaria um rastreio que não vale mais.
-    const limpaEnvio = etiquetaDescartada
-      ? { envioGeneratedAt: null, trackingCode: null, correiosPrepostagemId: null, carrier: null }
-      : {};
-
-    if (jaAberta) {
-      await this.prisma.transferOrder.updateMany({
-        where: { shipmentId: shipment.id } as any,
-        data: { shipmentId: jaAberta.id } as any,
-      });
-      await (this.prisma as any).realignmentShipment.update({
-        where: { id: shipment.id },
+    /**
+     * 3. AS PEÇAS VOLTAM PRA "A ENVIAR" e a caixa se desfaz (decisão do dono,
+     *    03/08: "o certo era voltar para esta fase aqui").
+     *
+     * Reabrir não é "destravar a caixa": é desfazer a separação. A peça foi
+     * pra outra caixa, pro chão, pra arara — ninguém sabe. Voltando pro estado
+     * pendente, a vendedora PEGA E BIPA de novo, e o bipe é o que prova que a
+     * peça está na mão. Caixa reaberta que continuasse cheia estaria afirmando
+     * uma conferência que não aconteceu.
+     *
+     * E resolve de graça o problema das 4 remessas pra Anália: reabriu tudo,
+     * as peças viram fila única de "a enviar", e o próximo bipe as junta na
+     * MESMA caixa nova — uma caixa, uma etiqueta. Por isso o merge que eu tinha
+     * escrito (mover itens pra caixa aberta) saiu: virou desnecessário.
+     */
+    let voltaramPendentes = 0;
+    if (idsItens.length) {
+      const upd = await this.prisma.transferOrder.updateMany({
+        where: { id: { in: idsItens } } as any,
         data: {
-          status: 'cancelled',
-          sentAt: null,
-          stockDecreasedAt: null,
-          ...limpaEnvio,
-          notes: [shipment.notes, `${carimbo} — itens movidos pra ${jaAberta.code}`]
-            .filter(Boolean).join(' | ').slice(0, 900),
+          realignmentStatus: 'pending',
+          realignmentSentAt: null,
+          shipmentId: null,
         } as any,
       });
-      juntouEm = jaAberta.code;
-    } else {
-      await (this.prisma as any).realignmentShipment.update({
-        where: { id: shipment.id },
-        data: {
-          status: 'open',
-          sentAt: null,
-          sentByUserId: null,
-          stockDecreasedAt: null,
-          ...limpaEnvio,
-          notes: [shipment.notes, carimbo].filter(Boolean).join(' | ').slice(0, 900),
-        } as any,
-      });
+      voltaramPendentes = upd.count ?? 0;
     }
+
+    await (this.prisma as any).realignmentShipment.update({
+      where: { id: shipment.id },
+      data: {
+        // 'cancelled' e não 'open': a caixa ficou vazia, e caixa vazia na tela
+        // é só um "Fechar e enviar" que não fecha nada. A próxima nasce no
+        // primeiro bipe, com número novo.
+        status: 'cancelled',
+        sentAt: null,
+        sentByUserId: null,
+        stockDecreasedAt: null,
+        totalItems: 0,
+        totalQty: 0,
+        envioGeneratedAt: null,
+        trackingCode: null,
+        correiosPrepostagemId: null,
+        carrier: null,
+        notes: [shipment.notes, `${carimbo} — ${voltaramPendentes} peça(s) devolvidas pra "a enviar"`]
+          .filter(Boolean).join(' | ').slice(0, 900),
+      } as any,
+    });
 
     // 4. Desavisa o destino — ele recebeu "chegando caixa" quando fechou.
     try {
@@ -510,8 +498,8 @@ export class RealignmentShipmentService {
     this.logger.log(
       `[reopen] ${shipment.code} reaberta por ${input.userId ?? 'loja'}: ` +
       `${devolvidos} SKU(s) devolvido(s) ao estoque de ${shipment.fromStoreCode}, ` +
-      `${obrigacoes} obrigação(ões) cancelada(s)` +
-      (juntouEm ? `, itens juntados em ${juntouEm}` : ''),
+      `${obrigacoes} obrigação(ões) cancelada(s), ` +
+      `${voltaramPendentes} peça(s) de volta em "a enviar"`,
     );
 
     return {
@@ -520,7 +508,7 @@ export class RealignmentShipmentService {
       itens: items.length,
       estoqueDevolvido: devolvidos,
       obrigacoesCanceladas: obrigacoes,
-      juntouEm,
+      voltaramPendentes,
       etiquetaDescartada,
       notaCancelada,
     };

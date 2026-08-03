@@ -1866,8 +1866,8 @@ function EnvioDaRemessa({
     const desfaz = [
       jaTemEtiqueta ? `⚠️ A ETIQUETA ${rastreio || ''} será CANCELADA — jogue fora, não poste com ela.` : null,
       notaAutorizada ? `⚠️ A NOTA FISCAL ${notaAutorizada} será CANCELADA na SEFAZ (prazo de 24h; fora dele a SEFAZ recusa e nada muda).` : null,
-      'As peças voltam pro estoque da loja.',
-      'A cobrança do acerto é cancelada.',
+      'As peças voltam pra "a enviar" na aba Pendentes — pra pegar e bipar de novo.',
+      'O estoque volta pra loja e a cobrança do acerto é cancelada.',
       'A loja destino deixa de esperar a caixa.',
     ].filter(Boolean);
     if (!window.confirm(`Reabrir a caixa ${code}?\n\n${desfaz.join('\n')}`)) return;
@@ -1886,8 +1886,7 @@ function EnvioDaRemessa({
       setMsg({
         tipo: 'ok',
         texto:
-          `Caixa reaberta — ${r?.itens ?? 0} peça(s) voltaram pra montagem` +
-          (r?.juntouEm ? `, juntadas na caixa ${r.juntouEm}.` : '.') +
+          `Caixa desfeita — ${r?.voltaramPendentes ?? 0} peça(s) voltaram pra "a enviar" na aba Pendentes.` +
           (r?.etiquetaDescartada ? ' Etiqueta cancelada.' : '') +
           (r?.notaCancelada ? ` NF-e ${r.notaCancelada} cancelada na SEFAZ.` : ''),
       });
@@ -1986,7 +1985,7 @@ function EnvioDaRemessa({
             type="button"
             onClick={() => void reabrir()}
             disabled={ocupado !== null}
-            title="Volta a caixa pra montagem: devolve as peças ao estoque e cancela a cobrança do acerto"
+            title="Desfaz a caixa: as peças voltam pra 'a enviar' e o estoque volta pra loja"
             className="bg-white hover:bg-amber-50 text-amber-900 border-2 border-amber-400 px-4 py-2.5 rounded-xl text-sm font-bold shadow-sm flex items-center gap-2 disabled:opacity-50"
           >
             {ocupado === 'reabrir' ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
