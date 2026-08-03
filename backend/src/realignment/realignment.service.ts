@@ -964,7 +964,9 @@ export class RealignmentService {
 
     const startOfDay = startOfDayBR();
 
-    const orders = await this.prisma.transferOrder.findMany({
+    // `any[]` porque o select leva `shipmentId` com `as any` (campo que o
+    // client gerado nem sempre conhece) e isso apaga a inferência do resto.
+    const orders: any[] = await this.prisma.transferOrder.findMany({
       where: {
         tipo: 'REALINHAMENTO',
         realignmentStatus: 'sent',
@@ -985,8 +987,31 @@ export class RealignmentService {
         mensagem: true,
         createdAt: true,
         realignmentSentAt: true,
-      },
+        shipmentId: true,
+      } as any,
     });
+
+    /**
+     * A peça já está em caixa FECHADA?
+     *
+     * A pilha verde ("PILHA PRA SANTOS") existe pra vendedora conferir o que
+     * separou e desfazer clique errado. Depois que a caixa fecha, aquilo não é
+     * mais pilha: é caixa lacrada, representada pelo cartão de etiqueta lá em
+     * cima — e o desfazer nem valeria mais, porque o estoque já baixou.
+     * Mostrar nos dois lugares fazia parecer trabalho em dobro.
+     */
+    const shipmentIds = Array.from(
+      new Set((orders as any[]).map((o) => o.shipmentId).filter(Boolean)),
+    );
+    const caixas = shipmentIds.length
+      ? await (this.prisma as any).realignmentShipment.findMany({
+          where: { id: { in: shipmentIds } },
+          select: { id: true, status: true },
+        })
+      : [];
+    const statusPorCaixa = new Map<string, string>(
+      (caixas as any[]).map((c) => [c.id, c.status]),
+    );
 
     // Mesma estratégia não-bloqueante (ver comentário no listPendingForStore)
     const uniqueRefs = Array.from(new Set(orders.map((o) => o.refCode).filter(Boolean)));
@@ -1003,6 +1028,11 @@ export class RealignmentService {
       createdAt: o.createdAt.toISOString(),
       sentAt: o.realignmentSentAt ? o.realignmentSentAt.toISOString() : null,
       imageUrl: imagesByRef[o.refCode] ?? null,
+      // Sem shipmentId = peça antiga, de antes das caixas. Trata como pilha
+      // (é o que ela era) em vez de sumir com ela.
+      caixaFechada: (o as any).shipmentId
+        ? (statusPorCaixa.get((o as any).shipmentId) ?? 'open') !== 'open'
+        : false,
     }));
   }
 

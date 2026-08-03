@@ -237,6 +237,202 @@ export class RealignmentShipmentService {
   }
 
   /**
+   * REABRE uma caixa fechada — desfaz o fechamento, não "muda um status".
+   *
+   * Fechar faz três coisas além de trocar o status: baixa o estoque da origem,
+   * cria as obrigações financeiras entre as lojas e avisa a loja destino. Um
+   * reabrir que só mexesse no status deixaria a peça fora do estoque, uma
+   * cobrança fantasma no acerto do mês e o destino esperando caixa que não vem.
+   * Por isso aqui é desfeito na ordem inversa.
+   *
+   * O QUE BLOQUEIA (e por quê):
+   *  · caixa já RECEBIDA — a peça já entrou no estoque do destino; desfazer
+   *    daqui criaria estoque do nada nas duas pontas;
+   *  · NF-e AUTORIZADA — documento fiscal emitido não se apaga por botão de
+   *    tela, se cancela na SEFAZ com prazo e justificativa;
+   *  · ETIQUETA já gerada — existe pré-postagem nos Correios com essa caixa.
+   * Nos três a mensagem diz o que fazer, em vez de só recusar.
+   */
+  async reopenShipment(input: { shipmentId: string; storeId: string; userId?: string }) {
+    const store = await this.prisma.store.findUnique({
+      where: { id: input.storeId },
+      select: { code: true } as any,
+    });
+    if (!store) throw new ForbiddenException('Loja inválida');
+
+    const shipment = await (this.prisma as any).realignmentShipment.findUnique({
+      where: { id: input.shipmentId },
+    });
+    if (!shipment) throw new NotFoundException('Remessa não encontrada');
+    if (shipment.fromStoreCode !== (store as any).code) {
+      throw new ForbiddenException('Essa remessa não é da sua loja');
+    }
+    if (shipment.status === 'open') {
+      return { ok: true, jaEstavaAberta: true, code: shipment.code };
+    }
+    if (shipment.status !== 'in_transit') {
+      throw new BadRequestException(
+        shipment.status === 'received'
+          ? 'A loja destino já recebeu esta caixa — não dá pra reabrir daqui.'
+          : `Remessa está como "${shipment.status}" e não pode ser reaberta.`,
+      );
+    }
+    if (shipment.envioGeneratedAt) {
+      throw new BadRequestException(
+        `Esta caixa já tem etiqueta dos Correios${shipment.trackingCode ? ` (${shipment.trackingCode})` : ''}. ` +
+        'Cancele a pré-postagem antes de reabrir.',
+      );
+    }
+
+    const nfAutorizada = await (this.prisma as any).nfeDoc.findFirst({
+      where: { shipmentId: shipment.id, status: 'authorized' },
+      select: { id: true, numero: true } as any,
+    });
+    if (nfAutorizada) {
+      throw new BadRequestException(
+        'Esta caixa já tem NF-e autorizada. Cancele a nota na SEFAZ antes de reabrir.',
+      );
+    }
+
+    const items = await this.prisma.transferOrder.findMany({
+      where: { shipmentId: shipment.id } as any,
+      select: { id: true, refCode: true, cor: true, tamanho: true, qtyOrigem: true, codigoBipado: true } as any,
+    });
+
+    // 1. DEVOLVE o estoque à origem — só se o fechamento realmente baixou.
+    //    `stockDecreasedAt` é o mesmo marcador que o reprocess usa; sem ele o
+    //    fechamento não tirou nada e devolver criaria peça do nada.
+    let devolvidos = 0;
+    if (shipment.stockDecreasedAt) {
+      const stockItems: Array<{ sku: string; qty: number; storeCode: string }> = [];
+      for (const it of items as any[]) {
+        try {
+          const sku =
+            it.codigoBipado ||
+            (await this.erp.findCodigoByRefCorTam(it.refCode, it.cor, it.tamanho));
+          if (sku) {
+            stockItems.push({ sku, qty: it.qtyOrigem || 1, storeCode: shipment.fromStoreCode });
+          }
+        } catch {
+          // Item sem SKU não baixou no fechamento (política de unresolved) —
+          // então também não tem o que devolver.
+        }
+      }
+      if (stockItems.length) {
+        const r = await this.erp.increaseStock(stockItems);
+        if (!r?.success) {
+          throw new BadRequestException(
+            `Não devolvi o estoque pra ${shipment.fromStoreCode}: ${r?.error || 'erro desconhecido'}. ` +
+            'A caixa continua fechada — nada foi alterado pela metade.',
+          );
+        }
+        devolvidos = r.applied?.length || 0;
+      }
+    }
+
+    // 2. CANCELA as obrigações do acerto. Cancela, não apaga: o mês fecha com
+    //    o rastro de que existiu e foi desfeita.
+    const idsItens = (items as any[]).map((i) => i.id);
+    let obrigacoes = 0;
+    if (idsItens.length) {
+      const upd = await (this.prisma as any).interStoreObligation.updateMany({
+        where: { transferOrderId: { in: idsItens }, status: 'pending' },
+        data: { status: 'cancelled' },
+      });
+      obrigacoes = upd.count ?? 0;
+    }
+
+    /**
+     * 3. Volta pra montagem — JUNTANDO na caixa aberta do destino, se houver.
+     *
+     * O par origem→destino só pode ter UMA caixa aberta: é assim que o
+     * "Enviei" acumula peça na mesma caixa (`findFirst status:'open'`). Se o
+     * reabrir criasse uma segunda aberta pro mesmo destino, o `findFirst`
+     * passaria a escolher uma das duas sem critério e as peças do dia se
+     * espalhariam entre elas — voltando a dar várias caixas (e várias
+     * etiquetas) pro mesmo lugar, que é justamente o que o dono não quer.
+     *
+     * Então: se já existe caixa aberta pra esse destino, as peças mudam de
+     * caixa e a reaberta é encerrada como 'cancelled'. Uma caixa, uma etiqueta.
+     */
+    const jaAberta = await (this.prisma as any).realignmentShipment.findFirst({
+      where: {
+        fromStoreCode: shipment.fromStoreCode,
+        toStoreCode: shipment.toStoreCode,
+        status: 'open',
+        NOT: { id: shipment.id },
+      },
+      orderBy: { openedAt: 'asc' },
+    });
+
+    const carimbo = `Reaberta em ${new Date().toISOString()} por ${input.userId ?? 'loja'}`;
+    let juntouEm: string | null = null;
+
+    if (jaAberta) {
+      await this.prisma.transferOrder.updateMany({
+        where: { shipmentId: shipment.id } as any,
+        data: { shipmentId: jaAberta.id } as any,
+      });
+      await (this.prisma as any).realignmentShipment.update({
+        where: { id: shipment.id },
+        data: {
+          status: 'cancelled',
+          sentAt: null,
+          stockDecreasedAt: null,
+          notes: [shipment.notes, `${carimbo} — itens movidos pra ${jaAberta.code}`]
+            .filter(Boolean).join(' | ').slice(0, 900),
+        } as any,
+      });
+      juntouEm = jaAberta.code;
+    } else {
+      await (this.prisma as any).realignmentShipment.update({
+        where: { id: shipment.id },
+        data: {
+          status: 'open',
+          sentAt: null,
+          sentByUserId: null,
+          stockDecreasedAt: null,
+          notes: [shipment.notes, carimbo].filter(Boolean).join(' | ').slice(0, 900),
+        } as any,
+      });
+    }
+
+    // 4. Desavisa o destino — ele recebeu "chegando caixa" quando fechou.
+    try {
+      const destStore = await this.prisma.store.findUnique({
+        where: { code: shipment.toStoreCode },
+        select: { id: true } as any,
+      });
+      if (destStore) {
+        this.gateway.emitToStore((destStore as any).id, 'shipment:cancelled', {
+          shipmentId: shipment.id,
+          code: shipment.code,
+          fromStoreName: shipment.fromStoreName,
+          motivo: 'reaberta na origem',
+        });
+      }
+    } catch (e) {
+      this.logger.warn(`[reopen] falha avisando destino: ${(e as Error).message}`);
+    }
+
+    this.logger.log(
+      `[reopen] ${shipment.code} reaberta por ${input.userId ?? 'loja'}: ` +
+      `${devolvidos} SKU(s) devolvido(s) ao estoque de ${shipment.fromStoreCode}, ` +
+      `${obrigacoes} obrigação(ões) cancelada(s)` +
+      (juntouEm ? `, itens juntados em ${juntouEm}` : ''),
+    );
+
+    return {
+      ok: true,
+      code: shipment.code,
+      itens: items.length,
+      estoqueDevolvido: devolvidos,
+      obrigacoesCanceladas: obrigacoes,
+      juntouEm,
+    };
+  }
+
+  /**
    * Adiciona uma TransferOrder a uma remessa (criando ou reutilizando a
    * remessa aberta do par origem→destino).
    *
@@ -1044,8 +1240,14 @@ export class RealignmentShipmentService {
       where: { id: input.shipmentId },
     });
     if (!shipment) throw new NotFoundException('Remessa não encontrada');
-    if (shipment.toStoreCode !== (store as any).code)
-      throw new ForbiddenException('Essa remessa não é da sua loja');
+    // AS DUAS PONTAS enxergam o conteúdo. A checagem era só do destino (quem
+    // confere ao receber), e isso barrava a loja de ORIGEM de olhar o que
+    // colocou na própria caixa — que é o "Verificar conteúdo" da tela dela.
+    // Ver a lista do que ela mesma separou não expõe nada de outra loja.
+    const minha =
+      shipment.toStoreCode === (store as any).code ||
+      shipment.fromStoreCode === (store as any).code;
+    if (!minha) throw new ForbiddenException('Essa remessa não é da sua loja');
 
     const items = await this.prisma.transferOrder.findMany({
       where: { shipmentId: shipment.id } as any,
