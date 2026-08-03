@@ -1,6 +1,7 @@
 import { Header } from '@/components/navigation/Header';
 import { Footer } from '@/components/layout/Footer';
 import { MiniCart } from '@/components/commerce/MiniCart';
+import { QuickAddSheet } from '@/components/commerce/QuickAddSheet';
 import { getTarjaDoTopo } from '@/services/banners';
 
 /**
@@ -21,6 +22,9 @@ export default async function PublicLayout({ children }: { children: React.React
       <main id="conteudo">{children}</main>
       <Footer />
       <MiniCart />
+      {/* Uma instância só: o botão da sacolinha nasce em todo card (vitrine,
+          carrossel, busca) e todos falam com este mesmo store. */}
+      <QuickAddSheet />
     </>
   );
 }
