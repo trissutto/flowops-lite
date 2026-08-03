@@ -16,7 +16,7 @@ import {
   Shuffle, CreditCard, Boxes, CheckCircle2, Package2, Store,
   FileSearch, Truck, BarChart3, Percent, ArrowLeft,
   LayoutDashboard, Globe2, Settings, ShoppingCart, Tags, KeyRound, Map, Zap,
-  Shirt,
+  Shirt, GalleryHorizontal,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import AdminShell, { type AdminNavItem } from '@/components/AdminShell';
@@ -50,6 +50,7 @@ const LOJA_ITEMS: LojaItem[] = [
   { href: '/cadastros/classificacao-produtos', label: 'Produtos Loja',  subtitle: 'Classificação', description: 'Básico/Moda + plus size',     tone: 'purple', icon: Tags         },
   { href: '/retaguarda/produto-master',       label: 'Produto (ficha)', subtitle: 'Tela master', description: 'REF → cor → grade · fotos · site', tone: 'purple', icon: Package2 },
   { href: '/cadastros/classificacao-peca',    label: 'Classificação Peça', subtitle: 'Cadastros', description: 'Ocasião · tecido · modelagem · coleção', tone: 'purple', icon: Shirt },
+  { href: '/retaguarda/banners',              label: 'Banners',        subtitle: 'Vitrine',     description: 'Hero da home · faixas · tarja do topo', tone: 'purple', icon: GalleryHorizontal },
   { href: '/retaguarda/promocoes-config',     label: 'Promoções PDV',  subtitle: 'Config',      description: '50% · básico fora · 4 leva 3',  tone: 'amber',  icon: Percent      },
   { href: '/retaguarda/descontos-senhas',     label: 'Descontos & Senhas', subtitle: 'Config',  description: 'Faixas de desconto + senhas',   tone: 'amber',  icon: KeyRound     },
   { href: '/retaguarda/mapa-urls',            label: 'Mapa de URLs',   subtitle: 'Sistema',     description: 'Todas as telas + flag de atalho', tone: 'slate',  icon: Map          },
