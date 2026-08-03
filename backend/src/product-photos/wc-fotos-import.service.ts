@@ -4,6 +4,7 @@ import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 import { PrismaService } from '../prisma/prisma.service';
 import { ProductPhotosService } from './product-photos.service';
+import { WpDbService } from '../wp-db/wp-db.service';
 
 /**
  * IMPORTAR AS FOTOS DO SITE ANTIGO — WooCommerce → R2, por REF e COR.
@@ -47,6 +48,7 @@ export class WcFotosImportService {
     private readonly http: HttpService,
     private readonly config: ConfigService,
     private readonly fotos: ProductPhotosService,
+    private readonly wp: WpDbService,
   ) {}
 
   private get baseUrl() {
@@ -113,6 +115,32 @@ export class WcFotosImportService {
    * peça de outra REF: sem ele, "222" casaria com meio catálogo.
    */
   private async acharNoWc(ref: string): Promise<any[]> {
+    /**
+     * FONTE PRINCIPAL: o MySQL do WordPress, o MESMO caminho que o PDV usa
+     * pra mostrar foto há meses.
+     *
+     * Pergunta do dono que resolveu o impasse: "no PDV a foto aparece, qual a
+     * dificuldade?". Nenhuma — eu é que tinha escolhido a fonte errada. Lá o
+     * casamento é `SKU LIKE 'REF%'`, e o SKU do WordPress é "VLM-222 MARROM";
+     * a REST do WooCommerce exige SKU exato e por isso devolvia UM produto.
+     */
+    try {
+      const doWp = await this.wp.getProdutosPorRef(ref);
+      if (doWp.length) {
+        this.logger.log(`[wc-fotos] ${ref}: ${doWp.length} produto(s) pelo MySQL do WordPress`);
+        // Formato do WooCommerce REST pro resto do fluxo não mudar.
+        return doWp.map((p) => ({
+          id: p.id,
+          name: p.nome,
+          sku: p.sku,
+          status: p.status,
+          images: p.imagens.map((src) => ({ src })),
+        }));
+      }
+    } catch (e: any) {
+      this.logger.warn(`[wc-fotos] MySQL do WordPress indisponível: ${e?.message || e}`);
+    }
+
     const base = ref.replace(/[A-Z]+$/i, '').replace(/[-_\s]+$/, '');
     const tentativas: Array<Record<string, unknown>> = [
       { sku: ref },
@@ -132,6 +160,16 @@ export class WcFotosImportService {
       );
     };
 
+    /**
+     * ⚠️ RODA AS TRÊS E SOMA — não para na primeira que responde.
+     *
+     * Medido no raio-X (03/08): `sku=VLM-222` devolve UM produto (o Laranja,
+     * em rascunho). O SKU exato existe, mas só numa peça da família; as outras
+     * nove têm SKU vazio ou diferente e só aparecem na busca por texto. Parar
+     * na primeira tentativa importava 1 cor e dava a família inteira como
+     * "sem foto no site antigo".
+     */
+    const porId = new Map<number, any>();
     for (const params of tentativas) {
       const res = await firstValueFrom(
         this.http.get(`${this.baseUrl}/products`, {
@@ -146,15 +184,13 @@ export class WcFotosImportService {
         return null;
       });
 
-      const achados: any[] = (res?.data ?? []).filter(combina);
-      if (achados.length) {
-        this.logger.log(
-          `[wc-fotos] ${ref}: ${achados.length} produto(s) via ${JSON.stringify(params)}`,
-        );
-        return achados;
+      for (const p of (res?.data ?? []).filter(combina)) {
+        if (!porId.has(p.id)) porId.set(p.id, p);
       }
     }
-    return [];
+
+    this.logger.log(`[wc-fotos] ${ref}: ${porId.size} produto(s) no site antigo`);
+    return Array.from(porId.values());
   }
 
   /**
@@ -176,6 +212,23 @@ export class WcFotosImportService {
     ];
 
     const rodadas: any[] = [];
+
+    // Primeiro a fonte que o PDV usa — se ela responde, o resto e irrelevante.
+    try {
+      const doWp = await this.wp.getProdutosPorRef(ref);
+      rodadas.push({
+        params: { fonte: 'mysql-wordpress (LIKE REF%)' },
+        erro: null,
+        devolvidos: doWp.length,
+        produtos: doWp.slice(0, 30).map((p) => ({
+          id: p.id, nome: p.nome, sku: p.sku, status: p.status,
+          imagens: p.imagens.length,
+          corCasada: this.casarCor(p.nome, cores),
+        })),
+      });
+    } catch (e) {
+      rodadas.push({ params: { fonte: 'mysql-wordpress' }, erro: String(e).slice(0, 120), devolvidos: 0, produtos: [] });
+    }
     for (const params of tentativas) {
       const res = await firstValueFrom(
         this.http.get(`${this.baseUrl}/products`, {
@@ -199,7 +252,8 @@ export class WcFotosImportService {
           corCasada: this.casarCor(String(p.name || ''), cores),
         })),
       });
-      if (brutos.length) break;
+      // Sem `break`: o diagnóstico tem que mostrar TODAS as tentativas, senão
+      // esconde exatamente o defeito que ele acabou de revelar (parar cedo).
     }
 
     return { ref, base, coresNoErp: cores, rodadas };
