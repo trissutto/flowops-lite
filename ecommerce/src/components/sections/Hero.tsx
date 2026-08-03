@@ -1,6 +1,6 @@
 'use client';
 
-import Image from 'next/image';
+import Image, { getImageProps } from 'next/image';
 import { motion, useScroll, useTransform } from 'framer-motion';
 import { useRef } from 'react';
 import { ChevronDown } from 'lucide-react';
@@ -47,6 +47,8 @@ interface HeroAction {
 
 interface HeroProps {
   image?: Media;
+  /** Recorte vertical pro celular (opcional) — arte dirigida. */
+  imageMobile?: Media;
   video?: VideoMedia;
   eyebrow?: string;
   title: React.ReactNode;
@@ -77,6 +79,7 @@ const OVERLAYS = {
 
 export function Hero({
   image,
+  imageMobile,
   video,
   eyebrow,
   title,
@@ -141,6 +144,41 @@ export function Hero({
                 className="relative size-full object-cover"
               />
             </>
+          ) : image && imageMobile ? (
+            /**
+             * ARTE DIRIGIDA — foto horizontal no computador, recorte vertical
+             * no celular.
+             *
+             * `<picture>` com `getImageProps` em vez de dois `<Image>` com
+             * `hidden`: imagem escondida por CSS **continua sendo baixada**
+             * pelo navegador, e o hero é o LCP da home — pagar duas vezes ali
+             * é o oposto do que a sprint de performance fez.
+             *
+             * O `<source media>` faz o navegador escolher UM, e o
+             * `getImageProps` mantém o srcset otimizado (AVIF/WebP, largura
+             * certa) dos dois lados.
+             */
+            (() => {
+              const comum = {
+                alt: image.alt,
+                fill: true,
+                priority,
+                sizes: '100vw',
+                placeholder: 'blur' as const,
+                blurDataURL: BLUR_DATA_URL,
+                className: 'object-cover object-center',
+              };
+              const desktop = getImageProps({ ...comum, src: image.src });
+              const mobile = getImageProps({ ...comum, src: imageMobile.src });
+              return (
+                <picture>
+                  <source media="(max-width: 1023px)" srcSet={mobile.props.srcSet} />
+                  <source media="(min-width: 1024px)" srcSet={desktop.props.srcSet} />
+                  {/* eslint-disable-next-line jsx-a11y/alt-text */}
+                  <img {...desktop.props} fetchPriority={priority ? 'high' : undefined} />
+                </picture>
+              );
+            })()
           ) : image ? (
             <Image
               src={image.src}

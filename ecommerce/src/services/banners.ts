@@ -51,6 +51,8 @@ export async function getBanners(slot: string): Promise<Banner[]> {
 /** O que o `<Hero>` da home precisa, já resolvido com o fallback estático. */
 export interface HeroDaHome {
   image: { src: string; alt: string };
+  /** Recorte vertical do banner, quando a retaguarda subiu um. */
+  imageMobile?: { src: string; alt: string };
   eyebrow: string;
   lead: string;
   emphasis: string;
@@ -77,6 +79,9 @@ export async function getHeroDaHome(): Promise<HeroDaHome> {
 
   return {
     image: { src: banner.imagemUrl, alt: banner.alt || banner.titulo || HERO_ESTATICO.image.alt },
+    ...(banner.imagemMobileUrl
+      ? { imageMobile: { src: banner.imagemMobileUrl, alt: banner.alt || banner.titulo || '' } }
+      : {}),
     eyebrow: banner.eyebrow || '',
     lead: banner.titulo || '',
     emphasis: banner.destaque || '',
