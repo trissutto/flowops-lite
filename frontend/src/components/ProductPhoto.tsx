@@ -113,7 +113,8 @@ export default function ProductPhoto({
       const r = await api<Photo>(`/product-photos/upload`, {
         method: 'POST',
         body: form as any,
-        headers: {} as any, // remove Content-Type pra browser setar multipart boundary
+        // O Content-Type do multipart é tirado dentro do api() quando o body é
+        // FormData — passar {} aqui NÃO removia nada (ver lib/api.ts).
       });
       photoCache.set(key, r);
       notifySubscribers(key, r);

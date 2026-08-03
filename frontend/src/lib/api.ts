@@ -182,16 +182,36 @@ export async function api<T = any>(
 ): Promise<T> {
   const token = getAuthToken();
   const training = isTrainingMode();
+  /**
+   * UPLOAD (FormData) NÃO PODE LEVAR Content-Type.
+   *
+   * Quem envia arquivo passava `headers: {}` achando que apagava o
+   * 'application/json' do padrão — não apaga: espalhar um objeto vazio não
+   * remove chave nenhuma. O resultado era um multipart declarado como JSON e
+   * SEM boundary, e o navegador derrubava a requisição com um
+   * "TypeError: Failed to fetch" que parecia rede/CORS. Foi o que quebrou o
+   * upload de foto do Produto Master em 03/08.
+   *
+   * Com FormData, o Content-Type é responsabilidade do NAVEGADOR — é ele que
+   * gera o boundary. A regra vive aqui, e não em cada chamador, senão o
+   * próximo upload repete o erro.
+   */
+  const ehUpload = typeof FormData !== 'undefined' && opts.body instanceof FormData;
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(training ? { 'x-training-mode': '1' } : {}),
+    ...((opts.headers as Record<string, string>) || {}),
+  };
+  // `delete` de verdade — não adianta sobrescrever com undefined, que viraria
+  // a string "undefined" dentro do Headers.
+  if (ehUpload) {
+    for (const chave of Object.keys(headers)) {
+      if (chave.toLowerCase() === 'content-type') delete headers[chave];
+    }
+  }
   try {
-    const res = await fetch(`${API_URL}/api${path}`, {
-      ...opts,
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        ...(training ? { 'x-training-mode': '1' } : {}),
-        ...(opts.headers || {}),
-      },
-    });
+    const res = await fetch(`${API_URL}/api${path}`, { ...opts, headers });
     if (!res.ok) {
       const msg = await res.text();
       // 401 = sessão expirou → força logout com alerta (1x só, mesmo em paralelo)
