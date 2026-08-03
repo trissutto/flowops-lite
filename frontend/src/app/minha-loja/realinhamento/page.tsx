@@ -625,6 +625,14 @@ export default function MinhaLojaRealinhamentoPage() {
   const currentItems =
     view === 'pending' ? items : sentItems.filter((i) => !(i as any).caixaFechada);
 
+  // Caixa aberta de cada destino, pra pendurar as ações no cabeçalho da pilha
+  // em vez de repetir as mesmas peças num cartão à parte.
+  const caixaDoDestino = useMemo(() => {
+    const m: Record<string, any> = {};
+    for (const s of openShipments) m[s.toStoreCode] = s;
+    return m;
+  }, [openShipments]);
+
   // Agrupa por destino → dentro dele, por REF, com grade Cor × Tamanho
   const byDestination = useMemo(() => {
     const dests = new Map<string, { code: string; name: string; items: RealignmentItem[] }>();
@@ -701,6 +709,19 @@ export default function MinhaLojaRealinhamentoPage() {
         return { code: d.code, name: d.name, refGroups, totalItems, totalUnits };
       });
   }, [currentItems]);
+
+  /**
+   * Caixas abertas que NÃO têm pilha na tela — só essas ganham cartão próprio.
+   *
+   * Na aba de enviados, a caixa cujo destino já aparece como pilha mostra as
+   * ações no cabeçalho dela; um cartão à parte repetiria as mesmas peças. Na
+   * aba de pendentes não existe pilha de enviados, então todas aparecem.
+   */
+  const caixasSemPilha = useMemo(() => {
+    if (view !== 'sent') return openShipments;
+    const comPilha = new Set(byDestination.map((d) => d.code));
+    return openShipments.filter((s) => !comPilha.has(s.toStoreCode));
+  }, [openShipments, byDestination, view]);
 
   const totalPending = items.length;
   const totalUnits = useMemo(() => items.reduce((a, it) => a + it.qtyOrigem, 0), [items]);
@@ -902,13 +923,18 @@ export default function MinhaLojaRealinhamentoPage() {
           </div>
         )}
 
-        {openShipments.length > 0 && (
+        {/* Caixa em montagem que NÃO tem pilha nesta tela — tipicamente a que
+            ficou aberta de outro dia. Quem tem pilha já mostra as ações no
+            próprio cabeçalho dela; repetir aqui era o mesmo item duas vezes.
+            Mas sumir com a caixa sem pilha seria pior: ela ficaria aberta pra
+            sempre, sem ninguém achar o "Fechar e enviar". */}
+        {caixasSemPilha.length > 0 && (
           <div className="space-y-3">
             <div className="flex items-center gap-2 text-sm font-bold text-amber-900">
               <Truck className="w-4 h-4" />
               Remessas em montagem
             </div>
-            {openShipments.map((s) => {
+            {caixasSemPilha.map((s) => {
               const isClosing = closingShipmentId === s.id;
               const totalQty = (s.items || []).reduce(
                 (sum: number, i: any) => sum + (i.qtyOrigem || 1), 0,
@@ -1052,6 +1078,47 @@ export default function MinhaLojaRealinhamentoPage() {
                     }`}
                   />
                 </button>
+
+                {/* AÇÕES DA CAIXA daquele destino, coladas na pilha.
+                    A caixa aberta tinha cartão amarelo PRÓPRIO, e as MESMAS
+                    peças apareciam nos dois lugares — "2 item(s) na caixa" em
+                    cima e a grade verde embaixo. Uma caixa, um cartão: as
+                    ações vêm pra cá e o cartão amarelo só sobra pra caixa que
+                    não tem peça nesta tela (a que ficou de outro dia).
+                    Fora do <button> do cabeçalho de propósito: botão dentro de
+                    botão não é HTML válido e o clique vira loteria. */}
+                {view === 'sent' && caixaDoDestino[d.code] && (
+                  <div className="no-print flex flex-wrap gap-2 px-4 py-3 bg-amber-50 border-b border-amber-200">
+                    <span className="font-mono text-xs font-black text-amber-900 self-center mr-1">
+                      {caixaDoDestino[d.code].code}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleDownloadPdf(caixaDoDestino[d.code].id, caixaDoDestino[d.code].code)}
+                      className="bg-white hover:bg-amber-100 text-amber-900 border-2 border-amber-400 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5"
+                    >
+                      <FileText className="w-3.5 h-3.5" /> PDF
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handlePrintRemessa(caixaDoDestino[d.code].id, caixaDoDestino[d.code].code)}
+                      className="bg-amber-100 hover:bg-amber-200 text-amber-900 border-2 border-amber-400 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5"
+                    >
+                      <Printer className="w-3.5 h-3.5" /> Imprimir
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleCloseShipment(caixaDoDestino[d.code].id, caixaDoDestino[d.code].code)}
+                      disabled={closingShipmentId === caixaDoDestino[d.code].id}
+                      className="bg-amber-500 hover:bg-amber-600 text-white px-3 py-1.5 rounded-lg text-xs font-black flex items-center gap-1.5 disabled:opacity-50"
+                    >
+                      {closingShipmentId === caixaDoDestino[d.code].id
+                        ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        : <Send className="w-3.5 h-3.5" />}
+                      Fechar e enviar
+                    </button>
+                  </div>
+                )}
 
                 {/* Grupos por REF — só renderiza quando aberto */}
                 {isOpen && (
@@ -1746,23 +1813,30 @@ function EnvioDaRemessa({
   }
 
   async function reabrir() {
-    if (
-      !window.confirm(
-        `Reabrir a caixa ${code}?\n\n` +
-          'As peças voltam pro estoque da loja, a cobrança do acerto é cancelada ' +
-          'e a loja destino deixa de esperar a caixa.',
-      )
-    ) return;
+    const aviso = jaTemEtiqueta
+      ? `Reabrir a caixa ${code}?\n\n` +
+        `⚠️ A ETIQUETA ${rastreio || ''} SERÁ DESCARTADA — jogue fora, não poste com ela.\n\n` +
+        'As peças voltam pro estoque da loja, a cobrança do acerto é cancelada ' +
+        'e a loja destino deixa de esperar a caixa.'
+      : `Reabrir a caixa ${code}?\n\n` +
+        'As peças voltam pro estoque da loja, a cobrança do acerto é cancelada ' +
+        'e a loja destino deixa de esperar a caixa.';
+    if (!window.confirm(aviso)) return;
     setOcupado('reabrir');
     setMsg(null);
     try {
       const r = await api<any>(`/realignment/shipments/${shipmentId}/reabrir`, {
         method: 'POST',
-        body: JSON.stringify({}),
+        // Confirmado na tela: a etiqueta vai pro lixo. Sem isto o backend
+        // recusa — e recusar sem saída foi o que prendeu as caixas antes.
+        body: JSON.stringify({ descartarEtiqueta: jaTemEtiqueta }),
       });
       setMsg({
         tipo: 'ok',
-        texto: `Caixa reaberta — ${r?.itens ?? 0} peça(s) voltaram pra montagem.`,
+        texto:
+          `Caixa reaberta — ${r?.itens ?? 0} peça(s) voltaram pra montagem` +
+          (r?.juntouEm ? `, juntadas na caixa ${r.juntouEm}.` : '.') +
+          (r?.etiquetaDescartada ? ' A etiqueta antiga foi descartada.' : ''),
       });
       onMudou?.();
     } catch (e: any) {
