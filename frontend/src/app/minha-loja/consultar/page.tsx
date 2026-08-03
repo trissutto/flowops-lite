@@ -70,6 +70,9 @@ interface OtherStore {
 
 interface ProductResult {
   ref: string;
+  /** A MESMA REF pode voltar em 2+ famílias (REF reciclada ou fornecedor
+      gravado diferente) — o fornecedor identifica cada cartão. */
+  fornecedor?: string | null;
   name: string;
   variants: Variant[];
   myStoreTotal: number;
@@ -440,9 +443,24 @@ function ConsultarInner() {
                 </div>
               </div>
             )}
-            {data.results.map((r) => (
+            {/* Mesma REF com 2+ cadastros (fornecedor divergente / REF
+                reciclada): avisa ANTES do primeiro cartão — a madrugada do
+                BMM-100 provou que ninguém desconfia de um segundo cartão. */}
+            {data.results.length > 1 &&
+              new Set(data.results.map((r) => r.ref)).size < data.results.length && (
+              <div className="bg-amber-50 border-2 border-amber-300 rounded-xl p-3 text-sm text-amber-900">
+                <strong>{data.results.length} cadastros desta REF</strong> — a mesma
+                referência existe com fornecedores diferentes. Os cartões aparecem
+                em sequência; confira os dois antes de dizer que não tem.
+              </div>
+            )}
+            {data.results.map((r, i) => (
               <ProductCard
-                key={r.ref}
+                // ⚠️ NUNCA só r.ref: famílias da MESMA REF (fornecedor
+                // divergente) geravam chave duplicada e o React descartava o
+                // segundo cartão — o PRETO do BMM-100 sumia da tela mesmo
+                // vindo na resposta (03/08).
+                key={`${r.ref}|${r.fornecedor ?? i}`}
                 item={r}
                 highlightSku={mode === 'sku' ? r.matchedSku ?? null : null}
                 myStore={data.myStore}
@@ -765,7 +783,10 @@ function ProductCard({ item, highlightSku, myStore }: {
       <header className={`px-4 py-3 border-b ${hasInMyStore ? 'bg-emerald-50 border-emerald-200' : 'bg-slate-50 border-slate-200'}`}>
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <div className="text-xs uppercase tracking-wide text-slate-500 font-medium">REF {item.ref}</div>
+            <div className="text-xs uppercase tracking-wide text-slate-500 font-medium">
+              REF {item.ref}
+              {item.fornecedor ? <span className="text-slate-400"> · {item.fornecedor}</span> : null}
+            </div>
             <h2 className="font-bold text-slate-900 text-lg leading-tight mt-0.5">{item.name}</h2>
             <div className="text-xs text-slate-500 mt-0.5">
               {colors.length} cor{colors.length === 1 ? '' : 'es'} · {sizes.length} tamanho{sizes.length === 1 ? '' : 's'}

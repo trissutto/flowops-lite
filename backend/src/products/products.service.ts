@@ -2538,6 +2538,11 @@ export class ProductsService {
     refMatches?: Array<{ ref: string; name: string; variantCount: number }>;
     results: Array<{
       ref: string;
+      /** Fornecedor do balde. A MESMA REF pode voltar em 2+ famílias (REF
+          reciclada de verdade, OU fornecedor gravado diferente no cadastro —
+          caso BMM-100, madrugada de 03/08). A tela rotula cada cartão com
+          isto pra vendedora perceber que existe mais de um. */
+      fornecedor: string | null;
       name: string;
       variants: Array<{
         sku: string;
@@ -2736,6 +2741,7 @@ export class ProductsService {
     // 6. Monta o agrupamento por REF
     const byRef = new Map<string, {
       ref: string;
+      fornecedor: string | null;
       name: string;
       variants: Map<string, { sku: string; cor: string; tamanho: string; myStoreQty: number; preco: number | null }>;
       otherStoresMap: Map<string, {
@@ -2758,6 +2764,7 @@ export class ProductsService {
       if (!byRef.has(bucketKey)) {
         byRef.set(bucketKey, {
           ref,
+          fornecedor: meta.fornecedor || null,
           name: cleanProductName(meta.descricao) || ref,
           variants: new Map(),
           otherStoresMap: new Map(),
@@ -2814,7 +2821,7 @@ export class ProductsService {
         matchedSkuForResult && variants.some((v) => v.sku === matchedSkuForResult)
           ? matchedSkuForResult
           : null;
-      return { ref: b.ref, name: b.name, variants, myStoreTotal, matchedSku, otherStores };
+      return { ref: b.ref, fornecedor: b.fornecedor, name: b.name, variants, myStoreTotal, matchedSku, otherStores };
     }).sort((a, b) => b.myStoreTotal - a.myStoreTotal);
 
     return {
