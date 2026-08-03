@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
+import { ProductNativeService } from '../product-native/product-native.service';
 
 /**
  * WincredMirrorService — espelha as 6 tabelas criticas do MySQL Wincred
@@ -30,6 +31,7 @@ export class WincredMirrorService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly erp: ErpService,
+    private readonly produtoNativo: ProductNativeService,
   ) {}
 
   /** Pausa em ms — usado entre batches pra liberar conexao Railway */
@@ -207,6 +209,14 @@ export class WincredMirrorService {
         ['codigos', () => this.syncCodigos()],
         ['produtos', () => this.syncProdutos()],
         ['estoque', () => this.syncEstoque()],
+        // NATIVA por último (03/08, caso BMM-100): com PRODUCT_NATIVE_READS a
+        // Consultar/bipe leem a tabela product — sincronizar só wincred_* e
+        // parar aqui consertava a tabela que ninguém lê. O incremental com
+        // anti-join também puxa linhas ausentes, então cobre REF antiga.
+        ['produto-nativo', async () => {
+          const r = await this.produtoNativo.syncIncremental();
+          return { table: 'produto-nativo', success: true, processed: r.upserted, durationMs: r.ms } as SyncResult;
+        }],
       ];
       try {
         for (const [name, fn] of steps) {

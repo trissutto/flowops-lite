@@ -2609,13 +2609,18 @@ export class ProductsService {
       const fontes: Array<() => Promise<any[]>> = [
         () => (this.prisma as any).product.findMany({ where: { codigo: { in: cods } }, select: { codigo: true, vendaUn: true, fornecedor: true } }).catch(() => []),
         () => (this.prisma as any).wincredProduto.findMany({ where: { codigo: { in: cods } }, select: { codigo: true, vendaUn: true, fornecedor: true } }).catch(() => []),
-        () => (this.prisma as any).gigaProduto.findMany({ where: { codigo: { in: cods } }, select: { codigo: true, vendaUn: true, fornecedor: true } }).catch(() => []),
+        // ⚠️ GigaProduto NÃO tem coluna fornecedor (schema) — pedir ela aqui
+        // dava PrismaClientValidationError engolido pelo catch e a fonte
+        // morria em silêncio (achado da varredura de 03/08). Só preço.
+        () => (this.prisma as any).gigaProduto.findMany({ where: { codigo: { in: cods } }, select: { codigo: true, vendaUn: true } }).catch(() => []),
       ];
       for (const fonte of fontes) {
         if (hidr.size >= cods.length) break;
         for (const h of await fonte()) {
           const c = String(h.codigo);
-          if (!hidr.has(c)) hidr.set(c, { vendaUn: h.vendaUn != null ? Number(h.vendaUn) : null, fornecedor: h.fornecedor ? String(h.fornecedor) : null });
+          const atual = hidr.get(c);
+          if (!atual) hidr.set(c, { vendaUn: h.vendaUn != null ? Number(h.vendaUn) : null, fornecedor: h.fornecedor ? String(h.fornecedor) : null });
+          else if (atual.fornecedor == null && h.fornecedor) atual.fornecedor = String(h.fornecedor);
         }
       }
       // Adapter tolerante: o ramo nativo do motor devolve minúsculo mapeado,
