@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { ShoppingBag, Sparkles, Ticket, X } from 'lucide-react';
+import { ShoppingBag, Ticket, X } from 'lucide-react';
 import { Drawer } from '@/components/ui/Drawer';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/feedback/EmptyState';
@@ -12,7 +12,8 @@ import { useCartStore } from '@/store/cart';
 import { useIsCartOpen, useUiStore } from '@/store/ui';
 import { useMounted } from '@/hooks';
 import { applyCoupon } from '@/lib/commerce/cupom';
-import { findQuote, freeShippingGap } from '@/lib/commerce/frete';
+import { findQuote } from '@/lib/commerce/frete';
+import { ProgressoFreteGratis } from '@/components/commerce/ProgressoFreteGratis';
 import {
   toTrackedItem,
   trackCouponApplied,
@@ -61,7 +62,6 @@ export function MiniCart() {
   const lines = mounted ? rawLines : [];
   const count = lines.reduce((sum, l) => sum + l.quantity, 0);
   const subtotal = lines.reduce((sum, l) => sum + l.unitPrice * l.quantity, 0);
-  const gap = freeShippingGap(subtotal);
 
   /* ----------------------------------------------------------------- cupom */
   const [codigoDigitado, setCodigoDigitado] = useState('');
@@ -178,40 +178,8 @@ export function MiniCart() {
         />
       ) : (
         <div className="flex flex-col gap-6">
-          {/* Barra do frete grátis — o incentivo mais honesto da sacola. */}
-          <div className="rounded-sm border border-border bg-surface-alt/60 px-4 py-3.5">
-            {gap.reached ? (
-              <motion.p
-                initial={{ opacity: 0, scale: 0.97 }}
-                animate={{ opacity: 1, scale: 1 }}
-                transition={transition.base}
-                className="flex items-center gap-2 text-small font-medium text-primary-strong"
-              >
-                <Sparkles className="size-3.5" strokeWidth={1.75} />
-                Você ganhou frete grátis
-              </motion.p>
-            ) : (
-              <p className="text-small font-light text-ink-soft">
-                Faltam{' '}
-                <span className="tabular font-medium text-ink">{formatPrice(gap.missing)}</span>{' '}
-                para o frete grátis
-              </p>
-            )}
-            <div
-              role="progressbar"
-              aria-valuenow={Math.round(gap.progress * 100)}
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-label="Progresso até o frete grátis"
-              className="mt-2.5 h-1 overflow-hidden rounded-pill bg-border"
-            >
-              <motion.div
-                animate={{ width: `${gap.progress * 100}%` }}
-                transition={transition.slow}
-                className="h-full rounded-pill bg-primary"
-              />
-            </div>
-          </div>
+          {/* Barra do frete grátis — mesma peça usada na página da sacola. */}
+          <ProgressoFreteGratis subtotal={subtotal} />
 
           {/* Linhas */}
           <ul className="flex flex-col divide-y divide-border">

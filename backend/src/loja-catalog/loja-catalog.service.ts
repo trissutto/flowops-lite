@@ -550,18 +550,49 @@ export class LojaCatalogService {
     const modelagens = new Map<string, number>();
     for (const f of fits) conta(modelagens, f.modelagem);
 
-    const paraLista = (m: Map<string, number>, ordemNumerica = false) =>
-      Array.from(m.entries())
+    /**
+     * FILTRO DA VITRINE ≠ CATÁLOGO CRU.
+     *
+     * O ERP carrega décadas de rótulo herdado: "01", "24-29", "46 48",
+     * "50/52", "G7"… A barra lateral ficava com ~30 tamanhos e ~30 cores, e
+     * lista desse tamanho não é filtro, é ruído — empurra a peça pra baixo da
+     * dobra e a cliente desiste antes de ver produto.
+     *
+     * O corte é por PRESENÇA (quantas variações usam aquele rótulo), não por
+     * lista fixa: rótulo novo legítimo aparece sozinho quando a loja passar a
+     * usá-lo, sem ninguém mexer no código.
+     */
+    const paraLista = (
+      m: Map<string, number>,
+      opcoes: { ordemNumerica?: boolean; minimo?: number; teto?: number } = {},
+    ) => {
+      const { ordemNumerica = false, minimo = 2, teto = 18 } = opcoes;
+      return Array.from(m.entries())
+        .filter(([, qtd]) => qtd >= minimo)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, teto)
         .map(([valor, qtd]) => ({ valor, qtd }))
-        .sort((a, b) => (ordemNumerica
-          ? (parseInt(a.valor.replace(/\D/g, ''), 10) || 999) - (parseInt(b.valor.replace(/\D/g, ''), 10) || 999)
-          : b.qtd - a.qtd));
+        .sort((a, b) => {
+          if (!ordemNumerica) return b.qtd - a.qtd;
+          // Numérico na ordem da grade; letra (P, M, G, GG) depois dos números.
+          const na = parseInt(a.valor.replace(/\D/g, ''), 10);
+          const nb = parseInt(b.valor.replace(/\D/g, ''), 10);
+          const aNum = Number.isFinite(na);
+          const bNum = Number.isFinite(nb);
+          if (aNum && bNum) return na - nb;
+          if (aNum) return -1;
+          if (bNum) return 1;
+          return a.valor.localeCompare(b.valor, 'pt-BR');
+        });
+    };
 
     const data = {
       categorias: paraLista(categorias),
       marcas: paraLista(marcas),
-      cores: paraLista(cores),
-      tamanhos: paraLista(tamanhos, true),
+      cores: paraLista(cores, { minimo: 3, teto: 16 }),
+      // Tamanho aceita mais opções na lista: é o filtro que a cliente plus
+      // size mais usa, e a grade legítima vai do 44 ao 60.
+      tamanhos: paraLista(tamanhos, { ordemNumerica: true, minimo: 3, teto: 16 }),
       modelagens: paraLista(modelagens),
       preco: {
         min: Number.isFinite(precoMin) ? Math.floor(precoMin) : 0,
