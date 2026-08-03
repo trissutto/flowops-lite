@@ -5,6 +5,7 @@ import { firstValueFrom } from 'rxjs';
 import { PrismaService } from '../prisma/prisma.service';
 import { ProductPhotosService } from './product-photos.service';
 import { WpDbService } from '../wp-db/wp-db.service';
+import { CorIaService } from './cor-ia.service';
 
 /**
  * IMPORTAR AS FOTOS DO SITE ANTIGO — WooCommerce → R2, por REF e COR.
@@ -49,6 +50,7 @@ export class WcFotosImportService {
     private readonly config: ConfigService,
     private readonly fotos: ProductPhotosService,
     private readonly wp: WpDbService,
+    private readonly corIa: CorIaService,
   ) {}
 
   private get baseUrl() {
@@ -273,6 +275,57 @@ export class WcFotosImportService {
     }
   }
 
+  /**
+   * Manda a IA ler a cor da peça na foto recém-importada e grava a bolinha.
+   *
+   * A leitura por IA já existia, mas só disparava no upload feito PELA TELA —
+   * a importação roda no servidor e não passava por ali, então a peça chegava
+   * com foto e bolinha cinza. Em lote isso seria milhares de bolinhas pra
+   * pintar na mão.
+   *
+   * Best-effort: falha aqui não derruba a importação (a foto, que é o caro,
+   * já está salva) e o conta-gotas manual continua disponível.
+   */
+  private async pintarBolinha(ref: string, cor: string): Promise<void> {
+    try {
+      const [capa] = await this.fotos.listPhotos(ref, cor);
+      if (!capa?.url) return;
+
+      const marcaRow = await this.prisma.$queryRawUnsafe<Array<{ marca: string }>>(
+        `SELECT NULLIF(TRIM(marca), '') AS marca FROM wincred_produtos
+           WHERE UPPER(TRIM(ref)) = $1 AND marca IS NOT NULL AND TRIM(marca) <> ''
+           LIMIT 1`,
+        ref,
+      );
+      const marca = String(marcaRow[0]?.marca || '').toUpperCase();
+      if (!marca) return; // sem marca não há chave de ficha (REF+MARCA)
+
+      const lida = await this.corIa.detectar(capa.url);
+
+      const ficha = await (this.prisma as any).produtoFicha.upsert({
+        where: { ref_marca: { ref, marca } },
+        create: { ref, marca },
+        update: {},
+      });
+      await (this.prisma as any).produtoFichaCor.upsert({
+        where: { fichaId_cor: { fichaId: ficha.id, cor } },
+        create: {
+          fichaId: ficha.id, cor,
+          corHex: lida.hex,
+          swatchTipo: lida.estampada ? 'foto' : 'cor',
+          swatchFocoX: lida.estampada ? 0.5 : null,
+          swatchFocoY: lida.estampada ? 0.5 : null,
+        },
+        // Não sobrescreve bolinha já definida: se alguém ajustou no conta-gotas,
+        // a escolha humana vale mais que o palpite da IA.
+        update: {},
+      });
+      this.logger.log(`[wc-fotos] ${ref}/${cor}: bolinha ${lida.hex} (${lida.nome})`);
+    } catch (e: any) {
+      this.logger.warn(`[wc-fotos] bolinha ${ref}/${cor}: ${e?.message || e}`);
+    }
+  }
+
   /** Importa as fotos de UMA REF. */
   async importarRef(refBruta: string, usuario?: string): Promise<ResultadoRef> {
     const ref = String(refBruta || '').trim().toUpperCase().replace(/\s+/g, '');
@@ -329,6 +382,7 @@ export class WcFotosImportService {
       if (subidas > 0) {
         resultado.coresComFoto.push(cor);
         resultado.fotos += subidas;
+        await this.pintarBolinha(ref, cor);
       }
     }
 
