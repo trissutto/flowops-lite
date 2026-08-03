@@ -300,6 +300,14 @@ export class WcFotosImportService {
       const marca = String(marcaRow[0]?.marca || '').toUpperCase();
       if (!marca) return; // sem marca não há chave de ficha (REF+MARCA)
 
+      // Bolinha já definida (pela IA antes ou pelo conta-gotas) → nem chama a
+      // IA. Cada leitura custa, e em lote isso vira dinheiro de verdade.
+      const jaTemBolinha = await (this.prisma as any).produtoFichaCor.findFirst({
+        where: { cor, ficha: { ref, marca }, corHex: { not: null } },
+        select: { id: true },
+      });
+      if (jaTemBolinha) return;
+
       const lida = await this.corIa.detectar(capa.url);
 
       const ficha = await (this.prisma as any).produtoFicha.upsert({
@@ -353,6 +361,10 @@ export class WcFotosImportService {
       const jaTem = await this.fotos.listPhotos(ref, cor);
       if (jaTem.length) {
         if (!resultado.jaTinham.includes(cor)) resultado.jaTinham.push(cor);
+        // Foto antiga com bolinha cinza também é caso pra IA: não custa nada
+        // (a função sai na hora se a bolinha já estiver definida) e evita que
+        // a peça fique pela metade só porque a foto chegou noutra rodada.
+        await this.pintarBolinha(ref, cor);
         continue;
       }
 
