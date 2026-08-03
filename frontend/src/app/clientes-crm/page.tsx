@@ -846,6 +846,82 @@ function CustomerDetailDrawer({
  *    cliente entrou. Reescrever apaga a origem da comissão e do LTV por loja.
  *  · Registro Giga — chave da ficha do ERP, não é dado de cadastro.
  */
+/**
+ * Campo da ficha — MORA NO ESCOPO DO MÓDULO, e isso não é preferência de
+ * estilo.
+ *
+ * Ele nasceu como `const Inp = …` DENTRO do PerfilTab. Toda vez que o
+ * componente renderizava, aquilo virava um tipo NOVO pro React, que então não
+ * reaproveitava o <input>: desmontava o antigo e montava outro. Resultado
+ * medido na tela (03/08): o campo perdia o foco a cada tecla e só aceitava UMA
+ * LETRA. A data de nascimento parecia um bug separado — "não aceita 1975" —
+ * mas era o mesmo: o Chrome considera o ano preenchido já no primeiro dígito,
+ * dispara o onChange, o campo é recriado, e o "975" some.
+ *
+ * Componente declarado dentro de outro componente = remontagem a cada render.
+ * Se um dia isto voltar pra dentro, os dois defeitos voltam juntos.
+ */
+function CampoFicha({
+  label, valor, aoMudar, tipo, min, max,
+}: {
+  label: string;
+  valor: string;
+  aoMudar: (v: string) => void;
+  tipo?: string;
+  min?: string;
+  max?: string;
+}) {
+  return (
+    <div>
+      <div className="text-[11px] uppercase tracking-wide text-gray-400 mb-1">{label}</div>
+      <input
+        type={tipo || 'text'}
+        value={valor}
+        min={min}
+        max={max}
+        onChange={(e) => aoMudar(e.target.value)}
+        className="w-full rounded border border-gray-300 px-2 py-1.5 text-sm outline-none focus:border-[#B8912B]"
+      />
+    </div>
+  );
+}
+
+/**
+ * Campo de escolha — gênero e estado civil eram caixas de texto livres, então
+ * a mesma pessoa entrava como "F", "fem", "Feminino" e "MULHER", e nenhum
+ * filtro ou segmentação conseguia agrupar depois.
+ *
+ * O valor que JÁ está gravado entra na lista mesmo se for de fora do padrão:
+ * abrir a ficha de uma cliente antiga não pode apagar em silêncio o que
+ * alguém digitou.
+ */
+function CampoEscolha({
+  label, valor, aoMudar, opcoes,
+}: {
+  label: string;
+  valor: string;
+  aoMudar: (v: string) => void;
+  opcoes: string[];
+}) {
+  const lista = valor && !opcoes.includes(valor) ? [valor, ...opcoes] : opcoes;
+  return (
+    <div>
+      <div className="text-[11px] uppercase tracking-wide text-gray-400 mb-1">{label}</div>
+      <select
+        value={valor}
+        onChange={(e) => aoMudar(e.target.value)}
+        className="w-full rounded border border-gray-300 bg-white px-2 py-1.5 text-sm outline-none focus:border-[#B8912B]"
+      >
+        <option value="">— não informado —</option>
+        {lista.map((o) => <option key={o} value={o}>{o}</option>)}
+      </select>
+    </div>
+  );
+}
+
+const GENEROS = ['Feminino', 'Masculino', 'Outro', 'Prefiro não informar'];
+const ESTADOS_CIVIS = ['Solteira(o)', 'Casada(o)', 'União estável', 'Divorciada(o)', 'Viúva(o)'];
+
 function PerfilTab({ d, onUpdate }: { d: CustomerDetail; onUpdate: () => void }) {
   const [editando, setEditando] = useState(false);
   const [salvando, setSalvando] = useState(false);
@@ -887,17 +963,14 @@ function PerfilTab({ d, onUpdate }: { d: CustomerDetail; onUpdate: () => void })
     }
   };
 
-  const Inp = ({ k, label, tipo }: { k: string; label: string; tipo?: string }) => (
-    <div>
-      <div className="text-[11px] uppercase tracking-wide text-gray-400 mb-1">{label}</div>
-      <input
-        type={tipo || 'text'}
-        value={f[k] ?? ''}
-        onChange={(e) => setF({ ...f, [k]: e.target.value })}
-        className="w-full rounded border border-gray-300 px-2 py-1.5 text-sm outline-none focus:border-[#B8912B]"
-      />
-    </div>
-  );
+  // Atalhos pra não repetir o par (valor, setter) em cada campo. NÃO são
+  // componentes — são funções que devolvem props; componente declarado aqui
+  // dentro é justamente o que quebrava a digitação (ver CampoFicha).
+  const texto = (k: string) => ({
+    valor: String(f[k] ?? ''),
+    aoMudar: (v: string) => setF((atual: any) => ({ ...atual, [k]: v })),
+  });
+  const hoje = new Date().toISOString().slice(0, 10);
 
   if (editando) {
     return (
@@ -916,27 +989,29 @@ function PerfilTab({ d, onUpdate }: { d: CustomerDetail; onUpdate: () => void })
         {erro && <div className="rounded bg-red-50 px-3 py-2 text-xs text-red-800">{erro}</div>}
 
         <Section title="Identificação">
-          <Inp k="name" label="Nome completo *" />
-          <Inp k="nameSocial" label="Como prefere ser chamada" />
-          <Inp k="cpf" label="CPF" />
-          <Inp k="birthDate" label="Data nascimento" tipo="date" />
-          <Inp k="gender" label="Gênero" />
-          <Inp k="maritalStatus" label="Estado civil" />
+          <CampoFicha label="Nome completo *" {...texto('name')} />
+          <CampoFicha label="Como prefere ser chamada" {...texto('nameSocial')} />
+          <CampoFicha label="CPF" {...texto('cpf')} />
+          {/* min/max: sem eles o Chrome aceita ano 0001 (que é o estado do
+              campo no primeiro dígito de "1975") e manda pro banco. */}
+          <CampoFicha label="Data nascimento" tipo="date" min="1900-01-01" max={hoje} {...texto('birthDate')} />
+          <CampoEscolha label="Gênero" opcoes={GENEROS} {...texto('gender')} />
+          <CampoEscolha label="Estado civil" opcoes={ESTADOS_CIVIS} {...texto('maritalStatus')} />
         </Section>
 
         <Section title="Contato">
-          <Inp k="whatsapp" label="WhatsApp" />
-          <Inp k="phone" label="Telefone fixo" />
-          <Inp k="email" label="E-mail" tipo="email" />
+          <CampoFicha label="WhatsApp" {...texto('whatsapp')} />
+          <CampoFicha label="Telefone fixo" {...texto('phone')} />
+          <CampoFicha label="E-mail" tipo="email" {...texto('email')} />
         </Section>
 
         <Section title="Perfil Plus Size">
-          <Inp k="sizeDefault" label="Manequim principal" />
-          <Inp k="sizeSecondary" label="Manequim secundário" />
-          <Inp k="bodyType" label="Tipo de corpo" />
-          <Inp k="preferredStyle" label="Estilo preferido" />
-          <Inp k="favoriteColors" label="Cores favoritas" />
-          <Inp k="avoidedPieces" label="Peças que evita" />
+          <CampoFicha label="Manequim principal" {...texto('sizeDefault')} />
+          <CampoFicha label="Manequim secundário" {...texto('sizeSecondary')} />
+          <CampoFicha label="Tipo de corpo" {...texto('bodyType')} />
+          <CampoFicha label="Estilo preferido" {...texto('preferredStyle')} />
+          <CampoFicha label="Cores favoritas" {...texto('favoriteColors')} />
+          <CampoFicha label="Peças que evita" {...texto('avoidedPieces')} />
         </Section>
 
         <Section title="Observações">
