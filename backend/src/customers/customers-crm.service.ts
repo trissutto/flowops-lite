@@ -172,6 +172,39 @@ export class CustomersCrmService {
    * Carrega cliente VALIDANDO escopo de loja do actor.
    * Vendedora de outra loja recebe 404 (mesma resposta de "não existe", evita enumeration).
    */
+  /**
+   * ERRO DE ESCRITA COM NOME E SOBRENOME.
+   *
+   * Toda gravação de cliente estava virando "500 Internal server error" — a
+   * tela dizia que falhou e ninguém sabia POR QUE: constraint? trigger?
+   * coluna? Cada palpite custava um deploy. Agora o código do Prisma (P2002,
+   * P2022, P2003...) e a mensagem do banco vão pro log e pra tela.
+   *
+   * Os códigos conhecidos viram frase de gente; o resto vai cru mesmo — cru e
+   * visível é melhor que bonito e mudo.
+   */
+  private erroDeEscrita(e: any, oQue: string): never {
+    const codigo = e?.code ? String(e.code) : null;
+    const alvo = e?.meta?.target ? ` (${JSON.stringify(e.meta.target)})` : '';
+    this.logger.error(
+      `[CRM] ${oQue} falhou ${codigo ?? 'sem código'}: ${e?.message || e}`,
+    );
+    if (codigo === 'P2002') {
+      throw new BadRequestException(`Já existe outro cliente com esse dado${alvo}. Ajuste e tente de novo.`);
+    }
+    if (codigo === 'P2025') throw new NotFoundException('Cliente não encontrado');
+    if (codigo === 'P2003') {
+      throw new BadRequestException(`Vínculo inválido${alvo} — o registro apontado não existe.`);
+    }
+    const detalhe = String(e?.message || '')
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .slice(-2)
+      .join(' ')
+      .slice(0, 300);
+    throw new BadRequestException(`Não consegui ${oQue} (${codigo ?? 'erro do banco'}): ${detalhe}`);
+  }
+
   private async loadScoped(customerId: string, actor?: RequestActor) {
     const c = await this.prisma.customer.findUnique({ where: { id: customerId } });
     if (!c) throw new NotFoundException('Cliente não encontrado');
