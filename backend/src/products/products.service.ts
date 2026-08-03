@@ -7,6 +7,7 @@ import * as path from 'path';
 import * as ExcelJS from 'exceljs';
 import { ErpService } from '../erp/erp.service';
 import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service';
+import { ProductSearchService } from '../product-search/product-search.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 /**
@@ -197,6 +198,7 @@ export class ProductsService {
     private readonly config: ConfigService,
     private readonly erp: ErpService,
     private readonly catalog: WincredCatalogService,
+    private readonly buscaUnica: ProductSearchService,
     private readonly prisma: PrismaService,
   ) {}
 
@@ -2589,10 +2591,74 @@ export class ProductsService {
       effectiveMode = 'sku';
     }
 
+    /**
+     * BUSCA ÚNICA (decisão do dono, madrugada 03/08, caso BMM-100): a tela
+     * master enxergava as 14 cores e a Consultar só 8, porque cada uma usava
+     * um motor. Agora a Consultar usa o MESMO resolveRows da master/live, e a
+     * cadeia antiga (catalog espelho→ERP) vira só fallback de segurança.
+     *
+     * `fornecedor` e `vendaUn` não vêm no shape do motor — hidrata por código
+     * com o NATIVO primeiro: é o fornecedor uniforme do nativo que faz as 14
+     * cores caírem num balde só, igual à master.
+     */
+    const viaBuscaUnica = async (q2: string) => {
+      const rows = await this.buscaUnica.resolveRows(q2, { fallbackTake: 5000 });
+      if (!rows.length) return [] as any[];
+      const cods = Array.from(new Set(rows.map((r: any) => String(r.codigo ?? r.CODIGO ?? '')).filter(Boolean)));
+      const hidr = new Map<string, { vendaUn: number | null; fornecedor: string | null }>();
+      const fontes: Array<() => Promise<any[]>> = [
+        () => (this.prisma as any).product.findMany({ where: { codigo: { in: cods } }, select: { codigo: true, vendaUn: true, fornecedor: true } }).catch(() => []),
+        () => (this.prisma as any).wincredProduto.findMany({ where: { codigo: { in: cods } }, select: { codigo: true, vendaUn: true, fornecedor: true } }).catch(() => []),
+        () => (this.prisma as any).gigaProduto.findMany({ where: { codigo: { in: cods } }, select: { codigo: true, vendaUn: true, fornecedor: true } }).catch(() => []),
+      ];
+      for (const fonte of fontes) {
+        if (hidr.size >= cods.length) break;
+        for (const h of await fonte()) {
+          const c = String(h.codigo);
+          if (!hidr.has(c)) hidr.set(c, { vendaUn: h.vendaUn != null ? Number(h.vendaUn) : null, fornecedor: h.fornecedor ? String(h.fornecedor) : null });
+        }
+      }
+      // Adapter tolerante: o ramo nativo do motor devolve minúsculo mapeado,
+      // o ramo espelho devolve a linha crua — aceita os dois.
+      return rows.map((r: any) => {
+        const codigo = String(r.codigo ?? r.CODIGO ?? '');
+        const extra = hidr.get(codigo);
+        return {
+          CODIGO: codigo,
+          REF: r.ref ?? r.REF ?? null,
+          DESCRICAOCOMPLETA: r.descricao ?? r.descricaoCompleta ?? r.DESCRICAOCOMPLETA ?? '',
+          COR: r.cor ?? r.COR ?? '',
+          TAMANHO: r.tamanho ?? r.TAMANHO ?? '',
+          VENDAUN: r.vendaUn ?? r.VENDAUN ?? extra?.vendaUn ?? null,
+          FORNECEDOR: extra?.fornecedor ?? r.fornecedor ?? r.FORNECEDOR ?? '',
+        };
+      });
+    };
+
     // Modo DESC puro — retorna LISTA de REFs pra vendedora escolher (não expande).
-    // ESPELHO primeiro (fallback Giga dentro do catalog) — consulta não pode
-    // morrer quando o Giga pendura.
     if (effectiveMode === 'desc') {
+      // Busca única primeiro; agrupa por REF aqui mesmo.
+      const rowsBU = await viaBuscaUnica(term);
+      if (rowsBU.length) {
+        const porRefBU = new Map<string, { ref: string; nome: string; codigos: Set<string> }>();
+        for (const r of rowsBU) {
+          const refKey = String(r.REF ?? '').trim();
+          if (!refKey) continue;
+          if (!porRefBU.has(refKey)) porRefBU.set(refKey, { ref: refKey, nome: String(r.DESCRICAOCOMPLETA || refKey), codigos: new Set() });
+          porRefBU.get(refKey)!.codigos.add(r.CODIGO);
+        }
+        return {
+          query: term,
+          mode,
+          detectedAs,
+          myStore: { id: myStore.id, code: myStore.code, name: myStore.name },
+          refMatches: Array.from(porRefBU.values()).slice(0, 60).map((g) => ({
+            ref: g.ref, name: g.nome, variantCount: g.codigos.size,
+          })),
+          results: [],
+        };
+      }
+      // Fallback: cadeia antiga (espelho → ERP).
       const grouped = await this.catalog.searchByDescriptionGrouped(term);
       return {
         query: term,
@@ -2611,10 +2677,17 @@ export class ProductsService {
     // Modo SKU/COD — acha a linha, pega a REF, expande TODA a REF.
     let rawRows: any[] = [];
     if (effectiveMode === 'sku') {
-      // Aba "Cód. Etiqueta" / bipe → código PRIMEIRO (intencional).
+      // Aba "Cód. Etiqueta" / bipe → código PRIMEIRO (intencional). A busca
+      // única já faz exatamente isso: código exato → expande a REF inteira.
       if (isLikelyEan) detectedAs = 'ean';
       matchedSkuForResult = term;
-      rawRows = await this.catalog.searchByCodeAndExpandRef(term);
+      rawRows = await viaBuscaUnica(term);
+      if (!rawRows.length) rawRows = await this.catalog.searchByCodeAndExpandRef(term);
+      if (!rawRows.length) rawRows = await this.catalog.searchByRef(term);
+    } else if (effectiveMode === 'ref' && !isLikelyCodeOrEan) {
+      // REF textual (BMM-100, VLM-222): busca única primeiro — foi a classe
+      // que ficou invisível na cadeia antiga. Fallback preserva o legado.
+      rawRows = await viaBuscaUnica(term);
       if (!rawRows.length) rawRows = await this.catalog.searchByRef(term);
     } else if (effectiveMode === 'ref' && isLikelyCodeOrEan) {
       // Aba REF/Descrição com termo SÓ NÚMEROS: pode ser uma REF numérica
@@ -2635,8 +2708,19 @@ export class ProductsService {
         // porCodigo vazio → mantém o searchByRef (pode ter match por prefixo)
       }
     } else {
-      // Modo REF puro (não-numérico) — busca exata + prefixo
+      // Ramo residual (não deve ocorrer: os três acima cobrem sku/ref) —
+      // mantém o legado por segurança.
       rawRows = await this.catalog.searchByRef(term);
+      if (!rawRows.length) rawRows = await viaBuscaUnica(term);
+    }
+    // Termo numérico que caiu no legado e continuou vazio: última chance na
+    // busca única (cobre código recém-nascido que só o nativo conhece).
+    if (!rawRows.length && isLikelyCodeOrEan) {
+      rawRows = await viaBuscaUnica(term);
+      if (rawRows.length && rawRows.some((r) => String(r.CODIGO) === term)) {
+        matchedSkuForResult = term;
+        if (isLikelyEan) detectedAs = 'ean';
+      }
     }
     if (!rawRows.length) {
       return {
