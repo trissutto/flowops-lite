@@ -364,6 +364,44 @@ export class CorreiosService {
   }
 
   /**
+   * CANCELA uma pré-postagem nos Correios.
+   *
+   * Existe porque a trava de "não reabrir caixa com etiqueta" virou beco sem
+   * saída: a caixa não podia ser reaberta e o sistema não tinha como desfazer a
+   * etiqueta. Uma trava sem porta de saída é um defeito, não uma proteção.
+   *
+   * BEST-EFFORT DE PROPÓSITO: devolve `{ ok:false }` em vez de estourar. Se os
+   * Correios recusarem (objeto já postado, id desconhecido, API fora), quem
+   * chamou decide — e no nosso caso a pré-postagem abandonada simplesmente
+   * caduca sem ser postada. O que NÃO pode é a caixa ficar presa.
+   *
+   * ⚠️ Escrito sem poder testar contra a API real (não tenho as credenciais de
+   * produção aqui). O caminho DELETE .../prepostagens/{id} é o documentado no
+   * CWS; se a conta responder outra coisa, o erro vem cru no `raw` em vez de
+   * virar exceção.
+   */
+  async cancelarPrepostagem(idPrepostagem: string): Promise<any> {
+    const id = String(idPrepostagem || '').trim();
+    if (!id) return { ok: false, erro: 'idPrepostagem vazio' };
+    try {
+      const headers = await this.auth.authHeader();
+      const base = this.auth.baseUrl;
+      const r = await axios.delete(
+        `${base}/prepostagem/v1/prepostagens/${encodeURIComponent(id)}`,
+        { headers, timeout: 30000, validateStatus: () => true },
+      );
+      if (r.status >= 200 && r.status < 300) return { ok: true, status: r.status };
+      const d: any = r.data;
+      const erro =
+        (d && typeof d === 'object' ? d.msgs?.join('; ') || d.detail || d.message : null) ||
+        `HTTP ${r.status}`;
+      return { ok: false, status: r.status, erro, raw: d };
+    } catch (e: any) {
+      return { ok: false, erro: e?.message || String(e) };
+    }
+  }
+
+  /**
    * Baixa a DECLARAÇÃO DE CONTEÚDO (DACE) de uma pré-postagem — documento
    * separado da etiqueta, que lista os itens (obrigatório em envio pra CPF sem
    * NF-e). É a mesma página que o QR code do rótulo abre.

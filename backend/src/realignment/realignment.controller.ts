@@ -487,7 +487,11 @@ export class RealignmentController {
    * ou já tem etiqueta dos Correios.
    */
   @Post('shipments/:id/reabrir')
-  reabrirShipment(@Param('id') id: string, @Req() req: any) {
+  reabrirShipment(
+    @Param('id') id: string,
+    @Body() body: { descartarEtiqueta?: boolean },
+    @Req() req: any,
+  ) {
     const role = req?.user?.role;
     const storeId = req?.user?.storeId;
     if (role !== 'store' || !storeId) throw new ForbiddenException('Apenas loja');
@@ -495,6 +499,7 @@ export class RealignmentController {
       shipmentId: id,
       storeId,
       userId: req?.user?.id || req?.user?.sub || undefined,
+      descartarEtiqueta: !!body?.descartarEtiqueta,
     });
   }
 

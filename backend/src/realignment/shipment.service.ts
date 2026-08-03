@@ -10,6 +10,7 @@ import { ErpService } from '../erp/erp.service';
 import { RealignmentPricingService } from './realignment-pricing.service';
 import { RealtimeGateway } from '../websocket/realtime.gateway';
 import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service';
+import { CorreiosService } from '../correios/correios.service';
 
 /**
  * RealignmentShipmentService — gerencia o ciclo de REMESSA entre lojas.
@@ -37,6 +38,7 @@ export class RealignmentShipmentService {
     private readonly pricing: RealignmentPricingService,
     private readonly gateway: RealtimeGateway,
     private readonly catalog: WincredCatalogService,
+    private readonly correios: CorreiosService,
   ) {}
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -253,7 +255,13 @@ export class RealignmentShipmentService {
    *  · ETIQUETA já gerada — existe pré-postagem nos Correios com essa caixa.
    * Nos três a mensagem diz o que fazer, em vez de só recusar.
    */
-  async reopenShipment(input: { shipmentId: string; storeId: string; userId?: string }) {
+  async reopenShipment(input: {
+    shipmentId: string;
+    storeId: string;
+    userId?: string;
+    /** Reabrir mesmo com etiqueta gerada, descartando a pré-postagem. */
+    descartarEtiqueta?: boolean;
+  }) {
     const store = await this.prisma.store.findUnique({
       where: { id: input.storeId },
       select: { code: true } as any,
@@ -277,10 +285,23 @@ export class RealignmentShipmentService {
           : `Remessa está como "${shipment.status}" e não pode ser reaberta.`,
       );
     }
-    if (shipment.envioGeneratedAt) {
+    /**
+     * Etiqueta já gerada: BLOQUEIA, mas com porta de saída.
+     *
+     * A primeira versão só recusava — e virou beco: a loja gerou a etiqueta de
+     * todas as caixas e depois nenhuma podia ser reaberta pra juntar. Trava sem
+     * saída é defeito, não proteção. Com `descartarEtiqueta` a pessoa assume
+     * que aquela etiqueta vai pro lixo, e o sistema tenta cancelar a
+     * pré-postagem nos Correios antes de soltar a caixa.
+     *
+     * A NF-e autorizada (abaixo) NÃO ganha porta dessas: nota fiscal se cancela
+     * na SEFAZ, com prazo e justificativa, não por botão de tela.
+     */
+    let etiquetaDescartada: string | null = null;
+    if (shipment.envioGeneratedAt && !input.descartarEtiqueta) {
       throw new BadRequestException(
         `Esta caixa já tem etiqueta dos Correios${shipment.trackingCode ? ` (${shipment.trackingCode})` : ''}. ` +
-        'Cancele a pré-postagem antes de reabrir.',
+        'Reabrir descarta essa etiqueta — confirme se é isso mesmo.',
       );
     }
 
@@ -292,6 +313,24 @@ export class RealignmentShipmentService {
       throw new BadRequestException(
         'Esta caixa já tem NF-e autorizada. Cancele a nota na SEFAZ antes de reabrir.',
       );
+    }
+
+    // Cancela a pré-postagem ANTES de mexer no resto: se os Correios
+    // recusarem, a caixa continua fechada e nada foi desfeito pela metade.
+    // Falha de comunicação não trava (a pré-postagem não postada caduca), mas
+    // vai pro log e pra resposta — a pessoa precisa saber que a etiqueta pode
+    // ter ficado viva lá.
+    if (shipment.envioGeneratedAt && input.descartarEtiqueta) {
+      etiquetaDescartada = shipment.trackingCode || shipment.correiosPrepostagemId || 'sem código';
+      if (shipment.correiosPrepostagemId) {
+        const r = await this.correios.cancelarPrepostagem(shipment.correiosPrepostagemId);
+        if (!r?.ok) {
+          this.logger.warn(
+            `[reopen] ${shipment.code}: Correios não cancelou a pré-postagem ` +
+            `${shipment.correiosPrepostagemId}: ${r?.erro || 'motivo desconhecido'}`,
+          );
+        }
+      }
     }
 
     const items = await this.prisma.transferOrder.findMany({
@@ -365,8 +404,16 @@ export class RealignmentShipmentService {
       orderBy: { openedAt: 'asc' },
     });
 
-    const carimbo = `Reaberta em ${new Date().toISOString()} por ${input.userId ?? 'loja'}`;
+    const carimbo =
+      `Reaberta em ${new Date().toISOString()} por ${input.userId ?? 'loja'}` +
+      (etiquetaDescartada ? ` — etiqueta ${etiquetaDescartada} descartada` : '');
     let juntouEm: string | null = null;
+
+    // Limpa o envio: sem isto a caixa reaberta continuaria "com etiqueta" e o
+    // próximo fechamento reusaria um rastreio que não vale mais.
+    const limpaEnvio = etiquetaDescartada
+      ? { envioGeneratedAt: null, trackingCode: null, correiosPrepostagemId: null, carrier: null }
+      : {};
 
     if (jaAberta) {
       await this.prisma.transferOrder.updateMany({
@@ -379,6 +426,7 @@ export class RealignmentShipmentService {
           status: 'cancelled',
           sentAt: null,
           stockDecreasedAt: null,
+          ...limpaEnvio,
           notes: [shipment.notes, `${carimbo} — itens movidos pra ${jaAberta.code}`]
             .filter(Boolean).join(' | ').slice(0, 900),
         } as any,
@@ -392,6 +440,7 @@ export class RealignmentShipmentService {
           sentAt: null,
           sentByUserId: null,
           stockDecreasedAt: null,
+          ...limpaEnvio,
           notes: [shipment.notes, carimbo].filter(Boolean).join(' | ').slice(0, 900),
         } as any,
       });
@@ -429,6 +478,7 @@ export class RealignmentShipmentService {
       estoqueDevolvido: devolvidos,
       obrigacoesCanceladas: obrigacoes,
       juntouEm,
+      etiquetaDescartada,
     };
   }
 
