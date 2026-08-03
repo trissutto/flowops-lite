@@ -229,7 +229,8 @@ function CardBanner({
       const salvo = await api<Banner>(`/site-banners/${form.id}/imagem?variante=${variante}`, {
         method: 'POST',
         body: fd as any,
-        headers: {} as any, // sem Content-Type: o browser põe o boundary
+        // O Content-Type do multipart é tirado dentro do api() quando o body é
+        // FormData — passar {} aqui NÃO removia nada (ver lib/api.ts).
       });
       onMudou(salvo);
     } catch (e: any) {

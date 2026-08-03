@@ -153,7 +153,8 @@ export default function FotosDaCor({
         await api(`/product-photos/upload`, {
           method: 'POST',
           body: form as any,
-          headers: {} as any, // sem Content-Type: o browser põe o boundary
+          // O Content-Type do multipart é tirado dentro do api() quando o body é
+          // FormData — passar {} aqui NÃO removia nada (ver lib/api.ts).
         });
       }
       if (lista.length > cabem) {
