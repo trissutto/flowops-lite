@@ -149,9 +149,29 @@ export default function ProdutoMasterPage() {
   /** Origem escolhida no modo clique (alternativa ao arrasto, serve em tablet). */
   const [origemSel, setOrigemSel] = useState<{ codigo: string; loja: string } | null>(null);
 
+  /**
+   * Código → sigla da loja. "03" não diz nada pra quem opera; "INDAI" diz.
+   * Mesma abreviação do editor de produtos (5 letras, sem acento), pra as duas
+   * telas mostrarem a mesma coisa.
+   */
+  const [lojaNomes, setLojaNomes] = useState<Map<string, string>>(new Map());
+
   useEffect(() => {
     api<AtributosPorTipo>('/atributos-peca').then(setAtributos).catch(() => {});
     api<Grade[]>('/produto-ficha/grades').then(setGrades).catch(() => {});
+    api<Array<{ code: string; name: string }>>('/stores')
+      .then((lista) => {
+        const m = new Map<string, string>();
+        for (const s of lista || []) {
+          const sigla = Array.from(String(s.name || '').normalize('NFD'))
+            .filter((c) => { const cp = c.codePointAt(0) ?? 0; return cp < 0x0300 || cp > 0x036f; })
+            .join('')
+            .replace(/[^A-Za-z0-9 ]/g, '').trim().toUpperCase().slice(0, 5);
+          if (s.code && sigla) m.set(String(s.code), sigla);
+        }
+        setLojaNomes(m);
+      })
+      .catch(() => {});
   }, []);
 
   const buscar = useCallback(async () => {
@@ -214,36 +234,108 @@ export default function ProdutoMasterPage() {
    * Move UMA peça. Recusa quando origem = destino ou quando a origem já ficou
    * sem saldo — sem essa checagem dá pra arrastar estoque que não existe e a
    * ordem nasce impossível de separar.
+   *
+   * ⚠️ A checagem e o aviso ficam FORA do updater de propósito. Antes eu
+   * calculava o saldo e chamava `setAviso` dentro do `setMovimentos(...)`:
+   * updater com efeito colateral não é puro, o React pode reexecutá-lo, e o
+   * mesmo arrasto entrava duas vezes — foi assim que apareceu estoque -1 numa
+   * loja que só tinha 1 peça.
    */
   const moverUma = useCallback((row: SkuRow, de: string, para: string) => {
     if (de === para) return;
-    setMovimentos((atuais) => {
-      const saldoOrigem = (row.estoqueLojas?.[de] ?? 0)
-        - atuais.filter((m) => m.codigo === row.codigo && m.de === de).length
-        + atuais.filter((m) => m.codigo === row.codigo && m.para === de).length;
-      if (saldoOrigem <= 0) {
-        setAviso(`${row.tamanho} não tem mais saldo na loja ${de}`);
-        return atuais;
-      }
-      setAviso(null);
-      return [...atuais, {
-        codigo: row.codigo, ref: row.ref, cor: row.cor, tamanho: row.tamanho,
-        desc: row.descricao, de, para,
-        estoqueOrigemAntes: row.estoqueLojas?.[de] ?? 0,
-      }];
-    });
-  }, []);
+    const saldoOrigem = (row.estoqueLojas?.[de] ?? 0)
+      - movimentos.filter((m) => m.codigo === row.codigo && m.de === de).length
+      + movimentos.filter((m) => m.codigo === row.codigo && m.para === de).length;
+    if (saldoOrigem <= 0) {
+      setAviso(`${row.tamanho} não tem mais saldo na loja ${de}`);
+      return;
+    }
+    setAviso(null);
+    setMovimentos((atuais) => [...atuais, {
+      codigo: row.codigo, ref: row.ref, cor: row.cor, tamanho: row.tamanho,
+      desc: row.descricao, de, para,
+      estoqueOrigemAntes: row.estoqueLojas?.[de] ?? 0,
+    }]);
+  }, [movimentos]);
 
   /** Clique: primeiro na origem, depois no destino. Arrasto não vai em tablet. */
   const aoClicarCelula = useCallback((row: SkuRow, loja: string) => {
-    setOrigemSel((sel) => {
-      if (!sel) return { codigo: row.codigo, loja };
-      if (sel.codigo !== row.codigo) return { codigo: row.codigo, loja };
-      if (sel.loja === loja) return null;
-      moverUma(row, sel.loja, loja);
-      return null;
+    if (!origemSel || origemSel.codigo !== row.codigo) {
+      setOrigemSel({ codigo: row.codigo, loja });
+      return;
+    }
+    if (origemSel.loja === loja) { setOrigemSel(null); return; }
+    moverUma(row, origemSel.loja, loja);
+    setOrigemSel(null);
+  }, [origemSel, moverUma]);
+
+  /**
+   * AJUSTE DE ESTOQUE — o número passa a ser editável e a diferença vira
+   * entrada/saída com motivo AJUSTE (mesmo caminho do editor de produtos).
+   *
+   * Modo separado do "mover" de propósito: a célula não pode ser arrastável e
+   * campo de digitação ao mesmo tempo, e as duas ações têm consequências bem
+   * diferentes — mover gera ordem de separação, ajustar mexe no estoque agora.
+   */
+  const [modo, setModo] = useState<'mover' | 'ajustar'>('mover');
+  /** `${codigo}|${loja}` → quantidade nova digitada. */
+  const [ajustes, setAjustes] = useState<Record<string, number>>({});
+  const [salvandoAjuste, setSalvandoAjuste] = useState(false);
+
+  const definirAjuste = useCallback((row: SkuRow, loja: string, valor: number) => {
+    const chave = `${row.codigo}|${loja}`;
+    const base = row.estoqueLojas?.[loja] ?? 0;
+    setAjustes((a) => {
+      const proximo = { ...a };
+      // Voltou pro valor original = não é mais ajuste.
+      if (!Number.isFinite(valor) || valor < 0 || valor === base) delete proximo[chave];
+      else proximo[chave] = valor;
+      return proximo;
     });
-  }, [moverUma]);
+  }, []);
+
+  async function salvarAjustes() {
+    const entradas = Object.entries(ajustes);
+    if (!entradas.length) return;
+    setSalvandoAjuste(true);
+    setAviso(null);
+    try {
+      const porCodigo = new Map(linhas.map((l) => [l.codigo, l]));
+      const movs = entradas.flatMap(([chave, novo]) => {
+        const [codigo, loja] = chave.split('|');
+        const base = porCodigo.get(codigo)?.estoqueLojas?.[loja] ?? 0;
+        const delta = novo - base;
+        if (!delta) return [];
+        return [{
+          codigo, loja, qtd: Math.abs(delta),
+          tipo: (delta > 0 ? 'entrada' : 'saida') as 'entrada' | 'saida',
+          motivo: 'AJUSTE',
+        }];
+      });
+      await api('/products-editor/movimentar', {
+        method: 'POST',
+        body: JSON.stringify({ movimentos: movs }),
+      });
+      // Reflete o novo estoque na tela sem refazer a busca inteira.
+      setLinhas((atuais) => atuais.map((l) => {
+        const lojasNovas = { ...(l.estoqueLojas ?? {}) };
+        let mexeu = false;
+        for (const [chave, novo] of entradas) {
+          const [codigo, loja] = chave.split('|');
+          if (codigo === l.codigo) { lojasNovas[loja] = novo; mexeu = true; }
+        }
+        if (!mexeu) return l;
+        const total = Object.values(lojasNovas).reduce((s, n) => s + n, 0);
+        return { ...l, estoqueLojas: lojasNovas, estoque: total };
+      }));
+      setAjustes({});
+      setAviso(`${movs.length} ajuste(s) de estoque salvo(s).`);
+    } catch (e: any) {
+      setAviso(e?.message || 'Não consegui salvar os ajustes');
+    } finally {
+      setSalvandoAjuste(false);
+    }
+  }
 
   /**
    * Vira ordens de separação. Agrupa por (sku, origem, destino) — cinco peças
@@ -416,12 +508,37 @@ export default function ProdutoMasterPage() {
                       {/* NÍVEL 3 — grade + campos da cor */}
                       {aberta && (
                         <div className="pl-10 pr-3 pb-4 space-y-3">
+                          {/* Mover e ajustar são ações bem diferentes — mover
+                              gera ordem de separação, ajustar mexe no estoque
+                              agora. Modo explícito evita fazer uma pensando na
+                              outra, e a célula não pode ser arrastável e campo
+                              de digitação ao mesmo tempo. */}
+                          <div className="flex gap-1">
+                            {(['mover', 'ajustar'] as const).map((m) => (
+                              <button
+                                key={m}
+                                type="button"
+                                onClick={() => setModo(m)}
+                                className={`text-[10px] font-bold px-2.5 py-1 rounded ${
+                                  modo === m
+                                    ? 'bg-violet-600 text-white'
+                                    : 'bg-white text-slate-600 border border-slate-300 hover:bg-slate-50'
+                                }`}
+                              >
+                                {m === 'mover' ? 'Mover entre lojas' : 'Ajustar estoque'}
+                              </button>
+                            ))}
+                          </div>
                           <GradeEstoque
                             skus={prod.skus}
                             movimentos={movimentos}
                             origemSel={origemSel}
                             onMover={moverUma}
                             onClicarCelula={aoClicarCelula}
+                            modo={modo}
+                            ajustes={ajustes}
+                            onAjustar={definirAjuste}
+                            lojaNomes={lojaNomes}
                           />
                           <FichaDaCor
                             ref_={prod.ref}
@@ -444,40 +561,75 @@ export default function ProdutoMasterPage() {
       {/* Rascunho de remessa — só existe enquanto houver arrasto pendente.
           Nada sai daqui sem autorizar: remessa mexe em peça física e no acerto
           entre lojas, e arrasto erra fácil. */}
-      {movimentos.length > 0 && (
+      {(movimentos.length > 0 || Object.keys(ajustes).length > 0) && (
         <div className="fixed inset-x-0 bottom-0 z-40 border-t border-violet-200 bg-white/95 backdrop-blur shadow-[0_-4px_16px_rgba(0,0,0,0.08)]">
           <div className="max-w-7xl mx-auto px-3 sm:px-6 py-3 flex flex-wrap items-center gap-3">
             <div className="min-w-0 flex-1">
-              <p className="text-xs font-bold text-slate-800">
-                {movimentos.length} peça(s) para mover — ainda não enviado
-              </p>
-              <p className="text-[11px] text-slate-500 truncate">
-                {[...new Set(movimentos.map((m) => `${m.de}→${m.para}`))].join(' · ')}
-              </p>
+              {movimentos.length > 0 && (
+                <>
+                  <p className="text-xs font-bold text-slate-800">
+                    {movimentos.length} peça(s) para mover — ainda não enviado
+                  </p>
+                  <p className="text-[11px] text-slate-500 truncate">
+                    {[...new Set(movimentos.map((m) => `${m.de}→${m.para}`))].join(' · ')}
+                  </p>
+                </>
+              )}
+              {Object.keys(ajustes).length > 0 && (
+                <p className="text-xs font-bold text-amber-800">
+                  {Object.keys(ajustes).length} ajuste(s) de estoque não salvo(s)
+                </p>
+              )}
             </div>
-            <button
-              type="button"
-              onClick={() => { setMovimentos((m) => m.slice(0, -1)); setAviso(null); }}
-              className="text-xs font-bold px-3 py-2 rounded-lg border border-slate-300 hover:bg-slate-50"
-            >
-              Desfazer
-            </button>
-            <button
-              type="button"
-              onClick={() => { setMovimentos([]); setOrigemSel(null); setAviso(null); }}
-              className="text-xs font-bold px-3 py-2 rounded-lg border border-slate-300 hover:bg-slate-50"
-            >
-              Descartar tudo
-            </button>
-            <button
-              type="button"
-              onClick={() => void autorizar()}
-              disabled={autorizando}
-              className="inline-flex items-center gap-1.5 text-xs font-bold px-5 py-2.5 rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50"
-            >
-              {autorizando ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Truck className="w-3.5 h-3.5" />}
-              Autorizar e gerar ordens
-            </button>
+
+            {movimentos.length > 0 && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => { setMovimentos((m) => m.slice(0, -1)); setAviso(null); }}
+                  className="text-xs font-bold px-3 py-2 rounded-lg border border-slate-300 hover:bg-slate-50"
+                >
+                  Desfazer
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setMovimentos([]); setOrigemSel(null); setAviso(null); }}
+                  className="text-xs font-bold px-3 py-2 rounded-lg border border-slate-300 hover:bg-slate-50"
+                >
+                  Descartar tudo
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void autorizar()}
+                  disabled={autorizando}
+                  className="inline-flex items-center gap-1.5 text-xs font-bold px-5 py-2.5 rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50"
+                >
+                  {autorizando ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Truck className="w-3.5 h-3.5" />}
+                  Autorizar e gerar ordens
+                </button>
+              </>
+            )}
+
+            {Object.keys(ajustes).length > 0 && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => { setAjustes({}); setAviso(null); }}
+                  className="text-xs font-bold px-3 py-2 rounded-lg border border-slate-300 hover:bg-slate-50"
+                >
+                  Descartar ajustes
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void salvarAjustes()}
+                  disabled={salvandoAjuste}
+                  className="inline-flex items-center gap-1.5 text-xs font-bold px-5 py-2.5 rounded-lg bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50"
+                >
+                  {salvandoAjuste ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                  Salvar ajuste de estoque
+                </button>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -634,13 +786,17 @@ function FichaComum({
 /* ─────────────── Nível 3: grade de estoque (leitura) ─────────────── */
 
 function GradeEstoque({
-  skus, movimentos, origemSel, onMover, onClicarCelula,
+  skus, movimentos, origemSel, onMover, onClicarCelula, modo, ajustes, onAjustar, lojaNomes,
 }: {
   skus: SkuRow[];
   movimentos: Movimento[];
   origemSel: { codigo: string; loja: string } | null;
   onMover: (row: SkuRow, de: string, para: string) => void;
   onClicarCelula: (row: SkuRow, loja: string) => void;
+  modo: 'mover' | 'ajustar';
+  ajustes: Record<string, number>;
+  onAjustar: (row: SkuRow, loja: string, valor: number) => void;
+  lojaNomes: Map<string, string>;
 }) {
   const lojas = useMemo(() => {
     const s = new Set<string>();
@@ -662,7 +818,13 @@ function GradeEstoque({
         <thead className="bg-slate-50 text-slate-500">
           <tr>
             <th className="px-2 py-1.5 text-left font-bold">TAM</th>
-            {lojas.map((l) => <th key={l} className="px-2 py-1.5 font-bold">{l}</th>)}
+            {/* Sigla na coluna, código no title — "03" não diz nada pra quem
+                opera, mas quem confere nota às vezes precisa do número. */}
+            {lojas.map((l) => (
+              <th key={l} title={`Loja ${l}`} className="px-2 py-1.5 font-bold whitespace-nowrap">
+                {lojaNomes.get(l) || l}
+              </th>
+            ))}
             <th className="px-2 py-1.5 font-bold">TOT</th>
           </tr>
         </thead>
@@ -675,6 +837,26 @@ function GradeEstoque({
                 {lojas.map((l) => {
                   const { valor, delta } = saldo(r, l);
                   const selecionada = origemSel?.codigo === r.codigo && origemSel.loja === l;
+
+                  if (modo === 'ajustar') {
+                    const chave = `${r.codigo}|${l}`;
+                    const base = r.estoqueLojas?.[l] ?? 0;
+                    const atual = ajustes[chave] ?? base;
+                    return (
+                      <td key={l} className="px-1 py-1 text-center">
+                        <input
+                          type="number"
+                          value={atual}
+                          onChange={(e) => onAjustar(r, l, Number(e.target.value))}
+                          className={`w-14 px-1 py-1 text-center text-xs tabular-nums border rounded ${
+                            chave in ajustes
+                              ? 'border-amber-400 bg-amber-50 font-bold text-amber-800'
+                              : 'border-slate-200'
+                          }`}
+                        />
+                      </td>
+                    );
+                  }
                   // Vermelho onde saiu, azul onde entrou — o preview pedido.
                   const cor = delta < 0 ? 'text-rose-600 font-bold'
                     : delta > 0 ? 'text-blue-600 font-bold'
@@ -721,10 +903,21 @@ function GradeEstoque({
         </tbody>
       </table>
       <p className="text-[10px] text-slate-400 px-2 py-1.5 border-t border-slate-100">
-        Arraste um número de uma loja para outra para mover 1 peça (ou clique na origem
-        e depois no destino). <span className="text-rose-600">Vermelho</span> saiu ·{' '}
-        <span className="text-blue-600">azul</span> entrou. Nada acontece de verdade até
-        autorizar. Entrada/saída e etiquetas entram num próximo passo.
+        {modo === 'mover' ? (
+          <>
+            Arraste um número de uma loja para outra para mover 1 peça (ou clique na
+            origem e depois no destino). <span className="text-rose-600">Vermelho</span>{' '}
+            saiu · <span className="text-blue-600">azul</span> entrou. Nada acontece de
+            verdade até autorizar.
+          </>
+        ) : (
+          <>
+            Digite a quantidade certa em cada loja. A diferença vira entrada ou saída
+            com motivo <b>AJUSTE</b> — mexe no estoque de verdade assim que salvar, sem
+            gerar ordem de separação. Negativo não é aceito aqui (só o sistema chega
+            nele, quando vende peça em trânsito).
+          </>
+        )}
       </p>
     </div>
   );

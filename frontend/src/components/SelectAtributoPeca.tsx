@@ -100,9 +100,20 @@ export function SelectAtributoPeca({
           if (!multiplo) { onChange?.(e.target.value); return; }
           if (e.target.value) onChangeMany?.([...escolhidos, e.target.value]);
         }}
-        className="w-full px-2 py-2 border rounded text-sm bg-white disabled:opacity-50 disabled:cursor-not-allowed"
+        className={`w-full px-2 py-2 border rounded text-sm bg-white disabled:opacity-50 disabled:cursor-not-allowed ${
+          multiplo && escolhidos.length > 0 ? 'border-violet-400' : ''
+        }`}
       >
-        <option value="">{multiplo ? '+ adicionar' : '— nenhum —'}</option>
+        {/* Com escolha feita o campo TEM que dizer isso. Só "+ adicionar" faz
+            parecer que a escolha não entrou — o que a pessoa vê é o select
+            inalterado e uns chips soltos embaixo. */}
+        <option value="">
+          {!multiplo
+            ? '— nenhum —'
+            : escolhidos.length === 0
+              ? '+ adicionar'
+              : `${escolhidos.length} escolhida(s) — + adicionar outra`}
+        </option>
         {disponiveis.map((o) => (
           <option key={o.id} value={o.id}>{o.nome}</option>
         ))}
