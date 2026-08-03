@@ -18,6 +18,7 @@ import { ProductPhotosService } from './product-photos.service';
 import { CorIaService } from './cor-ia.service';
 import { WcFotosImportService } from './wc-fotos-import.service';
 import { FotoImportJobService } from './foto-import-job.service';
+import { BolinhaAutoService } from './bolinha-auto.service';
 
 @UseGuards(JwtAuthGuard)
 @Controller('product-photos')
@@ -27,6 +28,7 @@ export class ProductPhotosController {
     private readonly corIa: CorIaService,
     private readonly wcImport: WcFotosImportService,
     private readonly lote: FotoImportJobService,
+    private readonly bolinhaAuto: BolinhaAutoService,
   ) {}
 
   private requireWrite(req: any) {
@@ -164,6 +166,17 @@ export class ProductPhotosController {
   async cancelarLote(@Req() req: any) {
     this.requireWrite(req);
     return this.lote.cancelar();
+  }
+
+  /**
+   * Quantas bolinhas ainda faltam pintar. A varredura roda sozinha; isto é só
+   * pra tela mostrar o progresso em vez de pedir fé.
+   * GET /product-photos/bolinha-auto/status
+   */
+  @Get('bolinha-auto/status')
+  async statusBolinha(@Req() req: any) {
+    this.requireWrite(req);
+    return this.bolinhaAuto.status();
   }
 
   @Post('detectar-cor')

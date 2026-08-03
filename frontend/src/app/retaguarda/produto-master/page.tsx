@@ -270,11 +270,25 @@ export default function ProdutoMasterPage() {
   }, [busca, carregarPendencias]);
 
   /**
-   * Agrupa os SKUs em REF+MARCA → COR. MARCA entra na chave porque REF numérica
-   * é reciclada entre fornecedores: dois "222" de marcas diferentes são peças
-   * diferentes e não podem cair na mesma ficha.
+   * Agrupa os SKUs em REF-BASE + MARCA → COR.
+   *
+   * BASE, não a REF do cadastro: no ERP a cor virou sufixo de REF na mão, e
+   * "VMS-223", "VMS-223 MA", "VMS-223 MM", "VMS-223 P" são O MESMO VESTIDO em
+   * quatro cadastros. Agrupando pela REF crua a tela mostrava quatro produtos
+   * de uma cor cada — e o site herdaria isso, quando o objetivo desta tela é
+   * exatamente o contrário: UM produto com quatro bolinhas de cor.
+   *
+   * MARCA continua na chave porque REF numérica é reciclada entre
+   * fornecedores: dois "222" de marcas diferentes são peças diferentes.
+   *
+   * `refBase` é a mesma regra do backend (`common/ref-base.ts`): corta tudo
+   * depois do último dígito. Se mudar lá, muda aqui.
    */
   const porRef = useMemo(() => {
+    const refBase = (r: string) => {
+      const up = String(r ?? '').trim().toUpperCase();
+      return up.replace(/[^0-9]+$/, '') || up;
+    };
     const mapa = new Map<string, { ref: string; marca: string; nomeCurto: string; produtos: Produto[] }>();
     // Guarda de forma: se a API mudar de formato de novo, a tela fica vazia em
     // vez de morrer inteira. Um useMemo que estoura sobe pro error boundary e
@@ -282,15 +296,19 @@ export default function ProdutoMasterPage() {
     if (!Array.isArray(linhas)) return [];
     for (const row of linhas) {
       const marca = (row.marca || 'SEM MARCA').toUpperCase();
-      const chaveRef = `${row.ref}|${marca}`;
+      const base = refBase(row.ref);
+      const chaveRef = `${base}|${marca}`;
       if (!mapa.has(chaveRef)) {
-        mapa.set(chaveRef, { ref: row.ref, marca, nomeCurto: derivarNomeCurto(row), produtos: [] });
+        mapa.set(chaveRef, { ref: base, marca, nomeCurto: derivarNomeCurto(row), produtos: [] });
       }
       const grupo = mapa.get(chaveRef)!;
       const cor = (row.cor || 'ÚNICA').toUpperCase();
       let prod = grupo.produtos.find((p) => p.cor === cor);
       if (!prod) {
-        prod = { chave: `${chaveRef}|${cor}`, ref: row.ref, marca, cor, nomeCurto: grupo.nomeCurto, precos: [], skus: [] };
+        // `ref` da cor é a BASE — é a chave de ficha e de foto. O cadastro
+        // original de cada cor continua em `skus[].codigo`, que é o que a
+        // edição de estoque e preço usa.
+        prod = { chave: `${chaveRef}|${cor}`, ref: base, marca, cor, nomeCurto: grupo.nomeCurto, precos: [], skus: [] };
         grupo.produtos.push(prod);
       }
       prod.skus.push(row);

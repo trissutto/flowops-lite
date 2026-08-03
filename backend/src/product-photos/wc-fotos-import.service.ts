@@ -6,6 +6,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ProductPhotosService } from './product-photos.service';
 import { WpDbService } from '../wp-db/wp-db.service';
 import { CorIaService } from './cor-ia.service';
+import { refBaseOf } from '../common/ref-base';
 
 /**
  * IMPORTAR AS FOTOS DO SITE ANTIGO — WooCommerce → R2, por REF e COR.
@@ -71,15 +72,53 @@ export class WcFotosImportService {
       .toUpperCase();
   }
 
-  /** Cores que a REF tem no catálogo — a lista fechada do casamento. */
+  /**
+   * Cores que a FAMÍLIA tem no catálogo — a lista fechada do casamento.
+   *
+   * Varre a família inteira, não a REF exata. "VMS-223 MA" sozinha tem UMA cor
+   * (marinho) e a importação achava só a foto dela; a família "VMS-223" tem
+   * blush + marinho + marrom + preto, que é o produto de verdade.
+   *
+   * O `LIKE base%` é peneira grossa de propósito (traz "VMS-2231" também) — o
+   * filtro fino é o `refBaseOf` no JS, que é a MESMA regra do resto do sistema.
+   * Repetir a regra em SQL seria a segunda cópia dela.
+   */
   private async coresDaRef(ref: string): Promise<string[]> {
-    const linhas = await this.prisma.$queryRawUnsafe<Array<{ cor: string }>>(
-      `SELECT DISTINCT NULLIF(TRIM(cor), '') AS cor
+    const base = refBaseOf(ref);
+    const linhas = await this.prisma.$queryRawUnsafe<Array<{ ref: string; cor: string }>>(
+      `SELECT DISTINCT UPPER(TRIM(ref)) AS ref, NULLIF(TRIM(cor), '') AS cor
          FROM wincred_produtos
-        WHERE UPPER(TRIM(ref)) = $1 AND cor IS NOT NULL AND TRIM(cor) <> ''`,
-      ref,
+        WHERE (UPPER(TRIM(ref)) = $1 OR UPPER(TRIM(ref)) LIKE $1 || '%')
+          AND cor IS NOT NULL AND TRIM(cor) <> ''`,
+      base,
     );
-    return linhas.map((l) => l.cor).filter(Boolean);
+    const cores = linhas
+      .filter((l) => refBaseOf(l.ref) === base)
+      .map((l) => String(l.cor || '').toUpperCase())
+      .filter(Boolean);
+    return Array.from(new Set(cores));
+  }
+
+  /**
+   * MARCA da família — a outra metade da chave da ficha (REF-BASE + MARCA).
+   *
+   * Procura na família, não na REF exata: existe família cujo cadastro base
+   * NÃO existe (só "VLM-222P" e "VLM-222M", nunca um "VLM-222" pelado). Com
+   * igualdade exata a marca vinha vazia, a função saía calada e a peça ficava
+   * com foto e bolinha cinza — sem erro nenhum no log pra explicar.
+   */
+  async marcaDaFamilia(ref: string): Promise<string | null> {
+    const base = refBaseOf(ref);
+    const linhas = await this.prisma.$queryRawUnsafe<Array<{ ref: string; marca: string }>>(
+      `SELECT DISTINCT UPPER(TRIM(ref)) AS ref, NULLIF(TRIM(marca), '') AS marca
+         FROM wincred_produtos
+        WHERE (UPPER(TRIM(ref)) = $1 OR UPPER(TRIM(ref)) LIKE $1 || '%')
+          AND marca IS NOT NULL AND TRIM(marca) <> ''
+        LIMIT 50`,
+      base,
+    );
+    const daFamilia = linhas.filter((l) => refBaseOf(l.ref) === base);
+    return daFamilia.length ? String(daFamilia[0].marca).toUpperCase() : null;
   }
 
   /**
@@ -204,7 +243,7 @@ export class WcFotosImportService {
    * segundos, com o que o site antigo REALMENTE devolveu.
    */
   async diagnosticar(refBruta: string) {
-    const ref = String(refBruta || '').trim().toUpperCase().replace(/\s+/g, '');
+    const ref = refBaseOf(refBruta);
     const cores = await this.coresDaRef(ref);
     const base = ref.replace(/[A-Z]+$/i, '').replace(/[-_\s]+$/, '');
     const tentativas: Array<Record<string, unknown>> = [
@@ -286,18 +325,12 @@ export class WcFotosImportService {
    * Best-effort: falha aqui não derruba a importação (a foto, que é o caro,
    * já está salva) e o conta-gotas manual continua disponível.
    */
-  private async pintarBolinha(ref: string, cor: string): Promise<void> {
+  async pintarBolinha(ref: string, cor: string): Promise<void> {
     try {
       const [capa] = await this.fotos.listPhotos(ref, cor);
       if (!capa?.url) return;
 
-      const marcaRow = await this.prisma.$queryRawUnsafe<Array<{ marca: string }>>(
-        `SELECT NULLIF(TRIM(marca), '') AS marca FROM wincred_produtos
-           WHERE UPPER(TRIM(ref)) = $1 AND marca IS NOT NULL AND TRIM(marca) <> ''
-           LIMIT 1`,
-        ref,
-      );
-      const marca = String(marcaRow[0]?.marca || '').toUpperCase();
+      const marca = await this.marcaDaFamilia(ref);
       if (!marca) return; // sem marca não há chave de ficha (REF+MARCA)
 
       // Bolinha já definida (pela IA antes ou pelo conta-gotas) → nem chama a
@@ -336,7 +369,15 @@ export class WcFotosImportService {
 
   /** Importa as fotos de UMA REF. */
   async importarRef(refBruta: string, usuario?: string): Promise<ResultadoRef> {
-    const ref = String(refBruta || '').trim().toUpperCase().replace(/\s+/g, '');
+    /**
+     * REF-BASE, e o espaço NÃO é lixo.
+     *
+     * O código anterior fazia `.replace(/\s+/g, '')` pra "limpar" a REF, e com
+     * isso "VMS-223 MA" virava "VMS-223MA" — que não existe em catálogo
+     * nenhum. Era esse o erro na tela: "REF VMS-223MA não tem cores no
+     * catálogo". O espaço fazia parte da REF; quem sobrava era o sufixo.
+     */
+    const ref = refBaseOf(refBruta);
     if (!ref) throw new BadRequestException('REF obrigatória');
     if (!this.config.get<string>('WC_URL')) {
       throw new BadRequestException('WC_URL não configurada — sem o site antigo não há de onde importar.');
