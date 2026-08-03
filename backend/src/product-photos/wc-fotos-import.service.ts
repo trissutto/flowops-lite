@@ -25,7 +25,7 @@ import { ProductPhotosService } from './product-photos.service';
  * quiser sem duplicar acervo nem gastar upload à toa.
  */
 
-interface ResultadoRef {
+export interface ResultadoRef {
   ref: string;
   coresComFoto: string[];
   coresSemFoto: string[];
