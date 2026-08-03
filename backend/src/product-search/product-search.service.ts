@@ -170,7 +170,12 @@ export class ProductSearchService implements OnModuleInit {
       }
       const vistos = new Set(refHitsN.map((r: any) => r.codigo));
       nrows = [...refHitsN, ...descHitsN.filter((r: any) => !vistos.has(r.codigo))];
-      return nrows.map((r: any) => this.mapNative(r));
+      if (nrows.length) return nrows.map((r: any) => this.mapNative(r));
+      // VAZIO NÃO É RESPOSTA (causa nº 2 do checklist "as 3 causas de sumiu"
+      // da migração): a tabela nativa só tem o que nasceu pelo fluxo novo, e
+      // REF antiga (caso BMM-100, 03/08) existe apenas no catálogo espelhado.
+      // Sem este fall-through, a busca da ficha/editor devolvia zero enquanto
+      // a Consultar — que lê o espelho — achava a peça na boa.
     }
 
     const find = (where: any, take = 1000) =>
