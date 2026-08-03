@@ -31,6 +31,9 @@ export interface ResultadoRef {
   coresSemFoto: string[];
   jaTinham: string[];
   produtosWcSemCor: string[];
+  /** Quantos produtos o site antigo devolveu pra esta REF. Zero = o acervo
+   *  la nao tem a peca; nao adianta procurar casamento de cor. */
+  produtosEncontrados: number;
   fotos: number;
 }
 
@@ -181,7 +184,8 @@ export class WcFotosImportService {
 
     const produtos = await this.acharNoWc(ref);
     const resultado: ResultadoRef = {
-      ref, coresComFoto: [], coresSemFoto: [], jaTinham: [], produtosWcSemCor: [], fotos: 0,
+      ref, coresComFoto: [], coresSemFoto: [], jaTinham: [], produtosWcSemCor: [],
+      produtosEncontrados: produtos.length, fotos: 0,
     };
 
     for (const p of produtos) {
@@ -253,7 +257,7 @@ export class WcFotosImportService {
       } catch (e: any) {
         relatorio.push({
           ref, coresComFoto: [], coresSemFoto: [], jaTinham: [],
-          produtosWcSemCor: [`erro: ${e?.message || e}`], fotos: 0,
+          produtosWcSemCor: [`erro: ${e?.message || e}`], produtosEncontrados: 0, fotos: 0,
         });
       }
     }
