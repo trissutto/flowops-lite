@@ -208,13 +208,39 @@ export class PickOrdersService {
       } catch { /* nota é best-effort aqui — o docs-envio avisa se faltar */ }
       return { ok: true, jaGerado: true, codigoRastreio: pick.trackingCode, idPrepostagem: pick.correiosPrepostagemId ?? null, servico: null, carrier: pick.carrier ?? null, etiquetaPdf: (pick as any).etiquetaPdf ?? null, dce: null, nfe };
     }
-    // Trava atômica contra cliques simultâneos: só o 1º request marca
-    // correiosGeneratedAt e gera; os demais levam aviso. Falhou? solta a trava.
+    /**
+     * Trava atômica contra cliques simultâneos: só o 1º request marca
+     * `correiosGeneratedAt` e gera; os demais levam aviso. Falhou? solta a
+     * trava no catch.
+     *
+     * ⚠️ A TRAVA EXPIRA — e isso não é detalhe. O `catch` só solta se o
+     * processo continuar vivo: deploy no meio da geração (o backend reinicia
+     * em ~30s e mata as requisições em voo), OOM ou queda de rede deixavam o
+     * campo preenchido com `trackingCode` nulo PARA SEMPRE. A loja ficava sem
+     * conseguir gerar envio daquele pedido, clicando num botão que respondia
+     * "aguarde uns segundos" pra sempre — aconteceu em 03/08, em dia de
+     * deploys seguidos.
+     *
+     * Dois minutos é maior que qualquer geração normal (a chamada aos
+     * Correios/Mais Envios leva segundos) e curto o bastante pra loja não
+     * ficar parada.
+     */
+    const EXPIRA_MS = 2 * 60_000;
+    const limite = new Date(Date.now() - EXPIRA_MS);
     const claim = await this.prisma.pickOrder.updateMany({
-      where: { id, trackingCode: null, correiosGeneratedAt: null },
+      where: {
+        id,
+        trackingCode: null,
+        OR: [{ correiosGeneratedAt: null }, { correiosGeneratedAt: { lt: limite } }],
+      },
       data: { correiosGeneratedAt: new Date() },
     });
-    if (claim.count === 0) throw new BadRequestException('Envio já está sendo gerado — aguarde uns segundos e clique Reimprimir.');
+    if (claim.count === 0) {
+      throw new BadRequestException(
+        'Envio já está sendo gerado — aguarde uns segundos e clique Reimprimir. ' +
+          'Se continuar assim por mais de 2 minutos, clique em Reabrir e gere de novo.',
+      );
+    }
     try {
       return await this.gerarEnvioCorreiosInner(id, pick);
     } catch (e) {

@@ -15,9 +15,10 @@ import { firstValueFrom } from 'rxjs';
  * Também responde se a peça é ESTAMPADA. Estampa não cabe num hex: nesse caso
  * a tela troca a bolinha para o modo "recorte da foto".
  *
- * Modelo: `ANTHROPIC_VISION_MODEL` ou o padrão abaixo. NÃO reusa
- * `ANTHROPIC_MODEL` de propósito — aquela env é do enriquecimento de texto e
- * pode estar apontando pra um modelo sem visão.
+ * Modelo: `ANTHROPIC_VISION_MODEL` → `ANTHROPIC_MODEL` → padrão. O default
+ * antigo era um id que eu supus existir, e a conta respondia erro em toda
+ * chamada; agora o primeiro fallback é o modelo que o enriquecimento de texto
+ * JÁ usa em produção — se ele funciona lá, funciona aqui.
  */
 
 export interface CorDetectada {
@@ -34,7 +35,9 @@ const HEX = /^#[0-9A-Fa-f]{6}$/;
 @Injectable()
 export class CorIaService {
   private readonly logger = new Logger(CorIaService.name);
-  private readonly modeloPadrao = 'claude-sonnet-5';
+  /** O mesmo modelo que o enriquecimento de texto já usa em produção — id
+   *  chutado é 404 na hora da verdade. VISION_MODEL sobrescreve. */
+  private readonly modeloPadrao = 'claude-sonnet-4-6';
 
   constructor(
     private readonly config: ConfigService,
@@ -62,11 +65,7 @@ Regras:
 Responda SOMENTE com um JSON válido, sem texto em volta, neste formato:
 {"hex":"#RRGGBB","nome":"...","estampada":false,"cores":[{"hex":"#RRGGBB","nome":"..."}],"confianca":"alta"}`;
 
-  /**
-   * @param urlFoto URL pública da foto (R2). Precisa ser acessível pela
-   *   Anthropic — é por isso que mandamos a URL e não o arquivo: a foto já
-   *   está pública no CDN, e subir o binário de novo só gastaria banda.
-   */
+  /** @param urlFoto URL da foto no R2 — baixada aqui e enviada em base64. */
   async detectar(urlFoto: string): Promise<CorDetectada> {
     if (!this.apiKey) {
       throw new BadRequestException(
@@ -78,14 +77,28 @@ Responda SOMENTE com um JSON válido, sem texto em volta, neste formato:
       throw new BadRequestException('URL da foto inválida');
     }
 
+    // A foto vai em BASE64, não por URL: mandar link obriga a Anthropic a
+    // buscar o arquivo (mais uma rede, mais um jeito de falhar) e depende de
+    // o formato `source: url` estar disponível na conta. Baixar aqui é uma
+    // requisição nossa, previsível, e funciona com bucket privado no futuro.
+    const baixada = await firstValueFrom(
+      this.http.get(url, { responseType: 'arraybuffer', timeout: 20000 }),
+    ).catch(() => null);
+    if (!baixada) throw new BadRequestException('Não consegui abrir a foto pra ler a cor.');
+    const mime = String((baixada.headers as any)?.['content-type'] || 'image/jpeg').split(';')[0];
+    const base64 = Buffer.from(baixada.data as ArrayBuffer).toString('base64');
+
     const body = {
-      model: this.config.get<string>('ANTHROPIC_VISION_MODEL') || this.modeloPadrao,
+      model:
+        this.config.get<string>('ANTHROPIC_VISION_MODEL') ||
+        this.config.get<string>('ANTHROPIC_MODEL') ||
+        this.modeloPadrao,
       max_tokens: 400,
       messages: [
         {
           role: 'user',
           content: [
-            { type: 'image', source: { type: 'url', url } },
+            { type: 'image', source: { type: 'base64', media_type: mime, data: base64 } },
             { type: 'text', text: this.PROMPT },
           ],
         },
@@ -109,11 +122,17 @@ Responda SOMENTE com um JSON válido, sem texto em volta, neste formato:
         .map((b) => String(b?.text || ''))
         .join('\n');
     } catch (e: any) {
+      // O motivo REAL vai pra tela e pro log. A mensagem genérica de antes
+      // custou uma tarde: "não consegui ler a cor" tanto podia ser modelo
+      // inválido quanto chave errada, e não dava pra saber sem deploy.
       const status = e?.response?.status;
-      this.logger.warn(`[cor-ia] falhou (${status ?? 'sem status'}): ${e?.message || e}`);
-      throw new BadRequestException(
-        'Não consegui ler a cor pela foto agora. Use o conta-gotas.',
-      );
+      const detalhe =
+        e?.response?.data?.error?.message ||
+        e?.response?.data?.message ||
+        e?.message ||
+        'erro desconhecido';
+      this.logger.warn(`[cor-ia] falhou (${status ?? 'sem status'}): ${detalhe}`);
+      throw new BadRequestException(`IA não leu a cor (${status ?? 'sem status'}): ${detalhe}`);
     }
 
     return this.interpretar(texto);
