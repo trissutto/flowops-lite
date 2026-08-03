@@ -100,8 +100,17 @@ export class LojaCatalogService {
     WHERE p.ref IS NOT NULL AND TRIM(p.ref) <> ''
   `;
 
-  /** Peça montada a partir das variações de uma REF. */
-  private montarPeca(ref: string, linhas: LinhaErp[], site: any, fit: any, fotos: any[] = []) {
+  /**
+   * Peça montada a partir das variações de uma REF.
+   *
+   * A PÁGINA DO SITE É UMA SÓ POR REF (decisão do dono, 03/08): a cliente
+   * escolhe a COR numa bolinha e só depois o tamanho. Por isso `cores` não é
+   * mais uma lista de nomes — cada cor carrega o que muda ao ser escolhida:
+   * fotos, grade de tamanhos com estoque, preço e a bolinha.
+   */
+  private montarPeca(
+    ref: string, linhas: LinhaErp[], site: any, fit: any, fotos: any[] = [], ficha?: any,
+  ) {
     const precos = linhas.map((l) => l.preco).filter((p) => p > 0);
     const preco = precos.length ? Math.min(...precos) : 0;
     const estoqueTotal = linhas.reduce((s, l) => s + (l.estoque || 0), 0);
@@ -125,6 +134,72 @@ export class LojaCatalogService {
       .sort((a, b) => ordemTam(a[0]) - ordemTam(b[0]))
       .map(([label, est]) => ({ label, estoque: est, disponivel: est > 0 }));
 
+    /* ── CORES como VARIAÇÃO ESCOLHÍVEL ─────────────────────────────────
+     * Cada cor devolve tudo que muda quando a cliente clica na bolinha:
+     * suas fotos, sua grade (só os tamanhos daquela cor) e seu preço.
+     *
+     * Cor SEM FOTO não vai pro site (decisão do dono, 03/08): bolinha que
+     * abre galeria vazia é pior que cor a menos. A ficha (`produto_ficha_cor`)
+     * traz a bolinha — hex do conta-gotas ou recorte da foto pra estampa.
+     */
+    const fichaPorCor = new Map<string, any>(
+      ((ficha?.cores ?? []) as any[]).map((c) => [String(c.cor || '').toUpperCase(), c]),
+    );
+    const fotosPorCor = new Map<string, any[]>();
+    for (const f of fotos) {
+      const k = String(f.cor || '').toUpperCase();
+      if (!fotosPorCor.has(k)) fotosPorCor.set(k, []);
+      fotosPorCor.get(k)!.push(f);
+    }
+
+    const coresDetalhadas = Array.from(cores.keys())
+      .sort((a, b) => a.localeCompare(b, 'pt-BR'))
+      .map((nomeCor) => {
+        const chave = nomeCor.toUpperCase();
+        const daCor = linhas.filter((l) => (l.cor || '').toUpperCase() === chave);
+        const suasFotos = fotosPorCor.get(chave) ?? [];
+        const f = fichaPorCor.get(chave);
+        const precosCor = daCor.map((l) => l.preco).filter((p) => p > 0);
+        const capa = suasFotos[0]?.url ?? null;
+
+        return {
+          nome: nomeCor,
+          estoque: daCor.reduce((s, l) => s + (l.estoque || 0), 0),
+          preco: precosCor.length ? Math.min(...precosCor) : 0,
+          // Bolinha: 'cor' = hex tirado da foto; 'foto' = recorte da estampa,
+          // enquadrado pelo ponto que a retaguarda clicou.
+          swatch: {
+            tipo: f?.swatchTipo === 'foto' ? 'foto' : 'cor',
+            hex: f?.corHex ?? null,
+            focoX: f?.swatchFocoX ?? null,
+            focoY: f?.swatchFocoY ?? null,
+            imagem: capa,
+          },
+          fotos: suasFotos.map((x: any) => ({
+            src: x.url,
+            alt: `${site?.nome || ref} ${nomeCor}`,
+          })),
+          titulo: f?.tituloComercial ?? null,
+          youtubeUrl: f?.youtubeUrl ?? null,
+          tamanhos: daCor
+            .filter((l) => l.tamanho)
+            .sort((a, b) => ordemTam(a.tamanho!) - ordemTam(b.tamanho!))
+            .map((l) => ({
+              label: l.tamanho!,
+              sku: l.codigo,
+              ean: l.ean,
+              preco: l.preco,
+              estoque: l.estoque || 0,
+              disponivel: (l.estoque || 0) > 0,
+            })),
+        };
+      })
+      // TRANSIÇÃO: enquanto a REF não tiver NENHUMA foto própria (o acervo
+      // ainda está vindo do WooCommerce, sem cor associada), mostra todas as
+      // cores. A partir da primeira foto no R2, vale a regra: cor sem foto
+      // não aparece.
+      .filter((c) => c.fotos.length > 0 || fotos.length === 0);
+
     const dataAlt = linhas.map((l) => l.dataAlt).filter(Boolean).sort()
       .slice(-1)[0] as Date | undefined;
 
@@ -145,7 +220,7 @@ export class LojaCatalogService {
       precoPix: preco > 0 ? Number((preco * 0.95).toFixed(2)) : null,
       parcelamento: preco > 0 ? { vezes: 12, valor: Number((preco / 12).toFixed(2)) } : null,
 
-      cores: Array.from(cores.values()),
+      cores: coresDetalhadas,
       tamanhos,
       estoqueTotal,
       disponivel: estoqueTotal > 0,
@@ -186,13 +261,20 @@ export class LojaCatalogService {
 
   /** Carrega curadoria + ficha de caimento de um conjunto de REFs. */
   private async complementos(refs: string[]) {
-    const [sites, fits, fotos] = await Promise.all([
+    const [sites, fits, fotos, fichas] = await Promise.all([
       (this.prisma as any).siteProduto.findMany({ where: { ref: { in: refs } } }),
       (this.prisma as any).fitProduct.findMany({ where: { ref: { in: refs } } }),
-      // Fotos próprias (R2) — o mesmo acervo que a Live já usa
+      // Fotos próprias (R2) — o mesmo acervo que a Live já usa.
+      // `ordem` primeiro: é ela que define a capa da cor (a galeria da tela
+      // master é ordenável). `createdAt` só desempata.
       (this.prisma as any).productPhoto.findMany({
         where: { ref: { in: refs } },
-        orderBy: [{ cor: 'asc' }, { createdAt: 'asc' }],
+        orderBy: [{ cor: 'asc' }, { ordem: 'asc' }, { createdAt: 'asc' }],
+      }),
+      // Ficha do CRM: é de lá que vem a bolinha de cada cor.
+      (this.prisma as any).produtoFicha.findMany({
+        where: { ref: { in: refs } },
+        include: { cores: true },
       }),
     ]);
     const porRefFotos = new Map<string, any[]>();
@@ -201,11 +283,35 @@ export class LojaCatalogService {
       if (!porRefFotos.has(k)) porRefFotos.set(k, []);
       porRefFotos.get(k)!.push(f);
     }
+    const porRefFichas = new Map<string, any[]>();
+    for (const f of fichas as any[]) {
+      const k = String(f.ref || '').toUpperCase();
+      if (!porRefFichas.has(k)) porRefFichas.set(k, []);
+      porRefFichas.get(k)!.push(f);
+    }
     return {
       site: new Map<string, any>((sites as any[]).map((s) => [s.ref, s])),
       fit: new Map<string, any>((fits as any[]).map((f) => [f.ref, f])),
       fotos: porRefFotos,
+      fichas: porRefFichas,
     };
+  }
+
+  /**
+   * Ficha da peça. A chave é REF + MARCA, nunca REF sozinha: REF numérica é
+   * reciclada entre fornecedores e pegar a ficha errada colocaria a bolinha
+   * (e a descrição) de outra peça na página. Ver [[giga-ref-reciclada]].
+   * Com uma única ficha na REF, aceita sem marca — o cadastro antigo não
+   * tinha esse cuidado e travar aqui esconderia a ficha certa.
+   */
+  private escolherFicha(fichas: any[] | undefined, marca?: string | null) {
+    if (!fichas?.length) return undefined;
+    const m = String(marca || '').trim().toUpperCase();
+    if (m) {
+      const exata = fichas.find((f) => String(f.marca || '').toUpperCase() === m);
+      if (exata) return exata;
+    }
+    return fichas.length === 1 ? fichas[0] : undefined;
   }
 
   /** Listagem paginada — o que a página de categoria e a busca consomem. */
@@ -305,7 +411,10 @@ export class LojaCatalogService {
         );
         if (!linhasSoltas.length) return null;
         const c = await this.complementos([ref]);
-        return this.montarPeca(ref, linhasSoltas, null, c.fit.get(ref), c.fotos.get(ref) ?? []);
+        return this.montarPeca(
+          ref, linhasSoltas, null, c.fit.get(ref), c.fotos.get(ref) ?? [],
+          this.escolherFicha(c.fichas.get(ref), linhasSoltas.find((l) => l.marca)?.marca),
+        );
       }
     }
 
@@ -314,7 +423,10 @@ export class LojaCatalogService {
     );
     if (!linhas.length) return null;
     const c = await this.complementos([registro.ref]);
-    return this.montarPeca(registro.ref, linhas, registro, c.fit.get(registro.ref), c.fotos.get(registro.ref) ?? []);
+    return this.montarPeca(
+      registro.ref, linhas, registro, c.fit.get(registro.ref), c.fotos.get(registro.ref) ?? [],
+      this.escolherFicha(c.fichas.get(registro.ref), linhas.find((l) => l.marca)?.marca),
+    );
   }
 
   /** Peças da mesma categoria — o "você também pode gostar". */

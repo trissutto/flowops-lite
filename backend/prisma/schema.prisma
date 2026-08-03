@@ -4532,6 +4532,55 @@ model ProdutoFichaCor {
   @@map("produto_ficha_cor")
 }
 
+/// BANNER DA VITRINE — o que a loja troca sozinha, sem deploy.
+///
+/// Até 03/08/2026 o hero da home, a tarja do topo e as faixas editoriais eram
+/// constantes em `ecommerce/src/data/content.ts`: trocar a foto da campanha
+/// exigia commit + build + deploy. Aqui viram dado.
+///
+/// `slot` é onde o banner aparece — o site pede por slot e nunca por id, então
+/// trocar a campanha é editar a linha, não mexer no código:
+///   'home-hero'   → o banner grande da home (foto, título, dois botões)
+///   'home-faixa'  → faixas editoriais no meio da home
+///   'tarja-topo'  → as frases que giram na tarja preta acima do menu
+///
+/// Janela (`inicioEm`/`fimEm`) existe pra campanha entrar e sair sozinha de
+/// madrugada — ninguém precisa acordar pra tirar o banner do Dia das Mães.
+model SiteBanner {
+  id              String    @id @default(uuid())
+  slot            String
+  eyebrow         String?
+  titulo          String?
+  /// Palavra de ênfase do título — o site quebra a linha e joga em itálico
+  /// dourado ("Elegância não tem" / *tamanho*).
+  destaque        String?
+  subtitulo       String?   @db.Text
+
+  imagemUrl       String?   @map("imagem_url") @db.Text
+  /// Opcional: recorte vertical pro celular. Vazio = usa a mesma foto.
+  imagemMobileUrl String?   @map("imagem_mobile_url") @db.Text
+  objectKey       String?   @map("object_key") @db.Text
+  objectKeyMobile String?   @map("object_key_mobile") @db.Text
+  alt             String?
+
+  ctaLabel        String?   @map("cta_label")
+  ctaHref         String?   @map("cta_href")
+  cta2Label       String?   @map("cta2_label")
+  cta2Href        String?   @map("cta2_href")
+
+  ordem           Int       @default(0)
+  ativo           Boolean   @default(true)
+  inicioEm        DateTime? @map("inicio_em")
+  fimEm           DateTime? @map("fim_em")
+
+  atualizadoPor   String?   @map("atualizado_por")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  @@index([slot, ativo, ordem])
+  @@map("site_banners")
+}
+
 /// CLASSIFICAÇÃO DA PEÇA — Ocasião, Tecido, Modelagem e Coleção.
 ///
 /// Uma tabela só, separada por `tipo`, porque os quatro têm exatamente a mesma

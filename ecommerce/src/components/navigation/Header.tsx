@@ -30,7 +30,7 @@ import {
  *
  * Ver docs/header.md.
  */
-export function Header() {
+export function Header({ tarja }: { tarja?: { label: string; href: string }[] }) {
   const scrolled = useScrolled(24);
   const overlay = useUiStore((s) => s.overlay);
   const toggleOverlay = useUiStore((s) => s.toggleOverlay);
@@ -38,7 +38,7 @@ export function Header() {
 
   return (
     <>
-      <AnnouncementBar />
+      <AnnouncementBar itens={tarja} />
 
       <header
         className={cn(

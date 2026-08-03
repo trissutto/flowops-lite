@@ -64,6 +64,7 @@ import { CrediariosModule } from './crediarios/crediarios.module';
 import { CommissionsModule } from './commissions/commissions.module';
 import { FitModule } from './fit/fit.module';
 import { LojaCatalogModule } from './loja-catalog/loja-catalog.module';
+import { SiteBannersModule } from './site-banners/site-banners.module';
 import { LojaOrdersModule } from './loja-orders/loja-orders.module';
 import { CutoverModule } from './cutover/cutover.module';
 import { FinanceiroModule } from './financeiro/financeiro.module';
@@ -154,6 +155,7 @@ import { OperadorPinModule } from './operador-pin/operador-pin.module';
     CommissionsModule,
     FitModule,
     LojaCatalogModule,
+    SiteBannersModule,
     LojaOrdersModule,
     CutoverModule,
     FinanceiroModule,

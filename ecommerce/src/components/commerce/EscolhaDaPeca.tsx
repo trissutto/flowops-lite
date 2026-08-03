@@ -1,0 +1,74 @@
+'use client';
+
+import { useMemo, useState } from 'react';
+import { ProductGallery } from '@/components/commerce/ProductGallery';
+import { BuyBox } from '@/components/commerce/BuyBox';
+import type { CorApi } from '@/services/products';
+import type { Product } from '@/types';
+
+/**
+ * ESCOLHA DA PEÇA — galeria + decisão de compra compartilhando a MESMA cor.
+ *
+ * A página do site é uma só por REF. A cliente escolhe a COR na bolinha e,
+ * no mesmo instante, a galeria vira as fotos daquela cor, a grade passa a
+ * mostrar só os tamanhos que existem nela e o preço acompanha (liso e
+ * estampado da mesma REF costumam custar diferente).
+ *
+ * Por que este componente existe: galeria e buy box são irmãos no layout, e
+ * estado compartilhado entre irmãos precisa morar no pai. Server Component
+ * não guarda estado, então o pai tem que ser client — mas só ele: as duas
+ * peças pesadas continuam as mesmas.
+ *
+ * Cor inicial: a primeira COM ESTOQUE. Abrir na cor esgotada é convidar a
+ * cliente a bater na parede logo no primeiro clique.
+ */
+export function EscolhaDaPeca({ product, cores }: { product: Product; cores: CorApi[] }) {
+  const inicial = useMemo(() => {
+    const comEstoque = cores.find((c) => c.estoque > 0);
+    return (comEstoque ?? cores[0])?.nome ?? null;
+  }, [cores]);
+
+  const [cor, setCor] = useState<string | null>(inicial);
+
+  const corAtual = cores.find((c) => c.nome === cor);
+
+  /**
+   * A peça vista pela cor escolhida. Sem cor (ou sem ficha ainda), fica
+   * exatamente como está hoje — o fallback importa mais que o recurso novo
+   * enquanto o cadastro de fotos não terminou.
+   */
+  const pecaDaCor: Product = useMemo(() => {
+    if (!corAtual) return product;
+    return {
+      ...product,
+      price: corAtual.preco > 0 ? corAtual.preco : product.price,
+      pixPrice: corAtual.preco > 0 ? Number((corAtual.preco * 0.95).toFixed(2)) : product.pixPrice,
+      installments: corAtual.preco > 0
+        ? { times: 12, value: Number((corAtual.preco / 12).toFixed(2)) }
+        : product.installments,
+      images: corAtual.fotos.length
+        ? corAtual.fotos.map((f) => ({ src: f.src, alt: f.alt ?? `${product.name} ${corAtual.nome}` }))
+        : product.images,
+      sizes: corAtual.tamanhos.length
+        ? corAtual.tamanhos.map((t) => ({ label: t.label, available: t.disponivel }))
+        : product.sizes,
+    };
+  }, [product, corAtual]);
+
+  return (
+    <div className="grid gap-10 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)] lg:gap-16">
+      {/* `key` força a galeria a voltar pra primeira foto ao trocar de cor —
+          sem isso a cliente escolhe MARINHO e continua vendo a 4ª foto do
+          PRETO, que era o índice em que ela estava. */}
+      <ProductGallery key={cor ?? 'unica'} images={pecaDaCor.images} name={pecaDaCor.name} />
+      <div className="lg:sticky lg:top-28 lg:self-start">
+        <BuyBox
+          product={pecaDaCor}
+          cores={cores.map((c) => ({ nome: c.nome, swatch: c.swatch, estoque: c.estoque }))}
+          corSelecionada={cor}
+          onSelecionarCor={setCor}
+        />
+      </div>
+    </div>
+  );
+}

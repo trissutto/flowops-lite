@@ -3,22 +3,25 @@
 import { useEffect, useState } from 'react';
 import { AppLink as Link } from '@/components/ui/AppLink';
 import { motion } from 'framer-motion';
-import { announcements } from '@/data/navigation';
+import { announcements as padrao } from '@/data/navigation';
 import { transition } from '@/lib/motion';
 
 /**
  * AnnouncementBar — 36px, discreta, mensagens rotativas.
- * Campanha nova = acrescentar item em `announcements` (data/navigation.ts);
- * nenhuma mudança estrutural é necessária.
+ *
+ * As frases vêm do cadastro de banners da retaguarda (slot 'tarja-topo'),
+ * entregues pelo layout. Lista vazia = cai nas frases padrão de
+ * `data/navigation.ts` — a tarja nunca fica em branco.
  */
-export function AnnouncementBar() {
+export function AnnouncementBar({ itens }: { itens?: { label: string; href: string }[] }) {
+  const announcements = itens?.length ? itens : padrao;
   const [index, setIndex] = useState(0);
 
   useEffect(() => {
     if (announcements.length <= 1) return;
     const timer = setInterval(() => setIndex((i) => (i + 1) % announcements.length), 5000);
     return () => clearInterval(timer);
-  }, []);
+  }, [announcements.length]);
 
   const current = announcements[index];
 

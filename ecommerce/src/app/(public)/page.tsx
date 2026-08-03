@@ -21,7 +21,6 @@ import {
   editorials,
   fabrics,
   fits,
-  homeHero,
   instagramPosts,
   institutionalVideo,
   looks,
@@ -31,6 +30,7 @@ import {
   testimonials,
 } from '@/data/content';
 import { featuredStores, stores } from '@/data/stores';
+import { getHeroDaHome } from '@/services/banners';
 import { buildMetadata, itemListSchema, jsonLdGraph, storeSchema } from '@/lib/seo';
 
 /**
@@ -58,7 +58,11 @@ export const metadata = buildMetadata({
   ],
 });
 
-export default function HomePage() {
+export default async function HomePage() {
+  // O hero vem do cadastro de banners da retaguarda; se não houver campanha
+  // no ar (ou o backend estiver fora), volta pro estático sem quebrar a home.
+  const hero = await getHeroDaHome();
+
   const jsonLd = jsonLdGraph(
     itemListSchema([...newArrivals, ...bestSellers], 'Destaques da home'),
     ...stores.map(storeSchema),
@@ -70,18 +74,22 @@ export default function HomePage() {
 
       {/* 01 — HERO EDITORIAL */}
       <Hero
-        image={homeHero.image}
-        eyebrow={homeHero.eyebrow}
+        image={hero.image}
+        eyebrow={hero.eyebrow}
         title={
           <>
-            {homeHero.lead}
-            <br />
-            <span className="text-primary-soft italic">{homeHero.emphasis}</span>
+            {hero.lead}
+            {hero.emphasis && (
+              <>
+                <br />
+                <span className="text-primary-soft italic">{hero.emphasis}</span>
+              </>
+            )}
           </>
         }
-        subtitle={homeHero.subtitle}
-        primaryAction={{ label: 'Conheça a coleção', href: '/novidades' }}
-        secondaryAction={{ label: 'Encontrar uma loja', href: '/lojas' }}
+        subtitle={hero.subtitle}
+        primaryAction={hero.primaria}
+        secondaryAction={hero.secundaria}
         height="fullscreen"
         align="center"
         overlay="medium"
