@@ -360,7 +360,11 @@ export class CustomersCrmService {
     const whatsapp = dto.whatsapp !== undefined ? this.normalizePhone(dto.whatsapp) : undefined;
     const phone    = dto.phone !== undefined    ? this.normalizePhone(dto.phone) : undefined;
 
-    return this.prisma.customer.update({
+    // O try/catch é o que faltava pro `erroDeEscrita` nascido em deb82e2 valer
+    // de alguma coisa: o helper existia mas ninguém chamava, e o erro real
+    // continuava saindo como 500 mudo.
+    try {
+      return await this.prisma.customer.update({
       where: { id },
       data: {
         ...(cpf !== undefined ? { cpf: cpf ?? null } : {}),
@@ -383,7 +387,10 @@ export class CustomersCrmService {
         ...(dto.inactiveReason !== undefined ? { inactiveReason: dto.inactiveReason } : {}),
         ...(dto.notes !== undefined ? { notes: dto.notes } : {}),
       },
-    });
+      });
+    } catch (e: any) {
+      this.erroDeEscrita(e, 'salvar a ficha do cliente');
+    }
   }
 
   // ─────────────────────────────────────────────────────────────────────────

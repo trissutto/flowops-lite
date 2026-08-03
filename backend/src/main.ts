@@ -4,6 +4,30 @@ import helmet from 'helmet';
 import { json, urlencoded } from 'express';
 import { AppModule } from './app.module';
 
+/**
+ * BIGINT VIRA NÚMERO NO JSON — sem isto, salvar cliente dá 500.
+ *
+ * JSON não tem BigInt. Qualquer resposta que carregue uma coluna BigInt
+ * (`customer.ltv_cents`, saldos de cashback, sequência do EAN) estoura
+ * `TypeError: Do not know how to serialize a BigInt` DEPOIS do handler — o
+ * Nest já respondeu 200 pro código, e o Express morre montando o corpo. Sai um
+ * "500 Internal server error" mudo, sem stack de negócio, sem código do
+ * Prisma.
+ *
+ * Foi exatamente o defeito do "salvar" do CRM (03/08): a gravação SEMPRE
+ * funcionou — quem morria era a resposta, porque `customer.update()` devolve a
+ * linha inteira, com `ltvCents`. Por isso até PATCH de corpo vazio dava 500, e
+ * por isso ler o cliente ia bem: a leitura passa por projeção que converte.
+ *
+ * Volta número quando cabe em inteiro seguro (o caso de 100% dos nossos
+ * campos, que são centavos) e string quando não cabe — melhor um id em texto
+ * do que um valor silenciosamente arredondado.
+ */
+(BigInt.prototype as any).toJSON = function () {
+  const n = Number(this);
+  return Number.isSafeInteger(n) ? n : this.toString();
+};
+
 // Diagnóstico de startup (aparece SEMPRE, mesmo se Nest não conseguir iniciar)
 console.log('==> [main.ts] ENTRANDO NO BOOTSTRAP');
 console.log('==> NODE_ENV =', process.env.NODE_ENV);
