@@ -261,10 +261,9 @@ export default function FotosDaCor({
   }
 
   /** Clique na foto com ferramenta ativa. */
-  function clicarNaFoto(ev: React.MouseEvent<HTMLImageElement>) {
+  async function clicarNaFoto(ev: React.MouseEvent<HTMLImageElement>, url: string) {
     if (!ferramenta) return;
-    const img = ev.currentTarget;
-    const r = img.getBoundingClientRect();
+    const r = ev.currentTarget.getBoundingClientRect();
     const fx = (ev.clientX - r.left) / r.width;
     const fy = (ev.clientY - r.top) / r.height;
 
@@ -274,10 +273,24 @@ export default function FotosDaCor({
       return;
     }
 
-    const hex = corDoPonto(img, fx, fy);
+    // A imagem NA TELA não serve pra ler pixel: sem CORS ela contamina o
+    // canvas. Carrega uma cópia paralela pedindo CORS — se o bucket permitir,
+    // lê o ponto exato; se não, cai no plano B sem estragar o que está visível.
+    const comCors = await new Promise<HTMLImageElement | null>((resolve) => {
+      const im = new Image();
+      im.crossOrigin = 'anonymous';
+      im.onload = () => resolve(im);
+      im.onerror = () => resolve(null);
+      im.src = url;
+    });
+
+    const hex = comCors ? corDoPonto(comCors, fx, fy) : null;
     if (!hex) {
       setSemCanvas(true);
-      setErro('A foto está hospedada sem permissão de leitura — use "conta-gotas da tela" ou digite o código da cor.');
+      setErro(
+        'Não consigo ler o pixel desta foto (o servidor de imagem não libera). ' +
+          'Use "Pegar cor da foto (IA)", o conta-gotas da tela, ou escolha à mão.',
+      );
       return;
     }
     onSwatchChange({ ...swatch, swatchTipo: 'cor', corHex: hex });
@@ -343,13 +356,15 @@ export default function FotosDaCor({
       >
         {fotos.map((f, i) => (
           <div key={f.id} className="relative group aspect-[3/4] rounded-lg overflow-hidden border border-slate-200 bg-slate-50">
-            {/* crossOrigin permite o conta-gotas ler o pixel quando o bucket
-                manda o cabeçalho CORS; sem ele o canvas contamina sempre. */}
+            {/* SEM crossOrigin. Medido em 03/08: o bucket R2 não manda
+                Access-Control-Allow-Origin, e com o atributo o navegador
+                RECUSA a imagem inteira — a galeria virava três ícones
+                quebrados. Exibir a foto vale mais que o conta-gotas de canvas,
+                que tem plano B (conta-gotas de tela e a leitura por IA). */}
             <img
               src={f.url}
               alt={`${refSku} ${cor}`}
-              crossOrigin="anonymous"
-              onClick={clicarNaFoto}
+              onClick={(ev) => void clicarNaFoto(ev, f.url)}
               className={`w-full h-full object-cover ${cursor}`}
             />
             {i === 0 && (
