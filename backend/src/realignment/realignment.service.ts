@@ -697,6 +697,52 @@ export class RealignmentService {
    * Sem WhatsApp, sem PDF — a filial abre o app, vê o card de alerta e vai
    * pra tela /minha-loja/realinhamento separar uma a uma.
    */
+  /**
+   * Pendências de transferência por SKU — o que sustenta o "já pedi esta
+   * peça?" da ficha do produto.
+   *
+   * Devolve toda ordem NÃO concluída (pending | in_transit) dos códigos
+   * pedidos, de QUALQUER origem (realinhamento automático, tela de
+   * realinhamento, ficha) — olhar só o que saiu de uma tela deixaria o risco
+   * de pedir em duplicidade de pé.
+   *
+   * Semântica de estoque que o front precisa respeitar:
+   *   pending    → estoque da origem AINDA NÃO baixou (baixa no envio),
+   *                então é isto que desconta do disponível.
+   *   in_transit → origem já baixou; o que falta é a ENTRADA no destino.
+   */
+  async pendenciasPorSku(skusRaw: unknown) {
+    const skus = (Array.isArray(skusRaw) ? skusRaw : [])
+      .map((s) => String(s ?? '').trim())
+      .filter(Boolean)
+      .slice(0, 500); // grade de uma REF tem dezenas; 500 é teto de segurança
+    if (!skus.length) return [];
+
+    const rows = await this.prisma.transferOrder.findMany({
+      where: {
+        codigoBipado: { in: skus },
+        realignmentStatus: { in: ['pending', 'in_transit'] },
+      },
+      select: {
+        codigoBipado: true,
+        lojaOrigemCode: true,
+        lojaDestinoCode: true,
+        qtyOrigem: true,
+        realignmentStatus: true,
+        createdAt: true,
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    return rows.map((r) => ({
+      codigo: r.codigoBipado,
+      de: r.lojaOrigemCode,
+      para: r.lojaDestinoCode,
+      qty: r.qtyOrigem,
+      status: r.realignmentStatus as 'pending' | 'in_transit',
+    }));
+  }
+
   async confirm(input: {
     plan: Array<{
       sku: string;

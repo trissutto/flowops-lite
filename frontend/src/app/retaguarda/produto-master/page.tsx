@@ -89,6 +89,22 @@ const STATUS_LABEL: Record<string, { texto: string; cor: string }> = {
 };
 
 /**
+ * Transferência JÁ AUTORIZADA e ainda não concluída — o que responde
+ * "essa peça eu já pedi?". Vem de /realignment/pendencias e cobre TODA origem
+ * (realinhamento automático, tela de realinhamento, esta ficha).
+ *
+ * `pending` = pedido, peça ainda na loja (estoque não baixou).
+ * `in_transit` = já saiu (origem já baixou; falta a entrada no destino).
+ */
+type Pendencia = {
+  codigo: string;
+  de: string;
+  para: string;
+  qty: number;
+  status: 'pending' | 'in_transit';
+};
+
+/**
  * Um movimento = UMA peça saindo de uma loja pra outra. Arrastar de novo
  * empilha outra linha; é assim que "de 1 em 1" fica literal e o desfazer
  * volta exatamente um passo.
@@ -144,10 +160,38 @@ export default function ProdutoMasterPage() {
   // Rascunho de remessa: acumula os arrastos e só vira ordem quando autoriza.
   // Arrastar erra fácil e remessa mexe em peça física e no acerto entre lojas.
   const [movimentos, setMovimentos] = useState<Movimento[]>([]);
+  /**
+   * Espelho SÍNCRONO do rascunho. A guarda de saldo não pode ler o estado do
+   * closure: dois arrastos rápidos chegam antes do re-render e os dois veem a
+   * lista velha — foi assim que 3 peças passaram com 2 disponíveis no teste.
+   * Toda mudança em `movimentos` passa por `mudarMovimentos`, que atualiza o
+   * ref na hora; a guarda lê o ref e nunca vê passado.
+   */
+  const movimentosRef = useRef<Movimento[]>([]);
+  const mudarMovimentos = useCallback((fn: (m: Movimento[]) => Movimento[]) => {
+    movimentosRef.current = fn(movimentosRef.current);
+    setMovimentos(movimentosRef.current);
+  }, []);
   const [autorizando, setAutorizando] = useState(false);
   const [aviso, setAviso] = useState<string | null>(null);
   /** Origem escolhida no modo clique (alternativa ao arrasto, serve em tablet). */
   const [origemSel, setOrigemSel] = useState<{ codigo: string; loja: string } | null>(null);
+
+  /** Transferências abertas/em trânsito dos códigos em tela. */
+  const [pendencias, setPendencias] = useState<Pendencia[]>([]);
+
+  const carregarPendencias = useCallback(async (codigos: string[]) => {
+    if (!codigos.length) { setPendencias([]); return; }
+    try {
+      setPendencias(await api<Pendencia[]>('/realignment/pendencias', {
+        method: 'POST',
+        body: JSON.stringify({ skus: codigos }),
+      }));
+    } catch {
+      // Sem pendências ninguém fica travado; só perde o marcador visual.
+      setPendencias([]);
+    }
+  }, []);
 
   /**
    * Código → sigla da loja. "03" não diz nada pra quem opera; "INDAI" diz.
@@ -155,6 +199,8 @@ export default function ProdutoMasterPage() {
    * telas mostrarem a mesma coisa.
    */
   const [lojaNomes, setLojaNomes] = useState<Map<string, string>>(new Map());
+  /** Toda mensagem e caminho usa a SIGLA — codigo so em tooltip. */
+  const sigla = useCallback((c: string) => lojaNomes.get(c) || c, [lojaNomes]);
 
   useEffect(() => {
     api<AtributosPorTipo>('/atributos-peca').then(setAtributos).catch(() => {});
@@ -185,16 +231,37 @@ export default function ProdutoMasterPage() {
       // estourar ("a is not iterable") e derrubar a tela inteira no boundary
       // do Next, com "Application error" e nada mais.
       const resp = await api<{ rows?: SkuRow[] }>(`/products-editor/search?q=${encodeURIComponent(q)}`);
-      const rows = resp?.rows ?? [];
+      let rows = resp?.rows ?? [];
+
+      // Caso BMM-100 PRETO: a busca exige TODAS as palavras, e quem digita
+      // "REF + cor" não acha nada quando a REF não tem aquela cor. A Consultar
+      // resolve a REF primeiro — aqui, sem resultado e com mais de uma
+      // palavra, tenta de novo só com a primeira e avisa o que aconteceu.
+      const palavras = q.split(/\s+/).filter(Boolean);
+      if (rows.length === 0 && palavras.length > 1) {
+        const so1 = await api<{ rows?: SkuRow[] }>(
+          `/products-editor/search?q=${encodeURIComponent(palavras[0])}`,
+        );
+        if (so1?.rows?.length) {
+          rows = so1.rows;
+          setAviso(
+            `Nada bateu com "${q}" — mostrando "${palavras[0]}". ` +
+            `Confira nas cores abaixo se "${palavras.slice(1).join(' ')}" existe nessa REF.`,
+          );
+        }
+      }
+
       setLinhas(rows);
       if (rows.length === 0) setErro(`Nada encontrado pra "${q}"`);
+      // Marca o que já tem transferência aberta — é o "já pedi?" da grade.
+      void carregarPendencias([...new Set(rows.map((r) => r.codigo))]);
     } catch (e: any) {
       setErro(e?.message || 'Busca falhou');
       setLinhas([]);
     } finally {
       setBuscando(false);
     }
-  }, [busca]);
+  }, [busca, carregarPendencias]);
 
   /**
    * Agrupa os SKUs em REF+MARCA → COR. MARCA entra na chave porque REF numérica
@@ -243,20 +310,33 @@ export default function ProdutoMasterPage() {
    */
   const moverUma = useCallback((row: SkuRow, de: string, para: string) => {
     if (de === para) return;
+    // Já prometido a uma remessa ABERTA também sai do disponível — é a raiz do
+    // "pedi duas vezes": o estoque só baixa no envio, mas a peça já tem dono.
+    // (in_transit não desconta: a origem já baixou quando saiu.)
+    const prometidas = pendencias
+      .filter((p) => p.codigo === row.codigo && p.de === de && p.status === 'pending')
+      .reduce((s, p) => s + p.qty, 0);
+    // Lê o REF, não o estado: dois arrastos rápidos não podem ver o passado.
+    const rascunho = movimentosRef.current;
     const saldoOrigem = (row.estoqueLojas?.[de] ?? 0)
-      - movimentos.filter((m) => m.codigo === row.codigo && m.de === de).length
-      + movimentos.filter((m) => m.codigo === row.codigo && m.para === de).length;
+      - prometidas
+      - rascunho.filter((m) => m.codigo === row.codigo && m.de === de).length
+      + rascunho.filter((m) => m.codigo === row.codigo && m.para === de).length;
     if (saldoOrigem <= 0) {
-      setAviso(`${row.tamanho} não tem mais saldo na loja ${de}`);
+      setAviso(
+        prometidas > 0
+          ? `${row.tamanho} em ${sigla(de)}: o que resta já está prometido a uma transferência aberta`
+          : `${row.tamanho} não tem mais saldo em ${sigla(de)}`,
+      );
       return;
     }
     setAviso(null);
-    setMovimentos((atuais) => [...atuais, {
+    mudarMovimentos((atuais) => [...atuais, {
       codigo: row.codigo, ref: row.ref, cor: row.cor, tamanho: row.tamanho,
       desc: row.descricao, de, para,
       estoqueOrigemAntes: row.estoqueLojas?.[de] ?? 0,
     }]);
-  }, [movimentos]);
+  }, [pendencias, mudarMovimentos, sigla]);
 
   /** Clique: primeiro na origem, depois no destino. Arrasto não vai em tablet. */
   const aoClicarCelula = useCallback((row: SkuRow, loja: string) => {
@@ -361,9 +441,13 @@ export default function ProdutoMasterPage() {
         method: 'POST',
         body: JSON.stringify({ plan, note: 'Realinhamento pela ficha do produto' }),
       });
-      setMovimentos([]);
+      mudarMovimentos(() => []);
       setOrigemSel(null);
       setAviso(`${plan.length} ordem(ns) de separação gerada(s).`);
+      // O que acabou de ser autorizado já entra como "pedido" na grade — é a
+      // resposta ao "como sei que já pedi?": o marcador fica até a
+      // transferência terminar.
+      void carregarPendencias([...new Set(linhas.map((l) => l.codigo))]);
     } catch (e: any) {
       setAviso(e?.message || 'Não consegui gerar as ordens');
     } finally {
@@ -539,6 +623,7 @@ export default function ProdutoMasterPage() {
                             ajustes={ajustes}
                             onAjustar={definirAjuste}
                             lojaNomes={lojaNomes}
+                            pendencias={pendencias}
                           />
                           <FichaDaCor
                             ref_={prod.ref}
@@ -571,7 +656,7 @@ export default function ProdutoMasterPage() {
                     {movimentos.length} peça(s) para mover — ainda não enviado
                   </p>
                   <p className="text-[11px] text-slate-500 truncate">
-                    {[...new Set(movimentos.map((m) => `${m.de}→${m.para}`))].join(' · ')}
+                    {[...new Set(movimentos.map((m) => `${sigla(m.de)}→${sigla(m.para)}`))].join(' · ')}
                   </p>
                 </>
               )}
@@ -586,14 +671,14 @@ export default function ProdutoMasterPage() {
               <>
                 <button
                   type="button"
-                  onClick={() => { setMovimentos((m) => m.slice(0, -1)); setAviso(null); }}
+                  onClick={() => { mudarMovimentos((m) => m.slice(0, -1)); setAviso(null); }}
                   className="text-xs font-bold px-3 py-2 rounded-lg border border-slate-300 hover:bg-slate-50"
                 >
                   Desfazer
                 </button>
                 <button
                   type="button"
-                  onClick={() => { setMovimentos([]); setOrigemSel(null); setAviso(null); }}
+                  onClick={() => { mudarMovimentos(() => []); setOrigemSel(null); setAviso(null); }}
                   className="text-xs font-bold px-3 py-2 rounded-lg border border-slate-300 hover:bg-slate-50"
                 >
                   Descartar tudo
@@ -787,6 +872,7 @@ function FichaComum({
 
 function GradeEstoque({
   skus, movimentos, origemSel, onMover, onClicarCelula, modo, ajustes, onAjustar, lojaNomes,
+  pendencias,
 }: {
   skus: SkuRow[];
   movimentos: Movimento[];
@@ -797,6 +883,7 @@ function GradeEstoque({
   ajustes: Record<string, number>;
   onAjustar: (row: SkuRow, loja: string, valor: number) => void;
   lojaNomes: Map<string, string>;
+  pendencias: Pendencia[];
 }) {
   const lojas = useMemo(() => {
     const s = new Set<string>();
@@ -804,12 +891,35 @@ function GradeEstoque({
     return [...s].sort();
   }, [skus]);
 
-  /** Saldo já com o rascunho aplicado, e o delta pra decidir a cor. */
+  /**
+   * As três camadas da célula:
+   *   base      = estoque real
+   *   rascunho  = arrastos ainda não autorizados (delta)
+   *   pendência = transferência já AUTORIZADA e não concluída
+   *
+   * `pending` desconta do disponível (a peça ainda está aqui, mas tem dono);
+   * `in_transit` NÃO desconta na origem (o estoque já baixou no envio) — na
+   * direção do destino ele aparece como "a caminho".
+   */
   function saldo(row: SkuRow, loja: string) {
     const base = row.estoqueLojas?.[loja] ?? 0;
     const saiu = movimentos.filter((m) => m.codigo === row.codigo && m.de === loja).length;
     const entrou = movimentos.filter((m) => m.codigo === row.codigo && m.para === loja).length;
-    return { valor: base - saiu + entrou, delta: entrou - saiu };
+
+    const minhas = pendencias.filter((p) => p.codigo === row.codigo);
+    const soma = (lista: Pendencia[]) => lista.reduce((s, p) => s + p.qty, 0);
+    const pedidoSai = soma(minhas.filter((p) => p.de === loja && p.status === 'pending'));
+    const pedidoChega = soma(minhas.filter((p) => p.para === loja && p.status === 'pending'));
+    const ruaChega = soma(minhas.filter((p) => p.para === loja && p.status === 'in_transit'));
+
+    return {
+      valor: base - pedidoSai - saiu + entrou,
+      base,
+      delta: entrou - saiu,
+      pedidoSai,
+      pedidoChega,
+      ruaChega,
+    };
   }
 
   return (
@@ -835,7 +945,7 @@ function GradeEstoque({
               <tr key={r.codigo} className="border-t border-slate-100">
                 <td className="px-2 py-1.5 font-bold text-slate-700">{r.tamanho}</td>
                 {lojas.map((l) => {
-                  const { valor, delta } = saldo(r, l);
+                  const { valor, base, delta, pedidoSai, pedidoChega, ruaChega } = saldo(r, l);
                   const selecionada = origemSel?.codigo === r.codigo && origemSel.loja === l;
 
                   if (modo === 'ajustar') {
@@ -858,9 +968,16 @@ function GradeEstoque({
                     );
                   }
                   // Vermelho onde saiu, azul onde entrou — o preview pedido.
+                  const temPendencia = pedidoSai > 0 || pedidoChega > 0 || ruaChega > 0;
                   const cor = delta < 0 ? 'text-rose-600 font-bold'
                     : delta > 0 ? 'text-blue-600 font-bold'
                     : valor ? 'text-slate-800' : 'text-slate-300';
+                  const dicas = [
+                    valor > 0 ? 'Arraste (ou clique aqui e depois no destino)' : '',
+                    pedidoSai > 0 ? `${pedidoSai} já pedida(s) daqui — aguardando envio (disponível ${valor} de ${base})` : '',
+                    pedidoChega > 0 ? `${pedidoChega} pedida(s) pra cá — aguardando envio` : '',
+                    ruaChega > 0 ? `${ruaChega} a caminho daqui (já saiu da origem)` : '',
+                  ].filter(Boolean).join(' · ');
                   return (
                     <td
                       key={l}
@@ -879,19 +996,32 @@ function GradeEstoque({
                         } catch { /* payload de outro lugar — ignora */ }
                       }}
                       onClick={() => onClicarCelula(r, l)}
-                      title={valor > 0 ? 'Arraste (ou clique aqui e depois no destino)' : undefined}
+                      title={dicas || undefined}
                       className={`px-2 py-1.5 text-center tabular-nums cursor-pointer select-none hover:bg-violet-50 ${cor} ${
                         selecionada ? 'ring-2 ring-violet-500 ring-inset bg-violet-50' : ''
                       }`}
                     >
-                      {/* Zero vira "·" só quando não houve movimento — com
-                          delta, mostrar "0" deixa claro que zerou de propósito
-                          (senão sai "·-3", que parece defeito). */}
-                      {delta !== 0 ? valor : (valor || '·')}
+                      {/* Zero vira "·" só quando não houve movimento nem
+                          pendência — com marcação, "0" deixa claro que zerou
+                          de propósito (senão sai "·-3", que parece defeito). */}
+                      {delta !== 0 || temPendencia ? valor : (valor || '·')}
+                      {/* Rascunho (forte): o que VOCÊ está montando agora. */}
                       {delta !== 0 && (
                         <span className="ml-0.5 text-[9px] align-super">
                           {delta > 0 ? `+${delta}` : delta}
                         </span>
+                      )}
+                      {/* Já autorizado (âmbar): pedido, aguardando envio.
+                          Some sozinho quando a remessa conclui ou cancela. */}
+                      {pedidoSai > 0 && (
+                        <span className="ml-0.5 text-[9px] align-super font-bold text-amber-600">-{pedidoSai}</span>
+                      )}
+                      {pedidoChega > 0 && (
+                        <span className="ml-0.5 text-[9px] align-super font-bold text-amber-600">+{pedidoChega}</span>
+                      )}
+                      {/* Na rua (violeta): já saiu da origem, falta chegar. */}
+                      {ruaChega > 0 && (
+                        <span className="ml-0.5 text-[9px] align-super font-bold text-violet-600">+{ruaChega}</span>
                       )}
                     </td>
                   );
@@ -906,9 +1036,12 @@ function GradeEstoque({
         {modo === 'mover' ? (
           <>
             Arraste um número de uma loja para outra para mover 1 peça (ou clique na
-            origem e depois no destino). <span className="text-rose-600">Vermelho</span>{' '}
-            saiu · <span className="text-blue-600">azul</span> entrou. Nada acontece de
-            verdade até autorizar.
+            origem e depois no destino). <span className="text-rose-600">Vermelho</span>/
+            <span className="text-blue-600">azul</span> = rascunho (não autorizado) ·{' '}
+            <span className="text-amber-600 font-bold">âmbar</span> = já pedido, aguardando
+            envio · <span className="text-violet-600 font-bold">violeta</span> = a caminho.
+            O número da célula já desconta o que está pedido — a marcação some quando a
+            transferência conclui.
           </>
         ) : (
           <>
