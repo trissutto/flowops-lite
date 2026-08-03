@@ -154,6 +154,54 @@ export class RealignmentShipmentService {
   }
 
   /**
+   * Remessas JÁ FECHADAS que ainda não têm etiqueta gerada.
+   *
+   * A tela da loja só mostrava as ABERTAS (amarelas) e, logo depois de
+   * fechar, um painel com "Gerar envio Correios". Quem fechasse a remessa e
+   * saísse da tela — ou fechasse no outro PC da loja, ou antes deste painel
+   * existir — perdia o caminho pra etiqueta: a remessa some das amarelas ao
+   * fechar e não reaparece em lugar nenhum. Foi o que aconteceu em Suzano:
+   * peças enviadas no dia, nenhuma caixa amarela e nenhum jeito de imprimir.
+   *
+   * Aqui elas voltam pra tela enquanto faltar a etiqueta. Sai da lista sozinha
+   * quando `envioGeneratedAt` é preenchido — lista de trabalho, não histórico.
+   */
+  async listPendingLabelForOrigin(storeId: string) {
+    const store = await this.prisma.store.findUnique({
+      where: { id: storeId },
+      select: { code: true, name: true } as any,
+    });
+    if (!store) throw new ForbiddenException('Loja inválida');
+
+    const shipments = await (this.prisma as any).realignmentShipment.findMany({
+      where: {
+        fromStoreCode: (store as any).code,
+        status: 'in_transit',
+        envioGeneratedAt: null,
+        // Envio por conta da loja não passa pelos Correios — cobrar etiqueta
+        // dela seria pedir uma coisa que não existe.
+        NOT: { transportMode: 'proprio' },
+      },
+      orderBy: { sentAt: 'desc' },
+      take: 20,
+    });
+
+    return Promise.all(
+      shipments.map(async (s: any) => {
+        const items = await this.prisma.transferOrder.findMany({
+          where: { shipmentId: s.id } as any,
+          select: { id: true, qtyOrigem: true } as any,
+        });
+        return {
+          ...s,
+          items,
+          totalPecas: (items as any[]).reduce((n, i) => n + (i.qtyOrigem || 1), 0),
+        };
+      }),
+    );
+  }
+
+  /**
    * Adiciona uma TransferOrder a uma remessa (criando ou reutilizando a
    * remessa aberta do par origem→destino).
    *

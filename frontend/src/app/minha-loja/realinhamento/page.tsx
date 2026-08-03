@@ -138,6 +138,8 @@ export default function MinhaLojaRealinhamentoPage() {
   // OPEN do par origem→destino. Aqui listamos essas remessas pra ela poder
   // FECHAR e ENVIAR (baixa Giga em batch + manda alerta pra loja destino).
   const [openShipments, setOpenShipments] = useState<any[]>([]);
+  // Fechadas e ainda sem etiqueta — some da lista sozinha quando a etiqueta sai.
+  const [pendingLabel, setPendingLabel] = useState<any[]>([]);
   const [closingShipmentId, setClosingShipmentId] = useState<string | null>(null);
   /** Remessa fechada agora — pra gerar etiqueta/nota sem sair desta tela. */
   const [recemEnviada, setRecemEnviada] = useState<{ id: string; code: string; qty: number } | null>(null);
@@ -186,6 +188,24 @@ export default function MinhaLojaRealinhamentoPage() {
     } catch {
       // silencioso — endpoint pode não existir ainda em deploys antigos
       setOpenShipments([]);
+    }
+  }, []);
+
+  /**
+   * Caixas já fechadas e ainda sem etiqueta.
+   *
+   * Fechar a remessa a tirava das amarelas, e o botão de gerar etiqueta só
+   * existia no painel que aparece logo depois de fechar. Fechou e saiu da tela
+   * — ou fechou no outro PC da loja — e a caixa ficava pronta, sem caminho
+   * nenhum pra postar. Era o caso de Suzano: 20 peças enviadas no dia, nenhuma
+   * caixa amarela, nada pra clicar.
+   */
+  const loadPendingLabel = useCallback(async () => {
+    try {
+      const data = await api<any[]>('/realignment/shipments/pendentes-etiqueta');
+      setPendingLabel(Array.isArray(data) ? data : []);
+    } catch {
+      setPendingLabel([]);
     }
   }, []);
 
@@ -320,13 +340,13 @@ export default function MinhaLojaRealinhamentoPage() {
       // que permite gerar etiqueta e nota SEM ir até a Retaguarda: quem acabou
       // de fechar a caixa é quem vai postar, e é agora que ela precisa do papel.
       setRecemEnviada({ id: shipmentId, code: res.code, qty: res.totalQty });
-      await Promise.all([loadOpenShipments(), loadItems(), loadSentItems()]);
+      await Promise.all([loadOpenShipments(), loadPendingLabel(), loadItems(), loadSentItems()]);
     } catch (e: any) {
       alert(`Erro ao fechar remessa: ${e?.message || e}`);
     } finally {
       setClosingShipmentId(null);
     }
-  }, [pushToast, loadOpenShipments, loadItems, loadSentItems]);
+  }, [pushToast, loadOpenShipments, loadPendingLabel, loadItems, loadSentItems]);
 
   // Estado do modal de problemas detectados pelo precheck
   const [problemasShipment, setProblemasShipment] = useState<{
@@ -361,7 +381,7 @@ export default function MinhaLojaRealinhamentoPage() {
         }
         return { ...prev, problemas: novosProblemas };
       });
-      await Promise.all([loadOpenShipments(), loadItems()]);
+      await Promise.all([loadOpenShipments(), loadPendingLabel(), loadItems()]);
     } catch (e: any) {
       alert(`Erro ao remover item: ${e?.message || e}`);
     }
@@ -416,7 +436,7 @@ export default function MinhaLojaRealinhamentoPage() {
 
     setBatchRemoving(null);
     setProblemasShipment(null);
-    await Promise.all([loadOpenShipments(), loadItems()]);
+    await Promise.all([loadOpenShipments(), loadPendingLabel(), loadItems()]);
 
     if (falhas.length === 0) {
       pushToast(`✅ ${removidos} item(s) removido(s) da remessa. Os outros ficaram intactos.`);
@@ -441,7 +461,7 @@ export default function MinhaLojaRealinhamentoPage() {
         }
         setMe(profile);
         // Carrega as 3 listas em paralelo — pendentes + enviados hoje + remessas abertas.
-        await Promise.all([loadItems(), loadSentItems(), loadOpenShipments()]);
+        await Promise.all([loadItems(), loadSentItems(), loadOpenShipments(), loadPendingLabel()]);
       } catch (err: any) {
         setError(err?.message ?? 'Erro ao carregar');
         if (String(err?.message ?? '').startsWith('401')) router.push('/login');
@@ -732,7 +752,7 @@ export default function MinhaLojaRealinhamentoPage() {
             <Printer className="w-4 h-4" />
           </button>
           <button
-            onClick={() => { loadItems(); loadSentItems(); loadOpenShipments(); }}
+            onClick={() => { loadItems(); loadSentItems(); loadOpenShipments(); loadPendingLabel(); }}
             className="no-print p-2 hover:bg-white/15 rounded-lg transition backdrop-blur"
             title="Atualizar"
           >
@@ -837,6 +857,35 @@ export default function MinhaLojaRealinhamentoPage() {
             qty={recemEnviada.qty}
             onFechar={() => setRecemEnviada(null)}
           />
+        )}
+
+        {/* ── FECHADAS E SEM ETIQUETA ──
+            Caixa pronta, lacrada, esperando papel. Some daqui sozinha assim
+            que a etiqueta sai — é lista de trabalho, não histórico.
+
+            Sem isto, fechar a remessa era um caminho sem volta: ela sumia das
+            amarelas e o botão de gerar etiqueta só existia no painel que
+            aparece logo depois de fechar. Quem fechasse e saísse da tela (ou
+            fechasse no outro PC da loja) ficava com a caixa pronta e nada pra
+            clicar — foi o que aconteceu em Suzano. */}
+        {pendingLabel.filter((s) => s.id !== recemEnviada?.id).length > 0 && (
+          <div className="space-y-3">
+            <div className="flex items-center gap-2 text-sm font-bold text-rose-900">
+              <AlertCircle className="w-4 h-4" />
+              Caixa fechada esperando etiqueta
+            </div>
+            {pendingLabel
+              .filter((s) => s.id !== recemEnviada?.id)
+              .map((s) => (
+                <EnvioDaRemessa
+                  key={s.id}
+                  shipmentId={s.id}
+                  code={s.code}
+                  qty={s.totalPecas ?? 0}
+                  destino={s.toStoreName || s.toStoreCode}
+                />
+              ))}
+          </div>
         )}
 
         {openShipments.length > 0 && (
@@ -1316,7 +1365,7 @@ export default function MinhaLojaRealinhamentoPage() {
                         { method: 'POST', body: '{}' },
                       );
                       pushToast('Remessa ' + res.code + ' FORCADA e enviada (' + res.totalQty + ' pecas).');
-                      await Promise.all([loadOpenShipments(), loadItems(), loadSentItems()]);
+                      await Promise.all([loadOpenShipments(), loadPendingLabel(), loadItems(), loadSentItems()]);
                     } catch (e: any) {
                       alert('Erro ao forcar fechamento: ' + (e?.message || e));
                     } finally {
@@ -1637,12 +1686,16 @@ function RealignCell({
  * config fiscal das lojas, a mesma que a NF-e usa.
  */
 function EnvioDaRemessa({
-  shipmentId, code, qty, onFechar,
+  shipmentId, code, qty, onFechar, destino,
 }: {
   shipmentId: string;
   code: string;
   qty: number;
-  onFechar: () => void;
+  /** Só a caixa que ACABOU de fechar pode ser dispensada. A que ficou
+   *  pendente de etiqueta some sozinha quando a etiqueta sai — dar um "fechar"
+   *  ali seria oferecer esconder trabalho que ainda existe. */
+  onFechar?: () => void;
+  destino?: string;
 }) {
   const [ocupado, setOcupado] = useState<'gerar' | 'docs' | null>(null);
   const [rastreio, setRastreio] = useState<string | null>(null);
@@ -1699,6 +1752,7 @@ function EnvioDaRemessa({
         <div className="min-w-0">
           <p className="text-sm font-black text-emerald-900">
             Remessa {code} enviada · {qty} peça(s)
+            {destino && <span className="font-bold"> · pra {destino}</span>}
           </p>
           <p className="text-xs text-emerald-800/80 mt-0.5">
             Agora gere a etiqueta dos Correios e imprima junto com a nota — sem sair desta tela.
@@ -1726,13 +1780,15 @@ function EnvioDaRemessa({
             {ocupado === 'docs' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Printer className="w-4 h-4" />}
             Etiqueta + NF
           </button>
-          <button
-            type="button"
-            onClick={onFechar}
-            className="text-emerald-800/70 hover:text-emerald-900 px-2 py-2.5 text-xs font-bold"
-          >
-            fechar
-          </button>
+          {onFechar && (
+            <button
+              type="button"
+              onClick={onFechar}
+              className="text-emerald-800/70 hover:text-emerald-900 px-2 py-2.5 text-xs font-bold"
+            >
+              fechar
+            </button>
+          )}
         </div>
       </div>
       {msg && (
