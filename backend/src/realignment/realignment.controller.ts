@@ -464,6 +464,22 @@ export class RealignmentController {
   }
 
   /**
+   * Remessas já fechadas que ainda estão sem etiqueta dos Correios.
+   * GET /realignment/shipments/pendentes-etiqueta · filial
+   *
+   * Existe porque fechar a remessa a tirava das amarelas e a etiqueta só era
+   * alcançável no painel que aparece logo depois de fechar. Fechou e saiu da
+   * tela (ou fechou no outro PC), a caixa ficava pronta e sem como postar.
+   */
+  @Get('shipments/pendentes-etiqueta')
+  listPendingLabel(@Req() req: any) {
+    const role = req?.user?.role;
+    const storeId = req?.user?.storeId;
+    if (role !== 'store' || !storeId) return [];
+    return this.shipment.listPendingLabelForOrigin(storeId);
+  }
+
+  /**
    * Lista remessas chegando na loja destino (status=in_transit).
    * GET /realignment/shipments/incoming · filial
    */
