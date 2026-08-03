@@ -736,14 +736,32 @@ export default function MinhaLojaRealinhamentoPage() {
       });
   }, [currentItems]);
 
+  /** Caixa aberta de cada destino, indexada pelo código da loja. */
+  const caixaDoDestino = useMemo(() => {
+    const m: Record<string, any> = {};
+    for (const s of openShipments) m[s.toStoreCode] = s;
+    return m;
+  }, [openShipments]);
+
   /**
-   * Caixa aberta é assunto da aba AMARELA, e só dela.
+   * Caixa em montagem que NÃO tem grade na tela — cartão próprio só pra essa.
    *
-   * Antes eu tinha pendurado as ações da caixa no cabeçalho da pilha verde, e
-   * o resultado foi a mesma caixa nas duas abas. A caixa está EM MONTAGEM
-   * enquanto não fecha — o lugar dela é junto do trabalho que ainda falta.
+   * A caixa com grade mostra as ações no cabeçalho DELA: é um card por
+   * destino, com a grade cor×tamanho embaixo, porque a caixa aberta continua
+   * recebendo peça e a pessoa precisa ver o que falta pegar (decisão do dono:
+   * "toda caixa que estiver em pendentes fica no formato da grade, pois
+   * podemos ainda inserir peças"). Tabela plana não serve pra isso — não dá
+   * pra bipar nela.
+   *
+   * Sobra o cartão simples pra caixa que ficou aberta de OUTRO DIA: as peças
+   * dela não estão nos enviados de hoje, então não têm grade. Sem o cartão,
+   * ela ficaria aberta pra sempre sem ninguém achar o "Fechar e enviar".
    */
-  const caixasEmMontagem = view === 'pending' ? openShipments : [];
+  const caixasEmMontagem = useMemo(() => {
+    if (view !== 'pending') return [];
+    const comGrade = new Set(byDestination.map((d) => d.code));
+    return openShipments.filter((s) => !comGrade.has(s.toStoreCode));
+  }, [view, openShipments, byDestination]);
 
   const totalPending = items.length;
   const totalUnits = useMemo(() => items.reduce((a, it) => a + it.qtyOrigem, 0), [items]);
@@ -1153,6 +1171,60 @@ export default function MinhaLojaRealinhamentoPage() {
                     }`}
                   />
                 </button>
+
+                {/* A CAIXA daquele destino, colada na grade.
+                    Um card por destino: cabeçalho com a caixa e as ações, grade
+                    cor×tamanho embaixo. A caixa aberta continua recebendo peça,
+                    então o que a pessoa precisa ver é o que FALTA pegar — e
+                    isso é a grade, não uma tabela plana onde não dá pra bipar.
+                    Fora do <button> do cabeçalho de propósito: botão dentro de
+                    botão não é HTML válido e o clique vira loteria. */}
+                {view === 'pending' && caixaDoDestino[d.code] && (
+                  <div className="no-print bg-amber-50 border-b-2 border-amber-200 px-4 py-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-mono text-sm font-black text-amber-900">
+                        {caixaDoDestino[d.code].code}
+                      </span>
+                      <span className="text-[10px] bg-amber-200 text-amber-900 px-2 py-0.5 rounded font-bold uppercase">
+                        aberta
+                      </span>
+                      <span className="text-xs text-amber-800/80">
+                        {(caixaDoDestino[d.code].items || []).length} item(s) na caixa
+                      </span>
+                      <div className="flex flex-wrap gap-2 ml-auto">
+                        <button
+                          type="button"
+                          onClick={() => handleDownloadPdf(caixaDoDestino[d.code].id, caixaDoDestino[d.code].code)}
+                          className="bg-white hover:bg-amber-100 text-amber-900 border-2 border-amber-400 px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5"
+                        >
+                          <FileText className="w-4 h-4" /> PDF
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handlePrintRemessa(caixaDoDestino[d.code].id, caixaDoDestino[d.code].code)}
+                          className="bg-amber-100 hover:bg-amber-200 text-amber-900 border-2 border-amber-400 px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5"
+                        >
+                          <Printer className="w-4 h-4" /> Imprimir
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleCloseShipment(caixaDoDestino[d.code].id, caixaDoDestino[d.code].code)}
+                          disabled={closingShipmentId === caixaDoDestino[d.code].id}
+                          className="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded-xl text-sm font-black flex items-center gap-2 disabled:opacity-50"
+                        >
+                          {closingShipmentId === caixaDoDestino[d.code].id
+                            ? <Loader2 className="w-4 h-4 animate-spin" />
+                            : <Send className="w-4 h-4" />}
+                          Fechar e enviar
+                        </button>
+                      </div>
+                    </div>
+                    <p className="text-[11px] text-amber-900/70 mt-1.5 leading-snug">
+                      As <b className="text-emerald-700">verdes</b> já estão na caixa · as claras
+                      ainda faltam pegar. Dá pra <b>reabrir</b> depois pela aba Enviados.
+                    </p>
+                  </div>
+                )}
 
                 {/* Grupos por REF — só renderiza quando aberto */}
                 {isOpen && (
