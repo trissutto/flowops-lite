@@ -5,6 +5,7 @@ import { Heart, MapPin, MessageCircle, Ruler, ShoppingBag, Sparkles, Star, Truck
 import { Button } from '@/components/ui/Button';
 import { SizePill } from '@/components/ui/Choice';
 import { FitAssistant } from '@/components/fit/FitAssistant';
+import { ChamarConsultora } from '@/components/chat/AssistenteWidget';
 import { ProductBadgeTag } from '@/components/ui/Badge';
 import { useToast } from '@/components/feedback/ToastProvider';
 import { useCartStore } from '@/store/cart';

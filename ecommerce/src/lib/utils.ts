@@ -1,5 +1,37 @@
 import { type ClassValue, clsx } from 'clsx';
-import { twMerge } from 'tailwind-merge';
+import { extendTailwindMerge } from 'tailwind-merge';
+
+/**
+ * ⚠️ O merge PRECISA conhecer nossos tokens — senão come classe boa.
+ *
+ * `text-*` no Tailwind serve pra DUAS coisas: tamanho de fonte (`text-button`)
+ * e cor (`text-light`). O tailwind-merge separa as duas pelo nome, mas só
+ * conhece os nomes DELE: diante de dois tokens nossos ele assume que são do
+ * mesmo grupo e mantém só o último.
+ *
+ * Resultado real (medido em produção, 03/08): o botão "Adicionar à sacola"
+ * saía `bg-ink text-light` do componente e chegava ao DOM como `bg-ink` +
+ * `text-button` — texto preto sobre fundo preto, um retângulo cego. Valia
+ * pra TODO botão com cor própria, não só esse.
+ *
+ * Declarando os grupos, `text-button` e `text-light` voltam a conviver.
+ */
+const FONT_SIZES = ['display', 'h1', 'h2', 'h3', 'h4', 'body', 'body-lg', 'button', 'small', 'caption'];
+const CORES = [
+  'ink', 'ink-soft', 'ink-muted', 'light', 'dark', 'background', 'surface', 'surface-alt',
+  'border', 'border-strong', 'champagne', 'primary', 'primary-soft', 'primary-strong',
+  'primary-wash', 'secondary', 'secondary-soft', 'secondary-wash', 'accent', 'accent-wash',
+  'success', 'success-strong', 'warning', 'danger', 'info', 'muted',
+];
+
+const twMerge = extendTailwindMerge({
+  extend: {
+    classGroups: {
+      'font-size': [{ text: FONT_SIZES }],
+      'text-color': [{ text: CORES }],
+    },
+  },
+});
 
 /**
  * Concatena classes resolvendo conflitos do Tailwind
