@@ -20,7 +20,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Camera, Crop, Loader2, Pipette, Sparkles, Star, Trash2 } from 'lucide-react';
-import { api } from '@/lib/api';
+import { api, API_URL } from '@/lib/api';
 
 export const MAX_FOTOS_POR_COR = 6;
 
@@ -281,12 +281,15 @@ export default function FotosDaCor({
     // A imagem NA TELA não serve pra ler pixel: sem CORS ela contamina o
     // canvas. Carrega uma cópia paralela pedindo CORS — se o bucket permitir,
     // lê o ponto exato; se não, cai no plano B sem estragar o que está visível.
+    // Passa pela NOSSA API: o R2 não manda cabeçalho CORS e o canvas se recusa
+    // a ler a imagem. O endpoint devolve o mesmo arquivo, com CORS.
+    const viaApi = `${API_URL}/api/public/foto/pixel?url=${encodeURIComponent(url)}`;
     const comCors = await new Promise<HTMLImageElement | null>((resolve) => {
       const im = new Image();
       im.crossOrigin = 'anonymous';
       im.onload = () => resolve(im);
       im.onerror = () => resolve(null);
-      im.src = url;
+      im.src = viaApi;
     });
 
     const hex = comCors ? corDoPonto(comCors, fx, fy) : null;
