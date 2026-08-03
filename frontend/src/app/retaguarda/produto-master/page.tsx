@@ -886,10 +886,14 @@ function GradeEstoque({
   pendencias: Pendencia[];
 }) {
   const lojas = useMemo(() => {
-    const s = new Set<string>();
+    // TODAS as lojas cadastradas, mesmo zeradas (pedido do dono 03/08) —
+    // mesma regra do editor de produtos. Coluna vazia é DESTINO válido: sem
+    // ela não dá pra arrastar peça pra loja que ainda não tem essa cor.
+    const s = new Set<string>(lojaNomes.keys());
+    if (!s.size) for (const c of ['01', '02', '03', '05', '06', '08', '10', '15', '17', '18']) s.add(c);
     for (const r of skus) for (const l of Object.keys(r.estoqueLojas ?? {})) s.add(l);
     return [...s].sort();
-  }, [skus]);
+  }, [skus, lojaNomes]);
 
   /**
    * As três camadas da célula:
