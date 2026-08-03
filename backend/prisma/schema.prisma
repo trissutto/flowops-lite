@@ -4573,6 +4573,41 @@ model SiteChat {
   @@map("site_chats")
 }
 
+/// IMPORTAÇÃO EM LOTE DAS FOTOS DO SITE ANTIGO.
+///
+/// O estado do lote mora no BANCO, e não na memória do processo, por uma lição
+/// cara de 03/08: deploy reinicia o backend em ~30s e mata o que estava em
+/// andamento. Job em memória morreria no meio e ninguém saberia até alguém
+/// reparar que faltou foto. Aqui a retomada é automática — o cron pega o job
+/// aberto de onde parou.
+///
+/// `refs` é a fila completa e `indice` o cursor. Reprocessar é inofensivo: a
+/// importação pula cor que já tem foto.
+model FotoImportJob {
+  id           String   @id @default(uuid())
+  /// 'rodando' | 'concluido' | 'cancelado'
+  status       String   @default("rodando")
+
+  /// JSON: lista de REFs a processar, na ordem.
+  refs         String   @db.Text
+  indice       Int      @default(0)
+  total        Int      @default(0)
+
+  fotos        Int      @default(0)
+  bolinhas     Int      @default(0)
+  refsComFoto  Int      @default(0) @map("refs_com_foto")
+  /// JSON: [{ ref, motivo }] — o que não deu certo, pra revisão manual.
+  problemas    String?  @db.Text
+
+  refAtual     String?  @map("ref_atual")
+  criadoPor    String?  @map("criado_por")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@index([status, updatedAt])
+  @@map("foto_import_jobs")
+}
+
 /// BANNER DA VITRINE — o que a loja troca sozinha, sem deploy.
 ///
 /// Até 03/08/2026 o hero da home, a tarja do topo e as faixas editoriais eram

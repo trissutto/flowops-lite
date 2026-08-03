@@ -525,6 +525,8 @@ export default function ProdutoMasterPage() {
         </p>
       )}
 
+      <ImportarTudo />
+
       <div className="space-y-2">
         {porRef.map((grupo) => {
           const abertaComum = refAberta === grupo.chave;
@@ -1265,6 +1267,132 @@ function ImportarFotosDoSite({ ref_, onImportou }: { ref_: string; onImportou: (
           )}
         </p>
       )}
+    </div>
+  );
+}
+
+/* ─────────────── Importar TUDO (lote em segundo plano) ─────────────── */
+
+type StatusLote = {
+  existe: boolean;
+  status?: 'rodando' | 'concluido' | 'cancelado';
+  total?: number;
+  processadas?: number;
+  restantes?: number;
+  fotos?: number;
+  bolinhas?: number;
+  refsComFoto?: number;
+  refAtual?: string | null;
+  problemas?: { ref: string; motivo: string }[];
+};
+
+/**
+ * Puxa o acervo INTEIRO do site antigo — foto, gravação e bolinha — sem
+ * ninguém ficar clicando REF por REF.
+ *
+ * O trabalho roda no servidor, aos poucos: esta tela só ABRE o lote e depois
+ * acompanha. Pode fechar o navegador, cair a internet, sair o deploy — o lote
+ * continua de onde parou, porque o cursor está no banco e não nesta página.
+ */
+function ImportarTudo() {
+  const [status, setStatus] = useState<StatusLote | null>(null);
+  const [erro, setErro] = useState<string | null>(null);
+  const [abrindo, setAbrindo] = useState(false);
+
+  const consultar = useCallback(async () => {
+    try {
+      setStatus(await api<StatusLote>('/product-photos/importar-tudo/status'));
+    } catch {
+      /* silencioso: é um poll, não vale poluir a tela */
+    }
+  }, []);
+
+  useEffect(() => {
+    void consultar();
+    // Enquanto roda, acompanha de perto; parado, quase não incomoda o servidor.
+    const t = setInterval(() => void consultar(), status?.status === 'rodando' ? 5000 : 20000);
+    return () => clearInterval(t);
+  }, [consultar, status?.status]);
+
+  async function comecar() {
+    if (!confirm('Importar as fotos do site antigo para TODAS as REFs com estoque que ainda não têm foto?\n\nRoda em segundo plano, aos poucos, e pode ser cancelado.')) return;
+    setAbrindo(true);
+    setErro(null);
+    try {
+      setStatus(await api<StatusLote>('/product-photos/importar-tudo', {
+        method: 'POST',
+        body: JSON.stringify({ apenasSemFoto: true }),
+      }));
+    } catch (e: any) {
+      setErro(e?.message?.replace(/^\d+:\s*/, '') || 'Não consegui iniciar');
+    } finally {
+      setAbrindo(false);
+    }
+  }
+
+  async function cancelar() {
+    if (!confirm('Cancelar a importação? O que já entrou continua salvo.')) return;
+    try {
+      setStatus(await api<StatusLote>('/product-photos/importar-tudo/cancelar', { method: 'POST' }));
+    } catch (e: any) {
+      setErro(e?.message || 'Não consegui cancelar');
+    }
+  }
+
+  const rodando = status?.status === 'rodando';
+  const pct = status?.total ? Math.round(((status.processadas ?? 0) / status.total) * 100) : 0;
+
+  return (
+    <div className="border border-violet-200 bg-violet-50/40 rounded-xl p-3 mb-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-bold text-slate-800">Importar fotos do site antigo — tudo de uma vez</p>
+          <p className="text-[11px] text-slate-500">
+            Traz as fotos de cada cor, grava aqui e já pinta a bolinha. Roda em segundo plano;
+            pode fechar a tela.
+          </p>
+        </div>
+        {rodando ? (
+          <button type="button" onClick={() => void cancelar()}
+            className="text-xs font-bold px-3 py-2 rounded-lg border border-rose-200 text-rose-700 hover:bg-rose-50">
+            Cancelar
+          </button>
+        ) : (
+          <button type="button" onClick={() => void comecar()} disabled={abrindo}
+            className="inline-flex items-center gap-1.5 text-xs font-bold px-4 py-2 rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50">
+            {abrindo ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ImageIcon className="w-3.5 h-3.5" />}
+            Importar tudo
+          </button>
+        )}
+      </div>
+
+      {status?.existe && (
+        <div className="mt-3">
+          <div className="h-1.5 bg-slate-200 rounded-full overflow-hidden">
+            <div className="h-full bg-violet-600 transition-all" style={{ width: `${pct}%` }} />
+          </div>
+          <p className="text-[11px] text-slate-600 mt-1.5">
+            {rodando ? 'Rodando' : status.status === 'concluido' ? 'Concluído' : 'Cancelado'} ·{' '}
+            {status.processadas}/{status.total} REFs ({pct}%) · {status.fotos} foto(s) em{' '}
+            {status.refsComFoto} peça(s) · {status.bolinhas} bolinha(s)
+            {rodando && status.refAtual ? ` · agora: ${status.refAtual}` : ''}
+          </p>
+          {!!status.problemas?.length && (
+            <details className="mt-1">
+              <summary className="text-[11px] text-amber-700 cursor-pointer">
+                {status.problemas.length} peça(s) sem foto no site antigo — ver
+              </summary>
+              <ul className="text-[11px] text-slate-500 mt-1 max-h-32 overflow-auto">
+                {status.problemas.map((p, i) => (
+                  <li key={i}>{p.ref} — {p.motivo}</li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </div>
+      )}
+
+      {erro && <p className="text-xs text-rose-700 mt-2">{erro}</p>}
     </div>
   );
 }

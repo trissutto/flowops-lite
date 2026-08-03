@@ -17,6 +17,7 @@ import { JwtAuthGuard } from '../auth/jwt.guard';
 import { ProductPhotosService } from './product-photos.service';
 import { CorIaService } from './cor-ia.service';
 import { WcFotosImportService } from './wc-fotos-import.service';
+import { FotoImportJobService } from './foto-import-job.service';
 
 @UseGuards(JwtAuthGuard)
 @Controller('product-photos')
@@ -25,6 +26,7 @@ export class ProductPhotosController {
     private readonly svc: ProductPhotosService,
     private readonly corIa: CorIaService,
     private readonly wcImport: WcFotosImportService,
+    private readonly lote: FotoImportJobService,
   ) {}
 
   private requireWrite(req: any) {
@@ -135,6 +137,33 @@ export class ProductPhotosController {
   async wcDebug(@Req() req: any, @Query('ref') ref: string) {
     this.requireWrite(req);
     return this.wcImport.diagnosticar(ref);
+  }
+
+  /**
+   * IMPORTAR TUDO — abre o lote (o cron processa em segundo plano).
+   * POST /product-photos/importar-tudo  body: { apenasSemFoto?, limite? }
+   */
+  @Post('importar-tudo')
+  async importarTudo(@Req() req: any, @Body() body: { apenasSemFoto?: boolean; limite?: number }) {
+    this.requireWrite(req);
+    return this.lote.iniciar({
+      apenasSemFoto: body?.apenasSemFoto,
+      limite: body?.limite,
+      usuario: req?.user?.id || req?.user?.sub || undefined,
+    });
+  }
+
+  /** Progresso do lote — a tela consulta de tempos em tempos. */
+  @Get('importar-tudo/status')
+  async statusLote(@Req() req: any) {
+    this.requireWrite(req);
+    return this.lote.status();
+  }
+
+  @Post('importar-tudo/cancelar')
+  async cancelarLote(@Req() req: any) {
+    this.requireWrite(req);
+    return this.lote.cancelar();
   }
 
   @Post('detectar-cor')

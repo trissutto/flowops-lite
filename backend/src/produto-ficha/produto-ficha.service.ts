@@ -153,14 +153,46 @@ export class ProdutoFichaService {
       gradeMedidas: ficha.gradeMedidas
         ? { ...ficha.gradeMedidas, linhas: this.parseJson(ficha.gradeMedidas.linhas, []) }
         : null,
-      cores: ficha.cores.map((c: any) => {
-        const suasFotos = fotosPorCor.get(c.cor.toUpperCase()) ?? [];
-        return {
-          ...c,
-          fotos: suasFotos,
-          statusPublicacao: this.statusEfetivo(c.statusPublicacao, suasFotos.length > 0),
-        };
-      }),
+      /**
+       * A lista de cores é a UNIÃO de duas origens:
+       *   1. as cores que já têm linha em `produto_ficha_cor` (alguém salvou);
+       *   2. as cores que têm FOTO em `product_photos`.
+       *
+       * A segunda é o caso da importação do site antigo: a foto chega antes de
+       * qualquer campo ser salvo. Enquanto a lista vinha só da tabela da ficha,
+       * a cor recém-importada ficava invisível — a foto existia, estava no
+       * bucket, e a tela dizia "faltam fotos" até alguém editar algo naquela
+       * cor e criar a linha. Foi exatamente o "só aparece depois que eu edito".
+       */
+      cores: (() => {
+        const salvas = ficha.cores.map((c: any) => {
+          const suasFotos = fotosPorCor.get(c.cor.toUpperCase()) ?? [];
+          return {
+            ...c,
+            fotos: suasFotos,
+            statusPublicacao: this.statusEfetivo(c.statusPublicacao, suasFotos.length > 0),
+          };
+        });
+        const jaListadas = new Set(salvas.map((c: any) => String(c.cor).toUpperCase()));
+
+        const soComFoto = Array.from(fotosPorCor.entries())
+          .filter(([cor]) => cor && !jaListadas.has(cor))
+          .map(([cor, suasFotos]) => ({
+            cor,
+            tituloComercial: null,
+            youtubeUrl: null,
+            statusPublicacao: this.statusEfetivo('nao_publicar', suasFotos.length > 0),
+            swatchTipo: 'cor',
+            corHex: null,
+            swatchFocoX: null,
+            swatchFocoY: null,
+            fotos: suasFotos,
+          }));
+
+        return [...salvas, ...soComFoto].sort((a: any, b: any) =>
+          String(a.cor).localeCompare(String(b.cor), 'pt-BR'),
+        );
+      })(),
     };
   }
 
