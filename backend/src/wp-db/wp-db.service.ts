@@ -110,6 +110,104 @@ export class WpDbService implements OnModuleInit, OnModuleDestroy {
   private siteUrlCache: { value: string; expiresAt: number } | null = null;
   private readonly CACHE_TTL_MS = 10 * 60 * 1000; // 10 min
 
+  /**
+   * TODOS os produtos do WordPress de uma REF, com a GALERIA inteira.
+   *
+   * Existe porque a REST do WooCommerce não serve pra isso: lá `sku=VLM-222`
+   * exige igualdade exata e devolve UM produto, enquanto no WordPress o SKU é
+   * "VLM-222 MARROM", "VLM-222 MUSGO"… — por isso o PDV, que sempre leu o
+   * MySQL direto com `LIKE 'REF%'`, mostra foto onde a REST não achava nada.
+   *
+   * Traz `post_status` (inclusive rascunho) e a galeria além da capa: a
+   * segunda foto costuma ser a das costas, que é o que a cliente plus size
+   * mais pede.
+   */
+  async getProdutosPorRef(
+    ref: string,
+  ): Promise<Array<{ id: number; nome: string; sku: string; status: string; imagens: string[] }>> {
+    if (!this.pool) return [];
+    const alvo = String(ref || '').trim();
+    if (!alvo) return [];
+
+    const siteUrl = await this.getSiteUrl();
+
+    const produtos = await this.query<{
+      id: number; nome: string; sku: string; status: string;
+      thumb: string | null; galeria: string | null;
+    }>(
+      `SELECT p.ID AS id, p.post_title AS nome, p.post_status AS status,
+              pm_sku.meta_value AS sku,
+              pm_thumb.meta_value AS thumb,
+              pm_gal.meta_value AS galeria
+         FROM wp_postmeta pm_sku
+         JOIN wp_posts p ON p.ID = pm_sku.post_id AND p.post_type = 'product'
+         LEFT JOIN wp_postmeta pm_thumb
+                ON pm_thumb.post_id = p.ID AND pm_thumb.meta_key = '_thumbnail_id'
+         LEFT JOIN wp_postmeta pm_gal
+                ON pm_gal.post_id = p.ID AND pm_gal.meta_key = '_product_image_gallery'
+        WHERE pm_sku.meta_key = '_sku'
+          AND pm_sku.meta_value LIKE ?
+          AND p.post_status IN ('publish', 'draft', 'private', 'pending')
+        LIMIT 200`,
+      [`${alvo}%`],
+    );
+    if (!produtos.length) return [];
+
+    // Uma query só pra todos os arquivos — evita N+1 no servidor compartilhado.
+    const ids = new Set<string>();
+    for (const p of produtos) {
+      if (p.thumb) ids.add(String(p.thumb));
+      for (const g of String(p.galeria || '').split(',')) {
+        const limpo = g.trim();
+        if (limpo) ids.add(limpo);
+      }
+    }
+    const arquivos = new Map<string, string>();
+    if (ids.size) {
+      const lista = Array.from(ids);
+      const rows = await this.query<{ post_id: number; meta_value: string }>(
+        `SELECT post_id, meta_value FROM wp_postmeta
+          WHERE meta_key = '_wp_attached_file' AND post_id IN (${lista.map(() => '?').join(',')})`,
+        lista,
+      );
+      for (const r of rows) arquivos.set(String(r.post_id), String(r.meta_value || ''));
+    }
+
+    const url = (idAnexo: string) => {
+      const file = arquivos.get(idAnexo);
+      if (!file) return null;
+      return siteUrl ? `${siteUrl}/wp-content/uploads/${file}` : null;
+    };
+
+    return produtos.map((p) => {
+      const ordem = [String(p.thumb || ''), ...String(p.galeria || '').split(',')]
+        .map((x) => x.trim())
+        .filter(Boolean);
+      const imagens = Array.from(new Set(ordem))
+        .map(url)
+        .filter((u): u is string => !!u);
+      return {
+        id: Number(p.id),
+        nome: String(p.nome || ''),
+        sku: String(p.sku || ''),
+        status: String(p.status || ''),
+        imagens,
+      };
+    });
+  }
+
+  /** URL do site (cacheada) — prefixo das imagens do WordPress. */
+  private async getSiteUrl(): Promise<string> {
+    const now = Date.now();
+    if (this.siteUrlCache && this.siteUrlCache.expiresAt > now) return this.siteUrlCache.value;
+    const rows = await this.query<{ option_value: string }>(
+      "SELECT option_value FROM wp_options WHERE option_name = 'siteurl' LIMIT 1",
+    );
+    const value = (rows[0]?.option_value || '').replace(/\/+$/, '');
+    this.siteUrlCache = { value, expiresAt: now + this.CACHE_TTL_MS };
+    return value;
+  }
+
   async getImagesByRefs(refs: string[]): Promise<Record<string, string>> {
     if (!this.pool || !refs.length) return {};
 
