@@ -157,6 +157,54 @@ export class WcFotosImportService {
     return [];
   }
 
+  /**
+   * RAIO-X do casamento — por que uma REF trouxe (ou não trouxe) foto.
+   *
+   * Existe porque diagnosticar isso pelo resultado final é adivinhação: "não
+   * achou" pode ser busca vazia, filtro de nome, cor que não bate ou foto que
+   * não baixou, e cada palpite custa um deploy. Aqui a resposta vem em dez
+   * segundos, com o que o site antigo REALMENTE devolveu.
+   */
+  async diagnosticar(refBruta: string) {
+    const ref = String(refBruta || '').trim().toUpperCase().replace(/\s+/g, '');
+    const cores = await this.coresDaRef(ref);
+    const base = ref.replace(/[A-Z]+$/i, '').replace(/[-_\s]+$/, '');
+    const tentativas: Array<Record<string, unknown>> = [
+      { sku: ref },
+      { search: ref },
+      ...(base && base !== ref ? [{ search: base }] : []),
+    ];
+
+    const rodadas: any[] = [];
+    for (const params of tentativas) {
+      const res = await firstValueFrom(
+        this.http.get(`${this.baseUrl}/products`, {
+          auth: this.auth,
+          params: { ...params, per_page: 100, status: 'any' },
+          timeout: 30000,
+        }),
+      ).catch((e) => ({ data: [], erro: e?.response?.status || e?.message } as any));
+
+      const brutos: any[] = (res as any)?.data ?? [];
+      rodadas.push({
+        params,
+        erro: (res as any)?.erro ?? null,
+        devolvidos: brutos.length,
+        produtos: brutos.slice(0, 20).map((p: any) => ({
+          id: p.id,
+          nome: p.name,
+          sku: p.sku,
+          status: p.status,
+          imagens: (p.images ?? []).length,
+          corCasada: this.casarCor(String(p.name || ''), cores),
+        })),
+      });
+      if (brutos.length) break;
+    }
+
+    return { ref, base, coresNoErp: cores, rodadas };
+  }
+
   private async baixar(url: string): Promise<{ buffer: Buffer; mime: string } | null> {
     try {
       const res = await firstValueFrom(

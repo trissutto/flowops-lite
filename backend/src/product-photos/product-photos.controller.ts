@@ -127,6 +127,16 @@ export class ProductPhotosController {
     return this.wcImport.importarRef(String(body?.ref || ''), quem);
   }
 
+  /**
+   * RAIO-X: o que o site antigo devolve pra esta REF e por que cada produto
+   * casou (ou não) com uma cor. GET /product-photos/wc-debug?ref=VOGUE
+   */
+  @Get('wc-debug')
+  async wcDebug(@Req() req: any, @Query('ref') ref: string) {
+    this.requireWrite(req);
+    return this.wcImport.diagnosticar(ref);
+  }
+
   @Post('detectar-cor')
   async detectarCor(@Req() req: any, @Body('url') url: string) {
     this.requireWrite(req);
