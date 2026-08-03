@@ -1201,6 +1201,7 @@ type ResultadoImport = {
   coresSemFoto: string[];
   jaTinham: string[];
   produtosWcSemCor: string[];
+  produtosEncontrados?: number;
   fotos: number;
 };
 
@@ -1252,7 +1253,9 @@ function ImportarFotosDoSite({ ref_, onImportou }: { ref_: string; onImportou: (
         <p className="text-[11px] text-slate-500 mt-1 max-w-xs">
           {r.fotos > 0
             ? `${r.fotos} foto(s) em ${r.coresComFoto.length} cor(es).`
-            : 'Nada novo pra trazer.'}
+            : r.produtosEncontrados === 0
+              ? 'O site antigo nao tem esta peca.'
+              : 'Nada novo pra trazer.'}
           {r.jaTinham.length > 0 && ` ${r.jaTinham.length} cor(es) já tinham.`}
           {r.produtosWcSemCor.length > 0 && (
             <span className='text-slate-500'> {r.produtosWcSemCor.length} produto(s) do site antigo nao bateram com cor nenhuma.</span>

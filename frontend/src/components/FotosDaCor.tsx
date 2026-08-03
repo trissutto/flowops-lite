@@ -137,10 +137,15 @@ export default function FotosDaCor({
    * velho, sem a foto) → este efeito rodava e devolvia a lista vazia. A
    * miniatura aparecia e sumia no mesmo piscar.
    */
+  // A assinatura sao os IDS das fotos: muda quando a ficha traz uma lista
+  // DIFERENTE (importacao do site antigo, outra aba, recarregar) e NAO muda
+  // quando o pai apenas re-renderiza com o mesmo conteudo. Depender do array
+  // apagava a foto recem-subida; depender so de ref/cor ignorava a importacao.
+  const assinatura = fotosIniciais.map((f) => f.id).join('|');
   useEffect(() => {
     setFotos(fotosIniciais);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refSku, cor]);
+  }, [refSku, cor, assinatura]);
 
   const capa = fotos[0]?.url ?? null;
 
