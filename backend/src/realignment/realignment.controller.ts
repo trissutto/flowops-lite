@@ -480,6 +480,25 @@ export class RealignmentController {
   }
 
   /**
+   * REABRE uma caixa fechada (volta pra montagem) — desfazendo a baixa de
+   * estoque e as obrigações do acerto. POST /shipments/:id/reabrir · origem
+   *
+   * Recusa (com o motivo) se a caixa já foi recebida, já tem NF-e autorizada
+   * ou já tem etiqueta dos Correios.
+   */
+  @Post('shipments/:id/reabrir')
+  reabrirShipment(@Param('id') id: string, @Req() req: any) {
+    const role = req?.user?.role;
+    const storeId = req?.user?.storeId;
+    if (role !== 'store' || !storeId) throw new ForbiddenException('Apenas loja');
+    return this.shipment.reopenShipment({
+      shipmentId: id,
+      storeId,
+      userId: req?.user?.id || req?.user?.sub || undefined,
+    });
+  }
+
+  /**
    * Lista remessas chegando na loja destino (status=in_transit).
    * GET /realignment/shipments/incoming · filial
    */

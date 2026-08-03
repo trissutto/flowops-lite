@@ -31,7 +31,7 @@ import ProductThumb from '@/components/ProductThumb';
 import {
   ArrowLeft, Shuffle, CheckCircle2, Loader2, RefreshCw, Package,
   AlertCircle, Send, Sparkles, Shirt, ChevronDown, Printer, Undo2,
-  Truck, X, FileText,
+  Truck, X, FileText, RotateCcw,
 } from 'lucide-react';
 
 interface RealignmentItem {
@@ -617,7 +617,13 @@ export default function MinhaLojaRealinhamentoPage() {
   // Fonte da verdade p/ a grade: troca conforme a aba selecionada.
   // Dessa forma o mesmo agrupamento e o mesmo componente de grid servem pros
   // 2 modos (só muda a cor/label das células).
-  const currentItems = view === 'pending' ? items : sentItems;
+  //
+  // Na aba de enviados, peça que JÁ ESTÁ EM CAIXA FECHADA sai da pilha verde:
+  // ela virou caixa lacrada, e quem manda nela agora é o cartão de etiqueta lá
+  // em cima. Aparecer nos dois lugares fazia parecer trabalho em dobro — e o
+  // "desfazer" da célula verde nem valeria mais, porque o estoque já baixou.
+  const currentItems =
+    view === 'pending' ? items : sentItems.filter((i) => !(i as any).caixaFechada);
 
   // Agrupa por destino → dentro dele, por REF, com grade Cor × Tamanho
   const byDestination = useMemo(() => {
@@ -886,6 +892,11 @@ export default function MinhaLojaRealinhamentoPage() {
                   destino={s.toStoreName || s.toStoreCode}
                   rastreioExistente={s.trackingCode ?? null}
                   jaTemEtiqueta={!!s.jaTemEtiqueta}
+                  onMudou={() => {
+                    void loadPendingLabel();
+                    void loadOpenShipments();
+                    void loadSentItems();
+                  }}
                 />
               ))}
           </div>
@@ -1689,7 +1700,7 @@ function RealignCell({
  * config fiscal das lojas, a mesma que a NF-e usa.
  */
 function EnvioDaRemessa({
-  shipmentId, code, qty, onFechar, destino, rastreioExistente = null, jaTemEtiqueta = false,
+  shipmentId, code, qty, onFechar, destino, rastreioExistente = null, jaTemEtiqueta = false, onMudou,
 }: {
   shipmentId: string;
   code: string;
@@ -1703,9 +1714,13 @@ function EnvioDaRemessa({
    *  dia e a impressão falhado no outro. */
   rastreioExistente?: string | null;
   jaTemEtiqueta?: boolean;
+  /** Recarrega as listas da tela — a caixa reaberta sai daqui e volta pras
+   *  amarelas, então quem manda tem que saber. */
+  onMudou?: () => void;
 }) {
-  const [ocupado, setOcupado] = useState<'gerar' | 'docs' | null>(null);
+  const [ocupado, setOcupado] = useState<'gerar' | 'docs' | 'reabrir' | 'conteudo' | null>(null);
   const [rastreio, setRastreio] = useState<string | null>(rastreioExistente);
+  const [conteudo, setConteudo] = useState<any[] | null>(null);
   const [msg, setMsg] = useState<{ tipo: 'ok' | 'erro'; texto: string } | null>(null);
 
   async function gerar() {
@@ -1725,6 +1740,46 @@ function EnvioDaRemessa({
       });
     } catch (e: any) {
       setMsg({ tipo: 'erro', texto: e?.message?.replace(/^\d+:\s*/, '') || 'Falha ao gerar o envio' });
+    } finally {
+      setOcupado(null);
+    }
+  }
+
+  async function reabrir() {
+    if (
+      !window.confirm(
+        `Reabrir a caixa ${code}?\n\n` +
+          'As peças voltam pro estoque da loja, a cobrança do acerto é cancelada ' +
+          'e a loja destino deixa de esperar a caixa.',
+      )
+    ) return;
+    setOcupado('reabrir');
+    setMsg(null);
+    try {
+      const r = await api<any>(`/realignment/shipments/${shipmentId}/reabrir`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+      setMsg({
+        tipo: 'ok',
+        texto: `Caixa reaberta — ${r?.itens ?? 0} peça(s) voltaram pra montagem.`,
+      });
+      onMudou?.();
+    } catch (e: any) {
+      setMsg({ tipo: 'erro', texto: e?.message?.replace(/^\d+:\s*/, '') || 'Falha ao reabrir' });
+    } finally {
+      setOcupado(null);
+    }
+  }
+
+  async function verConteudo() {
+    setOcupado('conteudo');
+    setMsg(null);
+    try {
+      const r = await api<any>(`/realignment/shipments/${shipmentId}`);
+      setConteudo(Array.isArray(r?.items) ? r.items : []);
+    } catch (e: any) {
+      setMsg({ tipo: 'erro', texto: e?.message?.replace(/^\d+:\s*/, '') || 'Falha ao abrir o conteúdo' });
     } finally {
       setOcupado(null);
     }
@@ -1789,6 +1844,27 @@ function EnvioDaRemessa({
             {ocupado === 'docs' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Printer className="w-4 h-4" />}
             Etiqueta + NF
           </button>
+          {/* Conferir o que está dentro ANTES de lacrar de vez — e desfazer se
+              a caixa foi fechada sem querer ou faltou peça. */}
+          <button
+            type="button"
+            onClick={() => (conteudo ? setConteudo(null) : void verConteudo())}
+            disabled={ocupado !== null}
+            className="bg-white hover:bg-slate-100 text-slate-800 border-2 border-slate-300 px-4 py-2.5 rounded-xl text-sm font-bold shadow-sm flex items-center gap-2 disabled:opacity-50"
+          >
+            {ocupado === 'conteudo' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Package className="w-4 h-4" />}
+            {conteudo ? 'Ocultar conteúdo' : 'Verificar conteúdo'}
+          </button>
+          <button
+            type="button"
+            onClick={() => void reabrir()}
+            disabled={ocupado !== null}
+            title="Volta a caixa pra montagem: devolve as peças ao estoque e cancela a cobrança do acerto"
+            className="bg-white hover:bg-amber-50 text-amber-900 border-2 border-amber-400 px-4 py-2.5 rounded-xl text-sm font-bold shadow-sm flex items-center gap-2 disabled:opacity-50"
+          >
+            {ocupado === 'reabrir' ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
+            Reabrir caixa
+          </button>
           {onFechar && (
             <button
               type="button"
@@ -1804,6 +1880,45 @@ function EnvioDaRemessa({
         <p className={`text-xs mt-2 font-semibold ${msg.tipo === 'ok' ? 'text-emerald-800' : 'text-rose-700'}`}>
           {msg.texto}
         </p>
+      )}
+
+      {/* Conteúdo da caixa — REF, cor, tamanho e quantidade, do jeito que a
+          pessoa vai conferir peça na mão antes de lacrar. */}
+      {conteudo && (
+        <div className="mt-3 rounded-xl border border-emerald-200 bg-white overflow-hidden">
+          {conteudo.length === 0 ? (
+            <p className="text-xs text-slate-500 p-3">Esta caixa está sem itens.</p>
+          ) : (
+            <table className="w-full text-xs">
+              <thead className="bg-slate-50 text-slate-500 uppercase tracking-wide">
+                <tr>
+                  <th className="text-left px-3 py-2 font-bold">Ref</th>
+                  <th className="text-left px-3 py-2 font-bold">Cor</th>
+                  <th className="text-left px-3 py-2 font-bold">Tam</th>
+                  <th className="text-right px-3 py-2 font-bold">Qtd</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {conteudo.map((i: any) => (
+                  <tr key={i.id}>
+                    <td className="px-3 py-2 font-mono font-bold text-slate-900">{i.refCode}</td>
+                    <td className="px-3 py-2 text-slate-700">{i.cor || '—'}</td>
+                    <td className="px-3 py-2 text-slate-700">{i.tamanho || '—'}</td>
+                    <td className="px-3 py-2 text-right font-bold text-slate-900">{i.qtyOrigem ?? 1}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot className="bg-slate-50">
+                <tr>
+                  <td colSpan={3} className="px-3 py-2 font-bold text-slate-600">Total</td>
+                  <td className="px-3 py-2 text-right font-black text-slate-900">
+                    {conteudo.reduce((n: number, i: any) => n + (i.qtyOrigem ?? 1), 0)}
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          )}
+        </div>
       )}
     </div>
   );
