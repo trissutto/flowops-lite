@@ -20,6 +20,9 @@ function getR2Client(): S3Client {
 export class ProductPhotosService {
   private readonly logger = new Logger(ProductPhotosService.name);
 
+  /** Teto da galeria por cor — o mesmo número que a ficha do site promete. */
+  static readonly MAX_POR_COR = 6;
+
   constructor(private readonly prisma: PrismaService) {}
 
   /**
@@ -93,13 +96,22 @@ export class ProductPhotosService {
   }
 
   /**
-   * Faz upload pro R2 + cria/atualiza registro no DB.
+   * Sobe foto pro R2 e grava a linha.
+   *
+   * ⚠️ ACRESCENTA à galeria (até 6 por cor) em vez de substituir. Até 03/08 este
+   * método apagava a foto existente de (ref, cor) a cada upload — o modelo já
+   * previa galeria (`@@unique([ref, cor, ordem])`), mas na prática nunca dava
+   * pra ter a segunda foto, e a vitrine do site precisa de várias.
+   *
+   * Quem quer TROCAR uma foto específica (o "trocar foto" do PDV/Reposição)
+   * manda `substituirId` — aí sim a antiga sai do R2 e a nova herda a ordem.
    */
   async upload(input: {
     ref: string;
     cor?: string;
     file: any; // multer file
     userId?: string;
+    substituirId?: string;
   }) {
     const refUp = (input.ref || '').trim().toUpperCase();
     if (!refUp) throw new BadRequestException('REF obrigatório');
@@ -111,6 +123,24 @@ export class ProductPhotosService {
     }
 
     const corUp = (input.cor || '').trim().toUpperCase() || null;
+
+    // Decide ANTES de gastar upload: galeria cheia devolve erro sem subir nada.
+    const irmas = await (this.prisma as any).productPhoto.findMany({
+      where: { ref: refUp, cor: corUp },
+      orderBy: { ordem: 'asc' },
+    });
+    const alvo = input.substituirId
+      ? irmas.find((f: any) => f.id === input.substituirId)
+      : null;
+    if (input.substituirId && !alvo) {
+      throw new BadRequestException('foto a substituir não encontrada nesta cor');
+    }
+    if (!alvo && irmas.length >= ProductPhotosService.MAX_POR_COR) {
+      throw new BadRequestException(
+        `esta cor já tem ${ProductPhotosService.MAX_POR_COR} fotos — remova uma antes de subir outra`,
+      );
+    }
+
     const safeName = (input.file.originalname || 'foto.jpg')
       .normalize('NFD')
       .replace(/[̀-ͯ]/g, '')
@@ -136,24 +166,20 @@ export class ProductPhotosService {
     const base = publicUrl.replace(/\/$/, '');
     const fullUrl = `${base}/${objectKey}`;
 
-    // Upsert: se já tem foto pra (ref, cor) substitui (deleta R2 antigo)
-    const existing = await (this.prisma as any).productPhoto.findFirst({
-      where: { ref: refUp, cor: corUp },
-    });
-
-    if (existing) {
-      // Apaga R2 antigo (best effort)
-      if (existing.objectKey) {
+    // Trocar foto existente: a nova herda a ordem (a capa continua capa) e a
+    // antiga sai do bucket.
+    if (alvo) {
+      if (alvo.objectKey) {
         try {
           await getR2Client().send(
-            new DeleteObjectCommand({ Bucket: bucket, Key: existing.objectKey }),
+            new DeleteObjectCommand({ Bucket: bucket, Key: alvo.objectKey }),
           );
         } catch (e: any) {
           this.logger.warn(`Falha ao deletar R2 antigo: ${e?.message}`);
         }
       }
       return (this.prisma as any).productPhoto.update({
-        where: { id: existing.id },
+        where: { id: alvo.id },
         data: {
           url: fullUrl,
           objectKey,
@@ -162,15 +188,59 @@ export class ProductPhotosService {
       });
     }
 
+    // Nova da galeria: entra no fim. `ordem` vem do MAIOR existente + 1 e não
+    // de `length`, senão apagar a foto do meio recria colisão no unique.
+    const proximaOrdem = irmas.length
+      ? Math.max(...irmas.map((f: any) => Number(f.ordem) || 0)) + 1
+      : 0;
+
     return (this.prisma as any).productPhoto.create({
       data: {
         ref: refUp,
         cor: corUp,
         url: fullUrl,
         objectKey,
+        ordem: proximaOrdem,
         uploadedByUserId: input.userId || null,
       },
     });
+  }
+
+  /**
+   * Reordena a galeria de uma cor — a primeira da lista vira a capa.
+   *
+   * Passa por ordem NEGATIVA antes de gravar a definitiva: o índice
+   * `@@unique([ref, cor, ordem])` recusaria duas fotos com a mesma ordem no
+   * meio da troca, mesmo que o estado final esteja correto.
+   */
+  async reordenar(ids: string[]) {
+    const limpos = (ids || []).map((i) => String(i)).filter(Boolean);
+    if (!limpos.length) throw new BadRequestException('nenhuma foto informada');
+
+    const fotos = await (this.prisma as any).productPhoto.findMany({
+      where: { id: { in: limpos } },
+    });
+    if (fotos.length !== limpos.length) {
+      throw new BadRequestException('alguma foto da lista não existe mais');
+    }
+    const mesmaCor = fotos.every(
+      (f: any) => f.ref === fotos[0].ref && (f.cor ?? null) === (fotos[0].cor ?? null),
+    );
+    if (!mesmaCor) throw new BadRequestException('as fotos precisam ser da mesma REF e cor');
+
+    await this.prisma.$transaction([
+      ...fotos.map((f: any, i: number) =>
+        (this.prisma as any).productPhoto.update({
+          where: { id: f.id },
+          data: { ordem: -(i + 1) },
+        }),
+      ),
+      ...limpos.map((id, i) =>
+        (this.prisma as any).productPhoto.update({ where: { id }, data: { ordem: i } }),
+      ),
+    ]);
+
+    return this.listPhotos(fotos[0].ref, fotos[0].cor ?? undefined);
   }
 
   /**

@@ -36,6 +36,19 @@ const nextConfig: NextConfig = {
       // URL canônica é /lojas.
       { source: '/nossas-lojas', destination: '/lojas', permanent: true },
       { source: '/nossaslojas', destination: '/lojas', permanent: true },
+
+      // TROCA FÁCIL — o portal público de trocas já existe e roda no FlowOps
+      // (localiza pedido por nº + CPF, gera reversa, acompanha status). Aqui
+      // ele é LINKADO, não recriado: duas telas de troca abertas ao mesmo
+      // tempo seria duas políticas divergindo sozinhas. Redirect temporário
+      // (307) de propósito — quando a tela for portada pra cá, é só apagar
+      // esta linha sem ter deixado 301 gravado no cache dos navegadores.
+      {
+        source: '/trocas',
+        destination: 'https://www.lurdsplussize.com.br/trocas',
+        permanent: false,
+      },
+      { source: '/institucional/trocas', destination: '/trocas', permanent: false },
     ];
   },
 };

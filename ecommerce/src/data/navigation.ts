@@ -4,8 +4,13 @@ import type { NavItem } from '@/types';
  * ESTRUTURA DE NAVEGAÇÃO — fonte única do menu, do mega menu, do drawer
  * mobile e do sitemap. Adicionar um eixo aqui propaga pra todos.
  *
- * A ordem segue a forma como a cliente pensa (não a árvore do ERP):
- * primeiro desejo (Novidades, Looks, Ocasiões), depois categoria técnica.
+ * ORDEM DEFINIDA PELO DONO (03/08/2026), sete eixos:
+ *   Novidades · Categorias · Looks · Tamanho · Tecidos · Outlet · Nossas Lojas
+ *
+ * Ocasiões e Coleções SAÍRAM do menu — não por design, por dado: nenhuma peça
+ * está classificada nesses eixos ainda, e eixo sem produto vira vitrine vazia.
+ * Os blocos voltam quando o cadastro estiver preenchido (o campo já existe na
+ * ficha do produto).
  *
  * As imagens dos cards editoriais são TEMPORÁRIAS (royalty-free) — trocar
  * pelas fotos de campanha da marca. Ver docs/navigation.md.
@@ -62,81 +67,6 @@ export const navigation: NavItem[] = [
     },
   },
   {
-    label: 'Looks',
-    href: '/looks',
-    icon: 'Shirt',
-    menu: {
-      columns: [
-        {
-          title: 'Looks prontos',
-          links: [
-            { label: 'Look trabalho', href: '/looks/trabalho' },
-            { label: 'Look casual', href: '/looks/casual' },
-            { label: 'Look festa', href: '/looks/festa' },
-            { label: 'Look praia', href: '/looks/praia' },
-            { label: 'Look viagem', href: '/looks/viagem' },
-            { label: 'Look executivo', href: '/looks/executivo' },
-            { label: 'Look fim de semana', href: '/looks/fim-de-semana' },
-          ],
-        },
-      ],
-      features: [
-        {
-          eyebrow: 'Shop the look',
-          title: 'Leve o look completo',
-          description: 'A composição inteira em um clique — ou peça por peça.',
-          image: { src: EDITORIAL.looks, alt: 'Look completo plus size' },
-          href: '/looks',
-          cta: 'Comprar looks',
-        },
-      ],
-      quickLinks: [{ label: 'Comprar o look completo', href: '/looks?modo=completo' }],
-    },
-  },
-  {
-    label: 'Ocasiões',
-    href: '/ocasioes',
-    icon: 'CalendarHeart',
-    menu: {
-      columns: [
-        {
-          title: 'Dia a dia',
-          links: [
-            { label: 'Trabalho', href: '/ocasioes/trabalho' },
-            { label: 'Dia a dia', href: '/ocasioes/dia-a-dia' },
-            { label: 'Igreja', href: '/ocasioes/igreja' },
-          ],
-        },
-        {
-          title: 'Momentos especiais',
-          links: [
-            { label: 'Casamento', href: '/ocasioes/casamento' },
-            { label: 'Aniversário', href: '/ocasioes/aniversario' },
-            { label: 'Jantar', href: '/ocasioes/jantar' },
-            { label: 'Eventos', href: '/ocasioes/eventos' },
-          ],
-        },
-        {
-          title: 'Descanso',
-          links: [
-            { label: 'Praia', href: '/ocasioes/praia' },
-            { label: 'Viagem', href: '/ocasioes/viagem' },
-          ],
-        },
-      ],
-      features: [
-        {
-          eyebrow: 'Convite na mão?',
-          title: 'Do casamento ao domingo',
-          description: 'A gente te ajuda a escolher pela ocasião, não pelo tamanho.',
-          image: { src: EDITORIAL.ocasioes, alt: 'Vestido de festa plus size' },
-          href: '/ocasioes/casamento',
-          cta: 'Ver por ocasião',
-        },
-      ],
-    },
-  },
-  {
     label: 'Categorias',
     href: '/categoria',
     icon: 'LayoutGrid',
@@ -176,63 +106,35 @@ export const navigation: NavItem[] = [
     },
   },
   {
-    label: 'Tecidos',
-    href: '/tecidos',
-    icon: 'Layers',
+    label: 'Looks',
+    href: '/looks',
+    icon: 'Shirt',
     menu: {
       columns: [
         {
-          title: 'Por tecido',
+          title: 'Looks prontos',
           links: [
-            { label: 'Viscolycra premium', href: '/tecidos/viscolycra-premium', highlight: true },
-            { label: 'Jeans', href: '/tecidos/jeans' },
-            { label: 'Linho', href: '/tecidos/linho' },
-            { label: 'Crepe', href: '/tecidos/crepe' },
-            { label: 'Tricot', href: '/tecidos/tricot' },
-            { label: 'Malha', href: '/tecidos/malha' },
-            { label: 'Alfaiataria', href: '/tecidos/alfaiataria' },
+            { label: 'Look trabalho', href: '/looks/trabalho' },
+            { label: 'Look casual', href: '/looks/casual' },
+            { label: 'Look festa', href: '/looks/festa' },
+            { label: 'Look praia', href: '/looks/praia' },
+            { label: 'Look viagem', href: '/looks/viagem' },
+            { label: 'Look executivo', href: '/looks/executivo' },
+            { label: 'Look fim de semana', href: '/looks/fim-de-semana' },
           ],
         },
       ],
       features: [
         {
-          eyebrow: 'Guia de tecidos',
-          title: 'O caimento começa no tecido',
-          description: 'Entenda qual tecido veste melhor o seu corpo.',
-          image: { src: EDITORIAL.tecidos, alt: 'Tecidos da coleção Lurds' },
-          href: '/tecidos',
-          cta: 'Conhecer tecidos',
+          eyebrow: 'Shop the look',
+          title: 'Leve o look completo',
+          description: 'A composição inteira em um clique — ou peça por peça.',
+          image: { src: EDITORIAL.looks, alt: 'Look completo plus size' },
+          href: '/looks',
+          cta: 'Comprar looks',
         },
       ],
-    },
-  },
-  {
-    label: 'Coleções',
-    href: '/colecoes',
-    icon: 'BookOpen',
-    menu: {
-      columns: [
-        {
-          title: 'Coleções',
-          links: [
-            { label: 'Coleção atual', href: '/colecoes/atual' },
-            { label: 'Alfaiataria Lurds', href: '/colecoes/alfaiataria' },
-            { label: 'Festa & Cerimônia', href: '/colecoes/festa' },
-            { label: 'Verão Litoral', href: '/colecoes/verao-litoral' },
-            { label: 'Essenciais', href: '/colecoes/essenciais' },
-          ],
-        },
-      ],
-      features: [
-        {
-          eyebrow: 'Editorial',
-          title: 'A coleção em imagens',
-          description: 'Um editorial completo pra inspirar o seu próximo look.',
-          image: { src: EDITORIAL.colecoes, alt: 'Editorial de coleção Lurds' },
-          href: '/colecoes/atual',
-          cta: 'Ver editorial',
-        },
-      ],
+      quickLinks: [{ label: 'Comprar o look completo', href: '/looks?modo=completo' }],
     },
   },
   {
@@ -273,6 +175,42 @@ export const navigation: NavItem[] = [
     },
   },
   {
+    label: 'Tecidos',
+    href: '/tecidos',
+    icon: 'Layers',
+    menu: {
+      columns: [
+        {
+          title: 'Por tecido',
+          links: [
+            { label: 'Viscolycra premium', href: '/tecidos/viscolycra-premium', highlight: true },
+            { label: 'Jeans', href: '/tecidos/jeans' },
+            { label: 'Linho', href: '/tecidos/linho' },
+            { label: 'Crepe', href: '/tecidos/crepe' },
+            { label: 'Tricot', href: '/tecidos/tricot' },
+            { label: 'Malha', href: '/tecidos/malha' },
+            { label: 'Alfaiataria', href: '/tecidos/alfaiataria' },
+          ],
+        },
+      ],
+      features: [
+        {
+          eyebrow: 'Guia de tecidos',
+          title: 'O caimento começa no tecido',
+          description: 'Entenda qual tecido veste melhor o seu corpo.',
+          image: { src: EDITORIAL.tecidos, alt: 'Tecidos da coleção Lurds' },
+          href: '/tecidos',
+          cta: 'Conhecer tecidos',
+        },
+      ],
+    },
+  },
+  {
+    label: 'Outlet',
+    href: '/outlet',
+    icon: 'Tag',
+  },
+  {
     label: 'Nossas Lojas',
     href: '/lojas',
     icon: 'MapPin',
@@ -289,11 +227,6 @@ export const navigation: NavItem[] = [
         },
       ],
     },
-  },
-  {
-    label: 'Outlet',
-    href: '/outlet',
-    icon: 'Tag',
   },
 ];
 

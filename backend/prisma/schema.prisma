@@ -4511,6 +4511,20 @@ model ProdutoFichaCor {
   /// escolhido a dedo — status digitado desatualiza no dia seguinte.
   statusPublicacao String @default("nao_publicar") @map("status_publicacao")
 
+  /// BOLINHA do seletor de cor no site. A cliente escolhe a cor clicando nela,
+  /// e a galeria troca pelas fotos daquela cor.
+  ///
+  /// 'cor'  = círculo pintado com `corHex`, pego a conta-gotas na própria foto
+  ///          (a cor da peça na luz da foto bate mais com o que chega do que
+  ///          qualquer tabela de nome de cor).
+  /// 'foto' = recorte da foto, pra ESTAMPA — floral, poá, tie-dye não cabem
+  ///          num hex só. `swatchFoco*` (0..1) é o ponto da foto que fica no
+  ///          centro do círculo, ampliado.
+  swatchTipo       String  @default("cor") @map("swatch_tipo")
+  corHex           String? @map("cor_hex")
+  swatchFocoX      Float?  @map("swatch_foco_x")
+  swatchFocoY      Float?  @map("swatch_foco_y")
+
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")
 

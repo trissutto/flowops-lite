@@ -29,6 +29,7 @@ import {
 import {
   SelectAtributoPeca, type Atributo, type AtributosPorTipo, type TipoAtributo,
 } from '@/components/SelectAtributoPeca';
+import FotosDaCor, { type FotoCor, type SwatchCor } from '@/components/FotosDaCor';
 
 /* ─────────────────────────────── Tipos ─────────────────────────────── */
 
@@ -53,7 +54,12 @@ type FichaCor = {
   tituloComercial: string | null;
   youtubeUrl: string | null;
   statusPublicacao: string;
-  fotos: { id: string; url: string; ordem: number }[];
+  fotos: FotoCor[];
+  /** Bolinha do seletor de cor do site — ver <FotosDaCor>. */
+  swatchTipo: 'cor' | 'foto';
+  corHex: string | null;
+  swatchFocoX: number | null;
+  swatchFocoY: number | null;
 };
 
 type Ficha = {
@@ -1078,7 +1084,17 @@ function FichaDaCor({
   );
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
-  const semFotos = (fichaCor?.fotos?.length ?? 0) === 0;
+  // A galeria vive aqui porque duas coisas dependem dela: o status
+  // ("faltam fotos" some assim que a primeira sobe) e a bolinha, que é pintada
+  // a conta-gotas EM CIMA da foto.
+  const [fotos, setFotos] = useState<FotoCor[]>(fichaCor?.fotos ?? []);
+  const [swatch, setSwatch] = useState<SwatchCor>({
+    swatchTipo: fichaCor?.swatchTipo ?? 'cor',
+    corHex: fichaCor?.corHex ?? null,
+    swatchFocoX: fichaCor?.swatchFocoX ?? null,
+    swatchFocoY: fichaCor?.swatchFocoY ?? null,
+  });
+  const semFotos = fotos.length === 0;
 
   async function salvar() {
     setSalvando(true);
@@ -1092,6 +1108,7 @@ function FichaDaCor({
             tituloComercial: titulo || null,
             youtubeUrl: youtube || null,
             statusPublicacao: status,
+            ...swatch,
           }),
         },
       );
@@ -1143,10 +1160,19 @@ function FichaDaCor({
           <span className="text-xs text-slate-500">
             {semFotos
               ? 'Nenhuma foto — o status fica em "faltam fotos"'
-              : `${fichaCor!.fotos.length} foto(s)`}
+              : `${fotos.length} foto(s)`}
           </span>
         </div>
       </div>
+
+      <FotosDaCor
+        refSku={ref_}
+        cor={cor}
+        fotosIniciais={fichaCor?.fotos ?? []}
+        swatch={swatch}
+        onSwatchChange={setSwatch}
+        onFotosChange={setFotos}
+      />
 
       {erro && <p className="text-xs text-rose-700">{erro}</p>}
 
