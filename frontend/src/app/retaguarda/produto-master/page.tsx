@@ -554,6 +554,10 @@ export default function ProdutoMasterPage() {
                     {grupo.marca} · {grupo.produtos.length} cor(es)
                   </p>
                 </div>
+                <ImportarFotosDoSite
+                  ref_={grupo.ref}
+                  onImportou={() => void carregarFicha(grupo.ref, grupo.marca)}
+                />
               </div>
 
               {/* NÍVEL 1 aberto — o que é COMUM */}
@@ -1185,6 +1189,76 @@ function FichaDaCor({
         {salvando ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
         Salvar cor
       </button>
+    </div>
+  );
+}
+
+/* ─────────────── Importar fotos do site antigo (WooCommerce) ─────────────── */
+
+type ResultadoImport = {
+  ref: string;
+  coresComFoto: string[];
+  coresSemFoto: string[];
+  jaTinham: string[];
+  produtosWcSemCor: string[];
+  fotos: number;
+};
+
+/**
+ * O acervo de fotos JÁ EXISTE no site antigo: lá cada cor é um produto com o
+ * mesmo SKU (a REF). Este botão puxa aquelas fotos pra cá, casando cada
+ * produto do WooCommerce com a COR do catálogo pelo nome.
+ *
+ * Mostra o que NÃO casou em vez de esconder: cor que ficou sem foto e produto
+ * do site antigo que não bateu com cor nenhuma são exatamente a lista de
+ * trabalho manual que sobra.
+ */
+function ImportarFotosDoSite({ ref_, onImportou }: { ref_: string; onImportou: () => void }) {
+  const [rodando, setRodando] = useState(false);
+  const [r, setR] = useState<ResultadoImport | null>(null);
+  const [erro, setErro] = useState<string | null>(null);
+
+  async function importar() {
+    setRodando(true);
+    setErro(null);
+    try {
+      const res = await api<ResultadoImport>('/product-photos/importar-wc', {
+        method: 'POST',
+        body: JSON.stringify({ ref: ref_ }),
+      });
+      setR(res);
+      if (res.fotos > 0) onImportou();
+    } catch (e: any) {
+      setErro(e?.message?.replace(/^\d+:\s*/, '') || 'Não consegui importar');
+    } finally {
+      setRodando(false);
+    }
+  }
+
+  return (
+    <div className="text-right">
+      <button
+        type="button"
+        onClick={() => void importar()}
+        disabled={rodando}
+        title="Puxa as fotos que já existem no site antigo (WooCommerce) pra cada cor desta REF"
+        className="inline-flex items-center gap-1.5 text-[11px] font-bold px-3 py-1.5 rounded-lg border border-violet-200 text-violet-700 hover:bg-violet-50 disabled:opacity-40"
+      >
+        {rodando ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ImageIcon className="w-3.5 h-3.5" />}
+        Importar fotos do site
+      </button>
+      {erro && <p className="text-[11px] text-rose-700 mt-1">{erro}</p>}
+      {r && (
+        <p className="text-[11px] text-slate-500 mt-1 max-w-xs">
+          {r.fotos > 0
+            ? `${r.fotos} foto(s) em ${r.coresComFoto.length} cor(es).`
+            : 'Nada novo pra trazer.'}
+          {r.jaTinham.length > 0 && ` ${r.jaTinham.length} cor(es) já tinham.`}
+          {r.coresSemFoto.length > 0 && (
+            <span className="text-amber-700"> Sem foto no site antigo: {r.coresSemFoto.join(', ')}.</span>
+          )}
+        </p>
+      )}
     </div>
   );
 }
