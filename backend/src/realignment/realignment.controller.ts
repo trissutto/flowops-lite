@@ -489,7 +489,7 @@ export class RealignmentController {
   @Post('shipments/:id/reabrir')
   reabrirShipment(
     @Param('id') id: string,
-    @Body() body: { descartarEtiqueta?: boolean },
+    @Body() body: { descartarEtiqueta?: boolean; cancelarNota?: boolean; justificativa?: string },
     @Req() req: any,
   ) {
     const role = req?.user?.role;
@@ -500,6 +500,8 @@ export class RealignmentController {
       storeId,
       userId: req?.user?.id || req?.user?.sub || undefined,
       descartarEtiqueta: !!body?.descartarEtiqueta,
+      cancelarNota: !!body?.cancelarNota,
+      justificativa: body?.justificativa,
     });
   }
 

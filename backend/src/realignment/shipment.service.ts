@@ -11,6 +11,7 @@ import { RealignmentPricingService } from './realignment-pricing.service';
 import { RealtimeGateway } from '../websocket/realtime.gateway';
 import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service';
 import { CorreiosService } from '../correios/correios.service';
+import { NfeTransferService } from '../nfe/nfe-transfer.service';
 
 /**
  * RealignmentShipmentService — gerencia o ciclo de REMESSA entre lojas.
@@ -39,6 +40,7 @@ export class RealignmentShipmentService {
     private readonly gateway: RealtimeGateway,
     private readonly catalog: WincredCatalogService,
     private readonly correios: CorreiosService,
+    private readonly nfe: NfeTransferService,
   ) {}
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -222,6 +224,18 @@ export class RealignmentShipmentService {
       take: 15,
     });
 
+    // Nota autorizada por caixa — a tela precisa AVISAR antes de reabrir, e não
+    // descobrir no erro. Uma query pra todas em vez de uma por cartão.
+    const notas = shipments.length
+      ? await (this.prisma as any).nfeDoc.findMany({
+          where: { shipmentId: { in: shipments.map((s: any) => s.id) }, status: 'authorized' },
+          select: { shipmentId: true, numero: true },
+        })
+      : [];
+    const notaPorCaixa = new Map<string, any>(
+      (notas as any[]).map((n) => [n.shipmentId, n.numero]),
+    );
+
     return Promise.all(
       shipments.map(async (s: any) => {
         const items = await this.prisma.transferOrder.findMany({
@@ -233,6 +247,7 @@ export class RealignmentShipmentService {
           items,
           totalPecas: (items as any[]).reduce((n, i) => n + (i.qtyOrigem || 1), 0),
           jaTemEtiqueta: !!s.envioGeneratedAt,
+          notaAutorizada: notaPorCaixa.get(s.id) ?? null,
         };
       }),
     );
@@ -261,6 +276,10 @@ export class RealignmentShipmentService {
     userId?: string;
     /** Reabrir mesmo com etiqueta gerada, descartando a pré-postagem. */
     descartarEtiqueta?: boolean;
+    /** Reabrir cancelando a NF-e autorizada na SEFAZ (evento 110111). */
+    cancelarNota?: boolean;
+    /** Justificativa do cancelamento (SEFAZ exige 15-255). Tem padrão. */
+    justificativa?: string;
   }) {
     const store = await this.prisma.store.findUnique({
       where: { id: input.storeId },
@@ -305,14 +324,38 @@ export class RealignmentShipmentService {
       );
     }
 
+    /**
+     * NF-e autorizada: cancela na SEFAZ (evento 110111) ANTES de tudo.
+     *
+     * Reusa `NfeTransferService.cancelDoc`, que já existe e já resolve o
+     * emitente correto — transferência às vezes sai pela raiz do destino, e
+     * autor errado é recusa 574. Escrever cancelamento fiscal de novo aqui
+     * seria a segunda versão da mesma coisa.
+     *
+     * Se a SEFAZ recusar, ESTOURA e nada mais é tocado: a caixa continua
+     * fechada, com a nota válida. É o contrário da etiqueta — pré-postagem não
+     * usada caduca sozinha, nota fiscal não. Prazo em SP é 24h; passou disso, a
+     * SEFAZ recusa e o caminho é com o contador (devolução), não por esta tela.
+     */
+    let notaCancelada: string | null = null;
     const nfAutorizada = await (this.prisma as any).nfeDoc.findFirst({
       where: { shipmentId: shipment.id, status: 'authorized' },
       select: { id: true, numero: true } as any,
     });
-    if (nfAutorizada) {
+    if (nfAutorizada && !input.cancelarNota) {
       throw new BadRequestException(
-        'Esta caixa já tem NF-e autorizada. Cancele a nota na SEFAZ antes de reabrir.',
+        `Esta caixa tem a NF-e ${nfAutorizada.numero} autorizada. ` +
+        'Reabrir exige cancelar a nota na SEFAZ — confirme se é isso mesmo.',
       );
+    }
+    if (nfAutorizada && input.cancelarNota) {
+      const justificativa =
+        String(input.justificativa || '').trim() ||
+        `Remessa ${shipment.code} reaberta na loja de origem para reagrupamento das pecas`;
+      // cancelDoc valida 15-255 e estoura com o cStat/xMotivo da SEFAZ.
+      await this.nfe.cancelDoc(nfAutorizada.id, justificativa, input.userId ?? null);
+      notaCancelada = String(nfAutorizada.numero);
+      this.logger.log(`[reopen] ${shipment.code}: NF-e ${notaCancelada} cancelada na SEFAZ`);
     }
 
     // Cancela a pré-postagem ANTES de mexer no resto: se os Correios
@@ -479,6 +522,7 @@ export class RealignmentShipmentService {
       obrigacoesCanceladas: obrigacoes,
       juntouEm,
       etiquetaDescartada,
+      notaCancelada,
     };
   }
 
