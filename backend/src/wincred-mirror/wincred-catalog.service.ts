@@ -402,6 +402,9 @@ export class WincredCatalogService {
       // vendaUn no espelho é DECIMAL em REAIS — NUNCA dividir por 100
       VENDAUN: p.vendaUn != null ? Number(p.vendaUn) : null,
       FORNECEDOR: p.fornecedor ? String(p.fornecedor).trim() : null,
+      // MARCA e o discriminador do balde na Consulta (nao o CNPJ) — ver
+      // products.service.storeProductSearch.
+      MARCA: p.marca ? String(p.marca).trim() : null,
     }));
   }
 

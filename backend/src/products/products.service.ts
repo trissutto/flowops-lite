@@ -2540,11 +2540,11 @@ export class ProductsService {
     refMatches?: Array<{ ref: string; name: string; variantCount: number }>;
     results: Array<{
       ref: string;
-      /** Fornecedor do balde. A MESMA REF pode voltar em 2+ famílias (REF
-          reciclada de verdade, OU fornecedor gravado diferente no cadastro —
-          caso BMM-100, madrugada de 03/08). A tela rotula cada cartão com
-          isto pra vendedora perceber que existe mais de um. */
-      fornecedor: string | null;
+      /** MARCA (nome fantasia) do balde — discriminador da REF reciclada.
+          NÃO é fornecedor/CNPJ: o mesmo fornecedor entra com CNPJ escrito
+          diferente entre cadastros e rachava a MESMA peça em dois cartões
+          (BMM-100, 03/08). Mesmo critério da tela master. */
+      marca: string | null;
       name: string;
       variants: Array<{
         sku: string;
@@ -2605,13 +2605,15 @@ export class ProductsService {
       const rows = await this.buscaUnica.resolveRows(q2, { fallbackTake: 5000 });
       if (!rows.length) return [] as any[];
       const cods = Array.from(new Set(rows.map((r: any) => String(r.codigo ?? r.CODIGO ?? '')).filter(Boolean)));
-      const hidr = new Map<string, { vendaUn: number | null; fornecedor: string | null }>();
+      // Hidrata MARCA (nome fantasia) e preço. MARCA — não FORNECEDOR — é o
+      // discriminador: ver o comentário do bucketKey mais abaixo.
+      const hidr = new Map<string, { vendaUn: number | null; marca: string | null }>();
       const fontes: Array<() => Promise<any[]>> = [
-        () => (this.prisma as any).product.findMany({ where: { codigo: { in: cods } }, select: { codigo: true, vendaUn: true, fornecedor: true } }).catch(() => []),
-        () => (this.prisma as any).wincredProduto.findMany({ where: { codigo: { in: cods } }, select: { codigo: true, vendaUn: true, fornecedor: true } }).catch(() => []),
-        // ⚠️ GigaProduto NÃO tem coluna fornecedor (schema) — pedir ela aqui
-        // dava PrismaClientValidationError engolido pelo catch e a fonte
-        // morria em silêncio (achado da varredura de 03/08). Só preço.
+        () => (this.prisma as any).product.findMany({ where: { codigo: { in: cods } }, select: { codigo: true, vendaUn: true, marca: true } }).catch(() => []),
+        () => (this.prisma as any).wincredProduto.findMany({ where: { codigo: { in: cods } }, select: { codigo: true, vendaUn: true, marca: true } }).catch(() => []),
+        // ⚠️ GigaProduto não tem `marca` nem `fornecedor` no schema — pedir
+        // coluna inexistente dava PrismaClientValidationError engolido pelo
+        // catch e a fonte morria em silêncio (varredura de 03/08). Só preço.
         () => (this.prisma as any).gigaProduto.findMany({ where: { codigo: { in: cods } }, select: { codigo: true, vendaUn: true } }).catch(() => []),
       ];
       for (const fonte of fontes) {
@@ -2619,8 +2621,8 @@ export class ProductsService {
         for (const h of await fonte()) {
           const c = String(h.codigo);
           const atual = hidr.get(c);
-          if (!atual) hidr.set(c, { vendaUn: h.vendaUn != null ? Number(h.vendaUn) : null, fornecedor: h.fornecedor ? String(h.fornecedor) : null });
-          else if (atual.fornecedor == null && h.fornecedor) atual.fornecedor = String(h.fornecedor);
+          if (!atual) hidr.set(c, { vendaUn: h.vendaUn != null ? Number(h.vendaUn) : null, marca: h.marca ? String(h.marca) : null });
+          else if (atual.marca == null && h.marca) atual.marca = String(h.marca);
         }
       }
       // Adapter tolerante: o ramo nativo do motor devolve minúsculo mapeado,
@@ -2635,7 +2637,7 @@ export class ProductsService {
           COR: r.cor ?? r.COR ?? '',
           TAMANHO: r.tamanho ?? r.TAMANHO ?? '',
           VENDAUN: r.vendaUn ?? r.VENDAUN ?? extra?.vendaUn ?? null,
-          FORNECEDOR: extra?.fornecedor ?? r.fornecedor ?? r.FORNECEDOR ?? '',
+          MARCA: extra?.marca ?? r.marca ?? r.MARCA ?? '',
         };
       });
     };
@@ -2748,7 +2750,7 @@ export class ProductsService {
 
     // 3. Coleta SKUs únicos e agrupa por REF
     const skus = Array.from(new Set(rawRows.map((r) => String(r.CODIGO)).filter(Boolean)));
-    const skuToMeta = new Map<string, { ref: string; descricao: string; cor: string; tamanho: string; preco: number | null; fornecedor: string }>();
+    const skuToMeta = new Map<string, { ref: string; descricao: string; cor: string; tamanho: string; preco: number | null; marca: string }>();
     for (const r of rawRows) {
       const sku = String(r.CODIGO);
       if (!sku || skuToMeta.has(sku)) continue;
@@ -2759,9 +2761,16 @@ export class ProductsService {
         tamanho: String(r.TAMANHO ?? ''),
         // VENDAUN em REAIS (espelho e Giga) — NUNCA dividir por 100
         preco: r.VENDAUN != null && Number(r.VENDAUN) > 0 ? Number(r.VENDAUN) : null,
-        // REF é RECICLADA entre fornecedores no Giga ("8709" = calça MANIFESTO
-        // e vestido RIU KIU) — o fornecedor separa os baldes
-        fornecedor: String(r.FORNECEDOR ?? '').trim().toUpperCase(),
+        // REF é RECICLADA entre fornecedores ("8709" = calça MANIFESTO e
+        // vestido RIU KIU), então precisa de um segundo discriminador — mas
+        // ele é a MARCA (nome fantasia), NÃO o FORNECEDOR (CNPJ).
+        //
+        // Por quê (decisão do dono, 03/08): o mesmo fornecedor entra com CNPJ
+        // escrito diferente entre o cadastro velho e o novo, e aí a MESMA
+        // peça racha em dois cartões — foi o que aconteceu com o BMM-100
+        // (8 cores + 6 cores). A marca é estável e é o que já aparece na
+        // descrição, e é exatamente o que a tela master usa pra agrupar.
+        marca: String(r.MARCA ?? r.FORNECEDOR ?? '').trim().toUpperCase(),
       });
     }
 
@@ -2830,7 +2839,7 @@ export class ProductsService {
     // 6. Monta o agrupamento por REF
     const byRef = new Map<string, {
       ref: string;
-      fornecedor: string | null;
+      marca: string | null;
       name: string;
       variants: Map<string, { sku: string; cor: string; tamanho: string; myStoreQty: number; preco: number | null }>;
       otherStoresMap: Map<string, {
@@ -2849,11 +2858,11 @@ export class ProductsService {
       // por fornecedores diferentes no Giga (calça MANIFESTO e vestido
       // RIU KIU ambos "8709") — sem o fornecedor os produtos se misturam e
       // a grade mostra o nome/preço de um com as variações do outro.
-      const bucketKey = `${ref}|${meta.fornecedor}`;
+      const bucketKey = `${ref}|${meta.marca}`;
       if (!byRef.has(bucketKey)) {
         byRef.set(bucketKey, {
           ref,
-          fornecedor: meta.fornecedor || null,
+          marca: meta.marca || null,
           name: cleanProductName(meta.descricao) || ref,
           variants: new Map(),
           otherStoresMap: new Map(),
@@ -2910,7 +2919,7 @@ export class ProductsService {
         matchedSkuForResult && variants.some((v) => v.sku === matchedSkuForResult)
           ? matchedSkuForResult
           : null;
-      return { ref: b.ref, fornecedor: b.fornecedor, name: b.name, variants, myStoreTotal, matchedSku, otherStores };
+      return { ref: b.ref, marca: b.marca, name: b.name, variants, myStoreTotal, matchedSku, otherStores };
     }).sort((a, b) => b.myStoreTotal - a.myStoreTotal);
 
     return {
