@@ -1254,6 +1254,9 @@ function ImportarFotosDoSite({ ref_, onImportou }: { ref_: string; onImportou: (
             ? `${r.fotos} foto(s) em ${r.coresComFoto.length} cor(es).`
             : 'Nada novo pra trazer.'}
           {r.jaTinham.length > 0 && ` ${r.jaTinham.length} cor(es) já tinham.`}
+          {r.produtosWcSemCor.length > 0 && (
+            <span className='text-slate-500'> {r.produtosWcSemCor.length} produto(s) do site antigo nao bateram com cor nenhuma.</span>
+          )}
           {r.coresSemFoto.length > 0 && (
             <span className="text-amber-700"> Sem foto no site antigo: {r.coresSemFoto.join(', ')}.</span>
           )}

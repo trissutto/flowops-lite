@@ -93,6 +93,67 @@ export class WcFotosImportService {
     return null;
   }
 
+  /**
+   * Acha no WooCommerce os produtos daquela REF.
+   *
+   * MEDIDO EM PRODUÇÃO (03/08): buscar por `sku=REF` devolve ZERO. O SKU do
+   * site antigo não é a REF — quem carrega a REF é o NOME ("… Ref VLM-222
+   * Marrom"), que é como o próprio site busca. Por isso a ordem:
+   *
+   *   1. sku exato      — respeita o cadastro quando ele está certo;
+   *   2. busca textual  — o caso real;
+   *   3. busca pela BASE da REF ("VLM-222EST" → "VLM-222") — as estampas
+   *      viraram REF própria no ERP, mas no site continuam com o nome da REF
+   *      original.
+   *
+   * O filtro por nome/SKU depois é o que impede a busca textual de trazer
+   * peça de outra REF: sem ele, "222" casaria com meio catálogo.
+   */
+  private async acharNoWc(ref: string): Promise<any[]> {
+    const base = ref.replace(/[A-Z]+$/i, '').replace(/[-_\s]+$/, '');
+    const tentativas: Array<Record<string, unknown>> = [
+      { sku: ref },
+      { search: ref },
+      ...(base && base !== ref ? [{ search: base }] : []),
+    ];
+
+    const combina = (p: any) => {
+      const sku = String(p?.sku || '').trim().toUpperCase().replace(/\s+/g, '');
+      if (sku === ref) return true;
+      const nome = this.semAcento(String(p?.name || ''));
+      const alvo = this.semAcento(ref).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const alvoBase = this.semAcento(base).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return (
+        new RegExp(`(^|[^A-Z0-9])${alvo}([^A-Z0-9]|$)`).test(nome) ||
+        (!!alvoBase && new RegExp(`(^|[^A-Z0-9])${alvoBase}([^A-Z0-9]|$)`).test(nome))
+      );
+    };
+
+    for (const params of tentativas) {
+      const res = await firstValueFrom(
+        this.http.get(`${this.baseUrl}/products`, {
+          auth: this.auth,
+          // `any` inclui RASCUNHO: muita peça boa ficou como draft no site
+          // antigo, e a foto dela é tão útil quanto a das publicadas.
+          params: { ...params, per_page: 100, status: 'any' },
+          timeout: 30000,
+        }),
+      ).catch((e) => {
+        this.logger.warn(`[wc-fotos] ${ref} ${JSON.stringify(params)}: ${e?.message}`);
+        return null;
+      });
+
+      const achados: any[] = (res?.data ?? []).filter(combina);
+      if (achados.length) {
+        this.logger.log(
+          `[wc-fotos] ${ref}: ${achados.length} produto(s) via ${JSON.stringify(params)}`,
+        );
+        return achados;
+      }
+    }
+    return [];
+  }
+
   private async baixar(url: string): Promise<{ buffer: Buffer; mime: string } | null> {
     try {
       const res = await firstValueFrom(
@@ -118,19 +179,7 @@ export class WcFotosImportService {
     const cores = await this.coresDaRef(ref);
     if (!cores.length) throw new BadRequestException(`REF ${ref} não tem cores no catálogo.`);
 
-    // Todos os produtos do WC com esse SKU — um por cor.
-    const res = await firstValueFrom(
-      this.http.get(`${this.baseUrl}/products`, {
-        auth: this.auth,
-        params: { sku: ref, per_page: 100, status: 'publish' },
-        timeout: 30000,
-      }),
-    ).catch((e) => {
-      this.logger.warn(`[wc-fotos] busca ${ref} falhou: ${e?.message}`);
-      return null;
-    });
-
-    const produtos: any[] = res?.data ?? [];
+    const produtos = await this.acharNoWc(ref);
     const resultado: ResultadoRef = {
       ref, coresComFoto: [], coresSemFoto: [], jaTinham: [], produtosWcSemCor: [], fotos: 0,
     };
@@ -161,7 +210,9 @@ export class WcFotosImportService {
             file: {
               buffer: arquivo.buffer,
               mimetype: arquivo.mime,
-              originalname: `wc-${p.id}-${subidas + 1}.jpg`,
+              // Nome pelo que a peça É, não pelo id do site velho: o arquivo
+              // no bucket já nasce identificável (VLM-222-MARINHO-1.jpg).
+              originalname: `${ref}-${cor.replace(/[^A-Za-z0-9]+/g, '-')}-${subidas + 1}.jpg`,
             },
           });
           subidas++;

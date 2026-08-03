@@ -75,6 +75,7 @@ export default async function HomePage() {
       {/* 01 — HERO EDITORIAL */}
       <Hero
         image={hero.image}
+        imageMobile={hero.imageMobile}
         eyebrow={hero.eyebrow}
         title={
           <>
