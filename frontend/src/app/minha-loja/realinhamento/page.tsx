@@ -872,7 +872,7 @@ export default function MinhaLojaRealinhamentoPage() {
           <div className="space-y-3">
             <div className="flex items-center gap-2 text-sm font-bold text-rose-900">
               <AlertCircle className="w-4 h-4" />
-              Caixa fechada esperando etiqueta
+              Caixas fechadas — etiqueta e nota
             </div>
             {pendingLabel
               .filter((s) => s.id !== recemEnviada?.id)
@@ -883,6 +883,8 @@ export default function MinhaLojaRealinhamentoPage() {
                   code={s.code}
                   qty={s.totalPecas ?? 0}
                   destino={s.toStoreName || s.toStoreCode}
+                  rastreioExistente={s.trackingCode ?? null}
+                  jaTemEtiqueta={!!s.jaTemEtiqueta}
                 />
               ))}
           </div>
@@ -1686,19 +1688,23 @@ function RealignCell({
  * config fiscal das lojas, a mesma que a NF-e usa.
  */
 function EnvioDaRemessa({
-  shipmentId, code, qty, onFechar, destino,
+  shipmentId, code, qty, onFechar, destino, rastreioExistente = null, jaTemEtiqueta = false,
 }: {
   shipmentId: string;
   code: string;
   qty: number;
-  /** Só a caixa que ACABOU de fechar pode ser dispensada. A que ficou
-   *  pendente de etiqueta some sozinha quando a etiqueta sai — dar um "fechar"
-   *  ali seria oferecer esconder trabalho que ainda existe. */
+  /** Só a caixa que ACABOU de fechar pode ser dispensada. A da lista some
+   *  sozinha quando sai da janela de dias — dar um "fechar" ali seria oferecer
+   *  esconder trabalho que ainda existe. */
   onFechar?: () => void;
   destino?: string;
+  /** Rastreio que já está gravado — a caixa pode ter tido o envio gerado num
+   *  dia e a impressão falhado no outro. */
+  rastreioExistente?: string | null;
+  jaTemEtiqueta?: boolean;
 }) {
   const [ocupado, setOcupado] = useState<'gerar' | 'docs' | null>(null);
-  const [rastreio, setRastreio] = useState<string | null>(null);
+  const [rastreio, setRastreio] = useState<string | null>(rastreioExistente);
   const [msg, setMsg] = useState<{ tipo: 'ok' | 'erro'; texto: string } | null>(null);
 
   async function gerar() {
@@ -1755,7 +1761,9 @@ function EnvioDaRemessa({
             {destino && <span className="font-bold"> · pra {destino}</span>}
           </p>
           <p className="text-xs text-emerald-800/80 mt-0.5">
-            Agora gere a etiqueta dos Correios e imprima junto com a nota — sem sair desta tela.
+            {jaTemEtiqueta
+              ? 'Envio já gerado — clique em Etiqueta + NF pra imprimir de novo.'
+              : 'Agora gere a etiqueta dos Correios e imprima junto com a nota — sem sair desta tela.'}
           </p>
           {rastreio && (
             <p className="text-xs font-mono font-bold text-emerald-900 mt-1">Rastreio: {rastreio}</p>
@@ -1769,7 +1777,7 @@ function EnvioDaRemessa({
             className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-xl text-sm font-black shadow-md flex items-center gap-2 disabled:opacity-50"
           >
             {ocupado === 'gerar' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Truck className="w-4 h-4" />}
-            Gerar envio Correios
+            {jaTemEtiqueta ? 'Refazer envio' : 'Gerar envio Correios'}
           </button>
           <button
             type="button"
