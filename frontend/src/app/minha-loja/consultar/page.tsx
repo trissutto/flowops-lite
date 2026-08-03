@@ -109,6 +109,10 @@ function ConsultarInner() {
   const [loading, setLoading] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [pickedRefFromDesc, setPickedRefFromDesc] = useState<ProductResult | null>(null);
+  // TODAS as familias da REF detalhada — a madrugada do BMM-100 (03/08)
+  // provou que guardar so a escolhida esconde a(s) outra(s) familia(s)
+  // (mesma REF com fornecedor diferente) e a vendedora jura que nao existe.
+  const [familiasDaRef, setFamiliasDaRef] = useState<ProductResult[]>([]);
   const [loadingRefFromDesc, setLoadingRefFromDesc] = useState(false);
 
   const inputRef = useRef<HTMLInputElement>(null);
@@ -211,6 +215,7 @@ function ConsultarInner() {
       // O user continua no modo DESC (pra conseguir voltar), mas vê o detalhe.
       if (tryRefFirst && resp.results.length >= 1) {
         setPickedRefFromDesc(resp.results[0]);
+        setFamiliasDaRef(resp.results);
       }
     } catch (err: any) {
       if (err?.name === 'AbortError') return;
@@ -241,7 +246,7 @@ function ConsultarInner() {
       runSearch(mode, query);
     }
     if (e.key === 'Escape') {
-      setQuery(''); setData(null); setSearchError(null); setPickedRefFromDesc(null);
+      setQuery(''); setData(null); setSearchError(null); setPickedRefFromDesc(null); setFamiliasDaRef([]);
     }
   }, [mode, query, runSearch]);
 
@@ -293,6 +298,7 @@ function ConsultarInner() {
         first = best;
       }
       setPickedRefFromDesc(first);
+      setFamiliasDaRef(resp.results);
     } catch (err: any) {
       setSearchError(err?.message ?? 'Falha ao carregar REF.');
     } finally {
@@ -414,16 +420,33 @@ function ConsultarInner() {
         {!searchError && mode === 'desc' && pickedRefFromDesc && (
           <div className="mt-3 space-y-3">
             <button
-              onClick={() => setPickedRefFromDesc(null)}
+              onClick={() => { setPickedRefFromDesc(null); setFamiliasDaRef([]); }}
               className="text-sm text-brand font-medium inline-flex items-center gap-1 hover:underline"
             >
               <ArrowLeft className="w-4 h-4" /> Voltar pra lista de REFs
             </button>
-            <ProductCard
-              item={pickedRefFromDesc}
-              highlightSku={null}
-              myStore={data?.myStore ?? (me?.storeCode ? { code: me.storeCode, name: me.storeName ?? me.storeCode } : null)}
-            />
+            {/* A madrugada do BMM-100 (03/08): guardar só a família escolhida
+                escondia a outra (mesma REF, fornecedor diferente) e a
+                vendedora jurava que a peça não existia. Agora TODAS as
+                famílias renderizam, a escolhida primeiro, com aviso âmbar. */}
+            {familiasDaRef.length > 1 && (
+              <div className="bg-amber-50 border-2 border-amber-300 rounded-xl p-3 text-sm text-amber-900">
+                <strong>{familiasDaRef.length} cadastros desta REF</strong> — a mesma
+                referência existe com fornecedores diferentes. Confira todos os
+                cartões abaixo antes de dizer que não tem.
+              </div>
+            )}
+            {(familiasDaRef.length > 1
+              ? [pickedRefFromDesc, ...familiasDaRef.filter((f) => f !== pickedRefFromDesc)]
+              : [pickedRefFromDesc]
+            ).map((fam, i) => (
+              <ProductCard
+                key={`${fam.ref}|${fam.fornecedor ?? i}`}
+                item={fam}
+                highlightSku={null}
+                myStore={data?.myStore ?? (me?.storeCode ? { code: me.storeCode, name: me.storeName ?? me.storeCode } : null)}
+              />
+            ))}
           </div>
         )}
 
@@ -547,9 +570,11 @@ function DescResults({
         {refs.length >= 200 && ' (mostrando as 200 mais relevantes — refine a busca)'}
       </div>
       <div className="space-y-2">
-        {refs.map((r) => (
+        {/* Chave composta: a MESMA REF pode repetir na lista (fornecedores
+            diferentes) — só r.ref duplicaria a key e o React some com itens. */}
+        {refs.map((r, i) => (
           <button
-            key={r.ref}
+            key={`${r.ref}|${i}`}
             onClick={() => onPickRef(r.ref, r.name)}
             disabled={loading}
             className="w-full text-left bg-white rounded-xl border border-slate-200 hover:border-brand hover:bg-brand/5 shadow-sm p-4 flex items-start gap-3 transition disabled:opacity-50"

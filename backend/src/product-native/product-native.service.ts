@@ -31,8 +31,15 @@ export class ProductNativeService {
 
   /** SQL de upsert espelho→nativo. `incremental` limita às linhas recentes. */
   private buildUpsertSql(incremental: boolean): string {
+    // ⚠️ O incremental também traz linhas AUSENTES da nativa (anti-join), não
+    // só as de dataAlt recente. Sem isso, REF antiga que nunca entrou fica
+    // invisível pra sempre: o caso BMM-100 (madrugada 03/08) tinha dataAlt
+    // 2023/2024 — carimbo do incidente DATAALT — e o filtro de 3 dias nunca a
+    // alcançava, então a Consultar (que lê a nativa com PRODUCT_NATIVE_READS)
+    // dependia do fallback pro MySQL descontinuado enxergar a peça.
     const where = incremental
-      ? `WHERE w."dataAlt" >= CURRENT_DATE - INTERVAL '3 days'`
+      ? `WHERE w."dataAlt" >= CURRENT_DATE - INTERVAL '3 days'
+            OR NOT EXISTS (SELECT 1 FROM product p2 WHERE p2.codigo = w.codigo)`
       : '';
     return `
       INSERT INTO product (

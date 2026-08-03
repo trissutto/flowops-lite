@@ -326,11 +326,25 @@ export class WincredCatalogService {
     if (!clean) return [];
     const prisma: any = this.prisma;
 
-    const produtos: any[] = await this.produtoTable.findMany({
-      where: { OR: [{ ref: clean }, { ref: { startsWith: clean } }] },
-      orderBy: [{ cor: 'asc' }, { tamanho: 'asc' }],
-      take: 1000,
-    });
+    // ⚠️ NUNCA deixar "parcial vencer completo" (varredura 03/08, BMM-100):
+    // com PRODUCT_NATIVE_READS a fonte é a tabela nativa, mas ela é populada
+    // por sync com janela — se tiver só parte da família, devolver esse
+    // parcial NÃO-VAZIO suprime o fallback que conhecia o resto e a cor some
+    // da Consultar. Aqui consultamos AS DUAS tabelas Postgres com o mesmo
+    // WHERE e mesclamos por codigo (nativa vence no conflito).
+    const whereRef = { OR: [{ ref: clean }, { ref: { startsWith: clean } }] };
+    const args = { where: whereRef, orderBy: [{ cor: 'asc' }, { tamanho: 'asc' }] as any, take: 1000 };
+    const [nativos, espelho]: [any[], any[]] = await Promise.all([
+      prisma.product.findMany(args).catch(() => []),
+      prisma.wincredProduto.findMany(args).catch(() => []),
+    ]);
+    if (nativos.length !== espelho.length) {
+      this.logger.log(`[consulta] ref "${clean}": nativo=${nativos.length} espelho=${espelho.length} (mesclando)`);
+    }
+    const porCodigo = new Map<string, any>();
+    for (const p of espelho) porCodigo.set(String(p.codigo), p);
+    for (const p of nativos) porCodigo.set(String(p.codigo), p); // nativa vence
+    const produtos: any[] = Array.from(porCodigo.values());
     if (!produtos.length) return [];
 
     // Padrões aceitos como variação de cor da MESMA REF base (igual ao Giga):
