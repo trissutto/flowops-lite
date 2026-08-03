@@ -913,6 +913,7 @@ export default function MinhaLojaRealinhamentoPage() {
                   destino={s.toStoreName || s.toStoreCode}
                   rastreioExistente={s.trackingCode ?? null}
                   jaTemEtiqueta={!!s.jaTemEtiqueta}
+                  notaAutorizada={s.notaAutorizada ?? null}
                   onMudou={() => {
                     void loadPendingLabel();
                     void loadOpenShipments();
@@ -1767,7 +1768,8 @@ function RealignCell({
  * config fiscal das lojas, a mesma que a NF-e usa.
  */
 function EnvioDaRemessa({
-  shipmentId, code, qty, onFechar, destino, rastreioExistente = null, jaTemEtiqueta = false, onMudou,
+  shipmentId, code, qty, onFechar, destino, rastreioExistente = null, jaTemEtiqueta = false,
+  notaAutorizada = null, onMudou,
 }: {
   shipmentId: string;
   code: string;
@@ -1781,6 +1783,8 @@ function EnvioDaRemessa({
    *  dia e a impressão falhado no outro. */
   rastreioExistente?: string | null;
   jaTemEtiqueta?: boolean;
+  /** Número da NF-e autorizada desta caixa, se houver. */
+  notaAutorizada?: string | number | null;
   /** Recarrega as listas da tela — a caixa reaberta sai daqui e volta pras
    *  amarelas, então quem manda tem que saber. */
   onMudou?: () => void;
@@ -1813,15 +1817,17 @@ function EnvioDaRemessa({
   }
 
   async function reabrir() {
-    const aviso = jaTemEtiqueta
-      ? `Reabrir a caixa ${code}?\n\n` +
-        `⚠️ A ETIQUETA ${rastreio || ''} SERÁ DESCARTADA — jogue fora, não poste com ela.\n\n` +
-        'As peças voltam pro estoque da loja, a cobrança do acerto é cancelada ' +
-        'e a loja destino deixa de esperar a caixa.'
-      : `Reabrir a caixa ${code}?\n\n` +
-        'As peças voltam pro estoque da loja, a cobrança do acerto é cancelada ' +
-        'e a loja destino deixa de esperar a caixa.';
-    if (!window.confirm(aviso)) return;
+    // O aviso lista o que vai ser DESFEITO, item por item. Reabrir mexe em
+    // estoque, em cobrança entre lojas e — quando tem nota — em documento
+    // fiscal; um "tem certeza?" genérico esconderia justamente isso.
+    const desfaz = [
+      jaTemEtiqueta ? `⚠️ A ETIQUETA ${rastreio || ''} será CANCELADA — jogue fora, não poste com ela.` : null,
+      notaAutorizada ? `⚠️ A NOTA FISCAL ${notaAutorizada} será CANCELADA na SEFAZ (prazo de 24h; fora dele a SEFAZ recusa e nada muda).` : null,
+      'As peças voltam pro estoque da loja.',
+      'A cobrança do acerto é cancelada.',
+      'A loja destino deixa de esperar a caixa.',
+    ].filter(Boolean);
+    if (!window.confirm(`Reabrir a caixa ${code}?\n\n${desfaz.join('\n')}`)) return;
     setOcupado('reabrir');
     setMsg(null);
     try {
@@ -1829,14 +1835,18 @@ function EnvioDaRemessa({
         method: 'POST',
         // Confirmado na tela: a etiqueta vai pro lixo. Sem isto o backend
         // recusa — e recusar sem saída foi o que prendeu as caixas antes.
-        body: JSON.stringify({ descartarEtiqueta: jaTemEtiqueta }),
+        body: JSON.stringify({
+          descartarEtiqueta: jaTemEtiqueta,
+          cancelarNota: !!notaAutorizada,
+        }),
       });
       setMsg({
         tipo: 'ok',
         texto:
           `Caixa reaberta — ${r?.itens ?? 0} peça(s) voltaram pra montagem` +
           (r?.juntouEm ? `, juntadas na caixa ${r.juntouEm}.` : '.') +
-          (r?.etiquetaDescartada ? ' A etiqueta antiga foi descartada.' : ''),
+          (r?.etiquetaDescartada ? ' Etiqueta cancelada.' : '') +
+          (r?.notaCancelada ? ` NF-e ${r.notaCancelada} cancelada na SEFAZ.` : ''),
       });
       onMudou?.();
     } catch (e: any) {
