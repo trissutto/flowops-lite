@@ -111,14 +111,63 @@ export class LojaCatalogService {
   private montarPeca(
     ref: string, linhas: LinhaErp[], site: any, fit: any, fotos: any[] = [], ficha?: any,
   ) {
-    const precos = linhas.map((l) => l.preco).filter((p) => p > 0);
+    /* ── DEDUPE: a mesma cor+tamanho não pode aparecer duas vezes ──────────
+     * O catálogo tem REF cadastrada mais de uma vez (códigos diferentes pra
+     * MESMO cor+tamanho). Sem tratar, a cliente via "44 46 46 48 48 50 50".
+     *
+     * Regra do dono (03/08): NUNCA duplicar; entre os cadastros duplicados
+     * fica o de MAIOR QUANTIDADE — e a duplicidade é REPORTADA. Somar os dois
+     * seria pior: inflaria o estoque de um erro de cadastro e o site venderia
+     * peça que não existe.
+     */
+    const chaveVar = (l: LinhaErp) =>
+      `${(l.cor || '').trim().toUpperCase()}|${(l.tamanho || '').trim().toUpperCase()}`;
+
+    const melhorPorVariacao = new Map<string, LinhaErp>();
+    const duplicadas: Array<{ cor: string | null; tamanho: string | null; codigos: string[] }> = [];
+    for (const l of linhas) {
+      const k = chaveVar(l);
+      const atual = melhorPorVariacao.get(k);
+      if (!atual) {
+        melhorPorVariacao.set(k, l);
+        continue;
+      }
+      // Empate de estoque: fica o de código menor, só pra ser determinístico
+      // (duas respostas diferentes pra mesma peça confundem mais que o erro).
+      const vence =
+        (l.estoque || 0) > (atual.estoque || 0) ||
+        ((l.estoque || 0) === (atual.estoque || 0) && String(l.codigo) < String(atual.codigo));
+      if (vence) melhorPorVariacao.set(k, l);
+
+      const registro = duplicadas.find(
+        (d) => (d.cor || '') === (l.cor || '') && (d.tamanho || '') === (l.tamanho || ''),
+      );
+      if (registro) {
+        if (!registro.codigos.includes(l.codigo)) registro.codigos.push(l.codigo);
+      } else {
+        duplicadas.push({ cor: l.cor, tamanho: l.tamanho, codigos: [atual.codigo, l.codigo] });
+      }
+    }
+    if (duplicadas.length) {
+      this.logger.warn(
+        `[catalogo] REF ${ref} tem ${duplicadas.length} variação(ões) duplicada(s) — ` +
+          `vale a de maior estoque: ${duplicadas
+            .map((d) => `${d.cor ?? '?'}/${d.tamanho ?? '?'} [${d.codigos.join(', ')}]`)
+            .join(' · ')}`,
+      );
+    }
+    const unicas = Array.from(melhorPorVariacao.values());
+
+    // Preço e estoque saem das ÚNICAS: somar cadastro duplicado inflaria o
+    // estoque do site e faria vender peça que não existe na arara.
+    const precos = unicas.map((l) => l.preco).filter((p) => p > 0);
     const preco = precos.length ? Math.min(...precos) : 0;
-    const estoqueTotal = linhas.reduce((s, l) => s + (l.estoque || 0), 0);
+    const estoqueTotal = unicas.reduce((s, l) => s + (l.estoque || 0), 0);
 
     // Grade: tamanho na ordem da numeração plus, com estoque somado por tamanho
     const porTamanho = new Map<string, number>();
     const cores = new Map<string, { nome: string; estoque: number }>();
-    for (const l of linhas) {
+    for (const l of unicas) {
       if (l.tamanho) porTamanho.set(l.tamanho, (porTamanho.get(l.tamanho) || 0) + (l.estoque || 0));
       if (l.cor) {
         const c = cores.get(l.cor) || { nome: l.cor, estoque: 0 };
@@ -156,7 +205,7 @@ export class LojaCatalogService {
       .sort((a, b) => a.localeCompare(b, 'pt-BR'))
       .map((nomeCor) => {
         const chave = nomeCor.toUpperCase();
-        const daCor = linhas.filter((l) => (l.cor || '').toUpperCase() === chave);
+        const daCor = unicas.filter((l) => (l.cor || '').toUpperCase() === chave);
         const suasFotos = fotosPorCor.get(chave) ?? [];
         const f = fichaPorCor.get(chave);
         const precosCor = daCor.map((l) => l.preco).filter((p) => p > 0);
@@ -247,7 +296,14 @@ export class LojaCatalogService {
       // Fiscal (pro checkout futuro) — do ERP, nunca digitado
       fiscal: { ncm: linhas.find((l) => l.ncm)?.ncm ?? null, cst: linhas.find((l) => l.cst)?.cst ?? null },
 
-      variacoes: linhas.map((l) => ({
+      // Cadastro duplicado (mesma cor+tamanho em códigos diferentes). Vai no
+      // payload pra retaguarda REPORTAR — o site ignora, mas alguém tem que
+      // limpar o cadastro: código duplicado é etiqueta ambígua no bipe.
+      duplicidades: duplicadas,
+
+      // Só as variações que sobreviveram ao dedupe — é o que o carrinho e a
+      // separação enxergam.
+      variacoes: unicas.map((l) => ({
         sku: l.codigo,
         cor: l.cor,
         tamanho: l.tamanho,
