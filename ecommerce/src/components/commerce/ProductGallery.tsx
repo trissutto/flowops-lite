@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Image from 'next/image';
 import { motion } from 'framer-motion';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
@@ -18,8 +18,18 @@ import type { Media } from '@/types';
  * A foto é o argumento de venda: proporção 3/4 e `priority` na primeira,
  * que é o LCP da página.
  */
-export function ProductGallery({ images, name }: { images: Media[]; name: string }) {
+export function ProductGallery({
+  images,
+  name,
+  autoPlay = false,
+}: {
+  images: Media[];
+  name: string;
+  /** Passa as fotos sozinha a cada 4,5s — e para no primeiro sinal de interesse. */
+  autoPlay?: boolean;
+}) {
   const [active, setActive] = useState(0);
+  const [parado, setParado] = useState(false);
   const safeImages = images.length > 0 ? images : [{ src: '', alt: name }];
   const current = safeImages[active];
 
@@ -27,8 +37,29 @@ export function ProductGallery({ images, name }: { images: Media[]; name: string
     setActive((i) => (i + delta + safeImages.length) % safeImages.length);
   }
 
+  /**
+   * Autoplay: mostra o caimento de vários ângulos (e as outras cores da peça)
+   * sem a cliente precisar clicar.
+   *
+   * PARA no primeiro sinal de interesse — mouse em cima ou toque — e não
+   * volta. Carrossel que continua andando enquanto a pessoa tenta olhar uma
+   * foto é pior que carrossel nenhum: o automático serve pra quem está
+   * passando o olho, não pra quem já parou pra decidir.
+   */
+  useEffect(() => {
+    if (!autoPlay || parado || safeImages.length < 2) return;
+    const timer = setInterval(() => {
+      setActive((i) => (i + 1) % safeImages.length);
+    }, 4500);
+    return () => clearInterval(timer);
+  }, [autoPlay, parado, safeImages.length]);
+
   return (
-    <div className="flex flex-col gap-4 lg:flex-row-reverse lg:gap-6">
+    <div
+      className="flex flex-col gap-4 lg:flex-row-reverse lg:gap-6"
+      onPointerDown={() => setParado(true)}
+      onMouseEnter={() => setParado(true)}
+    >
       {/* Foto principal */}
       <div className="relative aspect-3/4 flex-1 overflow-hidden rounded-lg bg-surface-alt">
         {current.src ? (

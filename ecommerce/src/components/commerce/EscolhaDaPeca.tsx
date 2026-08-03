@@ -37,6 +37,26 @@ export function EscolhaDaPeca({ product, cores }: { product: Product; cores: Cor
    * exatamente como está hoje — o fallback importa mais que o recurso novo
    * enquanto o cadastro de fotos não terminou.
    */
+  /**
+   * GALERIA: todas as fotos da peça, começando pelas da cor escolhida.
+   *
+   * O dono pediu que "rode sozinha por todas as cores" — então trocar de cor
+   * não ESCONDE as outras, só reordena. Assim a cliente vê a variedade sem
+   * precisar clicar bolinha por bolinha, e a foto que abre é sempre a da cor
+   * que ela escolheu.
+   */
+  const galeria = useMemo(() => {
+    const daCor = (c: CorApi) =>
+      c.fotos.map((f) => ({ src: f.src, alt: f.alt ?? `${product.name} ${c.nome}` }));
+    const escolhida = corAtual ? daCor(corAtual) : [];
+    const resto = cores.filter((c) => c.nome !== corAtual?.nome).flatMap(daCor);
+    const tudo = [...escolhida, ...resto];
+    return tudo.length ? tudo : product.images;
+  }, [cores, corAtual, product]);
+
+  /** Cor sem foto própria: mostra a das outras, mas AVISA — senão vira troca. */
+  const fotoIlustrativa = !!corAtual && corAtual.fotos.length === 0 && galeria.length > 0;
+
   const pecaDaCor: Product = useMemo(() => {
     if (!corAtual) return product;
     return {
@@ -55,14 +75,33 @@ export function EscolhaDaPeca({ product, cores }: { product: Product; cores: Cor
     };
   }, [product, corAtual]);
 
+  /** "Restam 2 nesta cor" — só com estoque de verdade, nunca inventado. */
+  const alertaEstoque = (() => {
+    if (!corAtual) return null;
+    const total = corAtual.tamanhos.reduce((s, t) => s + (t.estoque || 0), 0);
+    if (total <= 0 || total > 3) return null;
+    return total === 1
+      ? `Última peça em ${corAtual.nome}`
+      : `Restam ${total} peças em ${corAtual.nome}`;
+  })();
+
   return (
     <div className="grid gap-10 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)] lg:gap-16">
       {/* `key` força a galeria a voltar pra primeira foto ao trocar de cor —
           sem isso a cliente escolhe MARINHO e continua vendo a 4ª foto do
           PRETO, que era o índice em que ela estava. */}
-      <ProductGallery key={cor ?? 'unica'} images={pecaDaCor.images} name={pecaDaCor.name} />
+      <div>
+        <ProductGallery key={cor ?? 'unica'} images={galeria} name={pecaDaCor.name} autoPlay />
+        {fotoIlustrativa && (
+          <p className="mt-3 text-small text-ink-muted">
+            Ainda não temos foto de <strong>{corAtual!.nome}</strong> — as fotos acima são das
+            outras cores desta mesma peça.
+          </p>
+        )}
+      </div>
       <div className="lg:sticky lg:top-28 lg:self-start">
         <BuyBox
+          alertaEstoque={alertaEstoque}
           product={pecaDaCor}
           cores={cores.map((c) => ({ nome: c.nome, swatch: c.swatch, estoque: c.estoque }))}
           corSelecionada={cor}

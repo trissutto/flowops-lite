@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/Input';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { EmptyState } from '@/components/feedback/EmptyState';
 import { CartLineRow } from '@/components/commerce/CartLineRow';
+import { ProgressoFreteGratis } from '@/components/commerce/ProgressoFreteGratis';
 import { ProductCard } from '@/components/cards/ProductCard';
 import { useCartStore } from '@/store/cart';
 import { useMounted } from '@/hooks';
@@ -256,6 +257,11 @@ export default function CarrinhoPage() {
         Sua sacola{' '}
         {count > 0 && <span className="tabular text-h4 font-light text-ink-soft">({count} {count === 1 ? 'peça' : 'peças'})</span>}
       </h1>
+
+      {/* A meta do frete grátis aparece AQUI também, e não só no mini-carrinho:
+          é nesta tela que a cliente decide fechar ou voltar pra vitrine — o
+          momento em que "levo mais uma pra bater a meta" acontece. */}
+      {!vazio && <ProgressoFreteGratis subtotal={subtotal} className="mt-6" />}
 
       {vazio && saved.length === 0 ? (
         <EmptyState

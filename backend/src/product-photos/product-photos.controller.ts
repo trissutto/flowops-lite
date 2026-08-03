@@ -16,6 +16,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { ProductPhotosService } from './product-photos.service';
 import { CorIaService } from './cor-ia.service';
+import { WcFotosImportService } from './wc-fotos-import.service';
 
 @UseGuards(JwtAuthGuard)
 @Controller('product-photos')
@@ -23,6 +24,7 @@ export class ProductPhotosController {
   constructor(
     private readonly svc: ProductPhotosService,
     private readonly corIa: CorIaService,
+    private readonly wcImport: WcFotosImportService,
   ) {}
 
   private requireWrite(req: any) {
@@ -112,6 +114,19 @@ export class ProductPhotosController {
    * site. O conta-gotas manual continua valendo — isto é o palpite inicial.
    * POST /product-photos/detectar-cor  body: { url }
    */
+  /**
+   * Puxa do site antigo (WooCommerce) as fotos que JÁ EXISTEM daquela REF,
+   * casando cada produto do WC com a COR do catálogo pelo nome.
+   * POST /product-photos/importar-wc   body: { ref } ou { refs: [...] }
+   */
+  @Post('importar-wc')
+  async importarWc(@Req() req: any, @Body() body: { ref?: string; refs?: string[] }) {
+    this.requireWrite(req);
+    const quem = req?.user?.id || req?.user?.sub || undefined;
+    if (body?.refs?.length) return this.wcImport.importarLote(body.refs, quem);
+    return this.wcImport.importarRef(String(body?.ref || ''), quem);
+  }
+
   @Post('detectar-cor')
   async detectarCor(@Req() req: any, @Body('url') url: string) {
     this.requireWrite(req);

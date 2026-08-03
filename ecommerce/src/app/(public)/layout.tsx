@@ -2,6 +2,7 @@ import { Header } from '@/components/navigation/Header';
 import { Footer } from '@/components/layout/Footer';
 import { MiniCart } from '@/components/commerce/MiniCart';
 import { QuickAddSheet } from '@/components/commerce/QuickAddSheet';
+import { AssistenteWidget } from '@/components/chat/AssistenteWidget';
 import { getTarjaDoTopo } from '@/services/banners';
 
 /**
@@ -25,6 +26,8 @@ export default async function PublicLayout({ children }: { children: React.React
       {/* Uma instância só: o botão da sacolinha nasce em todo card (vitrine,
           carrossel, busca) e todos falam com este mesmo store. */}
       <QuickAddSheet />
+      {/* Atendimento: bolha fixa em todas as páginas da vitrine. */}
+      <AssistenteWidget />
     </>
   );
 }

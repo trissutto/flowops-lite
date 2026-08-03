@@ -4532,6 +4532,47 @@ model ProdutoFichaCor {
   @@map("produto_ficha_cor")
 }
 
+/// ATENDIMENTO DO SITE — a conversa da cliente com a assistente.
+///
+/// Guarda a conversa INTEIRA, e não só o lead: quando a cliente pede uma
+/// consultora, quem atende precisa saber o que já foi perguntado — repetir a
+/// pergunta é a forma mais rápida de perder a venda que a assistente segurou.
+///
+/// `status`:
+///   'ativa'      → conversando com a IA
+///   'aguardando' → pediu humano; está na fila da retaguarda
+///   'atendida'   → uma consultora assumiu
+///   'encerrada'  → resolvida sem humano
+model SiteChat {
+  id          String   @id @default(uuid())
+  /// Anônimo por sessão do navegador — a cliente não precisa se identificar
+  /// pra tirar dúvida.
+  sessaoId    String   @map("sessao_id")
+  /// Preenchido quando ela está logada (cookie da conta) — aí a assistente
+  /// enxerga os pedidos dela.
+  customerId  String?  @map("customer_id")
+
+  /// [{ papel: 'cliente'|'assistente', texto, em }]
+  mensagens   String   @db.Text
+
+  /// Deixados quando ela pede atendimento humano.
+  nome        String?
+  whatsapp    String?
+  /// O que ela estava vendo quando chamou — encurta o atendimento.
+  contexto    String?  @db.Text
+
+  status      String   @default("ativa")
+  atendidaPor String?  @map("atendida_por")
+  atendidaEm  DateTime? @map("atendida_em")
+
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@index([status, updatedAt])
+  @@index([sessaoId])
+  @@map("site_chats")
+}
+
 /// BANNER DA VITRINE — o que a loja troca sozinha, sem deploy.
 ///
 /// Até 03/08/2026 o hero da home, a tarja do topo e as faixas editoriais eram

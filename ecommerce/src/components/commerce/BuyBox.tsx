@@ -5,6 +5,7 @@ import { Heart, MapPin, MessageCircle, Ruler, ShoppingBag, Sparkles, Star, Truck
 import { Button } from '@/components/ui/Button';
 import { SizePill } from '@/components/ui/Choice';
 import { FitAssistant } from '@/components/fit/FitAssistant';
+import { ChamarConsultora } from '@/components/chat/AssistenteWidget';
 import { ProductBadgeTag } from '@/components/ui/Badge';
 import { useToast } from '@/components/feedback/ToastProvider';
 import { useCartStore } from '@/store/cart';
@@ -32,13 +33,15 @@ export interface CorEscolhivel {
 }
 
 export function BuyBox({
-  product, cores, corSelecionada, onSelecionarCor,
+  product, cores, corSelecionada, onSelecionarCor, alertaEstoque,
 }: {
   product: Product;
   /** Cores da peça. Vazio = peça de cor única (ou catálogo sem ficha ainda). */
   cores?: CorEscolhivel[];
   corSelecionada?: string | null;
   onSelecionarCor?: (nome: string) => void;
+  /** "Restam 2 nesta cor" — só com número REAL do estoque, nunca inventado. */
+  alertaEstoque?: string | null;
 }) {
   const [size, setSize] = useState<string | null>(null);
   const [sizeError, setSizeError] = useState(false);
@@ -86,6 +89,16 @@ export function BuyBox({
     // página — e o próximo passo (finalizar) já está na mão dela.
     openOverlay('cart');
   }
+
+  /**
+   * "Ver peças parecidas" — joga na busca as primeiras palavras do nome, que
+   * é onde mora o CORTE da peça ("Blusa Feminina Manga Curta"). Cor e REF
+   * ficam de fora de propósito: quem clica aqui é justamente quem NÃO quis
+   * aquela cor ou não achou o tamanho.
+   */
+  const buscaSemelhantes = `/busca?q=${encodeURIComponent(
+    product.name.split(/s+/).slice(0, 4).join(' '),
+  )}`;
 
   const whatsapp = `https://api.whatsapp.com/send?phone=5513996050174&text=${encodeURIComponent(
     `Olá! Tenho interesse na peça "${product.name}". Vocês têm no tamanho ${size ?? '__'}?`,
@@ -257,6 +270,13 @@ export function BuyBox({
           </p>
         )}
 
+        {/* ESCASSEZ HONESTA — o número vem do estoque de verdade daquela cor.
+            Nada de "100 pessoas viram hoje": a Shein sustenta isso com volume,
+            pra nós seria mentira que a cliente detecta em duas visitas. */}
+        {alertaEstoque && !soldOut && (
+          <p className="mt-3 text-small font-medium text-secondary">{alertaEstoque}</p>
+        )}
+
         {soldOut && (
           <p className="mt-3 text-small text-ink-soft">
             Esgotado no site — mas pode ter na loja. Chame uma consultora que a gente procura nas
@@ -267,6 +287,14 @@ export function BuyBox({
 
       {/* Ações */}
       <div className="mt-9 flex flex-col gap-2.5">
+        {/* Esgotou: em vez de deixar a cliente sair, oferece o mesmo corte em
+            outras peças — é o vendedor de loja física dizendo "se gostou
+            desse modelo, olha esses aqui". */}
+        {soldOut && (
+          <Button href={buscaSemelhantes} variant="secondary" size="lg" block>
+            Ver peças parecidas
+          </Button>
+        )}
         {!soldOut && (
           <Button size="lg" block onClick={handleAdd}>
             <ShoppingBag /> Adicionar à sacola
