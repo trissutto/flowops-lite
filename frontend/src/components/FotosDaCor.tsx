@@ -19,7 +19,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Camera, Crop, Loader2, Pipette, Star, Trash2 } from 'lucide-react';
+import { Camera, Crop, Loader2, Pipette, Sparkles, Star, Trash2 } from 'lucide-react';
 import { api } from '@/lib/api';
 
 export const MAX_FOTOS_POR_COR = 6;
@@ -45,6 +45,15 @@ type Props = {
 
 /** Ferramenta ativa sobre a foto. `null` = só olhando. */
 type Ferramenta = 'conta-gotas' | 'recorte' | null;
+
+/** O que a IA respondeu ao olhar a foto (POST /product-photos/detectar-cor). */
+export type CorDetectada = {
+  hex: string;
+  nome: string;
+  estampada: boolean;
+  cores: Array<{ hex: string; nome: string }>;
+  confianca: 'alta' | 'media' | 'baixa';
+};
 
 function paraHex(r: number, g: number, b: number) {
   return `#${[r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('')}`.toUpperCase();
@@ -115,9 +124,23 @@ export default function FotosDaCor({
   const [erro, setErro] = useState<string | null>(null);
   const [ferramenta, setFerramenta] = useState<Ferramenta>(null);
   const [semCanvas, setSemCanvas] = useState(false);
+  const [lendoIa, setLendoIa] = useState(false);
+  const [sugestao, setSugestao] = useState<CorDetectada | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => { setFotos(fotosIniciais); }, [fotosIniciais]);
+  /**
+   * Sincroniza com a ficha SÓ quando muda de peça/cor.
+   *
+   * Antes a dependência era `fotosIniciais`, e isso apagava a foto recém-subida:
+   * o pai guarda a lista em estado, subir foto chamava `onFotosChange` → o pai
+   * re-renderizava → `fotosIniciais` chegava como um ARRAY NOVO (com o conteúdo
+   * velho, sem a foto) → este efeito rodava e devolvia a lista vazia. A
+   * miniatura aparecia e sumia no mesmo piscar.
+   */
+  useEffect(() => {
+    setFotos(fotosIniciais);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refSku, cor]);
 
   const capa = fotos[0]?.url ?? null;
 
@@ -126,10 +149,45 @@ export default function FotosDaCor({
     onFotosChange?.(novas);
   }, [onFotosChange]);
 
-  async function recarregar() {
+  async function recarregar(): Promise<FotoCor[]> {
     const p = new URLSearchParams({ ref: refSku, cor });
     const lista = await api<FotoCor[]>(`/product-photos/galeria?${p}`);
     aplicar(lista);
+    return lista;
+  }
+
+  /**
+   * Lê a cor DA PEÇA na foto com a IA (Claude enxerga a roupa e ignora fundo,
+   * pele e acessório — que é onde algoritmo de "cor dominante" erra).
+   *
+   * `automatica` = disparo depois do primeiro upload: nesse caso não mostra
+   * erro na tela, porque ninguém pediu. O botão continua ali pra tentar de novo.
+   */
+  async function detectarCor(url: string, automatica = false) {
+    setLendoIa(true);
+    if (!automatica) setErro(null);
+    try {
+      const r = await api<CorDetectada>('/product-photos/detectar-cor', {
+        method: 'POST',
+        body: JSON.stringify({ url }),
+      });
+      setSugestao(r);
+      onSwatchChange({
+        ...swatch,
+        // Estampa não cabe num hex: a bolinha vira recorte da própria foto,
+        // já enquadrada no meio (a pessoa reposiciona clicando, se quiser).
+        swatchTipo: r.estampada ? 'foto' : 'cor',
+        corHex: r.hex,
+        swatchFocoX: r.estampada ? (swatch.swatchFocoX ?? 0.5) : swatch.swatchFocoX,
+        swatchFocoY: r.estampada ? (swatch.swatchFocoY ?? 0.5) : swatch.swatchFocoY,
+      });
+    } catch (e: any) {
+      if (!automatica) {
+        setErro(e?.message?.replace(/^\d+:\s*/, '') || 'Não consegui ler a cor pela foto');
+      }
+    } finally {
+      setLendoIa(false);
+    }
   }
 
   async function subir(arquivos: FileList | File[]) {
@@ -160,7 +218,12 @@ export default function FotosDaCor({
       if (lista.length > cabem) {
         setErro(`Subiram ${cabem} — o limite por cor é ${MAX_FOTOS_POR_COR}.`);
       }
-      await recarregar();
+      const galeria = await recarregar();
+      // Primeira foto da cor e bolinha ainda em branco → já tenta ler a cor.
+      // É o caso normal (milhares de peças): ninguém vai pintar uma a uma.
+      if (galeria[0]?.url && !swatch.corHex) {
+        void detectarCor(galeria[0].url, true);
+      }
     } catch (e: any) {
       setErro(e?.message?.replace(/^\d+:\s*/, '') || 'Não consegui subir a foto');
     } finally {
@@ -330,16 +393,54 @@ export default function FotosDaCor({
           <div className="min-w-0">
             <p className="text-[10px] font-bold text-slate-600 uppercase">Bolinha no site</p>
             <p className="text-[11px] text-slate-500">
-              {swatch.swatchTipo === 'foto'
-                ? 'Recorte da foto (estampa)'
-                : swatch.corHex
-                  ? `Cor ${swatch.corHex}`
-                  : 'Ainda sem cor — pegue no conta-gotas'}
+              {lendoIa
+                ? 'Lendo a cor na foto…'
+                : swatch.swatchTipo === 'foto'
+                  ? `Recorte da foto (estampa)${sugestao?.nome ? ` · ${sugestao.nome}` : ''}`
+                  : swatch.corHex
+                    ? `${sugestao?.nome ? `${sugestao.nome} · ` : ''}${swatch.corHex}`
+                    : 'Ainda sem cor — suba uma foto ou pegue no conta-gotas'}
             </p>
+            {sugestao?.confianca === 'baixa' && (
+              <p className="text-[11px] text-amber-700">
+                A IA ficou em dúvida nesta foto — confira no conta-gotas.
+              </p>
+            )}
           </div>
         </div>
 
+        {/* Outras cores que a IA viu (estampa costuma ter 2-3). Clicar troca a
+            bolinha — mais rápido que caçar o ponto certo na foto. */}
+        {sugestao && sugestao.cores.length > 1 && (
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[10px] text-slate-500 uppercase">Também vi:</span>
+            {sugestao.cores.map((c) => (
+              <button
+                key={c.hex}
+                type="button"
+                title={`${c.nome} ${c.hex}`}
+                onClick={() => onSwatchChange({ ...swatch, swatchTipo: 'cor', corHex: c.hex })}
+                className="inline-flex items-center gap-1.5 rounded-full border border-slate-300 pl-1 pr-2 py-0.5 text-[11px] hover:bg-slate-50"
+              >
+                <span style={{ backgroundColor: c.hex }} className="inline-block w-4 h-4 rounded-full border border-slate-300" />
+                {c.nome}
+              </button>
+            ))}
+          </div>
+        )}
+
         <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            disabled={!capa || lendoIa}
+            onClick={() => void detectarCor(capa!)}
+            className="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-40"
+            title="A IA olha a foto e diz a cor da peça, ignorando fundo e pele"
+          >
+            {lendoIa ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+            Pegar cor da foto (IA)
+          </button>
+
           <button
             type="button"
             disabled={!fotos.length}
@@ -369,7 +470,7 @@ export default function FotosDaCor({
             {ferramenta === 'recorte' ? 'Clique na estampa…' : 'Usar recorte da foto'}
           </button>
 
-          {semCanvas && (
+          {(semCanvas || fotos.length > 0) && (
             <button
               type="button"
               onClick={() => void contaGotasDaTela()}
