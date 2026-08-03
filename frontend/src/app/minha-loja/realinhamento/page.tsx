@@ -859,16 +859,17 @@ export default function MinhaLojaRealinhamentoPage() {
           />
         )}
 
-        {/* ── FECHADAS E SEM ETIQUETA ──
-            Caixa pronta, lacrada, esperando papel. Some daqui sozinha assim
-            que a etiqueta sai — é lista de trabalho, não histórico.
+        {/* ── CAIXAS FECHADAS: ETIQUETA E NOTA ──
+            SÓ na aba "Enviados hoje" (decisão do dono, 03/08). Em "Pendentes"
+            fica o que ainda precisa sair da arara; caixa já lacrada esperando
+            papel é outro assunto e estava roubando o topo do trabalho.
 
-            Sem isto, fechar a remessa era um caminho sem volta: ela sumia das
-            amarelas e o botão de gerar etiqueta só existia no painel que
+            Existe porque fechar a remessa era um caminho sem volta: ela sumia
+            das amarelas e o botão de gerar etiqueta só vivia no painel que
             aparece logo depois de fechar. Quem fechasse e saísse da tela (ou
             fechasse no outro PC da loja) ficava com a caixa pronta e nada pra
             clicar — foi o que aconteceu em Suzano. */}
-        {pendingLabel.filter((s) => s.id !== recemEnviada?.id).length > 0 && (
+        {view === 'sent' && pendingLabel.filter((s) => s.id !== recemEnviada?.id).length > 0 && (
           <div className="space-y-3">
             <div className="flex items-center gap-2 text-sm font-bold text-rose-900">
               <AlertCircle className="w-4 h-4" />
