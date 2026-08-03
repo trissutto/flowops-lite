@@ -173,17 +173,34 @@ export class RealignmentShipmentService {
     });
     if (!store) throw new ForbiddenException('Loja inválida');
 
+    /**
+     * FILTRO LARGO DE PROPÓSITO — a primeira versão desta lista voltou VAZIA em
+     * produção e o dono continuou sem conseguir imprimir. Três motivos possíveis,
+     * e eu tinha plantado os três:
+     *
+     * 1. `NOT: { transportMode: 'proprio' }` sumia com quem tem `transportMode`
+     *    NULL — que é a MAIORIA (null = regra automática). Em SQL,
+     *    `NULL <> 'proprio'` não é verdadeiro, é desconhecido, e linha
+     *    desconhecida não entra no resultado. Armadilha clássica de nulo.
+     * 2. `envioGeneratedAt: null` escondia justamente a caixa que teve o envio
+     *    gerado e NÃO foi impressa — que é um dos casos que a pessoa precisa
+     *    resolver.
+     * 3. depender de `sentAt` preenchido pra ordenar/filtrar.
+     *
+     * Agora a pergunta é a simples: "o que esta loja fechou nos últimos dias?".
+     * O estado de cada uma vai junto (`envioGeneratedAt`, `trackingCode`) e a
+     * TELA decide o texto do botão — gerar ou reimprimir. Lista curta, então
+     * mostrar demais custa barato; mostrar de menos custa uma caixa parada.
+     */
+    const seteDias = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
     const shipments = await (this.prisma as any).realignmentShipment.findMany({
       where: {
         fromStoreCode: (store as any).code,
-        status: 'in_transit',
-        envioGeneratedAt: null,
-        // Envio por conta da loja não passa pelos Correios — cobrar etiqueta
-        // dela seria pedir uma coisa que não existe.
-        NOT: { transportMode: 'proprio' },
+        status: { in: ['in_transit', 'received'] },
+        updatedAt: { gte: seteDias },
       },
-      orderBy: { sentAt: 'desc' },
-      take: 20,
+      orderBy: [{ sentAt: 'desc' }, { updatedAt: 'desc' }],
+      take: 15,
     });
 
     return Promise.all(
@@ -196,6 +213,7 @@ export class RealignmentShipmentService {
           ...s,
           items,
           totalPecas: (items as any[]).reduce((n, i) => n + (i.qtyOrigem || 1), 0),
+          jaTemEtiqueta: !!s.envioGeneratedAt,
         };
       }),
     );
