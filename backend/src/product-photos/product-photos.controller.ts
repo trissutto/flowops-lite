@@ -56,11 +56,23 @@ export class ProductPhotosController {
   }
 
   /**
-   * Upload de foto pra REF (+COR opcional).
+   * Galeria completa de uma cor, na ordem de exibição (capa primeiro).
+   * GET /product-photos/galeria?ref=7031&cor=PRETO
+   */
+  @Get('galeria')
+  async galeria(@Query('ref') ref: string, @Query('cor') cor?: string) {
+    return this.svc.listPhotos(ref, cor);
+  }
+
+  /**
+   * Upload de foto pra REF (+COR opcional). ACRESCENTA à galeria (até 6);
+   * mandar `substituirId` troca aquela foto específica no lugar de somar.
+   *
    * POST /product-photos/upload  multipart com:
    *   - file (image)
    *   - ref (form field)
    *   - cor (form field, opcional)
+   *   - substituirId (form field, opcional)
    */
   @Post('upload')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024 } }))
@@ -69,14 +81,26 @@ export class ProductPhotosController {
     @UploadedFile() file: any,
     @Body('ref') ref: string,
     @Body('cor') cor?: string,
+    @Body('substituirId') substituirId?: string,
   ) {
     this.requireWrite(req);
     return this.svc.upload({
       ref,
       cor,
       file,
+      substituirId: substituirId || undefined,
       userId: req?.user?.id || req?.user?.sub || null,
     });
+  }
+
+  /**
+   * Reordena a galeria — a primeira da lista vira a capa.
+   * POST /product-photos/reorder  body: { ids: ["...", "..."] }
+   */
+  @Post('reorder')
+  async reorder(@Req() req: any, @Body('ids') ids: string[]) {
+    this.requireWrite(req);
+    return this.svc.reordenar(ids || []);
   }
 
   /**

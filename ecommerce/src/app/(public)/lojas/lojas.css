@@ -1,0 +1,55 @@
+/* Estilos escopados da landing /nossaslojas — não vazam pro resto do app. */
+
+.lojas-root {
+  --lj-ivory: #fdfbf7;
+  --lj-cream: #f6f1e8;
+  --lj-champagne: #efe6d6;
+  --lj-ink: #211c18;
+  --lj-ink-soft: #5c534b;
+  --lj-gold: #b8912b;
+  --lj-gold-strong: #8c7325;
+  --lj-gold-soft: #d4af37;
+  --lj-line: #e8dfd0;
+  background: var(--lj-ivory);
+  color: var(--lj-ink);
+  font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.lojas-serif {
+  font-family: var(--font-playfair), 'Playfair Display', Georgia, serif;
+}
+
+/* Scroll suave nas âncoras internas (hero → busca → lojas) */
+.lojas-root {
+  scroll-behavior: smooth;
+}
+
+/* Fio dourado fino usado como divisor editorial */
+.lojas-rule {
+  height: 1px;
+  background: linear-gradient(to right, transparent, var(--lj-gold) 50%, transparent);
+}
+
+/* Grain sutil sobre as artes editoriais — dá textura de papel/tecido */
+.lojas-grain::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.5;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.04 0'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* Navegação por teclado — anel dourado consistente em qualquer interativo */
+.lojas-root :focus-visible {
+  outline: 2px solid var(--lj-gold);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lojas-root {
+    scroll-behavior: auto;
+  }
+}

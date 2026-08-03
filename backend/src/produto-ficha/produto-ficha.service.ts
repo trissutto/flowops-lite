@@ -41,7 +41,15 @@ export interface FichaCorInput {
   tituloComercial?: string | null;
   youtubeUrl?: string | null;
   statusPublicacao?: string;
+  /** Bolinha do seletor de cor: 'cor' (hex) ou 'foto' (recorte da estampa). */
+  swatchTipo?: string;
+  corHex?: string | null;
+  swatchFocoX?: number | null;
+  swatchFocoY?: number | null;
 }
+
+export const SWATCH_TIPOS = ['cor', 'foto'] as const;
+const HEX_RGB = /^#[0-9A-Fa-f]{6}$/;
 
 @Injectable()
 export class ProdutoFichaService {
@@ -201,6 +209,28 @@ export class ProdutoFichaService {
         );
       }
       patch.statusPublicacao = s;
+    }
+
+    if (dados.swatchTipo !== undefined) {
+      const t = String(dados.swatchTipo);
+      if (!(SWATCH_TIPOS as readonly string[]).includes(t)) {
+        throw new BadRequestException(`tipo de bolinha inválido: use ${SWATCH_TIPOS.join(' ou ')}`);
+      }
+      patch.swatchTipo = t;
+    }
+    if (dados.corHex !== undefined) {
+      const v = dados.corHex?.trim().toUpperCase() || null;
+      if (v && !HEX_RGB.test(v)) {
+        throw new BadRequestException('cor da bolinha inválida — esperado #RRGGBB');
+      }
+      patch.corHex = v;
+    }
+    // Foco do recorte: guardado em fração (0..1) e não em pixel, senão trocar a
+    // foto por uma de outra resolução moveria o enquadramento sozinho.
+    for (const eixo of ['swatchFocoX', 'swatchFocoY'] as const) {
+      if (dados[eixo] === undefined) continue;
+      const n = dados[eixo];
+      patch[eixo] = n === null ? null : Math.min(1, Math.max(0, Number(n) || 0));
     }
 
     await (this.prisma as any).produtoFichaCor.upsert({

@@ -106,6 +106,10 @@ export default function ProductPhoto({
       form.append('file', file);
       form.append('ref', refUp);
       if (corUp) form.append('cor', corUp);
+      // Este componente mostra UMA foto (a capa). Desde que o upload passou a
+      // ACRESCENTAR à galeria, "trocar foto" precisa dizer qual está trocando —
+      // senão o botão viraria "adicionar" e a capa nunca mudaria.
+      if (photo?.id) form.append('substituirId', photo.id);
       const r = await api<Photo>(`/product-photos/upload`, {
         method: 'POST',
         body: form as any,
