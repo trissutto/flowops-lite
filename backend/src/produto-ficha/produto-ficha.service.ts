@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AtributosPecaService } from '../atributos-peca/atributos-peca.service';
+import { refBaseOf, refsDeBusca } from '../common/ref-base';
 
 /**
  * FICHA DO PRODUTO — a camada que o Flow ACRESCENTA ao catálogo.
@@ -58,8 +59,19 @@ export class ProdutoFichaService {
     private readonly atributos: AtributosPecaService,
   ) {}
 
+  /**
+   * Chave da ficha = REF-BASE + MARCA.
+   *
+   * BASE, não a REF crua: no ERP a cor virou sufixo de REF ("VMS-223",
+   * "VMS-223 MA", "VMS-223 MM", "VMS-223 P" são o MESMO vestido em quatro
+   * cadastros). Com a REF crua, o mesmo produto ganhava quatro fichas de uma
+   * cor cada — e no site viraria quatro produtos em vez de um com quatro
+   * bolinhas, que é exatamente o contrário do que a tela existe pra fazer.
+   *
+   * MARCA continua na chave porque REF numérica se recicla entre fornecedores.
+   */
   private chave(ref: string, marca: string) {
-    const r = String(ref || '').trim().toUpperCase();
+    const r = refBaseOf(ref);
     const m = String(marca || '').trim().toUpperCase();
     if (!r) throw new BadRequestException('REF obrigatória');
     if (!m) throw new BadRequestException('MARCA obrigatória — REF sozinha se repete entre fornecedores');
@@ -98,9 +110,14 @@ export class ProdutoFichaService {
      * mostrar "0 fotos" logo depois de importar 17: elas existiam, mas o
      * caminho pra enxergá-las passava por uma linha que ninguém criou.
      */
+    // Procura pela BASE e pela REF como veio: foto importada antes da
+    // unificação está gravada sob a REF inteira ("VMS-223 MA"), e ignorá-la
+    // faria a galeria "sumir" no dia da mudança.
+    const refsFoto = refsDeBusca(refRaw);
+
     if (!ficha) {
       const fotosSoltas = await (this.prisma as any).productPhoto.findMany({
-        where: { ref },
+        where: { ref: { in: refsFoto } },
         orderBy: [{ cor: 'asc' }, { ordem: 'asc' }],
       });
       if (!fotosSoltas.length) return null;
@@ -135,7 +152,7 @@ export class ProdutoFichaService {
 
     // Uma query só pras fotos de todas as cores da REF.
     const fotos = await (this.prisma as any).productPhoto.findMany({
-      where: { ref },
+      where: { ref: { in: refsFoto } },
       orderBy: { ordem: 'asc' },
     });
     const fotosPorCor = new Map<string, any[]>();

@@ -1,6 +1,7 @@
 import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { refBaseOf, refsDeBusca } from '../common/ref-base';
 
 function getR2Client(): S3Client {
   const accountId = process.env.R2_ACCOUNT_ID;
@@ -37,31 +38,47 @@ export class ProductPhotosService {
   async getPhoto(ref: string, cor?: string) {
     const refUp = (ref || '').trim().toUpperCase();
     if (!refUp) return null;
+    const refs = refsDeBusca(refUp);
     const corUp = (cor || '').trim().toUpperCase() || null;
     // Tenta COR específica primeiro
     if (corUp) {
       const specific = await (this.prisma as any).productPhoto.findFirst({
-        where: { ref: refUp, cor: corUp },
+        where: { ref: { in: refs }, cor: corUp },
         orderBy: { ordem: 'asc' },
       });
       if (specific) return specific;
     }
     // Fallback: foto genérica (cor = null)
     return (this.prisma as any).productPhoto.findFirst({
-      where: { ref: refUp, cor: null },
+      where: { ref: { in: refs }, cor: null },
       orderBy: { ordem: 'asc' },
     });
   }
 
-  /** Galeria completa de uma cor, na ordem de exibição (capa primeiro). */
+  /**
+   * Galeria completa de uma cor, na ordem de exibição (capa primeiro).
+   *
+   * Procura pela REF-BASE **e** pela REF como veio. A foto nova é gravada na
+   * base (uma galeria por família, que é o que o site mostra), mas o PDV, a
+   * Reposição e a Separação bipam a REF INTEIRA — "VMS-223 MA" — e o acervo
+   * importado antes da unificação também está sob ela. Procurar só num dos
+   * dois lados faz a foto sumir de um lado ou do outro.
+   */
   async listPhotos(ref: string, cor?: string) {
     const refUp = (ref || '').trim().toUpperCase();
     if (!refUp) return [];
+    const refs = refsDeBusca(refUp);
     const corUp = (cor || '').trim().toUpperCase() || null;
-    return (this.prisma as any).productPhoto.findMany({
-      where: { ref: refUp, cor: corUp },
+    const achadas = await (this.prisma as any).productPhoto.findMany({
+      where: { ref: { in: refs }, cor: corUp },
       orderBy: { ordem: 'asc' },
     });
+    // Se a mesma cor tiver foto nos DOIS lugares (acervo antigo + novo), fica
+    // com o da base — misturar as duas galerias duplicaria a capa.
+    if (refs.length > 1 && achadas.some((f: any) => f.ref === refs[0])) {
+      return achadas.filter((f: any) => f.ref === refs[0]);
+    }
+    return achadas;
   }
 
   /**
@@ -71,7 +88,7 @@ export class ProductPhotosService {
     const refUp = (ref || '').trim().toUpperCase();
     if (!refUp) return [];
     return (this.prisma as any).productPhoto.findMany({
-      where: { ref: refUp },
+      where: { ref: { in: refsDeBusca(refUp) } },
       orderBy: { createdAt: 'asc' },
     });
   }
@@ -81,16 +98,38 @@ export class ProductPhotosService {
    * Útil pra telas que listam vários produtos.
    */
   async getBatch(items: Array<{ ref: string; cor?: string }>) {
-    const refs = Array.from(new Set(items.map((i) => (i.ref || '').trim().toUpperCase()).filter(Boolean)));
-    if (refs.length === 0) return {};
+    const pedidas = Array.from(
+      new Set(items.map((i) => (i.ref || '').trim().toUpperCase()).filter(Boolean)),
+    );
+    if (pedidas.length === 0) return {};
+    // Busca a família inteira: a foto pode estar sob a base ("VMS-223") mesmo
+    // que a tela tenha pedido a REF do cadastro ("VMS-223 MA").
+    const refs = Array.from(new Set(pedidas.flatMap((r) => refsDeBusca(r))));
     const photos = await (this.prisma as any).productPhoto.findMany({
       where: { ref: { in: refs } },
+      orderBy: { ordem: 'asc' },
     });
     // Indexa por "REF|COR" e por "REF|" (genérica)
     const map: Record<string, string> = {};
     for (const p of photos) {
       const key = `${p.ref}|${p.cor || ''}`;
-      map[key] = p.url;
+      if (!map[key]) map[key] = p.url; // ordem 0 primeiro = capa
+    }
+    /**
+     * A tela pergunta pela REF que ela tem na mão. Se a foto ficou gravada na
+     * base, a chave dela não bate com a pergunta e a peça aparece sem foto —
+     * o mesmo "sumiu" que já aconteceu com o espelho de estoque. Aqui a
+     * resposta ganha também a chave PEDIDA, apontando pra mesma URL.
+     */
+    for (const pedida of pedidas) {
+      const base = refBaseOf(pedida);
+      if (base === pedida) continue;
+      for (const [chave, url] of Object.entries(map)) {
+        const [r, cor] = chave.split('|');
+        if (r !== base) continue;
+        const chavePedida = `${pedida}|${cor}`;
+        if (!map[chavePedida]) map[chavePedida] = url;
+      }
     }
     return map;
   }
@@ -113,7 +152,10 @@ export class ProductPhotosService {
     userId?: string;
     substituirId?: string;
   }) {
-    const refUp = (input.ref || '').trim().toUpperCase();
+    // Grava sempre na REF-BASE: a galeria é da FAMÍLIA, não do cadastro. Sem
+    // isto, "VMS-223 MA" e "VMS-223 MM" — o mesmo vestido — teriam galerias
+    // separadas e o site mostraria dois produtos em vez de um com duas cores.
+    const refUp = refBaseOf(input.ref);
     if (!refUp) throw new BadRequestException('REF obrigatório');
     if (!input.file) throw new BadRequestException('Arquivo obrigatório');
     const bucket = process.env.R2_BUCKET_NAME;

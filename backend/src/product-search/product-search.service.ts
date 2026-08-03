@@ -1,5 +1,6 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { refBaseOf } from '../common/ref-base';
 
 /**
  * ProductSearchService — rotina ÚNICA de resolução de produto por termo.
@@ -34,9 +35,10 @@ export class ProductSearchService implements OnModuleInit {
    * REF sem dígito nenhum (ex.: "GRAVATA") fica como está.
    */
   static refBaseOf(ref: any): string {
-    const up = String(ref ?? '').trim().toUpperCase();
-    const stripped = up.replace(/[^0-9]+$/, '');
-    return stripped || up;
+    // A regra mudou de casa pra `common/ref-base.ts` — ficha, fotos e
+    // importação precisam da MESMA, e cada cópia é uma chance de divergir.
+    // Isto aqui fica como porta de entrada dos chamadores que já existiam.
+    return refBaseOf(ref);
   }
 
   /**
