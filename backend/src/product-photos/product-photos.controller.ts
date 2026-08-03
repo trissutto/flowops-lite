@@ -15,11 +15,15 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { ProductPhotosService } from './product-photos.service';
+import { CorIaService } from './cor-ia.service';
 
 @UseGuards(JwtAuthGuard)
 @Controller('product-photos')
 export class ProductPhotosController {
-  constructor(private readonly svc: ProductPhotosService) {}
+  constructor(
+    private readonly svc: ProductPhotosService,
+    private readonly corIa: CorIaService,
+  ) {}
 
   private requireWrite(req: any) {
     const allowed = ['admin', 'supervisor', 'operator', 'store'];
@@ -101,6 +105,17 @@ export class ProductPhotosController {
   async reorder(@Req() req: any, @Body('ids') ids: string[]) {
     this.requireWrite(req);
     return this.svc.reordenar(ids || []);
+  }
+
+  /**
+   * Lê a COR DA PEÇA na foto (Claude com visão) pra preencher a bolinha do
+   * site. O conta-gotas manual continua valendo — isto é o palpite inicial.
+   * POST /product-photos/detectar-cor  body: { url }
+   */
+  @Post('detectar-cor')
+  async detectarCor(@Req() req: any, @Body('url') url: string) {
+    this.requireWrite(req);
+    return this.corIa.detectar(url);
   }
 
   /**
