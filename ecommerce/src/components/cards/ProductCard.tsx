@@ -4,11 +4,12 @@ import { useState } from 'react';
 import Image from 'next/image';
 import { AppLink as Link } from '@/components/ui/AppLink';
 import { motion } from 'framer-motion';
-import { Eye, Heart } from 'lucide-react';
+import { Eye, Heart, ShoppingBag } from 'lucide-react';
 import { BLUR_DATA_URL, cn, discountPercent, formatInstallments, formatPrice } from '@/lib/utils';
 import { fadeUp, reveal } from '@/lib/motion';
 import { ProductBadgeTag } from '@/components/ui/Badge';
 import { useWishlistStore } from '@/store/wishlist';
+import { useQuickAddStore } from '@/store/quick-add';
 import { useMounted } from '@/hooks';
 import type { Product } from '@/types';
 
@@ -66,6 +67,7 @@ export function ProductCard({
 }: ProductCardProps) {
   const [hovered, setHovered] = useState(false);
   const mounted = useMounted();
+  const abrirQuickAdd = useQuickAddStore((s) => s.abrir);
   const toggleWishlist = useWishlistStore((s) => s.toggle);
   const isFavorite = useWishlistStore((s) => s.ids.includes(product.id));
 
@@ -76,6 +78,22 @@ export function ProductCard({
     ? discountPercent(product.compareAtPrice, product.price)
     : 0;
   const availableSizes = product.sizes.filter((s) => s.available);
+  const temEstoque = availableSizes.length > 0;
+
+  /**
+   * "Do 46 ao 60" — a pergunta nº 1 da cliente plus size é se serve nela, e a
+   * resposta cabe numa linha. Só sai quando os tamanhos são numéricos: com
+   * P/M/G a faixa não significa nada.
+   */
+  const faixaDeTamanhos = (() => {
+    const numeros = availableSizes
+      .map((s) => parseInt(String(s.label).replace(/\D/g, ''), 10))
+      .filter((n) => Number.isFinite(n) && n > 0);
+    if (numeros.length < 2) return null;
+    const min = Math.min(...numeros);
+    const max = Math.max(...numeros);
+    return min === max ? null : `Do ${min} ao ${max}`;
+  })();
 
   const aspectClass =
     aspect === '3/4' ? 'aspect-3/4' : aspect === '4/5' ? 'aspect-4/5' : 'aspect-square';
@@ -147,6 +165,20 @@ export function ProductCard({
           />
         </button>
 
+        {/* ADICIONAR RÁPIDO — abre a janelinha de cor/tamanho sem sair da
+            página. Fica FORA da camada de hover de propósito: no celular não
+            existe hover, e é no celular que a cliente compra. */}
+        {temEstoque && (
+          <button
+            type="button"
+            onClick={() => abrirQuickAdd(product)}
+            aria-label={`Adicionar ${product.name} à sacola`}
+            className="absolute right-3 bottom-3 z-[1] flex size-10 items-center justify-center rounded-pill bg-ink/90 text-light backdrop-blur transition-transform hover:scale-105 lg:size-9"
+          >
+            <ShoppingBag className="size-4" strokeWidth={1.75} />
+          </button>
+        )}
+
         {/* Camada de hover: quick view + tamanhos (desktop) */}
         <div
           className={cn(
@@ -217,6 +249,10 @@ export function ProductCard({
               : formatInstallments(product.price)}
           </span>
         </p>
+
+        {faixaDeTamanhos && (
+          <p className="mt-1.5 text-small text-ink-muted">{faixaDeTamanhos}</p>
+        )}
 
         {/* Cores disponíveis */}
         {product.colors && product.colors.length > 1 && (
