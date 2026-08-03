@@ -139,6 +139,8 @@ export default function MinhaLojaRealinhamentoPage() {
   // FECHAR e ENVIAR (baixa Giga em batch + manda alerta pra loja destino).
   const [openShipments, setOpenShipments] = useState<any[]>([]);
   const [closingShipmentId, setClosingShipmentId] = useState<string | null>(null);
+  /** Remessa fechada agora — pra gerar etiqueta/nota sem sair desta tela. */
+  const [recemEnviada, setRecemEnviada] = useState<{ id: string; code: string; qty: number } | null>(null);
 
   const toggleDest = useCallback((code: string) => {
     setExpandedDest((curr) => (curr === code ? null : code));
@@ -314,6 +316,10 @@ export default function MinhaLojaRealinhamentoPage() {
         { method: 'POST', body: '{}' },
       );
       pushToast(`✅ Remessa ${res.code} enviada (${res.totalQty} pecas). Loja destino recebeu alerta.`);
+      // A remessa some da lista de montagem assim que fecha. Guardar aqui é o
+      // que permite gerar etiqueta e nota SEM ir até a Retaguarda: quem acabou
+      // de fechar a caixa é quem vai postar, e é agora que ela precisa do papel.
+      setRecemEnviada({ id: shipmentId, code: res.code, qty: res.totalQty });
       await Promise.all([loadOpenShipments(), loadItems(), loadSentItems()]);
     } catch (e: any) {
       alert(`Erro ao fechar remessa: ${e?.message || e}`);
@@ -824,6 +830,15 @@ export default function MinhaLojaRealinhamentoPage() {
             Cada remessa = 1 caixa física que vendedora está montando pra
             mandar pra outra loja. Quando termina de empacotar, fecha aqui →
             sistema baixa Giga + emite alerta pra loja destino receber. */}
+        {recemEnviada && (
+          <EnvioDaRemessa
+            shipmentId={recemEnviada.id}
+            code={recemEnviada.code}
+            qty={recemEnviada.qty}
+            onFechar={() => setRecemEnviada(null)}
+          />
+        )}
+
         {openShipments.length > 0 && (
           <div className="space-y-3">
             <div className="flex items-center gap-2 text-sm font-bold text-amber-900">
@@ -1604,6 +1619,127 @@ function RealignCell({
       >
         ✕
       </button>
+    </div>
+  );
+}
+
+/* ────────── Etiqueta + nota da remessa que acabou de fechar ────────── */
+
+/**
+ * Os MESMOS endpoints da Retaguarda (`gerar-envio` e `docs-envio`), na tela
+ * onde a loja já está.
+ *
+ * Por que aqui: quem fecha a caixa é quem posta. Obrigar a vendedora a abrir a
+ * Retaguarda pra pegar o papel da caixa que está na mão dela é passo perdido —
+ * e passo perdido vira caixa parada esperando alguém "gerar depois".
+ *
+ * O endereço não é digitado em lugar nenhum: remetente e destinatário saem da
+ * config fiscal das lojas, a mesma que a NF-e usa.
+ */
+function EnvioDaRemessa({
+  shipmentId, code, qty, onFechar,
+}: {
+  shipmentId: string;
+  code: string;
+  qty: number;
+  onFechar: () => void;
+}) {
+  const [ocupado, setOcupado] = useState<'gerar' | 'docs' | null>(null);
+  const [rastreio, setRastreio] = useState<string | null>(null);
+  const [msg, setMsg] = useState<{ tipo: 'ok' | 'erro'; texto: string } | null>(null);
+
+  async function gerar() {
+    setOcupado('gerar');
+    setMsg(null);
+    try {
+      const r = await api<any>(`/realignment/shipments/${shipmentId}/gerar-envio`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+      setRastreio(r?.codigoRastreio ?? null);
+      setMsg({
+        tipo: 'ok',
+        texto: r?.jaGerado
+          ? `Já tinha envio: ${r.carrier || ''} ${r.codigoRastreio}`
+          : `${r?.carrier || 'Envio'} gerado — rastreio ${r?.codigoRastreio}`,
+      });
+    } catch (e: any) {
+      setMsg({ tipo: 'erro', texto: e?.message?.replace(/^\d+:\s*/, '') || 'Falha ao gerar o envio' });
+    } finally {
+      setOcupado(null);
+    }
+  }
+
+  async function baixarDocs() {
+    setOcupado('docs');
+    setMsg(null);
+    try {
+      const r = await api<any>(`/realignment/shipments/${shipmentId}/docs-envio`);
+      if (!r?.pdfBase64) throw new Error('PDF não veio');
+      const a = document.createElement('a');
+      a.href = `data:application/pdf;base64,${r.pdfBase64}`;
+      a.download = `${code}-etiqueta-danfe.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setMsg({
+        tipo: 'ok',
+        texto: r?.temNota ? 'PDF baixado (etiqueta + DANFE).' : 'PDF baixado (só a etiqueta — DANFE não disponível).',
+      });
+    } catch (e: any) {
+      setMsg({ tipo: 'erro', texto: e?.message?.replace(/^\d+:\s*/, '') || 'Falha ao baixar' });
+    } finally {
+      setOcupado(null);
+    }
+  }
+
+  return (
+    <div className="rounded-2xl border-2 border-emerald-300 bg-emerald-50 p-4 mb-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-sm font-black text-emerald-900">
+            Remessa {code} enviada · {qty} peça(s)
+          </p>
+          <p className="text-xs text-emerald-800/80 mt-0.5">
+            Agora gere a etiqueta dos Correios e imprima junto com a nota — sem sair desta tela.
+          </p>
+          {rastreio && (
+            <p className="text-xs font-mono font-bold text-emerald-900 mt-1">Rastreio: {rastreio}</p>
+          )}
+        </div>
+        <div className="flex flex-wrap gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={() => void gerar()}
+            disabled={ocupado !== null}
+            className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-xl text-sm font-black shadow-md flex items-center gap-2 disabled:opacity-50"
+          >
+            {ocupado === 'gerar' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Truck className="w-4 h-4" />}
+            Gerar envio Correios
+          </button>
+          <button
+            type="button"
+            onClick={() => void baixarDocs()}
+            disabled={ocupado !== null}
+            className="bg-white hover:bg-emerald-100 text-emerald-900 border-2 border-emerald-400 px-4 py-2.5 rounded-xl text-sm font-bold shadow-sm flex items-center gap-2 disabled:opacity-50"
+          >
+            {ocupado === 'docs' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Printer className="w-4 h-4" />}
+            Etiqueta + NF
+          </button>
+          <button
+            type="button"
+            onClick={onFechar}
+            className="text-emerald-800/70 hover:text-emerald-900 px-2 py-2.5 text-xs font-bold"
+          >
+            fechar
+          </button>
+        </div>
+      </div>
+      {msg && (
+        <p className={`text-xs mt-2 font-semibold ${msg.tipo === 'ok' ? 'text-emerald-800' : 'text-rose-700'}`}>
+          {msg.texto}
+        </p>
+      )}
     </div>
   );
 }

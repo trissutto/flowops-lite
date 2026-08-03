@@ -658,6 +658,18 @@ export class NfeTransferService {
     return undefined;
   }
 
+  /**
+   * IDENTIDADE FISCAL DA LOJA pra quem não vai emitir nota — hoje a etiqueta
+   * dos Correios da remessa entre lojas.
+   *
+   * Reusa o MESMO cadastro que a NF-e usa (NfceConfig: CNPJ, razão social e o
+   * endereço completo), em vez de pedir pra alguém digitar endereço de loja de
+   * novo em outro lugar. `requireCert: false` porque etiqueta não assina nada.
+   */
+  async identidadeDaLoja(storeCode: string) {
+    return this.loadStoreFiscal(storeCode, { requireCert: false, identidade: 'nfe' });
+  }
+
   private async loadStoreFiscal(
     storeCode: string,
     opts: {
