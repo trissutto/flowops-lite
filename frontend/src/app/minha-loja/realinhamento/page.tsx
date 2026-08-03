@@ -140,6 +140,8 @@ export default function MinhaLojaRealinhamentoPage() {
   const [openShipments, setOpenShipments] = useState<any[]>([]);
   // Fechadas e ainda sem etiqueta — some da lista sozinha quando a etiqueta sai.
   const [pendingLabel, setPendingLabel] = useState<any[]>([]);
+  // Qual caixa em montagem está com o conteúdo aberto na tela.
+  const [caixaAberta, setCaixaAberta] = useState<string | null>(null);
   const [closingShipmentId, setClosingShipmentId] = useState<string | null>(null);
   /** Remessa fechada agora — pra gerar etiqueta/nota sem sair desta tela. */
   const [recemEnviada, setRecemEnviada] = useState<{ id: string; code: string; qty: number } | null>(null);
@@ -622,16 +624,21 @@ export default function MinhaLojaRealinhamentoPage() {
   // ela virou caixa lacrada, e quem manda nela agora é o cartão de etiqueta lá
   // em cima. Aparecer nos dois lugares fazia parecer trabalho em dobro — e o
   // "desfazer" da célula verde nem valeria mais, porque o estoque já baixou.
+  /**
+   * REGRA DAS ABAS (dono, 03/08):
+   *   caixa ABERTA  → aba amarela (Pendentes), mesmo já com peça bipada dentro
+   *   caixa FECHADA → aba verde (Enviados hoje)
+   *   reabriu       → volta pra amarela
+   *
+   * Então a pilha verde não lista mais peça que está DENTRO de caixa nenhuma:
+   * a peça mora na caixa, e a caixa é que escolhe a aba. Sobra pra pilha só a
+   * peça sem caixa — o acervo antigo, de antes das remessas. Sem isso a mesma
+   * caixa aparecia nas duas abas: amarela como "em montagem" e verde como
+   * pilha de peças.
+   */
   const currentItems =
-    view === 'pending' ? items : sentItems.filter((i) => !(i as any).caixaFechada);
+    view === 'pending' ? items : sentItems.filter((i) => !(i as any).shipmentId);
 
-  // Caixa aberta de cada destino, pra pendurar as ações no cabeçalho da pilha
-  // em vez de repetir as mesmas peças num cartão à parte.
-  const caixaDoDestino = useMemo(() => {
-    const m: Record<string, any> = {};
-    for (const s of openShipments) m[s.toStoreCode] = s;
-    return m;
-  }, [openShipments]);
 
   // Agrupa por destino → dentro dele, por REF, com grade Cor × Tamanho
   const byDestination = useMemo(() => {
@@ -711,17 +718,13 @@ export default function MinhaLojaRealinhamentoPage() {
   }, [currentItems]);
 
   /**
-   * Caixas abertas que NÃO têm pilha na tela — só essas ganham cartão próprio.
+   * Caixa aberta é assunto da aba AMARELA, e só dela.
    *
-   * Na aba de enviados, a caixa cujo destino já aparece como pilha mostra as
-   * ações no cabeçalho dela; um cartão à parte repetiria as mesmas peças. Na
-   * aba de pendentes não existe pilha de enviados, então todas aparecem.
+   * Antes eu tinha pendurado as ações da caixa no cabeçalho da pilha verde, e
+   * o resultado foi a mesma caixa nas duas abas. A caixa está EM MONTAGEM
+   * enquanto não fecha — o lugar dela é junto do trabalho que ainda falta.
    */
-  const caixasSemPilha = useMemo(() => {
-    if (view !== 'sent') return openShipments;
-    const comPilha = new Set(byDestination.map((d) => d.code));
-    return openShipments.filter((s) => !comPilha.has(s.toStoreCode));
-  }, [openShipments, byDestination, view]);
+  const caixasEmMontagem = view === 'pending' ? openShipments : [];
 
   const totalPending = items.length;
   const totalUnits = useMemo(() => items.reduce((a, it) => a + it.qtyOrigem, 0), [items]);
@@ -929,13 +932,13 @@ export default function MinhaLojaRealinhamentoPage() {
             próprio cabeçalho dela; repetir aqui era o mesmo item duas vezes.
             Mas sumir com a caixa sem pilha seria pior: ela ficaria aberta pra
             sempre, sem ninguém achar o "Fechar e enviar". */}
-        {caixasSemPilha.length > 0 && (
+        {caixasEmMontagem.length > 0 && (
           <div className="space-y-3">
             <div className="flex items-center gap-2 text-sm font-bold text-amber-900">
               <Truck className="w-4 h-4" />
               Remessas em montagem
             </div>
-            {caixasSemPilha.map((s) => {
+            {caixasEmMontagem.map((s) => {
               const isClosing = closingShipmentId === s.id;
               const totalQty = (s.items || []).reduce(
                 (sum: number, i: any) => sum + (i.qtyOrigem || 1), 0,
@@ -964,6 +967,20 @@ export default function MinhaLojaRealinhamentoPage() {
                       <div className="text-xs text-amber-800/80 mt-1">
                         {(s.items || []).length} item(s) · {totalQty} peça(s) na caixa
                       </div>
+                      {/* VER O QUE TEM DENTRO — sem isto a caixa em montagem
+                          era uma caixa fechada aos olhos de quem monta: dizia
+                          "2 peça(s)" e não deixava conferir QUAIS. Vale ainda
+                          mais depois de reabrir, que é quando a pessoa precisa
+                          checar o que voltou pra dentro. Os itens já vêm no
+                          payload da lista — não custa uma ida ao servidor. */}
+                      <button
+                        type="button"
+                        onClick={() => setCaixaAberta((atual) => (atual === s.id ? null : s.id))}
+                        className="mt-2 inline-flex items-center gap-1.5 text-xs font-bold text-amber-900 hover:text-amber-950 underline decoration-amber-400 underline-offset-2"
+                      >
+                        <Package className="w-3.5 h-3.5" />
+                        {caixaAberta === s.id ? 'Ocultar conteúdo' : 'Verificar conteúdo'}
+                      </button>
                     </div>
                     <div className="flex flex-col gap-2 shrink-0">
                       <div className="flex gap-2">
@@ -1003,9 +1020,44 @@ export default function MinhaLojaRealinhamentoPage() {
                       </button>
                     </div>
                   </div>
+                  {caixaAberta === s.id && (
+                    <div className="mt-3 rounded-xl border border-amber-200 bg-white overflow-hidden">
+                      {(s.items || []).length === 0 ? (
+                        <p className="text-xs text-slate-500 p-3">Caixa ainda vazia.</p>
+                      ) : (
+                        <table className="w-full text-xs">
+                          <thead className="bg-slate-50 text-slate-500 uppercase tracking-wide">
+                            <tr>
+                              <th className="text-left px-3 py-2 font-bold">Ref</th>
+                              <th className="text-left px-3 py-2 font-bold">Cor</th>
+                              <th className="text-left px-3 py-2 font-bold">Tam</th>
+                              <th className="text-right px-3 py-2 font-bold">Qtd</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {(s.items || []).map((i: any) => (
+                              <tr key={i.id}>
+                                <td className="px-3 py-2 font-mono font-bold text-slate-900">{i.refCode}</td>
+                                <td className="px-3 py-2 text-slate-700">{i.cor || '—'}</td>
+                                <td className="px-3 py-2 text-slate-700">{i.tamanho || '—'}</td>
+                                <td className="px-3 py-2 text-right font-bold text-slate-900">{i.qtyOrigem ?? 1}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                          <tfoot className="bg-slate-50">
+                            <tr>
+                              <td colSpan={3} className="px-3 py-2 font-bold text-slate-600">Total</td>
+                              <td className="px-3 py-2 text-right font-black text-slate-900">{totalQty}</td>
+                            </tr>
+                          </tfoot>
+                        </table>
+                      )}
+                    </div>
+                  )}
                   <div className="mt-2 text-[11px] text-amber-900/70 leading-snug">
-                    ⚠️ Ao fechar, o estoque das peças sai do Giga desta loja e a remessa vai pra
-                    loja destino conferir. Não pode reverter depois.
+                    ⚠️ Ao fechar, o estoque das peças sai desta loja e a remessa vai pra
+                    loja destino conferir. Dá pra <b>reabrir</b> depois pela aba Enviados —
+                    cancelando a etiqueta e a nota, se já tiverem saído.
                     <br />
                     💡 Dica: você pode <b>fechar uma loja por vez</b> — as outras remessas continuam abertas pra acumular peças.
                   </div>
@@ -1079,47 +1131,6 @@ export default function MinhaLojaRealinhamentoPage() {
                     }`}
                   />
                 </button>
-
-                {/* AÇÕES DA CAIXA daquele destino, coladas na pilha.
-                    A caixa aberta tinha cartão amarelo PRÓPRIO, e as MESMAS
-                    peças apareciam nos dois lugares — "2 item(s) na caixa" em
-                    cima e a grade verde embaixo. Uma caixa, um cartão: as
-                    ações vêm pra cá e o cartão amarelo só sobra pra caixa que
-                    não tem peça nesta tela (a que ficou de outro dia).
-                    Fora do <button> do cabeçalho de propósito: botão dentro de
-                    botão não é HTML válido e o clique vira loteria. */}
-                {view === 'sent' && caixaDoDestino[d.code] && (
-                  <div className="no-print flex flex-wrap gap-2 px-4 py-3 bg-amber-50 border-b border-amber-200">
-                    <span className="font-mono text-xs font-black text-amber-900 self-center mr-1">
-                      {caixaDoDestino[d.code].code}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => handleDownloadPdf(caixaDoDestino[d.code].id, caixaDoDestino[d.code].code)}
-                      className="bg-white hover:bg-amber-100 text-amber-900 border-2 border-amber-400 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5"
-                    >
-                      <FileText className="w-3.5 h-3.5" /> PDF
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handlePrintRemessa(caixaDoDestino[d.code].id, caixaDoDestino[d.code].code)}
-                      className="bg-amber-100 hover:bg-amber-200 text-amber-900 border-2 border-amber-400 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5"
-                    >
-                      <Printer className="w-3.5 h-3.5" /> Imprimir
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleCloseShipment(caixaDoDestino[d.code].id, caixaDoDestino[d.code].code)}
-                      disabled={closingShipmentId === caixaDoDestino[d.code].id}
-                      className="bg-amber-500 hover:bg-amber-600 text-white px-3 py-1.5 rounded-lg text-xs font-black flex items-center gap-1.5 disabled:opacity-50"
-                    >
-                      {closingShipmentId === caixaDoDestino[d.code].id
-                        ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        : <Send className="w-3.5 h-3.5" />}
-                      Fechar e enviar
-                    </button>
-                  </div>
-                )}
 
                 {/* Grupos por REF — só renderiza quando aberto */}
                 {isOpen && (
