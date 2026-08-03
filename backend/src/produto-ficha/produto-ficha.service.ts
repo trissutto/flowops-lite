@@ -88,7 +88,50 @@ export class ProdutoFichaService {
       where: { ref_marca: { ref, marca } },
       include: { cores: { orderBy: { cor: 'asc' } }, gradeMedidas: true },
     });
-    if (!ficha) return null;
+
+    /**
+     * SEM FICHA AINDA, MAS COM FOTO: devolve uma ficha "casca".
+     *
+     * A ficha só nasce quando alguém salva algum campo. Só que as FOTOS não
+     * dependem dela — vivem em `product_photos` por (ref, cor) e chegam antes,
+     * pela importação do site antigo. Devolver `null` aqui fazia a tela
+     * mostrar "0 fotos" logo depois de importar 17: elas existiam, mas o
+     * caminho pra enxergá-las passava por uma linha que ninguém criou.
+     */
+    if (!ficha) {
+      const fotosSoltas = await (this.prisma as any).productPhoto.findMany({
+        where: { ref },
+        orderBy: [{ cor: 'asc' }, { ordem: 'asc' }],
+      });
+      if (!fotosSoltas.length) return null;
+
+      const porCor = new Map<string, any[]>();
+      for (const f of fotosSoltas) {
+        const k = (f.cor || '').toUpperCase();
+        if (!k) continue;
+        if (!porCor.has(k)) porCor.set(k, []);
+        porCor.get(k)!.push(f);
+      }
+      return {
+        ref, marca,
+        nomeCurto: null, descricao: null,
+        tecidoId: null, tecidoNome: null, colecaoId: null, colecaoNome: null,
+        ocasioes: [], modelagens: [],
+        gradeMedidasId: null, gradeMedidas: null, medidasAjuste: null,
+        elasticidade: null,
+        cores: Array.from(porCor.entries()).map(([cor, fotos]) => ({
+          cor,
+          tituloComercial: null,
+          youtubeUrl: null,
+          statusPublicacao: 'nao_publicar',
+          swatchTipo: 'cor',
+          corHex: null,
+          swatchFocoX: null,
+          swatchFocoY: null,
+          fotos,
+        })),
+      };
+    }
 
     // Uma query só pras fotos de todas as cores da REF.
     const fotos = await (this.prisma as any).productPhoto.findMany({
