@@ -888,7 +888,11 @@ export default function MinhaLojaRealinhamentoPage() {
    * ela ficaria aberta pra sempre sem ninguém achar o "Fechar e enviar".
    */
   const caixasEmMontagem = useMemo(() => {
-    if (view !== 'pending') return [];
+    // Aba ENVIADOS também mostra TODAS as caixas em montagem (04/08 — o dono
+    // ficou preso: bipou as peças, foi pra Enviados procurar o "Fechar e
+    // enviar" e lá não existia botão nenhum. Caixa aberta tem que ser
+    // fechável de onde a pessoa estiver, não só da aba Pendentes).
+    if (view === 'sent') return openShipments;
     const comGrade = new Set(byDestination.map((d) => d.code));
     return openShipments.filter((s) => !comGrade.has(s.toStoreCode));
   }, [view, openShipments, byDestination]);
@@ -2161,13 +2165,23 @@ function EnvioDaRemessa({
   const [conteudo, setConteudo] = useState<any[] | null>(null);
   const [msg, setMsg] = useState<{ tipo: 'ok' | 'erro'; texto: string } | null>(null);
 
-  async function gerar() {
+  /**
+   * `forcar` = caixa da rota do carro sendo postada pelos Correios mesmo
+   * assim (dono 04/08: "como emito o correio?" — a caixa de Santos ficou sem
+   * saída). O backend vira a remessa pra CORREIOS e gera NF + etiqueta.
+   */
+  async function gerar(forcar = false) {
+    if (forcar && !window.confirm(
+      `Postar a caixa ${code} pelos CORREIOS?\n\n` +
+      `Ela é da rota do carro da rede — forçando, o transporte vira CORREIOS ` +
+      `e o sistema emite a nota fiscal e a etiqueta agora.`,
+    )) return;
     setOcupado('gerar');
     setMsg(null);
     try {
       const r = await api<any>(`/realignment/shipments/${shipmentId}/gerar-envio`, {
         method: 'POST',
-        body: JSON.stringify({}),
+        body: JSON.stringify(forcar ? { forcar: true } : {}),
       });
       setRastreio(r?.codigoRastreio ?? null);
       setMsg({
@@ -2176,6 +2190,9 @@ function EnvioDaRemessa({
           ? `Já tinha envio: ${r.carrier || ''} ${r.codigoRastreio}`
           : `${r?.carrier || 'Envio'} gerado — rastreio ${r?.codigoRastreio}`,
       });
+      // Forçou rota própria → Correios: o cartão precisa renascer como
+      // Correios (com Etiqueta + NF) — recarrega as listas.
+      if (forcar) onMudou?.();
     } catch (e: any) {
       setMsg({ tipo: 'erro', texto: e?.message?.replace(/^\d+:\s*/, '') || 'Falha ao gerar o envio' });
     } finally {
@@ -2278,9 +2295,22 @@ function EnvioDaRemessa({
           )}
         </div>
         <div className="flex flex-wrap gap-2 shrink-0">
-          {/* Rota própria não tem Correios pra pedir — oferecer "Gerar envio"
-              numa caixa que vai de carro abriria pré-postagem que ninguém
-              posta. O resto (conferir, reabrir, nota) continua igual. */}
+          {/* Rota própria: o padrão é o carro da rede, então o "Gerar envio"
+              normal sai de cena — mas SEMPRE com a saída de postar mesmo
+              assim (dono 04/08: a caixa de Santos ficou sem como emitir).
+              Forçar vira a remessa pra CORREIOS e emite NF + etiqueta. */}
+          {rotaPropria && (
+            <button
+              type="button"
+              onClick={() => void gerar(true)}
+              disabled={ocupado !== null}
+              className="bg-white hover:bg-emerald-50 text-emerald-800 border-2 border-dashed border-emerald-400 px-4 py-2.5 rounded-xl text-sm font-bold shadow-sm flex items-center gap-2 disabled:opacity-50"
+              title="A caixa é da rota do carro, mas dá pra postar pelos Correios mesmo assim — gera NF + etiqueta"
+            >
+              {ocupado === 'gerar' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Truck className="w-4 h-4" />}
+              Postar pelos Correios
+            </button>
+          )}
           {!rotaPropria && (
             <>
               <button

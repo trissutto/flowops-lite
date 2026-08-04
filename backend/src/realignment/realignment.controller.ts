@@ -660,14 +660,17 @@ export class RealignmentController {
     const storeId = req?.user?.storeId;
     const userId = req?.user?.id || req?.user?.sub || null;
     // RETAGUARDA (dono 31/07): admin/operator geram a etiqueta de QUALQUER
-    // remessa, sem estar logado na loja de origem — e com `forcar` passam por
-    // cima da regra das 10 peças quando quiserem postar mesmo assim.
+    // remessa, sem estar logado na loja de origem.
+    // `forcar` vale TAMBÉM pra loja origem (dono 04/08): caixa da rota do
+    // carro pode ser postada pelos Correios quando ele quiser — a tela sem
+    // essa saída deixou a caixa de Santos sem como emitir. Forçar vira a
+    // remessa pra CORREIOS e gera NF + etiqueta normalmente.
     const ehRetaguarda = role === 'admin' || role === 'operator';
     if (!ehRetaguarda && (role !== 'store' || !storeId)) {
       throw new ForbiddenException('Apenas loja origem ou retaguarda');
     }
     return this.remessaEnvio.gerarEnvio(id, ehRetaguarda ? null : storeId, userId, {
-      forcar: ehRetaguarda && !!body?.forcar,
+      forcar: !!body?.forcar,
     });
   }
 
