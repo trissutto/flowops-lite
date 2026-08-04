@@ -253,7 +253,22 @@ export class RealignmentShipmentService {
       rota.size > 0 &&
       rota.has(String(s.fromStoreCode || '').toUpperCase()) &&
       rota.has(String(s.toStoreCode || '').toUpperCase());
-    const paraEtiqueta = (shipments as any[]).filter((s) => !daRota(s));
+
+    /**
+     * ⚠️ A caixa da ROTA PRÓPRIA CONTINUA NA LISTA (04/08 — incidente Santos).
+     *
+     * Antes ela era FILTRADA FORA daqui, e o efeito colateral era brutal:
+     * assim que a loja fechava uma caixa Itanhaém→Santos (rota do carro da
+     * rede), ela sumia da tela inteira — não está mais em "abertas", e a lista
+     * de fechadas só trazia quem precisa de etiqueta. As peças separadas
+     * ficavam invisíveis; o dono perguntou "onde estão as separadas?" e não
+     * havia onde olhar.
+     *
+     * O que a rota própria não tem é ETIQUETA — não é motivo pra esconder a
+     * caixa. Vai o sinalizador `rotaPropria` e a TELA decide o que oferecer
+     * (conferir conteúdo e reabrir sim, Correios não).
+     */
+    const paraEtiqueta = (shipments as any[]).map((s) => ({ ...s, rotaPropria: daRota(s) }));
 
     // Nota autorizada por caixa — a tela precisa AVISAR antes de reabrir, e não
     // descobrir no erro. Uma query pra todas em vez de uma por cartão.
@@ -279,6 +294,8 @@ export class RealignmentShipmentService {
           totalPecas: (items as any[]).reduce((n, i) => n + (i.qtyOrigem || 1), 0),
           jaTemEtiqueta: !!s.envioGeneratedAt,
           notaAutorizada: notaPorCaixa.get(s.id) ?? null,
+          // true = vai no carro da rede; a tela esconde os Correios
+          rotaPropria: !!s.rotaPropria,
         };
       }),
     );
