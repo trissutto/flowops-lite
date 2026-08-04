@@ -1005,6 +1005,8 @@ export default function MinhaLojaRealinhamentoPage() {
             shipmentId={recemEnviada.id}
             code={recemEnviada.code}
             qty={recemEnviada.qty}
+            onPdf={() => void handleDownloadPdf(recemEnviada.id, recemEnviada.code)}
+            onImprimir={() => void handlePrintRemessa(recemEnviada.id, recemEnviada.code)}
             onFechar={() => setRecemEnviada(null)}
           />
         )}
@@ -1038,6 +1040,8 @@ export default function MinhaLojaRealinhamentoPage() {
                   jaTemEtiqueta={!!s.jaTemEtiqueta}
                   notaAutorizada={s.notaAutorizada ?? null}
                   rotaPropria={!!s.rotaPropria}
+                  onPdf={() => void handleDownloadPdf(s.id, s.code)}
+                  onImprimir={() => void handlePrintRemessa(s.id, s.code)}
                   onMudou={() => {
                     void loadPendingLabel();
                     void loadOpenShipments();
@@ -2002,7 +2006,7 @@ function RealignCell({
  */
 function EnvioDaRemessa({
   shipmentId, code, qty, onFechar, destino, rastreioExistente = null, jaTemEtiqueta = false,
-  notaAutorizada = null, rotaPropria = false, onMudou,
+  notaAutorizada = null, rotaPropria = false, onPdf, onImprimir, onMudou,
 }: {
   shipmentId: string;
   code: string;
@@ -2021,6 +2025,11 @@ function EnvioDaRemessa({
   /** Caixa que vai no carro da rede (Itanhaém/Praia Grande/Santos): existe,
    *  aparece e pode ser conferida — só não tem etiqueta dos Correios. */
   rotaPropria?: boolean;
+  /** Romaneio (número da remessa + relação das peças). Existe em TODA caixa,
+   *  mas é o único papel da rota própria — lá não há etiqueta nem NF pra
+   *  imprimir, e a caixa precisa seguir com a relação do que vai dentro. */
+  onPdf?: () => void;
+  onImprimir?: () => void;
   /** Recarrega as listas da tela — a caixa reaberta sai daqui e volta pras
    *  amarelas, então quem manda tem que saber. */
   onMudou?: () => void;
@@ -2171,6 +2180,32 @@ function EnvioDaRemessa({
                 Etiqueta + NF
               </button>
             </>
+          )}
+
+          {/* ROMANEIO — número da remessa + relação do que vai dentro.
+              Na rota própria é o único papel que acompanha a caixa: quem
+              recebe confere peça por peça contra essa lista. */}
+          {onImprimir && (
+            <button
+              type="button"
+              onClick={onImprimir}
+              disabled={ocupado !== null}
+              className="bg-white hover:bg-emerald-100 text-emerald-900 border-2 border-emerald-400 px-4 py-2.5 rounded-xl text-sm font-bold shadow-sm flex items-center gap-2 disabled:opacity-50"
+              title="Imprime o romaneio: número da remessa e a relação das peças"
+            >
+              <Printer className="w-4 h-4" /> Imprimir relação
+            </button>
+          )}
+          {onPdf && (
+            <button
+              type="button"
+              onClick={onPdf}
+              disabled={ocupado !== null}
+              className="bg-white hover:bg-slate-100 text-slate-800 border-2 border-slate-300 px-4 py-2.5 rounded-xl text-sm font-bold shadow-sm flex items-center gap-2 disabled:opacity-50"
+              title="Baixa o romaneio em PDF"
+            >
+              <FileText className="w-4 h-4" /> PDF
+            </button>
           )}
           {/* Conferir o que está dentro ANTES de lacrar de vez — e desfazer se
               a caixa foi fechada sem querer ou faltou peça. */}

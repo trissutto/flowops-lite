@@ -158,15 +158,27 @@ const FILTROS = [
   { slug: 'em-transito', label: 'Em trânsito',         color: 'bg-sky-100 text-sky-800' },
   // Concluídos = WC status=completed (entregue/finalizado).
   { slug: 'completed',   label: 'Concluídos',          color: 'bg-slate-100 text-slate-700' },
+  // Cancelados/reembolsados — pra conferir o que saiu da fila e não ficar sem
+  // rastro depois de cancelar.
+  { slug: 'cancelled',   label: 'Cancelados',          color: 'bg-rose-100 text-rose-800' },
 ];
 
-// Mapa de status destino permitidos pra mudança em bloco, com label.
-// Só mostramos os úteis pro fluxo operacional (não quero acidentes tipo "cancelled").
-const BULK_TARGETS: Array<{ slug: string; label: string; color: string }> = [
+/**
+ * Status destino da mudança em bloco.
+ *
+ * CANCELADO e REEMBOLSADO entraram em 04/08 (pedido do dono: "nenhum status e
+ * preciso cancelar"). Estavam fora de propósito, por medo de clique acidental —
+ * mas o efeito foi pior: pedido morto ficava preso na fila pra sempre, sem
+ * nenhuma saída na tela. Agora eles existem, marcados como `destrutivo`, o que
+ * liga uma confirmação que explica o que vai acontecer antes de gravar.
+ */
+const BULK_TARGETS: Array<{ slug: string; label: string; color: string; destrutivo?: boolean }> = [
   { slug: 'separacao',  label: 'Separação',   color: 'bg-blue-600 hover:bg-blue-700' },
   { slug: 'processing', label: 'Processando', color: 'bg-emerald-600 hover:bg-emerald-700' },
   { slug: 'on-hold',    label: 'Aguardando',  color: 'bg-yellow-500 hover:bg-yellow-600' },
   { slug: 'completed',  label: 'Concluído',   color: 'bg-slate-600 hover:bg-slate-700' },
+  { slug: 'cancelled',  label: 'Cancelar',    color: 'bg-rose-600 hover:bg-rose-700', destrutivo: true },
+  { slug: 'refunded',   label: 'Reembolsado', color: 'bg-fuchsia-700 hover:bg-fuchsia-800', destrutivo: true },
 ];
 
 /**
@@ -263,6 +275,7 @@ function SeparacaoPageInner() {
       next['separacao']   = r.byStatus['separacao']?.total ?? 0;
       next['em-transito'] = r.byStatus['shipped']?.total ?? 0;
       next['completed']   = r.byStatus['completed']?.total ?? 0;
+      next['cancelled']   = r.byStatus['cancelled']?.total ?? 0;
       // merge (não substitui) pra não apagar o contador de carrinhos,
       // que vem de outro endpoint e pode chegar depois
       setTabCounts((prev) => ({ ...prev, ...next }));
@@ -700,9 +713,22 @@ function SeparacaoPageInner() {
     if (selected.size === 0) return;
 
     const ids = Array.from(selected);
-    const targetLabel = BULK_TARGETS.find((t) => t.slug === targetSlug)?.label ?? targetSlug;
+    const alvo = BULK_TARGETS.find((t) => t.slug === targetSlug);
+    const targetLabel = alvo?.label ?? targetSlug;
 
-    if (!window.confirm(
+    // Cancelar/reembolsar mexe em dinheiro e para a separação nas lojas — a
+    // confirmação lista o que acontece, em vez de perguntar "tem certeza?".
+    if (alvo?.destrutivo) {
+      const oQueAcontece = [
+        `${ids.length} pedido(s) ${targetSlug === 'refunded' ? 'vão pra REEMBOLSADO' : 'vão ser CANCELADOS'} no site.`,
+        'As ordens de separação em aberto desses pedidos são CANCELADAS — a loja para de separar.',
+        'Os pedidos saem da fila e passam a aparecer na aba Cancelados.',
+        targetSlug === 'refunded'
+          ? 'O estorno do dinheiro NÃO é feito aqui — faça no gateway (PagBank/Pagar.me).'
+          : 'Se já foi pago, confira o estorno no gateway.',
+      ];
+      if (!window.confirm(`${targetLabel.toUpperCase()} · ${ids.length} pedido(s)\n\n${oQueAcontece.join('\n\n')}`)) return;
+    } else if (!window.confirm(
       `Mudar ${ids.length} pedido(s) pra "${targetLabel}"?\n\nIsso grava DIRETO no WooCommerce.`,
     )) return;
 
