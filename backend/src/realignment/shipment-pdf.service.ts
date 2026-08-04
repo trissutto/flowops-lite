@@ -206,13 +206,18 @@ export class ShipmentPdfService {
         // Larguras redistribuídas: dá MUITO mais espaço pra DESCRIÇÃO (290px)
         // que era 160 e quebrava 2-3 linhas. Coluna COR enxugada de 130 → 80
         // (cores típicas: MARINHO, BEGE, ESTAMPA VERDE — caem em 80 com ellipsis).
+        // CÓDIGO entrou em 04/08: duas linhas iguais no romaneio (mesma REF,
+        // cor e tamanho) não diziam se era a mesma peça pedida em dobro ou
+        // duas peças com cadastro separado no Giga. Com o código na frente, a
+        // conferência resolve isso na hora, sem abrir o sistema.
         const cols = [
-          { label: '#',          x: 40,  width: 25  },
-          { label: 'REF',        x: 65,  width: 60  },
-          { label: 'COR',        x: 125, width: 90  },
-          { label: 'TAM',        x: 215, width: 35  },
-          { label: 'QTY',        x: 250, width: 30  },
-          { label: 'DESCRIÇÃO',  x: 280, width: 275 },
+          { label: '#',          x: 40,  width: 22  },
+          { label: 'CÓDIGO',     x: 62,  width: 62  },
+          { label: 'REF',        x: 124, width: 56  },
+          { label: 'COR',        x: 180, width: 78  },
+          { label: 'TAM',        x: 258, width: 32  },
+          { label: 'QTY',        x: 290, width: 28  },
+          { label: 'DESCRIÇÃO',  x: 318, width: 237 },
         ];
 
         // Cabeçalho
@@ -231,7 +236,7 @@ export class ShipmentPdfService {
           doc.font('Helvetica').fontSize(9);
           const descText = String(it.descricao || '—');
           const descHeight = doc.heightOfString(descText, {
-            width: cols[5].width - 6,
+            width: cols[6].width - 6,
           });
           const rowHeight = Math.max(16, descHeight + 6);
 
@@ -256,24 +261,33 @@ export class ShipmentPdfService {
           }
           doc.fillColor('#222').font('Helvetica').fontSize(9);
           doc.text(String(idx + 1), cols[0].x + 3, rowY + 4, { width: cols[0].width, lineBreak: false });
-          doc.text(it.refCode || '—', cols[1].x + 3, rowY + 4, { width: cols[1].width, lineBreak: false });
-          doc.text(it.cor || '—', cols[2].x + 3, rowY + 4, {
+          doc.text(String(it.codigoBipado || '—'), cols[1].x + 3, rowY + 4, {
+            width: cols[1].width,
+            ellipsis: true,
+            lineBreak: false,
+          });
+          doc.text(it.refCode || '—', cols[2].x + 3, rowY + 4, {
             width: cols[2].width,
             ellipsis: true,
             lineBreak: false,
           });
-          doc.text(it.tamanho || '—', cols[3].x + 3, rowY + 4, { width: cols[3].width, lineBreak: false });
+          doc.text(it.cor || '—', cols[3].x + 3, rowY + 4, {
+            width: cols[3].width,
+            ellipsis: true,
+            lineBreak: false,
+          });
+          doc.text(it.tamanho || '—', cols[4].x + 3, rowY + 4, { width: cols[4].width, lineBreak: false });
           doc
             .font('Helvetica-Bold')
-            .text(String(it.qtyOrigem || 1), cols[4].x + 3, rowY + 4, {
-              width: cols[4].width,
+            .text(String(it.qtyOrigem || 1), cols[5].x + 3, rowY + 4, {
+              width: cols[5].width,
               lineBreak: false,
             });
           // DESCRIÇÃO — quebra em múltiplas linhas dentro da própria célula
           doc
             .font('Helvetica')
-            .text(descText, cols[5].x + 3, rowY + 4, {
-              width: cols[5].width - 6,
+            .text(descText, cols[6].x + 3, rowY + 4, {
+              width: cols[6].width - 6,
             });
 
           doc.y = rowY + rowHeight;
