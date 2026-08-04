@@ -266,7 +266,8 @@ export class CashService {
       OUTROS: mkSlot(),
     };
     let totalVendas = 0;
-    const qtdVendas = sales.length;
+    let totalMarcados = 0;
+    let qtdMarcados = 0;
 
     const bandeiraMap: Record<string, string> = {
       'MASTERCARD': 'MASTERCARD', 'VISA': 'VISANET', 'VISANET': 'VISANET',
@@ -297,6 +298,14 @@ export class CashService {
     };
 
     for (const s of sales as any[]) {
+      // MARCADO não é venda (Regra 1 do dono): fica fora do total e das formas,
+      // e vai separado pro fechamento — ele não gerou movimento de dinheiro.
+      // (Antes entrava aqui e o relatório divergia do resumo da sessão.)
+      if (String(s.paymentMethod || '').toUpperCase() === 'MARCADO') {
+        totalMarcados += Number(s.total) || 0;
+        qtdMarcados += 1;
+        continue;
+      }
       totalVendas += Number(s.total) || 0;
       for (const p of s.payments || []) {
         const method = String(p.method || '').toLowerCase();
@@ -458,6 +467,20 @@ export class CashService {
     // Inclui recebimentos no dinheiroEsperado (entram no caixa físico)
     const dinheiroEsperadoComRecebimentos = dinheiroEsperado + recebimentosDinheiro.valor;
 
+    // RÉGUA OFICIAL DO FATURAMENTO na janela desta sessão (ver blocoFaturamento).
+    // Sem isto o fechamento mostrava "total de vendas" bruto e a conferência
+    // contra as formas de pagamento não fechava.
+    const aj = (await this.ajustesFaturamentoPorLoja(
+      session.openedAt,
+      session.closedAt || new Date(),
+      [session.storeCode],
+    )).get(session.storeCode) || CashService.AJUSTES_ZERO;
+    const fat = CashService.blocoFaturamento(
+      { totalVendas, totalValeTroca: totais.VALE_TROCA.valor },
+      aj,
+    );
+    const qtdVendas = sales.length - qtdMarcados;
+
     return {
       session: {
         id: session.id,
@@ -496,6 +519,13 @@ export class CashService {
         dinheiroEsperado: dinheiroEsperadoComRecebimentos,
         dinheiroEsperadoSoVendas: dinheiroEsperado,
         qtdVendas,
+        // ── Régua oficial (04/08) ──
+        ...fat,                                   // faturamento + devoluções + frete
+        totalValeTroca: totais.VALE_TROCA.valor,
+        totalVendaOnline: totais.VENDA_ONLINE.valor,
+        // MARCADO fica FORA de tudo acima — aparece só pra loja saber que existe.
+        totalMarcados,
+        qtdMarcados,
       },
       movimentos: movements.map((m: any) => ({
         id: m.id,
@@ -962,6 +992,10 @@ export class CashService {
             totalSangrias: t.totalSangrias,
             totalSuprimentos: t.totalSuprimentos,
             totalFechamento: t.totalFechamento,
+            // MARCADO fora do faturamento (Regra 1) mas visível no fechamento.
+            totalMarcados: t.totalMarcados,
+            qtdMarcados: t.qtdMarcados,
+            totalRecebimentosDinheiro: t.totalRecebimentosDinheiro,
             dinheiroEsperado: t.dinheiroEsperado,
             qtdVendas: t.qtdVendas,
           },
