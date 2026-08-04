@@ -294,8 +294,12 @@ export class RealignmentShipmentService {
           totalPecas: (items as any[]).reduce((n, i) => n + (i.qtyOrigem || 1), 0),
           jaTemEtiqueta: !!s.envioGeneratedAt,
           notaAutorizada: notaPorCaixa.get(s.id) ?? null,
-          // true = vai no carro da rede; a tela esconde os Correios
-          rotaPropria: !!s.rotaPropria,
+          // true = vai no carro da rede; a tela troca os Correios pelo botão
+          // "Postar pelos Correios" (forçar). Depois de forçada, o
+          // transportMode vira 'correios' e o cartão volta ao normal —
+          // sem isto o "Etiqueta + NF" continuava escondido numa caixa que
+          // JÁ TEM rastreio.
+          rotaPropria: !!s.rotaPropria && String(s.transportMode || '') !== 'correios',
         };
       }),
     );
