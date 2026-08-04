@@ -182,6 +182,13 @@ export default function MinhaLojaPage() {
   >(null);
   // Filtro de aba: null = todos | 'new' | 'separating' | 'ready' (separados+ready)
   const [filterTab, setFilterTab] = useState<'new' | 'separating' | 'ready' | 'shipped' | null>(null);
+  // Recorte da aba ENVIADOS. De/Ate + atalhos e a convencao da casa pra tela
+  // com recorte de tempo — nunca dropdown de periodo fixo.
+  const hojeISO = new Date().toISOString().slice(0, 10);
+  const seteDiasISO = new Date(Date.now() - 6 * 86400000).toISOString().slice(0, 10);
+  const [envDe, setEnvDe] = useState(seteDiasISO);
+  const [envAte, setEnvAte] = useState(hojeISO);
+  const [enviados, setEnviados] = useState<PickOrderRow[]>([]);
   // Pedido com o endereco aberto pra correcao (modal compartilhado com a retaguarda).
   const [editandoEndereco, setEditandoEndereco] = useState<PickOrderRow | null>(null);
   const [toasts, setToasts] = useState<Array<{ id: string; msg: string }>>([]);
@@ -304,6 +311,24 @@ export default function MinhaLojaPage() {
       setError(err?.message ?? 'Erro ao carregar pedidos');
     }
   }, [persistSeen]);
+
+  /**
+   * ENVIADOS do periodo — consulta PROPRIA, nao o /mine de sempre.
+   *
+   * O /mine sem parametro devolve so os ATIVOS (new/separating/ready): o
+   * despachado nunca chegava, e por isso a aba nasceu vazia. Com from/to o
+   * backend traz os shipped daquele recorte.
+   */
+  const loadEnviados = useCallback(async () => {
+    try {
+      const q = new URLSearchParams({ from: envDe, to: envAte }).toString();
+      setEnviados(await api<PickOrderRow[]>('/pick-orders/mine?' + q));
+    } catch {
+      setEnviados([]);
+    }
+  }, [envDe, envAte]);
+
+  useEffect(() => { if (filterTab === 'shipped') void loadEnviados(); }, [filterTab, loadEnviados]);
 
   // Pedidos da LIVE pra esta loja (silencioso: loja sem live não vê nada).
   // Pedido FINALIZADO (todas as peças enviadas) sai da home — igual ao site;
@@ -785,9 +810,9 @@ export default function MinhaLojaPage() {
     if (filterTab === 'ready') return activeRows.filter((r) => r.status === 'separated' || r.status === 'ready');
     // ENVIADOS sai de `rows`, não de `activeRows` — `activeRows` existe
     // justamente pra ESCONDER os despachados do dia a dia.
-    if (filterTab === 'shipped') return rows.filter((r) => r.status === 'shipped');
+    if (filterTab === 'shipped') return enviados;
     return activeRows;
-  }, [activeRows, rows, filterTab]);
+  }, [activeRows, filterTab, enviados]);
 
   // Imprime todos os pedidos visíveis (batch). Abre UMA única janela com TODOS
   // os cupons concatenados — assim o popup blocker bloqueia 0 ou 1 (não N).
@@ -913,7 +938,10 @@ export default function MinhaLojaPage() {
           <Counter label="Pronto p/ postar" count={countByStatus.separated + countByStatus.ready}  tone="mint"
             active={filterTab === 'ready'}
             onClick={() => setFilterTab(filterTab === 'ready' ? null : 'ready')} />
-          <Counter label="Enviados"         count={countByStatus.shipped}                          tone="slate"
+          {/* Conta o que a CONSULTA do período trouxe. `countByStatus` sai de
+              `rows`, que é a fila ativa e nunca tem despachado — ficaria zero
+              pra sempre. */}
+          <Counter label="Enviados"         count={enviados.length}                                tone="slate"
             active={filterTab === 'shipped'}
             onClick={() => setFilterTab(filterTab === 'shipped' ? null : 'shipped')} />
         </div>
@@ -1018,6 +1046,48 @@ export default function MinhaLojaPage() {
             onSalvo={() => { pushToast("Endereço corrigido ✓"); void loadRows(); }}
           />
         )}
+        {/* RECORTE DA ABA ENVIADOS — De/Até + atalhos, a convenção da casa pra
+            tela com recorte de tempo (nunca dropdown de período fixo). Só
+            aparece na aba: nas outras não há o que recortar, é tudo do agora. */}
+        {filterTab === 'shipped' && (
+          <div className="no-print mb-3 rounded-2xl border border-slate-200 bg-white p-3 space-y-2">
+            <div className="flex flex-wrap items-end gap-2">
+              <label className="text-xs font-bold text-slate-500">
+                De
+                <input type="date" value={envDe} onChange={(e) => setEnvDe(e.target.value)}
+                  className="ml-1 rounded-lg border border-slate-300 px-2 py-1.5 text-sm font-normal" />
+              </label>
+              <label className="text-xs font-bold text-slate-500">
+                Até
+                <input type="date" value={envAte} onChange={(e) => setEnvAte(e.target.value)}
+                  className="ml-1 rounded-lg border border-slate-300 px-2 py-1.5 text-sm font-normal" />
+              </label>
+              <button type="button" onClick={() => void loadEnviados()}
+                className="rounded-lg bg-slate-800 px-3 py-2 text-xs font-bold text-white hover:bg-slate-900">
+                Buscar
+              </button>
+              <span className="ml-auto text-xs text-slate-500">{enviados.length} pedido(s)</span>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {([['Hoje', 0, 0], ['Ontem', 1, 1], ['7 dias', 6, 0], ['30 dias', 29, 0]] as Array<[string, number, number]>)
+                .map(([rotulo, deDias, ateDias]) => (
+                  <button
+                    key={rotulo}
+                    type="button"
+                    onClick={() => {
+                      const d = (n: number) => new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
+                      setEnvDe(d(deDias));
+                      setEnvAte(d(ateDias));
+                    }}
+                    className="rounded-full border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-100"
+                  >
+                    {rotulo}
+                  </button>
+                ))}
+            </div>
+          </div>
+        )}
+
         {visibleRows.length === 0 && liveRows.length === 0 ? (
           <EmptyState />
         ) : (
