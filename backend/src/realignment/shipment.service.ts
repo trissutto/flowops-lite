@@ -1180,6 +1180,12 @@ export class RealignmentShipmentService {
     const keyOf = (ref: string, cor: string | null, tam: string | null) =>
       `${String(ref).trim().toUpperCase()}|${String(cor || '').trim().toUpperCase()}|${String(tam || '').trim().toUpperCase()}`;
 
+    // SKU resolvido aqui é PERSISTIDO na peça (04/08 — caso REM-838).
+    // Antes ele era usado só pra baixa de estoque e jogado fora: a linha
+    // continuava sem codigoBipado e, na hora da NF-e, era pulada em silêncio
+    // — caixa de 57 peças saiu com nota de 2 itens. Gravando no fechamento,
+    // a nota (que é emitida DEPOIS, no gerar-envio) enxerga todas as peças.
+    const skusResolvidos: Array<{ id: string; sku: string }> = [];
     for (const it of items as any[]) {
       try {
         let sku: string | null = it.codigoBipado || null;
@@ -1188,6 +1194,7 @@ export class RealignmentShipmentService {
           if (!sku) {
             sku = await this.erp.findCodigoByRefCorTam(it.refCode, it.cor, it.tamanho);
           }
+          if (sku) skusResolvidos.push({ id: it.id, sku });
         }
         if (!sku) {
           unresolved.push({ refCode: it.refCode, cor: it.cor, tamanho: it.tamanho });
@@ -1201,6 +1208,24 @@ export class RealignmentShipmentService {
         });
       } catch (e) {
         unresolved.push({ refCode: it.refCode, cor: it.cor, tamanho: it.tamanho });
+      }
+    }
+    if (skusResolvidos.length) {
+      try {
+        await Promise.all(
+          skusResolvidos.map((r) =>
+            this.prisma.transferOrder.update({
+              where: { id: r.id },
+              data: { codigoBipado: r.sku } as any,
+            }),
+          ),
+        );
+        this.logger.log(
+          `[closeAndSend] ${skusResolvidos.length} codigoBipado resolvido(s) e gravado(s) na peça`,
+        );
+      } catch (e) {
+        // Não bloqueia o fechamento — a NF-e vai recusar depois se faltar código.
+        this.logger.warn(`[closeAndSend] falha gravando codigoBipado: ${(e as Error).message}`);
       }
     }
     this.logger.log(
