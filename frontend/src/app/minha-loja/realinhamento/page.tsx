@@ -2435,6 +2435,49 @@ function EnvioDaRemessa({
             </>
           )}
 
+          {/* REPROCESSAR NOTA — conserta NF-e emitida com itens faltando SEM
+              reabrir a caixa e SEM re-bipar (caso REM-838: nota de 2 itens
+              numa caixa de 57). Cancela a nota na SEFAZ (prazo 24h) e emite
+              outra completa; a etiqueta continua a mesma. */}
+          {notaAutorizada && (
+            <button
+              type="button"
+              onClick={async () => {
+                if (!window.confirm(
+                  `Reprocessar a nota da caixa ${code}?\n\n` +
+                  `• A NF-e ${notaAutorizada} será CANCELADA na SEFAZ (prazo de 24h).\n` +
+                  `• Uma nota NOVA sai com TODAS as peças da caixa — se ainda faltar código em alguma, ` +
+                  `a emissão recusa e mostra a lista.\n` +
+                  `• A etiqueta/rastreio continuam os mesmos.`,
+                )) return;
+                setOcupado('gerar');
+                setMsg(null);
+                try {
+                  const r = await api<any>(`/realignment/shipments/${shipmentId}/reprocessar-nota`, {
+                    method: 'POST', body: '{}',
+                  });
+                  setMsg({
+                    tipo: 'ok',
+                    texto: `Nota reprocessada: nº ${r?.notaNova?.numero ?? '?'} no lugar da ` +
+                      `${r?.notaCancelada?.numero ?? '—'} · ${r?.skusAtualizados ?? 0} código(s) corrigido(s). ` +
+                      `Imprima a Etiqueta + NF de novo.`,
+                  });
+                  onMudou?.();
+                } catch (e: any) {
+                  setMsg({ tipo: 'erro', texto: e?.message?.replace(/^\d+:\s*/, '') || 'Falha ao reprocessar' });
+                } finally {
+                  setOcupado(null);
+                }
+              }}
+              disabled={ocupado !== null}
+              className="bg-white hover:bg-amber-50 text-amber-800 border-2 border-amber-400 px-4 py-2.5 rounded-xl text-sm font-bold shadow-sm flex items-center gap-2 disabled:opacity-50"
+              title="Cancela a nota atual na SEFAZ e emite outra com TODAS as peças — sem reabrir, sem re-bipar"
+            >
+              {ocupado === 'gerar' ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
+              Reprocessar nota
+            </button>
+          )}
+
           {/* ROMANEIO — número da remessa + relação do que vai dentro.
               Na rota própria é o único papel que acompanha a caixa: quem
               recebe confere peça por peça contra essa lista. */}

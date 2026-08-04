@@ -653,6 +653,35 @@ export class RealignmentController {
   }
 
   /**
+   * POST /realignment/shipments/:id/reprocessar-nota — conserta NF-e capada
+   * SEM reabrir a caixa e SEM re-bipar (04/08 — REM-838: nota autorizada com
+   * 2 itens numa caixa de 57 já fechada).
+   *
+   * Ordem: re-resolve e grava os códigos das peças (refreshSkus) → cancela a
+   * nota autorizada na SEFAZ (24h) → re-emite completa (a trava de completude
+   * recusa se ainda faltar código). Etiqueta/rastreio não mudam.
+   */
+  @Post('shipments/:id/reprocessar-nota')
+  async reprocessarNota(@Param('id') id: string, @Req() req: any) {
+    const role = req?.user?.role;
+    const storeId = req?.user?.storeId;
+    const userId = req?.user?.id || req?.user?.sub || null;
+    const ehRetaguarda = role === 'admin' || role === 'operator';
+    if (!ehRetaguarda && (role !== 'store' || !storeId)) {
+      throw new ForbiddenException('Apenas loja origem ou retaguarda');
+    }
+    // 1º completa os códigos — mora no shipment service (injetar no
+    // remessa-envio criaria dependência circular; a rota orquestra).
+    const refresh: any = await this.shipment.refreshSkusForShipment(id);
+    const r: any = await this.remessaEnvio.reprocessarNota(
+      id,
+      ehRetaguarda ? null : storeId,
+      userId,
+    );
+    return { ...r, skusAtualizados: refresh?.updated ?? 0, semCodigo: refresh?.unresolved ?? 0 };
+  }
+
+  /**
    * DELETE /realignment/shipments/:id — EXCLUI uma caixa ABERTA.
    * As peças voltam pra fila "a enviar"; a caixa vira 'cancelled'.
    * Caixa fechada é recusada (o caminho dela é o Reabrir).

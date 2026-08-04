@@ -476,10 +476,35 @@ export class NfeTransferService {
     });
     if (!rows.length) throw new BadRequestException('Remessa sem itens pra faturar');
 
+    /**
+     * ⚠️ NOTA INCOMPLETA É PROIBIDA (04/08 — caso REM-2026-000838).
+     *
+     * A linha sem `codigoBipado` era PULADA em silêncio ("continue") e a nota
+     * saía só com o que sobrava: caixa de 57 peças pra Moema gerou NF-e
+     * AUTORIZADA com 2 itens e R$ 60,00 — documento fiscal errado, sem
+     * nenhum aviso pra ninguém. Mercadoria viajando com nota menor que a
+     * caixa é exatamente o tipo de passivo que não pode nascer de um
+     * `continue`.
+     *
+     * Agora: se QUALQUER linha ficar sem código do ERP, a emissão FALHA
+     * listando as peças — nota ou sai completa, ou não sai.
+     */
+    const semCodigo = (rows as any[]).filter((r) => !String(r.codigoBipado || '').trim());
+    if (semCodigo.length) {
+      const lista = semCodigo
+        .slice(0, 10)
+        .map((r) => `${r.refCode} ${r.cor || ''}/${r.tamanho || ''}`.trim())
+        .join(', ');
+      throw new BadRequestException(
+        `NF-e NÃO emitida: ${semCodigo.length} de ${rows.length} peça(s) da remessa estão sem ` +
+        `código do ERP e sairiam FORA da nota (${lista}${semCodigo.length > 10 ? ', …' : ''}). ` +
+        `Reabra a caixa e bipe essas peças de novo — o fechamento grava o código — ou corrija o cadastro.`,
+      );
+    }
+
     const grouped = new Map<string, { sku: string; qty: number; row: any }>();
     for (const r of rows as any[]) {
       const sku = String(r.codigoBipado || '').trim();
-      if (!sku) continue; // sem código do ERP não dá pra faturar essa linha
       const g = grouped.get(sku) || { sku, qty: 0, row: r };
       g.qty += r.qtyOrigem || 1;
       grouped.set(sku, g);
