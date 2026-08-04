@@ -276,6 +276,32 @@ export class RealignmentController {
   }
 
   /**
+   * DELETE /realignment/:id — tira a ordem da fila de separação.
+   *
+   * Pra quando a matriz pediu peça a mais (duas ordens da mesma variação) ou o
+   * pedido não faz mais sentido. Loja origem ou admin. Peça que já está em
+   * caixa fechada é recusada com a instrução de reabrir a caixa antes.
+   */
+  @Delete(':id')
+  async cancelarOrdem(
+    @Param('id') id: string,
+    @Query('motivo') motivo: string | undefined,
+    @Req() req: any,
+  ) {
+    const role = req?.user?.role;
+    const storeId = req?.user?.storeId;
+    if (role !== 'store' && role !== 'admin') {
+      throw new ForbiddenException('Apenas loja origem ou admin');
+    }
+    return this.svc.cancelarOrdem({
+      transferId: id,
+      storeId,
+      isAdmin: role === 'admin',
+      motivo,
+    });
+  }
+
+  /**
    * PATCH /realignment/:id/undo-not-found — a LOJA desfaz o "não achei"
    * (achou depois / clicou por engano). A peça volta pra fila de separação.
    */
