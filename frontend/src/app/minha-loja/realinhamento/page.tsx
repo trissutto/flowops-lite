@@ -900,11 +900,11 @@ export default function MinhaLojaRealinhamentoPage() {
    * ela ficaria aberta pra sempre sem ninguém achar o "Fechar e enviar".
    */
   const caixasEmMontagem = useMemo(() => {
-    // Aba ENVIADOS também mostra TODAS as caixas em montagem (04/08 — o dono
-    // ficou preso: bipou as peças, foi pra Enviados procurar o "Fechar e
-    // enviar" e lá não existia botão nenhum. Caixa aberta tem que ser
-    // fechável de onde a pessoa estiver, não só da aba Pendentes).
-    if (view === 'sent') return openShipments;
+    // SÓ na aba Pendentes (o dono confirmou em 04/08 depois de um vaivém:
+    // caixa em montagem é trabalho em andamento, mora nos Pendentes — em
+    // Enviados ela aparecia DUPLICADA, porque a pilha do destino já mostra a
+    // caixa com os botões no próprio cabeçalho).
+    if (view !== 'pending') return [];
     const comGrade = new Set(byDestination.map((d) => d.code));
     return openShipments.filter((s) => !comGrade.has(s.toStoreCode));
   }, [view, openShipments, byDestination]);
