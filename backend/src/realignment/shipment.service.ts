@@ -306,6 +306,58 @@ export class RealignmentShipmentService {
   }
 
   /**
+   * EXCLUI uma caixa ABERTA (04/08 — botão "Excluir remessa" da tela).
+   *
+   * Caixa aberta ainda não baixou estoque, não tem obrigação, etiqueta nem
+   * nota — excluir é barato: as peças voltam pra fila "a enviar" e a caixa
+   * vira 'cancelled' (código nunca é apagado; o rastro fica). As ORDENS não
+   * são canceladas — pedido da matriz continua valendo; pra tirar peça do
+   * pedido existe o 🗑 da célula.
+   *
+   * Caixa fechada NÃO passa por aqui: fechamento se desfaz pelo Reabrir, que
+   * devolve estoque e cancela obrigações/etiqueta/nota na ordem certa.
+   */
+  async cancelOpenShipment(input: { shipmentId: string; storeId: string | null }) {
+    const shipment = await (this.prisma as any).realignmentShipment.findUnique({
+      where: { id: input.shipmentId },
+    });
+    if (!shipment) throw new NotFoundException('Remessa não encontrada');
+    if (input.storeId) {
+      const store = await this.prisma.store.findUnique({
+        where: { id: input.storeId },
+        select: { code: true } as any,
+      });
+      if (!store || (store as any).code !== shipment.fromStoreCode) {
+        throw new ForbiddenException('Essa remessa não é da sua loja');
+      }
+    }
+    if (shipment.status !== 'open') {
+      throw new BadRequestException(
+        'Só caixa ABERTA pode ser excluída. Caixa fechada se desfaz pelo "Reabrir caixa" na aba Enviados.',
+      );
+    }
+
+    const upd = await this.prisma.transferOrder.updateMany({
+      where: { shipmentId: shipment.id } as any,
+      data: {
+        realignmentStatus: 'pending',
+        realignmentSentAt: null,
+        shipmentId: null,
+      } as any,
+    });
+
+    await (this.prisma as any).realignmentShipment.update({
+      where: { id: shipment.id },
+      data: { status: 'cancelled', totalItems: 0, totalQty: 0 },
+    });
+
+    this.logger.warn(
+      `[shipment] ${shipment.code} EXCLUÍDA (aberta): ${upd.count} peça(s) voltaram pra fila de separação`,
+    );
+    return { ok: true, code: shipment.code, pecasDevolvidas: upd.count ?? 0 };
+  }
+
+  /**
    * REABRE uma caixa fechada — desfaz o fechamento, não "muda um status".
    *
    * Fechar faz três coisas além de trocar o status: baixa o estoque da origem,
