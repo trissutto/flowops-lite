@@ -180,7 +180,7 @@ export default function MinhaLojaPage() {
     | null
   >(null);
   // Filtro de aba: null = todos | 'new' | 'separating' | 'ready' (separados+ready)
-  const [filterTab, setFilterTab] = useState<'new' | 'separating' | 'ready' | null>(null);
+  const [filterTab, setFilterTab] = useState<'new' | 'separating' | 'ready' | 'shipped' | null>(null);
   const [toasts, setToasts] = useState<Array<{ id: string; msg: string }>>([]);
   // Badge de realinhamento: qtd de ordens pendentes (filial origem). Atualiza
   // via load inicial + socket 'realignment:new' e 'realignment:sent'.
@@ -780,8 +780,11 @@ export default function MinhaLojaPage() {
     if (filterTab === 'new') return activeRows.filter((r) => r.status === 'new');
     if (filterTab === 'separating') return activeRows.filter((r) => r.status === 'separating');
     if (filterTab === 'ready') return activeRows.filter((r) => r.status === 'separated' || r.status === 'ready');
+    // ENVIADOS sai de `rows`, não de `activeRows` — `activeRows` existe
+    // justamente pra ESCONDER os despachados do dia a dia.
+    if (filterTab === 'shipped') return rows.filter((r) => r.status === 'shipped');
     return activeRows;
-  }, [activeRows, filterTab]);
+  }, [activeRows, rows, filterTab]);
 
   // Imprime todos os pedidos visíveis (batch). Abre UMA única janela com TODOS
   // os cupons concatenados — assim o popup blocker bloqueia 0 ou 1 (não N).
@@ -893,8 +896,11 @@ export default function MinhaLojaPage() {
             </button>
           </div>
         </div>
-        {/* Contadores pastel — 3 mini-pílulas (clicáveis pra filtrar a lista) */}
-        <div className="px-4 pb-3 max-w-3xl mx-auto grid grid-cols-3 gap-2">
+        {/* Contadores pastel — mini-pílulas clicáveis que filtram a lista.
+            ENVIADOS entrou como 4ª (dono, 04/08): o pedido despachado sumia da
+            tela, e é justamente nele que aparece o erro de endereço na hora de
+            postar. Sem essa aba, corrigir um complemento exigia a matriz. */}
+        <div className="px-4 pb-3 max-w-3xl mx-auto grid grid-cols-4 gap-2">
           <Counter label="Novos"            count={countByStatus.new}                              tone="rose"
             active={filterTab === 'new'}
             onClick={() => setFilterTab(filterTab === 'new' ? null : 'new')} />
@@ -904,6 +910,9 @@ export default function MinhaLojaPage() {
           <Counter label="Pronto p/ postar" count={countByStatus.separated + countByStatus.ready}  tone="mint"
             active={filterTab === 'ready'}
             onClick={() => setFilterTab(filterTab === 'ready' ? null : 'ready')} />
+          <Counter label="Enviados"         count={countByStatus.shipped}                          tone="slate"
+            active={filterTab === 'shipped'}
+            onClick={() => setFilterTab(filterTab === 'shipped' ? null : 'shipped')} />
         </div>
         {filterTab && (
           <div className="px-4 pb-2 max-w-3xl mx-auto flex items-center justify-between gap-2">
@@ -1213,7 +1222,7 @@ function Counter({
 }: {
   label: string;
   count: number;
-  tone: 'rose' | 'sky' | 'mint' | 'peach';
+  tone: 'rose' | 'sky' | 'mint' | 'peach' | 'slate';
   active?: boolean;
   onClick?: () => void;
 }) {
@@ -1223,6 +1232,8 @@ function Counter({
     sky:   { ring: '#6b8a92', bg: '#dde7ea', text: '#2e4750', bgActive: '#b8ccd2' },
     mint:  { ring: '#9caf88', bg: '#e3ebd9', text: '#475636', bgActive: '#c4d4a8' },
     peach: { ring: '#c87f5e', bg: '#f3e2d6', text: '#6f3b25', bgActive: '#e3c0a3' },
+    // ENVIADOS: cinza de proposito — e arquivo do dia, nao trabalho a fazer.
+    slate: { ring: '#8a8f98', bg: '#e6e8ea', text: '#3b4148', bgActive: '#c9ced4' },
   };
   const t = TONES[tone];
   const hasCount = count > 0;

@@ -804,7 +804,13 @@ export class PickOrdersService {
    * Limpa o rastreio do pick-order E o envio do carrinho da live
    * (correiosPrepostagemId + trackingCode dos itens) pra o "Gerar envio" criar do
    * zero. NÃO mexe em estoque — no Model B a pré-postagem não baixou nada ainda.
-   * (Cancelar a pré-postagem antiga nos Correios é manual, no portal.)
+   *
+   * CANCELA a pré-postagem antiga nos Correios. Até 03/08 isso era manual, no
+   * portal deles ("é manual" estava escrito aqui) — porque o sistema não sabia
+   * cancelar. Passou a saber, então deixar a pré-postagem órfã lá seria só
+   * trabalho manual mantido por inércia. Best-effort: se os Correios
+   * recusarem, o refazer segue (pré-postagem não postada caduca sozinha) e o
+   * motivo vai pro log.
    */
   async reabrirEnvioCorreios(id: string, storeId: string) {
     const pick = await this.prisma.pickOrder.findUnique({ where: { id } });
@@ -813,6 +819,16 @@ export class PickOrdersService {
     if (pick.status === 'shipped') {
       throw new BadRequestException('Pedido já postado/enviado — reabrir só vale antes da postagem.');
     }
+    if (pick.correiosPrepostagemId) {
+      const r = await this.correios.cancelarPrepostagem(pick.correiosPrepostagemId);
+      if (!r?.ok) {
+        this.logger.warn(
+          `[reabrir-envio] Correios não cancelaram a pré-postagem ${pick.correiosPrepostagemId} ` +
+          `do pick ${id}: ${r?.erro || 'motivo desconhecido'}`,
+        );
+      }
+    }
+
     const order = await this.prisma.order.findUnique({ where: { id: pick.orderId } });
     if (order?.liveCartId) {
       await (this.prisma as any).livePdvCart.update({ where: { id: order.liveCartId }, data: { correiosPrepostagemId: null } });
