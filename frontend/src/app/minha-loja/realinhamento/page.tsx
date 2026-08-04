@@ -522,7 +522,17 @@ export default function MinhaLojaRealinhamentoPage() {
    * criar ordem nova. Move otimisticamente de sentItems → items.
    */
   async function markUnsent(itemId: string) {
-    const item = sentItems.find((i) => i.id === itemId);
+    /**
+     * Procura no que está NA TELA, não só em `sentItems`.
+     *
+     * A peça verde pode vir da caixa aberta (inclusive de outro dia), e essa
+     * não está na lista de "enviados hoje". Procurando só ali, o toque na
+     * célula verde caía num `return` mudo — o desfazer simplesmente não fazia
+     * nada, sem erro nenhum.
+     */
+    const item =
+      sentItems.find((i) => i.id === itemId) ||
+      (currentItems.find((i) => i.id === itemId) as RealignmentItem | undefined);
     if (!item) return;
     // Confirmação simples pra evitar clique acidental
     if (!confirm(`Voltar ${item.refCode} ${item.cor || ''} ${item.tamanho || ''} pra lista de pendentes?`)) {
@@ -545,6 +555,10 @@ export default function MinhaLojaRealinhamentoPage() {
         };
         setItems((prev) => [restored, ...prev]);
       }
+      // Recarrega: a peça pode ter saído de uma CAIXA, e aí a caixa mudou de
+      // tamanho (ou esvaziou). O movimento otimista acima só cobre o caso de
+      // "enviado hoje" solto.
+      void Promise.all([loadItems(), loadSentItems(), loadOpenShipments()]);
       pushToast('Voltou pra lista de pendentes ↺');
     } catch (err: any) {
       pushToast(`Erro: ${err?.message ?? 'falha ao reverter'}`);
@@ -646,16 +660,24 @@ export default function MinhaLojaRealinhamentoPage() {
      * Amarela: a grade INTEIRA do destino — o que falta pegar (célula aberta)
      * MAIS o que já está na caixa (célula verde, com o horário e o desfazer).
      *
-     * É o formato que a vendedora já conhecia, e é o que faz sentido enquanto
-     * a caixa está aberta: ela olha a grade e vê o que ainda tem que buscar na
-     * arara. Depois de reabrir uma caixa, é isso que devolve o contexto — sem
-     * a grade, a caixa reaberta era uma lista de códigos sem o "falta o quê".
+     * ⚠️ O verde vem da CAIXA (`openShipments[].items`), não de "enviados
+     * hoje". Essa era a raiz de oito idas e voltas: eu montava a grade a partir
+     * da lista do dia, então bastava virar a meia-noite — ou reabrir uma caixa
+     * de ontem — pra peça sumir da grade e a caixa cair numa tabela plana onde
+     * não dá pra bipar. A caixa carrega o próprio conteúdo; a data não tem nada
+     * a ver com isso.
      */
-    const abertas = new Set(openShipments.map((s) => s.id));
-    const naCaixaAberta = sentItems.filter(
-      (i) => (i as any).shipmentId && abertas.has((i as any).shipmentId),
+    const daCaixa = openShipments.flatMap((s: any) =>
+      (s.items || []).map((i: any) => ({
+        ...i,
+        lojaDestinoCode: i.lojaDestinoCode ?? s.toStoreCode,
+        lojaDestinoName: i.lojaDestinoName ?? s.toStoreName,
+        // `sentAt` é o que pinta a célula de verde e liga o desfazer.
+        sentAt: i.realignmentSentAt ?? i.sentAt ?? null,
+        shipmentId: s.id,
+      })),
     );
-    return [...items, ...naCaixaAberta];
+    return [...items, ...daCaixa];
   }, [view, items, sentItems, openShipments]);
 
 
