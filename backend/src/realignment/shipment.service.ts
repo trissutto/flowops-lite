@@ -161,6 +161,8 @@ export class RealignmentShipmentService {
             lojaDestinoCode: true,
             lojaDestinoName: true,
             realignmentSentAt: true,
+            // Pro controller preencher descrição vazia via espelho
+            codigoBipado: true,
           } as any,
         });
         return { ...s, items };

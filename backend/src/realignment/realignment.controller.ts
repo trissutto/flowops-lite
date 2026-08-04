@@ -496,11 +496,15 @@ export class RealignmentController {
    * GET /realignment/shipments/open · filial
    */
   @Get('shipments/open')
-  listOpenShipments(@Req() req: any) {
+  async listOpenShipments(@Req() req: any) {
     const role = req?.user?.role;
     const storeId = req?.user?.storeId;
     if (role !== 'store' || !storeId) return [];
-    return this.shipment.listOpenShipmentsForOrigin(storeId);
+    const list: any[] = await this.shipment.listOpenShipmentsForOrigin(storeId);
+    // Grade monta a descrição da REF a partir dos itens — os da caixa também
+    // precisam do preenchimento (ordem antiga nasce sem descrição gravada).
+    await this.svc.preencherDescricoes(list.flatMap((s: any) => s.items || []));
+    return list;
   }
 
   /**
