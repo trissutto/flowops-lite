@@ -710,6 +710,15 @@ export class RealignmentService {
    *   pending    → estoque da origem AINDA NÃO baixou (baixa no envio),
    *                então é isto que desconta do disponível.
    *   in_transit → origem já baixou; o que falta é a ENTRADA no destino.
+   *
+   * ⚠️ PEÇA VERDE (bipada, caixa ABERTA) TAMBÉM DESCONTA (dono, 04/08).
+   * O status dela é 'sent', que ficava FORA desta lista — no instante do bipe
+   * a peça sumia do desconto e o número da loja no produto-master SUBIA de
+   * volta, contando como disponível uma peça que já está dentro da caixa. A
+   * baixa real continua no "Fechar e enviar" (não pode baixar duas vezes),
+   * mas pro disponível da grade ela é 'pending': não baixou E tem dono.
+   * 'sent' com caixa já FECHADA vira 'in_transit' (a origem baixou no
+   * fechamento); caixa recebida sai da lista (transferência concluída).
    */
   async pendenciasPorSku(skusRaw: unknown) {
     const skus = (Array.isArray(skusRaw) ? skusRaw : [])
@@ -718,10 +727,10 @@ export class RealignmentService {
       .slice(0, 500); // grade de uma REF tem dezenas; 500 é teto de segurança
     if (!skus.length) return [];
 
-    const rows = await this.prisma.transferOrder.findMany({
+    const rows: any[] = await this.prisma.transferOrder.findMany({
       where: {
         codigoBipado: { in: skus },
-        realignmentStatus: { in: ['pending', 'in_transit'] },
+        realignmentStatus: { in: ['pending', 'in_transit', 'sent'] },
       },
       select: {
         codigoBipado: true,
@@ -730,17 +739,40 @@ export class RealignmentService {
         qtyOrigem: true,
         realignmentStatus: true,
         createdAt: true,
-      },
+        shipmentId: true,
+      } as any,
       orderBy: { createdAt: 'asc' },
     });
 
-    return rows.map((r) => ({
-      codigo: r.codigoBipado,
-      de: r.lojaOrigemCode,
-      para: r.lojaDestinoCode,
-      qty: r.qtyOrigem,
-      status: r.realignmentStatus as 'pending' | 'in_transit',
-    }));
+    // Status da caixa das peças 'sent' — é ele que diz se a origem já baixou.
+    const shipIds = Array.from(new Set(
+      rows.filter((r) => r.realignmentStatus === 'sent' && r.shipmentId).map((r) => r.shipmentId),
+    ));
+    const ships: any[] = shipIds.length
+      ? await (this.prisma as any).realignmentShipment.findMany({
+          where: { id: { in: shipIds } },
+          select: { id: true, status: true },
+        })
+      : [];
+    const statusCaixa = new Map<string, string>(ships.map((s) => [s.id, s.status]));
+
+    return rows
+      .map((r) => {
+        let status = r.realignmentStatus as string;
+        if (status === 'sent') {
+          const caixa = r.shipmentId ? (statusCaixa.get(r.shipmentId) ?? 'open') : 'open';
+          if (caixa === 'received') return null;           // concluída — some
+          status = caixa === 'open' ? 'pending' : 'in_transit';
+        }
+        return {
+          codigo: r.codigoBipado,
+          de: r.lojaOrigemCode,
+          para: r.lojaDestinoCode,
+          qty: r.qtyOrigem,
+          status: status as 'pending' | 'in_transit',
+        };
+      })
+      .filter(Boolean);
   }
 
   async confirm(input: {
