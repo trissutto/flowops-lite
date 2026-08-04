@@ -934,7 +934,9 @@ function GradeEstoque({
      * de loja eu não tenho como conferir daqui, e chutar código é esconder a
      * coluna errada.
      */
-    const FORA_DA_GRADE = ['MATRI', 'ITU', 'DEPOS'];
+    // SITE entrou aqui em 04/08: é loja-canal, não arara. A peça vai pro site
+    // pelo pedido (TransferOrder do canal), nunca arrastada nesta grade.
+    const FORA_DA_GRADE = ['MATRI', 'ITU', 'DEPOS', 'SITE'];
 
     /**
      * ORDEM DO ITINERÁRIO DA ENTREGA (dono, 04/08) — não alfabética.
