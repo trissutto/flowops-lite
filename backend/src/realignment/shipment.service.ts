@@ -1046,8 +1046,12 @@ export class RealignmentShipmentService {
     if (shipment.status !== 'open')
       throw new BadRequestException(`Remessa não está aberta (status=${shipment.status})`);
 
-    // Itens da remessa
-    const items = await this.prisma.transferOrder.findMany({
+    // Itens da remessa. SÓ O QUE FOI SEPARADO (status 'sent') fecha e baixa
+    // estoque — desde 04/08 a caixa também carrega o que ainda falta pegar
+    // (a sobra herdada da caixa anterior), e essas peças não podem sair do
+    // estoque sem alguém ter posto a mão nelas. Elas rolam pra caixa nova no
+    // fim deste método.
+    const todosDaCaixa = await this.prisma.transferOrder.findMany({
       where: { shipmentId: shipment.id } as any,
       select: {
         id: true,
@@ -1056,9 +1060,17 @@ export class RealignmentShipmentService {
         cor: true,
         tamanho: true,
         qtyOrigem: true,
+        realignmentStatus: true,
       } as any,
     });
-    if (!items.length) throw new BadRequestException('Remessa vazia — adicione itens antes de fechar');
+    const items = (todosDaCaixa as any[]).filter((i) => i.realignmentStatus === 'sent');
+    if (!items.length) {
+      throw new BadRequestException(
+        (todosDaCaixa as any[]).length
+          ? 'Nenhuma peça foi separada nesta caixa — bipe ao menos uma antes de fechar.'
+          : 'Remessa vazia — adicione itens antes de fechar',
+      );
+    }
 
     // Resolve SKU de cada item — OTIMIZADO: items com codigoBipado direto,
     // items sem fazem 1 ÚNICA query batch pra resolver todos de uma vez.
@@ -1228,7 +1240,58 @@ export class RealignmentShipmentService {
         `Giga ${shipment.fromStoreCode} baixou ${result.applied.length} SKUs`,
     );
 
-    return { ok: true, code: shipment.code, totalItems: items.length, totalQty };
+    // ── SOBRA VIRA CAIXA NOVA (04/08 — pedido do dono) ──────────────────
+    // Fechou a caixa sem estar 100% verde? O que faltou não pode ficar solto:
+    // abre AGORA uma remessa nova, com número próprio, já carregando as peças
+    // que não foram achadas/clicadas. A loja continua de onde parou e a matriz
+    // enxerga a pendência como caixa, não como lista solta.
+    //
+    // Entram: o que sobrou pendente pra este destino (com ou sem caixa) e as
+    // marcadas como "não achei" — estas voltam pra 'pending', que é uma nova
+    // chance de procurar a peça. Nada disso baixa estoque: só o verde baixou.
+    let novaRemessa: { id: string; code: string; totalItens: number } | null = null;
+    try {
+      const sobra = await this.prisma.transferOrder.findMany({
+        where: {
+          tipo: 'REALINHAMENTO',
+          lojaOrigemCode: shipment.fromStoreCode,
+          lojaDestinoCode: shipment.toStoreCode,
+          realignmentStatus: { in: ['pending', 'not_found'] },
+        } as any,
+        select: { id: true } as any,
+      });
+      if (sobra.length > 0) {
+        const nova = await this.createShipmentWithRetry({
+          fromStoreCode: shipment.fromStoreCode,
+          fromStoreName: shipment.fromStoreName,
+          toStoreCode: shipment.toStoreCode,
+          toStoreName: shipment.toStoreName,
+          tipo: shipment.tipo,
+          openedByUserId: input.userId ?? null,
+        });
+        await this.prisma.transferOrder.updateMany({
+          where: { id: { in: sobra.map((s: any) => s.id) } },
+          data: {
+            shipmentId: nova.id,
+            realignmentStatus: 'pending',
+            realignmentNotFoundAt: null,
+            realignmentNotFoundNote: null,
+            realignmentNotFoundByUserId: null,
+          } as any,
+        });
+        novaRemessa = { id: nova.id, code: nova.code, totalItens: sobra.length };
+        this.logger.log(
+          `[shipment] sobra de ${shipment.code}: ${sobra.length} peça(s) foram pra caixa nova ${nova.code}`,
+        );
+      }
+    } catch (e) {
+      // A caixa fechada já saiu — não pode falhar por causa da sobra.
+      this.logger.warn(
+        `[shipment] falha criando caixa da sobra de ${shipment.code}: ${(e as Error).message}`,
+      );
+    }
+
+    return { ok: true, code: shipment.code, totalItems: items.length, totalQty, novaRemessa };
   }
 
   /**

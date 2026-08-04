@@ -50,6 +50,11 @@ interface RealignmentItem {
   // Preenchido apenas na view "enviados hoje" — horário em que a vendedora
   // marcou a peça como separada. Usado pra exibir na célula em verde.
   sentAt?: string | null;
+  // 'pending' | 'not_found' — a peça reportada como não achada CONTINUA na
+  // lista (04/08). Some da tela era o que fazia a pilha inteira do destino
+  // desaparecer quando era a última peça.
+  realignmentStatus?: string | null;
+  realignmentNotFoundNote?: string | null;
 }
 
 type ViewMode = 'pending' | 'sent';
@@ -333,11 +338,20 @@ export default function MinhaLojaRealinhamentoPage() {
     }
     setClosingShipmentId(shipmentId);
     try {
-      const res = await api<{ ok: boolean; code: string; totalItems: number; totalQty: number }>(
+      const res = await api<{
+        ok: boolean; code: string; totalItems: number; totalQty: number;
+        novaRemessa?: { id: string; code: string; totalItens: number } | null;
+      }>(
         `/realignment/shipments/${shipmentId}/close-and-send`,
         { method: 'POST', body: '{}' },
       );
       pushToast(`✅ Remessa ${res.code} enviada (${res.totalQty} pecas). Loja destino recebeu alerta.`);
+      // Fechou sem estar 100% verde? O que faltou já está numa caixa NOVA.
+      if (res.novaRemessa) {
+        pushToast(
+          `📦 ${res.novaRemessa.totalItens} peça(s) não separada(s) foram pra caixa nova ${res.novaRemessa.code}.`,
+        );
+      }
       // A remessa some da lista de montagem assim que fecha. Guardar aqui é o
       // que permite gerar etiqueta e nota SEM ir até a Retaguarda: quem acabou
       // de fechar a caixa é quem vai postar, e é agora que ela precisa do papel.
@@ -585,11 +599,40 @@ export default function MinhaLojaRealinhamentoPage() {
         method: 'PATCH',
         body: JSON.stringify({ motivo: motivo.trim() }),
       });
-      // Remove dos pendentes — vai pra fila admin
-      setItems((prev) => prev.filter((i) => i.id !== item.id));
-      pushToast('Reportado como não encontrado · matriz vai revisar');
+      // NÃO remove da lista (fix 04/08 — caso Santos): a peça continua na
+      // grade marcada como "não achada". Tirar daqui apagava a pilha inteira
+      // do destino quando era a última peça, e a caixa ia junto.
+      setItems((prev) =>
+        prev.map((i) =>
+          i.id === item.id
+            ? { ...i, realignmentStatus: 'not_found', realignmentNotFoundNote: motivo.trim() || null }
+            : i,
+        ),
+      );
+      pushToast('Marcada como não achada · toque nela pra desfazer');
     } catch (err: any) {
       pushToast(`Erro: ${err?.message ?? 'falha ao reportar'}`);
+    }
+  }
+
+  /** Desfaz o "não achei" — a peça volta pra fila de separação da loja. */
+  async function undoNotFound(item: RealignmentItem) {
+    if (!confirm(
+      `Achou a peça?\n\n${item.refCode} ${item.cor || ''} ${item.tamanho || ''}\n\n` +
+      `Ela volta pra lista de separação.`,
+    )) return;
+    try {
+      await api(`/realignment/${item.id}/undo-not-found`, { method: 'PATCH' });
+      setItems((prev) =>
+        prev.map((i) =>
+          i.id === item.id
+            ? { ...i, realignmentStatus: 'pending', realignmentNotFoundNote: null }
+            : i,
+        ),
+      );
+      pushToast('Voltou pra separação ↺');
+    } catch (err: any) {
+      pushToast(`Erro: ${err?.message ?? 'falha ao desfazer'}`);
     }
   }
 
@@ -677,7 +720,15 @@ export default function MinhaLojaRealinhamentoPage() {
         shipmentId: s.id,
       })),
     );
-    return [...items, ...daCaixa];
+    // DEDUPE por id: desde 04/08 a caixa nova nasce carregando o que faltou
+    // separar, então a MESMA peça vem das duas listas (pendente + conteúdo da
+    // caixa). Sem isto ela contaria em dobro no total do destino.
+    const porId = new Map<string, RealignmentItem>();
+    for (const it of [...items, ...daCaixa]) {
+      const anterior = porId.get(it.id);
+      porId.set(it.id, anterior ? { ...anterior, ...it, sentAt: it.sentAt ?? anterior.sentAt } : it);
+    }
+    return Array.from(porId.values());
   }, [view, items, sentItems, openShipments]);
 
 
@@ -785,8 +836,18 @@ export default function MinhaLojaRealinhamentoPage() {
     return openShipments.filter((s) => !comGrade.has(s.toStoreCode));
   }, [view, openShipments, byDestination]);
 
-  const totalPending = items.length;
-  const totalUnits = useMemo(() => items.reduce((a, it) => a + it.qtyOrigem, 0), [items]);
+  // Peça "não achada" continua na lista (pra não sumir a pilha), mas NÃO é
+  // trabalho pendente — senão o contador do topo mentiria.
+  const pendentesDeVerdade = useMemo(
+    () => items.filter((i) => i.realignmentStatus !== 'not_found'),
+    [items],
+  );
+  const totalNaoAchadas = items.length - pendentesDeVerdade.length;
+  const totalPending = pendentesDeVerdade.length;
+  const totalUnits = useMemo(
+    () => pendentesDeVerdade.reduce((a, it) => a + it.qtyOrigem, 0),
+    [pendentesDeVerdade],
+  );
   const totalSentToday = sentItems.length;
   const totalSentUnitsToday = useMemo(
     () => sentItems.reduce((a, it) => a + it.qtyOrigem, 0),
@@ -1310,6 +1371,7 @@ export default function MinhaLojaRealinhamentoPage() {
                           onSend={markSent}
                           onRevert={markUnsent}
                           onReportNotFound={reportNotFound}
+                          onUndoNotFound={undoNotFound}
                           viewMode={view}
                         />
                       </div>
@@ -1617,6 +1679,7 @@ function RealignGrid({
   onSend,
   onRevert,
   onReportNotFound,
+  onUndoNotFound,
   viewMode,
 }: {
   g: {
@@ -1633,6 +1696,7 @@ function RealignGrid({
   onSend: (id: string) => void;
   onRevert: (id: string) => void;
   onReportNotFound: (item: RealignmentItem) => void;
+  onUndoNotFound: (item: RealignmentItem) => void;
   viewMode: ViewMode;
 }) {
   // Totais por cor (linha) e por tamanho (coluna) — ignora células vazias.
@@ -1706,6 +1770,7 @@ function RealignGrid({
                           onSend={onSend}
                           onRevert={onRevert}
                           onReportNotFound={onReportNotFound}
+                          onUndoNotFound={onUndoNotFound}
                           viewMode={viewMode}
                         />
                       </td>
@@ -1800,6 +1865,7 @@ function RealignCell({
   onSend,
   onRevert,
   onReportNotFound,
+  onUndoNotFound,
   viewMode,
 }: {
   item: RealignmentItem | null;
@@ -1808,6 +1874,7 @@ function RealignCell({
   onSend: (id: string) => void;
   onRevert: (id: string) => void;
   onReportNotFound: (item: RealignmentItem) => void;
+  onUndoNotFound: (item: RealignmentItem) => void;
   viewMode: ViewMode;
 }) {
   const base =
@@ -1832,6 +1899,34 @@ function RealignCell({
    *
    * Reverter continua seguro: o backend recusa se a remessa já fechou.
    */
+  /**
+   * Célula NÃO ACHADA — a peça foi reportada como ausente (o ✕).
+   *
+   * Antes ela simplesmente sumia da tela, e com ela a pilha inteira da loja
+   * destino quando era a última peça — foi assim que a caixa de SANTOS
+   * "desapareceu" em Itanhaém (04/08). Agora fica visível, riscada, e toque
+   * DESFAZ: a peça volta pra fila de separação.
+   */
+  if (item.realignmentStatus === 'not_found') {
+    return (
+      <button
+        type="button"
+        onClick={() => onUndoNotFound(item)}
+        title={
+          `NÃO ACHADA${item.realignmentNotFoundNote ? ` — "${item.realignmentNotFoundNote}"` : ''}` +
+          ` · toque pra DESFAZER e voltar pra separação`
+        }
+        className={`${base} bg-rose-100 text-rose-800 border border-rose-300 hover:bg-amber-100 hover:border-amber-400 hover:text-amber-900 active:scale-95 cursor-pointer`}
+      >
+        <span className="tabular-nums text-base leading-none line-through opacity-70">
+          {item.qtyOrigem}
+        </span>
+        <span className="text-[9px] font-bold leading-none mt-0.5">não achada</span>
+        <Undo2 className="w-3 h-3 absolute top-0.5 right-0.5 text-rose-600/80" />
+      </button>
+    );
+  }
+
   if (viewMode === 'sent' || item.sentAt) {
     const time = formatTime(item.sentAt);
     if (reverting) {
