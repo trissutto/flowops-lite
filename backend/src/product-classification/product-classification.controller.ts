@@ -77,6 +77,15 @@ export class ProductClassificationController {
     return this.svc.setOne(body?.ref, Number(body?.tipoProduto), this.userLabel(req));
   }
 
+  /**
+   * Libera/tira a REF da promoção de 50% (exceção manual à regra de data).
+   * POST /product-classification/promo  body: { ref, liberada }
+   */
+  @Post('promo')
+  promo(@Body() body: { ref: string; liberada: boolean }, @Req() req: any) {
+    return this.svc.setPromoLiberada(body?.ref, !!body?.liberada, this.userLabel(req));
+  }
+
   @Post('bulk')
   bulk(
     @Body() body: { tipoProduto: number; refs?: string[]; filtro?: CatalogFilters },

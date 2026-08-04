@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { elegivelPromo, precoPromo } from '../common/promo-julho';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
 import { ProductSearchService } from '../product-search/product-search.service';
@@ -41,6 +42,8 @@ interface RefRow {
 interface ClsRow {
   tipoProduto: number;
   classificacaoRevisada: boolean;
+  /** Exceção manual: entra na promo mesmo fora da regra de data. */
+  promoLiberada: boolean;
 }
 
 const SNAPSHOT_TTL_MS = 10 * 60 * 1000; // 10min — catálogo muda pouco intra-sessão
@@ -50,12 +53,12 @@ const UPSERT_CHUNK = 500;
 // Cadastro (DATAALT) até 31/12/2023 → 50% OFF, EXCETO linha BÁSICA.
 // É a MESMA regra YEAR_BASED que o PDV aplica na venda (applyAutoDiscounts) —
 // esta tela mostra o preço promocional pra planejamento/etiquetagem.
-const PROMO_JULHO_CUTOFF = '2023-12-31';
-const PROMO_JULHO_PCT = 0.5;
+// Regra da promo: common/promo-julho.ts (a MESMA que o PDV aplica na venda).
+
 // Coleções marcadas na REF entram na promo independente do ano de cadastro:
 // sufixo -INV (inverno) / -VER (verão) — regra do dono, 10/07/2026. A MESMA
 // regra existe no PDV (applyAutoDiscounts / YEAR_BASED).
-const PROMO_COLECAO_RE = /-(INV|VER)$/i;
+
 
 @Injectable()
 export class ProductClassificationService {
@@ -108,13 +111,14 @@ export class ProductClassificationService {
   private async getClsMap(): Promise<Map<string, ClsRow>> {
     if (this.clsMap) return this.clsMap;
     const rows = await (this.prisma as any).productClassification.findMany({
-      select: { ref: true, tipoProduto: true, classificacaoRevisada: true },
+      select: { ref: true, tipoProduto: true, classificacaoRevisada: true, promoLiberada: true },
     });
     const map = new Map<string, ClsRow>();
     for (const r of rows) {
       map.set(this.normRef(r.ref), {
         tipoProduto: r.tipoProduto,
         classificacaoRevisada: r.classificacaoRevisada,
+        promoLiberada: !!r.promoLiberada,
       });
     }
     this.clsMap = map;
@@ -247,12 +251,12 @@ export class ProductClassificationService {
       const preco = display?.preco ?? info?.preco ?? null;
       const dataCadastro = info?.dataCadastro ?? null;
       const isBasico = tipoProduto === 1;
-      const elegivel =
-        (!!dataCadastro && dataCadastro <= PROMO_JULHO_CUTOFF) ||
-        PROMO_COLECAO_RE.test(r.ref);
-      const precoPromo = !isBasico && elegivel && preco != null
-        ? Math.round(preco * (1 - PROMO_JULHO_PCT) * 100) / 100
-        : null;
+      // Regra única (common/promo-julho.ts) — a mesma que o PDV aplica na
+      // venda. Antes eram duas cópias, com um "se mudar lá, muda aqui" em cada.
+      const promoLiberada = !!(c as any)?.promoLiberada;
+      const precoPromoCalc = precoPromo(preco, {
+        ref: r.ref, dataCadastro, isBasico, promoLiberada,
+      });
       return {
         ref: r.ref,
         descricao: display?.descricao || r.descricao,
@@ -264,8 +268,11 @@ export class ProductClassificationService {
         revisada: c ? c.classificacaoRevisada : false,
         preco,
         dataCadastro,
-        precoPromo,                                   // null = fora da promo
-        promoIsento: isBasico && elegivel,            // básico antigo = isento
+        precoPromo: precoPromoCalc,                   // null = fora da promo
+        promoLiberada,                                // exceção manual (toggle)
+        // "Isento": e BASICO mas caberia na promo se nao fosse basico — a tela
+        // marca isso pra explicar por que o preco nao caiu.
+        promoIsento: isBasico && elegivelPromo({ ref: r.ref, dataCadastro, isBasico: false, promoLiberada }),
       };
     });
     return { rows, total, page: p, perPage: pp };
@@ -423,6 +430,30 @@ export class ProductClassificationService {
     });
     this.invalidateClsMap();
     return { ok: true, ref, tipoProduto: tipo };
+  }
+
+  /**
+   * LIBERA (ou tira) a peça da promoção, na mão.
+   *
+   * A alternativa era falsear a `dataAlt` do catálogo pra caber na regra de
+   * data — e essa data é a chave do sync incremental e do "recém-cadastrado".
+   * Aqui a exceção fica explícita, com autor e reversível num clique.
+   *
+   * Não cria linha só pra desligar: `promoLiberada=false` é o padrão, então
+   * REF sem registro já está desligada.
+   */
+  async setPromoLiberada(refRaw: string, liberada: boolean, user: string) {
+    const ref = this.normRef(refRaw);
+    if (!ref) return { ok: false, error: 'ref obrigatório' };
+    const valor = !!liberada;
+    await (this.prisma as any).productClassification.upsert({
+      where: { ref },
+      create: { ref, promoLiberada: valor, updatedBy: user },
+      update: { promoLiberada: valor, updatedBy: user },
+    });
+    this.invalidateClsMap();
+    this.logger.log(`[promo] ${ref}: ${valor ? 'LIBERADA' : 'removida'} da promoção por ${user}`);
+    return { ok: true, ref, promoLiberada: valor };
   }
 
   /**

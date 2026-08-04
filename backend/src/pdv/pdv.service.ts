@@ -70,6 +70,32 @@ export class PdvService {
   }
 
   /**
+   * REFs LIBERADAS na mão pra promoção (toggle da tela de Classificação).
+   *
+   * Sem isto a exceção valeria só na tela de planejamento e o caixa cobraria
+   * preço cheio — a cliente vendo 50% na etiqueta e o cupom saindo cheio. A
+   * regra de quem entra na promo é a mesma dos dois lados
+   * (`common/promo-julho.ts`); esta consulta só traz o dado que falta aqui.
+   */
+  private async promoLiberadaRefsIn(refs: string[]): Promise<Set<string>> {
+    const norm = (r: any) => String(r || '').trim().toUpperCase();
+    const wanted = Array.from(new Set(refs.map(norm).filter(Boolean)));
+    if (!wanted.length) return new Set();
+    try {
+      const rows = await (this.prisma as any).productClassification.findMany({
+        where: { ref: { in: wanted }, promoLiberada: true },
+        select: { ref: true },
+      });
+      return new Set((rows as any[]).map((r) => norm(r.ref)));
+    } catch (e: any) {
+      // fail-open pro lado SEGURO: sem a lista, vale só a regra de data — a
+      // venda não trava e ninguém ganha desconto por acidente.
+      this.logger.warn(`[pdv] lookup promo liberada falhou (fail-open): ${e?.message}`);
+      return new Set();
+    }
+  }
+
+  /**
    * CONSULTA DE PROMOÇÃO (dono 01/08) — bipa a peça e responde se ela entra
    * nos 50%, SEM lançar nada na venda.
    *
@@ -1782,6 +1808,13 @@ export class PdvService {
       const isBasico = (it: any) =>
         basicoRefs.size > 0 && basicoRefs.has(clsKey(it));
 
+      // Liberadas na mão (tela de Classificação): entram na promo mesmo sendo
+      // de cadastro novo. Uma consulta só, com as REFs do carrinho.
+      const liberadas = await this.promoLiberadaRefsIn(
+        (items as any[]).map(clsKey).filter(Boolean),
+      );
+      const isLiberada = (it: any) => liberadas.size > 0 && liberadas.has(clsKey(it));
+
       for (const it of items as any[]) {
         if (isManual(it)) continue; // preserva manual
         const bruto = it.precoUnit * it.qty;
@@ -1795,7 +1828,9 @@ export class PdvService {
         }
         const promo = isColecaoPromo(it)
           ? { pct: 0.50, tag: 'PROMO 50% · coleção' }
-          : promoByYear(it.dataCadastro || null);
+          : isLiberada(it)
+            ? { pct: 0.50, tag: 'PROMO 50% · liberada' }
+            : promoByYear(it.dataCadastro || null);
         if (promo) {
           const desconto = Math.round(bruto * promo.pct * 100) / 100;
           updates.push({

@@ -922,7 +922,22 @@ function GradeEstoque({
     const s = new Set<string>(lojaNomes.keys());
     if (!s.size) for (const c of ['01', '02', '03', '05', '06', '08', '10', '15', '17', '18']) s.add(c);
     for (const r of skus) for (const l of Object.keys(r.estoqueLojas ?? {})) s.add(l);
-    return [...s].sort();
+    /**
+     * MATRIZ, ITU e DEPÓSITO fora da grade (dono, 04/08).
+     *
+     * A grade existe pra mover peça ENTRE LOJAS QUE VENDEM. Essas três não
+     * vendem — e coluna a mais aqui não é só ruído visual: cada uma é um
+     * destino de arraste, e arrastar peça pra matriz por engano tira ela da
+     * arara sem ninguém precisar dela.
+     *
+     * Filtra pela SIGLA (o mesmo texto do cabeçalho) e não por código: código
+     * de loja eu não tenho como conferir daqui, e chutar código é esconder a
+     * coluna errada.
+     */
+    const FORA_DA_GRADE = ['MATRI', 'ITU', 'DEPOS'];
+    return [...s]
+      .filter((c) => !FORA_DA_GRADE.includes((lojaNomes.get(c) || c).toUpperCase()))
+      .sort();
   }, [skus, lojaNomes]);
 
   /**
