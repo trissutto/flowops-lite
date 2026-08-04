@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { OrderStatus } from '../common/enums';
 import { extractCpf, detectPickup } from '../woocommerce/wc-order-extract.util';
 import { extractAttributionRaw } from '../woocommerce/attribution.util';
+import { lerComplementoBairroWc, montarComplementoBairroWc, montarNumeroWc } from '../common/endereco-wc';
 
 @Injectable()
 export class OrdersService {
@@ -535,5 +536,134 @@ export class OrdersService {
     });
     if (!order) throw new NotFoundException('Pedido não encontrado');
     return order;
+  }
+
+  /**
+   * CORRIGE O ENDEREÇO DE ENTREGA de um pedido — o que faltava pra operadora.
+   *
+   * O endereço do pedido é um SNAPSHOT (`shippingAddress`, JSON) gravado no
+   * checkout, e a etiqueta lê dele. Não existia rota nenhuma pra mexer nisso:
+   * a operadora via o complemento errado na hora de postar e não tinha o que
+   * clicar. Editar o cadastro do cliente não resolvia, porque o pedido carrega
+   * a cópia.
+   *
+   * Espelha no cadastro do cliente (decisão do dono, 04/08): quem corrigiu o
+   * endereço na hora de postar corrigiu a informação de verdade — deixar o
+   * cadastro velho só garante que o próximo pedido nasce errado de novo.
+   *
+   * Grava o de→para em `IntegrationLog`, igual à edição de endereço da live:
+   * endereço errado manda a peça pro lugar errado, então precisa de rastro de
+   * quem mudou o quê.
+   */
+  async atualizarEnderecoEntrega(
+    wcOrderId: number,
+    input: {
+      cep?: string; endereco?: string; numero?: string; complemento?: string;
+      bairro?: string; cidade?: string; uf?: string;
+      nome?: string; telefone?: string;
+    },
+    actor?: { userId?: string | null; name?: string | null; storeCode?: string | null },
+  ) {
+    const order: any = await (this.prisma as any).order.findUnique({ where: { wcOrderId } });
+    if (!order) throw new NotFoundException('Pedido não encontrado');
+
+    let atual: any = {};
+    try { atual = JSON.parse(order.shippingAddress || '{}'); } catch { /* snapshot cru */ }
+    const antes = lerComplementoBairroWc(atual);
+
+    const limpo = (v?: string, max = 120) => String(v ?? '').trim().slice(0, max) || '';
+    const cep = String(input.cep ?? atual.postcode ?? '').replace(/\D/g, '');
+    const endereco = limpo(input.endereco ?? atual.address_1_rua ?? '');
+    const numero = limpo(input.numero ?? atual.number ?? '', 20);
+    const complemento = limpo(input.complemento ?? antes.complemento, 80);
+    const bairro = limpo(input.bairro ?? antes.bairro, 80);
+    const cidade = limpo(input.cidade ?? atual.city ?? '', 80);
+    const uf = limpo(input.uf ?? atual.state ?? '', 2).toUpperCase();
+
+    // `address_1` continua sendo "rua, número" porque os cards da loja e a
+    // impressão mostram esse texto pronto — mas `number` vai junto, separado,
+    // que é o que a etiqueta prefere ler.
+    const novo = {
+      ...atual,
+      ...(input.nome !== undefined
+        ? (() => {
+            const p = limpo(input.nome).split(/\s+/);
+            return { first_name: p[0] || '', last_name: p.slice(1).join(' ') };
+          })()
+        : {}),
+      ...(input.telefone !== undefined ? { phone: String(input.telefone).replace(/\D/g, '') } : {}),
+      address_1: [endereco, numero].filter(Boolean).join(', '),
+      ...montarComplementoBairroWc(complemento, bairro),
+      ...montarNumeroWc(numero),
+      city: cidade,
+      state: uf,
+      postcode: cep,
+    };
+
+    const mudancas = ([
+      ['cep', atual.postcode, cep],
+      ['endereco', atual.address_1, novo.address_1],
+      ['complemento', antes.complemento, complemento],
+      ['bairro', antes.bairro, bairro],
+      ['cidade', atual.city, cidade],
+      ['uf', atual.state, uf],
+    ] as Array<[string, any, any]>)
+      .filter(([, de, para]) => String(de ?? '').trim() !== String(para ?? '').trim())
+      .map(([campo, de, para]) => ({ campo, de: de ?? null, para: para ?? null }));
+
+    const atualizado = await (this.prisma as any).order.update({
+      where: { wcOrderId },
+      data: { shippingAddress: JSON.stringify(novo), shippingCep: cep || null },
+    });
+
+    // Espelho no cadastro do cliente — casa pelo CPF, que é a chave de pessoa
+    // do CRM. Sem CPF não dá pra saber de quem é: grava só no pedido.
+    const cpf = String(order.customerCpf || '').replace(/\D/g, '');
+    if (cpf.length === 11 && (cep || endereco || cidade)) {
+      try {
+        const cliente = await (this.prisma as any).customer.findFirst({ where: { cpf } });
+        if (cliente) {
+          const dados = {
+            cep: cep || null, street: endereco || null, number: numero || null,
+            complement: complemento || null, district: bairro || null,
+            city: cidade || null, state: uf || null,
+          };
+          const existente = await (this.prisma as any).customerAddress.findFirst({
+            where: { customerId: cliente.id },
+          });
+          if (existente) {
+            await (this.prisma as any).customerAddress.update({ where: { id: existente.id }, data: dados });
+          } else {
+            await (this.prisma as any).customerAddress.create({
+              data: { customerId: cliente.id, type: 'entrega', isPrimary: true, ...dados },
+            });
+          }
+        }
+      } catch (e) {
+        // Falha no espelho NÃO derruba a correção: o pedido — que é o que vai
+        // virar etiqueta agora — já está salvo.
+        this.logger.warn(`[endereco] espelho no cadastro falhou (pedido ${wcOrderId}): ${(e as Error).message}`);
+      }
+    }
+
+    if (mudancas.length) {
+      await (this.prisma as any).integrationLog.create({
+        data: {
+          source: 'orders', direction: 'internal', event: 'order.address.edit',
+          payload: JSON.stringify({
+            wcOrderId,
+            por: { userId: actor?.userId ?? null, nome: actor?.name ?? null, loja: actor?.storeCode ?? null },
+            mudancas,
+          }),
+        },
+      }).catch((e: any) => this.logger.warn(`[endereco] auditoria falhou (${wcOrderId}): ${e?.message || e}`));
+    }
+
+    this.logger.log(
+      `[endereco] pedido ${wcOrderId} corrigido por ${actor?.name ?? 'sistema'}: ` +
+      (mudancas.map((m) => m.campo).join(', ') || 'sem mudança'),
+    );
+
+    return { ok: true, shipping: novo, mudancas, orderId: atualizado.id };
   }
 }
