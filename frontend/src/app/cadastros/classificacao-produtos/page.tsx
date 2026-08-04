@@ -36,6 +36,8 @@ interface Row {
   precoPromo?: number | null;
   /** true = seria elegível pela data mas é BÁSICO (isento por regra) */
   promoIsento?: boolean;
+  /** Liberada na mão pra promoção, mesmo sendo cadastro novo. */
+  promoLiberada?: boolean;
 }
 
 const brl = (n: number) =>
@@ -212,6 +214,28 @@ export default function ClassificacaoProdutosPage() {
     } catch (e: any) {
       setError(e?.message || 'Falha ao salvar');
       loadList(page); // reverte do servidor
+    }
+  };
+
+  /**
+   * Libera (ou tira) a peça da promoção de 50%.
+   *
+   * Otimista igual ao BÁSICO/MODA, mas recarrega a lista no fim: quem decide o
+   * `precoPromo` é o backend (a regra é a mesma do PDV), e adivinhar o preço
+   * aqui seria a tela contando uma história e o caixa outra.
+   */
+  const togglePromo = async (r: Row) => {
+    const liberada = !r.promoLiberada;
+    setRows((prev) => prev.map((x) => (x.ref === r.ref ? { ...x, promoLiberada: liberada } : x)));
+    try {
+      await api('/product-classification/promo', {
+        method: 'POST',
+        body: JSON.stringify({ ref: r.ref, liberada }),
+      });
+      loadList(page);
+    } catch (e: any) {
+      setError(e?.message || 'Falha ao liberar');
+      loadList(page);
     }
   };
 
@@ -483,6 +507,28 @@ export default function ClassificacaoProdutosPage() {
                           </span>
                         ) : (
                           <span className="text-slate-300" title="Fora da promoção — cadastro após 31/12/2023">—</span>
+                        )}
+                        {/* LIBERAR NA MÃO: peça nova que se decide liquidar.
+                            A alternativa seria falsear a data do catálogo — que
+                            é a chave do sync incremental. Aqui a exceção fica
+                            explícita, reversível, e vale também no desconto que
+                            o PDV aplica na venda. */}
+                        {!r.promoIsento && (
+                          <button
+                            type="button"
+                            onClick={() => void togglePromo(r)}
+                            title={r.promoLiberada
+                              ? 'Liberada na mão — clique pra tirar da promoção'
+                              : 'Liberar esta peça pra promoção mesmo sendo cadastro novo'}
+                            className={
+                              'ml-2 rounded px-1.5 py-0.5 text-[10px] font-bold border ' +
+                              (r.promoLiberada
+                                ? 'border-rose-300 bg-rose-50 text-rose-700'
+                                : 'border-slate-300 text-slate-500 hover:bg-slate-50')
+                            }
+                          >
+                            {r.promoLiberada ? 'liberada ✓' : 'liberar'}
+                          </button>
                         )}
                       </td>
                       <td className="px-3 py-2">

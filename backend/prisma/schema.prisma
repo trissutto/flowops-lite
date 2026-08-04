@@ -4411,6 +4411,15 @@ model ProductClassification {
   ref                   String   @id @db.VarChar(20)
   tipoProduto           Int      @default(0) @map("tipo_produto") // 0=MODA, 1=BASICO
   classificacaoRevisada Boolean  @default(false) @map("classificacao_revisada")
+  /// LIBERADA NA MÃO pra promoção, mesmo fora da regra de data.
+  ///
+  /// A promo pega quem foi cadastrado até 31/12/2023 (ou REF -INV/-VER). Peça
+  /// nova que o dono quer liquidar ficava de fora, e a saída seria falsear a
+  /// `dataAlt` do catálogo — que é a chave do sync incremental e do
+  /// "recém-cadastrado". Mentir na data resolveria a promo e deixaria a mentira
+  /// pra próxima regra ler. Aqui a exceção fica explícita, reversível e com
+  /// autor (`updatedBy`/`updatedAt` já existem nesta tabela).
+  promoLiberada         Boolean  @default(false) @map("promo_liberada")
   updatedBy             String?  @map("updated_by")
   updatedAt             DateTime @updatedAt @map("updated_at")
 
