@@ -1285,9 +1285,28 @@ export class PickOrdersService {
    * Lista os pick-orders DA loja do user logado.
    * Filtro default: status ativos (new, separating, ready). `all=true` traz shipped também.
    */
-  async listMine(storeId: string, opts?: { all?: boolean }) {
+  async listMine(storeId: string, opts?: { all?: boolean; from?: string; to?: string }) {
     const where: any = { storeId };
-    if (!opts?.all) {
+    /**
+     * ABA ENVIADOS (dono, 04/08): com `from`/`to`, traz TAMBÉM os despachados
+     * no período — e é por isso que a aba existia vazia até aqui. O default
+     * desta rota sempre foi "só ativos", então filtrar shipped no frontend não
+     * adiantava: o registro nunca chegava.
+     *
+     * Recorte por `updatedAt`: não existe `shippedAt` no modelo, e o último
+     * toque num pick despachado é justamente a marcação de envio. Fim do dia
+     * incluído (23:59:59), senão "De 04/08 Até 04/08" devolve zero.
+     */
+    const de = opts?.from ? new Date(`${opts.from}T00:00:00`) : null;
+    const ate = opts?.to ? new Date(`${opts.to}T23:59:59.999`) : null;
+
+    if (de || ate) {
+      where.status = 'shipped';
+      where.updatedAt = {
+        ...(de ? { gte: de } : {}),
+        ...(ate ? { lte: ate } : {}),
+      };
+    } else if (!opts?.all) {
       where.status = { in: ['new', 'separating', 'separated', 'ready'] };
       // Esconde pick-orders sinalizados com problema — card sai da fila da loja
       // assim que ela reporta; matriz vê a flag em /pedidos e /separacao e reroteia.

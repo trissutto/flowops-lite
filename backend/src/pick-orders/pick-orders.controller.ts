@@ -83,12 +83,18 @@ export class PickOrdersController {
    * Default: só ativos (new, separating, ready). `?all=true` inclui shipped.
    */
   @Get('mine')
-  mine(@Req() req: any, @Query('all') all?: string) {
+  mine(
+    @Req() req: any,
+    @Query('all') all?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
     const user = req.user as AuthUser;
     if (user.role !== 'store' || !user.storeId) {
       throw new ForbiddenException('Apenas usuários de loja acessam /pick-orders/mine');
     }
-    return this.svc.listMine(user.storeId, { all: all === 'true' });
+    // from/to (YYYY-MM-DD) = aba ENVIADOS: só os despachados no período.
+    return this.svc.listMine(user.storeId, { all: all === 'true', from, to });
   }
 
   /**
