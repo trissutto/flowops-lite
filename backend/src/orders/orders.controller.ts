@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { startOfDayBR } from '../lib/date-br';
 import { OrdersService } from './orders.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
@@ -671,6 +671,32 @@ export class OrdersController {
    * registro de qual loja é responsável. Sem este hook, pedido vira "Separação" sem
    * loja associada e o painel "Status ao vivo" fica vazio.
    */
+  /**
+   * Corrige o ENDEREÇO DE ENTREGA do pedido.
+   * PATCH /orders/wc/:wcId/endereco-entrega
+   *
+   * Rota própria, e não mais um campo no `PATCH wc/:wcId`: aquele sincroniza
+   * status/rastreio com o WooCommerce, e endereço aqui é correção LOCAL do
+   * snapshot que a etiqueta lê. Misturar os dois faria uma correção de
+   * complemento disparar sync de pedido no site.
+   */
+  @Patch('wc/:wcId/endereco-entrega')
+  async wcUpdateEndereco(
+    @Param('wcId') wcId: string,
+    @Body()
+    body: {
+      cep?: string; endereco?: string; numero?: string; complemento?: string;
+      bairro?: string; cidade?: string; uf?: string; nome?: string; telefone?: string;
+    },
+    @Req() req: any,
+  ) {
+    return this.orders.atualizarEnderecoEntrega(Number(wcId), body, {
+      userId: req?.user?.userId ?? req?.user?.sub ?? null,
+      name: req?.user?.name ?? req?.user?.nome ?? req?.user?.username ?? null,
+      storeCode: req?.user?.storeCode ?? null,
+    });
+  }
+
   @Patch('wc/:wcId')
   async wcUpdate(
     @Param('wcId') wcId: string,

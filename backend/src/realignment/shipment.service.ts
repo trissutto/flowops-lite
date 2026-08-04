@@ -12,6 +12,7 @@ import { RealtimeGateway } from '../websocket/realtime.gateway';
 import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service';
 import { CorreiosService } from '../correios/correios.service';
 import { NfeTransferService } from '../nfe/nfe-transfer.service';
+import { RemessaEnvioService } from './remessa-envio.service';
 
 /**
  * RealignmentShipmentService — gerencia o ciclo de REMESSA entre lojas.
@@ -41,6 +42,7 @@ export class RealignmentShipmentService {
     private readonly catalog: WincredCatalogService,
     private readonly correios: CorreiosService,
     private readonly nfe: NfeTransferService,
+    private readonly envio: RemessaEnvioService,
   ) {}
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -233,11 +235,31 @@ export class RealignmentShipmentService {
       take: 15,
     });
 
+    /**
+     * Caixa da ROTA PRÓPRIA não pede etiqueta.
+     *
+     * Itanhaém, Praia Grande e Santos trocam mercadoria no carro da rede. O
+     * filtro do SQL acima só corta quem já tem `transportMode='proprio'`
+     * gravado — e na rota própria ele nasce NULO (regra automática). Sem isto,
+     * a loja veria "Gerar envio Correios" numa caixa que vai de carro e
+     * abriria pré-postagem que ninguém vai postar.
+     *
+     * Reusa `lojasDaRotaPropria` do serviço de envio: a regra tem que ser a
+     * MESMA que decide na hora de gerar, senão a tela oferece o que o backend
+     * recusa.
+     */
+    const rota = await this.envio.lojasDaRotaPropria();
+    const daRota = (s: any) =>
+      rota.size > 0 &&
+      rota.has(String(s.fromStoreCode || '').toUpperCase()) &&
+      rota.has(String(s.toStoreCode || '').toUpperCase());
+    const paraEtiqueta = (shipments as any[]).filter((s) => !daRota(s));
+
     // Nota autorizada por caixa — a tela precisa AVISAR antes de reabrir, e não
     // descobrir no erro. Uma query pra todas em vez de uma por cartão.
-    const notas = shipments.length
+    const notas = paraEtiqueta.length
       ? await (this.prisma as any).nfeDoc.findMany({
-          where: { shipmentId: { in: shipments.map((s: any) => s.id) }, status: 'authorized' },
+          where: { shipmentId: { in: paraEtiqueta.map((s: any) => s.id) }, status: 'authorized' },
           select: { shipmentId: true, numero: true },
         })
       : [];
@@ -246,7 +268,7 @@ export class RealignmentShipmentService {
     );
 
     return Promise.all(
-      shipments.map(async (s: any) => {
+      paraEtiqueta.map(async (s: any) => {
         const items = await this.prisma.transferOrder.findMany({
           where: { shipmentId: s.id } as any,
           select: { id: true, qtyOrigem: true } as any,
