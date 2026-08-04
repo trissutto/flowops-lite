@@ -118,11 +118,35 @@ export class MarcadosMirrorService {
           select: { id: true, status: true },
         });
         if (existente) {
-          // Linha ainda SIM no Giga → segue ativa (reabre se tinha sido
-          // marcada fechado_giga por um sync com Giga capenga). EXCEÇÃO: se está
-          // 'puxado' (foi pro PDV), PRESERVA — senão o sync devolvia pra 'ativo'
-          // e a peça reaparecia na tela de Marcados estando numa venda.
-          const dataUpd = existente.status === 'puxado' ? { ...data, status: 'puxado' } : data;
+          /**
+           * ⚠️ O QUE O FLOW JÁ RESOLVEU NÃO VOLTA (04/08 — caso Célio).
+           *
+           * `data` carrega `status: 'ativo'` fixo. Antes só 'puxado' era
+           * preservado, então TODO import trazia de volta pra 'ativo' o que o
+           * Flow já tinha encerrado — bastava a linha continuar MARCADO='SIM'
+           * no Giga, que é o normal quando a baixa lá falha ou é feita por
+           * outro caminho (o Giga é RÉPLICA desde 31/07, não a fonte).
+           *
+           * Efeito real: cliente que veio à loja, usou o crédito e teve o
+           * marcado fechado no Flow via ele RESSUSCITADO no próximo import —
+           * crédito de volta na conta dele e peça reaparecendo como "em marca".
+           * Foi o que aconteceu com o Célio (R$ 249,90).
+           *
+           * Agora o status decidido AQUI é final. Só 'ativo' e 'fechado_giga'
+           * seguem o Giga — 'fechado_giga' é justamente "sumiu de lá", então
+           * voltar a existir tem que reabrir mesmo.
+           */
+          const DECIDIDO_NO_FLOW = new Set(['fechado', 'devolvido', 'baixado', 'puxado']);
+          const preserva = DECIDIDO_NO_FLOW.has(String(existente.status));
+          const dataUpd = preserva ? { ...data, status: existente.status } : data;
+          if (preserva) {
+            // O Giga ainda acha que a peça está marcada — sinal de que a baixa
+            // lá não foi replicada. Fica no log pra matriz conferir.
+            this.logger.warn(
+              `[marcados/sync] REGISTRO=${reg} continua MARCADO='SIM' no Giga mas o Flow já ` +
+              `encerrou como "${existente.status}" — status preservado (não ressuscita).`,
+            );
+          }
           await (this.prisma as any).marcado.update({ where: { id: existente.id }, data: dataUpd });
         } else {
           // Marcação criada pelo Flow cujo REGISTRO não foi capturado na hora
