@@ -1459,6 +1459,15 @@ export class RealignmentShipmentService {
     for (const it of items as any[]) {
       const sku = refToSku.get(it.refCode);
       const preco = (sku ? priceMap.get(sku) || 0 : 0) || refPriceMap.get(it.refCode) || 0;
+      // Preço não resolvido → a obrigação NASCE (a peça viajou, a dívida
+      // existe) mas com R$ 0 — e isso não pode ser silencioso: some dinheiro
+      // do acerto REDE↔FILIAL sem ninguém ver. Fica gritado no log.
+      if (!preco) {
+        this.logger.warn(
+          `[shipment] ${shipment.code}: obrigação de ${it.refCode} ${it.cor || ''}/${it.tamanho || ''} ` +
+          `criada com PREÇO ZERO (sem preço no Giga por SKU nem por REF) — corrigir no acerto do mês.`,
+        );
+      }
       const qty = it.qtyOrigem || 1;
       const precoTotal = preco * qty;
       const divisor = 2.5;
