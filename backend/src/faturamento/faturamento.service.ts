@@ -58,21 +58,30 @@ export class FaturamentoService {
     const [flowRows, gigaRows, devolucoes, lojas] = await Promise.all([
       // PDV do Flow — marcado fora (não é venda), treino fora, cancelada fora
       //
-      // ⚠️ FATURAMENTO = A MESMA BASE DA COMISSÃO (decisão do dono, 01/08).
-      // Antes era SUM(total) cru, e isso INFLAVA o número: o vale-troca entrava
-      // como venda nova, mas é crédito de uma peça devolvida cuja venda original
-      // já tinha sido contada — a mesma peça aparecia duas vezes. Frete não é
-      // peça vendida. Devolução em dinheiro é dinheiro que saiu.
+      // ⚠️ RÉGUA OFICIAL DO FATURAMENTO (dono, 04/08):
+      //     faturamento = vendido − vale-troca − devoluções(dinheiro/pix)
+      //   com o FRETE DENTRO e o desconto já embutido (o `total` da venda é o
+      //   valor cobrado, líquido de desconto — subtrair de novo tiraria 2×).
       //
-      // Consequência aceita pelo dono: a comparação com 2025 passa a confrontar
-      // réguas diferentes (o histórico do Giga não separa o vale do mesmo jeito),
-      // então as lojas parecem cair no comparativo. É critério, não queda.
+      // O vale-troca sai porque é crédito de uma peça devolvida cuja venda
+      // original já foi contada — sem isso a mesma peça aparece duas vezes.
+      // Devolução em dinheiro/PIX é dinheiro que saiu da loja.
+      //
+      // FRETE (mudança de 04/08): ANTES era subtraído aqui. O dono decidiu que
+      // frete É faturamento (dinheiro que entrou na loja) — o que ele não faz é
+      // gerar comissão, e a comissão já usa `valorBaseComissao` do
+      // CommissionEngine, que continua excluindo frete. Com o frete dentro, o
+      // faturamento fecha 1:1 com a soma das formas de pagamento, que é a
+      // conferência que a operação usa.
+      //
+      // Consequência aceita pelo dono: a comparação com 2025 confronta réguas
+      // diferentes (o histórico do Giga não separa o vale do mesmo jeito).
       this.prisma.$queryRawUnsafe<Array<any>>(
         `SELECT store_code AS "storeCode",
                 COUNT(*)::int                              AS cupons,
                 COALESCE(SUM(it.pecas), 0)::float8         AS pecas,
                 COALESCE(SUM(
-                  s.total - COALESCE(vt.vale, 0) - COALESCE(fr.frete, 0)
+                  s.total - COALESCE(vt.vale, 0)
                 ), 0)::float8                              AS faturamento
            FROM pdv_sales s
            LEFT JOIN (
@@ -84,10 +93,6 @@ export class FaturamentoService {
               WHERE LOWER(TRIM(method)) IN ('vale_troca', 'vale', 'troca')
               GROUP BY sale_id
            ) vt ON vt.sale_id = s.id
-           LEFT JOIN (
-             SELECT sale_id, SUM(total)::float8 AS frete FROM pdv_sale_items
-              WHERE ref = 'FRETE' GROUP BY sale_id
-           ) fr ON fr.sale_id = s.id
           WHERE s.finalized_at >= $1 AND s.finalized_at < $2
             AND s.status = 'finalized'
             AND s.is_training = false

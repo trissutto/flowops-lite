@@ -595,6 +595,107 @@ export class CashService {
     return mapa;
   }
 
+  /**
+   * RÉGUA OFICIAL DO FATURAMENTO (dono, 04/08):
+   *
+   *   faturamento = vendido − vale-troca − devoluções(dinheiro/pix)
+   *
+   * com FRETE DENTRO (é dinheiro que entrou; o que ele não faz é comissionar)
+   * e o desconto já embutido — o `total` da venda é o valor cobrado, líquido
+   * de desconto; subtrair de novo tiraria duas vezes.
+   *
+   * Do outro lado, as formas de pagamento também precisam perder a devolução,
+   * senão os dois lados não fecham: a devolução em dinheiro/PIX não reduz o
+   * pagamento da venda — ela sai por SANGRIA. Devolução em troca/crédito não
+   * entra aqui: vira vale, e o vale abate no dia em que a cliente usa.
+   *
+   *   formas líquidas = (dinheiro − devolução dinheiro) + (pix − devolução pix)
+   *                   + crédito + débito + crediário + venda online
+   *
+   * Mesmos filtros do FaturamentoService e do CommissionEngine
+   * (DEVOLUCAO_ABATE_SQL): modo dinheiro/pix, não cancelada, sem treino.
+   */
+  private async ajustesFaturamentoPorLoja(
+    inicio: Date,
+    fim: Date,
+    storeCodes?: string[],
+  ): Promise<Map<string, { devolucoesDinheiro: number; devolucoesPix: number; devolucoes: number; frete: number }>> {
+    const escopoLoja = storeCodes?.length ? { storeCode: { in: storeCodes } } : {};
+    const [devolucoes, fretes] = await Promise.all([
+      (this.prisma as any).pdvReturn.findMany({
+        where: {
+          ...escopoLoja,
+          isTraining: false,
+          modo: { in: ['dinheiro', 'pix'] },
+          status: { not: 'cancelled' },
+          createdAt: { gte: inicio, lte: fim },
+        },
+        select: { storeCode: true, modo: true, valorTotal: true },
+      }),
+      // FRETE cobrado da cliente — item ref='FRETE' das vendas do período.
+      // Não muda o faturamento (já está no total): é exibição, pra conferir
+      // que a comissão não está pagando sobre ele.
+      this.prisma.$queryRawUnsafe<Array<{ storeCode: string; frete: number }>>(
+        `SELECT s.store_code AS "storeCode", COALESCE(SUM(i.total), 0)::float8 AS frete
+           FROM pdv_sale_items i
+           JOIN pdv_sales s ON s.id = i.sale_id
+          WHERE i.ref = 'FRETE'
+            AND s.status = 'finalized'
+            AND s.is_training = false
+            AND (s.payment_method IS NULL OR s.payment_method <> 'MARCADO')
+            AND s.finalized_at >= $1 AND s.finalized_at <= $2
+          GROUP BY s.store_code`,
+        inicio,
+        fim,
+      ),
+    ]);
+
+    const mapa = new Map<string, { devolucoesDinheiro: number; devolucoesPix: number; devolucoes: number; frete: number }>();
+    const get = (code: string) => {
+      const cur = mapa.get(code) || { devolucoesDinheiro: 0, devolucoesPix: 0, devolucoes: 0, frete: 0 };
+      mapa.set(code, cur);
+      return cur;
+    };
+    for (const d of devolucoes as any[]) {
+      const cur = get(String(d.storeCode));
+      const v = Number(d.valorTotal) || 0;
+      if (String(d.modo) === 'pix') cur.devolucoesPix += v;
+      else cur.devolucoesDinheiro += v;
+      cur.devolucoes += v;
+    }
+    for (const f of fretes as any[]) {
+      get(String(f.storeCode)).frete += Number(f.frete) || 0;
+    }
+    return mapa;
+  }
+
+  /** Zero pra loja que não teve devolução nem frete no período. */
+  private static readonly AJUSTES_ZERO = {
+    devolucoesDinheiro: 0, devolucoesPix: 0, devolucoes: 0, frete: 0,
+  };
+
+  /**
+   * Aplica a régua oficial em cima dos totais de venda + ajustes da loja.
+   * Devolve o bloco que as telas leem — nenhuma tela recalcula por fora.
+   */
+  private static blocoFaturamento(
+    dia: { totalVendas?: number; totalValeTroca?: number },
+    aj: { devolucoesDinheiro: number; devolucoesPix: number; devolucoes: number; frete: number },
+  ) {
+    const cent = (n: number) => Math.round(n * 100) / 100;
+    const vendido = Number(dia?.totalVendas) || 0;
+    const vale = Number(dia?.totalValeTroca) || 0;
+    return {
+      totalDevolucoes: cent(aj.devolucoes),
+      totalDevolucoesDinheiro: cent(aj.devolucoesDinheiro),
+      totalDevolucoesPix: cent(aj.devolucoesPix),
+      // Frete NÃO abate: já está dentro do total da venda. Vem só pra exibição
+      // (o dono quer ver que o frete entra no faturamento e não na comissão).
+      totalFrete: cent(aj.frete),
+      faturamento: cent(vendido - vale - aj.devolucoes),
+    };
+  }
+
   async getSuperPainelCaixas(storeCodes?: string[]): Promise<{
     lojas: Array<{
       storeCode: string;
@@ -678,9 +779,15 @@ export class CashService {
 
     // Venda do DIA por loja (independe de sessão) — é o que alimenta o
     // consolidado e a loja de caixa fechado. Ver computeDayTotalsByStore.
-    const vendasDoDia = await this.computeDayTotalsByStore(
-      (stores as any[]).map((s) => s.code),
-    );
+    const codigos = (stores as any[]).map((s) => s.code);
+    const [vendasDoDia, ajustes] = await Promise.all([
+      this.computeDayTotalsByStore(codigos),
+      // Devoluções + frete do dia — entram na régua oficial do faturamento
+      // (ver ajustesFaturamentoPorLoja).
+      this.ajustesFaturamentoPorLoja(startOfDayBR(), endOfDayBR(), codigos),
+    ]);
+    const ajusteDaLoja = (code: string) =>
+      ajustes.get(code) || CashService.AJUSTES_ZERO;
     const diaDaLoja = (code: string) =>
       vendasDoDia.get(code) || {
         totalVendas: 0, totalDinheiro: 0, totalPix: 0,
@@ -713,11 +820,13 @@ export class CashService {
           // escondidos em 01/08). Agora mostra a venda do dia; os campos de
           // GAVETA seguem zerados, que é a verdade: o caixa está fechado.
           const dia = diaDaLoja(s.code);
+          const aj = ajusteDaLoja(s.code);
           return {
             storeCode: s.code,
             storeName: s.name,
             sessionId: rawSession?.id || null,
             aberta: false,
+            ...CashService.blocoFaturamento(dia, aj),
             // Vendeu hoje e não tem caixa aberto agora → a tela precisa
             // distinguir isso de "loja parada", senão vira R$ 0,00 mentiroso.
             caixaFechadoComVenda: dia.totalVendas > 0,
@@ -835,6 +944,9 @@ export class CashService {
           storeName: s.name,
           sessionId: session.id,
           aberta: true,
+          // Régua oficial do faturamento — sobre a VENDA DO DIA (não da sessão),
+          // que é o número que o dono confere contra as formas de pagamento.
+          ...CashService.blocoFaturamento(diaDaLoja(s.code), ajusteDaLoja(s.code)),
           openedAt: session.openedAt,
           openedByName: (session as any).openedByName || null,
           fundoTroco: Number(session.fundoTroco) || 0,
@@ -871,6 +983,9 @@ export class CashService {
       totalCartaoCredito: 0, totalCartaoDebito: 0, totalCrediario: 0,
       totalVendaOnline: 0, totalValeTroca: 0,
       totalMarcados: 0, qtdMarcados: 0,
+      // Régua oficial (ver blocoFaturamento)
+      totalDevolucoes: 0, totalDevolucoesDinheiro: 0, totalDevolucoesPix: 0,
+      totalFrete: 0, faturamento: 0,
       totalSangrias: 0, totalSuprimentos: 0, qtdVendas: 0,
       qtdLojasAbertas: 0, qtdLojasFechadas: 0,
     };
@@ -892,6 +1007,12 @@ export class CashService {
       consolidado.totalMarcados += d.totalMarcados || 0;
       consolidado.qtdMarcados += d.qtdMarcados || 0;
       consolidado.qtdVendas += d.qtdVendas || 0;
+      // Faturamento da rede = soma do faturamento de cada loja (mesma régua).
+      consolidado.totalDevolucoes += (l as any).totalDevolucoes || 0;
+      consolidado.totalDevolucoesDinheiro += (l as any).totalDevolucoesDinheiro || 0;
+      consolidado.totalDevolucoesPix += (l as any).totalDevolucoesPix || 0;
+      consolidado.totalFrete += (l as any).totalFrete || 0;
+      consolidado.faturamento += (l as any).faturamento || 0;
       // Sangria/suprimento são movimento de GAVETA: seguem por sessão aberta.
       consolidado.totalSangrias += l.totais.totalSangrias;
       consolidado.totalSuprimentos += l.totais.totalSuprimentos;
@@ -929,6 +1050,11 @@ export class CashService {
       orderBy: { code: 'asc' },
       select: { code: true, name: true } as any,
     });
+
+    // Devoluções + frete do PERÍODO — régua oficial do faturamento.
+    const ajustes = await this.ajustesFaturamentoPorLoja(
+      fromStart, toEnd, (stores as any[]).map((s) => s.code),
+    );
 
     const lojas = await Promise.all(
       (stores as any[]).map(async (s) => {
@@ -1163,6 +1289,10 @@ export class CashService {
           storeName: s.name,
           sessionId: primeiraSessao?.id || null,
           aberta: false,
+          ...CashService.blocoFaturamento(
+            { totalVendas, totalValeTroca },
+            ajustes.get(s.code) || CashService.AJUSTES_ZERO,
+          ),
           openedAt: primeiraSessao?.openedAt
             ? (primeiraSessao.openedAt instanceof Date ? primeiraSessao.openedAt.toISOString() : String(primeiraSessao.openedAt))
             : null,
@@ -1213,10 +1343,17 @@ export class CashService {
       totalCartaoCredito: 0, totalCartaoDebito: 0, totalCrediario: 0,
       totalValeTroca: 0, totalVendaOnline: 0,
       totalMarcados: 0, qtdMarcados: 0,
+      totalDevolucoes: 0, totalDevolucoesDinheiro: 0, totalDevolucoesPix: 0,
+      totalFrete: 0, faturamento: 0,
       totalSangrias: 0, totalSuprimentos: 0, qtdVendas: 0,
       qtdLojasAbertas: 0, qtdLojasFechadas: lojas.length,
     };
     for (const l of lojas) {
+      consolidado.totalDevolucoes += (l as any).totalDevolucoes || 0;
+      consolidado.totalDevolucoesDinheiro += (l as any).totalDevolucoesDinheiro || 0;
+      consolidado.totalDevolucoesPix += (l as any).totalDevolucoesPix || 0;
+      consolidado.totalFrete += (l as any).totalFrete || 0;
+      consolidado.faturamento += (l as any).faturamento || 0;
       consolidado.totalVendas += l.totais.totalVendas;
       consolidado.totalDinheiro += l.totais.totalDinheiro;
       consolidado.totalPix += l.totais.totalPix;

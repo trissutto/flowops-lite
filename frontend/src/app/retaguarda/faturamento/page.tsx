@@ -273,7 +273,7 @@ export default function FaturamentoPage() {
           <div className="flex-1">
             <h1 className="text-lg font-black text-slate-800">Faturamento por Loja</h1>
             <p className="text-xs text-slate-500">
-              Vendas Giga + Site Flowops · líquido de vale-troca, frete e devolução em dinheiro
+              Vendas Giga + Site Flowops · líquido de vale-troca e devolução em dinheiro · frete incluso
               {' · '}
               <span title="O critério mudou em 01/08: o vale-troca deixou de contar como venda nova, porque a peça já foi faturada na venda original. O histórico de 2025 vem do Giga, que não separa o vale do mesmo jeito — então a queda no comparativo é de régua, não de venda.">
                 comparação com ano anterior usa régua antiga ⓘ
