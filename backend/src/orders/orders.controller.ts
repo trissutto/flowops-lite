@@ -760,6 +760,9 @@ export class OrdersController {
           })
           .catch(() => {});
       }
+      // Pedido da live/loja não tem WooCommerce pra recusar nada — o cancelamento
+      // é aplicado aqui mesmo (status local + ordens de separação).
+      await this.cancelarLocalmente(wcOrderId, body.status);
       return {
         ok: true,
         id: wcOrderId,
@@ -787,6 +790,14 @@ export class OrdersController {
     const rejectedStatus = updated._flowops_statusRejected as string | undefined;
     const statusApplied = !requestedStatus || updated.status === requestedStatus;
 
+    // CANCELAR/REEMBOLSAR não é só trocar um rótulo no site: o pedido tem que
+    // SAIR DA FILA daqui e a loja tem que parar de separar. Sem isto o Flow
+    // continuava mostrando o pedido em "Processando" e a ordem de separação
+    // seguia viva na filial — alguém ia empacotar peça de pedido cancelado.
+    if (statusApplied && !rejectedStatus) {
+      await this.cancelarLocalmente(wcOrderId, requestedStatus);
+    }
+
     let warning: string | undefined;
     if (rejectedStatus) {
       warning =
@@ -811,6 +822,59 @@ export class OrdersController {
       pickOrdersCreated: ensuredPickOrders && !alreadyHadPickOrders ? ensuredPickOrders : undefined,
       pickOrdersAlreadyExisted: alreadyHadPickOrders,
     };
+  }
+
+  /**
+   * Aplica o CANCELAMENTO no Flow quando o pedido é cancelado/reembolsado.
+   *
+   * Roda depois do WooCommerce aceitar (ou direto, no caso da live/loja, que
+   * não tem WC). Faz três coisas, nesta ordem de importância:
+   *   1. o pedido sai da fila local (status 'cancelled');
+   *   2. as ordens de separação em aberto são canceladas — a loja para de
+   *      separar peça de pedido morto;
+   *   3. fica o registro no histórico do pedido.
+   *
+   * Nunca lança: o status já mudou no site, e derrubar a resposta aqui faria
+   * parecer que o cancelamento falhou.
+   */
+  private async cancelarLocalmente(wcOrderId: number, statusPedido?: string) {
+    const s = String(statusPedido || '').toLowerCase();
+    if (!['cancelled', 'canceled', 'refunded'].includes(s)) return;
+    try {
+      const local = await (this.prisma as any).order.findUnique({
+        where: { wcOrderId },
+        select: { id: true, status: true },
+      });
+      if (!local) return;
+
+      await (this.prisma as any).order.update({
+        where: { id: local.id },
+        data: { status: 'cancelled' },
+      });
+
+      // Ordens de separação que ainda não saíram: não há mais o que separar.
+      const picks = await (this.prisma as any).pickOrder.updateMany({
+        where: { orderId: local.id, status: { notIn: ['shipped', 'cancelled'] } },
+        data: { status: 'cancelled' },
+      });
+
+      await (this.prisma as any).orderHistory
+        .create({
+          data: {
+            orderId: local.id,
+            fromStatus: local.status,
+            toStatus: 'cancelled',
+            note:
+              `Pedido ${s === 'refunded' ? 'REEMBOLSADO' : 'CANCELADO'} pelo Flow` +
+              (picks.count ? ` · ${picks.count} ordem(ns) de separação cancelada(s)` : ''),
+          },
+        })
+        .catch(() => {});
+    } catch (e: any) {
+      // Não bloqueia: o cancelamento no site já valeu.
+      // eslint-disable-next-line no-console
+      console.error(`[orders] cancelarLocalmente falhou (wc=${wcOrderId}): ${e?.message || e}`);
+    }
   }
 
   /**
