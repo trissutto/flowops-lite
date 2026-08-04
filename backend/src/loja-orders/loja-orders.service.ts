@@ -4,6 +4,7 @@ import { firstValueFrom } from 'rxjs';
 import { PrismaService } from '../prisma/prisma.service';
 import { PagarmeService } from '../pagarme/pagarme.service';
 import { computePersonKeyFromCpf } from '../customers/customer-aggregation.helper';
+import { montarComplementoBairroWc, montarNumeroWc } from '../common/endereco-wc';
 
 /**
  * PEDIDO DO E-COMMERCE NOVO (sprint 011).
@@ -408,7 +409,11 @@ export class LojaOrdersService {
       first_name: partesNome[0] || '',
       last_name: partesNome.slice(1).join(' '),
       address_1: e ? [e.street, e.number].filter(Boolean).join(', ') : '',
-      address_2: e ? [e.complement, e.neighborhood].filter(Boolean).join(' - ') : '',
+      // Complemento e bairro em campos SEPARADOS. Juntos no `address_2` (como
+      // era), a etiqueta dos Correios saía com "Apto 42 - Centro" no
+      // complemento e o bairro vazio.
+      ...montarComplementoBairroWc(e?.complement, e?.neighborhood),
+      ...montarNumeroWc(e?.number),
       city: e?.city || '',
       state: (e?.uf || '').toUpperCase().slice(0, 2),
       postcode: this.digits(e?.cep),

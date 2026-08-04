@@ -11,6 +11,7 @@ import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service
 import { DceEmitService } from '../dce/dce-emit.service';
 import { NfeTransferService } from '../nfe/nfe-transfer.service';
 import { DanfePdfService } from '../nfe/danfe-pdf.service';
+import { lerComplementoBairroWc } from '../common/endereco-wc';
 
 // Lojas que despacham pelo MAIS ENVIOS (código Flow → sender id no Mais Envios).
 // As demais vão pelo Correios (CWS). Rede: Piracicaba/Sorocaba/Limeira/Moema;
@@ -669,8 +670,12 @@ export class PickOrdersService {
     }
     let uf = String(addr.state || addr.uf || '').trim().toUpperCase();
     let cidade = String(addr.city || addr.cidade || '').trim();
-    let bairro = String(addr.neighborhood || addr.bairro || '').trim();
-    const complemento = String(addr.address_2 || addr.complemento || '').trim();
+    // Complemento e bairro saem SEPARADOS — inclusive de pedido antigo, que
+    // gravou os dois juntos no `address_2` (ver common/endereco-wc.ts). Ler
+    // `address_2` cru como complemento era o que punha "Apto 42 - Centro" na
+    // etiqueta e deixava o bairro vazio.
+    const { complemento, bairro: bairroDoPedido } = lerComplementoBairroWc(addr);
+    let bairro = bairroDoPedido;
     try {
       const via: any = await this.correios.buscarCep(cep);
       if (via && !via.erro) {
@@ -734,8 +739,12 @@ export class PickOrdersService {
     }
     let uf = String(addr.state || addr.uf || '').trim().toUpperCase();
     let cidade = String(addr.city || addr.cidade || '').trim();
-    let bairro = String(addr.neighborhood || addr.bairro || '').trim();
-    const complemento = String(addr.address_2 || addr.complemento || '').trim();
+    // Complemento e bairro saem SEPARADOS — inclusive de pedido antigo, que
+    // gravou os dois juntos no `address_2` (ver common/endereco-wc.ts). Ler
+    // `address_2` cru como complemento era o que punha "Apto 42 - Centro" na
+    // etiqueta e deixava o bairro vazio.
+    const { complemento, bairro: bairroDoPedido } = lerComplementoBairroWc(addr);
+    let bairro = bairroDoPedido;
 
     // CEP-authoritative (evita RTL-076): UF/cidade/bairro do ViaCEP sobrepõem.
     try {
