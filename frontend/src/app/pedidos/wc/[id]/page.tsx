@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { api } from '@/lib/api';
+import EnderecoEntregaModal, { enderecoDoPedido } from '@/components/EnderecoEntregaModal';
 import { getSocket } from '@/lib/socket';
 import { classifyShipping } from '@/lib/shipping-method';
 import TrackingTimeline from '@/components/TrackingTimeline';
@@ -134,6 +135,7 @@ export default function PedidoDetailPage() {
   const wcId = params.id as string;
 
   const [order, setOrder] = useState<WcOrderDetail | null>(null);
+  const [editandoEndereco, setEditandoEndereco] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1166,8 +1168,30 @@ export default function PedidoDetailPage() {
 
         {/* Entrega */}
         <div className="bg-white rounded shadow p-4">
-          <h3 className="font-semibold mb-3 text-sm text-slate-600 uppercase tracking-wide">Entrega</h3>
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <h3 className="font-semibold text-sm text-slate-600 uppercase tracking-wide">Entrega</h3>
+            {/* Corrigir endereco: mesma modal da tela da loja. O endereco do
+                pedido e snapshot e a etiqueta le dele — sem isto, complemento
+                errado so se resolvia por fora do sistema. */}
+            <button
+              type="button"
+              onClick={() => setEditandoEndereco(true)}
+              className="rounded-lg border-2 border-violet-300 px-3 py-1.5 text-xs font-bold text-violet-700 hover:bg-violet-50"
+            >
+              ✎ Corrigir
+            </button>
+          </div>
           <div className="text-sm space-y-0.5 text-slate-700">
+          {editandoEndereco && (
+            <EnderecoEntregaModal
+              wcOrderId={Number(wcId)}
+              // A tela da matriz ja tem o shipping como OBJETO; a modal le o
+              // mesmo shape que o pedido guarda, entao serializa de volta.
+              inicial={enderecoDoPedido(JSON.stringify(order.shipping || {}))}
+              onFechar={() => setEditandoEndereco(false)}
+              onSalvo={() => { void load(); }}
+            />
+          )}
             <div>{order.shipping.first_name} {order.shipping.last_name}</div>
             <div>{order.shipping.address_1} {order.shipping.number ? `, ${order.shipping.number}` : ''}</div>
             {order.shipping.address_2 && <div>{order.shipping.address_2}</div>}

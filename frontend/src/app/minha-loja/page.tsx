@@ -22,6 +22,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { api } from '@/lib/api';
+import EnderecoEntregaModal, { enderecoDoPedido } from '@/components/EnderecoEntregaModal';
 import { getSocket, disconnectSocket } from '@/lib/socket';
 import { parseShippingAddress, formatPhone } from '@/lib/format-address';
 import { classifyShipping } from '@/lib/shipping-method';
@@ -181,6 +182,8 @@ export default function MinhaLojaPage() {
   >(null);
   // Filtro de aba: null = todos | 'new' | 'separating' | 'ready' (separados+ready)
   const [filterTab, setFilterTab] = useState<'new' | 'separating' | 'ready' | 'shipped' | null>(null);
+  // Pedido com o endereco aberto pra correcao (modal compartilhado com a retaguarda).
+  const [editandoEndereco, setEditandoEndereco] = useState<PickOrderRow | null>(null);
   const [toasts, setToasts] = useState<Array<{ id: string; msg: string }>>([]);
   // Badge de realinhamento: qtd de ordens pendentes (filial origem). Atualiza
   // via load inicial + socket 'realignment:new' e 'realignment:sent'.
@@ -1007,6 +1010,14 @@ export default function MinhaLojaPage() {
             }
           />
         )}
+        {editandoEndereco?.order?.wcOrderId && (
+          <EnderecoEntregaModal
+            wcOrderId={Number(editandoEndereco.order.wcOrderId)}
+            inicial={enderecoDoPedido(editandoEndereco.order.shippingAddress)}
+            onFechar={() => setEditandoEndereco(null)}
+            onSalvo={() => { pushToast("Endereço corrigido ✓"); void loadRows(); }}
+          />
+        )}
         {visibleRows.length === 0 && liveRows.length === 0 ? (
           <EmptyState />
         ) : (
@@ -1019,6 +1030,7 @@ export default function MinhaLojaPage() {
               onShip={() => setShowShippedModal(row)}
               onCorreios={() => gerarEnvioCorreios(row)}
               onReabrir={() => reabrirEnvio(row)}
+              onEditarEndereco={() => setEditandoEndereco(row)}
               onReimprimir={() => row.correiosPrepostagemId ? baixarEtiquetaCorreios(String(row.correiosPrepostagemId), row.trackingCode || 'etiqueta', row.id) : pushToast('Sem pré-postagem pra reimprimir.')}
               onMarcarEnviado={() => marcarEnviadoManual(row)}
               onPrint={() => openPrintWindow(row.id)}
@@ -1677,7 +1689,7 @@ function LiveBipModal({
 }
 
 function PickOrderCard({
-  row, onStart, onBip, onShip, onCorreios, onReabrir, onReimprimir, onMarcarEnviado, onPrint, onReportIssue, onSeen, onSwapItem,
+  row, onStart, onBip, onShip, onCorreios, onReabrir, onReimprimir, onMarcarEnviado, onPrint, onReportIssue, onSeen, onSwapItem, onEditarEndereco,
 }: {
   row: PickOrderRow;
   onStart: () => void;
@@ -1685,6 +1697,7 @@ function PickOrderCard({
   onShip: () => void;
   onCorreios: () => Promise<void> | void;
   onReabrir: () => void;
+  onEditarEndereco: () => void;
   onReimprimir: () => void;
   onMarcarEnviado: () => void;
   onPrint: () => void;
@@ -1974,8 +1987,9 @@ function PickOrderCard({
             </div>
             <div className="flex gap-1">
               <button onClick={(e) => { e.stopPropagation(); onReimprimir(); }} title="Baixa etiqueta + DANFE num PDF único" className="flex-1 bg-white border-2 border-slate-300 text-slate-800 font-semibold py-2 rounded-lg text-sm hover:bg-slate-100">🏷️ Etiqueta + NF</button>
+              <button onClick={(e) => { e.stopPropagation(); onEditarEndereco(); }} title="Corrigir o endereco antes de postar (complemento, numero, bairro)" className="flex-1 bg-white border-2 border-violet-300 text-violet-700 font-semibold py-2 rounded-lg text-sm hover:bg-violet-50">✎ Endereco</button>
               <button onClick={(e) => { e.stopPropagation(); onMarcarEnviado(); }} title="Já postei — marcar enviado agora (baixa Giga + avisa cliente)" className="flex-1 bg-emerald-600 text-white font-semibold py-2 rounded-lg text-sm hover:bg-emerald-700">✓ Já postei</button>
-              <button onClick={(e) => { e.stopPropagation(); if (confirm('Reabrir e refazer o envio? A pré-postagem atual é desfeita — cancele-a no portal dos Correios.')) onReabrir(); }} className="flex-1 bg-white border-2 border-amber-300 text-amber-700 font-semibold py-2 rounded-lg text-sm hover:bg-amber-50">↩︎ Reabrir</button>
+              <button onClick={(e) => { e.stopPropagation(); if (confirm('Refazer o envio? A etiqueta atual é CANCELADA nos Correios e uma nova é gerada com o endereço que estiver no pedido agora.')) onReabrir(); }} className="flex-1 bg-white border-2 border-amber-300 text-amber-700 font-semibold py-2 rounded-lg text-sm hover:bg-amber-50">↩︎ Reabrir</button>
             </div>
           </div>
         )}
