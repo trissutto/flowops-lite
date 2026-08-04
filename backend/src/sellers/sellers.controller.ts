@@ -39,9 +39,16 @@ export class SellersController {
     private readonly cron: SellersCronService,
   ) {}
 
+  /** `storeCode` = só as funcionárias daquela loja (origem, atuação ou chefia). */
   @Get()
-  list(@Query('includeInactive') includeInactive?: string) {
-    return this.svc.list(includeInactive === '1' || includeInactive === 'true');
+  list(
+    @Query('includeInactive') includeInactive?: string,
+    @Query('storeCode') storeCode?: string,
+  ) {
+    return this.svc.list(
+      includeInactive === '1' || includeInactive === 'true',
+      storeCode,
+    );
   }
 
   @Post()
