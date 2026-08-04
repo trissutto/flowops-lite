@@ -55,6 +55,10 @@ interface RealignmentItem {
   // desaparecer quando era a última peça.
   realignmentStatus?: string | null;
   realignmentNotFoundNote?: string | null;
+  /** TODAS as ordens desta cor+tamanho (a matriz pode ter mais de uma —
+   *  cadastro com dois códigos pra mesma peça, ou pedido em duas linhas).
+   *  Só é preenchido no item que representa a célula da grade. */
+  celula?: RealignmentItem[];
 }
 
 type ViewMode = 'pending' | 'sent';
@@ -765,8 +769,34 @@ export default function MinhaLojaRealinhamentoPage() {
               matrix[c] = {};
               for (const t of tams) matrix[c][t] = null;
             }
+            /**
+             * ⚠️ PODE HAVER MAIS DE UMA ORDEM NA MESMA CÉLULA (04/08).
+             *
+             * A matriz guardava `matrix[cor][tam] = it` — a segunda ordem da
+             * MESMA cor+tamanho sobrescrevia a primeira e ficava invisível.
+             * O estrago aparecia só no romaneio: a vendedora bipava a célula,
+             * a lista recarregava mostrando a ordem irmã (ainda pendente) como
+             * se nada tivesse sido pego, ela bipava de novo — e a caixa saía
+             * com DUAS peças iguais. Foi o caso da REM-2026-000679, VOGUE AZUL
+             * 58 e 60 duplicados.
+             *
+             * Agora a célula carrega TODAS as ordens (`celula`) e a quantidade
+             * exibida é a soma — o que está na tela é o que vai na caixa.
+             */
             for (const it of list) {
-              matrix[it.cor || '—'][it.tamanho || '—'] = it;
+              const c = it.cor || '—';
+              const t = it.tamanho || '—';
+              const atual = matrix[c][t];
+              const celula = atual ? [...(atual.celula || [atual]), it] : [it];
+              // Principal = a primeira ordem que ainda dá pra bipar; se todas
+              // já foram, a primeira mesmo (só pra rótulo/id de referência).
+              const principal =
+                celula.find((x) => !x.sentAt && x.realignmentStatus !== 'not_found') || celula[0];
+              matrix[c][t] = {
+                ...principal,
+                celula,
+                qtyOrigem: celula.reduce((a, x) => a + (x.qtyOrigem || 0), 0),
+              };
             }
             const totalQty = list.reduce((a, it) => a + it.qtyOrigem, 0);
             // Descrição: pega a primeira não-vazia (todas as variações da mesma
@@ -1894,6 +1924,19 @@ function RealignCell({
   }
 
   /**
+   * A célula pode representar MAIS DE UMA ordem da mesma cor+tamanho (ver o
+   * comentário em byDestination). Toda ação vale pro conjunto: bipar marca as
+   * que faltam, reverter devolve as que estão na caixa. Assim a tela para de
+   * mentir sobre quantas peças aquela posição pede — foi o que gerou caixa com
+   * peça duplicada.
+   */
+  const celula = item.celula && item.celula.length ? item.celula : [item];
+  const naCaixa = celula.filter((x) => x.sentAt);
+  const aPegar = celula.filter((x) => !x.sentAt && x.realignmentStatus !== 'not_found');
+  const parcial = naCaixa.length > 0 && aPegar.length > 0;
+  const qtdCelula = celula.length;
+
+  /**
    * Célula VERDE — peça já bipada. Clicável pra REVERTER o clique errado.
    *
    * A decisão é do ITEM (`sentAt`), não mais só da aba. Na aba amarela a grade
@@ -1932,8 +1975,29 @@ function RealignCell({
     );
   }
 
+  // PARCIAL: parte da célula já está na caixa e ainda falta pegar o resto.
+  // Antes esse estado não existia — a peça que faltava aparecia como se nada
+  // tivesse sido separado, e bipar de novo mandava uma peça a mais.
+  if (viewMode !== 'sent' && parcial) {
+    return (
+      <button
+        type="button"
+        onClick={() => aPegar.forEach((x) => onSend(x.id))}
+        title={
+          `${naCaixa.length} de ${qtdCelula} já na caixa · toque pra marcar ${aPegar.length > 1 ? 'as restantes' : 'a restante'}`
+        }
+        className={`${base} bg-amber-200 text-amber-900 border-2 border-emerald-500 hover:bg-amber-300 active:scale-95 cursor-pointer`}
+      >
+        <span className="tabular-nums text-base leading-none">{item.qtyOrigem}</span>
+        <span className="text-[9px] font-black leading-none mt-0.5">
+          {naCaixa.length}/{qtdCelula} na caixa
+        </span>
+      </button>
+    );
+  }
+
   if (viewMode === 'sent' || item.sentAt) {
-    const time = formatTime(item.sentAt);
+    const time = formatTime(item.sentAt || naCaixa[0]?.sentAt);
     if (reverting) {
       return (
         <div className={`${base} bg-emerald-200 text-emerald-900 border border-emerald-400`}>
@@ -1944,8 +2008,11 @@ function RealignCell({
     return (
       <button
         type="button"
-        onClick={() => onRevert(item.id)}
-        title={`Enviado às ${time || '—'} pra LJ${item.lojaDestinoCode} — toque pra REVERTER pra pendente`}
+        onClick={() => (naCaixa.length ? naCaixa : [item]).forEach((x) => onRevert(x.id))}
+        title={
+          `${qtdCelula > 1 ? `${qtdCelula} peças · ` : ''}enviado às ${time || '—'} pra LJ${item.lojaDestinoCode}` +
+          ` — toque pra REVERTER pra pendente`
+        }
         className={`${base} bg-emerald-100 text-emerald-900 border border-emerald-400 hover:bg-rose-100 hover:border-rose-400 hover:text-rose-900 active:scale-95 cursor-pointer`}
       >
         <span className="tabular-nums text-base leading-none">{item.qtyOrigem}</span>
@@ -1967,8 +2034,11 @@ function RealignCell({
     <div className={`${base} bg-amber-100 text-amber-900 border border-amber-300 hover:bg-amber-200 text-base`}>
       <button
         type="button"
-        onClick={() => onSend(item.id)}
-        title={`Marcar como ENVIEI — ${item.qtyOrigem}un`}
+        onClick={() => (aPegar.length ? aPegar : [item]).forEach((x) => onSend(x.id))}
+        title={
+          `Marcar como ENVIEI — ${item.qtyOrigem}un` +
+          (qtdCelula > 1 ? ` (${qtdCelula} ordens desta cor/tamanho)` : '')
+        }
         className="absolute inset-0 cursor-pointer active:scale-95 transition-transform rounded"
         aria-label="Marcar enviada"
       />
