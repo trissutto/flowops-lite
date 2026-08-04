@@ -209,6 +209,59 @@ export default function MarcadosPage() {
     });
   }
 
+  /**
+   * BIPE DO CÓDIGO DE BARRAS (04/08 — pedido do dono).
+   *
+   * Com a cliente na frente devolvendo 8 peças, achar cada linha na tabela e
+   * clicar no checkbox é lento e erra. Agora a vendedora passa o leitor na
+   * etiqueta e a peça se marca sozinha.
+   *
+   * O código da etiqueta é o CODIGO do Giga (mesma régua do PDV). A comparação
+   * é tolerante porque o padding de zero do Giga é inconsistente ('05342853' e
+   * '5342853' são a MESMA peça) — comparar string crua devolvia "não achei"
+   * numa peça que está ali na lista.
+   */
+  const bipeRef = useRef<HTMLInputElement | null>(null);
+  const [bipe, setBipe] = useState('');
+  const [bipeMsg, setBipeMsg] = useState<{ tipo: 'ok' | 'erro'; texto: string } | null>(null);
+  const [ultimoBipado, setUltimoBipado] = useState<number | null>(null);
+
+  /** Normaliza pra comparar: só dígitos/letras, sem zeros à esquerda. */
+  const chaveCodigo = (v: any) =>
+    String(v ?? '').trim().toUpperCase().replace(/^0+/, '');
+
+  function bipar(codigoBruto: string) {
+    const codigo = codigoBruto.trim();
+    if (!codigo || !info) return;
+    const alvo = chaveCodigo(codigo);
+    // Peças ainda NÃO marcadas primeiro: bipar a mesma etiqueta duas vezes
+    // costuma ser leitor repetindo, não duas peças iguais na sacola.
+    const candidatos = info.marcadosAtivos.filter((m) => chaveCodigo(m.CODIGO) === alvo);
+    const alvoNovo = candidatos.find((m) => !voltadas.has(m.REGISTRO));
+
+    if (!candidatos.length) {
+      setBipeMsg({
+        tipo: 'erro',
+        texto: `Código ${codigo} não está na lista deste cliente.`,
+      });
+    } else if (!alvoNovo) {
+      setBipeMsg({
+        tipo: 'erro',
+        texto: `Essa peça já está marcada como devolvida (${candidatos[0].DESCRICAO || codigo}).`,
+      });
+    } else {
+      setVoltadas((prev) => new Set(prev).add(alvoNovo.REGISTRO));
+      setUltimoBipado(alvoNovo.REGISTRO);
+      setBipeMsg({
+        tipo: 'ok',
+        texto: `✓ ${alvoNovo.DESCRICAO || codigo}`,
+      });
+    }
+    setBipe('');
+    // O leitor dispara em sequência — o foco tem que voltar sozinho.
+    setTimeout(() => bipeRef.current?.focus(), 10);
+  }
+
   function selectAll() {
     if (!info) return;
     setVoltadas(new Set(info.marcadosAtivos.map((m) => m.REGISTRO)));
@@ -494,11 +547,62 @@ export default function MarcadosPage() {
                     Marcar todas voltaram
                   </button>
                   <button
+                    onClick={() => bipeRef.current?.focus()}
+                    className="text-xs px-2 py-1 bg-white border rounded hover:bg-slate-50"
+                    title="Voltar o cursor pro campo de bipe"
+                  >
+                    📷 Bipar
+                  </button>
+                  <button
                     onClick={selectNone}
                     className="text-xs px-2 py-1 bg-white border rounded hover:bg-slate-50"
                   >
                     Desmarcar todas
                   </button>
+                </div>
+              </div>
+
+              {/* BIPE — o jeito rápido de marcar o que voltou. Fica no topo da
+                  lista e recebe o foco sozinho, então a vendedora só passa o
+                  leitor peça por peça. */}
+              <div className="px-3 py-2 border-t bg-amber-50/60">
+                <label className="block text-[10px] uppercase font-bold tracking-wider text-amber-900 mb-1">
+                  Bipe a etiqueta da peça que voltou
+                </label>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <input
+                    ref={bipeRef}
+                    value={bipe}
+                    autoFocus
+                    onChange={(e) => setBipe(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        bipar(bipe);
+                      }
+                    }}
+                    placeholder="Passe o leitor ou digite o código e dê Enter"
+                    className="flex-1 min-w-[240px] px-3 py-2 border-2 border-amber-300 rounded-lg font-mono text-sm focus:outline-none focus:border-amber-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => bipar(bipe)}
+                    disabled={!bipe.trim()}
+                    className="px-3 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-sm font-bold disabled:opacity-40"
+                  >
+                    Marcar
+                  </button>
+                  {bipeMsg && (
+                    <span
+                      className={`text-xs font-bold px-2 py-1 rounded ${
+                        bipeMsg.tipo === 'ok'
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : 'bg-rose-100 text-rose-800'
+                      }`}
+                    >
+                      {bipeMsg.texto}
+                    </span>
+                  )}
                 </div>
               </div>
 
@@ -519,7 +623,11 @@ export default function MarcadosPage() {
                   {info.marcadosAtivos.map((m) => (
                     <tr
                       key={m.REGISTRO}
-                      className={`border-t hover:bg-slate-50 cursor-pointer ${voltadas.has(m.REGISTRO) ? 'bg-rose-50' : ''}`}
+                      className={`border-t hover:bg-slate-50 cursor-pointer ${
+                        ultimoBipado === m.REGISTRO
+                          ? 'bg-emerald-100 ring-2 ring-emerald-400'
+                          : voltadas.has(m.REGISTRO) ? 'bg-rose-50' : ''
+                      }`}
                       onClick={() => toggleVoltada(m.REGISTRO)}
                     >
                       <td className="text-center p-2">
