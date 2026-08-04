@@ -102,6 +102,15 @@ type Loja = {
   checkedByName?: string | null;
   checkedNote?: string | null;
   sessionsDoDia?: string[]; // IDs das sessões do dia (modo histórico)
+  // ── RÉGUA OFICIAL DO FATURAMENTO (dono, 04/08) ──
+  // faturamento = vendido − vale-troca − devoluções(dinheiro/pix), frete DENTRO
+  // (frete é dinheiro que entrou; o que ele não faz é comissionar) e desconto
+  // já embutido no total da venda. Calculado no backend — a tela nunca refaz.
+  faturamento?: number;
+  totalDevolucoes?: number;
+  totalDevolucoesDinheiro?: number;
+  totalDevolucoesPix?: number;
+  totalFrete?: number;
   totais: {
     totalVendas: number;
     totalDinheiro: number;
@@ -146,6 +155,11 @@ type Painel = {
     totalCrediario: number;
     totalVendaOnline?: number;
     totalValeTroca?: number;
+    faturamento?: number;
+    totalDevolucoes?: number;
+    totalDevolucoesDinheiro?: number;
+    totalDevolucoesPix?: number;
+    totalFrete?: number;
     totalSangrias: number;
     totalSuprimentos: number;
     qtdVendas: number;
@@ -244,6 +258,22 @@ function resumoOnlineRede(lojas: Loja[]) {
   return ONLINE_FORMATOS
     .map((f) => ({ ...f, ...(acc.get(f.key) || { qtd: 0, valor: 0 }) }))
     .filter((f) => f.qtd > 0);
+}
+
+/**
+ * Soma das FORMAS DE PAGAMENTO (sem vale-troca — vale não é dinheiro novo,
+ * é crédito de peça devolvida cuja venda original já foi contada).
+ * Crediário entra: é venda faturada no dia, mesmo que o dinheiro entre depois.
+ */
+function somaFormas(t: any): number {
+  return (
+    (t?.totalDinheiro || 0) +
+    (t?.totalPix || 0) +
+    (t?.totalCartaoCredito || 0) +
+    (t?.totalCartaoDebito || 0) +
+    (t?.totalCrediario || 0) +
+    (t?.totalVendaOnline || 0)
+  );
 }
 
 const fmtTime = (iso: string | null) => {
@@ -503,8 +533,23 @@ export default function SuperPainelCaixas() {
             <div className="bg-gradient-to-br from-rose-600 to-rose-800 text-white rounded-2xl shadow-2xl p-6 space-y-4">
               <div className="flex items-center justify-between flex-wrap gap-3">
                 <div>
-                  <div className="text-xs uppercase tracking-wider opacity-80 font-bold">Vendas hoje · TODAS as lojas</div>
-                  <div className="text-5xl font-black tabular-nums mt-1">{brl(data.consolidado.totalVendas)}</div>
+                  <div className="text-xs uppercase tracking-wider opacity-80 font-bold">
+                    Faturamento {isLiveMode ? 'hoje' : 'do período'} · TODAS as lojas
+                  </div>
+                  <div className="text-5xl font-black tabular-nums mt-1">
+                    {brl(data.consolidado.faturamento ?? data.consolidado.totalVendas)}
+                  </div>
+                  {/* Composição da régua — o número grande é líquido, então a
+                      conta precisa estar à vista pra ninguém achar que sumiu
+                      venda. Frete NÃO abate (já está dentro do vendido). */}
+                  <div className="text-[11px] opacity-80 font-mono mt-0.5">
+                    vendido {brl(data.consolidado.totalVendas)}
+                    {(data.consolidado.totalValeTroca || 0) > 0 && <> − vale {brl(data.consolidado.totalValeTroca || 0)}</>}
+                    {(data.consolidado.totalDevolucoes || 0) > 0 && <> − devoluções {brl(data.consolidado.totalDevolucoes || 0)}</>}
+                    {(data.consolidado.totalFrete || 0) > 0 && (
+                      <span className="opacity-70"> · frete incluso {brl(data.consolidado.totalFrete || 0)}</span>
+                    )}
+                  </div>
                 </div>
                 <div className="flex flex-col gap-1 text-sm">
                   <div className="bg-white/20 px-3 py-1.5 rounded-lg flex items-center gap-2 backdrop-blur">
@@ -553,25 +598,23 @@ export default function SuperPainelCaixas() {
                 );
               })()}
 
-              {/* CONCILIACAO GLOBAL V5 (15/07) — todas as lojas
-                  Vendido liquido = totalVendas - vale_troca (vale abate, não é $)
-                  Recebido = dinheiro + pix + credito + debito + crediario + VENDA ONLINE
-                  (venda online É dinheiro recebido — só não entra na gaveta física) */}
+              {/* CONCILIACAO GERAL — régua oficial (04/08).
+                  FATURAMENTO         = vendido − vale − devoluções
+                  FORMAS DE PAGAMENTO = dinheiro + pix + cartões + crediário +
+                                        venda online − devoluções(dinheiro/pix)
+                  A devolução tem que sair dos DOIS lados: ela não reduz o
+                  pagamento da venda (sai por sangria), então sem isso o
+                  confronto virava tautologia e nunca acusava erro. */}
               {(() => {
                 const c: any = data.consolidado;
-                const valeTroca = c.totalValeTroca || 0;
-                const recebido =
-                  (c.totalDinheiro || 0) +
-                  (c.totalPix || 0) +
-                  (c.totalCartaoCredito || 0) +
-                  (c.totalCartaoDebito || 0) +
-                  (c.totalCrediario || 0) +
-                  (c.totalVendaOnline || 0);
-                const vendidoLiquido = (c.totalVendas || 0) - valeTroca;
-                const diff = Number((vendidoLiquido - recebido).toFixed(2));
+                const formas = somaFormas(c);
+                const dev = c.totalDevolucoes || 0;
+                const formasLiquidas = Number((formas - dev).toFixed(2));
+                const faturamento = Number((c.faturamento ?? ((c.totalVendas || 0) - (c.totalValeTroca || 0))).toFixed(2));
+                const diff = Number((faturamento - formasLiquidas).toFixed(2));
                 const bate = Math.abs(diff) < 0.02;
                 return (
-                  <div className={`mt-2 px-3 py-2 rounded-lg border-2 flex items-center justify-between gap-3 text-sm ${
+                  <div className={`mt-2 px-3 py-2 rounded-lg border-2 flex items-center justify-between gap-3 text-sm flex-wrap ${
                     bate
                       ? 'bg-emerald-500/20 border-emerald-300 text-white'
                       : 'bg-amber-500/30 border-amber-200 text-white'
@@ -579,13 +622,13 @@ export default function SuperPainelCaixas() {
                     <div className="font-bold uppercase tracking-wide flex items-center gap-2">
                       {bate ? '✓' : '⚠️'} CONCILIACAO GERAL
                     </div>
-                    <div className="flex items-center gap-2 font-mono">
-                      <span>Vendido <b>{brl(vendidoLiquido)}</b></span>
-                      {valeTroca > 0 && (
-                        <span className="text-[10px] opacity-80">({brl(c.totalVendas)} − vale {brl(valeTroca)})</span>
-                      )}
+                    <div className="flex items-center gap-2 font-mono flex-wrap">
+                      <span>Faturamento <b>{brl(faturamento)}</b></span>
                       <span className="opacity-70">vs</span>
-                      <span>Recebido <b>{brl(recebido)}</b></span>
+                      <span>Formas <b>{brl(formasLiquidas)}</b></span>
+                      {dev > 0 && (
+                        <span className="text-[10px] opacity-80">({brl(formas)} − devoluções {brl(dev)})</span>
+                      )}
                       {!bate && (
                         <span className="ml-2 px-2 py-0.5 bg-amber-200 text-amber-900 rounded font-black">
                           Diferenca {diff > 0 ? '+' : ''}{brl(diff)}
@@ -664,7 +707,7 @@ function LojaSelector({
         >
           {lojas.map((l) => (
             <option key={l.storeCode} value={l.storeCode}>
-              {l.storeName} ({l.storeCode}) — {brl(l.totais?.totalVendas || 0)}
+              {l.storeName} ({l.storeCode}) — {brl(l.faturamento ?? l.totais?.totalVendas ?? 0)}
             </option>
           ))}
         </select>
@@ -693,7 +736,7 @@ function LojaSelector({
               {l.aberta ? <Unlock size={10} /> : <Lock size={10} />}
               <span className="uppercase">{l.storeName}</span>
               <span className={`font-mono tabular-nums ${sel ? 'text-white' : vendeu ? 'text-emerald-700' : 'text-slate-300'}`}>
-                {brl(l.totais?.totalVendas || 0)}
+                {brl(l.faturamento ?? l.totais?.totalVendas ?? 0)}
               </span>
             </button>
           );
@@ -912,6 +955,10 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo, onDate
   const fechamentoMov = (loja.movimentos || []).find((m) => m.isFechamento) || null;
   const totalFechamento = Number(t.totalFechamento ?? fechamentoMov?.valor ?? 0);
   const formatosOnline = resumoOnlinePorFormato(loja.detalhado);
+  // Régua oficial do faturamento — vem pronta do backend (ver blocoFaturamento).
+  const valeTroca = t.totalValeTroca || 0;
+  const devolucoes = loja.totalDevolucoes || 0;
+  const faturamento = loja.faturamento ?? ((t.totalVendas || 0) - valeTroca);
   const rec = loja.recebimentosCrediario || { totalGeral: 0, totalDinheiro: 0, totalPix: 0, baixas: [] };
   const recDinheiroBaixas = rec.baixas.filter((b) => b.forma === 'dinheiro' || (b.forma === 'misto' && (b.valorDinheiro || 0) > 0));
   const recPixBaixas = rec.baixas.filter((b) => b.forma === 'pix' || (b.forma === 'misto' && (b.valorPix || 0) > 0));
@@ -1002,13 +1049,22 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo, onDate
       <div className="p-3 space-y-2">
         <div className="flex items-end justify-between">
           <div>
-            <div className="text-[10px] uppercase font-bold text-slate-500">Vendas hoje</div>
+            <div className="text-[10px] uppercase font-bold text-slate-500">Faturamento</div>
             <div className={`text-3xl font-black tabular-nums ${
               loja.aberta
                 ? 'text-emerald-700'
                 : loja.caixaFechadoComVenda ? 'text-slate-700' : 'text-slate-400'
             }`}>
-              {brl(t.totalVendas)}
+              {brl(faturamento)}
+            </div>
+            {/* Composição da régua: o número acima é líquido. */}
+            <div className="text-[10px] text-slate-500 font-mono">
+              vendido {brl(t.totalVendas)}
+              {valeTroca > 0 && <> − vale {brl(valeTroca)}</>}
+              {devolucoes > 0 && <> − devoluções {brl(devolucoes)}</>}
+              {(loja.totalFrete || 0) > 0 && (
+                <span className="text-slate-400"> · frete incluso {brl(loja.totalFrete || 0)}</span>
+              )}
             </div>
             {loja.caixaFechadoComVenda && (
               <div className="text-[10px] text-slate-500 font-semibold">
@@ -1103,21 +1159,13 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo, onDate
           </button>
         )}
 
-        {/* CONCILIACAO INLINE V5 (15/07) — Vendido liquido vs Recebido.
-            Vendido liquido = totalVendas - vale_troca (vale abate, não é $)
-            Recebido = dinheiro + pix + credito + debito + crediario + VENDA ONLINE
+        {/* CONCILIACAO INLINE — régua oficial (04/08):
+              Faturamento (vendido − vale − devoluções)
+              vs Formas de pagamento − devoluções(dinheiro/pix)
             Click leva pra /produtos-vendidos com filtro de data + loja. */}
         {t.totalVendas > 0 && (() => {
-          const valeTroca = (t as any).totalValeTroca || 0;
-          const somaModalidades =
-            (t.totalDinheiro || 0) +
-            (t.totalPix || 0) +
-            (t.totalCartaoCredito || 0) +
-            (t.totalCartaoDebito || 0) +
-            (t.totalCrediario || 0) +
-            ((t as any).totalVendaOnline || 0);
-          const vendidoLiquido = (t.totalVendas || 0) - valeTroca;
-          const diff = Number((vendidoLiquido - somaModalidades).toFixed(2));
+          const formasLiquidas = Number((somaFormas(t) - devolucoes).toFixed(2));
+          const diff = Number((faturamento - formasLiquidas).toFixed(2));
           const bate = Math.abs(diff) < 0.02;
           const concUrl = `/retaguarda/produtos-vendidos?storeCode=${encodeURIComponent(loja.storeCode)}${dateFrom ? `&from=${dateFrom}` : ''}${dateTo ? `&to=${dateTo}` : ''}`;
           return (
@@ -1134,12 +1182,12 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo, onDate
                 {bate ? '✓' : '⚠️'} Conciliacao
               </span>
               <span className="flex items-center gap-1.5">
-                <span className="font-mono">{brl(vendidoLiquido)}</span>
-                {valeTroca > 0 && (
-                  <span className="opacity-60 text-[10px]">(vale −{brl(valeTroca)})</span>
+                <span className="font-mono">{brl(faturamento)}</span>
+                <span className="opacity-60">vs formas</span>
+                <span className="font-mono">{brl(formasLiquidas)}</span>
+                {devolucoes > 0 && (
+                  <span className="opacity-60 text-[10px]">(−devol. {brl(devolucoes)})</span>
                 )}
-                <span className="opacity-60">vs</span>
-                <span className="font-mono">{brl(somaModalidades)}</span>
                 {!bate && (
                   <span className="ml-1 font-mono font-black">
                     ({diff > 0 ? '+' : ''}{brl(diff)})
