@@ -24,7 +24,7 @@
  * nunca divergem.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
@@ -82,7 +82,27 @@ const ONLINE_LABEL: Record<string, string> = {
   pix: 'PIX direto', link: 'Link externo', pagarme_link: 'Link cartão', '': 'Sem formato',
 };
 
+/**
+ * `useSearchParams()` obriga Suspense no App Router: sem a fronteira, o build
+ * de produção quebra no prerender ("Error occurred prerendering page") e o
+ * deploy inteiro falha — foi o que derrubou a Vercel em 04/08. Em dev não
+ * aparece, só no `next build`.
+ */
 export default function FechamentoCaixaPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-[#FAFAF7] flex items-center justify-center text-sm text-slate-400">
+          Carregando fechamento…
+        </div>
+      }
+    >
+      <FechamentoCaixaConteudo />
+    </Suspense>
+  );
+}
+
+function FechamentoCaixaConteudo() {
   const router = useRouter();
   const params = useSearchParams();
   const hoje = toYmd(new Date());
