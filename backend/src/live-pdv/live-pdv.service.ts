@@ -10,6 +10,7 @@ import { PagbankService } from '../pagbank/pagbank.service';
 import { ProductPhotosService } from '../product-photos/product-photos.service';
 import { RealignmentPricingService } from '../realignment/realignment-pricing.service';
 import { RealtimeGateway } from '../websocket/realtime.gateway';
+import { montarComplementoBairroWc, montarNumeroWc } from '../common/endereco-wc';
 import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service';
 import { ProductSearchService } from '../product-search/product-search.service';
 import { ManychatService } from './manychat.service';
@@ -3720,7 +3721,8 @@ export class LivePdvService {
       first_name: cart.customerName || '',
       last_name: '',
       address_1: [cart.customerEndereco, cart.customerNumero].filter(Boolean).join(', '),
-      address_2: [cart.customerComplemento, cart.customerBairro].filter(Boolean).join(' - '),
+      ...montarComplementoBairroWc(cart.customerComplemento, cart.customerBairro),
+            ...montarNumeroWc(cart.customerNumero),
       city: cart.customerCidade || '',
       state: cart.customerUf || '',
       postcode: cart.customerCep || '',
@@ -3973,7 +3975,8 @@ export class LivePdvService {
           first_name: cart.customerName || '',
           last_name: '',
           address_1: [cart.customerEndereco, cart.customerNumero].filter(Boolean).join(', '),
-          address_2: [cart.customerComplemento, cart.customerBairro].filter(Boolean).join(' - '),
+          ...montarComplementoBairroWc(cart.customerComplemento, cart.customerBairro),
+            ...montarNumeroWc(cart.customerNumero),
           city: cart.customerCidade || '',
           state: cart.customerUf || '',
           postcode: cart.customerCep || '',
