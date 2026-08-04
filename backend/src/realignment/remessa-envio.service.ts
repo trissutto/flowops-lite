@@ -151,15 +151,23 @@ export class RemessaEnvioService {
     );
   }
 
-  /** 'correios' | 'proprio' — escolhido na tela, senão regra automática
-   *  (rota própria entre lojas vizinhas; senão até 10 peças → Correios). */
+  /**
+   * 'correios' | 'proprio' — escolhido na tela, senão regra automática.
+   *
+   * REGRA ÚNICA (dono, 04/08): PRÓPRIO é SÓ o trecho do carro da rede —
+   * Itanhaém, Praia Grande e Santos, nas DUAS pontas. Todo o resto é
+   * CORREIOS com etiqueta e nota fiscal, NÃO IMPORTA quantas peças.
+   *
+   * A regra antiga "acima de 10 peças → próprio" (29/07) saiu: ela marcava
+   * como PRÓPRIO caixa grande pra loja onde o carro NÃO passa — a REM-686
+   * (Itanhaém→Vinhedo, 22 peças) ficou sem etiqueta e sem nota, com a tela
+   * mandando "trocar o transporte" que a loja não sabia trocar. Caixa grande
+   * fora da rota vai pros Correios do mesmo jeito, só custa mais caro.
+   */
   async transporteEfetivo(shipment: any): Promise<'correios' | 'proprio'> {
     const m = String(shipment?.transportMode || '');
     if (m === 'correios' || m === 'proprio') return m as any;
 
-    // Rota própria ganha da contagem de peças: o que decide aqui é o CARRO
-    // existir naquele trecho, não o tamanho da caixa. Só quando as DUAS pontas
-    // estão na rota — Itanhaém→Vinhedo continua indo pelos Correios.
     const rota = await this.lojasDaRotaPropria();
     const de = String(shipment?.fromStoreCode || '').toUpperCase();
     const para = String(shipment?.toStoreCode || '').toUpperCase();
@@ -167,13 +175,7 @@ export class RemessaEnvioService {
       this.logger.log(`[transporte] ${shipment?.code ?? ''} ${de}→${para}: rota própria (carro da rede)`);
       return 'proprio';
     }
-
-    const rows: any[] = await this.prisma.transferOrder.findMany({
-      where: { shipmentId: shipment.id, realignmentStatus: { not: 'cancelled' } } as any,
-      select: { qtyOrigem: true } as any,
-    });
-    const pecas = rows.reduce((a, r) => a + (Number(r.qtyOrigem) || 1), 0);
-    return pecas <= 10 ? 'correios' : 'proprio';
+    return 'correios';
   }
 
   /** `storeId` nulo = retaguarda (admin), que enxerga todas as remessas. */
@@ -211,8 +213,9 @@ export class RemessaEnvioService {
       return { ok: true, jaGerado: true, codigoRastreio: shipment.trackingCode, carrier: shipment.carrier };
     }
 
-    // Regra do transporte (dono 29/07): até 10 peças → CORREIOS; acima →
-    // PRÓPRIO. Override manual: transportMode (botão na tela de remessas).
+    // Regra do transporte (dono 04/08): PRÓPRIO só na rota do carro
+    // (Itanhaém/Praia Grande/Santos); resto é CORREIOS em qualquer
+    // quantidade. Override manual: transportMode (botão na tela de remessas).
     const modoTransporte = await this.transporteEfetivo(shipment);
     if (modoTransporte !== 'correios' && !opts?.forcar) {
       throw new BadRequestException('Remessa marcada como transporte PRÓPRIO — não gera etiqueta. Se for postar, troque o transporte pra CORREIOS na remessa.');
