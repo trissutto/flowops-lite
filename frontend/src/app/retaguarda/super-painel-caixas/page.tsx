@@ -4,8 +4,13 @@ import { overlayClose } from '@/lib/overlayClose';
 /**
  * /retaguarda/super-painel-caixas
  *
- * Painel ao vivo de TODAS as lojas: status do caixa, totais por modalidade,
- * ranking de vendedoras. Auto-refresh a cada 60s.
+ * Painel ao vivo das lojas: status do caixa, totais por modalidade,
+ * movimento de caixa e ranking de vendedoras. Auto-refresh a cada 60s.
+ *
+ * 04/08: passou a mostrar UMA loja por vez (seleção pelo nome) em vez de um
+ * grid com todos os cards — o movimento de caixa não cabia numa coluna de 1/3
+ * de tela. O card selecionado ocupa a largura toda e traz o próprio filtro de
+ * data (Hoje / Ontem / Livre).
  */
 
 import { useEffect, useState, useRef } from 'react';
@@ -14,7 +19,7 @@ import Link from 'next/link';
 import {
   ArrowLeft, RefreshCw, Loader2, AlertCircle, Banknote, QrCode, CreditCard,
   TrendingUp, Lock, Unlock, Trophy, ShieldCheck, ShieldAlert, ShieldX, HelpCircle,
-  ChevronDown, ChevronUp,
+  ChevronDown, ChevronUp, Globe, Store,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -41,6 +46,9 @@ type Detalhado = {
     MASTERCARD: Slot; VISANET: Slot; CIELO: Slot; ELO: Slot; AMEX: Slot; HIPERCARD: Slot;
     VISA_ELECTRON: Slot; REDE_SHOP: Slot; ELO_DEBITO?: Slot;
     CREDITO_GENERICO: Slot; DEBITO_GENERICO: Slot; OUTROS: Slot;
+    // Venda online (WhatsApp/Instagram): dinheiro recebido que não passa pela
+    // gaveta. Estava no payload mas não tinha card no painel.
+    VENDA_ONLINE?: Slot; VALE_TROCA?: Slot;
   };
 };
 type Vendedora = { nome: string; qtd: number; total: number };
@@ -51,6 +59,10 @@ type Movimento = {
   motivo: string;
   userName: string | null;
   createdAt: string;
+  // Retirada de FECHAMENTO: sangria gerada na abertura do caixa seguinte com o
+  // valor contado. Fica FORA de totalSangrias — é o dinheiro que virou fundo do
+  // dia seguinte, não uma saída operacional.
+  isFechamento?: boolean;
 };
 type BaixaCrediario = {
   id: string;
@@ -93,8 +105,11 @@ type Loja = {
     totalCartaoCredito: number;
     totalCartaoDebito: number;
     totalCrediario: number;
+    totalVendaOnline?: number;
+    totalValeTroca?: number;
     totalSangrias: number;
     totalSuprimentos: number;
+    totalFechamento?: number;   // retirada de fechamento (contagem da abertura seguinte)
     dinheiroEsperado: number;
     qtdVendas: number;
   };
@@ -125,6 +140,8 @@ type Painel = {
     totalCartaoCredito: number;
     totalCartaoDebito: number;
     totalCrediario: number;
+    totalVendaOnline?: number;
+    totalValeTroca?: number;
     totalSangrias: number;
     totalSuprimentos: number;
     qtdVendas: number;
@@ -212,6 +229,9 @@ export default function SuperPainelCaixas() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [pixConc, setPixConc] = useState<Record<string, PixConcStatus>>({});
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  // UMA loja por vez (04/08): abrir 12 cards espremia o movimento de caixa em
+  // coluna estreita. Escolhe pelo nome e o card ocupa a largura toda.
+  const [storeSel, setStoreSel] = useState<string>('');
 
   // Quem pode EDITAR no painel (bandeira, ajustes master, conferir sessão).
   // 15/07: papéis de franquia editam igual admin — o backend escopa às FILIAIS.
@@ -307,6 +327,20 @@ export default function SuperPainelCaixas() {
     const t = setInterval(() => setSecsToRefresh((s) => Math.max(0, s - 1)), 1000);
     return () => clearInterval(t);
   }, []);
+
+  // Mantém a loja selecionada válida: na 1ª carga escolhe a que mais vendeu
+  // (a que o dono normalmente quer olhar); se a loja sumir da lista, cai na 1ª.
+  useEffect(() => {
+    if (!data?.lojas?.length) return;
+    if (storeSel && data.lojas.some((l) => l.storeCode === storeSel)) return;
+    const maisVendeu = [...data.lojas].sort(
+      (a, b) => (b.totais?.totalVendas || 0) - (a.totais?.totalVendas || 0),
+    )[0];
+    setStoreSel(maisVendeu?.storeCode || data.lojas[0].storeCode);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data]);
+
+  const lojaSelecionada = data?.lojas?.find((l) => l.storeCode === storeSel) || null;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
@@ -442,12 +476,15 @@ export default function SuperPainelCaixas() {
                 </div>
               </div>
               {/* Breakdown consolidado */}
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 pt-2 border-t border-white/20">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 pt-2 border-t border-white/20">
                 <ConsolidadoItem label="Dinheiro" valor={data.consolidado.totalDinheiro} icon={<Banknote size={14} />} />
                 <ConsolidadoItem label="PIX" valor={data.consolidado.totalPix} icon={<QrCode size={14} />} />
                 <ConsolidadoItem label="Cartão Crédito" valor={data.consolidado.totalCartaoCredito} icon={<CreditCard size={14} />} />
                 <ConsolidadoItem label="Cartão Débito" valor={data.consolidado.totalCartaoDebito} icon={<CreditCard size={14} />} />
                 <ConsolidadoItem label="Crediário" valor={data.consolidado.totalCrediario} icon={<TrendingUp size={14} />} />
+                {/* Venda online (WhatsApp/Insta): entra no Recebido da conciliação
+                    mas não passa pela gaveta — por isso card próprio. */}
+                <ConsolidadoItem label="Venda Online" valor={data.consolidado.totalVendaOnline || 0} icon={<Globe size={14} />} />
               </div>
 
               {/* CONCILIACAO GLOBAL V5 (15/07) — todas as lojas
@@ -504,12 +541,29 @@ export default function SuperPainelCaixas() {
                 quanto cada loja tem NA GAVETA agora/naquele dia. */}
             <DinheiroEmCaixaTable lojas={data.lojas} />
 
-            {/* Grid de lojas */}
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-              {data.lojas.map((l) => (
-                <LojaCard key={l.storeCode} loja={l} isAdmin={isAdmin} pixStatus={pixConc[l.storeCode]} onReload={() => load(true)} dateFrom={filterFrom} dateTo={filterTo} />
-              ))}
-            </div>
+            {/* Seleção da loja — uma por vez, card em largura total */}
+            <LojaSelector
+              lojas={data.lojas}
+              value={storeSel}
+              onChange={setStoreSel}
+            />
+
+            {lojaSelecionada ? (
+              <LojaCard
+                key={lojaSelecionada.storeCode}
+                loja={lojaSelecionada}
+                isAdmin={isAdmin}
+                pixStatus={pixConc[lojaSelecionada.storeCode]}
+                onReload={() => load(true)}
+                dateFrom={filterFrom}
+                dateTo={filterTo}
+                onDateRange={(from, to) => { setFilterFrom(from); setFilterTo(to); }}
+              />
+            ) : (
+              <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-sm text-slate-500">
+                Escolha uma loja acima pra ver o movimento de caixa.
+              </div>
+            )}
 
             {/* Footer */}
             <div className="text-center text-[10px] text-slate-400 pt-2">
@@ -517,6 +571,67 @@ export default function SuperPainelCaixas() {
             </div>
           </>
         )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Seleção da loja pelo NOME. Dropdown (busca rápida no teclado) + atalhos com
+ * status do caixa e venda do dia — dá pra comparar as lojas sem abrir todos os
+ * cards, que era o que espremia o movimento de caixa.
+ */
+function LojaSelector({
+  lojas, value, onChange,
+}: { lojas: Loja[]; value: string; onChange: (code: string) => void }) {
+  const abertas = lojas.filter((l) => l.aberta).length;
+  return (
+    <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-3 space-y-2">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-xs font-bold uppercase tracking-wider text-slate-600 flex items-center gap-1">
+          <Store size={14} /> Loja
+        </span>
+        <select
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className="px-3 py-1.5 border border-slate-300 rounded-lg text-sm font-bold text-slate-800 bg-white min-w-[240px] focus:ring-2 focus:ring-rose-300"
+        >
+          {lojas.map((l) => (
+            <option key={l.storeCode} value={l.storeCode}>
+              {l.storeName} ({l.storeCode}) — {brl(l.totais?.totalVendas || 0)}
+            </option>
+          ))}
+        </select>
+        <span className="text-[11px] text-slate-400">
+          {lojas.length} loja{lojas.length !== 1 ? 's' : ''} · {abertas} com caixa aberto
+        </span>
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {lojas.map((l) => {
+          const sel = l.storeCode === value;
+          const vendeu = (l.totais?.totalVendas || 0) > 0;
+          return (
+            <button
+              key={l.storeCode}
+              type="button"
+              onClick={() => onChange(l.storeCode)}
+              className={`flex items-center gap-1.5 px-2 py-1 rounded-lg border text-[11px] font-bold transition ${
+                sel
+                  ? 'bg-rose-600 border-rose-700 text-white shadow'
+                  : vendeu
+                    ? 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-rose-50 hover:border-rose-300'
+                    : 'bg-slate-50 border-slate-200 text-slate-400 hover:bg-slate-100'
+              }`}
+              title={`${l.storeName} · ${l.aberta ? 'caixa aberto' : 'caixa fechado'}`}
+            >
+              {l.aberta ? <Unlock size={10} /> : <Lock size={10} />}
+              <span className="uppercase">{l.storeName}</span>
+              <span className={`font-mono tabular-nums ${sel ? 'text-white' : vendeu ? 'text-emerald-700' : 'text-slate-300'}`}>
+                {brl(l.totais?.totalVendas || 0)}
+              </span>
+            </button>
+          );
+        })}
       </div>
     </div>
   );
@@ -640,9 +755,79 @@ function DinheiroEmCaixaTable({ lojas }: { lojas: Loja[] }) {
   );
 }
 
-function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo }: { loja: Loja; isAdmin?: boolean; pixStatus?: PixConcStatus; onReload?: () => void; dateFrom?: string; dateTo?: string }) {
-  // Ranking colapsado por padrão pra economizar espaço (default false = fechado)
-  const [rankingOpen, setRankingOpen] = useState(false);
+/**
+ * Filtro de data DENTRO do card da loja: Hoje · Ontem · Livre (De/Até).
+ * Hoje = modo ao vivo (polling); qualquer outra data cai no histórico.
+ */
+function CardDateFilter({
+  dateFrom, dateTo, onDateRange,
+}: { dateFrom?: string; dateTo?: string; onDateRange: (from: string, to: string) => void }) {
+  const hoje = todayYmd();
+  const ontemDate = new Date();
+  ontemDate.setDate(ontemDate.getDate() - 1);
+  const ontem = toYmd(ontemDate);
+  const modo: 'hoje' | 'ontem' | 'livre' =
+    dateFrom === hoje && dateTo === hoje ? 'hoje'
+      : dateFrom === ontem && dateTo === ontem ? 'ontem'
+        : 'livre';
+  const [livreAberto, setLivreAberto] = useState(false);
+  const mostrarInputs = livreAberto || modo === 'livre';
+
+  const btn = (ativo: boolean) =>
+    `px-3 py-1 rounded-lg text-xs font-bold transition border ${
+      ativo
+        ? 'bg-slate-800 border-slate-900 text-white shadow'
+        : 'bg-white border-slate-300 text-slate-600 hover:bg-slate-100'
+    }`;
+
+  return (
+    <div className="px-3 py-2 bg-slate-50 border-b border-slate-200 flex items-center gap-2 flex-wrap">
+      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Período</span>
+      <button type="button" className={btn(modo === 'hoje')}
+        onClick={() => { setLivreAberto(false); onDateRange(hoje, hoje); }}>
+        Hoje
+      </button>
+      <button type="button" className={btn(modo === 'ontem')}
+        onClick={() => { setLivreAberto(false); onDateRange(ontem, ontem); }}>
+        Ontem
+      </button>
+      <button type="button" className={btn(mostrarInputs)}
+        onClick={() => setLivreAberto((v) => !v)}>
+        Livre
+      </button>
+      {mostrarInputs && (
+        <div className="flex items-center gap-1.5">
+          <label className="text-[10px] text-slate-500">De</label>
+          <input
+            type="date"
+            value={dateFrom || hoje}
+            max={dateTo || hoje}
+            onChange={(e) => onDateRange(e.target.value, dateTo || e.target.value)}
+            className="px-2 py-1 border border-slate-300 rounded-lg text-xs font-mono"
+          />
+          <label className="text-[10px] text-slate-500">até</label>
+          <input
+            type="date"
+            value={dateTo || hoje}
+            min={dateFrom || undefined}
+            max={hoje}
+            onChange={(e) => onDateRange(dateFrom || e.target.value, e.target.value)}
+            className="px-2 py-1 border border-slate-300 rounded-lg text-xs font-mono"
+          />
+        </div>
+      )}
+      {modo !== 'hoje' && (
+        <span className="ml-auto text-[10px] font-bold text-amber-700 bg-amber-100 border border-amber-300 rounded px-2 py-0.5">
+          histórico · sem refresh automático
+        </span>
+      )}
+    </div>
+  );
+}
+
+function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo, onDateRange }: { loja: Loja; isAdmin?: boolean; pixStatus?: PixConcStatus; onReload?: () => void; dateFrom?: string; dateTo?: string; onDateRange?: (from: string, to: string) => void }) {
+  // Card ocupa a largura toda (uma loja por vez) — ranking já abre expandido.
+  const [rankingOpen, setRankingOpen] = useState(true);
   const reload = () => { if (onReload) onReload(); };
   const t = loja.totais;
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -653,8 +838,13 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo }: { lo
   const [masterModal, setMasterModal] = useState(false);
   // Lançamento (sangria/suprimento) em edição no modal master (editar/excluir).
   const [editMov, setEditMov] = useState<Movimento | null>(null);
-  const sangriasList = (loja.movimentos || []).filter((m) => m.tipo === 'sangria');
+  // A retirada de FECHAMENTO sai da lista de sangrias operacionais e ganha
+  // linha própria — ela não é uma saída do dia, é o dinheiro contado na manhã
+  // seguinte que virou fundo do caixa novo.
+  const sangriasList = (loja.movimentos || []).filter((m) => m.tipo === 'sangria' && !m.isFechamento);
   const suprimentosList = (loja.movimentos || []).filter((m) => m.tipo === 'suprimento');
+  const fechamentoMov = (loja.movimentos || []).find((m) => m.isFechamento) || null;
+  const totalFechamento = Number(t.totalFechamento ?? fechamentoMov?.valor ?? 0);
   const rec = loja.recebimentosCrediario || { totalGeral: 0, totalDinheiro: 0, totalPix: 0, baixas: [] };
   const recDinheiroBaixas = rec.baixas.filter((b) => b.forma === 'dinheiro' || (b.forma === 'misto' && (b.valorDinheiro || 0) > 0));
   const recPixBaixas = rec.baixas.filter((b) => b.forma === 'pix' || (b.forma === 'misto' && (b.valorPix || 0) > 0));
@@ -704,6 +894,12 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo }: { lo
           )}
         </div>
       </div>
+      {/* Filtro de data DO CARD — Hoje / Ontem / Livre. Mexe no mesmo período
+          que o painel carrega (uma loja por vez, então não há conflito). */}
+      {onDateRange && (
+        <CardDateFilter dateFrom={dateFrom} dateTo={dateTo} onDateRange={onDateRange} />
+      )}
+
       {masterModal && (
         <MasterAdjustModal
           loja={loja}
@@ -762,7 +958,7 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo }: { lo
         </div>
 
         {/* Breakdown por modalidade — clicável pra expandir cascade */}
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-1 pt-2 border-t border-slate-200">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-1 pt-2 border-t border-slate-200">
           <ModItem label="Dinheiro" valor={t.totalDinheiro} cor="emerald"
             active={expanded === 'dinheiro'}
             onClick={loja.detalhado && t.totalDinheiro > 0 ? () => setExpanded(expanded === 'dinheiro' ? null : 'dinheiro') : undefined} />
@@ -779,6 +975,11 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo }: { lo
           <ModItem label="Crediário" valor={t.totalCrediario} cor="rose"
             active={expanded === 'crediario'}
             onClick={loja.detalhado && t.totalCrediario > 0 ? () => setExpanded(expanded === 'crediario' ? null : 'crediario') : undefined} />
+          {/* VENDA ONLINE (WhatsApp/Instagram): já entrava na conciliação como
+              recebido, mas não tinha card — a modalidade ficava invisível. */}
+          <ModItem label="Venda Online" valor={t.totalVendaOnline || 0} cor="violet"
+            active={expanded === 'venda_online'}
+            onClick={loja.detalhado && (t.totalVendaOnline || 0) > 0 ? () => setExpanded(expanded === 'venda_online' ? null : 'venda_online') : undefined} />
         </div>
 
         {/* CONCILIACAO INLINE V5 (15/07) — Vendido liquido vs Recebido.
@@ -855,8 +1056,10 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo }: { lo
           />
         )}
 
+        {/* Card em largura total: caixa à esquerda, ranking à direita */}
+        <div className="grid lg:grid-cols-2 gap-x-4 gap-y-2 items-start">
         {/* Bloco financeiro do caixa: fundo, dinheiro fim de dia, conferência */}
-        {(loja.aberta || t.totalSangrias > 0 || t.totalSuprimentos > 0 || loja.fundoTroco > 0 || t.totalDinheiro > 0) && (
+        {(loja.aberta || t.totalSangrias > 0 || t.totalSuprimentos > 0 || loja.fundoTroco > 0 || t.totalDinheiro > 0 || totalFechamento > 0) && (
           <div className="pt-1 border-t border-slate-100 space-y-1">
             {/* Fundo do caixa — agora SEMPRE aparece (inclusive dias anteriores) */}
             <div className="flex justify-between text-[11px] text-slate-700">
@@ -869,6 +1072,28 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo }: { lo
               <div className="flex justify-between text-[11px] text-emerald-800 bg-emerald-50 rounded px-1.5 py-1">
                 <span className="font-bold">💰 Dinheiro fim de dia (fundo + vendas - sangrias + suprimentos)</span>
                 <span className="font-mono tabular-nums font-bold">{brl(t.dinheiroEsperado)}</span>
+              </div>
+            )}
+            {/* RETIRADA DE FECHAMENTO — gerada automaticamente quando a loja
+                abriu o caixa seguinte e digitou o dinheiro contado. É o
+                fechamento deste dia: o valor saiu daqui e virou o fundo do
+                próximo caixa. Fica fora de "Sangria" pra não virar despesa. */}
+            {totalFechamento > 0 && (
+              <div className="text-[11px] text-violet-900 bg-violet-50 border border-violet-200 rounded px-1.5 py-1 space-y-0.5">
+                <div className="flex justify-between">
+                  <span className="font-bold">🔒 Fechamento do dia (retirada automática)</span>
+                  <span className="font-mono tabular-nums font-bold">{brl(totalFechamento)}</span>
+                </div>
+                <div className="flex justify-between text-[10px] text-violet-700">
+                  <span className="italic truncate">
+                    {fechamentoMov?.userName
+                      ? `contado por ${fechamentoMov.userName}`
+                      : 'contagem feita na abertura do dia seguinte'}
+                  </span>
+                  <span className="font-mono">
+                    sobra em caixa {brl(Math.round(((t.dinheiroEsperado || 0) - totalFechamento) * 100) / 100)}
+                  </span>
+                </div>
               </div>
             )}
             {/* Conferência: badge se já conferido OU botão pra marcar */}
@@ -1123,7 +1348,7 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo }: { lo
             </button>
             {rankingOpen && (
               <div className="space-y-0.5 mt-1">
-                {loja.vendedoras.slice(0, 5).map((v, i) => (
+                {loja.vendedoras.slice(0, 10).map((v, i) => (
                   <div key={i} className="flex items-center justify-between text-[11px]">
                     <span className="font-bold text-slate-700 truncate flex items-center gap-1">
                       {i === 0 && <span className="text-amber-500">🏆</span>}
@@ -1138,18 +1363,20 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo }: { lo
             )}
           </div>
         )}
+        </div>
       </div>
     </div>
   );
 }
 
-function ModItem({ label, valor, cor, onClick, active, badge }: { label: string; valor: number; cor: 'emerald' | 'cyan' | 'blue' | 'indigo' | 'rose'; onClick?: () => void; active?: boolean; badge?: React.ReactNode }) {
+function ModItem({ label, valor, cor, onClick, active, badge }: { label: string; valor: number; cor: 'emerald' | 'cyan' | 'blue' | 'indigo' | 'rose' | 'violet'; onClick?: () => void; active?: boolean; badge?: React.ReactNode }) {
   const tones = {
     emerald: 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100 hover:border-emerald-300',
     cyan: 'bg-cyan-50 text-cyan-800 border-cyan-200 hover:bg-cyan-100 hover:border-cyan-300',
     blue: 'bg-blue-50 text-blue-800 border-blue-200 hover:bg-blue-100 hover:border-blue-300',
     indigo: 'bg-indigo-50 text-indigo-800 border-indigo-200 hover:bg-indigo-100 hover:border-indigo-300',
     rose: 'bg-rose-50 text-rose-800 border-rose-200 hover:bg-rose-100 hover:border-rose-300',
+    violet: 'bg-violet-50 text-violet-800 border-violet-200 hover:bg-violet-100 hover:border-violet-300',
   };
   const tonesActive = {
     emerald: 'bg-emerald-600 text-white border-emerald-700 shadow-md',
@@ -1157,6 +1384,7 @@ function ModItem({ label, valor, cor, onClick, active, badge }: { label: string;
     blue: 'bg-blue-600 text-white border-blue-700 shadow-md',
     indigo: 'bg-indigo-600 text-white border-indigo-700 shadow-md',
     rose: 'bg-rose-600 text-white border-rose-700 shadow-md',
+    violet: 'bg-violet-600 text-white border-violet-700 shadow-md',
   };
   const ativo = valor > 0;
   const cls = active ? tonesActive[cor] : (ativo ? tones[cor] : 'bg-slate-50 border-slate-200 text-slate-400');
@@ -1197,6 +1425,9 @@ function CascadeModalidade({
   }
   if (modalidade === 'crediario') {
     return <ListaVendas vendas={detalhado.totais.CREDIARIO.vendas} modalidadeAtual="crediario" isAdmin={isAdmin} onEditBandeira={onEditBandeira} />;
+  }
+  if (modalidade === 'venda_online') {
+    return <ListaVendas vendas={detalhado.totais.VENDA_ONLINE?.vendas || []} modalidadeAtual="venda_online" isAdmin={isAdmin} onEditBandeira={onEditBandeira} />;
   }
 
   // Cartão crédito ou débito — agrupa por bandeira

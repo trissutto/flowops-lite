@@ -95,8 +95,15 @@ export class CashService {
     // Movimentações de caixa (sangria/suprimento)
     let totalSangrias = 0;
     let totalSuprimentos = 0;
+    let totalFechamento = 0;
     for (const m of (session.movements || []) as any[]) {
       const v = Number(m.valor) || 0;
+      // Retirada de FECHAMENTO (gerada na abertura do dia seguinte): é o
+      // registro de que o dinheiro saiu da gaveta e virou fundo do próximo
+      // caixa. Fica FORA de totalSangrias/dinheiroEsperado — o esperado tem
+      // que continuar sendo o que havia na gaveta ANTES da retirada, senão a
+      // conferência (físico × esperado) se compara consigo mesma e zera.
+      if (m.isFechamento) { totalFechamento += v; continue; }
       if (m.tipo === 'sangria') totalSangrias += v;
       else if (m.tipo === 'suprimento') totalSuprimentos += v;
     }
@@ -154,6 +161,8 @@ export class CashService {
       qtdMarcados,
       totalSangrias,
       totalSuprimentos,
+      // Retirada de fechamento do dia (ver loop acima) — só pra exibição.
+      totalFechamento,
       // Crediário recebido em dinheiro que já ESTÁ somado no dinheiroEsperado —
       // exposto pra tela poder mostrar a linha no detalhamento do esperado.
       totalRecebimentosDinheiro: recebimentosDinheiro,
@@ -394,8 +403,10 @@ export class CashService {
     });
     let totalSangrias = 0;
     let totalSuprimentos = 0;
+    let totalFechamento = 0;
     for (const m of movements as any[]) {
       const v = Number(m.valor) || 0;
+      if (m.isFechamento) { totalFechamento += v; continue; } // ver computeSessionTotals
       if (m.tipo === 'sangria') totalSangrias += v;
       else if (m.tipo === 'suprimento') totalSuprimentos += v;
     }
@@ -457,6 +468,7 @@ export class CashService {
         qtdRecebimentosPix: recebimentosPix.qtd,
         totalSangrias,
         totalSuprimentos,
+        totalFechamento,
         dinheiroEsperado: dinheiroEsperadoComRecebimentos,
         dinheiroEsperadoSoVendas: dinheiroEsperado,
         qtdVendas,
@@ -466,6 +478,7 @@ export class CashService {
         tipo: m.tipo,
         valor: Number(m.valor) || 0,
         observacao: m.observacao,
+        isFechamento: !!m.isFechamento,
         createdAt: m.createdAt,
       })),
       generatedAt: new Date(),
@@ -729,7 +742,7 @@ export class CashService {
           orderBy: { createdAt: 'desc' },
           select: {
             id: true, tipo: true, valor: true, motivo: true,
-            userName: true, createdAt: true,
+            userName: true, createdAt: true, isFechamento: true,
           },
         });
         const movimentos = (movimentosRaw as any[]).map((m) => ({
@@ -738,6 +751,7 @@ export class CashService {
           valor: Number(m.valor) || 0,
           motivo: m.motivo || '',
           userName: m.userName || null,
+          isFechamento: !!m.isFechamento,
           createdAt: m.createdAt instanceof Date ? m.createdAt.toISOString() : String(m.createdAt),
         }));
 
@@ -811,6 +825,7 @@ export class CashService {
             totalValeTroca: t.totalValeTroca,
             totalSangrias: t.totalSangrias,
             totalSuprimentos: t.totalSuprimentos,
+            totalFechamento: t.totalFechamento,
             dinheiroEsperado: t.dinheiroEsperado,
             qtdVendas: t.qtdVendas,
           },
@@ -1074,7 +1089,7 @@ export class CashService {
           } as any,
           orderBy: { openedAt: 'asc' },
         });
-        let totalSangrias = 0, totalSuprimentos = 0;
+        let totalSangrias = 0, totalSuprimentos = 0, totalFechamento = 0;
         const movimentos: any[] = [];
         // FUNDO DO DIA = fundo da PRIMEIRA sessão (fix 02/07). Antes SOMAVA
         // os fundos de todas as sessões — mas reabertura de caixa carrega o
@@ -1091,15 +1106,17 @@ export class CashService {
           const movs = await (this.prisma as any).pdvCashMovement.findMany({
             where: { cashSessionId: { in: sessions.map((x: any) => x.id) } },
             orderBy: { createdAt: 'desc' },
-            select: { id: true, tipo: true, valor: true, motivo: true, userName: true, createdAt: true },
+            select: { id: true, tipo: true, valor: true, motivo: true, userName: true, createdAt: true, isFechamento: true },
           });
           for (const m of movs as any[]) {
             const v = Number(m.valor) || 0;
-            if (m.tipo === 'sangria') totalSangrias += v;
+            if (m.isFechamento) totalFechamento += v;          // ver computeSessionTotals
+            else if (m.tipo === 'sangria') totalSangrias += v;
             else if (m.tipo === 'suprimento') totalSuprimentos += v;
             movimentos.push({
               id: m.id, tipo: m.tipo, valor: v, motivo: m.motivo || '',
               userName: m.userName || null,
+              isFechamento: !!m.isFechamento,
               createdAt: m.createdAt instanceof Date ? m.createdAt.toISOString() : String(m.createdAt),
             });
           }
@@ -1148,6 +1165,7 @@ export class CashService {
             qtdMarcados,
             totalSangrias,
             totalSuprimentos,
+            totalFechamento,
             dinheiroEsperado: dinheiroEsperadoFimDia,
             qtdVendas: qtdVendasReais,
           },
@@ -1198,6 +1216,75 @@ export class CashService {
   }
 
   // ── Abertura ────────────────────────────────────────────────────────
+
+  /**
+   * RETIRADA DE FECHAMENTO do dia anterior (04/08 — pedido do dono).
+   *
+   * As lojas NÃO fecham o caixa no mesmo dia: a vendedora vai embora rápido e
+   * por segurança a contagem fica pro dia seguinte. Como ninguém mexe na gaveta
+   * de noite, a contagem da ABERTURA é, por definição, o FECHAMENTO da véspera
+   * — contar duas vezes não faria sentido.
+   *
+   * Então, com o valor digitado na abertura, gravamos na sessão do dia anterior
+   * uma sangria `FECHAMENTO`: o registro de que aquele dinheiro saiu daquele
+   * caixa e entrou como fundo do caixa de hoje. É a mesma "retirada final" que
+   * o Wincred gera ao abrir o caixa.
+   *
+   * Marcada com `isFechamento` pra ficar FORA de `totalSangrias` e do
+   * `dinheiroEsperado` — o esperado precisa continuar sendo o que havia na
+   * gaveta ANTES da retirada, senão ele se anularia contra a própria contagem
+   * e a conferência do dia perderia o número que hoje é batido com o Wincred.
+   *
+   * Idempotente: uma retirada de fechamento por sessão (reabertura no mesmo dia
+   * não duplica).
+   */
+  private async registrarSangriaFechamento(input: {
+    sessionId: string;
+    storeCode: string;
+    valor: number;
+    userName?: string | null;
+  }): Promise<any | null> {
+    const valor = Number(input.valor);
+    if (!(valor > 0)) return null; // caixa contado zerado — nada a retirar
+
+    try {
+      const jaExiste = await (this.prisma as any).pdvCashMovement.findFirst({
+        where: { cashSessionId: input.sessionId, isFechamento: true },
+      });
+      if (jaExiste) {
+        this.logger.log(
+          `[caixa] fechamento ja registrado na sessao ${input.sessionId} ` +
+          `(movimento ${jaExiste.id}, R$${Number(jaExiste.valor).toFixed(2)}) — nao duplica`,
+        );
+        return jaExiste;
+      }
+
+      const movement = await (this.prisma as any).pdvCashMovement.create({
+        data: {
+          cashSessionId: input.sessionId,
+          tipo: 'sangria',
+          valor,
+          motivo: 'FECHAMENTO',
+          userId: null,
+          userName: input.userName
+            ? `${input.userName} (contagem na abertura)`
+            : 'SISTEMA (contagem na abertura)',
+          isFechamento: true,
+        },
+      });
+      this.logger.log(
+        `[caixa] FECHAMENTO (retirada auto): loja=${input.storeCode} sessao=${input.sessionId} ` +
+        `R$${valor.toFixed(2)} por ${input.userName || 'sistema'}`,
+      );
+      return movement;
+    } catch (e: any) {
+      // Registro contábil — não pode impedir a loja de abrir o caixa e vender.
+      this.logger.warn(
+        `[caixa] falha ao gerar retirada de FECHAMENTO (sessao=${input.sessionId}): ${e?.message || e}`,
+      );
+      return null;
+    }
+  }
 
   /**
    * Abre uma nova sessão de caixa. Se já tiver uma sessão `open`, recusa.
@@ -1266,6 +1353,15 @@ export class CashService {
               diferenca,
             },
           });
+          // Retirada de FECHAMENTO do dia anterior com o valor contado agora.
+          // Depois do update: o `dinheiroEsperado` gravado acima é o de ANTES
+          // da retirada, que é o que a conferência compara com o físico.
+          const movFechamento = await this.registrarSangriaFechamento({
+            sessionId: existing.id,
+            storeCode,
+            valor: fisicoContado,
+            userName: openedByName,
+          });
           autoClosedInfo = {
             sessionId: existing.id,
             openedAt: existing.openedAt,
@@ -1273,6 +1369,7 @@ export class CashService {
             dinheiroEsperado: totals.dinheiroEsperado,
             dinheiroFisico: fisicoContado,
             diferenca,
+            fechamentoMovementId: movFechamento?.id || null,
           };
           this.logger.log(
             `[caixa] FECHA-COM-CONTAGEM: loja=${storeCode} sessao=${existing.id} ` +
@@ -1325,12 +1422,22 @@ export class CashService {
                 : `Contagem registrada na abertura do dia seguinte em ${new Date().toLocaleString('pt-BR')} por ${openedByName || 'sistema'}: Físico R$ ${fisicoContado.toFixed(2)} | Esperado R$ ${esperado.toFixed(2)} | Diferença R$ ${diferenca.toFixed(2)}.`,
             },
           });
+          // Mesma retirada de FECHAMENTO do caminho de auto-close: aqui a
+          // sessão do dia anterior já estava fechada (sem contagem) e é a
+          // abertura de hoje que traz o valor contado.
+          const movFechamento = await this.registrarSangriaFechamento({
+            sessionId: ultimaFechada.id,
+            storeCode,
+            valor: fisicoContado,
+            userName: openedByName,
+          });
           contagemRetroativa = {
             sessionId: ultimaFechada.id,
             closedAt: ultimaFechada.closedAt,
             dinheiroEsperado: esperado,
             dinheiroFisico: fisicoContado,
             diferenca,
+            fechamentoMovementId: movFechamento?.id || null,
           };
           this.logger.log(
             `[caixa] CONTAGEM-RETROATIVA: loja=${storeCode} sessao=${ultimaFechada.id} ` +

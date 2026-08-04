@@ -1657,6 +1657,15 @@ model PdvCashMovement {
   // ── MODO TREINAMENTO ──
   isTraining    Boolean  @default(false) @map("is_training")
 
+  // RETIRADA DE FECHAMENTO (04/08): sangria gerada AUTOMATICAMENTE na abertura
+  // do caixa seguinte, com o valor que a vendedora contou. As lojas não fecham
+  // no mesmo dia (vendedora vai embora), então a contagem da manhã É o
+  // fechamento da noite anterior — essa sangria é o registro dele.
+  // NÃO entra em totalSangrias nem abate o dinheiroEsperado: o esperado
+  // continua sendo o que tinha na gaveta ANTES da retirada, que é o número
+  // que a conferência compara com o físico contado.
+  isFechamento  Boolean  @default(false) @map("is_fechamento")
+
   session       PdvCashSession @relation(fields: [cashSessionId], references: [id], onDelete: Cascade)
 
   @@index([cashSessionId])
