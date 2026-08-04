@@ -619,6 +619,33 @@ export default function MinhaLojaRealinhamentoPage() {
     }
   }
 
+  /**
+   * EXCLUI uma peça do pedido — pra quando a matriz pediu a mais.
+   *
+   * Diferente do "não achei": ali a peça existe e não foi encontrada; aqui o
+   * PEDIDO é que estava errado (foi o caso da REM-679, com VOGUE AZUL 58 e 60
+   * em duplicidade). Some da fila e não volta.
+   */
+  async function excluirOrdem(item: RealignmentItem, totalNaCelula: number) {
+    const oQue = `${item.refCode} ${item.cor || ''} ${item.tamanho || ''}`.trim();
+    const aviso = totalNaCelula > 1
+      ? `Excluir 1 peça de "${oQue}"?\n\nA matriz pediu ${totalNaCelula} — vai ficar ${totalNaCelula - 1}.`
+      : `Excluir "${oQue}" do pedido?\n\nA peça sai da lista de separação e não volta.`;
+    if (!confirm(aviso)) return;
+    const motivo = await appPrompt('Por que está excluindo? (ex: pedido em duplicidade)');
+    if (motivo === null) return;
+    try {
+      await api(`/realignment/${item.id}?motivo=${encodeURIComponent(motivo.trim())}`, {
+        method: 'DELETE',
+      });
+      setItems((prev) => prev.filter((i) => i.id !== item.id));
+      void loadOpenShipments();
+      pushToast('Peça excluída do pedido 🗑');
+    } catch (err: any) {
+      pushToast(`Erro: ${err?.message ?? 'falha ao excluir'}`);
+    }
+  }
+
   /** Desfaz o "não achei" — a peça volta pra fila de separação da loja. */
   async function undoNotFound(item: RealignmentItem) {
     if (!confirm(
@@ -1407,6 +1434,7 @@ export default function MinhaLojaRealinhamentoPage() {
                           onRevert={markUnsent}
                           onReportNotFound={reportNotFound}
                           onUndoNotFound={undoNotFound}
+                          onExcluir={excluirOrdem}
                           viewMode={view}
                         />
                       </div>
@@ -1715,6 +1743,7 @@ function RealignGrid({
   onRevert,
   onReportNotFound,
   onUndoNotFound,
+  onExcluir,
   viewMode,
 }: {
   g: {
@@ -1732,6 +1761,7 @@ function RealignGrid({
   onRevert: (id: string) => void;
   onReportNotFound: (item: RealignmentItem) => void;
   onUndoNotFound: (item: RealignmentItem) => void;
+  onExcluir: (item: RealignmentItem, totalNaCelula: number) => void;
   viewMode: ViewMode;
 }) {
   // Totais por cor (linha) e por tamanho (coluna) — ignora células vazias.
@@ -1806,6 +1836,7 @@ function RealignGrid({
                           onRevert={onRevert}
                           onReportNotFound={onReportNotFound}
                           onUndoNotFound={onUndoNotFound}
+                          onExcluir={onExcluir}
                           viewMode={viewMode}
                         />
                       </td>
@@ -1901,6 +1932,7 @@ function RealignCell({
   onRevert,
   onReportNotFound,
   onUndoNotFound,
+  onExcluir,
   viewMode,
 }: {
   item: RealignmentItem | null;
@@ -1910,6 +1942,7 @@ function RealignCell({
   onRevert: (id: string) => void;
   onReportNotFound: (item: RealignmentItem) => void;
   onUndoNotFound: (item: RealignmentItem) => void;
+  onExcluir: (item: RealignmentItem, totalNaCelula: number) => void;
   viewMode: ViewMode;
 }) {
   const base =
@@ -2056,6 +2089,25 @@ function RealignCell({
         className="absolute top-0 left-0 w-5 h-5 rounded-tl rounded-br bg-rose-500/90 hover:bg-rose-600 text-white flex items-center justify-center text-[10px] font-black shadow z-10 active:scale-90 transition"
       >
         ✕
+      </button>
+      {/* 🗑 no canto inferior esquerdo: a matriz pediu peça a mais.
+          Diferente do ✕ — ali a peça não foi achada, aqui o pedido é que
+          estava errado. Tira do pedido e não volta. */}
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onExcluir(item, qtdCelula);
+        }}
+        title={
+          qtdCelula > 1
+            ? `Pedido em duplicidade? Excluir 1 das ${qtdCelula} peças desta posição`
+            : 'Excluir esta peça do pedido (a matriz pediu errado)'
+        }
+        aria-label="Excluir do pedido"
+        className="absolute bottom-0 left-0 w-5 h-5 rounded-bl rounded-tr bg-slate-500/80 hover:bg-slate-700 text-white flex items-center justify-center text-[9px] shadow z-10 active:scale-90 transition"
+      >
+        🗑
       </button>
     </div>
   );

@@ -1218,7 +1218,17 @@ export class MarcadosService {
     const limit = Math.min(10000, input.limit || 100);
 
     // NATIVO primeiro — a versão Giga era full-scan da caixa POR REQUEST.
-    if (await this.useNative()) {
+    //
+    // ⚠️ AQUI o espelho vale MESMO com `MARCADOS_NATIVE_READS` desligada (04/08).
+    // A flag protege a DECISÃO DE VENDA no PDV (liberar marcado acima do
+    // limite); esta tela é consulta da retaguarda. Com a flag off, toda a lista
+    // dependia do Giga — e quando ele cai, como caiu hoje, a tela mostra ZERO
+    // marcado na rede inteira, que é pior que mostrar o espelho com a fonte
+    // declarada. Se o espelho nunca foi importado, segue pro Giga como antes.
+    const usarEspelho =
+      (await this.useNative()) ||
+      (await this.mirror.hasMirror().catch(() => false));
+    if (usarEspelho) {
       const st = String(input.status || 'ativo').trim();
       const where: any = { isTraining: false };
       if (st !== 'todos') where.status = st;

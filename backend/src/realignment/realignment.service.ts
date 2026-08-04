@@ -963,6 +963,67 @@ export class RealignmentService {
   }
 
   /**
+   * EXCLUI uma ordem de realinhamento da fila da loja (04/08).
+   *
+   * Existe pro caso de a matriz ter pedido peça a mais: a REM-2026-000679 saiu
+   * com VOGUE AZUL 58 e 60 em dobro porque havia DUAS ordens da mesma variação,
+   * e a loja não tinha como tirar uma. "Não achei" não serve aqui — a peça
+   * existe, o pedido é que estava errado.
+   *
+   * Cancela, não apaga: o rastro fica (quem pediu, quando, o motivo) e a ordem
+   * some das listas, que filtram por pending/not_found.
+   */
+  async cancelarOrdem(input: {
+    transferId: string;
+    storeId?: string;
+    isAdmin?: boolean;
+    motivo?: string;
+  }) {
+    const order: any = await this.prisma.transferOrder.findUnique({
+      where: { id: input.transferId },
+      select: {
+        id: true, tipo: true, lojaOrigemCode: true, realignmentStatus: true,
+        refCode: true, cor: true, tamanho: true, shipmentId: true,
+      } as any,
+    });
+    if (!order) throw new NotFoundException('Ordem não encontrada');
+    if (order.tipo !== 'REALINHAMENTO')
+      throw new BadRequestException('Ordem não é de realinhamento');
+
+    if (!input.isAdmin) {
+      const store = await this.prisma.store.findUnique({
+        where: { id: input.storeId || '' },
+        select: { code: true },
+      });
+      if (!store?.code) throw new ForbiddenException('Loja inválida');
+      if (order.lojaOrigemCode !== store.code)
+        throw new ForbiddenException('Essa ordem não é da sua loja');
+    }
+
+    // Peça já enviada mora numa caixa fechada — mexer nela é reabrir a caixa,
+    // não excluir a linha (senão o romaneio impresso deixa de bater com o que
+    // foi despachado).
+    if (order.realignmentStatus === 'sent') {
+      throw new BadRequestException(
+        'Esta peça já está numa caixa fechada. Reabra a caixa primeiro — aí ela volta pra fila e pode ser excluída.',
+      );
+    }
+
+    const motivo = String(input.motivo || '').trim();
+    await this.prisma.$executeRaw`
+      UPDATE transfer_orders
+      SET realignment_status = 'cancelled',
+          realignment_not_found_note = ${motivo || 'Excluída da fila pela loja'}
+      WHERE id = ${input.transferId}
+    `;
+    this.logger.warn(
+      `[cancelarOrdem] ${order.refCode} ${order.cor || ''}/${order.tamanho || ''} ` +
+      `da loja ${order.lojaOrigemCode} EXCLUÍDA da fila · motivo="${motivo || '-'}"`,
+    );
+    return { ok: true, id: input.transferId };
+  }
+
+  /**
    * DESFAZ o "não achei" — a peça volta pra fila de separação da loja.
    *
    * A loja que reportou é a que percebe o engano (achou depois, estava em
