@@ -628,6 +628,31 @@ export class RealignmentController {
   }
 
   /**
+   * DELETE /realignment/pilha/:destCode — exclui a PILHA de um destino:
+   * cancela todos os pedidos pendentes/não-achadas daquela loja destino.
+   * Peça em caixa aberta fica de fora (a caixa tem o próprio excluir).
+   */
+  @Delete('pilha/:destCode')
+  excluirPilhaDestino(
+    @Param('destCode') destCode: string,
+    @Query('motivo') motivo: string | undefined,
+    @Req() req: any,
+  ) {
+    const role = req?.user?.role;
+    const storeId = req?.user?.storeId;
+    const ehRetaguarda = role === 'admin' || role === 'operator';
+    if (!ehRetaguarda && (role !== 'store' || !storeId)) {
+      throw new ForbiddenException('Apenas loja origem ou retaguarda');
+    }
+    return this.svc.cancelarPilhaDestino({
+      storeId,
+      isAdmin: ehRetaguarda,
+      destCode,
+      motivo,
+    });
+  }
+
+  /**
    * DELETE /realignment/shipments/:id — EXCLUI uma caixa ABERTA.
    * As peças voltam pra fila "a enviar"; a caixa vira 'cancelled'.
    * Caixa fechada é recusada (o caminho dela é o Reabrir).

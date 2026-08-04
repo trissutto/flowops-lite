@@ -141,7 +141,9 @@ export class RealignmentShipmentService {
     const result = await Promise.all(
       shipments.map(async (s: any) => {
         const items = await this.prisma.transferOrder.findMany({
-          where: { shipmentId: s.id } as any,
+          // Peça CANCELADA (excluída do pedido) não pertence mais à caixa —
+          // sem o filtro ela continuava na grade e no contador do cartão.
+          where: { shipmentId: s.id, realignmentStatus: { not: 'cancelled' } } as any,
           select: {
             id: true,
             refCode: true,
