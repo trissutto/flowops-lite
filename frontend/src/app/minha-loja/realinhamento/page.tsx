@@ -152,8 +152,13 @@ export default function MinhaLojaRealinhamentoPage() {
   // Qual caixa em montagem está com o conteúdo aberto na tela.
   const [caixaAberta, setCaixaAberta] = useState<string | null>(null);
   const [closingShipmentId, setClosingShipmentId] = useState<string | null>(null);
-  /** Remessa fechada agora — pra gerar etiqueta/nota sem sair desta tela. */
-  const [recemEnviada, setRecemEnviada] = useState<{ id: string; code: string; qty: number } | null>(null);
+  /** Remessa fechada agora — pra gerar etiqueta/nota sem sair desta tela.
+   *  `rotaPropria` vem do fechamento: sem ela o cartão oferecia "Gerar envio
+   *  Correios" numa caixa de Santos e o clique dava o erro de transporte
+   *  PRÓPRIO (04/08). */
+  const [recemEnviada, setRecemEnviada] = useState<{
+    id: string; code: string; qty: number; rotaPropria?: boolean; destino?: string;
+  } | null>(null);
 
   const toggleDest = useCallback((code: string) => {
     setExpandedDest((curr) => (curr === code ? null : code));
@@ -345,6 +350,7 @@ export default function MinhaLojaRealinhamentoPage() {
       const res = await api<{
         ok: boolean; code: string; totalItems: number; totalQty: number;
         novaRemessa?: { id: string; code: string; totalItens: number } | null;
+        rotaPropria?: boolean; toStoreName?: string;
       }>(
         `/realignment/shipments/${shipmentId}/close-and-send`,
         { method: 'POST', body: '{}' },
@@ -359,7 +365,13 @@ export default function MinhaLojaRealinhamentoPage() {
       // A remessa some da lista de montagem assim que fecha. Guardar aqui é o
       // que permite gerar etiqueta e nota SEM ir até a Retaguarda: quem acabou
       // de fechar a caixa é quem vai postar, e é agora que ela precisa do papel.
-      setRecemEnviada({ id: shipmentId, code: res.code, qty: res.totalQty });
+      setRecemEnviada({
+        id: shipmentId,
+        code: res.code,
+        qty: res.totalQty,
+        rotaPropria: !!res.rotaPropria,
+        destino: res.toStoreName,
+      });
       await Promise.all([loadOpenShipments(), loadPendingLabel(), loadItems(), loadSentItems()]);
     } catch (e: any) {
       alert(`Erro ao fechar remessa: ${e?.message || e}`);
@@ -1066,6 +1078,8 @@ export default function MinhaLojaRealinhamentoPage() {
             shipmentId={recemEnviada.id}
             code={recemEnviada.code}
             qty={recemEnviada.qty}
+            destino={recemEnviada.destino}
+            rotaPropria={!!recemEnviada.rotaPropria}
             onPdf={() => void handleDownloadPdf(recemEnviada.id, recemEnviada.code)}
             onImprimir={() => void handlePrintRemessa(recemEnviada.id, recemEnviada.code)}
             onFechar={() => setRecemEnviada(null)}

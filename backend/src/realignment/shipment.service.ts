@@ -1312,7 +1312,24 @@ export class RealignmentShipmentService {
       );
     }
 
-    return { ok: true, code: shipment.code, totalItems: items.length, totalQty, novaRemessa };
+    // O cartão "recém-enviada" da tela precisa saber NA HORA se a caixa é da
+    // rota do carro — sem isto ele oferecia "Gerar envio Correios" verde numa
+    // caixa de Santos e o clique respondia o erro de transporte PRÓPRIO
+    // (04/08). Best-effort: falha aqui não pode desfazer o fechamento.
+    let rotaPropria = false;
+    try {
+      rotaPropria = (await this.envio.transporteEfetivo(shipment)) === 'proprio';
+    } catch { /* segue como correios */ }
+
+    return {
+      ok: true,
+      code: shipment.code,
+      totalItems: items.length,
+      totalQty,
+      novaRemessa,
+      rotaPropria,
+      toStoreName: shipment.toStoreName || shipment.toStoreCode,
+    };
   }
 
   /**
