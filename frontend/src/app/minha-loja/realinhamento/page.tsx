@@ -1023,7 +1023,7 @@ export default function MinhaLojaRealinhamentoPage() {
           <div className="space-y-3">
             <div className="flex items-center gap-2 text-sm font-bold text-rose-900">
               <AlertCircle className="w-4 h-4" />
-              Caixas fechadas — etiqueta e nota
+              Caixas fechadas — conferir, etiqueta e nota
             </div>
             {pendingLabel
               .filter((s) => s.id !== recemEnviada?.id)
@@ -1037,6 +1037,7 @@ export default function MinhaLojaRealinhamentoPage() {
                   rastreioExistente={s.trackingCode ?? null}
                   jaTemEtiqueta={!!s.jaTemEtiqueta}
                   notaAutorizada={s.notaAutorizada ?? null}
+                  rotaPropria={!!s.rotaPropria}
                   onMudou={() => {
                     void loadPendingLabel();
                     void loadOpenShipments();
@@ -2001,7 +2002,7 @@ function RealignCell({
  */
 function EnvioDaRemessa({
   shipmentId, code, qty, onFechar, destino, rastreioExistente = null, jaTemEtiqueta = false,
-  notaAutorizada = null, onMudou,
+  notaAutorizada = null, rotaPropria = false, onMudou,
 }: {
   shipmentId: string;
   code: string;
@@ -2017,6 +2018,9 @@ function EnvioDaRemessa({
   jaTemEtiqueta?: boolean;
   /** Número da NF-e autorizada desta caixa, se houver. */
   notaAutorizada?: string | number | null;
+  /** Caixa que vai no carro da rede (Itanhaém/Praia Grande/Santos): existe,
+   *  aparece e pode ser conferida — só não tem etiqueta dos Correios. */
+  rotaPropria?: boolean;
   /** Recarrega as listas da tela — a caixa reaberta sai daqui e volta pras
    *  amarelas, então quem manda tem que saber. */
   onMudou?: () => void;
@@ -2132,33 +2136,42 @@ function EnvioDaRemessa({
             {destino && <span className="font-bold"> · pra {destino}</span>}
           </p>
           <p className="text-xs text-emerald-800/80 mt-0.5">
-            {jaTemEtiqueta
-              ? 'Envio já gerado — clique em Etiqueta + NF pra imprimir de novo.'
-              : 'Agora gere a etiqueta dos Correios e imprima junto com a nota — sem sair desta tela.'}
+            {rotaPropria
+              ? '🚚 Vai no carro da rede — sem etiqueta dos Correios. Confira o conteúdo ou reabra se faltou peça.'
+              : jaTemEtiqueta
+                ? 'Envio já gerado — clique em Etiqueta + NF pra imprimir de novo.'
+                : 'Agora gere a etiqueta dos Correios e imprima junto com a nota — sem sair desta tela.'}
           </p>
           {rastreio && (
             <p className="text-xs font-mono font-bold text-emerald-900 mt-1">Rastreio: {rastreio}</p>
           )}
         </div>
         <div className="flex flex-wrap gap-2 shrink-0">
-          <button
-            type="button"
-            onClick={() => void gerar()}
-            disabled={ocupado !== null}
-            className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-xl text-sm font-black shadow-md flex items-center gap-2 disabled:opacity-50"
-          >
-            {ocupado === 'gerar' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Truck className="w-4 h-4" />}
-            {jaTemEtiqueta ? 'Refazer envio' : 'Gerar envio Correios'}
-          </button>
-          <button
-            type="button"
-            onClick={() => void baixarDocs()}
-            disabled={ocupado !== null}
-            className="bg-white hover:bg-emerald-100 text-emerald-900 border-2 border-emerald-400 px-4 py-2.5 rounded-xl text-sm font-bold shadow-sm flex items-center gap-2 disabled:opacity-50"
-          >
-            {ocupado === 'docs' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Printer className="w-4 h-4" />}
-            Etiqueta + NF
-          </button>
+          {/* Rota própria não tem Correios pra pedir — oferecer "Gerar envio"
+              numa caixa que vai de carro abriria pré-postagem que ninguém
+              posta. O resto (conferir, reabrir, nota) continua igual. */}
+          {!rotaPropria && (
+            <>
+              <button
+                type="button"
+                onClick={() => void gerar()}
+                disabled={ocupado !== null}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-xl text-sm font-black shadow-md flex items-center gap-2 disabled:opacity-50"
+              >
+                {ocupado === 'gerar' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Truck className="w-4 h-4" />}
+                {jaTemEtiqueta ? 'Refazer envio' : 'Gerar envio Correios'}
+              </button>
+              <button
+                type="button"
+                onClick={() => void baixarDocs()}
+                disabled={ocupado !== null}
+                className="bg-white hover:bg-emerald-100 text-emerald-900 border-2 border-emerald-400 px-4 py-2.5 rounded-xl text-sm font-bold shadow-sm flex items-center gap-2 disabled:opacity-50"
+              >
+                {ocupado === 'docs' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Printer className="w-4 h-4" />}
+                Etiqueta + NF
+              </button>
+            </>
+          )}
           {/* Conferir o que está dentro ANTES de lacrar de vez — e desfazer se
               a caixa foi fechada sem querer ou faltou peça. */}
           <button
