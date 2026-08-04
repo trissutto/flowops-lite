@@ -362,6 +362,32 @@ export default function MinhaLojaRealinhamentoPage() {
     }
   }, [pushToast, loadOpenShipments, loadPendingLabel, loadItems, loadSentItems]);
 
+  /**
+   * EXCLUI A PILHA de um destino: cancela os pedidos pendentes (e não
+   * achadas) daquela loja. Peça já bipada em caixa aberta fica — a caixa
+   * tem o próprio "Excluir remessa".
+   */
+  const handleExcluirPilha = useCallback(async (destCode: string, destName: string, unidades: number) => {
+    if (!confirm(
+      `Excluir a pilha de ${destName}?\n\n` +
+      `Os pedidos pendentes deste destino (${unidades} unidade(s) na tela) serão CANCELADOS — ` +
+      `saem da fila e não voltam.\n` +
+      `Peças já bipadas em caixa aberta NÃO são afetadas.`,
+    )) return;
+    const motivo = await appPrompt(`Por que está excluindo a pilha de ${destName}? (ex: pedido errado da matriz)`);
+    if (motivo === null) return;
+    try {
+      const r = await api<{ ok: boolean; canceladas: number }>(
+        `/realignment/pilha/${encodeURIComponent(destCode)}?motivo=${encodeURIComponent(motivo.trim())}`,
+        { method: 'DELETE' },
+      );
+      pushToast(`🗑 Pilha de ${destName} excluída — ${r.canceladas} pedido(s) cancelado(s).`);
+      await Promise.all([loadItems(), loadSentItems(), loadOpenShipments()]);
+    } catch (e: any) {
+      alert(`Erro ao excluir pilha: ${e?.message || e}`);
+    }
+  }, [pushToast, loadItems, loadSentItems, loadOpenShipments]);
+
   const handleCloseShipment = useCallback(async (shipmentId: string, code: string) => {
     // SIMPLIFICADO: sem modal de precheck. Vendedora separou, pecas em maos,
     // clica Fechar e enviar -> confirma -> fecha. Backend ja aceita unresolved
@@ -1367,6 +1393,22 @@ export default function MinhaLojaRealinhamentoPage() {
                     }`}
                   />
                 </button>
+
+                {/* EXCLUIR PILHA (04/08 — dono: o excluir tem que estar ali
+                    mesmo sem peça bipada). IRMÃO do botão do cabeçalho,
+                    posicionado por cima — botão dentro de botão é HTML
+                    inválido. Cancela os pedidos pendentes deste destino;
+                    caixa aberta não é tocada (tem o próprio excluir). */}
+                {view === 'pending' && (
+                  <button
+                    type="button"
+                    onClick={() => handleExcluirPilha(d.code, d.name, d.totalUnits)}
+                    title={`Excluir a pilha de ${d.name} — cancela os pedidos pendentes deste destino`}
+                    className="no-print absolute top-2 right-14 z-10 bg-white/20 hover:bg-rose-600 backdrop-blur text-white rounded-lg px-2 py-1 text-[10px] font-black uppercase tracking-wide ring-1 ring-white/30 transition"
+                  >
+                    ✕ Excluir
+                  </button>
+                )}
 
                 {/* A CAIXA daquele destino, colada na grade.
                     Um card por destino: cabeçalho com a caixa e as ações, grade

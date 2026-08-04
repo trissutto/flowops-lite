@@ -1024,6 +1024,51 @@ export class RealignmentService {
   }
 
   /**
+   * EXCLUI a PILHA INTEIRA de um destino (04/08 — botão no cabeçalho da
+   * pilha, mesmo sem peça bipada).
+   *
+   * Cancela TODOS os pedidos pendentes (e "não achadas") desta loja origem
+   * para aquele destino. Peça já bipada em caixa aberta NÃO é tocada — a
+   * caixa tem o próprio "Excluir remessa". Cancela, não apaga: o rastro fica.
+   */
+  async cancelarPilhaDestino(input: {
+    storeId?: string;
+    isAdmin?: boolean;
+    destCode: string;
+    motivo?: string;
+  }) {
+    let origemCode: string | null = null;
+    if (!input.isAdmin) {
+      const store = await this.prisma.store.findUnique({
+        where: { id: input.storeId || '' },
+        select: { code: true },
+      });
+      if (!store?.code) throw new ForbiddenException('Loja inválida');
+      origemCode = store.code;
+    }
+    const dest = String(input.destCode || '').trim();
+    if (!dest) throw new BadRequestException('Destino obrigatório');
+
+    const upd = await this.prisma.transferOrder.updateMany({
+      where: {
+        tipo: 'REALINHAMENTO',
+        lojaDestinoCode: dest,
+        realignmentStatus: { in: ['pending', 'not_found'] },
+        // Peça dentro de caixa aberta fica de fora — é assunto da caixa.
+        shipmentId: null,
+        ...(origemCode ? { lojaOrigemCode: origemCode } : {}),
+      } as any,
+      data: { realignmentStatus: 'cancelled' } as any,
+    });
+
+    this.logger.warn(
+      `[cancelarPilhaDestino] origem=${origemCode || 'ADMIN'} destino=${dest}: ` +
+      `${upd.count} pedido(s) cancelado(s) · motivo="${String(input.motivo || '').trim() || '-'}"`,
+    );
+    return { ok: true, canceladas: upd.count ?? 0 };
+  }
+
+  /**
    * DESFAZ o "não achei" — a peça volta pra fila de separação da loja.
    *
    * A loja que reportou é a que percebe o engano (achou depois, estava em
