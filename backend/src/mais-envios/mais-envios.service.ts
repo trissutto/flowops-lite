@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
 import { MaisEnviosAuthService } from './mais-envios-auth.service';
+import { encurtarNomeDestinatario } from '../lib/nome-destinatario';
 
 /**
  * Serviços do Mais Envios (portalmaisenvios.com.br) — cotação de frete,
@@ -157,6 +158,18 @@ export class MaisEnviosService {
       if (op?.precoReais) pricetable = op.precoReais;
     } catch { /* sem cotação → 0; a API acusa se exigir */ }
 
+    // O Mais Envios RECUSA a pré-postagem com nome de destinatário acima de 40
+    // caracteres ("Tamanho do campo nome do destinatário inválido. Máximo 40").
+    // Nome de cliente do site passa disso com facilidade — o pedido #197922
+    // travou com 44. Ver `encurtarNomeDestinatario`.
+    const nomeDestino = encurtarNomeDestinatario(d.nome, 40);
+    if (nomeDestino !== String(d.nome || '').trim()) {
+      this.logger.warn(
+        `[mais-envios] nome do destinatário encurtado pro limite de 40: ` +
+        `"${d.nome}" (${String(d.nome || '').length}) → "${nomeDestino}" (${nomeDestino.length})`,
+      );
+    }
+
     const chave = String(input.nfe?.chave || '').replace(/\D/g, '');
     const cepDash = (v: any) => { const dd = onlyDigits(v); return dd.length === 8 ? `${dd.slice(0, 5)}-${dd.slice(5)}` : dd; };
     const referencia = String(input.referencia || '').slice(0, 40);
@@ -182,8 +195,8 @@ export class MaisEnviosService {
       delivery: {
         delivery: '',
         department: String(input.departamento || '').toUpperCase().slice(0, 30),
-        contact: d.nome,
-        name: d.nome,
+        contact: nomeDestino,
+        name: nomeDestino,
         cep: cepDash(d.cep),
         address: d.endereco,
         number: String(d.numero || 'S/N'),
