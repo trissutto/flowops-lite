@@ -276,6 +276,20 @@ export class RealignmentController {
   }
 
   /**
+   * PATCH /realignment/:id/undo-not-found — a LOJA desfaz o "não achei"
+   * (achou depois / clicou por engano). A peça volta pra fila de separação.
+   */
+  @Patch(':id/undo-not-found')
+  async undoNotFound(@Param('id') id: string, @Req() req: any) {
+    const role = req?.user?.role;
+    const storeId = req?.user?.storeId;
+    if (role !== 'store' || !storeId) {
+      throw new ForbiddenException('Apenas loja origem pode desfazer');
+    }
+    return this.svc.undoNotFound({ transferId: id, storeId });
+  }
+
+  /**
    * GET /realignment/not-found — lista de itens reportados como não encontrados.
    * Tela admin de revisão.
    */

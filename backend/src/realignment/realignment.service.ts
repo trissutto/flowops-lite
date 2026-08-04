@@ -895,6 +895,16 @@ export class RealignmentService {
    * Lista ordens pendentes de REALINHAMENTO pra LOJA ORIGEM dela.
    * Recebe storeId do JWT → resolve storeCode via Store (JWT atual não carrega
    * o code, só o id). Retorna [] se a loja não existir.
+   *
+   * ⚠️ TRAZ TAMBÉM AS `not_found` (04/08 — incidente Santos/Itanhaém):
+   * marcar as 3 últimas peças de um destino como "não achei" fazia a LOJA
+   * INTEIRA sumir da tela — a pilha se monta a partir desta lista, e sem item
+   * nenhum não há pilha, nem caixa, nem rastro do que aconteceu. A vendedora
+   * viu a caixa de SANTOS desaparecer.
+   *
+   * Agora a peça continua na tela, marcada como não encontrada, e dá pra
+   * desfazer (undoNotFound). Quem separa a lista é o front pelo
+   * `realignmentStatus` — o total de pendentes conta só as 'pending'.
    */
   async listPendingForStore(storeId: string) {
     if (!storeId) return [];
@@ -906,7 +916,7 @@ export class RealignmentService {
     const orders = await this.prisma.transferOrder.findMany({
       where: {
         tipo: 'REALINHAMENTO',
-        realignmentStatus: 'pending',
+        realignmentStatus: { in: ['pending', 'not_found'] },
         lojaOrigemCode: store.code,
       },
       orderBy: { createdAt: 'desc' },
@@ -922,7 +932,11 @@ export class RealignmentService {
         solicitanteNome: true,
         mensagem: true,
         createdAt: true,
-      },
+        // Pra tela pintar a célula de "não achada" e mostrar o motivo
+        realignmentStatus: true,
+        realignmentNotFoundAt: true,
+        realignmentNotFoundNote: true,
+      } as any,
     });
     // ESTRATÉGIA NÃO-BLOQUEANTE pra latência sempre baixa (<500ms):
     //  - Imagens já em cache → vão no payload
@@ -938,11 +952,54 @@ export class RealignmentService {
       });
     }
 
-    return orders.map((o) => ({
+    return orders.map((o: any) => ({
       ...o,
       createdAt: o.createdAt.toISOString(),
+      realignmentNotFoundAt: o.realignmentNotFoundAt
+        ? new Date(o.realignmentNotFoundAt).toISOString()
+        : null,
       imageUrl: imagesByRef[o.refCode] ?? null,
     }));
+  }
+
+  /**
+   * DESFAZ o "não achei" — a peça volta pra fila de separação da loja.
+   *
+   * A loja que reportou é a que percebe o engano (achou depois, estava em
+   * outra arara). Sem isso, só admin conseguia reverter e a peça ficava
+   * congelada até alguém na matriz olhar.
+   */
+  async undoNotFound(input: { transferId: string; storeId: string }) {
+    const store = await this.prisma.store.findUnique({
+      where: { id: input.storeId },
+      select: { code: true },
+    });
+    if (!store?.code) throw new ForbiddenException('Loja inválida');
+
+    const order: any = await this.prisma.transferOrder.findUnique({
+      where: { id: input.transferId },
+      select: {
+        id: true, tipo: true, lojaOrigemCode: true, realignmentStatus: true,
+      } as any,
+    });
+    if (!order) throw new NotFoundException('Ordem não encontrada');
+    if (order.tipo !== 'REALINHAMENTO')
+      throw new BadRequestException('Ordem não é de realinhamento');
+    if (order.lojaOrigemCode !== store.code)
+      throw new ForbiddenException('Essa ordem não é da sua loja');
+    if (order.realignmentStatus !== 'not_found')
+      throw new BadRequestException('Essa peça não está marcada como não encontrada');
+
+    await this.prisma.$executeRaw`
+      UPDATE transfer_orders
+      SET realignment_status = 'pending',
+          realignment_not_found_at = NULL,
+          realignment_not_found_note = NULL,
+          realignment_not_found_by_user_id = NULL
+      WHERE id = ${input.transferId}
+    `;
+    this.logger.log(`[undoNotFound] OK transferId=${input.transferId} loja=${store.code}`);
+    return { ok: true, id: input.transferId };
   }
 
   /**
