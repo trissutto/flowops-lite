@@ -33,6 +33,10 @@ type Slot = {
     method: string;
     bandeira?: string | null;
     valor: number;
+    // Venda online: COMO o dinheiro entrou — 'pix' (PIX direto na chave da
+    // loja), 'link' (link externo, pago por fora) ou 'pagarme_link' (link de
+    // cartão gerado pelo Flow). Vem de details.tipo do pagamento.
+    onlineTipo?: string | null;
     customerName: string | null;
     customerCpf: string | null;
     sellerName: string | null;
@@ -200,6 +204,47 @@ function PixBadge({ s }: { s: PixConcStatus | undefined }) {
   );
 }
 
+
+/**
+ * VENDA ONLINE — formatos possíveis (details.tipo gravado pelo PDV).
+ * Os rótulos seguem os mesmos botões que a vendedora vê ao fechar a venda.
+ */
+const ONLINE_FORMATOS: Array<{ key: string; label: string; curto: string }> = [
+  { key: 'pix', label: 'PIX direto (chave da loja)', curto: 'PIX direto' },
+  { key: 'link', label: 'Link externo (pago por fora)', curto: 'Link externo' },
+  { key: 'pagarme_link', label: 'Link Pagar.me (cartão)', curto: 'Link cartão' },
+  { key: '', label: 'Formato não informado', curto: 'Sem formato' },
+];
+
+/** Agrupa as vendas online por formato (só os formatos que tiveram venda). */
+function resumoOnlinePorFormato(detalhado: Detalhado | null) {
+  const vendas = detalhado?.totais?.VENDA_ONLINE?.vendas || [];
+  return ONLINE_FORMATOS
+    .map((f) => {
+      const doTipo = vendas.filter((v) => String(v.onlineTipo || '') === f.key);
+      return {
+        ...f,
+        vendas: doTipo,
+        qtd: doTipo.length,
+        valor: doTipo.reduce((a, v) => a + (Number(v.valor) || 0), 0),
+      };
+    })
+    .filter((f) => f.qtd > 0);
+}
+
+/** Mesmo resumo, somando TODAS as lojas (faixa do card consolidado). */
+function resumoOnlineRede(lojas: Loja[]) {
+  const acc = new Map<string, { qtd: number; valor: number }>();
+  for (const l of lojas || []) {
+    for (const f of resumoOnlinePorFormato(l.detalhado)) {
+      const cur = acc.get(f.key) || { qtd: 0, valor: 0 };
+      acc.set(f.key, { qtd: cur.qtd + f.qtd, valor: cur.valor + f.valor });
+    }
+  }
+  return ONLINE_FORMATOS
+    .map((f) => ({ ...f, ...(acc.get(f.key) || { qtd: 0, valor: 0 }) }))
+    .filter((f) => f.qtd > 0);
+}
 
 const fmtTime = (iso: string | null) => {
   if (!iso) return '—';
@@ -486,6 +531,27 @@ export default function SuperPainelCaixas() {
                     mas não passa pela gaveta — por isso card próprio. */}
                 <ConsolidadoItem label="Venda Online" valor={data.consolidado.totalVendaOnline || 0} icon={<Globe size={14} />} />
               </div>
+
+              {/* Formato da venda online na REDE inteira: PIX direto, link
+                  externo ou link de cartão (Pagar.me). */}
+              {(() => {
+                const formatos = resumoOnlineRede(data.lojas);
+                if (!formatos.length) return null;
+                return (
+                  <div className="flex items-center gap-2 flex-wrap text-[11px]">
+                    <span className="font-bold uppercase tracking-wide opacity-80">
+                      Venda online por formato
+                    </span>
+                    {formatos.map((f) => (
+                      <span key={f.key || 'sem'} className="bg-white/15 backdrop-blur rounded px-2 py-0.5 flex items-center gap-1">
+                        <span className="font-semibold">{f.curto}</span>
+                        <span className="font-mono tabular-nums font-black">{brl(f.valor)}</span>
+                        <span className="opacity-70">({f.qtd})</span>
+                      </span>
+                    ))}
+                  </div>
+                );
+              })()}
 
               {/* CONCILIACAO GLOBAL V5 (15/07) — todas as lojas
                   Vendido liquido = totalVendas - vale_troca (vale abate, não é $)
@@ -845,6 +911,7 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo, onDate
   const suprimentosList = (loja.movimentos || []).filter((m) => m.tipo === 'suprimento');
   const fechamentoMov = (loja.movimentos || []).find((m) => m.isFechamento) || null;
   const totalFechamento = Number(t.totalFechamento ?? fechamentoMov?.valor ?? 0);
+  const formatosOnline = resumoOnlinePorFormato(loja.detalhado);
   const rec = loja.recebimentosCrediario || { totalGeral: 0, totalDinheiro: 0, totalPix: 0, baixas: [] };
   const recDinheiroBaixas = rec.baixas.filter((b) => b.forma === 'dinheiro' || (b.forma === 'misto' && (b.valorDinheiro || 0) > 0));
   const recPixBaixas = rec.baixas.filter((b) => b.forma === 'pix' || (b.forma === 'misto' && (b.valorPix || 0) > 0));
@@ -957,8 +1024,14 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo, onDate
           </div>
         </div>
 
+        {/* Corpo em COLUNAS (04/08): vendas à esquerda (2/3), caixa e ranking
+            à direita (1/3). Em largura total o card virava uma tira alta e
+            estreita de conteúdo — assim ele fica quadrado e cabe mais dado. */}
+        <div className="grid lg:grid-cols-3 gap-3 items-start">
+        <div className="lg:col-span-2 space-y-2">
+
         {/* Breakdown por modalidade — clicável pra expandir cascade */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-1 pt-2 border-t border-slate-200">
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-1 pt-2 border-t border-slate-200">
           <ModItem label="Dinheiro" valor={t.totalDinheiro} cor="emerald"
             active={expanded === 'dinheiro'}
             onClick={loja.detalhado && t.totalDinheiro > 0 ? () => setExpanded(expanded === 'dinheiro' ? null : 'dinheiro') : undefined} />
@@ -981,6 +1054,54 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo, onDate
             active={expanded === 'venda_online'}
             onClick={loja.detalhado && (t.totalVendaOnline || 0) > 0 ? () => setExpanded(expanded === 'venda_online' ? null : 'venda_online') : undefined} />
         </div>
+
+        {/* BANDEIRAS separadas (04/08 — pedido do dono): "Crédito R$ 1.648,80"
+            não dizia se foi Master, Visa ou Elo. Cada bandeira com valor vira
+            um chip clicável que abre as vendas dela. */}
+        {loja.detalhado && (
+          <div className="grid sm:grid-cols-2 gap-2">
+            <BandeirasBloco
+              titulo="Crédito"
+              total={t.totalCartaoCredito}
+              cor="blue"
+              chaves={BANDEIRAS_CREDITO}
+              detalhado={loja.detalhado}
+              expanded={expanded}
+              onToggle={setExpanded}
+            />
+            <BandeirasBloco
+              titulo="Débito"
+              total={t.totalCartaoDebito}
+              cor="indigo"
+              chaves={BANDEIRAS_DEBITO}
+              detalhado={loja.detalhado}
+              expanded={expanded}
+              onToggle={setExpanded}
+            />
+          </div>
+        )}
+
+        {/* COMO a venda online entrou: PIX direto, link externo ou link de
+            cartão (Pagar.me). O total sozinho não dizia o formato. */}
+        {formatosOnline.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setExpanded(expanded === 'venda_online' ? null : 'venda_online')}
+            className="w-full flex items-center gap-2 flex-wrap px-2 py-1 rounded-md bg-violet-50 border border-violet-200 text-[11px] text-violet-900 hover:bg-violet-100 transition"
+            title="Clica pra ver as vendas online por formato"
+          >
+            <span className="font-bold uppercase tracking-wide flex items-center gap-1">
+              <Globe size={11} /> Venda online por formato
+            </span>
+            {formatosOnline.map((f) => (
+              <span key={f.key || 'sem'} className="flex items-center gap-1 bg-white border border-violet-200 rounded px-1.5 py-0.5">
+                <span className="font-semibold">{f.curto}</span>
+                <span className="font-mono tabular-nums font-bold">{brl(f.valor)}</span>
+                <span className="text-violet-500">({f.qtd})</span>
+              </span>
+            ))}
+          </button>
+        )}
 
         {/* CONCILIACAO INLINE V5 (15/07) — Vendido liquido vs Recebido.
             Vendido liquido = totalVendas - vale_troca (vale abate, não é $)
@@ -1056,8 +1177,10 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo, onDate
           />
         )}
 
-        {/* Card em largura total: caixa à esquerda, ranking à direita */}
-        <div className="grid lg:grid-cols-2 gap-x-4 gap-y-2 items-start">
+        </div>{/* fim da coluna de vendas */}
+
+        {/* Coluna do CAIXA: fundo, fechamento, movimentos e ranking */}
+        <div className="space-y-2">
         {/* Bloco financeiro do caixa: fundo, dinheiro fim de dia, conferência */}
         {(loja.aberta || t.totalSangrias > 0 || t.totalSuprimentos > 0 || loja.fundoTroco > 0 || t.totalDinheiro > 0 || totalFechamento > 0) && (
           <div className="pt-1 border-t border-slate-100 space-y-1">
@@ -1363,7 +1486,63 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo, onDate
             )}
           </div>
         )}
-        </div>
+        </div>{/* fim da coluna do caixa */}
+        </div>{/* fim do grid de colunas */}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Bandeiras de um cartão (crédito OU débito) como chips separados.
+ * Cada chip abre a lista de vendas daquela bandeira na cascata.
+ */
+function BandeirasBloco({
+  titulo, total, cor, chaves, detalhado, expanded, onToggle,
+}: {
+  titulo: string;
+  total: number;
+  cor: 'blue' | 'indigo';
+  chaves: readonly string[];
+  detalhado: Detalhado;
+  expanded: string | null;
+  onToggle: (v: string | null) => void;
+}) {
+  const itens = chaves
+    .map((k) => ({ chave: k, slot: (detalhado.totais as any)[k] as Slot | undefined }))
+    .filter((x) => x.slot && x.slot.qtd > 0);
+  if (itens.length === 0) return null;
+  const tons = cor === 'blue'
+    ? { box: 'border-blue-200 bg-blue-50/60', head: 'text-blue-900', chip: 'border-blue-200 hover:bg-blue-100', on: 'bg-blue-600 text-white border-blue-700' }
+    : { box: 'border-indigo-200 bg-indigo-50/60', head: 'text-indigo-900', chip: 'border-indigo-200 hover:bg-indigo-100', on: 'bg-indigo-600 text-white border-indigo-700' };
+  return (
+    <div className={`rounded-lg border p-2 space-y-1 ${tons.box}`}>
+      <div className={`flex items-center justify-between text-[11px] font-bold uppercase tracking-wide ${tons.head}`}>
+        <span className="flex items-center gap-1"><CreditCard size={11} /> {titulo}</span>
+        <span className="font-mono tabular-nums">{brl(total)}</span>
+      </div>
+      <div className="grid grid-cols-2 gap-1">
+        {itens.map(({ chave, slot }) => {
+          const key = `band:${chave}`;
+          const ativo = expanded === key;
+          return (
+            <button
+              key={chave}
+              type="button"
+              onClick={() => onToggle(ativo ? null : key)}
+              className={`rounded-md border bg-white px-1.5 py-1 text-left transition ${ativo ? tons.on : tons.chip}`}
+              title={`${slot!.qtd} venda(s) — clica pra ver`}
+            >
+              <div className="text-[9px] font-bold uppercase leading-tight truncate">
+                {BANDEIRA_LABEL[chave] || chave.replace(/_/g, ' ')}
+              </div>
+              <div className="flex items-baseline justify-between gap-1">
+                <span className="text-[11px] font-black tabular-nums">{brl(slot!.valor)}</span>
+                <span className={`text-[9px] ${ativo ? 'opacity-80' : 'text-slate-400'}`}>{slot!.qtd}x</span>
+              </div>
+            </button>
+          );
+        })}
       </div>
     </div>
   );
@@ -1405,6 +1584,13 @@ function ModItem({ label, valor, cor, onClick, active, badge }: { label: string;
 // ── Cascade detalhada por modalidade ──
 const BANDEIRAS_CREDITO = ['MASTERCARD', 'VISANET', 'CIELO', 'ELO', 'AMEX', 'HIPERCARD', 'CREDITO_GENERICO'] as const;
 const BANDEIRAS_DEBITO = ['VISA_ELECTRON', 'REDE_SHOP', 'ELO_DEBITO', 'DEBITO_GENERICO'] as const;
+/** Nome curto de cada bandeira pros chips do card. */
+const BANDEIRA_LABEL: Record<string, string> = {
+  MASTERCARD: 'Mastercard', VISANET: 'Visa', CIELO: 'Cielo', ELO: 'Elo',
+  AMEX: 'Amex', HIPERCARD: 'Hipercard', CREDITO_GENERICO: 'Sem bandeira',
+  VISA_ELECTRON: 'Visa Electron', REDE_SHOP: 'Redeshop', ELO_DEBITO: 'Elo débito',
+  DEBITO_GENERICO: 'Sem bandeira',
+};
 
 function CascadeModalidade({
   detalhado, modalidade, isAdmin, onEditBandeira,
@@ -1417,6 +1603,27 @@ function CascadeModalidade({
   const isCartao = modalidade === 'credito' || modalidade === 'debito';
   const [bandeiraOpen, setBandeiraOpen] = useState<string | null>(null);
 
+  // Chip de bandeira clicado no card (ex: "band:MASTERCARD") — lista direto as
+  // vendas daquela bandeira, sem passar pelo agrupamento de crédito/débito.
+  if (modalidade.startsWith('band:')) {
+    const chave = modalidade.slice(5);
+    const slot = (detalhado.totais as any)[chave] as Slot | undefined;
+    const metodo = (BANDEIRAS_DEBITO as readonly string[]).includes(chave) ? 'debito' : 'credito';
+    return (
+      <div className="space-y-1">
+        <div className="text-[11px] font-bold text-slate-600 uppercase tracking-wide">
+          {BANDEIRA_LABEL[chave] || chave.replace(/_/g, ' ')} · {metodo}
+        </div>
+        <ListaVendas
+          vendas={slot?.vendas || []}
+          bandeiraAtual={chave}
+          modalidadeAtual={metodo}
+          isAdmin={isAdmin}
+          onEditBandeira={onEditBandeira}
+        />
+      </div>
+    );
+  }
   if (modalidade === 'dinheiro') {
     return <ListaVendas vendas={detalhado.totais.DINHEIRO.vendas} modalidadeAtual="dinheiro" isAdmin={isAdmin} onEditBandeira={onEditBandeira} />;
   }
@@ -1427,7 +1634,39 @@ function CascadeModalidade({
     return <ListaVendas vendas={detalhado.totais.CREDIARIO.vendas} modalidadeAtual="crediario" isAdmin={isAdmin} onEditBandeira={onEditBandeira} />;
   }
   if (modalidade === 'venda_online') {
-    return <ListaVendas vendas={detalhado.totais.VENDA_ONLINE?.vendas || []} modalidadeAtual="venda_online" isAdmin={isAdmin} onEditBandeira={onEditBandeira} />;
+    // Agrupa por FORMATO (PIX direto / link externo / link de cartão), igual
+    // o crédito agrupa por bandeira — é a resposta pra "como entrou o dinheiro".
+    const grupos = resumoOnlinePorFormato(detalhado);
+    if (grupos.length === 0) {
+      return <ListaVendas vendas={detalhado.totais.VENDA_ONLINE?.vendas || []} modalidadeAtual="venda_online" isAdmin={isAdmin} onEditBandeira={onEditBandeira} />;
+    }
+    return (
+      <div className="space-y-1">
+        {grupos.map((g) => {
+          const gKey = `online:${g.key || 'sem'}`;
+          return (
+            <div key={gKey} className="bg-violet-50 rounded-md border border-violet-200 overflow-hidden">
+              <button
+                onClick={() => setBandeiraOpen(bandeiraOpen === gKey ? null : gKey)}
+                className="w-full flex items-center justify-between px-2 py-1.5 text-xs hover:bg-violet-100"
+              >
+                <span className="font-bold text-violet-900">{g.label}</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-violet-600">{g.qtd} {g.qtd === 1 ? 'tk' : 'tks'}</span>
+                  <span className="font-mono font-bold tabular-nums text-violet-900">{brl(g.valor)}</span>
+                  <span className={`text-[10px] transition-transform ${bandeiraOpen === gKey ? 'rotate-180' : ''}`}>▼</span>
+                </div>
+              </button>
+              {bandeiraOpen === gKey && (
+                <div className="border-t border-violet-200 bg-white px-2 py-1.5">
+                  <ListaVendas vendas={g.vendas} modalidadeAtual="venda_online" isAdmin={isAdmin} onEditBandeira={onEditBandeira} />
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    );
   }
 
   // Cartão crédito ou débito — agrupa por bandeira
@@ -1495,6 +1734,13 @@ function ListaVendas({
               <span className={`truncate ${v.customerName ? 'text-slate-800 font-medium' : 'text-slate-400 italic'}`}>{cliente}</span>
               {v.sellerName && <span className="text-slate-500 text-[10px] shrink-0">- {v.sellerName.split(' ')[0]}</span>}
               {v.parcelas && v.parcelas > 1 && <span className="text-violet-600 text-[10px] shrink-0">- {v.parcelas}x</span>}
+              {/* Formato da venda online direto na linha — vale também quando a
+                  lista aparece fora do agrupamento por formato. */}
+              {v.onlineTipo && (
+                <span className="shrink-0 text-[9px] font-bold uppercase text-violet-700 bg-violet-100 border border-violet-200 rounded px-1">
+                  {ONLINE_FORMATOS.find((f) => f.key === v.onlineTipo)?.curto || v.onlineTipo}
+                </span>
+              )}
             </div>
             <div className="flex items-center gap-2 shrink-0 ml-2">
               <span className="font-mono font-bold tabular-nums">{brl(v.valor)}</span>

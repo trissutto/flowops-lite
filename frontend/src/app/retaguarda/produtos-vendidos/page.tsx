@@ -824,10 +824,18 @@ function EditSellerModal({
   const [motivo, setMotivo] = useState('');
   // SELEÇÃO em vez de digitação livre (dono 23/07): nome digitado errado
   // vira vendedora fantasma e some da comissão. Lista = cadastro de
-  // funcionárias ativas, com as da loja do filtro primeiro.
+  // funcionárias ativas.
+  //
+  // 04/08 (dono): SÓ as vendedoras DA LOJA. A lista vinha com a rede inteira e
+  // dava pra atribuir a venda pra alguém que nunca pisou lá. O backend filtra
+  // por origem + lojas de atuação (quem roda em duas lojas, como a Brenda,
+  // continua aparecendo nas duas) + líder/gerente responsável.
   const [vendedoras, setVendedoras] = useState<Array<{ name: string; apelido?: string | null; storeCodeOrigin?: string | null }>>([]);
+  // Escape hatch pra caso raro (ficha cadastrada na loja errada): traz a rede.
+  const [todasLojas, setTodasLojas] = useState(false);
   useEffect(() => {
-    api<any[]>('/sellers')
+    const filtrandoLoja = !!storeCode && !todasLojas;
+    api<any[]>(`/sellers${filtrandoLoja ? `?storeCode=${encodeURIComponent(storeCode!)}` : ''}`)
       .then((arr) => {
         const ativas = (arr || []).filter((s: any) => s.active !== false);
         ativas.sort((a: any, b: any) => {
@@ -839,7 +847,7 @@ function EditSellerModal({
         setVendedoras(ativas);
       })
       .catch(() => setVendedoras([]));
-  }, [storeCode]);
+  }, [storeCode, todasLojas]);
   const [password, setPassword] = useState<string>(() => {
     try { return sessionStorage.getItem('flowops.masterPwd') || ''; } catch { return ''; }
   });
@@ -903,7 +911,24 @@ function EditSellerModal({
           </button>
         </div>
 
-        <label className="block text-xs font-bold text-slate-700 mb-1">Nova vendedora *</label>
+        <div className="flex items-center justify-between mb-1">
+          <label className="block text-xs font-bold text-slate-700">
+            Nova vendedora *
+            {storeCode && !todasLojas && (
+              <span className="ml-1 font-normal text-slate-500">· só da LJ {storeCode}</span>
+            )}
+          </label>
+          {storeCode && (
+            <button
+              type="button"
+              onClick={() => { setTodasLojas((v) => !v); setNovoNome(''); }}
+              className="text-[11px] font-bold text-violet-700 hover:text-violet-900 underline"
+              title="Use só se a ficha da funcionária estiver cadastrada em outra loja"
+            >
+              {todasLojas ? `← só da LJ ${storeCode}` : 'ver todas as lojas'}
+            </button>
+          )}
+        </div>
         <select
           value={novoNome}
           onChange={(e) => setNovoNome(e.target.value)}

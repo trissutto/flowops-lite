@@ -140,10 +140,35 @@ export class SellersService {
     return { created, skipped, total: funcionarios.length, sample };
   }
 
-  /** Lista vendedoras — por default só ativas. `includeInactive=true` pra admin. */
-  async list(includeInactive = false) {
+  /**
+   * Lista vendedoras — por default só ativas. `includeInactive=true` pra admin.
+   *
+   * `storeCode` restringe às funcionárias DAQUELA loja (04/08 — pedido do
+   * dono: o seletor de vendedora trazia a rede inteira e dava pra atribuir a
+   * venda pra alguém que nunca pisou na loja). O critério é o mesmo do ponto:
+   *   - storeCodeOrigin      → onde a ficha foi criada
+   *   - lojasAtuacao         → quem atende em MAIS de uma loja (a Brenda é de
+   *                            Jundiaí e também roda em Vinhedo); é JSON de
+   *                            códigos, o `contains` com aspas evita "03"
+   *                            casar dentro de "030"
+   *   - responsibleStoreId   → líder/gerente que responde pela loja
+   */
+  async list(includeInactive = false, storeCode?: string) {
+    const where: any = includeInactive ? {} : { active: true };
+    const code = String(storeCode || '').trim();
+    if (code) {
+      const store = await (this.prisma as any).store.findFirst({
+        where: { code },
+        select: { id: true },
+      });
+      where.OR = [
+        { storeCodeOrigin: code },
+        { lojasAtuacao: { contains: `"${code}"` } },
+        ...(store ? [{ responsibleStoreId: store.id }] : []),
+      ];
+    }
     return this.prisma.seller.findMany({
-      where: includeInactive ? undefined : { active: true },
+      where,
       orderBy: [{ active: 'desc' }, { name: 'asc' }],
     });
   }

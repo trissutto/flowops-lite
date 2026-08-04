@@ -35,6 +35,27 @@ export class CashService {
   }
 
   /**
+   * FORMATO da venda online, lido de `details.tipo` do pagamento:
+   *   'pix'          → PIX direto (cliente pagou na chave da loja)
+   *   'link'         → link externo (pago por fora, outro meio)
+   *   'pagarme_link' → link de cartão gerado pelo Flow (Pagar.me)
+   *
+   * O PDV já grava isso desde que a venda online existe; o painel só não
+   * mostrava — "VENDA ONLINE R$ 80,95" não dizia COMO entrou o dinheiro.
+   * Null pra qualquer outro método (ou venda antiga sem o campo).
+   */
+  private onlineTipoDoPagamento(payment: any): string | null {
+    if (String(payment?.method || '').toLowerCase() !== 'venda_online') return null;
+    try {
+      const det = typeof payment.details === 'string' ? JSON.parse(payment.details) : payment.details;
+      const tipo = det?.tipo ? String(det.tipo).trim() : '';
+      return tipo || null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Busca a sessão e calcula totais ATUAIS (sem fechar).
    * Usado tanto pelo Relatório X (parcial) quanto pelo fechamento Z.
    */
@@ -210,6 +231,8 @@ export class CashService {
         sellerName: string | null;
         finalizedAt: string | null;
         parcelas?: number;
+        // Venda online: 'pix' | 'link' | 'pagarme_link' (ver onlineTipoDoPagamento)
+        onlineTipo?: string | null;
         // Itens pra recebimentos crediário — lista de parcelas individuais pagas
         items?: Array<{
           parcelaNum: number | null;
@@ -269,6 +292,7 @@ export class CashService {
         sellerName: sale.sellerName || sale.vendedorName || null,
         finalizedAt: sale.finalizedAt || sale.createdAt || null,
         parcelas,
+        onlineTipo: this.onlineTipoDoPagamento(payment),
       });
     };
 
@@ -964,6 +988,7 @@ export class CashService {
             sellerName: sale.sellerName || sale.vendedorName || null,
             finalizedAt: sale.finalizedAt instanceof Date ? sale.finalizedAt.toISOString() : (sale.finalizedAt || sale.createdAt || null),
             parcelas,
+            onlineTipo: this.onlineTipoDoPagamento(payment),
           });
         };
 
