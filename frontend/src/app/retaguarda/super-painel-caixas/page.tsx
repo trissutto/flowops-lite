@@ -989,6 +989,14 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo, onDate
               {loja.caixaFechadoComVenda ? 'Caixa fechado' : 'Fechado'}
             </span>
           )}
+          {/* Tela cheia de fechamento/conferência desta loja no dia filtrado */}
+          <a
+            href={`/retaguarda/fechamento-caixa?storeCode=${encodeURIComponent(loja.storeCode)}&date=${dateFrom || ''}`}
+            className="ml-1 px-1.5 py-0.5 rounded bg-white/20 hover:bg-white/35 text-[10px] font-bold flex items-center gap-1"
+            title="Abrir o fechamento de caixa desta loja"
+          >
+            🧾 FECHAMENTO
+          </a>
           <a
             href={`/retaguarda/produtos-vendidos?storeCode=${encodeURIComponent(loja.storeCode)}${dateFrom ? `&from=${dateFrom}` : ''}${dateTo ? `&to=${dateTo}` : ''}`}
             className="ml-1 px-1.5 py-0.5 rounded bg-white/20 hover:bg-white/35 text-[10px] font-bold flex items-center gap-1"
