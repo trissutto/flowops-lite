@@ -338,6 +338,30 @@ export default function MinhaLojaRealinhamentoPage() {
    * Se tem problema, abre modal com lista — vendedora pode remover/diagnosticar
    * antes de tentar de novo. Se OK, fecha direto.
    */
+  /**
+   * EXCLUI uma caixa ABERTA (04/08 — botão "Excluir remessa").
+   * As peças voltam pra fila "a enviar" (células amarelas); a caixa some.
+   * Sem movimento de estoque — a baixa só acontece no fechamento.
+   */
+  const handleExcluirRemessa = useCallback(async (shipmentId: string, code: string, qtd: number) => {
+    if (!confirm(
+      `Excluir a remessa ${code}?\n\n` +
+      `A caixa some e ${qtd > 0 ? `as ${qtd} peça(s) que estão nela voltam` : 'as peças voltam'} ` +
+      `pra fila "a enviar" (células amarelas) — os pedidos continuam valendo.\n` +
+      `Nenhum estoque é movimentado.`,
+    )) return;
+    try {
+      const r = await api<{ ok: boolean; code: string; pecasDevolvidas: number }>(
+        `/realignment/shipments/${shipmentId}`,
+        { method: 'DELETE' },
+      );
+      pushToast(`🗑 Remessa ${r.code} excluída — ${r.pecasDevolvidas} peça(s) voltaram pra fila.`);
+      await Promise.all([loadOpenShipments(), loadPendingLabel(), loadItems(), loadSentItems()]);
+    } catch (e: any) {
+      alert(`Erro ao excluir remessa: ${e?.message || e}`);
+    }
+  }, [pushToast, loadOpenShipments, loadPendingLabel, loadItems, loadSentItems]);
+
   const handleCloseShipment = useCallback(async (shipmentId: string, code: string) => {
     // SIMPLIFICADO: sem modal de precheck. Vendedora separou, pecas em maos,
     // clica Fechar e enviar -> confirma -> fecha. Backend ja aceita unresolved
@@ -1221,6 +1245,15 @@ export default function MinhaLojaRealinhamentoPage() {
                         )}
                         Fechar e enviar
                       </button>
+                      <button
+                        type="button"
+                        onClick={() => handleExcluirRemessa(s.id, s.code, (s.items || []).length)}
+                        disabled={isClosing}
+                        className="bg-white hover:bg-rose-50 text-rose-700 border-2 border-rose-300 px-3 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 disabled:opacity-50"
+                        title="Exclui a caixa — as peças voltam pra fila 'a enviar'"
+                      >
+                        <X className="w-4 h-4" /> Excluir remessa
+                      </button>
                     </div>
                   </div>
                   {caixaAberta === s.id && (
@@ -1379,6 +1412,18 @@ export default function MinhaLojaRealinhamentoPage() {
                             ? <Loader2 className="w-4 h-4 animate-spin" />
                             : <Send className="w-4 h-4" />}
                           Fechar e enviar
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleExcluirRemessa(
+                            caixaDoDestino[d.code].id,
+                            caixaDoDestino[d.code].code,
+                            (caixaDoDestino[d.code].items || []).length,
+                          )}
+                          className="bg-white hover:bg-rose-50 text-rose-700 border-2 border-rose-300 px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5"
+                          title="Exclui a caixa — as peças voltam pra fila 'a enviar'"
+                        >
+                          <X className="w-4 h-4" /> Excluir remessa
                         </button>
                       </div>
                     </div>

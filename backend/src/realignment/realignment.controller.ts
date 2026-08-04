@@ -627,6 +627,25 @@ export class RealignmentController {
     return this.shipment.precheckCloseShipment({ shipmentId: id, storeId });
   }
 
+  /**
+   * DELETE /realignment/shipments/:id — EXCLUI uma caixa ABERTA.
+   * As peças voltam pra fila "a enviar"; a caixa vira 'cancelled'.
+   * Caixa fechada é recusada (o caminho dela é o Reabrir).
+   */
+  @Delete('shipments/:id')
+  excluirRemessaAberta(@Param('id') id: string, @Req() req: any) {
+    const role = req?.user?.role;
+    const storeId = req?.user?.storeId;
+    const ehRetaguarda = role === 'admin' || role === 'operator';
+    if (!ehRetaguarda && (role !== 'store' || !storeId)) {
+      throw new ForbiddenException('Apenas loja origem ou retaguarda');
+    }
+    return this.shipment.cancelOpenShipment({
+      shipmentId: id,
+      storeId: ehRetaguarda ? null : storeId,
+    });
+  }
+
   @Delete('shipments/items/:transferOrderId')
   removeItemFromShipment(@Param('transferOrderId') id: string, @Req() req: any) {
     const role = req?.user?.role;
