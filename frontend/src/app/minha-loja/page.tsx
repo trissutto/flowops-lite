@@ -2009,6 +2009,20 @@ function PickOrderCard({
             </div>
             <div className="text-xs text-emerald-700">{row.carrier}</div>
           </div>
+          {/* CORRIGIR ENDEREÇO em pedido JÁ ENVIADO.
+              O botão do outro bloco vive em `status !== 'shipped'` — ou seja,
+              sumia exatamente na aba Enviados, que foi criada pra isso.
+              Aqui a etiqueta não se refaz (o objeto já está viajando), mas
+              corrigir vale: acerta o cadastro da cliente pro próximo pedido e
+              deixa o registro certo pra quem for atrás depois. */}
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onEditarEndereco(); }}
+            className="w-full rounded-lg border-2 border-violet-300 bg-white py-2 text-sm font-semibold text-violet-700 hover:bg-violet-50"
+            title="Corrigir o endereço do pedido e do cadastro da cliente"
+          >
+            ✎ Corrigir endereço
+          </button>
           {/* Timeline ao vivo: só carrega quando expandir (compact) pra não estourar chamadas */}
           <TrackingTimeline
             code={row.trackingCode}
