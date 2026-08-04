@@ -112,11 +112,62 @@ export class RemessaEnvioService {
     return { ok: true, numero: doc.numero, serie: doc.serie, chave: doc.chave, danfeB64: buffer.toString('base64') };
   }
 
+  /**
+   * ROTA PRÓPRIA — lojas que trocam mercadoria de CARRO, entre si.
+   *
+   * Itanhaém, Praia Grande e Santos são vizinhas e a mercadoria vai no carro da
+   * rede (dono, 04/08). Etiqueta dos Correios pra esse trecho é papel jogado
+   * fora — e pior, é pré-postagem aberta que ninguém vai postar.
+   *
+   * Configurável em `SystemSetting['realignment_rota_propria']` (códigos de
+   * loja separados por vírgula) porque a rota do carro muda com o tempo e não
+   * pode exigir deploy. Sem config, o padrão resolve pelo NOME das lojas — o
+   * código de cada uma eu não tenho como saber daqui sem inventar, e chutar
+   * código de loja é mandar caixa pro lugar errado.
+   *
+   * Config com valor VAZIO desliga a regra (mesma convenção do filtro de
+   * tamanhos plus size).
+   */
+  private static readonly ROTA_PROPRIA_PADRAO = ['ITANHAEM', 'PRAIA GRANDE', 'SANTOS'];
+
+  async lojasDaRotaPropria(): Promise<Set<string>> {
+    const cfg: any = await (this.prisma as any).systemSetting
+      .findUnique({ where: { key: 'realignment_rota_propria' } })
+      .catch(() => null);
+
+    if (cfg && cfg.value !== null && cfg.value !== undefined) {
+      return new Set(
+        String(cfg.value).split(',').map((c) => c.trim().toUpperCase()).filter(Boolean),
+      );
+    }
+
+    const semAcento = (v: any) =>
+      String(v ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toUpperCase();
+    const lojas: any[] = await this.prisma.store.findMany({ select: { code: true, name: true } as any });
+    return new Set(
+      lojas
+        .filter((l) => RemessaEnvioService.ROTA_PROPRIA_PADRAO.includes(semAcento(l.name)))
+        .map((l) => String(l.code).toUpperCase()),
+    );
+  }
+
   /** 'correios' | 'proprio' — escolhido na tela, senão regra automática
-   *  (até 10 peças → Correios; acima → próprio). Dono 29/07. */
+   *  (rota própria entre lojas vizinhas; senão até 10 peças → Correios). */
   async transporteEfetivo(shipment: any): Promise<'correios' | 'proprio'> {
     const m = String(shipment?.transportMode || '');
     if (m === 'correios' || m === 'proprio') return m as any;
+
+    // Rota própria ganha da contagem de peças: o que decide aqui é o CARRO
+    // existir naquele trecho, não o tamanho da caixa. Só quando as DUAS pontas
+    // estão na rota — Itanhaém→Vinhedo continua indo pelos Correios.
+    const rota = await this.lojasDaRotaPropria();
+    const de = String(shipment?.fromStoreCode || '').toUpperCase();
+    const para = String(shipment?.toStoreCode || '').toUpperCase();
+    if (rota.size && rota.has(de) && rota.has(para)) {
+      this.logger.log(`[transporte] ${shipment?.code ?? ''} ${de}→${para}: rota própria (carro da rede)`);
+      return 'proprio';
+    }
+
     const rows: any[] = await this.prisma.transferOrder.findMany({
       where: { shipmentId: shipment.id, realignmentStatus: { not: 'cancelled' } } as any,
       select: { qtyOrigem: true } as any,
