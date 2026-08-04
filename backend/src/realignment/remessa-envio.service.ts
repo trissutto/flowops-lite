@@ -178,6 +178,64 @@ export class RemessaEnvioService {
     return 'correios';
   }
 
+  /**
+   * REPROCESSA A NOTA de uma remessa já fechada — SEM reabrir, SEM re-bipar
+   * (04/08 — caso REM-838: NF-e autorizada com 2 itens numa caixa de 57; a
+   * caixa já estava fechada e reabrir obrigaria a re-bipar tudo).
+   *
+   * Passos, na ordem, parando no primeiro erro:
+   *   1. o CONTROLLER re-resolve e grava o codigoBipado das peças
+   *      (refreshSkusForShipment — mora no shipment service; injetá-lo aqui
+   *      criaria dependência circular, então quem orquestra é a rota);
+   *   2. CANCELA a NF-e autorizada na SEFAZ (prazo de 24h — fora dele a SEFAZ
+   *      recusa e nada muda);
+   *   3. re-emite a nota — agora com a trava de completude: ou sai com TODAS
+   *      as peças, ou falha listando as que ainda estão sem código.
+   *
+   * A etiqueta/rastreio NÃO muda: pré-postagem continua a mesma.
+   */
+  async reprocessarNota(shipmentId: string, storeId: string | null, userId?: string | null) {
+    const shipment: any = await this.prisma.realignmentShipment.findUnique({ where: { id: shipmentId } });
+    if (!shipment) throw new NotFoundException('Remessa não encontrada');
+    await this.validarLojaOrigem(shipment, storeId);
+    if (shipment.status !== 'in_transit') {
+      throw new BadRequestException('Só remessa FECHADA (em trânsito) tem nota pra reprocessar.');
+    }
+
+    // Cancela a nota atual (se houver). Justificativa mínima de 15 chars (SEFAZ).
+    const atual = await this.prisma.nfeDoc.findFirst({
+      where: { shipmentId, status: 'authorized' },
+    });
+    let cancelada: any = null;
+    if (atual) {
+      cancelada = await this.nfe.cancelDoc(
+        atual.id,
+        `Nota emitida com itens faltando - reemissao com todas as pecas da remessa ${shipment.code}`,
+        userId ?? null,
+      );
+    }
+
+    // 3) Re-emite — a trava de completude decide: tudo ou nada.
+    const r: any = await this.nfe.emitForShipment(shipmentId, { userId: userId ?? null });
+    if (!r?.ok) {
+      throw new BadRequestException(
+        `Nota anterior cancelada, mas a reemissão falhou: ${r?.erro || r?.motivo || 'erro desconhecido'}. ` +
+        'Nenhuma nota vigente — resolva o cadastro e clique de novo.',
+      );
+    }
+
+    this.logger.warn(
+      `[reprocessar-nota] ${shipment.code}: nota antiga=${atual?.numero ?? '-'} cancelada=${!!cancelada} ` +
+      `· nota nova=${r?.doc?.numero ?? '?'}`,
+    );
+    return {
+      ok: true,
+      code: shipment.code,
+      notaCancelada: atual ? { numero: atual.numero } : null,
+      notaNova: r?.doc ?? null,
+    };
+  }
+
   /** `storeId` nulo = retaguarda (admin), que enxerga todas as remessas. */
   private async validarLojaOrigem(shipment: any, storeId: string | null) {
     if (!storeId) return null;
