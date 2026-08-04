@@ -934,10 +934,37 @@ function GradeEstoque({
      * de loja eu não tenho como conferir daqui, e chutar código é esconder a
      * coluna errada.
      */
-    const FORA_DA_GRADE = ['MATRI', 'ITU', 'DEPOS'];
+    // SITE entrou aqui em 04/08: é loja-canal, não arara. A peça vai pro site
+    // pelo pedido (TransferOrder do canal), nunca arrastada nesta grade.
+    const FORA_DA_GRADE = ['MATRI', 'ITU', 'DEPOS', 'SITE'];
+
+    /**
+     * ORDEM DO ITINERÁRIO DA ENTREGA (dono, 04/08) — não alfabética.
+     *
+     * A grade é usada pra decidir o que vai em cada caixa, e quem monta segue
+     * a ordem do carro. Coluna em ordem alfabética obriga a pular de um lado
+     * pro outro da tela a cada loja da rota.
+     *
+     * Casa pela SIGLA (o mesmo texto do cabeçalho), não por código: código de
+     * loja eu não tenho como conferir daqui. Loja fora da rota (SITE, e
+     * qualquer uma nova) vai pro fim, em ordem alfabética — melhor no fim do
+     * que sumida.
+     */
+    const ITINERARIO = [
+      'ITANH', 'PRAIA', 'SANTO', 'JUNDI', 'VINHE', 'CAMPI', 'LIMEI',
+      'PIRAC', 'INDAI', 'SOROC', 'MOEMA', 'ANALI', 'SUZAN', 'SAO J',
+    ];
+    const posicao = (c: string) => {
+      const i = ITINERARIO.indexOf((lojaNomes.get(c) || c).toUpperCase());
+      return i < 0 ? ITINERARIO.length : i;
+    };
+
     return [...s]
       .filter((c) => !FORA_DA_GRADE.includes((lojaNomes.get(c) || c).toUpperCase()))
-      .sort();
+      .sort((a, b) => {
+        const d = posicao(a) - posicao(b);
+        return d !== 0 ? d : a.localeCompare(b);
+      });
   }, [skus, lojaNomes]);
 
   /**
