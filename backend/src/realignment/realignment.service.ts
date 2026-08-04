@@ -924,6 +924,45 @@ export class RealignmentService {
   }
 
   /**
+   * Preenche `descricao` das ordens que nasceram SEM ela (04/08 — a pilha
+   * mostrava só a REF: "021320" sem dizer QUE peça é). Lookup em lote no
+   * espelho do catálogo pelo codigoBipado, com as variantes de zero à
+   * esquerda do Giga. Best-effort: falha aqui não derruba a lista.
+   */
+  async preencherDescricoes(orders: Array<any>): Promise<void> {
+    const semDesc = orders.filter(
+      (o) => !String(o.descricao || '').trim() && String(o.codigoBipado || '').trim(),
+    );
+    if (!semDesc.length) return;
+    try {
+      const variantes = new Set<string>();
+      for (const o of semDesc) {
+        const c = String(o.codigoBipado).trim();
+        variantes.add(c);
+        const semZeros = c.replace(/^0+/, '');
+        if (semZeros) variantes.add(semZeros);
+        if (c.length < 14) variantes.add(c.padStart(14, '0'));
+      }
+      const rows: any[] = await (this.prisma as any).wincredProduto.findMany({
+        where: { codigo: { in: Array.from(variantes) } },
+        select: { codigo: true, descricaoCompleta: true, descricaoPdv: true },
+      });
+      const porChave = new Map<string, string>();
+      for (const r of rows) {
+        const d = String(r.descricaoCompleta || r.descricaoPdv || '').trim();
+        if (!d) continue;
+        porChave.set(String(r.codigo).replace(/^0+/, ''), d);
+      }
+      for (const o of semDesc) {
+        const d = porChave.get(String(o.codigoBipado).trim().replace(/^0+/, ''));
+        if (d) o.descricao = d;
+      }
+    } catch (e: any) {
+      this.logger.warn(`[realignment] preencherDescricoes falhou: ${e?.message}`);
+    }
+  }
+
+  /**
    * Lista ordens pendentes de REALINHAMENTO pra LOJA ORIGEM dela.
    * Recebe storeId do JWT → resolve storeCode via Store (JWT atual não carrega
    * o code, só o id). Retorna [] se a loja não existir.
@@ -968,8 +1007,11 @@ export class RealignmentService {
         realignmentStatus: true,
         realignmentNotFoundAt: true,
         realignmentNotFoundNote: true,
+        // Pro preenchimento de descrição vazia (lookup no espelho)
+        codigoBipado: true,
       } as any,
     });
+    await this.preencherDescricoes(orders as any[]);
     // ESTRATÉGIA NÃO-BLOQUEANTE pra latência sempre baixa (<500ms):
     //  - Imagens já em cache → vão no payload
     //  - Refs sem cache → dispara fetch BG (sem await), próxima chamada já tem
@@ -1183,8 +1225,10 @@ export class RealignmentService {
         createdAt: true,
         realignmentSentAt: true,
         shipmentId: true,
+        codigoBipado: true,
       } as any,
     });
+    await this.preencherDescricoes(orders as any[]);
 
     /**
      * A peça já está em caixa FECHADA?
