@@ -148,6 +148,15 @@ export class RealignmentShipmentService {
             qtyOrigem: true,
             descricao: true,
             precoUnitCents: true,
+            // ── O que a GRADE da tela precisa ──
+            // A caixa carrega o proprio conteudo. Antes a tela montava a grade
+            // a partir de "enviados HOJE", e por isso toda caixa que virava o
+            // dia perdia a grade e caia numa tabela plana onde nao da pra
+            // bipar. Com destino e horario aqui, a grade nasce da CAIXA e nao
+            // depende de data nenhuma.
+            lojaDestinoCode: true,
+            lojaDestinoName: true,
+            realignmentSentAt: true,
           } as any,
         });
         return { ...s, items };
