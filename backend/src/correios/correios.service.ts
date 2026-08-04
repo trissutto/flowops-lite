@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
 import { CorreiosAuthService } from './correios-auth.service';
+import { encurtarNomeDestinatario } from '../lib/nome-destinatario';
 
 /**
  * Serviços dos Correios (API CWS) — cálculo de frete (preço + prazo) e
@@ -227,7 +228,10 @@ export class CorreiosService {
         },
       },
       destinatario: {
-        nome: input.destinatario.nome.slice(0, 50),
+        // Limite dos Correios é 50. Cortar seco deixava a etiqueta com nome
+        // partido no meio da palavra ("...Marques da Sil") — o helper abrevia
+        // preservando primeiro nome e último sobrenome.
+        nome: encurtarNomeDestinatario(input.destinatario.nome, 50),
         ...(input.destinatario.cpfCnpj ? { cpfCnpj: input.destinatario.cpfCnpj.replace(/\D/g, '') } : {}),
         ...(foneDest.numero ? { dddCelular: foneDest.ddd, celular: foneDest.numero } : {}),
         endereco: {
