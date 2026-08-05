@@ -16,7 +16,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
   ArrowLeft, Search, Loader2, CheckCircle2, AlertCircle, Banknote, QrCode, Copy, Check, X,
-  User, RefreshCw, ChevronDown, ChevronRight, Link as LinkIcon, MessageCircle,
+  User, RefreshCw, ChevronDown, ChevronRight, Link as LinkIcon, MessageCircle, Printer,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -87,6 +87,19 @@ async function printReceipt(baixaId: string) {
     await routePrint({ kind: 'recibo_pix', url });
   } catch {
     hiddenIframe(url);
+  }
+}
+// Extrato A4 das parcelas em aberto do cliente (routePrint → perfil A4)
+async function printExtrato(c: { codCliente: string; nome: string; telefone: string | null }) {
+  const qs = new URLSearchParams({ autoprint: '1' });
+  if (c.nome) qs.set('nome', c.nome);
+  if (c.telefone) qs.set('tel', c.telefone);
+  const url = `/minha-loja/pdv/recebimentos/extrato/${encodeURIComponent(c.codCliente)}?${qs.toString()}`;
+  try {
+    const { routePrint } = await import('@/lib/printer-router');
+    await routePrint({ kind: 'extrato_crediario', url });
+  } catch {
+    window.open(url, 'lurds_extrato', 'width=900,height=700,resizable=yes');
   }
 }
 function hiddenIframe(url: string) {
@@ -558,12 +571,21 @@ export default function RecebimentosPage() {
                             <>
                               <div className="px-3 py-2 bg-rose-50/50 text-[10px] font-bold uppercase text-rose-900 flex justify-between">
                                 <span>{parcelas.length} parcela{parcelas.length > 1 ? 's' : ''} em aberto</span>
-                                <button
-                                  onClick={(e) => { e.stopPropagation(); selectAll(); }}
-                                  className="px-2 py-0.5 bg-rose-200 hover:bg-rose-300 text-rose-900 rounded text-[10px] font-bold normal-case"
-                                >
-                                  {selected.size === parcelas.length ? 'Desmarcar todas' : 'Marcar todas'}
-                                </button>
+                                <span className="flex items-center gap-1.5">
+                                  <button
+                                    onClick={(e) => { e.stopPropagation(); printExtrato(c); }}
+                                    className="px-2 py-0.5 bg-white hover:bg-rose-100 border border-rose-200 text-rose-900 rounded text-[10px] font-bold normal-case flex items-center gap-1"
+                                    title="Imprimir extrato A4 das parcelas em aberto"
+                                  >
+                                    <Printer size={11} /> Imprimir
+                                  </button>
+                                  <button
+                                    onClick={(e) => { e.stopPropagation(); selectAll(); }}
+                                    className="px-2 py-0.5 bg-rose-200 hover:bg-rose-300 text-rose-900 rounded text-[10px] font-bold normal-case"
+                                  >
+                                    {selected.size === parcelas.length ? 'Desmarcar todas' : 'Marcar todas'}
+                                  </button>
+                                </span>
                               </div>
                               <ul className="divide-y divide-gray-100">
                                 {parcelas.map((p) => {
