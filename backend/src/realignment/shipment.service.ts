@@ -342,7 +342,9 @@ export class RealignmentShipmentService {
     }
 
     const upd = await this.prisma.transferOrder.updateMany({
-      where: { shipmentId: shipment.id } as any,
+      // Peça EXCLUÍDA (lixeirinha) NÃO volta pra fila — excluir a caixa
+      // ressuscitava peça que a loja tinha tirado do pedido de propósito.
+      where: { shipmentId: shipment.id, realignmentStatus: { not: 'cancelled' } } as any,
       data: {
         realignmentStatus: 'pending',
         realignmentSentAt: null,
@@ -484,8 +486,12 @@ export class RealignmentShipmentService {
       }
     }
 
+    // Peça EXCLUÍDA (lixeirinha) fica atada à caixa com status cancelled e o
+    // fechamento nunca baixou o estoque dela. Sem este filtro, o reabrir
+    // (a) DEVOLVIA estoque que não saiu — peça fantasma no estoque — e
+    // (b) RESSUSCITAVA a peça pra fila "a enviar" que a loja tinha excluído.
     const items = await this.prisma.transferOrder.findMany({
-      where: { shipmentId: shipment.id } as any,
+      where: { shipmentId: shipment.id, realignmentStatus: { not: 'cancelled' } } as any,
       select: { id: true, refCode: true, cor: true, tamanho: true, qtyOrigem: true, codigoBipado: true } as any,
     });
 

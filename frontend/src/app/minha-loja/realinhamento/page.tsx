@@ -754,6 +754,11 @@ export default function MinhaLojaRealinhamentoPage() {
         // Fallback paranoico: item já removido antes do clique? Força recarga.
         loadSentItems();
       }
+      // A célula VERDE da grade nasce da CAIXA (openShipments[].items) — sem
+      // recarregar aqui, a peça recém-bipada sumia da grade até um F5 (o
+      // markUnsent recarrega; o markSent não recarregava). Sem await: a UI já
+      // mostrou o toast, a grade se atualiza no tick seguinte.
+      loadOpenShipments();
       pushToast('Marcado como enviado ✓');
     } catch (err: any) {
       pushToast(`Erro: ${err?.message ?? 'falha ao marcar'}`);
@@ -877,10 +882,16 @@ export default function MinhaLojaRealinhamentoPage() {
               const t = it.tamanho || '—';
               const atual = matrix[c][t];
               const celula = atual ? [...(atual.celula || [atual]), it] : [it];
-              // Principal = a primeira ordem que ainda dá pra bipar; se todas
-              // já foram, a primeira mesmo (só pra rótulo/id de referência).
+              // Principal = a primeira ordem que ainda dá pra bipar; sem
+              // nenhuma bipável, prioriza a que JÁ ESTÁ NA CAIXA (verde) —
+              // antes o fallback era celula[0], e uma irmã "não achada" na
+              // frente pintava a célula de ROSA escondendo a peça separada
+              // (parecia que nada tinha sido bipado). Só fica rosa quando a
+              // célula INTEIRA é não-achada.
               const principal =
-                celula.find((x) => !x.sentAt && x.realignmentStatus !== 'not_found') || celula[0];
+                celula.find((x) => !x.sentAt && x.realignmentStatus !== 'not_found') ||
+                celula.find((x) => x.sentAt) ||
+                celula[0];
               matrix[c][t] = {
                 ...principal,
                 celula,
