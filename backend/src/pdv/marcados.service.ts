@@ -561,10 +561,14 @@ export class MarcadosService {
     // não trouxe). Se a pessoa tem ficha em várias lojas, vale a com
     // classificação 'A' e maior limite (o antigo LIMIT 1 pegava uma qualquer).
     let row: any = null;
+    /** Todas as fichas da MESMA pessoa (o cadastro é POR LOJA) — usadas pra
+     *  somar os marcados dela sem pegar os de um xará de outra loja. */
+    let fichasPessoa: any[] = [];
     try {
       const fichas: any[] = await (this.prisma as any).gigaCliente.findMany({
         where: { OR: [{ personKey: `cpf:${safeCpf}` }, { cpf: safeCpf }, { cpf: formattedCpf }] },
       });
+      fichasPessoa = fichas;
       if (fichas.length) {
         const f = fichas.slice().sort((a, b) => {
           const aA = String(a.avaliacao || '').trim().toUpperCase() === 'A' ? 1 : 0;
@@ -625,20 +629,36 @@ export class MarcadosService {
     // 3. Busca marcados ativos do cliente — NATIVO primeiro (tabela marcados
     // no Postgres, "CHEGA DE GIGA" 21/07); Giga só se o espelho nunca rodou
     // ou com MARCADOS_NATIVE_READS=0.
+    //
+    // ESCOPO POR PESSOA, não por número (04/08): o código do cliente REPETE
+    // entre lojas — cód. 5967 existe em várias. Casar só por `codCliente`
+    // somava o marcado de uma XARÁ de outra loja e comia o limite de quem não
+    // devia nada (mesma família de bug do JOIN sem LOJA em `listAll` e da
+    // comissão resolvida no mapa global). Agora casa por CPF **ou** pelo par
+    // loja+código de cada ficha dela.
     let marcadosAtivos: any[] | null = null;
     if (await this.useNative()) {
-      const nativos: any[] = await (this.prisma as any).marcado.findMany({
-        where: {
-          status: 'ativo',
-          isTraining: false,
-          OR: [
-            ...(safeCpf ? [{ cpf: safeCpf }] : []),
-            ...(codCliente ? [{ codCliente: { in: this.codVariants(codCliente) } }] : []),
-          ],
-        },
-        orderBy: [{ dataMarcacao: 'desc' }, { createdAt: 'desc' }],
-        take: 200,
-      });
+      const escopoPessoa: any[] = [
+        ...(safeCpf ? [{ cpf: safeCpf }] : []),
+        ...fichasPessoa
+          .filter((f) => f?.codigo)
+          .map((f) => ({
+            codCliente: { in: this.codVariants(f.codigo) },
+            storeCode: String(f.loja ?? '').replace(/\D/g, '').padStart(2, '0'),
+          })),
+        // Ficha só no Giga (recém-cadastrada): sem par loja+código no espelho,
+        // vale o código da ficha escolhida — melhor conferir demais que de menos.
+        ...(!fichasPessoa.length && codCliente
+          ? [{ codCliente: { in: this.codVariants(codCliente) } }]
+          : []),
+      ];
+      const nativos: any[] = escopoPessoa.length
+        ? await (this.prisma as any).marcado.findMany({
+            where: { status: 'ativo', isTraining: false, OR: escopoPessoa },
+            orderBy: [{ dataMarcacao: 'desc' }, { createdAt: 'desc' }],
+            take: 200,
+          })
+        : [];
       // REDE DE SEGURANÇA: espelho SEM linhas pra este cliente NÃO é resposta —
       // é possível mismatch/sync parcial. Cai pro Giga (a autoridade). Sem isso,
       // o cliente aparece "sem marcado" e o PDV libera marcação acima do limite.
@@ -660,15 +680,25 @@ export class MarcadosService {
       0,
     );
 
-    // 4. Validação
+    // 4. Validação — marcado exige classe A **E** limite. São dois campos
+    // separados da ficha, e é fácil ter um sem o outro: a AVALIACAO vinha do
+    // Giga (fora desde 02/08), então ficha nova do Flow nasce sem ela e
+    // `copiarParaLoja` de propósito não copia nenhum dos dois. O gerente dá
+    // limite, acha que liberou, e a peça é negada no balcão. A mensagem
+    // precisa dizer O QUE FAZER, não só qual campo está torto.
+    const ONDE_AJUSTAR = 'Um gerente ajusta em Retaguarda → Clientes → ficha da cliente → campos restritos.';
     let permitido = true;
     let motivo: string | undefined = undefined;
     if (classificacao !== 'A') {
       permitido = false;
-      motivo = `Cliente classificação "${classificacao || '—'}" — só clientes "A" podem marcar`;
+      motivo = limiteTotal > 0
+        ? `Ficha tem limite de R$ ${limiteTotal.toFixed(2)}, mas está sem Avaliação "A" ` +
+          `(hoje: "${classificacao || '—'}"). Limite sozinho NÃO libera marcado — precisa dos dois. ${ONDE_AJUSTAR}`
+        : `Ficha sem Avaliação "A" (hoje: "${classificacao || '—'}") e sem limite. ` +
+          `Marcado exige as duas coisas. ${ONDE_AJUSTAR}`;
     } else if (limiteTotal <= 0) {
       permitido = false;
-      motivo = `Cliente sem limite de marcação configurado no Giga (LIMITECOMPRAS=0)`;
+      motivo = `Cliente é classe "A" mas está sem limite de compras na ficha desta loja. ${ONDE_AJUSTAR}`;
     }
 
     return {

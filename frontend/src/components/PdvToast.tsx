@@ -90,10 +90,23 @@ function ToastBanner({ item, onClose }: { item: ToastItem; onClose: () => void }
  * Tenta detectar 404/500/JSON e converter. Fallback: mensagem original.
  */
 export function humanizeError(err: any): { title: string; hint?: string } {
-  const msg = String(err?.message || err || '');
+  const bruto = String(err?.message || err || '');
+  // O api() joga `Error("400: {json do Nest}")`. Sem desembrulhar, a vendedora
+  // lê `400: {"message":"...","error":"Bad Request","statusCode":400}` — e o
+  // envelope ainda come ~60 dos caracteres que sobram pro recado de verdade.
+  const status = Number(bruto.match(/^(\d{3}):/)?.[1] || 0);
+  let msg = bruto;
+  const corpo = bruto.replace(/^\d{3}:\s*/, '');
+  if (corpo.startsWith('{')) {
+    try {
+      const j = JSON.parse(corpo);
+      const m = j?.message;
+      if (m) msg = Array.isArray(m) ? m.join(' · ') : String(m);
+    } catch { /* não era JSON — segue com o texto cru */ }
+  }
   const lower = msg.toLowerCase();
 
-  if (lower.includes('produto não encontrado') || lower.includes('not found') || lower.includes('404')) {
+  if (lower.includes('produto não encontrado') || lower.includes('not found') || status === 404) {
     return { title: 'Produto não encontrado', hint: 'Verifique o código ou cadastre o item' };
   }
   if (lower.includes('giga') || lower.includes('mysql') || lower.includes('econn')) {
@@ -102,12 +115,15 @@ export function humanizeError(err: any): { title: string; hint?: string } {
   if (lower.includes('estoque') || lower.includes('stock')) {
     return { title: 'Sem estoque suficiente', hint: msg };
   }
-  if (lower.includes('500')) {
+  // Era `includes('500')`: qualquer valor com "500" no texto (limite de
+  // R$ 1500,00, REF 3500…) virava "Erro inesperado" e escondia o motivo real.
+  if (status >= 500) {
     return { title: 'Erro inesperado', hint: 'A equipe técnica foi notificada — tente de novo' };
   }
   if (lower.includes('network') || lower.includes('failed to fetch')) {
     return { title: 'Sem conexão', hint: 'Confira sua internet' };
   }
-  // Genérico: mantém a mensagem mas suaviza
-  return { title: 'Algo deu errado', hint: msg.slice(0, 120) };
+  // Genérico: mantém a mensagem. O corte era 120 e decepava justamente o fim,
+  // que é onde mora o "o que fazer agora".
+  return { title: 'Algo deu errado', hint: msg.slice(0, 300) };
 }
