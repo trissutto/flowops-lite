@@ -111,6 +111,7 @@ export class CrediarioMirrorService {
     optCol('totalParcelas', 'totalParcelas');
     optCol('vencimento', 'vencimento');
     optCol('valorParcela', 'valorParcela');
+    optCol('obs', 'obs'); // observação da promissória — sumia no espelho
 
     // MESMO critério de "em aberto" do listAllOpenInstallments
     const where: string[] = [];
@@ -157,6 +158,7 @@ export class CrediarioMirrorService {
           r.totalParcelas != null && !isNaN(Number(r.totalParcelas)) ? Number(r.totalParcelas) : null,
         vencimento: r.vencimento ? new Date(r.vencimento) : null,
         valorParcela: r.valorParcela != null ? r.valorParcela : null,
+        obs: r.obs != null ? String(r.obs).trim().slice(0, 300) || null : null,
       }))
       .filter((r) => !r.vencimento || !isNaN(r.vencimento.getTime()));
 

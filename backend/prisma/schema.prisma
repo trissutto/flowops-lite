@@ -3744,6 +3744,10 @@ model WincredMovimentoAberto {
   totalParcelas Int?      @map("total_parcelas")
   vencimento    DateTime? @db.Date
   valorParcela  Decimal?  @map("valor_parcela") @db.Decimal(10, 2)
+  // Observação livre da promissória (movimento.OBS do Giga). Sem esta coluna
+  // o espelho devolvia obs=null e a observação "sumia" da tela de
+  // recebimentos quando a leitura migrou pro espelho (05/08).
+  obs           String?   @db.VarChar(300)
 
   syncedAt      DateTime  @default(now()) @map("synced_at")
 
