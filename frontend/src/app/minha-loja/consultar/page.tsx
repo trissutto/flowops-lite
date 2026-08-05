@@ -24,7 +24,7 @@ import { overlayClose } from '@/lib/overlayClose';
  *  - Esc              → limpa
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { api, apiRetry } from '@/lib/api';
@@ -887,8 +887,8 @@ function ProductCard({ item, highlightSku, myStore }: {
                 const isColorSel = selectedColor === cor;
                 const dimmed = selectedColor && !isColorSel;
                 return (
+                  <Fragment key={cor}>
                   <tr
-                    key={cor}
                     className={`transition border-b border-slate-100 ${
                       isColorSel
                         ? 'bg-brand/5'
@@ -955,6 +955,17 @@ function ProductCard({ item, highlightSku, myStore }: {
                       {colorTotal}
                     </td>
                   </tr>
+                  {/* GRADE POR LOJA colada na linha da cor clicada (05/08 —
+                      "deixar embaixo ficou ruim"): abre logo abaixo da célula,
+                      dentro da própria tabela, ocupando a largura toda. */}
+                  {isColorSel && selectedSize && (
+                    <tr className="bg-brand/5">
+                      <td colSpan={sizes.length + 2} className="p-0">
+                        <GradePorLoja item={item} cor={cor} tamanho={selectedSize} />
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 );
               })}
               {/* Linha totais por tamanho */}
@@ -982,17 +993,6 @@ function ProductCard({ item, highlightSku, myStore }: {
 
         <CellLegend />
       </section>
-
-      {/* GRADE POR LOJA (05/08 — pedido do dono): clicou na célula, abre a
-          quantidade DAQUELA cor+tamanho em CADA loja da rede, no mesmo padrão
-          visual da grade de cima, com o NOME da loja em vez do código. */}
-      {selectedColor && selectedSize && (
-        <GradePorLoja
-          item={item}
-          cor={selectedColor}
-          tamanho={selectedSize}
-        />
-      )}
 
       {/* OUTRAS LOJAS — só aparece quando usuário clica em cor/tamanho/célula. */}
       {(selectedColor || selectedSize) && filteredOtherStores.length > 0 && (
@@ -1095,9 +1095,19 @@ function GradePorLoja({ item, cor, tamanho }: {
         qty: s.variants.filter((v) => casa(v.cor, v.tamanho)).reduce((a, v) => a + v.qty, 0),
       }))
       // Toda loja que tem a REF aparece — as sem esta variação ficam com o
-      // "—" cinza, igual à grade de cima. Ver a rede inteira de uma vez é o
-      // que evita a ligação desnecessária ("liga lá pra ver se tem").
-      .sort((a, b) => b.qty - a.qty || a.name.localeCompare(b.name, 'pt-BR'));
+      // "—" cinza. ORDEM DE SEMPRE (dono, 05/08): pelo código da loja
+      // (02 SAN, 03 VIN, 04 IND, 05 PIR...), não por quantidade — é a ordem
+      // que a operação decorou do Wincred. Código não-numérico vai pro fim.
+      .sort((a, b) => {
+        const na = Number(a.code);
+        const nb = Number(b.code);
+        const aNum = !isNaN(na);
+        const bNum = !isNaN(nb);
+        if (aNum && bNum) return na - nb;
+        if (aNum) return -1;
+        if (bNum) return 1;
+        return a.code.localeCompare(b.code);
+      });
 
     const totalRede = minhaQty + lojas.reduce((a, l) => a + l.qty, 0);
     return { minhaQty, lojas, totalRede };
