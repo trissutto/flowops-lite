@@ -928,12 +928,30 @@ export default function MinhaLojaRealinhamentoPage() {
       });
   }, [currentItems]);
 
-  /** Caixa aberta de cada destino, indexada pelo código da loja. */
+  /** Caixa aberta de cada destino, indexada pelo código da loja.
+   *  Com IRMÃS abertas pro mesmo destino (caixa fantasma da REM-809, 05/08),
+   *  vale a MAIS RECENTE — a mesma que o bipe do backend escolhe agora. As
+   *  outras entram em `irmasAbertas` pra tela AVISAR em vez de esconder. */
   const caixaDoDestino = useMemo(() => {
     const m: Record<string, any> = {};
-    for (const s of openShipments) m[s.toStoreCode] = s;
+    for (const s of openShipments) {
+      const atual = m[s.toStoreCode];
+      if (!atual || String(s.openedAt || '') > String(atual.openedAt || '')) m[s.toStoreCode] = s;
+    }
     return m;
   }, [openShipments]);
+
+  /** Caixas abertas ALÉM da exibida, por destino — antes ficavam invisíveis
+   *  (o bipe caía nelas e o cartão dizia "0 item(s)"). */
+  const irmasAbertas = useMemo(() => {
+    const m: Record<string, any[]> = {};
+    for (const s of openShipments) {
+      if (caixaDoDestino[s.toStoreCode]?.id !== s.id) {
+        (m[s.toStoreCode] = m[s.toStoreCode] || []).push(s);
+      }
+    }
+    return m;
+  }, [openShipments, caixaDoDestino]);
 
   /**
    * Caixa em montagem que NÃO tem grade na tela — cartão próprio só pra essa.
@@ -956,8 +974,13 @@ export default function MinhaLojaRealinhamentoPage() {
     // caixa com os botões no próprio cabeçalho).
     if (view !== 'pending') return [];
     const comGrade = new Set(byDestination.map((d) => d.code));
-    return openShipments.filter((s) => !comGrade.has(s.toStoreCode));
-  }, [view, openShipments, byDestination]);
+    // Entram: caixa de destino SEM grade (de outro dia) E as IRMÃS da caixa
+    // exibida na pilha — cada caixa aberta precisa de um cartão com botões,
+    // senão vira a caixa fantasma (bipe caía nela e ninguém conseguia fechar).
+    return openShipments.filter(
+      (s) => !comGrade.has(s.toStoreCode) || caixaDoDestino[s.toStoreCode]?.id !== s.id,
+    );
+  }, [view, openShipments, byDestination, caixaDoDestino]);
 
   // Peça "não achada" continua na lista (pra não sumir a pilha), mas NÃO é
   // trabalho pendente — senão o contador do topo mentiria.
@@ -1473,6 +1496,22 @@ export default function MinhaLojaRealinhamentoPage() {
                       As <b className="text-emerald-700">verdes</b> já estão na caixa · as claras
                       ainda faltam pegar. Dá pra <b>reabrir</b> depois pela aba Enviados.
                     </p>
+                    {/* CAIXA IRMÃ (05/08 — fantasma da REM-809): existe OUTRA
+                        caixa aberta pro mesmo destino. Antes ela ficava
+                        invisível — o bipe caía nela e este cartão dizia
+                        "0 item(s)". Agora avisa e aponta onde ela está. */}
+                    {(irmasAbertas[d.code] || []).length > 0 && (
+                      <div className="mt-2 bg-rose-50 border-2 border-rose-300 rounded-lg px-3 py-2 text-[11px] text-rose-900 leading-snug">
+                        ⚠ <b>Este destino tem {(irmasAbertas[d.code] || []).length + 1} caixas abertas:</b>{' '}
+                        {(irmasAbertas[d.code] || []).map((s: any) => (
+                          <b key={s.id} className="font-mono">
+                            {s.code} ({(s.items || []).length} item{(s.items || []).length !== 1 ? 's' : ''}) ·{' '}
+                          </b>
+                        ))}
+                        estão logo acima, em <b>Remessas em montagem</b> — feche ou exclua por lá.
+                        Peça verde desta grade pode estar em qualquer uma delas.
+                      </div>
+                    )}
                   </div>
                 )}
 

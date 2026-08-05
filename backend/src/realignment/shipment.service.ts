@@ -668,13 +668,18 @@ export class RealignmentShipmentService {
     if (o.realignmentStatus === 'received')
       throw new BadRequestException('Item já foi recebido');
 
-    // Procura remessa OPEN do par origem→destino
+    // Procura remessa OPEN do par origem→destino.
+    // tipo + orderBy DESC: mesma regra do markAsSent — o bipe cai SEMPRE na
+    // caixa que o cartão da tela mostra (a mais recente), nunca numa antiga
+    // invisível (caixa fantasma da REM-809, 05/08).
     let shipment = await (this.prisma as any).realignmentShipment.findFirst({
       where: {
         fromStoreCode: o.lojaOrigemCode,
         toStoreCode: o.lojaDestinoCode,
         status: 'open',
+        tipo: 'REALINHAMENTO',
       },
+      orderBy: [{ openedAt: 'desc' }, { code: 'desc' }],
     });
 
     // Se não tem aberta, cria nova (com retry em caso de colisão de code)
@@ -1384,14 +1389,31 @@ export class RealignmentShipmentService {
         select: { id: true } as any,
       });
       if (sobra.length > 0) {
-        const nova = await this.createShipmentWithRetry({
-          fromStoreCode: shipment.fromStoreCode,
-          fromStoreName: shipment.fromStoreName,
-          toStoreCode: shipment.toStoreCode,
-          toStoreName: shipment.toStoreName,
-          tipo: shipment.tipo,
-          openedByUserId: input.userId ?? null,
+        // REAPROVEITA caixa aberta existente do par antes de fabricar outra.
+        // Era uma das fontes da CAIXA DUPLICADA (05/08): a sobra criava uma
+        // nova mesmo já havendo aberta, e o par ficava com duas — o bipe caía
+        // numa e o cartão da tela mostrava a outra ("0 item(s)" com a grade
+        // verde). Mesma regra de escolha do bipe: a mais recente.
+        let nova = await (this.prisma as any).realignmentShipment.findFirst({
+          where: {
+            fromStoreCode: shipment.fromStoreCode,
+            toStoreCode: shipment.toStoreCode,
+            status: 'open',
+            tipo: shipment.tipo,
+            id: { not: shipment.id },
+          },
+          orderBy: [{ openedAt: 'desc' }, { code: 'desc' }],
         });
+        if (!nova) {
+          nova = await this.createShipmentWithRetry({
+            fromStoreCode: shipment.fromStoreCode,
+            fromStoreName: shipment.fromStoreName,
+            toStoreCode: shipment.toStoreCode,
+            toStoreName: shipment.toStoreName,
+            tipo: shipment.tipo,
+            openedByUserId: input.userId ?? null,
+          });
+        }
         await this.prisma.transferOrder.updateMany({
           where: { id: { in: sobra.map((s: any) => s.id) } },
           data: {

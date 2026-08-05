@@ -1316,7 +1316,8 @@ export class RealignmentService {
                loja_origem_name as "lojaOrigemName",
                loja_destino_code as "lojaDestinoCode",
                loja_destino_name as "lojaDestinoName",
-               realignment_status as "realignmentStatus"
+               realignment_status as "realignmentStatus",
+               shipment_id as "shipmentId"
         FROM transfer_orders
         WHERE id = ${input.transferId}
         LIMIT 1
@@ -1339,16 +1340,39 @@ export class RealignmentService {
     const now = new Date();
     const o = order as any;
 
-    // Procura ou cria a remessa OPEN do par origem→destino
+    // Procura ou cria a remessa OPEN do par origem→destino.
+    //
+    // ⚠️ CAIXA FANTASMA (05/08 — REM-2026-000809 de Piracicaba): com DUAS
+    // caixas abertas do mesmo par, este findFirst vinha SEM orderBy — o
+    // Postgres devolvia a mais ANTIGA, enquanto o cartão da tela mostra a
+    // mais RECENTE (caixaDoDestino é last-wins). Resultado: cada bipe
+    // gravava a peça na caixa que a tela ESCONDE; o cartão ficava "0 item(s)"
+    // com a grade toda verde, e o "Fechar e enviar" (pendurado na caixa
+    // exibida) respondia "caixa vazia". Três defesas:
+    //   1. peça que JÁ TEM caixa aberta fica NELA (não migra no re-bipe);
+    //   2. tipo REALINHAMENTO — peça de realinhamento nunca cai em caixa de
+    //      TRANSFERENCIA do mesmo par;
+    //   3. orderBy DESC — backend passa a escolher a MESMA caixa que o
+    //      cartão da tela (a mais recente), determinístico até com duplicata.
     let shipment: any;
     try {
-      shipment = await (this.prisma as any).realignmentShipment.findFirst({
-        where: {
-          fromStoreCode: o.lojaOrigemCode,
-          toStoreCode: o.lojaDestinoCode,
-          status: 'open',
-        },
-      });
+      if (o.shipmentId) {
+        const atual = await (this.prisma as any).realignmentShipment.findUnique({
+          where: { id: o.shipmentId },
+        });
+        if (atual && atual.status === 'open') shipment = atual;
+      }
+      if (!shipment) {
+        shipment = await (this.prisma as any).realignmentShipment.findFirst({
+          where: {
+            fromStoreCode: o.lojaOrigemCode,
+            toStoreCode: o.lojaDestinoCode,
+            status: 'open',
+            tipo: 'REALINHAMENTO',
+          },
+          orderBy: [{ openedAt: 'desc' }, { code: 'desc' }],
+        });
+      }
     } catch (e: any) {
       this.logger.error(`[markAsSent] step=findShipment failed: ${e?.message}`);
       throw new BadRequestException(
@@ -1377,7 +1401,11 @@ export class RealignmentService {
               fromStoreCode: o.lojaOrigemCode,
               toStoreCode: o.lojaDestinoCode,
               status: 'open',
+              tipo: 'REALINHAMENTO',
             },
+            // Mesmo critério do findFirst lá em cima — o vencedor da corrida
+            // tem que ser a MESMA caixa que o próximo bipe escolheria.
+            orderBy: [{ openedAt: 'desc' }, { code: 'desc' }],
           });
           if (racing) {
             shipment = racing;
