@@ -983,6 +983,17 @@ function ProductCard({ item, highlightSku, myStore }: {
         <CellLegend />
       </section>
 
+      {/* GRADE POR LOJA (05/08 — pedido do dono): clicou na célula, abre a
+          quantidade DAQUELA cor+tamanho em CADA loja da rede, no mesmo padrão
+          visual da grade de cima, com o NOME da loja em vez do código. */}
+      {selectedColor && selectedSize && (
+        <GradePorLoja
+          item={item}
+          cor={selectedColor}
+          tamanho={selectedSize}
+        />
+      )}
+
       {/* OUTRAS LOJAS — só aparece quando usuário clica em cor/tamanho/célula. */}
       {(selectedColor || selectedSize) && filteredOtherStores.length > 0 && (
         <section className="px-4 pb-4 pt-1 border-t border-slate-100 bg-slate-50/50">
@@ -1042,6 +1053,119 @@ function ProductCard({ item, highlightSku, myStore }: {
         </section>
       )}
     </article>
+  );
+}
+
+/**
+ * Nome curto da loja pros cabeçalhos de grade (ITANH, SOROC, SAO J…) —
+ * mesma abreviação do produto-master/editor: sem acento, 5 primeiros chars.
+ * O nome completo vai no tooltip.
+ */
+function siglaLoja(nome: string | null | undefined, fallback: string): string {
+  const n = String(nome || '').normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toUpperCase();
+  return n ? n.slice(0, 5) : fallback;
+}
+
+/**
+ * GRADE POR LOJA — abre no clique da célula (05/08, pedido do dono).
+ *
+ * Mostra a quantidade da cor+tamanho selecionados em CADA loja da rede, no
+ * MESMO padrão visual da grade principal (verde disponível, âmbar baixo,
+ * laranja última peça, cinza sem estoque), com o NOME da loja no cabeçalho
+ * em vez do código. Minha loja vem primeiro, destacada; as outras em ordem
+ * de quantidade.
+ */
+function GradePorLoja({ item, cor, tamanho }: {
+  item: ProductResult;
+  cor: string;
+  tamanho: string;
+}) {
+  const dados = useMemo(() => {
+    const casa = (vCor: string, vTam: string) =>
+      (vCor || '—').trim() === cor && (vTam || '—').trim() === tamanho;
+
+    const minhaQty = item.variants
+      .filter((v) => casa(v.cor, v.tamanho))
+      .reduce((a, v) => a + v.myStoreQty, 0);
+
+    const lojas = item.otherStores
+      .map((s) => ({
+        code: s.code,
+        name: s.name,
+        qty: s.variants.filter((v) => casa(v.cor, v.tamanho)).reduce((a, v) => a + v.qty, 0),
+      }))
+      // Toda loja que tem a REF aparece — as sem esta variação ficam com o
+      // "—" cinza, igual à grade de cima. Ver a rede inteira de uma vez é o
+      // que evita a ligação desnecessária ("liga lá pra ver se tem").
+      .sort((a, b) => b.qty - a.qty || a.name.localeCompare(b.name, 'pt-BR'));
+
+    const totalRede = minhaQty + lojas.reduce((a, l) => a + l.qty, 0);
+    return { minhaQty, lojas, totalRede };
+  }, [item, cor, tamanho]);
+
+  const celula = (qty: number, minha: boolean) => {
+    const base =
+      'mx-auto w-full h-10 rounded flex items-center justify-center font-extrabold select-none text-base';
+    if (qty === 0) return <div className={`${base} bg-slate-50 text-slate-300`}>—</div>;
+    const critico = qty === 1;
+    const low = qty <= 2;
+    return (
+      <div
+        className={`${base} ${
+          critico
+            ? 'bg-orange-300 text-orange-900 border border-orange-500'
+            : low
+            ? 'bg-amber-100 text-amber-900 border border-amber-300'
+            : 'bg-emerald-100 text-emerald-900 border border-emerald-300'
+        } ${minha ? 'ring-2 ring-brand' : ''}`}
+      >
+        {qty}
+      </div>
+    );
+  };
+
+  return (
+    <section className="px-4 pb-1 pt-3 border-t border-slate-100">
+      <div className="flex items-center justify-between mb-2 px-1 flex-wrap gap-2">
+        <div className="text-[11px] uppercase tracking-wide font-bold text-slate-500">
+          Quantidade por loja · <span className="text-brand normal-case tracking-normal">{cor} · tam {tamanho}</span>
+        </div>
+        <div className="text-[11px] font-bold text-slate-600">
+          {dados.totalRede} na rede
+        </div>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm border-separate border-spacing-0">
+          <thead>
+            <tr className="text-[11px] uppercase tracking-wide">
+              <th
+                className="px-2 py-1 text-center font-bold text-slate-900 whitespace-nowrap bg-[#FAF6E8] rounded-t min-w-[72px]"
+                title="Minha loja"
+              >
+                Minha loja
+              </th>
+              {dados.lojas.map((l) => (
+                <th
+                  key={l.code}
+                  className="px-2 py-1 text-center font-semibold text-slate-600 whitespace-nowrap min-w-[64px]"
+                  title={`${l.name} (${l.code})`}
+                >
+                  {siglaLoja(l.name, l.code)}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td className="p-1 bg-[#FAF6E8]/60 rounded-b">{celula(dados.minhaQty, true)}</td>
+              {dados.lojas.map((l) => (
+                <td key={l.code} className="p-1">{celula(l.qty, false)}</td>
+              ))}
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }
 
@@ -1180,10 +1304,12 @@ function StockByStoreMatrix({ item, myStore }: {
                 {stores.map((s) => (
                   <th
                     key={s.code}
-                    className="px-2 py-1 text-center font-semibold text-slate-600 whitespace-nowrap min-w-[44px]"
-                    title={s.name}
+                    className="px-2 py-1 text-center font-semibold text-slate-600 whitespace-nowrap min-w-[52px]"
+                    title={`${s.name} (${s.code})`}
                   >
-                    {s.code}
+                    {/* NOME da loja em vez do código (05/08 — "02" não diz
+                        nada pra quem opera; "SANTO" diz). Completo no hover. */}
+                    {siglaLoja(s.name, s.code)}
                   </th>
                 ))}
               </tr>
