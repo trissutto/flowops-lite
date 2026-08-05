@@ -123,6 +123,16 @@ export default function MarcadosPage() {
   }, [query]);
 
   async function buscarPorCpf(cpfNum: string) {
+    return abrirFicha(`cpf=${cpfNum}`);
+  }
+
+  /**
+   * Abre a ficha por CPF **ou** por loja+código (05/08). Um quarto das fichas
+   * do Wincred não tem CPF — a tela recusava abrir e a loja ficava sem fechar
+   * peça que já aparecia na lista de busca (caso DAIANA RUFINO: 48 peças,
+   * R$ 3.323,80). Código do cliente é a chave real do Giga.
+   */
+  async function abrirFicha(qs: string) {
     setErr(null);
     setInfo(null);
     setVoltadas(new Set());
@@ -130,7 +140,7 @@ export default function MarcadosPage() {
     setMatches([]);
     setBusy(true);
     try {
-      const r = await api<ClienteInfo>(`/pdv/marcados/cliente?cpf=${cpfNum}`);
+      const r = await api<ClienteInfo>(`/pdv/marcados/cliente?${qs}`);
       setInfo(r);
     } catch (e: any) {
       setErr(e?.message || 'Falha ao buscar cliente');
@@ -195,9 +205,16 @@ export default function MarcadosPage() {
     const cpfNum = (m.cpf || '').replace(/\D/g, '');
     if (cpfNum.length === 11) {
       await buscarPorCpf(cpfNum);
-    } else {
-      setErr('Cliente sem CPF cadastrado — não dá pra abrir os marcados');
+      return;
     }
+    // Ficha sem CPF (1 em cada 4 no Wincred): abre pela chave do Giga.
+    if (m.codCliente) {
+      const qs = new URLSearchParams({ codCliente: String(m.codCliente) });
+      if (m.loja) qs.set('loja', String(m.loja));
+      await abrirFicha(qs.toString());
+      return;
+    }
+    setErr('Ficha sem CPF e sem código de cliente — não dá pra abrir os marcados');
   }
 
   function toggleVoltada(registro: number) {

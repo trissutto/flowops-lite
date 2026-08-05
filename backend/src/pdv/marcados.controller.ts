@@ -127,12 +127,21 @@ export class MarcadosController {
 
   /**
    * GET /pdv/marcados/cliente?cpf=XXX
+   *  ou  /pdv/marcados/cliente?codCliente=6086&loja=01
+   *
    * Retorna info do cliente + lista de marcados ativos + valida se pode marcar.
+   * O CPF deixou de ser obrigatório (05/08): 1.911 fichas do Wincred não têm
+   * CPF e a loja ficava sem conseguir abrir os marcados dessas clientes.
    */
   @Get('cliente')
-  getClienteInfo(@Req() req: any, @Query('cpf') cpf: string) {
+  getClienteInfo(
+    @Req() req: any,
+    @Query('cpf') cpf?: string,
+    @Query('codCliente') codCliente?: string,
+    @Query('loja') loja?: string,
+  ) {
     this.requireRole(req);
-    return this.svc.getClienteMarcadorInfo(cpf);
+    return this.svc.getClienteMarcadorInfo({ cpf, codCliente, loja });
   }
 
   /**

@@ -266,7 +266,19 @@ function FichaPessoa({ ficha, onVoltar, onReload }: { ficha: any; onVoltar: () =
         <div className="flex items-start justify-between gap-3 flex-wrap">
           <div>
             <h2 className="text-2xl font-black text-slate-900">{pessoa.nome || '(sem nome)'}</h2>
-            <div className="text-sm text-slate-500 font-mono mt-0.5">CPF {fmtCpf(pessoa.cpf)}</div>
+            <div className="text-sm text-slate-500 font-mono mt-0.5">
+              CPF {fmtCpf(pessoa.cpf)}
+              {/* Ficha do Wincred sem CPF, mas o CRM tem: mostra e diz de onde
+                  veio (a ficha continua sem — não gravamos por conta própria). */}
+              {pessoa.cpfOrigem === 'crm' && (
+                <span
+                  className="ml-2 font-sans rounded-md bg-amber-50 border border-amber-300 px-1.5 py-0.5 text-[11px] font-bold text-amber-800"
+                  title={`A ficha desta loja está SEM CPF. Este número veio do cadastro do CRM${pessoa.cpfCrmNome ? ` (${pessoa.cpfCrmNome})` : ''}, casado pelo telefone. Confira antes de usar e salve na ficha pra vincular de vez.`}
+                >
+                  via CRM — falta na ficha
+                </span>
+              )}
+            </div>
           </div>
           <div className="flex gap-2">
             {customer && (

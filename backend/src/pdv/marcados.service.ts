@@ -541,7 +541,11 @@ export class MarcadosService {
    *  - totalMarcadosAtivos: soma do que já está em aberto
    *  - limiteDisponivel: limiteTotal - totalMarcadosAtivos
    */
-  async getClienteMarcadorInfo(cpf: string): Promise<{
+  async getClienteMarcadorInfo(input: string | {
+    cpf?: string | null;
+    codCliente?: string | null;
+    loja?: string | null;
+  }): Promise<{
     permitido: boolean;
     motivo?: string;
     cliente: any;
@@ -549,8 +553,25 @@ export class MarcadosService {
     totalMarcadosAtivos: number;
     limiteDisponivel: number;
   }> {
-    if (!cpf) throw new BadRequestException('CPF obrigatório');
-    const safeCpf = String(cpf).replace(/\D/g, '');
+    /**
+     * ABRE POR CPF **OU** POR loja+código (dono 05/08).
+     *
+     * 25% das fichas do Wincred (1.911 de 7.492) NUNCA tiveram CPF preenchido.
+     * A tela exigia CPF pra abrir e recusava o cliente — caso real: DAIANA
+     * RUFINO (loja 01, cód 6086), 48 peças e R$ 3.323,80 em marca que a busca
+     * JÁ mostrava na lista, mas que a loja não conseguia abrir pra fechar.
+     * O código do cliente é a chave real do Giga (loja+codigo); CPF é opcional
+     * lá desde sempre. Então ele deixa de ser obrigatório aqui.
+     */
+    const arg = typeof input === 'string' ? { cpf: input } : (input || {});
+    const safeCpf = String(arg.cpf ?? '').replace(/\D/g, '');
+    const codArg = String(arg.codCliente ?? '').trim();
+    const lojaArg = String(arg.loja ?? '').replace(/\D/g, '').padStart(2, '0');
+    const temLoja = !!String(arg.loja ?? '').trim();
+    if (!safeCpf && !codArg) {
+      throw new BadRequestException('Informe o CPF ou o código do cliente');
+    }
+    const cpf = safeCpf;
     const formattedCpf = safeCpf.length === 11
       ? `${safeCpf.slice(0,3)}.${safeCpf.slice(3,6)}.${safeCpf.slice(6,9)}-${safeCpf.slice(9)}`
       : safeCpf;
@@ -562,8 +583,13 @@ export class MarcadosService {
     // classificação 'A' e maior limite (o antigo LIMIT 1 pegava uma qualquer).
     let row: any = null;
     try {
+      // Sem CPF, a chave é a do próprio Giga: loja + código (com as variantes
+      // de zero à esquerda, que lá são inconsistentes).
+      const whereFicha: any = safeCpf
+        ? { OR: [{ personKey: `cpf:${safeCpf}` }, { cpf: safeCpf }, { cpf: formattedCpf }] }
+        : { codigo: { in: this.codVariants(codArg) }, ...(temLoja ? { loja: lojaArg } : {}) };
       const fichas: any[] = await (this.prisma as any).gigaCliente.findMany({
-        where: { OR: [{ personKey: `cpf:${safeCpf}` }, { cpf: safeCpf }, { cpf: formattedCpf }] },
+        where: whereFicha,
       });
       if (fichas.length) {
         const f = fichas.slice().sort((a, b) => {
@@ -590,11 +616,19 @@ export class MarcadosService {
       if (!cm) {
         throw new BadRequestException('Tabela de clientes não detectada no Giga');
       }
-      const sql = `
+      const codNum = Number(String(codArg).replace(/\D/g, '')) || 0;
+      const sql = safeCpf
+        ? `
         SELECT * FROM \`${cm.table}\`
         WHERE \`CPF\` = '${safeCpf}'
            OR \`CPF\` = '${formattedCpf}'
            OR REPLACE(REPLACE(REPLACE(\`CPF\`,'.',''),'-',''),'/','') = '${safeCpf}'
+        LIMIT 1
+      `
+        : `
+        SELECT * FROM \`${cm.table}\`
+        WHERE CAST(\`${cm.codCliente || 'CODIGO'}\` AS UNSIGNED) = ${codNum}
+        ${temLoja ? `AND \`LOJA\` = '${lojaArg}'` : ''}
         LIMIT 1
       `;
       const r = await this.erp.runReadOnly(sql, { maxRows: 1, timeoutMs: 10000 });
@@ -610,7 +644,9 @@ export class MarcadosService {
     if (!row) {
       return {
         permitido: false,
-        motivo: 'Cliente não encontrado (nem no espelho, nem no Giga — precisa cadastrar antes)',
+        motivo: safeCpf
+          ? 'Cliente não encontrado (nem no espelho, nem no Giga — precisa cadastrar antes)'
+          : `Ficha ${codArg}${temLoja ? `/loja ${lojaArg}` : ''} não encontrada (nem no espelho, nem no Giga)`,
         cliente: null,
         marcadosAtivos: [],
         totalMarcadosAtivos: 0,
@@ -631,6 +667,10 @@ export class MarcadosService {
         where: {
           status: 'ativo',
           isTraining: false,
+          // Sem CPF, o código sozinho NÃO identifica a pessoa (código é por
+          // loja no Giga — o 6086 da 01 não é o 6086 da 02). Com a loja em
+          // mãos, escopa; senão manteria o risco de misturar duas clientes.
+          ...(!safeCpf && temLoja ? { storeCode: lojaArg } : {}),
           OR: [
             ...(safeCpf ? [{ cpf: safeCpf }] : []),
             ...(codCliente ? [{ codCliente: { in: this.codVariants(codCliente) } }] : []),
@@ -649,6 +689,7 @@ export class MarcadosService {
         SELECT REGISTRO, NUMERO, CODIGO, DATA, DESCRICAO, QUANTIDADE, VALOR, VALORTOTAL, VENDEDOR, OPERADOR, LOJA
         FROM caixa
         WHERE UPPER(MARCADO) = 'SIM' AND CLIENTE = ${Number(codCliente) || 0}
+        ${!safeCpf && temLoja ? `AND LOJA = '${lojaArg}'` : ''}
         ORDER BY DATA DESC, REGISTRO DESC
         LIMIT 200
       `;
