@@ -1129,7 +1129,12 @@ export class RealignmentShipmentService {
     // estoque sem alguém ter posto a mão nelas. Elas rolam pra caixa nova no
     // fim deste método.
     const todosDaCaixa = await this.prisma.transferOrder.findMany({
-      where: { shipmentId: shipment.id } as any,
+      // Peça CANCELADA (excluída do pedido) NÃO conta como conteúdo da caixa —
+      // mesmo filtro do cartão da tela (listOpenShipmentsForOrigin). Sem isso a
+      // caixa que só tinha peça excluída dizia "0 item(s)" no cartão e, ao
+      // fechar, respondia "bipe ao menos uma" — a vendedora via peça verde na
+      // pilha (que está em OUTRA caixa) e não tinha como sair do lugar.
+      where: { shipmentId: shipment.id, realignmentStatus: { not: 'cancelled' } } as any,
       select: {
         id: true,
         refCode: true,
@@ -1142,10 +1147,26 @@ export class RealignmentShipmentService {
     });
     const items = (todosDaCaixa as any[]).filter((i) => i.realignmentStatus === 'sent');
     if (!items.length) {
+      const naCaixa = (todosDaCaixa as any[]).length;
+      // Peça VERDE na pilha que está em OUTRA caixa: a vendedora vê "todas
+      // bipadas" e o fechamento diz que não tem nada. A mensagem precisa dizer
+      // ONDE elas estão, senão ela fica clicando Fechar sem saída.
+      const verdesEmOutraCaixa = await this.prisma.transferOrder.count({
+        where: {
+          tipo: 'REALINHAMENTO',
+          lojaOrigemCode: shipment.fromStoreCode,
+          lojaDestinoCode: shipment.toStoreCode,
+          realignmentStatus: 'sent',
+          NOT: { shipmentId: shipment.id },
+        } as any,
+      }).catch(() => 0);
+      const ondeEstao = verdesEmOutraCaixa > 0
+        ? ` As ${verdesEmOutraCaixa} peça(s) já bipadas deste destino estão em OUTRA remessa — confira a aba Enviados.`
+        : '';
       throw new BadRequestException(
-        (todosDaCaixa as any[]).length
-          ? 'Nenhuma peça foi separada nesta caixa — bipe ao menos uma antes de fechar.'
-          : 'Remessa vazia — adicione itens antes de fechar',
+        naCaixa
+          ? `Nenhuma peça foi separada nesta caixa — bipe ao menos uma antes de fechar.${ondeEstao}`
+          : `Esta caixa está vazia: não há peça nenhuma dentro dela.${ondeEstao} Use "Excluir remessa" e bipe as peças de novo — a caixa nasce sozinha no primeiro bipe.`,
       );
     }
 
