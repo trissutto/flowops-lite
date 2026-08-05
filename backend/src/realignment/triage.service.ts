@@ -359,6 +359,9 @@ export class TriagemService {
         toStoreCode: input.toStoreCode,
         status: 'open',
       },
+      // Mesma caixa que o bipe escolhe (mais recente) — a trava de duplicado
+      // tem que olhar pra onde o item VAI entrar, não pra uma antiga qualquer.
+      orderBy: [{ openedAt: 'desc' }, { code: 'desc' }],
       select: { id: true },
     });
     if (existing && info.ref) {
