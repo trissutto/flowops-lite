@@ -22,7 +22,7 @@
 
 import { getAuthToken } from './api';
 
-export type PrinterKind = 'cupom' | 'nfce' | 'vale' | 'sangria' | 'recibo_pix' | 'carne';
+export type PrinterKind = 'cupom' | 'nfce' | 'vale' | 'sangria' | 'recibo_pix' | 'carne' | 'extrato_crediario';
 
 /**
  * Mapa: cada KIND vai pra um PROFILE de impressora (termica ou a4).
@@ -35,6 +35,7 @@ const KIND_TO_PROFILE: Record<PrinterKind, 'termica' | 'a4'> = {
   sangria: 'termica',       // Comprovante sangria/suprimento
   recibo_pix: 'termica',    // Recibo PIX-link crediário pago
   carne: 'a4',              // Carnê de crediário (folhas azul/branca)
+  extrato_crediario: 'a4',  // Extrato de parcelas em aberto do cliente (A4)
 };
 
 const LS_KEYS = {
@@ -231,4 +232,5 @@ export const KIND_LABELS: Record<PrinterKind, { label: string; desc: string }> =
   sangria: { label: 'Sangria / Suprimento', desc: 'Movimento de caixa com assinatura' },
   recibo_pix: { label: 'Recibo PIX-link crediário', desc: 'Quando cliente paga parcela remotamente' },
   carne: { label: 'Carnê de crediário', desc: 'Promissórias + carnê em A4 (azul/branca)' },
+  extrato_crediario: { label: 'Extrato de parcelas em aberto', desc: 'Lista A4 das parcelas do cliente com juros e observações' },
 };
