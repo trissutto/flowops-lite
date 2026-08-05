@@ -2582,8 +2582,14 @@ function PdvPageInner() {
                   await doMarcar(false);
                 } catch (e: any) {
                   const msg = String(e?.message || '');
-                  // Erro de limite estourado — oferece override
-                  const isLimite = /limite dispon[ií]vel|em marca/i.test(msg);
+                  // Erro de limite estourado — oferece override.
+                  // Casa a FRASE do backend, não pedaço solto: `em marca` é
+                  // substring de "po·dem marca·r", então "só clientes A podem
+                  // marcar" era lido como limite estourado. A vendedora recebia
+                  // "MARCAR MESMO ASSIM?", o force não relaxa classificação, e
+                  // o resultado era "Falha mesmo com override" — escondendo que
+                  // o problema era a ficha sem Avaliação A.
+                  const isLimite = /maior que limite dispon[ií]vel/i.test(msg);
                   if (isLimite) {
                     const ok = window.confirm(
                       `⚠ LIMITE DE MARCAÇÃO ESTOURADO\n\n${msg}\n\n` +
@@ -6729,13 +6735,19 @@ function MarcarComponent({
   } | null>(null);
   const [loading, setLoading] = useState(true);
   const [marking, setMarking] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    setErro(null);
     api<typeof info>(`/pdv/marcados/cliente?cpf=${customerCpf}`)
       .then((r) => { if (!cancelled) setInfo(r as any); })
-      .catch(() => { if (!cancelled) setInfo(null); })
+      .catch((e) => {
+        // Falha aqui SOME com o botão. A vendedora fica sem marcado e sem
+        // explicação — foi assim que a checagem quebrada passou despercebida.
+        if (!cancelled) { setInfo(null); setErro(e?.message || String(e)); }
+      })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [customerCpf]);
@@ -6750,6 +6762,23 @@ function MarcarComponent({
 
   // Não tem permissão ou erro — esconde a opção
   if (!info || !info.permitido || total > info.limiteDisponivel) {
+    if (!info) {
+      // Sem resposta da checagem: mostra o motivo em vez de sumir calado.
+      return (
+        <details className="bg-rose-50 border border-rose-200 rounded p-2 text-xs text-rose-800">
+          <summary className="cursor-pointer font-bold">
+            ⚠️ Não deu pra conferir o limite de marcado
+          </summary>
+          <div className="mt-1">
+            {erro || 'A consulta não respondeu.'}
+            <div className="mt-1">
+              A cliente pode ter limite — o que falhou foi a checagem. Tente o botão
+              📋 <b>Marcar</b> da tela da venda, que mostra o erro exato.
+            </div>
+          </div>
+        </details>
+      );
+    }
     if (info && !info.permitido) {
       // Mostra um aviso discreto pra vendedora saber por que não tem opção
       return (

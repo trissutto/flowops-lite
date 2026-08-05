@@ -852,6 +852,16 @@ function RestritoModal({
             </select>
           </div>
         </div>
+        {/* Limite sem Avaliação A não libera marcado — e é o erro mais comum:
+            o gerente põe o valor, sai achando que liberou, e a peça é negada no
+            balcão. Avisa ANTES de salvar. */}
+        {Number(String(limite).replace(',', '.')) > 0 && avaliacao.trim().toUpperCase() !== 'A' && (
+          <div className="rounded-lg bg-amber-50 border border-amber-300 px-3 py-2 text-xs text-amber-900">
+            ⚠️ Com <b>Avaliação {avaliacao.trim().toUpperCase() || '(vazia)'}</b> a cliente
+            <b> continua sem poder marcar</b> (provar em casa), mesmo com esse limite.
+            Marcado exige <b>A</b> <i>e</i> limite. (O crediário não olha a Avaliação.)
+          </div>
+        )}
         <div>
           <label className="text-[11px] uppercase font-bold text-slate-400">Senha / PIN (GERENTE ou acima)</label>
           <input type="password" value={senha} onChange={(e) => setSenha(e.target.value)}

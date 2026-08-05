@@ -73,6 +73,11 @@ export class ClientesGigaService {
     return isFinite(n) ? n : null;
   }
 
+  /** Reais pra mensagem lida pela vendedora ("R$ 1.234,50"). */
+  private brl(v: number): string {
+    return `R$ ${(Number(v) || 0).toFixed(2).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, '.')}`;
+  }
+
   private dateOf(v: any): Date | null {
     if (!v) return null;
     if (v instanceof Date) return isNaN(v.getTime()) ? null : v;
@@ -723,12 +728,14 @@ export class ClientesGigaService {
     // (a tela avisa).
     let marcados: { itens: any[]; totalReais: number } | null = null;
     try {
-      // DEFAULT OFF (26/07): era `?? '' !== '0'`, ou seja ligado quando a
-      // variável não existe — mesmo defeito que sumiu com o crediário em 25/07.
-      const temNativo = (await (this.prisma as any).marcado.count()) > 0
-        && String(process.env.MARCADOS_NATIVE_READS ?? '0').trim() === '1';
+      // MESMA REGRA da tela de marcados (04/08): aqui o espelho vale mesmo com
+      // `MARCADOS_NATIVE_READS` desligada. A flag protege a DECISÃO DE VENDA no
+      // PDV; esta é a ficha da retaguarda. Com a flag off (o default) esta
+      // leitura ia direto pro Giga — e com ele fora a ficha dizia "sem marcado"
+      // pra todo mundo. Espelho nunca importado ainda cai pro Giga, como antes.
+      const temEspelho = (await (this.prisma as any).marcado.count()) > 0;
       const itens: any[] = [];
-      if (temNativo) {
+      if (temEspelho) {
         // Código do Giga tem padding de zero inconsistente: '01234' e '1234'
         // são a mesma pessoa. Sem as variantes o espelho responde vazio.
         const codVariants = (cod: any): string[] => {
@@ -758,9 +765,10 @@ export class ClientesGigaService {
           LOJA: n.storeCode,
         })));
       }
-      // REDE DE SEGURANÇA: espelho vazio NÃO é "cliente sem marcado" — pode ser
-      // sync parcial. Confere no Giga antes de liberar limite pra marcação.
-      if (!itens.length) {
+      // Espelho nunca importado: confere no Giga antes de dizer que a cliente
+      // não tem marcado. Espelho POPULADO e sem linha dela é resposta — não
+      // vale acordar o Giga por isso.
+      if (!temEspelho) {
         for (const f of fichas) {
           const cod = Number(String(f.codigo).replace(/\D/g, '')) || 0;
           const lj = String(f.loja).replace(/\D/g, '').padStart(2, '0');
@@ -795,9 +803,26 @@ export class ClientesGigaService {
     let podeMarcar = true;
     let motivoMarcar: string | null = null;
     if (bloqueado) { podeMarcar = false; motivoMarcar = 'Cliente BLOQUEADO'; }
-    else if (avaliacao !== 'A') { podeMarcar = false; motivoMarcar = `Avaliação "${avaliacao || '—'}" — só clientes A marcam`; }
-    else if (limiteTotal <= 0) { podeMarcar = false; motivoMarcar = 'Sem limite de compras configurado'; }
-    else if (marcados && limiteDisponivel <= 0) { podeMarcar = false; motivoMarcar = 'Limite todo tomado por marcados em aberto'; }
+    else if (avaliacao !== 'A') {
+      podeMarcar = false;
+      // Marcado exige Avaliação A **E** limite. Ter só o limite é a pegadinha:
+      // o gerente libera o valor e a peça é negada no balcão sem ninguém
+      // entender por quê. Fala isso na cara.
+      motivoMarcar = limiteTotal > 0
+        ? `Tem limite de ${this.brl(limiteTotal)} mas está sem Avaliação "A" (hoje "${avaliacao || '—'}") — marcado precisa das duas`
+        : `Sem Avaliação "A" (hoje "${avaliacao || '—'}") e sem limite — marcado precisa das duas`;
+    }
+    else if (limiteTotal <= 0) { podeMarcar = false; motivoMarcar = 'É classe A, mas sem limite de compras nesta loja'; }
+    else if (marcados && limiteDisponivel <= 0) {
+      podeMarcar = false;
+      // Dizer "tomado por marcados" quando quem tomou foi o CREDIÁRIO manda a
+      // vendedora procurar peça que não existe. Nomeia quem comeu o limite.
+      const culpados = [
+        crediarioAbertoReais > 0 ? `crediário em aberto ${this.brl(crediarioAbertoReais)}` : null,
+        totalMarcado > 0 ? `marcados em aberto ${this.brl(totalMarcado)}` : null,
+      ].filter(Boolean).join(' + ');
+      motivoMarcar = `Limite de ${this.brl(limiteTotal)} todo tomado` + (culpados ? ` por ${culpados}` : '');
+    }
 
     // Cashback — da PESSOA (CRM), disponível em qualquer loja
     let cashbackCents: number | null = null;
