@@ -47,6 +47,17 @@ const fmtDate = (iso: string) => {
   }
 };
 
+// Telefone vem cru do Giga ("5513997016072", "13997016072", "1334221234").
+// Tira o 55 do país e formata (DD) NNNNN-NNNN.
+const fmtPhone = (raw: string | null | undefined): string | null => {
+  if (!raw) return null;
+  let d = String(raw).replace(/\D/g, '');
+  if (d.length > 11 && d.startsWith('55')) d = d.slice(2);
+  if (d.length === 11) return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
+  if (d.length === 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
+  return String(raw).trim() || null;
+};
+
 export default function ExtratoCrediarioPage() {
   return (
     <Suspense fallback={<div style={{ padding: 16, fontFamily: 'sans-serif' }}>Carregando…</div>}>
@@ -109,7 +120,7 @@ function ExtratoCrediarioInner() {
   }, [autoprint]);
 
   const nomeCliente = parcelas?.find((p) => p.nome)?.nome || nomeQuery || `Cód. ${codCliente}`;
-  const telCliente = parcelas?.find((p) => p.telefone)?.telefone || telQuery || null;
+  const telCliente = fmtPhone(parcelas?.find((p) => p.telefone)?.telefone || telQuery);
 
   const resumo = useMemo(() => {
     const list = parcelas || [];
@@ -136,8 +147,13 @@ function ExtratoCrediarioInner() {
     <>
       <style jsx global>{`
         @page {
+          /* Margem FOLGADA (dono 05/08: "tá cortando quando imprimi" +
+             "deixe mais borda lateral e top e base"). A HP Laser da loja tem
+             área não-imprimível maior que os 12mm que estavam aqui e comia a
+             borda do documento. 18mm laterais / 16mm topo e base dão folga
+             pra qualquer impressora da rede. */
           size: A4 portrait;
-          margin: 12mm;
+          margin: 16mm 18mm;
         }
         @media print {
           html, body {
@@ -149,10 +165,30 @@ function ExtratoCrediarioInner() {
           .folha {
             box-shadow: none !important;
             margin: 0 !important;
-            padding: 0 !important;
+            /* respiro extra além da margem da @page — nada encosta no corte */
+            padding: 2mm 1mm !important;
             width: auto !important;
+            max-width: 100% !important;
           }
+          /* Nada pode estourar a largura da folha (era o que cortava a coluna
+             TOTAL na direita quando a observação vinha comprida). */
+          table { table-layout: fixed; width: 100% !important; }
+          td, th { overflow-wrap: anywhere; }
+          .obs { max-width: 100%; white-space: normal; }
+          /* Linha nunca parte no meio; cabeçalho da tabela (com a faixa de
+             identificação do cliente) repete em TODA página — sem isso, a
+             página 2 e 3 chegavam na mão da cliente sem dizer de quem são. */
           tr { page-break-inside: avoid; break-inside: avoid; }
+          thead { display: table-header-group; }
+          tfoot { display: table-footer-group; }
+          .resumo, .rodape { page-break-inside: avoid; break-inside: avoid; }
+          /* Compacta pra caber mais parcela por folha (57 parcelas: 3 folhas
+             com a última quase vazia → 2 folhas cheias). */
+          table { font-size: 10.5px; line-height: 1.25; }
+          tbody td { padding: 2.5px 6px; }
+          thead th { padding: 4px 6px; }
+          .obs { padding: 1px 6px; font-size: 10px; }
+          .folha { padding-bottom: 0 !important; }
         }
         body {
           margin: 0;
@@ -180,6 +216,8 @@ function ExtratoCrediarioInner() {
         .badge { background: #fbf6e6; border: 1px solid #d4af37; color: #8c7325; font-size: 12px; font-weight: 700; padding: 6px 12px; border-radius: 999px; white-space: nowrap; }
         table { width: 100%; border-collapse: collapse; margin-top: 16px; font-size: 12.5px; }
         thead th { text-align: left; font-size: 10.5px; letter-spacing: 0.8px; color: #8c7325; border-bottom: 2px solid #d4af37; padding: 8px; text-transform: uppercase; }
+        thead th.faixa-cliente { text-transform: none; letter-spacing: 0; border-bottom: 1px solid #e8d9a0; background: #fbf6e6; color: #6b5a1e; font-size: 11px; padding: 5px 8px; }
+        thead th.faixa-cliente span { float: right; font-weight: 600; color: #8c7325; }
         thead th.num, tbody td.num { text-align: right; }
         tbody td { padding: 9px 8px; border-bottom: 1px solid #eeebe2; vertical-align: middle; }
         .promissoria { font-weight: 700; font-family: 'Courier New', monospace; }
@@ -245,7 +283,27 @@ function ExtratoCrediarioInner() {
           </div>
         ) : (
           <table>
+            {/* Larguras fixas: com table-layout:fixed no print, sem isso as 6
+                colunas sairiam iguais e a data quebraria em duas linhas. */}
+            <colgroup>
+              <col style={{ width: '18%' }} />
+              <col style={{ width: '19%' }} />
+              <col style={{ width: '23%' }} />
+              <col style={{ width: '14%' }} />
+              <col style={{ width: '12%' }} />
+              <col style={{ width: '14%' }} />
+            </colgroup>
             <thead>
+              {/* Repete em toda folha (display:table-header-group) — a página 2
+                  sozinha na mão da cliente precisa dizer de quem é. */}
+              <tr>
+                <th className="faixa-cliente" colSpan={6}>
+                  {nomeCliente} · Cód {codCliente}
+                  <span>
+                    {resumo.qtd} parcela{resumo.qtd !== 1 ? 's' : ''} · {brl(resumo.total)}
+                  </span>
+                </th>
+              </tr>
               <tr>
                 <th>Promissória</th>
                 <th>Observação</th>
