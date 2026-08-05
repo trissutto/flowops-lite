@@ -415,9 +415,42 @@ export class ClientesGigaService {
     const totalAberto = parcelas.reduce((s, p) => s + (Number(p.valorParcela) || 0), 0);
     const totalPago = parcelasPagas.reduce((s, p) => s + (Number(p.valorPago ?? p.valorParcela) || 0), 0);
 
+    /**
+     * CPF DO CRM QUANDO A FICHA NÃO TEM (dono 05/08: "tem CPF numa tela e na
+     * outra não"). 1.911 fichas do Wincred (25%) estão sem CPF; o cadastro da
+     * mesma pessoa no CRM (site/PDV/live) muitas vezes tem. Como o elo entre
+     * as duas bases é o próprio CPF (personKey = "cpf:<dígitos>"), ficha sem
+     * CPF nunca casa — e a tela mostrava "—" com o dado existindo na casa.
+     * Aqui a ponte é o TELEFONE. É EXIBIÇÃO, não gravação: a ficha do Giga
+     * continua sem CPF até alguém confirmar (a tela marca "via CRM").
+     */
+    let cpfCrm: { cpf: string; nome: string | null } | null = null;
+    if (!base.cpf) {
+      const tel = String(base.foneCel || base.foneRes || '').replace(/\D/g, '');
+      const last8 = tel.length >= 8 ? tel.slice(-8) : null;
+      if (last8) {
+        const cands: any[] = await (this.prisma as any).customer.findMany({
+          where: {
+            cpf: { not: null },
+            OR: [{ phone: { contains: last8 } }, { whatsapp: { contains: last8 } }],
+          },
+          select: { name: true, cpf: true },
+          take: 5,
+        }).catch(() => []);
+        const hit = cands.find((c) => String(c.cpf || '').replace(/\D/g, '').length === 11);
+        if (hit) cpfCrm = { cpf: String(hit.cpf).replace(/\D/g, ''), nome: hit.name || null };
+      }
+    }
+
     return {
       found: true,
-      pessoa: { nome: base.nome, cpf: base.cpf, personKey: base.personKey },
+      pessoa: {
+        nome: base.nome,
+        cpf: base.cpf || cpfCrm?.cpf || null,
+        cpfOrigem: base.cpf ? 'giga' : cpfCrm ? 'crm' : null,
+        cpfCrmNome: cpfCrm?.nome || null,
+        personKey: base.personKey,
+      },
       fichas,
       customer,
       parcelasAbertas: parcelas,
