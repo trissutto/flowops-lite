@@ -72,6 +72,20 @@ export interface OpenInstallment {
  * o nome EXATO, então um cliente real "VISA STORE" NÃO é excluído.
  * Extensível via env CREDIARIO_EXTRA_CARD_NAMES (lista separada por vírgula).
  */
+/**
+ * Códigos 1–3 eram tratados como RESERVADOS (cartões clássicos/consumidor do
+ * Giga) e descartados pelo NÚMERO — até a OZELINA, cliente REAL com código 2,
+ * sumir da tela de recebimentos (05/08). Cadastro antigo tem código baixo.
+ *
+ * Agora código baixo só é descartado quando o NOME é genérico (cartão,
+ * consumidor, avulso). Nome de pessoa passa, qualquer que seja o código.
+ */
+const GENERIC_LOW_CODE_REGEX = /CONSUMIDOR|CLIENTE\s*(PADRAO|PADRÃO|FINAL)|DIVERSOS|VENDA\s*AVULSA/i;
+function isPseudoClienteCodigoBaixo(codNum: number, nome: string): boolean {
+  if (isNaN(codNum) || codNum > 3) return false;
+  return !nome || CARD_NAME_REGEX.test(nome) || GENERIC_LOW_CODE_REGEX.test(nome);
+}
+
 const CARD_NAME_REGEX: RegExp = (() => {
   const base = 'VISANET|VISA|MASTER(CARD)?|AMEX|HIPER(CARD)?|REDESHOP|REDE\\s|CREDICARD|CREDI[\\s-]?CARD|ELO|DINERS|CABAL|TICKET|SODEXO|VR\\s|BANRICOMPRAS|GETNET|CIELO|STONE|PAGSEGURO|MERCADO\\s?PAGO|PIC\\s?PAY|AVULSO|BALC[ÃA]O|CART[ÃA]O';
   const extra = String(process.env.CREDIARIO_EXTRA_CARD_NAMES || '')
@@ -436,11 +450,13 @@ export class CrediarioBaixaService {
       `[crediario-baixa] listAllOpen retornou ${result.rows.length} linhas (${leitura.paginas} página(s)) em ${Date.now() - t0}ms`,
     );
 
-    // Filtra códigos 0-3 (cartões clássicos: CREDICARD, REDESHOP, AMEX, etc)
+    // Código baixo (0–3) NÃO cai mais pelo número (caso OZELINA cod 2, 05/08):
+    // segue no fluxo e é descartado adiante SÓ se o nome na tabela clientes
+    // for de cartão/genérico (cardCodes).
     const filteredRows = result.rows.filter((r: any) => {
       const cod = String(r.codCliente || '').replace(/\D/g, '');
       const n = parseInt(cod, 10);
-      return !isNaN(n) && n > 3;
+      return !isNaN(n);
     });
 
     // Enriquece com telefone + filtra clientes-cartão
@@ -461,7 +477,9 @@ export class CrediarioBaixaService {
           timeoutMs: 30000,
         });
         for (const row of r.rows as any[]) {
-          if (cardRegex.test(String(row.nome || '').trim())) {
+          const nomeCli = String(row.nome || '').trim();
+          const nCli = parseInt(String(row.cod || '').replace(/\D/g, ''), 10);
+          if (cardRegex.test(nomeCli) || isPseudoClienteCodigoBaixo(nCli, nomeCli)) {
             cardCodes.add(String(row.cod));
           }
         }
@@ -799,6 +817,7 @@ export class CrediarioBaixaService {
           codCliente: p.codCliente,
           nome: p.nomeCliente,
           loja: p.loja,
+          obs: p.obs ?? null,
         });
       }
       abertas.sort((a: any, b: any) => {
@@ -820,12 +839,15 @@ export class CrediarioBaixaService {
       return { parcelas: [], clientes: [] };
     }
 
-    // Filtro cód 0-3 (cartões clássicos), igual ao caminho Giga
+    // Código baixo (0–3) só cai quando o NOME é genérico — cliente real com
+    // cadastro antigo tem código baixo e as PARCELAS dela sumiam daqui
+    // (caso OZELINA cod 2, 05/08).
     const filteredRows = abertas
       .filter((r) => {
         const cod = String(r.codCliente || '').replace(/\D/g, '');
         const n = parseInt(cod, 10);
-        return !isNaN(n) && n > 3;
+        if (isNaN(n)) return false;
+        return !isPseudoClienteCodigoBaixo(n, String(r.nome || '').trim());
       })
       .map((r) => ({
         registro: r.registro,
@@ -837,7 +859,7 @@ export class CrediarioBaixaService {
         valorParcela: r.valorParcela != null ? Number(r.valorParcela) : 0,
         codCliente: r.codCliente,
         nome: r.nome,
-        obs: null,
+        obs: r.obs ? String(r.obs).trim() : null,
       }));
 
     // Nome + telefone + filtro de clientes-cartão via espelho de clientes.
@@ -931,9 +953,11 @@ export class CrediarioBaixaService {
           for (const c of doEspelho) {
             const cod = String(c.codCliente || '').trim();
             const codNum = parseInt(cod.replace(/\D/g, ''), 10);
-            if (!cod || isNaN(codNum) || codNum <= 3) continue;
+            if (!cod || isNaN(codNum)) continue;
             const nome = String(c.nome || '').trim();
             if (!nome || CARD_NAME_REGEX.test(nome)) continue;
+            // Código baixo só cai se o nome for genérico (caso OZELINA cod 2)
+            if (isPseudoClienteCodigoBaixo(codNum, nome)) continue;
             const lojaCli = String(c.loja || '').trim() || null;
             const dedupKey = `${lojaCli || ''}|${cod}|${nome.toUpperCase()}`;
             if (seen.has(dedupKey)) continue;
@@ -1032,10 +1056,12 @@ export class CrediarioBaixaService {
       const cod = String(row.cod || '').trim();
       if (!cod) { descartadosCod++; continue; }
       const codNum = parseInt(cod.replace(/\D/g, ''), 10);
-      if (isNaN(codNum) || codNum <= 3) { descartadosCodInvalido++; continue; }
+      if (isNaN(codNum)) { descartadosCodInvalido++; continue; }
       const nome = String(row.nome || '').trim();
       if (!nome) { descartadosNome++; continue; }
       if (cardRegex.test(nome)) { descartadosCartao++; continue; }
+      // Código baixo só cai se o nome for genérico (caso OZELINA cod 2)
+      if (isPseudoClienteCodigoBaixo(codNum, nome)) { descartadosCodInvalido++; continue; }
       const lojaCli = row.loja != null ? String(row.loja).trim() : null;
       const dedupKey = `${lojaCli || ''}|${cod}|${nome.toUpperCase()}`;
       if (seen.has(dedupKey)) { descartadosDup++; continue; }
@@ -1103,9 +1129,11 @@ export class CrediarioBaixaService {
     for (const row of r.rows as any[]) {
       const cod = String(row.cod || '').trim();
       const codNum = parseInt(cod.replace(/\D/g, ''), 10);
-      if (!cod || isNaN(codNum) || codNum <= 3) continue;
+      if (!cod || isNaN(codNum)) continue;
       const nome = String(row.nome || '').trim();
       if (!nome || nome.startsWith('#UNIF>') || CARD_NAME_REGEX.test(nome)) continue;
+      // Código baixo só cai se o nome for genérico (caso OZELINA cod 2)
+      if (isPseudoClienteCodigoBaixo(codNum, nome)) continue;
       const cpfDig = String(row.cpf || '').replace(/\D/g, '');
       clientes.push({
         codCliente: cod,
@@ -1360,9 +1388,11 @@ export class CrediarioBaixaService {
       for (const c of rows) {
         const cod = String(c.codCliente || '');
         const n = parseInt(cod.replace(/\D/g, ''), 10);
-        if (isNaN(n) || n <= 3) continue;
+        if (isNaN(n)) continue;
         const nome = String(c.nome || '').trim();
         if (CARD_NAME_REGEX.test(nome)) continue;
+        // Código baixo só cai se o nome for genérico (caso OZELINA cod 2)
+        if (isPseudoClienteCodigoBaixo(n, nome)) continue;
         const tel = String(c.telefone || '').trim() || String(c.telefone2 || '').trim() || null;
         outS.push({ codCliente: cod, nome, telefone: tel });
         if (outS.length >= 30) break;
@@ -1413,9 +1443,11 @@ export class CrediarioBaixaService {
     for (const row of r.rows as any[]) {
       const cod = String(row.cod || '');
       const n = parseInt(cod.replace(/\D/g, ''), 10);
-      if (isNaN(n) || n <= 3) continue;
+      if (isNaN(n)) continue;
       const nome = String(row.nome || '').trim();
       if (cardRegex.test(nome)) continue;
+      // Código baixo só cai se o nome for genérico (caso OZELINA cod 2)
+      if (isPseudoClienteCodigoBaixo(n, nome)) continue;
       const tel = (String(row.tel || '').trim()) || (String(row.tel2 || '').trim()) || null;
       out.push({ codCliente: cod, nome, telefone: tel });
     }
@@ -1471,7 +1503,7 @@ export class CrediarioBaixaService {
             codCliente: String(row.codCliente),
             nome: row.nome ? String(row.nome) : phoneInfoN?.nome || null,
             telefone: phoneInfoN?.telefone || null,
-            obs: null,
+            obs: row.obs ? String(row.obs).trim() : null,
           });
         }
         if (outN.length > 0) return outN;
@@ -1639,7 +1671,9 @@ export class CrediarioBaixaService {
       codClientes.filter((c) => {
         if (!c) return false;
         const n = parseInt(String(c).replace(/\D/g, ''), 10);
-        return !isNaN(n) && n > 3;
+        // Código baixo NÃO cai pelo número (caso OZELINA cod 2) — o filtro
+        // por NOME logo abaixo é quem separa cartão/genérico de gente.
+        return !isNaN(n);
       }),
     ));
 
@@ -1653,7 +1687,13 @@ export class CrediarioBaixaService {
           const r = await this.erp.runReadOnly(sql, { maxRows: codClientes.length + 100, timeoutMs: 10000 });
           const cardRegex = CARD_NAME_REGEX;
           const cardCodes = new Set(
-            r.rows.filter((row: any) => cardRegex.test(String(row.nome || '').trim())).map((row: any) => String(row.cod)),
+            r.rows
+              .filter((row: any) => {
+                const nomeCli = String(row.nome || '').trim();
+                const nCli = parseInt(String(row.cod || '').replace(/\D/g, ''), 10);
+                return cardRegex.test(nomeCli) || isPseudoClienteCodigoBaixo(nCli, nomeCli);
+              })
+              .map((row: any) => String(row.cod)),
           );
           if (cardCodes.size > 0) {
             this.logger.log(`[crediario-baixa] excluindo ${cardCodes.size} clientes-cartão: ${Array.from(cardCodes).join(',')}`);
@@ -1791,7 +1831,7 @@ export class CrediarioBaixaService {
       codCliente: String(row.codCliente),
       nome: row.nome ? String(row.nome) : null,
       telefone: null,
-      obs: null,
+      obs: row.obs ? String(row.obs).trim() : null,
     };
   }
 
