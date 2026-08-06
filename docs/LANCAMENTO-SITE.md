@@ -1,172 +1,174 @@
-# Lançamento do site novo — checklist de necessidades reais
+# Site novo — 100 itens pra ir ao ar
 
-Levantado em 04/08/2026 lendo o código (`ecommerce/`, `backend/src/loja-orders`,
-`backend/src/correios`, `backend/src/produto-ficha`). Onde diz **JÁ EXISTE**, é
-coisa medida no repositório — não repetir trabalho.
+Refeito em 04/08/2026, **só o site novo** (`ecommerce/` + `backend/src/loja-orders`,
+`correios`, `produto-ficha`, `pick-orders`). Levantado lendo o código.
 
-Legenda: 🔴 bloqueia o lançamento · 🟠 bloqueia anúncio pago · 🟡 primeira semana
+- **JÁ EXISTE** = medido no repositório. Não refazer.
+- 🔴 impede ir ao ar · 🟠 impede anunciar/escalar · 🟡 primeira semana
+
+> Corrigido nesta versão: "dado inventado no antifraude" **não se aplica ao site
+> novo** — o checkout exige CPF, e-mail e telefone da cliente antes de cobrar
+> (`loja-orders.service.ts › validar()`). Aquilo era do link de pagamento das
+> lojas, e já foi resolvido em 01/08.
 
 ---
 
-## 1. Pagamento (Pagar.me)
+## A. Dinheiro — não pode errar (🔴)
 
-1. 🔴 Revalidar `unitPrice` no servidor contra o catálogo antes de cobrar — hoje o preço que vem do front é o cobrado (o próprio `loja-orders.service.ts` marca isso como pendência conhecida)
-2. 🔴 Revalidar subtotal, desconto, frete e total no servidor (idem)
-3. 🔴 Parar de enviar e-mail/CPF/telefone inventados ao antifraude (há telefone fixo chumbado no código)
-4. 🔴 PIX: expiração de 30 min desfazendo a reserva do pedido
-5. 🔴 PIX: webhook confirmando pagamento de forma idempotente (repetição do gateway não pode duplicar pedido)
-6. 🔴 Cartão: tratar recusa com mensagem que a cliente entenda (saldo, dados, antifraude)
-7. 🔴 Cartão: não criar pedido quando recusado (regra já escrita — validar que se cumpre)
-8. 🟠 Parcelamento: definir nº máximo de parcelas, valor mínimo por parcela e quem paga juros
-9. 🟠 Exibir as parcelas na PDP e no carrinho, não só no checkout
-10. 🟠 3DS / autenticação do emissor no cartão
-11. 🟠 Tela de "pagamento em análise" (cartão que não aprova na hora)
-12. 🟠 Reprocessar pagamento pendente por cron (não depender só do webhook)
-13. 🟡 Segunda tentativa de cartão sem refazer o carrinho
-14. 🟡 Conciliação: pedido pago no gateway × pedido pago no Flow (relatório de divergência)
-15. 🟡 Estorno/cancelamento pelo painel, com baixa no pedido
+1. Revalidar `unitPrice` de cada item contra o catálogo antes de cobrar — hoje o preço vem do front (o código marca como pendência conhecida)
+2. Revalidar subtotal, desconto, frete e total no servidor
+3. Recalcular o cupom no servidor (não aceitar valor do cliente)
+4. Travar preço entre "ver carrinho" e "pagar" (não mudar no meio)
+5. Validar estoque no fechamento, não só ao adicionar
+6. Não fechar pedido com peça despublicada durante a sessão
+7. PIX: expiração de 30 min liberando a reserva
+8. PIX: webhook idempotente (repetição do gateway não duplica pedido)
+9. Cartão recusado não cria pedido (regra existe — validar que se cumpre)
+10. Cartão: mensagem de recusa que a cliente entenda
+11. Cron reprocessando pagamento pendente (não depender só do webhook)
+12. Conciliação diária: pago no gateway × pago no Flow
+13. Validação de e-mail de verdade (hoje é `includes('@')`, "a@b" passa e a confirmação não chega)
+14. Remover o fallback de telefone `13 996218277` do checkout (caminho morto hoje, mina amanhã)
+15. Valor mínimo de pedido, se houver
 
-## 2. Frete
+## B. Frete (🔴/🟠)
 
-16. 🔴 Endpoint público de cotação no backend — o cálculo **JÁ EXISTE** (`correios.calcularFrete`, `maisEnvios.calcularFrete`), falta expor
-17. 🔴 Trocar a fonte em `ecommerce/src/lib/commerce/frete.ts` (hoje é tabela fixa por faixa de CEP, declarada como estimativa)
-18. 🔴 Peso e dimensões reais por produto (hoje o envio usa estimativa de 200g/peça)
-19. 🔴 Cotação com o CEP de origem da loja que vai despachar, não um fixo
-20. 🔴 Cache da cotação por CEP+peso (não bater nos Correios a cada tecla)
-21. 🔴 Fallback quando Correios/Mais Envios não respondem — site não pode travar o checkout
-22. 🟠 Config editável de frete grátis: valor mínimo, período, região (hoje `FREE_SHIPPING_FROM` está chumbado no código)
-23. 🟠 Config de frete promocional fixo (ex.: R$ 9,90 pra Sudeste até dia X)
+16. 🔴 Endpoint público de cotação — o cálculo **JÁ EXISTE** (`correios.calcularFrete`, `maisEnvios.calcularFrete`), falta expor
+17. 🔴 Trocar a fonte em `ecommerce/src/lib/commerce/frete.ts` (hoje tabela fixa por faixa de CEP)
+18. 🔴 Peso e dimensão reais por produto (hoje 200g/peça estimado)
+19. 🔴 Cotar com o CEP da loja que vai despachar
+20. 🔴 Fallback quando o transportador não responde (não travar o checkout)
+21. 🔴 Cache de cotação por CEP+peso
+22. 🟠 Config editável de frete grátis: mínimo, período, região (hoje `FREE_SHIPPING_FROM` chumbado)
+23. 🟠 Config de frete promocional fixo com data de início e fim
 24. 🟠 Tela na retaguarda pra essas configs, sem deploy
-25. 🟠 Prazo de entrega = prazo do transportador + dias de separação
-26. 🟠 Retirada em loja: mostrar só lojas com a peça em estoque
-27. 🟠 Retirada em loja: prazo e instruções de retirada
-28. 🟡 Frete por região com transportadora própria (rota Itanhaém/Praia Grande/Santos já existe no realinhamento)
-29. 🟡 Simulador de frete na PDP, antes do carrinho
-30. 🟡 Regra de embalagem (juntar itens numa caixa só muda o preço)
+25. 🟠 Prazo = prazo do transportador + dias de separação
+26. 🟠 Retirada em loja só onde a peça existe
+27. 🟠 Retirada: prazo, endereço e instruções
+28. 🟡 Simulador de frete na página do produto
+29. 🟡 Regra de embalagem (vários itens numa caixa)
+30. 🟡 Rota própria Itanhaém/Praia Grande/Santos como opção de entrega
 
-## 3. Produto e catálogo
+## C. Produto e vitrine (🔴 — o gargalo real)
 
-31. 🔴 Fechar foto por cor de todo produto publicável (a importação e a varredura de bolinha **JÁ EXISTEM**)
-32. 🔴 Bolinha de cor preenchida em toda cor publicada
+31. 🔴 Foto por cor em todo produto publicável (importador e varredura **JÁ EXISTEM**)
+32. 🔴 Bolinha de cor preenchida em toda cor publicada (varredura automática **JÁ EXISTE**)
 33. 🔴 Título de venda por produto (não a descrição crua do ERP)
-34. 🔴 Descrição de venda (composição, caimento, o que veste)
-35. 🔴 Definir status de publicação de cada peça (publicado / pronto / sem fotos / não publicar)
-36. 🔴 Grade de tamanhos com estoque real por SKU
-37. 🔴 Esconder automaticamente cor/tamanho sem estoque
-38. 🔴 Preço de venda conferido contra o catálogo (evitar preço zerado ou 100× — já houve incidente)
-39. 🟠 Tabela de medidas por modelagem (o dono precisa fornecer as medidas oficiais)
-40. 🟠 Categorias e subcategorias ligadas ao CRM (de-para)
-41. 🟠 Atributos de filtro: tamanho, cor, tecido, ocasião, modelagem
-42. 🟠 Ordem das fotos por cor (capa definida, não aleatória)
-43. 🟠 Padronizar proporção das fotos da PDP (hoje varia)
-44. 🟠 Peça sem foto nunca aparece na vitrine
-45. 🟠 Produtos relacionados / "veja similares"
-46. 🟡 Vídeo do produto (campo já existe na ficha)
-47. 🟡 Nome de cor amigável (o ERP tem cor técnica)
-48. 🟡 Badge de novidade / últimas peças
+34. 🔴 Descrição de venda: composição, caimento, o que veste
+35. 🔴 Status de publicação decidido peça a peça
+36. 🔴 Estoque real por SKU aparecendo na grade
+37. 🔴 Esconder cor/tamanho sem estoque
+38. 🔴 Conferir preço contra o catálogo (já houve incidente de preço 100×)
+39. 🔴 Peça sem foto nunca chega à vitrine
+40. 🟠 Ordem das fotos por cor (capa definida)
+41. 🟠 Proporção padronizada das fotos da PDP
+42. 🟠 Tabela de medidas por modelagem (o dono precisa fornecer as oficiais)
+43. 🟠 Categorias e subcategorias ligadas ao CRM
+44. 🟠 Filtros: tamanho, cor, tecido, ocasião, modelagem
+45. 🟠 Produtos relacionados / "veja similares" (**JÁ EXISTE** o bloco, falta a fonte)
+46. 🟠 Nome de cor amigável (o ERP tem cor técnica)
+47. 🟡 Vídeo do produto (campo já existe na ficha)
+48. 🟡 Badge de novidade e de últimas peças
 49. 🟡 Guia de tamanhos por categoria
-50. 🟡 Compressão e conversão das fotos (WebP) sem perder qualidade
+50. 🟡 WebP e compressão sem perder qualidade
 
-## 4. Carrinho e checkout
+## D. Carrinho e checkout (🔴/🟠)
 
-51. 🔴 Carrinho persistente por cliente (não só no navegador)
-52. 🔴 Validar estoque no fechamento, não só ao adicionar
-53. 🔴 Bloquear compra de peça despublicada durante a sessão
-54. 🔴 Endereço: CEP com ViaCEP e complemento em campo próprio (o backend **JÁ FOI CORRIGIDO** pra separar complemento de bairro)
-55. 🔴 Validação de CPF e telefone com máscara e verificação
-56. 🟠 Cupom: validade, valor mínimo, primeira compra, por categoria
-57. 🟠 Cupom de frete grátis distinto do cupom de desconto
-58. 🟠 Barra de progresso de frete grátis (**JÁ EXISTE**, revisar valor vindo da config)
-59. 🟠 Resumo do pedido com tudo discriminado antes de pagar
-60. 🟠 Checkout em uma página, sem cadastro obrigatório antes
-61. 🟡 Salvar endereço pra próxima compra
-62. 🟡 Recuperação de carrinho abandonado (integra com o n8n depois)
+51. 🔴 Carrinho persistente por cliente, não só no navegador
+52. 🔴 CEP com ViaCEP e complemento em campo próprio (backend **JÁ CORRIGIDO**)
+53. 🔴 Máscara e validação de CPF e telefone
+54. 🔴 Mensagem clara quando falta estoque no fechamento
+55. 🟠 Cupom: validade, mínimo, primeira compra, por categoria
+56. 🟠 Cupom de frete grátis separado do de desconto
+57. 🟠 Barra de progresso de frete grátis lendo a config (**JÁ EXISTE** a barra)
+58. 🟠 Resumo discriminado antes de pagar
+59. 🟠 Checkout sem cadastro obrigatório antes
+60. 🟡 Salvar endereço pra próxima compra
+61. 🟡 Escassez honesta ("últimas 2") — **JÁ EXISTE**, ligar na fonte real
+62. 🟡 Quick add na listagem — **JÁ EXISTE**
 
-## 5. Conta da cliente
+## E. Conta da cliente (🟠)
 
-63. 🟠 Cadastro/login ligado ao CRM por CPF
-64. 🟠 Meus pedidos com status e rastreio
-65. 🟠 Segunda via do PIX de pedido em aberto
-66. 🟠 Meus endereços (adicionar, editar, padrão)
-67. 🟠 Meus dados (com consentimento LGPD)
+63. Cadastro e login ligados ao CRM por CPF — **JÁ EXISTE** a base
+64. Meus pedidos com status e rastreio
+65. Segunda via do PIX em aberto
+66. Meus endereços
+67. Meus dados com consentimento LGPD
 68. 🟡 Cashback: saldo e extrato (existe no CRM)
 69. 🟡 Lista de desejos
-70. 🟡 Recuperação de senha por e-mail ou WhatsApp
+70. 🟡 Recuperação de senha
 
-## 6. Pós-venda e logística
+## F. Pedido → loja → entrega (🔴)
 
-71. 🔴 Pedido do site cair na fila de separação da loja certa (roteamento **JÁ EXISTE**)
-72. 🔴 Etiqueta e NF-e do pedido do site (**JÁ EXISTE** no fluxo de pick-orders)
-73. 🔴 E-mail de confirmação de pedido
-74. 🔴 E-mail/WhatsApp de "pedido enviado" com rastreio
-75. 🟠 Página pública de acompanhamento do pedido
-76. 🟠 Rastreio automático (`LINKETRACK_TOKEN` não está configurado hoje)
-77. 🟠 Aviso de pedido atrasado pra operação
-78. 🟠 Regra de split: pedido com peças de lojas diferentes
-79. 🟡 Aviso de entrega concluída
-80. 🟡 Pesquisa de satisfação pós-entrega
+71. 🔴 Pedido do site cair na fila da loja certa — roteamento **JÁ EXISTE**
+72. 🔴 Etiqueta e NF-e do pedido do site — **JÁ EXISTE** em pick-orders
+73. 🔴 E-mail de confirmação do pedido
+74. 🔴 Aviso de "pedido enviado" com rastreio
+75. 🔴 Alerta quando o pagamento confirma e o pedido não anda
+76. 🟠 Página pública de acompanhamento
+77. 🟠 Rastreio automático (`LINKETRACK_TOKEN` não configurado hoje)
+78. 🟠 Pedido com peças de lojas diferentes (split) testado ponta a ponta
+79. 🟠 Corrigir endereço do pedido antes de postar — **JÁ EXISTE** (04/08)
+80. 🟡 Aviso de entrega concluída
 
-## 7. Trocas e devoluções
+## G. Trocas (🟠)
 
-81. 🟠 Política de trocas publicada no site
-82. 🟠 Portal de trocas ligado ao pedido do site (**JÁ EXISTE** pro site antigo)
-83. 🟠 Prazo de arrependimento (7 dias) tratado
-84. 🟠 Etiqueta de devolução
+81. Política de trocas publicada
+82. Portal de trocas ligado ao pedido do site (**JÁ EXISTE** pro site antigo)
+83. Prazo de arrependimento de 7 dias
+84. Etiqueta de devolução
 85. 🟡 Vale-troca / crédito na conta
-86. 🟡 Status da troca visível pra cliente
 
-## 8. Conteúdo e vitrine
+## H. Conteúdo (🟠)
 
-87. 🟠 Banners editáveis sem deploy (desenhado, não construído)
-88. 🟠 Tela de rascunho com preview do site ao lado (desenhado, não construído)
-89. 🟠 Vitrines curadas na home (o que aparece primeiro)
-90. 🟠 Menu com os 7 eixos populado de verdade (**JÁ EXISTE** a estrutura)
-91. 🟠 Página Nossas Lojas (**JÁ EXISTE**)
-92. 🟠 Página Troca Fácil (**JÁ EXISTE**)
-93. 🟡 Landing de campanha (50% OFF, datas comemorativas)
-94. 🟡 Blog / conteúdo pra SEO
-95. 🟡 Depoimentos e prova social
+86. Banners editáveis sem deploy — desenhado, não construído
+87. Tela de rascunho com preview ao lado — desenhada, não construída
+88. Vitrines curadas na home
+89. Menu dos 7 eixos populado (estrutura **JÁ EXISTE**)
+90. Nossas Lojas (**JÁ EXISTE**) e Troca Fácil (**JÁ EXISTE**)
+91. 🟡 Landing de campanha
 
-## 9. SEO e performance
+## I. SEO e velocidade (🟠)
 
-96. 🟠 Título e meta description por produto e categoria
-97. 🟠 URL amigável e estável (slug que não muda)
-98. 🟠 Sitemap.xml e robots.txt
-99. 🟠 Dados estruturados de produto (preço, estoque, avaliação)
-100. 🟠 Open Graph pra WhatsApp e Instagram
-101. 🟠 Redirect 301 das URLs do site antigo (não perder o que já ranqueia)
-102. 🟠 Core Web Vitals na PDP e na listagem
-103. 🟠 Imagens com `priority` e tamanho correto (já houve pegadinha de poster de vídeo baixando o original cru)
-104. 🟡 Canonical em filtro e paginação
-105. 🟡 Página 404 útil
+92. Título e meta description por produto e categoria
+93. Slug estável (URL que não muda)
+94. Sitemap.xml e robots.txt
+95. Dados estruturados de produto
+96. Open Graph pra WhatsApp e Instagram
+97. Redirect 301 das URLs do site antigo
+98. Core Web Vitals na PDP e na listagem
+99. 🟡 Canonical em filtro e paginação
 
-## 10. Rastreamento e dados
+## J. Rastreamento (🔴/🟠)
 
-106. 🔴 GTM instalado em todas as páginas
-107. 🔴 Evento de compra com valor e itens (sem isso não há ROI de anúncio)
-108. 🟠 Meta Pixel + API de Conversões (server-side)
-109. 🟠 Google Analytics 4 com e-commerce
-110. 🟠 Eventos: ver produto, adicionar ao carrinho, iniciar checkout
-111. 🟠 Consentimento de cookies antes de disparar tag
-112. 🟡 Google Merchant Center / catálogo do Meta
-113. 🟡 Relatório de funil (visita → carrinho → pagamento)
+100. 🔴 GTM em todas as páginas
+101. 🔴 Evento de compra com valor e itens (sem isso não há ROI de anúncio)
+102. 🟠 Meta Pixel + API de Conversões (server-side)
+103. 🟠 GA4 com e-commerce
+104. 🟠 Eventos de ver produto, adicionar ao carrinho, iniciar checkout
+105. 🟠 Consentimento de cookies antes da tag
 
-## 11. Segurança e LGPD
+## K. Segurança e LGPD (🔴/🟠)
 
-114. 🔴 Rate-limit no checkout e no login
-115. 🔴 Não confiar em nada que vem do cliente (validação server-side)
-116. 🔴 Cookie de sessão httpOnly
-117. 🟠 Política de privacidade e termos de uso publicados
-118. 🟠 Consentimento LGPD registrado no CRM
-119. 🟠 Exclusão de conta e exportação de dados
-120. 🟠 Log de acesso a dado de cliente
-121. 🟡 Teste de carga antes de campanha
+106. 🔴 Rate-limit no checkout e no login
+107. 🔴 Cookie de sessão httpOnly (**JÁ EXISTE** no padrão adotado)
+108. 🟠 Política de privacidade e termos publicados
+109. 🟠 Consentimento LGPD gravado no CRM
+110. 🟠 Exclusão de conta e exportação de dados
 
-## 12. Operação
+## L. Operação (🔴/🟠)
 
-122. 🔴 Alguém responsável por pedido travado, todo dia
-123. 🔴 Alerta quando pagamento confirma e o pedido não avança
-124. 🟠 Treinamento das lojas pro fluxo do site
-125. 🟠 Canal de atendimento na loja (WhatsApp/chat) com resposta definida
-126. 🟠 Ambiente de teste com pedido de mentira
-127. 🟡 Runbook: o que fazer quando o gateway cai
+111. 🔴 Responsável diário por pedido travado
+112. 🔴 Pedido de teste ponta a ponta antes de abrir
+113. 🟠 Treinamento das lojas no fluxo do site
+114. 🟠 Canal de atendimento com resposta definida
+115. 🟡 Runbook: o que fazer quando o gateway cai
+
+---
+
+## Por onde eu começaria
+
+**Semana 1 (código, rápido):** 1–6, 16–21, 100–101.
+**Em paralelo, desde já (gente):** 31–39 — é o que consome tempo humano.
+**Semana 2:** 22–24 (config de frete), 71–75 (pedido→loja), 51–54.
+**Antes de anunciar:** 92–99 e 102–105.
