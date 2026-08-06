@@ -38,6 +38,8 @@ export interface ResultadoRef {
    *  la nao tem a peca; nao adianta procurar casamento de cor. */
   produtosEncontrados: number;
   fotos: number;
+  /** Frase pronta explicando por que não veio nada. Só quando não veio. */
+  motivo?: string;
 }
 
 @Injectable()
@@ -106,19 +108,55 @@ export class WcFotosImportService {
    * NÃO existe (só "VLM-222P" e "VLM-222M", nunca um "VLM-222" pelado). Com
    * igualdade exata a marca vinha vazia, a função saía calada e a peça ficava
    * com foto e bolinha cinza — sem erro nenhum no log pra explicar.
+   *
+   * ⚠️ PRECISA SER DETERMINÍSTICA (06/08). REF é reciclada entre fornecedores
+   * ([[giga-ref-reciclada]]), então a mesma família pode ter DUAS marcas. Aqui
+   * escolhia-se `[0]` de um `SELECT DISTINCT` sem `ORDER BY` — ou seja, o
+   * Postgres devolvia a ordem que quisesse.
+   *
+   * O estrago: quem GRAVA a bolinha usa esta função, e quem LÊ (o catálogo,
+   * em `escolherFicha`) escolhe a marca por outro caminho, também sem ordem.
+   * Os dois sorteavam separado. Quando davam marcas diferentes, a bolinha era
+   * pintada numa ficha que o site nunca abre — e a varredura automática, que
+   * não olha marca, dava a peça como PINTADA e parava de tentar. Resultado
+   * exato do relato: "a varredura roda, o log diz que pintou, e a bolinha não
+   * aparece".
+   *
+   * Regra: vale a marca com MAIS cadastros na família; empate, a menor em
+   * ordem alfabética. Qualquer regra serve desde que os dois lados usem a
+   * mesma — o que não pode é sortear.
    */
   async marcaDaFamilia(ref: string): Promise<string | null> {
     const base = refBaseOf(ref);
-    const linhas = await this.prisma.$queryRawUnsafe<Array<{ ref: string; marca: string }>>(
-      `SELECT DISTINCT UPPER(TRIM(ref)) AS ref, NULLIF(TRIM(marca), '') AS marca
+    const linhas = await this.prisma.$queryRawUnsafe<Array<{ ref: string; marca: string; qtd: number }>>(
+      `SELECT UPPER(TRIM(ref)) AS ref, UPPER(TRIM(marca)) AS marca, COUNT(*)::int AS qtd
          FROM wincred_produtos
         WHERE (UPPER(TRIM(ref)) = $1 OR UPPER(TRIM(ref)) LIKE $1 || '%')
           AND marca IS NOT NULL AND TRIM(marca) <> ''
+        GROUP BY 1, 2
+        ORDER BY qtd DESC, marca ASC
         LIMIT 50`,
       base,
     );
-    const daFamilia = linhas.filter((l) => refBaseOf(l.ref) === base);
-    return daFamilia.length ? String(daFamilia[0].marca).toUpperCase() : null;
+
+    const porMarca = new Map<string, number>();
+    for (const l of linhas) {
+      if (refBaseOf(l.ref) !== base) continue;
+      porMarca.set(l.marca, (porMarca.get(l.marca) || 0) + Number(l.qtd || 0));
+    }
+    if (!porMarca.size) return null;
+
+    const vencedora = Array.from(porMarca.entries()).sort(
+      (a, b) => b[1] - a[1] || a[0].localeCompare(b[0]),
+    )[0][0];
+
+    if (porMarca.size > 1) {
+      this.logger.warn(
+        `[wc-fotos] REF ${base} tem ${porMarca.size} marcas (${Array.from(porMarca.keys()).join(', ')}) — ` +
+          `ficha vai pra "${vencedora}". Vale conferir o cadastro: REF reciclada entre fornecedores.`,
+      );
+    }
+    return vencedora;
   }
 
   /**
@@ -165,41 +203,77 @@ export class WcFotosImportService {
      * casamento é `SKU LIKE 'REF%'`, e o SKU do WordPress é "VLM-222 MARROM";
      * a REST do WooCommerce exige SKU exato e por isso devolvia UM produto.
      */
-    try {
-      const doWp = await this.wp.getProdutosPorRef(ref);
-      if (doWp.length) {
-        this.logger.log(`[wc-fotos] ${ref}: ${doWp.length} produto(s) pelo MySQL do WordPress`);
-        // Formato do WooCommerce REST pro resto do fluxo não mudar.
-        return doWp.map((p) => ({
-          id: p.id,
-          name: p.nome,
-          sku: p.sku,
-          status: p.status,
-          images: p.imagens.map((src) => ({ src })),
-        }));
-      }
-    } catch (e: any) {
-      this.logger.warn(`[wc-fotos] MySQL do WordPress indisponível: ${e?.message || e}`);
-    }
-
     const base = ref.replace(/[A-Z]+$/i, '').replace(/[-_\s]+$/, '');
-    const tentativas: Array<Record<string, unknown>> = [
-      { sku: ref },
-      { search: ref },
-      ...(base && base !== ref ? [{ search: base }] : []),
-    ];
 
+    /**
+     * O FILTRO VALE PROS DOIS CAMINHOS (corrigido 06/08).
+     *
+     * `combina` era aplicado só no caminho REST. O MySQL casa por
+     * `SKU LIKE 'REF%'`, que é peneira grossa de propósito — pedindo "VMS-223"
+     * ele traz "VMS-2231" junto. Sem o filtro, as fotos de OUTRA peça entravam
+     * como se fossem desta, e o casamento de cor depois ainda encontrava um
+     * nome de cor válido: foto errada, na cor certa, sem erro nenhum.
+     */
     const combina = (p: any) => {
       const sku = String(p?.sku || '').trim().toUpperCase().replace(/\s+/g, '');
       if (sku === ref) return true;
       const nome = this.semAcento(String(p?.name || ''));
       const alvo = this.semAcento(ref).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const alvoBase = this.semAcento(base).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      // O SKU do WordPress é "REF COR" — casa pelo começo, com fronteira.
+      const skuCasa = new RegExp(`^${alvo}([^A-Z0-9]|$)`).test(this.semAcento(String(p?.sku || '')));
       return (
+        skuCasa ||
         new RegExp(`(^|[^A-Z0-9])${alvo}([^A-Z0-9]|$)`).test(nome) ||
         (!!alvoBase && new RegExp(`(^|[^A-Z0-9])${alvoBase}([^A-Z0-9]|$)`).test(nome))
       );
     };
+
+    try {
+      const doWp = await this.wp.getProdutosPorRef(ref);
+      if (doWp.length) {
+        // Formato do WooCommerce REST pro resto do fluxo não mudar.
+        const convertidos = doWp.map((p) => ({
+          id: p.id,
+          name: p.nome,
+          sku: p.sku,
+          status: p.status,
+          images: p.imagens.map((src) => ({ src })),
+        }));
+        const daRef = convertidos.filter(combina);
+        if (daRef.length) {
+          this.logger.log(
+            `[wc-fotos] ${ref}: ${daRef.length} produto(s) pelo MySQL do WordPress` +
+              (daRef.length < convertidos.length
+                ? ` (${convertidos.length - daRef.length} de outra REF, descartado[s])`
+                : ''),
+          );
+          const semFoto = daRef.filter((p) => !p.images.length).length;
+          if (semFoto === daRef.length) {
+            // Todos vieram sem imagem: quase sempre é a URL do site vazia no
+            // WordPress (o `siteUrl` prefixa toda foto). Sem este aviso, a tela
+            // só diz "nenhuma cor com foto".
+            this.logger.warn(
+              `[wc-fotos] ${ref}: os ${daRef.length} produto(s) do WordPress vieram SEM imagem — ` +
+                `confira a opção "siteurl" no WordPress e as linhas _wp_attached_file`,
+            );
+          }
+          return daRef;
+        }
+        this.logger.warn(
+          `[wc-fotos] ${ref}: MySQL trouxe ${convertidos.length} produto(s), nenhum desta REF — ` +
+            `tentando a REST`,
+        );
+      }
+    } catch (e: any) {
+      this.logger.warn(`[wc-fotos] MySQL do WordPress indisponível: ${e?.message || e}`);
+    }
+
+    const tentativas: Array<Record<string, unknown>> = [
+      { sku: ref },
+      { search: ref },
+      ...(base && base !== ref ? [{ search: base }] : []),
+    ];
 
     /**
      * ⚠️ RODA AS TRÊS E SOMA — não para na primeira que responde.
@@ -328,10 +402,20 @@ export class WcFotosImportService {
   async pintarBolinha(ref: string, cor: string): Promise<void> {
     try {
       const [capa] = await this.fotos.listPhotos(ref, cor);
-      if (!capa?.url) return;
+      if (!capa?.url) {
+        // Saía calado — e "não pintou" sem log é indistinguível de "não rodou".
+        this.logger.warn(`[wc-fotos] bolinha ${ref}/${cor}: sem foto no acervo, nada pra ler`);
+        return;
+      }
 
       const marca = await this.marcaDaFamilia(ref);
-      if (!marca) return; // sem marca não há chave de ficha (REF+MARCA)
+      if (!marca) {
+        this.logger.warn(
+          `[wc-fotos] bolinha ${ref}/${cor}: família sem MARCA no catálogo — ` +
+            `a ficha é REF+MARCA, então não há onde gravar`,
+        );
+        return;
+      }
 
       // Bolinha já definida (pela IA antes ou pelo conta-gotas) → nem chama a
       // IA. Cada leitura custa, e em lote isso vira dinheiro de verdade.
@@ -379,9 +463,20 @@ export class WcFotosImportService {
      */
     const ref = refBaseOf(refBruta);
     if (!ref) throw new BadRequestException('REF obrigatória');
-    if (!this.config.get<string>('WC_URL')) {
-      throw new BadRequestException('WC_URL não configurada — sem o site antigo não há de onde importar.');
-    }
+
+    /**
+     * ⚠️ `WC_URL` NÃO PODE SER PRÉ-REQUISITO (corrigido 06/08).
+     *
+     * São DUAS fontes: o MySQL do WordPress (a que funciona, e a que o PDV usa
+     * há meses) e a REST do WooCommerce. Só a REST precisa de `WC_URL` — o
+     * MySQL usa a conexão própria e tira o prefixo das fotos da opção
+     * `siteurl` do próprio WordPress.
+     *
+     * Barrar tudo aqui fazia o importador recusar a REF inteira com "WC_URL
+     * não configurada" mesmo com a fonte boa disponível — o botão da tela
+     * simplesmente não funcionava, e a mensagem apontava pra lugar errado.
+     */
+    const temWc = !!this.config.get<string>('WC_URL');
 
     const cores = await this.coresDaRef(ref);
     if (!cores.length) throw new BadRequestException(`REF ${ref} não tem cores no catálogo.`);
@@ -391,6 +486,18 @@ export class WcFotosImportService {
       ref, coresComFoto: [], coresSemFoto: [], jaTinham: [], produtosWcSemCor: [],
       produtosEncontrados: produtos.length, fotos: 0,
     };
+
+    // A tela precisa saber POR QUE não veio nada. "0 fotos" sem motivo mandava
+    // o dono adivinhar entre: peça não existe no site antigo, site fora do ar,
+    // ou nenhuma fonte configurada.
+    if (!produtos.length) {
+      resultado.motivo = temWc
+        ? `Nenhum produto desta REF no site antigo (procurei no MySQL do WordPress e na REST do WooCommerce).`
+        : `Nenhum produto desta REF no MySQL do WordPress — e a REST não pôde ser tentada porque WC_URL não está configurada.`;
+      resultado.coresSemFoto = cores;
+      this.logger.warn(`[wc-fotos] ${ref}: ${resultado.motivo}`);
+      return resultado;
+    }
 
     for (const p of produtos) {
       const cor = this.casarCor(String(p.name || ''), cores);

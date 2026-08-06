@@ -86,12 +86,21 @@ Refeito em 04/08/2026, **só o site novo** (`ecommerce/` + `backend/src/loja-ord
 
 ## C. Produto e vitrine (🔴 — o gargalo real) · **REVISADO PELO DONO 04/08**
 
-> ⚠️ **31 e 32 ESTÃO COM BUG** (relato do dono). O importador de fotos e a
-> varredura da bolinha existem e rodaram, mas não estão entregando. **Investigar
-> ANTES de contar com eles** — é o gargalo do go-live e hoje está quebrado.
+> ✅ **31 e 32 REVISADOS 06/08.** Achei os dois pela leitura do código — e eles
+> compartilham a mesma raiz: **REF reciclada entre fornecedores** (a mesma REF
+> com DUAS marcas). Quem GRAVA a bolinha escolhia a marca de um jeito, quem LÊ
+> escolhia de outro, e **nenhum dos dois era determinístico**.
+>
+> ⚠️ Sem acesso ao log de produção não dá pra jurar que era a ÚNICA causa. Por
+> isso a rodada também **quebrou o silêncio**: todo caminho que antes falhava
+> calado agora diz o motivo — na tela e no log. Se sobrar algum caso, ele vai
+> se identificar em vez de virar adivinhação.
 
-31. 🐞 BUG — Foto por cor: importador existe e **não está funcionando**. Revisar
-32. 🐞 BUG — Bolinha: varredura automática existe e **não está preenchendo**. Revisar
+31. ✅ REVISADO — **Três defeitos no importador**, todos silenciosos:
+    - **`WC_URL` era pré-requisito pra tudo.** Existem DUAS fontes; só a REST precisa dessa env — o MySQL do WordPress (a que funciona, e a que o PDV usa há meses) não. Sem a env, o botão recusava a REF inteira mesmo com a fonte boa disponível, e a mensagem apontava pro lugar errado
+    - **O filtro de REF não era aplicado no caminho do MySQL.** O casamento é `SKU LIKE 'REF%'` (peneira grossa de propósito): pedindo `VMS-223` vinha `VMS-2231` junto, e o casamento de cor depois ainda achava uma cor válida — **foto de outra peça, na cor certa, sem erro nenhum**
+    - **Produto sem imagem não dizia nada.** Se a opção `siteurl` do WordPress estiver vazia, TODA foto vira URL nula e a tela só mostrava "nenhuma cor com foto". Agora avisa onde olhar
+32. ✅ REVISADO — **A bolinha era pintada numa ficha que o site nunca abre.** `marcaDaFamilia` pegava `[0]` de um `SELECT` **sem `ORDER BY`**; o catálogo escolhia a marca por outro caminho, também sem ordem. Quando davam marcas diferentes, a varredura pintava numa ficha e a página lia outra. E pior: a varredura **não olha marca**, então dava a peça como pintada e **parava de tentar** — "rodou, o log diz que pintou, e a bolinha não aparece". Agora a marca é determinística (a com mais cadastros; empate alfabético) e o catálogo, em vez de devolver `undefined` quando nenhuma ficha casa (**peça sem bolinha, sem título e sem vídeo, em silêncio**), usa a ficha mais preenchida e registra que houve desempate — porque o conserto de verdade é limpar o cadastro
 33. ⬜ APROVADO — Título de venda por produto (não a descrição crua do ERP)
 34. ⬜ APROVADO — Descrição de venda: composição, caimento, o que veste
 35. ⬜ APROVADO — Status de publicação decidido peça a peça

@@ -357,8 +357,18 @@ export class LojaCatalogService {
    * Ficha da peça. A chave é REF + MARCA, nunca REF sozinha: REF numérica é
    * reciclada entre fornecedores e pegar a ficha errada colocaria a bolinha
    * (e a descrição) de outra peça na página. Ver [[giga-ref-reciclada]].
-   * Com uma única ficha na REF, aceita sem marca — o cadastro antigo não
-   * tinha esse cuidado e travar aqui esconderia a ficha certa.
+   *
+   * ⚠️ 06/08 — a última linha era `fichas.length === 1 ? fichas[0] : undefined`:
+   * REF com DUAS fichas e nenhuma casando com a marca da peça devolvia
+   * `undefined`, ou seja, **peça sem bolinha, sem título e sem vídeo no site**,
+   * em silêncio. Combinado com a marca não-determinística do lado de quem
+   * GRAVA a bolinha (`marcaDaFamilia`), era o par que produzia "a varredura
+   * pintou e o site não mostra".
+   *
+   * Agora: marca exata primeiro (segue sendo a resposta certa); se não houver,
+   * vale a ficha mais PREENCHIDA — que é justamente aquela onde a varredura
+   * gravou. Melhor uma ficha da família do que peça pelada; e o log diz quando
+   * o desempate aconteceu, porque a correção de verdade é limpar o cadastro.
    */
   private escolherFicha(fichas: any[] | undefined, marca?: string | null) {
     if (!fichas?.length) return undefined;
@@ -367,7 +377,22 @@ export class LojaCatalogService {
       const exata = fichas.find((f) => String(f.marca || '').toUpperCase() === m);
       if (exata) return exata;
     }
-    return fichas.length === 1 ? fichas[0] : undefined;
+    if (fichas.length === 1) return fichas[0];
+
+    const preenchimento = (f: any) =>
+      ((f?.cores ?? []) as any[]).filter((c) => c?.corHex || c?.tituloComercial).length;
+    const melhor = [...fichas].sort(
+      (a, b) =>
+        preenchimento(b) - preenchimento(a) ||
+        String(a.marca || '').localeCompare(String(b.marca || '')),
+    )[0];
+
+    this.logger.warn(
+      `[catalogo] REF ${fichas[0]?.ref} tem ${fichas.length} fichas e a marca da peça ` +
+        `("${m || '—'}") não casou com nenhuma; usando a de marca "${melhor?.marca ?? '?'}" ` +
+        `(a mais preenchida). Cadastro precisa de limpeza.`,
+    );
+    return melhor;
   }
 
   /** Listagem paginada — o que a página de categoria e a busca consomem. */
