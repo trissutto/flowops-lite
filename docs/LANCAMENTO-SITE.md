@@ -104,20 +104,20 @@ Refeito em 04/08/2026, **só o site novo** (`ecommerce/` + `backend/src/loja-ord
 49. ⬜ APROVADO — Guia de tamanhos por categoria
 50. ⬜ APROVADO — WebP e compressão sem perder qualidade
 
-## D. Carrinho e checkout (🔴/🟠)
+## D. Carrinho e checkout (🔴/🟠) · **APROVADO PELO DONO 04/08**
 
-51. 🔴 Carrinho persistente por cliente, não só no navegador
-52. 🔴 CEP com ViaCEP e complemento em campo próprio (backend **JÁ CORRIGIDO**)
-53. 🔴 Máscara e validação de CPF e telefone
-54. 🔴 Mensagem clara quando falta estoque no fechamento
-55. 🟠 Cupom: validade, mínimo, primeira compra, por categoria
-56. 🟠 Cupom de frete grátis separado do de desconto
-57. 🟠 Barra de progresso de frete grátis lendo a config (**JÁ EXISTE** a barra)
-58. 🟠 Resumo discriminado antes de pagar
-59. 🟠 Checkout sem cadastro obrigatório antes
-60. 🟡 Salvar endereço pra próxima compra
-61. 🟡 Escassez honesta ("últimas 2") — **JÁ EXISTE**, ligar na fonte real
-62. 🟡 Quick add na listagem — **JÁ EXISTE**
+51. ⬜ APROVADO — Carrinho persistente por cliente, não só no navegador
+52. ⬜ APROVADO — CEP com ViaCEP e complemento em campo próprio (backend **JÁ CORRIGIDO**)
+53. ⬜ APROVADO — Máscara e validação de CPF e telefone
+54. ⬜ APROVADO — Mensagem clara quando falta estoque no fechamento
+55. ⬜ APROVADO — Cupom: validade, mínimo, primeira compra, por categoria — **editável e com criação de cupom na retaguarda** (o dono cria, não depende de deploy)
+56. ⬜ APROVADO — Cupom de frete grátis separado do de desconto
+57. ⬜ APROVADO — Barra de progresso de frete grátis lendo a config (**JÁ EXISTE** a barra)
+58. ⬜ APROVADO — Resumo discriminado antes de pagar
+59. ⬜ APROVADO — Checkout sem cadastro obrigatório antes
+60. ⬜ APROVADO — Salvar endereço pra próxima compra
+61. ⬜ APROVADO — Escassez honesta ("últimas 2") — **JÁ EXISTE**, ligar na fonte real
+62. ⬜ APROVADO — Quick add na listagem — **JÁ EXISTE**
 
 ## E. Conta da cliente (🟠)
 
