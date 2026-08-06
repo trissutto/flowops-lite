@@ -116,6 +116,36 @@ export class LojaOrdersController {
    * interna, marcada com `estimado: true`. A promocional — que é a maior parte
    * dos pedidos — nem depende da cotação pra existir.
    */
+  /**
+   * GET /api/public/loja/config — a régua comercial, sem precisar de CEP.
+   *
+   * A barra "faltam R$ X pro frete grátis" (item 57) aparece na sacola antes
+   * de existir CEP nenhum. Enquanto ela lia a constante do código, o dia em
+   * que o dono mudasse o mínimo na retaguarda a barra continuaria prometendo
+   * o valor velho — **prometendo frete grátis que o checkout não daria**.
+   *
+   * Só devolve o que é público (régua e texto da retirada); preço de frete
+   * continua exigindo CEP e passando pela cotação.
+   */
+  @Get('config')
+  async configPublica(@Headers('x-loja-token') token: string) {
+    this.exigirToken(token);
+    const { cfg } = await this.freteSvc.config();
+    return {
+      ok: true,
+      freteGratis: {
+        ativo: !!cfg?.freteGratisAtivo,
+        minimo: Number(cfg?.freteGratisMinimo ?? 0),
+        ufs: String(cfg?.freteGratisUfs || '') || null,
+      },
+      retirada: {
+        prazoHoras: Number(cfg?.retiradaPrazoHoras ?? 3),
+        instrucoes: cfg?.retiradaInstrucoes ?? null,
+      },
+      diasSeparacao: Number(cfg?.diasSeparacao ?? 2),
+    };
+  }
+
   @Post('frete')
   async frete(
     @Body() body: { cep: string; pecas?: number; subtotal?: number },

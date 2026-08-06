@@ -130,18 +130,22 @@ Refeito em 04/08/2026, **só o site novo** (`ecommerce/` + `backend/src/loja-ord
 
 ## D. Carrinho e checkout (🔴/🟠) · **APROVADO PELO DONO 04/08**
 
-51. ⬜ APROVADO — Carrinho persistente por cliente, não só no navegador
-52. ⬜ APROVADO — CEP com ViaCEP e complemento em campo próprio (backend **JÁ CORRIGIDO**)
-53. ⬜ APROVADO — Máscara e validação de CPF e telefone
-54. ⬜ APROVADO — Mensagem clara quando falta estoque no fechamento
-55. ⬜ APROVADO — Cupom: validade, mínimo, primeira compra, por categoria — **editável e com criação de cupom na retaguarda** (o dono cria, não depende de deploy)
-56. ⬜ APROVADO — Cupom de frete grátis separado do de desconto
-57. ⬜ APROVADO — Barra de progresso de frete grátis lendo a config (**JÁ EXISTE** a barra)
-58. ⬜ APROVADO — Resumo discriminado antes de pagar
-59. ⬜ APROVADO — Checkout sem cadastro obrigatório antes
-60. ⬜ APROVADO — Salvar endereço pra próxima compra
-61. ⬜ APROVADO — Escassez honesta ("últimas 2") — **JÁ EXISTE**, ligar na fonte real
-62. ⬜ APROVADO — Quick add na listagem — **JÁ EXISTE**
+> **Status 06/08:** 52–59, 61 e 62 fechados (a maioria já vinha do bloco A).
+> **51 e 60 seguem abertos** — os dois dependem da sessão da cliente, que é o
+> bloco E; fazer aqui seria construir a mesma plumbing duas vezes.
+
+51. ⬜ ABERTO — Carrinho persistente por cliente, não só no navegador (**depende do bloco E**: sem sessão não há a quem amarrar o carrinho)
+52. ✅ CONFERIDO — ViaCEP preenche rua/bairro/cidade/UF e o foco pula pro NÚMERO (o único campo que só a cliente sabe); complemento em campo próprio dos dois lados. Erro do ViaCEP é silencioso de propósito: o serviço é cortesia e os campos continuam editáveis
+53. ✅ CONFERIDO — Máscara + validação REAL de CPF (dígito verificador, não só 11 números) e de celular com DDD
+54. ✅ FEITO no bloco A — o guard responde com a frase pronta: "Sobrou só 1 unidade de X no tamanho 46. Ajuste a quantidade pra continuar"
+55. ✅ FEITO nos blocos A e B — tabela `site_cupons` + tela `/retaguarda/loja-frete` (aba Cupons): validade, mínimo, primeira compra (checada por CPF), categoria e limite de usos
+56. ✅ FEITO — cupom `tipo='shipping'` zera o frete **econômico** e não mexe no subtotal; quem escolheu expresso paga expresso
+57. ✅ FEITO — a barra lê a config via `GET /api/loja/config` (novo, sem exigir CEP). Antes lia a constante do código: o dia em que o mínimo mudasse na retaguarda, ela seguiria **prometendo frete grátis que o checkout não daria**. Frete grátis desligado agora esconde a barra em vez de travar em "faltam R$ 499,90"
+58. ✅ FEITO no bloco A — resumo com subtotal, frete, cupom e **desconto do Pix como linha própria**, batendo com o total que o servidor cobra
+59. ✅ CONFERIDO — o checkout pede só nome, e-mail, CPF e telefone; não existe login obrigatório
+60. ⬜ ABERTO — Salvar endereço pra próxima compra (**depende do bloco E**: `/conta/enderecos` já existe no backend, falta a sessão no checkout pra oferecer "salvar")
+61. ✅ CONFERIDO — "Restam 2 nesta cor" sai do estoque REAL da grade daquela cor, e o carrinho avisa "Restam só N neste tamanho". Nada inventado
+62. ✅ CONFERIDO — Quick add na listagem, com escolha de cor e tamanho no próprio card
 
 ## E. Conta da cliente (🟠) · **APROVADO PELO DONO 04/08**
 
