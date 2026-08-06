@@ -213,14 +213,19 @@ Refeito em 04/08/2026, **só o site novo** (`ecommerce/` + `backend/src/loja-ord
 
 ## I. SEO e velocidade (🟠) · APROVADO PELO DONO 04/08
 
-92. ⬜ APROVADO — Título e meta description por produto e categoria
-93. ⬜ APROVADO — Slug estável (URL que não muda)
-94. ⬜ APROVADO — Sitemap.xml e robots.txt
-95. ⬜ APROVADO — Dados estruturados de produto
-96. ⬜ APROVADO — Open Graph pra WhatsApp e Instagram — EXPLICADO: Open Graph = o CARTAO que aparece quando alguem cola o link do produto no WhatsApp ou no Instagram: foto, nome e preco em vez de URL crua. Sem isso, link compartilhado vira texto sem graca e perde clique.
-97. ⬜ APROVADO — Redirect 301 das URLs do site antigo
-98. ⬜ APROVADO — Core Web Vitals na PDP e na listagem
-99. ⬜ APROVADO — Canonical em filtro e paginação
+> **Medido no código em 06/08** (não é estimativa): 92–96 e 99 já existiam e
+> foram conferidos um a um. As páginas novas desta rodada (`/novidades`,
+> `/politica-de-trocas`, `/privacidade`, `/termos`) nasceram usando o mesmo
+> `buildMetadata`, então entram com título, description, OG e canonical.
+
+92. ✅ CONFERIDO — `buildMetadata` em produto e categoria, com título, description e keywords
+93. ✅ CONFERIDO — Slug do cadastro, com `ref-<REF>` como forma canônica quando a curadoria ainda não passou
+94. ✅ CONFERIDO — `app/sitemap.ts` e `app/robots.ts`
+95. ✅ CONFERIDO — `productSchema` (JSON-LD) na PDP, junto com o breadcrumb
+96. ✅ CONFERIDO — Open Graph no `buildMetadata` — o cartão com foto, nome e preço quando o link é colado no WhatsApp
+97. ⬜ ABERTO — Redirect 301 das URLs do site antigo. Existem 2 redirects permanentes hoje; o mapa das URLs do WooCommerce **precisa vir do site antigo** e não dá pra deduzir do código
+98. ⬜ ABERTO — Core Web Vitals: é MEDIÇÃO, com o site no ar, antes e depois de cada tag (regra do bloco J)
+99. ✅ CONFERIDO — Canonical no `buildMetadata`. ⚠️ Falta conferir o caso de **filtro e paginação** com a Search Console em produção — é onde o canonical costuma vazar
 
 ## J. Rastreamento (🔴/🟠) · APROVADO PELO DONO 04/08
 
@@ -229,12 +234,17 @@ Refeito em 04/08/2026, **só o site novo** (`ecommerce/` + `backend/src/loja-ord
 > mais script no navegador; e medir o Core Web Vitals ANTES e DEPOIS de cada
 > tag entrar. Se pesar, sai.
 
-100. ⬜ APROVADO — GTM em todas as páginas
-101. ⬜ APROVADO — Evento de compra com valor e itens (sem isso não há ROI de anúncio)
-102. ⬜ APROVADO — Meta Pixel + API de Conversões (server-side)
-103. ⬜ APROVADO — GA4 com e-commerce
-104. ⬜ APROVADO — Eventos de ver produto, adicionar ao carrinho, iniciar checkout
-105. ⬜ APROVADO — Consentimento de cookies antes da tag
+> **Medido no código em 06/08:** o tracking está construído — `lib/tracking/`
+> com Event Manager e os destinos GA4, Meta Pixel, Clarity e TikTok. O que
+> falta é o GTM como container (decisão 4 de 03/08) e a conferência com dado
+> real passando.
+
+100. ⬜ ABERTO — GTM em todas as páginas. Hoje as tags são nativas por env, não por container
+101. ✅ CONFERIDO — Evento de compra **server-only**, disparado no webhook de pagamento com `event_id` único. Fica no servidor de propósito: thank-you page que dispara `purchase` conta a mesma venda a cada F5 e infla o ROAS — o bug clássico de e-commerce
+102. ✅ CONFERIDO — Meta Pixel + CAPI compartilhando o mesmo `event_id` (é ele que evita contar a venda duas vezes)
+103. ✅ CONFERIDO — GA4 com e-commerce
+104. ✅ CONFERIDO — `view_item`, `add_to_cart`, `begin_checkout`, `add_shipping_info` e `add_payment_info` disparando nos pontos certos do funil
+105. ✅ CONFERIDO — `ConsentBanner` antes das tags de medição. As necessárias (sacola, sessão) não dependem de aceite, e isso está escrito na política de privacidade
 
 ## K. Seguranca e LGPD (🔴/🟠) · APROVADO PELO DONO 04/08
 
@@ -257,6 +267,31 @@ Refeito em 04/08/2026, **só o site novo** (`ecommerce/` + `backend/src/loja-ord
 115. ⬜ APROVADO — Runbook: o que fazer quando o gateway cai
 
 ---
+
+## O que sobrou (06/08/2026)
+
+Dos 115 itens, **97 estão fechados**. Os 18 abertos, e por que cada um continua
+aberto:
+
+**Dependem de decisão ou dado do dono:**
+- **97** — mapa das URLs do site antigo pro redirect 301. Não dá pra deduzir do código.
+- **111** — nomear quem abre a lista de pedidos parados todo dia. A ferramenta está pronta.
+- **113, 114, 115** — treinamento das lojas, canal de atendimento e runbook do gateway.
+
+**Dependem do site NO AR com dado real:**
+- **98** — Core Web Vitals: é medição, antes e depois de cada tag.
+- **99 (parte)** — canonical em filtro e paginação, pela Search Console.
+- **112** — pedido de teste ponta a ponta. É ele que fecha os itens **71, 72, 78 e 79**, que a lista já dava como "JÁ EXISTE" e que eu **não toquei de propósito**: mexer em roteamento, etiqueta e NF-e sem pedido real passando é risco sem retorno.
+
+**Código que falta escrever:**
+- **51 e 60** — carrinho persistente e salvar endereço no checkout. Os dois dependem da sessão da cliente estar disponível no fluxo de compra.
+- **84 e 85** — etiqueta de devolução e vale-troca. ⚠️ A política de trocas **já promete os dois** — é a única dívida desta rodada que o site anuncia e ainda não cumpre.
+- **87 e 88** — tela de rascunho com preview e vitrines curadas na home (a home ainda usa conteúdo estático).
+- **89 (parte)** — rotas dos eixos Looks, Tecidos e Outlet.
+- **91** — landing de campanha com URL própria.
+- **100** — GTM como container.
+- **110 (parte)** — automatizar exportação e exclusão de dados. O caminho por e-mail está publicado e é o mínimo que a lista aceitava.
+- **35, 36, 41, 43, 45, 50** — publicação peça a peça, config de lojas no estoque, proporção das fotos, categorias ligadas ao CRM, fonte dos relacionados e WebP.
 
 ## Por onde eu começaria
 
