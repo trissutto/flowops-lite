@@ -71,7 +71,7 @@ Refeito em 04/08/2026, **só o site novo** (`ecommerce/` + `backend/src/loja-ord
 16. ✅ FEITO — Endpoint público de cotação (`POST /api/public/loja/frete`). Deixou de ser proxy da cotação crua e virou a **FONTE ÚNICA** do frete: tabela promocional + cotação do contrato + régua do frete grátis + dias de separação, tudo pronto pro site desenhar
 17. ✅ FEITO — A tabela promocional virou **cadastro** (`site_frete_promo`), não código. **DEMAIS ESTADOS = cotação real do contrato** (decisão do dono, 06/08 — o buraco que a lista deixava "a definir"). A tabela do `frete.ts` do site foi rebaixada a paraquedas
 18. ✅ FEITO — Peso e caixa do dono: **250 g/peça**, **28 larg × 40 compr**, altura por faixa
-19. ✅ FEITO — Origem = **MATRIZ, CEP 11746-692** (decisão do dono; uma origem só mantém a cotação estável). ⚠️ CONFERIR se `CORREIOS_CEP_ORIGEM` no Railway está com esse CEP
+19. ✅ FEITO E CONFERIDO NO RAILWAY (06/08) — `CORREIOS_CEP_ORIGEM = 11746692`, a matriz, e `CORREIOS_DR = 72`. Uma origem só mantém a cotação estável
 20. ✅ FEITO — Correios fora do ar cai na estimativa interna, marcada `estimado`, e o site tem MAIS um paraquedas (tabela local) se o backend também cair. E a promocional — a maior parte dos pedidos — nem depende da cotação pra existir
 21. ✅ FEITO — Cache por CEP+peso+altura, 20 min, teto de 500 entradas
 22. ✅ FEITO — Config editável (`site_frete_config`): liga/desliga, mínimo, janela de datas e recorte de UF. **Régua nova: R$ 499,90** (dono, 06/08 — era 399,90 chumbado). Grátis zera sempre a econômica mais barata, nunca o expresso
@@ -261,12 +261,33 @@ Refeito em 04/08/2026, **só o site novo** (`ecommerce/` + `backend/src/loja-ord
 > ao responsável **o que olhar**, e isso o item 75 fez.
 
 111. 🔶 FERRAMENTA PRONTA, FALTA A PESSOA — `GET /admin/loja/parados?horas=4` lista os pedidos pagos que não andaram, e o cron grita de hora em hora. Falta o dono **nomear quem abre isso todo dia**. Sem nome, "alguém olha" não acontece
-112. ⬜ APROVADO — Pedido de teste ponta a ponta antes de abrir
+112. ✅ FEITO PELO DONO (06/08) — pedido de teste ponta a ponta passou. ⚠️ **O que o "deu certo" cobre precisa ser confirmado item a item**: o pedido nascer e ser pago já valida o bloco A inteiro, mas **71, 72, 78 e 79** só ficam fechados se o teste também tiver caído na fila da loja, gerado etiqueta/NF-e e (se dividido) feito o split. Ver a conferência abaixo
 113. ⬜ APROVADO — Treinamento das lojas no fluxo do site
 114. ⬜ APROVADO — Canal de atendimento com resposta definida
 115. ⬜ APROVADO — Runbook: o que fazer quando o gateway cai
 
 ---
+
+## Conferência do ambiente (Railway, 06/08 20:20)
+
+Medido com `railway variables`, não estimado:
+
+| Env | Estado | Efeito |
+|---|---|---|
+| `CORREIOS_CEP_ORIGEM` | `11746692` | ✅ matriz, como o dono decidiu |
+| `CORREIOS_DR` | `72` | ✅ contrato ativo |
+| `SITE_PIX_DESCONTO_PCT` | ausente | ✅ **vale o padrão: 5% ligado** |
+| `LOJA_PAGAMENTO_RECONCILE` | ausente | ✅ reconcile de pagamento LIGADO |
+| `LOJA_CONCILIACAO` | ausente | ✅ conciliação diária LIGADA (07h05) |
+| `LOJA_ALERTA_PARADO` | ausente | ✅ alerta de pedido parado LIGADO |
+| `LOJA_ORDER_TOKEN` · `ECOMMERCE_URL` | configuradas | ✅ checkout e `purchase` server-side de pé |
+
+**Todas as travas desta rodada nascem ligadas** — as envs só existem pra
+DESLIGAR (`=0`). Não há nada pra configurar pra o sistema funcionar.
+
+> ⚠️ Não consigo ler o banco de produção daqui: o `DATABASE_URL` aponta pra
+> `postgres.railway.internal`, que só resolve dentro da rede do Railway. Então
+> a conferência do pedido de teste (abaixo) é do dono, não minha.
 
 ## O que sobrou (06/08/2026)
 
