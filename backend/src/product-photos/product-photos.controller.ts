@@ -19,6 +19,7 @@ import { CorIaService } from './cor-ia.service';
 import { WcFotosImportService } from './wc-fotos-import.service';
 import { FotoImportJobService } from './foto-import-job.service';
 import { BolinhaAutoService } from './bolinha-auto.service';
+import { AutoPublicarService } from './auto-publicar.service';
 
 @UseGuards(JwtAuthGuard)
 @Controller('product-photos')
@@ -29,6 +30,7 @@ export class ProductPhotosController {
     private readonly wcImport: WcFotosImportService,
     private readonly lote: FotoImportJobService,
     private readonly bolinhaAuto: BolinhaAutoService,
+    private readonly autoPublicar: AutoPublicarService,
   ) {}
 
   private requireWrite(req: any) {
@@ -94,13 +96,18 @@ export class ProductPhotosController {
     @Body('substituirId') substituirId?: string,
   ) {
     this.requireWrite(req);
-    return this.svc.upload({
+    const foto = await this.svc.upload({
       ref,
       cor,
       file,
       substituirId: substituirId || undefined,
       userId: req?.user?.id || req?.user?.sub || null,
     });
+    // Foto subiu = peça no ar, sem "Salvar cor" no meio (pedido do dono,
+    // 06/08). Aqui e não dentro do svc.upload: a importação em massa do site
+    // antigo passa pelo mesmo upload() e NÃO pode publicar o acervo inteiro.
+    await this.autoPublicar.aoSubirFoto(ref, cor);
+    return foto;
   }
 
   /**
