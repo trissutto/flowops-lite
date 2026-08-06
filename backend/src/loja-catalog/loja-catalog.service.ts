@@ -98,6 +98,57 @@ export class LojaCatalogService {
     ESTP: 'Estampado', EST: 'Estampado', FLR: 'Floral', MESC: 'Mescla',
   };
 
+  /**
+   * A descrição CRUA do ERP virando nome de vitrine — sem a cor de outra peça.
+   *
+   * 🔴 Bug visto no pedido `#LP-000002` (06/08): a peça saiu como
+   * **"T-shirt Feminina Plus Size Manga Curta Ref Vogue Preto LENE · VINHO"**.
+   * "Preto" não é parte do nome do produto — é a cor da variação que por acaso
+   * ficou em primeiro na consulta. Como a descrição do ERP é POR VARIAÇÃO, ela
+   * sempre carrega uma cor; usá-la como nome da peça inteira gruda a cor de
+   * uma no título de todas, e aí a cliente lê "Preto · VINHO" no próprio
+   * carrinho.
+   *
+   * Tira o que é identificação interna (REF, "Ref XXX", marca) e QUALQUER cor
+   * conhecida daquela REF. Conservador: só remove o que sabe ser cor — não sai
+   * adivinhando palavra por palavra, senão come pedaço do nome de verdade
+   * ("Vinho" pode ser cor, mas "Vogue" é modelo).
+   *
+   * Isto é REMENDO do dado ruim. O certo é a ficha ter `nomeCurto` — e é por
+   * isso que ela ganha desta função na ordem de preferência.
+   */
+  private nomeDaDescricaoErp(
+    descricao: string | null | undefined,
+    ref: string,
+    cores: string[],
+    marca?: string | null,
+  ): string {
+    let txt = String(descricao || '').trim();
+    if (!txt) return '';
+
+    const escapar = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const semAcento = (v: string) =>
+      v.normalize('NFD').replace(/[̀-ͯ]/g, '');
+
+    // Remove "Ref VOGUE", "REF: VOGUE" e a REF solta.
+    txt = txt.replace(new RegExp(`\\bref\\s*:?\\s*${escapar(ref)}\\b`, 'gi'), ' ');
+    txt = txt.replace(new RegExp(`\\b${escapar(ref)}\\b`, 'gi'), ' ');
+
+    if (marca) txt = txt.replace(new RegExp(`\\b${escapar(marca)}\\b`, 'gi'), ' ');
+
+    /**
+     * Cores da MAIS LONGA pra mais curta: "ROSA QUEIMADO" tem que sair inteira
+     * antes de "ROSA" comer só um pedaço e deixar "QUEIMADO" solto no nome.
+     */
+    for (const cor of [...cores].sort((a, b) => b.length - a.length)) {
+      const alvo = escapar(semAcento(cor).trim());
+      if (alvo.length < 3) continue; // "PP", "GG" — arriscado demais
+      txt = txt.replace(new RegExp(`\\b${alvo}\\b`, 'gi'), ' ');
+    }
+
+    return txt.replace(/\s{2,}/g, ' ').replace(/[\s·,-]+$/, '').trim();
+  }
+
   private corAmigavel(cor: string): string {
     const bruto = String(cor || '').trim();
     if (!bruto) return '';
@@ -324,7 +375,21 @@ export class LojaCatalogService {
     return {
       ref,
       slug: site?.slug || `ref-${ref.toLowerCase()}`,
-      nome: nomeDaFicha || site?.nome || linhas[0]?.descricao || ref,
+      /**
+       * Ordem: ficha → cadastro do site → descrição do ERP LIMPA → a REF.
+       * A crua nunca entra inteira: ela carrega a cor de UMA variação, e isso
+       * gruda "Preto" no nome de uma peça vinho.
+       */
+      nome:
+        nomeDaFicha ||
+        site?.nome ||
+        this.nomeDaDescricaoErp(
+          linhas[0]?.descricao,
+          ref,
+          Array.from(cores.keys()),
+          linhas.find((l) => l.marca)?.marca,
+        ) ||
+        ref,
       descricaoCurta: site?.descricaoCurta ?? null,
       descricaoCompleta: descricaoDaFicha || site?.descricaoCompleta || null,
       marca: linhas.find((l) => l.marca)?.marca ?? null,

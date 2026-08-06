@@ -79,7 +79,14 @@ export function BuyBox({
     addToCart({
       productId: product.id,
       slug: product.slug,
-      name: cor ? `${product.name} · ${cor}` : product.name,
+      /**
+       * ⚠️ O NOME NÃO LEVA A COR (corrigido 06/08). Antes era
+       * `${product.name} · ${cor}`, e a cor viajava SÓ ali. Agora que ela tem
+       * campo próprio, repetir no nome dá "Vestido · VINHO · VINHO · 48" na
+       * linha do pedido — o backend compõe `nome · cor · tamanho`. A sacola e
+       * o resumo já mostram a cor em campo separado.
+       */
+      name: product.name,
       image: product.images[0] ?? { src: '', alt: product.name },
       size,
       color: cor,
