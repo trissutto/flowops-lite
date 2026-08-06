@@ -130,18 +130,24 @@ Refeito em 04/08/2026, **só o site novo** (`ecommerce/` + `backend/src/loja-ord
 69. ⬜ APROVADO — Lista de desejos
 70. ⬜ APROVADO — Recuperação de senha
 
-## F. Pedido → loja → entrega (🔴)
+## F. Pedido → loja → entrega (🔴) · **APROVADO PELO DONO 04/08**
 
-71. 🔴 Pedido do site cair na fila da loja certa — roteamento **JÁ EXISTE**
-72. 🔴 Etiqueta e NF-e do pedido do site — **JÁ EXISTE** em pick-orders
-73. 🔴 E-mail de confirmação do pedido
-74. 🔴 Aviso de "pedido enviado" com rastreio
-75. 🔴 Alerta quando o pagamento confirma e o pedido não anda
-76. 🟠 Página pública de acompanhamento
-77. 🟠 Rastreio automático (`LINKETRACK_TOKEN` não configurado hoje)
-78. 🟠 Pedido com peças de lojas diferentes (split) testado ponta a ponta
-79. 🟠 Corrigir endereço do pedido antes de postar — **JÁ EXISTE** (04/08)
-80. 🟡 Aviso de entrega concluída
+> **73 e 74 NÃO são pra construir do zero.** O dono confirmou: o aviso por
+> WhatsApp já existe no WooCommerce — são os workflows do n8n `Pedido Pago` e
+> `Código de rastreio` (ver memória ). O trabalho é
+> **reapontar o gatilho** pro pedido do site (), não
+> reescrever. Vale o e-mail junto.
+
+71. ⬜ APROVADO — Pedido do site cair na fila da loja certa — roteamento **JÁ EXISTE**
+72. ⬜ APROVADO — Etiqueta e NF-e do pedido do site — **JÁ EXISTE** em pick-orders
+73. ⬜ APROVADO — E-mail de confirmação **+ WhatsApp** — o WhatsApp já roda no WooCommerce (n8n ); reapontar o gatilho
+74. ⬜ APROVADO — Aviso de "pedido enviado" com rastreio, **e-mail + WhatsApp** — já roda no WooCommerce (n8n ); reapontar
+75. ⬜ APROVADO — Alerta quando o pagamento confirma e o pedido não anda
+76. ⬜ APROVADO — Página pública de acompanhamento
+77. ⬜ APROVADO — Rastreio automático (`LINKETRACK_TOKEN` não configurado hoje)
+78. ⬜ APROVADO — Split entre lojas **JÁ EXISTE na retaguarda** — falta só testar ponta a ponta com pedido do site novo
+79. ⬜ APROVADO — Corrigir endereço do pedido antes de postar — **JÁ EXISTE** (04/08)
+80. ⬜ APROVADO — Aviso de entrega concluída
 
 ## G. Trocas (🟠)
 
