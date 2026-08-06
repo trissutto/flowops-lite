@@ -77,28 +77,32 @@ Refeito em 04/08/2026, **só o site novo** (`ecommerce/` + `backend/src/loja-ord
 29. ✅ FEITO — Embalagem por FAIXA de altura (regra 1, dono 04/08): **1–2 peças = 3 cm · 3–5 = 6 cm · 6+ = 10 cm**. Roupa comprime, não empilha como tijolo. É chute educado até existir dado — depois de ~30 postagens reais, medir a altura de verdade e ajustar
 30. ~~Rota própria Itanhaém/Praia Grande/Santos como opção de entrega~~ — **REMOVIDO (04/08)**. Era a regra do REALINHAMENTO entre lojas (carro da rede levando mercadoria de loja pra loja), não entrega de pedido de cliente. Vazou do contexto do dia pra esta lista. Se um dia virar entrega própria pro cliente naquelas cidades, é item novo e com desenho próprio
 
-## C. Produto e vitrine (🔴 — o gargalo real)
+## C. Produto e vitrine (🔴 — o gargalo real) · **REVISADO PELO DONO 04/08**
 
-31. 🔴 Foto por cor em todo produto publicável (importador e varredura **JÁ EXISTEM**)
-32. 🔴 Bolinha de cor preenchida em toda cor publicada (varredura automática **JÁ EXISTE**)
-33. 🔴 Título de venda por produto (não a descrição crua do ERP)
-34. 🔴 Descrição de venda: composição, caimento, o que veste
-35. 🔴 Status de publicação decidido peça a peça
-36. 🔴 Estoque real por SKU aparecendo na grade
-37. 🔴 Esconder cor/tamanho sem estoque
-38. 🔴 Conferir preço contra o catálogo (já houve incidente de preço 100×)
-39. 🔴 Peça sem foto nunca chega à vitrine
-40. 🟠 Ordem das fotos por cor (capa definida)
-41. 🟠 Proporção padronizada das fotos da PDP
-42. 🟠 Tabela de medidas por modelagem (o dono precisa fornecer as oficiais)
-43. 🟠 Categorias e subcategorias ligadas ao CRM
-44. 🟠 Filtros: tamanho, cor, tecido, ocasião, modelagem
-45. 🟠 Produtos relacionados / "veja similares" (**JÁ EXISTE** o bloco, falta a fonte)
-46. 🟠 Nome de cor amigável (o ERP tem cor técnica)
-47. 🟡 Vídeo do produto (campo já existe na ficha)
-48. 🟡 Badge de novidade e de últimas peças
-49. 🟡 Guia de tamanhos por categoria
-50. 🟡 WebP e compressão sem perder qualidade
+> ⚠️ **31 e 32 ESTÃO COM BUG** (relato do dono). O importador de fotos e a
+> varredura da bolinha existem e rodaram, mas não estão entregando. **Investigar
+> ANTES de contar com eles** — é o gargalo do go-live e hoje está quebrado.
+
+31. 🐞 BUG — Foto por cor: importador existe e **não está funcionando**. Revisar
+32. 🐞 BUG — Bolinha: varredura automática existe e **não está preenchendo**. Revisar
+33. ⬜ APROVADO — Título de venda por produto (não a descrição crua do ERP)
+34. ⬜ APROVADO — Descrição de venda: composição, caimento, o que veste
+35. ⬜ APROVADO — Status de publicação decidido peça a peça
+36. ⬜ APROVADO — Estoque por SKU somando **TODAS as lojas ATIVAS** (criar config de quais lojas entram)
+37. 🔄 MUDOU — NÃO esconder: mostrar **riscado e claramente indisponível** (a cliente vê que existe e que acabou)
+38. ⬜ APROVADO — Conferir preço contra o catálogo (já houve incidente de preço 100×)
+39. ⬜ APROVADO — Peça sem foto nunca chega à vitrine
+40. ⬜ APROVADO — Ordem das fotos por cor (capa definida)
+41. ⬜ APROVADO — Proporção padronizada das fotos da PDP
+42. ⬜ APROVADO — Tabela de medidas **no cadastro do produto, na retaguarda** (o dono preenche por peça/modelagem)
+43. ⬜ APROVADO — Categorias e subcategorias ligadas ao CRM
+44. ⬜ APROVADO — Filtros: tamanho, cor, tecido, ocasião, modelagem
+45. ⬜ APROVADO — Produtos relacionados / "veja similares" (**JÁ EXISTE** o bloco, falta a fonte)
+46. ⬜ APROVADO — Nome de cor amigável (o ERP tem cor técnica)
+47. ⬜ APROVADO — Vídeo do produto: campo  **já existe** em ; guarda a URL como veio e o site extrai o id. É só colar o link do YouTube
+48. ⬜ APROVADO — Badge de novidade e de últimas peças
+49. ⬜ APROVADO — Guia de tamanhos por categoria
+50. ⬜ APROVADO — WebP e compressão sem perder qualidade
 
 ## D. Carrinho e checkout (🔴/🟠)
 
