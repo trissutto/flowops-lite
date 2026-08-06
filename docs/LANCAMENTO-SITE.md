@@ -38,22 +38,43 @@ Refeito em 04/08/2026, **só o site novo** (`ecommerce/` + `backend/src/loja-ord
 14. ✅ FEITO — Remover o fallback de telefone `13 996218277` do checkout (caminho morto hoje, mina amanhã)
 15. ✅ SEM VALOR MINIMO (dono) — Valor mínimo de pedido, se houver
 
-## B. Frete (🔴/🟠)
+## B. Frete (🔴/🟠) · **REGRAS DEFINIDAS PELO DONO 04/08**
+
+> **O preço que a cliente vê é TABELA PROMOCIONAL, não a cotação.**
+>
+> | Destino | Serviço | Preço |
+> |---|---|---|
+> | SP | SEDEX | **R$ 9,99** |
+> | RJ · MG · PR · SC · RS | PAC | **R$ 19,99** |
+> | RJ · MG · PR · SC · RS | SEDEX (opcional) | **cotação do nosso contrato** |
+> | Demais estados | — | a definir |
+>
+> - Nesses 5 estados a cliente **escolhe**: PAC promocional a R$ 19,99 ou SEDEX
+>   pelo preço real do contrato. Em SP o SEDEX já é o promocional.
+> - **Retirada em loja liberada perto das lojas** — e **sem exigir** que a peça
+>   esteja naquela loja: se não tiver, vem de outra (item 26).
+> - **Prazo = prazo do transportador + 2 dias de separação**, configurável.
+> - **Origem da cotação é SEMPRE a MATRIZ (11746-692)**, nunca a loja que
+>   despacha.
+>
+> ⚠️ Consequência: o endpoint de cotação (item 16) **continua necessário** —
+> ele é a fonte do SEDEX opcional e do simulador. O que muda é que ele deixa de
+> ser o preço padrão.
 
 16. ✅ FEITO — Endpoint público de cotação (`POST /api/public/loja/frete`, commit b6d7b1c) — **o cálculo COM CONTRATO JÁ EXISTE**. Verificado 04/08: `CORREIOS_CONTRATO`, `CORREIOS_CARTAO_POSTAGEM`, `CORREIOS_DR` e `CORREIOS_CEP_ORIGEM` estão configurados, e o `calcularFrete` passa `nuContrato`+`nuDR` no preço e consulta o prazo oficial — é o preço NEGOCIADO, não tabela de balcão. Falta **só expor num endpoint público** (hoje a rota exige login) e trocar a fonte no site. Item pequeno, retorno grande
-17. ⬜ PRÓXIMO — Trocar a fonte em `ecommerce/src/lib/commerce/frete.ts` (hoje tabela fixa por faixa de CEP)
+17. 🔄 MUDOU — NÃO trocar por cotação. A tabela promocional acima vira a fonte em `ecommerce/src/lib/commerce/frete.ts` (hoje tabela fixa por faixa de CEP)
 18. ✅ FEITO — Peso e caixa do dono: **250 g/peça**, **28 larg × 40 compr × 3 cm alt por peça** (só a altura acompanha a quantidade)
 19. ✅ FEITO — Origem = **MATRIZ, CEP 11746-692** (decisão do dono; uma origem só mantém a cotação estável). ⚠️ CONFERIR se `CORREIOS_CEP_ORIGEM` no Railway está com esse CEP
-20. 🔴 Fallback quando o transportador não responde (não travar o checkout)
-21. 🔴 Cache de cotação por CEP+peso
-22. 🟠 Config editável de frete grátis: mínimo, período, região (hoje `FREE_SHIPPING_FROM` chumbado)
-23. 🟠 Config de frete promocional fixo com data de início e fim
-24. 🟠 Tela na retaguarda pra essas configs, sem deploy
-25. 🟠 Prazo = prazo do transportador + dias de separação
-26. 🟠 Retirada em loja só onde a peça existe
-27. 🟠 Retirada: prazo, endereço e instruções
-28. 🟡 Simulador de frete na página do produto
-29. 🟡 Regra de embalagem (vários itens numa caixa)
+20. ⬜ APROVADO — Fallback quando o transportador não responde (não travar o checkout)
+21. ⬜ APROVADO — Cache de cotação por CEP+peso
+22. ⬜ APROVADO — Config editável de frete grátis: mínimo, período, região (hoje `FREE_SHIPPING_FROM` chumbado)
+23. ⬜ APROVADO — Config de frete promocional fixo com data de início e fim
+24. ⬜ APROVADO — Tela na retaguarda pra essas configs, sem deploy
+25. ⬜ APROVADO — Prazo = transportador + **2 dias de separação** (configurável)
+26. 🔄 MUDOU — Retirada NÃO exige a peça na loja: se não tiver, vem de outra
+27. ⬜ APROVADO — Retirada: prazo, endereço e instruções
+28. ⬜ APROVADO — Simulador de frete na página do produto
+29. ❓ EXPLICAR — Regra de embalagem: como a altura da caixa cresce quando o pedido tem várias peças (hoje 3 cm por peça). Dono pediu explicação antes de decidir
 30. ~~Rota própria Itanhaém/Praia Grande/Santos como opção de entrega~~ — **REMOVIDO (04/08)**. Era a regra do REALINHAMENTO entre lojas (carro da rede levando mercadoria de loja pra loja), não entrega de pedido de cliente. Vazou do contexto do dia pra esta lista. Se um dia virar entrega própria pro cliente naquelas cidades, é item novo e com desenho próprio
 
 ## C. Produto e vitrine (🔴 — o gargalo real)
