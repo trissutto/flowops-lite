@@ -189,19 +189,26 @@ Refeito em 04/08/2026, **só o site novo** (`ecommerce/` + `backend/src/loja-ord
 
 ## G. Trocas (🟠) · **APROVADO PELO DONO 04/08**
 
-81. ⬜ APROVADO — Política de trocas publicada
-82. ⬜ APROVADO — Portal de trocas ligado ao pedido do site (**JÁ EXISTE** pro site antigo)
-83. ⬜ APROVADO — Prazo de arrependimento de 7 dias
-84. ⬜ APROVADO — Etiqueta de devolução
-85. ⬜ APROVADO — Vale-troca / crédito na conta
+81. ✅ FEITO — `/politica-de-trocas`, escrita a partir do que o site JÁ PROMETE (30 dias, do card ao rodapé) e do que a lei obriga. Separa o prazo **legal** (7 dias, dinheiro de volta, sem justificar) do **comercial** (30 dias, troca) — é o ponto que mais gera briga: quem pede dinheiro de volta no dia 20 está pedindo algo que a lei não garante, e a política precisa dizer isso ANTES
+82. ✅ CONFERIDO — `/trocas` já é redirect (307) pro portal que roda no FlowOps; a conta e a política apontam pra lá
+83. ✅ FEITO — os 7 dias do art. 49 do CDC estão publicados, com o que devolvemos (tudo, inclusive o frete) e em quanto tempo
+84. ⬜ ABERTO — Etiqueta de devolução (a política já promete "a gente gera a etiqueta"; falta gerar de fato no portal)
+85. ⬜ ABERTO — Vale-troca / crédito na conta (a política já descreve o crédito na diferença; falta o saldo existir)
 
 ## H. Conteudo (🟠) · APROVADO PELO DONO 04/08
 
-86. ⬜ APROVADO — Banners editáveis sem deploy — desenhado, não construído
-87. ⬜ APROVADO — Tela de rascunho com preview ao lado — desenhada, não construída
-88. ⬜ APROVADO — Vitrines curadas na home
-89. ⬜ APROVADO — Menu dos 7 eixos populado (estrutura **JÁ EXISTE**)
-90. ⬜ APROVADO — Nossas Lojas (**JÁ EXISTE**) e Troca Fácil (**JÁ EXISTE**)
+> 🔴 **ACHADO 06/08 — a rota `/novidades` NÃO EXISTIA e era linkada em OITO
+> lugares**: sacola vazia, mini-carrinho, busca sem resultado, lista de desejos,
+> home e checkout. Todas caíam em 404 — e é o pior 404 possível, porque
+> acontece exatamente quando a cliente não achou o que queria e a gente ofereceu
+> uma saída. O rodapé tinha o mesmo problema em `/institucional/privacidade` e
+> `/institucional/termos`. Os três estão criados.
+
+86. ✅ JÁ EXISTIA — `site_banners` + `/retaguarda/banners` (hero, faixas e tarja, com janela de datas). A lista estava desatualizada
+87. ⬜ ABERTO — Tela de rascunho com preview ao lado
+88. ⬜ ABERTO — Vitrines curadas na home (a home ainda usa o conteúdo estático de `data/content.ts`)
+89. 🔶 PARCIAL — Estrutura existe e `/novidades` saiu do 404. Faltam as rotas dos outros eixos (Looks, Tecidos, Outlet)
+90. ✅ CONFERIDO — `/lojas` no ar e `/trocas` redirecionando pro portal
 91. ⬜ APROVADO — Landing de campanha = PAGINA TEMATICA com URL propria (ex.: /natal, /dia-das-maes, /black-friday): banner, texto e uma selecao de pecas, ligada e desligada sem mexer no site. E pra onde o anuncio aponta.
 
 ## I. SEO e velocidade (🟠) · APROVADO PELO DONO 04/08
@@ -231,15 +238,19 @@ Refeito em 04/08/2026, **só o site novo** (`ecommerce/` + `backend/src/loja-ord
 
 ## K. Seguranca e LGPD (🔴/🟠) · APROVADO PELO DONO 04/08
 
-106. ⬜ APROVADO — Rate-limit no checkout e no login — EXPLICADO: Rate-limit = teto de tentativas por minuto. No login impede alguem testar mil senhas; no checkout impede um robo (ou um retry em loop) abrir centenas de pedidos e cobrancas. O endpoint de pedido JA TEM; falta o login e o de frete.
-107. ⬜ APROVADO — Cookie de sessão httpOnly (**JÁ EXISTE** no padrão adotado)
-108. ⬜ APROVADO — Política de privacidade e termos publicados
-109. ⬜ APROVADO — Consentimento LGPD gravado no CRM
-110. ⬜ APROVADO — Exclusão de conta e exportação de dados — EXPLICADO: Exigencia da LGPD: a cliente pode pedir pra APAGAR a conta dela e pode pedir uma COPIA dos dados que temos. Precisa existir o caminho — nem que seja um botao que abre chamado pra alguem executar.
+106. ✅ FEITO — Login, "esqueci a senha" e reset agora têm teto. A trava é por **IP E por CPF**: só por IP não segura ataque distribuído contra uma conta, e só por CPF não segura varredura de muitas contas pela mesma máquina. O "esqueci a senha" tem teto MENOR (5) porque cada chamada dispara uma mensagem — sem limite vira máquina de encher o WhatsApp de uma cliente. O frete já nasceu com teto no bloco B; o pedido já tinha
+107. ✅ CONFERIDO — Cookie de sessão httpOnly (nenhuma tag do GTM consegue ler o login)
+108. ✅ FEITO — `/privacidade` e `/termos` publicados e **linkados do rodapé de qualquer tela**. Escritos a partir do que o código REALMENTE faz, não de modelo genérico: o cartão que nunca toca nosso servidor, o cookie httpOnly, o estoque sem reserva (duas clientes podem pagar a última peça — dizer isso ANTES transforma problema em expectativa combinada), o preço que nunca é cobrado acima do que ela viu. **Política que promete o que o sistema não faz é a prova contra a empresa no dia da reclamação.** ⚠️ Os links do rodapé apontavam pra `/institucional/privacidade` e `/institucional/termos`, que **não existiam** — 404 nos dois
+109. ✅ FEITO — `customer_consents` ligada ao site (feito junto com o item 67). Append-only: cada opt-in/opt-out é linha nova com data e IP. E grava em TODOS os cadastros do CPF — registrar num só faria a outra loja continuar mandando WhatsApp depois do "não"
+110. 🔶 PARCIAL — O caminho existe e está publicado (`privacidade@lurdsplussize.com.br`, com prazo de 15 dias, citado na política e em "Meus dados"), que é o mínimo que a lista aceitava. **Falta automatizar** a exportação e a exclusão. ⚠️ Quando for automatizar: apagar conta NÃO apaga nota fiscal — a lei fiscal manda guardar, e isso já está escrito na política
 
 ## L. Operacao (🔴/🟠) · APROVADO PELO DONO 04/08
 
-111. ⬜ APROVADO — Responsável diário por pedido travado — EXPLICADO: Nao e software, e GENTE: uma pessoa nomeada pra olhar todo dia se algum pedido pago nao andou. Sistema avisa (item 75), mas alguem tem que ler o aviso — senao o pedido dorme e a cliente cobra.
+> **Este bloco não é código — é GENTE.** Nada aqui se resolve com deploy, e por
+> isso ele não foi "entregue": o que dava pra fazer do lado do sistema era dar
+> ao responsável **o que olhar**, e isso o item 75 fez.
+
+111. 🔶 FERRAMENTA PRONTA, FALTA A PESSOA — `GET /admin/loja/parados?horas=4` lista os pedidos pagos que não andaram, e o cron grita de hora em hora. Falta o dono **nomear quem abre isso todo dia**. Sem nome, "alguém olha" não acontece
 112. ⬜ APROVADO — Pedido de teste ponta a ponta antes de abrir
 113. ⬜ APROVADO — Treinamento das lojas no fluxo do site
 114. ⬜ APROVADO — Canal de atendimento com resposta definida
