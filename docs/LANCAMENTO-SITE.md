@@ -222,3 +222,50 @@ Refeito em 04/08/2026, **só o site novo** (`ecommerce/` + `backend/src/loja-ord
 **Em paralelo, desde já (gente):** 31–39 — é o que consome tempo humano.
 **Semana 2:** 22–24 (config de frete), 71–75 (pedido→loja), 51–54.
 **Antes de anunciar:** 92–99 e 102–105.
+
+---
+
+## COMO TRABALHAR NESTA LISTA (instrucao do dono, 04/08)
+
+> **Nao parar.** Se um item precisar de decisao do dono, MARCAR como pendente,
+> registrar a pergunta aqui embaixo e PASSAR PRO PROXIMO. As pendentes sao
+> resolvidas em bloco quando ele voltar.
+
+### Ordem de execucao sem depender de ninguem
+
+1. **Bloco A, itens 1-6** — revalidacao no servidor. Vao JUNTOS num commit:
+   mexem no mesmo ponto (criarPedido) e checkout meio validado e pior que
+   nenhum. Nao precisa de decisao.
+2. **Itens 31 e 32** — os BUGS de foto e bolinha. Medir antes de mexer: pegar
+   uma REF que deveria ter foto, seguir WordPress -> R2 -> ficha -> bolinha e
+   achar onde para. NAO chutar.
+3. **Item 17** — tabela promocional de frete no site (SP SEDEX 9,99 / RJ MG PR
+   SC RS PAC 19,99 / SEDEX opcional pela cotacao). Regras ja definidas.
+4. **Itens 20, 21** — fallback e cache da cotacao.
+5. **Itens 92-99** — SEO. Nenhum precisa de decisao.
+6. **Itens 100-105** — rastreamento, respeitando SEM PESAR O SITE.
+7. **Item 106** — rate-limit no login e no frete.
+
+### Regras que valem sempre
+
+-  no backend (nest build),  no frontend, antes de
+  cada commit.
+- Commit por item ou bloco fechado, com o PORQUE no corpo.
+- Branch + push + PR. Deploy e passo manual do dono.
+- Quando o conserto depender de dado que so existe em producao, DIZER ANTES e
+  entregar junto o jeito de ver (endpoint de diagnostico, log, contador).
+
+### Pendentes de decisao do dono
+
+| # | Pergunta |
+|---|---|
+| B | Frete pros estados FORA de SP/RJ/MG/PR/SC/RS — qual regra? Hoje sem definicao |
+| 36 | Quais lojas entram na config de estoque do site (todas as ativas = quais?) |
+| 42 | As medidas oficiais por modelagem (o dono precisa fornecer) |
+| 29 | Revisar a faixa de altura depois de ~30 postagens reais |
+
+### Fora do meu alcance (so o dono faz)
+
+- Merge dos PRs e deploy.
+- Conferir  = 11746692 no Railway (o valor fica mascarado
+  pra mim).
