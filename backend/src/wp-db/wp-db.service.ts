@@ -196,6 +196,29 @@ export class WpDbService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
+  /**
+   * TODOS os produtos do site antigo, numa query só — SKU e nome.
+   *
+   * É a base do "importar tudo" INVERTIDO (06/08): em vez de perguntar ao
+   * WordPress por cada uma das ~21 mil REFs do catálogo (90% "não tem"), a
+   * fila nasce do que o site antigo REALMENTE tem — que não chega a 10% disso.
+   * A REF de cada produto é extraída depois (SKU "VLM-222 MARROM" → primeira
+   * palavra; nome "… Ref VLM-222 …" quando o SKU está vazio).
+   *
+   * Devolve [] com o pool fora — quem chama decide se isso é erro.
+   */
+  async listarTodosSkus(): Promise<Array<{ sku: string; nome: string }>> {
+    if (!this.pool) return [];
+    const rows = await this.query<{ sku: string | null; nome: string | null }>(
+      `SELECT pm_sku.meta_value AS sku, p.post_title AS nome
+         FROM wp_postmeta pm_sku
+         JOIN wp_posts p ON p.ID = pm_sku.post_id AND p.post_type = 'product'
+        WHERE pm_sku.meta_key = '_sku'
+          AND p.post_status IN ('publish', 'draft', 'private', 'pending')`,
+    );
+    return rows.map((r) => ({ sku: String(r.sku || ''), nome: String(r.nome || '') }));
+  }
+
   /** URL do site (cacheada) — prefixo das imagens do WordPress. */
   private async getSiteUrl(): Promise<string> {
     const now = Date.now();

@@ -1484,6 +1484,7 @@ function ImportarTudo() {
         <div className="flex-1 min-w-0">
           <p className="text-sm font-bold text-slate-800">Importar fotos do site antigo — tudo de uma vez</p>
           <p className="text-[11px] text-slate-500">
+            Lista o que o site antigo TEM e importa só isso (não varre o catálogo inteiro).
             Traz as fotos de cada cor, grava aqui e já pinta a bolinha. Roda em segundo plano;
             pode fechar a tela.
           </p>

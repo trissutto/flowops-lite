@@ -87,7 +87,9 @@ export function QuickAddSheet() {
       setAviso('Escolha o tamanho pra continuar.');
       return;
     }
-    const nome = cor ? `${produto!.name} · ${cor}` : produto!.name;
+    // Nome LIMPO: a cor vai no campo `color` e a sacola já a mostra separada.
+    // Repetir aqui produzia "Vestido · VINHO · VINHO · 48" na linha do pedido.
+    const nome = produto!.name;
     addToCart({
       productId: produto!.id,
       slug: produto!.slug,
@@ -99,7 +101,12 @@ export function QuickAddSheet() {
       unitPrice: preco,
     });
     trackAddToCart({ ...produto!, price: preco }, { tamanho, cor: cor ?? undefined });
-    toast({ message: 'Peça adicionada ao seu look!', description: `${nome} · tamanho ${tamanho}` });
+    // O toast ainda diz a cor — ali ela é confirmação do que ela acabou de
+    // escolher, não parte do nome da peça.
+    toast({
+      message: 'Peça adicionada ao seu look!',
+      description: `${nome}${cor ? ` · ${cor}` : ''} · tamanho ${tamanho}`,
+    });
     fechar();
   }
 

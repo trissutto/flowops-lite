@@ -345,10 +345,30 @@ export class LojaOrdersService {
     const conferencia = await this.guard.conferir(input.items as any);
     if (!conferencia.ok) return { ok: false, erro: conferencia.erro };
 
-    // O preço COBRADO passa a ser o do catálogo, item a item — inclusive no
-    // snapshot que vai pro OrderItem e pro evento de compra.
     for (const c of conferencia.itens) {
+      // O preço COBRADO passa a ser o do catálogo, item a item — inclusive no
+      // snapshot que vai pro OrderItem e pro evento de compra.
       input.items[c.indice].unitPrice = c.precoCatalogo;
+
+      /**
+       * 🔴 O SKU VIRA O CÓDIGO DO ERP (corrigido 06/08, com o primeiro pedido
+       * real na tela de separação).
+       *
+       * O carrinho manda `sku = product.id`, que é a **REF** ("VOGUE"). REF
+       * não é código de peça: o estoque, a etiqueta e o bipe da loja falam
+       * `codigo` — o número que identifica REF+COR+TAMANHO. Resultado no
+       * pedido `#LP-000002`: **"faltam 1 SKU(s) sem estoque em nenhuma loja"**
+       * numa peça que TINHA estoque. O roteamento procurou por "VOGUE" e não
+       * achou, porque esse código não existe em lugar nenhum.
+       *
+       * O guard já resolvia a variação exata pra conferir preço e estoque —
+       * faltava gravar o código que ele encontrou. Sem isso, todo pedido do
+       * site nasce impossível de separar.
+       *
+       * `codigo` vem nulo quando a variação não é única (peça sem cor
+       * escolhida): aí mantemos a REF, que pelo menos é rastreável na mão.
+       */
+      if (c.codigo) input.items[c.indice].sku = c.codigo;
     }
     const subtotal = this.dinheiro(conferencia.subtotal);
 

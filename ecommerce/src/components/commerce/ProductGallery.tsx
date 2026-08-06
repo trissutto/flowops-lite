@@ -18,15 +18,32 @@ import type { Media } from '@/types';
  * A foto é o argumento de venda: proporção 3/4 e `priority` na primeira,
  * que é o LCP da página.
  */
+
+/**
+ * Miniatura POR COR (pedido do dono, 06/08): em peça com várias cores, a
+ * barra lateral deixa de listar foto por foto — vira uma miniatura por cor,
+ * e clicar TROCA A COR INTEIRA (galeria, preço e grade), igual à bolinha.
+ * As demais fotos da cor ficam nas setas/contador da foto grande.
+ */
+export interface GrupoDeCor {
+  nome: string;
+  capa: string;
+  ativa: boolean;
+  onSelect: () => void;
+}
+
 export function ProductGallery({
   images,
   name,
   autoPlay = false,
+  grupos,
 }: {
   images: Media[];
   name: string;
   /** Passa as fotos sozinha a cada 4,5s — e para no primeiro sinal de interesse. */
   autoPlay?: boolean;
+  /** Presente (2+) = barra lateral vira "uma miniatura por cor". */
+  grupos?: GrupoDeCor[];
 }) {
   const [active, setActive] = useState(0);
   const [parado, setParado] = useState(false);
@@ -110,8 +127,55 @@ export function ProductGallery({
         )}
       </div>
 
-      {/* Miniaturas */}
-      {safeImages.length > 1 && (
+      {/* Miniaturas: uma POR COR quando a peça tem variações; senão, por foto. */}
+      {grupos && grupos.length > 1 ? (
+        <div
+          className="no-scrollbar flex gap-3 overflow-x-auto lg:w-20 lg:flex-col lg:overflow-visible"
+          role="tablist"
+          aria-label="Cores da peça"
+        >
+          {grupos.map((g) => (
+            <button
+              key={g.nome}
+              type="button"
+              role="tab"
+              aria-selected={g.ativa}
+              aria-label={`Cor ${g.nome}`}
+              title={g.nome}
+              onClick={g.onSelect}
+              className="w-16 shrink-0 lg:w-full"
+            >
+              <span
+                className={cn(
+                  'relative block aspect-3/4 overflow-hidden rounded-md border transition-all duration-[320ms]',
+                  g.ativa
+                    ? 'border-primary opacity-100'
+                    : 'border-transparent opacity-65 hover:opacity-100',
+                )}
+              >
+                <Image
+                  src={g.capa}
+                  alt=""
+                  aria-hidden
+                  fill
+                  sizes="80px"
+                  placeholder="blur"
+                  blurDataURL={BLUR_DATA_URL}
+                  className="object-cover"
+                />
+              </span>
+              <span
+                className={cn(
+                  'mt-1 block truncate text-center text-[0.625rem] leading-tight transition-colors',
+                  g.ativa ? 'text-ink' : 'text-ink-muted',
+                )}
+              >
+                {g.nome}
+              </span>
+            </button>
+          ))}
+        </div>
+      ) : safeImages.length > 1 && (
         <div
           className="no-scrollbar flex gap-3 overflow-x-auto lg:w-20 lg:flex-col lg:overflow-visible"
           role="tablist"

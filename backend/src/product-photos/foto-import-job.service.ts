@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { Interval } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { WcFotosImportService } from './wc-fotos-import.service';
+import { refBaseOf } from '../common/ref-base';
 
 /**
  * IMPORTAR TUDO — o acervo inteiro do site antigo, num clique.
@@ -41,6 +42,12 @@ export class FotoImportJobService {
   /**
    * Monta a fila e abre o job.
    *
+   * A FILA NASCE DO SITE ANTIGO (invertido em 06/08, pedido do dono): antes
+   * ela varria as ~21 mil REFs do catálogo perguntando ao WordPress uma a
+   * uma — e o acervo de lá não tem nem 10% disso, então 90% dos ciclos era
+   * "site antigo não tem esta peça". Agora uma query lista o que o WordPress
+   * TEM, e entra na fila só o que também existe no catálogo com estoque.
+   *
    * `apenasSemFoto` (padrão) descarta as REFs que já têm qualquer foto — numa
    * segunda rodada isso corta a fila em quase tudo e economiza horas.
    */
@@ -52,6 +59,9 @@ export class FotoImportJobService {
       throw new BadRequestException('Já existe uma importação rodando. Acompanhe ou cancele antes.');
     }
 
+    // O que o site antigo tem (lança erro claro com o WordPress fora).
+    const doSiteAntigo = await this.importador.refsDoSiteAntigo();
+
     // Só REF com estoque: importar foto de peça que não existe mais na arara é
     // gastar banda do servidor do site antigo à toa.
     const linhas = await this.prisma.$queryRawUnsafe<Array<{ ref: string }>>(
@@ -62,17 +72,32 @@ export class FotoImportJobService {
         WHERE p.ref IS NOT NULL AND TRIM(p.ref) <> '' AND e.total > 0
         ORDER BY 1`,
     );
-    let refs = linhas.map((l) => l.ref).filter(Boolean);
+    const comEstoque = linhas.map((l) => l.ref).filter(Boolean);
+    const exatas = new Set(comEstoque);
+    // A REF do site antigo costuma ser a BASE da família ("VMS-223") enquanto
+    // o catálogo guarda as variações ("VMS-223 MA") — casa pelos dois lados.
+    const bases = new Set(comEstoque.map((r) => refBaseOf(r)).filter(Boolean));
+    let refs = doSiteAntigo.filter((r) => exatas.has(r) || bases.has(r));
+    const foraDoCatalogo = doSiteAntigo.length - refs.length;
 
     if (opcoes.apenasSemFoto !== false) {
       const comFoto = await (this.prisma as any).productPhoto.findMany({
         distinct: ['ref'], select: { ref: true },
       });
       const ja = new Set(comFoto.map((f: any) => String(f.ref).toUpperCase()));
-      refs = refs.filter((r) => !ja.has(r));
+      refs = refs.filter((r) => !ja.has(r) && !ja.has(refBaseOf(r)));
     }
+    refs.sort();
     if (opcoes.limite && opcoes.limite > 0) refs = refs.slice(0, opcoes.limite);
-    if (!refs.length) throw new BadRequestException('Nenhuma REF pra importar — tudo que tem estoque já tem foto.');
+    if (!refs.length) {
+      throw new BadRequestException(
+        'Nenhuma REF pra importar — o que o site antigo tem (e ainda tem estoque) já tem foto aqui.',
+      );
+    }
+    this.logger.log(
+      `[import-lote] site antigo: ${doSiteAntigo.length} REF(s) · na fila: ${refs.length} · ` +
+        `fora do catálogo/sem estoque: ${foraDoCatalogo}`,
+    );
 
     const job = await (this.prisma as any).fotoImportJob.create({
       data: {
