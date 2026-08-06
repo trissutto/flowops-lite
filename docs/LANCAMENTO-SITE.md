@@ -99,7 +99,7 @@ Refeito em 04/08/2026, **só o site novo** (`ecommerce/` + `backend/src/loja-ord
 44. ⬜ APROVADO — Filtros: tamanho, cor, tecido, ocasião, modelagem
 45. ⬜ APROVADO — Produtos relacionados / "veja similares" (**JÁ EXISTE** o bloco, falta a fonte)
 46. ⬜ APROVADO — Nome de cor amigável (o ERP tem cor técnica)
-47. ⬜ APROVADO — Vídeo do produto: campo  **já existe** em ; guarda a URL como veio e o site extrai o id. É só colar o link do YouTube
+47. ⬜ APROVADO — Vídeo do produto: o campo `youtubeUrl` **já existe** no modelo `ProdutoFichaCor`; guarda a URL como veio e o site extrai o id. É só colar o link do YouTube
 48. ⬜ APROVADO — Badge de novidade e de últimas peças
 49. ⬜ APROVADO — Guia de tamanhos por categoria
 50. ⬜ APROVADO — WebP e compressão sem perder qualidade
