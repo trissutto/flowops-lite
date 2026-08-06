@@ -4630,6 +4630,123 @@ model FotoImportJob {
   @@map("foto_import_jobs")
 }
 
+/// FRETE DO SITE — a régua que a loja mexe sozinha (itens 22 a 25).
+///
+/// Singleton. Até 04/08/2026 o frete grátis era `FREE_SHIPPING_FROM = 399.9`
+/// chumbado no código do e-commerce e o prazo era o do transportador puro —
+/// mudar qualquer um dos dois exigia deploy.
+///
+/// `diasSeparacao` é a diferença entre o prazo do transportador e o prazo que
+/// a cliente lê. Prometer o prazo dos Correios cru é prometer que a peça sai
+/// no mesmo dia; ela ainda vai ser separada na loja, conferida e postada.
+model SiteFreteConfig {
+  id                 String    @id @default("singleton")
+
+  /// Frete grátis: régua, janela e recorte de região (CSV de UF; vazio = todas).
+  freteGratisAtivo   Boolean   @default(true) @map("frete_gratis_ativo")
+  freteGratisMinimo  Float     @default(499.9) @map("frete_gratis_minimo")
+  freteGratisInicio  DateTime? @map("frete_gratis_inicio")
+  freteGratisFim     DateTime? @map("frete_gratis_fim")
+  freteGratisUfs     String?   @map("frete_gratis_ufs") @db.VarChar(120)
+
+  /// Somado ao prazo do transportador (dono, 04/08).
+  diasSeparacao      Int       @default(2) @map("dias_separacao")
+
+  /// Retirada em loja: em quantas horas a peça fica pronta e o que a cliente
+  /// precisa levar. Vai na tela de entrega, não numa página de ajuda.
+  retiradaPrazoHoras Int       @default(3) @map("retirada_prazo_horas")
+  retiradaInstrucoes String?   @map("retirada_instrucoes") @db.Text
+
+  atualizadoPor      String?   @map("atualizado_por") @db.VarChar(80)
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  @@map("site_frete_config")
+}
+
+/// TABELA PROMOCIONAL DE FRETE (item 23) — o preço que a cliente vê.
+///
+/// Decisão do dono (04/08): o site NÃO mostra a cotação como preço padrão.
+/// Mostra tabela promocional — SP SEDEX R$ 9,99, e RJ/MG/PR/SC/RS PAC R$ 19,99
+/// — e a cotação real do contrato entra só como opção expressa (e como preço
+/// cheio nas demais UFs).
+///
+/// `ufs` é CSV ("SP" ou "RJ,MG,PR,SC,RS"). `prazoMin/Max` nulos = usa o prazo
+/// que os Correios devolverem (mais o `diasSeparacao`) — promoção muda preço,
+/// não muda o tempo que o carro leva.
+model SiteFretePromo {
+  id       String    @id @default(uuid())
+  /// O que aparece na tela ("Correios PAC", "SEDEX").
+  label    String    @db.VarChar(60)
+  /// 'pac' | 'sedex' — casa com o serviço cotado pra herdar o prazo.
+  servico  String    @db.VarChar(10)
+  ufs      String    @db.VarChar(120)
+  preco    Float
+  prazoMin Int?      @map("prazo_min")
+  prazoMax Int?      @map("prazo_max")
+  ativo    Boolean   @default(true)
+  inicioEm DateTime? @map("inicio_em")
+  fimEm    DateTime? @map("fim_em")
+  ordem    Int       @default(0)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@index([ativo, ordem])
+  @@map("site_frete_promo")
+}
+
+/// CUPOM DO SITE — a regra de desconto mora AQUI, não no código do e-commerce.
+///
+/// Item 3 da lista de lançamento ("recalcular o cupom no servidor") e item 55
+/// ("editável, com criação na retaguarda"). Até 04/08/2026 a tabela de cupons
+/// era um array em `ecommerce/src/lib/commerce/cupom.ts`: criar um cupom de
+/// campanha exigia commit + deploy, e quem recalculava era o BFF do site —
+/// não o dono do pedido.
+///
+/// O `code` é a chave: sempre MAIÚSCULO, sem espaço. O backend normaliza antes
+/// de gravar e antes de procurar, então "bemvinda10" e "BemVinda10" são o
+/// mesmo cupom (a cliente digita como quiser).
+///
+/// `tipo` diz onde o desconto cai:
+///   'percent'  → % sobre o subtotal das peças
+///   'fixed'    → R$ fixos sobre o subtotal
+///   'shipping' → zera o frete ECONÔMICO (nunca o expresso — quem quer SEDEX
+///                paga SEDEX; ver a tabela promocional do bloco B)
+///
+/// `usoMaximo`/`usos` existem pra cupom de campanha morrer sozinho depois de N
+/// pedidos. Nulo = ilimitado.
+model SiteCupom {
+  code           String    @id @db.VarChar(30)
+  /// Frase curta que a cliente lê quando aplica ("Boas-vindas: 10% off").
+  label          String    @db.VarChar(80)
+  tipo           String    @default("percent") @db.VarChar(12)
+  /// percent: 0–100 · fixed: reais · shipping: ignorado.
+  valor          Float     @default(0)
+
+  /// Pedido mínimo em reais pra valer. Nulo = sem mínimo.
+  minSubtotal    Float?    @map("min_subtotal")
+  /// Só pra quem nunca comprou no site (checado por CPF no CRM).
+  primeiraCompra Boolean   @default(false) @map("primeira_compra")
+  /// Restringe às categorias comerciais listadas (CSV, minúsculo). Vazio = todas.
+  categorias     String?   @db.VarChar(300)
+
+  /// Janela de validade — campanha entra e sai sozinha, sem ninguém acordar.
+  inicioEm       DateTime? @map("inicio_em")
+  fimEm          DateTime? @map("fim_em")
+
+  usoMaximo      Int?      @map("uso_maximo")
+  usos           Int       @default(0)
+  ativo          Boolean   @default(true)
+
+  atualizadoPor  String?   @map("atualizado_por") @db.VarChar(80)
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  @@index([ativo, fimEm])
+  @@map("site_cupons")
+}
+
 /// BANNER DA VITRINE — o que a loja troca sozinha, sem deploy.
 ///
 /// Até 03/08/2026 o hero da home, a tarja do topo e as faixas editoriais eram

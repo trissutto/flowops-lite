@@ -50,6 +50,11 @@ export interface CorApi {
   titulo: string | null;
   youtubeUrl: string | null;
   tamanhos: Array<{ label: string; sku: string; estoque: number; disponivel: boolean; preco: number }>;
+  /**
+   * O que a cliente lê. O ERP guarda cor de etiqueta ("VD MUSGO ESC"); o
+   * backend traduz e o título da ficha, quando existe, ganha da tradução.
+   */
+  nomeAmigavel?: string;
 }
 
 /** Peça do backend → `Product` do site. Um lugar só faz essa tradução. */
@@ -65,6 +70,17 @@ export interface PecaApi {
   imagens: Array<{ src: string; alt?: string }>;
   modelagem: string | null; composicao: string | null;
   destaque: boolean; lancamento: boolean; promocao: boolean;
+  /**
+   * Atributos da FICHA do CRM (item 44) — os eixos do menu. Opcionais porque
+   * peça sem ficha ainda existe enquanto o cadastro não termina.
+   */
+  tecido?: string | null;
+  colecao?: string | null;
+  ocasioes?: string[];
+  modelagens?: string[];
+  elasticidade?: string | null;
+  /** Tabela de medidas da PDP (itens 42 e 49) — grade + ajuste da peça. */
+  gradeMedidas?: Array<Record<string, unknown>> | null;
 }
 
 export function mapPeca(p: PecaApi): Product {
@@ -87,12 +103,15 @@ export function mapPeca(p: PecaApi): Product {
     // O hex do conta-gotas (tirado da foto real) vence a tabela de nomes —
     // "MUSGO" e "ROSA QUEIMADO" nunca teriam entrada decente numa tabela.
     colors: (p.cores ?? []).map((c) => ({
-      name: c.nome,
+      // O nome que a cliente lê, não o da etiqueta do ERP (item 46).
+      name: c.nomeAmigavel || c.nome,
       hex: c.swatch?.hex || hexDaCor(c.nome),
       ...(c.fotos?.[0] ? { image: { src: c.fotos[0].src, alt: c.fotos[0].alt ?? c.nome } } : {}),
     })),
     badges: badges.length ? badges : undefined,
-    fabric: p.composicao ?? undefined,
+    // Tecido da ficha ganha da composição inferida: um é digitado por gente,
+    // o outro é palpite da camada de IA.
+    fabric: p.tecido ?? p.composicao ?? undefined,
     fit: p.modelagem ?? undefined,
     availability: { online: p.disponivel, stores: [], pickup: p.disponivel },
   };

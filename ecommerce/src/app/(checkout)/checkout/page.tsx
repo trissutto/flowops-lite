@@ -17,6 +17,7 @@ import { OrderSummary } from '@/components/checkout/OrderSummary';
 import { PixPanel } from '@/components/checkout/PixPanel';
 import { maskPhone } from '@/components/checkout/masks';
 import { applyCoupon } from '@/lib/commerce/cupom';
+import { PIX_DESCONTO_PCT, pixDiscount } from '@/lib/commerce/pix';
 import { formatPrice } from '@/lib/utils';
 import {
   trackBeginCheckout,
@@ -115,7 +116,13 @@ export default function CheckoutPage() {
   const freteGratisCupom = coupon?.ok === true && coupon.kind === 'shipping';
   const shippingPrice = shipping ? (freteGratisCupom ? 0 : shipping.quote.price) : undefined;
   const discount = coupon?.ok ? coupon.discount : 0;
-  const total = subtotal - discount + (shippingPrice ?? 0);
+  /**
+   * O Pix desconta de verdade a partir de 06/08 — antes a tela prometia 5% em
+   * três lugares e o total saía cheio. A base é o subtotal já sem o cupom, pra
+   * 10% + 5% não virarem 15% sobre o valor original.
+   */
+  const descontoPix = pixDiscount(subtotal - discount, payment?.method);
+  const total = subtotal - discount - descontoPix + (shippingPrice ?? 0);
 
   function handleApplyCoupon(code: string) {
     const result = applyCoupon(code, subtotal);
@@ -245,6 +252,7 @@ export default function CheckoutPage() {
           coupon={coupon}
           onApplyCoupon={handleApplyCoupon}
           onRemoveCoupon={handleRemoveCoupon}
+          pixDiscount={descontoPix}
           total={total}
           className="lg:sticky lg:top-8 lg:col-start-2 lg:row-start-1"
         />
@@ -290,6 +298,7 @@ export default function CheckoutPage() {
           >
             <ShippingStep
               subtotal={subtotal}
+              pecas={lines.reduce((s, l) => s + l.quantity, 0)}
               itemsTracked={itemsTracked}
               defaults={shipping}
               onDone={(s) => {
@@ -306,7 +315,7 @@ export default function CheckoutPage() {
             summary={
               payment
                 ? payment.method === 'pix'
-                  ? 'PIX à vista · 5% off aplicado no total'
+                  ? `PIX à vista · ${PIX_DESCONTO_PCT}% off aplicado no total`
                   : payment.method === 'boleto'
                     ? 'Boleto bancário'
                     : `Cartão de crédito · ${payment.installments ?? 1}x sem juros`
@@ -335,6 +344,7 @@ export default function CheckoutPage() {
                 subtotal={subtotal}
                 shippingPrice={shippingPrice ?? 0}
                 coupon={coupon}
+                pixDiscount={descontoPix}
                 total={total}
                 submitting={submitting}
                 error={submitError}

@@ -1,8 +1,9 @@
 'use client';
 
 import { useState } from 'react';
-import { Heart, MapPin, MessageCircle, Ruler, ShoppingBag, Sparkles, Star, Truck } from 'lucide-react';
+import { Heart, MapPin, MessageCircle, Ruler, ShoppingBag, Sparkles, Star } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
+import { SimuladorFrete } from '@/components/commerce/SimuladorFrete';
 import { SizePill } from '@/components/ui/Choice';
 import { FitAssistant } from '@/components/fit/FitAssistant';
 import { ChamarConsultora } from '@/components/chat/AssistenteWidget';
@@ -66,8 +67,14 @@ export function BuyBox({
       document.getElementById('seletor-tamanho')?.scrollIntoView({ block: 'center' });
       return;
     }
-    // A cor escolhida vai junto no carrinho: sem ela a separação não sabe qual
-    // peça tirar da arara (mesma REF, cores diferentes).
+    /**
+     * A cor escolhida vai junto no carrinho, NO CAMPO `color`.
+     *
+     * Até 06/08 ela só entrava colada no `name` ("Vestido · PRETO"): a
+     * separação tinha que adivinhar a cor lendo um "·" no meio de um texto, e
+     * o guard do backend não conseguia conferir o estoque da variação certa —
+     * somava as cores todas e podia deixar passar peça esgotada naquela cor.
+     */
     const cor = corSelecionada ?? (cores?.length === 1 ? cores[0].nome : undefined);
     addToCart({
       productId: product.id,
@@ -75,6 +82,7 @@ export function BuyBox({
       name: cor ? `${product.name} · ${cor}` : product.name,
       image: product.images[0] ?? { src: '', alt: product.name },
       size,
+      color: cor,
       quantity: 1,
       unitPrice: product.price,
     });
@@ -321,12 +329,13 @@ export function BuyBox({
         </div>
       </div>
 
+      {/* Frete de verdade, pro CEP dela (item 28). Substituiu o texto fixo
+          "frete grátis acima de R$ 399", que envelheceu junto com a régua — o
+          valor agora é config e muda sem deploy. */}
+      <SimuladorFrete preco={product.price} />
+
       {/* Garantias — o que tira o medo de comprar online */}
-      <ul className="mt-9 flex flex-col gap-3 border-t border-border pt-7 text-small text-ink-soft">
-        <li className="flex items-center gap-3">
-          <Truck className="size-4 shrink-0 text-primary-strong" strokeWidth={1.75} />
-          Frete grátis acima de R$ 399 para todo o Brasil
-        </li>
+      <ul className="mt-7 flex flex-col gap-3 border-t border-border pt-7 text-small text-ink-soft">
         <li className="flex items-center gap-3">
           <MapPin className="size-4 shrink-0 text-primary-strong" strokeWidth={1.75} />
           Retire e prove em uma das 14 lojas antes de levar

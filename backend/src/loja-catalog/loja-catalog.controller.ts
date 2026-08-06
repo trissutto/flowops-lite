@@ -33,11 +33,21 @@ export class LojaCatalogPublicController {
       cor: q.cor || undefined,
       tamanho: q.tamanho || undefined,
       modelagem: q.modelagem || undefined,
+      // Eixos da ficha do CRM (item 44) — tecido, ocasião e coleção.
+      tecido: q.tecido || undefined,
+      ocasiao: q.ocasiao || undefined,
+      colecao: q.colecao || undefined,
       precoMin: q.precoMin ? Number(q.precoMin) : undefined,
       precoMax: q.precoMax ? Number(q.precoMax) : undefined,
       soPromocao: this.booleano(q.promocao),
       soNovidade: this.booleano(q.novidade),
-      soDisponivel: this.booleano(q.disponivel) ?? true,
+      /**
+       * ⚠️ O padrão era `?? true` — ESCONDER esgotado por omissão (item 37).
+       * A peça sumia da vitrine sem explicação e a cliente achava que o site
+       * tinha quebrado. Agora ela aparece riscada, e some só se pedirem
+       * `?disponivel=1`. A ordenação joga esgotado pro fim.
+       */
+      soDisponivel: this.booleano(q.disponivel),
       ordenar: q.ordenar,
     };
     return this.svc.listar(params);

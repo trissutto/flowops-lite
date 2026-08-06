@@ -89,6 +89,22 @@ export interface CreatedOrderAck {
   number: string;
   status: OrderStatus;
   total: number;
+  /**
+   * A CONTA DA CASA, discriminada (bloco A, 06/08). O backend passou a
+   * reprecificar o carrinho inteiro contra o catálogo antes de cobrar: preço
+   * de peça que mudou, cupom recalculado e o desconto do Pix nascem LÁ. Sem
+   * estes campos o BFF montaria o resumo com os números dele e trocaria só o
+   * total — resumo que não soma o total exibido.
+   *
+   * Opcionais porque o backend antigo não mandava: sem eles, cai no cálculo
+   * local de sempre.
+   */
+  subtotal?: number;
+  discount?: number;
+  couponDiscount?: number;
+  pixDiscount?: number;
+  shippingPrice?: number;
+  couponCode?: string;
   payment: {
     method: PaymentMethod;
     installments?: number;
@@ -332,11 +348,22 @@ class BackendOrderStore implements OrderStore {
     const pagamento = (raw.payment ?? {}) as Record<string, unknown>;
     const pix = pagamento.pix as Record<string, unknown> | undefined;
 
+    /** Só entra no ack o que o backend REALMENTE mandou — 0 vindo de campo
+     *  ausente viraria "subtotal zero" no resumo. */
+    const numeroOpcional = (v: unknown): number | undefined =>
+      typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+
     const ack: CreatedOrderAck = {
       id,
       number: asString(raw.number, id.slice(0, 8).toUpperCase()),
       status: asStatus(raw.status),
       total: asNumber(raw.total),
+      subtotal: numeroOpcional(raw.subtotal),
+      discount: numeroOpcional(raw.discount),
+      couponDiscount: numeroOpcional(raw.couponDiscount),
+      pixDiscount: numeroOpcional(raw.pixDiscount),
+      shippingPrice: numeroOpcional(raw.shippingPrice),
+      couponCode: typeof raw.couponCode === 'string' ? raw.couponCode : undefined,
       payment: {
         method: (pagamento.method as PaymentMethod) ?? payload.payment.method,
         installments: typeof pagamento.installments === 'number' ? pagamento.installments : undefined,

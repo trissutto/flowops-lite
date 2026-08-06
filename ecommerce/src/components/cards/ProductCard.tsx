@@ -79,6 +79,12 @@ export function ProductCard({
     : 0;
   const availableSizes = product.sizes.filter((s) => s.available);
   const temEstoque = availableSizes.length > 0;
+  /**
+   * Esgotado = sem grade disponível E sem estoque online. As duas condições
+   * porque a grade pode chegar vazia numa peça que existe (cadastro sem
+   * tamanho), e riscar o preço de peça vendável é pior que não riscar.
+   */
+  const esgotado = !temEstoque && product.availability?.online === false;
 
   /**
    * "Do 46 ao 60" — a pergunta nº 1 da cliente plus size é se serve nela, e a
@@ -224,31 +230,49 @@ export function ProductCard({
           </Link>
         </h3>
 
-        <div className="mt-2 flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
-          {product.compareAtPrice && (
-            <span className="tabular text-small text-ink-muted line-through">
-              {formatPrice(product.compareAtPrice)}
-            </span>
-          )}
-          <span className="tabular text-body font-medium text-ink">{formatPrice(product.price)}</span>
-          {discount > 0 && (
-            <span className="tabular text-small font-medium text-secondary">-{discount}%</span>
-          )}
-        </div>
+        {/* ESGOTADO aparece, riscado (item 37 — decisão do dono 04/08).
+            A peça esgotada sumia da vitrine sem explicação: quem viu no
+            Instagram voltava e achava que o site tinha quebrado. Vendo que
+            existe e acabou, a cliente pergunta quando volta — que é
+            exatamente a lista de espera que queremos. */}
+        {esgotado ? (
+          <>
+            <div className="mt-2 flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
+              <span className="tabular text-body text-ink-muted line-through">
+                {formatPrice(product.price)}
+              </span>
+            </div>
+            <p className="mt-1 text-small font-medium text-ink-soft">Esgotado por enquanto</p>
+          </>
+        ) : (
+          <>
+            <div className="mt-2 flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
+              {product.compareAtPrice && (
+                <span className="tabular text-small text-ink-muted line-through">
+                  {formatPrice(product.compareAtPrice)}
+                </span>
+              )}
+              <span className="tabular text-body font-medium text-ink">{formatPrice(product.price)}</span>
+              {discount > 0 && (
+                <span className="tabular text-small font-medium text-secondary">-{discount}%</span>
+              )}
+            </div>
 
-        <p className="mt-1 text-small font-light text-ink-soft">
-          {product.pixPrice && (
-            <>
-              <span className="tabular font-medium text-success">{formatPrice(product.pixPrice)}</span>{' '}
-              no Pix ·{' '}
-            </>
-          )}
-          <span className="tabular">
-            {product.installments
-              ? `${product.installments.times}x de ${formatPrice(product.installments.value)}`
-              : formatInstallments(product.price)}
-          </span>
-        </p>
+            <p className="mt-1 text-small font-light text-ink-soft">
+              {product.pixPrice && (
+                <>
+                  <span className="tabular font-medium text-success">{formatPrice(product.pixPrice)}</span>{' '}
+                  no Pix ·{' '}
+                </>
+              )}
+              <span className="tabular">
+                {product.installments
+                  ? `${product.installments.times}x de ${formatPrice(product.installments.value)}`
+                  : formatInstallments(product.price)}
+              </span>
+            </p>
+          </>
+        )}
 
         {faixaDeTamanhos && (
           <p className="mt-1.5 text-small text-ink-muted">{faixaDeTamanhos}</p>

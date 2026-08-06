@@ -1265,6 +1265,8 @@ type ResultadoImport = {
   produtosWcSemCor: string[];
   produtosEncontrados?: number;
   fotos: number;
+  /** Frase pronta do backend explicando por que não veio nada. */
+  motivo?: string;
 };
 
 /**
@@ -1313,11 +1315,16 @@ function ImportarFotosDoSite({ ref_, onImportou }: { ref_: string; onImportou: (
       {erro && <p className="text-[11px] text-rose-700 mt-1">{erro}</p>}
       {r && (
         <p className="text-[11px] text-slate-500 mt-1 max-w-xs">
+          {/* O motivo vem do backend quando existe: "nao tem esta peca" era a
+              mesma frase pra peca ausente, site fora do ar e fonte nao
+              configurada — tres problemas com tres consertos diferentes. */}
           {r.fotos > 0
             ? `${r.fotos} foto(s) em ${r.coresComFoto.length} cor(es).`
-            : r.produtosEncontrados === 0
-              ? 'O site antigo nao tem esta peca.'
-              : 'Nada novo pra trazer.'}
+            : r.motivo
+              ? r.motivo
+              : r.produtosEncontrados === 0
+                ? 'O site antigo nao tem esta peca.'
+                : 'Nada novo pra trazer.'}
           {r.jaTinham.length > 0 && ` ${r.jaTinham.length} cor(es) já tinham.`}
           {r.produtosWcSemCor.length > 0 && (
             <span className='text-slate-500'> {r.produtosWcSemCor.length} produto(s) do site antigo nao bateram com cor nenhuma.</span>

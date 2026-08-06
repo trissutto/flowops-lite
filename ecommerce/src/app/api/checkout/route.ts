@@ -17,18 +17,21 @@
  * RECALCULADOS aqui com as mesmas funções que a UI usa (`applyCoupon`,
  * `findQuote`). O client manda os fatos (itens, CEP, cupom, escolha de frete).
  *
- * ⚠️ PENDÊNCIA HONESTA — preço unitário dos itens: o `unitPrice` do client não
- * é reconferido contra o catálogo AQUI (exigiria uma chamada por SKU no meio
- * do checkout). Aplicamos teto de sanidade (> R$ 0 e < R$ 10.000 por peça) e
- * confiamos na reconferência do backend, que tem o catálogo na mão — é
- * justamente uma das coisas que a migração do pedido pro Flow desbloqueia.
+ * PREÇO UNITÁRIO: aqui vale só o teto de sanidade (> R$ 0 e < R$ 10.000 por
+ * peça). Quem reconfere peça por peça contra o catálogo é o BACKEND, no
+ * `CarrinhoGuard` — ele tem o espelho do ERP na mão e é quem cobra. Desde
+ * 06/08 (bloco A da lista de lançamento) preço, estoque e publicação de cada
+ * item são relidos lá antes de qualquer cobrança, e o total daqui serve de
+ * TETO: se a conta do backend der mais, o pedido é recusado em vez de cobrar
+ * acima do que a cliente leu na tela.
  */
 
 import { NextResponse } from 'next/server';
 import QRCode from 'qrcode';
 import { z } from 'zod';
 import { applyCoupon } from '@/lib/commerce/cupom';
-import { findQuote } from '@/lib/commerce/frete';
+import { pixDiscount } from '@/lib/commerce/pix';
+import { resolverFrete } from '@/lib/commerce/frete-server';
 import { getOrderStore, OrderStoreError, type NewOrderPayload } from '@/lib/orders/store';
 import type { CreateOrderResult, Order } from '@/types/checkout';
 
@@ -181,9 +184,16 @@ export async function POST(req: Request): Promise<NextResponse<CreateOrderResult
     couponCode = cupom.code;
   }
 
-  // Frete: recotado pelo CEP + subtotal. O id escolhido no client precisa
-  // existir na cotação do server — senão alguém inventou frete.
-  const quote = findQuote(input.cep, subtotal, input.shippingQuoteId);
+  // Frete: recotado pelo CEP + subtotal + nº de peças, na MESMA fonte que a
+  // tela usou (tabela promocional cadastrada + cotação do contrato). O id
+  // escolhido no client precisa existir lá — senão alguém inventou frete.
+  const pecas = input.items.reduce((soma, l) => soma + l.quantity, 0);
+  const quote = await resolverFrete({
+    cep: input.cep,
+    subtotal,
+    pecas,
+    quoteId: input.shippingQuoteId,
+  });
   if (!quote) {
     return NextResponse.json(
       { ok: false, error: 'Não conseguimos confirmar o frete para este CEP. Volte uma etapa e escolha a entrega de novo.' },
@@ -204,7 +214,15 @@ export async function POST(req: Request): Promise<NextResponse<CreateOrderResult
   let shippingPrice = quote.price;
   if (couponKind === 'shipping' && quote.kind === 'correios') shippingPrice = 0;
 
-  const total = round2(subtotal - discount + shippingPrice);
+  /**
+   * Pix desconta de verdade (06/08). Aqui é a segunda barreira, igual ao
+   * cupom: o backend recalcula com a MESMA regra e o total dele é o que vale.
+   * A base é o subtotal já sem o cupom — dois descontos não se somam sobre o
+   * valor cheio.
+   */
+  const descontoPix = pixDiscount(subtotal - discount, input.paymentMethod);
+
+  const total = round2(subtotal - discount - descontoPix + shippingPrice);
   if (total <= 0) {
     return NextResponse.json(
       { ok: false, error: 'Algo não fechou no total do pedido. Revise a sacola e tente novamente.' },
@@ -328,6 +346,15 @@ export async function POST(req: Request): Promise<NextResponse<CreateOrderResult
     console.warn(`[checkout] total divergente — BFF ${total} vs backend ${ack.total} no pedido ${ack.id}`);
   }
 
+  /**
+   * O RESUMO SEGUE O TOTAL. O backend reprecifica o carrinho contra o catálogo
+   * (peça que mudou de preço, cupom recalculado, desconto do Pix); quando ele
+   * manda a conta discriminada, é ELA que a tela mostra. Misturar o subtotal
+   * daqui com o total de lá dava um resumo que não fecha — e resumo que não
+   * fecha na hora de pagar é ligação no WhatsApp.
+   */
+  const descontoExibido = ack.discount ?? discount + descontoPix;
+
   const order: Order = {
     id: ack.id,
     number: ack.number,
@@ -337,10 +364,10 @@ export async function POST(req: Request): Promise<NextResponse<CreateOrderResult
     shippingAddress: input.shippingAddress,
     shipping: quote,
     items: input.items,
-    subtotal,
-    discount,
-    couponCode,
-    shippingPrice,
+    subtotal: ack.subtotal ?? subtotal,
+    discount: descontoExibido,
+    couponCode: ack.couponCode ?? couponCode,
+    shippingPrice: ack.shippingPrice ?? shippingPrice,
     total: totalBackend,
     payment: {
       method: ack.payment.method,

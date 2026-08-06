@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { LoaderCircle, Lock } from 'lucide-react';
 import { formatPrice } from '@/lib/utils';
+import { PIX_DESCONTO_PCT } from '@/lib/commerce/pix';
 import { Button } from '@/components/ui/Button';
 import { stores } from '@/data/stores';
 import type { CartLine } from '@/types';
@@ -29,6 +30,8 @@ interface ReviewCardProps {
   subtotal: number;
   shippingPrice: number;
   coupon: CouponResult | null;
+  /** Desconto do Pix em reais — 0 nos outros meios. */
+  pixDiscount?: number;
   total: number;
   submitting: boolean;
   /** Mensagem elegante quando o POST falhou — nunca status/stack técnico. */
@@ -50,6 +53,7 @@ export function ReviewCard({
   subtotal,
   shippingPrice,
   coupon,
+  pixDiscount = 0,
   total,
   submitting,
   error,
@@ -136,6 +140,12 @@ export function ReviewCard({
           <div className="flex justify-between text-success">
             <dt>Cupom {coupon.code}</dt>
             <dd className="tabular">−{formatPrice(coupon.discount)}</dd>
+          </div>
+        )}
+        {pixDiscount > 0 && (
+          <div className="flex justify-between text-success">
+            <dt>Desconto Pix ({PIX_DESCONTO_PCT}%)</dt>
+            <dd className="tabular">−{formatPrice(pixDiscount)}</dd>
           </div>
         )}
         <div className="flex items-baseline justify-between pt-2">

@@ -3,28 +3,31 @@
 import { motion } from 'framer-motion';
 import { Sparkles } from 'lucide-react';
 import { freeShippingGap } from '@/lib/commerce/frete';
+import { useLojaConfig } from '@/hooks/useLojaConfig';
 import { transition } from '@/lib/motion';
 import { cn, formatPrice } from '@/lib/utils';
 
 /**
  * "Faltam R$ 45 para o frete grátis" — o incentivo mais honesto da sacola.
  *
- * É honesto porque a meta é REAL (a regra dos R$ 399 é a mesma que o checkout
- * aplica) e porque o número é o que falta de verdade, não um teto inventado
- * pra empurrar peça.
+ * É honesto porque a meta é REAL e porque o número é o que falta de verdade,
+ * não um teto inventado pra empurrar peça.
  *
- * Estava só no mini-carrinho. Agora vive num lugar só e aparece também na
- * página da sacola, que é onde a cliente decide se fecha ou se volta pra
- * vitrine — o momento em que "levo mais uma pra bater a meta" acontece.
+ * ⚠️ A RÉGUA VEM DA CONFIG (item 57, 06/08). Antes ela era a constante do
+ * código, e no dia em que o dono mudasse o mínimo na retaguarda esta barra
+ * continuaria prometendo o valor velho — **prometendo frete grátis que o
+ * checkout não daria**, que é o pior tipo de erro possível aqui.
+ *
+ * `minimo` chega da cotação (`fetchQuotes().freteGratis.minimo`). Sem ele, cai
+ * na constante local — a mesma que serve de paraquedas do frete.
+ *
+ * `ativo: false` esconde a barra inteira: com o frete grátis desligado, uma
+ * barra parada em "faltam R$ 499,90" só ocupa espaço e confunde.
  */
-export function ProgressoFreteGratis({
-  subtotal,
-  className,
-}: {
-  subtotal: number;
-  className?: string;
-}) {
-  const gap = freeShippingGap(subtotal);
+export function ProgressoFreteGratis({ subtotal, className }: { subtotal: number; className?: string }) {
+  const { freteGratis } = useLojaConfig();
+  const gap = freeShippingGap(subtotal, freteGratis.minimo);
+  if (!freteGratis.ativo || !(freteGratis.minimo > 0)) return null;
 
   return (
     <div className={cn('rounded-sm border border-border bg-surface-alt/60 px-4 py-3.5', className)}>
