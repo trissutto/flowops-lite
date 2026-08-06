@@ -61,10 +61,13 @@ export class FornecedoresService {
       ];
       if (/^\d+$/.test(busca)) where.OR.push({ codigo: Number(busca) });
     }
+    // SEM take (dono 06/08: "preciso de todos") — o corte em 200 escondia o
+    // resto do cadastro sem dizer nada. São ~10 mil linhas leves; o teto alto
+    // é só corta-fogo contra crescimento absurdo, não paginação disfarçada.
     return (this.prisma as any).wincredFornecedor.findMany({
       where,
       orderBy: [{ razaoSocial: 'asc' }],
-      take: 200,
+      take: 30_000,
     });
   }
 
@@ -142,6 +145,55 @@ export class FornecedoresService {
     await this.replicar(codigo, usuario);
     this.logger.log(`[fornecedor] ${codigo} editado${usuario ? ` por ${usuario}` : ''}`);
     return atualizado;
+  }
+
+  /**
+   * EXCLUI o fornecedor — Flow primeiro, réplica da exclusão no Giga.
+   *
+   * Trava: fornecedor com Conta a Pagar apontando pra ele NÃO sai (o vínculo
+   * do financeiro ficaria órfão e o histórico de pagamento perderia o nome).
+   * A réplica no Giga é obrigatória de verdade: o sync é full-replace, então
+   * apagar só no Flow faria o fornecedor RESSUSCITAR no ciclo seguinte —
+   * mesmo padrão do marcado do Célio.
+   */
+  async excluir(codigo: number, usuario?: string) {
+    const f = await this.buscar(codigo);
+
+    const contas = await (this.prisma as any).contaPagar.count({
+      where: { fornecedorGigaCodigo: codigo, deletedAt: null },
+    }).catch(() => 0);
+    if (contas > 0) {
+      throw new BadRequestException(
+        `Este fornecedor tem ${contas} conta(s) a pagar vinculada(s) — excluir deixaria o financeiro órfão. ` +
+        `Se ele não é mais usado, apenas pare de lançar nele.`,
+      );
+    }
+
+    await (this.prisma as any).wincredFornecedor.delete({ where: { codigo } });
+    this.logger.warn(
+      `[fornecedor] ${codigo} "${f.razaoSocial}" EXCLUÍDO do Flow${usuario ? ` por ${usuario}` : ''}`,
+    );
+
+    // Réplica da exclusão — inline, e cai pra fila se o Giga estiver fora.
+    const r = await this.erp.deleteFornecedorRow(codigo).catch((e: any) => ({ success: false, error: e?.message }));
+    if (!r.success) {
+      try {
+        await (this.prisma as any).erpOutbox.create({
+          data: {
+            kind: 'fornecedor_delete',
+            saleId: `fornecedor-del-${codigo}`,
+            payload: { codigo, usuario: usuario || null },
+            status: 'pending',
+          },
+        });
+        this.logger.warn(`[fornecedor] exclusão de ${codigo} no Giga falhou (${r.error}) — na fila`);
+      } catch (e2: any) {
+        if (String(e2?.code) !== 'P2002') {
+          this.logger.error(`[fornecedor] ${codigo} excluído no Flow mas exclusão do Giga NÃO enfileirada: ${e2?.message}`);
+        }
+      }
+    }
+    return { ok: true, codigo, razaoSocial: f.razaoSocial };
   }
 
   private montar(dto: any, razao: string) {

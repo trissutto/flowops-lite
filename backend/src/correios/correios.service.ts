@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
 import { CorreiosAuthService } from './correios-auth.service';
-import { encurtarNomeDestinatario } from '../lib/nome-destinatario';
+import { encurtarCampoEndereco, encurtarNomeDestinatario, LIMITES_TRANSPORTE } from '../lib/nome-destinatario';
 
 /**
  * Serviços dos Correios (API CWS) — cálculo de frete (preço + prazo) e
@@ -213,34 +213,46 @@ export class CorreiosService {
     const foneRem = splitFone(input.remetente.telefone);
     const foneDest = splitFone(input.destinatario.telefone);
 
+    // LIMITE ÚNICO pra todos os campos e provedores (dono 06/08: "melhor
+    // limitar todos pelo Mais Envios") — ver LIMITES_TRANSPORTE. Abreviação
+    // antes do corte ("Avenida Doutor"→"Av. Dr.") — e fica no log quando mexeu.
+    const L = LIMITES_TRANSPORTE;
+    const endLimite = (rotulo: string, v: any, max: number) => {
+      const original = String(v || '').replace(/\s+/g, ' ').trim();
+      const curto = encurtarCampoEndereco(original, max);
+      if (curto !== original) {
+        this.logger.warn(`[correios] ${rotulo} encurtado pro limite de ${max}: "${original}" → "${curto}"`);
+      }
+      return curto;
+    };
+
     const body: any = {
       remetente: {
-        nome: input.remetente.nome.slice(0, 50),
+        nome: encurtarNomeDestinatario(input.remetente.nome, L.nome),
         cpfCnpj: input.remetente.cnpjCpf.replace(/\D/g, ''),
         ...(foneRem.numero ? { dddCelular: foneRem.ddd, celular: foneRem.numero } : {}),
         endereco: {
           cep: input.remetente.cep.replace(/\D/g, ''),
-          logradouro: input.remetente.endereco,
-          numero: input.remetente.numero,
-          bairro: input.remetente.bairro,
-          cidade: input.remetente.cidade,
+          logradouro: endLimite('logradouro remetente', input.remetente.endereco, L.logradouro),
+          numero: String(input.remetente.numero || 'S/N').trim().slice(0, L.numero),
+          bairro: endLimite('bairro remetente', input.remetente.bairro, L.bairro),
+          cidade: endLimite('cidade remetente', input.remetente.cidade, L.cidade),
           uf: input.remetente.uf,
         },
       },
       destinatario: {
-        // Limite dos Correios é 50. Cortar seco deixava a etiqueta com nome
-        // partido no meio da palavra ("...Marques da Sil") — o helper abrevia
-        // preservando primeiro nome e último sobrenome.
-        nome: encurtarNomeDestinatario(input.destinatario.nome, 50),
+        // Nome abrevia preservando primeiro nome e último sobrenome — cortar
+        // seco deixava a etiqueta com nome partido ("...Marques da Sil").
+        nome: encurtarNomeDestinatario(input.destinatario.nome, L.nome),
         ...(input.destinatario.cpfCnpj ? { cpfCnpj: input.destinatario.cpfCnpj.replace(/\D/g, '') } : {}),
         ...(foneDest.numero ? { dddCelular: foneDest.ddd, celular: foneDest.numero } : {}),
         endereco: {
           cep: input.destinatario.cep.replace(/\D/g, ''),
-          logradouro: input.destinatario.endereco,
-          numero: input.destinatario.numero,
-          complemento: input.destinatario.complemento || '',
-          bairro: input.destinatario.bairro,
-          cidade: input.destinatario.cidade,
+          logradouro: endLimite('logradouro destinatário', input.destinatario.endereco, L.logradouro),
+          numero: String(input.destinatario.numero || 'S/N').trim().slice(0, L.numero),
+          complemento: endLimite('complemento destinatário', input.destinatario.complemento || '', L.complemento),
+          bairro: endLimite('bairro destinatário', input.destinatario.bairro, L.bairro),
+          cidade: endLimite('cidade destinatário', input.destinatario.cidade, L.cidade),
           uf: input.destinatario.uf,
         },
       },
