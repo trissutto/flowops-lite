@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import * as crypto from 'crypto';
 import { CriarPedidoInput, LojaOrdersService } from './loja-orders.service';
+import { CorreiosService } from '../correios/correios.service';
 
 /**
  * PEDIDO DO E-COMMERCE NOVO — porta SERVER-TO-SERVER (sprint 011).
@@ -63,7 +64,10 @@ function excedeuLimite(ip: string): boolean {
 
 @Controller('public/loja')
 export class LojaOrdersController {
-  constructor(private readonly svc: LojaOrdersService) {}
+  constructor(
+    private readonly svc: LojaOrdersService,
+    private readonly correios: CorreiosService,
+  ) {}
 
   /** Comparação em tempo constante sobre os hashes (iguala o tamanho dos dois
    *  lados e impede que a diferença de tempo entregue o segredo byte a byte). */
@@ -83,6 +87,83 @@ export class LojaOrdersController {
   private ipDe(req: any): string {
     const xff = String(req?.headers?.['x-forwarded-for'] || '').split(',')[0].trim();
     return xff || req?.ip || req?.socket?.remoteAddress || 'desconhecido';
+  }
+
+  /**
+   * POST /api/public/loja/frete — COTAÇÃO REAL DOS CORREIOS pro site.
+   *
+   * O site cotava por TABELA FIXA de faixa de CEP (`ecommerce/src/lib/commerce/
+   * frete.ts`), declarada como estimativa. O cálculo de verdade sempre existiu
+   * aqui — e COM CONTRATO: `CORREIOS_CONTRATO` + `CORREIOS_CARTAO_POSTAGEM` +
+   * `CORREIOS_DR` já configurados, é o preço NEGOCIADO (convênio SIGEP), não
+   * tabela de balcão. Faltava só uma porta pública.
+   *
+   * ORIGEM = MATRIZ (dono, 04/08): CEP 11746-692. Uma origem só mantém a
+   * cotação estável — o site cota antes de saber qual loja vai despachar, e
+   * cotar por loja daria preço diferente pro mesmo carrinho a cada
+   * recálculo do roteamento.
+   *
+   * Mesma porta do pedido: token `x-loja-token` + rate-limit por IP. Sem os
+   * dois, isto vira consulta grátis ao contrato dos Correios pra qualquer um.
+   *
+   * FALHA NÃO TRAVA A COMPRA: se os Correios não responderem, devolve
+   * `{ ok:false }` e o site cai na estimativa. Melhor frete aproximado do que
+   * checkout parado.
+   */
+  @Post('frete')
+  async frete(
+    @Body() body: { cep: string; pecas?: number; pesoGramas?: number; comprimento?: number; largura?: number; altura?: number },
+    @Headers('x-loja-token') token: string,
+    @Req() req: any,
+    @Res({ passthrough: true }) res: any,
+  ) {
+    this.exigirToken(token);
+    if (excedeuLimite(this.ipDe(req))) {
+      res.status(429);
+      return { ok: false, error: 'Muitas consultas seguidas. Tente de novo em instantes.' };
+    }
+
+    const cep = String(body?.cep || '').replace(/\D/g, '');
+    if (cep.length !== 8) return { ok: false, error: 'CEP inválido' };
+
+    /**
+     * PESO E CAIXA — números do dono (04/08): 250 g por peça, embalagem
+     * 28 (largura) × 40 (comprimento) × 3 cm (altura) por peça.
+     *
+     * A ALTURA é o único que acompanha a quantidade: duas peças na mesma
+     * embalagem empilham (3 → 6 cm), largura e comprimento não mudam. Cotar
+     * tudo com 3 cm fixo daria frete barato demais no pedido grande, e a conta
+     * viria pra vocês na postagem.
+     *
+     * O site pode sobrescrever qualquer um; sem informação, vale 1 peça.
+     */
+    const pecas = Math.min(50, Math.max(1, Number(body?.pecas) || 1));
+    const peso = Math.min(30000, Number(body?.pesoGramas) || 250 * pecas);
+    const largura = Number(body?.largura) || 28;
+    const comprimento = Number(body?.comprimento) || 40;
+    const altura = Number(body?.altura) || 3 * pecas;
+
+    try {
+      // A ORIGEM sai de `CORREIOS_CEP_ORIGEM` (env) — o serviço não aceita
+      // origem por chamada, e é bom que seja assim: uma origem só mantém a
+      // cotação estável entre o carrinho e o checkout. Matriz = 11746-692.
+      const r: any = await this.correios.calcularFrete({
+        cepDestino: cep,
+        pesoGramas: peso,
+        comprimento,
+        largura,
+        altura,
+      });
+      return {
+        ok: true,
+        cep,
+        pecas,
+        caixa: { pesoGramas: peso, largura, comprimento, altura },
+        servicos: r?.servicos ?? r,
+      };
+    } catch (e: any) {
+      return { ok: false, error: 'Não consegui cotar agora', detalhe: String(e?.message || e).slice(0, 200) };
+    }
   }
 
   /**
