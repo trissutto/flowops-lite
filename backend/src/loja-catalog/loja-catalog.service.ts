@@ -34,8 +34,16 @@ export interface ListarParams {
   precoMin?: number;
   precoMax?: number;
   modelagem?: string;
+  /** Atributos da ficha do CRM — os eixos do menu (item 44). */
+  tecido?: string;
+  ocasiao?: string;
+  colecao?: string;
   soPromocao?: boolean;
   soNovidade?: boolean;
+  /**
+   * `true` esconde o esgotado. Vazio/`false` MOSTRA (item 37): a cliente vê
+   * que a peça existe e acabou, em vez de achar que o site quebrou.
+   */
   soDisponivel?: boolean;
   ordenar?: 'relevancia' | 'novidades' | 'preco-asc' | 'preco-desc' | 'nome';
 }
@@ -69,6 +77,42 @@ export class LojaCatalogService {
 
   private normRef(v?: string | null) {
     return String(v || '').trim().toUpperCase().replace(/\s+/g, '');
+  }
+
+  /**
+   * NOME DE COR AMIGÁVEL (item 46) — o ERP guarda cor de etiqueta.
+   *
+   * "VD MUSGO ESC" é o que a vendedora bipa; "Verde Musgo Escuro" é o que a
+   * cliente lê. A tradução é conservadora de propósito: expande só as
+   * abreviações que a casa usa de fato e ajeita a caixa. Palavra desconhecida
+   * passa intacta — inventar nome de cor é pior que mostrar a técnica, porque
+   * a cliente compara com a foto e perde a confiança na peça.
+   *
+   * Quando a ficha tiver `tituloComercial` naquela cor, ELE ganha: é escolha
+   * humana, e escolha humana sempre vence heurística.
+   */
+  private static readonly ABREV_COR: Record<string, string> = {
+    VD: 'Verde', VM: 'Vermelho', AZ: 'Azul', AM: 'Amarelo', BR: 'Branco',
+    PR: 'Preto', RS: 'Rosa', RX: 'Roxo', LR: 'Laranja', MR: 'Marrom',
+    CZ: 'Cinza', BG: 'Bege', ESC: 'Escuro', CL: 'Claro', MED: 'Médio',
+    ESTP: 'Estampado', EST: 'Estampado', FLR: 'Floral', MESC: 'Mescla',
+  };
+
+  private corAmigavel(cor: string): string {
+    const bruto = String(cor || '').trim();
+    if (!bruto) return '';
+    return bruto
+      .split(/\s+/)
+      .map((p) => {
+        const chave = p.toUpperCase().replace(/[^A-Z]/g, '');
+        const expandida = LojaCatalogService.ABREV_COR[chave];
+        if (expandida) return expandida;
+        // Título simples: "MARINHO" → "Marinho". Números e códigos passam.
+        return /^[A-Za-zÀ-ÿ]+$/.test(p)
+          ? p.charAt(0).toUpperCase() + p.slice(1).toLowerCase()
+          : p;
+      })
+      .join(' ');
   }
 
   /**
@@ -213,6 +257,8 @@ export class LojaCatalogService {
 
         return {
           nome: nomeCor,
+          /** O que a cliente lê. Título da ficha ganha da tradução automática. */
+          nomeAmigavel: String(f?.tituloComercial || '').trim() || this.corAmigavel(nomeCor),
           estoque: daCor.reduce((s, l) => s + (l.estoque || 0), 0),
           preco: precosCor.length ? Math.min(...precosCor) : 0,
           // Bolinha: 'cor' = hex tirado da foto; 'foto' = recorte da estampa,
@@ -252,12 +298,35 @@ export class LojaCatalogService {
     const dataAlt = linhas.map((l) => l.dataAlt).filter(Boolean).sort()
       .slice(-1)[0] as Date | undefined;
 
+    /**
+     * CONTEÚDO DE VENDA vem da FICHA primeiro (itens 33 e 34).
+     *
+     * Ordem: ficha do CRM → cadastro do site (import do WooCommerce) → a
+     * descrição CRUA do ERP. A crua é o último recurso de propósito: é texto
+     * de etiqueta ("BLUSA FEM MC VISCOSE"), não título de vitrine — mas é
+     * melhor que a peça aparecer sem nome nenhum.
+     */
+    const nomeDaFicha = String(ficha?.nomeCurto || '').trim();
+    const descricaoDaFicha = String(ficha?.descricao || '').trim();
+
+    /** JSON `[{id,nome}]` do cadastro → lista de nomes pro filtro e pra tela. */
+    const nomesDe = (raw: any): string[] => {
+      if (!raw) return [];
+      try {
+        const arr = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        if (!Array.isArray(arr)) return [];
+        return arr.map((x: any) => String(x?.nome || x || '').trim()).filter(Boolean);
+      } catch {
+        return [];
+      }
+    };
+
     return {
       ref,
       slug: site?.slug || `ref-${ref.toLowerCase()}`,
-      nome: site?.nome || linhas[0]?.descricao || ref,
+      nome: nomeDaFicha || site?.nome || linhas[0]?.descricao || ref,
       descricaoCurta: site?.descricaoCurta ?? null,
-      descricaoCompleta: site?.descricaoCompleta ?? null,
+      descricaoCompleta: descricaoDaFicha || site?.descricaoCompleta || null,
       marca: linhas.find((l) => l.marca)?.marca ?? null,
       // Categoria COMERCIAL (do cadastro do site). O grupo do Giga vai
       // separado: é classificação fiscal, não serve pro menu da loja.
@@ -282,11 +351,30 @@ export class LojaCatalogService {
       seo: site?.seo ?? null,
 
       // Ficha de caimento (Lurd's Fit AI) — alimenta filtro e recomendação
-      modelagem: fit?.modelagem ?? null,
+      modelagem: nomesDe(ficha?.modelagens)[0] ?? fit?.modelagem ?? null,
       elastano: fit?.elastano ?? null,
       caimento: fit?.caimento ?? null,
       composicao: fit?.composicao ?? null,
       medidas: fit?.medidas ?? null,
+
+      /**
+       * ATRIBUTOS DA FICHA — o que os 7 eixos do menu filtram (item 44).
+       * Vinham só do `fit_product` (a camada antiga de IA); a ficha do CRM é
+       * quem tem o dado digitado por gente.
+       */
+      tecido: ficha?.tecidoNome ?? null,
+      colecao: ficha?.colecaoNome ?? null,
+      ocasioes: nomesDe(ficha?.ocasioes),
+      modelagens: nomesDe(ficha?.modelagens),
+      /** 'nao' | 'pouco' | 'muito' — a pergunta que a cliente plus size mais faz. */
+      elasticidade: ficha?.elasticidade ?? null,
+
+      /**
+       * TABELA DE MEDIDAS (itens 42 e 49) — grade do cadastro, com o ajuste
+       * daquela peça por cima. O ajuste sobrescreve LINHA A LINHA: a grade é
+       * template da modelagem, e a peça específica sempre foge em algum ponto.
+       */
+      gradeMedidas: this.montarGrade(ficha),
 
       destaque: !!site?.destaque,
       lancamento: !!site?.lancamento,
@@ -315,6 +403,39 @@ export class LojaCatalogService {
     };
   }
 
+  /**
+   * Grade de medidas da peça: template da modelagem + ajuste próprio.
+   *
+   * O ajuste sobrescreve por TAMANHO, não o objeto inteiro — a grade é o
+   * template (ex.: "Reta P/M/G"), e a peça foge dele em um ou dois pontos.
+   * Trocar tudo obrigaria a redigitar a grade toda pra mudar um busto.
+   */
+  private montarGrade(ficha: any): Array<Record<string, any>> | null {
+    const ler = (raw: any): any[] => {
+      if (!raw) return [];
+      try {
+        const v = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        return Array.isArray(v) ? v : [];
+      } catch {
+        return [];
+      }
+    };
+
+    const base = ler(ficha?.gradeMedidas?.linhas);
+    const ajuste = ler(ficha?.medidasAjuste);
+    if (!base.length && !ajuste.length) return null;
+
+    const chave = (l: any) => String(l?.tamanho ?? l?.label ?? '').trim().toUpperCase();
+    const porTamanho = new Map<string, any>();
+    for (const l of base) porTamanho.set(chave(l), { ...l });
+    for (const l of ajuste) {
+      const k = chave(l);
+      porTamanho.set(k, { ...(porTamanho.get(k) ?? {}), ...l });
+    }
+    const linhas = Array.from(porTamanho.values());
+    return linhas.length ? linhas : null;
+  }
+
   /** Carrega curadoria + ficha de caimento de um conjunto de REFs. */
   private async complementos(refs: string[]) {
     const [sites, fits, fotos, fichas] = await Promise.all([
@@ -330,7 +451,9 @@ export class LojaCatalogService {
       // Ficha do CRM: é de lá que vem a bolinha de cada cor.
       (this.prisma as any).produtoFicha.findMany({
         where: { ref: { in: refs } },
-        include: { cores: true },
+        // `gradeMedidas` junto: é a tabela de medidas da PDP (itens 42 e 49).
+        // Sem o include, a peça chegava ao site sem medida nenhuma.
+        include: { cores: true, gradeMedidas: true },
       }),
     ]);
     const porRefFotos = new Map<string, any[]>();
@@ -423,10 +546,23 @@ export class LojaCatalogService {
       if (!porRef.has(l.ref)) porRef.set(l.ref, []);
       porRef.get(l.ref)!.push(l);
     }
-    const { site, fit, fotos } = await this.complementos(Array.from(porRef.keys()));
+    /**
+     * ⚠️ A FICHA ENTRA NA LISTAGEM (corrigido 06/08).
+     *
+     * `complementos` sempre carregou as fichas, mas aqui elas eram descartadas
+     * — só a PDP (`porSlug`) passava a ficha pro `montarPeca`. Consequência na
+     * vitrine: **card sem bolinha de cor, sem título comercial e sem os
+     * atributos** (tecido, ocasião, modelagem) que os filtros do menu usam.
+     * A ficha do CRM é a fonte do conteúdo desde 03/08; metade do site não
+     * estava lendo.
+     */
+    const { site, fit, fotos, fichas } = await this.complementos(Array.from(porRef.keys()));
 
     let pecas = Array.from(porRef.entries()).map(([ref, ls]) =>
-      this.montarPeca(ref, ls, site.get(ref), fit.get(ref), fotos.get(ref) ?? []),
+      this.montarPeca(
+        ref, ls, site.get(ref), fit.get(ref), fotos.get(ref) ?? [],
+        this.escolherFicha(fichas.get(ref), ls.find((l) => l.marca)?.marca),
+      ),
     );
 
     // 3) Filtros (em memória: o universo é o publicado, não o catálogo todo)
@@ -444,7 +580,42 @@ export class LojaCatalogService {
     if (params.modelagem) pecas = pecas.filter((p) => norm(p.modelagem) === norm(params.modelagem));
     if (params.precoMin != null) pecas = pecas.filter((p) => p.preco >= Number(params.precoMin));
     if (params.precoMax != null) pecas = pecas.filter((p) => p.preco <= Number(params.precoMax));
-    if (params.soDisponivel !== false) pecas = pecas.filter((p) => p.disponivel);
+    if (params.tecido) pecas = pecas.filter((p) => norm(p.tecido) === norm(params.tecido));
+    if (params.ocasiao) pecas = pecas.filter((p) => p.ocasioes.some((o: string) => norm(o) === norm(params.ocasiao)));
+    if (params.colecao) pecas = pecas.filter((p) => norm(p.colecao) === norm(params.colecao));
+
+    /**
+     * ESGOTADO NÃO SOME (item 37 — decisão do dono, 04/08).
+     *
+     * O filtro era `soDisponivel !== false`, ou seja, **esconder era o padrão**:
+     * a peça esgotada sumia da vitrine sem explicação. A cliente que viu a peça
+     * no Instagram voltava e achava que o site estava quebrado.
+     *
+     * Agora ela aparece, com `disponivel: false` pro card riscar e escrever
+     * "esgotado" — a cliente vê que a peça EXISTE e que acabou, o que também
+     * alimenta a lista de espera. Esconder só quando pedido explicitamente
+     * (`soDisponivel: true`).
+     *
+     * A ordenação abaixo empurra o esgotado pro fim: aparecer não é o mesmo
+     * que competir com quem tem estoque.
+     */
+    if (params.soDisponivel === true) pecas = pecas.filter((p) => p.disponivel);
+
+    /**
+     * PEÇA SEM FOTO NUNCA CHEGA À VITRINE (item 39).
+     *
+     * Card sem imagem é buraco na grade e destrói a confiança na loja inteira.
+     * Vale pra listagem; a PDP continua abrindo por link direto (é o que
+     * permite conferir a peça antes de publicar).
+     */
+    const semFoto = pecas.filter((p) => !p.imagens.length);
+    if (semFoto.length) {
+      pecas = pecas.filter((p) => p.imagens.length > 0);
+      this.logger.warn(
+        `[catalogo] ${semFoto.length} REF(s) publicada(s) sem foto — fora da vitrine: ` +
+          semFoto.slice(0, 15).map((p) => p.ref).join(', '),
+      );
+    }
 
     // 4) Ordenação
     const ord = params.ordenar || 'relevancia';
@@ -462,6 +633,10 @@ export class LojaCatalogService {
           return b.estoqueTotal - a.estoqueTotal;
       }
     });
+
+    // Esgotado aparece (item 37), mas por último — em QUALQUER ordenação.
+    // Sem isto, "menor preço" encheria a primeira tela de peça que não vende.
+    pecas.sort((a, b) => Number(b.disponivel) - Number(a.disponivel));
 
     const total = pecas.length;
     const inicio = (page - 1) * perPage;

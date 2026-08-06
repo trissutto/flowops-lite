@@ -101,23 +101,31 @@ Refeito em 04/08/2026, **só o site novo** (`ecommerce/` + `backend/src/loja-ord
     - **O filtro de REF não era aplicado no caminho do MySQL.** O casamento é `SKU LIKE 'REF%'` (peneira grossa de propósito): pedindo `VMS-223` vinha `VMS-2231` junto, e o casamento de cor depois ainda achava uma cor válida — **foto de outra peça, na cor certa, sem erro nenhum**
     - **Produto sem imagem não dizia nada.** Se a opção `siteurl` do WordPress estiver vazia, TODA foto vira URL nula e a tela só mostrava "nenhuma cor com foto". Agora avisa onde olhar
 32. ✅ REVISADO — **A bolinha era pintada numa ficha que o site nunca abre.** `marcaDaFamilia` pegava `[0]` de um `SELECT` **sem `ORDER BY`**; o catálogo escolhia a marca por outro caminho, também sem ordem. Quando davam marcas diferentes, a varredura pintava numa ficha e a página lia outra. E pior: a varredura **não olha marca**, então dava a peça como pintada e **parava de tentar** — "rodou, o log diz que pintou, e a bolinha não aparece". Agora a marca é determinística (a com mais cadastros; empate alfabético) e o catálogo, em vez de devolver `undefined` quando nenhuma ficha casa (**peça sem bolinha, sem título e sem vídeo, em silêncio**), usa a ficha mais preenchida e registra que houve desempate — porque o conserto de verdade é limpar o cadastro
-33. ⬜ APROVADO — Título de venda por produto (não a descrição crua do ERP)
-34. ⬜ APROVADO — Descrição de venda: composição, caimento, o que veste
-35. ⬜ APROVADO — Status de publicação decidido peça a peça
+> 🔴 **A LISTAGEM NUNCA RECEBIA A FICHA** (achado e corrigido 06/08). O
+> `complementos()` sempre carregou as fichas, mas o `listar()` as **descartava**
+> — só a PDP passava a ficha adiante. Resultado na vitrine: **card sem bolinha
+> de cor, sem título comercial e sem os atributos que os filtros do menu usam**.
+> A ficha do CRM é a fonte do conteúdo desde 03/08 e metade do site não estava
+> lendo. Este era o elo CRM→vitrine que faltava, e destrava 33, 34, 44 e 46 de
+> uma vez.
+
+33. ✅ FEITO — Título vem da ficha (`nomeCurto`) → cadastro do site → descrição crua do ERP, nessa ordem. A crua é último recurso: é texto de etiqueta ("BLUSA FEM MC VISCOSE"), não título de vitrine
+34. ✅ FEITO — Descrição de venda da ficha (`descricao`), com tecido, coleção, ocasiões, modelagens e elasticidade expostos separados
+35. ⬜ APROVADO — Status de publicação decidido peça a peça (`statusPublicacao` existe por cor; falta virar o gate de publicação)
 36. ⬜ APROVADO — Estoque por SKU somando **TODAS as lojas ATIVAS** (criar config de quais lojas entram)
-37. 🔄 MUDOU — NÃO esconder: mostrar **riscado e claramente indisponível** (a cliente vê que existe e que acabou)
-38. ⬜ APROVADO — Conferir preço contra o catálogo (já houve incidente de preço 100×)
-39. ⬜ APROVADO — Peça sem foto nunca chega à vitrine
-40. ⬜ APROVADO — Ordem das fotos por cor (capa definida)
+37. ✅ FEITO — Esgotado **aparece riscado**, com "Esgotado por enquanto". O padrão do backend era `soDisponivel ?? true` — ou seja, **esconder por omissão**. Agora só some com `?disponivel=1`, e a ordenação joga o esgotado pro fim em QUALQUER ordem (senão "menor preço" encheria a primeira tela de peça que não vende)
+38. ✅ FEITO no bloco A — o `CarrinhoGuard` relê o preço do catálogo antes de cobrar
+39. ✅ FEITO — Peça sem NENHUMA foto sai da vitrine (e o log diz quais). A PDP continua abrindo por link direto: é o que permite conferir antes de publicar
+40. ✅ JÁ EXISTIA — `product_photos.ordem` define a capa; a leitura já ordena por `cor, ordem, createdAt`
 41. ⬜ APROVADO — Proporção padronizada das fotos da PDP
-42. ⬜ APROVADO — Tabela de medidas **no cadastro do produto, na retaguarda** (o dono preenche por peça/modelagem)
+42. ✅ FEITO (leitura) — a grade de medidas chega ao site: template da modelagem + **ajuste da peça sobrepondo LINHA A LINHA** (trocar o objeto inteiro obrigaria a redigitar a grade toda pra mudar um busto). O cadastro já existia; faltava o `include` — a peça chegava sem medida nenhuma
 43. ⬜ APROVADO — Categorias e subcategorias ligadas ao CRM
-44. ⬜ APROVADO — Filtros: tamanho, cor, tecido, ocasião, modelagem
+44. ✅ FEITO — Filtros de **tecido, ocasião e coleção** (da ficha) somados a tamanho, cor, marca, modelagem e preço
 45. ⬜ APROVADO — Produtos relacionados / "veja similares" (**JÁ EXISTE** o bloco, falta a fonte)
-46. ⬜ APROVADO — Nome de cor amigável (o ERP tem cor técnica)
-47. ⬜ APROVADO — Vídeo do produto: o campo `youtubeUrl` **já existe** no modelo `ProdutoFichaCor`; guarda a URL como veio e o site extrai o id. É só colar o link do YouTube
-48. ⬜ APROVADO — Badge de novidade e de últimas peças
-49. ⬜ APROVADO — Guia de tamanhos por categoria
+46. ✅ FEITO — Cor amigável: "VD MUSGO ESC" → "Verde Musgo Escuro". Tradução **conservadora** (só as abreviações que a casa usa; palavra desconhecida passa intacta — inventar nome de cor é pior que mostrar a técnica). Título da ficha ganha da tradução: escolha humana vence heurística
+47. ✅ JÁ EXISTIA — `youtubeUrl` por cor já sai no payload da peça
+48. ✅ JÁ EXISTIA — badges de novidade, promoção e "últimas peças" (≤3 no estoque)
+49. ✅ FEITO junto com 42 — a mesma grade alimenta o guia de tamanhos
 50. ⬜ APROVADO — WebP e compressão sem perder qualidade
 
 ## D. Carrinho e checkout (🔴/🟠) · **APROVADO PELO DONO 04/08**
