@@ -36,11 +36,11 @@ Refeito em 04/08/2026, **só o site novo** (`ecommerce/` + `backend/src/loja-ord
 5. ✅ FEITO — Estoque conferido no fechamento, por cor+tamanho. ⚠️ Junto: a PDP não mandava a cor pro carrinho (ia colada no nome) — corrigido, senão a conferência somava as cores todas
 6. ✅ FEITO — Peça despublicada durante a sessão não fecha pedido (só barra o `publicado = false` explícito: sem linha de curadoria a vitrine deixa vender, e travar aqui derrubaria venda boa)
 7. ✅ FEITO (2h) — PIX: expiração de 30 min liberando a reserva
-8. PIX: webhook idempotente (repetição do gateway não duplica pedido)
-9. Cartão recusado não cria pedido (regra existe — validar que se cumpre)
-10. Cartão: mensagem de recusa que a cliente entenda
-11. Cron reprocessando pagamento pendente (não depender só do webhook)
-12. Conciliação diária: pago no gateway × pago no Flow
+8. ✅ FEITO — Webhook idempotente. O `if (já pago)` já existia e cobria a repetição SEQUENCIAL; faltava a SIMULTÂNEA — `order.paid` e `charge.paid` chegam quase juntos, os dois liam "não pago" e passavam, gerando histórico duplicado e o evento `purchase` disparado 2× (faturamento dobrado no Meta/GA4). Agora a trava é atômica no banco (`updateMany` com `paidAt: null` no WHERE)
+9. ✅ CONFERIDO — Cartão recusado apaga o Order recém-criado (`descartarPedido`; itens caem por cascade). O `PagarmePayment` com status `failed` FICA de propósito: é o registro de tentativa que a conciliação precisa enxergar
+10. ✅ CONFERIDO — `mensagemRecusa()` traduz o motivo do adquirente em frase acionável (sem limite / vencido / dados errados / operadora fora), sempre oferecendo o PIX como saída. Nunca vaza código de adquirente nem stack
+11. ✅ FEITO — `LojaPagamentoReconcileService` (cron de 1 min). ⚠️ O buraco era maior do que parecia: existia reconcile pro link das lojas, mas ele gravava `pagarme_payment = paid` e **não chamava o `confirmarPagamento` do pedido** — o pagamento constava pago no Flow e o pedido seguia aguardando pra sempre. Agora: 1º olha o banco local (de graça), depois pergunta ao gateway com throttle de 3 min por pedido, janela de 72h, teto de 40/ciclo. Kill-switch `LOJA_PAGAMENTO_RECONCILE=0`
+12. ✅ FEITO — Conciliação diária às 07h05 (`LOJA_CONCILIACAO=0` desliga) + `GET /admin/loja/conciliacao?de=&ate=` sob demanda. Aponta três divergências: **pago no gateway e não no Flow** (a pior — tem dinheiro na conta e pedido parado), **pago no Flow sem cobrança** e **valor divergente**. Divergência sai como WARN pra aparecer em qualquer filtro de log
 13. ✅ FEITO — Validação de e-mail de verdade (hoje é `includes('@')`, "a@b" passa e a confirmação não chega)
 14. ✅ FEITO — Remover o fallback de telefone `13 996218277` do checkout (caminho morto hoje, mina amanhã)
 15. ✅ SEM VALOR MINIMO (dono) — Valor mínimo de pedido, se houver

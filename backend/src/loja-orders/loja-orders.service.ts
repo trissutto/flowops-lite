@@ -1216,10 +1216,28 @@ export class LojaOrdersService {
     if (order.paidAt) return { ok: true, already: true };
     if (order.status === 'cancelled') return { ok: false, reason: 'pedido cancelado' };
 
+    /**
+     * TRAVA ATÔMICA, não só o `if` acima (item 8).
+     *
+     * O `if (order.paidAt)` resolve a repetição SEQUENCIAL — o webhook que
+     * chega de novo cinco minutos depois. Não resolve a SIMULTÂNEA: a Pagar.me
+     * entrega `order.paid` e `charge.paid` praticamente juntos, e o reconcile
+     * pode estar no mesmo pedido no mesmo segundo. Os dois leem `paidAt: null`,
+     * os dois passam, e o resultado é histórico duplicado e o evento `purchase`
+     * disparado duas vezes — ou seja, faturamento dobrado no Meta e no GA4.
+     *
+     * `updateMany` com `paidAt: null` no WHERE resolve no banco: quem chegar
+     * segundo atualiza 0 linhas e sai como `already`.
+     */
     const paidAt = new Date();
-    const atualizado = await (this.prisma as any).order.update({
-      where: { id: order.id },
+    const trava = await (this.prisma as any).order.updateMany({
+      where: { id: order.id, paidAt: null },
       data: { paidAt, status: 'processing' },
+    });
+    if (trava.count === 0) return { ok: true, already: true };
+
+    const atualizado = await (this.prisma as any).order.findUnique({
+      where: { id: order.id },
       include: { items: true },
     });
 

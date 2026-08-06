@@ -7,6 +7,8 @@ import { LojaOrdersService } from './loja-orders.service';
 import { LojaOrdersController } from './loja-orders.controller';
 import { CarrinhoGuardService } from './carrinho-guard.service';
 import { CupomService } from './cupom.service';
+import { LojaPagamentoReconcileService } from './loja-pagamento-reconcile.service';
+import { LojaAdminController } from './loja-admin.controller';
 
 /**
  * PEDIDOS DO E-COMMERCE NOVO (sprint 011).
@@ -22,8 +24,15 @@ import { CupomService } from './cupom.service';
  */
 @Module({
   imports: [PrismaModule, HttpModule, CorreiosModule, forwardRef(() => PagarmeModule)],
-  controllers: [LojaOrdersController],
-  providers: [LojaOrdersService, CarrinhoGuardService, CupomService],
+  controllers: [LojaOrdersController, LojaAdminController],
+  providers: [
+    LojaOrdersService,
+    CarrinhoGuardService,
+    CupomService,
+    // Rede de segurança do pagamento: o webhook não pode ser a única
+    // confirmação, e a conciliação diária é quem descobre o que ninguém viu.
+    LojaPagamentoReconcileService,
+  ],
   exports: [LojaOrdersService, CupomService],
 })
 export class LojaOrdersModule {}
