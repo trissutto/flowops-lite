@@ -160,6 +160,41 @@ export class WcFotosImportService {
   }
 
   /**
+   * TODAS as REFs que o site antigo tem — a fila do "importar tudo" INVERTIDA.
+   *
+   * Pedido do dono (06/08): a fila varria as ~21 mil REFs do catálogo
+   * perguntando ao WordPress uma a uma, e 90%+ voltava "site antigo não tem
+   * esta peça" — o acervo de lá não chega a 10% do catálogo. Aqui é o
+   * contrário: UMA query lista os produtos do WordPress e a REF sai de cada
+   * um (SKU "VLM-222 MARROM" → primeira palavra; nome "… Ref VOGUE …" quando
+   * o SKU está vazio).
+   *
+   * Lança erro com o MySQL do WP fora: fila vazia por indisponibilidade
+   * PARECERIA "site antigo sem nada" — melhor parar com mensagem clara.
+   */
+  async refsDoSiteAntigo(): Promise<string[]> {
+    const produtos = await this.wp.listarTodosSkus();
+    if (!produtos.length) {
+      throw new BadRequestException(
+        'Não consegui listar o site antigo (MySQL do WordPress fora ou sem produtos) — tente de novo mais tarde.',
+      );
+    }
+    const refs = new Set<string>();
+    for (const p of produtos) {
+      const sku = this.semAcento(p.sku).trim();
+      const doSku = sku.split(/\s+/)[0] || '';
+      if (doSku) {
+        refs.add(doSku);
+        continue;
+      }
+      // Sem SKU: a REF mora no nome ("Blusa … Ref Vogue Preto LENE").
+      const m = this.semAcento(p.nome).match(/\bREF\.?\s+([A-Z0-9][A-Z0-9./-]*)/);
+      if (m?.[1]) refs.add(m[1]);
+    }
+    return Array.from(refs);
+  }
+
+  /**
    * Qual cor da lista aparece no nome do produto do WC. Mais longa primeiro —
    * "ROSA QUEIMADO" tem que ganhar de "ROSA".
    */
