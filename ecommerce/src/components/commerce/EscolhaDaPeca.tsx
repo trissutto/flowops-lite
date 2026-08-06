@@ -38,21 +38,32 @@ export function EscolhaDaPeca({ product, cores }: { product: Product; cores: Cor
    * enquanto o cadastro de fotos não terminou.
    */
   /**
-   * GALERIA: todas as fotos da peça, começando pelas da cor escolhida.
-   *
-   * O dono pediu que "rode sozinha por todas as cores" — então trocar de cor
-   * não ESCONDE as outras, só reordena. Assim a cliente vê a variedade sem
-   * precisar clicar bolinha por bolinha, e a foto que abre é sempre a da cor
-   * que ela escolheu.
+   * GALERIA: as fotos DA COR escolhida (06/08 — substituiu o "todas as fotos
+   * reordenadas"). A variedade que o autoplay antigo mostrava agora mora na
+   * barra lateral: uma miniatura POR COR, e clicar troca a cor inteira.
+   * Cor ainda sem foto própria cai nas fotos das outras, com o aviso de
+   * foto ilustrativa logo abaixo.
    */
   const galeria = useMemo(() => {
     const daCor = (c: CorApi) =>
       c.fotos.map((f) => ({ src: f.src, alt: f.alt ?? `${product.name} ${c.nome}` }));
     const escolhida = corAtual ? daCor(corAtual) : [];
+    if (escolhida.length) return escolhida;
     const resto = cores.filter((c) => c.nome !== corAtual?.nome).flatMap(daCor);
-    const tudo = [...escolhida, ...resto];
-    return tudo.length ? tudo : product.images;
+    return resto.length ? resto : product.images;
   }, [cores, corAtual, product]);
+
+  /** Barra lateral: uma miniatura por cor COM foto; clicar = trocar a cor. */
+  const grupos = useMemo(() => {
+    const comFoto = cores.filter((c) => c.fotos.length > 0);
+    if (comFoto.length < 2) return undefined;
+    return comFoto.map((c) => ({
+      nome: c.nomeAmigavel || c.nome,
+      capa: c.fotos[0].src,
+      ativa: c.nome === corAtual?.nome,
+      onSelect: () => setCor(c.nome),
+    }));
+  }, [cores, corAtual]);
 
   /** Cor sem foto própria: mostra a das outras, mas AVISA — senão vira troca. */
   const fotoIlustrativa = !!corAtual && corAtual.fotos.length === 0 && galeria.length > 0;
@@ -91,7 +102,7 @@ export function EscolhaDaPeca({ product, cores }: { product: Product; cores: Cor
           sem isso a cliente escolhe MARINHO e continua vendo a 4ª foto do
           PRETO, que era o índice em que ela estava. */}
       <div>
-        <ProductGallery key={cor ?? 'unica'} images={galeria} name={pecaDaCor.name} autoPlay />
+        <ProductGallery key={cor ?? 'unica'} images={galeria} name={pecaDaCor.name} autoPlay grupos={grupos} />
         {fotoIlustrativa && (
           <p className="mt-3 text-small text-ink-muted">
             Ainda não temos foto de <strong>{corAtual!.nome}</strong> — as fotos acima são das
