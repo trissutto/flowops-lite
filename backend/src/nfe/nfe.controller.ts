@@ -171,8 +171,10 @@ export class NfeController {
 
   /**
    * DOWNLOAD EM LOTE (dono 29/07): ZIP com os XMLs e/ou DANFEs das notas
-   * AUTORIZADAS do período — pro contador. Query: de/ate (YYYY-MM-DD, vazio =
-   * tudo), tipo (xml | danfe | tudo), storeCode (loja origem, opcional).
+   * AUTORIZADAS e CANCELADAS do período — pro contador (dono 06/08: cancelada
+   * entra em canceladas/, com o XML do evento de cancelamento junto).
+   * Query: de/ate (YYYY-MM-DD, vazio = tudo), tipo (xml | danfe | tudo),
+   * storeCode (loja origem, opcional).
    * PRECISA vir antes de ':id' (senão o Nest casa 'download-lote' como id).
    */
   @Get('download-lote')
@@ -189,7 +191,7 @@ export class NfeController {
     const t = tipo === 'xml' || tipo === 'danfe' ? tipo : 'tudo';
     const docs = await this.transfer.listDocsParaLote({ de, ate, storeCode, emitRaiz });
     if (!docs.length) {
-      res.status(404).json({ message: 'Nenhuma NF-e autorizada no período/filtro.' });
+      res.status(404).json({ message: 'Nenhuma NF-e autorizada ou cancelada no período/filtro.' });
       return;
     }
     // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -204,17 +206,27 @@ export class NfeController {
     });
     zip.pipe(res);
     for (const d of docs as any[]) {
+      const cancelada = d.status === 'cancelled';
+      const pasta = cancelada ? 'canceladas/' : '';
+      const sufixo = cancelada ? '_CANCELADA' : '';
       const base = `NFe_${String(d.numero).padStart(9, '0')}-${d.serie || '1'}_${d.chave || d.id}`;
       if (t !== 'danfe') {
         const xml = d.xmlAutorizado || d.xmlEnviado;
-        if (xml) zip.append(String(xml), { name: `xml/${base}.xml` });
+        if (xml) zip.append(String(xml), { name: `xml/${pasta}${base}${sufixo}.xml` });
+        // Cancelada sem a prova do cancelamento parece nota válida — o retorno
+        // do evento 110111 vai junto. Doc antigo pode ter xmlResposta ainda da
+        // AUTORIZAÇÃO (o cancel só sobrescreve quando a SEFAZ devolve), por
+        // isso o teste de conteúdo antes de rotular como evento.
+        if (cancelada && d.xmlResposta && /110111|evento/i.test(String(d.xmlResposta))) {
+          zip.append(String(d.xmlResposta), { name: `xml/${pasta}${base}_evento-cancelamento.xml` });
+        }
       }
       if (t !== 'xml') {
         try {
           const { buffer } = await this.danfe.generateForDoc(d.id);
-          zip.append(buffer, { name: `danfe/${base}.pdf` });
+          zip.append(buffer, { name: `danfe/${pasta}${base}${sufixo}.pdf` });
         } catch (e: any) {
-          zip.append(`DANFE indisponível: ${e?.message || e}`, { name: `danfe/${base}.ERRO.txt` });
+          zip.append(`DANFE indisponível: ${e?.message || e}`, { name: `danfe/${pasta}${base}.ERRO.txt` });
         }
       }
     }

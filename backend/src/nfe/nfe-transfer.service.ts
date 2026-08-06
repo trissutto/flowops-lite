@@ -219,10 +219,13 @@ export class NfeTransferService {
     };
   }
 
-  /** Notas AUTORIZADAS do período pro DOWNLOAD EM LOTE (ZIP do contador).
+  /** Notas do período pro DOWNLOAD EM LOTE (ZIP do contador): AUTORIZADAS e
+   *  CANCELADAS (dono 06/08 — o contador precisa das canceladas na apuração,
+   *  com a prova do cancelamento junto). Rejeitada/erro fica de fora: nota que
+   *  a SEFAZ nunca aceitou não é documento fiscal.
    *  De/Até em YYYY-MM-DD (fuso -03); sem datas = todas (cap 1000). */
   async listDocsParaLote(p: { de?: string; ate?: string; storeCode?: string; emitRaiz?: string }) {
-    const where: any = { status: 'authorized' };
+    const where: any = { status: { in: ['authorized', 'cancelled'] } };
     const iso = /^\d{4}-\d{2}-\d{2}$/;
     const faixa: any = {};
     if (p.de && iso.test(p.de)) faixa.gte = new Date(`${p.de}T00:00:00-03:00`);
