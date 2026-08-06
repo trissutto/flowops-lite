@@ -12,6 +12,7 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { ArrowLeft, Printer, Loader2, AlertCircle } from 'lucide-react';
 import { api } from '@/lib/api';
+import { ordemTamanho } from '@/lib/ordem-tamanho';
 
 type Order = {
   id: string;
@@ -216,7 +217,8 @@ export default function PedidoImprimirPage() {
             const primeiro = refItems[0];
             const todosTamanhos = new Set<string>();
             for (const it of refItems) for (const t of Object.keys(it.tamanhosQty || {})) todosTamanhos.add(t);
-            const tamOrdenados = Array.from(todosTamanhos).sort((a, b) => Number(a) - Number(b));
+            // ordemTamanho: "46/48" e letras quebravam o sort numérico (NaN = ordem aleatória)
+            const tamOrdenados = Array.from(todosTamanhos).sort((a, b) => ordemTamanho(a) - ordemTamanho(b));
             return (
               <div key={ref} className="border border-slate-300 rounded mb-2 print:break-inside-avoid">
                 <div className="bg-slate-100 px-3 py-1.5 border-b border-slate-300 flex items-center gap-3 text-xs">
