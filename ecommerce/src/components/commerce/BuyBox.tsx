@@ -66,8 +66,14 @@ export function BuyBox({
       document.getElementById('seletor-tamanho')?.scrollIntoView({ block: 'center' });
       return;
     }
-    // A cor escolhida vai junto no carrinho: sem ela a separação não sabe qual
-    // peça tirar da arara (mesma REF, cores diferentes).
+    /**
+     * A cor escolhida vai junto no carrinho, NO CAMPO `color`.
+     *
+     * Até 06/08 ela só entrava colada no `name` ("Vestido · PRETO"): a
+     * separação tinha que adivinhar a cor lendo um "·" no meio de um texto, e
+     * o guard do backend não conseguia conferir o estoque da variação certa —
+     * somava as cores todas e podia deixar passar peça esgotada naquela cor.
+     */
     const cor = corSelecionada ?? (cores?.length === 1 ? cores[0].nome : undefined);
     addToCart({
       productId: product.id,
@@ -75,6 +81,7 @@ export function BuyBox({
       name: cor ? `${product.name} · ${cor}` : product.name,
       image: product.images[0] ?? { src: '', alt: product.name },
       size,
+      color: cor,
       quantity: 1,
       unitPrice: product.price,
     });

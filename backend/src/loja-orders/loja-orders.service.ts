@@ -5,6 +5,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { PagarmeService } from '../pagarme/pagarme.service';
 import { computePersonKeyFromCpf } from '../customers/customer-aggregation.helper';
 import { montarComplementoBairroWc, montarNumeroWc } from '../common/endereco-wc';
+import { CarrinhoGuardService } from './carrinho-guard.service';
+import { CupomService } from './cupom.service';
 
 /**
  * PEDIDO DO E-COMMERCE NOVO (sprint 011).
@@ -37,6 +39,14 @@ import { montarComplementoBairroWc, montarNumeroWc } from '../common/endereco-wc
  *  4. Confirmação de pagamento é SEMPRE por `confirmarPagamento()` —
  *     idempotente. Webhook repete, e repete MESMO. Cartão aprovado chama
  *     direto (síncrono) e o webhook que chega depois vira no-op.
+ *
+ *  5. **O DINHEIRO É RECALCULADO AQUI, DO ZERO** (bloco A da lista de
+ *     lançamento, 04/08). Nada que chega no corpo do POST vira cobrança sem
+ *     passar pelo `reprecificar()`: preço vem do catálogo (`CarrinhoGuard`),
+ *     desconto vem da regra do banco (`CupomService`), o Pix ganha os 5% que
+ *     a vitrine anuncia e o total é somado de novo. O que o site mandou serve
+ *     só de TETO — se a nossa conta der mais que a dele, ninguém é cobrado a
+ *     mais: o pedido é recusado e a cliente recarrega a página.
  */
 
 /* ─────────────────────────────── CONTRATO ─────────────────────────────── */
@@ -147,6 +157,26 @@ export class LojaOrdersService {
   /** Tolerância do recálculo: 1 centavo (arredondamento de float no front). */
   private static readonly TOLERANCIA = 0.011;
 
+  /**
+   * DESCONTO DO PIX — 5% (dono, 06/08).
+   *
+   * O site anuncia "no Pix por R$ X" no card, na PDP, na busca e com a badge
+   * "5% off já aplicado" no checkout — e até aqui NINGUÉM aplicava: a cliente
+   * lia o preço Pix e pagava o cheio. Agora o abate é feito no servidor, sobre
+   * o subtotal já descontado do cupom, e vai discriminado na resposta pra tela
+   * mostrar a mesma conta que a cobrança.
+   *
+   * `SITE_PIX_DESCONTO_PCT=0` desliga sem deploy.
+   */
+  private static pixDescontoPct(): number {
+    const raw = process.env.SITE_PIX_DESCONTO_PCT;
+    const n = raw == null || raw === '' ? 5 : Number(raw);
+    return Number.isFinite(n) && n >= 0 && n <= 50 ? n : 5;
+  }
+
+  /** Teto de sanidade do frete: acima disso é erro de cotação, não entrega. */
+  private static readonly FRETE_TETO = 400;
+
   private readonly BASE_URL = 'https://api.pagar.me/core/v5';
 
   /** Cache das lojas pra resolver storeSlug→code sem bater no banco a cada pedido. */
@@ -157,6 +187,8 @@ export class LojaOrdersService {
     private readonly prisma: PrismaService,
     private readonly http: HttpService,
     private readonly pagarme: PagarmeService,
+    private readonly guard: CarrinhoGuardService,
+    private readonly cupons: CupomService,
   ) {}
 
   /* ───────────────────────── helpers de formato ───────────────────────── */
@@ -203,13 +235,13 @@ export class LojaOrdersService {
   /* ─────────────────────── validação e recálculo ──────────────────────── */
 
   /**
-   * Confere que os números que o e-commerce mandou fecham entre si.
+   * FORMATO — só o que dá pra conferir sem sair do processo: dados da cliente,
+   * itens com quantidade, endereço, meio de pagamento.
    *
-   * NÃO reconfere preço contra o catálogo — PENDÊNCIA CONHECIDA. Hoje o BFF do
-   * e-commerce é server-to-server e autenticado por token, então o preço que
-   * chega já veio do nosso próprio catálogo; mas se um dia esse token vazar,
-   * dá pra comprar com preço inventado. A trava certa é reler `unitPrice` do
-   * `WincredCatalogService`/`site_produto` por SKU antes de cobrar.
+   * O DINHEIRO NÃO SE DECIDE AQUI. Preço, desconto e total são refeitos do
+   * zero em `reprecificar()`, contra o catálogo e a tabela de cupons. Esta
+   * função só garante que o pedido tem forma de pedido antes de gastar uma ida
+   * ao banco.
    *
    * Retorna a mensagem de erro (elegante) ou null se está tudo certo.
    */
@@ -260,34 +292,126 @@ export class LojaOrdersService {
       return 'Não conseguimos ler os dados do cartão. Tente preencher novamente.';
     }
 
-    // Recálculo — a conta tem que fechar dos dois lados.
-    const somaItens = input.items.reduce(
-      (acc, it) => acc + this.dinheiro(it.unitPrice) * Number(it.quantity),
-      0,
-    );
-    const subtotal = this.dinheiro(input.subtotal);
-    const desconto = this.dinheiro(input.discount);
-    const frete = this.dinheiro(input.shippingPrice);
-    const total = this.dinheiro(input.total);
     const T = LojaOrdersService.TOLERANCIA;
+    const frete = this.dinheiro(input.shippingPrice);
 
-    if (Math.abs(somaItens - subtotal) > T) {
-      this.logger.warn(`[loja] subtotal divergente: itens=${somaItens.toFixed(2)} informado=${subtotal.toFixed(2)}`);
-      return 'Os valores da sacola mudaram. Atualize a página e confira antes de fechar. 💜';
-    }
-    if (Math.abs(subtotal - desconto + frete - total) > T) {
-      this.logger.warn(
-        `[loja] total divergente: ${subtotal.toFixed(2)} - ${desconto.toFixed(2)} + ${frete.toFixed(2)} != ${total.toFixed(2)}`,
-      );
-      return 'Os valores da sacola mudaram. Atualize a página e confira antes de fechar. 💜';
-    }
-    if (total <= 0) return 'O valor do pedido ficou inválido. Confira a sacola.';
     // O frete cotado tem que ser o mesmo que entra no total.
     if (Math.abs(this.dinheiro(input.shipping.price) - frete) > T) {
       return 'O frete mudou desde a cotação. Recalcule a entrega e tente de novo.';
     }
+    // Frete negativo ou absurdo é erro de cotação, não entrega cara.
+    if (frete < 0 || frete > LojaOrdersService.FRETE_TETO) {
+      this.logger.warn(`[loja] frete fora da faixa: ${frete.toFixed(2)}`);
+      return 'Não conseguimos confirmar o valor do frete. Recalcule a entrega e tente de novo. 💜';
+    }
+    if (this.dinheiro(input.total) <= 0) return 'O valor do pedido ficou inválido. Confira a sacola.';
 
     return null;
+  }
+
+  /* ─────────────────────────── REPRECIFICAÇÃO ─────────────────────────── */
+
+  /**
+   * REFAZ O PEDIDO INTEIRO com os números da casa (itens 1 a 6).
+   *
+   * Ordem, e o porquê de cada passo:
+   *
+   *  1. **Catálogo** (`CarrinhoGuard`) — preço, estoque e publicação de cada
+   *     peça. É aqui que morre o "token vazado compra por R$ 1".
+   *  2. **Cupom** (`CupomService`) — recalculado do banco, nunca aceito pronto.
+   *     Cupom de frete zera o econômico (`kind='correios'`), igual à sacola.
+   *  3. **Pix** — os 5% que a vitrine anuncia, sobre o subtotal já descontado.
+   *  4. **Total** — somado do zero.
+   *
+   * TETO, NÃO ESPELHO: o total que o site mandou não precisa bater na vírgula,
+   * mas a NOSSA conta nunca pode passar dele. Cobrar mais do que a cliente leu
+   * na tela é o erro que não se desfaz com pedido de desculpas.
+   */
+  private async reprecificar(input: CriarPedidoInput): Promise<
+    | { ok: false; erro: string }
+    | {
+        ok: true;
+        subtotal: number;
+        descontoCupom: number;
+        descontoPix: number;
+        frete: number;
+        total: number;
+        couponCode: string | null;
+      }
+  > {
+    // 1) Preço, estoque e publicação, peça a peça.
+    const conferencia = await this.guard.conferir(input.items as any);
+    if (!conferencia.ok) return { ok: false, erro: conferencia.erro };
+
+    // O preço COBRADO passa a ser o do catálogo, item a item — inclusive no
+    // snapshot que vai pro OrderItem e pro evento de compra.
+    for (const c of conferencia.itens) {
+      input.items[c.indice].unitPrice = c.precoCatalogo;
+    }
+    const subtotal = this.dinheiro(conferencia.subtotal);
+
+    // 2) Cupom recalculado (item 3).
+    let descontoCupom = 0;
+    let couponCode: string | null = null;
+    let freteGratisPorCupom = false;
+    if (input.couponCode) {
+      const r = await this.cupons.aplicar(input.couponCode, subtotal, {
+        cpf: this.digits(input.customer.cpf),
+      });
+      if (!r.ok) return { ok: false, erro: r.mensagem };
+      descontoCupom = this.dinheiro(r.desconto);
+      couponCode = r.code;
+      freteGratisPorCupom = r.tipo === 'shipping';
+    }
+
+    // Frete: o valor cotado pelo site, já conferido em `validar()`. Cupom de
+    // frete zera o ECONÔMICO — quem escolheu expresso paga expresso.
+    let frete = this.dinheiro(input.shippingPrice);
+    if (freteGratisPorCupom && input.shipping.kind === 'correios') frete = 0;
+
+    // 3) Pix — o desconto que a vitrine já anunciava.
+    const pct = LojaOrdersService.pixDescontoPct();
+    const baseComDesconto = Math.max(0, subtotal - descontoCupom);
+    const descontoPix =
+      input.payment?.method === 'pix' && pct > 0
+        ? this.dinheiro((baseComDesconto * pct) / 100)
+        : 0;
+
+    // 4) Total do zero.
+    const total = this.dinheiro(subtotal - descontoCupom - descontoPix + frete);
+    if (total <= 0) {
+      this.logger.warn(`[loja] total recalculado <= 0 (subtotal=${subtotal} cupom=${descontoCupom})`);
+      return { ok: false, erro: 'O valor do pedido ficou inválido. Confira a sacola e tente de novo. 💜' };
+    }
+
+    // TETO: nunca cobrar acima do que a cliente viu.
+    const informado = this.dinheiro(input.total);
+    if (informado > 0 && total > informado + LojaOrdersService.TOLERANCIA) {
+      this.logger.warn(
+        `[loja] recálculo acima do informado: nosso=${total.toFixed(2)} site=${informado.toFixed(2)} ` +
+          `(subtotal=${subtotal.toFixed(2)} cupom=${descontoCupom.toFixed(2)} pix=${descontoPix.toFixed(2)} frete=${frete.toFixed(2)})`,
+      );
+      return {
+        ok: false,
+        erro: 'Os valores da sacola mudaram desde que você abriu o checkout. Atualize a página e confira antes de pagar. 💜',
+      };
+    }
+    if (informado > 0 && Math.abs(total - informado) > LojaOrdersService.TOLERANCIA) {
+      this.logger.log(
+        `[loja] cobrando MENOS que o informado: nosso=${total.toFixed(2)} site=${informado.toFixed(2)}`,
+      );
+    }
+
+    // O input passa a carregar a conta da casa — cobrança, Order e resposta
+    // leem daqui pra frente uma coisa só.
+    input.subtotal = subtotal;
+    input.discount = this.dinheiro(descontoCupom + descontoPix);
+    input.shippingPrice = frete;
+    input.shipping.price = frete;
+    input.total = total;
+    input.couponCode = couponCode || undefined;
+
+    return { ok: true, subtotal, descontoCupom, descontoPix, frete, total, couponCode };
   }
 
   /* ───────────────────────────── CRM ──────────────────────────────────── */
@@ -442,6 +566,7 @@ export class LojaOrdersService {
   private async criarOrder(
     input: CriarPedidoInput,
     pickup: { code: string; name: string } | null,
+    conta?: { descontoCupom: number; descontoPix: number },
   ): Promise<any> {
     const base = LojaOrdersService.LOJA_WC_ID_BASE;
     const seq0 = await this.proximaSequencia();
@@ -478,6 +603,10 @@ export class LojaOrdersService {
         : null,
       subtotal: this.dinheiro(input.subtotal),
       discount: this.dinheiro(input.discount),
+      // Desconto DISCRIMINADO: sem isto, "R$ 42,30 off" no pedido não diz se
+      // foi cupom ou Pix — e é a primeira pergunta de quem confere caixa.
+      descontoCupom: this.dinheiro(conta?.descontoCupom ?? 0),
+      descontoPix: this.dinheiro(conta?.descontoPix ?? 0),
       shippingPrice: this.dinheiro(input.shippingPrice),
       couponCode: input.couponCode || null,
       items: input.items.map((it) => ({
@@ -809,6 +938,17 @@ export class LojaOrdersService {
     const erro = this.validar(input);
     if (erro) return { ok: false, error: erro };
 
+    /**
+     * A CONTA É REFEITA ANTES DE QUALQUER COISA (bloco A).
+     *
+     * Vem antes até do CRM: preço errado, peça esgotada ou despublicada não
+     * viram nem lead — viram uma frase pedindo pra recarregar a página. E vem
+     * antes de `criarOrder` porque o Order precisa nascer já com o valor certo
+     * (é dele que a cobrança e a etiqueta saem).
+     */
+    const conta = await this.reprecificar(input);
+    if (!conta.ok) return { ok: false, error: conta.erro };
+
     // CRM antes da cobrança de propósito: mesmo que o cartão seja recusado, a
     // cliente fica cadastrada (é lead, não venda) e a próxima tentativa dela
     // já cai no mesmo cadastro em vez de duplicar.
@@ -821,7 +961,7 @@ export class LojaOrdersService {
 
     let order: any;
     try {
-      order = await this.criarOrder(input, pickup);
+      order = await this.criarOrder(input, pickup, conta);
     } catch (e: any) {
       this.logger.error(`[loja] falha ao criar pedido: ${e?.message || e}`);
       return { ok: false, error: 'Não conseguimos abrir o seu pedido agora. Tente de novo em instantes. 💜' };
@@ -881,6 +1021,7 @@ export class LojaOrdersService {
       await this.confirmarPagamento(order.id);
     }
 
+
     const fresh = await (this.prisma as any).order.findUnique({
       where: { id: order.id },
       include: { items: true },
@@ -893,6 +1034,26 @@ export class LojaOrdersService {
         number: fresh.wcOrderNumber,
         status: this.statusPublico(fresh),
         total: this.dinheiro(fresh.totalAmount),
+        /**
+         * A CONTA DA CASA volta discriminada. O BFF do site montava o resumo
+         * com os números DELE (subtotal/desconto/frete calculados lá) e só
+         * trocava o total pelo nosso — o que dava resumo que não somava o
+         * total exibido assim que a reprecificação mexesse em qualquer linha.
+         * Agora tem de onde ler a conta certa.
+         */
+        subtotal: this.dinheiro(conta.subtotal),
+        discount: this.dinheiro(conta.descontoCupom + conta.descontoPix),
+        couponDiscount: this.dinheiro(conta.descontoCupom),
+        pixDiscount: this.dinheiro(conta.descontoPix),
+        shippingPrice: this.dinheiro(conta.frete),
+        couponCode: conta.couponCode,
+        items: input.items.map((it) => ({
+          sku: it.sku,
+          size: it.size,
+          color: it.color ?? null,
+          quantity: Number(it.quantity),
+          unitPrice: this.dinheiro(it.unitPrice),
+        })),
         payment: {
           method: paymentInfo.method,
           ...(paymentInfo.installments ? { installments: paymentInfo.installments } : {}),
@@ -995,6 +1156,10 @@ export class LojaOrdersService {
             })),
         subtotal: ck.subtotal ?? null,
         discount: ck.discount ?? 0,
+        // Discriminado quando o pedido nasceu depois do bloco A; pedido antigo
+        // devolve 0 nos dois e o total continua certo.
+        couponDiscount: ck.descontoCupom ?? 0,
+        pixDiscount: ck.descontoPix ?? 0,
         ...(ck.couponCode ? { couponCode: ck.couponCode } : {}),
         shippingPrice: ck.shippingPrice ?? 0,
         total: this.dinheiro(order.totalAmount),
@@ -1070,6 +1235,15 @@ export class LojaOrdersService {
       .catch(() => undefined);
 
     this.logger.log(`[loja] pedido ${order.wcOrderNumber} PAGO — aguardando roteamento na retaguarda`);
+
+    /**
+     * Cupom com limite de uso só é QUEIMADO quando o dinheiro entra. Contar na
+     * criação do pedido gastaria a cota em PIX que expirou sem pagamento — e a
+     * campanha morreria antes de vender. Como este caminho é idempotente (sai
+     * em `already` acima), não conta duas vezes no reenvio do webhook.
+     */
+    const ck = this.parseJson<any>(order.checkoutInfo, {});
+    if (ck?.couponCode) void this.cupons.registrarUso(ck.couponCode);
 
     // Tracking nunca desfaz pagamento — fire-and-forget DE VERDADE (sem await):
     // quem chama isto é o webhook da Pagar.me, e segurar o ack esperando o

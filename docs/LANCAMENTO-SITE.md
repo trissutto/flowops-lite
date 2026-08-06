@@ -15,19 +15,26 @@ Refeito em 04/08/2026, **só o site novo** (`ecommerce/` + `backend/src/loja-ord
 
 ## A. Dinheiro — não pode errar (🔴) · **APROVADO PELO DONO 04/08**
 
-> **Status:** 7, 13, 14 e 15 **FEITOS** (commits `0408caa`). Itens **1–6 são o
-> próximo bloco** — vão juntos num commit só, porque mexem no mesmo ponto
-> (`criarPedido`) e checkout meio validado é pior que nenhum.
+> **Status:** 1–7, 13, 14 e 15 **FEITOS**. O bloco 1–6 saiu junto num commit só
+> (mexem todos no mesmo ponto, `criarPedido`, e checkout meio validado é pior
+> que nenhum).
 >
 > Duas decisões do dono nesta rodada: **PIX vale 2 HORAS** (não 30 min) e
 > **não existe valor mínimo de pedido**.
+>
+> 🔴 **ACHADO NO CAMINHO (06/08): o site anunciava 5% off no Pix e cobrava o
+> cheio.** Preço Pix no card, na PDP, na busca e a badge "5% off já aplicado"
+> no checkout — e nenhum código abatia nada. O dono mandou **aplicar de
+> verdade**: agora o desconto é calculado no servidor, aparece como linha no
+> resumo e o total cobrado é o mesmo que a tela mostra.
+> Desliga com `SITE_PIX_DESCONTO_PCT=0` (backend) + `NEXT_PUBLIC_PIX_DESCONTO_PCT=0` (site).
 
-1. ⬜ APROVADO — Revalidar `unitPrice` de cada item contra o catálogo antes de cobrar — hoje o preço vem do front (o código marca como pendência conhecida)
-2. ⬜ APROVADO — Revalidar subtotal, desconto, frete e total no servidor
-3. ⬜ APROVADO — Recalcular o cupom no servidor (não aceitar valor do cliente)
-4. ⬜ APROVADO — Travar preço entre "ver carrinho" e "pagar" (não mudar no meio)
-5. ⬜ APROVADO — Validar estoque no fechamento, não só ao adicionar
-6. ⬜ APROVADO — Não fechar pedido com peça despublicada durante a sessão
+1. ✅ FEITO — `unitPrice` relido do catálogo peça a peça antes de cobrar (`CarrinhoGuard`). Preço do cliente virou só sugestão
+2. ✅ FEITO — Subtotal, desconto, frete e total refeitos do zero no `reprecificar()`. O total do site virou **TETO**: se a nossa conta der mais, o pedido é recusado em vez de cobrar acima do que ela leu
+3. ✅ FEITO — Cupom recalculado no backend (`CupomService` → tabela `site_cupons`, env `SITE_CUPONS_JSON` ou os 3 códigos de sempre). Limite de uso só é queimado quando o pagamento confirma
+4. ✅ FEITO — Preço travado: catálogo mais caro **recusa** e manda recarregar; mais barato **cobra o menor** (nunca cobra a diferença em silêncio)
+5. ✅ FEITO — Estoque conferido no fechamento, por cor+tamanho. ⚠️ Junto: a PDP não mandava a cor pro carrinho (ia colada no nome) — corrigido, senão a conferência somava as cores todas
+6. ✅ FEITO — Peça despublicada durante a sessão não fecha pedido (só barra o `publicado = false` explícito: sem linha de curadoria a vitrine deixa vender, e travar aqui derrubaria venda boa)
 7. ✅ FEITO (2h) — PIX: expiração de 30 min liberando a reserva
 8. PIX: webhook idempotente (repetição do gateway não duplica pedido)
 9. Cartão recusado não cria pedido (regra existe — validar que se cumpre)

@@ -5,6 +5,8 @@ import { PagarmeModule } from '../pagarme/pagarme.module';
 import { CorreiosModule } from '../correios/correios.module';
 import { LojaOrdersService } from './loja-orders.service';
 import { LojaOrdersController } from './loja-orders.controller';
+import { CarrinhoGuardService } from './carrinho-guard.service';
+import { CupomService } from './cupom.service';
 
 /**
  * PEDIDOS DO E-COMMERCE NOVO (sprint 011).
@@ -21,7 +23,7 @@ import { LojaOrdersController } from './loja-orders.controller';
 @Module({
   imports: [PrismaModule, HttpModule, CorreiosModule, forwardRef(() => PagarmeModule)],
   controllers: [LojaOrdersController],
-  providers: [LojaOrdersService],
-  exports: [LojaOrdersService],
+  providers: [LojaOrdersService, CarrinhoGuardService, CupomService],
+  exports: [LojaOrdersService, CupomService],
 })
 export class LojaOrdersModule {}

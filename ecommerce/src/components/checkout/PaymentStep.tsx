@@ -3,6 +3,7 @@
 import { useId, useState } from 'react';
 import { Barcode, CreditCard, QrCode } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { PIX_DESCONTO_PCT } from '@/lib/commerce/pix';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { trackAddPaymentInfo, type TrackedItem } from '@/lib/tracking';
@@ -121,15 +122,19 @@ export function PaymentStep({ total, itemsTracked, defaults, onDone }: PaymentSt
       >
         {method === 'pix' && (
           <div className="flex flex-col gap-4">
-            {/* Badge informativa: o desconto REAL entra no total calculado
-                pelo server quando o pedido é criado (pixPrice do catálogo). */}
+            {/* O desconto é aplicado de verdade desde 06/08: entra como linha
+                no resumo e é recalculado pelo servidor antes de cobrar. Até
+                então esta badge prometia 5% que ninguém abatia. */}
             <Badge tone="success" className="self-start">
-              5% off já aplicado
+              {PIX_DESCONTO_PCT}% off já aplicado
             </Badge>
             <ul className="flex flex-col gap-2 text-body text-ink-soft">
               <li>Aprovação na hora — o QR Code aparece assim que você finalizar.</li>
               <li>Pague pelo app do seu banco, com QR Code ou copia-e-cola.</li>
-              <li>O código vale por 30 minutos.</li>
+              {/* 2 horas é a validade que o backend gera (PIX_EXPIRA_MIN=120,
+                  decisão do dono em 04/08). Dizer 30 min faria a cliente achar
+                  que perdeu o prazo e abandonar um pedido que ainda vale. */}
+              <li>O código vale por 2 horas.</li>
             </ul>
             <div className="pt-1">
               <Button type="button" block className="sm:w-auto" onClick={() => confirm({ method: 'pix' })}>

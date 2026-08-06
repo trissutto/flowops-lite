@@ -4,6 +4,7 @@ import { useState } from 'react';
 import Image from 'next/image';
 import { ChevronDown, TicketPercent, X } from 'lucide-react';
 import { BLUR_DATA_URL, cn, formatPrice } from '@/lib/utils';
+import { PIX_DESCONTO_PCT } from '@/lib/commerce/pix';
 import { Button } from '@/components/ui/Button';
 import type { CartLine } from '@/types';
 import type { CouponResult, ShippingQuote } from '@/types/checkout';
@@ -33,6 +34,8 @@ interface OrderSummaryProps {
   coupon: CouponResult | null;
   onApplyCoupon: (code: string) => void;
   onRemoveCoupon: () => void;
+  /** Desconto do Pix em reais — 0 fora do Pix ou antes de escolher. */
+  pixDiscount?: number;
   total: number;
   className?: string;
 }
@@ -45,6 +48,7 @@ export function OrderSummary({
   coupon,
   onApplyCoupon,
   onRemoveCoupon,
+  pixDiscount = 0,
   total,
   className,
 }: OrderSummaryProps) {
@@ -102,6 +106,15 @@ export function OrderSummary({
           <div className="flex justify-between text-success">
             <dt>Cupom {coupon.code}</dt>
             <dd className="tabular">−{formatPrice(coupon.discount)}</dd>
+          </div>
+        )}
+        {/* O 5% do Pix aparece como LINHA, não embutido no total: o desconto
+            que a cliente não vê discriminado é o desconto que ela acha que não
+            recebeu (e liga pra perguntar). */}
+        {pixDiscount > 0 && (
+          <div className="flex justify-between text-success">
+            <dt>Desconto Pix ({PIX_DESCONTO_PCT}%)</dt>
+            <dd className="tabular">−{formatPrice(pixDiscount)}</dd>
           </div>
         )}
         <div className="flex items-baseline justify-between border-t border-border pt-3">
