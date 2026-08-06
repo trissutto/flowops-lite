@@ -33,7 +33,7 @@ Refeito em 04/08/2026, **só o site novo** (`ecommerce/` + `backend/src/loja-ord
 
 ## B. Frete (🔴/🟠)
 
-16. 🔴 Endpoint público de cotação — o cálculo **JÁ EXISTE** (`correios.calcularFrete`, `maisEnvios.calcularFrete`), falta expor
+16. 🔴 Endpoint público de cotação — **o cálculo COM CONTRATO JÁ EXISTE**. Verificado 04/08: `CORREIOS_CONTRATO`, `CORREIOS_CARTAO_POSTAGEM`, `CORREIOS_DR` e `CORREIOS_CEP_ORIGEM` estão configurados, e o `calcularFrete` passa `nuContrato`+`nuDR` no preço e consulta o prazo oficial — é o preço NEGOCIADO, não tabela de balcão. Falta **só expor num endpoint público** (hoje a rota exige login) e trocar a fonte no site. Item pequeno, retorno grande
 17. 🔴 Trocar a fonte em `ecommerce/src/lib/commerce/frete.ts` (hoje tabela fixa por faixa de CEP)
 18. 🔴 Peso e dimensão reais por produto (hoje 200g/peça estimado)
 19. 🔴 Cotar com o CEP da loja que vai despachar
