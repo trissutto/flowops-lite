@@ -505,6 +505,150 @@ export class OrdersController {
     return { total: res.total, since: start.toISOString() };
   }
 
+  /**
+   * Detalhe do pedido do SITE NOVO, montado do banco — nunca do WooCommerce.
+   *
+   * Devolve exatamente o shape que a tela de pedido já consome (o mesmo do
+   * pedido da live), pra retaguarda não precisar saber de onde o pedido veio.
+   *
+   * Fonte dos valores: `checkoutInfo`, o snapshot gravado no fechamento. Ele
+   * tem endereço no formato original, frete escolhido e os descontos
+   * DISCRIMINADOS (cupom e Pix separados) — que é o que a conferência de caixa
+   * precisa e o `Order` não tem coluna pra guardar.
+   */
+  private async detalheEcommerce(pedido: any) {
+    const ler = (raw: any) => {
+      if (!raw) return {};
+      if (typeof raw === 'object') return raw;
+      try {
+        return JSON.parse(String(raw));
+      } catch {
+        return {};
+      }
+    };
+
+    const ck: any = ler(pedido.checkoutInfo);
+    const pi: any = ler(pedido.paymentInfo);
+    const enderecoWc: any = ler(pedido.shippingAddress);
+
+    /** Vocabulário da operação → slug que a tela de pedido entende. */
+    const STATUS_SLUG: Record<string, string> = {
+      awaiting_payment: 'pending',
+      processing: 'processing',
+      routing: 'processing',
+      separating: 'separacao',
+      shipped: 'completed',
+      delivered: 'completed',
+      pending: 'pending',
+      cancelled: 'cancelled',
+    };
+
+    const rastreio = (pedido.pickOrders || []).find((p: any) => p.trackingCode);
+    const lojas = await this.prisma.store.findMany({
+      where: { active: true },
+      select: { code: true, name: true },
+    });
+
+    const pagamento =
+      pi.method === 'card'
+        ? `Cartão de crédito${pi.installments ? ` (${pi.installments}x)` : ''}`
+        : pi.method === 'pix'
+          ? 'PIX'
+          : 'Site';
+
+    /**
+     * A NOTA vira o lugar de mostrar o que foi descontado. Sem isso, quem
+     * confere o caixa vê "R$ 79,90" e não tem como saber que houve 5% de Pix —
+     * e some com a diferença procurando erro que não existe.
+     */
+    const notas: string[] = [];
+    if (ck.couponCode) notas.push(`Cupom ${ck.couponCode}: −${this.reaisBr(ck.descontoCupom)}`);
+    if (Number(ck.descontoPix) > 0) notas.push(`Desconto Pix: −${this.reaisBr(ck.descontoPix)}`);
+
+    return {
+      id: pedido.wcOrderId,
+      number: pedido.wcOrderNumber,
+      status: STATUS_SLUG[pedido.status] ?? pedido.status,
+      dateCreatedGmt: (pedido.wcDateCreated ?? pedido.createdAt)?.toISOString?.() ?? null,
+      dateModifiedGmt: pedido.updatedAt?.toISOString?.() ?? null,
+      total: String(pedido.totalAmount ?? 0),
+      currency: 'BRL',
+      paymentMethodTitle: pagamento,
+      customerNote: notas.join(' · '),
+      billing: {
+        first_name: String(pedido.customerName || '').split(' ')[0] || '',
+        last_name: String(pedido.customerName || '').split(' ').slice(1).join(' '),
+        email: pedido.customerEmail || '',
+        phone: pedido.customerPhone || '',
+      },
+      // O `shippingAddress` do Order já está no shape do WooCommerce — é o que
+      // a etiqueta e a separação leem. Não desmontar aqui.
+      shipping: enderecoWc,
+      customerCpf: pedido.customerCpf || '',
+      lineItems: (pedido.items || []).map((it: any) => ({
+        id: it.id,
+        name: it.productName,
+        sku: it.sku,
+        quantity: it.quantity,
+        total: String((it.unitPrice ?? 0) * (it.quantity ?? 1)),
+        price: it.unitPrice,
+        image: null,
+      })),
+      shippingLines: [
+        {
+          method: ck.shipping?.label ?? pedido.shippingMethod ?? 'Entrega',
+          total: String(ck.shipping?.price ?? ck.shippingPrice ?? 0),
+        },
+      ],
+      tracking: {
+        number: rastreio?.trackingCode ?? pedido.trackingCode ?? '',
+        carrier: rastreio?.carrier ?? pedido.carrier ?? '',
+        url: '',
+      },
+      pickup: {
+        isPickup: !!pedido.isPickup,
+        storeCode: pedido.pickupStoreCode ?? null,
+        storeName: pedido.pickupStoreCode
+          ? lojas.find((s) => s.code === pedido.pickupStoreCode)?.name ?? null
+          : null,
+        shippingMethodTitle: pedido.shippingMethod ?? 'Entrega',
+        unresolvedCityName: null,
+      },
+      attribution: {
+        origem: 'Site',
+        source: [pedido.utmSource, pedido.utmMedium, pedido.utmCampaign]
+          .filter(Boolean)
+          .join(' / ') || '(Site) (direto)',
+      },
+      sellerId: pedido.sellerId ?? null,
+      sellerName: pedido.sellerName ?? null,
+    };
+  }
+
+  /** R$ com vírgula — só pra texto de nota, não pra conta. */
+  private reaisBr(v: any): string {
+    return `R$ ${(Number(v) || 0).toFixed(2).replace('.', ',')}`;
+  }
+
+  /**
+   * O pedido NASCEU AQUI e não existe no WooCommerce?
+   *
+   * Duas origens usam `wcOrderId` sintético só pra caber no campo `@unique Int`
+   * herdado do WC: a **live** (faixa 900M) e o **site novo** (950M). Nenhuma
+   * das duas pode ser buscada no WooCommerce — lá é 404, o axios estoura e a
+   * tela mostra "500: Internal server error".
+   *
+   * ⚠️ Existe porque a regra estava ESPALHADA como `source === 'live'` em
+   * cinco lugares deste arquivo. Quando a segunda faixa nasceu, quatro deles
+   * não foram atualizados — e o primeiro pedido real do site apareceu na fila
+   * de separação sem conseguir ser aberto nem separado.
+   *
+   * Origem sintética nova entra AQUI, num lugar só.
+   */
+  private origemSintetica(source?: string | null): boolean {
+    return source === 'live' || source === 'ecommerce';
+  }
+
   /** Detalhe de 1 pedido direto do WC. */
   @Get('wc/:wcId')
   async wcGetOne(@Param('wcId') wcId: string) {
@@ -517,6 +661,27 @@ export class OrdersController {
         pickOrders: { select: { trackingCode: true, carrier: true } },
       },
     });
+
+    /**
+     * ⚠️ PEDIDO DO SITE NOVO (`source='ecommerce'`, faixa 950M) — corrigido
+     * 06/08, com o primeiro pedido real na tela.
+     *
+     * A guarda logo abaixo cobria só `source === 'live'`. O pedido do
+     * e-commerce tem wcOrderId sintético pelo MESMO motivo (faixa 950M em vez
+     * de 900M) e caía direto no `wc.getOrder()` — o WooCommerce responde 404,
+     * o axios estoura, e a tela mostra "500: Internal server error".
+     *
+     * Sintoma exato: o pedido APARECE na fila de separação (a lista lê o
+     * banco), mas não abre. Ou seja, a retaguarda enxerga o pedido e não
+     * consegue trabalhar nele — sem etiqueta e sem NF-e.
+     *
+     * O comentário acima já avisava ("buscar lá dava 500"); faltou estender a
+     * regra quando a segunda faixa sintética nasceu.
+     */
+    if (liveLocal && liveLocal.source === 'ecommerce') {
+      return this.detalheEcommerce(liveLocal);
+    }
+
     if (liveLocal?.source === 'live') {
       let addr: any = {};
       try { addr = JSON.parse(liveLocal.shippingAddress || '{}'); } catch {}
@@ -712,14 +877,21 @@ export class OrdersController {
   ) {
     const wcOrderId = Number(wcId);
 
-    // Pedido da LIVE (source='live', wcOrderId sintético 900M+): existe SÓ no
-    // Flow — nunca toca o WooCommerce. As mesmas ações (gerar separação, nota)
-    // são aplicadas localmente.
+    /**
+     * Pedido de origem SINTÉTICA (live 900M, site novo 950M): existe SÓ no
+     * Flow — nunca toca o WooCommerce. As mesmas ações (gerar separação, nota)
+     * são aplicadas localmente.
+     *
+     * ⚠️ 06/08: chamava-se `isLive` e testava só `'live'`. Com o pedido do site
+     * novo, mudar o status tentaria escrever num pedido que o WooCommerce não
+     * tem — 404 na escrita, e o status ficaria dessincronizado sem ninguém ver.
+     * O nome mudou junto com a regra: `isLive` mentia sobre o que a variável é.
+     */
     const localForSource = await (this.prisma as any).order.findUnique({
       where: { wcOrderId },
       select: { id: true, source: true, status: true },
     });
-    const isLive = localForSource?.source === 'live';
+    const isLive = this.origemSintetica(localForSource?.source);
 
     // 1) Se está indo pra 'separacao', garante pick-orders criados ANTES.
     //    Se não conseguir (sem estoque etc), aborta sem mexer no WC — não faz
@@ -911,8 +1083,9 @@ export class OrdersController {
       };
     }
 
-    // Pedido da LIVE: já existe local com itens — roteia direto, sem WC.
-    if (existing && (existing as any).source === 'live') {
+    // Origem SINTÉTICA (live 900M, site novo 950M): já existe local com itens
+    // — roteia direto, sem WC. Buscar lá é 404 e derruba o roteamento.
+    if (existing && this.origemSintetica((existing as any).source)) {
       try {
         const preview = await this.routing.previewRoute(existing.id);
         if (!preview.success) {
@@ -936,7 +1109,7 @@ export class OrdersController {
           })),
         };
       } catch (e: any) {
-        return { ok: false, message: e?.message || 'erro no routing do pedido da live' };
+        return { ok: false, message: e?.message || 'erro no roteamento do pedido' };
       }
     }
 
@@ -1064,21 +1237,33 @@ export class OrdersController {
   ) {
     const wcOrderId = Number(wcId);
 
-    // Pedido da LIVE: monta o MESMO preview a partir do Order local — não
-    // existe no WooCommerce (wcOrderId sintético 900M+).
+    /**
+     * Pedido com wcOrderId SINTÉTICO monta o preview do Order local — ele não
+     * existe no WooCommerce e buscar lá estoura 404 → 500.
+     *
+     * ⚠️ 06/08: a guarda dizia só `'live'` (faixa 900M). O pedido do site novo
+     * usa a faixa 950M pelo mesmo motivo e caía no `wc.getOrder()`. Como este
+     * é o endpoint do botão **1-CLIQUE**, o efeito não era só a tela não
+     * abrir: era a SEPARAÇÃO não sair.
+     *
+     * Duas faixas sintéticas, uma regra: qualquer origem que não seja o
+     * WooCommerce se resolve aqui dentro.
+     */
     const local = await (this.prisma as any).order.findUnique({
       where: { wcOrderId },
       include: { items: true },
     });
-    if (local?.source === 'live') {
+    if (this.origemSintetica(local?.source)) {
       let addr: any = {};
       try { addr = JSON.parse(local.shippingAddress || '{}'); } catch { /* endereço cru */ }
+      // Rótulo só informativo no preview; o meio real está no `paymentInfo`.
+      const meioPagamento = local.source === 'live' ? 'PIX (Live)' : 'Site';
       return this.routing.previewSeparationForWc({
         wcOrderId,
         wcOrderNumber: String(local.wcOrderNumber ?? wcOrderId),
         orderDateIso: (local.wcDateCreated ?? local.createdAt).toISOString(),
         totalAmount: Number(local.totalAmount ?? 0),
-        paymentMethod: 'PIX (Live)',
+        paymentMethod: meioPagamento,
         items: (local.items || []).map((li: any) => ({
           sku: String(li.sku ?? '').trim(),
           quantity: Number(li.quantity ?? 0),
@@ -1089,7 +1274,7 @@ export class OrdersController {
         customerPhone: local.customerPhone ?? null,
         customerEmail: local.customerEmail ?? null,
         customerCpf: local.customerCpf ?? null,
-        shippingMethod: local.shippingMethod ?? 'LIVE',
+        shippingMethod: local.shippingMethod ?? (local.source === 'live' ? 'LIVE' : 'Entrega'),
         isPickup: !!local.isPickup,
         pickupStoreCode: local.pickupStoreCode ?? null,
         preferStoreCode: preferStoreCode?.trim() || null,
@@ -1502,10 +1687,10 @@ export class OrdersController {
     }
 
     // 1) Garante o Order local com items.
-    //    Pedido da LIVE (source='live') JÁ existe local — não busca no WC
-    //    (wcOrderId sintético; buscar lá dava 500 na aprovação da quebra).
+    //    Pedido de origem SINTÉTICA (live 900M, site novo 950M) JÁ existe
+    //    local — não busca no WC (buscar lá dava 500 na aprovação da quebra).
     let orderId: string;
-    if (existing && (existing as any).source === 'live') {
+    if (existing && this.origemSintetica((existing as any).source)) {
       orderId = existing.id;
     } else {
       const o = await this.wc.getOrder(wcOrderId);

@@ -2589,11 +2589,30 @@ export class PickOrdersService {
     //
     //  Falha aqui NÃO derruba a ação da loja — só loga e anexa warning na resposta.
     // ════════════════════════════════════════════════════════════════════════
-    const isLiveOrder = (updated.order as any)?.source === 'live';
+    /**
+     * ⚠️ 06/08 — passou a cobrir o SITE NOVO também.
+     *
+     * A variável se chamava `isLiveOrder` e testava só `source === 'live'`.
+     * Ela guarda a sincronia de status com o WooCommerce, e a razão de existir
+     * é o `wcOrderId` SINTÉTICO: pedido da live (900M) não existe lá.
+     *
+     * O pedido do site novo (950M) tem exatamente o mesmo problema. Sem esta
+     * correção, toda mudança de status de pedido do site tentaria escrever num
+     * pedido inexistente no WooCommerce e voltaria 404 — não derruba a ação da
+     * loja (o bloco tem catch e vira warning), mas encheria a resposta de aviso
+     * falso em TODO pedido do site. Aviso que aparece sempre é aviso que
+     * ninguém lê — e é assim que o dia em que ele for verdadeiro passa batido.
+     */
+    const origem = (updated.order as any)?.source;
+    const naoExisteNoWc = origem === 'live' || origem === 'ecommerce';
+    // Separado de propósito: o espelho abaixo é MESMO da live (depende do
+    // carrinho), enquanto a trava do WooCommerce vale pras duas origens.
+    // Manter um `isLiveOrder` valendo pelas duas era o que escondia o furo.
+    const ehDaLive = origem === 'live';
     // Pedido da LIVE: espelha o status de volta no carrinho da live (console
     // da operadora/dashboards) — e NUNCA sincroniza com o WooCommerce (o
     // wcOrderId é sintético; não existe no site).
-    if (isLiveOrder && (updated.order as any)?.liveCartId) {
+    if (ehDaLive && (updated.order as any)?.liveCartId) {
       const liveCartId = (updated.order as any).liveCartId as string;
       if (input.status === 'shipped' && allShipped) {
         await (this.prisma as any).livePdvCart
@@ -2615,7 +2634,7 @@ export class PickOrdersService {
     }
 
     const wcOrderId =
-      !isLiveOrder && updated.order?.wcOrderId ? Number(updated.order.wcOrderId) : null;
+      !naoExisteNoWc && updated.order?.wcOrderId ? Number(updated.order.wcOrderId) : null;
     const storeLabel = updated.store
       ? `${updated.store.name} (${updated.store.code})`
       : 'Loja';

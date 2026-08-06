@@ -71,7 +71,7 @@ Refeito em 04/08/2026, **só o site novo** (`ecommerce/` + `backend/src/loja-ord
 16. ✅ FEITO — Endpoint público de cotação (`POST /api/public/loja/frete`). Deixou de ser proxy da cotação crua e virou a **FONTE ÚNICA** do frete: tabela promocional + cotação do contrato + régua do frete grátis + dias de separação, tudo pronto pro site desenhar
 17. ✅ FEITO — A tabela promocional virou **cadastro** (`site_frete_promo`), não código. **DEMAIS ESTADOS = cotação real do contrato** (decisão do dono, 06/08 — o buraco que a lista deixava "a definir"). A tabela do `frete.ts` do site foi rebaixada a paraquedas
 18. ✅ FEITO — Peso e caixa do dono: **250 g/peça**, **28 larg × 40 compr**, altura por faixa
-19. ✅ FEITO — Origem = **MATRIZ, CEP 11746-692** (decisão do dono; uma origem só mantém a cotação estável). ⚠️ CONFERIR se `CORREIOS_CEP_ORIGEM` no Railway está com esse CEP
+19. ✅ FEITO E CONFERIDO NO RAILWAY (06/08) — `CORREIOS_CEP_ORIGEM = 11746692`, a matriz, e `CORREIOS_DR = 72`. Uma origem só mantém a cotação estável
 20. ✅ FEITO — Correios fora do ar cai na estimativa interna, marcada `estimado`, e o site tem MAIS um paraquedas (tabela local) se o backend também cair. E a promocional — a maior parte dos pedidos — nem depende da cotação pra existir
 21. ✅ FEITO — Cache por CEP+peso+altura, 20 min, teto de 500 entradas
 22. ✅ FEITO — Config editável (`site_frete_config`): liga/desliga, mínimo, janela de datas e recorte de UF. **Régua nova: R$ 499,90** (dono, 06/08 — era 399,90 chumbado). Grátis zera sempre a econômica mais barata, nunca o expresso
@@ -176,8 +176,26 @@ Refeito em 04/08/2026, **só o site novo** (`ecommerce/` + `backend/src/loja-ord
 > falta neles é o **teste ponta a ponta** do item 112, com pedido de verdade.
 > **73 e 74 são configuração no n8n**, não código nosso.
 
-71. ⬜ APROVADO — Pedido do site cair na fila da loja certa — roteamento **JÁ EXISTE**
-72. ⬜ APROVADO — Etiqueta e NF-e do pedido do site — **JÁ EXISTE** em pick-orders
+> 🔴 **O TESTE DO DONO ACHOU O BUG QUE NENHUM BUILD ACHARIA (06/08).** O pedido
+> `#LP-000002` apareceu certinho na fila de separação — e **não abria**: "500:
+> Internal server error".
+>
+> Causa: `wcOrderId` do site novo é SINTÉTICO (faixa 950M), igual ao da live
+> (900M), justamente porque o pedido **não existe no WooCommerce**. O código
+> tinha essa guarda em CINCO lugares — e todos os cinco diziam só
+> `source === 'live'`. Quando a segunda faixa sintética nasceu, ninguém
+> estendeu a regra. O pedido do site caía no `wc.getOrder()`, o WooCommerce
+> respondia 404, o axios estourava e a tela mostrava 500.
+>
+> **Não era só a tela.** Os mesmos cinco pontos são: abrir o pedido,
+> `prepare-separation` (o botão **1-CLIQUE**), o roteamento, a aprovação da
+> quebra e a sincronia de status. Ou seja: a retaguarda **enxergava** o pedido
+> e não conseguia **trabalhar** nele — sem separação, sem etiqueta, sem NF-e.
+>
+> A regra virou UMA função (`origemSintetica`). Faixa nova entra num lugar só.
+
+71. ✅ CONFIRMADO NO PEDIDO REAL — `#LP-000002` (retirada, R$ 79,90) na fila de Pedidos & Separação, com badge `ECOMMERCE` e filtro próprio
+72. 🔶 DESBLOQUEADO, FALTA REPETIR O TESTE — os cinco pontos que impediam abrir/separar foram corrigidos. Etiqueta e NF-e só ficam ✅ quando o pedido for aberto e separado de fato
 73. ⬜ APROVADO — E-mail de confirmação **+ WhatsApp** — o WhatsApp já roda no WooCommerce (workflow n8n **"Pedido Pago"**); reapontar o gatilho pro pedido do site
 74. ⬜ APROVADO — Aviso de "pedido enviado" com rastreio, **e-mail + WhatsApp** — já roda no WooCommerce (workflow n8n **"Código de rastreio"**); reapontar
 75. ✅ FEITO — Cron de hora em hora + `GET /admin/loja/parados?horas=4`. É o alerta mais difícil de perceber sem ele: o pedido pagou, virou `processing` e ficou na fila — **status válido, log limpo, nenhum erro em lugar nenhum** — e a cliente esperando. Não conserta de propósito (roteamento é decisão da matriz, e cron escolhendo loja sozinho é pior que pedido parado); ele GRITA, que é o que faltava pro responsável do item 111 ter o que olhar. Janela de 7 dias pra não repetir backlog eternamente e virar alarme que ninguém lê. `LOJA_ALERTA_PARADO=0` desliga
@@ -261,12 +279,33 @@ Refeito em 04/08/2026, **só o site novo** (`ecommerce/` + `backend/src/loja-ord
 > ao responsável **o que olhar**, e isso o item 75 fez.
 
 111. 🔶 FERRAMENTA PRONTA, FALTA A PESSOA — `GET /admin/loja/parados?horas=4` lista os pedidos pagos que não andaram, e o cron grita de hora em hora. Falta o dono **nomear quem abre isso todo dia**. Sem nome, "alguém olha" não acontece
-112. ⬜ APROVADO — Pedido de teste ponta a ponta antes de abrir
+112. ✅ FEITO PELO DONO (06/08) — pedido de teste ponta a ponta passou. ⚠️ **O que o "deu certo" cobre precisa ser confirmado item a item**: o pedido nascer e ser pago já valida o bloco A inteiro, mas **71, 72, 78 e 79** só ficam fechados se o teste também tiver caído na fila da loja, gerado etiqueta/NF-e e (se dividido) feito o split. Ver a conferência abaixo
 113. ⬜ APROVADO — Treinamento das lojas no fluxo do site
 114. ⬜ APROVADO — Canal de atendimento com resposta definida
 115. ⬜ APROVADO — Runbook: o que fazer quando o gateway cai
 
 ---
+
+## Conferência do ambiente (Railway, 06/08 20:20)
+
+Medido com `railway variables`, não estimado:
+
+| Env | Estado | Efeito |
+|---|---|---|
+| `CORREIOS_CEP_ORIGEM` | `11746692` | ✅ matriz, como o dono decidiu |
+| `CORREIOS_DR` | `72` | ✅ contrato ativo |
+| `SITE_PIX_DESCONTO_PCT` | ausente | ✅ **vale o padrão: 5% ligado** |
+| `LOJA_PAGAMENTO_RECONCILE` | ausente | ✅ reconcile de pagamento LIGADO |
+| `LOJA_CONCILIACAO` | ausente | ✅ conciliação diária LIGADA (07h05) |
+| `LOJA_ALERTA_PARADO` | ausente | ✅ alerta de pedido parado LIGADO |
+| `LOJA_ORDER_TOKEN` · `ECOMMERCE_URL` | configuradas | ✅ checkout e `purchase` server-side de pé |
+
+**Todas as travas desta rodada nascem ligadas** — as envs só existem pra
+DESLIGAR (`=0`). Não há nada pra configurar pra o sistema funcionar.
+
+> ⚠️ Não consigo ler o banco de produção daqui: o `DATABASE_URL` aponta pra
+> `postgres.railway.internal`, que só resolve dentro da rede do Railway. Então
+> a conferência do pedido de teste (abaixo) é do dono, não minha.
 
 ## O que sobrou (06/08/2026)
 

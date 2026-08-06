@@ -41,6 +41,8 @@ type Props = {
   onSwatchChange: (s: SwatchCor) => void;
   /** Avisa o pai quando a galeria muda — o status "faltam fotos" depende disso. */
   onFotosChange?: (fotos: FotoCor[]) => void;
+  /** O pai grava a bolinha sozinho; isto é só o "salvando… / salva" na tela. */
+  swatchSave?: 'salvando' | 'ok' | null;
 };
 
 /** Ferramenta ativa sobre a foto. `null` = só olhando. */
@@ -117,7 +119,7 @@ export function Bolinha({
 }
 
 export default function FotosDaCor({
-  refSku, cor, fotosIniciais, swatch, onSwatchChange, onFotosChange,
+  refSku, cor, fotosIniciais, swatch, onSwatchChange, onFotosChange, swatchSave,
 }: Props) {
   const [fotos, setFotos] = useState<FotoCor[]>(fotosIniciais);
   const [ocupado, setOcupado] = useState(false);
@@ -414,7 +416,11 @@ export default function FotosDaCor({
         <div className="flex items-center gap-3">
           <Bolinha swatch={swatch} capaUrl={capa} size={32} />
           <div className="min-w-0">
-            <p className="text-[10px] font-bold text-slate-600 uppercase">Bolinha no site</p>
+            <p className="text-[10px] font-bold text-slate-600 uppercase">
+              Bolinha no site
+              {swatchSave === 'salvando' && <span className="ml-2 font-normal normal-case text-slate-400">salvando…</span>}
+              {swatchSave === 'ok' && <span className="ml-2 font-normal normal-case text-green-600">salva ✓</span>}
+            </p>
             <p className="text-[11px] text-slate-500">
               {lendoIa
                 ? 'Lendo a cor na foto…'
@@ -422,7 +428,7 @@ export default function FotosDaCor({
                   ? `Recorte da foto (estampa)${sugestao?.nome ? ` · ${sugestao.nome}` : ''}`
                   : swatch.corHex
                     ? `${sugestao?.nome ? `${sugestao.nome} · ` : ''}${swatch.corHex}`
-                    : 'Ainda sem cor — suba uma foto ou pegue no conta-gotas'}
+                    : 'Ainda sem cor — a primeira foto pinta sozinha, ou pegue no conta-gotas'}
             </p>
             {sugestao?.confianca === 'baixa' && (
               <p className="text-[11px] text-amber-700">

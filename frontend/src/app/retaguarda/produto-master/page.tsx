@@ -1160,25 +1160,88 @@ function FichaDaCor({
     swatchFocoX: fichaCor?.swatchFocoX ?? null,
     swatchFocoY: fichaCor?.swatchFocoY ?? null,
   });
+  const [swatchSave, setSwatchSave] = useState<'salvando' | 'ok' | null>(null);
   const semFotos = fotos.length === 0;
+
+  const urlCor = `/produto-ficha/${encodeURIComponent(ref_)}/cor/${encodeURIComponent(cor)}?marca=${encodeURIComponent(marca)}`;
+
+  /** Resposta de qualquer PATCH/GET → estado local + pai, numa passada só. */
+  const aplicarFicha = useCallback((f: Ficha) => {
+    const c = f.cores?.find((x) => x.cor === cor);
+    if (c) {
+      // 'sem_fotos' é calculado e não existe no select — cai no "Fora do site".
+      setStatus(c.statusPublicacao === 'sem_fotos' ? 'nao_publicar' : c.statusPublicacao);
+    }
+    onSalvo(f);
+  }, [cor, onSalvo]);
+
+  /**
+   * BOLINHA SALVA SOZINHA (pedido do dono, 06/08): o resultado da IA, do
+   * conta-gotas, do recorte e do seletor "à mão" grava sem passar pelo botão.
+   * Debounce curto porque o <input type=color> dispara a cada arrasto do
+   * mouse dentro do picker.
+   */
+  const swatchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (swatchTimer.current) clearTimeout(swatchTimer.current); }, []);
+
+  function agendarSwatch(s: SwatchCor) {
+    if (swatchTimer.current) clearTimeout(swatchTimer.current);
+    setSwatchSave('salvando');
+    swatchTimer.current = setTimeout(async () => {
+      try {
+        const f = await api<Ficha>(urlCor, { method: 'PATCH', body: JSON.stringify(s) });
+        aplicarFicha(f);
+        setSwatchSave('ok');
+      } catch (e: any) {
+        setSwatchSave(null);
+        setErro(e?.message || 'Não consegui salvar a bolinha');
+      }
+    }, 600);
+  }
+
+  /** Publicação vale no clique — era o "mudei e esqueci de salvar" clássico. */
+  async function mudarStatus(novo: string) {
+    const anterior = status;
+    setStatus(novo);
+    setErro(null);
+    try {
+      const f = await api<Ficha>(urlCor, {
+        method: 'PATCH',
+        body: JSON.stringify({ statusPublicacao: novo }),
+      });
+      aplicarFicha(f);
+    } catch (e: any) {
+      setStatus(anterior);
+      setErro(e?.message || 'Não consegui mudar a publicação');
+    }
+  }
+
+  /**
+   * Depois que a galeria muda, o backend pode ter publicado a peça sozinho
+   * (upload = publicar). Busca a ficha fresca pra tela contar essa verdade —
+   * sem isso o select seguia em "Fora do site" com a peça já no ar.
+   */
+  async function sincronizarFicha() {
+    try {
+      const f = await api<Ficha>(`/produto-ficha/${encodeURIComponent(ref_)}?marca=${encodeURIComponent(marca)}`);
+      if (f) aplicarFicha(f);
+    } catch { /* informativo — a próxima interação sincroniza */ }
+  }
 
   async function salvar() {
     setSalvando(true);
     setErro(null);
     try {
-      const f = await api<Ficha>(
-        `/produto-ficha/${encodeURIComponent(ref_)}/cor/${encodeURIComponent(cor)}?marca=${encodeURIComponent(marca)}`,
-        {
-          method: 'PATCH',
-          body: JSON.stringify({
-            tituloComercial: titulo || null,
-            youtubeUrl: youtube || null,
-            statusPublicacao: status,
-            ...swatch,
-          }),
-        },
-      );
-      onSalvo(f);
+      const f = await api<Ficha>(urlCor, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          tituloComercial: titulo || null,
+          youtubeUrl: youtube || null,
+          statusPublicacao: status,
+          ...swatch,
+        }),
+      });
+      aplicarFicha(f);
     } catch (e: any) {
       setErro(e?.message || 'Não consegui salvar');
     } finally {
@@ -1210,9 +1273,9 @@ function FichaDaCor({
           <label className="text-[10px] font-bold text-slate-600 uppercase">Publicação</label>
           <select
             value={status}
-            onChange={(e) => setStatus(e.target.value)}
+            onChange={(e) => void mudarStatus(e.target.value)}
             disabled={semFotos}
-            title={semFotos ? 'Sem foto o site não tem o que mostrar' : undefined}
+            title={semFotos ? 'Sem foto o site não tem o que mostrar' : 'Vale na hora — sem precisar salvar'}
             className="px-2 py-2 border rounded text-sm bg-white disabled:opacity-50"
           >
             <option value="nao_publicar">Fora do site</option>
@@ -1236,21 +1299,27 @@ function FichaDaCor({
         cor={cor}
         fotosIniciais={fichaCor?.fotos ?? []}
         swatch={swatch}
-        onSwatchChange={setSwatch}
-        onFotosChange={setFotos}
+        onSwatchChange={(s) => { setSwatch(s); agendarSwatch(s); }}
+        onFotosChange={(novas) => { setFotos(novas); void sincronizarFicha(); }}
+        swatchSave={swatchSave}
       />
 
       {erro && <p className="text-xs text-rose-700">{erro}</p>}
 
-      <button
-        type="button"
-        onClick={() => void salvar()}
-        disabled={salvando}
-        className="inline-flex items-center gap-1.5 text-xs font-bold px-4 py-2 rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50"
-      >
-        {salvando ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-        Salvar cor
-      </button>
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={() => void salvar()}
+          disabled={salvando}
+          className="inline-flex items-center gap-1.5 text-xs font-bold px-4 py-2 rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50"
+        >
+          {salvando ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+          Salvar título e vídeo
+        </button>
+        <span className="text-[11px] text-slate-400">
+          Fotos, bolinha e publicação já salvam sozinhas.
+        </span>
+      </div>
     </div>
   );
 }
