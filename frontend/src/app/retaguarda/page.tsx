@@ -18,7 +18,7 @@ import {
   LayoutDashboard, BarChart3, DollarSign, Users, ShoppingBag,
   Shuffle, Truck, AlertTriangle, FileSearch, Activity, ArrowLeft,
   Globe2, Store, Settings, Megaphone, CreditCard, ClipboardList,
-  Package, Bell, Network, Tag,
+  Package, Bell, Network, Tag, Building2,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import AdminShell, { type AdminNavItem } from '@/components/AdminShell';
@@ -54,6 +54,9 @@ const GESTAO_ITEMS: GestaoItem[] = [
   { href: '/retaguarda/distribuicao-estoque', label: 'Distribuição',      subtitle: 'Estoque PLUS',  description: 'Detecta desequilíbrios entre lojas', tone: 'rose',   icon: Package         },
   // "Financeiro" (analítico WC) movido pro hub /site — é financeiro do e-commerce.
   { href: '/retaguarda/contas-pagar',         label: 'Contas a Pagar',    subtitle: 'Financeiro',    description: 'Vencimentos, fornecedores e funcionárias', tone: 'green', icon: DollarSign },
+  // A tela existe desde 01/08 mas ficou fora do hub — só chegava por URL
+  // digitada, e o dono pediu a "tela de cadastro" sem saber que já existia.
+  { href: '/retaguarda/fornecedores',         label: 'Fornecedores',      subtitle: 'Cadastro',      description: 'Criar e editar · réplica pro Giga na fila', tone: 'green', icon: Building2 },
   { href: '/retaguarda/financeiro/transferencias', label: 'Transferências', subtitle: 'Inter-lojas',  description: 'Royalties + fechamento',        tone: 'green',  icon: DollarSign      },
   { href: '/retaguarda/transferencias-rede-franquia', label: 'REDE × Franquia', subtitle: 'Conta corrente', description: 'Acerto da franqueada + extrato analítico', tone: 'teal', icon: Network },
   { href: '/relatorios/vendedoras',           label: 'Vendedoras',        subtitle: 'Ranking',       description: 'Vendas por mês',                tone: 'rose',   icon: Users           },
