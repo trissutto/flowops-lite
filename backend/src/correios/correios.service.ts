@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
 import { CorreiosAuthService } from './correios-auth.service';
-import { encurtarCampoEndereco, encurtarNomeDestinatario } from '../lib/nome-destinatario';
+import { encurtarCampoEndereco, encurtarNomeDestinatario, LIMITES_TRANSPORTE } from '../lib/nome-destinatario';
 
 /**
  * Serviços dos Correios (API CWS) — cálculo de frete (preço + prazo) e
@@ -213,11 +213,10 @@ export class CorreiosService {
     const foneRem = splitFone(input.remetente.telefone);
     const foneDest = splitFone(input.destinatario.telefone);
 
-    // O CWS VALIDA o tamanho de cada campo e recusa a pré-postagem inteira
-    // ("excesso de caracteres" — caso Sorocaba 05/08, que estourou no
-    // ENDEREÇO, não no nome). Limites do manual: logradouro 50, bairro 30,
-    // cidade 30, complemento 30, número 6. Abreviação antes do corte
-    // ("Avenida Doutor"→"Av. Dr.") — e fica no log quando mexeu.
+    // LIMITE ÚNICO pra todos os campos e provedores (dono 06/08: "melhor
+    // limitar todos pelo Mais Envios") — ver LIMITES_TRANSPORTE. Abreviação
+    // antes do corte ("Avenida Doutor"→"Av. Dr.") — e fica no log quando mexeu.
+    const L = LIMITES_TRANSPORTE;
     const endLimite = (rotulo: string, v: any, max: number) => {
       const original = String(v || '').replace(/\s+/g, ' ').trim();
       const curto = encurtarCampoEndereco(original, max);
@@ -229,32 +228,31 @@ export class CorreiosService {
 
     const body: any = {
       remetente: {
-        nome: encurtarNomeDestinatario(input.remetente.nome, 50),
+        nome: encurtarNomeDestinatario(input.remetente.nome, L.nome),
         cpfCnpj: input.remetente.cnpjCpf.replace(/\D/g, ''),
         ...(foneRem.numero ? { dddCelular: foneRem.ddd, celular: foneRem.numero } : {}),
         endereco: {
           cep: input.remetente.cep.replace(/\D/g, ''),
-          logradouro: endLimite('logradouro remetente', input.remetente.endereco, 50),
-          numero: String(input.remetente.numero || 'S/N').trim().slice(0, 6),
-          bairro: endLimite('bairro remetente', input.remetente.bairro, 30),
-          cidade: endLimite('cidade remetente', input.remetente.cidade, 30),
+          logradouro: endLimite('logradouro remetente', input.remetente.endereco, L.logradouro),
+          numero: String(input.remetente.numero || 'S/N').trim().slice(0, L.numero),
+          bairro: endLimite('bairro remetente', input.remetente.bairro, L.bairro),
+          cidade: endLimite('cidade remetente', input.remetente.cidade, L.cidade),
           uf: input.remetente.uf,
         },
       },
       destinatario: {
-        // Limite dos Correios é 50. Cortar seco deixava a etiqueta com nome
-        // partido no meio da palavra ("...Marques da Sil") — o helper abrevia
-        // preservando primeiro nome e último sobrenome.
-        nome: encurtarNomeDestinatario(input.destinatario.nome, 50),
+        // Nome abrevia preservando primeiro nome e último sobrenome — cortar
+        // seco deixava a etiqueta com nome partido ("...Marques da Sil").
+        nome: encurtarNomeDestinatario(input.destinatario.nome, L.nome),
         ...(input.destinatario.cpfCnpj ? { cpfCnpj: input.destinatario.cpfCnpj.replace(/\D/g, '') } : {}),
         ...(foneDest.numero ? { dddCelular: foneDest.ddd, celular: foneDest.numero } : {}),
         endereco: {
           cep: input.destinatario.cep.replace(/\D/g, ''),
-          logradouro: endLimite('logradouro destinatário', input.destinatario.endereco, 50),
-          numero: String(input.destinatario.numero || 'S/N').trim().slice(0, 6),
-          complemento: endLimite('complemento destinatário', input.destinatario.complemento || '', 30),
-          bairro: endLimite('bairro destinatário', input.destinatario.bairro, 30),
-          cidade: endLimite('cidade destinatário', input.destinatario.cidade, 30),
+          logradouro: endLimite('logradouro destinatário', input.destinatario.endereco, L.logradouro),
+          numero: String(input.destinatario.numero || 'S/N').trim().slice(0, L.numero),
+          complemento: endLimite('complemento destinatário', input.destinatario.complemento || '', L.complemento),
+          bairro: endLimite('bairro destinatário', input.destinatario.bairro, L.bairro),
+          cidade: endLimite('cidade destinatário', input.destinatario.cidade, L.cidade),
           uf: input.destinatario.uf,
         },
       },

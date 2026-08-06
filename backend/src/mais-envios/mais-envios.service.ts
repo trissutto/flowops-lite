@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
 import { MaisEnviosAuthService } from './mais-envios-auth.service';
-import { encurtarCampoEndereco, encurtarNomeDestinatario } from '../lib/nome-destinatario';
+import { encurtarCampoEndereco, encurtarNomeDestinatario, LIMITES_TRANSPORTE } from '../lib/nome-destinatario';
 
 /**
  * Serviços do Mais Envios (portalmaisenvios.com.br) — cotação de frete,
@@ -162,7 +162,7 @@ export class MaisEnviosService {
     // caracteres ("Tamanho do campo nome do destinatário inválido. Máximo 40").
     // Nome de cliente do site passa disso com facilidade — o pedido #197922
     // travou com 44. Ver `encurtarNomeDestinatario`.
-    const nomeDestino = encurtarNomeDestinatario(d.nome, 40);
+    const nomeDestino = encurtarNomeDestinatario(d.nome, LIMITES_TRANSPORTE.nome);
     if (nomeDestino !== String(d.nome || '').trim()) {
       this.logger.warn(
         `[mais-envios] nome do destinatário encurtado pro limite de 40: ` +
@@ -198,16 +198,14 @@ export class MaisEnviosService {
         contact: nomeDestino,
         name: nomeDestino,
         cep: cepDash(d.cep),
-        // Mesmo tratamento do nome pros campos de ENDEREÇO (caso Sorocaba
-        // 05/08 nos Correios — aqui os limites não são documentados, então
-        // valem os do CWS, que são os mais apertados do mercado: qualquer
-        // transportadora aceita 50/30/30).
-        address: encurtarCampoEndereco(d.endereco, 50),
-        number: String(d.numero || 'S/N').trim().slice(0, 6),
-        neighborhood: encurtarCampoEndereco(d.bairro || '', 30),
-        city: encurtarCampoEndereco(d.cidade || '', 30),
+        // LIMITE ÚNICO de todos os provedores (LIMITES_TRANSPORTE) — dono
+        // 06/08: "melhor limitar todos pelo Mais Envios".
+        address: encurtarCampoEndereco(d.endereco, LIMITES_TRANSPORTE.logradouro),
+        number: String(d.numero || 'S/N').trim().slice(0, LIMITES_TRANSPORTE.numero),
+        neighborhood: encurtarCampoEndereco(d.bairro || '', LIMITES_TRANSPORTE.bairro),
+        city: encurtarCampoEndereco(d.cidade || '', LIMITES_TRANSPORTE.cidade),
         state: d.uf || '',
-        extent: encurtarCampoEndereco(d.complemento || '', 30),
+        extent: encurtarCampoEndereco(d.complemento || '', LIMITES_TRANSPORTE.complemento),
       },
       contact: {
         save: false,

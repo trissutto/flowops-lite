@@ -23,6 +23,24 @@
  * último sobrenome nunca são abreviados.
  */
 /**
+ * LIMITE ÚNICO pra TODAS as transportadoras (decisão do dono, 06/08: "melhor
+ * limitar todos pelo Mais Envios"). Cada provedor valida um teto diferente e
+ * recusa a pré-postagem inteira quando estoura; em vez de manter um mapa por
+ * provedor, vale sempre o MAIS APERTADO conhecido — o que cabe nele cabe em
+ * qualquer um. Nome 40 é o do Mais Envios (provado no pedido #197922);
+ * endereço são os do manual CWS dos Correios (caso Sorocaba 05/08, que
+ * estourou no endereço/complemento).
+ */
+export const LIMITES_TRANSPORTE = {
+  nome: 40,        // Mais Envios recusa acima de 40 (Correios aceita 50)
+  logradouro: 50,
+  numero: 6,
+  complemento: 30,
+  bairro: 30,
+  cidade: 30,
+} as const;
+
+/**
  * Campo de ENDEREÇO dentro do limite da transportadora (logradouro, bairro,
  * cidade, complemento). Mesmo problema do nome — o CWS dos Correios valida e
  * recusa a pré-postagem inteira ("excesso de caracteres", caso Sorocaba
