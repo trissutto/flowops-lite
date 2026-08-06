@@ -141,7 +141,22 @@ export class LojaOrdersController {
     const peso = Math.min(30000, Number(body?.pesoGramas) || 250 * pecas);
     const largura = Number(body?.largura) || 28;
     const comprimento = Number(body?.comprimento) || 40;
-    const altura = Number(body?.altura) || 3 * pecas;
+
+    /**
+     * ALTURA POR FAIXA (regra 1, escolhida pelo dono em 04/08):
+     *   1–2 peças → 3 cm · 3–5 → 6 cm · 6+ → 10 cm
+     *
+     * Roupa não empilha como tijolo: 4 blusas dobradas não dão 12 cm porque o
+     * tecido comprime. Multiplicar 3 cm por peça (como estava) cobraria caixa
+     * maior que a real e comeria margem em todo pedido grande; cravar 3 cm
+     * fixo faria o oposto — frete barato demais no pedido de 6 peças, com a
+     * diferença aparecendo na postagem.
+     *
+     * A faixa é chute educado até existir dado. Depois de ~30 postagens reais,
+     * medir a altura de verdade e ajustar os números daqui.
+     */
+    const alturaPorFaixa = pecas <= 2 ? 3 : pecas <= 5 ? 6 : 10;
+    const altura = Number(body?.altura) || alturaPorFaixa;
 
     try {
       // A ORIGEM sai de `CORREIOS_CEP_ORIGEM` (env) — o serviço não aceita

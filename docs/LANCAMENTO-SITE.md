@@ -74,7 +74,7 @@ Refeito em 04/08/2026, **só o site novo** (`ecommerce/` + `backend/src/loja-ord
 26. 🔄 MUDOU — Retirada NÃO exige a peça na loja: se não tiver, vem de outra
 27. ⬜ APROVADO — Retirada: prazo, endereço e instruções
 28. ⬜ APROVADO — Simulador de frete na página do produto
-29. ❓ EXPLICAR — Regra de embalagem: como a altura da caixa cresce quando o pedido tem várias peças (hoje 3 cm por peça). Dono pediu explicação antes de decidir
+29. ✅ FEITO — Embalagem por FAIXA de altura (regra 1, dono 04/08): **1–2 peças = 3 cm · 3–5 = 6 cm · 6+ = 10 cm**. Roupa comprime, não empilha como tijolo. É chute educado até existir dado — depois de ~30 postagens reais, medir a altura de verdade e ajustar
 30. ~~Rota própria Itanhaém/Praia Grande/Santos como opção de entrega~~ — **REMOVIDO (04/08)**. Era a regra do REALINHAMENTO entre lojas (carro da rede levando mercadoria de loja pra loja), não entrega de pedido de cliente. Vazou do contexto do dia pra esta lista. Se um dia virar entrega própria pro cliente naquelas cidades, é item novo e com desenho próprio
 
 ## C. Produto e vitrine (🔴 — o gargalo real)
