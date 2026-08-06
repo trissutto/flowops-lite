@@ -134,14 +134,14 @@ Refeito em 04/08/2026, **só o site novo** (`ecommerce/` + `backend/src/loja-ord
 
 > **73 e 74 NÃO são pra construir do zero.** O dono confirmou: o aviso por
 > WhatsApp já existe no WooCommerce — são os workflows do n8n `Pedido Pago` e
-> `Código de rastreio` (ver memória ). O trabalho é
-> **reapontar o gatilho** pro pedido do site (), não
-> reescrever. Vale o e-mail junto.
+> `Código de rastreio`, no n8n em `auto.lurds.com.br`. O trabalho é **reapontar
+> o gatilho** pro pedido do site (`Order` com `source='ecommerce'`) em vez do
+> webhook do WooCommerce — não reescrever. Vale o e-mail junto.
 
 71. ⬜ APROVADO — Pedido do site cair na fila da loja certa — roteamento **JÁ EXISTE**
 72. ⬜ APROVADO — Etiqueta e NF-e do pedido do site — **JÁ EXISTE** em pick-orders
-73. ⬜ APROVADO — E-mail de confirmação **+ WhatsApp** — o WhatsApp já roda no WooCommerce (n8n ); reapontar o gatilho
-74. ⬜ APROVADO — Aviso de "pedido enviado" com rastreio, **e-mail + WhatsApp** — já roda no WooCommerce (n8n ); reapontar
+73. ⬜ APROVADO — E-mail de confirmação **+ WhatsApp** — o WhatsApp já roda no WooCommerce (workflow n8n **"Pedido Pago"**); reapontar o gatilho pro pedido do site
+74. ⬜ APROVADO — Aviso de "pedido enviado" com rastreio, **e-mail + WhatsApp** — já roda no WooCommerce (workflow n8n **"Código de rastreio"**); reapontar
 75. ⬜ APROVADO — Alerta quando o pagamento confirma e o pedido não anda
 76. ⬜ APROVADO — Página pública de acompanhamento
 77. ⬜ APROVADO — Rastreio automático (`LINKETRACK_TOKEN` não configurado hoje)
@@ -149,13 +149,13 @@ Refeito em 04/08/2026, **só o site novo** (`ecommerce/` + `backend/src/loja-ord
 79. ⬜ APROVADO — Corrigir endereço do pedido antes de postar — **JÁ EXISTE** (04/08)
 80. ⬜ APROVADO — Aviso de entrega concluída
 
-## G. Trocas (🟠)
+## G. Trocas (🟠) · **APROVADO PELO DONO 04/08**
 
-81. Política de trocas publicada
-82. Portal de trocas ligado ao pedido do site (**JÁ EXISTE** pro site antigo)
-83. Prazo de arrependimento de 7 dias
-84. Etiqueta de devolução
-85. 🟡 Vale-troca / crédito na conta
+81. ⬜ APROVADO — Política de trocas publicada
+82. ⬜ APROVADO — Portal de trocas ligado ao pedido do site (**JÁ EXISTE** pro site antigo)
+83. ⬜ APROVADO — Prazo de arrependimento de 7 dias
+84. ⬜ APROVADO — Etiqueta de devolução
+85. ⬜ APROVADO — Vale-troca / crédito na conta
 
 ## H. Conteúdo (🟠)
 
