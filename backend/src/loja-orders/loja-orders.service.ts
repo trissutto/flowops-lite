@@ -135,7 +135,14 @@ export class LojaOrdersService {
   private static readonly LOJA_WC_ID_BASE = 950_000_000;
 
   /** Validade do PIX. 30min é o que a cliente aguenta esperar sem desistir. */
-  private static readonly PIX_EXPIRA_MIN = 30;
+  /**
+   * Validade do PIX: 2 HORAS (dono, 04/08 — era 30 min).
+   *
+   * 30 minutos derrubava compra boa: cliente que abre o QR, sai pra pegar o
+   * celular do banco e volta, já achava o código vencido. Duas horas cobre o
+   * "vou pagar quando chegar em casa" sem segurar a peça a noite inteira.
+   */
+  private static readonly PIX_EXPIRA_MIN = 120;
 
   /** Tolerância do recálculo: 1 centavo (arredondamento de float no front). */
   private static readonly TOLERANCIA = 0.011;
@@ -211,7 +218,18 @@ export class LojaOrdersService {
     const cpf = this.digits(input.customer.cpf);
     if (cpf.length !== 11) return 'O CPF informado não parece completo. Confere pra gente?';
     if (!String(input.customer.name || '').trim()) return 'Faltou o seu nome no cadastro.';
-    if (!String(input.customer.email || '').includes('@')) return 'O e-mail informado não parece válido.';
+    /**
+     * E-mail de verdade, não `includes('@')`.
+     *
+     * A checagem antiga aceitava "a@b": passava no checkout e a confirmação de
+     * compra nunca chegava — a cliente pagava e ficava sem nada no e-mail. E é
+     * o mesmo endereço que vai pro antifraude do cartão, que pontua endereço
+     * malformado como sinal de fraude.
+     */
+    const email = String(input.customer.email || '').trim();
+    if (!/^[^\s@]+@[^\s@]+\.[a-zA-Z]{2,}$/.test(email) || email.length > 120) {
+      return 'O e-mail informado não parece válido.';
+    }
     if (this.digits(input.customer.phone).length < 10) return 'O telefone precisa vir com DDD.';
 
     if (!Array.isArray(input.items) || input.items.length === 0) {
@@ -572,7 +590,21 @@ export class LojaOrdersService {
     const d = this.digits(raw);
     if (d.length === 13 && d.startsWith('55')) return { area_code: d.slice(2, 4), number: d.slice(4) };
     if (d.length === 11 || d.length === 10) return { area_code: d.slice(0, 2), number: d.slice(2) };
-    return { area_code: '13', number: '996218277' }; // fallback da matriz
+    /**
+     * SEM TELEFONE INVENTADO (dono, 04/08).
+     *
+     * Aqui devolvia `13 996218277` — o celular da matriz — pra qualquer
+     * telefone que não casasse. Medido no link de pagamento das lojas em
+     * 01/08: cliente sintético levou a aprovação de cartão de 63% pra 22,8%,
+     * porque centenas de compras com o MESMO telefone é assinatura de fraude
+     * pro modelo da Pagar.me.
+     *
+     * Neste caminho o `validar()` já exige telefone com DDD antes de chegar
+     * aqui, então isto é caminho morto — e é justamente por isso que tinha que
+     * sair: caminho morto com dado falso é mina esperando um chamador novo que
+     * pule a validação. Agora estoura, alto e claro.
+     */
+    throw new Error(`Telefone inválido pra cobrança: "${raw}" — o checkout deveria ter barrado antes.`);
   }
 
   /**

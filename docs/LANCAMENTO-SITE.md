@@ -13,30 +13,37 @@ Refeito em 04/08/2026, **só o site novo** (`ecommerce/` + `backend/src/loja-ord
 
 ---
 
-## A. Dinheiro — não pode errar (🔴)
+## A. Dinheiro — não pode errar (🔴) · **APROVADO PELO DONO 04/08**
 
-1. Revalidar `unitPrice` de cada item contra o catálogo antes de cobrar — hoje o preço vem do front (o código marca como pendência conhecida)
-2. Revalidar subtotal, desconto, frete e total no servidor
-3. Recalcular o cupom no servidor (não aceitar valor do cliente)
-4. Travar preço entre "ver carrinho" e "pagar" (não mudar no meio)
-5. Validar estoque no fechamento, não só ao adicionar
-6. Não fechar pedido com peça despublicada durante a sessão
-7. PIX: expiração de 30 min liberando a reserva
+> **Status:** 7, 13, 14 e 15 **FEITOS** (commits `0408caa`). Itens **1–6 são o
+> próximo bloco** — vão juntos num commit só, porque mexem no mesmo ponto
+> (`criarPedido`) e checkout meio validado é pior que nenhum.
+>
+> Duas decisões do dono nesta rodada: **PIX vale 2 HORAS** (não 30 min) e
+> **não existe valor mínimo de pedido**.
+
+1. ⬜ APROVADO — Revalidar `unitPrice` de cada item contra o catálogo antes de cobrar — hoje o preço vem do front (o código marca como pendência conhecida)
+2. ⬜ APROVADO — Revalidar subtotal, desconto, frete e total no servidor
+3. ⬜ APROVADO — Recalcular o cupom no servidor (não aceitar valor do cliente)
+4. ⬜ APROVADO — Travar preço entre "ver carrinho" e "pagar" (não mudar no meio)
+5. ⬜ APROVADO — Validar estoque no fechamento, não só ao adicionar
+6. ⬜ APROVADO — Não fechar pedido com peça despublicada durante a sessão
+7. ✅ FEITO (2h) — PIX: expiração de 30 min liberando a reserva
 8. PIX: webhook idempotente (repetição do gateway não duplica pedido)
 9. Cartão recusado não cria pedido (regra existe — validar que se cumpre)
 10. Cartão: mensagem de recusa que a cliente entenda
 11. Cron reprocessando pagamento pendente (não depender só do webhook)
 12. Conciliação diária: pago no gateway × pago no Flow
-13. Validação de e-mail de verdade (hoje é `includes('@')`, "a@b" passa e a confirmação não chega)
-14. Remover o fallback de telefone `13 996218277` do checkout (caminho morto hoje, mina amanhã)
-15. Valor mínimo de pedido, se houver
+13. ✅ FEITO — Validação de e-mail de verdade (hoje é `includes('@')`, "a@b" passa e a confirmação não chega)
+14. ✅ FEITO — Remover o fallback de telefone `13 996218277` do checkout (caminho morto hoje, mina amanhã)
+15. ✅ SEM VALOR MINIMO (dono) — Valor mínimo de pedido, se houver
 
 ## B. Frete (🔴/🟠)
 
-16. 🔴 Endpoint público de cotação — **o cálculo COM CONTRATO JÁ EXISTE**. Verificado 04/08: `CORREIOS_CONTRATO`, `CORREIOS_CARTAO_POSTAGEM`, `CORREIOS_DR` e `CORREIOS_CEP_ORIGEM` estão configurados, e o `calcularFrete` passa `nuContrato`+`nuDR` no preço e consulta o prazo oficial — é o preço NEGOCIADO, não tabela de balcão. Falta **só expor num endpoint público** (hoje a rota exige login) e trocar a fonte no site. Item pequeno, retorno grande
-17. 🔴 Trocar a fonte em `ecommerce/src/lib/commerce/frete.ts` (hoje tabela fixa por faixa de CEP)
-18. 🔴 Peso e dimensão reais por produto (hoje 200g/peça estimado)
-19. 🔴 Cotar com o CEP da loja que vai despachar
+16. ✅ FEITO — Endpoint público de cotação (`POST /api/public/loja/frete`, commit b6d7b1c) — **o cálculo COM CONTRATO JÁ EXISTE**. Verificado 04/08: `CORREIOS_CONTRATO`, `CORREIOS_CARTAO_POSTAGEM`, `CORREIOS_DR` e `CORREIOS_CEP_ORIGEM` estão configurados, e o `calcularFrete` passa `nuContrato`+`nuDR` no preço e consulta o prazo oficial — é o preço NEGOCIADO, não tabela de balcão. Falta **só expor num endpoint público** (hoje a rota exige login) e trocar a fonte no site. Item pequeno, retorno grande
+17. ⬜ PRÓXIMO — Trocar a fonte em `ecommerce/src/lib/commerce/frete.ts` (hoje tabela fixa por faixa de CEP)
+18. ✅ FEITO — Peso e caixa do dono: **250 g/peça**, **28 larg × 40 compr × 3 cm alt por peça** (só a altura acompanha a quantidade)
+19. ✅ FEITO — Origem = **MATRIZ, CEP 11746-692** (decisão do dono; uma origem só mantém a cotação estável). ⚠️ CONFERIR se `CORREIOS_CEP_ORIGEM` no Railway está com esse CEP
 20. 🔴 Fallback quando o transportador não responde (não travar o checkout)
 21. 🔴 Cache de cotação por CEP+peso
 22. 🟠 Config editável de frete grátis: mínimo, período, região (hoje `FREE_SHIPPING_FROM` chumbado)
@@ -47,7 +54,7 @@ Refeito em 04/08/2026, **só o site novo** (`ecommerce/` + `backend/src/loja-ord
 27. 🟠 Retirada: prazo, endereço e instruções
 28. 🟡 Simulador de frete na página do produto
 29. 🟡 Regra de embalagem (vários itens numa caixa)
-30. 🟡 Rota própria Itanhaém/Praia Grande/Santos como opção de entrega
+30. ~~Rota própria Itanhaém/Praia Grande/Santos como opção de entrega~~ — **REMOVIDO (04/08)**. Era a regra do REALINHAMENTO entre lojas (carro da rede levando mercadoria de loja pra loja), não entrega de pedido de cliente. Vazou do contexto do dia pra esta lista. Se um dia virar entrega própria pro cliente naquelas cidades, é item novo e com desenho próprio
 
 ## C. Produto e vitrine (🔴 — o gargalo real)
 
