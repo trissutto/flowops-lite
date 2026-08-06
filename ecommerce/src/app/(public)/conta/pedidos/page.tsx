@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { Container } from '@/components/layout/Container';
 import { Section } from '@/components/layout/Section';
 import { AcessoConta } from '@/components/conta/AcessoConta';
+import { PixSegundaVia } from '@/components/conta/PixSegundaVia';
 import { comoCliente } from '@/lib/conta';
 import { formatPrice } from '@/lib/utils';
 import { buildMetadata } from '@/lib/seo';
@@ -26,14 +27,25 @@ interface Pedido {
   id: string;
   number: string | null;
   status: string | null;
+  /** O mesmo status no vocabulário da cliente — quem traduz é o backend. */
+  situacao?: { chave: string; rotulo: string } | null;
   total: number;
   date: string | null;
   tracking: { code: string; carrier: string | null } | null;
+  /** Copia-e-cola do Pix ainda válido (item 65). */
+  pix?: { copyPaste: string; expiresAt: string } | null;
   itemsCount: number;
   firstItem: string | null;
 }
 
-const STATUS: Record<string, string> = {
+/**
+ * Tradução de EMERGÊNCIA — cobre só o vocabulário do WooCommerce e existe pra
+ * pedido antigo, gravado antes de o backend passar a mandar `situacao`.
+ *
+ * Ela era a única tradução, e por isso os estados do FlowOps ("awaiting_payment",
+ * "routing", "separating") caíam direto na tela, crus, pra cliente ler.
+ */
+const STATUS_LEGADO: Record<string, string> = {
   pending: 'Aguardando pagamento',
   processing: 'Pagamento confirmado',
   'on-hold': 'Em análise',
@@ -77,8 +89,8 @@ export default async function PedidosPage() {
         ) : (
           <ul className="divide-y divide-border border-y border-border">
             {pedidos.map((p) => (
-              <li key={p.id} className="flex flex-wrap items-center justify-between gap-4 py-5">
-                <div className="min-w-0">
+              <li key={p.id} className="flex flex-wrap items-start justify-between gap-4 py-5">
+                <div className="min-w-0 flex-1">
                   <p className="text-body font-medium">
                     {p.firstItem || 'Pedido'}
                     {p.itemsCount > 1 && (
@@ -88,13 +100,22 @@ export default async function PedidosPage() {
                   <p className="text-small text-muted">
                     {p.number ? `Nº ${p.number} · ` : ''}
                     {p.date ? new Date(p.date).toLocaleDateString('pt-BR') : ''}
-                    {p.status ? ` · ${STATUS[p.status] ?? p.status}` : ''}
+                    {/* `situacao` primeiro: é a tradução completa. O mapa
+                        legado só cobre pedido antigo do WooCommerce. */}
+                    {p.situacao?.rotulo
+                      ? ` · ${p.situacao.rotulo}`
+                      : p.status
+                        ? ` · ${STATUS_LEGADO[p.status] ?? p.status}`
+                        : ''}
                   </p>
                   {p.tracking && (
                     <p className="text-small text-muted">
                       Rastreio {p.tracking.code}
                       {p.tracking.carrier ? ` · ${p.tracking.carrier}` : ''}
                     </p>
+                  )}
+                  {p.pix && (
+                    <PixSegundaVia copyPaste={p.pix.copyPaste} expiresAt={p.pix.expiresAt} />
                   )}
                 </div>
                 <p className="text-body tabular-nums">{formatPrice(p.total)}</p>

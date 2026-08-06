@@ -485,6 +485,169 @@ export class CustomersAppService {
   }
 
   /* ─────────────────── PEDIDOS (Flowops Orders) ─────────────────── */
+  /** JSON de coluna de texto — nunca derruba a listagem por dado torto. */
+  private lerJson(raw: any): any {
+    if (!raw) return null;
+    if (typeof raw === 'object') return raw;
+    try {
+      return JSON.parse(String(raw));
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * O status do pedido no vocabulário da cliente (item 64).
+   *
+   * A operação tem uma dúzia de estados (routing, separating, picking...); a
+   * cliente tem quatro perguntas: pagou? separou? saiu? chegou? Qualquer
+   * estado intermediário vira "preparando" — detalhar a fila interna só gera
+   * ligação perguntando o que "roteamento" quer dizer.
+   */
+  private situacaoPublica(o: {
+    status: string | null;
+    paidAt: Date | null;
+    trackingCode: string | null;
+  }): { chave: string; rotulo: string } {
+    const s = String(o.status || '').toLowerCase();
+
+    if (s === 'cancelled' || s === 'canceled') {
+      return { chave: 'cancelado', rotulo: 'Cancelado' };
+    }
+    if (s === 'delivered') return { chave: 'entregue', rotulo: 'Entregue' };
+    if (s === 'shipped' || o.trackingCode) {
+      return { chave: 'enviado', rotulo: 'A caminho' };
+    }
+    if (!o.paidAt) {
+      return { chave: 'aguardando_pagamento', rotulo: 'Aguardando pagamento' };
+    }
+    return { chave: 'preparando', rotulo: 'Preparando seu pedido' };
+  }
+
+  /**
+   * Copia-e-cola do PIX ainda válido. `null` quando já pagou, quando não é
+   * PIX, ou quando o código venceu.
+   */
+  private pixEmAberto(
+    o: { paidAt: Date | null; status: string | null },
+    pagamento: any,
+  ): { copyPaste: string; expiresAt: string } | null {
+    if (o.paidAt) return null;
+    if (String(o.status || '').toLowerCase() === 'cancelled') return null;
+
+    const pix = pagamento?.pix;
+    const copyPaste = String(pix?.copyPaste || '').trim();
+    if (!copyPaste) return null;
+
+    const expira = pix?.expiresAt ? new Date(pix.expiresAt).getTime() : 0;
+    if (!expira || Date.now() > expira) return null;
+
+    return { copyPaste, expiresAt: new Date(expira).toISOString() };
+  }
+
+  /* ─────────────────────── CONSENTIMENTO LGPD ──────────────────────────── */
+
+  /**
+   * Os canais que a cliente controla. Curto de propósito: lista grande de
+   * caixinhas faz todo mundo desmarcar tudo por precaução.
+   *
+   * `transacional` NÃO está aqui — aviso de pedido e nota fiscal não são
+   * marketing, são execução do contrato de compra, e não dependem de opt-in.
+   */
+  private static readonly CANAIS_CONSENTIMENTO = [
+    { channel: 'whatsapp', rotulo: 'Novidades e ofertas por WhatsApp' },
+    { channel: 'email', rotulo: 'Novidades e ofertas por e-mail' },
+    { channel: 'push', rotulo: 'Avisos no celular' },
+  ];
+
+  /**
+   * O estado ATUAL de cada canal — o último evento de cada um.
+   *
+   * A tabela é append-only (cada opt-in/opt-out é uma linha nova, com data e
+   * IP), então "o que vale hoje" é sempre a linha mais recente por canal.
+   * Nunca apagamos: é esse histórico que responde "quando ela autorizou?".
+   */
+  async getConsents(accountId: string) {
+    const account = await this.prisma.customerAccount.findUnique({
+      where: { id: accountId },
+      include: { links: { select: { customerId: true } } },
+    });
+    if (!account) throw new UnauthorizedException('Conta não encontrada');
+
+    const customerIds = account.links.map((l) => l.customerId);
+    const linhas = customerIds.length
+      ? await this.prisma.customerConsent.findMany({
+          where: { customerId: { in: customerIds } },
+          orderBy: { grantedAt: 'desc' },
+          take: 200,
+        })
+      : [];
+
+    const atual = new Map<string, { granted: boolean; em: Date }>();
+    for (const l of linhas) {
+      // `desc` + primeiro a chegar vence = o mais recente de cada canal.
+      if (!atual.has(l.channel)) atual.set(l.channel, { granted: l.granted, em: l.grantedAt });
+    }
+
+    return {
+      canais: CustomersAppService.CANAIS_CONSENTIMENTO.map((c) => ({
+        ...c,
+        // Sem registro = NÃO autorizado. O padrão da LGPD é o silêncio valer
+        // como não, nunca como sim.
+        granted: atual.get(c.channel)?.granted ?? false,
+        em: atual.get(c.channel)?.em ?? null,
+      })),
+    };
+  }
+
+  /** Grava um opt-in/opt-out. Uma linha nova por evento — nunca update. */
+  async setConsent(
+    accountId: string,
+    dto: { channel: string; granted: boolean; ip?: string | null },
+  ) {
+    const canal = String(dto.channel || '').trim().toLowerCase();
+    if (!CustomersAppService.CANAIS_CONSENTIMENTO.some((c) => c.channel === canal)) {
+      throw new BadRequestException('Canal inválido');
+    }
+
+    const account = await this.prisma.customerAccount.findUnique({
+      where: { id: accountId },
+      select: { id: true, cpf: true },
+    });
+    if (!account) throw new UnauthorizedException('Conta não encontrada');
+    await this.ensureAccountLinks(account.id, account.cpf);
+
+    const comLinks = await this.prisma.customerAccount.findUnique({
+      where: { id: accountId },
+      include: { links: { select: { customerId: true } } },
+    });
+    const customerIds = comLinks?.links.map((l) => l.customerId) ?? [];
+    if (!customerIds.length) {
+      // Sem cadastro no CRM não há onde pendurar o consentimento. Não é erro
+      // da cliente — é cadastro que ainda não foi criado.
+      throw new BadRequestException('Cadastro ainda não disponível. Tente de novo em instantes.');
+    }
+
+    /**
+     * Grava em TODOS os cadastros ligados ao CPF.
+     *
+     * A pessoa pode ter cadastro em mais de uma loja ([[clientes-pessoa-vs-cadastro]]).
+     * Registrar em um só faria a loja B continuar mandando WhatsApp depois de
+     * ela ter dito não — que é exatamente a reclamação que a LGPD pune.
+     */
+    await this.prisma.customerConsent.createMany({
+      data: customerIds.map((customerId) => ({
+        customerId,
+        channel: canal,
+        granted: !!dto.granted,
+        source: 'site',
+        ipAddress: dto.ip || null,
+      })),
+    });
+
+    return this.getConsents(accountId);
+  }
+
   /**
    * Histórico de pedidos do site (Flowops/WC).
    * Para pedidos da loja física, frontend mostra stats agregadas (#me) +
@@ -518,25 +681,56 @@ export class CustomersAppService {
         status: true,
         totalAmount: true,
         wcDateCreated: true,
+        paidAt: true,
         trackingCode: true,
         carrier: true,
+        source: true,
+        // Item 65: o PIX em aberto mora aqui.
+        paymentInfo: true,
         items: { select: { productName: true, quantity: true } },
       },
     });
 
     return {
-      orders: orders.map((o) => ({
-        id: o.id,
-        number: o.wcOrderNumber,
-        status: o.status,
-        total: Number(o.totalAmount) || 0,
-        date: o.wcDateCreated,
-        tracking: o.trackingCode
-          ? { code: o.trackingCode, carrier: o.carrier }
-          : null,
-        itemsCount: o.items.reduce((s, i) => s + (i.quantity || 0), 0),
-        firstItem: o.items[0]?.productName || null,
-      })),
+      orders: orders.map((o) => {
+        const pagamento = this.lerJson(o.paymentInfo);
+        return {
+          id: o.id,
+          number: o.wcOrderNumber,
+          /** Status CRU — a retaguarda e telas antigas ainda leem daqui. */
+          status: o.status,
+          /**
+           * O MESMO status, no vocabulário da cliente (item 64).
+           *
+           * "processing", "routing", "separating" são palavras da operação;
+           * quem abre "Meus pedidos" quer saber se o pedido foi pago, se
+           * saiu e quando chega. Traduzir na tela espalharia a regra por
+           * três telas diferentes — fica aqui, uma vez.
+           */
+          situacao: this.situacaoPublica(o),
+          total: Number(o.totalAmount) || 0,
+          date: o.wcDateCreated,
+          paidAt: o.paidAt,
+          tracking: o.trackingCode
+            ? { code: o.trackingCode, carrier: o.carrier }
+            : null,
+          /**
+           * SEGUNDA VIA DO PIX (item 65).
+           *
+           * A cliente fecha o pedido, perde a aba e não tem como pagar — o
+           * QR só existia naquela tela. Sem isto, o caminho é abrir o
+           * WhatsApp e pedir pra alguém gerar de novo, o que só acontece em
+           * horário comercial e some quando ninguém responde.
+           *
+           * Só sai enquanto o código VALE. Copia-e-cola vencido é pior que
+           * nenhum: a cliente paga, o banco recusa, e ela acha que a loja
+           * errou.
+           */
+          pix: this.pixEmAberto(o, pagamento),
+          itemsCount: o.items.reduce((s, i) => s + (i.quantity || 0), 0),
+          firstItem: o.items[0]?.productName || null,
+        };
+      }),
       linkedStoresCount: customerIds.length,
     };
   }

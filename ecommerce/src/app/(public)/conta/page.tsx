@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { Package, MapPin, Wallet, LogOut } from 'lucide-react';
+import { Package, MapPin, Wallet, Heart, RefreshCw, ShieldCheck, LogOut } from 'lucide-react';
 import { Container } from '@/components/layout/Container';
 import { Section } from '@/components/layout/Section';
 import { AcessoConta } from '@/components/conta/AcessoConta';
@@ -40,8 +40,13 @@ export default async function ContaPage() {
   const primeiroNome = String(cliente.name || '').split(' ')[0] || 'Bem-vinda';
   const atalhos = [
     { href: '/conta/pedidos', icon: Package, titulo: 'Meus pedidos', texto: 'Acompanhe e rastreie o que você comprou' },
+    // O saldo já era creditado a cada compra e nunca teve tela: cashback que a
+    // cliente não vê não muda comportamento nenhum — é custo sem retorno.
+    { href: '/conta/cashback', icon: Wallet, titulo: 'Meu cashback', texto: 'Seu saldo e de onde ele veio' },
     { href: '/conta/enderecos', icon: MapPin, titulo: 'Endereços', texto: 'Onde a gente entrega' },
-    { href: '/trocas', icon: Wallet, titulo: 'Troca fácil', texto: 'Trocar ou devolver uma peça' },
+    { href: '/conta/favoritos', icon: Heart, titulo: 'Lista de desejos', texto: 'As peças que você guardou' },
+    { href: '/conta/dados', icon: ShieldCheck, titulo: 'Meus dados', texto: 'O que a gente tem e o que você autoriza' },
+    { href: '/trocas', icon: RefreshCw, titulo: 'Troca fácil', texto: 'Trocar ou devolver uma peça' },
   ];
 
   return (

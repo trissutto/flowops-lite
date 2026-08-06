@@ -149,14 +149,18 @@ Refeito em 04/08/2026, **só o site novo** (`ecommerce/` + `backend/src/loja-ord
 
 ## E. Conta da cliente (🟠) · **APROVADO PELO DONO 04/08**
 
-63. ⬜ APROVADO — Cadastro e login ligados ao CRM por CPF — **JÁ EXISTE** a base
-64. ⬜ APROVADO — Meus pedidos com status e rastreio
-65. ⬜ APROVADO — Segunda via do PIX em aberto
-66. ⬜ APROVADO — Meus endereços
-67. ⬜ APROVADO — Meus dados com consentimento LGPD
-68. ⬜ APROVADO — Cashback: saldo e extrato (existe no CRM)
-69. ⬜ APROVADO — Lista de desejos
-70. ⬜ APROVADO — Recuperação de senha
+> **Padrão do bloco (06/08):** quase tudo já existia no backend `customers/app`
+> — login, endereços, pedidos, cashback, senha. **O que faltava era a tela.**
+> Recurso que a cliente não vê não muda comportamento nenhum.
+
+63. ✅ CONFERIDO — Login por CPF no `/customers/app`, cruzando com o CRM. Quem já comprou na loja física entra com o mesmo CPF e vê o histórico junto
+64. ✅ FEITO — Status **traduzido pra cliente** (pago / preparando / a caminho / entregue) + rastreio. Antes a tela recebia o estado CRU da operação: `awaiting_payment`, `routing` e `separating` chegavam assim na tela, porque o único mapa de tradução cobria só o vocabulário do WooCommerce
+65. ✅ FEITO — Segunda via do PIX em "Meus pedidos". Sem isso, a cliente que fechou o pedido e perdeu a aba **não tinha como pagar**: o caminho era o WhatsApp, em horário comercial, se alguém respondesse — enquanto o código vencia sozinho. Só aparece enquanto o código VALE (copia-e-cola vencido é pior que nenhum: o banco recusa e ela acha que a loja errou)
+66. ✅ CONFERIDO — `/conta/enderecos` com o CRUD do backend
+67. ✅ FEITO — `/conta/dados`: o que a loja tem (CPF **mascarado até pra dona**, porque a tela fica aberta em ônibus e em loja) + os canais que ela autoriza. Cada clique vira **linha nova** em `customer_consents`, com data e IP — sobrescrever apagaria a prova de quando ela autorizou. Grava em TODOS os cadastros do CPF: registrar num só faria a outra loja continuar mandando WhatsApp depois do "não"
+68. ✅ FEITO — `/conta/cashback` com saldo, extrato e **a expiração em destaque**. O saldo já era creditado a cada compra e nunca teve tela: cashback que a cliente não vê é custo sem retorno, e descobrir que venceu depois transforma benefício em reclamação
+69. ✅ FEITO — `/conta/favoritos`. O coração já existia no card e o store já guardava; não havia onde VER. O store guarda só a REF de propósito — a peça é relida com o preço e o estoque de HOJE, e REF que sumiu do catálogo sai da lista em vez de virar card quebrado
+70. ✅ CONFERIDO — "Esqueci minha senha" com código pelo WhatsApp, na mesma tela do login
 
 ## F. Pedido → loja → entrega (🔴) · **APROVADO PELO DONO 04/08**
 
@@ -165,14 +169,20 @@ Refeito em 04/08/2026, **só o site novo** (`ecommerce/` + `backend/src/loja-ord
 > `Código de rastreio`, no n8n em `auto.lurds.com.br`. O trabalho é **reapontar
 > o gatilho** pro pedido do site (`Order` com `source='ecommerce'`) em vez do
 > webhook do WooCommerce — não reescrever. Vale o e-mail junto.
+>
+> **Status 06/08:** 75, 76 e a metade visível do 77 feitos. **71, 72, 78 e 79
+> não foram tocados de propósito** — a lista diz "JÁ EXISTE" e mexer no
+> roteamento/etiqueta/NF-e sem pedido real passando é risco sem retorno. O que
+> falta neles é o **teste ponta a ponta** do item 112, com pedido de verdade.
+> **73 e 74 são configuração no n8n**, não código nosso.
 
 71. ⬜ APROVADO — Pedido do site cair na fila da loja certa — roteamento **JÁ EXISTE**
 72. ⬜ APROVADO — Etiqueta e NF-e do pedido do site — **JÁ EXISTE** em pick-orders
 73. ⬜ APROVADO — E-mail de confirmação **+ WhatsApp** — o WhatsApp já roda no WooCommerce (workflow n8n **"Pedido Pago"**); reapontar o gatilho pro pedido do site
 74. ⬜ APROVADO — Aviso de "pedido enviado" com rastreio, **e-mail + WhatsApp** — já roda no WooCommerce (workflow n8n **"Código de rastreio"**); reapontar
-75. ⬜ APROVADO — Alerta quando o pagamento confirma e o pedido não anda
-76. ⬜ APROVADO — Página pública de acompanhamento
-77. ⬜ APROVADO — Rastreio automático (`LINKETRACK_TOKEN` não configurado hoje)
+75. ✅ FEITO — Cron de hora em hora + `GET /admin/loja/parados?horas=4`. É o alerta mais difícil de perceber sem ele: o pedido pagou, virou `processing` e ficou na fila — **status válido, log limpo, nenhum erro em lugar nenhum** — e a cliente esperando. Não conserta de propósito (roteamento é decisão da matriz, e cron escolhendo loja sozinho é pior que pedido parado); ele GRITA, que é o que faltava pro responsável do item 111 ter o que olhar. Janela de 7 dias pra não repetir backlog eternamente e virar alarme que ninguém lê. `LOJA_ALERTA_PARADO=0` desliga
+76. ✅ FEITO — `/pedido/<id>` é a URL pública e compartilhável. A tela já existia, mas só em `/checkout/confirmacao/<id>` — uma URL que diz "checkout" e "confirmação" pra quem só quer saber onde está a peça, e que ninguém guarda. Redireciona em vez de duplicar a tela: uma cópia envelheceria em semanas e as duas passariam a mostrar coisas diferentes do mesmo pedido
+77. 🔶 PARCIAL — O código de rastreio agora **sai no GET público do pedido**, com link direto pros Correios (colar o código no site deles é o passo em que a cliente desiste e liga). Falta o `LINKETRACK_TOKEN` pra atualização automática do status de entrega
 78. ⬜ APROVADO — Split entre lojas **JÁ EXISTE na retaguarda** — falta só testar ponta a ponta com pedido do site novo
 79. ⬜ APROVADO — Corrigir endereço do pedido antes de postar — **JÁ EXISTE** (04/08)
 80. ⬜ APROVADO — Aviso de entrega concluída

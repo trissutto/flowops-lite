@@ -1197,6 +1197,20 @@ export class LojaOrdersService {
               quantity: it.quantity,
               unitPrice: it.unitPrice,
             })),
+        /**
+         * RASTREIO (itens 76 e 77) — a resposta do GET público não trazia o
+         * código, então a página de acompanhamento só sabia dizer "pago".
+         * Quem quer saber ONDE está a peça tinha que abrir o WhatsApp.
+         */
+        tracking: order.trackingCode
+          ? {
+              code: order.trackingCode,
+              carrier: order.carrier || null,
+              // Link direto dos Correios: colar o código no site deles é o
+              // passo que faz a cliente desistir e ligar.
+              url: `https://rastreamento.correios.com.br/app/index.php?objeto=${encodeURIComponent(order.trackingCode)}`,
+            }
+          : null,
         subtotal: ck.subtotal ?? null,
         discount: ck.discount ?? 0,
         // Discriminado quando o pedido nasceu depois do bloco A; pedido antigo

@@ -152,6 +152,103 @@ export class LojaPagamentoReconcileService {
     return false;
   }
 
+  /* ─────────────────── PEDIDO PAGO E PARADO (item 75) ──────────────────── */
+
+  /**
+   * O dinheiro entrou e o pedido não andou.
+   *
+   * O reconcile acima cuida do pedido que ficou preso ANTES do pagamento. Este
+   * cuida do contrário, que é pior: pagou, virou `processing`, caiu na fila da
+   * retaguarda — e ficou lá. Ninguém roteou, ninguém separou. O sistema está
+   * "funcionando": o pedido tem status válido, sem erro em log nenhum. Só que
+   * a cliente está esperando.
+   *
+   * Não conserta nada de propósito. Roteamento é decisão da matriz, e um cron
+   * escolhendo loja sozinho é pior que o pedido parado. O que ele faz é
+   * GRITAR — que é exatamente o que faltava pro item 111 (a pessoa nomeada pra
+   * olhar todo dia) ter o que olhar.
+   *
+   * Roda de hora em hora: é problema de horas, não de segundos, e alarme a
+   * cada minuto vira alarme que ninguém lê.
+   */
+  @Cron('0 15 * * * *')
+  async alertarPedidoParado(): Promise<void> {
+    if (process.env.LOJA_ALERTA_PARADO === '0') return;
+
+    const horas = Math.max(1, Number(process.env.LOJA_ALERTA_PARADO_HORAS) || 4);
+    const limite = new Date(Date.now() - horas * 3600_000);
+    // Janela de 7 dias: mais velho que isso não é "parou hoje", é backlog —
+    // e repetir a mesma lista pra sempre é o que faz o alerta virar ruído.
+    const desde = new Date(Date.now() - 7 * 24 * 3600_000);
+
+    const parados: any[] = await (this.prisma as any).order
+      .findMany({
+        where: {
+          source: 'ecommerce',
+          paidAt: { not: null, lt: limite, gte: desde },
+          // `processing` = pago e aguardando roteamento. Quem já andou saiu
+          // deste status; quem cancelou também.
+          status: 'processing',
+        },
+        orderBy: { paidAt: 'asc' },
+        take: 100,
+        select: { wcOrderNumber: true, paidAt: true, totalAmount: true, isPickup: true },
+      })
+      .catch(() => []);
+
+    if (!parados.length) return;
+
+    const total = parados.reduce((s, o) => s + (Number(o.totalAmount) || 0), 0);
+    const maisAntigo = parados[0];
+    const horasParado = Math.floor((Date.now() - new Date(maisAntigo.paidAt).getTime()) / 3600_000);
+
+    this.logger.warn(
+      `[loja-parado] ${parados.length} pedido(s) PAGO(S) e sem andar há mais de ${horas}h ` +
+        `(R$ ${total.toFixed(2)} no total). O mais antigo é o ${maisAntigo.wcOrderNumber}, parado há ${horasParado}h. ` +
+        `Números: ${parados.slice(0, 25).map((o) => o.wcOrderNumber).join(', ')}` +
+        (parados.length > 25 ? ` … +${parados.length - 25}` : ''),
+    );
+  }
+
+  /**
+   * A mesma lista, sob demanda — é o que a tela da retaguarda mostra pra quem
+   * é o responsável do dia (item 111).
+   */
+  async pedidosParados(horas = 4) {
+    const limite = new Date(Date.now() - Math.max(1, horas) * 3600_000);
+    const desde = new Date(Date.now() - 7 * 24 * 3600_000);
+
+    const parados: any[] = await (this.prisma as any).order.findMany({
+      where: {
+        source: 'ecommerce',
+        paidAt: { not: null, lt: limite, gte: desde },
+        status: 'processing',
+      },
+      orderBy: { paidAt: 'asc' },
+      take: 200,
+      select: {
+        id: true,
+        wcOrderNumber: true,
+        paidAt: true,
+        totalAmount: true,
+        customerName: true,
+        shippingCep: true,
+        isPickup: true,
+        pickupStoreCode: true,
+      },
+    });
+
+    return {
+      horas,
+      total: parados.length,
+      valor: Math.round(parados.reduce((s, o) => s + (Number(o.totalAmount) || 0), 0) * 100) / 100,
+      pedidos: parados.map((o) => ({
+        ...o,
+        horasParado: Math.floor((Date.now() - new Date(o.paidAt).getTime()) / 3600_000),
+      })),
+    };
+  }
+
   /* ──────────────────────────── CONCILIAÇÃO ────────────────────────────── */
 
   /**

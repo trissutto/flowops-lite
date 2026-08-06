@@ -163,6 +163,41 @@ export class CustomersAppController {
     return this.svc.updateProfile(req.customer.id, body || {});
   }
 
+  /**
+   * GET /customers/app/consents — o que a cliente autorizou (item 67).
+   *
+   * A tabela `customer_consents` existe desde o CRM e é append-only, mas o
+   * site nunca leu nem escreveu nela: a cliente não tinha como ver — nem
+   * mudar — o que autorizou. Isso é exigência da LGPD, não recurso.
+   */
+  @Get('consents')
+  @UseGuards(CustomerJwtGuard)
+  async consents(@Req() req: any) {
+    return this.svc.getConsents(req.customer.id);
+  }
+
+  /**
+   * POST /customers/app/consents — registra opt-in/opt-out.
+   *
+   * NUNCA atualiza a linha anterior: cada evento vira uma linha nova, com IP
+   * e data. É esse histórico que responde "quando ela autorizou?" numa
+   * fiscalização — sobrescrever apagaria justamente a prova.
+   */
+  @Post('consents')
+  @HttpCode(200)
+  @UseGuards(CustomerJwtGuard)
+  async setConsent(@Req() req: any, @Body() body: any) {
+    const ip =
+      String(req?.headers?.['x-forwarded-for'] || '').split(',')[0].trim() ||
+      req?.ip ||
+      null;
+    return this.svc.setConsent(req.customer.id, {
+      channel: String(body?.channel || ''),
+      granted: !!body?.granted,
+      ip,
+    });
+  }
+
   @Get('addresses')
   @UseGuards(CustomerJwtGuard)
   async addresses(@Req() req: any) {
