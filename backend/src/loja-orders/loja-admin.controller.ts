@@ -138,6 +138,21 @@ export class LojaAdminController {
     return { ok: true, cupom: salvo };
   }
 
+  /**
+   * GET /admin/loja/parados?horas=4 — pedidos PAGOS que não andaram (item 75).
+   *
+   * O sistema não tem erro nenhum nesses casos: o pedido tem status válido e
+   * o log está limpo. Só que a cliente está esperando. É a lista de trabalho
+   * do responsável do dia (item 111) — sem ela, "alguém olha todo dia" não
+   * tem o que olhar.
+   */
+  @Get('parados')
+  async parados(@Req() req: any, @Query('horas') horas?: string) {
+    this.exigirAdmin(req);
+    const r = await this.reconcile.pedidosParados(Number(horas) || 4);
+    return { ok: true, ...r };
+  }
+
   /* ───────────────────────────── FRETE ─────────────────────────────────── */
 
   /** GET /admin/loja/frete — config + tabela promocional pra tela (item 24). */

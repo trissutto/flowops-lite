@@ -3,6 +3,7 @@ import { MapPin, MessageCircle } from 'lucide-react';
 import { InstagramIcon } from '@/components/ui/icons';
 import { Container } from './Container';
 import { Logo } from '@/components/navigation/Logo';
+import { legalLinks } from '@/data/navigation';
 
 /**
  * Footer — minimalista, muito organizado. Quatro colunas de links, uma linha
@@ -120,19 +121,19 @@ export function Footer() {
           <p className="text-small font-light text-ink-muted">
             © {year} Lurd&apos;s Plus Size · CNPJ 20.104.813/0001-39
           </p>
+          {/* ⚠️ Apontavam pra /institucional/privacidade e /institucional/termos,
+              que NÃO EXISTEM — 404 nos dois links legais do rodapé, que são
+              justamente os que precisam estar publicados e alcançáveis. */}
           <div className="flex flex-wrap gap-x-6 gap-y-2">
-            <Link
-              href="/institucional/privacidade"
-              className="text-small font-light text-ink-muted transition-colors hover:text-ink"
-            >
-              Política de privacidade
-            </Link>
-            <Link
-              href="/institucional/termos"
-              className="text-small font-light text-ink-muted transition-colors hover:text-ink"
-            >
-              Termos de uso
-            </Link>
+            {legalLinks.map((l) => (
+              <Link
+                key={l.href}
+                href={l.href}
+                className="text-small font-light text-ink-muted transition-colors hover:text-ink"
+              >
+                {l.label}
+              </Link>
+            ))}
           </div>
         </div>
       </Container>

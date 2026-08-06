@@ -15,7 +15,7 @@ import { EditorialProductGrid, type GridInterruption } from './EditorialProductG
 import { useProductFilters } from '@/hooks/useProductFilters';
 import { useDebounced, useIntersection } from '@/hooks';
 import { fetchFacetas, fetchProducts, filterGroups } from '@/services/products';
-import type { Product } from '@/types';
+import type { Product, SortOption } from '@/types';
 
 const PER_PAGE = 12;
 
@@ -31,10 +31,18 @@ const PER_PAGE = 12;
  * Ver docs/category-page.md.
  */
 interface CategoryListingProps {
+  /** Vazio = catálogo inteiro (é assim que /novidades reusa esta listagem). */
   category: string;
   categoryName: string;
   interruptions?: GridInterruption[];
   mode?: 'infinite' | 'pages';
+  /**
+   * Ordenação inicial. A cliente continua podendo trocar — isto só decide o
+   * que ela vê ao chegar. `/novidades` usa 'novidades' pra listar o que entrou
+   * por último SEM depender da flag `lancamento` estar marcada peça a peça:
+   * uma vitrine de novidades vazia por falta de cadastro é pior que nenhuma.
+   */
+  ordemPadrao?: SortOption;
 }
 
 /**
@@ -55,8 +63,9 @@ function CategoryListingInner({
   categoryName,
   interruptions = [],
   mode = 'infinite',
+  ordemPadrao = 'relevancia',
 }: CategoryListingProps) {
-  const state = useProductFilters();
+  const state = useProductFilters({}, ordemPadrao);
   const [view, setView] = useState<'editorial' | 'grid'>('editorial');
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [page, setPage] = useState(1);

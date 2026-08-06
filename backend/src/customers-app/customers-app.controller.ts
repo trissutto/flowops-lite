@@ -11,6 +11,7 @@ import {
   Req,
   UseGuards,
   ForbiddenException,
+  HttpException,
 } from '@nestjs/common';
 import { CustomersAppService } from './customers-app.service';
 import {
@@ -51,6 +52,62 @@ export class CustomersAppController {
     private readonly invite: AppInviteService,
     private readonly pwReset: CustomerPasswordResetService,
   ) {}
+
+  /* ───────────────── rate-limit de autenticação (item 106) ─────────────── */
+
+  /**
+   * Balde por IP **e** por CPF, guardado no `globalThis`.
+   *
+   * No `globalThis` porque o Nest recria providers em hot-reload e cada
+   * instância nova zeraria a contagem — a mesma escolha do rate-limit do
+   * pedido. É por processo (o Railway roda um), então serve de freio contra
+   * script e varredura; não é defesa distribuída.
+   *
+   * Chave dupla de propósito: só por IP não segura ataque distribuído contra
+   * uma conta, e só por CPF não segura varredura de muitas contas da mesma
+   * máquina. Estourar QUALQUER uma das duas já barra.
+   */
+  private tentativas(): Map<string, number[]> {
+    const g = globalThis as any;
+    if (!g.__flowopsAppAuthRate) g.__flowopsAppAuthRate = new Map<string, number[]>();
+    return g.__flowopsAppAuthRate;
+  }
+
+  private exigirDentroDoLimite(acao: string, req: any, cpfBruto?: string, teto = 10): void {
+    const janela = 5 * 60_000;
+    const agora = Date.now();
+    const mapa = this.tentativas();
+
+    const ip =
+      String(req?.headers?.['x-forwarded-for'] || '').split(',')[0].trim() ||
+      req?.ip ||
+      'desconhecido';
+    const cpf = String(cpfBruto || '').replace(/\D/g, '');
+
+    const chaves = [`${acao}:ip:${ip}`, ...(cpf ? [`${acao}:cpf:${cpf}`] : [])];
+    let estourou = false;
+
+    for (const chave of chaves) {
+      const hits = (mapa.get(chave) || []).filter((t) => agora - t < janela);
+      hits.push(agora);
+      mapa.set(chave, hits);
+      if (hits.length > teto) estourou = true;
+    }
+
+    // Poda oportunista — sem isto o Map cresce pra sempre numa varredura.
+    if (mapa.size > 5000) {
+      for (const [k, v] of mapa) if (!v.some((t) => agora - t < janela)) mapa.delete(k);
+    }
+
+    if (estourou) {
+      // 429 com frase de gente: quem estoura isso quase sempre é a cliente que
+      // esqueceu a senha, não o atacante.
+      throw new HttpException(
+        'Muitas tentativas seguidas. Aguarde alguns minutos e tente de novo. 💜',
+        429,
+      );
+    }
+  }
 
   /**
    * GET /customers/app/lookup?cpf=12345678901
@@ -126,9 +183,24 @@ export class CustomersAppController {
     });
   }
 
+  /**
+   * POST /customers/app/login — COM RATE-LIMIT (item 106).
+   *
+   * Sem teto, um script testa milhares de senhas contra um CPF, ou passeia por
+   * uma lista de CPFs testando "123456" em cada um. Não é hipótese: CPF é
+   * público, e a senha de conta de loja costuma ser fraca.
+   *
+   * A trava é por IP **e por CPF** — só por IP não segura ataque distribuído
+   * contra uma conta só, e só por CPF não segura varredura de muitas contas
+   * pela mesma máquina.
+   *
+   * `reset-password` entra no mesmo balde porque o código do WhatsApp é curto:
+   * sem teto, ele é adivinhável por força bruta em minutos.
+   */
   @Post('login')
   @HttpCode(200)
-  async login(@Body() dto: AppLoginDto) {
+  async login(@Body() dto: AppLoginDto, @Req() req: any) {
+    this.exigirDentroDoLimite('login', req, dto?.cpf);
     return this.svc.login(dto);
   }
 
@@ -137,16 +209,23 @@ export class CustomersAppController {
   /** POST /customers/app/forgot-password — recebe CPF, envia código no WhatsApp */
   @Post('forgot-password')
   @HttpCode(200)
-  async forgotPassword(@Body() body: { cpf: string }) {
+  async forgotPassword(@Body() body: { cpf: string }, @Req() req: any) {
     const cpf = (body.cpf || '').replace(/\D/g, '');
+    // Teto menor: cada chamada dispara uma MENSAGEM. Sem limite, vira máquina
+    // de encher o WhatsApp de uma cliente — e conta que ela não pediu.
+    this.exigirDentroDoLimite('forgot', req, cpf, 5);
     return this.pwReset.requestReset(cpf);
   }
 
   /** POST /customers/app/reset-password — valida código e atualiza senha */
   @Post('reset-password')
   @HttpCode(200)
-  async resetPassword(@Body() body: { cpf: string; code: string; password: string }) {
+  async resetPassword(
+    @Body() body: { cpf: string; code: string; password: string },
+    @Req() req: any,
+  ) {
     const cpf = (body.cpf || '').replace(/\D/g, '');
+    this.exigirDentroDoLimite('reset', req, cpf);
     return this.pwReset.confirmReset(cpf, body.code, body.password);
   }
 
@@ -161,6 +240,41 @@ export class CustomersAppController {
   @UseGuards(CustomerJwtGuard)
   async updateMe(@Req() req: any, @Body() body: any) {
     return this.svc.updateProfile(req.customer.id, body || {});
+  }
+
+  /**
+   * GET /customers/app/consents — o que a cliente autorizou (item 67).
+   *
+   * A tabela `customer_consents` existe desde o CRM e é append-only, mas o
+   * site nunca leu nem escreveu nela: a cliente não tinha como ver — nem
+   * mudar — o que autorizou. Isso é exigência da LGPD, não recurso.
+   */
+  @Get('consents')
+  @UseGuards(CustomerJwtGuard)
+  async consents(@Req() req: any) {
+    return this.svc.getConsents(req.customer.id);
+  }
+
+  /**
+   * POST /customers/app/consents — registra opt-in/opt-out.
+   *
+   * NUNCA atualiza a linha anterior: cada evento vira uma linha nova, com IP
+   * e data. É esse histórico que responde "quando ela autorizou?" numa
+   * fiscalização — sobrescrever apagaria justamente a prova.
+   */
+  @Post('consents')
+  @HttpCode(200)
+  @UseGuards(CustomerJwtGuard)
+  async setConsent(@Req() req: any, @Body() body: any) {
+    const ip =
+      String(req?.headers?.['x-forwarded-for'] || '').split(',')[0].trim() ||
+      req?.ip ||
+      null;
+    return this.svc.setConsent(req.customer.id, {
+      channel: String(body?.channel || ''),
+      granted: !!body?.granted,
+      ip,
+    });
   }
 
   @Get('addresses')

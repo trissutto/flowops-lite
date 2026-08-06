@@ -33,9 +33,13 @@ export interface UseProductFiltersResult {
   removeChip: (groupId: string, value: string) => void;
 }
 
-export function useProductFilters(initial: FilterState = {}): UseProductFiltersResult {
+export function useProductFilters(
+  initial: FilterState = {},
+  ordemInicial: SortOption = 'relevancia',
+): UseProductFiltersResult {
   const [filters, setFilters] = useState<FilterState>(initial);
-  const [sort, setSort] = useState<SortOption>('relevancia');
+  // Só o valor INICIAL: a cliente troca a ordenação normalmente depois.
+  const [sort, setSort] = useState<SortOption>(ordemInicial);
   const [search, setSearch] = useState('');
 
   const toggleValue = useCallback((groupId: string, value: string) => {

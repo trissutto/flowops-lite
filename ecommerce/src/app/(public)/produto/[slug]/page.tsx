@@ -23,11 +23,12 @@ import { breadcrumbSchema, buildMetadata, jsonLdGraph, productSchema } from '@/l
  * Server Component: preço, estoque, fotos e SEO renderizam no servidor.
  * Só a galeria e a buy box são client (precisam de estado).
  *
- * ISR de 2 minutos: preço e estoque mudam com venda de loja física, então a
- * janela é curta — mas não zero, senão toda visita bate no ERP.
+ * SEM ISR de propósito: o fetch da peça é `no-store` (ver services/peca.ts),
+ * porque estoque servido do cache stale deixou tamanho esgotado comprável por
+ * horas (caso VOGUE VINHO 06/08). A rota é dinâmica; o dado do catálogo sai
+ * do Postgres local do backend, que aguenta uma query por visita.
  */
 
-export const revalidate = 120;
 /** Catálogo tem milhares de SKUs — geração sob demanda, sem pré-render. */
 export const dynamicParams = true;
 

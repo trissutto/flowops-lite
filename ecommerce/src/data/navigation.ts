@@ -230,13 +230,31 @@ export const navigation: NavItem[] = [
   },
 ];
 
-/** Barra superior — mensagens rotativas. Campanha nova = só editar aqui. */
+/**
+ * Barra superior — mensagens rotativas. Campanha nova = só editar aqui.
+ *
+ * ⚠️ NÃO repetir valor de frete aqui. A régua virou config (item 22) e este
+ * arquivo não a enxerga: "acima de R$ 399" ficou errado no dia em que o dono
+ * mudou pra R$ 499,90 na retaguarda, prometendo na barra o que o checkout não
+ * daria. Quem sabe o número é a barra de progresso da sacola, que lê a config.
+ */
 export const announcements = [
-  { label: 'Frete grátis acima de R$ 399', href: '/institucional/frete' },
+  { label: 'Frete grátis nas compras acima do valor da promoção', href: '/institucional/frete' },
   { label: 'Até 12x sem juros', href: '/institucional/pagamento' },
-  { label: 'Troca fácil em 30 dias', href: '/institucional/trocas' },
+  { label: 'Troca fácil em 30 dias', href: '/politica-de-trocas' },
   { label: '14 lojas em São Paulo e região', href: '/lojas' },
   { label: 'Fale com uma consultora no WhatsApp', href: '/lojas#whatsapp' },
+];
+
+/**
+ * RODAPÉ LEGAL — as três páginas que precisam estar publicadas e alcançáveis
+ * de qualquer tela (itens 81 e 108). Link enterrado em página interna não
+ * cumpre a exigência: tem que dar pra achar de onde a cliente estiver.
+ */
+export const legalLinks = [
+  { label: 'Trocas e devoluções', href: '/politica-de-trocas' },
+  { label: 'Política de privacidade', href: '/privacidade' },
+  { label: 'Termos de uso', href: '/termos' },
 ];
 
 /** Atalhos do drawer mobile (abaixo dos eixos principais). */

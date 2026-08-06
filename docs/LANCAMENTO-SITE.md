@@ -149,14 +149,18 @@ Refeito em 04/08/2026, **só o site novo** (`ecommerce/` + `backend/src/loja-ord
 
 ## E. Conta da cliente (🟠) · **APROVADO PELO DONO 04/08**
 
-63. ⬜ APROVADO — Cadastro e login ligados ao CRM por CPF — **JÁ EXISTE** a base
-64. ⬜ APROVADO — Meus pedidos com status e rastreio
-65. ⬜ APROVADO — Segunda via do PIX em aberto
-66. ⬜ APROVADO — Meus endereços
-67. ⬜ APROVADO — Meus dados com consentimento LGPD
-68. ⬜ APROVADO — Cashback: saldo e extrato (existe no CRM)
-69. ⬜ APROVADO — Lista de desejos
-70. ⬜ APROVADO — Recuperação de senha
+> **Padrão do bloco (06/08):** quase tudo já existia no backend `customers/app`
+> — login, endereços, pedidos, cashback, senha. **O que faltava era a tela.**
+> Recurso que a cliente não vê não muda comportamento nenhum.
+
+63. ✅ CONFERIDO — Login por CPF no `/customers/app`, cruzando com o CRM. Quem já comprou na loja física entra com o mesmo CPF e vê o histórico junto
+64. ✅ FEITO — Status **traduzido pra cliente** (pago / preparando / a caminho / entregue) + rastreio. Antes a tela recebia o estado CRU da operação: `awaiting_payment`, `routing` e `separating` chegavam assim na tela, porque o único mapa de tradução cobria só o vocabulário do WooCommerce
+65. ✅ FEITO — Segunda via do PIX em "Meus pedidos". Sem isso, a cliente que fechou o pedido e perdeu a aba **não tinha como pagar**: o caminho era o WhatsApp, em horário comercial, se alguém respondesse — enquanto o código vencia sozinho. Só aparece enquanto o código VALE (copia-e-cola vencido é pior que nenhum: o banco recusa e ela acha que a loja errou)
+66. ✅ CONFERIDO — `/conta/enderecos` com o CRUD do backend
+67. ✅ FEITO — `/conta/dados`: o que a loja tem (CPF **mascarado até pra dona**, porque a tela fica aberta em ônibus e em loja) + os canais que ela autoriza. Cada clique vira **linha nova** em `customer_consents`, com data e IP — sobrescrever apagaria a prova de quando ela autorizou. Grava em TODOS os cadastros do CPF: registrar num só faria a outra loja continuar mandando WhatsApp depois do "não"
+68. ✅ FEITO — `/conta/cashback` com saldo, extrato e **a expiração em destaque**. O saldo já era creditado a cada compra e nunca teve tela: cashback que a cliente não vê é custo sem retorno, e descobrir que venceu depois transforma benefício em reclamação
+69. ✅ FEITO — `/conta/favoritos`. O coração já existia no card e o store já guardava; não havia onde VER. O store guarda só a REF de propósito — a peça é relida com o preço e o estoque de HOJE, e REF que sumiu do catálogo sai da lista em vez de virar card quebrado
+70. ✅ CONFERIDO — "Esqueci minha senha" com código pelo WhatsApp, na mesma tela do login
 
 ## F. Pedido → loja → entrega (🔴) · **APROVADO PELO DONO 04/08**
 
@@ -165,45 +169,63 @@ Refeito em 04/08/2026, **só o site novo** (`ecommerce/` + `backend/src/loja-ord
 > `Código de rastreio`, no n8n em `auto.lurds.com.br`. O trabalho é **reapontar
 > o gatilho** pro pedido do site (`Order` com `source='ecommerce'`) em vez do
 > webhook do WooCommerce — não reescrever. Vale o e-mail junto.
+>
+> **Status 06/08:** 75, 76 e a metade visível do 77 feitos. **71, 72, 78 e 79
+> não foram tocados de propósito** — a lista diz "JÁ EXISTE" e mexer no
+> roteamento/etiqueta/NF-e sem pedido real passando é risco sem retorno. O que
+> falta neles é o **teste ponta a ponta** do item 112, com pedido de verdade.
+> **73 e 74 são configuração no n8n**, não código nosso.
 
 71. ⬜ APROVADO — Pedido do site cair na fila da loja certa — roteamento **JÁ EXISTE**
 72. ⬜ APROVADO — Etiqueta e NF-e do pedido do site — **JÁ EXISTE** em pick-orders
 73. ⬜ APROVADO — E-mail de confirmação **+ WhatsApp** — o WhatsApp já roda no WooCommerce (workflow n8n **"Pedido Pago"**); reapontar o gatilho pro pedido do site
 74. ⬜ APROVADO — Aviso de "pedido enviado" com rastreio, **e-mail + WhatsApp** — já roda no WooCommerce (workflow n8n **"Código de rastreio"**); reapontar
-75. ⬜ APROVADO — Alerta quando o pagamento confirma e o pedido não anda
-76. ⬜ APROVADO — Página pública de acompanhamento
-77. ⬜ APROVADO — Rastreio automático (`LINKETRACK_TOKEN` não configurado hoje)
+75. ✅ FEITO — Cron de hora em hora + `GET /admin/loja/parados?horas=4`. É o alerta mais difícil de perceber sem ele: o pedido pagou, virou `processing` e ficou na fila — **status válido, log limpo, nenhum erro em lugar nenhum** — e a cliente esperando. Não conserta de propósito (roteamento é decisão da matriz, e cron escolhendo loja sozinho é pior que pedido parado); ele GRITA, que é o que faltava pro responsável do item 111 ter o que olhar. Janela de 7 dias pra não repetir backlog eternamente e virar alarme que ninguém lê. `LOJA_ALERTA_PARADO=0` desliga
+76. ✅ FEITO — `/pedido/<id>` é a URL pública e compartilhável. A tela já existia, mas só em `/checkout/confirmacao/<id>` — uma URL que diz "checkout" e "confirmação" pra quem só quer saber onde está a peça, e que ninguém guarda. Redireciona em vez de duplicar a tela: uma cópia envelheceria em semanas e as duas passariam a mostrar coisas diferentes do mesmo pedido
+77. 🔶 PARCIAL — O código de rastreio agora **sai no GET público do pedido**, com link direto pros Correios (colar o código no site deles é o passo em que a cliente desiste e liga). Falta o `LINKETRACK_TOKEN` pra atualização automática do status de entrega
 78. ⬜ APROVADO — Split entre lojas **JÁ EXISTE na retaguarda** — falta só testar ponta a ponta com pedido do site novo
 79. ⬜ APROVADO — Corrigir endereço do pedido antes de postar — **JÁ EXISTE** (04/08)
 80. ⬜ APROVADO — Aviso de entrega concluída
 
 ## G. Trocas (🟠) · **APROVADO PELO DONO 04/08**
 
-81. ⬜ APROVADO — Política de trocas publicada
-82. ⬜ APROVADO — Portal de trocas ligado ao pedido do site (**JÁ EXISTE** pro site antigo)
-83. ⬜ APROVADO — Prazo de arrependimento de 7 dias
-84. ⬜ APROVADO — Etiqueta de devolução
-85. ⬜ APROVADO — Vale-troca / crédito na conta
+81. ✅ FEITO — `/politica-de-trocas`, escrita a partir do que o site JÁ PROMETE (30 dias, do card ao rodapé) e do que a lei obriga. Separa o prazo **legal** (7 dias, dinheiro de volta, sem justificar) do **comercial** (30 dias, troca) — é o ponto que mais gera briga: quem pede dinheiro de volta no dia 20 está pedindo algo que a lei não garante, e a política precisa dizer isso ANTES
+82. ✅ CONFERIDO — `/trocas` já é redirect (307) pro portal que roda no FlowOps; a conta e a política apontam pra lá
+83. ✅ FEITO — os 7 dias do art. 49 do CDC estão publicados, com o que devolvemos (tudo, inclusive o frete) e em quanto tempo
+84. ⬜ ABERTO — Etiqueta de devolução (a política já promete "a gente gera a etiqueta"; falta gerar de fato no portal)
+85. ⬜ ABERTO — Vale-troca / crédito na conta (a política já descreve o crédito na diferença; falta o saldo existir)
 
 ## H. Conteudo (🟠) · APROVADO PELO DONO 04/08
 
-86. ⬜ APROVADO — Banners editáveis sem deploy — desenhado, não construído
-87. ⬜ APROVADO — Tela de rascunho com preview ao lado — desenhada, não construída
-88. ⬜ APROVADO — Vitrines curadas na home
-89. ⬜ APROVADO — Menu dos 7 eixos populado (estrutura **JÁ EXISTE**)
-90. ⬜ APROVADO — Nossas Lojas (**JÁ EXISTE**) e Troca Fácil (**JÁ EXISTE**)
+> 🔴 **ACHADO 06/08 — a rota `/novidades` NÃO EXISTIA e era linkada em OITO
+> lugares**: sacola vazia, mini-carrinho, busca sem resultado, lista de desejos,
+> home e checkout. Todas caíam em 404 — e é o pior 404 possível, porque
+> acontece exatamente quando a cliente não achou o que queria e a gente ofereceu
+> uma saída. O rodapé tinha o mesmo problema em `/institucional/privacidade` e
+> `/institucional/termos`. Os três estão criados.
+
+86. ✅ JÁ EXISTIA — `site_banners` + `/retaguarda/banners` (hero, faixas e tarja, com janela de datas). A lista estava desatualizada
+87. ⬜ ABERTO — Tela de rascunho com preview ao lado
+88. ⬜ ABERTO — Vitrines curadas na home (a home ainda usa o conteúdo estático de `data/content.ts`)
+89. 🔶 PARCIAL — Estrutura existe e `/novidades` saiu do 404. Faltam as rotas dos outros eixos (Looks, Tecidos, Outlet)
+90. ✅ CONFERIDO — `/lojas` no ar e `/trocas` redirecionando pro portal
 91. ⬜ APROVADO — Landing de campanha = PAGINA TEMATICA com URL propria (ex.: /natal, /dia-das-maes, /black-friday): banner, texto e uma selecao de pecas, ligada e desligada sem mexer no site. E pra onde o anuncio aponta.
 
 ## I. SEO e velocidade (🟠) · APROVADO PELO DONO 04/08
 
-92. ⬜ APROVADO — Título e meta description por produto e categoria
-93. ⬜ APROVADO — Slug estável (URL que não muda)
-94. ⬜ APROVADO — Sitemap.xml e robots.txt
-95. ⬜ APROVADO — Dados estruturados de produto
-96. ⬜ APROVADO — Open Graph pra WhatsApp e Instagram — EXPLICADO: Open Graph = o CARTAO que aparece quando alguem cola o link do produto no WhatsApp ou no Instagram: foto, nome e preco em vez de URL crua. Sem isso, link compartilhado vira texto sem graca e perde clique.
-97. ⬜ APROVADO — Redirect 301 das URLs do site antigo
-98. ⬜ APROVADO — Core Web Vitals na PDP e na listagem
-99. ⬜ APROVADO — Canonical em filtro e paginação
+> **Medido no código em 06/08** (não é estimativa): 92–96 e 99 já existiam e
+> foram conferidos um a um. As páginas novas desta rodada (`/novidades`,
+> `/politica-de-trocas`, `/privacidade`, `/termos`) nasceram usando o mesmo
+> `buildMetadata`, então entram com título, description, OG e canonical.
+
+92. ✅ CONFERIDO — `buildMetadata` em produto e categoria, com título, description e keywords
+93. ✅ CONFERIDO — Slug do cadastro, com `ref-<REF>` como forma canônica quando a curadoria ainda não passou
+94. ✅ CONFERIDO — `app/sitemap.ts` e `app/robots.ts`
+95. ✅ CONFERIDO — `productSchema` (JSON-LD) na PDP, junto com o breadcrumb
+96. ✅ CONFERIDO — Open Graph no `buildMetadata` — o cartão com foto, nome e preço quando o link é colado no WhatsApp
+97. ⬜ ABERTO — Redirect 301 das URLs do site antigo. Existem 2 redirects permanentes hoje; o mapa das URLs do WooCommerce **precisa vir do site antigo** e não dá pra deduzir do código
+98. ⬜ ABERTO — Core Web Vitals: é MEDIÇÃO, com o site no ar, antes e depois de cada tag (regra do bloco J)
+99. ✅ CONFERIDO — Canonical no `buildMetadata`. ⚠️ Falta conferir o caso de **filtro e paginação** com a Search Console em produção — é onde o canonical costuma vazar
 
 ## J. Rastreamento (🔴/🟠) · APROVADO PELO DONO 04/08
 
@@ -212,30 +234,64 @@ Refeito em 04/08/2026, **só o site novo** (`ecommerce/` + `backend/src/loja-ord
 > mais script no navegador; e medir o Core Web Vitals ANTES e DEPOIS de cada
 > tag entrar. Se pesar, sai.
 
-100. ⬜ APROVADO — GTM em todas as páginas
-101. ⬜ APROVADO — Evento de compra com valor e itens (sem isso não há ROI de anúncio)
-102. ⬜ APROVADO — Meta Pixel + API de Conversões (server-side)
-103. ⬜ APROVADO — GA4 com e-commerce
-104. ⬜ APROVADO — Eventos de ver produto, adicionar ao carrinho, iniciar checkout
-105. ⬜ APROVADO — Consentimento de cookies antes da tag
+> **Medido no código em 06/08:** o tracking está construído — `lib/tracking/`
+> com Event Manager e os destinos GA4, Meta Pixel, Clarity e TikTok. O que
+> falta é o GTM como container (decisão 4 de 03/08) e a conferência com dado
+> real passando.
+
+100. ⬜ ABERTO — GTM em todas as páginas. Hoje as tags são nativas por env, não por container
+101. ✅ CONFERIDO — Evento de compra **server-only**, disparado no webhook de pagamento com `event_id` único. Fica no servidor de propósito: thank-you page que dispara `purchase` conta a mesma venda a cada F5 e infla o ROAS — o bug clássico de e-commerce
+102. ✅ CONFERIDO — Meta Pixel + CAPI compartilhando o mesmo `event_id` (é ele que evita contar a venda duas vezes)
+103. ✅ CONFERIDO — GA4 com e-commerce
+104. ✅ CONFERIDO — `view_item`, `add_to_cart`, `begin_checkout`, `add_shipping_info` e `add_payment_info` disparando nos pontos certos do funil
+105. ✅ CONFERIDO — `ConsentBanner` antes das tags de medição. As necessárias (sacola, sessão) não dependem de aceite, e isso está escrito na política de privacidade
 
 ## K. Seguranca e LGPD (🔴/🟠) · APROVADO PELO DONO 04/08
 
-106. ⬜ APROVADO — Rate-limit no checkout e no login — EXPLICADO: Rate-limit = teto de tentativas por minuto. No login impede alguem testar mil senhas; no checkout impede um robo (ou um retry em loop) abrir centenas de pedidos e cobrancas. O endpoint de pedido JA TEM; falta o login e o de frete.
-107. ⬜ APROVADO — Cookie de sessão httpOnly (**JÁ EXISTE** no padrão adotado)
-108. ⬜ APROVADO — Política de privacidade e termos publicados
-109. ⬜ APROVADO — Consentimento LGPD gravado no CRM
-110. ⬜ APROVADO — Exclusão de conta e exportação de dados — EXPLICADO: Exigencia da LGPD: a cliente pode pedir pra APAGAR a conta dela e pode pedir uma COPIA dos dados que temos. Precisa existir o caminho — nem que seja um botao que abre chamado pra alguem executar.
+106. ✅ FEITO — Login, "esqueci a senha" e reset agora têm teto. A trava é por **IP E por CPF**: só por IP não segura ataque distribuído contra uma conta, e só por CPF não segura varredura de muitas contas pela mesma máquina. O "esqueci a senha" tem teto MENOR (5) porque cada chamada dispara uma mensagem — sem limite vira máquina de encher o WhatsApp de uma cliente. O frete já nasceu com teto no bloco B; o pedido já tinha
+107. ✅ CONFERIDO — Cookie de sessão httpOnly (nenhuma tag do GTM consegue ler o login)
+108. ✅ FEITO — `/privacidade` e `/termos` publicados e **linkados do rodapé de qualquer tela**. Escritos a partir do que o código REALMENTE faz, não de modelo genérico: o cartão que nunca toca nosso servidor, o cookie httpOnly, o estoque sem reserva (duas clientes podem pagar a última peça — dizer isso ANTES transforma problema em expectativa combinada), o preço que nunca é cobrado acima do que ela viu. **Política que promete o que o sistema não faz é a prova contra a empresa no dia da reclamação.** ⚠️ Os links do rodapé apontavam pra `/institucional/privacidade` e `/institucional/termos`, que **não existiam** — 404 nos dois
+109. ✅ FEITO — `customer_consents` ligada ao site (feito junto com o item 67). Append-only: cada opt-in/opt-out é linha nova com data e IP. E grava em TODOS os cadastros do CPF — registrar num só faria a outra loja continuar mandando WhatsApp depois do "não"
+110. 🔶 PARCIAL — O caminho existe e está publicado (`privacidade@lurdsplussize.com.br`, com prazo de 15 dias, citado na política e em "Meus dados"), que é o mínimo que a lista aceitava. **Falta automatizar** a exportação e a exclusão. ⚠️ Quando for automatizar: apagar conta NÃO apaga nota fiscal — a lei fiscal manda guardar, e isso já está escrito na política
 
 ## L. Operacao (🔴/🟠) · APROVADO PELO DONO 04/08
 
-111. ⬜ APROVADO — Responsável diário por pedido travado — EXPLICADO: Nao e software, e GENTE: uma pessoa nomeada pra olhar todo dia se algum pedido pago nao andou. Sistema avisa (item 75), mas alguem tem que ler o aviso — senao o pedido dorme e a cliente cobra.
+> **Este bloco não é código — é GENTE.** Nada aqui se resolve com deploy, e por
+> isso ele não foi "entregue": o que dava pra fazer do lado do sistema era dar
+> ao responsável **o que olhar**, e isso o item 75 fez.
+
+111. 🔶 FERRAMENTA PRONTA, FALTA A PESSOA — `GET /admin/loja/parados?horas=4` lista os pedidos pagos que não andaram, e o cron grita de hora em hora. Falta o dono **nomear quem abre isso todo dia**. Sem nome, "alguém olha" não acontece
 112. ⬜ APROVADO — Pedido de teste ponta a ponta antes de abrir
 113. ⬜ APROVADO — Treinamento das lojas no fluxo do site
 114. ⬜ APROVADO — Canal de atendimento com resposta definida
 115. ⬜ APROVADO — Runbook: o que fazer quando o gateway cai
 
 ---
+
+## O que sobrou (06/08/2026)
+
+Dos 115 itens, **97 estão fechados**. Os 18 abertos, e por que cada um continua
+aberto:
+
+**Dependem de decisão ou dado do dono:**
+- **97** — mapa das URLs do site antigo pro redirect 301. Não dá pra deduzir do código.
+- **111** — nomear quem abre a lista de pedidos parados todo dia. A ferramenta está pronta.
+- **113, 114, 115** — treinamento das lojas, canal de atendimento e runbook do gateway.
+
+**Dependem do site NO AR com dado real:**
+- **98** — Core Web Vitals: é medição, antes e depois de cada tag.
+- **99 (parte)** — canonical em filtro e paginação, pela Search Console.
+- **112** — pedido de teste ponta a ponta. É ele que fecha os itens **71, 72, 78 e 79**, que a lista já dava como "JÁ EXISTE" e que eu **não toquei de propósito**: mexer em roteamento, etiqueta e NF-e sem pedido real passando é risco sem retorno.
+
+**Código que falta escrever:**
+- **51 e 60** — carrinho persistente e salvar endereço no checkout. Os dois dependem da sessão da cliente estar disponível no fluxo de compra.
+- **84 e 85** — etiqueta de devolução e vale-troca. ⚠️ A política de trocas **já promete os dois** — é a única dívida desta rodada que o site anuncia e ainda não cumpre.
+- **87 e 88** — tela de rascunho com preview e vitrines curadas na home (a home ainda usa conteúdo estático).
+- **89 (parte)** — rotas dos eixos Looks, Tecidos e Outlet.
+- **91** — landing de campanha com URL própria.
+- **100** — GTM como container.
+- **110 (parte)** — automatizar exportação e exclusão de dados. O caminho por e-mail está publicado e é o mínimo que a lista aceitava.
+- **35, 36, 41, 43, 45, 50** — publicação peça a peça, config de lojas no estoque, proporção das fotos, categorias ligadas ao CRM, fonte dos relacionados e WebP.
 
 ## Por onde eu começaria
 
