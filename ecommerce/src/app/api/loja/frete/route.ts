@@ -21,7 +21,7 @@ export const dynamic = 'force-dynamic';
 const TIMEOUT_MS = 9_000;
 
 export async function POST(req: Request) {
-  let body: any;
+  let body: { cep?: unknown; subtotal?: unknown; pecas?: unknown } | null = null;
   try {
     body = await req.json();
   } catch {
