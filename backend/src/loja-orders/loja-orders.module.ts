@@ -2,6 +2,7 @@ import { Module, forwardRef } from '@nestjs/common';
 import { HttpModule } from '@nestjs/axios';
 import { PrismaModule } from '../prisma/prisma.module';
 import { PagarmeModule } from '../pagarme/pagarme.module';
+import { CorreiosModule } from '../correios/correios.module';
 import { LojaOrdersService } from './loja-orders.service';
 import { LojaOrdersController } from './loja-orders.controller';
 
@@ -18,7 +19,7 @@ import { LojaOrdersController } from './loja-orders.controller';
  * dinheiro entra.
  */
 @Module({
-  imports: [PrismaModule, HttpModule, forwardRef(() => PagarmeModule)],
+  imports: [PrismaModule, HttpModule, CorreiosModule, forwardRef(() => PagarmeModule)],
   controllers: [LojaOrdersController],
   providers: [LojaOrdersService],
   exports: [LojaOrdersService],
