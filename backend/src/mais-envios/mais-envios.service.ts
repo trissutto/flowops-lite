@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
 import { MaisEnviosAuthService } from './mais-envios-auth.service';
-import { encurtarNomeDestinatario } from '../lib/nome-destinatario';
+import { encurtarCampoEndereco, encurtarNomeDestinatario } from '../lib/nome-destinatario';
 
 /**
  * Serviços do Mais Envios (portalmaisenvios.com.br) — cotação de frete,
@@ -198,12 +198,16 @@ export class MaisEnviosService {
         contact: nomeDestino,
         name: nomeDestino,
         cep: cepDash(d.cep),
-        address: d.endereco,
-        number: String(d.numero || 'S/N'),
-        neighborhood: d.bairro || '',
-        city: d.cidade || '',
+        // Mesmo tratamento do nome pros campos de ENDEREÇO (caso Sorocaba
+        // 05/08 nos Correios — aqui os limites não são documentados, então
+        // valem os do CWS, que são os mais apertados do mercado: qualquer
+        // transportadora aceita 50/30/30).
+        address: encurtarCampoEndereco(d.endereco, 50),
+        number: String(d.numero || 'S/N').trim().slice(0, 6),
+        neighborhood: encurtarCampoEndereco(d.bairro || '', 30),
+        city: encurtarCampoEndereco(d.cidade || '', 30),
         state: d.uf || '',
-        extent: d.complemento || '',
+        extent: encurtarCampoEndereco(d.complemento || '', 30),
       },
       contact: {
         save: false,

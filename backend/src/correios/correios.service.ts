@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
 import { CorreiosAuthService } from './correios-auth.service';
-import { encurtarNomeDestinatario } from '../lib/nome-destinatario';
+import { encurtarCampoEndereco, encurtarNomeDestinatario } from '../lib/nome-destinatario';
 
 /**
  * Serviços dos Correios (API CWS) — cálculo de frete (preço + prazo) e
@@ -213,17 +213,31 @@ export class CorreiosService {
     const foneRem = splitFone(input.remetente.telefone);
     const foneDest = splitFone(input.destinatario.telefone);
 
+    // O CWS VALIDA o tamanho de cada campo e recusa a pré-postagem inteira
+    // ("excesso de caracteres" — caso Sorocaba 05/08, que estourou no
+    // ENDEREÇO, não no nome). Limites do manual: logradouro 50, bairro 30,
+    // cidade 30, complemento 30, número 6. Abreviação antes do corte
+    // ("Avenida Doutor"→"Av. Dr.") — e fica no log quando mexeu.
+    const endLimite = (rotulo: string, v: any, max: number) => {
+      const original = String(v || '').replace(/\s+/g, ' ').trim();
+      const curto = encurtarCampoEndereco(original, max);
+      if (curto !== original) {
+        this.logger.warn(`[correios] ${rotulo} encurtado pro limite de ${max}: "${original}" → "${curto}"`);
+      }
+      return curto;
+    };
+
     const body: any = {
       remetente: {
-        nome: input.remetente.nome.slice(0, 50),
+        nome: encurtarNomeDestinatario(input.remetente.nome, 50),
         cpfCnpj: input.remetente.cnpjCpf.replace(/\D/g, ''),
         ...(foneRem.numero ? { dddCelular: foneRem.ddd, celular: foneRem.numero } : {}),
         endereco: {
           cep: input.remetente.cep.replace(/\D/g, ''),
-          logradouro: input.remetente.endereco,
-          numero: input.remetente.numero,
-          bairro: input.remetente.bairro,
-          cidade: input.remetente.cidade,
+          logradouro: endLimite('logradouro remetente', input.remetente.endereco, 50),
+          numero: String(input.remetente.numero || 'S/N').trim().slice(0, 6),
+          bairro: endLimite('bairro remetente', input.remetente.bairro, 30),
+          cidade: endLimite('cidade remetente', input.remetente.cidade, 30),
           uf: input.remetente.uf,
         },
       },
@@ -236,11 +250,11 @@ export class CorreiosService {
         ...(foneDest.numero ? { dddCelular: foneDest.ddd, celular: foneDest.numero } : {}),
         endereco: {
           cep: input.destinatario.cep.replace(/\D/g, ''),
-          logradouro: input.destinatario.endereco,
-          numero: input.destinatario.numero,
-          complemento: input.destinatario.complemento || '',
-          bairro: input.destinatario.bairro,
-          cidade: input.destinatario.cidade,
+          logradouro: endLimite('logradouro destinatário', input.destinatario.endereco, 50),
+          numero: String(input.destinatario.numero || 'S/N').trim().slice(0, 6),
+          complemento: endLimite('complemento destinatário', input.destinatario.complemento || '', 30),
+          bairro: endLimite('bairro destinatário', input.destinatario.bairro, 30),
+          cidade: endLimite('cidade destinatário', input.destinatario.cidade, 30),
           uf: input.destinatario.uf,
         },
       },
