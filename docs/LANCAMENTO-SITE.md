@@ -47,7 +47,7 @@ Refeito em 04/08/2026, **só o site novo** (`ecommerce/` + `backend/src/loja-ord
 27. 🟠 Retirada: prazo, endereço e instruções
 28. 🟡 Simulador de frete na página do produto
 29. 🟡 Regra de embalagem (vários itens numa caixa)
-30. 🟡 Rota própria Itanhaém/Praia Grande/Santos como opção de entrega
+30. ~~Rota própria Itanhaém/Praia Grande/Santos como opção de entrega~~ — **REMOVIDO (04/08)**. Era a regra do REALINHAMENTO entre lojas (carro da rede levando mercadoria de loja pra loja), não entrega de pedido de cliente. Vazou do contexto do dia pra esta lista. Se um dia virar entrega própria pro cliente naquelas cidades, é item novo e com desenho próprio
 
 ## C. Produto e vitrine (🔴 — o gargalo real)
 
