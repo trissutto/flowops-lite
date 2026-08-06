@@ -727,7 +727,7 @@ function NfeTransferSection({ stores }: { stores: Store[] }) {
         <button
           onClick={() => { setLoteDe(''); setLoteAte(''); }}
           className="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-[11px] font-semibold text-slate-600 hover:bg-slate-100"
-          title="Limpar período = TODAS as notas autorizadas"
+          title="Limpar período = TODAS as notas (autorizadas e canceladas)"
         >
           Todas
         </button>
@@ -755,7 +755,7 @@ function NfeTransferSection({ stores }: { stores: Store[] }) {
           </button>
         </div>
         <p className="w-full text-[10px] text-slate-500">
-          Baixa as notas <b>autorizadas</b> do período (e da loja selecionada acima, se houver) — XMLs pro contador, DANFEs em PDF, ou os dois.
+          Baixa as notas <b>autorizadas e canceladas</b> do período (e da loja selecionada acima, se houver) — XMLs pro contador, DANFEs em PDF, ou os dois. Canceladas vão na pasta <b>canceladas/</b> do ZIP, com o XML do evento de cancelamento junto.
         </p>
       </div>
 
