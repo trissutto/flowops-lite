@@ -166,41 +166,46 @@ Refeito em 04/08/2026, **só o site novo** (`ecommerce/` + `backend/src/loja-ord
 90. ⬜ APROVADO — Nossas Lojas (**JÁ EXISTE**) e Troca Fácil (**JÁ EXISTE**)
 91. ⬜ APROVADO — Landing de campanha = PAGINA TEMATICA com URL propria (ex.: /natal, /dia-das-maes, /black-friday): banner, texto e uma selecao de pecas, ligada e desligada sem mexer no site. E pra onde o anuncio aponta.
 
-## I. SEO e velocidade (🟠)
+## I. SEO e velocidade (🟠) · APROVADO PELO DONO 04/08
 
-92. Título e meta description por produto e categoria
-93. Slug estável (URL que não muda)
-94. Sitemap.xml e robots.txt
-95. Dados estruturados de produto
-96. Open Graph pra WhatsApp e Instagram
-97. Redirect 301 das URLs do site antigo
-98. Core Web Vitals na PDP e na listagem
-99. 🟡 Canonical em filtro e paginação
+92. ⬜ APROVADO — Título e meta description por produto e categoria
+93. ⬜ APROVADO — Slug estável (URL que não muda)
+94. ⬜ APROVADO — Sitemap.xml e robots.txt
+95. ⬜ APROVADO — Dados estruturados de produto
+96. ⬜ APROVADO — Open Graph pra WhatsApp e Instagram — EXPLICADO: Open Graph = o CARTAO que aparece quando alguem cola o link do produto no WhatsApp ou no Instagram: foto, nome e preco em vez de URL crua. Sem isso, link compartilhado vira texto sem graca e perde clique.
+97. ⬜ APROVADO — Redirect 301 das URLs do site antigo
+98. ⬜ APROVADO — Core Web Vitals na PDP e na listagem
+99. ⬜ APROVADO — Canonical em filtro e paginação
 
-## J. Rastreamento (🔴/🟠)
+## J. Rastreamento (🔴/🟠) · APROVADO PELO DONO 04/08
 
-100. 🔴 GTM em todas as páginas
-101. 🔴 Evento de compra com valor e itens (sem isso não há ROI de anúncio)
-102. 🟠 Meta Pixel + API de Conversões (server-side)
-103. 🟠 GA4 com e-commerce
-104. 🟠 Eventos de ver produto, adicionar ao carrinho, iniciar checkout
-105. 🟠 Consentimento de cookies antes da tag
+> ⚠️ REGRA DO DONO: SEM PESAR O SITE. Tag so carrega depois do conteudo,
+> nunca bloqueando a pagina; Meta pela API de Conversoes (servidor) em vez de
+> mais script no navegador; e medir o Core Web Vitals ANTES e DEPOIS de cada
+> tag entrar. Se pesar, sai.
 
-## K. Segurança e LGPD (🔴/🟠)
+100. ⬜ APROVADO — GTM em todas as páginas
+101. ⬜ APROVADO — Evento de compra com valor e itens (sem isso não há ROI de anúncio)
+102. ⬜ APROVADO — Meta Pixel + API de Conversões (server-side)
+103. ⬜ APROVADO — GA4 com e-commerce
+104. ⬜ APROVADO — Eventos de ver produto, adicionar ao carrinho, iniciar checkout
+105. ⬜ APROVADO — Consentimento de cookies antes da tag
 
-106. 🔴 Rate-limit no checkout e no login
-107. 🔴 Cookie de sessão httpOnly (**JÁ EXISTE** no padrão adotado)
-108. 🟠 Política de privacidade e termos publicados
-109. 🟠 Consentimento LGPD gravado no CRM
-110. 🟠 Exclusão de conta e exportação de dados
+## K. Seguranca e LGPD (🔴/🟠) · APROVADO PELO DONO 04/08
 
-## L. Operação (🔴/🟠)
+106. ⬜ APROVADO — Rate-limit no checkout e no login — EXPLICADO: Rate-limit = teto de tentativas por minuto. No login impede alguem testar mil senhas; no checkout impede um robo (ou um retry em loop) abrir centenas de pedidos e cobrancas. O endpoint de pedido JA TEM; falta o login e o de frete.
+107. ⬜ APROVADO — Cookie de sessão httpOnly (**JÁ EXISTE** no padrão adotado)
+108. ⬜ APROVADO — Política de privacidade e termos publicados
+109. ⬜ APROVADO — Consentimento LGPD gravado no CRM
+110. ⬜ APROVADO — Exclusão de conta e exportação de dados — EXPLICADO: Exigencia da LGPD: a cliente pode pedir pra APAGAR a conta dela e pode pedir uma COPIA dos dados que temos. Precisa existir o caminho — nem que seja um botao que abre chamado pra alguem executar.
 
-111. 🔴 Responsável diário por pedido travado
-112. 🔴 Pedido de teste ponta a ponta antes de abrir
-113. 🟠 Treinamento das lojas no fluxo do site
-114. 🟠 Canal de atendimento com resposta definida
-115. 🟡 Runbook: o que fazer quando o gateway cai
+## L. Operacao (🔴/🟠) · APROVADO PELO DONO 04/08
+
+111. ⬜ APROVADO — Responsável diário por pedido travado — EXPLICADO: Nao e software, e GENTE: uma pessoa nomeada pra olhar todo dia se algum pedido pago nao andou. Sistema avisa (item 75), mas alguem tem que ler o aviso — senao o pedido dorme e a cliente cobra.
+112. ⬜ APROVADO — Pedido de teste ponta a ponta antes de abrir
+113. ⬜ APROVADO — Treinamento das lojas no fluxo do site
+114. ⬜ APROVADO — Canal de atendimento com resposta definida
+115. ⬜ APROVADO — Runbook: o que fazer quando o gateway cai
 
 ---
 
