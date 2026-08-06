@@ -105,6 +105,7 @@ export class ErpOutboxService {
     if (job.kind === 'bandeira_fechamento') return this.processBandeiraFechamento(job);
     if (job.kind === 'crediario_criacao') return this.processCrediarioCriacao(job);
     if (job.kind === 'fornecedor_upsert') return this.processFornecedorUpsert(job);
+    if (job.kind === 'fornecedor_delete') return this.processFornecedorDelete(job);
     if (job.kind !== 'venda') {
       await this.markFailed(job, `kind desconhecido: ${job.kind}`);
       return false;
@@ -743,6 +744,32 @@ export class ErpOutboxService {
       return true;
     } catch (e: any) {
       this.logger.warn(`[outbox] fornecedor_upsert ${codigo} re-agendado: ${e?.message}`);
+      return this.requeueOrFail(job, e);
+    }
+  }
+
+  /**
+   * Réplica da EXCLUSÃO de fornecedor no Giga. Sem ela o sync full-replace
+   * re-importa o fornecedor apagado no Flow. DELETE por chave é idempotente —
+   * retry numa linha que já sumiu não afeta nada.
+   */
+  private async processFornecedorDelete(job: any): Promise<boolean> {
+    const codigo = Number(job.payload?.codigo) || 0;
+    if (!codigo) {
+      await this.markFailed(job, 'fornecedor_delete sem codigo');
+      return false;
+    }
+    try {
+      const r = await (this.erp as any).deleteFornecedorRow(codigo);
+      if (!r?.success) throw new Error(r?.error || 'delete falhou');
+      await this.prisma.erpOutbox.update({
+        where: { id: job.id },
+        data: { status: 'done', doneAt: new Date(), lastError: null },
+      });
+      this.logger.log(`[outbox] fornecedor_delete ${codigo} aplicado no Giga`);
+      return true;
+    } catch (e: any) {
+      this.logger.warn(`[outbox] fornecedor_delete ${codigo} re-agendado: ${e?.message}`);
       return this.requeueOrFail(job, e);
     }
   }

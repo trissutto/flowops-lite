@@ -1,4 +1,4 @@
-import { Body, Controller, ForbiddenException, Get, Param, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, ForbiddenException, Get, Param, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { FornecedoresService } from './fornecedores.service';
 
@@ -44,5 +44,12 @@ export class FornecedoresController {
   atualizar(@Req() req: any, @Param('codigo') codigo: string, @Body() body: any) {
     this.requireAdmin(req);
     return this.svc.atualizar(Number(codigo), body, req?.user?.name || req?.user?.email);
+  }
+
+  /** Bloqueado quando há Conta a Pagar vinculada; réplica da exclusão vai pro Giga. */
+  @Delete(':codigo')
+  excluir(@Req() req: any, @Param('codigo') codigo: string) {
+    this.requireAdmin(req);
+    return this.svc.excluir(Number(codigo), req?.user?.name || req?.user?.email);
   }
 }

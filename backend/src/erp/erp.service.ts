@@ -8571,6 +8571,23 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Exclusão do fornecedor no Giga — réplica do excluir do Flow. Sem isso o
+   * sync full-replace RE-IMPORTA o fornecedor apagado (mesmo padrão do marcado
+   * ressuscitado do caso Célio). LIMIT 1 defensivo: CODIGO é chave.
+   */
+  async deleteFornecedorRow(codigo: number): Promise<{ success: boolean; error?: string }> {
+    if (!this.isWriteEnabled || !this.pool) return { success: false, error: 'escrita no Giga desabilitada' };
+    const cod = Number(codigo);
+    if (!Number.isFinite(cod) || cod <= 0) return { success: false, error: `codigo inválido: ${codigo}` };
+    try {
+      await this.pool.query(`DELETE FROM \`fornecedores\` WHERE \`CODIGO\` = ? LIMIT 1`, [cod]);
+      return { success: true };
+    } catch (e: any) {
+      return { success: false, error: e?.message || String(e) };
+    }
+  }
+
+  /**
    * O INSERT da categoria no Giga, isolado. Público porque o cron do outbox
    * chama isto quando a réplica atrasada finalmente sai.
    *

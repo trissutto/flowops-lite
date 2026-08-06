@@ -21,7 +21,7 @@ import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { api } from '@/lib/api';
 import {
-  ArrowLeft, Plus, Search, Save, X, Building2, AlertTriangle, Check, Clock,
+  ArrowLeft, Plus, Search, Save, X, Building2, AlertTriangle, Check, Clock, Trash2,
 } from 'lucide-react';
 
 type Fornecedor = {
@@ -66,6 +66,10 @@ export default function FornecedoresPage() {
   const [erro, setErro] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
   const [dupCnpj, setDupCnpj] = useState<any[]>([]);
+  // Excluir em 2 cliques (sem window.confirm — não funciona no app das lojas):
+  // 1º clique arma ("Confirma?"), 2º executa. Qualquer outro clique desarma.
+  const [armadoExcluir, setArmadoExcluir] = useState<number | null>(null);
+  const [excluindo, setExcluindo] = useState<number | null>(null);
 
   const carregar = useCallback(async () => {
     setCarregando(true);
@@ -93,6 +97,22 @@ export default function FornecedoresPage() {
       );
       setDupCnpj(r.existentes || []);
     } catch { setDupCnpj([]); }
+  };
+
+  const excluir = async (f: Fornecedor) => {
+    if (armadoExcluir !== f.codigo) { setArmadoExcluir(f.codigo); setErro(null); setOk(null); return; }
+    setExcluindo(f.codigo);
+    setArmadoExcluir(null);
+    try {
+      await api(`/fornecedores/${f.codigo}`, { method: 'DELETE' });
+      setOk(`Fornecedor ${f.codigo} — ${f.razaoSocial || 's/ nome'} excluído (Giga recebe a exclusão automaticamente)`);
+      await carregar();
+    } catch (e: any) {
+      // Trava do backend (ex.: contas a pagar vinculadas) chega aqui com o motivo.
+      setErro(e?.message || 'Falha ao excluir');
+    } finally {
+      setExcluindo(null);
+    }
   };
 
   const salvar = async () => {
@@ -158,6 +178,9 @@ export default function FornecedoresPage() {
       </div>
 
       <div className="overflow-hidden rounded-xl border border-neutral-200 bg-white">
+        <div className="border-b border-neutral-100 bg-neutral-50/60 px-4 py-2 text-[11px] font-semibold uppercase tracking-wide text-neutral-500">
+          {carregando ? 'Carregando…' : `${lista.length} fornecedor${lista.length === 1 ? '' : 'es'}${busca.trim() ? ' na busca' : ' no total'}`}
+        </div>
         <table className="w-full text-sm">
           <thead className="bg-neutral-50 text-[11px] uppercase tracking-wide text-neutral-500">
             <tr>
@@ -191,7 +214,22 @@ export default function FornecedoresPage() {
                 <td className="px-4 py-3 text-neutral-600">{f.cidade || '—'}{f.uf ? `/${f.uf}` : ''}</td>
                 <td className="px-4 py-3 text-neutral-600">{f.contato || f.fone || '—'}</td>
                 <td className="px-4 py-3 text-right">
-                  <button onClick={() => abrirEdicao(f)} className="rounded-lg border border-neutral-300 px-3 py-1 text-xs font-medium hover:bg-neutral-50">Editar</button>
+                  <div className="flex items-center justify-end gap-1.5">
+                    <button onClick={() => { setArmadoExcluir(null); abrirEdicao(f); }} className="rounded-lg border border-neutral-300 px-3 py-1 text-xs font-medium hover:bg-neutral-50">Editar</button>
+                    <button
+                      onClick={() => void excluir(f)}
+                      disabled={excluindo === f.codigo}
+                      title={armadoExcluir === f.codigo ? 'Clique de novo pra confirmar a exclusão' : 'Excluir fornecedor'}
+                      className={`rounded-lg border px-2.5 py-1 text-xs font-medium flex items-center gap-1 disabled:opacity-50 ${
+                        armadoExcluir === f.codigo
+                          ? 'border-red-400 bg-red-600 text-white hover:bg-red-700'
+                          : 'border-red-200 text-red-600 hover:bg-red-50'
+                      }`}
+                    >
+                      <Trash2 size={13} />
+                      {excluindo === f.codigo ? 'Excluindo…' : armadoExcluir === f.codigo ? 'Confirma?' : ''}
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}
