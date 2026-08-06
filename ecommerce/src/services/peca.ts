@@ -29,8 +29,17 @@ export interface PecaDoSite {
 
 export async function fetchPeca(slug: string): Promise<PecaDoSite | null> {
   try {
+    /*
+     * SEM CACHE (`revalidate: 0`) de propósito — aqui vem a GRADE COM ESTOQUE.
+     *
+     * Com `revalidate: 120` o Next serve o STALE e revalida em segundo plano:
+     * quem abre a página vê o estoque de quando foi a visita ANTERIOR — com o
+     * tráfego de agora, horas atrás. Foi assim que o 48 esgotado da VOGUE
+     * VINHO ficou comprável a tarde inteira (06/08) enquanto o master dizia 0.
+     * O backend lê o Postgres local por REF; uma query por visita é barato.
+     */
     const p = await api<PecaApi>(`/public/loja/produto/${encodeURIComponent(slug)}`, {
-      revalidate: 120,
+      revalidate: 0,
       tags: ['catalogo', `produto:${slug}`],
       timeoutMs: 12000,
     });
