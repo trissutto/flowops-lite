@@ -1091,6 +1091,16 @@ export class PurchaseOrdersService {
     };
   }
 
+  /** Ordena tamanhos: numéricos por valor ("46/48" conta como 46.48), letras
+   *  PP→G5 depois dos números, desconhecidos por último. */
+  private ordemTamanho(t: string): number {
+    const n = Number(String(t || '').replace('/', '.'));
+    if (!isNaN(n) && n > 0) return n;
+    const letras = ['PP', 'P', 'M', 'G', 'GG', 'XGG', 'EG', 'EGG', 'G1', 'G2', 'G3', 'G4', 'G5'];
+    const i = letras.indexOf(String(t || '').toUpperCase());
+    return i >= 0 ? 1000 + i : 2000;
+  }
+
   async listLabels(orderId: string) {
     const order = await this.getById(orderId);
     // RECEBIDO_PARCIAL também gera etiquetas (dono 25/07): recebeu só uma
@@ -1111,7 +1121,14 @@ export class PurchaseOrdersService {
     }> = [];
     for (const it of order.items as any[]) {
       if (!it.skusGerados) continue;
-      for (const sku of it.skusGerados as any[]) {
+      // ORDEM DE TAMANHO (dono 06/08): skusGerados nasce iterando o JSON da
+      // grade, e objeto JS itera chave numérica ("50") ANTES da não-numérica
+      // ("46/48") — o 46/48 caía no fim da impressão. Reordenar na SAÍDA
+      // corrige também os pedidos antigos já gravados.
+      const skusOrdenados = [...(it.skusGerados as any[])].sort(
+        (a, b) => this.ordemTamanho(a?.tamanho) - this.ordemTamanho(b?.tamanho),
+      );
+      for (const sku of skusOrdenados) {
         for (let i = 0; i < (sku.qty || 0); i++) {
           labels.push({
             ref: it.ref,

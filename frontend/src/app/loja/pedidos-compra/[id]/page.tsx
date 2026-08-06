@@ -17,6 +17,7 @@ import {
   Truck, Printer, FileText, Edit3, Trash2, Plus, X, Search,
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import { ordemTamanho } from '@/lib/ordem-tamanho';
 
 type Order = {
   id: string;
@@ -592,7 +593,8 @@ export default function PedidoDetalhePage() {
           for (const it of refItems) {
             for (const t of Object.keys(it.tamanhosQty || {})) todosTamanhos.add(t);
           }
-          const tamanhosOrdenados = Array.from(todosTamanhos).sort((a, b) => Number(a) - Number(b));
+          // ordemTamanho: "46/48" e letras quebravam o sort numérico (NaN = ordem aleatória)
+          const tamanhosOrdenados = Array.from(todosTamanhos).sort((a, b) => ordemTamanho(a) - ordemTamanho(b));
 
           // Status desta REF: 'recebido' se TODOS os items dela foram recebidos
           const refRecebida = refItems.every((it: any) => it.itemStatus === 'recebido');

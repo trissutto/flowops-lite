@@ -18,6 +18,7 @@ import {
   AlertCircle, Copy, X, Eye, Check, Printer,
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import { ordemTamanho } from '@/lib/ordem-tamanho';
 import {
   SelectAtributoPeca, type Atributo, type AtributosPorTipo, type TipoAtributo,
 } from '@/components/SelectAtributoPeca';
@@ -581,14 +582,6 @@ export default function NovoPedidoPage() {
         if (typeof v !== 'string') return v;
         try { return JSON.parse(v); } catch { return fb; }
       };
-      const ordemTam = (t: string) => {
-        const n = Number(String(t).replace('/', '.'));
-        if (!isNaN(n) && n > 0) return n;
-        const letras = ['PP', 'P', 'M', 'G', 'GG', 'XGG', 'G1', 'G2', 'G3', 'G4', 'G5'];
-        const i = letras.indexOf(String(t).toUpperCase());
-        return i >= 0 ? 1000 + i : 2000;
-      };
-
       // Agrupa por REF, separando recebidos (card travado) dos pendentes
       // (card editável) — REF meio-recebida ("Receber cor") vira DOIS cards.
       const grupos = new Map<string, any[]>();
@@ -636,7 +629,7 @@ export default function NovoPedidoPage() {
           markup: '',
           gradePresetId: null,
           cores,
-          tamanhos: Array.from(tamSet).sort((a, b) => ordemTam(a) - ordemTam(b)),
+          tamanhos: Array.from(tamSet).sort((a, b) => ordemTamanho(a) - ordemTamanho(b)),
           grade,
           conferido: recebido ? { orderId: id, pecas, skusNovos: 0, erros: 0 } : undefined,
           serverItemIds: sis.map((x: any) => x.id),
