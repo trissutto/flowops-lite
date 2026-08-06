@@ -176,8 +176,26 @@ Refeito em 04/08/2026, **só o site novo** (`ecommerce/` + `backend/src/loja-ord
 > falta neles é o **teste ponta a ponta** do item 112, com pedido de verdade.
 > **73 e 74 são configuração no n8n**, não código nosso.
 
-71. ⬜ APROVADO — Pedido do site cair na fila da loja certa — roteamento **JÁ EXISTE**
-72. ⬜ APROVADO — Etiqueta e NF-e do pedido do site — **JÁ EXISTE** em pick-orders
+> 🔴 **O TESTE DO DONO ACHOU O BUG QUE NENHUM BUILD ACHARIA (06/08).** O pedido
+> `#LP-000002` apareceu certinho na fila de separação — e **não abria**: "500:
+> Internal server error".
+>
+> Causa: `wcOrderId` do site novo é SINTÉTICO (faixa 950M), igual ao da live
+> (900M), justamente porque o pedido **não existe no WooCommerce**. O código
+> tinha essa guarda em CINCO lugares — e todos os cinco diziam só
+> `source === 'live'`. Quando a segunda faixa sintética nasceu, ninguém
+> estendeu a regra. O pedido do site caía no `wc.getOrder()`, o WooCommerce
+> respondia 404, o axios estourava e a tela mostrava 500.
+>
+> **Não era só a tela.** Os mesmos cinco pontos são: abrir o pedido,
+> `prepare-separation` (o botão **1-CLIQUE**), o roteamento, a aprovação da
+> quebra e a sincronia de status. Ou seja: a retaguarda **enxergava** o pedido
+> e não conseguia **trabalhar** nele — sem separação, sem etiqueta, sem NF-e.
+>
+> A regra virou UMA função (`origemSintetica`). Faixa nova entra num lugar só.
+
+71. ✅ CONFIRMADO NO PEDIDO REAL — `#LP-000002` (retirada, R$ 79,90) na fila de Pedidos & Separação, com badge `ECOMMERCE` e filtro próprio
+72. 🔶 DESBLOQUEADO, FALTA REPETIR O TESTE — os cinco pontos que impediam abrir/separar foram corrigidos. Etiqueta e NF-e só ficam ✅ quando o pedido for aberto e separado de fato
 73. ⬜ APROVADO — E-mail de confirmação **+ WhatsApp** — o WhatsApp já roda no WooCommerce (workflow n8n **"Pedido Pago"**); reapontar o gatilho pro pedido do site
 74. ⬜ APROVADO — Aviso de "pedido enviado" com rastreio, **e-mail + WhatsApp** — já roda no WooCommerce (workflow n8n **"Código de rastreio"**); reapontar
 75. ✅ FEITO — Cron de hora em hora + `GET /admin/loja/parados?horas=4`. É o alerta mais difícil de perceber sem ele: o pedido pagou, virou `processing` e ficou na fila — **status válido, log limpo, nenhum erro em lugar nenhum** — e a cliente esperando. Não conserta de propósito (roteamento é decisão da matriz, e cron escolhendo loja sozinho é pior que pedido parado); ele GRITA, que é o que faltava pro responsável do item 111 ter o que olhar. Janela de 7 dias pra não repetir backlog eternamente e virar alarme que ninguém lê. `LOJA_ALERTA_PARADO=0` desliga
