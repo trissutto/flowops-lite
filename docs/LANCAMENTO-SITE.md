@@ -157,14 +157,14 @@ Refeito em 04/08/2026, **só o site novo** (`ecommerce/` + `backend/src/loja-ord
 84. ⬜ APROVADO — Etiqueta de devolução
 85. ⬜ APROVADO — Vale-troca / crédito na conta
 
-## H. Conteúdo (🟠)
+## H. Conteudo (🟠) · APROVADO PELO DONO 04/08
 
-86. Banners editáveis sem deploy — desenhado, não construído
-87. Tela de rascunho com preview ao lado — desenhada, não construída
-88. Vitrines curadas na home
-89. Menu dos 7 eixos populado (estrutura **JÁ EXISTE**)
-90. Nossas Lojas (**JÁ EXISTE**) e Troca Fácil (**JÁ EXISTE**)
-91. 🟡 Landing de campanha
+86. ⬜ APROVADO — Banners editáveis sem deploy — desenhado, não construído
+87. ⬜ APROVADO — Tela de rascunho com preview ao lado — desenhada, não construída
+88. ⬜ APROVADO — Vitrines curadas na home
+89. ⬜ APROVADO — Menu dos 7 eixos populado (estrutura **JÁ EXISTE**)
+90. ⬜ APROVADO — Nossas Lojas (**JÁ EXISTE**) e Troca Fácil (**JÁ EXISTE**)
+91. ⬜ APROVADO — Landing de campanha = PAGINA TEMATICA com URL propria (ex.: /natal, /dia-das-maes, /black-friday): banner, texto e uma selecao de pecas, ligada e desligada sem mexer no site. E pra onde o anuncio aponta.
 
 ## I. SEO e velocidade (🟠)
 
