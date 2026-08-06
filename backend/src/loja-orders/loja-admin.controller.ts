@@ -13,6 +13,7 @@ import {
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { CupomService } from './cupom.service';
+import { FreteService } from './frete.service';
 import { LojaPagamentoReconcileService } from './loja-pagamento-reconcile.service';
 
 /**
@@ -25,6 +26,9 @@ import { LojaPagamentoReconcileService } from './loja-pagamento-reconcile.servic
  *    com o período que quem está conferindo quiser.
  *  - **Cupons** (itens 3 e 55): a regra de desconto era um array no código do
  *    e-commerce — criar cupom de campanha exigia deploy. Agora é cadastro.
+ *  - **Frete** (itens 22 a 25): régua do frete grátis, tabela promocional com
+ *    janela de datas, dias de separação e o texto da retirada em loja.
+ *    `FREE_SHIPPING_FROM = 399.9` era uma constante no código do site.
  *
  * Filtro de período no padrão da casa: **De/Até** (`?de=&ate=`, YYYY-MM-DD),
  * nunca dropdown de períodos fixos.
@@ -35,6 +39,7 @@ export class LojaAdminController {
   constructor(
     private readonly prisma: PrismaService,
     private readonly cupons: CupomService,
+    private readonly frete: FreteService,
     private readonly reconcile: LojaPagamentoReconcileService,
   ) {}
 
@@ -131,6 +136,109 @@ export class LojaAdminController {
     // vai testar na hora.
     this.cupons.invalidarCache();
     return { ok: true, cupom: salvo };
+  }
+
+  /* ───────────────────────────── FRETE ─────────────────────────────────── */
+
+  /** GET /admin/loja/frete — config + tabela promocional pra tela (item 24). */
+  @Get('frete')
+  async lerFrete(@Req() req: any) {
+    this.exigirAdmin(req);
+    const { cfg, promos } = await this.frete.config();
+    return { ok: true, config: cfg, promocoes: promos };
+  }
+
+  /**
+   * POST /admin/loja/frete — salva a régua do frete grátis, os dias de
+   * separação e o texto da retirada.
+   */
+  @Post('frete')
+  async salvarFrete(@Req() req: any, @Body() body: any) {
+    const quem = this.exigirAdmin(req);
+
+    const minimo = Number(body?.freteGratisMinimo);
+    if (body?.freteGratisAtivo && !(minimo > 0)) {
+      return { ok: false, error: 'Com frete grátis ligado, informe o valor mínimo.' };
+    }
+    const dias = Number(body?.diasSeparacao);
+    if (!Number.isFinite(dias) || dias < 0 || dias > 30) {
+      return { ok: false, error: 'Dias de separação precisa ficar entre 0 e 30.' };
+    }
+
+    const dados = {
+      freteGratisAtivo: !!body?.freteGratisAtivo,
+      freteGratisMinimo: minimo > 0 ? minimo : 0,
+      freteGratisInicio: body?.freteGratisInicio ? new Date(body.freteGratisInicio) : null,
+      freteGratisFim: body?.freteGratisFim ? new Date(body.freteGratisFim) : null,
+      // CSV de UF em maiúsculo; vazio = Brasil inteiro.
+      freteGratisUfs:
+        String(body?.freteGratisUfs || '')
+          .toUpperCase()
+          .replace(/[^A-Z,]/g, '')
+          .slice(0, 120) || null,
+      diasSeparacao: Math.round(dias),
+      retiradaPrazoHoras: Math.max(0, Math.round(Number(body?.retiradaPrazoHoras) || 3)),
+      retiradaInstrucoes: String(body?.retiradaInstrucoes || '').trim().slice(0, 2000) || null,
+      atualizadoPor: quem,
+    };
+
+    const salvo = await (this.prisma as any).siteFreteConfig.upsert({
+      where: { id: 'singleton' },
+      update: dados,
+      create: { id: 'singleton', ...dados },
+    });
+    this.frete.invalidarCache();
+    return { ok: true, config: salvo };
+  }
+
+  /**
+   * POST /admin/loja/frete/promo — cria ou edita uma linha da tabela
+   * promocional (item 23). Sem `id`, cria.
+   */
+  @Post('frete/promo')
+  async salvarPromo(@Req() req: any, @Body() body: any) {
+    this.exigirAdmin(req);
+
+    const preco = Number(body?.preco);
+    if (!(preco >= 0)) return { ok: false, error: 'Informe o preço promocional.' };
+
+    const ufs = String(body?.ufs || '')
+      .toUpperCase()
+      .replace(/[^A-Z,]/g, '')
+      .replace(/,+/g, ',')
+      .replace(/^,|,$/g, '');
+    if (!ufs) return { ok: false, error: 'Informe pelo menos um estado (ex.: SP ou RJ,MG,PR).' };
+
+    const dados = {
+      label: String(body?.label || '').trim().slice(0, 60) || 'Correios',
+      servico: body?.servico === 'sedex' ? 'sedex' : 'pac',
+      ufs,
+      preco,
+      prazoMin: body?.prazoMin == null || body.prazoMin === '' ? null : Number(body.prazoMin),
+      prazoMax: body?.prazoMax == null || body.prazoMax === '' ? null : Number(body.prazoMax),
+      ativo: body?.ativo === undefined ? true : !!body.ativo,
+      inicioEm: body?.inicioEm ? new Date(body.inicioEm) : null,
+      fimEm: body?.fimEm ? new Date(body.fimEm) : null,
+      ordem: Number(body?.ordem) || 0,
+    };
+
+    const salvo = body?.id
+      ? await (this.prisma as any).siteFretePromo.update({ where: { id: String(body.id) }, data: dados })
+      : await (this.prisma as any).siteFretePromo.create({ data: dados });
+
+    this.frete.invalidarCache();
+    return { ok: true, promo: salvo };
+  }
+
+  /** Desativa a linha promocional (mesma lógica do cupom: não apaga histórico). */
+  @Delete('frete/promo/:id')
+  async removerPromo(@Req() req: any, @Param('id') id: string) {
+    this.exigirAdmin(req);
+    await (this.prisma as any).siteFretePromo
+      .update({ where: { id: String(id) }, data: { ativo: false } })
+      .catch(() => undefined);
+    this.frete.invalidarCache();
+    return { ok: true };
   }
 
   @Delete('cupons/:code')

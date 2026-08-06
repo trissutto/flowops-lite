@@ -7,6 +7,7 @@ import { computePersonKeyFromCpf } from '../customers/customer-aggregation.helpe
 import { montarComplementoBairroWc, montarNumeroWc } from '../common/endereco-wc';
 import { CarrinhoGuardService } from './carrinho-guard.service';
 import { CupomService } from './cupom.service';
+import { FreteService } from './frete.service';
 
 /**
  * PEDIDO DO E-COMMERCE NOVO (sprint 011).
@@ -189,6 +190,7 @@ export class LojaOrdersService {
     private readonly pagarme: PagarmeService,
     private readonly guard: CarrinhoGuardService,
     private readonly cupons: CupomService,
+    private readonly frete: FreteService,
   ) {}
 
   /* ───────────────────────── helpers de formato ───────────────────────── */
@@ -364,9 +366,50 @@ export class LojaOrdersService {
       freteGratisPorCupom = r.tipo === 'shipping';
     }
 
-    // Frete: o valor cotado pelo site, já conferido em `validar()`. Cupom de
-    // frete zera o ECONÔMICO — quem escolheu expresso paga expresso.
+    /**
+     * FRETE RECOTADO AQUI (item 2 — "revalidar o frete no servidor").
+     *
+     * Retirada é sempre grátis e não tem o que conferir. Entrega recota pela
+     * MESMA tabela que a tela mostrou: se a opção escolhida não existe mais
+     * (id inventado, promoção que venceu entre o carrinho e o pagamento), o
+     * pedido não fecha; se o preço mudou, vale o NOSSO.
+     *
+     * Cotação fora do ar não derruba a venda: o `FreteService` já cai na
+     * estimativa interna, então `conferir` só devolve null quando a opção
+     * realmente não existe.
+     */
     let frete = this.dinheiro(input.shippingPrice);
+    if (input.shipping.kind !== 'retirada') {
+      const pecas = input.items.reduce((s, it) => s + (Number(it.quantity) || 1), 0);
+      const opcao = await this.frete
+        .conferir({
+          cep: this.digits(input.shippingAddress?.cep),
+          subtotal,
+          pecas,
+          quoteId: input.shipping.id,
+        })
+        .catch(() => null);
+
+      if (!opcao) {
+        this.logger.warn(`[loja] opção de frete "${input.shipping.id}" não existe mais na cotação`);
+        return {
+          ok: false,
+          erro: 'A opção de entrega que você escolheu não está mais disponível. Volte uma etapa e escolha de novo. 💜',
+        };
+      }
+      if (Math.abs(opcao.price - frete) > LojaOrdersService.TOLERANCIA) {
+        this.logger.warn(
+          `[loja] frete divergente: site=${frete.toFixed(2)} nosso=${opcao.price.toFixed(2)} (${input.shipping.id})`,
+        );
+      }
+      frete = opcao.price;
+      input.shipping.label = opcao.label || input.shipping.label;
+      input.shipping.etaDays = opcao.etaDays;
+    } else {
+      frete = 0;
+    }
+
+    // Cupom de frete zera o ECONÔMICO — quem escolheu expresso paga expresso.
     if (freteGratisPorCupom && input.shipping.kind === 'correios') frete = 0;
 
     // 3) Pix — o desconto que a vitrine já anunciava.

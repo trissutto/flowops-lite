@@ -8,7 +8,7 @@ import { Clock, MapPin, Truck } from 'lucide-react';
 import { cn, formatPrice } from '@/lib/utils';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
-import { isValidCep, quoteShipping } from '@/lib/commerce/frete';
+import { fetchQuotes, isValidCep } from '@/lib/commerce/frete';
 import { stores } from '@/data/stores';
 import { trackAddShippingInfo, type TrackedItem } from '@/lib/tracking';
 import type { Address, ShippingQuote } from '@/types/checkout';
@@ -48,13 +48,15 @@ type AddressValues = z.infer<typeof addressSchema>;
 
 interface ShippingStepProps {
   subtotal: number;
+  /** Peças na sacola — muda a caixa e, com ela, o preço da cotação. */
+  pecas?: number;
   /** Itens no formato de tracking — pro add_shipping_info. */
   itemsTracked: TrackedItem[];
   defaults?: ShippingSelection | null;
   onDone: (selection: ShippingSelection) => void;
 }
 
-export function ShippingStep({ subtotal, itemsTracked, defaults, onDone }: ShippingStepProps) {
+export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDone }: ShippingStepProps) {
   const [cep, setCep] = useState(defaults ? maskCep(defaults.cep) : '');
   const [cepBuscando, setCepBuscando] = useState(false);
   const [quoteId, setQuoteId] = useState<string | undefined>(defaults?.quote.id);
@@ -85,8 +87,41 @@ export function ShippingStep({ subtotal, itemsTracked, defaults, onDone }: Shipp
   });
 
   const cepValido = isValidCep(cep);
-  // Cotação é síncrona e barata (tabela local) — memo só pra estabilidade.
-  const quotes = useMemo(() => (cepValido ? quoteShipping(cep, subtotal) : []), [cep, cepValido, subtotal]);
+
+  /**
+   * COTAÇÃO DE VERDADE (bloco B). Era síncrona porque saía de uma tabela local
+   * declarada como estimativa; agora vem do backend, que aplica a tabela
+   * promocional cadastrada e a cotação do contrato. Se ele não responder,
+   * `fetchQuotes` devolve a tabela local — a etapa nunca fica sem opção.
+   *
+   * O `subtotal` entra na chamada porque é ele que decide o frete grátis, e o
+   * número de peças porque a caixa (e o preço) mudam com a quantidade.
+   */
+  const [quotes, setQuotes] = useState<ShippingQuote[]>([]);
+  const [cotando, setCotando] = useState(false);
+  const [retirada, setRetirada] = useState<{ prazoHoras: number; instrucoes: string | null } | null>(null);
+  const [estimado, setEstimado] = useState(false);
+
+  useEffect(() => {
+    if (!cepValido) {
+      setQuotes([]);
+      return;
+    }
+    const controller = new AbortController();
+    setCotando(true);
+    fetchQuotes(cep, subtotal, pecas, controller.signal)
+      .then((r) => {
+        if (controller.signal.aborted) return;
+        setQuotes(r.quotes);
+        setEstimado(r.estimado);
+        setRetirada(r.retirada ?? null);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setCotando(false);
+      });
+    return () => controller.abort();
+  }, [cep, cepValido, subtotal, pecas]);
+
   const selectedQuote = quotes.find((q) => q.id === quoteId);
   const precisaEndereco = selectedQuote ? selectedQuote.kind !== 'retirada' : false;
 
@@ -182,14 +217,18 @@ export function ShippingStep({ subtotal, itemsTracked, defaults, onDone }: Shipp
       </div>
 
       {/* Cotações — rádios elegantes, uma linha por opção. */}
-      {cepValido && quotes.length > 0 && (
+      {cepValido && (quotes.length > 0 || cotando) && (
         <fieldset>
-          <legend className="eyebrow mb-3 text-ink-soft">Como você quer receber</legend>
+          <legend className="eyebrow mb-3 text-ink-soft">
+            Como você quer receber {cotando && <span className="text-ink-muted">· calculando…</span>}
+          </legend>
           <div className="flex flex-col gap-3" role="radiogroup">
             {quotes.map((quote) => (
               <QuoteOption
                 key={quote.id}
                 quote={quote}
+                estimado={estimado}
+                instrucoesRetirada={retirada?.instrucoes ?? null}
                 checked={quoteId === quote.id}
                 onSelect={() => {
                   setQuoteId(quote.id);
@@ -280,10 +319,16 @@ export function ShippingStep({ subtotal, itemsTracked, defaults, onDone }: Shipp
 function QuoteOption({
   quote,
   checked,
+  estimado,
+  instrucoesRetirada,
   onSelect,
 }: {
   quote: ShippingQuote;
   checked: boolean;
+  /** true = preço veio da estimativa (transportador fora do ar). */
+  estimado?: boolean;
+  /** O que levar / quanto tempo a peça fica reservada — cadastrado na retaguarda. */
+  instrucoesRetirada?: string | null;
   onSelect: () => void;
 }) {
   const retirada = quote.kind === 'retirada';
@@ -335,14 +380,21 @@ function QuoteOption({
             <span className="flex items-center gap-1.5 text-small text-ink-muted">
               <Clock className="size-3.5" /> Pronto em ~{quote.readyInHours ?? 3}h
             </span>
+            {/* Item 27: o que levar e por quanto tempo a peça espera. Vai AQUI,
+                na hora da escolha — não numa página de ajuda que ninguém abre. */}
+            {instrucoesRetirada && checked && (
+              <span className="text-small text-ink-muted">{instrucoesRetirada}</span>
+            )}
           </>
         ) : (
           quote.etaDays && (
             <span className="text-small text-ink-soft">
               {quote.etaDays.min === quote.etaDays.max
                 ? `${quote.etaDays.min} dia${quote.etaDays.min > 1 ? 's' : ''} útil`
-                : `${quote.etaDays.min} a ${quote.etaDays.max} dias úteis`}{' '}
-              · frete estimado
+                : `${quote.etaDays.min} a ${quote.etaDays.max} dias úteis`}
+              {/* "estimado" só quando É estimado. O prazo do contrato é oficial,
+                  e chamar tudo de estimativa treina a cliente a não confiar. */}
+              {estimado ? ' · frete estimado' : ''}
             </span>
           )
         )}

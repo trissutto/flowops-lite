@@ -54,7 +54,7 @@ Refeito em 04/08/2026, **só o site novo** (`ecommerce/` + `backend/src/loja-ord
 > | SP | SEDEX | **R$ 9,99** |
 > | RJ · MG · PR · SC · RS | PAC | **R$ 19,99** |
 > | RJ · MG · PR · SC · RS | SEDEX (opcional) | **cotação do nosso contrato** |
-> | Demais estados | — | a definir |
+> | Demais estados | PAC e SEDEX | **cotação do nosso contrato** (dono, 06/08) |
 >
 > - Nesses 5 estados a cliente **escolhe**: PAC promocional a R$ 19,99 ou SEDEX
 >   pelo preço real do contrato. Em SP o SEDEX já é o promocional.
@@ -68,19 +68,19 @@ Refeito em 04/08/2026, **só o site novo** (`ecommerce/` + `backend/src/loja-ord
 > ele é a fonte do SEDEX opcional e do simulador. O que muda é que ele deixa de
 > ser o preço padrão.
 
-16. ✅ FEITO — Endpoint público de cotação (`POST /api/public/loja/frete`, commit b6d7b1c) — **o cálculo COM CONTRATO JÁ EXISTE**. Verificado 04/08: `CORREIOS_CONTRATO`, `CORREIOS_CARTAO_POSTAGEM`, `CORREIOS_DR` e `CORREIOS_CEP_ORIGEM` estão configurados, e o `calcularFrete` passa `nuContrato`+`nuDR` no preço e consulta o prazo oficial — é o preço NEGOCIADO, não tabela de balcão. Falta **só expor num endpoint público** (hoje a rota exige login) e trocar a fonte no site. Item pequeno, retorno grande
-17. 🔄 MUDOU — NÃO trocar por cotação. A tabela promocional acima vira a fonte em `ecommerce/src/lib/commerce/frete.ts` (hoje tabela fixa por faixa de CEP)
-18. ✅ FEITO — Peso e caixa do dono: **250 g/peça**, **28 larg × 40 compr × 3 cm alt por peça** (só a altura acompanha a quantidade)
+16. ✅ FEITO — Endpoint público de cotação (`POST /api/public/loja/frete`). Deixou de ser proxy da cotação crua e virou a **FONTE ÚNICA** do frete: tabela promocional + cotação do contrato + régua do frete grátis + dias de separação, tudo pronto pro site desenhar
+17. ✅ FEITO — A tabela promocional virou **cadastro** (`site_frete_promo`), não código. **DEMAIS ESTADOS = cotação real do contrato** (decisão do dono, 06/08 — o buraco que a lista deixava "a definir"). A tabela do `frete.ts` do site foi rebaixada a paraquedas
+18. ✅ FEITO — Peso e caixa do dono: **250 g/peça**, **28 larg × 40 compr**, altura por faixa
 19. ✅ FEITO — Origem = **MATRIZ, CEP 11746-692** (decisão do dono; uma origem só mantém a cotação estável). ⚠️ CONFERIR se `CORREIOS_CEP_ORIGEM` no Railway está com esse CEP
-20. ⬜ APROVADO — Fallback quando o transportador não responde (não travar o checkout)
-21. ⬜ APROVADO — Cache de cotação por CEP+peso
-22. ⬜ APROVADO — Config editável de frete grátis: mínimo, período, região (hoje `FREE_SHIPPING_FROM` chumbado)
-23. ⬜ APROVADO — Config de frete promocional fixo com data de início e fim
-24. ⬜ APROVADO — Tela na retaguarda pra essas configs, sem deploy
-25. ⬜ APROVADO — Prazo = transportador + **2 dias de separação** (configurável)
-26. 🔄 MUDOU — Retirada NÃO exige a peça na loja: se não tiver, vem de outra
-27. ⬜ APROVADO — Retirada: prazo, endereço e instruções
-28. ⬜ APROVADO — Simulador de frete na página do produto
+20. ✅ FEITO — Correios fora do ar cai na estimativa interna, marcada `estimado`, e o site tem MAIS um paraquedas (tabela local) se o backend também cair. E a promocional — a maior parte dos pedidos — nem depende da cotação pra existir
+21. ✅ FEITO — Cache por CEP+peso+altura, 20 min, teto de 500 entradas
+22. ✅ FEITO — Config editável (`site_frete_config`): liga/desliga, mínimo, janela de datas e recorte de UF. **Régua nova: R$ 499,90** (dono, 06/08 — era 399,90 chumbado). Grátis zera sempre a econômica mais barata, nunca o expresso
+23. ✅ FEITO — Cada linha promocional tem serviço, UFs, preço, prazo opcional e janela de início/fim
+24. ✅ FEITO — Tela `/retaguarda/loja-frete` (aba Frete + aba Cupons), no menu da retaguarda. Desligar não apaga: conferência de 6 meses atrás precisa achar a explicação do preço
+25. ✅ FEITO — Prazo = transportador + **2 dias de separação**, configurável na tela. O "· frete estimado" da tela agora só aparece quando É estimado — chamar prazo oficial de estimativa treina a cliente a não confiar
+26. ✅ FEITO — Retirada NÃO exige a peça na loja: quem resolve a origem é o roteamento da matriz, igual a qualquer pedido dividido
+27. ✅ FEITO — Prazo e instruções da retirada vêm da config e aparecem **na hora da escolha**, junto com o endereço da loja — não numa página de ajuda que ninguém abre
+28. ✅ FEITO — Simulador na PDP (`SimuladorFrete`). Cota 1 peça de propósito: é o PIOR caso por peça, então a cliente nunca é surpreendida pra cima no checkout. Substituiu o texto fixo "frete grátis acima de R$ 399", que envelheceu junto com a régua
 29. ✅ FEITO — Embalagem por FAIXA de altura (regra 1, dono 04/08): **1–2 peças = 3 cm · 3–5 = 6 cm · 6+ = 10 cm**. Roupa comprime, não empilha como tijolo. É chute educado até existir dado — depois de ~30 postagens reais, medir a altura de verdade e ajustar
 30. ~~Rota própria Itanhaém/Praia Grande/Santos como opção de entrega~~ — **REMOVIDO (04/08)**. Era a regra do REALINHAMENTO entre lojas (carro da rede levando mercadoria de loja pra loja), não entrega de pedido de cliente. Vazou do contexto do dia pra esta lista. Se um dia virar entrega própria pro cliente naquelas cidades, é item novo e com desenho próprio
 

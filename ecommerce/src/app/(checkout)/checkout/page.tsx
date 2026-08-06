@@ -298,6 +298,7 @@ export default function CheckoutPage() {
           >
             <ShippingStep
               subtotal={subtotal}
+              pecas={lines.reduce((s, l) => s + l.quantity, 0)}
               itemsTracked={itemsTracked}
               defaults={shipping}
               onDone={(s) => {

@@ -9,6 +9,7 @@ import { CarrinhoGuardService } from './carrinho-guard.service';
 import { CupomService } from './cupom.service';
 import { LojaPagamentoReconcileService } from './loja-pagamento-reconcile.service';
 import { LojaAdminController } from './loja-admin.controller';
+import { FreteService } from './frete.service';
 
 /**
  * PEDIDOS DO E-COMMERCE NOVO (sprint 011).
@@ -29,6 +30,9 @@ import { LojaAdminController } from './loja-admin.controller';
     LojaOrdersService,
     CarrinhoGuardService,
     CupomService,
+    // Fonte única do frete: tabela promocional + cotação do contrato + régua
+    // do frete grátis. O site não decide mais preço de entrega.
+    FreteService,
     // Rede de segurança do pagamento: o webhook não pode ser a única
     // confirmação, e a conciliação diária é quem descobre o que ninguém viu.
     LojaPagamentoReconcileService,

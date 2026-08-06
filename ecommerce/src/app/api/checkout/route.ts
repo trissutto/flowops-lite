@@ -31,7 +31,7 @@ import QRCode from 'qrcode';
 import { z } from 'zod';
 import { applyCoupon } from '@/lib/commerce/cupom';
 import { pixDiscount } from '@/lib/commerce/pix';
-import { findQuote } from '@/lib/commerce/frete';
+import { resolverFrete } from '@/lib/commerce/frete-server';
 import { getOrderStore, OrderStoreError, type NewOrderPayload } from '@/lib/orders/store';
 import type { CreateOrderResult, Order } from '@/types/checkout';
 
@@ -184,9 +184,16 @@ export async function POST(req: Request): Promise<NextResponse<CreateOrderResult
     couponCode = cupom.code;
   }
 
-  // Frete: recotado pelo CEP + subtotal. O id escolhido no client precisa
-  // existir na cotação do server — senão alguém inventou frete.
-  const quote = findQuote(input.cep, subtotal, input.shippingQuoteId);
+  // Frete: recotado pelo CEP + subtotal + nº de peças, na MESMA fonte que a
+  // tela usou (tabela promocional cadastrada + cotação do contrato). O id
+  // escolhido no client precisa existir lá — senão alguém inventou frete.
+  const pecas = input.items.reduce((soma, l) => soma + l.quantity, 0);
+  const quote = await resolverFrete({
+    cep: input.cep,
+    subtotal,
+    pecas,
+    quoteId: input.shippingQuoteId,
+  });
   if (!quote) {
     return NextResponse.json(
       { ok: false, error: 'Não conseguimos confirmar o frete para este CEP. Volte uma etapa e escolha a entrega de novo.' },

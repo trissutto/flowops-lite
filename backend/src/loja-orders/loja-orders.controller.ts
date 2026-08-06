@@ -11,7 +11,7 @@ import {
 } from '@nestjs/common';
 import * as crypto from 'crypto';
 import { CriarPedidoInput, LojaOrdersService } from './loja-orders.service';
-import { CorreiosService } from '../correios/correios.service';
+import { FreteService } from './frete.service';
 
 /**
  * PEDIDO DO E-COMMERCE NOVO — porta SERVER-TO-SERVER (sprint 011).
@@ -66,7 +66,7 @@ function excedeuLimite(ip: string): boolean {
 export class LojaOrdersController {
   constructor(
     private readonly svc: LojaOrdersService,
-    private readonly correios: CorreiosService,
+    private readonly freteSvc: FreteService,
   ) {}
 
   /** Comparação em tempo constante sobre os hashes (iguala o tamanho dos dois
@@ -90,29 +90,35 @@ export class LojaOrdersController {
   }
 
   /**
-   * POST /api/public/loja/frete — COTAÇÃO REAL DOS CORREIOS pro site.
+   * POST /api/public/loja/frete — AS OPÇÕES DE ENTREGA do site, prontas.
    *
-   * O site cotava por TABELA FIXA de faixa de CEP (`ecommerce/src/lib/commerce/
-   * frete.ts`), declarada como estimativa. O cálculo de verdade sempre existiu
-   * aqui — e COM CONTRATO: `CORREIOS_CONTRATO` + `CORREIOS_CARTAO_POSTAGEM` +
-   * `CORREIOS_DR` já configurados, é o preço NEGOCIADO (convênio SIGEP), não
-   * tabela de balcão. Faltava só uma porta pública.
+   * Nasceu (04/08) como proxy da cotação crua dos Correios. Virou a FONTE
+   * ÚNICA do frete: aplica a tabela promocional cadastrada, completa com a
+   * cotação real do contrato onde a promoção não cobre, soma os dias de
+   * separação e devolve a régua do frete grátis. A regra inteira mora no
+   * `FreteService` — o site só desenha o que vier.
    *
-   * ORIGEM = MATRIZ (dono, 04/08): CEP 11746-692. Uma origem só mantém a
-   * cotação estável — o site cota antes de saber qual loja vai despachar, e
-   * cotar por loja daria preço diferente pro mesmo carrinho a cada
-   * recálculo do roteamento.
+   * Por que a regra saiu do site: a tabela promocional muda por campanha, e
+   * campanha não pode esperar deploy (itens 22 a 24). Enquanto ela vivia em
+   * `ecommerce/src/lib/commerce/frete.ts`, mudar R$ 19,99 pra R$ 14,99 era um
+   * commit.
+   *
+   * ORIGEM = MATRIZ (dono, 04/08): CEP 11746-692, via `CORREIOS_CEP_ORIGEM`.
+   * Uma origem só mantém a cotação estável — o site cota antes de saber qual
+   * loja vai despachar, e cotar por loja daria preço diferente pro mesmo
+   * carrinho a cada recálculo do roteamento. Peso e caixa (250 g/peça, 28×40,
+   * altura por faixa) também vivem lá dentro agora.
    *
    * Mesma porta do pedido: token `x-loja-token` + rate-limit por IP. Sem os
    * dois, isto vira consulta grátis ao contrato dos Correios pra qualquer um.
    *
-   * FALHA NÃO TRAVA A COMPRA: se os Correios não responderem, devolve
-   * `{ ok:false }` e o site cai na estimativa. Melhor frete aproximado do que
-   * checkout parado.
+   * FALHA NÃO TRAVA A COMPRA (item 20): Correios fora do ar cai na estimativa
+   * interna, marcada com `estimado: true`. A promocional — que é a maior parte
+   * dos pedidos — nem depende da cotação pra existir.
    */
   @Post('frete')
   async frete(
-    @Body() body: { cep: string; pecas?: number; pesoGramas?: number; comprimento?: number; largura?: number; altura?: number },
+    @Body() body: { cep: string; pecas?: number; subtotal?: number },
     @Headers('x-loja-token') token: string,
     @Req() req: any,
     @Res({ passthrough: true }) res: any,
@@ -126,55 +132,21 @@ export class LojaOrdersController {
     const cep = String(body?.cep || '').replace(/\D/g, '');
     if (cep.length !== 8) return { ok: false, error: 'CEP inválido' };
 
-    /**
-     * PESO E CAIXA — números do dono (04/08): 250 g por peça, embalagem
-     * 28 (largura) × 40 (comprimento) × 3 cm (altura) por peça.
-     *
-     * A ALTURA é o único que acompanha a quantidade: duas peças na mesma
-     * embalagem empilham (3 → 6 cm), largura e comprimento não mudam. Cotar
-     * tudo com 3 cm fixo daria frete barato demais no pedido grande, e a conta
-     * viria pra vocês na postagem.
-     *
-     * O site pode sobrescrever qualquer um; sem informação, vale 1 peça.
-     */
-    const pecas = Math.min(50, Math.max(1, Number(body?.pecas) || 1));
-    const peso = Math.min(30000, Number(body?.pesoGramas) || 250 * pecas);
-    const largura = Number(body?.largura) || 28;
-    const comprimento = Number(body?.comprimento) || 40;
-
-    /**
-     * ALTURA POR FAIXA (regra 1, escolhida pelo dono em 04/08):
-     *   1–2 peças → 3 cm · 3–5 → 6 cm · 6+ → 10 cm
-     *
-     * Roupa não empilha como tijolo: 4 blusas dobradas não dão 12 cm porque o
-     * tecido comprime. Multiplicar 3 cm por peça (como estava) cobraria caixa
-     * maior que a real e comeria margem em todo pedido grande; cravar 3 cm
-     * fixo faria o oposto — frete barato demais no pedido de 6 peças, com a
-     * diferença aparecendo na postagem.
-     *
-     * A faixa é chute educado até existir dado. Depois de ~30 postagens reais,
-     * medir a altura de verdade e ajustar os números daqui.
-     */
-    const alturaPorFaixa = pecas <= 2 ? 3 : pecas <= 5 ? 6 : 10;
-    const altura = Number(body?.altura) || alturaPorFaixa;
-
     try {
-      // A ORIGEM sai de `CORREIOS_CEP_ORIGEM` (env) — o serviço não aceita
-      // origem por chamada, e é bom que seja assim: uma origem só mantém a
-      // cotação estável entre o carrinho e o checkout. Matriz = 11746-692.
-      const r: any = await this.correios.calcularFrete({
-        cepDestino: cep,
-        pesoGramas: peso,
-        comprimento,
-        largura,
-        altura,
-      });
-      return {
-        ok: true,
+      const cotacao = await this.freteSvc.cotar({
         cep,
-        pecas,
-        caixa: { pesoGramas: peso, largura, comprimento, altura },
-        servicos: r?.servicos ?? r,
+        subtotal: Number(body?.subtotal) || 0,
+        pecas: Number(body?.pecas) || 1,
+      });
+      const { cfg } = await this.freteSvc.config();
+      return {
+        ...cotacao,
+        // A tela de entrega monta o texto da retirada com isto (item 27) — não
+        // é página de ajuda, é a informação no momento da escolha.
+        retirada: {
+          prazoHoras: Number(cfg?.retiradaPrazoHoras ?? 3),
+          instrucoes: cfg?.retiradaInstrucoes ?? null,
+        },
       };
     } catch (e: any) {
       return { ok: false, error: 'Não consegui cotar agora', detalhe: String(e?.message || e).slice(0, 200) };

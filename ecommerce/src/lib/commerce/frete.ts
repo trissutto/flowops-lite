@@ -1,22 +1,35 @@
 /**
- * FRETE — cotação estimada por CEP + retirada em loja.
+ * FRETE — a fonte agora é o BACKEND; o que sobrou aqui é paraquedas.
  *
- * ⚠️ ESTIMATIVA, declarada como tal na UI ("frete estimado"). O cálculo real
- * dos Correios exige contrato e roda no backend (o FlowOps já fala com
- * Correios/Mais Envios pros envios da live). Quando o endpoint público de
- * cotação existir, só `quoteShipping` muda — a UI consome `ShippingQuote[]`
- * e não sabe de onde veio.
+ * Até 06/08/2026 esta tabela ERA o preço: faixa de CEP → PAC/SEDEX estimados,
+ * e o cálculo real com contrato existia no FlowOps sem ninguém consumir. Duas
+ * verdades, e a que a cliente via era a errada.
  *
- * A tabela abaixo segue a lógica real da operação: raiz do CEP → região.
- * Retirada: a loja é elegível quando o CEP da cliente cai na área da cidade
- * dela (mesma lógica de faixas do CRM, simplificada pro client).
+ * Hoje `fetchQuotes()` pede as opções ao backend (`/api/loja/frete`), que
+ * aplica a tabela promocional cadastrada — SP SEDEX R$ 9,99, RJ/MG/PR/SC/RS
+ * PAC R$ 19,99, demais UFs pela cotação do contrato — soma os dias de
+ * separação e devolve a régua do frete grátis vigente. Nada disso é decidido
+ * aqui, e é de propósito: campanha de frete não pode esperar deploy.
+ *
+ * `quoteShipping()` continua existindo e continua SÍNCRONA porque é o
+ * PARAQUEDAS (item 20): backend fora do ar, a cliente ainda vê um preço e
+ * fecha o pedido. O backend reconfere na hora de cobrar, então o pior caso é
+ * o valor mudar entre a tela e a cobrança — nunca cobrar errado.
+ *
+ * Retirada continua 100% local: depende de `data/stores.ts` e das faixas de
+ * CEP das cidades atendidas, que o backend não tem.
  */
 
 import { stores } from '@/data/stores';
 import type { ShippingQuote } from '@/types/checkout';
 
-/** Frete grátis a partir deste subtotal (regra de negócio — ajustável). */
-export const FREE_SHIPPING_FROM = 399.9;
+/**
+ * Régua do frete grátis usada SÓ no paraquedas e como valor inicial da barra
+ * de progresso antes da primeira cotação. A régua que vale vem do backend
+ * (`freteGratis.minimo`) — o dono mudou pra R$ 499,90 em 06/08 e daqui pra
+ * frente muda na tela, sem deploy.
+ */
+export const FREE_SHIPPING_FROM = 499.9;
 
 /** Faixas de CEP (2 primeiros dígitos) → grupo de preço/prazo. */
 type Zone = 'sp-capital' | 'sp-interior' | 'sudeste' | 'sul' | 'centro-nordeste' | 'norte';
@@ -66,8 +79,16 @@ export function isValidCep(v: string): boolean {
   return onlyDigits(v).length === 8;
 }
 
-/** Lojas com retirada disponível pro CEP. */
-export function pickupStoresFor(cep: string): ShippingQuote[] {
+/**
+ * Lojas com retirada disponível pro CEP.
+ *
+ * ⚠️ NÃO exige que a peça esteja NAQUELA loja (item 26, decisão do dono
+ * 04/08): se a loja escolhida não tiver, vem de outra da rede. A retirada é
+ * sobre ONDE a cliente quer buscar, não sobre onde a peça está hoje — quem
+ * resolve a origem é o roteamento da matriz, exatamente como já faz com
+ * qualquer pedido dividido entre lojas.
+ */
+export function pickupStoresFor(cep: string, prazoHoras = 3): ShippingQuote[] {
   const digits = onlyDigits(cep);
   if (digits.length < 3) return [];
 
@@ -83,7 +104,7 @@ export function pickupStoresFor(cep: string): ShippingQuote[] {
       kind: 'retirada' as const,
       label: `Retirar na loja ${s.unit}`,
       price: 0,
-      readyInHours: 3,
+      readyInHours: prazoHoras,
       storeSlug: s.slug,
       storeLabel: `${s.unit} · ${s.city}/${s.uf}`,
     }));
@@ -100,7 +121,7 @@ export function quoteShipping(cep: string, subtotal: number): ShippingQuote[] {
   const zona = TABELA[zoneOf(digits)];
   const gratis = subtotal >= FREE_SHIPPING_FROM;
 
-  const quotes: ShippingQuote[] = [
+  return [
     {
       id: 'correios-pac',
       kind: 'correios',
@@ -117,19 +138,97 @@ export function quoteShipping(cep: string, subtotal: number): ShippingQuote[] {
     },
     ...pickupStoresFor(digits),
   ];
-  return quotes;
 }
 
 export function findQuote(cep: string, subtotal: number, quoteId: string): ShippingQuote | undefined {
   return quoteShipping(cep, subtotal).find((q) => q.id === quoteId);
 }
 
+/* ───────────────────────── cotação de verdade ──────────────────────────── */
+
+export interface CotacaoDoSite {
+  quotes: ShippingQuote[];
+  /** Régua vigente — a barra de progresso da sacola lê daqui. */
+  freteGratis: { ativo: boolean; minimo: number; alcancado: boolean; falta: number };
+  /** true = veio da tabela local (backend fora) ou da estimativa do backend. */
+  estimado: boolean;
+  /** Texto da retirada em loja, cadastrado na retaguarda. */
+  retirada?: { prazoHoras: number; instrucoes: string | null };
+}
+
+/**
+ * As opções de entrega REAIS. Roda no navegador (a rota /api carrega o token).
+ *
+ * Sempre devolve algo: backend fora → tabela local marcada `estimado`. A
+ * retirada é adicionada aqui nos dois casos, porque quem sabe quais lojas
+ * atendem aquele CEP é o site.
+ */
+export async function fetchQuotes(
+  cep: string,
+  subtotal: number,
+  pecas = 1,
+  signal?: AbortSignal,
+): Promise<CotacaoDoSite> {
+  const digits = onlyDigits(cep);
+  const local = (): CotacaoDoSite => ({
+    quotes: quoteShipping(digits, subtotal),
+    freteGratis: {
+      ativo: true,
+      minimo: FREE_SHIPPING_FROM,
+      alcancado: subtotal >= FREE_SHIPPING_FROM,
+      falta: Math.max(0, Math.round((FREE_SHIPPING_FROM - subtotal) * 100) / 100),
+    },
+    estimado: true,
+  });
+
+  if (!isValidCep(digits)) {
+    return { quotes: [], freteGratis: { ativo: false, minimo: 0, alcancado: false, falta: 0 }, estimado: false };
+  }
+
+  try {
+    const res = await fetch('/api/loja/frete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cep: digits, subtotal, pecas }),
+      signal,
+    });
+    const dados = await res.json().catch(() => null);
+    if (!dados?.ok || !Array.isArray(dados.opcoes) || !dados.opcoes.length) return local();
+
+    return {
+      quotes: [
+        ...dados.opcoes.map(
+          (o: any): ShippingQuote => ({
+            id: String(o.id),
+            kind: o.kind === 'expressa' ? 'expressa' : 'correios',
+            label: String(o.label),
+            price: Number(o.price) || 0,
+            etaDays: o.etaDays,
+          }),
+        ),
+        ...pickupStoresFor(digits, dados.retirada?.prazoHoras),
+      ],
+      freteGratis: dados.freteGratis ?? local().freteGratis,
+      estimado: !!dados.estimado,
+      retirada: dados.retirada,
+    };
+  } catch {
+    // AbortError incluído: quem cancelou não quer resultado, e devolver a
+    // tabela local é inofensivo (a tela descarta).
+    return local();
+  }
+}
+
 /** Quanto falta pro frete grátis — alimenta a barra de progresso da sacola. */
-export function freeShippingGap(subtotal: number): { reached: boolean; missing: number; progress: number } {
-  const missing = Math.max(0, FREE_SHIPPING_FROM - subtotal);
+export function freeShippingGap(
+  subtotal: number,
+  minimo = FREE_SHIPPING_FROM,
+): { reached: boolean; missing: number; progress: number } {
+  if (!(minimo > 0)) return { reached: true, missing: 0, progress: 1 };
+  const missing = Math.max(0, minimo - subtotal);
   return {
     reached: missing === 0,
     missing: Math.round(missing * 100) / 100,
-    progress: Math.min(1, subtotal / FREE_SHIPPING_FROM),
+    progress: Math.min(1, subtotal / minimo),
   };
 }
