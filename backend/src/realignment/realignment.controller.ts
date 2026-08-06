@@ -945,7 +945,7 @@ export class RealignmentController {
   @Post('triage/suggest')
   triageSuggest(
     @Req() req: any,
-    @Body() body: { sku: string; fromStoreCode: string; candidateStoreCodes: string[] },
+    @Body() body: { sku: string; fromStoreCode: string; candidateStoreCodes: string[]; manterUm?: boolean },
   ) {
     if (req?.user?.role === 'store') {
       // Vendedora pode usar (a triagem rola na loja física dela)
@@ -956,6 +956,8 @@ export class RealignmentController {
       sku: body?.sku,
       fromStoreCode: body?.fromStoreCode,
       candidateStoreCodes: body?.candidateStoreCodes || [],
+      // "Manter 1 na loja" — vem ligado/desligado da própria tela de triagem.
+      manterUm: !!body?.manterUm,
     });
   }
 

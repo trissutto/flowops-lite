@@ -49,6 +49,8 @@ export class TriagemService {
     sku: string;
     fromStoreCode: string;
     candidateStoreCodes: string[];
+    /** "Manter 1 na loja": recusa quando a origem tem só 1 peça daquele SKU. */
+    manterUm?: boolean;
   }) {
     try {
       return await this._suggestInner(input);
@@ -83,6 +85,7 @@ export class TriagemService {
     sku: string;
     fromStoreCode: string;
     candidateStoreCodes: string[];
+    manterUm?: boolean;
   }) {
     const sku = String(input.sku || '').trim();
     if (!sku) throw new BadRequestException('SKU vazio');
@@ -118,7 +121,9 @@ export class TriagemService {
     //    - venda da REF últimos 30d em cada candidato (Giga)
     //    - itens já bipados nas caixas OPEN do par origem→candidato (Postgres)
     const [stockMap, salesMap, openShipments] = await Promise.all([
-      this.erp.getStockBySkuAndStores(codigoGiga, candidates),
+      // Origem entra no MESMO lote de estoque — o "manter 1" precisa dela e
+      // uma consulta a mais tornaria o bipe mais lento (a tela e bipe-a-bipe).
+      this.erp.getStockBySkuAndStores(codigoGiga, [...candidates, input.fromStoreCode]),
       this.erp.getRecentSalesByRefAndStores(info.ref, candidates, 30),
       (this.prisma as any).realignmentShipment.findMany({
         where: {
@@ -146,6 +151,27 @@ export class TriagemService {
           select: { shipmentId: true, refCode: true, cor: true, tamanho: true } as any,
         })
       : [];
+
+    /**
+     * "MANTER 1 NA LOJA" (dono, 04/08) — trava ANTES de qualquer cálculo.
+     *
+     * Fica logo aqui, assim que o estoque chega, porque a tela é bipe-a-bipe:
+     * quanto antes recusar, mais rápido a pessoa põe a peça de volta na arara e
+     * bipa a próxima. Todo o resto (venda 30d, caixas abertas, sorteio de
+     * destino) é trabalho jogado fora quando a peça nem pode sair.
+     *
+     * A regra é do ESTOQUE DA ORIGEM, não do total da rede: tirar a última peça
+     * da arara é deixar a loja sem mostrar aquele tamanho — e quem está com a
+     * peça na mão não tem como saber disso sozinha.
+     */
+    const estoqueOrigem = stockMap.get(input.fromStoreCode) ?? 0;
+    if (input.manterUm && estoqueOrigem <= 1) {
+      throw new BadRequestException(
+        `[ULTIMA_PECA] ${info.ref} ${info.cor || ''} ${info.tamanho || ''} — ` +
+        `sua loja tem ${estoqueOrigem} peça(s) desta. Deixe na arara; ` +
+        `com "Manter 1" ligado, só sai a partir de 2.`,
+      );
+    }
 
     // Mapa: storeCode → { qtdMesmaRef, temSkuExato }
     const grade = new Map<string, { qtdMesmaRef: number; temSkuExato: boolean }>();
