@@ -90,6 +90,12 @@ export default function TriagemPage() {
   //    Quando ativo, renderiza overlay vermelho com X grande e mensagem
   //    "NÃO JOGUE EM NENHUMA CAIXA". Ignora qty pra nada — peça volta pra grade.
   const [allHaveStock, setAllHaveStock] = useState<{ sku: string; message: string } | null>(null);
+  // Recusa por 'Manter 1' — mesma familia do allHaveStock: bipe que NAO virou triagem.
+  const [ultimaPeca, setUltimaPeca] = useState<{ sku: string; message: string } | null>(null);
+  const [manterUm, setManterUm] = useState(false);
+  useEffect(() => {
+    try { setManterUm(localStorage.getItem('flowops_triagem_manter1') === '1'); } catch { /* modo privado */ }
+  }, []);
   const [diagLoading, setDiagLoading] = useState(false);
   const [diagResult, setDiagResult] = useState<any | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -276,6 +282,7 @@ export default function TriagemPage() {
     setError(null);
     setErrorSku(null);
     setAllHaveStock(null);
+    setUltimaPeca(null);
     setDiagResult(null);
     setFinalizeResult(null);
     try {
@@ -314,6 +321,16 @@ export default function TriagemPage() {
     } catch (e: any) {
       const raw = String(e?.message || '');
       // Marker do backend: TODAS as lojas destino já têm essa peça. NÃO confirma.
+      // "Manter 1": a peça é a última da arara — não vira triagem.
+      if (raw.includes('ULTIMA_PECA')) {
+        setUltimaPeca({
+          sku,
+          message: raw.replace(/^\d+:\s*/, '').replace(/^\[ULTIMA_PECA\]\s*/, '').trim(),
+        });
+        setScanInput('');
+        inputRef.current?.focus();
+        return;
+      }
       if (raw.includes('ALL_STORES_HAVE_STOCK')) {
         // Tira o prefixo "400: [ALL_STORES_HAVE_STOCK] " da mensagem
         const cleaned = raw
@@ -589,10 +606,37 @@ export default function TriagemPage() {
             onSubmit={handleScan}
             className="bg-white rounded-lg border-2 border-violet-300 p-3 shadow-sm"
           >
-            <label className="text-xs uppercase font-semibold text-violet-700 flex items-center gap-1 mb-2">
-              <Barcode className="w-3.5 h-3.5" />
-              Bipe a peça (SKU/EAN)
-            </label>
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+              <label className="text-xs uppercase font-semibold text-violet-700 flex items-center gap-1">
+                <Barcode className="w-3.5 h-3.5" />
+                Bipe a peça (SKU/EAN)
+              </label>
+              {/* MANTER 1 NA LOJA — decidido ANTES de começar a bipar, não
+                  peça a peça. Fica colado no campo de bipe pra pessoa ver em
+                  que modo está sem procurar. Guardado no navegador: quem
+                  decidiu "não esvaziar a arara" hoje não quer redecidir a cada
+                  recarga da tela. */}
+              <label
+                className={
+                  'flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-bold cursor-pointer select-none ' +
+                  (manterUm
+                    ? 'border-amber-400 bg-amber-50 text-amber-800'
+                    : 'border-slate-300 text-slate-500')
+                }
+                title="Com isto ligado, peça com 1 unidade na sua loja não é liberada pra triagem"
+              >
+                <input
+                  type="checkbox"
+                  checked={manterUm}
+                  onChange={(e) => {
+                    setManterUm(e.target.checked);
+                    try { localStorage.setItem('flowops_triagem_manter1', e.target.checked ? '1' : '0'); } catch { /* modo privado */ }
+                  }}
+                  className="accent-amber-600"
+                />
+                Manter 1 na loja
+              </label>
+            </div>
             <div className="flex flex-col sm:flex-row gap-2">
               <input
                 ref={inputRef}
@@ -718,6 +762,29 @@ export default function TriagemPage() {
 
           {/* BLOQUEIO: todas as lojas destino já têm estoque dessa peça.
               NÃO transferiu — vendedora deve devolver pra grade da loja origem. */}
+          {/* ÚLTIMA PEÇA — recusa do "Manter 1". Âmbar, não vermelho: não é
+              erro nem peça errada, é a regra funcionando. O que a pessoa
+              precisa ler em 1 segundo é "devolve pra arara e bipa a próxima". */}
+          {ultimaPeca && (
+            <div className="rounded-xl border-2 border-amber-400 bg-amber-50 p-4">
+              <div className="flex items-start gap-3">
+                <AlertCircle className="w-7 h-7 shrink-0 text-amber-600" />
+                <div className="min-w-0">
+                  <div className="text-lg font-black text-amber-900">DEIXE NA LOJA</div>
+                  <div className="mt-0.5 text-sm text-amber-900/90 break-words">{ultimaPeca.message}</div>
+                  <div className="mt-1 font-mono text-xs text-amber-700">SKU {ultimaPeca.sku}</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => { setUltimaPeca(null); inputRef.current?.focus(); }}
+                  className="ml-auto rounded-lg border border-amber-400 px-3 py-1.5 text-xs font-bold text-amber-800 hover:bg-amber-100"
+                >
+                  ok, próxima
+                </button>
+              </div>
+            </div>
+          )}
+
           {allHaveStock && (
             <div className="bg-rose-600 border-4 border-rose-800 rounded-xl p-6 shadow-2xl animate-pulse-slow">
               <div className="flex items-center justify-center mb-4">
