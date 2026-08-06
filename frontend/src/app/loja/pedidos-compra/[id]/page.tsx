@@ -386,6 +386,14 @@ export default function PedidoDetalhePage() {
             </button>
           )}
           <Link
+            href={`/loja/pedidos-compra/novo?id=${id}`}
+            className="flex items-center gap-2 px-4 py-2.5 bg-white hover:bg-violet-50 border border-violet-300 text-violet-700 font-bold text-sm rounded-lg"
+            title="Reabre o pedido NA TELA DE LANÇAMENTO (mesmo formato): REFs conferidas travadas, pendentes editáveis, e dá pra adicionar e conferir novas"
+          >
+            <Package className="w-4 h-4" />
+            Reabrir no lançamento
+          </Link>
+          <Link
             href={`/loja/pedidos-compra/${id}/imprimir`}
             className="flex items-center gap-2 px-4 py-2.5 bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 font-bold text-sm rounded-lg"
             title="Gerar PDF do pedido (conferência)"

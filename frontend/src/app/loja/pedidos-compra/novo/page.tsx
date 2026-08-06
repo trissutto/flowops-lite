@@ -15,7 +15,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
   ArrowLeft, Plus, Trash2, Loader2, Save, Package,
-  AlertCircle, Copy, X, Eye,
+  AlertCircle, Copy, X, Eye, Check, Printer,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import {
@@ -63,6 +63,17 @@ type ItemForm = {
   tamanhos: string[];
   // matriz: { "PRETO|46": 21, "PRETO|48": 21, ... }
   grade: Record<string, string>;
+  // Preenchido quando a REF foi CONFERIDA durante o lançamento (recebimento
+  // parcial): já existe no servidor com estoque lançado e etiquetas geradas —
+  // o Salvar final NÃO reenvia este item.
+  conferido?: { orderId: string; pecas: number; skusNovos: number; erros: number };
+  // Ids dos PurchaseOrderItem no servidor que este card representa (modo
+  // "reabrir pedido"). Ao conferir/salvar, os antigos são apagados e o card é
+  // regravado — edição vira delete+recreate, sem PATCH campo a campo.
+  serverItemIds?: string[];
+  // true = não deixar o auto-preço sobrescrever o precoUnit carregado do
+  // servidor (pedido reaberto mantém o preço salvo até alguém mexer).
+  precoTravado?: boolean;
 };
 
 const TAMANHOS_PLUS = ['46', '48', '50', '52', '54', '56', '58', '60'];
@@ -133,6 +144,12 @@ export default function NovoPedidoPage() {
 
   // Items
   const [items, setItems] = useState<ItemForm[]>([]);
+
+  // Conferência durante o lançamento: o pedido é criado (rascunho) no 1º
+  // "Conferir + etiquetas" e cada REF conferida já entra no estoque na hora.
+  const [orderId, setOrderId] = useState<string | null>(null);
+  const [conferindoId, setConferindoId] = useState<string | null>(null);
+  const [carregandoPedido, setCarregandoPedido] = useState(false);
 
   // Cache de subgrupos por grupoCode (compartilhado entre itens) — elimina race
   // quando item novo herda grupoCode+subgrupoCode do anterior.
@@ -299,13 +316,21 @@ export default function NovoPedidoPage() {
   };
 
   const removerItem = (tempId: string) => {
+    // Card pendente reaberto do servidor: remove lá também (senão vira item
+    // fantasma quando o pedido for salvo/recebido de novo).
+    const alvo = items.find((i) => i.tempId === tempId);
+    if (!alvo?.conferido) {
+      for (const sid of alvo?.serverItemIds || []) {
+        api(`/purchase-orders/items/${sid}`, { method: 'DELETE' }).catch(() => {});
+      }
+    }
     setItems((prev) => prev.filter((i) => i.tempId !== tempId));
   };
 
   const duplicarItem = (tempId: string) => {
     const original = items.find((i) => i.tempId === tempId);
     if (!original) return;
-    setItems((prev) => [...prev, { ...original, tempId: newTempId(), grade: { ...original.grade } }]);
+    setItems((prev) => [...prev, { ...original, tempId: newTempId(), grade: { ...original.grade }, conferido: undefined, serverItemIds: undefined }]);
   };
 
   const updateItem = (tempId: string, patch: Partial<ItemForm>) => {
@@ -406,13 +431,15 @@ export default function NovoPedidoPage() {
     [items],
   );
 
-  const salvar = async () => {
-    setError(null);
+  // ── Compartilhado entre Salvar e "Conferir + etiquetas" ──────────────────
+
+  /** CNPJ do fornecedor (auto-match pelo nome se não clicou no autocomplete).
+   *  null = bloqueado — o erro já foi mostrado. */
+  const resolverCnpjFornecedor = (): string | null => {
     if (!fornecedorNome.trim()) {
       setError('Fornecedor obrigatório');
-      return;
+      return null;
     }
-    // ULTIMA TENTATIVA de auto-match CNPJ (se user nao clicou no autocomplete)
     let cnpjFinal = fornecedorCnpj.trim();
     if (!cnpjFinal && fornecedores.length > 0) {
       const digitado = fornecedorNome.trim().toUpperCase();
@@ -432,116 +459,321 @@ export default function NovoPedidoPage() {
         setFornecedorCnpj(match.cnpj);
       }
     }
-    // FIX #3: bloqueia salvar sem CNPJ (usuario digitou nome sem clicar no autocomplete).
+    // FIX #3: bloqueia sem CNPJ (usuario digitou nome sem clicar no autocomplete).
     if (!cnpjFinal) {
       setError(
         `CNPJ do fornecedor "${fornecedorNome}" não encontrado. Selecione o fornecedor da lista (autocomplete dropdown abaixo do campo) pra pegar o CNPJ. Sem CNPJ o sistema não consegue cadastrar produtos no Wincred.`,
       );
-      return;
+      return null;
     }
+    return cnpjFinal;
+  };
+
+  const validarItemForm = (it: ItemForm): string | null => {
+    if (!it.ref.trim()) return 'Item sem REF';
+    if (!it.grupoCode || !it.subgrupoCode) return `REF ${it.ref}: Grupo e Subgrupo obrigatórios pra montar a descrição`;
+    if (!it.custoUnit || !it.precoUnit) return `REF ${it.ref}: Custo e Preço obrigatórios`;
+    if (it.cores.length === 0 || it.tamanhos.length === 0) return `REF ${it.ref}: adicione cores e tamanhos`;
+    if (calcularTotalItem(it) === 0) return `REF ${it.ref}: total = 0, informe quantidades na grade`;
+    return null;
+  };
+
+  /** Salva a categoria (grupo+subgrupo) se ainda não existir — não bloqueia. */
+  const salvarCategoriaSeNova = async (it: ItemForm) => {
+    const descBase = `${it.grupoNome} ${it.subgrupoNome}`.trim().toUpperCase();
+    const exists = categorias.find((c) => c.descricaoBase === descBase);
+    if (exists || !it.grupoCode || !it.subgrupoCode) return;
+    try {
+      await api('/purchase-orders/categorias', {
+        method: 'POST',
+        body: JSON.stringify({
+          descricaoBase: descBase,
+          grupoCode: it.grupoCode,
+          grupoNome: it.grupoNome,
+          subgrupoCode: it.subgrupoCode,
+          subgrupoNome: it.subgrupoNome,
+          ncmDefault: it.ncm || null,
+          cfopDefault: it.cfop || '5102',
+          plusSizeDefault: it.plusSize,
+        }),
+      });
+    } catch {
+      // Não bloqueia salvar pedido se categoria falhar
+    }
+  };
+
+  /** 1 ItemForm pode virar VÁRIOS items da API (1 por cor com qty na grade). */
+  const montarApiItems = (it: ItemForm): any[] => {
+    const descBase = `${it.grupoNome} ${it.subgrupoNome}`.trim().toUpperCase();
+    const out: any[] = [];
+    for (const cor of it.cores) {
+      const tamanhosQty: Record<string, number> = {};
+      for (const t of it.tamanhos) {
+        const q = Number(it.grade[`${cor}|${t}`] || 0);
+        if (q > 0) tamanhosQty[t] = q;
+      }
+      if (Object.keys(tamanhosQty).length === 0) continue; // pula cores sem qty
+      out.push({
+        ref: it.ref,
+        descricaoBase: descBase,
+        cor,
+        grupoCode: it.grupoCode,
+        grupoNome: it.grupoNome,
+        subgrupoCode: it.subgrupoCode,
+        subgrupoNome: it.subgrupoNome,
+        ncm: it.ncm || null,
+        cfop: it.cfop || '5102',
+        plusSize: it.plusSize,
+        custoUnit: Number(it.custoUnit.replace(',', '.')),
+        precoUnit: Number(it.precoUnit.replace(',', '.')),
+        tributoPct: Number(it.tributoPct.replace(',', '.') || 0),
+        descontoPct: Number(it.descontoPct.replace(',', '.') || 0),
+        tamanhosQty,
+        // Só os ids — o backend resolve o nome pelo cadastro, pra não
+        // gravar no pedido um texto que veio do navegador.
+        tecidoId: it.tecidoId || null,
+        colecaoId: it.colecaoId || null,
+        ocasiaoIds: it.ocasiaoIds,
+        modelagemIds: it.modelagemIds,
+      });
+    }
+    return out;
+  };
+
+  const headerPayload = (cnpjFinal: string) => ({
+    fornecedorNome,
+    fornecedorCnpj: cnpjFinal,
+    marca,
+    dataPrevista: dataPrevista || null,
+    nfNumero,
+    observacoes,
+  });
+
+  /** Garante o pedido criado no servidor (rascunho, só cabeçalho). */
+  const ensureOrder = async (cnpjFinal: string): Promise<string> => {
+    if (orderId) return orderId;
+    const r = await api<{ id: string }>('/purchase-orders', {
+      method: 'POST',
+      body: JSON.stringify({ ...headerPayload(cnpjFinal), items: [] }),
+    });
+    setOrderId(r.id);
+    return r.id;
+  };
+
+  // ── REABRIR pedido no MESMO formato de lançamento (dono 06/08) ───────────
+  // /loja/pedidos-compra/novo?id=<pedido> carrega um pedido existente AQUI:
+  // itens agrupados por REF como no lançamento; recebidos viram cards
+  // travados (✓ Conferida), pendentes voltam 100% editáveis.
+  const carregarPedido = async (id: string) => {
+    setCarregandoPedido(true);
+    setError(null);
+    try {
+      const o = await api<any>(`/purchase-orders/${id}`);
+      setFornecedorNome(o.fornecedorNome || '');
+      setFornecedorCnpj(o.fornecedorCnpj || '');
+      setMarca(o.marca || '');
+      setDataPrevista(o.dataPrevista ? String(o.dataPrevista).slice(0, 10) : '');
+      setNfNumero(o.nfNumero || '');
+      setObservacoes(o.observacoes || '');
+
+      const parse = (v: any, fb: any) => {
+        if (v == null) return fb;
+        if (typeof v !== 'string') return v;
+        try { return JSON.parse(v); } catch { return fb; }
+      };
+      const ordemTam = (t: string) => {
+        const n = Number(String(t).replace('/', '.'));
+        if (!isNaN(n) && n > 0) return n;
+        const letras = ['PP', 'P', 'M', 'G', 'GG', 'XGG', 'G1', 'G2', 'G3', 'G4', 'G5'];
+        const i = letras.indexOf(String(t).toUpperCase());
+        return i >= 0 ? 1000 + i : 2000;
+      };
+
+      // Agrupa por REF, separando recebidos (card travado) dos pendentes
+      // (card editável) — REF meio-recebida ("Receber cor") vira DOIS cards.
+      const grupos = new Map<string, any[]>();
+      for (const si of o.items || []) {
+        const key = `${si.ref}::${si.itemStatus === 'recebido' ? 'ok' : 'pend'}`;
+        if (!grupos.has(key)) grupos.set(key, []);
+        grupos.get(key)!.push(si);
+      }
+      const cards: ItemForm[] = [];
+      for (const [key, sis] of grupos) {
+        const recebido = key.endsWith('::ok');
+        const first = sis[0];
+        const cores: string[] = [];
+        const tamSet = new Set<string>();
+        const grade: Record<string, string> = {};
+        let pecas = 0;
+        for (const si of sis) {
+          if (!cores.includes(si.cor)) cores.push(si.cor);
+          const tq = parse(si.tamanhosQty, {}) as Record<string, number>;
+          for (const [t, q] of Object.entries(tq)) {
+            tamSet.add(t);
+            grade[`${si.cor}|${t}`] = String(q);
+            pecas += Number(q) || 0;
+          }
+        }
+        cards.push({
+          tempId: newTempId(),
+          ref: first.ref || '',
+          descricaoBase: first.descricaoBase || '',
+          grupoCode: first.grupoCode ?? null,
+          grupoNome: first.grupoNome || '',
+          subgrupoCode: first.subgrupoCode ?? null,
+          subgrupoNome: first.subgrupoNome || '',
+          ncm: first.ncm || '',
+          cfop: first.cfop || '5102',
+          plusSize: first.plusSize ?? true,
+          tecidoId: first.tecidoId || '',
+          colecaoId: first.colecaoId || '',
+          ocasiaoIds: (parse(first.ocasioes, []) as any[]).map((x) => x?.id).filter(Boolean),
+          modelagemIds: (parse(first.modelagens, []) as any[]).map((x) => x?.id).filter(Boolean),
+          custoUnit: String(first.custoUnit ?? '').replace('.', ','),
+          precoUnit: String(first.precoUnit ?? '').replace('.', ','),
+          tributoPct: String(first.tributoPct ?? 0).replace('.', ','),
+          descontoPct: String(first.descontoPct ?? 0).replace('.', ','),
+          markup: '',
+          gradePresetId: null,
+          cores,
+          tamanhos: Array.from(tamSet).sort((a, b) => ordemTam(a) - ordemTam(b)),
+          grade,
+          conferido: recebido ? { orderId: id, pecas, skusNovos: 0, erros: 0 } : undefined,
+          serverItemIds: sis.map((x: any) => x.id),
+          precoTravado: true,
+        });
+      }
+      // Conferidas primeiro (travadas), pendentes depois — ordem de lançamento
+      cards.sort((a, b) => Number(!!b.conferido) - Number(!!a.conferido));
+      setItems(cards);
+      setOrderId(id);
+    } catch (e: any) {
+      setError(`Não consegui carregar o pedido: ${e?.message || 'erro'}`);
+    } finally {
+      setCarregandoPedido(false);
+    }
+  };
+
+  useEffect(() => {
+    const id = typeof window !== 'undefined'
+      ? new URLSearchParams(window.location.search).get('id')
+      : null;
+    if (id) carregarPedido(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /**
+   * CONFERIR + ETIQUETAS durante o lançamento (dono 06/08): cria o pedido
+   * (rascunho) na 1ª vez, adiciona SÓ esta REF e recebe ela na hora via
+   * recebimento parcial — auto-cadastro + estoque — e abre as etiquetas da
+   * REF em outra aba. O pedido continua aberto pras próximas REFs.
+   */
+  const conferirAgora = async (tempId: string) => {
+    if (conferindoId) return;
+    const it = items.find((i) => i.tempId === tempId);
+    if (!it || it.conferido) return;
+    setError(null);
+    const vErr = validarItemForm(it);
+    if (vErr) { setError(vErr); return; }
+    const cnpjFinal = resolverCnpjFornecedor();
+    if (!cnpjFinal) return;
+    setConferindoId(tempId);
+    try {
+      const oid = await ensureOrder(cnpjFinal);
+      // Card veio de pedido reaberto: apaga os itens antigos (pendentes) e
+      // regrava com o que está na tela — edição = delete+recreate.
+      for (const sid of it.serverItemIds || []) {
+        await api(`/purchase-orders/items/${sid}`, { method: 'DELETE' });
+      }
+      await salvarCategoriaSeNova(it);
+      const apiItems = montarApiItems(it);
+      if (apiItems.length === 0) {
+        setError(`REF ${it.ref}: grade sem quantidades`);
+        return;
+      }
+      const itemIds: string[] = [];
+      for (const ai of apiItems) {
+        const criado = await api<{ id: string }>(`/purchase-orders/${oid}/items`, {
+          method: 'POST',
+          body: JSON.stringify(ai),
+        });
+        if (criado?.id) itemIds.push(criado.id);
+      }
+      const r = await api<any>(`/purchase-orders/${oid}/receive`, {
+        method: 'POST',
+        body: JSON.stringify({ itemIds }),
+      });
+      const erros = Array.isArray(r?.errors) ? r.errors.length : 0;
+      updateItem(tempId, {
+        serverItemIds: itemIds,
+        conferido: {
+          orderId: oid,
+          pecas: Number(r?.totalPecas || 0) || calcularTotalItem(it),
+          skusNovos: Number(r?.totalSkusInseridos || 0),
+          erros,
+        },
+      });
+      if (erros > 0) {
+        setError(
+          `REF ${it.ref} conferida com ${erros} erro(s) de cadastro — resolva depois na tela do pedido (Cadastrar faltantes).`,
+        );
+      }
+      window.open(
+        `/loja/pedidos-compra/${oid}/etiquetas?ref=${encodeURIComponent(it.ref.trim().toUpperCase())}`,
+        '_blank',
+      );
+    } catch (e: any) {
+      setError(`Conferir REF ${it.ref}: ${e?.message || 'erro'}`);
+    } finally {
+      setConferindoId(null);
+    }
+  };
+
+  const salvar = async () => {
+    setError(null);
+    const cnpjFinal = resolverCnpjFornecedor();
+    if (!cnpjFinal) return;
     if (items.length === 0) {
       setError('Adicione ao menos 1 item');
       return;
     }
-    // Valida cada item
-    for (const it of items) {
-      if (!it.ref.trim()) {
-        setError(`Item sem REF`);
-        return;
-      }
-      if (!it.grupoCode || !it.subgrupoCode) {
-        setError(`REF ${it.ref}: Grupo e Subgrupo obrigatórios pra montar a descrição`);
-        return;
-      }
-      if (!it.custoUnit || !it.precoUnit) {
-        setError(`REF ${it.ref}: Custo e Preço obrigatórios`);
-        return;
-      }
-      if (it.cores.length === 0 || it.tamanhos.length === 0) {
-        setError(`REF ${it.ref}: adicione cores e tamanhos`);
-        return;
-      }
-      if (calcularTotalItem(it) === 0) {
-        setError(`REF ${it.ref}: total = 0, informe quantidades na grade`);
-        return;
-      }
+    // REFs conferidas JÁ estão no pedido (servidor) — o Salvar cuida do resto.
+    const pendentes = items.filter((i) => !i.conferido);
+    for (const it of pendentes) {
+      const vErr = validarItemForm(it);
+      if (vErr) { setError(vErr); return; }
     }
 
     setSaving(true);
     try {
       // Salva novas categorias (se grupo+subgrupo ainda não existirem)
-      for (const it of items) {
-        const descBase = `${it.grupoNome} ${it.subgrupoNome}`.trim().toUpperCase();
-        const exists = categorias.find((c) => c.descricaoBase === descBase);
-        if (!exists && it.grupoCode && it.subgrupoCode) {
-          try {
-            await api('/purchase-orders/categorias', {
-              method: 'POST',
-              body: JSON.stringify({
-                descricaoBase: descBase,
-                grupoCode: it.grupoCode,
-                grupoNome: it.grupoNome,
-                subgrupoCode: it.subgrupoCode,
-                subgrupoNome: it.subgrupoNome,
-                ncmDefault: it.ncm || null,
-                cfopDefault: it.cfop || '5102',
-                plusSizeDefault: it.plusSize,
-              }),
-            });
-          } catch {
-            // Não bloqueia salvar pedido se categoria falhar
-          }
-        }
-      }
-
+      for (const it of pendentes) await salvarCategoriaSeNova(it);
       // Monta items pro POST: 1 ItemForm pode virar VÁRIOS items (1 por cor)
-      const apiItems: any[] = [];
-      for (const it of items) {
-        const descBase = `${it.grupoNome} ${it.subgrupoNome}`.trim().toUpperCase();
-        for (const cor of it.cores) {
-          const tamanhosQty: Record<string, number> = {};
-          for (const t of it.tamanhos) {
-            const q = Number(it.grade[`${cor}|${t}`] || 0);
-            if (q > 0) tamanhosQty[t] = q;
+      const apiItems: any[] = pendentes.flatMap((it) => montarApiItems(it));
+
+      if (orderId) {
+        // Pedido já existe (criado no 1º Conferir ou reaberto): atualiza o
+        // cabeçalho e regrava só o que ainda não foi conferido.
+        await api(`/purchase-orders/${orderId}`, {
+          method: 'PATCH',
+          body: JSON.stringify(headerPayload(cnpjFinal)),
+        });
+        // Cards pendentes reabertos são regravados: apaga os antigos antes.
+        for (const it of pendentes) {
+          for (const sid of it.serverItemIds || []) {
+            await api(`/purchase-orders/items/${sid}`, { method: 'DELETE' });
           }
-          if (Object.keys(tamanhosQty).length === 0) continue; // pula cores sem qty
-          apiItems.push({
-            ref: it.ref,
-            descricaoBase: descBase,
-            cor,
-            grupoCode: it.grupoCode,
-            grupoNome: it.grupoNome,
-            subgrupoCode: it.subgrupoCode,
-            subgrupoNome: it.subgrupoNome,
-            ncm: it.ncm || null,
-            cfop: it.cfop || '5102',
-            plusSize: it.plusSize,
-            custoUnit: Number(it.custoUnit.replace(',', '.')),
-            precoUnit: Number(it.precoUnit.replace(',', '.')),
-            tributoPct: Number(it.tributoPct.replace(',', '.') || 0),
-            descontoPct: Number(it.descontoPct.replace(',', '.') || 0),
-            tamanhosQty,
-            // Só os ids — o backend resolve o nome pelo cadastro, pra não
-            // gravar no pedido um texto que veio do navegador.
-            tecidoId: it.tecidoId || null,
-            colecaoId: it.colecaoId || null,
-            ocasiaoIds: it.ocasiaoIds,
-            modelagemIds: it.modelagemIds,
-          });
         }
+        for (const ai of apiItems) {
+          await api(`/purchase-orders/${orderId}/items`, { method: 'POST', body: JSON.stringify(ai) });
+        }
+        router.push(`/loja/pedidos-compra/${orderId}`);
+        return;
       }
 
       const r = await api<{ id: string }>('/purchase-orders', {
         method: 'POST',
-        body: JSON.stringify({
-          fornecedorNome,
-          fornecedorCnpj: cnpjFinal,
-          marca,
-          dataPrevista: dataPrevista || null,
-          nfNumero,
-          observacoes,
-          items: apiItems,
-        }),
+        body: JSON.stringify({ ...headerPayload(cnpjFinal), items: apiItems }),
       });
       router.push(`/loja/pedidos-compra/${r.id}`);
     } catch (e: any) {
@@ -561,21 +793,35 @@ export default function NovoPedidoPage() {
             <Package className="w-5 h-5 text-white" />
           </div>
           <div className="flex-1">
-            <h1 className="text-lg font-black text-slate-800">Novo pedido de compra</h1>
-            <p className="text-xs text-slate-500">{items.length} REF(s) · <b>{totalPecas}</b> peças · R$ {totalCusto.toFixed(2)}</p>
+            <h1 className="text-lg font-black text-slate-800">
+              {orderId ? 'Pedido de compra — lançamento' : 'Novo pedido de compra'}
+            </h1>
+            <p className="text-xs text-slate-500">
+              {items.length} REF(s) · <b>{totalPecas}</b> peças · R$ {totalCusto.toFixed(2)}
+              {orderId && (
+                <span className="ml-2 font-bold text-emerald-700">
+                  · pedido salvo — REFs conferidas já no estoque
+                </span>
+              )}
+            </p>
           </div>
           <button
             onClick={salvar}
-            disabled={saving || items.length === 0}
+            disabled={saving || !!conferindoId || carregandoPedido || items.length === 0}
             className="flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm rounded-lg shadow-md disabled:opacity-40"
           >
             {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-            Salvar pedido
+            {orderId && items.every((i) => i.conferido) ? 'Abrir pedido' : 'Salvar pedido'}
           </button>
         </div>
       </header>
 
       <main className="max-w-[1400px] mx-auto p-4 space-y-4">
+        {carregandoPedido && (
+          <div className="bg-violet-50 border border-violet-200 text-violet-700 rounded-lg p-3 text-sm font-bold">
+            Carregando pedido…
+          </div>
+        )}
         {error && (
           <div className="bg-rose-50 border border-rose-300 text-rose-700 rounded-lg p-3 flex items-center gap-2">
             <AlertCircle className="w-5 h-5" />
@@ -742,6 +988,8 @@ export default function NovoPedidoPage() {
               onUpdate={(patch) => updateItem(item.tempId, patch)}
               onRemove={() => removerItem(item.tempId)}
               onDuplicate={() => duplicarItem(item.tempId)}
+              onConferir={() => conferirAgora(item.tempId)}
+              conferindo={conferindoId === item.tempId}
               onAplicarCategoria={(desc) => aplicarCategoriaSeExistir(item.tempId, desc)}
               onAddCor={(c) => adicionarCor(item.tempId, c)}
               onRemoveCor={(c) => removerCor(item.tempId, c)}
@@ -772,6 +1020,7 @@ function ItemEditor({
   onUpdate, onRemove, onDuplicate, onAplicarCategoria,
   onAddCor, onRemoveCor, onAddTam, onRemoveTam, onGrade,
   onAdicionarNova, onRefreshGrupos, atributos, onCriarAtributo,
+  onConferir, conferindo,
 }: {
   item: ItemForm;
   index: number;
@@ -784,6 +1033,8 @@ function ItemEditor({
   onUpdate: (patch: Partial<ItemForm>) => void;
   onRemove: () => void;
   onDuplicate: () => void;
+  onConferir: () => void;
+  conferindo: boolean;
   onAplicarCategoria: (desc: string) => void;
   onAddCor: (c: string) => void;
   onRemoveCor: (c: string) => void;
@@ -794,7 +1045,7 @@ function ItemEditor({
   onRefreshGrupos?: () => Promise<Grupo[]>;
 }) {
   // Flag pra saber se o preço foi mexido manualmente (não auto-sobrescrever)
-  const [precoEditadoManual, setPrecoEditadoManual] = useState(false);
+  const [precoEditadoManual, setPrecoEditadoManual] = useState(!!item.precoTravado);
   const [subgrupos, setSubgrupos] = useState<Grupo[]>([]);
   const [novaCor, setNovaCor] = useState('');
   const [novoTam, setNovoTam] = useState('');
@@ -887,24 +1138,65 @@ function ItemEditor({
   const lucroUnit = precoVendaNum - custoLiquido;
 
   return (
-    <div className="bg-white border-2 border-slate-200 rounded-2xl p-4 space-y-3">
+    <div className={`bg-white border-2 rounded-2xl p-4 space-y-3 ${item.conferido ? 'border-emerald-300' : 'border-slate-200'}`}>
       {/* Header da REF */}
       <div className="flex items-center justify-between gap-2">
         <div className="text-xs font-black text-violet-700 uppercase tracking-wider">
           Item #{index}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap justify-end">
           <span className="text-xs text-slate-500">
             <b>{totalLinha}</b> peças · R$ {custoTotal.toFixed(2)}
           </span>
+          {item.conferido ? (
+            <>
+              <span
+                className="text-[10px] font-black uppercase text-emerald-700 bg-emerald-50 border border-emerald-300 px-2 py-1 rounded-lg"
+                title="REF conferida: cadastrada e com estoque lançado. O card fica travado — ajustes são na tela do pedido."
+              >
+                ✓ Conferida · {item.conferido.pecas} pç no estoque
+                {item.conferido.erros > 0 ? ` · ${item.conferido.erros} erro(s)` : ''}
+              </span>
+              <button
+                onClick={() =>
+                  window.open(
+                    `/loja/pedidos-compra/${item.conferido!.orderId}/etiquetas?ref=${encodeURIComponent(item.ref.trim().toUpperCase())}`,
+                    '_blank',
+                  )
+                }
+                className="p-1.5 hover:bg-emerald-50 rounded text-emerald-700"
+                title="Reabrir etiquetas desta REF"
+              >
+                <Printer className="w-4 h-4" />
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={onConferir}
+              disabled={conferindo}
+              title="Cadastra a REF no pedido, lança o estoque AGORA e abre as etiquetas — o pedido continua aberto pras próximas REFs"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-black uppercase disabled:opacity-50"
+            >
+              {conferindo ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+              Conferir + etiquetas
+            </button>
+          )}
           <button onClick={onDuplicate} className="p-1.5 hover:bg-slate-100 rounded" title="Duplicar">
             <Copy className="w-4 h-4 text-slate-500" />
           </button>
-          <button onClick={onRemove} className="p-1.5 hover:bg-rose-50 text-rose-500 rounded" title="Remover">
-            <Trash2 className="w-4 h-4" />
-          </button>
+          {!item.conferido && (
+            <button onClick={onRemove} className="p-1.5 hover:bg-rose-50 text-rose-500 rounded" title="Remover">
+              <Trash2 className="w-4 h-4" />
+            </button>
+          )}
         </div>
       </div>
+
+      {/* Corpo travado após conferir — a partir daí a verdade é o servidor */}
+      <fieldset
+        disabled={!!item.conferido}
+        className={`min-w-0 border-0 p-0 m-0 space-y-3 ${item.conferido ? 'opacity-55 pointer-events-none' : ''}`}
+      >
 
       {/* Linha 1: REF */}
       <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
@@ -1321,6 +1613,7 @@ function ItemEditor({
 
       {/* PREVIEW DESCRICAO - auto-gerada (ultimo campo) */}
       <DescricaoPreview item={item} />
+      </fieldset>
     </div>
   );
 }
