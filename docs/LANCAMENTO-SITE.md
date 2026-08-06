@@ -119,16 +119,16 @@ Refeito em 04/08/2026, **só o site novo** (`ecommerce/` + `backend/src/loja-ord
 61. ⬜ APROVADO — Escassez honesta ("últimas 2") — **JÁ EXISTE**, ligar na fonte real
 62. ⬜ APROVADO — Quick add na listagem — **JÁ EXISTE**
 
-## E. Conta da cliente (🟠)
+## E. Conta da cliente (🟠) · **APROVADO PELO DONO 04/08**
 
-63. Cadastro e login ligados ao CRM por CPF — **JÁ EXISTE** a base
-64. Meus pedidos com status e rastreio
-65. Segunda via do PIX em aberto
-66. Meus endereços
-67. Meus dados com consentimento LGPD
-68. 🟡 Cashback: saldo e extrato (existe no CRM)
-69. 🟡 Lista de desejos
-70. 🟡 Recuperação de senha
+63. ⬜ APROVADO — Cadastro e login ligados ao CRM por CPF — **JÁ EXISTE** a base
+64. ⬜ APROVADO — Meus pedidos com status e rastreio
+65. ⬜ APROVADO — Segunda via do PIX em aberto
+66. ⬜ APROVADO — Meus endereços
+67. ⬜ APROVADO — Meus dados com consentimento LGPD
+68. ⬜ APROVADO — Cashback: saldo e extrato (existe no CRM)
+69. ⬜ APROVADO — Lista de desejos
+70. ⬜ APROVADO — Recuperação de senha
 
 ## F. Pedido → loja → entrega (🔴)
 
