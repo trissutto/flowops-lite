@@ -33,10 +33,29 @@ interface LuxuryCarouselProps {
 
 const GAPS = { sm: 'gap-3', md: 'gap-4 lg:gap-6', lg: 'gap-6 lg:gap-8' } as const;
 
+/**
+ * ⚠️ TUDO EM VARIÁVEL — NADA DE `flexBasis` INLINE (bug real, 07/08).
+ *
+ * Antes esta função devolvia `flexBasis` direto no `style`, junto das
+ * variáveis dos breakpoints. Só que **estilo inline vence classe CSS**: o
+ * `sm:basis-*`, `lg:basis-*` e `xl:basis-*` nunca entravam, e a largura de
+ * CELULAR (1,15–1,35 card) valia até num monitor de 1920px. Todos os
+ * carrosséis do site — novidades, best sellers, "quem viu também levou" —
+ * mostravam um card e meio gigante em vez de quatro.
+ *
+ * Agora a base também é variável, aplicada por classe: todas as larguras
+ * ficam no mesmo nível de especificidade e o breakpoint manda, como sempre
+ * foi a intenção.
+ */
 function basisClass(perView: NonNullable<LuxuryCarouselProps['perView']>) {
   const { base = 1.15, sm = 2, lg = 3, xl = 4 } = perView;
   const pct = (n: number) => `${(100 / n).toFixed(4)}%`;
-  return { flexBasis: pct(base), '--sm-basis': pct(sm), '--lg-basis': pct(lg), '--xl-basis': pct(xl) } as React.CSSProperties;
+  return {
+    '--base-basis': pct(base),
+    '--sm-basis': pct(sm),
+    '--lg-basis': pct(lg),
+    '--xl-basis': pct(xl),
+  } as React.CSSProperties;
 }
 
 export function LuxuryCarousel({
@@ -88,7 +107,7 @@ export function LuxuryCarousel({
             <div
               key={i}
               style={style}
-              className="min-w-0 shrink-0 grow-0 sm:basis-[var(--sm-basis)] lg:basis-[var(--lg-basis)] xl:basis-[var(--xl-basis)]"
+              className="min-w-0 shrink-0 grow-0 basis-[var(--base-basis)] sm:basis-[var(--sm-basis)] lg:basis-[var(--lg-basis)] xl:basis-[var(--xl-basis)]"
               role="group"
               aria-roledescription="slide"
               aria-label={`${i + 1} de ${children.length}`}
