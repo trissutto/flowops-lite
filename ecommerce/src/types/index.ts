@@ -59,6 +59,13 @@ export interface Product {
   compareAtPrice?: number;
   /** Preço no Pix (à vista com desconto). */
   pixPrice?: number;
+  /**
+   * QUEBRA DE PREÇO POR TAMANHO. Vazio/ausente = preço único (o normal).
+   * Quando a peça custa um valor do 44 ao 54 e outro do 56 ao 60, os DOIS
+   * aparecem — mostrar só o menor faz a cliente do 58 descobrir a diferença
+   * no carrinho, que é onde ela desiste.
+   */
+  priceRanges?: Array<{ from: number; to: number; price: number }>;
   installments?: { times: number; value: number };
   images: Media[];
   colors?: ProductColor[];

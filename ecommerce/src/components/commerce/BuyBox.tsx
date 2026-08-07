@@ -202,6 +202,27 @@ export function BuyBox({
             </span>
           )}
         </p>
+
+        {/* QUEBRA DE PREÇO POR TAMANHO (dono 07/08). Peça que custa um valor
+            do 44 ao 54 e outro do 56 ao 60 mostra OS DOIS aqui. Escondendo a
+            faixa maior, a cliente de 58 só descobre no carrinho — e é ali que
+            ela desiste. */}
+        {product.priceRanges && product.priceRanges.length > 1 && (
+          <div className="mt-4 rounded-md border border-border bg-surface-alt/60 px-4 py-3">
+            <p className="eyebrow text-ink-soft">Preço por tamanho</p>
+            <ul className="mt-2 flex flex-wrap gap-x-6 gap-y-1">
+              {product.priceRanges.map((f) => (
+                <li key={`${f.from}-${f.to}`} className="text-small text-ink">
+                  <span className="tabular font-medium">
+                    {f.from === f.to ? f.from : `${f.from} ao ${f.to}`}
+                  </span>
+                  {' · '}
+                  <span className="tabular">{formatPrice(f.price)}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </div>
 
       {/* COR — vem ANTES do tamanho: a cliente escolhe a cor e só então vê a
