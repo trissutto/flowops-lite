@@ -55,6 +55,39 @@ export class SiteBannersService {
 
   constructor(private readonly prisma: PrismaService) {}
 
+  /**
+   * AVISA O SITE que o conteúdo mudou (dono 07/08).
+   *
+   * Sem isto, a vitrine só via o banner novo quando o cache de 1 hora vencia —
+   * o dono publicava, abria o site, via o hero antigo e mexia tudo de novo
+   * achando que não tinha salvo.
+   *
+   * Nunca lança e nunca espera: banner é enfeite, e um site fora do ar não pode
+   * impedir a retaguarda de gravar. Falhou? O cache de 1 hora resolve sozinho —
+   * volta a ser exatamente o comportamento de antes.
+   */
+  private avisarSite(tags: string[]) {
+    const base = (process.env.ECOMMERCE_URL || '').split(',')[0].trim().replace(/\/$/, '');
+    const segredo = (process.env.REVALIDATE_SECRET || '').trim();
+    if (!base || !segredo) return;
+    void fetch(`${base}/api/revalidar`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-revalidate-secret': segredo },
+      body: JSON.stringify({ tags }),
+      signal: AbortSignal.timeout(5000),
+    })
+      .then((r) => {
+        if (!r.ok) this.logger.warn(`[banners] site respondeu ${r.status} ao revalidar`);
+      })
+      .catch((e) => this.logger.warn(`[banners] não avisei o site: ${e?.message || e}`));
+  }
+
+  /** Tags do slot — o serviço do site marca o cache com estas mesmas. */
+  private tagsDoSlot(slot?: string | null): string[] {
+    const s = String(slot || '').trim();
+    return s ? ['banners', `banners:${s}`] : ['banners'];
+  }
+
   private texto(v: unknown): string | null {
     const s = String(v ?? '').trim();
     return s || null;
@@ -102,6 +135,7 @@ export class SiteBannersService {
     if (!slot || !(SLOTS as readonly string[]).includes(slot)) {
       throw new BadRequestException(`slot inválido — use ${SLOTS.join(', ')}`);
     }
+    this.avisarSite(this.tagsDoSlot(slot));
     return (this.prisma as any).siteBanner.create({
       data: {
         slot,
@@ -149,7 +183,12 @@ export class SiteBannersService {
     if (dados.inicioEm !== undefined) patch.inicioEm = this.data(dados.inicioEm);
     if (dados.fimEm !== undefined) patch.fimEm = this.data(dados.fimEm);
 
-    return (this.prisma as any).siteBanner.update({ where: { id }, data: patch });
+    const salvo = await (this.prisma as any).siteBanner.update({ where: { id }, data: patch });
+    // Slot novo E antigo: mover banner de slot muda os dois lados da vitrine.
+    this.avisarSite([
+      ...new Set([...this.tagsDoSlot(salvo.slot), ...this.tagsDoSlot(atual.slot)]),
+    ]);
+    return salvo;
   }
 
   async remover(id: string) {
@@ -167,6 +206,7 @@ export class SiteBannersService {
       }
     }
     await (this.prisma as any).siteBanner.delete({ where: { id } });
+    this.avisarSite(this.tagsDoSlot(atual.slot));
     return { ok: true };
   }
 
@@ -223,6 +263,7 @@ export class SiteBannersService {
         this.logger.warn(`R2: não apagou ${anterior}: ${e?.message || e}`);
       }
     }
+    this.avisarSite(this.tagsDoSlot(banner.slot));
     return atualizado;
   }
 }
