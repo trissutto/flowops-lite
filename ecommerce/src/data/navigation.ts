@@ -189,37 +189,15 @@ export const navigation: NavItem[] = [
       ],
     },
   },
-  {
-    label: 'Tecidos',
-    href: '/tecidos',
-    icon: 'Layers',
-    menu: {
-      columns: [
-        {
-          title: 'Por tecido',
-          links: [
-            { label: 'Viscolycra premium', href: '/tecidos/viscolycra-premium', highlight: true },
-            { label: 'Jeans', href: '/tecidos/jeans' },
-            { label: 'Linho', href: '/tecidos/linho' },
-            { label: 'Crepe', href: '/tecidos/crepe' },
-            { label: 'Tricot', href: '/tecidos/tricot' },
-            { label: 'Malha', href: '/tecidos/malha' },
-            { label: 'Alfaiataria', href: '/tecidos/alfaiataria' },
-          ],
-        },
-      ],
-      features: [
-        {
-          eyebrow: 'Guia de tecidos',
-          title: 'O caimento começa no tecido',
-          description: 'Entenda qual tecido veste melhor o seu corpo.',
-          image: { src: EDITORIAL.tecidos, alt: 'Tecidos da coleção Lurds' },
-          href: '/tecidos',
-          cta: 'Conhecer tecidos',
-        },
-      ],
-    },
-  },
+  /**
+   * TECIDOS SAIU DO MENU (dono 07/08) — mesma razão de Ocasiões e Coleções:
+   * o eixo depende de cadastro que ainda não existe peça a peça, e menu que
+   * leva a vitrine vazia gasta a confiança da cliente. O foco agora é
+   * CATEGORIAS e TAMANHOS, que têm dado de verdade por trás.
+   *
+   * As rotas /tecidos continuam de pé (link antigo e Google não quebram);
+   * só o item do menu saiu. Voltar é descomentar quando o cadastro andar.
+   */
   {
     label: 'Outlet',
     href: '/outlet',
