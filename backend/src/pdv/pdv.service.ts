@@ -2990,6 +2990,87 @@ export class PdvService {
     );
   }
 
+  /**
+   * AUTO-CONFIRMAÇÃO DE PIX PAGBANK NO WEBHOOK (dono 07/08).
+   *
+   * Antes, o webhook do PagBank só existia pra CREDIÁRIO (fix 16/06) — venda
+   * normal de balcão dependia 100% do POLLING no navegador da vendedora pra
+   * registrar o pagamento e finalizar. Se a aba fechasse, a rede caísse, ou o
+   * polling morresse por qualquer motivo ENTRE o cliente pagar e a vendedora
+   * ver a confirmação, a venda ficava aberta pra sempre com o dinheiro já na
+   * conta — foi o caso real de Sorocaba/Edna Aparecida, R$119,90 pago às
+   * 13:03 e só descoberto horas depois, na mão, quando a loja avisou.
+   *
+   * Agora o webhook tenta fechar a venda SOZINHO, do mesmo jeito que o
+   * crediário já fazia — reusando addPayment+finalize (mesma trava de
+   * sumPaidValue===total, mesmo caminho de baixa de estoque/NFC-e). O
+   * polling do navegador continua existindo (é mais rápido quando funciona);
+   * isto é a rede de segurança quando ele falha.
+   *
+   * Idempotente: não duplica se já existe payment com este pagbankOrderId.
+   * Nunca lança — falha aqui não pode derrubar o ACK do webhook (PagBank
+   * reenvia em loop se não receber 200).
+   */
+  async confirmPixWebhookIfOpenSale(input: {
+    saleId: string;
+    pagbankOrderId: string;
+    valor: number;
+  }): Promise<{ handled: boolean; reason?: string }> {
+    try {
+      const sale = await (this.prisma as any).pdvSale.findUnique({
+        where: { id: input.saleId },
+        select: { id: true, status: true },
+      });
+      if (!sale) return { handled: false, reason: 'venda_nao_encontrada' };
+      if (sale.status !== 'open') return { handled: false, reason: `venda_ja_${sale.status}` };
+
+      const existentes = await (this.prisma as any).pdvSalePayment.findMany({
+        where: { saleId: sale.id },
+        select: { details: true },
+      });
+      const jaRegistrado = (existentes as any[]).some((p: any) => {
+        try {
+          return JSON.parse(p.details || '{}')?.pixTxid === input.pagbankOrderId;
+        } catch {
+          return false;
+        }
+      });
+      if (jaRegistrado) return { handled: false, reason: 'pagamento_ja_registrado' };
+
+      await this.addPayment({
+        saleId: sale.id,
+        method: 'pix',
+        valor: input.valor,
+        details: {
+          pixTxid: input.pagbankOrderId,
+          pixChave: 'PagBank',
+          pixProvider: 'pagbank',
+          pixPaidByWebhook: true,
+        },
+      });
+
+      try {
+        await this.finalize({ saleId: sale.id });
+        this.logger.log(
+          `[pdv] webhook PagBank fechou SOZINHO a venda ${sale.id} (order ${input.pagbankOrderId})`,
+        );
+        return { handled: true };
+      } catch (e: any) {
+        // Split payment (parte em dinheiro/cartão, parte PIX): o pagamento
+        // entrou, mas falta o resto — vendedora fecha o restante na tela.
+        this.logger.log(
+          `[pdv] webhook PagBank registrou pagamento parcial na venda ${sale.id}, aguardando resto: ${e?.message}`,
+        );
+        return { handled: true, reason: 'pagamento_parcial_registrado' };
+      }
+    } catch (e: any) {
+      this.logger.warn(
+        `[pdv] confirmPixWebhookIfOpenSale falhou (venda ${input.saleId}): ${e?.message || e}`,
+      );
+      return { handled: false, reason: e?.message || 'erro' };
+    }
+  }
+
   async cancel(input: { saleId: string; reason?: string }) {
     const sale = await (this.prisma as any).pdvSale.findUnique({
       where: { id: input.saleId },
