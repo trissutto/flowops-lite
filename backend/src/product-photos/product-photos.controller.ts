@@ -181,12 +181,13 @@ export class ProductPhotosController {
    * A importação em massa trouxe 3.517 fotos e não publicou nada — a peça
    * ficava pronta e invisível, sem aparecer nem na busca. O importador já foi
    * corrigido, mas ele PULA quem tem foto, então o passivo precisa deste
-   * empurrão único. Só publica quem tem estoque.
+   * empurrão único. Entra quem está ATIVO no WooCommerce (decisão do dono).
    */
   @Post('publicar-pendentes')
-  async publicarPendentes(@Req() req: any) {
+  async publicarPendentes(@Req() req: any, @Body() body: { simular?: boolean }) {
     this.requireWrite(req);
-    return this.autoPublicar.repararPassivo();
+    // `simular` deixa a tela mostrar o número ANTES de pôr peça no ar.
+    return this.autoPublicar.repararPassivo(body?.simular === true);
   }
 
   /**
@@ -194,6 +195,19 @@ export class ProductPhotosController {
    * pra tela mostrar o progresso em vez de pedir fé.
    * GET /product-photos/bolinha-auto/status
    */
+  /**
+   * MUTIRÃO DE BOLINHA — "pode pintar todas" (dono, 07/08).
+   *
+   * A varredura de fundo faz 160 cores por hora; depois da importação em
+   * massa sobraram centenas, e alcançar levaria a noite. Aqui vai de uma vez.
+   * É POST com gente clicando porque cada bolinha é uma leitura de IA.
+   */
+  @Post('bolinha-auto/pintar-todas')
+  async pintarTodasBolinhas(@Req() req: any) {
+    this.requireWrite(req);
+    return this.bolinhaAuto.pintarTodas();
+  }
+
   @Get('bolinha-auto/status')
   async statusBolinha(@Req() req: any) {
     this.requireWrite(req);

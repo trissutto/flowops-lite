@@ -1473,8 +1473,12 @@ type StatusLote = {
 };
 
 type Reparo = {
-  comFoto: number; jaNoAr: number; publicadas: number; semEstoque: number; falhas: number;
+  simulado: boolean;
+  ativasNoWc: number; comFoto: number; jaNoAr: number;
+  publicadas: number; foraDoWc: number; falhas: number;
 };
+
+type Mutirao = { pendentesAntes: number; pintadas: number; falharam: number };
 
 /**
  * Puxa o acervo INTEIRO do site antigo — foto, gravação e bolinha — sem
@@ -1490,6 +1494,8 @@ function ImportarTudo() {
   const [abrindo, setAbrindo] = useState(false);
   const [publicando, setPublicando] = useState(false);
   const [reparo, setReparo] = useState<Reparo | null>(null);
+  const [pintando, setPintando] = useState(false);
+  const [mutirao, setMutirao] = useState<Mutirao | null>(null);
 
   const consultar = useCallback(async () => {
     try {
@@ -1538,19 +1544,50 @@ function ImportarTudo() {
    * deste empurrão único.
    */
   async function publicarPendentes() {
-    if (!confirm(
-      'Publicar no site todas as peças que JÁ TÊM FOTO e ainda estão fora?\n\n' +
-      'Só entra quem tem estoque. Isso coloca peça no ar pra cliente ver.',
-    )) return;
     setPublicando(true);
     setErro(null);
     setReparo(null);
     try {
+      // SIMULA PRIMEIRO. Pôr peça no ar pra cliente é ação de mão única —
+      // o número tem que aparecer ANTES do "confirmar", não depois.
+      const previa = await api<Reparo>('/product-photos/publicar-pendentes', {
+        method: 'POST',
+        body: JSON.stringify({ simular: true }),
+      });
+      if (!previa.publicadas) {
+        setReparo(previa);
+        return;
+      }
+      const ok = confirm(
+        `${previa.publicadas} peça(s) vão entrar no site agora.\n\n` +
+        `Critério: está ATIVA no WooCommerce (${previa.ativasNoWc} REFs ativas lá) e já tem foto aqui.\n` +
+        `${previa.jaNoAr} já estavam no ar · ${previa.foraDoWc} ficam de fora (não estão ativas no site antigo).\n\n` +
+        `Confirmar? Isso fica visível pra cliente.`,
+      );
+      if (!ok) return;
       setReparo(await api<Reparo>('/product-photos/publicar-pendentes', { method: 'POST' }));
     } catch (e: any) {
       setErro(e?.message?.replace(/^\d+:\s*/, '') || 'Não consegui publicar');
     } finally {
       setPublicando(false);
+    }
+  }
+
+  /** Mutirão de bolinha — a varredura de fundo é lenta demais pro passivo. */
+  async function pintarTodas() {
+    if (!confirm(
+      'Pintar TODAS as bolinhas que faltam agora?\n\n' +
+      'Cada bolinha é uma leitura de IA sobre a foto — pode demorar alguns minutos.',
+    )) return;
+    setPintando(true);
+    setErro(null);
+    setMutirao(null);
+    try {
+      setMutirao(await api<Mutirao>('/product-photos/bolinha-auto/pintar-todas', { method: 'POST' }));
+    } catch (e: any) {
+      setErro(e?.message?.replace(/^\d+:\s*/, '') || 'Não consegui pintar');
+    } finally {
+      setPintando(false);
     }
   }
 
@@ -1586,14 +1623,34 @@ function ImportarTudo() {
           {publicando ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Package className="w-3.5 h-3.5" />}
           Publicar quem tem foto
         </button>
+        <button type="button" onClick={() => void pintarTodas()} disabled={pintando}
+          title="Pinta agora todas as bolinhas que faltam (a varredura de fundo é lenta pro passivo)"
+          className="inline-flex items-center gap-1.5 text-xs font-bold px-4 py-2 rounded-lg border border-violet-300 text-violet-800 bg-white hover:bg-violet-50 disabled:opacity-50">
+          {pintando ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ImageIcon className="w-3.5 h-3.5" />}
+          Pintar todas as bolinhas
+        </button>
       </div>
 
       {reparo && (
         <div className="mt-3 text-[11px] rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-900 p-2">
-          <strong>{reparo.publicadas}</strong> peça(s) entraram no site agora ·{' '}
-          {reparo.jaNoAr} já estavam · <strong>{reparo.semEstoque}</strong> ficaram de fora por
-          estar sem estoque{reparo.falhas ? ` · ${reparo.falhas} falharam` : ''}.
-          {' '}Total com foto: {reparo.comFoto}.
+          {reparo.publicadas || reparo.simulado ? (
+            <>
+              <strong>{reparo.publicadas}</strong> peça(s){' '}
+              {reparo.simulado ? 'entrariam' : 'entraram'} no site · {reparo.jaNoAr} já estavam ·{' '}
+              <strong>{reparo.foraDoWc}</strong> fora (não estão ativas no site antigo)
+              {reparo.falhas ? ` · ${reparo.falhas} falharam` : ''}.
+            </>
+          ) : (
+            <>Nada pra publicar: as {reparo.comFoto} peças com foto já estão no ar ou não estão ativas no site antigo.</>
+          )}
+          {' '}Ativas no WooCommerce: {reparo.ativasNoWc}.
+        </div>
+      )}
+
+      {mutirao && (
+        <div className="mt-2 text-[11px] rounded-lg border border-violet-200 bg-violet-50 text-violet-900 p-2">
+          <strong>{mutirao.pintadas}</strong> bolinha(s) pintada(s) de {mutirao.pendentesAntes} que
+          faltavam{mutirao.falharam ? ` · ${mutirao.falharam} não deram certo (clique de novo pra tentar)` : ''}.
         </div>
       )}
 
@@ -1610,7 +1667,7 @@ function ImportarTudo() {
               <>
                 {' · '}
                 <strong className="text-emerald-800">{status.publicadas} no site</strong>
-                {status.semEstoque ? ` · ${status.semEstoque} sem estoque` : ''}
+                {status.semEstoque ? ` · ${status.semEstoque} inativas no site antigo` : ''}
               </>
             )}
             {rodando && status.refAtual ? ` · agora: ${status.refAtual}` : ''}
