@@ -220,6 +220,34 @@ function CardBanner({
     }
   }
 
+  /**
+   * PUBLICAR VALE NO CLIQUE (dono 07/08).
+   *
+   * Antes isto era um checkbox pequeno rotulado "Fora do ar" — que se lê como
+   * ETIQUETA DE ESTADO, não como interruptor — e ainda dependia de lembrar de
+   * clicar em Salvar. O dono montou o banner inteiro, saiu da tela e o site
+   * seguiu com o hero antigo, sem nada avisando que faltava um passo.
+   * Agora é um botão que diz o que faz e grava na hora.
+   */
+  async function alternarAtivo() {
+    const novo = !form.ativo;
+    setSalvando(true);
+    setErro(null);
+    campo('ativo', novo);
+    try {
+      const salvo = await api<Banner>(`/site-banners/${form.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ ativo: novo }),
+      });
+      onMudou(salvo);
+    } catch (e: any) {
+      campo('ativo', !novo); // desfaz: a tela não pode mentir sobre o que está no ar
+      setErro(e?.message?.replace(/^\d+:\s*/, '') || 'Não consegui mudar a publicação');
+    } finally {
+      setSalvando(false);
+    }
+  }
+
   async function subir(arquivo: File, variante: 'desktop' | 'mobile') {
     setSubindo(variante);
     setErro(null);
@@ -256,15 +284,36 @@ function CardBanner({
   return (
     <div className="border border-slate-200 rounded-lg bg-white p-3 space-y-3">
       <div className="flex items-start justify-between gap-3">
-        <label className="inline-flex items-center gap-2 text-sm font-bold text-slate-700">
-          <input
-            type="checkbox"
-            checked={form.ativo}
-            onChange={(e) => campo('ativo', e.target.checked)}
-            className="w-4 h-4"
-          />
-          {form.ativo ? 'No ar' : 'Fora do ar'}
-        </label>
+        <div className="flex items-center gap-2">
+          <span
+            className={`text-[10px] font-black uppercase px-2 py-1 rounded ${
+              form.ativo
+                ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                : 'bg-slate-100 text-slate-500 border border-slate-300'
+            }`}
+          >
+            {form.ativo ? '● No ar' : '○ Fora do ar'}
+          </span>
+          <button
+            type="button"
+            onClick={() => void alternarAtivo()}
+            disabled={salvando || (comFoto && !form.imagemUrl && !form.ativo)}
+            title={
+              comFoto && !form.imagemUrl && !form.ativo
+                ? 'Suba a foto do computador antes de publicar'
+                : form.ativo
+                  ? 'Tira do site agora (não apaga o banner)'
+                  : 'Coloca no site agora — sem precisar salvar depois'
+            }
+            className={`text-xs font-bold px-3 py-1.5 rounded-lg disabled:opacity-40 ${
+              form.ativo
+                ? 'border border-slate-300 text-slate-700 bg-white hover:bg-slate-50'
+                : 'bg-emerald-600 text-white hover:bg-emerald-700'
+            }`}
+          >
+            {salvando ? '...' : form.ativo ? 'Tirar do ar' : 'Publicar no site'}
+          </button>
+        </div>
         <div className="flex items-center gap-2">
           <label className="text-xs text-slate-500">
             ordem
