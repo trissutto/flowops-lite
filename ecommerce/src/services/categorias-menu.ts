@@ -38,6 +38,17 @@ function rotulo(slug: string): string {
   return limpo.charAt(0).toUpperCase() + limpo.slice(1);
 }
 
+/**
+ * O mínimo que a vitrine precisa da peça: nome e a primeira foto. Tipado à
+ * mão de propósito — `any` aqui QUEBRA O BUILD da Vercel (o lint de produção
+ * trata `no-explicit-any` como erro, não como aviso). Derrubou o deploy do
+ * site em 07/08.
+ */
+interface PecaDaCategoria {
+  nome?: string;
+  imagens?: Array<{ src?: string }>;
+}
+
 export interface CategoriaVitrine {
   slug: string;
   nome: string;
@@ -83,13 +94,13 @@ export async function getCategorias(): Promise<CategoriaVitrine[]> {
         alt: null,
       };
       try {
-        const r = await api<{ itens?: any[] }>(
+        const r = await api<{ itens?: PecaDaCategoria[] }>(
           `/public/loja/produtos?categoria=${encodeURIComponent(c.valor)}&perPage=1&ordenar=novidades`,
           { revalidate: REVALIDATE, tags: ['categorias', `categoria:${c.valor}`] },
         );
         const peca = r?.itens?.[0];
         const foto = peca?.imagens?.[0];
-        if (foto?.src) {
+        if (peca && foto?.src) {
           base.imagemUrl = foto.src;
           base.alt = `${base.nome} — ${peca.nome ?? ''}`.trim();
         }
