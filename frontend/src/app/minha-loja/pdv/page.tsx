@@ -4315,7 +4315,74 @@ function PaymentModal({
 
   // VENDA ONLINE — sub-tipo (PIX direto ou Link externo). Vendedora informa
   // só pra ter no histórico. Sem geração de cobrança, sem NFC-e automática.
-  const [vendaOnlineTipo, setVendaOnlineTipo] = useState<'pix' | 'link' | 'pagarme_link' | null>(null);
+  const [vendaOnlineTipo, setVendaOnlineTipo] =
+    useState<'pix' | 'link' | 'pagarme_link' | 'pix_gerar' | null>(null);
+
+  /**
+   * GERAR PIX NA VENDA ONLINE (dono 07/08) — PagBank.
+   *
+   * "PIX direto" sempre foi REGISTRO de venda já paga ("sem gerar cobrança",
+   * diz o próprio aviso da tela). Faltava o caso mais comum do WhatsApp: a
+   * cliente fechou, e a vendedora precisa MANDAR o código pra ela pagar.
+   * Este botão gera a cobrança de verdade e devolve o copia-e-cola.
+   *
+   * Provider: PagBank, por decisão do dono. Sem fallback silencioso pro
+   * Pagar.me — se o PagBank não responder, a vendedora precisa SABER, não
+   * receber um QR de outro gateway sem perceber.
+   */
+  const [pixOnline, setPixOnline] = useState<{
+    txid: string;
+    payload: string;
+    qrCodeDataUrl: string;
+    expiresAt: string;
+    valor: number;
+  } | null>(null);
+  const [pixOnlineLoading, setPixOnlineLoading] = useState(false);
+  const [pixOnlineCopiado, setPixOnlineCopiado] = useState(false);
+  const [pixOnlineErro, setPixOnlineErro] = useState<string | null>(null);
+
+  const gerarPixOnline = async () => {
+    if (pixOnlineLoading || !saleId) return;
+    setPixOnlineLoading(true);
+    setPixOnlineErro(null);
+    try {
+      const pb = await api<{
+        pagbankOrderId: string;
+        qrCodeText: string;
+        qrCodeImageB64: string;
+        expiresAt: string;
+        valor: number;
+      }>('/pagbank/pix/create', {
+        method: 'POST',
+        body: JSON.stringify({
+          saleId,
+          valor: restante > 0 ? restante : total,
+          storeCode,
+          customerName: customerName || undefined,
+          customerCpf: customerCpf || undefined,
+          customerEmail: customerEmail || undefined,
+          // Venda online: a cliente não está no balcão pra pagar em 15min.
+          expiresInMinutes: 60,
+        }),
+      });
+      setPixOnline({
+        txid: pb.pagbankOrderId,
+        payload: pb.qrCodeText,
+        qrCodeDataUrl: pb.qrCodeImageB64 ? `data:image/png;base64,${pb.qrCodeImageB64}` : '',
+        expiresAt: pb.expiresAt,
+        valor: pb.valor,
+      });
+    } catch (e: any) {
+      const msg = String(e?.message || e);
+      setPixOnlineErro(
+        /desabilitado/i.test(msg) ? 'PagBank está desligado nas configurações.'
+          : /não configurado|Token/i.test(msg) ? 'PagBank sem token configurado pra esta loja.'
+            : msg.slice(0, 140),
+      );
+    } finally {
+      setPixOnlineLoading(false);
+    }
+  };
 
   // VENDA ONLINE exige VENDEDORA ANTES (dono 29/07): o fechamento pode
   // acontecer bem depois (link pago via webhook / "Liberar") — se não
@@ -4437,7 +4504,17 @@ function PaymentModal({
         toast(
           'warning',
           'Escolha o tipo da venda online',
-          'PIX direto / Link externo / Link Pagar.me.',
+          'Gerar PIX / PIX recebido / Link externo / Link Pagar.me.',
+        );
+        return;
+      }
+      // Gerar PIX: exige o código criado. Fechar sem gerar é venda sem
+      // cobrança nenhuma — a cliente nunca recebeu o que pagar.
+      if (vendaOnlineTipo === 'pix_gerar' && !pixOnline) {
+        toast(
+          'warning',
+          'Gere o PIX primeiro',
+          'Clique em "Gerar PIX" pra criar o código e mandar pra cliente.',
         );
         return;
       }
@@ -4545,12 +4622,20 @@ function PaymentModal({
     }
     if (selected === 'venda_online') {
       // Só pra histórico — não dispara cobrança real
-      details.tipo = vendaOnlineTipo; // 'pix' | 'link' | 'pagarme_link'
+      details.tipo = vendaOnlineTipo; // 'pix' | 'link' | 'pagarme_link' | 'pix_gerar'
       details.origem = 'whatsapp_instagram';
       if (vendaOnlineTipo === 'pagarme_link' && pagarmeLink) {
         details.pagarmeOrderId = pagarmeLink.pagarmeOrderId;
         details.pagarmePaymentUrl = pagarmeLink.paymentUrl;
         details.paidByWebhook = pagarmeLinkPaid;
+      }
+      // PIX gerado pra cliente: guarda a cobrança pra conciliar depois — sem
+      // isso ninguém liga o dinheiro que caiu no PagBank a esta venda.
+      if (vendaOnlineTipo === 'pix_gerar' && pixOnline) {
+        details.pixTxid = pixOnline.txid;
+        details.pixChave = 'PagBank';
+        details.pixProvider = 'pagbank';
+        details.pagbankOrderId = pixOnline.txid;
       }
     }
     if (needsBandeira) details.bandeira = bandeira;
@@ -5563,7 +5648,24 @@ function PaymentModal({
             <label className="text-[10px] text-slate-600 uppercase font-semibold tracking-wider">
               Como foi feita a venda online?
             </label>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {/* GERAR PIX — o caso do WhatsApp: a cliente fechou e precisa
+                  receber o código pra pagar. Vem primeiro por ser o mais usado. */}
+              <button
+                type="button"
+                onClick={() => { setVendaOnlineTipo('pix_gerar'); setPagarmeLink(null); }}
+                className={`py-3 px-2 rounded-lg border-2 font-bold text-xs flex flex-col items-center gap-1 transition-all ${
+                  vendaOnlineTipo === 'pix_gerar'
+                    ? 'border-emerald-600 bg-emerald-100 text-emerald-900 shadow-md ring-2 ring-emerald-300'
+                    : 'border-emerald-400 hover:border-emerald-500 bg-emerald-50 text-emerald-800'
+                }`}
+              >
+                <QrCode className="w-5 h-5" />
+                Gerar PIX
+                <span className="text-[9px] font-normal text-emerald-700 leading-tight font-bold">
+                  Mandar p/ cliente
+                </span>
+              </button>
               <button
                 type="button"
                 onClick={() => { setVendaOnlineTipo('pix'); setPagarmeLink(null); }}
@@ -5574,9 +5676,9 @@ function PaymentModal({
                 }`}
               >
                 <QrCode className="w-5 h-5" />
-                PIX direto
+                PIX recebido
                 <span className="text-[9px] font-normal text-slate-500 leading-tight">
-                  Já pago p/ conta
+                  Já caiu na conta
                 </span>
               </button>
               <button
@@ -5664,6 +5766,89 @@ function PaymentModal({
                 Soma no total a cobrar · não baixa estoque · fora da comissão da vendedora.
               </p>
             </div>
+
+            {/* ── PAINEL: Gerar PIX (PagBank) — código pra mandar pra cliente ── */}
+            {vendaOnlineTipo === 'pix_gerar' && (
+              <div className="border-2 border-emerald-300 rounded-lg p-3 bg-emerald-50/40 space-y-2">
+                {!pixOnline ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => void gerarPixOnline()}
+                      disabled={pixOnlineLoading || !saleId}
+                      className="w-full rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm py-3 disabled:opacity-50"
+                    >
+                      {pixOnlineLoading ? 'Gerando PIX...' : `Gerar PIX de ${brl(restante > 0 ? restante : total)}`}
+                    </button>
+                    <p className="text-[10px] text-slate-500 text-center">
+                      PagBank · vale 1 hora · a venda confirma sozinha quando ela pagar
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex items-start gap-3">
+                      {pixOnline.qrCodeDataUrl && (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={pixOnline.qrCodeDataUrl}
+                          alt="QR Code do PIX"
+                          className="w-28 h-28 rounded border border-emerald-200 bg-white"
+                        />
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[10px] font-bold text-emerald-800 uppercase tracking-wider">
+                          PIX copia e cola
+                        </p>
+                        <p className="mt-1 text-[10px] font-mono break-all text-slate-600 leading-tight max-h-16 overflow-y-auto">
+                          {pixOnline.payload}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          try {
+                            await navigator.clipboard.writeText(pixOnline.payload);
+                            setPixOnlineCopiado(true);
+                            setTimeout(() => setPixOnlineCopiado(false), 2500);
+                          } catch {
+                            setPixOnlineErro('Não consegui copiar — selecione o código acima à mão.');
+                          }
+                        }}
+                        className="rounded-lg bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold py-2.5"
+                      >
+                        {pixOnlineCopiado ? '✓ Copiado' : 'Copiar código'}
+                      </button>
+                      <a
+                        href={`https://api.whatsapp.com/send?${
+                          customerPhone ? `phone=55${customerPhone.replace(/\D/g, '')}&` : ''
+                        }text=${encodeURIComponent(
+                          `Oi${customerName ? ` ${customerName.split(' ')[0]}` : ''}! Segue o PIX de ${brl(pixOnline.valor)} pra fechar seu pedido 💛\n\nÉ só copiar o código abaixo e colar no seu banco (PIX copia e cola):\n\n${pixOnline.payload}\n\nAssim que o pagamento cair a gente já separa tudo!`,
+                        )}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold py-2.5 flex items-center justify-center gap-1.5"
+                      >
+                        Mandar no WhatsApp
+                      </a>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => { setPixOnline(null); setPixOnlineErro(null); }}
+                      className="w-full text-[11px] text-slate-500 hover:text-slate-700 underline"
+                    >
+                      Gerar outro código (valor mudou)
+                    </button>
+                  </>
+                )}
+                {pixOnlineErro && (
+                  <div className="bg-rose-50 border border-rose-300 text-rose-800 text-[11px] rounded p-2 font-semibold">
+                    {pixOnlineErro}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* ── PAINEL: Link Pagar.me — gera URL + cliente paga + webhook ── */}
             {vendaOnlineTipo === 'pagarme_link' && customerCpf && (
