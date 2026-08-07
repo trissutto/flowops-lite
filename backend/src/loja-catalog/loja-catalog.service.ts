@@ -109,14 +109,15 @@ export class LojaCatalogService {
    * Numeração DUPLA existe e é legítima ("46/48", "50/52"), mas chega escrita
    * de três jeitos: com barra, com hífen e com espaço. Aqui viram um só.
    */
-  private static readonly GRADE_DA_CASA = [46, 48, 50, 52, 54, 56, 58, 60];
+  // 44 entrou por decisão do dono (07/08): "deixar no filtro 44 46 ... 60".
+  private static readonly GRADE_DA_CASA = [44, 46, 48, 50, 52, 54, 56, 58, 60];
 
   /**
    * OS NÚMEROS QUE UM RÓTULO COBRE, dentro da grade da casa. Fora dela, vazio.
    *
    *   "48"      → [48]
    *   "46/48"   → [46, 48]   (e "46 48", "46-48" — o mesmo escrito de 3 jeitos)
-   *   "44", "G" → []          (rótulo herdado, não é o que a loja vende)
+   *   "38", "G" → []          (rótulo herdado, não é o que a loja vende)
    *
    * ⚠️ É a MESMA função pro filtro e pra comparação, de propósito. Se a barra
    * lateral for montada por um critério e o clique casado por outro, o filtro
