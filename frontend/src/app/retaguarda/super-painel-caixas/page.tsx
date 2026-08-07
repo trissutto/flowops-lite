@@ -1,5 +1,6 @@
 'use client';
 import { overlayClose } from '@/lib/overlayClose';
+import { horaBr } from '@/lib/hora-br';
 
 /**
  * /retaguarda/super-painel-caixas
@@ -279,7 +280,10 @@ function somaFormas(t: any): number {
 const fmtTime = (iso: string | null) => {
   if (!iso) return '—';
   try {
-    return new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    // horaBr fixa o fuso de Brasília — sem ele a hora seguia o relógio do
+    // dispositivo de quem olha (dono conferindo de outro fuso via o horário
+    // errado, sem nada indicando o problema na tela).
+    return horaBr(iso) || iso;
   } catch { return iso; }
 };
 
@@ -1358,7 +1362,7 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo, onDate
                           <span className="font-mono tabular-nums">{brl(rec.totalDinheiro)}</span>
                         </div>
                         {recDinheiroBaixas.map((b) => {
-                          const hora = new Date(b.paidAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+                          const hora = horaBr(b.paidAt);
                           const valor = b.forma === 'misto' ? (b.valorDinheiro || 0) : b.valor;
                           return (
                             <div key={`d-${b.id}`} className="flex justify-between items-center text-[10px] gap-2 hover:bg-amber-50 rounded px-1 py-0.5">
@@ -1383,7 +1387,7 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo, onDate
                           <span className="font-mono tabular-nums">{brl(rec.totalPix)}</span>
                         </div>
                         {recPixBaixas.map((b) => {
-                          const hora = new Date(b.paidAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+                          const hora = horaBr(b.paidAt);
                           const valor = b.forma === 'misto' ? (b.valorPix || 0) : b.valor;
                           const isLink = b.origem === 'link';
                           return (
@@ -1426,7 +1430,7 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo, onDate
                 {showSangrias && sangriasList.length > 0 && (
                   <div className="ml-3 pl-2 border-l-2 border-rose-200 space-y-0.5 max-h-48 overflow-y-auto">
                     {sangriasList.map((m) => {
-                      const hora = new Date(m.createdAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+                      const hora = horaBr(m.createdAt);
                       return (
                         <div key={m.id} className="flex justify-between items-start text-[10px] gap-2 hover:bg-rose-50 rounded px-1 py-0.5">
                           <div className="min-w-0 flex-1">
@@ -1474,7 +1478,7 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo, onDate
                 {showSuprimentos && suprimentosList.length > 0 && (
                   <div className="ml-3 pl-2 border-l-2 border-amber-200 space-y-0.5 max-h-48 overflow-y-auto">
                     {suprimentosList.map((m) => {
-                      const hora = new Date(m.createdAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+                      const hora = horaBr(m.createdAt);
                       return (
                         <div key={m.id} className="flex justify-between items-start text-[10px] gap-2 hover:bg-amber-50 rounded px-1 py-0.5">
                           <div className="min-w-0 flex-1">
@@ -1781,7 +1785,7 @@ function ListaVendas({
   return (
     <div className="space-y-0.5 max-h-60 overflow-y-auto">
       {vendas.map((v, i) => {
-        const hora = v.finalizedAt ? new Date(v.finalizedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '';
+        const hora = v.finalizedAt ? horaBr(v.finalizedAt) : '';
         const cliente = v.customerName || (v.customerCpf ? `CPF ${v.customerCpf}` : 'Sem identificacao');
         return (
           <div key={i} className="flex items-center justify-between text-[11px] py-0.5 px-1 hover:bg-slate-50 rounded">
