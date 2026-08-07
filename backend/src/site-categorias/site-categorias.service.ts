@@ -112,9 +112,12 @@ export class SiteCategoriasService {
    * Pula REF sem foto (algumas ainda não têm) até achar uma que sirva.
    */
   private async fotoAutoDaCategoria(slug: string): Promise<{ url: string; ref: string; alt: string } | null> {
+    // ⚠️ `syncedAt`, NÃO `createdAt`: SiteProduto não tem createdAt, e o
+    // Prisma LANÇA em orderBy de campo inexistente — o catch de cima engolia
+    // o erro e TODA categoria voltava sem foto (bug real, 07/08).
     const produtos: Array<{ ref: string; nome: string | null }> = await (this.prisma as any).siteProduto.findMany({
       where: { categoria: slug, publicado: true },
-      orderBy: { createdAt: 'desc' },
+      orderBy: { syncedAt: 'desc' },
       select: { ref: true, nome: true },
       take: 10,
     });
