@@ -145,38 +145,20 @@ export async function getCategorias(): Promise<CategoriaVitrine[]> {
  * O menu com o eixo "Categorias" preenchido pelo CRM. Server-side: quem chama
  * é o layout, que passa o resultado pro Header (client) por prop.
  */
+/**
+ * "CATEGORIAS" VIRA LINK DIRETO (dono 07/08, depois de ver a página nova):
+ * "ao clicar em Categorias abrir uma página com os cards da home... está
+ * bonito e super rápido, isso que eu quis dizer".
+ *
+ * Antes o item abria um mega menu com a lista em TEXTO (Blusas, Vestidos...)
+ * — o dono clicava e não sentia como se tivesse acontecido nada. A página
+ * /categoria (cards com foto + ícone da peça, a mesma seção que já está na
+ * home) resolve isso: sem painel no meio do caminho, clicar leva direto pra
+ * lá. Menos um estado pra sincronizar (a lista em texto podia divergir da
+ * página de cards se alguém mexesse só num dos dois).
+ */
 export async function getNavegacao(): Promise<NavItem[]> {
-  let categorias: FiltroValor[] = [];
-  try {
-    const filtros = await api<{ categorias?: FiltroValor[] }>('/public/loja/filtros', {
-      revalidate: REVALIDATE,
-      tags: ['filtros', 'categorias'],
-    });
-    categorias = Array.isArray(filtros?.categorias) ? filtros.categorias : [];
-  } catch {
-    return navigation;
-  }
-
-  const links = categorias
-    .filter((c) => c?.valor && (c.qtd ?? 0) > 0)
-    .map((c) => ({ label: rotulo(c.valor), href: `/categoria/${c.valor}` }));
-
-  // Catálogo sem categoria classificada: o estático é melhor que menu vazio.
-  if (!links.length) return navigation;
-
-  // A mais vendida ganha destaque — é o mesmo critério do card editorial.
-  const comDestaque = links.map((l, i) => (i === 0 ? { ...l, highlight: true } : l));
-
-  const colunas: MenuColumn[] = [];
-  for (let i = 0; i < comDestaque.length; i += 5) {
-    colunas.push({ title: '', links: comDestaque.slice(i, i + 5) });
-  }
-
-  return navigation.map((item) => {
-    if (item.href !== '/categoria' || !item.menu) return item;
-    // "Por preço" fica: é corte da mesma vitrine, não categoria do CRM, e
-    // aponta pras únicas rotas de faixa de preço que existem.
-    const porPreco = item.menu.columns.filter((c) => c.title === 'Por preço');
-    return { ...item, menu: { ...item.menu, columns: [...colunas, ...porPreco] } };
-  });
+  return navigation.map((item) =>
+    item.href === '/categoria' ? { ...item, menu: undefined } : item,
+  );
 }
