@@ -212,6 +212,14 @@ export interface ProductQuery {
   filters?: FilterState;
   page?: number;
   perPage?: number;
+  /**
+   * Teto de preço da VITRINE (as faixas "Até R$ 59,90"). Diferente do filtro
+   * de preço de propósito: filtro a cliente tira no botão "Limpar", e aí a
+   * página "Até R$ 59,90" passaria a mostrar peça de R$ 400. Isto é
+   * propriedade da rota — só aperta o teto que já veio dos filtros, nunca
+   * afrouxa.
+   */
+  tetoDePreco?: number;
 }
 
 export interface Paginated<T> {

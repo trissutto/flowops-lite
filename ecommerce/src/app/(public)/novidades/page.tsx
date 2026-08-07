@@ -18,7 +18,10 @@ import { breadcrumbSchema, buildMetadata, jsonLdGraph } from '@/lib/seo';
  * falta de cadastro é pior do que não ter a página. Ordenando, ela sempre tem
  * conteúdo e ainda assim mostra o que entrou por último.
  *
- * Sem categoria fixa — é o catálogo inteiro, do mais novo pro mais antigo.
+ * SÃO 50 PEÇAS, sempre as 50 mais novas (decisão do dono, 06/08). A página
+ * mostrava 525 — o catálogo inteiro reordenado por data — e a 500ª tinha meses
+ * de loja. Novidade que dura o ano inteiro não é novidade: vira só mais uma
+ * listagem, e a cliente que volta toda semana não percebe o que mudou.
  */
 
 export const revalidate = 3600;
@@ -60,7 +63,12 @@ export default function NovidadesPage() {
       </Section>
 
       <Container width="wide">
-        <CategoryListing category="" categoryName="Novidades" ordemPadrao="novidades" />
+        <CategoryListing
+          category=""
+          categoryName="Novidades"
+          ordemPadrao="novidades"
+          limiteTotal={50}
+        />
       </Container>
     </>
   );

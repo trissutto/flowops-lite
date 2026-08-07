@@ -230,6 +230,18 @@ export function ProductCard({
           </Link>
         </h3>
 
+        {/* REFERÊNCIA EM DESTAQUE (decisão do dono, 06/08).
+            Ela vivia diluída no meio do título ("...Plus Size Ref 700979
+            Estampa Verde"), onde ninguém achava. É o código que a cliente
+            manda no WhatsApp e que a vendedora digita no PDV — merece ser a
+            coisa mais fácil de copiar do card. */}
+        {product.sku && (
+          <p className="tabular mt-1 text-small font-semibold tracking-wide text-ink">
+            <span className="font-normal text-ink-muted">Ref </span>
+            {product.sku}
+          </p>
+        )}
+
         {/* ESGOTADO aparece, riscado (item 37 — decisão do dono 04/08).
             A peça esgotada sumia da vitrine sem explicação: quem viu no
             Instagram voltava e achava que o site tinha quebrado. Vendo que

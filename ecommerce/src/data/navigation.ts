@@ -92,6 +92,21 @@ export const navigation: NavItem[] = [
             { label: 'Fitness', href: '/categoria/fitness' },
           ],
         },
+        /**
+         * POR PREÇO (dono, 06/08). Fica dentro de Categorias em vez de virar
+         * um oitavo eixo no topo: a ordem dos sete eixos foi decisão dele em
+         * 03/08, e preço é um corte da mesma vitrine, não um eixo novo.
+         *
+         * Estas duas são as ÚNICAS entradas deste menu que hoje apontam pra
+         * rota que existe de verdade.
+         */
+        {
+          title: 'Por preço',
+          links: [
+            { label: 'Até R$ 59,90', href: '/ate/59-90', highlight: true },
+            { label: 'Até R$ 99,90', href: '/ate/99-90' },
+          ],
+        },
       ],
       features: [
         {
