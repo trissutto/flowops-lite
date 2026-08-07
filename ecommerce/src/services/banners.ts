@@ -59,6 +59,13 @@ export interface HeroDaHome {
   subtitle: string;
   primaria: { label: string; href: string };
   secundaria: { label: string; href: string };
+  /**
+   * Veio da retaguarda = ARTE FECHADA (campanha com texto e logo embutidos).
+   * A home usa isto pra deixar a arte mandar na altura, em vez de recortar
+   * pra encher a tela — recorte comeu o "Indomável" nas duas pontas (07/08).
+   * O hero estático é foto editorial: recortar ali não custa nada.
+   */
+  daRetaguarda: boolean;
 }
 
 const HERO_ESTATICO: HeroDaHome = {
@@ -69,6 +76,7 @@ const HERO_ESTATICO: HeroDaHome = {
   subtitle: homeHero.subtitle,
   primaria: { label: 'Conheça a coleção', href: '/novidades' },
   secundaria: { label: 'Encontrar uma loja', href: '/lojas' },
+  daRetaguarda: false,
 };
 
 export async function getHeroDaHome(): Promise<HeroDaHome> {
@@ -78,6 +86,7 @@ export async function getHeroDaHome(): Promise<HeroDaHome> {
   if (!banner?.imagemUrl) return HERO_ESTATICO;
 
   return {
+    daRetaguarda: true,
     image: { src: banner.imagemUrl, alt: banner.alt || banner.titulo || HERO_ESTATICO.image.alt },
     ...(banner.imagemMobileUrl
       ? { imageMobile: { src: banner.imagemMobileUrl, alt: banner.alt || banner.titulo || '' } }
