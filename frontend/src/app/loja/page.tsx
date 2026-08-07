@@ -52,6 +52,7 @@ const LOJA_ITEMS: LojaItem[] = [
   { href: '/retaguarda/ficha-fila',           label: 'Fila da ficha',  subtitle: 'Site',        description: 'O que preencher primeiro, por venda', tone: 'purple', icon: ClipboardList },
   { href: '/cadastros/classificacao-peca',    label: 'Classificação Peça', subtitle: 'Cadastros', description: 'Ocasião · tecido · modelagem · coleção', tone: 'purple', icon: Shirt },
   { href: '/retaguarda/banners',              label: 'Banners',        subtitle: 'Vitrine',     description: 'Hero da home · faixas · tarja do topo', tone: 'purple', icon: GalleryHorizontal },
+  { href: '/retaguarda/categorias',           label: 'Categorias',     subtitle: 'Vitrine',     description: 'Foto, nome e ordem no menu do site', tone: 'purple', icon: Tags },
   { href: '/retaguarda/loja-frete',           label: 'Frete & Cupons', subtitle: 'Site',        description: 'Frete grátis · promocional · cupons', tone: 'sky',    icon: Truck        },
   { href: '/retaguarda/promocoes-config',     label: 'Promoções PDV',  subtitle: 'Config',      description: '50% · básico fora · 4 leva 3',  tone: 'amber',  icon: Percent      },
   { href: '/retaguarda/descontos-senhas',     label: 'Descontos & Senhas', subtitle: 'Config',  description: 'Faixas de desconto + senhas',   tone: 'amber',  icon: KeyRound     },
