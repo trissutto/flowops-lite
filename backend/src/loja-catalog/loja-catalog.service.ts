@@ -132,7 +132,10 @@ export class LojaCatalogService {
     const txt = String(bruto || '').trim().toUpperCase();
     if (!txt) return [];
     // Sobrou letra depois de tirar dígito e separador? É "G7", "46A", "GG".
-    if (txt.replace(/[\d\s/\-]/g, '')) return [];
+    // A vírgula entra na lista de separadores pra aceitar MULTISSELEÇÃO do
+    // filtro ("46,50,58" — cliente marcou três pílulas) sem tratar como texto
+    // inválido (bug real, 07/08: filtro de tamanho só aplicava o 1º marcado).
+    if (txt.replace(/[\d\s/\-,]/g, '')) return [];
     const numeros = (txt.match(/\d+/g) ?? []).map(Number);
     if (!numeros.length) return [];
     if (!numeros.every((n) => LojaCatalogService.GRADE_DA_CASA.includes(n))) return [];

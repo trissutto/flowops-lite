@@ -24,7 +24,7 @@ const HEX_POR_COR: Record<string, string> = {
   estampado: '#c9bda8', floral: '#c9bda8',
 };
 
-function hexDaCor(nome: string): string {
+export function hexDaCor(nome: string): string {
   const chave = normalize(nome);
   if (HEX_POR_COR[chave]) return HEX_POR_COR[chave];
   const parcial = Object.keys(HEX_POR_COR).find((k) => chave.includes(k));
@@ -156,10 +156,15 @@ export const SORT_OPTIONS: { value: SortOption; label: string }[] = [
 function paramsDosFiltros(filters: FilterState): Record<string, string> {
   const out: Record<string, string> = {};
   const primeiro = (v: unknown) => (Array.isArray(v) && v.length ? String(v[0]) : undefined);
+  // TAMANHO É MULTISSELEÇÃO NA TELA (bug real, 07/08): a cliente marca 46 e
+  // 50, os dois botões ficam com o visual de selecionado, mas só o 46 ia pro
+  // backend — o 50 era descartado em silêncio. `numerosDaGrade` no backend já
+  // entende lista separada por vírgula.
+  const todos = (v: unknown) => (Array.isArray(v) && v.length ? v.map(String).join(',') : undefined);
 
   const cor = primeiro(filters.cor);
   if (cor) out.cor = cor;
-  const tamanho = primeiro(filters.tamanho);
+  const tamanho = todos(filters.tamanho);
   if (tamanho) out.tamanho = tamanho;
   const modelagem = primeiro((filters as Record<string, unknown>).modelagem);
   if (modelagem) out.modelagem = modelagem;
@@ -197,7 +202,9 @@ export async function fetchProducts(query: ProductQuery = {}): Promise<Paginated
     params.set('precoMax', String(Number.isFinite(pedido) && pedido > 0 ? Math.min(pedido, tetoDePreco) : tetoDePreco));
   }
   if (category) params.set('categoria', category);
-  if (soPromocao) params.set('soPromocao', '1');
+  // Mesma chave que o controller lê ("promocao") — ver o comentário
+  // equivalente em services/vitrine.ts.
+  if (soPromocao) params.set('promocao', '1');
   if (search && search.trim().length >= 2) params.set('busca', search.trim());
 
   const resposta = await fetch(`/api/loja/produtos?${params.toString()}`);

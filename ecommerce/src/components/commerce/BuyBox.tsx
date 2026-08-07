@@ -16,6 +16,7 @@ import { useWishlistStore } from '@/store/wishlist';
 import { trackAddToCart } from '@/lib/tracking';
 import { useMounted } from '@/hooks';
 import { cn, discountPercent, formatPrice } from '@/lib/utils';
+import { hexDaCor } from '@/services/products';
 import type { Product } from '@/types';
 
 /**
@@ -239,6 +240,11 @@ export function BuyBox({
             {cores.map((c) => {
               const escolhida = corSelecionada === c.nome;
               const esgotada = c.estoque <= 0;
+              // MESMO FALLBACK DA VITRINE (bug real, 07/08): sem bolinha pintada
+              // na retaguarda, o card da listagem já ADIVINHA a cor pelo nome
+              // (hexDaCor) — a PDP caía num cinza genérico #D9D4CC porque usava
+              // o hex cru da API sem esse plano B. Cliente via bolinha colorida
+              // no card e cinza ao abrir a peça, como se tivesse quebrado.
               const estilo: React.CSSProperties =
                 c.swatch.tipo === 'foto' && c.swatch.imagem
                   ? {
@@ -246,7 +252,7 @@ export function BuyBox({
                       backgroundSize: '400%',
                       backgroundPosition: `${(c.swatch.focoX ?? 0.5) * 100}% ${(c.swatch.focoY ?? 0.5) * 100}%`,
                     }
-                  : { backgroundColor: c.swatch.hex || '#D9D4CC' };
+                  : { backgroundColor: c.swatch.hex || hexDaCor(c.nome) };
 
               return (
                 <button
