@@ -9,7 +9,8 @@ import { VideoBlock } from '@/components/sections/VideoBlock';
 import { CTABanner } from '@/components/sections/CTABanner';
 import { EditorialCard, ImageGrid } from '@/components/sections/ImageGrid';
 import { NewsletterBlock } from '@/components/sections/NewsletterBlock';
-import { TaxonomyCard, FitCard } from '@/components/cards/TaxonomyCard';
+import { FitCard } from '@/components/cards/TaxonomyCard';
+import { CategoriaCard } from '@/components/cards/CategoriaCard';
 import { StoreCard } from '@/components/cards/StoreCard';
 import { InstagramCard } from '@/components/cards/InstagramCard';
 import { Button } from '@/components/ui/Button';
@@ -113,7 +114,32 @@ export default async function HomePage() {
         priority
       />
 
-      {/* 02 — MANIFESTO */}
+      {/* 02 — NOSSAS CATEGORIAS, LOGO ABAIXO DO BANNER (dono 07/08, mockup).
+          É a primeira decisão que a cliente toma depois de ver a campanha:
+          "o que eu vim procurar?". Deixar isso pro meio da página obriga a
+          rolar por manifesto e carrossel antes de poder escolher.
+          Sem contagem de peças — número de item não ajuda a escolher e
+          envelhece mal. O ícone da silhueta diz o que é antes de ler. */}
+      {categoriasHome.length > 0 && (
+        <Section tone="alt" width="wide" aria-labelledby="categorias-home">
+          <SectionTitle
+            id="categorias-home"
+            eyebrow="Encontre seu look ideal"
+            title="Nossas categorias"
+          />
+          <div className="mt-12 grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6 lg:gap-4">
+            {categoriasHome.map((c, index) => (
+              <CategoriaCard
+                key={c.slug}
+                index={index}
+                data={{ slug: c.slug, nome: c.nome, imagemUrl: c.imagemUrl, alt: c.alt }}
+              />
+            ))}
+          </div>
+        </Section>
+      )}
+
+      {/* 03 — MANIFESTO */}
       <Manifesto
         eyebrow={manifesto.eyebrow}
         title={manifesto.title}
@@ -151,38 +177,6 @@ export default async function HomePage() {
         </div>
       </Section>
 
-      {/* 05 — NOSSAS CATEGORIAS (entrou no lugar de Ocasião e Tecido, 07/08)
-          Ocasião e tecido dependem de classificação peça a peça que ainda não
-          existe: a home mandava a cliente pra vitrines vazias. Categoria tem
-          dado de verdade — e a foto de cada card é a da peça mais nova, então
-          o bloco se renova sozinho. */}
-      <Section tone="alt" width="wide" aria-labelledby="categorias-home">
-        <SectionTitle
-          id="categorias-home"
-          eyebrow="Encontre seu look ideal"
-          title="Nossas categorias"
-          description="Do 46 ao 60, em modelagens pensadas pro corpo real."
-          cta={{ label: 'Ver todas as categorias', href: '/categoria' }}
-          align="left"
-        />
-        <div className="mt-14 grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6 lg:gap-5">
-          {categoriasHome.map((c, index) => (
-            <TaxonomyCard
-              key={c.slug}
-              index={index}
-              aspect="3/4"
-              variant={c.imagemUrl ? 'editorial' : 'text'}
-              data={{
-                slug: c.slug,
-                title: c.nome,
-                description: `${c.qtdPecas} ${c.qtdPecas === 1 ? 'peça' : 'peças'}`,
-                href: `/categoria/${c.slug}`,
-                ...(c.imagemUrl ? { image: { src: c.imagemUrl, alt: c.alt || c.nome } } : {}),
-              }}
-            />
-          ))}
-        </div>
-      </Section>
 
       {/* 07 — MODA POR MODELAGEM */}
       <Section tone="champagne" width="page" aria-labelledby="modelagem-titulo">
