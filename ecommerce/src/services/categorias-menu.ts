@@ -38,6 +38,69 @@ function rotulo(slug: string): string {
   return limpo.charAt(0).toUpperCase() + limpo.slice(1);
 }
 
+export interface CategoriaVitrine {
+  slug: string;
+  nome: string;
+  qtdPecas: number;
+  /** Foto da peça MAIS NOVA da categoria — a vitrine se renova sozinha. */
+  imagemUrl: string | null;
+  alt: string | null;
+}
+
+/**
+ * AS CATEGORIAS COM FOTO (dono 07/08).
+ *
+ * A foto de cada card é a da PEÇA MAIS RECENTE daquela categoria: a vitrine
+ * se atualiza sozinha conforme a loja cadastra, sem ninguém subir banner de
+ * categoria toda semana. A lista de categorias é a do CRM — as mesmas do menu
+ * e do filtro, só o que tem peça publicada.
+ *
+ * Uma requisição por categoria (9 hoje), todas em paralelo e cacheadas por 1h
+ * junto com a página. Categoria que falhar volta sem foto em vez de derrubar
+ * a página inteira.
+ */
+export async function getCategorias(): Promise<CategoriaVitrine[]> {
+  let categorias: FiltroValor[] = [];
+  try {
+    const filtros = await api<{ categorias?: FiltroValor[] }>('/public/loja/filtros', {
+      revalidate: REVALIDATE,
+      tags: ['filtros', 'categorias'],
+    });
+    categorias = Array.isArray(filtros?.categorias) ? filtros.categorias : [];
+  } catch {
+    return [];
+  }
+
+  const validas = categorias.filter((c) => c?.valor && (c.qtd ?? 0) > 0);
+
+  return Promise.all(
+    validas.map(async (c) => {
+      const base: CategoriaVitrine = {
+        slug: c.valor,
+        nome: rotulo(c.valor),
+        qtdPecas: c.qtd ?? 0,
+        imagemUrl: null,
+        alt: null,
+      };
+      try {
+        const r = await api<{ itens?: any[] }>(
+          `/public/loja/produtos?categoria=${encodeURIComponent(c.valor)}&perPage=1&ordenar=novidades`,
+          { revalidate: REVALIDATE, tags: ['categorias', `categoria:${c.valor}`] },
+        );
+        const peca = r?.itens?.[0];
+        const foto = peca?.imagens?.[0];
+        if (foto?.src) {
+          base.imagemUrl = foto.src;
+          base.alt = `${base.nome} — ${peca.nome ?? ''}`.trim();
+        }
+      } catch {
+        /* card sem foto é melhor que página fora do ar */
+      }
+      return base;
+    }),
+  );
+}
+
 /**
  * O menu com o eixo "Categorias" preenchido pelo CRM. Server-side: quem chama
  * é o layout, que passa o resultado pro Header (client) por prop.
