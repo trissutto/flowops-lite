@@ -45,6 +45,32 @@ export class MarcadosController {
   }
 
   /**
+   * GET /pdv/marcados/diagnostico-identidade?cpf=XXX — "de quem é de
+   * verdade" (07/08, caso Daiana). Read-only: mostra o código bruto de cada
+   * marcado com este CPF e toda ficha de QUALQUER loja com esse mesmo
+   * código — a lista de candidatas à dona real, quando o CPF gravado veio do
+   * fallback errado do sync (corrigido hoje, mas não reprocessa sozinho o
+   * que já ficou gravado).
+   */
+  @Get('diagnostico-identidade')
+  diagnosticoIdentidade(@Req() req: any, @Query('cpf') cpf: string) {
+    this.requireAdmin(req);
+    return this.mirror.diagnosticarIdentidade(cpf || '');
+  }
+
+  /**
+   * GET /pdv/marcados/diagnostico-cliente?loja=11&codCliente=148 — estado
+   * cru de cada marcado (07/08, caso Eliana): status, saleId, se tem
+   * registroGiga/numero (marcado 'flow' sem réplica confirmada nasce sem os
+   * dois — e a tela antiga de puxar dependia exatamente disso). Read-only.
+   */
+  @Get('diagnostico-cliente')
+  diagnosticoCliente(@Req() req: any, @Query('loja') loja: string, @Query('codCliente') codCliente: string) {
+    this.requireAdmin(req);
+    return this.svc.diagnosticarCliente(loja || '', codCliente || '');
+  }
+
+  /**
    * POST /pdv/marcados/reconciliar-presos — remendo pontual (07/08, caso
    * Limeira): fecha marcados travados em 'puxado' cuja venda já finalizou.
    * Roda na hora (não é fila) — é um lote de correção, não operação de rotina.
