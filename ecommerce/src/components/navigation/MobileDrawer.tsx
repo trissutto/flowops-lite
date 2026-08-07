@@ -8,7 +8,8 @@ import { Drawer } from '@/components/ui/Drawer';
 import { Button } from '@/components/ui/Button';
 import { cn } from '@/lib/utils';
 import { transition } from '@/lib/motion';
-import { navigation } from '@/data/navigation';
+import { navigation as estatico } from '@/data/navigation';
+import type { NavItem } from '@/types';
 import { Logo } from './Logo';
 
 /**
@@ -21,7 +22,11 @@ import { Logo } from './Logo';
 
 const ACCOUNT_ICONS = { User, Package, Heart, ShoppingBag } as const;
 
-export function MobileDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function MobileDrawer({
+  open, onClose, itens,
+}: { open: boolean; onClose: () => void; itens?: NavItem[] }) {
+  // Mesmas categorias do CRM que o desktop — o celular é a maioria do tráfego.
+  const navigation = itens?.length ? itens : estatico;
   const [expanded, setExpanded] = useState<string | null>(null);
 
   return (

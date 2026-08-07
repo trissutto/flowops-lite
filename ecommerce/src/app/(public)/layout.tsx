@@ -4,6 +4,7 @@ import { MiniCart } from '@/components/commerce/MiniCart';
 import { QuickAddSheet } from '@/components/commerce/QuickAddSheet';
 import { AssistenteWidget } from '@/components/chat/AssistenteWidget';
 import { getTarjaDoTopo } from '@/services/banners';
+import { getNavegacao } from '@/services/categorias-menu';
 
 /**
  * Layout do grupo (public) — todas as páginas de vitrine compartilham
@@ -15,11 +16,11 @@ import { getTarjaDoTopo } from '@/services/banners';
  * frases padrão dentro do próprio componente.
  */
 export default async function PublicLayout({ children }: { children: React.ReactNode }) {
-  const tarja = await getTarjaDoTopo();
+  const [tarja, navegacao] = await Promise.all([getTarjaDoTopo(), getNavegacao()]);
 
   return (
     <>
-      <Header tarja={tarja} />
+      <Header tarja={tarja} navegacao={navegacao} />
       <main id="conteudo">{children}</main>
       <Footer />
       <MiniCart />

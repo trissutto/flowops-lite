@@ -235,7 +235,10 @@ export function BuyBox({
                   aria-label={`Cor ${c.nome}${esgotada ? ' (esgotada)' : ''}`}
                   title={c.nome}
                   className={cn(
-                    'relative size-9 rounded-full border transition-all duration-[320ms]',
+                    // 2,7rem = 43px: a bolinha 20% maior que os 36px originais
+                    // (dono 07/08). É o controle que decide a compra — merece
+                    // o alvo de toque maior no celular.
+                    'relative size-[2.7rem] rounded-full border transition-all duration-[320ms]',
                     escolhida
                       ? 'border-ink ring-2 ring-ink ring-offset-2 ring-offset-background'
                       : 'border-border hover:border-ink-soft',
