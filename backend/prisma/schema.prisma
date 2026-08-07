@@ -4767,6 +4767,42 @@ model SiteCupom {
 ///
 /// Janela (`inicioEm`/`fimEm`) existe pra campanha entrar e sair sozinha de
 /// madrugada — ninguém precisa acordar pra tirar o banner do Dia das Mães.
+/// CATEGORIA DA VITRINE — a cara de /categoria/<slug> (dono 07/08).
+///
+/// A categoria em si NASCE do CRM (campo `categoria` do SiteProduto): esta
+/// tabela não cria nem apaga categoria, só VESTE a que já existe — foto,
+/// nome de exibição, texto e ordem no menu. Sem linha aqui, o site segue
+/// com o nome derivado do slug e sem foto, como hoje.
+model SiteCategoria {
+  id            String   @id @default(uuid())
+  /// O mesmo slug que o produto carrega ("vestidos", "moda-praia").
+  slug          String   @unique
+  /// Como aparece no menu e no título. Vazio = derivado do slug.
+  nome          String?
+  /// Título da página ("Vestidos plus size") — SEO e cabeçalho.
+  titulo        String?
+  /// Parágrafo de abertura da página da categoria.
+  intro         String?  @db.Text
+
+  imagemUrl     String?  @map("imagem_url") @db.Text
+  objectKey     String?  @map("object_key") @db.Text
+  alt           String?
+
+  /// Ordem no menu. Empate resolve pela quantidade de peças.
+  ordem         Int      @default(0)
+  /// Aparece no menu do site. Peça continua achável pela busca de qualquer forma.
+  ativo         Boolean  @default(true)
+  /// Ganha o card editorial grande do mega menu.
+  destaque      Boolean  @default(false)
+
+  atualizadoPor String?  @map("atualizado_por")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@index([ativo, ordem])
+  @@map("site_categorias")
+}
+
 model SiteBanner {
   id              String    @id @default(uuid())
   slot            String
