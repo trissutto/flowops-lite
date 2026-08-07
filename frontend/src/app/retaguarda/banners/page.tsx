@@ -191,7 +191,31 @@ function CardBanner({
   const fileDesktop = useRef<HTMLInputElement>(null);
   const fileMobile = useRef<HTMLInputElement>(null);
 
-  useEffect(() => { setForm(banner); }, [banner]);
+  /**
+   * ⚠️ A TELA NÃO PODE APAGAR O QUE A PESSOA DIGITOU (bug real, 07/08).
+   *
+   * Antes: `setForm(banner)` a cada mudança da prop. Só que subir a foto (e,
+   * depois, publicar) devolve o banner do SERVIDOR — sem os textos que ainda
+   * estavam só na tela — e o efeito jogava esse retorno por cima do formulário.
+   * O título e o texto sumiam na frente do dono, que redigitava; se ele
+   * salvasse depois de um upload, gravava os campos VAZIOS por cima dos bons.
+   * Foi assim que o "BANNER TESTE / Banner Novidades Agosto" virou tudo null.
+   *
+   * Agora: troca de banner (id diferente) reinicia o formulário; atualização do
+   * MESMO banner só traz os campos que são do servidor — imagem, publicação e
+   * carimbos. O que está sendo digitado fica onde está.
+   */
+  useEffect(() => {
+    setForm((f) => {
+      if (f.id !== banner.id) return banner;
+      return {
+        ...f,
+        imagemUrl: banner.imagemUrl,
+        imagemMobileUrl: banner.imagemMobileUrl,
+        ativo: banner.ativo,
+      };
+    });
+  }, [banner]);
 
   function campo<K extends keyof Banner>(k: K, v: Banner[K]) {
     setForm((f) => ({ ...f, [k]: v }));
@@ -277,6 +301,12 @@ function CardBanner({
       setErro(e?.message || 'Não consegui apagar');
     }
   }
+
+  /** Texto/janela/ordem diferentes do que está gravado = falta salvar. */
+  const temMudanca = (
+    ['eyebrow', 'titulo', 'destaque', 'subtitulo', 'alt',
+      'ctaLabel', 'ctaHref', 'cta2Label', 'cta2Href', 'inicioEm', 'fimEm'] as const
+  ).some((k) => (form[k] ?? '') !== (banner[k] ?? '')) || form.ordem !== banner.ordem;
 
   const input = 'w-full px-2 py-2 border border-slate-300 rounded text-sm';
   const rotulo = 'text-[10px] font-bold text-slate-600 uppercase';
@@ -446,15 +476,27 @@ function CardBanner({
 
       {erro && <p className="text-xs text-rose-700">{erro}</p>}
 
-      <button
-        type="button"
-        onClick={() => void salvar()}
-        disabled={salvando}
-        className="inline-flex items-center gap-1.5 text-xs font-bold px-4 py-2 rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50"
-      >
-        {salvando ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-        Salvar
-      </button>
+      {/* TEXTO NÃO SALVO PRECISA GRITAR. Foto e publicação gravam sozinhas; os
+          textos não — e nada dizia isso. O botão fica âmbar e escrito "Salvar
+          textos" enquanto houver mudança pendente. */}
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => void salvar()}
+          disabled={salvando}
+          className={`inline-flex items-center gap-1.5 text-xs font-bold px-4 py-2 rounded-lg text-white disabled:opacity-50 ${
+            temMudanca ? 'bg-amber-600 hover:bg-amber-700' : 'bg-violet-600 hover:bg-violet-700'
+          }`}
+        >
+          {salvando ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+          {temMudanca ? 'Salvar textos' : 'Salvar'}
+        </button>
+        {temMudanca && (
+          <span className="text-[11px] font-bold text-amber-700">
+            Você mudou os textos e ainda não salvou
+          </span>
+        )}
+      </div>
     </div>
   );
 }
