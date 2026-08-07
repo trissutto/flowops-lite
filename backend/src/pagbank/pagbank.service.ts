@@ -514,18 +514,7 @@ export class PagbankService {
    * Processa o payload do webhook. Idempotente: se já foi processado,
    * ignora.
    */
-  async handleWebhook(
-    payload: any,
-    rawBody?: string,
-    signature?: string,
-  ): Promise<{
-    ok: boolean;
-    saleId?: string;
-    status?: string;
-    statusChanged?: boolean;
-    pagbankOrderId?: string;
-    valor?: number;
-  }> {
+  async handleWebhook(payload: any, rawBody?: string, signature?: string): Promise<{ ok: boolean; saleId?: string; status?: string; statusChanged?: boolean }> {
     // Tenta validar assinatura (não bloqueia em sandbox se config sem secret)
     try {
       const cfg = await (this.prisma as any).pagbankConfig.findUnique({
@@ -573,14 +562,7 @@ export class PagbankService {
         data: { rawWebhook: JSON.stringify(payload).slice(0, 5000) },
       });
       // statusChanged=false → controller não deve disparar baixa (já disparou antes)
-      return {
-        ok: true,
-        saleId: local.saleId,
-        status: newStatus,
-        statusChanged: false,
-        pagbankOrderId: orderId,
-        valor: local.valor,
-      };
+      return { ok: true, saleId: local.saleId, status: newStatus, statusChanged: false };
     }
 
     await (this.prisma as any).pagbankPayment.update({
@@ -598,14 +580,7 @@ export class PagbankService {
     );
 
     // statusChanged=true → controller deve disparar confirmBaixaPixIfExists (1ª vez que virou paid)
-    return {
-      ok: true,
-      saleId: local.saleId,
-      status: newStatus,
-      statusChanged: true,
-      pagbankOrderId: orderId,
-      valor: local.valor,
-    };
+    return { ok: true, saleId: local.saleId, status: newStatus, statusChanged: true };
   }
 
   // ── Listagem (pra dashboard de PIX) ────────────────────────────────

@@ -16,7 +16,6 @@ import {
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { PagbankService } from './pagbank.service';
 import { CrediarioBaixaService } from '../crediarios/crediario-baixa.service';
-import { PdvService } from '../pdv/pdv.service';
 import type { Request } from 'express';
 
 @Controller('pagbank')
@@ -25,8 +24,6 @@ export class PagbankController {
     private readonly svc: PagbankService,
     @Inject(forwardRef(() => CrediarioBaixaService))
     private readonly crediarioBaixa: CrediarioBaixaService,
-    @Inject(forwardRef(() => PdvService))
-    private readonly pdv: PdvService,
   ) {}
 
   // ── Config (admin only) ────────────────────────────────────────────
@@ -231,14 +228,6 @@ export class PagbankController {
     // Quando webhook PagBank reporta paid PELA PRIMEIRA VEZ (statusChanged=true),
     // dispara baixa Giga automaticamente — mesmo padrão do Pagar.me.
     // Sem isso, parcela ficava em aberto + recibo não emitia.
-    //
-    // FIX VENDA NORMAL DE BALCÃO (dono 07/08): o gancho acima só cobria
-    // crediário — venda comum dependia 100% do polling no navegador da
-    // vendedora, e se a aba fechasse entre o cliente pagar e a confirmação
-    // aparecer, a venda ficava aberta pra sempre com o dinheiro já recebido
-    // (caso real: Sorocaba, R$119,90, só descoberto horas depois na mão).
-    // `saleId` aqui pode ser um crediarioBaixa.id OU um PdvSale.id — tenta
-    // os dois; cada um só age se o id for dele, sem risco de duplo-efeito.
     if (
       result.ok &&
       result.saleId &&
@@ -249,15 +238,6 @@ export class PagbankController {
         await this.crediarioBaixa.confirmBaixaPixIfExists(result.saleId);
       } catch (e: any) {
         // Não bloqueia ack do webhook — só loga. PagBank reenvia em falha.
-      }
-      try {
-        await this.pdv.confirmPixWebhookIfOpenSale({
-          saleId: result.saleId,
-          pagbankOrderId: result.pagbankOrderId || '',
-          valor: Number(result.valor || 0),
-        });
-      } catch (e: any) {
-        // Idem — nunca derruba o ACK do webhook.
       }
     }
     // PagBank espera 200 OK pra não retentar

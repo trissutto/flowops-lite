@@ -1,6 +1,5 @@
 'use client';
 import { overlayClose } from '@/lib/overlayClose';
-import { horaBr } from '@/lib/hora-br';
 
 /**
  * /retaguarda/super-painel-caixas
@@ -1427,7 +1426,7 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo, onDate
                 {showSangrias && sangriasList.length > 0 && (
                   <div className="ml-3 pl-2 border-l-2 border-rose-200 space-y-0.5 max-h-48 overflow-y-auto">
                     {sangriasList.map((m) => {
-                      const hora = horaBr(m.createdAt);
+                      const hora = new Date(m.createdAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
                       return (
                         <div key={m.id} className="flex justify-between items-start text-[10px] gap-2 hover:bg-rose-50 rounded px-1 py-0.5">
                           <div className="min-w-0 flex-1">
@@ -1475,7 +1474,7 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo, onDate
                 {showSuprimentos && suprimentosList.length > 0 && (
                   <div className="ml-3 pl-2 border-l-2 border-amber-200 space-y-0.5 max-h-48 overflow-y-auto">
                     {suprimentosList.map((m) => {
-                      const hora = horaBr(m.createdAt);
+                      const hora = new Date(m.createdAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
                       return (
                         <div key={m.id} className="flex justify-between items-start text-[10px] gap-2 hover:bg-amber-50 rounded px-1 py-0.5">
                           <div className="min-w-0 flex-1">
@@ -1782,7 +1781,7 @@ function ListaVendas({
   return (
     <div className="space-y-0.5 max-h-60 overflow-y-auto">
       {vendas.map((v, i) => {
-        const hora = v.finalizedAt ? horaBr(v.finalizedAt) : '';
+        const hora = v.finalizedAt ? new Date(v.finalizedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '';
         const cliente = v.customerName || (v.customerCpf ? `CPF ${v.customerCpf}` : 'Sem identificacao');
         return (
           <div key={i} className="flex items-center justify-between text-[11px] py-0.5 px-1 hover:bg-slate-50 rounded">
