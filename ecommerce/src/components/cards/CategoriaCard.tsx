@@ -4,7 +4,7 @@ import Image from 'next/image';
 import { motion } from 'framer-motion';
 import { AppLink as Link } from '@/components/ui/AppLink';
 import { cn } from '@/lib/utils';
-import { fadeUp, reveal } from '@/lib/motion';
+import { enter, fadeUp } from '@/lib/motion';
 
 /**
  * CARD DE CATEGORIA DA HOME — foto da peça + ícone da peça + nome.
@@ -158,9 +158,17 @@ export function CategoriaCard({
   const sizesFoco = `(max-width: 768px) ${Math.round(50 * zoomFoco)}vw, (max-width: 1024px) ${Math.round(33 * zoomFoco)}vw, ${Math.round(20 * zoomFoco)}vw`;
 
   return (
+    /**
+     * ENTRADA IMEDIATA, não reveal-por-scroll (07/08 — "tira este espaço em
+     * branco"). `/categoria` é uma página curta e a grade é o conteúdo
+     * principal, já na dobra — quando o card espera cruzar o gatilho do
+     * IntersectionObserver pra aparecer, ele existe no DOM mas fica com
+     * opacity:0 até lá, e a cliente vê um vão em branco onde deveriam estar
+     * as categorias. `reveal()` é certo pra seção que a cliente rola até
+     * encontrar; aqui ela já está olhando.
+     */
     <motion.div
-      {...reveal(fadeUp, '-40px')}
-      transition={{ duration: 0.56, delay: (index % 6) * 0.06 }}
+      {...enter(fadeUp, (index % 6) * 0.06)}
       className={className}
     >
       <Link
