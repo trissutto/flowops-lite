@@ -194,7 +194,12 @@ export function ProductCard({
         >
           {availableSizes.length > 0 && (
             <div className="flex flex-wrap gap-1">
-              {availableSizes.slice(0, 6).map((size) => (
+              {/* A GRADE INTEIRA (dono 07/08). O corte em 6 escondia o 58 e o
+                  60 justamente nas peças que vão até lá — o card mostrava
+                  "46 48 50 52 54 56" embaixo da frase "Do 46 ao 60", e a
+                  cliente de 60 concluía que a peça não servia pra ela. A grade
+                  da casa tem 9 números; cabem em duas linhas de pílula. */}
+              {availableSizes.slice(0, 10).map((size) => (
                 <span
                   key={size.label}
                   className="tabular rounded-xs bg-surface/90 px-2 py-1 text-[0.625rem] font-medium text-ink backdrop-blur"
