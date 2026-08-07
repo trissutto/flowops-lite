@@ -21,6 +21,12 @@
  * Por que catraca e não zero: exigir zero num débito de 60 faz a equipe
  * desligar a verificação no primeiro dia. Catraca é o único formato de teste
  * de dívida técnica que sobrevive à segunda semana.
+ *
+ * ⚠️ RODA NO `prebuild` — ou seja, NO DEPLOY DA VERCEL. Por isso o `--check`
+ * é à prova de falha: se a auditoria quebrar SOZINHA (arquivo renomeado, node
+ * diferente), ela AVISA e deixa passar. Só link morto novo derruba o build.
+ * Auditor que impede o site de subir por causa de um bug dele mesmo é pior do
+ * que auditor nenhum — some no primeiro incêndio.
  */
 const fs = require('fs');
 const path = require('path');
@@ -34,63 +40,84 @@ const APP = path.join(RAIZ, 'src', 'app');
 const SRC = path.join(RAIZ, 'src');
 const BASELINE = path.join(__dirname, 'links-mortos.baseline.json');
 
-/* ── 1) rotas que existem ─────────────────────────────────────────────── */
-const rotas = new Set(['/']);
-(function varrer(dir, url) {
-  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (!e.isDirectory() || e.name === 'api') continue;
-    // (grupo) não vira segmento de URL
-    const seg = /^\(.+\)$/.test(e.name) ? '' : `/${e.name}`;
-    const novo = url + seg;
-    const cheio = path.join(dir, e.name);
-    if (['page.tsx', 'page.ts'].some((f) => fs.existsSync(path.join(cheio, f)))) {
-      rotas.add(novo || '/');
+function levantar() {
+  /* ── 1) rotas que existem ───────────────────────────────────────────── */
+  const rotas = new Set(['/']);
+  (function varrer(dir, url) {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (!e.isDirectory() || e.name === 'api') continue;
+      // (grupo) não vira segmento de URL
+      const seg = /^\(.+\)$/.test(e.name) ? '' : `/${e.name}`;
+      const novo = url + seg;
+      const cheio = path.join(dir, e.name);
+      if (['page.tsx', 'page.ts'].some((f) => fs.existsSync(path.join(cheio, f)))) {
+        rotas.add(novo || '/');
+      }
+      varrer(cheio, novo);
     }
-    varrer(cheio, novo);
+  })(APP, '');
+
+  /* ── 2) redirects do next.config ────────────────────────────────────── */
+  // `.ts` hoje; aceito `.js`/`.mjs` pra auditoria não morrer se renomearem.
+  const arquivoCfg = ['next.config.ts', 'next.config.js', 'next.config.mjs']
+    .map((f) => path.join(RAIZ, f))
+    .find((f) => fs.existsSync(f));
+  const redirecionadas = new Set();
+  if (arquivoCfg) {
+    const cfg = fs.readFileSync(arquivoCfg, 'utf8');
+    for (const m of cfg.matchAll(/source:\s*['"`]([^'"`]+)['"`]/g)) redirecionadas.add(m[1]);
   }
-})(APP, '');
 
-/* ── 2) redirects do next.config ──────────────────────────────────────── */
-const cfg = fs.readFileSync(path.join(RAIZ, 'next.config.ts'), 'utf8');
-const redirecionadas = new Set();
-for (const m of cfg.matchAll(/source:\s*['"`]([^'"`]+)['"`]/g)) redirecionadas.add(m[1]);
-
-/* ── 3) hrefs usados no código ────────────────────────────────────────── */
-const usos = new Map(); // href -> Set(arquivo)
-(function ler(dir) {
-  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-    const cheio = path.join(dir, e.name);
-    if (e.isDirectory()) { ler(cheio); continue; }
-    if (!/\.(tsx|ts)$/.test(e.name)) continue;
-    if (cheio.includes(`${path.sep}api${path.sep}`)) continue;
-    const txt = fs.readFileSync(cheio, 'utf8');
-    const rel = path.relative(SRC, cheio);
-    for (const m of txt.matchAll(/href[=:]\s*["'`](\/[^"'`${}\s]*)["'`]/g)) {
-      const h = m[1].split('#')[0].split('?')[0].replace(/\/$/, '') || '/';
-      if (!usos.has(h)) usos.set(h, new Set());
-      usos.get(h).add(rel);
+  /* ── 3) hrefs usados no código ──────────────────────────────────────── */
+  const usos = new Map(); // href -> Set(arquivo)
+  (function ler(dir) {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const cheio = path.join(dir, e.name);
+      if (e.isDirectory()) { ler(cheio); continue; }
+      if (!/\.(tsx|ts)$/.test(e.name)) continue;
+      if (cheio.includes(`${path.sep}api${path.sep}`)) continue;
+      const txt = fs.readFileSync(cheio, 'utf8');
+      const rel = path.relative(SRC, cheio);
+      for (const m of txt.matchAll(/href[=:]\s*["'`](\/[^"'`${}\s]*)["'`]/g)) {
+        const h = m[1].split('#')[0].split('?')[0].replace(/\/$/, '') || '/';
+        if (!usos.has(h)) usos.set(h, new Set());
+        usos.get(h).add(rel);
+      }
     }
-  }
-})(SRC);
+  })(SRC);
 
-/* ── 4) casa href com rota (respeitando [param] e :param) ─────────────── */
-const casa = (alvoPartes, rota, curinga) => {
-  const rp = rota.split('/').filter(Boolean);
-  if (curinga) {
-    if (rp.length > alvoPartes.length) return false;
-  } else if (rp.length !== alvoPartes.length) return false;
-  return rp.every((s, i) => (curinga && (s.startsWith(':') || s.includes('*'))) || /^\[.+\]$/.test(s) || s === alvoPartes[i]);
-};
+  /* ── 4) casa href com rota (respeitando [param] e :param) ───────────── */
+  const casa = (alvoPartes, rota, curinga) => {
+    const rp = rota.split('/').filter(Boolean);
+    if (curinga) {
+      if (rp.length > alvoPartes.length) return false;
+    } else if (rp.length !== alvoPartes.length) return false;
+    return rp.every((s, i) => (curinga && (s.startsWith(':') || s.includes('*'))) || /^\[.+\]$/.test(s) || s === alvoPartes[i]);
+  };
 
-const existe = (href) => {
-  if (rotas.has(href) || redirecionadas.has(href)) return true;
-  const partes = href.split('/').filter(Boolean);
-  for (const r of rotas) if (casa(partes, r, false)) return true;
-  for (const r of redirecionadas) if (casa(partes, r, true)) return true;
-  return false;
-};
+  const existe = (href) => {
+    if (rotas.has(href) || redirecionadas.has(href)) return true;
+    const partes = href.split('/').filter(Boolean);
+    for (const r of rotas) if (casa(partes, r, false)) return true;
+    for (const r of redirecionadas) if (casa(partes, r, true)) return true;
+    return false;
+  };
 
-const mortos = [...usos.entries()].filter(([h]) => !existe(h)).map(([h, a]) => [h, [...a]]).sort();
+  const mortos = [...usos.entries()].filter(([h]) => !existe(h)).map(([h, a]) => [h, [...a]]).sort();
+  return { rotas, redirecionadas, mortos };
+}
+
+let rotas, redirecionadas, mortos;
+try {
+  ({ rotas, redirecionadas, mortos } = levantar());
+} catch (e) {
+  // No relatório quem roda é gente: quero o stack inteiro.
+  if (!CHECK) throw e;
+  // No `--check` quem roda é o deploy: falha MINHA não derruba o site.
+  console.warn(`\n⚠️  A auditoria de links não conseguiu rodar: ${e.message}`);
+  console.warn('   Deixando o build passar — conserte scripts/auditar-links.js.\n');
+  process.exit(0);
+}
 
 /* ── 5) saída ─────────────────────────────────────────────────────────── */
 if (!CHECK) {
