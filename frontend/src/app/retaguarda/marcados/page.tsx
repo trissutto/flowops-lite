@@ -84,6 +84,33 @@ export default function RetaguardaMarcadosPage() {
   const [statusFiltro, setStatusFiltro] = useState<string>('ativo');
   const [reconciliando, setReconciliando] = useState(false);
   const [reconciliado, setReconciliado] = useState<{ verificados: number; fechados: number; erros: string[] } | null>(null);
+  const [diagnosticoAberto, setDiagnosticoAberto] = useState<string | null>(null);
+  const [diagnosticoCarregando, setDiagnosticoCarregando] = useState(false);
+  const [diagnostico, setDiagnostico] = useState<any>(null);
+
+  /**
+   * DIAGNÓSTICO TÉCNICO — pra ver o estado CRU do que está preso, sem
+   * depender de acesso direto ao banco (07/08, caso Eliana). Sem `saleId`:
+   * nunca foi puxada. Com `saleId` e ainda `ativo`: a tentativa de puxar não
+   * conseguiu — provável `registroGiga`/`numero` nulos.
+   */
+  async function verDiagnostico(g: Grupo) {
+    if (diagnosticoAberto === g.key) { setDiagnosticoAberto(null); return; }
+    setDiagnosticoAberto(g.key);
+    setDiagnosticoCarregando(true);
+    setDiagnostico(null);
+    try {
+      const lojaCliente = g.lojas[0] || '';
+      const r = await api<any>(
+        `/pdv/marcados/diagnostico-cliente?loja=${encodeURIComponent(lojaCliente)}&codCliente=${encodeURIComponent(g.codCliente)}`,
+      );
+      setDiagnostico(r);
+    } catch (e: any) {
+      setDiagnostico({ erro: e?.message || 'falha ao carregar' });
+    } finally {
+      setDiagnosticoCarregando(false);
+    }
+  }
 
   /**
    * REMENDO PONTUAL (07/08, caso Limeira): peça puxada pro PDV, vendida
@@ -352,7 +379,14 @@ export default function RetaguardaMarcadosPage() {
                 {aberto && (
                   <div className="border-t border-[#F1EDE3] overflow-x-auto">
                     {statusFiltro === 'ativo' && (
-                    <div className="px-4 py-2 flex justify-end bg-[#FBF6E6]/40">
+                    <div className="px-4 py-2 flex justify-end gap-2 bg-[#FBF6E6]/40">
+                      <button
+                        onClick={() => verDiagnostico(g)}
+                        className="text-xs font-bold text-slate-600 border border-slate-300 rounded-lg px-3 py-1.5 hover:bg-slate-50 flex items-center gap-1.5"
+                        title="Estado cru de cada peça: status, venda vinculada, se tem registro no Giga"
+                      >
+                        <Search className="w-3.5 h-3.5" /> Diagnóstico técnico
+                      </button>
                       <button
                         onClick={() => setBaixando(g)}
                         className="text-xs font-bold text-rose-700 border border-rose-300 rounded-lg px-3 py-1.5 hover:bg-rose-50 flex items-center gap-1.5"
@@ -361,6 +395,39 @@ export default function RetaguardaMarcadosPage() {
                         <Trash2 className="w-3.5 h-3.5" /> Dar baixa sem financeiro ({g.qtd} peça(s) · {brl(g.total)})
                       </button>
                     </div>
+                    )}
+                    {diagnosticoAberto === g.key && (
+                      <div className="px-4 py-3 bg-slate-900 text-slate-100 text-[11px] font-mono overflow-x-auto">
+                        {diagnosticoCarregando ? (
+                          <span className="flex items-center gap-1.5"><Loader2 className="w-3.5 h-3.5 animate-spin" /> carregando…</span>
+                        ) : diagnostico?.erro ? (
+                          <span className="text-rose-300">{diagnostico.erro}</span>
+                        ) : (
+                          <>
+                            {(diagnostico?.vendasEnvolvidas || []).length > 0 && (
+                              <div className="mb-2 pb-2 border-b border-slate-700">
+                                <div className="text-slate-400 mb-1">venda(s) vinculada(s):</div>
+                                {diagnostico.vendasEnvolvidas.map((v: any) => (
+                                  <div key={v.id}>
+                                    {v.id} · status=<b className={v.status === 'finalized' ? 'text-emerald-400' : 'text-amber-400'}>{v.status}</b>
+                                    {' · '}{v.paymentMethod} · {brl(Number(v.total) || 0)}
+                                    {' · marcadosRegistros='}{v.marcadosRegistros ? `"${v.marcadosRegistros}"` : <span className="text-rose-400">vazio</span>}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                            {(diagnostico?.marcados || []).map((m: any) => (
+                              <div key={m.id} className="whitespace-nowrap">
+                                {m.sku.padEnd(14)} status=<b className={m.status === 'ativo' ? 'text-amber-400' : 'text-emerald-400'}>{m.status.padEnd(8)}</b>
+                                {' '}saleId={m.saleId ? m.saleId.slice(0, 8) : <span className="text-rose-400">null    </span>}
+                                {' '}registroGiga={m.registroGiga ?? <span className="text-rose-400">null</span>}
+                                {' '}numero={m.numero ?? <span className="text-rose-400">null</span>}
+                                {' '}origem={m.origem}
+                              </div>
+                            ))}
+                          </>
+                        )}
+                      </div>
                     )}
                     <table className="w-full text-sm">
                       <thead>

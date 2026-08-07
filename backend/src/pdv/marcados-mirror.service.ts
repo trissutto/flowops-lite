@@ -206,6 +206,45 @@ export class MarcadosMirrorService {
     }
   }
 
+  /**
+   * DIAGNÓSTICO — "de quem é de verdade" (caso Daiana, 07/08).
+   *
+   * Pra cada marcado com este CPF (o CPF pode estar errado — é resultado do
+   * bug), mostra: o código bruto do cliente gravado na peça, se existe ficha
+   * EXATA na loja de origem (se não, é POR ISSO que o fallback antigo
+   * disparou), e TODA ficha de QUALQUER loja com esse mesmo código — a lista
+   * de candidatas a dona real. Read-only, não muda nada.
+   */
+  async diagnosticarIdentidade(cpf: string): Promise<{
+    marcados: Array<{
+      id: string; sku: string; descricao: string | null; storeCode: string; codCliente: string;
+      fichaExataNaLoja: { nome: string | null; cpf: string | null } | null;
+      candidatas: Array<{ loja: string; nome: string | null; cpf: string | null }>;
+    }>;
+  }> {
+    const safeCpf = String(cpf || '').replace(/\D/g, '');
+    const marcados: any[] = await (this.prisma as any).marcado.findMany({
+      where: safeCpf ? { cpf: safeCpf } : undefined,
+      select: { id: true, sku: true, descricao: true, storeCode: true, codCliente: true },
+      take: 100,
+    });
+    const out: any[] = [];
+    for (const m of marcados) {
+      const codNorm = this.normNum(m.codCliente);
+      const todasComEsseCodigo: any[] = await (this.prisma as any).gigaCliente.findMany({
+        where: { codigo: { in: [m.codCliente, codNorm] } },
+        select: { loja: true, codigo: true, nome: true, cpf: true },
+      });
+      const exata = todasComEsseCodigo.find((f) => this.normNum(f.loja) === this.normNum(m.storeCode));
+      out.push({
+        id: m.id, sku: m.sku, descricao: m.descricao, storeCode: m.storeCode, codCliente: m.codCliente,
+        fichaExataNaLoja: exata ? { nome: exata.nome, cpf: exata.cpf } : null,
+        candidatas: todasComEsseCodigo.map((f) => ({ loja: f.loja, nome: f.nome, cpf: f.cpf })),
+      });
+    }
+    return { marcados: out };
+  }
+
   /** Normaliza código/loja pra casar caixa × giga_clientes (padding de zeros
    *  é inconsistente no Giga — mesma regra do CAST AS UNSIGNED dos produtos). */
   private normNum(s: any): string {
@@ -215,8 +254,23 @@ export class MarcadosMirrorService {
 
   /**
    * Busca nome/CPF no espelho giga_clientes pros pares (loja, codCliente),
-   * casando NORMALIZADO. Preferência: ficha da mesma loja; senão qualquer
-   * loja com o mesmo código. Retorna Map por `${loja}|${cod}` normalizado.
+   * casando por LOJA+CÓDIGO exato — nunca só pelo código. Retorna Map por
+   * `${loja}|${cod}` normalizado.
+   *
+   * 🔴 ATÉ 07/08 tinha um fallback "sem loja" (achado caso Daiana Lucena: 5
+   * peças da loja 11/Limeira apareceram atribuídas a ela, e a equipe não
+   * reconhecia). `codCliente` é sequência POR LOJA (`GigaClienteSeq`), não
+   * globalmente único — cód. 148 existe em várias lojas, cada uma sendo uma
+   * pessoa diferente. O fallback pegava "qualquer ficha com esse número, de
+   * qualquer loja" pra preencher nome/CPF, e a marcação de OUTRA cliente virava
+   * a Daiana na tela.
+   *
+   * Mesma família de bug já corrigida em `listAllMarcados` (21/07) e
+   * documentada em `getClienteMarcadorInfo` — só não tinha chegado aqui, que é
+   * o único caminho que preenche nome/CPF pra marcado de origem Giga.
+   *
+   * Sem ficha exata, o marcado fica SEM nome/CPF — pior pra tela (aparece só
+   * o código), melhor que aparecer com o nome de uma pessoa errada.
    */
   async lookupNomes(pares: Array<{ storeCode: string; codCliente: string }>): Promise<Map<string, { nome: string | null; cpf: string | null }>> {
     const out = new Map<string, { nome: string | null; cpf: string | null }>();
@@ -232,17 +286,13 @@ export class MarcadosMirrorService {
       select: { loja: true, codigo: true, nome: true, cpf: true },
     });
     const byExact = new Map<string, any>();
-    const byCod = new Map<string, any>();
     for (const f of fichas) {
       const k = `${this.normNum(f.loja)}|${this.normNum(f.codigo)}`;
       if (!byExact.has(k)) byExact.set(k, f);
-      const c = this.normNum(f.codigo);
-      // preferência pra ficha com nome preenchido
-      if (!byCod.has(c) || (!byCod.get(c)?.nome && f.nome)) byCod.set(c, f);
     }
     for (const p of pares) {
       const k = `${this.normNum(p.storeCode)}|${this.normNum(p.codCliente)}`;
-      const f = byExact.get(k) || byCod.get(this.normNum(p.codCliente));
+      const f = byExact.get(k);
       if (f) {
         out.set(k, {
           nome: f.nome || null,

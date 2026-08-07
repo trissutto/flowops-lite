@@ -459,6 +459,38 @@ export class MarcadosService {
    * isso a fila insiste, em vez de mandar a vendedora "resolver no Wincred".
    */
   /**
+   * DIAGNÓSTICO — estado cru dos marcados de um cliente (07/08, caso Eliana).
+   * Read-only. Mostra exatamente onde cada linha travou: sem `saleId` nunca
+   * foi puxada; com `saleId` mas ainda 'ativo' quer dizer que a tentativa de
+   * puxar não conseguiu casar a linha (provável: `registroGiga`/`numero`
+   * nulos — marcado 'flow' cuja réplica pro Giga nunca confirmou).
+   */
+  async diagnosticarCliente(loja: string, codCliente: string) {
+    const lojaNorm = String(loja).replace(/\D/g, '').padStart(2, '0');
+    const rows: any[] = await (this.prisma as any).marcado.findMany({
+      where: { storeCode: lojaNorm, codCliente: String(codCliente).trim() },
+      select: {
+        id: true, sku: true, descricao: true, status: true, saleId: true,
+        registroGiga: true, numero: true, origem: true, dataMarcacao: true,
+      },
+      orderBy: { dataMarcacao: 'desc' },
+    });
+    const saleIds = [...new Set(rows.map((r) => r.saleId).filter(Boolean))];
+    const vendas: any[] = saleIds.length
+      ? await (this.prisma as any).pdvSale.findMany({
+          where: { id: { in: saleIds } },
+          select: { id: true, status: true, paymentMethod: true, total: true, marcadosRegistros: true },
+        })
+      : [];
+    return {
+      marcados: rows.map((r) => ({
+        ...r, registroGiga: r.registroGiga != null ? Number(r.registroGiga) : null,
+      })),
+      vendasEnvolvidas: vendas,
+    };
+  }
+
+  /**
    * RECONCILIAÇÃO — fecha os marcados que ficaram "puxado" presos de uma
    * venda que JÁ FINALIZOU (07/08, caso Limeira). Existiam porque
    * `erpStepFecharMarcados` (antes do conserto de hoje) só fechava o status
