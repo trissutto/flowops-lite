@@ -2990,6 +2990,88 @@ export class PdvService {
     );
   }
 
+  /**
+   * FECHA UMA VENDA CUJO PIX JÁ FOI PAGO (chamado pelo reconciliador, 07/08).
+   *
+   * Caso real: venda de R$119,90 em Sorocaba paga às 13:03 e presa como
+   * "open" por horas, com o dinheiro já na conta — só apareceu porque a loja
+   * avisou. A confirmação dependia 100% do POLLING no navegador da vendedora;
+   * se a aba fechasse entre o cliente pagar e a tela confirmar, ninguém mais
+   * fechava aquela venda.
+   *
+   * ⚠️ NÃO é chamado pelo webhook. A tentativa de ligar webhook → PDV criou
+   * um ciclo de módulos (Pagbank→Pdv→Crediarios→Pagbank) que impediu o
+   * backend de SUBIR — derrubou a operação inteira em 07/08. Quem chama isto
+   * é o `PixPagbankReconcileService`, que mora aqui dentro do PdvModule e lê
+   * a tabela do PagBank direto pelo Prisma: zero dependência nova entre
+   * módulos, zero risco na inicialização.
+   *
+   * Idempotente (não duplica pagamento com o mesmo `pagbankOrderId`) e nunca
+   * lança — falha aqui não pode derrubar o ciclo do reconciliador.
+   */
+  async confirmPixPagoSeVendaAberta(input: {
+    saleId: string;
+    pagbankOrderId: string;
+    valor: number;
+  }): Promise<{ handled: boolean; reason?: string }> {
+    try {
+      const sale = await (this.prisma as any).pdvSale.findUnique({
+        where: { id: input.saleId },
+        select: { id: true, status: true, total: true },
+      });
+      // saleId da tabela do PagBank também é usado por baixa de crediário —
+      // se não é uma venda de PDV, não é problema nosso: ignora em silêncio.
+      if (!sale) return { handled: false, reason: 'nao_e_venda_pdv' };
+      if (sale.status !== 'open') return { handled: false, reason: `venda_ja_${sale.status}` };
+
+      const existentes = await (this.prisma as any).pdvSalePayment.findMany({
+        where: { saleId: sale.id },
+        select: { details: true },
+      });
+      const jaRegistrado = (existentes as any[]).some((p: any) => {
+        try {
+          return JSON.parse(p.details || '{}')?.pixTxid === input.pagbankOrderId;
+        } catch {
+          return false;
+        }
+      });
+      if (jaRegistrado) return { handled: false, reason: 'pagamento_ja_registrado' };
+
+      await this.addPayment({
+        saleId: sale.id,
+        method: 'pix',
+        valor: input.valor,
+        details: {
+          pixTxid: input.pagbankOrderId,
+          pixChave: 'PagBank',
+          pixProvider: 'pagbank',
+          pixPaidByWebhook: true,
+          reconciliadoPeloCron: true,
+        },
+      });
+
+      try {
+        await this.finalize({ saleId: sale.id });
+        this.logger.log(
+          `[pdv] reconciliador fechou a venda ${sale.id} (PagBank ${input.pagbankOrderId})`,
+        );
+        return { handled: true };
+      } catch (e: any) {
+        // Split (parte dinheiro/cartão, parte PIX): o pagamento entrou, mas
+        // falta o resto — a vendedora fecha o restante na tela.
+        this.logger.log(
+          `[pdv] reconciliador registrou pagamento parcial na venda ${sale.id}: ${e?.message}`,
+        );
+        return { handled: true, reason: 'pagamento_parcial_registrado' };
+      }
+    } catch (e: any) {
+      this.logger.warn(
+        `[pdv] confirmPixPagoSeVendaAberta falhou (venda ${input.saleId}): ${e?.message || e}`,
+      );
+      return { handled: false, reason: e?.message || 'erro' };
+    }
+  }
+
   async cancel(input: { saleId: string; reason?: string }) {
     const sale = await (this.prisma as any).pdvSale.findUnique({
       where: { id: input.saleId },
