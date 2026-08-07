@@ -176,6 +176,20 @@ export class ProductPhotosController {
   }
 
   /**
+   * PUBLICAR O QUE JÁ TEM FOTO e ficou fora do site (07/08).
+   *
+   * A importação em massa trouxe 3.517 fotos e não publicou nada — a peça
+   * ficava pronta e invisível, sem aparecer nem na busca. O importador já foi
+   * corrigido, mas ele PULA quem tem foto, então o passivo precisa deste
+   * empurrão único. Só publica quem tem estoque.
+   */
+  @Post('publicar-pendentes')
+  async publicarPendentes(@Req() req: any) {
+    this.requireWrite(req);
+    return this.autoPublicar.repararPassivo();
+  }
+
+  /**
    * Quantas bolinhas ainda faltam pintar. A varredura roda sozinha; isto é só
    * pra tela mostrar o progresso em vez de pedir fé.
    * GET /product-photos/bolinha-auto/status

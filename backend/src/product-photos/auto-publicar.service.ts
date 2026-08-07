@@ -38,6 +38,117 @@ export class AutoPublicarService {
     private readonly wcImport: WcFotosImportService,
   ) {}
 
+  /**
+   * IMPORTAÇÃO EM MASSA — publica, mas só o que tem ESTOQUE.
+   *
+   * 🔴 O buraco que isto fecha (achado 07/08 com o dono na tela): "Importar
+   * tudo" trouxe **3.517 fotos em 696 peças e não publicou nenhuma**. A REF
+   * VLM-222 tinha foto em várias cores e devolvia ZERO na busca do site. O
+   * gancho de publicar morava só no CONTROLLER do upload manual, então o
+   * caminho que o dono realmente usa — o botão de importar — deixava a peça
+   * pronta e invisível.
+   *
+   * A regra original ("não publicar na importação") foi escrita quando a fila
+   * era o acervo inteiro do site antigo, 21 mil REFs fora de linha. Hoje a
+   * fila nasce do cruzamento com o catálogo vivo (1.172). O que sobrou do
+   * medo legítimo é "encher a vitrine de peça esgotada" — e é exatamente isso
+   * que o filtro de estoque resolve, sem segurar o que está pronto pra vender.
+   *
+   * Devolve o que aconteceu, pro job CONTAR em vez de deixar sumir calado.
+   */
+  async aoImportarEmMassa(
+    refBruta: string,
+    cores: string[],
+  ): Promise<'publicada' | 'sem_estoque' | 'nada'> {
+    try {
+      const ref = refBaseOf(refBruta);
+      if (!ref || !cores.length) return 'nada';
+
+      const [linha] = await this.prisma.$queryRawUnsafe<Array<{ total: number }>>(
+        `SELECT COALESCE(SUM(e.estoque), 0)::int AS total
+           FROM wincred_produtos p
+           JOIN wincred_estoque e ON e.codigo = p.codigo
+          WHERE UPPER(TRIM(p.ref)) = $1 OR UPPER(TRIM(p.ref)) LIKE $1 || ' %'`,
+        ref,
+      );
+      if (!linha || linha.total <= 0) {
+        this.logger.log(`[auto-publicar] ${ref}: tem foto mas está sem estoque — fora do site`);
+        return 'sem_estoque';
+      }
+
+      for (const cor of cores) await this.aoSubirFoto(ref, cor);
+      return 'publicada';
+    } catch (e: any) {
+      this.logger.warn(`[auto-publicar] massa ${refBruta}: ${e?.message || e}`);
+      return 'nada';
+    }
+  }
+
+  /**
+   * REPARO DO PASSIVO — publica o que JÁ TEM FOTO e ficou fora do site.
+   *
+   * Precisa existir porque o conserto de `aoImportarEmMassa` sozinho não
+   * alcança o estrago: "Importar tudo" PULA quem já tem foto
+   * (`apenasSemFoto`), então re-rodar responderia "nenhuma REF pra importar"
+   * e as 696 peças já importadas continuariam invisíveis pra sempre.
+   *
+   * É explícito (botão) e não automático no deploy de propósito: isto coloca
+   * peça no ar pra cliente ver, e ninguém deve descobrir que publicou
+   * centenas de peças pelo log.
+   */
+  async repararPassivo(): Promise<{
+    comFoto: number; jaNoAr: number; publicadas: number; semEstoque: number; falhas: number;
+  }> {
+    const fotos: Array<{ ref: string; cor: string | null }> =
+      await this.prisma.$queryRawUnsafe(
+        `SELECT DISTINCT UPPER(TRIM(ref)) AS ref, NULLIF(TRIM(cor), '') AS cor
+           FROM product_photos WHERE ref IS NOT NULL AND TRIM(ref) <> ''`,
+      );
+    const coresPorRef = new Map<string, string[]>();
+    for (const f of fotos) {
+      if (!coresPorRef.has(f.ref)) coresPorRef.set(f.ref, []);
+      if (f.cor) coresPorRef.get(f.ref)!.push(String(f.cor).toUpperCase());
+    }
+
+    const comEstoque: Array<{ ref: string }> = await this.prisma.$queryRawUnsafe(
+      `SELECT DISTINCT UPPER(TRIM(p.ref)) AS ref
+         FROM wincred_produtos p
+         JOIN (SELECT codigo, SUM(COALESCE(estoque,0)) AS total
+                 FROM wincred_estoque GROUP BY codigo) e ON e.codigo = p.codigo
+        WHERE p.ref IS NOT NULL AND TRIM(p.ref) <> '' AND e.total > 0`,
+    );
+    const temEstoque = new Set<string>();
+    for (const l of comEstoque) {
+      temEstoque.add(l.ref);
+      const base = refBaseOf(l.ref);
+      if (base) temEstoque.add(base);
+    }
+
+    const publicados: Array<{ ref: string }> = await (this.prisma as any).siteProduto.findMany({
+      where: { publicado: true }, select: { ref: true },
+    });
+    const jaPublicado = new Set(publicados.map((s) => String(s.ref).toUpperCase()));
+
+    let jaNoAr = 0, publicadas = 0, semEstoque = 0, falhas = 0;
+    for (const [ref, cores] of coresPorRef) {
+      if (jaPublicado.has(ref)) { jaNoAr++; continue; }
+      if (!temEstoque.has(ref) && !temEstoque.has(refBaseOf(ref))) { semEstoque++; continue; }
+      try {
+        // Sem cor casada ainda assim publica a REF: a vitrine mostra a peça
+        // com a foto genérica, que é melhor que peça invisível.
+        if (cores.length) for (const cor of cores) await this.aoSubirFoto(ref, cor);
+        else await this.aoSubirFoto(ref, null);
+        publicadas++;
+      } catch {
+        falhas++;
+      }
+    }
+
+    const resumo = { comFoto: coresPorRef.size, jaNoAr, publicadas, semEstoque, falhas };
+    this.logger.log(`[auto-publicar] reparo: ${JSON.stringify(resumo)}`);
+    return resumo;
+  }
+
   /** Chamado pelo controller após CADA upload da tela. Nunca lança. */
   async aoSubirFoto(refBruta: string, corBruta?: string | null): Promise<void> {
     try {

@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { Interval } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { WcFotosImportService } from './wc-fotos-import.service';
+import { AutoPublicarService } from './auto-publicar.service';
 import { refBaseOf } from '../common/ref-base';
 
 /**
@@ -37,6 +38,7 @@ export class FotoImportJobService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly importador: WcFotosImportService,
+    private readonly autoPublicar: AutoPublicarService,
   ) {}
 
   /**
@@ -138,6 +140,10 @@ export class FotoImportJobService {
       fotos: job.fotos,
       bolinhas: job.bolinhas,
       refsComFoto: job.refsComFoto,
+      // Foto no banco ≠ peça no site. A tela mostra os dois números porque
+      // foi exatamente a diferença entre eles que passou despercebida.
+      publicadas: job.publicadas,
+      semEstoque: job.semEstoque,
       refAtual: job.refAtual,
       problemas: problemas.slice(-30),
       atualizadoEm: job.updatedAt,
@@ -175,7 +181,7 @@ export class FotoImportJobService {
       let problemas: any[] = [];
       try { problemas = JSON.parse(job.problemas || '[]'); } catch { problemas = []; }
 
-      let { indice, fotos, bolinhas, refsComFoto } = job;
+      let { indice, fotos, bolinhas, refsComFoto, publicadas, semEstoque } = job;
 
       for (let n = 0; n < POR_CICLO && indice < refs.length; n++) {
         const ref = refs[indice];
@@ -186,8 +192,29 @@ export class FotoImportJobService {
           // A bolinha é pintada dentro do importador; aqui só contabiliza o
           // que ganhou foto agora, que é o que ganhou bolinha.
           bolinhas += r.coresComFoto.length;
+
+          /**
+           * 🔴 IMPORTOU = VAI PRO SITE (07/08).
+           *
+           * Faltava esta linha, e era ela que fazia o dono olhar 3.517 fotos
+           * importadas e não achar UMA peça na busca: a foto entrava, a
+           * curadoria `site_produto.publicado` continuava falsa, e a vitrine
+           * ignorava tudo. `aoImportarEmMassa` segura só quem está sem
+           * estoque — peça esgotada não precisa entrar na vitrine agora.
+           *
+           * Vale pras cores que JÁ TINHAM foto também: a REF pode ter sido
+           * importada numa rodada anterior (quando ninguém publicava) e estar
+           * parada até hoje. Sem isso o conserto não alcançaria o passivo.
+           */
+          const coresNoAr = [...new Set([...r.coresComFoto, ...r.jaTinham])];
+          const desfecho = await this.autoPublicar.aoImportarEmMassa(ref, coresNoAr);
+          if (desfecho === 'publicada') publicadas += 1;
+          else if (desfecho === 'sem_estoque') semEstoque += 1;
+
           if (r.produtosEncontrados === 0) {
             problemas.push({ ref, motivo: 'site antigo não tem esta peça' });
+          } else if (desfecho === 'sem_estoque') {
+            problemas.push({ ref, motivo: 'tem foto, mas está sem estoque — fora do site' });
           } else if (r.produtosWcSemCor.length) {
             problemas.push({ ref, motivo: `${r.produtosWcSemCor.length} produto(s) sem cor casada` });
           }
@@ -199,7 +226,7 @@ export class FotoImportJobService {
         await (this.prisma as any).fotoImportJob.update({
           where: { id: job.id },
           data: {
-            indice, fotos, bolinhas, refsComFoto,
+            indice, fotos, bolinhas, refsComFoto, publicadas, semEstoque,
             refAtual: ref,
             problemas: JSON.stringify(problemas.slice(-MAX_PROBLEMAS)),
           },

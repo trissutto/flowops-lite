@@ -1443,8 +1443,15 @@ type StatusLote = {
   fotos?: number;
   bolinhas?: number;
   refsComFoto?: number;
+  /** Foto no banco ≠ peça no site — foi a diferença entre os dois que passou. */
+  publicadas?: number;
+  semEstoque?: number;
   refAtual?: string | null;
   problemas?: { ref: string; motivo: string }[];
+};
+
+type Reparo = {
+  comFoto: number; jaNoAr: number; publicadas: number; semEstoque: number; falhas: number;
 };
 
 /**
@@ -1459,6 +1466,8 @@ function ImportarTudo() {
   const [status, setStatus] = useState<StatusLote | null>(null);
   const [erro, setErro] = useState<string | null>(null);
   const [abrindo, setAbrindo] = useState(false);
+  const [publicando, setPublicando] = useState(false);
+  const [reparo, setReparo] = useState<Reparo | null>(null);
 
   const consultar = useCallback(async () => {
     try {
@@ -1500,6 +1509,29 @@ function ImportarTudo() {
     }
   }
 
+  /**
+   * O CONSERTO DO PASSIVO (07/08). A importação trouxe milhares de fotos e não
+   * publicou NADA — peça pronta, invisível no site e na busca. O importador já
+   * foi corrigido, mas ele pula quem tem foto, então o que já entrou precisa
+   * deste empurrão único.
+   */
+  async function publicarPendentes() {
+    if (!confirm(
+      'Publicar no site todas as peças que JÁ TÊM FOTO e ainda estão fora?\n\n' +
+      'Só entra quem tem estoque. Isso coloca peça no ar pra cliente ver.',
+    )) return;
+    setPublicando(true);
+    setErro(null);
+    setReparo(null);
+    try {
+      setReparo(await api<Reparo>('/product-photos/publicar-pendentes', { method: 'POST' }));
+    } catch (e: any) {
+      setErro(e?.message?.replace(/^\d+:\s*/, '') || 'Não consegui publicar');
+    } finally {
+      setPublicando(false);
+    }
+  }
+
   const rodando = status?.status === 'rodando';
   const pct = status?.total ? Math.round(((status.processadas ?? 0) / status.total) * 100) : 0;
 
@@ -1526,7 +1558,22 @@ function ImportarTudo() {
             Importar tudo
           </button>
         )}
+        <button type="button" onClick={() => void publicarPendentes()} disabled={publicando}
+          title="Peça com foto que ficou fora do site entra na vitrine (só quem tem estoque)"
+          className="inline-flex items-center gap-1.5 text-xs font-bold px-4 py-2 rounded-lg border border-emerald-300 text-emerald-800 bg-white hover:bg-emerald-50 disabled:opacity-50">
+          {publicando ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Package className="w-3.5 h-3.5" />}
+          Publicar quem tem foto
+        </button>
       </div>
+
+      {reparo && (
+        <div className="mt-3 text-[11px] rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-900 p-2">
+          <strong>{reparo.publicadas}</strong> peça(s) entraram no site agora ·{' '}
+          {reparo.jaNoAr} já estavam · <strong>{reparo.semEstoque}</strong> ficaram de fora por
+          estar sem estoque{reparo.falhas ? ` · ${reparo.falhas} falharam` : ''}.
+          {' '}Total com foto: {reparo.comFoto}.
+        </div>
+      )}
 
       {status?.existe && (
         <div className="mt-3">
@@ -1537,6 +1584,13 @@ function ImportarTudo() {
             {rodando ? 'Rodando' : status.status === 'concluido' ? 'Concluído' : 'Cancelado'} ·{' '}
             {status.processadas}/{status.total} REFs ({pct}%) · {status.fotos} foto(s) em{' '}
             {status.refsComFoto} peça(s) · {status.bolinhas} bolinha(s)
+            {status.publicadas !== undefined && (
+              <>
+                {' · '}
+                <strong className="text-emerald-800">{status.publicadas} no site</strong>
+                {status.semEstoque ? ` · ${status.semEstoque} sem estoque` : ''}
+              </>
+            )}
             {rodando && status.refAtual ? ` · agora: ${status.refAtual}` : ''}
           </p>
           {!!status.problemas?.length && (
