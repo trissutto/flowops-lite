@@ -133,6 +133,20 @@ export function BuyBox({
 
       <h1 className="mt-3 font-display text-h2 text-ink">{product.name}</h1>
 
+      {/* REFERÊNCIA (06/08). Ela morava dentro do título — "Blusa Feminina
+          Plus Size Ref 700984 Estampa Marinho" — e sumiu quando o título foi
+          limpo. É o código que a cliente manda no WhatsApp e que a vendedora
+          digita no PDV pra achar a peça em qualquer uma das 14 lojas: na
+          página do produto ele precisa estar visível, não deduzível. */}
+      {(product.sku || product.id) && (
+        <p className="tabular mt-2 text-small text-ink-soft">
+          Ref{' '}
+          <strong className="font-semibold tracking-wide text-ink">
+            {product.sku ?? product.id}
+          </strong>
+        </p>
+      )}
+
       {product.rating && (
         <div className="mt-4 flex items-center gap-2">
           <span className="flex items-center gap-0.5" role="img" aria-label={`${product.rating.average} de 5`}>

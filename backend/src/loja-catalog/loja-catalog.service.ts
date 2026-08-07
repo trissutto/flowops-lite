@@ -177,13 +177,24 @@ export class LojaCatalogService {
     if (marca) txt = txt.replace(new RegExp(`\\b${escapar(marca)}\\b`, 'gi'), ' ');
 
     /**
-     * Cores da MAIS LONGA pra mais curta: "ROSA QUEIMADO" tem que sair inteira
-     * antes de "ROSA" comer só um pedaço e deixar "QUEIMADO" solto no nome.
+     * A COR — E TUDO O QUE VEM DEPOIS DELA.
+     *
+     * Nestes nomes (importados do site antigo) a cor MARCA O FIM da parte
+     * descritiva; o que sobra atrás é sufixo interno. Exemplos reais:
+     *
+     *   "T-shirt Feminina Plus Size Manga Curta Ref Vogue Preto LENE"
+     *   "T-Shirt Feminina Plus Size Manga Curta STITCH-004 Preto ANA"
+     *
+     * "LENE" e "ANA" não são marca (as duas são MARRIE) nem cor: são resto de
+     * cadastro. Apagar só a palavra da cor deixava esse rabo pendurado.
+     *
+     * Cores da MAIS LONGA pra mais curta: "ROSA QUEIMADO" tem que casar
+     * inteira antes de "ROSA" cortar no meio dela.
      */
     for (const cor of [...cores].sort((a, b) => b.length - a.length)) {
       const alvo = escapar(semAcento(cor).trim());
       if (alvo.length < 3) continue; // "PP", "GG" — arriscado demais
-      txt = txt.replace(new RegExp(`\\b${alvo}\\b`, 'gi'), ' ');
+      txt = txt.replace(new RegExp(`\\b${alvo}\\b.*$`, 'i'), ' ');
     }
 
     /**
