@@ -132,12 +132,43 @@ export class SiteCategoriasService {
     return null;
   }
 
+  /** Slugs com leitura de foco em voo — evita a mesma categoria disparar a
+   *  IA várias vezes quando chegam requisições simultâneas. */
+  private readonly focoEmVoo = new Set<string>();
+
+  /**
+   * Lê o recorte em SEGUNDO PLANO e grava quando terminar. Fire-and-forget de
+   * propósito: quem chamou já respondeu à cliente. Uma categoria por vez
+   * (guard `focoEmVoo`), e o resultado é gravado só se a foto ainda for a
+   * mesma — se a peça em destaque mudou no meio, o foco antigo não vale.
+   */
+  private agendarFoco(slug: string, url: string, nomeCategoria: string) {
+    if (this.focoEmVoo.has(slug)) return;
+    this.focoEmVoo.add(slug);
+    void (async () => {
+      try {
+        const foco = await this.corIa.detectarFoco(url, nomeCategoria);
+        await (this.prisma as any).siteCategoria.updateMany({
+          where: { slug, imagemUrl: url },
+          data: { focoX: foco.focoX, focoY: foco.focoY, focoZoom: foco.zoom },
+        });
+        this.logger.log(
+          `[categorias] foco de "${slug}" lido: ${foco.focoX.toFixed(2)}/${foco.focoY.toFixed(2)} zoom ${foco.zoom}`,
+        );
+        this.avisarSite();
+      } catch (e: any) {
+        this.logger.warn(`[categorias] foco de "${slug}" falhou: ${e?.message || e}`);
+      } finally {
+        this.focoEmVoo.delete(slug);
+      }
+    })();
+  }
+
   /**
    * Foto final + recorte de uma categoria: manual sempre manda; sem manual,
-   * resolve pelo automático e — só quando a REF em destaque MUDA — chama a
-   * IA de novo e cacheia o resultado na linha. Nunca lança: falha na IA ou
-   * na resolução automática cai pra "sem foto" (o card vira tipografia),
-   * nunca derruba a listagem inteira.
+   * resolve pelo automático. A foto é gravada na hora; o recorte é lido em
+   * segundo plano (ver `agendarFoco`). Nunca lança: falha na resolução cai
+   * pra "sem foto" (o card vira tipografia), nunca derruba a listagem.
    */
   private async resolverFotoEFoco(
     slug: string, nomeCategoria: string, atual: any,
@@ -162,24 +193,25 @@ export class SiteCategoriasService {
         };
       }
 
-      // Peça em destaque mudou (ou é a primeira vez): lê o foco e cacheia.
-      let foco: { focoX: number; focoY: number; zoom: number } | null = null;
-      try {
-        foco = await this.corIa.detectarFoco(auto.url, nomeCategoria);
-      } catch (e: any) {
-        this.logger.warn(`[categorias] foco automático falhou (${slug}): ${e?.message || e}`);
-      }
+      /**
+       * A FOTO É GRAVADA NA HORA; O FOCO VEM DEPOIS, FORA DA REQUISIÇÃO.
+       *
+       * Medido em produção (07/08): com a leitura de IA DENTRO da requisição,
+       * as 9 categorias disparavam 9 chamadas de visão em paralelo e só UMA
+       * terminava a tempo — as outras 8 morriam em timeout e ficavam com foco
+       * nulo pra sempre (cada visita tentava de novo e falhava de novo).
+       *
+       * Agora a foto sai imediatamente e o recorte é calculado em segundo
+       * plano: a primeira visita mostra a foto com enquadramento padrão, e a
+       * partir da próxima revalidação já sai com o close. Nenhuma cliente
+       * espera IA pra ver a vitrine.
+       */
       const salvo = await (this.prisma as any).siteCategoria.upsert({
         where: { slug },
-        create: {
-          slug, imagemUrl: auto.url, imagemDeRef: auto.ref, alt: auto.alt || null,
-          focoX: foco?.focoX ?? null, focoY: foco?.focoY ?? null, focoZoom: foco?.zoom ?? null,
-        },
-        update: {
-          imagemUrl: auto.url, imagemDeRef: auto.ref, alt: auto.alt || null,
-          focoX: foco?.focoX ?? null, focoY: foco?.focoY ?? null, focoZoom: foco?.zoom ?? null,
-        },
+        create: { slug, imagemUrl: auto.url, imagemDeRef: auto.ref, alt: auto.alt || null },
+        update: { imagemUrl: auto.url, imagemDeRef: auto.ref, alt: auto.alt || null },
       });
+      this.agendarFoco(slug, auto.url, nomeCategoria);
       return {
         imagemUrl: salvo.imagemUrl, alt: salvo.alt,
         focoX: salvo.focoX, focoY: salvo.focoY, focoZoom: salvo.focoZoom,
@@ -332,15 +364,6 @@ export class SiteCategoriasService {
     const anterior = atual.objectKey;
     const url = `${publico.replace(/\/$/, '')}/${key}`;
 
-    // Foto escolhida À MÃO: lê o foco na hora (mesmo motor do automático),
-    // pra não publicar uma foto sem o recorte de close aplicado.
-    let foco: { focoX: number; focoY: number; zoom: number } | null = null;
-    try {
-      foco = await this.corIa.detectarFoco(url, atual.nome || this.nomeDoSlug(atual.slug));
-    } catch (e: any) {
-      this.logger.warn(`[categorias] foco da foto manual falhou (${atual.slug}): ${e?.message || e}`);
-    }
-
     const salvo = await (this.prisma as any).siteCategoria.update({
       where: { id: atual.id },
       data: {
@@ -348,12 +371,16 @@ export class SiteCategoriasService {
         objectKey: key,
         // imagemDeRef=null MARCA foto manual — nunca é sobrescrita pelo automático.
         imagemDeRef: null,
-        focoX: foco?.focoX ?? null,
-        focoY: foco?.focoY ?? null,
-        focoZoom: foco?.zoom ?? null,
+        // Foco zerado: o da foto ANTERIOR não vale pra foto nova. A leitura
+        // vem logo abaixo, em segundo plano — quem subiu a foto não fica
+        // esperando a IA com a tela travada.
+        focoX: null,
+        focoY: null,
+        focoZoom: null,
         atualizadoPor: usuario ?? null,
       },
     });
+    this.agendarFoco(atual.slug, url, atual.nome || this.nomeDoSlug(atual.slug));
 
     // Só apaga a antiga DEPOIS que a nova está gravada (mesma regra dos banners).
     if (anterior) {

@@ -56,7 +56,16 @@ export async function generateMetadata({
 export default async function CategoryPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
   const meta = categoryMeta(slug);
-  const primeiraPagina = await fetchPrimeiraPagina({ categoria: slug, perPage: 24 });
+  // NOVIDADES é a ordem padrão de toda categoria (dono 07/08): a cliente que
+  // volta toda semana precisa ver o que ENTROU, não a mesma vitrine de sempre.
+  // ⚠️ Tem que casar com o `ordemPadrao` do CategoryListing abaixo — se as duas
+  // divergirem, a página 1 vinda do servidor (ordenada aqui) seria exibida como
+  // se fosse a ordem do cliente, e a cliente veria uma lista que não pediu.
+  const primeiraPagina = await fetchPrimeiraPagina({
+    categoria: slug,
+    perPage: 24,
+    ordenar: 'novidades',
+  });
 
   const trail = [
     { name: 'Início', path: '/' },
@@ -87,6 +96,8 @@ export default async function CategoryPage({ params }: { params: Promise<{ slug:
         <CategoryListing
           category={slug}
           categoryName={meta.name}
+          /* Mesma ordem do `fetchPrimeiraPagina` acima — ver comentário lá. */
+          ordemPadrao="novidades"
           /* Página 1 pronta no servidor: a peça vem no HTML em vez de esperar
              o JS + duas viagens à API (perf, 07/08). */
           primeiraPagina={primeiraPagina}
