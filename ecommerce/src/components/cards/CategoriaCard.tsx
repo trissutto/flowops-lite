@@ -139,13 +139,23 @@ export function CategoriaCard({
   // wrapper de fora — são dois elementos diferentes de propósito, senão os
   // dois `transform: scale()` brigam pelo mesmo estilo inline.
   const temFoco = data.focoX != null && data.focoY != null;
+  const zoom = data.focoZoom ?? 1.4;
   const estiloFoco: React.CSSProperties = temFoco
     ? {
         objectPosition: `${(data.focoX ?? 0.5) * 100}% ${(data.focoY ?? 0.4) * 100}%`,
-        transform: `scale(${data.focoZoom ?? 1.4})`,
+        transform: `scale(${zoom})`,
         transformOrigin: `${(data.focoX ?? 0.5) * 100}% ${(data.focoY ?? 0.4) * 100}%`,
       }
     : { objectPosition: 'center top' };
+
+  // O zoom acima é feito com CSS transform: scale() em cima da imagem já
+  // carregada — o navegador escolhe a resolução com base no `sizes` (tamanho
+  // do CARD), sem saber que ela ainda vai ser ampliada. Resultado: foto
+  // "sem definição" (dono 07/08) porque pede uma imagem pequena e estica.
+  // Corrige multiplicando o `sizes` pelo mesmo fator de zoom, pra pedir uma
+  // imagem com resolução suficiente pro tamanho final exibido.
+  const zoomFoco = temFoco ? zoom : 1;
+  const sizesFoco = `(max-width: 768px) ${Math.round(50 * zoomFoco)}vw, (max-width: 1024px) ${Math.round(33 * zoomFoco)}vw, ${Math.round(20 * zoomFoco)}vw`;
 
   return (
     <motion.div
@@ -164,7 +174,7 @@ export function CategoriaCard({
                 src={data.imagemUrl}
                 alt={data.alt || data.nome}
                 fill
-                sizes="(max-width: 768px) 50vw, (max-width: 1024px) 33vw, 16vw"
+                sizes={sizesFoco}
                 className="object-cover"
                 style={estiloFoco}
               />
