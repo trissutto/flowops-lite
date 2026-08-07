@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import Link from 'next/link';
 import { Heart, MapPin, MessageCircle, Ruler, ShoppingBag, Sparkles, Star } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { SimuladorFrete } from '@/components/commerce/SimuladorFrete';
@@ -278,13 +279,13 @@ export function BuyBox({
       <div id="seletor-tamanho" className="mt-9 scroll-mt-28">
         <div className="flex items-center justify-between">
           <p className="eyebrow text-ink">Tamanho</p>
-          <a
+          <Link
             href="/tamanhos/guia"
             className="inline-flex items-center gap-1.5 text-small text-ink-soft underline decoration-border underline-offset-4 transition-colors hover:text-ink"
           >
             <Ruler className="size-3.5" strokeWidth={1.75} />
             Guia de medidas
-          </a>
+          </Link>
         </div>
 
         {/* LURDS FIT AI — mata a objeção "será que serve?" antes do seletor */}

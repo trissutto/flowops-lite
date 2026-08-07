@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import Link from 'next/link';
 import { Section } from '@/components/layout/Section';
 import { Container } from '@/components/layout/Container';
 import { SectionTitle } from '@/components/sections/SectionTitle';
@@ -58,9 +59,9 @@ export default async function CategoriasPage() {
           <Container width="text" className="mt-12">
             <p className="text-center text-body text-ink-soft">
               Estamos organizando as categorias. Enquanto isso, veja{' '}
-              <a href="/novidades" className="link-underline text-ink">
+              <Link href="/novidades" className="link-underline text-ink">
                 as novidades da semana
-              </a>
+              </Link>
               .
             </p>
           </Container>
