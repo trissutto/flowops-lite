@@ -112,21 +112,30 @@ export class LojaCatalogService {
   private static readonly GRADE_DA_CASA = [46, 48, 50, 52, 54, 56, 58, 60];
 
   /**
-   * Devolve o rótulo NORMALIZADO se o tamanho for da grade da casa, ou `null`.
+   * OS NÚMEROS QUE UM RÓTULO COBRE, dentro da grade da casa. Fora dela, vazio.
    *
-   * ⚠️ Quem usa isto pra montar o filtro TEM que usar pra casar também: se a
-   * barra lateral oferece "46/48" e a comparação procura "46 48", o clique
-   * leva a zero peça — que é o pior desfecho possível pra um filtro.
+   *   "48"      → [48]
+   *   "46/48"   → [46, 48]   (e "46 48", "46-48" — o mesmo escrito de 3 jeitos)
+   *   "44", "G" → []          (rótulo herdado, não é o que a loja vende)
+   *
+   * ⚠️ É a MESMA função pro filtro e pra comparação, de propósito. Se a barra
+   * lateral for montada por um critério e o clique casado por outro, o filtro
+   * que a cliente acabou de clicar devolve zero peça.
+   *
+   * O filtro mostra só número SOLTO (decisão do dono, 06/08) — mas a peça
+   * marcada "46/48" continua aparecendo tanto no 46 quanto no 48, porque ela
+   * veste os dois. Tirar a dupla da lista sem isso faria 38 peças pararem de
+   * ser encontradas por tamanho nenhum.
    */
-  private tamanhoDaCasa(bruto?: string | null): string | null {
+  private numerosDaGrade(bruto?: string | null): number[] {
     const txt = String(bruto || '').trim().toUpperCase();
-    if (!txt) return null;
+    if (!txt) return [];
     // Sobrou letra depois de tirar dígito e separador? É "G7", "46A", "GG".
-    if (txt.replace(/[\d\s/\-]/g, '')) return null;
+    if (txt.replace(/[\d\s/\-]/g, '')) return [];
     const numeros = (txt.match(/\d+/g) ?? []).map(Number);
-    if (!numeros.length) return null;
-    if (!numeros.every((n) => LojaCatalogService.GRADE_DA_CASA.includes(n))) return null;
-    return numeros.join('/');
+    if (!numeros.length) return [];
+    if (!numeros.every((n) => LojaCatalogService.GRADE_DA_CASA.includes(n))) return [];
+    return numeros;
   }
 
   /**
@@ -793,17 +802,27 @@ export class LojaCatalogService {
     if (params.cor) pecas = pecas.filter((p) => p.cores.some((c) => norm(c.nome) === norm(params.cor)));
     if (params.tamanho) {
       /**
-       * Casa pelo rótulo NORMALIZADO (ver `tamanhoDaCasa`). A barra lateral
-       * oferece "46/48"; no ERP a mesma numeração está gravada como "46 48",
-       * "46-48" e "46/48". Comparar texto cru faria o filtro que a cliente
-       * acabou de clicar devolver zero peça.
+       * Casa por NÚMERO COBERTO (ver `numerosDaGrade`), não por texto.
+       *
+       * Quem clica em "46" quer o que veste 46 — inclusive a peça gravada como
+       * "46/48", "46 48" ou "46-48". Comparar o rótulo cru deixaria essas 38
+       * peças de fora de todo filtro de tamanho.
        */
-      const alvo = this.tamanhoDaCasa(params.tamanho) ?? norm(params.tamanho);
-      pecas = pecas.filter((p) =>
-        p.tamanhos.some(
-          (t) => (this.tamanhoDaCasa(t.label) ?? norm(t.label)) === alvo && t.disponivel,
-        ),
-      );
+      const numerosAlvo = this.numerosDaGrade(params.tamanho);
+      if (numerosAlvo.length) {
+        pecas = pecas.filter((p) =>
+          p.tamanhos.some(
+            (t) =>
+              t.disponivel &&
+              this.numerosDaGrade(t.label).some((n) => numerosAlvo.includes(n)),
+          ),
+        );
+      } else {
+        // Tamanho fora da grade (link antigo, busca colada): compara texto.
+        pecas = pecas.filter((p) =>
+          p.tamanhos.some((t) => norm(t.label) === norm(params.tamanho) && t.disponivel),
+        );
+      }
     }
     if (params.modelagem) pecas = pecas.filter((p) => norm(p.modelagem) === norm(params.modelagem));
     if (params.precoMin != null) pecas = pecas.filter((p) => p.preco >= Number(params.precoMin));
@@ -953,9 +972,10 @@ export class LojaCatalogService {
     for (const l of linhas) {
       if ((l.estoque || 0) <= 0) continue;
       conta(cores, l.cor);
-      // Só a grade da casa entra no filtro — e já normalizada, pra "46 48" e
-      // "46/48" virarem uma pílula só em vez de duas que dividem as peças.
-      conta(tamanhos, this.tamanhoDaCasa(l.tamanho));
+      // Só NÚMERO SOLTO no filtro: a peça marcada "46/48" conta pro 46 E pro
+      // 48, em vez de criar uma pílula própria que reparte as peças em duas
+      // listas e some da busca por número.
+      for (const n of this.numerosDaGrade(l.tamanho)) conta(tamanhos, String(n));
       if (!refsVistas.has(l.ref)) {
         refsVistas.add(l.ref);
         conta(marcas, l.marca);
