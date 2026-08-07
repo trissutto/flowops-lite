@@ -16,7 +16,7 @@ import {
   Shuffle, CreditCard, Boxes, CheckCircle2, Package2, Store,
   FileSearch, Truck, BarChart3, Percent, ArrowLeft,
   LayoutDashboard, Globe2, Settings, ShoppingCart, Tags, KeyRound, Map, Zap,
-  Shirt, GalleryHorizontal,
+  Shirt, GalleryHorizontal, ClipboardList,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import AdminShell, { type AdminNavItem } from '@/components/AdminShell';
@@ -49,6 +49,7 @@ const LOJA_ITEMS: LojaItem[] = [
   { href: '/retaguarda/remessas',             label: 'Remessas',       subtitle: 'Trânsito',    description: 'Caixas em rota',                tone: 'sky',    icon: Truck        },
   { href: '/cadastros/classificacao-produtos', label: 'Produtos Loja',  subtitle: 'Classificação', description: 'Básico/Moda + plus size',     tone: 'purple', icon: Tags         },
   { href: '/retaguarda/produto-master',       label: 'Produto (ficha)', subtitle: 'Tela master', description: 'REF → cor → grade · fotos · site', tone: 'purple', icon: Package2 },
+  { href: '/retaguarda/ficha-fila',           label: 'Fila da ficha',  subtitle: 'Site',        description: 'O que preencher primeiro, por venda', tone: 'purple', icon: ClipboardList },
   { href: '/cadastros/classificacao-peca',    label: 'Classificação Peça', subtitle: 'Cadastros', description: 'Ocasião · tecido · modelagem · coleção', tone: 'purple', icon: Shirt },
   { href: '/retaguarda/banners',              label: 'Banners',        subtitle: 'Vitrine',     description: 'Hero da home · faixas · tarja do topo', tone: 'purple', icon: GalleryHorizontal },
   { href: '/retaguarda/loja-frete',           label: 'Frete & Cupons', subtitle: 'Site',        description: 'Frete grátis · promocional · cupons', tone: 'sky',    icon: Truck        },

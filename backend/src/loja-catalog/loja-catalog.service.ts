@@ -99,6 +99,113 @@ export class LojaCatalogService {
   };
 
   /**
+   * A GRADE DA CASA — 46 ao 60, de dois em dois (decisão do dono, 06/08).
+   *
+   * O ERP carrega décadas de rótulo herdado: "42", "44", "G", "GG", "M", "P",
+   * "01", "24-29", "G7". Nenhum deles é numeração que a Lurd's vende hoje, e
+   * cada um vira uma pílula a mais na barra lateral — filtro que a cliente
+   * clica pra achar duas peças de acervo.
+   *
+   * Numeração DUPLA existe e é legítima ("46/48", "50/52"), mas chega escrita
+   * de três jeitos: com barra, com hífen e com espaço. Aqui viram um só.
+   */
+  private static readonly GRADE_DA_CASA = [46, 48, 50, 52, 54, 56, 58, 60];
+
+  /**
+   * Devolve o rótulo NORMALIZADO se o tamanho for da grade da casa, ou `null`.
+   *
+   * ⚠️ Quem usa isto pra montar o filtro TEM que usar pra casar também: se a
+   * barra lateral oferece "46/48" e a comparação procura "46 48", o clique
+   * leva a zero peça — que é o pior desfecho possível pra um filtro.
+   */
+  private tamanhoDaCasa(bruto?: string | null): string | null {
+    const txt = String(bruto || '').trim().toUpperCase();
+    if (!txt) return null;
+    // Sobrou letra depois de tirar dígito e separador? É "G7", "46A", "GG".
+    if (txt.replace(/[\d\s/\-]/g, '')) return null;
+    const numeros = (txt.match(/\d+/g) ?? []).map(Number);
+    if (!numeros.length) return null;
+    if (!numeros.every((n) => LojaCatalogService.GRADE_DA_CASA.includes(n))) return null;
+    return numeros.join('/');
+  }
+
+  /**
+   * O que a vitrine NÃO repete em toda peça (decisão do dono, 06/08).
+   *
+   * A loja inteira é feminina e plus size: dizer isso em cada título gasta a
+   * linha inteira do card com o que não diferencia nada, e empurra pra fora o
+   * que a cliente usa pra pedir a peça no WhatsApp — a referência.
+   */
+  private static readonly RUIDO_NO_NOME = [
+    'plus size', 'plus-size', 'plussize', 'feminina', 'feminino', 'fem',
+  ];
+
+  /**
+   * O nome como a cliente lê no card — venha da ficha, do cadastro ou do ERP.
+   *
+   * Passa em TODOS os caminhos de propósito: o título sujo não vinha só da
+   * descrição do ERP. "Regata Feminina Plus Size Ref 700979 Estampa Verde" é
+   * nome importado do WooCommerce, e nenhuma limpeza anterior o tocava.
+   *
+   * Nunca devolve vazio: se a limpeza comer o nome inteiro (peça cujo título
+   * era só "Blusa Feminina Plus Size Preto"), volta o original. Peça sem nome
+   * na vitrine é pior que peça com nome redundante.
+   */
+  private limparNomeVitrine(
+    nome: string | null | undefined,
+    ref: string,
+    cores: string[],
+    marca?: string | null,
+  ): string {
+    const original = String(nome || '').trim();
+    if (!original) return '';
+
+    const escapar = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const semAcento = (v: string) => v.normalize('NFD').replace(/[̀-ͯ]/g, '');
+    let txt = original;
+
+    // "Ref 700979", "REF: 700979" e a REF solta — ela vai pro card em campo
+    // próprio, em negrito, em vez de diluída no meio da frase.
+    txt = txt.replace(new RegExp(`\\bref\\s*:?\\s*${escapar(ref)}\\b`, 'gi'), ' ');
+    txt = txt.replace(new RegExp(`\\b${escapar(ref)}\\b`, 'gi'), ' ');
+    txt = txt.replace(/\bref\s*:?\s*\d{3,}\b/gi, ' ');
+
+    for (const ruido of LojaCatalogService.RUIDO_NO_NOME) {
+      txt = txt.replace(new RegExp(`\\b${escapar(ruido)}\\b`, 'gi'), ' ');
+    }
+
+    if (marca) txt = txt.replace(new RegExp(`\\b${escapar(marca)}\\b`, 'gi'), ' ');
+
+    /**
+     * Cores da MAIS LONGA pra mais curta: "ROSA QUEIMADO" tem que sair inteira
+     * antes de "ROSA" comer só um pedaço e deixar "QUEIMADO" solto no nome.
+     */
+    for (const cor of [...cores].sort((a, b) => b.length - a.length)) {
+      const alvo = escapar(semAcento(cor).trim());
+      if (alvo.length < 3) continue; // "PP", "GG" — arriscado demais
+      txt = txt.replace(new RegExp(`\\b${alvo}\\b`, 'gi'), ' ');
+    }
+
+    /**
+     * Qualificador de cor que ficou órfão. "Blusa Manga Curta Estampa
+     * Marinho" com a cor gravada só como "MARINHO" perde o "Marinho" e deixa
+     * "Estampa" pendurado no fim, qualificando o nada. Some só quando está no
+     * FIM: "Blusa Estampa Floral" não é o caso, e "Saia Midi" não é atingida.
+     */
+    const ORFAOS = /\s+(estampa|estampada?o?|mescla|claro?a?|escuro?a?|m[ée]dio?a?)$/i;
+    let limpo = txt.replace(/\s{2,}/g, ' ').trim();
+    while (ORFAOS.test(limpo)) limpo = limpo.replace(ORFAOS, '');
+
+    limpo = limpo
+      .replace(/\s{2,}/g, ' ')
+      .replace(/^[\s·,-]+/, '')
+      .replace(/[\s·,-]+$/, '')
+      .trim();
+
+    return limpo || original;
+  }
+
+  /**
    * A descrição CRUA do ERP virando nome de vitrine — sem a cor de outra peça.
    *
    * 🔴 Bug visto no pedido `#LP-000002` (06/08): a peça saiu como
@@ -380,16 +487,20 @@ export class LojaCatalogService {
        * A crua nunca entra inteira: ela carrega a cor de UMA variação, e isso
        * gruda "Preto" no nome de uma peça vinho.
        */
-      nome:
+      nome: this.limparNomeVitrine(
         nomeDaFicha ||
-        site?.nome ||
-        this.nomeDaDescricaoErp(
-          linhas[0]?.descricao,
+          site?.nome ||
+          this.nomeDaDescricaoErp(
+            linhas[0]?.descricao,
+            ref,
+            Array.from(cores.keys()),
+            linhas.find((l) => l.marca)?.marca,
+          ) ||
           ref,
-          Array.from(cores.keys()),
-          linhas.find((l) => l.marca)?.marca,
-        ) ||
         ref,
+        Array.from(cores.keys()),
+        linhas.find((l) => l.marca)?.marca,
+      ) || ref,
       descricaoCurta: site?.descricaoCurta ?? null,
       descricaoCompleta: descricaoDaFicha || site?.descricaoCompleta || null,
       marca: linhas.find((l) => l.marca)?.marca ?? null,
@@ -669,7 +780,20 @@ export class LojaCatalogService {
     }
     if (params.marca) pecas = pecas.filter((p) => norm(p.marca) === norm(params.marca));
     if (params.cor) pecas = pecas.filter((p) => p.cores.some((c) => norm(c.nome) === norm(params.cor)));
-    if (params.tamanho) pecas = pecas.filter((p) => p.tamanhos.some((t) => norm(t.label) === norm(params.tamanho) && t.disponivel));
+    if (params.tamanho) {
+      /**
+       * Casa pelo rótulo NORMALIZADO (ver `tamanhoDaCasa`). A barra lateral
+       * oferece "46/48"; no ERP a mesma numeração está gravada como "46 48",
+       * "46-48" e "46/48". Comparar texto cru faria o filtro que a cliente
+       * acabou de clicar devolver zero peça.
+       */
+      const alvo = this.tamanhoDaCasa(params.tamanho) ?? norm(params.tamanho);
+      pecas = pecas.filter((p) =>
+        p.tamanhos.some(
+          (t) => (this.tamanhoDaCasa(t.label) ?? norm(t.label)) === alvo && t.disponivel,
+        ),
+      );
+    }
     if (params.modelagem) pecas = pecas.filter((p) => norm(p.modelagem) === norm(params.modelagem));
     if (params.precoMin != null) pecas = pecas.filter((p) => p.preco >= Number(params.precoMin));
     if (params.precoMax != null) pecas = pecas.filter((p) => p.preco <= Number(params.precoMax));
@@ -818,7 +942,9 @@ export class LojaCatalogService {
     for (const l of linhas) {
       if ((l.estoque || 0) <= 0) continue;
       conta(cores, l.cor);
-      conta(tamanhos, l.tamanho);
+      // Só a grade da casa entra no filtro — e já normalizada, pra "46 48" e
+      // "46/48" virarem uma pílula só em vez de duas que dividem as peças.
+      conta(tamanhos, this.tamanhoDaCasa(l.tamanho));
       if (!refsVistas.has(l.ref)) {
         refsVistas.add(l.ref);
         conta(marcas, l.marca);
@@ -883,9 +1009,13 @@ export class LojaCatalogService {
       categorias: paraLista(categorias),
       marcas: paraLista(marcas),
       cores: paraLista(cores, { minimo: 3, teto: 16 }),
-      // Tamanho aceita mais opções na lista: é o filtro que a cliente plus
-      // size mais usa, e a grade legítima vai do 44 ao 60.
-      tamanhos: paraLista(tamanhos, { ordemNumerica: true, minimo: 3, teto: 16 }),
+      /**
+       * Tamanho não passa mais por corte de frequência: quem tira o ruído
+       * agora é a GRADE (`tamanhoDaCasa`), que é lista fechada. Manter o
+       * `minimo: 3` junto com ela sumiria com um 60 legítimo só por ele ter
+       * poucas peças — e é justamente a numeração maior que tem menos.
+       */
+      tamanhos: paraLista(tamanhos, { ordemNumerica: true, minimo: 1, teto: 24 }),
       modelagens: paraLista(modelagens),
       preco: {
         min: Number.isFinite(precoMin) ? Math.floor(precoMin) : 0,

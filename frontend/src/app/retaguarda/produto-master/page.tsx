@@ -270,6 +270,31 @@ export default function ProdutoMasterPage() {
   }, [busca, carregarPendencias]);
 
   /**
+   * CHEGOU DA FILA DA FICHA (`?busca=REF`) — já busca sozinho.
+   *
+   * Sem isto o botão "Preencher" da fila abriria a master vazia e a pessoa
+   * teria que digitar de novo a REF que acabou de clicar. Fila que não leva ao
+   * trabalho vira relatório, e relatório ninguém abre duas vezes.
+   *
+   * Lê de `window.location.search` em vez de `useSearchParams` de propósito:
+   * o hook exige Suspense no App Router e derruba o build da página inteira —
+   * aqui a leitura é uma vez, na montagem, num componente que já é client.
+   */
+  const [buscaDaUrl, setBuscaDaUrl] = useState<string | null>(null);
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search).get('busca')?.trim();
+    if (q && q.length >= 2) {
+      setBusca(q);
+      setBuscaDaUrl(q);
+    }
+  }, []);
+  useEffect(() => {
+    if (!buscaDaUrl || busca !== buscaDaUrl) return;
+    setBuscaDaUrl(null); // dispara uma vez só
+    void buscar();
+  }, [buscaDaUrl, busca, buscar]);
+
+  /**
    * Agrupa os SKUs em REF-BASE + MARCA → COR.
    *
    * BASE, não a REF do cadastro: no ERP a cor virou sufixo de REF na mão, e

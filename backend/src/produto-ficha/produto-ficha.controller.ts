@@ -29,6 +29,26 @@ export class ProdutoFichaController {
     return req?.user?.name || req?.user?.email || `user#${req?.user?.sub || '?'}`;
   }
 
+  /**
+   * GET /produto-ficha/fila — o que preencher primeiro (item 24).
+   *
+   * Também vem antes de `:ref`, senão "fila" seria lido como REF.
+   */
+  @Get('fila')
+  fila(
+    @Query('de') de?: string,
+    @Query('ate') ate?: string,
+    @Query('limite') limite?: string,
+    @Query('incluirCompletas') incluirCompletas?: string,
+  ) {
+    return this.svc.fila({
+      de: de || undefined,
+      ate: ate || undefined,
+      limite: limite ? Number(limite) : undefined,
+      incluirCompletas: incluirCompletas === '1' || incluirCompletas === 'true',
+    });
+  }
+
   // As rotas de grade vêm ANTES de `:ref` pra "grades" não ser lido como REF.
   @Get('grades')
   listGrades(@Query('incluirInativas') incluirInativas?: string) {

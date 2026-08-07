@@ -143,10 +143,29 @@ rodapé) e corrigi. Não são exceção — são amostra.
 
 ## E. Dados e operação (🟠)
 
-24. 🔴 **A ficha do CRM é o gargalo de tudo.** Título, descrição, tecido,
-    ocasião, modelagem, medidas e bolinha — o site inteiro depende dela, e o
-    catálogo tem milhares de REFs. Sem uma **fila de trabalho** ("as 50 peças
-    mais vendidas ainda sem ficha"), o preenchimento nunca converge.
+24. ✅ **A ficha do CRM é o gargalo de tudo — FILA ENTREGUE em 06/08.**
+    Título, descrição, tecido, ocasião, modelagem, medidas e bolinha: o site
+    inteiro depende dela.
+
+    **A medição que fecha o argumento:** das **525 peças publicadas, ZERO
+    tinham modelagem preenchida.** O filtro "Modelagem" não aparece na vitrine
+    por falta de DADO, não de código.
+
+    Tela nova `/retaguarda/ficha-fila` (`GET /produto-ficha/fila`):
+    - ordena por **venda** no período (De/Até), não por data de cadastro —
+      ficha vazia numa peça que ninguém procura não custa venda;
+    - peça **sem foto vai pro fim**: sem foto ela nem entra na vitrine;
+    - mostra **o que falta** por peça, separando crítico (nome, descrição,
+      tecido, bolinha) de importante (modelagem, ocasião, medidas,
+      elasticidade);
+    - barra de progresso com o denominador real, e **conta o que ficou de
+      fora** (limite do recorte, e peças publicadas sem marca — que não têm
+      ficha possível, porque a chave é REF+MARCA);
+    - botão "Preencher" abre a tela master **já buscada pela REF**.
+
+    A venda usa a MESMA definição do motor de comissão (finalizada, fora do
+    treino, sem MARCADO) — critério próprio faria a tela ranquear por um
+    número que não bate com o de nenhuma outra.
 25. 🟠 **Não há tela de saúde do catálogo.** Quantas REFs publicadas estão sem
     foto? Sem bolinha? Com preço divergente entre cores? Os três já são
     calculáveis — falta a tela.
@@ -171,3 +190,19 @@ voltam sozinhos.
 
 **Em paralelo, e é o que demora:** item 24. Enquanto a ficha não estiver
 preenchida, metade desta lista não tem o que exibir.
+
+---
+
+## O que já saiu desta lista (06/08, mesmo dia)
+
+| Item | O que era |
+|---|---|
+| 1–4 | Os quatro links do caminho da compra (login, termos, privacidade, guia de medidas) |
+| 9 | Catraca de link morto no `prebuild` — link novo derruba o build |
+| 10–11 | Produtos e depoimentos inventados fora do ar; home lê o catálogo real |
+| 21 | First Load JS medido (256 kB home/PDP, 200 kB compartilhado) |
+| 24 | Fila da ficha (`/retaguarda/ficha-fila`) |
+
+**Sobra o que dá mais trabalho e menos brilho:** os 60 links do menu (A2), as
+22 fotos de banco de imagem (12) e os itens de conversão 14–20. Nenhum deles
+some sozinho.

@@ -52,12 +52,225 @@ export interface FichaCorInput {
 export const SWATCH_TIPOS = ['cor', 'foto'] as const;
 const HEX_RGB = /^#[0-9A-Fa-f]{6}$/;
 
+/** Um buraco da ficha, do jeito que a tela mostra. */
+export interface FaltaDaFicha {
+  campo: string;
+  rotulo: string;
+  /** `true` = o site fica visivelmente pior sem isto. */
+  critico: boolean;
+}
+
 @Injectable()
 export class ProdutoFichaService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly atributos: AtributosPecaService,
   ) {}
+
+  /**
+   * FILA DE TRABALHO DA FICHA (item 24 de docs/MELHORIAS-SITE.md).
+   *
+   * O problema: o site inteiro depende da ficha (título, descrição, tecido,
+   * ocasião, modelagem, medidas, bolinha) e o catálogo tem milhares de REFs.
+   * Medido em 06/08 na produção: das **525 peças publicadas, ZERO tinham
+   * modelagem preenchida** — o filtro "Modelagem" nem aparecia na vitrine por
+   * falta de dado, não por falta de código.
+   *
+   * Preencher "o catálogo" é tarefa que ninguém começa. Preencher "estas 20,
+   * que venderam 340 peças no trimestre e estão sem descrição" é tarefa que
+   * acaba. A fila existe pra transformar uma na outra.
+   *
+   * A ORDEM é por VENDA, não por data de cadastro: a peça que sai é a que a
+   * cliente procura no site, e ficha vazia numa peça que ninguém procura não
+   * custa venda nenhuma. Peça sem foto fica no fim de propósito — sem foto ela
+   * nem entra na vitrine, então a ficha dela não muda nada hoje.
+   *
+   * ⚠️ A venda é somada por REF, não por REF+MARCA: `pdv_sale_items` não
+   * guarda marca. Quando a mesma REF foi reciclada entre dois fornecedores, as
+   * duas fichas herdam o total das duas. Isso ordena um pouco pra cima uma das
+   * peças — aceitável numa fila de prioridade, e o motivo de o número aparecer
+   * na tela como "unidades no período", não como relatório de vendas.
+   */
+  async fila(
+    params: { de?: string; ate?: string; limite?: number; incluirCompletas?: boolean } = {},
+  ) {
+    const limite = Math.min(Math.max(Number(params.limite) || 50, 1), 300);
+
+    // Recorte de tempo em De/Até (convenção da casa) — não em "últimos N dias".
+    // Padrão: os últimos 90 dias, que é uma estação de venda inteira.
+    const hoje = new Date();
+    const ate = params.ate ? new Date(`${params.ate}T23:59:59.999`) : hoje;
+    const de = params.de
+      ? new Date(`${params.de}T00:00:00.000`)
+      : new Date(ate.getTime() - 90 * 24 * 60 * 60 * 1000);
+    if (Number.isNaN(de.getTime()) || Number.isNaN(ate.getTime())) {
+      throw new BadRequestException('Datas inválidas');
+    }
+    if (de > ate) throw new BadRequestException('A data inicial é depois da final');
+    const desde = de;
+
+    /* 1) O universo é o que ESTÁ NO SITE — publicado. */
+    const publicadas: Array<{ ref: string }> = await (this.prisma as any).siteProduto.findMany({
+      where: { publicado: true },
+      select: { ref: true },
+    });
+    const refs = publicadas.map((p) => String(p.ref).trim().toUpperCase());
+    const periodo = { de: de.toISOString(), ate: ate.toISOString() };
+    if (!refs.length) {
+      return {
+        periodo, total: 0, comPendencia: 0, completas: 0,
+        semMarca: 0, naoMostradas: 0, itens: [],
+      };
+    }
+
+    /* 2) REF+MARCA reais do catálogo (a chave da ficha é o par). */
+    const variacoes: Array<{
+      ref: string; marca: string | null; cores: number; estoque: number; preco: number;
+    }> = await this.prisma.$queryRawUnsafe(
+      `SELECT UPPER(TRIM(p.ref))                        AS ref,
+              NULLIF(TRIM(p.marca), '')                 AS marca,
+              COUNT(DISTINCT NULLIF(TRIM(p.cor), ''))::int AS cores,
+              COALESCE(SUM(e.total), 0)::int            AS estoque,
+              COALESCE(MIN(NULLIF(p."vendaUn", 0)), 0)::float8 AS preco
+         FROM wincred_produtos p
+         LEFT JOIN (SELECT codigo, SUM(COALESCE(estoque, 0)) AS total
+                      FROM wincred_estoque GROUP BY codigo) e ON e.codigo = p.codigo
+        WHERE UPPER(TRIM(p.ref)) = ANY($1)
+        GROUP BY 1, 2`,
+      refs,
+    );
+
+    /**
+     * 3) Venda do período, por REF (ver a ressalva de marca no cabeçalho).
+     *
+     * A definição de "venda válida" é a MESMA do motor de comissão
+     * (`CommissionEngineService`): finalizada, fora do treino e sem MARCADO —
+     * marcação é "provar em casa", não venda. Inventar um critério próprio
+     * aqui faria esta tela ranquear por um número que não bate com o de
+     * nenhuma outra, e aí ninguém confia em nenhum dos dois.
+     */
+    const vendas: Array<{ ref: string; unidades: number }> = await this.prisma.$queryRawUnsafe(
+      `SELECT UPPER(TRIM(i.ref)) AS ref, COALESCE(SUM(i.qty), 0)::int AS unidades
+         FROM pdv_sale_items i
+         JOIN pdv_sales s ON s.id = i.sale_id
+        WHERE i.ref IS NOT NULL
+          AND UPPER(TRIM(i.ref)) = ANY($1)
+          AND s.finalized_at >= $2
+          AND s.finalized_at <= $3
+          AND s.status = 'finalized'
+          AND s.is_training = false
+          AND (s.payment_method IS NULL OR s.payment_method <> 'MARCADO')
+        GROUP BY 1`,
+      refs,
+      desde,
+      ate,
+    );
+    const vendaPorRef = new Map(vendas.map((v) => [v.ref, v.unidades]));
+
+    /* 4) Fichas e fotos que já existem. */
+    const fichas: any[] = await (this.prisma as any).produtoFicha.findMany({
+      where: { ref: { in: refs } },
+      include: { cores: true },
+    });
+    const fichaPorChave = new Map(
+      fichas.map((f) => [`${String(f.ref).toUpperCase()}|${String(f.marca).toUpperCase()}`, f]),
+    );
+
+    const fotos: Array<{ ref: string; cores: number }> = await this.prisma.$queryRawUnsafe(
+      `SELECT UPPER(TRIM(ref)) AS ref, COUNT(DISTINCT COALESCE(NULLIF(TRIM(cor), ''), '—'))::int AS cores
+         FROM product_photos WHERE UPPER(TRIM(ref)) = ANY($1) GROUP BY 1`,
+      refs,
+    );
+    const fotoPorRef = new Map(fotos.map((f) => [f.ref, f.cores]));
+
+    /* 5) O que falta em cada uma. */
+    const preenchido = (v: unknown) => String(v ?? '').trim().length > 0;
+    const listaCheia = (raw: unknown) => {
+      if (!raw) return false;
+      try {
+        const arr = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        return Array.isArray(arr) && arr.length > 0;
+      } catch {
+        return false;
+      }
+    };
+
+    /**
+     * Peça publicada SEM MARCA não tem ficha possível — a chave é REF+MARCA.
+     * Ela sai da fila, mas o número vai junto na resposta: cap silencioso vira
+     * peça esquecida pra sempre, porque ninguém procura o que a tela não conta.
+     */
+    const semMarca = variacoes.filter((v) => !v.marca).length;
+
+    const itens = variacoes
+      .filter((v) => v.marca)
+      .map((v) => {
+        const chave = `${v.ref}|${String(v.marca).toUpperCase()}`;
+        const f = fichaPorChave.get(chave);
+        const temFoto = (fotoPorRef.get(v.ref) ?? 0) > 0;
+
+        const faltas: FaltaDaFicha[] = [];
+        const exigir = (ok: boolean, campo: string, rotulo: string, critico: boolean) => {
+          if (!ok) faltas.push({ campo, rotulo, critico });
+        };
+
+        // Críticos: sem eles a vitrine mostra a peça pior do que ela é.
+        exigir(preenchido(f?.nomeCurto), 'nomeCurto', 'Nome curto', true);
+        exigir(preenchido(f?.descricao), 'descricao', 'Descrição de venda', true);
+        exigir(preenchido(f?.tecidoNome), 'tecido', 'Tecido', true);
+        // A bolinha é por COR: basta uma cor com foto e sem bolinha pra faltar.
+        const coresSemBolinha = ((f?.cores ?? []) as any[]).filter(
+          (c) => c.swatchTipo === 'cor' && !preenchido(c.corHex),
+        ).length;
+        exigir(temFoto && coresSemBolinha === 0, 'bolinha', 'Bolinha de cor', true);
+
+        // Importantes: alimentam filtro e recomendação, não a primeira olhada.
+        exigir(listaCheia(f?.modelagens), 'modelagens', 'Modelagem', false);
+        exigir(listaCheia(f?.ocasioes), 'ocasioes', 'Ocasião', false);
+        exigir(preenchido(f?.gradeMedidasId), 'medidas', 'Tabela de medidas', false);
+        exigir(preenchido(f?.elasticidade), 'elasticidade', 'Elasticidade', false);
+
+        const total = 8;
+        return {
+          ref: v.ref,
+          marca: v.marca,
+          cores: v.cores,
+          estoque: v.estoque,
+          preco: v.preco,
+          temFoto,
+          temFicha: !!f,
+          unidadesVendidas: vendaPorRef.get(v.ref) ?? 0,
+          faltas,
+          faltamCriticos: faltas.filter((x) => x.critico).length,
+          completude: Math.round(((total - faltas.length) / total) * 100),
+        };
+      });
+
+    const comPendencia = itens.filter((i) => i.faltas.length > 0);
+    const candidatos = params.incluirCompletas ? itens : comPendencia;
+
+    candidatos.sort((a, b) => {
+      // 1º) sem foto vai pro fim: hoje ela nem aparece na vitrine.
+      if (a.temFoto !== b.temFoto) return a.temFoto ? -1 : 1;
+      // 2º) quem vendeu mais primeiro — é o que a cliente procura no site.
+      if (b.unidadesVendidas !== a.unidadesVendidas) return b.unidadesVendidas - a.unidadesVendidas;
+      // 3º) empate (inclusive tudo zerado): quem tem mais buraco crítico.
+      if (b.faltamCriticos !== a.faltamCriticos) return b.faltamCriticos - a.faltamCriticos;
+      return b.estoque - a.estoque;
+    });
+
+    return {
+      periodo,
+      /** Publicadas com marca conhecida — o denominador do progresso. */
+      total: itens.length,
+      comPendencia: comPendencia.length,
+      completas: itens.length - comPendencia.length,
+      semMarca,
+      itens: candidatos.slice(0, limite),
+      /** Quantas ficaram de fora do recorte — a fila nunca "acaba" calada. */
+      naoMostradas: Math.max(0, candidatos.length - limite),
+    };
+  }
 
   /**
    * Chave da ficha = REF-BASE + MARCA.

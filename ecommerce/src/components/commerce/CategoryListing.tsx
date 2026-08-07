@@ -43,6 +43,21 @@ interface CategoryListingProps {
    * uma vitrine de novidades vazia por falta de cadastro é pior que nenhuma.
    */
   ordemPadrao?: SortOption;
+  /**
+   * Teto de peças da seleção. `/novidades` usa 50 (decisão do dono, 06/08):
+   * "novidade" é uma vitrine curada, não o catálogo inteiro reordenado — com
+   * 525 peças a 500ª tinha meses de loja e a palavra perdia o sentido.
+   *
+   * O corte é do lado de cá porque a ORDEM já vem do backend: as 50 primeiras
+   * de uma lista ordenada por data SÃO as 50 mais novas.
+   */
+  limiteTotal?: number;
+  /**
+   * Teto de preço da vitrine (as faixas "Até R$ 59,90" / "Até R$ 99,90").
+   * Vai pra consulta como propriedade da ROTA, não como filtro — ver
+   * `ProductQuery.tetoDePreco`.
+   */
+  tetoDePreco?: number;
 }
 
 /**
@@ -64,6 +79,8 @@ function CategoryListingInner({
   interruptions = [],
   mode = 'infinite',
   ordemPadrao = 'relevancia',
+  limiteTotal,
+  tetoDePreco,
 }: CategoryListingProps) {
   const state = useProductFilters({}, ordemPadrao);
   const [view, setView] = useState<'editorial' | 'grid'>('editorial');
@@ -78,7 +95,18 @@ function CategoryListingInner({
     queryFn: fetchFacetas,
     staleTime: 5 * 60_000,
   });
-  const groups = useMemo(() => filterGroups(category, facetas), [category, facetas]);
+  const groups = useMemo(() => {
+    const base = filterGroups(category, facetas);
+    if (!tetoDePreco) return base;
+    // Numa vitrine "Até R$ 59,90" o slider não pode ir até R$ 490: oferecer
+    // uma faixa que a rota vai ignorar faz a cliente arrastar e achar que o
+    // site travou.
+    return base.map((g) =>
+      g.id === 'preco' && g.range
+        ? { ...g, range: { min: g.range.min, max: Math.min(g.range.max, tetoDePreco) } }
+        : g,
+    );
+  }, [category, facetas, tetoDePreco]);
 
   // Filtro/ordenação novos → volta pra primeira página.
   useEffect(() => {
@@ -86,7 +114,7 @@ function CategoryListingInner({
   }, [state.filters, state.sort, debouncedSearch]);
 
   const query = useInfiniteQuery({
-    queryKey: ['products', category, state.filters, state.sort, debouncedSearch],
+    queryKey: ['products', category, state.filters, state.sort, debouncedSearch, tetoDePreco],
     initialPageParam: 1,
     queryFn: ({ pageParam }) =>
       fetchProducts({
@@ -96,18 +124,30 @@ function CategoryListingInner({
         filters: state.filters,
         page: pageParam,
         perPage: PER_PAGE,
+        tetoDePreco,
       }),
-    getNextPageParam: (last) => (last.hasMore ? last.page + 1 : undefined),
+    getNextPageParam: (last, todas) => {
+      if (!last.hasMore) return undefined;
+      // Chegou no teto da seleção: para de pedir página.
+      if (limiteTotal && todas.reduce((n, p) => n + p.items.length, 0) >= limiteTotal) {
+        return undefined;
+      }
+      return last.page + 1;
+    },
   });
 
   const pagesLoaded = query.data?.pages ?? [];
-  const total = pagesLoaded[0]?.total ?? 0;
+  const totalBruto = pagesLoaded[0]?.total ?? 0;
+  // O contador da barra tem que dizer o que a cliente PODE ver: anunciar 525
+  // e entregar 50 é a mesma promessa quebrada de um filtro que some com peça.
+  const total = limiteTotal ? Math.min(totalBruto, limiteTotal) : totalBruto;
   const totalPages = Math.max(1, Math.ceil(total / PER_PAGE));
 
-  const products: Product[] =
+  const carregados: Product[] =
     mode === 'infinite'
       ? pagesLoaded.flatMap((p) => p.items)
       : (pagesLoaded.find((p) => p.page === page)?.items ?? []);
+  const products = limiteTotal ? carregados.slice(0, limiteTotal) : carregados;
 
   const sentinelRef = useIntersection(
     () => {

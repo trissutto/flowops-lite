@@ -173,7 +173,7 @@ function paramsDosFiltros(filters: FilterState): Record<string, string> {
 /* ----------------------------------------------------------------- CONSULTA */
 
 export async function fetchProducts(query: ProductQuery = {}): Promise<Paginated<Product>> {
-  const { category, search, sort = 'relevancia', filters = {}, page = 1, perPage = 12 } = query;
+  const { category, search, sort = 'relevancia', filters = {}, page = 1, perPage = 12, tetoDePreco } = query;
 
   const params = new URLSearchParams({
     page: String(page),
@@ -181,6 +181,13 @@ export async function fetchProducts(query: ProductQuery = {}): Promise<Paginated
     ordenar: ORDENACAO[sort] ?? 'relevancia',
     ...paramsDosFiltros(filters),
   });
+  // O teto da vitrine SÓ APERTA: se a cliente já pediu um máximo menor pelo
+  // slider, o dela vale. Assim "Até R$ 59,90" nunca mostra peça de R$ 400 —
+  // nem depois de ela clicar em "Limpar".
+  if (tetoDePreco) {
+    const pedido = Number(params.get('precoMax'));
+    params.set('precoMax', String(Number.isFinite(pedido) && pedido > 0 ? Math.min(pedido, tetoDePreco) : tetoDePreco));
+  }
   if (category) params.set('categoria', category);
   if (search && search.trim().length >= 2) params.set('busca', search.trim());
 
@@ -248,14 +255,14 @@ export function filterGroups(category?: string, facetas?: Facetas | null): Filte
       });
     }
     grupos.push({ id: 'preco', label: 'Preço', type: 'range', defaultOpen: true, range });
-    if (facetas.cores?.length) {
-      grupos.push({
-        id: 'cor', label: 'Cor', type: 'swatch', defaultOpen: true,
-        options: facetas.cores.slice(0, 24).map((c) => ({
-          value: c.valor, label: c.valor, hex: hexDaCor(c.valor), count: c.qtd,
-        })),
-      });
-    }
+    /**
+     * SEM FILTRO DE COR (decisão do dono, 06/08).
+     *
+     * A peça tem uma página só e a cor é escolhida DENTRO dela, na bolinha.
+     * Filtrar por cor na barra lateral escondia a peça inteira por causa de
+     * uma variação — e a bolinha do filtro competia visualmente com a bolinha
+     * que de fato troca a cor, que é a que importa.
+     */
     if (facetas.modelagens?.length) {
       grupos.push({
         id: 'modelagem', label: 'Modelagem', type: 'checkbox',
@@ -283,20 +290,7 @@ export function filterGroups(category?: string, facetas?: Facetas | null): Filte
       })),
     },
     { id: 'preco', label: 'Preço', type: 'range', defaultOpen: true, range },
-    {
-      id: 'cor',
-      label: 'Cor',
-      type: 'swatch',
-      defaultOpen: true,
-      options: [
-        { value: 'preto', label: 'Preto', hex: '#1a1614' },
-        { value: 'off white', label: 'Off white', hex: '#f1eadf' },
-        { value: 'vinho', label: 'Vinho', hex: '#7a3b46' },
-        { value: 'areia', label: 'Areia', hex: '#d9cdb4' },
-        { value: 'verde', label: 'Verde', hex: '#4f7355' },
-        { value: 'azul', label: 'Azul', hex: '#2f5573' },
-      ],
-    },
+    // Cor NÃO entra aqui — ver o comentário no caminho com facetas acima.
     {
       id: 'tecido',
       label: 'Tecido',
