@@ -5,7 +5,6 @@ import { Section } from '@/components/layout/Section';
 import { SectionTitle } from '@/components/sections/SectionTitle';
 import { ProductCarousel } from '@/components/sections/ProductCarousel';
 import { LookShowcase } from '@/components/sections/LookShowcase';
-import { TestimonialCarousel } from '@/components/sections/TestimonialCarousel';
 import { VideoBlock } from '@/components/sections/VideoBlock';
 import { CTABanner } from '@/components/sections/CTABanner';
 import { EditorialCard, ImageGrid } from '@/components/sections/ImageGrid';
@@ -16,7 +15,6 @@ import { StoreCard } from '@/components/cards/StoreCard';
 import { InstagramCard } from '@/components/cards/InstagramCard';
 import { Button } from '@/components/ui/Button';
 import {
-  bestSellers,
   editorialGridItems,
   editorials,
   fabrics,
@@ -25,12 +23,11 @@ import {
   institutionalVideo,
   looks,
   manifesto,
-  newArrivals,
   occasions,
-  testimonials,
 } from '@/data/content';
 import { featuredStores, stores } from '@/data/stores';
 import { getHeroDaHome } from '@/services/banners';
+import { fetchVitrine } from '@/services/vitrine';
 import { buildMetadata, itemListSchema, jsonLdGraph, storeSchema } from '@/lib/seo';
 
 /**
@@ -63,8 +60,22 @@ export default async function HomePage() {
   // no ar (ou o backend estiver fora), volta pro estático sem quebrar a home.
   const hero = await getHeroDaHome();
 
+  /**
+   * 🔴 PEÇAS REAIS (06/08). Os dois carrosséis vinham de `data/content.ts` —
+   * catálogo inventado, com foto de banco de imagem. A vitrine principal do
+   * site não estava ligada ao estoque, e a cliente clicava numa "mais vendida"
+   * que a loja nunca teve.
+   *
+   * Em paralelo: são duas chamadas independentes, e esperar uma pela outra
+   * dobraria o tempo até a home renderizar.
+   */
+  const [chegouAgora, emDestaque] = await Promise.all([
+    fetchVitrine({ ordenar: 'novidades', limite: 12 }),
+    fetchVitrine({ ordenar: 'relevancia', limite: 12 }),
+  ]);
+
   const jsonLd = jsonLdGraph(
-    itemListSchema([...newArrivals, ...bestSellers], 'Destaques da home'),
+    itemListSchema([...chegouAgora, ...emDestaque], 'Destaques da home'),
     ...stores.map(storeSchema),
   );
 
@@ -117,7 +128,7 @@ export default async function HomePage() {
           align="left"
         />
         <div className="mt-14">
-          <ProductCarousel products={newArrivals} ariaLabel="Novidades da semana" />
+          <ProductCarousel products={chegouAgora} ariaLabel="Novidades da semana" />
         </div>
       </Section>
 
@@ -187,14 +198,26 @@ export default async function HomePage() {
       <Section width="wide" aria-labelledby="best-sellers-titulo">
         <SectionTitle
           id="best-sellers-titulo"
-          eyebrow="Aprovadas pelas clientes"
-          title="As mais amadas"
-          description="As peças que mais voltam pra sacola — e que a gente repõe sem parar."
-          cta={{ label: 'Ver mais vendidos', href: '/novidades/mais-vendidos' }}
+          /**
+           * ⚠️ Era "Aprovadas pelas clientes · As mais amadas · as peças que
+           * mais voltam pra sacola". NADA disso era verdade: os produtos eram
+           * inventados e a home não olha histórico de venda nenhum. Dizer "mais
+           * vendida" sem dado de venda é o mesmo tipo de mentira do depoimento
+           * fabricado — só menos óbvio.
+           *
+           * A ordenação por relevância É a curadoria (destaque > lançamento >
+           * estoque saudável), então "seleção da loja" descreve exatamente o
+           * que a cliente está vendo. Quando a home ler venda de verdade, o
+           * título pode voltar a falar de popularidade.
+           */
+          eyebrow="Seleção da loja"
+          title="Escolhidas a dedo"
+          description="As peças que a gente separou — as que vestem bem em mais gente e saem da arara mais rápido."
+          cta={{ label: 'Ver a loja inteira', href: '/novidades' }}
           align="left"
         />
         <div className="mt-14">
-          <ProductCarousel products={bestSellers} ariaLabel="Produtos mais vendidos" />
+          <ProductCarousel products={emDestaque} ariaLabel="Seleção da loja" />
         </div>
       </Section>
 
@@ -227,18 +250,28 @@ export default async function HomePage() {
         />
       </Section>
 
-      {/* 11 — DEPOIMENTOS */}
-      <Section tone="alt" width="wide" aria-labelledby="depoimentos-titulo">
-        <SectionTitle
-          id="depoimentos-titulo"
-          eyebrow="Quem já vestiu"
-          title="Altura, peso e o tamanho que ela levou"
-          description="A informação que ninguém mostra — e que resolve a dúvida de tamanho."
-        />
-        <div className="mt-14">
-          <TestimonialCarousel testimonials={testimonials} />
-        </div>
-      </Section>
+      {/*
+        11 — DEPOIMENTOS · REMOVIDO DO AR EM 06/08/2026
+
+        Esta seção mostrava avaliações assinadas por "Cliente Lurds", com
+        ALTURA, PESO e TAMANHO COMPRADO inventados, e cinco estrelas. Não era
+        placeholder de layout: estava no ar, com cara de prova social real, sob
+        o título "Altura, peso e o tamanho que ela levou".
+
+        Duas razões pra sair, e a segunda é a que pesa:
+
+        1. É publicidade enganosa (CDC). Avaliação fabricada é infração, não
+           licença poética.
+        2. O dado de corpo é EXATAMENTE o que faz a cliente plus size confiar.
+           Inventar justo esse número é abusar da dúvida que ela veio resolver
+           — e é o tipo de coisa que, descoberta, não custa uma venda: custa a
+           marca.
+
+        A seção VOLTA quando houver depoimento de cliente de verdade. A base já
+        permite pedir: todo pedido entregue tem CPF, peça e tamanho. O
+        componente `TestimonialCarousel` continua no repositório, pronto — o
+        que falta é o dado, não a tela.
+      */}
 
       {/* 12 — INSTAGRAM */}
       <Section width="wide" aria-labelledby="instagram-titulo">

@@ -138,7 +138,7 @@ export function UserMenu({ tone = 'dark' }: { tone?: Tone }) {
         </ul>
         <div className="border-t border-border p-4">
           <Link
-            href="/conta/entrar"
+            href="/conta"
             onClick={() => setOpen(false)}
             className="flex w-full items-center justify-center rounded-pill bg-ink px-5 py-3 text-[0.6875rem] font-medium tracking-[0.16em] text-light uppercase transition-colors hover:bg-primary-strong"
           >

@@ -8,7 +8,10 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "links:auditar": "node scripts/auditar-links.js",
+    "links:check": "node scripts/auditar-links.js --check",
+    "prebuild": "node scripts/auditar-links.js --check"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.5.7",

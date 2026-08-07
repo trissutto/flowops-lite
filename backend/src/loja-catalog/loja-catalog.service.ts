@@ -501,6 +501,34 @@ export class LojaCatalogService {
     return linhas.length ? linhas : null;
   }
 
+  /**
+   * As tabelas de medida ativas, prontas pro guia de tamanhos do site.
+   *
+   * Devolve só grade com LINHA — grade cadastrada e vazia vira tabela em
+   * branco na tela, que é pior que não ter a seção: a cliente conclui que a
+   * loja não sabe as próprias medidas.
+   */
+  async gradesMedidas() {
+    const grades: any[] = await (this.prisma as any).gradeMedidas
+      .findMany({ where: { ativo: true }, orderBy: { nome: 'asc' } })
+      .catch(() => []);
+
+    const itens = grades
+      .map((g) => {
+        let linhas: any[] = [];
+        try {
+          const v = JSON.parse(String(g.linhas || '[]'));
+          if (Array.isArray(v)) linhas = v;
+        } catch {
+          /* grade com JSON torto não derruba o guia inteiro */
+        }
+        return { nome: g.nome, observacao: g.observacao ?? null, linhas };
+      })
+      .filter((g) => g.linhas.length > 0);
+
+    return { itens };
+  }
+
   /** Carrega curadoria + ficha de caimento de um conjunto de REFs. */
   private async complementos(refs: string[]) {
     const [sites, fits, fotos, fichas] = await Promise.all([

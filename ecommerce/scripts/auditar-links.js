@@ -1,29 +1,49 @@
+#!/usr/bin/env node
 /**
- * AUDITORIA DE LINKS MORTOS do e-commerce.
+ * AUDITORIA DE LINKS MORTOS.
  *
- * Extrai todo href/redirect interno do código e compara com as rotas que
- * existem de fato em app/. Achei 3 links 404 por acidente hoje; isto responde
- * quantos são no total.
+ * Extrai todo `href` interno do código e compara com as rotas que existem de
+ * fato em `src/app`. Nasceu em 06/08/2026, quando três links 404 apareceram
+ * por acidente num mesmo dia — inclusive o botão de login do cabeçalho e os
+ * dois links legais ao lado do "Finalizar compra". A varredura completa achou
+ * 64.
+ *
+ * DOIS MODOS:
+ *
+ *   node scripts/auditar-links.js            → relatório completo
+ *   node scripts/auditar-links.js --check    → falha (exit 1) se PIOROU
+ *
+ * O `--check` compara com `links-mortos.baseline.json`. É uma CATRACA, não uma
+ * trava: os 60 que já existem não quebram o build (senão ninguém consegue
+ * trabalhar), mas nenhum link novo entra. Cada vez que alguém conserta um
+ * grupo, baixa a baseline — e ela nunca sobe.
+ *
+ * Por que catraca e não zero: exigir zero num débito de 60 faz a equipe
+ * desligar a verificação no primeiro dia. Catraca é o único formato de teste
+ * de dívida técnica que sobrevive à segunda semana.
  */
 const fs = require('fs');
 const path = require('path');
 
-const RAIZ = process.argv[2];
+// `slice(2)`: argv[0] é o executável do node e argv[1] é este script — os dois
+// contêm separador de caminho e seriam confundidos com a raiz do projeto.
+const ARGS = process.argv.slice(2);
+const RAIZ = ARGS.find((a) => !a.startsWith('-')) || path.join(__dirname, '..');
+const CHECK = ARGS.includes('--check');
 const APP = path.join(RAIZ, 'src', 'app');
 const SRC = path.join(RAIZ, 'src');
+const BASELINE = path.join(__dirname, 'links-mortos.baseline.json');
 
 /* ── 1) rotas que existem ─────────────────────────────────────────────── */
 const rotas = new Set(['/']);
 (function varrer(dir, url) {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (!e.isDirectory()) continue;
-    if (e.name === 'api') continue;
-    const nome = e.name;
+    if (!e.isDirectory() || e.name === 'api') continue;
     // (grupo) não vira segmento de URL
-    const seg = /^\(.+\)$/.test(nome) ? '' : `/${nome}`;
+    const seg = /^\(.+\)$/.test(e.name) ? '' : `/${e.name}`;
     const novo = url + seg;
-    const cheio = path.join(dir, nome);
-    if (fs.existsSync(path.join(cheio, 'page.tsx')) || fs.existsSync(path.join(cheio, 'page.ts'))) {
+    const cheio = path.join(dir, e.name);
+    if (['page.tsx', 'page.ts'].some((f) => fs.existsSync(path.join(cheio, f)))) {
       rotas.add(novo || '/');
     }
     varrer(cheio, novo);
@@ -53,33 +73,55 @@ const usos = new Map(); // href -> Set(arquivo)
   }
 })(SRC);
 
-/* ── 4) casa href com rota (respeitando [param]) ──────────────────────── */
+/* ── 4) casa href com rota (respeitando [param] e :param) ─────────────── */
+const casa = (alvoPartes, rota, curinga) => {
+  const rp = rota.split('/').filter(Boolean);
+  if (curinga) {
+    if (rp.length > alvoPartes.length) return false;
+  } else if (rp.length !== alvoPartes.length) return false;
+  return rp.every((s, i) => (curinga && (s.startsWith(':') || s.includes('*'))) || /^\[.+\]$/.test(s) || s === alvoPartes[i]);
+};
+
 const existe = (href) => {
   if (rotas.has(href) || redirecionadas.has(href)) return true;
   const partes = href.split('/').filter(Boolean);
-  for (const r of rotas) {
-    const rp = r.split('/').filter(Boolean);
-    if (rp.length !== partes.length) continue;
-    if (rp.every((s, i) => /^\[.+\]$/.test(s) || s === partes[i])) return true;
-  }
-  // redirect com :param ou wildcard
-  for (const r of redirecionadas) {
-    const rp = r.split('/').filter(Boolean);
-    if (rp.some((s) => s.startsWith(':') || s.includes('*'))) {
-      if (rp.length <= partes.length && rp.every((s, i) => s.startsWith(':') || s.includes('*') || s === partes[i])) return true;
-    }
-  }
+  for (const r of rotas) if (casa(partes, r, false)) return true;
+  for (const r of redirecionadas) if (casa(partes, r, true)) return true;
   return false;
 };
 
-const mortos = [...usos.entries()].filter(([h]) => !existe(h)).sort();
+const mortos = [...usos.entries()].filter(([h]) => !existe(h)).map(([h, a]) => [h, [...a]]).sort();
 
-console.log(`ROTAS EXISTENTES (${rotas.size}):`);
-console.log([...rotas].sort().join('  '));
-console.log();
-console.log(`REDIRECTS (${redirecionadas.size}): ${[...redirecionadas].sort().join('  ')}`);
-console.log();
-console.log(`\n🔴 LINKS QUE APONTAM PRO VAZIO: ${mortos.length}\n`);
-for (const [h, arquivos] of mortos) {
-  console.log(`${h.padEnd(38)} ← ${[...arquivos].join(', ')}`);
+/* ── 5) saída ─────────────────────────────────────────────────────────── */
+if (!CHECK) {
+  console.log(`ROTAS EXISTENTES (${rotas.size}):\n${[...rotas].sort().join('  ')}\n`);
+  console.log(`REDIRECTS (${redirecionadas.size}): ${[...redirecionadas].sort().join('  ')}\n`);
+  console.log(`\n🔴 LINKS QUE APONTAM PRO VAZIO: ${mortos.length}\n`);
+  for (const [h, arquivos] of mortos) console.log(`${h.padEnd(38)} ← ${arquivos.join(', ')}`);
+  process.exit(0);
 }
+
+const base = fs.existsSync(BASELINE) ? JSON.parse(fs.readFileSync(BASELINE, 'utf8')) : { links: [] };
+const conhecidos = new Set(base.links);
+const novos = mortos.map(([h]) => h).filter((h) => !conhecidos.has(h));
+const consertados = base.links.filter((h) => !mortos.some(([m]) => m === h));
+
+if (novos.length) {
+  console.error(`\n🔴 ${novos.length} LINK(S) NOVO(S) APONTANDO PRO VAZIO:\n`);
+  for (const h of novos) {
+    const arquivos = mortos.find(([m]) => m === h)[1];
+    console.error(`  ${h}`);
+    console.error(`     em: ${arquivos.join(', ')}`);
+  }
+  console.error(
+    `\nCrie a rota, aponte pro endereço certo, ou — se for dívida aceita —\n` +
+      `adicione em scripts/links-mortos.baseline.json explicando o porquê.\n`,
+  );
+  process.exit(1);
+}
+
+if (consertados.length) {
+  console.log(`✅ ${consertados.length} link(s) consertado(s): ${consertados.join(', ')}`);
+  console.log('   Baixe a baseline pra travar o ganho (a catraca só desce).');
+}
+console.log(`✅ Nenhum link morto novo. Dívida atual: ${mortos.length}.`);

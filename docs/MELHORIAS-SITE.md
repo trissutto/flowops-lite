@@ -116,10 +116,23 @@ rodapé) e corrigi. Não são exceção — são amostra.
 
 ## D. Velocidade (🟠)
 
-21. 🟠 **`framer-motion` em 37 componentes.** Animação em quase tudo, e a
-    maioria roda em client component. É o suspeito nº 1 do First Load JS acima
-    de 300 kB registrado em julho.
-    *AVALIAÇÃO — precisa de `next build` pra confirmar quanto é dele.*
+21. 🟠 **First Load JS — MEDIDO em 06/08** (rodei o build; a suspeita da
+    primeira versão desta lista virou número):
+
+    | Rota | First Load JS |
+    |---|---|
+    | `/` (home) | **256 kB** |
+    | `/produto/[slug]` | **256 kB** |
+    | `/novidades` | 253 kB |
+    | `/lojas` | 245 kB |
+    | resto | ~230 kB |
+    | **compartilhado por todas** | **200 kB** |
+
+    Melhor que os >300 kB registrados em julho, ainda acima do alvo de 200 kB.
+    **O gargalo é o compartilhado**: 200 dos 256 kB da home entram em TODA
+    página, então otimizar página a página quase não move o ponteiro.
+    `framer-motion` está em 37 componentes e é o suspeito — mas isso ainda é
+    *AVALIAÇÃO*: falta abrir o bundle pra confirmar quanto é dele.
 22. 🟠 **Medir antes de otimizar.** Não existe número de Core Web Vitals do site
     hoje. A regra do bloco J ("medir antes e depois de cada tag") não tem linha
     de base pra comparar.
