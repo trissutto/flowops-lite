@@ -209,12 +209,12 @@ export class FotoImportJobService {
           const coresNoAr = [...new Set([...r.coresComFoto, ...r.jaTinham])];
           const desfecho = await this.autoPublicar.aoImportarEmMassa(ref, coresNoAr);
           if (desfecho === 'publicada') publicadas += 1;
-          else if (desfecho === 'sem_estoque') semEstoque += 1;
+          else if (desfecho === 'fora_do_wc') semEstoque += 1;
 
           if (r.produtosEncontrados === 0) {
             problemas.push({ ref, motivo: 'site antigo não tem esta peça' });
-          } else if (desfecho === 'sem_estoque') {
-            problemas.push({ ref, motivo: 'tem foto, mas está sem estoque — fora do site' });
+          } else if (desfecho === 'fora_do_wc') {
+            problemas.push({ ref, motivo: 'tem foto, mas não está ativa no site antigo' });
           } else if (r.produtosWcSemCor.length) {
             problemas.push({ ref, motivo: `${r.produtosWcSemCor.length} produto(s) sem cor casada` });
           }

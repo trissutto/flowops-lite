@@ -44,6 +44,17 @@ export class MarcadosController {
     return { started: true };
   }
 
+  /**
+   * POST /pdv/marcados/reconciliar-presos — remendo pontual (07/08, caso
+   * Limeira): fecha marcados travados em 'puxado' cuja venda já finalizou.
+   * Roda na hora (não é fila) — é um lote de correção, não operação de rotina.
+   */
+  @Post('reconciliar-presos')
+  reconciliarPresos(@Req() req: any) {
+    this.requireAdmin(req);
+    return this.svc.reconciliarPuxadosOrfaos();
+  }
+
   /** GET /pdv/marcados/sync/status — contadores + último resultado. */
   @Get('sync/status')
   syncStatus(@Req() req: any) {

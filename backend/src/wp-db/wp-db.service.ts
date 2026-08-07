@@ -219,6 +219,27 @@ export class WpDbService implements OnModuleInit, OnModuleDestroy {
     return rows.map((r) => ({ sku: String(r.sku || ''), nome: String(r.nome || '') }));
   }
 
+  /**
+   * Só o que está NO AR no site antigo — `post_status = 'publish'`.
+   *
+   * Diferente de `listarTodosSkus`, que traz rascunho e privado de propósito
+   * (pra importar FOTO de peça que ainda não foi publicada lá). Aqui o
+   * critério é outro: o dono decidiu em 07/08 que "ativo no WooCommerce" é
+   * quem entra na vitrine nova. Rascunho é peça que ELE escolheu não mostrar,
+   * e essa escolha tem que atravessar a migração.
+   */
+  async listarSkusPublicados(): Promise<Array<{ sku: string; nome: string }>> {
+    if (!this.pool) return [];
+    const rows = await this.query<{ sku: string | null; nome: string | null }>(
+      `SELECT pm_sku.meta_value AS sku, p.post_title AS nome
+         FROM wp_postmeta pm_sku
+         JOIN wp_posts p ON p.ID = pm_sku.post_id AND p.post_type = 'product'
+        WHERE pm_sku.meta_key = '_sku'
+          AND p.post_status = 'publish'`,
+    );
+    return rows.map((r) => ({ sku: String(r.sku || ''), nome: String(r.nome || '') }));
+  }
+
   /** URL do site (cacheada) — prefixo das imagens do WordPress. */
   private async getSiteUrl(): Promise<string> {
     const now = Date.now();

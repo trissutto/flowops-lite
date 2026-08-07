@@ -39,6 +39,31 @@ export class AutoPublicarService {
   ) {}
 
   /**
+   * A REF é masculina/infantil pela descrição do ERP? Mesma regra usada em
+   * `loja-catalog.service.ts`, `product-native.service.ts`, `live-pdv` e
+   * `product-registration` — aqui evita que "publicar quem está ativo no
+   * WooCommerce" volte a marcar `site_produto.publicado=true` numa peça que
+   * a loja não vende como plus size feminino (achado 07/08: REF 12199
+   * "CALÇA MASCULINA CARGO" foi publicada assim).
+   */
+  private async ehMasculinoOuInfantil(ref: string): Promise<boolean> {
+    const [linha] = await this.prisma.$queryRawUnsafe<Array<{ achou: boolean }>>(
+      `SELECT EXISTS (
+         SELECT 1 FROM wincred_produtos
+          WHERE (UPPER(TRIM(ref)) = $1 OR UPPER(TRIM(ref)) LIKE $1 || ' %')
+            AND (
+              UPPER(COALESCE("descricaoCompleta", '')) LIKE '%MASCULIN%' OR
+              UPPER(COALESCE("descricaoCompleta", '')) LIKE '%INFANTIL%' OR
+              UPPER(COALESCE("nomeGrupo", '')) LIKE '%MASCULIN%' OR
+              UPPER(COALESCE("nomeGrupo", '')) LIKE '%INFANTIL%'
+            )
+       ) AS achou`,
+      ref,
+    );
+    return !!linha?.achou;
+  }
+
+  /**
    * IMPORTAÇÃO EM MASSA — publica, mas só o que tem ESTOQUE.
    *
    * 🔴 O buraco que isto fecha (achado 07/08 com o dono na tela): "Importar
@@ -59,21 +84,25 @@ export class AutoPublicarService {
   async aoImportarEmMassa(
     refBruta: string,
     cores: string[],
-  ): Promise<'publicada' | 'sem_estoque' | 'nada'> {
+  ): Promise<'publicada' | 'fora_do_wc' | 'nada'> {
     try {
       const ref = refBaseOf(refBruta);
       if (!ref || !cores.length) return 'nada';
 
-      const [linha] = await this.prisma.$queryRawUnsafe<Array<{ total: number }>>(
-        `SELECT COALESCE(SUM(e.estoque), 0)::int AS total
-           FROM wincred_produtos p
-           JOIN wincred_estoque e ON e.codigo = p.codigo
-          WHERE UPPER(TRIM(p.ref)) = $1 OR UPPER(TRIM(p.ref)) LIKE $1 || ' %'`,
-        ref,
-      );
-      if (!linha || linha.total <= 0) {
-        this.logger.log(`[auto-publicar] ${ref}: tem foto mas está sem estoque — fora do site`);
-        return 'sem_estoque';
+      if (await this.ehMasculinoOuInfantil(ref)) {
+        this.logger.log(`[auto-publicar] ${ref}: masculino/infantil pela descrição — fora da vitrine`);
+        return 'fora_do_wc';
+      }
+
+      /**
+       * ATIVO NO WOOCOMMERCE = entra (decisão do dono, 07/08). A lista vem
+       * cacheada porque o lote chama isto REF por REF e ela é uma query só no
+       * WordPress inteiro.
+       */
+      const noAr = await this.refsAtivasCacheadas();
+      if (noAr.size && !noAr.has(ref) && !noAr.has(refBaseOf(ref))) {
+        this.logger.log(`[auto-publicar] ${ref}: não está ativa no site antigo — fora da vitrine`);
+        return 'fora_do_wc';
       }
 
       for (const cor of cores) await this.aoSubirFoto(ref, cor);
@@ -82,6 +111,33 @@ export class AutoPublicarService {
       this.logger.warn(`[auto-publicar] massa ${refBruta}: ${e?.message || e}`);
       return 'nada';
     }
+  }
+
+  /**
+   * As REFs ativas no site antigo, em cache de 10 min.
+   *
+   * O lote processa REF por REF; sem cache seria uma varredura do WordPress
+   * inteiro por peça. Conjunto VAZIO significa "não consegui listar" — e aí
+   * `aoImportarEmMassa` deixa passar em vez de bloquear tudo: WordPress fora
+   * do ar não pode virar "nenhuma peça entra no site".
+   */
+  private cacheAtivas: { at: number; refs: Set<string> } | null = null;
+  private async refsAtivasCacheadas(): Promise<Set<string>> {
+    const TTL = 10 * 60_000;
+    if (this.cacheAtivas && Date.now() - this.cacheAtivas.at < TTL) return this.cacheAtivas.refs;
+    const refs = new Set<string>();
+    try {
+      for (const r of await this.wcImport.refsAtivasNoSiteAntigo()) {
+        const u = String(r).toUpperCase();
+        refs.add(u);
+        const base = refBaseOf(u);
+        if (base) refs.add(base);
+      }
+    } catch (e: any) {
+      this.logger.warn(`[auto-publicar] não consegui listar as ativas do WC: ${e?.message || e}`);
+    }
+    this.cacheAtivas = { at: Date.now(), refs };
+    return refs;
   }
 
   /**
@@ -96,9 +152,28 @@ export class AutoPublicarService {
    * peça no ar pra cliente ver, e ninguém deve descobrir que publicou
    * centenas de peças pelo log.
    */
-  async repararPassivo(): Promise<{
-    comFoto: number; jaNoAr: number; publicadas: number; semEstoque: number; falhas: number;
+  async repararPassivo(simular = false): Promise<{
+    simulado: boolean;
+    ativasNoWc: number; comFoto: number; jaNoAr: number;
+    publicadas: number; foraDoWc: number; falhas: number;
   }> {
+    /**
+     * CRITÉRIO: ATIVO NO WOOCOMMERCE (decisão do dono, 07/08).
+     *
+     * Trocou o filtro de estoque que eu tinha proposto. É melhor mesmo: o site
+     * antigo é o registro do que a loja escolheu vender online, e peça
+     * esgotada hoje volta amanhã — enquanto rascunho lá é decisão de não
+     * mostrar, e essa decisão tem que atravessar a migração.
+     */
+    const ativas = await this.wcImport.refsAtivasNoSiteAntigo();
+    const noAr = new Set<string>();
+    for (const r of ativas) {
+      const u = String(r).toUpperCase();
+      noAr.add(u);
+      const base = refBaseOf(u);
+      if (base) noAr.add(base);
+    }
+
     const fotos: Array<{ ref: string; cor: string | null }> =
       await this.prisma.$queryRawUnsafe(
         `SELECT DISTINCT UPPER(TRIM(ref)) AS ref, NULLIF(TRIM(cor), '') AS cor
@@ -110,29 +185,19 @@ export class AutoPublicarService {
       if (f.cor) coresPorRef.get(f.ref)!.push(String(f.cor).toUpperCase());
     }
 
-    const comEstoque: Array<{ ref: string }> = await this.prisma.$queryRawUnsafe(
-      `SELECT DISTINCT UPPER(TRIM(p.ref)) AS ref
-         FROM wincred_produtos p
-         JOIN (SELECT codigo, SUM(COALESCE(estoque,0)) AS total
-                 FROM wincred_estoque GROUP BY codigo) e ON e.codigo = p.codigo
-        WHERE p.ref IS NOT NULL AND TRIM(p.ref) <> '' AND e.total > 0`,
-    );
-    const temEstoque = new Set<string>();
-    for (const l of comEstoque) {
-      temEstoque.add(l.ref);
-      const base = refBaseOf(l.ref);
-      if (base) temEstoque.add(base);
-    }
-
     const publicados: Array<{ ref: string }> = await (this.prisma as any).siteProduto.findMany({
       where: { publicado: true }, select: { ref: true },
     });
     const jaPublicado = new Set(publicados.map((s) => String(s.ref).toUpperCase()));
 
-    let jaNoAr = 0, publicadas = 0, semEstoque = 0, falhas = 0;
+    let jaNoAr = 0, publicadas = 0, foraDoWc = 0, falhas = 0;
     for (const [ref, cores] of coresPorRef) {
       if (jaPublicado.has(ref)) { jaNoAr++; continue; }
-      if (!temEstoque.has(ref) && !temEstoque.has(refBaseOf(ref))) { semEstoque++; continue; }
+      if (!noAr.has(ref) && !noAr.has(refBaseOf(ref))) { foraDoWc++; continue; }
+      // Achado 07/08: REF 12199 "CALÇA MASCULINA CARGO" entrou pelo reparo do
+      // passivo. Mesma trava de `aoImportarEmMassa`.
+      if (await this.ehMasculinoOuInfantil(ref)) { foraDoWc++; continue; }
+      if (simular) { publicadas++; continue; }
       try {
         // Sem cor casada ainda assim publica a REF: a vitrine mostra a peça
         // com a foto genérica, que é melhor que peça invisível.
@@ -144,7 +209,10 @@ export class AutoPublicarService {
       }
     }
 
-    const resumo = { comFoto: coresPorRef.size, jaNoAr, publicadas, semEstoque, falhas };
+    const resumo = {
+      simulado: simular, ativasNoWc: ativas.length, comFoto: coresPorRef.size,
+      jaNoAr, publicadas, foraDoWc, falhas,
+    };
     this.logger.log(`[auto-publicar] reparo: ${JSON.stringify(resumo)}`);
     return resumo;
   }

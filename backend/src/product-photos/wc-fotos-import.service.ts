@@ -172,8 +172,20 @@ export class WcFotosImportService {
    * Lança erro com o MySQL do WP fora: fila vazia por indisponibilidade
    * PARECERIA "site antigo sem nada" — melhor parar com mensagem clara.
    */
-  async refsDoSiteAntigo(): Promise<string[]> {
-    const produtos = await this.produtosDoSiteAntigo();
+  /**
+   * As REFs que estão NO AR no site antigo (`post_status = 'publish'`).
+   *
+   * Critério do dono (07/08) pra decidir o que entra na vitrine nova:
+   * "publica todos que estão ativos no site WooCommerce". Rascunho e privado
+   * ficam de fora — são peças que ELE escolheu não mostrar, e a escolha
+   * atravessa a migração.
+   */
+  async refsAtivasNoSiteAntigo(): Promise<string[]> {
+    return this.refsDoSiteAntigo(true);
+  }
+
+  async refsDoSiteAntigo(somenteAtivas = false): Promise<string[]> {
+    const produtos = await this.produtosDoSiteAntigo(somenteAtivas);
     if (!produtos.length) {
       throw new BadRequestException(
         'Não consegui listar o site antigo (MySQL e REST do WordPress sem resposta) — tente de novo mais tarde.',
@@ -202,9 +214,13 @@ export class WcFotosImportService {
    * do dono (aconteceu no primeiro clique do "importar tudo" invertido,
    * 06/08). A REST é mais lenta (paginada), mas roda UMA vez por lote.
    */
-  private async produtosDoSiteAntigo(): Promise<Array<{ sku: string; nome: string }>> {
+  private async produtosDoSiteAntigo(
+    somenteAtivas = false,
+  ): Promise<Array<{ sku: string; nome: string }>> {
     try {
-      const doMysql = await this.wp.listarTodosSkus();
+      const doMysql = somenteAtivas
+        ? await this.wp.listarSkusPublicados()
+        : await this.wp.listarTodosSkus();
       if (doMysql.length) return doMysql;
       this.logger.warn('[wc-fotos] MySQL do WP vazio ou inativo — listando pela REST');
     } catch (e: any) {
@@ -219,7 +235,11 @@ export class WcFotosImportService {
         const res = await firstValueFrom(
           this.http.get(`${this.baseUrl}/products`, {
             auth: this.auth,
-            params: { per_page: 100, page, status: 'any', _fields: 'id,name,sku,status' },
+            params: {
+              per_page: 100, page,
+              status: somenteAtivas ? 'publish' : 'any',
+              _fields: 'id,name,sku,status',
+            },
             timeout: 30000,
           }),
         );

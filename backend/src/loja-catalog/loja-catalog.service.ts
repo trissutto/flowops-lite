@@ -301,6 +301,21 @@ export class LojaCatalogService {
    * SQL base das variações publicadas. Junta ERP + estoque somado + curadoria.
    * Estoque: SOMA de todas as lojas (o site vende do consolidado; a reserva
    * por loja entra na fase 2 junto com retirada em loja).
+   *
+   * 🔴 SÓ FEMININO/PLUS SIZE (corrigido 07/08). O espelho `wincred_produtos`
+   * cobre o CATÁLOGO INTEIRO desde que o filtro PLUS_SIZE foi tirado da
+   * sincronização (02/07) — inclusive linha masculina e infantil que a rede
+   * vende na loja física. Achado do dono: "CALÇA MASCULINA CARGO" apareceu na
+   * vitrine do site.
+   *
+   * Esta é a ÚNICA função que monta variação pro site (`listar`, `filtros`,
+   * `porSlug`, `relacionados` — todas passam por aqui), então o filtro entra
+   * uma vez só, na fonte, em vez de em cada tela que lê catálogo.
+   *
+   * A mesma regra de palavra-chave (MASCULIN/INFANTIL na descrição) já existe
+   * em três lugares — `product-native.service.ts`, `live-pdv.service.ts`,
+   * `product-registration.service.ts` — e nunca tinha chegado aqui, porque
+   * o site novo lê o espelho cru direto, não a tabela nativa curada.
    */
   /**
    * FAMÍLIA de uma descrição: a primeira palavra "de produto" que aparece.
@@ -378,7 +393,7 @@ export class LojaCatalogService {
       p.codigo                                    AS codigo,
       NULLIF(TRIM(p.cor), '')                     AS cor,
       NULLIF(TRIM(p.tamanho), '')                 AS tamanho,
-      NULLIF(TRIM(p.marca), '')                   AS marca,
+      NULLIF(TRIM(p.marca), '')                     AS marca,
       NULLIF(TRIM(p."nomeGrupo"), '')              AS categoria,
       NULLIF(TRIM(p."descricaoCompleta"), '')      AS descricao,
       COALESCE(p."vendaUn", 0)::float8             AS preco,
@@ -394,6 +409,10 @@ export class LojaCatalogService {
         FROM wincred_estoque GROUP BY codigo
     ) e ON e.codigo = p.codigo
     WHERE p.ref IS NOT NULL AND TRIM(p.ref) <> ''
+      AND UPPER(COALESCE(p."descricaoCompleta", '')) NOT LIKE '%MASCULIN%'
+      AND UPPER(COALESCE(p."descricaoCompleta", '')) NOT LIKE '%INFANTIL%'
+      AND UPPER(COALESCE(p."nomeGrupo", '')) NOT LIKE '%MASCULIN%'
+      AND UPPER(COALESCE(p."nomeGrupo", '')) NOT LIKE '%INFANTIL%'
   `;
 
   /**

@@ -128,6 +128,61 @@ export class BolinhaAutoService {
     return !!achou;
   }
 
+  /**
+   * PINTAR TODAS AGORA — pedido do dono (07/08): "pode pintar todas".
+   *
+   * A varredura de fundo faz 4 cores a cada 90s (160/hora): ela é rede de
+   * segurança pro que pinga, não mutirão. Com centenas paradas depois da
+   * importação em massa, alcançar levaria a noite inteira.
+   *
+   * Aqui o ritmo é outro (`LOTE_PARALELO` por vez) e o gatilho é humano — a
+   * pintura chama IA por foto, e disparar isso sozinho num deploy seria custo
+   * que ninguém pediu.
+   *
+   * Também **zera as desistências**: `falhas` é memória do processo, e uma cor
+   * que falhou 3× por instabilidade ficava fora da fila até o próximo deploy.
+   * Quem clica no botão está justamente pedindo pra tentar de novo.
+   */
+  async pintarTodas(): Promise<{ pendentesAntes: number; pintadas: number; falharam: number }> {
+    this.falhas.clear();
+    const LOTE_PARALELO = 4;
+    const TETO = 5000; // trava de segurança: nunca é um loop infinito
+    let pintadas = 0, falharam = 0;
+
+    const { pendentes: pendentesAntes } = await this.status();
+
+    while (pintadas + falharam < TETO) {
+      const fila = await this.pendentes(LOTE_PARALELO);
+      if (!fila.length) break;
+
+      const desfechos = await Promise.all(
+        fila.map(async ({ ref, cor }) => {
+          const antes = await this.temBolinha(ref, cor);
+          await this.importador.pintarBolinha(ref, cor);
+          return { chave: `${ref}|${cor}`, ok: !antes && (await this.temBolinha(ref, cor)) };
+        }),
+      );
+
+      const acertou = desfechos.filter((d) => d.ok).length;
+      pintadas += acertou;
+      falharam += desfechos.length - acertou;
+      this.pintadas += acertou;
+
+      /**
+       * ⚠️ SAÍDA OBRIGATÓRIA: se o lote inteiro falhou, `pendentes()` devolve
+       * exatamente as mesmas cores no próximo giro — e o laço rodaria até o
+       * teto queimando chamada de IA à toa. Falhou tudo, para.
+       */
+      if (acertou === 0) {
+        this.logger.warn('[bolinha-auto] mutirão parou: um lote inteiro falhou');
+        break;
+      }
+    }
+
+    this.logger.log(`[bolinha-auto] mutirão: ${pintadas} pintada(s), ${falharam} falha(s)`);
+    return { pendentesAntes, pintadas, falharam };
+  }
+
   /** Quanto falta — pra tela mostrar progresso em vez de "confia". */
   async status() {
     const [linha] = await this.prisma.$queryRawUnsafe<Array<{ total: number }>>(

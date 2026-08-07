@@ -4621,8 +4621,8 @@ model FotoImportJob {
   /// Foi pro site. A importacao NAO publicava (07/08): 1.172 REFs ganharam
   /// foto e nenhuma aparecia na vitrine nem na busca.
   publicadas   Int      @default(0)
-  /// Ganhou foto mas ficou fora do site por estar sem estoque. Contado pra
-  /// nao virar peca sumida em silencio.
+  /// Ganhou foto mas ficou fora do site por NAO estar ativa no WooCommerce
+  /// (rascunho la = decisao de nao mostrar). Contado pra nao sumir calado.
   semEstoque   Int      @default(0) @map("sem_estoque")
   /// JSON: [{ ref, motivo }] — o que não deu certo, pra revisão manual.
   problemas    String?  @db.Text

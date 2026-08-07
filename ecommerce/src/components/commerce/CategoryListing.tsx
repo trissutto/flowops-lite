@@ -38,9 +38,10 @@ interface CategoryListingProps {
   mode?: 'infinite' | 'pages';
   /**
    * Ordenação inicial. A cliente continua podendo trocar — isto só decide o
-   * que ela vê ao chegar. `/novidades` usa 'novidades' pra listar o que entrou
-   * por último SEM depender da flag `lancamento` estar marcada peça a peça:
-   * uma vitrine de novidades vazia por falta de cadastro é pior que nenhuma.
+   * que ela vê ao chegar. Sem passar nada, o PADRÃO é 'novidades' (decisão do
+   * dono, 07/08: "sempre deixe o primeiro filtro como novidades em todas as
+   * telas") — `/categoria/[slug]` caía em 'relevância' por só não ter
+   * declarado a prop, e devolvia a mesma ordem crua do banco toda vez.
    */
   ordemPadrao?: SortOption;
   /**
@@ -92,7 +93,7 @@ function CategoryListingInner({
   categoryName,
   interruptions = [],
   mode = 'infinite',
-  ordemPadrao = 'relevancia',
+  ordemPadrao = 'novidades',
   limiteTotal,
   tetoDePreco,
   primeiraPagina,
