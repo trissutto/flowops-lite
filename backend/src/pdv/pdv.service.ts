@@ -17,6 +17,7 @@ import { ConveniosService } from '../convenios/convenios.service';
 import { validateMinLevel } from '../auth/auth-levels.util';
 import * as crypto from 'crypto';
 import { CashbackService } from '../cashback/cashback.service';
+import { MarcadosService } from './marcados.service';
 
 /**
  * PdvService — frente de caixa (MVP).
@@ -46,6 +47,7 @@ export class PdvService {
     private readonly accessPolicy: AccessPolicyService,
     private readonly convenios: ConveniosService,
     private readonly cashback: CashbackService,
+    private readonly marcados: MarcadosService,
   ) {}
 
   /**
@@ -2665,33 +2667,57 @@ export class PdvService {
       .map((s: string) => Number(s.trim()))
       .filter((n: number) => Number.isFinite(n) && n > 0);
     if (!regs.length) return { ok: true };
+
+    /**
+     * 🔴 O FLOW FECHA SEMPRE — o Giga é réplica, não pré-requisito (achado
+     * 07/08, caso Limeira: venda a crediário finalizou certinho e a peça
+     * continuou aparecendo como marcada).
+     *
+     * Antes, com `ERP_WRITE_ENABLED=false` (ou o DELETE no Giga falhando),
+     * a função inteira retornava `{ok:true}` SEM NUNCA atualizar
+     * `Marcado.status` no Postgres — a marcação de "fechado" morava dentro
+     * do mesmo bloco que escrevia no Giga. Resultado: venda 100% finalizada,
+     * cliente já com o carnê na mão, e o Flow (a fonte da verdade) continuava
+     * achando que a peça estava "puxado" pra sempre. Ninguém sem escrita no
+     * Giga tinha como fechar isso.
+     *
+     * Agora: o Flow fecha primeiro e incondicional. O DELETE no Giga
+     * continua tentado (é réplica/backup, não bloqueia nada) — se falhar,
+     * só entra numa fila de retry própria (`marcado_remover`), a mesma que
+     * "Devolver ao estoque" já usa. A peça já está fechada no Flow desde já.
+     */
+    const registrosGiga = regs.map((n) => BigInt(n));
+    try {
+      const r = await (this.prisma as any).marcado.updateMany({
+        where: { registroGiga: { in: registrosGiga }, status: { in: ['ativo', 'puxado'] } },
+        data: { status: 'fechado', saleId: sale.id, fechadoAt: new Date() },
+      });
+      this.logger.log(`[pdv→marcados] Venda ${sale.id}: ${r.count} marcado(s) fechado(s) no Flow.`);
+    } catch (e: any) {
+      // Isto é o dado que a tela lê — se não gravar, a venda tem que
+      // reconhecer o problema, não fingir sucesso.
+      return { ok: false, error: `Flow: ${e?.message || e}` };
+    }
+
     if (!this.erp.isWriteEnabled) {
       this.logger.warn(
-        `[pdv→marcados] Venda ${sale.id}: ERP_WRITE_ENABLED=false — marcados ${regs.join(',')} NÃO fechados no Wincred.`,
+        `[pdv→marcados] Venda ${sale.id}: ERP_WRITE_ENABLED=false — marcados ${regs.join(',')} fechados só no Flow (Giga não é tocado).`,
       );
       return { ok: true };
     }
-    const falhas: string[] = [];
     for (const reg of regs) {
       const r = await this.erp.deleteCaixaMarcadoRow({ registro: reg });
       if (r.success) {
-        this.logger.log(`[pdv→marcados] Venda ${sale.id}: marcado REGISTRO=${reg} fechado (linha removida).`);
+        this.logger.log(`[pdv→marcados] Venda ${sale.id}: marcado REGISTRO=${reg} fechado no Giga (linha removida).`);
       } else if (/Nenhuma linha/i.test(r.error || '')) {
         // Já fechado num retry anterior (ou devolvido) — idempotente, segue.
       } else {
-        falhas.push(`REG ${reg}: ${r.error || 'falha'}`);
-        continue;
+        // Réplica falhou — fila própria de retry, igual "Devolver ao estoque".
+        // NÃO derruba o resultado da venda: o Flow já fechou, o que falta é
+        // só o Giga alcançar.
+        await this.marcados.enfileirarRemocaoMarcadoPublico(reg, r.error || 'falha no DELETE');
       }
-      // Espelho nativo acompanha na hora (leituras já saem daqui). Fecha tanto
-      // 'ativo' quanto 'puxado' (a peça vai virar venda de verdade).
-      try {
-        await (this.prisma as any).marcado.updateMany({
-          where: { registroGiga: BigInt(reg), status: { in: ['ativo', 'puxado'] } },
-          data: { status: 'fechado', saleId: sale.id, fechadoAt: new Date() },
-        });
-      } catch { /* sync horário reconcilia */ }
     }
-    if (falhas.length) return { ok: false, error: falhas.join(' | ') };
     return { ok: true };
   }
 

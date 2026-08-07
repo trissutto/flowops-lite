@@ -458,6 +458,68 @@ export class MarcadosService {
    * faria a cliente aparecer devendo uma peça que ela já trouxe de volta — por
    * isso a fila insiste, em vez de mandar a vendedora "resolver no Wincred".
    */
+  /**
+   * RECONCILIAÇÃO — fecha os marcados que ficaram "puxado" presos de uma
+   * venda que JÁ FINALIZOU (07/08, caso Limeira). Existiam porque
+   * `erpStepFecharMarcados` (antes do conserto de hoje) só fechava o status
+   * nativo se a escrita no Giga também acontecesse — venda 100% ok, marcado
+   * preso pra sempre. Isto é o remendo pro que já ficou preso; o conserto da
+   * causa é em `PdvService.erpStepFecharMarcados`.
+   *
+   * Escopo deliberadamente estreito: só toca `status='puxado'` cuja
+   * `PdvSale` já está `finalized` — nunca uma venda `open`/`cancelled`, onde
+   * "puxado" pode ainda ser legítimo ou precisar voltar pro estoque.
+   */
+  async reconciliarPuxadosOrfaos(): Promise<{ verificados: number; fechados: number; erros: string[] }> {
+    const presos: any[] = await (this.prisma as any).marcado.findMany({
+      where: { status: 'puxado', saleId: { not: null } },
+      select: { id: true, registroGiga: true, saleId: true },
+      take: 500,
+    });
+    if (!presos.length) return { verificados: 0, fechados: 0, erros: [] };
+
+    const saleIds = [...new Set(presos.map((p) => p.saleId).filter(Boolean))];
+    const vendas: any[] = await (this.prisma as any).pdvSale.findMany({
+      where: { id: { in: saleIds } },
+      select: { id: true, status: true },
+    });
+    const statusPorVenda = new Map(vendas.map((v) => [v.id, v.status]));
+
+    let fechados = 0;
+    const erros: string[] = [];
+    for (const m of presos) {
+      if (statusPorVenda.get(m.saleId) !== 'finalized') continue;
+      try {
+        await (this.prisma as any).marcado.update({
+          where: { id: m.id },
+          data: { status: 'fechado', fechadoAt: new Date() },
+        });
+        fechados++;
+        if (m.registroGiga != null && this.erp.isWriteEnabled) {
+          const r = await this.erp.deleteCaixaMarcadoRow({ registro: Number(m.registroGiga) });
+          if (!r.success && !/Nenhuma linha/i.test(r.error || '')) {
+            await this.enfileirarRemocaoMarcado(Number(m.registroGiga), r.error || 'falha no DELETE');
+          }
+        }
+      } catch (e: any) {
+        erros.push(`marcado ${m.id} (venda ${m.saleId}): ${e?.message || e}`);
+      }
+    }
+    this.logger.log(`[marcados.reconciliar] ${presos.length} preso(s) verificado(s), ${fechados} fechado(s)`);
+    return { verificados: presos.length, fechados, erros };
+  }
+
+  /**
+   * Mesma fila, chamada de FORA deste service — hoje só por
+   * `PdvService.erpStepFecharMarcados` (07/08), pra "puxar pra venda →
+   * finalizar" ter a mesma rede de segurança que "Devolver ao estoque" já
+   * tinha. Nome feio de propósito: existe só pra não duplicar a lógica de
+   * enfileirar, não é uma API pra crescer.
+   */
+  async enfileirarRemocaoMarcadoPublico(registro: number, erro: string): Promise<void> {
+    return this.enfileirarRemocaoMarcado(registro, erro);
+  }
+
   private async enfileirarRemocaoMarcado(registro: number, erro: string): Promise<void> {
     try {
       await (this.prisma as any).erpOutbox.create({

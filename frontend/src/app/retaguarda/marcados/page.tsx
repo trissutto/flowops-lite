@@ -10,7 +10,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Tag, Loader2, RefreshCw, ChevronDown, ChevronRight, Search, Trash2, X, Lock } from 'lucide-react';
+import { ArrowLeft, Tag, Loader2, RefreshCw, ChevronDown, ChevronRight, Search, Trash2, X, Lock, Wrench } from 'lucide-react';
 import { api } from '@/lib/api';
 
 const brl = (n: number) =>
@@ -82,6 +82,32 @@ export default function RetaguardaMarcadosPage() {
   const [abertos, setAbertos] = useState<Set<string>>(new Set());
   const [baixando, setBaixando] = useState<Grupo | null>(null);
   const [statusFiltro, setStatusFiltro] = useState<string>('ativo');
+  const [reconciliando, setReconciliando] = useState(false);
+  const [reconciliado, setReconciliado] = useState<{ verificados: number; fechados: number; erros: string[] } | null>(null);
+
+  /**
+   * REMENDO PONTUAL (07/08, caso Limeira): peça puxada pro PDV, vendida
+   * (inclusive crediário) e finalizada — mas o marcado ficava "puxado" pra
+   * sempre porque o fechamento nativo dependia da escrita no Giga também
+   * acontecer. A causa já foi corrigida no backend; isto aqui fecha o que já
+   * tinha ficado preso ANTES do conserto.
+   */
+  async function reconciliarPresos() {
+    setReconciliando(true);
+    setReconciliado(null);
+    try {
+      const r = await api<{ verificados: number; fechados: number; erros: string[] }>(
+        '/pdv/marcados/reconciliar-presos',
+        { method: 'POST' },
+      );
+      setReconciliado(r);
+      if (r.fechados > 0) void carregar();
+    } catch (e: any) {
+      setReconciliado({ verificados: 0, fechados: 0, erros: [e?.message || 'falha'] });
+    } finally {
+      setReconciliando(false);
+    }
+  }
 
   useEffect(() => { api<any[]>('/stores').then((r) => setLojas(r || [])).catch(() => {}); }, []);
 
@@ -167,11 +193,29 @@ export default function RetaguardaMarcadosPage() {
             <h1 className="font-bold text-lg">Marcados por cliente</h1>
             <p className="text-xs text-slate-500">Tudo que está &quot;em marca&quot; (provar em casa) na rede — clique na cliente pra abrir as peças</p>
           </div>
+          <button onClick={() => reconciliarPresos()} disabled={reconciliando}
+            title="Fecha peça que foi vendida (venda já finalizada) mas ficou presa como 'puxado'"
+            className="rounded-lg border border-[#E7E2D8] px-3 py-2 text-sm font-bold text-slate-600 hover:bg-slate-50 flex items-center gap-1.5 disabled:opacity-50">
+            {reconciliando ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wrench className="w-4 h-4" />}
+            Destravar vendidas presas
+          </button>
           <button onClick={() => carregar()} disabled={loading}
             className="rounded-lg border border-[#E7E2D8] px-3 py-2 text-sm font-bold text-slate-600 hover:bg-slate-50 flex items-center gap-1.5 disabled:opacity-50">
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> Atualizar
           </button>
         </div>
+        {reconciliado && (
+          <div className="max-w-5xl mx-auto px-4 pb-3 -mt-1">
+            <div className={`rounded-lg border px-3 py-2 text-xs ${reconciliado.erros.length ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-emerald-50 border-emerald-200 text-emerald-800'}`}>
+              {reconciliado.verificados === 0
+                ? 'Nenhuma peça presa encontrada.'
+                : <>Verificadas <strong>{reconciliado.verificados}</strong> · fechadas <strong>{reconciliado.fechados}</strong></>}
+              {reconciliado.erros.length > 0 && (
+                <> · {reconciliado.erros.length} erro(s): {reconciliado.erros.slice(0, 3).join(' | ')}</>
+              )}
+            </div>
+          </div>
+        )}
       </header>
 
       <main className="max-w-5xl mx-auto px-4 py-5 space-y-4">
