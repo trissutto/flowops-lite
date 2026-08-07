@@ -1,5 +1,4 @@
 import type { Metadata } from 'next';
-import { Hero } from '@/components/sections/Hero';
 import { Section } from '@/components/layout/Section';
 import { Container } from '@/components/layout/Container';
 import { SectionTitle } from '@/components/sections/SectionTitle';
@@ -8,17 +7,24 @@ import { CategoryListing } from '@/components/commerce/CategoryListing';
 import { InstagramCard } from '@/components/cards/InstagramCard';
 import { NewsletterBlock } from '@/components/sections/NewsletterBlock';
 import { EditorialCard } from '@/components/sections/ImageGrid';
-import type { GridInterruption } from '@/components/commerce/EditorialProductGrid';
 import { CATEGORY_SLUGS, categoryMeta } from '@/services/products';
 import { fetchPrimeiraPagina } from '@/services/vitrine';
-import { editorials, instagramPosts, looks, storeInteriorImage } from '@/data/content';
+import { editorials, instagramPosts, storeInteriorImage } from '@/data/content';
 import { breadcrumbSchema, buildMetadata, jsonLdGraph } from '@/lib/seo';
 
 /**
  * PÁGINA DE CATEGORIA
  *
- * Server Component: hero, introdução, conteúdo educativo e SEO são estáticos
+ * Server Component: cabeçalho, conteúdo educativo e SEO são estáticos
  * (indexáveis, rápidos); só a listagem é client (filtros e infinite scroll).
+ *
+ * ⚠️ SEM HERO E SEM INTERRUPÇÃO NA GRADE (dono 07/08): "retire estes banners
+ * dentro das categorias, quanto mais direto for pro produto, melhor a
+ * conversão". Antes a peça só aparecia depois de um hero em tela cheia +
+ * texto de introdução, e a grade de produto era cortada a cada ~8 peças por
+ * um card editorial, um look ou um banner de loja — três desvios do caminho
+ * "entrou → viu produto → comprou". Cabeçalho agora é uma linha (breadcrumb +
+ * título), e a grade não tem mais interrupção nenhuma.
  *
  * ISR: `revalidate` de 1h — o catálogo muda por reposição, não por segundo.
  */
@@ -58,31 +64,6 @@ export default async function CategoryPage({ params }: { params: Promise<{ slug:
     { name: meta.name, path: `/categoria/${slug}` },
   ];
 
-  /**
-   * Blocos que quebram o ritmo da grade. As posições (6, 14, 22) foram
-   * escolhidas pra cair depois de uma fileira completa em qualquer breakpoint.
-   */
-  const interruptions: GridInterruption[] = [
-    {
-      at: 6,
-      kind: 'image',
-      image: { src: `${meta.heroImage}?q=80&w=1400&auto=format&fit=crop`, alt: `Editorial ${meta.name}` },
-      caption: `${meta.name} da coleção atual`,
-      href: '/colecoes/atual',
-    },
-    { at: 14, kind: 'look', look: looks[0] },
-    {
-      at: 22,
-      kind: 'banner',
-      eyebrow: 'Comprar e retirar',
-      title: 'Prove antes de levar',
-      description:
-        'Reserve a peça e experimente na loja mais perto de você. Se não vestir, você não leva — e não paga nada.',
-      href: '/lojas/comprar-e-retirar',
-      cta: 'Como funciona',
-    },
-  ];
-
   return (
     <>
       <script
@@ -90,54 +71,30 @@ export default async function CategoryPage({ params }: { params: Promise<{ slug:
         dangerouslySetInnerHTML={{ __html: jsonLdGraph(breadcrumbSchema(trail)) }}
       />
 
-      {/* 01 — HERO EDITORIAL */}
-      <Hero
-        image={{
-          src: `${meta.heroImage}?q=85&w=2000&auto=format&fit=crop`,
-          alt: `${meta.title} — editorial Lurds`,
-        }}
-        eyebrow="Coleção"
-        title={meta.name}
-        subtitle={meta.intro}
-        height="medium"
-        align="left"
-        overlay="medium"
-        parallax={false}
-        priority
-        above={
-          <Breadcrumb
-            tone="light"
-            items={trail.map((item, i) => ({
-              label: item.name,
-              href: i < trail.length - 1 ? item.path : undefined,
-            }))}
-          />
-        }
-      />
-
-      {/* 02 — INTRODUÇÃO */}
-      <Section width="text" space="sm">
-        <SectionTitle
-          eyebrow={`${meta.name} do 46 ao 60`}
-          title={meta.title}
-          description={meta.intro}
-          as="h2"
+      {/* 01 — CABEÇALHO ENXUTO (sem hero de tela cheia — direto pro produto) */}
+      <Section width="wide" space="sm">
+        <Breadcrumb
+          items={trail.map((item, i) => ({
+            label: item.name,
+            href: i < trail.length - 1 ? item.path : undefined,
+          }))}
         />
+        <SectionTitle eyebrow={`${meta.name} do 46 ao 60`} title={meta.title} as="h1" />
       </Section>
 
-      {/* 03 a 08 — BARRA + FILTROS + GRID EDITORIAL + INTERRUPÇÕES */}
+      {/* 02 — BARRA + FILTROS + GRID, SEM INTERRUPÇÃO NENHUMA */}
       <Container width="wide">
         <CategoryListing
           category={slug}
           categoryName={meta.name}
-          interruptions={interruptions}
           /* Página 1 pronta no servidor: a peça vem no HTML em vez de esperar
              o JS + duas viagens à API (perf, 07/08). */
           primeiraPagina={primeiraPagina}
         />
       </Container>
 
-      {/* 09 — CONTEÚDO EDUCATIVO (SEO + permanência) */}
+      {/* 03 — CONTEÚDO EDUCATIVO (SEO + permanência) — só DEPOIS da grade
+          inteira, nunca interrompendo o caminho até o produto. */}
       <Section tone="alt" width="text" aria-labelledby="guia-titulo">
         <SectionTitle
           id="guia-titulo"
