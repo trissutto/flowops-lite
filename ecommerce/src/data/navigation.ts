@@ -159,8 +159,9 @@ export const navigation: NavItem[] = [
     menu: {
       columns: [
         {
-          title: 'Do 46 ao 60',
+          title: 'Do 44 ao 60',
           links: [
+            { label: '44', href: '/tamanhos/44' },
             { label: '46', href: '/tamanhos/46' },
             { label: '48', href: '/tamanhos/48' },
             { label: '50', href: '/tamanhos/50' },

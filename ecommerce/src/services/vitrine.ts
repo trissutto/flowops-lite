@@ -27,6 +27,48 @@ import type { Product } from '@/types';
  */
 export type OrdemVitrine = 'novidades' | 'relevancia' | 'preco-asc' | 'preco-desc';
 
+/**
+ * A PRIMEIRA LEVA DA LISTAGEM, PRONTA NO SERVIDOR (perf, 07/08).
+ *
+ * 🔴 Medido em produção: `/categoria/blusas` chegava com **ZERO produto no
+ * HTML**. A página pintava a moldura e só então o navegador baixava o JS,
+ * pedia as facetas e pedia os produtos — duas viagens de ~550ms cada, DEPOIS
+ * do JS. A cliente ficava olhando esqueleto. (A home, que renderiza no
+ * servidor, chegava com 110 links de produto.)
+ *
+ * Isto devolve a página 1 já resolvida pra listagem usar como `initialData`:
+ * a peça vem no HTML, aparece na hora, e o react-query segue cuidando de
+ * filtro, ordenação e scroll infinito a partir dali.
+ *
+ * Nunca lança: catálogo fora do ar volta `null` e a listagem busca no cliente
+ * como antes — mais lenta, mas viva.
+ */
+export async function fetchPrimeiraPagina(opcoes: {
+  categoria?: string;
+  ordenar?: OrdemVitrine;
+  perPage?: number;
+  precoMax?: number;
+  soPromocao?: boolean;
+  revalidate?: number;
+}): Promise<{ itens: Product[]; total: number; totalPages: number } | null> {
+  const { categoria, ordenar = 'relevancia', perPage = 24, precoMax, soPromocao, revalidate = 600 } = opcoes;
+  const params = new URLSearchParams({ page: '1', perPage: String(perPage), ordenar });
+  if (categoria) params.set('categoria', categoria);
+  if (precoMax) params.set('precoMax', String(precoMax));
+  if (soPromocao) params.set('soPromocao', '1');
+
+  try {
+    const r = await api<{ itens: PecaApi[]; total?: number; totalPages?: number }>(
+      `/public/loja/produtos?${params.toString()}`,
+      { revalidate, tags: ['catalogo', categoria ? `categoria:${categoria}` : 'vitrine'], timeoutMs: 12000 },
+    );
+    const itens = (r?.itens ?? []).map(mapPeca);
+    return { itens, total: r?.total ?? itens.length, totalPages: r?.totalPages ?? 1 };
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchVitrine(
   opcoes: { ordenar?: OrdemVitrine; limite?: number; revalidate?: number } = {},
 ): Promise<Product[]> {
