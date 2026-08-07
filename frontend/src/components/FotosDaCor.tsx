@@ -151,6 +151,24 @@ export default function FotosDaCor({
 
   const capa = fotos[0]?.url ?? null;
 
+  /**
+   * PINTA SOZINHA TAMBÉM AS IMPORTADAS (dono 07/08): a leitura automática só
+   * rodava no upload manual — as milhares de cores com foto vinda do site
+   * antigo abriam com a bolinha em branco pra sempre. Agora: abriu a cor, tem
+   * foto e não tem bolinha → tenta a IA uma vez, em silêncio. O resultado
+   * passa pelo onSwatchChange e cai no auto-save normal.
+   */
+  const autoPintou = useRef<string | null>(null);
+  useEffect(() => {
+    const chave = `${refSku}|${cor}`;
+    if (autoPintou.current === chave) return;
+    const temBolinha = !!swatch.corHex || swatch.swatchTipo === 'foto';
+    if (!capa || temBolinha || lendoIa) return;
+    autoPintou.current = chave;
+    void detectarCor(capa, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [capa, refSku, cor]);
+
   const aplicar = useCallback((novas: FotoCor[]) => {
     setFotos(novas);
     onFotosChange?.(novas);

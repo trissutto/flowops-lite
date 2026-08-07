@@ -1205,16 +1205,38 @@ function FichaDaCor({
    * conta-gotas, do recorte e do seletor "à mão" grava sem passar pelo botão.
    * Debounce curto porque o <input type=color> dispara a cada arrasto do
    * mouse dentro do picker.
+   *
+   * ⚠️ O BUG DAS "5 SOLICITAÇÕES" (dono 07/08): só UMA cor fica aberta por
+   * vez — clicar na próxima cor DESMONTA este painel na hora, e o cleanup
+   * antigo fazia clearTimeout com o PATCH ainda pendente. Quem pintava a
+   * bolinha e ia direto pra próxima cor (o fluxo natural) perdia o save em
+   * silêncio; testando devagar funcionava. Por isso: o pendente agora vive
+   * num ref e o desmonte DISPARA o PATCH em vez de descartá-lo.
    */
   const swatchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => () => { if (swatchTimer.current) clearTimeout(swatchTimer.current); }, []);
+  const swatchPendente = useRef<SwatchCor | null>(null);
+
+  useEffect(() => () => {
+    if (swatchTimer.current) clearTimeout(swatchTimer.current);
+    const s = swatchPendente.current;
+    if (s) {
+      swatchPendente.current = null;
+      // Componente já morreu: nada de setState — só garante a gravação.
+      void api(urlCor, { method: 'PATCH', body: JSON.stringify(s) }).catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlCor]);
 
   function agendarSwatch(s: SwatchCor) {
+    swatchPendente.current = s;
     if (swatchTimer.current) clearTimeout(swatchTimer.current);
     setSwatchSave('salvando');
     swatchTimer.current = setTimeout(async () => {
+      const pendente = swatchPendente.current;
+      swatchPendente.current = null;
+      if (!pendente) return;
       try {
-        const f = await api<Ficha>(urlCor, { method: 'PATCH', body: JSON.stringify(s) });
+        const f = await api<Ficha>(urlCor, { method: 'PATCH', body: JSON.stringify(pendente) });
         aplicarFicha(f);
         setSwatchSave('ok');
       } catch (e: any) {
