@@ -229,7 +229,9 @@ export class ProductsEditorService {
   async refInfo(ref: string, excludeCodigos: string[]) {
     const target = String(ref || '').trim().toUpperCase();
     if (!target) throw new BadRequestException('Informe a REF');
-    const where: any = { ref: target };
+    // Colisão não olha caixa: renomear pra "VLM-126" tem que enxergar um
+    // "vlm-126" já existente, senão a fusão acontece sem aviso.
+    const where: any = { ref: { equals: target, mode: 'insensitive' } };
     if (excludeCodigos.length) where.codigo = { notIn: excludeCodigos };
     const [count, sample] = await Promise.all([
       (this.prisma as any).gigaProduto.count({ where }),

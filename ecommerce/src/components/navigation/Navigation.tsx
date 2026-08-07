@@ -4,7 +4,8 @@ import { useRef, useState } from 'react';
 import { AppLink as Link } from '@/components/ui/AppLink';
 import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/utils';
-import { navigation } from '@/data/navigation';
+import { navigation as estatico } from '@/data/navigation';
+import type { NavItem } from '@/types';
 import { MegaMenu } from './MegaMenu';
 
 /**
@@ -17,7 +18,9 @@ import { MegaMenu } from './MegaMenu';
  * - O painel vive fora do <ul> (posicionado absoluto no wrapper) pra ocupar a
  *   largura inteira da viewport.
  */
-export function Navigation() {
+export function Navigation({ itens }: { itens?: NavItem[] }) {
+  // As categorias vêm do CRM pelo layout (servidor). Sem elas, o estático.
+  const navigation = itens?.length ? itens : estatico;
   const [openIndex, setOpenIndex] = useState<number | null>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pathname = usePathname();

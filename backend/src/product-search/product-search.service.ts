@@ -150,9 +150,15 @@ export class ProductSearchService implements OnModuleInit {
       //    cascata parava nela, escondendo as centenas de peças com MARRIE na
       //    DESCRIÇÃO). O acerto de REF vem PRIMEIRO na lista, e o full-text
       //    da descrição é SOMADO em seguida (dedup por código).
-      const upN = term.toUpperCase();
+      // REF NÃO OLHA CAIXA (dono 07/08): "VLM-126", "vlm-126" e "Vlm-126" são a
+      // mesma peça. Antes só testava o termo cru e o termo em MAIÚSCULO — o que
+      // supunha o banco sempre em caixa alta; REF gravada em minúscula/mista no
+      // ERP simplesmente não era encontrada por ninguém.
       const refHitsN: any[] = await findN({
-        OR: [{ ref: upN }, { ref: term }, { ref: { startsWith: upN } }, { ref: { startsWith: term } }],
+        OR: [
+          { ref: { equals: term, mode: 'insensitive' } },
+          { ref: { startsWith: term, mode: 'insensitive' } },
+        ],
       });
       // 3) Full-text na descrição (pg_trgm no índice product_descricao_trgm_idx).
       let descHitsN: any[] = [];
@@ -198,9 +204,12 @@ export class ProductSearchService implements OnModuleInit {
 
     // 2) REF exata/prefixo — SEM SEQUESTRAR A BUSCA (fix 13/07, caso MARRIE):
     //    o acerto de REF vem primeiro, e o full-text da descrição é SOMADO.
-    const up = term.toUpperCase();
+    // REF NÃO OLHA CAIXA — mesma regra do caminho nativo acima.
     const refHits: any[] = await find({
-      OR: [{ ref: up }, { ref: term }, { ref: { startsWith: up } }, { ref: { startsWith: term } }],
+      OR: [
+        { ref: { equals: term, mode: 'insensitive' } },
+        { ref: { startsWith: term, mode: 'insensitive' } },
+      ],
     });
 
     // 3) FULL-TEXT na DESCRIÇÃO (10/07) — estilo motor de busca, via pg_trgm:

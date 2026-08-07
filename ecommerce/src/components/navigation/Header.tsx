@@ -2,6 +2,7 @@
 
 import { Menu } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import type { NavItem } from '@/types';
 import { useScrolled } from '@/hooks';
 import { useUiStore } from '@/store/ui';
 import { AnnouncementBar } from './AnnouncementBar';
@@ -30,7 +31,14 @@ import {
  *
  * Ver docs/header.md.
  */
-export function Header({ tarja }: { tarja?: { label: string; href: string }[] }) {
+export function Header({
+  tarja,
+  navegacao,
+}: {
+  tarja?: { label: string; href: string }[];
+  /** Menu com as categorias do CRM. Ausente = o estático de `data/navigation`. */
+  navegacao?: NavItem[];
+}) {
   const scrolled = useScrolled(24);
   const overlay = useUiStore((s) => s.overlay);
   const toggleOverlay = useUiStore((s) => s.toggleOverlay);
@@ -77,7 +85,7 @@ export function Header({ tarja }: { tarja?: { label: string; href: string }[] })
 
             {/* Centro: navegação (desktop) */}
             <div className="hidden lg:block">
-              <Navigation />
+              <Navigation itens={navegacao} />
             </div>
 
             {/* Direita: ações */}
@@ -92,7 +100,7 @@ export function Header({ tarja }: { tarja?: { label: string; href: string }[] })
         </div>
       </header>
 
-      <MobileDrawer open={overlay === 'menu'} onClose={closeOverlay} />
+      <MobileDrawer open={overlay === 'menu'} onClose={closeOverlay} itens={navegacao} />
       <SearchOverlay open={overlay === 'search'} onClose={closeOverlay} />
     </>
   );
