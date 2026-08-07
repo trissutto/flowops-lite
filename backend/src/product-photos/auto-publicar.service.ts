@@ -39,6 +39,31 @@ export class AutoPublicarService {
   ) {}
 
   /**
+   * A REF é masculina/infantil pela descrição do ERP? Mesma regra usada em
+   * `loja-catalog.service.ts`, `product-native.service.ts`, `live-pdv` e
+   * `product-registration` — aqui evita que "publicar quem está ativo no
+   * WooCommerce" volte a marcar `site_produto.publicado=true` numa peça que
+   * a loja não vende como plus size feminino (achado 07/08: REF 12199
+   * "CALÇA MASCULINA CARGO" foi publicada assim).
+   */
+  private async ehMasculinoOuInfantil(ref: string): Promise<boolean> {
+    const [linha] = await this.prisma.$queryRawUnsafe<Array<{ achou: boolean }>>(
+      `SELECT EXISTS (
+         SELECT 1 FROM wincred_produtos
+          WHERE (UPPER(TRIM(ref)) = $1 OR UPPER(TRIM(ref)) LIKE $1 || ' %')
+            AND (
+              UPPER(COALESCE("descricaoCompleta", '')) LIKE '%MASCULIN%' OR
+              UPPER(COALESCE("descricaoCompleta", '')) LIKE '%INFANTIL%' OR
+              UPPER(COALESCE("nomeGrupo", '')) LIKE '%MASCULIN%' OR
+              UPPER(COALESCE("nomeGrupo", '')) LIKE '%INFANTIL%'
+            )
+       ) AS achou`,
+      ref,
+    );
+    return !!linha?.achou;
+  }
+
+  /**
    * IMPORTAÇÃO EM MASSA — publica, mas só o que tem ESTOQUE.
    *
    * 🔴 O buraco que isto fecha (achado 07/08 com o dono na tela): "Importar
@@ -63,6 +88,11 @@ export class AutoPublicarService {
     try {
       const ref = refBaseOf(refBruta);
       if (!ref || !cores.length) return 'nada';
+
+      if (await this.ehMasculinoOuInfantil(ref)) {
+        this.logger.log(`[auto-publicar] ${ref}: masculino/infantil pela descrição — fora da vitrine`);
+        return 'fora_do_wc';
+      }
 
       /**
        * ATIVO NO WOOCOMMERCE = entra (decisão do dono, 07/08). A lista vem
@@ -164,6 +194,9 @@ export class AutoPublicarService {
     for (const [ref, cores] of coresPorRef) {
       if (jaPublicado.has(ref)) { jaNoAr++; continue; }
       if (!noAr.has(ref) && !noAr.has(refBaseOf(ref))) { foraDoWc++; continue; }
+      // Achado 07/08: REF 12199 "CALÇA MASCULINA CARGO" entrou pelo reparo do
+      // passivo. Mesma trava de `aoImportarEmMassa`.
+      if (await this.ehMasculinoOuInfantil(ref)) { foraDoWc++; continue; }
       if (simular) { publicadas++; continue; }
       try {
         // Sem cor casada ainda assim publica a REF: a vitrine mostra a peça
