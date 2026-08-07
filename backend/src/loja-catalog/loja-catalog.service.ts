@@ -299,6 +299,76 @@ export class LojaCatalogService {
    * Estoque: SOMA de todas as lojas (o site vende do consolidado; a reserva
    * por loja entra na fase 2 junto com retirada em loja).
    */
+  /**
+   * FAMÍLIA de uma descrição: a primeira palavra "de produto" que aparece.
+   * "CALCA CIGARRETE FEMININA PLUS SIZE 9099 MANIF" → "calca".
+   * Mesma heurística do ProductSearchService.familiaOf — se mudar lá, muda aqui.
+   */
+  private static readonly FAMILIA_IGNORAR = new Set([
+    'feminina', 'feminino', 'plus', 'size', 'plussize', 'moda', 'plus-size',
+  ]);
+
+  private familiaDe(desc?: string | null): string {
+    const palavras = String(desc || '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '')
+      .split(/\s+/)
+      .filter(Boolean);
+    return (
+      palavras.find(
+        (w) => w.length >= 4 && !/\d/.test(w) && !LojaCatalogService.FAMILIA_IGNORAR.has(w),
+      ) || '_outros'
+    );
+  }
+
+  /**
+   * Das linhas de uma REF, devolve SÓ as do produto que a retaguarda publicou.
+   * REF com uma família só (o caso normal) passa direto, sem custo.
+   */
+  private familiaPublicada(ref: string, linhas: LinhaErp[], site: any): LinhaErp[] {
+    if (linhas.length < 2) return linhas;
+
+    const porFamilia = new Map<string, LinhaErp[]>();
+    for (const l of linhas) {
+      const f = this.familiaDe(l.descricao);
+      if (!porFamilia.has(f)) porFamilia.set(f, []);
+      porFamilia.get(f)!.push(l);
+    }
+    if (porFamilia.size < 2) return linhas;
+
+    // 1) A família do NOME PUBLICADO manda — é a peça que a loja escolheu pôr
+    //    no site, e o nome dela veio de quem cadastrou, não do ERP.
+    const familiaDoSite = this.familiaDe(site?.nome);
+    let escolhida = familiaDoSite !== '_outros' ? porFamilia.get(familiaDoSite) : undefined;
+    let criterio = 'nome publicado';
+
+    // 2) Sem casar pelo nome: a que tem mais PEÇA EM ESTOQUE — é a que a
+    //    cliente realmente consegue comprar. Desempate por nº de variações.
+    if (!escolhida) {
+      criterio = 'maior estoque';
+      let melhorEstoque = -1;
+      let melhorLinhas = -1;
+      for (const [, ls] of porFamilia) {
+        const est = ls.reduce((s, l) => s + (l.estoque || 0), 0);
+        if (est > melhorEstoque || (est === melhorEstoque && ls.length > melhorLinhas)) {
+          melhorEstoque = est;
+          melhorLinhas = ls.length;
+          escolhida = ls;
+        }
+      }
+    }
+
+    const descartadas = linhas.length - (escolhida?.length ?? 0);
+    this.logger.warn(
+      `[catalogo] REF ${ref} tem ${porFamilia.size} PRODUTOS diferentes no ERP ` +
+        `(${Array.from(porFamilia.keys()).join(', ')}) — REF reciclada. ` +
+        `Fiquei com "${criterio}" e ignorei ${descartadas} variação(ões). ` +
+        `Cadastro precisa separar essas REFs.`,
+    );
+    return escolhida ?? linhas;
+  }
+
   private readonly SQL_VARIACOES = `
     SELECT
       UPPER(TRIM(p.ref))                          AS ref,
@@ -334,6 +404,24 @@ export class LojaCatalogService {
   private montarPeca(
     ref: string, linhas: LinhaErp[], site: any, fit: any, fotos: any[] = [], ficha?: any,
   ) {
+    /* ── ⚠️ UMA REF PODE SER TRÊS PRODUTOS (bug de preço, 07/08) ───────────
+     *
+     * O Giga RECICLA referência. A REF 9099, por exemplo, é ao mesmo tempo:
+     *   BOLERO MANGA LONGA (tam 10–16, R$ 59,90)
+     *   CALCA CIGARRETE PLUS SIZE (tam 46–60, R$ 339,90)
+     *   VESTIDO MANGA CURTA (tam 46–56, R$ 129,90)
+     *
+     * Juntando tudo numa peça só, o site anunciou a CALÇA DE R$ 339,90 POR
+     * R$ 59,90 — o `Math.min` dos preços pegou o do bolero — com grade "do 14
+     * ao 60". Preço errado no ar é prejuízo em cada venda, não estética.
+     *
+     * Aqui a REF é separada por FAMÍLIA (a primeira palavra significativa da
+     * descrição — a mesma regra que a live usa pra não bipar peça errada) e a
+     * peça é montada com UMA família só. Qual: a que casa com o nome que a
+     * retaguarda publicou; sem casar, a que tem mais peça em estoque.
+     */
+    linhas = this.familiaPublicada(ref, linhas, site);
+
     /* ── DEDUPE: a mesma cor+tamanho não pode aparecer duas vezes ──────────
      * O catálogo tem REF cadastrada mais de uma vez (códigos diferentes pra
      * MESMO cor+tamanho). Sem tratar, a cliente via "44 46 46 48 48 50 50".
@@ -951,12 +1039,30 @@ export class LojaCatalogService {
       return { ...this.cacheFiltros.data, cache: true };
     }
     const publicadas: any[] = await (this.prisma as any).siteProduto.findMany({
-      where: { publicado: true }, select: { ref: true },
+      where: { publicado: true }, select: { ref: true, nome: true },
     });
     const refs = publicadas.map((p) => p.ref);
-    const linhas: LinhaErp[] = refs.length
+    const linhasCruas: LinhaErp[] = refs.length
       ? await this.prisma.$queryRawUnsafe(`${this.SQL_VARIACOES} AND UPPER(TRIM(p.ref)) = ANY($1)`, refs)
       : [];
+
+    /**
+     * A BARRA LATERAL LÊ A MESMA PEÇA QUE A VITRINE (07/08).
+     *
+     * Estas contagens iam nas linhas CRUAS, sem passar pela separação de REF
+     * reciclada — então o "de R$ X até Y" do filtro de preço somava o bolero
+     * de R$ 59,90 que nem é a peça publicada, e a lista de tamanhos ganhava o
+     * 14 e o 16 de um produto que não está no site.
+     */
+    const nomePorRef = new Map<string, any>(publicadas.map((p) => [String(p.ref).toUpperCase(), p]));
+    const agrupadas = new Map<string, LinhaErp[]>();
+    for (const l of linhasCruas) {
+      if (!agrupadas.has(l.ref)) agrupadas.set(l.ref, []);
+      agrupadas.get(l.ref)!.push(l);
+    }
+    const linhas: LinhaErp[] = Array.from(agrupadas.entries()).flatMap(([ref, ls]) =>
+      this.familiaPublicada(ref, ls, nomePorRef.get(String(ref).toUpperCase())),
+    );
 
     const conta = (mapa: Map<string, number>, chave?: string | null) => {
       const k = String(chave || '').trim();
