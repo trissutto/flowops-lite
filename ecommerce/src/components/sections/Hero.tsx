@@ -388,9 +388,12 @@ const HeroArte = forwardRef<HTMLElement, {
 
       {overlay !== 'none' && <div className={cn('absolute inset-0', OVERLAYS[overlay])} />}
 
+      {/* PERTO DA BASE (dono 07/08). Centralizado, o botão caía em cima do
+          "Indomável" — a arte já usa o meio. Embaixo ele fica sobre a área
+          calma da foto e vira o último passo natural da leitura. */}
       {(temTexto || temBotao) && (
-        <div className="absolute inset-0 flex items-center">
-          <Container width="page" className="relative z-10">
+        <div className="absolute inset-0 flex items-end">
+          <Container width="page" className="relative z-10 pb-6 sm:pb-8 lg:pb-12">
             <div className={cn('flex flex-col', ALIGNMENTS[align])}>
               {eyebrow && <p className="eyebrow text-primary-soft">{eyebrow}</p>}
               {title && <h1 className="mt-4 max-w-3xl text-display text-light">{title}</h1>}
