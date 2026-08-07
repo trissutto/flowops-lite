@@ -71,28 +71,57 @@ export interface CategoriaVitrine {
  * a página inteira.
  */
 export async function getCategorias(): Promise<CategoriaVitrine[]> {
-  let categorias: FiltroValor[] = [];
+  /**
+   * A CONFIGURAÇÃO DA RETAGUARDA VEM PRIMEIRO (/retaguarda/categorias):
+   * nome de exibição, ordem e a foto escolhida à mão. Só o que ela não
+   * define é que cai no automático (nome do slug, foto da peça mais nova).
+   * Escolha humana ganha de heurística — sempre.
+   */
+  let configuradas: Array<{
+    slug: string; nome: string; imagemUrl: string | null; alt: string | null;
+    qtdPecas: number; ordem: number;
+  }> = [];
   try {
-    const filtros = await api<{ categorias?: FiltroValor[] }>('/public/loja/filtros', {
+    const r = await api<typeof configuradas>('/public/loja/categorias', {
       revalidate: REVALIDATE,
-      tags: ['filtros', 'categorias'],
+      tags: ['categorias'],
     });
-    categorias = Array.isArray(filtros?.categorias) ? filtros.categorias : [];
+    if (Array.isArray(r)) configuradas = r;
   } catch {
-    return [];
+    /* backend antigo (deploy pendente) — cai no caminho dos filtros abaixo */
   }
 
+  let categorias: FiltroValor[] = configuradas.length
+    ? configuradas.map((c) => ({ valor: c.slug, qtd: c.qtdPecas }))
+    : [];
+
+  if (!categorias.length) {
+    try {
+      const filtros = await api<{ categorias?: FiltroValor[] }>('/public/loja/filtros', {
+        revalidate: REVALIDATE,
+        tags: ['filtros', 'categorias'],
+      });
+      categorias = Array.isArray(filtros?.categorias) ? filtros.categorias : [];
+    } catch {
+      return [];
+    }
+  }
+
+  const porSlug = new Map(configuradas.map((c) => [c.slug, c]));
   const validas = categorias.filter((c) => c?.valor && (c.qtd ?? 0) > 0);
 
   return Promise.all(
     validas.map(async (c) => {
+      const cfg = porSlug.get(c.valor);
       const base: CategoriaVitrine = {
         slug: c.valor,
-        nome: rotulo(c.valor),
+        nome: cfg?.nome || rotulo(c.valor),
         qtdPecas: c.qtd ?? 0,
-        imagemUrl: null,
-        alt: null,
+        imagemUrl: cfg?.imagemUrl ?? null,
+        alt: cfg?.alt ?? null,
       };
+      // Foto escolhida na retaguarda manda — não gasta requisição buscando peça.
+      if (base.imagemUrl) return base;
       try {
         const r = await api<{ itens?: PecaDaCategoria[] }>(
           `/public/loja/produtos?categoria=${encodeURIComponent(c.valor)}&perPage=1&ordenar=novidades`,
