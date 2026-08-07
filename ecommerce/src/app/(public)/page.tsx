@@ -102,10 +102,14 @@ export default async function HomePage() {
         subtitle={hero.subtitle}
         primaryAction={hero.primaria}
         secondaryAction={hero.secundaria}
-        height="fullscreen"
+        // Arte da retaguarda manda na altura (não recorta a campanha); a foto
+        // editorial estática segue em tela cheia.
+        height={hero.daRetaguarda ? 'arte' : 'fullscreen'}
         align="center"
-        overlay="medium"
-        showScrollHint
+        // Escurecer a arte da campanha estraga a cor que o designer escolheu —
+        // o overlay só existe pra dar contraste ao texto do hero estático.
+        overlay={hero.daRetaguarda ? 'none' : 'medium'}
+        showScrollHint={!hero.daRetaguarda}
         priority
       />
 

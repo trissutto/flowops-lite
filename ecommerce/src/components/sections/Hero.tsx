@@ -2,7 +2,7 @@
 
 import Image, { getImageProps } from 'next/image';
 import { motion, useScroll, useTransform } from 'framer-motion';
-import { useRef } from 'react';
+import { forwardRef, useRef } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { Button, type ButtonVariant } from '@/components/ui/Button';
 import { Container } from '@/components/layout/Container';
@@ -22,14 +22,26 @@ import type { Media, VideoMedia } from '@/types';
  * Regra: pouquíssimo texto. Título curto, uma linha de apoio, dois botões.
  */
 
-export type HeroHeight = 'small' | 'medium' | 'large' | 'fullscreen';
+/**
+ * `arte` = A ARTE MANDA NA ALTURA (dono 07/08).
+ *
+ * Os outros modos fixam a altura e recortam a foto (`object-cover`) — certo pra
+ * foto editorial, onde perder um pedaço da borda não custa nada. Errado pra
+ * BANNER DE CAMPANHA: a arte já vem com texto e logo dentro, e o recorte comeu
+ * o "Indomável" nas duas pontas. Aqui a seção assume a proporção da imagem, e
+ * a campanha aparece inteira em qualquer tela — que é o que "se adaptar ao
+ * tamanho da tela" quer dizer pra quem desenhou o banner.
+ */
+export type HeroHeight = 'small' | 'medium' | 'large' | 'fullscreen' | 'arte';
 export type HeroAlign = 'left' | 'center' | 'right';
+export type HeroOverlay = 'none' | 'soft' | 'medium' | 'strong';
 
 const HEIGHTS: Record<HeroHeight, string> = {
   small: 'min-h-[42svh] lg:min-h-[46svh]',
   medium: 'min-h-[62svh] lg:min-h-[68svh]',
   large: 'min-h-[82svh] lg:min-h-[86svh]',
   fullscreen: 'min-h-[100svh]',
+  arte: '',
 };
 
 const ALIGNMENTS: Record<HeroAlign, string> = {
@@ -58,7 +70,7 @@ interface HeroProps {
   height?: HeroHeight;
   align?: HeroAlign;
   /** Intensidade do véu escuro sobre a mídia. */
-  overlay?: 'none' | 'soft' | 'medium' | 'strong';
+  overlay?: HeroOverlay;
   /** Conteúdo extra acima do título (breadcrumb, por exemplo). */
   above?: React.ReactNode;
   /** Seta de "role pra baixo". */
@@ -97,8 +109,29 @@ export function Hero({
 }: HeroProps) {
   const ref = useRef<HTMLElement>(null);
   const { scrollYProgress } = useScroll({ target: ref, offset: ['start start', 'end start'] });
-  // 12% de deslocamento — o suficiente pra dar profundidade sem "descolar".
-  const y = useTransform(scrollYProgress, [0, 1], ['0%', parallax ? '12%' : '0%']);
+  // Arte fechada não faz parallax nem zoom: mover a campanha corta a arte de
+  // novo — pela borda, em vez de pelo enquadramento. É a mesma perda.
+  const arte = height === 'arte';
+  const y = useTransform(scrollYProgress, [0, 1], ['0%', parallax && !arte ? '12%' : '0%']);
+
+  if (arte) {
+    return (
+      <HeroArte
+        ref={ref}
+        image={image}
+        imageMobile={imageMobile}
+        priority={priority}
+        overlay={overlay}
+        align={align}
+        eyebrow={eyebrow}
+        title={title}
+        subtitle={subtitle}
+        primaryAction={primaryAction}
+        secondaryAction={secondaryAction}
+        className={className}
+      />
+    );
+  }
 
   return (
     <section
@@ -301,3 +334,107 @@ export function Hero({
     </section>
   );
 }
+
+/**
+ * HERO DE ARTE FECHADA — a imagem entra em FLUXO (`w-full h-auto`), então a
+ * seção tem exatamente a altura da arte na largura da tela. Sem recorte, sem
+ * faixa preta, em qualquer proporção que a retaguarda subir.
+ *
+ * O texto e os botões continuam existindo (o dono pode querer os dois), mas
+ * ficam SOBREPOSTOS em absoluto — nunca esticam a seção. Em tela estreita, o
+ * `min-h` do conteúdo garante que os botões não amassem em cima da arte.
+ */
+const HeroArte = forwardRef<HTMLElement, {
+  image?: Media;
+  imageMobile?: Media;
+  priority?: boolean;
+  overlay?: HeroOverlay;
+  align?: HeroAlign;
+  eyebrow?: string;
+  title?: React.ReactNode;
+  subtitle?: string;
+  primaryAction?: HeroAction;
+  secondaryAction?: HeroAction;
+  className?: string;
+}>(function HeroArte(
+  { image, imageMobile, priority, overlay = 'none', align = 'center',
+    eyebrow, title, subtitle, primaryAction, secondaryAction, className },
+  ref,
+) {
+  const temTexto = !!(eyebrow || title || subtitle);
+  const temBotao = !!(primaryAction || secondaryAction);
+
+  const comum = {
+    alt: image?.alt ?? '',
+    width: 2400,
+    height: 1350,
+    priority,
+    sizes: '100vw',
+    className: 'w-full h-auto',
+  };
+  const desktop = image ? getImageProps({ ...comum, src: image.src }) : null;
+  const mobile = imageMobile ? getImageProps({ ...comum, src: imageMobile.src }) : null;
+
+  return (
+    <section ref={ref} className={cn('relative w-full', className)}>
+      {desktop && (
+        <picture>
+          {mobile && <source media="(max-width: 1023px)" srcSet={mobile.props.srcSet} />}
+          <source media="(min-width: 1024px)" srcSet={desktop.props.srcSet} />
+          {/* eslint-disable-next-line jsx-a11y/alt-text */}
+          <img {...desktop.props} fetchPriority={priority ? 'high' : undefined} />
+        </picture>
+      )}
+
+      {overlay !== 'none' && <div className={cn('absolute inset-0', OVERLAYS[overlay])} />}
+
+      {(temTexto || temBotao) && (
+        <div className="absolute inset-0 flex items-center">
+          <Container width="page" className="relative z-10">
+            <div className={cn('flex flex-col', ALIGNMENTS[align])}>
+              {eyebrow && <p className="eyebrow text-primary-soft">{eyebrow}</p>}
+              {title && <h1 className="mt-4 max-w-3xl text-display text-light">{title}</h1>}
+              {subtitle && (
+                <p className="mt-5 max-w-xl text-body-lg font-light text-light/85">{subtitle}</p>
+              )}
+              {temBotao && (
+                <div
+                  className={cn(
+                    'mt-8 flex w-full flex-col gap-3 sm:w-auto sm:flex-row sm:gap-4',
+                    align === 'center' && 'sm:justify-center',
+                    align === 'right' && 'sm:justify-end',
+                  )}
+                >
+                  {primaryAction && (
+                    <Button
+                      href={primaryAction.href}
+                      external={primaryAction.external}
+                      variant={primaryAction.variant ?? 'light'}
+                      size="lg"
+                      className="sm:w-auto"
+                      block
+                    >
+                      {primaryAction.label}
+                    </Button>
+                  )}
+                  {secondaryAction && (
+                    <Button
+                      href={secondaryAction.href}
+                      external={secondaryAction.external}
+                      variant={secondaryAction.variant ?? 'outlineLight'}
+                      size="lg"
+                      className="sm:w-auto"
+                      block
+                    >
+                      {secondaryAction.label}
+                    </Button>
+                  )}
+                </div>
+              )}
+            </div>
+          </Container>
+        </div>
+      )}
+    </section>
+  );
+});
