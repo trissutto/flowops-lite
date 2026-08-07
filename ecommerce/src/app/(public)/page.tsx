@@ -9,24 +9,22 @@ import { VideoBlock } from '@/components/sections/VideoBlock';
 import { CTABanner } from '@/components/sections/CTABanner';
 import { EditorialCard, ImageGrid } from '@/components/sections/ImageGrid';
 import { NewsletterBlock } from '@/components/sections/NewsletterBlock';
-import { OccasionCard, FitCard } from '@/components/cards/TaxonomyCard';
-import { FabricCard } from '@/components/cards/FabricCard';
+import { TaxonomyCard, FitCard } from '@/components/cards/TaxonomyCard';
 import { StoreCard } from '@/components/cards/StoreCard';
 import { InstagramCard } from '@/components/cards/InstagramCard';
 import { Button } from '@/components/ui/Button';
 import {
   editorialGridItems,
   editorials,
-  fabrics,
   fits,
   instagramPosts,
   institutionalVideo,
   looks,
   manifesto,
-  occasions,
 } from '@/data/content';
 import { featuredStores, stores } from '@/data/stores';
 import { getHeroDaHome } from '@/services/banners';
+import { getCategorias } from '@/services/categorias-menu';
 import { fetchVitrine } from '@/services/vitrine';
 import { buildMetadata, itemListSchema, jsonLdGraph, storeSchema } from '@/lib/seo';
 
@@ -59,6 +57,8 @@ export default async function HomePage() {
   // O hero vem do cadastro de banners da retaguarda; se não houver campanha
   // no ar (ou o backend estiver fora), volta pro estático sem quebrar a home.
   const hero = await getHeroDaHome();
+  // As categorias do CRM com a foto da peça mais nova de cada uma.
+  const categoriasHome = await getCategorias();
 
   /**
    * 🔴 PEÇAS REAIS (06/08). Os dois carrosséis vinham de `data/content.ts` —
@@ -151,34 +151,35 @@ export default async function HomePage() {
         </div>
       </Section>
 
-      {/* 05 — COMPRE POR OCASIÃO */}
-      <Section tone="alt" width="wide" aria-labelledby="ocasioes-titulo">
+      {/* 05 — NOSSAS CATEGORIAS (entrou no lugar de Ocasião e Tecido, 07/08)
+          Ocasião e tecido dependem de classificação peça a peça que ainda não
+          existe: a home mandava a cliente pra vitrines vazias. Categoria tem
+          dado de verdade — e a foto de cada card é a da peça mais nova, então
+          o bloco se renova sozinho. */}
+      <Section tone="alt" width="wide" aria-labelledby="categorias-home">
         <SectionTitle
-          id="ocasioes-titulo"
-          eyebrow="Para onde você vai"
-          title="Compre por ocasião"
-          description="Você não busca “vestido tamanho 52”. Busca o que vestir no casamento de sábado."
-        />
-        <div className="mt-14 grid grid-cols-2 gap-4 lg:grid-cols-4 lg:gap-6">
-          {occasions.map((occasion, index) => (
-            <OccasionCard key={occasion.slug} data={occasion} index={index} />
-          ))}
-        </div>
-      </Section>
-
-      {/* 06 — MODA POR TECIDO */}
-      <Section width="wide" aria-labelledby="tecidos-titulo">
-        <SectionTitle
-          id="tecidos-titulo"
-          eyebrow="O caimento começa aqui"
-          title="Moda por tecido"
-          description="Cada material veste de um jeito. Escolher pelo tecido é o atalho pro caimento certo."
-          cta={{ label: 'Guia completo de tecidos', href: '/tecidos' }}
+          id="categorias-home"
+          eyebrow="Encontre seu look ideal"
+          title="Nossas categorias"
+          description="Do 46 ao 60, em modelagens pensadas pro corpo real."
+          cta={{ label: 'Ver todas as categorias', href: '/categoria' }}
           align="left"
         />
-        <div className="mt-14 grid grid-cols-2 gap-4 lg:grid-cols-3 lg:gap-6 xl:grid-cols-6">
-          {fabrics.map((fabric, index) => (
-            <FabricCard key={fabric.slug} data={fabric} index={index} />
+        <div className="mt-14 grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6 lg:gap-5">
+          {categoriasHome.map((c, index) => (
+            <TaxonomyCard
+              key={c.slug}
+              index={index}
+              aspect="3/4"
+              variant={c.imagemUrl ? 'editorial' : 'text'}
+              data={{
+                slug: c.slug,
+                title: c.nome,
+                description: `${c.qtdPecas} ${c.qtdPecas === 1 ? 'peça' : 'peças'}`,
+                href: `/categoria/${c.slug}`,
+                ...(c.imagemUrl ? { image: { src: c.imagemUrl, alt: c.alt || c.nome } } : {}),
+              }}
+            />
           ))}
         </div>
       </Section>
