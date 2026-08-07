@@ -173,10 +173,10 @@ export class WcFotosImportService {
    * PARECERIA "site antigo sem nada" — melhor parar com mensagem clara.
    */
   async refsDoSiteAntigo(): Promise<string[]> {
-    const produtos = await this.wp.listarTodosSkus();
+    const produtos = await this.produtosDoSiteAntigo();
     if (!produtos.length) {
       throw new BadRequestException(
-        'Não consegui listar o site antigo (MySQL do WordPress fora ou sem produtos) — tente de novo mais tarde.',
+        'Não consegui listar o site antigo (MySQL e REST do WordPress sem resposta) — tente de novo mais tarde.',
       );
     }
     const refs = new Set<string>();
@@ -192,6 +192,49 @@ export class WcFotosImportService {
       if (m?.[1]) refs.add(m[1]);
     }
     return Array.from(refs);
+  }
+
+  /**
+   * SKU+nome de todos os produtos do site antigo — MySQL primeiro, REST atrás.
+   *
+   * A mesma lição do `acharNoWc`: o MySQL do WordPress mora atrás de firewall
+   * por IP e o IP do Railway muda — quando cai, o erro cru virava 500 na cara
+   * do dono (aconteceu no primeiro clique do "importar tudo" invertido,
+   * 06/08). A REST é mais lenta (paginada), mas roda UMA vez por lote.
+   */
+  private async produtosDoSiteAntigo(): Promise<Array<{ sku: string; nome: string }>> {
+    try {
+      const doMysql = await this.wp.listarTodosSkus();
+      if (doMysql.length) return doMysql;
+      this.logger.warn('[wc-fotos] MySQL do WP vazio ou inativo — listando pela REST');
+    } catch (e: any) {
+      this.logger.warn(`[wc-fotos] MySQL do WP falhou (${e?.message || e}) — listando pela REST`);
+    }
+
+    const todos: Array<{ sku: string; nome: string }> = [];
+    try {
+      // Teto de 100 páginas (10 mil produtos) — o acervo real é bem menor;
+      // é só pra um loop nunca ficar preso numa API que pagina errado.
+      for (let page = 1; page <= 100; page++) {
+        const res = await firstValueFrom(
+          this.http.get(`${this.baseUrl}/products`, {
+            auth: this.auth,
+            params: { per_page: 100, page, status: 'any', _fields: 'id,name,sku,status' },
+            timeout: 30000,
+          }),
+        );
+        const lote = Array.isArray(res.data) ? res.data : [];
+        for (const p of lote) {
+          todos.push({ sku: String((p as any)?.sku || ''), nome: String((p as any)?.name || '') });
+        }
+        if (lote.length < 100) break;
+      }
+    } catch (e: any) {
+      // Página que falhou no meio: segue com o que já veio — melhor fila
+      // parcial que 500. Vazio total vira o BadRequest de quem chama.
+      this.logger.warn(`[wc-fotos] REST parou na listagem (${e?.message || e}) — ${todos.length} produto(s) até aqui`);
+    }
+    return todos;
   }
 
   /**

@@ -182,7 +182,7 @@ export function ReviewCard({
 
       <p className="text-center text-caption font-normal tracking-normal normal-case text-ink-muted">
         Ao finalizar, você concorda com os{' '}
-        <Link href="/institucional/termos" className="underline underline-offset-2">
+        <Link href="/termos" className="underline underline-offset-2">
           termos de compra
         </Link>
         . Seus dados ficam protegidos.

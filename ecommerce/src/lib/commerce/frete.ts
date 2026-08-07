@@ -198,7 +198,10 @@ export async function fetchQuotes(
     return {
       quotes: [
         ...dados.opcoes.map(
-          (o: any): ShippingQuote => ({
+          (o: {
+            id?: string | number; kind?: string; label?: string;
+            price?: number | string; etaDays?: { min: number; max: number };
+          }): ShippingQuote => ({
             id: String(o.id),
             kind: o.kind === 'expressa' ? 'expressa' : 'correios',
             label: String(o.label),

@@ -22,6 +22,22 @@ export class LojaCatalogPublicController {
     return v === '1' || v === 'true';
   }
 
+  /**
+   * GET /api/public/loja/grades-medidas — as tabelas de medida da casa.
+   *
+   * As grades já existiam cadastradas (`grades_medidas`, com busto/cintura/
+   * quadril em centímetros por tamanho) e **não tinham porta pública**. Por
+   * isso o site linkava "Guia de medidas" pra uma rota que não existe: não
+   * havia de onde tirar o número.
+   *
+   * É o dado que mais decide compra de plus size — e o único que não dá pra
+   * inventar: medida errada é troca na certa.
+   */
+  @Get('grades-medidas')
+  gradesMedidas() {
+    return this.svc.gradesMedidas();
+  }
+
   @Get('produtos')
   produtos(@Query() q: any) {
     const params: ListarParams = {

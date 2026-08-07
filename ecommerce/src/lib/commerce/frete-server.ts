@@ -58,7 +58,11 @@ export async function resolverFrete(input: {
     if (!dados?.ok || !Array.isArray(dados.opcoes)) {
       return findQuote(cep, input.subtotal, input.quoteId);
     }
-    const achada = dados.opcoes.find((o: any) => String(o.id) === input.quoteId);
+    type OpcaoApi = {
+      id?: string | number; kind?: string; label?: string;
+      price?: number | string; etaDays?: { min: number; max: number };
+    };
+    const achada = dados.opcoes.find((o: OpcaoApi) => String(o.id) === input.quoteId);
     if (!achada) return undefined;
     return {
       id: String(achada.id),

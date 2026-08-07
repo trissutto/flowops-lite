@@ -10,11 +10,9 @@ import { BuyBox } from '@/components/commerce/BuyBox';
 import { ProductPageSignals } from '@/components/commerce/ProductPageSignals';
 import { RecommendationRail } from '@/components/commerce/RecommendationRail';
 import { NewsletterBlock } from '@/components/sections/NewsletterBlock';
-import { TestimonialCarousel } from '@/components/sections/TestimonialCarousel';
 import { getProduct } from '@/services/catalog';
 import { fetchPeca } from '@/services/peca';
 import { EscolhaDaPeca } from '@/components/commerce/EscolhaDaPeca';
-import { testimonials } from '@/data/content';
 import { breadcrumbSchema, buildMetadata, jsonLdGraph, productSchema } from '@/lib/seo';
 
 /**
@@ -162,9 +160,15 @@ export default async function ProductPage({ params }: { params: Promise<{ slug: 
               </p>
             </AccordionItem>
             <AccordionItem title="Entrega e retirada">
+              {/* ⚠️ Dizia "Frete grátis acima de R$ 399" — número chumbado que
+                  ficou errado no dia em que a régua virou config (hoje R$
+                  499,90, editável na retaguarda). Prometer valor errado aqui é
+                  pior que não prometer: o simulador logo acima já mostra o
+                  frete REAL pro CEP dela, com a régua vigente. */}
               <p className="text-body font-light text-ink-soft">
-                Frete grátis acima de R$ 399. Você também pode reservar e provar em uma das 14
-                lojas antes de levar — se não vestir, não leva e não paga nada.
+                Calcule o frete e o prazo pelo seu CEP na caixa acima. Você também pode
+                reservar e provar em uma das 14 lojas antes de levar — se não vestir, não
+                leva e não paga nada.
               </p>
             </AccordionItem>
             <AccordionItem title="Trocas e devoluções">
@@ -182,18 +186,21 @@ export default async function ProductPage({ params }: { params: Promise<{ slug: 
         </div>
       </Section>
 
-      {/* Prova social */}
-      <Section width="wide" aria-labelledby="avaliacoes-titulo">
-        <SectionTitle
-          id="avaliacoes-titulo"
-          eyebrow="Quem já vestiu"
-          title="Altura, peso e o tamanho que ela levou"
-          description="A informação que resolve a dúvida de numeração — direto de quem comprou."
-        />
-        <div className="mt-14">
-          <TestimonialCarousel testimonials={testimonials} />
-        </div>
-      </Section>
+      {/*
+        PROVA SOCIAL · REMOVIDA DO AR EM 06/08/2026
+
+        Mostrava depoimentos assinados por "Cliente Lurds" com ALTURA, PESO e
+        TAMANHO COMPRADO inventados, sob o título "direto de quem comprou".
+
+        Aqui era pior que na home: ficava na página do produto, ao lado da peça
+        que a cliente está decidindo, e **as mesmas quatro frases apareciam em
+        TODAS as peças** — a "avaliação" não tinha relação nenhuma com o produto
+        que ela estava olhando.
+
+        Volta quando houver avaliação real. O caminho já existe: todo pedido
+        entregue tem CPF, peça e tamanho — dá pra pedir por e-mail/WhatsApp
+        depois da entrega e amarrar a resposta à REF certa.
+      */}
 
       {/*
         Recomendações — client-side via motor (lib/recommendations/engine).

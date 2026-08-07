@@ -44,7 +44,7 @@ const COLUMNS = [
   {
     title: 'Minha conta',
     links: [
-      { label: 'Entrar', href: '/conta/entrar' },
+      { label: 'Entrar', href: '/conta' },
       { label: 'Meus pedidos', href: '/conta/pedidos' },
       { label: 'Favoritos', href: '/conta/favoritos' },
       { label: 'Meus endereços', href: '/conta/enderecos' },

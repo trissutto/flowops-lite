@@ -45,10 +45,10 @@ export default function CheckoutLayout({ children }: { children: React.ReactNode
         <div className="mx-auto flex max-w-page flex-col items-center justify-between gap-2 px-gutter py-5 text-caption font-normal tracking-normal normal-case text-ink-muted sm:flex-row lg:px-gutter-lg">
           <p>© {new Date().getFullYear()} Lurd&apos;s Plus Size · CNPJ 20.104.813/0001-39</p>
           <p className="flex gap-4">
-            <Link href="/institucional/termos" className="link-underline">
+            <Link href="/termos" className="link-underline">
               Termos
             </Link>
-            <Link href="/institucional/privacidade" className="link-underline">
+            <Link href="/privacidade" className="link-underline">
               Privacidade
             </Link>
             <Link href="/institucional/trocas" className="link-underline">

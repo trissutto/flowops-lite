@@ -73,7 +73,7 @@ export function IdentificationStep({ defaults, onDone }: IdentificationStepProps
       {/* Login opcional — NUNCA obrigatório. */}
       <p className="text-small text-ink-muted">
         Já tem conta?{' '}
-        <Link href="/conta/entrar" className="link-underline font-medium text-primary-strong">
+        <Link href="/conta" className="link-underline font-medium text-primary-strong">
           Entrar
         </Link>{' '}
         — ou siga sem cadastro mesmo.
