@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { CorIaService } from '../product-photos/cor-ia.service';
 import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 
 /**
@@ -12,6 +13,13 @@ import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client
  *
  * Por isso `listarAdmin` devolve a UNIÃO: as categorias reais do catálogo (com
  * a contagem de peças) + a configuração de cada uma, quando existe.
+ *
+ * FOTO + FOCO (dono 07/08): sem foto escolhida à mão, a foto é a da PEÇA MAIS
+ * NOVA da categoria — e o RECORTE (`focoX/focoY/focoZoom`) vem da IA olhando
+ * a foto e mirando na peça que representa a categoria (a calça, não a modelo
+ * inteira). O resultado fica em cache na própria linha, ligado à REF que
+ * gerou a foto (`imagemDeRef`): só reprocessa quando a peça em destaque muda,
+ * não a cada carregamento de página.
  */
 
 function getR2Client(): S3Client {
@@ -39,11 +47,22 @@ export interface CategoriaInput {
   destaque?: boolean;
 }
 
+interface FotoResolvida {
+  imagemUrl: string | null;
+  alt: string | null;
+  focoX: number | null;
+  focoY: number | null;
+  focoZoom: number | null;
+}
+
 @Injectable()
 export class SiteCategoriasService {
   private readonly logger = new Logger(SiteCategoriasService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly corIa: CorIaService,
+  ) {}
 
   private texto(v: unknown): string | null {
     const s = String(v ?? '').trim();
@@ -89,6 +108,86 @@ export class SiteCategoriasService {
   }
 
   /**
+   * A foto da PEÇA MAIS NOVA publicada na categoria — candidata do automático.
+   * Pula REF sem foto (algumas ainda não têm) até achar uma que sirva.
+   */
+  private async fotoAutoDaCategoria(slug: string): Promise<{ url: string; ref: string; alt: string } | null> {
+    const produtos: Array<{ ref: string; nome: string | null }> = await (this.prisma as any).siteProduto.findMany({
+      where: { categoria: slug, publicado: true },
+      orderBy: { createdAt: 'desc' },
+      select: { ref: true, nome: true },
+      take: 10,
+    });
+    for (const p of produtos) {
+      const foto = await (this.prisma as any).productPhoto.findFirst({
+        where: { ref: p.ref },
+        orderBy: { ordem: 'asc' },
+        select: { url: true },
+      });
+      if (foto?.url) return { url: foto.url, ref: p.ref, alt: p.nome || '' };
+    }
+    return null;
+  }
+
+  /**
+   * Foto final + recorte de uma categoria: manual sempre manda; sem manual,
+   * resolve pelo automático e — só quando a REF em destaque MUDA — chama a
+   * IA de novo e cacheia o resultado na linha. Nunca lança: falha na IA ou
+   * na resolução automática cai pra "sem foto" (o card vira tipografia),
+   * nunca derruba a listagem inteira.
+   */
+  private async resolverFotoEFoco(
+    slug: string, nomeCategoria: string, atual: any,
+  ): Promise<FotoResolvida> {
+    try {
+      // Foto MANUAL (sem imagemDeRef) nunca é sobrescrita pelo automático.
+      if (atual?.imagemUrl && !atual?.imagemDeRef) {
+        return {
+          imagemUrl: atual.imagemUrl, alt: atual.alt,
+          focoX: atual.focoX, focoY: atual.focoY, focoZoom: atual.focoZoom,
+        };
+      }
+
+      const auto = await this.fotoAutoDaCategoria(slug);
+      if (!auto) return { imagemUrl: null, alt: null, focoX: null, focoY: null, focoZoom: null };
+
+      // Mesma REF de antes → usa o foco já cacheado, sem chamar IA de novo.
+      if (atual?.imagemDeRef === auto.ref && atual?.imagemUrl) {
+        return {
+          imagemUrl: atual.imagemUrl, alt: atual.alt || auto.alt,
+          focoX: atual.focoX, focoY: atual.focoY, focoZoom: atual.focoZoom,
+        };
+      }
+
+      // Peça em destaque mudou (ou é a primeira vez): lê o foco e cacheia.
+      let foco: { focoX: number; focoY: number; zoom: number } | null = null;
+      try {
+        foco = await this.corIa.detectarFoco(auto.url, nomeCategoria);
+      } catch (e: any) {
+        this.logger.warn(`[categorias] foco automático falhou (${slug}): ${e?.message || e}`);
+      }
+      const salvo = await (this.prisma as any).siteCategoria.upsert({
+        where: { slug },
+        create: {
+          slug, imagemUrl: auto.url, imagemDeRef: auto.ref, alt: auto.alt || null,
+          focoX: foco?.focoX ?? null, focoY: foco?.focoY ?? null, focoZoom: foco?.zoom ?? null,
+        },
+        update: {
+          imagemUrl: auto.url, imagemDeRef: auto.ref, alt: auto.alt || null,
+          focoX: foco?.focoX ?? null, focoY: foco?.focoY ?? null, focoZoom: foco?.zoom ?? null,
+        },
+      });
+      return {
+        imagemUrl: salvo.imagemUrl, alt: salvo.alt,
+        focoX: salvo.focoX, focoY: salvo.focoY, focoZoom: salvo.focoZoom,
+      };
+    } catch (e: any) {
+      this.logger.warn(`[categorias] resolverFotoEFoco falhou (${slug}): ${e?.message || e}`);
+      return { imagemUrl: atual?.imagemUrl ?? null, alt: atual?.alt ?? null, focoX: null, focoY: null, focoZoom: null };
+    }
+  }
+
+  /**
    * TELA DA RETAGUARDA: toda categoria que existe no catálogo, configurada ou
    * não, com a contagem de peças. Categoria configurada que perdeu todas as
    * peças aparece com `qtdPecas: 0` — some do site, mas não some da tela: quem
@@ -102,27 +201,34 @@ export class SiteCategoriasService {
     const porSlug = new Map<string, any>(configs.map((c: any) => [c.slug, c]));
     const slugs = new Set<string>([...catalogo.keys(), ...porSlug.keys()]);
 
-    return Array.from(slugs)
-      .map((slug) => {
+    const linhas = await Promise.all(
+      Array.from(slugs).map(async (slug) => {
         const c = porSlug.get(slug);
         const qtdPecas = catalogo.get(slug) ?? 0;
+        const nomeExibido = c?.nome || this.nomeDoSlug(slug);
+        const foto = qtdPecas > 0 ? await this.resolverFotoEFoco(slug, nomeExibido, c) : null;
         return {
           id: c?.id ?? null,
           slug,
           nome: c?.nome ?? null,
-          nomeExibido: c?.nome || this.nomeDoSlug(slug),
+          nomeExibido,
           titulo: c?.titulo ?? null,
           intro: c?.intro ?? null,
-          imagemUrl: c?.imagemUrl ?? null,
-          alt: c?.alt ?? null,
+          imagemUrl: foto?.imagemUrl ?? null,
+          alt: foto?.alt ?? null,
+          focoX: foto?.focoX ?? null,
+          focoY: foto?.focoY ?? null,
+          focoZoom: foto?.focoZoom ?? null,
+          fotoAutomatica: !!(c?.imagemDeRef),
           ordem: c?.ordem ?? 0,
           ativo: c?.ativo ?? true,
           destaque: c?.destaque ?? false,
           qtdPecas,
           configurada: !!c,
         };
-      })
-      .sort((a, b) => a.ordem - b.ordem || b.qtdPecas - a.qtdPecas);
+      }),
+    );
+    return linhas.sort((a, b) => a.ordem - b.ordem || b.qtdPecas - a.qtdPecas);
   }
 
   /** O que o site consome: só categoria ATIVA e COM peça. */
@@ -133,23 +239,31 @@ export class SiteCategoriasService {
     ]);
     const porSlug = new Map<string, any>(configs.map((c: any) => [c.slug, c]));
 
-    return Array.from(catalogo.entries())
-      .filter(([slug]) => porSlug.get(slug)?.ativo !== false)
-      .map(([slug, qtdPecas]) => {
+    const validas = Array.from(catalogo.entries()).filter(
+      ([slug]) => porSlug.get(slug)?.ativo !== false,
+    );
+    const linhas = await Promise.all(
+      validas.map(async ([slug, qtdPecas]) => {
         const c = porSlug.get(slug);
+        const nome = c?.nome || this.nomeDoSlug(slug);
+        const foto = await this.resolverFotoEFoco(slug, nome, c);
         return {
           slug,
-          nome: c?.nome || this.nomeDoSlug(slug),
+          nome,
           titulo: c?.titulo ?? null,
           intro: c?.intro ?? null,
-          imagemUrl: c?.imagemUrl ?? null,
-          alt: c?.alt ?? null,
+          imagemUrl: foto.imagemUrl,
+          alt: foto.alt,
+          focoX: foto.focoX,
+          focoY: foto.focoY,
+          focoZoom: foto.focoZoom,
           ordem: c?.ordem ?? 0,
           destaque: c?.destaque ?? false,
           qtdPecas,
         };
-      })
-      .sort((a, b) => a.ordem - b.ordem || b.qtdPecas - a.qtdPecas);
+      }),
+    );
+    return linhas.sort((a, b) => a.ordem - b.ordem || b.qtdPecas - a.qtdPecas);
   }
 
   /** Cria a configuração da categoria na primeira edição. Slug é a chave. */
@@ -214,9 +328,28 @@ export class SiteCategoriasService {
 
     const anterior = atual.objectKey;
     const url = `${publico.replace(/\/$/, '')}/${key}`;
+
+    // Foto escolhida À MÃO: lê o foco na hora (mesmo motor do automático),
+    // pra não publicar uma foto sem o recorte de close aplicado.
+    let foco: { focoX: number; focoY: number; zoom: number } | null = null;
+    try {
+      foco = await this.corIa.detectarFoco(url, atual.nome || this.nomeDoSlug(atual.slug));
+    } catch (e: any) {
+      this.logger.warn(`[categorias] foco da foto manual falhou (${atual.slug}): ${e?.message || e}`);
+    }
+
     const salvo = await (this.prisma as any).siteCategoria.update({
       where: { id: atual.id },
-      data: { imagemUrl: url, objectKey: key, atualizadoPor: usuario ?? null },
+      data: {
+        imagemUrl: url,
+        objectKey: key,
+        // imagemDeRef=null MARCA foto manual — nunca é sobrescrita pelo automático.
+        imagemDeRef: null,
+        focoX: foco?.focoX ?? null,
+        focoY: foco?.focoY ?? null,
+        focoZoom: foco?.zoom ?? null,
+        atualizadoPor: usuario ?? null,
+      },
     });
 
     // Só apaga a antiga DEPOIS que a nova está gravada (mesma regra dos banners).
@@ -231,7 +364,8 @@ export class SiteCategoriasService {
     return salvo;
   }
 
-  /** Tira só a FOTO — a categoria continua existindo (ela é do catálogo). */
+  /** Tira só a FOTO — a categoria continua existindo (ela é do catálogo).
+   *  Volta a valer o automático (peça mais nova) na próxima leitura. */
   async removerImagem(slug: string) {
     const atual = await (this.prisma as any).siteCategoria.findUnique({
       where: { slug: this.normSlug(slug) },
@@ -248,7 +382,10 @@ export class SiteCategoriasService {
     }
     const salvo = await (this.prisma as any).siteCategoria.update({
       where: { id: atual.id },
-      data: { imagemUrl: null, objectKey: null },
+      data: {
+        imagemUrl: null, objectKey: null, imagemDeRef: null,
+        focoX: null, focoY: null, focoZoom: null,
+      },
     });
     this.avisarSite();
     return salvo;

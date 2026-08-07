@@ -29,6 +29,12 @@ type Categoria = {
   intro: string | null;
   imagemUrl: string | null;
   alt: string | null;
+  /** Recorte lido por IA — centro (fração 0..1) + zoom. Null = sem leitura. */
+  focoX: number | null;
+  focoY: number | null;
+  focoZoom: number | null;
+  /** true = foto veio sozinha (peça mais nova); false = escolhida à mão. */
+  fotoAutomatica: boolean;
   ordem: number;
   ativo: boolean;
   destaque: boolean;
@@ -102,7 +108,18 @@ function CardCategoria({
   // não pode jogar o retorno do servidor por cima do que está sendo digitado
   // (foi o bug dos banners, 07/08).
   useEffect(() => {
-    setForm((f) => (f.slug !== categoria.slug ? categoria : { ...f, imagemUrl: categoria.imagemUrl }));
+    setForm((f) =>
+      f.slug !== categoria.slug
+        ? categoria
+        : {
+            ...f,
+            imagemUrl: categoria.imagemUrl,
+            focoX: categoria.focoX,
+            focoY: categoria.focoY,
+            focoZoom: categoria.focoZoom,
+            fotoAutomatica: categoria.fotoAutomatica,
+          },
+    );
   }, [categoria]);
 
   const campo = <K extends keyof Categoria>(k: K, v: Categoria[K]) =>
@@ -160,13 +177,40 @@ function CardCategoria({
       <div className="flex items-start gap-3">
         {/* Foto */}
         <div className="shrink-0">
-          <div className="w-24 h-32 rounded-lg border border-slate-200 bg-slate-50 overflow-hidden flex items-center justify-center">
+          <div className="w-24 h-32 rounded-lg border border-slate-200 bg-slate-50 overflow-hidden flex items-center justify-center relative">
             {form.imagemUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={form.imagemUrl} alt={form.nomeExibido} className="w-full h-full object-cover" />
+              // eslint-disable-next-line @next/next/no-img-element — recorte da
+              // IA é o mesmo objectPosition/scale do card real (CategoriaCard),
+              // pra retaguarda mostrar exatamente o que o site vai exibir.
+              <img
+                src={form.imagemUrl}
+                alt={form.nomeExibido}
+                className="w-full h-full object-cover"
+                style={
+                  form.focoX != null && form.focoY != null
+                    ? {
+                        objectPosition: `${form.focoX * 100}% ${form.focoY * 100}%`,
+                        transform: `scale(${form.focoZoom ?? 1.4})`,
+                        transformOrigin: `${form.focoX * 100}% ${form.focoY * 100}%`,
+                      }
+                    : { objectPosition: 'center top' }
+                }
+              />
             ) : (
               <span className="text-[9px] text-slate-400 text-center px-1 leading-tight">
                 usa a peça mais nova
+              </span>
+            )}
+            {form.imagemUrl && (
+              <span
+                className="absolute top-1 left-1 text-[8px] font-bold uppercase px-1 py-0.5 rounded bg-white/90 text-slate-600"
+                title={
+                  form.fotoAutomatica
+                    ? 'Foto automática (peça mais nova) — recorte lido por IA'
+                    : 'Foto escolhida à mão — recorte lido por IA'
+                }
+              >
+                {form.fotoAutomatica ? '🤖 auto' : '✓ sua foto'}
               </span>
             )}
           </div>

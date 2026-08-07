@@ -27,6 +27,11 @@ export interface CategoriaCardData {
   nome: string;
   imagemUrl: string | null;
   alt: string | null;
+  /** Recorte lido por IA — centro (fração 0..1) + zoom. Null = sem leitura
+   *  ainda; o card cai no enquadramento padrão (topo da foto). */
+  focoX?: number | null;
+  focoY?: number | null;
+  focoZoom?: number | null;
 }
 
 /**
@@ -128,6 +133,20 @@ function IconePeca({ slug, className }: { slug: string; className?: string }) {
 export function CategoriaCard({
   data, index = 0, className,
 }: { data: CategoriaCardData; index?: number; className?: string }) {
+  // RECORTE DA IA (dono 07/08: "dar mais close na peça que simboliza a
+  // categoria"). O zoom da IA fica FIXO na própria <Image> (é o enquadramento
+  // da categoria, não um efeito de interação); o zoom de HOVER vai no
+  // wrapper de fora — são dois elementos diferentes de propósito, senão os
+  // dois `transform: scale()` brigam pelo mesmo estilo inline.
+  const temFoco = data.focoX != null && data.focoY != null;
+  const estiloFoco: React.CSSProperties = temFoco
+    ? {
+        objectPosition: `${(data.focoX ?? 0.5) * 100}% ${(data.focoY ?? 0.4) * 100}%`,
+        transform: `scale(${data.focoZoom ?? 1.4})`,
+        transformOrigin: `${(data.focoX ?? 0.5) * 100}% ${(data.focoY ?? 0.4) * 100}%`,
+      }
+    : { objectPosition: 'center top' };
+
   return (
     <motion.div
       {...reveal(fadeUp, '-40px')}
@@ -138,15 +157,18 @@ export function CategoriaCard({
         href={`/categoria/${data.slug}`}
         className="group relative block overflow-hidden rounded-md border border-border/60 bg-surface-alt"
       >
-        <div className="relative aspect-3/4">
+        <div className="relative aspect-3/4 overflow-hidden">
           {data.imagemUrl ? (
-            <Image
-              src={data.imagemUrl}
-              alt={data.alt || data.nome}
-              fill
-              sizes="(max-width: 768px) 50vw, (max-width: 1024px) 33vw, 16vw"
-              className="object-cover object-top transition-transform duration-[720ms] ease-[cubic-bezier(0.22,1,0.36,1)] group-hover:scale-[1.04]"
-            />
+            <div className="absolute inset-0 transition-transform duration-[720ms] ease-[cubic-bezier(0.22,1,0.36,1)] group-hover:scale-[1.04]">
+              <Image
+                src={data.imagemUrl}
+                alt={data.alt || data.nome}
+                fill
+                sizes="(max-width: 768px) 50vw, (max-width: 1024px) 33vw, 16vw"
+                className="object-cover"
+                style={estiloFoco}
+              />
+            </div>
           ) : (
             <div className="grain size-full bg-gradient-to-br from-champagne via-surface-alt to-background" />
           )}
