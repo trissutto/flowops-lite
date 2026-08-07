@@ -55,7 +55,10 @@ export async function fetchPrimeiraPagina(opcoes: {
   const params = new URLSearchParams({ page: '1', perPage: String(perPage), ordenar });
   if (categoria) params.set('categoria', categoria);
   if (precoMax) params.set('precoMax', String(precoMax));
-  if (soPromocao) params.set('soPromocao', '1');
+  // O controller (loja-catalog.controller.ts) lê a chave "promocao", não
+  // "soPromocao" — bug real, 07/08: o Outlet mandava o parâmetro errado e o
+  // filtro nunca aplicava (a página listava o catálogo inteiro).
+  if (soPromocao) params.set('promocao', '1');
 
   try {
     const r = await api<{ itens: PecaApi[]; total?: number; totalPages?: number }>(
