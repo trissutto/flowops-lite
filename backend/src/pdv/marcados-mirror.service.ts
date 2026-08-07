@@ -1,46 +1,33 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
 
 /**
- * MARCADOS NATIVOS — espelho/fonte de leitura no Flow (dono 21/07: "CHEGA DE GIGA").
+ * MARCADOS — hoje 100% Flow (07/08, regra do dono: "nunca marque ou puxe
+ * nada do Giga"). Este service NAO grava mais nada aqui vindo do Giga — nem
+ * em cron, nem sob pedido. O que resta e:
  *
- * - Import: puxa TODA a caixa com MARCADO='SIM' (poucas centenas de linhas,
- *   mas a query é full-scan — por isso roda 1x/hora, não por request).
- * - Linhas do Giga que sumiram (fechadas/devolvidas direto no Wincred) viram
- *   status='fechado_giga' — nunca apaga histórico.
- * - Linhas criadas pelo Flow (origem='flow', sem registroGiga ainda) NÃO são
- *   tocadas pelo sync.
- * - Enriquece nome/CPF da cliente pelo espelho giga_clientes (loja+codigo).
+ * - `varrerRestosDoGiga()`: leitura PURA e sob demanda de `caixa
+ *   WHERE MARCADO='SIM'` — so pra referencia/duvida ("essa peca antiga ainda
+ *   esta marcada la?"), nunca grava nada no Flow. Botao "Restos dos marcados
+ *   do Giga" na retaguarda.
+ * - `lookupNomes()`: casa nome/CPF olhando o ESPELHO `giga_clientes` (ja
+ *   sincronizado no nosso Postgres) — nao e leitura do Giga ao vivo.
+ * - `diagnosticarIdentidade()`: mesma ideia, pra investigar atribuicao
+ *   errada de cliente (caso Daiana, 07/08).
  *
- * Cron: minuto 40 de cada hora, gated por WINCRED_MIRROR_CRON_ENABLED
- * (mesma flag dos outros espelhos).
+ * ATE 07/08 existia aqui um sync horario que IMPORTAVA `caixa` pro Flow
+ * (`syncFromGiga`, cron `40 * * * *`) — removido. Cada peca marcada hoje
+ * nasce e morre 100% no Postgres; nao sobra Giga nenhum pra "puxar".
  */
 @Injectable()
 export class MarcadosMirrorService {
   private readonly logger = new Logger(MarcadosMirrorService.name);
-  private running = false;
-  private lastResult: any = null;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly erp: ErpService,
   ) {}
-
-  private get cronEnabled(): boolean {
-    return String(process.env.WINCRED_MIRROR_CRON_ENABLED ?? '').trim() === '1';
-  }
-
-  @Cron('40 * * * *')
-  async cronSync() {
-    if (!this.cronEnabled) return;
-    try {
-      await this.syncFromGiga();
-    } catch (e: any) {
-      this.logger.error(`[marcados-mirror] cron falhou: ${e?.message || e}`);
-    }
-  }
 
   async status() {
     const [total, ativos, fechados, devolvidos, fechadosGiga, porLojaRaw] = await Promise.all([
@@ -58,162 +45,80 @@ export class MarcadosMirrorService {
       porLoja: (porLojaRaw as any[])
         .map((r) => ({ loja: r.storeCode, ativos: r._count._all }))
         .sort((a, b) => a.loja.localeCompare(b.loja)),
-      running: this.running,
-      lastResult: this.lastResult,
     };
   }
 
-  /** Tem espelho utilizável? (nunca importou = 0 linhas → leituras caem pro Giga) */
+  /** Tem espelho utilizavel? (nunca importou = 0 linhas) */
   async hasMirror(): Promise<boolean> {
     const n = await (this.prisma as any).marcado.count();
     return n > 0;
   }
 
-  async syncFromGiga(): Promise<{ ok: boolean; importados?: number; fechadosGiga?: number; error?: string }> {
-    if (this.running) return { ok: false, error: 'sync já em andamento' };
-    this.running = true;
-    const t0 = Date.now();
-    try {
-      // Paginado (31/07): eram 6.912 linhas contra um teto de 50.000, então
-      // ainda não cortava — mas marcado que some do espelho é PDV liberando
-      // venda acima do limite da cliente. Não fica no "ainda cabe".
-      const r = await this.erp.readAllPages(
-        `SELECT REGISTRO, NUMERO, CODIGO, DATA, DESCRICAO, QUANTIDADE, VALOR, VALORTOTAL,
-                VENDEDOR, CLIENTE, LOJA
-           FROM caixa
-          WHERE UPPER(MARCADO) = 'SIM'`,
-        { orderBy: 'REGISTRO', batch: 10_000, timeoutMs: 90_000 },
-      );
-      const rows: any[] = r.rows || [];
-      if (r.truncado) {
-        // Espelho pela metade = limite de crediário errado no PDV. Aborta.
-        throw new Error(`leitura de marcados truncada no teto (${rows.length} linhas) — espelho preservado`);
-      }
-      const vivos = new Set<string>();
+  /**
+   * "RESTOS DOS MARCADOS DO GIGA" — sob demanda, NUNCA grava nada. Mostra o
+   * que ainda esta com `MARCADO='SIM'` na `caixa` — sobras de antes de
+   * 07/08 (ou peca que alguem fechou direto no Wincred, que ninguem mais
+   * usa, e nunca vai sumir sozinha de la). Cada linha diz se JA existe um
+   * `Marcado` nativo pro mesmo REGISTRO, pra distinguir "so existe no Giga,
+   * morto" de "tambem esta rastreado no Flow".
+   */
+  async varrerRestosDoGiga(limite = 500): Promise<{
+    total: number;
+    truncado: boolean;
+    itens: Array<{
+      registro: number; numero: number | null; sku: string; descricao: string | null;
+      qty: number; valor: number; valorTotal: number; loja: string; codCliente: string;
+      data: string | null; jaNoFlow: boolean; statusNoFlow: string | null;
+    }>;
+  }> {
+    const teto = Math.min(Math.max(limite, 1), 2000);
+    const r = await this.erp.runReadOnly(
+      `SELECT REGISTRO, NUMERO, CODIGO, DATA, DESCRICAO, QUANTIDADE, VALOR, VALORTOTAL, CLIENTE, LOJA
+         FROM caixa
+        WHERE UPPER(MARCADO) = 'SIM'
+        ORDER BY DATA DESC, REGISTRO DESC
+        LIMIT ${teto}`,
+      { maxRows: teto, timeoutMs: 20000 },
+    );
+    const rows: any[] = r.rows || [];
+    const regs = rows.map((row) => Number(row.REGISTRO)).filter((n) => Number.isFinite(n) && n > 0);
+    const nativos: any[] = regs.length
+      ? await (this.prisma as any).marcado.findMany({
+          where: { registroGiga: { in: regs.map((n) => BigInt(n)) } },
+          select: { registroGiga: true, status: true },
+        })
+      : [];
+    const statusPorReg = new Map(nativos.map((n) => [String(n.registroGiga), n.status]));
 
-      let importados = 0;
-      for (const row of rows) {
-        const reg = Number(row.REGISTRO);
-        if (!Number.isFinite(reg) || reg <= 0) continue;
-        vivos.add(String(reg));
-        const loja = String(row.LOJA ?? '').trim().padStart(2, '0');
-        const qty = Math.max(1, Number(row.QUANTIDADE) || 1);
-        const valorTotal = Number(row.VALORTOTAL) || (Number(row.VALOR) || 0) * qty;
-        const data: any = {
-          storeCode: loja,
-          codCliente: String(row.CLIENTE ?? '').trim(),
-          numero: Number(row.NUMERO) || null,
-          sku: String(row.CODIGO ?? '').trim().slice(0, 60),
-          descricao: String(row.DESCRICAO ?? '').slice(0, 160) || null,
-          qty,
-          valorUnit: Number(row.VALOR) || 0,
-          valorTotal,
-          vendedor: row.VENDEDOR != null ? String(row.VENDEDOR) : null,
-          dataMarcacao: row.DATA ? new Date(row.DATA) : null,
-          status: 'ativo',
-          origem: 'giga',
-        };
-        const existente = await (this.prisma as any).marcado.findUnique({
-          where: { registroGiga: BigInt(reg) },
-          select: { id: true, status: true },
-        });
-        if (existente) {
-          /**
-           * ⚠️ O QUE O FLOW JÁ RESOLVEU NÃO VOLTA (04/08 — caso Célio).
-           *
-           * `data` carrega `status: 'ativo'` fixo. Antes só 'puxado' era
-           * preservado, então TODO import trazia de volta pra 'ativo' o que o
-           * Flow já tinha encerrado — bastava a linha continuar MARCADO='SIM'
-           * no Giga, que é o normal quando a baixa lá falha ou é feita por
-           * outro caminho (o Giga é RÉPLICA desde 31/07, não a fonte).
-           *
-           * Efeito real: cliente que veio à loja, usou o crédito e teve o
-           * marcado fechado no Flow via ele RESSUSCITADO no próximo import —
-           * crédito de volta na conta dele e peça reaparecendo como "em marca".
-           * Foi o que aconteceu com o Célio (R$ 249,90).
-           *
-           * Agora o status decidido AQUI é final. Só 'ativo' e 'fechado_giga'
-           * seguem o Giga — 'fechado_giga' é justamente "sumiu de lá", então
-           * voltar a existir tem que reabrir mesmo.
-           */
-          const DECIDIDO_NO_FLOW = new Set(['fechado', 'devolvido', 'baixado', 'puxado']);
-          const preserva = DECIDIDO_NO_FLOW.has(String(existente.status));
-          const dataUpd = preserva ? { ...data, status: existente.status } : data;
-          if (preserva) {
-            // O Giga ainda acha que a peça está marcada — sinal de que a baixa
-            // lá não foi replicada. Fica no log pra matriz conferir.
-            this.logger.warn(
-              `[marcados/sync] REGISTRO=${reg} continua MARCADO='SIM' no Giga mas o Flow já ` +
-              `encerrou como "${existente.status}" — status preservado (não ressuscita).`,
-            );
-          }
-          await (this.prisma as any).marcado.update({ where: { id: existente.id }, data: dataUpd });
-        } else {
-          // Marcação criada pelo Flow cujo REGISTRO não foi capturado na hora
-          // (Giga lento): casa por NUMERO+loja+sku pra não duplicar.
-          const orfao = data.numero
-            ? await (this.prisma as any).marcado.findFirst({
-                where: {
-                  registroGiga: null, origem: 'flow', status: 'ativo',
-                  numero: data.numero, storeCode: data.storeCode, sku: data.sku,
-                },
-                select: { id: true },
-              })
-            : null;
-          if (orfao) {
-            await (this.prisma as any).marcado.update({
-              where: { id: orfao.id },
-              data: { registroGiga: BigInt(reg), ...data, origem: 'flow' },
-            });
-          } else {
-            await (this.prisma as any).marcado.create({ data: { registroGiga: BigInt(reg), ...data } });
-          }
-        }
-        importados++;
-      }
-
-      // Import é a fonte: quem era 'ativo' vindo do Giga e NÃO está mais SIM
-      // lá, foi fechado/devolvido direto no Wincred → fechado_giga.
-      // (origem='flow' sem registroGiga nunca entra aqui.)
-      const ativosGiga: any[] = await (this.prisma as any).marcado.findMany({
-        where: { status: 'ativo', origem: 'giga', registroGiga: { not: null } },
-        select: { id: true, registroGiga: true },
-      });
-      let fechadosGiga = 0;
-      for (const m of ativosGiga) {
-        if (!vivos.has(String(m.registroGiga))) {
-          await (this.prisma as any).marcado.update({
-            where: { id: m.id },
-            data: { status: 'fechado_giga', fechadoAt: new Date() },
-          });
-          fechadosGiga++;
-        }
-      }
-
-      // Enriquece nome/CPF pelo espelho de clientes (loja+codigo)
-      await this.enrichClientes();
-
-      const ms = Date.now() - t0;
-      this.lastResult = { at: new Date().toISOString(), importados, fechadosGiga, ms };
-      this.logger.log(`[marcados-mirror] sync ok: ${importados} ativos, ${fechadosGiga} fechados no Giga, ${ms}ms`);
-      return { ok: true, importados, fechadosGiga };
-    } catch (e: any) {
-      this.lastResult = { at: new Date().toISOString(), error: e?.message || String(e) };
-      this.logger.error(`[marcados-mirror] sync falhou: ${e?.message || e}`);
-      return { ok: false, error: e?.message || String(e) };
-    } finally {
-      this.running = false;
-    }
+    const itens = rows.map((row) => {
+      const registro = Number(row.REGISTRO) || 0;
+      const st = statusPorReg.get(String(registro)) ?? null;
+      return {
+        registro,
+        numero: row.NUMERO != null ? Number(row.NUMERO) : null,
+        sku: String(row.CODIGO || ''),
+        descricao: row.DESCRICAO ? String(row.DESCRICAO) : null,
+        qty: Number(row.QUANTIDADE) || 1,
+        valor: Number(row.VALOR) || 0,
+        valorTotal: Number(row.VALORTOTAL) || 0,
+        loja: String(row.LOJA || ''),
+        codCliente: String(row.CLIENTE ?? '').trim(),
+        data: row.DATA ? new Date(row.DATA).toISOString() : null,
+        jaNoFlow: st != null,
+        statusNoFlow: st,
+      };
+    });
+    return { total: itens.length, truncado: itens.length >= teto, itens };
   }
 
   /**
-   * DIAGNÓSTICO — "de quem é de verdade" (caso Daiana, 07/08).
+   * DIAGNOSTICO — "de quem e de verdade" (caso Daiana, 07/08).
    *
-   * Pra cada marcado com este CPF (o CPF pode estar errado — é resultado do
-   * bug), mostra: o código bruto do cliente gravado na peça, se existe ficha
-   * EXATA na loja de origem (se não, é POR ISSO que o fallback antigo
-   * disparou), e TODA ficha de QUALQUER loja com esse mesmo código — a lista
-   * de candidatas a dona real. Read-only, não muda nada.
+   * Pra cada marcado com este CPF (o CPF pode estar errado — e resultado do
+   * bug), mostra: o codigo bruto do cliente gravado na peca, se existe ficha
+   * EXATA na loja de origem (se nao, e POR ISSO que o fallback antigo
+   * disparou), e TODA ficha de QUALQUER loja com esse mesmo codigo — a lista
+   * de candidatas a dona real. Read-only, nao muda nada.
    */
   async diagnosticarIdentidade(cpf: string): Promise<{
     marcados: Array<{
@@ -245,38 +150,39 @@ export class MarcadosMirrorService {
     return { marcados: out };
   }
 
-  /** Normaliza código/loja pra casar caixa × giga_clientes (padding de zeros
-   *  é inconsistente no Giga — mesma regra do CAST AS UNSIGNED dos produtos). */
+  /** Normaliza codigo/loja pra casar contra o espelho giga_clientes (padding
+   *  de zeros e inconsistente no Giga — mesma regra do CAST AS UNSIGNED dos
+   *  produtos). */
   private normNum(s: any): string {
     const d = String(s ?? '').replace(/\D/g, '').replace(/^0+/, '');
     return d || '0';
   }
 
   /**
-   * Busca nome/CPF no espelho giga_clientes pros pares (loja, codCliente),
-   * casando por LOJA+CÓDIGO exato — nunca só pelo código. Retorna Map por
-   * `${loja}|${cod}` normalizado.
+   * Busca nome/CPF no ESPELHO giga_clientes (nosso Postgres, ja
+   * sincronizado — nao e leitura do Giga ao vivo) pros pares
+   * (loja, codCliente), casando por LOJA+CODIGO exato — nunca so pelo
+   * codigo. Retorna Map por `${loja}|${cod}` normalizado.
    *
-   * 🔴 ATÉ 07/08 tinha um fallback "sem loja" (achado caso Daiana Lucena: 5
-   * peças da loja 11/Limeira apareceram atribuídas a ela, e a equipe não
-   * reconhecia). `codCliente` é sequência POR LOJA (`GigaClienteSeq`), não
-   * globalmente único — cód. 148 existe em várias lojas, cada uma sendo uma
-   * pessoa diferente. O fallback pegava "qualquer ficha com esse número, de
-   * qualquer loja" pra preencher nome/CPF, e a marcação de OUTRA cliente virava
+   * ATE 07/08 tinha um fallback "sem loja" (achado caso Daiana Lucena: 5
+   * pecas da loja 11/Limeira apareceram atribuidas a ela, e a equipe nao
+   * reconhecia). `codCliente` e sequencia POR LOJA (`GigaClienteSeq`), nao
+   * globalmente unico — cod. 148 existe em varias lojas, cada uma sendo uma
+   * pessoa diferente. O fallback pegava "qualquer ficha com esse numero, de
+   * qualquer loja" pra preencher nome/CPF, e a marcacao de OUTRA cliente virava
    * a Daiana na tela.
    *
-   * Mesma família de bug já corrigida em `listAllMarcados` (21/07) e
-   * documentada em `getClienteMarcadorInfo` — só não tinha chegado aqui, que é
-   * o único caminho que preenche nome/CPF pra marcado de origem Giga.
+   * Mesma familia de bug ja corrigida em `listAllMarcados` (21/07) e
+   * documentada em `getClienteMarcadorInfo` — so nao tinha chegado aqui.
    *
-   * Sem ficha exata, o marcado fica SEM nome/CPF — pior pra tela (aparece só
-   * o código), melhor que aparecer com o nome de uma pessoa errada.
+   * Sem ficha exata, o marcado fica SEM nome/CPF — pior pra tela (aparece so
+   * o codigo), melhor que aparecer com o nome de uma pessoa errada.
    */
   async lookupNomes(pares: Array<{ storeCode: string; codCliente: string }>): Promise<Map<string, { nome: string | null; cpf: string | null }>> {
     const out = new Map<string, { nome: string | null; cpf: string | null }>();
     const codsNorm = Array.from(new Set(pares.map((p) => this.normNum(p.codCliente)))).filter((c) => c !== '0');
     if (!codsNorm.length) return out;
-    // Busca por código cru E sem zeros (cobre os dois jeitos de gravar)
+    // Busca por codigo cru E sem zeros (cobre os dois jeitos de gravar)
     const variantes = Array.from(new Set([
       ...codsNorm,
       ...pares.map((p) => String(p.codCliente).trim()),
@@ -301,27 +207,5 @@ export class MarcadosMirrorService {
       }
     }
     return out;
-  }
-
-  /** Preenche clienteNome/cpf a partir do espelho giga_clientes (persistindo). */
-  private async enrichClientes() {
-    const semNome: any[] = await (this.prisma as any).marcado.findMany({
-      where: { OR: [{ clienteNome: null }, { cpf: null }] },
-      select: { id: true, storeCode: true, codCliente: true },
-      take: 5000,
-    });
-    if (!semNome.length) return;
-    const nomes = await this.lookupNomes(semNome);
-    for (const m of semNome) {
-      const f = nomes.get(`${this.normNum(m.storeCode)}|${this.normNum(m.codCliente)}`);
-      if (!f || (!f.nome && !f.cpf)) continue;
-      await (this.prisma as any).marcado.update({
-        where: { id: m.id },
-        data: {
-          clienteNome: f.nome || undefined,
-          cpf: f.cpf || undefined,
-        },
-      });
-    }
   }
 }

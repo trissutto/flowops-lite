@@ -14,7 +14,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import {
   ArrowLeft, Database, RefreshCw, Play, Loader2, CheckCircle2,
-  AlertTriangle, Clock,
+  AlertTriangle, Clock, Search,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -580,56 +580,50 @@ function MarcadosNativoBox() {
   const [st, setSt] = useState<{
     total: number; ativos: number; fechados: number; devolvidos: number; fechadosGiga: number;
     porLoja: Array<{ loja: string; ativos: number }>;
-    running: boolean;
-    lastResult?: { at?: string; importados?: number; error?: string } | null;
   } | null>(null);
-  const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  // Restos do Giga — leitura sob demanda, NUNCA grava nada (07/08, regra do
+  // dono: "nunca marque ou puxe nada do Giga"). Ver comentário completo em
+  // MarcadosMirrorService.varrerRestosDoGiga.
+  const [restos, setRestos] = useState<{ total: number; truncado: boolean; itens: any[] } | null>(null);
+  const [restosBusy, setRestosBusy] = useState(false);
+  const [restosErr, setRestosErr] = useState<string | null>(null);
+  const [restosAberto, setRestosAberto] = useState(false);
 
   const load = async () => {
     try { setSt(await api('/pdv/marcados/sync/status')); } catch { /* mantém */ }
   };
   useEffect(() => { load(); }, []);
 
-  const rodar = async () => {
-    if (busy) return;
-    setBusy(true); setErr(null);
+  const verRestos = async () => {
+    setRestosAberto(true);
+    setRestosBusy(true); setRestosErr(null);
     try {
-      await api('/pdv/marcados/sync', { method: 'POST' });
-      const t0 = Date.now();
-      while (Date.now() - t0 < 10 * 60 * 1000) {
-        await new Promise((res) => setTimeout(res, 4000));
-        const cur = await api<any>('/pdv/marcados/sync/status').catch(() => null);
-        if (cur) setSt(cur);
-        if (cur && !cur.running) {
-          if (cur.lastResult?.error) setErr(`Importação falhou: ${cur.lastResult.error}`);
-          break;
-        }
-      }
+      setRestos(await api('/pdv/marcados/restos-giga?limite=500'));
     } catch (e: any) {
-      setErr(e?.message || 'Erro ao iniciar a importação');
-    } finally { setBusy(false); load(); }
+      setRestosErr(e?.message || 'Falha ao consultar o Giga');
+    } finally {
+      setRestosBusy(false);
+    }
   };
 
   return (
     <div className="bg-gradient-to-br from-amber-50 to-yellow-50 border border-amber-200 rounded-xl p-5">
       <div className="flex items-center gap-4 flex-wrap">
         <div className="flex-1 min-w-[260px]">
-          <h2 className="font-bold text-amber-900 mb-1">Marcados nativos — provar em casa no Flow</h2>
+          <h2 className="font-bold text-amber-900 mb-1">Marcados — 100% Flow</h2>
           <p className="text-xs text-amber-700">
-            Importa tudo que está <b>em marca</b> (caixa MARCADO=SIM) pro Flow. Depois disso as
-            consultas de marcados (PDV e retaguarda) leem daqui — sem Giga no caminho. Sync
-            automático de hora em hora + atualização na hora ao marcar/devolver/fechar.
+            Marcar, puxar pra venda, devolver e fechar são só no Flow (07/08) — sem escrever nem
+            ler o Giga ao vivo em nenhum desses passos. &quot;Restos dos marcados do Giga&quot; é
+            uma consulta pontual, só pra referência: nunca importa nada de lá pro Flow.
           </p>
           {st && (
             <div className="mt-2 flex gap-3 flex-wrap text-[11px] font-bold text-amber-800">
               <span>{st.ativos.toLocaleString('pt-BR')} em marca</span>
               <span className="text-emerald-700">· {st.fechados.toLocaleString('pt-BR')} fechados</span>
               <span>· {st.devolvidos.toLocaleString('pt-BR')} devolvidos</span>
-              {st.fechadosGiga > 0 && <span className="text-slate-500">· {st.fechadosGiga} fechados no Giga</span>}
-              {st.lastResult?.at && (
-                <span className="text-amber-600 font-normal">· último: {new Date(st.lastResult.at).toLocaleString('pt-BR')}</span>
-              )}
+              {st.fechadosGiga > 0 && <span className="text-slate-500">· {st.fechadosGiga} fechados no Giga (histórico)</span>}
             </div>
           )}
           {st && st.porLoja?.length > 0 && (
@@ -643,18 +637,71 @@ function MarcadosNativoBox() {
           )}
         </div>
         <button
-          onClick={rodar}
-          disabled={busy || !!st?.running}
-          className="shrink-0 px-5 py-3 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold flex items-center gap-2 shadow disabled:opacity-50"
+          onClick={verRestos}
+          disabled={restosBusy}
+          title="Só olha o que ainda está MARCADO='SIM' na caixa do Giga — não grava nada no Flow"
+          className="shrink-0 px-5 py-3 rounded-lg bg-slate-700 hover:bg-slate-800 text-white font-bold flex items-center gap-2 shadow disabled:opacity-50"
         >
-          {busy || st?.running ? (
-            <><Loader2 className="w-4 h-4 animate-spin" /> Importando marcados...</>
+          {restosBusy ? (
+            <><Loader2 className="w-4 h-4 animate-spin" /> Consultando…</>
           ) : (
-            <><Play className="w-4 h-4" /> Importar marcados do Giga</>
+            <><Search className="w-4 h-4" /> Restos dos marcados do Giga</>
           )}
         </button>
       </div>
       {err && <div className="mt-2 text-xs font-bold text-red-700">{err}</div>}
+
+      {restosAberto && (
+        <div className="mt-4 pt-4 border-t border-amber-200">
+          {restosErr && <div className="text-xs font-bold text-red-700 mb-2">{restosErr}</div>}
+          {restos && (
+            <>
+              <p className="text-xs text-amber-800 mb-2">
+                <b>{restos.total}</b> linha(s) ainda marcada(s) no Giga{restos.truncado ? ' (mostrando as 500 mais recentes)' : ''}.
+                {' '}<span className="text-slate-500">&quot;Já no Flow&quot; = existe um marcado nativo pro mesmo registro (pode já estar fechado por aqui, só não foi tocado lá).</span>
+              </p>
+              {restos.itens.length === 0 ? (
+                <p className="text-xs text-emerald-700 font-bold">Nada sobrando no Giga.</p>
+              ) : (
+                <div className="overflow-x-auto max-h-80 overflow-y-auto rounded-lg border border-amber-200">
+                  <table className="w-full text-[11px]">
+                    <thead className="bg-amber-100 sticky top-0">
+                      <tr className="text-left text-amber-900">
+                        <th className="px-2 py-1.5">Data</th>
+                        <th className="px-2 py-1.5">SKU</th>
+                        <th className="px-2 py-1.5">Descrição</th>
+                        <th className="px-2 py-1.5 text-right">Valor</th>
+                        <th className="px-2 py-1.5">Loja</th>
+                        <th className="px-2 py-1.5">Cód. cliente</th>
+                        <th className="px-2 py-1.5">Já no Flow?</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {restos.itens.map((it) => (
+                        <tr key={it.registro} className="border-t border-amber-100">
+                          <td className="px-2 py-1 whitespace-nowrap">{it.data ? new Date(it.data).toLocaleDateString('pt-BR') : '—'}</td>
+                          <td className="px-2 py-1 font-mono">{it.sku}</td>
+                          <td className="px-2 py-1">{it.descricao || '—'}</td>
+                          <td className="px-2 py-1 text-right tabular-nums">{Number(it.valorTotal || it.valor || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</td>
+                          <td className="px-2 py-1">{it.loja}</td>
+                          <td className="px-2 py-1">{it.codCliente}</td>
+                          <td className="px-2 py-1">
+                            {it.jaNoFlow ? (
+                              <span className="text-emerald-700 font-bold">sim ({it.statusNoFlow})</span>
+                            ) : (
+                              <span className="text-slate-400">não</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }
