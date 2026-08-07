@@ -178,7 +178,10 @@ function paramsDosFiltros(filters: FilterState): Record<string, string> {
 /* ----------------------------------------------------------------- CONSULTA */
 
 export async function fetchProducts(query: ProductQuery = {}): Promise<Paginated<Product>> {
-  const { category, search, sort = 'relevancia', filters = {}, page = 1, perPage = 12, tetoDePreco } = query;
+  const {
+    category, search, sort = 'relevancia', filters = {}, page = 1, perPage = 12,
+    tetoDePreco, soPromocao,
+  } = query;
 
   const params = new URLSearchParams({
     page: String(page),
@@ -194,6 +197,7 @@ export async function fetchProducts(query: ProductQuery = {}): Promise<Paginated
     params.set('precoMax', String(Number.isFinite(pedido) && pedido > 0 ? Math.min(pedido, tetoDePreco) : tetoDePreco));
   }
   if (category) params.set('categoria', category);
+  if (soPromocao) params.set('soPromocao', '1');
   if (search && search.trim().length >= 2) params.set('busca', search.trim());
 
   const resposta = await fetch(`/api/loja/produtos?${params.toString()}`);

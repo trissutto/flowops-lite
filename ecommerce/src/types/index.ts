@@ -227,6 +227,8 @@ export interface ProductQuery {
    * afrouxa.
    */
   tetoDePreco?: number;
+  /** Só peça com desconto — é o que define a vitrine do Outlet. */
+  soPromocao?: boolean;
 }
 
 export interface Paginated<T> {

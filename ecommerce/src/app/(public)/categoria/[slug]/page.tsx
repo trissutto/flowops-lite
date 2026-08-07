@@ -10,6 +10,7 @@ import { NewsletterBlock } from '@/components/sections/NewsletterBlock';
 import { EditorialCard } from '@/components/sections/ImageGrid';
 import type { GridInterruption } from '@/components/commerce/EditorialProductGrid';
 import { CATEGORY_SLUGS, categoryMeta } from '@/services/products';
+import { fetchPrimeiraPagina } from '@/services/vitrine';
 import { editorials, instagramPosts, looks, storeInteriorImage } from '@/data/content';
 import { breadcrumbSchema, buildMetadata, jsonLdGraph } from '@/lib/seo';
 
@@ -49,6 +50,7 @@ export async function generateMetadata({
 export default async function CategoryPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
   const meta = categoryMeta(slug);
+  const primeiraPagina = await fetchPrimeiraPagina({ categoria: slug, perPage: 24 });
 
   const trail = [
     { name: 'Início', path: '/' },
@@ -129,6 +131,9 @@ export default async function CategoryPage({ params }: { params: Promise<{ slug:
           category={slug}
           categoryName={meta.name}
           interruptions={interruptions}
+          /* Página 1 pronta no servidor: a peça vem no HTML em vez de esperar
+             o JS + duas viagens à API (perf, 07/08). */
+          primeiraPagina={primeiraPagina}
         />
       </Container>
 

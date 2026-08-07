@@ -15,7 +15,7 @@ import { EditorialProductGrid, type GridInterruption } from './EditorialProductG
 import { useProductFilters } from '@/hooks/useProductFilters';
 import { useDebounced, useIntersection } from '@/hooks';
 import { fetchFacetas, fetchProducts, filterGroups } from '@/services/products';
-import type { Product, SortOption } from '@/types';
+import type { FilterState, Product, SortOption } from '@/types';
 
 const PER_PAGE = 12;
 
@@ -58,6 +58,20 @@ interface CategoryListingProps {
    * `ProductQuery.tetoDePreco`.
    */
   tetoDePreco?: number;
+  /**
+   * PÁGINA 1 JÁ RESOLVIDA NO SERVIDOR (perf, 07/08). Com isto a peça vem no
+   * HTML e aparece na hora; sem, a listagem busca no cliente como antes.
+   * Só vale enquanto a cliente não mexeu em filtro/ordem/busca — daí em
+   * diante é o react-query que manda.
+   */
+  primeiraPagina?: { itens: Product[]; total: number; totalPages: number } | null;
+  /** Só promoção — a rota /outlet usa pra listar tudo que tem desconto. */
+  soPromocao?: boolean;
+  /**
+   * Filtro já aplicado ao abrir — a vitrine por tamanho (/tamanhos/52) chega
+   * com o número dela marcado. A cliente continua podendo mexer na barra.
+   */
+  filtrosIniciais?: FilterState;
 }
 
 /**
@@ -81,8 +95,11 @@ function CategoryListingInner({
   ordemPadrao = 'relevancia',
   limiteTotal,
   tetoDePreco,
+  primeiraPagina,
+  soPromocao,
+  filtrosIniciais,
 }: CategoryListingProps) {
-  const state = useProductFilters({}, ordemPadrao);
+  const state = useProductFilters(filtrosIniciais ?? {}, ordemPadrao);
   const [view, setView] = useState<'editorial' | 'grid'>('editorial');
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [page, setPage] = useState(1);
@@ -113,9 +130,33 @@ function CategoryListingInner({
     setPage(1);
   }, [state.filters, state.sort, debouncedSearch]);
 
+  /**
+   * A página 1 do servidor só serve enquanto a cliente não pediu outra coisa.
+   * Assim que ela filtra, ordena ou busca, o resultado pronto não corresponde
+   * mais ao pedido — e entregar produto errado "rápido" é pior que esperar.
+   */
+  const semInterferencia =
+    Object.keys(state.filters ?? {}).length === 0 &&
+    !debouncedSearch &&
+    state.sort === ordemPadrao;
+
   const query = useInfiniteQuery({
-    queryKey: ['products', category, state.filters, state.sort, debouncedSearch, tetoDePreco],
+    queryKey: ['products', category, state.filters, state.sort, debouncedSearch, tetoDePreco, soPromocao],
     initialPageParam: 1,
+    ...(primeiraPagina && semInterferencia
+      ? {
+          initialData: {
+            pages: [{
+              items: primeiraPagina.itens,
+              total: primeiraPagina.total,
+              page: 1,
+              perPage: PER_PAGE,
+              hasMore: primeiraPagina.totalPages > 1,
+            }],
+            pageParams: [1],
+          },
+        }
+      : {}),
     queryFn: ({ pageParam }) =>
       fetchProducts({
         category,
@@ -125,6 +166,7 @@ function CategoryListingInner({
         page: pageParam,
         perPage: PER_PAGE,
         tetoDePreco,
+        soPromocao,
       }),
     getNextPageParam: (last, todas) => {
       if (!last.hasMore) return undefined;
