@@ -467,13 +467,74 @@ export class LojaCatalogService {
             .join(' · ')}`,
       );
     }
-    const unicas = Array.from(melhorPorVariacao.values());
+    let unicas = Array.from(melhorPorVariacao.values());
+
+    /**
+     * O SITE VENDE 44 AO 60 (dono 07/08). Tamanho fora da grade da casa é
+     * acervo de loja física ("38", "G", "01", "24-29") e não pode aparecer na
+     * vitrine — nem na grade, nem puxando o preço "a partir de" pra baixo.
+     *
+     * Guarda: se a peça INTEIRA estiver fora da grade (peça de letra, por
+     * exemplo), mantém como está. Melhor uma grade herdada visível do que uma
+     * peça publicada sem tamanho nenhum pra escolher.
+     */
+    const daGrade = unicas.filter((l) => this.numerosDaGrade(l.tamanho).length > 0);
+    if (daGrade.length) unicas = daGrade;
+
+    /**
+     * O 44 CUSTA O MESMO QUE O 46 (dono 07/08).
+     *
+     * Em várias peças o fornecedor cobra menos pelo 44, e esse preço menor
+     * virava o "a partir de" do card — a cliente de 52 via um valor que não
+     * existe pra ela e descobria a diferença só no carrinho. Na Lurd's o 44 é
+     * vendido pelo preço do 46.
+     */
+    const precoDo46 = unicas.find((l) => this.numerosDaGrade(l.tamanho).includes(46) && l.preco > 0)?.preco;
+    if (precoDo46) {
+      unicas = unicas.map((l) =>
+        this.numerosDaGrade(l.tamanho).includes(44) && l.preco !== precoDo46
+          ? { ...l, preco: precoDo46 }
+          : l,
+      );
+    }
 
     // Preço e estoque saem das ÚNICAS: somar cadastro duplicado inflaria o
     // estoque do site e faria vender peça que não existe na arara.
     const precos = unicas.map((l) => l.preco).filter((p) => p > 0);
     const preco = precos.length ? Math.min(...precos) : 0;
     const estoqueTotal = unicas.reduce((s, l) => s + (l.estoque || 0), 0);
+
+    /**
+     * QUEBRA DE PREÇO POR FAIXA (dono 07/08): "do 44 ao 54 mesmo preço, às
+     * vezes do 56 ao 60 muda — precisamos mostrar os 2 preços".
+     *
+     * Mostrar só o menor faz a cliente do 58 descobrir o preço real no
+     * carrinho, que é onde ela desiste. Aqui sai a lista de faixas contíguas
+     * de tamanho por preço; o site mostra "R$ 199,90 (44–54) · R$ 219,90
+     * (56–60)" quando há mais de uma.
+     */
+    const faixasPreco = (() => {
+      const porNumero = new Map<number, number>();
+      for (const l of unicas) {
+        if (!(l.preco > 0)) continue;
+        for (const n of this.numerosDaGrade(l.tamanho)) {
+          // Mesma numeração em preços diferentes (cor cara e cor barata): o
+          // menor manda, senão a faixa promete o que a cliente não acha.
+          const atual = porNumero.get(n);
+          if (atual == null || l.preco < atual) porNumero.set(n, l.preco);
+        }
+      }
+      const numeros = Array.from(porNumero.keys()).sort((a, b) => a - b);
+      const faixas: Array<{ de: number; ate: number; preco: number }> = [];
+      for (const n of numeros) {
+        const p = porNumero.get(n)!;
+        const ultima = faixas[faixas.length - 1];
+        if (ultima && ultima.preco === p) ultima.ate = n;
+        else faixas.push({ de: n, ate: n, preco: p });
+      }
+      // Uma faixa só = preço único: o card já mostra isso, não precisa repetir.
+      return faixas.length > 1 ? faixas : [];
+    })();
 
     // Grade: tamanho na ordem da numeração plus, com estoque somado por tamanho
     const porTamanho = new Map<string, number>();
@@ -619,6 +680,8 @@ export class LojaCatalogService {
       grupoErp: linhas.find((l) => l.categoria)?.categoria ?? null,
 
       preco,
+      /** Vazio = preço único. Com 2+, o site mostra os dois: "44–54" e "56–60". */
+      faixasPreco,
       // Pix e parcelamento são convenção da marca (5% / 12x), não dado do ERP.
       precoPix: preco > 0 ? Number((preco * 0.95).toFixed(2)) : null,
       parcelamento: preco > 0 ? { vezes: 12, valor: Number((preco / 12).toFixed(2)) } : null,
