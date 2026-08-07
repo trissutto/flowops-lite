@@ -30,6 +30,15 @@ export interface CorDetectada {
   confianca: 'alta' | 'media' | 'baixa';
 }
 
+export interface FocoDetectado {
+  /** Centro do recorte, fração 0..1 da largura/altura da foto. */
+  focoX: number;
+  focoY: number;
+  /** Quanto ampliar a partir do foco — 1 = sem zoom, 2 = dobro. */
+  zoom: number;
+  confianca: 'alta' | 'media' | 'baixa';
+}
+
 const HEX = /^#[0-9A-Fa-f]{6}$/;
 
 @Injectable()
@@ -92,18 +101,12 @@ Regras:
 Responda SOMENTE com um JSON válido, sem texto em volta, neste formato:
 {"hex":"#RRGGBB","nome":"...","estampada":false,"cores":[{"hex":"#RRGGBB","nome":"..."}],"confianca":"alta"}`;
 
-  /** @param urlFoto URL da foto no R2 — baixada aqui e enviada em base64. */
-  async detectar(urlFoto: string): Promise<CorDetectada> {
-    if (!this.apiKey) {
-      throw new BadRequestException(
-        'IA desabilitada — configure ANTHROPIC_API_KEY. O conta-gotas manual continua funcionando.',
-      );
-    }
+  /** Baixa a foto e devolve os bytes + mime real (pelos bytes, não pelo cabeçalho). */
+  private async baixarImagem(urlFoto: string): Promise<{ bytes: Buffer; mime: string }> {
     const url = String(urlFoto || '').trim();
     if (!/^https?:\/\//i.test(url)) {
       throw new BadRequestException('URL da foto inválida');
     }
-
     // A foto vai em BASE64, não por URL: mandar link obriga a Anthropic a
     // buscar o arquivo (mais uma rede, mais um jeito de falhar) e depende de
     // o formato `source: url` estar disponível na conta. Baixar aqui é uma
@@ -111,29 +114,35 @@ Responda SOMENTE com um JSON válido, sem texto em volta, neste formato:
     const baixada = await firstValueFrom(
       this.http.get(url, { responseType: 'arraybuffer', timeout: 20000 }),
     ).catch(() => null);
-    if (!baixada) throw new BadRequestException('Não consegui abrir a foto pra ler a cor.');
+    if (!baixada) throw new BadRequestException('Não consegui abrir a foto.');
     const bytes = Buffer.from(baixada.data as ArrayBuffer);
     const mime = this.tipoDaImagem(bytes, String((baixada.headers as any)?.['content-type'] || ''));
-    const base64 = bytes.toString('base64');
+    return { bytes, mime };
+  }
 
+  /** Chama a Anthropic com uma imagem + prompt de texto, devolve a resposta crua. */
+  private async chamarVision(bytes: Buffer, mime: string, prompt: string, maxTokens = 400): Promise<string> {
+    if (!this.apiKey) {
+      throw new BadRequestException(
+        'IA desabilitada — configure ANTHROPIC_API_KEY. O ajuste manual continua funcionando.',
+      );
+    }
     const body = {
       model:
         this.config.get<string>('ANTHROPIC_VISION_MODEL') ||
         this.config.get<string>('ANTHROPIC_MODEL') ||
         this.modeloPadrao,
-      max_tokens: 400,
+      max_tokens: maxTokens,
       messages: [
         {
           role: 'user',
           content: [
-            { type: 'image', source: { type: 'base64', media_type: mime, data: base64 } },
-            { type: 'text', text: this.PROMPT },
+            { type: 'image', source: { type: 'base64', media_type: mime, data: bytes.toString('base64') } },
+            { type: 'text', text: prompt },
           ],
         },
       ],
     };
-
-    let texto = '';
     try {
       const res = await firstValueFrom(
         this.http.post('https://api.anthropic.com/v1/messages', body, {
@@ -145,7 +154,7 @@ Responda SOMENTE com um JSON válido, sem texto em volta, neste formato:
           timeout: 45000,
         }),
       );
-      texto = ((res.data?.content as any[]) || [])
+      return ((res.data?.content as any[]) || [])
         .filter((b) => b?.type === 'text')
         .map((b) => String(b?.text || ''))
         .join('\n');
@@ -159,11 +168,66 @@ Responda SOMENTE com um JSON válido, sem texto em volta, neste formato:
         e?.response?.data?.message ||
         e?.message ||
         'erro desconhecido';
-      this.logger.warn(`[cor-ia] falhou (${status ?? 'sem status'}): ${detalhe}`);
-      throw new BadRequestException(`IA não leu a cor (${status ?? 'sem status'}): ${detalhe}`);
+      this.logger.warn(`[cor-ia] IA falhou (${status ?? 'sem status'}): ${detalhe}`);
+      throw new BadRequestException(`IA falhou (${status ?? 'sem status'}): ${detalhe}`);
     }
+  }
 
+  /** @param urlFoto URL da foto no R2 — baixada aqui e enviada em base64. */
+  async detectar(urlFoto: string): Promise<CorDetectada> {
+    const { bytes, mime } = await this.baixarImagem(urlFoto);
+    const texto = await this.chamarVision(bytes, mime, this.PROMPT, 400);
     return this.interpretar(texto);
+  }
+
+  private readonly PROMPT_FOCO = (nomeCategoria: string) => `Você olha a foto de uma modelo plus size vestindo roupa, pra escolher o RECORTE de uma vitrine de categoria "${nomeCategoria}".
+
+O card da vitrine é vertical (proporção 3:4) e precisa mostrar a peça ${nomeCategoria.toLowerCase()} EM DESTAQUE, tipo revista de moda — não a modelo de corpo inteiro pequena no meio da foto.
+
+Regras:
+- "focoX" e "focoY": o CENTRO da peça de roupa que representa "${nomeCategoria}" nesta foto, como fração de 0 (esquerda/topo) a 1 (direita/base) da largura e altura TOTAIS da imagem original. Se a categoria for "Calças" ou "Shorts", mire na região da cintura/quadril até onde a peça termina. Se for "Blusas", "Jaquetas" ou "Conjuntos" com foco em cima, mire no tronco/busto. Se for "Vestidos", "Macacões" ou "Saias", mire no meio do corpo (a peça cobre tronco+quadril). Ignore rosto, cabelo e fundo ao escolher o ponto.
+- "zoom": de 1.2 a 2.2 — quanto ampliar a partir desse centro pra virar um close de revista. Foto onde a peça já ocupa boa parte do quadro pede zoom menor (1.2–1.5); foto de corpo inteiro de longe pede zoom maior (1.8–2.2). Nunca amplie tanto que corte a peça inteira pra fora — pense no que ainda cabe depois do zoom.
+- "confianca": "baixa" se não conseguir identificar a peça claramente na foto.
+
+Responda SOMENTE com um JSON válido, sem texto em volta, neste formato:
+{"focoX":0.5,"focoY":0.6,"zoom":1.6,"confianca":"alta"}`;
+
+  /**
+   * ONDE MIRAR O RECORTE do card de categoria (dono 07/08): "trate as fotos
+   * pra dar mais close na peça que simboliza a categoria". O card de
+   * "Calças" mostrando a modelo inteira de longe não vende calça nenhuma —
+   * o recorte precisa mirar na peça, como uma vitrine de revista.
+   */
+  async detectarFoco(urlFoto: string, nomeCategoria: string): Promise<FocoDetectado> {
+    const { bytes, mime } = await this.baixarImagem(urlFoto);
+    const texto = await this.chamarVision(bytes, mime, this.PROMPT_FOCO(nomeCategoria), 200);
+    return this.interpretarFoco(texto);
+  }
+
+  private interpretarFoco(texto: string): FocoDetectado {
+    const bruto = texto.replace(/```json|```/g, '').trim();
+    const inicio = bruto.indexOf('{');
+    const fim = bruto.lastIndexOf('}');
+    if (inicio < 0 || fim <= inicio) {
+      throw new BadRequestException('A IA respondeu num formato que não entendi.');
+    }
+    let dados: any;
+    try {
+      dados = JSON.parse(bruto.slice(inicio, fim + 1));
+    } catch {
+      throw new BadRequestException('A IA respondeu num formato que não entendi.');
+    }
+    const clamp01 = (n: any, padrao: number) => {
+      const v = Number(n);
+      return Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : padrao;
+    };
+    const zoom = Number(dados?.zoom);
+    return {
+      focoX: clamp01(dados?.focoX, 0.5),
+      focoY: clamp01(dados?.focoY, 0.4),
+      zoom: Number.isFinite(zoom) ? Math.min(2.5, Math.max(1, zoom)) : 1.5,
+      confianca: ['alta', 'media', 'baixa'].includes(dados?.confianca) ? dados.confianca : 'media',
+    };
   }
 
   /**

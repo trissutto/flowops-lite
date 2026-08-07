@@ -127,12 +127,16 @@ export default async function HomePage() {
             eyebrow="Encontre seu look ideal"
             title="Nossas categorias"
           />
-          <div className="mt-12 grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6 lg:gap-4">
+          {/* 5 por linha no desktop (dono 07/08) — 9 categorias viram 5+4. */}
+          <div className="mt-12 grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-5 lg:gap-4">
             {categoriasHome.map((c, index) => (
               <CategoriaCard
                 key={c.slug}
                 index={index}
-                data={{ slug: c.slug, nome: c.nome, imagemUrl: c.imagemUrl, alt: c.alt }}
+                data={{
+                  slug: c.slug, nome: c.nome, imagemUrl: c.imagemUrl, alt: c.alt,
+                  focoX: c.focoX, focoY: c.focoY, focoZoom: c.focoZoom,
+                }}
               />
             ))}
           </div>

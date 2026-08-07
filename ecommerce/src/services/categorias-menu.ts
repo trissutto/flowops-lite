@@ -38,107 +38,61 @@ function rotulo(slug: string): string {
   return limpo.charAt(0).toUpperCase() + limpo.slice(1);
 }
 
-/**
- * O mínimo que a vitrine precisa da peça: nome e a primeira foto. Tipado à
- * mão de propósito — `any` aqui QUEBRA O BUILD da Vercel (o lint de produção
- * trata `no-explicit-any` como erro, não como aviso). Derrubou o deploy do
- * site em 07/08.
- */
-interface PecaDaCategoria {
-  nome?: string;
-  imagens?: Array<{ src?: string }>;
-}
-
 export interface CategoriaVitrine {
   slug: string;
   nome: string;
   qtdPecas: number;
-  /** Foto da peça MAIS NOVA da categoria — a vitrine se renova sozinha. */
+  /** Foto: escolhida à mão na retaguarda OU da peça mais nova (automático). */
   imagemUrl: string | null;
   alt: string | null;
+  /**
+   * RECORTE lido por IA (dono 07/08: "trate as fotos pra dar mais close na
+   * peça que simboliza a categoria") — centro (fração 0..1) + zoom sugerido.
+   * Sem leitura ainda (ou foto sem foco calculado) → card usa o enquadramento
+   * padrão (topo da foto), sem quebrar o card.
+   */
+  focoX: number | null;
+  focoY: number | null;
+  focoZoom: number | null;
 }
 
 /**
- * AS CATEGORIAS COM FOTO (dono 07/08).
+ * AS CATEGORIAS COM FOTO E RECORTE (dono 07/08).
  *
- * A foto de cada card é a da PEÇA MAIS RECENTE daquela categoria: a vitrine
- * se atualiza sozinha conforme a loja cadastra, sem ninguém subir banner de
- * categoria toda semana. A lista de categorias é a do CRM — as mesmas do menu
- * e do filtro, só o que tem peça publicada.
+ * Toda a resolução — foto manual vs. automática (peça mais nova), e o
+ * recorte por IA — acontece no BACKEND (`SiteCategoriasService`), cacheada
+ * na própria linha da categoria. Aqui é só consumir `/public/loja/categorias`
+ * pronto: uma requisição, não uma por categoria.
  *
- * Uma requisição por categoria (9 hoje), todas em paralelo e cacheadas por 1h
- * junto com a página. Categoria que falhar volta sem foto em vez de derrubar
- * a página inteira.
+ * Fallback pra `/public/loja/filtros` cobre só o caso de backend ainda não
+ * atualizado (deploy em trânsito) — sem foto/foco, mas o site não cai.
  */
 export async function getCategorias(): Promise<CategoriaVitrine[]> {
-  /**
-   * A CONFIGURAÇÃO DA RETAGUARDA VEM PRIMEIRO (/retaguarda/categorias):
-   * nome de exibição, ordem e a foto escolhida à mão. Só o que ela não
-   * define é que cai no automático (nome do slug, foto da peça mais nova).
-   * Escolha humana ganha de heurística — sempre.
-   */
-  let configuradas: Array<{
-    slug: string; nome: string; imagemUrl: string | null; alt: string | null;
-    qtdPecas: number; ordem: number;
-  }> = [];
   try {
-    const r = await api<typeof configuradas>('/public/loja/categorias', {
+    const r = await api<CategoriaVitrine[]>('/public/loja/categorias', {
       revalidate: REVALIDATE,
       tags: ['categorias'],
     });
-    if (Array.isArray(r)) configuradas = r;
+    if (Array.isArray(r) && r.length) return r;
   } catch {
-    /* backend antigo (deploy pendente) — cai no caminho dos filtros abaixo */
+    /* cai no fallback abaixo */
   }
 
-  let categorias: FiltroValor[] = configuradas.length
-    ? configuradas.map((c) => ({ valor: c.slug, qtd: c.qtdPecas }))
-    : [];
-
-  if (!categorias.length) {
-    try {
-      const filtros = await api<{ categorias?: FiltroValor[] }>('/public/loja/filtros', {
-        revalidate: REVALIDATE,
-        tags: ['filtros', 'categorias'],
-      });
-      categorias = Array.isArray(filtros?.categorias) ? filtros.categorias : [];
-    } catch {
-      return [];
-    }
+  try {
+    const filtros = await api<{ categorias?: FiltroValor[] }>('/public/loja/filtros', {
+      revalidate: REVALIDATE,
+      tags: ['filtros', 'categorias'],
+    });
+    const categorias = Array.isArray(filtros?.categorias) ? filtros.categorias : [];
+    return categorias
+      .filter((c) => c?.valor && (c.qtd ?? 0) > 0)
+      .map((c) => ({
+        slug: c.valor, nome: rotulo(c.valor), qtdPecas: c.qtd ?? 0,
+        imagemUrl: null, alt: null, focoX: null, focoY: null, focoZoom: null,
+      }));
+  } catch {
+    return [];
   }
-
-  const porSlug = new Map(configuradas.map((c) => [c.slug, c]));
-  const validas = categorias.filter((c) => c?.valor && (c.qtd ?? 0) > 0);
-
-  return Promise.all(
-    validas.map(async (c) => {
-      const cfg = porSlug.get(c.valor);
-      const base: CategoriaVitrine = {
-        slug: c.valor,
-        nome: cfg?.nome || rotulo(c.valor),
-        qtdPecas: c.qtd ?? 0,
-        imagemUrl: cfg?.imagemUrl ?? null,
-        alt: cfg?.alt ?? null,
-      };
-      // Foto escolhida na retaguarda manda — não gasta requisição buscando peça.
-      if (base.imagemUrl) return base;
-      try {
-        const r = await api<{ itens?: PecaDaCategoria[] }>(
-          `/public/loja/produtos?categoria=${encodeURIComponent(c.valor)}&perPage=1&ordenar=novidades`,
-          { revalidate: REVALIDATE, tags: ['categorias', `categoria:${c.valor}`] },
-        );
-        const peca = r?.itens?.[0];
-        const foto = peca?.imagens?.[0];
-        if (peca && foto?.src) {
-          base.imagemUrl = foto.src;
-          base.alt = `${base.nome} — ${peca.nome ?? ''}`.trim();
-        }
-      } catch {
-        /* card sem foto é melhor que página fora do ar */
-      }
-      return base;
-    }),
-  );
 }
 
 /**

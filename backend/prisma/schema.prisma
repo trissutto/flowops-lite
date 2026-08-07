@@ -4787,6 +4787,19 @@ model SiteCategoria {
   imagemUrl     String?  @map("imagem_url") @db.Text
   objectKey     String?  @map("object_key") @db.Text
   alt           String?
+  /// Qual REF gerou `imagemUrl` quando ela veio do automático (peça mais
+  /// nova da categoria) — permite recalcular o foco só quando a foto MUDA,
+  /// sem reprocessar toda vez que a página carrega. Nulo = foto escolhida
+  /// à mão na retaguarda (nunca é trocada sozinha).
+  imagemDeRef   String?  @map("imagem_de_ref")
+  /// Centro do RECORTE — fração 0..1 da peça que representa a categoria
+  /// ("as calças", não o corpo inteiro). Lido pela IA (dono 07/08: "trate as
+  /// fotos pra dar mais close na peça que simboliza a categoria"); null =
+  /// sem leitura ainda, o card usa o enquadramento padrão (topo da foto).
+  focoX         Float?   @map("foco_x")
+  focoY         Float?   @map("foco_y")
+  /// Quanto ampliar a partir do foco pra virar "close" — 1 = sem zoom.
+  focoZoom      Float?   @map("foco_zoom")
 
   /// Ordem no menu. Empate resolve pela quantidade de peças.
   ordem         Int      @default(0)

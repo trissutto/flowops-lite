@@ -36,17 +36,19 @@ export default async function CategoriasPage() {
 
   return (
     <>
-      <Section space="sm" width="wide">
+      {/* UM SÓ Section (dono 07/08): breadcrumb e título viviam em dois
+          <Section> separados, e `space` aplica padding em CIMA e EMBAIXO —
+          dois blocos empilhados somavam os dois paddings e abriam um vão
+          enorme entre o breadcrumb e "Nossas categorias". */}
+      <Section width="wide" space="lg" aria-labelledby="categorias-titulo">
         <Breadcrumb
           items={[
             { label: 'Início', href: '/' },
             { label: 'Categorias' },
           ]}
         />
-      </Section>
-
-      <Section width="wide" space="lg" aria-labelledby="categorias-titulo">
         <SectionTitle
+          className="mt-8"
           id="categorias-titulo"
           eyebrow="Encontre seu look ideal"
           title="Nossas categorias"
@@ -66,12 +68,16 @@ export default async function CategoriasPage() {
             </p>
           </Container>
         ) : (
-          <div className="mt-12 grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6 lg:gap-4">
+          // 5 por linha no desktop (dono 07/08) — 9 categorias viram 5+4.
+          <div className="mt-12 grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-5 lg:gap-4">
             {categorias.map((c, index) => (
               <CategoriaCard
                 key={c.slug}
                 index={index}
-                data={{ slug: c.slug, nome: c.nome, imagemUrl: c.imagemUrl, alt: c.alt }}
+                data={{
+                  slug: c.slug, nome: c.nome, imagemUrl: c.imagemUrl, alt: c.alt,
+                  focoX: c.focoX, focoY: c.focoY, focoZoom: c.focoZoom,
+                }}
               />
             ))}
           </div>
