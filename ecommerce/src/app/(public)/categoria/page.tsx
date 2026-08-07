@@ -3,7 +3,7 @@ import { Section } from '@/components/layout/Section';
 import { Container } from '@/components/layout/Container';
 import { SectionTitle } from '@/components/sections/SectionTitle';
 import { Breadcrumb } from '@/components/navigation/Breadcrumb';
-import { TaxonomyCard } from '@/components/cards/TaxonomyCard';
+import { CategoriaCard } from '@/components/cards/CategoriaCard';
 import { getCategorias } from '@/services/categorias-menu';
 import { buildMetadata } from '@/lib/seo';
 
@@ -65,24 +65,12 @@ export default async function CategoriasPage() {
             </p>
           </Container>
         ) : (
-          <div className="mt-14 grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6 lg:gap-5">
+          <div className="mt-12 grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6 lg:gap-4">
             {categorias.map((c, index) => (
-              <TaxonomyCard
+              <CategoriaCard
                 key={c.slug}
                 index={index}
-                aspect="3/4"
-                /* Sem foto na categoria o card vira tipografia — melhor que
-                   moldura cinza com o nome dentro. */
-                variant={c.imagemUrl ? 'editorial' : 'text'}
-                data={{
-                  slug: c.slug,
-                  title: c.nome,
-                  description: `${c.qtdPecas} ${c.qtdPecas === 1 ? 'peça' : 'peças'}`,
-                  href: `/categoria/${c.slug}`,
-                  ...(c.imagemUrl
-                    ? { image: { src: c.imagemUrl, alt: c.alt || c.nome } }
-                    : {}),
-                }}
+                data={{ slug: c.slug, nome: c.nome, imagemUrl: c.imagemUrl, alt: c.alt }}
               />
             ))}
           </div>
