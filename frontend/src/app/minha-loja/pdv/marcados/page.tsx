@@ -22,7 +22,10 @@ import { ArrowLeft, Search, Loader2, Check, AlertCircle, Tag, RefreshCw, Shoppin
 import { api } from '@/lib/api';
 
 type Marcado = {
-  REGISTRO: number;
+  /** Identidade real (07/08) — sempre existe, Giga ou não. */
+  id: string;
+  /** Histórico: existe só em marcado de origem Giga antiga. */
+  REGISTRO: number | null;
   NUMERO: number;
   CODIGO: string;
   DATA: string;
@@ -77,7 +80,7 @@ export default function MarcadosPage() {
   const [info, setInfo] = useState<ClienteInfo | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [voltadas, setVoltadas] = useState<Set<number>>(new Set());
+  const [voltadas, setVoltadas] = useState<Set<string>>(new Set());
   const [processing, setProcessing] = useState(false);
   const [puxando, setPuxando] = useState(false);
   const [processResult, setProcessResult] = useState<{ ok: number; falhas: string[] } | null>(null);
@@ -217,11 +220,11 @@ export default function MarcadosPage() {
     setErr('Ficha sem CPF e sem código de cliente — não dá pra abrir os marcados');
   }
 
-  function toggleVoltada(registro: number) {
+  function toggleVoltada(id: string) {
     setVoltadas((prev) => {
       const next = new Set(prev);
-      if (next.has(registro)) next.delete(registro);
-      else next.add(registro);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   }
@@ -241,7 +244,7 @@ export default function MarcadosPage() {
   const bipeRef = useRef<HTMLInputElement | null>(null);
   const [bipe, setBipe] = useState('');
   const [bipeMsg, setBipeMsg] = useState<{ tipo: 'ok' | 'erro'; texto: string } | null>(null);
-  const [ultimoBipado, setUltimoBipado] = useState<number | null>(null);
+  const [ultimoBipado, setUltimoBipado] = useState<string | null>(null);
 
   /** Normaliza pra comparar: só dígitos/letras, sem zeros à esquerda. */
   const chaveCodigo = (v: any) =>
@@ -254,7 +257,7 @@ export default function MarcadosPage() {
     // Peças ainda NÃO marcadas primeiro: bipar a mesma etiqueta duas vezes
     // costuma ser leitor repetindo, não duas peças iguais na sacola.
     const candidatos = info.marcadosAtivos.filter((m) => chaveCodigo(m.CODIGO) === alvo);
-    const alvoNovo = candidatos.find((m) => !voltadas.has(m.REGISTRO));
+    const alvoNovo = candidatos.find((m) => !voltadas.has(m.id));
 
     if (!candidatos.length) {
       setBipeMsg({
@@ -267,8 +270,8 @@ export default function MarcadosPage() {
         texto: `Essa peça já está marcada como devolvida (${candidatos[0].DESCRICAO || codigo}).`,
       });
     } else {
-      setVoltadas((prev) => new Set(prev).add(alvoNovo.REGISTRO));
-      setUltimoBipado(alvoNovo.REGISTRO);
+      setVoltadas((prev) => new Set(prev).add(alvoNovo.id));
+      setUltimoBipado(alvoNovo.id);
       setBipeMsg({
         tipo: 'ok',
         texto: `✓ ${alvoNovo.DESCRICAO || codigo}`,
@@ -281,7 +284,7 @@ export default function MarcadosPage() {
 
   function selectAll() {
     if (!info) return;
-    setVoltadas(new Set(info.marcadosAtivos.map((m) => m.REGISTRO)));
+    setVoltadas(new Set(info.marcadosAtivos.map((m) => m.id)));
   }
 
   function selectNone() {
@@ -300,14 +303,14 @@ export default function MarcadosPage() {
     let ok = 0;
     const falhas: string[] = [];
 
-    for (const registro of voltadas) {
-      const m = info.marcadosAtivos.find((x) => x.REGISTRO === registro);
+    for (const id of voltadas) {
+      const m = info.marcadosAtivos.find((x) => x.id === id);
       if (!m) continue;
       try {
         const r = await api<{ ok: boolean; error?: string }>('/pdv/marcados/devolver', {
           method: 'POST',
           body: JSON.stringify({
-            registro: m.REGISTRO,
+            id: m.id,
             sku: m.CODIGO,
             qty: m.QUANTIDADE || 1,
             loja: m.LOJA,
@@ -341,13 +344,13 @@ export default function MarcadosPage() {
 
     setPuxando(true);
     try {
-      const registros = Array.from(voltadas);
+      const marcadoIds = Array.from(voltadas);
       const r = await api<{ saleId: string; itemsAdded: number; total: number }>(
         '/pdv/marcados/puxar-pra-venda',
         {
           method: 'POST',
           body: JSON.stringify({
-            registros,
+            marcadoIds,
             customerCpf: info.cliente?.cpf || undefined,
             customerName: info.cliente?.nome || undefined,
           }),
@@ -366,7 +369,7 @@ export default function MarcadosPage() {
 
   const valorVoltadas = info
     ? info.marcadosAtivos
-        .filter((m) => voltadas.has(m.REGISTRO))
+        .filter((m) => voltadas.has(m.id))
         .reduce((s, m) => s + (Number(m.VALORTOTAL) || Number(m.VALOR) || 0), 0)
     : 0;
 
@@ -639,19 +642,19 @@ export default function MarcadosPage() {
                 <tbody>
                   {info.marcadosAtivos.map((m) => (
                     <tr
-                      key={m.REGISTRO}
+                      key={m.id}
                       className={`border-t hover:bg-slate-50 cursor-pointer ${
-                        ultimoBipado === m.REGISTRO
+                        ultimoBipado === m.id
                           ? 'bg-emerald-100 ring-2 ring-emerald-400'
-                          : voltadas.has(m.REGISTRO) ? 'bg-rose-50' : ''
+                          : voltadas.has(m.id) ? 'bg-rose-50' : ''
                       }`}
-                      onClick={() => toggleVoltada(m.REGISTRO)}
+                      onClick={() => toggleVoltada(m.id)}
                     >
                       <td className="text-center p-2">
                         <input
                           type="checkbox"
-                          checked={voltadas.has(m.REGISTRO)}
-                          onChange={() => toggleVoltada(m.REGISTRO)}
+                          checked={voltadas.has(m.id)}
+                          onChange={() => toggleVoltada(m.id)}
                           onClick={(e) => e.stopPropagation()}
                           className="w-5 h-5"
                         />

@@ -19,7 +19,10 @@ const fmtData = (s: any) => (s ? new Date(s).toLocaleDateString('pt-BR') : '—'
 const iso = (d: Date) => d.toISOString().slice(0, 10);
 
 type Row = {
-  REGISTRO: number;
+  /** Identidade real (07/08) — sempre existe, Giga ou não. */
+  id: string;
+  /** Histórico: só existe em marcado de origem Giga antiga. */
+  REGISTRO: number | null;
   DATA: string;
   CODIGO: string;
   DESCRICAO: string;
@@ -443,7 +446,7 @@ export default function RetaguardaMarcadosPage() {
                       </thead>
                       <tbody>
                         {g.itens.map((it) => (
-                          <tr key={it.REGISTRO} className="border-b border-[#F8F5EC] last:border-b-0">
+                          <tr key={it.id} className="border-b border-[#F8F5EC] last:border-b-0">
                             <td className="px-4 py-1.5 text-xs text-slate-500 whitespace-nowrap">{fmtData(it.DATA)}</td>
                             <td className="px-2 py-1.5 font-mono text-xs">{it.CODIGO}</td>
                             <td className="px-2 py-1.5 text-slate-700">{it.DESCRICAO}</td>
@@ -510,13 +513,12 @@ function BaixaModal({ grupo, onClose, onDone }: { grupo: Grupo; onClose: () => v
   const confirmar = async () => {
     setErr(null); setBusy(true);
     try {
-      const registros = grupo.itens.map((it) => it.REGISTRO).filter((r: any) => Number(r) > 0);
+      const ids = grupo.itens.map((it) => it.id).filter(Boolean);
       const loja = grupo.lojas[0] || '';
       const r = await api<{ ok: boolean; baixados: number; falhas: string[] }>('/pdv/marcados/baixar', {
         method: 'POST',
         body: JSON.stringify({
-          registros,
-          codCliente: grupo.codCliente,
+          ids,
           loja,
           motivo,
           password: senha,

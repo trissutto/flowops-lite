@@ -34,14 +34,15 @@ export class MarcadosController {
   }
 
   /**
-   * POST /pdv/marcados/sync — dispara o import Giga → tabela nativa `marcados`
-   * em background (acompanha pelo status). Admin/operator.
+   * GET /pdv/marcados/restos-giga — "Restos dos marcados do Giga" (07/08,
+   * regra do dono). Leitura PURA, sob demanda: mostra o que ainda está
+   * MARCADO='SIM' na caixa do Giga, só pra referência/dúvida. NUNCA grava
+   * nada no Flow, nunca marca, nunca puxa — é olhar, não sincronizar.
    */
-  @Post('sync')
-  startSync(@Req() req: any) {
+  @Get('restos-giga')
+  restosGiga(@Req() req: any, @Query('limite') limite?: string) {
     this.requireAdmin(req);
-    void this.mirror.syncFromGiga();
-    return { started: true };
+    return this.mirror.varrerRestosDoGiga(limite ? Number(limite) : 500);
   }
 
   /**
@@ -143,8 +144,7 @@ export class MarcadosController {
   baixar(
     @Req() req: any,
     @Body() body: {
-      registros: Array<number | string>;
-      codCliente?: string;
+      ids: string[];
       loja?: string;
       motivo: string;
       password: string;
@@ -154,9 +154,7 @@ export class MarcadosController {
     const auth = authorizeMinLevel(String(body?.password || ''), 'GERENTE', String(body?.loja || req?.user?.storeCode || '') || undefined);
     const quem = auth.byNome || req?.user?.name || req?.user?.email || 'gerente';
     return this.svc.baixarMarcados({
-      registros: body?.registros || [],
-      codCliente: body?.codCliente,
-      loja: body?.loja,
+      ids: body?.ids || [],
       motivo: String(body?.motivo || ''),
       autorizadoPor: `[${auth.level}] ${quem}`,
     });
@@ -221,13 +219,13 @@ export class MarcadosController {
 
   /**
    * POST /pdv/marcados/devolver
-   * Body: { registro, sku, qty, loja }
-   * Devolve 1 peça marcada ao estoque Giga (cliente trouxe de volta).
+   * Body: { id, sku, qty, loja }
+   * Devolve 1 peça marcada ao estoque (cliente trouxe de volta). 100% Flow.
    */
   @Post('devolver')
   devolver(
     @Req() req: any,
-    @Body() body: { registro: number | string; sku: string; qty: number; loja: string },
+    @Body() body: { id: string; sku: string; qty: number; loja: string },
   ) {
     this.requireRole(req);
     return this.svc.devolverItemMarcado(body);
@@ -263,15 +261,18 @@ export class MarcadosController {
 
   /**
    * POST /pdv/marcados/puxar-pra-venda
-   * Body: { registros: number[], customerCpf?, customerName?, customerPhone? }
+   * Body: { marcadoIds: string[], customerCpf?, customerName?, customerPhone? }
    * Cria uma PdvSale aberta com as pecas marcadas como itens, retorna saleId.
    * Frontend redireciona pro PDV pra retomar e finalizar a venda.
+   *
+   * `marcadoIds` são os `id` nativos (07/08) — não REGISTRO do Giga. Ver o
+   * comentário grande em `MarcadosService.puxarParaVenda`.
    */
   @Post('puxar-pra-venda')
   puxarParaVenda(
     @Req() req: any,
     @Body() body: {
-      registros: Array<number | string>;
+      marcadoIds: string[];
       customerCpf?: string;
       customerName?: string;
       customerPhone?: string;
@@ -282,9 +283,8 @@ export class MarcadosController {
     if (!storeCode) throw new ForbiddenException('Usuário sem loja vinculada');
     const vendedorUserId = req?.user?.sub || req?.user?.id;
     const vendedorName = req?.user?.name || req?.user?.email;
-    const registros = (body?.registros || []).map((r) => Number(r)).filter((r) => Number.isFinite(r) && r > 0);
     return this.svc.puxarParaVenda({
-      registros,
+      marcadoIds: body?.marcadoIds || [],
       storeCode,
       customerCpf: body?.customerCpf,
       customerName: body?.customerName,

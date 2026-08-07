@@ -17,7 +17,6 @@ import { ConveniosService } from '../convenios/convenios.service';
 import { validateMinLevel } from '../auth/auth-levels.util';
 import * as crypto from 'crypto';
 import { CashbackService } from '../cashback/cashback.service';
-import { MarcadosService } from './marcados.service';
 
 /**
  * PdvService — frente de caixa (MVP).
@@ -47,7 +46,6 @@ export class PdvService {
     private readonly accessPolicy: AccessPolicyService,
     private readonly convenios: ConveniosService,
     private readonly cashback: CashbackService,
-    private readonly marcados: MarcadosService,
   ) {}
 
   /**
@@ -2650,75 +2648,39 @@ export class PdvService {
   /**
    * PASSO 3 do sync ERP: fecha os MARCADOS PUXADOS pra essa venda.
    *
-   * BUG (21/07, Indaiatuba): a venda puxada de marcados gravava linha NOVA na
-   * caixa (gravarVendaPdv manda todos os itens) mas a linha marcada antiga
-   * ficava com MARCADO='SIM' pra sempre — a peça continuava "em marca" no nome
-   * da cliente E contava 2x na caixa. O campo sale.marcadosRegistros era
-   * gravado no puxarParaVenda e nunca lido.
+   * 100% FLOW, SEM GIGA (07/08, regra do dono: "nunca marque ou puxe nada do
+   * Giga"). `sale.marcadosRegistros` guarda `Marcado.id` nativos (nome do
+   * campo é histórico — o conteúdo deixou de ser REGISTRO do Giga em 07/08,
+   * junto com `puxarParaVenda`). Fechar é só um `UPDATE status='fechado'`;
+   * não existe mais DELETE no Giga tentado aqui, nem fila de retry pra isso.
    *
-   * Fecha = DELETE da linha antiga (a linha nova da venda é a que vale).
-   * Estoque NÃO é tocado: a marcação já baixou; a venda pulou os itens
-   * MARCADO (isStockEligibleItem). Idempotente: o DELETE só pega
-   * MARCADO='SIM' — retry com 0 linhas afetadas conta como ok.
+   * Histórico do bug que isto substitui: até 07/08 o fechamento nativo
+   * morava DENTRO do bloco que escrevia no Giga — com `ERP_WRITE_ENABLED`
+   * desligado (ou o DELETE falhando), a função retornava sucesso SEM NUNCA
+   * fechar no Flow (caso Limeira: venda a crediário finalizada, peça
+   * marcada pra sempre). Depois, ainda tentava o Giga como "réplica opcional"
+   * — essa parte também saiu agora: não sobra nenhum motivo pra tocar Giga
+   * aqui.
    */
   async erpStepFecharMarcados(sale: any): Promise<{ ok: boolean; error?: string }> {
-    const regs = String(sale?.marcadosRegistros || '')
+    const ids = String(sale?.marcadosRegistros || '')
       .split(',')
-      .map((s: string) => Number(s.trim()))
-      .filter((n: number) => Number.isFinite(n) && n > 0);
-    if (!regs.length) return { ok: true };
+      .map((s: string) => s.trim())
+      .filter(Boolean);
+    if (!ids.length) return { ok: true };
 
-    /**
-     * 🔴 O FLOW FECHA SEMPRE — o Giga é réplica, não pré-requisito (achado
-     * 07/08, caso Limeira: venda a crediário finalizou certinho e a peça
-     * continuou aparecendo como marcada).
-     *
-     * Antes, com `ERP_WRITE_ENABLED=false` (ou o DELETE no Giga falhando),
-     * a função inteira retornava `{ok:true}` SEM NUNCA atualizar
-     * `Marcado.status` no Postgres — a marcação de "fechado" morava dentro
-     * do mesmo bloco que escrevia no Giga. Resultado: venda 100% finalizada,
-     * cliente já com o carnê na mão, e o Flow (a fonte da verdade) continuava
-     * achando que a peça estava "puxado" pra sempre. Ninguém sem escrita no
-     * Giga tinha como fechar isso.
-     *
-     * Agora: o Flow fecha primeiro e incondicional. O DELETE no Giga
-     * continua tentado (é réplica/backup, não bloqueia nada) — se falhar,
-     * só entra numa fila de retry própria (`marcado_remover`), a mesma que
-     * "Devolver ao estoque" já usa. A peça já está fechada no Flow desde já.
-     */
-    const registrosGiga = regs.map((n) => BigInt(n));
     try {
       const r = await (this.prisma as any).marcado.updateMany({
-        where: { registroGiga: { in: registrosGiga }, status: { in: ['ativo', 'puxado'] } },
+        where: { id: { in: ids }, status: { in: ['ativo', 'puxado'] } },
         data: { status: 'fechado', saleId: sale.id, fechadoAt: new Date() },
       });
       this.logger.log(`[pdv→marcados] Venda ${sale.id}: ${r.count} marcado(s) fechado(s) no Flow.`);
+      return { ok: true };
     } catch (e: any) {
       // Isto é o dado que a tela lê — se não gravar, a venda tem que
       // reconhecer o problema, não fingir sucesso.
       return { ok: false, error: `Flow: ${e?.message || e}` };
     }
-
-    if (!this.erp.isWriteEnabled) {
-      this.logger.warn(
-        `[pdv→marcados] Venda ${sale.id}: ERP_WRITE_ENABLED=false — marcados ${regs.join(',')} fechados só no Flow (Giga não é tocado).`,
-      );
-      return { ok: true };
-    }
-    for (const reg of regs) {
-      const r = await this.erp.deleteCaixaMarcadoRow({ registro: reg });
-      if (r.success) {
-        this.logger.log(`[pdv→marcados] Venda ${sale.id}: marcado REGISTRO=${reg} fechado no Giga (linha removida).`);
-      } else if (/Nenhuma linha/i.test(r.error || '')) {
-        // Já fechado num retry anterior (ou devolvido) — idempotente, segue.
-      } else {
-        // Réplica falhou — fila própria de retry, igual "Devolver ao estoque".
-        // NÃO derruba o resultado da venda: o Flow já fechou, o que falta é
-        // só o Giga alcançar.
-        await this.marcados.enfileirarRemocaoMarcadoPublico(reg, r.error || 'falha no DELETE');
-      }
-    }
-    return { ok: true };
   }
 
   /**
