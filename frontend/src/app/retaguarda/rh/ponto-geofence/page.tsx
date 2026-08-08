@@ -12,7 +12,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { api } from '@/lib/api';
-import { ArrowLeft, MapPin, Crosshair, Check, AlertCircle, ShieldCheck } from 'lucide-react';
+import { ArrowLeft, MapPin, Crosshair, Check, AlertCircle, ShieldCheck, Loader2, Zap } from 'lucide-react';
 
 interface Store { id: string; code: string; name: string; }
 interface Geofence {
@@ -36,6 +36,31 @@ export default function PontoGeofencePage() {
   const [err, setErr] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
   const [locating, setLocating] = useState(false);
+
+  // Ligar em todas de uma vez (dono, 07/08) — só liga quem já tem coordenada.
+  const [ativandoTodas, setAtivandoTodas] = useState(false);
+  const [resultadoTodas, setResultadoTodas] = useState<{
+    ligadas: Array<{ id: string; name: string }>;
+    semCoordenada: Array<{ id: string; name: string }>;
+  } | null>(null);
+
+  async function ativarEmTodas() {
+    if (!confirm(
+      'Ligar o bloqueio por localização em TODAS as lojas que já têm coordenada cadastrada?\n\n' +
+      'Lojas sem coordenada ficam de fora da lista — pra elas, alguém precisa ' +
+      'ir até a loja e usar "minha localização atual" pelo menos uma vez.',
+    )) return;
+    setAtivandoTodas(true); setResultadoTodas(null); setErr(null);
+    try {
+      const r = await api<{ ligadas: any[]; semCoordenada: any[] }>('/ponto/geofence/ativar-todas', { method: 'POST' });
+      setResultadoTodas(r);
+      if (storeId) await selecionar(storeId); // reflete se a loja aberta mudou
+    } catch (e: any) {
+      setErr(e?.message || 'Erro ao ligar em todas as lojas');
+    } finally {
+      setAtivandoTodas(false);
+    }
+  }
 
   useEffect(() => {
     (async () => {
@@ -104,6 +129,31 @@ export default function PontoGeofencePage() {
         <p className="text-sm text-slate-500 mt-1 mb-5">
           Estando <b>na loja</b>, capture a localização e defina o raio. Quem tentar bater ponto fora do raio é bloqueado.
         </p>
+
+        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 mb-4">
+          <button type="button" onClick={ativarEmTodas} disabled={ativandoTodas}
+            className="w-full py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold flex items-center justify-center gap-2 disabled:opacity-50">
+            {ativandoTodas ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+            Ligar em todas as lojas de uma vez
+          </button>
+          <p className="text-[11px] text-amber-700 mt-1.5">
+            Só liga quem já tem coordenada cadastrada. As demais aparecem na lista abaixo pra alguém ir até lá e capturar.
+          </p>
+          {resultadoTodas && (
+            <div className="mt-3 text-xs space-y-1.5">
+              <p className="text-emerald-700 font-bold">
+                ✓ {resultadoTodas.ligadas.length} loja(s) ligada(s){resultadoTodas.ligadas.length > 0 ? ': ' : ''}
+                {resultadoTodas.ligadas.map((l) => l.name).join(', ')}
+              </p>
+              {resultadoTodas.semCoordenada.length > 0 && (
+                <p className="text-amber-800">
+                  ⚠ {resultadoTodas.semCoordenada.length} loja(s) SEM coordenada, ainda desprotegida(s):{' '}
+                  <b>{resultadoTodas.semCoordenada.map((l) => l.name).join(', ')}</b>
+                </p>
+              )}
+            </div>
+          )}
+        </div>
 
         {loading ? <p className="text-slate-400 text-sm">Carregando…</p> : (
           <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-sm space-y-4">

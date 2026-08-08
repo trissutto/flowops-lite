@@ -76,7 +76,7 @@ export class PontoService {
   static readonly SOURCES_VALIDOS = ['face_pdv', 'pwa_selfie', 'manual_admin'];
 
   /** Janela mínima entre duas batidas IGUAIS (evita duplo-clique). */
-  static readonly DEBOUNCE_MIN = 2; // 2 minutos
+  static readonly DEBOUNCE_MIN = 10; // 10 minutos (dono, 07/08 — celular sensível registrava 2x)
 
   /** Idade máxima de um IP do PDV pra valer como referência do WiFi da loja. */
   static readonly PDV_IP_FRESH_H = 48; // horas
@@ -539,19 +539,28 @@ export class PontoService {
       }
     }
 
-    // Debounce: já existe batida MESMA tipo nos últimos N minutos? rejeita
+    /**
+     * DEBOUNCE — QUALQUER batida da pessoa nos últimos N minutos rejeita,
+     * não só a mesma. (Dono, 07/08: "às vezes a pessoa olha o celular duas
+     * vezes e registra duas batidas" — a versão antiga só travava a MESMA
+     * `tipo` repetida; um toque duplo em tipos DIFERENTES em sequência
+     * passava direto.) Decisão dele: mais rígido que "só o mesmo tipo",
+     * mesmo sabendo que uma jornada real curta entre dois tipos poderia,
+     * em tese, cair nessa janela — a marcação manual da gerente
+     * (`/ponto/manual`) é a válvula de escape pra esse caso raro.
+     */
     const debounceFrom = new Date(Date.now() - PontoService.DEBOUNCE_MIN * 60_000);
     const recent = await (this.prisma as any).pontoRegistro.findFirst({
       where: {
         sellerId: input.sellerId,
-        tipo,
         timestamp: { gte: debounceFrom },
       },
       orderBy: { timestamp: 'desc' },
     });
     if (recent) {
+      const faltam = PontoService.DEBOUNCE_MIN - Math.round((Date.now() - recent.timestamp.getTime()) / 60_000);
       throw new BadRequestException(
-        `Ponto de "${tipo}" já registrado há menos de ${PontoService.DEBOUNCE_MIN} min`,
+        `Você bateu ponto (${recent.tipo}) há pouco. Espere ${Math.max(faltam, 1)} min pra bater de novo.`,
       );
     }
 
@@ -1051,6 +1060,36 @@ export class PontoService {
       pdvIps = [];
     }
     return { ...s, pdvIps };
+  }
+
+  /**
+   * LIGA o geofence em TODAS as lojas de uma vez (dono, 07/08).
+   *
+   * Só liga quem JÁ tem `pontoLat`/`pontoLng` cadastrado — `setGeofence`
+   * recusa ligar sem coordenada, de propósito ("senão trava todo mundo"), e
+   * isto respeita a mesma trava. Loja sem coordenada fica de fora da lista
+   * de "ligadas" e some do problema: precisa que alguém vá até lá e rode
+   * "usar localização atual" em `/retaguarda/rh/ponto-geofence` uma vez.
+   */
+  async ativarGeofenceEmTodasAsLojas(): Promise<{
+    ligadas: Array<{ id: string; name: string }>;
+    semCoordenada: Array<{ id: string; name: string }>;
+  }> {
+    const lojas: any[] = await (this.prisma as any).store.findMany({
+      select: { id: true, name: true, pontoLat: true, pontoLng: true, pontoGeofence: true },
+    });
+    const comCoordenada = lojas.filter((l) => l.pontoLat != null && l.pontoLng != null);
+    const semCoordenada = lojas.filter((l) => l.pontoLat == null || l.pontoLng == null);
+    if (comCoordenada.length) {
+      await (this.prisma as any).store.updateMany({
+        where: { id: { in: comCoordenada.map((l) => l.id) } },
+        data: { pontoGeofence: true },
+      });
+    }
+    return {
+      ligadas: comCoordenada.map((l) => ({ id: l.id, name: l.name })),
+      semCoordenada: semCoordenada.map((l) => ({ id: l.id, name: l.name })),
+    };
   }
 
   /** Define coordenadas/raio e liga/desliga o geofence do ponto de uma loja. */

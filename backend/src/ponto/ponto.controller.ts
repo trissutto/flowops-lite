@@ -304,6 +304,19 @@ export class PontoController {
   }
 
   // ── GEOFENCE do ponto (config por loja — matriz) ──────────────────
+  /**
+   * POST /ponto/geofence/ativar-todas — liga em TODAS as lojas de uma vez
+   * (07/08). Só liga quem já tem coordenada; devolve quem ficou de fora.
+   * Vem ANTES de `geofence/:storeId` — senão "ativar-todas" seria lido
+   * como um storeId.
+   */
+  @Post('geofence/ativar-todas')
+  @UseGuards(AdminOnlyGuard)
+  @AdminOnly()
+  ativarGeofenceEmTodas() {
+    return this.svc.ativarGeofenceEmTodasAsLojas();
+  }
+
   @Get('geofence/:storeId')
   getGeofence(@Param('storeId') storeId: string) {
     return this.svc.getGeofence(storeId);
