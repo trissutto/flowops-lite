@@ -8,6 +8,17 @@ Dar prioridade visual ao valor que falta cobrar e reduzir os cliques para escolh
 
 A mudança é somente no frontend do PDV em `frontend/src/app/minha-loja/pdv/page.tsx`. O backend, os endpoints e os formatos enviados pela tela permanecem inalterados.
 
+## Requisito funcional inegociável
+
+Esta entrega muda somente apresentação e distribuição de espaço.
+
+- Nenhuma função existente poderá ser removida, renomeada, substituída ou ter seu comportamento alterado.
+- Todos os itens do menu lateral atual continuarão visíveis no desktop.
+- Todas as formas de pagamento e operações especiais continuarão visíveis no desktop, sem serem escondidas em `Mais opções`, menus de três pontos ou drawers.
+- Continuarão disponíveis na tela: Crédito e suas bandeiras, Débito e suas bandeiras, PIX, Dinheiro, Crediário, Vale-troca, Venda Online, Vale Presente, Marcar e Convênio quando habilitado para a loja.
+- Pausadas, links online, treinamento, identificação da cliente, descontos, campanhas, simulação, trocas, recebimentos, retiradas, produtos vendidos, notas fiscais, impressoras, pedidos do site, realinhamento e fechamento continuarão acessíveis nos mesmos contextos atuais.
+- O fluxo de escolha da vendedora no encerramento continuará inalterado.
+
 ## Layout novo
 
 O layout novo será o padrão, mantendo o menu lateral esquerdo existente e o painel direito com cliente, subtotal, desconto, pagamentos parciais e o total em verde.
@@ -27,6 +38,7 @@ Uma barra compacta ficará abaixo do conjunto carrinho + resumo, sem repetir o t
 - Débito: RedeShop, Visa Electron e Elo.
 - Outras formas: PIX, Dinheiro, Crediário, Vale-troca, Venda Online, Vale Presente e Marcar.
 - Convênio aparecerá somente quando estiver ativo para a loja.
+- Nenhuma opção será escondida atrás de um botão genérico ou submenu no desktop.
 - Os logotipos usarão proporção natural (`object-contain`), sem deformação.
 - Clicar numa bandeira abrirá o modal com crédito/débito e a bandeira já selecionados.
 - Clicar nas demais formas reutilizará os fluxos atuais, inclusive validações de CPF, PIX, crediário e marcado.
@@ -53,6 +65,7 @@ O código do layout atual permanecerá no mesmo arquivo e continuará funcional.
 
 - Nenhuma chamada de API será removida ou substituída.
 - Nenhuma lógica de finalização, pagamento, impressão, estoque ou treinamento será duplicada.
+- Os handlers atuais serão reutilizados; a mudança não criará uma segunda implementação das regras de venda.
 - Os novos botões chamarão os mesmos handlers já usados pelo painel atual.
 - O modo treinamento continuará obedecendo às proteções existentes.
 - O layout anterior servirá como fallback instantâneo durante o piloto.
