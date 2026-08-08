@@ -3140,6 +3140,8 @@ model Property {
   commercialMedia   PropertyCommercialMedia[]
   publication       PropertyPublication?
   publicationJobs   PropertyPublicationJob[]
+  constructionProjects PropertyConstructionProject[]
+  constructionAuditLogs ConstructionAuditLog[]
 
   @@index([status])
   @@index([cidade])
@@ -3387,6 +3389,259 @@ model PropertyPublicationJob {
 // Mercadoria chega → Confere/ajusta → Marca recebido → Sistema AUTO-CADASTRA
 // SKUs no Wincred (gera EAN-13 prefixo 8) + atualiza estoque + fila de etiquetas.
 // ════════════════════════════════════════════════════════════════════════
+
+// Gestão financeira e cronograma de obras. Este domínio permanece privado no
+// FlowOps e nunca integra o snapshot público destinado aos corretores.
+model PropertyConstructionProject {
+  id              String   @id @default(uuid())
+  propertyId      String   @map("property_id")
+  property        Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  name            String
+  description     String?  @db.Text
+  status          String   @default("planejamento")
+  plannedStartAt  DateTime? @map("planned_start_at")
+  plannedEndAt    DateTime? @map("planned_end_at")
+  actualStartAt   DateTime? @map("actual_start_at")
+  actualEndAt     DateTime? @map("actual_end_at")
+  createdByUserId String?  @map("created_by_user_id")
+  createdByName   String?  @map("created_by_name")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  stages          ConstructionStage[]
+  commitments     ConstructionCommitment[]
+  payments        ConstructionPayment[]
+  entries         ConstructionEntry[]
+  documents       ConstructionDocument[]
+  auditLogs       ConstructionAuditLog[]
+
+  @@index([propertyId, status])
+  @@index([propertyId, createdAt(sort: Desc)])
+  @@map("property_construction_projects")
+}
+
+model ConstructionCategory {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  active      Boolean  @default(true)
+  isDefault   Boolean  @default(false) @map("is_default")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  stages      ConstructionStage[]
+  commitments ConstructionCommitment[]
+
+  @@index([active, name])
+  @@map("construction_categories")
+}
+
+model ConstructionVendor {
+  id                 String   @id @default(uuid())
+  legalName          String   @map("legal_name")
+  tradeName          String?  @map("trade_name")
+  kind               String   @default("prestador")
+  specialty          String?
+  document           String?
+  documentNormalized String?  @unique @map("document_normalized")
+  phone              String?
+  email              String?
+  pixKey             String?  @map("pix_key")
+  paymentNotes       String?  @map("payment_notes") @db.Text
+  notes              String?  @db.Text
+  active             Boolean  @default(true)
+  createdByUserId    String?  @map("created_by_user_id")
+  createdByName      String?  @map("created_by_name")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  commitments        ConstructionCommitment[]
+  payments           ConstructionPayment[]
+  entries            ConstructionEntry[]
+
+  @@index([active, legalName])
+  @@index([specialty])
+  @@map("construction_vendors")
+}
+
+model ConstructionStage {
+  id              String   @id @default(uuid())
+  projectId       String   @map("project_id")
+  project         PropertyConstructionProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  categoryId      String?  @map("category_id")
+  category        ConstructionCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  name            String
+  description     String?  @db.Text
+  responsible     String?
+  plannedStartAt  DateTime? @map("planned_start_at")
+  plannedEndAt    DateTime? @map("planned_end_at")
+  actualStartAt   DateTime? @map("actual_start_at")
+  actualEndAt     DateTime? @map("actual_end_at")
+  budgetCents     Int      @default(0) @map("budget_cents")
+  progressPercent Int      @default(0) @map("progress_percent")
+  status          String   @default("nao_iniciada")
+  sortOrder       Int      @default(0) @map("sort_order")
+  createdByUserId String?  @map("created_by_user_id")
+  createdByName   String?  @map("created_by_name")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  commitments     ConstructionCommitment[]
+  payments        ConstructionPayment[]
+
+  @@index([projectId, sortOrder])
+  @@index([projectId, status])
+  @@map("construction_stages")
+}
+
+model ConstructionCommitment {
+  id              String   @id @default(uuid())
+  projectId       String   @map("project_id")
+  project         PropertyConstructionProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  stageId         String?  @map("stage_id")
+  stage           ConstructionStage? @relation(fields: [stageId], references: [id], onDelete: SetNull)
+  categoryId      String?  @map("category_id")
+  category        ConstructionCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  vendorId        String?  @map("vendor_id")
+  vendor          ConstructionVendor? @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  description     String
+  contractedAt    DateTime @map("contracted_at")
+  amountCents     Int      @map("amount_cents")
+  dueDate         DateTime? @map("due_date")
+  notes           String?  @db.Text
+  status          String   @default("ativa")
+  cancelledAt     DateTime? @map("cancelled_at")
+  cancelledReason String?  @map("cancelled_reason") @db.Text
+  createdByUserId String?  @map("created_by_user_id")
+  createdByName   String?  @map("created_by_name")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  payments        ConstructionPayment[]
+  documents       ConstructionDocument[]
+
+  @@index([projectId, contractedAt(sort: Desc)])
+  @@index([projectId, status, dueDate])
+  @@index([vendorId])
+  @@map("construction_commitments")
+}
+
+model ConstructionPayment {
+  id              String   @id @default(uuid())
+  projectId       String   @map("project_id")
+  project         PropertyConstructionProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  commitmentId    String?  @map("commitment_id")
+  commitment      ConstructionCommitment? @relation(fields: [commitmentId], references: [id], onDelete: SetNull)
+  stageId         String?  @map("stage_id")
+  stage           ConstructionStage? @relation(fields: [stageId], references: [id], onDelete: SetNull)
+  vendorId        String?  @map("vendor_id")
+  vendor          ConstructionVendor? @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  description     String
+  paidAt          DateTime @map("paid_at")
+  amountCents     Int      @map("amount_cents")
+  paymentMethod   String?  @map("payment_method")
+  notes           String?  @db.Text
+  status          String   @default("ativo")
+  createdByUserId String?  @map("created_by_user_id")
+  createdByName   String?  @map("created_by_name")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  reversals       ConstructionPaymentReversal[]
+  documents       ConstructionDocument[]
+
+  @@index([projectId, paidAt(sort: Desc)])
+  @@index([commitmentId])
+  @@index([vendorId])
+  @@map("construction_payments")
+}
+
+model ConstructionEntry {
+  id              String   @id @default(uuid())
+  projectId       String   @map("project_id")
+  project         PropertyConstructionProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  vendorId        String?  @map("vendor_id")
+  vendor          ConstructionVendor? @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  type            String   @default("aporte")
+  occurredAt      DateTime @map("occurred_at")
+  description     String
+  amountCents     Int      @map("amount_cents")
+  notes           String?  @db.Text
+  status          String   @default("ativa")
+  cancelledAt     DateTime? @map("cancelled_at")
+  cancelledReason String?  @map("cancelled_reason") @db.Text
+  createdByUserId String?  @map("created_by_user_id")
+  createdByName   String?  @map("created_by_name")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  documents       ConstructionDocument[]
+
+  @@index([projectId, occurredAt(sort: Desc)])
+  @@index([projectId, status])
+  @@map("construction_entries")
+}
+
+model ConstructionPaymentReversal {
+  id              String   @id @default(uuid())
+  paymentId       String   @map("payment_id")
+  payment         ConstructionPayment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  occurredAt      DateTime @map("occurred_at")
+  amountCents     Int      @map("amount_cents")
+  reason          String   @db.Text
+  createdByUserId String?  @map("created_by_user_id")
+  createdByName   String?  @map("created_by_name")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  @@index([paymentId, occurredAt])
+  @@map("construction_payment_reversals")
+}
+
+model ConstructionDocument {
+  id               String   @id @default(uuid())
+  projectId        String   @map("project_id")
+  project          PropertyConstructionProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  commitmentId     String?  @map("commitment_id")
+  commitment       ConstructionCommitment? @relation(fields: [commitmentId], references: [id], onDelete: SetNull)
+  paymentId        String?  @map("payment_id")
+  payment          ConstructionPayment? @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  entryId          String?  @map("entry_id")
+  entry            ConstructionEntry? @relation(fields: [entryId], references: [id], onDelete: SetNull)
+  kind             String   @default("recibo")
+  fileName         String   @map("file_name")
+  objectKey        String   @map("object_key") @db.Text
+  fileSize         Int?     @map("file_size")
+  mimeType         String?  @map("mime_type")
+  uploadedByUserId String?  @map("uploaded_by_user_id")
+  uploadedByName   String?  @map("uploaded_by_name")
+  uploadedAt       DateTime @default(now()) @map("uploaded_at")
+  removedAt        DateTime? @map("removed_at")
+  removedByUserId  String?  @map("removed_by_user_id")
+
+  @@index([projectId, uploadedAt(sort: Desc)])
+  @@index([paymentId, removedAt])
+  @@index([commitmentId, removedAt])
+  @@index([entryId, removedAt])
+  @@map("construction_documents")
+}
+
+model ConstructionAuditLog {
+  id          String   @id @default(uuid())
+  propertyId  String   @map("property_id")
+  property    Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  projectId   String?  @map("project_id")
+  project     PropertyConstructionProject? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  action      String
+  entityType  String   @map("entity_type")
+  entityId    String?  @map("entity_id")
+  details     Json?
+  userId      String?  @map("user_id")
+  userName    String?  @map("user_name")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([propertyId, createdAt(sort: Desc)])
+  @@index([projectId, createdAt(sort: Desc)])
+  @@map("construction_audit_logs")
+}
 
 model PurchaseOrder {
   id              String   @id @default(uuid())
