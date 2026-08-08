@@ -740,9 +740,43 @@ function PdvPageInner() {
     });
   };
 
+  // Piloto visual do checkout. O layout anterior continua vivo no mesmo
+  // componente e pode ser restaurado em um clique, sem tocar na venda aberta.
+  const [checkoutLayout, setCheckoutLayout] = useState<'highlighted' | 'legacy'>('highlighted');
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('lurds_pdv_checkout_layout');
+      if (saved === 'legacy' || saved === 'highlighted') setCheckoutLayout(saved);
+    } catch {}
+  }, []);
+  const toggleCheckoutLayout = () => {
+    setCheckoutLayout((current) => {
+      const next = current === 'highlighted' ? 'legacy' : 'highlighted';
+      try { localStorage.setItem('lurds_pdv_checkout_layout', next); } catch {}
+      return next;
+    });
+  };
+  const [quickConvenioAtivo, setQuickConvenioAtivo] = useState<{ id: string; nome: string } | null>(null);
+  useEffect(() => {
+    if (!storeCode) {
+      setQuickConvenioAtivo(null);
+      return;
+    }
+    let cancelled = false;
+    api<{ id?: string; nome?: string }>(`/pdv/convenio/ativo?storeCode=${encodeURIComponent(storeCode)}`)
+      .then((result) => {
+        if (!cancelled) setQuickConvenioAtivo(result?.id ? { id: result.id, nome: result.nome || 'Convênio' } : null);
+      })
+      .catch(() => { if (!cancelled) setQuickConvenioAtivo(null); });
+    return () => { cancelled = true; };
+  }, [storeCode]);
+
   // Barra de bipagem isolada — o estado digitado vive DENTRO do componente
   // ScanBar (ver definição acima). O pai fala com ela só via ref imperativo.
   const scanBarRef = useRef<ScanBarHandle>(null);
+  // O botão "Marcar" do layout novo aciona literalmente o botão legado,
+  // preservando todas as validações e o fluxo de override já existentes.
+  const markSaleButtonRef = useRef<HTMLButtonElement>(null);
   const [promoCheckOpen, setPromoCheckOpen] = useState(false);
   // SKU pendente quando vendedora ainda nao foi escolhida — bipe fica em
   // espera. Apos saveVendedora, dispara handleScan automatico com esse SKU
@@ -1853,6 +1887,19 @@ function PdvPageInner() {
           <span className="hidden md:block"><HeaderClock /></span>
           <span className="hidden sm:block"><ConnBadge compact /></span>
 
+          {/* Rollback instantâneo do piloto visual — preferência local deste caixa. */}
+          <button
+            type="button"
+            onClick={toggleCheckoutLayout}
+            className="hidden lg:flex text-xs px-2.5 py-1.5 rounded-lg items-center gap-1.5 font-bold shrink-0 bg-white hover:bg-[#FBF6E6] text-[#8C7325] border border-[#CDA434] transition"
+            title={checkoutLayout === 'highlighted' ? 'Voltar agora ao visual anterior' : 'Ativar novamente o novo visual'}
+          >
+            {checkoutLayout === 'highlighted'
+              ? <RotateCcw className="w-3.5 h-3.5" />
+              : <Sparkles className="w-3.5 h-3.5" />}
+            {checkoutLayout === 'highlighted' ? 'Visual anterior' : 'Usar visual novo'}
+          </button>
+
           {/* Botão Modo Treinamento — só aparece quando NÃO está em treino. */}
           <TrainingModeButton className="text-xs px-2.5 py-1.5 rounded-lg flex items-center gap-1.5 font-bold shrink-0 bg-white hover:bg-[#FBF6E6] text-[#B58A1E] border border-[#CDA434]" />
         </div>
@@ -1996,8 +2043,11 @@ function PdvPageInner() {
         );
       })()}
 
+      {/* Centro + resumo formam a primeira linha. No visual novo, a barra de
+          pagamento ocupa a segunda linha inteira sem encobrir o carrinho. */}
+      <div className="flex-1 min-w-0 w-full flex flex-col lg:flex-row lg:flex-wrap items-start gap-4">
 
-      <main className="flex-1 min-w-0 space-y-3 w-full">
+      <main className="flex-1 min-w-0 space-y-3 w-full lg:basis-0">
         {error && (
           <div className="bg-rose-50 border-2 border-rose-300 text-rose-800 p-3 rounded-xl text-sm flex items-start gap-2 shadow-sm">
             <AlertCircle className="w-5 h-5 shrink-0 mt-0.5 text-rose-600" />
@@ -2033,7 +2083,7 @@ function PdvPageInner() {
           <div className="bg-white rounded-2xl border border-[#E5E2D9] shadow-sm overflow-hidden">
             {/* Cabeçalho do card — contador de PEÇAS em DESTAQUE (soma das qtds,
                 não nº de linhas: linha com qty 3 conta 3 peças). */}
-            <div className="px-4 pt-3.5 pb-2.5 flex items-baseline justify-between">
+            <div className={`${checkoutLayout === 'highlighted' ? 'px-4 pt-2.5 pb-2' : 'px-4 pt-3.5 pb-2.5'} flex items-baseline justify-between`}>
               {(() => {
                 const totalPecas = sale.items.reduce((s, i) => s + i.qty, 0);
                 return (
@@ -2117,7 +2167,7 @@ function PdvPageInner() {
               </button>
             </div>
             )}
-            <div className="divide-y divide-[#F0EEE6]">
+            <div className={`divide-y divide-[#F0EEE6] ${checkoutLayout === 'highlighted' ? 'lg:max-h-[min(460px,calc(100vh-410px))] lg:min-h-[300px] overflow-y-auto overscroll-contain' : ''}`}>
               {/* LINHAS VIRTUAIS DE VALE-TROCA — quando o cliente aplica um vale
                   na venda, aparece como "produto devolvido" no carrinho com valor
                   negativo, deixando claro que o abatimento foi feito. Renderizado
@@ -2131,7 +2181,7 @@ function PdvPageInner() {
                 return (
                   <div
                     key={`vt-${p.id}`}
-                    className="px-4 py-3 flex items-center gap-3 bg-[#FAF6E8] border-l-4 border-[#D4AF37]"
+                    className={`${checkoutLayout === 'highlighted' ? 'px-4 py-2' : 'px-4 py-3'} flex items-center gap-3 bg-[#FAF6E8] border-l-4 border-[#D4AF37]`}
                     title="Vale-troca aplicado — abate da venda"
                   >
                     <div className="w-11 h-11 rounded-lg bg-white border border-[#E5E2D9] flex items-center justify-center text-[#8C7325] text-xl shrink-0">↺</div>
@@ -2169,7 +2219,7 @@ function PdvPageInner() {
                 return (
                 <div
                   key={it.id}
-                  className={`px-4 py-3 flex items-center gap-3 transition-colors duration-500 ${
+                  className={`${checkoutLayout === 'highlighted' ? 'px-4 py-2' : 'px-4 py-3'} flex items-center gap-3 transition-colors duration-500 ${
                     it.id === lastAddedItemId
                       ? 'bg-emerald-200/80 ring-2 ring-inset ring-emerald-500'
                       : isLast
@@ -2178,7 +2228,7 @@ function PdvPageInner() {
                   }`}
                 >
                   {/* THUMBNAIL — busca foto do WooCommerce; fallback avatar */}
-                  <ProductThumb sku={it.sku} refCode={it.ref} />
+                  <ProductThumb sku={it.sku} refCode={it.ref} compact={checkoutLayout === 'highlighted'} />
 
                   {/* NOME + linha "ref · tamanho" (espec). EAN/SKU ficam no title. */}
                   <div className="min-w-0 flex-1" title={`SKU ${it.sku}${it.ean ? ` · EAN ${it.ean}` : ''}`}>
@@ -2358,22 +2408,19 @@ function PdvPageInner() {
         ) : null}
       </main>
 
-      {/* ─── PAINEL DIREITO — CLIENTE + TOTAIS + PAGAMENTO (espec) ─────────
-          Card do cliente no topo; abaixo, card com subtotal/desconto, total a
-          pagar em verde, grade 2 colunas de formas de pagamento e o botão
-          verde "Finalizar venda · F8". Toda a lógica é a mesma da antiga
-          PaymentBar + footer — só mudou de lugar e de roupa. */}
+      {/* PAINEL DIREITO: cliente + totais + controles operacionais. No visual
+          destacado, as formas de pagamento ocupam a faixa logo abaixo. */}
       {sale?.status === 'open' && (() => {
         // Handlers de forma de pagamento (mesmo comportamento da PaymentBar antiga)
-        const venderCredito = () => {
+        const venderCredito = (brand?: string) => {
           setPresetMethod('credito');
-          setPresetBandeira(null);
+          setPresetBandeira(brand || null);
           setPaymentFilter('cartao');
           setShowPayment(true);
         };
-        const venderDebito = () => {
+        const venderDebito = (brand?: string) => {
           setPresetMethod('debito');
-          setPresetBandeira(null);
+          setPresetBandeira(brand || null);
           setPaymentFilter('cartao');
           setShowPayment(true);
         };
@@ -2381,6 +2428,13 @@ function PdvPageInner() {
           if (m === 'pix') { setPaymentFilter('pix'); setShowPayment(true); return; }
           if (m === 'crediario') { setPaymentFilter('crediario'); setShowPayment(true); return; }
           if (m === 'dinheiro') { setPresetMethod('dinheiro'); setPaymentFilter('all'); setShowPayment(true); return; }
+          if (m === 'convenio') {
+            setPresetMethod('convenio');
+            setPresetBandeira(null);
+            setPaymentFilter('all');
+            setShowPayment(true);
+            return;
+          }
           if (m === 'venda_online') {
             // Exige CPF antes de abrir — venda online sempre identifica cliente
             if (!sale?.customerCpf) {
@@ -2407,6 +2461,7 @@ function PdvPageInner() {
         );
         const payBtnCls = 'flex items-center gap-2 border border-[#E5E2D9] rounded-lg px-3 py-2.5 text-sm font-semibold text-slate-700 bg-white hover:bg-[#FBF6E6] hover:border-[#CDA434] hover:text-[#8C7325] transition disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white disabled:hover:border-[#E5E2D9] disabled:hover:text-slate-700';
         return (
+      <>
       <aside className="w-full lg:w-[320px] shrink-0 flex flex-col gap-3 lg:sticky self-start lg:top-[64px]">
 
         {/* Card do CLIENTE — clique abre o modal de identificação (F6) */}
@@ -2506,17 +2561,17 @@ function PdvPageInner() {
           </div>
 
           {/* Grade de formas de pagamento — 2 colunas (espec) */}
-          <div className="grid grid-cols-2 gap-2">
+          <div className={checkoutLayout === 'legacy' ? 'grid grid-cols-2 gap-2' : 'hidden'}>
             <button onClick={() => venderOutro('pix')} disabled={!podePagar} className={payBtnCls} title="Receber em PIX">
               <QrCode className="w-4 h-4 shrink-0" /> PIX
             </button>
             <button onClick={() => venderOutro('dinheiro')} disabled={!podePagar} className={payBtnCls} title="Receber em dinheiro">
               <Banknote className="w-4 h-4 shrink-0" /> Dinheiro
             </button>
-            <button onClick={venderDebito} disabled={!podePagar} className={payBtnCls} title="Cartão de débito (bandeira no próximo passo)">
+            <button onClick={() => venderDebito()} disabled={!podePagar} className={payBtnCls} title="Cartão de débito (bandeira no próximo passo)">
               <CreditCard className="w-4 h-4 shrink-0" /> Débito
             </button>
-            <button onClick={venderCredito} disabled={!podePagar} className={payBtnCls} title="Cartão de crédito (bandeira e parcelas no próximo passo)">
+            <button onClick={() => venderCredito()} disabled={!podePagar} className={payBtnCls} title="Cartão de crédito (bandeira e parcelas no próximo passo)">
               <CreditCard className="w-4 h-4 shrink-0" /> Crédito
             </button>
             <button onClick={() => venderOutro('crediario')} disabled={!podePagar} className={payBtnCls} title="Crediário próprio">
@@ -2528,7 +2583,7 @@ function PdvPageInner() {
           </div>
 
           {/* Linha secundária — venda online + marcar + vale presente (fluxos especiais) */}
-          <div className="grid grid-cols-3 gap-2">
+          <div className={checkoutLayout === 'legacy' ? 'grid grid-cols-3 gap-2' : 'hidden'}>
             <button
               onClick={() => setShowGiftVoucher(true)}
               className="flex items-center justify-center gap-1.5 text-xs font-semibold text-slate-500 border border-dashed border-[#E5E2D9] rounded-lg px-2 py-1.5 hover:bg-[#FBF6E6] hover:text-[#8C7325] hover:border-[#CDA434] transition disabled:opacity-40 disabled:cursor-not-allowed"
@@ -2545,6 +2600,7 @@ function PdvPageInner() {
               <Globe className="w-3.5 h-3.5" /> V. Online
             </button>
             <button
+              ref={markSaleButtonRef}
               onClick={async () => {
                 if (!sale.customerCpf) {
                   toast('warning', 'Identifique a cliente primeiro', 'CPF é obrigatorio pra marcar (provar em casa)');
@@ -2628,22 +2684,24 @@ function PdvPageInner() {
           )}
 
           {/* FINALIZAR VENDA — verde, F8 (abre a tela de pagamento) */}
-          <button
-            onClick={() => {
-              if (sale.items?.length > 0) {
-                setPaymentFilter('all');
-                setShowPayment(true);
-              }
-            }}
-            disabled={(sale.items?.length ?? 0) === 0}
-            className="w-full py-3.5 rounded-xl text-white font-bold text-base flex items-center justify-center gap-2 transition hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed shadow-sm"
-            style={{ background: '#2E7D46' }}
-            title="Abrir pagamento e finalizar (atalho F8)"
-          >
-            <Check className="w-5 h-5" />
-            Finalizar venda
-            <kbd className="text-[10px] font-mono font-semibold bg-white/20 rounded px-1.5 py-0.5 ml-1">F8</kbd>
-          </button>
+          {checkoutLayout === 'legacy' && (
+            <button
+              onClick={() => {
+                if (sale.items?.length > 0) {
+                  setPaymentFilter('all');
+                  setShowPayment(true);
+                }
+              }}
+              disabled={(sale.items?.length ?? 0) === 0}
+              className="w-full py-3.5 rounded-xl text-white font-bold text-base flex items-center justify-center gap-2 transition hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed shadow-sm"
+              style={{ background: '#2E7D46' }}
+              title="Abrir pagamento e finalizar (atalho F8)"
+            >
+              <Check className="w-5 h-5" />
+              Finalizar venda
+              <kbd className="text-[10px] font-mono font-semibold bg-white/20 rounded px-1.5 py-0.5 ml-1">F8</kbd>
+            </button>
+          )}
 
           {/* FINALIZAR DIRETO — aparece SÓ quando a venda já está 100% paga
               (ex: vale-troca cobriu todo o total numa TROCA PAR). Sem esse
@@ -2748,9 +2806,29 @@ function PdvPageInner() {
           </div>
         </div>
       </aside>
+
+      {checkoutLayout === 'highlighted' && (
+        <QuickPaymentDock
+          disabled={!podePagar}
+          itemsDisabled={(sale.items?.length ?? 0) === 0}
+          convenioNome={quickConvenioAtivo?.nome || null}
+          onCredit={(brand) => venderCredito(brand)}
+          onDebit={(brand) => venderDebito(brand)}
+          onPix={() => venderOutro('pix')}
+          onMoney={() => venderOutro('dinheiro')}
+          onCrediario={() => venderOutro('crediario')}
+          onValeTroca={() => setShowValeTroca(true)}
+          onVendaOnline={() => venderOutro('venda_online')}
+          onValePresente={() => setShowGiftVoucher(true)}
+          onMarcar={() => markSaleButtonRef.current?.click()}
+          onConvenio={() => venderOutro('convenio')}
+        />
+      )}
+      </>
         );
       })()}
 
+      </div>{/* fim centro + resumo + pagamento rápido */}
       </div>{/* fim do flex main+sidebar */}
 
       {/* MOBILE BAR — em telas <lg, mostra ações em scroll horizontal acima do rodapé de status */}
@@ -5362,7 +5440,7 @@ function PaymentModal({
             <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wide">
               {pago100 ? '✓ Pago' : payments.length > 0 ? 'Falta pagar' : 'Total a pagar'}
             </span>
-            <span className={`text-2xl font-black tabular-nums leading-none ${pago100 ? 'text-emerald-600' : payments.length > 0 ? 'text-rose-700' : 'text-slate-800'}`}>
+            <span className={`text-3xl font-black tabular-nums leading-none ${pago100 ? 'text-emerald-600' : payments.length > 0 ? 'text-rose-700' : 'text-[#2E7D46]'}`}>
               {pago100 ? brl(total) : brl(restante)}
             </span>
           </div>
@@ -5530,7 +5608,7 @@ function PaymentModal({
                       isSelected
                         ? isVendaOnline
                           ? 'border-teal-600 bg-teal-50 text-teal-800'
-                          : 'border-emerald-600 bg-emerald-50 text-emerald-800'
+                          : 'border-[#CDA434] bg-[#FBF6E6] text-[#8C7325]'
                         : isVendaOnline
                         ? 'border-teal-300 bg-teal-50/40 text-teal-700 hover:border-teal-400'
                         : 'border-slate-200 hover:border-slate-300 text-slate-600'
@@ -5619,7 +5697,7 @@ function PaymentModal({
                   onClick={() => setBandeira(b)}
                   className={`py-3 px-2 rounded-xl border-2 transition-all flex items-center justify-center min-h-[68px] ${
                     bandeira === b
-                      ? 'border-emerald-600 bg-emerald-50 shadow-md'
+                      ? 'border-[#CDA434] bg-[#FBF6E6] shadow-md'
                       : 'border-slate-200 hover:border-slate-300 bg-white'
                   }`}
                 >
@@ -6457,10 +6535,9 @@ function PaymentModal({
                   </span>
                 )}
               </label>
-              {/* 2 COLUNAS (6+6) — corta a altura pela metade pra as 12 parcelas
-                  SEMPRE caberem na tela útil, mesmo em monitor menor, sem cortar
-                  10×–12×. Linha selecionada vira verde. Teclas 1-9 selecionam. */}
-              <div className="grid grid-cols-2 gap-1.5">
+              {/* As 12 opções ficam visíveis em uma grade compacta (4×3 em
+                  desktop), sem mudar o cálculo nem o atalho de seleção. */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
                 {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((p) => {
                   const calc = calcularParcelas(baseTotal, p);
                   const valorMostrar = calc.iguais;
@@ -6471,21 +6548,21 @@ function PaymentModal({
                       key={p}
                       type="button"
                       onClick={() => setParcelas(p)}
-                      className={`flex items-center justify-between gap-3 px-3 sm:px-4 py-2 rounded-lg transition-all border-2 shrink-0 ${
+                      className={`flex flex-col items-center justify-center gap-0.5 px-2 py-2 min-h-[68px] rounded-lg transition-all border-2 shrink-0 ${
                         ativo
-                          ? 'bg-emerald-600 border-emerald-700 text-white shadow-md'
-                          : 'bg-white border-slate-200 hover:border-emerald-400 hover:bg-emerald-50 text-slate-700'
+                          ? 'bg-[#B8912B] border-[#8C7325] text-white shadow-md'
+                          : 'bg-white border-slate-200 hover:border-[#CDA434] hover:bg-[#FBF6E6] text-slate-700'
                       }`}
                     >
-                      <span className={`text-sm font-black tabular-nums leading-none w-9 text-left shrink-0 ${
-                        ativo ? 'text-white' : 'text-emerald-700'
+                      <span className={`text-sm font-black tabular-nums leading-none shrink-0 ${
+                        ativo ? 'text-white' : 'text-[#8C7325]'
                       }`}>{p}×</span>
-                      <span className={`flex-1 text-left text-[11px] uppercase tracking-wide font-semibold ${
+                      <span className={`text-center text-[9px] uppercase tracking-wide font-semibold leading-tight ${
                         ativo ? 'text-white/85' : 'text-slate-400'
                       }`}>
                         {p === 1 ? 'à vista' : todasIguais ? 'de' : `de · última ${brl(calc.ultima)}`}
                       </span>
-                      <span className={`text-base font-black tabular-nums leading-none ${
+                      <span className={`text-sm sm:text-base font-black tabular-nums leading-none ${
                         ativo ? 'text-white' : 'text-slate-800'
                       }`}>
                         {p === 1 ? brl(baseTotal) : brl(valorMostrar)}
@@ -7896,7 +7973,7 @@ function BandeiraLogo({ brand }: { brand: string }) {
     return (
       <div className="flex flex-col items-center justify-center leading-none gap-0.5">
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={src} alt="Visa Electron" className="h-7 object-contain" />
+        <img src={src} alt="Visa Electron" className="h-7 w-auto max-w-full object-contain" />
         <span className="text-[10px] font-bold tracking-wider text-[#1A1F71]">
           ELECTRON
         </span>
@@ -7908,9 +7985,93 @@ function BandeiraLogo({ brand }: { brand: string }) {
     <img
       src={src}
       alt={brand}
-      className="h-9 max-h-9 object-contain"
+      className="h-9 max-h-9 w-auto max-w-full object-contain"
       loading="lazy"
     />
+  );
+}
+
+type QuickPaymentDockProps = {
+  disabled: boolean;
+  itemsDisabled: boolean;
+  convenioNome?: string | null;
+  onCredit: (brand: string) => void;
+  onDebit: (brand: string) => void;
+  onPix: () => void;
+  onMoney: () => void;
+  onCrediario: () => void;
+  onValeTroca: () => void;
+  onVendaOnline: () => void;
+  onValePresente: () => void;
+  onMarcar: () => void;
+  onConvenio: () => void;
+};
+
+/**
+ * Barra visual do piloto. Só encaminha cliques para os handlers do PDV;
+ * nenhuma regra de pagamento vive aqui.
+ */
+function QuickPaymentDock({
+  disabled,
+  itemsDisabled,
+  convenioNome,
+  onCredit,
+  onDebit,
+  onPix,
+  onMoney,
+  onCrediario,
+  onValeTroca,
+  onVendaOnline,
+  onValePresente,
+  onMarcar,
+  onConvenio,
+}: QuickPaymentDockProps) {
+  const brandButton = (brand: string, onClick: () => void) => (
+    <button
+      key={brand}
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className="h-11 min-w-0 rounded-lg border border-[#E5E2D9] bg-white px-2 flex items-center justify-center hover:border-[#CDA434] hover:bg-[#FBF6E6] transition disabled:opacity-35 disabled:cursor-not-allowed overflow-hidden"
+      title={brand}
+    >
+      <BandeiraLogo brand={brand} />
+    </button>
+  );
+  const actionClass = 'h-10 min-w-0 rounded-lg border border-[#E5E2D9] bg-white px-2 flex items-center justify-center gap-1.5 text-[11px] font-bold text-slate-700 hover:border-[#CDA434] hover:bg-[#FBF6E6] hover:text-[#8C7325] transition disabled:opacity-35 disabled:cursor-not-allowed whitespace-nowrap';
+
+  return (
+    <section className="hidden lg:block w-full basis-full bg-white rounded-2xl border border-[#CDA434]/70 shadow-sm p-2" aria-label="Pagamento rápido">
+      <div className="flex items-end gap-3">
+        <div className="flex-[5] min-w-0">
+          <div className="text-[10px] uppercase tracking-wider font-black text-[#8C7325] text-center mb-1">Crédito</div>
+          <div className="grid grid-cols-5 gap-1.5">
+            {BANDEIRAS_CREDITO.map((brand) => brandButton(brand, () => onCredit(brand)))}
+          </div>
+        </div>
+        <div className="w-px h-11 bg-[#EDEAE1] shrink-0" />
+        <div className="flex-[3] min-w-0">
+          <div className="text-[10px] uppercase tracking-wider font-black text-[#8C7325] text-center mb-1">Débito</div>
+          <div className="grid grid-cols-3 gap-1.5">
+            {BANDEIRAS_DEBITO.map((brand) => brandButton(brand, () => onDebit(brand)))}
+          </div>
+        </div>
+      </div>
+      <div className={`grid ${convenioNome ? 'grid-cols-8' : 'grid-cols-7'} gap-1.5 mt-1.5`}>
+        <button type="button" onClick={onPix} disabled={disabled} className={actionClass}><QrCode className="w-4 h-4 shrink-0" />PIX</button>
+        <button type="button" onClick={onMoney} disabled={disabled} className={actionClass}><Banknote className="w-4 h-4 shrink-0" />Dinheiro</button>
+        <button type="button" onClick={onCrediario} disabled={disabled} className={actionClass}><Receipt className="w-4 h-4 shrink-0" />Crediário</button>
+        <button type="button" onClick={onValeTroca} disabled={itemsDisabled} className={actionClass}><Tag className="w-4 h-4 shrink-0" />Vale-troca</button>
+        <button type="button" onClick={onVendaOnline} disabled={disabled} className={actionClass}><Globe className="w-4 h-4 shrink-0" />Venda Online</button>
+        <button type="button" onClick={onValePresente} className={actionClass}><Sparkles className="w-4 h-4 shrink-0" />Vale Presente</button>
+        <button type="button" onClick={onMarcar} disabled={itemsDisabled} className={actionClass}><ShoppingCart className="w-4 h-4 shrink-0" />Marcar</button>
+        {convenioNome && (
+          <button type="button" onClick={onConvenio} disabled={disabled} className={actionClass} title={convenioNome}>
+            <Handshake className="w-4 h-4 shrink-0" />Convênio
+          </button>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -8493,7 +8654,7 @@ function PdvMobilePill({
 // via /pdv/product-image?sku=X (cache 1h no backend). Enquanto carrega,
 // mostra avatar com inicial da REF. Se WC não tem foto, mantém o avatar.
 const PRODUCT_IMG_CACHE = new Map<string, string | null>();
-function ProductThumb({ sku, refCode }: { sku: string; refCode: string | null }) {
+function ProductThumb({ sku, refCode, compact = false }: { sku: string; refCode: string | null; compact?: boolean }) {
   const [url, setUrl] = useState<string | null | undefined>(
     PRODUCT_IMG_CACHE.has(sku) ? PRODUCT_IMG_CACHE.get(sku) : undefined,
   );
@@ -8525,7 +8686,7 @@ function ProductThumb({ sku, refCode }: { sku: string; refCode: string | null })
 
   if (url) {
     return (
-      <div className="w-12 h-12 rounded-lg overflow-hidden bg-slate-100 border border-slate-200 shrink-0">
+      <div className={`${compact ? 'w-11 h-11' : 'w-12 h-12'} rounded-lg overflow-hidden bg-slate-100 border border-slate-200 shrink-0`}>
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src={url} alt={refCode || sku} className="w-full h-full object-cover" />
       </div>
@@ -8533,7 +8694,7 @@ function ProductThumb({ sku, refCode }: { sku: string; refCode: string | null })
   }
   // Fallback: tile neutro cinza-claro com inicial (espec do layout claro)
   return (
-    <div className="w-12 h-12 rounded-lg bg-[#F3F1EA] border border-[#E5E2D9] flex items-center justify-center text-[#8C7325] font-black text-lg shrink-0">
+    <div className={`${compact ? 'w-11 h-11' : 'w-12 h-12'} rounded-lg bg-[#F3F1EA] border border-[#E5E2D9] flex items-center justify-center text-[#8C7325] font-black text-lg shrink-0`}>
       {letter}
     </div>
   );
