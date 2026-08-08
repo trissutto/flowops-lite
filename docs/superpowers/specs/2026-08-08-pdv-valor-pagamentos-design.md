@@ -19,6 +19,19 @@ Esta entrega muda somente apresentação e distribuição de espaço.
 - Pausadas, links online, treinamento, identificação da cliente, descontos, campanhas, simulação, trocas, recebimentos, retiradas, produtos vendidos, notas fiscais, impressoras, pedidos do site, realinhamento e fechamento continuarão acessíveis nos mesmos contextos atuais.
 - O fluxo de escolha da vendedora no encerramento continuará inalterado.
 
+### Controles que devem permanecer visíveis e ativos
+
+- Botão de desconto de cada item, inclusive edição e remoção do desconto manual.
+- Botão de desconto da venda inteira.
+- Seletor e controles de campanhas promocionais, incluindo participação ou exclusão de itens e recálculo de preços.
+- Identificação e troca de cliente, com o mesmo atalho e as mesmas validações atuais.
+- Escolha obrigatória da vendedora no popup final, sem antecipar ou remover essa etapa.
+- Botão e contador de vendas pausadas, incluindo listar, retomar e finalizar vendas já pagas.
+- Links online aguardando pagamento, alertas e retomada do fluxo quando o pagamento for confirmado.
+- Atalhos de teclado atuais relacionados a esses controles.
+
+Esses elementos não serão mockups estáticos: continuarão ligados aos handlers e estados atuais do PDV.
+
 ## Layout novo
 
 O layout novo será o padrão, mantendo o menu lateral esquerdo existente e o painel direito com cliente, subtotal, desconto, pagamentos parciais e o total em verde.
