@@ -145,6 +145,12 @@ type StoreSummary = {
   returnedTodayQty: number;
   netSoldTodayQty: number;
   stockQty: number;
+  sellerRanking: Array<{
+    sellerName: string;
+    grossSalesValue: number;
+    returnsAppliedValue: number;
+    netSalesValue: number;
+  }>;
   updatedAt: string;
 };
 
@@ -8204,11 +8210,9 @@ function StoreSummaryModal({
 
   useEffect(() => {
     activeRef.current = true;
-    loadSummary();
-    const timer = window.setInterval(loadSummary, 15_000);
+    void loadSummary();
     return () => {
       activeRef.current = false;
-      window.clearInterval(timer);
     };
   }, [loadSummary]);
 
@@ -8227,7 +8231,7 @@ function StoreSummaryModal({
         role="dialog"
         aria-modal="true"
         aria-labelledby="store-summary-title"
-        className="bg-white rounded-2xl border border-[#CDA434]/70 shadow-2xl w-full max-w-xl overflow-hidden"
+        className="bg-white rounded-2xl border border-[#CDA434]/70 shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col"
         onClick={(event) => event.stopPropagation()}
       >
         <header className="px-5 py-4 border-b border-[#E5E2D9] flex items-start gap-3">
@@ -8258,7 +8262,7 @@ function StoreSummaryModal({
           </button>
         </header>
 
-        <div className="p-5 space-y-4" aria-live="polite">
+        <div className="p-5 space-y-4 overflow-y-auto" aria-live="polite">
           {error && (
             <div className="rounded-xl border border-rose-300 bg-rose-50 px-3 py-2.5 flex items-center gap-2 text-xs text-rose-700">
               <AlertCircle className="w-4 h-4 shrink-0" />
@@ -8293,9 +8297,62 @@ function StoreSummaryModal({
             </article>
           </div>
 
+          <section className="rounded-2xl border border-slate-200 overflow-hidden bg-white">
+            <div className="px-4 py-3 border-b border-slate-200 bg-slate-50 flex items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-black text-slate-900">Ranking de vendas líquidas hoje</h3>
+                <p className="text-[11px] text-slate-500 mt-0.5">Venda atual − vale-troca aplicado</p>
+              </div>
+              <span className="text-[10px] font-black uppercase tracking-wider text-[#8C7325] bg-[#FBF6E6] border border-[#E4C968] rounded-full px-2.5 py-1">
+                Em valor
+              </span>
+            </div>
+
+            {loading && !data ? (
+              <div className="px-4 py-7 flex items-center justify-center gap-2 text-sm text-slate-500">
+                <Loader2 className="w-4 h-4 animate-spin" /> Calculando ranking…
+              </div>
+            ) : (data?.sellerRanking || []).length === 0 ? (
+              <div className="px-4 py-7 text-center text-sm text-slate-500">
+                Nenhuma venda finalizada hoje.
+              </div>
+            ) : (
+              <div className="divide-y divide-slate-100">
+                {(data?.sellerRanking || []).map((seller, index) => (
+                  <div
+                    key={`${seller.sellerName}-${index}`}
+                    className={`px-4 py-3 flex items-center gap-3 ${index === 0 ? 'bg-[#FFFCF3]' : 'bg-white'}`}
+                  >
+                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 text-sm font-black border ${
+                      index === 0
+                        ? 'bg-[#F7E7A9] border-[#D4AF37] text-[#6E591C]'
+                        : index === 1
+                          ? 'bg-slate-100 border-slate-300 text-slate-600'
+                          : index === 2
+                            ? 'bg-amber-100 border-amber-300 text-amber-800'
+                            : 'bg-white border-slate-200 text-slate-500'
+                    }`}>
+                      {index < 3 ? ['1º', '2º', '3º'][index] : `${index + 1}º`}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-black text-slate-900 truncate">{seller.sellerName}</div>
+                      <div className="text-[11px] text-slate-500 mt-0.5">
+                        Bruto {brl(seller.grossSalesValue)} · Trocas − {brl(seller.returnsAppliedValue)}
+                      </div>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <div className="text-[10px] uppercase tracking-wider font-bold text-slate-400">Líquido</div>
+                      <div className="text-lg font-black tabular-nums text-[#2E7D46]">{brl(seller.netSalesValue)}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
           <div className="flex items-center justify-between gap-3 text-[11px] text-slate-500">
             <span>{updatedAt ? `Atualizado às ${updatedAt}` : 'Consultando dados atuais…'}</span>
-            <span>Atualização automática a cada 15 segundos</span>
+            <span>Atualiza somente ao abrir ou clicar no botão</span>
           </div>
         </div>
       </section>
