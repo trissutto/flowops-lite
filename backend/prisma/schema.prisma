@@ -3136,6 +3136,10 @@ model Property {
   taxes           PropertyTax[]
   attachments     PropertyAttachment[]
   logs            PropertyLog[]
+  commercialProfile PropertyCommercialProfile?
+  commercialMedia   PropertyCommercialMedia[]
+  publication       PropertyPublication?
+  publicationJobs   PropertyPublicationJob[]
 
   @@index([status])
   @@index([cidade])
@@ -3257,6 +3261,124 @@ model PropertyAttachment {
 
   @@index([propertyId, category])
   @@map("property_attachments")
+}
+
+/// Dados de divulgação. Ficam separados do cadastro patrimonial para que o
+/// publicador trabalhe com uma allowlist pequena e nunca serialize o imóvel
+/// interno completo por engano.
+model PropertyCommercialProfile {
+  id                       String   @id @default(uuid())
+  propertyId               String   @unique @map("property_id")
+  property                 Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  municipalRegistration    String?  @map("municipal_registration")
+  propertyType             String?  @map("property_type")
+  commercialStatus         String   @default("disponivel") @map("commercial_status")
+  internalReference        String?  @map("internal_reference")
+  mapUrl                   String?  @map("map_url")
+  publicLocationNote       String?  @map("public_location_note") @db.Text
+  publishFullAddress       Boolean  @default(true) @map("publish_full_address")
+  landAreaM2               Decimal? @map("land_area_m2") @db.Decimal(12, 2)
+  landAreaNotApplicable    Boolean  @default(false) @map("land_area_not_applicable")
+  builtAreaM2              Decimal? @map("built_area_m2") @db.Decimal(12, 2)
+  builtAreaNotApplicable   Boolean  @default(false) @map("built_area_not_applicable")
+  usefulAreaM2             Decimal? @map("useful_area_m2") @db.Decimal(12, 2)
+  bedrooms                 Int?
+  suites                   Int?
+  bathrooms                Int?
+  parkingSpaces            Int?     @map("parking_spaces")
+  floor                    Int?
+  elevator                 Boolean?
+  furnished                Boolean?
+  constructionYear         Int?     @map("construction_year")
+  features                 String[] @default([])
+  salePrice                Decimal? @map("sale_price") @db.Decimal(14, 2)
+  condominiumMonthly       Decimal? @map("condominium_monthly") @db.Decimal(14, 2)
+  iptuAnnual               Decimal? @map("iptu_annual") @db.Decimal(14, 2)
+  acceptsFinancing         Boolean? @map("accepts_financing")
+  acceptsExchange          Boolean? @map("accepts_exchange")
+  negotiable               Boolean?
+  negotiationText          String?  @map("negotiation_text") @db.Text
+  description              String?  @db.Text
+  whatsappSummary          String?  @map("whatsapp_summary") @db.Text
+  campaignTitle            String?  @map("campaign_title")
+  lastReviewedAt           DateTime? @map("last_reviewed_at")
+  brokerCommissionNotes    String?  @map("broker_commission_notes") @db.Text
+  internalNegotiationNotes String?  @map("internal_negotiation_notes") @db.Text
+  createdAt                DateTime @default(now()) @map("created_at")
+  updatedAt                DateTime @updatedAt @map("updated_at")
+
+  @@map("property_commercial_profiles")
+}
+
+/// Fotos, plantas e links usados na divulgação. Não reaproveita anexos
+/// patrimoniais, evitando que conta, matrícula ou escritura virem mídia pública.
+model PropertyCommercialMedia {
+  id               String   @id @default(uuid())
+  propertyId       String   @map("property_id")
+  property         Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  kind             String   @default("photo")
+  fileName         String   @map("file_name")
+  sourceUrl        String   @map("source_url") @db.Text
+  sourceKey        String?  @map("source_key")
+  mimeType         String?  @map("mime_type")
+  fileSize         Int?     @map("file_size")
+  caption          String?
+  sortOrder        Int      @default(0) @map("sort_order")
+  isCover          Boolean  @default(false) @map("is_cover")
+  active           Boolean  @default(true)
+  uploadedByUserId String?  @map("uploaded_by_user_id")
+  uploadedByName   String?  @map("uploaded_by_name")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  @@index([propertyId, active, sortOrder])
+  @@map("property_commercial_media")
+}
+
+/// Espelho apenas do estado da publicação. O snapshot público vive no banco
+/// isolado; aqui ficam versão, URL, hash e erros para operação e auditoria.
+model PropertyPublication {
+  id               String   @id @default(uuid())
+  propertyId       String   @unique @map("property_id")
+  property         Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  publicId         String   @unique @map("public_id")
+  status           String   @default("draft")
+  operationVersion Int      @default(0) @map("operation_version")
+  publishedVersion Int      @default(0) @map("published_version")
+  activeJobId      String?  @map("active_job_id")
+  payloadHash      String?  @map("payload_hash")
+  publicUrl        String?  @map("public_url")
+  publishedAt      DateTime? @map("published_at")
+  syncedAt         DateTime? @map("synced_at")
+  lastError        String?  @map("last_error") @db.Text
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  @@index([status])
+  @@map("property_publications")
+}
+
+/// Outbox transacional para o portal público. A venda/operação interna nunca
+/// depende da disponibilidade momentânea da Vercel ou do banco público.
+model PropertyPublicationJob {
+  id             String   @id @default(uuid())
+  propertyId     String   @map("property_id")
+  property       Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  action         String
+  idempotencyKey String   @unique @map("idempotency_key")
+  payload        Json
+  status         String   @default("pending")
+  attempts       Int      @default(0)
+  nextAttemptAt  DateTime @default(now()) @map("next_attempt_at")
+  lockedAt       DateTime? @map("locked_at")
+  lastError      String?  @map("last_error") @db.Text
+  completedAt    DateTime? @map("completed_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@index([status, nextAttemptAt])
+  @@index([propertyId, createdAt(sort: Desc)])
+  @@map("property_publication_jobs")
 }
 
 // ════════════════════════════════════════════════════════════════════════
