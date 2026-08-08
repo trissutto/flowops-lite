@@ -30,7 +30,7 @@ import {
   Send, Mail, MessageSquare, FileText, RotateCcw, History, Percent,
   Clock, ChevronRight, Pause, DollarSign, ArrowRightLeft, Search, Sparkles,
   Receipt, Globe, Shuffle, Tag, Wallet, ArrowUpRight, Printer,
-  RefreshCw, Handshake, Moon, Sun,
+  RefreshCw, Handshake, Moon, Sun, Package,
   type LucideIcon,
 } from 'lucide-react';
 import { api } from '@/lib/api';
@@ -138,6 +138,15 @@ type Sale = {
 };
 
 type Store = { id: string; code: string; name: string; active: boolean };
+
+type StoreSummary = {
+  storeCode: string;
+  soldTodayQty: number;
+  returnedTodayQty: number;
+  netSoldTodayQty: number;
+  stockQty: number;
+  updatedAt: string;
+};
 
 const PAYMENT_METHODS = [
   { id: 'dinheiro', label: 'Dinheiro', icon: Banknote },
@@ -1354,6 +1363,7 @@ function PdvPageInner() {
   // ── Vendas em aberto (badge) ──
   const [openCount, setOpenCount] = useState(0);
   const [showOpenList, setShowOpenList] = useState(false);
+  const [showStoreSummary, setShowStoreSummary] = useState(false);
 
   // ── Links Pagar.me aguardando pagamento (widget global) ──
   // Polling a cada 15s lista vendas pausadas com Link Pagar.me. Quando
@@ -1899,6 +1909,18 @@ function PdvPageInner() {
             }`}>
               {openCount}
             </span>
+          </button>
+
+          {/* Totais operacionais ficam ocultos até a abertura deste resumo. */}
+          <button
+            type="button"
+            onClick={() => setShowStoreSummary(true)}
+            disabled={!storeCode}
+            className="text-xs px-2.5 py-1.5 rounded-lg flex items-center gap-1.5 font-bold shrink-0 bg-white hover:bg-[#FBF6E6] text-slate-600 border border-slate-200 hover:border-[#CDA434] transition disabled:opacity-40 disabled:cursor-not-allowed"
+            title="Ver peças vendidas hoje e estoque atual da loja"
+          >
+            <Package className="w-3.5 h-3.5 text-[#B8912B]" />
+            <span className="hidden xl:inline">Resumo da Loja</span>
           </button>
 
           {/* Botão Links Online — Pagar.me aguardando/pago. Pisca em verde quando
@@ -2953,6 +2975,14 @@ function PdvPageInner() {
           onAutoFlowTriggered={() => { autoFlowRef.current = true; }}
           hasSeller={!!sale.sellerName}
           onNeedSeller={() => setShowConfirmSale(true)}
+        />
+      )}
+
+      {showStoreSummary && storeCode && (
+        <StoreSummaryModal
+          storeCode={storeCode}
+          storeName={sale?.storeName || stores.find((store) => store.code === storeCode)?.name || storeCode}
+          onClose={() => setShowStoreSummary(false)}
         />
       )}
 
@@ -8135,6 +8165,141 @@ function QuickSecondaryPaymentPanel({
           </button>
         )}
     </section>
+  );
+}
+
+function StoreSummaryModal({
+  storeCode,
+  storeName,
+  onClose,
+}: {
+  storeCode: string;
+  storeName: string;
+  onClose: () => void;
+}) {
+  const [data, setData] = useState<StoreSummary | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const busyRef = useRef(false);
+  const activeRef = useRef(true);
+
+  const loadSummary = useCallback(async () => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setLoading(true);
+    try {
+      const result = await api<StoreSummary>(
+        `/pdv/store-summary?storeCode=${encodeURIComponent(storeCode)}`,
+      );
+      if (!activeRef.current) return;
+      setData(result);
+      setError(null);
+    } catch (e: any) {
+      if (activeRef.current) setError(e?.message || 'Não foi possível atualizar');
+    } finally {
+      busyRef.current = false;
+      if (activeRef.current) setLoading(false);
+    }
+  }, [storeCode]);
+
+  useEffect(() => {
+    activeRef.current = true;
+    loadSummary();
+    const timer = window.setInterval(loadSummary, 15_000);
+    return () => {
+      activeRef.current = false;
+      window.clearInterval(timer);
+    };
+  }, [loadSummary]);
+
+  const number = (value: number | undefined) =>
+    value === undefined ? '—' : value.toLocaleString('pt-BR');
+  const updatedAt = data?.updatedAt
+    ? new Date(data.updatedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    : null;
+
+  return (
+    <div
+      className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4"
+      {...overlayClose(onClose)}
+    >
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="store-summary-title"
+        className="bg-white rounded-2xl border border-[#CDA434]/70 shadow-2xl w-full max-w-xl overflow-hidden"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <header className="px-5 py-4 border-b border-[#E5E2D9] flex items-start gap-3">
+          <div className="w-11 h-11 rounded-xl bg-[#FBF6E6] border border-[#E4C968] flex items-center justify-center shrink-0">
+            <Package className="w-5 h-5 text-[#8C7325]" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <h2 id="store-summary-title" className="text-lg font-black text-slate-900">Resumo da Loja</h2>
+            <p className="text-xs text-slate-500 truncate">{storeName} · PDV {storeCode}</p>
+          </div>
+          <button
+            type="button"
+            onClick={loadSummary}
+            disabled={loading}
+            className="p-2 rounded-lg border border-slate-200 text-slate-500 hover:text-[#8C7325] hover:border-[#CDA434] hover:bg-[#FBF6E6] transition disabled:opacity-50"
+            title="Atualizar agora"
+            aria-label="Atualizar resumo agora"
+          >
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-2 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition"
+            aria-label="Fechar resumo"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </header>
+
+        <div className="p-5 space-y-4" aria-live="polite">
+          {error && (
+            <div className="rounded-xl border border-rose-300 bg-rose-50 px-3 py-2.5 flex items-center gap-2 text-xs text-rose-700">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span className="flex-1">Não foi possível atualizar. {error}</span>
+              <button type="button" onClick={loadSummary} className="font-black underline underline-offset-2">
+                Tentar novamente
+              </button>
+            </div>
+          )}
+
+          <div className="grid sm:grid-cols-2 gap-3">
+            <article className="rounded-2xl border-2 border-[#D4AF37] bg-[#FBF6E6] p-5 min-h-[150px] flex flex-col justify-between">
+              <div>
+                <div className="text-xs uppercase tracking-wider font-black text-[#8C7325]">Vendido hoje</div>
+                <div className="text-[11px] text-slate-500 mt-1">peças vendidas − devolvidas</div>
+              </div>
+              <div className={`text-5xl font-black tabular-nums leading-none ${
+                (data?.netSoldTodayQty ?? 0) < 0 ? 'text-rose-600' : 'text-[#8C7325]'
+              }`}>
+                {number(data?.netSoldTodayQty)}
+              </div>
+            </article>
+
+            <article className="rounded-2xl border-2 border-sky-300 bg-sky-50 p-5 min-h-[150px] flex flex-col justify-between">
+              <div>
+                <div className="text-xs uppercase tracking-wider font-black text-sky-800">Estoque atual</div>
+                <div className="text-[11px] text-slate-500 mt-1">peças disponíveis nesta loja</div>
+              </div>
+              <div className="text-5xl font-black tabular-nums leading-none text-sky-700">
+                {number(data?.stockQty)}
+              </div>
+            </article>
+          </div>
+
+          <div className="flex items-center justify-between gap-3 text-[11px] text-slate-500">
+            <span>{updatedAt ? `Atualizado às ${updatedAt}` : 'Consultando dados atuais…'}</span>
+            <span>Atualização automática a cada 15 segundos</span>
+          </div>
+        </div>
+      </section>
+    </div>
   );
 }
 
