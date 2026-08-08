@@ -242,11 +242,20 @@
   .pdv1-skin.pdv-night .hover\:bg-red-50:hover { background-color: #4b1827 !important; }
   .pdv1-skin.pdv-night .hover\:text-\[\#8C7325\]:hover { color: #f2d16b !important; }
 
-  /* Logos preservam suas cores e precisam de base branca real. */
+  /* O seletor de bandeira dentro do modal mantém contraste próprio. */
   .pdv1-skin.pdv-night .pdv-brand-tile,
   .pdv1-skin.pdv-night .pdv-brand-tile:hover {
     background-color: #fff !important;
     color: #1e293b !important;
+  }
+
+  /* Na faixa principal, as bandeiras ficam sem moldura ou base branca. */
+  .pdv1-skin.pdv-night .pdv-brand-button {
+    background-color: transparent !important;
+    color: #f8fafc !important;
+  }
+  .pdv1-skin.pdv-night .pdv-brand-button:hover {
+    background-color: #263449 !important;
   }
 
   .pdv1-skin.pdv-night * {

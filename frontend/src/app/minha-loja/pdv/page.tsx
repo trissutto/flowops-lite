@@ -1755,6 +1755,44 @@ function PdvPageInner() {
     createNewSale();
   };
 
+  // Handlers compartilhados pelos dois blocos do pagamento rápido. A divisão
+  // é somente visual: bandeiras ficam sob o carrinho e demais formas no resumo.
+  const venderCredito = (brand?: string) => {
+    setPresetMethod('credito');
+    setPresetBandeira(brand || null);
+    setPaymentFilter('cartao');
+    setShowPayment(true);
+  };
+  const venderDebito = (brand?: string) => {
+    setPresetMethod('debito');
+    setPresetBandeira(brand || null);
+    setPaymentFilter('cartao');
+    setShowPayment(true);
+  };
+  const venderOutro = (method: string) => {
+    if (method === 'pix') { setPaymentFilter('pix'); setShowPayment(true); return; }
+    if (method === 'crediario') { setPaymentFilter('crediario'); setShowPayment(true); return; }
+    if (method === 'dinheiro') { setPresetMethod('dinheiro'); setPaymentFilter('all'); setShowPayment(true); return; }
+    if (method === 'convenio') {
+      setPresetMethod('convenio');
+      setPresetBandeira(null);
+      setPaymentFilter('all');
+      setShowPayment(true);
+      return;
+    }
+    if (method === 'venda_online') {
+      // Venda online sempre exige identificação da cliente antes do pagamento.
+      if (!sale?.customerCpf) {
+        toast('warning', 'Identifique a cliente primeiro', 'Venda online sempre exige CPF (F6)');
+        setShowCustomer(true);
+        return;
+      }
+      setPresetMethod('venda_online');
+      setPaymentFilter('all');
+      setShowPayment(true);
+    }
+  };
+
   // ── Render ──
 
   if (!storeCode) {
@@ -2084,8 +2122,8 @@ function PdvPageInner() {
         );
       })()}
 
-      {/* Centro + resumo formam a primeira linha. No visual novo, a barra de
-          pagamento ocupa a segunda linha inteira sem encobrir o carrinho. */}
+      {/* Centro + resumo. No visual novo, as bandeiras acompanham o carrinho e
+          as demais formas de pagamento acompanham o painel de totais. */}
       <div className="flex-1 min-w-0 w-full flex flex-col lg:flex-row lg:flex-wrap items-start gap-4">
 
       <main className="flex-1 min-w-0 space-y-3 w-full lg:basis-0">
@@ -2447,48 +2485,18 @@ function PdvPageInner() {
             </div>
           </div>
         ) : null}
+
+        {checkoutLayout === 'highlighted' && sale?.status === 'open' && (
+          <QuickCardBrandDock
+            disabled={(sale.items?.length ?? 0) === 0 || (sale.total || 0) <= 0}
+            onCredit={(brand) => venderCredito(brand)}
+            onDebit={(brand) => venderDebito(brand)}
+          />
+        )}
       </main>
 
-      {/* PAINEL DIREITO: cliente + totais + controles operacionais. No visual
-          destacado, as formas de pagamento ocupam a faixa logo abaixo. */}
+      {/* PAINEL DIREITO: cliente + totais + controles operacionais. */}
       {sale?.status === 'open' && (() => {
-        // Handlers de forma de pagamento (mesmo comportamento da PaymentBar antiga)
-        const venderCredito = (brand?: string) => {
-          setPresetMethod('credito');
-          setPresetBandeira(brand || null);
-          setPaymentFilter('cartao');
-          setShowPayment(true);
-        };
-        const venderDebito = (brand?: string) => {
-          setPresetMethod('debito');
-          setPresetBandeira(brand || null);
-          setPaymentFilter('cartao');
-          setShowPayment(true);
-        };
-        const venderOutro = (m: string) => {
-          if (m === 'pix') { setPaymentFilter('pix'); setShowPayment(true); return; }
-          if (m === 'crediario') { setPaymentFilter('crediario'); setShowPayment(true); return; }
-          if (m === 'dinheiro') { setPresetMethod('dinheiro'); setPaymentFilter('all'); setShowPayment(true); return; }
-          if (m === 'convenio') {
-            setPresetMethod('convenio');
-            setPresetBandeira(null);
-            setPaymentFilter('all');
-            setShowPayment(true);
-            return;
-          }
-          if (m === 'venda_online') {
-            // Exige CPF antes de abrir — venda online sempre identifica cliente
-            if (!sale?.customerCpf) {
-              toast('warning', 'Identifique a cliente primeiro', 'Venda online sempre exige CPF (F6)');
-              setShowCustomer(true);
-              return;
-            }
-            setPresetMethod('venda_online');
-            setPaymentFilter('all');
-            setShowPayment(true);
-            return;
-          }
-        };
         const podePagar = (sale.items?.length ?? 0) > 0 && (sale.total || 0) > 0;
         const paid = (sale.payments || []).reduce((s: number, p: any) => s + (Number(p.valor) || 0), 0);
         const liquido = Math.round((sale.total - paid) * 100) / 100;
@@ -2846,25 +2854,23 @@ function PdvPageInner() {
             </button>
           </div>
         </div>
-      </aside>
 
-      {checkoutLayout === 'highlighted' && (
-        <QuickPaymentDock
-          disabled={!podePagar}
-          itemsDisabled={(sale.items?.length ?? 0) === 0}
-          convenioNome={quickConvenioAtivo?.nome || null}
-          onCredit={(brand) => venderCredito(brand)}
-          onDebit={(brand) => venderDebito(brand)}
-          onPix={() => venderOutro('pix')}
-          onMoney={() => venderOutro('dinheiro')}
-          onCrediario={() => venderOutro('crediario')}
-          onValeTroca={() => setShowValeTroca(true)}
-          onVendaOnline={() => venderOutro('venda_online')}
-          onValePresente={() => setShowGiftVoucher(true)}
-          onMarcar={() => markSaleButtonRef.current?.click()}
-          onConvenio={() => venderOutro('convenio')}
-        />
-      )}
+        {checkoutLayout === 'highlighted' && (
+          <QuickSecondaryPaymentPanel
+            disabled={!podePagar}
+            itemsDisabled={(sale.items?.length ?? 0) === 0}
+            convenioNome={quickConvenioAtivo?.nome || null}
+            onPix={() => venderOutro('pix')}
+            onMoney={() => venderOutro('dinheiro')}
+            onCrediario={() => venderOutro('crediario')}
+            onValeTroca={() => setShowValeTroca(true)}
+            onVendaOnline={() => venderOutro('venda_online')}
+            onValePresente={() => setShowGiftVoucher(true)}
+            onMarcar={() => markSaleButtonRef.current?.click()}
+            onConvenio={() => venderOutro('convenio')}
+          />
+        )}
+      </aside>
       </>
         );
       })()}
@@ -8032,12 +8038,59 @@ function BandeiraLogo({ brand }: { brand: string }) {
   );
 }
 
-type QuickPaymentDockProps = {
+type QuickCardBrandDockProps = {
+  disabled: boolean;
+  onCredit: (brand: string) => void;
+  onDebit: (brand: string) => void;
+};
+
+/** Bandeiras alinhadas exclusivamente à coluna do carrinho. */
+function QuickCardBrandDock({
+  disabled,
+  onCredit,
+  onDebit,
+}: QuickCardBrandDockProps) {
+  const brandButton = (brand: string, onClick: () => void) => (
+    <button
+      key={brand}
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className="pdv-brand-button h-14 min-w-0 rounded-lg border border-transparent bg-transparent px-2 flex items-center justify-center hover:border-[#CDA434]/70 hover:bg-[#FBF6E6]/40 transition disabled:opacity-35 disabled:cursor-not-allowed overflow-hidden"
+      title={brand}
+    >
+      <BandeiraLogo brand={brand} />
+    </button>
+  );
+
+  return (
+    <section
+      className="hidden lg:block w-full bg-white rounded-2xl border border-[#CDA434]/70 shadow-sm p-2"
+      aria-label="Bandeiras de cartão"
+    >
+      <div className="flex items-end gap-3">
+        <div className="flex-[5] min-w-0">
+          <div className="text-[10px] uppercase tracking-wider font-black text-[#8C7325] text-center mb-0.5">Crédito</div>
+          <div className="grid grid-cols-5 gap-1">
+            {BANDEIRAS_CREDITO.map((brand) => brandButton(brand, () => onCredit(brand)))}
+          </div>
+        </div>
+        <div className="w-px h-14 bg-[#EDEAE1] shrink-0" />
+        <div className="flex-[3] min-w-0">
+          <div className="text-[10px] uppercase tracking-wider font-black text-[#8C7325] text-center mb-0.5">Débito</div>
+          <div className="grid grid-cols-3 gap-1">
+            {BANDEIRAS_DEBITO.map((brand) => brandButton(brand, () => onDebit(brand)))}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+type QuickSecondaryPaymentPanelProps = {
   disabled: boolean;
   itemsDisabled: boolean;
   convenioNome?: string | null;
-  onCredit: (brand: string) => void;
-  onDebit: (brand: string) => void;
   onPix: () => void;
   onMoney: () => void;
   onCrediario: () => void;
@@ -8048,16 +8101,11 @@ type QuickPaymentDockProps = {
   onConvenio: () => void;
 };
 
-/**
- * Barra visual do piloto. Só encaminha cliques para os handlers do PDV;
- * nenhuma regra de pagamento vive aqui.
- */
-function QuickPaymentDock({
+/** Demais formas de pagamento, abaixo do resumo e sem regras próprias. */
+function QuickSecondaryPaymentPanel({
   disabled,
   itemsDisabled,
   convenioNome,
-  onCredit,
-  onDebit,
   onPix,
   onMoney,
   onCrediario,
@@ -8066,52 +8114,26 @@ function QuickPaymentDock({
   onValePresente,
   onMarcar,
   onConvenio,
-}: QuickPaymentDockProps) {
-  const brandButton = (brand: string, onClick: () => void) => (
-    <button
-      key={brand}
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className="pdv-brand-tile h-11 min-w-0 rounded-lg border border-[#E5E2D9] bg-white px-2 flex items-center justify-center hover:border-[#CDA434] hover:bg-[#FBF6E6] transition disabled:opacity-35 disabled:cursor-not-allowed overflow-hidden"
-      title={brand}
-    >
-      <BandeiraLogo brand={brand} />
-    </button>
-  );
-  const actionClass = 'h-10 min-w-0 rounded-lg border border-[#E5E2D9] bg-white px-2 flex items-center justify-center gap-1.5 text-[11px] font-bold text-slate-700 hover:border-[#CDA434] hover:bg-[#FBF6E6] hover:text-[#8C7325] transition disabled:opacity-35 disabled:cursor-not-allowed whitespace-nowrap';
+}: QuickSecondaryPaymentPanelProps) {
+  const actionClass = 'min-h-[58px] min-w-0 rounded-xl border border-[#E5E2D9] bg-white px-2.5 py-2 flex items-center justify-center gap-2 text-xs font-extrabold text-slate-700 hover:border-[#CDA434] hover:bg-[#FBF6E6] hover:text-[#8C7325] transition disabled:opacity-35 disabled:cursor-not-allowed whitespace-nowrap';
 
   return (
-    <section className="hidden lg:block w-full basis-full bg-white rounded-2xl border border-[#CDA434]/70 shadow-sm p-2" aria-label="Pagamento rápido">
-      <div className="flex items-end gap-3">
-        <div className="flex-[5] min-w-0">
-          <div className="text-[10px] uppercase tracking-wider font-black text-[#8C7325] text-center mb-1">Crédito</div>
-          <div className="grid grid-cols-5 gap-1.5">
-            {BANDEIRAS_CREDITO.map((brand) => brandButton(brand, () => onCredit(brand)))}
-          </div>
-        </div>
-        <div className="w-px h-11 bg-[#EDEAE1] shrink-0" />
-        <div className="flex-[3] min-w-0">
-          <div className="text-[10px] uppercase tracking-wider font-black text-[#8C7325] text-center mb-1">Débito</div>
-          <div className="grid grid-cols-3 gap-1.5">
-            {BANDEIRAS_DEBITO.map((brand) => brandButton(brand, () => onDebit(brand)))}
-          </div>
-        </div>
-      </div>
-      <div className={`grid ${convenioNome ? 'grid-cols-8' : 'grid-cols-7'} gap-1.5 mt-1.5`}>
+    <section
+      className="hidden lg:grid grid-cols-2 gap-2 bg-white rounded-2xl border border-[#CDA434]/70 shadow-sm p-2.5"
+      aria-label="Outras formas de pagamento"
+    >
         <button type="button" onClick={onPix} disabled={disabled} className={actionClass}><QrCode className="w-4 h-4 shrink-0" />PIX</button>
         <button type="button" onClick={onMoney} disabled={disabled} className={actionClass}><Banknote className="w-4 h-4 shrink-0" />Dinheiro</button>
         <button type="button" onClick={onCrediario} disabled={disabled} className={actionClass}><Receipt className="w-4 h-4 shrink-0" />Crediário</button>
         <button type="button" onClick={onValeTroca} disabled={itemsDisabled} className={actionClass}><Tag className="w-4 h-4 shrink-0" />Vale-troca</button>
-        <button type="button" onClick={onVendaOnline} disabled={disabled} className={actionClass}><Globe className="w-4 h-4 shrink-0" />Venda Online</button>
         <button type="button" onClick={onValePresente} className={actionClass}><Sparkles className="w-4 h-4 shrink-0" />Vale Presente</button>
         <button type="button" onClick={onMarcar} disabled={itemsDisabled} className={actionClass}><ShoppingCart className="w-4 h-4 shrink-0" />Marcar</button>
+        <button type="button" onClick={onVendaOnline} disabled={disabled} className={`${actionClass} col-span-2`}><Globe className="w-4 h-4 shrink-0" />Venda Online</button>
         {convenioNome && (
-          <button type="button" onClick={onConvenio} disabled={disabled} className={actionClass} title={convenioNome}>
+          <button type="button" onClick={onConvenio} disabled={disabled} className={`${actionClass} col-span-2`} title={convenioNome}>
             <Handshake className="w-4 h-4 shrink-0" />Convênio
           </button>
         )}
-      </div>
     </section>
   );
 }
