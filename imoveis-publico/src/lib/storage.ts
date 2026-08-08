@@ -12,20 +12,26 @@ let clientCache: S3Client | null = null;
 function client() {
   if (clientCache) return clientCache;
   const accountId = process.env.PUBLIC_MEDIA_R2_ACCOUNT_ID;
-  const accessKeyId = process.env.PUBLIC_MEDIA_R2_ACCESS_KEY_ID;
-  const secretAccessKey = process.env.PUBLIC_MEDIA_R2_SECRET_ACCESS_KEY;
-  if (!accountId || !accessKeyId || !secretAccessKey) throw new Error('Armazenamento público não configurado.');
+  const endpoint = process.env.PUBLIC_MEDIA_S3_ENDPOINT
+    || (accountId ? `https://${accountId}.r2.cloudflarestorage.com` : undefined);
+  const accessKeyId = process.env.PUBLIC_MEDIA_S3_ACCESS_KEY_ID
+    || process.env.PUBLIC_MEDIA_R2_ACCESS_KEY_ID;
+  const secretAccessKey = process.env.PUBLIC_MEDIA_S3_SECRET_ACCESS_KEY
+    || process.env.PUBLIC_MEDIA_R2_SECRET_ACCESS_KEY;
+  if (!endpoint || !accessKeyId || !secretAccessKey) throw new Error('Armazenamento público não configurado.');
   clientCache = new S3Client({
-    region: 'auto',
-    endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
+    region: process.env.PUBLIC_MEDIA_S3_REGION || 'auto',
+    endpoint,
+    forcePathStyle: process.env.PUBLIC_MEDIA_S3_FORCE_PATH_STYLE === '1',
     credentials: { accessKeyId, secretAccessKey },
   });
   return clientCache;
 }
 
 function bucket() {
-  const name = process.env.PUBLIC_MEDIA_R2_BUCKET_NAME;
-  if (!name) throw new Error('PUBLIC_MEDIA_R2_BUCKET_NAME não configurado.');
+  const name = process.env.PUBLIC_MEDIA_S3_BUCKET_NAME
+    || process.env.PUBLIC_MEDIA_R2_BUCKET_NAME;
+  if (!name) throw new Error('PUBLIC_MEDIA_S3_BUCKET_NAME não configurado.');
   return name;
 }
 

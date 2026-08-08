@@ -6,7 +6,7 @@ Aplicação isolada que recebe apenas snapshots comerciais autorizados pelo Flow
 
 1. Um novo projeto Vercel apontando para a pasta `imoveis-publico/`.
 2. Um novo projeto Railway, separado do `heroic-mercy`, contendo somente um Postgres para este portal.
-3. Um bucket R2 privado separado, exclusivo das mídias já publicadas.
+3. Um bucket S3 privado separado, exclusivo das mídias já publicadas. Em produção usamos um Railway Bucket dentro do projeto público isolado.
 4. O domínio `imoveis.lurds.com.br` apontado para o novo projeto Vercel.
 
 ## Variáveis do portal público
@@ -17,12 +17,14 @@ Copie os nomes de `.env.example` para o projeto Vercel:
 - `PUBLICATION_SYNC_SECRET`: segredo aleatório com no mínimo 32 bytes.
 - `PUBLICATION_MEDIA_SOURCE_HOSTS`: hosts, separados por vírgula, de onde o publicador pode copiar as mídias comerciais internas. Não informe protocolo nem caminho.
 - `PUBLIC_SITE_URL`: `https://imoveis.lurds.com.br`.
-- `PUBLIC_MEDIA_R2_ACCOUNT_ID`.
-- `PUBLIC_MEDIA_R2_ACCESS_KEY_ID`.
-- `PUBLIC_MEDIA_R2_SECRET_ACCESS_KEY`.
-- `PUBLIC_MEDIA_R2_BUCKET_NAME`.
+- `PUBLIC_MEDIA_S3_ENDPOINT`: endpoint S3 mostrado na aba Credentials do bucket.
+- `PUBLIC_MEDIA_S3_REGION`: `auto` para o Railway Bucket.
+- `PUBLIC_MEDIA_S3_FORCE_PATH_STYLE`: `1` para o Railway Bucket.
+- `PUBLIC_MEDIA_S3_ACCESS_KEY_ID`.
+- `PUBLIC_MEDIA_S3_SECRET_ACCESS_KEY`.
+- `PUBLIC_MEDIA_S3_BUCKET_NAME`.
 
-O bucket não deve possuir domínio público. Fotos, PDF e ZIP são entregues somente por rotas que confirmam que a ficha continua ativa.
+O bucket não deve possuir domínio público. Fotos, PDF e ZIP são entregues somente por rotas que confirmam que a ficha continua ativa. As variáveis antigas `PUBLIC_MEDIA_R2_*` continuam aceitas apenas para compatibilidade.
 
 ## Variáveis do backend FlowOps
 
