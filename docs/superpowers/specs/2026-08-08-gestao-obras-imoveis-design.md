@@ -2,7 +2,7 @@
 
 **Data:** 08/08/2026
 
-**Status:** desenho funcional aprovado; aguardando revisão da especificação escrita
+**Status:** aprovado para implementação
 
 **Escopo:** módulo interno de imóveis do FlowOps Lite
 
