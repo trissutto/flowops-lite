@@ -94,6 +94,165 @@
     text-transform: uppercase !important;
   }
 
+  /* ── PDV v1: modo noturno local ────────────────────────────────────────
+     Escopado no root do PDV. A classe é controlada por preferência local do
+     computador; não altera body/html e não vaza para outras páginas. */
+  .pdv1-skin.pdv-night {
+    color-scheme: dark;
+    background-color: #0b1120 !important;
+    color: #cbd5e1;
+  }
+
+  /* Superfícies neutras */
+  .pdv1-skin.pdv-night .bg-white { background-color: #172033 !important; }
+  .pdv1-skin.pdv-night .bg-white\/95 { background-color: rgba(23, 32, 51, .96) !important; }
+  .pdv1-skin.pdv-night .bg-slate-50,
+  .pdv1-skin.pdv-night .bg-\[\#FAFAF7\] { background-color: #0b1120 !important; }
+  .pdv1-skin.pdv-night .bg-slate-100,
+  .pdv1-skin.pdv-night .bg-\[\#F3F1EA\] { background-color: #1e293b !important; }
+  .pdv1-skin.pdv-night .bg-slate-200,
+  .pdv1-skin.pdv-night .bg-\[\#EDEAE1\] { background-color: #334155 !important; }
+  .pdv1-skin.pdv-night .bg-\[\#FAF6E8\],
+  .pdv1-skin.pdv-night .bg-\[\#FAF6E8\]\/40,
+  .pdv1-skin.pdv-night .bg-\[\#FAF6E8\]\/60,
+  .pdv1-skin.pdv-night .bg-\[\#FAF6E8\]\/70,
+  .pdv1-skin.pdv-night .bg-\[\#FBF6E6\],
+  .pdv1-skin.pdv-night .bg-\[\#FBF6E6\]\/60,
+  .pdv1-skin.pdv-night .bg-\[\#FFFBEB\] { background-color: #2a2415 !important; }
+
+  /* Texto neutro e acentos da marca */
+  .pdv1-skin.pdv-night .text-slate-900,
+  .pdv1-skin.pdv-night .text-slate-800 { color: #f8fafc !important; }
+  .pdv1-skin.pdv-night .text-slate-700,
+  .pdv1-skin.pdv-night .text-slate-600 { color: #e2e8f0 !important; }
+  .pdv1-skin.pdv-night .text-slate-500 { color: #cbd5e1 !important; }
+  .pdv1-skin.pdv-night .text-slate-400,
+  .pdv1-skin.pdv-night .text-slate-300 { color: #94a3b8 !important; }
+  .pdv1-skin.pdv-night .text-\[\#8C7325\],
+  .pdv1-skin.pdv-night .text-\[\#9A7B16\],
+  .pdv1-skin.pdv-night .text-\[\#7A5E0E\],
+  .pdv1-skin.pdv-night .text-\[\#B8912B\],
+  .pdv1-skin.pdv-night .text-\[\#B58A1E\] { color: #f2d16b !important; }
+  .pdv1-skin.pdv-night .text-\[\#2E7D46\] { color: #4ade80 !important; }
+
+  /* Bordas neutras */
+  .pdv1-skin.pdv-night .border-slate-50,
+  .pdv1-skin.pdv-night .border-slate-100,
+  .pdv1-skin.pdv-night .border-slate-200,
+  .pdv1-skin.pdv-night .border-slate-300,
+  .pdv1-skin.pdv-night .border-\[\#E5E2D9\],
+  .pdv1-skin.pdv-night .border-\[\#E5E5E0\],
+  .pdv1-skin.pdv-night .border-\[\#E7E2D8\],
+  .pdv1-skin.pdv-night .border-\[\#E6DFC8\],
+  .pdv1-skin.pdv-night .border-\[\#F0EEE6\],
+  .pdv1-skin.pdv-night .border-\[\#EDEAE1\] { border-color: #334155 !important; }
+  .pdv1-skin.pdv-night .divide-\[\#F0EEE6\] > :not([hidden]) ~ :not([hidden]) {
+    border-color: #334155 !important;
+  }
+
+  /* Campos: mantém leitura consistente mesmo nos modais mais antigos. */
+  .pdv1-skin.pdv-night input:not([type='checkbox']):not([type='radio']):not([type='range']),
+  .pdv1-skin.pdv-night select,
+  .pdv1-skin.pdv-night textarea {
+    background-color: #1e293b !important;
+    border-color: #475569 !important;
+    color: #f8fafc !important;
+  }
+  .pdv1-skin.pdv-night input::placeholder,
+  .pdv1-skin.pdv-night textarea::placeholder { color: #94a3b8 !important; }
+  .pdv1-skin.pdv-night option { background-color: #1e293b; color: #f8fafc; }
+  .pdv1-skin.pdv-night input:disabled,
+  .pdv1-skin.pdv-night select:disabled,
+  .pdv1-skin.pdv-night textarea:disabled { color: #94a3b8 !important; }
+
+  /* Superfícies semânticas escuras: significado preservado sem clarões. */
+  .pdv1-skin.pdv-night .bg-amber-50,
+  .pdv1-skin.pdv-night .bg-amber-100,
+  .pdv1-skin.pdv-night .bg-yellow-100 { background-color: #33260d !important; }
+  .pdv1-skin.pdv-night .bg-rose-50,
+  .pdv1-skin.pdv-night .bg-rose-100,
+  .pdv1-skin.pdv-night .bg-red-50,
+  .pdv1-skin.pdv-night .bg-red-100 { background-color: #3b1420 !important; }
+  .pdv1-skin.pdv-night .bg-emerald-50,
+  .pdv1-skin.pdv-night .bg-emerald-50\/40,
+  .pdv1-skin.pdv-night .bg-emerald-100 { background-color: #0f2e24 !important; }
+  .pdv1-skin.pdv-night .bg-blue-50,
+  .pdv1-skin.pdv-night .bg-blue-100,
+  .pdv1-skin.pdv-night .bg-sky-50,
+  .pdv1-skin.pdv-night .bg-sky-100,
+  .pdv1-skin.pdv-night .bg-cyan-50 { background-color: #10243e !important; }
+  .pdv1-skin.pdv-night .bg-violet-50,
+  .pdv1-skin.pdv-night .bg-violet-50\/30,
+  .pdv1-skin.pdv-night .bg-violet-100,
+  .pdv1-skin.pdv-night .bg-purple-50 { background-color: #25163f !important; }
+  .pdv1-skin.pdv-night .bg-teal-50,
+  .pdv1-skin.pdv-night .bg-teal-50\/40,
+  .pdv1-skin.pdv-night .bg-teal-100 { background-color: #0d2f2c !important; }
+
+  /* Texto de estados sobre as superfícies semânticas. */
+  .pdv1-skin.pdv-night .text-amber-500,
+  .pdv1-skin.pdv-night .text-amber-600,
+  .pdv1-skin.pdv-night .text-amber-700,
+  .pdv1-skin.pdv-night .text-amber-800,
+  .pdv1-skin.pdv-night .text-amber-900,
+  .pdv1-skin.pdv-night .text-yellow-900 { color: #fde68a !important; }
+  .pdv1-skin.pdv-night .text-rose-500,
+  .pdv1-skin.pdv-night .text-rose-600,
+  .pdv1-skin.pdv-night .text-rose-700,
+  .pdv1-skin.pdv-night .text-rose-800,
+  .pdv1-skin.pdv-night .text-rose-900,
+  .pdv1-skin.pdv-night .text-red-700,
+  .pdv1-skin.pdv-night .text-red-800,
+  .pdv1-skin.pdv-night .text-red-900 { color: #fecdd3 !important; }
+  .pdv1-skin.pdv-night .text-emerald-600,
+  .pdv1-skin.pdv-night .text-emerald-700,
+  .pdv1-skin.pdv-night .text-emerald-800,
+  .pdv1-skin.pdv-night .text-emerald-900 { color: #6ee7b7 !important; }
+  .pdv1-skin.pdv-night .text-blue-700,
+  .pdv1-skin.pdv-night .text-blue-800,
+  .pdv1-skin.pdv-night .text-blue-900,
+  .pdv1-skin.pdv-night .text-sky-700,
+  .pdv1-skin.pdv-night .text-sky-800,
+  .pdv1-skin.pdv-night .text-sky-900,
+  .pdv1-skin.pdv-night .text-cyan-600,
+  .pdv1-skin.pdv-night .text-cyan-800 { color: #7dd3fc !important; }
+  .pdv1-skin.pdv-night .text-violet-500,
+  .pdv1-skin.pdv-night .text-violet-600,
+  .pdv1-skin.pdv-night .text-violet-700,
+  .pdv1-skin.pdv-night .text-violet-800,
+  .pdv1-skin.pdv-night .text-violet-900,
+  .pdv1-skin.pdv-night .text-purple-600,
+  .pdv1-skin.pdv-night .text-purple-700,
+  .pdv1-skin.pdv-night .text-purple-900 { color: #ddd6fe !important; }
+  .pdv1-skin.pdv-night .text-teal-700,
+  .pdv1-skin.pdv-night .text-teal-800,
+  .pdv1-skin.pdv-night .text-teal-900 { color: #99f6e4 !important; }
+
+  /* Hovers neutros e dourados */
+  .pdv1-skin.pdv-night .hover\:bg-slate-50:hover,
+  .pdv1-skin.pdv-night .hover\:bg-slate-100:hover,
+  .pdv1-skin.pdv-night .hover\:bg-slate-200:hover { background-color: #263449 !important; }
+  .pdv1-skin.pdv-night .hover\:bg-\[\#FBF6E6\]:hover,
+  .pdv1-skin.pdv-night .hover\:bg-\[\#FBF6E6\]\/40:hover,
+  .pdv1-skin.pdv-night .hover\:bg-\[\#FAF6E8\]:hover,
+  .pdv1-skin.pdv-night .hover\:bg-\[\#FAF6E8\]\/50:hover,
+  .pdv1-skin.pdv-night .hover\:bg-\[\#FAF6E8\]\/60:hover,
+  .pdv1-skin.pdv-night .hover\:bg-amber-50:hover { background-color: #3b3015 !important; }
+  .pdv1-skin.pdv-night .hover\:bg-rose-50:hover,
+  .pdv1-skin.pdv-night .hover\:bg-red-50:hover { background-color: #4b1827 !important; }
+  .pdv1-skin.pdv-night .hover\:text-\[\#8C7325\]:hover { color: #f2d16b !important; }
+
+  /* Logos preservam suas cores e precisam de base branca real. */
+  .pdv1-skin.pdv-night .pdv-brand-tile,
+  .pdv1-skin.pdv-night .pdv-brand-tile:hover {
+    background-color: #fff !important;
+    color: #1e293b !important;
+  }
+
+  .pdv1-skin.pdv-night * {
+    scrollbar-color: #475569 #111827;
+  }
+
   body { @apply text-slate-700 antialiased; background: var(--pastel-cream); }
 
   /* BLOQUEIO de gesture "back" do Chrome — vendedora arrastando o mouse
