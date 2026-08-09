@@ -45,3 +45,33 @@ export function applyPurchaseOrderCollection(items, collectionId) {
 export function getPurchaseOrderCollection(items) {
   return items.find((item) => item.colecaoId)?.colecaoId || '';
 }
+
+/**
+ * Enter percorre a matriz da grade. Quando o campo atual e o ultimo, nao ha
+ * proximo indice: o chamador deve conferir a REF e criar a seguinte.
+ *
+ * @param {number} currentIndex
+ * @param {number} totalInputs
+ * @returns {number | null}
+ */
+export function getNextGradeInputIndex(currentIndex, totalInputs) {
+  const nextIndex = currentIndex + 1;
+  return nextIndex < totalInputs ? nextIndex : null;
+}
+
+/**
+ * Coordena o ultimo Enter sem antecipar a nova REF: primeiro aguarda o
+ * cadastro da atual; somente no sucesso cria a proxima e solicita seu foco.
+ *
+ * @param {() => Promise<boolean>} confirmCurrent
+ * @param {() => string} createNext
+ * @param {(itemId: string) => void} requestFocus
+ * @returns {Promise<boolean>}
+ */
+export async function completeGradeAndPrepareNext(confirmCurrent, createNext, requestFocus) {
+  const confirmed = await confirmCurrent();
+  if (!confirmed) return false;
+  const nextItemId = createNext();
+  requestFocus(nextItemId);
+  return true;
+}
