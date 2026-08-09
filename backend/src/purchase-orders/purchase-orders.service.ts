@@ -8,6 +8,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
 import { ProductRegistrationService } from '../product-registration/product-registration.service';
 import { AtributosPecaService } from '../atributos-peca/atributos-peca.service';
+import { NcmAiClassifierService } from './ncm-ai-classifier.service';
 
 /**
  * PurchaseOrdersService — pedidos de compra do fornecedor.
@@ -35,6 +36,7 @@ export class PurchaseOrdersService {
     private readonly erp: ErpService,
     private readonly productReg: ProductRegistrationService,
     private readonly atributos: AtributosPecaService,
+    private readonly ncmClassifier: NcmAiClassifierService,
   ) {}
 
   /**
@@ -328,6 +330,27 @@ export class PurchaseOrdersService {
       throw new BadRequestException('Nenhum tamanho com qty > 0 (todos zerados)');
     }
     const classificacao = await this.montarClassificacao(input);
+    const nomesClassificacao = (value: unknown): string[] => {
+      if (!value) return [];
+      try {
+        const parsed = typeof value === 'string' ? JSON.parse(value) : value;
+        return Array.isArray(parsed)
+          ? parsed.map((entry: any) => String(entry?.nome || '').trim()).filter(Boolean)
+          : [];
+      } catch {
+        return [];
+      }
+    };
+    const ncmDecision = await this.ncmClassifier.classify({
+      existingNcm: input.ncm,
+      ref: input.ref,
+      descricaoBase: input.descricaoBase,
+      grupoNome: input.grupoNome,
+      subgrupoNome: input.subgrupoNome,
+      tecidoNome: String(classificacao.tecidoNome || ''),
+      modelagens: nomesClassificacao(classificacao.modelagens),
+      ocasioes: nomesClassificacao(classificacao.ocasioes),
+    });
     const it = await (this.prisma as any).purchaseOrderItem.create({
       data: {
         ...classificacao,
@@ -339,7 +362,7 @@ export class PurchaseOrdersService {
         grupoNome: input.grupoNome?.trim().toUpperCase() || null,
         subgrupoCode: input.subgrupoCode || null,
         subgrupoNome: input.subgrupoNome?.trim().toUpperCase() || null,
-        ncm: input.ncm?.trim() || null,
+        ncm: ncmDecision.ncm,
         cfop: input.cfop?.trim() || '5102',
         plusSize: input.plusSize ?? true,
         custoUnit: Number(input.custoUnit),
