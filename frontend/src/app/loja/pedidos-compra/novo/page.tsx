@@ -85,9 +85,6 @@ type ItemForm = {
 
 const TAMANHOS_PLUS = ['46', '48', '50', '52', '54', '56', '58', '60'];
 
-// NCM padrao pra vestuario feminino (61062000 = camisas/blusas de malha algodao)
-const NCM_DEFAULT = '61062000';
-
 // Markup padrao POR TIPO de grade
 const MARKUP_PLUS = '2.75';
 const MARKUP_REGULAR = '2.35';
@@ -293,7 +290,8 @@ export default function NovoPedidoPage() {
 
   const adicionarItem = () => {
     setItems((prev) => {
-      // HERDA tudo do ultimo item: Grupo/Subgrupo/NCM/CFOP/PlusSize/Markup/Desc/Imp/Tamanhos
+      // HERDA tudo do ultimo item, exceto NCM: cada nova REF é classificada
+      // pelo backend com IA e validada contra a tabela vigente do Siscomex.
       // (REF, custo, preco, cores e qtys ficam em branco — sao especificos por peca)
       const last = prev[prev.length - 1];
       return [
@@ -306,7 +304,7 @@ export default function NovoPedidoPage() {
           grupoNome: last?.grupoNome ?? '',
           subgrupoCode: last?.subgrupoCode ?? null,
           subgrupoNome: last?.subgrupoNome ?? '',
-          ncm: last?.ncm || NCM_DEFAULT,
+          ncm: '',
           cfop: last?.cfop || '5102',
           plusSize: last?.plusSize ?? true,
           // Herda a classificação: numa mesma compra o fornecedor costuma
@@ -344,7 +342,7 @@ export default function NovoPedidoPage() {
   const duplicarItem = (tempId: string) => {
     const original = items.find((i) => i.tempId === tempId);
     if (!original) return;
-    setItems((prev) => [...prev, { ...original, tempId: newTempId(), grade: { ...original.grade }, conferido: undefined, serverItemIds: undefined }]);
+    setItems((prev) => [...prev, { ...original, tempId: newTempId(), ncm: '', grade: { ...original.grade }, conferido: undefined, serverItemIds: undefined }]);
   };
 
   const updateItem = (tempId: string, patch: Partial<ItemForm>) => {
@@ -363,7 +361,7 @@ export default function NovoPedidoPage() {
         grupoNome: cat.grupoNome,
         subgrupoCode: cat.subgrupoCode,
         subgrupoNome: cat.subgrupoNome,
-        ncm: cat.ncmDefault || NCM_DEFAULT,
+        ncm: '',
         cfop: cat.cfopDefault || '5102',
         plusSize: cat.plusSizeDefault,
       });
@@ -535,7 +533,7 @@ export default function NovoPedidoPage() {
         grupoNome: it.grupoNome,
         subgrupoCode: it.subgrupoCode,
         subgrupoNome: it.subgrupoNome,
-          ncm: it.ncm || NCM_DEFAULT,
+        ncm: it.ncm || null,
         cfop: it.cfop || '5102',
         plusSize: it.plusSize,
         custoUnit: Number(it.custoUnit.replace(',', '.')),
@@ -1326,9 +1324,13 @@ function ItemEditor({
             onChange={(e) => {
               const code = Number(e.target.value);
               const g = grupos.find((x) => x.codigo === code);
-              const patch: any = { grupoCode: code, grupoNome: g?.nome || '', subgrupoCode: null, subgrupoNome: '' };
-              if (!item.ncm) patch.ncm = NCM_DEFAULT;
-              onUpdate(patch);
+              onUpdate({
+                grupoCode: code,
+                grupoNome: g?.nome || '',
+                subgrupoCode: null,
+                subgrupoNome: '',
+                ncm: '',
+              });
             }}
             className="po-select"
           >
