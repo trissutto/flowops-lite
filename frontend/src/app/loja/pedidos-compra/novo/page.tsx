@@ -10,7 +10,7 @@
  * Quando recebe a mercadoria depois, dispara auto-cadastro Wincred.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
@@ -20,6 +20,8 @@ import {
 import { api } from '@/lib/api';
 import { ordemTamanho } from '@/lib/ordem-tamanho';
 import {
+  applyPurchaseOrderCollection,
+  getPurchaseOrderCollection,
   isPurchaseOrderItemCollapsed,
   toggleExpandedPurchaseOrderItem,
 } from '@/lib/purchase-order-item-accordion.mjs';
@@ -134,6 +136,9 @@ export default function NovoPedidoPage() {
   const [fornecedorNome, setFornecedorNome] = useState('');
   const [fornecedorCnpj, setFornecedorCnpj] = useState('');
   const [marca, setMarca] = useState('');
+  // A colecao pertence ao contexto da compra: escolhe uma vez junto da marca
+  // e todas as REFs pendentes recebem o mesmo valor.
+  const [colecaoPedidoId, setColecaoPedidoId] = useState('');
   const [dataPrevista, setDataPrevista] = useState('');
   const [nfNumero, setNfNumero] = useState('');
   const [observacoes, setObservacoes] = useState('');
@@ -149,6 +154,7 @@ export default function NovoPedidoPage() {
 
   // Items
   const [items, setItems] = useState<ItemForm[]>([]);
+  const inicializouPedidoRef = useRef(false);
   // Referencias conferidas nascem recolhidas. So uma pode ser reaberta por vez;
   // e um estado puramente visual, sem alterar o pedido salvo no servidor.
   const [conferidoAbertoId, setConferidoAbertoId] = useState<string | null>(null);
@@ -300,13 +306,13 @@ export default function NovoPedidoPage() {
           grupoNome: last?.grupoNome ?? '',
           subgrupoCode: last?.subgrupoCode ?? null,
           subgrupoNome: last?.subgrupoNome ?? '',
-          ncm: last?.ncm ?? '',
+          ncm: last?.ncm || NCM_DEFAULT,
           cfop: last?.cfop || '5102',
           plusSize: last?.plusSize ?? true,
           // Herda a classificação: numa mesma compra o fornecedor costuma
           // mandar várias REFs do mesmo tecido e da mesma coleção.
           tecidoId: last?.tecidoId ?? '',
-          colecaoId: last?.colecaoId ?? '',
+          colecaoId: colecaoPedidoId || last?.colecaoId || '',
           ocasiaoIds: last?.ocasiaoIds ? [...last.ocasiaoIds] : [],
           modelagemIds: last?.modelagemIds ? [...last.modelagemIds] : [],
           custoUnit: '',
@@ -529,7 +535,7 @@ export default function NovoPedidoPage() {
         grupoNome: it.grupoNome,
         subgrupoCode: it.subgrupoCode,
         subgrupoNome: it.subgrupoNome,
-        ncm: it.ncm || null,
+          ncm: it.ncm || NCM_DEFAULT,
         cfop: it.cfop || '5102',
         plusSize: it.plusSize,
         custoUnit: Number(it.custoUnit.replace(',', '.')),
@@ -646,6 +652,7 @@ export default function NovoPedidoPage() {
       // Conferidas primeiro (travadas), pendentes depois — ordem de lançamento
       cards.sort((a, b) => Number(!!b.conferido) - Number(!!a.conferido));
       setItems(cards);
+      setColecaoPedidoId(getPurchaseOrderCollection(cards));
       setOrderId(id);
     } catch (e: any) {
       setError(`Não consegui carregar o pedido: ${e?.message || 'erro'}`);
@@ -655,10 +662,13 @@ export default function NovoPedidoPage() {
   };
 
   useEffect(() => {
+    if (inicializouPedidoRef.current) return;
+    inicializouPedidoRef.current = true;
     const id = typeof window !== 'undefined'
       ? new URLSearchParams(window.location.search).get('id')
       : null;
     if (id) carregarPedido(id);
+    else adicionarItem();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -785,23 +795,23 @@ export default function NovoPedidoPage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50">
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-30">
-        <div className="max-w-[1400px] mx-auto px-4 py-3 flex items-center gap-3">
-          <Link href="/loja/pedidos-compra" className="p-2 rounded-lg hover:bg-slate-100">
-            <ArrowLeft className="w-5 h-5 text-slate-600" />
+    <div className="purchase-order-theme min-h-screen">
+      <header className="po-page-header sticky top-0 z-30">
+        <div className="max-w-[1580px] mx-auto px-4 py-3 flex items-center gap-3">
+          <Link href="/loja/pedidos-compra" className="po-header-back" aria-label="Voltar para pedidos de compra">
+            <ArrowLeft className="w-5 h-5" />
           </Link>
-          <div className="w-10 h-10 rounded-xl bg-violet-600 flex items-center justify-center">
-            <Package className="w-5 h-5 text-white" />
+          <div className="po-header-icon">
+            <Package className="w-5 h-5" />
           </div>
           <div className="flex-1">
-            <h1 className="text-lg font-black text-slate-800">
+            <h1 className="text-lg font-black text-white tracking-tight">
               {orderId ? 'Pedido de compra — lançamento' : 'Novo pedido de compra'}
             </h1>
-            <p className="text-xs text-slate-500">
+            <p className="text-xs text-[#E8D69B]">
               {items.length} REF(s) · <b>{totalPecas}</b> peças · R$ {totalCusto.toFixed(2)}
               {orderId && (
-                <span className="ml-2 font-bold text-emerald-700">
+                <span className="ml-2 font-bold text-white/80">
                   · pedido salvo — REFs conferidas já no estoque
                 </span>
               )}
@@ -810,7 +820,7 @@ export default function NovoPedidoPage() {
           <button
             onClick={salvar}
             disabled={saving || !!conferindoId || carregandoPedido || items.length === 0}
-            className="flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm rounded-lg shadow-md disabled:opacity-40"
+            className="po-save-button"
           >
             {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
             {orderId && items.every((i) => i.conferido) ? 'Abrir pedido' : 'Salvar pedido'}
@@ -818,9 +828,9 @@ export default function NovoPedidoPage() {
         </div>
       </header>
 
-      <main className="max-w-[1400px] mx-auto p-4 space-y-4">
+      <main className="max-w-[1580px] mx-auto p-4 space-y-4">
         {carregandoPedido && (
-          <div className="bg-violet-50 border border-violet-200 text-violet-700 rounded-lg p-3 text-sm font-bold">
+          <div className="rounded-xl border border-[#D2B15B]/50 bg-[#102A46] p-3 text-sm font-bold text-white">
             Carregando pedido…
           </div>
         )}
@@ -832,13 +842,18 @@ export default function NovoPedidoPage() {
         )}
 
         {/* Header do pedido */}
-        <section className="bg-white border border-slate-200 rounded-2xl p-4 space-y-3">
-          <h2 className="text-sm font-black text-violet-700 uppercase tracking-wider">Fornecedor & NF</h2>
+        <section className="po-panel space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="po-section-title">Dados do pedido</h2>
+            <span className="hidden sm:block text-[11px] font-semibold text-slate-400">
+              Defina fornecedor, marca e coleção uma única vez
+            </span>
+          </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-12">
             {/* Fornecedor autocomplete */}
-            <div className="relative sm:col-span-2">
-              <label className="text-xs font-bold text-slate-600 mb-1 block">
+            <div className="relative lg:col-span-4">
+              <label className="po-label">
                 Fornecedor
                 <span className="text-[10px] text-slate-400 font-normal ml-2">
                   ({fornecedores.length} no Wincred, {fornecedoresFiltered.length} mostrados)
@@ -868,7 +883,7 @@ export default function NovoPedidoPage() {
                   handleFornecedorBlur();
                 }}
                 placeholder="Digite a MARCA do fornecedor (ex: MARRIE, MALWEE)..."
-                className={`w-full px-3 py-2 border-2 rounded-lg text-sm ${
+                className={`po-input ${
                   fornecedorNome.trim() && !fornecedorCnpj.trim()
                     ? 'border-rose-400 bg-rose-50'
                     : fornecedorCnpj.trim()
@@ -877,16 +892,16 @@ export default function NovoPedidoPage() {
                 }`}
               />
               {showFornDropdown && (
-                <div className="absolute top-full left-0 right-0 mt-1 bg-white border-2 border-violet-200 rounded-lg shadow-xl max-h-72 overflow-y-auto z-10">
+                <div className="absolute top-full left-0 right-0 mt-1 bg-white border-2 border-[#D2B15B] rounded-xl shadow-2xl max-h-72 overflow-y-auto z-10">
                   {fornecedoresFiltered.length > 0 ? (
                     fornecedoresFiltered.map((f) => (
                       <button
                         key={f.cnpj + f.nome}
                         type="button"
                         onClick={() => escolherFornecedor(f)}
-                        className="w-full text-left px-3 py-2 hover:bg-violet-50 border-b border-slate-100 last:border-b-0"
+                        className="w-full text-left px-3 py-2 hover:bg-[#FBF6E6] border-b border-slate-100 last:border-b-0"
                       >
-                        <div className="font-bold text-sm text-violet-900">
+                        <div className="font-bold text-sm text-[#071A33]">
                           {f.fantasia || f.nome}
                           {f.fantasia && (
                             <span className="ml-2 text-[9px] font-bold uppercase text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded">
@@ -910,49 +925,71 @@ export default function NovoPedidoPage() {
               )}
             </div>
 
-            <div>
-              <label className="text-xs font-bold text-slate-600 mb-1 block">Marca (na descrição)</label>
+            <div className="lg:col-span-2">
+              <label className="po-label">Marca</label>
               <input
                 value={marca}
                 onChange={(e) => setMarca(e.target.value.toUpperCase())}
                 placeholder="Ex: MARRIE"
-                className="w-full px-3 py-2 border rounded-lg text-sm font-mono uppercase"
+                className="po-input font-mono uppercase"
               />
             </div>
-          </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div>
-              <label className="text-xs font-bold text-slate-600 mb-1 block">Data prevista</label>
+            <div className="lg:col-span-2">
+              <SelectAtributoPeca
+                tipo="colecao"
+                label="Coleção"
+                opcoes={atributos.colecao}
+                value={colecaoPedidoId}
+                onCriado={aoCriarAtributo}
+                onChange={(v) => {
+                  setColecaoPedidoId(v);
+                  setItems((atuais) => applyPurchaseOrderCollection(atuais, v));
+                }}
+              />
+            </div>
+
+            <div className="lg:col-span-2">
+              <label className="po-label">Data prevista</label>
               <input
                 type="date"
                 value={dataPrevista}
                 onChange={(e) => setDataPrevista(e.target.value)}
-                className="w-full px-3 py-2 border rounded-lg text-sm"
+                className="po-input"
               />
             </div>
-            <div>
-              <label className="text-xs font-bold text-slate-600 mb-1 block">NF (opcional)</label>
+            <div className="lg:col-span-2">
+              <label className="po-label">NF (opcional)</label>
               <input
                 value={nfNumero}
                 onChange={(e) => setNfNumero(e.target.value)}
                 placeholder="Número da NF"
-                className="w-full px-3 py-2 border rounded-lg text-sm"
+                className="po-input"
               />
             </div>
-            <div>
-              <label className="text-xs font-bold text-emerald-700 mb-1 block">
-                Markup (multiplicador)
-              </label>
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-12">
+            <div className="lg:col-span-10">
+              <label className="po-label">Observações</label>
+              <textarea
+                value={observacoes}
+                onChange={(e) => setObservacoes(e.target.value)}
+                rows={2}
+                className="po-input po-observations"
+              />
+            </div>
+            <div className="lg:col-span-2">
+              <label className="po-label">Fator padrão</label>
               <div className="relative">
                 <input
                   value={markup}
                   onChange={(e) => setMarkup(e.target.value.replace(',', '.'))}
                   placeholder="2.5"
                   inputMode="decimal"
-                  className="w-full px-3 py-2 border-2 border-emerald-300 rounded-lg text-sm font-mono font-bold bg-emerald-50"
+                  className="po-input border-[#D2B15B] bg-[#FBF6E6] font-mono font-black text-[#071A33]"
                 />
-                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-emerald-700 font-bold pointer-events-none">
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-[#9A7827] font-bold pointer-events-none">
                   ×
                 </span>
               </div>
@@ -960,16 +997,6 @@ export default function NovoPedidoPage() {
                 Custo líquido × markup = preço sugerido
               </div>
             </div>
-          </div>
-
-          <div>
-            <label className="text-xs font-bold text-slate-600 mb-1 block">Observações</label>
-            <textarea
-              value={observacoes}
-              onChange={(e) => setObservacoes(e.target.value)}
-              rows={2}
-              className="w-full px-3 py-2 border rounded-lg text-sm"
-            />
           </div>
         </section>
 
@@ -1013,7 +1040,7 @@ export default function NovoPedidoPage() {
 
           <button
             onClick={adicionarItem}
-            className="w-full py-4 border-2 border-dashed border-violet-300 hover:border-violet-500 hover:bg-violet-50 rounded-xl text-violet-600 font-bold flex items-center justify-center gap-2 transition"
+            className="po-add-ref"
           >
             <Plus className="w-5 h-5" />
             Adicionar nova REF
@@ -1174,9 +1201,9 @@ function ItemEditor({
   }
 
   return (
-    <div className={`bg-white border-2 rounded-2xl p-4 space-y-3 ${item.conferido ? 'border-[#D2B15B]' : 'border-slate-200'}`}>
+    <div className={`po-item-card space-y-3 ${item.conferido ? 'border-[#D2B15B]' : ''}`}>
       {/* Header da REF */}
-      <div className="flex items-center justify-between gap-2">
+      <div className="po-item-toolbar flex items-center justify-between gap-2">
         {item.conferido ? (
           <button
             type="button"
@@ -1190,12 +1217,12 @@ function ItemEditor({
             REF {item.ref.trim().toUpperCase()}
           </button>
         ) : (
-          <div className="text-xs font-black text-violet-700 uppercase tracking-wider">
-            Item #{index}
+          <div className="text-xs font-black text-[#071A33] uppercase tracking-[0.16em]">
+            Produto {index}
           </div>
         )}
         <div className="flex items-center gap-2 flex-wrap justify-end">
-          <span className="text-xs text-slate-500">
+          <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-600 tabular-nums">
             <b>{totalLinha}</b> peças · R$ {custoTotal.toFixed(2)}
           </span>
           {item.conferido ? (
@@ -1214,28 +1241,41 @@ function ItemEditor({
                     '_blank',
                   )
                 }
-                className="p-1.5 hover:bg-emerald-50 rounded text-emerald-700"
+                className="po-icon-action text-[#071A33]"
                 title="Reabrir etiquetas desta REF"
               >
                 <Printer className="w-4 h-4" />
               </button>
             </>
           ) : (
-            <button
-              onClick={onConferir}
-              disabled={conferindo}
-              title="Cadastra a REF no pedido, lança o estoque AGORA e abre as etiquetas — o pedido continua aberto pras próximas REFs"
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-black uppercase disabled:opacity-50"
-            >
-              {conferindo ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
-              Conferir + etiquetas
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={onConferir}
+                disabled={conferindo}
+                title="Confere a REF e lança o estoque"
+                className="po-action"
+              >
+                {conferindo ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                Conferir
+              </button>
+              <button
+                type="button"
+                onClick={onConferir}
+                disabled={conferindo}
+                className="po-action-secondary"
+                title="Conferir e gerar etiquetas desta REF"
+              >
+                <Printer className="w-3.5 h-3.5" />
+                Etiquetas
+              </button>
+            </>
           )}
-          <button onClick={onDuplicate} className="p-1.5 hover:bg-slate-100 rounded" title="Duplicar">
-            <Copy className="w-4 h-4 text-slate-500" />
+          <button type="button" onClick={onDuplicate} className="po-icon-action" title="Duplicar referência" aria-label="Duplicar referência">
+            <Copy className="w-4 h-4" />
           </button>
           {!item.conferido && (
-            <button onClick={onRemove} className="p-1.5 hover:bg-rose-50 text-rose-500 rounded" title="Remover">
+            <button type="button" onClick={onRemove} className="po-icon-action po-icon-danger" title="Excluir referência" aria-label="Excluir referência">
               <Trash2 className="w-4 h-4" />
             </button>
           )}
@@ -1249,27 +1289,35 @@ function ItemEditor({
         className={`min-w-0 border-0 p-0 m-0 space-y-3 ${item.conferido ? 'opacity-55 pointer-events-none' : ''}`}
       >
 
-      {/* Linha 1: REF */}
-      <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
-        <div className="sm:col-span-1">
-          <label className="text-[10px] font-bold text-slate-600 uppercase">REF *</label>
+      {/* Linha 1: REF destacada + Plus Size compacto */}
+      <div className="grid grid-cols-1 items-end gap-3 sm:grid-cols-[minmax(220px,360px)_auto_1fr]">
+        <div>
+          <label className="po-label">Referência *</label>
           <input
             value={item.ref}
             onChange={(e) => onUpdate({ ref: e.target.value.toUpperCase() })}
             placeholder="7031"
-            className="w-full px-2 py-2 border rounded text-sm font-mono uppercase font-bold"
+            className="po-ref-input"
           />
         </div>
+        <label className={`po-plus-toggle ${item.plusSize ? 'is-active' : ''}`}>
+          <input
+            type="checkbox"
+            checked={item.plusSize}
+            onChange={(e) => onUpdate({ plusSize: e.target.checked })}
+          />
+          <span>PLUS SIZE</span>
+        </label>
       </div>
 
-      {/* Linha 2: Grupo + Subgrupo + NCM + CFOP */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 bg-slate-50 p-2 rounded-lg">
-        <div className="sm:col-span-2">
+      {/* Linha 2: classificação principal, sem campos fiscais visíveis */}
+      <div className="po-classification-grid grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-5">
+        <div>
           <div className="flex items-center justify-between">
-            <label className="text-[10px] font-bold text-slate-600 uppercase">Grupo *</label>
+            <label className="po-label">Grupo *</label>
             <button type="button" onClick={handleCriarGrupo} disabled={criandoGrupo}
               title="Criar novo grupo no Wincred"
-              className="text-[10px] font-bold text-violet-600 hover:text-violet-800 disabled:opacity-40">
+              className="po-new-link">
               {criandoGrupo ? '...' : '+ novo'}
             </button>
           </div>
@@ -1282,7 +1330,7 @@ function ItemEditor({
               if (!item.ncm) patch.ncm = NCM_DEFAULT;
               onUpdate(patch);
             }}
-            className="w-full px-2 py-2 border rounded text-sm bg-white"
+            className="po-select"
           >
             <option value="">— selecione —</option>
             {grupos.map((g) => (
@@ -1290,12 +1338,12 @@ function ItemEditor({
             ))}
           </select>
         </div>
-        <div className="sm:col-span-2">
+        <div>
           <div className="flex items-center justify-between">
-            <label className="text-[10px] font-bold text-slate-600 uppercase">Subgrupo *</label>
+            <label className="po-label">Subgrupo *</label>
             <button type="button" onClick={handleCriarSubgrupo} disabled={criandoSubgrupo || !item.grupoCode}
               title="Criar novo subgrupo no grupo atual"
-              className="text-[10px] font-bold text-violet-600 hover:text-violet-800 disabled:opacity-40">
+              className="po-new-link">
               {criandoSubgrupo ? '...' : '+ novo'}
             </button>
           </div>
@@ -1307,7 +1355,7 @@ function ItemEditor({
               onUpdate({ subgrupoCode: code, subgrupoNome: s?.nome || (item.subgrupoCode === code ? item.subgrupoNome : '') });
             }}
             disabled={!item.grupoCode}
-            className="w-full px-2 py-2 border rounded text-sm bg-white disabled:opacity-50"
+            className="po-select disabled:opacity-50"
           >
             <option value="">— selecione —</option>
             {/* Option fantasma: subgrupo herdado pode nao estar na lista ainda (race) */}
@@ -1319,46 +1367,6 @@ function ItemEditor({
             ))}
           </select>
         </div>
-        <div>
-          <label className="text-[10px] font-bold text-slate-600 uppercase">NCM</label>
-          <input
-            value={item.ncm}
-            onChange={(e) => onUpdate({ ncm: e.target.value.replace(/\D/g, '').slice(0, 8) })}
-            placeholder="00000000"
-            className="w-full px-2 py-2 border rounded text-sm font-mono"
-          />
-        </div>
-      </div>
-
-      {/* Linha 3: CFOP + PlusSize */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-        <div>
-          <label className="text-[10px] font-bold text-slate-600 uppercase">CFOP</label>
-          <input
-            value={item.cfop}
-            onChange={(e) => onUpdate({ cfop: e.target.value.replace(/\D/g, '').slice(0, 4) })}
-            placeholder="5102"
-            className="w-full px-2 py-2 border rounded text-sm font-mono"
-          />
-        </div>
-        <label className="flex items-end gap-1.5 cursor-pointer sm:col-span-4">
-          <input
-            type="checkbox"
-            checked={item.plusSize}
-            onChange={(e) => onUpdate({ plusSize: e.target.checked })}
-            className="accent-violet-600 w-4 h-4 mb-2"
-          />
-          <span className="text-xs font-bold text-violet-700 mb-2">PLUS SIZE</span>
-        </label>
-      </div>
-
-      {/* Linha 4: CLASSIFICAÇÃO DA PEÇA — o que o site usa pra montar vitrine.
-          Preenchida aqui porque quem compra tem a peça na mão e sabe o tecido;
-          deixar pra depois é o que faz o campo ficar vazio pra sempre.
-          Opcional: nada aqui trava o pedido. Ocasião e modelagem aceitam mais
-          de uma — escolher empilha chips embaixo do campo. O "+ novo" ao lado
-          do rótulo cadastra sem sair da tela, igual GRUPO/SUBGRUPO acima. */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
         <SelectAtributoPeca
           tipo="tecido"
           label="Tecido"
@@ -1366,23 +1374,6 @@ function ItemEditor({
           value={item.tecidoId}
           onCriado={onCriarAtributo}
           onChange={(v) => onUpdate({ tecidoId: v })}
-        />
-        <SelectAtributoPeca
-          tipo="colecao"
-          label="Coleção"
-          opcoes={atributos.colecao}
-          value={item.colecaoId}
-          onCriado={onCriarAtributo}
-          onChange={(v) => onUpdate({ colecaoId: v })}
-        />
-        <SelectAtributoPeca
-          tipo="ocasiao"
-          label="Ocasião"
-          multiplo
-          opcoes={atributos.ocasiao}
-          values={item.ocasiaoIds}
-          onCriado={onCriarAtributo}
-          onChangeMany={(v) => onUpdate({ ocasiaoIds: v })}
         />
         <SelectAtributoPeca
           tipo="modelagem"
@@ -1393,83 +1384,93 @@ function ItemEditor({
           onCriado={onCriarAtributo}
           onChangeMany={(v) => onUpdate({ modelagemIds: v })}
         />
+        <SelectAtributoPeca
+          tipo="ocasiao"
+          label="Ocasião"
+          multiplo
+          opcoes={atributos.ocasiao}
+          values={item.ocasiaoIds}
+          onCriado={onCriarAtributo}
+          onChangeMany={(v) => onUpdate({ ocasiaoIds: v })}
+        />
       </div>
 
-      {/* PRECIFICAÇÃO — Custo → Desconto → Imposto → Líquido → Sugerido → Preço */}
-      <div className="bg-gradient-to-r from-slate-50 to-emerald-50 border border-emerald-200 rounded-lg p-3">
-        <div className="text-[10px] font-black uppercase text-emerald-700 tracking-wider mb-2">
+      {/* PRECIFICAÇÃO — custo e venda em destaque, ajustes compactos */}
+      <div className="po-price-band">
+        <div className="po-price-title">
           Precificação
         </div>
-        <div className="grid grid-cols-2 sm:grid-cols-6 gap-2 items-end">
+        <div className="grid grid-cols-2 gap-2 items-end md:grid-cols-6 lg:grid-cols-12">
           {/* Custo */}
-          <div>
-            <label className="text-[10px] font-bold text-slate-600 uppercase">Custo R$ *</label>
+          <div className="po-price-card po-cost-card lg:col-span-2">
+            <label className="po-label">Custo R$ *</label>
             <input
               value={item.custoUnit}
               onChange={(e) => onUpdate({ custoUnit: e.target.value })}
               placeholder="10,00"
               inputMode="decimal"
-              className="w-full px-2 py-2 border rounded text-sm font-mono bg-white"
+              className="po-money-input po-cost-input"
             />
           </div>
           {/* Desconto */}
-          <div>
-            <label className="text-[10px] font-bold text-slate-600 uppercase">− Desc %</label>
+          <div className="po-compact-price lg:col-span-1">
+            <label className="po-label">− Desc %</label>
             <input
               value={item.descontoPct}
               onChange={(e) => onUpdate({ descontoPct: e.target.value })}
               placeholder="0"
               inputMode="decimal"
-              className="w-full px-2 py-2 border rounded text-sm font-mono bg-white"
+              className="po-compact-input"
             />
           </div>
           {/* Tributo */}
-          <div>
-            <label className="text-[10px] font-bold text-slate-600 uppercase">+ Imp %</label>
+          <div className="po-compact-price lg:col-span-1">
+            <label className="po-label">+ Imp %</label>
             <input
               value={item.tributoPct}
               onChange={(e) => onUpdate({ tributoPct: e.target.value })}
               placeholder="0"
               inputMode="decimal"
-              className="w-full px-2 py-2 border rounded text-sm font-mono bg-white"
+              className="po-compact-input"
             />
           </div>
           {/* Custo líquido (calc) */}
-          <div>
-            <label className="text-[10px] font-bold text-emerald-700 uppercase">= Líquido</label>
-            <div className="w-full px-2 py-2 border-2 border-emerald-300 rounded text-sm font-mono font-bold bg-emerald-50 text-emerald-900 text-right tabular-nums">
+          <div className="lg:col-span-1">
+            <label className="po-label">= Líquido</label>
+            <div className="po-calculated-value">
               R$ {custoLiquido.toFixed(2).replace('.', ',')}
             </div>
           </div>
-          {/* Sugerido + Markup editavel por item */}
-          <div>
-            <label className="text-[10px] font-bold text-violet-700 uppercase flex items-center gap-1">
-              × 
-              <input
-                value={item.markup}
-                onChange={(e) => { onUpdate({ markup: e.target.value }); setPrecoEditadoManual(false); }}
-                placeholder={markup}
-                inputMode="decimal"
-                className="w-12 px-1 py-0.5 border border-violet-300 rounded text-xs font-mono font-bold text-center bg-white"
-                title={`Markup do item. Plus=${MARKUP_PLUS}, Reg=${MARKUP_REGULAR}`}
-              />
-              × Sugerido
-            </label>
+          {/* Fator compacto */}
+          <div className="po-compact-price lg:col-span-1">
+            <label className="po-label">Fator ×</label>
+            <input
+              value={item.markup}
+              onChange={(e) => { onUpdate({ markup: e.target.value }); setPrecoEditadoManual(false); }}
+              placeholder={markup}
+              inputMode="decimal"
+              className="po-compact-input"
+              title={`Markup do item. Plus=${MARKUP_PLUS}, Reg=${MARKUP_REGULAR}`}
+            />
+          </div>
+          {/* Sugerido */}
+          <div className="lg:col-span-2">
+            <label className="po-label">Preço sugerido</label>
             <button
               type="button"
               onClick={() => {
                 onUpdate({ precoUnit: precoSugeridoRedondo.toFixed(2).replace('.', ',') });
                 setPrecoEditadoManual(false);
               }}
-              className="w-full px-2 py-2 border-2 border-violet-300 rounded text-sm font-mono font-bold bg-violet-50 text-violet-900 text-right tabular-nums hover:bg-violet-100"
+              className="po-suggested-value"
               title="Clique pra aplicar"
             >
               R$ {precoSugeridoRedondo.toFixed(2).replace('.', ',')}
             </button>
           </div>
           {/* Preço editável */}
-          <div>
-            <label className="text-[10px] font-bold text-emerald-800 uppercase">Preço Venda *</label>
+          <div className="po-price-card po-sale-card col-span-2 md:col-span-2 lg:col-span-4">
+            <label className="po-label">Preço de venda *</label>
             <input
               value={item.precoUnit}
               onChange={(e) => {
@@ -1478,13 +1479,13 @@ function ItemEditor({
               }}
               placeholder="0,00"
               inputMode="decimal"
-              className="w-full px-2 py-2 border-2 border-emerald-500 rounded text-sm font-mono font-black bg-white text-emerald-800 text-right tabular-nums"
+              className="po-money-input po-sale-input"
             />
           </div>
         </div>
         {/* Resumo de margem */}
         {precoVendaNum > 0 && custoLiquido > 0 && (
-          <div className="mt-2 flex flex-wrap items-center gap-3 text-[11px]">
+          <div className="po-margin-summary">
             <span className="text-slate-600">
               Markup real: <b className={margemReal >= markupNum ? 'text-emerald-700' : 'text-amber-700'}>{margemReal.toFixed(2)}×</b>
             </span>
@@ -1506,7 +1507,7 @@ function ItemEditor({
       {/* Tamanhos (chips) */}
       <div className="space-y-1">
         <div className="flex items-center justify-between flex-wrap gap-2">
-          <div className="text-[10px] font-bold text-slate-600 uppercase">Tamanhos da grade</div>
+          <div className="po-label">Tamanhos da grade</div>
           <div className="flex flex-wrap gap-1">
             {GRADE_PRESETS.map((g) => {
               // active: preferencia ao gradePresetId (explicit), fallback compara arrays
@@ -1514,13 +1515,12 @@ function ItemEditor({
                 ? item.gradePresetId === g.id
                 : (item.tamanhos.length === g.tamanhos.length
                    && item.tamanhos.every((t, i) => t === g.tamanhos[i]));
-              const cls = active ? g.clsActive : g.clsIdle;
               return (
                 <button
                   key={g.id}
                   type="button"
                   onClick={() => onUpdate({ tamanhos: [...g.tamanhos], plusSize: g.plusSize, grade: {}, markup: g.markup, gradePresetId: g.id })}
-                  className={`px-2 py-1 border-2 rounded text-[10px] font-black uppercase ${cls}`}
+                  className={`po-preset ${active ? 'is-active' : ''}`}
                   title={`Aplicar: ${g.tamanhos.join(' • ')}`}
                 >
                   {g.label}
@@ -1531,7 +1531,7 @@ function ItemEditor({
         </div>
         <div className="flex flex-wrap gap-1 items-center">
           {item.tamanhos.map((t) => (
-            <span key={t} className="bg-violet-100 text-violet-700 px-2 py-1 rounded text-xs font-bold font-mono flex items-center gap-1">
+            <span key={t} className="po-size-chip">
               {t}
               <button onClick={() => onRemoveTam(t)} className="hover:text-rose-600">
                 <X className="w-3 h-3" />
@@ -1549,17 +1549,17 @@ function ItemEditor({
               }
             }}
             placeholder="+ tam"
-            className="px-2 py-1 border rounded text-xs w-20 font-mono"
+            className="po-inline-add w-20 font-mono"
           />
         </div>
       </div>
 
       {/* Cores (chips) */}
       <div className="space-y-1">
-        <div className="text-[10px] font-bold text-slate-600 uppercase">Cores</div>
+        <div className="po-label">Cores</div>
         <div className="flex flex-wrap gap-1 items-center">
           {item.cores.map((c) => (
-            <span key={c} className="bg-amber-100 text-amber-800 px-2 py-1 rounded text-xs font-bold flex items-center gap-1">
+            <span key={c} className="po-color-chip">
               {c}
               <button onClick={() => onRemoveCor(c)} className="hover:text-rose-600">
                 <X className="w-3 h-3" />
@@ -1577,7 +1577,7 @@ function ItemEditor({
               }
             }}
             placeholder="+ cor"
-            className="px-2 py-1 border rounded text-xs w-32 uppercase"
+            className="po-inline-add w-32 uppercase"
           />
         </div>
       </div>
@@ -1585,14 +1585,14 @@ function ItemEditor({
       {/* Grade cor x tamanho */}
       {item.cores.length > 0 && item.tamanhos.length > 0 && (
         <div className="overflow-x-auto">
-          <table className="w-full border-collapse text-sm">
+          <table className="po-grade-table w-full border-collapse text-sm">
             <thead>
               <tr>
-                <th className="text-left text-[10px] font-bold uppercase text-slate-500 p-1">Cor</th>
+                <th className="text-left text-[10px] font-bold uppercase p-2">Cor</th>
                 {item.tamanhos.map((t) => (
-                  <th key={t} className="p-1 text-center text-[10px] font-mono text-violet-700">{t}</th>
+                  <th key={t} className="p-2 text-center text-[10px] font-mono">{t}</th>
                 ))}
-                <th className="p-1 text-center text-[10px] text-violet-700">TOT</th>
+                <th className="p-2 text-center text-[10px]">TOT</th>
               </tr>
             </thead>
             <tbody>
@@ -1601,7 +1601,7 @@ function ItemEditor({
                 for (const t of item.tamanhos) total += Number(item.grade[`${c}|${t}`] || 0);
                 return (
                   <tr key={c}>
-                    <td className="p-1 font-bold text-amber-700 text-xs">{c}</td>
+                    <td className="p-2 font-black text-[#071A33] text-xs">{c}</td>
                     {item.tamanhos.map((t) => (
                       <td key={t} className="p-0.5">
                         <input
@@ -1627,11 +1627,11 @@ function ItemEditor({
                           data-grade={item.tempId}
                           placeholder="0"
                           inputMode="numeric"
-                          className="w-12 px-1 py-1 border rounded text-center font-mono text-sm"
+                          className="po-grade-input"
                         />
                       </td>
                     ))}
-                    <td className="p-1 text-center font-black text-violet-700 tabular-nums text-sm">{total}</td>
+                    <td className="p-2 text-center font-black text-[#071A33] tabular-nums text-sm">{total}</td>
                   </tr>
                 );
               })}

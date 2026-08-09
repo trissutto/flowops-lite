@@ -21,3 +21,27 @@ export function isPurchaseOrderItemCollapsed(conferido, expandedItemId, itemId) 
 export function toggleExpandedPurchaseOrderItem(currentItemId, clickedItemId) {
   return currentItemId === clickedItemId ? null : clickedItemId;
 }
+
+/**
+ * A colecao e escolhida uma vez no cabecalho e aplicada somente nas REFs que
+ * ainda nao foram conferidas. Produto recebido nunca e alterado no navegador.
+ *
+ * @template {{ conferido?: unknown, colecaoId?: string }} T
+ * @param {T[]} items
+ * @param {string} collectionId
+ * @returns {T[]}
+ */
+export function applyPurchaseOrderCollection(items, collectionId) {
+  return items.map((item) => (
+    item.conferido ? item : { ...item, colecaoId: collectionId }
+  ));
+}
+
+/**
+ * Recupera a colecao do primeiro item classificado ao reabrir um pedido.
+ *
+ * @param {Array<{ colecaoId?: string }>} items
+ */
+export function getPurchaseOrderCollection(items) {
+  return items.find((item) => item.colecaoId)?.colecaoId || '';
+}
