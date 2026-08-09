@@ -22,6 +22,8 @@ import { api } from '@/lib/api';
 import { ordemTamanho } from '@/lib/ordem-tamanho';
 import {
   applyPurchaseOrderCollection,
+  completeGradeAndPrepareNext,
+  getNextGradeInputIndex,
   getPurchaseOrderCollection,
   isPurchaseOrderItemCollapsed,
   toggleExpandedPurchaseOrderItem,
@@ -161,7 +163,24 @@ export default function NovoPedidoPage() {
   // "Conferir + etiquetas" e cada REF conferida já entra no estoque na hora.
   const [orderId, setOrderId] = useState<string | null>(null);
   const [conferindoId, setConferindoId] = useState<string | null>(null);
+  const conferindoIdRef = useRef<string | null>(null);
+  const [focusRefId, setFocusRefId] = useState<string | null>(null);
   const [carregandoPedido, setCarregandoPedido] = useState(false);
+
+  // Depois do ultimo Enter da grade, a nova REF nasce no fim da lista. O foco
+  // acontece somente depois que o React montou o novo campo no DOM.
+  useEffect(() => {
+    if (!focusRefId) return;
+    const frame = window.requestAnimationFrame(() => {
+      const input = document.querySelector<HTMLInputElement>(`[data-ref-input="${focusRefId}"]`);
+      if (!input) return;
+      input.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      input.focus({ preventScroll: true });
+      input.select();
+      setFocusRefId(null);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [focusRefId, items]);
 
   // Cache de subgrupos por grupoCode (compartilhado entre itens) — elimina race
   // quando item novo herda grupoCode+subgrupoCode do anterior.
@@ -289,7 +308,7 @@ export default function NovoPedidoPage() {
     }
   };
 
-  const adicionarItem = () => {
+  const adicionarItem = (tempId = newTempId()) => {
     setItems((prev) => {
       // HERDA tudo do ultimo item, exceto NCM: cada nova REF é classificada
       // pelo backend com IA e validada contra a tabela vigente do Siscomex.
@@ -298,7 +317,7 @@ export default function NovoPedidoPage() {
       return [
         ...prev,
         {
-          tempId: newTempId(),
+          tempId,
           ref: '',
           descricaoBase: last?.descricaoBase ?? '',
           grupoCode: last?.grupoCode ?? null,
@@ -677,15 +696,16 @@ export default function NovoPedidoPage() {
    * recebimento parcial — auto-cadastro + estoque — e abre as etiquetas da
    * REF em outra aba. O pedido continua aberto pras próximas REFs.
    */
-  const conferirAgora = async (tempId: string) => {
-    if (conferindoId) return;
+  const conferirAgora = async (tempId: string): Promise<boolean> => {
+    if (conferindoIdRef.current) return false;
     const it = items.find((i) => i.tempId === tempId);
-    if (!it || it.conferido) return;
+    if (!it || it.conferido) return false;
     setError(null);
     const vErr = validarItemForm(it);
-    if (vErr) { setError(vErr); return; }
+    if (vErr) { setError(vErr); return false; }
     const cnpjFinal = resolverCnpjFornecedor();
-    if (!cnpjFinal) return;
+    if (!cnpjFinal) return false;
+    conferindoIdRef.current = tempId;
     setConferindoId(tempId);
     try {
       const oid = await ensureOrder(cnpjFinal);
@@ -698,7 +718,7 @@ export default function NovoPedidoPage() {
       const apiItems = montarApiItems(it);
       if (apiItems.length === 0) {
         setError(`REF ${it.ref}: grade sem quantidades`);
-        return;
+        return false;
       }
       const itemIds: string[] = [];
       for (const ai of apiItems) {
@@ -733,11 +753,26 @@ export default function NovoPedidoPage() {
         `/loja/pedidos-compra/${oid}/etiquetas?ref=${encodeURIComponent(it.ref.trim().toUpperCase())}`,
         '_blank',
       );
+      return true;
     } catch (e: any) {
       setError(`Conferir REF ${it.ref}: ${e?.message || 'erro'}`);
+      return false;
     } finally {
+      conferindoIdRef.current = null;
       setConferindoId(null);
     }
+  };
+
+  const conferirEAdicionarProximaRef = async (tempId: string) => {
+    await completeGradeAndPrepareNext(
+      () => conferirAgora(tempId),
+      () => {
+        const novaRefId = newTempId();
+        adicionarItem(novaRefId);
+        return novaRefId;
+      },
+      setFocusRefId,
+    );
   };
 
   const salvar = async () => {
@@ -1019,6 +1054,7 @@ export default function NovoPedidoPage() {
               onRemove={() => removerItem(item.tempId)}
               onDuplicate={() => duplicarItem(item.tempId)}
               onConferir={() => conferirAgora(item.tempId)}
+              onConferirEAvancar={() => conferirEAdicionarProximaRef(item.tempId)}
               conferindo={conferindoId === item.tempId}
               onAplicarCategoria={(desc) => aplicarCategoriaSeExistir(item.tempId, desc)}
               onAddCor={(c) => adicionarCor(item.tempId, c)}
@@ -1040,7 +1076,7 @@ export default function NovoPedidoPage() {
           ))}
 
           <button
-            onClick={adicionarItem}
+            onClick={() => adicionarItem()}
             className="po-add-ref"
           >
             <Plus className="w-5 h-5" />
@@ -1059,7 +1095,7 @@ function ItemEditor({
   onUpdate, onRemove, onDuplicate, onAplicarCategoria,
   onAddCor, onRemoveCor, onAddTam, onRemoveTam, onGrade,
   onRefreshGrupos, atributos, onCriarAtributo,
-  onConferir, conferindo, expanded, onToggleExpanded,
+  onConferir, onConferirEAvancar, conferindo, expanded, onToggleExpanded,
 }: {
   item: ItemForm;
   index: number;
@@ -1072,7 +1108,8 @@ function ItemEditor({
   onUpdate: (patch: Partial<ItemForm>) => void;
   onRemove: () => void;
   onDuplicate: () => void;
-  onConferir: () => void;
+  onConferir: () => Promise<boolean>;
+  onConferirEAvancar: () => Promise<void>;
   conferindo: boolean;
   onAplicarCategoria: (desc: string) => void;
   onAddCor: (c: string) => void;
@@ -1305,6 +1342,7 @@ function ItemEditor({
             value={item.ref}
             onChange={(e) => onUpdate({ ref: e.target.value.toUpperCase() })}
             placeholder="7031"
+            data-ref-input={item.tempId}
             className="po-ref-input"
           />
         </div>
@@ -1643,13 +1681,13 @@ function ItemEditor({
                                 document.querySelectorAll<HTMLInputElement>(`[data-grade="${item.tempId}"]`),
                               );
                               const idx = inputs.indexOf(e.currentTarget);
-                              const next = inputs[idx + 1];
-                              if (next) {
-                                next.focus();
+                              const nextIndex = getNextGradeInputIndex(idx, inputs.length);
+                              if (nextIndex !== null) {
+                                inputs[nextIndex]?.focus();
                               } else {
-                                // Ultima quantidade da REF: Enter confirma usando
-                                // exatamente o mesmo fluxo do botao Conferir + etiquetas.
-                                onConferir();
+                                // Ultima quantidade: aguarda cadastro + estoque,
+                                // recolhe a atual, cria outra REF e foca nela.
+                                void onConferirEAvancar();
                               }
                             }
                           }}
