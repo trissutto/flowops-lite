@@ -6,7 +6,8 @@
     "dev": "next dev -p 3000 -H 0.0.0.0",
     "build": "next build",
     "start": "next start -p 3000 -H 0.0.0.0",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test:produto-estoque": "node scripts/check-produto-estoque.mjs"
   },
   "dependencies": {
     "@types/qrcode": "^1.5.6",

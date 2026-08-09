@@ -1,8 +1,8 @@
 {
-  "generatedAt": "2026-07-09T11:58:31.247Z",
-  "total": 171,
-  "comAtalho": 126,
-  "semAtalho": 45,
+  "generatedAt": "2026-08-09T01:08:15.009Z",
+  "total": 219,
+  "comAtalho": 161,
+  "semAtalho": 58,
   "rows": [
     {
       "route": "/",
@@ -22,7 +22,7 @@
       "route": "/auditoria-sku",
       "section": "auditoria-sku",
       "dynamic": false,
-      "hasShortcut": false,
+      "hasShortcut": true,
       "file": "src/app/auditoria-sku/page.tsx"
     },
     {
@@ -31,6 +31,13 @@
       "dynamic": false,
       "hasShortcut": false,
       "file": "src/app/cadastro-live/page.tsx"
+    },
+    {
+      "route": "/cadastros/classificacao-peca",
+      "section": "cadastros",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/cadastros/classificacao-peca/page.tsx"
     },
     {
       "route": "/cadastros/classificacao-produtos",
@@ -157,6 +164,20 @@
       "dynamic": false,
       "hasShortcut": true,
       "file": "src/app/franquias/page.tsx"
+    },
+    {
+      "route": "/franquias/estoque",
+      "section": "franquias",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/franquias/estoque/page.tsx"
+    },
+    {
+      "route": "/franquias/faturamento",
+      "section": "franquias",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/franquias/faturamento/page.tsx"
     },
     {
       "route": "/gestao",
@@ -295,8 +316,15 @@
       "route": "/meu-pedido",
       "section": "meu-pedido",
       "dynamic": false,
-      "hasShortcut": false,
+      "hasShortcut": true,
       "file": "src/app/meu-pedido/page.tsx"
+    },
+    {
+      "route": "/meus-pedidos",
+      "section": "meus-pedidos",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/meus-pedidos/page.tsx"
     },
     {
       "route": "/minha-loja",
@@ -325,6 +353,13 @@
       "dynamic": false,
       "hasShortcut": true,
       "file": "src/app/minha-loja/consultar/page.tsx"
+    },
+    {
+      "route": "/minha-loja/funcionarias",
+      "section": "minha-loja",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/minha-loja/funcionarias/page.tsx"
     },
     {
       "route": "/minha-loja/historico",
@@ -367,6 +402,13 @@
       "dynamic": false,
       "hasShortcut": true,
       "file": "src/app/minha-loja/live-pdv/page.tsx"
+    },
+    {
+      "route": "/minha-loja/live-romaneio/[cartId]",
+      "section": "minha-loja",
+      "dynamic": true,
+      "hasShortcut": false,
+      "file": "src/app/minha-loja/live-romaneio/[cartId]/page.tsx"
     },
     {
       "route": "/minha-loja/materiais",
@@ -460,6 +502,13 @@
       "file": "src/app/minha-loja/pdv/recebimentos-pix-confirmados/page.tsx"
     },
     {
+      "route": "/minha-loja/pdv/recebimentos/extrato/[codCliente]",
+      "section": "minha-loja",
+      "dynamic": true,
+      "hasShortcut": false,
+      "file": "src/app/minha-loja/pdv/recebimentos/extrato/[codCliente]/page.tsx"
+    },
+    {
       "route": "/minha-loja/pdv/recebimentos/historico",
       "section": "minha-loja",
       "dynamic": false,
@@ -495,6 +544,13 @@
       "file": "src/app/minha-loja/pdv/recibo/[saleId]/page.tsx"
     },
     {
+      "route": "/minha-loja/pdv/vale-presente/[code]",
+      "section": "minha-loja",
+      "dynamic": true,
+      "hasShortcut": false,
+      "file": "src/app/minha-loja/pdv/vale-presente/[code]/page.tsx"
+    },
+    {
       "route": "/minha-loja/pdv/vale-troca/[code]",
       "section": "minha-loja",
       "dynamic": true,
@@ -507,6 +563,13 @@
       "dynamic": false,
       "hasShortcut": true,
       "file": "src/app/minha-loja/ponto/page.tsx"
+    },
+    {
+      "route": "/minha-loja/ponto-celular",
+      "section": "minha-loja",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/minha-loja/ponto-celular/page.tsx"
     },
     {
       "route": "/minha-loja/realinhamento",
@@ -523,6 +586,20 @@
       "file": "src/app/minha-loja/recebimento/page.tsx"
     },
     {
+      "route": "/minha-loja/rosto",
+      "section": "minha-loja",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/minha-loja/rosto/page.tsx"
+    },
+    {
+      "route": "/minha-loja/rosto/[sellerId]",
+      "section": "minha-loja",
+      "dynamic": true,
+      "hasShortcut": true,
+      "file": "src/app/minha-loja/rosto/[sellerId]/page.tsx"
+    },
+    {
       "route": "/minha-loja/transferencia",
       "section": "minha-loja",
       "dynamic": false,
@@ -535,6 +612,13 @@
       "dynamic": false,
       "hasShortcut": true,
       "file": "src/app/minha-loja/triagem/page.tsx"
+    },
+    {
+      "route": "/nossaslojas",
+      "section": "nossaslojas",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/nossaslojas/page.tsx"
     },
     {
       "route": "/p/[cartId]",
@@ -663,11 +747,25 @@
       "file": "src/app/retaguarda/baixas-log/page.tsx"
     },
     {
+      "route": "/retaguarda/banners",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/banners/page.tsx"
+    },
+    {
       "route": "/retaguarda/cadastro-produtos",
       "section": "retaguarda",
       "dynamic": false,
       "hasShortcut": true,
       "file": "src/app/retaguarda/cadastro-produtos/page.tsx"
+    },
+    {
+      "route": "/retaguarda/campanhas",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/campanhas/page.tsx"
     },
     {
       "route": "/retaguarda/carne-config",
@@ -677,11 +775,32 @@
       "file": "src/app/retaguarda/carne-config/page.tsx"
     },
     {
+      "route": "/retaguarda/cashback",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/retaguarda/cashback/page.tsx"
+    },
+    {
       "route": "/retaguarda/cashback-config",
       "section": "retaguarda",
       "dynamic": false,
       "hasShortcut": false,
       "file": "src/app/retaguarda/cashback-config/page.tsx"
+    },
+    {
+      "route": "/retaguarda/categorias",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/categorias/page.tsx"
+    },
+    {
+      "route": "/retaguarda/clientes",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/retaguarda/clientes/page.tsx"
     },
     {
       "route": "/retaguarda/clientes-duplicados",
@@ -703,6 +822,41 @@
       "dynamic": false,
       "hasShortcut": true,
       "file": "src/app/retaguarda/comissoes/cargos/page.tsx"
+    },
+    {
+      "route": "/retaguarda/conciliacao",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/conciliacao/page.tsx"
+    },
+    {
+      "route": "/retaguarda/conferidor-estoque",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/conferidor-estoque/page.tsx"
+    },
+    {
+      "route": "/retaguarda/contas-pagar",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/contas-pagar/page.tsx"
+    },
+    {
+      "route": "/retaguarda/convenios",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/retaguarda/convenios/page.tsx"
+    },
+    {
+      "route": "/retaguarda/correios",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/correios/page.tsx"
     },
     {
       "route": "/retaguarda/crediario",
@@ -747,6 +901,20 @@
       "file": "src/app/retaguarda/dashboard-estrategico/page.tsx"
     },
     {
+      "route": "/retaguarda/dce",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/retaguarda/dce/page.tsx"
+    },
+    {
+      "route": "/retaguarda/demandas",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/demandas/page.tsx"
+    },
+    {
       "route": "/retaguarda/descontos-senhas",
       "section": "retaguarda",
       "dynamic": false,
@@ -782,6 +950,20 @@
       "file": "src/app/retaguarda/dm/page.tsx"
     },
     {
+      "route": "/retaguarda/dre",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/dre/page.tsx"
+    },
+    {
+      "route": "/retaguarda/editor-produtos",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/editor-produtos/page.tsx"
+    },
+    {
       "route": "/retaguarda/enviados-hoje",
       "section": "retaguarda",
       "dynamic": false,
@@ -792,7 +974,7 @@
       "route": "/retaguarda/estoque",
       "section": "retaguarda",
       "dynamic": false,
-      "hasShortcut": false,
+      "hasShortcut": true,
       "file": "src/app/retaguarda/estoque/page.tsx"
     },
     {
@@ -803,11 +985,46 @@
       "file": "src/app/retaguarda/faturamento/page.tsx"
     },
     {
+      "route": "/retaguarda/fechamento-caixa",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/fechamento-caixa/page.tsx"
+    },
+    {
+      "route": "/retaguarda/ficha-fila",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/ficha-fila/page.tsx"
+    },
+    {
       "route": "/retaguarda/financeiro/transferencias",
       "section": "retaguarda",
       "dynamic": false,
       "hasShortcut": true,
       "file": "src/app/retaguarda/financeiro/transferencias/page.tsx"
+    },
+    {
+      "route": "/retaguarda/fit-ai",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/retaguarda/fit-ai/page.tsx"
+    },
+    {
+      "route": "/retaguarda/fornecedores",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/fornecedores/page.tsx"
+    },
+    {
+      "route": "/retaguarda/giga-sombra",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/retaguarda/giga-sombra/page.tsx"
     },
     {
       "route": "/retaguarda/inbox",
@@ -866,6 +1083,13 @@
       "file": "src/app/retaguarda/live-pro/page.tsx"
     },
     {
+      "route": "/retaguarda/loja-frete",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/loja-frete/page.tsx"
+    },
+    {
       "route": "/retaguarda/lojas",
       "section": "retaguarda",
       "dynamic": false,
@@ -880,6 +1104,13 @@
       "file": "src/app/retaguarda/lu-config/page.tsx"
     },
     {
+      "route": "/retaguarda/mais-envios",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/mais-envios/page.tsx"
+    },
+    {
       "route": "/retaguarda/manychat-import",
       "section": "retaguarda",
       "dynamic": false,
@@ -892,6 +1123,13 @@
       "dynamic": false,
       "hasShortcut": true,
       "file": "src/app/retaguarda/mapa-urls/page.tsx"
+    },
+    {
+      "route": "/retaguarda/marcados",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/marcados/page.tsx"
     },
     {
       "route": "/retaguarda/materiais",
@@ -934,6 +1172,76 @@
       "dynamic": false,
       "hasShortcut": false,
       "file": "src/app/retaguarda/pagbank-config/page.tsx"
+    },
+    {
+      "route": "/retaguarda/produto-estoque",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/produto-estoque/page.tsx"
+    },
+    {
+      "route": "/retaguarda/produto-estoque/cadastros",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/retaguarda/produto-estoque/cadastros/page.tsx"
+    },
+    {
+      "route": "/retaguarda/produto-estoque/entradas",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/retaguarda/produto-estoque/entradas/page.tsx"
+    },
+    {
+      "route": "/retaguarda/produto-estoque/estoque",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/retaguarda/produto-estoque/estoque/page.tsx"
+    },
+    {
+      "route": "/retaguarda/produto-estoque/inteligencia",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/retaguarda/produto-estoque/inteligencia/page.tsx"
+    },
+    {
+      "route": "/retaguarda/produto-estoque/produtos",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/produto-estoque/produtos/page.tsx"
+    },
+    {
+      "route": "/retaguarda/produto-estoque/produtos/classificacao",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/produto-estoque/produtos/classificacao/page.tsx"
+    },
+    {
+      "route": "/retaguarda/produto-estoque/produtos/grade-geral",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/retaguarda/produto-estoque/produtos/grade-geral/page.tsx"
+    },
+    {
+      "route": "/retaguarda/produto-estoque/produtos/pendencias",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": false,
+      "file": "src/app/retaguarda/produto-estoque/produtos/pendencias/page.tsx"
+    },
+    {
+      "route": "/retaguarda/produto-master",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/produto-master/page.tsx"
     },
     {
       "route": "/retaguarda/produtos-vendidos",
@@ -1041,6 +1349,20 @@
       "file": "src/app/retaguarda/rh/face-enroll/[sellerId]/page.tsx"
     },
     {
+      "route": "/retaguarda/rh/operadores",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/rh/operadores/page.tsx"
+    },
+    {
+      "route": "/retaguarda/rh/ponto-geofence",
+      "section": "retaguarda",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/retaguarda/rh/ponto-geofence/page.tsx"
+    },
+    {
       "route": "/retaguarda/saidas-site",
       "section": "retaguarda",
       "dynamic": false,
@@ -1135,7 +1457,7 @@
       "route": "/retaguarda/wincred-mirror",
       "section": "retaguarda",
       "dynamic": false,
-      "hasShortcut": false,
+      "hasShortcut": true,
       "file": "src/app/retaguarda/wincred-mirror/page.tsx"
     },
     {
@@ -1167,11 +1489,25 @@
       "file": "src/app/site/page.tsx"
     },
     {
+      "route": "/site/portal-trocas",
+      "section": "site",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/site/portal-trocas/page.tsx"
+    },
+    {
       "route": "/site/trocas",
       "section": "site",
       "dynamic": false,
       "hasShortcut": true,
       "file": "src/app/site/trocas/page.tsx"
+    },
+    {
+      "route": "/trocas",
+      "section": "trocas",
+      "dynamic": false,
+      "hasShortcut": true,
+      "file": "src/app/trocas/page.tsx"
     },
     {
       "route": "/usuarios",

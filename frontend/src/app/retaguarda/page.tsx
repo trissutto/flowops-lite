@@ -42,6 +42,7 @@ interface GestaoItem {
 }
 
 const GESTAO_ITEMS: GestaoItem[] = [
+  { href: '/retaguarda/produto-estoque',      label: 'Produto & Estoque', subtitle: 'Módulo unificado', description: 'Ficha Master · grades · entradas · movimentações', tone: 'teal', icon: Package },
   { href: '/retaguarda/demandas',             label: 'Demandas',          subtitle: 'Backlog',       description: 'Prompt + prints · criticidade', tone: 'amber',  icon: ClipboardList },
   { href: '/retaguarda/conciliacao',          label: 'Conciliação',       subtitle: 'Financeiro',    description: 'Stone · PagBank · Pagar.me × vendas', tone: 'green', icon: DollarSign },
   { href: '/retaguarda/dashboard',            label: 'Dashboard',         subtitle: 'KPIs',          description: 'Visão geral em tempo real',     tone: 'teal',   icon: LayoutDashboard },
