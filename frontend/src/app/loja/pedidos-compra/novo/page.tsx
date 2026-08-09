@@ -16,6 +16,7 @@ import { useRouter } from 'next/navigation';
 import {
   ArrowLeft, Plus, Trash2, Loader2, Save, Package,
   AlertCircle, Copy, X, Eye, Check, Printer, ChevronDown,
+  Tag, Coins, Ruler,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { ordemTamanho } from '@/lib/ordem-tamanho';
@@ -795,7 +796,7 @@ export default function NovoPedidoPage() {
   return (
     <div className="purchase-order-theme min-h-screen">
       <header className="po-page-header sticky top-0 z-30">
-        <div className="max-w-[1580px] mx-auto px-4 py-3 flex items-center gap-3">
+        <div className="max-w-[1760px] mx-auto px-4 py-3 flex items-center gap-3">
           <Link href="/loja/pedidos-compra" className="po-header-back" aria-label="Voltar para pedidos de compra">
             <ArrowLeft className="w-5 h-5" />
           </Link>
@@ -826,7 +827,7 @@ export default function NovoPedidoPage() {
         </div>
       </header>
 
-      <main className="max-w-[1580px] mx-auto p-4 space-y-4">
+      <main className="max-w-[1760px] mx-auto p-4 space-y-4">
         {carregandoPedido && (
           <div className="rounded-xl border border-[#D2B15B]/50 bg-[#102A46] p-3 text-sm font-bold text-white">
             Carregando pedido…
@@ -840,13 +841,14 @@ export default function NovoPedidoPage() {
         )}
 
         {/* Header do pedido */}
-        <section className="po-panel space-y-3">
-          <div className="flex items-center justify-between gap-3">
+        <section className="po-panel">
+          <div className="po-order-panel-header flex items-center justify-between gap-3">
             <h2 className="po-section-title">Dados do pedido</h2>
-            <span className="hidden sm:block text-[11px] font-semibold text-slate-400">
+            <span className="hidden sm:block text-xs font-semibold text-white/65">
               Defina fornecedor, marca e coleção uma única vez
             </span>
           </div>
+          <div className="po-order-panel-content space-y-4">
 
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-12">
             {/* Fornecedor autocomplete */}
@@ -995,6 +997,7 @@ export default function NovoPedidoPage() {
                 Custo líquido × markup = preço sugerido
               </div>
             </div>
+          </div>
           </div>
         </section>
 
@@ -1199,7 +1202,7 @@ function ItemEditor({
   }
 
   return (
-    <div className={`po-item-card space-y-3 ${item.conferido ? 'border-[#D2B15B]' : ''}`}>
+    <div className={`po-item-card ${item.conferido ? 'border-[#D2B15B]' : ''}`}>
       {/* Header da REF */}
       <div className="po-item-toolbar flex items-center justify-between gap-2">
         {item.conferido ? (
@@ -1215,12 +1218,12 @@ function ItemEditor({
             REF {item.ref.trim().toUpperCase()}
           </button>
         ) : (
-          <div className="text-xs font-black text-[#071A33] uppercase tracking-[0.16em]">
-            Produto {index}
+          <div className="po-item-title">
+            Item #{index}
           </div>
         )}
         <div className="flex items-center gap-2 flex-wrap justify-end">
-          <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-600 tabular-nums">
+          <span className="po-item-summary">
             <b>{totalLinha}</b> peças · R$ {custoTotal.toFixed(2)}
           </span>
           {item.conferido ? (
@@ -1273,8 +1276,9 @@ function ItemEditor({
             <Copy className="w-4 h-4" />
           </button>
           {!item.conferido && (
-            <button type="button" onClick={onRemove} className="po-icon-action po-icon-danger" title="Excluir referência" aria-label="Excluir referência">
+            <button type="button" onClick={onRemove} className="po-delete-action" title="Excluir referência" aria-label="Excluir referência">
               <Trash2 className="w-4 h-4" />
+              <span>Excluir</span>
             </button>
           )}
         </div>
@@ -1286,9 +1290,15 @@ function ItemEditor({
         disabled={!!item.conferido}
         className={`min-w-0 border-0 p-0 m-0 space-y-3 ${item.conferido ? 'opacity-55 pointer-events-none' : ''}`}
       >
+      <section className="po-item-section">
+        <div className="po-section-bar">
+          <Tag className="h-5 w-5" aria-hidden="true" />
+          <span>Identificação</span>
+        </div>
+        <div className="po-section-content space-y-5">
 
       {/* Linha 1: REF destacada + Plus Size compacto */}
-      <div className="grid grid-cols-1 items-end gap-3 sm:grid-cols-[minmax(220px,360px)_auto_1fr]">
+      <div className="po-identity-primary grid grid-cols-1 items-end gap-4 sm:grid-cols-[minmax(280px,420px)_minmax(240px,300px)_1fr]">
         <div>
           <label className="po-label">Referência *</label>
           <input
@@ -1304,7 +1314,12 @@ function ItemEditor({
             checked={item.plusSize}
             onChange={(e) => onUpdate({ plusSize: e.target.checked })}
           />
-          <span>PLUS SIZE</span>
+          <span className="po-plus-symbol" aria-hidden="true">✦</span>
+          <span className="po-plus-copy">
+            <strong>Plus Size</strong>
+            <small>Grade 46–60</small>
+          </span>
+          <span className="po-plus-switch" aria-hidden="true"><span /></span>
         </label>
       </div>
 
@@ -1396,12 +1411,16 @@ function ItemEditor({
           onChangeMany={(v) => onUpdate({ ocasiaoIds: v })}
         />
       </div>
+        </div>
+      </section>
 
       {/* PRECIFICAÇÃO — custo e venda em destaque, ajustes compactos */}
-      <div className="po-price-band">
-        <div className="po-price-title">
-          Precificação
+      <section className="po-item-section">
+        <div className="po-section-bar">
+          <Coins className="h-5 w-5" aria-hidden="true" />
+          <span>Precificação</span>
         </div>
+      <div className="po-price-band">
         <div className="grid grid-cols-2 gap-2 items-end md:grid-cols-6 lg:grid-cols-12">
           {/* Custo */}
           <div className="po-price-card po-cost-card lg:col-span-2">
@@ -1506,13 +1525,16 @@ function ItemEditor({
         )}
       </div>
 
-      {/* Tamanhos (chips) */}
-      <div className="space-y-1">
-        <div className="flex items-center justify-between flex-wrap gap-2">
-          <div className="po-label">Tamanhos da grade</div>
-          <div className="flex flex-wrap gap-1">
+      </section>
+
+      <section className="po-item-section">
+        <div className="po-section-bar po-grade-bar">
+          <div className="flex items-center gap-2">
+            <Ruler className="h-5 w-5" aria-hidden="true" />
+            <span>Grade e cores</span>
+          </div>
+          <div className="po-grade-presets">
             {GRADE_PRESETS.map((g) => {
-              // active: preferencia ao gradePresetId (explicit), fallback compara arrays
               const active = item.gradePresetId
                 ? item.gradePresetId === g.id
                 : (item.tamanhos.length === g.tamanhos.length
@@ -1531,6 +1553,11 @@ function ItemEditor({
             })}
           </div>
         </div>
+        <div className="po-section-content po-grade-content space-y-4">
+
+      {/* Tamanhos (chips) */}
+      <div className="po-grade-options-row">
+        <div className="po-grade-row-label">Tamanhos da grade</div>
         <div className="flex flex-wrap gap-1 items-center">
           {item.tamanhos.map((t) => (
             <span key={t} className="po-size-chip">
@@ -1557,8 +1584,8 @@ function ItemEditor({
       </div>
 
       {/* Cores (chips) */}
-      <div className="space-y-1">
-        <div className="po-label">Cores</div>
+      <div className="po-grade-options-row">
+        <div className="po-grade-row-label">Cores</div>
         <div className="flex flex-wrap gap-1 items-center">
           {item.cores.map((c) => (
             <span key={c} className="po-color-chip">
@@ -1662,6 +1689,8 @@ function ItemEditor({
 
       {/* PREVIEW DESCRICAO - auto-gerada (ultimo campo) */}
       <DescricaoPreview item={item} />
+        </div>
+      </section>
       </fieldset>
     </div>
   );
