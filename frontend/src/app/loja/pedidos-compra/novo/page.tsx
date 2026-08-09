@@ -15,10 +15,14 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
   ArrowLeft, Plus, Trash2, Loader2, Save, Package,
-  AlertCircle, Copy, X, Eye, Check, Printer,
+  AlertCircle, Copy, X, Eye, Check, Printer, ChevronDown,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { ordemTamanho } from '@/lib/ordem-tamanho';
+import {
+  isPurchaseOrderItemCollapsed,
+  toggleExpandedPurchaseOrderItem,
+} from '@/lib/purchase-order-item-accordion.mjs';
 import {
   SelectAtributoPeca, type Atributo, type AtributosPorTipo, type TipoAtributo,
 } from '@/components/SelectAtributoPeca';
@@ -145,6 +149,9 @@ export default function NovoPedidoPage() {
 
   // Items
   const [items, setItems] = useState<ItemForm[]>([]);
+  // Referencias conferidas nascem recolhidas. So uma pode ser reaberta por vez;
+  // e um estado puramente visual, sem alterar o pedido salvo no servidor.
+  const [conferidoAbertoId, setConferidoAbertoId] = useState<string | null>(null);
 
   // Conferência durante o lançamento: o pedido é criado (rascunho) no 1º
   // "Conferir + etiquetas" e cada REF conferida já entra no estoque na hora.
@@ -706,6 +713,8 @@ export default function NovoPedidoPage() {
           erros,
         },
       });
+      // A REF so recolhe depois que o servidor confirmou cadastro + estoque.
+      setConferidoAbertoId(null);
       if (erros > 0) {
         setError(
           `REF ${it.ref} conferida com ${erros} erro(s) de cadastro — resolva depois na tela do pedido (Cadastrar faltantes).`,
@@ -989,7 +998,16 @@ export default function NovoPedidoPage() {
               onAddTam={(t) => adicionarTamanho(item.tempId, t)}
               onRemoveTam={(t) => removerTamanho(item.tempId, t)}
               onGrade={(c, t, v) => setGradeCell(item.tempId, c, t, v)}
-              onAdicionarNova={idx === items.length - 1 ? adicionarItem : undefined}
+              expanded={!isPurchaseOrderItemCollapsed(
+                !!item.conferido,
+                conferidoAbertoId,
+                item.tempId,
+              )}
+              onToggleExpanded={() =>
+                setConferidoAbertoId((atual) =>
+                  toggleExpandedPurchaseOrderItem(atual, item.tempId),
+                )
+              }
             />
           ))}
 
@@ -1012,8 +1030,8 @@ function ItemEditor({
   getSubgrupos,
   onUpdate, onRemove, onDuplicate, onAplicarCategoria,
   onAddCor, onRemoveCor, onAddTam, onRemoveTam, onGrade,
-  onAdicionarNova, onRefreshGrupos, atributos, onCriarAtributo,
-  onConferir, conferindo,
+  onRefreshGrupos, atributos, onCriarAtributo,
+  onConferir, conferindo, expanded, onToggleExpanded,
 }: {
   item: ItemForm;
   index: number;
@@ -1034,8 +1052,9 @@ function ItemEditor({
   onAddTam: (t: string) => void;
   onRemoveTam: (t: string) => void;
   onGrade: (c: string, t: string, v: string) => void;
-  onAdicionarNova?: () => void;
   onRefreshGrupos?: () => Promise<Grupo[]>;
+  expanded: boolean;
+  onToggleExpanded: () => void;
 }) {
   // Flag pra saber se o preço foi mexido manualmente (não auto-sobrescrever)
   const [precoEditadoManual, setPrecoEditadoManual] = useState(!!item.precoTravado);
@@ -1130,13 +1149,51 @@ function ItemEditor({
   const margemReal = custoLiquido > 0 ? (precoVendaNum / custoLiquido) : 0;
   const lucroUnit = precoVendaNum - custoLiquido;
 
+  if (item.conferido && !expanded) {
+    return (
+      <button
+        type="button"
+        onClick={onToggleExpanded}
+        aria-expanded={false}
+        aria-controls={`pedido-item-corpo-${item.tempId}`}
+        aria-label={`Reabrir REF ${item.ref.trim().toUpperCase()}`}
+        className="group flex min-h-16 w-full items-stretch overflow-hidden rounded-xl border border-[#D2B15B] bg-white text-left shadow-sm transition hover:border-[#B8912B] hover:shadow-md focus:outline-none focus:ring-2 focus:ring-[#D2B15B] focus:ring-offset-2"
+      >
+        <span className="w-1.5 shrink-0 bg-[#D2B15B]" aria-hidden="true" />
+        <span className="flex flex-1 items-center justify-between gap-3 px-5 py-3">
+          <span className="text-base font-black uppercase tracking-wide text-[#071A33]">
+            REF {item.ref.trim().toUpperCase()}
+          </span>
+          <ChevronDown
+            className="h-5 w-5 shrink-0 text-[#8C7325] transition-transform group-hover:translate-y-0.5"
+            aria-hidden="true"
+          />
+        </span>
+      </button>
+    );
+  }
+
   return (
-    <div className={`bg-white border-2 rounded-2xl p-4 space-y-3 ${item.conferido ? 'border-emerald-300' : 'border-slate-200'}`}>
+    <div className={`bg-white border-2 rounded-2xl p-4 space-y-3 ${item.conferido ? 'border-[#D2B15B]' : 'border-slate-200'}`}>
       {/* Header da REF */}
       <div className="flex items-center justify-between gap-2">
-        <div className="text-xs font-black text-violet-700 uppercase tracking-wider">
-          Item #{index}
-        </div>
+        {item.conferido ? (
+          <button
+            type="button"
+            onClick={onToggleExpanded}
+            aria-expanded={true}
+            aria-controls={`pedido-item-corpo-${item.tempId}`}
+            className="flex items-center gap-2 rounded-lg px-2 py-1 text-xs font-black uppercase tracking-wider text-[#071A33] hover:bg-[#FBF6E6] focus:outline-none focus:ring-2 focus:ring-[#D2B15B]"
+            title="Recolher esta referencia"
+          >
+            <ChevronDown className="h-4 w-4 rotate-180 text-[#8C7325]" aria-hidden="true" />
+            REF {item.ref.trim().toUpperCase()}
+          </button>
+        ) : (
+          <div className="text-xs font-black text-violet-700 uppercase tracking-wider">
+            Item #{index}
+          </div>
+        )}
         <div className="flex items-center gap-2 flex-wrap justify-end">
           <span className="text-xs text-slate-500">
             <b>{totalLinha}</b> peças · R$ {custoTotal.toFixed(2)}
@@ -1187,6 +1244,7 @@ function ItemEditor({
 
       {/* Corpo travado após conferir — a partir daí a verdade é o servidor */}
       <fieldset
+        id={`pedido-item-corpo-${item.tempId}`}
         disabled={!!item.conferido}
         className={`min-w-0 border-0 p-0 m-0 space-y-3 ${item.conferido ? 'opacity-55 pointer-events-none' : ''}`}
       >
@@ -1559,14 +1617,10 @@ function ItemEditor({
                               const next = inputs[idx + 1];
                               if (next) {
                                 next.focus();
-                              } else if (onAdicionarNova) {
-                                // Ultimo input - cria nova REF e foca no campo REF
-                                onAdicionarNova();
-                                setTimeout(() => {
-                                  const refs = document.querySelectorAll<HTMLInputElement>('input[placeholder="7031"]');
-                                  const last = refs[refs.length - 1];
-                                  if (last) last.focus();
-                                }, 50);
+                              } else {
+                                // Ultima quantidade da REF: Enter confirma usando
+                                // exatamente o mesmo fluxo do botao Conferir + etiquetas.
+                                onConferir();
                               }
                             }
                           }}
