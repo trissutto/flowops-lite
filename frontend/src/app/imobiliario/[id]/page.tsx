@@ -21,9 +21,11 @@ import { useParams, useRouter } from 'next/navigation';
 import {
   ArrowLeft, Building2, Loader2, Save, Edit3, Archive, ArchiveRestore,
   Copy, MapPin, Droplet, Zap, Receipt, FileText, Scroll, Folder, History,
-  Plus, Trash2, AlertCircle, Calendar, Tag,
+  Plus, Trash2, AlertCircle, Calendar, Tag, Megaphone, HardHat,
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import { PropertyCommercialTab } from '@/components/imobiliario/PropertyCommercialTab';
+import { PropertyConstructionTab } from '@/components/imobiliario/PropertyConstructionTab';
 
 type Property = any;
 
@@ -43,6 +45,8 @@ const TABS = [
   { id: 'taxas', label: 'Taxas', icon: Tag },
   { id: 'matricula', label: 'Matrícula', icon: FileText },
   { id: 'escritura', label: 'Escritura', icon: Scroll },
+  { id: 'obras', label: 'Gestão de Obra', icon: HardHat },
+  { id: 'corretores', label: 'Ficha p/ Corretores', icon: Megaphone },
   { id: 'historico', label: 'Histórico', icon: History },
 ];
 
@@ -299,6 +303,8 @@ export default function ImovelDetailPage() {
             onSaved={fetchData}
           />
         )}
+        {tab === 'obras' && <PropertyConstructionTab propertyId={id} />}
+        {tab === 'corretores' && <PropertyCommercialTab propertyId={id} />}
         {tab === 'historico' && <TabHistorico id={id} />}
       </main>
     </div>

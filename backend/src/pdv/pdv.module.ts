@@ -36,15 +36,17 @@ import { ProdutosVendidosService } from './produtos-vendidos.service';
 import { ProdutosVendidosController } from './produtos-vendidos.controller';
 import { PixPagbankReconcileService } from './pix-pagbank-reconcile.service';
 import { CashbackModule } from '../cashback/cashback.module';
+import { PdvStoreSummaryController } from './store-summary.controller';
+import { PdvStoreSummaryService } from './store-summary.service';
 
 @Module({
   imports: [CashbackModule, PrismaModule, ErpModule, PagarmeModule, forwardRef(() => CrediariosModule), WooCommerceModule, PromoConfigModule, AccessPolicyModule, WincredMirrorModule, AdiantamentosModule, ConveniosModule, CrediarioNativoModule],
-  controllers: [PdvController, CashController, ReturnsController, ReturnsPublicController, PdvDiagController, MarcadosController, ActiveSellersController, CarneCoordsController, FiscalReportController, ProdutosVendidosController],
+  controllers: [PdvController, CashController, ReturnsController, ReturnsPublicController, PdvDiagController, MarcadosController, ActiveSellersController, CarneCoordsController, FiscalReportController, ProdutosVendidosController, PdvStoreSummaryController],
   // ⚠️ `PixPagbankReconcileService` entra SÓ como provider — nenhum import de
   // módulo novo. Foi exatamente um import novo aqui (PagbankModule) que criou
   // o ciclo e impediu o backend de subir em 07/08. Ele lê a tabela do PagBank
   // pelo Prisma, que este módulo já tem.
-  providers: [PdvService, ErpOutboxService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, CoordsDbService, MarcadosService, MarcadosMirrorService, ActiveSellersService, CarneCoordsService, FiscalReportService, ProdutosVendidosService, PixPagbankReconcileService],
+  providers: [PdvService, ErpOutboxService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, CoordsDbService, MarcadosService, MarcadosMirrorService, ActiveSellersService, CarneCoordsService, FiscalReportService, ProdutosVendidosService, PixPagbankReconcileService, PdvStoreSummaryService],
   exports: [PdvService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, CoordsDbService, MarcadosService, MarcadosMirrorService, ActiveSellersService, CarneCoordsService, FiscalReportService, ProdutosVendidosService],
 })
 export class PdvModule {}

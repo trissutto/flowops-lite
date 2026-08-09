@@ -1,0 +1,74 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model PublicProperty {
+  id          String   @id @default(uuid())
+  publicId    String   @unique @map("public_id")
+  active      Boolean  @default(false)
+  version     Int
+  payloadHash String?  @map("payload_hash")
+  snapshot    Json
+  publishedAt DateTime @map("published_at")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  media       PublicMedia[]
+
+  @@index([active, updatedAt])
+  @@map("public_properties")
+}
+
+model PublicMedia {
+  id          String   @id
+  propertyId  String   @map("property_id")
+  property    PublicProperty @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  kind        String
+  fileName    String   @map("file_name")
+  storageKey  String?  @map("storage_key")
+  externalUrl String?  @map("external_url") @db.Text
+  mimeType    String?  @map("mime_type")
+  fileSize    Int?     @map("file_size")
+  caption     String?
+  sortOrder   Int      @default(0) @map("sort_order")
+  isCover     Boolean  @default(false) @map("is_cover")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([propertyId, sortOrder])
+  @@map("public_property_media")
+}
+
+model PublicationNonce {
+  nonce     String   @id
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt])
+  @@map("publication_nonces")
+}
+
+model PublicationOperation {
+  idempotencyKey String   @id @map("idempotency_key")
+  action         String
+  status         String
+  response       Json?
+  error          String?  @db.Text
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@index([createdAt])
+  @@map("publication_operations")
+}
+
+model PublicRateLimit {
+  key       String   @id
+  count     Int      @default(1)
+  expiresAt DateTime @map("expires_at")
+
+  @@index([expiresAt])
+  @@map("public_rate_limits")
+}

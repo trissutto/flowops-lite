@@ -1,12 +1,9 @@
 /** @type {import('jest').Config} */
 module.exports = {
-  rootDir: 'src',
-  testRegex: '.*\\.spec\\.ts$',
-  transform: {
-    '^.+\\.(t|j)s$': 'ts-jest',
-  },
-  moduleFileExtensions: ['js', 'json', 'ts'],
+  rootDir: '.',
   testEnvironment: 'node',
-  collectCoverageFrom: ['**/*.(t|j)s'],
-  coverageDirectory: '../coverage',
+  testRegex: '.*\\.spec\\.ts$',
+  transform: { '^.+\\.(t|j)s$': ['ts-jest', { tsconfig: 'tsconfig.json' }] },
+  moduleFileExtensions: ['ts', 'js', 'json'],
+  clearMocks: true,
 };
