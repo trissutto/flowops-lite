@@ -10,6 +10,7 @@ import { ErpModule } from '../erp/erp.module';
 import { WooCommerceModule } from '../woocommerce/woocommerce.module';
 import { WhatsappModule } from '../whatsapp/whatsapp.module';
 import { AuthModule } from '../auth/auth.module';
+import { PushModule } from '../push/push.module';
 
 import { LiveController } from './live.controller';
 import { MetaWebhookController } from './meta-webhook.controller';
@@ -24,6 +25,7 @@ import { AiAgentService } from './ai-agent.service';
 import { LiveRealtimeGateway } from './live-realtime.gateway';
 import { LiveBroadcasterService } from './live-broadcaster.service';
 import { InboxService } from './inbox.service';
+import { MetaTokenWatchdogService } from './meta-token-watchdog.service';
 
 @Module({
   imports: [
@@ -35,6 +37,9 @@ import { InboxService } from './inbox.service';
     WooCommerceModule,
     WhatsappModule,
     AuthModule,
+    // Canal do vigia do token (ver `MetaTokenWatchdogService`). PushModule só
+    // depende do Prisma — não há ciclo com o live.
+    PushModule,
   ],
   controllers: [LiveController, MetaWebhookController, InboxController],
   providers: [
@@ -47,7 +52,8 @@ import { InboxService } from './inbox.service';
     LiveRealtimeGateway,
     LiveBroadcasterService,
     InboxService,
+    MetaTokenWatchdogService,
   ],
-  exports: [LiveService, ReservationService, MetaService, InboxService],
+  exports: [LiveService, ReservationService, MetaService, InboxService, MetaTokenWatchdogService],
 })
 export class LiveModule {}

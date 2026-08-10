@@ -6,6 +6,7 @@ import { JwtAuthGuard } from '../auth/jwt.guard';
 
 import { LiveService } from './live.service';
 import { ReservationService } from './reservation.service';
+import { MetaTokenWatchdogService } from './meta-token-watchdog.service';
 import { StartLiveDto } from './dto/start-live.dto';
 import { CreateLiveDto } from './dto/create-live.dto';
 import { AddProductDto } from './dto/add-product.dto';
@@ -26,7 +27,25 @@ export class LiveController {
   constructor(
     private readonly liveService: LiveService,
     private readonly reservationService: ReservationService,
+    private readonly metaToken: MetaTokenWatchdogService,
   ) {}
+
+  /**
+   * SAÚDE DO TOKEN DA META — a resposta pra "o Instagram sumiu do site".
+   *
+   * `?agora=1` pergunta pra Meta na hora (uma requisição); sem ele devolve o
+   * último resultado do vigia das 9h, de graça. Existe porque quem desconfia
+   * do token acabou de trocar o token e quer confirmar, não quer esperar até
+   * amanhã de manhã.
+   *
+   * `null` = integração não configurada, que é diferente de token vencido.
+   */
+  @Get('meta/token')
+  async statusToken(@Query('agora') agora?: string) {
+    return agora === '1' || agora === 'true'
+      ? this.metaToken.checar()
+      : this.metaToken.ultimoStatus();
+  }
 
   // ─────────── Lifecycle da live ───────────
 
