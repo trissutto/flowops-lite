@@ -5,6 +5,7 @@ import { Container } from '@/components/layout/Container';
 import { SectionTitle } from '@/components/sections/SectionTitle';
 import { Breadcrumb } from '@/components/navigation/Breadcrumb';
 import { CategoryListing } from '@/components/commerce/CategoryListing';
+import { fetchPrimeiraPagina } from '@/services/vitrine';
 import { SeletorTamanho } from '@/components/commerce/SeletorTamanho';
 import { breadcrumbSchema, buildMetadata, jsonLdGraph } from '@/lib/seo';
 
@@ -46,6 +47,29 @@ export default async function TamanhoPage({
   const { numero } = await params;
   const n = Number(numero);
   if (!NUMEROS.includes(n)) notFound();
+
+  /**
+   * PÁGINA 1 PRONTA NO SERVIDOR — a peça vem no HTML.
+   *
+   * 🔴 Medido em produção (10/08): `/tamanhos/58` chegava com **ZERO produto
+   * no HTML**. A moldura, o seletor de número e o contador pintavam na hora, e
+   * a grade ficava em branco até o navegador baixar o JS, pedir a API e
+   * esperar a resposta — a cliente olhando espaço vazio, achando que travou.
+   *
+   * A API não era o problema: responde em 0,27s com cache quente. O custo era
+   * a viagem EXTRA, depois do JS.
+   *
+   * É exatamente a correção que `/categoria/[slug]` já tinha desde 07/08 e que
+   * eu esqueci de aplicar aqui quando fiz esta página.
+   */
+  const primeiraPagina = await fetchPrimeiraPagina({
+    tamanho: String(n),
+    perPage: 24,
+    // Tem que casar com o `ordemPadrao` do CategoryListing lá embaixo — se
+    // divergirem, a cliente veria a página 1 numa ordem e o scroll continuar
+    // em outra.
+    ordenar: 'novidades',
+  });
 
   const trail = [
     { name: 'Início', path: '/' },
@@ -91,6 +115,7 @@ export default async function TamanhoPage({
           categoryName={`Tamanho ${n}`}
           ordemPadrao="novidades"
           filtrosIniciais={{ tamanho: [String(n)] }}
+          primeiraPagina={primeiraPagina}
         />
       </Container>
     </>

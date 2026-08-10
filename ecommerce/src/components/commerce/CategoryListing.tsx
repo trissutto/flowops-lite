@@ -20,6 +20,23 @@ import type { FilterState, Product, SortOption } from '@/types';
 const PER_PAGE = 12;
 
 /**
+ * Os filtros da tela ainda são exatamente os que a rota nasceu tendo?
+ *
+ * Serve pra decidir se a página 1 que veio pronta do servidor ainda responde
+ * ao que está na tela. Comparação rasa por chave: os valores aqui são array de
+ * string, número ou boolean — nada aninhado.
+ */
+function mesmoFiltro(atual: FilterState | undefined, inicial: FilterState | undefined): boolean {
+  const a = atual ?? {};
+  const b = inicial ?? {};
+  const chaves = new Set([...Object.keys(a), ...Object.keys(b)]);
+  for (const k of chaves) {
+    if (JSON.stringify(a[k] ?? null) !== JSON.stringify(b[k] ?? null)) return false;
+  }
+  return true;
+}
+
+/**
  * LISTAGEM DE CATEGORIA — orquestra barra + filtros + grid + paginação.
  *
  * Paginação: infinite scroll por padrão (sentinela com margem de 400px, então
@@ -144,27 +161,41 @@ function CategoryListingInner({
    * mais ao pedido — e entregar produto errado "rápido" é pior que esperar.
    */
   const semInterferencia =
-    Object.keys(state.filters ?? {}).length === 0 &&
+    // `filtrosIniciais` NÃO conta como interferência: a página do servidor já
+    // foi buscada com ele (é o caso de /tamanhos/58, que nasce filtrado). Só
+    // desqualifica o que a CLIENTE mexeu depois.
+    mesmoFiltro(state.filters, filtrosIniciais) &&
     !debouncedSearch &&
     state.sort === ordemPadrao;
+
+  /**
+   * O servidor traz 24 peças de uma vez (uma tela cheia), mas o scroll infinito
+   * pagina de 12 em 12. Entregar as 24 como "página 1" fazia o react-query
+   * pedir a página 2 de 12 — que são as peças 13 a 24, JÁ NA TELA: a cliente
+   * rolava e via a mesma vitrine repetida. Por isso o bloco do servidor é
+   * fatiado em páginas de `PER_PAGE` antes de virar `initialData`.
+   */
+  const paginasIniciais = useMemo(() => {
+    if (!primeiraPagina) return null;
+    const { itens, total } = primeiraPagina;
+    const pages = [];
+    for (let i = 0; i < itens.length; i += PER_PAGE) {
+      pages.push({
+        items: itens.slice(i, i + PER_PAGE),
+        total,
+        page: i / PER_PAGE + 1,
+        perPage: PER_PAGE,
+        hasMore: total > i + PER_PAGE,
+      });
+    }
+    if (!pages.length) return null;
+    return { pages, pageParams: pages.map((p) => p.page) };
+  }, [primeiraPagina]);
 
   const query = useInfiniteQuery({
     queryKey: ['products', category, subcategoria, state.filters, state.sort, debouncedSearch, tetoDePreco, soPromocao],
     initialPageParam: 1,
-    ...(primeiraPagina && semInterferencia
-      ? {
-          initialData: {
-            pages: [{
-              items: primeiraPagina.itens,
-              total: primeiraPagina.total,
-              page: 1,
-              perPage: PER_PAGE,
-              hasMore: primeiraPagina.totalPages > 1,
-            }],
-            pageParams: [1],
-          },
-        }
-      : {}),
+    ...(paginasIniciais && semInterferencia ? { initialData: paginasIniciais } : {}),
     queryFn: ({ pageParam }) =>
       fetchProducts({
         category,

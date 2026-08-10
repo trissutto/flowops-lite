@@ -47,16 +47,19 @@ export async function fetchPrimeiraPagina(opcoes: {
   categoria?: string;
   /** Segundo nível da árvore: 'manga-curta' dentro de 'blusas'. */
   subcategoria?: string;
+  /** Numeração (`/tamanhos/58`) — o backend casa a grade, então "46/48" entra nos dois. */
+  tamanho?: string;
   ordenar?: OrdemVitrine;
   perPage?: number;
   precoMax?: number;
   soPromocao?: boolean;
   revalidate?: number;
 }): Promise<{ itens: Product[]; total: number; totalPages: number } | null> {
-  const { categoria, subcategoria, ordenar = 'relevancia', perPage = 24, precoMax, soPromocao, revalidate = 600 } = opcoes;
+  const { categoria, subcategoria, tamanho, ordenar = 'relevancia', perPage = 24, precoMax, soPromocao, revalidate = 600 } = opcoes;
   const params = new URLSearchParams({ page: '1', perPage: String(perPage), ordenar });
   if (categoria) params.set('categoria', categoria);
   if (subcategoria) params.set('subcategoria', subcategoria);
+  if (tamanho) params.set('tamanho', tamanho);
   if (precoMax) params.set('precoMax', String(precoMax));
   // O controller (loja-catalog.controller.ts) lê a chave "promocao", não
   // "soPromocao" — bug real, 07/08: o Outlet mandava o parâmetro errado e o
