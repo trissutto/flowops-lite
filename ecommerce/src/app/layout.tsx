@@ -26,7 +26,7 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = buildMetadata({
-  title: "Lurd's Plus Size — Moda plus size elegante do 46 ao 60",
+  title: "Lurd's Plus Size — Moda plus size elegante do 44 ao 60",
   path: '/',
 });
 

@@ -395,7 +395,7 @@ export function filterGroups(category?: string, facetas?: Facetas | null): Filte
       type: 'checkbox',
       options: [
         { value: 'valoriza a cintura', label: 'Valoriza a cintura' },
-        { value: 'disfarca barriga', label: 'Disfarça a barriga' },
+        { value: 'disfarca barriga', label: 'Caimento leve no abdômen' },
         { value: 'alonga silhueta', label: 'Alonga a silhueta' },
         { value: 'modelagem solta', label: 'Modelagem solta' },
         { value: 'conforto total', label: 'Conforto total' },
@@ -451,7 +451,7 @@ const CATEGORY_META: Record<string, CategoryMeta> = {
     name: 'Vestidos',
     title: 'Vestidos plus size',
     intro:
-      'Do envelope clássico ao midi de festa: modelagens que valorizam o corpo real, em tecidos que aguentam o dia inteiro. Do 46 ao 60.',
+      'Do envelope clássico ao midi de festa: modelagens que valorizam o corpo real, em tecidos que aguentam o dia inteiro. Do 44 ao 60.',
     heroImage: 'https://images.unsplash.com/photo-1657550853452-f13aa437f6c9?w=2000&q=85&fm=jpg&fit=max',
     guide: {
       title: 'Como escolher o vestido ideal',
@@ -472,7 +472,7 @@ export function categoryMeta(slug: string): CategoryMeta {
       name: slug.charAt(0).toUpperCase() + slug.slice(1).replace(/-/g, ' '),
       title: `${slug.charAt(0).toUpperCase() + slug.slice(1).replace(/-/g, ' ')} plus size`,
       intro:
-        'Curadoria Lurds do 46 ao 60: peças escolhidas pelo caimento, pelo tecido e pela forma como vestem o corpo real.',
+        'Curadoria Lurds do 44 ao 60: peças escolhidas pelo caimento, pelo tecido e pela forma como vestem o corpo real.',
       heroImage: 'https://images.unsplash.com/photo-1603400521630-9f2de124b33b?w=2000&q=85&fm=jpg&fit=max',
       guide: {
         title: 'Como escolher a peça ideal',

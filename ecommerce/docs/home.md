@@ -56,6 +56,6 @@ Vem de `data/content.ts`. **Produtos, looks, depoimentos, Instagram e vídeo
 são placeholder** — estrutura pra dar forma às seções.
 
 O que já é **real**: taxonomias (ocasiões, tecidos, modelagens), a numeração
-46–60, o texto do manifesto e as 14 lojas (`data/stores.ts`).
+44–60, o texto do manifesto e as 14 lojas (`data/stores.ts`).
 
 Trocar conteúdo = editar `data/content.ts`. Nenhum componente muda.

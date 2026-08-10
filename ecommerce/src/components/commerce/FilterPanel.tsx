@@ -133,6 +133,33 @@ function PriceRange({
         <span className="tabular">{formatPrice(to)}</span>
       </div>
 
+      <div className="grid grid-cols-2 gap-3">
+        <label className="text-xs text-ink-soft">
+          Mínimo
+          <input
+            type="number"
+            min={min}
+            max={to - 10}
+            step={10}
+            value={from}
+            onChange={(e) => onChange([Math.min(Number(e.target.value), to - 10), to])}
+            className="mt-1 min-h-11 w-full rounded-sm border border-border bg-surface px-3 text-small text-ink"
+          />
+        </label>
+        <label className="text-xs text-ink-soft">
+          Máximo
+          <input
+            type="number"
+            min={from + 10}
+            max={max}
+            step={10}
+            value={to}
+            onChange={(e) => onChange([from, Math.max(Number(e.target.value), from + 10)])}
+            className="mt-1 min-h-11 w-full rounded-sm border border-border bg-surface px-3 text-small text-ink"
+          />
+        </label>
+      </div>
+
       <div className="flex flex-col gap-2">
         <label className="flex items-center gap-3">
           <span className="eyebrow w-8 text-ink-muted">Mín</span>

@@ -53,10 +53,10 @@ export async function generateMetadata({
     title: product.name,
     description:
       shortDescription ||
-      `${product.name} — moda plus size do 46 ao 60 na Lurd's. Caimento que valoriza, tecido que abraça.`,
+      `${product.name} — moda plus size do 44 ao 60 na Lurd's. Caimento que valoriza, tecido que abraça.`,
     path: `/produto/${product.slug}`,
     image: product.images[0]?.src,
-    keywords: [product.name, `${product.name} plus size`, product.fabric ?? '', 'plus size 46 ao 60'].filter(
+    keywords: [product.name, `${product.name} plus size`, product.fabric ?? '', 'plus size 44 ao 60'].filter(
       Boolean,
     ),
   });
@@ -150,7 +150,7 @@ export default async function ProductPage({ params }: { params: Promise<{ slug: 
           <Accordion>
             <AccordionItem title="Tamanhos disponíveis" defaultOpen>
               <p className="text-body font-light text-ink-soft">
-                Do 46 ao 60.{' '}
+                Do 44 ao 60.{' '}
                 {product.sizes.filter((s) => s.available).length > 0
                   ? `Disponível agora nos tamanhos ${product.sizes
                       .filter((s) => s.available)

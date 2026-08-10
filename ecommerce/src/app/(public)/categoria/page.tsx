@@ -31,7 +31,7 @@ import { buildMetadata } from '@/lib/seo';
 export const dynamic = 'force-dynamic';
 
 export const metadata: Metadata = buildMetadata({
-  title: 'Categorias — todas as peças do 46 ao 60',
+  title: 'Categorias — todas as peças do 44 ao 60',
   description:
     'Vestidos, blusas, calças, conjuntos e mais: navegue por categoria e encontre a peça certa pro seu corpo.',
   path: '/categoria',
@@ -59,7 +59,7 @@ export default async function CategoriasPage() {
           id="categorias-titulo"
           eyebrow="Encontre seu look ideal"
           title="Nossas categorias"
-          description="Do 46 ao 60, em modelagens pensadas pro corpo real."
+          description="Do 44 ao 60, em modelagens pensadas pro corpo real."
         />
 
         {categorias.length === 0 ? (

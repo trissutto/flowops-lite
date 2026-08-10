@@ -70,7 +70,7 @@ export function Footer() {
           <div>
             <Logo variant="horizontal" className="justify-start" />
             <p className="mt-6 max-w-xs text-body font-light text-ink-soft">
-              Moda plus size elegante do 46 ao 60. Peças que vestem super bem e um atendimento que
+              Moda plus size elegante do 44 ao 60. Peças que vestem super bem e um atendimento que
               acolhe — online e em 14 lojas.
             </p>
             <div className="mt-7 flex items-center gap-2">

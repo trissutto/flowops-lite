@@ -65,7 +65,7 @@ const NAVEGACAO_COMPLETA: NavItem[] = [
         {
           eyebrow: 'Coleção',
           title: 'A nova estação chegou',
-          description: 'Peças pensadas pro corpo real, do 46 ao 60.',
+          description: 'Peças pensadas pro corpo real, do 44 ao 60.',
           image: { src: EDITORIAL.novidades, alt: 'Nova coleção Lurds Plus Size' },
           href: '/novidades/lancamentos',
           cta: 'Ver a coleção',
@@ -302,8 +302,8 @@ export const navigation: NavItem[] = podarNavegacao(NAVEGACAO_COMPLETA);
  * daria. Quem sabe o número é a barra de progresso da sacola, que lê a config.
  */
 export const announcements = [
-  { label: 'Frete grátis nas compras acima do valor da promoção', href: '/institucional/frete' },
-  { label: 'Até 12x sem juros', href: '/institucional/pagamento' },
+  { label: 'Frete grátis: consulte o valor vigente', href: '/carrinho' },
+  { label: 'Até 12x sem juros', href: '/carrinho' },
   { label: 'Troca fácil em 30 dias', href: '/politica-de-trocas' },
   { label: '14 lojas em São Paulo e região', href: '/lojas' },
   { label: 'Fale com uma consultora no WhatsApp', href: '/lojas#whatsapp' },
