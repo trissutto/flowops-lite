@@ -103,6 +103,7 @@
 
   /* --------------------------------------------------------- ESPAÇAMENTO */
   /* Base 4px do Tailwind + aliases semânticos pro ritmo vertical das seções */
+  /* ⚠️ Estes três encolhem no celular — ver o @media logo abaixo do @theme. */
   --spacing-section: 7rem; /* 112px — respiro padrão entre seções */
   --spacing-section-sm: 4.5rem;
   --spacing-section-lg: 10rem;
@@ -150,6 +151,32 @@
   --breakpoint-lg: 64rem; /* 1024px — notebook */
   --breakpoint-xl: 80rem; /* 1280px — desktop */
   --breakpoint-2xl: 96rem; /* 1536px */
+}
+
+/* ============================================================================
+   RITMO VERTICAL NO CELULAR (dono, 10/08/2026: "diminua esta distância entre
+   os carrosséis")
+
+   Os 7rem de respiro entre seções foram desenhados olhando o DESKTOP, onde a
+   tela tem 900px de altura e o espaço vira elegância. No celular a mesma
+   medida vira 112px em cima + 112px embaixo = 224px de nada entre uma vitrine
+   e a próxima — mais de um quarto de uma tela de 812px gasto rolando por
+   espaço vazio. Em vitrine, distância entre produtos é produto que a cliente
+   não vê.
+
+   Encolher AQUI, no token, e não em cada seção: o respiro é uma decisão de
+   design system, e mexer componente a componente faria as páginas divergirem
+   na primeira que alguém esquecesse. Todas as seções do site — home, categoria,
+   lojas — herdam de uma vez.
+
+   Só até 767px. Do tablet pra cima o desenho aprovado fica intacto.
+   ========================================================================== */
+@media (max-width: 767px) {
+  :root {
+    --spacing-section: 3rem; /* 48px */
+    --spacing-section-sm: 2rem;
+    --spacing-section-lg: 4rem;
+  }
 }
 
 /* ============================================================================
