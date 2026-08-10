@@ -11,7 +11,8 @@ import { CategoriaCard } from '@/components/cards/CategoriaCard';
 import { StoreCard } from '@/components/cards/StoreCard';
 import { InstagramCard } from '@/components/cards/InstagramCard';
 import { Button } from '@/components/ui/Button';
-import { instagramPosts, manifesto, PERFIL_INSTAGRAM } from '@/data/content';
+import { manifesto, PERFIL_INSTAGRAM } from '@/data/content';
+import { getInstagram } from '@/services/instagram';
 import { featuredStores, stores } from '@/data/stores';
 import { getHeroDaHome } from '@/services/banners';
 import { getCategorias } from '@/services/categorias-menu';
@@ -57,6 +58,9 @@ export default async function HomePage() {
   const hero = await getHeroDaHome();
   // As categorias do CRM com a foto da peça mais nova de cada uma.
   const categoriasHome = await getCategorias();
+  // Posts REAIS da @lurdsplussize. Cai na grade estática se a integração não
+  // estiver configurada — ver `services/instagram`.
+  const posts = await getInstagram(6);
 
   /**
    * AS CINCO VITRINES DA HOME (dono, 10/08): Lançamentos, Blusas, Vestidos,
@@ -331,7 +335,7 @@ export default async function HomePage() {
           align="left"
         />
         <div className="mt-14 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-          {instagramPosts.map((post) => (
+          {posts.map((post) => (
             <InstagramCard key={post.id} post={post} />
           ))}
         </div>

@@ -4,6 +4,7 @@ import {
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { LojaCatalogService, ListarParams } from './loja-catalog.service';
 import { SiteSyncService } from './site-sync.service';
+import { InstagramFeedService } from './instagram-feed.service';
 
 /**
  * CATÁLOGO PÚBLICO DO E-COMMERCE (sprint 008).
@@ -15,7 +16,10 @@ import { SiteSyncService } from './site-sync.service';
  */
 @Controller('public/loja')
 export class LojaCatalogPublicController {
-  constructor(private readonly svc: LojaCatalogService) {}
+  constructor(
+    private readonly svc: LojaCatalogService,
+    private readonly instagramSvc: InstagramFeedService,
+  ) {}
 
   private booleano(v?: string) {
     if (v === undefined) return undefined;
@@ -48,6 +52,20 @@ export class LojaCatalogPublicController {
   @Get('feed')
   feed() {
     return this.svc.catalogoParaFeed();
+  }
+
+  /**
+   * GET /api/public/loja/instagram — os posts REAIS da @lurdsplussize.
+   *
+   * A grade da home mostrava foto de banco de imagem: bonita, e de outra
+   * marca. Prova social só vale sendo a de verdade. Lista vazia quando a
+   * integração não está configurada ou o Instagram falha — o site cai na
+   * grade estática em vez de quebrar. Ver `InstagramFeedService`.
+   */
+  @Get('instagram')
+  instagram(@Query('limite') limite?: string) {
+    const n = Math.min(12, Math.max(1, Number(limite) || 6));
+    return this.instagramSvc.posts(n);
   }
 
   @Get('produtos')

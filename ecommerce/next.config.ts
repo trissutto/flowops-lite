@@ -23,6 +23,13 @@ const nextConfig: NextConfig = {
       // TEMPORÁRIO: editoriais royalty-free enquanto o banco de imagens da
       // marca não está pronto. Remover quando as fotos próprias entrarem.
       { protocol: 'https', hostname: 'images.unsplash.com' },
+      // CDN do Instagram — as fotos do feed real da @lurdsplussize (grade da
+      // home). Sem estes hosts o next/image RECUSA a URL e a seção aparece
+      // vazia, mesmo com a integração funcionando: o erro fica no servidor e
+      // a tela só não mostra nada. Os dois subdomínios existem porque a Meta
+      // alterna entre eles (`scontent-*` por região, `*.fbcdn.net` no geral).
+      { protocol: 'https', hostname: '**.cdninstagram.com' },
+      { protocol: 'https', hostname: '**.fbcdn.net' },
       // R2 da Lurd's — fotos de produto (por cor) e banners da vitrine. O
       // subdomínio padrão é `pub-<id>.r2.dev`; se o bucket for servido por
       // domínio próprio, informe em R2_PUBLIC_HOST na Vercel (sem https://),
