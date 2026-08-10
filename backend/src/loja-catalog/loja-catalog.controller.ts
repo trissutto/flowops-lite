@@ -38,6 +38,18 @@ export class LojaCatalogPublicController {
     return this.svc.gradesMedidas();
   }
 
+  /**
+   * GET /api/public/loja/feed — catálogo inteiro pro feed de produtos do Meta.
+   *
+   * Quem monta o XML é o site (`/feed/meta.xml`), que sabe o domínio público e
+   * a URL de cada peça. Aqui sai só o dado, sem paginação: o Meta lê uma vez
+   * por dia e precisa do catálogo completo. Ver `catalogoParaFeed`.
+   */
+  @Get('feed')
+  feed() {
+    return this.svc.catalogoParaFeed();
+  }
+
   @Get('produtos')
   produtos(@Query() q: any) {
     const params: ListarParams = {

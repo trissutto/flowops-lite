@@ -1087,6 +1087,61 @@ export class LojaCatalogService {
     };
   }
 
+  /**
+   * CATÁLOGO INTEIRO PRO FEED DO META — uma ida só, sem paginar.
+   *
+   * O feed de produtos é o que destrava anúncio DINÂMICO (mostrar pra cliente
+   * a peça exata que ela olhou). Pra moda costuma ser a campanha de melhor
+   * retorno, e sem catálogo cadastrado ela simplesmente não roda.
+   *
+   * Por que endpoint próprio em vez de paginar o `/produtos`: aquele teto é de
+   * 60 por página de propósito (é tela de cliente). O Meta lê o catálogo
+   * inteiro uma vez por dia — vinte requisições em sequência levariam dez
+   * segundos e correriam risco de estourar o tempo da função. Aqui o custo é
+   * pago uma vez por dia, e devolve só os campos que o feed usa.
+   *
+   * ⚠️ ESGOTADO ENTRA, e é de propósito. O Meta quer o catálogo COMPLETO com
+   * a disponibilidade correta em cada item: peça marcada `out of stock` para
+   * de ser anunciada e volta sozinha quando reabastece. Some do feed e o Meta
+   * trata como produto morto — quando voltar, recomeça o aprendizado do zero.
+   */
+  async catalogoParaFeed(): Promise<
+    Array<{
+      ref: string;
+      slug: string;
+      nome: string;
+      descricao: string | null;
+      marca: string | null;
+      categoria: string | null;
+      preco: number;
+      precoPromocional: number | null;
+      disponivel: boolean;
+      imagens: string[];
+      tamanhos: string[];
+      cores: string[];
+    }>
+  > {
+    // `perPage` alto de propósito: `listar` já pagina em memória, então isto
+    // é uma fatia só que pega tudo. Teto de 5.000 como para-choque.
+    const r = await this.listar({ page: 1, perPage: 5000, ordenar: 'novidades' });
+    return (r.itens as any[]).map((p) => ({
+      ref: p.ref,
+      slug: p.slug,
+      nome: p.nome,
+      descricao: p.descricaoCurta || p.descricaoCompleta || null,
+      marca: p.marca ?? null,
+      categoria: p.categoria ?? null,
+      preco: Number(p.preco) || 0,
+      // O Meta compara `sale_price` com `price` pra desenhar o "de/por". Só
+      // faz sentido quando há promoção de verdade.
+      precoPromocional: p.promocao && p.precoPix ? Number(p.precoPix) : null,
+      disponivel: Boolean(p.disponivel),
+      imagens: (p.imagens ?? []).map((i: any) => i.src).filter(Boolean),
+      tamanhos: (p.tamanhos ?? []).filter((t: any) => t.disponivel).map((t: any) => t.label),
+      cores: (p.cores ?? []).map((c: any) => c.nome).filter(Boolean),
+    }));
+  }
+
   /** Detalhe da peça — por slug (site) ou pela própria REF. */
   async porSlug(slug: string) {
     const chave = String(slug || '').trim();
