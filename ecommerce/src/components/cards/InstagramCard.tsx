@@ -1,16 +1,23 @@
 'use client';
 
 import Image from 'next/image';
-import { Heart, Play, ShoppingBag } from 'lucide-react';
+import { Play } from 'lucide-react';
+import { InstagramIcon } from '@/components/ui/icons';
 import { BLUR_DATA_URL, cn } from '@/lib/utils';
+import { trackInstagramClick } from '@/lib/tracking';
 import type { InstagramPost } from '@/types';
 
 /**
  * INSTAGRAM CARD — post da galeria social.
  *
  * Feito à mão de propósito: widget de terceiro carrega iframe, script externo
- * e mata o Lighthouse. Aqui é só next/image + link, e os produtos marcados
- * viram atalho de compra (é o que transforma inspiração em venda).
+ * e mata o Lighthouse. Aqui é só next/image + link.
+ *
+ * O véu de hover mostrava CURTIDAS e "N peças marcadas". Os dois saíram em
+ * 10/08/2026: a contagem era inventada (prova social fabricada, mesmo motivo
+ * que tirou os depoimentos do ar) e as peças marcadas apontavam pro catálogo
+ * de maquete — o card oferecia atalho de compra pra produto inexistente.
+ * Ver o comentário de `instagramPosts` em `data/content.ts`.
  */
 
 export function InstagramCard({
@@ -20,13 +27,14 @@ export function InstagramCard({
   post: InstagramPost;
   className?: string;
 }) {
-  const tagged = post.taggedProducts ?? [];
-
   return (
     <a
       href={post.permalink}
       target="_blank"
       rel="noopener noreferrer"
+      // Clique no Instagram é sinal de intenção de marca — entra no mesmo
+      // conjunto de eventos que a conta de anúncio das lojas otimiza.
+      onClick={() => trackInstagramClick('home_grid')}
       className={cn('group relative block aspect-square overflow-hidden rounded-md bg-surface-alt', className)}
     >
       <Image
@@ -50,20 +58,15 @@ export function InstagramCard({
         </span>
       )}
 
-      {/* Véu com métricas — só no hover, pra não poluir a grade */}
-      <div className="absolute inset-0 flex flex-col justify-end bg-gradient-to-t from-ink/75 via-ink/10 to-transparent p-4 opacity-0 transition-opacity duration-[320ms] group-hover:opacity-100">
-        {tagged.length > 0 && (
-          <p className="flex items-center gap-1.5 text-[0.6875rem] font-medium tracking-[0.12em] text-light uppercase">
-            <ShoppingBag className="size-3.5" strokeWidth={1.75} />
-            {tagged.length === 1 ? '1 peça marcada' : `${tagged.length} peças marcadas`}
-          </p>
-        )}
-        {post.likes !== undefined && (
-          <p className="tabular mt-1.5 flex items-center gap-1.5 text-small text-light/85">
-            <Heart className="size-3.5 fill-current" strokeWidth={0} />
-            {post.likes.toLocaleString('pt-BR')}
-          </p>
-        )}
+      {/* Véu de hover — o convite pro perfil. Antes ele exibia contagem de
+          curtidas e "N peças marcadas"; os dois números eram inventados e
+          saíram (ver o cabeçalho). O que ficou é só o gesto de que o card leva
+          a algum lugar. */}
+      <div className="absolute inset-0 flex flex-col justify-end bg-gradient-to-t from-ink/70 via-ink/10 to-transparent p-4 opacity-0 transition-opacity duration-[320ms] group-hover:opacity-100">
+        <p className="flex items-center gap-1.5 text-[0.6875rem] font-medium tracking-[0.12em] text-light uppercase">
+          <InstagramIcon className="size-3.5" strokeWidth={1.75} />
+          Ver no Instagram
+        </p>
       </div>
     </a>
   );

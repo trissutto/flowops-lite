@@ -10,7 +10,16 @@ import type { MenuColumn } from '@/types';
  * pílulas pra numeração — mesmo desenho do `SeletorTamanho` da página de
  * tamanhos, pra cliente reconhecer o mesmo controle nos dois lugares.
  */
-export function CategoryColumn({ column, className }: { column: MenuColumn; className?: string }) {
+export function CategoryColumn({
+  column,
+  className,
+  onNavigate,
+}: {
+  column: MenuColumn;
+  className?: string;
+  /** Fecha o painel no clique — ver o comentário em `MegaMenu`. */
+  onNavigate?: () => void;
+}) {
   const hasTitle = column.title.trim().length > 0;
   const pilulas = column.layout === 'pilulas';
 
@@ -30,6 +39,7 @@ export function CategoryColumn({ column, className }: { column: MenuColumn; clas
             <li key={link.href}>
               <Link
                 href={link.href}
+                onClick={onNavigate}
                 className={cn(
                   'tabular flex h-11 min-w-[3.25rem] items-center justify-center rounded-md border px-3',
                   'border-border bg-surface text-body text-ink transition-all duration-[240ms]',
@@ -47,6 +57,7 @@ export function CategoryColumn({ column, className }: { column: MenuColumn; clas
             <li key={link.href}>
               <Link
                 href={link.href}
+                onClick={onNavigate}
                 className={cn(
                   'link-underline inline-block text-body transition-colors',
                   link.highlight ? 'font-medium text-ink' : 'font-light text-ink-soft hover:text-ink',

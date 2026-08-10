@@ -11,7 +11,7 @@ import { CategoriaCard } from '@/components/cards/CategoriaCard';
 import { StoreCard } from '@/components/cards/StoreCard';
 import { InstagramCard } from '@/components/cards/InstagramCard';
 import { Button } from '@/components/ui/Button';
-import { instagramPosts, institutionalVideo, manifesto } from '@/data/content';
+import { instagramPosts, manifesto, PERFIL_INSTAGRAM } from '@/data/content';
 import { featuredStores, stores } from '@/data/stores';
 import { getHeroDaHome } from '@/services/banners';
 import { getCategorias } from '@/services/categorias-menu';
@@ -286,16 +286,17 @@ export default async function HomePage() {
           Volta quando existir conteúdo editorial de verdade (com foto da
           Lurd's e página pra ler). */}
 
-      {/* 08 — VÍDEO INSTITUCIONAL */}
-      <Section width="wide" space="sm">
-        <VideoBlock
-          video={institutionalVideo}
-          eyebrow="Por dentro da Lurds"
-          title="Um provador sem pressa, um atendimento que acolhe"
-          aspect="21/9"
-          caption="Nossas consultoras são treinadas em caimento e modelagem plus size."
-        />
-      </Section>
+      {/* 08 — VÍDEO INSTITUCIONAL: FORA DO AR (dono, 10/08)
+          ───────────────────────────────────────────────
+          "Por dentro da Lurds — um provador sem pressa, um atendimento que
+          acolhe", ilustrado por uma foto de banco de imagem de uma loja
+          MASCULINA de streetwear: tênis, bonés, mochilas e um pôster da U.S.
+          Navy. Numa loja de moda plus size feminina, a imagem contava uma
+          história de outra marca — e logo na seção que fala do acolhimento no
+          provador, que é o argumento mais forte da Lurd's.
+
+          Volta com vídeo ou foto REAL de uma das lojas. `VideoBlock` e
+          `institutionalVideo` seguem no código, só esperando o material. */}
 
       {/*
         11 — DEPOIMENTOS · REMOVIDO DO AR EM 06/08/2026
@@ -326,7 +327,7 @@ export default async function HomePage() {
           id="instagram-titulo"
           eyebrow="@lurdsplussize"
           title="No feed e no seu guarda-roupa"
-          cta={{ label: 'Seguir no Instagram', href: 'https://www.instagram.com/lurdsplussize' }}
+          cta={{ label: 'Seguir no Instagram', href: PERFIL_INSTAGRAM }}
           align="left"
         />
         <div className="mt-14 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">

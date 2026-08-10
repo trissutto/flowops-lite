@@ -84,24 +84,75 @@ export class SiteSyncService {
     short: 'shorts', shorts: 'shorts', bermuda: 'shorts',
     praia: 'moda-praia', biquini: 'moda-praia', maio: 'moda-praia', canga: 'moda-praia',
     fitness: 'fitness', academia: 'fitness',
+    /**
+     * Lingerie tem categoria PRÓPRIA de propósito. Sem estas linhas, "Conjunto
+     * Lingerie" só casaria em `conjunto` e cairia junto com conjunto de blusa
+     * e calça. Com elas, o nome passa a casar com DUAS categorias — e a regra
+     * de `detectarCategoria` recusa o chute em vez de errar (a peça fica sem
+     * categoria até alguém classificar no WooCommerce, que é onde a decisão
+     * deve ser tomada).
+     */
+    lingerie: 'lingerie', calcinha: 'lingerie', sutia: 'lingerie',
+    pijama: 'pijamas', camisola: 'pijamas', robe: 'pijamas',
   };
 
   private semAcento(v: string): string {
     return String(v || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
   }
 
-  private detectarCategoria(categoriasWc: string[], nome: string): string | null {
-    for (const bruta of categoriasWc) {
-      const limpo = this.semAcento(bruta);
-      for (const palavra of limpo.split(/[^a-z0-9]+/).filter(Boolean)) {
-        const achou = SiteSyncService.MAPA_CATEGORIA[palavra];
-        if (achou) return achou;
-      }
-    }
-    // Fallback pelo nome: "Blusa Feminina Manga Curta" → blusas
-    for (const palavra of this.semAcento(nome).split(/[^a-z0-9]+/).filter(Boolean)) {
+  /**
+   * A CATEGORIA CADASTRADA MANDA; O NOME SÓ PALPITA QUANDO NÃO HÁ DÚVIDA.
+   *
+   * ── O QUE ESTAVA ERRADO (dono, 10/08/2026) ──
+   *
+   * O fallback pelo nome devolvia a PRIMEIRA palavra que casasse, na ordem em
+   * que ela aparece no nome. "Conjunto Lingerie Renda" bate em `conjunto`
+   * antes de qualquer outra coisa e ia parar em **Conjuntos**, junto com
+   * conjunto de blusa e calça — duas coisas que não têm nada a ver uma com a
+   * outra, e a cliente que filtra Conjuntos esperando look de trabalho recebe
+   * lingerie no meio.
+   *
+   * O erro não é ter fallback, é ele CHUTAR NO EMPATE. Um nome com duas
+   * categorias possíveis não é informação suficiente pra decidir — e decidir
+   * errado é pior que não decidir, porque some sem sintoma: a peça aparece
+   * numa vitrine onde ninguém a procura, e some da que ela deveria estar.
+   *
+   * ── A REGRA AGORA ──
+   *
+   * 1. Categoria cadastrada no WooCommerce vence sempre. É lá que a taxonomia
+   *    de venda é mantida à mão, por gente.
+   * 2. Sem ela, o nome é lido por INTEIRO. Se todas as palavras conhecidas
+   *    apontarem pra MESMA categoria, usa. Se apontarem pra categorias
+   *    diferentes, devolve `null` — a peça fica sem categoria e aparece na
+   *    listagem geral, esperando alguém classificar. Melhor exposta sem
+   *    categoria do que escondida na categoria errada.
+   */
+  private categoriaDoTexto(texto: string): Set<string> {
+    const achadas = new Set<string>();
+    for (const palavra of this.semAcento(texto).split(/[^a-z0-9]+/).filter(Boolean)) {
       const achou = SiteSyncService.MAPA_CATEGORIA[palavra];
-      if (achou) return achou;
+      if (achou) achadas.add(achou);
+    }
+    return achadas;
+  }
+
+  private detectarCategoria(categoriasWc: string[], nome: string): string | null {
+    // 1) O que foi CADASTRADO. Primeira categoria do WC que resolve, vence.
+    for (const bruta of categoriasWc) {
+      const achadas = this.categoriaDoTexto(bruta);
+      if (achadas.size === 1) return [...achadas][0];
+      // Categoria cadastrada ambígua ("Conjuntos de Lingerie") tem o mesmo
+      // problema do nome — não chuta, tenta a próxima do WC.
+    }
+
+    // 2) Palpite pelo nome, só quando ele não se contradiz.
+    const doNome = this.categoriaDoTexto(nome);
+    if (doNome.size === 1) return [...doNome][0];
+    if (doNome.size > 1) {
+      this.logger.warn(
+        `[site-sync] "${nome}" casa com ${doNome.size} categorias (${[...doNome].join(', ')}) ` +
+          `e não tem categoria no WooCommerce — fica SEM categoria até alguém classificar.`,
+      );
     }
     return null;
   }

@@ -39,7 +39,13 @@ export function MegaMenu({ item, onNavigate }: { item: NavItem; onNavigate: () =
             }}
           >
             {menu.columns.map((column, i) => (
-              <CategoryColumn key={`${column.title}-${i}`} column={column} />
+              // `onNavigate` não era repassado às colunas: clicar num link de
+              // dentro do painel navegava e deixava o painel ABERTO por cima
+              // da página nova, tapando o conteúdo inteiro (achado 10/08 ao
+              // clicar num tamanho). O `Navigation` também fecha por mudança
+              // de rota — este aqui é o fechamento imediato, sem esperar a
+              // navegação resolver.
+              <CategoryColumn key={`${column.title}-${i}`} column={column} onNavigate={onNavigate} />
             ))}
           </div>
 

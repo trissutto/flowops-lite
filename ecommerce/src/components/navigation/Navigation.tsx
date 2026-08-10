@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AppLink as Link } from '@/components/ui/AppLink';
 import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/utils';
@@ -39,6 +39,26 @@ export function Navigation({ itens }: { itens?: NavItem[] }) {
     if (closeTimer.current) clearTimeout(closeTimer.current);
     setOpenIndex(null);
   }
+
+  /**
+   * FECHA O PAINEL EM QUALQUER TROCA DE ROTA.
+   *
+   * O painel abre por hover e só fechava por hover de saída ou Esc. Ao clicar
+   * num link de dentro dele, a navegação acontecia e o painel FICAVA ABERTO
+   * por cima da página nova — uma faixa branca cobrindo o conteúdo inteiro,
+   * porque o mouse continuava parado onde o painel estava (achado 10/08 ao
+   * clicar num tamanho).
+   *
+   * Cada link também chama `onNavigate` pra fechar na hora. Este efeito é a
+   * rede de segurança: pega o que o `onNavigate` não cobre — cards
+   * editoriais, atalhos do rodapé do painel, botão voltar do navegador — sem
+   * precisar lembrar de passar a função pra cada componente novo.
+   */
+  useEffect(() => {
+    closeNow();
+    // Só a rota importa: incluir `closeNow` reabriria o efeito a cada render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathname]);
 
   const activeItem = openIndex !== null ? navigation[openIndex] : null;
 

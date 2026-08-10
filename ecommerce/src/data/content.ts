@@ -300,13 +300,36 @@ export const testimonials: Testimonial[] = [
 
 /* ---------------------------------------------------------------- INSTAGRAM */
 
+/** Perfil oficial. Num lugar só — aparece no card, no CTA e no rodapé. */
+export const PERFIL_INSTAGRAM = 'https://www.instagram.com/lurdsplussize';
+
+/**
+ * GRADE DO INSTAGRAM — vitrine visual que leva pro perfil.
+ *
+ * ⚠️ NÚMERO DE CURTIDA E "PEÇAS MARCADAS" SAÍRAM EM 10/08/2026.
+ *
+ * Cada card trazia uma contagem de curtidas (1.284, 2.130, 1.755…) que
+ * NINGUÉM mediu — número escrito à mão, apresentado como engajamento real. É
+ * o mesmo problema que tirou os depoimentos do ar em 06/08: prova social
+ * fabricada é publicidade enganosa (CDC), não licença poética. E as "peças
+ * marcadas" apontavam pros produtos de maquete, que não existem no catálogo:
+ * o card prometia atalho de compra pra peça nenhuma.
+ *
+ * O que ficou é honesto: uma grade de fotos que leva ao perfil. Sem número
+ * inventado, sem promessa de compra que não se cumpre.
+ *
+ * AS FOTOS AINDA SÃO DE BANCO DE IMAGEM. Trocar pelas do feed real da
+ * @lurdsplussize é o passo que falta — aí o `permalink` de cada card pode
+ * apontar pro post específico em vez do perfil, e a seção passa a ser prova
+ * social de verdade.
+ */
 export const instagramPosts: InstagramPost[] = [
-  { id: 'i01', image: { src: IMG.model1, alt: 'Cliente com vestido midi Lurds' }, permalink: 'https://www.instagram.com/lurdsplussize', likes: 1284, taggedProducts: [newArrivals[0]] },
-  { id: 'i02', image: { src: IMG.rack, alt: 'Novidades na arara da loja' }, permalink: 'https://www.instagram.com/lurdsplussize', likes: 842 },
-  { id: 'i03', image: { src: IMG.model4, alt: 'Macacão pantalona Lurds' }, permalink: 'https://www.instagram.com/lurdsplussize', likes: 2130, isVideo: true, taggedProducts: [bestSellers[1]] },
-  { id: 'i04', image: { src: IMG.model5, alt: 'Look de trabalho Lurds' }, permalink: 'https://www.instagram.com/lurdsplussize', likes: 967, taggedProducts: [newArrivals[2], newArrivals[3]] },
-  { id: 'i05', image: { src: IMG.corner, alt: 'Corner de looks da loja' }, permalink: 'https://www.instagram.com/lurdsplussize', likes: 611 },
-  { id: 'i06', image: { src: IMG.model8, alt: 'Vestido de festa Lurds' }, permalink: 'https://www.instagram.com/lurdsplussize', likes: 1755 },
+  { id: 'i01', image: { src: IMG.model1, alt: 'Cliente com vestido midi Lurds' }, permalink: PERFIL_INSTAGRAM },
+  { id: 'i02', image: { src: IMG.rack, alt: 'Novidades na arara da loja' }, permalink: PERFIL_INSTAGRAM },
+  { id: 'i03', image: { src: IMG.model4, alt: 'Macacão pantalona Lurds' }, permalink: PERFIL_INSTAGRAM, isVideo: true },
+  { id: 'i04', image: { src: IMG.model5, alt: 'Look de trabalho Lurds' }, permalink: PERFIL_INSTAGRAM },
+  { id: 'i05', image: { src: IMG.corner, alt: 'Corner de looks da loja' }, permalink: PERFIL_INSTAGRAM },
+  { id: 'i06', image: { src: IMG.model8, alt: 'Vestido de festa Lurds' }, permalink: PERFIL_INSTAGRAM },
 ];
 
 /* --------------------------------------------------------------- EDITORIAL */
