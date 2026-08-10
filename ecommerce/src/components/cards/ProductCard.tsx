@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+
 import Image from 'next/image';
 import { AppLink as Link } from '@/components/ui/AppLink';
 import { motion } from 'framer-motion';
@@ -65,7 +65,6 @@ export function ProductCard({
   priority = false,
   sizes = GRID_SIZES,
 }: ProductCardProps) {
-  const [hovered, setHovered] = useState(false);
   const mounted = useMounted();
   const abrirQuickAdd = useQuickAddStore((s) => s.abrir);
   const toggleWishlist = useWishlistStore((s) => s.toggle);
@@ -108,8 +107,6 @@ export function ProductCard({
     <motion.article
       {...reveal(fadeUp, '-40px')}
       transition={{ duration: 0.56, delay: (index % 4) * 0.06 }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
       className={cn('group relative flex flex-col', className)}
     >
       {/* Mídia */}
@@ -125,8 +122,10 @@ export function ProductCard({
             blurDataURL={BLUR_DATA_URL}
             className={cn(
               'object-cover transition-all duration-[900ms] ease-[cubic-bezier(0.22,1,0.36,1)]',
-              alternate && hovered ? 'opacity-0' : 'opacity-100',
-              'lg:group-hover:scale-[1.04]',
+              'opacity-100 lg:group-hover:scale-[1.04]',
+              // A troca de foto no hover era `useState` — agora é `group-hover`.
+              // Ver o comentário no topo do componente.
+              alternate && 'lg:group-hover:opacity-0',
             )}
           />
           {alternate && (
@@ -140,7 +139,7 @@ export function ProductCard({
               blurDataURL={BLUR_DATA_URL}
               className={cn(
                 'hidden object-cover transition-all duration-[900ms] ease-[cubic-bezier(0.22,1,0.36,1)] lg:block',
-                hovered ? 'scale-[1.04] opacity-100' : 'opacity-0',
+                'opacity-0 lg:group-hover:scale-[1.04] lg:group-hover:opacity-100',
               )}
             />
           )}
@@ -189,7 +188,7 @@ export function ProductCard({
         <div
           className={cn(
             'pointer-events-none absolute inset-x-3 bottom-3 hidden flex-col gap-2 transition-all duration-[320ms] ease-[cubic-bezier(0.22,1,0.36,1)] lg:flex',
-            hovered ? 'translate-y-0 opacity-100' : 'translate-y-3 opacity-0',
+            'translate-y-3 opacity-0 lg:group-hover:translate-y-0 lg:group-hover:opacity-100',
           )}
         >
           {availableSizes.length > 0 && (
