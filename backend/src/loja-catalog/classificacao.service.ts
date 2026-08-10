@@ -23,9 +23,30 @@ import { PrismaService } from '../prisma/prisma.service';
  * primeiro que o dono pediu foi PUBLICADOS, porque peça não publicada não
  * urge: ela não está na loja.
  */
+export interface FiltroClassificacao {
+  publicado?: boolean;
+  semSubcategoria?: boolean;
+  semCategoria?: boolean;
+  /** Palavras que a peça PRECISA ter no nome ou na REF. */
+  busca?: string;
+  /** Palavras que DESCLASSIFICAM a peça — ver `refsPorTexto`. */
+  excluir?: string;
+  categoria?: string;
+  subcategoria?: string;
+}
+
+/** Sentinela de "a busca não casou com nada" — ver `montarWhere`. */
+const VAZIO = Symbol('sem resultado');
+
 @Injectable()
 export class ClassificacaoService {
   private readonly logger = new Logger(ClassificacaoService.name);
+
+  /** Teto do "marcar todas do filtro" e da varredura por texto. */
+  private static readonly TETO_SELECAO = 2000;
+  /** Pares do `translate()` do Postgres — a busca ignora acento. */
+  private static readonly COM_ACENTO = 'áàâãäéèêëíìîïóòôõöúùûüçñ';
+  private static readonly SEM_ACENTO = 'aaaaaeeeeiiiiooooouuuucn';
 
   constructor(private readonly prisma: PrismaService) {}
 
@@ -102,32 +123,13 @@ export class ClassificacaoService {
    * `publicado` é o primeiro filtro de propósito (pedido do dono): peça fora
    * do ar não está custando venda, então não disputa a fila.
    */
-  async listar(params: {
-    publicado?: boolean;
-    semSubcategoria?: boolean;
-    semCategoria?: boolean;
-    busca?: string;
-    categoria?: string;
-    subcategoria?: string;
-    page?: number;
-    perPage?: number;
-  }) {
+  async listar(params: FiltroClassificacao & { page?: number; perPage?: number }) {
     const page = Math.max(1, Number(params.page) || 1);
     const perPage = Math.min(200, Math.max(10, Number(params.perPage) || 50));
 
-    const where: any = {};
-    if (params.publicado !== undefined) where.publicado = params.publicado;
-    if (params.semSubcategoria) where.subcategoria = null;
-    if (params.semCategoria) where.categoria = null;
-    if (params.categoria) where.categoria = params.categoria;
-    if (params.subcategoria) where.subcategoria = params.subcategoria;
-    if (params.busca && params.busca.trim().length >= 2) {
-      const t = params.busca.trim();
-      // REF e nome na mesma busca: quem classifica pensa pelos dois.
-      where.OR = [
-        { nome: { contains: t, mode: 'insensitive' } },
-        { ref: { contains: t.toUpperCase() } },
-      ];
+    const where = await this.montarWhere(params);
+    if (where === VAZIO) {
+      return { total: 0, page, perPage, totalPages: 0, itens: [] };
     }
 
     const [total, itens] = await Promise.all([
@@ -162,27 +164,155 @@ export class ClassificacaoService {
     };
   }
 
+  /**
+   * TODAS as REFs do filtro — o "marcar as 138 do filtro" da tela.
+   *
+   * A página mostra 60 e o filtro tem 138: sem isto, marcar tudo seria marcar,
+   * aplicar, virar a página e repetir — três vezes o trabalho, e com o risco
+   * de perder a conta de onde parou. Como a listagem é ordenada por nome e a
+   * classificação MUDA o filtro (a peça sai de "sem categoria"), paginar à mão
+   * durante o mutirão é justamente onde peça passa batida.
+   *
+   * `TETO` existe pra "marcar todas" nunca virar um clique que classifica o
+   * catálogo inteiro por engano. Batendo no teto a tela avisa em vez de fingir
+   * que marcou tudo.
+   */
+  async refs(params: FiltroClassificacao) {
+    const where = await this.montarWhere(params);
+    if (where === VAZIO) return { refs: [], total: 0, limitado: false };
+
+    const total = await (this.prisma as any).siteProduto.count({ where });
+    const linhas = await (this.prisma as any).siteProduto.findMany({
+      where,
+      select: { ref: true },
+      orderBy: { nome: 'asc' },
+      take: ClassificacaoService.TETO_SELECAO,
+    });
+    return {
+      refs: (linhas as any[]).map((l) => l.ref),
+      total,
+      limitado: total > ClassificacaoService.TETO_SELECAO,
+    };
+  }
+
   /** Classifica VÁRIAS de uma vez — a operação que faz a tela valer a pena. */
   async classificar(input: {
     refs: string[];
     categoria: string | null;
     subcategoria: string | null;
+    /** Só mexe na subcategoria — a categoria de cada peça fica como está. */
+    manterCategoria?: boolean;
     quem: string;
   }) {
     const refs = (input.refs || []).map((r) => String(r).trim().toUpperCase()).filter(Boolean);
     if (!refs.length) return { ok: false, erro: 'Nenhuma peça selecionada' };
 
+    /**
+     * `manterCategoria` NÃO é preciosismo: a mesma busca ("manga curta") traz
+     * blusa, vestido e macacão. Quem quer só carimbar a manga precisa poder
+     * fazer isso sem que a categoria de cada peça vire a do lote — senão um
+     * clique manda vestido pra Blusas, e o estrago só aparece na vitrine.
+     */
+    const data: any = {
+      subcategoria: input.subcategoria,
+      classificadoPor: input.quem,
+      classificadoEm: new Date(),
+    };
+    if (!input.manterCategoria) data.categoria = input.categoria;
+
     const r = await (this.prisma as any).siteProduto.updateMany({
       where: { ref: { in: refs } },
-      data: {
-        categoria: input.categoria,
-        subcategoria: input.subcategoria,
-        classificadoPor: input.quem,
-        classificadoEm: new Date(),
-      },
+      data,
     });
-    this.logger.log(`[classificacao] ${r.count} peça(s) → ${input.categoria}/${input.subcategoria ?? '-'} por ${input.quem}`);
+    const destino = input.manterCategoria ? '(categoria mantida)' : input.categoria;
+    this.logger.log(`[classificacao] ${r.count} peça(s) → ${destino}/${input.subcategoria ?? '-'} por ${input.quem}`);
     return { ok: true, atualizadas: r.count };
+  }
+
+  /**
+   * O `where` do Prisma a partir dos filtros da tela.
+   *
+   * Devolve `VAZIO` quando a busca não casou com nada — assim quem chama
+   * responde lista vazia em vez de rodar um `IN ()` que o Prisma recusa.
+   */
+  private async montarWhere(params: FiltroClassificacao): Promise<any> {
+    const where: any = {};
+    if (params.publicado !== undefined) where.publicado = params.publicado;
+    if (params.semSubcategoria) where.subcategoria = null;
+    if (params.semCategoria) where.categoria = null;
+    if (params.categoria) where.categoria = params.categoria;
+    if (params.subcategoria) where.subcategoria = params.subcategoria;
+
+    const porTexto = await this.refsPorTexto(params.busca, params.excluir);
+    if (porTexto) {
+      if (!porTexto.length) return VAZIO;
+      where.ref = { in: porTexto };
+    }
+    return where;
+  }
+
+  /**
+   * BUSCA POR TEXTO — sem acento, por palavra, e com termos NEGATIVOS.
+   *
+   * ── por que não dava pra usar o `contains` do Prisma ──
+   *
+   * 1. ACENTO. O `contains ... insensitive` do Prisma vira `ILIKE`, que ignora
+   *    caixa mas NÃO ignora acento. Quem digita "saida" não achava "Saída de
+   *    Praia" e concluía que a peça não existe (ela existe: são 3, publicadas).
+   *    Idem "maio" x "Maiô". `translate()` é função nativa do Postgres — não
+   *    depende da extensão `unaccent`, que pode não estar instalada.
+   *
+   * 2. ORDEM DAS PALAVRAS. `contains` compara a frase inteira: "curta manga"
+   *    não achava "Manga Curta". Aqui cada palavra é uma condição.
+   *
+   * 3. TERMO NEGATIVO. "Manga 3/4" existe em blusa, vestido E macacão; e
+   *    "Conjunto Blusa Manga Curta + Calça" não é blusa (decisão do dono,
+   *    10/08/2026). Sem poder EXCLUIR palavra, todo filtro de manga viria
+   *    contaminado e a seleção em bloco perderia a graça.
+   *
+   * A varredura é sequencial, mas a tabela é o catálogo do site (~3 mil
+   * linhas) e a tela é de retaguarda, usada por uma pessoa por vez.
+   */
+  private async refsPorTexto(busca?: string, excluir?: string): Promise<string[] | null> {
+    const positivos = this.termos(busca);
+    const negativos = this.termos(excluir);
+    if (!positivos.length && !negativos.length) return null;
+
+    // Constantes minhas, não entrada do usuário — os TERMOS vão parametrizados.
+    const alvo = `translate(lower(nome || ' ' || ref), '${ClassificacaoService.COM_ACENTO}', '${ClassificacaoService.SEM_ACENTO}')`;
+    const cond: string[] = [];
+    const valores: string[] = [];
+    for (const t of positivos) {
+      valores.push(`%${t}%`);
+      cond.push(`${alvo} LIKE $${valores.length}`);
+    }
+    for (const t of negativos) {
+      valores.push(`%${t}%`);
+      cond.push(`${alvo} NOT LIKE $${valores.length}`);
+    }
+
+    const linhas: Array<{ ref: string }> = await (this.prisma as any).$queryRawUnsafe(
+      `SELECT ref FROM site_produto WHERE ${cond.join(' AND ')} LIMIT ${ClassificacaoService.TETO_SELECAO}`,
+      ...valores,
+    );
+    return linhas.map((l) => l.ref);
+  }
+
+  /**
+   * "Manga Curta, conjunto" → ["manga", "curta", "conjunto"].
+   *
+   * `%` e `_` são curinga do LIKE: escapados, senão quem digitasse "50%" viria
+   * com o catálogo inteiro sem entender por quê.
+   */
+  private termos(v?: string): string[] {
+    return this.semAcento(v || '')
+      .split(/[,;\s]+/)
+      .map((t) => t.trim().replace(/([%_\\])/g, '\\$1'))
+      .filter((t) => t.length >= 2);
+  }
+
+  private semAcento(v: string): string {
+    return String(v || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
   }
 
   /** Quanto falta — o número que diz se o mutirão está andando. */
