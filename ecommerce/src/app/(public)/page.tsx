@@ -18,6 +18,7 @@ import { getHeroDaHome } from '@/services/banners';
 import { getCategorias } from '@/services/categorias-menu';
 import { fetchVitrine } from '@/services/vitrine';
 import { buildMetadata, itemListSchema, jsonLdGraph, storeSchema } from '@/lib/seo';
+import { HeroImagePreload } from '@/components/sections/HeroImagePreload';
 
 /**
  * HOME — a jornada da cliente.
@@ -128,6 +129,7 @@ export default async function HomePage() {
 
   return (
     <>
+      <HeroImagePreload image={hero.image} imageMobile={hero.imageMobile} />
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd }} />
 
       {/* 01 — HERO EDITORIAL */}
@@ -212,7 +214,7 @@ export default async function HomePage() {
           align="left"
         />
         <div className="mt-14">
-          <ProductCarousel products={chegouAgora} ariaLabel="Novidades da semana" />
+          <ProductCarousel products={chegouAgora} ariaLabel="Novidades da semana" progressiveImages />
         </div>
       </Section>
 
@@ -262,7 +264,7 @@ export default async function HomePage() {
             align="left"
           />
           <div className="mt-14">
-            <ProductCarousel products={v.produtos} ariaLabel={`Vitrine de ${v.titulo}`} />
+            <ProductCarousel products={v.produtos} ariaLabel={`Vitrine de ${v.titulo}`} progressiveImages />
           </div>
         </Section>
       ))}
