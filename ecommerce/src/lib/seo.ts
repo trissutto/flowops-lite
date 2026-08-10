@@ -34,7 +34,7 @@ export const SITE = {
   shortName: 'Lurds',
   url: resolveSiteUrl(),
   description:
-    'Moda plus size elegante do 46 ao 60. Curadoria de peças que vestem super bem, atendimento acolhedor e 14 lojas em São Paulo e região.',
+    'Moda plus size elegante do 44 ao 60. Curadoria de peças que vestem super bem, atendimento acolhedor e 14 lojas em São Paulo e região.',
   locale: 'pt_BR',
   twitter: '@lurdsplussize',
   ogImage: '/og/default.jpg',

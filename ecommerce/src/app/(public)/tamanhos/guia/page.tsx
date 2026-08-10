@@ -24,9 +24,9 @@ export const revalidate = 3600;
 export const metadata = buildMetadata({
   title: 'Guia de medidas',
   description:
-    'Como tirar suas medidas e encontrar seu tamanho na Lurd’s Plus Size — do 46 ao 60, com busto, cintura e quadril em centímetros.',
+    'Como tirar suas medidas e encontrar seu tamanho na Lurd’s Plus Size — do 44 ao 60, com busto, cintura e quadril em centímetros.',
   path: '/tamanhos/guia',
-  keywords: ['guia de medidas plus size', 'tabela de medidas 46 ao 60', 'qual meu tamanho plus size'],
+  keywords: ['guia de medidas plus size', 'tabela de medidas 44 ao 60', 'qual meu tamanho plus size'],
 });
 
 interface Grade {

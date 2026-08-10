@@ -61,7 +61,7 @@ export async function generateMetadata({
     description: meta.intro,
     path: `/categoria/${slug}`,
     image: `${meta.heroImage}?q=80&w=1200&auto=format&fit=crop`,
-    keywords: [meta.title, `${meta.name} plus size`, `${meta.name} 46 ao 60`, 'moda plus size'],
+    keywords: [meta.title, `${meta.name} plus size`, `${meta.name} 44 ao 60`, 'moda plus size'],
   });
 }
 
@@ -110,7 +110,7 @@ export default async function CategoryPage({ params }: { params: Promise<{ slug:
             href: i < trail.length - 1 ? item.path : undefined,
           }))}
         />
-        <SectionTitle eyebrow={`${meta.name} do 46 ao 60`} title={meta.title} as="h1" />
+        <SectionTitle eyebrow={`${meta.name} do 44 ao 60`} title={meta.title} as="h1" />
         {/* Primeira coisa depois do título: é o recorte mais previsível da
             página — ver `ChipsSubcategoria`. */}
         <ChipsSubcategoria subcategorias={subcategorias} className="mt-6 justify-center" />

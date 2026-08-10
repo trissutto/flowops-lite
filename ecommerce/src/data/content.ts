@@ -15,7 +15,7 @@ import type {
  * disso é conteúdo aprovado de marca.
  *
  * O que é REAL: a taxonomia (categorias, ocasiões, tecidos, modelagens) e a
- * faixa de numeração 46–60, que refletem a operação da Lurds.
+ * faixa de numeração 44–60, que refletem a operação da Lurds.
  *
  * Quando o catálogo entrar: services/products.ts troca a fonte e este arquivo
  * fica apenas com as taxonomias e os textos editoriais.
@@ -72,7 +72,7 @@ export const homeHero = {
   lead: 'Elegância não tem',
   emphasis: 'tamanho',
   subtitle:
-    'Peças pensadas pro corpo real, do 46 ao 60. Caimento que valoriza, tecido que abraça e um atendimento que acolhe.',
+    'Peças pensadas pro corpo real, do 44 ao 60. Caimento que valoriza, tecido que abraça e um atendimento que acolhe.',
 };
 
 export const institutionalVideo = {
@@ -94,7 +94,7 @@ export const manifesto = {
     { value: '1979', label: 'Desde' },
     { value: '14', label: 'Lojas' },
     { value: '500 mil+', label: 'Clientes' },
-    { value: '46–60', label: 'Numeração' },
+    { value: '44–60', label: 'Numeração' },
   ],
 };
 

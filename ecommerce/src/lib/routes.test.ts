@@ -9,7 +9,10 @@ import { isBuiltRoute } from './routes';
  */
 describe('isBuiltRoute', () => {
   it('reconhece as rotas que existem em src/app', () => {
-    for (const rota of ['/', '/busca', '/carrinho', '/checkout']) {
+    for (const rota of [
+      '/', '/busca', '/carrinho', '/checkout', '/lojas', '/novidades', '/outlet',
+      '/conta/favoritos', '/trocas',
+    ]) {
       expect(isBuiltRoute(rota), rota).toBe(true);
     }
   });
@@ -22,11 +25,7 @@ describe('isBuiltRoute', () => {
 
   it('nega as rotas ainda não construídas', () => {
     for (const rota of [
-      '/lojas',
-      '/novidades',
-      '/outlet',
       '/looks',
-      '/conta/favoritos',
       '/institucional/frete',
       '/tecidos/linho',
       '/ocasioes/casamento',
@@ -46,7 +45,7 @@ describe('isBuiltRoute', () => {
   it('ignora query string e âncora ao casar o caminho', () => {
     expect(isBuiltRoute('/busca?q=vestido')).toBe(true);
     expect(isBuiltRoute('/carrinho#resumo')).toBe(true);
-    expect(isBuiltRoute('/lojas?cidade=santos')).toBe(false);
+    expect(isBuiltRoute('/lojas?cidade=santos')).toBe(true);
   });
 
   it('deixa passar o que o Next nem prefetcha (externo, âncora, protocolo)', () => {
@@ -62,6 +61,6 @@ describe('isBuiltRoute', () => {
 
   it('aceita href em forma de objeto', () => {
     expect(isBuiltRoute({ pathname: '/busca', query: { q: 'x' } })).toBe(true);
-    expect(isBuiltRoute({ pathname: '/lojas' })).toBe(false);
+    expect(isBuiltRoute({ pathname: '/lojas' })).toBe(true);
   });
 });

@@ -87,7 +87,7 @@ export function ProductCard({
   const esgotado = !temEstoque && product.availability?.online === false;
 
   /**
-   * "Do 46 ao 60" — a pergunta nº 1 da cliente plus size é se serve nela, e a
+   * "Do 44 ao 60" — a pergunta nº 1 da cliente plus size é se serve nela, e a
    * resposta cabe numa linha. Só sai quando os tamanhos são numéricos: com
    * P/M/G a faixa não significa nada.
    */
@@ -196,7 +196,7 @@ export function ProductCard({
             <div className="flex flex-wrap gap-1">
               {/* A GRADE INTEIRA (dono 07/08). O corte em 6 escondia o 58 e o
                   60 justamente nas peças que vão até lá — o card mostrava
-                  "46 48 50 52 54 56" embaixo da frase "Do 46 ao 60", e a
+                  "46 48 50 52 54 56" embaixo da frase "Do 44 ao 60", e a
                   cliente de 60 concluía que a peça não servia pra ela. A grade
                   da casa tem 9 números; cabem em duas linhas de pílula. */}
               {availableSizes.slice(0, 10).map((size) => (

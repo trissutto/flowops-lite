@@ -65,7 +65,7 @@ app/(checkout)   carrinho e checkout (chrome mínimo, sem distração)
 
 - **Preço em REAIS** (`number`), nunca centavos. Lição do FlowOps: dividir por
   100 no lugar errado derrubou preços 100×.
-- **Numeração** 46–60 é o eixo da marca; aparece em filtro, card e SEO.
+- **Numeração** 44–60 é o eixo da marca; aparece em filtro, card e SEO.
 - **Loja física é entidade de primeira classe** — `Store` tem geo, horário e
   WhatsApp próprios; todo fluxo online oferece a saída pro provador.
 

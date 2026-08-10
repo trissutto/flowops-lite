@@ -3,7 +3,6 @@
 import Image from 'next/image';
 import { motion } from 'framer-motion';
 import { AppLink as Link } from '@/components/ui/AppLink';
-import { cn } from '@/lib/utils';
 import { enter, fadeUp } from '@/lib/motion';
 
 /**
