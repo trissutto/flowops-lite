@@ -6,6 +6,7 @@ import { LojaCatalogService, ListarParams } from './loja-catalog.service';
 import { SiteSyncService } from './site-sync.service';
 import { InstagramFeedService } from './instagram-feed.service';
 import { GrupoRefService } from './grupo-ref.service';
+import { ClassificacaoService } from './classificacao.service';
 
 /**
  * CATÁLOGO PÚBLICO DO E-COMMERCE (sprint 008).
@@ -133,6 +134,7 @@ export class LojaCatalogAdminController {
     private readonly svc: LojaCatalogService,
     private readonly sync: SiteSyncService,
     private readonly grupos: GrupoRefService,
+    private readonly classificacao: ClassificacaoService,
   ) {}
 
   private requireAdmin(req: any) {
@@ -210,6 +212,72 @@ export class LojaCatalogAdminController {
   gruposDefinir(@Req() req: any, @Param('ref') ref: string, @Body() body: { grupo: string | null }) {
     this.requireAdmin(req);
     return this.grupos.definir(ref, body?.grupo ?? null);
+  }
+
+  /**
+   * CLASSIFICAÇÃO EM LOTE na árvore do site (categoria → subcategoria).
+   *
+   * 773 das 797 peças publicadas estavam sem grupo em 10/08/2026, e 345 sem
+   * categoria nenhuma — quase metade da loja fora de todo menu. Uma a uma
+   * seriam 773 telas; aqui a unidade é o lote. Ver `ClassificacaoService`.
+   */
+  @Get('classificacao/arvore')
+  classArvore(@Req() req: any) {
+    this.requireAdmin(req);
+    return this.classificacao.arvore();
+  }
+
+  @Get('classificacao/progresso')
+  classProgresso(@Req() req: any) {
+    this.requireAdmin(req);
+    return this.classificacao.progresso();
+  }
+
+  @Get('classificacao')
+  classListar(@Req() req: any, @Query() q: any) {
+    this.requireAdmin(req);
+    return this.classificacao.listar({
+      publicado: q.publicado === undefined ? undefined : this.booleanoAdmin(q.publicado),
+      semSubcategoria: this.booleanoAdmin(q.semSubcategoria),
+      semCategoria: this.booleanoAdmin(q.semCategoria),
+      busca: q.busca || undefined,
+      categoria: q.categoria || undefined,
+      subcategoria: q.subcategoria || undefined,
+      page: q.page ? Number(q.page) : 1,
+      perPage: q.perPage ? Number(q.perPage) : 50,
+    });
+  }
+
+  @Post('classificacao')
+  classAplicar(
+    @Req() req: any,
+    @Body() body: { refs: string[]; categoria: string | null; subcategoria: string | null },
+  ) {
+    this.requireAdmin(req);
+    const quem = req?.user?.email || req?.user?.name || 'admin';
+    return this.classificacao.classificar({
+      refs: body?.refs || [],
+      categoria: body?.categoria ?? null,
+      subcategoria: body?.subcategoria ?? null,
+      quem,
+    });
+  }
+
+  /** Cria uma subcategoria dentro de uma categoria — "Manga curta" em "Blusas". */
+  @Post('classificacao/subcategoria')
+  classCriarSub(@Req() req: any, @Body() body: { pai: string; nome: string }) {
+    this.requireAdmin(req);
+    const quem = req?.user?.email || req?.user?.name || 'admin';
+    return this.classificacao.criarSubcategoria({
+      pai: body?.pai || '',
+      nome: body?.nome || '',
+      quem,
+    });
+  }
+
+  private booleanoAdmin(v: any): boolean | undefined {
+    if (v === undefined || v === '') return undefined;
+    return v === '1' || v === 'true' || v === true;
   }
 
   @Get('produto/:ref')

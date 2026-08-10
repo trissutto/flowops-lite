@@ -5186,6 +5186,22 @@ model SiteCupom {
 /// com o nome derivado do slug e sem foto, como hoje.
 model SiteCategoria {
   id            String   @id @default(uuid())
+
+  /// PAI, quando esta linha é uma SUBCATEGORIA.
+  ///
+  /// `null` = categoria de primeiro nível ("Blusas"), que aparece no menu e
+  /// tem página própria. Preenchido = subcategoria ("Manga curta", com
+  /// `paiSlug: 'blusas'`), que aparece como FILTRO dentro da página do pai.
+  ///
+  /// Auto-referência em vez de tabela separada porque subcategoria precisa de
+  /// exatamente o mesmo que categoria: nome de vitrine, ordem, ativo, foto.
+  /// Duas tabelas seriam duas telas e duas regras pra manter iguais.
+  ///
+  /// Árvore do SITE, não do Giga (dono, 10/08/2026: "esquece Giga"). O
+  /// grupo/subgrupo de lá é fiscal ("BLUSA FEMININA"), estava em 3% do
+  /// catálogo, e vive num espelho recriado por TRUNCATE a cada sync.
+  paiSlug       String?  @map("pai_slug")
+
   /// O mesmo slug que o produto carrega ("vestidos", "moda-praia").
   slug          String   @unique
   /// Como aparece no menu e no título. Vazio = derivado do slug.
@@ -5224,6 +5240,8 @@ model SiteCategoria {
   updatedAt     DateTime @updatedAt @map("updated_at")
 
   @@index([ativo, ordem])
+  /// O menu monta a árvore buscando os filhos de cada categoria.
+  @@index([paiSlug])
   @@map("site_categorias")
 }
 
@@ -6191,6 +6209,23 @@ model SiteProduto {
   grupoRef          String?  @map("grupo_ref") @db.VarChar(20)
   grupoRefManual    Boolean  @default(false) @map("grupo_ref_manual")
 
+  /// SUBCATEGORIA do site — o segundo nível abaixo de `categoria`.
+  ///
+  /// "Blusas" é a categoria; "Manga curta" a subcategoria (dono, 10/08/2026).
+  /// Guarda o SLUG da `SiteCategoria` filha (`manga-curta`), e é ela que
+  /// aparece como filtro dentro da página da categoria.
+  ///
+  /// ⚠️ NÃO é o grupo/subgrupo do Giga. Aquilo é classificação FISCAL
+  /// ("BLUSA FEMININA", "VESTIDO MID"), vive num espelho que é recriado por
+  /// TRUNCATE a cada sync, e estava preenchido em 3% do catálogo. Decisão do
+  /// dono no mesmo dia: **esquecer o Giga** — a taxonomia da vitrine nasce e
+  /// vive no Flow, com nome que a cliente entende.
+  subcategoria      String?  @db.VarChar(40)
+  /// Quem classificou e quando — classificar 797 peças é trabalho manual caro,
+  /// e saber o que já foi feito evita refazer.
+  classificadoPor   String?  @map("classificado_por")
+  classificadoEm    DateTime? @map("classificado_em")
+
   /// Curadoria: o que a loja escolheu publicar
   publicado         Boolean  @default(true)
   destaque          Boolean  @default(false)
@@ -6217,6 +6252,10 @@ model SiteProduto {
   @@index([lancamento])
   /// A listagem agrupa por aqui — ver `grupoRef`.
   @@index([grupoRef])
+  /// A tela de classificação filtra por "sem subcategoria" e a página da
+  /// categoria filtra por ela — sem índice, varreria as 797 peças a cada
+  /// troca de filtro.
+  @@index([subcategoria])
   @@map("site_produto")
 }
 

@@ -28,6 +28,8 @@ export interface ListarParams {
   perPage?: number;
   busca?: string;
   categoria?: string;
+  /** Segundo nível da árvore do site: 'manga-curta' dentro de 'blusas'. */
+  subcategoria?: string;
   marca?: string;
   cor?: string;
   tamanho?: string;
@@ -939,6 +941,14 @@ export class LojaCatalogService {
         .filter(Boolean);
       if (cats.length === 1) wherePub.categoria = cats[0];
       else if (cats.length > 1) wherePub.categoria = { in: cats };
+    }
+    /**
+     * SUBCATEGORIA — o segundo nível da árvore do site ("Blusas" → "Manga
+     * curta"). Filtra junto com a categoria, e é o que a página da categoria
+     * oferece como recorte fino.
+     */
+    if (params.subcategoria) {
+      wherePub.subcategoria = String(params.subcategoria).trim().toLowerCase();
     }
     if (params.soPromocao) wherePub.promocao = true;
     if (params.soNovidade) wherePub.lancamento = true;

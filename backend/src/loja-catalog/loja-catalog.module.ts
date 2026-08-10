@@ -5,6 +5,7 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { LojaCatalogService } from './loja-catalog.service';
 import { InstagramFeedService } from './instagram-feed.service';
 import { GrupoRefService } from './grupo-ref.service';
+import { ClassificacaoService } from './classificacao.service';
 import { SiteSyncService } from './site-sync.service';
 import { LojaCatalogPublicController, LojaCatalogAdminController } from './loja-catalog.controller';
 
@@ -31,7 +32,7 @@ import { LojaCatalogPublicController, LojaCatalogAdminController } from './loja-
    */
   imports: [PrismaModule, HttpModule, LiveModule],
   controllers: [LojaCatalogPublicController, LojaCatalogAdminController],
-  providers: [LojaCatalogService, SiteSyncService, InstagramFeedService, GrupoRefService],
+  providers: [LojaCatalogService, SiteSyncService, InstagramFeedService, GrupoRefService, ClassificacaoService],
   exports: [LojaCatalogService],
 })
 export class LojaCatalogModule {}
