@@ -1753,6 +1753,14 @@ export class PdvController {
   /**
    * PATCH /pdv/sales/:id/vendedora — atribui vendedora à venda.
    * Aceita codigo+nome direto do Giga (sem precisar do Seller cadastrado no Postgres).
+   *
+   * ACEITA VENDA JÁ FINALIZADA (10/08). A vendedora é escolhida no popup de
+   * ENCERRAMENTO, então quando o reconciliador de PIX fecha a venda sozinho
+   * (cron de 30s que viu o PagBank pago antes da tela confirmar) a venda
+   * nasce SEM vendedora — e o popup tomava "Venda já fechada", deixando a
+   * comissão órfã sem ninguém pra corrigir. Atribuir vendedora não mexe em
+   * dinheiro, estoque nem fiscal: é correção de dado. Só venda CANCELADA
+   * continua bloqueada (não existe comissão de venda que não aconteceu).
    */
   @Patch('sales/:id/vendedora')
   async setVendedora(
@@ -1764,7 +1772,16 @@ export class PdvController {
     if (!body?.nome) throw new BadRequestException('Nome da vendedora obrigatório');
     const sale = await (this.svc as any).prisma.pdvSale.findUnique({ where: { id: saleId } });
     if (!sale) throw new NotFoundException('Venda não encontrada');
-    if (sale.status !== 'open') throw new BadRequestException('Venda já fechada');
+    if (sale.status === 'cancelled') {
+      throw new BadRequestException('Venda cancelada — não dá pra atribuir vendedora');
+    }
+    if (sale.status === 'finalized' && sale.sellerName) {
+      // Já tem dona: trocar a vendedora de uma venda fechada é ajuste de
+      // comissão e passa pela retaguarda, não pelo popup do PDV.
+      throw new BadRequestException(
+        `Venda já finalizada com a vendedora ${sale.sellerName} — troca de vendedora é pela retaguarda.`,
+      );
+    }
 
     return (this.svc as any).prisma.pdvSale.update({
       where: { id: saleId },

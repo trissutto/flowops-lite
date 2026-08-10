@@ -4832,6 +4832,23 @@ function PaymentModal({
           method: 'POST',
           body: JSON.stringify({ method: selected, valor: valorPayment, details }),
         });
+        // ── O RECONCILIADOR CHEGOU PRIMEIRO ──
+        // O cron de PIX do backend viu o PagBank pago e já fechou a venda
+        // com ESTE mesmo pagamento. Não é erro: a venda passou. Pula direto
+        // pro encerramento (tela de finalizada + cupom + NFC-e) em vez de
+        // empurrar um pagamento duplicado na lista.
+        if (newPayment?.alreadyFinalized) {
+          toast(
+            'success',
+            'Pagamento já confirmado automaticamente',
+            'O sistema detectou o PIX pago e fechou a venda. Seguindo pro cupom.',
+          );
+          setSelected(null);
+          setPixCharge(null);
+          onPaymentsChange?.();
+          onConfirm('', undefined);
+          return;
+        }
         setPayments((prev) => [...prev, newPayment]);
       }
 
@@ -4890,6 +4907,29 @@ function PaymentModal({
         }, 80);
       }
     } catch (e: any) {
+      // REDE DE SEGURANÇA do caso acima: se o backend ainda respondeu
+      // "Venda já fechada" (deploy antigo, ou pagamento que o backend não
+      // reconheceu como equivalente), confere o estado REAL da venda antes
+      // de assustar a vendedora. Venda finalizada = deu certo, segue pro
+      // cupom. O erro seco levava ela a bipar tudo de novo — estoque em
+      // dobro e caixa duplicado (caso Itanhaém, 10/08).
+      if (/j[áa] fechada|j[áa] est[áa] finalized/i.test(String(e?.message || ''))) {
+        try {
+          const fresh = await api<any>(`/pdv/sales/${saleId}`);
+          if (fresh?.status === 'finalized') {
+            toast(
+              'success',
+              'Essa venda já foi fechada',
+              'O pagamento entrou e o sistema finalizou sozinho. Seguindo pro cupom — NÃO bipe as peças de novo.',
+            );
+            setSelected(null);
+            setPixCharge(null);
+            onPaymentsChange?.();
+            onConfirm('', undefined);
+            return;
+          }
+        } catch { /* não deu pra conferir — cai no erro normal abaixo */ }
+      }
       const h = humanizeError(e);
       toast('error', h.title, h.hint);
     } finally {

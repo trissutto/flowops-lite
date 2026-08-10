@@ -732,7 +732,35 @@ export class PdvService {
       select: { id: true, status: true, total: true, customerCpf: true, storeCode: true },
     });
     if (!sale) throw new NotFoundException('Venda não encontrada');
-    if (sale.status !== 'open') throw new BadRequestException('Venda já fechada');
+    if (sale.status !== 'open') {
+      // ── CORRIDA COM O RECONCILIADOR DE PIX (caso Itanhaém, 10/08) ──
+      // O `PixPagbankReconcileService` (cron de 30s, rede de segurança de
+      // 07/08) vê o PagBank pago, registra o pagamento e chama o finalize
+      // sozinho. Quando ele chega ANTES da vendedora clicar em confirmar, o
+      // clique dela caía aqui e levava "Venda já fechada": ela via erro de
+      // venda não concluída — com o dinheiro na conta e a venda fechada
+      // certinho no banco — e a saída óbvia era bipar tudo de novo, o que
+      // baixa estoque em dobro e duplica o caixa do dia.
+      //
+      // Só devolve OK quando o pagamento é COMPROVADAMENTE o mesmo que já
+      // está na venda (ver `acharPagamentoEquivalente`) e a venda está
+      // `finalized`. Pagamento novo em venda fechada e venda cancelada
+      // continuam sendo erro de verdade.
+      const equivalente =
+        sale.status === 'finalized'
+          ? await this.acharPagamentoEquivalente(sale.id, input)
+          : null;
+      if (equivalente) {
+        this.logger.warn(
+          `[pdv] addPayment em venda já finalizada ${sale.id} ` +
+            `(${input.method} R$${Number(input.valor || 0).toFixed(2)}) — pagamento ` +
+            `${equivalente.id} já estava registrado (provável reconciliador de PIX). ` +
+            `Devolvendo OK idempotente.`,
+        );
+        return { ...equivalente, alreadyFinalized: true };
+      }
+      throw new BadRequestException('Venda já fechada');
+    }
 
     // Crediário precisa de cliente
     if (input.method === 'crediario' && !sale.customerCpf) {
@@ -906,6 +934,71 @@ export class PdvService {
     });
 
     return payment;
+  }
+
+  /**
+   * Ids de transação de gateway dentro de um `details` de pagamento.
+   * `details` vive no banco como String (JSON serializado) e chega da tela
+   * como objeto — aceita os dois.
+   */
+  private idsDeTransacao(details: any): string[] {
+    let det = details;
+    if (typeof det === 'string') {
+      try {
+        det = JSON.parse(det);
+      } catch {
+        return [];
+      }
+    }
+    if (!det || typeof det !== 'object') return [];
+    return [det.pixTxid, det.pagbankOrderId, det.pagarmeOrderId, det.creditoCode]
+      .map((v) => (v == null ? '' : String(v).trim()))
+      .filter(Boolean);
+  }
+
+  /**
+   * Acha na venda um pagamento equivalente ao que está chegando.
+   *
+   * Existe SÓ pro retorno idempotente do `addPayment` em venda já finalizada
+   * (corrida com o reconciliador de PIX) — nunca cria nem altera nada. Ordem
+   * de confiança:
+   *   1. mesmo id de transação do gateway (pixTxid / pagbankOrderId /
+   *      pagarmeOrderId / código do vale) — prova de que é o MESMO pagamento;
+   *   2. mesmo método e mesmo valor (tolerância de 1 centavo) — cobre o PIX
+   *      externo e o caso do `details` divergir entre a tela e o cron (o cron
+   *      grava `pixTxid` + `reconciliadoPeloCron`, a tela grava a chave e o
+   *      provider).
+   *
+   * O critério 2 é seguro aqui porque a venda já está fechada: no pior caso
+   * a tela recebe "esse pagamento já está registrado" — que é a verdade, já
+   * que o total da venda fechada bate com a soma dos pagamentos dela.
+   */
+  private async acharPagamentoEquivalente(
+    saleId: string,
+    input: { method: string; valor: number; details?: any },
+  ): Promise<any | null> {
+    const existentes = await (this.prisma as any).pdvSalePayment.findMany({
+      where: { saleId },
+      orderBy: { createdAt: 'asc' },
+    });
+    if (!(existentes as any[]).length) return null;
+
+    const idsDoInput = this.idsDeTransacao(input.details);
+    if (idsDoInput.length) {
+      const porTxid = (existentes as any[]).find((p: any) =>
+        this.idsDeTransacao(p.details).some((id) => idsDoInput.includes(id)),
+      );
+      if (porTxid) return porTxid;
+    }
+
+    const metodo = String(input.method || '').toLowerCase();
+    return (
+      (existentes as any[]).find(
+        (p: any) =>
+          String(p.method || '').toLowerCase() === metodo &&
+          Math.abs(Number(p.valor || 0) - Number(input.valor || 0)) < 0.01,
+      ) || null
+    );
   }
 
   /**
