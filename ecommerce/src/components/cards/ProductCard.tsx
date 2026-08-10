@@ -12,6 +12,7 @@ import { useWishlistStore } from '@/store/wishlist';
 import { useQuickAddStore } from '@/store/quick-add';
 import { useMounted } from '@/hooks';
 import type { Product } from '@/types';
+import { ProgressiveImage } from '@/components/media/ProgressiveImage';
 
 /**
  * PRODUCT CARD — o card definitivo do ecommerce. Nenhuma página cria o seu.
@@ -44,6 +45,8 @@ interface ProductCardProps {
    * senão o Next escolhe uma variante pequena demais e a foto sai borrada.
    */
   sizes?: string;
+  /** Usado só na home: segura o download até a vitrine se aproximar. */
+  progressiveImage?: boolean;
 }
 
 /** Largura do card na grade padrão de catálogo. */
@@ -64,6 +67,7 @@ export function ProductCard({
   className,
   priority = false,
   sizes = GRID_SIZES,
+  progressiveImage = false,
 }: ProductCardProps) {
   const [hovered, setHovered] = useState(false);
   const mounted = useMounted();
@@ -103,6 +107,7 @@ export function ProductCard({
 
   const aspectClass =
     aspect === '3/4' ? 'aspect-3/4' : aspect === '4/5' ? 'aspect-4/5' : 'aspect-square';
+  const ProductImage = progressiveImage ? ProgressiveImage : Image;
 
   return (
     <motion.article
@@ -115,7 +120,7 @@ export function ProductCard({
       {/* Mídia */}
       <div className={cn('relative overflow-hidden rounded-md bg-surface-alt', aspectClass)}>
         <Link href={href} className="absolute inset-0" aria-label={product.name}>
-          <Image
+          <ProductImage
             src={cover.src}
             alt={cover.alt}
             fill
@@ -130,7 +135,7 @@ export function ProductCard({
             )}
           />
           {alternate && (
-            <Image
+            <ProductImage
               src={alternate.src}
               alt=""
               aria-hidden

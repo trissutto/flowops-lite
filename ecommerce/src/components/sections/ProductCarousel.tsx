@@ -12,10 +12,12 @@ export function ProductCarousel({
   products,
   ariaLabel,
   onQuickView,
+  progressiveImages = false,
 }: {
   products: Product[];
   ariaLabel: string;
   onQuickView?: (product: Product) => void;
+  progressiveImages?: boolean;
 }) {
   return (
     <LuxuryCarousel
@@ -31,6 +33,7 @@ export function ProductCarousel({
           index={index}
           onQuickView={onQuickView}
           sizes={CAROUSEL_PRODUCT_SIZES}
+          progressiveImage={progressiveImages}
         />
       ))}
     </LuxuryCarousel>
