@@ -773,8 +773,9 @@ export class CustomersCrmService {
    */
   async byPerson(id: string, actor?: RequestActor) {
     const me = await this.loadScoped(id, actor);
-    if (!me.personKey) {
+    if (!me.personId && !me.personKey) {
       return {
+        personId: null,
         personKey: null,
         outros: [],
         agregado: null,
@@ -782,7 +783,12 @@ export class CustomersCrmService {
       };
     }
     const todos = await this.prisma.customer.findMany({
-      where: { personKey: me.personKey },
+      where: {
+        ...(me.personId ? { personId: me.personId } : { personKey: me.personKey! }),
+        ...(!isMatrix(actor) && actor?.storeId
+          ? { OR: [{ originStoreId: actor.storeId }, { targetStoreId: actor.storeId }] }
+          : {}),
+      },
       select: {
         id: true,
         name: true,
@@ -807,7 +813,7 @@ export class CustomersCrmService {
       ).sort(),
       canais: Array.from(new Set(todos.map((c) => c.originSource).filter(Boolean))),
     };
-    return { personKey: me.personKey, outros, agregado };
+    return { personId: me.personId, personKey: me.personKey, outros, agregado };
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -854,7 +860,10 @@ export class CustomersCrmService {
     // 1. Compras (PdvSale finalizadas, exclui MARCADO e cancelled)
     const compras = await (this.prisma as any).pdvSale.findMany({
       where: {
-        customerCpf: cpf,
+        OR: [
+          ...(customer.personId ? [{ personId: customer.personId }] : []),
+          { customerCpf: cpf },
+        ],
         status: 'finalized',
         NOT: { paymentMethod: 'MARCADO' },
       },
@@ -878,7 +887,10 @@ export class CustomersCrmService {
     try {
       comprasOnline = await (this.prisma as any).order.findMany({
         where: {
-          customerCpf: { in: [cpf, cpfMascarado] },
+          OR: [
+            ...(customer.personId ? [{ personId: customer.personId }] : []),
+            { customerCpf: { in: [cpf, cpfMascarado] } },
+          ],
           status: { notIn: ['cancelled', 'failed'] },
         },
         orderBy: { createdAt: 'desc' },
