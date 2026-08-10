@@ -191,6 +191,7 @@ model Store {
   // aparece na lista física desta loja com badge "🌐 SITE".
   customersTarget       Customer[]            @relation("CustomerTargetStore")
   cashbackTransactions  CashbackTransaction[] @relation("StoreCashbackTransactions")
+  personsFirstRegistered Person[]
 
   // CEP ranges atendidos pela loja (raio aproximado).
   // Formato: JSON array de [start, end] (inteiros 5 dígitos sem hífen).
@@ -377,6 +378,7 @@ model FranquiaLancamento {
 
 model Order {
   id              String   @id @default(uuid())
+  personId        String?  @map("person_id")
   wcOrderId       Int      @unique @map("wc_order_id")
   wcOrderNumber   String?  @map("wc_order_number")
   // Origem do pedido: 'site' (WooCommerce), 'live' (Live Commerce) ou
@@ -446,6 +448,7 @@ model Order {
   pickOrders PickOrder[]
   history    OrderHistory[]
   seller     Seller? @relation(fields: [sellerId], references: [id])
+  person     Person? @relation(fields: [personId], references: [id], onDelete: Restrict)
 
   @@index([status])
   @@index([sellerId])
@@ -455,6 +458,7 @@ model Order {
   // unificado, 10/08/2026). Sem este índice cada abertura de drawer varre a
   // tabela inteira de pedidos.
   @@index([customerCpf])
+  @@index([personId])
   @@map("orders")
 }
 
@@ -1342,6 +1346,7 @@ model CrediarioConfig {
 // Header de uma baixa multi-parcelas
 model CrediarioBaixa {
   id                String   @id @default(uuid())
+  personId          String?  @map("person_id")
   // Cliente do Giga
   codCliente        String?  @map("cod_cliente")
   customerCpf       String?  @map("customer_cpf")
@@ -1384,10 +1389,12 @@ model CrediarioBaixa {
   updatedAt         DateTime @updatedAt @map("updated_at")
 
   items             CrediarioBaixaItem[]
+  person            Person? @relation(fields: [personId], references: [id], onDelete: Restrict)
 
   @@index([lojaCode, createdAt(sort: Desc)])
   @@index([codCliente, createdAt(sort: Desc)])
   @@index([status, createdAt(sort: Desc)])
+  @@index([personId])
   @@map("crediario_baixas")
 }
 
@@ -1435,6 +1442,7 @@ model CrediarioBaixaItem {
 //
 model PdvSale {
   id              String   @id @default(uuid())
+  personId        String?  @map("person_id")
   // Loja origem da venda
   storeCode       String   @map("store_code")
   storeName       String   @map("store_name")
@@ -1539,6 +1547,7 @@ model PdvSale {
 
   items           PdvSaleItem[]
   payments        PdvSalePayment[]
+  person          Person? @relation(fields: [personId], references: [id], onDelete: Restrict)
 
   @@index([storeCode, createdAt(sort: Desc)])
   @@index([status, createdAt(sort: Desc)])
@@ -1550,6 +1559,7 @@ model PdvSale {
   @@index([sellerId])
   @@index([stoneTxId])
   @@index([isTraining])
+  @@index([personId])
   @@map("pdv_sales")
 }
 
@@ -2397,8 +2407,112 @@ model SizeFeedback {
 // porque o sync ETL pra popular Customer roda em fase posterior. Quando o ETL
 // estiver completo, customers.service passa a usar essa tabela como fonte.
 // ===========================================================================
+model Person {
+  id                       String    @id @default(uuid())
+  cpfNormalized            String?   @unique @map("cpf_normalized") @db.VarChar(11)
+  identityStatus           String    @default("provisional") @map("identity_status") @db.VarChar(20)
+  name                     String?
+  socialName               String?   @map("social_name")
+  email                    String?
+  phone                    String?
+  birthDate                DateTime? @map("birth_date") @db.Date
+  primaryCustomerId        String?   @unique @map("primary_customer_id")
+  firstRegistrationAt      DateTime? @map("first_registration_at")
+  firstRegistrationSource  String?   @map("first_registration_source") @db.VarChar(20)
+  firstRegistrationStoreId String?   @map("first_registration_store_id")
+  mergedIntoId             String?   @map("merged_into_id")
+  createdAt                DateTime  @default(now()) @map("created_at")
+  updatedAt                DateTime  @updatedAt @map("updated_at")
+
+  primaryCustomer          Customer? @relation("PersonPrimaryCustomer", fields: [primaryCustomerId], references: [id], onDelete: Restrict)
+  firstRegistrationStore   Store?    @relation(fields: [firstRegistrationStoreId], references: [id], onDelete: Restrict)
+  mergedInto               Person?   @relation("PersonRedirect", fields: [mergedIntoId], references: [id], onDelete: Restrict)
+  mergedPersons            Person[]  @relation("PersonRedirect")
+  customers                Customer[] @relation("CustomerPerson")
+  customerAccounts         CustomerAccount[]
+  gigaCustomers            GigaCliente[]
+  orders                   Order[]
+  pdvSales                 PdvSale[]
+  liveCarts                LiveCart[]
+  livePdvCarts             LivePdvCart[]
+  crediarioParcelas        CrediarioParcela[]
+  crediarioBaixas          CrediarioBaixa[]
+  marcados                 Marcado[]
+  identifiers              PersonIdentifier[]
+  linkAudits               PersonLinkAudit[]
+  mergeAuditsAsSurvivor    PersonMergeAudit[] @relation("PersonMergeSurvivor")
+  mergeAuditsAsSource      PersonMergeAudit[] @relation("PersonMergeSource")
+
+  @@index([identityStatus])
+  @@index([mergedIntoId])
+  @@index([firstRegistrationStoreId])
+  @@map("persons")
+}
+
+model PersonIdentifier {
+  id               String    @id @default(uuid())
+  personId         String    @map("person_id")
+  type             String    @db.VarChar(40)
+  normalizedValue  String    @map("normalized_value") @db.VarChar(255)
+  verified         Boolean   @default(false)
+  source           String?   @db.VarChar(40)
+  sourceCustomerId String?   @map("source_customer_id")
+  verifiedAt       DateTime? @map("verified_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  person         Person    @relation(fields: [personId], references: [id], onDelete: Restrict)
+  sourceCustomer Customer? @relation(fields: [sourceCustomerId], references: [id], onDelete: Restrict)
+
+  @@unique([personId, type, normalizedValue])
+  @@index([type, normalizedValue])
+  @@index([sourceCustomerId])
+  @@map("person_identifiers")
+}
+
+model PersonLinkAudit {
+  id         String   @id @default(uuid())
+  personId   String   @map("person_id")
+  entityType String   @map("entity_type") @db.VarChar(50)
+  entityId   String   @map("entity_id") @db.VarChar(120)
+  rule       String   @db.VarChar(80)
+  confidence Int
+  automatic  Boolean  @default(true)
+  actor      String?  @db.VarChar(120)
+  batchId    String?  @map("batch_id") @db.VarChar(80)
+  metadata   Json?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  person Person @relation(fields: [personId], references: [id], onDelete: Restrict)
+
+  @@unique([personId, entityType, entityId, rule])
+  @@index([entityType, entityId])
+  @@index([batchId])
+  @@map("person_link_audits")
+}
+
+model PersonMergeAudit {
+  id               String    @id @default(uuid())
+  survivorPersonId String    @map("survivor_person_id")
+  sourcePersonId   String    @map("source_person_id")
+  reason           String    @db.Text
+  previousState    Json      @map("previous_state")
+  actor            String?   @db.VarChar(120)
+  createdAt        DateTime  @default(now()) @map("created_at")
+  reversedAt       DateTime? @map("reversed_at")
+  reversedBy       String?   @map("reversed_by") @db.VarChar(120)
+
+  survivorPerson Person @relation("PersonMergeSurvivor", fields: [survivorPersonId], references: [id], onDelete: Restrict)
+  sourcePerson   Person @relation("PersonMergeSource", fields: [sourcePersonId], references: [id], onDelete: Restrict)
+
+  @@index([survivorPersonId, createdAt(sort: Desc)])
+  @@index([sourcePersonId, createdAt(sort: Desc)])
+  @@map("person_merge_audits")
+}
+
 model Customer {
   id              String   @id @default(uuid())
+  personId        String?  @map("person_id")
 
   // -- Identificacao fiscal / Giga --
   // CPF NÃO é mais @unique (jun/2026): mesma pessoa pode ter cadastro em
@@ -2538,9 +2652,13 @@ model Customer {
   rfvSnapshots          CustomerRfvSnapshot[]
   gigaLinks             CustomerGigaLink[]
   accountLinks          CustomerAccountLink[]
+  person                Person? @relation("CustomerPerson", fields: [personId], references: [id], onDelete: Restrict)
+  primaryForPerson      Person? @relation("PersonPrimaryCustomer")
+  personIdentifiers     PersonIdentifier[]
 
   @@index([cpf])
   @@index([personKey])
+  @@index([personId])
   @@index([phone])
   @@index([whatsapp])
   @@index([vipTier])
@@ -2581,6 +2699,7 @@ model Customer {
 // ===========================================================================
 model CustomerAccount {
   id                    String   @id @default(uuid())
+  personId              String?  @map("person_id")
 
   // Identidade — CPF é a chave única (1 conta por pessoa)
   cpf                   String   @unique
@@ -2622,8 +2741,10 @@ model CustomerAccount {
   cashbackTxs           CustomerCashbackTx[]
   passwordResetTokens   CustomerPasswordResetToken[]
   notifications         CustomerAppNotification[]
+  person                Person? @relation(fields: [personId], references: [id], onDelete: Restrict)
 
   @@index([cpf])
+  @@index([personId])
   @@map("customer_accounts")
 }
 
@@ -3091,6 +3212,7 @@ model Reservation {
 
 model LiveCart {
   id            String   @id @default(uuid())
+  personId      String?  @map("person_id")
   liveId        String   @map("live_id")
   customerId    String   @map("customer_id")
   status        String   @default("open") // open | checked_out | abandoned
@@ -3102,8 +3224,10 @@ model LiveCart {
 
   live          Live     @relation(fields: [liveId], references: [id], onDelete: Cascade)
   customer      Customer @relation(fields: [customerId], references: [id])
+  person        Person?  @relation(fields: [personId], references: [id], onDelete: Restrict)
 
   @@unique([liveId, customerId])
+  @@index([personId])
   @@map("live_carts")
 }
 
@@ -4199,6 +4323,7 @@ model WincredCliente {
 model GigaCliente {
   loja            String    @default("00") @db.VarChar(4)
   codigo          String    @db.VarChar(20)
+  personId        String?   @map("person_id")
   nome            String?   @db.VarChar(120)
   cpf             String?   @db.VarChar(20)
   rg              String?   @db.VarChar(30)
@@ -4239,6 +4364,7 @@ model GigaCliente {
   editedAt        DateTime? @map("edited_at")
   editedBy        String?   @map("edited_by")
   syncedAt        DateTime  @default(now()) @map("synced_at")
+  person          Person?   @relation(fields: [personId], references: [id], onDelete: Restrict)
 
   @@id([loja, codigo])
   @@index([nome])
@@ -4246,6 +4372,7 @@ model GigaCliente {
   @@index([codigo])
   @@index([personKey])
   @@index([customerId])
+  @@index([personId])
   @@map("giga_clientes")
 }
 
@@ -4258,6 +4385,7 @@ model GigaCliente {
 /// Chave = REGISTRO do Giga. Parcela nova do Flow (fase 2) usará faixa própria.
 model CrediarioParcela {
   registro      String    @id @db.VarChar(20)
+  personId      String?   @map("person_id")
   controle      String?   @db.VarChar(20)
   numeroCompra  String?   @map("numero_compra") @db.VarChar(20)
   loja          String    @default("00") @db.VarChar(4)
@@ -4296,6 +4424,7 @@ model CrediarioParcela {
   cancelado    Boolean   @default(false)
   canceladoEm  DateTime? @map("cancelado_em")
   canceladoPor String?   @map("cancelado_por") @db.VarChar(80)
+  person       Person?   @relation(fields: [personId], references: [id], onDelete: Restrict)
 
   @@index([loja, codCliente])
   @@index([codCliente])
@@ -4310,6 +4439,7 @@ model CrediarioParcela {
   /// distintos — o índice sobe sem conflito com o histórico.
   @@unique([saleId, parcela], name: "uniq_parcela_por_venda")
   @@index([saleId])
+  @@index([personId])
   @@index([flowIsSource, gigaOk])
   @@index([flowIsSource, pago, cancelado])
   @@map("crediario_parcelas")
@@ -4445,6 +4575,7 @@ model GigaClienteSeq {
 /// amarra na linha da caixa pra réplica (fechar = DELETE lá).
 model Marcado {
   id           String    @id @default(cuid())
+  personId     String?   @map("person_id")
   registroGiga BigInt?   @unique @map("registro_giga")
   storeCode    String    @map("store_code") @db.VarChar(4)
   codCliente   String    @map("cod_cliente") @db.VarChar(20)
@@ -4472,10 +4603,12 @@ model Marcado {
   isTraining   Boolean   @default(false) @map("is_training")
   createdAt    DateTime  @default(now()) @map("created_at")
   updatedAt    DateTime  @default(now()) @updatedAt @map("updated_at")
+  person       Person?   @relation(fields: [personId], references: [id], onDelete: Restrict)
 
   @@index([status, codCliente])
   @@index([status, storeCode])
   @@index([status, cpf])
+  @@index([personId])
   @@map("marcados")
 }
 
@@ -4559,6 +4692,7 @@ model LivePdvAtalho {
 
 model LivePdvCart {
   id                String   @id @default(uuid())
+  personId          String?  @map("person_id")
   sessionId         String   @map("session_id")
   cartNumber        Int?     @map("cart_number")         // nº sequencial da comanda por sessão (busca por número)
   customerId        String?  @map("customer_id")        // FK lógico p/ Customer (sem relação p/ não tocar Customer)
@@ -4626,10 +4760,12 @@ model LivePdvCart {
 
   session           LivePdvSession @relation(fields: [sessionId], references: [id])
   items             LivePdvItem[]
+  person            Person? @relation(fields: [personId], references: [id], onDelete: Restrict)
 
   @@unique([sessionId, cartNumber])
   @@index([sessionId, status])
   @@index([status, createdAt(sort: Desc)])
+  @@index([personId])
   @@map("live_pdv_carts")
 }
 
