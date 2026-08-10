@@ -21,7 +21,14 @@ import { buildMetadata } from '@/lib/seo';
  * conforme a loja cadastra, sem depender de alguém subir arte toda semana.
  */
 
-export const revalidate = 3600;
+/**
+ * SEM ISR (dono, 10/08/2026: "elimine este cache").
+ *
+ * Esta é a página que ele abre pra conferir se a foto da categoria pegou. Com
+ * 1 hora de cache, ele subia as 12 fotos, via as antigas e concluía que não
+ * tinha salvo — as fotos estavam gravadas. Ver `categorias-menu.ts`.
+ */
+export const dynamic = 'force-dynamic';
 
 export const metadata: Metadata = buildMetadata({
   title: 'Categorias — todas as peças do 46 ao 60',
@@ -32,7 +39,7 @@ export const metadata: Metadata = buildMetadata({
 });
 
 export default async function CategoriasPage() {
-  const categorias = await getCategorias();
+  const categorias = await getCategorias({ fresco: true });
 
   return (
     <>

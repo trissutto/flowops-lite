@@ -7,6 +7,7 @@ import { ProductCarousel } from '@/components/sections/ProductCarousel';
 import { VideoBlock } from '@/components/sections/VideoBlock';
 import { CTABanner } from '@/components/sections/CTABanner';
 import { NewsletterBlock } from '@/components/sections/NewsletterBlock';
+import { FaixaTrocaFacil } from '@/components/sections/FaixaTrocaFacil';
 import { CategoriaCard } from '@/components/cards/CategoriaCard';
 import { StoreCard } from '@/components/cards/StoreCard';
 import { InstagramCard } from '@/components/cards/InstagramCard';
@@ -230,6 +231,13 @@ export default async function HomePage() {
           tabela guarda "estas 3 REFs formam um look"), então a seção volta
           quando esse dado existir. `LookShowcase`, `LookCard` e o tipo `Look`
           continuam no código, prontos, esperando dado real. */}
+
+      {/* 03.5 — TROCA FÁCIL (dono 10/08).
+          Depois da PRIMEIRA vitrine, não antes: a cliente precisa ter visto
+          peça que quer pra dúvida "e se não servir?" existir — antes disso é
+          recado sobre um problema que ela ainda não tem. E antes das outras
+          quatro vitrines, porque é justamente aí que ela começa a escolher. */}
+      <FaixaTrocaFacil />
 
       {/* 04 a 07 — AS OUTRAS QUATRO VITRINES, POR CATEGORIA (dono 10/08)
           Alterna o fundo entre elas: três carrosséis seguidos com o mesmo tom

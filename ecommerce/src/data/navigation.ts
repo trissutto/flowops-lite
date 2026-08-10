@@ -233,6 +233,22 @@ const NAVEGACAO_COMPLETA: NavItem[] = [
       ],
     },
   },
+  /**
+   * TROCA FÁCIL no topo (dono, 10/08/2026: "ao lado de lojas").
+   *
+   * Não é enfeite de rodapé: em plus size a dúvida de tamanho é a objeção que
+   * mais segura a primeira compra, e saber que a troca é fácil ANTES de
+   * comprar é o que destrava. Por isso vai na barra, onde a cliente vê enquanto
+   * decide — e não escondido no rodapé, onde só chega quem já tem problema.
+   *
+   * A página é o portal de /trocas, entregue em 10/08: cliente logada não
+   * digita número de pedido nem CPF.
+   */
+  {
+    label: 'Troca Fácil',
+    href: '/trocas',
+    icon: 'RefreshCw',
+  },
 ];
 
 /**
