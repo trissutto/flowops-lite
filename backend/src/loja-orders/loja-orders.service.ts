@@ -528,10 +528,39 @@ export class LojaOrdersService {
         return alvo.id;
       }
 
+      /**
+       * E-MAIL DE OUTRA PESSOA NÃO PODE CUSTAR O CADASTRO (10/08/2026).
+       *
+       * `Customer.email` é `@unique`, mas o CPF deixou de ser em jun/2026
+       * porque a regra da casa é "CPF é a PESSOA". As duas coisas se
+       * contradizem: duas pessoas de verdade dividem e-mail (família, e-mail
+       * de trabalho), e quando dividem o `create` estourava violação de
+       * unicidade, caía no catch e o cadastro simplesmente não acontecia. O
+       * pedido seguia, então ninguém percebia.
+       *
+       * Foi o caso da primeira cliente de verdade a comprar no site novo: o
+       * e-mail dela já pertencia a outro cadastro, e ela nunca entrou no CRM.
+       *
+       * Entre gravar a cliente SEM o e-mail e não gravar a cliente, o certo é
+       * gravar: nome, CPF e telefone são o que faz o CRM valer, e o e-mail
+       * continua no pedido (`orders.customer_email`), que é de onde ele sai
+       * pra qualquer contato. Perder a pessoa é irreversível; perder o campo,
+       * não.
+       */
+      const donoDoEmail = email
+        ? await (this.prisma as any).customer.findUnique({ where: { email }, select: { id: true, name: true } })
+        : null;
+      if (donoDoEmail) {
+        this.logger.warn(
+          `[loja] e-mail ${email} já é de outro cadastro (${donoDoEmail.name || donoDoEmail.id}) — ` +
+            `${nome || cpf} entra no CRM SEM e-mail`,
+        );
+      }
+
       const criado = await (this.prisma as any).customer.create({
         data: {
           name: nome || null,
-          email,
+          email: donoDoEmail ? null : email,
           phone,
           cpf,
           personKey,
@@ -540,7 +569,24 @@ export class LojaOrdersService {
       });
       return criado.id;
     } catch (e: any) {
-      this.logger.warn(`[loja] cliente não gravado no CRM (pedido segue): ${e?.message || e}`);
+      /**
+       * Rede de segurança pra corrida (dois checkouts no mesmo segundo) e pra
+       * qualquer OUTRO campo único que apareça no futuro: tenta de novo com o
+       * mínimo. Só depois disso é que desistir vira aceitável.
+       */
+      if (e?.code === 'P2002') {
+        try {
+          const minimo = await (this.prisma as any).customer.create({
+            data: { name: nome || null, phone, cpf, personKey, originSource: 'site' },
+          });
+          this.logger.warn(`[loja] cliente criado sem e-mail após colisão (${e?.meta?.target ?? 'unique'})`);
+          return minimo.id;
+        } catch (e2: any) {
+          this.logger.error(`[loja] cliente NÃO entrou no CRM nem no modo mínimo: ${e2?.message || e2}`);
+          return null;
+        }
+      }
+      this.logger.error(`[loja] cliente não gravado no CRM (pedido segue): ${e?.message || e}`);
       return null;
     }
   }
