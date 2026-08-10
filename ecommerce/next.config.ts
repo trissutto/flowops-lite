@@ -40,6 +40,8 @@ const nextConfig: NextConfig = {
   },
 
   async redirects() {
+    /** Onde o FlowOps roda — destino de todo caminho que ainda não migrou. */
+    const FLOWOPS = process.env.FLOWOPS_PORTAL_URL || 'https://crm.lurdsplussize.com.br';
     return [
       // URL canônica é /lojas.
       { source: '/nossas-lojas', destination: '/lojas', permanent: true },
@@ -60,10 +62,44 @@ const nextConfig: NextConfig = {
       // pro domínio onde o portal realmente roda.
       {
         source: '/trocas',
-        destination: `${process.env.FLOWOPS_PORTAL_URL || 'https://crm.lurdsplussize.com.br'}/trocas`,
+        destination: `${FLOWOPS}/trocas`,
         permanent: false,
       },
       { source: '/institucional/trocas', destination: '/trocas', permanent: false },
+
+      /**
+       * ── PONTE DO www: OS CAMINHOS DE CLIENTE QUE AINDA MORAM NO FLOWOPS ──
+       *
+       * O `www.lurdsplussize.com.br` era do FlowOps e passou a ser desta loja.
+       * Só que o FlowOps não servia ali apenas a landing: servia PÁGINA DE
+       * CLIENTE, com link já enviado por WhatsApp e Direct. Sem estas linhas,
+       * cada um desses links passaria a cair no 404 da loja no dia da virada —
+       * e o pior deles é o de pagamento: a cliente clica pra pagar e não paga.
+       *
+       * Então o domínio muda hoje e nada quebra: quem chegar por um link
+       * antigo é reencaminhado pro FlowOps, onde a tela de fato está.
+       *
+       * 307 (temporário) em TODAS de propósito. Cada uma dessas telas vai ser
+       * reconstruída aqui — trocas e cadastro da live já estão decididos. No
+       * dia em que a versão nativa existir, apaga-se a linha e pronto. Com 301
+       * o navegador teria gravado o desvio e continuaria pulando pro FlowOps
+       * mesmo depois da tela nova existir.
+       *
+       * ⚠️ NUNCA apontar isto pro próprio domínio desta loja: vira laço
+       * infinito e a página morre com ERR_TOO_MANY_REDIRECTS.
+       */
+      // Pagamento da live — o link que a apresentadora manda pra cliente.
+      // `/p/:codigo` é o curto; `/pagar/:id` o longo. Os dois são gerados com
+      // domínio fixo em `live-pdv/page.tsx`, então links antigos existem.
+      { source: '/p/:codigo', destination: `${FLOWOPS}/p/:codigo`, permanent: false },
+      { source: '/pagar/:id', destination: `${FLOWOPS}/pagar/:id`, permanent: false },
+      // Comprovante de PIX do crediário.
+      { source: '/pix/:id', destination: `${FLOWOPS}/pix/:id`, permanent: false },
+      // Acompanhamento de pedido.
+      { source: '/meu-pedido', destination: `${FLOWOPS}/meu-pedido`, permanent: false },
+      { source: '/meus-pedidos', destination: `${FLOWOPS}/meus-pedidos`, permanent: false },
+      // Cadastro da live (a cliente se inscreve pra participar).
+      { source: '/cadastro-live', destination: `${FLOWOPS}/cadastro-live`, permanent: false },
     ];
   },
 };
