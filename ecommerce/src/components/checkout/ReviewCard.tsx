@@ -42,7 +42,6 @@ interface ReviewCardProps {
 const METODO_LABEL: Record<PaymentSelection['method'], string> = {
   pix: 'PIX à vista',
   card: 'Cartão de crédito',
-  boleto: 'Boleto bancário',
 };
 
 export function ReviewCard({

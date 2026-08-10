@@ -11,13 +11,17 @@ import type { Product, Store } from '@/types';
  * URL canônica do site.
  *
  * Vem de `NEXT_PUBLIC_SITE_URL` (Vercel → Settings → Environment Variables).
- * Enquanto o domínio definitivo não existe, a Vercel injeta `VERCEL_URL` com o
- * endereço do deploy — assim canonical e Open Graph apontam pro lugar certo em
- * qualquer preview, sem ninguém editar código.
+ * Sem ela, a Vercel injeta `VERCEL_URL` com o endereço do deploy — assim
+ * canonical e Open Graph apontam pro lugar certo em qualquer preview, sem
+ * ninguém editar código.
  *
- * ⚠️ O fallback NÃO é `lurdsplussize.com.br`: esse domínio é do FlowOps
- * (PDV/retaguarda/Live). Colocá-lo aqui faria o ecommerce se anunciar com a
- * URL de outro sistema.
+ * O domínio de produção deste site é **www.lurdsplussize.com.br**. Ele já foi
+ * do FlowOps (PDV/retaguarda/Live) — por isso o aviso antigo aqui mandava não
+ * usar — mas o FlowOps mudou pra `crm.lurdsplussize.com.br` em 10/07/2026 e
+ * liberou o `www`.
+ *
+ * ⚠️ Continua valendo NÃO apontar pra `crm.lurdsplussize.com.br`: lá roda o
+ * sistema interno, e o ecommerce se anunciaria com a URL da retaguarda.
  */
 function resolveSiteUrl(): string {
   if (process.env.NEXT_PUBLIC_SITE_URL) return process.env.NEXT_PUBLIC_SITE_URL;

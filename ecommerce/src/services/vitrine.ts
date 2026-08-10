@@ -73,9 +73,15 @@ export async function fetchPrimeiraPagina(opcoes: {
 }
 
 export async function fetchVitrine(
-  opcoes: { ordenar?: OrdemVitrine; limite?: number; revalidate?: number } = {},
+  opcoes: {
+    ordenar?: OrdemVitrine;
+    limite?: number;
+    revalidate?: number;
+    /** Slug da categoria — vitrine de "Blusas", "Vestidos" etc. na home. */
+    categoria?: string;
+  } = {},
 ): Promise<Product[]> {
-  const { ordenar = 'relevancia', limite = 12, revalidate = 600 } = opcoes;
+  const { ordenar = 'relevancia', limite = 12, revalidate = 600, categoria } = opcoes;
 
   const params = new URLSearchParams({
     perPage: String(limite),
@@ -85,11 +91,12 @@ export async function fetchVitrine(
     // lá a cliente já está procurando aquilo especificamente.
     disponivel: '1',
   });
+  if (categoria) params.set('categoria', categoria);
 
   try {
     const r = await api<{ itens: PecaApi[] }>(`/public/loja/produtos?${params.toString()}`, {
       revalidate,
-      tags: ['catalogo', 'vitrine'],
+      tags: ['catalogo', categoria ? `categoria:${categoria}` : 'vitrine'],
       timeoutMs: 12000,
     });
     return (r?.itens ?? []).map(mapPeca);

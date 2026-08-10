@@ -96,7 +96,7 @@ const bodySchema = z.object({
   cep: z.string().min(8).max(9), // com ou sem hífen — findQuote normaliza
   items: z.array(cartLineSchema).min(1).max(50),
   couponCode: z.string().max(30).optional(),
-  paymentMethod: z.enum(['pix', 'card', 'boleto']),
+  paymentMethod: z.enum(['pix', 'card']),
   installments: z.number().int().min(1).max(12).optional(),
   // Token da Pagar.me gerado NO NAVEGADOR (PCI: o número do cartão não passa
   // por este servidor nem pelo backend). Só o token trafega.
@@ -232,14 +232,10 @@ export async function POST(req: Request): Promise<NextResponse<CreateOrderResult
 
   /* ── Meio de pagamento ── */
 
-  if (input.paymentMethod === 'boleto') {
-    // Boleto ainda não existe no contrato do backend — recusa elegante, e o
-    // contrato `ok:false` já cobre a UI.
-    return NextResponse.json({
-      ok: false,
-      error: 'Estamos finalizando este meio de pagamento — por enquanto, o Pix garante seu pedido (e com desconto).',
-    });
-  }
+  // Boleto saiu daqui em 10/08/2026: a loja não trabalha com ele, e o schema
+  // acima já rejeita o valor antes de chegar nesta altura. Antes existia uma
+  // aba de Boleto no checkout que só era recusada AQUI — depois da cliente ter
+  // preenchido o pedido inteiro.
 
   if (input.paymentMethod === 'card' && !input.cardToken) {
     // Cartão sem token = a tokenização no navegador não rodou (chave pública

@@ -69,7 +69,15 @@ export interface CouponResult {
 
 /* ---------------------------------------------------------------- PAGAMENTO */
 
-export type PaymentMethod = 'pix' | 'card' | 'boleto';
+/**
+ * A loja não trabalha com boleto (confirmado pelo dono em 10/08/2026). O tipo
+ * existia com `'boleto'` e o checkout tinha uma aba inteira e convincente pra
+ * ele — enquanto a rota `/api/checkout` recusava boleto no ÚLTIMO clique,
+ * depois da cliente já ter preenchido identificação, entrega e revisão.
+ * Tirar do TIPO (em vez de esconder a aba) é o que impede a aba de voltar por
+ * engano: qualquer código que mencione boleto agora não compila.
+ */
+export type PaymentMethod = 'pix' | 'card';
 
 export interface CardInput {
   /** NUNCA logar nem persistir — vai direto pro gateway tokenizar. */
@@ -83,7 +91,7 @@ export interface CardInput {
 /* ------------------------------------------------------------------- PEDIDO */
 
 export type OrderStatus =
-  | 'awaiting_payment' // criado, aguardando PIX/boleto/cartão
+  | 'awaiting_payment' // criado, aguardando PIX/cartão
   | 'paid'             // pagamento confirmado — ÚNICO estado que dispara purchase
   | 'cancelled'
   | 'expired';

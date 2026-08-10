@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
 
@@ -579,8 +580,8 @@ export class CustomersCrmService {
   // CLIENTE MISTO — atribui targetStoreId baseado em range CEP da Store
   // ─────────────────────────────────────────────────────────────────────────
   /**
-   * Atribui targetStoreId pra todos os Customers WC (originSource='woo')
-   * que têm CEP na CustomerAddress(type=entrega).
+   * Atribui targetStoreId pros Customers de canal ONLINE que têm CEP na
+   * CustomerAddress(type=entrega).
    *
    * Pra cada Customer:
    *   1. Pega o cep do endereço de entrega
@@ -588,9 +589,43 @@ export class CustomersCrmService {
    *   3. Procura Store cujos cepRanges cobrem esse CEP
    *   4. Atribui targetStoreId (loja física candidata)
    *
-   * Cliente que JÁ é da loja física (originSource='giga') não é tocado.
-   * Cliente WC sem CEP fica com targetStoreId=null.
+   * Cliente que JÁ é da loja física (originSource='giga'/'pdv'/'physical') não
+   * é tocado — ele já tem loja de origem, não precisa de candidata.
+   * Cliente online sem CEP fica com targetStoreId=null.
+   *
+   * ── QUEM ENTRA (corrigido em 10/08/2026) ──
+   *
+   * O filtro era `originSource: 'woo'` — só cliente do WooCommerce. Cliente do
+   * site novo nasce com `originSource: 'site'` (ver `LojaOrdersService.
+   * upsertCustomer`) e portanto NUNCA era processado: nunca ganhava loja
+   * candidata, e a vendedora nunca via o selo de cliente do site na ficha.
+   * `live` fica de fora de propósito — cliente da live já tem a loja que
+   * apresentou como origem, atribuir outra por CEP brigaria com isso.
    */
+  /**
+   * A atribuição rodava SÓ no botão da retaguarda — se ninguém clicasse,
+   * ninguém era atribuído, e não havia como perceber a falta (o cliente só
+   * aparecia sem loja candidata). Cliente novo chega todo dia; um passo manual
+   * que precisa acontecer todo dia é um passo que uma hora não acontece.
+   *
+   * 4h30 da manhã: longe do expediente e depois do espelho Wincred das 3h.
+   * O botão manual continua valendo pra quando o dono cadastrar range de CEP
+   * novo e quiser ver o efeito na hora, sem esperar a madrugada.
+   *
+   * `TARGET_STORES_CRON=0` desliga sem deploy.
+   */
+  @Cron('0 30 4 * * *', { name: 'customers-target-stores-cep' })
+  async assignTargetStoresByCepCron(): Promise<void> {
+    if (String(process.env.TARGET_STORES_CRON ?? '1') === '0') return;
+    try {
+      await this.assignTargetStoresByCep();
+    } catch (e: any) {
+      // Atribuição é conveniência de atendimento, não caminho de venda:
+      // falhar aqui não pode derrubar nada, só reclamar e tentar amanhã.
+      this.logger.error(`[target-stores] cron falhou: ${e?.message || e}`);
+    }
+  }
+
   async assignTargetStoresByCep(): Promise<{
     processados: number;
     atribuidos: number;
@@ -619,9 +654,11 @@ export class CustomersCrmService {
     }
     this.logger.log(`[target-stores] ${storeRanges.length} lojas com ranges CEP cadastrados`);
 
-    // 2) Carrega Customers WC com pelo menos 1 CustomerAddress
+    // 2) Carrega Customers de canal online com pelo menos 1 CustomerAddress.
+    // Lista explícita em vez de "tudo que não é loja física": originSource novo
+    // que apareça amanhã não entra aqui por acidente.
     const customers = await this.prisma.customer.findMany({
-      where: { originSource: 'woo' },
+      where: { originSource: { in: ['woo', 'site'] } },
       select: {
         id: true,
         targetStoreId: true,
@@ -778,10 +815,26 @@ export class CustomersCrmService {
   // ─────────────────────────────────────────────────────────────────────────
   /**
    * Timeline cronológica das interações do cliente:
-   *  - Compras (PdvSale finalizadas com customerCpf)
+   *  - Compras: PdvSale (loja física) + Order (site e live) — ver abaixo
    *  - Devoluções (PdvReturn com customerCpf)
    *  - Vales-troca emitidos (PdvReturn com creditoCode)
    *  - Marcados ativos no Giga (caixa com MARCADO='SIM' no nome do cliente)
+   *
+   * ── POR QUE A COMPRA ONLINE ENTRA AQUI (10/08/2026) ──
+   *
+   * Até esta data o histórico lia SÓ `PdvSale`. Uma cliente que comprava cinco
+   * vezes pelo site e uma vez na loja aparecia pra vendedora com UMA compra —
+   * a ficha dizia que ela era cliente nova quando ela era a melhor cliente da
+   * base. O dado sempre esteve ligado (o mesmo `Customer` é usado pelos dois
+   * lados); faltava esta consulta.
+   *
+   * ⚠️ O CPF É GRAVADO EM DOIS FORMATOS na tabela `orders`, e é fácil errar:
+   * pedido do WooCommerce passa por `cleanCpf()` e grava MASCARADO
+   * ("123.456.789-00"); pedido do site novo e da live gravam só DÍGITOS. Uma
+   * busca por um formato só devolve metade do histórico sem erro nenhum — a
+   * ficha pareceria certa, apenas incompleta. Por isso o `in` com as duas
+   * formas. Se algum dia a `orders` for normalizada num formato só, este `in`
+   * pode virar igualdade — até lá, não simplificar.
    */
   async historico(id: string, actor?: RequestActor) {
     const customer = await this.loadScoped(id, actor);
@@ -816,6 +869,33 @@ export class CustomersCrmService {
         payments: { select: { method: true, valor: true } },
       },
     });
+
+    // 1b. Compras ONLINE (Order: site WooCommerce, site novo e live).
+    // Cancelado/malsucedido fica de fora: não é compra, e contar como compra
+    // inflaria o LTV que a vendedora usa pra decidir como atender.
+    const cpfMascarado = `${cpf.slice(0, 3)}.${cpf.slice(3, 6)}.${cpf.slice(6, 9)}-${cpf.slice(9)}`;
+    let comprasOnline: any[] = [];
+    try {
+      comprasOnline = await (this.prisma as any).order.findMany({
+        where: {
+          customerCpf: { in: [cpf, cpfMascarado] },
+          status: { notIn: ['cancelled', 'failed'] },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 100,
+        select: {
+          id: true, wcOrderNumber: true, source: true, status: true,
+          totalAmount: true, sellerName: true, paymentInfo: true,
+          isPickup: true, pickupStoreCode: true,
+          paidAt: true, wcDateCreated: true, createdAt: true,
+          _count: { select: { items: true } },
+        },
+      });
+    } catch (e: any) {
+      // Mesma postura das outras seções: uma fonte que falha não pode deixar
+      // a ficha inteira em branco — a vendedora está com a cliente na frente.
+      this.logger.warn(`[historico] compras online falharam: ${e?.message}`);
+    }
 
     // 2. Devoluções (PdvReturn)
     const devolucoes = await (this.prisma as any).pdvReturn.findMany({
@@ -894,28 +974,76 @@ export class CustomersCrmService {
       this.logger.warn(`[historico] marcados Giga falhou: ${e?.message}`);
     }
 
+    /**
+     * Loja física e online viram UMA lista só, ordenada por data. A cliente
+     * não pensa em "canal" — ela comprou. `canal` fica em cada linha pra tela
+     * distinguir com um selo, mas o histórico é um só, que é a promessa do
+     * sistema unificado.
+     */
+    const comprasLoja = (compras as any[]).map((s) => ({
+      canal: 'loja' as const,
+      id: s.id,
+      saleNumber: String(s.id).slice(0, 8),
+      nfceNumber: s.nfceNumber,
+      storeCode: s.storeCode,
+      storeName: s.storeName,
+      total: s.total,
+      subtotal: s.subtotal,
+      desconto: s.desconto,
+      paymentMethod: s.paymentMethod,
+      sellerName: s.sellerName || s.vendedorName,
+      qtdItens: s._count?.items || 0,
+      qtdPayments: s._count?.payments || 0,
+      payments: s.payments,
+      status: null as string | null,
+      data: s.finalizedAt || s.createdAt,
+    }));
+
+    const comprasDoOnline = comprasOnline.map((o) => {
+      // `paymentInfo` só existe no pedido do site novo (JSON em texto, convenção
+      // da casa). WooCommerce e live não guardam — daí o chip de pagamento
+      // simplesmente não aparece, em vez de aparecer errado.
+      let metodo: string | null = null;
+      try {
+        if (o.paymentInfo) metodo = JSON.parse(o.paymentInfo)?.method ?? null;
+      } catch {
+        /* JSON quebrado não pode derrubar a ficha */
+      }
+      const canal: 'site' | 'live' = o.source === 'live' ? 'live' : 'site';
+      return {
+        canal,
+        id: o.id,
+        saleNumber: o.wcOrderNumber || String(o.id).slice(0, 8),
+        nfceNumber: null,
+        storeCode: o.pickupStoreCode || null,
+        // Onde a venda aconteceu, na linguagem de quem lê a ficha.
+        storeName: canal === 'live' ? 'LIVE' : o.isPickup ? 'SITE · retirada' : 'SITE',
+        total: o.totalAmount,
+        subtotal: o.totalAmount,
+        desconto: 0,
+        paymentMethod: metodo,
+        sellerName: o.sellerName,
+        qtdItens: o._count?.items || 0,
+        qtdPayments: metodo ? 1 : 0,
+        payments: metodo ? [{ method: metodo, valor: Number(o.totalAmount ?? 0) }] : [],
+        // Pedido online tem vida depois de pago (separando, enviado, entregue)
+        // — a vendedora precisa saber pra responder "cadê meu pedido?".
+        status: o.status as string | null,
+        data: o.paidAt || o.wcDateCreated || o.createdAt,
+      };
+    });
+
+    const comprasUnificadas = [...comprasLoja, ...comprasDoOnline].sort(
+      (a, b) => new Date(b.data).getTime() - new Date(a.data).getTime(),
+    );
+
     return {
       customer: {
         id: customer.id,
         name: customer.name,
         cpf: customer.cpf,
       },
-      compras: (compras as any[]).map((s) => ({
-        id: s.id,
-        saleNumber: String(s.id).slice(0, 8),
-        nfceNumber: s.nfceNumber,
-        storeCode: s.storeCode,
-        storeName: s.storeName,
-        total: s.total,
-        subtotal: s.subtotal,
-        desconto: s.desconto,
-        paymentMethod: s.paymentMethod,
-        sellerName: s.sellerName || s.vendedorName,
-        qtdItens: s._count?.items || 0,
-        qtdPayments: s._count?.payments || 0,
-        payments: s.payments,
-        data: s.finalizedAt || s.createdAt,
-      })),
+      compras: comprasUnificadas,
       devolucoes: (devolucoes as any[]).map((r) => ({
         id: r.id,
         returnNumber: String(r.id).slice(0, 8),

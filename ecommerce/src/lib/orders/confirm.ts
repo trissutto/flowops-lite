@@ -66,9 +66,8 @@ export interface ConfirmResult {
  * `card` no vocabulário do checkout é `credit_card` no do tracking (GA4/Meta).
  * Tolerante a já vir traduzido — webhook de backend em evolução manda os dois.
  */
-function metodoPurchase(method: string): 'pix' | 'credit_card' | 'boleto' {
+function metodoPurchase(method: string): 'pix' | 'credit_card' {
   if (method === 'pix') return 'pix';
-  if (method === 'boleto') return 'boleto';
   return 'credit_card';
 }
 

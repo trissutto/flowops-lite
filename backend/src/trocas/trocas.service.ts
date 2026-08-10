@@ -1101,7 +1101,10 @@ export class TrocasService {
 
   private portalUrl(): string {
     const front = (process.env.FRONTEND_URL || '').split(',')[0].trim();
-    return `${front || 'https://www.lurdsplussize.com.br'}/trocas`;
+    // O fallback era `www.lurdsplussize.com.br` — domínio do FlowOps até
+    // 10/07/2026. Hoje o portal roda em `crm.` e o `www` é do ecommerce, então
+    // o fallback antigo mandaria a cliente pra loja em vez do portal de troca.
+    return `${front || 'https://crm.lurdsplussize.com.br'}/trocas`;
   }
 
   /** Etapa 9 — "Produto Recebido" → automaticamente Em Conferência. */

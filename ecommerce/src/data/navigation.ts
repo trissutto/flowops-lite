@@ -1,4 +1,5 @@
 import type { NavItem } from '@/types';
+import { filtrarLinksVivos, isBuiltRoute } from '@/lib/routes';
 
 /**
  * ESTRUTURA DE NAVEGAÇÃO — fonte única do menu, do mega menu, do drawer
@@ -36,7 +37,13 @@ const EDITORIAL = {
   outlet: unsplash('photo-1441986300917-64674bd600d8'),
 } as const;
 
-export const navigation: NavItem[] = [
+/**
+ * Desenho COMPLETO da navegação — inclui eixos e sub-links de páginas que
+ * ainda não existem. Não exportado direto: passa por `podarNavegacao` logo
+ * abaixo, que remove o que levaria a 404. Editar aqui é editar o mapa; o que
+ * aparece na tela é o que já foi construído.
+ */
+const NAVEGACAO_COMPLETA: NavItem[] = [
   {
     label: 'Novidades',
     href: '/novidades',
@@ -223,6 +230,48 @@ export const navigation: NavItem[] = [
     },
   },
 ];
+
+/**
+ * PODA — o menu só mostra o que leva a algum lugar.
+ *
+ * A navegação acima descreve a loja pronta; a medição de 10/08/2026 achou 49
+ * destinos internos mortos contra 27 páginas reais, 17 deles vindo daqui.
+ * Enquanto o site estava em construção, link furado "caindo no not-found" era
+ * tolerável. Com tráfego pago não é: a cliente abre "Looks" no menu, escolhe
+ * "Look festa" e leva um 404 — e não volta.
+ *
+ * A poda é em cascata, porque esconder só a folha deixa buraco:
+ *   · coluna sem nenhum link vivo não aparece;
+ *   · eixo que perdeu TODAS as colunas, cards e atalhos vira link simples
+ *     (sem mega menu vazio abrindo no hover);
+ *   · eixo cujo próprio destino não existe some do menu.
+ *
+ * Nada é apagado do desenho — página nova entra em `lib/routes.ts` e o link
+ * reaparece sozinho.
+ */
+function podarNavegacao(itens: NavItem[]): NavItem[] {
+  const vivos: NavItem[] = [];
+  for (const item of itens) {
+    if (!isBuiltRoute(item.href)) continue;
+    if (!item.menu) {
+      vivos.push(item);
+      continue;
+    }
+    const columns = item.menu.columns
+      .map((c) => ({ ...c, links: filtrarLinksVivos(c.links) }))
+      .filter((c) => c.links.length > 0);
+    const features = filtrarLinksVivos(item.menu.features);
+    const quickLinks = filtrarLinksVivos(item.menu.quickLinks);
+
+    const temMenu = columns.length > 0 || features.length > 0 || quickLinks.length > 0;
+    vivos.push(
+      temMenu ? { ...item, menu: { columns, features, quickLinks } } : { ...item, menu: undefined },
+    );
+  }
+  return vivos;
+}
+
+export const navigation: NavItem[] = podarNavegacao(NAVEGACAO_COMPLETA);
 
 /**
  * Barra superior — mensagens rotativas. Campanha nova = só editar aqui.

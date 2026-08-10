@@ -316,9 +316,7 @@ export default function CheckoutPage() {
               payment
                 ? payment.method === 'pix'
                   ? `PIX à vista · ${PIX_DESCONTO_PCT}% off aplicado no total`
-                  : payment.method === 'boleto'
-                    ? 'Boleto bancário'
-                    : `Cartão de crédito · ${payment.installments ?? 1}x sem juros`
+                  : `Cartão de crédito · ${payment.installments ?? 1}x sem juros`
                 : undefined
             }
             onEdit={() => setStep(3)}

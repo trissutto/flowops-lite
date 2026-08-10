@@ -25,6 +25,13 @@ const LOJA_KEY = 'lurds_loja';
 /** Janela de inatividade que encerra a sessão — igual à do GA4. */
 const SESSION_TIMEOUT_MS = 30 * 60 * 1000;
 
+/**
+ * Por quanto tempo a origem da visita continua valendo — a "janela de
+ * atribuição". 30 dias é o padrão de last-click do mercado (é o mesmo default
+ * do Meta e do GA4), então o relatório da casa bate com o do Gerenciador.
+ */
+const ATTRIBUTION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
 /* ────────────────────────────────────────────────────────────────────────────
  * Storage à prova de bala
  * ──────────────────────────────────────────────────────────────────────────── */
