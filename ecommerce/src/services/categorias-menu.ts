@@ -54,6 +54,16 @@ export interface CategoriaVitrine {
   focoX: number | null;
   focoY: number | null;
   focoZoom: number | null;
+  /**
+   * SEGUNDO NÍVEL — "Blusas" → "Manga curta" (dono, 10/08/2026).
+   *
+   * Vira filtro dentro da página da categoria, não card no menu principal. O
+   * backend só manda as que TÊM peça publicada: subcategoria vazia é promessa
+   * que não se cumpre — a cliente clica e recebe página em branco.
+   *
+   * Vazio enquanto ninguém classificou; a página se comporta como antes.
+   */
+  subcategorias?: Array<{ slug: string; nome: string; qtdPecas: number }>;
 }
 
 /**

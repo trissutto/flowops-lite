@@ -267,15 +267,66 @@ export class SiteCategoriasService {
   }
 
   /** O que o site consome: só categoria ATIVA e COM peça. */
+  /**
+   * Quantas peças publicadas em cada SUBCATEGORIA — o que decide se ela
+   * aparece. Subcategoria vazia no menu é promessa que não se cumpre: a
+   * cliente clica em "Manga curta" e recebe página em branco.
+   */
+  private async pecasPorSubcategoria(): Promise<Map<string, number>> {
+    const m = new Map<string, number>();
+    try {
+      const linhas: Array<{ subcategoria: string | null; _count: { _all: number } }> =
+        await (this.prisma as any).siteProduto.groupBy({
+          by: ['subcategoria'],
+          where: { publicado: true, subcategoria: { not: null } },
+          _count: { _all: true },
+        });
+      for (const l of linhas) {
+        if (l.subcategoria) m.set(this.normSlug(l.subcategoria), l._count._all);
+      }
+    } catch (e: any) {
+      // Coluna ainda não existe (deploy antigo): o site segue com um nível só.
+      this.logger.warn(`[categorias] subcategorias indisponíveis: ${e?.message || e}`);
+    }
+    return m;
+  }
+
   async listarPublico() {
-    const [catalogo, configs] = await Promise.all([
+    const [catalogo, configs, porSub] = await Promise.all([
       this.doCatalogo(),
       (this.prisma as any).siteCategoria.findMany({ orderBy: { ordem: 'asc' } }),
+      this.pecasPorSubcategoria(),
     ]);
     const porSlug = new Map<string, any>(configs.map((c: any) => [c.slug, c]));
 
+    /**
+     * SUBCATEGORIAS de cada categoria — o segundo nível ("Blusas" → "Manga
+     * curta"). Só entram as que têm peça publicada, pelo mesmo motivo que
+     * categoria vazia não entra: menu que leva a lugar vazio custa confiança.
+     */
+    const subsPorPai = new Map<string, Array<{ slug: string; nome: string; qtdPecas: number }>>();
+    for (const c of configs as any[]) {
+      if (!c.paiSlug || c.ativo === false) continue;
+      const qtd = porSub.get(this.normSlug(c.slug)) ?? 0;
+      if (qtd <= 0) continue;
+      const pai = this.normSlug(c.paiSlug);
+      if (!subsPorPai.has(pai)) subsPorPai.set(pai, []);
+      subsPorPai.get(pai)!.push({
+        slug: c.slug,
+        nome: c.nome || this.nomeDoSlug(c.slug),
+        qtdPecas: qtd,
+      });
+    }
+
+    // Subcategoria NUNCA vira card de primeiro nível — ela é filtro dentro do
+    // pai. Sem este filtro, "Manga curta" apareceria no menu ao lado de
+    // "Blusas", como se fossem o mesmo nível.
+    const ehSub = new Set(
+      (configs as any[]).filter((c) => c.paiSlug).map((c) => this.normSlug(c.slug)),
+    );
+
     const validas = Array.from(catalogo.entries()).filter(
-      ([slug]) => porSlug.get(slug)?.ativo !== false,
+      ([slug]) => porSlug.get(slug)?.ativo !== false && !ehSub.has(this.normSlug(slug)),
     );
     const linhas = await Promise.all(
       validas.map(async ([slug, qtdPecas]) => {
@@ -295,6 +346,8 @@ export class SiteCategoriasService {
           ordem: c?.ordem ?? 0,
           destaque: c?.destaque ?? false,
           qtdPecas,
+          /** Segundo nível — vira filtro dentro da página da categoria. */
+          subcategorias: subsPorPai.get(this.normSlug(slug)) ?? [],
         };
       }),
     );

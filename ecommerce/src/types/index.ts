@@ -214,6 +214,8 @@ export type FilterState = Record<string, string[] | [number, number] | boolean |
 
 export interface ProductQuery {
   category?: string;
+  /** Segundo nível da árvore do site: 'manga-curta' dentro de 'blusas'. */
+  subcategoria?: string;
   search?: string;
   sort?: SortOption;
   filters?: FilterState;

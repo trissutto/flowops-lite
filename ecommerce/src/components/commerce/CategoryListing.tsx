@@ -33,6 +33,12 @@ const PER_PAGE = 12;
 interface CategoryListingProps {
   /** Vazio = catálogo inteiro (é assim que /novidades reusa esta listagem). */
   category: string;
+  /**
+   * Subcategoria vinda da URL (`?sub=manga-curta`). Entra na `queryKey` pra
+   * a troca de chip refazer a busca — sem isso o react-query devolveria o
+   * resultado da subcategoria anterior, em cache.
+   */
+  subcategoria?: string;
   categoryName: string;
   interruptions?: GridInterruption[];
   mode?: 'infinite' | 'pages';
@@ -99,6 +105,7 @@ function CategoryListingInner({
   primeiraPagina,
   soPromocao,
   filtrosIniciais,
+  subcategoria,
 }: CategoryListingProps) {
   const state = useProductFilters(filtrosIniciais ?? {}, ordemPadrao);
   const [view, setView] = useState<'editorial' | 'grid'>('editorial');
@@ -142,7 +149,7 @@ function CategoryListingInner({
     state.sort === ordemPadrao;
 
   const query = useInfiniteQuery({
-    queryKey: ['products', category, state.filters, state.sort, debouncedSearch, tetoDePreco, soPromocao],
+    queryKey: ['products', category, subcategoria, state.filters, state.sort, debouncedSearch, tetoDePreco, soPromocao],
     initialPageParam: 1,
     ...(primeiraPagina && semInterferencia
       ? {
@@ -161,6 +168,7 @@ function CategoryListingInner({
     queryFn: ({ pageParam }) =>
       fetchProducts({
         category,
+        subcategoria,
         search: debouncedSearch,
         sort: state.sort,
         filters: state.filters,

@@ -4,11 +4,13 @@ import { Container } from '@/components/layout/Container';
 import { SectionTitle } from '@/components/sections/SectionTitle';
 import { Breadcrumb } from '@/components/navigation/Breadcrumb';
 import { CategoryListing } from '@/components/commerce/CategoryListing';
+import { ChipsSubcategoria } from '@/components/commerce/ChipsSubcategoria';
 import { InstagramCard } from '@/components/cards/InstagramCard';
 import { NewsletterBlock } from '@/components/sections/NewsletterBlock';
 import { EditorialCard } from '@/components/sections/ImageGrid';
 import { CATEGORY_SLUGS, categoryMeta } from '@/services/products';
 import { fetchPrimeiraPagina } from '@/services/vitrine';
+import { getCategorias } from '@/services/categorias-menu';
 import { editorials, instagramPosts, storeInteriorImage } from '@/data/content';
 import { breadcrumbSchema, buildMetadata, jsonLdGraph } from '@/lib/seo';
 

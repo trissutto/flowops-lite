@@ -195,7 +195,7 @@ function paramsDosFiltros(filters: FilterState): Record<string, string> {
 
 export async function fetchProducts(query: ProductQuery = {}): Promise<Paginated<Product>> {
   const {
-    category, search, sort = 'relevancia', filters = {}, page = 1, perPage = 12,
+    category, subcategoria, search, sort = 'relevancia', filters = {}, page = 1, perPage = 12,
     tetoDePreco, soPromocao,
   } = query;
 
@@ -213,6 +213,8 @@ export async function fetchProducts(query: ProductQuery = {}): Promise<Paginated
     params.set('precoMax', String(Number.isFinite(pedido) && pedido > 0 ? Math.min(pedido, tetoDePreco) : tetoDePreco));
   }
   if (category) params.set('categoria', category);
+  // Segundo nível da árvore do site — vem do `?sub=` da URL da categoria.
+  if (subcategoria) params.set('subcategoria', subcategoria);
   // Mesma chave que o controller lê ("promocao") — ver o comentário
   // equivalente em services/vitrine.ts.
   if (soPromocao) params.set('promocao', '1');
