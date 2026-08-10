@@ -167,11 +167,30 @@ export class SiteCategoriasService {
     slug: string, nomeCategoria: string, atual: any,
   ): Promise<FotoResolvida> {
     try {
-      // Foto MANUAL (sem imagemDeRef) nunca é sobrescrita pelo automático.
+      /**
+       * Foto MANUAL (sem imagemDeRef) nunca é sobrescrita pelo automático — e
+       * VAI SEM RECORTE.
+       *
+       * O foco por IA existe pra foto AUTOMÁTICA: ela é a imagem de catálogo de
+       * uma peça (corpo inteiro, roupa pequena no meio), e sem um close o card
+       * viraria uma pessoa distante. Numa foto que alguém subiu, essa mesma
+       * ajuda estraga: o dono mandou as 12 artes já enquadradas, com a modelo
+       * no tamanho que ele quis e o rótulo desenhado — e a IA dava zoom por
+       * cima, cortando cabeça e pés. Só JAQUETAS escapou, porque a leitura
+       * ainda não tinha rodado nela (10/08/2026: "deixe todas na mesma
+       * proporção da jaqueta").
+       *
+       * Quem sobe a foto já decidiu o enquadramento. Devolver foco nulo faz o
+       * card mostrar a imagem inteira, que é o que ele compôs.
+       *
+       * Isto CONSERTA sozinho as fotos que já estão com foco gravado: o valor
+       * continua na linha (voltar é reativar esta leitura), só não é mais
+       * enviado pra vitrine.
+       */
       if (atual?.imagemUrl && !atual?.imagemDeRef) {
         return {
           imagemUrl: atual.imagemUrl, alt: atual.alt,
-          focoX: atual.focoX, focoY: atual.focoY, focoZoom: atual.focoZoom,
+          focoX: null, focoY: null, focoZoom: null,
         };
       }
 
@@ -417,16 +436,15 @@ export class SiteCategoriasService {
         objectKey: key,
         // imagemDeRef=null MARCA foto manual — nunca é sobrescrita pelo automático.
         imagemDeRef: null,
-        // Foco zerado: o da foto ANTERIOR não vale pra foto nova. A leitura
-        // vem logo abaixo, em segundo plano — quem subiu a foto não fica
-        // esperando a IA com a tela travada.
+        // Foco zerado, e SEM chamar a IA depois: foto que alguém subiu vai
+        // inteira, com o enquadramento que essa pessoa escolheu. Ver
+        // `resolverFotoEFoco`.
         focoX: null,
         focoY: null,
         focoZoom: null,
         atualizadoPor: usuario ?? null,
       },
     });
-    this.agendarFoco(atual.slug, url, atual.nome || this.nomeDoSlug(atual.slug));
 
     // Só apaga a antiga DEPOIS que a nova está gravada (mesma regra dos banners).
     if (anterior) {
