@@ -6,7 +6,7 @@ import { LojaCatalogService, ListarParams } from './loja-catalog.service';
 import { SiteSyncService } from './site-sync.service';
 import { InstagramFeedService } from './instagram-feed.service';
 import { GrupoRefService } from './grupo-ref.service';
-import { ClassificacaoService } from './classificacao.service';
+import { ClassificacaoService, FiltroClassificacao } from './classificacao.service';
 
 /**
  * CATÁLOGO PÚBLICO DO E-COMMERCE (sprint 008).
@@ -237,21 +237,28 @@ export class LojaCatalogAdminController {
   classListar(@Req() req: any, @Query() q: any) {
     this.requireAdmin(req);
     return this.classificacao.listar({
-      publicado: q.publicado === undefined ? undefined : this.booleanoAdmin(q.publicado),
-      semSubcategoria: this.booleanoAdmin(q.semSubcategoria),
-      semCategoria: this.booleanoAdmin(q.semCategoria),
-      busca: q.busca || undefined,
-      categoria: q.categoria || undefined,
-      subcategoria: q.subcategoria || undefined,
+      ...this.filtroClassificacao(q),
       page: q.page ? Number(q.page) : 1,
       perPage: q.perPage ? Number(q.perPage) : 50,
     });
   }
 
+  /** Todas as REFs do filtro — o "marcar as N do filtro" da tela. */
+  @Get('classificacao/refs')
+  classRefs(@Req() req: any, @Query() q: any) {
+    this.requireAdmin(req);
+    return this.classificacao.refs(this.filtroClassificacao(q));
+  }
+
   @Post('classificacao')
   classAplicar(
     @Req() req: any,
-    @Body() body: { refs: string[]; categoria: string | null; subcategoria: string | null },
+    @Body() body: {
+      refs: string[];
+      categoria: string | null;
+      subcategoria: string | null;
+      manterCategoria?: boolean;
+    },
   ) {
     this.requireAdmin(req);
     const quem = req?.user?.email || req?.user?.name || 'admin';
@@ -259,8 +266,22 @@ export class LojaCatalogAdminController {
       refs: body?.refs || [],
       categoria: body?.categoria ?? null,
       subcategoria: body?.subcategoria ?? null,
+      manterCategoria: body?.manterCategoria === true,
       quem,
     });
+  }
+
+  /** Os mesmos filtros na lista e no "marcar todas" — divergir marcaria peça fora do filtro. */
+  private filtroClassificacao(q: any): FiltroClassificacao {
+    return {
+      publicado: q.publicado === undefined ? undefined : this.booleanoAdmin(q.publicado),
+      semSubcategoria: this.booleanoAdmin(q.semSubcategoria),
+      semCategoria: this.booleanoAdmin(q.semCategoria),
+      busca: q.busca || undefined,
+      excluir: q.excluir || undefined,
+      categoria: q.categoria || undefined,
+      subcategoria: q.subcategoria || undefined,
+    };
   }
 
   /** Cria uma subcategoria dentro de uma categoria — "Manga curta" em "Blusas". */

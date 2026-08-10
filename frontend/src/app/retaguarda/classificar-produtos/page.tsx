@@ -23,11 +23,22 @@
  *
  * A árvore é a do SITE — Blusas → Manga curta —, com nome que a cliente
  * entende. Não é o grupo fiscal do Giga.
+ *
+ * ── OS ATALHOS (10/08/2026) ──
+ *
+ * O nome do produto JÁ diz a resposta: "Blusa Manga Curta", "Regata Alcinha",
+ * "Biquini Com Bojo", "Saída de Praia Longa". Então o mutirão que o dono pediu
+ * — separar blusas por manga e criar Moda praia — é filtro + seleção em bloco,
+ * não peça a peça.
+ *
+ * O que os atalhos NÃO fazem: marcar sozinhos. Decisão do dono ("só filtra, eu
+ * marco"). O nome acerta a maioria, e a minoria que erra ("Conjunto Blusa
+ * Manga Curta + Calça" não é blusa) é justamente a que não pode passar batida.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@/lib/api';
-import { Loader2, AlertCircle, Check, Tags, Search, Plus } from 'lucide-react';
+import { Loader2, AlertCircle, Check, Tags, Search, Plus, X, Zap } from 'lucide-react';
 
 interface Peca {
   ref: string;
@@ -48,6 +59,44 @@ interface Progresso {
   publicadas: number; semCategoria: number; semSubcategoria: number; comCategoria: number;
 }
 
+/**
+ * ATALHOS — um clique arma filtro E destino.
+ *
+ * `excluir` é o que faz o atalho valer: "Manga 3/4" existe em blusa, vestido E
+ * macacão, e "Conjunto Blusa Manga Curta + Calça" tem a palavra "blusa" sem ser
+ * uma. Sem os termos negativos, o filtro viria contaminado e a seleção em bloco
+ * perderia a razão de existir — voltaria a ser conferir peça por peça.
+ *
+ * Fica editável na tela de propósito: catálogo tem nome que ninguém previu, e
+ * ajustar a palavra na hora é mais rápido que pedir deploy.
+ */
+const NAO_E_BLUSA = 'conjunto vestido macacao macaquinho saia calca short camisola pijama';
+const ATALHOS: Array<{
+  categoria: string;
+  rotulo: string;
+  itens: Array<{ nome: string; slug: string; busca: string; excluir?: string }>;
+}> = [
+  {
+    categoria: 'blusas',
+    rotulo: 'Blusas',
+    itens: [
+      { nome: 'Manga curta', slug: 'manga-curta', busca: 'manga curta', excluir: NAO_E_BLUSA },
+      { nome: 'Manga longa', slug: 'manga-longa', busca: 'manga longa', excluir: NAO_E_BLUSA },
+      { nome: 'Manga 3/4', slug: 'manga-3-4', busca: 'manga 3/4', excluir: NAO_E_BLUSA },
+      { nome: 'Regata', slug: 'regata', busca: 'regata', excluir: NAO_E_BLUSA },
+    ],
+  },
+  {
+    categoria: 'moda-praia',
+    rotulo: 'Moda praia',
+    itens: [
+      { nome: 'Biquíni', slug: 'biquini', busca: 'biquini' },
+      { nome: 'Maiô', slug: 'maio', busca: 'maio' },
+      { nome: 'Saída de praia', slug: 'saida-de-praia', busca: 'saida de praia' },
+    ],
+  },
+];
+
 export default function ClassificarProdutosPage() {
   const [arvore, setArvore] = useState<Arvore>({ categorias: [], subcategorias: [] });
   const [progresso, setProgresso] = useState<Progresso | null>(null);
@@ -56,24 +105,45 @@ export default function ClassificarProdutosPage() {
   const [erro, setErro] = useState<string | null>(null);
   const [aviso, setAviso] = useState<string | null>(null);
   const [aplicando, setAplicando] = useState(false);
+  const [marcandoTodas, setMarcandoTodas] = useState(false);
 
   // ── filtros ──
   const [publicado, setPublicado] = useState<'1' | '0' | ''>('1'); // publicados primeiro
   const [semCategoria, setSemCategoria] = useState(true);
+  const [semSubcategoria, setSemSubcategoria] = useState(false);
+  const [catFiltro, setCatFiltro] = useState('');
   const [busca, setBusca] = useState('');
   const [buscaAtiva, setBuscaAtiva] = useState('');
+  const [excluir, setExcluir] = useState('');
+  const [excluirAtivo, setExcluirAtivo] = useState('');
+  const [perPage, setPerPage] = useState(60);
   const [page, setPage] = useState(1);
 
   // ── seleção e destino ──
   const [marcadas, setMarcadas] = useState<Set<string>>(new Set());
   const [destCategoria, setDestCategoria] = useState('');
   const [destSubcategoria, setDestSubcategoria] = useState('');
+  const [manterCategoria, setManterCategoria] = useState(false);
   const [novaSub, setNovaSub] = useState('');
+  /** Âncora do shift+clique — marcar um intervalo inteiro sem clicar 40 vezes. */
+  const ancora = useRef<number | null>(null);
 
   useEffect(() => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('flowops_token') : null;
     if (!token) window.location.href = '/login';
   }, []);
+
+  /** Os filtros viram query em UM lugar só: a lista e o "marcar todas" precisam ser o MESMO filtro. */
+  function queryFiltros(): URLSearchParams {
+    const q = new URLSearchParams();
+    if (publicado) q.set('publicado', publicado);
+    if (semCategoria) q.set('semCategoria', '1');
+    if (semSubcategoria) q.set('semSubcategoria', '1');
+    if (catFiltro) q.set('categoria', catFiltro);
+    if (buscaAtiva.trim().length >= 2) q.set('busca', buscaAtiva.trim());
+    if (excluirAtivo.trim()) q.set('excluir', excluirAtivo.trim());
+    return q;
+  }
 
   async function carregarArvore() {
     try {
@@ -88,12 +158,16 @@ export default function ClassificarProdutosPage() {
     setLoading(true);
     setErro(null);
     try {
-      const q = new URLSearchParams({ page: String(page), perPage: '60' });
-      if (publicado) q.set('publicado', publicado);
-      if (semCategoria) q.set('semCategoria', '1');
-      if (buscaAtiva.trim().length >= 2) q.set('busca', buscaAtiva.trim());
+      const q = queryFiltros();
+      q.set('page', String(page));
+      q.set('perPage', String(perPage));
       setLista(await api<Lista>(`/loja-catalog/classificacao?${q}`));
-      setMarcadas(new Set());
+      /**
+       * A seleção NÃO é limpa ao trocar de página: com 138 peças no filtro e 60
+       * por página, limpar aqui obrigaria a aplicar três vezes — e é aí que se
+       * perde a conta de onde parou. Quem quiser zerar tem o "limpar".
+       */
+      ancora.current = null;
     } catch (e: any) {
       setErro(e?.message ?? 'Falha ao carregar');
     } finally {
@@ -102,7 +176,10 @@ export default function ClassificarProdutosPage() {
   }
 
   useEffect(() => { carregarArvore(); }, []);
-  useEffect(() => { carregarLista(); /* eslint-disable-next-line */ }, [publicado, semCategoria, buscaAtiva, page]);
+  useEffect(() => {
+    carregarLista();
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, [publicado, semCategoria, semSubcategoria, catFiltro, buscaAtiva, excluirAtivo, perPage, page]);
 
   /** Só as subcategorias da categoria escolhida — as outras não fazem sentido. */
   const subsDaCategoria = useMemo(
@@ -110,38 +187,113 @@ export default function ClassificarProdutosPage() {
     [arvore.subcategorias, destCategoria],
   );
 
-  function alternar(ref: string) {
-    setMarcadas((s) => {
-      const n = new Set(s);
-      if (n.has(ref)) n.delete(ref); else n.add(ref);
-      return n;
+  const itens = lista?.itens ?? [];
+  const marcadasNaPagina = useMemo(
+    () => itens.filter((p) => marcadas.has(p.ref)).length,
+    [itens, marcadas],
+  );
+
+  /**
+   * Clique numa linha. Com SHIFT, marca do último clique até aqui — é o gesto
+   * que todo mundo já conhece de gerenciador de arquivos, e o que torna
+   * "marcar 30 seguidas" um gesto em vez de trinta.
+   */
+  function clicarItem(indice: number, shift: boolean) {
+    const alvo = itens[indice];
+    if (!alvo) return;
+    setMarcadas((atual) => {
+      const nova = new Set(atual);
+      if (shift && ancora.current !== null) {
+        const [ini, fim] = [ancora.current, indice].sort((a, b) => a - b);
+        // O intervalo herda a ação da PONTA: se a âncora estava sendo marcada,
+        // marca tudo; se desmarcada, desmarca tudo.
+        const marcar = !atual.has(alvo.ref);
+        for (let i = ini; i <= fim; i++) {
+          const r = itens[i]?.ref;
+          if (!r) continue;
+          if (marcar) nova.add(r); else nova.delete(r);
+        }
+      } else if (nova.has(alvo.ref)) {
+        nova.delete(alvo.ref);
+      } else {
+        nova.add(alvo.ref);
+      }
+      return nova;
     });
-  }
-  function marcarTodas() {
-    setMarcadas((s) =>
-      s.size === (lista?.itens.length ?? 0) ? new Set() : new Set((lista?.itens ?? []).map((p) => p.ref)),
-    );
+    ancora.current = indice;
   }
 
-  async function criarSubcategoria() {
-    if (!destCategoria || !novaSub.trim()) return;
+  function alternarPagina() {
+    const todasMarcadas = itens.length > 0 && marcadasNaPagina === itens.length;
+    setMarcadas((atual) => {
+      const nova = new Set(atual);
+      for (const p of itens) {
+        if (todasMarcadas) nova.delete(p.ref); else nova.add(p.ref);
+      }
+      return nova;
+    });
+  }
+
+  /** Marca as N do FILTRO INTEIRO, não só as da página. */
+  async function marcarFiltroInteiro() {
+    setMarcandoTodas(true);
+    setErro(null);
+    try {
+      const r = await api<{ refs: string[]; total: number; limitado: boolean }>(
+        `/loja-catalog/classificacao/refs?${queryFiltros()}`,
+      );
+      setMarcadas((atual) => new Set([...atual, ...r.refs]));
+      if (r.limitado) {
+        setAviso(`Marcadas ${r.refs.length} de ${r.total} — o resto vem na próxima leva.`);
+      }
+    } catch (e: any) {
+      setErro(e?.message ?? 'Falha ao marcar todas');
+    } finally {
+      setMarcandoTodas(false);
+    }
+  }
+
+  /** Um clique arma filtro E destino — ver ATALHOS. */
+  function usarAtalho(categoria: string, item: (typeof ATALHOS)[number]['itens'][number]) {
+    setBusca(item.busca);
+    setBuscaAtiva(item.busca);
+    setExcluir(item.excluir ?? '');
+    setExcluirAtivo(item.excluir ?? '');
+    // O atalho procura a peça, esteja ela classificada ou não: metade das
+    // blusas já está em "blusas" e só falta a manga.
+    setSemCategoria(false);
+    setSemSubcategoria(false);
+    setCatFiltro('');
+    setPage(1);
+    setMarcadas(new Set());
+    setDestCategoria(categoria);
+    setManterCategoria(false);
+    const existe = arvore.subcategorias.some((s) => s.slug === item.slug && s.pai === categoria);
+    setDestSubcategoria(existe ? item.slug : '');
+    setNovaSub(existe ? '' : item.nome);
+  }
+
+  async function criarSubcategoria(nome?: string) {
+    const alvo = (nome ?? novaSub).trim();
+    if (!destCategoria || !alvo) return;
     try {
       const r = await api<{ ok: boolean; slug?: string; erro?: string }>(
         '/loja-catalog/classificacao/subcategoria',
-        { method: 'POST', body: JSON.stringify({ pai: destCategoria, nome: novaSub.trim() }) },
+        { method: 'POST', body: JSON.stringify({ pai: destCategoria, nome: alvo }) },
       );
       if (!r.ok) throw new Error(r.erro || 'Falha ao criar');
       setNovaSub('');
       await carregarArvore();
       if (r.slug) setDestSubcategoria(r.slug);
-      setAviso(`Subcategoria criada.`);
+      setAviso(`Subcategoria "${alvo}" criada.`);
     } catch (e: any) {
       setErro(e?.message ?? 'Falha ao criar subcategoria');
     }
   }
 
   async function aplicar() {
-    if (!marcadas.size || !destCategoria) return;
+    if (!marcadas.size) return;
+    if (!manterCategoria && !destCategoria) return;
     setAplicando(true);
     setErro(null);
     setAviso(null);
@@ -152,13 +304,15 @@ export default function ClassificarProdutosPage() {
           method: 'POST',
           body: JSON.stringify({
             refs: [...marcadas],
-            categoria: destCategoria,
+            categoria: manterCategoria ? null : destCategoria,
             subcategoria: destSubcategoria || null,
+            manterCategoria,
           }),
         },
       );
       if (!r.ok) throw new Error(r.erro || 'Falha ao aplicar');
       setAviso(`${r.atualizadas} peça(s) classificada(s).`);
+      setMarcadas(new Set());
       await carregarArvore();
       await carregarLista();
     } catch (e: any) {
@@ -172,6 +326,10 @@ export default function ClassificarProdutosPage() {
     arvore.categorias.find((c) => c.slug === slug)?.nome
     ?? arvore.subcategorias.find((c) => c.slug === slug)?.nome
     ?? slug;
+
+  const subFaltando =
+    !!destCategoria && !!novaSub.trim()
+    && !arvore.subcategorias.some((s) => s.slug === destSubcategoria && s.pai === destCategoria);
 
   return (
     <div className="max-w-6xl mx-auto p-6">
@@ -194,6 +352,29 @@ export default function ClassificarProdutosPage() {
         </div>
       )}
 
+      {/* ── ATALHOS — um clique arma filtro e destino ── */}
+      <div className="mb-4 bg-white rounded-lg shadow border p-4">
+        <div className="text-xs font-bold uppercase text-slate-400 mb-2 flex items-center gap-1.5">
+          <Zap className="w-3.5 h-3.5" /> Atalhos
+        </div>
+        <div className="flex flex-col gap-2">
+          {ATALHOS.map((fam) => (
+            <div key={fam.categoria} className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-semibold text-slate-600 w-24 shrink-0">{fam.rotulo}</span>
+              {fam.itens.map((it) => (
+                <button
+                  key={it.slug}
+                  onClick={() => usarAtalho(fam.categoria, it)}
+                  className="px-3 py-1.5 rounded-full border text-sm hover:bg-brand/10 hover:border-brand/40 transition"
+                >
+                  {it.nome}
+                </button>
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
+
       {/* ── FILTROS ── */}
       <div className="mb-4 bg-white rounded-lg shadow border p-4 flex flex-wrap items-end gap-3">
         <div>
@@ -208,24 +389,65 @@ export default function ClassificarProdutosPage() {
             <option value="">Todos</option>
           </select>
         </div>
-        <label className="flex items-center gap-2 text-sm text-slate-700 pb-2">
-          <input
-            type="checkbox"
-            checked={semCategoria}
-            onChange={(e) => { setSemCategoria(e.target.checked); setPage(1); }}
-          />
-          Só as sem categoria
-        </label>
+        <div>
+          <label className="block text-xs text-slate-500 mb-1">Categoria atual</label>
+          <select
+            value={catFiltro}
+            onChange={(e) => { setCatFiltro(e.target.value); setPage(1); }}
+            className="px-3 py-2 border rounded text-sm bg-white min-w-[140px]"
+          >
+            <option value="">Qualquer uma</option>
+            {arvore.categorias.map((c) => (
+              <option key={c.slug} value={c.slug}>{c.nome}</option>
+            ))}
+          </select>
+        </div>
+        <div className="flex flex-col gap-1 pb-1">
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              checked={semCategoria}
+              onChange={(e) => { setSemCategoria(e.target.checked); setPage(1); }}
+            />
+            Só as sem categoria
+          </label>
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              checked={semSubcategoria}
+              onChange={(e) => { setSemSubcategoria(e.target.checked); setPage(1); }}
+            />
+            Só as sem subcategoria
+          </label>
+        </div>
         <form
-          onSubmit={(e) => { e.preventDefault(); setBuscaAtiva(busca); setPage(1); }}
-          className="flex items-end gap-2 flex-1 min-w-[240px]"
+          onSubmit={(e) => {
+            e.preventDefault();
+            setBuscaAtiva(busca);
+            setExcluirAtivo(excluir);
+            setPage(1);
+          }}
+          className="flex items-end gap-2 flex-1 min-w-[320px]"
         >
           <div className="flex-1">
-            <label className="block text-xs text-slate-500 mb-1">Buscar por nome ou REF</label>
+            <label className="block text-xs text-slate-500 mb-1">
+              Descrição ou REF <span className="text-slate-400">— acento não importa</span>
+            </label>
             <input
               value={busca}
               onChange={(e) => setBusca(e.target.value)}
-              placeholder="ex: VESTIDO, MACAQUINHO, 900887"
+              placeholder="ex: manga curta, biquini, saida de praia"
+              className="w-full px-3 py-2 border rounded text-sm"
+            />
+          </div>
+          <div className="flex-1">
+            <label className="block text-xs text-slate-500 mb-1">
+              Menos as que tiverem <span className="text-slate-400">— separe por espaço</span>
+            </label>
+            <input
+              value={excluir}
+              onChange={(e) => setExcluir(e.target.value)}
+              placeholder="ex: conjunto vestido macacao"
               className="w-full px-3 py-2 border rounded text-sm"
             />
           </div>
@@ -248,7 +470,7 @@ export default function ClassificarProdutosPage() {
 
       {/* ── BARRA DE AÇÃO — só aparece com peça marcada ── */}
       {marcadas.size > 0 && (
-        <div className="mb-4 bg-brand/5 border border-brand/30 rounded-lg p-4 flex flex-wrap items-end gap-3">
+        <div className="mb-4 bg-brand/5 border border-brand/30 rounded-lg p-4 flex flex-wrap items-end gap-3 sticky top-2 z-10 backdrop-blur">
           <span className="text-sm font-semibold text-slate-700 pb-2">
             {marcadas.size} marcada(s) →
           </span>
@@ -257,7 +479,8 @@ export default function ClassificarProdutosPage() {
             <select
               value={destCategoria}
               onChange={(e) => { setDestCategoria(e.target.value); setDestSubcategoria(''); }}
-              className="px-3 py-2 border rounded text-sm bg-white min-w-[160px]"
+              disabled={manterCategoria}
+              className="px-3 py-2 border rounded text-sm bg-white min-w-[160px] disabled:opacity-50"
             >
               <option value="">— escolher —</option>
               {arvore.categorias.map((c) => (
@@ -290,11 +513,13 @@ export default function ClassificarProdutosPage() {
                   value={novaSub}
                   onChange={(e) => setNovaSub(e.target.value)}
                   placeholder="Manga curta"
-                  className="px-3 py-2 border rounded text-sm w-36"
+                  className={`px-3 py-2 border rounded text-sm w-36 ${
+                    subFaltando ? 'border-amber-400 bg-amber-50' : ''
+                  }`}
                 />
               </div>
               <button
-                onClick={criarSubcategoria}
+                onClick={() => criarSubcategoria()}
                 disabled={!novaSub.trim()}
                 className="px-2.5 py-2 border rounded text-sm hover:bg-white disabled:opacity-40"
                 title="Criar subcategoria nesta categoria"
@@ -303,9 +528,20 @@ export default function ClassificarProdutosPage() {
               </button>
             </div>
           )}
+          {/* Categoria do lote x categoria de cada peça: a mesma busca traz
+              blusa, vestido e macacão. Quem quer carimbar só a manga precisa
+              poder, senão um clique manda vestido pra Blusas. */}
+          <label className="flex items-center gap-2 text-sm text-slate-700 pb-2.5">
+            <input
+              type="checkbox"
+              checked={manterCategoria}
+              onChange={(e) => setManterCategoria(e.target.checked)}
+            />
+            Manter a categoria de cada peça
+          </label>
           <button
             onClick={aplicar}
-            disabled={!destCategoria || aplicando}
+            disabled={(!manterCategoria && !destCategoria) || aplicando}
             className="px-4 py-2 bg-brand text-white rounded text-sm font-semibold hover:bg-brand-dark disabled:opacity-50 flex items-center gap-2 ml-auto"
           >
             {aplicando ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
@@ -319,31 +555,57 @@ export default function ClassificarProdutosPage() {
         <div className="p-12 text-center text-slate-400">
           <Loader2 className="w-6 h-6 animate-spin mx-auto" />
         </div>
-      ) : !lista?.itens.length ? (
+      ) : !itens.length ? (
         <div className="p-8 text-center text-slate-400 border border-dashed rounded">
           Nenhuma peça com esses filtros. {semCategoria && 'Talvez já esteja tudo classificado aqui.'}
         </div>
       ) : (
         <>
-          <div className="mb-2 flex items-center justify-between text-sm text-slate-500">
-            <button onClick={marcarTodas} className="text-brand hover:underline font-medium">
-              {marcadas.size === lista.itens.length ? 'Desmarcar todas' : `Marcar as ${lista.itens.length} desta página`}
+          <div className="mb-2 flex flex-wrap items-center gap-3 text-sm text-slate-500">
+            <button onClick={alternarPagina} className="text-brand hover:underline font-medium">
+              {marcadasNaPagina === itens.length
+                ? 'Desmarcar esta página'
+                : `Marcar as ${itens.length} desta página`}
             </button>
-            <span>{lista.total} peça(s) no filtro</span>
+            {(lista?.total ?? 0) > itens.length && (
+              <button
+                onClick={marcarFiltroInteiro}
+                disabled={marcandoTodas}
+                className="text-brand hover:underline font-medium flex items-center gap-1.5 disabled:opacity-50"
+              >
+                {marcandoTodas && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                Marcar as {lista?.total} do filtro
+              </button>
+            )}
+            {marcadas.size > 0 && (
+              <button
+                onClick={() => { setMarcadas(new Set()); ancora.current = null; }}
+                className="text-slate-500 hover:underline flex items-center gap-1"
+              >
+                <X className="w-3.5 h-3.5" /> Limpar seleção ({marcadas.size})
+              </button>
+            )}
+            <span className="ml-auto">
+              {lista?.total} peça(s) no filtro · <b>shift+clique</b> marca o intervalo
+            </span>
           </div>
           <div className="bg-white rounded-lg shadow border divide-y">
-            {lista.itens.map((p) => (
-              <label
+            {itens.map((p, i) => (
+              <div
                 key={p.ref}
-                className={`flex items-center gap-3 px-4 py-2.5 cursor-pointer hover:bg-slate-50 ${
+                onClick={(e) => clicarItem(i, e.shiftKey)}
+                className={`flex items-center gap-3 px-4 py-2.5 cursor-pointer select-none hover:bg-slate-50 ${
                   marcadas.has(p.ref) ? 'bg-brand/5' : ''
                 }`}
               >
+                {/* readOnly + pointer-events-none: o clique é da LINHA inteira,
+                    senão o shift do checkbox nativo não chegaria aqui. */}
                 <input
                   type="checkbox"
                   checked={marcadas.has(p.ref)}
-                  onChange={() => alternar(p.ref)}
-                  className="shrink-0"
+                  readOnly
+                  tabIndex={-1}
+                  className="shrink-0 pointer-events-none"
                 />
                 {/* Miniatura: reconhecer a peça de relance é o que permite
                     classificar rápido sem abrir cada uma. */}
@@ -367,31 +629,42 @@ export default function ClassificarProdutosPage() {
                     <span className="text-amber-700 font-medium">sem categoria</span>
                   )}
                 </span>
-              </label>
+              </div>
             ))}
           </div>
 
-          {lista.totalPages > 1 && (
-            <div className="mt-4 flex items-center justify-center gap-3">
-              <button
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-                disabled={page <= 1}
-                className="px-3 py-1.5 border rounded text-sm disabled:opacity-40"
-              >
-                Anterior
-              </button>
-              <span className="text-sm text-slate-500">
-                {page} de {lista.totalPages}
-              </span>
-              <button
-                onClick={() => setPage((p) => Math.min(lista.totalPages, p + 1))}
-                disabled={page >= lista.totalPages}
-                className="px-3 py-1.5 border rounded text-sm disabled:opacity-40"
-              >
-                Próxima
-              </button>
-            </div>
-          )}
+          <div className="mt-4 flex flex-wrap items-center justify-center gap-3">
+            {(lista?.totalPages ?? 1) > 1 && (
+              <>
+                <button
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  disabled={page <= 1}
+                  className="px-3 py-1.5 border rounded text-sm disabled:opacity-40"
+                >
+                  Anterior
+                </button>
+                <span className="text-sm text-slate-500">
+                  {page} de {lista?.totalPages}
+                </span>
+                <button
+                  onClick={() => setPage((p) => Math.min(lista?.totalPages ?? 1, p + 1))}
+                  disabled={page >= (lista?.totalPages ?? 1)}
+                  className="px-3 py-1.5 border rounded text-sm disabled:opacity-40"
+                >
+                  Próxima
+                </button>
+              </>
+            )}
+            <select
+              value={perPage}
+              onChange={(e) => { setPerPage(Number(e.target.value)); setPage(1); }}
+              className="px-2 py-1.5 border rounded text-sm bg-white text-slate-500"
+            >
+              <option value={60}>60 por página</option>
+              <option value={120}>120 por página</option>
+              <option value={200}>200 por página</option>
+            </select>
+          </div>
         </>
       )}
     </div>
