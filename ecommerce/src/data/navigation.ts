@@ -166,18 +166,22 @@ const NAVEGACAO_COMPLETA: NavItem[] = [
     menu: {
       columns: [
         {
+          /**
+           * Uma coluna só, em pílulas. Eram DUAS colunas de texto (44-52 e
+           * 54-60, a segunda com o título preenchido por um espaço não-
+           * quebrável pra fingir continuação): ocupava meia tela, parecia
+           * índice de documento, e a numeração — que é a primeira pergunta de
+           * quem compra plus size — não se lia de relance.
+           * Ver `MenuColumn.layout`.
+           */
           title: 'Do 44 ao 60',
+          layout: 'pilulas',
           links: [
             { label: '44', href: '/tamanhos/44' },
             { label: '46', href: '/tamanhos/46' },
             { label: '48', href: '/tamanhos/48' },
             { label: '50', href: '/tamanhos/50' },
             { label: '52', href: '/tamanhos/52' },
-          ],
-        },
-        {
-          title: ' ',
-          links: [
             { label: '54', href: '/tamanhos/54' },
             { label: '56', href: '/tamanhos/56' },
             { label: '58', href: '/tamanhos/58' },

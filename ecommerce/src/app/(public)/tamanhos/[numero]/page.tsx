@@ -68,9 +68,9 @@ export default async function TamanhoPage({
           }))}
         />
         <SectionTitle
-          eyebrow="Do 46 ao 60"
+          eyebrow="Do 44 ao 60"
           title={`Tudo no tamanho ${n}`}
-          description="Só o que está disponível no seu número — sem peça que acabou no seu tamanho."
+          description="Só o que está disponível no seu número. Use o filtro de categoria pra ver só blusas, vestidos ou calças."
           as="h1"
         />
       </Section>
@@ -80,11 +80,16 @@ export default async function TamanhoPage({
       </Section>
 
       <Container width="wide">
-        {/* O filtro entra pela barra lateral, então a cliente pode combinar o
-            número dela com cor, marca e preço sem sair da página. */}
+        {/* `category=""` de propósito: esta listagem não é de uma categoria, é
+            de um NÚMERO. É isso que faz a barra lateral mostrar o filtro de
+            categoria (ver `filterGroups`) — a cliente já disse o tamanho dela,
+            e o recorte que falta é o tipo de peça.
+            Ordem por novidades: quem entra pelo número quer ver o que chegou
+            que serve nela, não o catálogo inteiro em ordem de curadoria. */}
         <CategoryListing
           category=""
           categoryName={`Tamanho ${n}`}
+          ordemPadrao="novidades"
           filtrosIniciais={{ tamanho: [String(n)] }}
         />
       </Container>

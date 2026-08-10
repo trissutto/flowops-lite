@@ -166,6 +166,17 @@ function paramsDosFiltros(filters: FilterState): Record<string, string> {
   if (cor) out.cor = cor;
   const tamanho = todos(filters.tamanho);
   if (tamanho) out.tamanho = tamanho;
+  /**
+   * CATEGORIA como filtro da barra lateral — só aparece em listagem que ainda
+   * não está presa a uma categoria (`/tamanhos/56`, `/novidades`, `/outlet`,
+   * busca). Ver `filterGroups`.
+   *
+   * `todos`, não `primeiro`: marcar Blusas E Vestidos manda as duas. Mandar só
+   * a primeira com os dois botões acesos na tela é o bug do tamanho de 07/08
+   * — o backend passou a aceitar lista separada por vírgula junto com isto.
+   */
+  const categoria = todos((filters as Record<string, unknown>).categoria);
+  if (categoria) out.categoria = categoria;
   const modelagem = primeiro((filters as Record<string, unknown>).modelagem);
   if (modelagem) out.modelagem = modelagem;
 
@@ -257,6 +268,25 @@ export async function fetchFacetas(): Promise<Facetas | null> {
   }
 }
 
+/**
+ * "calcas" → "Calças". Os slugs vêm sem acento do CRM; mostrar o slug cru na
+ * barra de filtro ficaria "calcas" e "macacoes" na cara da cliente. Mesma
+ * tabela de `services/categorias-menu.ts` — as duas mostram os mesmos nomes.
+ */
+const ROTULO_CATEGORIA: Record<string, string> = {
+  calcas: 'Calças',
+  macacoes: 'Macacões',
+  'moda-praia': 'Moda praia',
+};
+
+function rotuloCategoria(slug: string): string {
+  const s = String(slug || '').trim();
+  if (!s) return '';
+  if (ROTULO_CATEGORIA[s]) return ROTULO_CATEGORIA[s];
+  const limpo = s.replace(/[-_]+/g, ' ');
+  return limpo.charAt(0).toUpperCase() + limpo.slice(1);
+}
+
 export function filterGroups(category?: string, facetas?: Facetas | null): FilterGroup[] {
   const range = facetas?.preco ?? priceRange();
 
@@ -264,6 +294,29 @@ export function filterGroups(category?: string, facetas?: Facetas | null): Filte
   // o filtro que não levaria a lugar nenhum.
   if (facetas) {
     const grupos: FilterGroup[] = [];
+    /**
+     * CATEGORIA — só quando a listagem NÃO é de uma categoria (dono, 10/08:
+     * "depois colocar ainda filtro de categorias").
+     *
+     * As facetas sempre trouxeram `categorias` com contagem; ninguém usava.
+     * Faz sentido em `/tamanhos/56` ("tudo que veste 56" → "só as blusas"),
+     * em `/novidades`, `/outlet` e na busca. Dentro de `/categoria/vestidos`
+     * não faz: filtrar vestido por categoria de novo só teria uma resposta
+     * possível, ou zero.
+     *
+     * Primeiro na barra porque em `/tamanhos/56` é o recorte que mais reduz a
+     * lista — a cliente já disse o número dela, o que falta é o tipo de peça.
+     */
+    if (!category && facetas.categorias?.length > 1) {
+      grupos.push({
+        id: 'categoria', label: 'Categoria', type: 'checkbox', defaultOpen: true,
+        options: facetas.categorias.map((c) => ({
+          value: c.valor,
+          label: rotuloCategoria(c.valor),
+          count: c.qtd,
+        })),
+      });
+    }
     if (facetas.tamanhos?.length) {
       grupos.push({
         id: 'tamanho', label: 'Tamanho', type: 'size', defaultOpen: true,
