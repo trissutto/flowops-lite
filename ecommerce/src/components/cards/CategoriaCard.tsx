@@ -175,7 +175,24 @@ export function CategoriaCard({
         href={`/categoria/${data.slug}`}
         className="group relative block overflow-hidden rounded-md border border-border/60 bg-surface-alt"
       >
-        <div className="relative aspect-3/4 overflow-hidden">
+        {/**
+         * 2:3, A PROPORÇÃO DA ARTE (dono 10/08: "apareça também o rosto da
+         * modelo").
+         *
+         * Era `aspect-3/4` (0,75) e as artes das categorias são 251×379
+         * (0,66) — medido no arquivo que está no R2. Imagem mais alta que a
+         * caixa + `object-cover` = 12% cortados na vertical, e como o recorte
+         * ancorava no topo, o corte saía tudo embaixo. Somado ao zoom da IA
+         * (que ia de 1,4 a 1,6 e agora não se aplica a foto manual), sobrava
+         * um close no tronco: sem rosto e sem sapato.
+         *
+         * Com a caixa na mesma proporção do arquivo, o `cover` não tem o que
+         * cortar — a arte aparece exatamente como foi composta.
+         *
+         * Foto AUTOMÁTICA (a peça mais nova da categoria) continua sendo
+         * recortada pelo cover como antes; só ganha uma caixa mais alta.
+         */}
+        <div className="relative aspect-2/3 overflow-hidden">
           {data.imagemUrl ? (
             <div className="absolute inset-0 transition-transform duration-[720ms] ease-[cubic-bezier(0.22,1,0.36,1)] group-hover:scale-[1.04]">
               <Image
