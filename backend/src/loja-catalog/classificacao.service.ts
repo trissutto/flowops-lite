@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { avisarVitrine } from '../common/avisar-vitrine';
 
 /**
  * CLASSIFICAÇÃO EM LOTE — pôr 773 peças na árvore do site sem enlouquecer.
@@ -226,6 +227,20 @@ export class ClassificacaoService {
     });
     const destino = input.manterCategoria ? '(categoria mantida)' : input.categoria;
     this.logger.log(`[classificacao] ${r.count} peça(s) → ${destino}/${input.subcategoria ?? '-'} por ${input.quem}`);
+
+    /**
+     * Sem isto o mutirão parece quebrado: a peça muda no banco, o site continua
+     * servindo a página de até 1 hora atrás, e quem classificou conclui que a
+     * ferramenta não funcionou — foi exatamente o que aconteceu com os chips de
+     * subcategoria de Moda praia em 10/08/2026, com o dado JÁ correto na API.
+     *
+     * `categorias`/`filtros` derrubam o menu e a lista de subcategorias;
+     * `catalogo` e `categoria:<slug>`, a grade da página da categoria.
+     */
+    const tags = ['categorias', 'filtros', 'catalogo'];
+    if (input.categoria) tags.push(`categoria:${input.categoria}`);
+    avisarVitrine(tags, this.logger, 'classificacao');
+
     return { ok: true, atualizadas: r.count };
   }
 

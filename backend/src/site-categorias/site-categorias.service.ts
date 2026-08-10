@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, Logger, NotFoundException } from '@nes
 import { PrismaService } from '../prisma/prisma.service';
 import { CorIaService } from '../product-photos/cor-ia.service';
 import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { avisarVitrine } from '../common/avisar-vitrine';
 
 /**
  * CATEGORIAS DA VITRINE — foto, nome e texto de cada /categoria/<slug>.
@@ -79,17 +80,9 @@ export class SiteCategoriasService {
     return s ? s.charAt(0).toUpperCase() + s.slice(1) : slug;
   }
 
-  /** Avisa a vitrine (mesma regra dos banners — ver `site-banners.service`). */
+  /** Avisa a vitrine — ver `avisarVitrine`. */
   private avisarSite() {
-    const base = (process.env.ECOMMERCE_URL || '').split(',')[0].trim().replace(/\/$/, '');
-    const segredo = (process.env.REVALIDATE_SECRET || '').trim();
-    if (!base || !segredo) return;
-    void fetch(`${base}/api/revalidar`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-revalidate-secret': segredo },
-      body: JSON.stringify({ tags: ['categorias', 'filtros'] }),
-      signal: AbortSignal.timeout(5000),
-    }).catch((e) => this.logger.warn(`[categorias] não avisei o site: ${e?.message || e}`));
+    avisarVitrine(['categorias', 'filtros'], this.logger, 'categorias');
   }
 
   /** Slugs que EXISTEM de verdade, com quantas peças publicadas cada um tem. */
