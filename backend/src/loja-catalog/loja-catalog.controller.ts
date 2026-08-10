@@ -77,6 +77,13 @@ export class LojaCatalogPublicController {
       perPage: q.perPage ? Number(q.perPage) : 24,
       busca: q.busca || q.q || undefined,
       categoria: q.categoria || undefined,
+      /**
+       * SEGUNDO NÍVEL — `?subcategoria=manga-curta` (o chip da página da
+       * categoria). O parâmetro chegava e era jogado fora: `/produtos?
+       * categoria=blusas&subcategoria=regata` devolvia as mesmas 180 peças de
+       * `categoria=blusas`. O chip pintava de dourado e a grade não mudava.
+       */
+      subcategoria: q.subcategoria || undefined,
       marca: q.marca || undefined,
       cor: q.cor || undefined,
       tamanho: q.tamanho || undefined,

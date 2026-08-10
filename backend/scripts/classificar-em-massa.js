@@ -213,11 +213,17 @@ function decidir(p) {
   for (const [categoria, lista] of aCriar) {
     for (const { slug, nome } of lista) {
       await c.query(
-        // `id` é gerado pelo Prisma na aplicação (@default(uuid())), não pelo
-        // banco: SQL cru precisa fornecer o valor.
-        `INSERT INTO site_categorias (id, slug, nome, pai_slug, ativo, ordem, atualizado_por)
-         VALUES (gen_random_uuid()::text, $1, $2, $3, true, 0, 'classificacao-em-massa')
-         ON CONFLICT (slug) DO UPDATE SET nome = EXCLUDED.nome, pai_slug = EXCLUDED.pai_slug`,
+        /**
+         * `id` e `updated_at` são preenchidos pelo PRISMA na aplicação
+         * (`@default(uuid())` e `@updatedAt`), não pelo banco — conferido no
+         * information_schema: são as únicas colunas NOT NULL sem default, ao
+         * lado do slug. SQL cru precisa fornecer os dois, senão o INSERT morre
+         * com "null value in column ... violates not-null constraint".
+         */
+        `INSERT INTO site_categorias (id, slug, nome, pai_slug, ativo, ordem, atualizado_por, updated_at)
+         VALUES (gen_random_uuid()::text, $1, $2, $3, true, 0, 'classificacao-em-massa', NOW())
+         ON CONFLICT (slug) DO UPDATE
+            SET nome = EXCLUDED.nome, pai_slug = EXCLUDED.pai_slug, updated_at = NOW()`,
         [slug, nome, categoria],
       );
     }
@@ -226,9 +232,12 @@ function decidir(p) {
   let n = 0;
   for (const m of mudancas) {
     await c.query(
+      // `updated_at` também é do Prisma (@updatedAt): num UPDATE cru ele não se
+      // move sozinho, e a linha ficaria dizendo que não foi tocada hoje.
       `UPDATE site_produto
           SET categoria = $2, subcategoria = COALESCE($3, subcategoria),
-              classificado_por = 'classificacao-em-massa', classificado_em = NOW()
+              classificado_por = 'classificacao-em-massa', classificado_em = NOW(),
+              updated_at = NOW()
         WHERE ref = $1`,
       [m.ref, m.categoria, m.sub],
     );

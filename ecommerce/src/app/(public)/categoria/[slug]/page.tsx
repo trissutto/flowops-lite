@@ -65,8 +65,25 @@ export async function generateMetadata({
   });
 }
 
-export default async function CategoryPage({ params }: { params: Promise<{ slug: string }> }) {
+export default async function CategoryPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ slug: string }>;
+  searchParams: Promise<{ sub?: string }>;
+}) {
   const { slug } = await params;
+  /**
+   * `?sub=manga-curta` — o chip que a cliente clicou.
+   *
+   * Lido AQUI e passado adiante em dois lugares: a página 1 feita no servidor
+   * e o `CategoryListing`. Sem isso o chip pinta de dourado, muda a URL e a
+   * grade continua com a categoria inteira — foi o que o dono viu em 10/08:
+   * "Regata não filtra nada". O componente sempre soube filtrar; ninguém
+   * entregava o valor pra ele.
+   */
+  const { sub } = await searchParams;
+  const subcategoria = typeof sub === 'string' && sub.trim() ? sub.trim() : undefined;
   const meta = categoryMeta(slug);
   // NOVIDADES é a ordem padrão de toda categoria (dono 07/08): a cliente que
   // volta toda semana precisa ver o que ENTROU, não a mesma vitrine de sempre.
@@ -75,6 +92,7 @@ export default async function CategoryPage({ params }: { params: Promise<{ slug:
   // se fosse a ordem do cliente, e a cliente veria uma lista que não pediu.
   const primeiraPagina = await fetchPrimeiraPagina({
     categoria: slug,
+    subcategoria,
     perPage: 24,
     ordenar: 'novidades',
   });
@@ -121,6 +139,8 @@ export default async function CategoryPage({ params }: { params: Promise<{ slug:
         <CategoryListing
           category={slug}
           categoryName={meta.name}
+          /* O chip da URL — sem isto a grade ignora a subcategoria. */
+          subcategoria={subcategoria}
           /* Mesma ordem do `fetchPrimeiraPagina` acima — ver comentário lá. */
           ordemPadrao="novidades"
           /* Página 1 pronta no servidor: a peça vem no HTML em vez de esperar
