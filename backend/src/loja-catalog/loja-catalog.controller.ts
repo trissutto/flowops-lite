@@ -5,6 +5,7 @@ import { JwtAuthGuard } from '../auth/jwt.guard';
 import { LojaCatalogService, ListarParams } from './loja-catalog.service';
 import { SiteSyncService } from './site-sync.service';
 import { InstagramFeedService } from './instagram-feed.service';
+import { GrupoRefService } from './grupo-ref.service';
 
 /**
  * CATÁLOGO PÚBLICO DO E-COMMERCE (sprint 008).
@@ -131,6 +132,7 @@ export class LojaCatalogAdminController {
   constructor(
     private readonly svc: LojaCatalogService,
     private readonly sync: SiteSyncService,
+    private readonly grupos: GrupoRefService,
   ) {}
 
   private requireAdmin(req: any) {
@@ -182,6 +184,32 @@ export class LojaCatalogAdminController {
     this.requireAdmin(req);
     const quem = req?.user?.email || req?.user?.name || 'admin';
     return this.svc.salvarCategoriaMapa(origem, body?.destino ?? null, quem);
+  }
+
+  /**
+   * PRODUTOS AGRUPADOS — mesma peça em REFs diferentes.
+   *
+   * No catálogo legado a cor virava REF nova (`900887` preta, `900887B` bege),
+   * e a vitrine mostrava dois cards do mesmo produto. A tela
+   * `/retaguarda/produtos-agrupados` revisa o que o automático propôs — e
+   * separar/juntar na mão TRAVA a decisão contra o sync. Ver `GrupoRefService`.
+   */
+  @Get('grupos')
+  gruposListar(@Req() req: any) {
+    this.requireAdmin(req);
+    return this.grupos.listar();
+  }
+
+  @Post('grupos/recalcular')
+  gruposRecalcular(@Req() req: any) {
+    this.requireAdmin(req);
+    return this.grupos.recalcular();
+  }
+
+  @Patch('grupos/:ref')
+  gruposDefinir(@Req() req: any, @Param('ref') ref: string, @Body() body: { grupo: string | null }) {
+    this.requireAdmin(req);
+    return this.grupos.definir(ref, body?.grupo ?? null);
   }
 
   @Get('produto/:ref')

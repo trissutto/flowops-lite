@@ -56,6 +56,8 @@ export default function CategoriasMapaPage() {
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
   const [salvando, setSalvando] = useState<string | null>(null);
+  const [sincronizando, setSincronizando] = useState(false);
+  const [aviso, setAviso] = useState<string | null>(null);
 
   useEffect(() => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('flowops_token') : null;
@@ -74,6 +76,32 @@ export default function CategoriasMapaPage() {
     }
   }
   useEffect(() => { carregar(); }, []);
+
+  /**
+   * Roda o sync de catálogo agora. É o que APLICA os vínculos: eles ficam
+   * guardados na hora, mas a classificação das peças só muda quando o
+   * catálogo é reimportado.
+   */
+  async function sincronizar() {
+    setSincronizando(true);
+    setErro(null);
+    setAviso(null);
+    try {
+      const r = await api<{ ok: boolean; lidos?: number; atualizados?: number; erro?: string }>(
+        '/loja-catalog/importar',
+        { method: 'POST' },
+      );
+      if (r?.ok === false) throw new Error(r.erro || 'Sync não concluiu');
+      setAviso(
+        `Catálogo atualizado — ${r.lidos ?? 0} peças lidas, ${r.atualizados ?? 0} atualizadas.`,
+      );
+      await carregar();
+    } catch (e: any) {
+      setErro(e?.message ?? 'Falha ao atualizar o catálogo');
+    } finally {
+      setSincronizando(false);
+    }
+  }
 
   async function salvar(origem: string, destino: string | null) {
     setSalvando(origem);
@@ -115,12 +143,29 @@ export default function CategoriasMapaPage() {
             De onde vem × onde aparece. O que você escolher aqui vale mais que a regra automática.
           </p>
         </div>
-        <button
-          onClick={carregar}
-          className="px-3 py-2 border rounded text-sm hover:bg-slate-50 flex items-center gap-2 shrink-0"
-        >
-          <RefreshCw className="w-4 h-4" /> Atualizar
-        </button>
+        <div className="flex gap-2 shrink-0">
+          <button
+            onClick={carregar}
+            className="px-3 py-2 border rounded text-sm hover:bg-slate-50 flex items-center gap-2"
+          >
+            <RefreshCw className="w-4 h-4" /> Recarregar
+          </button>
+          {/* O sync só rodava às 4h35 e NÃO havia botão em lugar nenhum: você
+              vinculava a categoria e não tinha como ver o efeito antes do dia
+              seguinte. Este botão fecha o ciclo — vincula, aplica, confere. */}
+          <button
+            onClick={sincronizar}
+            disabled={sincronizando}
+            className="px-4 py-2 bg-brand text-white rounded text-sm font-semibold hover:bg-brand-dark disabled:opacity-50 flex items-center gap-2"
+          >
+            {sincronizando ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <RefreshCw className="w-4 h-4" />
+            )}
+            Atualizar catálogo
+          </button>
+        </div>
       </div>
 
       {pendentes.length > 0 && (
@@ -142,6 +187,11 @@ export default function CategoriasMapaPage() {
       {erro && (
         <div className="mb-4 rounded-lg border border-rose-300 bg-rose-50 p-3 text-sm text-rose-700 flex items-center gap-2">
           <AlertCircle className="w-4 h-4" /> {erro}
+        </div>
+      )}
+      {aviso && (
+        <div className="mb-4 rounded-lg border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-800 flex items-center gap-2">
+          <Check className="w-4 h-4" /> {aviso}
         </div>
       )}
 

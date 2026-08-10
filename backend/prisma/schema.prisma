@@ -6168,6 +6168,29 @@ model SiteProduto {
   colecao           String?  @db.VarChar(60)
   linha             String?  @db.VarChar(60)
 
+  /// MESMA PEÇA, CORES EM REFs DIFERENTES — o agrupamento do catálogo legado.
+  ///
+  /// No site antigo a cor era resolvida INVENTANDO REF: `900887` era a preta e
+  /// `900887B` a bege — mesma peça, dois cadastros. Resultado na vitrine: dois
+  /// cards idênticos lado a lado, e a cliente escolhendo entre o que parece
+  /// ser o mesmo produto duas vezes (achado do dono em 10/08/2026).
+  ///
+  /// Este campo diz "estas REFs são um produto só". A listagem agrupa por
+  /// `grupoRef ?? ref`, e as cores de todas elas viram as bolinhas de uma
+  /// peça. `null` = peça sozinha, que é o caso normal.
+  ///
+  /// Preenchido pelo sync a partir da RAIZ NUMÉRICA da REF (`900887B` →
+  /// `900887`), mas só quando as candidatas concordam em categoria e preço —
+  /// agrupar errado junta produtos diferentes num card e faz a cliente comprar
+  /// a peça errada, o que é pior que deixar separado.
+  ///
+  /// `grupoRefManual` trava a decisão de quem revisou: o sync NUNCA sobrescreve
+  /// um grupo marcado à mão, senão a correção se perderia toda madrugada.
+  /// A REF nova (gerada pela `EanSequence`) já nasce com cor resolvida dentro
+  /// da própria peça — este campo é dívida do catálogo legado, não desenho.
+  grupoRef          String?  @map("grupo_ref") @db.VarChar(20)
+  grupoRefManual    Boolean  @default(false) @map("grupo_ref_manual")
+
   /// Curadoria: o que a loja escolheu publicar
   publicado         Boolean  @default(true)
   destaque          Boolean  @default(false)
@@ -6192,6 +6215,8 @@ model SiteProduto {
   @@index([categoria])
   @@index([destaque])
   @@index([lancamento])
+  /// A listagem agrupa por aqui — ver `grupoRef`.
+  @@index([grupoRef])
   @@map("site_produto")
 }
 

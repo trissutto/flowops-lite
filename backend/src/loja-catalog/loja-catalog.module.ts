@@ -4,6 +4,7 @@ import { HttpModule } from '@nestjs/axios';
 import { PrismaModule } from '../prisma/prisma.module';
 import { LojaCatalogService } from './loja-catalog.service';
 import { InstagramFeedService } from './instagram-feed.service';
+import { GrupoRefService } from './grupo-ref.service';
 import { SiteSyncService } from './site-sync.service';
 import { LojaCatalogPublicController, LojaCatalogAdminController } from './loja-catalog.controller';
 
@@ -30,7 +31,7 @@ import { LojaCatalogPublicController, LojaCatalogAdminController } from './loja-
    */
   imports: [PrismaModule, HttpModule, LiveModule],
   controllers: [LojaCatalogPublicController, LojaCatalogAdminController],
-  providers: [LojaCatalogService, SiteSyncService, InstagramFeedService],
+  providers: [LojaCatalogService, SiteSyncService, InstagramFeedService, GrupoRefService],
   exports: [LojaCatalogService],
 })
 export class LojaCatalogModule {}

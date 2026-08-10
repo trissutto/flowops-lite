@@ -972,12 +972,45 @@ export class LojaCatalogService {
      */
     const { site, fit, fotos, fichas } = await this.complementos(Array.from(porRef.keys()));
 
-    let pecas = Array.from(porRef.entries()).map(([ref, ls]) =>
-      this.montarPeca(
-        ref, ls, site.get(ref), fit.get(ref), fotos.get(ref) ?? [],
-        this.escolherFicha(fichas.get(ref), ls.find((l) => l.marca)?.marca),
-      ),
-    );
+    /**
+     * JUNTA AS REFs QUE SÃO A MESMA PEÇA (10/08/2026).
+     *
+     * No catálogo legado a cor virava REF nova: `900887` era o macaquinho
+     * preto e `900887B` o mesmo macaquinho bege. A vitrine mostrava os dois
+     * lado a lado, e a cliente escolhia entre o que parece ser o mesmo produto
+     * repetido.
+     *
+     * Aqui as linhas do ERP das REFs irmãs entram no MESMO `montarPeca` — e
+     * como é dele que saem as bolinhas de cor, as cores das duas viram as
+     * cores de uma peça só. Nada precisou mudar em `montarPeca`.
+     *
+     * Quem decide o parentesco é `SiteProduto.grupoRef`, escrito pelo
+     * `GrupoRefService` e revisável na retaguarda. Sem grupo (o caso normal, e
+     * o de toda REF nova), a peça continua sozinha.
+     */
+    const agrupadas = new Map<string, LinhaErp[]>();
+    for (const [ref, ls] of porRef) {
+      const chave = this.normRef((site.get(ref) as any)?.grupoRef) || ref;
+      if (!agrupadas.has(chave)) agrupadas.set(chave, []);
+      agrupadas.get(chave)!.push(...ls);
+    }
+
+    let pecas = Array.from(agrupadas.entries()).map(([ref, ls]) => {
+      /**
+       * A identidade (nome, slug, foto, ficha) vem do cadastro da RAIZ quando
+       * ele existe — é a peça "principal". Se a raiz não estiver publicada,
+       * usa o cadastro da primeira irmã disponível: melhor a peça aparecer com
+       * o nome da irmã do que não aparecer.
+       */
+      const dono =
+        site.get(ref) !== undefined
+          ? ref
+          : (ls.map((l) => l.ref).find((r) => site.get(r) !== undefined) ?? ref);
+      return this.montarPeca(
+        ref, ls, site.get(dono), fit.get(dono), fotos.get(dono) ?? [],
+        this.escolherFicha(fichas.get(dono), ls.find((l) => l.marca)?.marca),
+      );
+    });
 
     // 3) Filtros (em memória: o universo é o publicado, não o catálogo todo)
     const norm = (v: any) => String(v ?? '').trim().toUpperCase();

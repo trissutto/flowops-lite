@@ -4,6 +4,7 @@ import { HttpService } from '@nestjs/axios';
 import { ConfigService } from '@nestjs/config';
 import { firstValueFrom } from 'rxjs';
 import { PrismaService } from '../prisma/prisma.service';
+import { GrupoRefService } from './grupo-ref.service';
 
 /**
  * IMPORTADOR DE CONTEÚDO (sprint 008) — WooCommerce → `site_produto`.
@@ -36,6 +37,7 @@ export class SiteSyncService {
     private readonly prisma: PrismaService,
     private readonly http: HttpService,
     private readonly config: ConfigService,
+    private readonly grupos: GrupoRefService,
   ) {}
 
   private get baseUrl() {
@@ -94,6 +96,15 @@ export class SiteSyncService {
      */
     lingerie: 'lingerie', calcinha: 'lingerie', sutia: 'lingerie',
     pijama: 'pijamas', camisola: 'pijamas', robe: 'pijamas',
+    /**
+     * Modeladores. "Cinta Modeladora Macaquinho" aparecia em MACACÕES (achado
+     * do dono, 10/08): o nome tem "macaquinho", `macaquinho` estava no mapa e
+     * `cinta` não — então casava com UMA categoria e ia pra lá com confiança.
+     * Com estas linhas o nome passa a casar com duas, e a peça fica esperando
+     * classificação em vez de errar.
+     */
+    cinta: 'modeladores', modeladora: 'modeladores', modelador: 'modeladores',
+    shapewear: 'modeladores',
   };
 
   private semAcento(v: string): string {
@@ -339,6 +350,17 @@ export class SiteSyncService {
 
       // Grava o inventário de categorias do WC vistas nesta rodada.
       await this.registrarOrigens(origensVistas);
+
+      /**
+       * REF nova pode ter nascido agora — recalcula quais são a mesma peça em
+       * cores diferentes. Nunca derruba o sync: agrupamento é apresentação, e
+       * falhar aqui não pode invalidar um catálogo que já foi importado.
+       */
+      await this.grupos
+        .recalcular()
+        .catch((e: any) =>
+          this.logger.warn(`[site-sync] agrupamento por REF falhou: ${e?.message || e}`),
+        );
       const semDestino = [...origensVistas.keys()].filter(
         (o) => !this.mapaManual.get(o) && this.categoriaDoTexto(o).size !== 1,
       );
