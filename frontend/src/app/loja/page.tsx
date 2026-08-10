@@ -54,6 +54,7 @@ const LOJA_ITEMS: LojaItem[] = [
   { href: '/cadastros/classificacao-peca',    label: 'Classificação Peça', subtitle: 'Cadastros', description: 'Ocasião · tecido · modelagem · coleção', tone: 'purple', icon: Shirt },
   { href: '/retaguarda/banners',              label: 'Banners',        subtitle: 'Vitrine',     description: 'Hero da home · faixas · tarja do topo', tone: 'purple', icon: GalleryHorizontal },
   { href: '/retaguarda/categorias',           label: 'Categorias',     subtitle: 'Vitrine',     description: 'Foto, nome e ordem no menu do site', tone: 'purple', icon: Tags },
+  { href: '/retaguarda/classificar-produtos', label: 'Classificar Produtos', subtitle: 'Catálogo', description: 'Categoria e subcategoria do site, em lote', tone: 'purple', icon: Tags },
   { href: '/retaguarda/categorias-mapa',      label: 'Vincular Categorias', subtitle: 'Catálogo', description: 'De-para WooCommerce → categoria do site', tone: 'purple', icon: Tags },
   { href: '/retaguarda/produtos-agrupados',   label: 'Produtos agrupados', subtitle: 'Catálogo', description: 'Mesma peça em REFs diferentes (cor)', tone: 'purple', icon: Package2 },
   { href: '/retaguarda/loja-frete',           label: 'Frete & Cupons', subtitle: 'Site',        description: 'Frete grátis · promocional · cupons', tone: 'sky',    icon: Truck        },
