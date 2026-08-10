@@ -117,6 +117,16 @@ export default async function PedidosPage() {
                   {p.pix && (
                     <PixSegundaVia copyPaste={p.pix.copyPaste} expiresAt={p.pix.expiresAt} />
                   )}
+                  {/* Atalho pra troca (10/08). O portal decide prazo e direito;
+                      aqui é só o caminho — e ele existe porque procurar "como
+                      trocar" no rodapé é onde a cliente desiste e vai pro
+                      WhatsApp. Quem está logada não digita nada lá. */}
+                  <Link
+                    href="/trocas"
+                    className="link-underline mt-1 inline-block text-small text-ink-soft hover:text-ink"
+                  >
+                    Precisa trocar?
+                  </Link>
                 </div>
                 <p className="text-body tabular-nums">{formatPrice(p.total)}</p>
               </li>

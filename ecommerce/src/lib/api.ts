@@ -30,9 +30,25 @@ export class ApiError extends Error {
     message: string,
     readonly status: number,
     readonly path: string,
+    /**
+     * Corpo da resposta de erro, quando o backend mandou JSON.
+     *
+     * Existe porque parte das rotas responde com MENSAGEM PRONTA PRA CLIENTE
+     * ("pedido fora do prazo de troca", "esse tamanho esgotou") — e sem isto
+     * o `message` chegava genérico ("Backend respondeu 400"), obrigando cada
+     * BFF a inventar um texto pior que o que o backend já tinha escrito.
+     * Quem trata decide se usa; ninguém é obrigado a olhar.
+     */
+    readonly body?: { message?: string; error?: string; [k: string]: unknown },
   ) {
     super(message);
     this.name = 'ApiError';
+  }
+
+  /** A mensagem pronta pra tela, se o backend mandou alguma. */
+  get mensagemDoBackend(): string | null {
+    const m = this.body?.message ?? this.body?.error;
+    return typeof m === 'string' && m.trim() ? m.trim() : null;
   }
 }
 
@@ -110,10 +126,15 @@ export async function api<T>(path: string, options: ApiOptions = {}): Promise<T>
     });
 
     if (!response.ok) {
+      // Lê o corpo pra não perder a mensagem que o backend escreveu pra
+      // cliente. Falha na leitura não pode virar outro erro: o que importa
+      // aqui é o status, o corpo é bônus.
+      const corpo = await response.json().catch(() => undefined);
       throw new ApiError(
         `Backend respondeu ${response.status} em ${path}`,
         response.status,
         path,
+        corpo,
       );
     }
 

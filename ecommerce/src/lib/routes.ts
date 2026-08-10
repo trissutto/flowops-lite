@@ -42,8 +42,7 @@ const BUILT_ROUTES: readonly (string | RegExp)[] = [
   '/politica-de-trocas',
   '/privacidade',
   '/termos',
-  // `/trocas` não tem página: é redirect pro portal do FlowOps (next.config).
-  // Entra aqui porque, do ponto de vista de quem clica, o destino existe.
+  // Tela nativa desde 10/08/2026 (antes era redirect pro FlowOps).
   '/trocas',
   '/conta',
   '/conta/cashback',

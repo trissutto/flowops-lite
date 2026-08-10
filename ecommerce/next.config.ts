@@ -47,24 +47,15 @@ const nextConfig: NextConfig = {
       { source: '/nossas-lojas', destination: '/lojas', permanent: true },
       { source: '/nossaslojas', destination: '/lojas', permanent: true },
 
-      // TROCA FÁCIL — o portal público de trocas já existe e roda no FlowOps
-      // (localiza pedido por nº + CPF, gera reversa, acompanha status). Aqui
-      // ele é LINKADO, não recriado: duas telas de troca abertas ao mesmo
-      // tempo seria duas políticas divergindo sozinhas. Redirect temporário
-      // (307) de propósito — quando a tela for portada pra cá, é só apagar
-      // esta linha sem ter deixado 301 gravado no cache dos navegadores.
+      // TROCA FÁCIL — a tela agora é DAQUI (10/08/2026), não mais um desvio
+      // pro FlowOps. A REGRA continua lá (prazo, reversa grátis, motivos,
+      // decisão): o site só desenha, e chama `/public/trocas/*` pra tudo que
+      // decide. Duas telas com duas políticas seria duas políticas divergindo
+      // sozinhas — por isso a lógica não foi copiada junto.
       //
-      // ⚠️ O destino apontava pra `www.lurdsplussize.com.br` — que era do
-      // FlowOps até 10/07/2026, quando ele mudou pra `crm.lurdsplussize.com.br`
-      // e liberou o `www` pra ESTE site. Com o ecommerce no `www`, aquele
-      // destino viraria `/trocas` → `www/trocas` → `/trocas`: LOOP INFINITO,
-      // a página de trocas morre com ERR_TOO_MANY_REDIRECTS. Tem que apontar
-      // pro domínio onde o portal realmente roda.
-      {
-        source: '/trocas',
-        destination: `${FLOWOPS}/trocas`,
-        permanent: false,
-      },
+      // O redirect que existia aqui foi apagado; a rota real vive em
+      // `app/(public)/trocas`. Era 307 justamente pra este dia chegar sem
+      // ninguém ficar preso num 301 gravado no navegador.
       { source: '/institucional/trocas', destination: '/trocas', permanent: false },
 
       /**
