@@ -37,6 +37,7 @@
 
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { PersonIdentityService } from '../person-identity/person-identity.service';
 import { ErpService } from '../erp/erp.service';
 
 /**
@@ -190,6 +191,7 @@ export class CustomersGigaEtlService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly erp: ErpService,
+    private readonly identity: PersonIdentityService,
   ) {}
 
   getState(): GigaSyncState {
@@ -871,7 +873,12 @@ export class CustomersGigaEtlService {
 
         for (const r of rows) {
           try {
-            await this._upsertCustomerFromGiga(r);
+            const customerId = await this._upsertCustomerFromGiga(r);
+            if (customerId) {
+              await this.identity.linkCustomer(customerId).catch((error) =>
+                this.logger.warn(`[giga-etl] identidade pendente customer=${customerId}: ${error?.message || error}`),
+              );
+            }
             this.state.processados++;
           } catch (e: any) {
             this.state.erros++;
@@ -941,7 +948,7 @@ export class CustomersGigaEtlService {
    * UPSERT de 1 cliente Giga no Customer FlowOps.
    * MERGE: nunca sobrescreve dados marketing. Só preenche o que está null.
    */
-  private async _upsertCustomerFromGiga(row: any): Promise<void> {
+  private async _upsertCustomerFromGiga(row: any): Promise<string | null> {
     const cpfDigits = String(row.cpf || '').replace(/\D/g, '');
     const codCliente = Number(row.codCliente) || null;
     const cpfValido = cpfDigits && cpfDigits.length === 11;
@@ -950,7 +957,7 @@ export class CustomersGigaEtlService {
     // CHAVE COMPOSTA: (loja, codigo). Sem loja não tem como rastrear — pula.
     if (!codCliente || !gigaLoja) {
       this.state.pulados++;
-      return;
+      return null;
     }
 
     // 1. Tenta achar link existente pela chave composta (loja, codigo)
@@ -967,15 +974,16 @@ export class CustomersGigaEtlService {
         data: { ultimoSync: new Date() },
       });
       this.state.atualizados++;
-      return;
+      return linkExistente.customer.id;
     }
 
     // 2. SEM dedup por CPF — cada (loja, codigo) vira UM Customer
     //    independente. Mesma pessoa cadastrada em N lojas físicas no Giga
     //    vai virar N Customers no FlowOps (regra de negócio aprovada por
     //    Thiago em jun/2026). Cada loja gerencia seu próprio cadastro.
-    await this._criarNovoComLink(row, cpfDigits, codCliente, gigaLoja);
+    const customerId = await this._criarNovoComLink(row, cpfDigits, codCliente, gigaLoja);
     this.state.criados++;
+    return customerId;
   }
 
   /**
@@ -1124,7 +1132,7 @@ export class CustomersGigaEtlService {
     cpfDigits: string,
     codCliente: number,
     gigaLoja: string,
-  ): Promise<void> {
+  ): Promise<string> {
     const tel = String(row.foneCel || row.foneRes || '').replace(/\D/g, '');
     const telRes = String(row.foneRes || '').replace(/\D/g, '');
     const email = String(row.email || '').trim().toLowerCase();
@@ -1144,7 +1152,7 @@ export class CustomersGigaEtlService {
     });
 
     // Cria Customer + Link em transação atômica
-    await (this.prisma as any).$transaction(async (tx: any) => {
+    return (this.prisma as any).$transaction(async (tx: any) => {
       const customer = await tx.customer.create({
         data: {
           cpf: cpfDigits && cpfDigits.length === 11 ? this._formatCpf(cpfDigits) : null,
@@ -1171,6 +1179,7 @@ export class CustomersGigaEtlService {
       });
 
       await this._criarEnderecoSeFaltarTx(tx, customer.id, row);
+      return customer.id;
     });
   }
 
