@@ -1484,6 +1484,10 @@ model PdvSale {
   nfceQrUrl       String?  @map("nfce_qr_url") @db.Text
   nfceUrlConsulta String?  @map("nfce_url_consulta")
   nfceAutorizadaEm DateTime? @map("nfce_autorizada_em")
+  // Trava distribuida da emissao: impede duplo clique/duas instancias de
+  // transmitirem a mesma venda ao mesmo tempo. Expira para recuperar crash.
+  nfceEmissionLockId String?   @map("nfce_emission_lock_id")
+  nfceEmissionLockAt DateTime? @map("nfce_emission_lock_at")
   // Cancelamento NFC-e (evento 110111)
   nfceCanceladaEm        DateTime? @map("nfce_cancelada_em")
   nfceCancelamentoProto  String?   @map("nfce_cancelamento_proto")
@@ -2048,6 +2052,32 @@ model NfceConfig {
   updatedAt       DateTime @updatedAt @map("updated_at")
 
   @@map("nfce_configs")
+}
+
+// Historico append-only de cada envio de NFC-e. PdvSale mantem o resumo atual;
+// esta tabela preserva rejeicoes/erros sem sobrescrever a tentativa anterior.
+model NfceAttempt {
+  id             String   @id @default(uuid())
+  saleId         String   @map("sale_id")
+  storeCode      String   @map("store_code")
+  serie          String
+  numero         Int
+  chave          String?
+  status         String   @default("building")
+  cStat          String?  @map("c_stat")
+  motivo         String?  @db.Text
+  protocolo      String?
+  dhRecbto       String?  @map("dh_recbto")
+  xmlEnviado     String?  @map("xml_enviado") @db.Text
+  xmlResposta    String?  @map("xml_resposta") @db.Text
+  xmlAutorizado  String?  @map("xml_autorizado") @db.Text
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@index([saleId, createdAt(sort: Desc)])
+  @@index([storeCode, serie, numero])
+  @@index([status])
+  @@map("nfce_attempts")
 }
 
 // ── NF-e modelo 55 (transferência entre lojas) ──────────────────────────

@@ -710,9 +710,16 @@ export default function NfceConfigPage() {
                   </div>
                 )}
 
+                {cfg.ambiente === '1' && (
+                  <div className="mb-3 rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-900">
+                    <FileWarning size={14} className="inline mr-1" />
+                    Teste bloqueado em producao para nao consumir numeracao fiscal.
+                  </div>
+                )}
+
                 <button
                   onClick={testarEmissao}
-                  disabled={!cfg.ready || testing}
+                  disabled={!cfg.ready || testing || cfg.ambiente === '1'}
                   className="w-full bg-purple-600 hover:bg-purple-700 disabled:opacity-40 disabled:cursor-not-allowed text-white px-4 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition"
                 >
                   <FlaskConical size={18} />

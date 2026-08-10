@@ -229,18 +229,71 @@ export class NfceService {
 
   // ── Helpers de número e chave ───────────────────────────────────────
 
-  private async nextNumero(storeCode: string): Promise<number> {
-    const cur = await (this.prisma as any).nfceConfig.findUnique({
-      where: { storeCode },
-      select: { numeroAtual: true },
+  /**
+   * Reserva o nNF uma unica vez por venda. O UPDATE ... RETURNING elimina a
+   * corrida do antigo read+write quando dois caixas emitem ao mesmo tempo.
+   */
+  private async reserveNumero(saleId: string, storeCode: string, serie: string): Promise<number> {
+    return (this.prisma as any).$transaction(async (tx: any) => {
+      const [locked] = await tx.$queryRawUnsafe(
+        `SELECT nfce_number FROM pdv_sales WHERE id = $1 FOR UPDATE`,
+        saleId,
+      );
+      if (!locked) throw new BadRequestException('Venda nao encontrada durante reserva da NFC-e');
+
+      const existente = parseInt(String(locked.nfce_number || ''), 10);
+      if (Number.isFinite(existente) && existente > 0) return existente;
+
+      const [cfg] = await tx.$queryRawUnsafe(
+        `UPDATE nfce_configs
+            SET numero_atual = numero_atual + 1, updated_at = NOW()
+          WHERE store_code = $1
+          RETURNING numero_atual`,
+        storeCode,
+      );
+      if (!cfg) throw new BadRequestException(`NFC-e nao configurada pra loja ${storeCode}`);
+
+      const numero = Number(cfg.numero_atual);
+      await tx.$executeRawUnsafe(
+        `UPDATE pdv_sales SET nfce_number = $1, nfce_serie = $2 WHERE id = $3`,
+        String(numero),
+        serie,
+        saleId,
+      );
+      return numero;
     });
-    const atual = cur?.numeroAtual || 0;
-    const proximo = atual + 1;
-    await (this.prisma as any).nfceConfig.update({
-      where: { storeCode },
-      data: { numeroAtual: proximo },
+  }
+
+  private async acquireEmissionLock(saleId: string): Promise<string> {
+    const lockId = crypto.randomUUID();
+    const expiredBefore = new Date(Date.now() - 2 * 60 * 1000);
+    const claimed = await (this.prisma as any).pdvSale.updateMany({
+      where: {
+        id: saleId,
+        AND: [
+          { OR: [{ nfceStatus: null }, { nfceStatus: { not: 'authorized' } }] },
+          {
+            OR: [
+              { nfceEmissionLockId: null },
+              { nfceEmissionLockAt: null },
+              { nfceEmissionLockAt: { lt: expiredBefore } },
+            ],
+          },
+        ],
+      },
+      data: { nfceEmissionLockId: lockId, nfceEmissionLockAt: new Date() },
     });
-    return proximo;
+    if (claimed.count !== 1) {
+      throw new BadRequestException('A NFC-e desta venda ja esta sendo emitida. Aguarde alguns segundos.');
+    }
+    return lockId;
+  }
+
+  private async releaseEmissionLock(saleId: string, lockId: string): Promise<void> {
+    await (this.prisma as any).pdvSale.updateMany({
+      where: { id: saleId, nfceEmissionLockId: lockId },
+      data: { nfceEmissionLockId: null, nfceEmissionLockAt: null },
+    });
   }
 
   /**
@@ -894,7 +947,8 @@ export class NfceService {
     };
     const ready = !!(cfgRaw.cnpj && cfgRaw.ie && cfgRaw.cscToken && cfgRaw.certPfxB64);
 
-    const numero = await this.nextNumero(sale.storeCode);
+    const emissionLockId = await this.acquireEmissionLock(sale.id);
+    const numero = await this.reserveNumero(sale.id, sale.storeCode, config.serie);
     const chave = this.buildChave({
       cUF: '35',
       cnpj: config.cnpj.replace(/\D/g, ''),
@@ -903,7 +957,28 @@ export class NfceService {
       dataEmissao: this.agoraBrasilia(),
     });
 
-    const xml = await this.buildXml(sale, config, chave, numero);
+    const attempt = await (this.prisma as any).nfceAttempt.create({
+      data: {
+        saleId: sale.id,
+        storeCode: sale.storeCode,
+        serie: config.serie,
+        numero,
+        chave,
+        status: 'building',
+      },
+    });
+
+    let xml: string;
+    try {
+      xml = await this.buildXml(sale, config, chave, numero);
+    } catch (e: any) {
+      await (this.prisma as any).nfceAttempt.update({
+        where: { id: attempt.id },
+        data: { status: 'error', motivo: `Erro ao montar XML: ${e?.message || e}` },
+      });
+      await this.releaseEmissionLock(sale.id, emissionLockId);
+      throw e;
+    }
 
     const status: 'preview' | 'authorized' = 'preview';
     await (this.prisma as any).pdvSale.update({
@@ -921,6 +996,11 @@ export class NfceService {
       this.logger.warn(
         `[nfce] Venda ${sale.id.slice(0, 8)} loja=${sale.storeCode} sem certificado/CSC — XML preview (chave ${chave})`,
       );
+      await (this.prisma as any).nfceAttempt.update({
+        where: { id: attempt.id },
+        data: { status: 'error', motivo: 'Configuracao incompleta: XML gerado sem transmissao' },
+      });
+      await this.releaseEmissionLock(sale.id, emissionLockId);
       return { status: 'preview', chave, numero, serie: config.serie, xml };
     }
 
@@ -938,6 +1018,11 @@ export class NfceService {
         where: { id: sale.id },
         data: { nfceStatus: 'rejected', nfceMotivo: `Erro assinatura: ${e?.message}` },
       });
+      await (this.prisma as any).nfceAttempt.update({
+        where: { id: attempt.id },
+        data: { status: 'error', motivo: `Erro assinatura: ${e?.message}` },
+      });
+      await this.releaseEmissionLock(sale.id, emissionLockId);
       return {
         status: 'rejected',
         chave,
@@ -947,6 +1032,11 @@ export class NfceService {
         motivo: `Erro ao assinar XML: ${e?.message}`,
       };
     }
+
+    await (this.prisma as any).nfceAttempt.update({
+      where: { id: attempt.id },
+      data: { status: 'signed', xmlEnviado: xmlAssinado },
+    });
 
     let transmit = await transmitNfeSefazSp({
       xmlAssinado,
@@ -1012,6 +1102,17 @@ export class NfceService {
           nfceMotivo: `${transmit.cStat}: ${transmit.xMotivo}`,
         },
       });
+      await (this.prisma as any).nfceAttempt.update({
+        where: { id: attempt.id },
+        data: {
+          status: 'rejected',
+          cStat: String(transmit.cStat || ''),
+          motivo: transmit.xMotivo || transmit.error || 'Rejeitada',
+          xmlEnviado: transmit.xmlEnviado || xmlAssinado,
+          xmlResposta: transmit.xmlResposta || null,
+        },
+      });
+      await this.releaseEmissionLock(sale.id, emissionLockId);
       return {
         status: 'rejected',
         chave,
@@ -1042,6 +1143,20 @@ export class NfceService {
         nfceAutorizadaEm: transmit.dhRecbto ? new Date(transmit.dhRecbto) : new Date(),
       },
     });
+    await (this.prisma as any).nfceAttempt.update({
+      where: { id: attempt.id },
+      data: {
+        status: 'authorized',
+        cStat: String(transmit.cStat || ''),
+        motivo: transmit.xMotivo || null,
+        protocolo: transmit.protocolo || null,
+        dhRecbto: transmit.dhRecbto || null,
+        xmlEnviado: transmit.xmlEnviado || xmlAssinado,
+        xmlResposta: transmit.xmlResposta || null,
+        xmlAutorizado: transmit.xmlAutorizado || xmlAssinado,
+      },
+    });
+    await this.releaseEmissionLock(sale.id, emissionLockId);
 
     this.logger.log(
       `[nfce] AUTORIZADA: chave=${chave} prot=${transmit.protocolo} loja=${sale.storeCode}`,
@@ -1080,6 +1195,11 @@ export class NfceService {
     });
     if (!cfgRaw) {
       return { status: 'error', error: 'NFC-e não configurada pra essa loja' };
+    }
+    if (String(cfgRaw.ambiente || '2') === '1') {
+      throw new BadRequestException(
+        'Teste de emissao bloqueado em producao. Use homologacao para validar a configuracao.',
+      );
     }
     const ready = !!(cfgRaw.cnpj && cfgRaw.ie && cfgRaw.cscToken && cfgRaw.certPfxB64);
     if (!ready) {
@@ -1133,7 +1253,8 @@ export class NfceService {
       ],
     };
 
-    const numero = await this.nextNumero(storeCode);
+    // Faixa isolada de homologacao: nao altera numeroAtual da serie produtiva.
+    const numero = 900_000_000 + (Date.now() % 100_000_000);
     const chave = this.buildChave({
       cUF: '35',
       cnpj: config.cnpj.replace(/\D/g, ''),
