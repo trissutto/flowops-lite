@@ -85,3 +85,8 @@ uploads/
 
 # Snapshots locais de seguranca (correcoes em producao) — nunca versionar
 backup/
+
+# Saída do classificar-em-massa.js (backup e relatórios da rodada)
+backend/scripts/backup-antes.json
+backend/scripts/mudancas.json
+backend/scripts/sem-manga.txt
