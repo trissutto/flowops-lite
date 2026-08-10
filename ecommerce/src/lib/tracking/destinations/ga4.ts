@@ -17,8 +17,30 @@ function measurementId(): string {
   return process.env.NEXT_PUBLIC_GA4_ID || '';
 }
 
-function adsId(): string {
-  return process.env.NEXT_PUBLIC_GOOGLE_ADS_ID || '';
+/**
+ * CONTAS DO GOOGLE ADS — plural, de propósito.
+ *
+ * A rede tem duas: uma pras LOJAS FÍSICAS e outra pro E-COMMERCE. As duas
+ * anunciam pro mesmo site, então as duas precisam enxergar o que acontece
+ * aqui — senão a conta de lojas fica cega justamente pros sinais que ela
+ * deveria otimizar (clique no WhatsApp da unidade, pedido de rota).
+ *
+ * Aceita lista separada por vírgula:
+ *   NEXT_PUBLIC_GOOGLE_ADS_ID=AW-11353612462,AW-878832356
+ *
+ * ⚠️ O QUE ISTO **NÃO** FAZ: escolher qual conta conta o quê. Os eventos são
+ * enviados às duas; quem decide o que vira conversão é a **ação de conversão**
+ * configurada dentro de cada conta do Ads. Ou seja: a conta de e-commerce
+ * marca `purchase` como conversão, a de lojas marca os eventos de intenção de
+ * ir à loja. Se as duas marcarem tudo, as duas vão reportar a mesma venda — e
+ * a soma dos dois painéis passa a mentir. Isso é configuração do gestor de
+ * tráfego, não tem como o site resolver por ele.
+ */
+function adsIds(): string[] {
+  return (process.env.NEXT_PUBLIC_GOOGLE_ADS_ID || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
 function gtag(): ((...args: unknown[]) => void) | undefined {
@@ -49,9 +71,19 @@ export const ga4: Destination = {
 
     gtag()?.('js', new Date());
     gtag()?.('config', measurementId(), { send_page_view: false });
-    if (adsId()) {
-      // Enhanced Conversions liga aqui; os dados do usuário vão por evento.
-      gtag()?.('config', adsId(), { allow_enhanced_conversions: true });
+    /**
+     * Uma linha de `config` por conta do Ads — é assim que o gtag envia pra
+     * mais de uma. Elas são independentes: uma fora do ar não afeta a outra.
+     *
+     * Enhanced Conversions: a flag liga o recurso, mas quem o alimenta é o
+     * `user_data` que sai do SERVIDOR, em `server/ga4-mp.ts`. Tem que ser lá
+     * porque o `purchase` é server-side: a compra só é confirmada depois do
+     * pagamento, sem navegador aberto. Enquanto esta flag existiu sozinha
+     * (até 10/08/2026) o recurso aparecia ativo no painel do Google e não
+     * fazia absolutamente nada — não havia dado nenhum chegando pra casar.
+     */
+    for (const id of adsIds()) {
+      gtag()?.('config', id, { allow_enhanced_conversions: true });
     }
   },
 

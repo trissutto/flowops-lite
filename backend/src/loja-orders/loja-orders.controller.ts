@@ -36,8 +36,21 @@ import { FreteService } from './frete.service';
 
 /**
  * Balde por IP guardado no `globalThis`: o Nest recria providers em hot-reload
- * e cada instância nova zeraria a contagem. É por processo (o Railway roda 1),
- * então serve de freio contra loop/scan — não é defesa distribuída.
+ * e cada instância nova zeraria a contagem.
+ *
+ * ── POR QUE ESTE LIMITE É MELHOR QUE O DO SITE ──
+ *
+ * O e-commerce tem um limitador próprio, em memória de função serverless. A
+ * Vercel sobe várias cópias sob carga e CADA UMA conta do zero: um limite de
+ * "10 por minuto" com 8 cópias no ar é 80 na prática. Não é uma trava, é uma
+ * estimativa.
+ *
+ * Aqui não: o Railway roda UM processo, então este balde é o mesmo pra todas
+ * as cópias do site. É o limite que de fato vale — e sem infra nova (nada de
+ * Redis) justamente porque o backend não é serverless.
+ *
+ * Só funciona somado ao `x-cliente-ip` do BFF (ver `ipDe`): sem ele o balde é
+ * por IP da Vercel, ou seja, um balde só pra loja inteira.
  */
 const BALDE_KEY = '__flowopsLojaOrderRate__';
 const JANELA_MS = 60_000;
@@ -84,7 +97,28 @@ export class LojaOrdersController {
     if (!token || !this.segredoConfere(token, esperado)) throw new NotFoundException();
   }
 
+  /**
+   * QUEM É A PESSOA DO OUTRO LADO — e por que não é o `x-forwarded-for`.
+   *
+   * Quem faz esta chamada é o BFF do e-commerce (server-to-server), não o
+   * navegador da cliente. Então o IP que chega aqui é o da VERCEL, igual pra
+   * todo mundo: o balde de 20/min passava a valer pra loja INTEIRA somada, e a
+   * 21ª cliente a fechar pedido no mesmo minuto levava "Muitas tentativas
+   * seguidas". Em minuto normal ninguém percebe; em live ou campanha, o site
+   * recusa venda boa achando que está se defendendo. (Achado em 10/08/2026.)
+   *
+   * O BFF passou a repassar o IP real em `x-cliente-ip` (ver `lib/api.ts` do
+   * ecommerce). Confiar num header é seguro AQUI porque `exigirToken` já rodou:
+   * quem chega até esta linha provou conhecer o `LOJA_ORDER_TOKEN`. Se um dia
+   * esta rota for aberta ao navegador, este header vira forjável e o `if`
+   * abaixo tem que cair junto.
+   *
+   * Sem o header (deploy antigo do site, chamada de fora), cai no comportamento
+   * anterior — limite compartilhado, mas nunca sem limite.
+   */
   private ipDe(req: any): string {
+    const daCliente = String(req?.headers?.['x-cliente-ip'] || '').trim();
+    if (daCliente) return daCliente;
     const xff = String(req?.headers?.['x-forwarded-for'] || '').split(',')[0].trim();
     return xff || req?.ip || req?.socket?.remoteAddress || 'desconhecido';
   }

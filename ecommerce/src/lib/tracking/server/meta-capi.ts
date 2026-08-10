@@ -14,6 +14,7 @@ import 'server-only';
  */
 
 import type { TrackingEvent } from '../types';
+import { hashEmail, hashPhone, sha256 } from './hash';
 
 const API_VERSION = 'v21.0';
 
@@ -47,32 +48,13 @@ export function isMetaCapiEnabled(): boolean {
   return Boolean(process.env.META_PIXEL_ID && process.env.META_CAPI_TOKEN);
 }
 
-/** SHA-256 em hex via Web Crypto — funciona em Node e no runtime Edge. */
-async function sha256(value: string): Promise<string> {
-  const bytes = new TextEncoder().encode(value);
-  const digest = await crypto.subtle.digest('SHA-256', bytes);
-  return Array.from(new Uint8Array(digest))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-}
-
-const normEmail = (v: string) => v.trim().toLowerCase();
-
-/** Telefone: só dígitos, com DDI. Brasileiro sem 55 não casa na base da Meta. */
-function normPhone(v: string): string {
-  const digits = v.replace(/\D/g, '');
-  if (!digits) return '';
-  return digits.startsWith('55') ? digits : `55${digits}`;
-}
-
 async function buildUserData(event: TrackingEvent, signals: MetaUserSignals): Promise<Record<string, unknown>> {
   const user: Record<string, unknown> = {};
 
-  if (signals.email) user.em = [await sha256(normEmail(signals.email))];
-  if (signals.phone) {
-    const phone = normPhone(signals.phone);
-    if (phone) user.ph = [await sha256(phone)];
-  }
+  const em = await hashEmail(signals.email);
+  if (em) user.em = [em];
+  const ph = await hashPhone(signals.phone);
+  if (ph) user.ph = [ph];
 
   // external_id identifica a pessoa entre sessões. Sem cadastro, o
   // anonymous_id já melhora bastante o casamento — e não é dado pessoal.

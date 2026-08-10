@@ -156,6 +156,13 @@ export interface Attribution {
   campaign?: string;
   term?: string;
   content?: string;
+  /**
+   * `utm_id` — o ID da campanha no Meta (`{{campaign.id}}`). O backend já
+   * gravava isso em `Order.utmId`, mas o campo não existia aqui: o dado
+   * chegava na URL e era descartado antes de virar pedido. Nome do parâmetro é
+   * `id` (não `utmId`) porque `LojaOrdersService` lê `attr.id`.
+   */
+  id?: string;
   gclid?: string;
   fbclid?: string;
   landing_page?: string;

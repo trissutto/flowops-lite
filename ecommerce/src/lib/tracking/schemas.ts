@@ -56,6 +56,8 @@ export const attributionSchema = z.object({
   campaign: z.string().optional(),
   term: z.string().optional(),
   content: z.string().optional(),
+  /** `utm_id` — ID da campanha no Meta. Vira `Order.utmId` no backend. */
+  id: z.string().optional(),
   gclid: z.string().optional(),
   fbclid: z.string().optional(),
   landing_page: z.string().optional(),

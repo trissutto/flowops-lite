@@ -153,30 +153,56 @@ export function setLoja(code: string | null): void {
 export type { Attribution } from './types';
 
 /**
- * Captura a origem UMA vez por sessão, na primeira página. Reescrever a cada
- * navegação apagaria a campanha assim que a visitante clicasse em qualquer link
- * interno — e aí toda venda vira "direto".
+ * De onde a visitante veio. Capturada na primeira página em que ela chega com
+ * origem identificável, e mantida por 30 dias.
+ *
+ * ── DUAS REGRAS QUE PARECEM A MESMA E NÃO SÃO ──
+ *
+ * 1. Não reescrever a cada navegação. Senão a campanha é apagada no instante
+ *    em que ela clica em qualquer link interno, e toda venda vira "direto".
+ *
+ * 2. Não morrer com a aba. Era o comportamento até 10/08/2026: a origem vivia
+ *    em `sessionStorage`. A cliente clicava no anúncio na segunda, gostava do
+ *    vestido, ia pensar — e voltava na quarta digitando o site direto. A
+ *    origem tinha sumido, a venda entrava como "Direto", e a campanha que
+ *    trouxe ela levava crédito ZERO. Roupa tem decisão de dias, então isso
+ *    subestimava sistematicamente o retorno da mídia paga.
+ *
+ * A janela de 30 dias é o last-click padrão do mercado (mesmo default do Meta
+ * e do GA4), então o relatório da casa bate com o do Gerenciador de Anúncios.
+ * Origem NOVA dentro da janela sobrescreve a antiga — é last-click, não
+ * first-click: se ela voltou por outro anúncio, quem levou ela de volta é
+ * quem fecha a venda.
  */
 export function captureAttribution(): Attribution {
   if (typeof window === 'undefined') return {};
 
-  const stored = safeGet('session', ATTRIBUTION_KEY);
-  if (stored) {
-    try {
-      return JSON.parse(stored) as Attribution;
-    } catch {
-      /* segue e recaptura */
-    }
-  }
-
   const q = new URLSearchParams(window.location.search);
   const ref = document.referrer || '';
+
+  /**
+   * Só conta como "toque novo" o que identifica origem de verdade: UTM na URL
+   * ou clique de anúncio (gclid/fbclid). Referrer sozinho não vale — senão
+   * voltar do Google depois de uma busca por "lurds" sobrescreveria a campanha
+   * paga que trouxe ela na semana passada.
+   */
+  const temToqueNovo = Boolean(
+    q.get('utm_source') || q.get('utm_campaign') || q.get('gclid') || q.get('fbclid'),
+  );
+
+  const guardada = lerAtribuicao();
+  if (guardada && !temToqueNovo) return guardada;
+
   const attr: Attribution = {
     source: q.get('utm_source') || inferSource(ref),
     medium: q.get('utm_medium') || (ref ? 'referral' : 'direct'),
     campaign: q.get('utm_campaign') || undefined,
     term: q.get('utm_term') || undefined,
     content: q.get('utm_content') || undefined,
+    // O ID da campanha existe como coluna no pedido (`utmId`) e nunca era
+    // capturado aqui — se o Meta manda `utm_id={{campaign.id}}`, o dado
+    // chegava e era jogado fora.
+    id: q.get('utm_id') || undefined,
     gclid: q.get('gclid') || undefined,
     fbclid: q.get('fbclid') || undefined,
     landing_page: window.location.pathname,
@@ -184,8 +210,39 @@ export function captureAttribution(): Attribution {
 
   // Remove chave sem valor pra não poluir o payload com `undefined`.
   const clean = Object.fromEntries(Object.entries(attr).filter(([, v]) => v)) as Attribution;
-  safeSet('session', ATTRIBUTION_KEY, JSON.stringify(clean));
+
+  // Primeiro acesso sem origem nenhuma (digitou o endereço): não vale gravar
+  // "direto" por 30 dias — isso blindaria a visitante contra qualquer
+  // campanha futura durante um mês.
+  if (!temToqueNovo && !clean.source) return clean;
+
+  safeSet(
+    'local',
+    ATTRIBUTION_KEY,
+    JSON.stringify({ attr: clean, expiraEm: Date.now() + ATTRIBUTION_TTL_MS }),
+  );
   return clean;
+}
+
+/**
+ * Lê a origem guardada, respeitando a validade. Aceita o formato ANTIGO (o
+ * objeto cru, sem `expiraEm`) que ficou em `sessionStorage` nos navegadores
+ * de quem estava com o site aberto na virada — sem isso, a atribuição dessas
+ * visitantes se perderia justamente no deploy.
+ */
+function lerAtribuicao(): Attribution | null {
+  const bruto = safeGet('local', ATTRIBUTION_KEY) ?? safeGet('session', ATTRIBUTION_KEY);
+  if (!bruto) return null;
+  try {
+    const parsed = JSON.parse(bruto);
+    if (parsed && typeof parsed === 'object' && 'attr' in parsed) {
+      if (typeof parsed.expiraEm === 'number' && parsed.expiraEm < Date.now()) return null;
+      return parsed.attr as Attribution;
+    }
+    return parsed as Attribution; // formato antigo
+  } catch {
+    return null;
+  }
 }
 
 function inferSource(referrer: string): string | undefined {

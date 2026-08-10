@@ -202,7 +202,18 @@ type BackendEnvelope = {
 
 async function chamar(
   path: string,
-  init: { method: 'GET' | 'POST'; body?: unknown; timeoutMs: number },
+  init: {
+    method: 'GET' | 'POST';
+    body?: unknown;
+    timeoutMs: number;
+    /**
+     * IP real da cliente. O backend limita por IP, mas quem chega lá é esta
+     * função — server-to-server —, então sem repassar isto o limite vale pra
+     * loja INTEIRA somada e a 21ª cliente do minuto leva 429. Ver `ipDe` no
+     * `loja-orders.controller.ts`.
+     */
+    clientIp?: string;
+  },
 ): Promise<{ httpStatus: number; body: BackendEnvelope }> {
   const { baseUrl, token } = config();
   const controller = new AbortController();
@@ -214,6 +225,7 @@ async function chamar(
       headers: {
         Accept: 'application/json',
         'x-loja-token': token,
+        ...(init.clientIp ? { 'x-cliente-ip': init.clientIp } : {}),
         ...(init.body ? { 'Content-Type': 'application/json' } : {}),
       },
       body: init.body ? JSON.stringify(init.body) : undefined,

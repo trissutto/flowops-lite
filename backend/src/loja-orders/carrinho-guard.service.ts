@@ -146,6 +146,87 @@ export class CarrinhoGuardService {
   }
 
   /**
+   * ESTOQUE JÁ PROMETIDO A OUTRA CLIENTE — a peça vendida que ainda não saiu
+   * da arara.
+   *
+   * ── O PROBLEMA ──
+   *
+   * O estoque de um pedido do site só baixa quando a loja BIPA a peça na
+   * separação. Entre "cliente pagou" e "loja bipou" passam horas, e nessa
+   * janela `wincred_estoque` ainda conta a peça como disponível. Duas clientes
+   * comprando a última unidade com meia hora de diferença passam as duas: o
+   * sistema cobra as duas, e alguém liga pra uma delas desmarcando a compra.
+   *
+   * Não é só corrida de milissegundos entre dois checkouts simultâneos — essa
+   * é a versão rara. A versão comum é a janela de horas, e numa live ou
+   * campanha em peça de estoque baixo ela é quase garantida.
+   *
+   * ── POR QUE DEDUZIR EM VEZ DE RESERVAR ──
+   *
+   * A alternativa seria baixar o estoque na hora do pedido, ou manter uma
+   * tabela de reservas. As duas criam estado novo pra sincronizar, e estado
+   * que precisa ser liberado (pedido cancelado, PIX expirado, separação
+   * concluída) é estado que uma hora vaza: reserva órfã trava peça boa e
+   * ninguém descobre até a peça "sumir" da vitrine com estoque na arara.
+   *
+   * Aqui não há o que liberar. O compromisso é DERIVADO dos pedidos que
+   * existem: o pedido sai da lista de status vivos e para de reservar
+   * sozinho, no mesmo instante, sem cron e sem compensação.
+   *
+   * ── QUAIS PEDIDOS CONTAM ──
+   *
+   * Pago e ainda não separado conta sempre. Aguardando pagamento conta só
+   * dentro da janela do PIX (2h, `PIX_EXPIRA_MIN`): carrinho abandonado não
+   * pode segurar peça pra sempre. Enviado/entregue não conta — ali o estoque
+   * JÁ baixou, e contar de novo tiraria a peça duas vezes.
+   *
+   * Kill-switch: `CARRINHO_RESERVA=0` volta ao comportamento antigo.
+   */
+  private static readonly STATUS_QUE_RESERVAM = [
+    'processing',
+    'routing',
+    'awaiting_stock',
+    'separating',
+  ];
+  /** Janela do PIX + folga — igual à validade que o backend gera. */
+  private static readonly HORAS_PENDENTE = 3;
+
+  private async reservado(codigos: string[]): Promise<Map<string, number>> {
+    const vazio = new Map<string, number>();
+    if (String(process.env.CARRINHO_RESERVA ?? '1') === '0') return vazio;
+    if (!codigos.length) return vazio;
+
+    const desde = new Date(Date.now() - CarrinhoGuardService.HORAS_PENDENTE * 3600_000);
+    try {
+      const rows = await this.prisma.$queryRawUnsafe<Array<{ sku: string; qtd: number }>>(
+        `
+        SELECT oi.sku AS sku, SUM(oi.quantity)::int AS qtd
+          FROM order_items oi
+          JOIN orders o ON o.id = oi.order_id
+         WHERE oi.sku = ANY($1)
+           AND (
+                 o.status = ANY($2)
+              OR (o.status = 'pending' AND o.created_at >= $3)
+           )
+         GROUP BY oi.sku
+        `,
+        codigos,
+        CarrinhoGuardService.STATUS_QUE_RESERVAM,
+        desde,
+      );
+      const m = new Map<string, number>();
+      for (const r of rows) m.set(String(r.sku), Number(r.qtd) || 0);
+      return m;
+    } catch (e: any) {
+      // Mesma postura do gate de publicação: esta é uma trava A MAIS. Se a
+      // consulta falhar, vender com o estoque bruto é melhor do que recusar
+      // pedido bom — o risco vira o de antes, não um risco novo.
+      this.logger.warn(`[guard] não consegui conferir reservas (segue): ${e?.message || e}`);
+      return vazio;
+    }
+  }
+
+  /**
    * Dedupe do catálogo: uma linha por cor+tamanho, vencendo a de maior
    * estoque (empate → código menor, pra resposta ser sempre a mesma).
    */
@@ -202,6 +283,10 @@ export class CarrinhoGuardService {
     }
 
     const bloqueadas = await this.despublicadas(Array.from(porRef.keys()));
+    // Uma consulta só pra sacola inteira: os códigos de TODAS as variações das
+    // REFs do carrinho, resolvidos ou não. Consultar dentro do laço faria uma
+    // ida ao banco por item.
+    const reservas = await this.reservado(linhas.map((l) => String(l.codigo)));
 
     const conferidos: ItemConferido[] = [];
     let subtotal = 0;
@@ -283,8 +368,28 @@ export class CarrinhoGuardService {
       }
       const precoCatalogo = Math.min(...precos);
 
-      // 4) Item 5 — ESTOQUE no fechamento, não só ao adicionar.
-      const estoque = variacoes.reduce((s, l) => s + (l.estoque || 0), 0);
+      /**
+       * 4) Item 5 — ESTOQUE no fechamento, não só ao adicionar.
+       *
+       * Do estoque bruto sai o que já foi prometido a outra cliente e ainda
+       * não saiu da arara (ver `reservado`). Sem isso, a última peça é vendida
+       * quantas vezes couberem na janela entre o pedido e a separação.
+       *
+       * Piso em zero: reserva maior que o estoque significa que já houve
+       * venda a mais (ou que a peça foi baixada por outro caminho). Número
+       * negativo aqui só produziria mensagem sem sentido pra cliente.
+       */
+      const estoqueBruto = variacoes.reduce((s, l) => s + (l.estoque || 0), 0);
+      const jaPrometido = variacoes.reduce(
+        (s, l) => s + (reservas.get(String(l.codigo)) || 0),
+        0,
+      );
+      const estoque = Math.max(0, estoqueBruto - jaPrometido);
+      if (jaPrometido > 0) {
+        this.logger.log(
+          `[guard] REF ${ref}: estoque ${estoqueBruto} − ${jaPrometido} prometido = ${estoque}`,
+        );
+      }
       if (estoque <= 0) {
         return {
           ok: false,

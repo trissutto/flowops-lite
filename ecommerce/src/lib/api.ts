@@ -47,6 +47,19 @@ interface ApiOptions {
   body?: unknown;
   /** Aborta a requisição depois de N ms (o Giga já nos ensinou a temer pendura). */
   timeoutMs?: number;
+  /**
+   * IP REAL DA CLIENTE, repassado pro backend limitar por pessoa.
+   *
+   * Sem isto o backend só enxerga o IP da Vercel — todas as clientes caem no
+   * MESMO balde de 20 requisições por minuto, e a 21ª pessoa a tentar fechar
+   * pedido no mesmo minuto leva "Muitas tentativas seguidas". Numa live ou
+   * campanha, isso não é proteção: é o site recusando venda boa.
+   *
+   * O backend só confia neste header porque a chamada já foi autenticada pelo
+   * `x-loja-token` (server-to-server). Vindo do navegador, seria só um
+   * cabeçalho que qualquer um forja pra furar o limite.
+   */
+  clientIp?: string;
 }
 
 /**
@@ -64,6 +77,7 @@ export async function api<T>(path: string, options: ApiOptions = {}): Promise<T>
     method = 'GET',
     body,
     timeoutMs = 8000,
+    clientIp,
   } = options;
 
   if (!BASE_URL) {
@@ -85,6 +99,7 @@ export async function api<T>(path: string, options: ApiOptions = {}): Promise<T>
         Accept: 'application/json',
         ...(body ? { 'Content-Type': 'application/json' } : {}),
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(clientIp ? { 'x-cliente-ip': clientIp } : {}),
       },
       body: body ? JSON.stringify(body) : undefined,
       signal: controller.signal,
