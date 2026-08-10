@@ -10,6 +10,7 @@ import { CupomService } from './cupom.service';
 import { LojaPagamentoReconcileService } from './loja-pagamento-reconcile.service';
 import { LojaAdminController } from './loja-admin.controller';
 import { FreteService } from './frete.service';
+import { PersonIdentityModule } from '../person-identity/person-identity.module';
 
 /**
  * PEDIDOS DO E-COMMERCE NOVO (sprint 011).
@@ -24,7 +25,7 @@ import { FreteService } from './frete.service';
  * dinheiro entra.
  */
 @Module({
-  imports: [PrismaModule, HttpModule, CorreiosModule, forwardRef(() => PagarmeModule)],
+  imports: [PrismaModule, HttpModule, CorreiosModule, PersonIdentityModule, forwardRef(() => PagarmeModule)],
   controllers: [LojaOrdersController, LojaAdminController],
   providers: [
     LojaOrdersService,

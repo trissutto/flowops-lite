@@ -10,6 +10,7 @@ import { AiAgentService } from './ai-agent.service';
 // @TODO_VALIDATE_VS_LOJA — caminho do Prisma
 import { PrismaService } from '../prisma/prisma.service';
 import { LiveBroadcasterService } from './live-broadcaster.service';
+import { PersonIdentityService } from '../person-identity/person-identity.service';
 
 /**
  * Webhook receiver da Meta Graph API.
@@ -36,6 +37,7 @@ export class MetaWebhookController {
     private readonly aiAgent: AiAgentService,
     private readonly prisma: PrismaService,
     private readonly broadcaster: LiveBroadcasterService,
+    private readonly identity: PersonIdentityService,
   ) {}
 
   // ─────────── Verify (handshake inicial Meta) ───────────
@@ -168,6 +170,9 @@ export class MetaWebhookController {
       // obrigatórios (cpf, email, etc.) que aqui são nullable. Se for o
       // caso, ajustar create acima.
     });
+    await this.identity.linkCustomer(customer.id).catch((error) =>
+      this.logger.warn(`Identidade da live pendente: ${error?.message || error}`),
+    );
 
     // Produto ao vivo do momento — fonte de contexto pro parser
     const currentProduct = await this.prisma.liveProduct.findFirst({

@@ -15,6 +15,7 @@ import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service
 import { ProductSearchService } from '../product-search/product-search.service';
 import { ManychatService } from './manychat.service';
 import { CorreiosService } from '../correios/correios.service';
+import { PersonIdentityService } from '../person-identity/person-identity.service';
 import type { StoreInput, StockEntry } from '../routing/types';
 
 /**
@@ -58,6 +59,7 @@ export class LivePdvService {
     private readonly catalog: WincredCatalogService,
     private readonly productSearch: ProductSearchService,
     private readonly correios: CorreiosService,
+    private readonly identity: PersonIdentityService,
   ) {}
 
   /**
@@ -1189,6 +1191,9 @@ export class LivePdvService {
       if (Object.keys(patch).length) {
         await (this.prisma as any).customer.update({ where: { id: existing.id }, data: patch });
       }
+      await this.identity.linkCustomer(existing.id).catch((error) =>
+        this.logger.warn(`quickCustomer: identidade pendente: ${error?.message || error}`),
+      );
       return { id: existing.id, name: existing.name || name, phone, instagram: ig };
     }
 
@@ -1204,6 +1209,9 @@ export class LivePdvService {
         manychatSubscriberId: mcSid,
       },
     });
+    await this.identity.linkCustomer(created.id).catch((error) =>
+      this.logger.warn(`quickCustomer: identidade pendente: ${error?.message || error}`),
+    );
     return { id: created.id, name, phone, instagram: ig };
   }
 
@@ -1261,6 +1269,12 @@ export class LivePdvService {
       // Conflito (ex.: e-mail único já usado por outro cliente) não pode travar
       // a live — o snapshot do carrinho continua sendo a fonte pra venda.
       this.logger.warn(`updateCartCustomer: falha ao salvar Customer: ${(e as Error).message}`);
+    }
+
+    if (customerId) {
+      await this.identity.linkCustomer(customerId).catch((error) =>
+        this.logger.warn(`updateCartCustomer: identidade pendente: ${error?.message || error}`),
+      );
     }
 
     // Upsert do endereço mestre (CustomerAddress) — só se veio algo de endereço.

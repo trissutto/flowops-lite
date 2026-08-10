@@ -12,9 +12,10 @@ import { OrdersModule } from '../orders/orders.module';
 import { WooCommerceModule } from '../woocommerce/woocommerce.module';
 import { AuthModule } from '../auth/auth.module';
 import { ErpModule } from '../erp/erp.module';
+import { PersonIdentityModule } from '../person-identity/person-identity.module';
 
 @Module({
-  imports: [OrdersModule, WooCommerceModule, AuthModule, ErpModule],
+  imports: [OrdersModule, WooCommerceModule, AuthModule, ErpModule, PersonIdentityModule],
   providers: [CustomersService, CustomersCrmService, CustomersEtlService, CustomersGigaEtlService, CashbackConfigService],
   controllers: [CustomersController, CustomersCrmController, CashbackConfigController, CustomerResumeController],
   exports: [CustomersService, CustomersCrmService, CustomersEtlService, CustomersGigaEtlService, CashbackConfigService],

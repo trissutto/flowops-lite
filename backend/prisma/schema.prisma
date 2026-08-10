@@ -2454,6 +2454,7 @@ model PersonIdentifier {
   personId         String    @map("person_id")
   type             String    @db.VarChar(40)
   normalizedValue  String    @map("normalized_value") @db.VarChar(255)
+  uniqueKey        String?   @unique @map("unique_key") @db.VarChar(300)
   verified         Boolean   @default(false)
   source           String?   @db.VarChar(40)
   sourceCustomerId String?   @map("source_customer_id")

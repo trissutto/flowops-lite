@@ -11,6 +11,7 @@ import { WincredMirrorModule } from '../wincred-mirror/wincred-mirror.module';
 import { ProductSearchModule } from '../product-search/product-search.module';
 import { WebsocketModule } from '../websocket/websocket.module';
 import { CorreiosModule } from '../correios/correios.module';
+import { PersonIdentityModule } from '../person-identity/person-identity.module';
 import { LivePdvController } from './live-pdv.controller';
 import { LivePublicController, ManychatHookController, ManychatInboundController } from './live-public.controller';
 import { LivePayPublicController } from './live-pay-public.controller';
@@ -40,6 +41,7 @@ import { LivePdvCobrancaWhatsCron } from './live-pdv-cobranca-whats.cron';
     ProductSearchModule,
     WebsocketModule,
     CorreiosModule,
+    PersonIdentityModule,
   ],
   controllers: [LivePdvController, LivePublicController, ManychatHookController, ManychatInboundController, LivePayPublicController],
   providers: [LivePdvService, ManychatService, LivePdvExpiryCron, LivePdvPayReconcileCron, LivePdvCobrancaWhatsCron],
