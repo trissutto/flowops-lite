@@ -20,8 +20,33 @@ import type { MenuColumn, NavItem } from '@/types';
 
 type FiltroValor = { valor: string; qtd: number };
 
-/** Uma hora, igual à revalidação da home e dos banners. */
-const REVALIDATE = 3600;
+/**
+ * SEM CACHE nas páginas de categoria (dono, 10/08/2026: "elimine este cache").
+ *
+ * O mecanismo que derrubava o cache ao gravar (`/api/revalidar`) existe desde
+ * 07/08 e **nunca funcionou em produção**: `REVALIDATE_SECRET` não está
+ * configurada em nenhum dos dois lados, e sem ela o backend desiste em silêncio
+ * e a rota do site responde 503. Resultado: TODA edição de retaguarda esperava
+ * a hora inteira. O dono subiu as fotos das 12 categorias, abriu o site, viu as
+ * antigas e concluiu que não tinha salvo — as fotos estavam gravadas.
+ *
+ * Enquanto o segredo não existe, o cache é uma promessa de velocidade paga com
+ * a confiança de quem edita. Então:
+ *
+ *   · PÁGINAS DE CATEGORIA (`/categoria` e `/categoria/<slug>`) — a vitrine que
+ *     ele edita e confere: FRESCO SEMPRE. É o que ele abre pra ver se pegou.
+ *   · HOME: 60s. Ela é a página mais visitada e já carrega banner e vitrine
+ *     junto; um minuto é invisível pra quem edita e não abre mão do estático
+ *     justamente onde o tráfego está.
+ *
+ * A consulta é barata (16 linhas com contagem), não a grade de produtos — que
+ * segue com o cache dela.
+ *
+ * Ligando o `REVALIDATE_SECRET` nos dois lados, dá pra voltar tudo pra 3600 —
+ * aí o cache volta a ser velocidade de graça, que era a intenção original.
+ */
+const REVALIDATE_PADRAO = 60;
+const SEMPRE_FRESCO = 0;
 
 /** "moda-praia" → "Moda praia" · "calcas" → "Calças". */
 const ROTULOS: Record<string, string> = {
@@ -76,11 +101,16 @@ export interface CategoriaVitrine {
  *
  * Fallback pra `/public/loja/filtros` cobre só o caso de backend ainda não
  * atualizado (deploy em trânsito) — sem foto/foco, mas o site não cai.
+ *
+ * `fresco` pula o cache — ver o bloco de REVALIDATE_PADRAO lá em cima.
  */
-export async function getCategorias(): Promise<CategoriaVitrine[]> {
+export async function getCategorias(
+  { fresco = false }: { fresco?: boolean } = {},
+): Promise<CategoriaVitrine[]> {
+  const revalidate = fresco ? SEMPRE_FRESCO : REVALIDATE_PADRAO;
   try {
     const r = await api<CategoriaVitrine[]>('/public/loja/categorias', {
-      revalidate: REVALIDATE,
+      revalidate,
       tags: ['categorias'],
     });
     if (Array.isArray(r) && r.length) return r;
@@ -90,7 +120,7 @@ export async function getCategorias(): Promise<CategoriaVitrine[]> {
 
   try {
     const filtros = await api<{ categorias?: FiltroValor[] }>('/public/loja/filtros', {
-      revalidate: REVALIDATE,
+      revalidate,
       tags: ['filtros', 'categorias'],
     });
     const categorias = Array.isArray(filtros?.categorias) ? filtros.categorias : [];

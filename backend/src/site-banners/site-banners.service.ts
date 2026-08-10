@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { avisarVitrine } from '../common/avisar-vitrine';
 
 /**
  * BANNERS DA VITRINE — o conteúdo editorial do site que a loja troca sozinha.
@@ -67,19 +68,7 @@ export class SiteBannersService {
    * volta a ser exatamente o comportamento de antes.
    */
   private avisarSite(tags: string[]) {
-    const base = (process.env.ECOMMERCE_URL || '').split(',')[0].trim().replace(/\/$/, '');
-    const segredo = (process.env.REVALIDATE_SECRET || '').trim();
-    if (!base || !segredo) return;
-    void fetch(`${base}/api/revalidar`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-revalidate-secret': segredo },
-      body: JSON.stringify({ tags }),
-      signal: AbortSignal.timeout(5000),
-    })
-      .then((r) => {
-        if (!r.ok) this.logger.warn(`[banners] site respondeu ${r.status} ao revalidar`);
-      })
-      .catch((e) => this.logger.warn(`[banners] não avisei o site: ${e?.message || e}`));
+    avisarVitrine(tags, this.logger, 'banners');
   }
 
   /** Tags do slot — o serviço do site marca o cache com estas mesmas. */

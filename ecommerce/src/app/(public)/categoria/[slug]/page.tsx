@@ -8,7 +8,7 @@ import { ChipsSubcategoria } from '@/components/commerce/ChipsSubcategoria';
 import { InstagramCard } from '@/components/cards/InstagramCard';
 import { NewsletterBlock } from '@/components/sections/NewsletterBlock';
 import { EditorialCard } from '@/components/sections/ImageGrid';
-import { CATEGORY_SLUGS, categoryMeta } from '@/services/products';
+import { categoryMeta } from '@/services/products';
 import { fetchPrimeiraPagina } from '@/services/vitrine';
 import { getCategorias } from '@/services/categorias-menu';
 import { editorials, instagramPosts, storeInteriorImage } from '@/data/content';
@@ -28,15 +28,25 @@ import { breadcrumbSchema, buildMetadata, jsonLdGraph } from '@/lib/seo';
  * "entrou → viu produto → comprou". Cabeçalho agora é uma linha (breadcrumb +
  * título), e a grade não tem mais interrupção nenhuma.
  *
- * ISR: `revalidate` de 1h — o catálogo muda por reposição, não por segundo.
+ * SEM ISR (dono, 10/08/2026: "elimine este cache"). Era 1h, e como o
+ * `REVALIDATE_SECRET` nunca foi configurado em produção, nada derrubava esse
+ * cache: classificar uma peça e conferir na vitrine eram coisas separadas por
+ * uma hora. Ver `categorias-menu.ts`.
  */
 
-export const revalidate = 3600;
+export const dynamic = 'force-dynamic';
 
-/** Pré-renderiza as categorias conhecidas; novas caem no fallback dinâmico. */
-export function generateStaticParams() {
-  return CATEGORY_SLUGS.map((slug) => ({ slug }));
-}
+/**
+ * `generateStaticParams` SAIU junto com o ISR.
+ *
+ * Ele prerenderizava as categorias conhecidas no build — com a página
+ * dinâmica, isso vira contradição: o build congelaria uma versão que nunca
+ * mais atualiza, que é o oposto exato do que foi pedido.
+ *
+ * O que NÃO se perde: a grade de produtos continua com o cache de dados dela
+ * (`fetchPrimeiraPagina` → tags `catalogo`/`categoria:<slug>`). Muda o
+ * render, não a consulta pesada — a categoria é lida fresca, a vitrine não.
+ */
 
 export async function generateMetadata({
   params,
@@ -69,6 +79,16 @@ export default async function CategoryPage({ params }: { params: Promise<{ slug:
     ordenar: 'novidades',
   });
 
+  /**
+   * SUBCATEGORIAS desta categoria — "Blusas" → "Manga curta".
+   *
+   * Vem `fresco` porque é exatamente o que o dono acabou de classificar e vai
+   * abrir a página pra conferir. Vazio enquanto ninguém classificou: o
+   * `ChipsSubcategoria` não renderiza nada e a página fica como era.
+   */
+  const subcategorias =
+    (await getCategorias({ fresco: true })).find((c) => c.slug === slug)?.subcategorias ?? [];
+
   const trail = [
     { name: 'Início', path: '/' },
     { name: 'Categorias', path: '/categoria' },
@@ -91,6 +111,9 @@ export default async function CategoryPage({ params }: { params: Promise<{ slug:
           }))}
         />
         <SectionTitle eyebrow={`${meta.name} do 46 ao 60`} title={meta.title} as="h1" />
+        {/* Primeira coisa depois do título: é o recorte mais previsível da
+            página — ver `ChipsSubcategoria`. */}
+        <ChipsSubcategoria subcategorias={subcategorias} className="mt-6 justify-center" />
       </Section>
 
       {/* 02 — BARRA + FILTROS + GRID, SEM INTERRUPÇÃO NENHUMA */}

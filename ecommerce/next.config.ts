@@ -49,7 +49,33 @@ const nextConfig: NextConfig = {
   async redirects() {
     /** Onde o FlowOps roda — destino de todo caminho que ainda não migrou. */
     const FLOWOPS = process.env.FLOWOPS_PORTAL_URL || 'https://crm.lurdsplussize.com.br';
+    /**
+     * O DOMÍNIO DA LOJA É lurdsplussize.com.br, NÃO O .vercel.app.
+     *
+     * Achado do dono em 10/08/2026, navegando: ele abriu o endereço da Vercel e
+     * o site inteiro seguiu ali — links internos são relativos, então uma vez
+     * dentro do domínio errado nunca se sai dele.
+     *
+     * Isso não é cosmético. O mesmo site em dois endereços é conteúdo
+     * duplicado pro Google (as duas versões disputam a mesma busca e nenhuma
+     * ganha), e cookie de sessão e carrinho não atravessam de um domínio pro
+     * outro: quem entra pelo .vercel.app faz login e perde tudo ao clicar num
+     * link que aponte pro domínio de verdade.
+     *
+     * `has: host` casa SÓ o alias de produção. Os endereços de preview
+     * (`lurds-ecommerce-git-<branch>.vercel.app`) seguem intactos, senão testar
+     * uma branch viraria um pulo pra produção.
+     */
+    const CANONICO = (process.env.NEXT_PUBLIC_SITE_URL || 'https://www.lurdsplussize.com.br')
+      .replace(/\/$/, '');
     return [
+      {
+        source: '/:caminho*',
+        has: [{ type: 'host', value: 'lurds-ecommerce.vercel.app' }],
+        destination: `${CANONICO}/:caminho*`,
+        permanent: true,
+      },
+
       // URL canônica é /lojas.
       { source: '/nossas-lojas', destination: '/lojas', permanent: true },
       { source: '/nossaslojas', destination: '/lojas', permanent: true },
