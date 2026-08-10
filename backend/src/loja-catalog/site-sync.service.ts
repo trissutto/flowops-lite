@@ -136,7 +136,62 @@ export class SiteSyncService {
     return achadas;
   }
 
+  /**
+   * DE-PARA manual, carregado uma vez por sync (`site_categoria_mapa`).
+   *
+   * Chave: nome da categoria do WooCommerce normalizado. Valor: slug do site,
+   * ou string vazia pra "ignorar de propósito".
+   */
+  private mapaManual = new Map<string, string>();
+
+  private async carregarMapaManual(): Promise<void> {
+    this.mapaManual.clear();
+    try {
+      const linhas: Array<{ origem: string; destino: string | null }> =
+        await (this.prisma as any).siteCategoriaMapa.findMany({
+          where: { destino: { not: null } },
+          select: { origem: true, destino: true },
+        });
+      for (const l of linhas) this.mapaManual.set(l.origem, String(l.destino ?? ''));
+    } catch (e: any) {
+      // Tabela ainda não criada (deploy antigo): segue com o mapa do código.
+      this.logger.warn(`[site-sync] de-para de categorias indisponível: ${e?.message || e}`);
+    }
+  }
+
+  /**
+   * Registra que esta categoria do WooCommerce existe, e quantas peças vieram
+   * com ela. É o inventário que a tela da retaguarda lê pra mostrar o que
+   * está esperando destino — sem ele, categoria nova do WC faria a peça sumir
+   * da vitrine sem ninguém saber por quê.
+   */
+  private async registrarOrigens(contagem: Map<string, { rotulo: string; pecas: number }>): Promise<void> {
+    for (const [origem, { rotulo, pecas }] of contagem) {
+      try {
+        await (this.prisma as any).siteCategoriaMapa.upsert({
+          where: { origem },
+          // `destino` NUNCA é tocado aqui: a decisão é de quem cadastra, e o
+          // sync sobrescrevê-la apagaria o trabalho manual toda madrugada.
+          update: { pecas, vistoEm: new Date(), origemRotulo: rotulo },
+          create: { origem, origemRotulo: rotulo, pecas },
+        });
+      } catch {
+        /* uma origem que falha não pode derrubar o sync inteiro */
+      }
+    }
+  }
+
   private detectarCategoria(categoriasWc: string[], nome: string): string | null {
+    // 0) DE-PARA MANUAL — o que a retaguarda decidiu vence tudo.
+    for (const bruta of categoriasWc) {
+      const chave = this.semAcento(bruta).trim();
+      const escolhido = this.mapaManual.get(chave);
+      if (escolhido === undefined) continue;
+      // String vazia = "ignorar esta categoria do WC" (ex: "Promoções", que
+      // não é tipo de peça). Segue procurando nas outras categorias da peça.
+      if (escolhido) return escolhido;
+    }
+
     // 1) O que foi CADASTRADO. Primeira categoria do WC que resolve, vence.
     for (const bruta of categoriasWc) {
       const achadas = this.categoriaDoTexto(bruta);
@@ -175,6 +230,11 @@ export class SiteSyncService {
     if (this.rodando) return { ok: false, motivo: 'sync já em andamento' };
     this.rodando = true;
     const inicio = Date.now();
+
+    // O de-para manual da retaguarda, antes de classificar qualquer peça.
+    await this.carregarMapaManual();
+    /** Inventário das categorias do WC vistas nesta rodada. Ver `registrarOrigens`. */
+    const origensVistas = new Map<string, { rotulo: string; pecas: number }>();
 
     let lidos = 0, criados = 0, atualizados = 0, ignorados = 0, falhas = 0;
     const semSku: string[] = [];
@@ -216,6 +276,15 @@ export class SiteSyncService {
             }));
 
             const categoriasWc: string[] = (p.categories ?? []).map((c: any) => String(c.name || ''));
+            // Anota toda categoria do WC que passou por aqui — é o que a tela
+            // da retaguarda lista pra você dar destino ao que ainda não tem.
+            for (const bruta of categoriasWc) {
+              const chave = this.semAcento(bruta).trim();
+              if (!chave) continue;
+              const atual = origensVistas.get(chave);
+              if (atual) atual.pecas += 1;
+              else origensVistas.set(chave, { rotulo: bruta.trim(), pecas: 1 });
+            }
 
             const dados = {
               categoria: this.detectarCategoria(categoriasWc, String(p.name || '')),
@@ -268,8 +337,21 @@ export class SiteSyncService {
         if (page >= totalPaginas) break;
       }
 
+      // Grava o inventário de categorias do WC vistas nesta rodada.
+      await this.registrarOrigens(origensVistas);
+      const semDestino = [...origensVistas.keys()].filter(
+        (o) => !this.mapaManual.get(o) && this.categoriaDoTexto(o).size !== 1,
+      );
+      if (semDestino.length) {
+        this.logger.warn(
+          `[site-sync] ${semDestino.length} categoria(s) do WooCommerce sem destino: ` +
+            `${semDestino.slice(0, 8).join(', ')} — dar destino em /retaguarda/categorias-mapa`,
+        );
+      }
+
       const duracaoMs = Date.now() - inicio;
       const detalhes = {
+        categoriasSemDestino: { qtd: semDestino.length, exemplos: semDestino.slice(0, 20) },
         semSku: { qtd: nSemSku, exemplos: semSku },
         semCorrespondenciaNoErp: { qtd: nSemErp, exemplos: semErp },
         refsDuplicadasNoWc: { qtd: nDup, exemplos: refsDuplicadas },

@@ -141,6 +141,31 @@ export class LojaCatalogAdminController {
     return this.sync.historico(limite ? Number(limite) : 20);
   }
 
+  /**
+   * DE-PARA de categorias — o que o WooCommerce manda × o que o site mostra.
+   *
+   * A tela `/retaguarda/categorias-mapa` lista as categorias que o sync viu no
+   * WooCommerce (com quantas peças vieram em cada) e deixa escolher onde cada
+   * uma entra no site. Antes disso, categoria fora do mapa fixo do código
+   * fazia a peça cair no palpite pelo nome — e corrigir exigia deploy.
+   */
+  @Get('categorias-mapa')
+  categoriasMapa(@Req() req: any) {
+    this.requireAdmin(req);
+    return this.svc.listarCategoriasMapa();
+  }
+
+  @Patch('categorias-mapa/:origem')
+  salvarCategoriaMapa(
+    @Req() req: any,
+    @Param('origem') origem: string,
+    @Body() body: { destino: string | null },
+  ) {
+    this.requireAdmin(req);
+    const quem = req?.user?.email || req?.user?.name || 'admin';
+    return this.svc.salvarCategoriaMapa(origem, body?.destino ?? null, quem);
+  }
+
   @Get('produto/:ref')
   async produto(@Req() req: any, @Param('ref') ref: string) {
     this.requireAdmin(req);

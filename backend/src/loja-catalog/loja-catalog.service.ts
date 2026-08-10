@@ -1088,6 +1088,60 @@ export class LojaCatalogService {
   }
 
   /**
+   * DE-PARA de categorias, pronto pra tela: o que o WooCommerce manda de um
+   * lado, os destinos possíveis do outro.
+   *
+   * `destinos` sai das categorias que JÁ existem no site (peça publicada
+   * nelas) somadas às que a retaguarda já escolheu. Não há lista fixa de
+   * categorias válidas em lugar nenhum — categoria existe porque tem peça
+   * dentro (mesma regra do `SiteCategoria`), então a lista se monta do que é
+   * real.
+   */
+  async listarCategoriasMapa() {
+    const [mapa, doCatalogo] = await Promise.all([
+      (this.prisma as any).siteCategoriaMapa.findMany({
+        orderBy: [{ destino: 'asc' }, { pecas: 'desc' }],
+      }),
+      (this.prisma as any).siteProduto.findMany({
+        where: { categoria: { not: null }, publicado: true },
+        select: { categoria: true },
+        distinct: ['categoria'],
+      }),
+    ]);
+
+    const destinos = new Set<string>(
+      (doCatalogo as any[]).map((c) => String(c.categoria)).filter(Boolean),
+    );
+    for (const m of mapa as any[]) if (m.destino) destinos.add(String(m.destino));
+
+    return {
+      /** `destino: null` = esperando decisão. `''` = ignorar de propósito. */
+      origens: (mapa as any[]).map((m) => ({
+        origem: m.origem,
+        rotulo: m.origemRotulo || m.origem,
+        destino: m.destino,
+        pecas: m.pecas,
+        vistoEm: m.vistoEm,
+      })),
+      destinos: [...destinos].sort(),
+    };
+  }
+
+  async salvarCategoriaMapa(origem: string, destino: string | null, quem: string) {
+    const chave = String(origem || '').trim().toLowerCase();
+    if (!chave) throw new Error('origem obrigatória');
+    // `null` volta a categoria pra "sem decisão"; '' marca "ignorar".
+    const valor = destino === null ? null : String(destino).trim().toLowerCase();
+    await (this.prisma as any).siteCategoriaMapa.upsert({
+      where: { origem: chave },
+      update: { destino: valor, atualizadoPor: quem },
+      create: { origem: chave, origemRotulo: origem, destino: valor, atualizadoPor: quem },
+    });
+    // A classificação só muda de fato no próximo sync — a tela avisa isso.
+    return { ok: true, origem: chave, destino: valor };
+  }
+
+  /**
    * CATÁLOGO INTEIRO PRO FEED DO META — uma ida só, sem paginar.
    *
    * O feed de produtos é o que destrava anúncio DINÂMICO (mostrar pra cliente

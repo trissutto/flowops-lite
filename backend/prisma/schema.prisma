@@ -5197,6 +5197,45 @@ model SiteCategoria {
   @@map("site_categorias")
 }
 
+/// DE-PARA entre a categoria do WooCommerce e a categoria do site.
+///
+/// A classificação da peça vinha de um mapa FIXO no código
+/// (`SiteSyncService.MAPA_CATEGORIA`): "vestido"→vestidos, "blusa"→blusas.
+/// Categoria do WooCommerce fora desse mapa não resolvia, e a peça caía no
+/// palpite pelo nome — que é onde "Conjunto Lingerie" ia parar em Conjuntos
+/// (10/08/2026). Corrigir exigia mexer em código e fazer deploy.
+///
+/// Esta tabela põe a decisão na mão de quem cadastra. O sync consulta ela
+/// PRIMEIRO; o mapa do código vira só o padrão de fábrica.
+///
+/// Também é o INVENTÁRIO do que chega: toda categoria vista no sync é
+/// registrada aqui, mapeada ou não, com quantas peças vieram com ela. É como
+/// a retaguarda descobre que existe uma categoria nova no WooCommerce
+/// esperando destino — sem isso, a peça sumiria da vitrine e ninguém saberia
+/// por quê.
+model SiteCategoriaMapa {
+  id            String   @id @default(uuid())
+  /// Nome da categoria do WooCommerce, normalizado (minúscula, sem acento).
+  /// É a chave de busca do sync.
+  origem        String   @unique
+  /// Como estava escrito no WooCommerce — só pra exibir na tela.
+  origemRotulo  String?  @map("origem_rotulo")
+  /// Slug da categoria do site. `null` = ainda não decidido (a peça fica sem
+  /// categoria). String vazia = IGNORAR de propósito (categoria do WC que não
+  /// vira vitrine, tipo "Promoções" ou "Novidades").
+  destino       String?
+  /// Quantas peças vieram com esta categoria no último sync — ordena a tela
+  /// pelo que mais dói deixar sem destino.
+  pecas         Int      @default(0)
+  vistoEm       DateTime @default(now()) @map("visto_em")
+  atualizadoPor String?  @map("atualizado_por")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@index([destino])
+  @@map("site_categoria_mapa")
+}
+
 model SiteBanner {
   id              String    @id @default(uuid())
   slot            String
