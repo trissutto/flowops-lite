@@ -40,7 +40,11 @@ interface ServerDestination {
 
 const SERVER_DESTINATIONS: ServerDestination[] = [
   { id: 'meta_capi', isEnabled: isMetaCapiEnabled, send: (events, signals) => sendToMetaCapi(events, signals) },
-  { id: 'ga4_mp', isEnabled: isGa4MpEnabled, send: (events) => sendToGa4Mp(events) },
+  // O GA4 recebe os MESMOS sinais que a Meta (e-mail/telefone, hasheados lá
+  // dentro): é isso que alimenta o Enhanced Conversions do Google Ads. Antes
+  // os sinais chegavam aqui e eram descartados na porta do GA4 — a flag do
+  // recurso estava ligada no gtag sem nunca ter dado pra processar.
+  { id: 'ga4_mp', isEnabled: isGa4MpEnabled, send: (events, signals) => sendToGa4Mp(events, signals) },
 ];
 
 /**

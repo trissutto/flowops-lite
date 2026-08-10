@@ -4,10 +4,17 @@ import { InstagramIcon } from '@/components/ui/icons';
 import { Container } from './Container';
 import { Logo } from '@/components/navigation/Logo';
 import { legalLinks } from '@/data/navigation';
+import { filtrarLinksVivos } from '@/lib/routes';
 
 /**
  * Footer — minimalista, muito organizado. Quatro colunas de links, uma linha
  * institucional e os ícones sociais. Nada de muro de texto.
+ *
+ * As colunas abaixo descrevem o rodapé do desenho FINAL da loja; boa parte
+ * dessas páginas ainda não existe. `filtrarLinksVivos` esconde o que levaria a
+ * 404 e a coluna que ficar vazia não é renderizada — cada página que nascer
+ * reaparece sozinha aqui (ver `lib/routes.ts`). Manter a lista completa é de
+ * propósito: ela é o mapa do que falta construir.
  */
 
 const COLUMNS = [
@@ -97,23 +104,27 @@ export function Footer() {
 
           {/* Links */}
           <div className="grid grid-cols-2 gap-x-8 gap-y-10 sm:grid-cols-4">
-            {COLUMNS.map((column) => (
-              <nav key={column.title} aria-label={column.title}>
-                <p className="eyebrow text-primary-strong">{column.title}</p>
-                <ul className="mt-5 flex flex-col gap-3">
-                  {column.links.map((link) => (
-                    <li key={link.href}>
-                      <Link
-                        href={link.href}
-                        className="link-underline text-small font-light text-ink-soft transition-colors hover:text-ink"
-                      >
-                        {link.label}
-                      </Link>
-                    </li>
-                  ))}
-                </ul>
-              </nav>
-            ))}
+            {COLUMNS.map((column) => {
+              const links = filtrarLinksVivos(column.links);
+              if (links.length === 0) return null;
+              return (
+                <nav key={column.title} aria-label={column.title}>
+                  <p className="eyebrow text-primary-strong">{column.title}</p>
+                  <ul className="mt-5 flex flex-col gap-3">
+                    {links.map((link) => (
+                      <li key={link.href}>
+                        <Link
+                          href={link.href}
+                          className="link-underline text-small font-light text-ink-soft transition-colors hover:text-ink"
+                        >
+                          {link.label}
+                        </Link>
+                      </li>
+                    ))}
+                  </ul>
+                </nav>
+              );
+            })}
           </div>
         </div>
 

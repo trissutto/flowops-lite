@@ -1,7 +1,7 @@
 'use client';
 
 import { useId, useState } from 'react';
-import { Barcode, CreditCard, QrCode } from 'lucide-react';
+import { CreditCard, QrCode } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { PIX_DESCONTO_PCT } from '@/lib/commerce/pix';
 import { Badge } from '@/components/ui/Badge';
@@ -11,8 +11,9 @@ import type { PaymentMethod } from '@/types/checkout';
 import { CardForm } from './CardForm';
 
 /**
- * § 3 — PAGAMENTO. Três abas: PIX (recomendado e primeiro — é o meio com
- * melhor conversão E menor custo pra loja), Cartão e Boleto.
+ * § 3 — PAGAMENTO. Duas abas: PIX (recomendado e primeiro — é o meio com
+ * melhor conversão E menor custo pra loja) e Cartão. A loja não trabalha com
+ * boleto (dono, 10/08/2026) — ver o comentário do `PaymentMethod`.
  *
  * O desconto do PIX aparece como badge informativa; o VALOR real com desconto
  * quem calcula é o SERVER na criação do pedido (o client nunca inventa total
@@ -36,7 +37,6 @@ export interface PaymentSelection {
 const TABS: Array<{ method: PaymentMethod; label: string; icon: React.ElementType }> = [
   { method: 'pix', label: 'PIX', icon: QrCode },
   { method: 'card', label: 'Cartão', icon: CreditCard },
-  { method: 'boleto', label: 'Boleto', icon: Barcode },
 ];
 
 interface PaymentStepProps {
@@ -77,7 +77,7 @@ export function PaymentStep({ total, itemsTracked, defaults, onDone }: PaymentSt
       <div
         role="tablist"
         aria-label="Forma de pagamento"
-        className="grid grid-cols-3 gap-2"
+        className="grid grid-cols-2 gap-2"
         onKeyDown={(e) => {
           const index = TABS.findIndex((t) => t.method === method);
           if (e.key === 'ArrowRight') pick(TABS[(index + 1) % TABS.length].method);
@@ -153,29 +153,6 @@ export function PaymentStep({ total, itemsTracked, defaults, onDone }: PaymentSt
         hidden={method !== 'card'}
       >
         {method === 'card' && <CardForm total={total} onDone={confirm} />}
-      </div>
-
-      {/* Boleto */}
-      <div
-        role="tabpanel"
-        id={`${groupId}-panel-boleto`}
-        aria-labelledby={`${groupId}-tab-boleto`}
-        hidden={method !== 'boleto'}
-      >
-        {method === 'boleto' && (
-          <div className="flex flex-col gap-4">
-            <ul className="flex flex-col gap-2 text-body text-ink-soft">
-              <li>O boleto chega no seu e-mail assim que você finalizar.</li>
-              <li>O pagamento compensa em até 2 dias úteis.</li>
-              <li>Suas peças ficam reservadas por 3 dias enquanto isso.</li>
-            </ul>
-            <div className="pt-1">
-              <Button type="button" block className="sm:w-auto" onClick={() => confirm({ method: 'boleto' })}>
-                Continuar para a revisão
-              </Button>
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );

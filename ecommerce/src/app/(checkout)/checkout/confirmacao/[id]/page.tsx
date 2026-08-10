@@ -258,7 +258,6 @@ function primeiroNome(nome: string): string {
 
 function pagoLabel(order: Order): string {
   if (order.status === 'paid') return 'Pagamento confirmado';
-  if (order.payment.method === 'boleto') return 'Boleto enviado pro seu e-mail — compensa em até 2 dias úteis';
   if (order.payment.method === 'pix') return 'Aguardando o PIX — o código está no seu e-mail';
   return 'Pagamento em processamento';
 }

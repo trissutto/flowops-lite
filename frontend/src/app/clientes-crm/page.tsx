@@ -1089,12 +1089,16 @@ function PerfilTab({ d, onUpdate }: { d: CustomerDetail; onUpdate: () => void })
 interface HistoricoData {
   customer: { id: string; name: string | null; cpf: string | null };
   compras: Array<{
+    /** Onde a venda aconteceu — loja física, site ou live. */
+    canal: 'loja' | 'site' | 'live';
     id: string; saleNumber: string; nfceNumber: string | null;
-    storeCode: string; storeName: string;
+    storeCode: string | null; storeName: string;
     total: number; subtotal: number; desconto: number;
-    paymentMethod: string; sellerName: string | null;
+    paymentMethod: string | null; sellerName: string | null;
     qtdItens: number; qtdPayments: number;
     payments: Array<{ method: string; valor: number }>;
+    /** Só em pedido online: separando, enviado, entregue… */
+    status: string | null;
     data: string;
   }>;
   devolucoes: Array<{
@@ -1122,6 +1126,18 @@ interface HistoricoData {
   };
   warning?: string;
 }
+
+/** Status do pedido online no vocabulário de quem atende, não no do banco. */
+const STATUS_PEDIDO_LABEL: Record<string, string> = {
+  pending: 'aguardando pagamento',
+  processing: 'pago',
+  awaiting_stock: 'aguardando estoque',
+  routing: 'roteando',
+  separating: 'separando',
+  ready: 'pronto',
+  shipped: 'enviado',
+  delivered: 'entregue',
+};
 
 function HistoricoTab({ customerId }: { customerId: string }) {
   const [data, setData] = useState<HistoricoData | null>(null);
@@ -1177,6 +1193,7 @@ function HistoricoTab({ customerId }: { customerId: string }) {
 
   const totalCompras = data.compras.reduce((s, c) => s + Number(c.total || 0), 0);
   const totalDevolucoes = data.devolucoes.reduce((s, r) => s + Number(r.valor || 0), 0);
+  const comprasOnline = data.compras.filter((c) => c.canal !== 'loja').length;
 
   return (
     <div className="space-y-6">
@@ -1193,6 +1210,13 @@ function HistoricoTab({ customerId }: { customerId: string }) {
           <div className="text-[10px] uppercase text-emerald-700 font-bold">Compras</div>
           <div className="text-lg font-bold text-emerald-900">{data.compras.length}</div>
           <div className="text-[11px] text-emerald-700">R$ {totalCompras.toFixed(2).replace('.', ',')}</div>
+          {/* Cliente que compra nos dois canais é a mais valiosa da base — vale
+              a vendedora saber disso antes de abrir a conversa. */}
+          {comprasOnline > 0 && (
+            <div className="text-[10px] text-blue-700 mt-0.5">
+              {comprasOnline} online · {data.compras.length - comprasOnline} na loja
+            </div>
+          )}
         </div>
         <div className="bg-rose-50 border border-rose-200 rounded p-3">
           <div className="text-[10px] uppercase text-rose-700 font-bold">Devoluções</div>
@@ -1228,7 +1252,23 @@ function HistoricoTab({ customerId }: { customerId: string }) {
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-mono text-xs bg-gray-100 px-1.5 py-0.5 rounded">#{c.saleNumber}</span>
                       {c.nfceNumber && <span className="text-[10px] text-gray-500">NFC-e {c.nfceNumber}</span>}
-                      <span className="text-[10px] uppercase font-bold text-purple-700">{c.storeName}</span>
+                      {/* Loja física em roxo (a cor que a ficha já usava); venda
+                          online em azul, pra bater o olho e saber de onde veio
+                          sem precisar ler. */}
+                      <span
+                        className={`text-[10px] uppercase font-bold ${
+                          c.canal === 'loja' ? 'text-purple-700' : 'text-blue-700'
+                        }`}
+                      >
+                        {c.storeName}
+                      </span>
+                      {/* Pedido online continua vivo depois de pago — é o que a
+                          cliente pergunta no WhatsApp ("cadê meu pedido?"). */}
+                      {c.canal !== 'loja' && c.status && (
+                        <span className="text-[10px] bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded border border-blue-200">
+                          {STATUS_PEDIDO_LABEL[c.status] ?? c.status}
+                        </span>
+                      )}
                     </div>
                     <div className="text-xs text-gray-500 mt-1">
                       {fmtDT(c.data)} · {c.qtdItens} {c.qtdItens === 1 ? 'peça' : 'peças'}

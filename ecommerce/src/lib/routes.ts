@@ -3,27 +3,61 @@ import type { UrlObject } from 'url';
 /**
  * ROTAS QUE EXISTEM DE VERDADE
  *
- * A navegação (menu, cards, footer) já aponta pra ~85 rotas do desenho final
- * da loja, mas só um punhado existe em `src/app`. O `<Link>` do Next faz
- * prefetch de tudo que entra em viewport, então cada link órfão vira uma
- * requisição RSC que volta 404 — barulho no console, banda gasta na dobra
- * mais cara da página e ruído em cima do LCP.
+ * A navegação (menu, cards, footer) foi escrita pro desenho FINAL da loja e
+ * aponta pra dezenas de rotas que ainda não existem em `src/app` — medição de
+ * 10/08/2026: **49 destinos internos mortos** contra 27 páginas reais,
+ * concentrados em `/ocasioes` (9), `/looks` (8), `/institucional` (6),
+ * `/modelagem` (6) e `/tecidos` (6).
  *
- * Este módulo é a lista branca. O `AppLink` consulta ela e desliga o prefetch
- * de quem ainda não nasceu; o link continua clicável (cai no not-found), e no
- * dia em que a página existir basta acrescentá-la aqui pro prefetch voltar.
+ * Esta lista tem DOIS usos, e o segundo nasceu na auditoria de lançamento:
  *
- * MANUTENÇÃO: criou página nova em `src/app`? Acrescente o padrão aqui.
+ *  1. `AppLink` desliga o prefetch de quem ainda não nasceu (cada link órfão
+ *     em viewport viraria uma requisição RSC 404 — banda gasta na dobra mais
+ *     cara da página e ruído em cima do LCP).
+ *
+ *  2. `filtrarLinksVivos` ESCONDE esses links do menu e do rodapé. Antes eles
+ *     continuavam clicáveis "caindo no not-found", o que era aceitável num
+ *     site em construção e deixa de ser no dia em que entra tráfego pago: a
+ *     cliente clica em "Formas de pagamento" no rodapé — justo a dúvida que
+ *     estava travando a compra dela — e leva um 404 da loja.
+ *
+ * Some o link em vez de apagar o item: o desenho final segue registrado em
+ * `data/navigation.ts` e no `Footer`, e cada página que nascer reaparece
+ * sozinha na navegação ao ser acrescentada aqui.
+ *
+ * MANUTENÇÃO: criou página nova em `src/app`? Acrescente o padrão aqui —
+ * senão ela existe e ninguém acha.
  */
 const BUILT_ROUTES: readonly (string | RegExp)[] = [
   '/',
   '/busca',
   '/carrinho',
   '/checkout',
+  '/lojas',
+  '/novidades',
+  '/outlet',
+  '/categoria',
+  '/tamanhos',
+  '/tamanhos/guia',
+  '/politica-de-trocas',
+  '/privacidade',
+  '/termos',
+  // `/trocas` não tem página: é redirect pro portal do FlowOps (next.config).
+  // Entra aqui porque, do ponto de vista de quem clica, o destino existe.
+  '/trocas',
+  '/conta',
+  '/conta/cashback',
+  '/conta/dados',
+  '/conta/enderecos',
+  '/conta/favoritos',
+  '/conta/pedidos',
   '/debug/search',
   '/debug/tracking',
+  /^\/ate\/[^/]+$/,
   /^\/categoria\/[^/]+$/,
   /^\/produto\/[^/]+$/,
+  /^\/pedido\/[^/]+$/,
+  /^\/tamanhos\/[^/]+$/,
   /^\/checkout\/confirmacao\/[^/]+$/,
 ];
 
@@ -46,4 +80,17 @@ export function isBuiltRoute(href: Href): boolean {
   return BUILT_ROUTES.some((route) =>
     typeof route === 'string' ? route === pathname : route.test(pathname),
   );
+}
+
+/**
+ * Filtra uma lista de links de navegação, deixando só os que levam a algum
+ * lugar. Link externo, âncora e `mailto:`/`tel:` passam sempre (o
+ * `isBuiltRoute` já devolve `true` pra eles).
+ *
+ * Genérico no formato do item porque menu, rodapé e destaque do mega menu têm
+ * cada um o seu tipo — todos com `href`.
+ */
+export function filtrarLinksVivos<T extends { href: Href }>(links: readonly T[] | undefined): T[] {
+  if (!links) return [];
+  return links.filter((l) => isBuiltRoute(l.href));
 }

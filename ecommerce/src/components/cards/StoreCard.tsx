@@ -6,6 +6,7 @@ import { InstagramIcon } from '@/components/ui/icons';
 import { cn } from '@/lib/utils';
 import { fadeUp, reveal } from '@/lib/motion';
 import { Button } from '@/components/ui/Button';
+import { trackInstagramClick, trackStoreLocator, trackWhatsAppClick } from '@/lib/tracking';
 import type { Store } from '@/types';
 
 /**
@@ -14,6 +15,24 @@ import type { Store } from '@/types';
  * Decisão de design (validada com o dono na landing atual): a CIDADE é a
  * protagonista, em caixa alta e Playfair grande. Sem foto de modelo — o que a
  * cliente busca aqui é endereço e contato, e a foto competia com a informação.
+ *
+ * ── OS EVENTOS DAQUI SÃO A CONVERSÃO DA CONTA DE LOJA FÍSICA (10/08/2026) ──
+ *
+ * A rede tem duas contas de anúncio: uma pro e-commerce, outra pras lojas.
+ * A do e-commerce otimiza por `Purchase` — que existe. A das lojas otimiza
+ * por INTENÇÃO DE IR NA LOJA: clicar no WhatsApp da unidade, pedir rota, abrir
+ * o Instagram dela. Esses eventos estavam escritos em `lib/tracking/events.ts`
+ * e não eram chamados em lugar nenhum: a conta de loja não tinha o que
+ * otimizar, e só conseguia comprar clique ou alcance — que é quase jogar
+ * dinheiro fora.
+ *
+ * `store` vai em todo evento porque é o que permite a campanha por praça:
+ * quem clicou no WhatsApp de Sorocaba é público da campanha de Sorocaba.
+ *
+ * O clique dispara ANTES da navegação sair da página, e de propósito não
+ * espera confirmação: o link é externo (WhatsApp, Maps, Instagram) e segurar
+ * a navegação pra garantir o evento atrasaria a cliente por causa de métrica.
+ * O `sendBeacon` do despachante já cobre o descarregamento da página.
  */
 
 interface StoreCardProps {
@@ -80,13 +99,32 @@ export function StoreCard({ store, index = 0, nearest, distance, className }: St
       </ul>
 
       <div className="mt-7 grid gap-2 sm:grid-cols-3">
-        <Button href={directions} external size="sm">
+        <Button
+          href={directions}
+          external
+          size="sm"
+          // Pedir rota é o sinal mais forte de "vou nessa loja" que o site
+          // consegue captar — mais que abrir a página de lojas.
+          onClick={() => trackStoreLocator(store.city)}
+        >
           <MapPin /> Como chegar
         </Button>
-        <Button href={whatsapp} external variant="whatsapp" size="sm">
+        <Button
+          href={whatsapp}
+          external
+          variant="whatsapp"
+          size="sm"
+          onClick={() => trackWhatsAppClick('store_card', store.unit)}
+        >
           <MessageCircle /> WhatsApp
         </Button>
-        <Button href={instagram} external variant="secondary" size="sm">
+        <Button
+          href={instagram}
+          external
+          variant="secondary"
+          size="sm"
+          onClick={() => trackInstagramClick(`store:${store.unit}`)}
+        >
           <InstagramIcon /> Instagram
         </Button>
       </div>

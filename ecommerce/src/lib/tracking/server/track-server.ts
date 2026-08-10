@@ -4,7 +4,7 @@ import 'server-only';
  * EVENTOS QUE NASCEM NO SERVIDOR — `purchase` e `refund`.
  *
  * A regra da spec, ao pé da letra: purchase só dispara com PIX confirmado,
- * cartão aprovado ou boleto compensado. Nunca na criação do pedido, nunca no
+ * cartão aprovado ou PIX compensado. Nunca na criação do pedido, nunca no
  * início do checkout. Por isso ele não existe no cliente: a única forma de
  * emitir é chamar `trackPurchase` daqui, e o lugar certo pra isso é o webhook
  * do gateway — não a página de obrigado, que a cliente pode recarregar dez
@@ -30,7 +30,7 @@ export interface ServerPurchaseInput {
   /** `_fbp` / `_fbc` guardados junto com o pedido no checkout. */
   meta?: { fbp?: string; fbc?: string };
   /** Confirmação do pagamento. Obrigatória e conferida abaixo. */
-  payment: { status: 'paid'; method: 'pix' | 'credit_card' | 'boleto'; confirmed_at: string };
+  payment: { status: 'paid'; method: 'pix' | 'credit_card'; confirmed_at: string };
 }
 
 function fullContext(partial: ServerPurchaseInput['context']): EventContext {

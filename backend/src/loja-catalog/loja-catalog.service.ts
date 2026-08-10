@@ -923,7 +923,23 @@ export class LojaCatalogService {
 
     // 1) REFs publicadas (curadoria) — a lista de saída nunca é maior que isso
     const wherePub: any = { publicado: true };
-    if (params.categoria) wherePub.categoria = String(params.categoria).trim().toLowerCase();
+    /**
+     * Aceita UMA categoria ("blusas") ou uma LISTA ("blusas,vestidos").
+     *
+     * A lista nasceu com o filtro de categoria na barra lateral (10/08): fora
+     * da página de categoria — em `/tamanhos/56`, `/novidades`, `/outlet` — a
+     * cliente pode marcar mais de um tipo de peça. Sem isto, a tela deixaria
+     * ela marcar duas e só a primeira valeria, em silêncio: exatamente o bug
+     * do filtro de tamanho de 07/08 (dois botões acesos, um filtro aplicado).
+     */
+    if (params.categoria) {
+      const cats = String(params.categoria)
+        .split(',')
+        .map((c) => c.trim().toLowerCase())
+        .filter(Boolean);
+      if (cats.length === 1) wherePub.categoria = cats[0];
+      else if (cats.length > 1) wherePub.categoria = { in: cats };
+    }
     if (params.soPromocao) wherePub.promocao = true;
     if (params.soNovidade) wherePub.lancamento = true;
     const publicadas: any[] = await (this.prisma as any).siteProduto.findMany({

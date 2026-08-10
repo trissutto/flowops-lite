@@ -51,9 +51,16 @@ const nextConfig: NextConfig = {
       // tempo seria duas políticas divergindo sozinhas. Redirect temporário
       // (307) de propósito — quando a tela for portada pra cá, é só apagar
       // esta linha sem ter deixado 301 gravado no cache dos navegadores.
+      //
+      // ⚠️ O destino apontava pra `www.lurdsplussize.com.br` — que era do
+      // FlowOps até 10/07/2026, quando ele mudou pra `crm.lurdsplussize.com.br`
+      // e liberou o `www` pra ESTE site. Com o ecommerce no `www`, aquele
+      // destino viraria `/trocas` → `www/trocas` → `/trocas`: LOOP INFINITO,
+      // a página de trocas morre com ERR_TOO_MANY_REDIRECTS. Tem que apontar
+      // pro domínio onde o portal realmente roda.
       {
         source: '/trocas',
-        destination: 'https://www.lurdsplussize.com.br/trocas',
+        destination: `${process.env.FLOWOPS_PORTAL_URL || 'https://crm.lurdsplussize.com.br'}/trocas`,
         permanent: false,
       },
       { source: '/institucional/trocas', destination: '/trocas', permanent: false },

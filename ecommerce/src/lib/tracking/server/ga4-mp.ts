@@ -13,9 +13,41 @@ import 'server-only';
  */
 
 import type { TrackedItem, TrackingEvent } from '../types';
+import { hashEmail, hashPhone } from './hash';
 
 export function isGa4MpEnabled(): boolean {
   return Boolean(process.env.NEXT_PUBLIC_GA4_ID && process.env.GA4_API_SECRET);
+}
+
+/**
+ * Dado da compradora, hasheado — o que faz o Enhanced Conversions do Google
+ * existir de verdade.
+ *
+ * ⚠️ Até 10/08/2026 o `allow_enhanced_conversions: true` estava ligado no
+ * `gtag` (ver `destinations/ga4.ts`) e NENHUM dado de usuário era enviado a
+ * lugar nenhum. A chave dizia "sim" e não havia o que processar: o painel do
+ * Google mostrava o recurso ativo, e a taxa de casamento não melhorava um
+ * ponto. Pior tipo de bug — o que se parece com o certo.
+ *
+ * Tinha que ser AQUI e não no navegador: a compra é confirmada no servidor,
+ * depois do pagamento, sem navegador aberto pra disparar evento. Enhanced
+ * Conversions client-side só funcionaria se o `purchase` fosse client-side —
+ * e ele é server-side de propósito, pra ninguém forjar venda pelo console.
+ */
+async function buildUserData(
+  signals: { email?: string; phone?: string } | undefined,
+): Promise<Record<string, unknown> | undefined> {
+  if (!signals) return undefined;
+  const email = await hashEmail(signals.email);
+  const phone = await hashPhone(signals.phone);
+  if (!email && !phone) return undefined;
+  // Nomes de campo do contrato do GA4 Measurement Protocol — são diferentes
+  // dos da Meta (`em`/`ph`), e errar aqui não dá erro: o MP responde 204 pra
+  // quase tudo e ignora em silêncio o que não reconhece.
+  return {
+    ...(email ? { sha256_email_address: [email] } : {}),
+    ...(phone ? { sha256_phone_number: [phone] } : {}),
+  };
 }
 
 export interface Ga4Result {
@@ -43,7 +75,10 @@ function toItem(item: TrackedItem, index: number): Record<string, unknown> {
  * `client_id` PRECISA ser o mesmo do gtag do navegador, senão a mesma pessoa
  * vira dois usuários e a sessão se parte em duas no relatório.
  */
-export async function sendToGa4Mp(events: TrackingEvent[]): Promise<Ga4Result> {
+export async function sendToGa4Mp(
+  events: TrackingEvent[],
+  signals?: { email?: string; phone?: string },
+): Promise<Ga4Result> {
   const measurementId = process.env.NEXT_PUBLIC_GA4_ID!;
   const apiSecret = process.env.GA4_API_SECRET!;
   const debug = process.env.GA4_MP_DEBUG === '1';
@@ -60,10 +95,14 @@ export async function sendToGa4Mp(events: TrackingEvent[]): Promise<Ga4Result> {
   let lastStatus = 204;
   let firstError: string | undefined;
 
+  // Uma vez por lote: o hash é o mesmo pra todos os eventos da mesma pessoa.
+  const userData = await buildUserData(signals);
+
   for (const [clientId, doCliente] of porCliente) {
     const body = {
       client_id: clientId,
       user_id: doCliente[0].context.user_id ?? undefined,
+      ...(userData ? { user_data: userData } : {}),
       // Sem isso o GA4 marca tudo como "(not set)" na dimensão de sessão.
       events: doCliente.map((ev) => ({
         name: ev.event,

@@ -265,6 +265,17 @@ export interface MenuLink {
 export interface MenuColumn {
   title: string;
   links: MenuLink[];
+  /**
+   * Como os links se desenham. `lista` (padrão) é a coluna de texto de sempre.
+   *
+   * `pilulas` é pra rótulo CURTO em conjunto fechado — hoje só a numeração.
+   * Os tamanhos eram nove links de texto empilhados em duas colunas, a segunda
+   * com o título em branco pra fingir continuação: ocupava meia tela, parecia
+   * um índice e não uma régua de tamanhos, e a cliente não batia o olho e via
+   * "44 ao 60". Como pílula, o conjunto inteiro cabe em duas linhas e se lê de
+   * uma vez.
+   */
+  layout?: 'lista' | 'pilulas';
 }
 
 /** Card editorial dentro do mega menu. */

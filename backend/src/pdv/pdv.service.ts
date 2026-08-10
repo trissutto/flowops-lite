@@ -496,42 +496,84 @@ export class PdvService {
     }
 
     /* ─── PASSO 3: Revogar cashback ganho ─── */
+    /**
+     * ⚠️ CORRIGIDO EM 10/08/2026 — ESTE PASSO TIRAVA DINHEIRO QUE A VENDA
+     * NUNCA TINHA DADO.
+     *
+     * O código antigo calculava `total × 10%` e descontava esse valor do saldo
+     * do app. Só que **venda de PDV nunca creditou o saldo do app**: quem
+     * credita ali é pedido do app e bônus de boas-vindas (ver
+     * `CustomerCashbackService`). Ou seja, o cancelamento não desfazia um
+     * crédito — ele confiscava saldo de outra origem.
+     *
+     * Caso concreto: cliente instala o app e ganha R$ 20 de boas-vindas.
+     * Compra R$ 500 na loja. A caixa erra e cancela a venda. O sistema tirava
+     * R$ 50 (10% de 500) de um saldo de R$ 20 — o `Math.max(0, ...)` zerava a
+     * conta. A cliente perdia os R$ 20 do app por causa de um cancelamento de
+     * loja física que nada tinha a ver com aquilo. Sem log, sem extrato: o
+     * `CustomerCashbackTx` nem era criado, então nem dava pra descobrir depois
+     * pra onde o dinheiro foi.
+     *
+     * Agora a regra é a única correta: **só se revoga o que esta venda
+     * creditou**. O crédito é procurado pelo `pdvSaleId` no extrato. Hoje esse
+     * campo nunca é preenchido (venda de PDV não credita), então na prática
+     * este passo não mexe em saldo nenhum — que é exatamente o certo. No dia em
+     * que a venda de PDV passar a creditar gravando `pdvSaleId`, a revogação
+     * volta a funcionar sozinha, e pelo valor real.
+     */
     if (sale.customerCpf && !sale.isTraining) {
       try {
-        const cpfDigits = String(sale.customerCpf).replace(/\D/g, '');
-        const totalCents = Math.round(Number(sale.total || 0) * 100);
-        const cashbackGerado = Math.floor(totalCents * 0.10); // 10% padrão
-        if (cashbackGerado > 0) {
-          // Procura a conta unificada
-          const acc = await (this.prisma as any).customerAccount.findUnique({
-            where: { cpf: cpfDigits.length === 11 ? `${cpfDigits.slice(0,3)}.${cpfDigits.slice(3,6)}.${cpfDigits.slice(6,9)}-${cpfDigits.slice(9)}` : cpfDigits },
-            select: { id: true, cashbackBalanceCents: true, cashbackEarnedCents: true },
-          }) || await (this.prisma as any).customerAccount.findUnique({
-            where: { cpf: cpfDigits },
-            select: { id: true, cashbackBalanceCents: true, cashbackEarnedCents: true },
+        const creditos = await (this.prisma as any).customerCashbackTx.findMany({
+          where: { pdvSaleId: sale.id, amountCents: { gt: 0 } },
+          select: { id: true, accountId: true, amountCents: true },
+        });
+
+        if (creditos.length === 0) {
+          passos.push({
+            passo: 'Cashback cliente',
+            status: 'pulado',
+            detalhe: 'Esta venda não gerou cashback — nada a revogar',
           });
-          if (acc) {
-            await (this.prisma as any).customerAccount.update({
-              where: { id: acc.id },
-              data: {
-                cashbackBalanceCents: Math.max(0, (acc.cashbackBalanceCents || 0) - cashbackGerado),
-                cashbackEarnedCents: { decrement: BigInt(cashbackGerado) },
-              },
-            });
-            passos.push({
-              passo: 'Cashback cliente',
-              status: 'ok',
-              detalhe: `Revogados R$ ${(cashbackGerado / 100).toFixed(2)} do cliente`,
-            });
-          } else {
-            passos.push({
-              passo: 'Cashback cliente',
-              status: 'pulado',
-              detalhe: 'Cliente não tem conta no app — nada a revogar',
-            });
-          }
         } else {
-          passos.push({ passo: 'Cashback cliente', status: 'pulado', detalhe: 'Sem cashback gerado' });
+          const totalRevogado = creditos.reduce((s: number, c: any) => s + c.amountCents, 0);
+          const accountId = creditos[0].accountId;
+          const acc = await (this.prisma as any).customerAccount.findUnique({
+            where: { id: accountId },
+            select: { cashbackBalanceCents: true },
+          });
+          const saldoAtual = acc?.cashbackBalanceCents || 0;
+          // Se a cliente já gastou parte, não dá pra tirar o que não está mais
+          // lá — vira dívida zero, não saldo negativo (o app não sabe exibir
+          // saldo negativo, ver CustomerCashbackService.creditAndUpdate).
+          const revogavel = Math.min(saldoAtual, totalRevogado);
+
+          await (this.prisma as any).$transaction([
+            (this.prisma as any).customerAccount.update({
+              where: { id: accountId },
+              data: {
+                cashbackBalanceCents: saldoAtual - revogavel,
+                cashbackEarnedCents: { decrement: BigInt(revogavel) },
+              },
+            }),
+            // Extrato: o antigo mexia no saldo sem deixar rastro. Sem esta
+            // linha, a cliente vê o saldo cair e ninguém sabe explicar.
+            (this.prisma as any).customerCashbackTx.create({
+              data: {
+                accountId,
+                type: 'adjust',
+                amountCents: -revogavel,
+                balanceAfterCents: saldoAtual - revogavel,
+                description: `Venda cancelada (${String(sale.id).slice(0, 8)})`,
+                pdvSaleId: sale.id,
+              },
+            }),
+          ]);
+
+          passos.push({
+            passo: 'Cashback cliente',
+            status: 'ok',
+            detalhe: `Revogados R$ ${(revogavel / 100).toFixed(2)} (crédito desta venda)`,
+          });
         }
       } catch (e: any) {
         passos.push({
