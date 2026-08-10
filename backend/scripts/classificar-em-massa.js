@@ -62,10 +62,16 @@ const FAMILIAS = [
  *
  * `\bmaio\b` com borda de palavra: sem isso "maio" casaria dentro de "maior".
  */
+/**
+ * ⚠️ A ORDEM DO ARRAY é precedência de CASAMENTO ("Saída de Praia" antes de
+ * "Maiô", senão "Maiô Saída de Praia" cairia em Maiô). A ordem de EXIBIÇÃO na
+ * vitrine é o campo `ordem` — são duas coisas diferentes e misturá-las faz uma
+ * quebrar quando alguém arruma a outra.
+ */
 const PRAIA = [
-  { slug: 'saida-de-praia', nome: 'Saída de Praia', termos: ['saida de praia', 'saida praia'] },
-  { slug: 'biquini', nome: 'Biquini', termos: ['biquini', 'sunquini'] },
-  { slug: 'maio', nome: 'Maiô', termos: [/\bmaio\b/] },
+  { slug: 'saida-de-praia', nome: 'Saída de Praia', ordem: 3, termos: ['saida de praia', 'saida praia'] },
+  { slug: 'biquini', nome: 'Biquini', ordem: 1, termos: ['biquini', 'sunquini'] },
+  { slug: 'maio', nome: 'Maiô', ordem: 2, termos: [/\bmaio\b/] },
 ];
 
 /**
@@ -86,24 +92,33 @@ const MANGAS = [
  * não pode pendurar em dois pais. Então "Manga curta" de Vestidos precisa de
  * slug próprio. O NOME (o que a cliente lê no chip) continua igual.
  */
+/**
+ * `ordem` é a sequência dos CHIPS na vitrine, escolhida pelo dono em
+ * 10/08/2026: **manga curta → regata → manga longa → manga 3/4**. Não é
+ * alfabética nem por quantidade — é a ordem em que a cliente pensa, do que
+ * mais sai pro que menos sai.
+ *
+ * Sem valor explícito todas ficam em `ordem: 0` e o Postgres devolve na ordem
+ * que quiser: os chips trocavam de lugar entre um deploy e outro.
+ */
 const SUB = {
   blusas: {
-    'manga-curta': { slug: 'manga-curta', nome: 'Manga curta' },
-    'manga-longa': { slug: 'manga-longa', nome: 'Manga longa' },
-    'manga-3-4': { slug: 'manga-3-4', nome: 'Manga 3/4' },
-    'sem-manga': { slug: 'regata', nome: 'Regata' },
+    'manga-curta': { slug: 'manga-curta', nome: 'Manga curta', ordem: 1 },
+    'sem-manga': { slug: 'regata', nome: 'Regata', ordem: 2 },
+    'manga-longa': { slug: 'manga-longa', nome: 'Manga longa', ordem: 3 },
+    'manga-3-4': { slug: 'manga-3-4', nome: 'Manga 3/4', ordem: 4 },
   },
   vestidos: {
-    'manga-curta': { slug: 'vestido-manga-curta', nome: 'Manga curta' },
-    'manga-longa': { slug: 'vestido-manga-longa', nome: 'Manga longa' },
-    'manga-3-4': { slug: 'vestido-manga-3-4', nome: 'Manga 3/4' },
-    'sem-manga': { slug: 'vestido-sem-manga', nome: 'Sem manga' },
+    'manga-curta': { slug: 'vestido-manga-curta', nome: 'Manga curta', ordem: 1 },
+    'sem-manga': { slug: 'vestido-sem-manga', nome: 'Sem manga', ordem: 2 },
+    'manga-longa': { slug: 'vestido-manga-longa', nome: 'Manga longa', ordem: 3 },
+    'manga-3-4': { slug: 'vestido-manga-3-4', nome: 'Manga 3/4', ordem: 4 },
   },
   macacoes: {
-    'manga-curta': { slug: 'macacao-manga-curta', nome: 'Manga curta' },
-    'manga-longa': { slug: 'macacao-manga-longa', nome: 'Manga longa' },
-    'manga-3-4': { slug: 'macacao-manga-3-4', nome: 'Manga 3/4' },
-    'sem-manga': { slug: 'macacao-sem-manga', nome: 'Sem manga' },
+    'manga-curta': { slug: 'macacao-manga-curta', nome: 'Manga curta', ordem: 1 },
+    'sem-manga': { slug: 'macacao-sem-manga', nome: 'Sem manga', ordem: 2 },
+    'manga-longa': { slug: 'macacao-manga-longa', nome: 'Manga longa', ordem: 3 },
+    'manga-3-4': { slug: 'macacao-manga-3-4', nome: 'Manga 3/4', ordem: 4 },
   },
 };
 
@@ -211,7 +226,7 @@ function decidir(p) {
   const aCriar = Object.entries(SUB).map(([cat, mapa]) => [cat, Object.values(mapa)]);
   aCriar.push(['moda-praia', PRAIA]);
   for (const [categoria, lista] of aCriar) {
-    for (const { slug, nome } of lista) {
+    for (const { slug, nome, ordem } of lista) {
       await c.query(
         /**
          * `id` e `updated_at` são preenchidos pelo PRISMA na aplicação
@@ -221,10 +236,11 @@ function decidir(p) {
          * com "null value in column ... violates not-null constraint".
          */
         `INSERT INTO site_categorias (id, slug, nome, pai_slug, ativo, ordem, atualizado_por, updated_at)
-         VALUES (gen_random_uuid()::text, $1, $2, $3, true, 0, 'classificacao-em-massa', NOW())
+         VALUES (gen_random_uuid()::text, $1, $2, $3, true, $4, 'classificacao-em-massa', NOW())
          ON CONFLICT (slug) DO UPDATE
-            SET nome = EXCLUDED.nome, pai_slug = EXCLUDED.pai_slug, updated_at = NOW()`,
-        [slug, nome, categoria],
+            SET nome = EXCLUDED.nome, pai_slug = EXCLUDED.pai_slug,
+                ordem = EXCLUDED.ordem, updated_at = NOW()`,
+        [slug, nome, categoria, ordem ?? 0],
       );
     }
   }

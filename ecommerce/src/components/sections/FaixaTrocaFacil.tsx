@@ -39,7 +39,7 @@ const ITENS = [
 
 export function FaixaTrocaFacil() {
   return (
-    <section aria-labelledby="troca-facil-titulo" className="bg-surface-alt py-14">
+    <section aria-labelledby="troca-facil-titulo" className="bg-surface-alt py-section-sm">
       <Container width="wide">
         <div className="flex flex-col items-center gap-10 lg:flex-row lg:items-center lg:justify-between">
           <div className="max-w-md text-center lg:text-left">
