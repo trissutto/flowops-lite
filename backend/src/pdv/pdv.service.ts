@@ -891,7 +891,15 @@ export class PdvService {
 
     // Não deixa pagar mais que o total
     const jaPago = await this.sumPaidValue(input.saleId);
-    const restante = sale.total - jaPago;
+    // CENTAVO (10/08 — Campinas): o total da venda podia carregar FRAÇÃO de
+    // centavo (soma de itens/descontos sem arredondar), o front cobra o
+    // restante JÁ arredondado (`Math.round((total - jaPago) * 100) / 100`) e
+    // aqui a comparação era feita no valor cru → 1134,15 > 1134,1485 travava a
+    // venda com a mensagem absurda "Valor R$1134,15 maior que o restante
+    // R$1134,15" (os dois lados imprimem com toFixed(2)).
+    // Agora o restante é comparado em CENTAVOS, igual ao front e ao guard do
+    // finalize (que já tolera 0,01).
+    const restante = Math.round((sale.total - jaPago) * 100) / 100;
     let valor = Math.round(input.valor * 100) / 100;
     let details = input.details;
     if (valor > restante + 0.001) {
@@ -1821,7 +1829,8 @@ export class PdvService {
       where: { id: sale.id },
       data: {
         desconto,
-        total: Math.max(0, subtotalLiquido - desconto),
+        // CENTAVO (10/08): total sempre em centavos fechados (ver recalcTotals).
+        total: Math.max(0, Math.round((subtotalLiquido - desconto) * 100) / 100),
       },
     });
   }
@@ -2110,12 +2119,16 @@ export class PdvService {
     });
     if (!sale) return;
     const items = sale.items;
-    const subtotal = items.reduce((s: number, i: any) => s + (i.precoUnit * i.qty), 0);
-    const descontoItens = items.reduce((s: number, i: any) => s + (i.desconto || 0), 0);
+    // CENTAVO (10/08): arredonda subtotal/total pra 2 casas. Sem isso a venda
+    // guardava fração de centavo (preço/desconto quebrado) e o caixa não
+    // conseguia pagar o valor que a própria tela mostrava.
+    const cents = (v: number) => Math.round(v * 100) / 100;
+    const subtotal = cents(items.reduce((s: number, i: any) => s + (i.precoUnit * i.qty), 0));
+    const descontoItens = cents(items.reduce((s: number, i: any) => s + (i.desconto || 0), 0));
     const saleExtra = sale.desconto || 0;
     // Garante que extra + descontoItens não excede subtotal (clipa se passar)
     const extraClipado = Math.max(0, Math.min(saleExtra, subtotal - descontoItens));
-    const total = Math.max(0, subtotal - descontoItens - extraClipado);
+    const total = Math.max(0, cents(subtotal - descontoItens - extraClipado));
     await (this.prisma as any).pdvSale.update({
       where: { id: saleId },
       // NÃO toca em sale.desconto aqui — só atualiza se foi clipado
