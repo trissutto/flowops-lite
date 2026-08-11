@@ -808,11 +808,9 @@ export default function NovoPedidoPage() {
     setConferindoId(tempId);
     try {
       const oid = await ensureOrder(cnpjFinal);
-      // Card veio de pedido reaberto: apaga os itens antigos (pendentes) e
-      // regrava com o que está na tela — edição = delete+recreate.
-      for (const sid of it.serverItemIds || []) {
-        await api(`/purchase-orders/items/${sid}`, { method: 'DELETE' });
-      }
+      // Regrava com o que está na tela — edição = delete+recreate (tolerante
+      // a id velho; ver apagarItensPendentesDaRef).
+      await apagarItensPendentesDaRef(oid, it.ref, it.serverItemIds || []);
       await salvarCategoriaSeNova(it);
       const apiItems = montarApiItems(it);
       if (apiItems.length === 0) {
@@ -875,6 +873,38 @@ export default function NovoPedidoPage() {
    * Primavera/Verão com entrega marcada) NÃO pode ganhar estoque no
    * lançamento. REF já salva antes é regravada (delete+recreate).
    */
+  /**
+   * Apaga do servidor os itens PENDENTES que este card representa, antes de
+   * regravar (delete+recreate).
+   *
+   * BLINDADO CONTRA ID VELHO (caso REF 9829, 11/08): depois de um "Salvar"
+   * que regravou os itens (ids novos), o rascunho local podia ficar com os
+   * ids ANTIGOS — o DELETE tomava 404 "Item não encontrado" e abortava o
+   * Conferir/Enter. Agora: 404 no id rastreado é ignorado (o item já não
+   * existe — que é o estado desejado) e, além dos rastreados, apaga QUALQUER
+   * item pendente da MESMA REF no pedido — senão a regravação criaria a REF
+   * duplicada ao lado da versão órfã.
+   */
+  const apagarItensPendentesDaRef = async (oid: string, ref: string, tracked: string[]) => {
+    const ids = new Set<string>(tracked.filter(Boolean));
+    try {
+      const o = await api<any>(`/purchase-orders/${oid}`);
+      for (const si of (o?.items || []) as any[]) {
+        if (
+          String(si.ref || '').trim().toUpperCase() === ref.trim().toUpperCase() &&
+          si.itemStatus !== 'recebido'
+        ) ids.add(si.id);
+      }
+    } catch { /* sem a lista, segue só com os rastreados */ }
+    for (const sid of ids) {
+      try {
+        await api(`/purchase-orders/items/${sid}`, { method: 'DELETE' });
+      } catch (e: any) {
+        if (!/^404/.test(String(e?.message || ''))) throw e;
+      }
+    }
+  };
+
   const salvarRefNoPedido = async (tempId: string): Promise<boolean> => {
     if (conferindoIdRef.current) return false;
     const it = items.find((i) => i.tempId === tempId);
@@ -888,9 +918,7 @@ export default function NovoPedidoPage() {
     setConferindoId(tempId);
     try {
       const oid = await ensureOrder(cnpjFinal);
-      for (const sid of it.serverItemIds || []) {
-        await api(`/purchase-orders/items/${sid}`, { method: 'DELETE' });
-      }
+      await apagarItensPendentesDaRef(oid, it.ref, it.serverItemIds || []);
       await salvarCategoriaSeNova(it);
       const apiItems = montarApiItems(it);
       if (apiItems.length === 0) {
@@ -993,11 +1021,10 @@ export default function NovoPedidoPage() {
           method: 'PATCH',
           body: JSON.stringify(headerPayload(cnpjFinal)),
         });
-        // Cards pendentes reabertos são regravados: apaga os antigos antes.
+        // Cards pendentes são regravados: apaga os antigos antes (tolerante a
+        // id velho + limpa órfãos da mesma REF — ver apagarItensPendentesDaRef).
         for (const it of pendentes) {
-          for (const sid of it.serverItemIds || []) {
-            await api(`/purchase-orders/items/${sid}`, { method: 'DELETE' });
-          }
+          await apagarItensPendentesDaRef(orderId, it.ref, it.serverItemIds || []);
         }
         for (const ai of apiItems) {
           await api(`/purchase-orders/${orderId}/items`, { method: 'POST', body: JSON.stringify(ai) });
