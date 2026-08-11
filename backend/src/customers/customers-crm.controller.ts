@@ -16,6 +16,7 @@ import { CustomersEtlService } from './customers-etl.service';
 import { CustomersGigaEtlService } from './customers-giga-etl.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { AdminOnly, AdminOnlyGuard } from '../auth/admin-only.guard';
+import { CpfWooService } from './cpf-woo.service';
 
 /**
  * Rotas do CRM real (model Customer no banco).
@@ -34,7 +35,34 @@ export class CustomersCrmController {
     private readonly svc: CustomersCrmService,
     private readonly etl: CustomersEtlService,
     private readonly gigaEtl: CustomersGigaEtlService,
+    private readonly cpfWoo: CpfWooService,
   ) {}
+
+  /**
+   * CPF DAS CLIENTES DO SITE ANTIGO — ver `CpfWooService`.
+   *
+   * Vive aqui, e não num script, porque o MySQL do WordPress está atrás do
+   * firewall por IP da KingHost: só o Railway passa.
+   *
+   * `GET .../diagnostico` mostra o que existe do outro lado (HPOS? qual chave
+   * de meta o plugin usou?) sem cruzar nada — é o primeiro comando a rodar,
+   * porque supor o schema devolveria "nenhum CPF" num banco cheio deles.
+   */
+  @Get('cpf-woo/diagnostico')
+  @AdminOnly()
+  cpfWooDiagnostico() {
+    return this.cpfWoo.diagnostico();
+  }
+
+  /**
+   * SECO por padrão. `?aplicar=1` grava — são 14 mil cadastros e não há
+   * desfazer barato, então a confirmação é explícita.
+   */
+  @Post('cpf-woo/backfill')
+  @AdminOnly()
+  cpfWooBackfill(@Query('aplicar') aplicar?: string) {
+    return this.cpfWoo.backfill(aplicar === '1' || aplicar === 'true');
+  }
 
   // ─── ETL Woo → Customers (só admin) ──────────────────────────────────────
   @Get('etl/status')
