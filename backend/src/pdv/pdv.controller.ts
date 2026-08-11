@@ -1523,7 +1523,49 @@ export class PdvController {
       return (Number(b?.orderCount) || 0) - (Number(a?.orderCount) || 0);
     });
 
-    return { results: ordenados.slice(0, limit) };
+    /**
+     * ─── A MESMA PESSOA CINCO VEZES NA TELA (11/08/2026) ──────────────────
+     *
+     * Buscar "thiago de oliveira" devolvia CINCO linhas idênticas. Conferido
+     * no banco: era a mesma pessoa, com uma ficha por LOJA onde tinha
+     * cadastro — a importação do Giga criou todas SEM CPF, e só a do PDV
+     * ficou com CPF.
+     *
+     * A deduplicação acima só enxerga CPF (`cpfsVistos`). Com 74% da base sem
+     * CPF, ela não tinha o que comparar: quatro das cinco passavam batidas.
+     *
+     * Aqui, quando o MESMO nome aparece com e sem CPF, ficam só as com CPF —
+     * é a mesma pessoa, e a ficha identificada é a única que serve pra
+     * crediário, nota e cashback. Escolher a errada não é só confuso: é venda
+     * que sai sem CPF e cliente que não acumula.
+     *
+     * ⚠️ O RISCO, ASSUMIDO CONSCIENTEMENTE: duas pessoas DIFERENTES com o
+     * nome exatamente igual, uma com CPF e outra sem — a sem CPF some da
+     * lista. A base tem 942 nomes repetidos, então isso acontece. Aceitei
+     * porque a alternativa (cinco linhas iguais) faz a vendedora escolher no
+     * chute todo dia, e porque some só quando existe uma homônima JÁ
+     * IDENTIFICADA — caso em que a de CPF é o palpite melhor.
+     *
+     * Quando NENHUMA do grupo tem CPF, todas ficam: aí não há como saber, e
+     * esconder seria pior.
+     *
+     * A correção de verdade é a base ter CPF (backfill do WooCommerce + fila
+     * de revisão de identidade). Isto é o remendo que segura a tela até lá.
+     */
+    const chaveNome = (r: any) =>
+      String(r?.nome || '')
+        .normalize('NFD')
+        .replace(/[̀-ͯ]/g, '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, ' ')
+        .trim();
+    const temCpfValido = (r: any) => String(r?.cpf || '').replace(/\D/g, '').length === 11;
+    const nomesComCpf = new Set(ordenados.filter(temCpfValido).map(chaveNome));
+    const semDuplicatas = ordenados.filter(
+      (r: any) => temCpfValido(r) || !nomesComCpf.has(chaveNome(r)),
+    );
+
+    return { results: semDuplicatas.slice(0, limit) };
   }
 
   /**
