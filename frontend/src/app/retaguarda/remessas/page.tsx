@@ -119,6 +119,9 @@ const STATUS_TONE: Record<string, { bg: string; text: string; border: string; ic
 export default function RemessasAdminPage() {
   const [rows, setRows] = useState<ShipmentRow[]>([]);
   const [kpis, setKpis] = useState<KPIs | null>(null);
+  // Caixas abertas há 4h+ com peça dentro (rede toda, sem recorte de data).
+  // Enquanto abertas: estoque da origem NÃO baixou e o destino NÃO vê nada.
+  const [abertasParadas, setAbertasParadas] = useState<ShipmentRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -213,12 +216,22 @@ export default function RemessasAdminPage() {
       if (de) params.set('de', de);
       if (ate) params.set('ate', ate);
 
-      const [list, k] = await Promise.all([
+      const [list, k, abertas] = await Promise.all([
         api<ShipmentRow[]>(`/realignment/shipments/admin/all?${params.toString()}`),
         api<KPIs>('/realignment/shipments/admin/kpis'),
+        // Caixas ABERTAS da rede inteira, SEM recorte de data — a caixa
+        // esquecida é justamente a antiga (Santos ficou 8 dias aberta e o
+        // destino nunca viu; casos 11/08). Alimenta o banner vermelho.
+        api<ShipmentRow[]>('/realignment/shipments/admin/all?status=open').catch(() => [] as ShipmentRow[]),
       ]);
       setRows(Array.isArray(list) ? list : []);
       setKpis(k);
+      const agora = Date.now();
+      setAbertasParadas(
+        (Array.isArray(abertas) ? abertas : [])
+          .filter((r) => (r.totalItemsLive ?? 0) > 0 && agora - new Date(r.openedAt).getTime() >= 4 * 3_600_000)
+          .sort((a, b) => new Date(a.openedAt).getTime() - new Date(b.openedAt).getTime()),
+      );
     } catch (e: any) {
       setError(e?.message || 'Erro ao carregar remessas');
     } finally {
@@ -575,6 +588,45 @@ export default function RemessasAdminPage() {
       </header>
 
       <main className="max-w-7xl mx-auto p-4 space-y-4">
+        {/* ⚠️ CAIXAS ABERTAS PARADAS — a loja imprimiu/despachou e esqueceu o
+            "Fechar e enviar": estoque da origem sem baixar, destino cego.
+            Banner independe dos filtros — problema ativo tem que gritar. */}
+        {abertasParadas.length > 0 && (
+          <div className="rounded-xl border-2 border-rose-300 bg-rose-50 overflow-hidden">
+            <div className="px-4 py-2.5 bg-rose-600 text-white flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4" />
+              <span className="text-sm font-black uppercase tracking-wide">
+                {abertasParadas.length} caixa{abertasParadas.length === 1 ? '' : 's'} aberta
+                {abertasParadas.length === 1 ? '' : 's'} há 4h+ com peça dentro
+              </span>
+              <span className="ml-auto text-[11px] opacity-90">
+                estoque não baixou · destino não enxerga · cobrar a loja ORIGEM
+              </span>
+            </div>
+            <div className="divide-y divide-rose-200">
+              {abertasParadas.slice(0, 10).map((r) => {
+                const h = (Date.now() - new Date(r.openedAt).getTime()) / 3_600_000;
+                const idade = h >= 48 ? `${Math.floor(h / 24)} dias` : `${Math.floor(h)}h`;
+                return (
+                  <div key={r.id} className="px-4 py-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+                    <span className="font-mono font-black text-rose-900">{r.code}</span>
+                    <span className="text-slate-700">
+                      {r.fromStoreCode} {r.fromStoreName} → {r.toStoreCode} {r.toStoreName}
+                    </span>
+                    <span className="text-slate-500">{r.totalItemsLive} peça(s)</span>
+                    <span className="ml-auto font-bold text-rose-700">aberta há {idade}</span>
+                  </div>
+                );
+              })}
+              {abertasParadas.length > 10 && (
+                <div className="px-4 py-2 text-xs text-rose-700">
+                  … e mais {abertasParadas.length - 10}. Clique no KPI “Em montagem” pra ver todas.
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* KPIs */}
         {kpis && (
           <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">

@@ -152,6 +152,11 @@ export default function MinhaLojaRealinhamentoPage() {
   // Qual caixa em montagem está com o conteúdo aberto na tela.
   const [caixaAberta, setCaixaAberta] = useState<string | null>(null);
   const [closingShipmentId, setClosingShipmentId] = useState<string | null>(null);
+  // Prompt pós-impressão: imprimiu a etiqueta de caixa ABERTA → oferece fechar
+  // na hora. Nasceu dos casos Piracicaba/Santos (11/08): etiqueta impressa,
+  // caixa despachada fisicamente e o "Fechar e enviar" esquecido — estoque sem
+  // baixar na origem e destino sem enxergar a remessa.
+  const [fecharPrompt, setFecharPrompt] = useState<{ id: string; code: string } | null>(null);
   /** Remessa fechada agora — pra gerar etiqueta/nota sem sair desta tela.
    *  `rotaPropria` vem do fechamento: sem ela o cartão oferecia "Gerar envio
    *  Correios" numa caixa de Santos e o clique dava o erro de transporte
@@ -281,6 +286,10 @@ export default function MinhaLojaRealinhamentoPage() {
       document.body.removeChild(a);
       // Não revoga imediatamente pra deixar a aba abrir
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      // Etiqueta na mão = caixa vai ser despachada. Pergunta o fechamento AGORA
+      // — o esquecimento do "Fechar e enviar" foi o que deixou caixa viajando
+      // aberta (estoque sem baixar + destino cego; casos Piracicaba/Santos 11/08).
+      setFecharPrompt({ id: shipmentId, code });
     } catch (e: any) {
       alert(`Erro ao gerar PDF: ${e?.message || e}`);
     }
@@ -327,6 +336,10 @@ export default function MinhaLojaRealinhamentoPage() {
         pushToast(`🖨️ Romaneio ${code} enviado pra impressora.`);
       }
       setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+      // Mesmo gatilho do PDF: imprimiu = vai despachar → oferece fechar agora.
+      if (res.mode !== 'popup-blocked') {
+        setFecharPrompt({ id: shipmentId, code });
+      }
     } catch (e: any) {
       alert(`Erro ao imprimir: ${e?.message || e}`);
     }
@@ -388,11 +401,13 @@ export default function MinhaLojaRealinhamentoPage() {
     }
   }, [pushToast, loadItems, loadSentItems, loadOpenShipments]);
 
-  const handleCloseShipment = useCallback(async (shipmentId: string, code: string) => {
+  const handleCloseShipment = useCallback(async (shipmentId: string, code: string, skipConfirm = false) => {
     // SIMPLIFICADO: sem modal de precheck. Vendedora separou, pecas em maos,
     // clica Fechar e enviar -> confirma -> fecha. Backend ja aceita unresolved
     // e roda decreaseStock com allowNegative=true (peca fisica prevalece).
-    if (!confirm(`Fechar remessa ${code} e enviar pra destino?\n\nIsso vai BAIXAR o estoque Giga das pecas e marcar a remessa como em transito. Nao pode desfazer.`)) {
+    // skipConfirm=true quando quem chama JA e um modal de confirmacao (o
+    // prompt pos-impressao) — dois dialogos seguidos parecem travamento.
+    if (!skipConfirm && !confirm(`Fechar remessa ${code} e enviar pra destino?\n\nIsso vai BAIXAR o estoque das pecas e marcar a remessa como em transito. Nao pode desfazer.`)) {
       return;
     }
     setClosingShipmentId(shipmentId);
@@ -1684,6 +1699,49 @@ export default function MinhaLojaRealinhamentoPage() {
           svg.animate-spin { display: none !important; }
         }
       `}</style>
+
+      {/* MODAL — prompt pós-impressão: fechar a caixa agora? */}
+      {fecharPrompt && (
+        <div
+          className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4"
+          onClick={() => setFecharPrompt(null)}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-2 mb-2">
+              <Send className="w-5 h-5 text-amber-600" />
+              <h3 className="text-lg font-black text-slate-800">Etiqueta na mão!</h3>
+            </div>
+            <p className="text-sm text-slate-600 leading-snug">
+              Vai despachar a caixa <b className="font-mono">{fecharPrompt.code}</b> agora?
+              O estoque das peças <b>só baixa</b> e a loja destino <b>só enxerga a remessa</b>{' '}
+              depois do <b>Fechar e enviar</b>. Caixa que viaja aberta = estoque errado nas duas pontas.
+            </p>
+            <div className="mt-4 flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  const p = fecharPrompt;
+                  setFecharPrompt(null);
+                  if (p) handleCloseShipment(p.id, p.code, true);
+                }}
+                className="w-full bg-amber-600 hover:bg-amber-700 text-white px-4 py-3 rounded-xl text-sm font-black flex items-center justify-center gap-2"
+              >
+                <Send className="w-4 h-4" /> FECHAR E ENVIAR AGORA
+              </button>
+              <button
+                type="button"
+                onClick={() => setFecharPrompt(null)}
+                className="w-full bg-white hover:bg-slate-50 text-slate-600 border-2 border-slate-200 px-4 py-3 rounded-xl text-sm font-bold"
+              >
+                Ainda vou adicionar peças
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* MODAL — problemas detectados pelo precheck antes de fechar remessa */}
       {problemasShipment && (
