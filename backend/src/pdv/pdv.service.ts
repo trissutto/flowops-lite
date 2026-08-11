@@ -2518,9 +2518,12 @@ export class PdvService {
         // (venda online / troca par / total zero). Relatório fiscal filtra.
         nfceStatus: skipNfce ? 'skipped' : 'preview',
         nfceXml: nfceStub?.xml ?? null,
-        nfceNumber: nfceStub?.numero ?? null,
-        nfceSerie: nfceStub?.serie ?? null,
-        nfceChave: nfceStub?.chave ?? null,
+        // numero/serie/chave do stub são FAKE (timestamp) e ficam NULL: a
+        // emissão real reusa nfce_number pré-existente no retry — gravar o
+        // fake fez a SEFAZ autorizar nNF 408643218/462823380 (10-11/08/26).
+        nfceNumber: null,
+        nfceSerie: null,
+        nfceChave: null,
       },
     });
 
