@@ -46,8 +46,11 @@ export class PixPagbankReconcileService {
 
   /** Teto por ciclo — reconciliação é exceção, não fluxo de massa. */
   private static readonly BATCH = 20;
-  /** Só olha pagamento recente: venda de dias atrás vira caso pra humano. */
-  private static readonly JANELA_HORAS = 24;
+  /** Janela de 72h (era 24h): venda ONLINE paga sábado à noite precisa
+   *  sobreviver até o caixa abrir na segunda de manhã — com 24h ela saía
+   *  da janela e ficava aberta pra sempre (caso 11/08). Mais velho que
+   *  isso vira caso pra humano. */
+  private static readonly JANELA_HORAS = 72;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -77,16 +80,32 @@ export class PixPagbankReconcileService {
   private async reconciliar(): Promise<void> {
     const desde = new Date(Date.now() - PixPagbankReconcileService.JANELA_HORAS * 3600_000);
 
+    // Pega TODOS os pagos da janela e filtra ANTES pra só processar os que
+    // ainda têm venda ABERTA. O `take: BATCH` direto aqui deixava a venda
+    // online travada de ontem ser atropelada pelos 20 PIX presenciais mais
+    // recentes (todos já finalizados) — ela nunca chegava a ser olhada.
+    // Custo: 2 queries baratas por ciclo; ids de baixa de crediário (que
+    // também vivem em pagbank_payments) caem fora naturalmente no filtro.
     const pagos: Array<{ saleId: string; pagbankOrderId: string; valor: number }> =
       await (this.prisma as any).pagbankPayment.findMany({
         where: { status: 'paid', method: 'pix', paidAt: { gte: desde } },
         orderBy: { paidAt: 'desc' },
-        take: PixPagbankReconcileService.BATCH,
+        take: 500,
         select: { saleId: true, pagbankOrderId: true, valor: true },
       });
     if (!pagos.length) return;
 
-    for (const p of pagos) {
+    const abertas: Array<{ id: string }> = await (this.prisma as any).pdvSale.findMany({
+      where: { id: { in: [...new Set(pagos.map((p) => p.saleId))] }, status: 'open' },
+      select: { id: true },
+    });
+    if (!abertas.length) return;
+    const abertasSet = new Set(abertas.map((s) => s.id));
+    const alvo = pagos
+      .filter((p) => abertasSet.has(p.saleId))
+      .slice(0, PixPagbankReconcileService.BATCH);
+
+    for (const p of alvo) {
       // Cada venda é independente: uma falha não interrompe as outras.
       // `confirmPixPagoSeVendaAberta` já é idempotente e nunca lança —
       // venda já fechada, id de crediário ou pagamento repetido saem em
