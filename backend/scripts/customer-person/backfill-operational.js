@@ -6,7 +6,7 @@
 const { Client } = require('pg');
 
 const BATCH_SIZE = Math.max(100, Math.min(5000, Number(process.env.CUSTOMER_PERSON_BATCH_SIZE || 1000)));
-const BATCH_ID = process.env.CUSTOMER_PERSON_BATCH_ID || `operational-${new Date().toISOString()}`;
+const BATCH_ID = process.env.CUSTOMER_PERSON_BATCH_ID || null;
 
 const targets = [
   {
@@ -98,13 +98,13 @@ function assertIdentifier(value) {
 async function financialBaseline(client) {
   const { rows } = await client.query(`SELECT json_build_object(
     'parcelas', (SELECT count(*) FROM crediario_parcelas),
-    'parcelasValor', (SELECT coalesce(sum(valor_parcela),0)::text FROM crediario_parcelas WHERE NOT cancelado),
+    'parcelasValor', (SELECT round(coalesce(sum(valor_parcela),0)::numeric,2)::text FROM crediario_parcelas WHERE NOT cancelado),
     'baixas', (SELECT count(*) FROM crediario_baixas),
-    'baixasValor', (SELECT coalesce(sum(total_pago),0)::text FROM crediario_baixas WHERE status='paid'),
+    'baixasValor', (SELECT round(coalesce(sum(total_pago),0)::numeric,2)::text FROM crediario_baixas WHERE status='paid'),
     'marcados', (SELECT count(*) FROM marcados),
-    'marcadosValor', (SELECT coalesce(sum(valor_total),0)::text FROM marcados),
+    'marcadosValor', (SELECT round(coalesce(sum(valor_total),0)::numeric,2)::text FROM marcados),
     'vendas', (SELECT count(*) FROM pdv_sales),
-    'vendasValor', (SELECT coalesce(sum(total),0)::text FROM pdv_sales WHERE status='finalized' AND NOT is_training)
+    'vendasValor', (SELECT round(coalesce(sum(total),0)::numeric,2)::text FROM pdv_sales WHERE status='finalized' AND NOT is_training)
   ) AS value`);
   return rows[0].value;
 }
@@ -117,16 +117,26 @@ async function countCandidates(client, target) {
     unresolved: rows[0].unlinked - rows[0].candidates };
 }
 
+async function countAmbiguous(client, target) {
+  const keys = target.key.map(assertIdentifier).join(',');
+  const { rows } = await client.query(`SELECT count(*)::int ambiguous FROM (
+    SELECT ${keys} FROM (${target.select}) candidate
+    GROUP BY ${keys} HAVING count(DISTINCT person_id) > 1
+  ) conflicts`);
+  return rows[0].ambiguous;
+}
+
 async function applyTarget(client, target) {
   let updated = 0;
   const table = assertIdentifier(target.table);
   const keys = target.key.map(assertIdentifier);
-  while (true) {
+  await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
+  try {
+    const before = await financialBaseline(client);
+    while (true) {
     const order = target.key.map((_, index) => index + 1).join(',');
     const { rows } = await client.query(`${target.select} ORDER BY ${order} LIMIT $1`, [BATCH_SIZE]);
     if (!rows.length) break;
-    await client.query('BEGIN');
-    try {
       const width = target.key.length + 1;
       const params = [];
       const valueSql = rows.map((row, rowIndex) => {
@@ -154,11 +164,13 @@ async function applyTarget(client, target) {
         ON CONFLICT (person_id, entity_type, entity_id, rule) DO NOTHING
         RETURNING entity_id`, params);
       updated += result.rowCount;
-      await client.query('COMMIT');
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
     }
+    const after = await financialBaseline(client);
+    if (JSON.stringify(before) !== JSON.stringify(after)) throw new Error(`PORTAO FINANCEIRO FALHOU em ${target.name}`);
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
   }
   return updated;
 }
@@ -168,21 +180,35 @@ async function main() {
   if (apply && process.env.CUSTOMER_PERSON_OPERATIONAL_ENABLED !== '1') {
     throw new Error('Aplicação bloqueada: defina CUSTOMER_PERSON_OPERATIONAL_ENABLED=1');
   }
+  if (apply && (!BATCH_ID || !/^[a-zA-Z0-9][a-zA-Z0-9._:-]{7,79}$/.test(BATCH_ID))) {
+    throw new Error('Aplicacao exige CUSTOMER_PERSON_BATCH_ID unico');
+  }
   const connectionString = process.env.DATABASE_PUBLIC_URL || process.env.DATABASE_URL;
   if (!connectionString) throw new Error('DATABASE_URL ausente');
   const client = new Client({ connectionString, ssl: { rejectUnauthorized: false } });
   await client.connect();
   try {
     await client.query("SET statement_timeout = '120s'");
+    if (apply) {
+      const reused = await client.query('SELECT 1 FROM person_link_audits WHERE batch_id=$1 LIMIT 1', [BATCH_ID]);
+      if (reused.rowCount) throw new Error(`batch-id ja utilizado: ${BATCH_ID}`);
+    }
     const before = await financialBaseline(client);
     const report = { mode: apply ? 'apply' : 'dry-run', batchId: BATCH_ID, batchSize: BATCH_SIZE, targets: {} };
+    let totalAmbiguous = 0;
     for (const target of targets) {
       const counts = await countCandidates(client, target);
-      report.targets[target.name] = { ...counts, updated: apply ? await applyTarget(client, target) : 0 };
+      const ambiguous = await countAmbiguous(client, target);
+      totalAmbiguous += ambiguous;
+      report.targets[target.name] = { ...counts, ambiguous, updated: 0 };
     }
+    if (totalAmbiguous) throw new Error(`Aplicacao bloqueada: ${totalAmbiguous} chave(s) ambigua(s)`);
+    if (apply) for (const target of targets) report.targets[target.name].updated = await applyTarget(client, target);
     const after = await financialBaseline(client);
+    // Em apply, cada dominio ja foi conciliado dentro de sua propria transacao.
+    if (apply) Object.assign(before, after);
     if (JSON.stringify(before) !== JSON.stringify(after)) throw new Error('PORTÃO FINANCEIRO FALHOU: baseline divergiu');
-    report.financialGate = 'PASS';
+    report.financialGate = apply ? 'PASS_PER_TARGET' : 'PASS';
     report.baseline = after;
     console.log(JSON.stringify(report, null, 2));
   } finally {
