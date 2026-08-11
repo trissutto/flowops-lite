@@ -866,9 +866,59 @@ export default function NovoPedidoPage() {
     }
   };
 
-  const conferirEAdicionarProximaRef = async (tempId: string) => {
+  /**
+   * SALVA a REF no pedido SEM receber (11/08, dono): é isto que o Enter da
+   * última célula da grade chama. Cria o pedido (rascunho) na 1ª vez e grava
+   * os itens desta REF como PENDENTES — sem `/receive`, sem estoque, sem aba
+   * de etiquetas. Recebimento é outro momento (botão Conferir, ou a tela do
+   * pedido quando a mercadoria chegar): pedido futuro (ex: coleção
+   * Primavera/Verão com entrega marcada) NÃO pode ganhar estoque no
+   * lançamento. REF já salva antes é regravada (delete+recreate).
+   */
+  const salvarRefNoPedido = async (tempId: string): Promise<boolean> => {
+    if (conferindoIdRef.current) return false;
+    const it = items.find((i) => i.tempId === tempId);
+    if (!it || it.conferido) return false;
+    setError(null);
+    const vErr = validarItemForm(it);
+    if (vErr) { setError(vErr); return false; }
+    const cnpjFinal = resolverCnpjFornecedor();
+    if (!cnpjFinal) return false;
+    conferindoIdRef.current = tempId;
+    setConferindoId(tempId);
+    try {
+      const oid = await ensureOrder(cnpjFinal);
+      for (const sid of it.serverItemIds || []) {
+        await api(`/purchase-orders/items/${sid}`, { method: 'DELETE' });
+      }
+      await salvarCategoriaSeNova(it);
+      const apiItems = montarApiItems(it);
+      if (apiItems.length === 0) {
+        setError(`REF ${it.ref}: grade sem quantidades`);
+        return false;
+      }
+      const itemIds: string[] = [];
+      for (const ai of apiItems) {
+        const criado = await api<{ id: string }>(`/purchase-orders/${oid}/items`, {
+          method: 'POST',
+          body: JSON.stringify(ai),
+        });
+        if (criado?.id) itemIds.push(criado.id);
+      }
+      updateItem(tempId, { serverItemIds: itemIds });
+      return true;
+    } catch (e: any) {
+      setError(`Salvar REF ${it.ref}: ${e?.message || 'erro'}`);
+      return false;
+    } finally {
+      conferindoIdRef.current = null;
+      setConferindoId(null);
+    }
+  };
+
+  const salvarRefEAdicionarProxima = async (tempId: string) => {
     await completeGradeAndPrepareNext(
-      () => conferirAgora(tempId),
+      () => salvarRefNoPedido(tempId),
       () => {
         const novaRefId = newTempId();
         adicionarItem(novaRefId);
@@ -1217,7 +1267,7 @@ export default function NovoPedidoPage() {
               onDuplicate={() => duplicarItem(item.tempId)}
               onConferir={() => conferirAgora(item.tempId)}
               onConferirEtiquetas={() => conferirAgora(item.tempId, { abrirEtiquetas: true })}
-              onConferirEAvancar={() => conferirEAdicionarProximaRef(item.tempId)}
+              onConferirEAvancar={() => salvarRefEAdicionarProxima(item.tempId)}
               conferindo={conferindoId === item.tempId}
               onAplicarCategoria={(desc) => aplicarCategoriaSeExistir(item.tempId, desc)}
               onAddCor={(c) => adicionarCor(item.tempId, c)}
@@ -1457,6 +1507,14 @@ function ItemEditor({
             </>
           ) : (
             <>
+              {(item.serverItemIds?.length ?? 0) > 0 && (
+                <span
+                  className="text-[11px] font-extrabold text-sky-700 bg-sky-50 border border-sky-200 px-2.5 py-1.5 rounded-lg"
+                  title="REF gravada no pedido (pendente de recebimento — estoque só entra no Conferir)"
+                >
+                  ✓ Salva no pedido
+                </span>
+              )}
               <button
                 type="button"
                 onClick={onConferirEtiquetas}
