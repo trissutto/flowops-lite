@@ -23,6 +23,39 @@ export function reviewHash(value: string): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
+function normalizedText(value?: string | null): string | null {
+  if (!value) return null;
+  const text = value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  return text || null;
+}
+
+export type ReviewPriority = 'conflict' | 'high' | 'review';
+
+export function classifyReviewCandidates(candidates: Array<Pick<Candidate, 'name' | 'email' | 'cpf' | 'personId' | 'originSource' | 'orderCount'>>): {
+  priority: ReviewPriority; score: number; signals: string[]; partial: boolean; siteLive: boolean;
+} {
+  const signals: string[] = [];
+  const distinct = (values: Array<string | null>) => new Set(values.filter((v): v is string => !!v));
+  const names = distinct(candidates.map((c) => normalizedText(c.name)));
+  const emails = distinct(candidates.map((c) => normalizedText(c.email)));
+  const cpfs = distinct(candidates.map((c) => c.cpf?.replace(/\D/g, '').length === 11 ? c.cpf.replace(/\D/g, '') : null));
+  const persons = distinct(candidates.map((c) => c.personId));
+  const sources = distinct(candidates.map((c) => c.originSource?.toLowerCase() ?? null));
+  const partial = persons.size === 1 && candidates.some((c) => !c.personId);
+  const siteLive = sources.has('live') && ([...sources].some((s) => s === 'woo' || s === 'site' || s === 'woocommerce'));
+  let score = 20;
+  if (names.size === 1 && names.size > 0) { score += 40; signals.push('Nomes iguais'); }
+  if (emails.size === 1 && emails.size > 0) { score += 25; signals.push('E-mails iguais'); }
+  if (siteLive) { score += 15; signals.push('Site + Live'); }
+  if (candidates.some((c) => c.orderCount > 0)) { score += 5; signals.push('Possui histórico'); }
+  if (partial) { score += 10; signals.push('Vínculo parcial'); }
+  if (cpfs.size > 1 || persons.size > 1) {
+    signals.push(cpfs.size > 1 ? 'CPFs divergentes' : 'Persons conflitantes');
+    return { priority: 'conflict', score: 0, signals, partial, siteLive };
+  }
+  return { priority: score >= 65 ? 'high' : 'review', score: Math.min(100, score), signals, partial, siteLive };
+}
+
 type Candidate = {
   id: string;
   personId: string | null;
@@ -116,6 +149,7 @@ export class CustomerIdentityReviewService {
   }
 
   private summary(g: Group) {
+    const classification = classifyReviewCandidates(g.candidates);
     return {
       key: g.key,
       type: g.type,
@@ -126,23 +160,51 @@ export class CustomerIdentityReviewService {
       totalLtvCents: g.candidates.reduce((sum, c) => sum + Number(c.ltvCents), 0),
       totalOrders: g.candidates.reduce((sum, c) => sum + c.orderCount, 0),
       candidates: g.candidates.map((c) => this.publicCandidate(c)),
+      ...classification,
     };
   }
 
-  async list(page = 1, limit = 20) {
+  async list(query: { page?: number; limit?: number; priority?: string; type?: string; channel?: string; linkState?: string; search?: string } = {}) {
     const all = await this.groups();
     const decisions = await this.prisma.personReviewDecision.findMany({
       where: { OR: all.map((g) => ({ suggestionType: g.type, suggestionHash: g.suggestionHash, participantKey: g.participantKey })) },
       select: { suggestionType: true, suggestionHash: true, participantKey: true },
     });
     const decided = new Set(decisions.map((d) => `${d.suggestionType}:${d.suggestionHash}:${d.participantKey}`));
-    const pending = all.filter((g) => !decided.has(`${g.type}:${g.suggestionHash}:${g.participantKey}`));
+    const summaries = all.filter((g) => !decided.has(`${g.type}:${g.suggestionHash}:${g.participantKey}`)).map((g) => this.summary(g));
+    const counters = summaries.reduce((acc, item) => { acc[item.priority]++; return acc; }, { conflict: 0, high: 0, review: 0 });
+    const search = normalizedText(query.search);
+    const pending = summaries.filter((item) =>
+      (!query.priority || item.priority === query.priority) &&
+      (!query.type || item.type === query.type) &&
+      (!query.channel || query.channel !== 'site-live' || item.siteLive) &&
+      (!query.linkState || (query.linkState === 'partial' ? item.partial : item.unlinkedCount === item.participantCount)) &&
+      (!search || item.candidates.some((c) => normalizedText(c.name)?.includes(search))),
+    ).sort((a, b) => ({ conflict: 0, high: 1, review: 2 }[a.priority] - { conflict: 0, high: 1, review: 2 }[b.priority]) || b.score - a.score);
+    const safeLimit = Math.min(100, Math.max(1, query.limit ?? 20));
+    const safePage = Math.max(1, query.page ?? 1);
+    return {
+      total: pending.length, counters, page: safePage, limit: safeLimit,
+      items: pending.slice((safePage - 1) * safeLimit, safePage * safeLimit),
+    };
+  }
+
+  async history(page = 1, limit = 30) {
     const safeLimit = Math.min(100, Math.max(1, limit));
     const safePage = Math.max(1, page);
-    return {
-      total: pending.length, page: safePage, limit: safeLimit,
-      items: pending.slice((safePage - 1) * safeLimit, safePage * safeLimit).map((g) => this.summary(g)),
-    };
+    const [total, decisions] = await this.prisma.$transaction([
+      this.prisma.personReviewDecision.count(),
+      this.prisma.personReviewDecision.findMany({ orderBy: { decidedAt: 'desc' }, skip: (safePage - 1) * safeLimit, take: safeLimit }),
+    ]);
+    const ids = [...new Set(decisions.flatMap((d) => d.participantIds as string[]))];
+    const customers = await this.prisma.customer.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, originSource: true, originStore: { select: { code: true, name: true } } } });
+    const byId = new Map(customers.map((c) => [c.id, c]));
+    return { total, page: safePage, limit: safeLimit, items: decisions.map((d) => ({
+      id: d.id, decision: d.decision, suggestionType: d.suggestionType, actorUserId: d.actorUserId,
+      reason: d.reason, decidedAt: d.decidedAt, destinationPersonId: d.destinationPersonId,
+      rolledBackAt: d.rolledBackAt, canRollback: d.decision === 'confirmed' && !d.rolledBackAt,
+      participants: (d.participantIds as string[]).map((id) => byId.get(id) ?? { id, name: 'Cadastro indisponível', originSource: null, originStore: null }),
+    })) };
   }
 
   async detail(key: string) {
@@ -156,6 +218,9 @@ export class CustomerIdentityReviewService {
     return this.prisma.$transaction(async (tx) => {
       const group = (await this.groups(tx)).find((g) => g.key === key);
       if (!group) throw new ConflictException('Grupo alterado; atualize a fila antes de confirmar');
+      if (classifyReviewCandidates(group.candidates).priority === 'conflict') {
+        throw new ConflictException('Conflito de identidade: revise CPF e vínculos existentes antes de confirmar');
+      }
       const personIds = [...new Set(group.candidates.map((c) => c.personId).filter((id): id is string => !!id))];
       if (personIds.length > 1) throw new ConflictException('Conflito: os cadastros já apontam para pessoas diferentes');
       const previousState = group.candidates.map((c) => ({ customerId: c.id, personId: c.personId }));
