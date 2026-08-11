@@ -137,7 +137,7 @@ export default function PedidoImprimirPage() {
 
       {/* Conteúdo imprimível */}
       <main className="max-w-[900px] mx-auto p-6 print:p-0 print:max-w-full">
-        <div className="bg-white print:bg-transparent p-6 print:p-0 rounded-lg print:rounded-none">
+        <div className="print-doc bg-white print:bg-transparent p-6 print:p-0 rounded-lg print:rounded-none">
 
           {/* Cabeçalho do documento */}
           <div className="border-b-2 border-slate-800 pb-3 mb-4">
@@ -281,7 +281,13 @@ export default function PedidoImprimirPage() {
       <style jsx global>{`
         @media print {
           body { background: white !important; margin: 0; }
-          @page { size: A4 portrait; margin: 10mm; }
+          /* Margem lateral maior + conteúdo reduzido (11/08): impressoras
+             com área não-imprimível > 10mm comiam as laterais do pedido.
+             O zoom encolhe tudo ~10% e a margem de 14mm garante a folga —
+             cabe em qualquer impressora de loja sem cortar coluna. */
+          @page { size: A4 portrait; margin: 10mm 14mm; }
+          .print-doc { zoom: 0.9; }
+          .print-doc table { width: 100% !important; table-layout: auto; }
         }
       `}</style>
     </div>
