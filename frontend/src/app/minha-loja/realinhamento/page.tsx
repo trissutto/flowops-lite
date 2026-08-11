@@ -128,6 +128,8 @@ export default function MinhaLojaRealinhamentoPage() {
   // Preenchido via GET /realignment/mine-sent.
   const [sentItems, setSentItems] = useState<RealignmentItem[]>([]);
   // Toggle entre "Pendentes" e "Enviados hoje". Default = pendentes (o trabalho).
+  // ?view=sent abre direto nas fechadas: é pra onde a tarefa "Gerar etiqueta"
+  // da home aponta, e o painel de etiqueta/nota só existe nessa aba.
   const [view, setView] = useState<ViewMode>('pending');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -567,6 +569,23 @@ export default function MinhaLojaRealinhamentoPage() {
       }
     })();
   }, [router, loadItems, loadSentItems]);
+
+  /**
+   * ?view=sent abre direto na aba das caixas FECHADAS — é pra lá que a tarefa
+   * "Gerar etiqueta" da home aponta, e o painel de etiqueta/nota só existe
+   * nessa aba (sem isso a tarefa caía em "Pendentes" e a tela respondia
+   * "Nenhuma peça pendente", parecendo que a tarefa mentia).
+   *
+   * Em EFEITO, não no initializer do useState: na navegação client-side do
+   * Next o componente monta ANTES da URL trocar, e o initializer lia a query
+   * da página anterior (vazia).
+   */
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (new URLSearchParams(window.location.search).get('view') === 'sent') {
+      setView('sent');
+    }
+  }, []);
 
   // Socket
   useEffect(() => {
