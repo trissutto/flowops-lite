@@ -85,6 +85,11 @@ export default function TopBreadcrumb() {
     pathname.startsWith('/pagar') ||
     pathname.startsWith('/p/') ||
     pathname.startsWith('/meu-pedido') ||
+    // Redesign 11/08: lista e lançamento de pedidos de compra têm sidebar +
+    // breadcrumb próprios (design system LURD'S). Telas internas ([id],
+    // etiquetas) seguem com a topbar até migrarem.
+    pathname === '/loja/pedidos-compra' ||
+    pathname.startsWith('/loja/pedidos-compra/novo') ||
     pathname.includes('/imprimir');
 
   // Monta o breadcrumb a partir do pathname — cada nível é clicável (exceto o último)
