@@ -197,6 +197,68 @@ export default function NovoPedidoPage() {
   // Estado
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Erro sempre visível: com 30 REFs na tela o banner (que fica no topo)
+  // passava despercebido — a vendedora achava que salvou e fechava a aba.
+  const errorRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (error) errorRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, [error]);
+
+  // ── RASCUNHO AUTOMÁTICO (caso das 30 REFs, 11/08) ─────────────────────
+  // REF digitada morava SÓ no estado do React: F5, deploy do Vercel ou aba
+  // fechada no meio do lançamento = tudo que não foi Conferido/Salvo sumia
+  // (caso real: 28 de 30 REFs perdidas). Agora TODA mudança vai pro
+  // localStorage (com debounce) e volta sozinha ao reabrir a tela — inclusive
+  // o orderId, então o Conferir continua no MESMO pedido em vez de abrir
+  // um pedido novo depois de um reload.
+  const DRAFT_KEY = 'pc:draft:novo';
+  const draftProntoRef = useRef(false);
+  const [draftRestauradoEm, setDraftRestauradoEm] = useState<string | null>(null);
+
+  const itemTemConteudo = (i: ItemForm) =>
+    !!(i.ref.trim() || i.cores.length > 0 || i.custoUnit.trim() || Object.keys(i.grade).length > 0);
+
+  useEffect(() => {
+    if (!draftProntoRef.current) return;
+    const t = setTimeout(() => {
+      try {
+        const temAlgo = items.some(itemTemConteudo) || fornecedorNome.trim();
+        if (!temAlgo) { localStorage.removeItem(DRAFT_KEY); return; }
+        localStorage.setItem(DRAFT_KEY, JSON.stringify({
+          fornecedorNome, fornecedorCnpj, marca, colecaoPedidoId,
+          dataPrevista, nfNumero, observacoes, orderId, items,
+          savedAt: new Date().toISOString(),
+        }));
+      } catch { /* localStorage cheio/indisponível — segue sem rascunho */ }
+    }, 600);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items, fornecedorNome, fornecedorCnpj, marca, colecaoPedidoId, dataPrevista, nfNumero, observacoes, orderId]);
+
+  const descartarRascunho = () => {
+    if (!confirm('Descartar o rascunho recuperado? As REFs não salvas serão perdidas.')) return;
+    try { localStorage.removeItem(DRAFT_KEY); } catch {}
+    setDraftRestauradoEm(null);
+    setFornecedorNome(''); setFornecedorCnpj(''); setMarca('');
+    setColecaoPedidoId(''); setDataPrevista(''); setNfNumero(''); setObservacoes('');
+    setOrderId(null);
+    setItems([]);
+    adicionarItem();
+  };
+
+  // Cinto e suspensório: além do rascunho, avisa antes de fechar/recarregar
+  // a aba com REF pendente (o rascunho recupera, mas o aviso evita o susto).
+  useEffect(() => {
+    const h = (e: BeforeUnloadEvent) => {
+      if (items.some((i) => !i.conferido && itemTemConteudo(i))) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    };
+    window.addEventListener('beforeunload', h);
+    return () => window.removeEventListener('beforeunload', h);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items]);
 
   useEffect(() => {
     api<Fornecedor[]>('/purchase-orders/lookups/fornecedores').then(setFornecedores).catch(() => {});
@@ -685,18 +747,55 @@ export default function NovoPedidoPage() {
     const id = typeof window !== 'undefined'
       ? new URLSearchParams(window.location.search).get('id')
       : null;
-    if (id) carregarPedido(id);
-    else adicionarItem();
+    if (id) {
+      // Reabertura explícita (?id=): a verdade é o servidor — não salva nem
+      // restaura rascunho aqui, senão o rascunho de um pedido antigo vazaria
+      // pro próximo lançamento.
+      carregarPedido(id);
+      return;
+    }
+    // Lançamento novo: tenta recuperar o rascunho salvo (F5/deploy/aba fechada)
+    let restaurou = false;
+    try {
+      const raw = localStorage.getItem(DRAFT_KEY);
+      if (raw) {
+        const d = JSON.parse(raw);
+        if (Array.isArray(d?.items) && d.items.some((i: ItemForm) => itemTemConteudo(i))) {
+          setFornecedorNome(d.fornecedorNome || '');
+          setFornecedorCnpj(d.fornecedorCnpj || '');
+          setMarca(d.marca || '');
+          setColecaoPedidoId(d.colecaoPedidoId || '');
+          setDataPrevista(d.dataPrevista || '');
+          setNfNumero(d.nfNumero || '');
+          setObservacoes(d.observacoes || '');
+          setOrderId(d.orderId || null);
+          setItems(d.items);
+          setDraftRestauradoEm(d.savedAt || null);
+          restaurou = true;
+        }
+      }
+    } catch { /* rascunho corrompido — começa em branco */ }
+    if (!restaurou) adicionarItem();
+    draftProntoRef.current = true;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /**
-   * CONFERIR + ETIQUETAS durante o lançamento (dono 06/08): cria o pedido
-   * (rascunho) na 1ª vez, adiciona SÓ esta REF e recebe ela na hora via
-   * recebimento parcial — auto-cadastro + estoque — e abre as etiquetas da
-   * REF em outra aba. O pedido continua aberto pras próximas REFs.
+   * CONFERIR durante o lançamento (dono 06/08): cria o pedido (rascunho) na
+   * 1ª vez, adiciona SÓ esta REF e recebe ela na hora via recebimento
+   * parcial — auto-cadastro + estoque. O pedido continua aberto pras
+   * próximas REFs.
+   *
+   * `abrirEtiquetas` (11/08): a aba de etiquetas SÓ abre no botão
+   * "Etiquetas". Antes o conferir SEMPRE abria a aba — inclusive no Enter da
+   * última célula da grade — e a aba roubando o foco fez a vendedora parar
+   * de usar o Enter e clicar em "Adicionar nova REF" direto... que não
+   * salva nada. Foi assim que 28 de 30 REFs se perderam no caso de 11/08.
    */
-  const conferirAgora = async (tempId: string): Promise<boolean> => {
+  const conferirAgora = async (
+    tempId: string,
+    opts?: { abrirEtiquetas?: boolean },
+  ): Promise<boolean> => {
     if (conferindoIdRef.current) return false;
     const it = items.find((i) => i.tempId === tempId);
     if (!it || it.conferido) return false;
@@ -749,10 +848,14 @@ export default function NovoPedidoPage() {
           `REF ${it.ref} conferida com ${erros} erro(s) de cadastro — resolva depois na tela do pedido (Cadastrar faltantes).`,
         );
       }
-      window.open(
-        `/loja/pedidos-compra/${oid}/etiquetas?ref=${encodeURIComponent(it.ref.trim().toUpperCase())}`,
-        '_blank',
-      );
+      // Aba de etiquetas SÓ quando pedida (botão "Etiquetas") — no fluxo do
+      // Enter ela roubava o foco e quebrava o ritmo do lançamento.
+      if (opts?.abrirEtiquetas) {
+        window.open(
+          `/loja/pedidos-compra/${oid}/etiquetas?ref=${encodeURIComponent(it.ref.trim().toUpperCase())}`,
+          '_blank',
+        );
+      }
       return true;
     } catch (e: any) {
       setError(`Conferir REF ${it.ref}: ${e?.message || 'erro'}`);
@@ -813,6 +916,7 @@ export default function NovoPedidoPage() {
         for (const ai of apiItems) {
           await api(`/purchase-orders/${orderId}/items`, { method: 'POST', body: JSON.stringify(ai) });
         }
+        try { localStorage.removeItem(DRAFT_KEY); } catch {}
         router.push(`/loja/pedidos-compra/${orderId}`);
         return;
       }
@@ -821,6 +925,7 @@ export default function NovoPedidoPage() {
         method: 'POST',
         body: JSON.stringify({ ...headerPayload(cnpjFinal), items: apiItems }),
       });
+      try { localStorage.removeItem(DRAFT_KEY); } catch {}
       router.push(`/loja/pedidos-compra/${r.id}`);
     } catch (e: any) {
       setError(e?.message || 'Erro ao salvar');
@@ -885,9 +990,41 @@ export default function NovoPedidoPage() {
           </div>
         )}
         {error && (
-          <div className="bg-rose-50 border border-rose-200 text-rose-700 rounded-xl p-3 flex items-center gap-2">
+          <div ref={errorRef} className="bg-rose-50 border border-rose-200 text-rose-700 rounded-xl p-3 flex items-center gap-2">
             <AlertCircle className="w-5 h-5" />
             <span className="text-sm font-bold">{error}</span>
+          </div>
+        )}
+
+        {draftRestauradoEm && (
+          <div className="bg-amber-50 border border-amber-300 text-amber-900 rounded-xl p-3 flex flex-wrap items-center gap-3">
+            <AlertCircle className="w-5 h-5 shrink-0" />
+            <span className="text-sm font-bold flex-1 min-w-[240px]">
+              Rascunho recuperado
+              {(() => {
+                try {
+                  const d = new Date(draftRestauradoEm);
+                  return isNaN(d.getTime()) ? '' : ` (salvo às ${d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })})`;
+                } catch { return ''; }
+              })()}
+              {' '}— as REFs que você digitou estão de volta. Confira e clique em <u>Salvar pedido</u>.
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setDraftRestauradoEm(null)}
+                className="px-3 py-1.5 rounded-lg bg-amber-600 text-white text-xs font-bold hover:bg-amber-700"
+              >
+                Continuar daqui
+              </button>
+              <button
+                type="button"
+                onClick={descartarRascunho}
+                className="px-3 py-1.5 rounded-lg border border-amber-400 text-amber-800 text-xs font-bold hover:bg-amber-100"
+              >
+                Descartar rascunho
+              </button>
+            </div>
           </div>
         )}
 
@@ -1079,6 +1216,7 @@ export default function NovoPedidoPage() {
               onRemove={() => removerItem(item.tempId)}
               onDuplicate={() => duplicarItem(item.tempId)}
               onConferir={() => conferirAgora(item.tempId)}
+              onConferirEtiquetas={() => conferirAgora(item.tempId, { abrirEtiquetas: true })}
               onConferirEAvancar={() => conferirEAdicionarProximaRef(item.tempId)}
               conferindo={conferindoId === item.tempId}
               onAplicarCategoria={(desc) => aplicarCategoriaSeExistir(item.tempId, desc)}
@@ -1120,7 +1258,7 @@ function ItemEditor({
   onUpdate, onRemove, onDuplicate, onAplicarCategoria,
   onAddCor, onRemoveCor, onAddTam, onRemoveTam, onGrade,
   onRefreshGrupos, atributos, onCriarAtributo,
-  onConferir, onConferirEAvancar, conferindo, expanded, onToggleExpanded,
+  onConferir, onConferirEtiquetas, onConferirEAvancar, conferindo, expanded, onToggleExpanded,
 }: {
   item: ItemForm;
   index: number;
@@ -1134,6 +1272,7 @@ function ItemEditor({
   onRemove: () => void;
   onDuplicate: () => void;
   onConferir: () => Promise<boolean>;
+  onConferirEtiquetas: () => Promise<boolean>;
   onConferirEAvancar: () => Promise<void>;
   conferindo: boolean;
   onAplicarCategoria: (desc: string) => void;
@@ -1320,10 +1459,10 @@ function ItemEditor({
             <>
               <button
                 type="button"
-                onClick={onConferir}
+                onClick={onConferirEtiquetas}
                 disabled={conferindo}
                 className="po-action-secondary"
-                title="Conferir e gerar etiquetas desta REF"
+                title="Conferir e gerar etiquetas desta REF (abre a aba de etiquetas)"
               >
                 <Tag className="w-4 h-4" />
                 Etiquetas
