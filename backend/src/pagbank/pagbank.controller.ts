@@ -175,6 +175,32 @@ export class PagbankController {
     if (!body?.saleId) throw new BadRequestException('saleId obrigatório');
     if (!body?.valor) throw new BadRequestException('valor obrigatório');
     if (!body?.storeCode) throw new BadRequestException('storeCode obrigatório');
+    /**
+     * A VENDA TEM QUE EXISTIR ANTES DO QR (11/08/2026).
+     *
+     * Auditoria achou 11 pagamentos PIX PAGOS em 48h cujo `saleId` não existe
+     * em NENHUMA tabela — R$88 a R$1.448, dinheiro real na conta e venda
+     * nenhuma pra fechar. O QR era gerado aceitando qualquer `saleId`; se a
+     * venda da tela não estava mais no servidor (aba velha, venda recriada,
+     * estado local), a cobrança nascia órfã: a cliente pagava, o webhook
+     * confirmava, o reconciliador ignorava ("não é venda de PDV") e a
+     * vendedora ficava presa numa tela que nunca confirma.
+     *
+     * Validar AQUI (na rota do PDV, não no service) é de propósito: a live usa
+     * o mesmo `createPixCharge` com id de CARRINHO, que não é pdv_sale — a
+     * validação no service quebraria a live inteira.
+     */
+    const venda = await this.svc.buscarVendaPdv(body.saleId);
+    if (!venda) {
+      throw new BadRequestException(
+        'Esta venda não existe mais no servidor. Recarregue o PDV (F5) e monte a venda de novo — NÃO envie o QR antigo pra cliente.',
+      );
+    }
+    if (venda.status !== 'open') {
+      throw new BadRequestException(
+        `Esta venda já está ${venda.status === 'finalized' ? 'finalizada' : venda.status}. Abra uma venda nova antes de gerar o PIX.`,
+      );
+    }
     return this.svc.createPixCharge(body);
   }
 

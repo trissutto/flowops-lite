@@ -608,6 +608,22 @@ export class PagbankService {
     });
   }
 
+  /**
+   * A venda de PDV por trás de um saleId — ou null.
+   *
+   * Existe pro guard do `POST /pagbank/pix/create`: QR só nasce pra venda que
+   * EXISTE e está aberta (ver o comentário na rota — 11 cobranças órfãs pagas
+   * em 48h motivaram isto). Método próprio em vez de expor o prisma do
+   * controller, e SEM validar aqui dentro do `createPixCharge`: a live chama o
+   * mesmo create com id de CARRINHO, que nunca é pdv_sale.
+   */
+  async buscarVendaPdv(saleId: string): Promise<{ id: string; status: string } | null> {
+    return (this.prisma as any).pdvSale.findUnique({
+      where: { id: String(saleId || '') },
+      select: { id: true, status: true },
+    });
+  }
+
   // ── Diagnóstico ─────────────────────────────────────────────────────
 
   /**

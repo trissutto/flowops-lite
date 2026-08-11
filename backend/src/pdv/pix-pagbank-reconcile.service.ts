@@ -101,6 +101,45 @@ export class PixPagbankReconcileService {
           `[pix-reconcile] venda ${p.saleId} fechada por PIX PagBank pago (${p.pagbankOrderId})`,
         );
       }
+      /**
+       * DINHEIRO SEM VENDA NÃO PODE SER SILÊNCIO (11/08/2026).
+       *
+       * "nao_e_venda_pdv" era ignorado de propósito, porque o saleId da tabela
+       * também carrega id de carrinho da live e de baixa de crediário — esses
+       * têm dono. Mas a auditoria achou pagamentos PAGOS cujo id não existe em
+       * tabela NENHUMA: R$88 a R$1.448 na conta, sem venda, sem carrinho, sem
+       * nada — e ninguém sabia. O guard novo no pix/create estanca a origem;
+       * este aviso é pro que ainda escapar. Um warn POR PAGAMENTO (não por
+       * ciclo — o Set segura a repetição a cada 30s), e a lista completa fica
+       * em GET /pdv/pix-orfaos.
+       */
+      if (!r.handled && r.reason === 'nao_e_venda_pdv' && !this.orfaosAvisados.has(p.pagbankOrderId)) {
+        this.orfaosAvisados.add(p.pagbankOrderId);
+        const temDono = await this.temDonoConhecido(p.saleId);
+        if (!temDono) {
+          this.logger.warn(
+            `[pix-reconcile] ⚠️ PIX PAGO SEM VENDA: R$${Number(p.valor || 0).toFixed(2)} ` +
+              `(${p.pagbankOrderId}, saleId ${p.saleId}) não pertence a venda, carrinho ou ` +
+              `crediário nenhum. Conferir em GET /pdv/pix-orfaos.`,
+          );
+        }
+      }
     }
+  }
+
+  /** Ids já avisados — evita o mesmo warn a cada ciclo de 30s. Zera no deploy, tudo bem. */
+  private readonly orfaosAvisados = new Set<string>();
+
+  /** O saleId pertence a algum fluxo conhecido (carrinho da live / crediário)? */
+  private async temDonoConhecido(saleId: string): Promise<boolean> {
+    const [cart, baixa] = await Promise.all([
+      (this.prisma as any).livePdvCart
+        .findUnique({ where: { id: saleId }, select: { id: true } })
+        .catch(() => null),
+      (this.prisma as any).crediarioBaixa
+        .findUnique({ where: { id: saleId }, select: { id: true } })
+        .catch(() => null),
+    ]);
+    return !!(cart || baixa);
   }
 }
