@@ -1409,61 +1409,86 @@ export class PdvController {
       console.warn('[customer-search] CRM falhou:', e?.message);
     }
 
-    // ─── 2. SE AINDA HÁ SLOTS, BUSCA NO GIGA ──────────────────────────────
+    /**
+     * ─── 2. SE AINDA HÁ SLOTS, BUSCA NO ESPELHO (Postgres) ────────────────
+     *
+     * ANTES ISTO IA AO GIGA AO VIVO, E ERA A LENTIDÃO DA TELA (11/08/2026).
+     *
+     * O ERP legado saiu em 02/08. A chamada continuou aqui com
+     * `timeoutMs: 8000` — e o pool do Giga PENDURA em vez de dar erro, então
+     * cada busca de cliente esperava os 8 segundos inteiros antes de desistir
+     * e mostrar o resultado que o CRM já tinha em 14ms.
+     *
+     * É a assinatura do problema: não era "meio lento", era rápido OU oito
+     * segundos. E como a busca dispara a cada tecla (debounce), as consultas
+     * empilhavam — a vendedora com a cliente na frente, olhando o campo
+     * parado.
+     *
+     * Agora lê `giga_clientes`, o espelho que já existe no Postgres (7.492
+     * cadastros) e que o resto do PDV usa desde a saída do Giga. Zero MySQL no
+     * caminho de quem está vendendo.
+     *
+     * De quebra a busca ficou ACENTO-INSENSÍVEL: no Giga os nomes estão em
+     * maiúsculas com acento ("JÉSSICA"), e digitar "jessica" não achava nada.
+     * `translate()` é função nativa do Postgres — não depende da extensão
+     * `unaccent`, que pode não estar instalada.
+     */
     const restante = limit - results.length;
     if (restante > 0) {
-      const cm = await this.detectClientesTableCached();
-      if (cm) {
-        const safeText = term.replace(/['"\\;%_]/g, '').slice(0, 80);
-        const safeNum = onlyDigits.slice(0, 14);
+      try {
+        const semAcento = (v: string) =>
+          String(v || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+        const ALVO = `translate(lower(nome), 'áàâãäéèêëíìîïóòôõöúùûüçñ', 'aaaaaeeeeiiiiooooouuuucn')`;
 
-        const selectCols: string[] = [`\`${cm.codCliente}\``];
-        if (cm.nome) selectCols.push(`\`${cm.nome}\``);
-        if (cm.cpf) selectCols.push(`\`${cm.cpf}\``);
-        if (cm.cidade) selectCols.push(`\`${cm.cidade}\``);
-        if (cm.telefone) selectCols.push(`\`${cm.telefone}\``);
-
-        const wheres: string[] = [];
+        const cond: string[] = [];
+        const params: any[] = [];
         if (isNumeric) {
-          if (cm.cpf) {
-            wheres.push(`REPLACE(REPLACE(REPLACE(\`${cm.cpf}\`, '.', ''), '-', ''), '/', '') LIKE '${safeNum}%'`);
-          }
-          wheres.push(`CONCAT('', \`${cm.codCliente}\`) = '${safeNum}'`);
+          params.push(`${onlyDigits}%`);
+          cond.push(`regexp_replace(coalesce(cpf,''), '[^0-9]', '', 'g') LIKE $${params.length}`);
+          params.push(onlyDigits);
+          cond.push(`codigo = $${params.length}`);
         }
-        if (cm.nome) {
-          wheres.push(`UPPER(\`${cm.nome}\`) LIKE UPPER('%${safeText}%')`);
+        params.push(`%${semAcento(term)}%`);
+        cond.push(`${ALVO} LIKE $${params.length}`);
+
+        // Escopo por loja: cadastro do Giga é POR LOJA (o mesmo CPF tem ficha
+        // em várias). CAST dos dois lados porque o padding é inconsistente
+        // ('1' × '01') — mesma pegadinha de sempre.
+        let filtroLoja = '';
+        if (lojaScope) {
+          params.push(Number(lojaScope));
+          filtroLoja = ` AND CAST(NULLIF(regexp_replace(coalesce(loja,''),'[^0-9]','','g'),'') AS INTEGER) = $${params.length}`;
         }
+        params.push(restante * 2);
 
-        if (wheres.length > 0) {
-          const orderBy = cm.nome ? `ORDER BY \`${cm.nome}\` ASC` : `ORDER BY \`${cm.codCliente}\` ASC`;
-          // CAST dos dois lados: padding da LOJA é inconsistente no Giga ('1' × '01')
-          const lojaAnd = lojaScope && cm.loja
-            ? ` AND CAST(\`${cm.loja}\` AS UNSIGNED) = ${Number(lojaScope)}`
-            : '';
-          const sql = `SELECT ${selectCols.join(', ')} FROM \`${cm.table}\` WHERE (${wheres.join(' OR ')})${lojaAnd} ${orderBy} LIMIT ${restante * 2}`;
+        const linhas: any[] = await (this.svc as any).prisma.$queryRawUnsafe(
+          `SELECT codigo, nome, cpf, cidade, fone_cel, fone_res
+             FROM giga_clientes
+            WHERE (${cond.join(' OR ')})${filtroLoja}
+            ORDER BY nome ASC
+            LIMIT $${params.length}`,
+          ...params,
+        );
 
-          try {
-            const r = await this.erp.runReadOnly(sql, { maxRows: restante * 2, timeoutMs: 8000 });
-            for (const row of (r.rows || [])) {
-              const cpfNum = cm.cpf ? String(row[cm.cpf] ?? '').replace(/\D/g, '').trim() : '';
-              // Dedup: pula se esse CPF já veio do CRM
-              if (cpfNum && cpfsVistos.has(cpfNum)) continue;
-              if (cpfNum) cpfsVistos.add(cpfNum);
-
-              results.push({
-                source: 'giga',
-                codCliente: String(row[cm.codCliente] ?? '').trim(),
-                nome: cm.nome ? String(row[cm.nome] ?? '').trim() : '',
-                cpf: cpfNum,
-                cidade: cm.cidade ? String(row[cm.cidade] ?? '').trim() : '',
-                telefone: cm.telefone ? String(row[cm.telefone] ?? '').replace(/\D/g, '').trim() : '',
-              });
-              if (results.length >= limit) break;
-            }
-          } catch (e: any) {
-            console.warn('[customer-search] Giga falhou:', e?.message);
-          }
+        for (const row of linhas) {
+          const cpfNum = String(row.cpf ?? '').replace(/\D/g, '').trim();
+          // Dedup: pula se esse CPF já veio do CRM
+          if (cpfNum && cpfsVistos.has(cpfNum)) continue;
+          if (cpfNum) cpfsVistos.add(cpfNum);
+          results.push({
+            source: 'giga',
+            codCliente: String(row.codigo ?? '').trim(),
+            nome: String(row.nome ?? '').trim(),
+            cpf: cpfNum,
+            cidade: String(row.cidade ?? '').trim(),
+            telefone: String(row.fone_cel || row.fone_res || '').replace(/\D/g, '').trim(),
+          });
+          if (results.length >= limit) break;
         }
+      } catch (e: any) {
+        // Nunca derruba a busca: o CRM já respondeu, e meia lista é melhor
+        // que nenhuma pra quem está com a cliente na frente.
+        console.warn('[customer-search] espelho falhou:', e?.message);
       }
     }
 
