@@ -19,6 +19,9 @@
     "prisma:migrate": "prisma migrate dev --name init",
     "prisma:push": "prisma db push",
     "customer-person:baseline": "node scripts/customer-person/baseline.js",
+    "customer-integrity:collect": "node scripts/customer-integrity/collect.js",
+    "customer-integrity:compare": "node scripts/customer-integrity/compare.js",
+    "customer-integrity:test": "node --test scripts/customer-integrity/*.test.js",
     "customer-person:backfill": "node scripts/customer-person/backfill-shadow.js",
     "customer-person:operational": "node scripts/customer-person/backfill-operational.js"
   },

@@ -1,0 +1,4 @@
+const path=require('node:path');const{compareSnapshots,readJson}=require('./lib');
+function arg(name){const value=process.argv.find(item=>item.startsWith(`--${name}=`));if(!value)throw new Error(`Parâmetro --${name}=... obrigatório`);return path.resolve(value.slice(name.length+3));}
+function run(){const before=readJson(arg('before'));const after=readJson(arg('after'));const configPath=process.argv.some(item=>item.startsWith('--config='))?arg('config'):path.join(__dirname,'config.json');const failures=compareSnapshots(before,after,readJson(configPath));if(failures.length){console.error(JSON.stringify({ok:false,failures},null,2));process.exitCode=1;return;}console.log(JSON.stringify({ok:true,message:'Nenhuma redução protegida detectada'},null,2));}
+if(require.main===module){try{run();}catch(error){console.error(error.message);process.exitCode=1;}}module.exports={run};
