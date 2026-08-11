@@ -2595,6 +2595,130 @@ export class RealignmentShipmentService {
     return this.confirmReceived(input);
   }
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // MUTIRÃO DA MATRIZ — caixa parada em trânsito
+  //
+  // A remessa baixa o estoque da ORIGEM ao fechar e só entra no DESTINO
+  // quando alguém clica "dar entrada". Entre um e outro a peça não está no
+  // estoque de NINGUÉM: some da Consulta e não vende no site. Medição de
+  // 11/08: 198 remessas / 1.057 peças nesse limbo, 6 delas com mais de 30
+  // dias (a mais antiga de 15/05) — contra um ciclo normal de 4,1 dias.
+  //
+  // A loja destino sempre pôde resolver (tela Receber), mas quando ela não
+  // resolve não existia ninguém acima dela pra fechar o ciclo. Estes três
+  // métodos dão isso à matriz. Os dois de AÇÃO delegam pros mesmos métodos
+  // da loja — mesmo efeito no estoque, mesmos sockets, mesmas travas — só
+  // resolvendo a loja pela PRÓPRIA REMESSA em vez do JWT de quem clica.
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /** Caixas em trânsito paradas há mais de `minDias` (rede toda). */
+  async listStuckInTransit(minDias = 3) {
+    const cutoff = new Date(Date.now() - minDias * 24 * 60 * 60 * 1000);
+    const shipments = await (this.prisma as any).realignmentShipment.findMany({
+      where: {
+        status: 'in_transit',
+        // sentAt é o marco do despacho; caixa antiga pode não ter (fechada
+        // antes do campo existir) — aí vale a abertura.
+        OR: [{ sentAt: { lte: cutoff } }, { sentAt: null, openedAt: { lte: cutoff } }],
+      },
+      orderBy: [{ sentAt: 'asc' }, { openedAt: 'asc' }],
+      take: 300,
+    });
+    if (!shipments.length) return [];
+
+    const ids = shipments.map((s: any) => s.id);
+    const pendentes = await this.prisma.transferOrder.groupBy({
+      by: ['shipmentId'],
+      where: {
+        shipmentId: { in: ids },
+        realignmentStatus: { notIn: ['cancelled', 'received', 'missing'] },
+      } as any,
+      _count: { _all: true },
+      _sum: { qtyOrigem: true },
+    } as any);
+    const porRemessa = new Map<string, { itens: number; pecas: number }>(
+      (pendentes as any[]).map((p) => [
+        p.shipmentId,
+        { itens: p._count?._all ?? 0, pecas: Number(p._sum?.qtyOrigem ?? 0) },
+      ]),
+    );
+
+    return shipments.map((s: any) => {
+      const base = s.sentAt ?? s.openedAt;
+      const p = porRemessa.get(s.id) ?? { itens: 0, pecas: 0 };
+      return {
+        id: s.id,
+        code: s.code,
+        fromStoreCode: s.fromStoreCode,
+        fromStoreName: s.fromStoreName,
+        toStoreCode: s.toStoreCode,
+        toStoreName: s.toStoreName,
+        sentAt: s.sentAt,
+        openedAt: s.openedAt,
+        diasParada: base ? Math.floor((Date.now() - new Date(base).getTime()) / 86400000) : null,
+        itensPendentes: p.itens,
+        pecasPendentes: p.pecas,
+        trackingCode: s.trackingCode ?? null,
+        envioGeneratedAt: s.envioGeneratedAt ?? null,
+      };
+    });
+  }
+
+  /** "Chegou": matriz dá a entrada pela loja destino (+estoque no destino). */
+  async adminReceberTudo(shipmentId: string, userId?: string) {
+    const shipment = await (this.prisma as any).realignmentShipment.findUnique({
+      where: { id: shipmentId },
+      select: { toStoreCode: true, code: true } as any,
+    });
+    if (!shipment) throw new NotFoundException('Remessa não encontrada');
+    const store = await this.prisma.store.findUnique({
+      where: { code: (shipment as any).toStoreCode },
+      select: { id: true } as any,
+    });
+    if (!store) {
+      throw new BadRequestException(
+        `Loja destino ${(shipment as any).toStoreCode} não encontrada no cadastro`,
+      );
+    }
+    this.logger.warn(
+      `[shipment] ${(shipment as any).code}: ENTRADA PELA MATRIZ (mutirão) — user=${userId || '-'}`,
+    );
+    return this.receberTudoSemBipar({ shipmentId, storeId: (store as any).id, userId });
+  }
+
+  /** "Nunca saiu": matriz devolve a caixa pra origem (peças voltam pra fila). */
+  async adminReabrir(
+    shipmentId: string,
+    userId?: string,
+    opts?: { descartarEtiqueta?: boolean; cancelarNota?: boolean; justificativa?: string },
+  ) {
+    const shipment = await (this.prisma as any).realignmentShipment.findUnique({
+      where: { id: shipmentId },
+      select: { fromStoreCode: true, code: true } as any,
+    });
+    if (!shipment) throw new NotFoundException('Remessa não encontrada');
+    const store = await this.prisma.store.findUnique({
+      where: { code: (shipment as any).fromStoreCode },
+      select: { id: true } as any,
+    });
+    if (!store) {
+      throw new BadRequestException(
+        `Loja origem ${(shipment as any).fromStoreCode} não encontrada no cadastro`,
+      );
+    }
+    this.logger.warn(
+      `[shipment] ${(shipment as any).code}: REABERTA PELA MATRIZ (mutirão) — user=${userId || '-'}`,
+    );
+    return this.reopenShipment({
+      shipmentId,
+      storeId: (store as any).id,
+      userId,
+      descartarEtiqueta: opts?.descartarEtiqueta ?? true,
+      cancelarNota: opts?.cancelarNota ?? false,
+      justificativa: opts?.justificativa,
+    });
+  }
+
   /**
    * "Dar Entrada" — finaliza o recebimento da remessa.
    *

@@ -205,10 +205,15 @@ export default function MinhaLojaPage() {
   const [openBoxes, setOpenBoxes] = useState<any[]>([]);
   const [incomingShipments, setIncomingShipments] = useState<any[]>([]);
   const [pendingPieces, setPendingPieces] = useState<any[]>([]);
-  // Remessa FECHADA sem etiqueta gerada (fase 2 do piloto): 196 casos em 30d
-  // na medição de 11/08 — o degrau mais pulado do fluxo depois do fechamento.
-  // Rota própria (carro da rede) não pede etiqueta e fica de fora.
-  const [pendingLabels, setPendingLabels] = useState<any[]>([]);
+  // NÃO existe tarefa de "gerar etiqueta" aqui — e é de propósito (11/08).
+  // A medição no banco derrubou a premissa: só 5 das 203 remessas em trânsito
+  // têm etiqueta do sistema, e mesmo assim 639 caixas chegaram e foram
+  // recebidas em 30 dias (média 4,1 dias até a entrada). Ou seja, gerar
+  // etiqueta é EXCEÇÃO na operação — cobrar isso transformava o caminho normal
+  // da casa em parede de alarme vermelho. Quem precisa de etiqueta gera pelo
+  // botão da tela Realinhar. O que fecha o ciclo de verdade é o destino DAR
+  // ENTRADA, e isso já é tarefa aqui ("Receber remessa").
+  //
   // Loja grande (matriz) acumula dezenas de pendências — 50 linhas de uma vez
   // é tão inútil quanto lista nenhuma. Mostra as 10 mais urgentes e abre o
   // resto sob demanda.
@@ -396,36 +401,15 @@ export default function MinhaLojaPage() {
   // e peças de realinhamento aguardando separação. Silencioso em erro — a
   // fila simplesmente não mostra aquela fonte.
   const loadTasksData = useCallback(async () => {
-    const [open, inc, mine, labels] = await Promise.all([
+    const [open, inc, mine] = await Promise.all([
       api<any[]>('/realignment/shipments/open').catch(() => []),
       api<any[]>('/realignment/shipments/incoming').catch(() => []),
       api<any[]>('/realignment/mine').catch(() => []),
-      api<any[]>('/realignment/shipments/pendentes-etiqueta').catch(() => []),
     ]);
     // Caixa vazia não é tarefa — só entra caixa com peça dentro.
     setOpenBoxes(Array.isArray(open) ? open.filter((s) => (s?.items || []).length > 0) : []);
     setIncomingShipments(Array.isArray(inc) ? inc : []);
     setPendingPieces(Array.isArray(mine) ? mine : []);
-    // Só vira tarefa quem PRECISA de etiqueta. Três cortes, e o terceiro é o
-    // que evitou a parede de tarefa falsa em Itanhaém (11/08): caixa GRANDE vai
-    // no carro da rede e nunca teve etiqueta pra gerar. A regra do transporte é
-    // a MESMA do backend (dono 29/07): escolha manual manda; sem escolha, até
-    // 10 peças → Correios, acima → próprio.
-    setPendingLabels(
-      Array.isArray(labels)
-        ? labels.filter((s) => {
-            if (s?.jaTemEtiqueta || s?.rotaPropria) return false;
-            const pecas = Number(s?.totalPecas ?? (s?.items || []).length) || 0;
-            const efetivo =
-              s?.transportMode === 'correios' || s?.transportMode === 'proprio'
-                ? s.transportMode
-                : pecas <= 10
-                  ? 'correios'
-                  : 'proprio';
-            return efetivo === 'correios';
-          })
-        : [],
-    );
     setShipmentsIncoming(Array.isArray(inc) ? inc.length : 0);
     setRealignmentPending(Array.isArray(mine) ? mine.length : 0);
   }, []);
@@ -649,20 +633,10 @@ export default function MinhaLojaPage() {
         go: () => router.push('/minha-loja/realinhamento'),
       });
     }
-    for (const s of pendingLabels) {
-      const h = horas(s.sentAt || s.updatedAt);
-      tasks.push({
-        key: `etiqueta-${s.id}`,
-        urgency: h >= 4 ? 'red' : 'yellow',
-        icon: Truck,
-        title: `Gerar etiqueta — ${s.code}`,
-        subtitle: `${s.totalPecas || (s.items || []).length} peça(s) → ${s.toStoreName || s.toStoreCode} · fechada há ${idadeTxt(h)} · sem etiqueta o pacote não viaja`,
-        // ?view=sent porque o painel das caixas fechadas mora na aba "Enviados
-        // hoje" — sem isso a tarefa caía na aba Pendentes e a tela dizia
-        // "Nenhuma peça pendente" (parecia que a tarefa mentia).
-        go: () => router.push('/minha-loja/realinhamento?view=sent'),
-      });
-    }
+    // RECEBER é a tarefa que fecha o ciclo: enquanto a caixa não entra, a peça
+    // não está no estoque de loja nenhuma (nem some da origem, nem aparece
+    // aqui) — 1.057 peças estavam nesse limbo em 11/08. O ciclo normal medido
+    // é de 4,1 dias, então 3 dias já é sinal vermelho.
     for (const s of incomingShipments) {
       const h = horas(s.sentAt || s.openedAt);
       tasks.push({
@@ -670,7 +644,7 @@ export default function MinhaLojaPage() {
         urgency: h >= 72 ? 'red' : 'yellow',
         icon: Inbox,
         title: `Receber remessa de ${s.fromStoreName || s.fromStoreCode}`,
-        subtitle: `${s.totalQty || '?'} peça(s) · ${s.code} · em trânsito há ${idadeTxt(h)}`,
+        subtitle: `${s.totalQty || '?'} peça(s) · ${s.code} · em trânsito há ${idadeTxt(h)}${h >= 72 ? ' · a peça está fora do estoque até dar entrada' : ''}`,
         go: () => router.push('/minha-loja/recebimento'),
       });
     }
@@ -715,7 +689,7 @@ export default function MinhaLojaPage() {
     // (caixas → receber → separar → pedidos), que já é a ordem de prioridade.
     tasks.sort((a, b) => (a.urgency === b.urgency ? 0 : a.urgency === 'red' ? -1 : 1));
     return tasks;
-  }, [openBoxes, incomingShipments, pendingPieces, pendingLabels, rows, liveRows, router]);
+  }, [openBoxes, incomingShipments, pendingPieces, rows, liveRows, router]);
 
   // ---------- Notificação + auto-maximize em 5min ----------
   const triggerNewOrderAlert = useCallback((pickOrder: any) => {
