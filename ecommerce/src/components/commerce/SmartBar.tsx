@@ -109,6 +109,27 @@ export function SmartBar({
           </div>
         </div>
 
+        <label className="relative block sm:hidden">
+          <span className="sr-only">Buscar em {categoryName}</span>
+          <Search className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-primary-strong" />
+          <input
+            value={state.search}
+            onChange={(e) => state.setSearch(e.target.value)}
+            placeholder={`Buscar em ${categoryName}…`}
+            className="min-h-11 w-full rounded-pill border border-border bg-surface py-2 pr-10 pl-10 text-small text-ink placeholder:text-ink-muted/70 focus:border-primary focus:outline-none"
+          />
+          {state.search && (
+            <button
+              type="button"
+              onClick={() => state.setSearch('')}
+              aria-label="Limpar busca"
+              className="absolute top-1/2 right-3 flex size-8 -translate-y-1/2 items-center justify-center rounded-full text-ink-muted"
+            >
+              <X className="size-4" />
+            </button>
+          )}
+        </label>
+
         {/* Chips de filtro ativo */}
         {state.activeCount > 0 && (
           <div className="flex flex-wrap items-center gap-2">

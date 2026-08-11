@@ -26,7 +26,7 @@ export const revalidate = 3600;
 export const metadata = buildMetadata({
   title: 'Outlet — peças com desconto',
   description:
-    'Peças selecionadas com desconto na Lurd’s Plus Size, do 46 ao 60. Enquanto durar o estoque.',
+    'Peças selecionadas com desconto na Lurd’s Plus Size, do 44 ao 60. Enquanto durar o estoque.',
   path: '/outlet',
   keywords: ['outlet plus size', 'promoção plus size', 'desconto roupa plus size'],
 });
@@ -56,7 +56,7 @@ export default async function OutletPage() {
         <SectionTitle
           eyebrow="Enquanto durar o estoque"
           title="Outlet"
-          description="Peças com desconto, do 46 ao 60. O que sai daqui não volta pelo mesmo preço."
+          description="Peças com desconto, do 44 ao 60. O que sai daqui não volta pelo mesmo preço."
           as="h1"
         />
       </Section>

@@ -11,6 +11,7 @@ import { WooCommerceModule } from '../woocommerce/woocommerce.module';
 import { WhatsappModule } from '../whatsapp/whatsapp.module';
 import { AuthModule } from '../auth/auth.module';
 import { PushModule } from '../push/push.module';
+import { PersonIdentityModule } from '../person-identity/person-identity.module';
 
 import { LiveController } from './live.controller';
 import { MetaWebhookController } from './meta-webhook.controller';
@@ -40,6 +41,7 @@ import { MetaTokenWatchdogService } from './meta-token-watchdog.service';
     // Canal do vigia do token (ver `MetaTokenWatchdogService`). PushModule só
     // depende do Prisma — não há ciclo com o live.
     PushModule,
+    PersonIdentityModule,
   ],
   controllers: [LiveController, MetaWebhookController, InboxController],
   providers: [

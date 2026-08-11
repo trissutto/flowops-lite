@@ -37,7 +37,7 @@ export function AnnouncementBar({ itens }: { itens?: { label: string; href: stri
         >
           <Link
             href={current.href}
-            className="eyebrow text-[0.625rem] text-light/85 transition-colors hover:text-primary-soft"
+            className="block max-w-[calc(100vw-2rem)] truncate text-center text-[0.625rem] font-medium tracking-[0.16em] text-light/90 uppercase transition-colors hover:text-primary-soft sm:tracking-[0.28em]"
           >
             {current.label}
           </Link>

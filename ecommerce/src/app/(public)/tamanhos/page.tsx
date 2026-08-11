@@ -25,7 +25,7 @@ export const metadata = buildMetadata({
   description:
     'Escolha sua numeração e veja tudo que temos no seu tamanho. Do 44 ao 60, com guia de medidas.',
   path: '/tamanhos',
-  keywords: ['tamanhos plus size', 'numeração plus size', 'roupa 46 ao 60'],
+  keywords: ['tamanhos plus size', 'numeração plus size', 'roupa 44 ao 60'],
 });
 
 const trail = [

@@ -38,7 +38,7 @@ const FAIXAS: Record<string, Faixa> = {
     rotulo: 'Até R$ 59,90',
     titulo: 'Tudo até R$ 59,90',
     descricao:
-      'Peças do 46 ao 60 por até R$ 59,90 — o preço que a gente pratica na loja, sem taxa de tamanho grande.',
+      'Peças do 44 ao 60 por até R$ 59,90 — o preço que a gente pratica na loja, sem taxa de tamanho grande.',
     chamada: 'Preço fechado',
   },
   '99-90': {
@@ -46,7 +46,7 @@ const FAIXAS: Record<string, Faixa> = {
     rotulo: 'Até R$ 99,90',
     titulo: 'Tudo até R$ 99,90',
     descricao:
-      'Do 46 ao 60 por até R$ 99,90 — inclusive as peças que acabaram de chegar.',
+      'Do 44 ao 60 por até R$ 99,90 — inclusive as peças que acabaram de chegar.',
     chamada: 'Preço fechado',
   },
 };
@@ -67,7 +67,7 @@ export async function generateMetadata({ params }: { params: Promise<{ teto: str
     keywords: [
       `roupa plus size ${faixa.rotulo.toLowerCase()}`,
       'roupa plus size barata',
-      'plus size do 46 ao 60',
+      'plus size do 44 ao 60',
     ],
   });
 }

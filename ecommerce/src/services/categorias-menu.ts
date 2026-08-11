@@ -1,6 +1,6 @@
 import { api } from '@/lib/api';
 import { navigation } from '@/data/navigation';
-import type { MenuColumn, NavItem } from '@/types';
+import type { NavItem } from '@/types';
 
 /**
  * AS CATEGORIAS DO MENU VÊM DO CRM (dono 07/08).
@@ -113,7 +113,13 @@ export async function getCategorias(
       revalidate,
       tags: ['categorias'],
     });
-    if (Array.isArray(r) && r.length) return r;
+    if (Array.isArray(r) && r.length) {
+      return r.map((categoria) => ({
+        ...categoria,
+        // O slug é canônico; evita expor nomes técnicos sem acento vindos do CRM.
+        nome: ROTULOS[categoria.slug] ?? categoria.nome ?? rotulo(categoria.slug),
+      }));
+    }
   } catch {
     /* cai no fallback abaixo */
   }

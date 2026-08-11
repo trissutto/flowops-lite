@@ -17,7 +17,10 @@
     "delete-demo-stores": "ts-node scripts/delete-demo-stores.ts",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev --name init",
-    "prisma:push": "prisma db push"
+    "prisma:push": "prisma db push",
+    "customer-person:baseline": "node scripts/customer-person/baseline.js",
+    "customer-person:backfill": "node scripts/customer-person/backfill-shadow.js",
+    "customer-person:operational": "node scripts/customer-person/backfill-operational.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.633.0",

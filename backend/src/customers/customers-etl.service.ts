@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { PersonIdentityService } from '../person-identity/person-identity.service';
 
 /**
  * CustomersEtlService — popula a tabela `customers` (mestre CRM) a partir das
@@ -50,7 +51,10 @@ export class CustomersEtlService {
     lastError: null,
   };
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly identity: PersonIdentityService,
+  ) {}
 
   getState(): EtlState {
     return { ...this.state };
@@ -273,6 +277,10 @@ export class CustomersEtlService {
         if (agg.shippingAddressJson) {
           await this._upsertEnderecoEntregaWc(customerId, agg.shippingAddressJson, agg.shippingCep);
         }
+
+        await this.identity.linkCustomer(customerId).catch((error) =>
+          this.logger.warn(`[ETL/woo] identidade pendente customer=${customerId}: ${error?.message || error}`),
+        );
 
         this.state.processed += 1;
 

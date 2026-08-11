@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import Image from 'next/image';
 import { motion } from 'framer-motion';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut } from 'lucide-react';
 import { BLUR_DATA_URL, cn } from '@/lib/utils';
 import { transition } from '@/lib/motion';
 import type { Media } from '@/types';
@@ -47,10 +47,12 @@ export function ProductGallery({
 }) {
   const [active, setActive] = useState(0);
   const [parado, setParado] = useState(false);
+  const [zoomed, setZoomed] = useState(false);
   const safeImages = images.length > 0 ? images : [{ src: '', alt: name }];
   const current = safeImages[active];
 
   function step(delta: number) {
+    setZoomed(false);
     setActive((i) => (i + delta + safeImages.length) % safeImages.length);
   }
 
@@ -95,11 +97,26 @@ export function ProductGallery({
               sizes="(max-width: 1024px) 100vw, 45vw"
               placeholder="blur"
               blurDataURL={BLUR_DATA_URL}
-              className="object-cover"
+              className={cn(
+                'object-cover transition-transform duration-500',
+                zoomed && 'scale-[1.7] cursor-zoom-out',
+              )}
             />
           </motion.div>
         ) : (
           <div className="grain size-full bg-gradient-to-br from-champagne to-surface-alt" />
+        )}
+
+        {current.src && (
+          <button
+            type="button"
+            onClick={() => setZoomed((value) => !value)}
+            aria-label={zoomed ? 'Reduzir foto' : 'Ampliar foto'}
+            aria-pressed={zoomed}
+            className="absolute top-4 right-4 z-[2] flex size-11 items-center justify-center rounded-pill bg-surface/90 text-ink backdrop-blur transition-colors hover:bg-surface"
+          >
+            {zoomed ? <ZoomOut className="size-4" /> : <ZoomIn className="size-4" />}
+          </button>
         )}
 
         {safeImages.length > 1 && (
@@ -188,7 +205,10 @@ export function ProductGallery({
               role="tab"
               aria-selected={index === active}
               aria-label={`Ver foto ${index + 1}`}
-              onClick={() => setActive(index)}
+              onClick={() => {
+                setZoomed(false);
+                setActive(index);
+              }}
               className={cn(
                 'relative aspect-3/4 w-16 shrink-0 overflow-hidden rounded-md border transition-all duration-[320ms] lg:w-full',
                 index === active

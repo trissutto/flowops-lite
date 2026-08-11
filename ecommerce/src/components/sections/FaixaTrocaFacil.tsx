@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { RefreshCw, Truck, CalendarDays } from 'lucide-react';
 import { Container } from '@/components/layout/Container';
+import { RETURN_EXCHANGE_SUMMARY } from '@/data/store-policies';
 
 /**
  * TROCA FÁCIL — a faixa que responde "e se não servir?".
@@ -31,7 +32,7 @@ import { Container } from '@/components/layout/Container';
  */
 
 const ITENS = [
-  { icone: CalendarDays, titulo: '7 dias pra decidir', texto: 'Contados da entrega do pedido.' },
+  { icone: CalendarDays, titulo: '7 dias para devolver', texto: 'Arrependimento com reembolso.' },
   { icone: Truck, titulo: 'Primeira devolução grátis', texto: 'A gente paga o frete de volta.' },
   { icone: RefreshCw, titulo: 'Sem digitar nada', texto: 'Logada, é só escolher a peça.' },
 ];
@@ -48,7 +49,7 @@ export function FaixaTrocaFacil() {
             </h2>
             <p className="mt-3 text-body text-ink-soft">
               Comprar plus size online não precisa ser aposta. Se a peça não servir, a troca é
-              simples — e a primeira devolução é por nossa conta.
+              simples — e a primeira devolução é por nossa conta. {RETURN_EXCHANGE_SUMMARY}
             </p>
             <Link
               href="/trocas"

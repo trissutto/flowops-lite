@@ -4,7 +4,6 @@ import { Manifesto } from '@/components/sections/Manifesto';
 import { Section } from '@/components/layout/Section';
 import { SectionTitle } from '@/components/sections/SectionTitle';
 import { ProductCarousel } from '@/components/sections/ProductCarousel';
-import { VideoBlock } from '@/components/sections/VideoBlock';
 import { CTABanner } from '@/components/sections/CTABanner';
 import { NewsletterBlock } from '@/components/sections/NewsletterBlock';
 import { FaixaTrocaFacil } from '@/components/sections/FaixaTrocaFacil';
@@ -19,6 +18,7 @@ import { getHeroDaHome } from '@/services/banners';
 import { getCategorias } from '@/services/categorias-menu';
 import { fetchVitrine } from '@/services/vitrine';
 import { buildMetadata, itemListSchema, jsonLdGraph, storeSchema } from '@/lib/seo';
+import { HeroImagePreload } from '@/components/sections/HeroImagePreload';
 
 /**
  * HOME — a jornada da cliente.
@@ -42,14 +42,14 @@ import { buildMetadata, itemListSchema, jsonLdGraph, storeSchema } from '@/lib/s
  */
 
 export const metadata = buildMetadata({
-  title: "Lurd's Plus Size — Moda plus size elegante do 46 ao 60",
+  title: "Lurd's Plus Size — Moda plus size elegante do 44 ao 60",
   path: '/',
   keywords: [
     'moda plus size',
     'roupas plus size',
     'vestido plus size',
     'loja plus size',
-    'plus size 46 ao 60',
+    'plus size 44 ao 60',
   ],
 });
 
@@ -129,6 +129,7 @@ export default async function HomePage() {
 
   return (
     <>
+      <HeroImagePreload image={hero.image} imageMobile={hero.imageMobile} />
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd }} />
 
       {/* 01 — HERO EDITORIAL */}
@@ -137,15 +138,19 @@ export default async function HomePage() {
         imageMobile={hero.imageMobile}
         eyebrow={hero.eyebrow}
         title={
-          <>
-            {hero.lead}
-            {hero.emphasis && (
-              <>
-                <br />
-                <span className="text-primary-soft italic">{hero.emphasis}</span>
-              </>
-            )}
-          </>
+          hero.lead || hero.emphasis ? (
+            <>
+              {hero.lead}
+              {hero.emphasis && (
+                <>
+                  <br />
+                  <span className="text-primary-soft italic">{hero.emphasis}</span>
+                </>
+              )}
+            </>
+          ) : (
+            <span className="sr-only">Lurd&apos;s Plus Size — moda elegante do 44 ao 60</span>
+          )
         }
         subtitle={hero.subtitle}
         primaryAction={hero.primaria}
@@ -209,7 +214,7 @@ export default async function HomePage() {
           align="left"
         />
         <div className="mt-14">
-          <ProductCarousel products={chegouAgora} ariaLabel="Novidades da semana" />
+          <ProductCarousel products={chegouAgora} ariaLabel="Novidades da semana" progressiveImages />
         </div>
       </Section>
 
@@ -259,7 +264,7 @@ export default async function HomePage() {
             align="left"
           />
           <div className="mt-14">
-            <ProductCarousel products={v.produtos} ariaLabel={`Vitrine de ${v.titulo}`} />
+            <ProductCarousel products={v.produtos} ariaLabel={`Vitrine de ${v.titulo}`} progressiveImages />
           </div>
         </Section>
       ))}

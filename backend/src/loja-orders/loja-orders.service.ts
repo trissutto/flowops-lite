@@ -8,6 +8,7 @@ import { montarComplementoBairroWc, montarNumeroWc } from '../common/endereco-wc
 import { CarrinhoGuardService } from './carrinho-guard.service';
 import { CupomService } from './cupom.service';
 import { FreteService } from './frete.service';
+import { PersonIdentityService } from '../person-identity/person-identity.service';
 
 /**
  * PEDIDO DO E-COMMERCE NOVO (sprint 011).
@@ -191,6 +192,7 @@ export class LojaOrdersService {
     private readonly guard: CarrinhoGuardService,
     private readonly cupons: CupomService,
     private readonly frete: FreteService,
+    private readonly identity: PersonIdentityService,
   ) {}
 
   /* ───────────────────────── helpers de formato ───────────────────────── */
@@ -525,6 +527,9 @@ export class LojaOrdersService {
         if (Object.keys(patch).length) {
           await (this.prisma as any).customer.update({ where: { id: alvo.id }, data: patch });
         }
+        await this.identity.linkCustomer(alvo.id).catch((error) =>
+          this.logger.warn(`[loja] identidade pendente: ${error?.message || error}`),
+        );
         return alvo.id;
       }
 
@@ -567,6 +572,9 @@ export class LojaOrdersService {
           originSource: 'site',
         },
       });
+      await this.identity.linkCustomer(criado.id).catch((error) =>
+        this.logger.warn(`[loja] identidade pendente: ${error?.message || error}`),
+      );
       return criado.id;
     } catch (e: any) {
       /**

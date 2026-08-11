@@ -130,6 +130,16 @@ function CategoryListingInner({
   const [page, setPage] = useState(1);
   const debouncedSearch = useDebounced(state.search, 250);
 
+  useEffect(() => {
+    const saved = window.localStorage.getItem('lurds:catalog-view');
+    if (saved === 'editorial' || saved === 'grid') setView(saved);
+  }, []);
+
+  const changeView = (next: 'editorial' | 'grid') => {
+    setView(next);
+    window.localStorage.setItem('lurds:catalog-view', next);
+  };
+
   // Facetas do catálogo REAL (cor, tamanho, marca com contagem). Enquanto
   // não chegam, a sidebar usa o esqueleto — nunca fica vazia.
   const { data: facetas } = useQuery({
@@ -246,7 +256,7 @@ function CategoryListingInner({
         total={total}
         state={state}
         view={view}
-        onViewChange={setView}
+        onViewChange={changeView}
         onOpenFilters={() => setDrawerOpen(true)}
         categoryName={categoryName}
       />
@@ -276,7 +286,14 @@ function CategoryListingInner({
 
         {/* Grid */}
         <div>
-          {query.isLoading ? (
+          {query.isError ? (
+            <EmptyState
+              icon={<SearchX strokeWidth={1.5} />}
+              title="Não conseguimos carregar as peças."
+              description="Sua seleção continua salva. Confira a conexão e tente novamente."
+              action={{ label: 'Tentar novamente', onClick: () => void query.refetch() }}
+            />
+          ) : query.isLoading ? (
             <ProductGridSkeleton count={PER_PAGE} />
           ) : isEmpty ? (
             <EmptyState

@@ -64,7 +64,7 @@ deriva:
 | `pixPrice` | 5% off (convenção da marca) |
 | `installments` | 12x sem juros |
 
-Produto simples (sem variações) assume a grade 46–60 com a disponibilidade do
+Produto simples (sem variações) assume a grade 44–60 com a disponibilidade do
 próprio item — o WC não detalha por número nesse caso.
 
 ## CRM / conta do cliente (próxima etapa)

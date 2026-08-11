@@ -24,7 +24,7 @@ export async function generateMetadata({ searchParams }: BuscaPageProps): Promis
   return {
     title: termo ? `Busca: ${termo}` : 'Busca',
     description: termo
-      ? `Resultados para "${termo}" na Lurds Plus Size — moda plus size do 46 ao 60.`
+      ? `Resultados para "${termo}" na Lurds Plus Size — moda plus size do 44 ao 60.`
       : 'Busque por peça, ocasião, tecido ou tamanho na Lurds Plus Size.',
     robots: { index: false, follow: true },
   };

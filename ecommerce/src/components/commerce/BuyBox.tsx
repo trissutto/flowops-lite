@@ -7,7 +7,6 @@ import { Button } from '@/components/ui/Button';
 import { SimuladorFrete } from '@/components/commerce/SimuladorFrete';
 import { SizePill } from '@/components/ui/Choice';
 import { FitAssistant } from '@/components/fit/FitAssistant';
-import { ChamarConsultora } from '@/components/chat/AssistenteWidget';
 import { ProductBadgeTag } from '@/components/ui/Badge';
 import { useToast } from '@/components/feedback/ToastProvider';
 import { useCartStore } from '@/store/cart';
@@ -412,6 +411,22 @@ export function BuyBox({
           document.getElementById('seletor-tamanho')?.scrollIntoView({ block: 'center' });
         }}
       />
+
+      {!soldOut && (
+        <div className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-background/96 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-[0_-8px_30px_rgba(0,0,0,0.12)] backdrop-blur lg:hidden">
+          <div className="mx-auto flex max-w-lg items-center gap-3">
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-small font-medium text-ink">{product.name}</p>
+              <p className="tabular text-xs text-ink-soft">
+                {size ? `Tamanho ${size}` : 'Escolha o tamanho'} · {formatPrice(product.price)}
+              </p>
+            </div>
+            <Button onClick={handleAdd} className="shrink-0">
+              <ShoppingBag /> {size ? 'Adicionar' : 'Escolher tamanho'}
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
