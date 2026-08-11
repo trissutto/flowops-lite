@@ -122,6 +122,12 @@ export default function RemessasAdminPage() {
   // Caixas abertas há 4h+ com peça dentro (rede toda, sem recorte de data).
   // Enquanto abertas: estoque da origem NÃO baixou e o destino NÃO vê nada.
   const [abertasParadas, setAbertasParadas] = useState<ShipmentRow[]>([]);
+  // Em trânsito por CORREIOS sem etiqueta gerada (rede, sem recorte) + total
+  // de remessas em trânsito sem NF-e — os dois degraus pulados do fluxo.
+  const [semEtiqueta, setSemEtiqueta] = useState<ShipmentRow[]>([]);
+  const [semNfCount, setSemNfCount] = useState(0);
+  // Filtro rápido "só sem NF-e" — em cima do resultado atual da tabela.
+  const [soSemNf, setSoSemNf] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -216,13 +222,17 @@ export default function RemessasAdminPage() {
       if (de) params.set('de', de);
       if (ate) params.set('ate', ate);
 
-      const [list, k, abertas] = await Promise.all([
+      const [list, k, abertas, transito] = await Promise.all([
         api<ShipmentRow[]>(`/realignment/shipments/admin/all?${params.toString()}`),
         api<KPIs>('/realignment/shipments/admin/kpis'),
         // Caixas ABERTAS da rede inteira, SEM recorte de data — a caixa
         // esquecida é justamente a antiga (Santos ficou 8 dias aberta e o
         // destino nunca viu; casos 11/08). Alimenta o banner vermelho.
         api<ShipmentRow[]>('/realignment/shipments/admin/all?status=open').catch(() => [] as ShipmentRow[]),
+        // Em trânsito SEM recorte — alimenta o banner de etiqueta/NF pendente
+        // (medição 11/08: 196 remessas sem etiqueta em 30d, zero erro logado —
+        // o degrau é PULADO, não falha).
+        api<ShipmentRow[]>('/realignment/shipments/admin/all?status=in_transit').catch(() => [] as ShipmentRow[]),
       ]);
       setRows(Array.isArray(list) ? list : []);
       setKpis(k);
@@ -232,6 +242,13 @@ export default function RemessasAdminPage() {
           .filter((r) => (r.totalItemsLive ?? 0) > 0 && agora - new Date(r.openedAt).getTime() >= 4 * 3_600_000)
           .sort((a, b) => new Date(a.openedAt).getTime() - new Date(b.openedAt).getTime()),
       );
+      const transitoArr = Array.isArray(transito) ? transito : [];
+      setSemEtiqueta(
+        transitoArr
+          .filter((r) => !r.envioGeneratedAt && r.transportEfetivo === 'correios')
+          .sort((a, b) => new Date(a.sentAt || a.openedAt).getTime() - new Date(b.sentAt || b.openedAt).getTime()),
+      );
+      setSemNfCount(transitoArr.filter((r) => !r.nfeEmitida).length);
     } catch (e: any) {
       setError(e?.message || 'Erro ao carregar remessas');
     } finally {
@@ -260,6 +277,8 @@ export default function RemessasAdminPage() {
     return rows.filter((r) => {
       if (origemFiltro && r.fromStoreCode !== origemFiltro) return false;
       if (destinoFiltro && r.toStoreCode !== destinoFiltro) return false;
+      // "Só sem NF-e": esconde abertas/canceladas (não emitem) e quem já tem nota.
+      if (soSemNf && (r.nfeEmitida || r.status === 'open' || r.status === 'cancelled')) return false;
       if (!q) return true;
       return (
         r.code.toLowerCase().includes(q) ||
@@ -269,7 +288,7 @@ export default function RemessasAdminPage() {
         r.toStoreName.toLowerCase().includes(q)
       );
     });
-  }, [rows, search, origemFiltro, destinoFiltro]);
+  }, [rows, search, origemFiltro, destinoFiltro, soSemNf]);
 
   const openDetail = async (id: string) => {
     setDetail(null);
@@ -627,6 +646,57 @@ export default function RemessasAdminPage() {
           </div>
         )}
 
+        {/* 🏷️ ETIQUETA/NF PENDENTE — remessa fechada que ninguém postou/emitiu.
+            Medição 11/08: 196 sem etiqueta em 30d com ZERO erro de API — o
+            degrau é pulado em silêncio, então aqui ele grita. */}
+        {(semEtiqueta.length > 0 || semNfCount > 0) && (
+          <div className="rounded-xl border-2 border-amber-300 bg-amber-50 overflow-hidden">
+            <div className="px-4 py-2.5 bg-amber-500 text-white flex flex-wrap items-center gap-x-2 gap-y-1">
+              <Truck className="w-4 h-4" />
+              <span className="text-sm font-black uppercase tracking-wide">
+                {semEtiqueta.length > 0 && (
+                  <>{semEtiqueta.length} remessa{semEtiqueta.length === 1 ? '' : 's'} Correios sem etiqueta</>
+                )}
+                {semEtiqueta.length > 0 && semNfCount > 0 && ' · '}
+                {semNfCount > 0 && <>{semNfCount} em trânsito sem NF-e</>}
+              </span>
+              {semNfCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setSoSemNf(true)}
+                  className="ml-auto text-[11px] font-black bg-white/20 hover:bg-white/30 rounded-full px-3 py-1 uppercase tracking-wide"
+                >
+                  filtrar sem NF-e ↓
+                </button>
+              )}
+            </div>
+            {semEtiqueta.length > 0 && (
+              <div className="divide-y divide-amber-200">
+                {semEtiqueta.slice(0, 10).map((r) => {
+                  const h = (Date.now() - new Date(r.sentAt || r.openedAt).getTime()) / 3_600_000;
+                  const idade = h >= 48 ? `${Math.floor(h / 24)} dias` : `${Math.floor(h)}h`;
+                  return (
+                    <div key={r.id} className="px-4 py-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+                      <span className="font-mono font-black text-amber-900">{r.code}</span>
+                      <span className="text-slate-700">
+                        {r.fromStoreCode} {r.fromStoreName} → {r.toStoreCode} {r.toStoreName}
+                      </span>
+                      <span className="text-slate-500">{r.totalQtyLive ?? r.totalQty ?? '?'} peça(s)</span>
+                      {!r.nfeEmitida && (
+                        <span className="text-[10px] font-black text-rose-700 bg-rose-100 rounded px-1.5 py-0.5 uppercase">sem NF</span>
+                      )}
+                      <span className="ml-auto font-bold text-amber-700">fechada há {idade}</span>
+                    </div>
+                  );
+                })}
+                {semEtiqueta.length > 10 && (
+                  <div className="px-4 py-2 text-xs text-amber-700">… e mais {semEtiqueta.length - 10} sem etiqueta.</div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* KPIs */}
         {kpis && (
           <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
@@ -683,6 +753,18 @@ export default function RemessasAdminPage() {
               className="w-full pl-9 pr-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500"
             />
           </div>
+          <button
+            type="button"
+            onClick={() => setSoSemNf((v) => !v)}
+            className={`text-sm border-2 rounded-md px-3 py-2 font-bold transition ${
+              soSemNf
+                ? 'bg-rose-600 border-rose-600 text-white'
+                : 'bg-white border-rose-200 text-rose-700 hover:bg-rose-50'
+            }`}
+            title="Mostrar só remessas fechadas que ainda não têm NF-e emitida"
+          >
+            {soSemNf ? '✓ ' : ''}Só sem NF-e
+          </button>
           <select
             value={origemFiltro}
             onChange={(e) => setOrigemFiltro(e.target.value)}

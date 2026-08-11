@@ -205,6 +205,10 @@ export default function MinhaLojaPage() {
   const [openBoxes, setOpenBoxes] = useState<any[]>([]);
   const [incomingShipments, setIncomingShipments] = useState<any[]>([]);
   const [pendingPieces, setPendingPieces] = useState<any[]>([]);
+  // Remessa FECHADA sem etiqueta gerada (fase 2 do piloto): 196 casos em 30d
+  // na medição de 11/08 — o degrau mais pulado do fluxo depois do fechamento.
+  // Rota própria (carro da rede) não pede etiqueta e fica de fora.
+  const [pendingLabels, setPendingLabels] = useState<any[]>([]);
   const autoMaximizeTimers = useRef<Map<string, number>>(new Map());
   const originalTitleRef = useRef<string>('LURDS ORDER ONE');
 
@@ -388,15 +392,21 @@ export default function MinhaLojaPage() {
   // e peças de realinhamento aguardando separação. Silencioso em erro — a
   // fila simplesmente não mostra aquela fonte.
   const loadTasksData = useCallback(async () => {
-    const [open, inc, mine] = await Promise.all([
+    const [open, inc, mine, labels] = await Promise.all([
       api<any[]>('/realignment/shipments/open').catch(() => []),
       api<any[]>('/realignment/shipments/incoming').catch(() => []),
       api<any[]>('/realignment/mine').catch(() => []),
+      api<any[]>('/realignment/shipments/pendentes-etiqueta').catch(() => []),
     ]);
     // Caixa vazia não é tarefa — só entra caixa com peça dentro.
     setOpenBoxes(Array.isArray(open) ? open.filter((s) => (s?.items || []).length > 0) : []);
     setIncomingShipments(Array.isArray(inc) ? inc : []);
     setPendingPieces(Array.isArray(mine) ? mine : []);
+    // Só vira tarefa quem PRECISA de etiqueta: sem etiqueta gerada e fora da
+    // rota própria (o carro da rede não posta nos Correios).
+    setPendingLabels(
+      Array.isArray(labels) ? labels.filter((s) => !s?.jaTemEtiqueta && !s?.rotaPropria) : [],
+    );
     setShipmentsIncoming(Array.isArray(inc) ? inc.length : 0);
     setRealignmentPending(Array.isArray(mine) ? mine.length : 0);
   }, []);
@@ -620,6 +630,17 @@ export default function MinhaLojaPage() {
         go: () => router.push('/minha-loja/realinhamento'),
       });
     }
+    for (const s of pendingLabels) {
+      const h = horas(s.sentAt || s.updatedAt);
+      tasks.push({
+        key: `etiqueta-${s.id}`,
+        urgency: h >= 4 ? 'red' : 'yellow',
+        icon: Truck,
+        title: `Gerar etiqueta — ${s.code}`,
+        subtitle: `${s.totalPecas || (s.items || []).length} peça(s) → ${s.toStoreName || s.toStoreCode} · fechada há ${idadeTxt(h)} · sem etiqueta o pacote não viaja`,
+        go: () => router.push('/minha-loja/realinhamento'),
+      });
+    }
     for (const s of incomingShipments) {
       const h = horas(s.sentAt || s.openedAt);
       tasks.push({
@@ -672,7 +693,7 @@ export default function MinhaLojaPage() {
     // (caixas → receber → separar → pedidos), que já é a ordem de prioridade.
     tasks.sort((a, b) => (a.urgency === b.urgency ? 0 : a.urgency === 'red' ? -1 : 1));
     return tasks;
-  }, [openBoxes, incomingShipments, pendingPieces, rows, liveRows, router]);
+  }, [openBoxes, incomingShipments, pendingPieces, pendingLabels, rows, liveRows, router]);
 
   // ---------- Notificação + auto-maximize em 5min ----------
   const triggerNewOrderAlert = useCallback((pickOrder: any) => {
