@@ -753,6 +753,91 @@ export class PurchaseOrdersService {
     };
   }
 
+  /**
+   * ESTORNO DE CONFERÊNCIA (11/08, dono): devolve REF(s) conferida(s) pra
+   * edição no lançamento. Caso real: o Enter do lançamento conferia a REF —
+   * num pedido FUTURO (coleção com entrega marcada) o estoque entrou sem a
+   * mercadoria existir, e o card travado impedia a correção.
+   *
+   * O que faz, por item recebido:
+   *   1. Baixa do estoque EXATAMENTE o que o receive aplicou — os SKUs/qtds
+   *      gravados em `skusGerados` (Flow na hora + réplica Giga via outbox,
+   *      mesmo caminho do decreaseStockAsync dos outros fluxos).
+   *   2. Volta o item pra itemStatus='pendente' (limpa qtyRecebida/skus).
+   *   3. Recalcula o status do pedido (sem recebidos → volta a 'rascunho').
+   *
+   * O CADASTRO dos produtos NÃO é desfeito — o auto-cadastro é idempotente
+   * no próximo receive. Item cuja baixa de estoque falhar NÃO volta a
+   * pendente (evita estorno meia-boca com estoque divergente).
+   */
+  async unreceiveItems(orderId: string, itemIds: string[], userId?: string) {
+    if (!itemIds?.length) throw new BadRequestException('itemIds obrigatório');
+    const order = await this.getById(orderId);
+    const lojaMatriz = process.env.PRIMARY_STORE_CODE || '01';
+    const estornados: any[] = [];
+    const errors: string[] = [];
+
+    for (const it of order.items as any[]) {
+      if (!itemIds.includes(it.id)) continue;
+      if (it.itemStatus !== 'recebido') continue;
+
+      let skus: any[] = [];
+      try { skus = it.skusGerados ? JSON.parse(it.skusGerados) : []; } catch { skus = []; }
+      const paraBaixa = skus
+        .filter((s: any) => Number(s.qty) > 0 && s.codigo)
+        .map((s: any) => ({ sku: String(s.codigo), qty: Number(s.qty), storeCode: lojaMatriz }));
+
+      if (paraBaixa.length > 0) {
+        try {
+          // allowNegative: se alguma peça já saiu (venda/transferência), o
+          // estorno ainda precisa passar — a divergência aparece no ajuste.
+          const r = await (this.erp as any).decreaseStockAsync?.(paraBaixa, {
+            allowNegative: true,
+            skipNotFound: true,
+          });
+          if (r && !r.success) {
+            errors.push(`REF ${it.ref} ${it.cor}: estoque não revertido (${r.error || 'erro'})`);
+            continue;
+          }
+        } catch (e: any) {
+          errors.push(`REF ${it.ref} ${it.cor}: ${e?.message || e}`);
+          continue;
+        }
+      }
+
+      await (this.prisma as any).purchaseOrderItem.update({
+        where: { id: it.id },
+        data: { itemStatus: 'pendente', tamanhosQtyRecebida: null, skusGerados: null },
+      });
+      estornados.push({
+        itemId: it.id,
+        ref: it.ref,
+        cor: it.cor,
+        pecasEstornadas: paraBaixa.reduce((s: number, x: any) => s + x.qty, 0),
+      });
+    }
+
+    const allItems = await (this.prisma as any).purchaseOrderItem.findMany({
+      where: { orderId },
+      select: { itemStatus: true },
+    });
+    const temRecebido = (allItems as any[]).some((x) => x.itemStatus === 'recebido');
+    const statusFinal = temRecebido ? 'recebido_parcial' : 'rascunho';
+    await (this.prisma as any).purchaseOrder.update({
+      where: { id: orderId },
+      data: { status: statusFinal, ...(temRecebido ? {} : { recebidoAt: null }) },
+    });
+
+    this.logger.log(
+      `[purchase-orders] ESTORNO pedido ${orderId} por ${userId || '—'}: ` +
+        `${estornados.length} item(ns) de volta a pendente ` +
+        `(${estornados.reduce((s, x) => s + x.pecasEstornadas, 0)} peças fora do estoque), ` +
+        `${errors.length} erro(s), status=${statusFinal}`,
+    );
+
+    return { ok: errors.length === 0, estornados, errors, statusFinal };
+  }
+
   // ── Etiquetas ──
 
   /**

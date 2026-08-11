@@ -916,6 +916,37 @@ export default function NovoPedidoPage() {
     }
   };
 
+  /**
+   * CORRIGIR REF CONFERIDA (11/08, dono): estorna a conferência no servidor
+   * (as peças saem do estoque — Flow + Giga via outbox) e o card volta a ser
+   * editável como pendente. Pra consertar conferência acidental (o Enter
+   * antigo conferia) ou dado errado numa REF já recebida.
+   */
+  const corrigirRefConferida = async (tempId: string) => {
+    const it = items.find((i) => i.tempId === tempId);
+    if (!it?.conferido || !it.serverItemIds?.length) return;
+    if (!confirm(
+      `Corrigir a REF ${it.ref}?\n\n` +
+      `As ${it.conferido.pecas} peça(s) SAEM do estoque e a REF volta a ser ` +
+      `editável (pendente). Confira de novo quando a mercadoria chegar.`,
+    )) return;
+    setError(null);
+    try {
+      const r = await api<{ ok: boolean; errors: string[] }>(
+        `/purchase-orders/${it.conferido.orderId}/unreceive`,
+        { method: 'POST', body: JSON.stringify({ itemIds: it.serverItemIds }) },
+      );
+      if (!r.ok && r.errors?.length) {
+        setError(`Corrigir REF ${it.ref}: ${r.errors.join(' · ')}`);
+        return;
+      }
+      updateItem(tempId, { conferido: undefined, precoTravado: true });
+      setConferidoAbertoId(null);
+    } catch (e: any) {
+      setError(`Corrigir REF ${it.ref}: ${e?.message || 'erro'}`);
+    }
+  };
+
   const salvarRefEAdicionarProxima = async (tempId: string) => {
     await completeGradeAndPrepareNext(
       () => salvarRefNoPedido(tempId),
@@ -1268,6 +1299,7 @@ export default function NovoPedidoPage() {
               onConferir={() => conferirAgora(item.tempId)}
               onConferirEtiquetas={() => conferirAgora(item.tempId, { abrirEtiquetas: true })}
               onConferirEAvancar={() => salvarRefEAdicionarProxima(item.tempId)}
+              onCorrigir={() => corrigirRefConferida(item.tempId)}
               conferindo={conferindoId === item.tempId}
               onAplicarCategoria={(desc) => aplicarCategoriaSeExistir(item.tempId, desc)}
               onAddCor={(c) => adicionarCor(item.tempId, c)}
@@ -1308,7 +1340,7 @@ function ItemEditor({
   onUpdate, onRemove, onDuplicate, onAplicarCategoria,
   onAddCor, onRemoveCor, onAddTam, onRemoveTam, onGrade,
   onRefreshGrupos, atributos, onCriarAtributo,
-  onConferir, onConferirEtiquetas, onConferirEAvancar, conferindo, expanded, onToggleExpanded,
+  onConferir, onConferirEtiquetas, onConferirEAvancar, onCorrigir, conferindo, expanded, onToggleExpanded,
 }: {
   item: ItemForm;
   index: number;
@@ -1324,6 +1356,7 @@ function ItemEditor({
   onConferir: () => Promise<boolean>;
   onConferirEtiquetas: () => Promise<boolean>;
   onConferirEAvancar: () => Promise<void>;
+  onCorrigir: () => Promise<void>;
   conferindo: boolean;
   onAplicarCategoria: (desc: string) => void;
   onAddCor: (c: string) => void;
@@ -1484,11 +1517,19 @@ function ItemEditor({
             <>
               <span
                 className="text-[11px] font-extrabold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1.5 rounded-lg"
-                title="REF conferida: cadastrada e com estoque lançado. O card fica travado — ajustes são na tela do pedido."
+                title="REF conferida: cadastrada e com estoque lançado. Pra editar, use o Corrigir (estorna o estoque e libera o card)."
               >
                 ✓ Conferida · {item.conferido.pecas} pç no estoque
                 {item.conferido.erros > 0 ? ` · ${item.conferido.erros} erro(s)` : ''}
               </span>
+              <button
+                type="button"
+                onClick={onCorrigir}
+                className="po-action-secondary"
+                title="Estorna a conferência: as peças saem do estoque e a REF volta a ser editável"
+              >
+                Corrigir
+              </button>
               <button
                 onClick={() =>
                   window.open(
