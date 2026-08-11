@@ -1,18 +1,17 @@
 'use client';
 
 /**
- * /minha-loja/ponto — Bater ponto eletrônico (modo AUTOMÁTICO).
+ * /minha-loja/ponto — Bater ponto eletrônico.
  *
- * Fluxo:
- *  1. Carrega face-api.js + descriptors das vendedoras da loja
- *  2. Camera ativa em loop: a cada 1.2s detecta rosto e compara
- *  3. Match (dist < 0.5) → backend resolve qual tipo bater (auto):
- *       - 1ª do dia: entrada
- *       - 2ª: saída almoço
- *       - 3ª: volta almoço
- *       - 4ª: saída
- *  4. Tela mostra "✓ Olá Thiago, Entrada Registrada"
- *  5. Cooldown 60s por vendedora pra não bater igual em sequência
+ * Fluxo (11/08/26 — regra do dono: escolher o NOME antes de ligar a câmera):
+ *  1. Carrega descriptors das vendedoras da loja e lista os NOMES
+ *  2. Funcionária toca no próprio nome → só então a câmera monta/liga
+ *  3. Loop detecta o rosto e SÓ aceita se for da pessoa escolhida — o
+ *     matching continua 1:N com ratio test anti-sósia, então rosto de
+ *     outra funcionária é recusado com aviso na tela
+ *  4. Backend resolve qual tipo bater (auto): 1ª do dia = entrada,
+ *     depois saída almoço → volta almoço → saída
+ *  5. Bateu (ou erro/60s parado) → volta pra lista e a câmera desliga
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -53,6 +52,8 @@ const COOLDOWN_AFTER_REGISTER_MS = 8_000;
 const SUCCESS_DISPLAY_MS = 1_200;
 // Compat com codigo que ainda referencia MATCH_THRESHOLD (diagnostico)
 const MATCH_THRESHOLD = MATCH_CONFIRM_THRESHOLD;
+// Escolheu o nome e não bateu em 60s → volta pra lista (câmera desliga).
+const SELECT_TIMEOUT_MS = 60_000;
 
 const TIPO_LABELS: Record<string, { texto: string; cor: string; emoji: string }> = {
   entrada:      { texto: 'Entrada Registrada',           cor: 'bg-emerald-500', emoji: '🟢' },
@@ -121,6 +122,14 @@ export default function PontoPage() {
 
   const [me, setMe] = useState<Me | null>(null);
   const [sellers, setSellers] = useState<SellerDescriptors[]>([]);
+  // Nome escolhido ANTES da captura (dono 11/08): a câmera só monta depois
+  // da escolha e o match só vale pra essa pessoa.
+  const [selected, setSelected] = useState<SellerDescriptors | null>(null);
+  const selectedRef = useRef<SellerDescriptors | null>(null);
+  // Rosto reconhecido ≠ nome escolhido → aviso na tela (ref evita setState
+  // repetido a cada frame do loop).
+  const [wrongFace, setWrongFace] = useState<string | null>(null);
+  const wrongFaceRef = useRef<string | null>(null);
   const [registering, setRegistering] = useState(false);
   const [lastSuccess, setLastSuccess] = useState<{
     name: string;
@@ -179,6 +188,24 @@ export default function PontoPage() {
   useEffect(() => {
     lastSuccessRef.current = lastSuccess ? { name: lastSuccess.name } : null;
   }, [lastSuccess]);
+  useEffect(() => {
+    selectedRef.current = selected;
+    if (!selected) {
+      // Voltou pra lista: FaceCapture desmonta (câmera desliga) → ready
+      // precisa voltar pro estado inicial senão o loop re-liga sem câmera.
+      setReady(false);
+      voteRef.current = null;
+      wrongFaceRef.current = null;
+      setWrongFace(null);
+    }
+  }, [selected]);
+
+  // Totem não pode ficar preso numa escolha: 60s sem bater → volta pra lista.
+  useEffect(() => {
+    if (!selected) return;
+    const t = setTimeout(() => setSelected(null), SELECT_TIMEOUT_MS);
+    return () => clearTimeout(t);
+  }, [selected]);
 
   // GEOFENCE: mantém a última localização conhecida do aparelho pra mandar na
   // batida. O backend valida contra o raio da loja (se a loja tiver geofence
@@ -223,6 +250,8 @@ export default function PontoPage() {
         tipo: r.tipo,
         at: new Date(),
       });
+      // Bateu → volta pra lista de nomes (câmera desliga; card fica na tela)
+      setSelected(null);
       // Cooldown: evita re-bater o mesmo seller logo em seguida
       cooldownRef.current.add(match.seller.id);
       setTimeout(() => {
@@ -239,6 +268,7 @@ export default function PontoPage() {
         msg.toLowerCase().includes('4 pontos')
       ) {
         setAlreadyDone({ name: match.seller.name });
+        setSelected(null);
         cooldownRef.current.add(match.seller.id);
         // Cooldown 90s pra mesma vendedora — ela já bateu, vai pra casa.
         // Antes era 5min. Reduzido pq vendedora pode esquecer e voltar.
@@ -249,6 +279,7 @@ export default function PontoPage() {
         setTimeout(() => setAlreadyDone(null), 2000);
       } else {
         setErrorMsg(`${match.seller.name.split(' ')[0]}: ${msg}`);
+        setSelected(null);
         cooldownRef.current.add(match.seller.id);
         setTimeout(() => {
           cooldownRef.current.delete(match.seller.id);
@@ -265,8 +296,10 @@ export default function PontoPage() {
   // (lê tudo via ref) — assim ele NÃO remonta a cada batida. Só (re)inicia
   // quando a câmera fica pronta e os descriptors carregam.
   const hasSellers = sellers.length > 0;
+  const selectedId = selected?.id ?? null;
   useEffect(() => {
-    if (!ready || !hasSellers) {
+    // Sem nome escolhido não há captura: a câmera nem está montada.
+    if (!ready || !hasSellers || !selectedId) {
       loopActiveRef.current = false;
       return;
     }
@@ -289,6 +322,7 @@ export default function PontoPage() {
         if (cancelled) return;
         if (!hasFace) {
           voteRef.current = null; // rosto saiu → zera votação
+          if (wrongFaceRef.current) { wrongFaceRef.current = null; setWrongFace(null); }
           const t1 = performance.now();
           setDiag({ ms: Math.round(t1 - t0), detected: false, bestName: null, bestDist: null, secondName: null, secondDist: null, ambiguous: false, rejected: 'sem_rosto' });
           if (!cancelled) setTimeout(tick, DETECT_INTERVAL_MS);
@@ -312,6 +346,12 @@ export default function PontoPage() {
           return;
         }
 
+        // Rosto confere com o nome escolhido → derruba o aviso de "outra pessoa"
+        if (best.seller.id === selectedRef.current?.id && wrongFaceRef.current) {
+          wrongFaceRef.current = null;
+          setWrongFace(null);
+        }
+
         // ── DECISÃO: aceita na hora, vota, ou rejeita ──
         let rejected: string | null = null;
         let accept = false;
@@ -321,6 +361,15 @@ export default function PontoPage() {
         } else if (best.ambiguous) {
           rejected = `ambiguo: ${best.seller.name} (${best.distance.toFixed(3)}) vs ${best.second?.seller.name} (${best.second?.distance.toFixed(3)})`;
           voteRef.current = null;
+        } else if (selectedRef.current && best.seller.id !== selectedRef.current.id) {
+          // Nome escolhido manda: rosto (confiável) de OUTRA funcionária não
+          // bate o ponto de quem foi selecionada.
+          rejected = `rosto de ${best.seller.name}, esperado ${selectedRef.current.name}`;
+          voteRef.current = null;
+          if (wrongFaceRef.current !== best.seller.name) {
+            wrongFaceRef.current = best.seller.name;
+            setWrongFace(best.seller.name);
+          }
         } else if (cooldownRef.current.has(best.seller.id)) {
           rejected = 'cooldown';
         } else if (best.distance < MATCH_AUTO_THRESHOLD) {
@@ -375,7 +424,7 @@ export default function PontoPage() {
       clearTimeout(startTimer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, hasSellers]);
+  }, [ready, hasSellers, selectedId]);
 
   const tipoInfo = lastSuccess ? TIPO_LABELS[lastSuccess.tipo] : null;
   // Calculado fora do JSX pra evitar parser confundir o operador < com tag JSX
@@ -405,12 +454,74 @@ export default function PontoPage() {
       </header>
 
       <div className="max-w-3xl mx-auto p-4 space-y-4">
-        <FaceCapture
-          ref={captureRef}
-          onReady={() => setReady(true)}
-          onError={(err) => setErrorMsg(err)}
-          showStatus={false}
-        />
+        {!selected ? (
+          /* ── PASSO 1: escolher o nome (câmera DESLIGADA até aqui) ── */
+          !loadingDescriptors && sellers.length > 0 && (
+            <div className="bg-slate-800 rounded-xl p-4">
+              <p className="text-white font-bold text-lg text-center">Quem vai bater o ponto?</p>
+              <p className="text-white/50 text-xs text-center mt-0.5 mb-3">
+                Toque no seu nome — a câmera liga depois da escolha
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {[...sellers]
+                  .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'))
+                  .map((s) => (
+                    <button
+                      key={s.id}
+                      onClick={() => setSelected(s)}
+                      className="bg-slate-700 hover:bg-slate-600 active:bg-slate-500 text-white rounded-xl p-4 flex items-center gap-3 text-left"
+                    >
+                      <div className="w-10 h-10 shrink-0 rounded-full bg-[#D4AF37] text-slate-900 font-bold flex items-center justify-center text-lg">
+                        {s.name.charAt(0)}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="font-bold truncate">{s.name}</div>
+                        <div className="text-xs text-white/50">{s.cargo}</div>
+                      </div>
+                    </button>
+                  ))}
+              </div>
+            </div>
+          )
+        ) : (
+          /* ── PASSO 2: câmera ligada SÓ pra pessoa escolhida ── */
+          <>
+            <div className="bg-slate-800 rounded-xl p-3 flex items-center gap-3">
+              <div className="w-10 h-10 shrink-0 rounded-full bg-[#D4AF37] text-slate-900 font-bold flex items-center justify-center text-lg">
+                {selected.name.charAt(0)}
+              </div>
+              <div className="flex-1 min-w-0 text-white">
+                <div className="text-[11px] text-white/50 uppercase">Batendo ponto de</div>
+                <div className="font-bold truncate">{selected.name}</div>
+              </div>
+              <button
+                onClick={() => setSelected(null)}
+                className="text-xs font-bold text-white/80 hover:text-white bg-white/10 hover:bg-white/20 rounded-lg px-3 py-2"
+              >
+                Trocar nome
+              </button>
+            </div>
+
+            <FaceCapture
+              ref={captureRef}
+              onReady={() => setReady(true)}
+              onError={(err) => setErrorMsg(err)}
+              showStatus={false}
+            />
+
+            {wrongFace && (
+              <div className="bg-amber-100 border-2 border-amber-300 text-amber-900 rounded-xl p-3 text-center">
+                <AlertTriangle className="w-5 h-5 mx-auto mb-1" />
+                <p className="font-bold text-sm">
+                  Esse rosto não parece ser de {selected.name.split(' ')[0]}.
+                </p>
+                <p className="text-xs mt-0.5">
+                  Se você é {wrongFace.split(' ')[0]}, toque em "Trocar nome" e escolha o seu.
+                </p>
+              </div>
+            )}
+          </>
+        )}
 
         {/* PAINEL DIAGNOSTICO — mostra status de cada frame.
             Pra esconder: adicionar ?debug=0 na URL. */}
@@ -495,8 +606,9 @@ export default function PontoPage() {
           </div>
         )}
 
-        {/* Vazio */}
-        {!loadingDescriptors && sellers.length === 0 && ready && (
+        {/* Vazio — sem `ready` na condição: a câmera só monta após escolher
+            um nome, então com 0 cadastradas o ready nunca ficaria true */}
+        {!loadingDescriptors && sellers.length === 0 && (
           <div className="bg-amber-100 border-2 border-amber-300 text-amber-800 rounded-xl p-4 text-center">
             <p className="font-bold">Nenhuma funcionária cadastrada com biometria</p>
             <p className="text-sm mt-1">Acesse Retaguarda - RH - Face Enroll</p>

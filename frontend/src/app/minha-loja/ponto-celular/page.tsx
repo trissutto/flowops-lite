@@ -10,9 +10,10 @@
  *  - Layout mobile-first, cartões grandes, relógio gigante
  *  - Painel de diagnóstico ESCONDIDO por padrão (mostra com ?debug=1)
  *
- * O celular fica logado com a conta da LOJA (mesmo login do PDV). A câmera
- * frontal reconhece a funcionária e bate automático: 1ª do dia = entrada,
- * depois saída almoço → volta almoço → saída.
+ * O celular fica logado com a conta da LOJA (mesmo login do PDV). Fluxo
+ * 11/08/26 (regra do dono — igual ao PDV): a funcionária toca no PRÓPRIO
+ * NOME, só então a câmera liga, e o rosto precisa ser dela pra bater.
+ * 1ª do dia = entrada, depois saída almoço → volta almoço → saída.
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -41,6 +42,8 @@ const VOTE_FRAMES = 2;
 const DETECT_INTERVAL_MS = 50;
 const COOLDOWN_AFTER_REGISTER_MS = 8_000;
 const SUCCESS_DISPLAY_MS = 1_200;
+// Escolheu o nome e não bateu em 60s → volta pra lista (câmera desliga).
+const SELECT_TIMEOUT_MS = 60_000;
 
 const TIPO_LABELS: Record<string, { texto: string; cor: string; emoji: string }> = {
   entrada:      { texto: 'Entrada Registrada',           cor: 'bg-emerald-500', emoji: '🟢' },
@@ -98,6 +101,12 @@ export default function PontoCelularPage() {
 
   const [me, setMe] = useState<Me | null>(null);
   const [sellers, setSellers] = useState<SellerDescriptors[]>([]);
+  // Nome escolhido ANTES da captura (dono 11/08): a câmera só monta depois
+  // da escolha e o match só vale pra essa pessoa.
+  const [selected, setSelected] = useState<SellerDescriptors | null>(null);
+  const selectedRef = useRef<SellerDescriptors | null>(null);
+  const [wrongFace, setWrongFace] = useState<string | null>(null);
+  const wrongFaceRef = useRef<string | null>(null);
   const [lastSuccess, setLastSuccess] = useState<{ name: string; tipo: string; at: Date } | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [alreadyDone, setAlreadyDone] = useState<{ name: string } | null>(null);
@@ -248,6 +257,24 @@ export default function PontoCelularPage() {
   useEffect(() => {
     lastSuccessRef.current = lastSuccess ? { name: lastSuccess.name } : null;
   }, [lastSuccess]);
+  useEffect(() => {
+    selectedRef.current = selected;
+    if (!selected) {
+      // Voltou pra lista: FaceCapture desmonta (câmera desliga) → ready
+      // precisa voltar pro estado inicial senão o loop re-liga sem câmera.
+      setReady(false);
+      voteRef.current = null;
+      wrongFaceRef.current = null;
+      setWrongFace(null);
+    }
+  }, [selected]);
+
+  // Totem não pode ficar preso numa escolha: 60s sem bater → volta pra lista.
+  useEffect(() => {
+    if (!selected) return;
+    const t = setTimeout(() => setSelected(null), SELECT_TIMEOUT_MS);
+    return () => clearTimeout(t);
+  }, [selected]);
 
   // GEOFENCE: GPS do celular (bem mais preciso que o do PC do PDV).
   // Backend valida contra o raio da loja; sem coordenada ele BLOQUEIA
@@ -291,6 +318,8 @@ export default function PontoCelularPage() {
         }),
       });
       setLastSuccess({ name: match.seller.name, tipo: r.tipo, at: new Date() });
+      // Bateu → volta pra lista de nomes (câmera desliga; card fica na tela)
+      setSelected(null);
       cooldownRef.current.add(match.seller.id);
       setTimeout(() => cooldownRef.current.delete(match.seller.id), COOLDOWN_AFTER_REGISTER_MS);
       setTimeout(() => setLastSuccess(null), SUCCESS_DISPLAY_MS);
@@ -298,11 +327,13 @@ export default function PontoCelularPage() {
       const msg = e?.message || 'Falha ao registrar';
       if (msg.toLowerCase().includes('já bateu') || msg.toLowerCase().includes('4 pontos')) {
         setAlreadyDone({ name: match.seller.name });
+        setSelected(null);
         cooldownRef.current.add(match.seller.id);
         setTimeout(() => cooldownRef.current.delete(match.seller.id), 90_000);
         setTimeout(() => setAlreadyDone(null), 2000);
       } else {
         setErrorMsg(`${match.seller.name.split(' ')[0]}: ${msg}`);
+        setSelected(null);
         cooldownRef.current.add(match.seller.id);
         setTimeout(() => cooldownRef.current.delete(match.seller.id), 15_000);
         setTimeout(() => setErrorMsg(null), 6000);
@@ -312,8 +343,10 @@ export default function PontoCelularPage() {
 
   // Loop de detecção — idêntico ao do PDV (self-scheduling, lê estado via ref)
   const hasSellers = sellers.length > 0;
+  const selectedId = selected?.id ?? null;
   useEffect(() => {
-    if (!ready || !hasSellers) {
+    // Sem nome escolhido não há captura: a câmera nem está montada.
+    if (!ready || !hasSellers || !selectedId) {
       loopActiveRef.current = false;
       return;
     }
@@ -332,6 +365,7 @@ export default function PontoCelularPage() {
         if (cancelled) return;
         if (!hasFace) {
           voteRef.current = null;
+          if (wrongFaceRef.current) { wrongFaceRef.current = null; setWrongFace(null); }
           setDiag({ ms: Math.round(performance.now() - t0), bestName: null, bestDist: null, rejected: 'sem_rosto' });
           if (!cancelled) setTimeout(tick, DETECT_INTERVAL_MS);
           return;
@@ -352,6 +386,12 @@ export default function PontoCelularPage() {
           return;
         }
 
+        // Rosto confere com o nome escolhido → derruba o aviso de "outra pessoa"
+        if (best.seller.id === selectedRef.current?.id && wrongFaceRef.current) {
+          wrongFaceRef.current = null;
+          setWrongFace(null);
+        }
+
         let rejected: string | null = null;
         let accept = false;
         if (best.distance >= MATCH_CONFIRM_THRESHOLD) {
@@ -360,6 +400,15 @@ export default function PontoCelularPage() {
         } else if (best.ambiguous) {
           rejected = 'ambiguo';
           voteRef.current = null;
+        } else if (selectedRef.current && best.seller.id !== selectedRef.current.id) {
+          // Nome escolhido manda: rosto (confiável) de OUTRA funcionária não
+          // bate o ponto de quem foi selecionada.
+          rejected = `rosto de ${best.seller.name}`;
+          voteRef.current = null;
+          if (wrongFaceRef.current !== best.seller.name) {
+            wrongFaceRef.current = best.seller.name;
+            setWrongFace(best.seller.name);
+          }
         } else if (cooldownRef.current.has(best.seller.id)) {
           rejected = 'cooldown';
         } else if (best.distance < MATCH_AUTO_THRESHOLD) {
@@ -402,7 +451,7 @@ export default function PontoCelularPage() {
       clearTimeout(startTimer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, hasSellers]);
+  }, [ready, hasSellers, selectedId]);
 
   const tipoInfo = lastSuccess ? TIPO_LABELS[lastSuccess.tipo] : null;
 
@@ -433,16 +482,74 @@ export default function PontoCelularPage() {
         <div className="text-center text-white">
           <p className="text-5xl font-bold font-mono tracking-tight">{clock}</p>
           <p className="text-xs text-white/50 mt-1">
-            Olhe pra câmera — o ponto bate sozinho
+            {selected
+              ? `Olhe pra câmera, ${selected.name.split(' ')[0]} — o ponto bate sozinho`
+              : 'Toque no seu nome pra bater o ponto'}
           </p>
         </div>
 
-        <FaceCapture
-          ref={captureRef}
-          onReady={() => setReady(true)}
-          onError={(err) => setErrorMsg(err)}
-          showStatus={false}
-        />
+        {!selected ? (
+          /* ── PASSO 1: escolher o nome (câmera DESLIGADA até aqui) ── */
+          !loadingDescriptors && sellers.length > 0 && (
+            <div className="space-y-2">
+              {[...sellers]
+                .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'))
+                .map((s) => (
+                  <button
+                    key={s.id}
+                    onClick={() => setSelected(s)}
+                    className="w-full bg-slate-800 hover:bg-slate-700 active:bg-slate-600 text-white rounded-xl p-4 flex items-center gap-3 text-left"
+                  >
+                    <div className="w-11 h-11 shrink-0 rounded-full bg-[#D4AF37] text-slate-900 font-bold flex items-center justify-center text-xl">
+                      {s.name.charAt(0)}
+                    </div>
+                    <div className="min-w-0">
+                      <div className="font-bold text-lg truncate">{s.name}</div>
+                      <div className="text-xs text-white/50">{s.cargo}</div>
+                    </div>
+                  </button>
+                ))}
+            </div>
+          )
+        ) : (
+          /* ── PASSO 2: câmera ligada SÓ pra pessoa escolhida ── */
+          <>
+            <div className="bg-slate-800 rounded-xl p-3 flex items-center gap-3">
+              <div className="w-10 h-10 shrink-0 rounded-full bg-[#D4AF37] text-slate-900 font-bold flex items-center justify-center text-lg">
+                {selected.name.charAt(0)}
+              </div>
+              <div className="flex-1 min-w-0 text-white">
+                <div className="text-[11px] text-white/50 uppercase">Batendo ponto de</div>
+                <div className="font-bold truncate">{selected.name}</div>
+              </div>
+              <button
+                onClick={() => setSelected(null)}
+                className="text-xs font-bold text-white/80 hover:text-white bg-white/10 hover:bg-white/20 rounded-lg px-3 py-2"
+              >
+                Trocar nome
+              </button>
+            </div>
+
+            <FaceCapture
+              ref={captureRef}
+              onReady={() => setReady(true)}
+              onError={(err) => setErrorMsg(err)}
+              showStatus={false}
+            />
+
+            {wrongFace && (
+              <div className="bg-amber-100 border-2 border-amber-300 text-amber-900 rounded-xl p-3 text-center">
+                <AlertTriangle className="w-5 h-5 mx-auto mb-1" />
+                <p className="font-bold text-sm">
+                  Esse rosto não parece ser de {selected.name.split(' ')[0]}.
+                </p>
+                <p className="text-xs mt-0.5">
+                  Se você é {wrongFace.split(' ')[0]}, toque em "Trocar nome" e escolha o seu.
+                </p>
+              </div>
+            )}
+          </>
+        )}
 
         {/* GPS negado — aviso permanente (geofence vai bloquear) */}
         {gpsStatus === 'denied' && (
@@ -495,7 +602,9 @@ export default function PontoCelularPage() {
           </div>
         )}
 
-        {!loadingDescriptors && sellers.length === 0 && ready && (
+        {/* Sem `ready` na condição: a câmera só monta após escolher um nome,
+            então com 0 cadastradas o ready nunca ficaria true */}
+        {!loadingDescriptors && sellers.length === 0 && (
           <div className="bg-amber-100 border-2 border-amber-300 text-amber-800 rounded-xl p-4 text-center">
             <p className="font-bold">Nenhuma funcionária cadastrada com biometria</p>
             <p className="text-sm mt-1">Cadastre os rostos em Minha Loja → Rosto</p>
