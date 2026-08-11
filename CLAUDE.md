@@ -77,6 +77,20 @@ Cron de 1h espelha transferências/vendas/estoque pro financeiro. Conta corrente
 - CRM: escopo de loja = `originStoreId` **OU** `targetStoreId` (cliente do site atribuído por CEP) — lista e ficha usam o MESMO critério (divergência já causou drawer travado em "Carregando...").
 - Modo treinamento NUNCA toca Giga/estoque/NFC-e (flag `isTraining` + header de sessão).
 
+## Fila de tarefas da loja + ciclo da remessa (11/08)
+
+**Diretriz de UX (dono):** a loja não escolhe tela — a home `/minha-loja` abre com a fila **"O QUE FAZER AGORA"** (pedidos a separar, caixas abertas, remessas chegando, peças de realinhamento). Vermelho = parado, amarelo = a fazer, teto de 10 linhas + "ver as outras N". Toda tela nova pra loja segue esse padrão: **tarefa clicável > menu**, e nenhum passo manual entra sem alerta de esquecimento.
+
+**Regra de ouro contra alarme falso:** tarefa só entra se for pendência real PRA AQUELA loja — alarme falso mata a confiança na fila inteira. Foi o que aconteceu com "Gerar etiqueta" (removida em 11/08): a medição mostrou que só **5 de 203** remessas em trânsito têm etiqueta do sistema e mesmo assim **639 caixas chegaram em 30 dias** (média 4,1 dias). Etiqueta é EXCEÇÃO na operação — quem precisa gera pelo painel "Caixas fechadas" da tela Realinhar.
+
+**O ciclo da remessa tem 2 pontas, e as duas somem em silêncio:**
+1. **Caixa ABERTA** — o estoque só sai da origem no **"Fechar e enviar"**. Imprimir etiqueta/PDF com a caixa aberta abre o modal "Etiqueta na mão! Fechar agora?" (casos Piracicaba REM-1116 e Santos REM-732, esta 8 dias aberta).
+2. **Caixa EM TRÂNSITO** — a peça só volta a existir quando o destino **dá entrada**. Entre um e outro ela não está no estoque de ninguém: some da Consulta e não vende no site. Em 11/08 havia **198 remessas / 1.057 peças** nesse limbo (a mais antiga de 15/05).
+
+**Mutirão da matriz** — `/retaguarda/remessas` mostra as caixas paradas (3+ dias) com ação de 1 clique: **"Chegou"** (`POST /realignment/shipments/admin/:id/receber`) e **"Nunca saiu"** (`POST .../reabrir`). As duas delegam pros mesmos métodos da loja, resolvendo a loja pela própria remessa — mesmo efeito no estoque, sem duplicar lógica. Lista: `GET /realignment/shipments/admin/paradas?minDias=3`.
+
+**Volume normal da rede (medido 30d):** 777 remessas / 9.293 peças — 594 TRANSFERENCIA + 183 REALINHAMENTO. Pedido do SITE é minoria das paradas (38 remessas, 71 peças).
+
 ## Mapa rápido dos módulos (backend/src)
 
 - `pdv/` — PDV loja física: vendas (`pdv.service`), outbox, devoluções (`returns`), marcados, crediário print, NFC-e, caixa/sangria.
