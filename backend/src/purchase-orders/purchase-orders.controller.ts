@@ -185,6 +185,9 @@ export class PurchaseOrdersController {
       id,
       Array.isArray(body?.itemIds) ? body.itemIds : [],
       this.userId(req),
+      // all=true estorna TODAS as REFs recebidas do pedido de uma vez —
+      // caso 11/08: pedido futuro com 69 REFs conferidas por engano.
+      body?.all === true,
     );
   }
 

@@ -770,15 +770,15 @@ export class PurchaseOrdersService {
    * no próximo receive. Item cuja baixa de estoque falhar NÃO volta a
    * pendente (evita estorno meia-boca com estoque divergente).
    */
-  async unreceiveItems(orderId: string, itemIds: string[], userId?: string) {
-    if (!itemIds?.length) throw new BadRequestException('itemIds obrigatório');
+  async unreceiveItems(orderId: string, itemIds: string[], userId?: string, all = false) {
+    if (!itemIds?.length && !all) throw new BadRequestException('itemIds obrigatório (ou all=true)');
     const order = await this.getById(orderId);
     const lojaMatriz = process.env.PRIMARY_STORE_CODE || '01';
     const estornados: any[] = [];
     const errors: string[] = [];
 
     for (const it of order.items as any[]) {
-      if (!itemIds.includes(it.id)) continue;
+      if (!all && !itemIds.includes(it.id)) continue;
       if (it.itemStatus !== 'recebido') continue;
 
       let skus: any[] = [];

@@ -84,6 +84,9 @@ type ItemForm = {
   // true = não deixar o auto-preço sobrescrever o precoUnit carregado do
   // servidor (pedido reaberto mantém o preço salvo até alguém mexer).
   precoTravado?: boolean;
+  // true = editada depois do último save — o "Salvar pedido" só regrava
+  // cards sujos (regravar as 40 REFs intactas era o que travava o botão).
+  dirty?: boolean;
 };
 
 const TAMANHOS_PLUS = ['46', '48', '50', '52', '54', '56', '58', '60'];
@@ -455,7 +458,7 @@ export default function NovoPedidoPage() {
     if (!c) return;
     const item = items.find((i) => i.tempId === tempId);
     if (!item || item.cores.includes(c)) return;
-    updateItem(tempId, { cores: [...item.cores, c] });
+    updateItem(tempId, { cores: [...item.cores, c], dirty: true });
   };
 
   const removerCor = (tempId: string, cor: string) => {
@@ -468,6 +471,7 @@ export default function NovoPedidoPage() {
     updateItem(tempId, {
       cores: item.cores.filter((c) => c !== cor),
       grade: newGrade,
+      dirty: true,
     });
   };
 
@@ -477,7 +481,7 @@ export default function NovoPedidoPage() {
     const item = items.find((i) => i.tempId === tempId);
     if (!item || item.tamanhos.includes(t)) return;
     // Edicao manual: limpa marca de preset
-    updateItem(tempId, { tamanhos: [...item.tamanhos, t], gradePresetId: null });
+    updateItem(tempId, { tamanhos: [...item.tamanhos, t], gradePresetId: null, dirty: true });
   };
 
   const removerTamanho = (tempId: string, tam: string) => {
@@ -490,6 +494,7 @@ export default function NovoPedidoPage() {
     updateItem(tempId, {
       tamanhos: item.tamanhos.filter((t) => t !== tam),
       grade: newGrade,
+      dirty: true,
     });
   };
 
@@ -499,6 +504,7 @@ export default function NovoPedidoPage() {
     const key = `${cor}|${tam}`;
     updateItem(tempId, {
       grade: { ...item.grade, [key]: valor.replace(/\D/g, '') },
+      dirty: true,
     });
   };
 
@@ -832,6 +838,7 @@ export default function NovoPedidoPage() {
       const erros = Array.isArray(r?.errors) ? r.errors.length : 0;
       updateItem(tempId, {
         serverItemIds: itemIds,
+        dirty: false,
         conferido: {
           orderId: oid,
           pecas: Number(r?.totalPecas || 0) || calcularTotalItem(it),
@@ -885,17 +892,28 @@ export default function NovoPedidoPage() {
    * item pendente da MESMA REF no pedido — senão a regravação criaria a REF
    * duplicada ao lado da versão órfã.
    */
-  const apagarItensPendentesDaRef = async (oid: string, ref: string, tracked: string[]) => {
+  const apagarItensPendentesDaRef = async (
+    oid: string,
+    ref: string,
+    tracked: string[],
+    /** Lista de itens do pedido já buscada — o Salvar em lote busca UMA vez
+     *  e reusa (buscar o pedido inteiro por REF derrubava a performance). */
+    serverItemsPrefetched?: any[],
+  ) => {
     const ids = new Set<string>(tracked.filter(Boolean));
-    try {
-      const o = await api<any>(`/purchase-orders/${oid}`);
-      for (const si of (o?.items || []) as any[]) {
-        if (
-          String(si.ref || '').trim().toUpperCase() === ref.trim().toUpperCase() &&
-          si.itemStatus !== 'recebido'
-        ) ids.add(si.id);
-      }
-    } catch { /* sem a lista, segue só com os rastreados */ }
+    let serverItems = serverItemsPrefetched;
+    if (!serverItems) {
+      try {
+        const o = await api<any>(`/purchase-orders/${oid}`);
+        serverItems = (o?.items || []) as any[];
+      } catch { serverItems = undefined; /* sem a lista, segue só com os rastreados */ }
+    }
+    for (const si of serverItems || []) {
+      if (
+        String(si.ref || '').trim().toUpperCase() === ref.trim().toUpperCase() &&
+        si.itemStatus !== 'recebido'
+      ) ids.add(si.id);
+    }
     for (const sid of ids) {
       try {
         await api(`/purchase-orders/items/${sid}`, { method: 'DELETE' });
@@ -933,7 +951,7 @@ export default function NovoPedidoPage() {
         });
         if (criado?.id) itemIds.push(criado.id);
       }
-      updateItem(tempId, { serverItemIds: itemIds });
+      updateItem(tempId, { serverItemIds: itemIds, dirty: false });
       // Recolhe a REF salva (vira o barzinho compacto). Com 40+ REFs na tela,
       // manter todo card aberto — grade + selects + precificação — deixava o
       // navegador de joelhos (caso 11/08: 43 REFs = digitação travando).
@@ -996,13 +1014,22 @@ export default function NovoPedidoPage() {
     setError(null);
     const cnpjFinal = resolverCnpjFornecedor();
     if (!cnpjFinal) return;
-    if (items.length === 0) {
+
+    // CARD VAZIO NÃO TRAVA O SALVAR (11/08, dono): o Enter sempre deixa uma
+    // REF nova em branco no rodapé — o Salvar validava ela e morria em
+    // "Item sem REF" com o pedido inteiro pronto. Vazio = ignorado.
+    const comConteudo = items.filter((i) => i.conferido || itemTemConteudo(i));
+    if (comConteudo.length === 0) {
       setError('Adicione ao menos 1 item');
       return;
     }
-    // REFs conferidas JÁ estão no pedido (servidor) — o Salvar cuida do resto.
-    const pendentes = items.filter((i) => !i.conferido);
-    for (const it of pendentes) {
+    // SÓ REGRAVA O QUE MUDOU: REF salva pelo Enter e não editada depois já
+    // está idêntica no servidor — regravar as 40 intactas (apagar + recriar
+    // uma a uma) era a lentidão/travada do botão. Regrava: editadas (dirty)
+    // e as que nunca foram salvas.
+    const pendentes = comConteudo.filter((i) => !i.conferido);
+    const paraRegravar = pendentes.filter((i) => i.dirty || !(i.serverItemIds?.length));
+    for (const it of paraRegravar) {
       const vErr = validarItemForm(it);
       if (vErr) { setError(vErr); return; }
     }
@@ -1010,24 +1037,31 @@ export default function NovoPedidoPage() {
     setSaving(true);
     try {
       // Salva novas categorias (se grupo+subgrupo ainda não existirem)
-      for (const it of pendentes) await salvarCategoriaSeNova(it);
+      for (const it of paraRegravar) await salvarCategoriaSeNova(it);
       // Monta items pro POST: 1 ItemForm pode virar VÁRIOS items (1 por cor)
-      const apiItems: any[] = pendentes.flatMap((it) => montarApiItems(it));
+      const apiItems: any[] = paraRegravar.flatMap((it) => montarApiItems(it));
 
       if (orderId) {
-        // Pedido já existe (criado no 1º Conferir ou reaberto): atualiza o
-        // cabeçalho e regrava só o que ainda não foi conferido.
+        // Pedido já existe (criado no 1º Enter/Conferir ou reaberto):
+        // atualiza o cabeçalho e regrava só o que mudou.
         await api(`/purchase-orders/${orderId}`, {
           method: 'PATCH',
           body: JSON.stringify(headerPayload(cnpjFinal)),
         });
-        // Cards pendentes são regravados: apaga os antigos antes (tolerante a
-        // id velho + limpa órfãos da mesma REF — ver apagarItensPendentesDaRef).
-        for (const it of pendentes) {
-          await apagarItensPendentesDaRef(orderId, it.ref, it.serverItemIds || []);
-        }
-        for (const ai of apiItems) {
-          await api(`/purchase-orders/${orderId}/items`, { method: 'POST', body: JSON.stringify(ai) });
+        if (paraRegravar.length > 0) {
+          // Busca a lista do pedido UMA vez e reusa em todas as REFs
+          // (tolerância a id velho + limpeza de órfãos sem N buscas).
+          let serverItems: any[] | undefined;
+          try {
+            const o = await api<any>(`/purchase-orders/${orderId}`);
+            serverItems = (o?.items || []) as any[];
+          } catch { serverItems = undefined; }
+          for (const it of paraRegravar) {
+            await apagarItensPendentesDaRef(orderId, it.ref, it.serverItemIds || [], serverItems);
+          }
+          for (const ai of apiItems) {
+            await api(`/purchase-orders/${orderId}/items`, { method: 'POST', body: JSON.stringify(ai) });
+          }
         }
         try { localStorage.removeItem(DRAFT_KEY); } catch {}
         router.push(`/loja/pedidos-compra/${orderId}`);
@@ -1252,7 +1286,12 @@ export default function NovoPedidoPage() {
                 onCriado={aoCriarAtributo}
                 onChange={(v) => {
                   setColecaoPedidoId(v);
-                  setItems((atuais) => applyPurchaseOrderCollection(atuais, v));
+                  // Marca sujo: coleção nova precisa ser regravada no Salvar
+                  setItems((atuais) =>
+                    applyPurchaseOrderCollection(atuais, v).map((i: any) =>
+                      i.conferido ? i : { ...i, dirty: true },
+                    ),
+                  );
                 }}
               />
             </div>
@@ -1325,7 +1364,7 @@ export default function NovoPedidoPage() {
               markup={markup}
               getSubgrupos={getSubgrupos}
               onRefreshGrupos={refetchGrupos}
-              onUpdate={(patch) => updateItem(item.tempId, patch)}
+              onUpdate={(patch) => updateItem(item.tempId, { ...patch, dirty: true })}
               onRemove={() => removerItem(item.tempId)}
               onDuplicate={() => duplicarItem(item.tempId)}
               onConferir={() => conferirAgora(item.tempId)}

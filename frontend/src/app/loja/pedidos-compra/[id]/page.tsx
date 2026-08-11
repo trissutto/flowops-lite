@@ -402,6 +402,42 @@ export default function PedidoDetalhePage() {
             <FileText className="w-4 h-4" />
             PDF
           </Link>
+          {/* ESTORNAR RECEBIMENTO — pedido futuro conferido por engano
+              (11/08: Enter antigo conferia REF a REF; #55 entrou com 1255
+              peças sem a mercadoria existir). Tira TODO o estoque que o
+              recebimento lançou e volta o pedido pra rascunho. */}
+          {(isRecebido || data.status === 'recebido_parcial') && (
+            <button
+              onClick={async () => {
+                const pecas = data.totalPecas;
+                if (!confirm(
+                  `ESTORNAR o recebimento do pedido #${data.numero} (${data.fornecedorNome})?\n\n` +
+                  `As ~${pecas} peças que o recebimento lançou SAEM do estoque e ` +
+                  `todas as REFs voltam a PENDENTES (pedido vira rascunho).\n\n` +
+                  `Use quando o pedido foi recebido por engano — ex: mercadoria ainda não chegou.`,
+                )) return;
+                try {
+                  const r = await api<{ ok: boolean; estornados: any[]; errors: string[] }>(
+                    `/purchase-orders/${id}/unreceive`,
+                    { method: 'POST', body: JSON.stringify({ all: true }) },
+                  );
+                  if (r.errors?.length) {
+                    alert(`Estorno parcial — ${r.estornados.length} REF(s) estornada(s), erros:\n${r.errors.join('\n')}`);
+                  } else {
+                    alert(`✅ Estorno completo: ${r.estornados.length} REF(s) de volta a pendente, estoque revertido.`);
+                  }
+                  fetchData();
+                } catch (err: any) {
+                  alert('Erro ao estornar: ' + (err?.message || 'desconhecido'));
+                }
+              }}
+              title="Reverte o estoque lançado pelo recebimento e volta todas as REFs pra pendente"
+              className="flex items-center gap-2 px-4 py-2.5 bg-white hover:bg-amber-50 border border-amber-300 text-amber-700 font-bold text-sm rounded-lg"
+            >
+              <X className="w-4 h-4" />
+              Estornar recebimento
+            </button>
+          )}
           <button
             onClick={async () => {
               if (!confirm(`Excluir pedido #${data.numero} (${data.fornecedorNome})?\n\nEsta acao nao pode ser desfeita.${isRecebido ? '\n\nATENCAO: este pedido ja foi RECEBIDO. Os SKUs cadastrados no Wincred NAO serao removidos.' : ''}`)) return;
