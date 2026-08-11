@@ -906,6 +906,11 @@ export default function NovoPedidoPage() {
         if (criado?.id) itemIds.push(criado.id);
       }
       updateItem(tempId, { serverItemIds: itemIds });
+      // Recolhe a REF salva (vira o barzinho compacto). Com 40+ REFs na tela,
+      // manter todo card aberto — grade + selects + precificação — deixava o
+      // navegador de joelhos (caso 11/08: 43 REFs = digitação travando).
+      // Só o card em edição fica montado por inteiro.
+      setConferidoAbertoId(null);
       return true;
     } catch (e: any) {
       setError(`Salvar REF ${it.ref}: ${e?.message || 'erro'}`);
@@ -1308,7 +1313,9 @@ export default function NovoPedidoPage() {
               onRemoveTam={(t) => removerTamanho(item.tempId, t)}
               onGrade={(c, t, v) => setGradeCell(item.tempId, c, t, v)}
               expanded={!isPurchaseOrderItemCollapsed(
-                !!item.conferido,
+                // REF salva no pedido (Enter) recolhe igual à conferida — com
+                // 40+ REFs, cards abertos matavam a performance da tela.
+                !!item.conferido || (item.serverItemIds?.length ?? 0) > 0,
                 conferidoAbertoId,
                 item.tempId,
               )}
@@ -1461,7 +1468,11 @@ function ItemEditor({
   const margemReal = custoLiquido > 0 ? (precoVendaNum / custoLiquido) : 0;
   const lucroUnit = precoVendaNum - custoLiquido;
 
-  if (item.conferido && !expanded) {
+  // REF salva no pedido pelo Enter (pendente, sem estoque) também recolhe —
+  // performance: 40+ cards abertos travavam a digitação (caso 11/08).
+  const salvaNoPedido = !item.conferido && (item.serverItemIds?.length ?? 0) > 0;
+
+  if ((item.conferido || salvaNoPedido) && !expanded) {
     return (
       <button
         type="button"
@@ -1474,13 +1485,24 @@ function ItemEditor({
         <span className="po-collapsed-bar" aria-hidden="true" />
         <span className="flex flex-1 items-center justify-between gap-3 px-5 py-3">
           <span className="inline-flex items-center gap-2 text-base font-extrabold uppercase tracking-wide text-[#16233a]">
-            <CheckCircle2 className="h-4.5 w-4.5 text-emerald-600" aria-hidden="true" />
+            {item.conferido ? (
+              <CheckCircle2 className="h-4.5 w-4.5 text-emerald-600" aria-hidden="true" />
+            ) : (
+              <Check className="h-4.5 w-4.5 text-sky-600" aria-hidden="true" />
+            )}
             REF {item.ref.trim().toUpperCase()}
           </span>
-          <ChevronDown
-            className="h-5 w-5 shrink-0 text-[#c19a2e] transition-transform group-hover:translate-y-0.5"
-            aria-hidden="true"
-          />
+          <span className="ml-auto flex items-center gap-3">
+            <span className="text-[11px] font-bold text-[#8a94a3] normal-case tracking-normal">
+              {item.conferido
+                ? `Conferida · ${item.conferido.pecas} pç no estoque`
+                : `Salva no pedido · ${totalLinha} pç — clique pra editar`}
+            </span>
+            <ChevronDown
+              className="h-5 w-5 shrink-0 text-[#c19a2e] transition-transform group-hover:translate-y-0.5"
+              aria-hidden="true"
+            />
+          </span>
         </span>
       </button>
     );
@@ -1490,7 +1512,7 @@ function ItemEditor({
     <div className={`po-item-card ${item.conferido ? 'border-[#d3ac52]' : ''}`}>
       {/* Header da REF */}
       <div className="po-item-toolbar">
-        {item.conferido ? (
+        {item.conferido || salvaNoPedido ? (
           <button
             type="button"
             onClick={onToggleExpanded}
