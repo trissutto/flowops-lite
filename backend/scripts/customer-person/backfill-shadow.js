@@ -1,97 +1,10 @@
-/*
- * Idempotent customer -> person backfill. Dry-run is the default.
- * Apply requires BOTH --apply and CUSTOMER_PERSON_BACKFILL_ENABLED=1.
- * It never changes CPF, Giga keys, financial rows, sales, orders or marcados.
- */
-const { Client } = require('pg');
-const { randomUUID } = require('crypto');
-
-function normalizeCpf(value) {
-  const cpf = String(value || '').replace(/\D/g, '');
-  if (cpf.length !== 11 || /^(\d)\1{10}$/.test(cpf)) return null;
-  const digit = (length) => {
-    let sum = 0;
-    for (let i = 0; i < length; i += 1) sum += Number(cpf[i]) * (length + 1 - i);
-    const remainder = (sum * 10) % 11;
-    return remainder === 10 ? 0 : remainder;
-  };
-  return digit(9) === Number(cpf[9]) && digit(10) === Number(cpf[10]) ? cpf : null;
-}
-
-async function main() {
-  const apply = process.argv.includes('--apply');
-  if (apply && process.env.CUSTOMER_PERSON_BACKFILL_ENABLED !== '1') {
-    throw new Error('Aplicação bloqueada: defina CUSTOMER_PERSON_BACKFILL_ENABLED=1');
-  }
-  const connectionString = process.env.DATABASE_PUBLIC_URL || process.env.DATABASE_URL;
-  if (!connectionString) throw new Error('DATABASE_URL ausente');
-  const client = new Client({ connectionString, ssl: { rejectUnauthorized: false } });
-  await client.connect();
-  const stats = { mode: apply ? 'apply' : 'dry-run', scanned: 0, valid: 0, invalid: 0, linked: 0, alreadyLinked: 0 };
-  try {
-    const { rows: customers } = await client.query(`
-      SELECT id, cpf, name, email, phone, person_id, created_at
-      FROM customers
-      WHERE cpf IS NOT NULL AND btrim(cpf) <> ''
-      ORDER BY created_at, id
-    `);
-    for (const customer of customers) {
-      stats.scanned += 1;
-      const cpf = normalizeCpf(customer.cpf);
-      if (!cpf) { stats.invalid += 1; continue; }
-      stats.valid += 1;
-      if (customer.person_id) { stats.alreadyLinked += 1; continue; }
-      if (!apply) { stats.linked += 1; continue; }
-
-      await client.query('BEGIN');
-      try {
-        const personId = randomUUID();
-        const { rows } = await client.query(`
-          INSERT INTO persons (
-            id, cpf_normalized, identity_status, name, email, phone,
-            primary_customer_id, first_registration_at,
-            first_registration_source, created_at, updated_at
-          ) VALUES ($1, $2, 'confirmed', $3, $4, $5, $6, $7, 'flow', now(), now())
-          ON CONFLICT (cpf_normalized) DO UPDATE SET updated_at = persons.updated_at
-          RETURNING id
-        `, [personId, cpf, customer.name, customer.email, customer.phone, customer.id, customer.created_at]);
-        const resolvedPersonId = rows[0].id;
-        const updated = await client.query(
-          'UPDATE customers SET person_id = $1 WHERE id = $2 AND person_id IS NULL',
-          [resolvedPersonId, customer.id],
-        );
-        if (updated.rowCount === 1) {
-          await client.query(`
-            INSERT INTO person_identifiers (
-              id, person_id, type, normalized_value, unique_key, verified, source,
-              source_customer_id, verified_at, created_at, updated_at
-            ) VALUES ($1, $2, 'cpf', $3, $5, true, 'customer_backfill', $4, now(), now(), now())
-            ON CONFLICT (person_id, type, normalized_value) DO NOTHING
-          `, [randomUUID(), resolvedPersonId, cpf, customer.id, `cpf:${cpf}`]);
-          await client.query(`
-            INSERT INTO person_link_audits (
-              id, person_id, entity_type, entity_id, rule, confidence,
-              automatic, batch_id, created_at
-            ) VALUES ($1, $2, 'customer', $3, 'valid_cpf_exact', 100, true, $4, now())
-            ON CONFLICT (person_id, entity_type, entity_id, rule) DO NOTHING
-          `, [randomUUID(), resolvedPersonId, customer.id, process.env.CUSTOMER_PERSON_BATCH_ID || 'manual']);
-          stats.linked += 1;
-        } else {
-          stats.alreadyLinked += 1;
-        }
-        await client.query('COMMIT');
-      } catch (error) {
-        await client.query('ROLLBACK');
-        throw error;
-      }
-    }
-    console.log(JSON.stringify(stats, null, 2));
-  } finally {
-    await client.end();
-  }
-}
-
-main().catch((error) => {
-  console.error(error.message);
-  process.exitCode = 1;
-});
+/* Customer -> Person: dry-run by default; apply is atomic and financially gated. */
+const {Client}=require('pg');const{randomUUID}=require('node:crypto');const path=require('node:path');const{collect}=require('../customer-integrity/collect');const{compareSnapshots,readJson}=require('../customer-integrity/lib');
+function normalizeCpf(value){const cpf=String(value||'').replace(/\D/g,'');if(cpf.length!==11||/^(\d)\1{10}$/.test(cpf))return null;const digit=(length)=>{let sum=0;for(let i=0;i<length;i+=1)sum+=Number(cpf[i])*(length+1-i);const r=(sum*10)%11;return r===10?0:r;};return digit(9)===Number(cpf[9])&&digit(10)===Number(cpf[10])?cpf:null;}
+function option(name){const raw=process.argv.find(arg=>arg.startsWith(`--${name}=`));return raw?raw.slice(name.length+3):null;}
+function parseOptions(){const apply=process.argv.includes('--apply');const batchId=option('batch-id')||process.env.CUSTOMER_PERSON_BATCH_ID||null;const batchSize=Number(option('batch-size')||1000);if(!Number.isInteger(batchSize)||batchSize<1||batchSize>2000)throw new Error('batch-size deve estar entre 1 e 2000');if(apply&&process.env.CUSTOMER_PERSON_BACKFILL_ENABLED!=='1')throw new Error('Aplicação bloqueada: defina CUSTOMER_PERSON_BACKFILL_ENABLED=1');if(apply&&(!batchId||!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{7,79}$/.test(batchId)))throw new Error('Aplicação exige --batch-id único (8 a 80 caracteres seguros)');return{apply,batchId,batchSize};}
+async function findConflicts(client){const{rows}=await client.query(`SELECT regexp_replace(c.cpf,'\\D','','g') cpf,count(DISTINCT c.person_id)::int persons FROM customers c WHERE c.person_id IS NOT NULL AND length(regexp_replace(coalesce(c.cpf,''),'\\D','','g'))=11 GROUP BY 1 HAVING count(DISTINCT c.person_id)>1`);return rows;}
+async function candidates(client){return(await client.query(`SELECT id,cpf,name,email,phone,created_at FROM customers WHERE cpf IS NOT NULL AND btrim(cpf)<>'' AND person_id IS NULL ORDER BY created_at,id`)).rows;}
+async function applyOne(client,c,cpf,batchId){const proposed=randomUUID();const{rows}=await client.query(`INSERT INTO persons(id,cpf_normalized,identity_status,name,email,phone,primary_customer_id,first_registration_at,first_registration_source,created_at,updated_at) VALUES($1,$2,'confirmed',$3,$4,$5,$6,$7,'flow',now(),now()) ON CONFLICT(cpf_normalized) DO UPDATE SET updated_at=persons.updated_at RETURNING id`,[proposed,cpf,c.name,c.email,c.phone,c.id,c.created_at]);const personId=rows[0].id;const updated=await client.query('UPDATE customers SET person_id=$1 WHERE id=$2 AND person_id IS NULL',[personId,c.id]);if(updated.rowCount!==1)return false;await client.query(`INSERT INTO person_identifiers(id,person_id,type,normalized_value,unique_key,verified,source,source_customer_id,verified_at,created_at,updated_at) VALUES($1,$2,'cpf',$3,$5,true,'customer_backfill',$4,now(),now(),now()) ON CONFLICT(person_id,type,normalized_value) DO NOTHING`,[randomUUID(),personId,cpf,c.id,`cpf:${cpf}`]);await client.query(`INSERT INTO person_link_audits(id,person_id,entity_type,entity_id,rule,confidence,automatic,batch_id,metadata,created_at) VALUES($1,$2,'customer',$3,'valid_cpf_exact',100,true,$4,$5::jsonb,now()) ON CONFLICT(person_id,entity_type,entity_id,rule) DO NOTHING`,[randomUUID(),personId,c.id,batchId,JSON.stringify({cpfLast4:cpf.slice(-4),source:'safe_backfill_v2'})]);return true;}
+async function run(){const opts=parseOptions();const connectionString=process.env.DATABASE_PUBLIC_URL||process.env.DATABASE_URL;if(!connectionString)throw new Error('DATABASE_PUBLIC_URL ou DATABASE_URL ausente');const client=new Client({connectionString,ssl:{rejectUnauthorized:false}});await client.connect();const report={mode:opts.apply?'apply':'dry-run',batchId:opts.batchId,batchSize:opts.batchSize,scanned:0,eligible:0,invalid:0,applied:0,remaining:0,gate:'not-run'};try{const conflicts=await findConflicts(client);if(conflicts.length)throw new Error(`Conflito bloqueante: ${conflicts.length} CPF(s) já ligados a Persons diferentes`);if(opts.apply){const reused=await client.query('SELECT 1 FROM person_link_audits WHERE batch_id=$1 LIMIT 1',[opts.batchId]);if(reused.rowCount)throw new Error(`batch-id já utilizado: ${opts.batchId}`);}const rows=await candidates(client);report.scanned=rows.length;const valid=[];for(const customer of rows){const cpf=normalizeCpf(customer.cpf);if(cpf)valid.push({customer,cpf});else report.invalid+=1;}report.eligible=valid.length;report.remaining=valid.length;if(!opts.apply){console.log(JSON.stringify(report,null,2));return report;}await client.query('BEGIN');await client.query("SET LOCAL statement_timeout='120s'");const before=await collect(client);for(const item of valid.slice(0,opts.batchSize))if(await applyOne(client,item.customer,item.cpf,opts.batchId))report.applied+=1;const after=await collect(client);const config=readJson(path.join(__dirname,'..','customer-integrity','config.json'));const failures=compareSnapshots(before,after,config);if(failures.length)throw new Error(`Gate financeiro reprovado: ${JSON.stringify(failures)}`);report.gate='approved';report.remaining=valid.length-report.applied;await client.query('COMMIT');console.log(JSON.stringify(report,null,2));return report;}catch(error){try{await client.query('ROLLBACK');}catch{}throw error;}finally{await client.end();}}
+if(require.main===module)run().catch(error=>{console.error(error.message);process.exitCode=1;});module.exports={normalizeCpf,parseOptions,findConflicts,run};
