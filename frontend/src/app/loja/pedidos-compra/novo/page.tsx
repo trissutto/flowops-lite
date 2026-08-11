@@ -11,13 +11,13 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
-  ArrowLeft, Plus, Trash2, Loader2, Save, Package,
+  Plus, Trash2, Loader2, Save,
   AlertCircle, Copy, X, Eye, Check, Printer, ChevronDown,
-  Tag, Coins, Ruler,
+  Tag, FilePlus2, Search, Clock3, Shirt, CheckCircle2,
 } from 'lucide-react';
+import { PoShell } from '../PoShell';
 import { api } from '@/lib/api';
 import { ordemTamanho } from '@/lib/ordem-tamanho';
 import {
@@ -829,47 +829,63 @@ export default function NovoPedidoPage() {
   };
 
   return (
-    <div className="purchase-order-theme min-h-screen">
-      <header className="po-page-header sticky top-0 z-30">
-        <div className="max-w-[1760px] mx-auto px-4 py-3 flex items-center gap-3">
-          <Link href="/loja/pedidos-compra" className="po-header-back" aria-label="Voltar para pedidos de compra">
-            <ArrowLeft className="w-5 h-5" />
-          </Link>
-          <div className="po-header-icon">
-            <Package className="w-5 h-5" />
+    <PoShell
+      crumbs={[
+        { label: 'Loja', href: '/loja' },
+        { label: 'Pedidos de compra', href: '/loja/pedidos-compra' },
+        { label: orderId ? 'Lançamento' : 'Novo pedido' },
+      ]}
+    >
+          {/* Cabeçalho da página */}
+          <div className="po-page-head">
+            <div className="po-page-icon">
+              <FilePlus2 className="w-6 h-6" />
+            </div>
+            <h1 className="po-page-title">Pedido de Compra</h1>
+            <span className="po-page-badge">{orderId ? 'Pedido salvo' : 'Novo pedido'}</span>
+            <div className="po-page-stats">
+              <div className="po-page-stat">
+                <b>{items.length}</b>
+                <span>referência{items.length === 1 ? '' : 's'}</span>
+              </div>
+              <div className="po-page-stat">
+                <b>{totalPecas}</b>
+                <span>peças</span>
+              </div>
+              <div className="po-page-stat">
+                <b>R$ {totalCusto.toFixed(2).replace('.', ',')}</b>
+                <span>valor total</span>
+              </div>
+            </div>
+            <div className="po-page-actions">
+              <button
+                onClick={salvar}
+                disabled={saving || !!conferindoId || carregandoPedido || items.length === 0}
+                className="po-btn-secondary"
+                title="Salva o pedido como está (rascunho no servidor)"
+              >
+                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                Salvar rascunho
+              </button>
+              <button
+                onClick={salvar}
+                disabled={saving || !!conferindoId || carregandoPedido || items.length === 0}
+                className="po-save-button"
+              >
+                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                {orderId && items.every((i) => i.conferido) ? 'Abrir pedido' : 'Salvar pedido'}
+              </button>
+            </div>
           </div>
-          <div className="flex-1">
-            <h1 className="text-lg font-black text-white tracking-tight">
-              {orderId ? 'Pedido de compra — lançamento' : 'Novo pedido de compra'}
-            </h1>
-            <p className="text-xs text-[#E8D69B]">
-              {items.length} REF(s) · <b>{totalPecas}</b> peças · R$ {totalCusto.toFixed(2)}
-              {orderId && (
-                <span className="ml-2 font-bold text-white/80">
-                  · pedido salvo — REFs conferidas já no estoque
-                </span>
-              )}
-            </p>
-          </div>
-          <button
-            onClick={salvar}
-            disabled={saving || !!conferindoId || carregandoPedido || items.length === 0}
-            className="po-save-button"
-          >
-            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-            {orderId && items.every((i) => i.conferido) ? 'Abrir pedido' : 'Salvar pedido'}
-          </button>
-        </div>
-      </header>
 
-      <main className="max-w-[1760px] mx-auto p-4 space-y-4">
+          <main className="space-y-5">
         {carregandoPedido && (
-          <div className="rounded-xl border border-[#D2B15B]/50 bg-[#102A46] p-3 text-sm font-bold text-white">
+          <div className="rounded-xl border border-[#e4e8ee] bg-white p-3 text-sm font-bold text-[#16233a] shadow-sm">
             Carregando pedido…
           </div>
         )}
         {error && (
-          <div className="bg-rose-50 border border-rose-300 text-rose-700 rounded-lg p-3 flex items-center gap-2">
+          <div className="bg-rose-50 border border-rose-200 text-rose-700 rounded-xl p-3 flex items-center gap-2">
             <AlertCircle className="w-5 h-5" />
             <span className="text-sm font-bold">{error}</span>
           </div>
@@ -877,13 +893,17 @@ export default function NovoPedidoPage() {
 
         {/* Header do pedido */}
         <section className="po-panel">
-          <div className="po-order-panel-header flex items-center justify-between gap-3">
-            <h2 className="po-section-title">Dados do pedido</h2>
-            <span className="hidden sm:block text-xs font-semibold text-white/65">
+          <div className="po-panel-head">
+            <div>
+              <h2 className="po-panel-title">Dados do pedido</h2>
+              <p className="po-panel-subtitle">Informações comerciais e fornecedor</p>
+            </div>
+            <span className="po-panel-hint hidden sm:inline-flex">
+              <Clock3 />
               Defina fornecedor, marca e coleção uma única vez
             </span>
           </div>
-          <div className="po-order-panel-content space-y-4">
+          <div className="space-y-4">
 
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-12">
             {/* Fornecedor autocomplete */}
@@ -904,39 +924,42 @@ export default function NovoPedidoPage() {
                   </span>
                 )}
               </label>
-              <input
-                value={fornecedorNome}
-                onChange={(e) => {
-                  setFornecedorNome(e.target.value);
-                  // Se user editou nome, invalida CNPJ ate clicar no autocomplete
-                  if (fornecedorCnpj) setFornecedorCnpj('');
-                  setShowFornDropdown(true);
-                }}
-                onFocus={() => setShowFornDropdown(true)}
-                onBlur={() => {
-                  setTimeout(() => setShowFornDropdown(false), 200);
-                  handleFornecedorBlur();
-                }}
-                placeholder="Digite a MARCA do fornecedor (ex: MARRIE, MALWEE)..."
-                className={`po-input ${
-                  fornecedorNome.trim() && !fornecedorCnpj.trim()
-                    ? 'border-rose-400 bg-rose-50'
-                    : fornecedorCnpj.trim()
-                    ? 'border-emerald-300 bg-emerald-50'
-                    : 'border-slate-300'
-                }`}
-              />
+              <div className="po-input-icon-wrap">
+                <input
+                  value={fornecedorNome}
+                  onChange={(e) => {
+                    setFornecedorNome(e.target.value);
+                    // Se user editou nome, invalida CNPJ ate clicar no autocomplete
+                    if (fornecedorCnpj) setFornecedorCnpj('');
+                    setShowFornDropdown(true);
+                  }}
+                  onFocus={() => setShowFornDropdown(true)}
+                  onBlur={() => {
+                    setTimeout(() => setShowFornDropdown(false), 200);
+                    handleFornecedorBlur();
+                  }}
+                  placeholder="Digite a MARCA do fornecedor (ex: MARRIE, MALWEE)..."
+                  className={`po-input ${
+                    fornecedorNome.trim() && !fornecedorCnpj.trim()
+                      ? 'border-rose-400 bg-rose-50'
+                      : fornecedorCnpj.trim()
+                      ? 'border-emerald-300 bg-emerald-50'
+                      : ''
+                  }`}
+                />
+                <Search />
+              </div>
               {showFornDropdown && (
-                <div className="absolute top-full left-0 right-0 mt-1 bg-white border-2 border-[#D2B15B] rounded-xl shadow-2xl max-h-72 overflow-y-auto z-10">
+                <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-[#e4e8ee] rounded-xl shadow-2xl max-h-72 overflow-y-auto z-10">
                   {fornecedoresFiltered.length > 0 ? (
                     fornecedoresFiltered.map((f) => (
                       <button
                         key={f.cnpj + f.nome}
                         type="button"
                         onClick={() => escolherFornecedor(f)}
-                        className="w-full text-left px-3 py-2 hover:bg-[#FBF6E6] border-b border-slate-100 last:border-b-0"
+                        className="w-full text-left px-3 py-2 hover:bg-[#fbf4e3] border-b border-slate-100 last:border-b-0"
                       >
-                        <div className="font-bold text-sm text-[#071A33]">
+                        <div className="font-bold text-sm text-[#16233a]">
                           {f.fantasia || f.nome}
                           {f.fantasia && (
                             <span className="ml-2 text-[9px] font-bold uppercase text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded">
@@ -1005,32 +1028,34 @@ export default function NovoPedidoPage() {
           </div>
 
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-12">
-            <div className="lg:col-span-10">
-              <label className="po-label">Observações</label>
-              <textarea
-                value={observacoes}
-                onChange={(e) => setObservacoes(e.target.value)}
-                rows={2}
-                className="po-input po-observations"
-              />
-            </div>
             <div className="lg:col-span-2">
               <label className="po-label">Fator padrão</label>
               <div className="relative">
                 <input
                   value={markup}
                   onChange={(e) => setMarkup(e.target.value.replace(',', '.'))}
-                  placeholder="2.5"
+                  placeholder="2,35"
                   inputMode="decimal"
-                  className="po-input border-[#D2B15B] bg-[#FBF6E6] font-mono font-black text-[#071A33]"
+                  className="po-input font-mono font-bold"
                 />
-                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-[#9A7827] font-bold pointer-events-none">
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-[#a6afbd] font-bold pointer-events-none">
                   ×
                 </span>
               </div>
-              <div className="text-[10px] text-slate-500 mt-1">
+              <div className="text-[11px] text-[#8a94a3] mt-1">
                 Custo líquido × markup = preço sugerido
               </div>
+            </div>
+            <div className="lg:col-span-10">
+              <label className="po-label">Observações</label>
+              <textarea
+                value={observacoes}
+                onChange={(e) => setObservacoes(e.target.value)}
+                rows={2}
+                placeholder="Observações sobre o pedido, fornecedor ou condições comerciais..."
+                className="po-input po-observations"
+              />
+              <div className="po-char-counter">{observacoes.length}/500</div>
             </div>
           </div>
           </div>
@@ -1084,7 +1109,7 @@ export default function NovoPedidoPage() {
           </button>
         </section>
       </main>
-    </div>
+    </PoShell>
   );
 }
 
@@ -1222,15 +1247,16 @@ function ItemEditor({
         aria-expanded={false}
         aria-controls={`pedido-item-corpo-${item.tempId}`}
         aria-label={`Reabrir REF ${item.ref.trim().toUpperCase()}`}
-        className="group flex min-h-16 w-full items-stretch overflow-hidden rounded-xl border border-[#D2B15B] bg-white text-left shadow-sm transition hover:border-[#B8912B] hover:shadow-md focus:outline-none focus:ring-2 focus:ring-[#D2B15B] focus:ring-offset-2"
+        className="po-collapsed-ref group focus:outline-none focus:ring-2 focus:ring-[#d3ac52] focus:ring-offset-2"
       >
-        <span className="w-1.5 shrink-0 bg-[#D2B15B]" aria-hidden="true" />
+        <span className="po-collapsed-bar" aria-hidden="true" />
         <span className="flex flex-1 items-center justify-between gap-3 px-5 py-3">
-          <span className="text-base font-black uppercase tracking-wide text-[#071A33]">
+          <span className="inline-flex items-center gap-2 text-base font-extrabold uppercase tracking-wide text-[#16233a]">
+            <CheckCircle2 className="h-4.5 w-4.5 text-emerald-600" aria-hidden="true" />
             REF {item.ref.trim().toUpperCase()}
           </span>
           <ChevronDown
-            className="h-5 w-5 shrink-0 text-[#8C7325] transition-transform group-hover:translate-y-0.5"
+            className="h-5 w-5 shrink-0 text-[#c19a2e] transition-transform group-hover:translate-y-0.5"
             aria-hidden="true"
           />
         </span>
@@ -1239,34 +1265,36 @@ function ItemEditor({
   }
 
   return (
-    <div className={`po-item-card ${item.conferido ? 'border-[#D2B15B]' : ''}`}>
+    <div className={`po-item-card ${item.conferido ? 'border-[#d3ac52]' : ''}`}>
       {/* Header da REF */}
-      <div className="po-item-toolbar flex items-center justify-between gap-2">
+      <div className="po-item-toolbar">
         {item.conferido ? (
           <button
             type="button"
             onClick={onToggleExpanded}
             aria-expanded={true}
             aria-controls={`pedido-item-corpo-${item.tempId}`}
-            className="flex items-center gap-2 rounded-lg px-2 py-1 text-xs font-black uppercase tracking-wider text-[#071A33] hover:bg-[#FBF6E6] focus:outline-none focus:ring-2 focus:ring-[#D2B15B]"
+            className="flex items-center gap-2 rounded-lg px-2 py-1 text-sm font-extrabold uppercase tracking-wide text-[#16233a] hover:bg-[#fbf4e3] focus:outline-none focus:ring-2 focus:ring-[#d3ac52]"
             title="Recolher esta referencia"
           >
-            <ChevronDown className="h-4 w-4 rotate-180 text-[#8C7325]" aria-hidden="true" />
+            <ChevronDown className="h-4 w-4 rotate-180 text-[#c19a2e]" aria-hidden="true" />
             REF {item.ref.trim().toUpperCase()}
           </button>
         ) : (
           <div className="po-item-title">
-            Item #{index}
+            <Tag aria-hidden="true" />
+            Item {String(index).padStart(2, '0')}
+            {item.ref.trim() && <span className="font-bold text-[#55647a]">— Ref. {item.ref.trim().toUpperCase()}</span>}
           </div>
         )}
         <div className="flex items-center gap-2 flex-wrap justify-end">
           <span className="po-item-summary">
-            <b>{totalLinha}</b> peças · R$ {custoTotal.toFixed(2)}
+            <b>{totalLinha}</b> peças <span className="mx-1 text-[#c9cfd8]">•</span> R$ {custoTotal.toFixed(2).replace('.', ',')}
           </span>
           {item.conferido ? (
             <>
               <span
-                className="text-[10px] font-black uppercase text-emerald-700 bg-emerald-50 border border-emerald-300 px-2 py-1 rounded-lg"
+                className="text-[11px] font-extrabold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1.5 rounded-lg"
                 title="REF conferida: cadastrada e com estoque lançado. O card fica travado — ajustes são na tela do pedido."
               >
                 ✓ Conferida · {item.conferido.pecas} pç no estoque
@@ -1279,10 +1307,13 @@ function ItemEditor({
                     '_blank',
                   )
                 }
-                className="po-icon-action text-[#071A33]"
+                className="po-icon-action"
                 title="Reabrir etiquetas desta REF"
               >
                 <Printer className="w-4 h-4" />
+              </button>
+              <button type="button" onClick={onDuplicate} className="po-icon-action" title="Duplicar referência" aria-label="Duplicar referência">
+                <Copy className="w-4 h-4" />
               </button>
             </>
           ) : (
@@ -1291,32 +1322,31 @@ function ItemEditor({
                 type="button"
                 onClick={onConferir}
                 disabled={conferindo}
-                title="Confere a REF e lança o estoque"
-                className="po-action"
+                className="po-action-secondary"
+                title="Conferir e gerar etiquetas desta REF"
               >
-                {conferindo ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
-                Conferir
+                <Tag className="w-4 h-4" />
+                Etiquetas
+              </button>
+              <button type="button" onClick={onDuplicate} className="po-action-secondary" title="Duplicar referência">
+                <Copy className="w-4 h-4" />
+                Duplicar
+              </button>
+              <button type="button" onClick={onRemove} className="po-delete-action" title="Excluir referência" aria-label="Excluir referência">
+                <Trash2 className="w-4 h-4" />
+                <span>Excluir</span>
               </button>
               <button
                 type="button"
                 onClick={onConferir}
                 disabled={conferindo}
-                className="po-action-secondary"
-                title="Conferir e gerar etiquetas desta REF"
+                title="Confere a REF e lança o estoque"
+                className="po-action"
               >
-                <Printer className="w-3.5 h-3.5" />
-                Etiquetas
+                {conferindo ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                Conferir
               </button>
             </>
-          )}
-          <button type="button" onClick={onDuplicate} className="po-icon-action" title="Duplicar referência" aria-label="Duplicar referência">
-            <Copy className="w-4 h-4" />
-          </button>
-          {!item.conferido && (
-            <button type="button" onClick={onRemove} className="po-delete-action" title="Excluir referência" aria-label="Excluir referência">
-              <Trash2 className="w-4 h-4" />
-              <span>Excluir</span>
-            </button>
           )}
         </div>
       </div>
@@ -1328,16 +1358,13 @@ function ItemEditor({
         className={`min-w-0 border-0 p-0 m-0 space-y-3 ${item.conferido ? 'opacity-55 pointer-events-none' : ''}`}
       >
       <section className="po-item-section">
-        <div className="po-section-bar">
-          <Tag className="h-5 w-5" aria-hidden="true" />
-          <span>Identificação</span>
-        </div>
-        <div className="po-section-content space-y-5">
+        <div className="po-subsection">Produto</div>
+        <div className="space-y-5">
 
       {/* Linha 1: REF destacada + Plus Size compacto */}
-      <div className="po-identity-primary grid grid-cols-1 items-end gap-4 sm:grid-cols-[minmax(280px,420px)_minmax(240px,300px)_1fr]">
-        <div>
-          <label className="po-label">Referência *</label>
+      <div className="po-identity-primary grid grid-cols-1 items-end gap-4 sm:grid-cols-[minmax(240px,320px)_minmax(240px,300px)_1fr]">
+        <div className="po-ref-box">
+          <span className="po-ref-box-label">Referência *</span>
           <input
             value={item.ref}
             onChange={(e) => onUpdate({ ref: e.target.value.toUpperCase() })}
@@ -1352,7 +1379,7 @@ function ItemEditor({
             checked={item.plusSize}
             onChange={(e) => onUpdate({ plusSize: e.target.checked })}
           />
-          <span className="po-plus-symbol" aria-hidden="true">✦</span>
+          <span className="po-plus-symbol" aria-hidden="true"><Shirt /></span>
           <span className="po-plus-copy">
             <strong>Plus Size</strong>
             <small>Grade 46–60</small>
@@ -1454,15 +1481,12 @@ function ItemEditor({
 
       {/* PRECIFICAÇÃO — custo e venda em destaque, ajustes compactos */}
       <section className="po-item-section">
-        <div className="po-section-bar">
-          <Coins className="h-5 w-5" aria-hidden="true" />
-          <span>Precificação</span>
-        </div>
+        <div className="po-subsection">Precificação</div>
       <div className="po-price-band">
         <div className="grid grid-cols-2 gap-2 items-end md:grid-cols-6 lg:grid-cols-12">
           {/* Custo */}
-          <div className="po-price-card po-cost-card lg:col-span-2">
-            <label className="po-label">Custo R$ *</label>
+          <div className="lg:col-span-2">
+            <label className="po-label">Custo R$ *<span className="po-info" title="Custo unitário de compra da peça">ⓘ</span></label>
             <input
               value={item.custoUnit}
               onChange={(e) => onUpdate({ custoUnit: e.target.value })}
@@ -1495,14 +1519,14 @@ function ItemEditor({
           </div>
           {/* Custo líquido (calc) */}
           <div className="lg:col-span-1">
-            <label className="po-label">= Líquido</label>
+            <label className="po-label">Líquido<span className="po-info" title="Custo − desconto + imposto">ⓘ</span></label>
             <div className="po-calculated-value">
-              R$ {custoLiquido.toFixed(2).replace('.', ',')}
+              {custoLiquido.toFixed(2).replace('.', ',')}
             </div>
           </div>
           {/* Fator compacto */}
           <div className="po-compact-price lg:col-span-1">
-            <label className="po-label">Fator ×</label>
+            <label className="po-label">Fator<span className="po-info" title={`Markup do item. Plus=${MARKUP_PLUS}, Reg=${MARKUP_REGULAR}`}>ⓘ</span></label>
             <input
               value={item.markup}
               onChange={(e) => { onUpdate({ markup: e.target.value }); setPrecoEditadoManual(false); }}
@@ -1514,7 +1538,7 @@ function ItemEditor({
           </div>
           {/* Sugerido */}
           <div className="lg:col-span-2">
-            <label className="po-label">Preço sugerido</label>
+            <label className="po-label">Preço sugerido<span className="po-info" title="Custo líquido × fator, arredondado pra ,90 — clique pra aplicar">ⓘ</span></label>
             <button
               type="button"
               onClick={() => {
@@ -1524,22 +1548,27 @@ function ItemEditor({
               className="po-suggested-value"
               title="Clique pra aplicar"
             >
-              R$ {precoSugeridoRedondo.toFixed(2).replace('.', ',')}
+              {precoSugeridoRedondo.toFixed(2).replace('.', ',')}
             </button>
           </div>
           {/* Preço editável */}
-          <div className="po-price-card po-sale-card col-span-2 md:col-span-2 lg:col-span-4">
-            <label className="po-label">Preço de venda *</label>
-            <input
-              value={item.precoUnit}
-              onChange={(e) => {
-                setPrecoEditadoManual(true);
-                onUpdate({ precoUnit: e.target.value });
-              }}
-              placeholder="0,00"
-              inputMode="decimal"
-              className="po-money-input po-sale-input"
-            />
+          <div className="col-span-2 md:col-span-2 lg:col-span-4">
+            <div className="po-sale-box">
+              <span className="po-sale-box-label">Preço de venda <span className="po-info" title="É o preço que sai na etiqueta">ⓘ</span></span>
+              <div className="flex items-baseline gap-1.5">
+                <span className="text-[19px] font-extrabold text-[#c19a2e]">R$</span>
+                <input
+                  value={item.precoUnit}
+                  onChange={(e) => {
+                    setPrecoEditadoManual(true);
+                    onUpdate({ precoUnit: e.target.value });
+                  }}
+                  placeholder="0,00"
+                  inputMode="decimal"
+                  className="po-money-input po-sale-input"
+                />
+              </div>
+            </div>
           </div>
         </div>
         {/* Resumo de margem */}
@@ -1566,11 +1595,8 @@ function ItemEditor({
       </section>
 
       <section className="po-item-section">
-        <div className="po-section-bar po-grade-bar">
-          <div className="flex items-center gap-2">
-            <Ruler className="h-5 w-5" aria-hidden="true" />
-            <span>Grade e cores</span>
-          </div>
+        <div className="po-grade-bar">
+          <div className="po-subsection !my-0">Grade e cores</div>
           <div className="po-grade-presets">
             {GRADE_PRESETS.map((g) => {
               const active = item.gradePresetId
@@ -1591,7 +1617,7 @@ function ItemEditor({
             })}
           </div>
         </div>
-        <div className="po-section-content po-grade-content space-y-4">
+        <div className="space-y-4">
 
       {/* Tamanhos (chips) */}
       <div className="po-grade-options-row">
@@ -1668,7 +1694,7 @@ function ItemEditor({
                 for (const t of item.tamanhos) total += Number(item.grade[`${c}|${t}`] || 0);
                 return (
                   <tr key={c}>
-                    <td className="p-2 font-black text-[#071A33] text-xs">{c}</td>
+                    <td className="p-2 font-black text-[#16233a] text-xs">{c}</td>
                     {item.tamanhos.map((t) => (
                       <td key={t} className="p-0.5">
                         <input
@@ -1698,7 +1724,7 @@ function ItemEditor({
                         />
                       </td>
                     ))}
-                    <td className="p-2 text-center font-black text-[#071A33] tabular-nums text-sm">{total}</td>
+                    <td className="p-2 text-center font-black text-[#16233a] tabular-nums text-sm">{total}</td>
                   </tr>
                 );
               })}
@@ -1769,22 +1795,22 @@ function DescricaoPreview({ item }: { item: ItemForm }) {
   }
 
   return (
-    <div className="bg-gradient-to-r from-violet-50 to-emerald-50 border-2 border-violet-200 rounded-lg p-3">
+    <div className="bg-[#fdf9ee] border border-[#e8d9ab] rounded-xl p-3.5">
       <div className="flex items-center gap-2 mb-1">
-        <Eye className="w-3.5 h-3.5 text-violet-600" />
-        <span className="text-[10px] font-black uppercase text-violet-700 tracking-wider">
-          Descricao que vai pro cadastro
+        <Eye className="w-3.5 h-3.5 text-[#c19a2e]" />
+        <span className="text-[11px] font-extrabold text-[#8a6d1f]">
+          Descrição que vai pro cadastro
         </span>
         {combinacoes > 0 && (
-          <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded">
+          <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">
             {combinacoes} SKU(s)
           </span>
         )}
       </div>
-      <div className="font-mono text-sm font-black text-slate-800 break-all">
+      <div className="font-mono text-sm font-extrabold text-[#16233a] break-all">
         {descricaoExemplo}
       </div>
-      <div className="text-[10px] text-slate-500 mt-1">
+      <div className="text-[11px] text-[#8a94a3] mt-1">
         Cada cor x tamanho gera um SKU com sua propria descricao. Acima e so um exemplo.
       </div>
     </div>

@@ -12,10 +12,11 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
-  ArrowLeft, Plus, Search, Loader2, AlertCircle, Package,
+  Plus, Search, Loader2, AlertCircle, Package,
   Truck, CheckCircle2, Clock, FileText, Calendar, Trash2,
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import { PoShell } from './PoShell';
 
 type Order = {
   id: string;
@@ -88,86 +89,78 @@ export default function PedidosComprapage() {
   }, [fetchData]);
 
   return (
-    <div className="min-h-screen bg-slate-50">
-      {/* Header */}
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-30">
-        <div className="max-w-[1400px] mx-auto px-4 py-3 flex items-center gap-3">
-          <Link href="/loja" className="p-2 rounded-lg hover:bg-slate-100">
-            <ArrowLeft className="w-5 h-5 text-slate-600" />
-          </Link>
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-500 to-violet-700 flex items-center justify-center">
-            <Package className="w-5 h-5 text-white" />
-          </div>
-          <div className="flex-1">
-            <h1 className="text-lg font-black text-slate-800">Pedidos de Compra</h1>
-            <p className="text-xs text-slate-500">Fornecedor · conferência · auto-cadastro</p>
-          </div>
-          <Link
-            href="/loja/pedidos-compra/novo"
-            className="flex items-center gap-2 px-4 py-2.5 bg-violet-600 hover:bg-violet-700 text-white font-bold text-sm rounded-lg shadow-md"
-          >
+    <PoShell crumbs={[{ label: 'Loja', href: '/loja' }, { label: 'Pedidos de compra' }]}>
+      {/* Cabeçalho da página */}
+      <div className="po-page-head">
+        <div className="po-page-icon">
+          <Package className="w-6 h-6" />
+        </div>
+        <h1 className="po-page-title">Pedidos de Compra</h1>
+        <span className="po-page-badge">{orders.length} pedido{orders.length === 1 ? '' : 's'}</span>
+        <div className="po-page-actions">
+          <Link href="/loja/pedidos-compra/novo" className="po-save-button">
             <Plus className="w-4 h-4" />
             Novo pedido
           </Link>
         </div>
+      </div>
 
-        {/* Filtros */}
-        <div className="max-w-[1400px] mx-auto px-4 pb-3 flex flex-wrap items-center gap-2">
-          <div className="relative flex-1 min-w-[240px]">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Buscar fornecedor, NF, marca..."
-              className="w-full pl-8 pr-3 py-2 border rounded-lg text-sm"
-            />
-          </div>
-          <select
-            value={status}
-            onChange={(e) => setStatus(e.target.value)}
-            className="px-3 py-2 border rounded-lg text-sm bg-white"
-          >
-            <option value="">Todos status</option>
-            {Object.entries(STATUS_INFO).map(([k, v]) => (
-              <option key={k} value={k}>{v.label}</option>
-            ))}
-          </select>
+      {/* Filtros */}
+      <div className="po-panel !p-3 flex flex-wrap items-center gap-2">
+        <div className="relative flex-1 min-w-[240px]">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#a6afbd]" />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Buscar fornecedor, NF, marca..."
+            className="po-input !pl-9"
+          />
         </div>
-      </header>
+        <select
+          value={status}
+          onChange={(e) => setStatus(e.target.value)}
+          className="po-select !w-auto min-w-[160px]"
+        >
+          <option value="">Todos status</option>
+          {Object.entries(STATUS_INFO).map(([k, v]) => (
+            <option key={k} value={k}>{v.label}</option>
+          ))}
+        </select>
+      </div>
 
-      <main className="max-w-[1400px] mx-auto p-4">
+      <main>
         {loading ? (
           <div className="p-12 text-center">
-            <Loader2 className="w-8 h-8 animate-spin text-violet-600 mx-auto" />
+            <Loader2 className="w-8 h-8 animate-spin text-[#c19a2e] mx-auto" />
           </div>
         ) : error ? (
-          <div className="bg-rose-50 border border-rose-200 text-rose-700 rounded-lg p-4">
+          <div className="bg-rose-50 border border-rose-200 text-rose-700 rounded-xl p-4">
             <AlertCircle className="w-5 h-5 inline mr-2" />
             {error}
           </div>
         ) : orders.length === 0 ? (
-          <div className="bg-white border border-slate-200 rounded-2xl p-16 text-center">
-            <Package className="w-12 h-12 text-slate-300 mx-auto" />
-            <div className="text-base font-bold text-slate-700 mt-3">Nenhum pedido cadastrado</div>
-            <div className="text-xs text-slate-500 mt-1">Comece criando seu primeiro pedido de compra</div>
+          <div className="po-panel !p-16 text-center">
+            <Package className="w-12 h-12 text-[#c9cfd8] mx-auto" />
+            <div className="text-base font-bold text-[#16233a] mt-3">Nenhum pedido cadastrado</div>
+            <div className="text-xs text-[#8a94a3] mt-1">Comece criando seu primeiro pedido de compra</div>
             <Link
               href="/loja/pedidos-compra/novo"
-              className="inline-flex items-center gap-2 mt-4 px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white text-sm rounded-lg font-bold"
+              className="po-save-button !inline-flex mt-4"
             >
               <Plus className="w-4 h-4" />
               Criar primeiro pedido
             </Link>
           </div>
         ) : (
-          <div className="space-y-2">
+          <div className="space-y-2.5">
             {orders.map((o) => {
               const st = STATUS_INFO[o.status] || STATUS_INFO.rascunho;
               const Icon = st.icon;
               return (
                 <div
                   key={o.id}
-                  className="group relative bg-white border border-slate-200 rounded-xl hover:border-violet-300 hover:shadow-md transition"
+                  className="group relative bg-white border border-[#e4e8ee] rounded-2xl shadow-[0_1px_2px_rgba(16,24,40,.04)] hover:border-[#d3ac52] hover:shadow-md transition"
                 >
                   <button
                     type="button"
@@ -192,12 +185,12 @@ export default function PedidosComprapage() {
                     className="block p-4"
                   >
                     <div className="flex items-center gap-4">
-                    <div className="w-12 h-12 rounded-xl bg-violet-100 flex items-center justify-center shrink-0">
-                      <span className="text-violet-700 font-black text-sm">#{o.numero}</span>
+                    <div className="w-12 h-12 rounded-xl bg-[#16263d] flex items-center justify-center shrink-0">
+                      <span className="text-[#e8c766] font-black text-sm">#{o.numero}</span>
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-0.5">
-                        <div className="font-bold text-slate-800 truncate">{o.fornecedorNome}</div>
+                        <div className="font-bold text-[#16233a] truncate">{o.fornecedorNome}</div>
                         {o.marca && o.marca !== o.fornecedorNome && (
                           <span className="text-[10px] font-bold bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded">
                             {o.marca}
@@ -238,8 +231,8 @@ export default function PedidosComprapage() {
                       </div>
                     </div>
                     <div className="text-right shrink-0">
-                      <div className="text-[10px] text-slate-500 uppercase tracking-wider">Total custo</div>
-                      <div className="text-lg font-black text-slate-800 tabular-nums">{brl(o.totalCusto)}</div>
+                      <div className="text-[10px] text-[#8a94a3] uppercase tracking-wider">Total custo</div>
+                      <div className="text-lg font-black text-[#16233a] tabular-nums">{brl(o.totalCusto)}</div>
                       <div className="text-[10px] text-emerald-600 tabular-nums">Venda {brl(o.totalVenda)}</div>
                     </div>
                     </div>
@@ -250,6 +243,6 @@ export default function PedidosComprapage() {
           </div>
         )}
       </main>
-    </div>
+    </PoShell>
   );
 }
