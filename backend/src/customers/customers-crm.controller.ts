@@ -250,8 +250,19 @@ export class CustomersCrmController {
 
   @Get('identity-review')
   @AdminOnly()
-  identityReviewList(@Query('page') page?: string, @Query('limit') limit?: string) {
-    return this.identityReview.list(page ? Number(page) : 1, limit ? Number(limit) : 20);
+  identityReviewList(
+    @Query('page') page?: string, @Query('limit') limit?: string,
+    @Query('priority') priority?: string, @Query('type') type?: string,
+    @Query('channel') channel?: string, @Query('linkState') linkState?: string,
+    @Query('search') search?: string,
+  ) {
+    return this.identityReview.list({ page: page ? Number(page) : 1, limit: limit ? Number(limit) : 20, priority, type, channel, linkState, search });
+  }
+
+  @Get('identity-review-history')
+  @AdminOnly()
+  identityReviewHistory(@Query('page') page?: string, @Query('limit') limit?: string) {
+    return this.identityReview.history(page ? Number(page) : 1, limit ? Number(limit) : 30);
   }
 
   @Get('identity-review/:key')
