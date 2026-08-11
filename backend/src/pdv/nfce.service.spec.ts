@@ -8,7 +8,10 @@ describe('NfceService - sequencia fiscal', () => {
 
   it('reutiliza o numero ja reservado sem incrementar a configuracao', async () => {
     const tx = {
-      $queryRawUnsafe: jest.fn().mockResolvedValueOnce([{ nfce_number: '155' }]),
+      $queryRawUnsafe: jest
+        .fn()
+        .mockResolvedValueOnce([{ nfce_number: '155' }])
+        .mockResolvedValueOnce([{ id: 'attempt-1' }]),
       $executeRawUnsafe: jest.fn(),
     };
     const prisma = { $transaction: (fn: any) => fn(tx) };
@@ -17,8 +20,32 @@ describe('NfceService - sequencia fiscal', () => {
     const numero = await (service as any).reserveNumero('sale-1', '10', '4');
 
     expect(numero).toBe(155);
-    expect(tx.$queryRawUnsafe).toHaveBeenCalledTimes(1);
+    expect(tx.$queryRawUnsafe).toHaveBeenCalledTimes(2);
+    expect(tx.$queryRawUnsafe.mock.calls[1][0]).toContain('nfce_attempts');
     expect(tx.$executeRawUnsafe).not.toHaveBeenCalled();
+  });
+
+  it('ignora numero fake do stub de preview (sem nfce_attempt) e renumera pelo contador', async () => {
+    const tx = {
+      $queryRawUnsafe: jest
+        .fn()
+        .mockResolvedValueOnce([{ nfce_number: '462823380' }])
+        .mockResolvedValueOnce([]) // nenhum attempt com esse numero
+        .mockResolvedValueOnce([{ numero_atual: 198 }]),
+      $executeRawUnsafe: jest.fn().mockResolvedValue(1),
+    };
+    const prisma = { $transaction: (fn: any) => fn(tx) };
+    const service = serviceWith(prisma);
+
+    const numero = await (service as any).reserveNumero('sale-stub', '02', '6');
+
+    expect(numero).toBe(198);
+    expect(tx.$executeRawUnsafe).toHaveBeenCalledWith(
+      expect.stringContaining('UPDATE pdv_sales'),
+      '198',
+      '6',
+      'sale-stub',
+    );
   });
 
   it('reserva novo numero com UPDATE atomico e o associa a venda', async () => {

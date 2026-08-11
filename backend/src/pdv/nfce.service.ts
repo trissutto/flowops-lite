@@ -242,7 +242,17 @@ export class NfceService {
       if (!locked) throw new BadRequestException('Venda nao encontrada durante reserva da NFC-e');
 
       const existente = parseInt(String(locked.nfce_number || ''), 10);
-      if (Number.isFinite(existente) && existente > 0) return existente;
+      if (Number.isFinite(existente) && existente > 0) {
+        // Só reusa número reservado por emissão REAL (tem nfce_attempt).
+        // Vendas finalizadas até 11/08/26 carregam número fake do stub de
+        // preview (timestamp) — esse tem que ser ignorado e renumerado.
+        const [attempt] = await tx.$queryRawUnsafe(
+          `SELECT id FROM nfce_attempts WHERE sale_id = $1 AND numero = $2 LIMIT 1`,
+          saleId,
+          existente,
+        );
+        if (attempt) return existente;
+      }
 
       const [cfg] = await tx.$queryRawUnsafe(
         `UPDATE nfce_configs
