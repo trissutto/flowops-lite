@@ -2442,11 +2442,40 @@ model Person {
   linkAudits               PersonLinkAudit[]
   mergeAuditsAsSurvivor    PersonMergeAudit[] @relation("PersonMergeSurvivor")
   mergeAuditsAsSource      PersonMergeAudit[] @relation("PersonMergeSource")
+  reviewDecisions          PersonReviewDecision[]
 
   @@index([identityStatus])
   @@index([mergedIntoId])
   @@index([firstRegistrationStoreId])
   @@map("persons")
+}
+
+/// Decisao humana sobre uma sugestao fraca de identidade (telefone/Instagram).
+/// Nao move compras ou financeiro: registra apenas o vinculo Customer -> Person,
+/// com estado anterior suficiente para desfazer de forma segura.
+model PersonReviewDecision {
+  id                  String    @id @default(uuid())
+  suggestionType      String    @map("suggestion_type") @db.VarChar(20)
+  suggestionHash      String    @map("suggestion_hash") @db.VarChar(64)
+  participantKey      String    @map("participant_key") @db.VarChar(64)
+  participantIds      Json      @map("participant_ids")
+  decision            String    @db.VarChar(20)
+  destinationPersonId String?   @map("destination_person_id")
+  actorUserId         String?   @map("actor_user_id") @db.VarChar(120)
+  reason              String    @db.Text
+  previousState       Json      @map("previous_state")
+  decidedAt           DateTime  @default(now()) @map("decided_at")
+  rolledBackAt        DateTime? @map("rolled_back_at")
+  rolledBackByUserId  String?   @map("rolled_back_by_user_id") @db.VarChar(120)
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  destinationPerson Person? @relation(fields: [destinationPersonId], references: [id], onDelete: Restrict)
+
+  @@unique([suggestionType, suggestionHash, participantKey])
+  @@index([decision, decidedAt(sort: Desc)])
+  @@index([destinationPersonId])
+  @@map("person_review_decisions")
 }
 
 model PersonIdentifier {

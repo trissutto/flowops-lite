@@ -13,10 +13,11 @@ import { WooCommerceModule } from '../woocommerce/woocommerce.module';
 import { AuthModule } from '../auth/auth.module';
 import { ErpModule } from '../erp/erp.module';
 import { PersonIdentityModule } from '../person-identity/person-identity.module';
+import { CustomerIdentityReviewService } from './customer-identity-review.service';
 
 @Module({
   imports: [OrdersModule, WooCommerceModule, AuthModule, ErpModule, PersonIdentityModule],
-  providers: [CustomersService, CustomersCrmService, CustomersEtlService, CustomersGigaEtlService, CashbackConfigService],
+  providers: [CustomersService, CustomersCrmService, CustomerIdentityReviewService, CustomersEtlService, CustomersGigaEtlService, CashbackConfigService],
   controllers: [CustomersController, CustomersCrmController, CashbackConfigController, CustomerResumeController],
   exports: [CustomersService, CustomersCrmService, CustomersEtlService, CustomersGigaEtlService, CashbackConfigService],
 })
