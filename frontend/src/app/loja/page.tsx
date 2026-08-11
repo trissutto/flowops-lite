@@ -55,6 +55,7 @@ const LOJA_ITEMS: LojaItem[] = [
   { href: '/retaguarda/banners',              label: 'Banners',        subtitle: 'Vitrine',     description: 'Hero da home · faixas · tarja do topo', tone: 'purple', icon: GalleryHorizontal },
   { href: '/retaguarda/categorias',           label: 'Categorias',     subtitle: 'Vitrine',     description: 'Foto, nome e ordem no menu do site', tone: 'purple', icon: Tags },
   { href: '/retaguarda/classificar-produtos', label: 'Classificar Produtos', subtitle: 'Catálogo', description: 'Categoria e subcategoria do site, em lote', tone: 'purple', icon: Tags },
+  { href: '/retaguarda/modulo-produtos', label: 'Módulo Produtos (triagem)', subtitle: 'Reorganização', description: 'As 43 telas de produto numeradas, com uso real — teste e responda pelo número', tone: 'purple', icon: Tags },
   { href: '/retaguarda/categorias-mapa',      label: 'Vincular Categorias', subtitle: 'Catálogo', description: 'De-para WooCommerce → categoria do site', tone: 'purple', icon: Tags },
   { href: '/retaguarda/produtos-agrupados',   label: 'Produtos agrupados', subtitle: 'Catálogo', description: 'Mesma peça em REFs diferentes (cor)', tone: 'purple', icon: Package2 },
   { href: '/retaguarda/loja-frete',           label: 'Frete & Cupons', subtitle: 'Site',        description: 'Frete grátis · promocional · cupons', tone: 'sky',    icon: Truck        },
