@@ -16,6 +16,7 @@ import { CustomersEtlService } from './customers-etl.service';
 import { CustomersGigaEtlService } from './customers-giga-etl.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { AdminOnly, AdminOnlyGuard } from '../auth/admin-only.guard';
+import { CustomerIdentityReviewService } from './customer-identity-review.service';
 
 /**
  * Rotas do CRM real (model Customer no banco).
@@ -34,6 +35,7 @@ export class CustomersCrmController {
     private readonly svc: CustomersCrmService,
     private readonly etl: CustomersEtlService,
     private readonly gigaEtl: CustomersGigaEtlService,
+    private readonly identityReview: CustomerIdentityReviewService,
   ) {}
 
   // ─── ETL Woo → Customers (só admin) ──────────────────────────────────────
@@ -244,6 +246,36 @@ export class CustomersCrmController {
   @AdminOnly()                                            // criar tag é da matriz
   createTag(@Body() body: { name: string; description?: string; color?: string }) {
     return this.svc.createTag(body.name, body.description, body.color);
+  }
+
+  @Get('identity-review')
+  @AdminOnly()
+  identityReviewList(@Query('page') page?: string, @Query('limit') limit?: string) {
+    return this.identityReview.list(page ? Number(page) : 1, limit ? Number(limit) : 20);
+  }
+
+  @Get('identity-review/:key')
+  @AdminOnly()
+  identityReviewDetail(@Param('key') key: string) {
+    return this.identityReview.detail(key);
+  }
+
+  @Post('identity-review/:key/confirm')
+  @AdminOnly()
+  identityReviewConfirm(@Req() req: any, @Param('key') key: string, @Body() body: { reason: string }) {
+    return this.identityReview.confirm(key, body.reason, this.actor(req));
+  }
+
+  @Post('identity-review/:key/reject')
+  @AdminOnly()
+  identityReviewReject(@Req() req: any, @Param('key') key: string, @Body() body: { reason: string }) {
+    return this.identityReview.reject(key, body.reason, this.actor(req));
+  }
+
+  @Post('identity-review/decisions/:id/rollback')
+  @AdminOnly()
+  identityReviewRollback(@Req() req: any, @Param('id') id: string) {
+    return this.identityReview.rollback(id, this.actor(req));
   }
 
   // ─── CRUD principal ──────────────────────────────────────────────────────

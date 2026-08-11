@@ -18,7 +18,7 @@ import {
   LayoutDashboard, BarChart3, DollarSign, Users, ShoppingBag,
   Shuffle, Truck, AlertTriangle, FileSearch, Activity, ArrowLeft,
   Globe2, Store, Settings, Megaphone, CreditCard, ClipboardList,
-  Package, Bell, Network, Tag, Building2,
+  Package, Bell, Network, Tag, Building2, ShieldCheck,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import AdminShell, { type AdminNavItem } from '@/components/AdminShell';
@@ -42,6 +42,7 @@ interface GestaoItem {
 }
 
 const GESTAO_ITEMS: GestaoItem[] = [
+  { href: '/retaguarda/revisao-identidade', label: 'Revisar identidade', subtitle: 'Clientes', description: 'Confirmar sugestoes de mesma pessoa', tone: 'purple', icon: ShieldCheck },
   { href: '/retaguarda/produto-estoque',      label: 'Produto & Estoque', subtitle: 'Módulo unificado', description: 'Ficha Master · grades · entradas · movimentações', tone: 'teal', icon: Package },
   { href: '/retaguarda/demandas',             label: 'Demandas',          subtitle: 'Backlog',       description: 'Prompt + prints · criticidade', tone: 'amber',  icon: ClipboardList },
   { href: '/retaguarda/conciliacao',          label: 'Conciliação',       subtitle: 'Financeiro',    description: 'Stone · PagBank · Pagar.me × vendas', tone: 'green', icon: DollarSign },
