@@ -5,6 +5,8 @@ import { CustomersCrmService } from './customers-crm.service';
 import { CustomersCrmController } from './customers-crm.controller';
 import { CustomersEtlService } from './customers-etl.service';
 import { CustomersGigaEtlService } from './customers-giga-etl.service';
+import { CpfWooService } from './cpf-woo.service';
+import { WpDbModule } from '../wp-db/wp-db.module';
 import { CashbackConfigService } from './cashback-config.service';
 import { CashbackConfigController } from './cashback-config.controller';
 import { CustomerResumeController } from './customer-resume.controller';
@@ -16,8 +18,8 @@ import { PersonIdentityModule } from '../person-identity/person-identity.module'
 import { CustomerIdentityReviewService } from './customer-identity-review.service';
 
 @Module({
-  imports: [OrdersModule, WooCommerceModule, AuthModule, ErpModule, PersonIdentityModule],
-  providers: [CustomersService, CustomersCrmService, CustomerIdentityReviewService, CustomersEtlService, CustomersGigaEtlService, CashbackConfigService],
+  imports: [OrdersModule, WooCommerceModule, AuthModule, ErpModule, WpDbModule, PersonIdentityModule],
+  providers: [CustomersService, CustomersCrmService, CustomerIdentityReviewService, CustomersEtlService, CustomersGigaEtlService, CashbackConfigService, CpfWooService],
   controllers: [CustomersController, CustomersCrmController, CashbackConfigController, CustomerResumeController],
   exports: [CustomersService, CustomersCrmService, CustomersEtlService, CustomersGigaEtlService, CashbackConfigService],
 })
