@@ -4930,6 +4930,26 @@ function PaymentModal({
           }
         } catch { /* não deu pra conferir — cai no erro normal abaixo */ }
       }
+      /**
+       * VENDA QUE NÃO EXISTE MAIS NO SERVIDOR (11/08/2026).
+       *
+       * A auditoria achou cobranças PIX PAGAS cujo saleId não existe em tabela
+       * nenhuma: a tela estava numa venda que o servidor não conhece (aba
+       * velha, venda recriada), o QR foi gerado assim mesmo, a cliente pagou —
+       * e a vendedora ficava presa num erro seco, sem saber que O DINHEIRO
+       * ENTROU. O guard novo impede gerar QR nessa situação; se ainda assim
+       * acontecer, o recado precisa dizer o que fazer com o pagamento.
+       */
+      if (/n[ãa]o encontrada/i.test(String(e?.message || '')) && (pixPaid || pixOnline)) {
+        toast(
+          'error',
+          'ATENÇÃO: pagamento recebido, venda perdida',
+          'A cliente PAGOU, mas esta venda não existe mais no servidor. NÃO cobre de novo. ' +
+            'Anote o valor e avise a matriz — o pagamento aparece em "PIX órfãos" do admin. ' +
+            'Depois recarregue o PDV (F5) e refaça a venda como VENDA ONLINE já paga.',
+        );
+        return;
+      }
       const h = humanizeError(e);
       toast('error', h.title, h.hint);
     } finally {

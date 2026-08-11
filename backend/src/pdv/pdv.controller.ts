@@ -174,6 +174,53 @@ export class PdvController {
   }
 
   /**
+   * GET /pdv/pix-orfaos — PIX PagBank PAGO cujo saleId não é venda, carrinho
+   * nem baixa de crediário (admin).
+   *
+   * É a lista do dinheiro invisível: a auditoria de 11/08 achou 11 desses em
+   * 48h (R$88 a R$1.448) — pagos, na conta, e sem registro pra fechar. O guard
+   * no `POST /pagbank/pix/create` estanca a origem; isto aqui é a conferência
+   * do que já entrou e do que ainda escapar.
+   */
+  @Get('pix-orfaos')
+  async pixOrfaos(@Req() req: any, @Query('dias') dias?: string) {
+    const role = req?.user?.role;
+    if (role !== 'admin') throw new ForbiddenException('Apenas admin');
+    const janela = Math.min(90, Math.max(1, Number(dias) || 30));
+    const desde = new Date(Date.now() - janela * 86_400_000);
+
+    const pagos: any[] = await (this.svc as any).prisma.pagbankPayment.findMany({
+      where: { status: 'paid', paidAt: { gte: desde } },
+      orderBy: { paidAt: 'desc' },
+      select: {
+        saleId: true, pagbankOrderId: true, valor: true, storeCode: true,
+        method: true, paidAt: true, createdAt: true,
+      },
+    });
+
+    const orfaos: any[] = [];
+    for (const p of pagos) {
+      const [venda, cart, baixa] = await Promise.all([
+        (this.svc as any).prisma.pdvSale.findUnique({ where: { id: p.saleId }, select: { id: true } }),
+        (this.svc as any).prisma.livePdvCart
+          .findUnique({ where: { id: p.saleId }, select: { id: true } })
+          .catch(() => null),
+        (this.svc as any).prisma.crediarioBaixa
+          .findUnique({ where: { id: p.saleId }, select: { id: true } })
+          .catch(() => null),
+      ]);
+      if (!venda && !cart && !baixa) orfaos.push(p);
+    }
+    return {
+      janelaDias: janela,
+      totalPagos: pagos.length,
+      orfaos: orfaos.length,
+      valorTotal: orfaos.reduce((s, p) => s + Number(p.valor || 0), 0),
+      itens: orfaos,
+    };
+  }
+
+  /**
    * GET /pdv/erp-outbox — status da fila de sync ERP (admin).
    * Mostra contagens por status, job pendente mais antigo e últimas falhas.
    */
