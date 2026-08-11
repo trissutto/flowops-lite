@@ -6535,3 +6535,26 @@ model CashbackUso {
   @@index([storeCode, createdAt])
   @@map("cashback_usos")
 }
+
+/// ÚLTIMO ACESSO POR TELA — a resposta pra "que telas ninguém usa?".
+///
+/// Pedido do dono em 11/08/2026, ao planejar a reorganização dos módulos:
+/// são 223 rotas no CRM e nenhum registro de uso — nem aqui, nem na Vercel
+/// (Web Analytics nunca foi ligado). Sem isso, decidir que tela morre é
+/// achismo.
+///
+/// UMA LINHA POR ROTA, não uma por acesso: a pergunta é "quando foi a última
+/// vez e quantas vezes", não auditoria de navegação. Rota dinâmica entra
+/// normalizada (/pedidos/[id]) — senão cada pedido viraria uma linha.
+model PageAccess {
+  /// Rota normalizada: /retaguarda/clientes, /pedidos/[id]...
+  path      String   @id @db.VarChar(160)
+  hits      Int      @default(0)
+  lastAt    DateTime @map("last_at")
+  /// Papel de quem acessou por último (admin/store) — diz QUEM usa a tela.
+  lastRole  String?  @map("last_role") @db.VarChar(20)
+  lastStore String?  @map("last_store") @db.VarChar(10)
+
+  @@index([lastAt])
+  @@map("page_access")
+}
