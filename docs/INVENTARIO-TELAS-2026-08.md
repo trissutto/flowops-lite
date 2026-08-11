@@ -2,7 +2,7 @@
 
 **223 rotas** no frontend. 88 com botão em hub (/loja, /retaguarda, /config, /gestao), 70 alcançáveis só por link interno, 48 sem link nenhum (acesso só por URL digitada — parte é pública de propósito: /cadastro-live, /meus-pedidos, /p/:id).
 
-**Acesso por tela: começou a contar HOJE.** Não existia registro em lugar nenhum (nem Vercel Analytics). A tabela  agora grava última visita, contagem e papel de quem usou — consulta em . Em ~1 semana este relatório ganha a coluna que decide os cortes.
+**Acesso por tela: começou a contar HOJE.** Não existia registro em lugar nenhum (nem Vercel Analytics). A tabela `page_access` agora grava última visita, contagem e papel de quem usou — consulta em `GET /telemetria/paginas`. Em ~1 semana este relatório ganha a coluna que decide os cortes.
 
 Gerado por script (scratchpad/inventario.js + segmentar.js). Regenerar após mudanças de rota.
 
