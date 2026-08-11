@@ -17,6 +17,7 @@ import { CustomersGigaEtlService } from './customers-giga-etl.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { AdminOnly, AdminOnlyGuard } from '../auth/admin-only.guard';
 import { CpfWooService } from './cpf-woo.service';
+import { CpfRestService } from './cpf-rest.service';
 import { CustomerIdentityReviewService } from './customer-identity-review.service';
 
 /**
@@ -37,6 +38,7 @@ export class CustomersCrmController {
     private readonly etl: CustomersEtlService,
     private readonly gigaEtl: CustomersGigaEtlService,
     private readonly cpfWoo: CpfWooService,
+    private readonly cpfRest: CpfRestService,
     private readonly identityReview: CustomerIdentityReviewService,
   ) {}
 
@@ -64,6 +66,37 @@ export class CustomersCrmController {
   @AdminOnly()
   cpfWooBackfill(@Query('aplicar') aplicar?: string) {
     return this.cpfWoo.backfill(aplicar === '1' || aplicar === 'true');
+  }
+
+
+  /**
+   * CPF DOS PEDIDOS ANTIGOS pela API REST do WooCommerce — ver CpfRestService.
+   * O caminho por MySQL morreu (o WordPress mudou de servidor); a REST responde.
+   */
+  @Post('cpf-rest/sync')
+  @AdminOnly()
+  @HttpCode(202)
+  cpfRestIniciar(@Query('de') de?: string) {
+    return this.cpfRest.iniciar(Math.max(1, Number(de) || 1));
+  }
+
+  @Get('cpf-rest/status')
+  @AdminOnly()
+  cpfRestStatus() {
+    return this.cpfRest.status();
+  }
+
+  @Post('cpf-rest/cancelar')
+  @AdminOnly()
+  cpfRestCancelar() {
+    return this.cpfRest.cancelar();
+  }
+
+  /** Leva o CPF do pedido pro cadastro. SECO por padrão; ?aplicar=1 grava. */
+  @Post('cpf-rest/propagar')
+  @AdminOnly()
+  cpfRestPropagar(@Query('aplicar') aplicar?: string) {
+    return this.cpfRest.propagarParaClientes(aplicar === '1' || aplicar === 'true');
   }
 
   // ─── ETL Woo → Customers (só admin) ──────────────────────────────────────
