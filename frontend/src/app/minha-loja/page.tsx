@@ -197,6 +197,14 @@ export default function MinhaLojaPage() {
   const [realignmentPending, setRealignmentPending] = useState(0);
   // Badge de remessas chegando (filial destino). Mostra no card "Receber".
   const [shipmentsIncoming, setShipmentsIncoming] = useState(0);
+  // ── FILA DE TAREFAS (piloto 11/08) ──
+  // Caixa de remessa ABERTA com peça dentro é a maior fonte de "estoque não
+  // baixou": a etiqueta imprime com a caixa aberta, a loja despacha e esquece
+  // o "Fechar e enviar" — o destino nunca vê a remessa (caso Piracicaba/Santos
+  // 11/08). Tudo que está pendente vira tarefa clicável no topo da home.
+  const [openBoxes, setOpenBoxes] = useState<any[]>([]);
+  const [incomingShipments, setIncomingShipments] = useState<any[]>([]);
+  const [pendingPieces, setPendingPieces] = useState<any[]>([]);
   const autoMaximizeTimers = useRef<Map<string, number>>(new Map());
   const originalTitleRef = useRef<string>('LURDS ORDER ONE');
 
@@ -266,7 +274,7 @@ export default function MinhaLojaPage() {
         }
         // Carrega IDs já notificados hoje — protege contra reload do Electron
         if (profile.storeId) loadSeenFromStorage(profile.storeId);
-        await Promise.all([loadRows(), loadLiveRows(), loadRealignmentCount(), loadShipmentsIncoming()]);
+        await Promise.all([loadRows(), loadLiveRows(), loadTasksData()]);
       } catch (err: any) {
         setError(err?.message ?? 'Erro ao carregar perfil');
         if (String(err?.message ?? '').startsWith('401')) {
@@ -375,24 +383,22 @@ export default function MinhaLojaPage() {
 
   // Carrega count de realinhamento pendente (pra badge no card do launchpad).
   // Silencioso: se falhar, mostra 0 e segue a vida — não bloqueia a tela.
-  const loadRealignmentCount = useCallback(async () => {
-    try {
-      const items = await api<Array<{ id: string }>>('/realignment/mine');
-      setRealignmentPending(Array.isArray(items) ? items.length : 0);
-    } catch {
-      setRealignmentPending(0);
-    }
-  }, []);
-
-  // Carrega contagem de remessas chegando (filial destino) — alimenta badge
-  // no card "Receber". Silencioso em caso de erro.
-  const loadShipmentsIncoming = useCallback(async () => {
-    try {
-      const items = await api<Array<{ id: string }>>('/realignment/shipments/incoming');
-      setShipmentsIncoming(Array.isArray(items) ? items.length : 0);
-    } catch {
-      setShipmentsIncoming(0);
-    }
+  // Carrega TUDO que vira tarefa na fila "O que fazer agora" (e alimenta os
+  // badges dos cards) numa ida só: caixas abertas da loja, remessas chegando
+  // e peças de realinhamento aguardando separação. Silencioso em erro — a
+  // fila simplesmente não mostra aquela fonte.
+  const loadTasksData = useCallback(async () => {
+    const [open, inc, mine] = await Promise.all([
+      api<any[]>('/realignment/shipments/open').catch(() => []),
+      api<any[]>('/realignment/shipments/incoming').catch(() => []),
+      api<any[]>('/realignment/mine').catch(() => []),
+    ]);
+    // Caixa vazia não é tarefa — só entra caixa com peça dentro.
+    setOpenBoxes(Array.isArray(open) ? open.filter((s) => (s?.items || []).length > 0) : []);
+    setIncomingShipments(Array.isArray(inc) ? inc : []);
+    setPendingPieces(Array.isArray(mine) ? mine : []);
+    setShipmentsIncoming(Array.isArray(inc) ? inc.length : 0);
+    setRealignmentPending(Array.isArray(mine) ? mine.length : 0);
   }, []);
 
   // ---------- Socket ----------
@@ -524,10 +530,12 @@ export default function MinhaLojaPage() {
         setRealignmentPending((prev) => prev + count);
         pushToast(`🔁 Realinhamento: ${count} peça(s) pra separar e enviar`);
       }
+      loadTasksData(); // fila "O que fazer agora" reflete na hora
     };
     // Quando a própria loja marca enviado em outra aba — sincroniza badge.
     const onRealignmentSent = (_payload: any) => {
       setRealignmentPending((prev) => Math.max(0, prev - 1));
+      loadTasksData();
     };
 
     // Pedido da LIVE liberado pra esta loja — mesma dinâmica do pedido do site
@@ -578,7 +586,93 @@ export default function MinhaLojaPage() {
       socket.off('live-pdv:separation-new', onLiveSeparationNew);
       socket.off('live-pdv:separation-removed', onLiveSeparationRemoved);
     };
-  }, [me, loadLiveRows]);
+  }, [me, loadLiveRows, loadTasksData]);
+
+  // A fila de tarefas se atualiza sozinha a cada 60s — caixa aberta envelhece
+  // e fica vermelha sem depender de reload manual (o PC da loja fica dias aberto).
+  useEffect(() => {
+    if (!me) return;
+    const t = window.setInterval(() => {
+      loadTasksData();
+    }, 60_000);
+    return () => window.clearInterval(t);
+  }, [me, loadTasksData]);
+
+  // ── Monta a fila "O que fazer agora" (vermelho = parado, amarelo = a fazer) ──
+  const storeTasks = useMemo(() => {
+    const now = Date.now();
+    const horas = (iso?: string | null) =>
+      iso ? Math.max(0, (now - new Date(iso).getTime()) / 3_600_000) : 0;
+    const idadeTxt = (h: number) =>
+      h >= 48 ? `${Math.floor(h / 24)} dias` : h >= 1 ? `${Math.floor(h)}h` : `${Math.max(1, Math.round(h * 60))}min`;
+    const tasks: Array<{
+      key: string; urgency: 'red' | 'yellow'; icon: any; title: string; subtitle: string; go: () => void;
+    }> = [];
+
+    for (const s of openBoxes) {
+      const h = horas(s.openedAt);
+      tasks.push({
+        key: `caixa-${s.id}`,
+        urgency: h >= 4 ? 'red' : 'yellow',
+        icon: Package,
+        title: `Fechar caixa ${s.code} → ${s.toStoreName || s.toStoreCode}`,
+        subtitle: `${(s.items || []).length} peça(s) · aberta há ${idadeTxt(h)} · o estoque SÓ baixa quando fechar`,
+        go: () => router.push('/minha-loja/realinhamento'),
+      });
+    }
+    for (const s of incomingShipments) {
+      const h = horas(s.sentAt || s.openedAt);
+      tasks.push({
+        key: `receber-${s.id}`,
+        urgency: h >= 72 ? 'red' : 'yellow',
+        icon: Inbox,
+        title: `Receber remessa de ${s.fromStoreName || s.fromStoreCode}`,
+        subtitle: `${s.totalQty || '?'} peça(s) · ${s.code} · em trânsito há ${idadeTxt(h)}`,
+        go: () => router.push('/minha-loja/recebimento'),
+      });
+    }
+    if (pendingPieces.length > 0) {
+      const oldest = Math.max(...pendingPieces.map((p: any) => horas(p.createdAt)));
+      tasks.push({
+        key: 'realinhamento-pendente',
+        urgency: oldest >= 24 ? 'red' : 'yellow',
+        icon: Shuffle,
+        title: `Separar ${pendingPieces.length} peça(s) pra outras lojas`,
+        subtitle: `realinhamento aguardando bipe${oldest >= 24 ? ` · parado há ${idadeTxt(oldest)}` : ''}`,
+        go: () => router.push('/minha-loja/realinhamento'),
+      });
+    }
+    const scrollPedidos = () => {
+      document.getElementById('fila-pedidos')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    };
+    for (const r of rows) {
+      if (r.status !== 'new' && r.status !== 'separating') continue;
+      const h = horas(r.createdAt);
+      const n = r.order?.wcOrderNumber ?? r.order?.wcOrderId ?? r.id.slice(0, 6);
+      tasks.push({
+        key: `pedido-${r.id}`,
+        urgency: h >= 3 ? 'red' : 'yellow',
+        icon: ShoppingCart,
+        title: `Separar pedido #${n}`,
+        subtitle: `${r.order?.items?.length || '?'} peça(s) · chegou há ${idadeTxt(h)}${r.status === 'separating' ? ' · separação começada' : ''}`,
+        go: scrollPedidos,
+      });
+    }
+    for (const g of liveRows) {
+      tasks.push({
+        key: `live-${g.cartId}`,
+        urgency: 'yellow',
+        icon: Radio,
+        title: `Separar LIVE de ${g.customerName}`,
+        subtitle: `${g.items?.length || '?'} peça(s)${g.liveStoreName ? ` · live ${g.liveStoreName}` : ''}`,
+        go: scrollPedidos,
+      });
+    }
+    // Vermelhas primeiro; dentro da mesma cor mantém a ordem natural das fontes
+    // (caixas → receber → separar → pedidos), que já é a ordem de prioridade.
+    tasks.sort((a, b) => (a.urgency === b.urgency ? 0 : a.urgency === 'red' ? -1 : 1));
+    return tasks;
+  }, [openBoxes, incomingShipments, pendingPieces, rows, liveRows, router]);
 
   // ---------- Notificação + auto-maximize em 5min ----------
   const triggerNewOrderAlert = useCallback((pickOrder: any) => {
@@ -962,13 +1056,63 @@ export default function MinhaLojaPage() {
         )}
       </header>
 
+      {/* ══ O QUE FAZER AGORA — fila de tarefas (piloto 11/08) ══
+          A operadora não precisa saber QUAL tela abrir: tudo que está pendente
+          na loja vira uma linha aqui, com idade e cor de urgência. Vermelho =
+          parado (caixa aberta 4h+, pedido 3h+, remessa em trânsito 3 dias+). */}
+      <div className="max-w-3xl mx-auto px-3 pt-3">
+        {storeTasks.length === 0 ? (
+          <div className="rounded-2xl border-2 border-emerald-200 bg-emerald-50 px-4 py-3 flex items-center gap-2.5">
+            <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+            <div className="text-sm font-bold text-emerald-800">
+              Tudo em dia — nenhum pedido, caixa ou remessa esperando você.
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-2xl border-2 border-slate-200 bg-white shadow-sm overflow-hidden">
+            <div className="px-4 py-2.5 bg-slate-800 text-white flex items-center justify-between">
+              <span className="text-xs font-black tracking-widest uppercase">O que fazer agora</span>
+              <span className="text-[11px] font-bold bg-white/15 rounded-full px-2 py-0.5">
+                {storeTasks.length} tarefa{storeTasks.length === 1 ? '' : 's'}
+              </span>
+            </div>
+            <div className="divide-y divide-slate-100">
+              {storeTasks.map((t) => {
+                const Icon = t.icon;
+                const red = t.urgency === 'red';
+                return (
+                  <button
+                    key={t.key}
+                    type="button"
+                    onClick={t.go}
+                    className={`w-full text-left px-4 py-3 flex items-center gap-3 transition ${
+                      red ? 'bg-rose-50 hover:bg-rose-100' : 'hover:bg-amber-50'
+                    }`}
+                  >
+                    <span className={`shrink-0 w-2.5 h-2.5 rounded-full ${red ? 'bg-rose-500 animate-pulse' : 'bg-amber-400'}`} />
+                    <Icon className={`w-5 h-5 shrink-0 ${red ? 'text-rose-600' : 'text-amber-600'}`} />
+                    <span className="min-w-0 flex-1">
+                      <span className={`block text-sm font-bold truncate ${red ? 'text-rose-900' : 'text-slate-800'}`}>{t.title}</span>
+                      <span className={`block text-[11px] truncate ${red ? 'text-rose-700' : 'text-slate-500'}`}>{t.subtitle}</span>
+                    </span>
+                    <span className={`shrink-0 text-[11px] font-black uppercase ${red ? 'text-rose-600' : 'text-amber-600'}`}>
+                      {red ? 'parado' : 'fazer'} →
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* Quick-action grid — acesso rápido às funções da filial */}
       <div className="max-w-3xl mx-auto px-3 pt-3">
         <QuickActionGrid realignmentPending={realignmentPending} shipmentsIncoming={shipmentsIncoming} />
       </div>
 
       {/* Lista */}
-      <main className="max-w-3xl mx-auto p-3 space-y-3 pb-10">
+      <main id="fila-pedidos" className="max-w-3xl mx-auto p-3 space-y-3 pb-10">
         {/* Botões "Imprimir TODOS" + "RESUMO ESTOQUE" — quando filtra Novos/Separando */}
         {(filterTab === 'new' || filterTab === 'separating') && visibleRows.length > 0 && (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
