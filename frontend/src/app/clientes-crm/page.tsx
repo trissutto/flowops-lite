@@ -106,6 +106,26 @@ interface CustomerDetail extends CustomerListItem {
   tags: Array<{ id: string; name: string; color: string }>;
 }
 
+interface PersonSummary {
+  personId: string | null;
+  personKey: string | null;
+  outros: Array<{
+    id: string;
+    name: string | null;
+    originSource: string | null;
+    originStore: { code: string; name: string } | null;
+    orderCount: number;
+    ltvCents: string;
+  }>;
+  agregado: {
+    totalCadastros: number;
+    totalLtvCents: number;
+    totalOrderCount: number;
+    lojas: string[];
+    canais: string[];
+  } | null;
+}
+
 interface Tag {
   id: string;
   name: string;
@@ -689,7 +709,6 @@ export default function ClientesCrmPage() {
     </div>
   );
 }
-
 // ══════════════════════════════════════════════════════════════════════════
 // StatCard
 // ══════════════════════════════════════════════════════════════════════════
@@ -720,6 +739,7 @@ function CustomerDetailDrawer({
 }) {
   const [tab, setTab] = useState<'perfil' | 'historico' | 'cashback' | 'enderecos' | 'lgpd' | 'tags'>('perfil');
   const [detail, setDetail] = useState<CustomerDetail | null>(null);
+  const [person, setPerson] = useState<PersonSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -727,8 +747,12 @@ function CustomerDetailDrawer({
     setLoading(true);
     setLoadError(null);
     try {
-      const res = await api<CustomerDetail>(`/customers-crm/${customerId}`);
+      const [res, personRes] = await Promise.all([
+        api<CustomerDetail>(`/customers-crm/${customerId}`),
+        api<PersonSummary>(`/customers-crm/${customerId}/by-person`).catch(() => null),
+      ]);
       setDetail(res);
+      setPerson(personRes);
     } catch (e: any) {
       // Sem catch, o drawer ficava ETERNAMENTE em "Carregando..." quando a
       // API falhava (404 de escopo, 500, rede). Agora mostra o erro + retry.
@@ -816,6 +840,20 @@ function CustomerDetailDrawer({
           </div>
         ) : (
           <div className="p-6">
+            {person?.agregado && person.agregado.totalCadastros > 1 && (
+              <div className="mb-5 rounded-xl border border-purple-200 bg-purple-50 p-4">
+                <div className="flex items-center gap-2 text-sm font-bold text-purple-900">
+                  <Users className="h-4 w-4" /> Cadastro unificado da cliente
+                </div>
+                <div className="mt-2 text-sm text-purple-800">
+                  {person.agregado.totalCadastros} cadastros vinculados · {person.agregado.totalOrderCount} compras · {fmtMoney(person.agregado.totalLtvCents)} em compras
+                </div>
+                <div className="mt-1 text-xs text-purple-700">
+                  Canais: {person.agregado.canais.join(', ') || 'não informado'}
+                  {person.agregado.lojas.length > 0 && ` · Lojas: ${person.agregado.lojas.join(', ')}`}
+                </div>
+              </div>
+            )}
             {tab === 'perfil'    && <PerfilTab d={detail} onUpdate={refresh} />}
             {tab === 'historico' && <HistoricoTab customerId={detail.id} />}
             {tab === 'cashback'  && <CashbackTab d={detail} onUpdate={refresh} />}
@@ -1939,4 +1977,3 @@ function Field({ label, value }: { label: string; value: string | null | undefin
     </div>
   );
 }
-        

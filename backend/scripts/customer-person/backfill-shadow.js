@@ -63,11 +63,11 @@ async function main() {
         if (updated.rowCount === 1) {
           await client.query(`
             INSERT INTO person_identifiers (
-              id, person_id, type, normalized_value, verified, source,
+              id, person_id, type, normalized_value, unique_key, verified, source,
               source_customer_id, verified_at, created_at, updated_at
-            ) VALUES ($1, $2, 'cpf', $3, true, 'customer_backfill', $4, now(), now(), now())
+            ) VALUES ($1, $2, 'cpf', $3, $5, true, 'customer_backfill', $4, now(), now(), now())
             ON CONFLICT (person_id, type, normalized_value) DO NOTHING
-          `, [randomUUID(), resolvedPersonId, cpf, customer.id]);
+          `, [randomUUID(), resolvedPersonId, cpf, customer.id, `cpf:${cpf}`]);
           await client.query(`
             INSERT INTO person_link_audits (
               id, person_id, entity_type, entity_id, rule, confidence,
