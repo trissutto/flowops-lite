@@ -1183,6 +1183,58 @@ export class RealignmentController {
   }
 
   /**
+   * GET /realignment/shipments/admin/paradas?minDias=3 · admin/operator
+   *
+   * MUTIRÃO: caixas em trânsito paradas — saíram da origem (estoque baixado)
+   * e ninguém deu entrada no destino, então as peças não estão no estoque de
+   * loja nenhuma. Medição 11/08: 198 remessas / 1.057 peças assim.
+   *
+   * Tem que vir ANTES de `@Get('shipments/admin/:id')`, senão o Nest casa
+   * :id="paradas" (mesma armadilha do needs-stock-reprocess acima).
+   */
+  @Get('shipments/admin/paradas')
+  shipmentsParadas(@Req() req: any, @Query('minDias') minDias?: string) {
+    if (req?.user?.role !== 'admin' && req?.user?.role !== 'operator') {
+      throw new ForbiddenException('Apenas admin/operator');
+    }
+    return this.shipment.listStuckInTransit(Number(minDias) || 3);
+  }
+
+  /**
+   * POST /realignment/shipments/admin/:id/receber · admin/operator
+   * "Chegou": a matriz dá a entrada pela loja destino (+estoque no destino,
+   * remessa vira 'received'). Mesma rotina da loja, sem depender do JWT dela.
+   */
+  @Post('shipments/admin/:id/receber')
+  adminReceberRemessa(@Req() req: any, @Param('id') id: string) {
+    if (req?.user?.role !== 'admin' && req?.user?.role !== 'operator') {
+      throw new ForbiddenException('Apenas admin/operator');
+    }
+    return this.shipment.adminReceberTudo(id, req?.user?.id || req?.user?.sub || undefined);
+  }
+
+  /**
+   * POST /realignment/shipments/admin/:id/reabrir · admin/operator
+   * "Nunca saiu": devolve a caixa pra origem (peças voltam pra fila e o
+   * estoque volta pra loja de origem).
+   */
+  @Post('shipments/admin/:id/reabrir')
+  adminReabrirRemessa(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: { descartarEtiqueta?: boolean; cancelarNota?: boolean; justificativa?: string },
+  ) {
+    if (req?.user?.role !== 'admin' && req?.user?.role !== 'operator') {
+      throw new ForbiddenException('Apenas admin/operator');
+    }
+    return this.shipment.adminReabrir(id, req?.user?.id || req?.user?.sub || undefined, {
+      descartarEtiqueta: body?.descartarEtiqueta ?? true,
+      cancelarNota: !!body?.cancelarNota,
+      justificativa: body?.justificativa,
+    });
+  }
+
+  /**
    * GET /realignment/shipments/admin/:id · admin
    * Detalhe completo de uma remessa qualquer (sem filtro de loja).
    */
