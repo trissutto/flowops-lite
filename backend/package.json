@@ -23,6 +23,7 @@
     "customer-integrity:compare": "node scripts/customer-integrity/compare.js",
     "customer-integrity:test": "node --test scripts/customer-integrity/*.test.js",
     "customer-person:backfill": "node scripts/customer-person/backfill-shadow.js",
+    "customer-person:test": "node --test scripts/customer-person/*.test.js",
     "customer-person:operational": "node scripts/customer-person/backfill-operational.js"
   },
   "dependencies": {
