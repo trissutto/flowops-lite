@@ -3145,6 +3145,10 @@ export class PdvService {
    * Idempotente (não duplica pagamento com o mesmo `pagbankOrderId`) e nunca
    * lança — falha aqui não pode derrubar o ciclo do reconciliador.
    */
+  /** Último motivo de falha do retry de finalize por venda — só pra não
+   *  logar o MESMO "caixa fechado" a cada 30s a noite inteira. */
+  private readonly reconcileRetryFalhas = new Map<string, string>();
+
   async confirmPixPagoSeVendaAberta(input: {
     saleId: string;
     pagbankOrderId: string;
@@ -3162,16 +3166,64 @@ export class PdvService {
 
       const existentes = await (this.prisma as any).pdvSalePayment.findMany({
         where: { saleId: sale.id },
-        select: { details: true },
+        select: { valor: true, details: true },
       });
       const jaRegistrado = (existentes as any[]).some((p: any) => {
         try {
-          return JSON.parse(p.details || '{}')?.pixTxid === input.pagbankOrderId;
+          const det = JSON.parse(p.details || '{}');
+          // venda online grava o id da order em pixTxid E pagbankOrderId
+          return det?.pixTxid === input.pagbankOrderId
+            || det?.pagbankOrderId === input.pagbankOrderId;
         } catch {
           return false;
         }
       });
-      if (jaRegistrado) return { handled: false, reason: 'pagamento_ja_registrado' };
+      if (jaRegistrado) {
+        // ── RETRY DE FINALIZE (caso venda online PagBank, 11/08) ──
+        // O pagamento já está na venda mas ela AINDA está aberta. Dois jeitos
+        // de chegar aqui:
+        //   1. a vendedora registrou o pagamento `venda_online` (com o
+        //      pixTxid do PagBank) e não concluiu o popup — natural, a
+        //      cliente ainda nem tinha pago;
+        //   2. o PRÓPRIO cron registrou o pagamento num ciclo anterior e o
+        //      finalize falhou (caixa fechado à noite — o horário em que
+        //      cliente de venda online mais paga).
+        // O comportamento antigo era desistir pra sempre ("pagamento_ja_
+        // registrado") — a venda ficava aberta com o dinheiro na conta até
+        // alguém notar. Agora: se o pago cobre o total, tenta fechar DE NOVO
+        // a cada ciclo — quando o caixa abrir de manhã, fecha sozinha.
+        // Split incompleto (PIX é só parte do total) segue em silêncio:
+        // a vendedora fecha o restante na tela.
+        const jaPago = (existentes as any[]).reduce(
+          (s: number, p: any) => s + Number(p.valor || 0), 0,
+        );
+        if (jaPago < Number(sale.total) - 0.01) {
+          return { handled: false, reason: 'pagamento_ja_registrado_split_incompleto' };
+        }
+        try {
+          await this.finalize({ saleId: sale.id });
+          this.reconcileRetryFalhas.delete(sale.id);
+          this.logger.log(
+            `[pdv] reconciliador fechou a venda ${sale.id} no RETRY ` +
+              `(PagBank ${input.pagbankOrderId} — pagamento já estava registrado)`,
+          );
+          return { handled: true };
+        } catch (e: any) {
+          // Loga só quando o MOTIVO muda (senão enche o log a cada 30s com
+          // "caixa fechado" a noite inteira). Quando o motivo se resolve
+          // (caixa abre), o finalize passa e a entrada sai do Map.
+          const msg = String(e?.message || e);
+          if (this.reconcileRetryFalhas.get(sale.id) !== msg) {
+            if (this.reconcileRetryFalhas.size > 500) this.reconcileRetryFalhas.clear();
+            this.reconcileRetryFalhas.set(sale.id, msg);
+            this.logger.warn(
+              `[pdv] reconciliador: venda ${sale.id} PAGA (PagBank ${input.pagbankOrderId}) ` +
+                `mas finalize falhou — vou re-tentar a cada ciclo. Motivo: ${msg}`,
+            );
+          }
+          return { handled: false, reason: `finalize_retry_falhou: ${msg}` };
+        }
+      }
 
       await this.addPayment({
         saleId: sale.id,
