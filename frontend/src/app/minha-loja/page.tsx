@@ -209,6 +209,10 @@ export default function MinhaLojaPage() {
   // na medição de 11/08 — o degrau mais pulado do fluxo depois do fechamento.
   // Rota própria (carro da rede) não pede etiqueta e fica de fora.
   const [pendingLabels, setPendingLabels] = useState<any[]>([]);
+  // Loja grande (matriz) acumula dezenas de pendências — 50 linhas de uma vez
+  // é tão inútil quanto lista nenhuma. Mostra as 10 mais urgentes e abre o
+  // resto sob demanda.
+  const [showAllTasks, setShowAllTasks] = useState(false);
   const autoMaximizeTimers = useRef<Map<string, number>>(new Map());
   const originalTitleRef = useRef<string>('LURDS ORDER ONE');
 
@@ -402,10 +406,25 @@ export default function MinhaLojaPage() {
     setOpenBoxes(Array.isArray(open) ? open.filter((s) => (s?.items || []).length > 0) : []);
     setIncomingShipments(Array.isArray(inc) ? inc : []);
     setPendingPieces(Array.isArray(mine) ? mine : []);
-    // Só vira tarefa quem PRECISA de etiqueta: sem etiqueta gerada e fora da
-    // rota própria (o carro da rede não posta nos Correios).
+    // Só vira tarefa quem PRECISA de etiqueta. Três cortes, e o terceiro é o
+    // que evitou a parede de tarefa falsa em Itanhaém (11/08): caixa GRANDE vai
+    // no carro da rede e nunca teve etiqueta pra gerar. A regra do transporte é
+    // a MESMA do backend (dono 29/07): escolha manual manda; sem escolha, até
+    // 10 peças → Correios, acima → próprio.
     setPendingLabels(
-      Array.isArray(labels) ? labels.filter((s) => !s?.jaTemEtiqueta && !s?.rotaPropria) : [],
+      Array.isArray(labels)
+        ? labels.filter((s) => {
+            if (s?.jaTemEtiqueta || s?.rotaPropria) return false;
+            const pecas = Number(s?.totalPecas ?? (s?.items || []).length) || 0;
+            const efetivo =
+              s?.transportMode === 'correios' || s?.transportMode === 'proprio'
+                ? s.transportMode
+                : pecas <= 10
+                  ? 'correios'
+                  : 'proprio';
+            return efetivo === 'correios';
+          })
+        : [],
     );
     setShipmentsIncoming(Array.isArray(inc) ? inc.length : 0);
     setRealignmentPending(Array.isArray(mine) ? mine.length : 0);
@@ -638,7 +657,10 @@ export default function MinhaLojaPage() {
         icon: Truck,
         title: `Gerar etiqueta — ${s.code}`,
         subtitle: `${s.totalPecas || (s.items || []).length} peça(s) → ${s.toStoreName || s.toStoreCode} · fechada há ${idadeTxt(h)} · sem etiqueta o pacote não viaja`,
-        go: () => router.push('/minha-loja/realinhamento'),
+        // ?view=sent porque o painel das caixas fechadas mora na aba "Enviados
+        // hoje" — sem isso a tarefa caía na aba Pendentes e a tela dizia
+        // "Nenhuma peça pendente" (parecia que a tarefa mentia).
+        go: () => router.push('/minha-loja/realinhamento?view=sent'),
       });
     }
     for (const s of incomingShipments) {
@@ -1098,7 +1120,7 @@ export default function MinhaLojaPage() {
               </span>
             </div>
             <div className="divide-y divide-slate-100">
-              {storeTasks.map((t) => {
+              {(showAllTasks ? storeTasks : storeTasks.slice(0, 10)).map((t) => {
                 const Icon = t.icon;
                 const red = t.urgency === 'red';
                 return (
@@ -1122,6 +1144,17 @@ export default function MinhaLojaPage() {
                   </button>
                 );
               })}
+              {storeTasks.length > 10 && (
+                <button
+                  type="button"
+                  onClick={() => setShowAllTasks((v) => !v)}
+                  className="w-full px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-50"
+                >
+                  {showAllTasks
+                    ? '↑ mostrar só as 10 mais urgentes'
+                    : `↓ ver as outras ${storeTasks.length - 10} tarefas`}
+                </button>
+              )}
             </div>
           </div>
         )}
