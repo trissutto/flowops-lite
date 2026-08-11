@@ -377,6 +377,46 @@ const HeroArte = forwardRef<HTMLElement, {
 
   return (
     <section ref={ref} className={cn('relative w-full', className)}>
+      {/**
+       * PRELOAD DO LCP NA MÃO — o `<Image>` emite sozinho, o `getImageProps`
+       * NÃO (10/08/2026).
+       *
+       * Medido no HTML de produção: a home saía com preload de TRÊS FONTES e
+       * NENHUM de imagem. O navegador só descobria o banner depois de parsear
+       * o HTML, com as fontes já na frente dele na fila. É o formato exato do
+       * PageSpeed de hoje — FCP 1,6s (verde) e LCP 4,3s (vermelho): a página
+       * aparece rápido e a arte grande chega quase 3s depois.
+       *
+       * O `fetchPriority` no `<img>` abaixo só age DEPOIS da descoberta; o
+       * atraso estava na descoberta.
+       *
+       * `media` casa com os `<source>` — sem ele o navegador baixaria as DUAS
+       * artes e o remédio viraria veneno. `imageSrcSet` preserva a escolha de
+       * largura e formato (AVIF/WebP) do otimizador.
+       */}
+      {priority && desktop && (
+        <>
+          {mobile && (
+            <link
+              rel="preload"
+              as="image"
+              media="(max-width: 1023px)"
+              imageSrcSet={mobile.props.srcSet}
+              imageSizes="100vw"
+              fetchPriority="high"
+            />
+          )}
+          <link
+            rel="preload"
+            as="image"
+            media="(min-width: 1024px)"
+            imageSrcSet={desktop.props.srcSet}
+            imageSizes="100vw"
+            fetchPriority="high"
+          />
+        </>
+      )}
+
       {desktop && (
         <picture>
           {mobile && <source media="(max-width: 1023px)" srcSet={mobile.props.srcSet} />}

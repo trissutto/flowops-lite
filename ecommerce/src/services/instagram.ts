@@ -30,9 +30,20 @@ interface PostApi {
 export async function getInstagram(limite = 6): Promise<InstagramPost[]> {
   try {
     const posts = await api<PostApi[]>(`/public/loja/instagram?limite=${limite}`, {
-      // Uma hora: post novo demora no máximo isso pra aparecer, e a home
-      // continua servida do cache no meio tempo.
-      revalidate: 3600,
+      /**
+       * 5 min, não 1 hora (10/08/2026).
+       *
+       * O backend JÁ segura 30 min em memória (`InstagramFeedService`), então
+       * o custo real disto não é chamar o Instagram — é chamar o backend, que
+       * responde do cache dele. Guardar mais uma hora POR CIMA disso não
+       * economiza cota da Meta: só atrasa o que já está pronto.
+       *
+       * E atrasa no pior momento. O token da Meta venceu e ficou 3 meses
+       * quebrado; quando foi trocado, a API já devolvia os 6 posts e a home
+       * continuou mostrando a grade estática — o dono concluiu, de novo, que
+       * não tinha funcionado. Quem acabou de consertar precisa VER consertado.
+       */
+      revalidate: 300,
       tags: ['instagram'],
       timeoutMs: 8000,
     });
