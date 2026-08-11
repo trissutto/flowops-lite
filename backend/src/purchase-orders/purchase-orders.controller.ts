@@ -172,6 +172,22 @@ export class PurchaseOrdersController {
     );
   }
 
+  /**
+   * POST /:id/unreceive — ESTORNO de conferência de REF(s).
+   * body.itemIds = ids dos PurchaseOrderItem recebidos que voltam a pendente.
+   * Reverte o estoque que o receive aplicou (mesmos SKUs/qtds de skusGerados)
+   * e libera a REF pra edição no lançamento. Cadastro dos produtos fica.
+   */
+  @Post(':id/unreceive')
+  async unreceive(@Req() req: any, @Param('id') id: string, @Body() body: any) {
+    this.requireWrite(req);
+    return this.svc.unreceiveItems(
+      id,
+      Array.isArray(body?.itemIds) ? body.itemIds : [],
+      this.userId(req),
+    );
+  }
+
   // ── Etiquetas ──
   @Get(':id/labels')
   async labels(@Param('id') id: string) {
