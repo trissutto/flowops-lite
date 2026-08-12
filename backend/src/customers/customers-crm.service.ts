@@ -832,6 +832,25 @@ export class CustomersCrmService {
       nextExpirationCents: records.reduce((sum: number, r: any) => sum + Number(r.cashbackBalance?.nextExpirationCents || 0), 0),
     };
 
+    // A liberação de marcado pertence à ficha física (loja + código),
+    // não ao Customer consolidado. Retornar as fichas separadamente evita
+    // alterar Itanhaém quando o administrador pretendia liberar outra loja.
+    const recordIds = records.map((r: any) => r.id);
+    const markedAuthorizations: any[] = await (this.prisma as any).gigaCliente.findMany({
+      where: {
+        OR: [
+          ...(recordIds.length ? [{ customerId: { in: recordIds } }] : []),
+          ...(seed.personId ? [{ personId: seed.personId }] : []),
+          ...(seed.personKey ? [{ personKey: seed.personKey }] : []),
+        ],
+      },
+      select: {
+        loja: true, codigo: true, avaliacao: true, limiteCompras: true,
+        bloqueado: true, editedAt: true, editedBy: true,
+      },
+      orderBy: [{ loja: 'asc' }, { codigo: 'asc' }],
+    });
+
     return {
       ...canonical,
       id, // mutações continuam ancoradas no Customer aberto e autorizado
@@ -841,6 +860,18 @@ export class CustomersCrmService {
       addresses,
       cashbackTransactions,
       cashbackBalance,
+      markedAuthorizations: markedAuthorizations.map((f: any) => ({
+        storeCode: f.loja,
+        customerCode: f.codigo,
+        evaluation: String(f.avaliacao || '').trim().toUpperCase() || null,
+        limit: f.limiteCompras == null ? null : Number(f.limiteCompras),
+        blocked: String(f.bloqueado || '').trim().toUpperCase() === 'SIM',
+        allowed: String(f.avaliacao || '').trim().toUpperCase() === 'A'
+          && Number(f.limiteCompras || 0) > 0
+          && String(f.bloqueado || '').trim().toUpperCase() !== 'SIM',
+        editedAt: f.editedAt,
+        editedBy: f.editedBy,
+      })),
       personSummary: {
         personId: seed.personId,
         personKey: seed.personKey,
