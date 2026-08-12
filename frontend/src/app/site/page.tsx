@@ -16,7 +16,7 @@ import Link from 'next/link';
 import {
   ClipboardList, Megaphone, Users, Globe, ShoppingBag,
   FileSearch, MessageCircle, Store, ArrowRightLeft, ArrowLeft,
-  LayoutDashboard, Globe2, BarChart3, Settings, DollarSign,
+  LayoutDashboard, Globe2, BarChart3, Settings, DollarSign, UserPlus,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import AdminShell, { type AdminNavItem } from '@/components/AdminShell';
@@ -45,6 +45,7 @@ const SITE_ITEMS: SiteItem[] = [
   { href: '/marketing',                label: 'Marketing',       subtitle: 'CRM',          description: 'Recuperação · campanhas', tone: 'rose',  icon: Megaphone      },
   { href: '/retaguarda/vendedoras',    label: 'Vendedoras',      subtitle: 'Atribuição',   description: 'Quem vende cada pedido',  tone: 'orange', icon: Users         },
   { href: '/retaguarda/publicar-site', label: 'Publicar no Site',subtitle: 'IA',           description: 'Cadastros automáticos',   tone: 'green',  icon: Globe         },
+  { href: '/retaguarda/leads',         label: 'Cadastros do Site', subtitle: 'Cupom 10%',  description: 'Quem deixou contato no popup', tone: 'rose', icon: UserPlus     },
   { href: '/produtos',                 label: 'Produtos Site',   subtitle: 'WooCommerce',  description: 'Catálogo · variações',    tone: 'purple', icon: ShoppingBag   },
   { href: '/retaguarda/baixas-log',    label: 'Log de Baixas',   subtitle: 'Auditoria',    description: 'ERP → WC',                tone: 'amber',  icon: FileSearch    },
   { href: '/site/trocas',              label: 'Trocas Site',     subtitle: 'Devolução',    description: 'Pedidos WC',              tone: 'rose',   icon: ArrowRightLeft },
