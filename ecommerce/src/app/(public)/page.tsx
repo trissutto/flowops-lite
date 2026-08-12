@@ -19,6 +19,7 @@ import { getCategorias } from '@/services/categorias-menu';
 import { fetchVitrine } from '@/services/vitrine';
 import { buildMetadata, itemListSchema, jsonLdGraph, storeSchema } from '@/lib/seo';
 import { HeroImagePreload } from '@/components/sections/HeroImagePreload';
+import { WHATSAPP_ATENDIMENTO } from '@/data/contato';
 
 /**
  * HOME — a jornada da cliente.
@@ -372,7 +373,7 @@ export default async function HomePage() {
             <MapPin /> Ver todas as lojas
           </Button>
           <Button
-            href="https://api.whatsapp.com/send?phone=5513996050174"
+            href={`https://api.whatsapp.com/send?phone=${WHATSAPP_ATENDIMENTO}`}
             external
             variant="whatsapp"
             size="lg"
@@ -390,7 +391,7 @@ export default async function HomePage() {
         primaryAction={{ label: 'Encontrar minha loja', href: '/lojas' }}
         secondaryAction={{
           label: 'Falar no WhatsApp',
-          href: 'https://api.whatsapp.com/send?phone=5513996050174',
+          href: `https://api.whatsapp.com/send?phone=${WHATSAPP_ATENDIMENTO}`,
           external: true,
         }}
         height="md"

@@ -22,6 +22,7 @@ import { mapPeca } from '@/services/products';
 import { maskCpf } from '@/components/checkout/masks';
 import type { Product } from '@/types';
 import type { Order } from '@/types/checkout';
+import { WHATSAPP_ATENDIMENTO } from '@/data/contato';
 
 /**
  * THANK YOU PAGE — a confirmação do pedido.
@@ -42,7 +43,7 @@ import type { Order } from '@/types/checkout';
  * WhatsApp do atendimento do site — por ora o número da unidade Anália
  * Franco; trocar quando o canal dedicado do e-commerce existir.
  */
-const WHATSAPP_ATENDIMENTO = '5511978106947';
+
 
 type Estado =
   | { fase: 'carregando' }
@@ -91,7 +92,7 @@ export default function ConfirmacaoPage() {
   const pago = order.status === 'paid';
   const retirada = order.shipping.kind === 'retirada';
   const store = retirada ? stores.find((s) => s.slug === order.shipping.storeSlug) : undefined;
-  const mensagemZap = encodeURIComponent(`Oi! Acabei de fazer o pedido ${order.number} 💛`);
+  const mensagemZap = encodeURIComponent(`Oi! Acabei de fazer o pedido ${order.number}`);
 
   return (
     <Container width="page" className="py-10 lg:py-16">

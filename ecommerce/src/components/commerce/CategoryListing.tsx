@@ -16,6 +16,7 @@ import { useProductFilters } from '@/hooks/useProductFilters';
 import { useDebounced, useIntersection } from '@/hooks';
 import { fetchFacetas, fetchProducts, filterGroups } from '@/services/products';
 import type { FilterState, Product, SortOption } from '@/types';
+import { WHATSAPP_ATENDIMENTO } from '@/data/contato';
 
 const PER_PAGE = 12;
 
@@ -303,7 +304,7 @@ function CategoryListingInner({
               action={{ label: 'Limpar filtros', onClick: state.clearAll }}
               secondaryAction={{
                 label: 'Falar no WhatsApp',
-                href: 'https://api.whatsapp.com/send?phone=5513996050174',
+                href: `https://api.whatsapp.com/send?phone=${WHATSAPP_ATENDIMENTO}`,
               }}
             />
           ) : (

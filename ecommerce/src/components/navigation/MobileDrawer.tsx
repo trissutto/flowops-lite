@@ -11,6 +11,7 @@ import { transition } from '@/lib/motion';
 import { navigation as estatico } from '@/data/navigation';
 import type { NavItem } from '@/types';
 import { Logo } from './Logo';
+import { WHATSAPP_ATENDIMENTO } from '@/data/contato';
 
 /**
  * MobileDrawer — navegação completa em tela cheia no celular.
@@ -43,7 +44,7 @@ export function MobileDrawer({
             <MapPin /> Encontrar uma loja
           </Button>
           <Button
-            href="https://api.whatsapp.com/send?phone=5513996050174"
+            href={`https://api.whatsapp.com/send?phone=${WHATSAPP_ATENDIMENTO}`}
             external
             variant="whatsapp"
             block

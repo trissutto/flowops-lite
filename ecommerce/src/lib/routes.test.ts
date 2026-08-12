@@ -51,7 +51,7 @@ describe('isBuiltRoute', () => {
   it('deixa passar o que o Next nem prefetcha (externo, âncora, protocolo)', () => {
     for (const href of [
       'https://www.instagram.com/lurdsplussize',
-      'https://api.whatsapp.com/send?phone=5513996050174',
+      'https://api.whatsapp.com/send?phone=5513996256238',
       'mailto:contato@lurds.com.br',
       '#conteudo',
     ]) {

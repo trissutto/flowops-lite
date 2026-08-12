@@ -6,6 +6,7 @@ import { Logo } from '@/components/navigation/Logo';
 import { legalLinks } from '@/data/navigation';
 import { SelosDeConfianca } from '@/components/sections/SelosDeConfianca';
 import { filtrarLinksVivos } from '@/lib/routes';
+import { WHATSAPP_ATENDIMENTO } from '@/data/contato';
 
 /**
  * Footer — minimalista, muito organizado. Quatro colunas de links, uma linha
@@ -85,7 +86,7 @@ export function Footer() {
                 <InstagramIcon className="size-4" strokeWidth={1.5} />
               </Link>
               <Link
-                href="https://api.whatsapp.com/send?phone=5513996050174"
+                href={`https://api.whatsapp.com/send?phone=${WHATSAPP_ATENDIMENTO}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 aria-label="WhatsApp da Lurds"

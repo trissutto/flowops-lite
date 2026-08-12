@@ -7,6 +7,7 @@ import { Overlay } from '@/components/ui/Overlay';
 import { Button } from '@/components/ui/Button';
 import { transition } from '@/lib/motion';
 import { cn } from '@/lib/utils';
+import { WHATSAPP_ATENDIMENTO } from '@/data/contato';
 
 /**
  * LURDS FIT AI — assistente proprietário de tamanho.
@@ -108,7 +109,7 @@ export function FitAssistant({
   categoria,
   tamanhosDisponiveis,
   onEscolherTamanho,
-  whatsapp = '5513996050174',
+  whatsapp = WHATSAPP_ATENDIMENTO,
 }: FitAssistantProps) {
   const salvo = useMemo(lerPerfil, []);
   const [passo, setPasso] = useState(0);

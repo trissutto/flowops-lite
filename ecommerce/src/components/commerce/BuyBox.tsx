@@ -19,6 +19,7 @@ import { hexDaCor } from '@/services/products';
 import type { Product } from '@/types';
 import { STORE_POLICIES } from '@/data/store-policies';
 import { SeloVendas } from '@/components/commerce/SeloVendas';
+import { WHATSAPP_ATENDIMENTO } from '@/data/contato';
 
 /**
  * BUY BOX — a coluna de decisão de compra.
@@ -118,7 +119,7 @@ export function BuyBox({
     product.name.split(/s+/).slice(0, 4).join(' '),
   )}`;
 
-  const whatsapp = `https://api.whatsapp.com/send?phone=5513996050174&text=${encodeURIComponent(
+  const whatsapp = `https://api.whatsapp.com/send?phone=${WHATSAPP_ATENDIMENTO}&text=${encodeURIComponent(
     `Olá! Tenho interesse na peça "${product.name}". Vocês têm no tamanho ${size ?? '__'}?`,
   )}`;
 
