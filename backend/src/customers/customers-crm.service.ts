@@ -106,6 +106,22 @@ function orderCanonicalRecords(records: any[]): any[] {
 }
 
 /**
+ * Nome canônico deve representar o cadastro comercial real. Um nome digitado
+ * depois no site não pode substituir o nome do registro que concentra compras.
+ */
+function chooseCanonicalNameRecord(records: any[]): any {
+  return [...records].filter((r) => r.nameSocial || r.name).sort((a, b) => {
+    const orders = Number(b.orderCount || 0) - Number(a.orderCount || 0);
+    if (orders) return orders;
+    const ltv = Number(b.ltvCents || 0) - Number(a.ltvCents || 0);
+    if (ltv) return ltv;
+    const aName = String(a.nameSocial || a.name || '').trim();
+    const bName = String(b.nameSocial || b.name || '').trim();
+    return bName.length - aName.length;
+  })[0] || records[0];
+}
+
+/**
  * Actor = quem está fazendo a request (vem do req.user).
  * Usado pra aplicar SCOPE POR LOJA automaticamente:
  *   • admin/operator (matriz) → vê todos os clientes
@@ -662,7 +678,7 @@ export class CustomersCrmService {
     }).map((records) => {
       const ordered = orderCanonicalRecords(records);
       const canonical = ordered[0];
-      const nameRecord = ordered.find((r) => r.nameSocial || r.name) || canonical;
+      const nameRecord = chooseCanonicalNameRecord(records);
       const cpfRecord = ordered.find((r) => r.cpf) || canonical;
       const whatsappRecord = ordered.find((r) => r.whatsapp) || canonical;
       const ltvCents = records.reduce((sum, r) => sum + Number(r.ltvCents || 0), 0);
@@ -781,6 +797,9 @@ export class CustomersCrmService {
       const chosen = records.find((r: any) => r[field] !== null && r[field] !== undefined && r[field] !== '');
       if (chosen) canonical[field] = (chosen as any)[field];
     }
+    const canonicalName = chooseCanonicalNameRecord(records);
+    canonical.name = canonicalName.name;
+    canonical.nameSocial = canonicalName.nameSocial;
 
     // Origem da PESSOA não pode depender do Customer usado para abrir a URL.
     // Prefere o cadastro físico mais antigo (PDV/Giga); o site pode ser apenas
