@@ -5,6 +5,7 @@ import { LoaderCircle, Lock } from 'lucide-react';
 import { formatPrice } from '@/lib/utils';
 import { PIX_DESCONTO_PCT } from '@/lib/commerce/pix';
 import { Button } from '@/components/ui/Button';
+import { SeloPagamentoSeguro } from '@/components/commerce/SeloPagamentoSeguro';
 import { stores } from '@/data/stores';
 import type { CartLine } from '@/types';
 import type { CouponResult, CustomerIdentity } from '@/types/checkout';
@@ -178,6 +179,10 @@ export function ReviewCard({
           </>
         )}
       </Button>
+
+      {/* O cadeado logo abaixo do botão (dono, 12/08): é o instante exato da
+          hesitação, e o rodapé fica longe demais pra servir aqui. */}
+      <SeloPagamentoSeguro compacto />
 
       <p className="text-center text-caption font-normal tracking-normal normal-case text-ink-muted">
         Ao finalizar, você concorda com os{' '}

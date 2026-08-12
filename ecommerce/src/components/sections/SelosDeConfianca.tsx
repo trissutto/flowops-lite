@@ -2,6 +2,7 @@
 
 import { CreditCard, Lock, MapPin, RefreshCw, ShieldCheck } from 'lucide-react';
 import { useLojaConfig } from '@/hooks/useLojaConfig';
+import { SeloReclameAqui } from '@/components/sections/SeloReclameAqui';
 import { STORE_POLICIES } from '@/data/store-policies';
 import { formatPrice } from '@/lib/utils';
 
@@ -74,12 +75,18 @@ export function SelosDeConfianca({ className = '' }: { className?: string }) {
         ))}
       </ul>
 
-      {freteGratis.ativo && freteGratis.minimo > 0 && (
-        <p className="mt-6 flex items-center justify-center gap-2 text-small text-ink-soft">
-          <ShieldCheck className="size-4 shrink-0 text-primary-strong" strokeWidth={1.75} />
-          Frete grátis acima de {formatPrice(freteGratis.minimo)} — a régua vale pro Brasil todo.
-        </p>
-      )}
+      <div className="mt-6 flex flex-col items-center gap-3 sm:flex-row sm:justify-center sm:gap-8">
+        {freteGratis.ativo && freteGratis.minimo > 0 && (
+          <p className="flex items-center gap-2 text-small text-ink-soft">
+            <ShieldCheck className="size-4 shrink-0 text-primary-strong" strokeWidth={1.75} />
+            Frete grátis acima de {formatPrice(freteGratis.minimo)} — a régua vale pro Brasil todo.
+          </p>
+        )}
+        {/* Reputação na FONTE: link pro perfil público, com a nota do dia. Ver
+            o cabeçalho do componente sobre por que não vai logo nem nota
+            escrita à mão. */}
+        <SeloReclameAqui />
+      </div>
     </section>
   );
 }

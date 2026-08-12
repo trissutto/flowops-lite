@@ -18,6 +18,7 @@ import { mapPeca } from '@/services/products';
 import { toTrackedItem, trackViewCart, trackCouponApplied, trackCouponRemoved } from '@/lib/tracking';
 import { cn, formatPrice } from '@/lib/utils';
 import type { CartLine, Product } from '@/types';
+import { SeloPagamentoSeguro } from '@/components/commerce/SeloPagamentoSeguro';
 
 /**
  * PÁGINA DA SACOLA — a visão completa (o mini-cart é o resumo rápido).
@@ -469,7 +470,10 @@ export default function CarrinhoPage() {
                 <Button block size="lg" href="/checkout" className="mt-6">
                   Finalizar compra
                 </Button>
-                <Button block variant="ghost" href="/novidades" className="mt-2">
+                {/* Cadeado ANTES de ela entrar no checkout (dono, 12/08): a
+                    dúvida sobre o cartão nasce aqui, não lá dentro. */}
+                <SeloPagamentoSeguro compacto className="mt-3" />
+                <Button block variant="ghost" href="/novidades" className="mt-3">
                   Continuar comprando
                 </Button>
               </div>

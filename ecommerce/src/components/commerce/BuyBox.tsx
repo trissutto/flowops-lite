@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { Heart, MapPin, MessageCircle, Ruler, ShoppingBag, Sparkles, Star } from 'lucide-react';
+import { Heart, Lock, MapPin, MessageCircle, Ruler, ShoppingBag, Sparkles, Star } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { SimuladorFrete } from '@/components/commerce/SimuladorFrete';
 import { SizePill } from '@/components/ui/Choice';
@@ -394,6 +394,12 @@ export function BuyBox({
 
       {/* Garantias — o que tira o medo de comprar online */}
       <ul className="mt-7 flex flex-col gap-3 border-t border-border pt-7 text-small text-ink-soft">
+        {/* O cadeado na PEÇA (dono, 12/08): a cliente que chega pelo Instagram
+            decide aqui se a loja é confiável, muito antes do checkout. */}
+        <li className="flex items-center gap-3">
+          <Lock className="size-4 shrink-0 text-primary-strong" strokeWidth={1.75} />
+          Pagamento criptografado — PagBank e Pagar.me
+        </li>
         <li className="flex items-center gap-3">
           <MapPin className="size-4 shrink-0 text-primary-strong" strokeWidth={1.75} />
           Retire e prove em uma das 14 lojas antes de levar
