@@ -809,9 +809,25 @@ export class PdvService {
     if (input.method === 'vale_troca') {
       const code = String(input.details?.creditoCode || '').trim().toUpperCase();
       if (!code) throw new BadRequestException('Código TROCA-XXXXX obrigatório');
-      const ret = await (this.prisma as any).pdvReturn.findUnique({
+      let ret = await (this.prisma as any).pdvReturn.findUnique({
         where: { creditoCode: code },
       });
+      /**
+       * VALE DO SITE (item 85) — o crédito nascido numa troca do e-commerce.
+       *
+       * Ele NÃO mora em `pdv_returns`: mora em `site_cupons`, criado quando a
+       * conferência da troca aprova. A política sempre disse "vale no site ou
+       * em qualquer loja física" e a loja respondia "vale não encontrado".
+       *
+       * Resolvido pro MESMO formato de `pdvReturn` de propósito: assim todas as
+       * guardas que já existem — treino, usado, anulado, validade, saldo e o
+       * anti-uso-duplo entre PDVs — continuam valendo sem serem reescritas.
+       * Regra nova em caminho de dinheiro é regra nova pra dar errado.
+       *
+       * ⚠️ NÃO criar um `pdvReturn` espelho pro vale do site: comissão e DRE
+       * leem essa tabela, e o vale viraria devolução de loja nos dois.
+       */
+      if (!ret) ret = await this.resolverValeDoSite(code, input.saleId);
       if (!ret) throw new BadRequestException(`Vale-troca ${code} não encontrado`);
       // GUARD TREINO: vale gerado em devolução de TREINAMENTO não vale
       // dinheiro — bloqueia uso em venda real (em venda de treino, passa).
@@ -962,6 +978,84 @@ export class PdvService {
     return [det.pixTxid, det.pagbankOrderId, det.pagarmeOrderId, det.creditoCode]
       .map((v) => (v == null ? '' : String(v).trim()))
       .filter(Boolean);
+  }
+
+  /**
+   * VALE DO SITE → formato de `pdvReturn` (item 85).
+   *
+   * O vale de uma troca do e-commerce vive em `site_cupons` (`origem: 'troca'`,
+   * `tipo: 'fixed'`, uso único). Aqui ele é traduzido pro shape que o PDV já
+   * sabe validar, pra reaproveitar TODAS as guardas existentes em vez de
+   * escrever regra nova no caminho do dinheiro.
+   *
+   * O que muda em relação ao vale da loja:
+   *
+   * · **É NOMINAL.** O código sai por WhatsApp e um print encaminhado bastaria
+   *   pra outra pessoa gastar o crédito da cliente. Então a venda precisa
+   *   estar no CPF do dono do vale — sem CPF na venda, não passa. É a mesma
+   *   regra que o checkout do site aplica (ver `CupomService.aplicar`), e é
+   *   por isso que o erro diz o que fazer: identificar a cliente na venda.
+   * · **Nunca é de treino**: nasce de troca real de pedido real.
+   *
+   * Devolve `null` quando o código não é vale de site — quem chamou decide se
+   * isso vira "não encontrado".
+   */
+  private async resolverValeDoSite(code: string, saleId: string): Promise<any | null> {
+    let cupom: any = null;
+    try {
+      cupom = await (this.prisma as any).siteCupom.findUnique({ where: { code } });
+    } catch (e: any) {
+      // Tabela ausente (deploy antigo) não pode derrubar o pagamento — o vale
+      // da LOJA continua funcionando pelo caminho de sempre.
+      this.logger.warn(`[pdv] site_cupons indisponível ao resolver ${code}: ${e?.message || e}`);
+      return null;
+    }
+    if (!cupom || cupom.origem !== 'troca') return null;
+
+    const venda = await (this.prisma as any).pdvSale.findUnique({
+      where: { id: saleId },
+      select: { customerCpf: true, customerName: true, storeCode: true, storeName: true },
+    });
+    const cpfVale = String(cupom.cpf || '').replace(/\D/g, '');
+    if (cpfVale) {
+      const cpfVenda = String(venda?.customerCpf || '').replace(/\D/g, '');
+      if (!cpfVenda) {
+        throw new BadRequestException(
+          `Vale ${code} é nominal (troca do site). Identifique a cliente na venda pelo CPF pra usar.`,
+        );
+      }
+      if (cpfVenda !== cpfVale) {
+        throw new BadRequestException(
+          `Vale ${code} está no CPF de outra cliente (final ${cpfVale.slice(-4)}). Não dá pra usar nesta venda.`,
+        );
+      }
+    }
+
+    // `usos >= usoMaximo` é o "já gastou" — o mesmo contador que o checkout do
+    // site incrementa (`CupomService.registrarUso`). É ele que impede gastar no
+    // site e na loja com o mesmo código.
+    const usos = Number(cupom.usos) || 0;
+    const maximo = cupom.usoMaximo == null ? null : Number(cupom.usoMaximo);
+    const esgotado = maximo != null && usos >= maximo;
+
+    return {
+      // Marca de origem: o finalize e o cancelamento precisam saber que este
+      // vale não está em `pdv_returns`.
+      __site: true,
+      id: cupom.code,
+      creditoCode: cupom.code,
+      valorTotal: Number(cupom.valor) || 0,
+      creditoValidade: cupom.fimEm || null,
+      status: !cupom.ativo ? 'cancelled' : esgotado ? 'used' : 'completed',
+      creditoUsadoAt: cupom.usadoAt || null,
+      creditoUsadoEm: cupom.usadoPdvSaleId || null,
+      isTraining: false,
+      customerCpf: cpfVale || null,
+      customerName: venda?.customerName || null,
+      storeCode: venda?.storeCode || null,
+      storeName: venda?.storeName || null,
+      originalSaleNumber: null,
+    };
   }
 
   /**
@@ -2673,23 +2767,75 @@ export class PdvService {
           code = String(det?.creditoCode || '').trim().toUpperCase() || null;
         } catch { /* ignora */ }
         if (!code) continue;
-        const ret = await (this.prisma as any).pdvReturn.findUnique({
+        let ret = await (this.prisma as any).pdvReturn.findUnique({
           where: { creditoCode: code },
         });
+
+        /**
+         * VALE DO SITE (item 85): não está em `pdv_returns`, está em
+         * `site_cupons`. Dar a baixa AQUI é o que impede o gasto duplo — o
+         * mesmo contador `usos` que o checkout do site incrementa. Sem isso a
+         * cliente pagaria na loja e o código continuaria válido no site.
+         *
+         * ⚠️ Janela conhecida: entre o `addPayment` e este finalize o vale
+         * ainda conta como não usado pro site. Um checkout do site fechando
+         * EXATAMENTE nesse intervalo, com o mesmo código nominal, gastaria
+         * duas vezes. Não seguramos o vale no `addPayment` de propósito: esta
+         * tela cria dezenas de vendas abandonadas por dia (nenhuma finaliza),
+         * e a reserva deixaria crédito de cliente travado sem ninguém saber.
+         * Crédito preso todo dia é pior que uma corrida que exige a mesma
+         * pessoa comprando nos dois canais no mesmo minuto.
+         */
+        if (!ret) {
+          let cupom: any = null;
+          try {
+            cupom = await (this.prisma as any).siteCupom.findUnique({ where: { code } });
+          } catch { cupom = null; }
+          if (cupom && cupom.origem === 'troca') {
+            if (cupom.usadoPdvSaleId === sale.id) continue; // idempotente
+            await (this.prisma as any).siteCupom.update({
+              where: { code },
+              data: {
+                usos: { increment: 1 },
+                // Vale é uso único: desligar é o que some com ele da lista de
+                // cupons ativos do site no mesmo instante.
+                ativo: false,
+                usadoPdvSaleId: sale.id,
+                usadoAt: new Date(),
+              },
+            });
+            this.logger.log(`[pdv] vale do SITE ${code} baixado na venda ${sale.id}`);
+            // Segue pro trecho do residual com os dados que ele precisa. A
+            // LOJA é a da venda: o vale veio do site e não tem loja de origem.
+            ret = {
+              __site: true,
+              valorTotal: Number(cupom.valor) || 0,
+              storeCode: sale.storeCode,
+              storeName: sale.storeName || sale.storeCode,
+              customerCpf: String(cupom.cpf || '') || (sale as any).customerCpf || null,
+              customerName: (sale as any).customerName || null,
+              isTraining: !!(sale as any).isTraining,
+              originalSaleNumber: null,
+            };
+          }
+        }
+
         if (!ret) {
           this.logger.warn(`[pdv] vale-troca ${code} não achado pra marcar como usado`);
           continue;
         }
-        if (ret.status === 'used') continue; // idempotente
-        await (this.prisma as any).pdvReturn.update({
-          where: { id: ret.id },
-          data: {
-            status: 'used',
-            creditoUsadoEm: sale.id,
-            creditoUsadoAt: new Date(),
-          },
-        });
-        this.logger.log(`[pdv] vale-troca ${code} marcado como USED na venda ${sale.id}`);
+        if (!(ret as any).__site) {
+          if (ret.status === 'used') continue; // idempotente
+          await (this.prisma as any).pdvReturn.update({
+            where: { id: ret.id },
+            data: {
+              status: 'used',
+              creditoUsadoEm: sale.id,
+              creditoUsadoAt: new Date(),
+            },
+          });
+          this.logger.log(`[pdv] vale-troca ${code} marcado como USED na venda ${sale.id}`);
+        }
 
         // FIX uso PARCIAL: se o vale cobriu MENOS que o valor total dele, gera
         // automaticamente um vale RESIDUAL com a diferença pra cliente NÃO
@@ -3330,6 +3476,30 @@ export class PdvService {
             data: { status: 'completed', creditoUsadoEm: null, creditoUsadoAt: null },
           });
           this.logger.log(`[pdv] cancel: vale ${code} DEVOLVIDO (venda ${sale.id} cancelada)`);
+        }
+        /**
+         * VALE DO SITE: mesma devolução, na tabela dele. A trava é a mesma —
+         * só volta se foi ESTA venda que gastou (`usadoPdvSaleId`), senão
+         * cancelar uma venda antiga ressuscitaria crédito já gasto em outra.
+         */
+        if (!ret) {
+          try {
+            const cupom = await (this.prisma as any).siteCupom.findUnique({ where: { code } });
+            if (cupom && cupom.origem === 'troca' && cupom.usadoPdvSaleId === sale.id) {
+              await (this.prisma as any).siteCupom.update({
+                where: { code },
+                data: {
+                  usos: { decrement: 1 },
+                  ativo: true,
+                  usadoPdvSaleId: null,
+                  usadoAt: null,
+                },
+              });
+              this.logger.log(`[pdv] cancel: vale do SITE ${code} DEVOLVIDO (venda ${sale.id} cancelada)`);
+            }
+          } catch (e2: any) {
+            this.logger.warn(`[pdv] cancel: falha ao devolver vale do site ${code}: ${e2?.message || e2}`);
+          }
         }
       }
       // ANULA vales RESIDUAIS gerados a partir desta venda (uso parcial). Sem

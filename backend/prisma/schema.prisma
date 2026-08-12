@@ -5332,6 +5332,11 @@ model SiteCupom {
   origem         String    @default("campanha") @db.VarChar(12)
   /// Troca que originou o vale — a auditoria de "de onde veio esse dinheiro".
   trocaId        String?   @map("troca_id")
+  /// Venda do PDV que consumiu o vale. Existe pelo mesmo motivo que
+  /// `pdvReturn.creditoUsadoEm`: cancelar a venda tem que DEVOLVER o crédito,
+  /// e devolver só é seguro quando dá pra provar que foi ESTA venda que gastou.
+  usadoPdvSaleId String?   @map("usado_pdv_sale_id")
+  usadoAt        DateTime? @map("usado_at")
 
   atualizadoPor  String?   @map("atualizado_por") @db.VarChar(80)
   createdAt      DateTime  @default(now()) @map("created_at")
