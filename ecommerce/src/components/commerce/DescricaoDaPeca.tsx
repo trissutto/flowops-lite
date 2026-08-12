@@ -36,9 +36,12 @@ const ALTURA_DA_LINHA = 1.7;
 export function DescricaoDaPeca({
   resumo,
   texto,
+  fichaTecnica = [],
 }: {
   resumo?: string | null;
   texto?: string | null;
+  /** [{rotulo,valor}] extraído da descrição — forro, decote, manga, etc. */
+  fichaTecnica?: Array<{ rotulo: string; valor: string }>;
 }) {
   const [aberto, setAberto] = useState(false);
   const [temCorte, setTemCorte] = useState(false);
@@ -63,7 +66,18 @@ export function DescricaoDaPeca({
     return () => observador.disconnect();
   }, [medir, texto]);
 
-  if (!resumo && !texto) {
+  /**
+   * A FICHA TÉCNICA VEM ANTES DO PARÁGRAFO.
+   *
+   * "Viscose · Sem forro · Não é transparente" responde em três segundos o que
+   * a cliente plus size pergunta; o texto corrido leva 40 linhas pra dizer o
+   * mesmo, quando diz. Fica fora do corte de 4 linhas de propósito — é dado,
+   * não prosa, e esconder dado atrás de botão é o problema que este componente
+   * veio resolver.
+   */
+  const ficha = (fichaTecnica ?? []).filter((i) => i?.rotulo && i?.valor);
+
+  if (!resumo && !texto && !ficha.length) {
     return (
       <p className="text-body font-light text-ink-soft">
         Peça da curadoria Lurd&apos;s. Para detalhes de composição e caimento, fale com uma
@@ -75,6 +89,17 @@ export function DescricaoDaPeca({
   return (
     <div>
       {resumo && <p className="text-body-lg font-light text-ink-soft">{resumo}</p>}
+
+      {ficha.length > 0 && (
+        <dl className="mt-5 grid gap-x-8 gap-y-2 sm:grid-cols-2">
+          {ficha.map((item) => (
+            <div key={item.rotulo} className="flex gap-2 border-b border-border/60 pb-2">
+              <dt className="text-small text-ink-muted">{item.rotulo}</dt>
+              <dd className="text-small text-ink ml-auto text-right">{item.valor}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
 
       {texto && texto !== resumo && (
         <>

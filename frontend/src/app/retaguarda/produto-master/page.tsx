@@ -1485,6 +1485,12 @@ type Formatos = {
   falharam: number; restantes: number; exemplosFalha: string[];
 };
 
+type LoteIa = {
+  olhadas: number; enriquecidas: number; semTexto: number;
+  falharam: number; restantes: number;
+  foraDoCadastro: string[]; exemplosFalha: string[];
+};
+
 /**
  * Puxa o acervo INTEIRO do site antigo — foto, gravação e bolinha — sem
  * ninguém ficar clicando REF por REF.
@@ -1503,6 +1509,8 @@ function ImportarTudo() {
   const [mutirao, setMutirao] = useState<Mutirao | null>(null);
   const [normalizando, setNormalizando] = useState(false);
   const [formatos, setFormatos] = useState<Formatos | null>(null);
+  const [extraindo, setExtraindo] = useState(false);
+  const [loteIa, setLoteIa] = useState<LoteIa | null>(null);
 
   const consultar = useCallback(async () => {
     try {
@@ -1625,6 +1633,35 @@ function ImportarTudo() {
     }
   }
 
+  /**
+   * A DESCRIÇÃO VIRA FICHA (dono, 12/08).
+   *
+   * A descrição da peça passa de 40 linhas e não responde o que a cliente
+   * pergunta — tecido, se estica, se tem forro, se é transparente. A IA lê o
+   * texto que JÁ existe e preenche os campos, sem inventar nada e sem
+   * sobrescrever o que alguém digitou. Em lotes, porque cada peça é uma
+   * chamada paga.
+   */
+  async function extrairFichas() {
+    if (!confirm(
+      'Ler as descrições e preencher as fichas (tecido, elasticidade, forro, decote...)?\n\n' +
+      'Vai em lotes de 40 peças; clique de novo enquanto sobrar peça.\n' +
+      'Nada que já esteja preenchido é sobrescrito.',
+    )) return;
+    setExtraindo(true);
+    setErro(null);
+    try {
+      setLoteIa(await api<LoteIa>('/produto-ficha/ia/lote', {
+        method: 'POST',
+        body: JSON.stringify({ limite: 40 }),
+      }));
+    } catch (e: any) {
+      setErro(e?.message?.replace(/^\d+:\s*/, '') || 'Não consegui extrair');
+    } finally {
+      setExtraindo(false);
+    }
+  }
+
   const rodando = status?.status === 'rodando';
   const pct = status?.total ? Math.round(((status.processadas ?? 0) / status.total) * 100) : 0;
 
@@ -1669,6 +1706,12 @@ function ImportarTudo() {
           {normalizando ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ImageIcon className="w-3.5 h-3.5" />}
           Converter fotos pra JPEG
         </button>
+        <button type="button" onClick={() => void extrairFichas()} disabled={extraindo}
+          title="A IA lê a descrição que já existe e preenche tecido, elasticidade, forro, decote — sem inventar e sem sobrescrever o que você digitou"
+          className="inline-flex items-center gap-1.5 text-xs font-bold px-4 py-2 rounded-lg border border-amber-300 text-amber-800 bg-white hover:bg-amber-50 disabled:opacity-50">
+          {extraindo ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Package className="w-3.5 h-3.5" />}
+          Preencher fichas com IA
+        </button>
       </div>
 
       {reparo && (
@@ -1707,6 +1750,27 @@ function ImportarTudo() {
               <summary className="cursor-pointer">ver as que falharam</summary>
               <ul className="mt-1 max-h-32 overflow-auto">
                 {formatos.exemplosFalha.map((f, i) => <li key={i}>{f}</li>)}
+              </ul>
+            </details>
+          )}
+        </div>
+      )}
+
+      {loteIa && (
+        <div className="mt-2 text-[11px] rounded-lg border border-amber-200 bg-amber-50 text-amber-900 p-2">
+          <strong>{loteIa.enriquecidas}</strong> ficha(s) preenchida(s) de {loteIa.olhadas} lida(s)
+          {loteIa.semTexto ? ` · ${loteIa.semTexto} sem descrição pra ler` : ''}
+          {loteIa.falharam ? ` · ${loteIa.falharam} falharam` : ''} ·{' '}
+          {loteIa.restantes
+            ? <><strong>{loteIa.restantes}</strong> pendente(s) — clique de novo</>
+            : 'acervo inteiro lido'}
+          {!!loteIa.foraDoCadastro?.length && (
+            <details className="mt-1">
+              <summary className="cursor-pointer">
+                {loteIa.foraDoCadastro.length} valor(es) que o cadastro não tem — vale criar
+              </summary>
+              <ul className="mt-1 max-h-32 overflow-auto">
+                {loteIa.foraDoCadastro.map((f, i) => <li key={i}>{f}</li>)}
               </ul>
             </details>
           )}

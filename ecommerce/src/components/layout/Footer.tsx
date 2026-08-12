@@ -4,6 +4,7 @@ import { InstagramIcon } from '@/components/ui/icons';
 import { Container } from './Container';
 import { Logo } from '@/components/navigation/Logo';
 import { legalLinks } from '@/data/navigation';
+import { SelosDeConfianca } from '@/components/sections/SelosDeConfianca';
 import { filtrarLinksVivos } from '@/lib/routes';
 
 /**
@@ -128,7 +129,12 @@ export function Footer() {
           </div>
         </div>
 
-        <div className="mt-16 flex flex-col gap-4 border-t border-border pt-8 sm:flex-row sm:items-center sm:justify-between">
+        {/* SELOS DE CONFIANÇA (dono, 12/08). No RODAPÉ de propósito: assim
+            aparecem também na sacola e no checkout, que é onde o medo do
+            cartão realmente aparece — e não só em quem chega pela home. */}
+        <SelosDeConfianca className="mt-16 border-t border-border pt-10" />
+
+        <div className="mt-12 flex flex-col gap-4 border-t border-border pt-8 sm:flex-row sm:items-center sm:justify-between">
           <p className="text-small font-light text-ink-muted">
             © {year} Lurd&apos;s Plus Size · CNPJ 20.104.813/0001-39
           </p>

@@ -5098,6 +5098,24 @@ model ProdutoFicha {
   /// 'nao' | 'pouco' | 'muito' — pergunta que a cliente mais faz.
   elasticidade   String?
 
+  /// RESUMO DE VITRINE — 2 a 3 linhas, o que a cliente lê antes do "Ver mais".
+  ///
+  /// A `descricao` acima passa de 40 linhas na peça bem cadastrada: o texto vem
+  /// pronto do fornecedor/site antigo e mistura venda com ficha. Este campo é o
+  /// mesmo conteúdo destilado — não substitui a descrição, abre a leitura dela.
+  resumo         String?  @db.Text
+  /// FICHA TÉCNICA — JSON `[{rotulo,valor}]`: forro, transparência, decote,
+  /// manga, comprimento, composição.
+  ///
+  /// Formato livre de propósito. Tecido, modelagem e elasticidade têm campo
+  /// próprio porque viram FILTRO; estes só são exibidos, e criar cinco colunas
+  /// pra texto curto engessaria a lista na primeira peça que precisar de um
+  /// item a mais ("bojo removível", "fenda lateral").
+  fichaTecnica   String?  @map("ficha_tecnica") @db.Text
+  /// Quando a extração por IA passou por aqui. É o CURSOR do lote: sem ele o
+  /// mutirão reprocessa as mesmas peças e cobra de novo por elas.
+  iaEm           DateTime? @map("ia_em")
+
   atualizadoPor String?  @map("atualizado_por")
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @updatedAt @map("updated_at")

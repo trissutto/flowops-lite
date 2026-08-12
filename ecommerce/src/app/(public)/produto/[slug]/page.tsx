@@ -136,8 +136,13 @@ export default async function ProductPage({ params }: { params: Promise<{ slug: 
         <div className="mt-8 grid gap-10 lg:grid-cols-2 lg:gap-16">
           {/* 4 linhas e "Ver mais": a descrição da ficha passa de 40 linhas na
               peça bem cadastrada e empurrava tamanhos, entrega e trocas pro
-              fim da página. */}
-          <DescricaoDaPeca resumo={shortDescription} texto={description} />
+              fim da página. A ficha técnica é o que a IA extraiu desse mesmo
+              texto — é ela que responde "estica? tem forro? é transparente?". */}
+          <DescricaoDaPeca
+            resumo={shortDescription}
+            texto={description}
+            fichaTecnica={peca?.fichaTecnica ?? []}
+          />
 
           <Accordion>
             <AccordionItem title="Tamanhos disponíveis" defaultOpen>

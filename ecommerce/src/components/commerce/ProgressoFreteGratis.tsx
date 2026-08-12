@@ -45,6 +45,10 @@ export function ProgressoFreteGratis({ subtotal, className }: { subtotal: number
         <p className="text-small font-light text-ink-soft">
           Faltam <span className="tabular font-medium text-ink">{formatPrice(gap.missing)}</span>{' '}
           para o frete grátis
+          {/* A RÉGUA POR EXTENSO (dono, 12/08): "faltam R$ 45" não diz de
+              quanto é a meta, e quem acabou de abrir a sacola não sabe se
+              falta pouco ou se o alvo é inalcançável. Sai da mesma config. */}
+          <span className="text-ink-muted"> · acima de {formatPrice(freteGratis.minimo)}</span>
         </p>
       )}
       <div

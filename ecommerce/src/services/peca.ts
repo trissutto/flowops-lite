@@ -25,6 +25,10 @@ export interface PecaDoSite {
   cores: CorApi[];
   descricao: string;
   descricaoCurta: string;
+  /** [{rotulo,valor}] — forro, transparência, decote, manga, comprimento. */
+  fichaTecnica: Array<{ rotulo: string; valor: string }>;
+  /** Peças da família já vendidas (loja + site + histórico do ERP antigo). */
+  vendas: number;
 }
 
 export async function fetchPeca(slug: string): Promise<PecaDoSite | null> {
@@ -49,6 +53,8 @@ export async function fetchPeca(slug: string): Promise<PecaDoSite | null> {
       cores: p.cores ?? [],
       descricao: p.descricaoCompleta ?? '',
       descricaoCurta: p.descricaoCurta ?? '',
+      fichaTecnica: p.fichaTecnica ?? [],
+      vendas: Number(p.vendas) || 0,
     };
   } catch {
     return null;

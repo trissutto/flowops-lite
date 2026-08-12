@@ -495,6 +495,8 @@ export class LojaCatalogService {
    */
   private montarPeca(
     ref: string, linhas: LinhaErp[], site: any, fit: any, fotos: any[] = [], ficha?: any,
+    /** Peças da família já vendidas (loja + site + histórico do ERP antigo). */
+    vendas = 0,
   ) {
     /* ── ⚠️ UMA REF PODE SER TRÊS PRODUTOS (bug de preço, 07/08) ───────────
      *
@@ -763,8 +765,28 @@ export class LojaCatalogService {
         Array.from(cores.keys()),
         linhas.find((l) => l.marca)?.marca,
       ) || ref,
-      descricaoCurta: site?.descricaoCurta ?? null,
+      /**
+       * RESUMO DA FICHA na frente do `descricaoCurta` (12/08): a curta veio do
+       * WooCommerce e costuma ser a primeira frase da descrição gigante; o
+       * resumo é o texto destilado (2-3 frases) que a IA extraiu do que já
+       * existia. Quando não há resumo, nada muda.
+       */
+      descricaoCurta: String(ficha?.resumo || '').trim() || site?.descricaoCurta || null,
       descricaoCompleta: descricaoDaFicha || site?.descricaoCompleta || null,
+      /**
+       * FICHA TÉCNICA — `[{rotulo,valor}]`: forro, transparência, decote,
+       * manga, comprimento. É o que a cliente plus size pergunta e o parágrafo
+       * de venda escondia.
+       */
+      fichaTecnica: this.lerLista(ficha?.fichaTecnica)
+        .filter((i: any) => i?.rotulo && i?.valor)
+        .map((i: any) => ({ rotulo: String(i.rotulo), valor: String(i.valor) })),
+      /**
+       * PROVA SOCIAL REAL: peças desta família já vendidas, somando loja
+       * física, site e o histórico importado do ERP antigo. Número cru — quem
+       * decide o piso de exibição é a vitrine, num lugar só.
+       */
+      vendas,
       marca: linhas.find((l) => l.marca)?.marca ?? null,
       // Categoria COMERCIAL (do cadastro do site). O grupo do Giga vai
       // separado: é classificação fiscal, não serve pro menu da loja.
@@ -910,6 +932,20 @@ export class LojaCatalogService {
     return { itens };
   }
 
+  /**
+   * JSON de texto do banco → lista. Devolve vazio em qualquer defeito: campo
+   * torto de uma peça não pode derrubar a montagem do catálogo inteiro.
+   */
+  private lerLista(raw: any): any[] {
+    if (!raw) return [];
+    try {
+      const v = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      return Array.isArray(v) ? v : [];
+    } catch {
+      return [];
+    }
+  }
+
   /** Carrega curadoria + ficha de caimento de um conjunto de REFs. */
   private async complementos(refs: string[]) {
     const [sites, fits, fotos, fichas] = await Promise.all([
@@ -1025,6 +1061,95 @@ export class LojaCatalogService {
     return this.catalogoEmVoo;
   }
 
+  /**
+   * QUANTAS PEÇAS DESTA FAMÍLIA JÁ SAÍRAM — loja física + site + live.
+   *
+   * É a prova social que a loja PODE mostrar: número verdadeiro, conferível no
+   * próprio caixa. A alternativa que estava no ar até 06/08 era depoimento
+   * inventado, com as mesmas quatro frases em toda peça — removido, e não
+   * volta ([[prova-social-e-ficha-por-ia]]).
+   *
+   * TRÊS fontes, porque a rede vendeu em três sistemas ao longo do tempo:
+   *
+   * - `giga_caixa_mov` — o caixa do ERP antigo, IMPORTADO pro Postgres:
+   *   02/01/2025 a 12/08/2026, 227 mil peças. É a maior parte do histórico e
+   *   some se a conta olhar só pro Flow.
+   * - `pdv_sale_items` — o PDV do Flow. Definição de venda válida IGUAL à do
+   *   motor de comissão (finalizada, fora do treino, sem MARCADO — marcado é
+   *   "provar em casa", não venda). Critério próprio faria este número não
+   *   bater com o de nenhuma outra tela.
+   * - `order_items` — pedido do site e da live; guarda SKU (código), não REF,
+   *   então casa pelo espelho do catálogo.
+   *
+   * ⚠️ DUPLA CONTAGEM: enquanto o Giga esteve de pé, o PDV do Flow gravava a
+   * venda NOS DOIS (o outbox replicava no caixa). Essas linhas carregam
+   * `obs_pedido` começando em "flowops" — 18.421 delas, desde 07/05/2026, que
+   * batem com as 18.530 peças do `pdv_sale_items`. Sem excluí-las, todo o
+   * período de convivência contaria em dobro.
+   *
+   * Soma por REF-BASE: as cores da peça são REFs irmãs e a cliente lê "esta
+   * peça", não "esta cor". Devolução entra com quantidade negativa e abate.
+   *
+   * Cache PRÓPRIO de 10 min: o histórico quase não muda de um minuto pro
+   * outro, e são ~1,2s de agregação que não precisam entrar em toda remontagem
+   * do catálogo.
+   */
+  private cacheVendas: { at: number; mapa: Map<string, number> } | null = null;
+  private readonly TTL_VENDAS = 10 * 60_000;
+
+  private async vendasPorFamilia(): Promise<Map<string, number>> {
+    if (this.cacheVendas && Date.now() - this.cacheVendas.at < this.TTL_VENDAS) {
+      return this.cacheVendas.mapa;
+    }
+    const total = new Map<string, number>();
+    const somar = (linhas: Array<{ ref: string; unidades: number }>) => {
+      for (const l of linhas) {
+        const base = refBaseOf(l.ref);
+        if (!base) continue;
+        total.set(base, (total.get(base) ?? 0) + (Number(l.unidades) || 0));
+      }
+    };
+    try {
+      const [historico, pdv, site] = await Promise.all([
+        this.prisma.$queryRawUnsafe<Array<{ ref: string; unidades: number }>>(
+          `SELECT UPPER(TRIM(p.ref)) AS ref, COALESCE(SUM(m.quantidade), 0)::int AS unidades
+             FROM giga_caixa_mov m
+             JOIN wincred_produtos p ON p.codigo = TRIM(m.codigo)
+            WHERE COALESCE(m.obs_pedido, '') NOT LIKE 'flowops%'
+              AND (m.marcado IS NULL OR TRIM(m.marcado) = '')
+            GROUP BY 1`,
+        ),
+        this.prisma.$queryRawUnsafe<Array<{ ref: string; unidades: number }>>(
+          `SELECT UPPER(TRIM(i.ref)) AS ref, COALESCE(SUM(i.qty), 0)::int AS unidades
+             FROM pdv_sale_items i
+             JOIN pdv_sales s ON s.id = i.sale_id
+            WHERE i.ref IS NOT NULL
+              AND s.status = 'finalized'
+              AND s.is_training = false
+              AND (s.payment_method IS NULL OR s.payment_method <> 'MARCADO')
+            GROUP BY 1`,
+        ),
+        this.prisma.$queryRawUnsafe<Array<{ ref: string; unidades: number }>>(
+          `SELECT UPPER(TRIM(p.ref)) AS ref, COALESCE(SUM(i.quantity), 0)::int AS unidades
+             FROM order_items i
+             JOIN orders o ON o.id = i.order_id
+             JOIN wincred_produtos p ON p.codigo = TRIM(i.sku)
+            WHERE o.status <> 'cancelled'
+            GROUP BY 1`,
+        ),
+      ]);
+      somar(historico);
+      somar(pdv);
+      somar(site);
+      this.cacheVendas = { at: Date.now(), mapa: total };
+    } catch (e: any) {
+      // Prova social é acréscimo: se a contagem falha, a vitrine continua de
+      // pé sem o selo. Não cacheia o erro — a próxima montagem tenta de novo.
+      this.logger.warn(`[catalogo] vendas por família indisponíveis: ${e?.message || e}`);
+    }
+    return total;
+  }
+
   private async montarCatalogo(): Promise<any[]> {
     // 1) REFs publicadas (curadoria) — a lista de saída nunca é maior que isso
     const publicadas: any[] = await (this.prisma as any).siteProduto.findMany({
@@ -1080,7 +1205,10 @@ export class LojaCatalogService {
       refsComplementos.add(ref);
       refsComplementos.add(refBaseOf(ref));
     }
-    const { site, fit, fotos, fichas } = await this.complementos([...refsComplementos]);
+    const [{ site, fit, fotos, fichas }, vendas] = await Promise.all([
+      this.complementos([...refsComplementos]),
+      this.vendasPorFamilia(),
+    ]);
 
     /**
      * JUNTA AS REFs QUE SÃO A MESMA PEÇA (10/08/2026, refeito em 12/08).
@@ -1164,6 +1292,16 @@ export class LojaCatalogService {
         this.montarPeca(
           ref, linhas, site.get(dono), fit.get(dono), fotosDaFamilia,
           this.escolherFicha(fichasDaFamilia, linhas.find((l) => l.marca)?.marca),
+          /**
+           * A venda é da FAMÍLIA — a cliente lê "esta peça", não "esta cor".
+           *
+           * Soma sobre as BASES DISTINTAS: as irmãs compartilham a mesma
+           * REF-BASE, e somar ref a ref multiplicaria o número pelo tamanho da
+           * família (uma peça de 4 cores viraria 4× o que vendeu).
+           */
+          [...new Set(refsDaFamilia.map(refBaseOf))].reduce(
+            (s, base) => s + (vendas.get(base) ?? 0), 0,
+          ),
         ),
       );
     }

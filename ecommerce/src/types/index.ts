@@ -78,6 +78,13 @@ export interface Product {
   occasions?: string[];
   collection?: string;
   rating?: { average: number; count: number };
+  /**
+   * PEÇAS JÁ VENDIDAS desta família — loja física + site + histórico do ERP
+   * antigo. É a prova social que a loja PODE mostrar: número conferível no
+   * caixa, no lugar da avaliação inventada que saiu do ar em 06/08. A partir
+   * de quanto ele aparece é decisão do `SeloVendas`, num lugar só.
+   */
+  sold?: number;
   /** Disponibilidade — preparado pra comprar-e-retirar. */
   availability?: {
     online: boolean;

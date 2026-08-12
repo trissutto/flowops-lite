@@ -18,6 +18,7 @@ import { cn, discountPercent, formatPrice } from '@/lib/utils';
 import { hexDaCor } from '@/services/products';
 import type { Product } from '@/types';
 import { STORE_POLICIES } from '@/data/store-policies';
+import { SeloVendas } from '@/components/commerce/SeloVendas';
 
 /**
  * BUY BOX — a coluna de decisão de compra.
@@ -385,6 +386,11 @@ export function BuyBox({
           "frete grátis acima de R$ 399", que envelheceu junto com a régua — o
           valor agora é config e muda sem deploy. */}
       <SimuladorFrete preco={product.price} />
+
+      {/* PROVA SOCIAL REAL, perto do botão: quantas peças desta família já
+          saíram (loja + site + histórico do ERP antigo). Some sozinha abaixo
+          do piso — a regra mora no `SeloVendas`. */}
+      <SeloVendas vendas={product.sold} className="mt-6" />
 
       {/* Garantias — o que tira o medo de comprar online */}
       <ul className="mt-7 flex flex-col gap-3 border-t border-border pt-7 text-small text-ink-soft">
