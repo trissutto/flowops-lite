@@ -47,9 +47,8 @@ const VOTE_FRAMES = 2;
 const DETECT_INTERVAL_MS = 50;
 // Cooldown da mesma pessoa apos bater. 8s = sai da camera, da espaco proxima.
 const COOLDOWN_AFTER_REGISTER_MS = 8_000;
-// Tempo que o card "Ola X" fica visivel. Loop continua durante esse tempo —
-// se OUTRA pessoa aparecer, derruba o card e bate na hora.
-const SUCCESS_DISPLAY_MS = 1_200;
+// Confirmação exclusiva antes de liberar a seleção para a próxima pessoa.
+const SUCCESS_DISPLAY_MS = 2_000;
 // Compat com codigo que ainda referencia MATCH_THRESHOLD (diagnostico)
 const MATCH_THRESHOLD = MATCH_CONFIRM_THRESHOLD;
 // Escolheu o nome e não bateu em 60s → volta pra lista (câmera desliga).
@@ -61,6 +60,22 @@ const TIPO_LABELS: Record<string, { texto: string; cor: string; emoji: string }>
   volta_almoco: { texto: 'Volta do almoço Registrada',   cor: 'bg-amber-600',   emoji: '☕' },
   saida:        { texto: 'Saída Registrada',             cor: 'bg-rose-500',    emoji: '🔴' },
 };
+
+function mensagemConfirmacao(tipo: string, nome: string): string {
+  const primeiroNome = nome.trim().split(/\s+/)[0] || nome;
+  switch (tipo) {
+    case 'entrada':
+      return `Bom dia, ${primeiroNome}. Entrada registrada.`;
+    case 'saida_almoco':
+      return `Saída de almoço registrada, ${primeiroNome}.`;
+    case 'volta_almoco':
+      return `Retorno do almoço registrado, ${primeiroNome}.`;
+    case 'saida':
+      return `Saída registrada, ${primeiroNome}.`;
+    default:
+      return `Ponto registrado, ${primeiroNome}.`;
+  }
+}
 
 function euclidean(a: number[], b: number[]): number {
   let sum = 0;
@@ -250,7 +265,7 @@ export default function PontoPage() {
         tipo: r.tipo,
         at: new Date(),
       });
-      // Bateu → volta pra lista de nomes (câmera desliga; card fica na tela)
+      // Bateu → câmera desliga; a lista só reaparece após a confirmação.
       setSelected(null);
       // Cooldown: evita re-bater o mesmo seller logo em seguida
       cooldownRef.current.add(match.seller.id);
@@ -258,7 +273,7 @@ export default function PontoPage() {
         cooldownRef.current.delete(match.seller.id);
       }, COOLDOWN_AFTER_REGISTER_MS);
 
-      // Volta ao "aguardando" depois de 5s
+      // Libera a seleção da próxima colaboradora após a confirmação.
       setTimeout(() => setLastSuccess(null), SUCCESS_DISPLAY_MS);
     } catch (e: any) {
       const msg = e?.message || 'Falha ao registrar';
@@ -454,7 +469,18 @@ export default function PontoPage() {
       </header>
 
       <div className="max-w-3xl mx-auto p-4 space-y-4">
-        {!selected ? (
+        {lastSuccess && tipoInfo && !alreadyDone ? (
+          /* Confirmação exclusiva: só depois de 2s a lista volta a aparecer. */
+          <div className={`${tipoInfo.cor} text-white rounded-xl p-8 text-center shadow-lg animate-in fade-in zoom-in`}>
+            <CheckCircle2 className="w-16 h-16 mx-auto mb-4" />
+            <p className="text-2xl sm:text-3xl font-bold">
+              {mensagemConfirmacao(lastSuccess.tipo, lastSuccess.name)}
+            </p>
+            <p className="text-base opacity-80 mt-3">
+              {lastSuccess.at.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+            </p>
+          </div>
+        ) : !selected ? (
           /* ── PASSO 1: escolher o nome (câmera DESLIGADA até aqui) ── */
           !loadingDescriptors && sellers.length > 0 && (
             <div className="bg-slate-800 rounded-xl p-4">
@@ -570,22 +596,6 @@ export default function PontoPage() {
             </p>
             <p className="text-sm opacity-80 mt-3 italic">
               Boa noite e até amanhã ✨
-            </p>
-          </div>
-        )}
-
-        {/* Sucesso */}
-        {lastSuccess && tipoInfo && !alreadyDone && (
-          <div className={`${tipoInfo.cor} text-white rounded-xl p-6 text-center shadow-lg animate-in fade-in zoom-in`}>
-            <CheckCircle2 className="w-14 h-14 mx-auto mb-3" />
-            <p className="text-3xl font-bold">
-              Olá, {lastSuccess.name.split(' ')[0]}
-            </p>
-            <p className="text-xl font-bold mt-2 opacity-95">
-              {tipoInfo.emoji} {tipoInfo.texto}
-            </p>
-            <p className="text-sm opacity-80 mt-2">
-              {lastSuccess.at.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
             </p>
           </div>
         )}
