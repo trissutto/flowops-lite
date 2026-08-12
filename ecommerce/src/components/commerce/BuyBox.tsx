@@ -17,6 +17,7 @@ import { useMounted } from '@/hooks';
 import { cn, discountPercent, formatPrice } from '@/lib/utils';
 import { hexDaCor } from '@/services/products';
 import type { Product } from '@/types';
+import { STORE_POLICIES } from '@/data/store-policies';
 
 /**
  * BUY BOX — a coluna de decisão de compra.
@@ -393,7 +394,7 @@ export function BuyBox({
         </li>
         <li className="flex items-center gap-3">
           <Ruler className="size-4 shrink-0 text-primary-strong" strokeWidth={1.75} />
-          Troca fácil em até 30 dias, sem burocracia
+          Troca fácil em até {STORE_POLICIES.exchangeWindowDays} dias, sem burocracia
         </li>
       </ul>
 

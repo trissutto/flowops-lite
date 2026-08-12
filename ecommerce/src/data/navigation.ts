@@ -1,5 +1,6 @@
 import type { NavItem } from '@/types';
 import { filtrarLinksVivos, isBuiltRoute } from '@/lib/routes';
+import { STORE_POLICIES } from '@/data/store-policies';
 
 /**
  * ESTRUTURA DE NAVEGAÇÃO — fonte única do menu, do mega menu, do drawer
@@ -304,7 +305,7 @@ export const navigation: NavItem[] = podarNavegacao(NAVEGACAO_COMPLETA);
 export const announcements = [
   { label: 'Frete grátis: consulte o valor vigente', href: '/carrinho' },
   { label: 'Até 12x sem juros', href: '/carrinho' },
-  { label: 'Troca fácil em 30 dias', href: '/politica-de-trocas' },
+  { label: `Troca fácil em ${STORE_POLICIES.exchangeWindowDays} dias`, href: '/politica-de-trocas' },
   { label: '14 lojas em São Paulo e região', href: '/lojas' },
   { label: 'Fale com uma consultora no WhatsApp', href: '/lojas#whatsapp' },
 ];
