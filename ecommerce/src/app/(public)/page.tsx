@@ -18,7 +18,6 @@ import { getHeroDaHome } from '@/services/banners';
 import { getCategorias } from '@/services/categorias-menu';
 import { fetchVitrine } from '@/services/vitrine';
 import { buildMetadata, itemListSchema, jsonLdGraph, storeSchema } from '@/lib/seo';
-import { HeroImagePreload } from '@/components/sections/HeroImagePreload';
 import { WHATSAPP_ATENDIMENTO } from '@/data/contato';
 
 /**
@@ -130,7 +129,8 @@ export default async function HomePage() {
 
   return (
     <>
-      <HeroImagePreload image={hero.image} imageMobile={hero.imageMobile} />
+      {/* O preload do LCP mora dentro do próprio <Hero> — eram dois lugares
+          emitindo o mesmo par de links (12/08/2026). */}
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd }} />
 
       {/* 01 — HERO EDITORIAL */}

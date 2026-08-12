@@ -11,7 +11,7 @@
  */
 
 import type { EventName, TrackingEvent } from '../types';
-import type { Destination } from './types';
+import { loadScript, type Destination } from './types';
 
 /** Momentos que valem virar filtro na lista de gravações. */
 const TAGGED: readonly EventName[] = [
@@ -50,11 +50,10 @@ export const microsoftClarity: Destination = {
     };
     w.clarity = c;
 
-    const el = document.createElement('script');
-    el.id = 'clarity-sdk';
-    el.async = true;
-    el.src = `https://www.clarity.ms/tag/${projectId()}`;
-    document.head.appendChild(el);
+    // Pelo `loadScript` (e não montando a tag na mão) pra herdar a espera pela
+    // linha principal — a fila `c.q` acima segura os eventos até o script
+    // chegar, igual ao dataLayer do Google e ao stub da Meta.
+    loadScript(`https://www.clarity.ms/tag/${projectId()}`, 'clarity-sdk');
   },
 
   accepts: (event: EventName) => TAGGED.includes(event),

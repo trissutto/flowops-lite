@@ -309,6 +309,29 @@
     background-size: 300% 100%;
     animation: shimmer 1.8s var(--ease-in-out-soft) infinite;
   }
+
+  /**
+   * ALTURA RESERVADA DA ARTE DO HERO (ver `components/sections/Hero`).
+   *
+   * O `<img>` já carrega `width`/`height` reais e cada `<source>` do
+   * `<picture>` carrega os seus — o Chrome respeita e reserva certo. Esta
+   * classe é o cinto de segurança pro navegador que IGNORA o atributo no
+   * `<source>`: sem ela ele reservaria a proporção da arte de DESKTOP pro
+   * recorte VERTICAL do celular, que é justamente a conta mais errada
+   * possível (a de 12/08 dava 3,1:1 no lugar de 0,63:1).
+   *
+   * Os valores saem medidos do arquivo (`services/medir-arte`), então forçar a
+   * proporção não distorce nada: é a proporção real. Sem medida, o Hero não
+   * põe a classe e tudo segue como antes.
+   */
+  .arte-reservada {
+    aspect-ratio: var(--arte-desktop);
+  }
+  @media (max-width: 1023px) {
+    .arte-reservada {
+      aspect-ratio: var(--arte-mobile, var(--arte-desktop));
+    }
+  }
 }
 
 @keyframes shimmer {
