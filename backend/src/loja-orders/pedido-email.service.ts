@@ -95,25 +95,66 @@ export class PedidoEmailService {
       this.logger.debug(`[pedido-msg] ${evento} não disparado — N8N_PEDIDO_WEBHOOK_URL ausente`);
       return;
     }
+
+    /**
+     * ⚠️ O PAYLOAD IMITA O WOOCOMMERCE, e isso é o ponto (12/08/2026).
+     *
+     * Li o fluxo "Pedido Pago" direto no banco do n8n: ele decide com
+     * `$json.body.status === 'processing'` e monta a mensagem com
+     * `body.billing.first_name`, `body.billing.phone` e `body.id` — o formato
+     * que o WooCommerce mandava.
+     *
+     * Falar essa mesma língua é o que permite REAPONTAR O GATILHO sem abrir o
+     * fluxo: o que já funciona (a mensagem, o retry, a planilha) continua
+     * intacto, e o site novo só passa a ser quem chama. Mudar o n8n pra
+     * entender um formato novo seria mexer no que está de pé pra acomodar o
+     * que acabou de nascer.
+     *
+     * `status: 'processing'` só vai no evento de PAGAMENTO — é ele que o `IF`
+     * do fluxo exige. No `pedido_criado` o status vai como está, então o fluxo
+     * ignora sozinho (o Pix ainda não foi pago; avisar "confirmado" ali seria
+     * mentira).
+     *
+     * Os campos do Flow vão junto, fora do formato antigo: quem editar o fluxo
+     * amanhã tem o pedido inteiro à mão sem precisar de outro webhook.
+     */
+    const pago = evento === 'pagamento_confirmado';
+    const telefone = String(order?.customerPhone || '').replace(/\D/g, '');
+    const nomeCompleto = String(order?.customerName || '').trim();
+    const [primeiroNome, ...resto] = nomeCompleto.split(/\s+/);
+
     try {
       await firstValueFrom(
         this.http.post(
           url,
           {
+            // ── formato que o fluxo já entende ──
+            id: order?.wcOrderNumber ?? order?.id ?? null,
+            status: pago ? 'processing' : String(order?.status || 'pending'),
+            billing: {
+              first_name: primeiroNome || 'cliente',
+              last_name: resto.join(' '),
+              // Sem o 55: o fluxo prefixa (`=55{{ ...phone }}`) e mandar o DDI
+              // aqui produziria "5555…" e mensagem entregue a ninguém.
+              phone: telefone.replace(/^55(?=\d{10,11}$)/, ''),
+              email: order?.customerEmail ?? null,
+            },
+            total: order?.totalAmount ?? null,
+            // ── o que é do Flow, pra quem editar o fluxo depois ──
             evento,
             origem: 'site-novo',
             pedido: {
               numero: order?.wcOrderNumber ?? null,
               id: order?.id ?? null,
               total: order?.totalAmount ?? null,
-              status: order?.status ?? null,
+              statusFlow: order?.status ?? null,
               pagoEm: order?.paidAt ?? null,
               formaPagamento: String(order?.paymentInfo || '').includes('"pix"') ? 'pix' : 'cartao',
             },
             cliente: {
-              nome: order?.customerName ?? null,
+              nome: nomeCompleto || null,
               email: order?.customerEmail ?? null,
-              telefone: order?.customerPhone ?? null,
+              telefone: telefone || null,
               cpf: order?.customerCpf ?? null,
             },
             itens: this.itensDoPedido(order),
