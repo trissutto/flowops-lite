@@ -180,7 +180,8 @@ export default function FichaClienteBetaPage() {
     router.replace(`/clientes-crm/beta/${id}?${qs.toString()}`, { scroll: false });
   };
   const back = searchParams.get('returnTo');
-  const returnTo = back && back.startsWith('/clientes-crm') && !back.startsWith('//') ? back : '/clientes-crm';
+  const validReturn = back && !back.startsWith('//') && (back.startsWith('/clientes-crm') || back.startsWith('/beta/clientes'));
+  const returnTo = validReturn ? back! : (typeof window !== 'undefined' && window.location.pathname.startsWith('/beta/') ? '/beta/clientes' : '/clientes-crm');
   const totalLtv = person?.agregado?.totalLtvCents ?? Number(detail?.ltvCents || 0);
   const totalOrders = person?.agregado?.totalOrderCount ?? detail?.orderCount ?? 0;
   const channels = useMemo(() => {
