@@ -2593,6 +2593,8 @@ export class CashService {
     dinheiroFisico?: number | null;
     closedByName?: string;
     observacao?: string;
+    /** Loja já viu a lista de vendas com peça e mandou cancelar mesmo assim. */
+    cancelarVendasComPeca?: boolean;
   }) {
     const { storeCode, dinheiroFisico, closedByName, observacao } = input;
 
@@ -2601,20 +2603,71 @@ export class CashService {
       throw new BadRequestException('Não há caixa aberto nesta loja.');
     }
 
-    // Venda em aberto NÃO bloqueia mais o fechamento (dono 21/07 — o erro
-    // "Existem N venda(s) em aberto" atrapalhava todo fim de dia). Vendas
-    // abertas nessa hora são zumbis (carrinho não finalizado): cancela
-    // automaticamente, registra na observação e segue o fechamento — mesmo
-    // comportamento do antigo botão "Cancelar pendências e fechar caixa".
-    // Venda finalizada NUNCA é tocada aqui.
+    // ── VENDA EM ABERTO NO FECHAMENTO ──────────────────────────────────
+    // Regra de 21/07 (dono): venda aberta NÃO bloqueia o fechamento — o erro
+    // "Existem N venda(s) em aberto" atrapalhava todo fim de dia. Aquilo
+    // valia porque quase toda venda aberta era VAZIA (a tela criava uma só de
+    // abrir: 42 por dia).
+    //
+    // O que a medição de 11/08 mostrou: junto com o lixo iam embora vendas
+    // DE VERDADE — 47 carrinhos montados, R$ 12,5 mil em 30 dias, cancelados
+    // sem ninguém decidir. Agora as duas coisas são tratadas diferente:
+    //   • venda VAZIA   → cancela em silêncio (é lixo, não é decisão)
+    //   • venda COM PEÇA → bloqueia o fechamento e devolve a lista pra tela
+    //                      perguntar o que fazer (finalizar ou cancelar).
+    // `cancelarVendasComPeca: true` é a resposta da tela depois de perguntar.
+    const comPeca: any[] = await (this.prisma as any).pdvSale.findMany({
+      where: { cashSessionId: session.id, status: 'open', items: { some: {} } },
+      select: {
+        id: true, total: true, createdAt: true, customerName: true,
+        sellerName: true, vendedorName: true,
+        _count: { select: { items: true } },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    if (comPeca.length > 0 && !input.cancelarVendasComPeca) {
+      throw new BadRequestException({
+        code: 'VENDAS_COM_PECA_ABERTAS',
+        message:
+          `${comPeca.length} venda(s) com peça ainda aberta(s). ` +
+          'Finalize ou cancele cada uma antes de fechar o caixa.',
+        vendas: comPeca.map((s) => ({
+          id: s.id,
+          total: Number(s.total || 0),
+          itens: s._count?.items ?? 0,
+          criadaEm: s.createdAt,
+          cliente: s.customerName ?? null,
+          vendedora: s.sellerName ?? s.vendedorName ?? null,
+        })),
+      });
+    }
+
+    // Vazias: lixo mesmo — cancela sem perguntar.
     const zumbis = await (this.prisma as any).pdvSale.updateMany({
-      where: { cashSessionId: session.id, status: 'open' },
+      where: { cashSessionId: session.id, status: 'open', items: { none: {} } },
       data: {
         status: 'cancelled',
         cancelledAt: new Date(),
-        cancelReason: 'Cancelamento automático no fechamento do caixa (venda não finalizada)',
+        cancelReason: 'Cancelamento automático no fechamento do caixa (carrinho vazio)',
       },
     });
+
+    // Com peça, mas a loja JÁ decidiu cancelar na tela: registra com motivo
+    // separado pra não se misturar com o lixo no relatório.
+    if (comPeca.length > 0 && input.cancelarVendasComPeca) {
+      const r = await (this.prisma as any).pdvSale.updateMany({
+        where: { cashSessionId: session.id, status: 'open' },
+        data: {
+          status: 'cancelled',
+          cancelledAt: new Date(),
+          cancelReason: 'Cancelada no fechamento do caixa (decisão da loja)',
+        },
+      });
+      this.logger.warn(
+        `[caixa] closeCash ${storeCode}: ${r.count} venda(s) COM PEÇA canceladas por decisão da loja`,
+      );
+    }
     let obsZumbis = '';
     if (zumbis.count > 0) {
       obsZumbis = `[fechamento: ${zumbis.count} venda(s) em aberto cancelada(s) automaticamente]`;

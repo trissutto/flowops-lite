@@ -314,7 +314,10 @@ type ScanBarHandle = {
 };
 
 type ScanBarProps = {
-  saleId: string;
+  /** null enquanto a venda ainda não nasceu — ela só nasce ao bipar a 1ª peça. */
+  saleId: string | null;
+  /** Devolve o id da venda CRIANDO na hora se ainda não existir. */
+  ensureSaleId: () => Promise<string | null>;
   onScanResult: (fresh: Sale) => void;     // pai faz flashAddedItem + setSale
   onError: (msg: string | null) => void;   // pai faz setError
   onRequestManualItem: () => void;         // pai abre o modal de item manual
@@ -322,7 +325,7 @@ type ScanBarProps = {
 };
 
 const ScanBar = forwardRef<ScanBarHandle, ScanBarProps>(function ScanBar(
-  { saleId, onScanResult, onError, onRequestManualItem, onAbrirPromoCheck },
+  { saleId, ensureSaleId, onScanResult, onError, onRequestManualItem, onAbrirPromoCheck },
   ref,
 ) {
   type ErpSearchHit = {
@@ -355,7 +358,6 @@ const ScanBar = forwardRef<ScanBarHandle, ScanBarProps>(function ScanBar(
   // forceRef: Shift+Enter / REF+ESPAÇO → busca a REF/grade direto, sem tentar bipar.
   const handleScan = async (e?: React.FormEvent, opts?: { forceRef?: boolean }) => {
     e?.preventDefault();
-    if (!saleId) return;
     const sku = scanInput.trim();
     if (!sku) return;
     // Atalho item manual: vendedora digita "0" → abre modal pra lançar
@@ -399,13 +401,23 @@ const ScanBar = forwardRef<ScanBarHandle, ScanBarProps>(function ScanBar(
     setScanLoading(true);
     onError(null);
     try {
-      const r = await api<any>(`/pdv/sales/${saleId}/items`, {
+      // A VENDA NASCE AQUI (11/08). Antes ela era criada só de abrir a tela e
+      // 42 registros vazios por dia viravam lixo — cancelados em massa no
+      // fechamento do caixa, escondendo as vendas de verdade que ficaram
+      // pendentes. Agora o primeiro bipe é que cria.
+      const sid = saleId || (await ensureSaleId());
+      if (!sid) {
+        onError('Não consegui abrir a venda. Tenta bipar de novo.');
+        setScanLoading(false);
+        return;
+      }
+      const r = await api<any>(`/pdv/sales/${sid}/items`, {
         method: 'POST',
         body: JSON.stringify({ skuOrEan: sku }),
       });
       // PERF: backend novo devolve a venda completa no POST — elimina o
       // segundo GET. Fallback pro GET enquanto backend antigo estiver no ar.
-      const fresh: Sale = r?.sale || (await api<Sale>(`/pdv/sales/${saleId}`));
+      const fresh: Sale = r?.sale || (await api<Sale>(`/pdv/sales/${sid}`));
       onScanResult(fresh);
       setScanInput('');
     } catch (e: any) {
@@ -433,17 +445,22 @@ const ScanBar = forwardRef<ScanBarHandle, ScanBarProps>(function ScanBar(
 
   // ── Adiciona peca direto por SKU (usado pelo dropdown de busca) ──
   const addBySku = useCallback(async (sku: string) => {
-    if (!saleId) return;
     setShowResults(false);
     setSearchResults([]);
     setScanLoading(true);
     onError(null);
     try {
-      const r = await api<any>(`/pdv/sales/${saleId}/items`, {
+      const sid = saleId || (await ensureSaleId());
+      if (!sid) {
+        onError('Não consegui abrir a venda. Tenta de novo.');
+        setScanLoading(false);
+        return;
+      }
+      const r = await api<any>(`/pdv/sales/${sid}/items`, {
         method: 'POST',
         body: JSON.stringify({ skuOrEan: sku }),
       });
-      const fresh: Sale = r?.sale || (await api<Sale>(`/pdv/sales/${saleId}`));
+      const fresh: Sale = r?.sale || (await api<Sale>(`/pdv/sales/${sid}`));
       onScanResult(fresh);
       setScanInput('');
     } catch (e: any) {
@@ -457,7 +474,7 @@ const ScanBar = forwardRef<ScanBarHandle, ScanBarProps>(function ScanBar(
         }
       }, 50);
     }
-  }, [saleId, onScanResult, onError]);
+  }, [saleId, ensureSaleId, onScanResult, onError]);
 
   // ── Effect: busca inline com debounce ──
   // Se digitar texto (com letra), busca por descricao no Giga.
@@ -845,6 +862,10 @@ function PdvPageInner() {
   // Popup central de CONFIRMAÇÃO da venda (resumo + escolha da vendedora) que
   // abre na finalização — substituiu o seletor de vendedora do canto superior.
   const [showConfirmSale, setShowConfirmSale] = useState(false);
+  // Seletor de MOTIVO do cancelamento (11/08). Texto livre não ensina nada:
+  // em 30 dias, R$ 543 mil saíram como "Cancelado pela vendedora" e ninguém
+  // sabe se foi desistência da cliente ou defeito nosso.
+  const [showCancelReason, setShowCancelReason] = useState(false);
   const [showPayment, setShowPayment] = useState(false);
   // Pré-seleção de método + bandeira (usado pelos atalhos MASTERCARD/VISANET/REDESHOP/VISA ELECTRON)
   const [presetMethod, setPresetMethod] = useState<string | null>(null);
@@ -943,14 +964,14 @@ function PdvPageInner() {
             if (lastSaleId) {
               api<Sale>(`/pdv/sales/${lastSaleId}`).then((sx) => {
                 if (sx.status === 'open' && sx.storeCode === storeCode) setSale(sx);
-                else { localStorage.removeItem(`lurds_pdv_sale_${storeCode}`); createNewSale(); }
-              }).catch(() => { localStorage.removeItem(`lurds_pdv_sale_${storeCode}`); createNewSale(); });
+                else { localStorage.removeItem(`lurds_pdv_sale_${storeCode}`); setSale(null); }
+              }).catch(() => { localStorage.removeItem(`lurds_pdv_sale_${storeCode}`); setSale(null); });
             } else {
-              createNewSale();
+              setSale(null);
             }
           }
         })
-        .catch(() => createNewSale());
+        .catch(() => setSale(null));
       return;
     }
 
@@ -971,21 +992,51 @@ function PdvPageInner() {
             setSale(s);
           } else {
             localStorage.removeItem(`lurds_pdv_sale_${storeCode}`);
-            createNewSale();
+            setSale(null);
           }
         })
         .catch(() => {
           localStorage.removeItem(`lurds_pdv_sale_${storeCode}`);
-          createNewSale();
+          setSale(null);
         });
     } else {
-      createNewSale();
+      setSale(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storeCode]);
 
-  const createNewSale = async () => {
-    if (!storeCode) return;
+  /**
+   * VENDA SOB DEMANDA (11/08) — devolve o id da venda aberta, criando na hora
+   * se ainda não existe.
+   *
+   * Antes o PDV criava a venda no banco só de abrir a tela: 42 registros
+   * vazios por dia (1.264 em 30 dias), que morriam em cancelamento em massa
+   * no fechamento do caixa ("limpeza de pendências"). O efeito colateral era
+   * pior que o lixo: as vendas DE VERDADE que ficaram pendentes se perdiam no
+   * meio do monte e eram canceladas junto.
+   *
+   * O ref segura a promessa em voo: dois bipes rápidos (ou bipe + clique no
+   * dropdown) compartilham a MESMA criação em vez de abrir duas vendas.
+   */
+  const ensureSaleIdRef = useRef<Promise<string | null> | null>(null);
+  const ensureSaleId = useCallback(async (): Promise<string | null> => {
+    if (sale?.id) return sale.id;
+    if (ensureSaleIdRef.current) return ensureSaleIdRef.current;
+    const p = (async () => {
+      try {
+        const s = await createNewSale();
+        return s?.id ?? null;
+      } finally {
+        ensureSaleIdRef.current = null;
+      }
+    })();
+    ensureSaleIdRef.current = p;
+    return p;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sale?.id, storeCode]);
+
+  const createNewSale = async (): Promise<Sale | null> => {
+    if (!storeCode) return null;
     setLoadingSale(true);
     setError(null);
     try {
@@ -1012,8 +1063,10 @@ function PdvPageInner() {
       } catch {
         /* noop */
       }
+      return full;
     } catch (e: any) {
       setError(e?.message || 'Erro ao abrir venda');
+      return null;
     } finally {
       setLoadingSale(false);
     }
@@ -1360,8 +1413,7 @@ function PdvPageInner() {
     setShowPayment(false);
     // Limpa referência da venda atual e cria nova (a anterior fica OPEN no DB)
     localStorage.removeItem(`lurds_pdv_sale_${storeCode}`);
-    setSale(null);
-    createNewSale();
+    setSale(null); // a próxima venda nasce no próximo bipe
     // Recarrega contagem de vendas em aberto
     loadOpenCount();
   };
@@ -1617,16 +1669,36 @@ function PdvPageInner() {
   }, [sale?.customerCpf]);
 
   // ── Cancelar ──
+  /**
+   * Cancelar venda — abre o seletor de MOTIVO em vez do confirm() seco.
+   *
+   * Por que (medição 11/08): 564 vendas COM PEÇA foram canceladas em 30 dias,
+   * R$ 543 mil, todas com o mesmo texto "Cancelado pela vendedora". Com isso
+   * não dá pra saber se é desistência normal da cliente ou defeito nosso —
+   * e sem saber, não dá pra consertar. Carrinho vazio não pergunta nada
+   * (não é decisão, é limpeza).
+   */
   const cancelSale = async () => {
     if (!sale) return;
-    if (!confirm('Cancelar essa venda? Vai perder tudo bipado.')) return;
+    const temItens = (sale.items || []).length > 0;
+    if (!temItens) {
+      await confirmarCancelamento('Carrinho vazio');
+      return;
+    }
+    setShowCancelReason(true);
+  };
+
+  /** Executa o cancelamento com o motivo escolhido. */
+  const confirmarCancelamento = async (motivo: string) => {
+    if (!sale) return;
+    setShowCancelReason(false);
     try {
       await api(`/pdv/sales/${sale.id}/cancel`, {
         method: 'POST',
-        body: JSON.stringify({ reason: 'Cancelado pela vendedora' }),
+        body: JSON.stringify({ reason: `Cancelado pela vendedora — ${motivo}` }),
       });
       localStorage.removeItem(`lurds_pdv_sale_${storeCode}`);
-      createNewSale();
+      setSale(null); // venda nova só nasce quando bipar a próxima peça
       toast('info', 'Venda cancelada', 'Carrinho limpo — pronta pra próxima');
     } catch (e: any) {
       const h = humanizeError(e);
@@ -1767,8 +1839,7 @@ function PdvPageInner() {
   const startNewSale = () => {
     setShowFinalized(false);
     setFinalizeError(null);
-    setSale(null);
-    createNewSale();
+    setSale(null); // a próxima venda nasce no próximo bipe
   };
 
   // Handlers compartilhados pelos dois blocos do pagamento rápido. A divisão
@@ -2166,13 +2237,17 @@ function PdvPageInner() {
         )}
 
         {/* Input bipagem — FULL-WIDTH (estilo mockup) com botão grande à direita */}
-        {sale?.status === 'open' && sale && (
+        {/* A barra de bipe aparece TAMBÉM sem venda aberta — é ela que cria a
+            venda no primeiro bipe (antes a venda nascia junto com a tela e
+            enchia o banco de registro vazio). */}
+        {(!sale || sale.status === 'open') && (
           <ScanBar
             ref={scanBarRef}
-            saleId={sale.id}
+            saleId={sale?.id ?? null}
+            ensureSaleId={ensureSaleId}
             onScanResult={(fresh) => {
               // flash verde no item recém-adicionado + atualiza a venda.
-              flashAddedItem(sale.items || [], fresh.items || []);
+              flashAddedItem(sale?.items || [], fresh.items || []);
               setSale(fresh);
             }}
             onError={setError}
@@ -2705,8 +2780,7 @@ function PdvPageInner() {
                       `${r.totalItems || sale.items.length} peças marcadas!`,
                       `Controle ${r.controle || ''} · ${r.forced ? '⚠ FORÇADO (acima do limite) · ' : ''}Cliente vai provar em casa`,
                     );
-                    setSale(null);
-                    setTimeout(() => createNewSale(), 500);
+                    setSale(null); // a próxima venda nasce no próximo bipe
                   } else {
                     toast('error', 'Falha ao marcar', r.error || 'Tente de novo');
                   }
@@ -2942,6 +3016,53 @@ function PdvPageInner() {
           onClose={() => setShowCustomer(false)}
           onSave={saveCustomer}
         />
+      )}
+
+      {/* ── MOTIVO DO CANCELAMENTO (11/08) ──
+          4 botões grandes em vez de texto livre. O motivo entra no
+          cancel_reason e vira relatório: dá pra separar desistência da
+          cliente (normal no provador) de erro nosso (que a gente conserta). */}
+      {showCancelReason && sale && (
+        <div
+          className="fixed inset-0 z-[70] bg-black/50 flex items-center justify-center p-4"
+          onClick={() => setShowCancelReason(false)}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-lg font-black text-slate-800">Cancelar esta venda</h3>
+            <p className="text-sm text-slate-500 mt-0.5 mb-4">
+              {(sale.items || []).length} peça(s) · R$ {Number(sale.total || 0).toFixed(2)} — por que
+              não foi pra frente?
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {[
+                { m: 'cliente desistiu', desc: 'provou e não levou' },
+                { m: 'errei a venda', desc: 'peça/preço errado' },
+                { m: 'trocou o pagamento', desc: 'vai refazer de outro jeito' },
+                { m: 'cliente volta depois', desc: 'vai pensar / buscar dinheiro' },
+              ].map((o) => (
+                <button
+                  key={o.m}
+                  type="button"
+                  onClick={() => confirmarCancelamento(o.m)}
+                  className="text-left px-4 py-3 rounded-xl border-2 border-slate-200 hover:border-rose-300 hover:bg-rose-50 transition"
+                >
+                  <span className="block text-sm font-bold text-slate-800 capitalize">{o.m}</span>
+                  <span className="block text-[11px] text-slate-500">{o.desc}</span>
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowCancelReason(false)}
+              className="mt-4 w-full px-4 py-2.5 rounded-xl border-2 border-slate-200 text-slate-600 text-sm font-bold hover:bg-slate-50"
+            >
+              Voltar — não cancelar
+            </button>
+          </div>
+        </div>
       )}
 
       {/* Modal Vendedora */}
