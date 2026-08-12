@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { refBaseOf } from '../common/ref-base';
 
 /**
  * CATÁLOGO DO E-COMMERCE (sprint 008) — ERP é a fonte da verdade.
@@ -441,6 +442,20 @@ export class LojaCatalogService {
     );
     return escolhida ?? linhas;
   }
+
+  /**
+   * A REF-BASE em SQL — a MESMA regra de `common/ref-base.ts`, no banco.
+   *
+   * `refBaseOf` corta tudo depois do último dígito e devolve a REF inteira
+   * quando não sobra nada ("GRAVATA"). O `NULLIF/COALESCE` é justamente esse
+   * "senão a própria REF": sem ele, toda REF sem dígito viraria string vazia e
+   * cairia no mesmo balde.
+   *
+   * Existe pra buscar a FAMÍLIA numa consulta só. Se a regra do TypeScript
+   * mudar, esta muda junto — duas versões da mesma regra é o erro que criou
+   * este arquivo.
+   */
+  private static readonly SQL_REF_BASE = `COALESCE(NULLIF(regexp_replace(UPPER(TRIM(p.ref)), '[^0-9]+$', ''), ''), UPPER(TRIM(p.ref)))`;
 
   private readonly SQL_VARIACOES = `
     SELECT
@@ -1017,10 +1032,26 @@ export class LojaCatalogService {
     });
     if (!publicadas.length) return [];
     const refsPub = publicadas.map((p) => p.ref);
+    const publicada = new Set(refsPub.map((r) => String(r).trim().toUpperCase()));
+    const basesPub = [...new Set(refsPub.map((r) => refBaseOf(r)))];
 
-    // 2) Variações do ERP dessas REFs
+    /**
+     * 2) Variações do ERP — DA FAMÍLIA, não só da REF publicada (12/08/2026).
+     *
+     * A cor virou REF nova no catálogo legado, e quase sempre só UMA delas foi
+     * publicada. Medido na produção: 290 REFs irmãs existem no espelho sem
+     * cadastro no site, segurando 297 cores — cores com FOTO no acervo e PEÇA
+     * na arara, que simplesmente não existiam pro site.
+     *
+     * Aqui a consulta abre pra família inteira (mesma REF-BASE de alguma
+     * publicada). Quem entra de fato é decidido embaixo: cor de irmã sem
+     * cadastro só vale com foto e estoque — publicar por tabela encheria a
+     * vitrine de peça morta.
+     */
     const linhas: LinhaErp[] = await this.prisma.$queryRawUnsafe(
-      `${this.SQL_VARIACOES} AND UPPER(TRIM(p.ref)) = ANY($1)`, refsPub,
+      `${this.SQL_VARIACOES}
+         AND (UPPER(TRIM(p.ref)) = ANY($1) OR ${LojaCatalogService.SQL_REF_BASE} = ANY($2))`,
+      refsPub, basesPub,
     );
 
     const porRef = new Map<string, LinhaErp[]>();
@@ -1038,47 +1069,104 @@ export class LojaCatalogService {
      * A ficha do CRM é a fonte do conteúdo desde 03/08; metade do site não
      * estava lendo.
      */
-    const { site, fit, fotos, fichas } = await this.complementos(Array.from(porRef.keys()));
+    /**
+     * As REFs-BASE entram no carregamento MESMO SEM LINHA NO ERP: a foto é
+     * gravada sempre na base (`ProductPhotosService.upload`), e a peça
+     * publicada pode ser a irmã sufixada. Sem isto, 159 REFs publicadas ficam
+     * "sem foto" com a galeria inteira guardada uma REF ao lado.
+     */
+    const refsComplementos = new Set<string>(refsPub.map((r) => String(r).toUpperCase()));
+    for (const ref of porRef.keys()) {
+      refsComplementos.add(ref);
+      refsComplementos.add(refBaseOf(ref));
+    }
+    const { site, fit, fotos, fichas } = await this.complementos([...refsComplementos]);
 
     /**
-     * JUNTA AS REFs QUE SÃO A MESMA PEÇA (10/08/2026).
+     * JUNTA AS REFs QUE SÃO A MESMA PEÇA (10/08/2026, refeito em 12/08).
      *
      * No catálogo legado a cor virava REF nova: `900887` era o macaquinho
      * preto e `900887B` o mesmo macaquinho bege. A vitrine mostrava os dois
      * lado a lado, e a cliente escolhia entre o que parece ser o mesmo produto
      * repetido.
      *
-     * Aqui as linhas do ERP das REFs irmãs entram no MESMO `montarPeca` — e
-     * como é dele que saem as bolinhas de cor, as cores das duas viram as
-     * cores de uma peça só. Nada precisou mudar em `montarPeca`.
+     * A chave da família é o `grupoRef` quando a retaguarda decidiu, e a
+     * **REF-BASE** quando não — antes era a própria REF, e por isso a fusão
+     * dependia do sync ter rodado e ter passado nas travas. Medido em 12/08:
+     * das 122 famílias publicadas só 76 tinham `grupoRef`, e as outras 46
+     * apareciam como 166 cards repetidos.
      *
-     * Quem decide o parentesco é `SiteProduto.grupoRef`, escrito pelo
-     * `GrupoRefService` e revisável na retaguarda. Sem grupo (o caso normal, e
-     * o de toda REF nova), a peça continua sozinha.
+     * `grupoRefManual` sem grupo é DESAGRUPAMENTO explícito: alguém olhou e
+     * disse "esta peça é sozinha". A base não pode reagrupá-la.
      */
+    const chaveDaFamilia = (ref: string): string => {
+      const cadastro = site.get(ref) as any;
+      if (cadastro?.grupoRefManual && !cadastro?.grupoRef) return ref;
+      return this.normRef(cadastro?.grupoRef) || refBaseOf(ref);
+    };
+
     const agrupadas = new Map<string, LinhaErp[]>();
     for (const [ref, ls] of porRef) {
-      const chave = this.normRef((site.get(ref) as any)?.grupoRef) || ref;
+      const chave = chaveDaFamilia(ref);
       if (!agrupadas.has(chave)) agrupadas.set(chave, []);
       agrupadas.get(chave)!.push(...ls);
     }
 
-    const pecas = Array.from(agrupadas.entries()).map(([ref, ls]) => {
+    const pecas: any[] = [];
+    for (const [ref, todas] of agrupadas) {
       /**
-       * A identidade (nome, slug, foto, ficha) vem do cadastro da RAIZ quando
-       * ele existe — é a peça "principal". Se a raiz não estiver publicada,
-       * usa o cadastro da primeira irmã disponível: melhor a peça aparecer com
-       * o nome da irmã do que não aparecer.
+       * A identidade (nome, slug, ficha) vem do cadastro da RAIZ quando ele
+       * existe — é a peça "principal". Se a raiz não estiver publicada, usa o
+       * cadastro da primeira irmã disponível: melhor a peça aparecer com o
+       * nome da irmã do que não aparecer.
        */
+      const refsDaFamilia = [...new Set([ref, ...todas.map((l) => l.ref)])];
       const dono =
         site.get(ref) !== undefined
           ? ref
-          : (ls.map((l) => l.ref).find((r) => site.get(r) !== undefined) ?? ref);
-      return this.montarPeca(
-        ref, ls, site.get(dono), fit.get(dono), fotos.get(dono) ?? [],
-        this.escolherFicha(fichas.get(dono), ls.find((l) => l.marca)?.marca),
+          : (refsDaFamilia.find((r) => site.get(r) !== undefined) ?? ref);
+
+      /**
+       * A GALERIA É DA FAMÍLIA. O acervo está gravado na REF-BASE e as cores
+       * moram nas irmãs: ler só as fotos do `dono` deixava 1.230 fotos (34% do
+       * acervo) apontando pra uma cor que "não existe" na peça — e a bolinha
+       * dessa cor sumia do site, porque cor sem foto não vai pra vitrine.
+       *
+       * As do dono vêm primeiro: `ordem` 0 dele é que tem de ser a capa.
+       */
+      const fotosDaFamilia = [
+        ...(fotos.get(dono) ?? []),
+        ...refsDaFamilia.filter((r) => r !== dono).flatMap((r) => fotos.get(r) ?? []),
+      ];
+      const coresComFoto = new Set(
+        fotosDaFamilia.map((f) => String(f.cor || '').trim().toUpperCase()).filter(Boolean),
       );
-    });
+
+      /**
+       * A IRMÃ SEM CADASTRO ENTRA PELA COR, não pela REF (decisão do dono,
+       * 12/08): a cor dela vira bolinha desta peça quando tem FOTO e ESTOQUE.
+       * Sem as duas condições ela é acervo morto — cor que abre galeria vazia
+       * ou que a cliente escolhe e descobre esgotada no carrinho.
+       */
+      const linhas = todas.filter(
+        (l) =>
+          publicada.has(l.ref) ||
+          ((l.estoque || 0) > 0 &&
+            coresComFoto.has(String(l.cor || '').trim().toUpperCase())),
+      );
+      if (!linhas.length) continue;
+
+      // A ficha também é da família: a bolinha pode ter sido gravada sob a
+      // base enquanto a peça publicada é a irmã (a varredura usa REF-BASE).
+      const fichasDaFamilia = refsDaFamilia.flatMap((r) => fichas.get(r) ?? []);
+
+      pecas.push(
+        this.montarPeca(
+          ref, linhas, site.get(dono), fit.get(dono), fotosDaFamilia,
+          this.escolherFicha(fichasDaFamilia, linhas.find((l) => l.marca)?.marca),
+        ),
+      );
+    }
 
     /**
      * PEÇA SEM FOTO NUNCA CHEGA À VITRINE (item 39).
@@ -1325,6 +1413,28 @@ export class LojaCatalogService {
   async porSlug(slug: string) {
     const chave = String(slug || '').trim();
     if (!chave) return null;
+
+    /**
+     * A PDP É O MESMO CARD DA VITRINE (12/08/2026).
+     *
+     * 🔴 Bug encontrado na revisão: a listagem funde a família e a PDP não —
+     * ela montava a peça só com as linhas da PRÓPRIA REF. A cliente clicava
+     * num card com quatro bolinhas e abria uma página com duas, sem que nada
+     * no site explicasse a diferença. Toda regra nova de agrupamento nascia
+     * torta pelo mesmo motivo: eram dois caminhos montando "a peça".
+     *
+     * Agora a PDP procura no catálogo já montado (cache de 60s, o mesmo TTL da
+     * borda) e só cai no caminho REF a REF quando a peça não está na vitrine —
+     * que é o que permite conferir por link direto uma peça ainda sem foto.
+     */
+    const refPedida = this.normRef(chave.replace(/^ref-/i, ''));
+    const daVitrine = (await this.catalogoPublicado()).find(
+      (p: any) =>
+        p.slug === chave ||
+        this.normRef(p.ref) === refPedida ||
+        this.normRef(p.ref) === refBaseOf(refPedida),
+    );
+    if (daVitrine) return daVitrine;
 
     let registro = await (this.prisma as any).siteProduto.findUnique({ where: { slug: chave } });
     if (!registro) {

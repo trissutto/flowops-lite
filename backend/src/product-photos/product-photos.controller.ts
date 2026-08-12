@@ -214,6 +214,20 @@ export class ProductPhotosController {
     return this.bolinhaAuto.status();
   }
 
+  /**
+   * ACERVO EM JPEG — tira o AVIF do bucket (12/08).
+   *
+   * Parte do acervo veio do WordPress já convertido em AVIF, com nome `.jpg`:
+   * a IA recusa ler a cor e o iPhone anterior ao iOS 16.4 não abre a foto. Vai
+   * em lotes porque o domínio público do R2 responde 429 com pressa — a tela
+   * chama de novo enquanto `restantes` for maior que zero.
+   */
+  @Post('normalizar-formatos')
+  async normalizarFormatos(@Req() req: any, @Body() body: { limite?: number }) {
+    this.requireWrite(req);
+    return this.svc.normalizarFormatos(Number(body?.limite) || 150);
+  }
+
   @Post('detectar-cor')
   async detectarCor(@Req() req: any, @Body('url') url: string) {
     this.requireWrite(req);
