@@ -4622,11 +4622,50 @@ function PaymentModal({
   const [pixOnlineLoading, setPixOnlineLoading] = useState(false);
   const [pixOnlineCopiado, setPixOnlineCopiado] = useState(false);
   const [pixOnlineErro, setPixOnlineErro] = useState<string | null>(null);
+  const [pixOnlinePago, setPixOnlinePago] = useState(false);
+
+  /**
+   * O PIX MANDADO PRA CLIENTE PRECISA AVISAR QUE CAIU (12/08/2026).
+   *
+   * O painel prometia "a venda confirma sozinha quando ela pagar" e não
+   * mostrava nada quando isso acontecia: a vendedora mandava o código e ficava
+   * olhando pra tela parada, sem saber se o dinheiro entrou. Foi assim que
+   * Sorocaba abriu chamado com a cliente já tendo mandado o comprovante.
+   *
+   * Poll leve (4s) só no status LOCAL — quem pergunta pro PagBank é o
+   * reconciliador no servidor. Nada de bater no gateway pelo navegador: foi
+   * exatamente esse padrão que derrubou a live de 01/07.
+   */
+  useEffect(() => {
+    if (!pixOnline || pixOnlinePago || !saleId) return;
+    let cancelado = false;
+    let emVoo = false;
+    const tick = async () => {
+      if (emVoo) return;
+      emVoo = true;
+      try {
+        const r = await api<{ status: string }>(`/pagbank/pix/status/${saleId}`);
+        if (!cancelado && r?.status === 'paid') {
+          setPixOnlinePago(true);
+          toast('success', 'PIX recebido!', 'O pagamento caiu. Pode finalizar a venda.');
+        }
+      } catch {
+        // silencioso — poll tolerante
+      } finally {
+        emVoo = false;
+      }
+    };
+    void tick();
+    const id = setInterval(tick, 4000);
+    return () => { cancelado = true; clearInterval(id); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pixOnline, pixOnlinePago, saleId]);
 
   const gerarPixOnline = async () => {
     if (pixOnlineLoading || !saleId) return;
     setPixOnlineLoading(true);
     setPixOnlineErro(null);
+    setPixOnlinePago(false);
     try {
       const pb = await api<{
         pagbankOrderId: string;
@@ -6175,9 +6214,18 @@ function PaymentModal({
                         Mandar no WhatsApp
                       </a>
                     </div>
+                    {pixOnlinePago ? (
+                      <div className="rounded-lg bg-emerald-600 text-white text-center text-xs font-bold py-2.5">
+                        ✓ PAGAMENTO CONFIRMADO — pode finalizar a venda
+                      </div>
+                    ) : (
+                      <div className="rounded-lg bg-white border border-emerald-200 text-emerald-800 text-center text-[11px] font-semibold py-2">
+                        Aguardando o pagamento cair… o sistema avisa aqui sozinho
+                      </div>
+                    )}
                     <button
                       type="button"
-                      onClick={() => { setPixOnline(null); setPixOnlineErro(null); }}
+                      onClick={() => { setPixOnline(null); setPixOnlineErro(null); setPixOnlinePago(false); }}
                       className="w-full text-[11px] text-slate-500 hover:text-slate-700 underline"
                     >
                       Gerar outro código (valor mudou)
