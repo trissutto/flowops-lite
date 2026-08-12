@@ -128,6 +128,70 @@ function CreditEditor({ data, onSaved }: { data: AnyRecord; onSaved: () => void 
   return <Card className="mt-4 border-amber-300 bg-amber-50"><SectionTitle action={<div className="flex gap-2"><button onClick={() => setOpen(false)} className="rounded-lg border bg-white px-3 py-1.5 text-xs">Cancelar</button><button onClick={save} disabled={saving} className="rounded-lg bg-[#2E7D46] px-3 py-1.5 text-xs font-bold text-white disabled:opacity-50">{saving ? 'Salvando…' : 'Salvar alterações'}</button></div>}>Editar dados de crédito</SectionTitle>{error && <div className="mb-3 rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</div>}<div className="grid gap-4 sm:grid-cols-2">{input('limiteCrediario','Limite de compras (R$)','number')}{input('spcSituacao','Situação SPC')}{input('spcData','Data SPC','date')}{input('trabalhoRazaoSocial','Empresa')}{input('trabalhoCargo','Cargo')}{input('trabalhoSalario','Salário (R$)','number')}{input('trabalhoAdmissao','Admissão','date')}{input('trabalhoFone','Telefone comercial')}{input('aluguel','Aluguel (R$)','number')}<label className="text-xs font-semibold">Bloqueada<select value={String(form.bloqueado)} onChange={e => setForm(v => ({...v,bloqueado:e.target.value==='true'}))} className="mt-1 w-full rounded-lg border bg-white px-3 py-2 text-sm"><option value="false">Não</option><option value="true">Sim</option></select></label><label className="text-xs font-semibold">Negativada<select value={String(form.negativado)} onChange={e => setForm(v => ({...v,negativado:e.target.value==='true'}))} className="mt-1 w-full rounded-lg border bg-white px-3 py-2 text-sm"><option value="false">Não</option><option value="true">Sim</option></select></label></div></Card>;
 }
 
+function MarkedAuthorization({ fichas, onSaved }: { fichas: AnyRecord[]; onSaved: () => void }) {
+  const [editing, setEditing] = useState<string | null>(null);
+  const [evaluation, setEvaluation] = useState('');
+  const [password, setPassword] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const start = (ficha: AnyRecord) => {
+    setEditing(`${ficha.storeCode}:${ficha.customerCode}`);
+    setEvaluation(ficha.evaluation || '');
+    setPassword('');
+    setError('');
+  };
+  const save = async (ficha: AnyRecord) => {
+    if (!password.trim()) { setError('Informe a senha do gerente.'); return; }
+    setSaving(true); setError('');
+    try {
+      const result = await api<AnyRecord>('/admin/clientes-giga/ficha/restrito', {
+        method: 'POST',
+        body: JSON.stringify({
+          loja: ficha.storeCode,
+          codigo: ficha.customerCode,
+          password,
+          campos: { AVALIACAO: evaluation.trim().toUpperCase() },
+        }),
+      });
+      if (result?.ok === false) throw new Error(result.erro || 'Não foi possível alterar a liberação');
+      setEditing(null); setPassword(''); onSaved();
+    } catch (e: any) { setError(e?.message || 'Não foi possível alterar a liberação'); }
+    finally { setSaving(false); }
+  };
+
+  return <Card className="lg:col-span-2">
+    <SectionTitle>Liberação para marcado</SectionTitle>
+    <p className="mb-4 text-sm text-[#6B665D]">A liberação é por loja. Para permitir marcar, a ficha precisa estar com Avaliação A, limite maior que zero e sem bloqueio.</p>
+    {!fichas?.length ? <div className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">Esta cliente ainda não possui ficha física vinculada para liberar o marcado.</div> : <div className="space-y-3">
+      {fichas.map((ficha) => {
+        const key = `${ficha.storeCode}:${ficha.customerCode}`;
+        const isEditing = editing === key;
+        return <div key={key} className="rounded-xl border border-[#DEDCD7] p-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+            <div className="min-w-0 flex-1">
+              <div className="font-semibold">Loja {ficha.storeCode} <span className="font-normal text-[#817B70]">· ficha {ficha.customerCode}</span></div>
+              <div className="mt-1 flex flex-wrap gap-2 text-xs">
+                <span className={`rounded-full px-2 py-1 font-semibold ${ficha.allowed ? 'bg-emerald-100 text-emerald-800' : 'bg-red-50 text-red-800'}`}>{ficha.allowed ? 'Liberada para marcado' : 'Não liberada'}</span>
+                <span className="rounded-full bg-[#F2F0EB] px-2 py-1">Avaliação: {ficha.evaluation || '—'}</span>
+                <span className="rounded-full bg-[#F2F0EB] px-2 py-1">Limite: {ficha.limit == null ? 'não informado' : ficha.limit.toLocaleString('pt-BR',{style:'currency',currency:'BRL'})}</span>
+                {ficha.blocked && <span className="rounded-full bg-red-50 px-2 py-1 text-red-800">Bloqueada</span>}
+              </div>
+            </div>
+            {!isEditing && <button onClick={() => start(ficha)} className="rounded-lg border border-[#D4AF37] px-3 py-2 text-xs font-semibold text-[#8C7325] hover:bg-[#FBF6E6]"><ShieldCheck className="mr-1 inline h-4 w-4" />Alterar liberação</button>}
+          </div>
+          {isEditing && <div className="mt-4 grid gap-3 border-t border-[#ECE9E2] pt-4 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
+            <label className="text-xs font-semibold text-[#6B665D]">Avaliação<select value={evaluation} onChange={e => setEvaluation(e.target.value)} className="mt-1 w-full rounded-lg border bg-white px-3 py-2 text-sm font-normal"><option value="">Sem classificação</option><option value="A">A — libera marcado</option><option value="B">B — não libera</option><option value="C">C — não libera</option></select></label>
+            <label className="text-xs font-semibold text-[#6B665D]">Senha do gerente<input type="password" value={password} onChange={e => setPassword(e.target.value)} autoComplete="current-password" className="mt-1 w-full rounded-lg border px-3 py-2 text-sm font-normal" /></label>
+            <div className="flex gap-2"><button onClick={() => setEditing(null)} className="rounded-lg border px-3 py-2 text-xs">Cancelar</button><button onClick={() => void save(ficha)} disabled={saving} className="rounded-lg bg-[#27241F] px-3 py-2 text-xs font-bold text-white disabled:opacity-50">{saving ? 'Salvando…' : 'Confirmar'}</button></div>
+          </div>}
+          {isEditing && error && <div className="mt-3 rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</div>}
+        </div>;
+      })}
+    </div>}
+  </Card>;
+}
+
 export default function FichaClienteBetaPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
@@ -243,7 +307,7 @@ export default function FichaClienteBetaPage() {
 
         {tab === 'perfil' && <div className="grid gap-4 lg:grid-cols-2"><EditSection title="Perfil Plus Size" data={detail} onSaved={load} fields={[{key:'sizeDefault',label:'Manequim principal'},{key:'sizeSecondary',label:'Manequim secundário'},{key:'bodyType',label:'Tipo de corpo'},{key:'preferredStyle',label:'Estilo preferido'},{key:'favoriteColors',label:'Cores favoritas'},{key:'avoidedPieces',label:'Peças que evita'}]} /><Card><SectionTitle>Segmentação</SectionTitle><div className="grid grid-cols-2 gap-4"><Field label="Tier atual" value={detail.vipTier} /><Field label="Entrada no tier" value={date(detail.tierEnteredAt)} /><Field label="Classificação RFV" value={detail.rfvSegment} /><Field label="Engajamento" value={detail.rfvEngagement !== null ? `${detail.rfvEngagement || 0} / 100` : null} /></div></Card></div>}
 
-        {tab === 'credito' && <><div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><ShieldCheck className="mr-2 inline h-4 w-4" />Dados sensíveis. {isAdmin ? <>Somente administradores podem alterar esta aba.<CreditEditor data={detail} onSaved={load} /></> : 'Somente administradores podem alterar esta aba.'}</div><div className="grid gap-4 lg:grid-cols-2"><Card><SectionTitle>Limite e situação</SectionTitle><div className="grid grid-cols-2 gap-4"><Field label="Limite de compras" value={detail.limiteCrediarioCents ? money(detail.limiteCrediarioCents) : null} moneyValue /><Field label="Bloqueada" value={detail.bloqueadoGiga === true ? 'Sim' : detail.bloqueadoGiga === false ? 'Não' : null} /><Field label="SPC / negativada" value={detail.negativadoGiga === true ? 'Sim' : detail.negativadoGiga === false ? 'Não' : null} /><Field label="Situação SPC" value={detail.spcSituacao} /><Field label="Data da consulta" value={date(detail.spcData)} /><Field label="Casa própria" value={detail.casaPropria === true ? 'Sim' : detail.casaPropria === false ? 'Não' : null} /></div></Card><Card><SectionTitle>Trabalho e renda</SectionTitle><div className="grid grid-cols-2 gap-4"><Field label="Empresa" value={detail.trabalhoRazaoSocial} /><Field label="Cargo" value={detail.trabalhoCargo} /><Field label="Admissão" value={date(detail.trabalhoAdmissao)} /><Field label="Salário" value={detail.trabalhoSalarioCents ? money(detail.trabalhoSalarioCents) : null} moneyValue /><Field label="Telefone comercial" value={phone(detail.trabalhoFone)} /><Field label="Aluguel" value={detail.aluguelCents ? money(detail.aluguelCents) : null} moneyValue /></div></Card></div></>}
+        {tab === 'credito' && <><div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><ShieldCheck className="mr-2 inline h-4 w-4" />Dados sensíveis. {isAdmin ? <>Somente administradores podem alterar esta aba.<CreditEditor data={detail} onSaved={load} /></> : 'Somente administradores podem alterar esta aba.'}</div><div className="grid gap-4 lg:grid-cols-2">{isAdmin && <MarkedAuthorization fichas={detail.markedAuthorizations || []} onSaved={load} />}<Card><SectionTitle>Limite e situação</SectionTitle><div className="grid grid-cols-2 gap-4"><Field label="Limite de compras" value={detail.limiteCrediarioCents ? money(detail.limiteCrediarioCents) : null} moneyValue /><Field label="Bloqueada" value={detail.bloqueadoGiga === true ? 'Sim' : detail.bloqueadoGiga === false ? 'Não' : null} /><Field label="SPC / negativada" value={detail.negativadoGiga === true ? 'Sim' : detail.negativadoGiga === false ? 'Não' : null} /><Field label="Situação SPC" value={detail.spcSituacao} /><Field label="Data da consulta" value={date(detail.spcData)} /><Field label="Casa própria" value={detail.casaPropria === true ? 'Sim' : detail.casaPropria === false ? 'Não' : null} /></div></Card><Card><SectionTitle>Trabalho e renda</SectionTitle><div className="grid grid-cols-2 gap-4"><Field label="Empresa" value={detail.trabalhoRazaoSocial} /><Field label="Cargo" value={detail.trabalhoCargo} /><Field label="Admissão" value={date(detail.trabalhoAdmissao)} /><Field label="Salário" value={detail.trabalhoSalarioCents ? money(detail.trabalhoSalarioCents) : null} moneyValue /><Field label="Telefone comercial" value={phone(detail.trabalhoFone)} /><Field label="Aluguel" value={detail.aluguelCents ? money(detail.aluguelCents) : null} moneyValue /></div></Card></div></>}
 
         {tab === 'compras' && <Card><SectionTitle>Histórico consolidado · loja + site + live</SectionTitle>{loadingHistory ? <div className="py-10 text-center text-[#817B70]"><Loader2 className="mx-auto mb-2 h-5 w-5 animate-spin" />Carregando compras…</div> : history?.error ? <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{history.error}</div> : history?.compras?.length ? <div className="divide-y">{history.compras.map((c: AnyRecord) => <div key={`${c.canal}-${c.id}`} className="flex items-start gap-3 py-4"><div className="rounded-lg bg-[#F2F0EB] p-2"><ShoppingBag className="h-4 w-4" /></div><div className="min-w-0 flex-1"><div className="font-medium">{c.canal === 'loja' ? c.storeName : c.canal === 'live' ? 'Live Commerce' : 'Site'} · {c.saleNumber}</div><div className="mt-1 text-xs text-[#817B70]">{date(c.data, true)} · {c.qtdItens} peça(s){c.sellerName ? ` · ${c.sellerName}` : ''}</div></div><div className="font-semibold text-[#2E7D46]">{Number(c.total || 0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'})}</div></div>)}</div> : <p className="py-8 text-center text-sm italic text-[#AAA49A]">Nenhuma compra localizada</p>}</Card>}
 
