@@ -216,7 +216,13 @@ export class CashController {
   @Post('fechar')
   async close(
     @Req() req: any,
-    @Body() body: { dinheiroFisico?: number; observacao?: string; storeCode?: string },
+    @Body() body: {
+      dinheiroFisico?: number;
+      observacao?: string;
+      storeCode?: string;
+      /** Loja já viu a lista de vendas COM PEÇA abertas e mandou cancelar. */
+      cancelarVendasComPeca?: boolean;
+    },
   ) {
     this.requireRole(req);
     const { storeCode } = this.resolveStore(req, { storeCode: body.storeCode });
@@ -228,6 +234,7 @@ export class CashController {
       dinheiroFisico: fisico != null && !isNaN(fisico) ? fisico : null,
       closedByName: req?.user?.name || req?.user?.email || null,
       observacao: body.observacao,
+      cancelarVendasComPeca: !!body.cancelarVendasComPeca,
     });
   }
 
