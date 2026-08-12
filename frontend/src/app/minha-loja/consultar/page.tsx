@@ -432,8 +432,8 @@ function ConsultarInner() {
             {familiasDaRef.length > 1 && (
               <div className="bg-amber-50 border-2 border-amber-300 rounded-xl p-3 text-sm text-amber-900">
                 <strong>{familiasDaRef.length} cadastros desta REF</strong> — a mesma
-                referência existe com marcas diferentes. Confira todos os
-                cartões abaixo antes de dizer que não tem.
+                referência tem mais de um produto (bermuda, calça, vestido…).
+                Confira todos os cartões abaixo antes de dizer que não tem.
               </div>
             )}
             {(familiasDaRef.length > 1
@@ -441,7 +441,7 @@ function ConsultarInner() {
               : [pickedRefFromDesc]
             ).map((fam, i) => (
               <ProductCard
-                key={`${fam.ref}|${fam.marca ?? i}`}
+                key={`${fam.ref}|${fam.marca ?? ''}|${i}`}
                 item={fam}
                 highlightSku={null}
                 myStore={data?.myStore ?? (me?.storeCode ? { code: me.storeCode, name: me.storeName ?? me.storeCode } : null)}
@@ -473,8 +473,9 @@ function ConsultarInner() {
               new Set(data.results.map((r) => r.ref)).size < data.results.length && (
               <div className="bg-amber-50 border-2 border-amber-300 rounded-xl p-3 text-sm text-amber-900">
                 <strong>{data.results.length} cadastros desta REF</strong> — a mesma
-                referência existe com marcas diferentes. Os cartões aparecem
-                em sequência; confira os dois antes de dizer que não tem.
+                referência tem mais de um produto (bermuda, calça, vestido…).
+                Os cartões aparecem em sequência; confira todos antes de dizer
+                que não tem.
               </div>
             )}
             {data.results.map((r, i) => (
@@ -482,8 +483,10 @@ function ConsultarInner() {
                 // ⚠️ NUNCA só r.ref: famílias da MESMA REF (fornecedor
                 // divergente) geravam chave duplicada e o React descartava o
                 // segundo cartão — o PRETO do BMM-100 sumia da tela mesmo
-                // vindo na resposta (03/08).
-                key={`${r.ref}|${r.marca ?? i}`}
+                // vindo na resposta (03/08). O índice entra sempre porque
+                // desde 12/08 há cartões legítimos com REF igual e marca
+                // VAZIA nos dois (blusa 6605 × calça 6605).
+                key={`${r.ref}|${r.marca ?? ''}|${i}`}
                 item={r}
                 highlightSku={mode === 'sku' ? r.matchedSku ?? null : null}
                 myStore={data.myStore}

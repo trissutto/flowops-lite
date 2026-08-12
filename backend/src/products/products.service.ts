@@ -9,6 +9,7 @@ import { ErpService } from '../erp/erp.service';
 import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service';
 import { ProductSearchService } from '../product-search/product-search.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { discriminadorProduto } from '../common/produto-discriminador';
 
 /**
  * ProductsService
@@ -2854,11 +2855,15 @@ export class ProductsService {
     for (const sku of skus) {
       const meta = skuToMeta.get(sku)!;
       const ref = normalizeBaseRef(meta.ref);
-      // Chave do balde = REF + FORNECEDOR: a mesma REF numérica é reusada
+      // Chave do balde = REF + DISCRIMINADOR: a mesma REF numérica é reusada
       // por fornecedores diferentes no Giga (calça MANIFESTO e vestido
-      // RIU KIU ambos "8709") — sem o fornecedor os produtos se misturam e
+      // RIU KIU ambos "8709") — sem o discriminador os produtos se misturam e
       // a grade mostra o nome/preço de um com as variações do outro.
-      const bucketKey = `${ref}|${meta.marca}`;
+      //
+      // O discriminador é a MARCA, e cai pra família da descrição quando a
+      // marca está VAZIA (44% do catálogo) — sem esse fallback a calça 6605
+      // sumia dentro do cartão da blusa 6605, as duas sem marca (12/08).
+      const bucketKey = `${ref}|${discriminadorProduto(meta.marca, meta.descricao)}`;
       if (!byRef.has(bucketKey)) {
         byRef.set(bucketKey, {
           ref,

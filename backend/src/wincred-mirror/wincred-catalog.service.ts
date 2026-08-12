@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
+import { discriminadorProduto } from '../common/produto-discriminador';
 
 /**
  * WincredCatalogService — leitura do CATÁLOGO pro caminho quente do PDV
@@ -321,7 +322,11 @@ export class WincredCatalogService {
     return this.erp.searchByRef(ref);
   }
 
-  private async searchByRefFromMirror(ref: string): Promise<any[]> {
+  private async searchByRefFromMirror(
+    ref: string,
+    /** Código bipado — imune à dedup (ver o comentário da chave, abaixo). */
+    preservarCodigo?: string,
+  ): Promise<any[]> {
     const clean = String(ref || '').trim();
     if (!clean) return [];
     const prisma: any = this.prisma;
@@ -381,12 +386,24 @@ export class WincredCatalogService {
     const norm = (s: any) => String(s ?? '').trim().toUpperCase();
     const byKey = new Map<string, any>();
     for (const p of filtered) {
-      const k = `${norm(p.ref)}|${norm(p.cor)}|${norm(p.tamanho)}`;
+      // ⚠️ O DISCRIMINADOR ENTRA NA CHAVE (12/08): a dedup existe pra matar
+      // duplicidade do Wincred DENTRO do mesmo produto. Sem marca/família na
+      // chave, "6605 JEANS 38" da BERMUDA KATHO e "6605 JEANS 38" da CALÇA
+      // MAX DENIM viram a mesma célula e uma APAGA a outra do resultado —
+      // não é cartão errado, é linha que some da Consulta.
+      const k = `${norm(p.ref)}|${discriminadorProduto(p.marca, p.descricaoCompleta)}|${norm(p.cor)}|${norm(p.tamanho)}`;
       const totalEst = totalByCodigo.get(String(p.codigo)) || 0;
       const codigoNum = Number(p.codigo) || 0;
       const cur = byKey.get(k);
       if (!cur) { byKey.set(k, { p, totalEst, codigoNum }); continue; }
-      if (totalEst > cur.totalEst || (totalEst === cur.totalEst && codigoNum > cur.codigoNum)) {
+      // O código BIPADO nunca perde a disputa: quem bipou a etiqueta tem que
+      // ver aquela peça, mesmo que a irmã duplicada tenha mais estoque.
+      if (preservarCodigo && String(cur.p.codigo) === preservarCodigo) continue;
+      if (
+        (preservarCodigo && String(p.codigo) === preservarCodigo) ||
+        totalEst > cur.totalEst ||
+        (totalEst === cur.totalEst && codigoNum > cur.codigoNum)
+      ) {
         byKey.set(k, { p, totalEst, codigoNum });
       }
     }
@@ -422,7 +439,7 @@ export class WincredCatalogService {
             select: { ref: true },
           });
           if (p?.ref) {
-            const rows = await this.searchByRefFromMirror(String(p.ref).trim());
+            const rows = await this.searchByRefFromMirror(String(p.ref).trim(), codigo);
             if (rows.length > 0) return rows;
           }
         }
