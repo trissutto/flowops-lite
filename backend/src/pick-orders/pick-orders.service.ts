@@ -12,6 +12,7 @@ import { DceEmitService } from '../dce/dce-emit.service';
 import { NfeTransferService } from '../nfe/nfe-transfer.service';
 import { DanfePdfService } from '../nfe/danfe-pdf.service';
 import { lerComplementoBairroWc } from '../common/endereco-wc';
+import { servicoPagoDoPedido } from '../common/servico-envio';
 
 // Lojas que despacham pelo MAIS ENVIOS (código Flow → sender id no Mais Envios).
 // As demais vão pelo Correios (CWS). Rede: Piracicaba/Sorocaba/Limeira/Moema;
@@ -761,7 +762,18 @@ export class PickOrdersService {
     const lista = itensLoja.length ? itensLoja : (order.items || []);
     const totalPecas = lista.reduce((s: number, i: any) => s + (Number(i.quantity) || 1), 0) || 1;
     const pesoGramas = Math.max(300, totalPecas * 200);
-    const servico: 'PAC' | 'SEDEX' = uf === 'SP' ? 'SEDEX' : 'PAC';
+    // SERVIÇO = o que a cliente PAGOU no checkout. Até 12/08 isto era
+    // `uf === 'SP' ? 'SEDEX' : 'PAC'`: quem morava fora de SP, escolhia SEDEX e
+    // pagava o expresso recebia uma pré-postagem PAC. A regra de UF sobrou como
+    // último recurso, pra pedido antigo sem método legível.
+    const escolha = servicoPagoDoPedido(order, uf);
+    const servico = escolha.servico;
+    if (escolha.origem === 'fallback-uf') {
+      this.logger.warn(
+        `[envio] pedido ${order.wcOrderNumber || order.id} sem método de envio legível ` +
+        `("${order.shippingMethod ?? '—'}") — postando ${servico} pela regra de UF (${uf || '?'}).`,
+      );
+    }
     const rem = remetenteLoja || this.correios.remetentePadrao();
 
     const resp: any = await this.correios.criarPrepostagem({
