@@ -1,5 +1,6 @@
 import { api, ApiError } from '@/lib/api';
 import { homeHero } from '@/data/content';
+import { medirArte } from './medir-arte';
 
 /**
  * BANNERS DA VITRINE — servidor.
@@ -50,9 +51,10 @@ export async function getBanners(slot: string): Promise<Banner[]> {
 
 /** O que o `<Hero>` da home precisa, já resolvido com o fallback estático. */
 export interface HeroDaHome {
-  image: { src: string; alt: string };
+  /** `largura`/`altura` só vêm quando a medição da arte deu certo. */
+  image: { src: string; alt: string; largura?: number; altura?: number };
   /** Recorte vertical do banner, quando a retaguarda subiu um. */
-  imageMobile?: { src: string; alt: string };
+  imageMobile?: { src: string; alt: string; largura?: number; altura?: number };
   eyebrow: string;
   lead: string;
   emphasis: string;
@@ -85,11 +87,31 @@ export async function getHeroDaHome(): Promise<HeroDaHome> {
   // estático. Por isso a imagem é a condição, não o título.
   if (!banner?.imagemUrl) return HERO_ESTATICO;
 
+  /**
+   * O tamanho real de cada arte, pra reservar a altura certa antes de ela
+   * chegar. Em paralelo porque são duas leituras independentes de 64 KB, e em
+   * `Promise.all` com o resto do hero elas nem aparecem no tempo da home.
+   */
+  const [medidaDesktop, medidaMobile] = await Promise.all([
+    medirArte(banner.imagemUrl),
+    medirArte(banner.imagemMobileUrl),
+  ]);
+
   return {
     daRetaguarda: true,
-    image: { src: banner.imagemUrl, alt: banner.alt || banner.titulo || HERO_ESTATICO.image.alt },
+    image: {
+      src: banner.imagemUrl,
+      alt: banner.alt || banner.titulo || HERO_ESTATICO.image.alt,
+      ...(medidaDesktop ?? {}),
+    },
     ...(banner.imagemMobileUrl
-      ? { imageMobile: { src: banner.imagemMobileUrl, alt: banner.alt || banner.titulo || '' } }
+      ? {
+          imageMobile: {
+            src: banner.imagemMobileUrl,
+            alt: banner.alt || banner.titulo || '',
+            ...(medidaMobile ?? {}),
+          },
+        }
       : {}),
     eyebrow: banner.eyebrow || '',
     lead: banner.titulo || '',

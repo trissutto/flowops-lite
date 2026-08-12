@@ -89,6 +89,57 @@ const OVERLAYS = {
   strong: 'bg-gradient-to-b from-ink/60 via-ink/40 to-ink/70',
 } as const;
 
+/** Tamanho real do arquivo, quando a medição do servidor conseguiu ler. */
+function medida(m?: Media): { width: number; height: number } | null {
+  return m?.largura && m?.altura ? { width: m.largura, height: m.altura } : null;
+}
+
+/**
+ * PRELOAD DO LCP PRO CASO `<picture>` — o `<Image>` emite sozinho, o
+ * `getImageProps` NÃO (10/08/2026).
+ *
+ * Medido no HTML de produção: a home saía com preload de TRÊS FONTES e NENHUM
+ * de imagem. O navegador só descobria o banner depois de parsear o HTML, com
+ * as fontes já na frente dele na fila — FCP verde e LCP vermelho, a página
+ * aparece rápido e a arte grande chega segundos depois. O `fetchPriority` do
+ * `<img>` só age DEPOIS da descoberta; o atraso estava na descoberta.
+ *
+ * `media` casa com os `<source>`: sem ele o navegador baixaria as DUAS artes e
+ * o remédio viraria veneno. `imageSrcSet` preserva a escolha de largura e
+ * formato (AVIF/WebP) do otimizador.
+ *
+ * MORA AQUI, E SÓ AQUI (12/08/2026). Isto vivia em dois lugares — neste
+ * componente e num `<HeroImagePreload>` chamado pela home — e o HTML saía com
+ * QUATRO preloads pras mesmas duas imagens. O navegador dedupa pela URL, então
+ * não custava banda, mas era a mesma decisão escrita duas vezes: mexer numa
+ * cópia e esquecer a outra é como o hero fica sem preload de novo.
+ */
+function PreloadArte({ desktop, mobile }: { desktop?: string; mobile?: string }) {
+  if (!desktop) return null;
+  return (
+    <>
+      {mobile && (
+        <link
+          rel="preload"
+          as="image"
+          media="(max-width: 1023px)"
+          imageSrcSet={mobile}
+          imageSizes="100vw"
+          fetchPriority="high"
+        />
+      )}
+      <link
+        rel="preload"
+        as="image"
+        media={mobile ? '(min-width: 1024px)' : undefined}
+        imageSrcSet={desktop}
+        imageSizes="100vw"
+        fetchPriority="high"
+      />
+    </>
+  );
+}
+
 export function Hero({
   image,
   imageMobile,
@@ -204,12 +255,17 @@ export function Hero({
               const desktop = getImageProps({ ...comum, src: image.src });
               const mobile = getImageProps({ ...comum, src: imageMobile.src });
               return (
-                <picture>
-                  <source media="(max-width: 1023px)" srcSet={mobile.props.srcSet} />
-                  <source media="(min-width: 1024px)" srcSet={desktop.props.srcSet} />
-                  {/* eslint-disable-next-line jsx-a11y/alt-text */}
-                  <img {...desktop.props} fetchPriority={priority ? 'high' : undefined} />
-                </picture>
+                <>
+                  {priority && (
+                    <PreloadArte desktop={desktop.props.srcSet} mobile={mobile.props.srcSet} />
+                  )}
+                  <picture>
+                    <source media="(max-width: 1023px)" srcSet={mobile.props.srcSet} />
+                    <source media="(min-width: 1024px)" srcSet={desktop.props.srcSet} />
+                    {/* eslint-disable-next-line jsx-a11y/alt-text */}
+                    <img {...desktop.props} fetchPriority={priority ? 'high' : undefined} />
+                  </picture>
+                </>
               );
             })()
           ) : image ? (
@@ -364,16 +420,51 @@ const HeroArte = forwardRef<HTMLElement, {
   const temTexto = !!(eyebrow || title || subtitle);
   const temBotao = !!(primaryAction || secondaryAction);
 
+  /**
+   * A ALTURA RESERVADA VEM DO ARQUIVO, NÃO DE UM CHUTE (12/08/2026).
+   *
+   * Aqui a imagem entra em fluxo (`w-full h-auto`), então o `width`/`height`
+   * que declaramos É a altura que o navegador reserva antes de a arte chegar.
+   * Estava fixo em 2400×1350 (16:9) e a campanha no ar é 2216×709 (3,13:1):
+   * medido em tela de 1350px, ele reservava 751px, a arte ocupava 427px e a
+   * home inteira subia 324px na hora do load — CLS 0,13, o único indicador
+   * vermelho do PageSpeed desktop. No celular era pior e estava escondido: o
+   * recorte vertical (992×1586) herdava a mesma conta e o pulo era de 389px,
+   * invisível só porque a arte chegava antes da primeira pintura.
+   *
+   * Chute não conserta isso porque cada campanha tem a sua proporção. O
+   * tamanho real é medido no servidor (`services/medir-arte`, lê o cabeçalho
+   * do arquivo) e desce em `image.largura/altura`. Sem medida, cai no 16:9 de
+   * antes — pior que o certo, igual ao que já estava.
+   */
+  const dimDesktop = medida(image) ?? { width: 2400, height: 1350 };
+  // O recorte de celular tem proporção PRÓPRIA (é vertical). Sem medida dele,
+  // repetimos a do desktop: um número errado nos dois é melhor que dois.
+  const dimMobile = medida(imageMobile) ?? dimDesktop;
+
+  /**
+   * Só reservamos por CSS quando a medida é REAL. Com chute, forçar a
+   * proporção deixaria de ser reserva e passaria a ser distorção da arte.
+   */
+  const medido = !!medida(image);
+  const reserva = medido
+    ? ({
+        '--arte-desktop': `${dimDesktop.width}/${dimDesktop.height}`,
+        ...(medida(imageMobile) ? { '--arte-mobile': `${dimMobile.width}/${dimMobile.height}` } : {}),
+      } as React.CSSProperties)
+    : undefined;
+
   const comum = {
     alt: image?.alt ?? '',
-    width: 2400,
-    height: 1350,
     priority,
     sizes: '100vw',
-    className: 'w-full h-auto',
+    className: cn('w-full h-auto', medido && 'arte-reservada'),
+    style: reserva,
   };
-  const desktop = image ? getImageProps({ ...comum, src: image.src }) : null;
-  const mobile = imageMobile ? getImageProps({ ...comum, src: imageMobile.src }) : null;
+  const desktop = image ? getImageProps({ ...comum, ...dimDesktop, src: image.src }) : null;
+  const mobile = imageMobile
+    ? getImageProps({ ...comum, ...dimMobile, src: imageMobile.src })
+    : null;
 
   return (
     <section ref={ref} className={cn('relative w-full', className)}>
@@ -395,32 +486,29 @@ const HeroArte = forwardRef<HTMLElement, {
        * largura e formato (AVIF/WebP) do otimizador.
        */}
       {priority && desktop && (
-        <>
-          {mobile && (
-            <link
-              rel="preload"
-              as="image"
-              media="(max-width: 1023px)"
-              imageSrcSet={mobile.props.srcSet}
-              imageSizes="100vw"
-              fetchPriority="high"
-            />
-          )}
-          <link
-            rel="preload"
-            as="image"
-            media="(min-width: 1024px)"
-            imageSrcSet={desktop.props.srcSet}
-            imageSizes="100vw"
-            fetchPriority="high"
-          />
-        </>
+        <PreloadArte desktop={desktop.props.srcSet} mobile={mobile?.props.srcSet} />
       )}
 
       {desktop && (
         <picture>
-          {mobile && <source media="(max-width: 1023px)" srcSet={mobile.props.srcSet} />}
-          <source media="(min-width: 1024px)" srcSet={desktop.props.srcSet} />
+          {/* `width`/`height` no <source>: o recorte de celular tem proporção
+              própria e é ELE que aparece ali. Sem isto o navegador reservaria
+              a altura do desktop pra uma arte vertical. Navegador que ignore
+              o atributo cai no tamanho do <img>, que é o de hoje. */}
+          {mobile && (
+            <source
+              media="(max-width: 1023px)"
+              srcSet={mobile.props.srcSet}
+              width={dimMobile.width}
+              height={dimMobile.height}
+            />
+          )}
+          <source
+            media="(min-width: 1024px)"
+            srcSet={desktop.props.srcSet}
+            width={dimDesktop.width}
+            height={dimDesktop.height}
+          />
           {/* eslint-disable-next-line jsx-a11y/alt-text */}
           <img {...desktop.props} fetchPriority={priority ? 'high' : undefined} />
         </picture>

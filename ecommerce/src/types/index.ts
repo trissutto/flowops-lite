@@ -15,6 +15,14 @@ export interface Media {
   alt: string;
   /** Proporção usada pelo componente (não altera o arquivo). */
   aspect?: '1/1' | '3/4' | '4/5' | '4/3' | '16/9' | '21/9';
+  /**
+   * Tamanho REAL do arquivo, quando conhecido. Serve pra reservar a altura
+   * certa antes de a imagem chegar — proporção chutada é o que fazia a home
+   * pular 324px quando a arte do hero carregava (CLS 0,13 em 12/08/2026).
+   * Ver `services/medir-arte`.
+   */
+  largura?: number;
+  altura?: number;
 }
 
 export interface VideoMedia {
