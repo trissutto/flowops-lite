@@ -1,4 +1,4 @@
-import { classifyReviewCandidates, normalizeReviewInstagram, normalizeReviewPhone, reviewHash } from './customer-identity-review.service';
+import { classifyReviewCandidates, isInternalReviewCustomer, normalizeReviewEmail, normalizeReviewInstagram, normalizeReviewPhone, reviewHash } from './customer-identity-review.service';
 
 describe('customer identity review normalization', () => {
   it('normalizes Brazilian phone variants to the same value', () => {
@@ -10,6 +10,20 @@ describe('customer identity review normalization', () => {
   it('normalizes Instagram without making it an automatic identity key', () => {
     expect(normalizeReviewInstagram(' @Lurds.Cliente ')).toBe('lurds.cliente');
     expect(normalizeReviewInstagram('@')).toBeNull();
+  });
+
+  it('normalizes exact personal emails and rejects invalid or generic addresses', () => {
+    expect(normalizeReviewEmail(' Maria.Silva@Example.COM ')).toBe('maria.silva@example.com');
+    expect(normalizeReviewEmail('maria @example.com')).toBeNull();
+    expect(normalizeReviewEmail('contato@lurds.com.br')).toBeNull();
+  });
+
+  it('excludes internal operational accounts from identity review', () => {
+    expect(isInternalReviewCustomer('DEFEITOS')).toBe(true);
+    expect(isInternalReviewCustomer(' reserva ')).toBe(true);
+    expect(isInternalReviewCustomer('FURTO')).toBe(true);
+    expect(isInternalReviewCustomer('PERDA')).toBe(true);
+    expect(isInternalReviewCustomer('Maria Perda da Silva')).toBe(false);
   });
 
   it('creates deterministic, non-plain suggestion hashes', () => {

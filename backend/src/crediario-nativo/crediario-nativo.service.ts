@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
+import { restoreAuditedPersonLinks } from '../person-identity/person-link-recovery';
 import { sqlParcelaAberta } from '../common/crediario-pago';
 
 /**
@@ -276,6 +277,9 @@ export class CrediarioNativoService {
         if (paginas % 5 === 0) this.logger.log(`[crediario-nativo] página ${paginas}: total ${total}`);
         if (batch.length < CrediarioNativoService.PAGE) break;
       }
+
+      const personLinksRestaurados = await restoreAuditedPersonLinks(this.prisma as any, 'crediario_parcela');
+      this.logger.log(`[crediario-nativo] ${personLinksRestaurados} person_id reidratados das auditorias`);
 
       // ── CONFERÊNCIA (31/07) ────────────────────────────────────────────
       // A tabela desta classe é lida pela ficha da cliente SEM flag nenhuma

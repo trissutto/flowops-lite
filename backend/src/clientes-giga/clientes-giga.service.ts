@@ -3,6 +3,7 @@ import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
 import { findAllCustomersByCpf, aggregatePerson } from '../customers/customer-aggregation.helper';
+import { restoreAuditedPersonLinks } from '../person-identity/person-link-recovery';
 
 /**
  * IMPORTAÇÃO COMPLETA da tabela `clientes` do Giga pro Flow (giga_clientes).
@@ -172,11 +173,12 @@ export class ClientesGigaService {
         this.logger.warn(`[clientes-giga] vinculação falhou (segue sem): ${(e as Error).message}`);
         return { vinculados: 0, semMatch: 0 };
       });
+      const personLinksRestaurados = await restoreAuditedPersonLinks(this.prisma as any, 'giga_cliente');
 
       this.lastResult = { at: new Date(), total };
       this.logger.log(
         `[clientes-giga] sync completo: ${total} clientes em ${Math.round((Date.now() - t0) / 1000)}s · ` +
-        `${vinc.vinculados} vinculados ao CRM`,
+        `${vinc.vinculados} vinculados ao CRM · ${personLinksRestaurados} person_id reidratados`,
       );
       return { ok: true, total, paginas };
     } catch (e: any) {

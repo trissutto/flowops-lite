@@ -4,7 +4,7 @@ import { Prisma, PrismaClient } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { RequestActor } from './customers-crm.service';
 
-export type IdentitySuggestionType = 'phone' | 'instagram';
+export type IdentitySuggestionType = 'phone' | 'email' | 'instagram';
 
 export function normalizeReviewPhone(value?: string | null): string | null {
   if (!value) return null;
@@ -19,6 +19,23 @@ export function normalizeReviewInstagram(value?: string | null): string | null {
   return normalized.length >= 2 ? normalized : null;
 }
 
+const GENERIC_EMAIL_LOCAL_PARTS = new Set([
+  'admin', 'atendimento', 'caixa', 'comercial', 'contato', 'ecommerce',
+  'financeiro', 'loja', 'noreply', 'naoresponder', 'sac', 'sememail',
+  'site', 'suporte', 'teste', 'vendas',
+]);
+
+export function normalizeReviewEmail(value?: string | null): string | null {
+  if (!value) return null;
+  const normalized = value.trim().toLowerCase();
+  if (normalized.length > 254 || /\s/.test(normalized)) return null;
+  const match = normalized.match(/^([^@]+)@([^@]+)$/);
+  if (!match || !match[1] || !match[2].includes('.') || match[2].startsWith('.') || match[2].endsWith('.')) return null;
+  const local = match[1].replace(/[^a-z0-9]/g, '');
+  if (!local || GENERIC_EMAIL_LOCAL_PARTS.has(local)) return null;
+  return normalized;
+}
+
 export function reviewHash(value: string): string {
   return createHash('sha256').update(value).digest('hex');
 }
@@ -27,6 +44,13 @@ function normalizedText(value?: string | null): string | null {
   if (!value) return null;
   const text = value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '');
   return text || null;
+}
+
+const INTERNAL_CUSTOMER_NAMES = new Set(['defeitos', 'reserva', 'furto', 'perda']);
+
+export function isInternalReviewCustomer(name?: string | null): boolean {
+  const normalized = normalizedText(name);
+  return normalized ? INTERNAL_CUSTOMER_NAMES.has(normalized) : false;
 }
 
 export type ReviewPriority = 'conflict' | 'high' | 'review';
@@ -95,7 +119,7 @@ export class CustomerIdentityReviewService {
 
   private async groups(db: Prisma.TransactionClient | PrismaClient = this.prisma): Promise<Group[]> {
     const customers = await db.customer.findMany({
-      where: { active: true, OR: [{ phone: { not: null } }, { whatsapp: { not: null } }, { igUsername: { not: null } }] },
+      where: { active: true, OR: [{ phone: { not: null } }, { whatsapp: { not: null } }, { email: { not: null } }, { igUsername: { not: null } }] },
       select: customerSelect,
     }) as Candidate[];
     const buckets = new Map<string, { type: IdentitySuggestionType; value: string; candidates: Map<string, Candidate> }>();
@@ -108,8 +132,10 @@ export class CustomerIdentityReviewService {
       buckets.set(bucketKey, bucket);
     };
     for (const c of customers) {
+      if (isInternalReviewCustomer(c.name)) continue;
       add('phone', normalizeReviewPhone(c.phone), c);
       add('phone', normalizeReviewPhone(c.whatsapp), c);
+      add('email', normalizeReviewEmail(c.email), c);
       add('instagram', normalizeReviewInstagram(c.igUsername), c);
     }
 
@@ -153,7 +179,11 @@ export class CustomerIdentityReviewService {
     return {
       key: g.key,
       type: g.type,
-      matchMasked: g.type === 'phone' ? `(**) *****-${g.normalizedValue.slice(-4)}` : `@${g.normalizedValue}`,
+      matchMasked: g.type === 'phone'
+        ? `(**) *****-${g.normalizedValue.slice(-4)}`
+        : g.type === 'email'
+          ? g.normalizedValue.replace(/^(.{2}).*(@.*)$/, '$1***$2')
+          : `@${g.normalizedValue}`,
       participantCount: g.candidates.length,
       unlinkedCount: g.candidates.filter((c) => !c.personId).length,
       existingPersonCount: new Set(g.candidates.map((c) => c.personId).filter(Boolean)).size,
