@@ -9,6 +9,7 @@ import { CarrinhoGuardService } from './carrinho-guard.service';
 import { CupomService } from './cupom.service';
 import { FreteService } from './frete.service';
 import { PersonIdentityService } from '../person-identity/person-identity.service';
+import { PedidoEmailService } from './pedido-email.service';
 
 /**
  * PEDIDO DO E-COMMERCE NOVO (sprint 011).
@@ -193,6 +194,7 @@ export class LojaOrdersService {
     private readonly cupons: CupomService,
     private readonly frete: FreteService,
     private readonly identity: PersonIdentityService,
+    private readonly pedidoEmail: PedidoEmailService,
   ) {}
 
   /* ───────────────────────── helpers de formato ───────────────────────── */
@@ -1144,6 +1146,13 @@ export class LojaOrdersService {
       include: { items: true },
     });
 
+    /**
+     * "RECEBEMOS SEU PEDIDO" (12/08). Fire-and-forget: a cliente está olhando
+     * a tela do Pix agora, e segurar a resposta esperando webhook de mensagem
+     * é atrasar justamente o momento em que ela precisa do QR code.
+     */
+    void this.pedidoEmail.aoCriarPedido(fresh);
+
     return {
       ok: true,
       order: {
@@ -1399,6 +1408,14 @@ export class LojaOrdersService {
     // e-commerce responder é convite pro gateway dar timeout e reenfileirar.
     // `notificarEcommerce` engole os próprios erros, então nunca rejeita.
     void this.notificarEcommerce(atualizado);
+
+    /**
+     * O E-MAIL DE "PAGAMENTO CONFIRMADO" (12/08). Até aqui o e-commerce não
+     * mandava e-mail NENHUM: a cliente pagava e ficava sem nada na caixa de
+     * entrada. Fire-and-forget pela mesma razão do tracking — o dinheiro já
+     * entrou, e SMTP fora do ar não pode segurar o ack do webhook.
+     */
+    void this.pedidoEmail.aoConfirmarPagamento(atualizado);
 
     return { ok: true };
   }

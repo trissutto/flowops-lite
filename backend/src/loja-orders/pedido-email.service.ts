@@ -1,0 +1,304 @@
+import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { HttpService } from '@nestjs/axios';
+import { firstValueFrom } from 'rxjs';
+import { EmailService } from '../email/email.service';
+
+/**
+ * O E-MAIL QUE A CLIENTE ESPERA — e que não existia (achado de 12/08/2026).
+ *
+ * Medido na revisão de prontidão do site: o pedido do e-commerce **não
+ * disparava e-mail nenhum**. Nem "recebemos seu pedido", nem "pagamento
+ * confirmado". A cliente pagava e ficava sem nada na caixa de entrada —
+ * exatamente o silêncio que faz ela abrir um chamado, pedir estorno ou
+ * simplesmente nunca mais comprar.
+ *
+ * Para tráfego pago isso é pior ainda: o anúncio traz gente que não conhece a
+ * loja, e a primeira prova de que a compra deu certo é o e-mail.
+ *
+ * ── DECISÕES ──
+ *
+ * 1. **Nunca derruba a venda.** Todo envio é best-effort e engolido: o pedido
+ *    já está pago no banco quando isto roda. Falha de SMTP não pode reverter
+ *    dinheiro que entrou, e o log diz o que aconteceu.
+ *
+ * 2. **Sem SMTP configurado, avisa uma vez e segue.** O `EmailService`
+ *    devolve `false` na primeira linha quando `SMTP_HOST/USER/PASS` faltam. O
+ *    log aqui é explícito, porque "não chegou e-mail" e "não configuramos
+ *    e-mail" são coisas diferentes e sem isto ninguém distingue.
+ *
+ * 3. **Texto sem promessa que a operação não cumpre.** Prazo de troca sai da
+ *    política vigente (7 dias); nada de "chega em 2 dias" — o prazo real de
+ *    entrega depende do frete escolhido e já foi mostrado no checkout.
+ */
+
+interface ItemDoEmail {
+  nome: string;
+  quantidade: number;
+  valor?: number | null;
+}
+
+@Injectable()
+export class PedidoEmailService {
+  private readonly logger = new Logger(PedidoEmailService.name);
+
+  /** Prazo de troca — o mesmo do portal (`TrocasService`, default 7). */
+  private static readonly DIAS_TROCA = 7;
+
+  constructor(
+    private readonly email: EmailService,
+    private readonly config: ConfigService,
+    private readonly http: HttpService,
+  ) {}
+
+  /**
+   * ── O n8n É O DONO DA CONVERSA (decisão do dono, 12/08/2026) ──
+   *
+   * "aquela estrutura de whats funciona bem e a de email também funcionava lá".
+   * O fluxo do n8n já manda WhatsApp e e-mail para o pedido do site ANTIGO, e
+   * reconstruir isso aqui seria trocar o que funciona por código novo — e, pior,
+   * fazer a cliente receber tudo em dobro durante a convivência.
+   *
+   * Então o backend novo só AVISA: dispara o mesmo evento pro webhook do n8n,
+   * que continua sendo quem escreve e envia. É o gatilho que muda de dono (do
+   * WooCommerce pro site novo), não o fluxo.
+   *
+   * `N8N_PEDIDO_WEBHOOK_URL` vazia = não dispara nada (é o estado de hoje,
+   * enquanto a URL não é informada).
+   */
+  private get webhookN8n(): string {
+    return String(this.config.get<string>('N8N_PEDIDO_WEBHOOK_URL') || '').trim();
+  }
+
+  /**
+   * O e-mail PRÓPRIO (este serviço) é o plano B, DESLIGADO por padrão.
+   *
+   * Ligar os dois ao mesmo tempo entrega duas mensagens pra mesma compra, que
+   * é pior que nenhuma: a cliente conclui que comprou duas vezes. Vale ligar
+   * (`PEDIDO_EMAIL_PROPRIO=1`) só se o fluxo do n8n sair de cena.
+   */
+  private get emailProprioLigado(): boolean {
+    return String(this.config.get<string>('PEDIDO_EMAIL_PROPRIO') ?? '0') === '1';
+  }
+
+  /**
+   * Avisa o n8n. Fire-and-forget: automação de mensagem nunca desfaz
+   * pagamento, e o log conta o que aconteceu.
+   *
+   * O payload leva o pedido inteiro em campos planos — o n8n é montado com
+   * cliques, e obrigar quem edita o fluxo a cavar dentro de objeto aninhado é
+   * o jeito mais rápido de o fluxo quebrar na primeira manutenção.
+   */
+  private async avisarN8n(evento: 'pedido_criado' | 'pagamento_confirmado', order: any): Promise<void> {
+    const url = this.webhookN8n;
+    if (!url) {
+      this.logger.debug(`[pedido-msg] ${evento} não disparado — N8N_PEDIDO_WEBHOOK_URL ausente`);
+      return;
+    }
+    try {
+      await firstValueFrom(
+        this.http.post(
+          url,
+          {
+            evento,
+            origem: 'site-novo',
+            pedido: {
+              numero: order?.wcOrderNumber ?? null,
+              id: order?.id ?? null,
+              total: order?.totalAmount ?? null,
+              status: order?.status ?? null,
+              pagoEm: order?.paidAt ?? null,
+              formaPagamento: String(order?.paymentInfo || '').includes('"pix"') ? 'pix' : 'cartao',
+            },
+            cliente: {
+              nome: order?.customerName ?? null,
+              email: order?.customerEmail ?? null,
+              telefone: order?.customerPhone ?? null,
+              cpf: order?.customerCpf ?? null,
+            },
+            itens: this.itensDoPedido(order),
+            prazoTrocaDias: PedidoEmailService.DIAS_TROCA,
+          },
+          { timeout: 12000 },
+        ),
+      );
+      this.logger.log(`[pedido-msg] ${evento} entregue ao n8n (pedido ${order?.wcOrderNumber ?? order?.id})`);
+    } catch (e: any) {
+      this.logger.warn(`[pedido-msg] n8n não recebeu ${evento}: ${e?.response?.status ?? ''} ${e?.message || e}`);
+    }
+  }
+
+  private moeda(v?: number | null): string {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return '—';
+    return n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+  }
+
+  private escapar(v: any): string {
+    return String(v ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  /** O primeiro nome, que é como a loja fala com a cliente. */
+  private primeiroNome(nome?: string | null): string {
+    const n = String(nome || '').trim().split(/\s+/)[0];
+    return n ? n.charAt(0).toUpperCase() + n.slice(1).toLowerCase() : 'Oi';
+  }
+
+  private itensDoPedido(order: any): ItemDoEmail[] {
+    const itens: any[] = Array.isArray(order?.items) ? order.items : [];
+    return itens.map((i) => ({
+      nome: String(i?.productName || i?.sku || 'Peça'),
+      quantidade: Number(i?.quantity) || 1,
+      valor: i?.unitPrice ?? null,
+    }));
+  }
+
+  /**
+   * Layout em TABELA e estilo INLINE de propósito: cliente de e-mail (Gmail,
+   * Outlook, app nativo) descarta `<style>` e não entende flex nem grid. O que
+   * parece retrógrado aqui é o que chega inteiro na caixa de entrada.
+   */
+  private montarHtml(titulo: string, chamada: string, order: any, rodape: string): string {
+    const itens = this.itensDoPedido(order);
+    const linhas = itens
+      .map(
+        (i) => `
+        <tr>
+          <td style="padding:8px 0;border-bottom:1px solid #eee;color:#333;font-size:14px">
+            ${this.escapar(i.nome)}${i.quantidade > 1 ? ` <span style="color:#888">× ${i.quantidade}</span>` : ''}
+          </td>
+          <td style="padding:8px 0;border-bottom:1px solid #eee;text-align:right;color:#333;font-size:14px;white-space:nowrap">
+            ${this.moeda(i.valor)}
+          </td>
+        </tr>`,
+      )
+      .join('');
+
+    const numero = this.escapar(order?.wcOrderNumber || order?.id || '');
+
+    return `<!doctype html>
+<html lang="pt-BR"><body style="margin:0;padding:24px;background:#faf9f7;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;margin:0 auto;background:#fff;border:1px solid #eee;border-radius:8px">
+    <tr><td style="padding:28px 28px 8px">
+      <p style="margin:0;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#b8912b">Lurd's Plus Size</p>
+      <h1 style="margin:12px 0 0;font-size:22px;color:#1a1a1a;font-weight:600">${this.escapar(titulo)}</h1>
+      <p style="margin:12px 0 0;font-size:15px;line-height:1.6;color:#444">${chamada}</p>
+    </td></tr>
+
+    <tr><td style="padding:20px 28px 0">
+      <p style="margin:0 0 4px;font-size:13px;color:#888">Pedido</p>
+      <p style="margin:0;font-size:16px;color:#1a1a1a;font-weight:600">${numero}</p>
+    </td></tr>
+
+    <tr><td style="padding:16px 28px 0">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+        ${linhas || '<tr><td style="color:#888;font-size:14px">—</td></tr>'}
+        <tr>
+          <td style="padding:12px 0 0;font-size:15px;color:#1a1a1a;font-weight:600">Total</td>
+          <td style="padding:12px 0 0;text-align:right;font-size:15px;color:#1a1a1a;font-weight:600">${this.moeda(order?.totalAmount)}</td>
+        </tr>
+      </table>
+    </td></tr>
+
+    <tr><td style="padding:24px 28px 28px">
+      <p style="margin:0;font-size:13px;line-height:1.7;color:#666">${rodape}</p>
+      <p style="margin:16px 0 0;font-size:12px;line-height:1.6;color:#999">
+        Lurd's Plus Size · CNPJ 20.104.813/0001-39 · 14 lojas em São Paulo e região<br>
+        Precisa de ajuda? Responda este e-mail ou fale com uma consultora no WhatsApp.
+      </p>
+    </td></tr>
+  </table>
+</body></html>`;
+  }
+
+  /** Versão texto — filtro de spam pune e-mail só-HTML, e alguns leem assim. */
+  private montarTexto(titulo: string, order: any): string {
+    const itens = this.itensDoPedido(order)
+      .map((i) => `- ${i.nome}${i.quantidade > 1 ? ` x${i.quantidade}` : ''} ${this.moeda(i.valor)}`)
+      .join('\n');
+    return [
+      titulo,
+      '',
+      `Pedido ${order?.wcOrderNumber || order?.id || ''}`,
+      itens,
+      `Total: ${this.moeda(order?.totalAmount)}`,
+      '',
+      "Lurd's Plus Size · CNPJ 20.104.813/0001-39",
+    ].join('\n');
+  }
+
+  private destinatario(order: any): string | null {
+    const e = String(order?.customerEmail || '').trim();
+    return /^[^\s@]+@[^\s@]+\.[a-zA-Z]{2,}$/.test(e) ? e : null;
+  }
+
+  /** Pedido criado — o dinheiro ainda não entrou (PIX aguardando, por ex.). */
+  async aoCriarPedido(order: any): Promise<void> {
+    void this.avisarN8n('pedido_criado', order);
+    if (!this.emailProprioLigado) return;
+
+    const para = this.destinatario(order);
+    if (!para) {
+      this.logger.warn(`[pedido-email] pedido ${order?.wcOrderNumber ?? order?.id} sem e-mail válido`);
+      return;
+    }
+    const nome = this.primeiroNome(order?.customerName);
+    const pix = String(order?.paymentInfo || '').includes('"pix"');
+    const titulo = 'Recebemos seu pedido';
+    const chamada = pix
+      ? `${nome}, seu pedido está reservado e esperando o pagamento do Pix. Assim que ele cair, a gente confirma por aqui e começa a separar as peças.`
+      : `${nome}, recebemos seu pedido. Assim que o pagamento for confirmado, avisamos por aqui e começamos a separar as peças.`;
+    const rodape = `Se o pagamento não for concluído, o pedido é liberado automaticamente e as peças voltam pro estoque. Nada é cobrado.`;
+
+    await this.enviar(para, `${titulo} · ${order?.wcOrderNumber ?? ''}`.trim(), titulo, chamada, order, rodape);
+  }
+
+  /** Pagamento confirmado — a mensagem que a cliente realmente espera. */
+  async aoConfirmarPagamento(order: any): Promise<void> {
+    void this.avisarN8n('pagamento_confirmado', order);
+    if (!this.emailProprioLigado) return;
+
+    const para = this.destinatario(order);
+    if (!para) {
+      this.logger.warn(`[pedido-email] pedido ${order?.wcOrderNumber ?? order?.id} pago, mas sem e-mail válido`);
+      return;
+    }
+    const nome = this.primeiroNome(order?.customerName);
+    const titulo = 'Pagamento confirmado';
+    const chamada = `${nome}, seu pagamento entrou e o pedido já está com a nossa equipe pra separação. Quando ele sair pra entrega, mandamos o código de rastreio.`;
+    const rodape =
+      `Não serviu? Você tem ${PedidoEmailService.DIAS_TROCA} dias corridos a partir do recebimento pra trocar ` +
+      `pelo portal de trocas ou em qualquer uma das nossas lojas.`;
+
+    await this.enviar(para, `${titulo} · pedido ${order?.wcOrderNumber ?? ''}`.trim(), titulo, chamada, order, rodape);
+  }
+
+  private async enviar(
+    para: string, assunto: string, titulo: string, chamada: string, order: any, rodape: string,
+  ): Promise<void> {
+    try {
+      const ok = await this.email.send(
+        para,
+        assunto,
+        this.montarHtml(titulo, chamada, order, rodape),
+        this.montarTexto(titulo, order),
+      );
+      if (ok) {
+        this.logger.log(`[pedido-email] "${titulo}" enviado pro pedido ${order?.wcOrderNumber ?? order?.id}`);
+      } else {
+        // Distingue "não configuramos" de "falhou": sem isto, a ausência de
+        // e-mail vira mistério na primeira reclamação.
+        this.logger.warn(
+          `[pedido-email] "${titulo}" NÃO enviado (pedido ${order?.wcOrderNumber ?? order?.id}) — ` +
+            `SMTP_HOST/USER/PASS configurados?`,
+        );
+      }
+    } catch (e: any) {
+      this.logger.warn(`[pedido-email] falhou: ${e?.message || e}`);
+    }
+  }
+}

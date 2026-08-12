@@ -11,6 +11,8 @@ import { LojaPagamentoReconcileService } from './loja-pagamento-reconcile.servic
 import { LojaAdminController } from './loja-admin.controller';
 import { FreteService } from './frete.service';
 import { PersonIdentityModule } from '../person-identity/person-identity.module';
+import { EmailModule } from '../email/email.module';
+import { PedidoEmailService } from './pedido-email.service';
 
 /**
  * PEDIDOS DO E-COMMERCE NOVO (sprint 011).
@@ -25,7 +27,10 @@ import { PersonIdentityModule } from '../person-identity/person-identity.module'
  * dinheiro entra.
  */
 @Module({
-  imports: [PrismaModule, HttpModule, CorreiosModule, PersonIdentityModule, forwardRef(() => PagarmeModule)],
+  imports: [
+    PrismaModule, HttpModule, CorreiosModule, PersonIdentityModule, EmailModule,
+    forwardRef(() => PagarmeModule),
+  ],
   controllers: [LojaOrdersController, LojaAdminController],
   providers: [
     LojaOrdersService,
@@ -37,6 +42,9 @@ import { PersonIdentityModule } from '../person-identity/person-identity.module'
     // Rede de segurança do pagamento: o webhook não pode ser a única
     // confirmação, e a conciliação diária é quem descobre o que ninguém viu.
     LojaPagamentoReconcileService,
+    // Avisa a cliente: dispara o evento pro fluxo do n8n (que já manda
+    // WhatsApp e e-mail no site antigo) e, se ligado, manda o e-mail próprio.
+    PedidoEmailService,
   ],
   exports: [LojaOrdersService, CupomService],
 })
