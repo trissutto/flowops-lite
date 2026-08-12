@@ -124,6 +124,22 @@ export class LojaCatalogPublicController {
   relacionados(@Param('slug') slug: string, @Query('limite') limite?: string) {
     return this.svc.relacionados(slug, limite ? Number(limite) : 8);
   }
+
+  /**
+   * GET /api/public/loja/produto/:slug/descobrir — o feed que continua a PDP.
+   *
+   * Uma sequência só: resto da subcategoria → resto da categoria → as outras
+   * categorias na ordem do menu. Paginado porque a lista é o catálogo inteiro;
+   * ver `LojaCatalogService.descobrir`.
+   */
+  @Get('produto/:slug/descobrir')
+  descobrir(
+    @Param('slug') slug: string,
+    @Query('page') page?: string,
+    @Query('perPage') perPage?: string,
+  ) {
+    return this.svc.descobrir(slug, Number(page) || 1, Number(perPage) || 12);
+  }
 }
 
 /**

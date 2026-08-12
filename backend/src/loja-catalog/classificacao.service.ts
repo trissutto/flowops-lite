@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { avisarVitrine } from '../common/avisar-vitrine';
+import { LojaCatalogService } from './loja-catalog.service';
 
 /**
  * CLASSIFICAÇÃO EM LOTE — pôr 773 peças na árvore do site sem enlouquecer.
@@ -49,7 +50,10 @@ export class ClassificacaoService {
   private static readonly COM_ACENTO = 'áàâãäéèêëíìîïóòôõöúùûüçñ';
   private static readonly SEM_ACENTO = 'aaaaaeeeeiiiiooooouuuucn';
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly catalogo: LojaCatalogService,
+  ) {}
 
   /**
    * A ÁRVORE DO SITE, pronta pros dois seletores da tela.
@@ -240,6 +244,9 @@ export class ClassificacaoService {
     const tags = ['categorias', 'filtros', 'catalogo'];
     if (input.categoria) tags.push(`categoria:${input.categoria}`);
     avisarVitrine(tags, this.logger, 'classificacao');
+    // Derrubar o cache do site não adianta se o backend responder do dele: a
+    // página revalidaria e receberia a MESMA classificação velha.
+    this.catalogo.invalidarCache();
 
     return { ok: true, atualizadas: r.count };
   }

@@ -9,6 +9,7 @@ import { ProductGallery } from '@/components/commerce/ProductGallery';
 import { BuyBox } from '@/components/commerce/BuyBox';
 import { ProductPageSignals } from '@/components/commerce/ProductPageSignals';
 import { RecommendationRail } from '@/components/commerce/RecommendationRail';
+import { DescobrirFeed } from '@/components/commerce/DescobrirFeed';
 import { NewsletterBlock } from '@/components/sections/NewsletterBlock';
 import { getProduct } from '@/services/catalog';
 import { fetchPeca } from '@/services/peca';
@@ -205,18 +206,13 @@ export default async function ProductPage({ params }: { params: Promise<{ slug: 
       {/*
         Recomendações — client-side via motor (lib/recommendations/engine).
         Cada rail se auto-remove quando não há o que mostrar, então a página
-        pode empilhar os três sem medo de seção vazia. O rail de relacionados
-        substituiu o antigo bloco server-side (getRelated/WooCommerce) — a
-        fonte agora é o endpoint nativo /public/loja/.../relacionados.
+        pode empilhar os dois sem medo de seção vazia.
+
+        ORDEM (12/08/2026): os rails vêm ANTES do feed. Eles são curtos e
+        curados; o feed não tem fim, então qualquer coisa embaixo dele nunca
+        seria alcançada. O rail "Você também pode gostar" saiu daqui — virou o
+        feed logo abaixo, que é a mesma promessa sem o teto de quatro peças.
       */}
-      <RecommendationRail
-        kind="voce-tambem-pode-gostar"
-        seed={product}
-        eyebrow="Combina com"
-        title="Você também pode gostar"
-        cta={{ label: `Ver tudo em ${categoryLabel}`, href: `/categoria/${product.category}` }}
-        tone="alt"
-      />
       <RecommendationRail
         kind="complete-seu-look"
         seed={product}
@@ -232,9 +228,27 @@ export default async function ProductPage({ params }: { params: Promise<{ slug: 
         tone="alt"
       />
 
+      {/*
+        A PÁGINA NÃO ACABA (dono, 12/08/2026).
+
+        Continua na ordem que a cliente já estava seguindo: resto da
+        subcategoria desta peça → resto da categoria → próximas categorias.
+        A sequência é montada no servidor (`LojaCatalogService.descobrir`) —
+        é o que garante que a página 7 não repita o que a página 1 mostrou.
+      */}
+      <DescobrirFeed
+        slug={product.slug}
+        eyebrow="Combina com"
+        title="Você também pode gostar"
+        cta={{ label: `Ver tudo em ${categoryLabel}`, href: `/categoria/${product.category}` }}
+        tone="alt"
+      />
+
       {/* Sinais locais: últimos vistos + personalização (client, invisível) */}
       <ProductPageSignals product={product} />
 
+      {/* Fica depois do feed porque é o fecho editorial da página, e o feed
+          termina de verdade — o catálogo é grande, não infinito. */}
       <NewsletterBlock tone="champagne" />
     </>
   );

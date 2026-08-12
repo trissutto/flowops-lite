@@ -75,10 +75,63 @@ export class LojaCatalogService {
   private cacheFiltros: { at: number; data: any } | null = null;
   private readonly TTL_FILTROS = 10 * 60_000;
 
+  /**
+   * Catálogo montado (todas as peças publicadas). Ver `catalogoPublicado` —
+   * o TTL acompanha o `revalidate: 60` da borda do site.
+   */
+  private cacheCatalogo: { at: number; pecas: any[] } | null = null;
+  private catalogoEmVoo: Promise<any[]> | null = null;
+  private readonly TTL_CATALOGO = 60_000;
+
   constructor(private readonly prisma: PrismaService) {}
 
   private normRef(v?: string | null) {
     return String(v || '').trim().toUpperCase().replace(/\s+/g, '');
+  }
+
+  /**
+   * Zera os caches de leitura. Quem MUDA o catálogo (edição da retaguarda,
+   * classificação em lote, sync) chama isto — senão a vitrine continua
+   * servindo a versão anterior por até um minuto e quem cadastrou acha que a
+   * ferramenta não salvou.
+   */
+  invalidarCache() {
+    this.cacheCatalogo = null;
+    this.cacheFiltros = null;
+    this.cacheTaxonomia = null;
+  }
+
+  /** Slug de categoria/subcategoria normalizado — a comparação é sempre por aqui. */
+  private slugTaxonomia(v?: string | null) {
+    return String(v || '').trim().toLowerCase();
+  }
+
+  /**
+   * A ORDEM DA VITRINE, em um lugar só. `listar` e o feed da PDP
+   * (`descobrir`) precisam ordenar igual: duas cópias divergiriam no primeiro
+   * ajuste de relevância. Ordena in-place (o array já é cópia de quem chama).
+   */
+  private ordenarPecas(pecas: any[], ordenar?: ListarParams['ordenar']) {
+    const ord = ordenar || 'relevancia';
+    pecas.sort((a, b) => {
+      switch (ord) {
+        case 'preco-asc': return a.preco - b.preco;
+        case 'preco-desc': return b.preco - a.preco;
+        case 'nome': return a.nome.localeCompare(b.nome, 'pt-BR');
+        case 'novidades':
+          return new Date(b.atualizadoEm ?? 0).getTime() - new Date(a.atualizadoEm ?? 0).getTime();
+        default:
+          // Relevância: destaque > lançamento > estoque saudável
+          if (a.destaque !== b.destaque) return a.destaque ? -1 : 1;
+          if (a.lancamento !== b.lancamento) return a.lancamento ? -1 : 1;
+          return b.estoqueTotal - a.estoqueTotal;
+      }
+    });
+
+    // Esgotado aparece (item 37), mas por último — em QUALQUER ordenação.
+    // Sem isto, "menor preço" encheria a primeira tela de peça que não vende.
+    pecas.sort((a, b) => Number(b.disponivel) - Number(a.disponivel));
+    return pecas;
   }
 
   /**
@@ -701,6 +754,12 @@ export class LojaCatalogService {
       // Categoria COMERCIAL (do cadastro do site). O grupo do Giga vai
       // separado: é classificação fiscal, não serve pro menu da loja.
       categoria: site?.categoria ?? null,
+      /**
+       * Segundo nível da árvore do site ("Blusas" → "Manga curta"). Sai aqui
+       * porque a PDP começa o feed de descoberta pela subcategoria da peça que
+       * a cliente está vendo — sem este campo ela não saberia onde está.
+       */
+      subcategoria: site?.subcategoria ?? null,
       grupoErp: linhas.find((l) => l.categoria)?.categoria ?? null,
 
       preco,
@@ -918,46 +977,45 @@ export class LojaCatalogService {
     return melhor;
   }
 
-  /** Listagem paginada — o que a página de categoria e a busca consomem. */
-  async listar(params: ListarParams) {
-    const page = Math.max(1, Number(params.page) || 1);
-    const perPage = Math.min(60, Math.max(1, Number(params.perPage) || 24));
+  /**
+   * TODAS AS PEÇAS PUBLICADAS, MONTADAS — com cache de 60s.
+   *
+   * Montar o catálogo custa uma query nas REFs publicadas, uma nas variações
+   * do ERP e uma rodada de `montarPeca` por peça. Antes isso acontecia A CADA
+   * requisição de listagem, com o recorte (categoria/subcategoria) aplicado no
+   * `where` — barato pra UMA página de categoria, caro pro feed infinito da
+   * PDP, que pede página atrás de página.
+   *
+   * O TTL é o MESMO da borda do site (`revalidate: 60` no BFF), então nada
+   * fica mais velho do que já ficava: o que muda é quantas vezes o Postgres é
+   * lido pra entregar a mesma resposta.
+   *
+   * `catalogoEmVoo` é o guarda contra estouro: N requisições chegando com o
+   * cache frio esperam a MESMA montagem em vez de dispararem N montagens.
+   */
+  private async catalogoPublicado(): Promise<any[]> {
+    if (this.cacheCatalogo && Date.now() - this.cacheCatalogo.at < this.TTL_CATALOGO) {
+      return this.cacheCatalogo.pecas;
+    }
+    if (this.catalogoEmVoo) return this.catalogoEmVoo;
 
+    this.catalogoEmVoo = this.montarCatalogo()
+      .then((pecas) => {
+        this.cacheCatalogo = { at: Date.now(), pecas };
+        return pecas;
+      })
+      .finally(() => {
+        this.catalogoEmVoo = null;
+      });
+    return this.catalogoEmVoo;
+  }
+
+  private async montarCatalogo(): Promise<any[]> {
     // 1) REFs publicadas (curadoria) — a lista de saída nunca é maior que isso
-    const wherePub: any = { publicado: true };
-    /**
-     * Aceita UMA categoria ("blusas") ou uma LISTA ("blusas,vestidos").
-     *
-     * A lista nasceu com o filtro de categoria na barra lateral (10/08): fora
-     * da página de categoria — em `/tamanhos/56`, `/novidades`, `/outlet` — a
-     * cliente pode marcar mais de um tipo de peça. Sem isto, a tela deixaria
-     * ela marcar duas e só a primeira valeria, em silêncio: exatamente o bug
-     * do filtro de tamanho de 07/08 (dois botões acesos, um filtro aplicado).
-     */
-    if (params.categoria) {
-      const cats = String(params.categoria)
-        .split(',')
-        .map((c) => c.trim().toLowerCase())
-        .filter(Boolean);
-      if (cats.length === 1) wherePub.categoria = cats[0];
-      else if (cats.length > 1) wherePub.categoria = { in: cats };
-    }
-    /**
-     * SUBCATEGORIA — o segundo nível da árvore do site ("Blusas" → "Manga
-     * curta"). Filtra junto com a categoria, e é o que a página da categoria
-     * oferece como recorte fino.
-     */
-    if (params.subcategoria) {
-      wherePub.subcategoria = String(params.subcategoria).trim().toLowerCase();
-    }
-    if (params.soPromocao) wherePub.promocao = true;
-    if (params.soNovidade) wherePub.lancamento = true;
     const publicadas: any[] = await (this.prisma as any).siteProduto.findMany({
-      where: wherePub, select: { ref: true },
+      where: { publicado: true }, select: { ref: true },
     });
-    if (!publicadas.length) {
-      return { itens: [], total: 0, page, perPage, totalPages: 0, fonte: 'erp', aviso: 'nenhuma REF publicada — rode o sync de conteúdo' };
-    }
+    if (!publicadas.length) return [];
     const refsPub = publicadas.map((p) => p.ref);
 
     // 2) Variações do ERP dessas REFs
@@ -1005,7 +1063,7 @@ export class LojaCatalogService {
       agrupadas.get(chave)!.push(...ls);
     }
 
-    let pecas = Array.from(agrupadas.entries()).map(([ref, ls]) => {
+    const pecas = Array.from(agrupadas.entries()).map(([ref, ls]) => {
       /**
        * A identidade (nome, slug, foto, ficha) vem do cadastro da RAIZ quando
        * ele existe — é a peça "principal". Se a raiz não estiver publicada,
@@ -1021,6 +1079,64 @@ export class LojaCatalogService {
         this.escolherFicha(fichas.get(dono), ls.find((l) => l.marca)?.marca),
       );
     });
+
+    /**
+     * PEÇA SEM FOTO NUNCA CHEGA À VITRINE (item 39).
+     *
+     * Card sem imagem é buraco na grade e destrói a confiança na loja inteira.
+     * Vale pra listagem; a PDP continua abrindo por link direto (é o que
+     * permite conferir a peça antes de publicar).
+     */
+    const semFoto = pecas.filter((p) => !p.imagens.length);
+    if (semFoto.length) {
+      this.logger.warn(
+        `[catalogo] ${semFoto.length} REF(s) publicada(s) sem foto — fora da vitrine: ` +
+          semFoto.slice(0, 15).map((p) => p.ref).join(', '),
+      );
+    }
+    return pecas.filter((p) => p.imagens.length > 0);
+  }
+
+  /** Listagem paginada — o que a página de categoria e a busca consomem. */
+  async listar(params: ListarParams) {
+    const page = Math.max(1, Number(params.page) || 1);
+    const perPage = Math.min(60, Math.max(1, Number(params.perPage) || 24));
+
+    // Cópia: o array do cache é compartilhado entre requisições, e a ordenação
+    // abaixo é in-place — ordenar o cache embaralharia a lista de quem estiver
+    // lendo ao mesmo tempo.
+    let pecas = [...(await this.catalogoPublicado())];
+    if (!pecas.length) {
+      return { itens: [], total: 0, page, perPage, totalPages: 0, fonte: 'erp', aviso: 'nenhuma REF publicada — rode o sync de conteúdo' };
+    }
+
+    /**
+     * Aceita UMA categoria ("blusas") ou uma LISTA ("blusas,vestidos").
+     *
+     * A lista nasceu com o filtro de categoria na barra lateral (10/08): fora
+     * da página de categoria — em `/tamanhos/56`, `/novidades`, `/outlet` — a
+     * cliente pode marcar mais de um tipo de peça. Sem isto, a tela deixaria
+     * ela marcar duas e só a primeira valeria, em silêncio: exatamente o bug
+     * do filtro de tamanho de 07/08 (dois botões acesos, um filtro aplicado).
+     */
+    if (params.categoria) {
+      const cats = String(params.categoria)
+        .split(',')
+        .map((c) => c.trim().toLowerCase())
+        .filter(Boolean);
+      if (cats.length) pecas = pecas.filter((p) => cats.includes(this.slugTaxonomia(p.categoria)));
+    }
+    /**
+     * SUBCATEGORIA — o segundo nível da árvore do site ("Blusas" → "Manga
+     * curta"). Filtra junto com a categoria, e é o que a página da categoria
+     * oferece como recorte fino.
+     */
+    if (params.subcategoria) {
+      const sub = this.slugTaxonomia(params.subcategoria);
+      pecas = pecas.filter((p) => this.slugTaxonomia(p.subcategoria) === sub);
+    }
+    if (params.soPromocao) pecas = pecas.filter((p) => p.promocao);
+    if (params.soNovidade) pecas = pecas.filter((p) => p.lancamento);
 
     // 3) Filtros (em memória: o universo é o publicado, não o catálogo todo)
     const norm = (v: any) => String(v ?? '').trim().toUpperCase();
@@ -1081,42 +1197,8 @@ export class LojaCatalogService {
      */
     if (params.soDisponivel === true) pecas = pecas.filter((p) => p.disponivel);
 
-    /**
-     * PEÇA SEM FOTO NUNCA CHEGA À VITRINE (item 39).
-     *
-     * Card sem imagem é buraco na grade e destrói a confiança na loja inteira.
-     * Vale pra listagem; a PDP continua abrindo por link direto (é o que
-     * permite conferir a peça antes de publicar).
-     */
-    const semFoto = pecas.filter((p) => !p.imagens.length);
-    if (semFoto.length) {
-      pecas = pecas.filter((p) => p.imagens.length > 0);
-      this.logger.warn(
-        `[catalogo] ${semFoto.length} REF(s) publicada(s) sem foto — fora da vitrine: ` +
-          semFoto.slice(0, 15).map((p) => p.ref).join(', '),
-      );
-    }
-
-    // 4) Ordenação
-    const ord = params.ordenar || 'relevancia';
-    pecas.sort((a, b) => {
-      switch (ord) {
-        case 'preco-asc': return a.preco - b.preco;
-        case 'preco-desc': return b.preco - a.preco;
-        case 'nome': return a.nome.localeCompare(b.nome, 'pt-BR');
-        case 'novidades':
-          return new Date(b.atualizadoEm ?? 0).getTime() - new Date(a.atualizadoEm ?? 0).getTime();
-        default:
-          // Relevância: destaque > lançamento > estoque saudável
-          if (a.destaque !== b.destaque) return a.destaque ? -1 : 1;
-          if (a.lancamento !== b.lancamento) return a.lancamento ? -1 : 1;
-          return b.estoqueTotal - a.estoqueTotal;
-      }
-    });
-
-    // Esgotado aparece (item 37), mas por último — em QUALQUER ordenação.
-    // Sem isto, "menor preço" encheria a primeira tela de peça que não vende.
-    pecas.sort((a, b) => Number(b.disponivel) - Number(a.disponivel));
+    // 4) Ordenação (peça sem foto já ficou fora na montagem do catálogo)
+    this.ordenarPecas(pecas, params.ordenar);
 
     const total = pecas.length;
     const inicio = (page - 1) * perPage;
@@ -1280,6 +1362,179 @@ export class LojaCatalogService {
     if (!peca) return [];
     const lista = await this.listar({ categoria: peca.categoria ?? undefined, perPage: limite + 1 });
     return lista.itens.filter((p: any) => p.ref !== peca.ref).slice(0, limite);
+  }
+
+  /**
+   * Nome e ordem de cada categoria/subcategoria — o rótulo dos trechos do
+   * feed. Tabela pequena e que quase nunca muda; 5 min de cache evita uma ida
+   * ao banco por página do scroll infinito.
+   */
+  private cacheTaxonomia: { at: number; linhas: any[] } | null = null;
+  private async taxonomia(): Promise<any[]> {
+    if (this.cacheTaxonomia && Date.now() - this.cacheTaxonomia.at < this.TTL_FILTROS) {
+      return this.cacheTaxonomia.linhas;
+    }
+    let linhas: any[] = [];
+    try {
+      linhas = await (this.prisma as any).siteCategoria.findMany({
+        select: { slug: true, nome: true, paiSlug: true, ordem: true, ativo: true },
+        orderBy: { ordem: 'asc' },
+      });
+    } catch (e: any) {
+      // Sem a tabela configurada o feed continua: cai no nome derivado do slug.
+      this.logger.warn(`[catalogo] taxonomia indisponível: ${e?.message || e}`);
+    }
+    this.cacheTaxonomia = { at: Date.now(), linhas };
+    return linhas;
+  }
+
+  /** "moda-praia" → "Moda praia". Fallback de quem não tem nome cadastrado. */
+  private nomeDoSlug(slug: string): string {
+    const s = String(slug || '').replace(/[-_]+/g, ' ').trim();
+    return s ? s.charAt(0).toUpperCase() + s.slice(1) : slug;
+  }
+
+  /**
+   * FEED DE DESCOBERTA DA PDP — o catálogo inteiro em UMA sequência, começando
+   * de onde a cliente está (dono, 12/08/2026).
+   *
+   * A PDP mostrava quatro peças num carrossel e acabava ali: quem gostou da
+   * regata tinha que voltar pro menu, achar a categoria e recomeçar. Aqui a
+   * página não termina — ela continua na ordem que a cliente já estava
+   * seguindo:
+   *
+   *   1. o resto da SUBCATEGORIA da peça  ("Regatas", se ela abriu uma regata)
+   *   2. o resto da CATEGORIA             ("Mais em Blusas")
+   *   3. as outras CATEGORIAS na ordem do menu (Vestidos, e assim por diante)
+   *   4. o que não tem categoria, por último
+   *
+   * A ordem é montada NO SERVIDOR, sobre o catálogo já em cache, porque é o
+   * único jeito de a página 7 saber o que a página 1 mostrou: paginar cada
+   * trecho no cliente repetiria peça na virada de um bloco pro outro.
+   *
+   * `contexto` em cada item diz de que trecho ela veio — é o que deixa o site
+   * escrever "Vestidos" no meio do rolo em vez de emendar tudo em silêncio.
+   */
+  async descobrir(slug: string, page = 1, perPage = 12) {
+    const pagina = Math.max(1, Number(page) || 1);
+    const porPagina = Math.min(48, Math.max(1, Number(perPage) || 12));
+
+    const catalogo = await this.catalogoPublicado();
+    // A peça-semente sai do próprio catálogo (custo zero); só quando ela não
+    // está na vitrine — sem foto, por exemplo — é que vale uma consulta.
+    const semente =
+      catalogo.find((p: any) => p.slug === slug || this.normRef(p.ref) === this.normRef(slug)) ??
+      (await this.porSlug(slug));
+    if (!semente) return { itens: [], total: 0, page: pagina, perPage: porPagina, totalPages: 0 };
+
+    const catSemente = this.slugTaxonomia(semente.categoria);
+    const subSemente = this.slugTaxonomia(semente.subcategoria);
+
+    const taxonomia = await this.taxonomia();
+    const rotuloDe = new Map<string, string>();
+    const ordemDe = new Map<string, number>();
+    for (const c of taxonomia) {
+      const s = this.slugTaxonomia(c.slug);
+      if (c.nome) rotuloDe.set(s, c.nome);
+      ordemDe.set(s, Number(c.ordem) || 0);
+    }
+    const rotulo = (s: string) => rotuloDe.get(s) || this.nomeDoSlug(s);
+
+    /** Peça por peça em baldes; a peça aberta nunca entra no próprio feed. */
+    const daSub: any[] = [];
+    const daCategoria: any[] = [];
+    const porCategoria = new Map<string, any[]>();
+    const semCategoria: any[] = [];
+
+    for (const p of catalogo) {
+      if (p.ref === semente.ref) continue;
+      const cat = this.slugTaxonomia(p.categoria);
+      if (!cat) {
+        semCategoria.push(p);
+      } else if (cat === catSemente) {
+        if (subSemente && this.slugTaxonomia(p.subcategoria) === subSemente) daSub.push(p);
+        else daCategoria.push(p);
+      } else {
+        if (!porCategoria.has(cat)) porCategoria.set(cat, []);
+        porCategoria.get(cat)!.push(p);
+      }
+    }
+
+    // As outras categorias entram na ORDEM DO MENU (a mesma que a cliente vê
+    // no topo do site) — empate resolve por quantidade de peça, como no menu.
+    const outras = Array.from(porCategoria.entries()).sort(
+      (a, b) =>
+        (ordemDe.get(a[0]) ?? 999) - (ordemDe.get(b[0]) ?? 999) ||
+        b[1].length - a[1].length ||
+        a[0].localeCompare(b[0], 'pt-BR'),
+    );
+
+    const trechos: Array<{ grupo: string; rotulo: string; tipo: string; pecas: any[] }> = [];
+    if (subSemente && daSub.length) {
+      trechos.push({
+        grupo: `sub:${subSemente}`,
+        rotulo: rotulo(subSemente),
+        tipo: 'subcategoria',
+        pecas: daSub,
+      });
+    }
+    if (daCategoria.length) {
+      trechos.push({
+        grupo: `cat:${catSemente}`,
+        // Com a subcategoria antes, este trecho é o RESTO da categoria — o
+        // rótulo tem que dizer isso, senão parece que a lista recomeçou.
+        rotulo: trechos.length ? `Mais em ${rotulo(catSemente)}` : rotulo(catSemente),
+        tipo: 'categoria',
+        pecas: daCategoria,
+      });
+    }
+    for (const [cat, pecas] of outras) {
+      trechos.push({ grupo: `cat:${cat}`, rotulo: rotulo(cat), tipo: 'outra-categoria', pecas });
+    }
+    if (semCategoria.length) {
+      trechos.push({ grupo: 'sem-categoria', rotulo: 'Outras peças', tipo: 'outra-categoria', pecas: semCategoria });
+    }
+
+    // Cada trecho é ordenado como a vitrine ordena (relevância, esgotado por
+    // último) — o que muda é só a ordem ENTRE os trechos.
+    for (const t of trechos) this.ordenarPecas((t.pecas = [...t.pecas]));
+
+    /**
+     * Só a JANELA pedida vira objeto novo. Materializar a sequência inteira a
+     * cada página faria o servidor copiar o catálogo todo umas 60 vezes
+     * durante um scroll — o feed é longo justamente por desenho.
+     */
+    const total = trechos.reduce((n, t) => n + t.pecas.length, 0);
+    const inicio = (pagina - 1) * porPagina;
+    const fim = inicio + porPagina;
+    const itens: any[] = [];
+    let cursor = 0;
+    for (const t of trechos) {
+      const inicioT = cursor;
+      cursor += t.pecas.length;
+      if (cursor <= inicio) continue;
+      if (inicioT >= fim) break;
+      const de = Math.max(0, inicio - inicioT);
+      const ate = Math.min(t.pecas.length, fim - inicioT);
+      for (const p of t.pecas.slice(de, ate)) {
+        itens.push({ ...p, contexto: { grupo: t.grupo, rotulo: t.rotulo, tipo: t.tipo } });
+      }
+    }
+
+    return {
+      itens,
+      total,
+      page: pagina,
+      perPage: porPagina,
+      totalPages: Math.ceil(total / porPagina),
+      semente: {
+        ref: semente.ref,
+        slug: semente.slug,
+        categoria: semente.categoria ?? null,
+        subcategoria: semente.subcategoria ?? null,
+      },
+      fonte: 'erp',
+    };
   }
 
   /**
@@ -1455,7 +1710,11 @@ export class LojaCatalogService {
     }
 
     const existente = await (this.prisma as any).siteProduto.findUnique({ where: { ref: chave } });
+    // Edição da retaguarda aparece na hora: publicar/despublicar uma peça e
+    // ela continuar na vitrine por um minuto é o tipo de coisa que faz quem
+    // cadastra clicar de novo achando que não salvou.
     this.cacheFiltros = null;
+    this.cacheCatalogo = null;
 
     if (existente) {
       return (this.prisma as any).siteProduto.update({ where: { ref: chave }, data });
