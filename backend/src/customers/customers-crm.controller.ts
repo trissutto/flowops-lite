@@ -5,6 +5,7 @@ import {
   CustomersCrmService,
   CreateCustomerDto,
   UpdateCustomerDto,
+  UpdateCustomerCreditDto,
   CreateAddressDto,
   ConsentDto,
   CreditCashbackDto,
@@ -356,9 +357,34 @@ export class CustomersCrmController {
     return this.svc.create(dto, this.actor(req));
   }
 
+  /** Lista beta: uma linha por pessoa, com registros de origem expansíveis. */
+  @Get('beta-list')
+  betaList(@Req() req: any, @Query() query: ListQuery) {
+    return this.svc.betaList(query, this.actor(req));
+  }
+
+  /** Retira somente uma origem duplicada; nunca apaga a pessoa consolidada. */
+  @Delete('beta-duplicates/:id')
+  @AdminOnly({ strict: true })
+  archiveDuplicate(@Req() req: any, @Param('id') id: string) {
+    return this.svc.archiveDuplicate(id, this.actor(req));
+  }
+
   @Get(':id')
   detail(@Req() req: any, @Param('id') id: string) {
     return this.svc.detail(id, this.actor(req));
+  }
+
+  /** Ficha beta: visão canônica da Person, mantendo os registros de origem. */
+  @Get(':id/beta')
+  betaDetail(@Req() req: any, @Param('id') id: string) {
+    return this.svc.betaDetail(id, this.actor(req));
+  }
+
+  @Patch(':id/beta/credit')
+  @AdminOnly({ strict: true })
+  updateBetaCredit(@Req() req: any, @Param('id') id: string, @Body() dto: UpdateCustomerCreditDto) {
+    return this.svc.updateCredit(id, dto, this.actor(req));
   }
 
   /**

@@ -41,7 +41,7 @@ const RATIO_THRESHOLD = 0.75;
 const VOTE_FRAMES = 2;
 const DETECT_INTERVAL_MS = 50;
 const COOLDOWN_AFTER_REGISTER_MS = 8_000;
-const SUCCESS_DISPLAY_MS = 1_200;
+const SUCCESS_DISPLAY_MS = 2_000;
 // Escolheu o nome e não bateu em 60s → volta pra lista (câmera desliga).
 const SELECT_TIMEOUT_MS = 60_000;
 
@@ -51,6 +51,22 @@ const TIPO_LABELS: Record<string, { texto: string; cor: string; emoji: string }>
   volta_almoco: { texto: 'Volta do almoço Registrada',   cor: 'bg-amber-600',   emoji: '☕' },
   saida:        { texto: 'Saída Registrada',             cor: 'bg-rose-500',    emoji: '🔴' },
 };
+
+function mensagemConfirmacao(tipo: string, nome: string): string {
+  const primeiroNome = nome.trim().split(/\s+/)[0] || nome;
+  switch (tipo) {
+    case 'entrada':
+      return `Bom dia, ${primeiroNome}. Entrada registrada.`;
+    case 'saida_almoco':
+      return `Saída de almoço registrada, ${primeiroNome}.`;
+    case 'volta_almoco':
+      return `Retorno do almoço registrado, ${primeiroNome}.`;
+    case 'saida':
+      return `Saída registrada, ${primeiroNome}.`;
+    default:
+      return `Ponto registrado, ${primeiroNome}.`;
+  }
+}
 
 function euclidean(a: number[], b: number[]): number {
   let sum = 0;
@@ -318,7 +334,7 @@ export default function PontoCelularPage() {
         }),
       });
       setLastSuccess({ name: match.seller.name, tipo: r.tipo, at: new Date() });
-      // Bateu → volta pra lista de nomes (câmera desliga; card fica na tela)
+      // Bateu → câmera desliga; a lista só reaparece após a confirmação.
       setSelected(null);
       cooldownRef.current.add(match.seller.id);
       setTimeout(() => cooldownRef.current.delete(match.seller.id), COOLDOWN_AFTER_REGISTER_MS);
@@ -488,7 +504,18 @@ export default function PontoCelularPage() {
           </p>
         </div>
 
-        {!selected ? (
+        {lastSuccess && tipoInfo && !alreadyDone ? (
+          /* Confirmação exclusiva: só depois de 2s a lista volta a aparecer. */
+          <div className={`${tipoInfo.cor} text-white rounded-xl p-7 text-center shadow-lg animate-in fade-in zoom-in`}>
+            <CheckCircle2 className="w-16 h-16 mx-auto mb-4" />
+            <p className="text-2xl font-bold leading-tight">
+              {mensagemConfirmacao(lastSuccess.tipo, lastSuccess.name)}
+            </p>
+            <p className="text-sm opacity-80 mt-3">
+              {lastSuccess.at.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+            </p>
+          </div>
+        ) : !selected ? (
           /* ── PASSO 1: escolher o nome (câmera DESLIGADA até aqui) ── */
           !loadingDescriptors && sellers.length > 0 && (
             <div className="space-y-2">
@@ -569,20 +596,6 @@ export default function PontoCelularPage() {
             <p className="text-3xl font-bold">Olá, {alreadyDone.name.split(' ')[0]}</p>
             <p className="text-lg font-bold mt-2 opacity-95">
               Você já bateu todos os pontos hoje! 🎉
-            </p>
-          </div>
-        )}
-
-        {/* Sucesso */}
-        {lastSuccess && tipoInfo && !alreadyDone && (
-          <div className={`${tipoInfo.cor} text-white rounded-xl p-6 text-center shadow-lg animate-in fade-in zoom-in`}>
-            <CheckCircle2 className="w-14 h-14 mx-auto mb-3" />
-            <p className="text-3xl font-bold">Olá, {lastSuccess.name.split(' ')[0]}</p>
-            <p className="text-lg font-bold mt-2 opacity-95">
-              {tipoInfo.emoji} {tipoInfo.texto}
-            </p>
-            <p className="text-sm opacity-80 mt-2">
-              {lastSuccess.at.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
             </p>
           </div>
         )}

@@ -57,6 +57,21 @@ export interface UpdateCustomerDto extends Partial<CreateCustomerDto> {
   inactiveReason?: string;
 }
 
+export interface UpdateCustomerCreditDto {
+  limiteCrediario?: number | null; // reais
+  bloqueado?: boolean;
+  negativado?: boolean;
+  spcSituacao?: string | null;
+  spcData?: string | null;
+  trabalhoRazaoSocial?: string | null;
+  trabalhoCargo?: string | null;
+  trabalhoSalario?: number | null; // reais
+  trabalhoAdmissao?: string | null;
+  trabalhoFone?: string | null;
+  casaPropria?: boolean | null;
+  aluguel?: number | null; // reais
+}
+
 export interface ListQuery {
   search?: string;
   tier?: string;
@@ -68,6 +83,42 @@ export interface ListQuery {
   limit?: number;
   orderBy?: 'name' | 'lastOrderAt' | 'ltvCents' | 'createdAt';
   order?: 'asc' | 'desc';
+}
+
+const CUSTOMER_SOURCE_WEIGHT: Record<string, number> = {
+  manual: 60, flowops: 60, pdv: 50, physical: 50,
+  site: 40, ecommerce: 40, woo: 40,
+  live: 30, instagram: 30, giga: 10,
+};
+
+function customerIdentityKey(customer: any): string {
+  return customer.personId ? `person:${customer.personId}`
+    : customer.personKey ? `key:${customer.personKey}`
+      : `customer:${customer.id}`;
+}
+
+function orderCanonicalRecords(records: any[]): any[] {
+  return [...records].sort((a, b) => {
+    const weight = (CUSTOMER_SOURCE_WEIGHT[b.originSource || ''] || 0)
+      - (CUSTOMER_SOURCE_WEIGHT[a.originSource || ''] || 0);
+    return weight || new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+  });
+}
+
+/**
+ * Nome canônico deve representar o cadastro comercial real. Um nome digitado
+ * depois no site não pode substituir o nome do registro que concentra compras.
+ */
+function chooseCanonicalNameRecord(records: any[]): any {
+  return [...records].filter((r) => r.nameSocial || r.name).sort((a, b) => {
+    const orders = Number(b.orderCount || 0) - Number(a.orderCount || 0);
+    if (orders) return orders;
+    const ltv = Number(b.ltvCents || 0) - Number(a.ltvCents || 0);
+    if (ltv) return ltv;
+    const aName = String(a.nameSocial || a.name || '').trim();
+    const bName = String(b.nameSocial || b.name || '').trim();
+    return bName.length - aName.length;
+  })[0] || records[0];
 }
 
 /**
@@ -574,6 +625,281 @@ export class CustomersCrmService {
       currentConsents,
       tags: c.tags.map(ct => ct.tag),
     };
+  }
+
+  /**
+   * Ficha única beta. Customer continua sendo o registro operacional por
+   * origem/loja; esta leitura resolve a Person e escolhe o melhor valor real
+   * entre os Customers vinculados sem apagar procedência.
+   */
+  async betaList(query: ListQuery, actor?: RequestActor) {
+    const page = Math.max(1, Number(query.page) || 1);
+    const limit = Math.min(100, Math.max(1, Number(query.limit) || 50));
+    const matrix = isMatrix(actor);
+    const scope = !matrix && actor?.storeId
+      ? { OR: [{ originStoreId: actor.storeId }, { targetStoreId: actor.storeId }] }
+      : {};
+
+    const rows: any[] = await this.prisma.customer.findMany({
+      where: { active: true, ...scope },
+      select: {
+        id: true, personId: true, personKey: true, name: true, nameSocial: true,
+        cpf: true, email: true, whatsapp: true, originSource: true,
+        originStoreId: true, targetStoreId: true, vipTier: true, orderCount: true,
+        ltvCents: true, ticketMedioCents: true, lastOrderAt: true, updatedAt: true,
+        originStore: { select: { id: true, code: true, name: true } },
+        targetStore: { select: { id: true, code: true, name: true } },
+        cashbackBalance: { select: { balanceCents: true } },
+      },
+    });
+
+    const groups = new Map<string, any[]>();
+    for (const row of rows) {
+      const key = customerIdentityKey(row);
+      const current = groups.get(key) || [];
+      current.push(row);
+      groups.set(key, current);
+    }
+
+    const search = String(query.search || '').trim().toLocaleLowerCase('pt-BR');
+    const digits = search.replace(/\D/g, '');
+    const requestedStore = matrix ? String(query.storeId || '') : '';
+    const people = Array.from(groups.values()).filter((records) => {
+      if (search && !records.some((r) => {
+        const text = [r.name, r.nameSocial, r.email].filter(Boolean).join(' ').toLocaleLowerCase('pt-BR');
+        const recordDigits = [r.cpf, r.whatsapp].filter(Boolean).join(' ').replace(/\D/g, '');
+        return text.includes(search) || (!!digits && recordDigits.includes(digits));
+      })) return false;
+      if (requestedStore && !records.some((r) => r.originStoreId === requestedStore || r.targetStoreId === requestedStore)) return false;
+      if (query.tier && !records.some((r) => r.vipTier === query.tier)) return false;
+      if (query.hasWhatsapp && !records.some((r) => !!r.whatsapp)) return false;
+      if (query.hasCashbackBalance && !records.some((r) => Number(r.cashbackBalance?.balanceCents || 0) > 0)) return false;
+      return true;
+    }).map((records) => {
+      const ordered = orderCanonicalRecords(records);
+      const canonical = ordered[0];
+      const nameRecord = chooseCanonicalNameRecord(records);
+      const cpfRecord = ordered.find((r) => r.cpf) || canonical;
+      const whatsappRecord = ordered.find((r) => r.whatsapp) || canonical;
+      const ltvCents = records.reduce((sum, r) => sum + Number(r.ltvCents || 0), 0);
+      const orderCount = records.reduce((sum, r) => sum + Number(r.orderCount || 0), 0);
+      const cashbackBalanceCents = records.reduce((sum, r) => sum + Number(r.cashbackBalance?.balanceCents || 0), 0);
+      const lastOrderAt = records.map((r) => r.lastOrderAt).filter(Boolean).sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0] || null;
+      return {
+        id: canonical.id,
+        personId: canonical.personId,
+        name: nameRecord.name,
+        nameSocial: nameRecord.nameSocial,
+        cpf: cpfRecord.cpf,
+        whatsapp: whatsappRecord.whatsapp,
+        vipTier: canonical.vipTier,
+        orderCount,
+        ltvCents: String(ltvCents),
+        ticketMedioCents: orderCount ? Math.round(ltvCents / orderCount) : 0,
+        cashbackBalanceCents,
+        lastOrderAt,
+        originStore: canonical.originStore,
+        targetStore: canonical.targetStore,
+        origins: ordered.map((r) => ({
+          id: r.id, name: r.name, nameSocial: r.nameSocial, cpf: r.cpf,
+          whatsapp: r.whatsapp, originSource: r.originSource,
+          originStore: r.originStore, targetStore: r.targetStore,
+          orderCount: r.orderCount, ltvCents: String(r.ltvCents),
+          lastOrderAt: r.lastOrderAt, updatedAt: r.updatedAt,
+        })),
+      };
+    }).sort((a, b) => String(a.nameSocial || a.name || '').localeCompare(String(b.nameSocial || b.name || ''), 'pt-BR'));
+
+    const total = people.length;
+    return { data: people.slice((page - 1) * limit, page * limit), total, page, limit };
+  }
+
+  async archiveDuplicate(id: string, actor: RequestActor) {
+    const customer: any = await this.prisma.customer.findUnique({
+      where: { id },
+      include: {
+        originStore: { select: { code: true, name: true } },
+        targetStore: { select: { code: true, name: true } },
+        cashbackBalance: { select: { balanceCents: true } },
+      },
+    });
+    if (!customer || !customer.active) throw new NotFoundException('Cadastro de origem não encontrado');
+
+    const identityWhere = customer.personId
+      ? { personId: customer.personId }
+      : customer.personKey ? { personKey: customer.personKey } : { id: customer.id };
+    const activeCount = await this.prisma.customer.count({ where: { ...identityWhere, active: true } });
+    const hasMovement = Number(customer.orderCount || 0) > 0
+      || Number(customer.ltvCents || 0) > 0
+      || Number(customer.cashbackBalance?.balanceCents || 0) > 0;
+    // Registro isolado só pode ser arquivado diretamente quando está vazio.
+    // Com movimento, exigimos outra origem ativa da mesma identidade.
+    if (activeCount <= 1 && hasMovement) {
+      throw new ConflictException('Este cadastro possui movimentação e não está vinculado a outra origem ativa');
+    }
+
+    const snapshot = {
+      id: customer.id, name: customer.name, nameSocial: customer.nameSocial,
+      cpf: customer.cpf, originSource: customer.originSource,
+      originStore: customer.originStore, targetStore: customer.targetStore,
+      orderCount: customer.orderCount, ltvCents: String(customer.ltvCents),
+      cashbackBalanceCents: customer.cashbackBalance?.balanceCents || 0,
+    };
+    await this.prisma.$transaction(async (tx) => {
+      await tx.customer.update({
+        where: { id },
+        data: { active: false, inactiveReason: 'duplicate_archived_by_admin' },
+      });
+      await tx.customerDuplicateAudit.create({
+        data: {
+          customerId: id,
+          personId: customer.personId,
+          actorUserId: actor.userId,
+          action: 'archived',
+          reason: 'Duplicidade removida pela lista Beta',
+          snapshot,
+        },
+      });
+    });
+    return { ok: true, mode: 'archived', customerId: id };
+  }
+
+  async betaDetail(id: string, actor?: RequestActor) {
+    const seed = await this.loadScoped(id, actor);
+    const identityWhere = seed.personId
+      ? { personId: seed.personId }
+      : seed.personKey
+        ? { personKey: seed.personKey }
+        : { id: seed.id };
+    const scopedWhere = !isMatrix(actor) && actor?.storeId
+      ? { OR: [{ originStoreId: actor.storeId }, { targetStoreId: actor.storeId }] }
+      : {};
+    const rows = await this.prisma.customer.findMany({
+      where: { ...identityWhere, ...scopedWhere, active: true },
+      select: { id: true, originSource: true, updatedAt: true },
+    });
+    const records = await Promise.all(rows.map((row) => this.detail(row.id, actor)));
+    records.splice(0, records.length, ...orderCanonicalRecords(records));
+
+    const canonical: any = { ...records.find((r: any) => r.id === id) };
+    const scalarFields = [
+      'name', 'nameSocial', 'cpf', 'rg', 'registroGiga', 'email', 'phone', 'whatsapp',
+      'birthDate', 'gender', 'maritalStatus', 'igUsername', 'sizeDefault',
+      'sizeSecondary', 'bodyType', 'preferredStyle', 'favoriteColors', 'avoidedPieces',
+      'originSeller', 'vipTier', 'tierEnteredAt', 'rfvSegment', 'rfvEngagement', 'notes',
+      'naturalidade', 'pai', 'mae', 'conjugeNome', 'conjugeCpf', 'trabalhoRazaoSocial',
+      'trabalhoCargo', 'trabalhoSalarioCents', 'trabalhoAdmissao', 'trabalhoFone',
+      'nomeRecado', 'foneRecado', 'limiteCrediarioCents', 'bloqueadoGiga',
+      'negativadoGiga', 'fidelidadeGiga', 'spcSituacao', 'spcData', 'casaPropria',
+      'aluguelCents',
+    ];
+    for (const field of scalarFields) {
+      const chosen = records.find((r: any) => r[field] !== null && r[field] !== undefined && r[field] !== '');
+      if (chosen) canonical[field] = (chosen as any)[field];
+    }
+    const canonicalName = chooseCanonicalNameRecord(records);
+    canonical.name = canonicalName.name;
+    canonical.nameSocial = canonicalName.nameSocial;
+
+    // Origem da PESSOA não pode depender do Customer usado para abrir a URL.
+    // Prefere o cadastro físico mais antigo (PDV/Giga); o site pode ser apenas
+    // um vínculo posterior e, nesse caso, não transforma a origem em SITE.
+    const physicalSources = new Set(['pdv', 'physical', 'giga']);
+    const originRecord = records
+      .filter((r: any) => physicalSources.has(r.originSource) && r.originStore)
+      .sort((a: any, b: any) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())[0]
+      || records.find((r: any) => r.originStore);
+    if (originRecord) {
+      canonical.originSource = originRecord.originSource;
+      canonical.originStoreId = originRecord.originStoreId;
+      canonical.originStore = originRecord.originStore;
+    }
+
+    const totalLtvCents = records.reduce((sum: number, r: any) => sum + Number(r.ltvCents || 0), 0);
+    const totalOrderCount = records.reduce((sum: number, r: any) => sum + Number(r.orderCount || 0), 0);
+    const channels = Array.from(new Set(records.map((r: any) => r.originSource).filter(Boolean)));
+    const stores = Array.from(new Set(records.map((r: any) => r.originStore?.code).filter(Boolean)));
+    const addresses = Array.from(new Map(records.flatMap((r: any) => r.addresses || []).map((a: any) => [a.id, a])).values());
+    const cashbackTransactions = records.flatMap((r: any) => r.cashbackTransactions || [])
+      .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .slice(0, 50);
+    const cashbackBalance = {
+      balanceCents: records.reduce((sum: number, r: any) => sum + Number(r.cashbackBalance?.balanceCents || 0), 0),
+      accumulatedTotalCents: String(records.reduce((sum: number, r: any) => sum + Number(r.cashbackBalance?.accumulatedTotalCents || 0), 0)),
+      redeemedTotalCents: String(records.reduce((sum: number, r: any) => sum + Number(r.cashbackBalance?.redeemedTotalCents || 0), 0)),
+      expiredTotalCents: String(records.reduce((sum: number, r: any) => sum + Number(r.cashbackBalance?.expiredTotalCents || 0), 0)),
+      nextExpirationAt: records.map((r: any) => r.cashbackBalance?.nextExpirationAt).filter(Boolean).sort()[0] || null,
+      nextExpirationCents: records.reduce((sum: number, r: any) => sum + Number(r.cashbackBalance?.nextExpirationCents || 0), 0),
+    };
+
+    return {
+      ...canonical,
+      id, // mutações continuam ancoradas no Customer aberto e autorizado
+      ltvCents: String(totalLtvCents),
+      orderCount: totalOrderCount,
+      ticketMedioCents: totalOrderCount ? Math.round(totalLtvCents / totalOrderCount) : 0,
+      addresses,
+      cashbackTransactions,
+      cashbackBalance,
+      personSummary: {
+        personId: seed.personId,
+        personKey: seed.personKey,
+        identityStatus: seed.personId ? 'consolidated' : 'provisional',
+        totalCadastros: records.length,
+        totalLtvCents,
+        totalOrderCount,
+        canais: channels,
+        lojas: stores,
+        records: records.map((r: any) => ({
+          id: r.id, name: r.name, originSource: r.originSource,
+          originStore: r.originStore, updatedAt: r.updatedAt,
+        })),
+      },
+    };
+  }
+
+  async updateCredit(id: string, dto: UpdateCustomerCreditDto, actor: RequestActor) {
+    const before: any = await this.loadScoped(id, actor);
+    const cents = (value: number | null | undefined) => value === undefined
+      ? undefined
+      : value === null
+        ? null
+        : BigInt(Math.round(Number(value) * 100));
+    const data: any = {
+      ...(dto.limiteCrediario !== undefined ? { limiteCrediarioCents: cents(dto.limiteCrediario) } : {}),
+      ...(dto.bloqueado !== undefined ? { bloqueadoGiga: !!dto.bloqueado } : {}),
+      ...(dto.negativado !== undefined ? { negativadoGiga: !!dto.negativado } : {}),
+      ...(dto.spcSituacao !== undefined ? { spcSituacao: dto.spcSituacao?.trim() || null } : {}),
+      ...(dto.spcData !== undefined ? { spcData: dto.spcData ? new Date(dto.spcData) : null } : {}),
+      ...(dto.trabalhoRazaoSocial !== undefined ? { trabalhoRazaoSocial: dto.trabalhoRazaoSocial?.trim() || null } : {}),
+      ...(dto.trabalhoCargo !== undefined ? { trabalhoCargo: dto.trabalhoCargo?.trim() || null } : {}),
+      ...(dto.trabalhoSalario !== undefined ? { trabalhoSalarioCents: cents(dto.trabalhoSalario) } : {}),
+      ...(dto.trabalhoAdmissao !== undefined ? { trabalhoAdmissao: dto.trabalhoAdmissao ? new Date(dto.trabalhoAdmissao) : null } : {}),
+      ...(dto.trabalhoFone !== undefined ? { trabalhoFone: this.normalizePhone(dto.trabalhoFone) } : {}),
+      ...(dto.casaPropria !== undefined ? { casaPropria: dto.casaPropria } : {}),
+      ...(dto.aluguel !== undefined ? { aluguelCents: cents(dto.aluguel) } : {}),
+    };
+    const oldSnapshot = Object.fromEntries(Object.keys(data).map((key) => [key, before[key]]));
+    const stringifyAudit = (value: any) => JSON.stringify(
+      value,
+      (_key, item) => typeof item === 'bigint' ? item.toString() : item,
+    );
+    const after = await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.customer.update({ where: { id }, data });
+      await tx.masterAudit.create({
+        data: {
+          action: 'customer_credit_edit', entityType: 'customer', entityId: id,
+          storeCode: null, storeName: null, level: 'ADMIN',
+          userName: actor.userId || 'admin',
+          oldValue: stringifyAudit(oldSnapshot),
+          newValue: stringifyAudit(data),
+          motivo: 'Edição administrativa pela ficha única beta',
+        },
+      });
+      return updated;
+    });
+    this.logger.log(`[CRM beta] crédito de ${id} alterado por ${actor.userId}`);
+    return { ok: true, id: after.id, updatedAt: after.updatedAt };
   }
 
   // ─────────────────────────────────────────────────────────────────────────

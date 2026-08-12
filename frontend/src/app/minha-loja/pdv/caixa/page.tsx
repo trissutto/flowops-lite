@@ -1402,8 +1402,19 @@ function FecharModal({
   // Detecta erro específico de venda em aberto pra mostrar botão "forçar"
   const [showForceClose, setShowForceClose] = useState(false);
   const [pendenciasCount, setPendenciasCount] = useState(0);
+  /**
+   * VENDAS COM PEÇA ABERTAS (11/08) — o backend agora recusa fechar o caixa
+   * quando existe carrinho MONTADO em aberto e devolve a lista aqui. Motivo:
+   * em 30 dias, 47 vendas com peça (R$ 12,5 mil) foram canceladas sozinhas no
+   * fechamento e ninguém ficou sabendo. Carrinho vazio continua sendo limpo
+   * em silêncio — aquilo é lixo, não decisão.
+   */
+  const [vendasComPeca, setVendasComPeca] = useState<Array<{
+    id: string; total: number; itens: number; criadaEm: string;
+    cliente: string | null; vendedora: string | null;
+  }> | null>(null);
 
-  async function submit(force = false) {
+  async function submit(force = false, cancelarVendasComPeca = false) {
     setErr('');
     setBusy(true);
     try {
@@ -1413,6 +1424,7 @@ function FecharModal({
       const body: any = { observacao: obs || undefined };
       if (storeCode) body.storeCode = storeCode;
       if (force) body.reason = 'Limpeza de pendências antes do fechamento';
+      if (cancelarVendasComPeca) body.cancelarVendasComPeca = true;
       const endpoint = force ? '/pdv/caixa/forcar-fechar' : '/pdv/caixa/fechar';
       await api(endpoint, {
         method: 'POST',
@@ -1421,6 +1433,14 @@ function FecharModal({
       onSuccess();
     } catch (e: any) {
       const msg = String(e?.message || 'Falha ao fechar caixa');
+      // Venda COM PEÇA aberta → mostra a lista e deixa a loja decidir.
+      const lista = e?.body?.vendas ?? e?.response?.vendas ?? null;
+      if (Array.isArray(lista) && lista.length > 0) {
+        setVendasComPeca(lista);
+        setShowForceClose(false);
+        setErr('');
+        return;
+      }
       // Detecta erro de venda em aberto e oferece botão pra cancelar pendências
       const match = msg.match(/Existem (\d+) venda\(s\) em aberto/);
       if (match) {
@@ -1495,6 +1515,58 @@ function FecharModal({
           >
             {busy ? '...' : '🧹 Cancelar pendências e fechar caixa'}
           </button>
+        </div>
+      )}
+
+      {/* ── VENDAS COM PEÇA ABERTAS — decisão obrigatória (11/08) ──
+          Carrinho montado não morre sozinho no fechamento: a loja vê cada um
+          e decide. Vazio continua sendo limpo em silêncio pelo backend. */}
+      {vendasComPeca && vendasComPeca.length > 0 && (
+        <div className="mt-4 rounded-xl border-2 border-rose-300 bg-rose-50 overflow-hidden">
+          <div className="px-4 py-2.5 bg-rose-600 text-white">
+            <div className="text-sm font-black uppercase tracking-wide">
+              {vendasComPeca.length} venda(s) com peça ainda aberta(s)
+            </div>
+            <div className="text-[11px] opacity-90">
+              Tem carrinho montado esperando. Finalize no PDV ou cancele aqui — não some sozinho.
+            </div>
+          </div>
+          <div className="divide-y divide-rose-200 max-h-56 overflow-y-auto">
+            {vendasComPeca.map((v) => (
+              <div key={v.id} className="px-4 py-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+                <span className="font-bold text-slate-800">
+                  {v.itens} peça(s) · R$ {fmt(v.total)}
+                </span>
+                {v.cliente && <span className="text-slate-600">{v.cliente}</span>}
+                {v.vendedora && <span className="text-slate-500 text-xs">{v.vendedora}</span>}
+                <span className="ml-auto text-[11px] text-slate-500">
+                  {new Date(v.criadaEm).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                </span>
+              </div>
+            ))}
+          </div>
+          <div className="p-3 flex flex-col gap-2">
+            <button
+              onClick={onClose}
+              className="w-full py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold"
+            >
+              Voltar pro PDV e finalizar essas vendas
+            </button>
+            <button
+              disabled={busy}
+              onClick={() => {
+                if (window.confirm(
+                  `Cancelar ${vendasComPeca.length} venda(s) COM PEÇA e fechar o caixa?\n\n` +
+                  'As peças voltam pro estoque e a venda é perdida. Não dá pra desfazer.'
+                )) {
+                  submit(false, true);
+                }
+              }}
+              className="w-full py-2 rounded-lg bg-white hover:bg-rose-100 text-rose-700 border-2 border-rose-300 text-sm font-bold disabled:opacity-50"
+            >
+              {busy ? '...' : 'Cancelar todas e fechar mesmo assim'}
+            </button>
+          </div>
         </div>
       )}
 

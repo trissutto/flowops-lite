@@ -222,7 +222,14 @@ export async function api<T = any>(
       }
       // 5xx = servidor com problema → marca offline pra UI reagir
       if (res.status >= 500) emitConnection({ status: 'offline', detail: `HTTP ${res.status}` });
-      throw new Error(`${res.status}: ${msg}`);
+      // Erro com CORPO ESTRUTURADO (11/08): o texto continua igual (nada quebra
+      // pra quem lê e.message), mas quem precisa dos dados do erro — ex.: a
+      // lista de vendas abertas que impedem fechar o caixa — lê `e.body` em
+      // vez de tentar decifrar a mensagem com regex.
+      const err: any = new Error(`${res.status}: ${msg}`);
+      err.status = res.status;
+      try { err.body = JSON.parse(msg); } catch { /* corpo não-JSON: só a mensagem */ }
+      throw err;
     }
     emitConnection({ status: 'online' });
     return res.json();

@@ -2685,6 +2685,7 @@ model Customer {
   person                Person? @relation("CustomerPerson", fields: [personId], references: [id], onDelete: Restrict)
   primaryForPerson      Person? @relation("PersonPrimaryCustomer")
   personIdentifiers     PersonIdentifier[]
+  duplicateAudits       CustomerDuplicateAudit[]
 
   @@index([cpf])
   @@index([personKey])
@@ -2703,6 +2704,24 @@ model Customer {
   // Verificador anti-duplicata da Live busca por @ do Instagram a cada cadastro.
   @@index([igUsername])
   @@map("customers")
+}
+
+/// Auditoria imutável das origens duplicadas retiradas da ficha consolidada.
+model CustomerDuplicateAudit {
+  id          String   @id @default(uuid())
+  customerId  String   @map("customer_id")
+  personId    String?  @map("person_id")
+  actorUserId String   @map("actor_user_id")
+  action      String   @default("archived")
+  reason      String
+  snapshot    Json
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  @@index([customerId, createdAt(sort: Desc)])
+  @@index([personId])
+  @@map("customer_duplicate_audits")
 }
 
 // ===========================================================================
