@@ -9,7 +9,7 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import { EmptyState } from '@/components/feedback/EmptyState';
 import { CartLineRow } from '@/components/commerce/CartLineRow';
 import { ProgressoFreteGratis } from '@/components/commerce/ProgressoFreteGratis';
-import { ProductCard } from '@/components/cards/ProductCard';
+import { RecommendationRail } from '@/components/commerce/RecommendationRail';
 import { useCartStore } from '@/store/cart';
 import { useMounted } from '@/hooks';
 import { applyCoupon } from '@/lib/commerce/cupom';
@@ -148,6 +148,13 @@ export default function CarrinhoPage() {
 
   /* ------------------------------------------- estoque em tempo (quase) real */
   const [avisosEstoque, setAvisosEstoque] = useState<Record<string, AvisoEstoque>>({});
+  /**
+   * As peças da sacola RESOLVIDAS no catálogo — saem da mesma revalidação de
+   * estoque abaixo, de graça. É o que a recomendação precisa: `CartLine` não
+   * guarda categoria, e sem categoria "Complete seu look" não tem o que
+   * complementar.
+   */
+  const [pecasDaSacola, setPecasDaSacola] = useState<Product[]>([]);
   const jaRevalidou = useRef(false);
 
   useEffect(() => {
@@ -161,67 +168,59 @@ export default function CarrinhoPage() {
     // quem trava a venda de verdade. Roda uma vez, pras 8 primeiras linhas.
     const controller = new AbortController();
 
-    async function revalidar(line: CartLine): Promise<[string, AvisoEstoque] | null> {
+    /** Devolve o aviso (se houver) e a peça resolvida no catálogo. */
+    async function revalidar(
+      line: CartLine,
+    ): Promise<{ aviso: [string, AvisoEstoque] | null; peca: Product | null }> {
+      const nada = { aviso: null, peca: null };
       try {
         const resposta = await fetch(
           `/api/loja/produtos?busca=${encodeURIComponent(line.productId)}&perPage=5`,
           { signal: controller.signal },
         );
-        if (!resposta.ok) return null;
+        if (!resposta.ok) return nada;
         const dados = await resposta.json();
         const peca = ((dados.itens ?? []) as PecaApi[]).find((p) => p.ref === line.productId);
-        if (!peca) return null;
+        if (!peca) return nada;
+        const produto = mapPeca(peca);
 
         const tamanho = (peca.tamanhos ?? []).find((t) => t.label === line.size);
-        if (!tamanho) return null;
+        if (!tamanho) return { aviso: null, peca: produto };
         if (!tamanho.disponivel) {
-          return [line.id, { tone: 'danger', text: `Esgotou no tamanho ${line.size} — remova ou troque o tamanho.` }];
+          return {
+            peca: produto,
+            aviso: [line.id, { tone: 'danger', text: `Esgotou no tamanho ${line.size} — remova ou troque o tamanho.` }],
+          };
         }
         if (tamanho.estoque === 1) {
-          return [line.id, { tone: 'gold', text: 'Última peça neste tamanho — garanta a sua.' }];
+          return {
+            peca: produto,
+            aviso: [line.id, { tone: 'gold', text: 'Última peça neste tamanho — garanta a sua.' }],
+          };
         }
         if (line.quantity > tamanho.estoque) {
-          return [line.id, { tone: 'gold', text: `Restam só ${tamanho.estoque} neste tamanho.` }];
+          return {
+            peca: produto,
+            aviso: [line.id, { tone: 'gold', text: `Restam só ${tamanho.estoque} neste tamanho.` }],
+          };
         }
-        return null;
+        return { aviso: null, peca: produto };
       } catch {
-        return null;
+        return nada;
       }
     }
 
     Promise.all(rawLines.slice(0, 8).map(revalidar)).then((resultados) => {
-      const avisos = Object.fromEntries(resultados.filter((r): r is [string, AvisoEstoque] => r !== null));
+      const avisos = Object.fromEntries(
+        resultados.map((r) => r.aviso).filter((a): a is [string, AvisoEstoque] => a !== null),
+      );
       if (Object.keys(avisos).length) setAvisosEstoque(avisos);
+      const pecas = resultados.map((r) => r.peca).filter((p): p is Product => p !== null);
+      if (pecas.length) setPecasDaSacola(pecas);
     });
 
     return () => controller.abort();
   }, [mounted, rawLines]);
-
-  /* --------------------------------------------- cross-sell "Complete seu look" */
-  const [relacionados, setRelacionados] = useState<Product[]>([]);
-  const slugPrimeiraLinha = lines[0]?.slug;
-
-  useEffect(() => {
-    if (!mounted || !slugPrimeiraLinha) {
-      setRelacionados([]);
-      return;
-    }
-    const controller = new AbortController();
-    // Fetch direto por URL de propósito: o módulo de recommendations está
-    // sendo construído em paralelo — acoplar por HTTP (contrato do BFF) em
-    // vez de import evita conflito. Falhou ou veio vazio? A seção não existe.
-    fetch(`/api/loja/relacionados?slug=${encodeURIComponent(slugPrimeiraLinha)}&limite=4`, {
-      signal: controller.signal,
-    })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((dados) => {
-        if (!dados) return;
-        const itens = (dados.itens ?? dados.produtos ?? []) as PecaApi[];
-        setRelacionados(Array.isArray(itens) ? itens.slice(0, 4).map(mapPeca) : []);
-      })
-      .catch(() => setRelacionados([]));
-    return () => controller.abort();
-  }, [mounted, slugPrimeiraLinha]);
 
   /* ------------------------------------------------------------------ render */
 
@@ -252,6 +251,7 @@ export default function CarrinhoPage() {
   const vazio = lines.length === 0;
 
   return (
+    <>
     <Container className="py-12 lg:py-16">
       <h1 className="font-display text-h2 text-ink">
         Sua sacola{' '}
@@ -478,19 +478,41 @@ export default function CarrinhoPage() {
         </div>
       )}
 
-      {/* Cross-sell — só existe quando o BFF respondeu com peças. */}
-      {relacionados.length > 0 && (
-        <section aria-label="Complete seu look" className="mt-20 border-t border-border pt-14">
-          <h2 className="font-display text-h3 text-ink">
-            Complete seu <em className="italic">look</em>
-          </h2>
-          <div className="mt-8 grid grid-cols-2 gap-x-4 gap-y-10 lg:grid-cols-4 lg:gap-x-6">
-            {relacionados.map((product, index) => (
-              <ProductCard key={product.id} product={product} index={index} />
-            ))}
-          </div>
-        </section>
-      )}
     </Container>
+
+    {/*
+      RECOMENDAÇÃO NO CARRINHO (12/08/2026, decisão do dono).
+
+      Os dois blocos vieram da página do produto. Aqui eles trabalham melhor:
+      é a tela onde a cliente decide fechar ou voltar pra vitrine, e onde
+      "levo mais uma pra bater o frete grátis" acontece de verdade. No
+      checkout NÃO entram — distração na hora de pagar derruba conversão.
+
+      "Complete seu look" olha a SACOLA INTEIRA (`seeds`), não a primeira
+      peça: quem tem calça e blusa no carrinho não precisa de mais uma blusa.
+      Antes daqui havia um bloco caseiro que chamava `/relacionados` — ou
+      seja, mostrava MAIS DO MESMO com o título "Complete seu look".
+
+      Cada rail some sozinho quando não há o que mostrar; por isso a sacola
+      vazia não fica com seção fantasma, e "Vistos por você" continua valendo
+      (é o convite pra retomar de onde ela parou).
+    */}
+    {pecasDaSacola.length > 0 && (
+      <RecommendationRail
+        kind="complete-seu-look"
+        seeds={pecasDaSacola}
+        eyebrow="Estilo completo"
+        title="Complete seu look"
+        description="Peças que fecham a produção com o que já está na sua sacola — escolhidas pela curadoria, não pelo acaso."
+      />
+    )}
+    <RecommendationRail
+      kind="ultimos-vistos"
+      seeds={pecasDaSacola}
+      eyebrow="Sua navegação"
+      title="Vistos por você"
+      tone="alt"
+    />
+    </>
   );
 }

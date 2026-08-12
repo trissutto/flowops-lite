@@ -35,6 +35,13 @@ interface RecommendationRailProps {
   kind: RecommendationKind;
   /** Peça de referência — obrigatória pros kinds que partem de um produto. */
   seed?: Product;
+  /**
+   * VÁRIAS referências — a sacola inteira. O motor sempre soube receber
+   * (`RecommendationRequest.seeds`), mas o rail só expunha uma: no carrinho
+   * isso seria recomendar complemento pra PRIMEIRA peça e ignorar as outras
+   * cinco. Ver `completeSeuLook`.
+   */
+  seeds?: Product[];
   title: string;
   eyebrow?: string;
   description?: string;
@@ -46,6 +53,7 @@ interface RecommendationRailProps {
 export function RecommendationRail({
   kind,
   seed,
+  seeds,
   title,
   eyebrow,
   description,
@@ -57,10 +65,14 @@ export function RecommendationRail({
   const [products, setProducts] = useState<Product[] | null>(null);
   const viewTracked = useRef(false);
 
+  // Identidade da lista de seeds — array novo a cada render não pode refazer
+  // a busca (no carrinho isso seria um request por tecla digitada no cupom).
+  const idsDosSeeds = (seeds ?? []).map((s) => s.id).join(',');
+
   useEffect(() => {
     let alive = true;
     viewTracked.current = false;
-    getRecommendations({ kind, seed, limit }).then((result) => {
+    getRecommendations({ kind, seed, seeds, limit }).then((result) => {
       // Guarda contra resposta atrasada de um seed anterior (navegação SPA).
       if (alive) setProducts(result);
     });
@@ -69,7 +81,7 @@ export function RecommendationRail({
     };
     // seed é objeto novo a cada render do server — o id é a identidade real.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [kind, seed?.id, limit]);
+  }, [kind, seed?.id, idsDosSeeds, limit]);
 
   // view_item_list só quando há produto de verdade na tela, e só uma vez.
   useEffect(() => {
