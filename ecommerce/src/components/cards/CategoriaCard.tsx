@@ -6,7 +6,18 @@ import { AppLink as Link } from '@/components/ui/AppLink';
 import { enter, fadeUp } from '@/lib/motion';
 
 /**
- * CARD DE CATEGORIA DA HOME — foto da peça + ícone da peça + nome.
+ * CARD DE CATEGORIA DA HOME — a arte-botão da categoria.
+ *
+ * DOIS DESENHOS, NESTA ORDEM:
+ *
+ * 1. ARTE-BOTÃO (dono, 12/08) — ilustração em traço sobre fundo bege, com o
+ *    nome da categoria e o risco dourado JÁ COMPOSTOS no arquivo. É o desenho
+ *    de hoje, e é por isso que a arte entra SEM faixa, SEM ícone e SEM nome por
+ *    cima: escreveria "BLUSAS" em cima de um "BLUSAS" que já está lá.
+ * 2. FOTO (desenho anterior, 07/08) — descrito no bloco abaixo. Sobrou como
+ *    fallback pra categoria que ainda não tem arte; as 10 do ar já têm.
+ *
+ * O DESENHO ANTIGO, que só aparece no fallback:
  *
  * Desenho definido pelo dono (07/08, mockup): a foto é de uma peça REAL da
  * categoria, e por cima dela uma faixa translúcida com o ÍCONE minimalista do
@@ -32,6 +43,33 @@ export interface CategoriaCardData {
   focoY?: number | null;
   focoZoom?: number | null;
 }
+
+/**
+ * AS ARTES-BOTÃO, POR SLUG (dono, 12/08).
+ *
+ * Ficam no repositório (`public/categorias/`), não no R2 como as fotos: são
+ * IDENTIDADE da marca, não conteúdo editorial — mudam junto com o layout, não
+ * com o estoque. Vantagem: sobem no deploy, sem depender de upload e sem o
+ * problema de cache que fazia a edição da retaguarda demorar a aparecer.
+ *
+ * ⚠️ PEGADINHA: pra estas categorias, trocar a foto em /retaguarda/categorias
+ * NÃO muda mais o site — a arte daqui ganha do `imagemUrl` do CRM. Categoria
+ * fora desta lista continua 100% pela retaguarda, como sempre foi.
+ *
+ * Arquivos: 660×880 (3:4, a proporção em que foram compostas), webp ~13 KB.
+ */
+const ARTE_BOTAO: Record<string, string> = {
+  blusas: '/categorias/blusas.webp',
+  vestidos: '/categorias/vestidos.webp',
+  calcas: '/categorias/calcas.webp',
+  conjuntos: '/categorias/conjuntos.webp',
+  macacoes: '/categorias/macacoes.webp',
+  'moda-praia': '/categorias/moda-praia.webp',
+  lingerie: '/categorias/lingerie.webp',
+  shorts: '/categorias/shorts.webp',
+  saias: '/categorias/saias.webp',
+  jaquetas: '/categorias/jaquetas.webp',
+};
 
 /**
  * Silhuetas em traço, desenhadas pro tamanho que aparecem (28px): sem
@@ -132,6 +170,8 @@ function IconePeca({ slug, className }: { slug: string; className?: string }) {
 export function CategoriaCard({
   data, index = 0, className,
 }: { data: CategoriaCardData; index?: number; className?: string }) {
+  const arte = ARTE_BOTAO[data.slug];
+
   // RECORTE DA IA (dono 07/08: "dar mais close na peça que simboliza a
   // categoria"). O zoom da IA fica FIXO na própria <Image> (é o enquadramento
   // da categoria, não um efeito de interação); o zoom de HOVER vai no
@@ -172,27 +212,44 @@ export function CategoriaCard({
     >
       <Link
         href={`/categoria/${data.slug}`}
-        className="group relative block overflow-hidden rounded-md border border-border/60 bg-surface-alt"
+        /* A arte-botão já tem moldura própria (cantos arredondados e sombra
+           compostos no arquivo) — a borda do card desenharia um segundo
+           contorno em volta do primeiro. */
+        className={`group relative block overflow-hidden rounded-md ${
+          arte ? '' : 'border border-border/60 bg-surface-alt'
+        }`}
       >
         {/**
-         * 2:3, A PROPORÇÃO DA ARTE (dono 10/08: "apareça também o rosto da
-         * modelo").
+         * 3:4, A PROPORÇÃO EM QUE AS ARTES-BOTÃO FORAM COMPOSTAS (1086×1448).
          *
-         * Era `aspect-3/4` (0,75) e as artes das categorias são 251×379
-         * (0,66) — medido no arquivo que está no R2. Imagem mais alta que a
-         * caixa + `object-cover` = 12% cortados na vertical, e como o recorte
-         * ancorava no topo, o corte saía tudo embaixo. Somado ao zoom da IA
-         * (que ia de 1,4 a 1,6 e agora não se aplica a foto manual), sobrava
-         * um close no tronco: sem rosto e sem sapato.
+         * A regra que vale desde 10/08 é "a caixa na mesma proporção do
+         * arquivo, pro `cover` não ter o que cortar". O que mudou em 12/08 foi
+         * o arquivo: as artes de modelo eram 251×379 (2:3) e as artes-botão
+         * são 3:4 — então a caixa acompanhou.
          *
-         * Com a caixa na mesma proporção do arquivo, o `cover` não tem o que
-         * cortar — a arte aparece exatamente como foi composta.
-         *
-         * Foto AUTOMÁTICA (a peça mais nova da categoria) continua sendo
-         * recortada pelo cover como antes; só ganha uma caixa mais alta.
+         * UMA proporção só pra grade inteira, de propósito: card mais alto no
+         * meio de uma linha de cards menores deixa a fileira desalinhada. Uma
+         * categoria sem arte (fallback de foto) é recortada nas laterais pelo
+         * cover — o preço de manter a grade reta, e ninguém está nesse caso.
          */}
-        <div className="relative aspect-2/3 overflow-hidden">
-          {data.imagemUrl ? (
+        <div className="relative aspect-3/4 overflow-hidden">
+          {arte ? (
+            /* Arte-botão: entra INTEIRA, sem recorte. O arquivo é 3:4 e a
+               caixa também, então o `cover` não tem o que cortar — a
+               composição (ilustração, nome, risco dourado) aparece exatamente
+               como foi desenhada. Sem o zoom da IA, que é tratamento de FOTO:
+               aplicado aqui, daria close no meio da ilustração e cortaria
+               justamente o nome. */
+            <div className="absolute inset-0 transition-transform duration-[720ms] ease-[cubic-bezier(0.22,1,0.36,1)] group-hover:scale-[1.04]">
+              <Image
+                src={arte}
+                alt={data.nome}
+                fill
+                sizes="(max-width: 768px) 50vw, (max-width: 1024px) 33vw, 20vw"
+                className="object-cover"
+              />
+            </div>
+          ) : data.imagemUrl ? (
             <div className="absolute inset-0 transition-transform duration-[720ms] ease-[cubic-bezier(0.22,1,0.36,1)] group-hover:scale-[1.04]">
               <Image
                 src={data.imagemUrl}
@@ -208,7 +265,13 @@ export function CategoriaCard({
           )}
 
           {/* Faixa de leitura: só na base, e só o suficiente pro texto branco
-              passar em contraste sem apagar a peça. */}
+              passar em contraste sem apagar a peça.
+
+              NÃO ENTRA sobre a arte-botão — o nome já está composto nela, e a
+              faixa escreveria o segundo. O nome da categoria continua chegando
+              na leitora de tela pelo `alt` da imagem, que é o nome acessível
+              do link. */}
+          {!arte && (
           <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-ink/75 via-ink/45 to-transparent pt-10 pb-4">
             <div className="flex flex-col items-center gap-1.5 px-2">
               <IconePeca slug={data.slug} className="size-7 text-light" />
@@ -217,6 +280,7 @@ export function CategoriaCard({
               </span>
             </div>
           </div>
+          )}
         </div>
       </Link>
     </motion.div>
