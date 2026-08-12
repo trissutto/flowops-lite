@@ -2255,8 +2255,18 @@ function PdvPageInner() {
           Linhas horizontais: ícone + label à esquerda, atalho real à direita.
           "Venda" (tela atual) ativa em dourado. "Recolher menu" encolhe pra
           coluna de ícones. Rodapé com o logotipo + versão. Em mobile (<lg)
-          some — PdvMobilePill horizontais continuam pra mesma navegação. */}
-      {sale?.status === 'open' && (() => {
+          some — PdvMobilePill horizontais continuam pra mesma navegação.
+
+          ⚠️ O MENU NÃO DEPENDE DE EXISTIR VENDA (12/08/2026).
+          A condição era `sale?.status === 'open'`. Com a venda passando a
+          nascer só no PRIMEIRO BIPE, a tela vazia ficou sem venda — e o menu
+          inteiro sumia junto: Produtos (F10), Baixa crediário, Marcados,
+          Trocas, Retiradas, Fechamento. Pra consultar um preço ou receber uma
+          parcela a vendedora tinha que bipar uma peça antes. Menu é navegação,
+          não estado da venda: aparece com a tela vazia e enquanto carrega.
+          Só some com a venda finalizada/cancelada, que é quando a tela vira
+          o fecho da venda. */}
+      {(!sale || sale.status === 'open') && (() => {
         const rowBase = menuCollapsed
           ? 'w-full flex items-center justify-center rounded-lg py-2.5 transition text-slate-600 hover:bg-[#FBF6E6] hover:text-[#8C7325]'
           : 'w-full flex items-center gap-2.5 rounded-lg px-3 py-2 transition text-slate-600 hover:bg-[#FBF6E6] hover:text-[#8C7325]';
