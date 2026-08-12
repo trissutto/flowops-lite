@@ -10,11 +10,16 @@ import { cn } from '@/lib/utils';
 import { fadeUp, reveal } from '@/lib/motion';
 
 /**
- * NEWSLETTER — bloco de seção, NUNCA popup.
+ * NEWSLETTER — bloco de seção: um campo só (e-mail), muito espaço em branco,
+ * e a promessa é de curadoria, não de desconto.
  *
- * Regra da marca: um campo só (e-mail), muito espaço em branco, e a promessa
- * é de curadoria, não de desconto. Pop-up interrompendo a navegação é o
- * oposto do que uma marca premium faz.
+ * ⚠️ Dizia aqui "NUNCA popup". Mudou em 12/08/2026, por decisão do dono: o
+ * site ganhou o `CupomBoasVindas`, que troca nome/celular/e-mail por 10% na
+ * primeira compra. Não é este bloco virando popup — são duas conversas: aqui
+ * é quem rolou até o rodapé e quer curadoria; lá é quem ainda não comprou e
+ * responde a uma oferta. O popup carrega as regras (rolagem + 15s, uma vez
+ * por pessoa, nunca no checkout) que evitam justamente o comportamento
+ * agressivo que esta linha queria barrar.
  *
  * ⚠️ EXCEÇÃO CONSCIENTE ao padrão de formulários do projeto (react-hook-form
  * + Zod). Este bloco fecha a HOME, e arrastar as três bibliotecas

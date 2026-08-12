@@ -8,7 +8,6 @@ import { Accordion, AccordionItem } from '@/components/ui/Accordion';
 import { ProductGallery } from '@/components/commerce/ProductGallery';
 import { BuyBox } from '@/components/commerce/BuyBox';
 import { ProductPageSignals } from '@/components/commerce/ProductPageSignals';
-import { RecommendationRail } from '@/components/commerce/RecommendationRail';
 import { DescobrirFeed } from '@/components/commerce/DescobrirFeed';
 import { NewsletterBlock } from '@/components/sections/NewsletterBlock';
 import { getProduct } from '@/services/catalog';
@@ -204,29 +203,17 @@ export default async function ProductPage({ params }: { params: Promise<{ slug: 
       */}
 
       {/*
-        Recomendações — client-side via motor (lib/recommendations/engine).
-        Cada rail se auto-remove quando não há o que mostrar, então a página
-        pode empilhar os dois sem medo de seção vazia.
+        AQUI HAVIA TRÊS CARROSSÉIS (12/08/2026).
 
-        ORDEM (12/08/2026): os rails vêm ANTES do feed. Eles são curtos e
-        curados; o feed não tem fim, então qualquer coisa embaixo dele nunca
-        seria alcançada. O rail "Você também pode gostar" saiu daqui — virou o
-        feed logo abaixo, que é a mesma promessa sem o teto de quatro peças.
+        "Complete seu look" e "Vistos por você" mudaram pro CARRINHO (decisão
+        do dono): é lá que a cliente ainda pode somar peça — pra bater o frete
+        grátis, pra aproveitar o mesmo envio —, e "Complete seu look" passou a
+        olhar a sacola INTEIRA em vez de uma peça só. No checkout não entram
+        de propósito: distração na hora de pagar derruba conversão.
+
+        O terceiro, "Você também pode gostar", virou o feed abaixo — a mesma
+        promessa sem o teto de quatro peças.
       */}
-      <RecommendationRail
-        kind="complete-seu-look"
-        seed={product}
-        eyebrow="Estilo completo"
-        title="Complete seu look"
-        description="Peças que fecham a produção com esta escolha — escolhidas pela curadoria, não pelo acaso."
-      />
-      <RecommendationRail
-        kind="ultimos-vistos"
-        seed={product}
-        eyebrow="Sua navegação"
-        title="Vistos por você"
-        tone="alt"
-      />
 
       {/*
         A PÁGINA NÃO ACABA (dono, 12/08/2026).
