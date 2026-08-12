@@ -57,6 +57,21 @@ export interface UpdateCustomerDto extends Partial<CreateCustomerDto> {
   inactiveReason?: string;
 }
 
+export interface UpdateCustomerCreditDto {
+  limiteCrediario?: number | null; // reais
+  bloqueado?: boolean;
+  negativado?: boolean;
+  spcSituacao?: string | null;
+  spcData?: string | null;
+  trabalhoRazaoSocial?: string | null;
+  trabalhoCargo?: string | null;
+  trabalhoSalario?: number | null; // reais
+  trabalhoAdmissao?: string | null;
+  trabalhoFone?: string | null;
+  casaPropria?: boolean | null;
+  aluguel?: number | null; // reais
+}
+
 export interface ListQuery {
   search?: string;
   tier?: string;
@@ -574,6 +589,140 @@ export class CustomersCrmService {
       currentConsents,
       tags: c.tags.map(ct => ct.tag),
     };
+  }
+
+  /**
+   * Ficha única beta. Customer continua sendo o registro operacional por
+   * origem/loja; esta leitura resolve a Person e escolhe o melhor valor real
+   * entre os Customers vinculados sem apagar procedência.
+   */
+  async betaDetail(id: string, actor?: RequestActor) {
+    const seed = await this.loadScoped(id, actor);
+    const identityWhere = seed.personId
+      ? { personId: seed.personId }
+      : seed.personKey
+        ? { personKey: seed.personKey }
+        : { id: seed.id };
+    const scopedWhere = !isMatrix(actor) && actor?.storeId
+      ? { OR: [{ originStoreId: actor.storeId }, { targetStoreId: actor.storeId }] }
+      : {};
+    const rows = await this.prisma.customer.findMany({
+      where: { ...identityWhere, ...scopedWhere },
+      select: { id: true, originSource: true, updatedAt: true },
+    });
+    const records = await Promise.all(rows.map((row) => this.detail(row.id, actor)));
+    const sourceWeight: Record<string, number> = {
+      manual: 60, flowops: 60, pdv: 50, physical: 50,
+      site: 40, ecommerce: 40, woo: 40,
+      live: 30, instagram: 30, giga: 10,
+    };
+    records.sort((a: any, b: any) => {
+      const weight = (sourceWeight[b.originSource || ''] || 0) - (sourceWeight[a.originSource || ''] || 0);
+      return weight || new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+    });
+
+    const canonical: any = { ...records.find((r: any) => r.id === id) };
+    const scalarFields = [
+      'name', 'nameSocial', 'cpf', 'rg', 'registroGiga', 'email', 'phone', 'whatsapp',
+      'birthDate', 'gender', 'maritalStatus', 'igUsername', 'sizeDefault',
+      'sizeSecondary', 'bodyType', 'preferredStyle', 'favoriteColors', 'avoidedPieces',
+      'originSeller', 'vipTier', 'tierEnteredAt', 'rfvSegment', 'rfvEngagement', 'notes',
+      'naturalidade', 'pai', 'mae', 'conjugeNome', 'conjugeCpf', 'trabalhoRazaoSocial',
+      'trabalhoCargo', 'trabalhoSalarioCents', 'trabalhoAdmissao', 'trabalhoFone',
+      'nomeRecado', 'foneRecado', 'limiteCrediarioCents', 'bloqueadoGiga',
+      'negativadoGiga', 'fidelidadeGiga', 'spcSituacao', 'spcData', 'casaPropria',
+      'aluguelCents',
+    ];
+    for (const field of scalarFields) {
+      const chosen = records.find((r: any) => r[field] !== null && r[field] !== undefined && r[field] !== '');
+      if (chosen) canonical[field] = (chosen as any)[field];
+    }
+
+    const totalLtvCents = records.reduce((sum: number, r: any) => sum + Number(r.ltvCents || 0), 0);
+    const totalOrderCount = records.reduce((sum: number, r: any) => sum + Number(r.orderCount || 0), 0);
+    const channels = Array.from(new Set(records.map((r: any) => r.originSource).filter(Boolean)));
+    const stores = Array.from(new Set(records.map((r: any) => r.originStore?.code).filter(Boolean)));
+    const addresses = Array.from(new Map(records.flatMap((r: any) => r.addresses || []).map((a: any) => [a.id, a])).values());
+    const cashbackTransactions = records.flatMap((r: any) => r.cashbackTransactions || [])
+      .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .slice(0, 50);
+    const cashbackBalance = {
+      balanceCents: records.reduce((sum: number, r: any) => sum + Number(r.cashbackBalance?.balanceCents || 0), 0),
+      accumulatedTotalCents: String(records.reduce((sum: number, r: any) => sum + Number(r.cashbackBalance?.accumulatedTotalCents || 0), 0)),
+      redeemedTotalCents: String(records.reduce((sum: number, r: any) => sum + Number(r.cashbackBalance?.redeemedTotalCents || 0), 0)),
+      expiredTotalCents: String(records.reduce((sum: number, r: any) => sum + Number(r.cashbackBalance?.expiredTotalCents || 0), 0)),
+      nextExpirationAt: records.map((r: any) => r.cashbackBalance?.nextExpirationAt).filter(Boolean).sort()[0] || null,
+      nextExpirationCents: records.reduce((sum: number, r: any) => sum + Number(r.cashbackBalance?.nextExpirationCents || 0), 0),
+    };
+
+    return {
+      ...canonical,
+      id, // mutações continuam ancoradas no Customer aberto e autorizado
+      ltvCents: String(totalLtvCents),
+      orderCount: totalOrderCount,
+      ticketMedioCents: totalOrderCount ? Math.round(totalLtvCents / totalOrderCount) : 0,
+      addresses,
+      cashbackTransactions,
+      cashbackBalance,
+      personSummary: {
+        personId: seed.personId,
+        personKey: seed.personKey,
+        identityStatus: seed.personId ? 'consolidated' : 'provisional',
+        totalCadastros: records.length,
+        totalLtvCents,
+        totalOrderCount,
+        canais: channels,
+        lojas: stores,
+        records: records.map((r: any) => ({
+          id: r.id, name: r.name, originSource: r.originSource,
+          originStore: r.originStore, updatedAt: r.updatedAt,
+        })),
+      },
+    };
+  }
+
+  async updateCredit(id: string, dto: UpdateCustomerCreditDto, actor: RequestActor) {
+    const before: any = await this.loadScoped(id, actor);
+    const cents = (value: number | null | undefined) => value === undefined
+      ? undefined
+      : value === null
+        ? null
+        : BigInt(Math.round(Number(value) * 100));
+    const data: any = {
+      ...(dto.limiteCrediario !== undefined ? { limiteCrediarioCents: cents(dto.limiteCrediario) } : {}),
+      ...(dto.bloqueado !== undefined ? { bloqueadoGiga: !!dto.bloqueado } : {}),
+      ...(dto.negativado !== undefined ? { negativadoGiga: !!dto.negativado } : {}),
+      ...(dto.spcSituacao !== undefined ? { spcSituacao: dto.spcSituacao?.trim() || null } : {}),
+      ...(dto.spcData !== undefined ? { spcData: dto.spcData ? new Date(dto.spcData) : null } : {}),
+      ...(dto.trabalhoRazaoSocial !== undefined ? { trabalhoRazaoSocial: dto.trabalhoRazaoSocial?.trim() || null } : {}),
+      ...(dto.trabalhoCargo !== undefined ? { trabalhoCargo: dto.trabalhoCargo?.trim() || null } : {}),
+      ...(dto.trabalhoSalario !== undefined ? { trabalhoSalarioCents: cents(dto.trabalhoSalario) } : {}),
+      ...(dto.trabalhoAdmissao !== undefined ? { trabalhoAdmissao: dto.trabalhoAdmissao ? new Date(dto.trabalhoAdmissao) : null } : {}),
+      ...(dto.trabalhoFone !== undefined ? { trabalhoFone: this.normalizePhone(dto.trabalhoFone) } : {}),
+      ...(dto.casaPropria !== undefined ? { casaPropria: dto.casaPropria } : {}),
+      ...(dto.aluguel !== undefined ? { aluguelCents: cents(dto.aluguel) } : {}),
+    };
+    const oldSnapshot = Object.fromEntries(Object.keys(data).map((key) => [key, before[key]]));
+    const stringifyAudit = (value: any) => JSON.stringify(
+      value,
+      (_key, item) => typeof item === 'bigint' ? item.toString() : item,
+    );
+    const after = await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.customer.update({ where: { id }, data });
+      await tx.masterAudit.create({
+        data: {
+          action: 'customer_credit_edit', entityType: 'customer', entityId: id,
+          storeCode: null, storeName: null, level: 'ADMIN',
+          userName: actor.userId || 'admin',
+          oldValue: stringifyAudit(oldSnapshot),
+          newValue: stringifyAudit(data),
+          motivo: 'Edição administrativa pela ficha única beta',
+        },
+      });
+      return updated;
+    });
+    this.logger.log(`[CRM beta] crédito de ${id} alterado por ${actor.userId}`);
+    return { ok: true, id: after.id, updatedAt: after.updatedAt };
   }
 
   // ─────────────────────────────────────────────────────────────────────────

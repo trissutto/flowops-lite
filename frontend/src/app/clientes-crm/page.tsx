@@ -265,6 +265,14 @@ export default function ClientesCrmPage() {
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const params = new URLSearchParams(window.location.search);
+    const restoredSearch = params.get('search') || '';
+    setSearch(restoredSearch);
+    setSearchInput(restoredSearch);
+    setTier(params.get('tier') || '');
+    setStoreFilter(params.get('storeId') || '');
+    setHasWhatsapp(params.get('hasWhatsapp') === '1');
+    setHasCashbackBalance(params.get('hasCashbackBalance') === '1');
+    setPage(Math.max(1, Number(params.get('page')) || 1));
     const openId = params.get('openId');
     if (openId) {
       setSelectedId(openId);
@@ -281,6 +289,17 @@ export default function ClientesCrmPage() {
   const [gigaEtl, setGigaEtl] = useState<GigaEtlState | null>(null);
 
   const isMatrix = me?.role === 'admin' || me?.role === 'operator';
+  const listaReturnTo = (() => {
+    const qs = new URLSearchParams();
+    if (search) qs.set('search', search);
+    if (tier) qs.set('tier', tier);
+    if (storeFilter) qs.set('storeId', storeFilter);
+    if (hasWhatsapp) qs.set('hasWhatsapp', '1');
+    if (hasCashbackBalance) qs.set('hasCashbackBalance', '1');
+    if (page > 1) qs.set('page', String(page));
+    const query = qs.toString();
+    return query ? `/clientes-crm?${query}` : '/clientes-crm';
+  })();
 
   // Carrega user atual + lojas (1x)
   useEffect(() => {
@@ -582,17 +601,18 @@ export default function ClientesCrmPage() {
                 <th className="text-center px-3 py-2.5 font-medium text-gray-700 whitespace-nowrap">Compras</th>
                 <th className="text-center px-3 py-2.5 font-medium text-gray-700 whitespace-nowrap">Última</th>
                 <th className="text-center px-3 py-2.5 font-medium text-gray-700 whitespace-nowrap">Loja</th>
+                <th className="text-center px-3 py-2.5 font-medium text-gray-700 whitespace-nowrap">Nova ficha</th>
                 <th className="w-8"></th>
               </tr>
             </thead>
             <tbody>
               {loading && (
-                <tr><td colSpan={9} className="py-12 text-center text-gray-500">
+                <tr><td colSpan={10} className="py-12 text-center text-gray-500">
                   <Loader2 className="w-6 h-6 animate-spin inline mr-2" /> Carregando...
                 </td></tr>
               )}
               {!loading && data.length === 0 && (
-                <tr><td colSpan={9} className="py-12 text-center text-gray-500">
+                <tr><td colSpan={10} className="py-12 text-center text-gray-500">
                   Nenhum cliente encontrado. Ajuste filtros ou cadastre o primeiro.
                 </td></tr>
               )}
@@ -649,6 +669,15 @@ export default function ClientesCrmPage() {
                     {c.originStore?.code
                       ? <span className="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">{c.originStore.code}</span>
                       : <span className="text-gray-400 text-xs">—</span>}
+                  </td>
+                  <td className="px-3 py-2 text-center whitespace-nowrap">
+                    <a
+                      href={`/clientes-crm/beta/${c.id}?returnTo=${encodeURIComponent(listaReturnTo)}`}
+                      onClick={(e) => e.stopPropagation()}
+                      className="inline-flex items-center rounded-lg border border-[#D4AF37] bg-[#FBF6E6] px-2.5 py-1 text-[11px] font-bold text-[#8C7325] hover:bg-[#F6EBC8]"
+                    >
+                      Abrir Beta
+                    </a>
                   </td>
                   <td className="text-gray-400"><ChevronRight className="w-4 h-4" /></td>
                 </tr>
