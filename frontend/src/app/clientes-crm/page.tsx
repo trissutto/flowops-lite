@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useState, useCallback } from 'react';
+import { usePathname } from 'next/navigation';
 import { api } from '@/lib/api';
 import {
   Search, Plus, Users, Filter, X, ChevronRight, Award, Wallet,
@@ -239,6 +240,8 @@ function fmtPhone(p: string | null): string {
 // Página
 // ──────────────────────────────────────────────────────────────────────────
 export default function ClientesCrmPage() {
+  const pathname = usePathname() || '/clientes-crm';
+  const inBeta = pathname.startsWith('/beta/clientes');
   const [me, setMe] = useState<Me | null>(null);
   const [stores, setStores] = useState<StoreOption[]>([]);
   const [storeFilter, setStoreFilter] = useState<string>('');   // só usado por matrix
@@ -623,7 +626,7 @@ export default function ClientesCrmPage() {
                 return (
                 <tr
                   key={c.id}
-                  onClick={() => setSelectedId(c.id)}
+                  onClick={() => inBeta ? window.location.assign(`/beta/clientes/${c.id}?returnTo=${encodeURIComponent(listaReturnTo.replace('/clientes-crm', '/beta/clientes'))}`) : setSelectedId(c.id)}
                   className={`border-b hover:bg-purple-50 cursor-pointer transition-colors ${
                     c.isMixed ? 'bg-sky-50/60' : tierPremium ? 'bg-amber-50/30' : ''
                   }`}
@@ -672,7 +675,9 @@ export default function ClientesCrmPage() {
                   </td>
                   <td className="px-3 py-2 text-center whitespace-nowrap">
                     <a
-                      href={`/clientes-crm/beta/${c.id}?returnTo=${encodeURIComponent(listaReturnTo)}`}
+                      href={inBeta
+                        ? `/beta/clientes/${c.id}?returnTo=${encodeURIComponent(listaReturnTo.replace('/clientes-crm', '/beta/clientes'))}`
+                        : `/clientes-crm/beta/${c.id}?returnTo=${encodeURIComponent(listaReturnTo)}`}
                       onClick={(e) => e.stopPropagation()}
                       className="inline-flex items-center rounded-lg border border-[#D4AF37] bg-[#FBF6E6] px-2.5 py-1 text-[11px] font-bold text-[#8C7325] hover:bg-[#F6EBC8]"
                     >

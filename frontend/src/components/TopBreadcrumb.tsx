@@ -75,6 +75,7 @@ export default function TopBreadcrumb() {
   // Esconde em telas que não devem ter a topbar (auth, filial, vitrine, home, impressão)
   const hide =
     pathname === '/' ||
+    pathname === '/beta' || pathname.startsWith('/beta/') ||
     pathname === '/login' || pathname.startsWith('/login') ||
     pathname.startsWith('/minha-loja') ||
     pathname.startsWith('/vitrine') ||
