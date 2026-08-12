@@ -8,12 +8,14 @@ import { Accordion, AccordionItem } from '@/components/ui/Accordion';
 import { ProductGallery } from '@/components/commerce/ProductGallery';
 import { BuyBox } from '@/components/commerce/BuyBox';
 import { ProductPageSignals } from '@/components/commerce/ProductPageSignals';
+import { DescricaoDaPeca } from '@/components/commerce/DescricaoDaPeca';
 import { DescobrirFeed } from '@/components/commerce/DescobrirFeed';
 import { NewsletterBlock } from '@/components/sections/NewsletterBlock';
 import { getProduct } from '@/services/catalog';
 import { fetchPeca } from '@/services/peca';
 import { EscolhaDaPeca } from '@/components/commerce/EscolhaDaPeca';
 import { breadcrumbSchema, buildMetadata, jsonLdGraph, productSchema } from '@/lib/seo';
+import { STORE_POLICIES } from '@/data/store-policies';
 
 /**
  * PÁGINA DE PRODUTO — dados REAIS do catálogo (backend → WooCommerce).
@@ -132,20 +134,10 @@ export default async function ProductPage({ params }: { params: Promise<{ slug: 
           hideRule
         />
         <div className="mt-8 grid gap-10 lg:grid-cols-2 lg:gap-16">
-          <div>
-            {shortDescription && (
-              <p className="text-body-lg font-light text-ink-soft">{shortDescription}</p>
-            )}
-            {description && description !== shortDescription && (
-              <p className="mt-5 text-body font-light text-ink-soft">{description}</p>
-            )}
-            {!description && !shortDescription && (
-              <p className="text-body font-light text-ink-soft">
-                Peça da curadoria Lurd&apos;s. Para detalhes de composição e caimento, fale com
-                uma consultora — ela conhece a peça na mão.
-              </p>
-            )}
-          </div>
+          {/* 4 linhas e "Ver mais": a descrição da ficha passa de 40 linhas na
+              peça bem cadastrada e empurrava tamanhos, entrega e trocas pro
+              fim da página. */}
+          <DescricaoDaPeca resumo={shortDescription} texto={description} />
 
           <Accordion>
             <AccordionItem title="Tamanhos disponíveis" defaultOpen>
@@ -172,8 +164,12 @@ export default async function ProductPage({ params }: { params: Promise<{ slug: 
               </p>
             </AccordionItem>
             <AccordionItem title="Trocas e devoluções">
+              {/* O número vem de `STORE_POLICIES`: escrito à mão aqui, foi um
+                  dos seis lugares que continuaram prometendo 30 dias depois
+                  de a política virar 7. */}
               <p className="text-body font-light text-ink-soft">
-                30 dias para trocar, na loja ou pelo portal de trocas. Sem burocracia.
+                {STORE_POLICIES.exchangeWindowDays} dias para trocar, na loja ou pelo portal
+                de trocas. Sem burocracia.
               </p>
             </AccordionItem>
             <AccordionItem title="Formas de pagamento">

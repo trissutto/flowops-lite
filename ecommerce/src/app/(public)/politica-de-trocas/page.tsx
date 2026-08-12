@@ -5,15 +5,22 @@ import { buildMetadata } from '@/lib/seo';
 /**
  * POLÍTICA DE TROCAS (itens 81 e 83).
  *
- * ⚠️ O texto abaixo foi montado a partir do que o site JÁ PROMETE hoje (30
- * dias para troca, do card ao rodapé) e do que a lei obriga (7 dias de
- * arrependimento, art. 49 do CDC). Nada aqui é modelo genérico — cada prazo
- * corresponde a algo que a loja já diz ou que a lei manda.
+ * ⚠️ O PRAZO DE TROCA É 7 DIAS, não 30 (dono, 12/08/2026).
  *
- * Separar o prazo LEGAL (7 dias, dinheiro de volta, qualquer motivo) do prazo
- * COMERCIAL (30 dias, troca) é o ponto que mais gera briga: a cliente que pede
- * dinheiro de volta no dia 20 está pedindo algo diferente do que a lei garante,
- * e a política tem que dizer isso antes de ela pedir.
+ * O site inteiro prometia 30 dias — do card ao rodapé — enquanto o portal que
+ * recebe o pedido trabalha com 7 (`TrocasService.getPrazoDias`, default 7, e
+ * não há `troca.prazoDias` gravado em produção). Ou seja: a vitrine convidava
+ * a cliente a voltar no dia 20 e o sistema recusava. Promessa que o próprio
+ * sistema nega custa mais caro que prazo curto.
+ *
+ * Separar o prazo LEGAL (7 dias, dinheiro de volta, qualquer motivo, art. 49
+ * do CDC) do COMERCIAL (7 dias, troca por outra peça) continua importando: são
+ * direitos diferentes com o mesmo prazo, e a cliente que pede dinheiro de
+ * volta está pedindo outra coisa.
+ *
+ * Se a loja mudar o prazo, muda em `troca.prazoDias` (tela de trocas da
+ * equipe) — e ESTE texto tem que mudar junto. Mesma armadilha do "frete grátis
+ * acima de R$ 399" que ficou no ar depois da régua virar config.
  */
 
 export const metadata = buildMetadata({
@@ -28,7 +35,7 @@ export default function PoliticaTrocasPage() {
     <PaginaLegal
       titulo="Trocas e devoluções"
       atualizadoEm="2026-08-06"
-      resumo="Você tem 7 dias para desistir da compra e receber o dinheiro de volta, e 30 dias para trocar por outro tamanho, cor ou peça."
+      resumo="Você tem 7 dias, a partir do recebimento, para desistir da compra e receber o dinheiro de volta ou para trocar por outro tamanho, cor ou peça."
     >
       <h2>Desistiu da compra? 7 dias</h2>
       <p>
@@ -44,12 +51,12 @@ export default function PoliticaTrocasPage() {
         que costuma levar uma ou duas faturas.
       </p>
 
-      <h2>Quer trocar? 30 dias</h2>
+      <h2>Quer trocar? 7 dias</h2>
       <p>
-        Além do prazo legal, você tem <strong>30 dias corridos</strong> a partir do
-        recebimento para trocar a peça por outro tamanho, outra cor ou outra peça. É uma
-        condição nossa, não uma obrigação da lei — e existe porque tamanho plus size varia
-        de marca para marca e a gente sabe disso.
+        Para trocar a peça por outro tamanho, outra cor ou outra peça, o prazo é de{' '}
+        <strong>7 dias corridos</strong> a partir do recebimento — o mesmo do
+        arrependimento. O que conta é abrir o pedido de troca pelo portal dentro desses 7
+        dias.
       </p>
       <p>
         Na troca, a diferença de valor é acertada: se a peça nova custar mais, você

@@ -4,6 +4,7 @@ import { Section } from '@/components/layout/Section';
 import { SectionTitle } from '@/components/sections/SectionTitle';
 import { api } from '@/lib/api';
 import { buildMetadata } from '@/lib/seo';
+import { STORE_POLICIES } from '@/data/store-policies';
 
 /**
  * GUIA DE MEDIDAS (`/tamanhos/guia`).
@@ -166,7 +167,7 @@ export default async function GuiaDeMedidasPage() {
           uma das 14 lojas</Link> antes de levar — se não vestir, você não leva e não paga
           nada. E se comprar aqui e não servir,{' '}
           <Link href="/politica-de-trocas" className="link-underline text-ink">
-            a troca é sua por 30 dias
+            a troca é sua por {STORE_POLICIES.exchangeWindowDays} dias
           </Link>
           .
         </p>
