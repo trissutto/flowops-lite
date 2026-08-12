@@ -221,7 +221,11 @@ export class PdvService {
         isTraining: !!input.isTraining,
       },
     });
-    return sale;
+    // PERF: devolve já no formato completo, com `items: []` e `payments: []`.
+    // O PDV fazia POST e, na sequência, um GET só pra ter esses dois arrays
+    // vazios — duas viagens ao servidor em TODA venda nova, ou seja, ao fim
+    // de cada venda do dia.
+    return { ...sale, items: [], payments: [] };
   }
 
   /**

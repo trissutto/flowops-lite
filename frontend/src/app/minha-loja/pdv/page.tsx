@@ -4,7 +4,7 @@ import { overlayClose } from '@/lib/overlayClose';
 /**
  * /minha-loja/pdv — Frente de caixa.
  *
- * Cópia paralela de /minha-loja/pdv com melhorias de UX (atalhos F8/Del/F12,
+ * Cópia paralela de /minha-loja/pdv com melhorias de UX (atalhos F8/Del/F7,
  * flash na bipagem, guard de duplo clique, barra de atalhos). Subpáginas
  * (caixa, devolucao, recibo etc.) continuam apontando pras rotas ORIGINAIS
  * /minha-loja/pdv/...
@@ -22,6 +22,7 @@ import { overlayClose } from '@/lib/overlayClose';
 import * as React from 'react';
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import Image from 'next/image';
 import {
   ArrowLeft, Loader2, X, Barcode, Trash2, Plus, Minus,
@@ -30,7 +31,7 @@ import {
   FileText, RotateCcw, History, Percent,
   Clock, ChevronRight, Pause, DollarSign, ArrowRightLeft, Search, Sparkles,
   Receipt, Globe, Shuffle, Tag, Wallet, ArrowUpRight, Printer,
-  RefreshCw, Handshake, Moon, Sun, Package,
+  RefreshCw, Handshake, Moon, Sun, Package, Settings,
   type LucideIcon,
 } from 'lucide-react';
 import { api } from '@/lib/api';
@@ -41,7 +42,7 @@ import { loadPrinterConfig } from '@/lib/printer-router';
 import QRCode from 'qrcode';
 import { PdvToastProvider, usePdvToast, humanizeError } from '@/components/PdvToast';
 import ValeTrocaModal from './ValeTrocaModal';
-import { appPrompt } from '@/lib/app-prompt';
+import { appConfirm, appPrompt } from '@/lib/app-prompt';
 import { HUB_TONES, type HubTone } from '@/components/HubCard';
 import StorePickOrderAlert from '@/components/StorePickOrderAlert';
 import TrainingModeBanner from '@/components/TrainingModeBanner';
@@ -357,6 +358,8 @@ type ScanBarHandle = {
   focusSelect: () => void;
   clear: () => void;
   isActiveEmpty: () => boolean;
+  /** Abre a grade do modelo pra um código que não existiu como SKU. */
+  buscarComoRef: (codigo: string) => void;
 };
 
 type ScanBarProps = {
@@ -423,12 +426,38 @@ const ScanBar = forwardRef<ScanBarHandle, ScanBarProps>(function ScanBar(
     if (saleId || pending === 0) saleIdRef.current = saleId;
   }, [saleId, pending]);
 
+  /**
+   * Abre a GRADE do modelo (tamanhos/cores) pra um termo. É o mesmo caminho
+   * do "REF + espaço", extraído pra também servir ao botão "Buscar como REF"
+   * do aviso de peça não encontrada.
+   */
+  const buscarGrade = useCallback(async (termo: string) => {
+    const q = String(termo || '').trim();
+    if (!q) return;
+    setSearchLoading(true);
+    onErrorRef.current(null);
+    try {
+      const res = await api<ErpSearchHit[]>(`/products/erp-search?q=${encodeURIComponent(q)}`);
+      const arr = Array.isArray(res) ? res : [];
+      setSearchResults(arr);
+      setShowResults(arr.length > 0);
+      setHighlightedIdx(arr.length > 0 ? 0 : -1);
+      if (!arr.length) onErrorRef.current(`REF ${q} não encontrada`);
+    } catch (e2: any) {
+      onErrorRef.current(e2?.message || 'Erro ao buscar REF');
+    } finally {
+      setSearchLoading(false);
+      setTimeout(() => inputRef.current?.focus(), 50);
+    }
+  }, []);
+
   useImperativeHandle(ref, () => ({
     focus: () => inputRef.current?.focus(),
     focusSelect: () => { inputRef.current?.focus(); inputRef.current?.select(); },
     clear: () => setScanInput(''),
     isActiveEmpty: () => document.activeElement === inputRef.current && !scanInput.trim(),
-  }), [scanInput]);
+    buscarComoRef: (codigo: string) => { setScanInput(codigo); void buscarGrade(codigo); },
+  }), [scanInput, buscarGrade]);
 
   // ── Bipagem ──
   // forceRef: Shift+Enter / REF+ESPAÇO → busca a REF/grade direto, sem tentar bipar.
@@ -447,23 +476,7 @@ const ScanBar = forwardRef<ScanBarHandle, ScanBarProps>(function ScanBar(
     //   1. forceRef (Shift+Enter / REF+ESPAÇO): explícito, REF de QUALQUER tamanho.
     //   2. Fallback no catch abaixo: bipou código + ENTER e não achou → tenta REF.
     // (NÃO usar mais "3-6 dígitos = REF": existem CÓDIGOS de 3-6 dígitos, ex. 10115.)
-    const buscarRef = async () => {
-      setSearchLoading(true);
-      onError(null);
-      try {
-        const res = await api<ErpSearchHit[]>(`/products/erp-search?q=${encodeURIComponent(sku)}`);
-        const arr = Array.isArray(res) ? res : [];
-        setSearchResults(arr);
-        setShowResults(arr.length > 0);
-        setHighlightedIdx(arr.length > 0 ? 0 : -1);
-        if (!arr.length) onError(`REF ${sku} não encontrada no Giga`);
-      } catch (e2: any) {
-        onError(e2?.message || 'Erro ao buscar REF');
-      } finally {
-        setSearchLoading(false);
-        setTimeout(() => inputRef.current?.focus(), 50);
-      }
-    };
+    const buscarRef = () => buscarGrade(sku);
     // REF/GRADE só por gatilho EXPLÍCITO (REF + ESPAÇO ou Shift+Enter).
     // ANTES: "3-6 dígitos + Enter" caía aqui automático — mas isso QUEBRAVA
     // produtos cujo CODIGO tem 3-6 dígitos (ex.: 10115 = Calça). O leitor manda
@@ -621,8 +634,12 @@ const ScanBar = forwardRef<ScanBarHandle, ScanBarProps>(function ScanBar(
             }
           }}
           onBlur={() => {
-            // delay pra permitir click no item antes do dropdown fechar
-            setTimeout(() => setShowResults(false), 150);
+            // Fecha NA HORA. O delay de 150ms existia pra dar tempo do clique
+            // registrar antes do dropdown sumir — mas o item da lista usa
+            // `onMouseDown` com preventDefault, que dispara ANTES do blur.
+            // A proteção era redundante e a janela de 150ms deixava a lista
+            // antiga capturando mouse depois de já dever ter fechado.
+            setShowResults(false);
           }}
           onFocus={() => {
             if (searchResults.length > 0) setShowResults(true);
@@ -775,31 +792,15 @@ function ConnBadge({ compact }: { compact?: boolean }) {
 }
 
 /**
- * Rodapé fino de status (espec do layout claro): conexão + impressora térmica
- * configurada + ambiente. Fixed no fundo, altura mínima.
- *
- * Também é onde mora o seletor de TAMANHO da tela (densidade) — preferência
- * local deste computador. Ficou aqui, e não no header, porque o header já
- * disputa espaço com 9 chips.
+ * Rodapé fino de status: conexão + impressora térmica + ambiente.
+ * Só leitura — as preferências do computador moram na ⚙ do header.
  */
-function StatusFooter({
-  density,
-  onDensity,
-}: {
-  density: PdvDensity;
-  onDensity: (d: PdvDensity) => void;
-}) {
+function StatusFooter() {
   const [printerName, setPrinterName] = useState<string | null>(null);
   useEffect(() => {
     try { setPrinterName(loadPrinterConfig().termica); } catch { setPrinterName(null); }
   }, []);
   const isProd = process.env.NODE_ENV === 'production';
-  const opcoes: Array<[PdvDensity, string]> = [
-    ['auto', 'Auto'],
-    ['compacto', 'Compacto'],
-    ['normal', 'Normal'],
-    ['grande', 'Grande'],
-  ];
   return (
     <footer className="fixed bottom-0 left-0 right-0 z-10 bg-white border-t border-[#EDEAE1]">
       <div className="max-w-[1700px] mx-auto px-5 h-9 flex items-center gap-6 text-[11px] font-semibold text-slate-500">
@@ -812,29 +813,6 @@ function StatusFooter({
           <FileText className="w-3.5 h-3.5 text-slate-400" />
           Ambiente: {isProd ? 'Produção' : 'Desenvolvimento'}
         </span>
-        <div className="ml-auto hidden lg:flex items-center gap-1">
-          <span className="text-slate-400 whitespace-nowrap">Tamanho da tela</span>
-          {opcoes.map(([id, label]) => (
-            <button
-              key={id}
-              type="button"
-              onClick={() => onDensity(id)}
-              aria-pressed={density === id}
-              className={`px-2 py-0.5 rounded border transition whitespace-nowrap ${
-                density === id
-                  ? 'border-[#CDA434] bg-[#FBF6E6] text-[#8C7325]'
-                  : 'border-transparent hover:border-slate-200 hover:text-slate-700'
-              }`}
-              title={
-                id === 'auto'
-                  ? 'Ajusta sozinho pelo tamanho do monitor'
-                  : `Fixa o tamanho em ${label.toLowerCase()} neste computador`
-              }
-            >
-              {label}
-            </button>
-          ))}
-        </div>
       </div>
     </footer>
   );
@@ -856,6 +834,7 @@ export default function PdvPage() {
 
 function PdvPageInner() {
   const { toast } = usePdvToast();
+  const router = useRouter();
   const [stores, setStores] = useState<Store[]>([]);
   const [storeCode, setStoreCode] = useState<string>('');
   const [sale, setSale] = useState<Sale | null>(null);
@@ -1014,7 +993,7 @@ function PdvPageInner() {
   // Erro FIXO do último finalize (o toast some rápido — sem isto a vendedora
   // não sabia por que a venda "voltava" após escolher a vendedora).
   const [finalizeError, setFinalizeError] = useState<string | null>(null);
-  // ── PDV2: overlay de ajuda de atalhos (F12 ou ?) ──
+  // ── PDV2: overlay de ajuda de atalhos (F7 ou ?) ──
   const [showShortcuts, setShowShortcuts] = useState(false);
   // ── PDV2: flash visual no item recém-bipado (fundo verde ~600ms) ──
   const [lastAddedItemId, setLastAddedItemId] = useState<string | null>(null);
@@ -1190,8 +1169,12 @@ function PdvPageInner() {
         method: 'POST',
         body: JSON.stringify({ storeCode }),
       });
-      // GET pra ter `items: []` populado
-      const full = await api<Sale>(`/pdv/sales/${s.id}`);
+      // O POST já devolve `items: []` e `payments: []` prontos. O GET fica só
+      // como rede de segurança pro backend antigo (janela de deploy) — antes
+      // ele era incondicional e custava uma segunda viagem em TODA venda nova.
+      const full: Sale = Array.isArray((s as any)?.items)
+        ? s
+        : await api<Sale>(`/pdv/sales/${s.id}`);
       setSale(full);
       try {
         localStorage.setItem(`lurds_pdv_sale_${storeCode}`, full.id);
@@ -1248,6 +1231,8 @@ function PdvPageInner() {
   // do render) evita o erro de usar a const antes da declaração.
   const removeItemRef = useRef<(itemId: string) => void>(() => {});
   useEffect(() => { removeItemRef.current = removeItem; });
+  const routerRef = useRef(router);
+  useEffect(() => { routerRef.current = router; });
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const {
@@ -1255,6 +1240,10 @@ function PdvPageInner() {
         showConfirmSale, showDiscount, showShortcuts,
       } = kbdRef.current;
       const removeItem = removeItemRef.current;
+      // Navegação do Next em vez de `window.location.href`: aquilo jogava a
+      // aplicação inteira fora e recarregava tudo — 2 a 4s de tela branca num
+      // PC de loja, com a cliente esperando na frente do caixa.
+      const irPara = (href: string) => routerRef.current.push(href);
       if (!sale || sale.status !== 'open') return;
       const anyModal =
         showCustomer || showPayment || showFinalized || showVendedora || showConfirmSale ||
@@ -1270,8 +1259,10 @@ function PdvPageInner() {
         if (showConfirmSale) { e.preventDefault(); pendingFinalizeRef.current = null; setShowConfirmSale(false); return; }
         // sem modal aberto → cai no comportamento original (bloco Escape abaixo)
       }
-      // ── PDV2: F12 abre/fecha overlay de atalhos (funciona sempre) ──
-      if (e.key === 'F12') {
+      // ── Ajuda de atalhos: F7 (funciona sempre) ──
+      // NÃO usar F12: é o atalho do CONSOLE do navegador/Electron. A ajuda
+      // abria junto com o DevTools em cima da tela da vendedora.
+      if (e.key === 'F7') {
         e.preventDefault();
         setShowShortcuts((v) => !v);
         return;
@@ -1306,7 +1297,7 @@ function PdvPageInner() {
       // F3 → tela de Caixa (sangria, suprimento, retiradas)
       if (e.key === 'F3') {
         e.preventDefault();
-        window.location.href = '/minha-loja/pdv/caixa';
+        irPara('/minha-loja/pdv/caixa');
         return;
       }
       // F4 → tela de TROCA / Devolução (atalho rápido pro fluxo de troca)
@@ -1318,7 +1309,7 @@ function PdvPageInner() {
           if (sale?.id) localStorage.setItem('lurds_pdv_attach_to_sale_id', JSON.stringify({ id: sale.id, ts: Date.now(), items: sale.items?.length || 0 }));
           else localStorage.removeItem('lurds_pdv_attach_to_sale_id');
         } catch {}
-        window.location.href = '/minha-loja/pdv/devolucao';
+        irPara('/minha-loja/pdv/devolucao');
         return;
       }
       // F6 → identificar/trocar cliente (CPF/nome)
@@ -1334,7 +1325,7 @@ function PdvPageInner() {
       // F10 → consultar produto (estoque/preço/foto)
       if (e.key === 'F10') {
         e.preventDefault();
-        window.location.href = '/minha-loja/consultar';
+        irPara('/minha-loja/consultar');
         return;
       }
       // ── PDV2: F8 → abrir tela de pagamento (só com itens no carrinho) ──
@@ -1392,6 +1383,85 @@ function PdvPageInner() {
     // única vez na vida da tela.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ── Callbacks ESTÁVEIS da linha do carrinho ────────────────────────────
+  // `updateItem`/`removeItem` são recriadas a cada render; se fossem passadas
+  // direto pro <CartRow> memoizado, toda prop mudaria e o memo não seguraria
+  // nada. Aqui elas são lidas por ref, então a identidade nunca muda.
+  const updateItemRef = useRef<typeof updateItem>(() => Promise.resolve());
+  useEffect(() => { updateItemRef.current = updateItem; });
+  const aoMudarQty = useCallback((itemId: string, qty: number) => {
+    void updateItemRef.current(itemId, { qty });
+  }, []);
+  const aoPatchItem = useCallback((itemId: string, patch: { excludePromo?: boolean; forcePromo?: boolean }) => {
+    void updateItemRef.current(itemId, patch);
+  }, []);
+  const aoRemoverItem = useCallback((itemId: string) => {
+    void removeItemRef.current(itemId);
+  }, []);
+  const aoAbrirDesconto = useCallback((itemId: string, bruto: number, atual: number) => {
+    setShowDiscount({ kind: 'item', itemId, bruto, atual });
+  }, []);
+
+  // ── Última venda finalizada (pra reimprimir o cupom na tela vazia) ─────
+  // Reimprimir o cupom da venda que acabou de sair é o pedido nº 1 do balcão,
+  // e até aqui a vendedora tinha que ir em "Produtos vendidos" procurar.
+  const [ultimaVenda, setUltimaVenda] = useState<{ id: string; total: number; hora: string } | null>(null);
+  const registrarUltimaVenda = useCallback((s: Sale) => {
+    const quando = s.finalizedAt ? new Date(s.finalizedAt) : new Date();
+    const info = {
+      id: s.id,
+      total: Number(s.total) || 0,
+      hora: quando.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+    };
+    setUltimaVenda(info);
+    try { localStorage.setItem(`lurds_pdv_ultima_venda_${s.storeCode}`, JSON.stringify(info)); } catch { /* noop */ }
+  }, []);
+  useEffect(() => {
+    if (!storeCode) return;
+    try {
+      const raw = localStorage.getItem(`lurds_pdv_ultima_venda_${storeCode}`);
+      if (raw) setUltimaVenda(JSON.parse(raw));
+    } catch { /* noop */ }
+  }, [storeCode]);
+  const reimprimirUltimoCupom = useCallback(async () => {
+    const id = ultimaVenda?.id;
+    if (!id) return;
+    const url = `/minha-loja/pdv/recibo/${id}?autoprint=1`;
+    try {
+      const { routePrint } = await import('@/lib/printer-router');
+      await routePrint({ kind: 'cupom', url });
+      toast('success', 'Cupom reenviado', 'Confira a impressora térmica');
+    } catch {
+      printViaHiddenIframe(url);
+    }
+  }, [ultimaVenda?.id, toast]);
+
+  // ── Filtro do carrinho (aparece a partir de 10 linhas) ─────────────────
+  const [filtroCarrinho, setFiltroCarrinho] = useState('');
+  // Some junto com a venda: carrinho novo não pode nascer filtrado.
+  useEffect(() => { setFiltroCarrinho(''); }, [sale?.id]);
+
+  /**
+   * Linhas que o carrinho mostra: ordem invertida (última peça bipada no topo,
+   * pra conferir o que acabou de passar) e, com filtro digitado, só o que casa.
+   *
+   * `normalizar` tira acento: a busca por "saida" tem que achar "Saída". Já
+   * mordeu antes — ILIKE do Prisma tem o mesmo problema no backend.
+   */
+  const linhasVisiveis = useMemo(() => {
+    const todas = [...(sale?.items || [])].reverse();
+    const termo = filtroCarrinho.trim();
+    if (!termo) return todas;
+    const normalizar = (s: string) =>
+      String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+    const alvo = normalizar(termo);
+    return todas.filter((i) =>
+      normalizar(
+        [i.descricao, i.ref, i.sku, i.ean, i.cor, i.tamanho].filter(Boolean).join(' '),
+      ).includes(alvo),
+    );
+  }, [sale?.items, filtroCarrinho]);
 
   // ── PDV2: marca o item recém-adicionado pra dar flash verde (~600ms) ──
   // Detecta por diff: item NOVO (id que não existia) ou qty incrementada.
@@ -1617,34 +1687,33 @@ function PdvPageInner() {
   const [showSimular, setShowSimular] = useState(false);
   // ── Banner de campanha promocional (colapsado por padrão pra não poluir tela) ──
   const [promoExpanded, setPromoExpanded] = useState(false);
-  const loadOpenCount = async () => {
+  // ── BATIDA ÚNICA (heartbeat) ────────────────────────────────────────────
+  // ANTES eram TRÊS ciclos independentes e desalinhados: links Pagar.me a cada
+  // 15s, pedidos do site + realinhamento a cada 30s (2 requisições) e a
+  // contagem de pausadas a cada troca de venda. ~4.800 requisições por PC em
+  // 8h de loja — e nada parava com a aba no fundo ou o caixa já fechado.
+  //
+  // AGORA: um `GET /pdv/heartbeat` a cada 15s (o ritmo é ditado pelo link
+  // pago, que é o único que não pode esfriar), PAUSADO quando a aba sai da
+  // frente e disparado na hora em que ela volta.
+  const HEARTBEAT_MS = 15_000;
+  const loadOpenCount = async () => { await baterPonto(); };
+  const baterPonto = async () => {
     if (!storeCode) return;
     try {
-      const list = await api<any[]>(`/pdv/sales?storeCode=${storeCode}&status=open&limit=50`);
-      // Não conta a venda ATUAL (que também é open) nem vendas FANTASMAS
-      // (carrinho vazio — vendedora abriu o PDV e nao bipou nada, acumula).
-      const others = list.filter((s) => s.id !== sale?.id && (s.items?.length || 0) > 0);
-      setOpenCount(others.length);
-    } catch {
-      setOpenCount(0);
-    }
-  };
-  useEffect(() => {
-    if (storeCode) loadOpenCount();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [storeCode, sale?.id]);
-
-  // ── Polling Links Pagar.me pendentes (a cada 15s) ──
-  // Quando o cliente paga, o webhook do Pagar.me atualiza o status no banco.
-  // O polling pega esse status e dispara alerta sonoro + visual no header pra
-  // vendedora finalizar a venda. Roda enquanto o PDV estiver aberto.
-  const loadOnlinePending = async () => {
-    if (!storeCode) return;
-    try {
-      const list = await api<typeof onlinePending>(
-        `/pagarme/online-pending?storeCode=${storeCode}`,
-      );
-      setOnlinePending(Array.isArray(list) ? list : []);
+      const qs = new URLSearchParams({ storeCode });
+      if (saleIdAtualRef.current) qs.set('excludeSaleId', saleIdAtualRef.current);
+      const r = await api<{
+        pausadas: number;
+        pedidosSite: number;
+        realinhamento: number;
+        online: typeof onlinePending;
+      }>(`/pdv/heartbeat?${qs.toString()}`);
+      setOpenCount(Number(r?.pausadas) || 0);
+      setPedidosSitePending(Number(r?.pedidosSite) || 0);
+      setRealignPending(Number(r?.realinhamento) || 0);
+      const list = Array.isArray(r?.online) ? r.online : [];
+      setOnlinePending(list);
       // Detecta novos paid e notifica (toca som + toast)
       for (const item of list) {
         if (item.status === 'paid' && !notifiedPaidRef.current.has(item.saleId)) {
@@ -1671,38 +1740,44 @@ function PdvPageInner() {
         }
       }
     } catch {
-      // silencioso
+      // silencioso — badge desatualizado não pode atrapalhar a venda
     }
   };
-  useEffect(() => {
-    if (!storeCode) return;
-    loadOnlinePending();
-    const id = setInterval(loadOnlinePending, 15000);
-    return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [storeCode]);
 
-  // ── Badges de operação (pedidos site + realinhamento) ──
-  // Polling leve a cada 30s pra alertar quando matriz manda algo novo.
+  // ── Badges de operação (pedidos site + realinhamento) — vêm do heartbeat ──
   const [pedidosSitePending, setPedidosSitePending] = useState(0);
   const [realignPending, setRealignPending] = useState(0);
+
+  // A venda da tela não conta como "pausada". Vive num ref pra não reiniciar
+  // o ciclo a cada troca de venda.
+  const saleIdAtualRef = useRef<string | null>(null);
+  useEffect(() => { saleIdAtualRef.current = sale?.id ?? null; }, [sale?.id]);
+
+  const baterPontoRef = useRef(baterPonto);
+  useEffect(() => { baterPontoRef.current = baterPonto; });
   useEffect(() => {
-    let cancel = false;
-    const load = async () => {
-      try {
-        const [picks, realigns] = await Promise.all([
-          api<any[]>('/pick-orders/mine').catch(() => []),
-          api<any[]>('/realignment/mine').catch(() => []),
-        ]);
-        if (cancel) return;
-        setPedidosSitePending(Array.isArray(picks) ? picks.length : 0);
-        setRealignPending(Array.isArray(realigns) ? realigns.length : 0);
-      } catch { /* silencioso */ }
+    if (!storeCode) return;
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const parar = () => { if (timer) { clearInterval(timer); timer = null; } };
+    const comecar = () => {
+      if (timer) return;
+      void baterPontoRef.current();
+      timer = setInterval(() => void baterPontoRef.current(), HEARTBEAT_MS);
     };
-    load();
-    const id = setInterval(load, 30_000);
-    return () => { cancel = true; clearInterval(id); };
-  }, []);
+    // Aba escondida (outra janela, PC bloqueado, caixa fechado com a tela
+    // aberta) não gasta requisição. Ao voltar, atualiza na hora.
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') comecar();
+      else parar();
+    };
+    onVisibility();
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      parar();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storeCode]);
 
   const retomarVenda = async (saleId: string) => {
     try {
@@ -1950,6 +2025,8 @@ function PdvPageInner() {
       const allPaymentsPix = (fresh?.payments?.length ?? 0) > 0 &&
         (fresh.payments || []).every((p: any) => String(p.method).toLowerCase() === 'pix');
       setShowFinalized(true);
+      // Guarda pra oferecer "reimprimir último cupom" na tela de carrinho vazio.
+      registrarUltimaVenda(fresh);
 
       // ── Impressão automática de cupom: PIX ou DINHEIRO (em 2 vias) ──
       // Cartão/crediário/marcado/vale NÃO imprimem cupom auto.
@@ -2215,34 +2292,19 @@ function PdvPageInner() {
           <span className="hidden md:block"><HeaderClock /></span>
           <span className="hidden sm:block"><ConnBadge compact /></span>
 
-          {/* Preferência local deste computador; não interfere na venda aberta. */}
-          <button
-            type="button"
-            onClick={toggleColorTheme}
-            className="flex text-xs px-2.5 py-1.5 rounded-lg items-center gap-1.5 font-bold shrink-0 bg-white hover:bg-[#FBF6E6] text-slate-600 border border-slate-200 hover:border-[#CDA434] transition"
-            title={nightMode ? 'Voltar ao modo claro neste computador' : 'Escurecer o PDV neste computador'}
-            aria-label={nightMode ? 'Ativar modo claro' : 'Ativar modo noturno'}
-            aria-pressed={nightMode}
-          >
-            {nightMode ? <Sun className="w-3.5 h-3.5 text-[#D4AF37]" /> : <Moon className="w-3.5 h-3.5 text-slate-500" />}
-            <span className="hidden xl:inline">{nightMode ? 'Modo claro' : 'Modo noturno'}</span>
-          </button>
-
-          {/* Rollback instantâneo do piloto visual — preferência local deste caixa. */}
-          <button
-            type="button"
-            onClick={toggleCheckoutLayout}
-            className="hidden lg:flex text-xs px-2.5 py-1.5 rounded-lg items-center gap-1.5 font-bold shrink-0 bg-white hover:bg-[#FBF6E6] text-[#8C7325] border border-[#CDA434] transition"
-            title={checkoutLayout === 'highlighted' ? 'Voltar agora ao visual anterior' : 'Ativar novamente o novo visual'}
-          >
-            {checkoutLayout === 'highlighted'
-              ? <RotateCcw className="w-3.5 h-3.5" />
-              : <Sparkles className="w-3.5 h-3.5" />}
-            {checkoutLayout === 'highlighted' ? 'Visual anterior' : 'Usar visual novo'}
-          </button>
-
-          {/* Botão Modo Treinamento — só aparece quando NÃO está em treino. */}
-          <TrainingModeButton className="text-xs px-2.5 py-1.5 rounded-lg flex items-center gap-1.5 font-bold shrink-0 bg-white hover:bg-[#FBF6E6] text-[#B58A1E] border border-[#CDA434]" />
+          {/* ⚙ PREFERÊNCIAS DESTE COMPUTADOR
+              O header disputava espaço com 9 chips e, em 1366px, os últimos já
+              perdiam o rótulo. O que a loja configura UMA VEZ e esquece (tema,
+              tamanho da tela, visual do caixa, treinamento) saiu da barra e
+              virou um menu só. O que muda durante a venda continua à mostra. */}
+          <PdvPrefsMenu
+            nightMode={nightMode}
+            onToggleTheme={toggleColorTheme}
+            density={density}
+            onDensity={applyDensity}
+            checkoutLayout={checkoutLayout}
+            onToggleLayout={toggleCheckoutLayout}
+          />
         </div>
       </header>
 
@@ -2389,16 +2451,6 @@ function PdvPageInner() {
       <div className="flex-1 min-w-0 w-full flex flex-col lg:flex-row lg:flex-wrap items-start gap-4">
 
       <main className="flex-1 min-w-0 space-y-3 w-full lg:basis-0">
-        {error && (
-          <div className="bg-rose-50 border-2 border-rose-300 text-rose-800 p-3 rounded-xl text-sm flex items-start gap-2 shadow-sm">
-            <AlertCircle className="w-5 h-5 shrink-0 mt-0.5 text-rose-600" />
-            <div>
-              <div className="font-bold">{error.includes('não encontrad') ? 'Produto não encontrado' : 'Algo deu errado'}</div>
-              <div className="text-xs mt-0.5 text-rose-700">{error}</div>
-            </div>
-          </div>
-        )}
-
         {/* Input bipagem — FULL-WIDTH (estilo mockup) com botão grande à direita */}
         {/* A barra de bipe aparece TAMBÉM sem venda aberta — é ela que cria a
             venda no primeiro bipe (antes a venda nascia junto com a tela e
@@ -2419,6 +2471,80 @@ function PdvPageInner() {
           />
         )}
 
+        {/* ERRO DA BIPAGEM — nasce COLADO no campo, não no topo da tela.
+            O olho da vendedora está no campo de bipe com a cliente na frente;
+            um banner fino lá em cima passava despercebido e ela bipava de
+            novo. Aqui vem grande, com o código que ela digitou e o que fazer
+            em seguida. */}
+        {error && (() => {
+          const naoAchou = /n[aã]o encontrad/i.test(error);
+          // O código costuma vir na mensagem ("REF 1234 não encontrada...").
+          const codigo = error.match(/\b\d{3,}\b/)?.[0] || null;
+          return (
+            <div className="bg-rose-50 border-2 border-rose-400 rounded-2xl p-4 shadow-sm">
+              <div className="flex items-start gap-3">
+                <div className="w-11 h-11 rounded-xl bg-rose-100 border-2 border-rose-300 flex items-center justify-center shrink-0">
+                  <AlertCircle className="w-6 h-6 text-rose-600" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-lg font-black text-rose-900 leading-tight">
+                    {naoAchou ? 'Essa peça não foi encontrada' : 'Não consegui lançar a peça'}
+                  </div>
+                  {codigo && (
+                    <div className="mt-1 text-sm text-rose-800">
+                      Código lido: <b className="font-mono text-base">{codigo}</b>
+                    </div>
+                  )}
+                  <div className="text-sm text-rose-700 mt-1 leading-snug">{error}</div>
+
+                  {naoAchou && (
+                    <div className="mt-2 text-[13px] text-rose-800 leading-relaxed">
+                      Costuma ser um destes três: a etiqueta é de <b>REF</b> e não de código
+                      (busque a grade), a peça foi cadastrada agora e ainda não sincronizou,
+                      ou a etiqueta está gasta e o leitor trocou um dígito.
+                    </div>
+                  )}
+
+                  <div className="flex flex-wrap gap-2 mt-3">
+                    {codigo && (
+                      <button
+                        type="button"
+                        onClick={() => { setError(null); scanBarRef.current?.buscarComoRef(codigo); }}
+                        className="px-3 py-2 rounded-lg bg-white border-2 border-rose-300 text-rose-800 text-sm font-bold hover:bg-rose-100 transition"
+                      >
+                        Buscar {codigo} como REF
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => { setError(null); scanBarRef.current?.focusSelect(); }}
+                      className="px-3 py-2 rounded-lg bg-white border-2 border-rose-300 text-rose-800 text-sm font-bold hover:bg-rose-100 transition"
+                    >
+                      Bipar de novo
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setError(null); setShowManualItem(true); }}
+                      className="px-3 py-2 rounded-lg bg-white border-2 border-rose-200 text-rose-700 text-sm font-semibold hover:bg-rose-100 transition"
+                      title="Lançar a peça digitando descrição e valor, sem travar a venda"
+                    >
+                      Lançar item manual
+                    </button>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setError(null)}
+                  className="p-1.5 rounded-lg text-rose-400 hover:text-rose-700 hover:bg-rose-100 transition shrink-0"
+                  aria-label="Fechar aviso"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+          );
+        })()}
+
         {/* Carrinho */}
         {loadingSale ? (
           <div className="text-center py-10 text-slate-400">
@@ -2437,11 +2563,44 @@ function PdvPageInner() {
                       <span className="text-3xl font-black text-slate-900">{totalPecas}</span>
                       <span className="text-base font-bold text-slate-500 ml-1.5">{totalPecas === 1 ? 'peça' : 'peças'}</span>
                     </span>
-                    {totalPecas !== sale.items.length && (
-                      <span className="text-xs font-semibold text-slate-400">
-                        {sale.items.length} {sale.items.length === 1 ? 'linha' : 'linhas'}
-                      </span>
-                    )}
+                    <span className="flex items-center gap-2">
+                      {totalPecas !== sale.items.length && (
+                        <span className="text-xs font-semibold text-slate-400">
+                          {sale.items.length} {sale.items.length === 1 ? 'linha' : 'linhas'}
+                        </span>
+                      )}
+                      {/* BUSCA NO CARRINHO — a partir de 10 linhas achar a peça
+                          que a cliente desistiu virava caçada visual numa lista
+                          de altura fixa. Filtra por REF, tamanho, cor, nome ou
+                          código. Não altera nada: só esconde o resto. */}
+                      {sale.items.length >= 10 && (
+                        <span className="flex items-center gap-1.5 bg-[#FAFAF7] border border-[#E5E2D9] rounded-lg px-2 py-1">
+                          <Search className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                          <input
+                            value={filtroCarrinho}
+                            onChange={(e) => setFiltroCarrinho(e.target.value)}
+                            onKeyDown={(e) => {
+                              e.stopPropagation();
+                              if (e.key === 'Escape') setFiltroCarrinho('');
+                            }}
+                            placeholder="achar peça no carrinho"
+                            className="w-[150px] bg-transparent text-xs font-semibold text-slate-700 placeholder:font-normal placeholder:text-slate-400 focus:outline-none"
+                            autoComplete="off"
+                            spellCheck={false}
+                          />
+                          {filtroCarrinho && (
+                            <button
+                              type="button"
+                              onClick={() => setFiltroCarrinho('')}
+                              className="text-slate-400 hover:text-slate-700 shrink-0"
+                              aria-label="Limpar busca do carrinho"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </span>
+                      )}
+                    </span>
                   </>
                 );
               })()}
@@ -2537,7 +2696,13 @@ function PdvPageInner() {
                     <div className="text-right text-sm font-bold text-rose-700 tabular-nums shrink-0">−{brl(Number(p.valor) || 0)}</div>
                     <button
                       onClick={async () => {
-                        if (!confirm(`Remover vale-troca ${code}?\n\nO codigo TROCA volta a ficar disponivel.`)) return;
+                        const podeRemover = await appConfirm({
+                          title: `Remover o vale-troca ${code}?`,
+                          message: 'O código volta a ficar disponível pra cliente usar depois.',
+                          okLabel: 'Remover vale',
+                          danger: true,
+                        });
+                        if (!podeRemover) return;
                         try {
                           const r = await api<any>(`/pdv/sales/${sale.id}/payments/${p.id}`, { method: 'DELETE' });
                           const fresh = await saleFromResponse(r, sale.id);
@@ -2557,200 +2722,145 @@ function PdvPageInner() {
               })}
               {/* ORDEM INVERTIDA — último item bipado fica no topo pra vendedora
                   conferir o que acabou de passar. Slice + reverse não muta o array
-                  original (sale.items continua na ordem original no estado). */}
-              {[...sale.items].slice().reverse().map((it, idx) => {
-                const isLast = idx === 0; // primeiro renderizado = último bipado
-                const bruto = it.precoUnit * it.qty;
-                return (
-                <div
+                  original (sale.items continua na ordem original no estado).
+
+                  Cada linha é um <CartRow> MEMOIZADO: antes, qualquer setState
+                  da tela (heartbeat, relógio, toast) repintava as 15 linhas do
+                  carrinho inteiro. Agora só repinta a linha que mudou de fato. */}
+              {linhasVisiveis.map((it, idx) => (
+                <CartRow
                   key={it.id}
-                  className={`${checkoutLayout === 'highlighted' ? 'px-4 py-2' : 'px-4 py-3'} flex items-center gap-3 transition-colors duration-500 ${
-                    it.id === lastAddedItemId
-                      ? 'bg-emerald-200/80 ring-2 ring-inset ring-emerald-500'
-                      : isLast
-                      ? 'bg-[#FAF6E8]/70 shadow-[inset_3px_0_0_0_#D4AF37]'
-                      : 'hover:bg-[#FAF6E8]/50'
-                  }`}
-                >
-                  {/* THUMBNAIL — busca foto do WooCommerce; fallback avatar */}
-                  <ProductThumb sku={it.sku} refCode={it.ref} compact={checkoutLayout === 'highlighted'} />
-
-                  {/* NOME + linha "ref · tamanho" (espec). EAN/SKU ficam no title. */}
-                  <div className="min-w-0 flex-1" title={`SKU ${it.sku}${it.ean ? ` · EAN ${it.ean}` : ''}`}>
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span className="text-sm font-bold text-slate-900 truncate">
-                        {it.descricao || it.ref || it.sku}
-                      </span>
-                      {/* Badge de promoção (pedido do dono 14/07): 30% maior e
-                          código de cor fixo — AZUL = fora/sem promoção (básico),
-                          VERMELHO = participando de promoção. MANUAL segue cinza. */}
-                      {it.promoTag && (() => {
-                        const semPromo =
-                          it.promoTag === 'SEM_PROMO' || /SEM PROMO/i.test(it.promoTag);
-                        return (
-                          <span
-                            className={`text-[12px] font-bold px-2 py-1 rounded shrink-0 ${
-                              semPromo
-                                ? 'bg-blue-600 text-white border border-blue-700'
-                                : it.promoTag === 'MANUAL'
-                                ? 'bg-slate-600 text-white border border-slate-600'
-                                : 'bg-red-600 text-white border border-red-700'
-                            }`}
-                            title={semPromo ? 'Fora da promoção (não participa)' : `Desconto: ${brl(it.desconto)}`}
-                          >
-                            {semPromo
-                              ? (it.promoTag === 'SEM_PROMO' ? '🚫 Fora da promo' : `🚫 ${it.promoTag}`)
-                              : it.promoTag === 'MANUAL'
-                              ? '✏️ MANUAL'
-                              : `🎁 ${it.promoTag}`}
-                          </span>
-                        );
-                      })()}
-                    </div>
-                    <div className="text-xs text-slate-400 font-medium mt-0.5 truncate">
-                      ref {it.ref || it.sku}
-                      {it.tamanho ? ` · ${it.tamanho}` : ''}
-                      {it.qty > 1 ? ` · ${it.qty} × ${brl(it.precoUnit)}` : ''}
-                    </div>
+                  it={it}
+                  isLast={idx === 0 && !filtroCarrinho}
+                  flash={it.id === lastAddedItemId}
+                  compact={checkoutLayout === 'highlighted'}
+                  saleStatus={sale.status}
+                  activePromotion={sale.activePromotion}
+                  onQty={aoMudarQty}
+                  onPatch={aoPatchItem}
+                  onDiscount={aoAbrirDesconto}
+                  onRemove={aoRemoverItem}
+                />
+              ))}
+              {filtroCarrinho && linhasVisiveis.length === 0 && (
+                <div className="px-4 py-8 text-center">
+                  <div className="text-sm font-bold text-slate-600">
+                    Nenhuma peça do carrinho casa com “{filtroCarrinho}”
                   </div>
-
-                  {/* QTD — stepper − / valor / + (espec). Valor continua editável. */}
-                  <div className="flex items-center gap-1 shrink-0">
-                    <button
-                      onClick={() => { if (it.qty > 1) updateItem(it.id, { qty: it.qty - 1 }); }}
-                      disabled={sale.status !== 'open' || it.qty <= 1}
-                      className="w-9 h-9 rounded-md border border-[#E5E2D9] bg-white text-slate-500 hover:bg-[#FAF6E8] hover:text-[#8C7325] flex items-center justify-center transition active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed"
-                      title="Diminuir quantidade"
-                    >
-                      <Minus className="w-4 h-4" />
-                    </button>
-                    <input
-                      type="number"
-                      min={1}
-                      max={99}
-                      value={it.qty}
-                      onChange={(e) => {
-                        const n = parseInt(e.target.value, 10);
-                        if (!isNaN(n) && n >= 1 && n <= 99 && n !== it.qty) {
-                          updateItem(it.id, { qty: n });
-                        }
-                      }}
-                      disabled={sale.status !== 'open'}
-                      className="w-10 h-9 text-center font-bold tabular-nums text-sm text-slate-900 border-0 bg-transparent focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 rounded disabled:opacity-60 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                    />
-                    <button
-                      onClick={() => { if (it.qty < 99) updateItem(it.id, { qty: it.qty + 1 }); }}
-                      disabled={sale.status !== 'open' || it.qty >= 99}
-                      className="w-9 h-9 rounded-md border border-[#E5E2D9] bg-white text-slate-500 hover:bg-[#FAF6E8] hover:text-[#8C7325] flex items-center justify-center transition active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed"
-                      title="Aumentar quantidade"
-                    >
-                      <Plus className="w-4 h-4" />
-                    </button>
-                  </div>
-
-                  {/* TOTAL DA LINHA */}
-                  <div className="text-right w-[92px] shrink-0">
-                    <div className="font-bold text-slate-900 tabular-nums text-sm">{brl(it.total)}</div>
-                    {it.desconto > 0 && (
-                      <div className="text-[10px] text-slate-400 line-through tabular-nums">{brl(bruto)}</div>
-                    )}
-                  </div>
-
-                  {/* AÇÕES — % desconto + 🗑 remover, discretos à direita */}
-                  {sale.status === 'open' ? (
-                    <div className="flex items-center gap-0.5 shrink-0">
-                      <button
-                        onClick={() =>
-                          setShowDiscount({ kind: 'item', itemId: it.id, bruto, atual: it.desconto || 0 })
-                        }
-                        className={`w-9 h-9 rounded-lg flex items-center justify-center transition active:scale-95 ${
-                          it.desconto > 0 && it.promoTag === 'MANUAL'
-                            ? 'bg-amber-500 text-white hover:bg-amber-600'
-                            : 'text-slate-300 hover:text-amber-600 hover:bg-amber-50'
-                        }`}
-                        title={
-                          it.desconto > 0 && it.promoTag === 'MANUAL'
-                            ? `Desconto manual: ${brl(it.desconto)} (clique pra alterar)`
-                            : 'Aplicar desconto neste item (% ou R$)'
-                        }
-                      >
-                        <Percent className="w-4 h-4" />
-                      </button>
-                      {/* Botão de PROMOÇÃO por item (campanha ativa). Um só botão,
-                          conforme o estado:
-                            🎁 verde  = SEM_PROMO → voltar ao automático
-                            ⬆️ azul   = BÁSICO → COLOCAR na promoção (força, ignora
-                                        só o filtro básico; data/coleção seguem)
-                            ⬇️ azul   = FORÇADO → tirar da promo forçada (volta básico)
-                            🚫 cinza  = promo automática → tirar da promoção */}
-                      {sale.activePromotion && sale.activePromotion !== 'NONE' && (() => {
-                        const semPromoTag = it.promoTag === 'SEM_PROMO';
-                        const isForced = !!it.forcarPromo;
-                        const basicoTag = !isForced && /b[áa]sico/i.test(it.promoTag || '');
-                        const autoPromo = !isForced && it.desconto > 0 && /^(PROMO|4 LEVA)/.test(it.promoTag || '');
-                        if (semPromoTag) {
-                          return (
-                            <button
-                              onClick={() => updateItem(it.id, { excludePromo: false })}
-                              className="w-9 h-9 rounded-lg flex items-center justify-center text-[15px] leading-none transition active:scale-95 bg-emerald-100 text-emerald-700 hover:bg-emerald-200"
-                              title="Incluir este item na promoção (volta ao automático)"
-                            >🎁</button>
-                          );
-                        }
-                        if (isForced) {
-                          return (
-                            <button
-                              onClick={() => updateItem(it.id, { forcePromo: false })}
-                              className="w-9 h-9 rounded-lg flex items-center justify-center text-[15px] leading-none transition active:scale-95 bg-blue-600 text-white hover:bg-blue-700"
-                              title="Tirar da promoção forçada (volta a básico)"
-                            >⬇️</button>
-                          );
-                        }
-                        if (basicoTag) {
-                          return (
-                            <button
-                              onClick={() => updateItem(it.id, { forcePromo: true })}
-                              className="w-9 h-9 rounded-lg flex items-center justify-center text-[15px] leading-none transition active:scale-95 bg-blue-100 text-blue-700 hover:bg-blue-200"
-                              title="Colocar este item na promoção (aplica o desconto mesmo sendo básico)"
-                            >⬆️</button>
-                          );
-                        }
-                        if (autoPromo) {
-                          return (
-                            <button
-                              onClick={() => updateItem(it.id, { excludePromo: true })}
-                              className="w-9 h-9 rounded-lg flex items-center justify-center text-[15px] leading-none transition active:scale-95 bg-slate-200 text-slate-700 hover:bg-slate-300"
-                              title="Tirar este item da promoção (não participa)"
-                            >🚫</button>
-                          );
-                        }
-                        return null;
-                      })()}
-                      <button
-                        onClick={() => removeItem(it.id)}
-                        className="w-9 h-9 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 flex items-center justify-center transition active:scale-95"
-                        title="Remover item"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  ) : <div />}
+                  <button
+                    type="button"
+                    onClick={() => setFiltroCarrinho('')}
+                    className="mt-2 text-xs font-bold text-[#8C7325] hover:underline"
+                  >
+                    Ver as {sale.items.length} peças de novo
+                  </button>
                 </div>
-                );
-              })}
+              )}
+            </div>
+            {filtroCarrinho && linhasVisiveis.length > 0 && (
+              <div className="px-4 py-2 bg-[#FBF6E6] border-t border-[#E4C968] text-[11px] font-bold text-[#8C7325] flex items-center justify-between">
+                <span>
+                  Mostrando {linhasVisiveis.length} de {sale.items.length} — o total abaixo continua sendo da venda inteira
+                </span>
+                <button type="button" onClick={() => setFiltroCarrinho('')} className="underline">
+                  limpar
+                </button>
+              </div>
+            )}
+          </div>
+        ) : (
+          /* CARRINHO VAZIO — é a tela que a vendedora mais olha no dia.
+             Antes era só uma caixa tracejada dizendo "bipe o primeiro
+             produto". Agora ela também resolve o que costuma vir junto:
+             conferir o que a loja tem pra fazer e reimprimir o cupom da
+             última venda (o pedido nº 1 do balcão). */
+          <div className="bg-white rounded-2xl border-2 border-dashed border-[#E5E2D9] p-6">
+            <div className="flex items-center gap-4">
+              <div className="w-16 h-16 rounded-2xl bg-[#FAF6E8] border-2 border-[#E4C968] flex items-center justify-center shrink-0">
+                <Barcode className="w-8 h-8 text-[#B8912B]" />
+              </div>
+              <div className="min-w-0">
+                <div className="text-xl font-black text-slate-800 leading-tight">Pronto pra vender</div>
+                <div className="text-sm text-slate-500 mt-0.5">
+                  Bipe a primeira peça — a venda começa no bipe.
+                </div>
+              </div>
+            </div>
+
+            {/* Pendências REAIS da loja. Só entra o que tem número: alarme
+                falso na tela vazia mata a confiança no resto. */}
+            {(openCount > 0 || pedidosSitePending > 0 || realignPending > 0) && (
+              <div className="mt-5 pt-4 border-t border-[#EDEAE1]">
+                <div className="text-[11px] font-black uppercase tracking-wider text-slate-400 mb-2">
+                  A loja tem pra fazer agora
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {openCount > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setShowOpenList(true)}
+                      className="flex items-center gap-2 px-3 py-2 rounded-xl border-2 border-[#CDA434] bg-[#FBF6E6] text-[#8C7325] text-sm font-bold hover:brightness-95 transition"
+                    >
+                      <Pause className="w-4 h-4" />
+                      {openCount} venda{openCount > 1 ? 's' : ''} pausada{openCount > 1 ? 's' : ''}
+                    </button>
+                  )}
+                  {pedidosSitePending > 0 && (
+                    <Link
+                      href="/minha-loja"
+                      className="flex items-center gap-2 px-3 py-2 rounded-xl border-2 border-[#CDA434] bg-[#FBF6E6] text-[#8C7325] text-sm font-bold hover:brightness-95 transition"
+                    >
+                      <Globe className="w-4 h-4" />
+                      {pedidosSitePending} pedido{pedidosSitePending > 1 ? 's' : ''} do site pra separar
+                    </Link>
+                  )}
+                  {realignPending > 0 && (
+                    <Link
+                      href="/minha-loja/realinhamento"
+                      className="flex items-center gap-2 px-3 py-2 rounded-xl border-2 border-[#CDA434] bg-[#FBF6E6] text-[#8C7325] text-sm font-bold hover:brightness-95 transition"
+                    >
+                      <Shuffle className="w-4 h-4" />
+                      {realignPending} peça{realignPending > 1 ? 's' : ''} de realinhamento
+                    </Link>
+                  )}
+                </div>
+              </div>
+            )}
+
+            <div className="mt-5 pt-4 border-t border-[#EDEAE1] flex flex-wrap items-center gap-2">
+              {ultimaVenda && (
+                <button
+                  type="button"
+                  onClick={() => reimprimirUltimoCupom()}
+                  className="flex items-center gap-2 px-3 py-2 rounded-xl border border-[#E5E2D9] bg-white text-slate-700 text-sm font-bold hover:border-[#CDA434] hover:bg-[#FBF6E6] hover:text-[#8C7325] transition"
+                  title={`Venda de ${brl(ultimaVenda.total)} às ${ultimaVenda.hora}`}
+                >
+                  <Printer className="w-4 h-4" />
+                  Reimprimir último cupom
+                  <span className="text-[11px] font-semibold text-slate-400">
+                    {brl(ultimaVenda.total)} · {ultimaVenda.hora}
+                  </span>
+                </button>
+              )}
+              <Link
+                href="/minha-loja/consultar"
+                className="flex items-center gap-2 px-3 py-2 rounded-xl border border-[#E5E2D9] bg-white text-slate-700 text-sm font-bold hover:border-[#CDA434] hover:bg-[#FBF6E6] hover:text-[#8C7325] transition"
+              >
+                <Search className="w-4 h-4" />
+                Consultar peça
+                <kbd className="text-[9px] font-mono bg-slate-100 text-slate-400 border border-slate-200 rounded px-1 py-0.5">F10</kbd>
+              </Link>
+              <button
+                type="button"
+                onClick={() => setShowShortcuts(true)}
+                className="flex items-center gap-2 px-3 py-2 rounded-xl border border-[#E5E2D9] bg-white text-slate-500 text-sm font-semibold hover:border-[#CDA434] hover:bg-[#FBF6E6] hover:text-[#8C7325] transition"
+              >
+                Atalhos
+                <kbd className="text-[9px] font-mono bg-slate-100 text-slate-400 border border-slate-200 rounded px-1 py-0.5">F7</kbd>
+              </button>
             </div>
           </div>
-        ) : sale?.status === 'open' ? (
-          <div className="text-center py-16 px-6 bg-white rounded-2xl border-2 border-dashed border-slate-200">
-            <div className="w-20 h-20 mx-auto rounded-full bg-[#FAF6E8] border-2 border-[#E5E5E0] flex items-center justify-center mb-4">
-              <ShoppingCart className="w-10 h-10 text-[#D4AF37]" />
-            </div>
-            <div className="text-lg font-bold text-slate-700 mb-1">Carrinho vazio</div>
-            <div className="text-sm text-slate-500">
-              Bipe o primeiro produto pra começar a venda
-            </div>
-          </div>
-        ) : null}
+        )}
 
         {checkoutLayout === 'highlighted' && sale?.status === 'open' && (
           <QuickCardBrandDock
@@ -2926,12 +3036,17 @@ function PdvPageInner() {
                   toast('warning', 'Carrinho vazio', 'Bipe as peças que a cliente vai levar pra provar');
                   return;
                 }
-                if (!confirm(
-                  `MARCAR ${sale.items.length} peça(s) pra ${sale.customerName || 'cliente'}?\n\n` +
-                  `Total: ${brl(sale.total)}\n\n` +
-                  `As peças vão como "provar em casa" — baixa estoque + fica em aberto pra cliente devolver depois.\n\n` +
-                  `Cliente precisa ser classe A com limite disponivel no Giga.`,
-                )) return;
+                const confirmou = await appConfirm({
+                  title: `Marcar ${sale.items.length} peça${sale.items.length > 1 ? 's' : ''} pra ${sale.customerName || 'cliente'}?`,
+                  highlight: `Total ${brl(sale.total)}`,
+                  bullets: [
+                    'As peças saem do estoque agora',
+                    'Ficam em aberto até a cliente devolver',
+                    'Só cliente classe A, com limite disponível',
+                  ],
+                  okLabel: 'Marcar peças',
+                });
+                if (!confirmou) return;
                 const doMarcar = async (force: boolean) => {
                   const r = await api<any>('/pdv/marcados/criar', {
                     method: 'POST',
@@ -2961,13 +3076,18 @@ function PdvPageInner() {
                   // o problema era a ficha sem Avaliação A.
                   const isLimite = /maior que limite dispon[ií]vel/i.test(msg);
                   if (isLimite) {
-                    const ok = window.confirm(
-                      `⚠ LIMITE DE MARCAÇÃO ESTOURADO\n\n${msg}\n\n` +
-                      `Isso costuma acontecer quando a cliente tem marcações antigas no Giga ` +
-                      `que nunca foram baixadas (peças que voltaram mas o flag MARCADO=SIM ficou).\n\n` +
-                      `Quer MARCAR MESMO ASSIM?\n` +
-                      `(Vai ficar registrado quem forçou — só faça se tiver certeza)`,
-                    );
+                    const ok = await appConfirm({
+                      title: 'Limite de marcação estourado',
+                      // O motivo REAL do backend em destaque — era o que se
+                      // perdia no meio das 5 linhas de explicação.
+                      highlight: msg,
+                      message:
+                        'Costuma ser marcação antiga que nunca foi baixada: a peça voltou, ' +
+                        'mas continuou marcada na ficha da cliente.',
+                      bullets: ['Fica registrado quem forçou'],
+                      okLabel: 'Marcar mesmo assim',
+                      danger: true,
+                    });
                     if (ok) {
                       try {
                         await doMarcar(true);
@@ -3050,12 +3170,17 @@ function PdvPageInner() {
             return (
               <button
                 onClick={async () => {
-                  if (!confirm(
-                    `Gerar vale de R$ ${valorResidual.toFixed(2).replace('.', ',')} pra cliente usar depois?\n\n` +
-                    `✓ O vale-troca atual será ajustado pra cobrir só ${brl(sale.total)}\n` +
-                    `✓ O saldo R$ ${valorResidual.toFixed(2).replace('.', ',')} vira novo vale (90 dias)\n` +
-                    `✓ Venda será finalizada e o vale impresso`
-                  )) return;
+                  const podeGerar = await appConfirm({
+                    title: 'Gerar vale do saldo que sobrou?',
+                    highlight: `Vale de ${brl(valorResidual)} · válido 90 dias`,
+                    bullets: [
+                      `O vale-troca atual passa a cobrir só ${brl(sale.total)}`,
+                      'A venda é finalizada em seguida',
+                      'O vale novo sai impresso na hora',
+                    ],
+                    okLabel: 'Gerar vale',
+                  });
+                  if (!podeGerar) return;
                   try {
                     const r: any = await api('/pdv/devolucao/dividir-vale-residual', {
                       method: 'POST',
@@ -3093,29 +3218,36 @@ function PdvPageInner() {
             );
           })()}
 
-          {/* Ações da venda — discretas abaixo do finalizar */}
-          <div className="flex items-center justify-between gap-1 pt-1 border-t border-[#F0EEE6]">
+          {/* Ações da venda — três pesos DIFERENTES.
+              Antes eram três linkzinhos cinza idênticos: Desconto (usado o dia
+              inteiro) tinha exatamente o mesmo tratamento visual de Cancelar
+              (que joga a venda montada fora). Agora: Desconto e Pausar são
+              botões de verdade, Cancelar é texto discreto e separado. */}
+          <div className="pt-2 border-t border-[#F0EEE6] space-y-2">
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={() => setShowDiscount({ kind: 'sale' })}
+                className="text-sm font-bold text-slate-700 bg-white border border-[#E5E2D9] hover:border-[#CDA434] hover:bg-[#FBF6E6] hover:text-[#8C7325] rounded-lg px-3 py-2.5 flex items-center justify-center gap-1.5 transition"
+                title="Aplicar desconto na venda toda (atalho F2)"
+              >
+                <Percent className="w-4 h-4" /> Desconto
+                <kbd className="text-[9px] font-mono bg-slate-100 text-slate-400 border border-slate-200 rounded px-1 py-0.5">F2</kbd>
+              </button>
+              <button
+                onClick={fecharDepois}
+                disabled={!sale?.items?.length}
+                className="text-sm font-bold text-slate-700 bg-white border border-[#E5E2D9] hover:border-[#CDA434] hover:bg-[#FBF6E6] hover:text-[#8C7325] rounded-lg px-3 py-2.5 flex items-center justify-center gap-1.5 transition disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white disabled:hover:border-[#E5E2D9] disabled:hover:text-slate-700"
+                title="Pausar venda (volta na lista Pausadas)"
+              >
+                <Pause className="w-4 h-4" /> Pausar
+              </button>
+            </div>
             <button
               onClick={cancelSale}
-              className="flex-1 text-xs font-semibold text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-lg px-2 py-2 flex items-center justify-center gap-1 transition"
-              title="Cancelar venda"
+              className="w-full text-xs font-semibold text-slate-400 hover:text-rose-700 hover:bg-rose-50 rounded-lg px-2 py-1.5 flex items-center justify-center gap-1 transition"
+              title="Cancelar a venda — perde tudo que já foi bipado"
             >
-              <X className="w-3.5 h-3.5" /> Cancelar
-            </button>
-            <button
-              onClick={fecharDepois}
-              disabled={!sale?.items?.length}
-              className="flex-1 text-xs font-semibold text-slate-500 hover:text-[#8C7325] hover:bg-[#FBF6E6] rounded-lg px-2 py-2 flex items-center justify-center gap-1 transition disabled:opacity-40 disabled:cursor-not-allowed"
-              title="Pausar venda (volta na lista Pausadas)"
-            >
-              <Pause className="w-3.5 h-3.5" /> Pausar
-            </button>
-            <button
-              onClick={() => setShowDiscount({ kind: 'sale' })}
-              className="flex-1 text-xs font-semibold text-slate-500 hover:text-[#8C7325] hover:bg-[#FBF6E6] rounded-lg px-2 py-2 flex items-center justify-center gap-1 transition"
-              title="Aplicar desconto na venda toda (atalho F2)"
-            >
-              <Percent className="w-3.5 h-3.5" /> Desconto
+              <X className="w-3.5 h-3.5" /> Cancelar venda
             </button>
           </div>
         </div>
@@ -3158,7 +3290,7 @@ function PdvPageInner() {
       </div>
 
       {/* Rodapé fino de status — conexão / impressora / ambiente (espec) */}
-      <StatusFooter density={density} onDensity={applyDensity} />
+      <StatusFooter />
 
       {/* Modal Cliente */}
       {showCustomer && sale && (
@@ -3308,7 +3440,7 @@ function PdvPageInner() {
               </h2>
               <div className="flex items-center gap-2">
                 <button
-                  onClick={loadOnlinePending}
+                  onClick={baterPonto}
                   className="text-xs px-2 py-1 bg-violet-100 hover:bg-violet-200 text-violet-700 font-bold rounded flex items-center gap-1"
                   title="Atualizar lista"
                 >
@@ -3390,10 +3522,12 @@ function PdvPageInner() {
                             onClick={async () => {
                               // AUTO-FINALIZA: cria payment 'venda_online' + chama finalize.
                               // Não abre PaymentModal (já tá pago — só registra e fecha).
-                              if (!confirm(
-                                `Finalizar venda #${p.saleCode} de ${p.customerName || 'cliente'} ` +
-                                `(${brl(p.total)})?\n\nO pagamento já foi confirmado pela Pagar.me.`,
-                              )) return;
+                              if (!(await appConfirm({
+                                title: `Finalizar a venda #${p.saleCode}?`,
+                                message: `${p.customerName || 'Cliente'} · pagamento já confirmado pela Pagar.me.`,
+                                highlight: brl(p.total),
+                                okLabel: 'Finalizar venda',
+                              }))) return;
                               try {
                                 // 1) Cria PdvSalePayment como venda_online/pagarme_link
                                 await api(`/pdv/sales/${p.saleId}/payments`, {
@@ -3419,7 +3553,7 @@ function PdvPageInner() {
                                   `✅ Venda #${p.saleCode} finalizada!`,
                                   `${brl(p.total)} · estoque baixado · Wincred OK`,
                                 );
-                                loadOnlinePending();
+                                baterPonto();
                                 loadOpenCount();
                                 // Fecha modal só se não tiver mais pendentes
                                 const restantes = onlinePending.filter((o) => o.saleId !== p.saleId);
@@ -3447,7 +3581,7 @@ function PdvPageInner() {
                                   );
                                   if (r.isPaid || r.status === 'paid') {
                                     toast('success', 'Pago!', `${p.customerName} pagou`);
-                                    loadOnlinePending();
+                                    baterPonto();
                                   } else {
                                     toast('info', `Status: ${r.status}`, 'Ainda não pago');
                                   }
@@ -3507,7 +3641,7 @@ function PdvPageInner() {
         </div>
       )}
 
-      {/* ── PDV2: overlay de ajuda de atalhos (F12 / ?) ── */}
+      {/* ── PDV2: overlay de ajuda de atalhos (F7 / ?) ── */}
       {showShortcuts && <ShortcutsHelpModal onClose={() => setShowShortcuts(false)} />}
 
       {/* Modal Finalizada */}
@@ -4152,16 +4286,17 @@ function CustomerModal({
     return () => clearTimeout(t);
   }, [searchTerm]);
 
-  function pickResult(c: { codCliente: string; nome: string; cpf: string; telefone: string }) {
+  async function pickResult(c: { codCliente: string; nome: string; cpf: string; telefone: string }) {
     // CLICK NO RESULTADO = JÁ IDENTIFICA. Não precisa clicar em "Salvar" depois.
     // Se o cliente não tem CPF no Giga, ainda salva nome+telefone — mas avisa.
     if (!c.cpf || c.cpf.length < 11) {
       // Sem CPF: salva mesmo assim (vendedora pode preencher manualmente depois),
       // mas avisa que o crediário não vai funcionar até cadastrar CPF no Giga.
-      const ok = window.confirm(
-        `${c.nome} não tem CPF cadastrado no Giga.\n\n` +
-        `Posso identificar com nome só, mas pra crediário você precisa cadastrar o CPF no Giga primeiro.\n\nIdentificar mesmo assim?`,
-      );
+      const ok = await appConfirm({
+        title: `${c.nome} está sem CPF no cadastro`,
+        message: 'Dá pra identificar só pelo nome, mas crediário e marcado vão continuar bloqueados até o CPF entrar na ficha.',
+        okLabel: 'Identificar assim mesmo',
+      });
       if (!ok) return;
     }
     onSave({
@@ -4941,7 +5076,7 @@ function PaymentModal({
         toast(
           'warning',
           'CPF obrigatório',
-          'Venda online sempre identifica a cliente (F5).',
+          'Venda online sempre identifica a cliente (F6).',
         );
         return;
       }
@@ -5242,7 +5377,12 @@ function PaymentModal({
   };
 
   const removerPagamento = async (paymentId: string) => {
-    if (!window.confirm('Remover essa forma de pagamento?')) return;
+    if (!(await appConfirm({
+      title: 'Remover essa forma de pagamento?',
+      message: 'O valor volta pro que ainda falta pagar.',
+      okLabel: 'Remover',
+      danger: true,
+    }))) return;
     try {
       await api(`/pdv/sales/${saleId}/payments/${paymentId}`, { method: 'DELETE' });
       setPayments((prev) => prev.filter((p) => p.id !== paymentId));
@@ -6028,7 +6168,7 @@ function PaymentModal({
                       disabled
                         ? p.id === 'crediario'
                           ? 'Crediário exige CPF do cliente'
-                          : 'Venda online exige CPF do cliente (F5)'
+                          : 'Venda online exige CPF do cliente (F6)'
                         : ''
                     }
                   >
@@ -7482,13 +7622,15 @@ function MarcarComponent({
   }
 
   async function marcar() {
-    if (!confirm(
-      `MARCAR ${brl(total)} pra ${info?.cliente?.nome}?\n\n` +
-      `As peças vão ser registradas como "marcado" no Giga.\n` +
-      `Estoque é baixado igual venda.\n` +
-      `Cliente leva pra provar em casa.\n\n` +
-      `Confirma?`,
-    )) return;
+    if (!(await appConfirm({
+      title: `Marcar pra ${info?.cliente?.nome || 'cliente'}?`,
+      highlight: `Total ${brl(total)}`,
+      bullets: [
+        'As peças saem do estoque agora',
+        'Ficam em aberto até a cliente devolver',
+      ],
+      okLabel: 'Marcar peças',
+    }))) return;
     setMarking(true);
     try {
       const r = await api<{ ok: boolean; controle: number; totalItems: number }>(
@@ -8275,7 +8417,12 @@ function OpenSalesModal({
   }, []);
 
   const cancelOne = async (id: string) => {
-    if (!confirm('Cancelar essa venda em aberto?')) return;
+    if (!(await appConfirm({
+      title: 'Cancelar essa venda em aberto?',
+      message: 'As peças voltam pro estoque e a venda sai da lista de pausadas.',
+      okLabel: 'Cancelar a venda',
+      danger: true,
+    }))) return;
     try {
       await api(`/pdv/sales/${id}/cancel`, {
         method: 'POST',
@@ -9012,6 +9159,362 @@ function ProductThumb({ sku, refCode, compact = false }: { sku: string; refCode:
   );
 }
 
+/**
+ * ⚙ Preferências deste computador — tema, tamanho da tela, visual do caixa,
+ * modo treinamento e o status da impressora.
+ *
+ * Regra da divisão: no header fica o que MUDA durante a venda (pausadas, link
+ * pago, resumo, vendedora). Aqui dentro fica o que a loja ajusta uma vez e
+ * esquece. Tudo é preferência LOCAL — nada disso viaja com a venda.
+ */
+function PdvPrefsMenu({
+  nightMode,
+  onToggleTheme,
+  density,
+  onDensity,
+  checkoutLayout,
+  onToggleLayout,
+}: {
+  nightMode: boolean;
+  onToggleTheme: () => void;
+  density: PdvDensity;
+  onDensity: (d: PdvDensity) => void;
+  checkoutLayout: 'highlighted' | 'legacy';
+  onToggleLayout: () => void;
+}) {
+  const [aberto, setAberto] = useState(false);
+  const [printerName, setPrinterName] = useState<string | null>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!aberto) return;
+    try { setPrinterName(loadPrinterConfig().termica); } catch { setPrinterName(null); }
+    const fora = (e: MouseEvent) => {
+      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setAberto(false);
+    };
+    // Esc fecha antes do listener global do PDV ver a tecla.
+    const esc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.stopPropagation(); setAberto(false); }
+    };
+    document.addEventListener('mousedown', fora);
+    document.addEventListener('keydown', esc, true);
+    return () => {
+      document.removeEventListener('mousedown', fora);
+      document.removeEventListener('keydown', esc, true);
+    };
+  }, [aberto]);
+
+  const linha = 'text-[11px] font-semibold text-slate-500 mb-1';
+  const opt = (ativo: boolean) =>
+    `flex-1 text-center text-xs font-bold rounded-lg px-2 py-1.5 border transition ${
+      ativo
+        ? 'border-[#CDA434] bg-[#FBF6E6] text-[#8C7325]'
+        : 'border-[#E5E2D9] bg-white text-slate-500 hover:border-[#CDA434] hover:bg-[#FBF6E6]'
+    }`;
+
+  const densidades: Array<[PdvDensity, string]> = [
+    ['auto', 'Auto'],
+    ['compacto', 'Compacto'],
+    ['normal', 'Normal'],
+    ['grande', 'Grande'],
+  ];
+
+  return (
+    <div className="relative shrink-0" ref={boxRef}>
+      <button
+        type="button"
+        onClick={() => setAberto((v) => !v)}
+        aria-haspopup="menu"
+        aria-expanded={aberto}
+        aria-label="Preferências deste computador"
+        title="Preferências deste computador"
+        className={`w-9 h-9 rounded-lg flex items-center justify-center border transition ${
+          aberto
+            ? 'border-[#CDA434] bg-[#FBF6E6] text-[#8C7325]'
+            : 'border-slate-200 bg-white text-slate-500 hover:border-[#CDA434] hover:bg-[#FBF6E6] hover:text-[#8C7325]'
+        }`}
+      >
+        <Settings className="w-4 h-4" />
+      </button>
+
+      {aberto && (
+        <div
+          role="menu"
+          className="absolute right-0 top-[calc(100%+6px)] z-40 w-[260px] bg-white border border-[#E5E2D9] rounded-xl shadow-xl p-3"
+        >
+          <div className="text-[10px] font-black uppercase tracking-wider text-slate-400 mb-2.5">
+            Preferências deste computador
+          </div>
+
+          <div className="mb-3">
+            <div className={linha}>Tema</div>
+            <div className="flex gap-1.5">
+              <button type="button" className={opt(!nightMode)} onClick={() => { if (nightMode) onToggleTheme(); }}>
+                <Sun className="w-3.5 h-3.5 inline-block mr-1 -mt-0.5" />Claro
+              </button>
+              <button type="button" className={opt(nightMode)} onClick={() => { if (!nightMode) onToggleTheme(); }}>
+                <Moon className="w-3.5 h-3.5 inline-block mr-1 -mt-0.5" />Noturno
+              </button>
+            </div>
+          </div>
+
+          <div className="mb-3">
+            <div className={linha}>Tamanho da tela</div>
+            <div className="grid grid-cols-4 gap-1">
+              {densidades.map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  className={`${opt(density === id)} px-1 text-[10px]`}
+                  onClick={() => onDensity(id)}
+                  title={id === 'auto' ? 'Ajusta sozinho pelo tamanho do monitor' : `Fixa em ${label.toLowerCase()}`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="mb-3">
+            <div className={linha}>Visual do caixa</div>
+            <div className="flex gap-1.5">
+              <button
+                type="button"
+                className={opt(checkoutLayout === 'highlighted')}
+                onClick={() => { if (checkoutLayout !== 'highlighted') onToggleLayout(); }}
+              >
+                <Sparkles className="w-3.5 h-3.5 inline-block mr-1 -mt-0.5" />Novo
+              </button>
+              <button
+                type="button"
+                className={opt(checkoutLayout === 'legacy')}
+                onClick={() => { if (checkoutLayout !== 'legacy') onToggleLayout(); }}
+              >
+                <RotateCcw className="w-3.5 h-3.5 inline-block mr-1 -mt-0.5" />Anterior
+              </button>
+            </div>
+          </div>
+
+          <div className="pt-2.5 border-t border-[#EDEAE1] flex items-center justify-between gap-2">
+            <span className="text-[11px] font-semibold text-slate-500">Modo treinamento</span>
+            <TrainingModeButton className="text-[11px] px-2.5 py-1.5 rounded-lg flex items-center gap-1.5 font-bold shrink-0 bg-white hover:bg-[#FBF6E6] text-[#B58A1E] border border-[#CDA434]" />
+          </div>
+
+          <Link
+            href="/minha-loja/pdv/config-impressora"
+            className="mt-2 pt-2.5 border-t border-[#EDEAE1] flex items-center gap-2 text-[11px] text-slate-500 hover:text-[#8C7325] transition"
+          >
+            <Printer className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+            <span className="truncate">{printerName || 'Impressora não configurada'}</span>
+          </Link>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── LINHA DO CARRINHO ─────────────────────────────────────────────────
+// Extraída do corpo do PdvPageInner (~2.800 linhas) e MEMOIZADA.
+//
+// Antes, qualquer setState da tela — a batida do heartbeat, um toast, o
+// relógio do header — reexecutava a função inteira e reconciliava as 15
+// linhas do carrinho junto. Em PC de loja com Electron era o engasgo que já
+// tinha obrigado a isolar a ScanBar. Agora só repinta a linha que mudou.
+//
+// Pra memo funcionar, os callbacks do pai precisam ser ESTÁVEIS (useCallback
+// com deps vazias, lendo a venda por ref) — senão toda prop muda e o memo
+// não segura nada.
+type CartRowProps = {
+  it: Sale['items'][number];
+  isLast: boolean;
+  flash: boolean;
+  compact: boolean;
+  saleStatus: string;
+  activePromotion: string | null;
+  onQty: (itemId: string, qty: number) => void;
+  onPatch: (itemId: string, patch: { excludePromo?: boolean; forcePromo?: boolean }) => void;
+  onDiscount: (itemId: string, bruto: number, atual: number) => void;
+  onRemove: (itemId: string) => void;
+};
+
+const CartRow = React.memo(function CartRow({
+  it, isLast, flash, compact, saleStatus, activePromotion,
+  onQty, onPatch, onDiscount, onRemove,
+}: CartRowProps) {
+  const bruto = it.precoUnit * it.qty;
+  const aberta = saleStatus === 'open';
+  return (
+    <div
+      className={`${compact ? 'px-4 py-2' : 'px-4 py-3'} flex items-center gap-3 transition-colors duration-500 ${
+        flash
+          ? 'bg-emerald-200/80 ring-2 ring-inset ring-emerald-500'
+          : isLast
+          ? 'bg-[#FAF6E8]/70 shadow-[inset_3px_0_0_0_#D4AF37]'
+          : 'hover:bg-[#FAF6E8]/50'
+      }`}
+    >
+      {/* THUMBNAIL — foto vem do lote pedido pelo carrinho; fallback avatar */}
+      <ProductThumb sku={it.sku} refCode={it.ref} compact={compact} />
+
+      {/* NOME + linha "ref · tamanho". EAN/SKU ficam no title. */}
+      <div className="min-w-0 flex-1" title={`SKU ${it.sku}${it.ean ? ` · EAN ${it.ean}` : ''}`}>
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-sm font-bold text-slate-900 truncate">
+            {it.descricao || it.ref || it.sku}
+          </span>
+          {/* Badge de promoção (pedido do dono 14/07): 30% maior e código de
+              cor fixo — AZUL = fora/sem promoção (básico), VERMELHO =
+              participando. MANUAL segue cinza. */}
+          {it.promoTag && (() => {
+            const semPromo = it.promoTag === 'SEM_PROMO' || /SEM PROMO/i.test(it.promoTag);
+            return (
+              <span
+                className={`text-[12px] font-bold px-2 py-1 rounded shrink-0 ${
+                  semPromo
+                    ? 'bg-blue-600 text-white border border-blue-700'
+                    : it.promoTag === 'MANUAL'
+                    ? 'bg-slate-600 text-white border border-slate-600'
+                    : 'bg-red-600 text-white border border-red-700'
+                }`}
+                title={semPromo ? 'Fora da promoção (não participa)' : `Desconto: ${brl(it.desconto)}`}
+              >
+                {semPromo
+                  ? (it.promoTag === 'SEM_PROMO' ? '🚫 Fora da promo' : `🚫 ${it.promoTag}`)
+                  : it.promoTag === 'MANUAL'
+                  ? '✏️ MANUAL'
+                  : `🎁 ${it.promoTag}`}
+              </span>
+            );
+          })()}
+        </div>
+        <div className="text-xs text-slate-400 font-medium mt-0.5 truncate">
+          ref {it.ref || it.sku}
+          {it.tamanho ? ` · ${it.tamanho}` : ''}
+          {it.qty > 1 ? ` · ${it.qty} × ${brl(it.precoUnit)}` : ''}
+        </div>
+      </div>
+
+      {/* QTD — stepper − / valor / + */}
+      <div className="flex items-center gap-1 shrink-0">
+        <button
+          onClick={() => { if (it.qty > 1) onQty(it.id, it.qty - 1); }}
+          disabled={!aberta || it.qty <= 1}
+          className="w-9 h-9 rounded-md border border-[#E5E2D9] bg-white text-slate-500 hover:bg-[#FAF6E8] hover:text-[#8C7325] flex items-center justify-center transition active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed"
+          title="Diminuir quantidade"
+        >
+          <Minus className="w-4 h-4" />
+        </button>
+        <input
+          type="number"
+          min={1}
+          max={99}
+          value={it.qty}
+          onChange={(e) => {
+            const n = parseInt(e.target.value, 10);
+            if (!isNaN(n) && n >= 1 && n <= 99 && n !== it.qty) onQty(it.id, n);
+          }}
+          disabled={!aberta}
+          className="w-10 h-9 text-center font-bold tabular-nums text-sm text-slate-900 border-0 bg-transparent focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 rounded disabled:opacity-60 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+        />
+        <button
+          onClick={() => { if (it.qty < 99) onQty(it.id, it.qty + 1); }}
+          disabled={!aberta || it.qty >= 99}
+          className="w-9 h-9 rounded-md border border-[#E5E2D9] bg-white text-slate-500 hover:bg-[#FAF6E8] hover:text-[#8C7325] flex items-center justify-center transition active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed"
+          title="Aumentar quantidade"
+        >
+          <Plus className="w-4 h-4" />
+        </button>
+      </div>
+
+      {/* TOTAL DA LINHA */}
+      <div className="text-right w-[92px] shrink-0">
+        <div className="font-bold text-slate-900 tabular-nums text-sm">{brl(it.total)}</div>
+        {it.desconto > 0 && (
+          <div className="text-[10px] text-slate-400 line-through tabular-nums">{brl(bruto)}</div>
+        )}
+      </div>
+
+      {/* AÇÕES — % desconto + promoção + remover */}
+      {aberta ? (
+        <div className="flex items-center gap-0.5 shrink-0">
+          <button
+            onClick={() => onDiscount(it.id, bruto, it.desconto || 0)}
+            className={`w-9 h-9 rounded-lg flex items-center justify-center transition active:scale-95 ${
+              it.desconto > 0 && it.promoTag === 'MANUAL'
+                ? 'bg-amber-500 text-white hover:bg-amber-600'
+                : 'text-slate-300 hover:text-amber-600 hover:bg-amber-50'
+            }`}
+            title={
+              it.desconto > 0 && it.promoTag === 'MANUAL'
+                ? `Desconto manual: ${brl(it.desconto)} (clique pra alterar)`
+                : 'Aplicar desconto neste item (% ou R$)'
+            }
+          >
+            <Percent className="w-4 h-4" />
+          </button>
+          {/* Botão de PROMOÇÃO por item (campanha ativa). Um só botão, conforme
+              o estado:
+                🎁 verde  = SEM_PROMO → voltar ao automático
+                ⬆️ azul   = BÁSICO → COLOCAR na promoção (força, ignora só o
+                            filtro básico; data/coleção seguem)
+                ⬇️ azul   = FORÇADO → tirar da promo forçada (volta básico)
+                🚫 cinza  = promo automática → tirar da promoção */}
+          {activePromotion && activePromotion !== 'NONE' && (() => {
+            const semPromoTag = it.promoTag === 'SEM_PROMO';
+            const isForced = !!it.forcarPromo;
+            const basicoTag = !isForced && /b[áa]sico/i.test(it.promoTag || '');
+            const autoPromo = !isForced && it.desconto > 0 && /^(PROMO|4 LEVA)/.test(it.promoTag || '');
+            if (semPromoTag) {
+              return (
+                <button
+                  onClick={() => onPatch(it.id, { excludePromo: false })}
+                  className="w-9 h-9 rounded-lg flex items-center justify-center text-[15px] leading-none transition active:scale-95 bg-emerald-100 text-emerald-700 hover:bg-emerald-200"
+                  title="Incluir este item na promoção (volta ao automático)"
+                >🎁</button>
+              );
+            }
+            if (isForced) {
+              return (
+                <button
+                  onClick={() => onPatch(it.id, { forcePromo: false })}
+                  className="w-9 h-9 rounded-lg flex items-center justify-center text-[15px] leading-none transition active:scale-95 bg-blue-600 text-white hover:bg-blue-700"
+                  title="Tirar da promoção forçada (volta a básico)"
+                >⬇️</button>
+              );
+            }
+            if (basicoTag) {
+              return (
+                <button
+                  onClick={() => onPatch(it.id, { forcePromo: true })}
+                  className="w-9 h-9 rounded-lg flex items-center justify-center text-[15px] leading-none transition active:scale-95 bg-blue-100 text-blue-700 hover:bg-blue-200"
+                  title="Colocar este item na promoção (aplica o desconto mesmo sendo básico)"
+                >⬆️</button>
+              );
+            }
+            if (autoPromo) {
+              return (
+                <button
+                  onClick={() => onPatch(it.id, { excludePromo: true })}
+                  className="w-9 h-9 rounded-lg flex items-center justify-center text-[15px] leading-none transition active:scale-95 bg-slate-200 text-slate-700 hover:bg-slate-300"
+                  title="Tirar este item da promoção (não participa)"
+                >🚫</button>
+              );
+            }
+            return null;
+          })()}
+          <button
+            onClick={() => onRemove(it.id)}
+            className="w-9 h-9 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 flex items-center justify-center transition active:scale-95"
+            title="Remover item"
+          >
+            <Trash2 className="w-4 h-4" />
+          </button>
+        </div>
+      ) : <div />}
+    </div>
+  );
+});
+
 // ── SIMULADOR DE PARCELAMENTO CARTÃO ──────────────────────────────────
 // Mostra pra cliente quanto fica cada parcela de 1× a 12×, SEMPRE SEM JUROS.
 // Vendedora fala em voz alta pra cliente "fica 5× de R$ 31,04". A tela cabe
@@ -9559,7 +10062,7 @@ function ManualItemModal({
 }
 
 
-/* ─── PDV2: Overlay de ajuda — lista de atalhos do teclado (F12 / ?) ─── */
+/* ─── PDV2: Overlay de ajuda — lista de atalhos do teclado (F7 / ?) ─── */
 function ShortcutsHelpModal({ onClose }: { onClose: () => void }) {
   const close = useSmartBackdropClose(onClose);
   const atalhos: Array<[string, string]> = [
@@ -9572,9 +10075,18 @@ function ShortcutsHelpModal({ onClose }: { onClose: () => void }) {
     ['F10', 'Consultar produto (estoque / preço)'],
     ['Del', 'Remover último item do carrinho'],
     ['Esc', 'Fechar modal aberto'],
-    ['F12 ou ?', 'Abrir / fechar esta ajuda'],
+    ['F7 ou ?', 'Abrir / fechar esta ajuda'],
     ['0 + Enter', 'Lançar item manual (produto livre)'],
     ['REF + Espaço', 'Abrir a grade do modelo (tamanhos/cores)'],
+    ['Shift + Enter', 'Mesma grade, sem tirar a mão do teclado'],
+    ['↑ ↓ Enter', 'Escolher na lista de busca por nome'],
+  ];
+  // Ações que não têm tecla, mas ninguém acha sozinha na tela.
+  const semAtalho: Array<[string, string]> = [
+    ['Vale-troca', 'No painel direito, em "outras formas de pagamento"'],
+    ['Marcar', 'Mesmo painel — cliente leva pra provar em casa (exige CPF)'],
+    ['Desconto no item', 'Ícone % na linha da peça, no carrinho'],
+    ['Essa peça entra na promo?', 'Botão da etiqueta, ao lado do campo de bipe'],
   ];
   return (
     <div
@@ -9600,9 +10112,23 @@ function ShortcutsHelpModal({ onClose }: { onClose: () => void }) {
               <span className="text-sm text-slate-700">{desc}</span>
             </div>
           ))}
+
+          <div className="pt-3 mt-2 border-t border-slate-100">
+            <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 px-2 pb-1">
+              Sem tecla — onde fica na tela
+            </div>
+            {semAtalho.map(([acao, onde]) => (
+              <div key={acao} className="flex items-start gap-3 px-2 py-1.5 rounded-lg hover:bg-slate-50">
+                <span className="min-w-[72px] text-center text-[11px] font-bold text-[#8C7325] bg-[#FBF6E6] border border-[#E4C968] rounded px-1.5 py-1 shrink-0">
+                  {acao}
+                </span>
+                <span className="text-sm text-slate-600">{onde}</span>
+              </div>
+            ))}
+          </div>
         </div>
         <div className="px-5 py-2.5 bg-slate-50 border-t border-slate-100 text-[11px] text-slate-400 text-center">
-          Pressione Esc ou F12 pra fechar
+          Pressione Esc ou F7 pra fechar
         </div>
       </div>
     </div>

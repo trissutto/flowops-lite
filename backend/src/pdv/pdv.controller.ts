@@ -148,6 +148,84 @@ export class PdvController {
   }
 
   /**
+   * GET /pdv/heartbeat?storeCode=12&excludeSaleId=xxx
+   *
+   * UM pedido no lugar de TRÊS ciclos independentes.
+   *
+   * O PDV mantinha 3 pollings simultâneos e desalinhados: links Pagar.me a
+   * cada 15s, pedidos do site + realinhamento a cada 30s (2 requisições), e a
+   * contagem de vendas pausadas a cada troca de venda. Em 8h de loja aberta
+   * dava ~4.800 requisições POR PC, e nada disso parava quando a aba ia pro
+   * fundo ou a loja esquecia a tela aberta depois de fechar o caixa.
+   *
+   * ⚠️ De propósito NÃO importa PickOrdersModule/RealignmentModule: foi um
+   * import de módulo novo aqui que criou o ciclo de dependência e impediu o
+   * backend de subir em 07/08. As duas contagens são consultas Prisma diretas,
+   * espelhando os filtros de `PickOrdersService.listMine` e
+   * `RealignmentService.listPendingForStore` — mantenha em sincronia.
+   */
+  @Get('heartbeat')
+  async heartbeat(
+    @Req() req: any,
+    @Query('storeCode') storeCode: string,
+    @Query('excludeSaleId') excludeSaleId?: string,
+  ) {
+    this.requireRole(req);
+    const storeId = req?.user?.storeId as string | undefined;
+
+    const [pausadas, pedidosSite, realinhamento, online] = await Promise.all([
+      // Vendas pausadas: OPEN, com peça dentro (venda vazia é lixo, não
+      // pendência) e sem contar a venda que está na tela agora.
+      storeCode
+        ? (this.prisma as any).pdvSale
+            .count({
+              where: {
+                storeCode,
+                status: 'open',
+                ...(excludeSaleId ? { id: { not: excludeSaleId } } : {}),
+                items: { some: {} },
+              },
+            })
+            .catch(() => 0)
+        : Promise.resolve(0),
+
+      // Pedidos do site a separar — espelha PickOrdersService.listMine.
+      storeId
+        ? (this.prisma as any).pickOrder
+            .count({
+              where: {
+                storeId,
+                status: { in: ['new', 'separating', 'separated', 'ready'] },
+                issueReason: null,
+              },
+            })
+            .catch(() => 0)
+        : Promise.resolve(0),
+
+      // Realinhamento pendente — espelha RealignmentService.listPendingForStore.
+      storeCode
+        ? (this.prisma as any).transferOrder
+            .count({
+              where: {
+                tipo: 'REALINHAMENTO',
+                realignmentStatus: { in: ['pending', 'not_found'] },
+                lojaOrigemCode: storeCode,
+              },
+            })
+            .catch(() => 0)
+        : Promise.resolve(0),
+
+      // Links Pagar.me: lista COMPLETA — o PDV precisa dos dados pra abrir o
+      // modal e pra tocar o alerta quando um vira `paid`.
+      storeCode
+        ? this.pagarme.listOnlinePending(storeCode).catch(() => [] as any[])
+        : Promise.resolve([] as any[]),
+    ]);
+
+    return { pausadas, pedidosSite, realinhamento, online };
+  }
+
+  /**
    * GET /pdv/product-images?skus=A,B,C
    * Mesma coisa da rota acima, porém em LOTE.
    *
