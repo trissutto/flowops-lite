@@ -1707,10 +1707,10 @@ function ImportarTudo() {
           Converter fotos pra JPEG
         </button>
         <button type="button" onClick={() => void extrairFichas()} disabled={extraindo}
-          title="A IA lê a descrição que já existe e preenche tecido, elasticidade, forro, decote — sem inventar e sem sobrescrever o que você digitou"
+          title="A varredura já preenche sozinha (240 fichas/hora). Este botão é pra adiantar 40 de uma vez — a IA lê a descrição que já existe, sem inventar e sem sobrescrever o que você digitou"
           className="inline-flex items-center gap-1.5 text-xs font-bold px-4 py-2 rounded-lg border border-amber-300 text-amber-800 bg-white hover:bg-amber-50 disabled:opacity-50">
           {extraindo ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Package className="w-3.5 h-3.5" />}
-          Preencher fichas com IA
+          Adiantar fichas com IA
         </button>
       </div>
 
