@@ -297,13 +297,18 @@ export const navigation: NavItem[] = podarNavegacao(NAVEGACAO_COMPLETA);
 /**
  * Barra superior — mensagens rotativas. Campanha nova = só editar aqui.
  *
- * ⚠️ NÃO repetir valor de frete aqui. A régua virou config (item 22) e este
- * arquivo não a enxerga: "acima de R$ 399" ficou errado no dia em que o dono
- * mudou pra R$ 499,90 na retaguarda, prometendo na barra o que o checkout não
- * daria. Quem sabe o número é a barra de progresso da sacola, que lê a config.
+ * ⚠️ NUNCA escreva o valor do frete grátis aqui. A régua virou config (item
+ * 22) e este arquivo não a enxerga: "acima de R$ 399" ficou errado no dia em
+ * que o dono mudou pra R$ 499,90 na retaguarda — a barra prometia o que o
+ * checkout não daria.
+ *
+ * O dono pediu o valor de volta na barra em 12/08, e ele voltou como
+ * `{FRETE_GRATIS}`: o `AnnouncementBar` troca o marcador pelo número que a
+ * config diz naquele momento e esconde a frase inteira se o frete grátis
+ * estiver desligado. A barra mostra o valor sem nunca inventá-lo.
  */
 export const announcements = [
-  { label: 'Frete grátis: consulte o valor vigente', href: '/carrinho' },
+  { label: 'Frete grátis acima de {FRETE_GRATIS}', href: '/carrinho' },
   { label: 'Até 12x sem juros', href: '/carrinho' },
   { label: `Troca fácil em ${STORE_POLICIES.exchangeWindowDays} dias`, href: '/politica-de-trocas' },
   { label: '14 lojas em São Paulo e região', href: '/lojas' },

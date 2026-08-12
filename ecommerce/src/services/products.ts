@@ -83,6 +83,16 @@ export interface PecaApi {
   elasticidade?: string | null;
   /** Tabela de medidas da PDP (itens 42 e 49) — grade + ajuste da peça. */
   gradeMedidas?: Array<Record<string, unknown>> | null;
+  /**
+   * FICHA TÉCNICA — o que a cliente plus size pergunta (forro, transparência,
+   * decote, manga, comprimento), extraído da descrição pela IA da retaguarda.
+   */
+  fichaTecnica?: Array<{ rotulo: string; valor: string }>;
+  /**
+   * PEÇAS JÁ VENDIDAS desta família — loja física + site + histórico do ERP
+   * antigo. Prova social REAL; o piso de exibição mora no `SeloVendas`.
+   */
+  vendas?: number;
 }
 
 export function mapPeca(p: PecaApi): Product {
@@ -118,6 +128,9 @@ export function mapPeca(p: PecaApi): Product {
     // o outro é palpite da camada de IA.
     fabric: p.tecido ?? p.composicao ?? undefined,
     fit: p.modelagem ?? undefined,
+    // Prova social REAL — quantas peças desta família já saíram. Quem decide a
+    // partir de quanto o número aparece é o `SeloVendas`.
+    sold: Number(p.vendas) || undefined,
     availability: { online: p.disponivel, stores: [], pickup: p.disponivel },
   };
 }
