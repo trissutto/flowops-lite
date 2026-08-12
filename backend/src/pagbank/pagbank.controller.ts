@@ -247,7 +247,17 @@ export class PagbankController {
     @Req() req: Request,
     @Headers('x-authenticity-token') signature?: string,
   ) {
-    const rawBody = JSON.stringify(body);
+    /**
+     * O HASH É SOBRE OS BYTES QUE O PAGBANK MANDOU (12/08/2026).
+     *
+     * `JSON.stringify(body)` reserializa o objeto já parseado: espaços, ordem
+     * de chaves e escapes mudam, e o hash NUNCA bate com o do remetente. O
+     * `verify` do body-parser (main.ts) guarda o corpo cru em `req.rawBody` —
+     * é ele que vale. O stringify fica só de último recurso.
+     */
+    const rawBody = (req as any).rawBody
+      ? Buffer.from((req as any).rawBody).toString('utf8')
+      : JSON.stringify(body);
     const result = await this.svc.handleWebhook(body, rawBody, signature);
 
     // FIX PIX-LINK CREDIÁRIO (16/06/2026):

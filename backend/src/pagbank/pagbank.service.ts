@@ -31,6 +31,8 @@ import * as crypto from 'crypto';
 @Injectable()
 export class PagbankService {
   private readonly logger = new Logger(PagbankService.name);
+  /** Um aviso por processo — o alerta de "sem webhook" não pode virar ruído. */
+  private avisouSemWebhook = false;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -342,6 +344,22 @@ export class PagbankService {
     const webhook = this.getWebhookUrl();
     if (webhook) {
       body.notification_urls = [webhook];
+    } else if (!this.avisouSemWebhook) {
+      /**
+       * SEM URL PÚBLICA, A COBRANÇA NASCE SEM AVISO DE PAGAMENTO.
+       *
+       * `BACKEND_PUBLIC_URL`/`RAILWAY_PUBLIC_DOMAIN` faltando significa que
+       * NENHUMA order tem `notification_urls`: o PagBank não tem pra onde
+       * avisar e o pagamento nunca chega sozinho. Isso passava em silêncio
+       * absoluto. Hoje o reconciliador cobre (ele pergunta), mas a loja espera
+       * até 1 minuto à toa — e é bom saber que a variável sumiu.
+       */
+      this.avisouSemWebhook = true;
+      this.logger.warn(
+        '[pagbank] ⚠️ sem BACKEND_PUBLIC_URL/RAILWAY_PUBLIC_DOMAIN — as cobranças ' +
+          'estão indo SEM notification_urls (nenhum webhook de pagamento). ' +
+          'Quem está confirmando é o reconciliador (PagbankPixReconcileService).',
+      );
     }
 
     let resp: any;
@@ -467,9 +485,25 @@ export class PagbankService {
     );
 
     const order = resp.data;
-    const charge = (order.charges || [])[0];
-    const isPaid = charge?.status === 'PAID';
-    const isCancelled = charge?.status === 'CANCELED' || charge?.status === 'DECLINED';
+
+    /**
+     * LER **TODAS** AS CHARGES, NÃO SÓ A PRIMEIRA (12/08/2026).
+     *
+     * `charges[0]` assume que a order tem no máximo uma cobrança. Não tem: uma
+     * tentativa recusada/cancelada antes da boa deixa a paga em `charges[1]` —
+     * e a consulta respondia "pending" com o dinheiro na conta. Ninguém nota,
+     * porque o erro se disfarça de "cliente ainda não pagou".
+     *
+     * Cancelado só vale quando NÃO existe nenhuma paga: pago vence empate.
+     */
+    const charges: any[] = Array.isArray(order.charges) ? order.charges : [];
+    const st = (x: any) => String(x?.status || '').toUpperCase();
+    const chargePaga = charges.find((c) => st(c) === 'PAID');
+    // Alguns retornos marcam o pagamento no próprio qr_code, sem charge ainda.
+    const qrPago = (order.qr_codes || []).some((q: any) => st(q) === 'PAID');
+    const isPaid = !!chargePaga || qrPago;
+    const isCancelled =
+      !isPaid && charges.some((c) => st(c) === 'CANCELED' || st(c) === 'DECLINED');
 
     let newStatus: string = 'pending';
     if (isPaid) newStatus = 'paid';
@@ -479,22 +513,47 @@ export class PagbankService {
     const local = await (this.prisma as any).pagbankPayment.findUnique({
       where: { pagbankOrderId },
     });
-    if (local && local.status !== newStatus) {
+    /**
+     * PAGO NÃO VOLTA ATRÁS. Uma resposta instável do PagBank (ou uma consulta
+     * concorrente) não pode reescrever `paid` → `pending` e apagar o `paidAt`:
+     * o reconciliador do PDV procura por `status='paid'`, então rebaixar a
+     * linha faz a venda paga sumir da fila de fechamento.
+     */
+    if (local && local.status !== newStatus && local.status !== 'paid') {
       await (this.prisma as any).pagbankPayment.update({
         where: { pagbankOrderId },
         data: {
           status: newStatus,
-          paidAt: isPaid ? new Date() : null,
+          ...(isPaid ? { paidAt: local.paidAt || new Date() } : {}),
+          ...(chargePaga?.id ? { pagbankChargeId: chargePaga.id } : {}),
         },
       });
     }
 
     return {
       pagbankOrderId,
-      status: newStatus,
-      isPaid,
+      status: local?.status === 'paid' ? 'paid' : newStatus,
+      isPaid: isPaid || local?.status === 'paid',
       raw: order,
     };
+  }
+
+  /**
+   * Marca uma cobrança como expirada — some da fila do reconciliador.
+   *
+   * Só o reconciliador chama, e só depois do QR ter vencido há horas COM
+   * resposta ao vivo do PagBank dizendo que não foi pago. Sem isto, todo QR
+   * abandonado (a cliente desistiu, a vendedora trocou pra cartão) fica
+   * `pending` pra sempre e o cron consulta o PagBank por eles até o fim dos
+   * tempos.
+   */
+  async marcarExpirado(pagbankOrderId: string): Promise<void> {
+    await (this.prisma as any).pagbankPayment
+      .updateMany({
+        where: { pagbankOrderId, status: 'pending' },
+        data: { status: 'expired' },
+      })
+      .catch(() => null);
   }
 
   // ── Webhook handler ────────────────────────────────────────────────
@@ -511,40 +570,58 @@ export class PagbankService {
   }
 
   /**
+   * O `x-authenticity-token` do PagBank NÃO é o HMAC que a gente calculava.
+   *
+   * A documentação do PagBank define o hash como SHA-256 puro da string
+   * `<token da conta>-<corpo cru da notificação>` — sem HMAC, e usando o
+   * BEARER TOKEN da conta, não um "webhook secret" separado. Com a fórmula
+   * errada, toda notificação assinada era recusada e o pagamento nunca virava
+   * `paid` no nosso banco: o dinheiro caía e a venda ficava aberta.
+   *
+   * Aceita qualquer um dos esquemas conhecidos porque a conta da loja e a da
+   * matriz podem assinar com credenciais diferentes, e ainda existem contas
+   * antigas com `webhookSecret` cadastrado. O nome do esquema que bateu vai no
+   * log — é assim que se descobre, em produção, qual deles a conta usa.
+   */
+  private conferirAutenticidade(
+    rawBody: string,
+    header: string | undefined,
+    candidatos: Array<{ nome: string; token?: string | null; secret?: string | null }>,
+  ): { ok: boolean; esquema?: string } {
+    if (!header || !rawBody) return { ok: false };
+    const recebido = header.replace(/^sha256=/i, '').trim().toLowerCase();
+    const sha256 = (s: string) => crypto.createHash('sha256').update(s).digest('hex');
+    for (const c of candidatos) {
+      if (c.token) {
+        // Formato documentado pelo PagBank
+        if (sha256(`${c.token}-${rawBody}`) === recebido) {
+          return { ok: true, esquema: `${c.nome}:sha256(token-body)` };
+        }
+      }
+      if (c.secret) {
+        // Legado: como estava implementado aqui até 12/08
+        if (sha256(`${c.secret}-${rawBody}`) === recebido) {
+          return { ok: true, esquema: `${c.nome}:sha256(secret-body)` };
+        }
+        if (this.validateWebhookSignature(rawBody, header, c.secret)) {
+          return { ok: true, esquema: `${c.nome}:hmac(secret)` };
+        }
+      }
+    }
+    return { ok: false };
+  }
+
+  /**
    * Processa o payload do webhook. Idempotente: se já foi processado,
    * ignora.
    */
   async handleWebhook(payload: any, rawBody?: string, signature?: string): Promise<{ ok: boolean; saleId?: string; status?: string; statusChanged?: boolean }> {
-    // Tenta validar assinatura (não bloqueia em sandbox se config sem secret)
-    try {
-      const cfg = await (this.prisma as any).pagbankConfig.findUnique({
-        where: { id: 'singleton' },
-      });
-      if (cfg?.webhookSecret && rawBody) {
-        const ok = this.validateWebhookSignature(rawBody, signature, cfg.webhookSecret);
-        if (!ok) {
-          this.logger.warn('[pagbank] webhook signature inválida — ignorando');
-          return { ok: false };
-        }
-      }
-    } catch (e: any) {
-      this.logger.warn(`[pagbank] webhook signature check falhou: ${e?.message}`);
-    }
-
     // Estrutura típica: { id, reference_id, charges: [{id, status, ...}] }
     const orderId = payload?.id;
     if (!orderId) {
       this.logger.warn(`[pagbank] webhook sem orderId: ${JSON.stringify(payload).slice(0, 300)}`);
       return { ok: false };
     }
-
-    const charge = (payload.charges || [])[0];
-    const status = String(charge?.status || '').toUpperCase();
-
-    let newStatus: string = 'pending';
-    if (status === 'PAID') newStatus = 'paid';
-    else if (status === 'CANCELED' || status === 'DECLINED') newStatus = 'cancelled';
-    else if (status === 'EXPIRED') newStatus = 'expired';
 
     const local = await (this.prisma as any).pagbankPayment.findUnique({
       where: { pagbankOrderId: orderId },
@@ -553,6 +630,83 @@ export class PagbankService {
     if (!local) {
       this.logger.warn(`[pagbank] webhook pra order desconhecida: ${orderId}`);
       return { ok: false };
+    }
+
+    /**
+     * ASSINATURA QUE NÃO BATE VIRA CONSULTA, NÃO LIXO (12/08/2026).
+     *
+     * O comportamento antigo era `return { ok: false }` — a notificação de
+     * pagamento ia pro ralo com um warn, o status ficava `pending` e a venda
+     * paga não fechava. Um erro de credencial (conta da loja assinando com
+     * token próprio, secret trocado, fórmula errada) virava venda perdida.
+     *
+     * Agora, quando a conferência falha, a gente NÃO acredita no corpo do
+     * webhook: pergunta o status direto pra API do PagBank, que é a única
+     * fonte da verdade. Notificação forjada não consegue mentir — no máximo
+     * gasta uma consulta. Notificação legítima com assinatura torta continua
+     * fechando a venda.
+     */
+    const cfgLoja = local.storeCode
+      ? await (this.prisma as any).pagbankStoreConfig
+          .findUnique({ where: { storeCode: local.storeCode } })
+          .catch(() => null)
+      : null;
+    const cfgMatriz = await (this.prisma as any).pagbankConfig
+      .findUnique({ where: { id: 'singleton' } })
+      .catch(() => null);
+    const temAlgoPraConferir = !!(
+      cfgLoja?.bearerToken || cfgLoja?.webhookSecret || cfgMatriz?.bearerToken || cfgMatriz?.webhookSecret
+    );
+    if (temAlgoPraConferir && rawBody) {
+      const conf = this.conferirAutenticidade(rawBody, signature, [
+        { nome: `loja ${local.storeCode}`, token: cfgLoja?.bearerToken, secret: cfgLoja?.webhookSecret },
+        { nome: 'matriz', token: cfgMatriz?.bearerToken, secret: cfgMatriz?.webhookSecret },
+      ]);
+      if (!conf.ok) {
+        this.logger.warn(
+          `[pagbank] webhook ${orderId} com assinatura que não confere — ` +
+            `confirmando na API do PagBank em vez de descartar`,
+        );
+        try {
+          const live = await this.checkOrderStatus(orderId);
+          const virouPago = live.isPaid && local.status !== 'paid';
+          return {
+            ok: true,
+            saleId: local.saleId,
+            status: live.status,
+            statusChanged: virouPago,
+          };
+        } catch (e: any) {
+          // Sem resposta do gateway: o reconciliador tenta de novo em segundos.
+          this.logger.error(
+            `[pagbank] webhook ${orderId}: consulta ao vivo falhou (${e?.message || e}) — ` +
+              `o reconciliador pega no próximo ciclo`,
+          );
+          return { ok: false };
+        }
+      }
+      this.logger.debug?.(`[pagbank] webhook ${orderId} autenticado por ${conf.esquema}`);
+    }
+
+    const charges: any[] = Array.isArray(payload.charges) ? payload.charges : [];
+    const st = (x: any) => String(x?.status || '').toUpperCase();
+    // Mesma regra da consulta: qualquer charge paga vale, pago vence empate.
+    const charge = charges.find((c) => st(c) === 'PAID') || charges[0];
+    const status = st(charge);
+
+    let newStatus: string = 'pending';
+    if (charges.some((c) => st(c) === 'PAID')) newStatus = 'paid';
+    else if (status === 'CANCELED' || status === 'DECLINED') newStatus = 'cancelled';
+    else if (status === 'EXPIRED') newStatus = 'expired';
+
+    // Pago não volta atrás (ver checkOrderStatus): notificação atrasada de
+    // status antigo não pode reabrir uma cobrança já confirmada.
+    if (local.status === 'paid' && newStatus !== 'paid') {
+      await (this.prisma as any).pagbankPayment.update({
+        where: { pagbankOrderId: orderId },
+        data: { rawWebhook: JSON.stringify(payload).slice(0, 5000) },
+      });
+      return { ok: true, saleId: local.saleId, status: 'paid', statusChanged: false };
     }
 
     // Idempotência: se já tá no mesmo status, só atualiza raw
@@ -569,8 +723,8 @@ export class PagbankService {
       where: { pagbankOrderId: orderId },
       data: {
         status: newStatus,
-        paidAt: newStatus === 'paid' ? new Date() : null,
-        pagbankChargeId: charge?.id || null,
+        ...(newStatus === 'paid' ? { paidAt: local.paidAt || new Date() } : {}),
+        ...(charge?.id ? { pagbankChargeId: charge.id } : {}),
         rawWebhook: JSON.stringify(payload).slice(0, 5000),
       },
     });
@@ -602,6 +756,24 @@ export class PagbankService {
    * é o caminho oficial).
    */
   async getPaymentBySale(saleId: string) {
+    /**
+     * O QR PAGO GANHA DO QR MAIS NOVO (12/08/2026).
+     *
+     * A tela regenera o QR sozinha quando o valor a cobrar muda — a mesma
+     * venda acumula várias linhas aqui. Pegando só a mais recente, o caso
+     * clássico ficava invisível: a vendedora manda o código pela conversa, o
+     * valor muda na tela, nasce um QR novo, e a cliente paga o código ANTIGO
+     * que já está no celular dela. O pagamento entra, mas a tela pergunta pelo
+     * QR errado e responde "pending" pra sempre — a vendedora fica presa em
+     * "Aguardando pagamento PIX" com o dinheiro já na conta.
+     *
+     * Qualquer linha paga desta venda fecha a tela.
+     */
+    const pago = await (this.prisma as any).pagbankPayment.findFirst({
+      where: { saleId, method: 'pix', status: 'paid' },
+      orderBy: { paidAt: 'desc' },
+    });
+    if (pago) return pago;
     return (this.prisma as any).pagbankPayment.findFirst({
       where: { saleId, method: 'pix' },
       orderBy: { createdAt: 'desc' },
