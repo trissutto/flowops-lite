@@ -713,7 +713,14 @@ export class CustomersCrmService {
       ? { personId: customer.personId }
       : customer.personKey ? { personKey: customer.personKey } : { id: customer.id };
     const activeCount = await this.prisma.customer.count({ where: { ...identityWhere, active: true } });
-    if (activeCount <= 1) throw new ConflictException('Este é o último cadastro ativo da pessoa e não pode ser removido como duplicidade');
+    const hasMovement = Number(customer.orderCount || 0) > 0
+      || Number(customer.ltvCents || 0) > 0
+      || Number(customer.cashbackBalance?.balanceCents || 0) > 0;
+    // Registro isolado só pode ser arquivado diretamente quando está vazio.
+    // Com movimento, exigimos outra origem ativa da mesma identidade.
+    if (activeCount <= 1 && hasMovement) {
+      throw new ConflictException('Este cadastro possui movimentação e não está vinculado a outra origem ativa');
+    }
 
     const snapshot = {
       id: customer.id, name: customer.name, nameSocial: customer.nameSocial,
