@@ -1,10 +1,10 @@
 'use client';
 
-import { FormEvent, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { FormEvent, Fragment, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
-  ChevronLeft, ChevronRight, Loader2, MessageCircle, Plus, RefreshCw,
-  Search, SlidersHorizontal, Store, Users, X,
+  ChevronDown, ChevronLeft, ChevronRight, Loader2, MessageCircle, Plus, RefreshCw,
+  Search, SlidersHorizontal, Store, Trash2, Users, X,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -21,8 +21,15 @@ interface Customer {
   lastOrderAt: string | null;
   originStore: { id: string; code: string; name: string } | null;
   targetStore: { id: string; code: string; name: string } | null;
-  originSource: string | null;
-  active: boolean;
+  origins: CustomerOrigin[];
+}
+
+interface CustomerOrigin {
+  id: string; name: string | null; nameSocial: string | null; cpf: string | null;
+  whatsapp: string | null; originSource: string | null;
+  originStore: { id: string; code: string; name: string } | null;
+  targetStore: { id: string; code: string; name: string } | null;
+  orderCount: number; ltvCents: string; lastOrderAt: string | null; updatedAt: string;
 }
 
 interface ListResponse { data: Customer[]; total: number; page: number; limit: number }
@@ -65,6 +72,11 @@ function BetaClientesContent() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [isMatrix, setIsMatrix] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [deleteOrigin, setDeleteOrigin] = useState<CustomerOrigin | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [notice, setNotice] = useState('');
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [searchInput, setSearchInput] = useState(searchParams.get('search') || '');
   const [search, setSearch] = useState(searchParams.get('search') || '');
@@ -78,6 +90,7 @@ function BetaClientesContent() {
     api<Me>('/auth/me').then((me) => {
       const matrix = me.role === 'admin' || me.role === 'operator';
       setIsMatrix(matrix);
+      setIsAdmin(me.role === 'admin');
       if (matrix) api<StoreOption[]>('/stores').then(setStores).catch(() => setStores([]));
     }).catch(() => setIsMatrix(false));
   }, []);
@@ -107,7 +120,7 @@ function BetaClientesContent() {
     if (hasWhatsapp) query.set('hasWhatsapp', 'true');
     if (hasCashback) query.set('hasCashbackBalance', 'true');
     try {
-      const response = await api<ListResponse>(`/customers-crm?${query}`);
+      const response = await api<ListResponse>(`/customers-crm/beta-list?${query}`);
       setCustomers(response.data);
       setTotal(response.total);
     } catch (e) {
@@ -135,6 +148,21 @@ function BetaClientesContent() {
     router.push(`/beta/clientes/${id}?returnTo=${encodeURIComponent(returnTo)}`);
   }
 
+  async function confirmDelete() {
+    if (!deleteOrigin) return;
+    setDeleting(true);
+    try {
+      await api(`/customers-crm/beta-duplicates/${deleteOrigin.id}`, { method: 'DELETE' });
+      setNotice('Duplicidade retirada da ficha. O histórico foi preservado para auditoria.');
+      setDeleteOrigin(null);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Não foi possível excluir a duplicidade.');
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   const totalPages = Math.max(1, Math.ceil(total / LIMIT));
   const activeFilters = [storeId, tier, hasWhatsapp, hasCashback].filter(Boolean).length;
 
@@ -155,6 +183,7 @@ function BetaClientesContent() {
       </div>
 
       <section className="overflow-hidden rounded-xl border border-[#DDDCD7] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+        {notice && <div className="flex items-center justify-between border-b border-[#B9DDC3] bg-[#F1FAF3] px-4 py-3 text-sm text-[#25643A]"><span>{notice}</span><button onClick={() => setNotice('')}><X className="h-4 w-4" /></button></div>}
         <div className="border-b border-[#E5E4DF] px-4 pt-3">
           <div className="flex items-center gap-6">
             <button className="border-b-2 border-[#24231F] px-1 pb-3 text-sm font-semibold text-[#24231F]">Todos</button>
@@ -186,16 +215,28 @@ function BetaClientesContent() {
             <thead className="bg-[#F7F7F5] text-[12px] font-semibold uppercase tracking-wide text-[#6D6B64]"><tr><th className="px-5 py-3">Cliente</th><th className="px-4 py-3">Contato</th><th className="px-4 py-3">Loja de relacionamento</th><th className="px-4 py-3">Categoria</th><th className="px-4 py-3 text-right">Pedidos</th><th className="px-4 py-3 text-right">Total gasto</th><th className="px-4 py-3">Última compra</th><th className="w-10 px-3 py-3" /></tr></thead>
             <tbody>{customers.map((customer) => {
               const store = customer.targetStore || customer.originStore;
-              return <tr key={customer.id} onClick={() => openCustomer(customer.id)} className="cursor-pointer border-t border-[#ECEBE7] text-sm hover:bg-[#F8F8F5]">
-                <td className="px-5 py-3.5"><div className="font-semibold text-[#24231F]">{customer.nameSocial || customer.name || 'Cliente sem nome'}</div><div className="mt-0.5 text-xs text-[#85827B]">{customer.cpf || 'CPF não informado'}</div></td>
-                <td className="px-4 py-3.5"><div className="flex items-center gap-1.5 text-[#34332F]"><MessageCircle className="h-3.5 w-3.5 text-[#77756F]" /> {phone(customer.whatsapp)}</div></td>
-                <td className="px-4 py-3.5"><div className="flex items-center gap-1.5 text-[#34332F]"><Store className="h-3.5 w-3.5 text-[#8C7325]" /> {store ? `${store.code} · ${store.name}` : 'Não definida'}</div></td>
-                <td className="px-4 py-3.5"><span className="inline-flex rounded-full border border-[#D8D6CF] bg-[#F6F5F1] px-2.5 py-1 text-xs font-medium text-[#504E48]">{tierLabel[customer.vipTier?.toLowerCase()] || customer.vipTier || 'Bronze'}</span></td>
-                <td className="px-4 py-3.5 text-right tabular-nums text-[#34332F]">{customer.orderCount}</td>
-                <td className="px-4 py-3.5 text-right font-semibold tabular-nums text-[#2E7D46]">{money(customer.ltvCents)}</td>
-                <td className="px-4 py-3.5 text-[#5D5B55]">{dateLabel(customer.lastOrderAt)}</td>
-                <td className="px-3 py-3.5"><ChevronRight className="h-4 w-4 text-[#85827B]" /></td>
-              </tr>;
+              const expanded = expandedId === customer.id;
+              return <Fragment key={customer.id}>
+                <tr onClick={() => openCustomer(customer.id)} className="cursor-pointer border-t border-[#ECEBE7] text-sm hover:bg-[#F8F8F5]">
+                  <td className="px-5 py-3.5"><div className="font-semibold text-[#24231F]">{customer.nameSocial || customer.name || 'Cliente sem nome'}</div><div className="mt-0.5 text-xs text-[#85827B]">{customer.cpf || 'CPF não informado'}</div></td>
+                  <td className="px-4 py-3.5"><div className="flex items-center gap-1.5 text-[#34332F]"><MessageCircle className="h-3.5 w-3.5 text-[#77756F]" /> {phone(customer.whatsapp)}</div></td>
+                  <td className="px-4 py-3.5"><div className="flex items-center gap-1.5 text-[#34332F]"><Store className="h-3.5 w-3.5 text-[#8C7325]" /> {store ? `${store.code} · ${store.name}` : 'Não definida'}</div></td>
+                  <td className="px-4 py-3.5"><span className="inline-flex rounded-full border border-[#D8D6CF] bg-[#F6F5F1] px-2.5 py-1 text-xs font-medium text-[#504E48]">{tierLabel[customer.vipTier?.toLowerCase()] || customer.vipTier || 'Bronze'}</span></td>
+                  <td className="px-4 py-3.5 text-right tabular-nums text-[#34332F]">{customer.orderCount}</td>
+                  <td className="px-4 py-3.5 text-right font-semibold tabular-nums text-[#2E7D46]">{money(customer.ltvCents)}</td>
+                  <td className="px-4 py-3.5 text-[#5D5B55]">{dateLabel(customer.lastOrderAt)}</td>
+                  <td className="px-3 py-3.5"><button onClick={(event) => { event.stopPropagation(); setExpandedId(expanded ? null : customer.id); }} title="Ver cadastros vinculados" className="rounded-md p-1.5 hover:bg-[#EDECE7]"><ChevronDown className={`h-4 w-4 transition-transform ${expanded ? 'rotate-180' : ''}`} /></button></td>
+                </tr>
+                {expanded && <tr className="border-t border-[#ECEBE7] bg-[#F8F8F5]"><td colSpan={8} className="px-5 py-4">
+                  <div className="mb-3"><div className="text-sm font-semibold">{customer.origins.length} cadastros vinculados</div><div className="text-xs text-[#77756F]">Os totais acima são a soma destes registros.</div></div>
+                  <div className="space-y-2">{customer.origins.map((origin) => { const originStore = origin.originStore || origin.targetStore; return <div key={origin.id} className="grid items-center gap-3 rounded-lg border border-[#DEDDD8] bg-white p-3 text-xs md:grid-cols-[1.4fr_1fr_.7fr_.7fr_auto]">
+                    <div><div className="font-semibold">{origin.nameSocial || origin.name || 'Sem nome'}</div><div className="text-[#85827B]">{origin.cpf || 'CPF não informado'} · {origin.originSource || 'origem não informada'}</div></div>
+                    <div className="flex items-center gap-1.5"><Store className="h-3.5 w-3.5 text-[#8C7325]" />{originStore ? `${originStore.code} · ${originStore.name}` : 'Loja não definida'}</div>
+                    <div>{origin.orderCount} pedidos</div><div className="font-semibold text-[#2E7D46]">{money(origin.ltvCents)}</div>
+                    {isAdmin && customer.origins.length > 1 ? <button onClick={() => setDeleteOrigin(origin)} className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-[#D9A9A3] px-3 py-2 font-semibold text-[#9A342B] hover:bg-[#FFF2F0]"><Trash2 className="h-3.5 w-3.5" /> Excluir duplicidade</button> : <span />}
+                  </div>; })}</div>
+                </td></tr>}
+              </Fragment>;
             })}</tbody>
           </table>
         </div>}
@@ -205,6 +246,11 @@ function BetaClientesContent() {
           <div className="flex items-center gap-2"><button disabled={page <= 1 || loading} onClick={() => setPage((p) => p - 1)} className="inline-flex h-9 items-center gap-1 rounded-lg border border-[#CFCFC9] px-3 disabled:opacity-40"><ChevronLeft className="h-4 w-4" /> Anterior</button><span className="px-2 text-xs">Página {page} de {totalPages}</span><button disabled={page >= totalPages || loading} onClick={() => setPage((p) => p + 1)} className="inline-flex h-9 items-center gap-1 rounded-lg border border-[#CFCFC9] px-3 disabled:opacity-40">Próxima <ChevronRight className="h-4 w-4" /></button></div>
         </div>
       </section>
+      {deleteOrigin && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"><div className="w-full max-w-md rounded-xl border border-[#DDDCD7] bg-white p-6 shadow-2xl">
+        <div className="mb-4 flex items-start justify-between"><div><h2 className="text-lg font-semibold">Excluir esta duplicidade?</h2><p className="mt-1 text-sm text-[#6D6B64]">A ficha principal e o histórico de vendas serão preservados.</p></div><button onClick={() => setDeleteOrigin(null)} disabled={deleting}><X className="h-5 w-5" /></button></div>
+        <div className="rounded-lg bg-[#F7F7F5] p-4 text-sm"><div className="font-semibold">{deleteOrigin.nameSocial || deleteOrigin.name || 'Cliente sem nome'}</div><div className="mt-2 text-[#6D6B64]">Loja: {(deleteOrigin.originStore || deleteOrigin.targetStore)?.name || 'Não definida'}</div><div className="text-[#6D6B64]">Pedidos: {deleteOrigin.orderCount} · Total: {money(deleteOrigin.ltvCents)}</div></div>
+        <div className="mt-5 flex justify-end gap-2"><button onClick={() => setDeleteOrigin(null)} disabled={deleting} className="rounded-lg border border-[#CFCFC9] px-4 py-2 text-sm font-medium">Cancelar</button><button onClick={() => void confirmDelete()} disabled={deleting} className="inline-flex items-center gap-2 rounded-lg bg-[#A33A31] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{deleting && <Loader2 className="h-4 w-4 animate-spin" />}Excluir duplicidade</button></div>
+      </div></div>}
     </main>
   );
 }

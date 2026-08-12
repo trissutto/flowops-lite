@@ -85,6 +85,26 @@ export interface ListQuery {
   order?: 'asc' | 'desc';
 }
 
+const CUSTOMER_SOURCE_WEIGHT: Record<string, number> = {
+  manual: 60, flowops: 60, pdv: 50, physical: 50,
+  site: 40, ecommerce: 40, woo: 40,
+  live: 30, instagram: 30, giga: 10,
+};
+
+function customerIdentityKey(customer: any): string {
+  return customer.personId ? `person:${customer.personId}`
+    : customer.personKey ? `key:${customer.personKey}`
+      : `customer:${customer.id}`;
+}
+
+function orderCanonicalRecords(records: any[]): any[] {
+  return [...records].sort((a, b) => {
+    const weight = (CUSTOMER_SOURCE_WEIGHT[b.originSource || ''] || 0)
+      - (CUSTOMER_SOURCE_WEIGHT[a.originSource || ''] || 0);
+    return weight || new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+  });
+}
+
 /**
  * Actor = quem está fazendo a request (vem do req.user).
  * Usado pra aplicar SCOPE POR LOJA automaticamente:
@@ -596,6 +616,131 @@ export class CustomersCrmService {
    * origem/loja; esta leitura resolve a Person e escolhe o melhor valor real
    * entre os Customers vinculados sem apagar procedência.
    */
+  async betaList(query: ListQuery, actor?: RequestActor) {
+    const page = Math.max(1, Number(query.page) || 1);
+    const limit = Math.min(100, Math.max(1, Number(query.limit) || 50));
+    const matrix = isMatrix(actor);
+    const scope = !matrix && actor?.storeId
+      ? { OR: [{ originStoreId: actor.storeId }, { targetStoreId: actor.storeId }] }
+      : {};
+
+    const rows: any[] = await this.prisma.customer.findMany({
+      where: { active: true, ...scope },
+      select: {
+        id: true, personId: true, personKey: true, name: true, nameSocial: true,
+        cpf: true, email: true, whatsapp: true, originSource: true,
+        originStoreId: true, targetStoreId: true, vipTier: true, orderCount: true,
+        ltvCents: true, ticketMedioCents: true, lastOrderAt: true, updatedAt: true,
+        originStore: { select: { id: true, code: true, name: true } },
+        targetStore: { select: { id: true, code: true, name: true } },
+        cashbackBalance: { select: { balanceCents: true } },
+      },
+    });
+
+    const groups = new Map<string, any[]>();
+    for (const row of rows) {
+      const key = customerIdentityKey(row);
+      const current = groups.get(key) || [];
+      current.push(row);
+      groups.set(key, current);
+    }
+
+    const search = String(query.search || '').trim().toLocaleLowerCase('pt-BR');
+    const digits = search.replace(/\D/g, '');
+    const requestedStore = matrix ? String(query.storeId || '') : '';
+    const people = Array.from(groups.values()).filter((records) => {
+      if (search && !records.some((r) => {
+        const text = [r.name, r.nameSocial, r.email].filter(Boolean).join(' ').toLocaleLowerCase('pt-BR');
+        const recordDigits = [r.cpf, r.whatsapp].filter(Boolean).join(' ').replace(/\D/g, '');
+        return text.includes(search) || (!!digits && recordDigits.includes(digits));
+      })) return false;
+      if (requestedStore && !records.some((r) => r.originStoreId === requestedStore || r.targetStoreId === requestedStore)) return false;
+      if (query.tier && !records.some((r) => r.vipTier === query.tier)) return false;
+      if (query.hasWhatsapp && !records.some((r) => !!r.whatsapp)) return false;
+      if (query.hasCashbackBalance && !records.some((r) => Number(r.cashbackBalance?.balanceCents || 0) > 0)) return false;
+      return true;
+    }).map((records) => {
+      const ordered = orderCanonicalRecords(records);
+      const canonical = ordered[0];
+      const nameRecord = ordered.find((r) => r.nameSocial || r.name) || canonical;
+      const cpfRecord = ordered.find((r) => r.cpf) || canonical;
+      const whatsappRecord = ordered.find((r) => r.whatsapp) || canonical;
+      const ltvCents = records.reduce((sum, r) => sum + Number(r.ltvCents || 0), 0);
+      const orderCount = records.reduce((sum, r) => sum + Number(r.orderCount || 0), 0);
+      const cashbackBalanceCents = records.reduce((sum, r) => sum + Number(r.cashbackBalance?.balanceCents || 0), 0);
+      const lastOrderAt = records.map((r) => r.lastOrderAt).filter(Boolean).sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0] || null;
+      return {
+        id: canonical.id,
+        personId: canonical.personId,
+        name: nameRecord.name,
+        nameSocial: nameRecord.nameSocial,
+        cpf: cpfRecord.cpf,
+        whatsapp: whatsappRecord.whatsapp,
+        vipTier: canonical.vipTier,
+        orderCount,
+        ltvCents: String(ltvCents),
+        ticketMedioCents: orderCount ? Math.round(ltvCents / orderCount) : 0,
+        cashbackBalanceCents,
+        lastOrderAt,
+        originStore: canonical.originStore,
+        targetStore: canonical.targetStore,
+        origins: ordered.map((r) => ({
+          id: r.id, name: r.name, nameSocial: r.nameSocial, cpf: r.cpf,
+          whatsapp: r.whatsapp, originSource: r.originSource,
+          originStore: r.originStore, targetStore: r.targetStore,
+          orderCount: r.orderCount, ltvCents: String(r.ltvCents),
+          lastOrderAt: r.lastOrderAt, updatedAt: r.updatedAt,
+        })),
+      };
+    }).sort((a, b) => String(a.nameSocial || a.name || '').localeCompare(String(b.nameSocial || b.name || ''), 'pt-BR'));
+
+    const total = people.length;
+    return { data: people.slice((page - 1) * limit, page * limit), total, page, limit };
+  }
+
+  async archiveDuplicate(id: string, actor: RequestActor) {
+    const customer: any = await this.prisma.customer.findUnique({
+      where: { id },
+      include: {
+        originStore: { select: { code: true, name: true } },
+        targetStore: { select: { code: true, name: true } },
+        cashbackBalance: { select: { balanceCents: true } },
+      },
+    });
+    if (!customer || !customer.active) throw new NotFoundException('Cadastro de origem não encontrado');
+
+    const identityWhere = customer.personId
+      ? { personId: customer.personId }
+      : customer.personKey ? { personKey: customer.personKey } : { id: customer.id };
+    const activeCount = await this.prisma.customer.count({ where: { ...identityWhere, active: true } });
+    if (activeCount <= 1) throw new ConflictException('Este é o último cadastro ativo da pessoa e não pode ser removido como duplicidade');
+
+    const snapshot = {
+      id: customer.id, name: customer.name, nameSocial: customer.nameSocial,
+      cpf: customer.cpf, originSource: customer.originSource,
+      originStore: customer.originStore, targetStore: customer.targetStore,
+      orderCount: customer.orderCount, ltvCents: String(customer.ltvCents),
+      cashbackBalanceCents: customer.cashbackBalance?.balanceCents || 0,
+    };
+    await this.prisma.$transaction(async (tx) => {
+      await tx.customer.update({
+        where: { id },
+        data: { active: false, inactiveReason: 'duplicate_archived_by_admin' },
+      });
+      await tx.customerDuplicateAudit.create({
+        data: {
+          customerId: id,
+          personId: customer.personId,
+          actorUserId: actor.userId,
+          action: 'archived',
+          reason: 'Duplicidade removida pela lista Beta',
+          snapshot,
+        },
+      });
+    });
+    return { ok: true, mode: 'archived', customerId: id };
+  }
+
   async betaDetail(id: string, actor?: RequestActor) {
     const seed = await this.loadScoped(id, actor);
     const identityWhere = seed.personId
@@ -607,19 +752,11 @@ export class CustomersCrmService {
       ? { OR: [{ originStoreId: actor.storeId }, { targetStoreId: actor.storeId }] }
       : {};
     const rows = await this.prisma.customer.findMany({
-      where: { ...identityWhere, ...scopedWhere },
+      where: { ...identityWhere, ...scopedWhere, active: true },
       select: { id: true, originSource: true, updatedAt: true },
     });
     const records = await Promise.all(rows.map((row) => this.detail(row.id, actor)));
-    const sourceWeight: Record<string, number> = {
-      manual: 60, flowops: 60, pdv: 50, physical: 50,
-      site: 40, ecommerce: 40, woo: 40,
-      live: 30, instagram: 30, giga: 10,
-    };
-    records.sort((a: any, b: any) => {
-      const weight = (sourceWeight[b.originSource || ''] || 0) - (sourceWeight[a.originSource || ''] || 0);
-      return weight || new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
-    });
+    records.splice(0, records.length, ...orderCanonicalRecords(records));
 
     const canonical: any = { ...records.find((r: any) => r.id === id) };
     const scalarFields = [
