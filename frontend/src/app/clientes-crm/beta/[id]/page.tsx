@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useParams, useRouter, useSearchParams } from 'next/navigation';
+import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
 import {
@@ -131,6 +131,7 @@ function CreditEditor({ data, onSaved }: { data: AnyRecord; onSaved: () => void 
 export default function FichaClienteBetaPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
+  const pathname = usePathname();
   const searchParams = useSearchParams();
   const id = params.id;
   const requestedTab = searchParams.get('tab') as Aba | null;
@@ -177,7 +178,10 @@ export default function FichaClienteBetaPage() {
   const chooseTab = (next: Aba) => {
     setTab(next);
     const qs = new URLSearchParams(searchParams.toString()); qs.set('tab', next);
-    router.replace(`/clientes-crm/beta/${id}?${qs.toString()}`, { scroll: false });
+    const detailPath = pathname.startsWith('/beta/clientes/')
+      ? `/beta/clientes/${id}`
+      : `/clientes-crm/beta/${id}`;
+    router.replace(`${detailPath}?${qs.toString()}`, { scroll: false });
   };
   const back = searchParams.get('returnTo');
   const validReturn = back && !back.startsWith('//') && (back.startsWith('/clientes-crm') || back.startsWith('/beta/clientes'));
