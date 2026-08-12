@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { refBaseOf } from '../common/ref-base';
 
 /**
  * MESMA PEÇA EM REFs DIFERENTES — juntando o que o catálogo legado separou.
@@ -14,16 +15,28 @@ import { PrismaService } from '../prisma/prisma.service';
  *
  * ── A REGRA ──
  *
- * A RAIZ é a parte numérica da frente: `900887B` → `900887`, `207275P` →
- * `207275`. Ela separa produto de produto — `900889` (macacão longo) tem raiz
+ * A família é a **REF-BASE** (`common/ref-base.ts`): corta tudo depois do
+ * último dígito. `900887B` → `900887`, `14582-BR` → `14582`, `VLM-222P` →
+ * `VLM-222`. Ela separa produto de produto — `900889` (macacão longo) tem base
  * diferente de `900887` (macaquinho), e por isso não se misturam.
  *
- * Mas raiz igual NÃO BASTA pra juntar. Duas travas, porque agrupar errado é
+ * ⚠️ Até 12/08 aqui morava uma regra PRÓPRIA — "os dígitos da frente",
+ * `^(\d{3,})` — que devolvia `null` pra toda REF que começa com letra. Medido
+ * na produção naquele dia: das 122 famílias publicadas, **16 nunca eram nem
+ * consideradas** só porque a REF é `VLM-222`/`VMS-223`. É a lição de
+ * [[ref-base-familia-unica]] de novo: regra de família duplicada é regra que
+ * diverge — a ficha e as fotos já usavam `refBaseOf`, e só este serviço não.
+ *
+ * Mas base igual NÃO BASTA pra juntar. Duas travas, porque agrupar errado é
  * pior que não agrupar: junta duas peças diferentes num card só, e a cliente
  * compra a errada.
  *
- *   1. **Mesma categoria.** Macaquinho não junta com vestido, nem que a raiz
- *      bata por acaso.
+ *   1. **Mesma categoria** — entre as que TÊM categoria. Categoria vazia é
+ *      "ainda não classificaram", não "categoria diferente": tratá-la como um
+ *      valor recusava 25 famílias em que a irmã só estava sem classificar
+ *      (`14582` sem categoria + `14582-BR` em conjuntos). Quando o grupo fecha
+ *      com uma categoria só, ela é PROPAGADA pras irmãs vazias — senão a peça
+ *      fundida continua fora da página da categoria.
  *   2. **Preço parecido** (até 15% de diferença). Mesma peça em outra cor
  *      custa o mesmo; diferença grande é sinal de que são peças distintas.
  *
@@ -45,17 +58,17 @@ export class GrupoRefService {
   constructor(private readonly prisma: PrismaService) {}
 
   /**
-   * A raiz de uma REF: os dígitos da frente.
+   * A raiz de uma REF: a REF-BASE da família.
    *
-   * `900887B` → `900887` · `207275P` → `207275` · `900887-BR` → `900887`
+   * `900887B` → `900887` · `VLM-222P` → `VLM-222` · `14582-BR` → `14582`
    *
-   * REF que não começa com dígito (ou é só letra) devolve `null` — sem raiz
-   * numérica não há como afirmar parentesco, e chutar aqui juntaria peças que
-   * não têm nada a ver.
+   * REF SEM DÍGITO NENHUM devolve `null`: "GRAVATA" e "GRAVATA LISA" teriam a
+   * mesma base por não ter o que cortar, e agrupar por texto juntaria peças
+   * que não têm nada a ver. O dígito é o que faz a base ser identidade.
    */
   static raiz(ref: string): string | null {
-    const m = String(ref || '').trim().match(/^(\d{3,})/);
-    return m ? m[1] : null;
+    const base = refBaseOf(ref);
+    return /\d/.test(base) ? base : null;
   }
 
   /**
@@ -72,11 +85,15 @@ export class GrupoRefService {
     const pecas: Array<{
       ref: string;
       categoria: string | null;
+      subcategoria: string | null;
       grupoRef: string | null;
       grupoRefManual: boolean;
     }> = await (this.prisma as any).siteProduto.findMany({
       where: { publicado: true },
-      select: { ref: true, categoria: true, grupoRef: true, grupoRefManual: true },
+      select: {
+        ref: true, categoria: true, subcategoria: true,
+        grupoRef: true, grupoRefManual: true,
+      },
     });
 
     // Preço vem do espelho do ERP, não do cadastro — é lá que ele vive.
@@ -100,7 +117,15 @@ export class GrupoRefService {
       // Alguém já decidiu na mão: não mexe em nenhuma peça desta raiz.
       if (doGrupo.some((p) => p.grupoRefManual)) continue;
 
-      const categorias = new Set(doGrupo.map((p) => p.categoria ?? '—'));
+      /**
+       * VAZIO NÃO É DIVERGÊNCIA (12/08). Só conta como categoria diferente o
+       * que ALGUÉM CLASSIFICOU: a peça sem categoria não discorda de ninguém,
+       * está esperando classificação. Contar o vazio como valor recusava 25
+       * das 46 famílias que sobraram — sempre pelo mesmo motivo bobo.
+       */
+      const categorias = new Set(
+        doGrupo.map((p) => String(p.categoria || '').trim()).filter(Boolean),
+      );
       if (categorias.size > 1) {
         recusados.push({
           raiz,
@@ -131,6 +156,33 @@ export class GrupoRefService {
           data: { grupoRef: raiz },
         });
       }
+
+      /**
+       * A CLASSIFICAÇÃO DA IRMÃ VALE PRA FAMÍLIA INTEIRA.
+       *
+       * Quem manda no card é o cadastro da RAIZ; se a raiz está sem categoria
+       * e a irmã em "conjuntos", a peça fundida some da página de Conjuntos —
+       * o grupo teria consertado a vitrine e quebrado o menu. Propaga só
+       * quando o grupo tem UMA categoria: com duas o grupo nem chega aqui.
+       */
+      const categoria = [...categorias][0] ?? null;
+      const subcategorias = new Set(
+        doGrupo.map((p) => String(p.subcategoria || '').trim()).filter(Boolean),
+      );
+      const subcategoria = subcategorias.size === 1 ? [...subcategorias][0] : null;
+      const semClassificacao = doGrupo
+        .filter((p) => (categoria && !p.categoria) || (subcategoria && !p.subcategoria))
+        .map((p) => p.ref);
+      if (semClassificacao.length && (categoria || subcategoria)) {
+        await (this.prisma as any).siteProduto.updateMany({
+          where: { ref: { in: semClassificacao } },
+          data: {
+            ...(categoria ? { categoria } : {}),
+            ...(subcategoria ? { subcategoria } : {}),
+          },
+        });
+      }
+
       gruposCriados += 1;
       pecasAgrupadas += doGrupo.length;
     }

@@ -73,8 +73,23 @@ export class CorIaService {
    * A assinatura no início do arquivo não mente — é o que o próprio navegador
    * usa quando o servidor erra o tipo.
    */
-  private tipoDaImagem(bytes: Buffer, cabecalho: string): string {
-    const aceitos = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+  static readonly ACEITOS_PELA_IA = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+
+  /**
+   * ⚠️ AVIF/HEIC ESTÃO NO ACERVO E A API NÃO OS LÊ (achado de 12/08/2026).
+   *
+   * O WordPress converte a imagem na origem, e o importador salvou os bytes
+   * como vieram, com nome `.jpg`. Sem reconhecer a assinatura ISO-BMFF, este
+   * método caía no chute "image/jpeg" e a API respondia
+   * `400 Image format image/jpeg not supported` — a cada 90 segundos, desde
+   * 07/08. Medido: 139 capas AVIF, 129 delas sem bolinha, contra 296 de 299
+   * pintadas em JPEG/PNG. A varredura não estava parada: estava batendo na
+   * mesma porta.
+   *
+   * Reconhecer é metade do conserto — a outra é `paraFormatoDaIA`, porque AVIF
+   * continua não sendo aceito depois de identificado.
+   */
+  static tipoDaImagem(bytes: Buffer, cabecalho: string): string {
     if (bytes.length >= 12) {
       if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg';
       if (bytes.toString('ascii', 1, 4) === 'PNG') return 'image/png';
@@ -82,11 +97,52 @@ export class CorIaService {
       if (bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP') {
         return 'image/webp';
       }
+      // ISO-BMFF: [tamanho 4B]['ftyp'][marca 4B] — avif/avis, heic/heix/mif1.
+      if (bytes.toString('ascii', 4, 8) === 'ftyp') {
+        const marca = bytes.toString('ascii', 8, 12).toLowerCase();
+        if (marca.startsWith('avi')) return 'image/avif';
+        if (['heic', 'heix', 'hevc', 'mif1', 'msf1'].includes(marca)) return 'image/heic';
+      }
     }
     const doCabecalho = cabecalho.split(';')[0].trim().toLowerCase();
-    if (aceitos.includes(doCabecalho)) return doCabecalho;
+    if (CorIaService.ACEITOS_PELA_IA.includes(doCabecalho)) return doCabecalho;
+    if (doCabecalho === 'image/avif' || doCabecalho === 'image/heic') return doCabecalho;
     // JPEG é o formato de 99% do acervo — chute menos ruim que devolver erro.
     return 'image/jpeg';
+  }
+
+  /**
+   * O que a API aceita — convertendo o que ela não aceita.
+   *
+   * AVIF e HEIC viram JPEG aqui, EM MEMÓRIA: o arquivo do bucket não é tocado
+   * (normalizar o acervo é outro caminho, com botão próprio). Qualidade 88 é
+   * de sobra pra ler cor de tecido.
+   *
+   * `sharp` entra por require preguiçoso de propósito: é binário nativo, e se
+   * a instalação falhar num deploy o certo é a leitura de cor avisar — não o
+   * backend inteiro deixar de subir.
+   */
+  async paraFormatoDaIA(bytes: Buffer, mime: string): Promise<{ bytes: Buffer; mime: string }> {
+    if (CorIaService.ACEITOS_PELA_IA.includes(mime)) return { bytes, mime };
+
+    let sharp: any;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      sharp = require('sharp');
+    } catch (e: any) {
+      throw new BadRequestException(
+        `foto em ${mime}, que a IA não lê, e a conversão não está disponível (sharp): ${e?.message || e}`,
+      );
+    }
+    try {
+      const convertida: Buffer = await sharp(bytes).jpeg({ quality: 88 }).toBuffer();
+      this.logger.log(
+        `[cor-ia] ${mime} convertida pra JPEG (${bytes.length} → ${convertida.length} bytes)`,
+      );
+      return { bytes: convertida, mime: 'image/jpeg' };
+    } catch (e: any) {
+      throw new BadRequestException(`não consegui converter a foto ${mime}: ${e?.message || e}`);
+    }
   }
 
   private readonly PROMPT = `Você olha a foto de uma peça de roupa feminina plus size e responde a COR DA PEÇA.
@@ -116,8 +172,13 @@ Responda SOMENTE com um JSON válido, sem texto em volta, neste formato:
     ).catch(() => null);
     if (!baixada) throw new BadRequestException('Não consegui abrir a foto.');
     const bytes = Buffer.from(baixada.data as ArrayBuffer);
-    const mime = this.tipoDaImagem(bytes, String((baixada.headers as any)?.['content-type'] || ''));
-    return { bytes, mime };
+    const mime = CorIaService.tipoDaImagem(
+      bytes,
+      String((baixada.headers as any)?.['content-type'] || ''),
+    );
+    // AVIF/HEIC viram JPEG antes de sair daqui: TODO caminho que lê foto (cor
+    // e foco do recorte) passa por este método, então o conserto é um só.
+    return this.paraFormatoDaIA(bytes, mime);
   }
 
   /** Chama a Anthropic com uma imagem + prompt de texto, devolve a resposta crua. */

@@ -2,6 +2,8 @@ import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { refBaseOf, refsDeBusca } from '../common/ref-base';
+// Só os ESTÁTICOS (assinatura de formato) — não há injeção nem ciclo aqui.
+import { CorIaService } from './cor-ia.service';
 
 function getR2Client(): S3Client {
   const accountId = process.env.R2_ACCOUNT_ID;
@@ -251,6 +253,119 @@ export class ProductPhotosService {
         uploadedByUserId: input.userId || null,
       },
     });
+  }
+
+  /**
+   * NORMALIZA O ACERVO: AVIF/HEIC viram JPEG no bucket (12/08/2026).
+   *
+   * O WordPress converte imagem na origem e o importador salvou os bytes como
+   * vieram, com nome `.jpg`. Duas consequências medidas na produção:
+   *
+   *   1. A leitura de cor por IA responde `400 ... not supported` — 129 das
+   *      139 capas AVIF estavam sem bolinha.
+   *   2. iPhone com iOS anterior ao 16.4 não abre AVIF: a cliente vê o card
+   *      vazio e conclui que o site está quebrado.
+   *
+   * A conversão em memória (`CorIaService.paraFormatoDaIA`) resolve só o item
+   * 1 — o arquivo continua AVIF pra quem navega. Aqui o arquivo é REGRAVADO.
+   *
+   * Detalhes que importam:
+   * - Grava numa CHAVE NOVA e só então apaga a antiga. A URL do R2 é servida
+   *   por CDN: sobrescrever a mesma chave deixaria o cache antigo no ar sem
+   *   jeito de saber por quanto tempo.
+   * - Em SÉRIE e com teto por chamada. O domínio público do R2 responde 429
+   *   com download paralelo (medido), e a tela chama de novo pra continuar.
+   * - Erro numa foto não derruba o lote: ela fica pro próximo clique.
+   */
+  async normalizarFormatos(limite = 150): Promise<{
+    olhadas: number; convertidas: number; jaOk: number; falharam: number;
+    restantes: number; exemplosFalha: string[];
+  }> {
+    const bucket = process.env.R2_BUCKET_NAME;
+    const publicUrl = process.env.R2_PUBLIC_URL;
+    if (!bucket || !publicUrl) {
+      throw new BadRequestException('R2_BUCKET_NAME ou R2_PUBLIC_URL não configurado.');
+    }
+    let sharp: any;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      sharp = require('sharp');
+    } catch (e: any) {
+      throw new BadRequestException(`conversão indisponível (sharp): ${e?.message || e}`);
+    }
+
+    /**
+     * O CURSOR É `updatedAt`, e ele avança MESMO NA FOTO QUE JÁ ESTAVA BOA.
+     *
+     * Sem isso a segunda chamada baixaria as mesmas 150 primeiras de novo e o
+     * mutirão nunca sairia do começo do acervo — o mesmo erro de fila do
+     * `bolinha-auto` (ordem fixa + nada marcando o que já passou).
+     */
+    const inicio = new Date();
+    const aOlhar = { objectKey: { not: null }, updatedAt: { lt: inicio } };
+    const fotos: any[] = await (this.prisma as any).productPhoto.findMany({
+      where: aOlhar,
+      orderBy: { updatedAt: 'asc' },
+      take: Math.max(1, Math.min(500, limite)),
+    });
+
+    let convertidas = 0, jaOk = 0, falharam = 0;
+    const exemplosFalha: string[] = [];
+    const client = getR2Client();
+    const base = publicUrl.replace(/\/$/, '');
+
+    for (const foto of fotos) {
+      try {
+        const resposta = await fetch(foto.url);
+        if (!resposta.ok) throw new Error(`HTTP ${resposta.status}`);
+        const bytes = Buffer.from(await resposta.arrayBuffer());
+        const mime = CorIaService.tipoDaImagem(
+          bytes, String(resposta.headers.get('content-type') || ''),
+        );
+        if (CorIaService.ACEITOS_PELA_IA.includes(mime)) {
+          jaOk++;
+          // Toque no registro só pra o cursor andar (ver `inicio` acima).
+          await (this.prisma as any).productPhoto.update({
+            where: { id: foto.id }, data: { objectKey: foto.objectKey },
+          });
+          continue;
+        }
+
+        const convertida: Buffer = await sharp(bytes).jpeg({ quality: 90 }).toBuffer();
+        const chaveNova = `${String(foto.objectKey).replace(/\.[^./]+$/, '')}-jpg.jpg`;
+        await client.send(new PutObjectCommand({
+          Bucket: bucket, Key: chaveNova, Body: convertida,
+          ContentType: 'image/jpeg', ContentDisposition: 'inline',
+        }));
+        await (this.prisma as any).productPhoto.update({
+          where: { id: foto.id },
+          data: { url: `${base}/${chaveNova}`, objectKey: chaveNova },
+        });
+        // Só depois do banco apontar pro arquivo novo: se apagasse antes e o
+        // update falhasse, a foto sumia do site.
+        await client
+          .send(new DeleteObjectCommand({ Bucket: bucket, Key: foto.objectKey }))
+          .catch((e: any) => this.logger.warn(`[fotos] sobrou o AVIF ${foto.objectKey}: ${e?.message}`));
+        convertidas++;
+        this.logger.log(`[fotos] ${foto.ref}/${foto.cor ?? '—'}: ${mime} → JPEG`);
+      } catch (e: any) {
+        falharam++;
+        if (exemplosFalha.length < 10) {
+          exemplosFalha.push(`${foto.ref}/${foto.cor ?? '—'}: ${e?.message || e}`);
+        }
+        // A que falhou também anda: senão uma foto morta (404 no bucket)
+        // seguraria o cursor e o resto do acervo nunca seria olhado.
+        await (this.prisma as any).productPhoto
+          .update({ where: { id: foto.id }, data: { objectKey: foto.objectKey } })
+          .catch(() => undefined);
+      }
+    }
+
+    const restantes = await (this.prisma as any).productPhoto.count({ where: aOlhar });
+    this.logger.log(
+      `[fotos] normalização: ${convertidas} convertida(s), ${jaOk} já ok, ${falharam} falha(s), ${restantes} por olhar`,
+    );
+    return { olhadas: fotos.length, convertidas, jaOk, falharam, restantes, exemplosFalha };
   }
 
   /**

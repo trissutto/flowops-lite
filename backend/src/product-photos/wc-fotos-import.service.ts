@@ -506,13 +506,25 @@ export class WcFotosImportService {
         return;
       }
 
-      const marca = await this.marcaDaFamilia(ref);
+      /**
+       * FAMÍLIA SEM MARCA GANHA FICHA MESMO ASSIM (12/08/2026).
+       *
+       * A chave da ficha é REF+MARCA e 44% do catálogo está com marca vazia
+       * ([[marca-vazia-funde-produtos]]). Aqui isso virava um `return` calado:
+       * 69 cores com foto boa ficavam sem bolinha PRA SEMPRE, tentando de novo
+       * a cada 90 segundos, porque nada nesse caminho ia mudar sozinho.
+       *
+       * Marca vazia é um valor legítimo pro par único — e a leitura do site já
+       * sabe lidar (`escolherFicha` cai na ficha mais preenchida quando a marca
+       * não casa). Bolinha pintada numa ficha sem marca é melhor que cor cinza
+       * esperando um cadastro que ninguém vai preencher hoje.
+       */
+      const marca = (await this.marcaDaFamilia(ref)) ?? '';
       if (!marca) {
         this.logger.warn(
           `[wc-fotos] bolinha ${ref}/${cor}: família sem MARCA no catálogo — ` +
-            `a ficha é REF+MARCA, então não há onde gravar`,
+            `gravando a ficha com marca vazia. Vale preencher a marca no cadastro.`,
         );
-        return;
       }
 
       // Bolinha já definida (pela IA antes ou pelo conta-gotas) → nem chama a

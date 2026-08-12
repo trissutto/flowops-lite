@@ -1480,6 +1480,11 @@ type Reparo = {
 
 type Mutirao = { pendentesAntes: number; pintadas: number; falharam: number };
 
+type Formatos = {
+  olhadas: number; convertidas: number; jaOk: number;
+  falharam: number; restantes: number; exemplosFalha: string[];
+};
+
 /**
  * Puxa o acervo INTEIRO do site antigo — foto, gravação e bolinha — sem
  * ninguém ficar clicando REF por REF.
@@ -1496,6 +1501,8 @@ function ImportarTudo() {
   const [reparo, setReparo] = useState<Reparo | null>(null);
   const [pintando, setPintando] = useState(false);
   const [mutirao, setMutirao] = useState<Mutirao | null>(null);
+  const [normalizando, setNormalizando] = useState(false);
+  const [formatos, setFormatos] = useState<Formatos | null>(null);
 
   const consultar = useCallback(async () => {
     try {
@@ -1591,6 +1598,33 @@ function ImportarTudo() {
     }
   }
 
+  /**
+   * ACERVO EM JPEG — o mutirão que destrava a bolinha (12/08).
+   *
+   * Parte das fotos veio do WordPress em AVIF com nome `.jpg`: a IA responde
+   * "formato não suportado" (era o que segurava 129 bolinhas) e o iPhone
+   * anterior ao iOS 16.4 não abre a imagem. Vai em lotes porque o R2 corta
+   * download em rajada — o botão continua de onde parou a cada clique.
+   */
+  async function normalizarFotos() {
+    if (!confirm(
+      'Converter as fotos AVIF/HEIC do acervo para JPEG?\n\n' +
+      'Vai em lotes; clique de novo enquanto sobrar foto por olhar.',
+    )) return;
+    setNormalizando(true);
+    setErro(null);
+    try {
+      setFormatos(await api<Formatos>('/product-photos/normalizar-formatos', {
+        method: 'POST',
+        body: JSON.stringify({ limite: 150 }),
+      }));
+    } catch (e: any) {
+      setErro(e?.message?.replace(/^\d+:\s*/, '') || 'Não consegui converter');
+    } finally {
+      setNormalizando(false);
+    }
+  }
+
   const rodando = status?.status === 'rodando';
   const pct = status?.total ? Math.round(((status.processadas ?? 0) / status.total) * 100) : 0;
 
@@ -1629,6 +1663,12 @@ function ImportarTudo() {
           {pintando ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ImageIcon className="w-3.5 h-3.5" />}
           Pintar todas as bolinhas
         </button>
+        <button type="button" onClick={() => void normalizarFotos()} disabled={normalizando}
+          title="Converte pra JPEG as fotos que vieram em AVIF/HEIC — a IA não lê esse formato e o iPhone antigo não abre"
+          className="inline-flex items-center gap-1.5 text-xs font-bold px-4 py-2 rounded-lg border border-sky-300 text-sky-800 bg-white hover:bg-sky-50 disabled:opacity-50">
+          {normalizando ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ImageIcon className="w-3.5 h-3.5" />}
+          Converter fotos pra JPEG
+        </button>
       </div>
 
       {reparo && (
@@ -1651,6 +1691,25 @@ function ImportarTudo() {
         <div className="mt-2 text-[11px] rounded-lg border border-violet-200 bg-violet-50 text-violet-900 p-2">
           <strong>{mutirao.pintadas}</strong> bolinha(s) pintada(s) de {mutirao.pendentesAntes} que
           faltavam{mutirao.falharam ? ` · ${mutirao.falharam} não deram certo (clique de novo pra tentar)` : ''}.
+        </div>
+      )}
+
+      {formatos && (
+        <div className="mt-2 text-[11px] rounded-lg border border-sky-200 bg-sky-50 text-sky-900 p-2">
+          <strong>{formatos.convertidas}</strong> foto(s) convertida(s) pra JPEG ·{' '}
+          {formatos.jaOk} já estavam certas
+          {formatos.falharam ? ` · ${formatos.falharam} falharam` : ''} ·{' '}
+          {formatos.restantes
+            ? <><strong>{formatos.restantes}</strong> por olhar — clique de novo</>
+            : 'acervo inteiro conferido'}
+          {!!formatos.exemplosFalha?.length && (
+            <details className="mt-1">
+              <summary className="cursor-pointer">ver as que falharam</summary>
+              <ul className="mt-1 max-h-32 overflow-auto">
+                {formatos.exemplosFalha.map((f, i) => <li key={i}>{f}</li>)}
+              </ul>
+            </details>
+          )}
         </div>
       )}
 
