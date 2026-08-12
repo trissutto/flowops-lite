@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { Interval } from '@nestjs/schedule';
 import { ConfigService } from '@nestjs/config';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
@@ -62,6 +63,13 @@ interface LeituraIa {
   fichaTecnica?: Array<{ rotulo: string; valor: string }>;
 }
 
+/** Uma rodada da varredura a cada 90s. */
+const CICLO_MS = 90_000;
+/** Fichas por rodada — 6 a cada 90s são 240/hora: o acervo em uma tarde. */
+const POR_CICLO = 6;
+/** Depois disso a ficha sai da fila, pra falha permanente não virar loop. */
+const MAX_TENTATIVAS = 3;
+
 @Injectable()
 export class FichaIaService {
   private readonly logger = new Logger(FichaIaService.name);
@@ -70,6 +78,10 @@ export class FichaIaService {
   private static readonly LOTE_PADRAO = 40;
   /** Teto do texto enviado: descrição de 40 linhas cabe folgada em 6 mil. */
   private static readonly MAX_TEXTO = 6000;
+
+  private varrendo = false;
+  /** id da ficha → falhas neste processo. Memória curta, de propósito. */
+  private readonly falhas = new Map<string, number>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -94,13 +106,55 @@ export class FichaIaService {
     );
   }
 
+  /** `FICHA_IA_AUTO=0` desliga a varredura sem deploy. O botão continua. */
+  private get automatico(): boolean {
+    return String(this.config.get<string>('FICHA_IA_AUTO') ?? '1') !== '0';
+  }
+
+  /**
+   * A VARREDURA — ninguém precisa ficar olhando (dono, 12/08/2026).
+   *
+   * A primeira versão saiu só com botão, e o dono perguntou na hora: "mas ela
+   * fará sozinha? ou preciso ficar olhando?". É a MESMA lição da bolinha de
+   * cor ([[bolinha-auto-varredura]]): quando a automação depende do caminho
+   * por onde o dado entrou — o clique, a importação — sempre sobra um caminho.
+   * Amarrar ao ESTADO ("tem descrição e não tem ficha → preenche") pega o
+   * passado e o futuro pelo mesmo lugar: a peça cadastrada amanhã de manhã
+   * entra na fila sozinha.
+   *
+   * Ritmo: 6 a cada 90s (240/hora) — as 655 fichas de hoje em umas três horas.
+   * Vai devagar porque cada ficha é uma chamada paga; em ritmo de cron o custo
+   * se dilui e ninguém precisa acompanhar.
+   *
+   * O botão da tela continua existindo pra quem quer o acervo AGORA.
+   */
+  @Interval(CICLO_MS)
+  async varrer(): Promise<void> {
+    if (!this.automatico || this.varrendo || !this.apiKey) return;
+    this.varrendo = true;
+    try {
+      const r = await this.processarLote(POR_CICLO);
+      if (r.olhadas) {
+        this.logger.log(
+          `[ficha-ia] varredura: ${r.enriquecidas} preenchida(s) · ${r.restantes} pendente(s)`,
+        );
+      }
+    } catch (e: any) {
+      this.logger.warn(`[ficha-ia] varredura falhou: ${e?.message || e}`);
+    } finally {
+      this.varrendo = false;
+    }
+  }
+
   /** Quanto falta — pra tela mostrar progresso em vez de pedir fé. */
-  async status(): Promise<{ ligado: boolean; pendentes: number; jaFeitas: number }> {
+  async status(): Promise<{
+    ligado: boolean; automatico: boolean; pendentes: number; jaFeitas: number;
+  }> {
     const [pendentes, jaFeitas] = await Promise.all([
       (this.prisma as any).produtoFicha.count({ where: { iaEm: null } }),
       (this.prisma as any).produtoFicha.count({ where: { iaEm: { not: null } } }),
     ]);
-    return { ligado: !!this.apiKey, pendentes, jaFeitas };
+    return { ligado: !!this.apiKey, automatico: this.automatico, pendentes, jaFeitas };
   }
 
   /**
@@ -202,7 +256,21 @@ export class FichaIaService {
         if (exemplosFalha.length < 10) {
           exemplosFalha.push(`${ficha.ref}/${ficha.marca || '—'}: ${e?.message || e}`);
         }
-        // Não marca: falha de rede merece nova tentativa no próximo clique.
+        /**
+         * Falha de rede merece nova tentativa — mas não PARA SEMPRE. Sem esta
+         * contagem, uma ficha que a IA nunca consegue ler (texto quebrado,
+         * resposta fora do formato) seguraria o topo da fila e a varredura
+         * gastaria as 6 chamadas do ciclo nela, a cada 90 segundos, sem nunca
+         * alcançar o resto do acervo. Foi o que travou a bolinha de cor.
+         */
+        const n = (this.falhas.get(ficha.id) ?? 0) + 1;
+        this.falhas.set(ficha.id, n);
+        if (n >= MAX_TENTATIVAS) {
+          await this.marcar(ficha.id).catch(() => undefined);
+          this.logger.warn(
+            `[ficha-ia] ${ficha.ref}/${ficha.marca || '—'}: desisti depois de ${n} tentativas`,
+          );
+        }
       }
     }
 
