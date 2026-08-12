@@ -25,7 +25,7 @@ import {
   LayoutDashboard, PackageMinus, CheckCircle2, Package2, Boxes, Database,
   DollarSign, ShoppingBag, Users, Megaphone, Settings, ChevronDown, X, Globe,
   Smartphone, FileSearch, MessageSquare, Radio, Instagram,
-  Bot, TrendingUp, Network,
+  Bot, TrendingUp, Network, Plug,
 } from 'lucide-react';
 
 type NavItem = {
@@ -107,6 +107,9 @@ const GROUPS: NavGroup[] = [
     color: 'slate',
     items: [
       { href: '/configuracoes', label: 'Configurações', icon: Settings },
+      // Destino do push do vigia do token da Meta — a rota existia só no
+      // alerta, e o clique dava 404.
+      { href: '/retaguarda/integracoes', label: 'Saúde das Integrações', icon: Plug },
     ],
   },
 ];
