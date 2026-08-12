@@ -638,6 +638,20 @@ export class CustomersCrmService {
       if (chosen) canonical[field] = (chosen as any)[field];
     }
 
+    // Origem da PESSOA não pode depender do Customer usado para abrir a URL.
+    // Prefere o cadastro físico mais antigo (PDV/Giga); o site pode ser apenas
+    // um vínculo posterior e, nesse caso, não transforma a origem em SITE.
+    const physicalSources = new Set(['pdv', 'physical', 'giga']);
+    const originRecord = records
+      .filter((r: any) => physicalSources.has(r.originSource) && r.originStore)
+      .sort((a: any, b: any) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())[0]
+      || records.find((r: any) => r.originStore);
+    if (originRecord) {
+      canonical.originSource = originRecord.originSource;
+      canonical.originStoreId = originRecord.originStoreId;
+      canonical.originStore = originRecord.originStore;
+    }
+
     const totalLtvCents = records.reduce((sum: number, r: any) => sum + Number(r.ltvCents || 0), 0);
     const totalOrderCount = records.reduce((sum: number, r: any) => sum + Number(r.orderCount || 0), 0);
     const channels = Array.from(new Set(records.map((r: any) => r.originSource).filter(Boolean)));
