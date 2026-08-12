@@ -5322,11 +5322,24 @@ model SiteCupom {
   usos           Int       @default(0)
   ativo          Boolean   @default(true)
 
+  /// ── VALE-TROCA (item 85) ──────────────────────────────────────────────
+  /// Cupom de campanha é público: quem tiver o código usa. Vale-troca é
+  /// DINHEIRO de uma pessoa específica — o código vaza num print de WhatsApp
+  /// e vira compra de outra. Preenchido = só este CPF usa (só dígitos).
+  cpf            String?   @db.VarChar(11)
+  /// 'campanha' (padrão) | 'troca'. Separa o que a retaguarda pode editar à
+  /// vontade do que é crédito de cliente e tem dono.
+  origem         String    @default("campanha") @db.VarChar(12)
+  /// Troca que originou o vale — a auditoria de "de onde veio esse dinheiro".
+  trocaId        String?   @map("troca_id")
+
   atualizadoPor  String?   @map("atualizado_por") @db.VarChar(80)
   createdAt      DateTime  @default(now()) @map("created_at")
   updatedAt      DateTime  @default(now()) @updatedAt @map("updated_at")
 
   @@index([ativo, fimEm])
+  @@index([cpf])
+  @@index([trocaId])
   @@map("site_cupons")
 }
 

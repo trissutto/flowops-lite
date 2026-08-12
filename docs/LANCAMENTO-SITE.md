@@ -210,8 +210,14 @@ Refeito em 04/08/2026, **só o site novo** (`ecommerce/` + `backend/src/loja-ord
 81. ✅ FEITO — `/politica-de-trocas`, escrita a partir do que o site JÁ PROMETE (30 dias, do card ao rodapé) e do que a lei obriga. Separa o prazo **legal** (7 dias, dinheiro de volta, sem justificar) do **comercial** (30 dias, troca) — é o ponto que mais gera briga: quem pede dinheiro de volta no dia 20 está pedindo algo que a lei não garante, e a política precisa dizer isso ANTES
 82. ✅ CONFERIDO — `/trocas` já é redirect (307) pro portal que roda no FlowOps; a conta e a política apontam pra lá
 83. ✅ FEITO — os 7 dias do art. 49 do CDC estão publicados, com o que devolvemos (tudo, inclusive o frete) e em quanto tempo
-84. ⬜ ABERTO — Etiqueta de devolução (a política já promete "a gente gera a etiqueta"; falta gerar de fato no portal)
-85. ⬜ ABERTO — Vale-troca / crédito na conta (a política já descreve o crédito na diferença; falta o saldo existir)
+84. ✅ FEITO (12/08) — Etiqueta de devolução gerada nos Correios (`POST /trocas/:id/reversa/gerar`). É a MESMA `criarPrepostagem` da ida, com remetente = cliente e destinatário = matriz; quem paga é o cartão de postagem do contrato, então a cliente leva o código na agência e não desembolsa nada. Recusa dos Correios volta como 400 e a retaguarda cai no código manual de sempre — automatizar não pode ser pior que o manual que já funcionava
+85. 🔶 PARCIAL (12/08) — O vale agora **existe onde a cliente vai gastar**: entra em `site_cupons` (fixed, uso único, 90 dias) e é **nominal no CPF** — código vazado num print não vira compra de outra pessoa. E só nasce depois da conferência aprovada com **checklist obrigatório** (regra do dono: aprovar sem conferir cada item deixou de ser possível). **Falta o PDV aceitar**: ele resolve `vale_troca` por `pdv_returns.creditoCode` em 4 pontos (validação, revalidação, baixa no fechamento e devolução no cancelamento) — ligar o vale do site ali é mexer em caminho de dinheiro e vai como tarefa própria, com teste. ⚠️ Enquanto isso a política diz "site ou qualquer loja física": no site vale, na loja ainda não
+
+> **A entrega era o buraco real dos dois.** Todo o portal comunicava por e-mail
+> e `SMTP_HOST/USER/PASS` não existem em produção: `EmailService.send()`
+> devolve `false` na primeira linha e o histórico grava "e-mail NÃO enviado",
+> que ninguém lê. A cliente registrava a troca e não recebia nada. Agora o
+> código de postagem e o vale saem por **WhatsApp**.
 
 ## H. Conteudo (🟠) · APROVADO PELO DONO 04/08
 

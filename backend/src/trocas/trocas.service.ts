@@ -9,6 +9,8 @@ import { WooCommerceService } from '../woocommerce/woocommerce.service';
 import { TrackingService } from '../tracking/tracking.service';
 import { EmailService } from '../email/email.service';
 import { ErpService } from '../erp/erp.service';
+import { CorreiosService } from '../correios/correios.service';
+import { WhatsappService } from '../whatsapp/whatsapp.service';
 
 /**
  * trocas.service.ts — PORTAL DE TROCAS self-service do e-commerce.
@@ -128,7 +130,34 @@ export class TrocasService {
     private readonly tracking: TrackingService,
     private readonly email: EmailService,
     private readonly erp: ErpService,
+    private readonly correios: CorreiosService,
+    private readonly whats: WhatsappService,
   ) {}
+
+  /**
+   * AVISO POR WHATSAPP — a entrega que faltava.
+   *
+   * O portal inteiro comunica por e-mail, e `SMTP_HOST/USER/PASS` não existem
+   * em produção: `EmailService.send()` devolve `false` na primeira linha e o
+   * histórico grava "e-mail NÃO enviado", que ninguém lê. Ou seja, a cliente
+   * registrava a troca e não recebia nada — nem o código de postagem, nem o
+   * vale.
+   *
+   * WhatsApp é onde ela já fala com a loja e onde ela cobra quando some. Nunca
+   * lança: aviso que falha não pode desfazer a decisão que a cliente acabou de
+   * tomar — quem lê o retorno decide o que escrever no histórico.
+   */
+  private async avisarWhats(telefone: string | null | undefined, texto: string): Promise<boolean> {
+    const num = String(telefone || '').replace(/\D/g, '');
+    if (num.length < 10) return false;
+    try {
+      const r = await this.whats.sendText(num, texto);
+      return !!r?.ok;
+    } catch (e: any) {
+      this.logger.warn(`[trocas] WhatsApp falhou pra ${num.slice(-4)}: ${e?.message || e}`);
+      return false;
+    }
+  }
 
   // ── Config (mesma chave da tela de trocas da equipe) ────────────────
 
@@ -950,6 +979,181 @@ export class TrocasService {
 
   // ── Admin: colar código da reversa + e-mail automático ──────────────
 
+  /**
+   * ETIQUETA DE DEVOLUÇÃO AUTOMÁTICA (item 84).
+   *
+   * A política de trocas promete "a gente gera a etiqueta" desde 04/08/2026 e
+   * ninguém gerava: alguém abria o site dos Correios, emitia a Autorização de
+   * Postagem na mão e colava o código em `setReversaCodigo`. Era a única
+   * dívida que o site ANUNCIAVA e não cumpria.
+   *
+   * ── POR QUE PRÉ-POSTAGEM COM OS PAPÉIS INVERTIDOS ──
+   *
+   * Não inventamos integração nova: é a MESMA `criarPrepostagem` que já emite
+   * a etiqueta da ida em site, live, pick-orders e realinhamento. A reversa é
+   * ela com remetente = a cliente e destinatário = a matriz. Quem paga é o
+   * cartão de postagem do contrato (é o cartão que vai no corpo), então a
+   * cliente leva o código na agência e não desembolsa nada — que é exatamente
+   * o que a política promete.
+   *
+   * A alternativa seria a API de Logística Reversa, que depende de o contrato
+   * ter o serviço habilitado. Se um dia tiver, troca-se aqui dentro; o resto
+   * do fluxo não muda.
+   *
+   * ── DEGRADA PRO CAMINHO DE HOJE ──
+   *
+   * Correios recusando (contrato sem cobertura, endereço incompleto, API fora)
+   * NÃO trava a troca: levanta erro com a mensagem crua dos Correios e a
+   * retaguarda segue colando o código manual em `setReversaCodigo`, como
+   * sempre fez. Automatizar não pode ser pior que o manual que já funcionava.
+   */
+  async gerarReversaCorreios(input: { id: string; userId?: string; userName?: string }) {
+    const troca = await (this.prisma as any).trocaSolicitacao.findUnique({
+      where: { id: input.id },
+      include: { items: true },
+    });
+    if (!troca) throw new NotFoundException('Troca não encontrada');
+    if (troca.reversaCodigo) {
+      throw new BadRequestException(
+        `Esta troca já tem código de postagem (${troca.reversaCodigo}). Cancele antes de gerar outro.`,
+      );
+    }
+
+    // O endereço da cliente mora no PEDIDO, não na troca (a troca só guarda o
+    // snapshot de quem é). `shippingAddress` é JSON serializado — convenção da
+    // casa desde o pedido do WC.
+    const pedido = await (this.prisma as any).order.findFirst({
+      where: { wcOrderId: Number(troca.wcOrderId) },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!pedido) {
+      throw new BadRequestException(
+        'Não achei o pedido original pra pegar o endereço da cliente. Gere a etiqueta manualmente.',
+      );
+    }
+    let addr: any = {};
+    try {
+      addr = typeof pedido.shippingAddress === 'string' ? JSON.parse(pedido.shippingAddress) : (pedido.shippingAddress || {});
+    } catch { addr = {}; }
+
+    const cep = String(pedido.shippingCep || addr.postcode || addr.cep || '').replace(/\D/g, '');
+    if (cep.length !== 8) {
+      throw new BadRequestException('O pedido está sem CEP válido. Gere a etiqueta manualmente.');
+    }
+
+    let endereco = String(addr.address_1 || addr.logradouro || addr.endereco || '').trim();
+    let numero = String(addr.number || addr.numero || '').trim();
+    if (!numero && endereco) {
+      // Pedido antigo grava "Rua X, 123" num campo só.
+      const m = endereco.match(/^(.*?),?\s*(\d+[A-Za-z]?)\s*$/);
+      if (m) { endereco = m[1].trim(); numero = m[2]; }
+    }
+    let cidade = String(addr.city || addr.cidade || '').trim();
+    let uf = String(addr.state || addr.uf || '').trim().toUpperCase();
+    let bairro = String(addr.neighborhood || addr.bairro || '').trim();
+    const complemento = String(addr.address_2 || addr.complemento || '').trim();
+
+    // CEP manda: o endereço digitado pela cliente erra UF/cidade com frequência,
+    // e endereço errado na pré-postagem é recusa na hora (mesma regra do envio).
+    try {
+      const via: any = await this.correios.buscarCep(cep);
+      if (via && !via.erro) {
+        if (via.uf) uf = String(via.uf).toUpperCase();
+        if (via.cidade) cidade = via.cidade;
+        if (!bairro && via.bairro) bairro = via.bairro;
+        if (!endereco && via.logradouro) endereco = via.logradouro;
+      }
+    } catch { /* ViaCEP fora → segue com o do pedido */ }
+
+    const loja = this.correios.remetentePadrao();
+    const pecas = (troca.items || []).reduce((s: number, i: any) => s + (Number(i.qty) || 1), 0) || 1;
+
+    const resp: any = await this.correios.criarPrepostagem({
+      // PAC sempre: a devolução não tem pressa e quem paga é a loja. SEDEX na
+      // volta seria custo a mais sem ganho nenhum pra cliente.
+      servico: 'PAC',
+      remetente: {
+        nome: troca.customerName || pedido.customerName || 'Cliente',
+        cnpjCpf: String(troca.customerCpf || pedido.customerCpf || '').replace(/\D/g, ''),
+        endereco: endereco || '',
+        numero: numero || 'S/N',
+        bairro: bairro || '',
+        cidade: cidade || '',
+        uf: uf || '',
+        cep,
+        telefone: String(troca.customerPhone || pedido.customerPhone || '').replace(/\D/g, ''),
+      },
+      destinatario: {
+        nome: loja.nome,
+        cpfCnpj: loja.cnpjCpf,
+        endereco: loja.endereco,
+        numero: loja.numero,
+        bairro: loja.bairro,
+        cidade: loja.cidade,
+        uf: loja.uf,
+        cep: loja.cep,
+        telefone: loja.telefone,
+      },
+      pesoGramas: Math.max(300, pecas * 200),
+      valorDeclarado: Number(troca.valorTotalPago) || undefined,
+      itensDeclaracao: (troca.items || []).map((i: any) => ({
+        conteudo: String(i.productName || 'Vestuário').slice(0, 60),
+        quantidade: String(i.qty || 1),
+      })),
+    });
+    if (!resp?.ok || !resp?.codigoRastreio) {
+      throw new BadRequestException('Correios não devolveu o código da reversa. Gere manualmente.');
+    }
+
+    const codigo = String(resp.codigoRastreio);
+    const prazo = new Date(Date.now() + 15 * 86_400_000);
+
+    const whatsOk = await this.avisarWhats(
+      troca.customerPhone,
+      `Oi, ${(troca.customerName || '').split(' ')[0] || 'tudo bem'}! 💛\n\n` +
+        `Sua devolução da troca ${formatTrocaNumero(troca.numero)} está liberada.\n\n` +
+        `📮 Código de postagem: *${codigo}*\n` +
+        `É só levar a peça em QUALQUER agência dos Correios e informar esse código — ` +
+        `você não paga nada, o frete é por nossa conta.\n\n` +
+        `Válido até ${prazo.toLocaleDateString('pt-BR')}.\n\n` +
+        `Assim que a peça chegar e passar na conferência, a gente te avisa pra escolher ` +
+        `entre trocar, vale-compras ou reembolso.`,
+    );
+
+    const updated = await (this.prisma as any).trocaSolicitacao.update({
+      where: { id: troca.id },
+      data: {
+        reversaCodigo: codigo,
+        reversaPrazo: prazo,
+        reversaEnviadaAt: whatsOk ? new Date() : null,
+        status: troca.status === 'solicitada' || troca.status === 'aguardando_envio_cliente'
+          ? 'aguardando_postagem'
+          : troca.status,
+        eventos: {
+          create: {
+            tipo: 'reversa',
+            descricao:
+              `Etiqueta de devolução gerada nos Correios: ${codigo} (PAC, válido até ${prazo.toLocaleDateString('pt-BR')}).` +
+              (whatsOk
+                ? ' Código enviado pra cliente por WhatsApp.'
+                : ' ATENÇÃO: WhatsApp NÃO enviado — passar o código pra cliente manualmente.'),
+            userId: input.userId || null,
+            userName: input.userName || null,
+          },
+        },
+      },
+    });
+
+    return {
+      ok: true,
+      codigo,
+      prazo,
+      whatsOk,
+      idPrepostagem: resp.idPrepostagem ?? null,
+      troca: this.formatTrocaPublic({ ...updated, items: troca.items, eventos: [] }),
+    };
+  }
+
   async setReversaCodigo(input: {
     id: string;
     codigo: string;
@@ -1157,6 +1361,31 @@ export class TrocasService {
     if (!troca) throw new NotFoundException('Troca não encontrada');
     if (!['em_conferencia', 'recebida'].includes(troca.status)) {
       throw new BadRequestException('Troca não está em conferência.');
+    }
+
+    /**
+     * CHECKLIST OBRIGATÓRIO PRA APROVAR (regra do dono, 12/08/2026).
+     *
+     * Até aqui `checklist` era opcional e livre: `aprovado: true` sozinho
+     * liberava a troca e, com ela, o vale-compras. Ou seja, o crédito nascia
+     * da palavra de quem clicou, não da regra cumprida — e o campo que existia
+     * pra provar a conferência ficava nulo justamente nos casos em que alguém
+     * teria pulado a etapa.
+     *
+     * Agora aprovar exige TODOS os itens de `CONFERENCIA_CHECKLIST` marcados.
+     * Não é burocracia: é o que separa "a peça voltou" de "a peça voltou em
+     * condição de virar dinheiro". Item que não passa não vira observação —
+     * vira REPROVAÇÃO, que já tem motivo obrigatório e caminho próprio.
+     */
+    if (input.aprovado) {
+      const marcados = input.checklist || {};
+      const faltando = CONFERENCIA_CHECKLIST.filter((item) => marcados[item] !== true);
+      if (faltando.length) {
+        throw new BadRequestException(
+          `Pra aprovar, confira todos os itens: ${faltando.join(', ')}. ` +
+            'Se algum não passa, reprove com o motivo — não aprove com ressalva.',
+        );
+      }
     }
 
     // ── REPROVADA ──
@@ -1431,6 +1660,46 @@ export class TrocasService {
         cupomOk = !!r.ok;
       } catch { /* segue — vale local vale mesmo sem cupom no site */ }
 
+      /**
+       * O VALE PRECISA EXISTIR NO SITE NOVO (item 85).
+       *
+       * O `createDiscountCoupon` acima grava no WooCommerce — o site VELHO.
+       * O site novo lê `site_cupons` (ver `CupomService`), então o vale que a
+       * cliente recebia simplesmente não era aceito no checkout onde ela ia
+       * gastar. A política já prometia o crédito; o crédito não existia onde
+       * importa.
+       *
+       * Nominal no CPF de propósito: o código vai por WhatsApp e um print
+       * encaminhado bastaria pra outra pessoa gastar. `usoMaximo: 1` porque
+       * vale não é campanha — gastou, acabou (o troco não volta, e isso está
+       * escrito na política).
+       */
+      let cupomSiteOk = false;
+      const cpfVale = String(troca.customerCpf || '').replace(/\D/g, '');
+      try {
+        await (this.prisma as any).siteCupom.create({
+          data: {
+            code: valeCode,
+            label: `Vale-troca ${formatTrocaNumero(troca.numero)}`,
+            tipo: 'fixed',
+            valor: Number(troca.valorTotalPago),
+            fimEm: validade,
+            usoMaximo: 1,
+            ativo: true,
+            cpf: cpfVale.length === 11 ? cpfVale : null,
+            origem: 'troca',
+            trocaId: troca.id,
+            atualizadoPor: 'troca (automático)',
+          },
+        });
+        cupomSiteOk = true;
+      } catch (e: any) {
+        // Não derruba a decisão da cliente: o vale continua registrado na
+        // troca e a retaguarda consegue honrar na mão. Mas fica gritando no
+        // histórico, porque vale que não entra no site é promessa quebrada.
+        this.logger.error(`[troca ${troca.id}] vale ${valeCode} NÃO entrou em site_cupons: ${e?.message || e}`);
+      }
+
       let emailOk = false;
       if (troca.customerEmail) {
         emailOk = await this.email.send(
@@ -1448,6 +1717,18 @@ export class TrocasService {
         );
       }
 
+      // O vale só vale se chegar. Ver `avisarWhats`: o e-mail nunca saiu.
+      const whatsOk = await this.avisarWhats(
+        troca.customerPhone,
+        `Oi, ${(troca.customerName || '').split(' ')[0] || 'tudo bem'}! 💛\n\n` +
+          `Sua troca ${formatTrocaNumero(troca.numero)} foi finalizada e seu vale-compras está pronto:\n\n` +
+          `🎟️ *${valeCode}*\n` +
+          `Valor: R$ ${Number(troca.valorTotalPago).toFixed(2).replace('.', ',')}\n` +
+          `Válido até ${validade.toLocaleDateString('pt-BR')}\n\n` +
+          `É só aplicar o código no carrinho do site ou apresentar em qualquer loja.` +
+          (cpfVale.length === 11 ? `\n\nO vale está no seu CPF — use com ele na hora de fechar o pedido. 💜` : ''),
+      );
+
       const updated = await (this.prisma as any).trocaSolicitacao.update({
         where: { id: troca.id },
         data: {
@@ -1461,8 +1742,12 @@ export class TrocasService {
               tipo: 'decisao',
               descricao:
                 `Cliente escolheu VALE-COMPRAS de R$ ${Number(troca.valorTotalPago).toFixed(2)} — código ${valeCode}, válido até ${validade.toLocaleDateString('pt-BR')}.` +
-                (cupomOk ? ' Cupom criado no site.' : ' ATENÇÃO: cupom NÃO criado no WC — criar manualmente.') +
-                (emailOk ? ' E-mail enviado.' : ' E-mail NÃO enviado.'),
+                (cupomSiteOk
+                  ? ` Vale ativo no site${cpfVale.length === 11 ? ` (nominal, CPF ...${cpfVale.slice(-4)})` : ' (SEM CPF na troca — vale ficou aberto a qualquer CPF)'}.`
+                  : ' ATENÇÃO: vale NÃO entrou no site — honrar manualmente.') +
+                (cupomOk ? ' Cupom espelhado no site antigo.' : '') +
+                (whatsOk ? ' Código enviado por WhatsApp.' : ' WhatsApp NÃO enviado — passar o código manualmente.') +
+                (emailOk ? ' E-mail enviado.' : ''),
               statusDe: 'aguardando_decisao',
               statusPara: 'finalizada',
             },
