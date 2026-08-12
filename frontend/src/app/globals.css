@@ -94,6 +94,32 @@
     text-transform: uppercase !important;
   }
 
+  /* ── PDV v1: piso de legibilidade no tamanho COMPACTO ──────────────────
+     O compacto aplica zoom 0.86 no PDV inteiro. Sem isto, um rótulo de 9px
+     chega aos olhos da vendedora como 7,7px. Aqui os três menores degraus de
+     texto sobem o suficiente pra nenhum ficar abaixo de ~9,5px reais.
+     Só afeta o compacto — normal e grande seguem o tamanho original. */
+  .pdv1-skin.pdv-dense-compacto .text-\[9px\]  { font-size: 11px !important; }
+  .pdv1-skin.pdv-dense-compacto .text-\[10px\] { font-size: 11.5px !important; }
+  .pdv1-skin.pdv-dense-compacto .text-\[11px\] { font-size: 12px !important; }
+
+  /* ── PDV v1: CTA que chama atenção SEM piscar pra sempre ───────────────
+     Substitui o `animate-pulse` dos botões de finalizar/gerar vale. O
+     animate-pulse anima OPACIDADE — o valor em dinheiro dentro do botão
+     apagava junto, e com 3 botões piscando ao mesmo tempo nenhum chamava
+     atenção de verdade. Aqui só o brilho oscila, por 3 ciclos (~3,3s), e
+     depois o botão fica estático com o anel forte que ele já tem. */
+  @keyframes pdvCtaAttention {
+    0%, 100% { filter: brightness(1); }
+    50%      { filter: brightness(1.18); }
+  }
+  .pdv1-skin .pdv-cta-attention {
+    animation: pdvCtaAttention 1.1s ease-in-out 3;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .pdv1-skin .pdv-cta-attention { animation: none; }
+  }
+
   /* ── PDV v1: modo noturno local ────────────────────────────────────────
      Escopado no root do PDV. A classe é controlada por preferência local do
      computador; não altera body/html e não vaza para outras páginas. */

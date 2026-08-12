@@ -148,6 +148,39 @@ export class PdvController {
   }
 
   /**
+   * GET /pdv/product-images?skus=A,B,C
+   * Mesma coisa da rota acima, porém em LOTE.
+   *
+   * O carrinho pedia uma requisição POR PEÇA: carrinho de 12 peças abria 12
+   * conexões, e em loja com internet ruim a miniatura entrava piscando uma a
+   * uma. Aqui a tela pede tudo de uma vez.
+   *
+   * Retorna { urls: { [sku]: string | null } }. SKU que falhar vira null —
+   * miniatura é enfeite, nunca pode derrubar o carrinho.
+   */
+  @Get('product-images')
+  async getProductImages(@Req() req: any, @Query('skus') skus: string) {
+    this.requireRole(req);
+    const lista = String(skus || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .slice(0, 60); // teto de segurança — carrinho real não passa disso
+    const unicos = Array.from(new Set(lista));
+    const urls: Record<string, string | null> = {};
+    await Promise.all(
+      unicos.map(async (sku) => {
+        try {
+          urls[sku] = (await this.woo.getProductImageBySku(sku)) || null;
+        } catch {
+          urls[sku] = null;
+        }
+      }),
+    );
+    return { urls };
+  }
+
+  /**
    * POST /pdv/training/validate
    * Valida senha de treinamento. Frontend chama uma vez no clique do botão
    * "🎓 Modo Treinamento" — se ok, salva flag no sessionStorage e passa a
