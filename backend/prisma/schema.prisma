@@ -5522,6 +5522,41 @@ model SiteBanner {
   @@map("site_banners")
 }
 
+/// LEAD DO SITE — quem deixou nome, celular e e-mail no popup do cupom.
+///
+/// SEPARADO do `Customer` de propósito (decisão do dono, 12/08/2026). Aqui é
+/// gente que AINDA NÃO COMPROU: jogar lead de popup na base mestra suja a
+/// ficha de quem compra, embaralha LTV e faz o CRM prometer cliente que nunca
+/// existiu. Quando ela compra, o pedido cria/atualiza o cadastro normal pelos
+/// caminhos que já existem — e é aí que ela vira cliente de verdade.
+///
+/// A CHAVE É O TELEFONE (só dígitos), a mesma identidade que o CRM usa pra
+/// deduplicar. Ela volta e preenche de novo? Atualiza a linha e MANTÉM o
+/// cupom e a data do primeiro cadastro: cupom que muda a cada visita é convite
+/// pra ninguém confiar no primeiro.
+model SiteLead {
+  id          String   @id @default(uuid())
+  nome        String   @db.VarChar(120)
+  /// Só dígitos, com DDD (11 ou 10 posições). Identidade da pessoa.
+  telefone    String   @unique @db.VarChar(11)
+  email       String   @db.VarChar(160)
+
+  /// Cupom entregue a ela. Guardado na linha (e não deduzido depois) pra
+  /// sobreviver a mudança de campanha: se o código do popup virar outro
+  /// amanhã, a promessa feita a ESTA pessoa continua registrada.
+  cupom       String   @db.VarChar(30)
+  /// Em que página ela se cadastrou — diz qual vitrine converte lead.
+  origem      String?  @db.VarChar(200)
+
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  /// A tela da retaguarda lista por data (filtro De/Até) — sem índice, varre
+  /// a tabela inteira a cada troca de período.
+  @@index([createdAt])
+  @@map("site_lead")
+}
+
 /// CLASSIFICAÇÃO DA PEÇA — Ocasião, Tecido, Modelagem e Coleção.
 ///
 /// Uma tabela só, separada por `tipo`, porque os quatro têm exatamente a mesma

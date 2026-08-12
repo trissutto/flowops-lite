@@ -3,6 +3,7 @@ import { Footer } from '@/components/layout/Footer';
 import { MiniCart } from '@/components/commerce/MiniCart';
 import { QuickAddSheet } from '@/components/commerce/QuickAddSheet';
 import { AssistenteWidget } from '@/components/chat/AssistenteWidget';
+import { CupomBoasVindas } from '@/components/marketing/CupomBoasVindas';
 import { getTarjaDoTopo } from '@/services/banners';
 import { getNavegacao } from '@/services/categorias-menu';
 
@@ -29,6 +30,9 @@ export default async function PublicLayout({ children }: { children: React.React
       <QuickAddSheet />
       {/* Atendimento: bolha fixa em todas as páginas da vitrine. */}
       <AssistenteWidget />
+      {/* Cupom de boas-vindas. Ele mesmo se cala no carrinho, no checkout e na
+          conta — quem está comprando não pode ser interrompido. */}
+      <CupomBoasVindas />
     </>
   );
 }

@@ -26,6 +26,18 @@ interface CouponRule {
 
 /** Tabela padrão. No server, `CUPONS_JSON` (env) substitui por completo. */
 const DEFAULT_RULES: CouponRule[] = [
+  /**
+   * PRIMEIRA10 — o cupom do popup de boas-vindas (12/08/2026).
+   *
+   * SEM VALOR MÍNIMO, por decisão do dono. O BEMVINDA10 logo abaixo exige
+   * R$ 149,90; prometer "10% na primeira compra" e a cliente levar um "não"
+   * no carrinho de R$ 89 é quebrar a promessa na primeira conversa que a
+   * marca teve com ela — pior do que não ter oferecido.
+   *
+   * Código próprio (e não o BEMVINDA10) pra dar pra medir quanto o popup
+   * vendeu. Trocar de campanha: este código + `CUPOM_LEAD_SITE` no backend.
+   */
+  { code: 'PRIMEIRA10', kind: 'percent', value: 10, label: 'Primeira compra: 10% off' },
   { code: 'BEMVINDA10', kind: 'percent', value: 10, minSubtotal: 149.9, label: 'Boas-vindas: 10% off' },
   { code: 'LURDS15', kind: 'percent', value: 15, minSubtotal: 349.9, label: '15% off acima de R$ 349,90' },
   { code: 'FRETEGRATIS', kind: 'shipping', value: 0, minSubtotal: 199.9, label: 'Frete grátis' },
