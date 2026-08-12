@@ -5,6 +5,7 @@ import {
   CustomersCrmService,
   CreateCustomerDto,
   UpdateCustomerDto,
+  UpdateCustomerCreditDto,
   CreateAddressDto,
   ConsentDto,
   CreditCashbackDto,
@@ -359,6 +360,18 @@ export class CustomersCrmController {
   @Get(':id')
   detail(@Req() req: any, @Param('id') id: string) {
     return this.svc.detail(id, this.actor(req));
+  }
+
+  /** Ficha beta: visão canônica da Person, mantendo os registros de origem. */
+  @Get(':id/beta')
+  betaDetail(@Req() req: any, @Param('id') id: string) {
+    return this.svc.betaDetail(id, this.actor(req));
+  }
+
+  @Patch(':id/beta/credit')
+  @AdminOnly({ strict: true })
+  updateBetaCredit(@Req() req: any, @Param('id') id: string, @Body() dto: UpdateCustomerCreditDto) {
+    return this.svc.updateCredit(id, dto, this.actor(req));
   }
 
   /**
