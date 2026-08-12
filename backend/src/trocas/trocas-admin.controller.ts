@@ -90,6 +90,19 @@ export class TrocasAdminController {
     return this.svc.getDetail(id);
   }
 
+  /**
+   * POST /trocas/:id/reversa/gerar — emite a etiqueta nos Correios (item 84).
+   *
+   * O caminho automático. Recusa dos Correios volta como 400 com a mensagem
+   * crua deles, e a retaguarda cai no `POST :id/reversa` de sempre, colando o
+   * código emitido na mão. Nunca deixa a troca travada por causa da API.
+   */
+  @Post(':id/reversa/gerar')
+  async gerarReversa(@Req() req: any, @Param('id') id: string) {
+    this.requireAdmin(req);
+    return this.svc.gerarReversaCorreios({ id, ...this.who(req) });
+  }
+
   /** POST /trocas/:id/reversa { codigo, prazoDias? } — cola o código e dispara e-mail */
   @Post(':id/reversa')
   async reversa(
