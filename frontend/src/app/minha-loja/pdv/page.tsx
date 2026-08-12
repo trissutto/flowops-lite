@@ -27,7 +27,7 @@ import {
   ArrowLeft, Loader2, X, Barcode, Trash2, Plus, Minus,
   ShoppingCart, User, CreditCard, Banknote, QrCode, Check, AlertCircle,
   AlertTriangle,
-  Send, Mail, MessageSquare, FileText, RotateCcw, History, Percent,
+  FileText, RotateCcw, History, Percent,
   Clock, ChevronRight, Pause, DollarSign, ArrowRightLeft, Search, Sparkles,
   Receipt, Globe, Shuffle, Tag, Wallet, ArrowUpRight, Printer,
   RefreshCw, Handshake, Moon, Sun, Package,
@@ -165,6 +165,52 @@ const PAYMENT_METHODS = [
   // QR/cobrança, sem NFC-e automática. CPF obrigatório.
   { id: 'venda_online', label: 'Venda Online', icon: Globe },
 ] as const;
+
+/**
+ * A venda fresca SEM uma segunda viagem ao servidor.
+ *
+ * As mutações do PDV (bipar, +/−, remover, desconto, campanha, remover
+ * pagamento) já devolvem a venda completa — igual o bipe faz desde a
+ * otimização anterior. Antes CADA clique custava POST/PATCH + GET inteiro:
+ * em loja com internet ruim isso dobrava o tempo do "+" na quantidade.
+ *
+ * O GET continua aqui como rede de segurança pro backend ANTIGO (janela de
+ * deploy, quando o Railway ainda não subiu a versão nova).
+ */
+async function saleFromResponse(r: any, saleId: string): Promise<Sale> {
+  if (r?.sale?.id && Array.isArray(r.sale.items)) return r.sale as Sale;
+  if (r?.id === saleId && Array.isArray(r.items)) return r as Sale;
+  return api<Sale>(`/pdv/sales/${saleId}`);
+}
+
+// ── Densidade da tela ──────────────────────────────────────────────────
+// Três tamanhos fixos no lugar do zoom proporcional livre. O piso subiu de
+// 0.70 pra 0.86: num monitor de 1366px o texto para de encolher pra ~10px.
+// 'auto' escolhe pelo monitor; a loja pode fixar no rodapé do PDV.
+type PdvDensityFixa = 'compacto' | 'normal' | 'grande';
+type PdvDensity = PdvDensityFixa | 'auto';
+const PDV_DENSITY_KEY = 'lurds_pdv_densidade';
+const DENSITY_ZOOM: Record<PdvDensityFixa, number> = {
+  compacto: 0.86,
+  normal: 0.95,
+  grande: 1.05,
+};
+const densidadeAuto = (w: number): PdvDensityFixa =>
+  w < 1400 ? 'compacto' : w < 1650 ? 'normal' : 'grande';
+
+// Cores do split de pagamento (barra de progresso + bolinhas das formas).
+// Antes: ciano/violeta/azul/rosa/teal — paleta de outro sistema, que ainda
+// brigava com o verde do total. Agora segue a identidade do PDV: dourado
+// pros meios eletrônicos, verde SÓ pro dinheiro, neutros pro resto.
+const PAYMENT_COLORS: Record<string, string> = {
+  dinheiro: 'bg-[#2E7D46]',
+  pix: 'bg-[#D4AF37]',
+  credito: 'bg-[#8C7325]',
+  debito: 'bg-[#5B7C99]',
+  crediario: 'bg-[#64748B]',
+  vale_troca: 'bg-[#2F7A72]',
+};
+const paymentColor = (m?: string | null) => PAYMENT_COLORS[String(m || '').toLowerCase()] || 'bg-[#94A3B8]';
 
 const BANDEIRAS_DEBITO = ['REDESHOP', 'VISA ELECTRON', 'ELO'] as const;
 const BANDEIRAS_CREDITO = ['MASTERCARD', 'VISANET', 'CIELO', 'HIPERCARD', 'AMEX'] as const;
@@ -341,8 +387,29 @@ const ScanBar = forwardRef<ScanBarHandle, ScanBarProps>(function ScanBar(
   const [searchLoading, setSearchLoading] = useState(false);
   const [showResults, setShowResults] = useState(false);
   const [highlightedIdx, setHighlightedIdx] = useState(-1);
-  const [scanLoading, setScanLoading] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // ── FILA DE BIPAGEM ────────────────────────────────────────────────────
+  // ANTES: o campo ficava `disabled` enquanto o POST não voltava. O leitor de
+  // código de barras é MUITO mais rápido que a rede — bipar duas peças em
+  // sequência perdia a segunda (o campo estava desabilitado e as teclas caíam
+  // no vazio, sem erro nenhum na tela).
+  //
+  // AGORA: o campo NUNCA trava. Cada leitura entra numa fila serial
+  // (chainRef) — os POSTs continuam um de cada vez, na ordem, pra não haver
+  // corrida de duas respostas escrevendo a venda ao mesmo tempo. O contador
+  // `pending` só alimenta o spinner.
+  const [pending, setPending] = useState(0);
+  const scanLoading = pending > 0;
+  const chainRef = useRef<Promise<void>>(Promise.resolve());
+  // Callbacks sempre na versão mais recente: uma leitura enfileirada não pode
+  // devolver o resultado pro `sale` de dois bipes atrás.
+  const onScanResultRef = useRef(onScanResult);
+  const onErrorRef = useRef(onError);
+  useEffect(() => {
+    onScanResultRef.current = onScanResult;
+    onErrorRef.current = onError;
+  });
 
   useImperativeHandle(ref, () => ({
     focus: () => inputRef.current?.focus(),
@@ -396,68 +463,60 @@ const ScanBar = forwardRef<ScanBarHandle, ScanBarProps>(function ScanBar(
       await buscarRef();
       return;
     }
-    setScanLoading(true);
-    onError(null);
-    try {
-      const r = await api<any>(`/pdv/sales/${saleId}/items`, {
-        method: 'POST',
-        body: JSON.stringify({ skuOrEan: sku }),
-      });
-      // PERF: backend novo devolve a venda completa no POST — elimina o
-      // segundo GET. Fallback pro GET enquanto backend antigo estiver no ar.
-      const fresh: Sale = r?.sale || (await api<Sale>(`/pdv/sales/${saleId}`));
-      onScanResult(fresh);
-      setScanInput('');
-    } catch (e: any) {
-      const msg = String(e?.message || '');
-      // FALLBACK REF: código numérico não existe no Giga? Pode ser uma REF
-      // (digitada à mão) — busca a grade automaticamente antes de dar erro.
-      // Cobre qualquer numérico 3+ (não só 7+), já que agora o ENTER bipa
-      // código primeiro pra QUALQUER tamanho de número.
-      if (/^\d{3,}$/.test(sku) && /n[aã]o encontrado/i.test(msg)) {
-        setScanLoading(false);
-        await buscarRef();
-        return;
-      }
-      onError(msg || 'Erro ao bipar');
-    } finally {
-      setScanLoading(false);
-      setTimeout(() => {
-        if (inputRef.current) {
-          inputRef.current.focus();
-          inputRef.current.select();
-        }
-      }, 50);
-    }
+    // O campo é limpo AGORA, não quando a resposta chegar: a próxima peça já
+    // pode ser bipada em cima. A gravação segue na fila, em segundo plano.
+    setScanInput('');
+    enfileirarBipe(sku, buscarRef);
   };
 
-  // ── Adiciona peca direto por SKU (usado pelo dropdown de busca) ──
-  const addBySku = useCallback(async (sku: string) => {
+  /**
+   * Enfileira uma leitura. As gravações acontecem UMA DE CADA VEZ (na ordem
+   * em que a vendedora bipou), mas o campo continua livre o tempo todo.
+   */
+  const enfileirarBipe = useCallback((sku: string, aoNaoAchar?: () => Promise<void>) => {
     if (!saleId) return;
+    setPending((n) => n + 1);
+    onErrorRef.current(null);
+    chainRef.current = chainRef.current.then(async () => {
+      try {
+        const r = await api<any>(`/pdv/sales/${saleId}/items`, {
+          method: 'POST',
+          body: JSON.stringify({ skuOrEan: sku }),
+        });
+        // PERF: backend novo devolve a venda completa no POST — elimina o
+        // segundo GET. Fallback pro GET enquanto backend antigo estiver no ar.
+        const fresh: Sale = r?.sale || (await api<Sale>(`/pdv/sales/${saleId}`));
+        onScanResultRef.current(fresh);
+      } catch (e: any) {
+        const msg = String(e?.message || '');
+        // FALLBACK REF: código numérico não existe no Giga? Pode ser uma REF
+        // (digitada à mão) — busca a grade automaticamente antes de dar erro.
+        // Cobre qualquer numérico 3+ (não só 7+), já que agora o ENTER bipa
+        // código primeiro pra QUALQUER tamanho de número.
+        if (aoNaoAchar && /^\d{3,}$/.test(sku) && /n[aã]o encontrado/i.test(msg)) {
+          await aoNaoAchar();
+          return;
+        }
+        onErrorRef.current(msg || 'Erro ao bipar');
+      } finally {
+        setPending((n) => Math.max(0, n - 1));
+        setTimeout(() => {
+          if (inputRef.current) {
+            inputRef.current.focus();
+            inputRef.current.select();
+          }
+        }, 50);
+      }
+    });
+  }, [saleId]);
+
+  // ── Adiciona peca direto por SKU (usado pelo dropdown de busca) ──
+  const addBySku = useCallback((sku: string) => {
     setShowResults(false);
     setSearchResults([]);
-    setScanLoading(true);
-    onError(null);
-    try {
-      const r = await api<any>(`/pdv/sales/${saleId}/items`, {
-        method: 'POST',
-        body: JSON.stringify({ skuOrEan: sku }),
-      });
-      const fresh: Sale = r?.sale || (await api<Sale>(`/pdv/sales/${saleId}`));
-      onScanResult(fresh);
-      setScanInput('');
-    } catch (e: any) {
-      onError(e?.message || 'Erro ao adicionar');
-    } finally {
-      setScanLoading(false);
-      setTimeout(() => {
-        if (inputRef.current) {
-          inputRef.current.focus();
-          inputRef.current.select();
-        }
-      }, 50);
-    }
-  }, [saleId, onScanResult, onError]);
+    setScanInput('');
+    enfileirarBipe(sku);
+  }, [enfileirarBipe]);
 
   // ── Effect: busca inline com debounce ──
   // Se digitar texto (com letra), busca por descricao no Giga.
@@ -546,8 +605,9 @@ const ScanBar = forwardRef<ScanBarHandle, ScanBarProps>(function ScanBar(
             if (searchResults.length > 0) setShowResults(true);
           }}
           placeholder="Bipe o código, a REF ou o nome da peça"
-          disabled={scanLoading}
-          className="flex-1 min-w-0 px-1 py-2 text-base font-semibold border-0 focus:outline-none disabled:bg-slate-50 placeholder:text-slate-400 placeholder:font-normal text-slate-900"
+          /* Sem `disabled` de propósito: o leitor é mais rápido que a rede e a
+             peça bipada durante a gravação da anterior não pode se perder. */
+          className="flex-1 min-w-0 px-1 py-2 text-base font-semibold border-0 focus:outline-none placeholder:text-slate-400 placeholder:font-normal text-slate-900"
           autoComplete="off"
           autoCorrect="off"
           autoCapitalize="off"
@@ -567,9 +627,20 @@ const ScanBar = forwardRef<ScanBarHandle, ScanBarProps>(function ScanBar(
         >
           <Tag className="w-5 h-5" />
         </button>
+        {/* Quantas leituras ainda estão sendo gravadas. Só aparece quando
+            passa de uma — é o sinal de que a fila está trabalhando e nenhuma
+            peça se perdeu, mesmo com a internet lenta. */}
+        {pending > 1 && (
+          <span
+            className="shrink-0 text-[11px] font-black text-[#8C7325] bg-[#FBF6E6] border border-[#E4C968] rounded-full px-2 py-0.5 tabular-nums"
+            title={`${pending} leituras na fila de gravação`}
+          >
+            {pending} na fila
+          </span>
+        )}
         <button
           type="submit"
-          disabled={!scanInput || scanLoading}
+          disabled={!scanInput}
           className="w-11 h-11 text-white font-bold rounded-lg flex items-center justify-center disabled:opacity-40 transition shrink-0 hover:brightness-95"
           style={{ background: '#B8912B' }}
           title="Buscar / adicionar (Enter)"
@@ -682,14 +753,30 @@ function ConnBadge({ compact }: { compact?: boolean }) {
 
 /**
  * Rodapé fino de status (espec do layout claro): conexão + impressora térmica
- * configurada + ambiente. Fixed no fundo, altura mínima, só leitura.
+ * configurada + ambiente. Fixed no fundo, altura mínima.
+ *
+ * Também é onde mora o seletor de TAMANHO da tela (densidade) — preferência
+ * local deste computador. Ficou aqui, e não no header, porque o header já
+ * disputa espaço com 9 chips.
  */
-function StatusFooter() {
+function StatusFooter({
+  density,
+  onDensity,
+}: {
+  density: PdvDensity;
+  onDensity: (d: PdvDensity) => void;
+}) {
   const [printerName, setPrinterName] = useState<string | null>(null);
   useEffect(() => {
     try { setPrinterName(loadPrinterConfig().termica); } catch { setPrinterName(null); }
   }, []);
   const isProd = process.env.NODE_ENV === 'production';
+  const opcoes: Array<[PdvDensity, string]> = [
+    ['auto', 'Auto'],
+    ['compacto', 'Compacto'],
+    ['normal', 'Normal'],
+    ['grande', 'Grande'],
+  ];
   return (
     <footer className="fixed bottom-0 left-0 right-0 z-10 bg-white border-t border-[#EDEAE1]">
       <div className="max-w-[1700px] mx-auto px-5 h-9 flex items-center gap-6 text-[11px] font-semibold text-slate-500">
@@ -698,10 +785,33 @@ function StatusFooter() {
           <Printer className="w-3.5 h-3.5 text-slate-400" />
           {printerName || 'Impressora não configurada'}
         </span>
-        <span className="flex items-center gap-1.5 whitespace-nowrap">
+        <span className="hidden lg:flex items-center gap-1.5 whitespace-nowrap">
           <FileText className="w-3.5 h-3.5 text-slate-400" />
           Ambiente: {isProd ? 'Produção' : 'Desenvolvimento'}
         </span>
+        <div className="ml-auto hidden lg:flex items-center gap-1">
+          <span className="text-slate-400 whitespace-nowrap">Tamanho da tela</span>
+          {opcoes.map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => onDensity(id)}
+              aria-pressed={density === id}
+              className={`px-2 py-0.5 rounded border transition whitespace-nowrap ${
+                density === id
+                  ? 'border-[#CDA434] bg-[#FBF6E6] text-[#8C7325]'
+                  : 'border-transparent hover:border-slate-200 hover:text-slate-700'
+              }`}
+              title={
+                id === 'auto'
+                  ? 'Ajusta sozinho pelo tamanho do monitor'
+                  : `Fixa o tamanho em ${label.toLowerCase()} neste computador`
+              }
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
     </footer>
   );
@@ -822,23 +932,42 @@ function PdvPageInner() {
   // é retomado automaticamente com os mesmos argumentos.
   const pendingFinalizeRef = useRef<{ paymentMethod: string; paymentDetails?: any } | null>(null);
 
-  // ── AUTO-FIT: escala a UI inteira pro tamanho do monitor ──
-  // Design-base: 1700px de largura. Monitor menor → zoom proporcional menor
-  // (1366px → ~0.80); maior → até 1.1. Sem config por loja, recalcula em
-  // resize. Abaixo de 1024px (tablet/celular) não aplica — breakpoints
-  // responsivos do Tailwind assumem.
+  // ── DENSIDADE DA TELA (era AUTO-FIT contínuo) ──────────────────────────
+  // ANTES: zoom proporcional livre (w / 1700, piso 0.7). Num monitor de
+  // 1366px isso dava 0.80 e o texto de 13px chegava aos olhos como 10px —
+  // e ninguém na loja tinha como corrigir.
+  //
+  // AGORA: 3 tamanhos fixos (compacto/normal/grande) com piso bem mais alto,
+  // escolhidos automaticamente pelo monitor OU fixados pela loja no rodapé.
+  // O CSS `.pdv-dense-compacto` (globals.css) ainda levanta os textos
+  // menores (9/10/11px) pra que nada fique abaixo do legível.
+  const [density, setDensity] = useState<PdvDensity>('auto');
+  // Densidade REAL em uso (resolve o 'auto' pelo monitor). Vive em state pra
+  // não ler window durante o render — isso quebraria a hidratação do Next.
+  const [densityUsada, setDensityUsada] = useState<PdvDensityFixa>('grande');
   const [uiZoom, setUiZoom] = useState(1);
+  useEffect(() => {
+    try {
+      const salvo = localStorage.getItem(PDV_DENSITY_KEY) as PdvDensity | null;
+      if (salvo && (salvo === 'auto' || DENSITY_ZOOM[salvo as PdvDensityFixa])) setDensity(salvo);
+    } catch { /* preferência local — sem ela segue em auto */ }
+  }, []);
   useEffect(() => {
     const calcZoom = () => {
       const w = window.innerWidth;
-      if (w < 1024) { setUiZoom(1); return; }
-      const z = Math.min(1.1, Math.max(0.7, w / 1700));
-      setUiZoom(Math.round(z * 100) / 100);
+      const efetiva = density === 'auto' ? densidadeAuto(w) : density;
+      setDensityUsada(efetiva);
+      // Celular/tablet seguem os breakpoints responsivos do Tailwind.
+      setUiZoom(w < 1024 ? 1 : DENSITY_ZOOM[efetiva]);
     };
     calcZoom();
     window.addEventListener('resize', calcZoom);
     return () => window.removeEventListener('resize', calcZoom);
-  }, []);
+  }, [density]);
+  const applyDensity = (d: PdvDensity) => {
+    setDensity(d);
+    try { localStorage.setItem(PDV_DENSITY_KEY, d); } catch { /* noop */ }
+  };
 
   const [showCustomer, setShowCustomer] = useState(false);
   const [showVendedora, setShowVendedora] = useState(false);
@@ -1019,6 +1148,12 @@ function PdvPageInner() {
     }
   };
 
+  // ── Fotos do carrinho: UM pedido em lote, não um por peça ──
+  useEffect(() => {
+    const skus = (sale?.items || []).map((i) => i.sku).filter(Boolean);
+    if (skus.length) void prefetchProductImages(skus);
+  }, [sale?.items]);
+
   // ── Foco automático ──
   useEffect(() => {
     if (!sale || sale.status !== 'open') return;
@@ -1035,13 +1170,36 @@ function PdvPageInner() {
   // finalizeSale), com retomada automática após escolher. Bipagem e
   // pagamento fluem sem interrupção pra liberar a cliente mais rápido.
 
-  // Listener global: qualquer tecla redireciona pro input + atalhos PDV
+  // ── Listener global de teclado (atalhos + foco automático) ─────────────
+  // ANTES: `sale` estava nas deps, então o listener era REMOVIDO e RECRIADO a
+  // cada bipe, a cada +/− de quantidade, a cada desconto. Em PC fraco de loja
+  // isso engasgava justamente no momento de maior digitação.
+  //
+  // AGORA: registra UMA vez e lê o estado atual por ref. O ref é atualizado a
+  // cada render (logo abaixo), então o handler nunca vê estado velho.
+  const kbdRef = useRef({
+    sale, showCustomer, showPayment, showFinalized, showVendedora,
+    showConfirmSale, showDiscount, showShortcuts,
+  });
+  kbdRef.current = {
+    sale, showCustomer, showPayment, showFinalized, showVendedora,
+    showConfirmSale, showDiscount, showShortcuts,
+  };
+  // `removeItem` é declarada mais abaixo — guardar por effect (que roda DEPOIS
+  // do render) evita o erro de usar a const antes da declaração.
+  const removeItemRef = useRef<(itemId: string) => void>(() => {});
+  useEffect(() => { removeItemRef.current = removeItem; });
   useEffect(() => {
-    if (!sale || sale.status !== 'open') return;
-    const anyModal =
-      showCustomer || showPayment || showFinalized || showVendedora || showConfirmSale ||
-      !!showDiscount || showShortcuts;
     const handler = (e: KeyboardEvent) => {
+      const {
+        sale, showCustomer, showPayment, showFinalized, showVendedora,
+        showConfirmSale, showDiscount, showShortcuts,
+      } = kbdRef.current;
+      const removeItem = removeItemRef.current;
+      if (!sale || sale.status !== 'open') return;
+      const anyModal =
+        showCustomer || showPayment || showFinalized || showVendedora || showConfirmSale ||
+        !!showDiscount || showShortcuts;
       // ── PDV2: Esc fecha modais — roda ANTES do early-return de modal
       // (no PDV v1 o listener inteiro era desativado com modal aberto) ──
       if (e.key === 'Escape') {
@@ -1170,12 +1328,11 @@ function PdvPageInner() {
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-    // PDV2: removeItem fica fora das deps de propósito — é recriada a cada
-    // render e o handler já é re-registrado quando `sale` muda (captura fresca).
-    // PERF: `scanInput` saiu das deps — o valor digitado agora vive na ScanBar,
-    // então o listener NÃO é mais re-registrado a cada tecla.
+    // Deps VAZIAS de propósito: tudo que o handler precisa vem de kbdRef,
+    // que é reatribuído a cada render. Assim o listener é registrado uma
+    // única vez na vida da tela.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sale, showCustomer, showPayment, showFinalized, showVendedora, showConfirmSale, showDiscount, showShortcuts]);
+  }, []);
 
   // ── PDV2: marca o item recém-adicionado pra dar flash verde (~600ms) ──
   // Detecta por diff: item NOVO (id que não existia) ou qty incrementada.
@@ -1222,11 +1379,11 @@ function PdvPageInner() {
       }
     }
     try {
-      await api(`/pdv/sales/${sale.id}/items/${itemId}`, {
+      const r = await api<any>(`/pdv/sales/${sale.id}/items/${itemId}`, {
         method: 'PATCH',
         body: JSON.stringify({ ...patch, password, motivo }),
       });
-      const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
+      const fresh = await saleFromResponse(r, sale.id);
       setSale(fresh);
       // Feedback explícito quando aplica desconto manual
       if (patch.desconto != null) {
@@ -1271,11 +1428,11 @@ function PdvPageInner() {
   const setPromotion = async (promotion: string | null) => {
     if (!sale) return;
     try {
-      await api(`/pdv/sales/${sale.id}/promotion`, {
+      const r = await api<any>(`/pdv/sales/${sale.id}/promotion`, {
         method: 'PATCH',
         body: JSON.stringify({ promotion }),
       });
-      const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
+      const fresh = await saleFromResponse(r, sale.id);
       setSale(fresh);
     } catch (e: any) {
       const h = humanizeError(e);
@@ -1312,11 +1469,11 @@ function PdvPageInner() {
       }
     }
     try {
-      await api(`/pdv/sales/${sale.id}/discount`, {
+      const r = await api<any>(`/pdv/sales/${sale.id}/discount`, {
         method: 'PATCH',
         body: JSON.stringify({ desconto, password, motivo }),
       });
-      const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
+      const fresh = await saleFromResponse(r, sale.id);
       setSale(fresh);
       if (desconto > 0) {
         toast('success', `Desconto da venda · ${brl(desconto)}`, `Total: ${brl(fresh.total)}`);
@@ -1336,10 +1493,10 @@ function PdvPageInner() {
     if (!sale) return;
     setRecalculando(true);
     try {
-      const r = await api<{ atualizados: number }>(`/pdv/sales/${sale.id}/recalcular-precos`, {
+      const r = await api<{ atualizados: number; sale?: Sale }>(`/pdv/sales/${sale.id}/recalcular-precos`, {
         method: 'POST',
       });
-      const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
+      const fresh = await saleFromResponse(r, sale.id);
       setSale(fresh);
       if (r.atualizados > 0) {
         toast('success', `${r.atualizados} preço(s) atualizado(s)`, `Total: ${brl(fresh.total)}`);
@@ -1510,8 +1667,8 @@ function PdvPageInner() {
   const removeItem = async (itemId: string) => {
     if (!sale) return;
     try {
-      await api(`/pdv/sales/${sale.id}/items/${itemId}`, { method: 'DELETE' });
-      const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
+      const r = await api<any>(`/pdv/sales/${sale.id}/items/${itemId}`, { method: 'DELETE' });
+      const fresh = await saleFromResponse(r, sale.id);
       setSale(fresh);
     } catch (e: any) {
       const h = humanizeError(e);
@@ -1838,7 +1995,7 @@ function PdvPageInner() {
 
   return (
     <div
-      className={`pdv1-skin ${nightMode ? 'pdv-night' : ''} min-h-screen flex flex-col`}
+      className={`pdv1-skin pdv-dense-${densityUsada} ${nightMode ? 'pdv-night' : ''} min-h-screen flex flex-col`}
       style={{
         background: nightMode ? '#0B1120' : '#FAFAF7',
         zoom: uiZoom,
@@ -2301,8 +2458,8 @@ function PdvPageInner() {
                       onClick={async () => {
                         if (!confirm(`Remover vale-troca ${code}?\n\nO codigo TROCA volta a ficar disponivel.`)) return;
                         try {
-                          await api(`/pdv/sales/${sale.id}/payments/${p.id}`, { method: 'DELETE' });
-                          const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
+                          const r = await api<any>(`/pdv/sales/${sale.id}/payments/${p.id}`, { method: 'DELETE' });
+                          const fresh = await saleFromResponse(r, sale.id);
                           setSale(fresh);
                           toast('success', 'Vale-troca removido', code);
                         } catch (e: any) {
@@ -2381,10 +2538,10 @@ function PdvPageInner() {
                     <button
                       onClick={() => { if (it.qty > 1) updateItem(it.id, { qty: it.qty - 1 }); }}
                       disabled={sale.status !== 'open' || it.qty <= 1}
-                      className="w-7 h-7 rounded-md border border-[#E5E2D9] bg-white text-slate-500 hover:bg-[#FAF6E8] hover:text-[#8C7325] flex items-center justify-center transition active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed"
+                      className="w-9 h-9 rounded-md border border-[#E5E2D9] bg-white text-slate-500 hover:bg-[#FAF6E8] hover:text-[#8C7325] flex items-center justify-center transition active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed"
                       title="Diminuir quantidade"
                     >
-                      <Minus className="w-3.5 h-3.5" />
+                      <Minus className="w-4 h-4" />
                     </button>
                     <input
                       type="number"
@@ -2398,15 +2555,15 @@ function PdvPageInner() {
                         }
                       }}
                       disabled={sale.status !== 'open'}
-                      className="w-9 h-7 text-center font-bold tabular-nums text-sm text-slate-900 border-0 bg-transparent focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 rounded disabled:opacity-60 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                      className="w-10 h-9 text-center font-bold tabular-nums text-sm text-slate-900 border-0 bg-transparent focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 rounded disabled:opacity-60 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                     />
                     <button
                       onClick={() => { if (it.qty < 99) updateItem(it.id, { qty: it.qty + 1 }); }}
                       disabled={sale.status !== 'open' || it.qty >= 99}
-                      className="w-7 h-7 rounded-md border border-[#E5E2D9] bg-white text-slate-500 hover:bg-[#FAF6E8] hover:text-[#8C7325] flex items-center justify-center transition active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed"
+                      className="w-9 h-9 rounded-md border border-[#E5E2D9] bg-white text-slate-500 hover:bg-[#FAF6E8] hover:text-[#8C7325] flex items-center justify-center transition active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed"
                       title="Aumentar quantidade"
                     >
-                      <Plus className="w-3.5 h-3.5" />
+                      <Plus className="w-4 h-4" />
                     </button>
                   </div>
 
@@ -2425,7 +2582,7 @@ function PdvPageInner() {
                         onClick={() =>
                           setShowDiscount({ kind: 'item', itemId: it.id, bruto, atual: it.desconto || 0 })
                         }
-                        className={`w-6 h-6 rounded flex items-center justify-center transition active:scale-95 ${
+                        className={`w-9 h-9 rounded-lg flex items-center justify-center transition active:scale-95 ${
                           it.desconto > 0 && it.promoTag === 'MANUAL'
                             ? 'bg-amber-500 text-white hover:bg-amber-600'
                             : 'text-slate-300 hover:text-amber-600 hover:bg-amber-50'
@@ -2436,7 +2593,7 @@ function PdvPageInner() {
                             : 'Aplicar desconto neste item (% ou R$)'
                         }
                       >
-                        <Percent className="w-3.5 h-3.5" />
+                        <Percent className="w-4 h-4" />
                       </button>
                       {/* Botão de PROMOÇÃO por item (campanha ativa). Um só botão,
                           conforme o estado:
@@ -2454,7 +2611,7 @@ function PdvPageInner() {
                           return (
                             <button
                               onClick={() => updateItem(it.id, { excludePromo: false })}
-                              className="w-6 h-6 rounded flex items-center justify-center text-[11px] leading-none transition active:scale-95 bg-emerald-100 text-emerald-700 hover:bg-emerald-200"
+                              className="w-9 h-9 rounded-lg flex items-center justify-center text-[15px] leading-none transition active:scale-95 bg-emerald-100 text-emerald-700 hover:bg-emerald-200"
                               title="Incluir este item na promoção (volta ao automático)"
                             >🎁</button>
                           );
@@ -2463,7 +2620,7 @@ function PdvPageInner() {
                           return (
                             <button
                               onClick={() => updateItem(it.id, { forcePromo: false })}
-                              className="w-6 h-6 rounded flex items-center justify-center text-[11px] leading-none transition active:scale-95 bg-blue-600 text-white hover:bg-blue-700"
+                              className="w-9 h-9 rounded-lg flex items-center justify-center text-[15px] leading-none transition active:scale-95 bg-blue-600 text-white hover:bg-blue-700"
                               title="Tirar da promoção forçada (volta a básico)"
                             >⬇️</button>
                           );
@@ -2472,7 +2629,7 @@ function PdvPageInner() {
                           return (
                             <button
                               onClick={() => updateItem(it.id, { forcePromo: true })}
-                              className="w-6 h-6 rounded flex items-center justify-center text-[11px] leading-none transition active:scale-95 bg-blue-100 text-blue-700 hover:bg-blue-200"
+                              className="w-9 h-9 rounded-lg flex items-center justify-center text-[15px] leading-none transition active:scale-95 bg-blue-100 text-blue-700 hover:bg-blue-200"
                               title="Colocar este item na promoção (aplica o desconto mesmo sendo básico)"
                             >⬆️</button>
                           );
@@ -2481,7 +2638,7 @@ function PdvPageInner() {
                           return (
                             <button
                               onClick={() => updateItem(it.id, { excludePromo: true })}
-                              className="w-6 h-6 rounded flex items-center justify-center text-[11px] leading-none transition active:scale-95 bg-slate-200 text-slate-700 hover:bg-slate-300"
+                              className="w-9 h-9 rounded-lg flex items-center justify-center text-[15px] leading-none transition active:scale-95 bg-slate-200 text-slate-700 hover:bg-slate-300"
                               title="Tirar este item da promoção (não participa)"
                             >🚫</button>
                           );
@@ -2490,10 +2647,10 @@ function PdvPageInner() {
                       })()}
                       <button
                         onClick={() => removeItem(it.id)}
-                        className="w-6 h-6 rounded text-slate-300 hover:text-rose-600 hover:bg-rose-50 flex items-center justify-center transition active:scale-95"
+                        className="w-9 h-9 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 flex items-center justify-center transition active:scale-95"
                         title="Remover item"
                       >
-                        <Trash2 className="w-3.5 h-3.5" />
+                        <Trash2 className="w-4 h-4" />
                       </button>
                     </div>
                   ) : <div />}
@@ -2792,7 +2949,7 @@ function PdvPageInner() {
               <button
                 onClick={() => finalizeSale('')}
                 disabled={finalizing}
-                className={`w-full py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-black rounded-xl flex items-center justify-center gap-2 text-base shadow-md ${trocaParZero ? '' : 'ring-4 ring-emerald-300/60 animate-pulse'}`}
+                className={`w-full py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-black rounded-xl flex items-center justify-center gap-2 text-base shadow-md ${trocaParZero ? '' : 'ring-4 ring-emerald-300/60 pdv-cta-attention'}`}
                 title={trocaParZero ? 'Troca par sem diferença — clique pra finalizar' : 'Venda já está 100% paga (vale-troca cobriu tudo). Clique pra finalizar.'}
               >
                 {finalizing ? <Loader2 className="w-5 h-5 animate-spin" /> : <Check className="w-5 h-5" />}
@@ -2847,7 +3004,7 @@ function PdvPageInner() {
                   }
                 }}
                 disabled={finalizing}
-                className="w-full py-3 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white font-black rounded-xl flex items-center justify-center gap-2 text-base shadow-md ring-4 ring-rose-300/60 animate-pulse"
+                className="w-full py-3 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white font-black rounded-xl flex items-center justify-center gap-2 text-base shadow-md ring-4 ring-rose-300/60 pdv-cta-attention"
                 title={`Cria vale de R$ ${valorResidual.toFixed(2)} pra cliente usar depois`}
               >
                 <span>💰</span>
@@ -2921,7 +3078,7 @@ function PdvPageInner() {
       </div>
 
       {/* Rodapé fino de status — conexão / impressora / ambiente (espec) */}
-      <StatusFooter />
+      <StatusFooter density={density} onDensity={applyDensity} />
 
       {/* Modal Cliente */}
       {showCustomer && sale && (
@@ -3064,7 +3221,7 @@ function PdvPageInner() {
                               #{p.saleCode}
                             </span>
                             {isPaid && (
-                              <span className="bg-emerald-500 text-white text-[10px] font-black px-2 py-0.5 rounded animate-pulse">
+                              <span className="bg-emerald-600 text-white text-[10px] font-black px-2 py-0.5 rounded">
                                 ✓ PAGO
                               </span>
                             )}
@@ -5591,15 +5748,7 @@ function PaymentModal({
           <div className="h-2.5 bg-slate-200 rounded-full overflow-hidden flex">
             {payments.map((p, i) => {
               const pct = (p.valor / total) * 100;
-              const colorMap: Record<string, string> = {
-                dinheiro: 'bg-emerald-500',
-                pix: 'bg-cyan-500',
-                credito: 'bg-violet-500',
-                debito: 'bg-blue-500',
-                crediario: 'bg-rose-500',
-                vale_troca: 'bg-teal-500',
-              };
-              const cor = colorMap[p.method?.toLowerCase()] || 'bg-slate-500';
+              const cor = paymentColor(p.method);
               return (
                 <div
                   key={p.id || i}
@@ -5641,15 +5790,7 @@ function PaymentModal({
             </div>
             {payments.map((p) => {
               const det = p.details ? JSON.parse(p.details) : {};
-              const colorMap: Record<string, string> = {
-                dinheiro: 'bg-emerald-500',
-                pix: 'bg-cyan-500',
-                credito: 'bg-violet-500',
-                debito: 'bg-blue-500',
-                crediario: 'bg-rose-500',
-                vale_troca: 'bg-teal-500',
-              };
-              const cor = colorMap[p.method?.toLowerCase()] || 'bg-slate-500';
+              const cor = paymentColor(p.method);
               const label = p.method === 'MULTIPLO' ? 'Múltiplo' : (p.method || '').toUpperCase();
               return (
                 <div
@@ -6192,7 +6333,7 @@ function PaymentModal({
                     <div className="flex items-center gap-1.5 text-[10px] font-bold text-violet-700">
                       <span>🔗 LINK GERADO · 24h</span>
                       {pagarmeLinkPaid && (
-                        <span className="bg-emerald-500 text-white px-1.5 py-0.5 rounded animate-pulse">✓ PAGO</span>
+                        <span className="bg-emerald-600 text-white px-1.5 py-0.5 rounded">✓ PAGO</span>
                       )}
                     </div>
                     <div className="bg-white border border-violet-300 rounded px-2 py-1 font-mono text-[10px] text-violet-900 truncate">
@@ -6766,7 +6907,7 @@ function PaymentModal({
                     <span
                       className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full flex items-center gap-1 ${
                         pixPaid
-                          ? 'bg-emerald-600 text-white animate-pulse'
+                          ? 'bg-emerald-600 text-white'
                           : 'bg-amber-100 text-amber-800'
                       }`}
                     >
@@ -6922,7 +7063,7 @@ function PaymentModal({
             <button
               onClick={() => onConfirm('', undefined)}
               disabled={finalizing}
-              className="w-full px-3 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded text-base disabled:opacity-40 flex items-center justify-center gap-2 animate-pulse"
+              className="w-full px-3 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-base disabled:opacity-40 flex items-center justify-center gap-2 ring-4 ring-emerald-300/60 pdv-cta-attention"
             >
               {finalizing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-5 h-5" />}
               {finalizing ? 'Finalizando...' : 'Finalizar venda'}
@@ -8420,142 +8561,6 @@ function StoreSummaryModal({
   );
 }
 
-
-// ── EMPTY CART DASHBOARD ──────────────────────────────────────────────
-// Quando o carrinho está vazio, em vez de mostrar só "Carrinho vazio",
-// exibe um dashboard bonito com atalhos grandes touch-friendly e dicas
-// pra vendedora bater o olho e saber o que fazer.
-function EmptyCartDashboard({ onPixAvulso }: { onPixAvulso: () => void }) {
-  return (
-    <div className="space-y-3">
-      {/* Hero card — call to action principal */}
-      <div className="relative overflow-hidden bg-gradient-to-br from-rose-500 via-pink-500 to-fuchsia-600 rounded-2xl p-5 shadow-xl shadow-rose-300/40">
-        {/* Padrão decorativo */}
-        <div className="absolute -right-10 -top-10 w-40 h-40 bg-white/10 rounded-full blur-3xl pointer-events-none" />
-        <div className="absolute -left-8 -bottom-8 w-32 h-32 bg-white/10 rounded-full blur-2xl pointer-events-none" />
-        <div className="relative flex items-center gap-4">
-          <div className="w-16 h-16 rounded-2xl bg-white/20 backdrop-blur flex items-center justify-center shrink-0 ring-2 ring-white/30">
-            <Barcode className="w-9 h-9 text-white" strokeWidth={2.5} />
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="text-white font-black text-xl leading-tight">Pronto pra vender</div>
-            <div className="text-white/90 text-sm font-medium">
-              Bipe um produto acima ou use os atalhos abaixo
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Grid 2×2 de atalhos GRANDES touch-friendly */}
-      <div className="grid grid-cols-2 gap-3">
-        <BigQuickAction
-          onClick={onPixAvulso}
-          icon={<DollarSign className="w-8 h-8" strokeWidth={2.5} />}
-          label="PIX RÁPIDO"
-          sub="Cobrança avulsa"
-          fromColor="from-emerald-500"
-          toColor="to-teal-600"
-          shadowColor="shadow-emerald-300/50"
-        />
-        <BigQuickActionLink
-          href="/minha-loja/consultar"
-          icon={<Search className="w-8 h-8" strokeWidth={2.5} />}
-          label="CONSULTAR"
-          sub="Estoque rede"
-          fromColor="from-sky-500"
-          toColor="to-blue-600"
-          shadowColor="shadow-sky-300/50"
-        />
-        <BigQuickActionLink
-          href="/minha-loja/pdv/recebimentos"
-          icon={<Receipt className="w-8 h-8" strokeWidth={2.5} />}
-          label="RECEBIMENTOS"
-          sub="Crediário"
-          fromColor="from-rose-500"
-          toColor="to-pink-600"
-          shadowColor="shadow-rose-300/50"
-        />
-        <BigQuickActionLink
-          href="/minha-loja/pdv/caixa"
-          icon={<DollarSign className="w-8 h-8" strokeWidth={2.5} />}
-          label="CAIXA"
-          sub="Sangria · Z"
-          fromColor="from-amber-500"
-          toColor="to-orange-600"
-          shadowColor="shadow-amber-300/50"
-        />
-      </div>
-
-      {/* Dica de fluxo */}
-      <div className="bg-white border border-slate-200 rounded-xl p-3 flex items-center gap-3">
-        <div className="w-10 h-10 rounded-full bg-violet-100 text-violet-600 flex items-center justify-center shrink-0">
-          <Sparkles className="w-5 h-5" />
-        </div>
-        <div className="text-xs text-slate-600 leading-snug">
-          <span className="font-bold text-slate-800">Dica:</span> também dá pra
-          buscar pela <span className="font-mono font-bold">REF</span> ou{' '}
-          <span className="font-mono font-bold">EAN</span> no campo acima — o
-          sistema reconhece automaticamente.
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function BigQuickAction({
-  onClick, icon, label, sub, fromColor, toColor, shadowColor,
-}: {
-  onClick: () => void;
-  icon: React.ReactNode;
-  label: string;
-  sub: string;
-  fromColor: string;
-  toColor: string;
-  shadowColor: string;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={`bg-gradient-to-br ${fromColor} ${toColor} hover:brightness-110 active:brightness-95 text-white rounded-2xl p-4 flex flex-col items-start gap-2 transition shadow-lg ${shadowColor} hover:shadow-xl hover:-translate-y-0.5 ring-1 ring-white/20`}
-    >
-      <div className="w-12 h-12 rounded-xl bg-white/20 backdrop-blur flex items-center justify-center">
-        {icon}
-      </div>
-      <div className="text-left">
-        <div className="text-base font-black uppercase tracking-tight leading-none">{label}</div>
-        <div className="text-xs opacity-90 font-semibold mt-1">{sub}</div>
-      </div>
-    </button>
-  );
-}
-
-function BigQuickActionLink({
-  href, icon, label, sub, fromColor, toColor, shadowColor,
-}: {
-  href: string;
-  icon: React.ReactNode;
-  label: string;
-  sub: string;
-  fromColor: string;
-  toColor: string;
-  shadowColor: string;
-}) {
-  return (
-    <Link
-      href={href}
-      className={`bg-gradient-to-br ${fromColor} ${toColor} hover:brightness-110 active:brightness-95 text-white rounded-2xl p-4 flex flex-col items-start gap-2 transition shadow-lg ${shadowColor} hover:shadow-xl hover:-translate-y-0.5 ring-1 ring-white/20`}
-    >
-      <div className="w-12 h-12 rounded-xl bg-white/20 backdrop-blur flex items-center justify-center">
-        {icon}
-      </div>
-      <div className="text-left">
-        <div className="text-base font-black uppercase tracking-tight leading-none">{label}</div>
-        <div className="text-xs opacity-90 font-semibold mt-1">{sub}</div>
-      </div>
-    </Link>
-  );
-}
-
 // ── PIX AVULSO MODAL ──────────────────────────────────────────────────
 // Cobrança PIX rápida da venda atual. Gera QR via Pagar.me/Stone e faz
 // polling no /pagarme/pix/status/:saleId pra detectar pagamento confirmado
@@ -8773,187 +8778,6 @@ function PixAvulsoModal({
   );
 }
 
-// ── STATS BAR ──────────────────────────────────────────────────────────
-// Linha compacta de métricas do dia: vendas finalizadas, total vendido,
-// ticket médio. Sempre visível abaixo do header. Recarrega quando a
-// venda muda (ex: pós-finalização aparece nova métrica em segundos).
-function StatsBar({ storeCode, salesVersion }: { storeCode?: string; salesVersion?: string }) {
-  const [stats, setStats] = useState<{ count: number; total: number; ticketMedio: number } | null>(null);
-  useEffect(() => {
-    if (!storeCode) return;
-    let cancel = false;
-    api<{ count: number; total: number; ticketMedio: number }>(
-      `/pdv/stats/today?storeCode=${encodeURIComponent(storeCode)}`,
-    )
-      .then((d) => { if (!cancel) setStats(d); })
-      .catch(() => { /* silencioso — não polui UI por stat não carregar */ });
-    return () => { cancel = true; };
-  }, [storeCode, salesVersion]);
-
-  if (!storeCode) return null;
-  return (
-    <div className="max-w-3xl mx-auto px-4 pb-2">
-      <div className="flex gap-2 text-[11px]">
-        <div className="flex-1 bg-white border border-slate-200 rounded-lg px-3 py-1.5 flex items-center gap-2">
-          <div className="w-6 h-6 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0">
-            <Check className="w-3.5 h-3.5" />
-          </div>
-          <div className="min-w-0">
-            <div className="text-[9px] uppercase font-bold text-slate-500 leading-none">Vendas hoje</div>
-            <div className="text-base font-black text-slate-900 leading-tight tabular-nums">
-              {stats?.count ?? '—'}
-            </div>
-          </div>
-        </div>
-        <div className="flex-1 bg-white border border-slate-200 rounded-lg px-3 py-1.5 flex items-center gap-2">
-          <div className="w-6 h-6 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center shrink-0">
-            <DollarSign className="w-3.5 h-3.5" />
-          </div>
-          <div className="min-w-0">
-            <div className="text-[9px] uppercase font-bold text-slate-500 leading-none">Total</div>
-            <div className="text-base font-black text-rose-700 leading-tight tabular-nums truncate">
-              {stats ? brl(stats.total) : '—'}
-            </div>
-          </div>
-        </div>
-        <div className="flex-1 bg-white border border-slate-200 rounded-lg px-3 py-1.5 flex items-center gap-2">
-          <div className="w-6 h-6 rounded-full bg-violet-100 text-violet-600 flex items-center justify-center shrink-0">
-            <Sparkles className="w-3.5 h-3.5" />
-          </div>
-          <div className="min-w-0">
-            <div className="text-[9px] uppercase font-bold text-slate-500 leading-none">Ticket médio</div>
-            <div className="text-base font-black text-violet-700 leading-tight tabular-nums truncate">
-              {stats && stats.count > 0 ? brl(stats.ticketMedio) : '—'}
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── SHORTCUT PILL: atalho colorido grande do header do PDV ───────────
-function ShortcutPill({
-  href,
-  icon,
-  label,
-  sub,
-  gradient,
-  border,
-  text,
-  iconBg,
-}: {
-  href: string;
-  icon: React.ReactNode;
-  label: string;
-  sub: string;
-  gradient: string;
-  border: string;
-  text: string;
-  iconBg: string;
-}) {
-  return (
-    <Link
-      href={href}
-      className={`bg-gradient-to-br ${gradient} hover:brightness-105 border ${border} ${text} rounded-2xl p-2.5 flex flex-col items-center gap-1 transition shadow-sm hover:shadow-md group`}
-    >
-      <div className={`w-9 h-9 rounded-full ${iconBg} text-white flex items-center justify-center shadow-md group-hover:scale-110 transition-transform`}>
-        {icon}
-      </div>
-      <div className="text-center leading-tight">
-        <div className="text-[11px] font-black uppercase tracking-wide">{label}</div>
-        <div className="text-[9px] opacity-70 font-semibold">{sub}</div>
-      </div>
-    </Link>
-  );
-}
-
-// ── PDV SIDEBAR CARD ──────────────────────────────────────────────────
-// Card vertical da sidebar do PDV. Segue exatamente a paleta HUB_TONES
-// (mesmas cores do /site, /loja, /retaguarda, /config) pra manter o sistema
-// visualmente unificado. Suporta Link OU button (onClick), badge e pulse.
-function PdvSidebarCard({
-  tone,
-  href,
-  onClick,
-  disabled,
-  icon: Icon,
-  subtitle,
-  label,
-  description,
-  badge,
-  pulse,
-  compact,
-}: {
-  tone: HubTone;
-  href?: string;
-  onClick?: () => void;
-  disabled?: boolean;
-  icon: LucideIcon;
-  subtitle?: string;
-  label: string;
-  description?: string;
-  badge?: number;
-  pulse?: boolean;
-  /** Compact: layout horizontal (icon esquerda, label direita) — pra ações secundárias */
-  compact?: boolean;
-}) {
-  const t = HUB_TONES[tone];
-  const baseClass = `relative overflow-hidden rounded-xl text-white shadow-sm hover:shadow-md hover:-translate-y-0.5 active:translate-y-0 transition disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:translate-y-0 ${
-    pulse ? 'ring-2 ring-rose-300 animate-pulse' : ''
-  }`;
-  const style = { background: `linear-gradient(135deg, ${t.from} 0%, ${t.to} 100%)` };
-
-  const inner = compact ? (
-    // Compact: horizontal — ícone esquerda, label direita
-    <div className="px-3 py-2.5 flex items-center gap-2.5">
-      <Icon className="w-4 h-4 opacity-90 shrink-0" strokeWidth={2} />
-      <span className="text-sm font-bold leading-none">{label}</span>
-      {badge && badge > 0 && (
-        <span className="ml-auto bg-white/95 text-slate-900 text-[10px] font-black rounded-full min-w-[20px] h-[20px] flex items-center justify-center px-1.5 shadow">
-          {badge}
-        </span>
-      )}
-    </div>
-  ) : (
-    // Default: vertical estilo HubCard — icon top, subtitle, label, description
-    <div className="px-3.5 py-3 flex flex-col gap-1">
-      <div
-        className="absolute -top-6 -right-6 w-20 h-20 rounded-full opacity-15 pointer-events-none"
-        style={{ background: 'radial-gradient(circle, white 0%, transparent 70%)' }}
-      />
-      <Icon className="w-5 h-5 opacity-90 relative" strokeWidth={1.7} />
-      {subtitle && (
-        <div className="text-[10px] font-bold tracking-wider uppercase opacity-90 relative">
-          {subtitle}
-        </div>
-      )}
-      <div className="text-base font-black leading-tight relative">{label}</div>
-      {description && (
-        <div className="text-[10px] opacity-85 leading-snug relative tabular-nums">{description}</div>
-      )}
-      {badge && badge > 0 && (
-        <span className="absolute top-1.5 right-1.5 bg-white text-slate-900 text-[10px] font-black rounded-full min-w-[20px] h-[20px] flex items-center justify-center px-1.5 shadow">
-          {badge}
-        </span>
-      )}
-    </div>
-  );
-
-  if (href) {
-    return (
-      <Link href={href} className={baseClass} style={style}>
-        {inner}
-      </Link>
-    );
-  }
-  return (
-    <button type="button" onClick={onClick} disabled={disabled} className={`${baseClass} text-left w-full`} style={style}>
-      {inner}
-    </button>
-  );
-}
-
 // ── PDV MOBILE PILL ───────────────────────────────────────────────────
 // Pílula compacta horizontal da bottom bar mobile. Usada no scroll
 // horizontal acima do footer em telas pequenas (<lg).
@@ -8995,37 +8819,53 @@ function PdvMobilePill({
 }
 
 // ── PRODUCT THUMB ─────────────────────────────────────────────────────
-// Thumbnail do produto no carrinho do PDV. Busca a foto no WooCommerce
-// via /pdv/product-image?sku=X (cache 1h no backend). Enquanto carrega,
-// mostra avatar com inicial da REF. Se WC não tem foto, mantém o avatar.
+// Thumbnail do produto no carrinho do PDV (foto do WooCommerce).
+//
+// ANTES: CADA miniatura abria a sua própria requisição — carrinho de 12
+// peças = 12 chamadas, e as fotos entravam piscando uma a uma.
+// AGORA: o carrinho pede TODAS de uma vez em /pdv/product-images e guarda no
+// cache do módulo; a miniatura só lê o cache. Sem foto, mantém o avatar com
+// a inicial da REF.
 const PRODUCT_IMG_CACHE = new Map<string, string | null>();
-function ProductThumb({ sku, refCode, compact = false }: { sku: string; refCode: string | null; compact?: boolean }) {
-  const [url, setUrl] = useState<string | null | undefined>(
-    PRODUCT_IMG_CACHE.has(sku) ? PRODUCT_IMG_CACHE.get(sku) : undefined,
+const PRODUCT_IMG_INFLIGHT = new Set<string>();
+const PRODUCT_IMG_LISTENERS = new Set<() => void>();
+
+/** Busca em LOTE as fotos que ainda não estão em cache. */
+async function prefetchProductImages(skus: Array<string | null | undefined>) {
+  const faltando = Array.from(
+    new Set(
+      skus
+        .map((s) => String(s || '').trim())
+        .filter((s) => s && !PRODUCT_IMG_CACHE.has(s) && !PRODUCT_IMG_INFLIGHT.has(s)),
+    ),
   );
+  if (!faltando.length) return;
+  faltando.forEach((s) => PRODUCT_IMG_INFLIGHT.add(s));
+  try {
+    const r = await api<{ urls: Record<string, string | null> }>(
+      `/pdv/product-images?skus=${encodeURIComponent(faltando.join(','))}`,
+    );
+    for (const s of faltando) PRODUCT_IMG_CACHE.set(s, r?.urls?.[s] ?? null);
+  } catch {
+    // Miniatura é enfeite: falhou, marca como "sem foto" e segue a venda.
+    for (const s of faltando) PRODUCT_IMG_CACHE.set(s, null);
+  } finally {
+    faltando.forEach((s) => PRODUCT_IMG_INFLIGHT.delete(s));
+    PRODUCT_IMG_LISTENERS.forEach((fn) => fn());
+  }
+}
+
+function ProductThumb({ sku, refCode, compact = false }: { sku: string; refCode: string | null; compact?: boolean }) {
+  const [, forceRender] = useState(0);
   useEffect(() => {
-    if (!sku) return;
-    if (PRODUCT_IMG_CACHE.has(sku)) {
-      setUrl(PRODUCT_IMG_CACHE.get(sku));
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await api<{ url: string | null }>(`/pdv/product-image?sku=${encodeURIComponent(sku)}`);
-        if (!cancelled) {
-          PRODUCT_IMG_CACHE.set(sku, r.url);
-          setUrl(r.url);
-        }
-      } catch {
-        if (!cancelled) {
-          PRODUCT_IMG_CACHE.set(sku, null);
-          setUrl(null);
-        }
-      }
-    })();
-    return () => { cancelled = true; };
+    const notificar = () => forceRender((n) => n + 1);
+    PRODUCT_IMG_LISTENERS.add(notificar);
+    // Rede de segurança: peça que entrou fora do lote (ex.: item manual)
+    // ainda pede a foto — mas em lote de um, pelo mesmo caminho.
+    void prefetchProductImages([sku]);
+    return () => { PRODUCT_IMG_LISTENERS.delete(notificar); };
   }, [sku]);
+  const url = PRODUCT_IMG_CACHE.get(sku);
 
   const letter = (refCode || sku || '?').charAt(0).toUpperCase();
 
@@ -9043,50 +8883,6 @@ function ProductThumb({ sku, refCode, compact = false }: { sku: string; refCode:
       {letter}
     </div>
   );
-}
-
-// ── PDV OUTLINE PILL ──────────────────────────────────────────────────
-// Pílula compacta outline pra ações secundárias da sidebar (Caixa, Trocar,
-// Pausadas, Realinhar). Visual neutro (branco com borda slate) — não compete
-// com os 4 cards coloridos primários. Suporta badge e flag de atenção.
-function PdvOutlinePill({
-  href,
-  onClick,
-  disabled,
-  icon: Icon,
-  label,
-  badge,
-  attention,
-}: {
-  href?: string;
-  onClick?: () => void;
-  disabled?: boolean;
-  icon: LucideIcon;
-  label: string;
-  badge?: number;
-  attention?: boolean;
-}) {
-  // Pílulas brancas com sombra forte pra "saltar" do fundo roxo do PDV
-  const cls = `relative px-3 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition disabled:opacity-40 disabled:cursor-not-allowed shadow-md ${
-    attention
-      ? 'bg-rose-100 border border-rose-300 text-rose-800 hover:bg-rose-200'
-      : 'bg-white border border-white text-violet-900 hover:bg-amber-50'
-  }`;
-  const inner = (
-    <>
-      <Icon className={`w-4 h-4 ${attention ? 'text-rose-700' : 'text-violet-600'}`} />
-      <span className="flex-1 text-left">{label}</span>
-      {badge && badge > 0 && (
-        <span className={`text-[10px] font-black rounded-full min-w-[20px] h-[20px] flex items-center justify-center px-1.5 ${
-          attention ? 'bg-rose-600 text-white' : 'bg-violet-700 text-white'
-        }`}>
-          {badge}
-        </span>
-      )}
-    </>
-  );
-  if (href) return <Link href={href} className={cls}>{inner}</Link>;
-  return <button type="button" onClick={onClick} disabled={disabled} className={cls}>{inner}</button>;
 }
 
 // ── SIMULADOR DE PARCELAMENTO CARTÃO ──────────────────────────────────

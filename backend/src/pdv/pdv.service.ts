@@ -1216,7 +1216,8 @@ export class PdvService {
     });
     if (sale?.status !== 'open') throw new BadRequestException('Venda já fechada');
     await (this.prisma as any).pdvSalePayment.delete({ where: { id: input.paymentId } });
-    return { ok: true };
+    // PERF: venda completa no retorno — evita o GET extra do PDV (ver addItem).
+    return { ok: true, sale: await this.getSale(input.saleId) };
   }
 
   /**
@@ -1722,6 +1723,7 @@ export class PdvService {
   async recalcularPrecos(input: { saleId: string }): Promise<{
     atualizados: number;
     itens: Array<{ itemId: string; sku: string; descricao: string; antes: number; depois: number }>;
+    sale: any;
   }> {
     const sale = await (this.prisma as any).pdvSale.findUnique({
       where: { id: input.saleId },
@@ -1754,7 +1756,8 @@ export class PdvService {
     }
     await this.recalcTotals(input.saleId);
     this.logger.log(`[pdv] recalcularPrecos venda ${input.saleId}: ${itens.length} item(ns) atualizado(s)`);
-    return { atualizados: itens.length, itens };
+    // PERF: venda completa no retorno — evita o GET extra do PDV (ver addItem).
+    return { atualizados: itens.length, itens, sale: await this.getSale(input.saleId) };
   }
 
   async updateItem(input: { saleId: string; itemId: string; qty?: number; desconto?: number; password?: string; motivo?: string; excludePromo?: boolean; forcePromo?: boolean }) {
@@ -1845,7 +1848,10 @@ export class PdvService {
     });
     await this.applyAutoDiscounts(input.saleId);
     await this.recalcTotals(input.saleId);
-    return updated;
+    // PERF: devolve a venda COMPLETA junto (mesmo padrão do bipe) — o PDV não
+    // precisa mais de um segundo GET /pdv/sales/:id a cada +/− de quantidade.
+    // `item` fica pra quem já consumia o retorno antigo.
+    return { ...updated, item: updated, sale: await this.getSale(input.saleId) };
   }
 
   /**
@@ -1919,7 +1925,7 @@ export class PdvService {
       );
     }
 
-    return (this.prisma as any).pdvSale.update({
+    await (this.prisma as any).pdvSale.update({
       where: { id: sale.id },
       data: {
         desconto,
@@ -1927,6 +1933,8 @@ export class PdvService {
         total: Math.max(0, Math.round((subtotalLiquido - desconto) * 100) / 100),
       },
     });
+    // PERF: venda completa (com items/payments) — evita o GET extra do PDV.
+    return this.getSale(sale.id);
   }
 
   async removeItem(input: { saleId: string; itemId: string }) {
@@ -1946,7 +1954,8 @@ export class PdvService {
     await (this.prisma as any).pdvSaleItem.delete({ where: { id: item.id } });
     await this.applyAutoDiscounts(input.saleId);
     await this.recalcTotals(input.saleId);
-    return { ok: true };
+    // PERF: venda completa no retorno — evita o GET extra do PDV (ver addItem).
+    return { ok: true, sale: await this.getSale(input.saleId) };
   }
 
   // ═══════════════════════════════════════════════════════════════════════
