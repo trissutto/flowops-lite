@@ -34,6 +34,10 @@ export interface RegraCupom {
   fimEm?: Date | null;
   usoMaximo?: number | null;
   usos?: number;
+  /** Preenchido = vale-troca nominal; só este CPF usa (só dígitos). */
+  cpf?: string | null;
+  /** 'campanha' | 'troca' — muda a frase que a cliente lê ao errar. */
+  origem?: string;
 }
 
 export interface ResultadoCupom {
@@ -97,6 +101,8 @@ export class CupomService {
         fimEm: r.fimEm ?? null,
         usoMaximo: r.usoMaximo ?? null,
         usos: Number(r.usos) || 0,
+        cpf: String(r.cpf || '').replace(/\D/g, '') || null,
+        origem: String(r.origem || 'campanha'),
       }));
     } catch (e: any) {
       // Tabela ainda não existe (deploy anterior ao db push) — não é erro fatal.
@@ -133,6 +139,31 @@ export class CupomService {
     this.cache = null;
   }
 
+  /** Consulta um código específico direto na tabela (fura o cache de 60s). */
+  private async buscarDireto(code: string): Promise<RegraCupom | null> {
+    try {
+      const r: any = await (this.prisma as any).siteCupom.findUnique({ where: { code } });
+      if (!r || !r.ativo) return null;
+      return {
+        code: this.norm(r.code),
+        label: String(r.label || r.code),
+        tipo: this.tipoValido(r.tipo),
+        valor: Number(r.valor) || 0,
+        minSubtotal: r.minSubtotal ?? null,
+        primeiraCompra: !!r.primeiraCompra,
+        categorias: String(r.categorias || '').split(',').map((c: string) => c.trim().toLowerCase()).filter(Boolean),
+        inicioEm: r.inicioEm ?? null,
+        fimEm: r.fimEm ?? null,
+        usoMaximo: r.usoMaximo ?? null,
+        usos: Number(r.usos) || 0,
+        cpf: String(r.cpf || '').replace(/\D/g, '') || null,
+        origem: String(r.origem || 'campanha'),
+      };
+    } catch {
+      return null;
+    }
+  }
+
   /**
    * Aplica o cupom sobre o subtotal JÁ CONFERIDO no catálogo.
    *
@@ -149,7 +180,16 @@ export class CupomService {
     const code = this.norm(codigoBruto);
     if (!code) return { ok: false, code, desconto: 0, mensagem: 'Digite o código do cupom.' };
 
-    const regra = (await this.regras()).find((r) => r.code === code);
+    /**
+     * Cache de 60s serve campanha, não vale-troca. O vale nasce no instante em
+     * que a conferência aprova e a cliente recebe o código na hora, por
+     * WhatsApp — se ela digitar dentro da janela do cache, o código que acabou
+     * de ser criado responde "não encontramos". Miss no cache = uma consulta
+     * direta antes de desistir; é barata e só acontece quando o código não
+     * estava na lista.
+     */
+    let regra = (await this.regras()).find((r) => r.code === code);
+    if (!regra) regra = (await this.buscarDireto(code)) ?? undefined;
     if (!regra) {
       return {
         ok: false,
@@ -195,6 +235,30 @@ export class CupomService {
           code,
           desconto: 0,
           mensagem: 'Esse cupom não vale para as peças da sua sacola. 💜',
+        };
+      }
+    }
+    /**
+     * VALE-TROCA É NOMINAL (item 85).
+     *
+     * Cupom de campanha é público de propósito: quem tiver o código usa. Vale
+     * é o dinheiro de UMA cliente — o código sai por WhatsApp e um print
+     * encaminhado bastaria pra outra pessoa gastar o crédito dela. A trava é
+     * por CPF porque é o que o checkout já exige e o que identifica a pessoa
+     * no CRM (ver `clientes-pessoa-vs-cadastro`).
+     *
+     * Sem CPF no contexto o vale NÃO passa. É o oposto do `primeiraCompra`
+     * logo abaixo, que deixa passar quando não consegue checar: lá o risco é
+     * dar 10% a mais, aqui é entregar o crédito da cliente errada.
+     */
+    if (regra.cpf) {
+      const doPedido = String(contexto?.cpf || '').replace(/\D/g, '');
+      if (!doPedido || doPedido !== regra.cpf) {
+        return {
+          ok: false,
+          code,
+          desconto: 0,
+          mensagem: 'Esse vale-troca é nominal e está no CPF de quem fez a troca. Faça o pedido com esse CPF pra usar. 💜',
         };
       }
     }

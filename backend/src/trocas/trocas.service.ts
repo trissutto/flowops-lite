@@ -1159,6 +1159,31 @@ export class TrocasService {
       throw new BadRequestException('Troca não está em conferência.');
     }
 
+    /**
+     * CHECKLIST OBRIGATÓRIO PRA APROVAR (regra do dono, 12/08/2026).
+     *
+     * Até aqui `checklist` era opcional e livre: `aprovado: true` sozinho
+     * liberava a troca e, com ela, o vale-compras. Ou seja, o crédito nascia
+     * da palavra de quem clicou, não da regra cumprida — e o campo que existia
+     * pra provar a conferência ficava nulo justamente nos casos em que alguém
+     * teria pulado a etapa.
+     *
+     * Agora aprovar exige TODOS os itens de `CONFERENCIA_CHECKLIST` marcados.
+     * Não é burocracia: é o que separa "a peça voltou" de "a peça voltou em
+     * condição de virar dinheiro". Item que não passa não vira observação —
+     * vira REPROVAÇÃO, que já tem motivo obrigatório e caminho próprio.
+     */
+    if (input.aprovado) {
+      const marcados = input.checklist || {};
+      const faltando = CONFERENCIA_CHECKLIST.filter((item) => marcados[item] !== true);
+      if (faltando.length) {
+        throw new BadRequestException(
+          `Pra aprovar, confira todos os itens: ${faltando.join(', ')}. ` +
+            'Se algum não passa, reprove com o motivo — não aprove com ressalva.',
+        );
+      }
+    }
+
     // ── REPROVADA ──
     if (!input.aprovado) {
       const motivo = String(input.motivoReprovacao || '').trim();
@@ -1431,6 +1456,46 @@ export class TrocasService {
         cupomOk = !!r.ok;
       } catch { /* segue — vale local vale mesmo sem cupom no site */ }
 
+      /**
+       * O VALE PRECISA EXISTIR NO SITE NOVO (item 85).
+       *
+       * O `createDiscountCoupon` acima grava no WooCommerce — o site VELHO.
+       * O site novo lê `site_cupons` (ver `CupomService`), então o vale que a
+       * cliente recebia simplesmente não era aceito no checkout onde ela ia
+       * gastar. A política já prometia o crédito; o crédito não existia onde
+       * importa.
+       *
+       * Nominal no CPF de propósito: o código vai por WhatsApp e um print
+       * encaminhado bastaria pra outra pessoa gastar. `usoMaximo: 1` porque
+       * vale não é campanha — gastou, acabou (o troco não volta, e isso está
+       * escrito na política).
+       */
+      let cupomSiteOk = false;
+      const cpfVale = String(troca.customerCpf || '').replace(/\D/g, '');
+      try {
+        await (this.prisma as any).siteCupom.create({
+          data: {
+            code: valeCode,
+            label: `Vale-troca ${formatTrocaNumero(troca.numero)}`,
+            tipo: 'fixed',
+            valor: Number(troca.valorTotalPago),
+            fimEm: validade,
+            usoMaximo: 1,
+            ativo: true,
+            cpf: cpfVale.length === 11 ? cpfVale : null,
+            origem: 'troca',
+            trocaId: troca.id,
+            atualizadoPor: 'troca (automático)',
+          },
+        });
+        cupomSiteOk = true;
+      } catch (e: any) {
+        // Não derruba a decisão da cliente: o vale continua registrado na
+        // troca e a retaguarda consegue honrar na mão. Mas fica gritando no
+        // histórico, porque vale que não entra no site é promessa quebrada.
+        this.logger.error(`[troca ${troca.id}] vale ${valeCode} NÃO entrou em site_cupons: ${e?.message || e}`);
+      }
+
       let emailOk = false;
       if (troca.customerEmail) {
         emailOk = await this.email.send(
@@ -1461,7 +1526,10 @@ export class TrocasService {
               tipo: 'decisao',
               descricao:
                 `Cliente escolheu VALE-COMPRAS de R$ ${Number(troca.valorTotalPago).toFixed(2)} — código ${valeCode}, válido até ${validade.toLocaleDateString('pt-BR')}.` +
-                (cupomOk ? ' Cupom criado no site.' : ' ATENÇÃO: cupom NÃO criado no WC — criar manualmente.') +
+                (cupomSiteOk
+                  ? ` Vale ativo no site${cpfVale.length === 11 ? ` (nominal, CPF ...${cpfVale.slice(-4)})` : ' (SEM CPF na troca — vale ficou aberto a qualquer CPF)'}.`
+                  : ' ATENÇÃO: vale NÃO entrou no site — honrar manualmente.') +
+                (cupomOk ? ' Cupom espelhado no site antigo.' : '') +
                 (emailOk ? ' E-mail enviado.' : ' E-mail NÃO enviado.'),
               statusDe: 'aguardando_decisao',
               statusPara: 'finalizada',
