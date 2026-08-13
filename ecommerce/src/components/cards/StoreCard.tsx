@@ -51,7 +51,9 @@ function fullAddress(store: Store): string {
 }
 
 export function StoreCard({ store, index = 0, nearest, distance, className }: StoreCardProps) {
-  const whatsapp = `https://api.whatsapp.com/send?phone=${store.whatsapp}&text=${encodeURIComponent('Olá! Quero conhecer a loja (vim pelo site).')}`;
+  // Unidade carimbada na mensagem — contrato de parse do n8n, igual ao
+  // `whatsappUrl` da página /lojas: `loja <unidade> (vim pelo site)`.
+  const whatsapp = `https://api.whatsapp.com/send?phone=${store.whatsapp}&text=${encodeURIComponent(`Olá! Quero conhecer a loja ${store.unit} (vim pelo site).`)}`;
   const instagram = `https://www.instagram.com/${store.instagram}/`;
   const directions = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(store.mapsQuery)}`;
 

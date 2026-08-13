@@ -104,7 +104,15 @@ export function fullAddress(s: Store): string {
 }
 
 export function whatsappUrl(s: Store): string {
-  const text = encodeURIComponent('Olá! Quero conhecer a loja (vim pelo site).');
+  /**
+   * A UNIDADE VAI CARIMBADA NA MENSAGEM — "loja Suzano (vim pelo site)".
+   *
+   * Não é cosmético: é o que permite à automação (n8n/Evolution) reconhecer
+   * de qual loja veio o lead e gravar no CRM com a origem certa. O formato
+   * `loja <unidade> (vim pelo site)` é o contrato de parse do fluxo — mudar o
+   * texto quebra o reconhecimento sem dar erro em lugar nenhum.
+   */
+  const text = encodeURIComponent(`Olá! Quero conhecer a loja ${s.unit} (vim pelo site).`);
   return `https://api.whatsapp.com/send?phone=${s.whatsapp}&text=${text}`;
 }
 
