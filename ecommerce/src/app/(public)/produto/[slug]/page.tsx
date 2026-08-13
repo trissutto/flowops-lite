@@ -114,7 +114,7 @@ export default async function ProductPage({ params }: { params: Promise<{ slug: 
       {/* Galeria + decisão de compra */}
       <Container width="wide" className="pb-16">
         {cores.length > 0 ? (
-          <EscolhaDaPeca product={product} cores={cores} />
+          <EscolhaDaPeca product={product} cores={cores} look={peca?.look ?? null} />
         ) : (
           <div className="grid gap-10 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)] lg:gap-16">
             <ProductGallery images={product.images} name={product.name} />
