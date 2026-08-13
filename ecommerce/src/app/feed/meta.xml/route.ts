@@ -137,7 +137,13 @@ export async function GET() {
     // catálogo (POST /api/revalidar com tags:['catalogo']) — sem ela, o dado
     // preso aqui só saía pelo relógio, por mais que o backend já respondesse
     // o catálogo novo.
-    pecas = (await api<PecaFeed[]>('/public/loja/feed', { revalidate, tags: ['catalogo'], timeoutMs: 25000 })) ?? [];
+    //
+    // O `?rev=2` rotaciona a CHAVE no Data Cache da Vercel (13/08): a entrada
+    // antiga foi gravada com validade de 24h e SEM tag, e o Data Cache
+    // sobrevive a deploy — trocar revalidate/tags no código não alcança a
+    // entrada já gravada (config de cache não entra na chave). O backend
+    // ignora a query. Se um dia envenenar de novo: soma 1 aqui.
+    pecas = (await api<PecaFeed[]>('/public/loja/feed?rev=2', { revalidate, tags: ['catalogo'], timeoutMs: 25000 })) ?? [];
   } catch {
     /* Catálogo fora do ar: devolve feed VAZIO e válido, nunca erro. O Meta
        trata resposta com erro como falha de importação e pode desativar o
