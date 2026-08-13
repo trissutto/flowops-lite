@@ -575,8 +575,21 @@ export class WcFotosImportService {
       };
 
       if (!jaExiste) {
+        /**
+         * ⚠️ NASCE 'publicado', não no default do schema (achado 13/08/2026).
+         *
+         * O default de `statusPublicacao` é 'nao_publicar', e desde que a
+         * vitrine passou a honrar o campo, criar a linha sem status ESCONDIA a
+         * cor no instante em que a bolinha era pintada. A rajada da varredura
+         * de 03:14–03:55 de 13/08 sumiu com 466 cores fotografadas (19.855
+         * peças) e fabricou 362 cards "Esgotado" com peça na arara — SMILE,
+         * ROLLING e PUGGY entre eles. Este create só roda pra cor QUE TEM
+         * FOTO (a varredura lê a foto pra pintar), então 'publicado' respeita
+         * a regra "não libere cor sem foto". Esconder é decisão da tela, não
+         * efeito colateral do robô.
+         */
         await (this.prisma as any).produtoFichaCor.create({
-          data: { fichaId: ficha.id, cor, ...swatch },
+          data: { fichaId: ficha.id, cor, statusPublicacao: 'publicado', ...swatch },
         });
       } else if (!jaExiste.corHex) {
         await (this.prisma as any).produtoFichaCor.update({
