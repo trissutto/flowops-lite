@@ -502,6 +502,118 @@ export class AbandonedCartsService {
     };
   }
 
+  // ==========================================================================
+  // E-COMMERCE NOVO (lurdsplussize.com.br) — pedidos source='ecommerce' do
+  // NOSSO Postgres que começaram o checkout e não pagaram. Não depende de WP
+  // nem de plugin. Sacola sem checkout NÃO entra aqui: o add_to_cart do
+  // site_eventos é anônimo (só session_id) — sem nome/telefone não existe
+  // recuperação possível.
+  // ==========================================================================
+
+  async listEcommercePending(params: {
+    status?: string; // abandoned | recovered/completed | lost | all
+    since?: string;  // YYYY-MM-DD
+    until?: string;
+    search?: string;
+  }) {
+    const where: any = { source: 'ecommerce' };
+    if (params.since || params.until) {
+      where.createdAt = {};
+      if (params.since) where.createdAt.gte = new Date(params.since + 'T00:00:00');
+      if (params.until) where.createdAt.lte = new Date(params.until + 'T23:59:59');
+    }
+    // Mesma semântica do fallback WC:
+    //   abandoned → checkout iniciado sem pagamento (awaiting_payment/expired)
+    //   recovered → pagou depois (paidAt preenchido)
+    //   lost      → cancelado sem pagar
+    switch (params.status) {
+      case 'recovered':
+      case 'completed':
+        where.paidAt = { not: null };
+        break;
+      case 'lost':
+        where.paidAt = null;
+        where.status = 'cancelled';
+        break;
+      case 'all':
+      case undefined:
+      case '':
+        break;
+      default: // abandoned
+        where.paidAt = null;
+        where.status = { not: 'cancelled' };
+    }
+    if (params.search) {
+      where.OR = [
+        { customerName: { contains: params.search, mode: 'insensitive' } },
+        { customerEmail: { contains: params.search, mode: 'insensitive' } },
+        { customerPhone: { contains: params.search } },
+      ];
+    }
+
+    try {
+      const orders = await (this.prisma as any).order.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        take: 200,
+        include: { items: true },
+      });
+
+      const items = orders.map((o: any) => {
+        const nome = String(o.customerName ?? '').trim();
+        const sp = nome.indexOf(' ');
+        let order_status = 'abandoned';
+        if (o.paidAt) order_status = 'recovered';
+        else if (o.status === 'cancelled') order_status = 'lost';
+        const cartItems = (o.items ?? []).map((it: any) => ({
+          name: it.productName || it.sku,
+          sku: it.sku,
+          quantity: Number(it.quantity ?? 1),
+          price: Number(it.unitPrice ?? 0),
+          line_subtotal: Number(it.unitPrice ?? 0) * Number(it.quantity ?? 1),
+        }));
+        return {
+          id: Number(o.wcOrderId),
+          email: o.customerEmail ?? '',
+          first_name: sp > 0 ? nome.slice(0, sp) : nome,
+          last_name: sp > 0 ? nome.slice(sp + 1) : '',
+          phone: o.customerPhone ?? '',
+          city: '',
+          state: '',
+          cart_total: Number(o.totalAmount ?? 0),
+          items_count: cartItems.reduce((acc: number, it: any) => acc + it.quantity, 0),
+          order_status,
+          time: o.createdAt ? o.createdAt.toISOString() : null,
+          order_id: Number(o.wcOrderId),
+          order_number: o.wcOrderNumber ?? null,
+          source: 'ecommerce',
+          utmCampaign: o.utmCampaign ?? null,
+          cart_items: cartItems,
+        };
+      });
+
+      const stats = {
+        abandoned: items.filter((i: any) => i.order_status === 'abandoned').length,
+        recovered: items.filter((i: any) => i.order_status === 'recovered').length,
+        lost: items.filter((i: any) => i.order_status === 'lost').length,
+        recovery_rate: 0,
+        total_abandoned_value: items
+          .filter((i: any) => i.order_status === 'abandoned')
+          .reduce((acc: number, i: any) => acc + (i.cart_total || 0), 0),
+        total_recovered_value: items
+          .filter((i: any) => i.order_status === 'recovered')
+          .reduce((acc: number, i: any) => acc + (i.cart_total || 0), 0),
+      };
+      const base = stats.abandoned + stats.recovered + stats.lost;
+      stats.recovery_rate = base > 0 ? (stats.recovered / base) * 100 : 0;
+
+      return { ok: true, source: 'ecommerce', items, total: items.length, stats };
+    } catch (e: any) {
+      this.logger.warn(`[carrinhos] lista ecommerce falhou: ${e?.message ?? e}`);
+      return { ok: false, error: `Falha ao buscar carrinhos do e-commerce novo: ${e?.message ?? e}` };
+    }
+  }
+
   /**
    * Detalhe HIDRATADO: pega o detail do plugin PHP + enriquece cada cart_item
    * com dados completos do produto via WC REST (name, image, sku, price).

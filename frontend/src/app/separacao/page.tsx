@@ -1836,8 +1836,13 @@ type CarrinhoAB = {
   unsubscribed?: number | boolean;
   items_count?: number;
   // Origem do registro: undefined = plugin CartFlows; 'woocommerce' = pedido
-  // iniciado-sem-pagar trazido pelo fallback WC pra preencher gaps de captura.
+  // iniciado-sem-pagar trazido pelo fallback WC pra preencher gaps de captura;
+  // 'ecommerce' = checkout iniciado-sem-pagar no site NOVO (orders do Postgres).
   source?: string;
+  // Só no source='ecommerce': número LP-xxxxxx e itens já embutidos na lista
+  // (vêm do nosso banco — não precisa de /full).
+  order_number?: string | null;
+  cart_items?: any[];
   // Pedido WC vinculado (quando o CartFlows registrou que o carrinho virou
   // pedido). Usado pra deduplicar contra os itens do fallback WooCommerce.
   order_id?: number | null;
@@ -1885,6 +1890,8 @@ function CarrinhosTab() {
   // Quantos itens foram trazidos do WooCommerce pra preencher gaps de captura
   // do plugin (pedidos iniciados-sem-pagar que o CartFlows não registrou).
   const [wcFill, setWcFill] = useState(0);
+  // Quantos vieram do e-commerce NOVO (orders source='ecommerce' sem pagamento).
+  const [ecomFill, setEcomFill] = useState(0);
   // Auto-refresh a cada 60s pra capturar carrinhos novos do site
   useEffect(() => {
     const t = setInterval(() => { load(); }, 60000);
@@ -1898,6 +1905,12 @@ function CarrinhosTab() {
     // Itens do WooCommerce (preenchimento de gap) não existem no plugin
     // CartFlows, então não têm /full — buscar daria 404. Mostra só o resumo.
     if (c.source === 'woocommerce') {
+      setDetailLoading(false);
+      return;
+    }
+    // Carrinho do e-commerce novo já traz os itens embutidos (nosso banco).
+    if (c.source === 'ecommerce') {
+      setDetail({ cart_items: c.cart_items || [] });
       setDetailLoading(false);
       return;
     }
@@ -1957,16 +1970,37 @@ function CarrinhosTab() {
         return { ...first, items: acc };
       };
 
-      const [listResp, statsResp] = await Promise.all([
+      // E-commerce NOVO (lurdsplussize.com.br): pedidos do nosso Postgres com
+      // checkout iniciado e sem pagamento. Busca 'all' pra somar nos KPIs; a
+      // lista filtra pelo status escolhido logo abaixo.
+      const qsEcom = new URLSearchParams({ since, status: 'all', _t: String(Date.now()) });
+      if (search) qsEcom.set('search', search);
+
+      const [listResp, statsResp, ecomResp] = await Promise.all([
         fetchAllCarts().catch((e) => ({ ok: false, error: e?.message } as ListResp)),
         api<any>(`/abandoned-carts/stats?since=${since}&_t=${Date.now()}`).catch(() => null),
+        api<ListResp>(`/abandoned-carts/ecommerce/list?${qsEcom}`).catch(() => null),
       ]);
       setLastFetch(new Date());
+
+      const ecomAll: CarrinhoAB[] = Array.isArray((ecomResp as any)?.items)
+        ? ((ecomResp as any).items as CarrinhoAB[])
+        : [];
+      const ecomVisiveis = ecomAll.filter((c) => {
+        const st = String(c.order_status || '');
+        if (statusF === 'abandoned') return st === 'abandoned';
+        if (statusF === 'completed') return st === 'recovered';
+        return true;
+      });
+
       if ((listResp as any)?.ok === false || (listResp as any)?.error) {
         setErro((listResp as any)?.error || 'Falha ao buscar carrinhos.');
-        setItems([]);
+        // Site antigo fora do ar não pode esconder os carrinhos do e-commerce
+        // novo — eles vêm do nosso banco e continuam aparecendo.
+        setItems(ecomVisiveis);
         setWarning(null);
         setWcFill(0);
+        setEcomFill(ecomVisiveis.length);
       } else {
         let arr: CarrinhoAB[] = (listResp as any).items || (listResp as any).rows || [];
         if (!Array.isArray(arr)) arr = [];
@@ -2010,6 +2044,17 @@ function CarrinhosTab() {
           } catch { /* WC indisponível — segue só com o plugin */ }
         }
         setWcFill(fill);
+        // Junta os carrinhos do e-commerce novo (id na faixa 950M — nunca
+        // colide com CartFlows nem com pedido WC) e reordena por data.
+        if (ecomVisiveis.length) {
+          arr = [...arr, ...ecomVisiveis];
+          arr.sort((a, b) => {
+            const ta = a.time ? Date.parse(a.time) : 0;
+            const tb = b.time ? Date.parse(b.time) : 0;
+            return tb - ta;
+          });
+        }
+        setEcomFill(ecomVisiveis.length);
         setItems(arr);
         setWarning(usouFallback ? ((listResp as any)?.warning || 'Mostrando dados parciais via WooCommerce — o plugin de carrinhos do site está fora do ar.') : null);
       }
@@ -2021,13 +2066,23 @@ function CarrinhosTab() {
         for (const v of vs) if (v !== undefined && v !== null) return Number(v) || 0;
         return 0;
       };
+      // Soma o e-commerce novo nos KPIs (o endpoint de stats só cobre o site
+      // antigo). Com ecommerce presente, recalcula a taxa em cima do total.
+      const somaVal = (list: CarrinhoAB[]) =>
+        list.reduce((s, c) => s + Number(c.total ?? c.cart_total ?? c.cart_total_brl ?? 0), 0);
+      const ecomAb = ecomAll.filter((c) => c.order_status === 'abandoned');
+      const ecomRec = ecomAll.filter((c) => c.order_status === 'recovered');
+      const abTot = pick(raw.abandoned, by.abandoned?.qty, by.abandoned?.count) + ecomAb.length;
+      const recTot = pick(raw.recovered, raw.completed, by.completed?.qty, by.recovered?.qty) + ecomRec.length;
       setStats({
-        abandoned: pick(raw.abandoned, by.abandoned?.qty, by.abandoned?.count),
-        recovered: pick(raw.recovered, raw.completed, by.completed?.qty, by.recovered?.qty),
+        abandoned: abTot,
+        recovered: recTot,
         lost: pick(raw.lost, by.lost?.qty, by.lost?.count),
-        total_abandoned_value: pick(raw.total_abandoned_value, by.abandoned?.total, by.abandoned?.value),
-        total_recovered_value: pick(raw.total_recovered_value, by.completed?.total, by.recovered?.total),
-        recovery_rate: pick(raw.recovery_rate),
+        total_abandoned_value: pick(raw.total_abandoned_value, by.abandoned?.total, by.abandoned?.value) + somaVal(ecomAb),
+        total_recovered_value: pick(raw.total_recovered_value, by.completed?.total, by.recovered?.total) + somaVal(ecomRec),
+        recovery_rate: ecomAll.length
+          ? (abTot + recTot > 0 ? (recTot / (abTot + recTot)) * 100 : 0)
+          : pick(raw.recovery_rate),
       });
     } catch (e: any) {
       setErro(e?.message || 'Erro de rede');
@@ -2141,7 +2196,7 @@ function CarrinhosTab() {
         <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar nome, email ou telefone..." className="flex-1 min-w-[200px] px-3 py-2 border-2 rounded text-sm" />
         <button onClick={load} className="px-3 py-2 border-2 rounded text-sm font-bold bg-white hover:bg-slate-50">Atualizar</button>
         <button onClick={runDiag} className="px-3 py-2 border-2 rounded text-sm font-bold bg-slate-100 hover:bg-slate-200" title="Schema da tabela CartFlows">Diag</button>
-        <span className="text-xs text-slate-500 ml-auto">{filtered.length} {filtered.length === 1 ? 'carrinho' : 'carrinhos'}{wcFill > 0 ? ` · ${wcFill} do site` : ''}{lastFetch ? ` · atualizado ${lastFetch.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : ''}</span>
+        <span className="text-xs text-slate-500 ml-auto">{filtered.length} {filtered.length === 1 ? 'carrinho' : 'carrinhos'}{wcFill > 0 ? ` · ${wcFill} do site` : ''}{ecomFill > 0 ? ` · ${ecomFill} do ecommerce` : ''}{lastFetch ? ` · atualizado ${lastFetch.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : ''}</span>
       </div>
 
       {warning && !erro && (
@@ -2164,6 +2219,7 @@ function CarrinhosTab() {
             const status = (c.order_status || c.status || '').toString();
             const isCompleted = status === 'completed' || status === 'recovered';
             const isWc = c.source === 'woocommerce';
+            const isEcom = c.source === 'ecommerce';
             const nome = `${c.first_name || ''} ${c.last_name || ''}`.trim() || c.email?.split('@')[0] || 'Cliente';
             const valor = Number(c.total ?? c.cart_total ?? c.cart_total_brl ?? 0);
             return (
@@ -2173,6 +2229,7 @@ function CarrinhosTab() {
                     {nome}
                     {isCompleted && <span className="ml-2 text-[10px] bg-emerald-200 text-emerald-800 px-1.5 py-0.5 rounded font-bold uppercase">Recuperado</span>}
                     {isWc && <span className="ml-2 text-[10px] bg-sky-100 text-sky-700 px-1.5 py-0.5 rounded font-bold uppercase" title="Pedido iniciado no site sem pagamento (via WooCommerce) — o plugin de carrinhos não registrou este">Site</span>}
+                    {isEcom && <span className="ml-2 text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded font-bold uppercase" title={`Checkout iniciado no site novo (lurdsplussize.com.br) sem pagamento${c.order_number ? ` — pedido ${c.order_number}` : ''}`}>Ecommerce</span>}
                     {Boolean(c.unsubscribed) && <span className="ml-2 text-[10px] bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded font-bold uppercase">Optout</span>}
                   </div>
                   <div className="text-[11px] text-slate-500 flex flex-wrap items-center gap-2 mt-0.5">
@@ -2206,13 +2263,19 @@ function CarrinhosTab() {
           <div className="bg-white rounded-2xl w-full max-w-3xl my-8 overflow-hidden shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <div className="px-5 py-3 bg-gradient-to-r from-rose-600 to-pink-600 text-white flex items-center justify-between">
               <div>
-                <h2 className="font-black text-lg">Carrinho abandonado #{selected.id}</h2>
+                <h2 className="font-black text-lg">Carrinho abandonado #{selected.order_number || selected.id}</h2>
                 <p className="text-[11px] opacity-90">Dados pra contato direto via WhatsApp ou ligacao.</p>
               </div>
               <button onClick={closeCart} className="text-white hover:bg-white/20 rounded-lg w-8 h-8 flex items-center justify-center text-xl font-bold">x</button>
             </div>
             <div className="p-5 space-y-4">
               {detailLoading && <div className="text-center text-slate-400 py-2">Carregando detalhes...</div>}
+
+              {selected.source === 'ecommerce' && (
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-[12px] text-amber-900">
+                  <b>Origem: E-commerce novo (lurdsplussize.com.br).</b> Checkout iniciado sem pagamento confirmado{selected.order_number ? <> — pedido <b>{selected.order_number}</b></> : null}. Os itens abaixo vêm direto do nosso banco.
+                </div>
+              )}
 
               {selected.source === 'woocommerce' && (
                 <div className="bg-sky-50 border border-sky-200 rounded-lg p-3 text-[12px] text-sky-900">
