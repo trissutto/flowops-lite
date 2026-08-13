@@ -73,6 +73,16 @@ type LinhaErp = {
 export class LojaCatalogService {
   private readonly logger = new Logger(LojaCatalogService.name);
 
+  /**
+   * PISO DE ESTOQUE POR COR (regra do dono, 13/08): variação com menos que
+   * isto no total sai do site sozinha — e volta sozinha quando repõe. `1`
+   * desliga a regra (só cor zerada some). Env pra ajustar sem deploy.
+   */
+  private static readonly ESTOQUE_MINIMO_COR = Math.max(
+    1,
+    Number(process.env.ESTOQUE_MINIMO_COR ?? 10) || 10,
+  );
+
   /** Facetas custam um scan do catálogo — 10 min de cache resolve. */
   private cacheFiltros: { at: number; data: any } | null = null;
   private readonly TTL_FILTROS = 10 * 60_000;
@@ -886,24 +896,65 @@ export class LojaCatalogService {
       .filter((c) => c.estoque > 0);
 
     /**
-     * O "NÃO PUBLICAR" da ficha vale por COR (13/08): a retaguarda marcava
-     * `statusPublicacao='nao_publicar'` e a vitrine seguia mostrando — a
-     * decisão não tinha efeito nenhum. O automático continua sendo o estoque
-     * (regra da VOGUE, acima); este aqui é o botão MANUAL, cor a cor, da tela
-     * /retaguarda/cores-sem-foto. As descartadas seguem no payload pra tela
-     * poder listar e desfazer.
+     * DOIS FILTROS por cor, além do estoque zero acima:
+     *
+     * 1. "NÃO PUBLICAR" da ficha (13/08): o botão MANUAL da tela
+     *    /retaguarda/cores-sem-foto — a retaguarda marcava e a vitrine
+     *    ignorava.
+     * 2. ESTOQUE MÍNIMO POR COR (regra do dono, 13/08 à tarde): "toda
+     *    variação (cor) com menos de 10 unidades no total desativa — e fica
+     *    como regra". Cor de grade rala vende número quebrado e vira troca;
+     *    ela SOME sozinha e VOLTA sozinha quando a reposição passar do piso.
+     *    Medição na hora da regra: 210 das 554 cores no ar (38%), 1.078
+     *    peças físicas, e 127 peças ficariam sem nenhuma cor (caem no
+     *    caminho de esgotado que já existe). `ESTOQUE_MINIMO_COR` ajusta o
+     *    piso sem deploy; `1` desliga (só a zerada some, como antes).
+     *
+     * As descartadas seguem no payload (`coresOcultas`, com motivo) pra
+     * tela de cores listar — esgotamento não pode ser mistério.
      */
     const coresOcultas: Array<{
       nome: string; estoque: number; refDona: string; marcaDona: string | null; motivo: string;
     }> = [];
     const coresVisiveis = coresDetalhadas.filter((c) => {
-      if (fichaPorCor.get(c.nome.toUpperCase())?.statusPublicacao !== 'nao_publicar') return true;
-      coresOcultas.push({
-        nome: c.nome, estoque: c.estoque, refDona: c.refDona, marcaDona: c.marcaDona,
-        motivo: 'nao_publicar',
-      });
-      return false;
+      if (fichaPorCor.get(c.nome.toUpperCase())?.statusPublicacao === 'nao_publicar') {
+        coresOcultas.push({
+          nome: c.nome, estoque: c.estoque, refDona: c.refDona, marcaDona: c.marcaDona,
+          motivo: 'nao_publicar',
+        });
+        return false;
+      }
+      if (c.estoque < LojaCatalogService.ESTOQUE_MINIMO_COR) {
+        coresOcultas.push({
+          nome: c.nome, estoque: c.estoque, refDona: c.refDona, marcaDona: c.marcaDona,
+          motivo: 'estoque_baixo',
+        });
+        return false;
+      }
+      return true;
     });
+
+    /**
+     * Com cor escondida, TOTAL e GRADE exibidos têm que ser o que dá pra
+     * COMPRAR — "91 no 46" contando cor invisível é a mentira da VOGUE ao
+     * contrário. Peça SEM cor cadastrada (linhas do ERP sem cor) não tem
+     * bolinha pra filtrar: mantém os números crus.
+     */
+    const temCores = coresDetalhadas.length > 0;
+    const estoqueExibido = temCores
+      ? coresVisiveis.reduce((s, c) => s + (c.estoque || 0), 0)
+      : estoqueTotal;
+    const porTamanhoVisivel = new Map<string, number>();
+    for (const c of coresVisiveis) {
+      for (const t of c.tamanhos) {
+        porTamanhoVisivel.set(t.label, (porTamanhoVisivel.get(t.label) || 0) + (t.estoque || 0));
+      }
+    }
+    const tamanhosExibidos = temCores
+      ? Array.from(porTamanhoVisivel.entries())
+          .sort((a, b) => ordemTam(a[0]) - ordemTam(b[0]))
+          .map(([label, est]) => ({ label, estoque: est, disponivel: est > 0 }))
+      : tamanhos;
 
     const dataAlt = linhas.map((l) => l.dataAlt).filter(Boolean).sort()
       .slice(-1)[0] as Date | undefined;
@@ -995,11 +1046,11 @@ export class LojaCatalogService {
       parcelamento: preco > 0 ? { vezes: 12, valor: Number((preco / 12).toFixed(2)) } : null,
 
       cores: coresVisiveis,
-      /** Cores escondidas à mão na ficha — só a tela de cores usa, pra desfazer. */
+      /** Cores escondidas (ficha ou estoque mínimo) — a tela de cores lista. */
       coresOcultas,
-      tamanhos,
-      estoqueTotal,
-      disponivel: estoqueTotal > 0,
+      tamanhos: tamanhosExibidos,
+      estoqueTotal: estoqueExibido,
+      disponivel: estoqueExibido > 0,
 
       // FOTO PRÓPRIA VENCE (decisão 30/07): o R2 é da Lurd's; o que veio do
       // WC é só o resto do acervo até a migração de imagem terminar.
