@@ -6725,3 +6725,28 @@ model SiteEvento {
   @@index([evento, criadoEm])
   @@map("site_eventos")
 }
+
+/// O WHATSAPP DE QUEM CLICOU — enfim com nome e número (dono, 13/08: "onde
+/// vejo o whats de quem clicou?"). O clique no site é anônimo por natureza;
+/// a pessoa passa a existir quando ENVIA a mensagem carimbada ("vim pelo
+/// site") no WhatsApp da loja. A Evolution recebe, o n8n reconhece o carimbo
+/// e grava aqui via POST /public/site-metrics/whatsapp-lead. Tela:
+/// /retaguarda/leads-whatsapp.
+model WhatsappLead {
+  id        String   @id @default(uuid())
+  /// Só dígitos, como vem do remoteJid (com DDI: 5511...).
+  telefone  String   @db.VarChar(20)
+  /// pushName do WhatsApp — o nome que a pessoa usa no app.
+  nome      String?  @db.VarChar(120)
+  /// Unidade extraída do carimbo ("loja X (vim pelo site)"); nulo = botão geral.
+  loja      String?  @db.VarChar(80)
+  /// A mensagem como chegou — prova e contexto pra quem for responder.
+  mensagem  String?  @db.Text
+  /// Instância da Evolution que recebeu (o WhatsApp de qual loja atendeu).
+  instancia String?  @db.VarChar(60)
+  criadoEm  DateTime @default(now()) @map("criado_em")
+
+  @@index([criadoEm])
+  @@index([telefone, criadoEm])
+  @@map("whatsapp_leads")
+}

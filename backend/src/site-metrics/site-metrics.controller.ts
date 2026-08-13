@@ -59,6 +59,22 @@ export class SiteMetricsPublicController {
     await this.service.registrarEventos(eventos);
   }
 
+  /**
+   * O LEAD DO WHATSAPP — quem mandou a mensagem carimbada ("vim pelo site").
+   * Quem chama é o n8n (Evolution → webhook), com o MESMO x-loja-token.
+   */
+  @Post('whatsapp-lead')
+  async registrarLeadWhatsapp(
+    @Headers('x-loja-token') token: string,
+    @Body() body: {
+      telefone?: string; nome?: string; loja?: string;
+      mensagem?: string; instancia?: string;
+    },
+  ) {
+    this.exigirToken(token);
+    return this.service.registrarLeadWhatsapp(body ?? {});
+  }
+
   private segredoConfere(recebido: string, esperado: string): boolean {
     const a = crypto.createHash('sha256').update(recebido).digest();
     const b = crypto.createHash('sha256').update(esperado).digest();
@@ -107,6 +123,18 @@ export class SiteMetricsController {
       totalCliques,
       linhas,
     };
+  }
+
+  /** Leads do WhatsApp (mensagem carimbada) — tela /retaguarda/leads-whatsapp. */
+  @Get('whatsapp-leads')
+  async whatsappLeads(@Req() req: any, @Query('de') de?: string, @Query('ate') ate?: string) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+
+    const fim = this.fimDoDia(ate) ?? this.fimDoDia(this.hoje())!;
+    const inicio = this.inicioDoDia(de) ?? new Date(fim.getTime() - 29 * 24 * 60 * 60 * 1000);
+
+    const dados = await this.service.leadsWhatsapp(inicio, fim);
+    return { de: inicio.toISOString(), ate: fim.toISOString(), ...dados };
   }
 
   private hoje(): string {
