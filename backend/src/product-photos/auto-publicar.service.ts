@@ -273,25 +273,50 @@ export class AutoPublicarService {
       // MARROM 46" (caso 407012, 13/08). A PDP segue priorizando o nomeCurto
       // da ficha, e o slug segue a convenção `ref-<base>` que o catálogo e a
       // lista de desejos já entendem.
+      // ⚠️ REF RECICLADA (13/08): a mesma REF é vários produtos no ERP — a
+      // 10990 é ao mesmo tempo o biquíni IT CURVES da coleção atual, uma
+      // regata masculina e uma camiseta infantil de 2012. Sem ORDER BY, o
+      // `linhas[0]` sorteava o produto: o site estreou o biquíni com nome e
+      // preço da camiseta. E o catálogo CONFIA neste nome pra escolher a
+      // família (`familiaPublicada`), então o erro daqui contamina preço e
+      // grade da PDP inteira. A linha viva vem primeiro: quem tem estoque,
+      // depois o cadastro mais recente — e masculino/infantil nunca batiza
+      // peça da vitrine feminina.
       const linhas = await this.prisma.$queryRawUnsafe<
-        Array<{ descricao: string | null; cor: string | null }>
+        Array<{ descricao: string | null; cor: string | null; marca: string | null }>
       >(
-        `SELECT NULLIF(TRIM("descricaoCompleta"), '') AS descricao,
-                NULLIF(TRIM(cor), '')                 AS cor
-           FROM wincred_produtos
-          WHERE UPPER(TRIM(ref)) = $1 OR UPPER(TRIM(ref)) LIKE $1 || ' %'
+        `SELECT NULLIF(TRIM(p."descricaoCompleta"), '') AS descricao,
+                NULLIF(TRIM(p.cor), '')                 AS cor,
+                NULLIF(TRIM(p.marca), '')               AS marca
+           FROM wincred_produtos p
+           LEFT JOIN (SELECT codigo, SUM(COALESCE(estoque, 0)) AS total
+                        FROM wincred_estoque GROUP BY codigo) e ON e.codigo = p.codigo
+          WHERE (UPPER(TRIM(p.ref)) = $1 OR UPPER(TRIM(p.ref)) LIKE $1 || ' %')
+            AND UPPER(COALESCE(p."descricaoCompleta", '')) NOT LIKE '%MASCULIN%'
+            AND UPPER(COALESCE(p."descricaoCompleta", '')) NOT LIKE '%INFANTIL%'
+            AND UPPER(COALESCE(p."nomeGrupo", '')) NOT LIKE '%MASCULIN%'
+            AND UPPER(COALESCE(p."nomeGrupo", '')) NOT LIKE '%INFANTIL%'
+          ORDER BY (COALESCE(e.total, 0) > 0) DESC, p."dataAlt" DESC NULLS LAST
           LIMIT 60`,
         ref,
       );
+      // Cores só da peça viva (mesma marca da 1ª linha): a lista alimenta a
+      // limpeza do nome, e cor de OUTRO produto homônimo não pode entrar.
+      const viva = linhas[0];
       const coresDaFamilia = Array.from(
-        new Set(linhas.map((l) => l.cor).filter(Boolean)),
+        new Set(
+          linhas
+            .filter((l) => !viva?.marca || !l.marca || l.marca === viva.marca)
+            .map((l) => l.cor)
+            .filter(Boolean),
+        ),
       ) as string[];
       await (this.prisma as any).siteProduto.create({
         data: {
           ref,
           slug: `ref-${ref.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`,
           nome: (
-            limparNomeVitrine(linhas[0]?.descricao, ref, coresDaFamilia, marca) || ref
+            limparNomeVitrine(viva?.descricao, ref, coresDaFamilia, marca) || ref
           ).slice(0, 160),
           publicado: true,
           origemConteudo: 'flow',

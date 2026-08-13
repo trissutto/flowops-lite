@@ -122,32 +122,49 @@ export class WcFotosImportService {
    * exato do relato: "a varredura roda, o log diz que pintou, e a bolinha não
    * aparece".
    *
-   * Regra: vale a marca com MAIS cadastros na família; empate, a menor em
-   * ordem alfabética. Qualquer regra serve desde que os dois lados usem a
-   * mesma — o que não pode é sortear.
+   * Regra (13/08): vale a marca da peça VIVA — quem tem ESTOQUE primeiro,
+   * depois o cadastro mais recente, depois quem tem mais cadastros; empate
+   * final, a menor em ordem alfabética. "Mais cadastros" sozinho perdia pra
+   * peça velha: na REF 10990 a regata FEDERAL ART (8 cadastros, zero estoque)
+   * ganhava do biquíni IT CURVES (4 cadastros, coleção atual) — e a ficha
+   * nascia amarrada num produto que a loja nem vende mais. Continua
+   * determinística, que é o que os dois lados exigem.
    */
   async marcaDaFamilia(ref: string): Promise<string | null> {
     const base = refBaseOf(ref);
-    const linhas = await this.prisma.$queryRawUnsafe<Array<{ ref: string; marca: string; qtd: number }>>(
-      `SELECT UPPER(TRIM(ref)) AS ref, UPPER(TRIM(marca)) AS marca, COUNT(*)::int AS qtd
-         FROM wincred_produtos
-        WHERE (UPPER(TRIM(ref)) = $1 OR UPPER(TRIM(ref)) LIKE $1 || '%')
-          AND marca IS NOT NULL AND TRIM(marca) <> ''
+    const linhas = await this.prisma.$queryRawUnsafe<
+      Array<{ ref: string; marca: string; qtd: number; estoque: number; dataalt: Date | null }>
+    >(
+      `SELECT UPPER(TRIM(p.ref)) AS ref, UPPER(TRIM(p.marca)) AS marca, COUNT(*)::int AS qtd,
+              COALESCE(SUM(e.total), 0)::int AS estoque, MAX(p."dataAlt") AS dataalt
+         FROM wincred_produtos p
+         LEFT JOIN (SELECT codigo, SUM(COALESCE(estoque, 0)) AS total
+                      FROM wincred_estoque GROUP BY codigo) e ON e.codigo = p.codigo
+        WHERE (UPPER(TRIM(p.ref)) = $1 OR UPPER(TRIM(p.ref)) LIKE $1 || '%')
+          AND p.marca IS NOT NULL AND TRIM(p.marca) <> ''
         GROUP BY 1, 2
-        ORDER BY qtd DESC, marca ASC
+        ORDER BY 4 DESC, 5 DESC NULLS LAST, 3 DESC, 2 ASC
         LIMIT 50`,
       base,
     );
 
-    const porMarca = new Map<string, number>();
+    const porMarca = new Map<string, { qtd: number; estoque: number; dataalt: number }>();
     for (const l of linhas) {
       if (refBaseOf(l.ref) !== base) continue;
-      porMarca.set(l.marca, (porMarca.get(l.marca) || 0) + Number(l.qtd || 0));
+      const agg = porMarca.get(l.marca) || { qtd: 0, estoque: 0, dataalt: 0 };
+      agg.qtd += Number(l.qtd || 0);
+      agg.estoque += Number(l.estoque || 0);
+      agg.dataalt = Math.max(agg.dataalt, l.dataalt ? new Date(l.dataalt).getTime() : 0);
+      porMarca.set(l.marca, agg);
     }
     if (!porMarca.size) return null;
 
     const vencedora = Array.from(porMarca.entries()).sort(
-      (a, b) => b[1] - a[1] || a[0].localeCompare(b[0]),
+      (a, b) =>
+        Number(b[1].estoque > 0) - Number(a[1].estoque > 0) ||
+        b[1].dataalt - a[1].dataalt ||
+        b[1].qtd - a[1].qtd ||
+        a[0].localeCompare(b[0]),
     )[0][0];
 
     if (porMarca.size > 1) {
