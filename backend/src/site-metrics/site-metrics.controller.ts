@@ -13,7 +13,7 @@ import {
 } from '@nestjs/common';
 import * as crypto from 'crypto';
 import { JwtAuthGuard } from '../auth/jwt.guard';
-import { CliqueEntrada, SiteMetricsService } from './site-metrics.service';
+import { CliqueEntrada, EventoEntrada, SiteMetricsService } from './site-metrics.service';
 
 /**
  * A PORTA DO SITE — server-to-server, do BFF do e-commerce pra cá.
@@ -40,6 +40,23 @@ export class SiteMetricsPublicController {
     if (!cliques.length) return;
     // 204 mesmo se gravar zero: métrica não devolve erro pro site.
     await this.service.registrar(cliques);
+  }
+
+  /**
+   * TODO evento do site — a cópia de primeira parte (dono, 13/08). Chega
+   * inclusive de visitante SEM aceite do banner, já anonimizado na origem;
+   * o consentimento aqui governa só o repasse a terceiros, que é do BFF.
+   */
+  @Post('eventos')
+  @HttpCode(204)
+  async registrarEventos(
+    @Headers('x-loja-token') token: string,
+    @Body() body: { eventos?: EventoEntrada[] },
+  ): Promise<void> {
+    this.exigirToken(token);
+    const eventos = Array.isArray(body?.eventos) ? body.eventos.slice(0, 50) : [];
+    if (!eventos.length) return;
+    await this.service.registrarEventos(eventos);
   }
 
   private segredoConfere(recebido: string, esperado: string): boolean {
