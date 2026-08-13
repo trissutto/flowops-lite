@@ -464,15 +464,17 @@ Thiago Rissutto — Lurd's Plus Size`;
             title="URL do Webhook (cadastrar no PagBank)"
             subtitle="Cole esta URL no PagBank: minhaconta.pagbank.com.br → Notificação de transação"
           >
+            {/* O /api NÃO é detalhe: sem ele o PagBank recebe 404 e o aviso de
+                pagamento morre em silêncio. Esta tela mandava a URL errada. */}
             <div className="bg-rose-50 border border-rose-200 rounded-lg p-3">
               <div className="flex items-center gap-2">
                 <code className="flex-1 text-sm font-mono text-rose-900 break-all select-all">
-                  https://flowops-lite-production.up.railway.app/pagbank/webhook
+                  https://flowops-lite-production.up.railway.app/api/pagbank/webhook
                 </code>
                 <button
                   onClick={() => {
                     navigator.clipboard.writeText(
-                      'https://flowops-lite-production.up.railway.app/pagbank/webhook',
+                      'https://flowops-lite-production.up.railway.app/api/pagbank/webhook',
                     );
                     setMsg({ kind: 'ok', text: 'URL copiada!' });
                     setTimeout(() => setMsg(null), 2000);
@@ -482,6 +484,12 @@ Thiago Rissutto — Lurd's Plus Size`;
                   Copiar
                 </button>
               </div>
+              <p className="mt-2 text-[11px] text-rose-800 font-semibold">
+                O <code className="font-mono">/api</code> faz parte do endereço. Sem ele o PagBank
+                recebe 404, o aviso de pagamento se perde e a venda não fecha sozinha — foi o que
+                aconteceu até 12/08. Se já estiver cadastrada sem o <code className="font-mono">/api</code>,
+                corrija no painel do PagBank.
+              </p>
             </div>
           </Card>
 

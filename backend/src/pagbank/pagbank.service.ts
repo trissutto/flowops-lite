@@ -1213,6 +1213,25 @@ export class PagbankService {
       : 'https://sandbox.api.pagseguro.com';
   }
 
+  /**
+   * A URL DE AVISO ESTAVA APONTANDO PRO VAZIO (12/08/2026).
+   *
+   * O backend inteiro roda atrás do prefixo global `/api` (main.ts). Esta
+   * função montava `.../pagbank/webhook` SEM o prefixo — endereço que não
+   * existe. Medido em produção:
+   *
+   *   POST /pagbank/webhook      → 404
+   *   POST /api/pagbank/webhook  → 201
+   *
+   * Ou seja: TODA cobrança PIX nascia mandando o PagBank avisar num lugar
+   * onde ninguém atende. O pagamento caía na conta e o aviso morria num 404,
+   * sem erro em lugar nenhum — nem no nosso log (a requisição nem chegava a
+   * um controller), nem pra loja, que só via a venda não fechar. É a origem
+   * dos chamados de "PIX PagBank sem comunicação".
+   *
+   * ⚠️ Mexer aqui exige conferir o painel do PagBank também: a URL cadastrada
+   * lá (fora do `notification_urls` por pedido) precisa do mesmo `/api`.
+   */
   private getWebhookUrl(): string {
     const base =
       process.env.BACKEND_PUBLIC_URL ||
@@ -1220,8 +1239,9 @@ export class PagbankService {
       ''; // Pode estar vazio em dev — daí roda sem webhook
     if (!base) return '';
     const cleanBase = base.replace(/\/+$/, '');
-    return cleanBase.startsWith('http')
-      ? `${cleanBase}/pagbank/webhook`
-      : `https://${cleanBase}/pagbank/webhook`;
+    const comProtocolo = cleanBase.startsWith('http') ? cleanBase : `https://${cleanBase}`;
+    // Se alguém já tiver posto o /api na env, não duplica.
+    const raiz = comProtocolo.replace(/\/api$/, '');
+    return `${raiz}/api/pagbank/webhook`;
   }
 }
