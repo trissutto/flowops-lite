@@ -2,6 +2,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { refBaseOf } from '../common/ref-base';
 import { avisarVitrine } from '../common/avisar-vitrine';
+import { limparNomeVitrine, nomeDaDescricaoErp } from './nome-vitrine';
+import { classificarPorNome } from './classificacao-por-nome';
 
 /**
  * CATÁLOGO DO E-COMMERCE (sprint 008) — ERP é a fonte da verdade.
@@ -216,136 +218,10 @@ export class LojaCatalogService {
    * linha inteira do card com o que não diferencia nada, e empurra pra fora o
    * que a cliente usa pra pedir a peça no WhatsApp — a referência.
    */
-  private static readonly RUIDO_NO_NOME = [
-    'plus size', 'plus-size', 'plussize', 'feminina', 'feminino', 'fem',
-  ];
-
-  /**
-   * O nome como a cliente lê no card — venha da ficha, do cadastro ou do ERP.
-   *
-   * Passa em TODOS os caminhos de propósito: o título sujo não vinha só da
-   * descrição do ERP. "Regata Feminina Plus Size Ref 700979 Estampa Verde" é
-   * nome importado do WooCommerce, e nenhuma limpeza anterior o tocava.
-   *
-   * Nunca devolve vazio: se a limpeza comer o nome inteiro (peça cujo título
-   * era só "Blusa Feminina Plus Size Preto"), volta o original. Peça sem nome
-   * na vitrine é pior que peça com nome redundante.
-   */
-  private limparNomeVitrine(
-    nome: string | null | undefined,
-    ref: string,
-    cores: string[],
-    marca?: string | null,
-  ): string {
-    const original = String(nome || '').trim();
-    if (!original) return '';
-
-    const escapar = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const semAcento = (v: string) => v.normalize('NFD').replace(/[̀-ͯ]/g, '');
-    let txt = original;
-
-    // "Ref 700979", "REF: 700979" e a REF solta — ela vai pro card em campo
-    // próprio, em negrito, em vez de diluída no meio da frase.
-    txt = txt.replace(new RegExp(`\\bref\\s*:?\\s*${escapar(ref)}\\b`, 'gi'), ' ');
-    txt = txt.replace(new RegExp(`\\b${escapar(ref)}\\b`, 'gi'), ' ');
-    txt = txt.replace(/\bref\s*:?\s*\d{3,}\b/gi, ' ');
-
-    for (const ruido of LojaCatalogService.RUIDO_NO_NOME) {
-      txt = txt.replace(new RegExp(`\\b${escapar(ruido)}\\b`, 'gi'), ' ');
-    }
-
-    if (marca) txt = txt.replace(new RegExp(`\\b${escapar(marca)}\\b`, 'gi'), ' ');
-
-    /**
-     * A COR — E TUDO O QUE VEM DEPOIS DELA.
-     *
-     * Nestes nomes (importados do site antigo) a cor MARCA O FIM da parte
-     * descritiva; o que sobra atrás é sufixo interno. Exemplos reais:
-     *
-     *   "T-shirt Feminina Plus Size Manga Curta Ref Vogue Preto LENE"
-     *   "T-Shirt Feminina Plus Size Manga Curta STITCH-004 Preto ANA"
-     *
-     * "LENE" e "ANA" não são marca (as duas são MARRIE) nem cor: são resto de
-     * cadastro. Apagar só a palavra da cor deixava esse rabo pendurado.
-     *
-     * Cores da MAIS LONGA pra mais curta: "ROSA QUEIMADO" tem que casar
-     * inteira antes de "ROSA" cortar no meio dela.
-     */
-    for (const cor of [...cores].sort((a, b) => b.length - a.length)) {
-      const alvo = escapar(semAcento(cor).trim());
-      if (alvo.length < 3) continue; // "PP", "GG" — arriscado demais
-      txt = txt.replace(new RegExp(`\\b${alvo}\\b.*$`, 'i'), ' ');
-    }
-
-    /**
-     * Qualificador de cor que ficou órfão. "Blusa Manga Curta Estampa
-     * Marinho" com a cor gravada só como "MARINHO" perde o "Marinho" e deixa
-     * "Estampa" pendurado no fim, qualificando o nada. Some só quando está no
-     * FIM: "Blusa Estampa Floral" não é o caso, e "Saia Midi" não é atingida.
-     */
-    const ORFAOS = /\s+(estampa|estampada?o?|mescla|claro?a?|escuro?a?|m[ée]dio?a?)$/i;
-    let limpo = txt.replace(/\s{2,}/g, ' ').trim();
-    while (ORFAOS.test(limpo)) limpo = limpo.replace(ORFAOS, '');
-
-    limpo = limpo
-      .replace(/\s{2,}/g, ' ')
-      .replace(/^[\s·,-]+/, '')
-      .replace(/[\s·,-]+$/, '')
-      .trim();
-
-    return limpo || original;
-  }
-
-  /**
-   * A descrição CRUA do ERP virando nome de vitrine — sem a cor de outra peça.
-   *
-   * 🔴 Bug visto no pedido `#LP-000002` (06/08): a peça saiu como
-   * **"T-shirt Feminina Plus Size Manga Curta Ref Vogue Preto LENE · VINHO"**.
-   * "Preto" não é parte do nome do produto — é a cor da variação que por acaso
-   * ficou em primeiro na consulta. Como a descrição do ERP é POR VARIAÇÃO, ela
-   * sempre carrega uma cor; usá-la como nome da peça inteira gruda a cor de
-   * uma no título de todas, e aí a cliente lê "Preto · VINHO" no próprio
-   * carrinho.
-   *
-   * Tira o que é identificação interna (REF, "Ref XXX", marca) e QUALQUER cor
-   * conhecida daquela REF. Conservador: só remove o que sabe ser cor — não sai
-   * adivinhando palavra por palavra, senão come pedaço do nome de verdade
-   * ("Vinho" pode ser cor, mas "Vogue" é modelo).
-   *
-   * Isto é REMENDO do dado ruim. O certo é a ficha ter `nomeCurto` — e é por
-   * isso que ela ganha desta função na ordem de preferência.
-   */
-  private nomeDaDescricaoErp(
-    descricao: string | null | undefined,
-    ref: string,
-    cores: string[],
-    marca?: string | null,
-  ): string {
-    let txt = String(descricao || '').trim();
-    if (!txt) return '';
-
-    const escapar = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const semAcento = (v: string) =>
-      v.normalize('NFD').replace(/[̀-ͯ]/g, '');
-
-    // Remove "Ref VOGUE", "REF: VOGUE" e a REF solta.
-    txt = txt.replace(new RegExp(`\\bref\\s*:?\\s*${escapar(ref)}\\b`, 'gi'), ' ');
-    txt = txt.replace(new RegExp(`\\b${escapar(ref)}\\b`, 'gi'), ' ');
-
-    if (marca) txt = txt.replace(new RegExp(`\\b${escapar(marca)}\\b`, 'gi'), ' ');
-
-    /**
-     * Cores da MAIS LONGA pra mais curta: "ROSA QUEIMADO" tem que sair inteira
-     * antes de "ROSA" comer só um pedaço e deixar "QUEIMADO" solto no nome.
-     */
-    for (const cor of [...cores].sort((a, b) => b.length - a.length)) {
-      const alvo = escapar(semAcento(cor).trim());
-      if (alvo.length < 3) continue; // "PP", "GG" — arriscado demais
-      txt = txt.replace(new RegExp(`\\b${alvo}\\b`, 'gi'), ' ');
-    }
-
-    return txt.replace(/\s{2,}/g, ' ').replace(/[\s·,-]+$/, '').trim();
-  }
+  // A limpeza de nome (cor/REF/tamanho/caixa alta) e a classificação pelo
+  // nome moram em módulos próprios — ./nome-vitrine.ts e
+  // ./classificacao-por-nome.ts — porque o publicar() também usa e porque
+  // regra de string sem teste é regressão esperando deploy.
 
   private corAmigavel(cor: string): string {
     const bruto = String(cor || '').trim();
@@ -956,7 +832,13 @@ export class LojaCatalogService {
           .map(([label, est]) => ({ label, estoque: est, disponivel: est > 0 }))
       : tamanhos;
 
-    const dataAlt = linhas.map((l) => l.dataAlt).filter(Boolean).sort()
+    // Comparador numérico de propósito: `.sort()` sem ele ordena Date como
+    // STRING ("Mon Jul..." antes de "Thu Aug...") e o "mais recente" da peça
+    // — que é o que ordena a página de Novidades — sai sorteado.
+    const dataAlt = linhas
+      .map((l) => l.dataAlt)
+      .filter(Boolean)
+      .sort((a, b) => new Date(a as any).getTime() - new Date(b as any).getTime())
       .slice(-1)[0] as Date | undefined;
 
     /**
@@ -982,18 +864,16 @@ export class LojaCatalogService {
       }
     };
 
-    return {
-      ref,
-      slug: site?.slug || `ref-${ref.toLowerCase()}`,
-      /**
-       * Ordem: ficha → cadastro do site → descrição do ERP LIMPA → a REF.
-       * A crua nunca entra inteira: ela carrega a cor de UMA variação, e isso
-       * gruda "Preto" no nome de uma peça vinho.
-       */
-      nome: this.limparNomeVitrine(
+    /**
+     * Ordem do NOME: ficha → cadastro do site → descrição do ERP LIMPA → a
+     * REF. A crua nunca entra inteira: ela carrega a cor de UMA variação, e
+     * isso gruda "Preto" no nome de uma peça vinho.
+     */
+    const nomeVitrine =
+      limparNomeVitrine(
         nomeDaFicha ||
           site?.nome ||
-          this.nomeDaDescricaoErp(
+          nomeDaDescricaoErp(
             linhas[0]?.descricao,
             ref,
             Array.from(cores.keys()),
@@ -1003,7 +883,27 @@ export class LojaCatalogService {
         ref,
         Array.from(cores.keys()),
         linhas.find((l) => l.marca)?.marca,
-      ) || ref,
+      ) || ref;
+
+    /**
+     * CLASSIFICAÇÃO DERIVADA PELO NOME (caso 407012, 13/08): a primeira peça
+     * nascida no sistema chegou publicada com categoria NULA — visível na PDP
+     * e invisível em TODO menu do site. O fallback aplica em LEITURA as
+     * mesmas regras do lote de 10/08 (classificar-em-massa). Escolha humana
+     * vence: só preenche o que o cadastro deixou vazio, e a subcategoria
+     * derivada só vale dentro da MESMA categoria (nome que diz "blusa" não
+     * pendura manga em cima de um cadastro que diz "vestidos").
+     */
+    const derivada = classificarPorNome(nomeVitrine);
+    const categoria = site?.categoria ?? derivada?.categoria ?? null;
+    const subcategoria =
+      site?.subcategoria ??
+      (derivada && derivada.categoria === categoria ? derivada.subcategoria : null);
+
+    return {
+      ref,
+      slug: site?.slug || `ref-${ref.toLowerCase()}`,
+      nome: nomeVitrine,
       /**
        * RESUMO DA FICHA na frente do `descricaoCurta` (12/08): a curta veio do
        * WooCommerce e costuma ser a primeira frase da descrição gigante; o
@@ -1027,15 +927,16 @@ export class LojaCatalogService {
        */
       vendas,
       marca: linhas.find((l) => l.marca)?.marca ?? null,
-      // Categoria COMERCIAL (do cadastro do site). O grupo do Giga vai
-      // separado: é classificação fiscal, não serve pro menu da loja.
-      categoria: site?.categoria ?? null,
+      // Categoria COMERCIAL: cadastro do site primeiro; sem ele, a derivada
+      // pelo nome (ver bloco acima). O grupo do Giga vai separado: é
+      // classificação fiscal, não serve pro menu da loja.
+      categoria,
       /**
        * Segundo nível da árvore do site ("Blusas" → "Manga curta"). Sai aqui
        * porque a PDP começa o feed de descoberta pela subcategoria da peça que
        * a cliente está vendo — sem este campo ela não saberia onde está.
        */
-      subcategoria: site?.subcategoria ?? null,
+      subcategoria,
       grupoErp: linhas.find((l) => l.categoria)?.categoria ?? null,
 
       preco,
@@ -2289,13 +2190,28 @@ export class LojaCatalogService {
       `${this.SQL_VARIACOES} AND UPPER(TRIM(p.ref)) = $1`, chave,
     );
     if (!linhas.length) throw new Error(`REF ${chave} não existe no ERP`);
+    const coresDaRef = Array.from(
+      new Set(linhas.map((l) => l.cor).filter(Boolean)),
+    ) as string[];
     return (this.prisma as any).siteProduto.create({
       data: {
         ref: chave,
         slug: data.slug || `ref-${chave.toLowerCase()}`,
-        nome: data.nome || linhas[0].descricao || chave,
         publicado: data.publicado ?? false,
         ...data,
+        // Depois do spread de propósito: o nome que NASCE aqui já nasce limpo.
+        // A descrição do ERP é por VARIAÇÃO ("CAMISA MANGA LONGA POÁ MARROM
+        // 46") — gravada crua, virou o título da primeira peça do sistema
+        // (13/08). Nome escolhido por gente (data.nome) continua vencendo.
+        nome:
+          data.nome ||
+          limparNomeVitrine(
+            linhas[0].descricao,
+            chave,
+            coresDaRef,
+            linhas.find((l) => l.marca)?.marca,
+          ) ||
+          chave,
       },
     });
   }

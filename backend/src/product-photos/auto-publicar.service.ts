@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { WcFotosImportService } from './wc-fotos-import.service';
 import { refBaseOf } from '../common/ref-base';
+import { limparNomeVitrine } from '../loja-catalog/nome-vitrine';
 
 /**
  * FOTO SUBIU → PEÇA NO AR — sem botão no meio.
@@ -267,21 +268,31 @@ export class AutoPublicarService {
       }
 
       // Peça que nunca passou pelo site antigo: nasce no Flow, já publicada.
-      // Nome cru do catálogo serve de fallback — a PDP prioriza o nomeCurto
+      // O nome NASCE LIMPO: a descrição do ERP é por variação e carrega cor e
+      // tamanho — gravada crua, estreou na PDP como "CAMISA MANGA LONGA POÁ
+      // MARROM 46" (caso 407012, 13/08). A PDP segue priorizando o nomeCurto
       // da ficha, e o slug segue a convenção `ref-<base>` que o catálogo e a
       // lista de desejos já entendem.
-      const [linha] = await this.prisma.$queryRawUnsafe<Array<{ descricao: string | null }>>(
-        `SELECT NULLIF(TRIM("descricaoCompleta"), '') AS descricao
+      const linhas = await this.prisma.$queryRawUnsafe<
+        Array<{ descricao: string | null; cor: string | null }>
+      >(
+        `SELECT NULLIF(TRIM("descricaoCompleta"), '') AS descricao,
+                NULLIF(TRIM(cor), '')                 AS cor
            FROM wincred_produtos
           WHERE UPPER(TRIM(ref)) = $1 OR UPPER(TRIM(ref)) LIKE $1 || ' %'
-          LIMIT 1`,
+          LIMIT 60`,
         ref,
       );
+      const coresDaFamilia = Array.from(
+        new Set(linhas.map((l) => l.cor).filter(Boolean)),
+      ) as string[];
       await (this.prisma as any).siteProduto.create({
         data: {
           ref,
           slug: `ref-${ref.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`,
-          nome: (linha?.descricao || ref).slice(0, 160),
+          nome: (
+            limparNomeVitrine(linhas[0]?.descricao, ref, coresDaFamilia, marca) || ref
+          ).slice(0, 160),
           publicado: true,
           origemConteudo: 'flow',
           editadoPor: 'auto-publicar',
