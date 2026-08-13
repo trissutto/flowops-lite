@@ -3,6 +3,7 @@
 import { motion } from 'framer-motion';
 import { MapPin, MessageCircle, Clock, Phone } from 'lucide-react';
 import { InstagramIcon as Instagram } from '@/components/ui/icons';
+import { trackInstagramClick, trackPhoneClick, trackStoreLocator, trackWhatsAppClick } from '@/lib/tracking';
 import {
   fullAddress,
   whatsappUrl,
@@ -98,7 +99,10 @@ export default function StoreCard({ store, index, isSelected, isNearest, onSelec
             <a
               href={`tel:+55${store.whatsapp.slice(2)}`}
               className="hover:underline"
-              onClick={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                trackPhoneClick(store.unit, 'store_card');
+              }}
             >
               {store.phone}
             </a>
@@ -114,7 +118,10 @@ export default function StoreCard({ store, index, isSelected, isNearest, onSelec
             href={directionsUrl(store)}
             target="_blank"
             rel="noopener noreferrer"
-            onClick={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              trackStoreLocator(store.city, store.unit, 'store_card');
+            }}
             className="inline-flex items-center justify-center gap-1.5 rounded-full bg-[var(--lj-ink)] px-3 py-3 text-xs font-medium text-white transition-all duration-300 hover:-translate-y-0.5 hover:bg-[var(--lj-gold-strong)] sm:py-2.5"
           >
             <MapPin className="h-3.5 w-3.5" strokeWidth={1.75} /> Como chegar
@@ -123,7 +130,10 @@ export default function StoreCard({ store, index, isSelected, isNearest, onSelec
             href={whatsappUrl(store)}
             target="_blank"
             rel="noopener noreferrer"
-            onClick={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              trackWhatsAppClick('store_card', store.unit);
+            }}
             className="inline-flex items-center justify-center gap-1.5 rounded-full bg-[#2E7D46] px-3 py-3 text-xs font-medium text-white transition-all duration-300 hover:-translate-y-0.5 hover:bg-[#256538] sm:py-2.5"
           >
             <MessageCircle className="h-3.5 w-3.5" strokeWidth={1.75} /> WhatsApp
@@ -132,7 +142,10 @@ export default function StoreCard({ store, index, isSelected, isNearest, onSelec
             href={instagramUrl(store)}
             target="_blank"
             rel="noopener noreferrer"
-            onClick={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              trackInstagramClick('store_card', store.unit);
+            }}
             className="inline-flex items-center justify-center gap-1.5 rounded-full border border-[var(--lj-gold)] px-3 py-3 text-xs font-medium text-[var(--lj-gold-strong)] transition-all duration-300 hover:-translate-y-0.5 hover:bg-[#FBF6E6] sm:py-2.5"
           >
             <Instagram className="h-3.5 w-3.5" strokeWidth={1.75} /> Instagram

@@ -167,10 +167,23 @@ export const trackGenerateLead = (origem: string, valor?: number) => track('gene
  * Canais e lojas
  * ──────────────────────────────────────────────────────────────────────────── */
 
+/**
+ * ⚠️ A UNIDADE VIAJA EM `store`, SEMPRE COM O MESMO NOME.
+ *
+ * É esse campo que a tela de cliques da retaguarda agrupa e que a dimensão
+ * personalizada do GA4 lê. Chamar de `loja` num evento e `store` noutro faz a
+ * coluna vir vazia sem erro nenhum — foi o que aconteceu com a dimensão criada
+ * em 13/08, registrada como `loja` enquanto o código mandava `store`.
+ *
+ * `store` opcional no Instagram e no "Como chegar" porque os dois também são
+ * clicados fora de uma unidade (o Instagram da marca no rodapé, por exemplo).
+ * Nesses casos a linha entra agrupada em "—" na tela, em vez de sumir.
+ */
 export const trackWhatsAppClick = (origem: string, loja?: string) => track('whatsapp_click', { source: origem, store: loja });
-export const trackInstagramClick = (origem: string) => track('instagram_click', { source: origem });
-export const trackPhoneClick = (loja: string) => track('phone_click', { store: loja });
-export const trackStoreLocator = (cidade?: string) => track('store_locator', { city: cidade });
+export const trackInstagramClick = (origem: string, loja?: string) => track('instagram_click', { source: origem, store: loja });
+export const trackPhoneClick = (loja: string, origem?: string) => track('phone_click', { store: loja, source: origem });
+export const trackStoreLocator = (cidade?: string, loja?: string, origem?: string) =>
+  track('store_locator', { city: cidade, store: loja, source: origem });
 export const trackStoreAvailability = (product: TrackableProduct, loja: string, disponivel: boolean) =>
   track('store_availability', { store: loja, available: disponivel }, { items: [toTrackedItem(product)] });
 export const trackStoreReservation = (product: TrackableProduct, loja: string) =>
