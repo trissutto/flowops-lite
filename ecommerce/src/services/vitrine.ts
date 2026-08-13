@@ -28,6 +28,20 @@ import type { Product } from '@/types';
 export type OrdemVitrine = 'novidades' | 'relevancia' | 'preco-asc' | 'preco-desc';
 
 /**
+ * 60 s, não 10 min (dono, 13/08: "o estoque tem q ser em tempo real").
+ *
+ * Card de vitrine carrega estoque: é ele que decide o risco "esgotado" e se a
+ * peça sequer aparece na home (`disponivel: '1'`). Com 600 s, uma peça vendida
+ * na loja física continuava sendo isca por dez minutos.
+ *
+ * 60 s é o número certo por um motivo, não por gosto: é o MESMO TTL do cache
+ * de catálogo do backend (`TTL_CATALOGO` em `loja-catalog.service.ts`). Pedir
+ * mais rápido que isso não traria dado mais novo — só bateria no mesmo cache.
+ * As duas pontas têm que andar juntas: mexeu numa, mexa na outra.
+ */
+const REVALIDATE_VITRINE = 60;
+
+/**
  * A PRIMEIRA LEVA DA LISTAGEM, PRONTA NO SERVIDOR (perf, 07/08).
  *
  * 🔴 Medido em produção: `/categoria/blusas` chegava com **ZERO produto no
@@ -55,7 +69,7 @@ export async function fetchPrimeiraPagina(opcoes: {
   soPromocao?: boolean;
   revalidate?: number;
 }): Promise<{ itens: Product[]; total: number; totalPages: number } | null> {
-  const { categoria, subcategoria, tamanho, ordenar = 'relevancia', perPage = 24, precoMax, soPromocao, revalidate = 600 } = opcoes;
+  const { categoria, subcategoria, tamanho, ordenar = 'relevancia', perPage = 24, precoMax, soPromocao, revalidate = REVALIDATE_VITRINE } = opcoes;
   const params = new URLSearchParams({ page: '1', perPage: String(perPage), ordenar });
   if (categoria) params.set('categoria', categoria);
   if (subcategoria) params.set('subcategoria', subcategoria);
@@ -87,7 +101,7 @@ export async function fetchVitrine(
     categoria?: string;
   } = {},
 ): Promise<Product[]> {
-  const { ordenar = 'relevancia', limite = 12, revalidate = 600, categoria } = opcoes;
+  const { ordenar = 'relevancia', limite = 12, revalidate = REVALIDATE_VITRINE, categoria } = opcoes;
 
   const params = new URLSearchParams({
     perPage: String(limite),

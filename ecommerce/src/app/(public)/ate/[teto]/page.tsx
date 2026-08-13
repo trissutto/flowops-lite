@@ -22,7 +22,8 @@ import { breadcrumbSchema, buildMetadata, jsonLdGraph } from '@/lib/seo';
  * que a página faz.
  */
 
-export const revalidate = 3600;
+/** 60 s (era 3600) — ver `REVALIDATE_VITRINE` em `services/vitrine.ts`. */
+export const revalidate = 60;
 
 interface Faixa {
   teto: number;

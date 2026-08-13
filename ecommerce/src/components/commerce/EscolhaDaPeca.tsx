@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react';
 import { ProductGallery } from '@/components/commerce/ProductGallery';
 import { BuyBox } from '@/components/commerce/BuyBox';
+import { useEstoqueAoVivo } from '@/hooks/useEstoqueAoVivo';
 import type { CorApi } from '@/services/products';
 import type { Product } from '@/types';
 
@@ -22,10 +23,38 @@ import type { Product } from '@/types';
  * Cor inicial: a primeira COM ESTOQUE. Abrir na cor esgotada é convidar a
  * cliente a bater na parede logo no primeiro clique.
  */
-export function EscolhaDaPeca({ product, cores }: { product: Product; cores: CorApi[] }) {
+export function EscolhaDaPeca({
+  product,
+  cores: coresDoServidor,
+}: {
+  product: Product;
+  cores: CorApi[];
+}) {
+  /**
+   * ESTOQUE VIVO (13/08): o HTML é uma fotografia do instante em que a página
+   * abriu. Enquanto a cliente está aqui, a grade se reconfere sozinha — ver
+   * `useEstoqueAoVivo`. A COR ESCOLHIDA NUNCA MUDA POR CAUSA DISSO: esgotar
+   * enquanto ela olha vira aviso, não troca de peça debaixo do dedo dela.
+   */
+  const cores = useEstoqueAoVivo(product.slug, coresDoServidor);
+
+  /**
+   * COR DE ABERTURA: a primeira com estoque **E COM FOTO PRÓPRIA**.
+   *
+   * O "com estoque" é de sempre — abrir na cor esgotada é convidar a cliente a
+   * bater na parede no primeiro clique. O "com foto" entrou em 13/08, junto com
+   * a liberação das cores sem foto: as cores vêm em ordem alfabética, então a
+   * VOGUE passaria a abrir em BEGE — que não tem foto — e a primeira coisa que
+   * a cliente veria seria "as fotos acima são das outras cores". A cor sem foto
+   * é ótima como escolha dela; é ruim como cartão de visita da peça.
+   *
+   * Duas redes, nesta ordem: se nenhuma cor com estoque tem foto, vale a com
+   * estoque; se nem isso, a primeira que existir.
+   */
   const inicial = useMemo(() => {
-    const comEstoque = cores.find((c) => c.estoque > 0);
-    return (comEstoque ?? cores[0])?.nome ?? null;
+    const comEstoque = cores.filter((c) => c.estoque > 0);
+    const comFoto = comEstoque.find((c) => c.fotos.length > 0);
+    return (comFoto ?? comEstoque[0] ?? cores[0])?.nome ?? null;
   }, [cores]);
 
   const [cor, setCor] = useState<string | null>(inicial);

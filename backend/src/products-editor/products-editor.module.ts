@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { PrismaModule } from '../prisma/prisma.module';
 import { ErpModule } from '../erp/erp.module';
 import { ProductSearchModule } from '../product-search/product-search.module';
+import { LojaCatalogModule } from '../loja-catalog/loja-catalog.module';
 import { ProductsEditorService } from './products-editor.service';
 import { ProductsEditorController } from './products-editor.controller';
 
@@ -10,7 +11,7 @@ import { ProductsEditorController } from './products-editor.controller';
  * Grava no GIGA (fonte da verdade) e reflete nos espelhos. Ver service.
  */
 @Module({
-  imports: [PrismaModule, ErpModule, ProductSearchModule],
+  imports: [PrismaModule, ErpModule, ProductSearchModule, LojaCatalogModule],
   controllers: [ProductsEditorController],
   providers: [ProductsEditorService],
 })

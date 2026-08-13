@@ -21,7 +21,8 @@ import { breadcrumbSchema, buildMetadata, jsonLdGraph } from '@/lib/seo';
  * enquanto o navegador baixa o JS e faz duas viagens à API.
  */
 
-export const revalidate = 3600;
+/** 60 s (era 3600) — ver `REVALIDATE_VITRINE` em `services/vitrine.ts`. */
+export const revalidate = 60;
 
 export const metadata = buildMetadata({
   title: 'Outlet — peças com desconto',

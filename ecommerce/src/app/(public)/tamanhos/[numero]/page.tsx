@@ -23,7 +23,8 @@ import { breadcrumbSchema, buildMetadata, jsonLdGraph } from '@/lib/seo';
 
 const NUMEROS = [44, 46, 48, 50, 52, 54, 56, 58, 60];
 
-export const revalidate = 3600;
+/** 60 s (era 3600) — ver `REVALIDATE_VITRINE` em `services/vitrine.ts`. */
+export const revalidate = 60;
 
 export function generateStaticParams() {
   return NUMEROS.map((n) => ({ numero: String(n) }));

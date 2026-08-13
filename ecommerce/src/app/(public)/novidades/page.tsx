@@ -24,7 +24,12 @@ import { breadcrumbSchema, buildMetadata, jsonLdGraph } from '@/lib/seo';
  * listagem, e a cliente que volta toda semana não percebe o que mudou.
  */
 
-export const revalidate = 3600;
+/**
+ * 60 s (era 3600). Card de listagem carrega estoque, e uma hora de defasagem
+ * é uma hora oferecendo peça que a loja física já vendeu. Mesmo TTL do cache
+ * de catálogo do backend — ver `REVALIDATE_VITRINE` em `services/vitrine.ts`.
+ */
+export const revalidate = 60;
 
 export const metadata = buildMetadata({
   title: 'Novidades',

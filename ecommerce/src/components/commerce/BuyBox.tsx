@@ -83,6 +83,39 @@ export function BuyBox({
 
   const available = product.sizes.filter((s) => s.available);
   const soldOut = available.length === 0;
+
+  /**
+   * O TAMANHO ESCOLHIDO ACABOU ENQUANTO ELA OLHAVA (dono, 13/08).
+   *
+   * A grade se reconfere sozinha (ver `useEstoqueAoVivo`), então o 48 pode
+   * sair da prateleira com a cliente na página. Deixar o botão selecionado e
+   * indisponível ao mesmo tempo é o pior dos mundos: ela clica em "Adicionar",
+   * o pedido vai, e o guard do carrinho recusa lá no fim — depois de ela ter
+   * preenchido o CEP.
+   *
+   * Então a seleção cai E ela é avisada. Sumir em silêncio faria a próxima
+   * tentativa de comprar esbarrar em "Escolha um tamanho pra continuar", sem
+   * ninguém explicar por que o dela sumiu.
+   *
+   * `product.sizes.length` na condição: grade vazia por um instante (troca de
+   * cor) não é tamanho esgotado, e limpar a escolha ali seria bug puro.
+   */
+  const escolhidoEsgotou =
+    !!size && product.sizes.length > 0 && !product.sizes.some((s) => s.label === size && s.available);
+
+  useEffect(() => {
+    if (!escolhidoEsgotou) return;
+    const perdido = size;
+    setSize(null);
+    setSizeError(false);
+    toast({
+      message: `O tamanho ${perdido} acabou agora`,
+      description: 'Alguém levou a última enquanto você olhava. Escolha outro tamanho.',
+    });
+    // `size` e `toast` de fora de propósito: o gatilho é o tamanho ter deixado
+    // de existir, e reagir à própria limpeza reabriria o aviso.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [escolhidoEsgotou]);
   const discount = product.compareAtPrice
     ? discountPercent(product.compareAtPrice, product.price)
     : 0;
