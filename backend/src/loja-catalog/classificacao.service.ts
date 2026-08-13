@@ -115,6 +115,47 @@ export class ClassificacaoService {
     return { ok: true, slug, nome, pai };
   }
 
+  /**
+   * Cria uma CATEGORIA nova (nível de cima) — "Linha Conforto" pra campanha.
+   *
+   * Nasce ATIVA e no fim da ordem, igual à subcategoria. Aparecer no menu do
+   * site continua dependendo de ter peça publicada dentro — categoria vazia
+   * não vira vitrine, e é assim que o resto do sistema já pensa.
+   */
+  async criarCategoria(input: { nome: string; quem: string }) {
+    const nome = String(input.nome || '').trim();
+    if (!nome) return { ok: false, erro: 'Nome é obrigatório' };
+    const slug = this.slugify(nome);
+    if (!slug) return { ok: false, erro: 'Nome inválido' };
+
+    // Se o slug já vive como SUBcategoria, virar categoria aqui deixaria a
+    // árvore com o mesmo nó nos dois níveis — melhor recusar com explicação.
+    const existente = await (this.prisma as any).siteCategoria.findUnique({
+      where: { slug },
+      select: { paiSlug: true },
+    });
+    if (existente?.paiSlug) {
+      return { ok: false, erro: `"${nome}" já existe como subcategoria de "${existente.paiSlug}"` };
+    }
+
+    const ultima = await (this.prisma as any).siteCategoria.findFirst({
+      where: { paiSlug: null },
+      orderBy: { ordem: 'desc' },
+      select: { ordem: true },
+    });
+
+    await (this.prisma as any).siteCategoria.upsert({
+      where: { slug },
+      update: { nome, atualizadoPor: input.quem },
+      create: {
+        slug, nome, paiSlug: null, ativo: true,
+        ordem: (ultima?.ordem ?? 0) + 1,
+        atualizadoPor: input.quem,
+      },
+    });
+    return { ok: true, slug, nome };
+  }
+
   private slugify(texto: string): string {
     return String(texto || '')
       .normalize('NFD').replace(/[̀-ͯ]/g, '')

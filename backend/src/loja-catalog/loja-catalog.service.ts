@@ -1540,6 +1540,7 @@ export class LojaCatalogService {
       descricao: string | null;
       marca: string | null;
       categoria: string | null;
+      subcategoria: string | null;
       preco: number;
       precoPromocional: number | null;
       disponivel: boolean;
@@ -1573,6 +1574,7 @@ export class LojaCatalogService {
       descricao: p.descricaoCurta || p.descricaoCompleta || null,
       marca: p.marca ?? null,
       categoria: p.categoria ?? null,
+      subcategoria: p.subcategoria ?? null,
       preco: Number(p.preco) || 0,
       // O Meta compara `sale_price` com `price` pra desenhar o "de/por". Só
       // faz sentido quando há promoção de verdade.

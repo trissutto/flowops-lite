@@ -49,6 +49,7 @@ interface PecaFeed {
   descricao: string | null;
   marca: string | null;
   categoria: string | null;
+  subcategoria: string | null;
   preco: number;
   precoPromocional: number | null;
   disponivel: boolean;
@@ -110,6 +111,11 @@ function item(p: PecaFeed): string {
     `<g:age_group>adult</g:age_group>`,
     `<g:product_type>${escapar(rotulo(p.categoria))}</g:product_type>`,
   ];
+
+  // O SLUG da subcategoria, cru — é a chave que o conjunto de produtos do
+  // Meta filtra (custom_label_0 eq "blusas-confort"). Campanha por
+  // subcategoria depende disto; sem subcategoria o campo nem vai.
+  if (p.subcategoria) campos.push(`<g:custom_label_0>${escapar(p.subcategoria)}</g:custom_label_0>`);
 
   if (capa) campos.push(`<g:image_link>${escapar(capa)}</g:image_link>`);
   // Até 10 fotos extras — o carrossel do anúncio dinâmico usa estas.
