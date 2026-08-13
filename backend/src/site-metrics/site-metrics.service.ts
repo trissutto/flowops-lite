@@ -186,6 +186,37 @@ export class SiteMetricsService {
   }
 
   /**
+   * O FUNIL DE VENDA DO SITE (dono, 13/08: "preciso destes dados na tela de
+   * cliques — add cart, initiate checkout, etc"). Do `site_eventos` — a cópia
+   * de primeira parte, que conta todo mundo (com e sem aceite do banner).
+   *
+   * EVENTOS (toques) e PESSOAS (sessões distintas) por etapa. A coleta nasceu
+   * em 13/08/2026 à tarde: período anterior vem zerado, e a tela avisa em vez
+   * de deixar parecer que o site não vendia. `::int` nos COUNTs: BigInt na
+   * resposta é 500 mudo de serialização.
+   */
+  async funil(de: Date, ate: Date): Promise<Array<{ evento: string; eventos: number; pessoas: number }>> {
+    const linhas = await this.prisma.$queryRawUnsafe<
+      Array<{ evento: string; eventos: number; pessoas: number }>
+    >(
+      `SELECT evento,
+              COUNT(*)::int                   AS eventos,
+              COUNT(DISTINCT session_id)::int AS pessoas
+         FROM site_eventos
+        WHERE criado_em >= $1 AND criado_em <= $2
+          AND evento IN ('page_view','view_item','add_to_cart','begin_checkout','add_payment_info','purchase')
+        GROUP BY evento`,
+      de,
+      ate,
+    );
+    return linhas.map((l) => ({
+      evento: l.evento,
+      eventos: Number(l.eventos),
+      pessoas: Number(l.pessoas),
+    }));
+  }
+
+  /**
    * QUANTAS PESSOAS ESTÃO NO SITE AGORA — do nosso dado, não do GA4.
    *
    * Pergunta do dono (13/08): "quantas pessoas estão no site neste momento?

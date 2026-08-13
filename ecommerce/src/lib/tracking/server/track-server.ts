@@ -15,6 +15,7 @@ import 'server-only';
  */
 
 import { dispatchBatch } from './dispatch';
+import { persistirEventosSite } from './flowops-store';
 import type { MetaUserSignals } from './meta-capi';
 import type { EventContext, TrackedItem, TrackingEvent } from '../types';
 
@@ -82,7 +83,18 @@ export async function trackPurchase(input: ServerPurchaseInput): Promise<{ ok: b
     external_id: input.user?.external_id,
   };
 
-  await dispatchBatch([event], signals);
+  /**
+   * A cópia de primeira parte TAMBÉM recebe o purchase (13/08): o funil da
+   * retaguarda fecha da visita à compra no NOSSO banco. Sem isto a última
+   * etapa ficava estruturalmente zerada — o purchase nasce aqui no servidor
+   * e nunca passa pelo `/api/events` do navegador. Vai o mínimo de sempre
+   * (REFs, valor, sessão) — e-mail/telefone ficam só nos sinais das
+   * plataformas.
+   */
+  await Promise.allSettled([
+    dispatchBatch([event], signals),
+    persistirEventosSite([event], false),
+  ]);
   return { ok: true };
 }
 

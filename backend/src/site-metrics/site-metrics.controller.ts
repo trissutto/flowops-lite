@@ -137,6 +137,21 @@ export class SiteMetricsController {
     return { de: inicio.toISOString(), ate: fim.toISOString(), ...dados };
   }
 
+  /** O funil do site (visita → sacola → checkout → compra) — mesma janela De/Até. */
+  @Get('funil')
+  async funil(@Req() req: any, @Query('de') de?: string, @Query('ate') ate?: string) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+
+    const fim = this.fimDoDia(ate) ?? this.fimDoDia(this.hoje())!;
+    const inicio = this.inicioDoDia(de) ?? new Date(fim.getTime() - 29 * 24 * 60 * 60 * 1000);
+
+    return {
+      de: inicio.toISOString(),
+      ate: fim.toISOString(),
+      etapas: await this.service.funil(inicio, fim),
+    };
+  }
+
   private hoje(): string {
     return new Date().toISOString().slice(0, 10);
   }
