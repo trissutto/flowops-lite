@@ -7,7 +7,11 @@
  * DESCRIÇÕES em bloco, com os campos SEPARADOS (SKU · REF · DESCRIÇÃO ·
  * MARCA · COR · TAMANHO · PREÇO).
  *
- * Tudo grava NO GIGA (fonte da verdade) e reflete nos espelhos na hora.
+ * Tudo grava no FLOW e reflete no sistema inteiro na hora (PDV, consulta,
+ * site). O Wincred recebe réplica quando `PRODUCT_NATIVE_WRITES` está ligada
+ * — que é o padrão desde 13/07. O texto da tela dizia "grava no GIGA (fonte
+ * da verdade)" e ficou pra trás da migração: quem lia entendia que a edição
+ * dependia de um ERP que já não manda em nada.
  * Toda ação em bloco passa por PREVIEW ANTES→DEPOIS antes de confirmar.
  * SKU (código) nunca é editável — é a chave do bipe/etiqueta/estoque.
  */
@@ -528,7 +532,7 @@ export default function EditorProdutosPage() {
           <Link href="/retaguarda" className="text-slate-500 hover:text-slate-800"><ArrowLeft className="w-5 h-5" /></Link>
           <Pencil className="w-5 h-5 text-amber-600" />
           <h1 className="font-bold text-slate-800 text-lg">Editor de Produtos</h1>
-          <span className="text-[11px] text-slate-500">grava no GIGA · SKU nunca muda · preview antes de aplicar</span>
+          <span className="text-[11px] text-slate-500">vale na hora · SKU nunca muda · preview antes de aplicar</span>
           {meta?.shadowMode && (
             <span className="text-[10px] font-bold uppercase bg-amber-500 text-white px-2 py-0.5 rounded-full">
               Shadow mode — não grava
@@ -956,7 +960,7 @@ export default function EditorProdutosPage() {
             </table>
           </div>
           <p className="text-[11px] text-slate-500 mt-2">
-            Grava no <b>GIGA</b> (fonte da verdade) e reflete no Flow na hora. Tudo fica auditado (quem/quando/antes/depois).
+            Vale <b>na hora</b> no PDV, na consulta e no site. Tudo fica auditado (quem/quando/antes/depois).
           </p>
           <div className="flex gap-2 mt-3">
             <button onClick={() => setPreview(null)} disabled={applying}
