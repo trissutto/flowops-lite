@@ -81,6 +81,21 @@ export class AbandonedCartsController {
     });
   }
 
+  /**
+   * Carrinhos do E-COMMERCE NOVO (lurdsplussize.com.br) — pedidos
+   * source='ecommerce' do Postgres com checkout iniciado e sem pagamento.
+   * Query: status (abandoned|recovered|lost|all), since, until, search.
+   */
+  @Get('ecommerce/list')
+  ecommercePending(
+    @Query('status') status?: string,
+    @Query('since') since?: string,
+    @Query('until') until?: string,
+    @Query('search') search?: string,
+  ) {
+    return this.service.listEcommercePending({ status, since, until, search });
+  }
+
   /** Stats agregadas via fallback WC. */
   @Get('wc-pending/stats')
   wcPendingStats(
