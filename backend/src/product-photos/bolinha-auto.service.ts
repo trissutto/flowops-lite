@@ -36,6 +36,15 @@ import { WcFotosImportService } from './wc-fotos-import.service';
 const CICLO_MS = 90_000;     // uma rodada a cada 1min30
 const POR_CICLO = 4;         // leituras de cor por rodada
 const MAX_TENTATIVAS = 3;    // depois disso, a peça sai da fila
+/**
+ * Quantas pendentes o ciclo OLHA antes de escolher as 4 que vai pintar.
+ *
+ * Tem que ser MUITO maior que `POR_CICLO`: a consulta ordena por REF e corta
+ * no limite, então uma janela apertada devolve sempre as mesmas primeiras do
+ * alfabeto — e quando elas desistem, a varredura para de andar sem dizer nada
+ * (ver o comentário em `varrer`).
+ */
+const JANELA = 500;
 
 @Injectable()
 export class BolinhaAutoService {
@@ -86,13 +95,36 @@ export class BolinhaAutoService {
     if (!this.ligado || this.ocupado) return;
     this.ocupado = true;
     try {
-      // Pede mais do que vai processar: parte do que vier já falhou antes e
-      // será descartada aqui, e sem folga o ciclo andaria em falso.
-      const candidatas = await this.pendentes(POR_CICLO * 4);
+      /**
+       * ⚠️ A JANELA PRECISA SER MAIOR QUE O TANTO QUE DESISTE (achado 12/08).
+       *
+       * Aqui se pedia `POR_CICLO * 4` = 16. Como `pendentes()` ordena por REF e
+       * corta no limite, isso traz SEMPRE as 16 primeiras do alfabeto. Quando
+       * essas 16 esgotam as três tentativas — o que aconteceu enquanto o acervo
+       * era AVIF e a IA recusava tudo ([[avif-quebra-leitura-ia]]) — a fila
+       * filtrada fica vazia, o método retorna **sem logar nada**, e a varredura
+       * nunca chega na 17ª cor. Morreu em silêncio: 128 cores pendentes e ZERO
+       * linha de `[bolinha-auto]` no log, já com as fotos convertidas e a IA de
+       * pé. Sem log, "parou" e "não tem o que fazer" são indistinguíveis.
+       *
+       * Agora a janela cobre o passivo inteiro, então sempre há candidata nova
+       * atrás das desistentes — e se um dia a janela inteira desistir, o log
+       * DIZ isso em vez de calar.
+       */
+      const candidatas = await this.pendentes(JANELA);
       const fila = candidatas
         .filter((c) => (this.falhas.get(`${c.ref}|${c.cor}`) ?? 0) < MAX_TENTATIVAS)
         .slice(0, POR_CICLO);
-      if (!fila.length) return;
+      if (!fila.length) {
+        if (candidatas.length) {
+          this.logger.warn(
+            `[bolinha-auto] ${candidatas.length} cor(es) pendente(s) e TODAS já ` +
+              `desistidas (${MAX_TENTATIVAS} tentativas). Só volta a tentar no ` +
+              `próximo restart ou pelo botão "Pintar todas", que zera as desistências.`,
+          );
+        }
+        return;
+      }
 
       for (const { ref, cor } of fila) {
         const chave = `${ref}|${cor}`;
