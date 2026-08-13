@@ -18,7 +18,7 @@ import {
   LayoutDashboard, BarChart3, DollarSign, Users, ShoppingBag,
   Shuffle, Truck, AlertTriangle, FileSearch, Activity, ArrowLeft,
   Globe2, Store, Settings, Megaphone, CreditCard, ClipboardList,
-  Package, Bell, Network, Tag, Building2, ShieldCheck,
+  Package, Bell, Network, Tag, Building2, ShieldCheck, MapPin,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import AdminShell, { type AdminNavItem } from '@/components/AdminShell';
@@ -51,6 +51,7 @@ const GESTAO_ITEMS: GestaoItem[] = [
   { href: '/retaguarda/faturamento',          label: 'Faturamento',       subtitle: 'Por loja',      description: 'Gráfico + comparação ano anterior', tone: 'green',  icon: DollarSign     },
   { href: '/retaguarda/dre',                  label: 'Resultado (DRE)',   subtitle: 'Por loja',      description: 'Margem, 4-wall e ponto de equilíbrio', tone: 'teal', icon: BarChart3      },
   { href: '/retaguarda/campanhas',            label: 'Campanhas',         subtitle: 'Vendas por anúncio', description: 'Receita real do site por campanha (UTM)', tone: 'purple', icon: Megaphone   },
+  { href: '/retaguarda/cliques-lojas',        label: 'Cliques nas Lojas', subtitle: 'Site → loja física', description: 'Rota, WhatsApp e Instagram por unidade', tone: 'purple', icon: MapPin      },
   { href: '/retaguarda/relatorio-fiscal',     label: 'Relatório Fiscal',  subtitle: 'NFC-e',          description: 'Auditoria por CNPJ/série + inconsistências', tone: 'purple', icon: ClipboardList },
   { href: '/retaguarda/inteligencia-estoque', label: 'Inteligência',      subtitle: 'Estoque',       description: 'Análise de produto + venda',    tone: 'purple', icon: BarChart3       },
   { href: '/retaguarda/distribuicao-estoque', label: 'Distribuição',      subtitle: 'Estoque PLUS',  description: 'Detecta desequilíbrios entre lojas', tone: 'rose',   icon: Package         },

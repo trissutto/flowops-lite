@@ -76,6 +76,7 @@ import { PdvModule } from './pdv/pdv.module';
 import { WcReturnsModule } from './wc-returns/wc-returns.module';
 import { TrocasModule } from './trocas/trocas.module';
 import { TelemetriaModule } from './telemetria/telemetria.module';
+import { SiteMetricsModule } from './site-metrics/site-metrics.module';
 import { OrderStatusModule } from './order-status/order-status.module';
 import { PagbankModule } from './pagbank/pagbank.module';
 import { PagarmeModule } from './pagarme/pagarme.module';
@@ -189,6 +190,7 @@ import { OperadorPinModule } from './operador-pin/operador-pin.module';
     OperadorPinModule,
     ReportsModule,
     TelemetriaModule,
+    SiteMetricsModule,
   ],
 })
 export class AppModule {}

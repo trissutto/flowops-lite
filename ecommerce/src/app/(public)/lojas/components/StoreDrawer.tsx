@@ -5,6 +5,7 @@ import Image from 'next/image';
 import { motion } from 'framer-motion';
 import { X, MapPin, MessageCircle, Clock, Phone } from 'lucide-react';
 import { InstagramIcon as Instagram } from '@/components/ui/icons';
+import { trackInstagramClick, trackPhoneClick, trackStoreLocator, trackWhatsAppClick } from '@/lib/tracking';
 import {
   fullAddress,
   whatsappUrl,
@@ -134,7 +135,11 @@ export default function StoreDrawer({ store, onClose }: Props) {
             </li>
             <li className="flex gap-2.5">
               <Phone className="mt-0.5 h-4 w-4 shrink-0 text-[var(--lj-gold-strong)]" strokeWidth={1.75} />
-              <a href={`tel:+55${s.whatsapp.slice(2)}`} className="hover:underline">
+              <a
+                href={`tel:+55${s.whatsapp.slice(2)}`}
+                className="hover:underline"
+                onClick={() => trackPhoneClick(s.unit, 'store_drawer')}
+              >
                 {s.phone}
               </a>
             </li>
@@ -145,6 +150,7 @@ export default function StoreDrawer({ store, onClose }: Props) {
                 target="_blank"
                 rel="noopener noreferrer"
                 className="hover:underline"
+                onClick={() => trackInstagramClick('store_drawer_arroba', s.unit)}
               >
                 @{s.instagram}
               </a>
@@ -208,6 +214,7 @@ export default function StoreDrawer({ store, onClose }: Props) {
               href={directionsUrl(s)}
               target="_blank"
               rel="noopener noreferrer"
+              onClick={() => trackStoreLocator(s.city, s.unit, 'store_drawer')}
               className="inline-flex items-center justify-center gap-1.5 rounded-full bg-[var(--lj-ink)] px-3 py-3 text-xs font-medium text-white transition-colors hover:bg-[var(--lj-gold-strong)]"
             >
               <MapPin className="h-3.5 w-3.5" strokeWidth={1.75} /> Como chegar
@@ -216,6 +223,7 @@ export default function StoreDrawer({ store, onClose }: Props) {
               href={whatsappUrl(s)}
               target="_blank"
               rel="noopener noreferrer"
+              onClick={() => trackWhatsAppClick('store_drawer', s.unit)}
               className="inline-flex items-center justify-center gap-1.5 rounded-full bg-[#2E7D46] px-3 py-3 text-xs font-medium text-white transition-colors hover:bg-[#256538]"
             >
               <MessageCircle className="h-3.5 w-3.5" strokeWidth={1.75} /> Falar no WhatsApp
@@ -224,6 +232,7 @@ export default function StoreDrawer({ store, onClose }: Props) {
               href={instagramUrl(s)}
               target="_blank"
               rel="noopener noreferrer"
+              onClick={() => trackInstagramClick('store_drawer', s.unit)}
               className="inline-flex items-center justify-center gap-1.5 rounded-full border border-[var(--lj-gold)] px-3 py-3 text-xs font-medium text-[var(--lj-gold-strong)] transition-colors hover:bg-[#FBF6E6]"
             >
               <Instagram className="h-3.5 w-3.5" strokeWidth={1.75} /> Ver Instagram

@@ -13,6 +13,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { dispatchBatch } from '@/lib/tracking/server/dispatch';
+import { persistirCliquesDeLoja } from '@/lib/tracking/server/flowops-store';
 import { getLogStore } from '@/lib/tracking/server/log-store';
 import { consentStateSchema, trackingEventSchema } from '@/lib/tracking/schemas';
 import { SERVER_ONLY_EVENTS } from '@/lib/tracking/types';
@@ -119,7 +120,21 @@ export async function POST(req: Request) {
   };
 
   try {
-    const { dispatched } = await dispatchBatch(aceitos, signals);
+    /**
+     * Em paralelo, não em sequência: a gravação no FlowOps não pode atrasar o
+     * despacho pras plataformas. `allSettled` porque as duas pontas já engolem
+     * o próprio erro — e se uma escapar, a outra ainda tem que acontecer.
+     *
+     * Awaited de propósito, apesar de ser "fire and forget" conceitual: função
+     * serverless morre quando a resposta termina e leva junto qualquer promise
+     * solta (ver docs/limitacoes.md). Não dá pra soltar sem await aqui.
+     */
+    const [despacho] = await Promise.allSettled([
+      dispatchBatch(aceitos, signals),
+      persistirCliquesDeLoja(aceitos),
+    ]);
+    const dispatched = despacho.status === 'fulfilled' ? despacho.value.dispatched : 0;
+    if (despacho.status === 'rejected') throw despacho.reason;
     return NextResponse.json({ ok: true, dispatched, rejeitados: recusados }, { status: 202 });
   } catch (err) {
     // Falha aqui não pode virar erro visível: o navegador não tem o que fazer

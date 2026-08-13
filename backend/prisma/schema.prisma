@@ -6648,3 +6648,40 @@ model PageAccess {
   @@index([lastAt])
   @@map("page_access")
 }
+
+///
+/// CLIQUE NOS BOTÕES DA LOJA — "Como chegar", WhatsApp, Instagram, telefone.
+///
+/// Pedido do dono em 13/08/2026: saber, loja por loja, quantas pessoas pediram
+/// rota ou chamaram no WhatsApp. A página /lojas nasceu sem instrumentação
+/// nenhuma (nem GA4) — o botão mais valioso da rede era o único sem medida.
+///
+/// UMA LINHA POR CLIQUE, ao contrário da `PageAccess` acima. Lá a pergunta era
+/// "quando foi a última vez"; aqui é "quantos foram na semana passada, em
+/// Suzano, no WhatsApp" — e isso exige recorte por período, que um contador
+/// acumulado não devolve. Volume é baixo (dezenas por dia), então cabe.
+///
+/// O dado é ANÔNIMO de propósito: não guarda IP, nem telefone, nem nada que
+/// identifique a pessoa. Quem quiser saber QUEM chamou tem que olhar a
+/// conversa no WhatsApp — não é este o lugar.
+model SiteStoreClick {
+  id        String   @id @default(uuid())
+  /// Nome no dialeto GA4: whatsapp_click, instagram_click, store_locator, phone_click.
+  evento    String   @db.VarChar(40)
+  /// Unidade ("Suzano", "Piracicaba"). Nulo quando o botão não é de uma loja
+  /// específica — o WhatsApp geral do rodapé, por exemplo.
+  loja      String?  @db.VarChar(80)
+  cidade    String?  @db.VarChar(80)
+  /// Onde o botão estava: store_card, store_drawer, hero, final_cta. Diz se a
+  /// pessoa clicou na lista ou só depois de abrir a ficha da loja.
+  origem    String?  @db.VarChar(40)
+  path      String?  @db.VarChar(160)
+  /// Sessão anônima do tracking. Separa "10 cliques de 1 pessoa indecisa" de
+  /// "10 pessoas" — sem ela o número infla e ninguém percebe.
+  sessionId String?  @map("session_id") @db.VarChar(64)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt])
+  @@index([loja, evento, createdAt])
+  @@map("site_store_clicks")
+}
