@@ -158,7 +158,14 @@ export function EscolhaDaPeca({
       {/* `key` força a galeria a voltar pra primeira foto ao trocar de cor —
           sem isso a cliente escolhe MARINHO e continua vendo a 4ª foto do
           PRETO, que era o índice em que ela estava. */}
-      <div>
+      {/* ⚠️ `min-w-0` NOS DOIS FILHOS — o desktop já tinha o equivalente no
+          `minmax(0,…)` das colunas, mas no MOBILE a coluna única implícita usa
+          `min-width:auto`: a fita de miniaturas (uma POR COR, 13/08) tem
+          largura mínima de 64px×N cores, e com 8 cores são 596px que o item de
+          grid se recusava a encolher. O viewport de layout do celular esticava
+          pra 620px e a PDP INTEIRA cortava à direita — grade de tamanhos,
+          "Adicionar à sacola", tudo. Quanto mais cores a peça ganhava, pior. */}
+      <div className="min-w-0">
         <ProductGallery key={cor ?? 'unica'} images={galeria} name={pecaDaCor.name} autoPlay grupos={grupos} />
         {fotoIlustrativa && (
           <p className="mt-3 text-small text-ink-muted">
@@ -167,7 +174,7 @@ export function EscolhaDaPeca({
           </p>
         )}
       </div>
-      <div className="lg:sticky lg:top-28 lg:self-start">
+      <div className="min-w-0 lg:sticky lg:top-28 lg:self-start">
         <BuyBox
           alertaEstoque={alertaEstoque}
           product={pecaDaCor}
