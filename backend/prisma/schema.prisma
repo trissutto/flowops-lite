@@ -6485,8 +6485,18 @@ model SiteProduto {
   /// Curadoria: o que a loja escolheu publicar
   publicado         Boolean  @default(true)
   destaque          Boolean  @default(false)
+  /// ⚠️ APOSENTADA (13/08): era a tag "Novidade" herdada do WooCommerce —
+  /// etiqueta editorial do site velho que nunca expirava. "Novidades" agora
+  /// é AUTOMÁTICO por `publicadoEm` (peça publicada há ≤30 dias). A coluna
+  /// fica pra histórico; ninguém mais escreve nem lê.
   lancamento        Boolean  @default(false)
   promocao          Boolean  @default(false)
+  /// QUANDO A PEÇA ENTROU NO AR (primeira publicação) — decisão do dono
+  /// 13/08: "Novidades" deixa de ser tag herdada e vira idade real. Carimbo
+  /// preenchido pela varredura do catálogo (idempotente: só onde está nulo,
+  /// backfill = primeira foto R2 da REF, senão syncedAt congelado). Nulo =
+  /// nunca publicada (ou despublicada antes do carimbo existir).
+  publicadoEm       DateTime? @map("publicado_em")
 
   /// TOMADA DE POSSE: 'woocommerce' = ainda espelha o site antigo; 'flow' =
   /// alguém editou aqui e o Flow virou dono — o importador PULA essa peça
