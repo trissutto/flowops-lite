@@ -34,8 +34,13 @@ import { SITE } from '@/lib/seo';
  * peça — em CSV isso vira campo quebrado; em XML, `escapar()` resolve.
  */
 
-/** Uma vez por dia: é a frequência com que o Meta lê, e o catálogo muda devagar. */
-export const revalidate = 86400;
+/**
+ * De hora em hora, não uma vez por dia: o Meta lê 1×/dia, mas com ISR de 24h
+ * a leitura pegava um retrato de até um dia atrás — foi o que manteve o feed
+ * em 60 peças mesmo depois do fix do backend (13/08). O backend cacheia o
+ * catálogo internamente, então regenerar custa um request por hora.
+ */
+export const revalidate = 3600;
 
 interface PecaFeed {
   ref: string;
@@ -128,7 +133,11 @@ function item(p: PecaFeed): string {
 export async function GET() {
   let pecas: PecaFeed[] = [];
   try {
-    pecas = (await api<PecaFeed[]>('/public/loja/feed', { revalidate, timeoutMs: 25000 })) ?? [];
+    // A tag deixa a retaguarda derrubar este cache junto com o resto do
+    // catálogo (POST /api/revalidar com tags:['catalogo']) — sem ela, o dado
+    // preso aqui só saía pelo relógio, por mais que o backend já respondesse
+    // o catálogo novo.
+    pecas = (await api<PecaFeed[]>('/public/loja/feed', { revalidate, tags: ['catalogo'], timeoutMs: 25000 })) ?? [];
   } catch {
     /* Catálogo fora do ar: devolve feed VAZIO e válido, nunca erro. O Meta
        trata resposta com erro como falha de importação e pode desativar o
@@ -147,8 +156,8 @@ export async function GET() {
   return new Response(xml, {
     headers: {
       'Content-Type': 'application/xml; charset=utf-8',
-      // O Meta busca uma vez por dia; o CDN segura o resto.
-      'Cache-Control': 'public, max-age=3600, s-maxage=86400, stale-while-revalidate=86400',
+      // CDN no mesmo ritmo do ISR (1h); SWR cobre a virada sem buraco.
+      'Cache-Control': 'public, max-age=600, s-maxage=3600, stale-while-revalidate=86400',
     },
   });
 }
