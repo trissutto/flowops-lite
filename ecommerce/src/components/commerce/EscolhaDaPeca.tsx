@@ -1,8 +1,9 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ProductGallery } from '@/components/commerce/ProductGallery';
 import { BuyBox } from '@/components/commerce/BuyBox';
+import { useToast } from '@/components/feedback/ToastProvider';
 import { useEstoqueAoVivo } from '@/hooks/useEstoqueAoVivo';
 import type { CorApi } from '@/services/products';
 import type { Product } from '@/types';
@@ -60,6 +61,33 @@ export function EscolhaDaPeca({
   const [cor, setCor] = useState<string | null>(inicial);
 
   const corAtual = cores.find((c) => c.nome === cor);
+
+  /**
+   * A COR ESCOLHIDA ESGOTOU E SAIU DA LISTA (13/08).
+   *
+   * Desde que "cor sem peça não aparece" virou regra no backend, a cor pode
+   * DESAPARECER da resposta enquanto a cliente está na página — o estoque se
+   * reconfere sozinho a cada 45 s (ver `useEstoqueAoVivo`).
+   *
+   * Sem tratar, `corAtual` viraria `undefined` e a página cairia calada no
+   * fallback da peça: a galeria trocaria de foto e o preço poderia mudar sem
+   * nenhum motivo visível. Trocar a peça debaixo do dedo da cliente é pior que
+   * a notícia ruim — então a notícia é dada, e a página vai pra uma cor que
+   * existe de verdade.
+   */
+  const { toast } = useToast();
+  const corSumiu = !!cor && cores.length > 0 && !corAtual;
+  useEffect(() => {
+    if (!corSumiu) return;
+    const perdida = cor;
+    setCor(inicial);
+    toast({
+      message: `A cor ${perdida} esgotou`,
+      description: 'Levaram a última enquanto você olhava. Veja as outras cores desta peça.',
+    });
+    // Só o sumiço é gatilho: reagir à própria troca reabriria o aviso em loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [corSumiu]);
 
   /**
    * A peça vista pela cor escolhida. Sem cor (ou sem ficha ainda), fica
