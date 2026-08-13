@@ -2,6 +2,7 @@
 
 import { motion } from 'framer-motion';
 import { MapPin, MessageCircle } from 'lucide-react';
+import { trackStoreLocator, trackWhatsAppClick } from '@/lib/tracking';
 import { whatsappUrl, directionsUrl, type Store } from '../lib';
 
 interface Props {
@@ -34,6 +35,7 @@ export default function FinalCta({ store }: Props) {
               href={directionsUrl(store)}
               target="_blank"
               rel="noopener noreferrer"
+              onClick={() => trackStoreLocator(store.city, store.unit, 'final_cta')}
               className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-[var(--lj-ink)] px-8 py-4 text-sm font-medium uppercase tracking-[0.15em] text-white transition-colors hover:bg-[var(--lj-gold-strong)] sm:w-auto"
             >
               <MapPin className="h-4 w-4" /> Como chegar
@@ -42,6 +44,7 @@ export default function FinalCta({ store }: Props) {
               href={whatsappUrl(store)}
               target="_blank"
               rel="noopener noreferrer"
+              onClick={() => trackWhatsAppClick('final_cta', store.unit)}
               className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-[#2E7D46] px-8 py-4 text-sm font-medium uppercase tracking-[0.15em] text-white transition-colors hover:bg-[#256538] sm:w-auto"
             >
               <MessageCircle className="h-4 w-4" /> Falar com a loja

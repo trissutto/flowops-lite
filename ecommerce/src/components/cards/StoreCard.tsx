@@ -125,7 +125,9 @@ export function StoreCard({ store, index = 0, nearest, distance, className }: St
           external
           variant="secondary"
           size="sm"
-          onClick={() => trackInstagramClick(`store:${store.unit}`)}
+          // A unidade vai no campo `store`, não embutida no source — era
+          // `store:${unit}` e caía como "Sem loja definida" na tela de cliques.
+          onClick={() => trackInstagramClick('store_card', store.unit)}
         >
           <InstagramIcon /> Instagram
         </Button>
