@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { avisarVitrine } from '../common/avisar-vitrine';
+import { refsDeBusca } from '../common/ref-base';
 import { LojaCatalogService } from './loja-catalog.service';
 
 /**
@@ -192,6 +193,47 @@ export class ClassificacaoService {
       }),
     ]);
 
+    /**
+     * A MINIATURA VINHA SÓ DO ACERVO ANTIGO (bug, 13/08/2026).
+     *
+     * `site_produto.imagens` é o JSON que veio na importação do WooCommerce.
+     * Peça que nunca existiu no site antigo — ou cuja foto foi tirada agora e
+     * subida pela tela master — tem esse campo VAZIO e aparecia aqui sem
+     * miniatura, como se estivesse sem foto. VOGUE-C, VOGUE-OFF, VOGUERQ,
+     * VOGUEU e VOGUEVI aparecem em branco nesta tela tendo de 2 a 4 fotos no
+     * R2, publicadas e visíveis no site.
+     *
+     * Miniatura em branco numa tela de classificação não é detalhe: é ela que
+     * diz "esta peça está sem foto, resolve isso antes" — e estava mentindo.
+     *
+     * Agora vale o R2 (`product_photos`), que é o que o site mostra de fato, e
+     * o acervo antigo fica como rede. UMA query pro lote inteiro: por REF e
+     * por REF-BASE, porque foto antiga foi gravada sob a REF inteira e a nova
+     * sob a base ([[ref-base-familia-unica]]).
+     */
+    const refsDaPagina = [...new Set((itens as any[]).flatMap((p) => refsDeBusca(p.ref)))];
+    const capaR2 = new Map<string, string>();
+    if (refsDaPagina.length) {
+      const fotos = await (this.prisma as any).productPhoto
+        .findMany({
+          where: { ref: { in: refsDaPagina } },
+          select: { ref: true, url: true },
+          orderBy: [{ ordem: 'asc' }, { createdAt: 'asc' }],
+        })
+        .catch(() => [] as any[]);
+      for (const f of fotos as any[]) {
+        const k = String(f.ref || '').toUpperCase();
+        if (!capaR2.has(k) && f.url) capaR2.set(k, f.url);
+      }
+    }
+    const capaDe = (ref: string): string | null => {
+      for (const r of refsDeBusca(ref)) {
+        const u = capaR2.get(String(r).toUpperCase());
+        if (u) return u;
+      }
+      return null;
+    };
+
     return {
       total,
       page,
@@ -205,7 +247,7 @@ export class ClassificacaoService {
         publicado: p.publicado,
         // Só a capa: a tela mostra miniatura pra reconhecer a peça de relance,
         // e mandar a galeria inteira de 200 peças pesaria a resposta à toa.
-        capa: this.primeiraImagem(p.imagens),
+        capa: capaDe(p.ref) ?? this.primeiraImagem(p.imagens),
       })),
     };
   }

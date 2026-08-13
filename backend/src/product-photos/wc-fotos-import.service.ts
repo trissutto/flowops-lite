@@ -258,15 +258,61 @@ export class WcFotosImportService {
   }
 
   /**
+   * O ERP ABREVIA, O SITE ANTIGO ESCREVE POR EXTENSO (13/08/2026).
+   *
+   * A cor do ERP tinha de aparecer LETRA POR LETRA no título do WooCommerce.
+   * Só que quem cadastra no ERP tem campo curto e abrevia: "EST MOSTARDA" no
+   * ERP é "Estampa Mostarda" no site; "OFF WHITE" é "Off-White". A cor existia
+   * dos dois lados, com foto lá, e o importador dizia "cor não casou" — e o
+   * dono rodava a importação de novo, várias vezes, sem nada mudar.
+   *
+   * Medido em 13/08 nas 322 cores sem foto do catálogo: **102 têm nome
+   * composto ou abreviado** (OFF WHITE 11×, EST VERDE, EST BEGE, EST LARANJA,
+   * ESTAMPA PRETO, PRETO DOURADO…). Essas falhavam por construção.
+   *
+   * Aqui as duas pontas passam pela MESMA normalização antes de comparar:
+   * abreviação vira palavra inteira e hífen vira espaço. "EST MOSTARDA" e
+   * "Estampa Mostarda" viram a mesma coisa; "OFF WHITE" e "Off-White" também.
+   */
+  private static readonly ABREVIACOES: Array<[RegExp, string]> = [
+    [/\bEST\b/g, 'ESTAMPA'],
+    [/\bESTAMP\b/g, 'ESTAMPA'],
+    [/\bESTP\b/g, 'ESTAMPA'],
+    [/\bMESC\b/g, 'MESCLA'],
+    [/\bVD\b/g, 'VERDE'],
+    [/\bVERM\b/g, 'VERMELHO'],
+    [/\bAM\b/g, 'AMARELO'],
+    [/\bMAR\b/g, 'MARINHO'],
+    [/\bCLA?\b/g, 'CLARO'],
+    [/\bESC\b/g, 'ESCURO'],
+    [/\bDOUR\b/g, 'DOURADO'],
+  ];
+
+  /** Mesma régua pros dois lados — comparar cru foi o que criou o problema. */
+  private normalizarCor(v: string): string {
+    let s = this.semAcento(v)
+      // Hífen/barra/ponto viram espaço: "Off-White" = "OFF WHITE".
+      .replace(/[-_/.]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    for (const [de, para] of WcFotosImportService.ABREVIACOES) s = s.replace(de, para);
+    return s.replace(/\s+/g, ' ').trim();
+  }
+
+  /**
    * Qual cor da lista aparece no nome do produto do WC. Mais longa primeiro —
    * "ROSA QUEIMADO" tem que ganhar de "ROSA".
    */
   private casarCor(nomeWc: string, cores: string[]): string | null {
-    const nome = this.semAcento(nomeWc);
-    const candidatas = [...cores].sort((a, b) => b.length - a.length);
-    for (const cor of candidatas) {
-      const alvo = this.semAcento(cor);
-      if (!alvo) continue;
+    const nome = this.normalizarCor(nomeWc);
+    // Ordena pela cor JÁ NORMALIZADA: "EST BEGE" (8) vira "ESTAMPA BEGE" (12)
+    // e só assim ganha de "BEGE" — ordenar pelo nome cru deixava a cor curta
+    // casar primeiro e roubar a foto da estampa.
+    const candidatas = [...cores]
+      .map((cor) => ({ cor, alvo: this.normalizarCor(cor) }))
+      .filter((c) => c.alvo)
+      .sort((a, b) => b.alvo.length - a.alvo.length);
+    for (const { cor, alvo } of candidatas) {
       // Fronteira de palavra pra "UVA" não casar dentro de "LUVA".
       if (new RegExp(`(^|[^A-Z0-9])${alvo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^A-Z0-9]|$)`).test(nome)) {
         return cor;
