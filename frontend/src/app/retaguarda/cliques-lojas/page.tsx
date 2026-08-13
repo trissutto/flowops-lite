@@ -36,6 +36,20 @@ type Linha = {
 
 type Resposta = { de: string; ate: string; totalCliques: number; linhas: Linha[] };
 
+/**
+ * "Quantas pessoas estão no site AGORA" (pergunta do dono, 13/08). Vem de
+ * `site_eventos` — o nosso Postgres, não o GA4 (que mistura o site novo com o
+ * WordPress no mesmo stream). Sessão com evento nos últimos 5 min = pessoa
+ * navegando agora.
+ */
+type Agora = {
+  ativos5min: number;
+  ativos30min: number;
+  sessoesHoje: number;
+  pageViewsHoje: number;
+  paginasQuentes: Array<{ path: string; pessoas: number }>;
+};
+
 const iso = (d: Date) => d.toISOString().slice(0, 10);
 
 export default function CliquesLojasPage() {
@@ -44,6 +58,23 @@ export default function CliquesLojasPage() {
   const [dados, setDados] = useState<Resposta | null>(null);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState('');
+  const [agora, setAgora] = useState<Agora | null>(null);
+
+  /**
+   * O card ao vivo se atualiza sozinho a cada 20s — "agora" com botão de
+   * atualizar seria um contrassenso. Falha fica muda de propósito: o resto da
+   * tela continua servindo, e o card mostra o último número que teve.
+   */
+  useEffect(() => {
+    let vivo = true;
+    const busca = () =>
+      api<Agora>('/site-metrics/agora')
+        .then((r) => { if (vivo) setAgora(r); })
+        .catch(() => {});
+    busca();
+    const timer = setInterval(busca, 20_000);
+    return () => { vivo = false; clearInterval(timer); };
+  }, []);
 
   const carregar = useCallback(async () => {
     setCarregando(true);
@@ -102,6 +133,65 @@ export default function CliquesLojasPage() {
         >
           <RefreshCw className={`w-4 h-4 ${carregando ? 'animate-spin' : ''}`} />
         </button>
+      </div>
+
+      {/* AGORA NO SITE — ao vivo, do nosso Postgres (não é GA4) */}
+      <div className="bg-white border border-[#E7E2D8] rounded-xl p-4 sm:p-5">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+          <div className="flex-1">
+            <div className="flex items-center gap-2 text-xs font-bold tracking-wide text-slate-500 uppercase">
+              <span className="relative flex h-2.5 w-2.5">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500" />
+              </span>
+              Agora no site
+            </div>
+            <div className="mt-1 flex items-baseline gap-2">
+              <span className="text-4xl font-extrabold text-slate-800 tabular-nums">
+                {agora ? agora.ativos5min : '—'}
+              </span>
+              <span className="text-sm text-slate-500">
+                {agora?.ativos5min === 1 ? 'pessoa navegando' : 'pessoas navegando'}
+              </span>
+            </div>
+            <p className="text-xs text-slate-400 mt-0.5">
+              últimos 5 min · dado nosso, só do lurdsplussize.com.br · atualiza sozinho
+            </p>
+          </div>
+
+          <div className="grid grid-cols-3 gap-3 sm:w-auto w-full">
+            {[
+              { rotulo: 'Últimos 30 min', valor: agora?.ativos30min },
+              { rotulo: 'Visitas hoje', valor: agora?.sessoesHoje },
+              { rotulo: 'Páginas vistas hoje', valor: agora?.pageViewsHoje },
+            ].map((m) => (
+              <div key={m.rotulo} className="rounded-lg border border-[#E7E2D8] px-3 py-2 text-center">
+                <div className="text-lg font-bold text-slate-700 tabular-nums">{m.valor ?? '—'}</div>
+                <div className="text-[11px] text-slate-500 leading-tight">{m.rotulo}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {!!agora?.paginasQuentes?.length && (
+          <div className="mt-3 pt-3 border-t border-[#F1EDE3]">
+            <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1.5">
+              Onde elas estão
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {agora.paginasQuentes.slice(0, 6).map((p) => (
+                <span
+                  key={p.path}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-[#E7E2D8] bg-[#FAFAF7] px-2.5 py-1 text-xs text-slate-600"
+                  title={p.path}
+                >
+                  <span className="font-semibold text-slate-700">{p.pessoas}</span>
+                  <span className="max-w-[220px] truncate">{p.path}</span>
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* filtros — De/Até + atalhos, padrão de toda tela com período */}
