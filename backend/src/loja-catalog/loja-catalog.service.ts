@@ -396,25 +396,111 @@ export class LojaCatalogService {
     );
   }
 
+  /* ── TIPO DE PEÇA: o que a cliente vê no cabide ──────────────────────────
+   *
+   * 🔴 O ERRO QUE ISTO CONSERTA (Limeira, 13/08/2026): a página "Regata
+   * Estampa Mostarda" (REF 132908) tinha DUAS bolinhas — a regata estampada e
+   * uma CAMISA LISTRADA AZUL, com outra grade (54, 56, 58, 46/48, 50/52).
+   * Dois produtos diferentes vendidos como duas cores da mesma peça. A cliente
+   * escolhia a "cor" e recebia outra roupa.
+   *
+   * A defesa contra REF reciclada existia e não pegou: ela separava pela
+   * PRIMEIRA PALAVRA da descrição, e no ERP as duas estão cadastradas como
+   * "BLUSA ..." — regata é blusa, camisa é blusa. Primeira palavra igual,
+   * produtos diferentes, e a REF reciclada passou direto pela porta.
+   *
+   * Aqui o que separa é o TIPO: regata ≠ camisa ≠ vestido ≠ calça. Sinônimos
+   * caem no mesmo balde de propósito (t-shirt/camiseta/cropped são "blusa"),
+   * senão o cadastro irregular racharia peça boa — que é o erro oposto e
+   * também custa venda ([[marca-vazia-funde-produtos]]).
+   *
+   * `familiaDe` fica como estava: é a heurística que o `ProductSearchService`
+   * também usa, e divergir ali quebraria o bipe da live. O tipo entra como
+   * discriminador ADICIONAL, só do catálogo.
+   */
+  private static readonly TIPO_POR_PALAVRA: Record<string, string> = {
+    regata: 'regata',
+    camisa: 'camisa', camisao: 'camisa', chemise: 'camisa',
+    vestido: 'vestido', vestidos: 'vestido',
+    macacao: 'macacao', macaquinho: 'macacao', jardineira: 'macacao',
+    conjunto: 'conjunto',
+    saia: 'saia',
+    calca: 'calca', calcas: 'calca', pantalona: 'calca', legging: 'calca', leggin: 'calca',
+    short: 'short', shorts: 'short', bermuda: 'short',
+    jaqueta: 'casaco', casaco: 'casaco', blazer: 'casaco', cardigan: 'casaco',
+    colete: 'casaco', kimono: 'casaco', sobretudo: 'casaco',
+    body: 'body',
+    pijama: 'pijama', robe: 'pijama', camisola: 'pijama',
+    blusa: 'blusa', camiseta: 'blusa', tshirt: 'blusa', cropped: 'blusa', bata: 'blusa',
+  };
+
+  /**
+   * Do mais específico pro mais genérico: "BLUSA REGATA" é REGATA, e "BLUSA
+   * MANGA CURTA" é blusa. Sem a ordem, quem chegasse primeiro na frase venceria
+   * — e "blusa" chega primeiro justamente nos casos que precisam ser separados.
+   */
+  private static readonly PRIORIDADE_TIPO = [
+    'regata', 'camisa', 'vestido', 'macacao', 'conjunto', 'saia', 'calca',
+    'short', 'casaco', 'body', 'pijama', 'blusa',
+  ];
+
+  private tipoDePeca(desc?: string | null): string {
+    const palavras = new Set(
+      String(desc || '')
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[̀-ͯ]/g, '')
+        // Hífen e ponto CAEM DENTRO da palavra, não a partem: quebrando em
+        // "t" + "shirt", a T-shirt não casava com nada e caía no fallback —
+        // o que separava a VOGUE das próprias irmãs.
+        .replace(/[^a-z0-9\s]+/g, '')
+        .split(/\s+/)
+        .filter(Boolean),
+    );
+    const achados = new Set<string>();
+    for (const p of palavras) {
+      const t = LojaCatalogService.TIPO_POR_PALAVRA[p];
+      if (t) achados.add(t);
+    }
+    return LojaCatalogService.PRIORIDADE_TIPO.find((t) => achados.has(t)) || '';
+  }
+
+  /**
+   * A chave que diz "isto é o mesmo produto". Tipo quando dá pra reconhecer;
+   * senão a família de sempre, pra descrição fora do vocabulário não virar um
+   * balde só ('' agruparia peças que não têm nada a ver).
+   */
+  private chaveDeProduto(desc?: string | null): string {
+    return this.tipoDePeca(desc) || this.familiaDe(desc);
+  }
+
   /**
    * Das linhas de uma REF, devolve SÓ as do produto que a retaguarda publicou.
-   * REF com uma família só (o caso normal) passa direto, sem custo.
+   * REF com um produto só (o caso normal) passa direto, sem custo.
    */
   private familiaPublicada(ref: string, linhas: LinhaErp[], site: any): LinhaErp[] {
     if (linhas.length < 2) return linhas;
 
     const porFamilia = new Map<string, LinhaErp[]>();
     for (const l of linhas) {
-      const f = this.familiaDe(l.descricao);
+      const f = this.chaveDeProduto(l.descricao);
       if (!porFamilia.has(f)) porFamilia.set(f, []);
       porFamilia.get(f)!.push(l);
     }
     if (porFamilia.size < 2) return linhas;
 
-    // 1) A família do NOME PUBLICADO manda — é a peça que a loja escolheu pôr
-    //    no site, e o nome dela veio de quem cadastrou, não do ERP.
-    const familiaDoSite = this.familiaDe(site?.nome);
-    let escolhida = familiaDoSite !== '_outros' ? porFamilia.get(familiaDoSite) : undefined;
+    /* 1) O TIPO DO NOME PUBLICADO manda — é a peça que a loja escolheu pôr no
+     *    site, e o nome dela veio de quem cadastrou, não do ERP.
+     *
+     *    Casar por TIPO (e não pela primeira palavra) também conserta um
+     *    silêncio antigo: o nome do site é "Regata Estampa Mostarda" e a
+     *    descrição do ERP é "BLUSA REGATA FEMININA PLUS SIZE" — primeira
+     *    palavra "regata" contra "blusa", nunca casava, e a escolha caía no
+     *    desempate por estoque. Ou seja: a peça que ia pro ar era a que tinha
+     *    mais peça na arara, não a que a loja publicou.
+     */
+    const tipoDoSite = this.chaveDeProduto(site?.nome);
+    let escolhida = tipoDoSite !== '_outros' ? porFamilia.get(tipoDoSite) : undefined;
     let criterio = 'nome publicado';
 
     // 2) Sem casar pelo nome: a que tem mais PEÇA EM ESTOQUE — é a que a
