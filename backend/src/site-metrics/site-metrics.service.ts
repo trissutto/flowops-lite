@@ -115,6 +115,77 @@ export class SiteMetricsService {
   }
 
   /**
+   * O LEAD DO WHATSAPP — quem clicou E mandou a mensagem carimbada.
+   *
+   * Quem chama é o n8n (Evolution → webhook → cá), não o site. Dedup de
+   * rajada: a MESMA pessoa mandando de novo em menos de 1h não vira lead
+   * novo — o WhatsApp reenvia webhook com facilidade e cada toque duplicado
+   * inflaria a tela. Depois de 1h conta de novo de propósito: voltou outro
+   * dia, é interesse novo.
+   */
+  async registrarLeadWhatsapp(entrada: {
+    telefone?: string; nome?: string | null; loja?: string | null;
+    mensagem?: string | null; instancia?: string | null;
+  }): Promise<{ ok: boolean; duplicado?: boolean }> {
+    const telefone = String(entrada?.telefone || '').replace(/\D/g, '').slice(0, 20);
+    if (telefone.length < 10) return { ok: false };
+
+    try {
+      const umaHoraAtras = new Date(Date.now() - 60 * 60 * 1000);
+      const recente = await (this.prisma as any).whatsappLead.findFirst({
+        where: { telefone, criadoEm: { gte: umaHoraAtras } },
+        select: { id: true },
+      });
+      if (recente) return { ok: true, duplicado: true };
+
+      await (this.prisma as any).whatsappLead.create({
+        data: {
+          telefone,
+          nome: this.corta(entrada.nome, 120),
+          loja: this.corta(entrada.loja, 80),
+          mensagem: this.corta(entrada.mensagem, 2000),
+          instancia: this.corta(entrada.instancia, 60),
+        },
+      });
+      return { ok: true };
+    } catch (err) {
+      this.logger.error(`falha ao gravar lead do whatsapp: ${String(err)}`);
+      return { ok: false };
+    }
+  }
+
+  /** A tela de leads: lista do período + contagem por loja. */
+  async leadsWhatsapp(de: Date, ate: Date): Promise<{
+    total: number;
+    porLoja: Array<{ loja: string; leads: number }>;
+    linhas: Array<{
+      id: string; telefone: string; nome: string | null; loja: string | null;
+      mensagem: string | null; instancia: string | null; criadoEm: Date;
+    }>;
+  }> {
+    const janela = { gte: de, lte: ate };
+    const linhas = await (this.prisma as any).whatsappLead.findMany({
+      where: { criadoEm: janela },
+      orderBy: { criadoEm: 'desc' },
+      take: 500,
+    });
+
+    const porLojaMapa = new Map<string, number>();
+    for (const l of linhas as Array<{ loja: string | null }>) {
+      const chave = l.loja || 'Atendimento do site';
+      porLojaMapa.set(chave, (porLojaMapa.get(chave) || 0) + 1);
+    }
+
+    return {
+      total: linhas.length,
+      porLoja: Array.from(porLojaMapa.entries())
+        .map(([loja, leads]) => ({ loja, leads }))
+        .sort((a, b) => b.leads - a.leads),
+      linhas,
+    };
+  }
+
+  /**
    * QUANTAS PESSOAS ESTÃO NO SITE AGORA — do nosso dado, não do GA4.
    *
    * Pergunta do dono (13/08): "quantas pessoas estão no site neste momento?
