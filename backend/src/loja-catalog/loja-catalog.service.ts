@@ -678,6 +678,53 @@ export class LojaCatalogService {
       );
     }
 
+    /* ── COR SEM FOTO NÃO EXISTE PRO SITE — E NEM SEU ESTOQUE ──────────────
+     *
+     * Regra do dono, reafirmada em 13/08: **não libere cor sem foto**. Por 6
+     * horas o site mostrou cor sem foto usando a foto das irmãs; a medição
+     * mostrou o tamanho disso — 320 cores, 8.925 peças — e uma bolinha
+     * mostrando a peça errada custa mais que a venda que ela traria.
+     *
+     * O QUE MUDA DE VERDADE AQUI: o corte passou pra ANTES da conta.
+     *
+     * Antes, a cor sumia da bolinha mas o estoque dela CONTINUAVA somando no
+     * total e na grade da peça. Deu no que deu na REF VOGUE: o site anunciava
+     * 570 peças e "91 no 46", e só tinha bolinha pra 178 — 392 peças
+     * anunciadas que a cliente não tinha como comprar. Prometer o que não se
+     * vende é pior que a cor a menos.
+     *
+     * Agora a peça inteira (preço, faixas, grade, estoque total e bolinhas)
+     * nasce das MESMAS linhas: as das cores que têm foto. O que não aparece
+     * não conta.
+     *
+     * Cor sem foto continua invisível mesmo com peça na arara — a saída é
+     * subir a foto na tela master, e aí ela volta sozinha.
+     */
+    const fotosPorCor = new Map<string, any[]>();
+    for (const f of fotos) {
+      const k = String(f.cor || '').toUpperCase();
+      if (!fotosPorCor.has(k)) fotosPorCor.set(k, []);
+      fotosPorCor.get(k)!.push(f);
+    }
+    /**
+     * Duas guardas, e as duas já salvaram tela:
+     *
+     * - `fotos.length === 0`: peça sem foto NENHUMA (acervo antigo, sem cor
+     *   associada) mostra todas as cores, como sempre mostrou.
+     * - linha SEM cor entra sempre: peça de cor única não tem o que casar, e
+     *   filtrar por cor a apagaria inteira.
+     */
+    const semFotoNaPeca = fotos.length === 0;
+    const visivel = (l: LinhaErp) =>
+      !l.cor || semFotoNaPeca || fotosPorCor.has(String(l.cor).trim().toUpperCase());
+    const comFoto = unicas.filter(visivel);
+    /**
+     * Se NENHUMA linha sobrou, as fotos existem mas nenhuma está associada a
+     * cor (import antigo). Rachar a peça aqui a deixaria sem preço, sem grade
+     * e sem estoque — pior que a bolinha errada. Fica como estava.
+     */
+    if (comFoto.length) unicas = comFoto;
+
     // Preço e estoque saem das ÚNICAS: somar cadastro duplicado inflaria o
     // estoque do site e faria vender peça que não existe na arara.
     const precos = unicas.map((l) => l.preco).filter((p) => p > 0);
@@ -746,12 +793,8 @@ export class LojaCatalogService {
     const fichaPorCor = new Map<string, any>(
       ((ficha?.cores ?? []) as any[]).map((c) => [String(c.cor || '').toUpperCase(), c]),
     );
-    const fotosPorCor = new Map<string, any[]>();
-    for (const f of fotos) {
-      const k = String(f.cor || '').toUpperCase();
-      if (!fotosPorCor.has(k)) fotosPorCor.set(k, []);
-      fotosPorCor.get(k)!.push(f);
-    }
+    // `fotosPorCor` já foi montado lá em cima — é ele que decide quais linhas
+    // entram na peça (ver "COR SEM FOTO NÃO EXISTE PRO SITE").
 
     const coresDetalhadas = Array.from(cores.keys())
       .sort((a, b) => a.localeCompare(b, 'pt-BR'))
@@ -797,28 +840,23 @@ export class LojaCatalogService {
             })),
         };
       })
-      /* ── QUEM VIRA BOLINHA: QUEM TEM PEÇA. SÓ ISSO. ────────────────────
+      /* ── QUEM VIRA BOLINHA: TEM FOTO **E** TEM PEÇA ────────────────────
        *
-       * Regra do dono, 13/08: "quando zerar, tirar do site — caso da VINHO".
+       * As duas condições vieram de decisões do dono no mesmo dia (13/08), e
+       * cada uma conserta um erro oposto que convivia na MESMA peça:
        *
-       * O critério era FOTO (03/08: "bolinha que abre galeria vazia é pior que
-       * cor a menos") e errava dos dois lados ao mesmo tempo, na MESMA peça:
+       *   FOTO  — "não libere cor sem foto". Sem ela, 320 cores da rede
+       *           entravam mostrando a foto de uma cor irmã. Bolinha que
+       *           mostra a peça errada custa mais que a venda que traz.
+       *   PEÇA  — "quando zerar, tirar do site — caso da VINHO". Ela estava
+       *           zerada nos 8 tamanhos e seguia na tela por ter foto bonita:
+       *           bolinha que só leva a "esgotado" gasta o clique da cliente.
        *
-       *   - escondia quem tinha peça — a REF VOGUE tinha 570 peças em 21
-       *     cores e só 3 com foto: o site contava as 570 no total e na grade
-       *     ("91 no 46") e só tinha bolinha pra 178. **392 peças anunciadas e
-       *     sem como comprar**, a BEGE sozinha com 102.
-       *   - e oferecia quem não tinha — a VINHO, zerada nos 8 tamanhos, seguia
-       *     na tela porque tinha foto bonita. Bolinha que só leva a "esgotado"
-       *     gasta o clique da cliente.
-       *
-       * Foto nunca foi o assunto: o assunto é ter a peça pra vender. Cor sem
-       * foto própria cai nas fotos das irmãs e a tela avisa ("ainda não temos
-       * foto de BEGE") — aviso que já existia em `EscolhaDaPeca` e nunca
-       * disparava, justamente porque este filtro barrava antes.
-       *
-       * De brinde, estoque total e grade voltam a bater com o que dá pra
-       * comprar: toda cor que soma tem bolinha, e toda bolinha tem peça.
+       * O filtro de FOTO já foi aplicado lá em cima, nas linhas — de propósito.
+       * Cortar só aqui deixava o estoque da cor invisível somando no total e na
+       * grade da peça, e foi assim que a VOGUE anunciou 570 peças tendo bolinha
+       * pra 178. Aqui sobra a condição de ESTOQUE, que não distorce conta
+       * nenhuma: cor zerada soma zero.
        *
        * Peça inteira zerada = nenhuma cor, e aí a PDP cai no caminho de
        * esgotado que já existe ("pode ter na loja, chame uma consultora").
