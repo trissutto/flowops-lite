@@ -256,6 +256,23 @@ export class LojaCatalogAdminController {
     return this.classificacao.progresso();
   }
 
+  /**
+   * Radar da tela /retaguarda/cores-sem-foto: cores NO AR sem foto própria
+   * (vendendo com foto de irmã + aviso) e cores ocultadas à mão na ficha.
+   */
+  @Get('cores-sem-foto')
+  coresSemFoto(@Req() req: any) {
+    this.requireAdmin(req);
+    return this.svc.coresSemFoto();
+  }
+
+  /** Depois de gravar na ficha: derruba caches (backend + vitrine) e devolve o radar fresco. */
+  @Post('cores-sem-foto/recarregar')
+  coresSemFotoRecarregar(@Req() req: any) {
+    this.requireAdmin(req);
+    return this.svc.coresSemFotoRecarregar();
+  }
+
   @Get('classificacao')
   classListar(@Req() req: any, @Query() q: any) {
     this.requireAdmin(req);

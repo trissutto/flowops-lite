@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { refBaseOf } from '../common/ref-base';
+import { avisarVitrine } from '../common/avisar-vitrine';
 
 /**
  * CATÁLOGO DO E-COMMERCE (sprint 008) — ERP é a fonte da verdade.
@@ -583,6 +584,12 @@ export class LojaCatalogService {
     ref: string, linhas: LinhaErp[], site: any, fit: any, fotos: any[] = [], ficha?: any,
     /** Peças da família já vendidas (loja + site + histórico do ERP antigo). */
     vendas = 0,
+    /**
+     * TODAS as fichas da família — não só a escolhida. O "não publicar" de uma
+     * cor pode ter sido gravado na ficha da REF irmã (é lá que a cor mora), e
+     * olhar só a ficha escolhida faria a decisão da retaguarda não valer nada.
+     */
+    fichasTodas: any[] = [],
   ) {
     /* ── ⚠️ UMA REF PODE SER TRÊS PRODUTOS (bug de preço, 07/08) ───────────
      *
@@ -786,15 +793,26 @@ export class LojaCatalogService {
      * Cada cor devolve tudo que muda quando a cliente clica na bolinha:
      * suas fotos, sua grade (só os tamanhos daquela cor) e seu preço.
      *
-     * Cor SEM FOTO não vai pro site (decisão do dono, 03/08): bolinha que
-     * abre galeria vazia é pior que cor a menos. A ficha (`produto_ficha_cor`)
-     * traz a bolinha — hex do conta-gotas ou recorte da foto pra estampa.
+     * Três coisas decidem se a cor aparece, e as três são independentes:
+     * FOTO (aplicada lá em cima, nas linhas), ESTOQUE (no filtro adiante) e o
+     * "não publicar" da ficha. A foto voltou a ser critério em 13/08, algumas
+     * horas depois de ter sido solta — ver o bloco "COR SEM FOTO NÃO EXISTE
+     * PRO SITE". A ficha (`produto_ficha_cor`) traz a bolinha — hex do
+     * conta-gotas ou recorte da foto pra estampa.
      */
-    const fichaPorCor = new Map<string, any>(
-      ((ficha?.cores ?? []) as any[]).map((c) => [String(c.cor || '').toUpperCase(), c]),
-    );
-    // `fotosPorCor` já foi montado lá em cima — é ele que decide quais linhas
-    // entram na peça (ver "COR SEM FOTO NÃO EXISTE PRO SITE").
+    // A ficha ESCOLHIDA entra primeiro e ganha no empate; as das irmãs
+    // completam as cores que só existem nelas.
+    const fichaPorCor = new Map<string, any>();
+    for (const fx of [ficha, ...fichasTodas]) {
+      for (const c of ((fx?.cores ?? []) as any[])) {
+        const k = String(c.cor || '').toUpperCase();
+        if (!fichaPorCor.has(k)) fichaPorCor.set(k, c);
+      }
+    }
+    // `fotosPorCor` já foi montado LÁ EM CIMA, antes das contas — é ele que
+    // decide quais linhas entram na peça (ver "COR SEM FOTO NÃO EXISTE PRO
+    // SITE"). Montar de novo aqui não quebraria nada, mas esconderia que o
+    // corte acontece antes do preço e da grade, que é o ponto todo.
 
     const coresDetalhadas = Array.from(cores.keys())
       .sort((a, b) => a.localeCompare(b, 'pt-BR'))
@@ -808,6 +826,10 @@ export class LojaCatalogService {
 
         return {
           nome: nomeCor,
+          /** REF e marca DONAS da cor (numa família pode ser a irmã) — é onde
+           *  a tela de cores grava o "não publicar" da ficha. */
+          refDona: (daCor[0] as any)?.ref || ref,
+          marcaDona: (daCor[0] as any)?.marca ?? null,
           /** O que a cliente lê. Título da ficha ganha da tradução automática. */
           nomeAmigavel: String(f?.tituloComercial || '').trim() || this.corAmigavel(nomeCor),
           estoque: daCor.reduce((s, l) => s + (l.estoque || 0), 0),
@@ -862,6 +884,26 @@ export class LojaCatalogService {
        * esgotado que já existe ("pode ter na loja, chame uma consultora").
        */
       .filter((c) => c.estoque > 0);
+
+    /**
+     * O "NÃO PUBLICAR" da ficha vale por COR (13/08): a retaguarda marcava
+     * `statusPublicacao='nao_publicar'` e a vitrine seguia mostrando — a
+     * decisão não tinha efeito nenhum. O automático continua sendo o estoque
+     * (regra da VOGUE, acima); este aqui é o botão MANUAL, cor a cor, da tela
+     * /retaguarda/cores-sem-foto. As descartadas seguem no payload pra tela
+     * poder listar e desfazer.
+     */
+    const coresOcultas: Array<{
+      nome: string; estoque: number; refDona: string; marcaDona: string | null; motivo: string;
+    }> = [];
+    const coresVisiveis = coresDetalhadas.filter((c) => {
+      if (fichaPorCor.get(c.nome.toUpperCase())?.statusPublicacao !== 'nao_publicar') return true;
+      coresOcultas.push({
+        nome: c.nome, estoque: c.estoque, refDona: c.refDona, marcaDona: c.marcaDona,
+        motivo: 'nao_publicar',
+      });
+      return false;
+    });
 
     const dataAlt = linhas.map((l) => l.dataAlt).filter(Boolean).sort()
       .slice(-1)[0] as Date | undefined;
@@ -952,7 +994,9 @@ export class LojaCatalogService {
       precoPix: preco > 0 ? Number((preco * 0.95).toFixed(2)) : null,
       parcelamento: preco > 0 ? { vezes: 12, valor: Number((preco / 12).toFixed(2)) } : null,
 
-      cores: coresDetalhadas,
+      cores: coresVisiveis,
+      /** Cores escondidas à mão na ficha — só a tela de cores usa, pra desfazer. */
+      coresOcultas,
       tamanhos,
       estoqueTotal,
       disponivel: estoqueTotal > 0,
@@ -1448,6 +1492,7 @@ export class LojaCatalogService {
           [...new Set(refsDaFamilia.map(refBaseOf))].reduce(
             (s, base) => s + (vendas.get(base) ?? 0), 0,
           ),
+          fichasDaFamilia,
         ),
       );
     }
@@ -1710,6 +1755,62 @@ export class LojaCatalogService {
     }));
   }
 
+  /**
+   * RADAR da tela /retaguarda/cores-sem-foto.
+   *
+   * Duas listas, tiradas do MESMO catálogo montado que o site serve (cache de
+   * 60s — mesma verdade da vitrine):
+   *   · `semFoto`  — cores NO AR vendendo com foto de irmã + aviso "ainda não
+   *     temos foto" (regra da VOGUE, 13/08). É a fila de quem precisa de foto.
+   *   · `ocultas`  — cores escondidas à mão (`nao_publicar` na ficha), pra
+   *     tela poder desfazer.
+   */
+  async coresSemFoto() {
+    const pecas = await this.catalogoPublicado();
+    const linhas: any[] = [];
+    for (const p of pecas as any[]) {
+      const semFoto = (p.cores ?? []).filter((c: any) => !(c.fotos?.length));
+      const ocultas = p.coresOcultas ?? [];
+      if (!semFoto.length && !ocultas.length) continue;
+      linhas.push({
+        ref: p.ref,
+        slug: p.slug,
+        nome: p.nome,
+        marca: p.marca ?? null,
+        capa:
+          (p.cores ?? []).find((c: any) => c.fotos?.length)?.fotos?.[0]?.src ??
+          p.imagens?.[0]?.src ?? null,
+        semFoto: semFoto.map((c: any) => ({
+          nome: c.nome,
+          estoque: c.estoque,
+          refDona: c.refDona ?? p.ref,
+          marcaDona: c.marcaDona ?? p.marca ?? null,
+        })),
+        ocultas,
+      });
+    }
+    return {
+      pecas: linhas,
+      totais: {
+        pecasAfetadas: linhas.length,
+        coresSemFoto: linhas.reduce((s, l) => s + l.semFoto.length, 0),
+        coresOcultas: linhas.reduce((s, l) => s + l.ocultas.length, 0),
+      },
+    };
+  }
+
+  /**
+   * Depois que a tela grava na ficha: derruba o cache do backend E avisa a
+   * vitrine, e devolve o radar já recalculado. Sem isto o clique "funciona"
+   * no banco e a tela/site seguem mostrando o passado por até 1 hora — o
+   * clássico "fiz e não mudou".
+   */
+  async coresSemFotoRecarregar() {
+    this.invalidarCache();
+    avisarVitrine(['catalogo', 'categorias', 'filtros'], this.logger, 'cores-sem-foto');
+    return this.coresSemFoto();
+  }
+
   /** Detalhe da peça — por slug (site) ou pela própria REF. */
   async porSlug(slug: string) {
     const chave = String(slug || '').trim();
@@ -1752,6 +1853,7 @@ export class LojaCatalogService {
         return this.montarPeca(
           ref, linhasSoltas, null, c.fit.get(ref), c.fotos.get(ref) ?? [],
           this.escolherFicha(c.fichas.get(ref), linhasSoltas.find((l) => l.marca)?.marca),
+          0, c.fichas.get(ref) ?? [],
         );
       }
     }
@@ -1764,6 +1866,7 @@ export class LojaCatalogService {
     return this.montarPeca(
       registro.ref, linhas, registro, c.fit.get(registro.ref), c.fotos.get(registro.ref) ?? [],
       this.escolherFicha(c.fichas.get(registro.ref), linhas.find((l) => l.marca)?.marca),
+      0, c.fichas.get(registro.ref) ?? [],
     );
   }
 
