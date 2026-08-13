@@ -29,6 +29,13 @@ export const STATUS_PUBLICACAO = [
 export interface FichaInput {
   nomeCurto?: string | null;
   descricao?: string | null;
+  /**
+   * O texto CURTO da PDP e a descrição que o feed do Meta manda pro anúncio.
+   * Era só da IA (que nunca sobrescreve gente) — mas gente não tinha COMO
+   * escrever: o pedido do dono de 13/08 ("nas descrições da BMM-100…")
+   * esbarrou em campo sem porta. Mesmo teto de 400 caracteres da IA.
+   */
+  resumo?: string | null;
   tecidoId?: string | null;
   colecaoId?: string | null;
   ocasiaoIds?: string[];
@@ -433,6 +440,7 @@ export class ProdutoFichaService {
     const patch: Record<string, unknown> = { atualizadoPor: usuario ?? null };
     if (dados.nomeCurto !== undefined) patch.nomeCurto = dados.nomeCurto?.trim() || null;
     if (dados.descricao !== undefined) patch.descricao = dados.descricao?.trim() || null;
+    if (dados.resumo !== undefined) patch.resumo = dados.resumo?.trim().slice(0, 400) || null;
 
     if (dados.tecidoId !== undefined) {
       const t = await this.atributos.resolveRef('tecido', dados.tecidoId);
