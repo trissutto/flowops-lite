@@ -19,8 +19,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import {
-  ArrowLeft, Instagram, Loader2, MapPin, MessageCircle,
-  Phone, RefreshCw, Users,
+  ArrowLeft, BadgeCheck, CreditCard, Eye, Instagram, Loader2, MapPin,
+  MessageCircle, Phone, RefreshCw, ShoppingBag, ShoppingCart, Users,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -50,6 +50,14 @@ type Agora = {
   paginasQuentes: Array<{ path: string; pessoas: number }>;
 };
 
+/**
+ * O FUNIL DE VENDA (dono, 13/08: "preciso destes dados na tela de cliques —
+ * add cart, initiate checkout, etc"). Mesmo período De/Até dos cliques; conta
+ * todo mundo (com e sem aceite do banner) porque vem de `site_eventos`.
+ */
+type EtapaFunil = { evento: string; eventos: number; pessoas: number };
+type RespostaFunil = { de: string; ate: string; etapas: EtapaFunil[] };
+
 const iso = (d: Date) => d.toISOString().slice(0, 10);
 
 export default function CliquesLojasPage() {
@@ -59,6 +67,7 @@ export default function CliquesLojasPage() {
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState('');
   const [agora, setAgora] = useState<Agora | null>(null);
+  const [funil, setFunil] = useState<RespostaFunil | null>(null);
 
   /**
    * O card ao vivo se atualiza sozinho a cada 20s — "agora" com botão de
@@ -83,8 +92,14 @@ export default function CliquesLojasPage() {
       const qs = new URLSearchParams();
       if (de) qs.set('de', de);
       if (ate) qs.set('ate', ate);
-      const r = await api<Resposta>(`/site-metrics/lojas${qs.toString() ? `?${qs}` : ''}`);
+      const sufixo = qs.toString() ? `?${qs}` : '';
+      // Funil em paralelo e tolerante: se falhar, a tela de cliques segue de pé.
+      const [r, f] = await Promise.all([
+        api<Resposta>(`/site-metrics/lojas${sufixo}`),
+        api<RespostaFunil>(`/site-metrics/funil${sufixo}`).catch(() => null),
+      ]);
       setDados(r);
+      setFunil(f);
     } catch (e: any) {
       setErro(e?.message || 'Não consegui carregar');
     } finally {
@@ -215,6 +230,10 @@ export default function CliquesLojasPage() {
         </div>
       </div>
 
+      {/* O FUNIL — acima do bloco de cliques de propósito: dia sem clique de
+          loja ainda tem funil, e um não pode esconder o outro. */}
+      {funil && <FunilSite etapas={funil.etapas} />}
+
       {erro && (
         <div className="bg-rose-50 border border-rose-200 text-rose-700 rounded-xl p-4 text-sm">{erro}</div>
       )}
@@ -297,6 +316,57 @@ function Cartao({ titulo, valor, icone, cor }: { titulo: string; valor: number; 
         {icone} {titulo}
       </div>
       <div className={`mt-2 text-2xl font-bold tabular-nums ${cor}`}>{valor}</div>
+    </div>
+  );
+}
+
+/**
+ * O funil da visita à compra, em PESSOAS (sessões) — o % de cada etapa é
+ * sobre a anterior. Números pequenos embaixo são os toques (eventos).
+ */
+function FunilSite({ etapas }: { etapas: EtapaFunil[] }) {
+  const por = new Map(etapas.map((e) => [e.evento, e]));
+  const ordem = [
+    { evento: 'page_view', titulo: 'Visitas', icone: <Users className="w-4 h-4" /> },
+    { evento: 'view_item', titulo: 'Viram peça', icone: <Eye className="w-4 h-4" /> },
+    { evento: 'add_to_cart', titulo: 'Sacola', icone: <ShoppingBag className="w-4 h-4" /> },
+    { evento: 'begin_checkout', titulo: 'Checkout', icone: <ShoppingCart className="w-4 h-4" /> },
+    { evento: 'add_payment_info', titulo: 'Pagamento', icone: <CreditCard className="w-4 h-4" /> },
+    { evento: 'purchase', titulo: 'Compras', icone: <BadgeCheck className="w-4 h-4" /> },
+  ];
+
+  let anterior: number | null = null;
+  const cards = ordem.map((o) => {
+    const dado = por.get(o.evento);
+    const pessoas = dado?.pessoas ?? 0;
+    const pct = anterior !== null && anterior > 0 ? Math.round((pessoas / anterior) * 100) : null;
+    anterior = pessoas;
+    return { ...o, pessoas, eventos: dado?.eventos ?? 0, pct };
+  });
+
+  return (
+    <div className="space-y-2">
+      <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
+        {cards.map((c) => (
+          <div key={c.evento} className="bg-white border border-[#E7E2D8] rounded-xl p-4">
+            <div className="flex items-center gap-2 text-slate-500 text-xs font-semibold uppercase tracking-wide">
+              {c.icone} {c.titulo}
+            </div>
+            <div className={`mt-2 text-2xl font-bold tabular-nums ${c.evento === 'purchase' ? 'text-[#2E7D46]' : 'text-slate-800'}`}>
+              {c.pessoas}
+            </div>
+            <div className="text-xs text-slate-400 tabular-nums">
+              {c.eventos} evento{c.eventos === 1 ? '' : 's'}
+              {c.pct !== null && <span className="ml-1 font-semibold text-[#B8912B]">· {c.pct}%</span>}
+            </div>
+          </div>
+        ))}
+      </div>
+      <p className="text-xs text-slate-400">
+        Funil em pessoas (sessões), contando todo mundo — com e sem aceite de cookies. Coleta
+        desde 13/08/2026; período anterior aparece zerado. O % é sobre a etapa anterior.
+        Compras = pagamento confirmado; o número fiscal é o da tela de Pedidos.
+      </p>
     </div>
   );
 }
