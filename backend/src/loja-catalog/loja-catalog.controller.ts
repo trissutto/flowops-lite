@@ -319,6 +319,14 @@ export class LojaCatalogAdminController {
     });
   }
 
+  /** Cria uma categoria nova de nível de cima — "Linha Conforto". */
+  @Post('classificacao/categoria')
+  classCriarCategoria(@Req() req: any, @Body() body: { nome: string }) {
+    this.requireAdmin(req);
+    const quem = req?.user?.email || req?.user?.name || 'admin';
+    return this.classificacao.criarCategoria({ nome: body?.nome || '', quem });
+  }
+
   private booleanoAdmin(v: any): boolean | undefined {
     if (v === undefined || v === '') return undefined;
     return v === '1' || v === 'true' || v === true;
