@@ -57,8 +57,10 @@ export default async function HomePage() {
   // O hero vem do cadastro de banners da retaguarda; se não houver campanha
   // no ar (ou o backend estiver fora), volta pro estático sem quebrar a home.
   const hero = await getHeroDaHome();
-  // As categorias do CRM com a foto da peça mais nova de cada uma.
-  const categoriasHome = await getCategorias();
+  // As categorias do CRM com a foto da peça mais nova de cada uma. As
+  // DESTACADAS ficam de fora: elas têm aba própria no topo (estrela da
+  // retaguarda), e card + aba juntos duplicam a mesma entrada.
+  const categoriasHome = (await getCategorias()).filter((c) => !c.destaque);
   // Posts REAIS da @lurdsplussize. Cai na grade estática se a integração não
   // estiver configurada — ver `services/instagram`.
   const posts = await getInstagram(6);
