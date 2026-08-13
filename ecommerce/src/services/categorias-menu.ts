@@ -89,6 +89,13 @@ export interface CategoriaVitrine {
    * Vazio enquanto ninguém classificou; a página se comporta como antes.
    */
   subcategorias?: Array<{ slug: string; nome: string; qtdPecas: number }>;
+  /**
+   * CATEGORIA EM DESTAQUE VIRA ABA PRÓPRIA no topo (dono, 13/08: "a Linha
+   * Conforto entra como uma nova aba lá em cima; ao clicar abre em cascata").
+   * O interruptor é o "Destaque" da tela /retaguarda/categorias — marcou,
+   * vira aba com as subcategorias em cascata; desmarcou, volta a ser só card.
+   */
+  destaque?: boolean;
 }
 
 /**
@@ -158,7 +165,43 @@ export async function getCategorias(
  * página de cards se alguém mexesse só num dos dois).
  */
 export async function getNavegacao(): Promise<NavItem[]> {
-  return navigation.map((item) =>
+  const base = navigation.map((item) =>
     item.href === '/categoria' ? { ...item, menu: undefined } : item,
   );
+
+  /**
+   * ABAS DINÂMICAS — categoria marcada como "Destaque" na retaguarda entra
+   * como eixo próprio logo depois de "Categorias" (dono, 13/08, pra Linha
+   * Conforto). A cascata são as subcategorias com peça publicada, apontando
+   * pro filtro `?sub=` que a página da categoria já entende. Falhou o fetch?
+   * O menu estático segue de pé — mesma regra do resto deste arquivo.
+   */
+  try {
+    const destacadas = (await getCategorias()).filter((c) => c.destaque);
+    if (destacadas.length) {
+      const abas: NavItem[] = destacadas.map((c) => ({
+        label: c.nome,
+        href: `/categoria/${c.slug}`,
+        icon: 'Sparkles',
+        menu: c.subcategorias?.length
+          ? {
+              columns: [
+                {
+                  title: c.nome,
+                  links: c.subcategorias.map((s) => ({
+                    label: s.nome,
+                    href: `/categoria/${c.slug}?sub=${encodeURIComponent(s.slug)}`,
+                  })),
+                },
+              ],
+            }
+          : undefined,
+      }));
+      const posicao = base.findIndex((i) => i.href === '/categoria');
+      base.splice(posicao < 0 ? 1 : posicao + 1, 0, ...abas);
+    }
+  } catch {
+    /* menu estático segue de pé */
+  }
+  return base;
 }
