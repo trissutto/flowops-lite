@@ -20,7 +20,8 @@ import { hexDaCor, type PecaApi } from '@/services/products';
 import type { Product } from '@/types';
 import { STORE_POLICIES } from '@/data/store-policies';
 import { SeloVendas } from '@/components/commerce/SeloVendas';
-import { WHATSAPP_ATENDIMENTO } from '@/data/contato';
+import { linkWhatsapp } from '@/data/contato';
+import { SITE } from '@/lib/seo';
 
 /**
  * BUY BOX — a coluna de decisão de compra.
@@ -178,9 +179,24 @@ export function BuyBox({
     product.name.split(/s+/).slice(0, 4).join(' '),
   )}`;
 
-  const whatsapp = `https://api.whatsapp.com/send?phone=${WHATSAPP_ATENDIMENTO}&text=${encodeURIComponent(
-    `Olá! Tenho interesse na peça "${product.name}". Vocês têm no tamanho ${size ?? '__'}?`,
-  )}`;
+  /**
+   * TIRAR DÚVIDA leva REF, cor e o LINK da peça (pedido do dono, 13/08).
+   *
+   * A mensagem chegava só com o nome — "Tenho interesse na peça Blusa Manga
+   * Curta" — e a consultora respondia perguntando "qual delas?": nome limpo
+   * não identifica peça nenhuma entre 14 lojas. A REF é o código que o PDV
+   * busca, e o link faz o WhatsApp montar a prévia com a FOTO — a atendente
+   * vê a peça antes de abrir conversa. Sem emoji (ver `data/contato.ts`).
+   */
+  const refPeca = product.sku ?? product.id;
+  const corDaDuvida = corSelecionada ?? (cores?.length === 1 ? cores[0].nome : null);
+  const whatsapp = linkWhatsapp(
+    [
+      `Olá! Tenho interesse na peça "${product.name}" (Ref ${refPeca}${corDaDuvida ? `, cor ${corDaDuvida}` : ''}).`,
+      `Vocês têm no tamanho ${size ?? '__'}?`,
+      `${SITE.url}/produto/${product.slug}`,
+    ].join('\n'),
+  );
 
   return (
     <div className="flex flex-col">
