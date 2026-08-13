@@ -1882,6 +1882,135 @@ export class LojaCatalogService {
     return lista.itens.filter((p: any) => p.ref !== peca.ref).slice(0, limite);
   }
 
+  /* ── LOOK — "estas peças saem na mesma foto e se vendem juntas" ──────────
+   *
+   * Dono, 13/08: a Regata 403048 e a Calça Aladdin 406027 são o MESMO look e
+   * cada PDP tem que puxar a outra. Fase 1: bloco "Complete o look" na PDP.
+   * Fase 2 (quando houver mais fotos de conjunto): botão "Comprar o look".
+   *
+   * O look guarda REFs cruas; a resolução pro card usa o CATÁLOGO MONTADO
+   * (mesma verdade da vitrine, cache de 60s) — nome, preço e foto nunca
+   * divergem do que a cliente vê no resto do site. Membro fora da vitrine
+   * (despublicado, sem foto) simplesmente não aparece; look que resolver
+   * menos de 2 peças não vale um bloco.
+   */
+
+  /** O card compacto de um membro do look, resolvido pelo catálogo. */
+  private cartaoDoLook(catalogo: any[], ref: string): any | null {
+    const alvo = this.normRef(ref);
+    const c = catalogo.find(
+      (p: any) => this.normRef(p.ref) === alvo || this.normRef(p.ref) === refBaseOf(alvo),
+    );
+    if (!c) return null;
+    return {
+      ref: c.ref,
+      slug: c.slug,
+      nome: c.nome,
+      preco: c.preco,
+      precoPix: c.precoPix,
+      imagem: c.imagens?.[0]?.src ?? null,
+      disponivel: !!c.disponivel,
+    };
+  }
+
+  /**
+   * O look de uma peça já montada (chamado só pela PDP). Best-effort de
+   * propósito: look quebrado não pode derrubar a página do produto.
+   */
+  async lookDaPeca(peca: any): Promise<any | null> {
+    try {
+      const refs = new Set<string>([this.normRef(peca.ref), refBaseOf(this.normRef(peca.ref))]);
+      for (const c of peca.cores ?? []) {
+        if (c?.refDona) refs.add(this.normRef(c.refDona));
+      }
+      const membros: any[] = await (this.prisma as any).siteLookPeca.findMany({
+        where: { ref: { in: [...refs] } },
+        select: { lookId: true },
+      });
+      if (!membros.length) return null;
+      const look = await (this.prisma as any).siteLook.findFirst({
+        where: { id: { in: membros.map((m) => m.lookId) } },
+        include: { pecas: true },
+        orderBy: { criadoEm: 'desc' },
+      });
+      if (!look) return null;
+
+      const catalogo = await this.catalogoPublicado();
+      const vistos = new Set<string>();
+      const pecas = (look.pecas as any[])
+        .map((m) => {
+          const cartao = this.cartaoDoLook(catalogo, m.ref);
+          if (!cartao || vistos.has(cartao.ref)) return null;
+          vistos.add(cartao.ref);
+          return { ...cartao, atual: refs.has(this.normRef(m.ref)) || cartao.ref === peca.ref };
+        })
+        .filter(Boolean);
+      if (pecas.length < 2) return null;
+      return { id: look.id, nome: look.nome, pecas };
+    } catch (e: any) {
+      this.logger.warn(`[look] falha ao resolver look da peça ${peca?.ref}: ${e?.message || e}`);
+      return null;
+    }
+  }
+
+  /** A tela da retaguarda: todos os looks, com o que resolver do catálogo. */
+  async listarLooks() {
+    const looks: any[] = await (this.prisma as any).siteLook.findMany({
+      include: { pecas: true },
+      orderBy: { criadoEm: 'desc' },
+    });
+    const catalogo = await this.catalogoPublicado();
+    return looks.map((l) => ({
+      id: l.id,
+      nome: l.nome,
+      criadoPor: l.criadoPor,
+      criadoEm: l.criadoEm,
+      pecas: (l.pecas as any[]).map((m) => ({
+        ref: m.ref,
+        // null = fora da vitrine agora (sem foto/despublicada) — a tela avisa.
+        cartao: this.cartaoDoLook(catalogo, m.ref),
+      })),
+    }));
+  }
+
+  async criarLook(nome: string, refs: string[], usuario?: string) {
+    const limpo = String(nome || '').trim().slice(0, 80);
+    if (!limpo) throw new Error('Nome do look é obrigatório');
+    const unicas = [...new Set((refs || []).map((r) => this.normRef(r)).filter(Boolean))];
+    if (unicas.length < 2) throw new Error('Um look precisa de pelo menos 2 REFs');
+    return (this.prisma as any).siteLook.create({
+      data: {
+        nome: limpo,
+        criadoPor: usuario ?? null,
+        pecas: { create: unicas.map((ref) => ({ ref })) },
+      },
+      include: { pecas: true },
+    });
+  }
+
+  async adicionarPecaAoLook(lookId: string, ref: string) {
+    const limpa = this.normRef(ref);
+    if (!limpa) throw new Error('REF obrigatória');
+    await (this.prisma as any).siteLookPeca.upsert({
+      where: { lookId_ref: { lookId, ref: limpa } },
+      create: { lookId, ref: limpa },
+      update: {},
+    });
+    return { ok: true };
+  }
+
+  async removerPecaDoLook(lookId: string, ref: string) {
+    await (this.prisma as any).siteLookPeca.deleteMany({
+      where: { lookId, ref: this.normRef(ref) },
+    });
+    return { ok: true };
+  }
+
+  async excluirLook(lookId: string) {
+    await (this.prisma as any).siteLook.delete({ where: { id: lookId } });
+    return { ok: true };
+  }
+
   /**
    * Nome e ordem de cada categoria/subcategoria — o rótulo dos trechos do
    * feed. Tabela pequena e que quase nunca muda; 5 min de cache evita uma ida

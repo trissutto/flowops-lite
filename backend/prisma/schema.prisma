@@ -6726,6 +6726,34 @@ model SiteEvento {
   @@map("site_eventos")
 }
 
+/// LOOK — peças que formam um conjunto (dono, 13/08: Regata 403048 + Calça
+/// Aladdin 406027 saem na MESMA foto e têm que se vender juntas). Fase 1: a
+/// PDP de cada peça mostra as irmãs do look ("Complete o look"). Fase 2 (o
+/// plano do dono): botão "Comprar o look" e o look como card próprio quando
+/// houver mais fotos de conjunto. Curadoria HUMANA — nenhum robô cria look.
+model SiteLook {
+  id        String         @id @default(uuid())
+  nome      String         @db.VarChar(80)
+  criadoPor String?        @map("criado_por") @db.VarChar(80)
+  criadoEm  DateTime       @default(now()) @map("criado_em")
+  pecas     SiteLookPeca[]
+
+  @@map("site_look")
+}
+
+model SiteLookPeca {
+  id     String   @id @default(uuid())
+  lookId String   @map("look_id")
+  look   SiteLook @relation(fields: [lookId], references: [id], onDelete: Cascade)
+  /// REF como está em `site_produto` — a vitrine resolve pela família
+  /// (normRef/REF-BASE), então a irmã sufixada também encontra o look.
+  ref    String   @db.VarChar(20)
+
+  @@unique([lookId, ref])
+  @@index([ref])
+  @@map("site_look_peca")
+}
+
 /// O WHATSAPP DE QUEM CLICOU — enfim com nome e número (dono, 13/08: "onde
 /// vejo o whats de quem clicou?"). O clique no site é anônimo por natureza;
 /// a pessoa passa a existir quando ENVIA a mensagem carimbada ("vim pelo

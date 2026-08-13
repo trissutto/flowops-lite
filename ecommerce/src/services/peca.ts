@@ -29,6 +29,8 @@ export interface PecaDoSite {
   fichaTecnica: Array<{ rotulo: string; valor: string }>;
   /** Peças da família já vendidas (loja + site + histórico do ERP antigo). */
   vendas: number;
+  /** As peças que saem na mesma foto — ver `PecaApi['look']`. */
+  look: PecaApi['look'];
 }
 
 export async function fetchPeca(slug: string): Promise<PecaDoSite | null> {
@@ -55,6 +57,7 @@ export async function fetchPeca(slug: string): Promise<PecaDoSite | null> {
       descricaoCurta: p.descricaoCurta ?? '',
       fichaTecnica: p.fichaTecnica ?? [],
       vendas: Number(p.vendas) || 0,
+      look: p.look ?? null,
     };
   } catch {
     return null;
