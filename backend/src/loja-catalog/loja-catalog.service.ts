@@ -711,30 +711,33 @@ export class LojaCatalogService {
             })),
         };
       })
-      /* ── QUEM VIRA BOLINHA ─────────────────────────────────────────────
+      /* ── QUEM VIRA BOLINHA: QUEM TEM PEÇA. SÓ ISSO. ────────────────────
        *
-       * A regra de 03/08 era "cor sem foto não aparece", pelo motivo certo:
-       * bolinha que abre GALERIA VAZIA é pior que cor a menos.
+       * Regra do dono, 13/08: "quando zerar, tirar do site — caso da VINHO".
        *
-       * Só que ela cobrava caro. Medido na REF VOGUE em 13/08: 570 peças no
-       * estoque, 21 cores, 3 com foto. O site contava as 570 no total e na
-       * grade ("91 no 46") e só tinha bolinha pra 178 — **392 peças que a
-       * cliente via anunciadas e não tinha como comprar**. A BEGE sozinha,
-       * com 102 peças, era invisível.
+       * O critério era FOTO (03/08: "bolinha que abre galeria vazia é pior que
+       * cor a menos") e errava dos dois lados ao mesmo tempo, na MESMA peça:
        *
-       * Agora: COR COM ESTOQUE APARECE, tenha foto própria ou não. A galeria
-       * não fica vazia — cai nas fotos das irmãs, e a tela avisa "ainda não
-       * temos foto de BEGE, as fotos acima são das outras cores" (o aviso já
-       * existia em `EscolhaDaPeca` e nunca disparava, justamente porque este
-       * filtro nunca deixava passar cor sem foto).
+       *   - escondia quem tinha peça — a REF VOGUE tinha 570 peças em 21
+       *     cores e só 3 com foto: o site contava as 570 no total e na grade
+       *     ("91 no 46") e só tinha bolinha pra 178. **392 peças anunciadas e
+       *     sem como comprar**, a BEGE sozinha com 102.
+       *   - e oferecia quem não tinha — a VINHO, zerada nos 8 tamanhos, seguia
+       *     na tela porque tinha foto bonita. Bolinha que só leva a "esgotado"
+       *     gasta o clique da cliente.
        *
-       * O que continua fora: cor SEM foto E SEM estoque. Essa é só ruído de
-       * cadastro — bolinha morta que abre galeria emprestada.
+       * Foto nunca foi o assunto: o assunto é ter a peça pra vender. Cor sem
+       * foto própria cai nas fotos das irmãs e a tela avisa ("ainda não temos
+       * foto de BEGE") — aviso que já existia em `EscolhaDaPeca` e nunca
+       * disparava, justamente porque este filtro barrava antes.
        *
-       * Efeito colateral bom: estoque total e grade voltam a bater com o que
-       * dá pra comprar, porque toda cor que soma agora tem bolinha.
+       * De brinde, estoque total e grade voltam a bater com o que dá pra
+       * comprar: toda cor que soma tem bolinha, e toda bolinha tem peça.
+       *
+       * Peça inteira zerada = nenhuma cor, e aí a PDP cai no caminho de
+       * esgotado que já existe ("pode ter na loja, chame uma consultora").
        */
-      .filter((c) => c.fotos.length > 0 || fotos.length === 0 || c.estoque > 0);
+      .filter((c) => c.estoque > 0);
 
     const dataAlt = linhas.map((l) => l.dataAlt).filter(Boolean).sort()
       .slice(-1)[0] as Date | undefined;
