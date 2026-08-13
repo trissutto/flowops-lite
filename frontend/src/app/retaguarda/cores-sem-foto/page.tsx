@@ -283,17 +283,26 @@ export default function CoresSemFotoPage() {
                         >
                           <EyeOff className="w-3 h-3" /> {c.nome}
                           <b className="text-xs">{c.estoque} pç</b>
-                          <button
-                            onClick={() => mudarStatus(c, 'publicado')}
-                            disabled={agindo.has(chave)}
-                            className="rounded-full border px-2 py-0.5 text-xs hover:bg-white disabled:opacity-40 flex items-center gap-1"
-                            title="Publicar esta cor de volta"
-                          >
-                            {agindo.has(chave)
-                              ? <Loader2 className="w-3 h-3 animate-spin" />
-                              : <Eye className="w-3 h-3" />}
-                            publicar
-                          </button>
+                          {/* Cor no piso de estoque não tem botão: publicar de
+                              volta não adianta — a regra a esconderia de novo
+                              no segundo seguinte. Ela volta REPONDO. */}
+                          {c.motivo === 'estoque_baixo' ? (
+                            <span className="rounded-full border border-slate-300 px-2 py-0.5 text-xs" title="Regra automática: variação com menos de 10 peças sai do site e volta quando repõe">
+                              estoque &lt; 10
+                            </span>
+                          ) : (
+                            <button
+                              onClick={() => mudarStatus(c, 'publicado')}
+                              disabled={agindo.has(chave)}
+                              className="rounded-full border px-2 py-0.5 text-xs hover:bg-white disabled:opacity-40 flex items-center gap-1"
+                              title="Publicar esta cor de volta"
+                            >
+                              {agindo.has(chave)
+                                ? <Loader2 className="w-3 h-3 animate-spin" />
+                                : <Eye className="w-3 h-3" />}
+                              publicar
+                            </button>
+                          )}
                         </span>
                       );
                     })}
