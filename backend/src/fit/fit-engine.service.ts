@@ -9,18 +9,56 @@ import { Injectable } from '@nestjs/common';
  * a torna precisa é o histórico REAL de venda/troca da Lurd's.
  *
  * Como pensa (nesta ordem):
- *   1. Base pelo corpo (IMC ajustado por altura)
+ *   1. Base pelo corpo: estima busto/cintura/quadril em CM a partir de
+ *      peso+altura, corrige pelos portes declarados (busto/quadril P-M-G e
+ *      formato) e mapeia na régua de medidas da grade — o eixo que decide
+ *      depende da categoria (busto em cima, quadril embaixo, vestido fecha
+ *      no maior)
  *   2. Âncora no tamanho que a cliente JÁ USA (sinal mais forte que existe)
  *   3. Ajuste da PEÇA (modelagem, elastano, caimento)
  *   4. Preferência de caimento da cliente (justa/normal/soltinha)
- *   5. Proporção do corpo por categoria (busto manda em cima, quadril embaixo)
- *   6. VIÉS APRENDIDO — o que as trocas reais dessa peça ensinaram
+ *   5. VIÉS APRENDIDO — o que as trocas reais dessa peça ensinaram
  *
  * Trabalha em ÍNDICE da grade (0=46 … 7=60), não no número: assim "meio
  * tamanho" tem significado e o arredondamento acontece só no fim.
+ *
+ * ── CALIBRAÇÃO (13/08/2026) ──────────────────────────────────────────────
+ * A base anterior era uma tabela IMC→tamanho que recomendava 2 A 3 NÚMEROS
+ * ACIMA do que o mercado plus veste (1,62m/90kg caía no 54; as tabelas de
+ * loja plus dizem 46-48) e a correção de altura tinha o sinal invertido
+ * (em IMC igual, a mulher mais alta tem perímetros MAIORES, não menores —
+ * circunferência ∝ √(peso/altura), e o IMC já divide por altura²).
+ *
+ * Fontes da recalibração:
+ *  - Régua tamanho→medidas: consolidação de tabelas plus brasileiras
+ *    (numeração 46-60, passo de 4-5 cm por número nos três perímetros).
+ *  - Corpo→medidas: perímetro = a·√(peso/altura) + b, ajustada em três
+ *    âncoras de estudos antropométricos femininos — população média do
+ *    SizeUK (~68 kg: busto 99, quadril 104), média adulta dos EUA/NHANES
+ *    (~77 kg: cintura 99, quadril 110) e coorte SOON de obesidade severa
+ *    (117 kg / IMC 44: cintura 123, quadril 134).
+ * O tamanho habitual declarado e o viés aprendido das trocas continuam
+ * sendo quem afina a pontaria peça a peça.
  */
 
 export const GRADE_PLUS = ['46', '48', '50', '52', '54', '56', '58', '60'];
+
+/**
+ * Régua da casa: medidas de CORPO (cm) que cada número da grade veste.
+ * Consolidada das tabelas do varejo plus nacional — enquanto não houver
+ * grade própria cadastrada (grades_medidas), esta é a referência única,
+ * também pro guia e pra ficha de caimento.
+ */
+export const MEDIDAS_POR_TAMANHO: Record<string, { busto: number; cintura: number; quadril: number }> = {
+  '46': { busto: 108, cintura: 92, quadril: 116 },
+  '48': { busto: 113, cintura: 97, quadril: 121 },
+  '50': { busto: 118, cintura: 102, quadril: 126 },
+  '52': { busto: 122, cintura: 107, quadril: 131 },
+  '54': { busto: 126, cintura: 112, quadril: 135 },
+  '56': { busto: 130, cintura: 117, quadril: 139 },
+  '58': { busto: 134, cintura: 122, quadril: 143 },
+  '60': { busto: 138, cintura: 127, quadril: 147 },
+};
 
 export type Preferencia = 'justa' | 'normal' | 'soltinha';
 export type Porte = 'P' | 'M' | 'G';
@@ -72,43 +110,80 @@ export interface FitResultado {
   trilha: Array<{ etapa: string; ajuste: number; indice: number; nota: string }>;
 }
 
-/** Peças em que o BUSTO manda / em que o QUADRIL manda. */
+/** Peças em que o BUSTO manda / em que o QUADRIL manda; o resto é inteira. */
 const CATEGORIA_CIMA = /blusa|camisa|jaqueta|casaco|body|cropped|regata|blazer|top/i;
 const CATEGORIA_BAIXO = /calca|calça|legging|saia|short|pantalona/i;
-const CATEGORIA_INTEIRA = /vestido|macacao|macacão|conjunto/i;
+
+interface Medidas { busto: number; cintura: number; quadril: number }
 
 @Injectable()
 export class FitEngineService {
   /**
-   * Base pelo corpo. Faixas calibradas pra grade PLUS feminina 46–60: o IMC
-   * sozinho erra em quem é alta (mesmo peso distribuído em mais altura veste
-   * menor), por isso a altura entra como correção fina.
+   * Corpo → medidas estimadas (cm). Modelo alométrico: o tronco é um volume,
+   * então perímetro cresce com √(peso/altura) — a altura entra na física,
+   * não como remendo. Coeficientes ajustados nas âncoras femininas do
+   * cabeçalho (SizeUK / NHANES / SOON).
    */
-  private baseCorpo(alturaCm: number, pesoKg: number): { indice: number; imc: number } {
-    const alturaM = Math.max(1.3, Math.min(2.1, alturaCm / 100));
-    const imc = pesoKg / (alturaM * alturaM);
+  private estimarMedidas(corpo: FitCorpo): { neutras: Medidas; ajustadas: Medidas; notas: string[] } {
+    const alturaM = Math.max(1.3, Math.min(2.1, corpo.alturaCm / 100));
+    const s = Math.sqrt(Math.max(35, Math.min(250, corpo.pesoKg)) / alturaM);
 
-    const faixas: Array<[number, number]> = [
-      [27, 0],    // até 27 → 46
-      [29, 1],    // 48
-      [31, 2],    // 50
-      [33.5, 3],  // 52
-      [36, 4],    // 54
-      [39, 5],    // 56
-      [42, 6],    // 58
-    ];
-    let indice = 7; // acima de 42 → 60
-    for (const [teto, idx] of faixas) {
-      if (imc < teto) { indice = idx; break; }
+    const neutras: Medidas = {
+      busto: 13.5 * s + 11.5,
+      cintura: 15.5 * s - 11,
+      quadril: 15.5 * s + 2.5,
+    };
+
+    // O porte declarado corrige a estimativa média: ±5 cm ≈ ±1 número no eixo.
+    const aj: Medidas = { ...neutras };
+    const notas: string[] = [];
+    if (corpo.busto === 'G') { aj.busto += 5; notas.push('busto grande'); }
+    if (corpo.busto === 'P') { aj.busto -= 5; notas.push('busto pequeno'); }
+    if (corpo.quadril === 'G') { aj.quadril += 5; notas.push('quadril grande'); }
+    if (corpo.quadril === 'P') { aj.quadril -= 5; notas.push('quadril pequeno'); }
+    switch (corpo.formatoCorpo) {
+      case 'pera':      aj.quadril += 3; aj.busto -= 2; notas.push('corpo pera'); break;
+      case 'maca':      aj.busto += 3; aj.cintura += 5; aj.quadril -= 2; notas.push('corpo maçã'); break;
+      case 'ampulheta': aj.cintura -= 4; notas.push('corpo ampulheta'); break;
+      case 'retangulo': aj.cintura += 3; aj.quadril -= 2; notas.push('corpo retângulo'); break;
     }
+    return { neutras, ajustadas: aj, notas };
+  }
 
-    // Correção por altura: alta "estica" o volume, baixa concentra
-    if (alturaCm >= 1.72 * 100) indice -= 0.5;
-    else if (alturaCm >= 1.66 * 100) indice -= 0.25;
-    else if (alturaCm <= 1.55 * 100) indice += 0.5;
-    else if (alturaCm <= 1.60 * 100) indice += 0.25;
+  /** Medida (cm) → índice fracionário na régua da grade, com extrapolação nas pontas. */
+  private idxPorMedida(eixo: keyof Medidas, cm: number): number {
+    const vals = GRADE_PLUS.map((t) => MEDIDAS_POR_TAMANHO[t][eixo]);
+    const n = vals.length;
+    if (cm <= vals[0]) return (cm - vals[0]) / (vals[1] - vals[0]);
+    if (cm >= vals[n - 1]) return n - 1 + (cm - vals[n - 1]) / (vals[n - 1] - vals[n - 2]);
+    for (let i = 0; i < n - 1; i++) {
+      if (cm <= vals[i + 1]) return i + (cm - vals[i]) / (vals[i + 1] - vals[i]);
+    }
+    return n - 1;
+  }
 
-    return { indice: this.clamp(indice), imc };
+  /**
+   * Índice-base pela categoria: blusa fecha no busto, calça no quadril
+   * (cintura pesa pouco — no plus ela costuma ser elástica), vestido tem
+   * que fechar no MAIOR eixo. Eixos limitados pra uma estimativa extrema
+   * de cintura não arrastar o resultado sozinha.
+   */
+  private mixPorCategoria(categoria: string | null | undefined, m: Medidas): { indice: number; eixos: Record<string, number> } {
+    const lim = (v: number) => Math.max(-1.5, Math.min(9, v));
+    const B = lim(this.idxPorMedida('busto', m.busto));
+    const C = lim(this.idxPorMedida('cintura', m.cintura));
+    const Q = lim(this.idxPorMedida('quadril', m.quadril));
+
+    const cat = String(categoria || '');
+    const ehCima = CATEGORIA_CIMA.test(cat);
+    const ehBaixo = CATEGORIA_BAIXO.test(cat);
+
+    let indice: number;
+    if (ehCima) indice = 0.85 * B + 0.15 * C;
+    else if (ehBaixo) indice = 0.7 * Q + 0.3 * C;
+    else indice = 0.6 * Math.max(B, Q) + 0.3 * Math.min(B, Q) + 0.1 * C; // inteira/desconhecida
+
+    return { indice, eixos: { B, C, Q } };
   }
 
   private indiceDe(tamanho?: string | null): number | null {
@@ -134,20 +209,32 @@ export class FitEngineService {
       trilha.push({ etapa, ajuste: Number(ajuste.toFixed(2)), indice: Number(indice.toFixed(2)), nota });
 
     // ── 1) BASE PELO CORPO ────────────────────────────────────────────────
-    const { indice: baseImc, imc } = this.baseCorpo(corpo.alturaCm, corpo.pesoKg);
-    let idx = baseImc;
-    push('corpo', 0, idx, `IMC ${imc.toFixed(1)} + altura ${corpo.alturaCm}cm → ${GRADE_PLUS[Math.round(idx)]}`);
+    const alturaM = Math.max(1.3, Math.min(2.1, corpo.alturaCm / 100));
+    const imc = corpo.pesoKg / (alturaM * alturaM);
+    const { neutras, ajustadas, notas } = this.estimarMedidas(corpo);
+
+    const neutro = this.mixPorCategoria(peca.categoria, neutras);
+    const base = this.mixPorCategoria(peca.categoria, ajustadas);
+    const baseBruta = base.indice; // antes do clamp — guarda o "quão fora da grade"
+    let idx = this.clamp(base.indice);
+
+    push('corpo', 0, this.clamp(neutro.indice),
+      `${corpo.alturaCm}cm/${corpo.pesoKg}kg (IMC ${imc.toFixed(1)}) → busto ~${Math.round(neutras.busto)}, ` +
+      `cintura ~${Math.round(neutras.cintura)}, quadril ~${Math.round(neutras.quadril)}cm → ${GRADE_PLUS[Math.round(this.clamp(neutro.indice))]}`);
+    if (notas.length) {
+      push('proporcao', base.indice - neutro.indice, idx, notas.join(' + '));
+    }
 
     // ── 2) ÂNCORA NO TAMANHO QUE ELA JÁ USA ───────────────────────────────
     // É o sinal mais forte do formulário: a cliente já viveu o corpo dela em
-    // roupa. O IMC entra como contrapeso (ela pode estar comprando errado).
+    // roupa. A estimativa entra como contrapeso (ela pode estar comprando errado).
     const idxHabitual = this.indiceDe(corpo.tamanhoHabitual);
     const temHabitual = idxHabitual !== null;
     let discordancia = 0;
     if (temHabitual) {
-      discordancia = Math.abs(idxHabitual! - baseImc);
+      discordancia = Math.abs(idxHabitual! - idx);
       const antes = idx;
-      idx = 0.45 * baseImc + 0.55 * idxHabitual!;
+      idx = 0.45 * idx + 0.55 * idxHabitual!;
       push('habitual', idx - antes, idx, `costuma vestir ${corpo.tamanhoHabitual} (peso 55%)`);
     }
 
@@ -163,28 +250,10 @@ export class FitEngineService {
     if (peca.caimento === 'amplo') { idx -= 0.5; push('caimento', -0.5, idx, 'caimento amplo'); }
 
     // ── 4) COMO ELA GOSTA ─────────────────────────────────────────────────
-    if (corpo.preferencia === 'justa')    { idx -= 0.6; push('preferencia', -0.6, idx, 'prefere mais justa'); }
-    if (corpo.preferencia === 'soltinha') { idx += 0.6; push('preferencia', +0.6, idx, 'prefere mais soltinha'); }
+    if (corpo.preferencia === 'justa')    { idx -= 0.5; push('preferencia', -0.5, idx, 'prefere mais justa'); }
+    if (corpo.preferencia === 'soltinha') { idx += 0.5; push('preferencia', +0.5, idx, 'prefere mais soltinha'); }
 
-    // ── 5) PROPORÇÃO DO CORPO × CATEGORIA ─────────────────────────────────
-    const cat = String(peca.categoria || '');
-    const ehCima = CATEGORIA_CIMA.test(cat);
-    const ehBaixo = CATEGORIA_BAIXO.test(cat);
-    const ehInteira = CATEGORIA_INTEIRA.test(cat) || (!ehCima && !ehBaixo);
-
-    const pesoBusto = ehCima ? 1 : ehInteira ? 0.6 : 0;
-    const pesoQuadril = ehBaixo ? 1 : ehInteira ? 0.6 : 0;
-
-    if (corpo.busto === 'G' && pesoBusto) { const a = 0.5 * pesoBusto; idx += a; push('busto', a, idx, 'busto grande'); }
-    if (corpo.busto === 'P' && pesoBusto) { const a = -0.3 * pesoBusto; idx += a; push('busto', a, idx, 'busto pequeno'); }
-    if (corpo.quadril === 'G' && pesoQuadril) { const a = 0.5 * pesoQuadril; idx += a; push('quadril', a, idx, 'quadril grande'); }
-    if (corpo.quadril === 'P' && pesoQuadril) { const a = -0.3 * pesoQuadril; idx += a; push('quadril', a, idx, 'quadril pequeno'); }
-
-    // Formato do corpo afina onde o volume se concentra
-    if (corpo.formatoCorpo === 'pera' && (ehBaixo || ehInteira)) { idx += 0.3; push('formato', +0.3, idx, 'corpo pera — quadril manda'); }
-    if (corpo.formatoCorpo === 'maca' && (ehCima || ehInteira))  { idx += 0.3; push('formato', +0.3, idx, 'corpo maçã — tronco manda'); }
-
-    // ── 6) O QUE AS TROCAS REAIS ENSINARAM ────────────────────────────────
+    // ── 5) O QUE AS TROCAS REAIS ENSINARAM ────────────────────────────────
     const viesRef = this.viesConfiavel(aprend.viesRef, aprend.amostrasRef || 0, 4);
     const viesCat = this.viesConfiavel(aprend.viesCategoria, aprend.amostrasCategoria || 0, 25);
     const viesMarca = this.viesConfiavel(aprend.viesMarca, aprend.amostrasMarca || 0, 25);
@@ -263,6 +332,9 @@ export class FitEngineService {
     else if (tamanhoAlt) frases.push(`Se preferir mais justinha, escolha o ${tamanhoAlt}.`);
     if ((aprend.amostrasRef || 0) >= 3 && Math.abs(viesRef) >= 0.3) {
       frases.push('Ajustamos pela experiência real de quem já comprou essa peça.');
+    }
+    if (baseBruta < -0.75 && !temHabitual) {
+      frases.push('O 46 é o menor número da nossa grade — se você costuma vestir 44, pode ficar levemente amplo.');
     }
 
     return {
