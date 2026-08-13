@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Heart, MapPin, MessageCircle, Ruler, ShoppingBag, Sparkles, Star } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
@@ -12,7 +12,7 @@ import { useToast } from '@/components/feedback/ToastProvider';
 import { useCartStore } from '@/store/cart';
 import { useUiStore } from '@/store/ui';
 import { useWishlistStore } from '@/store/wishlist';
-import { trackAddToCart } from '@/lib/tracking';
+import { trackAddToCart, trackViewItem } from '@/lib/tracking';
 import { useMounted } from '@/hooks';
 import { cn, discountPercent, formatPrice } from '@/lib/utils';
 import { hexDaCor } from '@/services/products';
@@ -55,6 +55,28 @@ export function BuyBox({
   const openOverlay = useUiStore((s) => s.openOverlay);
   const toggleWishlist = useWishlistStore((s) => s.toggle);
   const isFavorite = useWishlistStore((s) => s.ids.includes(product.id));
+
+  /**
+   * VIEW_ITEM — o topo do funil.
+   *
+   * Dispara aqui, e não na página, porque a PDP é Server Component: quem sabe
+   * que a peça foi VISTA por um navegador é o primeiro pedaço client que
+   * monta com o produto na mão. A cor selecionada entra junto — é ela que
+   * distingue a peça no remarketing.
+   *
+   * A trava por `product.id` existe porque `view_item` não tem `dedupe_key`:
+   * sem ela, o StrictMode do dev e qualquer re-render por troca de cor
+   * mandariam a mesma visualização duas vezes, inflando o funil.
+   */
+  const viewTrackedRef = useRef<string | number | null>(null);
+  useEffect(() => {
+    if (viewTrackedRef.current === product.id) return;
+    viewTrackedRef.current = product.id;
+    trackViewItem(product, { cor: corSelecionada ?? undefined });
+    // `corSelecionada` de propósito fora das deps: trocar de cor não é uma
+    // nova visualização da peça.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [product]);
 
   const available = product.sizes.filter((s) => s.available);
   const soldOut = available.length === 0;
