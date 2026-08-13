@@ -542,19 +542,53 @@ export class WcFotosImportService {
         create: { ref, marca },
         update: {},
       });
-      await (this.prisma as any).produtoFichaCor.upsert({
+      /**
+       * ⚠️ `update: {}` NÃO PREENCHIA A COR QUE ESTAVA VAZIA (achado 12/08/2026).
+       *
+       * O upsert daqui só gravava o hex no CREATE. Quando a linha de
+       * `produto_ficha_cor` já existia com `cor_hex NULL` — o caso mais comum,
+       * porque a cor ganha linha ao receber título, status de publicação ou
+       * foto — ele caía no `update: {}` e não fazia NADA. E ainda logava
+       * "bolinha #XXXXXX" logo abaixo, então o log dizia sucesso enquanto o
+       * banco continuava vazio.
+       *
+       * Foi isso que segurou 128 cores: elas TÊM linha, com hex nulo, e a
+       * varredura as reencontrava a cada ciclo, relia a foto (chamada paga!) e
+       * jogava o resultado fora. O `pendentes()` estava certo o tempo todo — o
+       * comentário dele até avisa que olha `cor_hex`, não a existência da
+       * linha; quem não cumpria o combinado era a escrita.
+       *
+       * A regra "escolha humana ganha da IA" continua valendo, e agora é
+       * explícita: só grava quando `corHex` está vazio. Conta-gotas ajustado
+       * não é tocado.
+       */
+      const jaExiste = await (this.prisma as any).produtoFichaCor.findUnique({
         where: { fichaId_cor: { fichaId: ficha.id, cor } },
-        create: {
-          fichaId: ficha.id, cor,
-          corHex: lida.hex,
-          swatchTipo: lida.estampada ? 'foto' : 'cor',
-          swatchFocoX: lida.estampada ? 0.5 : null,
-          swatchFocoY: lida.estampada ? 0.5 : null,
-        },
-        // Não sobrescreve bolinha já definida: se alguém ajustou no conta-gotas,
-        // a escolha humana vale mais que o palpite da IA.
-        update: {},
+        select: { id: true, corHex: true },
       });
+
+      const swatch = {
+        corHex: lida.hex,
+        swatchTipo: lida.estampada ? 'foto' : 'cor',
+        swatchFocoX: lida.estampada ? 0.5 : null,
+        swatchFocoY: lida.estampada ? 0.5 : null,
+      };
+
+      if (!jaExiste) {
+        await (this.prisma as any).produtoFichaCor.create({
+          data: { fichaId: ficha.id, cor, ...swatch },
+        });
+      } else if (!jaExiste.corHex) {
+        await (this.prisma as any).produtoFichaCor.update({
+          where: { id: jaExiste.id },
+          data: swatch,
+        });
+      } else {
+        // Alguém já escolheu a cor no conta-gotas: não se toca.
+        this.logger.log(`[wc-fotos] ${ref}/${cor}: já tinha bolinha humana, mantida`);
+        return;
+      }
+
       this.logger.log(`[wc-fotos] ${ref}/${cor}: bolinha ${lida.hex} (${lida.nome})`);
     } catch (e: any) {
       this.logger.warn(`[wc-fotos] bolinha ${ref}/${cor}: ${e?.message || e}`);
