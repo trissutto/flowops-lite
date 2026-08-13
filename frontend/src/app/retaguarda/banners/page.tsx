@@ -61,6 +61,13 @@ const SLOTS: { id: string; nome: string; ajuda: string; comFoto: boolean }[] = [
     ajuda: 'As frases que giram na faixa preta acima do menu. Só texto e link — sem foto.',
     comFoto: false,
   },
+  {
+    id: 'lojas-hero',
+    nome: 'Capa de Nossas Lojas',
+    ajuda:
+      'A foto do topo de /lojas. Horizontal, 2000px de largura ou mais: ela ocupa a tela inteira e o texto entra por cima, então evite arte com informação nos cantos. Sem banner aqui, vale a foto padrão da página.',
+    comFoto: true,
+  },
 ];
 
 function paraInput(v: string | null): string {
