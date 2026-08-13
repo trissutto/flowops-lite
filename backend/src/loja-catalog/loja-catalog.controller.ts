@@ -1,5 +1,5 @@
 import {
-  Body, Controller, ForbiddenException, Get, NotFoundException, Param, Patch, Post, Query, Req, UseGuards,
+  Body, Controller, Delete, ForbiddenException, Get, NotFoundException, Param, Patch, Post, Query, Req, UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { LojaCatalogService, ListarParams } from './loja-catalog.service';
@@ -117,7 +117,12 @@ export class LojaCatalogPublicController {
   async produto(@Param('slug') slug: string) {
     const p = await this.svc.porSlug(slug);
     if (!p) throw new NotFoundException('Produto não encontrado');
-    return p;
+    /**
+     * O LOOK vai junto do produto (dono, 13/08): a regata e a calça da mesma
+     * foto se puxam na PDP. Best-effort no service — look quebrado devolve
+     * null e a página segue inteira.
+     */
+    return { ...p, look: await this.svc.lookDaPeca(p) };
   }
 
   @Get('produto/:slug/relacionados')
@@ -184,6 +189,39 @@ export class LojaCatalogAdminController {
   historico(@Req() req: any, @Query('limite') limite?: string) {
     this.requireAdmin(req);
     return this.sync.historico(limite ? Number(limite) : 20);
+  }
+
+  /* ── LOOKS — curadoria "estas peças se vendem juntas" (dono, 13/08) ────── */
+
+  @Get('looks')
+  looks(@Req() req: any) {
+    this.requireAdmin(req);
+    return this.svc.listarLooks();
+  }
+
+  @Post('looks')
+  criarLook(@Req() req: any, @Body() body: { nome?: string; refs?: string[] }) {
+    this.requireAdmin(req);
+    const quem = req?.user?.email || req?.user?.name || 'admin';
+    return this.svc.criarLook(String(body?.nome || ''), body?.refs ?? [], quem);
+  }
+
+  @Post('looks/:id/pecas')
+  adicionarPeca(@Req() req: any, @Param('id') id: string, @Body() body: { ref?: string }) {
+    this.requireAdmin(req);
+    return this.svc.adicionarPecaAoLook(id, String(body?.ref || ''));
+  }
+
+  @Delete('looks/:id/pecas/:ref')
+  removerPeca(@Req() req: any, @Param('id') id: string, @Param('ref') ref: string) {
+    this.requireAdmin(req);
+    return this.svc.removerPecaDoLook(id, ref);
+  }
+
+  @Delete('looks/:id')
+  excluirLook(@Req() req: any, @Param('id') id: string) {
+    this.requireAdmin(req);
+    return this.svc.excluirLook(id);
   }
 
   /**

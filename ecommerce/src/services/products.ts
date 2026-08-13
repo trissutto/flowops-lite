@@ -93,6 +93,20 @@ export interface PecaApi {
    * antigo. Prova social REAL; o piso de exibição mora no `SeloVendas`.
    */
   vendas?: number;
+  /**
+   * LOOK — as peças que saem na mesma foto (curadoria da retaguarda, 13/08).
+   * `atual` marca a própria peça da página; a PDP mostra as irmãs no bloco
+   * "Complete o look". null/ausente = peça sem look.
+   */
+  look?: {
+    id: string;
+    nome: string;
+    pecas: Array<{
+      ref: string; slug: string; nome: string;
+      preco: number; precoPix: number | null;
+      imagem: string | null; disponivel: boolean; atual: boolean;
+    }>;
+  } | null;
 }
 
 export function mapPeca(p: PecaApi): Product {
