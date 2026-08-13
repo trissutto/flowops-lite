@@ -132,8 +132,7 @@ export class SiteBannersService {
     if (!slot || !(SLOTS as readonly string[]).includes(slot)) {
       throw new BadRequestException(`slot inválido — use ${SLOTS.join(', ')}`);
     }
-    this.avisarSite(this.tagsDoSlot(slot));
-    return (this.prisma as any).siteBanner.create({
+    const criado = await (this.prisma as any).siteBanner.create({
       data: {
         slot,
         eyebrow: this.texto(dados.eyebrow),
@@ -154,6 +153,10 @@ export class SiteBannersService {
         atualizadoPor: usuario ?? null,
       },
     });
+    // DEPOIS de gravar: avisar antes fazia a vitrine remontar a página com o
+    // banco de ANTES do banner existir — cache limpo com dado velho.
+    this.avisarSite(this.tagsDoSlot(slot));
+    return criado;
   }
 
   async atualizar(id: string, dados: BannerInput, usuario?: string) {
