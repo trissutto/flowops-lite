@@ -29,7 +29,7 @@ interface PostApi {
 
 export async function getInstagram(limite = 6): Promise<InstagramPost[]> {
   try {
-    const posts = await api<PostApi[]>(`/public/loja/instagram?limite=${limite}`, {
+    let posts = await api<PostApi[]>(`/public/loja/instagram?limite=${limite}`, {
       /**
        * 5 min, não 1 hora (10/08/2026).
        *
@@ -47,6 +47,27 @@ export async function getInstagram(limite = 6): Promise<InstagramPost[]> {
       tags: ['instagram'],
       timeoutMs: 8000,
     });
+
+    /**
+     * VACINA CONTRA O VAZIO PRESO (13/08 — "insta saiu de novo"): o backend
+     * responde 200 com `[]` quando o Instagram engasga por um instante
+     * (deploy reiniciando, cota) — e esse vazio ficava 5 min guardado como
+     * resposta boa. Tempo de sobra pro dono abrir a página e concluir que
+     * quebrou de novo. Vazio não merece cache: retenta na hora com TTL
+     * mínimo (5s mantém a página estática, ao contrário de no-store), e só
+     * aceita a grade estática se a segunda tentativa também vier vazia.
+     */
+    if (!Array.isArray(posts) || !posts.length) {
+      // `&retry=1` NÃO é enfeite: a chave do Data Cache é a URL — repetir a
+      // mesma URL devolveria o MESMO vazio guardado. O backend ignora o
+      // parâmetro; o cache enxerga outra entrada, com TTL de 5s.
+      posts = await api<PostApi[]>(`/public/loja/instagram?limite=${limite}&retry=1`, {
+        revalidate: 5,
+        tags: ['instagram'],
+        timeoutMs: 8000,
+      });
+    }
+
     if (!Array.isArray(posts) || !posts.length) return estaticos.slice(0, limite);
     return posts.map((p) => ({
       id: p.id,
