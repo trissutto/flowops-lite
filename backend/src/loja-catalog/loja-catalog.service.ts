@@ -132,8 +132,19 @@ export class LojaCatalogService {
         case 'preco-asc': return a.preco - b.preco;
         case 'preco-desc': return b.preco - a.preco;
         case 'nome': return a.nome.localeCompare(b.nome, 'pt-BR');
-        case 'novidades':
+        case 'novidades': {
+          /**
+           * "Novidade" é quando a peça ENTROU NO AR (`publicadoEm`), não
+           * quando o ERP mexeu nela (13/08) — o critério antigo (`dataAlt`)
+           * subia peça velha pro topo a cada acerto de estoque. Empate ou
+           * peça sem carimbo cai pro `atualizadoEm`, só pra ordem ser
+           * estável.
+           */
+          const pubB = new Date(b.publicadoEm ?? 0).getTime();
+          const pubA = new Date(a.publicadoEm ?? 0).getTime();
+          if (pubB !== pubA) return pubB - pubA;
           return new Date(b.atualizadoEm ?? 0).getTime() - new Date(a.atualizadoEm ?? 0).getTime();
+        }
         default:
           // Relevância: destaque > lançamento > estoque saudável
           if (a.destaque !== b.destaque) return a.destaque ? -1 : 1;
@@ -987,9 +998,21 @@ export class LojaCatalogService {
       gradeMedidas: this.montarGrade(ficha),
 
       destaque: !!site?.destaque,
-      lancamento: !!site?.lancamento,
+      /**
+       * NOVIDADE É IDADE, NÃO ETIQUETA (dono, 13/08). O critério antigo era a
+       * tag "Novidade" herdada do WooCommerce — editorial do site velho que
+       * nunca expirava: regata de meses atrás ficava em "Novidades" pra
+       * sempre, e peça recém-publicada sem a tag nunca entrava. Agora:
+       * publicou há até 30 dias = novidade; envelheceu = sai sozinha.
+       */
+      lancamento: !!(
+        site?.publicadoEm &&
+        Date.now() - new Date(site.publicadoEm).getTime() <= 30 * 24 * 60 * 60 * 1000
+      ),
       promocao: !!site?.promocao,
       atualizadoEm: dataAlt ?? null,
+      /** Quando a peça entrou no ar — o eixo da ordenação "novidades". */
+      publicadoEm: site?.publicadoEm ?? null,
 
       // Fiscal (pro checkout futuro) — do ERP, nunca digitado
       fiscal: { ncm: linhas.find((l) => l.ncm)?.ncm ?? null, cst: linhas.find((l) => l.cst)?.cst ?? null },
@@ -1192,7 +1215,8 @@ export class LojaCatalogService {
     }
     if (this.catalogoEmVoo) return this.catalogoEmVoo;
 
-    this.catalogoEmVoo = this.montarCatalogo()
+    this.catalogoEmVoo = this.carimbarPublicadoEm()
+      .then(() => this.montarCatalogo())
       .then((pecas) => {
         this.cacheCatalogo = { at: Date.now(), pecas };
         return pecas;
@@ -1201,6 +1225,34 @@ export class LojaCatalogService {
         this.catalogoEmVoo = null;
       });
     return this.catalogoEmVoo;
+  }
+
+  /**
+   * CARIMBO DE "QUANDO ENTROU NO AR" — idempotente, roda junto da remontagem
+   * do catálogo (no máximo 1×/60s) e só toca quem está publicado SEM carimbo.
+   *
+   * É a fundação do "Novidades" automático (dono, 13/08): peça nova publicada
+   * ganha `publicado_em` em até um minuto, sem caçar cada tela e sync que
+   * escreve `publicado = true`. O backfill do acervo usa a PRIMEIRA foto R2
+   * da REF (é quando a peça passou a existir pro site de verdade) e cai pro
+   * `synced_at` quando não há foto — roda uma vez, vira data fixa, envelhece
+   * e sai de Novidades sozinha.
+   */
+  private async carimbarPublicadoEm(): Promise<void> {
+    try {
+      await this.prisma.$executeRawUnsafe(
+        `UPDATE site_produto sp
+            SET publicado_em = COALESCE(
+              (SELECT MIN(pp.created_at) FROM product_photos pp WHERE pp.ref = sp.ref),
+              sp.synced_at,
+              NOW()
+            )
+          WHERE sp.publicado = true AND sp.publicado_em IS NULL`,
+      );
+    } catch (err) {
+      // Sem carimbo o catálogo continua de pé — só o "Novidades" fica manco.
+      this.logger.warn(`carimbo de publicado_em falhou: ${String(err)}`);
+    }
   }
 
   /**

@@ -316,7 +316,10 @@ export class SiteSyncService {
               // "promoção" é do WC só como sinalização editorial; o preço com
               // desconto quem manda é o ERP (ver LojaCatalogService).
               promocao: !!p.on_sale,
-              lancamento: (p.tags ?? []).some((t: any) => /lanc|novidade|new/i.test(t.name || '')),
+              // A tag "Novidade" do WC NÃO entra mais (13/08): "Novidades"
+              // virou automático por `publicadoEm` (peça no ar há ≤30 dias).
+              // A etiqueta editorial do site velho nunca expirava — regata de
+              // meses atrás ficava novidade pra sempre.
               wcId: Number(p.id) || null,
               wcSlug: p.slug ? String(p.slug).slice(0, 160) : null,
               origemConteudo: 'woocommerce',
