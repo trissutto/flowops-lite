@@ -83,6 +83,16 @@ export class SiteMetricsPublicController {
 export class SiteMetricsController {
   constructor(private readonly service: SiteMetricsService) {}
 
+  /**
+   * QUEM ESTÁ NO SITE AGORA — o card ao vivo da tela de cliques.
+   * Sem parâmetro de propósito: "agora" não tem De/Até.
+   */
+  @Get('agora')
+  async agora(@Req() req: any) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+    return this.service.agora();
+  }
+
   @Get('lojas')
   async lojas(@Req() req: any, @Query('de') de?: string, @Query('ate') ate?: string) {
     if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');

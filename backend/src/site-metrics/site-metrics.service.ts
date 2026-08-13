@@ -115,6 +115,72 @@ export class SiteMetricsService {
   }
 
   /**
+   * QUANTAS PESSOAS ESTÃO NO SITE AGORA — do nosso dado, não do GA4.
+   *
+   * Pergunta do dono (13/08): "quantas pessoas estão no site neste momento?
+   * como vejo pelo sistema nosso?". A resposta vem de `site_eventos`: o site
+   * manda page_view/scroll/time_on_page de TODO mundo (com ou sem aceite do
+   * banner, linha anonimizada), então sessão com evento recente = pessoa
+   * navegando. Não é batida de presença: quem está parado numa página só
+   * aparece enquanto os eventos de tempo/rolagem pingam — por isso o card
+   * mostra a janela ("últimos 5 min") em vez de fingir precisão.
+   *
+   * GA4 não serve pra isso hoje: o site novo dispara no MESMO stream do
+   * WordPress ([[ga4-site-novo-stream-trocado]]), então o "tempo real" de lá
+   * soma os dois sites.
+   *
+   * Tudo em UMA query com subselects — a tela recarrega a cada 20s e não vale
+   * quatro idas ao banco. `::int` em todo COUNT: BigInt na resposta é 500 mudo
+   * de serialização.
+   */
+  async agora(): Promise<{
+    ativos5min: number;
+    ativos30min: number;
+    sessoesHoje: number;
+    pageViewsHoje: number;
+    paginasQuentes: Array<{ path: string; pessoas: number }>;
+  }> {
+    // "Hoje" no fuso da loja (São Paulo), não em UTC — meia-noite UTC é 21h
+    // daqui e comeria as três primeiras horas do dia (mesmo cuidado do
+    // relatório de cliques).
+    const [linha] = await this.prisma.$queryRawUnsafe<Array<{
+      ativos5: number; ativos30: number; sessoes_hoje: number; pv_hoje: number;
+    }>>(
+      `SELECT
+         (SELECT COUNT(DISTINCT session_id)::int FROM site_eventos
+           WHERE criado_em > NOW() - INTERVAL '5 minutes' AND session_id IS NOT NULL)  AS ativos5,
+         (SELECT COUNT(DISTINCT session_id)::int FROM site_eventos
+           WHERE criado_em > NOW() - INTERVAL '30 minutes' AND session_id IS NOT NULL) AS ativos30,
+         (SELECT COUNT(DISTINCT session_id)::int FROM site_eventos
+           WHERE criado_em >= date_trunc('day', NOW() AT TIME ZONE 'America/Sao_Paulo')
+                             AT TIME ZONE 'America/Sao_Paulo'
+             AND session_id IS NOT NULL)                                               AS sessoes_hoje,
+         (SELECT COUNT(*)::int FROM site_eventos
+           WHERE criado_em >= date_trunc('day', NOW() AT TIME ZONE 'America/Sao_Paulo')
+                             AT TIME ZONE 'America/Sao_Paulo'
+             AND evento = 'page_view')                                                 AS pv_hoje`,
+    );
+
+    const paginas = await this.prisma.$queryRawUnsafe<Array<{ path: string; pessoas: number }>>(
+      `SELECT path, COUNT(DISTINCT session_id)::int AS pessoas
+         FROM site_eventos
+        WHERE criado_em > NOW() - INTERVAL '5 minutes'
+          AND session_id IS NOT NULL AND path IS NOT NULL
+        GROUP BY path
+        ORDER BY pessoas DESC, path
+        LIMIT 8`,
+    );
+
+    return {
+      ativos5min: Number(linha?.ativos5 ?? 0),
+      ativos30min: Number(linha?.ativos30 ?? 0),
+      sessoesHoje: Number(linha?.sessoes_hoje ?? 0),
+      pageViewsHoje: Number(linha?.pv_hoje ?? 0),
+      paginasQuentes: paginas.map((p) => ({ path: p.path, pessoas: Number(p.pessoas) })),
+    };
+  }
+
+  /**
    * Relatório por loja no período.
    *
    * Duas queries de propósito: `groupBy` conta CLIQUES (soma tudo), e a segunda
