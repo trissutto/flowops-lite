@@ -19,7 +19,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api';
 import {
-  Image as ImageIcon, Loader2, Plus, Save, Smartphone, Trash2, Monitor,
+  AlertTriangle, CheckCircle2, Image as ImageIcon, Loader2, Plus, Save,
+  Smartphone, Trash2, Monitor,
 } from 'lucide-react';
 
 type Banner = {
@@ -70,6 +71,9 @@ const SLOTS: { id: string; nome: string; ajuda: string; comFoto: boolean }[] = [
   },
 ];
 
+/** Resposta de `GET /site-banners/status-site` — ver o controller. */
+type StatusSite = { ligado: boolean; motivo: string | null };
+
 function paraInput(v: string | null): string {
   // <input type="datetime-local"> não aceita ISO com fuso; corta no minuto.
   if (!v) return '';
@@ -84,6 +88,7 @@ export default function BannersPage() {
   const [lista, setLista] = useState<Banner[]>([]);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
+  const [statusSite, setStatusSite] = useState<StatusSite | null>(null);
 
   const meta = SLOTS.find((s) => s.id === slot)!;
 
@@ -100,6 +105,16 @@ export default function BannersPage() {
   }, [slot]);
 
   useEffect(() => { void carregar(); }, [carregar]);
+
+  /**
+   * Pergunta UMA vez, ao abrir a tela, se o site atualiza na hora. Falhou a
+   * pergunta? Não inventa resposta: sem selo é melhor que selo mentindo.
+   */
+  useEffect(() => {
+    void api<StatusSite>('/site-banners/status-site')
+      .then(setStatusSite)
+      .catch(() => setStatusSite(null));
+  }, []);
 
   async function criar() {
     try {
@@ -120,12 +135,26 @@ export default function BannersPage() {
 
   return (
     <div className="p-4 sm:p-6 max-w-5xl mx-auto space-y-4">
-      <header>
+      <header className="space-y-2">
         <h1 className="text-xl font-bold text-slate-800">Banners da vitrine</h1>
         <p className="text-sm text-slate-500">
-          O que você muda aqui aparece no site em até 1 hora (o site guarda a página pronta
-          pra abrir rápido). Banner fora do ar não é apagado — é só desligar.
+          Salvou aqui, o site troca sozinho. Banner fora do ar não é apagado — é só desligar.
         </p>
+        {statusSite && (
+          statusSite.ligado ? (
+            <p className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-2.5 py-1">
+              <CheckCircle2 className="w-3.5 h-3.5" /> O site atualiza na hora
+            </p>
+          ) : (
+            <p className="flex items-start gap-1.5 text-xs font-bold text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-2">
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px" />
+              <span>
+                O site pode levar até 1 hora pra mostrar o que você salvar agora — avise o
+                suporte. {statusSite.motivo}
+              </span>
+            </p>
+          )
+        )}
       </header>
 
       <div className="flex flex-wrap gap-2">
