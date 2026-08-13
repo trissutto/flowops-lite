@@ -1526,10 +1526,25 @@ export class LojaCatalogService {
       cores: string[];
     }>
   > {
-    // `perPage` alto de propósito: `listar` já pagina em memória, então isto
-    // é uma fatia só que pega tudo. Teto de 5.000 como para-choque.
-    const r = await this.listar({ page: 1, perPage: 5000, ordenar: 'novidades' });
-    return (r.itens as any[]).map((p) => ({
+    /**
+     * `listar` trava `perPage` em 60 (proteção da rota pública de vitrine),
+     * então pedir 5.000 numa chamada só devolvia a PRIMEIRA página — o feed
+     * do Meta ficava com as 60 peças mais novas e o resto do catálogo nunca
+     * era anunciado. Percorre as páginas até o fim; teto de 84 páginas
+     * (~5.000 itens) como para-choque. `catalogoPublicado` é cacheado, o
+     * custo extra é paginação em memória.
+     */
+    const PAGINA = 60;
+    const MAX_PAGINAS = 84;
+    const primeira = await this.listar({ page: 1, perPage: PAGINA, ordenar: 'novidades' });
+    const itens = [...(primeira.itens as any[])];
+    const totalPaginas = Math.min(Number(primeira.totalPages) || 1, MAX_PAGINAS);
+    for (let pagina = 2; pagina <= totalPaginas; pagina++) {
+      const r = await this.listar({ page: pagina, perPage: PAGINA, ordenar: 'novidades' });
+      if (!(r.itens as any[]).length) break;
+      itens.push(...(r.itens as any[]));
+    }
+    return itens.map((p) => ({
       ref: p.ref,
       slug: p.slug,
       nome: p.nome,
