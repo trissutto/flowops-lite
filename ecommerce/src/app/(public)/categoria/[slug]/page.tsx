@@ -11,7 +11,8 @@ import { EditorialCard } from '@/components/sections/ImageGrid';
 import { categoryMeta } from '@/services/products';
 import { fetchPrimeiraPagina } from '@/services/vitrine';
 import { getCategorias } from '@/services/categorias-menu';
-import { editorials, instagramPosts, storeInteriorImage } from '@/data/content';
+import { editorials, storeInteriorImage } from '@/data/content';
+import { getInstagram } from '@/services/instagram';
 import { breadcrumbSchema, buildMetadata, jsonLdGraph } from '@/lib/seo';
 
 /**
@@ -107,6 +108,14 @@ export default async function CategoryPage({
   const subcategorias =
     (await getCategorias({ fresco: true })).find((c) => c.slug === slug)?.subcategorias ?? [];
 
+  /**
+   * OS POSTS REAIS da @lurdsplussize ("insta saiu de novo", dono 13/08 —
+   * na verdade esta página NUNCA teve: ela renderizava a grade estática de
+   * `data/content` enquanto só a home tinha sido ligada no feed de verdade).
+   * `getInstagram` já cai na estática sozinho se a integração falhar.
+   */
+  const postsInstagram = await getInstagram(6);
+
   const trail = [
     { name: 'Início', path: '/' },
     { name: 'Categorias', path: '/categoria' },
@@ -184,7 +193,7 @@ export default async function CategoryPage({
           align="left"
         />
         <div className="mt-14 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-          {instagramPosts.map((post) => (
+          {postsInstagram.map((post) => (
             <InstagramCard key={post.id} post={post} />
           ))}
         </div>
