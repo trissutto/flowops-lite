@@ -5,7 +5,7 @@ import { ProductGallery } from '@/components/commerce/ProductGallery';
 import { BuyBox } from '@/components/commerce/BuyBox';
 import { useToast } from '@/components/feedback/ToastProvider';
 import { useEstoqueAoVivo } from '@/hooks/useEstoqueAoVivo';
-import type { CorApi } from '@/services/products';
+import type { CorApi, PecaApi } from '@/services/products';
 import type { Product } from '@/types';
 
 /**
@@ -27,9 +27,12 @@ import type { Product } from '@/types';
 export function EscolhaDaPeca({
   product,
   cores: coresDoServidor,
+  look,
 }: {
   product: Product;
   cores: CorApi[];
+  /** As peças que saem na MESMA foto — repassado direto pro BuyBox. */
+  look?: PecaApi['look'];
 }) {
   /**
    * ESTOQUE VIVO (13/08): o HTML é uma fotografia do instante em que a página
@@ -177,6 +180,7 @@ export function EscolhaDaPeca({
       <div className="min-w-0 lg:sticky lg:top-28 lg:self-start">
         <BuyBox
           alertaEstoque={alertaEstoque}
+          look={look}
           product={pecaDaCor}
           cores={cores.map((c) => ({ nome: c.nome, swatch: c.swatch, estoque: c.estoque }))}
           corSelecionada={cor}

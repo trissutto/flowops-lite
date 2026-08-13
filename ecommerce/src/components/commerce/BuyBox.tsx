@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { Heart, Lock, MapPin, MessageCircle, Ruler, ShoppingBag, Sparkles, Star } from 'lucide-react';
+import Image from 'next/image';
+import { ArrowRight, Heart, Lock, MapPin, MessageCircle, Ruler, ShoppingBag, Sparkles, Star } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { SimuladorFrete } from '@/components/commerce/SimuladorFrete';
 import { SizePill } from '@/components/ui/Choice';
@@ -15,7 +16,7 @@ import { useWishlistStore } from '@/store/wishlist';
 import { trackAddToCart, trackViewItem } from '@/lib/tracking';
 import { useMounted } from '@/hooks';
 import { cn, discountPercent, formatPrice } from '@/lib/utils';
-import { hexDaCor } from '@/services/products';
+import { hexDaCor, type PecaApi } from '@/services/products';
 import type { Product } from '@/types';
 import { STORE_POLICIES } from '@/data/store-policies';
 import { SeloVendas } from '@/components/commerce/SeloVendas';
@@ -38,7 +39,7 @@ export interface CorEscolhivel {
 }
 
 export function BuyBox({
-  product, cores, corSelecionada, onSelecionarCor, alertaEstoque,
+  product, cores, corSelecionada, onSelecionarCor, alertaEstoque, look,
 }: {
   product: Product;
   /** Cores da peça. Vazio = peça de cor única (ou catálogo sem ficha ainda). */
@@ -47,7 +48,10 @@ export function BuyBox({
   onSelecionarCor?: (nome: string) => void;
   /** "Restam 2 nesta cor" — só com número REAL do estoque, nunca inventado. */
   alertaEstoque?: string | null;
+  /** As peças que saem na MESMA foto (curadoria de /retaguarda/looks). */
+  look?: PecaApi['look'];
 }) {
+  const irmasDoLook = (look?.pecas ?? []).filter((p) => !p.atual);
   const [size, setSize] = useState<string | null>(null);
   const [sizeError, setSizeError] = useState(false);
   // LURDS FIT AI — assistente próprio de tamanho
@@ -334,6 +338,43 @@ export function BuyBox({
                 </button>
               );
             })}
+          </div>
+        </div>
+      )}
+
+      {/* SAI NA MESMA FOTO — a irmã do look colada na decisão (dono, 13/08:
+          "era bom aparecer aqui a indicação da peça irmã"). A cliente está
+          literalmente vendo a outra peça na foto ao lado; o bloco grande
+          "Complete o look" continua no fim da página pra quem rolou. */}
+      {irmasDoLook.length > 0 && (
+        <div className="mt-9">
+          <p className="eyebrow text-ink">Sai na mesma foto</p>
+          <div className="mt-3 flex flex-col gap-2">
+            {irmasDoLook.map((p) => (
+              <Link
+                key={p.ref}
+                href={`/produto/${p.slug}`}
+                className="group flex items-center gap-3 rounded-sm border border-border bg-surface-alt/60 px-3 py-2.5 transition-colors duration-[320ms] hover:border-ink-soft"
+              >
+                {p.imagem && (
+                  <Image
+                    src={p.imagem}
+                    alt={p.nome}
+                    width={40}
+                    height={53}
+                    className="h-[53px] w-10 shrink-0 rounded-sm object-cover"
+                  />
+                )}
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-body text-ink">{p.nome}</span>
+                  <span className="block text-small font-light text-ink-soft">
+                    {formatPrice(p.preco)}
+                    {!p.disponivel && ' · esgotada'}
+                  </span>
+                </span>
+                <ArrowRight className="size-4 shrink-0 text-ink-muted transition-transform duration-[320ms] group-hover:translate-x-0.5" />
+              </Link>
+            ))}
           </div>
         </div>
       )}
