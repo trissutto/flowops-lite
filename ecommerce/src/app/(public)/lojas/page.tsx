@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import NossasLojasClient from './NossasLojasClient';
 import { stores, site, imgSrc, SITE_URL, instagramUrl, directionsUrl, type Store } from './lib';
+import { getBanners } from '@/services/banners';
 
 // No site novo a rota é /lojas (o menu, o rodapé e a retirada em loja já
 // apontam pra ela). O /nossaslojas do site antigo redireciona pra cá.
@@ -76,7 +77,16 @@ function storeJsonLd(s: Store) {
   };
 }
 
-export default function NossasLojasPage() {
+export default async function NossasLojasPage() {
+  /**
+   * A CAPA VEM DO CADASTRO (13/08/2026). Era uma foto do UNSPLASH chumbada no
+   * `lojas.json` — banco de imagens genérico numa página que existe justamente
+   * pra mostrar as lojas de verdade. Agora a retaguarda sobe a arte no slot
+   * `lojas-hero` e troca quando quiser, sem deploy. Slot vazio ou backend fora
+   * do ar: continua valendo a foto do JSON, então a página nunca fica sem
+   * capa.
+   */
+  const [capa] = await getBanners('lojas-hero');
   const jsonLd = {
     '@context': 'https://schema.org',
     '@graph': [
@@ -97,7 +107,7 @@ export default function NossasLojasPage() {
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
       />
-      <NossasLojasClient />
+      <NossasLojasClient heroImagem={capa?.imagemUrl ?? null} />
     </>
   );
 }

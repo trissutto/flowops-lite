@@ -8,9 +8,14 @@ import { site, imgSrc, BLUR_DATA_URL } from '../lib';
 interface Props {
   onFindStore: () => void;
   onLocate: () => void;
+  /**
+   * Arte do cadastro de banners (slot `lojas-hero`). Sem ela vale a foto do
+   * `lojas.json` — a página nunca fica sem capa.
+   */
+  imagem?: string | null;
 }
 
-export default function Hero({ onFindStore, onLocate }: Props) {
+export default function Hero({ onFindStore, onLocate, imagem }: Props) {
   return (
     <section className="relative flex min-h-[100svh] items-center justify-center overflow-hidden">
       {/* Fotografia editorial com zoom-out lento na entrada */}
@@ -21,7 +26,7 @@ export default function Hero({ onFindStore, onLocate }: Props) {
         className="absolute inset-0"
       >
         <Image
-          src={imgSrc(site.heroImage, 2000)}
+          src={imagem || imgSrc(site.heroImage, 2000)}
           alt="Mulheres plus size em produção editorial de moda — Lurds Plus Size"
           fill
           priority

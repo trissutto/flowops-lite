@@ -14,7 +14,7 @@ import FinalCta from './components/FinalCta';
 
 export type GeoState = 'idle' | 'loading' | 'ok' | 'error';
 
-export default function NossasLojasClient() {
+export default function NossasLojasClient({ heroImagem }: { heroImagem?: string | null }) {
   const [selectedSlug, setSelectedSlug] = useState<string>(stores[0].slug);
   const [drawerSlug, setDrawerSlug] = useState<string | null>(null);
   const [nearest, setNearest] = useState<{ store: Store; km: number } | null>(null);
@@ -64,7 +64,7 @@ export default function NossasLojasClient() {
 
   return (
     <main>
-      <Hero onFindStore={() => scrollToId('buscar')} onLocate={locate} />
+      <Hero onFindStore={() => scrollToId('buscar')} onLocate={locate} imagem={heroImagem} />
       <Manifesto />
       <SearchLocate
         geoState={geoState}

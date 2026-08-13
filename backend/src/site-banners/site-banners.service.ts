@@ -14,7 +14,15 @@ import { avisarVitrine } from '../common/avisar-vitrine';
  * As imagens vão pro mesmo R2 das fotos de produto.
  */
 
-export const SLOTS = ['home-hero', 'home-faixa', 'tarja-topo'] as const;
+/**
+ * Onde uma arte cadastrada pode aparecer.
+ *
+ * `lojas-hero` entrou em 13/08/2026: a capa da página /lojas era uma foto do
+ * UNSPLASH chumbada no `lojas.json` — banco de imagens genérico numa página
+ * que existe justamente pra mostrar as lojas de verdade, e trocar a arte
+ * exigia deploy. Agora é upload pela tela, como os outros banners.
+ */
+export const SLOTS = ['home-hero', 'home-faixa', 'tarja-topo', 'lojas-hero'] as const;
 export type Slot = (typeof SLOTS)[number];
 
 function getR2Client(): S3Client {

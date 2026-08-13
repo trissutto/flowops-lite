@@ -347,8 +347,13 @@ export function BuyBox({
         )}
       </div>
 
+      {/* PROVA SOCIAL COLADA NO BOTÃO (dono, 13/08): é o último argumento antes
+          do clique, e o único da página que vem de venda de verdade. Estava lá
+          embaixo, em cinza, no meio das garantias — onde ninguém lia. */}
+      <SeloVendas vendas={product.sold} className="mt-8" />
+
       {/* Ações */}
-      <div className="mt-9 flex flex-col gap-2.5">
+      <div className="mt-4 flex flex-col gap-2.5">
         {/* Esgotou: em vez de deixar a cliente sair, oferece o mesmo corte em
             outras peças — é o vendedor de loja física dizendo "se gostou
             desse modelo, olha esses aqui". */}
@@ -388,10 +393,6 @@ export function BuyBox({
           valor agora é config e muda sem deploy. */}
       <SimuladorFrete preco={product.price} />
 
-      {/* PROVA SOCIAL REAL, perto do botão: quantas peças desta família já
-          saíram (loja + site + histórico do ERP antigo). Some sozinha abaixo
-          do piso — a regra mora no `SeloVendas`. */}
-      <SeloVendas vendas={product.sold} className="mt-6" />
 
       {/* Garantias — o que tira o medo de comprar online */}
       <ul className="mt-7 flex flex-col gap-3 border-t border-border pt-7 text-small text-ink-soft">

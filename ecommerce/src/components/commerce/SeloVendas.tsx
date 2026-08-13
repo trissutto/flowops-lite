@@ -37,19 +37,32 @@ export function SeloVendas({
   if (n < PISO) return null;
 
   /**
-   * Arredonda pra baixo na casa cheia a partir de 100 ("mais de 300 já
-   * levaram"). Número redondo lê como estimativa honesta; "317 já levaram"
-   * parece precisão de laboratório e convida a cliente a duvidar da conta.
+   * Arredonda pra baixo na casa cheia a partir de 100 ("mais de 300"). Número
+   * redondo lê como estimativa honesta; "317 clientes" parece precisão de
+   * laboratório e convida a cliente a duvidar da conta.
    */
-  const texto =
-    n >= 100
-      ? `Mais de ${Math.floor(n / 100) * 100} já levaram esta peça`
-      : `${n} já levaram esta peça`;
+  const quantidade = n >= 100 ? `Mais de ${Math.floor(n / 100) * 100}` : String(n);
 
+  /**
+   * ── DESTAQUE (dono, 13/08/2026) ──
+   *
+   * Nasceu como uma linha cinza no meio dos selos de garantia, e sumia: era o
+   * argumento mais forte da página tratado como rodapé. Agora é um bloco com
+   * fundo próprio, colado no botão de comprar, com o NÚMERO em corpo maior —
+   * é ele que carrega a informação, não a frase.
+   *
+   * Continua sóbrio de propósito: fundo suave da marca em vez de vermelho de
+   * urgência. O número é verdadeiro e não precisa gritar; card de e-commerce
+   * que grita é o que a cliente aprendeu a ignorar.
+   */
   return (
-    <p className={`inline-flex items-center gap-2 text-small text-ink-soft ${className}`}>
-      <ShoppingBag className="size-4 shrink-0 text-primary-strong" strokeWidth={1.75} />
-      {texto}
-    </p>
+    <div
+      className={`flex items-center gap-3 rounded-sm border border-primary/25 bg-primary-soft/25 px-4 py-3 ${className}`}
+    >
+      <ShoppingBag className="size-5 shrink-0 text-primary-strong" strokeWidth={1.75} aria-hidden />
+      <p className="text-body font-light text-ink">
+        <strong className="font-medium">{quantidade} clientes</strong> já compraram esta peça
+      </p>
+    </div>
   );
 }
