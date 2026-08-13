@@ -275,14 +275,23 @@ function base(event: TrackingEvent, dest: Destination) {
  * ──────────────────────────────────────────────────────────────────────────── */
 
 function enqueueForServer(event: TrackingEvent): void {
-  // O servidor repassa pra Meta e Google. Sem opt-in pra nenhuma das duas
-  // finalidades, não há motivo pro evento sair do navegador.
-  if (!isAllowed('analytics') && !isAllowed('marketing')) {
-    log({ ...base(event, { id: 'server' } as Destination), status: 'skipped', reason: 'sem consentimento de analytics/marketing' });
-    return;
-  }
+  /**
+   * O evento SEMPRE vai pro servidor (dono, 13/08: "preciso de todos os
+   * cliques registrados — para todo o site"). Quem decide o destino é o
+   * `/api/events`, pelo estado de consentimento que viaja no lote:
+   *
+   *   · COM aceite → Meta/GA4 + cópia de primeira parte (FlowOps).
+   *   · SEM aceite → SÓ a cópia de primeira parte — e o evento sai daqui já
+   *     ANONIMIZADO: sem user_id (e os fbp/fbc da Meta nem são anexados ao
+   *     lote, ver `flush`). Medir o próprio site é interesse legítimo;
+   *     repassar a terceiro sem opt-in continua proibido.
+   */
+  const consentido = isAllowed('analytics') || isAllowed('marketing');
+  const pronto = consentido
+    ? event
+    : { ...event, context: { ...event.context, user_id: null } };
 
-  queue.push({ event, attempts: 0, next_try_at: 0 });
+  queue.push({ event: pronto, attempts: 0, next_try_at: 0 });
 
   // Fila estourada = rede fora há muito tempo. Descarta o mais VELHO: evento
   // recente vale mais, e crescer sem limite trava a aba.
@@ -307,7 +316,12 @@ async function flush(): Promise<void> {
     const res = await fetch('/api/events', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ events: ready.map((r) => r.event), consent: getConsent(), meta: getMetaBrowserIds() }),
+      // fbp/fbc são identificadores de anúncio: sem aceite, nem saem daqui.
+      body: JSON.stringify({
+        events: ready.map((r) => r.event),
+        consent: getConsent(),
+        meta: isAllowed('analytics') || isAllowed('marketing') ? getMetaBrowserIds() : undefined,
+      }),
       keepalive: true,
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -345,7 +359,11 @@ function flushBeacon(): void {
 
   const events = queue.splice(0, queue.length).map((q) => q.event);
   try {
-    const blob = new Blob([JSON.stringify({ events, consent: getConsent(), meta: getMetaBrowserIds() })], {
+    const blob = new Blob([JSON.stringify({
+      events,
+      consent: getConsent(),
+      meta: isAllowed('analytics') || isAllowed('marketing') ? getMetaBrowserIds() : undefined,
+    })], {
       type: 'application/json',
     });
     navigator.sendBeacon('/api/events', blob);

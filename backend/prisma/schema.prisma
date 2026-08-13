@@ -6685,3 +6685,33 @@ model SiteStoreClick {
   @@index([loja, evento, createdAt])
   @@map("site_store_clicks")
 }
+
+/// CÓPIA DE PRIMEIRA PARTE DE TODO EVENTO DO SITE (dono, 13/08: "preciso de
+/// todos os cliques registrados — para todo o site"). Diferente do
+/// SiteStoreClick (só os 4 botões de loja), aqui entra o funil inteiro:
+/// view_item, add_to_cart, search, begin_checkout… — SEMPRE, com ou sem o
+/// aceite do banner. Sem aceite o evento chega ANONIMIZADO na origem (sem
+/// user_id; fbp/fbc nem saem do navegador) — interesse legítimo de medir o
+/// próprio site, sem cruzar com terceiro. GA4/Meta continuam atrás do opt-in.
+/// Volume é de milhares/dia: quando pesar, a limpeza é por `criadoEm`.
+model SiteEvento {
+  id        String   @id @default(uuid())
+  /// Nome canônico do tracking: view_item, add_to_cart, search…
+  evento    String   @db.VarChar(40)
+  path      String?  @db.VarChar(200)
+  /// Unidade envolvida (botão de loja ou loja atribuída por CEP).
+  loja      String?  @db.VarChar(80)
+  /// Sessão anônima — separa cliques de pessoas. Nula quando não deu pra ter.
+  sessionId String?  @map("session_id") @db.VarChar(64)
+  /// Valor em reais quando o evento carrega (checkout, add_to_cart).
+  valor     Decimal? @db.Decimal(12, 2)
+  /// O resto que der contexto sem dado pessoal: REFs, termo de busca, origem.
+  dados     Json?
+  /// true = visitante sem aceite do banner (linha anônima).
+  semAceite Boolean  @default(false) @map("sem_aceite")
+  criadoEm  DateTime @default(now()) @map("criado_em")
+
+  @@index([criadoEm])
+  @@index([evento, criadoEm])
+  @@map("site_eventos")
+}

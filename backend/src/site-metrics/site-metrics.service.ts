@@ -19,6 +19,17 @@ export interface CliqueEntrada {
   sessionId?: string | null;
 }
 
+/** Um evento genérico do site — a cópia de primeira parte do funil inteiro. */
+export interface EventoEntrada {
+  evento?: string;
+  path?: string | null;
+  loja?: string | null;
+  sessionId?: string | null;
+  valor?: number | null;
+  dados?: unknown;
+  semAceite?: boolean;
+}
+
 /** Uma linha do relatório: a loja e o que fizeram nela. */
 export interface LinhaLoja {
   loja: string;
@@ -69,6 +80,36 @@ export class SiteMetricsService {
       return r.count;
     } catch (err) {
       this.logger.error(`falha ao gravar cliques de loja: ${String(err)}`);
+      return 0;
+    }
+  }
+
+  /**
+   * TODO EVENTO DO SITE, sem lista fechada (dono, 13/08: "para todo o site").
+   * Aqui aceita qualquer nome de evento — quem valida forma e teto é o BFF do
+   * e-commerce, e a rota continua atrás do token compartilhado. `semAceite`
+   * marca a linha anônima de quem não aceitou o banner.
+   */
+  async registrarEventos(entradas: EventoEntrada[]): Promise<number> {
+    const linhas = entradas
+      .filter((e) => e?.evento && String(e.evento).trim())
+      .map((e) => ({
+        evento: this.corta(e.evento, 40) as string,
+        path: this.corta(e.path, 200),
+        loja: this.corta(e.loja, 80),
+        sessionId: this.corta(e.sessionId, 64),
+        valor: typeof e.valor === 'number' && Number.isFinite(e.valor) ? e.valor : null,
+        dados: e.dados && typeof e.dados === 'object' ? (e.dados as object) : undefined,
+        semAceite: e.semAceite === true,
+      }));
+
+    if (!linhas.length) return 0;
+
+    try {
+      const r = await (this.prisma as any).siteEvento.createMany({ data: linhas });
+      return r.count;
+    } catch (err) {
+      this.logger.error(`falha ao gravar eventos do site: ${String(err)}`);
       return 0;
     }
   }
