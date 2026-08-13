@@ -711,11 +711,30 @@ export class LojaCatalogService {
             })),
         };
       })
-      // TRANSIÇÃO: enquanto a REF não tiver NENHUMA foto própria (o acervo
-      // ainda está vindo do WooCommerce, sem cor associada), mostra todas as
-      // cores. A partir da primeira foto no R2, vale a regra: cor sem foto
-      // não aparece.
-      .filter((c) => c.fotos.length > 0 || fotos.length === 0);
+      /* ── QUEM VIRA BOLINHA ─────────────────────────────────────────────
+       *
+       * A regra de 03/08 era "cor sem foto não aparece", pelo motivo certo:
+       * bolinha que abre GALERIA VAZIA é pior que cor a menos.
+       *
+       * Só que ela cobrava caro. Medido na REF VOGUE em 13/08: 570 peças no
+       * estoque, 21 cores, 3 com foto. O site contava as 570 no total e na
+       * grade ("91 no 46") e só tinha bolinha pra 178 — **392 peças que a
+       * cliente via anunciadas e não tinha como comprar**. A BEGE sozinha,
+       * com 102 peças, era invisível.
+       *
+       * Agora: COR COM ESTOQUE APARECE, tenha foto própria ou não. A galeria
+       * não fica vazia — cai nas fotos das irmãs, e a tela avisa "ainda não
+       * temos foto de BEGE, as fotos acima são das outras cores" (o aviso já
+       * existia em `EscolhaDaPeca` e nunca disparava, justamente porque este
+       * filtro nunca deixava passar cor sem foto).
+       *
+       * O que continua fora: cor SEM foto E SEM estoque. Essa é só ruído de
+       * cadastro — bolinha morta que abre galeria emprestada.
+       *
+       * Efeito colateral bom: estoque total e grade voltam a bater com o que
+       * dá pra comprar, porque toda cor que soma agora tem bolinha.
+       */
+      .filter((c) => c.fotos.length > 0 || fotos.length === 0 || c.estoque > 0);
 
     const dataAlt = linhas.map((l) => l.dataAlt).filter(Boolean).sort()
       .slice(-1)[0] as Date | undefined;
