@@ -3,7 +3,7 @@ import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { TrackingService } from '../tracking/tracking.service';
 import { EmailService } from '../email/email.service';
-import { formatTrocaNumero } from './trocas.service';
+import { formatTrocaNumero, TrocasService } from './trocas.service';
 
 /**
  * Alertas automáticos do Portal de Trocas (Fase 3).
@@ -26,6 +26,7 @@ export class TrocasCronService {
     private readonly prisma: PrismaService,
     private readonly tracking: TrackingService,
     private readonly email: EmailService,
+    private readonly trocas: TrocasService,
   ) {}
 
   private get enabled(): boolean {
@@ -37,12 +38,52 @@ export class TrocasCronService {
     if (!this.enabled || this.running) return;
     this.running = true;
     try {
+      await this.reversasPendentes();
       await this.lembretesReversa();
       await this.autoRastreio();
     } catch (e: any) {
       this.logger.warn(`trocas-cron falhou: ${e?.message || e}`);
     } finally {
       this.running = false;
+    }
+  }
+
+  // ── 0. Reversa que ninguém gerou ────────────────────────────────────
+
+  /**
+   * REDE DE SEGURANÇA DO CÓDIGO DE POSTAGEM (14/08).
+   *
+   * A geração passou a ser automática no `solicitar`, mas Correios fora do ar
+   * na hora exata da solicitação deixaria a cliente esperando de novo — que é
+   * exatamente o estado que este cron nasceu pra matar: na medição de 14/08
+   * havia **12 trocas abertas e ZERO códigos gerados**, a mais antiga parada
+   * há 17 dias, porque a etapa dependia de alguém lembrar de clicar.
+   *
+   * Pega qualquer troca com direito à reversa e sem código — inclusive as
+   * antigas. Máx 10 por ciclo: cada uma é uma pré-postagem de verdade nos
+   * Correios, e erro em lote é pior que demora.
+   */
+  private async reversasPendentes() {
+    if (String(process.env.TROCA_REVERSA_AUTO ?? '1').trim() === '0') return;
+    const pendentes = await (this.prisma as any).trocaSolicitacao.findMany({
+      where: {
+        reversaGratis: true,
+        reversaCodigo: null,
+        status: { in: ['solicitada', 'aguardando_postagem', 'aguardando_envio_cliente'] },
+      },
+      select: { id: true, numero: true, createdAt: true },
+      orderBy: { createdAt: 'asc' },
+      take: 10,
+    });
+    for (const t of pendentes) {
+      try {
+        const r: any = await this.trocas.gerarReversaCorreios({ id: t.id, userName: 'automático (cron)' });
+        this.logger.log(`[trocas-cron] reversa gerada pra ${formatTrocaNumero(t.numero)}: ${r?.codigo}`);
+      } catch (e: any) {
+        // Sem CEP, sem pedido, Correios fora — fica pro próximo ciclo. O
+        // motivo vai pro log; a troca continua visível na retaguarda.
+        this.logger.warn(`[trocas-cron] reversa de ${formatTrocaNumero(t.numero)} falhou: ${e?.message || e}`);
+      }
     }
   }
 
