@@ -37,7 +37,7 @@ import {
   Clock, PlayCircle, CheckCircle2, Truck, Printer, RefreshCw,
   Wifi, WifiOff, X, LogOut, AlertCircle, Barcode, Search, History,
   Package2, ClipboardList, Shuffle, Inbox, Package, ShoppingCart,
-  Fingerprint, Zap, Radio, ArrowLeftRight, KeyRound, ScanFace, Smartphone,
+  Fingerprint, Zap, Radio, ArrowLeftRight, KeyRound, ScanFace, Smartphone, AlertTriangle,
 } from 'lucide-react';
 
 type PickStatus = 'new' | 'separating' | 'separated' | 'ready' | 'shipped';
@@ -1426,6 +1426,7 @@ function QuickActionGrid({ realignmentPending = 0, shipmentsIncoming = 0 }: { re
     { href: '/minha-loja/realinhamento', icon: Shuffle,      label: 'Realinhar',      subtitle: 'Inter-lojas', description: 'Separar pra outras lojas', tone: 'sky',     badge: realignmentPending },
     { href: '/minha-loja/transferencia', icon: ArrowLeftRight, label: 'Transferir',    subtitle: 'Ponto a ponto', description: 'Mandar pra outra loja',    tone: 'sky'    },
     { href: '/minha-loja/recebimento',   icon: Inbox,        label: 'Receber',        subtitle: 'Mercadoria',  description: 'Dar entrada de remessa',   tone: 'green',   badge: shipmentsIncoming },
+    { href: '/minha-loja/defeitos',      icon: AlertTriangle, label: 'Defeitos',      subtitle: 'Avaria',      description: 'Tirar do estoque e mandar pra matriz', tone: 'amber' },
     { href: '/minha-loja/ponto',         icon: Fingerprint,  label: 'Ponto',          subtitle: 'Bater',       description: 'Entrada · almoço · saída', tone: 'indigo' },
     { href: '/minha-loja/ponto-celular', icon: Smartphone,   label: 'Ponto Celular',  subtitle: 'Totem',       description: 'Bater no celular da loja', tone: 'indigo' },
     { href: '/minha-loja/funcionarias',  icon: KeyRound,     label: 'Funcionárias',   subtitle: 'Função & PIN', description: 'Liberar desconto no PDV',   tone: 'amber'  },

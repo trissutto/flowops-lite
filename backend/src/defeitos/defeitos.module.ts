@@ -3,6 +3,7 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { ErpModule } from '../erp/erp.module';
 import { WincredMirrorModule } from '../wincred-mirror/wincred-mirror.module';
 import { DefeitosService } from './defeitos.service';
+import { DefeitosController } from './defeitos.controller';
 
 /**
  * DEFEITOS — registro de peça avariada fora do módulo de marcados.
@@ -19,6 +20,7 @@ import { DefeitosService } from './defeitos.service';
  */
 @Module({
   imports: [PrismaModule, ErpModule, WincredMirrorModule],
+  controllers: [DefeitosController],
   providers: [DefeitosService],
   exports: [DefeitosService],
 })
