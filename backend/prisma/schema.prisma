@@ -6835,3 +6835,114 @@ model WhatsappLead {
   @@index([telefone, criadoEm])
   @@map("whatsapp_leads")
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// DEFEITOS — peça avariada sai do estoque da loja e vai pra matriz (CD)
+//
+// Por que NÃO é marcado: marcado é dívida de cliente (entra no
+// LIMITECOMPRAS, aparece em marcados ativos, exige avaliação do cliente).
+// Defeito é perda de mercadoria e não tem cliente. Usar `Marcado
+// status='baixado'` pra defeito sujava os dois controles.
+//
+// REGRA CENTRAL: a peça baixa do estoque UMA vez, no registro na loja, e
+// nunca reentra — ela não volta pra vitrine (vai pro fornecedor ou pro
+// lixo). Por isso a matriz, ao receber a caixa, NÃO movimenta estoque:
+// só confirma a chegada. Isso é o que impede peça defeituosa de voltar a
+// ser vendida.
+// ═══════════════════════════════════════════════════════════════════════
+
+// A caixa física que a loja monta e manda pra matriz. Uma caixa ABERTA por
+// loja de cada vez — o registro de defeito cai nela automaticamente.
+model DefectBatch {
+  id              String    @id @default(uuid())
+  // Código humano sequencial: CX-2026-000045
+  code            String    @unique @db.VarChar(20)
+  storeCodeOrigem String    @map("store_code_origem") @db.VarChar(10)
+  storeNameOrigem String?   @map("store_name_origem") @db.VarChar(80)
+  // aberta (recebendo peças) | enviada (fechada, a caminho) | recebida
+  status          String    @default("aberta") @db.VarChar(10)
+  // Congelados no fechamento — o relatório não recalcula caixa fechada.
+  totalPecas      Int       @default(0) @map("total_pecas")
+  totalCustoCents Int       @default(0) @map("total_custo_cents")
+  fechadaAt       DateTime? @map("fechada_at")
+  fechadaPorNome  String?   @map("fechada_por_nome") @db.VarChar(80)
+  recebidaAt      DateTime? @map("recebida_at")
+  recebidaPorNome String?   @map("recebida_por_nome") @db.VarChar(80)
+  createdAt       DateTime  @default(now()) @map("created_at")
+
+  itens           DefectItem[]
+
+  @@index([status, storeCodeOrigem])
+  @@map("defect_batches")
+}
+
+// Uma linha por PEÇA com defeito.
+model DefectItem {
+  id              String    @id @default(uuid())
+  // Número de controle humano: DEF-2026-000123
+  code            String    @unique @db.VarChar(20)
+
+  // ── Peça (snapshot no registro; o cadastro pode mudar depois) ──
+  sku             String    @db.VarChar(20)
+  ref             String?   @db.VarChar(20)
+  descricao       String?   @db.VarChar(150)
+  cor             String?   @db.VarChar(30)
+  tamanho         String?   @db.VarChar(20)
+
+  // ── Fornecedor (snapshot) — é por ele que a devolução é agrupada ──
+  fornecedorCnpj  String?   @map("fornecedor_cnpj") @db.VarChar(20)
+  fornecedorNome  String?   @map("fornecedor_nome") @db.VarChar(80)
+  marca           String?   @db.VarChar(40)
+
+  // ── Valor (snapshot, em centavos) — base do valor da perda ──
+  custoUnitCents  Int       @default(0) @map("custo_unit_cents")
+  precoUnitCents  Int       @default(0) @map("preco_unit_cents")
+
+  // ── Origem ──
+  storeCodeOrigem String    @map("store_code_origem") @db.VarChar(10)
+  storeNameOrigem String?   @map("store_name_origem") @db.VarChar(80)
+  // LOJA | DEVOLUCAO_CLIENTE | MATRIZ | MIGRACAO_MARCADO
+  origem          String    @default("LOJA") @db.VarChar(20)
+
+  // ── Defeito ──
+  // FURO_RASGO | MANCHA | COSTURA_SOLTA | ZIPER_BOTAO | DESBOTADO |
+  // FALTA_PECA | MODELAGEM_ERRADA | OUTRO (exige observação)
+  motivo          String    @db.VarChar(20)
+  observacao      String?   @db.Text
+  fotoUrl         String?   @map("foto_url") @db.Text
+
+  // ── Ciclo de vida ──
+  // EM_TRANSITO -> RECEBIDO -> DEVOLVIDO_FORNECEDOR | DESCARTADO
+  status              String    @default("EM_TRANSITO") @db.VarChar(25)
+  registradoPorUserId String?   @map("registrado_por_user_id")
+  registradoPorNome   String?   @map("registrado_por_nome") @db.VarChar(80)
+  registradoAt        DateTime  @default(now()) @map("registrado_at")
+  recebidoPorNome     String?   @map("recebido_por_nome") @db.VarChar(80)
+  recebidoAt          DateTime? @map("recebido_at")
+  decididoPorNome     String?   @map("decidido_por_nome") @db.VarChar(80)
+  decididoAt          DateTime? @map("decidido_at")
+  decisaoObservacao   String?   @map("decisao_observacao") @db.Text
+
+  // ── Vínculos ──
+  batchId         String?      @map("batch_id")
+  batch           DefectBatch? @relation(fields: [batchId], references: [id])
+  // Devolução de cliente que originou o defeito (origem=DEVOLUCAO_CLIENTE).
+  returnId        String?      @map("return_id")
+  // Marcado 'baixado' que virou este registro. UNIQUE = idempotência da
+  // migração: rodar duas vezes não duplica.
+  marcadoId       String?      @unique @map("marcado_id")
+
+  // ── Controle ──
+  // Trava de idempotência da baixa, no padrão do ErpOutboxService. Na
+  // MIGRAÇÃO vem preenchido com a data original: a peça já saiu do estoque
+  // quando o marcado foi criado — rebaixar duplicaria a perda.
+  stockDecreasedAt DateTime? @map("stock_decreased_at")
+  isTraining       Boolean   @default(false) @map("is_training")
+  createdAt        DateTime  @default(now()) @map("created_at")
+
+  @@index([status, storeCodeOrigem])
+  @@index([fornecedorCnpj, status])
+  @@index([batchId])
+  @@index([registradoAt])
+  @@map("defect_items")
+}
