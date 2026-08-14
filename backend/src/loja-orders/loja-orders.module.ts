@@ -12,6 +12,9 @@ import { LojaAdminController } from './loja-admin.controller';
 import { FreteService } from './frete.service';
 import { PersonIdentityModule } from '../person-identity/person-identity.module';
 import { EmailModule } from '../email/email.module';
+// WhatsappModule → o WhatsApp direto dos eventos que o n8n descarta
+// (pix_nao_pago / pedido_enviado / pedido_entregue). Ver PedidoEmailService.
+import { WhatsappModule } from '../whatsapp/whatsapp.module';
 import { PedidoEmailService } from './pedido-email.service';
 import { PixResgateCron } from './pix-resgate.cron';
 
@@ -29,7 +32,7 @@ import { PixResgateCron } from './pix-resgate.cron';
  */
 @Module({
   imports: [
-    PrismaModule, HttpModule, CorreiosModule, PersonIdentityModule, EmailModule,
+    PrismaModule, HttpModule, CorreiosModule, PersonIdentityModule, EmailModule, WhatsappModule,
     forwardRef(() => PagarmeModule),
   ],
   controllers: [LojaOrdersController, LojaAdminController],

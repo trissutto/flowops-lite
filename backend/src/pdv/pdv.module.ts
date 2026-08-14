@@ -17,6 +17,7 @@ import { RoutingModule } from '../routing/routing.module';
 // receita do PickOrdersModule): o aviso ao cliente do pedido online sai daqui
 // sem importar o LojaOrdersModule inteiro e sem criar ciclo.
 import { EmailModule } from '../email/email.module';
+import { WhatsappModule } from '../whatsapp/whatsapp.module';
 import { HttpModule } from '@nestjs/axios';
 import { PedidoEmailService } from '../loja-orders/pedido-email.service';
 import { PedidoOnlineService } from './pedido-online.service';
@@ -50,7 +51,7 @@ import { PdvStoreSummaryController } from './store-summary.controller';
 import { PdvStoreSummaryService } from './store-summary.service';
 
 @Module({
-  imports: [CashbackModule, PrismaModule, ErpModule, PagarmeModule, forwardRef(() => CrediariosModule), WooCommerceModule, PromoConfigModule, AccessPolicyModule, WincredMirrorModule, AdiantamentosModule, ConveniosModule, CrediarioNativoModule, RoutingModule, EmailModule, HttpModule],
+  imports: [CashbackModule, PrismaModule, ErpModule, PagarmeModule, forwardRef(() => CrediariosModule), WooCommerceModule, PromoConfigModule, AccessPolicyModule, WincredMirrorModule, AdiantamentosModule, ConveniosModule, CrediarioNativoModule, RoutingModule, EmailModule, HttpModule, WhatsappModule],
   controllers: [PdvController, CashController, ReturnsController, ReturnsPublicController, PdvDiagController, MarcadosController, ActiveSellersController, CarneCoordsController, FiscalReportController, ProdutosVendidosController, PdvStoreSummaryController],
   // ⚠️ `PixPagbankReconcileService` entra SÓ como provider — nenhum import de
   // módulo novo. Foi exatamente um import novo aqui (PagbankModule) que criou
