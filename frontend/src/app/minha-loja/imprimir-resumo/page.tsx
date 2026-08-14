@@ -20,7 +20,20 @@ import { api } from '@/lib/api';
 interface OrderItem {
   sku: string;
   productName?: string | null;
+  /** REF · COR · TAM — o que a vendedora usa pra achar a peça na arara. */
+  ref?: string | null;
+  cor?: string | null;
+  tamanho?: string | null;
   quantity: number;
+}
+
+/**
+ * "5358 · PRETO DOURADO 60" — mesmo formato do card da LIVE e da fila da
+ * /minha-loja. Vazio quando o pedido nasceu antes de 13/08 (sem REF gravada).
+ */
+function refCorTam(it: OrderItem): string {
+  if (!it.ref) return '';
+  return [it.ref, [it.cor, it.tamanho].filter(Boolean).join(' ')].filter(Boolean).join(' · ');
 }
 
 interface PickOrderRow {
@@ -74,7 +87,7 @@ export default function ImprimirResumoPage() {
   // Cada linha mostra também QUAIS pedidos / clientes precisam dessa peça
   const totalConsolidado = (() => {
     const map = new Map<string, {
-      sku: string; nome: string; qty: number;
+      sku: string; nome: string; variacao: string; qty: number;
       pedidos: { numero: string; cliente: string; qty: number }[];
     }>();
     for (const r of rows) {
@@ -91,6 +104,7 @@ export default function ImprimirResumoPage() {
           map.set(key, {
             sku: it.sku,
             nome: it.productName || it.sku,
+            variacao: refCorTam(it),
             qty: it.quantity,
             pedidos: [{ numero, cliente, qty: it.quantity }],
           });
@@ -159,7 +173,10 @@ export default function ImprimirResumoPage() {
           <tbody>
             {totalConsolidado.map((t, i) => (
               <tr key={i} className="border-b border-gray-300 align-top">
-                <td className="px-2 py-1 font-semibold">{t.nome}</td>
+                <td className="px-2 py-1 font-semibold">
+                  {t.variacao && <div className="font-black tracking-wide">{t.variacao}</div>}
+                  <div className={t.variacao ? 'text-[11px] font-normal text-gray-600' : ''}>{t.nome}</div>
+                </td>
                 <td className="px-2 py-1 font-mono text-[11px] text-gray-700">{t.sku}</td>
                 <td className="px-2 py-1 text-right font-black text-base">{t.qty}</td>
                 <td className="px-2 py-1 text-[11px] leading-tight">
@@ -208,7 +225,12 @@ export default function ImprimirResumoPage() {
                 <div className="text-[11px] space-y-0.5">
                   {(o.items || []).map((it, i) => (
                     <div key={i} className="flex justify-between gap-2 border-b border-dotted border-gray-300 pb-0.5">
-                      <span className="flex-1">{it.productName || it.sku}</span>
+                      <span className="flex-1">
+                        {refCorTam(it) && <span className="block font-black">{refCorTam(it)}</span>}
+                        <span className={refCorTam(it) ? 'block text-[10px] text-gray-600' : ''}>
+                          {it.productName || it.sku}
+                        </span>
+                      </span>
                       <span className="font-black whitespace-nowrap">{it.quantity}x</span>
                     </div>
                   ))}

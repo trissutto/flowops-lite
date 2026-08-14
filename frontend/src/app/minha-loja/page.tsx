@@ -47,7 +47,22 @@ interface PickOrderItem {
   quantity: number;
   productName?: string | null;
   variant?: string | null;
+  /** REF · COR · TAM — o que a vendedora lê pra achar a peça (13/08). */
+  ref?: string | null;
+  cor?: string | null;
+  tamanho?: string | null;
   assignedStoreId?: string | null;
+}
+
+/**
+ * Título da peça no card do SITE — MESMO formato do card da LIVE mais abaixo
+ * nesta tela (`{refCode} · {cor} {tamanho}`), com a descrição em cinza
+ * embaixo. Pedido do site nascido antes de 13/08 não tem REF gravada; aí cai
+ * no nome, que é o que essa tela sempre mostrou.
+ */
+function tituloPeca(it: PickOrderItem): string {
+  if (!it.ref) return it.productName ?? it.sku;
+  return [it.ref, [it.cor, it.tamanho].filter(Boolean).join(' ')].filter(Boolean).join(' · ');
 }
 
 interface PickOrderRow {
@@ -2099,14 +2114,19 @@ function PickOrderCard({
                     className="group/troca text-left w-full"
                   >
                     <div className="text-slate-900 font-semibold leading-tight group-hover/troca:text-[#8C7325] group-hover/troca:underline decoration-dotted underline-offset-2">
-                      {it.productName ?? it.sku}
+                      {tituloPeca(it)}
                       <span className="ml-1 text-[10px] font-bold uppercase tracking-wide text-[#B8912B] opacity-0 group-hover/troca:opacity-100">✎ trocar</span>
                     </div>
                   </button>
                 ) : (
                   <div className="text-slate-900 font-semibold leading-tight">
-                    {it.productName ?? it.sku}
+                    {tituloPeca(it)}
                   </div>
+                )}
+                {/* Descrição embaixo, cinza — o MESMO formato do card da LIVE
+                    logo abaixo nesta tela: a linha grande é REF · COR TAM. */}
+                {it.ref && it.productName && (
+                  <div className="truncate text-xs text-slate-500">{it.productName}</div>
                 )}
                 {it.variant && (
                   <div className="text-xs text-slate-500 mt-0.5">{it.variant}</div>

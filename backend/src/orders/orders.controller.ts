@@ -549,6 +549,24 @@ export class OrdersController {
       select: { code: true, name: true },
     });
 
+    /**
+     * REF · COR · TAMANHO dos itens. Desde 13/08 são colunas do `OrderItem`;
+     * pedido anterior a isso não tem — e aí o snapshot do checkout salva, que
+     * guarda `productId` (= a REF que o carrinho manda), `color` e `size`.
+     * Sem esse fallback, os pedidos que já existem ficariam com a coluna vazia
+     * justamente na tela em que o dono foi olhar.
+     */
+    const doSnapshot = new Map<string, { ref: string | null; cor: string | null; tamanho: string | null }>();
+    for (const it of (ck.items || []) as any[]) {
+      const chave = String(it?.sku || '').trim();
+      if (!chave || doSnapshot.has(chave)) continue;
+      doSnapshot.set(chave, {
+        ref: it?.ref || it?.productId || null,
+        cor: it?.color || null,
+        tamanho: it?.size || null,
+      });
+    }
+
     const pagamento =
       pi.method === 'card'
         ? `Cartão de crédito${pi.installments ? ` (${pi.installments}x)` : ''}`
@@ -585,15 +603,21 @@ export class OrdersController {
       // a etiqueta e a separação leem. Não desmontar aqui.
       shipping: enderecoWc,
       customerCpf: pedido.customerCpf || '',
-      lineItems: (pedido.items || []).map((it: any) => ({
-        id: it.id,
-        name: it.productName,
-        sku: it.sku,
-        quantity: it.quantity,
-        total: String((it.unitPrice ?? 0) * (it.quantity ?? 1)),
-        price: it.unitPrice,
-        image: null,
-      })),
+      lineItems: (pedido.items || []).map((it: any) => {
+        const snap = doSnapshot.get(String(it.sku || '').trim());
+        return {
+          id: it.id,
+          name: it.productName,
+          sku: it.sku,
+          ref: it.ref || snap?.ref || null,
+          cor: it.cor || snap?.cor || null,
+          tamanho: it.tamanho || snap?.tamanho || null,
+          quantity: it.quantity,
+          total: String((it.unitPrice ?? 0) * (it.quantity ?? 1)),
+          price: it.unitPrice,
+          image: null,
+        };
+      }),
       shippingLines: [
         {
           method: ck.shipping?.label ?? pedido.shippingMethod ?? 'Entrega',
@@ -725,6 +749,9 @@ export class OrdersController {
           id: it.id,
           name: it.productName,
           sku: it.sku,
+          ref: it.ref ?? null,
+          cor: it.cor ?? null,
+          tamanho: it.tamanho ?? null,
           quantity: it.quantity,
           total: String((it.unitPrice ?? 0) * (it.quantity ?? 1)),
           price: it.unitPrice,

@@ -96,6 +96,11 @@ export interface LojaItemInput {
   quantity: number;
   /** Em REAIS. */
   unitPrice: number;
+  /**
+   * REF da peça, preenchida pelo GUARD (não vem do carrinho). É o que a loja
+   * usa pra achar a peça na arara — o `sku` vira o código do ERP logo abaixo.
+   */
+  ref?: string;
 }
 
 export interface LojaTrackingInput {
@@ -373,6 +378,13 @@ export class LojaOrdersService {
        * escolhida): aí mantemos a REF, que pelo menos é rastreável na mão.
        */
       if (c.codigo) input.items[c.indice].sku = c.codigo;
+
+      /**
+       * A REF vem junto (13/08). O `sku` acima é o CÓDIGO — sete dígitos que
+       * ninguém lê na loja. Quem separa procura pela REF, e o pedido do site
+       * era o único canal que não mostrava a dela em lugar nenhum.
+       */
+      if (c.ref) input.items[c.indice].ref = c.ref;
     }
     const subtotal = this.dinheiro(conferencia.subtotal);
 
@@ -731,6 +743,7 @@ export class LojaOrdersService {
       items: input.items.map((it) => ({
         productId: it.productId,
         sku: it.sku,
+        ref: it.ref || it.productId || null,
         slug: it.slug,
         name: it.name,
         size: it.size,
@@ -787,6 +800,12 @@ export class LojaOrdersService {
               create: input.items.map((it) => ({
                 sku: String(it.sku),
                 productName: [it.name, it.color, it.size].filter(Boolean).join(' · '),
+                // REF/COR/TAMANHO em colunas próprias: o `productName` já
+                // trazia cor e tamanho grudados no nome, mas grudado não dá
+                // pra destacar na separação nem imprimir em coluna.
+                ref: it.ref || it.productId || null,
+                cor: it.color || null,
+                tamanho: it.size || null,
                 quantity: Number(it.quantity),
                 unitPrice: this.dinheiro(it.unitPrice),
                 // No site o preço praticado JÁ é o cheio — não há tabela

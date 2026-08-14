@@ -1030,7 +1030,15 @@ export class PickOrdersService {
     // Items atribuídos a essa loja (pedido multi-loja só retorna o pedaço dela)
     const items = await this.prisma.orderItem.findMany({
       where: { orderId: po.orderId, assignedStoreId: storeId },
-      select: { id: true, sku: true, productName: true, quantity: true },
+      select: {
+        id: true,
+        sku: true,
+        productName: true,
+        ref: true,
+        cor: true,
+        tamanho: true,
+        quantity: true,
+      },
     });
 
     const skus = items.map((i) => i.sku).filter(Boolean);
@@ -1064,6 +1072,9 @@ export class PickOrdersService {
           id: i.id,
           sku: i.sku,
           productName: i.productName,
+          ref: (i as any).ref ?? null,
+          cor: (i as any).cor ?? null,
+          tamanho: (i as any).tamanho ?? null,
           quantity: i.quantity,
           ean, // null = sem EAN no ERP → operador precisa reportar
           eanVariants,
@@ -2200,7 +2211,15 @@ export class PickOrdersService {
     // conta pra loja se for a única pick-order.
     const itens = await this.prisma.orderItem.findMany({
       where: { orderId: order.id },
-      select: { sku: true, productName: true, quantity: true, assignedStoreId: true },
+      select: {
+        sku: true,
+        productName: true,
+        ref: true,
+        cor: true,
+        tamanho: true,
+        quantity: true,
+        assignedStoreId: true,
+      },
     });
     const soUmaLoja = rows.length === 1;
     const itensDaStore = (storeId: string) =>
@@ -2211,6 +2230,9 @@ export class PickOrdersService {
       itensDaStore(storeId).map((i) => ({
         sku: String(i.sku || '').trim(),
         descricao: i.productName || null,
+        ref: (i as any).ref || null,
+        cor: (i as any).cor || null,
+        tamanho: (i as any).tamanho || null,
         qty: Number(i.quantity) || 1,
       }));
     const reasonLabels: Record<string, string> = {

@@ -796,6 +796,14 @@ model OrderItem {
   orderId         String  @map("order_id")
   sku             String
   productName     String? @map("product_name")
+  // REF · COR · TAMANHO da peça, congelados no momento do pedido.
+  // O `sku` é o CÓDIGO do ERP (identifica REF+COR+TAMANHO, mas não se lê): a
+  // vendedora procura a peça na arara pela REF, e é isso que a loja pedia na
+  // separação e na impressão. Snapshot de propósito — REF reciclada troca de
+  // dono e o pedido antigo tem que continuar contando a verdade dele.
+  ref             String?
+  cor             String?
+  tamanho         String?
   quantity        Int
   unitPrice       Float?  @map("unit_price")
   // Preço CHEIO (sem promoção) — base da obrigação intercompany ÷2,5.

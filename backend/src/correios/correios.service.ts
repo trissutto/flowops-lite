@@ -160,10 +160,26 @@ export class CorreiosService {
         ]);
         if (preco.status >= 200 && preco.status < 300) {
           raw = preco.data; // resposta crua — pra conferir desconto de contrato/tabela promocional
-          // pcBase = TARIFA do contrato (tabela promocional — o que a gente cobra).
-          // pcFinal = pcBase + seguro automático (ad valorem) — guardado como referência.
-          precoReais = parseBRL(preco.data?.pcBase ?? preco.data?.pcFinal);
+          /**
+           * 🔴 O PREÇO É O `pcFinal` (13/08). Era `pcBase`, e `pcBase` NÃO é a
+           * conta: é a tarifa do serviço antes dos adicionais que os Correios
+           * cobram junto (seguro automático/ad valorem e afins). A diferença
+           * apareceu num pedido real — SEDEX pra SC saiu **R$ 9,94** no
+           * checkout, mais barato que o PAC de R$ 19,99 da mesma cotação, e a
+           * cliente naturalmente escolheu o expresso.
+           *
+           * `pcFinal` é o que a fatura vai cobrar da loja. Cobrar menos que
+           * isso é vender frete no prejuízo, em silêncio, em toda UF que não
+           * tem tabela promocional.
+           */
+          precoReais = parseBRL(preco.data?.pcFinal ?? preco.data?.pcBase);
           precoComSeguro = parseBRL(preco.data?.pcFinal);
+          const base = parseBRL(preco.data?.pcBase);
+          const cheia = parseBRL(preco.data?.pcBaseGeral);
+          this.logger.log(
+            `[frete] ${s.nome} ${cepOrigem}→${cepDestino} ${peso}g ${comprimento}x${largura}x${altura}cm: ` +
+              `cobrado=${precoReais} pcBase=${base} pcBaseGeral=${cheia} pcFinal=${precoComSeguro}`,
+          );
         } else {
           raw = preco.data;
           erro = preco.data?.msgs?.join('; ') || `preço HTTP ${preco.status}`;
@@ -176,7 +192,9 @@ export class CorreiosService {
       }
       opcoes.push({ servico: s.nome, codigo: s.codigo, precoReais, precoComSeguro, prazoDias, erro, raw });
     }
-    return { cepOrigem, cepDestino, pesoGramas: peso, opcoes };
+    // Dimensões junto: preço estranho quase sempre é caixa errada, e a tela
+    // precisa mostrar o que FOI enviado, não o que se supõe ter sido.
+    return { cepOrigem, cepDestino, pesoGramas: peso, comprimento, largura, altura, opcoes };
   }
 
   /**
