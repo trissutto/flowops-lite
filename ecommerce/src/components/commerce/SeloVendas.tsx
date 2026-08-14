@@ -29,9 +29,18 @@ const PISO = 20;
 export function SeloVendas({
   vendas,
   className = '',
+  variant = 'bloco',
 }: {
   vendas?: number | null;
   className?: string;
+  /**
+   * `linha` (dono, 14/08): na coluna de compra da PDP a caixa empurrava o
+   * botão de comprar pra longe do seletor de tamanho — no meio de Fit AI,
+   * pills e garantias, era mais uma caixa disputando atenção. Vira uma linha
+   * de texto colada no botão: mantém o argumento, devolve o espaço. O card
+   * da vitrine continua com o bloco.
+   */
+  variant?: 'bloco' | 'linha';
 }) {
   const n = Number(vendas) || 0;
   if (n < PISO) return null;
@@ -55,6 +64,18 @@ export function SeloVendas({
    * urgência. O número é verdadeiro e não precisa gritar; card de e-commerce
    * que grita é o que a cliente aprendeu a ignorar.
    */
+  if (variant === 'linha') {
+    return (
+      <p className={`flex items-center gap-2 text-small text-ink-soft ${className}`}>
+        <ShoppingBag className="size-4 shrink-0 text-primary-strong" strokeWidth={1.75} aria-hidden />
+        <span>
+          <strong className="font-medium text-ink">{quantidade} clientes</strong> já compraram
+          esta peça
+        </span>
+      </p>
+    );
+  }
+
   return (
     <div
       className={`flex items-center gap-3 rounded-sm border border-primary/25 bg-primary-soft/25 px-4 py-3 ${className}`}

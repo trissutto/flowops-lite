@@ -155,11 +155,14 @@ export function SizePill({
   selected,
   disabled,
   onSelect,
+  size = 'md',
 }: {
   label: string;
   selected?: boolean;
   disabled?: boolean;
   onSelect?: () => void;
+  /** `lg` na PDP: é a decisão principal da página e merece alvo maior. */
+  size?: 'md' | 'lg';
 }) {
   return (
     <button
@@ -167,13 +170,22 @@ export function SizePill({
       onClick={onSelect}
       disabled={disabled}
       aria-pressed={selected}
+      aria-label={disabled ? `Tamanho ${label} esgotado` : `Tamanho ${label}`}
       className={cn(
-        'tabular min-w-11 rounded-sm border px-3 py-2 text-small font-medium transition-all duration-[180ms]',
-        disabled && 'cursor-not-allowed border-border text-ink-muted/50 line-through',
+        'tabular rounded-sm border font-medium transition-all duration-[180ms]',
+        size === 'lg' ? 'min-w-13 px-4 py-2.5 text-body' : 'min-w-11 px-3 py-2 text-small',
+        /* Esgotado TEM que gritar (dono, 14/08: "quase não dá pra ver"): o
+           line-through fino em texto 50% passava batido. Agora a pílula
+           inteira leva um traço diagonal (gradiente em currentColor — segue o
+           tom do texto nos dois temas) sobre fundo lavado e borda tracejada:
+           lê como "riscado do mapa" a um metro do celular. */
+        disabled &&
+          'cursor-not-allowed border-dashed border-border bg-surface-alt/70 text-ink-muted ' +
+            'bg-[linear-gradient(to_top_right,transparent_calc(50%-0.8px),currentColor_calc(50%-0.8px),currentColor_calc(50%+0.8px),transparent_calc(50%+0.8px))]',
         !disabled && selected && 'border-ink bg-ink text-light',
         !disabled &&
           !selected &&
-          'border-border text-ink-soft hover:border-primary hover:text-primary-strong',
+          'border-border-strong text-ink hover:border-primary hover:text-primary-strong',
       )}
     >
       {label}
