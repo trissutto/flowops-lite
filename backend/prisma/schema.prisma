@@ -445,6 +445,10 @@ model Order {
   // n8n. Preenchido = nunca mais toca esse pedido (um lembrete só — segundo
   // toque vira cobrança). Null com o PIX vencido = janela passou em silêncio.
   pixResgateAvisadoEm DateTime? @map("pix_resgate_avisado_em")
+  // Aviso de rastreio (14/08): pedido dividido despacha um pacote por loja e
+  // cada um chama o afterShipped — sem esta trava a cliente receberia um
+  // "saiu pra entrega" por pacote. Guard atômico: updateMany com null.
+  rastreioAvisadoEm   DateTime? @map("rastreio_avisado_em")
   createdAt       DateTime @default(now()) @map("created_at") // data que chegou no FlowOps
   updatedAt       DateTime @updatedAt @map("updated_at")
 

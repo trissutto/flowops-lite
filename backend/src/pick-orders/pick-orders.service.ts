@@ -11,6 +11,7 @@ import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service
 import { DceEmitService } from '../dce/dce-emit.service';
 import { NfeTransferService } from '../nfe/nfe-transfer.service';
 import { DanfePdfService } from '../nfe/danfe-pdf.service';
+import { PedidoEmailService } from '../loja-orders/pedido-email.service';
 import { lerComplementoBairroWc, lerRuaNumeroWc } from '../common/endereco-wc';
 import { servicoPagoDoPedido } from '../common/servico-envio';
 
@@ -94,6 +95,7 @@ export class PickOrdersService {
     private readonly dce: DceEmitService,
     private readonly nfe: NfeTransferService,
     private readonly danfePdf: DanfePdfService,
+    private readonly pedidoEmail: PedidoEmailService,
   ) {}
 
   /**
@@ -2898,6 +2900,30 @@ export class PickOrdersService {
       }
     } catch (e: any) {
       this.logger.warn(`[acerto-÷2,5] pedido ${order.wcOrderNumber}: ${e?.message || e}`);
+    }
+
+    // ── 2b) Rastreio pra cliente do SITE NOVO (e-mail + evento n8n) ──
+    // O e-mail de "Pagamento confirmado" promete o código de rastreio, e até
+    // 14/08 ninguém cumpria: o ManyChat abaixo é só da LIVE e o site novo não
+    // passa pelo WooCommerce que avisava o site velho. Guard atômico no
+    // pedido: dividido despacha um pacote por loja, e só o PRIMEIRO com
+    // rastreio avisa (updateMany com null → 1 linha = este pacote venceu).
+    if (order.source === 'ecommerce' && input.trackingCode) {
+      try {
+        const venceu = await (this.prisma as any).order.updateMany({
+          where: { id: order.id, rastreioAvisadoEm: null },
+          data: { rastreioAvisadoEm: new Date() },
+        });
+        if (venceu.count === 1) {
+          void this.pedidoEmail.aoEnviarPedido({
+            ...order,
+            trackingCode: input.trackingCode,
+            carrier: input.carrier ?? order.carrier ?? 'Correios',
+          });
+        }
+      } catch (e: any) {
+        this.logger.warn(`[rastreio-site] pedido ${order.wcOrderNumber}: ${e?.message || e}`);
+      }
     }
 
     // ── 2) WhatsApp de rastreio pra cliente da LIVE ──
