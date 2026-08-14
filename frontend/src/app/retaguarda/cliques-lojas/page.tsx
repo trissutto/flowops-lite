@@ -283,9 +283,23 @@ export default function CliquesLojasPage() {
                 {linhas.map((l) => (
                   <tr key={l.loja} className="border-t border-[#E7E2D8] hover:bg-[#FBF6E6]/40">
                     <td className="px-4 py-3 font-semibold text-slate-800">
-                      {/* "—" é o clique que não nasceu de uma unidade. Aparece
-                          em vez de sumir, pra o total da tela bater. */}
-                      {l.loja === '—' ? <span className="text-slate-400">Sem loja definida</span> : l.loja}
+                      {/* "—" é o clique que não nasceu de uma unidade: o grid de
+                          Instagram da home e os ícones do rodapé apontam pro
+                          perfil e pro WhatsApp da MARCA, não de uma loja. Não é
+                          atribuição perdida — não existe unidade pra atribuir.
+                          Chamava-se "Sem loja definida" e lia como defeito
+                          (dono perguntou 13/08). Aparece em vez de sumir, pra o
+                          total da tela bater. */}
+                      {l.loja === '—' ? (
+                        <span className="text-slate-500">
+                          Marca — @lurdsplussize
+                          <span className="block text-[11px] font-normal text-slate-400">
+                            grid da home e rodapé, sem unidade
+                          </span>
+                        </span>
+                      ) : (
+                        l.loja
+                      )}
                     </td>
                     <td className="px-4 py-3 text-right tabular-nums">{l.comoChegar || '–'}</td>
                     <td className="px-4 py-3 text-right tabular-nums font-semibold text-[#2E7D46]">{l.whatsapp || '–'}</td>

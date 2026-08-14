@@ -1,12 +1,11 @@
 import { AppLink as Link } from '@/components/ui/AppLink';
-import { MapPin, MessageCircle } from 'lucide-react';
-import { InstagramIcon } from '@/components/ui/icons';
+import { MapPin } from 'lucide-react';
 import { Container } from './Container';
 import { Logo } from '@/components/navigation/Logo';
 import { legalLinks } from '@/data/navigation';
 import { SelosDeConfianca } from '@/components/sections/SelosDeConfianca';
 import { filtrarLinksVivos } from '@/lib/routes';
-import { LINK_WHATSAPP_SITE } from '@/data/contato';
+import { SociaisDoRodape } from './SociaisDoRodape';
 
 /**
  * Footer — minimalista, muito organizado. Quatro colunas de links, uma linha
@@ -76,24 +75,8 @@ export function Footer() {
               acolhe — online e em 14 lojas.
             </p>
             <div className="mt-7 flex items-center gap-2">
-              <Link
-                href="https://www.instagram.com/lurdsplussize"
-                target="_blank"
-                rel="noopener noreferrer"
-                aria-label="Instagram da Lurds"
-                className="inline-flex size-10 items-center justify-center rounded-pill border border-border text-ink-soft transition-colors hover:border-primary hover:text-primary-strong"
-              >
-                <InstagramIcon className="size-4" strokeWidth={1.5} />
-              </Link>
-              <Link
-                href={LINK_WHATSAPP_SITE}
-                target="_blank"
-                rel="noopener noreferrer"
-                aria-label="WhatsApp da Lurds"
-                className="inline-flex size-10 items-center justify-center rounded-pill border border-border text-ink-soft transition-colors hover:border-success hover:text-success"
-              >
-                <MessageCircle className="size-4" strokeWidth={1.5} />
-              </Link>
+              {/* Instagram e WhatsApp da marca — cliques medidos, ver `SociaisDoRodape`. */}
+              <SociaisDoRodape />
               <Link
                 href="/lojas"
                 aria-label="Nossas lojas"
