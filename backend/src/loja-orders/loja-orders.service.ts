@@ -10,6 +10,7 @@ import { CupomService } from './cupom.service';
 import { FreteService } from './frete.service';
 import { PersonIdentityService } from '../person-identity/person-identity.service';
 import { PedidoEmailService } from './pedido-email.service';
+import { SacolaService } from './sacola.service';
 
 /**
  * PEDIDO DO E-COMMERCE NOVO (sprint 011).
@@ -202,6 +203,7 @@ export class LojaOrdersService {
     private readonly frete: FreteService,
     private readonly identity: PersonIdentityService,
     private readonly pedidoEmail: PedidoEmailService,
+    private readonly sacola: SacolaService,
   ) {}
 
   /* ───────────────────────── helpers de formato ───────────────────────── */
@@ -1179,6 +1181,12 @@ export class LojaOrdersService {
       return { ok: false, error: 'Não conseguimos abrir o seu pedido agora. Tente de novo em instantes. 💜' };
     }
 
+    // A sacola desta sessão cumpriu o papel: quem vai pra fila de recuperação
+    // agora é o PEDIDO (que tem número, itens conferidos e status). Se a
+    // cobrança falhar e o pedido for descartado logo abaixo, o carimbo é
+    // desfeito — ninguém pode sumir da fila por causa de pedido que não existe.
+    await this.sacola.marcarConvertida(input.tracking?.session_id, order.id);
+
     // ── Cobrança ──
     let paymentInfo: any = {
       method: input.payment.method,
@@ -1303,6 +1311,9 @@ export class LojaOrdersService {
 
   /** Remove o pedido que não virou venda. Falhou o delete → marca cancelado. */
   private async descartarPedido(orderId: string): Promise<void> {
+    // Pedido descartado devolve a cliente pra fila de recuperação: a sacola
+    // dela volta a valer, com as peças e o telefone que ela já tinha digitado.
+    await this.sacola.reabrir(orderId);
     try {
       await (this.prisma as any).order.delete({ where: { id: orderId } });
     } catch (e: any) {

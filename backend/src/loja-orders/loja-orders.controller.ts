@@ -12,6 +12,7 @@ import {
 import * as crypto from 'crypto';
 import { CriarPedidoInput, LojaOrdersService } from './loja-orders.service';
 import { FreteService } from './frete.service';
+import { SacolaEntrada, SacolaService } from './sacola.service';
 
 /**
  * PEDIDO DO E-COMMERCE NOVO — porta SERVER-TO-SERVER (sprint 011).
@@ -80,6 +81,7 @@ export class LojaOrdersController {
   constructor(
     private readonly svc: LojaOrdersService,
     private readonly freteSvc: FreteService,
+    private readonly sacolaSvc: SacolaService,
   ) {}
 
   /** Comparação em tempo constante sobre os hashes (iguala o tamanho dos dois
@@ -241,6 +243,34 @@ export class LojaOrdersController {
     const r = await this.svc.criarPedido(body);
     res.status(r.ok ? 201 : 200);
     return r;
+  }
+
+  /**
+   * POST /api/public/loja/sacola — A SACOLA COM DONA (dono, 14/08).
+   *
+   * Chamada assim que a cliente confirma nome + celular no § 1 do checkout, e
+   * de novo a cada etapa vencida. NÃO cria pedido: só deixa a sacola
+   * recuperável por WhatsApp caso ela não chegue no fim.
+   *
+   * Sempre 200 `{ ok }`: o site chama isto em segundo plano, e nada que
+   * aconteça aqui pode aparecer na tela de quem está comprando. Entra no mesmo
+   * balde de rate-limit do pedido — são ~3 toques por checkout, longe do teto,
+   * mas o balde é o que impede alguém com o token de escrever sem fim.
+   */
+  @Post('sacola')
+  async sacola(
+    @Body() body: SacolaEntrada,
+    @Headers('x-loja-token') token: string,
+    @Req() req: any,
+    @Res({ passthrough: true }) res: any,
+  ) {
+    this.exigirToken(token);
+    if (excedeuLimite(this.ipDe(req))) {
+      res.status(429);
+      return { ok: false };
+    }
+    const ok = await this.sacolaSvc.registrar(body);
+    return { ok };
   }
 
   /** GET /api/public/loja/pedido/:id — CPF mascarado, sem tracking, sem gateway. */

@@ -1822,7 +1822,9 @@ function SeparacaoPageInner() {
 // vars FLOWOPS_WP_BASE e FLOWOPS_WP_KEY no Railway.
 // =================================================================================
 type CarrinhoAB = {
-  id: number;
+  // String só no source='sacola' (uuid da sacola do checkout) — os carrinhos
+  // do plugin e os pedidos continuam numéricos.
+  id: number | string;
   email: string;
   first_name?: string;
   last_name?: string;
@@ -1837,8 +1839,14 @@ type CarrinhoAB = {
   items_count?: number;
   // Origem do registro: undefined = plugin CartFlows; 'woocommerce' = pedido
   // iniciado-sem-pagar trazido pelo fallback WC pra preencher gaps de captura;
-  // 'ecommerce' = checkout iniciado-sem-pagar no site NOVO (orders do Postgres).
+  // 'ecommerce' = checkout iniciado-sem-pagar no site NOVO (orders do Postgres);
+  // 'sacola' = ela se identificou no checkout do site novo e NÃO chegou a
+  // fechar pedido (14/08) — não tem número nem cobrança, só telefone e peças.
   source?: string;
+  // Só no source='sacola': até onde ela foi antes de sumir. É o que muda o
+  // texto da mensagem — "faltou escolher o frete" ≠ "o cartão recusou".
+  etapa?: string;
+  etapaLabel?: string;
   // Só no source='ecommerce': número LP-xxxxxx e itens já embutidos na lista
   // (vêm do nosso banco — não precisa de /full).
   order_number?: string | null;
@@ -1892,6 +1900,10 @@ function CarrinhosTab() {
   const [wcFill, setWcFill] = useState(0);
   // Quantos vieram do e-commerce NOVO (orders source='ecommerce' sem pagamento).
   const [ecomFill, setEcomFill] = useState(0);
+  // Destes, quantos são SACOLA identificada (checkout começado, pedido nunca
+  // criado). Vale contar à parte: é o pedaço do funil que até 14/08 não
+  // existia em tela nenhuma.
+  const [sacolaFill, setSacolaFill] = useState(0);
   // Auto-refresh a cada 60s pra capturar carrinhos novos do site
   useEffect(() => {
     const t = setInterval(() => { load(); }, 60000);
@@ -1909,7 +1921,7 @@ function CarrinhosTab() {
       return;
     }
     // Carrinho do e-commerce novo já traz os itens embutidos (nosso banco).
-    if (c.source === 'ecommerce') {
+    if (c.source === 'ecommerce' || c.source === 'sacola') {
       setDetail({ cart_items: c.cart_items || [] });
       setDetailLoading(false);
       return;
@@ -1992,6 +2004,7 @@ function CarrinhosTab() {
         if (statusF === 'completed') return st === 'recovered';
         return true;
       });
+      setSacolaFill(ecomVisiveis.filter((c) => c.source === 'sacola').length);
 
       if ((listResp as any)?.ok === false || (listResp as any)?.error) {
         setErro((listResp as any)?.error || 'Falha ao buscar carrinhos.');
@@ -2196,7 +2209,7 @@ function CarrinhosTab() {
         <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar nome, email ou telefone..." className="flex-1 min-w-[200px] px-3 py-2 border-2 rounded text-sm" />
         <button onClick={load} className="px-3 py-2 border-2 rounded text-sm font-bold bg-white hover:bg-slate-50">Atualizar</button>
         <button onClick={runDiag} className="px-3 py-2 border-2 rounded text-sm font-bold bg-slate-100 hover:bg-slate-200" title="Schema da tabela CartFlows">Diag</button>
-        <span className="text-xs text-slate-500 ml-auto">{filtered.length} {filtered.length === 1 ? 'carrinho' : 'carrinhos'}{wcFill > 0 ? ` · ${wcFill} do site` : ''}{ecomFill > 0 ? ` · ${ecomFill} do ecommerce` : ''}{lastFetch ? ` · atualizado ${lastFetch.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : ''}</span>
+        <span className="text-xs text-slate-500 ml-auto">{filtered.length} {filtered.length === 1 ? 'carrinho' : 'carrinhos'}{wcFill > 0 ? ` · ${wcFill} do site` : ''}{ecomFill - sacolaFill > 0 ? ` · ${ecomFill - sacolaFill} do ecommerce` : ''}{sacolaFill > 0 ? ` · ${sacolaFill} ${sacolaFill === 1 ? 'sacola' : 'sacolas'}` : ''}{lastFetch ? ` · atualizado ${lastFetch.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : ''}</span>
       </div>
 
       {warning && !erro && (
@@ -2220,6 +2233,7 @@ function CarrinhosTab() {
             const isCompleted = status === 'completed' || status === 'recovered';
             const isWc = c.source === 'woocommerce';
             const isEcom = c.source === 'ecommerce';
+            const isSacola = c.source === 'sacola';
             const nome = `${c.first_name || ''} ${c.last_name || ''}`.trim() || c.email?.split('@')[0] || 'Cliente';
             const valor = Number(c.total ?? c.cart_total ?? c.cart_total_brl ?? 0);
             return (
@@ -2230,6 +2244,8 @@ function CarrinhosTab() {
                     {isCompleted && <span className="ml-2 text-[10px] bg-emerald-200 text-emerald-800 px-1.5 py-0.5 rounded font-bold uppercase">Recuperado</span>}
                     {isWc && <span className="ml-2 text-[10px] bg-sky-100 text-sky-700 px-1.5 py-0.5 rounded font-bold uppercase" title="Pedido iniciado no site sem pagamento (via WooCommerce) — o plugin de carrinhos não registrou este">Site</span>}
                     {isEcom && <span className="ml-2 text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded font-bold uppercase" title={`Checkout iniciado no site novo (lurdsplussize.com.br) sem pagamento${c.order_number ? ` — pedido ${c.order_number}` : ''}`}>Ecommerce</span>}
+                    {isSacola && <span className="ml-2 text-[10px] bg-fuchsia-100 text-fuchsia-800 px-1.5 py-0.5 rounded font-bold uppercase" title="Ela se identificou no checkout do site novo e não chegou a fechar pedido. Não existe cobrança nem número — só a sacola e o telefone dela.">Sacola</span>}
+                    {isSacola && c.etapaLabel && <span className="ml-1.5 text-[10px] bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded font-bold">{c.etapaLabel}</span>}
                     {Boolean(c.unsubscribed) && <span className="ml-2 text-[10px] bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded font-bold uppercase">Optout</span>}
                   </div>
                   <div className="text-[11px] text-slate-500 flex flex-wrap items-center gap-2 mt-0.5">
@@ -2263,7 +2279,12 @@ function CarrinhosTab() {
           <div className="bg-white rounded-2xl w-full max-w-3xl my-8 overflow-hidden shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <div className="px-5 py-3 bg-gradient-to-r from-rose-600 to-pink-600 text-white flex items-center justify-between">
               <div>
-                <h2 className="font-black text-lg">Carrinho abandonado #{selected.order_number || selected.id}</h2>
+                {/* Sacola não tem número — mostrar o uuid seria ruído. */}
+                <h2 className="font-black text-lg">
+                  {selected.source === 'sacola'
+                    ? 'Sacola sem pedido'
+                    : `Carrinho abandonado #${selected.order_number || selected.id}`}
+                </h2>
                 <p className="text-[11px] opacity-90">Dados pra contato direto via WhatsApp ou ligacao.</p>
               </div>
               <button onClick={closeCart} className="text-white hover:bg-white/20 rounded-lg w-8 h-8 flex items-center justify-center text-xl font-bold">x</button>
@@ -2274,6 +2295,12 @@ function CarrinhosTab() {
               {selected.source === 'ecommerce' && (
                 <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-[12px] text-amber-900">
                   <b>Origem: E-commerce novo (lurdsplussize.com.br).</b> Checkout iniciado sem pagamento confirmado{selected.order_number ? <> — pedido <b>{selected.order_number}</b></> : null}. Os itens abaixo vêm direto do nosso banco.
+                </div>
+              )}
+
+              {selected.source === 'sacola' && (
+                <div className="bg-fuchsia-50 border border-fuchsia-200 rounded-lg p-3 text-[12px] text-fuchsia-900">
+                  <b>Origem: sacola do site novo — pedido nunca foi criado.</b> Ela preencheu os dados no checkout e parou{selected.etapaLabel ? <> em <b>{selected.etapaLabel.replace('Parou n', 'n')}</b></> : null}. Não há cobrança nem número de pedido: as peças abaixo são o que estava na sacola dela. É a ligação mais quente da lista.
                 </div>
               )}
 

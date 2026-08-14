@@ -14,6 +14,7 @@ import { PersonIdentityModule } from '../person-identity/person-identity.module'
 import { EmailModule } from '../email/email.module';
 import { PedidoEmailService } from './pedido-email.service';
 import { PixResgateCron } from './pix-resgate.cron';
+import { SacolaService } from './sacola.service';
 
 /**
  * PEDIDOS DO E-COMMERCE NOVO (sprint 011).
@@ -48,6 +49,9 @@ import { PixResgateCron } from './pix-resgate.cron';
     PedidoEmailService,
     // Resgate do PIX não pago: toque único aos 30min, dentro da validade.
     PixResgateCron,
+    // A sacola com dona: nome + celular capturados no § 1 do checkout, pra
+    // quem desiste no meio não sumir sem deixar rastro (14/08).
+    SacolaService,
   ],
   exports: [LojaOrdersService, CupomService],
 })

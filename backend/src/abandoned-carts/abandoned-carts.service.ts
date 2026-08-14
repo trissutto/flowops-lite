@@ -592,26 +592,153 @@ export class AbandonedCartsService {
         };
       });
 
+      // As sacolas identificadas entram na MESMA lista: pra quem atende, "não
+      // terminou o checkout" e "não terminou o cadastro" são a mesma tarefa —
+      // ligar. O que muda é a tarja e a etapa em que ela parou.
+      const sacolas =
+        params.status === 'recovered' ||
+        params.status === 'completed' ||
+        params.status === 'lost'
+          ? [] // sacola nunca é recuperada nem perdida: converteu, vira pedido
+          : await this.listSacolas(params, items);
+      const todos = [...items, ...sacolas].sort((a: any, b: any) => {
+        const ta = a.time ? Date.parse(a.time) : 0;
+        const tb = b.time ? Date.parse(b.time) : 0;
+        return tb - ta;
+      });
+
       const stats = {
-        abandoned: items.filter((i: any) => i.order_status === 'abandoned').length,
-        recovered: items.filter((i: any) => i.order_status === 'recovered').length,
-        lost: items.filter((i: any) => i.order_status === 'lost').length,
+        abandoned: todos.filter((i: any) => i.order_status === 'abandoned').length,
+        recovered: todos.filter((i: any) => i.order_status === 'recovered').length,
+        lost: todos.filter((i: any) => i.order_status === 'lost').length,
         recovery_rate: 0,
-        total_abandoned_value: items
+        total_abandoned_value: todos
           .filter((i: any) => i.order_status === 'abandoned')
           .reduce((acc: number, i: any) => acc + (i.cart_total || 0), 0),
-        total_recovered_value: items
+        total_recovered_value: todos
           .filter((i: any) => i.order_status === 'recovered')
           .reduce((acc: number, i: any) => acc + (i.cart_total || 0), 0),
       };
       const base = stats.abandoned + stats.recovered + stats.lost;
       stats.recovery_rate = base > 0 ? (stats.recovered / base) * 100 : 0;
 
-      return { ok: true, source: 'ecommerce', items, total: items.length, stats };
+      return {
+        ok: true,
+        source: 'ecommerce',
+        items: todos,
+        total: todos.length,
+        sacolas: sacolas.length,
+        stats,
+      };
     } catch (e: any) {
       this.logger.warn(`[carrinhos] lista ecommerce falhou: ${e?.message ?? e}`);
       return { ok: false, error: `Falha ao buscar carrinhos do e-commerce novo: ${e?.message ?? e}` };
     }
+  }
+
+  /**
+   * SACOLAS IDENTIFICADAS que não viraram pedido (`sacola_checkout`).
+   *
+   * É a metade do funil que nunca aparecia em lugar nenhum: quem digitou nome
+   * e celular e desistiu antes de fechar. Sem pedido, sem número, sem
+   * cobrança — mas com telefone, que é o que a recuperação precisa.
+   *
+   * DUAS TRAVAS CONTRA ALARME FALSO (a mesma regra da fila da loja: tarefa que
+   * não é pendência real mata a confiança na lista inteira):
+   *
+   *  1. **Quem está comprando AGORA fica de fora.** Sacola tocada há menos de
+   *     `MINUTOS_ESFRIAR` ainda é uma pessoa com o checkout aberto — ligar pra
+   *     ela é atrapalhar a própria venda.
+   *  2. **Telefone que já virou pedido fica de fora.** O carimbo de conversão
+   *     resolve o caso normal; esta é a rede pra quando ele não gravou (o
+   *     `session_id` não chegou, o site perdeu a sessão no meio). Sem ela a
+   *     mesma cliente apareceria duas vezes, uma como sacola e outra como
+   *     pedido.
+   */
+  private async listSacolas(
+    params: { since?: string; until?: string; search?: string },
+    pedidos: any[],
+  ): Promise<any[]> {
+    /** Tempo pra sacola "esfriar" — abaixo disso ela ainda está no checkout. */
+    const MINUTOS_ESFRIAR = 20;
+
+    const where: any = { convertidoEm: null };
+    if (params.since || params.until) {
+      where.criadoEm = {};
+      if (params.since) where.criadoEm.gte = new Date(params.since + 'T00:00:00');
+      if (params.until) where.criadoEm.lte = new Date(params.until + 'T23:59:59');
+    }
+    where.atualizadoEm = { lt: new Date(Date.now() - MINUTOS_ESFRIAR * 60_000) };
+    if (params.search) {
+      where.OR = [
+        { nome: { contains: params.search, mode: 'insensitive' } },
+        { email: { contains: params.search, mode: 'insensitive' } },
+        { telefone: { contains: params.search.replace(/\D/g, '') || params.search } },
+      ];
+    }
+
+    let linhas: any[] = [];
+    try {
+      linhas = await (this.prisma as any).sacolaCheckout.findMany({
+        where,
+        orderBy: { atualizadoEm: 'desc' },
+        take: 200,
+      });
+    } catch (e: any) {
+      // Tabela ainda não existe (deploy do schema não passou) não pode derrubar
+      // a aba inteira — os pedidos continuam listados.
+      this.logger.warn(`[carrinhos] sacolas indisponíveis: ${e?.message ?? e}`);
+      return [];
+    }
+
+    const telefonesComPedido = new Set(
+      (pedidos ?? [])
+        .map((p: any) => String(p?.phone ?? '').replace(/\D/g, ''))
+        .filter((t: string) => t.length >= 10),
+    );
+
+    const rotulo: Record<string, string> = {
+      identificacao: 'Parou no cadastro',
+      entrega: 'Parou na entrega',
+      pagamento: 'Parou no pagamento',
+    };
+
+    return linhas
+      .filter((s: any) => !telefonesComPedido.has(String(s.telefone ?? '')))
+      .map((s: any) => {
+        const nome = String(s.nome ?? '').trim();
+        const sp = nome.indexOf(' ');
+        const itens = Array.isArray(s.itens) ? s.itens : [];
+        const cartItems = itens.map((it: any) => ({
+          name: [it?.nome, it?.cor, it?.tamanho].filter(Boolean).join(' · ') || it?.ref || 'Peça',
+          sku: it?.ref ?? null,
+          quantity: Number(it?.quantidade ?? 1),
+          price: Number(it?.preco ?? 0),
+          line_subtotal: Number(it?.preco ?? 0) * Number(it?.quantidade ?? 1),
+        }));
+        return {
+          id: s.id,
+          email: s.email ?? '',
+          first_name: sp > 0 ? nome.slice(0, sp) : nome,
+          last_name: sp > 0 ? nome.slice(sp + 1) : '',
+          phone: s.telefone ?? '',
+          city: s.cidade ?? '',
+          state: s.uf ?? '',
+          cart_total: Number(s.valor ?? 0),
+          items_count: Number(s.pecas ?? 0),
+          order_status: 'abandoned',
+          // A hora que vale é a do ÚLTIMO toque, não a da primeira: é ela que
+          // diz há quanto tempo a cliente sumiu.
+          time: s.atualizadoEm ? s.atualizadoEm.toISOString() : null,
+          order_id: null,
+          order_number: null,
+          source: 'sacola',
+          etapa: s.etapa ?? 'identificacao',
+          etapaLabel: rotulo[String(s.etapa)] ?? 'Parou no cadastro',
+          utmCampaign: s.utmCampaign ?? null,
+          cart_items: cartItems,
+        };
+      });
   }
 
   /**

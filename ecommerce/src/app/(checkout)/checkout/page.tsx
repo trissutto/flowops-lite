@@ -124,6 +124,60 @@ export default function CheckoutPage() {
   const descontoPix = pixDiscount(subtotal - discount, payment?.method);
   const total = subtotal - discount - descontoPix + (shippingPrice ?? 0);
 
+  /* ------------------------------------------------- SACOLA RECUPERÁVEL */
+
+  /**
+   * A SACOLA COM DONA (dono, 14/08) — guarda nome + celular + peças assim que
+   * a cliente vence uma etapa, e não só no fim.
+   *
+   * Por que existe: quem confirmava a identificação e desistia no frete não
+   * deixava NADA no nosso banco além de um `add_to_cart` anônimo (só
+   * `session_id`), porque o pedido só nasce no submit da página inteira. Na
+   * medição de 14/08, 8 das 11 sessões que abriram o checkout morreram já na
+   * primeira seção — o pedaço do funil que não dava pra recuperar era o maior
+   * deles. Agora ela cai na aba Carrinhos com botão de WhatsApp.
+   *
+   * Fire-and-forget de propósito: isto não é o caminho da venda. Se falhar, a
+   * cliente não vê nada e a compra segue — o que se perde é a ligação depois.
+   */
+  function salvarSacola(
+    etapa: 'identificacao' | 'entrega' | 'pagamento',
+    quem: CustomerIdentity | null,
+    entrega?: ShippingSelection | null,
+  ) {
+    if (!quem || lines.length === 0) return;
+    const attr = captureAttribution();
+    void fetch('/api/checkout/sacola', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      // A cliente pode fechar a aba no mesmo segundo — `keepalive` deixa a
+      // requisição terminar mesmo com a página indo embora.
+      keepalive: true,
+      body: JSON.stringify({
+        sessionId: getSessionId(),
+        nome: quem.name,
+        email: quem.email,
+        telefone: quem.phone,
+        etapa,
+        // Valor das PEÇAS: o total ainda muda com frete e cupom, e quem liga
+        // pergunta pelo que ela separou.
+        valor: subtotal,
+        itens: lines.map((l) => ({
+          ref: l.productId,
+          nome: l.name,
+          cor: l.color,
+          tamanho: l.size,
+          quantidade: l.quantity,
+          preco: l.unitPrice,
+        })),
+        cep: entrega?.cep ?? entrega?.address?.cep,
+        cidade: entrega?.address?.city,
+        uf: entrega?.address?.uf,
+        utmCampaign: attr.campaign,
+      }),
+    }).catch(() => undefined);
+  }
+
   function handleApplyCoupon(code: string) {
     const result = applyCoupon(code, subtotal);
     setCoupon(result);
@@ -274,6 +328,9 @@ export default function CheckoutPage() {
               defaults={customer}
               onDone={(c) => {
                 setCustomer(c);
+                // A partir daqui ela é recuperável: nome + celular no banco,
+                // com as peças da sacola (ver salvarSacola).
+                salvarSacola(payment ? 'pagamento' : shipping ? 'entrega' : 'identificacao', c, shipping);
                 // Editou só a identificação com o resto pronto? Volta direto
                 // pra revisão — ninguém refaz etapa já concluída.
                 setStep(!shipping ? 2 : !payment ? 3 : 4);
@@ -303,6 +360,7 @@ export default function CheckoutPage() {
               defaults={shipping}
               onDone={(s) => {
                 setShipping(s);
+                salvarSacola(payment ? 'pagamento' : 'entrega', customer, s);
                 setStep(!payment ? 3 : 4);
               }}
             />
@@ -327,6 +385,7 @@ export default function CheckoutPage() {
               defaults={payment}
               onDone={(p) => {
                 setPayment(p);
+                salvarSacola('pagamento', customer, shipping);
                 setStep(4);
               }}
             />

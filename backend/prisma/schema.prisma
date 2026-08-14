@@ -6778,6 +6778,65 @@ model SiteEvento {
   @@map("site_eventos")
 }
 
+/// SACOLA IDENTIFICADA — o carrinho que TEM DONA (dono, 14/08: "1").
+///
+/// O `add_to_cart` do [SiteEvento] é anônimo (só `session_id`): 32 sacolas por
+/// dia que ninguém consegue ligar pra nenhuma pessoa. E o `Order` só nasce no
+/// SUBMIT do checkout inteiro — quem desiste no frete ou no cartão não deixa
+/// linha nenhuma. Entre os dois havia o buraco onde a venda morre: medido em
+/// 14/08, 8 de 11 sessões pararam na própria seção de identificação.
+///
+/// Esta tabela fecha o buraco. Assim que a cliente confirma nome + celular no
+/// § 1 do checkout, a sacola vira linha AQUI — recuperável por WhatsApp mesmo
+/// que ela feche a aba no segundo seguinte. `etapa` diz até onde ela foi, que
+/// é o que muda o texto da mensagem ("faltou escolher o frete" ≠ "o cartão
+/// recusou").
+///
+/// NÃO é pedido: número LP, estoque e cobrança continuam nascendo só no
+/// `Order` (faixa 950M é escassa — ver o incidente do LP reciclado). Quando o
+/// pedido é criado, a sacola é CARIMBADA como convertida e some da fila de
+/// recuperação — quem assume a linha é o pedido.
+///
+/// LGPD: dado que a própria cliente digitou pra concluir a compra, usado pra
+/// concluir a compra. Sem CPF (só a nota precisa dele) e sem cartão.
+model SacolaCheckout {
+  id           String    @id @default(uuid())
+  /// Chave do upsert: a mesma sessão que edita a identificação três vezes é
+  /// UMA sacola, não três. Vem do `session_id` do tracking do site.
+  sessionId    String    @unique @map("session_id") @db.VarChar(64)
+  nome         String    @db.VarChar(120)
+  email        String    @db.VarChar(160)
+  /// Só dígitos com DDD — é por ele que a recuperação acontece.
+  telefone     String    @db.VarChar(11)
+  /// Peças da sacola no formato da tela: ref, nome, cor, tamanho, qtd, preço.
+  itens        Json
+  /// Somatório das peças (exibição na fila) — o valor que vale continua sendo
+  /// o do pedido, recalculado no backend.
+  valor        Decimal   @db.Decimal(12, 2)
+  pecas        Int       @default(0)
+  /// Até onde ela chegou: identificacao | entrega | pagamento.
+  etapa        String    @default("identificacao") @db.VarChar(20)
+  /// Preenchidos quando ela conclui a entrega — atalho pra saber a região (e a
+  /// loja que atenderia) sem abrir o pedido, que ainda não existe.
+  cep          String?   @db.VarChar(8)
+  cidade       String?   @db.VarChar(80)
+  uf           String?   @db.VarChar(2)
+  /// Campanha de origem, quando a atribuição veio junto — a fila mostra a
+  /// mesma tarja violeta dos carrinhos do site antigo.
+  utmCampaign  String?   @map("utm_campaign") @db.VarChar(120)
+  /// Carimbo da conversão: pedido criado a partir desta sacola. Com ele
+  /// preenchido a linha sai da fila (quem recupera é o pedido).
+  pedidoId     String?   @map("pedido_id")
+  convertidoEm DateTime? @map("convertido_em")
+  criadoEm     DateTime  @default(now()) @map("criado_em")
+  atualizadoEm DateTime  @updatedAt @map("atualizado_em")
+
+  /// A fila lê "não convertidas do período", ordenadas pela última atividade.
+  @@index([convertidoEm, atualizadoEm])
+  @@index([telefone])
+  @@map("sacola_checkout")
+}
+
 /// LOOK — peças que formam um conjunto (dono, 13/08: Regata 403048 + Calça
 /// Aladdin 406027 saem na MESMA foto e têm que se vender juntas). Fase 1: a
 /// PDP de cada peça mostra as irmãs do look ("Complete o look"). Fase 2 (o
