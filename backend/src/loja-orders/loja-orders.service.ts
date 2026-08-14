@@ -120,6 +120,8 @@ export interface LojaTrackingInput {
 export interface CriarPedidoInput {
   customer: LojaCustomerInput;
   shippingAddress?: LojaAddressInput;
+  /** CEP digitado na cotação — vem mesmo na retirada (sem endereço completo). */
+  cep?: string;
   shipping: LojaShippingInput;
   items: LojaItemInput[];
   couponCode?: string;
@@ -958,6 +960,16 @@ export class LojaOrdersService {
             installments: parcelas,
             statement_descriptor: 'LURDS',
             card_token: String(input.payment.cardToken),
+            /**
+             * BILLING_ADDRESS OBRIGATÓRIO (incidente 14/08): a Pagar.me passou
+             * a exigir o endereço de cobrança no cartão — 4 de 4 tentativas do
+             * dia morreram com `validation_error | billing | "value" is
+             * required` SEM nenhum deploy nosso no caminho (cartão pagava às
+             * 03:44, quebrou até as 13:22 com o mesmo código). O endereço de
+             * entrega é o proxy padrão do titular; retirada na loja (sem
+             * endereço) cai pro CEP digitado + matriz.
+             */
+            card: { billing_address: this.billingAddressPagarme(end, input.cep) },
           },
           ...(cfg.recipientId
             ? {
@@ -1035,6 +1047,37 @@ export class LojaOrdersService {
     }
 
     return { ok: true, gatewayOrderId: gw.id, gatewayChargeId: charge?.id || null };
+  }
+
+  /**
+   * Endereço de cobrança pro cartão da Pagar.me (exigido desde 14/08).
+   *
+   * Entrega em casa → o endereço de entrega é o proxy do titular (padrão do
+   * varejo). Retirada na loja → não existe endereço digitado; vai o CEP que a
+   * cliente usou na cotação com a cidade da matriz como âncora — a Pagar.me
+   * valida presença dos campos, e recusar TODO cartão de retirada por falta
+   * de um formulário a mais seria pior que a aproximação.
+   */
+  private billingAddressPagarme(
+    end: CriarPedidoInput['shippingAddress'],
+    cepCotacao?: string,
+  ): Record<string, string> {
+    if (end) {
+      return {
+        line_1: [end.number, end.street, end.neighborhood].filter(Boolean).join(', '),
+        zip_code: this.digits(end.cep),
+        city: end.city,
+        state: (end.uf || '').toUpperCase().slice(0, 2),
+        country: 'BR',
+      };
+    }
+    return {
+      line_1: 'Retirada em loja',
+      zip_code: this.digits(cepCotacao || '') || '08710000',
+      city: 'Mogi das Cruzes',
+      state: 'SP',
+      country: 'BR',
+    };
   }
 
   /**
@@ -1121,13 +1164,32 @@ export class LojaOrdersService {
       } else {
         const r = await this.cobrarCartao(order, input);
         if (!r.ok) {
-          // "Cartão recusado NÃO cria pedido": apaga o Order recém-criado (os
-          // itens caem por cascade; ainda não há histórico/pick-order pendurado)
-          // pra retaguarda não encher de pedido fantasma. Se o delete falhar,
-          // pelo menos cancela — nunca deixa em awaiting_payment eterno.
-          // O PagarmePayment status='failed' FICA (não tem FK): é registro de
-          // tentativa e é justamente o que a conciliação quer enxergar.
-          await this.descartarPedido(order.id);
+          /**
+           * CARTÃO RECUSADO VIRA CARRINHO RESGATÁVEL (dono, 14/08).
+           *
+           * Até hoje o pedido recusado era APAGADO — e com ele o nome e o
+           * telefone da cliente mais quente que existe: a que JÁ tentou
+           * pagar. No incidente do billing_address (4 recusas em 25min) as
+           * duas clientes sumiram do banco sem deixar rastro na aba
+           * Carrinhos. Agora o pedido fica com `status='payment_failed'`:
+           *
+           *  - NÃO entra em nenhuma fila (roteamento/separação/reconcile/
+           *    resgate PIX filtram por status explícito, e este não está em
+           *    nenhuma lista);
+           *  - NÃO segura estoque (a baixa só acontece no bipe da separação);
+           *  - APARECE na aba Carrinhos (abandoned = sem pagamento e não
+           *    cancelado) com botão de WhatsApp.
+           *
+           * Tentou de novo e passou? Nasce outro pedido — o recusado fica
+           * como registro da tentativa, mesmo papel do PagarmePayment
+           * status='failed' que sempre ficou.
+           */
+          await (this.prisma as any).order
+            .update({ where: { id: order.id }, data: { status: 'payment_failed' } })
+            .catch(async (e: any) => {
+              this.logger.warn(`[loja] recusa não persistiu (${e?.message || e}) — descartando como antes`);
+              await this.descartarPedido(order.id);
+            });
           return { ok: false, error: r.error };
         }
         paymentInfo = {
@@ -1232,6 +1294,10 @@ export class LojaOrdersService {
   private statusPublico(order: any): 'awaiting_payment' | 'paid' | 'expired' | 'cancelled' {
     const s = String(order?.status || '');
     if (s === 'cancelled' || s === 'canceled') return 'cancelled';
+    // Cartão recusado (14/08): pro público lê como cancelado — a cliente que
+    // abrir o link não pode ver "aguardando pagamento" de uma cobrança que
+    // não existe mais.
+    if (s === 'payment_failed') return 'cancelled';
     if (s === 'awaiting_payment') {
       // PIX vencido sem pagamento vira `expired` (o pedido segue no banco pra
       // eventual pagamento tardio — o webhook ainda confirma se cair).
