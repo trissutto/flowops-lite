@@ -63,6 +63,8 @@ export interface PecaApi {
   descricaoCurta: string | null; descricaoCompleta: string | null;
   marca: string | null; categoria: string | null;
   preco: number; precoPix: number | null;
+  /** "De" riscado quando há promoção de site (precoPromo). null = sem promo. */
+  precoDe?: number | null;
   /** Faixas de preço por tamanho — vazio quando a peça tem preço único. */
   faixasPreco?: Array<{ de: number; ate: number; preco: number }>;
   parcelamento: { vezes: number; valor: number } | null;
@@ -122,6 +124,7 @@ export function mapPeca(p: PecaApi): Product {
     name: p.nome,
     category: p.categoria ?? '',
     price: p.preco,
+    compareAtPrice: p.precoDe ?? undefined,
     pixPrice: p.precoPix ?? undefined,
     ...(p.faixasPreco?.length
       ? { priceRanges: p.faixasPreco.map((f) => ({ from: f.de, to: f.ate, price: f.preco })) }
