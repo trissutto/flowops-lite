@@ -113,20 +113,32 @@ export class SiteLeadsService {
     const origem = String(input.origem ?? '').trim().slice(0, 200) || null;
 
     /**
-     * `update` sem tocar em `cupom` nem em `createdAt`: a segunda visita
-     * corrige nome/e-mail, não renegocia a oferta.
+     * SÓ ENTREGA O CUPOM UMA VEZ (14/08): o upsert reenviava e-mail e WhatsApp
+     * a CADA visita — a cliente que abre o popup três vezes recebia três
+     * mensagens iguais, o oposto do que fideliza (e, no WhatsApp, o caminho
+     * mais rápido pro ban por marcação de spam). Checa a existência ANTES:
+     * lead novo recebe a mensagem, visita repetida só corrige nome/e-mail.
      */
+    const jaExiste = await (this.prisma as any).siteLead.findUnique({
+      where: { telefone },
+      select: { id: true },
+    });
+
+    // `update` sem tocar em `cupom` nem em `createdAt`: a segunda visita
+    // corrige o cadastro, não renegocia a oferta.
     const lead = await (this.prisma as any).siteLead.upsert({
       where: { telefone },
       create: { nome, telefone, email, origem, cupom: CUPOM_PRIMEIRA_COMPRA },
       update: { nome, email, ...(origem ? { origem } : {}) },
     });
 
-    this.logger.log(`[leads] ${nome} (${telefone}) — cupom ${lead.cupom} · origem ${origem ?? '-'}`);
+    this.logger.log(
+      `[leads] ${nome} (${telefone}) — cupom ${lead.cupom} · origem ${origem ?? '-'}${jaExiste ? ' · repetido (não reenvia)' : ''}`,
+    );
 
-    // Fire-and-forget: a captura do lead já está gravada e não pode falhar
-    // porque o SMTP demorou. Quem não recebeu aparece no log.
-    void this.entregarCupom({ nome, email, telefone, cupom: lead.cupom });
+    // Fire-and-forget SÓ no lead novo: a captura já está gravada e não pode
+    // falhar porque o SMTP demorou. Quem não recebeu aparece no log.
+    if (!jaExiste) void this.entregarCupom({ nome, email, telefone, cupom: lead.cupom });
 
     return { ok: true, cupom: lead.cupom };
   }
