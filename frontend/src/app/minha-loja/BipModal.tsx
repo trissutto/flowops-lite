@@ -1,5 +1,6 @@
 'use client';
 import { overlayClose } from '@/lib/overlayClose';
+import { refCorTam, nomeSemVariacao } from '@/lib/peca-linha';
 
 /**
  * BipModal — tela de bipagem por código de barras (EAN13) pra finalizar separação.
@@ -453,13 +454,9 @@ export default function BipModal({
                         <div className="font-mono text-xs text-slate-500">{it.sku}</div>
                         {/* REF · COR TAM em cima, descrição embaixo — mesmo
                             formato do card da LIVE e da fila da /minha-loja. */}
-                        {it.ref && (
-                          <div className="font-medium text-slate-900">
-                            {[it.ref, [it.cor, it.tamanho].filter(Boolean).join(' ')].filter(Boolean).join(' · ')}
-                          </div>
-                        )}
+                        {it.ref && <div className="font-medium text-slate-900">{refCorTam(it)}</div>}
                         <div className={`truncate ${it.ref ? 'text-xs text-slate-500' : 'font-medium text-slate-900'}`}>
-                          {it.productName ?? '(sem descrição)'}
+                          {nomeSemVariacao(it.productName, it.cor, it.tamanho) || '(sem descrição)'}
                         </div>
                         {/* Só avisa se NEM EAN NEM SKU funcionam como barcode —
                             na prática quase nunca acontece (SKU sempre é variante). */}

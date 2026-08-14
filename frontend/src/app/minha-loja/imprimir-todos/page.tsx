@@ -16,6 +16,7 @@ import { useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { Suspense } from 'react';
 import { api } from '@/lib/api';
+import { refCorTam, nomeSemVariacao } from '@/lib/peca-linha';
 
 interface OrderItem {
   sku: string;
@@ -27,14 +28,8 @@ interface OrderItem {
   quantity: number;
 }
 
-/**
- * "5358 · PRETO DOURADO 60" — mesmo formato do card da LIVE e da fila da
- * /minha-loja. Vazio quando o pedido nasceu antes de 13/08 (sem REF gravada).
- */
-function refCorTam(it: OrderItem): string {
-  if (!it.ref) return '';
-  return [it.ref, [it.cor, it.tamanho].filter(Boolean).join(' ')].filter(Boolean).join(' · ');
-}
+/** Nome sem a cor/tamanho que já estão na linha da REF. */
+const nomeLimpo = (it: OrderItem) => nomeSemVariacao(it.productName, it.cor, it.tamanho) || it.sku;
 
 interface PickOrderRow {
   id: string;
@@ -167,7 +162,7 @@ function ImprimirTodosContent() {
                         <span className="block font-black tracking-wide">{refCorTam(it)}</span>
                       )}
                       <span className={`block truncate ${refCorTam(it) ? 'text-[10px] font-normal text-gray-600' : ''}`}>
-                        {it.productName || it.sku}
+                        {nomeLimpo(it)}
                       </span>
                     </span>
                     <span className="font-bold">{it.quantity}x</span>

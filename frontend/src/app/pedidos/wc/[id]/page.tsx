@@ -7,6 +7,7 @@ import { api } from '@/lib/api';
 import EnderecoEntregaModal, { enderecoDoPedido } from '@/components/EnderecoEntregaModal';
 import { getSocket } from '@/lib/socket';
 import { classifyShipping } from '@/lib/shipping-method';
+import { refCorTam, nomeSemVariacao } from '@/lib/peca-linha';
 import TrackingTimeline from '@/components/TrackingTimeline';
 import SellerTag from '@/components/SellerTag';
 import { ArrowLeft, Save, ExternalLink, Truck, Package, Loader2, Check, Send, Store as StoreIcon, AlertTriangle, AlertCircle, Zap, Search, X } from 'lucide-react';
@@ -139,8 +140,7 @@ interface WcOrderDetail {
  * WooCommerce) continua mostrando o nome, como sempre mostrou.
  */
 function tituloPeca(li: { name: string; sku: string; ref?: string | null; cor?: string | null; tamanho?: string | null }): string {
-  if (!li.ref) return li.name || li.sku;
-  return [li.ref, [li.cor, li.tamanho].filter(Boolean).join(' ')].filter(Boolean).join(' · ');
+  return refCorTam(li) || li.name || li.sku;
 }
 
 export default function PedidoDetailPage() {
@@ -1243,7 +1243,11 @@ export default function PedidoDetailPage() {
               <tr key={li.id} className="border-t">
                 <td className="p-3">
                   <div className="font-medium text-slate-800">{tituloPeca(li)}</div>
-                  {li.ref && <div className="text-xs text-slate-500">{li.name}</div>}
+                  {li.ref && (
+                    <div className="text-xs text-slate-500">
+                      {nomeSemVariacao(li.name, li.cor, li.tamanho)}
+                    </div>
+                  )}
                 </td>
                 <td className="p-3 font-mono text-xs text-slate-600">{li.sku || '—'}</td>
                 <td className="p-3 text-right">{li.quantity}</td>

@@ -16,6 +16,7 @@
 
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
+import { refCorTam, nomeSemVariacao } from '@/lib/peca-linha';
 
 interface OrderItem {
   sku: string;
@@ -27,14 +28,8 @@ interface OrderItem {
   quantity: number;
 }
 
-/**
- * "5358 · PRETO DOURADO 60" — mesmo formato do card da LIVE e da fila da
- * /minha-loja. Vazio quando o pedido nasceu antes de 13/08 (sem REF gravada).
- */
-function refCorTam(it: OrderItem): string {
-  if (!it.ref) return '';
-  return [it.ref, [it.cor, it.tamanho].filter(Boolean).join(' ')].filter(Boolean).join(' · ');
-}
+/** Nome sem a cor/tamanho que já estão na linha da REF. */
+const nomeLimpo = (it: OrderItem) => nomeSemVariacao(it.productName, it.cor, it.tamanho) || it.sku;
 
 interface PickOrderRow {
   id: string;
@@ -103,7 +98,7 @@ export default function ImprimirResumoPage() {
         } else {
           map.set(key, {
             sku: it.sku,
-            nome: it.productName || it.sku,
+            nome: nomeLimpo(it),
             variacao: refCorTam(it),
             qty: it.quantity,
             pedidos: [{ numero, cliente, qty: it.quantity }],
@@ -228,7 +223,7 @@ export default function ImprimirResumoPage() {
                       <span className="flex-1">
                         {refCorTam(it) && <span className="block font-black">{refCorTam(it)}</span>}
                         <span className={refCorTam(it) ? 'block text-[10px] text-gray-600' : ''}>
-                          {it.productName || it.sku}
+                          {nomeLimpo(it)}
                         </span>
                       </span>
                       <span className="font-black whitespace-nowrap">{it.quantity}x</span>

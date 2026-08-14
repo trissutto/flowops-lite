@@ -60,6 +60,37 @@ export function montarNumeroWc(numero?: string | null): { number: string } {
 }
 
 /**
+ * Lê rua e número SEM repetir o número — o efeito colateral do `montarNumeroWc`.
+ *
+ * Gravar `number` em campo próprio resolveu a etiqueta, mas o `address_1`
+ * continuou sendo "rua, número". Quem lê os dois e junta escreve o número duas
+ * vezes: **"Rua Salomão Filho, 577 , 577"** na tela do pedido (13/08), e o
+ * mesmo na etiqueta dos Correios e na NF-e, que montam endereço + número em
+ * campos separados.
+ *
+ * Regra: com `number` preenchido, tira do fim do `address_1` o que for ele;
+ * sem `number`, desfaz por regex como sempre foi (pedido do WooCommerce nunca
+ * teve campo separado).
+ */
+export function lerRuaNumeroWc(addr: EnderecoWc | null | undefined): { rua: string; numero: string } {
+  const a: any = addr || {};
+  const bruto = String(a.address_1 ?? a.street ?? a.logradouro ?? '').trim();
+  const numero = String(a.number ?? a.numero ?? '').trim();
+
+  if (numero) {
+    // Escapa o número: "1500-A" tem hífen, "s/n" tem barra.
+    const alvo = numero.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const semNumero = bruto.replace(new RegExp(`[,\\s]*${alvo}\\s*$`, 'i'), '').trim();
+    // `semNumero` vazio = o address_1 era SÓ o número; melhor devolver o bruto.
+    return { rua: semNumero || bruto, numero };
+  }
+
+  const m = bruto.match(/^(.*?),?\s*(\d+[A-Za-z]?)\s*$/);
+  if (m) return { rua: m[1].trim(), numero: m[2] };
+  return { rua: bruto, numero: '' };
+}
+
+/**
  * Lê complemento e bairro de um endereço WC, **inclusive dos pedidos antigos**.
  *
  * Pedido gravado antes desta correção tem "Apto 42 - Centro" no `address_2` e
