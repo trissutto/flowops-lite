@@ -441,6 +441,10 @@ model Order {
   // Quando o dinheiro entrou de verdade (webhook/aprovação do cartão).
   // Distinto de createdAt: o PIX pode ser pago horas depois.
   paidAt          DateTime? @map("paid_at")
+  // Resgate do PIX não pago (14/08): quando o toque de 30min foi entregue ao
+  // n8n. Preenchido = nunca mais toca esse pedido (um lembrete só — segundo
+  // toque vira cobrança). Null com o PIX vencido = janela passou em silêncio.
+  pixResgateAvisadoEm DateTime? @map("pix_resgate_avisado_em")
   createdAt       DateTime @default(now()) @map("created_at") // data que chegou no FlowOps
   updatedAt       DateTime @updatedAt @map("updated_at")
 

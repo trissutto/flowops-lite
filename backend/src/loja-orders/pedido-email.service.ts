@@ -89,11 +89,14 @@ export class PedidoEmailService {
    * cliques, e obrigar quem edita o fluxo a cavar dentro de objeto aninhado é
    * o jeito mais rápido de o fluxo quebrar na primeira manutenção.
    */
-  private async avisarN8n(evento: 'pedido_criado' | 'pagamento_confirmado', order: any): Promise<void> {
+  private async avisarN8n(
+    evento: 'pedido_criado' | 'pagamento_confirmado' | 'pix_nao_pago',
+    order: any,
+  ): Promise<boolean> {
     const url = this.webhookN8n;
     if (!url) {
       this.logger.debug(`[pedido-msg] ${evento} não disparado — N8N_PEDIDO_WEBHOOK_URL ausente`);
-      return;
+      return false;
     }
 
     /**
@@ -159,13 +162,32 @@ export class PedidoEmailService {
             },
             itens: this.itensDoPedido(order),
             prazoTrocaDias: PedidoEmailService.DIAS_TROCA,
+            // ── só no resgate: o código copia-e-cola VAI NA MENSAGEM ──
+            // A cliente paga direto do WhatsApp, sem reabrir o site. É a
+            // única saída do paymentInfo pra fora do backend, e o destino é
+            // o n8n da casa — nunca o GET público.
+            ...(evento === 'pix_nao_pago' ? { pix: this.pixDoPedido(order) } : {}),
           },
           { timeout: 12000 },
         ),
       );
       this.logger.log(`[pedido-msg] ${evento} entregue ao n8n (pedido ${order?.wcOrderNumber ?? order?.id})`);
+      return true;
     } catch (e: any) {
       this.logger.warn(`[pedido-msg] n8n não recebeu ${evento}: ${e?.response?.status ?? ''} ${e?.message || e}`);
+      return false;
+    }
+  }
+
+  /** Copia-e-cola e validade do PIX, lidos do paymentInfo do pedido. */
+  private pixDoPedido(order: any): { copiaECola: string | null; expiraEm: string | null; minutosRestantes: number | null } {
+    try {
+      const info = JSON.parse(String(order?.paymentInfo || '{}'));
+      const expiraEm = info?.pix?.expiresAt ?? null;
+      const restam = expiraEm ? Math.max(0, Math.round((Date.parse(expiraEm) - Date.now()) / 60000)) : null;
+      return { copiaECola: info?.pix?.copyPaste ?? null, expiraEm, minutosRestantes: restam };
+    } catch {
+      return { copiaECola: null, expiraEm: null, minutosRestantes: null };
     }
   }
 
@@ -296,6 +318,19 @@ export class PedidoEmailService {
     const rodape = `Se o pagamento não for concluído, o pedido é liberado automaticamente e as peças voltam pro estoque. Nada é cobrado.`;
 
     await this.enviar(para, `${titulo} · ${order?.wcOrderNumber ?? ''}`.trim(), titulo, chamada, order, rodape);
+  }
+
+  /**
+   * PIX gerado e não pago há 30min — o resgate mais barato do e-commerce:
+   * ela preencheu TUDO (nome, telefone, endereço) e só falta pagar. O n8n é
+   * quem fala (ramo `evento === 'pix_nao_pago'`); o payload leva o
+   * copia-e-cola pra ela pagar do próprio WhatsApp.
+   *
+   * Devolve se o n8n RECEBEU: o cron só carimba `pixResgateAvisadoEm` com
+   * `true` — falha de rede tenta de novo no ciclo seguinte, dentro da janela.
+   */
+  async aoPixNaoPago(order: any): Promise<boolean> {
+    return this.avisarN8n('pix_nao_pago', order);
   }
 
   /** Pagamento confirmado — a mensagem que a cliente realmente espera. */
