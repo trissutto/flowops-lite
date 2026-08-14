@@ -33,6 +33,16 @@ import { STORE_POLICIES } from '@/data/store-policies';
 /** Catálogo tem milhares de SKUs — geração sob demanda, sem pré-render. */
 export const dynamicParams = true;
 
+/**
+ * DINÂMICA DE VERDADE (dono, 14/08/2026). A intenção sempre foi no-store (o
+ * fetch da peça é `revalidate: 0`), MAS sem isto o Vercel guardava o HTML da
+ * PÁGINA no Full Route Cache e servia preço/estoque velhos: setei o VLM-222
+ * pra R$ 139,90, a API já devolvia 139,90 e a página seguia mostrando 189,90
+ * (o render cacheado de antes). Preço e estoque de peça plus size mudam e
+ * TÊM que aparecer na hora — força SSR a cada visita, sem route cache.
+ */
+export const dynamic = 'force-dynamic';
+
 export async function generateMetadata({
   params,
 }: {
