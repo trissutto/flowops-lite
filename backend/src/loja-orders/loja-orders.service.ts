@@ -1164,13 +1164,32 @@ export class LojaOrdersService {
       } else {
         const r = await this.cobrarCartao(order, input);
         if (!r.ok) {
-          // "Cartão recusado NÃO cria pedido": apaga o Order recém-criado (os
-          // itens caem por cascade; ainda não há histórico/pick-order pendurado)
-          // pra retaguarda não encher de pedido fantasma. Se o delete falhar,
-          // pelo menos cancela — nunca deixa em awaiting_payment eterno.
-          // O PagarmePayment status='failed' FICA (não tem FK): é registro de
-          // tentativa e é justamente o que a conciliação quer enxergar.
-          await this.descartarPedido(order.id);
+          /**
+           * CARTÃO RECUSADO VIRA CARRINHO RESGATÁVEL (dono, 14/08).
+           *
+           * Até hoje o pedido recusado era APAGADO — e com ele o nome e o
+           * telefone da cliente mais quente que existe: a que JÁ tentou
+           * pagar. No incidente do billing_address (4 recusas em 25min) as
+           * duas clientes sumiram do banco sem deixar rastro na aba
+           * Carrinhos. Agora o pedido fica com `status='payment_failed'`:
+           *
+           *  - NÃO entra em nenhuma fila (roteamento/separação/reconcile/
+           *    resgate PIX filtram por status explícito, e este não está em
+           *    nenhuma lista);
+           *  - NÃO segura estoque (a baixa só acontece no bipe da separação);
+           *  - APARECE na aba Carrinhos (abandoned = sem pagamento e não
+           *    cancelado) com botão de WhatsApp.
+           *
+           * Tentou de novo e passou? Nasce outro pedido — o recusado fica
+           * como registro da tentativa, mesmo papel do PagarmePayment
+           * status='failed' que sempre ficou.
+           */
+          await (this.prisma as any).order
+            .update({ where: { id: order.id }, data: { status: 'payment_failed' } })
+            .catch(async (e: any) => {
+              this.logger.warn(`[loja] recusa não persistiu (${e?.message || e}) — descartando como antes`);
+              await this.descartarPedido(order.id);
+            });
           return { ok: false, error: r.error };
         }
         paymentInfo = {
@@ -1275,6 +1294,10 @@ export class LojaOrdersService {
   private statusPublico(order: any): 'awaiting_payment' | 'paid' | 'expired' | 'cancelled' {
     const s = String(order?.status || '');
     if (s === 'cancelled' || s === 'canceled') return 'cancelled';
+    // Cartão recusado (14/08): pro público lê como cancelado — a cliente que
+    // abrir o link não pode ver "aguardando pagamento" de uma cobrança que
+    // não existe mais.
+    if (s === 'payment_failed') return 'cancelled';
     if (s === 'awaiting_payment') {
       // PIX vencido sem pagamento vira `expired` (o pedido segue no banco pra
       // eventual pagamento tardio — o webhook ainda confirma se cair).
