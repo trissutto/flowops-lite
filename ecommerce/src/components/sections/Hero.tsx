@@ -1,13 +1,11 @@
 'use client';
 
 import Image, { getImageProps } from 'next/image';
-import { motion, useScroll, useTransform } from 'framer-motion';
-import { forwardRef, useRef } from 'react';
+import { forwardRef } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { Button, type ButtonVariant } from '@/components/ui/Button';
 import { Container } from '@/components/layout/Container';
 import { BLUR_DATA_URL, cn } from '@/lib/utils';
-import { EASE_LURDS, transition } from '@/lib/motion';
 import type { Media, VideoMedia } from '@/types';
 
 /**
@@ -154,21 +152,16 @@ export function Hero({
   overlay = 'medium',
   above,
   showScrollHint = false,
-  parallax = true,
   priority = false,
   className,
 }: HeroProps) {
-  const ref = useRef<HTMLElement>(null);
-  const { scrollYProgress } = useScroll({ target: ref, offset: ['start start', 'end start'] });
   // Arte fechada não faz parallax nem zoom: mover a campanha corta a arte de
   // novo — pela borda, em vez de pelo enquadramento. É a mesma perda.
   const arte = height === 'arte';
-  const y = useTransform(scrollYProgress, [0, 1], ['0%', parallax && !arte ? '12%' : '0%']);
 
   if (arte) {
     return (
       <HeroArte
-        ref={ref}
         image={image}
         imageMobile={imageMobile}
         priority={priority}
@@ -186,20 +179,16 @@ export function Hero({
 
   return (
     <section
-      ref={ref}
       className={cn('relative flex items-center overflow-hidden', HEIGHTS[height], className)}
     >
       {/* Mídia */}
-      <motion.div style={{ y }} className="absolute inset-0">
-        <motion.div
-          initial={{ scale: 1.08 }}
-          animate={{ scale: 1 }}
-          transition={{ duration: 2.2, ease: EASE_LURDS }}
+      <div className="absolute inset-0">
+        <div
           // `relative` é obrigatório: a mídia usa <Image fill>, que precisa de
           // um pai posicionado. Sem isto o next/image reclama no console e a
           // foto passa a se ancorar no avô — funcionava por coincidência de
           // tamanho, não por desenho.
-          className="relative size-full"
+          className="relative size-full animate-[hero-media-enter_2.2s_cubic-bezier(0.22,1,0.36,1)_both]"
         >
           {video ? (
             <>
@@ -287,8 +276,8 @@ export function Hero({
           ) : (
             <div className="grain size-full bg-gradient-to-br from-champagne via-surface-alt to-background" />
           )}
-        </motion.div>
-      </motion.div>
+        </div>
+      </div>
 
       {overlay !== 'none' && <div className={cn('absolute inset-0', OVERLAYS[overlay])} />}
 
@@ -296,57 +285,47 @@ export function Hero({
       <Container width="page" className="relative z-10 py-20">
         <div className={cn('flex flex-col', ALIGNMENTS[align])}>
           {above && (
-            <motion.div
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ ...transition.slow, delay: 0.1 }}
-              className="mb-8"
+            <div
+              className="mb-8 animate-[widget-enter_900ms_cubic-bezier(0.22,1,0.36,1)_both]"
+              style={{ animationDelay: '100ms' }}
             >
               {above}
-            </motion.div>
+            </div>
           )}
 
           {eyebrow && (
-            <motion.p
-              initial={{ opacity: 0, y: 16 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ ...transition.slow, delay: 0.2 }}
-              className="eyebrow text-primary-soft"
+            <p
+              className="eyebrow animate-[widget-enter_900ms_cubic-bezier(0.22,1,0.36,1)_both] text-primary-soft"
+              style={{ animationDelay: '200ms' }}
             >
               {eyebrow}
-            </motion.p>
+            </p>
           )}
 
-          <motion.h1
-            initial={{ opacity: 0, y: 26 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.9, ease: EASE_LURDS, delay: 0.32 }}
-            className="mt-6 max-w-3xl text-display text-light"
+          <h1
+            className="mt-6 max-w-3xl animate-[widget-enter_900ms_cubic-bezier(0.22,1,0.36,1)_both] text-display text-light"
+            style={{ animationDelay: '320ms' }}
           >
             {title}
-          </motion.h1>
+          </h1>
 
           {subtitle && (
-            <motion.p
-              initial={{ opacity: 0, y: 26 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.9, ease: EASE_LURDS, delay: 0.46 }}
-              className="mt-7 max-w-xl text-body-lg font-light text-light/85"
+            <p
+              className="mt-7 max-w-xl animate-[widget-enter_900ms_cubic-bezier(0.22,1,0.36,1)_both] text-body-lg font-light text-light/85"
+              style={{ animationDelay: '460ms' }}
             >
               {subtitle}
-            </motion.p>
+            </p>
           )}
 
           {(primaryAction || secondaryAction) && (
-            <motion.div
-              initial={{ opacity: 0, y: 26 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.9, ease: EASE_LURDS, delay: 0.6 }}
+            <div
               className={cn(
-                'mt-11 flex w-full flex-col gap-3 sm:w-auto sm:flex-row sm:gap-4',
+                'mt-11 flex w-full animate-[widget-enter_900ms_cubic-bezier(0.22,1,0.36,1)_both] flex-col gap-3 sm:w-auto sm:flex-row sm:gap-4',
                 align === 'center' && 'sm:justify-center',
                 align === 'right' && 'sm:justify-end',
               )}
+              style={{ animationDelay: '600ms' }}
             >
               {primaryAction && (
                 <Button
@@ -372,20 +351,18 @@ export function Hero({
                   {secondaryAction.label}
                 </Button>
               )}
-            </motion.div>
+            </div>
           )}
         </div>
       </Container>
 
       {showScrollHint && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 1.6, duration: 1 }}
-          className="absolute bottom-8 left-1/2 z-10 -translate-x-1/2"
+        <div
+          className="absolute bottom-8 left-1/2 z-10 -translate-x-1/2 animate-[widget-enter_1s_cubic-bezier(0.22,1,0.36,1)_both]"
+          style={{ animationDelay: '1.6s' }}
         >
           <ChevronDown className="size-6 animate-bounce text-light/75" aria-hidden />
-        </motion.div>
+        </div>
       )}
     </section>
   );

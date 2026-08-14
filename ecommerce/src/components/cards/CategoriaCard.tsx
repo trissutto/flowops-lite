@@ -1,9 +1,7 @@
 'use client';
 
 import Image from 'next/image';
-import { motion } from 'framer-motion';
 import { AppLink as Link } from '@/components/ui/AppLink';
-import { enter, fadeUp } from '@/lib/motion';
 
 /**
  * CARD DE CATEGORIA DA HOME — a arte-botão da categoria.
@@ -206,9 +204,9 @@ export function CategoriaCard({
      * as categorias. `reveal()` é certo pra seção que a cliente rola até
      * encontrar; aqui ela já está olhando.
      */
-    <motion.div
-      {...enter(fadeUp, (index % 6) * 0.06)}
-      className={className}
+    <div
+      className={`animate-[widget-enter_560ms_cubic-bezier(0.22,1,0.36,1)_both] ${className ?? ''}`}
+      style={{ animationDelay: `${(index % 6) * 60}ms` }}
     >
       <Link
         href={`/categoria/${data.slug}`}
@@ -283,6 +281,6 @@ export function CategoriaCard({
           )}
         </div>
       </Link>
-    </motion.div>
+    </div>
   );
 }

@@ -4,7 +4,6 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import Image from 'next/image';
 import { AppLink as Link } from '@/components/ui/AppLink';
 import { useRouter } from 'next/navigation';
-import { motion } from 'framer-motion';
 import {
   ArrowUpRight,
   Clock,
@@ -18,7 +17,6 @@ import {
 import { Container } from '@/components/layout/Container';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { BLUR_DATA_URL, cn, formatPrice } from '@/lib/utils';
-import { transition } from '@/lib/motion';
 import { useDebounced, useEscapeKey, useLockScroll } from '@/hooks';
 import { trackSearch, trackSelectItem } from '@/lib/tracking';
 import {
@@ -223,26 +221,26 @@ export function SearchOverlay({ open, onClose }: { open: boolean; onClose: () =>
 
   return (
     <>
-      <motion.div
+      <div
         aria-hidden
         onClick={onClose}
-        initial={{ opacity: 0 }}
-        animate={{ opacity: open ? 1 : 0 }}
-        transition={transition.base}
         style={{ pointerEvents: open ? 'auto' : 'none' }}
-        className="fixed inset-0 z-[var(--z-overlay)] bg-ink/40 backdrop-blur-sm"
+        className={cn(
+          'fixed inset-0 z-[var(--z-overlay)] bg-ink/40 backdrop-blur-sm transition-opacity duration-[320ms]',
+          open ? 'opacity-100' : 'opacity-0',
+        )}
       />
-      <motion.div
+      <div
         ref={panelRef}
         role="dialog"
         aria-modal="true"
         aria-label="Buscar no site"
         aria-hidden={!open}
-        initial={{ y: '-100%' }}
-        animate={{ y: open ? '0%' : '-100%' }}
-        transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
         style={{ pointerEvents: open ? 'auto' : 'none' }}
-        className="fixed inset-x-0 top-0 z-[var(--z-modal)] max-h-[92vh] overflow-y-auto bg-background shadow-xl"
+        className={cn(
+          'fixed inset-x-0 top-0 z-[var(--z-modal)] max-h-[92vh] overflow-y-auto bg-background shadow-xl transition-transform duration-[450ms] ease-[cubic-bezier(0.22,1,0.36,1)]',
+          open ? 'translate-y-0' : '-translate-y-full',
+        )}
       >
         <Container width="page" className="py-8 lg:py-12">
           {/* Campo (combobox) */}
@@ -552,7 +550,7 @@ export function SearchOverlay({ open, onClose }: { open: boolean; onClose: () =>
             </div>
           )}
         </Container>
-      </motion.div>
+      </div>
     </>
   );
 }

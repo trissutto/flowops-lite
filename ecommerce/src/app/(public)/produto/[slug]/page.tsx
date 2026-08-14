@@ -117,8 +117,10 @@ export default async function ProductPage({ params }: { params: Promise<{ slug: 
           <EscolhaDaPeca product={product} cores={cores} look={peca?.look ?? null} />
         ) : (
           <div className="grid gap-10 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)] lg:gap-16">
-            <ProductGallery images={product.images} name={product.name} />
-            <div className="lg:sticky lg:top-28 lg:self-start">
+            <div className="min-w-0">
+              <ProductGallery images={product.images} name={product.name} />
+            </div>
+            <div className="min-w-0 lg:sticky lg:top-28 lg:self-start">
               <BuyBox product={product} />
             </div>
           </div>

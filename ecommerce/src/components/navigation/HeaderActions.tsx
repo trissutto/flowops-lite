@@ -10,8 +10,6 @@ import { useUiStore } from '@/store/ui';
 import { accountLinks } from '@/data/navigation';
 import { useClickOutside } from '@/hooks';
 import { useState } from 'react';
-import { motion } from 'framer-motion';
-import { transition } from '@/lib/motion';
 
 /**
  * Ações do header — cada botão é um componente próprio (responsabilidade única).
@@ -107,14 +105,14 @@ export function UserMenu({ tone = 'dark' }: { tone?: Tone }) {
         <User className="size-[18px]" strokeWidth={1.5} />
       </button>
 
-      <motion.div
+      <div
         role="menu"
         aria-hidden={!open}
-        initial={{ opacity: 0, y: -8 }}
-        animate={{ opacity: open ? 1 : 0, y: open ? 0 : -8 }}
-        transition={transition.fast}
         style={{ pointerEvents: open ? 'auto' : 'none' }}
-        className="absolute right-0 z-[var(--z-dropdown)] mt-3 w-56 overflow-hidden rounded-md border border-border bg-surface shadow-md"
+        className={cn(
+          'absolute right-0 z-[var(--z-dropdown)] mt-3 w-56 overflow-hidden rounded-md border border-border bg-surface shadow-md transition-[opacity,transform] duration-[180ms] ease-[cubic-bezier(0.22,1,0.36,1)]',
+          open ? 'translate-y-0 opacity-100' : '-translate-y-2 opacity-0',
+        )}
       >
         <div className="border-b border-border px-5 py-4">
           <p className="font-display text-h4">Olá!</p>
@@ -145,7 +143,7 @@ export function UserMenu({ tone = 'dark' }: { tone?: Tone }) {
             Entrar
           </Link>
         </div>
-      </motion.div>
+      </div>
     </div>
   );
 }

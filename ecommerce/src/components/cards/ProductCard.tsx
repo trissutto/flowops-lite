@@ -3,10 +3,8 @@
 
 import Image from 'next/image';
 import { AppLink as Link } from '@/components/ui/AppLink';
-import { motion } from 'framer-motion';
 import { Eye, Heart, ShoppingBag } from 'lucide-react';
 import { BLUR_DATA_URL, cn, discountPercent, formatInstallments, formatPrice } from '@/lib/utils';
-import { fadeUp, reveal } from '@/lib/motion';
 import { ProductBadgeTag } from '@/components/ui/Badge';
 import { useWishlistStore } from '@/store/wishlist';
 import { useQuickAddStore } from '@/store/quick-add';
@@ -109,10 +107,12 @@ export function ProductCard({
   const ProductImage = progressiveImage ? ProgressiveImage : Image;
 
   return (
-    <motion.article
-      {...reveal(fadeUp, '-40px')}
-      transition={{ duration: 0.56, delay: (index % 4) * 0.06 }}
-      className={cn('group relative flex flex-col', className)}
+    <article
+      className={cn(
+        'group relative flex animate-[widget-enter_560ms_cubic-bezier(0.22,1,0.36,1)_both] flex-col',
+        className,
+      )}
+      style={{ animationDelay: `${(index % 4) * 60}ms` }}
     >
       {/* Mídia */}
       <div className={cn('relative overflow-hidden rounded-md bg-surface-alt', aspectClass)}>
@@ -316,6 +316,6 @@ export function ProductCard({
           </div>
         )}
       </div>
-    </motion.article>
+    </article>
   );
 }

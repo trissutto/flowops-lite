@@ -1,10 +1,8 @@
 'use client';
 
-import { motion } from 'framer-motion';
 import { Clock, MapPin, MessageCircle } from 'lucide-react';
 import { InstagramIcon } from '@/components/ui/icons';
 import { cn } from '@/lib/utils';
-import { fadeUp, reveal } from '@/lib/motion';
 import { Button } from '@/components/ui/Button';
 import { trackInstagramClick, trackStoreLocator, trackWhatsAppClick } from '@/lib/tracking';
 import type { Store } from '@/types';
@@ -58,14 +56,13 @@ export function StoreCard({ store, index = 0, nearest, distance, className }: St
   const directions = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(store.mapsQuery)}`;
 
   return (
-    <motion.article
-      {...reveal(fadeUp, '-40px')}
-      transition={{ duration: 0.56, delay: (index % 3) * 0.07 }}
+    <article
       className={cn(
-        'group flex flex-col rounded-lg border bg-surface p-7 transition-all duration-[560ms] ease-[cubic-bezier(0.22,1,0.36,1)] hover:-translate-y-1.5 hover:shadow-gold',
+        'group flex animate-[widget-enter_560ms_cubic-bezier(0.22,1,0.36,1)_both] flex-col rounded-lg border bg-surface p-7 transition-all duration-[560ms] ease-[cubic-bezier(0.22,1,0.36,1)] hover:-translate-y-1.5 hover:shadow-gold',
         nearest ? 'border-primary shadow-gold' : 'border-border shadow-sm hover:border-primary/50',
         className,
       )}
+      style={{ animationDelay: `${(index % 3) * 70}ms` }}
     >
       {nearest && (
         <span className="eyebrow mb-4 self-start rounded-pill bg-ink px-3 py-1 text-primary-soft">
@@ -132,6 +129,6 @@ export function StoreCard({ store, index = 0, nearest, distance, className }: St
           <InstagramIcon /> Instagram
         </Button>
       </div>
-    </motion.article>
+    </article>
   );
 }

@@ -2,12 +2,10 @@
 
 import { useState } from 'react';
 import { AppLink as Link } from '@/components/ui/AppLink';
-import { motion } from 'framer-motion';
 import { ChevronDown, Heart, MapPin, MessageCircle, Package, ShoppingBag, User } from 'lucide-react';
 import { Drawer } from '@/components/ui/Drawer';
 import { Button } from '@/components/ui/Button';
 import { cn } from '@/lib/utils';
-import { transition } from '@/lib/motion';
 import { navigation as estatico } from '@/data/navigation';
 import type { NavItem } from '@/types';
 import { Logo } from './Logo';
@@ -80,13 +78,14 @@ export function MobileDrawer({
                       />
                     </button>
 
-                    <motion.div
-                      initial={false}
-                      animate={{ height: isOpen ? 'auto' : 0, opacity: isOpen ? 1 : 0 }}
-                      transition={transition.base}
-                      className="overflow-hidden"
+                    <div
+                      className={cn(
+                        'grid transition-[grid-template-rows,opacity] duration-[320ms] ease-[cubic-bezier(0.22,1,0.36,1)]',
+                        isOpen ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0',
+                      )}
                     >
-                      <div className="flex flex-col gap-6 pb-6">
+                      <div className="min-h-0 overflow-hidden">
+                        <div className="flex flex-col gap-6 pb-6">
                         {item.menu!.columns.map((column, i) => (
                           <div key={`${column.title}-${i}`}>
                             {column.title.trim() && (
@@ -119,8 +118,9 @@ export function MobileDrawer({
                         >
                           Ver tudo em {item.label}
                         </Link>
+                        </div>
                       </div>
-                    </motion.div>
+                    </div>
                   </>
                 ) : (
                   <Link

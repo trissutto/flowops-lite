@@ -2,10 +2,8 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { AppLink as Link } from '@/components/ui/AppLink';
-import { motion } from 'framer-motion';
 import { announcements as padrao } from '@/data/navigation';
 import { useLojaConfig } from '@/hooks/useLojaConfig';
-import { transition } from '@/lib/motion';
 import { formatPrice } from '@/lib/utils';
 
 /**
@@ -53,11 +51,9 @@ export function AnnouncementBar({ itens }: { itens?: { label: string; href: stri
     <div className="relative h-9 overflow-hidden bg-ink text-light">
       {/* aria-live off: mensagem promocional não deve interromper leitor de tela */}
       <div className="mx-auto flex h-full max-w-wide items-center justify-center px-gutter">
-        <motion.div
+        <div
           key={index}
-          initial={{ opacity: 0, y: 6 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={transition.base}
+          className="animate-[announcement-enter_320ms_cubic-bezier(0.22,1,0.36,1)]"
         >
           <Link
             href={current.href}
@@ -65,7 +61,7 @@ export function AnnouncementBar({ itens }: { itens?: { label: string; href: stri
           >
             {current.label}
           </Link>
-        </motion.div>
+        </div>
       </div>
     </div>
   );

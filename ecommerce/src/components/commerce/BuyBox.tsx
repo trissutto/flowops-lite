@@ -1,13 +1,13 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import Image from 'next/image';
 import { ArrowRight, Check, Heart, Lock, MapPin, MessageCircle, Ruler, ShoppingBag, Sparkles, Star } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { SimuladorFrete } from '@/components/commerce/SimuladorFrete';
 import { SizePill } from '@/components/ui/Choice';
-import { FitAssistant } from '@/components/fit/FitAssistant';
 import { ProductBadgeTag } from '@/components/ui/Badge';
 import { useToast } from '@/components/feedback/ToastProvider';
 import { useCartStore } from '@/store/cart';
@@ -22,6 +22,10 @@ import { STORE_POLICIES } from '@/data/store-policies';
 import { SeloVendas } from '@/components/commerce/SeloVendas';
 import { linkWhatsapp } from '@/data/contato';
 import { SITE } from '@/lib/seo';
+
+const FitAssistant = dynamic(
+  () => import('@/components/fit/FitAssistant').then((module) => module.FitAssistant),
+);
 
 /**
  * BUY BOX — a coluna de decisão de compra.
@@ -591,7 +595,7 @@ export function BuyBox({
         </li>
       </ul>
 
-      <FitAssistant
+      {fitOpen && <FitAssistant
         open={fitOpen}
         onClose={() => setFitOpen(false)}
         productRef={product.sku ?? product.id}
@@ -604,7 +608,7 @@ export function BuyBox({
           toast({ message: `Tamanho ${tamanho} selecionado`, description: 'Recomendado pelo Lurd’s Fit AI' });
           document.getElementById('seletor-tamanho')?.scrollIntoView({ block: 'center' });
         }}
-      />
+      />}
 
       {!soldOut && (
         <div className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-background/96 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-[0_-8px_30px_rgba(0,0,0,0.12)] backdrop-blur lg:hidden">

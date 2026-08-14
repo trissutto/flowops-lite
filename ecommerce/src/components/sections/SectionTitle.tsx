@@ -1,10 +1,8 @@
 'use client';
 
 import { AppLink as Link } from '@/components/ui/AppLink';
-import { motion } from 'framer-motion';
 import { ArrowRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { fadeUp, reveal } from '@/lib/motion';
 
 /**
  * SectionTitle — cabeçalho padrão de TODA seção do site.
@@ -47,8 +45,7 @@ export function SectionTitle({
   const centered = align === 'center';
 
   return (
-    <motion.div
-      {...reveal(fadeUp)}
+    <div
       className={cn(
         'flex flex-col',
         centered ? 'items-center text-center' : 'items-start text-left',
@@ -112,6 +109,6 @@ export function SectionTitle({
           <ArrowRight className="size-3.5 transition-transform duration-[320ms] group-hover:translate-x-1" />
         </Link>
       )}
-    </motion.div>
+    </div>
   );
 }
