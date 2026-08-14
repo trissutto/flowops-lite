@@ -14,6 +14,7 @@ import { DanfePdfService } from '../nfe/danfe-pdf.service';
 import { PedidoEmailService } from '../loja-orders/pedido-email.service';
 import { lerComplementoBairroWc, lerRuaNumeroWc } from '../common/endereco-wc';
 import { servicoPagoDoPedido } from '../common/servico-envio';
+import { ehItemSemEstoque } from '../common/item-sem-estoque';
 
 // Lojas que despacham pelo MAIS ENVIOS (código Flow → sender id no Mais Envios).
 // As demais vão pelo Correios (CWS). Rede: Piracicaba/Sorocaba/Limeira/Moema;
@@ -295,6 +296,9 @@ export class PickOrdersService {
             storeCode: isSite && siteRaiz.length === 8 && siteStore ? siteStore : String(store?.code || ''),
             dest: dados.dest,
             items: dados.items,
+            // Frete cobrado da cliente vai no campo vFrete da nota (nunca
+            // como produto). Pedido dividido: só a nota do 1º pick leva.
+            vFrete: dados.vFrete,
             ambienteOverride: amb as any,
             emitirPorRaiz: isSite && siteRaiz.length === 8 ? siteRaiz : (lojaRaiz.length === 8 ? lojaRaiz : undefined),
           });
@@ -411,7 +415,7 @@ export class PickOrdersService {
    * Destinatário + itens da NF-e do envio. CEP-authoritative (ViaCEP) pra
    * UF/cidade e principalmente o código IBGE (cMun, obrigatório na NF-e).
    */
-  private async montarDadosNfeEnvio(order: any, pick: any, storeCode?: string): Promise<{ dest: any; items: any[] } | null> {
+  private async montarDadosNfeEnvio(order: any, pick: any, storeCode?: string): Promise<{ dest: any; items: any[]; vFrete: number } | null> {
     let nome = '';
     let cpfCnpj = '';
     let endereco = '';
@@ -421,6 +425,15 @@ export class PickOrdersService {
     let uf = '';
     let cep = '';
     let items: any[] = [];
+    /**
+     * FRETE COBRADO DA CLIENTE → campo `vFrete` da NF-e (nunca linha de
+     * produto — mod 55 tem campo pra isso; regra do dono de 31/07, a mesma
+     * que a nota grande do PDV já seguia).
+     *
+     * Pedido DIVIDIDO em 2+ lojas: o frete inteiro vai na nota do PRIMEIRO
+     * pick (o mais antigo). Repetir em cada nota cobraria o frete 2×.
+     */
+    let vFrete = 0;
 
     // PEDIDO DIVIDIDO em 2+ lojas (dono 29/07): a NF-e de cada envio leva SÓ
     // as peças daquela loja — filtro ESTRITO (sem fallback pro pedido inteiro;
@@ -512,8 +525,30 @@ export class PickOrdersService {
       bairro = String(addr.neighborhood || addr.bairro || '').trim();
       nome = order.customerName || 'Cliente';
       cpfCnpj = String(order.customerCpf || '').replace(/\D/g, '');
-      const atribuidos = (order.items || []).filter((i: any) => i.assignedStoreId === pick.storeId);
-      const semDono = (order.items || []).filter((i: any) => !i.assignedStoreId);
+      // FRETE: valor do método de envio (checkoutInfo.shipping.price) e, como
+      // rede de segurança, a linha FRETE que pedido antigo ainda tenha dentro.
+      // Só na nota do primeiro pick — ver comentário na declaração.
+      const primeiroPick = await this.prisma.pickOrder.findFirst({
+        where: { orderId: order.id },
+        orderBy: { createdAt: 'asc' },
+        select: { id: true },
+      });
+      if (!dividido || primeiroPick?.id === pick.id) {
+        let ck: any = {};
+        try { ck = JSON.parse(order.checkoutInfo || '{}'); } catch { /* snapshot cru */ }
+        vFrete =
+          Math.round((Number(ck?.shipping?.price ?? ck?.shippingPrice ?? 0) || 0) * 100) / 100 ||
+          Math.round(
+            (order.items || [])
+              .filter((i: any) => ehItemSemEstoque(i) && String(i.sku || '').toUpperCase() === 'FRETE')
+              .reduce((s: number, i: any) => s + (Number(i.unitPrice) || 0) * (Number(i.quantity) || 1), 0) * 100,
+          ) / 100;
+      }
+      // A linha de FRETE (pedido criado antes de 14/08) NÃO pode virar produto
+      // na nota: ela não tem NCM nem estoque — vai no vFrete acima.
+      const pecas = (order.items || []).filter((i: any) => !ehItemSemEstoque(i));
+      const atribuidos = pecas.filter((i: any) => i.assignedStoreId === pick.storeId);
+      const semDono = pecas.filter((i: any) => !i.assignedStoreId);
       // Dividido: SÓ os itens atribuídos a esta loja. Loja única: mantém o
       // comportamento antigo (atribuídos + sem dono; sem nada, o pedido todo).
       const lista = dividido
@@ -561,6 +596,7 @@ export class PickOrdersService {
     return {
       dest: { cpfCnpj, nome, endereco, numero: numero || 'S/N', bairro, cidade, uf, cep, codMun },
       items,
+      vFrete,
     };
   }
 
