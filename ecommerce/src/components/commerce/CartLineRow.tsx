@@ -29,6 +29,8 @@ interface CartLineRowProps {
   full?: boolean;
   /** Aviso de estoque vindo da revalidação da página (esgotado/última peça). */
   notice?: { text: string; tone: 'danger' | 'gold' };
+  /** Estoque confirmado na revalidação da sacola; ausente mantém o fluxo atual. */
+  maxQuantity?: number;
 }
 
 /** CartLine → item rastreável (o carrinho não guarda categoria/coleção). */
@@ -36,7 +38,7 @@ function trackable(line: CartLine) {
   return { id: line.productId, sku: line.productId, name: line.name, price: line.unitPrice };
 }
 
-export function CartLineRow({ line, saved = false, full = false, notice }: CartLineRowProps) {
+export function CartLineRow({ line, saved = false, full = false, notice, maxQuantity }: CartLineRowProps) {
   const setQuantity = useCartStore((s) => s.setQuantity);
   const remove = useCartStore((s) => s.remove);
   const saveForLater = useCartStore((s) => s.saveForLater);
@@ -189,7 +191,8 @@ export function CartLineRow({ line, saved = false, full = false, notice }: CartL
                 type="button"
                 onClick={() => setQuantity(line.id, line.quantity + 1)}
                 aria-label="Aumentar quantidade"
-                className="flex size-8 items-center justify-center rounded-pill text-ink-soft transition-colors hover:text-ink"
+                disabled={maxQuantity !== undefined && line.quantity >= maxQuantity}
+                className="flex size-8 items-center justify-center rounded-pill text-ink-soft transition-colors hover:text-ink disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:text-ink-soft"
               >
                 <Plus className="size-3.5" strokeWidth={1.75} />
               </button>

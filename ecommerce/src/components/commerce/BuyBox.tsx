@@ -609,6 +609,7 @@ export function BuyBox({
         tamanhosDisponiveis={available.map((s) => s.label)}
         onEscolherTamanho={(tamanho) => {
           setSize(tamanho);
+          trackSizeSwitch(product, tamanho);
           setSizeError(false);
           toast({ message: `Tamanho ${tamanho} selecionado`, description: 'Recomendado pelo Lurd’s Fit AI' });
           document.getElementById('seletor-tamanho')?.scrollIntoView({ block: 'center' });
