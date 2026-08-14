@@ -18,6 +18,7 @@ import { useParams, useSearchParams } from 'next/navigation';
 import { api } from '@/lib/api';
 import { parseShippingAddress, formatPhone } from '@/lib/format-address';
 import { classifyShipping } from '@/lib/shipping-method';
+import { refCorTam, nomeSemVariacao } from '@/lib/peca-linha';
 
 interface PickItem {
   id?: string;
@@ -496,12 +497,8 @@ function ImprimirCupomPageInner() {
                   </div>
                   {/* REF · COR TAM na linha grande + descrição embaixo: o
                       mesmo formato do card da LIVE e da fila da /minha-loja. */}
-                  {it.ref && (
-                    <div className="ref-linha">
-                      {[it.ref, [it.cor, it.tamanho].filter(Boolean).join(' ')].filter(Boolean).join(' · ')}
-                    </div>
-                  )}
-                  <div className="bold">{it.productName ?? '—'}</div>
+                  {it.ref && <div className="ref-linha">{refCorTam(it)}</div>}
+                  <div className="bold">{nomeSemVariacao(it.productName, it.cor, it.tamanho) || '—'}</div>
                   {it.variant && <div>{it.variant}</div>}
                   <div className="sku">SKU: {it.sku}</div>
                 </div>

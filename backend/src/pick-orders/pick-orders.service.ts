@@ -11,7 +11,7 @@ import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service
 import { DceEmitService } from '../dce/dce-emit.service';
 import { NfeTransferService } from '../nfe/nfe-transfer.service';
 import { DanfePdfService } from '../nfe/danfe-pdf.service';
-import { lerComplementoBairroWc } from '../common/endereco-wc';
+import { lerComplementoBairroWc, lerRuaNumeroWc } from '../common/endereco-wc';
 import { servicoPagoDoPedido } from '../common/servico-envio';
 
 // Lojas que despacham pelo MAIS ENVIOS (código Flow → sender id no Mais Envios).
@@ -504,13 +504,7 @@ export class PickOrdersService {
       let addr: any = {};
       try { addr = JSON.parse(order.shippingAddress || '{}'); } catch { /* cru */ }
       cep = String(order.shippingCep || addr.postcode || addr.cep || '').replace(/\D/g, '');
-      const address1 = String(addr.address_1 || addr.street || addr.logradouro || '').trim();
-      endereco = address1;
-      numero = String(addr.number || addr.numero || '').trim();
-      if (!numero && address1) {
-        const m = address1.match(/^(.*?),?\s*(\d+[A-Za-z]?)\s*$/);
-        if (m) { endereco = m[1].trim(); numero = m[2]; }
-      }
+      ({ rua: endereco, numero } = lerRuaNumeroWc(addr));
       uf = String(addr.state || addr.uf || '').trim().toUpperCase();
       cidade = String(addr.city || addr.cidade || '').trim();
       bairro = String(addr.neighborhood || addr.bairro || '').trim();
@@ -661,14 +655,8 @@ export class PickOrdersService {
     const cep = String(order.shippingCep || addr.postcode || addr.cep || '').replace(/\D/g, '');
     if (cep.length !== 8) throw new BadRequestException('Pedido sem CEP válido pra postar.');
 
-    // Mesmo parse do caminho Correios: número dentro de address_1 + CEP-authoritative
-    const address1 = String(addr.address_1 || addr.street || addr.logradouro || '').trim();
-    let endereco = address1;
-    let numero = String(addr.number || addr.numero || '').trim();
-    if (!numero && address1) {
-      const m = address1.match(/^(.*?),?\s*(\d+[A-Za-z]?)\s*$/);
-      if (m) { endereco = m[1].trim(); numero = m[2]; }
-    }
+    // Mesmo parse do caminho Correios: rua e número sem repetir + CEP-authoritative
+    let { rua: endereco, numero } = lerRuaNumeroWc(addr);
     let uf = String(addr.state || addr.uf || '').trim().toUpperCase();
     let cidade = String(addr.city || addr.cidade || '').trim();
     // Complemento e bairro saem SEPARADOS — inclusive de pedido antigo, que
@@ -730,14 +718,9 @@ export class PickOrdersService {
     if (cep.length !== 8) throw new BadRequestException('Pedido sem CEP válido pra postar.');
 
     // Endereço WooCommerce: número/bairro podem vir separados (plugin BR) ou
-    // dentro de address_1 ("Rua X, 123"). Extrai o número se não vier separado.
-    const address1 = String(addr.address_1 || addr.street || addr.logradouro || '').trim();
-    let endereco = address1;
-    let numero = String(addr.number || addr.numero || '').trim();
-    if (!numero && address1) {
-      const m = address1.match(/^(.*?),?\s*(\d+[A-Za-z]?)\s*$/);
-      if (m) { endereco = m[1].trim(); numero = m[2]; }
-    }
+    // dentro de address_1 ("Rua X, 123") — e no pedido do site vêm NOS DOIS,
+    // que é o que punha "Rua X, 123, 123" na etiqueta.
+    let { rua: endereco, numero } = lerRuaNumeroWc(addr);
     let uf = String(addr.state || addr.uf || '').trim().toUpperCase();
     let cidade = String(addr.city || addr.cidade || '').trim();
     // Complemento e bairro saem SEPARADOS — inclusive de pedido antigo, que

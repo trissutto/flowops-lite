@@ -26,6 +26,7 @@ import EnderecoEntregaModal, { enderecoDoPedido } from '@/components/EnderecoEnt
 import { getSocket, disconnectSocket } from '@/lib/socket';
 import { parseShippingAddress, formatPhone } from '@/lib/format-address';
 import { classifyShipping } from '@/lib/shipping-method';
+import { refCorTam, nomeSemVariacao } from '@/lib/peca-linha';
 import Logo from '@/components/Logo';
 import TrackingTimeline from '@/components/TrackingTimeline';
 import ProductThumb from '@/components/ProductThumb';
@@ -61,8 +62,7 @@ interface PickOrderItem {
  * no nome, que é o que essa tela sempre mostrou.
  */
 function tituloPeca(it: PickOrderItem): string {
-  if (!it.ref) return it.productName ?? it.sku;
-  return [it.ref, [it.cor, it.tamanho].filter(Boolean).join(' ')].filter(Boolean).join(' · ');
+  return refCorTam(it) || it.productName || it.sku;
 }
 
 interface PickOrderRow {
@@ -2126,7 +2126,9 @@ function PickOrderCard({
                 {/* Descrição embaixo, cinza — o MESMO formato do card da LIVE
                     logo abaixo nesta tela: a linha grande é REF · COR TAM. */}
                 {it.ref && it.productName && (
-                  <div className="truncate text-xs text-slate-500">{it.productName}</div>
+                  <div className="truncate text-xs text-slate-500">
+                    {nomeSemVariacao(it.productName, it.cor, it.tamanho)}
+                  </div>
                 )}
                 {it.variant && (
                   <div className="text-xs text-slate-500 mt-0.5">{it.variant}</div>
