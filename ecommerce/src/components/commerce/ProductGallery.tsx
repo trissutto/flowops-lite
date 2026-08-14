@@ -94,7 +94,22 @@ export function ProductGallery({
               alt={current.alt}
               fill
               priority={active === 0}
-              sizes="(max-width: 1024px) 100vw, 45vw"
+              /**
+               * QUALIDADE 90, e não o padrão 75 do Next.
+               *
+               * A foto do produto é o produto: é nela que a cliente decide se
+               * o caimento serve. Medido em 13/08 na VLM-222 — a mesma foto em
+               * AVIF sai com 11,4 KB a 75 e 15,5 KB a 90. Quatro quilobytes
+               * pela textura do tecido é troca óbvia; 75 é ajuste de banner.
+               */
+              quality={90}
+              /**
+               * O quadro ocupa ~45vw no desktop, mas o botão de lupa amplia
+               * 1,7× a MESMA imagem — pedir só o tamanho do quadro entrega uma
+               * foto que borra no zoom. Como o navegador escolhe o arquivo uma
+               * vez e não troca ao ampliar, o pedido já sai maior.
+               */
+              sizes="(max-width: 1024px) 100vw, 70vw"
               placeholder="blur"
               blurDataURL={BLUR_DATA_URL}
               className={cn(
