@@ -15,6 +15,7 @@ import { CorreiosPostagemReconcileCron } from './correios-postagem-reconcile.cro
 import { EntregaAvisoCron } from './entrega-aviso.cron';
 import { HttpModule } from '@nestjs/axios';
 import { EmailModule } from '../email/email.module';
+import { WhatsappModule } from '../whatsapp/whatsapp.module';
 import { PedidoEmailService } from '../loja-orders/pedido-email.service';
 
 @Module({
@@ -26,7 +27,7 @@ import { PedidoEmailService } from '../loja-orders/pedido-email.service';
   // EmailModule/HttpModule → PedidoEmailService registrado AQUI de novo (instância
   // própria, deps são só Email/Config/Http): o aviso de rastreio do site novo
   // dispara do afterShipped sem criar ciclo com o LojaOrdersModule.
-  imports: [PrismaModule, WebsocketModule, forwardRef(() => WooCommerceModule), ErpModule, LivePdvModule, WincredMirrorModule, CorreiosModule, MaisEnviosModule, DceModule, NfeModule, EmailModule, HttpModule],
+  imports: [PrismaModule, WebsocketModule, forwardRef(() => WooCommerceModule), ErpModule, LivePdvModule, WincredMirrorModule, CorreiosModule, MaisEnviosModule, DceModule, NfeModule, EmailModule, HttpModule, WhatsappModule],
   controllers: [PickOrdersController],
   providers: [PickOrdersService, CorreiosPostagemReconcileCron, EntregaAvisoCron, PedidoEmailService],
   exports: [PickOrdersService],

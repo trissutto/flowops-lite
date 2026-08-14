@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 import { EmailService } from '../email/email.service';
+import { WhatsappService } from '../whatsapp/whatsapp.service';
 
 /**
  * O E-MAIL QUE A CLIENTE ESPERA — e que não existia (achado de 12/08/2026).
@@ -52,7 +53,81 @@ export class PedidoEmailService {
     private readonly email: EmailService,
     private readonly config: ConfigService,
     private readonly http: HttpService,
+    private readonly whats: WhatsappService,
   ) {}
+
+  /**
+   * WHATSAPP DIRETO — o plano B do n8n (liberado pelo dono, 14/08).
+   *
+   * O fluxo "Pedido Pago" decide com `status === 'processing'`, então só o
+   * evento de PAGAMENTO vira mensagem: `pix_nao_pago`, `pedido_enviado` e
+   * `pedido_entregue` chegam lá e são descartados pelo IF. Enquanto não
+   * existirem ramos por `body.evento`, esses três saem por aqui — pelo mesmo
+   * WhatsApp que o portal de trocas e o código de recuperação de senha já
+   * usam em produção.
+   *
+   * ⚠️ NUNCA cobre `pagamento_confirmado`: esse o n8n já manda, e ligar os
+   * dois entrega a mesma mensagem duas vezes — o defeito que a cliente lê
+   * como "comprei duas vezes".
+   *
+   * Kill-switch `WHATS_PEDIDO_DIRETO=0`. Ao criar os ramos no n8n, desligar
+   * aqui — senão a duplicidade volta pela outra ponta.
+   */
+  private get whatsDiretoLigado(): boolean {
+    return String(this.config.get<string>('WHATS_PEDIDO_DIRETO') ?? '1') === '1';
+  }
+
+  private async avisarWhatsDireto(
+    evento: 'pix_nao_pago' | 'pedido_enviado' | 'pedido_entregue',
+    order: any,
+  ): Promise<boolean> {
+    if (!this.whatsDiretoLigado) return false;
+    const telefone = String(order?.customerPhone || '').replace(/\D/g, '');
+    if (telefone.length < 10) return false;
+
+    const nome = this.primeiroNome(order?.customerName);
+    const numero = order?.wcOrderNumber ? ` ${order.wcOrderNumber}` : '';
+    let texto: string | null = null;
+
+    if (evento === 'pix_nao_pago') {
+      const pix = this.pixDoPedido(order);
+      if (!pix.copiaECola) return false; // sem o código a mensagem não serve pra nada
+      const validade =
+        pix.minutosRestantes && pix.minutosRestantes > 0
+          ? `\nEle vale por mais ${pix.minutosRestantes} minutos.`
+          : '';
+      texto =
+        `Oi, ${nome}! 💛\n\nSuas peças do pedido${numero} estão reservadas, mas o Pix ainda não caiu.${validade}\n\n` +
+        `É só copiar o código abaixo e colar em "Pix copia e cola" no app do seu banco:\n\n${pix.copiaECola}\n\n` +
+        `Se o Pix vencer, o pedido é liberado e as peças voltam pro estoque — nada é cobrado.`;
+    } else if (evento === 'pedido_enviado') {
+      const codigo = String(order?.trackingCode || '').trim();
+      const transportadora = String(order?.carrier || 'Correios');
+      const link = this.linkRastreio(codigo, transportadora);
+      texto =
+        `Oi, ${nome}! 💛\n\nSeu pedido${numero} saiu pra entrega com a ${transportadora}.` +
+        (codigo ? `\n\n📦 Código: *${codigo}*` : '') +
+        (link ? `\n${link}` : '');
+    } else {
+      const limite = new Date(Date.now() + PedidoEmailService.DIAS_TROCA * 24 * 60 * 60 * 1000);
+      texto =
+        `Oi, ${nome}! 💛\n\nOs Correios confirmaram a entrega do seu pedido${numero}. ` +
+        `Esperamos que sirva certinho!\n\n` +
+        `Se precisar trocar, você tem até ${limite.toLocaleDateString('pt-BR')} — pelo portal de trocas ` +
+        `ou em qualquer uma das nossas ${PedidoEmailService.LOJAS_NA_REDE} lojas.`;
+    }
+
+    try {
+      const r = await this.whats.sendText(telefone, texto);
+      if (!r?.ok) {
+        this.logger.warn(`[pedido-whats] ${evento} não saiu (pedido ${order?.wcOrderNumber}): ${r?.error}`);
+      }
+      return !!r?.ok;
+    } catch (e: any) {
+      this.logger.warn(`[pedido-whats] ${evento} falhou (pedido ${order?.wcOrderNumber}): ${e?.message || e}`);
+      return false;
+    }
+  }
 
   /**
    * ── O n8n É O DONO DA CONVERSA (decisão do dono, 12/08/2026) ──
@@ -356,6 +431,7 @@ export class PedidoEmailService {
    */
   async aoPixNaoPago(order: any): Promise<boolean> {
     const n8nOk = await this.avisarN8n('pix_nao_pago', order);
+    const whatsOk = await this.avisarWhatsDireto('pix_nao_pago', order);
 
     let emailOk = false;
     const para = this.emailProprioLigado ? this.destinatario(order) : null;
@@ -382,7 +458,7 @@ export class PedidoEmailService {
         titulo, chamada, order, rodape,
       );
     }
-    return n8nOk || emailOk;
+    return n8nOk || whatsOk || emailOk;
   }
 
   /**
@@ -397,6 +473,7 @@ export class PedidoEmailService {
    */
   async aoEnviarPedido(order: any): Promise<void> {
     void this.avisarN8n('pedido_enviado', order);
+    void this.avisarWhatsDireto('pedido_enviado', order);
     if (!this.emailProprioLigado) return;
 
     const para = this.destinatario(order);
@@ -455,10 +532,11 @@ export class PedidoEmailService {
    */
   async aoEntregar(order: any): Promise<boolean> {
     const n8nOk = await this.avisarN8n('pedido_entregue', order);
-    if (!this.emailProprioLigado) return n8nOk;
+    const whatsOk = await this.avisarWhatsDireto('pedido_entregue', order);
+    if (!this.emailProprioLigado) return n8nOk || whatsOk;
 
     const para = this.destinatario(order);
-    if (!para) return n8nOk;
+    if (!para) return n8nOk || whatsOk;
 
     const nome = this.primeiroNome(order?.customerName);
     const limite = new Date(Date.now() + PedidoEmailService.DIAS_TROCA * 24 * 60 * 60 * 1000);
@@ -475,7 +553,7 @@ export class PedidoEmailService {
     const emailOk = await this.enviar(
       para, `${titulo} · pedido ${order?.wcOrderNumber ?? ''}`.trim(), titulo, chamada, order, rodape,
     );
-    return n8nOk || emailOk;
+    return n8nOk || whatsOk || emailOk;
   }
 
   /** Devolve se o e-mail SAIU — o resgate do PIX usa isso pra decidir o carimbo. */
