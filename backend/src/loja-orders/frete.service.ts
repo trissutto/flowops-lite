@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CorreiosService } from '../correios/correios.service';
+import { caixaDoSite } from '../common/caixa-site';
 
 /**
  * FRETE DO SITE — uma fonte só, e ela mora aqui (bloco B da lista).
@@ -228,14 +229,7 @@ export class FreteService {
    * não empilha como tijolo.
    */
   private caixa(pecas: number) {
-    const n = Math.min(50, Math.max(1, Number(pecas) || 1));
-    return {
-      pecas: n,
-      pesoGramas: 250 * n,
-      largura: 28,
-      comprimento: 40,
-      altura: n <= 2 ? 3 : n <= 5 ? 6 : 10,
-    };
+    return caixaDoSite(pecas);
   }
 
   /** Cotação dos Correios com cache. `null` = não respondeu (cai na estimativa). */
@@ -363,7 +357,35 @@ export class FreteService {
     for (const servico of ['pac', 'sedex'] as const) {
       if (cobertosPorPromo.has(servico)) continue;
       const vivo = cotado?.get(servico);
-      const preco = vivo ? vivo.preco : estimativa[servico][0];
+      let preco = vivo ? vivo.preco : estimativa[servico][0];
+      let daCotacao = !!vivo;
+
+      /**
+       * 🔴 TRAVA DE SANIDADE (13/08) — expresso nunca mais barato que o
+       * econômico que está na MESMA tela.
+       *
+       * Aconteceu de verdade: pedido pra Balneário Camboriú/SC saiu com
+       * **SEDEX Expresso R$ 9,94** ao lado do PAC promocional de R$ 19,99. O
+       * site ordena por preço, então o expresso apareceu PRIMEIRO e a cliente
+       * escolheu — pagou R$ 9,94 por um envio que custa múltiplo disso.
+       *
+       * Preço de expresso abaixo do econômico não existe no mundo real: é erro
+       * de leitura da cotação. Nesse caso a opção cai na estimativa interna
+       * (marcada `estimado`) em vez de virar prejuízo silencioso, e o WARN
+       * deixa rastro pra achar a causa na resposta crua dos Correios.
+       */
+      if (servico === 'sedex' && daCotacao) {
+        const economico = opcoes.filter((o) => o.kind === 'correios').sort((a, b) => a.price - b.price)[0];
+        if (economico && preco < economico.price) {
+          this.logger.warn(
+            `[frete] SEDEX cotado (R$ ${preco}) saiu ABAIXO do econômico (R$ ${economico.price}) pro CEP ${cep} ` +
+              `— cotação descartada, usando estimativa. Confira a resposta crua em /retaguarda/correios.`,
+          );
+          preco = estimativa.sedex[0];
+          daCotacao = false;
+        }
+      }
+
       if (!(preco > 0)) continue;
       const base = prazo(servico);
       opcoes.push({
@@ -372,7 +394,7 @@ export class FreteService {
         label: servico === 'sedex' ? 'SEDEX Expresso' : 'Correios PAC',
         price: this.reais(preco),
         etaDays: base,
-        ...(vivo ? {} : { estimado: true }),
+        ...(daCotacao ? {} : { estimado: true }),
       });
     }
 

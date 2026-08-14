@@ -35,7 +35,11 @@ type Status = {
 };
 
 type FreteOpcao = { servico: string; codigo: string; precoReais: number | null; precoComSeguro?: number | null; prazoDias: number | null; erro?: string; raw?: any };
-type FreteResp = { cepOrigem: string; cepDestino: string; pesoGramas: number; opcoes: FreteOpcao[] };
+type FreteResp = {
+  cepOrigem: string; cepDestino: string; pesoGramas: number;
+  comprimento?: number; largura?: number; altura?: number;
+  opcoes: FreteOpcao[];
+};
 
 type Endereco = {
   nome: string; cnpjCpf: string; endereco: string; numero: string; complemento?: string;
@@ -45,6 +49,15 @@ type Endereco = {
 const REMETENTE_KEY = 'flowops:correios:remetente';
 const brl = (n: number | null | undefined) =>
   n == null ? '—' : Number(n).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+/** Os Correios devolvem "15,45" (BR) ou 15.45 — mesmo parser do backend. */
+const parseBRL = (v: any): number | null => {
+  if (v == null) return null;
+  const s = String(v).trim();
+  if (!s) return null;
+  const n = s.includes(',') ? Number(s.replace(/\./g, '').replace(',', '.')) : Number(s);
+  return Number.isFinite(n) ? n : null;
+};
 
 const REMETENTE_VAZIO: Endereco = {
   nome: '', cnpjCpf: '', endereco: '', numero: '', bairro: '', cidade: '', uf: '', cep: '', telefone: '',
@@ -110,6 +123,13 @@ export default function CorreiosDiagnostico() {
   // ── frete ──
   const [cepFrete, setCepFrete] = useState('');
   const [pesoFrete, setPesoFrete] = useState('500');
+  /**
+   * Nº de peças: monta no backend a MESMA caixa que o site cota (250 g/peça,
+   * 28×40, altura por faixa). Com o peso em branco, o teste aqui vira a
+   * conferência do preço que a cliente viu — que é pra isso que se olha esta
+   * tela quando um frete sai estranho.
+   */
+  const [pecasFrete, setPecasFrete] = useState('1');
   const [frete, setFrete] = useState<FreteResp | null>(null);
   const [loadingFrete, setLoadingFrete] = useState(false);
   const [erroFrete, setErroFrete] = useState<string | null>(null);
@@ -121,14 +141,17 @@ export default function CorreiosDiagnostico() {
     setFrete(null);
     try {
       const cep = cepFrete.replace(/\D/g, '');
-      const qs = `?cep=${cep}${pesoFrete ? `&peso=${pesoFrete.replace(/\D/g, '')}` : ''}`;
+      const qs =
+        `?cep=${cep}` +
+        (pesoFrete ? `&peso=${pesoFrete.replace(/\D/g, '')}` : '') +
+        (pecasFrete ? `&pecas=${pecasFrete.replace(/\D/g, '')}` : '');
       setFrete(await api<FreteResp>(`/correios/frete${qs}`));
     } catch (e: any) {
       setErroFrete(e?.message || 'Falha ao calcular frete');
     } finally {
       setLoadingFrete(false);
     }
-  }, [cepFrete, pesoFrete]);
+  }, [cepFrete, pesoFrete, pecasFrete]);
 
   // ── pré-postagem ──
   const [remetente, setRemetente] = useState<Endereco>(REMETENTE_PADRAO);
@@ -306,6 +329,7 @@ export default function CorreiosDiagnostico() {
           <div className="flex flex-wrap items-end gap-3">
             <Campo label="CEP destino" value={cepFrete} onChange={setCepFrete} placeholder="00000-000" className="w-40" />
             <Campo label="Peso (g)" value={pesoFrete} onChange={setPesoFrete} placeholder="500" className="w-28" />
+            <Campo label="Peças (caixa do site)" value={pecasFrete} onChange={setPecasFrete} placeholder="1" className="w-36" />
             <button
               onClick={testarFrete}
               disabled={loadingFrete || cepFrete.replace(/\D/g, '').length !== 8}
@@ -317,7 +341,16 @@ export default function CorreiosDiagnostico() {
           {erroFrete && <div className="mt-3 text-sm text-rose-600 flex items-center gap-2"><AlertTriangle size={15} /> {erroFrete}</div>}
           {frete && (
             <>
-              <div className="mt-4 grid sm:grid-cols-2 gap-3">
+              {/* O que FOI enviado pros Correios. Preço estranho quase sempre
+                  é caixa errada — sem isto na tela, a conferência vira palpite. */}
+              <div className="mt-3 text-xs text-slate-500">
+                Cotado com <b className="text-slate-700">{frete.pesoGramas} g</b>
+                {frete.comprimento != null && (
+                  <> · caixa <b className="text-slate-700">{frete.comprimento}×{frete.largura}×{frete.altura} cm</b></>
+                )}
+                {' '}· origem <b className="text-slate-700">{frete.cepOrigem}</b>
+              </div>
+              <div className="mt-3 grid sm:grid-cols-2 gap-3">
                 {frete.opcoes.map((o) => (
                   <div key={o.codigo} className={`rounded-lg border p-3 ${o.erro ? 'border-rose-200 bg-rose-50' : 'border-emerald-200 bg-emerald-50'}`}>
                     <div className="flex items-center justify-between">
@@ -330,9 +363,15 @@ export default function CorreiosDiagnostico() {
                       <div className="text-sm mt-1">
                         <b>{brl(o.precoReais)}</b>
                         <span className="text-slate-500"> · {o.prazoDias != null ? `${o.prazoDias} dia(s)` : 'prazo —'}</span>
-                        {o.precoComSeguro != null && o.precoReais != null && o.precoComSeguro !== o.precoReais && (
-                          <span className="ml-2 text-xs text-slate-400">c/ seguro {brl(o.precoComSeguro)}</span>
-                        )}
+                        {/* Quebra do preço: `pcBase` é a tarifa do serviço,
+                            `pcBaseGeral` a tabela cheia (sem contrato) e
+                            `pcFinal` o que a fatura cobra — que é o que o site
+                            cobra da cliente desde 13/08. Ver os três lado a
+                            lado é o que separa "desconto de contrato" de
+                            "leitura errada da cotação". */}
+                        <div className="mt-1 text-xs text-slate-500 font-mono">
+                          pcBase {brl(parseBRL(o.raw?.pcBase))} · pcBaseGeral {brl(parseBRL(o.raw?.pcBaseGeral))} · pcFinal {brl(parseBRL(o.raw?.pcFinal))}
+                        </div>
                       </div>
                     )}
                   </div>

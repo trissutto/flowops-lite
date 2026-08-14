@@ -24,6 +24,10 @@ interface PickItem {
   sku: string;
   productName?: string | null;
   variant?: string | null;
+  /** REF · COR · TAM — impressos em destaque (é o que acha a peça). */
+  ref?: string | null;
+  cor?: string | null;
+  tamanho?: string | null;
   quantity: number;
 }
 interface PickDetail {
@@ -310,6 +314,14 @@ function ImprimirCupomPageInner() {
           font-size: 9px;
           color: #444;
         }
+        /* REF · COR TAM: a linha que a vendedora lê no cupom pra achar a peça.
+           Maior que o SKU de propósito — o código do ERP só serve pro bipe,
+           ninguém procura arara por ele. */
+        .ref-linha {
+          font-size: 13px;
+          font-weight: bold;
+          letter-spacing: 0.3px;
+        }
         .item-row-with-img {
           display: flex;
           gap: 6px;
@@ -482,6 +494,13 @@ function ImprimirCupomPageInner() {
                     <span className="checkbox" />
                     <span className="qty">{it.quantity}x</span>
                   </div>
+                  {/* REF · COR TAM na linha grande + descrição embaixo: o
+                      mesmo formato do card da LIVE e da fila da /minha-loja. */}
+                  {it.ref && (
+                    <div className="ref-linha">
+                      {[it.ref, [it.cor, it.tamanho].filter(Boolean).join(' ')].filter(Boolean).join(' · ')}
+                    </div>
+                  )}
                   <div className="bold">{it.productName ?? '—'}</div>
                   {it.variant && <div>{it.variant}</div>}
                   <div className="sku">SKU: {it.sku}</div>
