@@ -4675,6 +4675,10 @@ function PaymentModal({
   // FRETE à parte (venda online) — vira linha própria na venda
   const [freteStr, setFreteStr] = useState('');
   const [aplicandoFrete, setAplicandoFrete] = useState(false);
+  // COMO A PEÇA SAI (14/08) — SEDEX / PAC / MOTOBOY / RETIRADA EM LOJA.
+  // Sem isso o pedido online nascia "Correios R$ 0,00" e a matriz não sabia
+  // se emitia etiqueta, chamava motoboy ou segurava a peça pra retirada.
+  const [entregaTipo, setEntregaTipo] = useState<'sedex' | 'pac' | 'motoboy' | 'retirada' | null>(null);
   // Info do cliente vinda do Giga + pendências (pra banner de inadimplência)
   const [credCustomerInfo, setCredCustomerInfo] = useState<{
     found: boolean;
@@ -5018,6 +5022,15 @@ function PaymentModal({
           'warning',
           'Escolha o tipo da venda online',
           'Gerar PIX / PIX recebido / Link externo / Link Pagar.me.',
+        );
+        return;
+      }
+      // COMO A PEÇA SAI — 1 clique, e é o que a matriz lê pra despachar.
+      if (!entregaTipo) {
+        toast(
+          'warning',
+          'Escolha a forma de entrega',
+          'SEDEX, PAC, Motoboy ou Retirada em loja.',
         );
         return;
       }
@@ -5810,10 +5823,12 @@ function PaymentModal({
     // aplicado, cliente só precisa cobrir o que falta — não a venda inteira.
     if (selected === 'dinheiro' && recebidoNum < restante) return false;
     if (needsBandeira && !bandeira) return false;
-    if (selected === 'venda_online' && (!customerCpf || !vendaOnlineTipo)) return false;
+    // Venda online também precisa da FORMA DE ENTREGA (14/08) — é o que a
+    // matriz lê pra despachar (etiqueta, motoboy ou retirada na loja).
+    if (selected === 'venda_online' && (!customerCpf || !vendaOnlineTipo || !entregaTipo)) return false;
     if (selected === 'convenio' && !convMembro) return false;
     return true;
-  }, [selected, bandeira, needsBandeira, recebidoNum, restante, customerCpf, vendaOnlineTipo, convMembro]);
+  }, [selected, bandeira, needsBandeira, recebidoNum, restante, customerCpf, vendaOnlineTipo, entregaTipo, convMembro]);
 
   const confirm = async () => {
     if (!selected) return;
@@ -6296,6 +6311,56 @@ function PaymentModal({
                 ⚠ CPF do cliente é obrigatório. Aperte F5 pra identificar.
               </div>
             )}
+
+            {/* ── COMO A PEÇA SAI (14/08) — a matriz despacha por isto:
+                SEDEX/PAC geram etiqueta dos Correios, MOTOBOY é entrega na
+                mão e RETIRADA segura a peça na própria loja (o pedido nasce
+                como retirada, sem etiqueta). Obrigatório na venda online. ── */}
+            <div className="bg-white border-2 border-teal-200 rounded-lg p-2.5">
+              <label className="text-[10px] text-slate-600 uppercase font-semibold tracking-wider">
+                Forma de entrega <span className="text-rose-600">*</span>
+              </label>
+              <div className="grid grid-cols-2 gap-1.5 mt-1">
+                {([
+                  { id: 'sedex', label: '⚡ SEDEX' },
+                  { id: 'pac', label: '📦 PAC' },
+                  { id: 'motoboy', label: '🛵 MOTOBOY' },
+                  { id: 'retirada', label: '🏬 RETIRA NA LOJA' },
+                ] as const).map((op) => (
+                  <button
+                    key={op.id}
+                    type="button"
+                    onClick={async () => {
+                      setEntregaTipo(op.id);
+                      if (!saleId) return;
+                      try {
+                        await api(`/pdv/sales/${saleId}/entrega`, {
+                          method: 'POST',
+                          body: JSON.stringify({ tipo: op.id }),
+                        });
+                      } catch (e: any) {
+                        // A escolha fica na tela; o finalize regrava. Nunca
+                        // travar a venda por causa do registro da entrega.
+                        const h = humanizeError(e);
+                        toast('error', h.title, h.hint);
+                      }
+                    }}
+                    className={`rounded-lg border-2 py-2 text-xs font-bold transition ${
+                      entregaTipo === op.id
+                        ? 'border-teal-500 bg-teal-600 text-white'
+                        : 'border-slate-200 bg-white text-slate-700 hover:border-teal-300'
+                    }`}
+                  >
+                    {op.label}
+                  </button>
+                ))}
+              </div>
+              {entregaTipo === 'retirada' && (
+                <p className="text-[10px] text-teal-700 mt-1 font-semibold">
+                  A peça fica reservada nesta loja — o pedido nasce como retirada, sem etiqueta.
+                </p>
+              )}
+            </div>
 
             {/* ── FRETE À PARTE (dono 23/07): vira linha própria na venda —
                 soma no total, entra no caixa como receita e fica FORA da

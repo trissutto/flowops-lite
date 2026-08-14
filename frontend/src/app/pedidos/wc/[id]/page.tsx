@@ -123,6 +123,8 @@ interface WcOrderDetail {
   shippingLines: Array<{ method: string; total: string }>;
   tracking: { number: string; carrier: string; url: string };
   attribution: { origem: string; source: string };
+  /** Loja que PEDIU (venda online do PDV). NULL no pedido do site. */
+  origemLoja?: { code: string; name: string; vendedora: string | null } | null;
   customerCpf?: string | null;
   pickup?: {
     isPickup: boolean;
@@ -987,6 +989,24 @@ export default function PedidoDetailPage() {
     trackingUrl !== (order.tracking.url || '');
   const hasChanges = statusChanged || trackingChanged || note.trim().length > 0;
 
+  /**
+   * PEÇAS × FRETE (14/08). O frete que a loja cobrou da cliente é uma linha
+   * da VENDA (assim entra no caixa), não uma peça pra separar. O primeiro
+   * pedido online mostrava "FRETE - ENVIO" no meio dos produtos e a
+   * separação acusava "1 SKU sem estoque em nenhuma loja".
+   */
+  const ehLinhaFrete = (li: { sku?: string | null; ref?: string | null }) =>
+    [li.sku, li.ref].some((v) => String(v ?? '').trim().toUpperCase() === 'FRETE');
+  const pecasDoPedido = order.lineItems.filter((li) => !ehLinhaFrete(li));
+  const freteDoPedido = {
+    // Valor: o que o pedido guarda no método de envio; se o frete ainda estiver
+    // como item (pedido de antes desta correção), soma a linha.
+    valor:
+      Number(order.shippingLines?.[0]?.total ?? 0) ||
+      order.lineItems.filter(ehLinhaFrete).reduce((s, li) => s + Number(li.total || 0), 0),
+    metodo: order.shippingLines?.[0]?.method || order.pickup?.shippingMethodTitle || '',
+  };
+
   return (
     <div className="max-w-5xl mx-auto p-6">
       <div className="flex items-center justify-between mb-4">
@@ -1068,6 +1088,7 @@ export default function PedidoDetailPage() {
         const icon =
           m.kind === 'sedex' ? '⚡' :
           m.kind === 'pac' ? '📦' :
+          m.kind === 'motoboy' ? '🛵' :
           m.kind === 'transportadora' ? '🚚' : '📨';
         return (
           <div className={`mb-4 rounded-lg p-4 shadow-sm ${m.colorBold} flex items-center gap-3`}>
@@ -1082,6 +1103,30 @@ export default function PedidoDetailPage() {
           </div>
         );
       })()}
+
+      {/* DE ONDE VEIO O PEDIDO — a loja que vendeu. A loja que SEPARA pode ser
+          outra (roteamento), e é ela quem cobra desta no acerto; sem este
+          carimbo a matriz abria o pedido sem saber qual filial pediu. */}
+      {order.origemLoja && (
+        <div className="mb-4 rounded-lg border-2 border-teal-300 bg-teal-50 p-4">
+          <div className="flex items-start justify-between gap-3 flex-wrap">
+            <div>
+              <div className="font-bold text-base flex items-center gap-2 text-slate-800">
+                🏬 PEDIDO DA LOJA
+                <span className="text-teal-700">— {order.origemLoja.name}</span>
+              </div>
+              <div className="text-xs text-slate-600 mt-1">
+                Venda online feita no PDV da loja
+                {order.origemLoja.vendedora ? ` · vendedora: ${order.origemLoja.vendedora}` : ''}
+                {' · '}a loja que separar cobra desta no acerto.
+              </div>
+            </div>
+            <span className="px-2 py-1 bg-teal-200 text-teal-900 rounded text-xs font-mono">
+              {order.origemLoja.code}
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Banner de RETIRADA EM LOJA — aparece só quando o método de envio é pickup */}
       {order.pickup?.isPickup && (
@@ -1225,10 +1270,12 @@ export default function PedidoDetailPage() {
         </div>
       </div>
 
-      {/* Itens */}
+      {/* Itens — PEÇAS. O FRETE cobrado pela loja é uma linha da venda no PDV
+          (é assim que o dinheiro entra no caixa), mas NÃO é peça: aparece
+          embaixo, no rodapé, e nunca na lista que a loja vai separar. */}
       <div className="bg-white rounded shadow mb-4 overflow-hidden">
         <h3 className="font-semibold p-4 text-sm text-slate-600 uppercase tracking-wide border-b flex items-center gap-2">
-          <Package className="w-4 h-4" /> Itens ({order.lineItems.length})
+          <Package className="w-4 h-4" /> Itens ({pecasDoPedido.length})
         </h3>
         <div className="overflow-x-auto">
         <table className="w-full text-sm">
@@ -1242,7 +1289,7 @@ export default function PedidoDetailPage() {
             </tr>
           </thead>
           <tbody>
-            {order.lineItems.map((li) => (
+            {pecasDoPedido.map((li) => (
               <tr key={li.id} className="border-t">
                 <td className="p-3">
                   <div className="font-medium text-slate-800">{tituloPeca(li)}</div>
@@ -1259,6 +1306,16 @@ export default function PedidoDetailPage() {
               </tr>
             ))}
           </tbody>
+          <tfoot className="border-t-2 bg-slate-50 text-slate-700">
+            <tr>
+              <td className="p-3 text-xs uppercase tracking-wide" colSpan={4}>
+                Frete cobrado da cliente{freteDoPedido.metodo ? ` · ${freteDoPedido.metodo}` : ''}
+              </td>
+              <td className="p-3 text-right font-bold tabular-nums">
+                {freteDoPedido.valor > 0 ? fmtMoney(freteDoPedido.valor) : '—'}
+              </td>
+            </tr>
+          </tfoot>
         </table>
         </div>
       </div>

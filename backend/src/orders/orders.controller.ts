@@ -604,6 +604,20 @@ export class OrdersController {
     if (ck.couponCode) notas.push(`Cupom ${ck.couponCode}: −${this.reaisBr(ck.descontoCupom)}`);
     if (Number(ck.descontoPix) > 0) notas.push(`Desconto Pix: −${this.reaisBr(ck.descontoPix)}`);
 
+    // QUAL FILIAL PEDIU — só o pedido nascido no PDV tem loja pedinte
+    // (`sellerStoreCode`). O nome vem da lista de lojas ativas; se a loja
+    // saiu do ar, o código ainda identifica de onde veio.
+    const codigoPedinte = pedido.sellerStoreCode ?? ck.sellerStoreCode ?? null;
+    const lojaPedinte = codigoPedinte
+      ? {
+          code: String(codigoPedinte),
+          name:
+            lojas.find((s) => s.code === String(codigoPedinte))?.name ??
+            ck.sellerStoreName ??
+            String(codigoPedinte),
+        }
+      : null;
+
     return {
       id: pedido.wcOrderId,
       number: pedido.wcOrderNumber,
@@ -660,11 +674,26 @@ export class OrdersController {
         unresolvedCityName: null,
       },
       attribution: {
-        origem: 'Site',
-        source: [pedido.utmSource, pedido.utmMedium, pedido.utmCampaign]
-          .filter(Boolean)
-          .join(' / ') || '(Site) (direto)',
+        origem: lojaPedinte ? `Loja ${lojaPedinte.name}` : 'Site',
+        source: lojaPedinte
+          ? `Venda online da loja${ck.vendedora ? ` · ${ck.vendedora}` : ''}`
+          : [pedido.utmSource, pedido.utmMedium, pedido.utmCampaign]
+              .filter(Boolean)
+              .join(' / ') || '(Site) (direto)',
       },
+      /**
+       * DE ONDE VEIO O PEDIDO (14/08). Pedido do site não tem loja pedinte —
+       * o do PDV tem, e sem mostrar isso a matriz abria o pedido sem saber
+       * QUEM vendeu (a loja que separa pode ser outra, e é ela que cobra
+       * desta no acerto). NULL = pedido do site, como sempre foi.
+       */
+      origemLoja: lojaPedinte
+        ? {
+            code: lojaPedinte.code,
+            name: lojaPedinte.name,
+            vendedora: ck.vendedora ?? null,
+          }
+        : null,
       sellerId: pedido.sellerId ?? null,
       sellerName: pedido.sellerName ?? null,
     };

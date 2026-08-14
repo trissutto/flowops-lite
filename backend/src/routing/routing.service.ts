@@ -4,6 +4,7 @@ import { StockService } from '../stock/stock.service';
 import { RoutingEngine } from './routing.engine';
 import { SalesStatsService } from './sales-stats.service';
 import { OrderStatus, PickStatus } from '../common/enums';
+import { ehItemSemEstoque } from '../common/item-sem-estoque';
 import { RoutingCedeStats, RoutingResult, StockEntry } from './types';
 import { buildWhatsappMessage, buildWhatsappUrl } from './whatsapp-message.util';
 import { RealtimeGateway } from '../websocket/realtime.gateway';
@@ -54,10 +55,14 @@ export class RoutingService {
       },
     });
     // Escopo dos itens a rotear: subconjunto (swap) ou pedido inteiro (padrão).
-    const routeItems =
+    // FRETE/MANUAL nunca são roteados: não existem no estoque de loja nenhuma
+    // e viravam "ruptura" (caso ON-000001, 14/08). Filtra aqui pra valer pros
+    // pedidos que JÁ nasceram com a linha de frete dentro.
+    const routeItems = (
       opts?.onlyItems && opts.onlyItems.length > 0
         ? opts.onlyItems.map((i) => ({ sku: i.sku, quantity: Math.max(1, Number(i.quantity) || 1) }))
-        : order.items.map((i) => ({ sku: i.sku, quantity: i.quantity }));
+        : order.items.map((i) => ({ sku: i.sku, quantity: i.quantity }))
+    ).filter((i) => !ehItemSemEstoque(i));
     const skus = routeItems.map((i) => i.sku);
     const storeCodes = stores.map((s) => s.code);
     const stock = await this.stock.getStockFor(skus, storeCodes);
@@ -472,10 +477,12 @@ export class RoutingService {
       }
       // Pega apenas items SEM atribuição (órfãos pós-cancelamento dos new/separating).
       // Items das lojas avançadas continuam com assignedStoreId preservado.
-      const orphanItems = await this.prisma.orderItem.findMany({
-        where: { orderId, assignedStoreId: null },
-        select: { sku: true, quantity: true },
-      });
+      const orphanItems = (
+        await this.prisma.orderItem.findMany({
+          where: { orderId, assignedStoreId: null },
+          select: { sku: true, quantity: true },
+        })
+      ).filter((it) => !ehItemSemEstoque(it)); // FRETE/MANUAL não se separa
       if (orphanItems.length === 0) {
         return {
           ok: false as const,
@@ -977,7 +984,9 @@ export class RoutingService {
     };
     orderUrl?: string;
   }) {
-    const validItems = input.items.filter((i) => i.sku?.trim());
+    // Sem SKU não dá pra achar estoque; FRETE/MANUAL não TÊM estoque pra achar
+    // (a linha de frete do pedido online dava "ruptura" — caso ON-000001).
+    const validItems = input.items.filter((i) => i.sku?.trim() && !ehItemSemEstoque(i));
     if (validItems.length === 0) {
       throw new BadRequestException(
         'Nenhum item do pedido tem SKU preenchido. Não dá pra localizar estoque.',
@@ -1214,7 +1223,7 @@ export class RoutingService {
 
     // 4) roda pedido por pedido usando o mesmo stockMap + cedeStats
     for (const input of orders) {
-      const validItems = input.items.filter((i) => i.sku?.trim());
+      const validItems = input.items.filter((i) => i.sku?.trim() && !ehItemSemEstoque(i));
       if (validItems.length === 0) {
         previews.push({
           wcOrderNumber: input.wcOrderNumber,
