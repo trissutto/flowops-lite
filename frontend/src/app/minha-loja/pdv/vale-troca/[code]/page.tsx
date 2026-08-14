@@ -137,17 +137,39 @@ export default function ValeImprimirPage() {
             top: 0;
             width: 80mm;
             padding: 4mm 3mm;
-            font-family: 'Courier New', monospace;
-            color: black;
+            /* Courier regular tem traco fino demais pra cabeca termica de
+               203dpi — a fonte de sistema em negrito queima cheia. */
+            font-family: Arial, Helvetica, sans-serif;
+            font-size: 12px;
+            line-height: 1.35;
+            color: #000;
           }
           /* IMPRESSAO: forca tudo preto sobre branco. Antes o bloco do codigo
              era bg-black text-white — browser nao imprime background por default,
              entao texto BRANCO ficava invisivel no papel BRANCO. Override pra
              garantir codigo TROCA-XXXXX legivel. */
+          /* ── LETRA FRACA/FALHADA NA TERMICA (14/08) ──
+             A cabeca termica queima PONTO: ou queima, ou nao queima. Texto
+             cinza (opacity-70/80, text-slate-700) e traco fino viram meio-tom,
+             o driver aplica dithering e a letra sai chapiscada — foi o que a
+             loja viu. No papel nao pode existir cinza: */
           #vale-content * {
-            color: black !important;
+            color: #000 !important;
             background: transparent !important;
+            opacity: 1 !important;             /* nada de cinza por opacidade */
+            font-weight: 700 !important;       /* traco cheio */
+            text-shadow: none !important;
+            filter: none !important;
+            -webkit-font-smoothing: none !important;  /* borda 1-bit, sem meio-tom */
+            text-rendering: geometricPrecision;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
           }
+          /* Piso de tamanho: abaixo de ~10px a termica come metade do traco.
+             So nas linhas miudas — por CLASSE, nao por seletor universal: um
+             #vale-content * aqui venceria o text-3xl do codigo e do valor e
+             achataria os dois pro mesmo tamanho do resto. */
+          #vale-content .mini { font-size: 10.5px !important; }
           /* Caixa do codigo: borda dupla pra dar destaque sem precisar de
              background preto (que nao imprime na termica). */
           #vale-content .bg-black {
@@ -220,7 +242,7 @@ export default function ValeImprimirPage() {
 
           {/* HISTÓRICO — mostra peças devolvidas e levadas (transparência) */}
           {info.historico && (info.historico.pecasDevolvidas?.length > 0 || info.historico.pecasLevadas?.length > 0) && (
-            <div className="text-[9px] mt-3 pt-2 border-t-2 border-dashed border-black space-y-2">
+            <div className="mini text-[9px] mt-3 pt-2 border-t-2 border-dashed border-black space-y-2">
               <div className="font-bold uppercase text-center text-[10px]">Histórico</div>
 
               {info.historico.pecasDevolvidas?.length > 0 && (
@@ -259,7 +281,7 @@ export default function ValeImprimirPage() {
           )}
 
           {/* INSTRUÇÕES */}
-          <div className="text-[9px] mt-4 pt-2 border-t-2 border-dashed border-black space-y-1">
+          <div className="mini text-[9px] mt-4 pt-2 border-t-2 border-dashed border-black space-y-1">
             <div className="font-bold uppercase">Como usar:</div>
             <div>1. Apresente este cupom em qualquer loja Lurd's</div>
             <div>2. A vendedora bipa o código TROCA-XXXXXX no PDV</div>
@@ -268,7 +290,7 @@ export default function ValeImprimirPage() {
           </div>
 
           {/* FOOTER */}
-          <div className="text-center text-[8px] mt-4 pt-2 border-t border-dashed border-black opacity-70">
+          <div className="mini text-center text-[8px] mt-4 pt-2 border-t border-dashed border-black opacity-70">
             Emitido em {new Date().toLocaleString('pt-BR')}
             <br />
             Loja origem: {info.origem.store}
