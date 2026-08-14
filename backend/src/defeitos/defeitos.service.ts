@@ -47,7 +47,21 @@ export const STATUS_DEFEITO = {
   RECEBIDO: 'RECEBIDO',
   DEVOLVIDO_FORNECEDOR: 'DEVOLVIDO_FORNECEDOR',
   DESCARTADO: 'DESCARTADO',
+  // ── Caminho do conserto (dono, 14/08) ──
+  // Poucas peças, mas existem: a matriz manda pra costureira e, se voltar
+  // boa, a peça VOLTA A EXISTIR no estoque — o único caminho em que o
+  // estoque reentra. Sem o EM_CONSERTO a peça ficaria em RECEBIDO pra
+  // sempre, misturada na fila com as que ninguém decidiu ainda.
+  EM_CONSERTO: 'EM_CONSERTO',
+  RECUPERADO: 'RECUPERADO',
 } as const;
+
+/** Decisões que a matriz aplica em lote na fila. */
+export const DECISOES = [
+  STATUS_DEFEITO.DEVOLVIDO_FORNECEDOR,
+  STATUS_DEFEITO.DESCARTADO,
+  STATUS_DEFEITO.EM_CONSERTO,
+] as const;
 
 @Injectable()
 export class DefeitosService {
@@ -398,6 +412,171 @@ export class DefeitosService {
     });
     this.logger.log(`[defeitos] caixa ${fechada.code} fechada com ${total} peça(s)`);
     return fechada;
+  }
+
+  // ── Recebimento na matriz e destino ────────────────────────────────
+
+  /**
+   * A matriz bipa a peça na chegada da caixa. NÃO mexe em estoque: a peça já
+   * saiu no registro da loja — aqui só se confirma que ela chegou.
+   *
+   * Aceita o número de controle (DEF-...) ou o código da própria peça: quem
+   * confere tem o romaneio na mão, mas às vezes é mais rápido bipar a
+   * etiqueta. Casa dentro da caixa informada pra não confirmar por engano
+   * uma peça homônima de outra remessa.
+   */
+  async receberPeca(input: { batchId: string; codigo: string; userName?: string | null }) {
+    const codigo = String(input.codigo || '').trim().toUpperCase();
+    if (!codigo) throw new BadRequestException('Bipe o código da peça');
+
+    const item = await (this.prisma as any).defectItem.findFirst({
+      where: {
+        batchId: input.batchId,
+        OR: [{ code: codigo }, { sku: codigo.replace(/^0+/, '') }, { sku: codigo }],
+      },
+    });
+    if (!item) {
+      throw new NotFoundException(`${codigo} não pertence a esta caixa`);
+    }
+    if (item.status !== STATUS_DEFEITO.EM_TRANSITO) {
+      // Bipar duas vezes é comum na conferência — não é erro.
+      return { ...item, jaEstava: true };
+    }
+    return (this.prisma as any).defectItem.update({
+      where: { id: item.id },
+      data: {
+        status: STATUS_DEFEITO.RECEBIDO,
+        recebidoAt: new Date(),
+        recebidoPorNome: input.userName || null,
+      },
+    });
+  }
+
+  /**
+   * Fecha a conferência da caixa. As peças que ninguém bipou continuam
+   * EM_TRANSITO de propósito — é assim que "sumiu no caminho" aparece no
+   * relatório em vez de virar silêncio.
+   */
+  async fecharConferencia(batchId: string, userName?: string | null) {
+    const caixa = await (this.prisma as any).defectBatch.findUnique({ where: { id: batchId } });
+    if (!caixa) throw new NotFoundException('Caixa não encontrada');
+
+    const naoChegaram = await (this.prisma as any).defectItem.count({
+      where: { batchId, status: STATUS_DEFEITO.EM_TRANSITO },
+    });
+    await (this.prisma as any).defectBatch.update({
+      where: { id: batchId },
+      data: { status: 'recebida', recebidaAt: new Date(), recebidaPorNome: userName || null },
+    });
+    this.logger.log(
+      `[defeitos] caixa ${caixa.code} conferida na matriz` +
+        (naoChegaram > 0 ? ` — ATENÇÃO: ${naoChegaram} peça(s) não chegaram` : ''),
+    );
+    return { ok: true, naoChegaram };
+  }
+
+  /**
+   * DECISÃO em lote (fila agrupada por fornecedor):
+   *   DEVOLVIDO_FORNECEDOR · DESCARTADO · EM_CONSERTO
+   *
+   * Nenhuma delas mexe em estoque — a peça já está fora desde o registro.
+   * O estoque só volta em `recuperarDoConserto`.
+   */
+  async decidir(input: {
+    itemIds: string[];
+    decisao: string;
+    observacao?: string | null;
+    userName?: string | null;
+  }) {
+    const decisao = String(input.decisao || '').trim().toUpperCase();
+    if (!(DECISOES as readonly string[]).includes(decisao)) {
+      throw new BadRequestException(`Decisão inválida: ${decisao}`);
+    }
+    if (!input.itemIds?.length) throw new BadRequestException('Selecione ao menos uma peça');
+
+    // Só decide peça que chegou: decidir sobre peça EM_TRANSITO esconderia
+    // justamente a que sumiu no caminho.
+    const alvos = await (this.prisma as any).defectItem.findMany({
+      where: { id: { in: input.itemIds }, status: STATUS_DEFEITO.RECEBIDO },
+      select: { id: true },
+    });
+    if (alvos.length === 0) {
+      throw new BadRequestException(
+        'Nenhuma das peças selecionadas está recebida — confira a caixa na chegada antes de decidir.',
+      );
+    }
+    const r = await (this.prisma as any).defectItem.updateMany({
+      where: { id: { in: alvos.map((a: any) => a.id) } },
+      data: {
+        status: decisao,
+        decididoAt: new Date(),
+        decididoPorNome: input.userName || null,
+        decisaoObservacao: input.observacao || null,
+      },
+    });
+    this.logger.log(
+      `[defeitos] ${r.count} peça(s) → ${decisao} por ${input.userName || '—'}` +
+        (alvos.length !== input.itemIds.length
+          ? ` (${input.itemIds.length - alvos.length} ignorada(s) por não estarem recebidas)`
+          : ''),
+    );
+    return { ok: true, atualizadas: r.count, ignoradas: input.itemIds.length - alvos.length };
+  }
+
+  /**
+   * VOLTOU DA COSTUREIRA (dono, 14/08): a peça foi consertada e volta a
+   * valer. É o ÚNICO caminho em que o estoque reentra.
+   *
+   * O estoque volta pra LOJA DE ORIGEM — quem perdeu a venda recupera a
+   * peça (decisão do dono). Usa `increaseStockAsync`, simétrico à baixa do
+   * registro: Flow na hora + réplica pro Giga via outbox.
+   *
+   * Idempotente por status: peça já RECUPERADA não credita estoque de novo
+   * — clicar duas vezes não cria peça do nada.
+   */
+  async recuperarDoConserto(input: {
+    itemId: string;
+    observacao?: string | null;
+    userName?: string | null;
+  }) {
+    const item = await (this.prisma as any).defectItem.findUnique({
+      where: { id: input.itemId },
+    });
+    if (!item) throw new NotFoundException('Defeito não encontrado');
+    if (item.status === STATUS_DEFEITO.RECUPERADO) {
+      return { ...item, jaEstava: true };
+    }
+    if (![STATUS_DEFEITO.EM_CONSERTO, STATUS_DEFEITO.RECEBIDO].includes(item.status)) {
+      throw new BadRequestException(
+        `Peça ${item.code} está ${item.status} — só volta do conserto quem está recebida ou em conserto.`,
+      );
+    }
+
+    // Treino nunca credita estoque real.
+    if (!item.isTraining) {
+      const r = await (this.erp as any).increaseStockAsync?.([
+        { sku: item.sku, qty: 1, storeCode: item.storeCodeOrigem },
+      ]);
+      if (r && r.success === false) {
+        throw new BadRequestException(
+          `Não consegui devolver a peça ao estoque: ${r.error || 'erro'}. Nada foi alterado.`,
+        );
+      }
+    }
+
+    const atualizado = await (this.prisma as any).defectItem.update({
+      where: { id: item.id },
+      data: {
+        status: STATUS_DEFEITO.RECUPERADO,
+        decididoAt: new Date(),
+        decididoPorNome: input.userName || null,
+        decisaoObservacao: input.observacao || null,
+      },
+    });
+    this.logger.log(
+      `[defeitos] ${item.code} RECUPERADO do conserto — peça devolvida ao estoque da loja ${item.storeCodeOrigem}`,
+    );
+    return atualizado;
   }
 
   /** Romaneio da caixa — a lista impressa que vai colada por fora. */
