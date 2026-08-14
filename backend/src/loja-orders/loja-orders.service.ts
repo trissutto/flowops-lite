@@ -661,14 +661,42 @@ export class LojaOrdersService {
    * Próxima sequência da faixa da loja. Pega o MAIOR wcOrderId já usado (ver
    * decisão 2 no topo do arquivo) — não `count()`.
    */
+  /**
+   * O PRÓXIMO NÚMERO, E ELE NUNCA VOLTA.
+   *
+   * Era `MAX(wcOrderId)` dos pedidos existentes. Cartão recusado dá rollback e
+   * o pedido não persiste — então o número voltava pra fila e a cliente
+   * seguinte recebia o MESMO: em 14/08 o `LP-000012` apareceu no painel da
+   * Pagar.me em três pessoas diferentes. Procurar por esse código num
+   * atendimento ou numa contestação devolvia a pessoa errada.
+   *
+   * Agora o contador é uma linha própria, incrementada em transação e FORA da
+   * vida do pedido: tentativa recusada QUEIMA o número. Buraco na numeração é
+   * barato; código repetido entre clientes não é.
+   *
+   * A primeira chamada semeia o contador a partir do maior pedido já gravado,
+   * pra numeração continuar de onde parou em vez de recomeçar do zero.
+   */
   private async proximaSequencia(): Promise<number> {
     const base = LojaOrdersService.LOJA_WC_ID_BASE;
-    const ultimo = await (this.prisma as any).order.findFirst({
-      where: { source: 'ecommerce', wcOrderId: { gte: base } },
-      orderBy: { wcOrderId: 'desc' },
-      select: { wcOrderId: true },
+
+    return (this.prisma as any).$transaction(async (tx: any) => {
+      const atual = await tx.lojaPedidoSequence.findFirst({ where: { id: 1 } });
+      if (atual) {
+        const proximo = Number(atual.lastSeq) + 1;
+        await tx.lojaPedidoSequence.update({ where: { id: 1 }, data: { lastSeq: proximo } });
+        return proximo;
+      }
+
+      const ultimo = await tx.order.findFirst({
+        where: { source: 'ecommerce', wcOrderId: { gte: base } },
+        orderBy: { wcOrderId: 'desc' },
+        select: { wcOrderId: true },
+      });
+      const proximo = (ultimo ? Number(ultimo.wcOrderId) - base : 0) + 1;
+      await tx.lojaPedidoSequence.create({ data: { id: 1, lastSeq: proximo } });
+      return proximo;
     });
-    return ultimo ? Number(ultimo.wcOrderId) - base : 0;
   }
 
   private numeroPedido(seq: number): string {
@@ -702,7 +730,6 @@ export class LojaOrdersService {
     conta?: { descontoCupom: number; descontoPix: number },
   ): Promise<any> {
     const base = LojaOrdersService.LOJA_WC_ID_BASE;
-    const seq0 = await this.proximaSequencia();
     const shipping = this.montarShippingWc(input);
     const retirada = input.shipping.kind === 'retirada';
     const attr = input.tracking?.attribution || {};
@@ -765,10 +792,14 @@ export class LojaOrdersService {
         }
       : null;
 
-    // Retry em colisão de wcOrderId — mesma defesa da live: dois checkouts
-    // simultâneos leem a mesma sequência e um dos dois bate P2002.
+    // Retry em colisão de wcOrderId — rede de segurança que ficou de pé mesmo
+    // com o contador transacional: número gravado à mão em produção ou
+    // importação antiga ainda podem ocupar a faixa.
     for (let tent = 0; tent < 6; tent++) {
-      const seq = seq0 + 1 + tent;
+      // Cada tentativa pede um número NOVO ao contador — inclusive a que
+      // colidiu. Somar +1 no número anterior traria de volta o problema que o
+      // contador resolve: dois checkouts simultâneos chegando no mesmo LP.
+      const seq = await this.proximaSequencia();
       try {
         return await (this.prisma as any).order.create({
           data: {

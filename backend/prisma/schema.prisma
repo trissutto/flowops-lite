@@ -2366,6 +2366,28 @@ model MasterAudit {
 // e grava na tabela `produtos` do Wincred (gigasistemas21).
 // Single row (id=1). Atualizada em transação a cada batch.
 // ════════════════════════════════════════════════════════════════
+/**
+ * NÚMERO DO PEDIDO DO SITE — um contador que NÃO anda pra trás.
+ *
+ * Até 14/08/2026 o `LP-xxxxxx` saía de `MAX(wcOrderId)` entre os pedidos
+ * existentes. Cartão recusado dá rollback e o pedido não persiste — então o
+ * número voltava pra fila e a cliente seguinte recebia o MESMO. No painel da
+ * Pagar.me, `LP-000012` apareceu em três pessoas diferentes (Ivonete, Ana
+ * Paula e, depois, um PIX em aberto): num atendimento ou numa contestação,
+ * procurar por esse código devolve a pessoa errada.
+ *
+ * Mesma receita da `EanSequence`: o contador vive fora da transação do
+ * pedido, então tentativa recusada QUEIMA o número — e queimar número é
+ * barato, confundir cliente não é.
+ */
+model LojaPedidoSequence {
+  id        Int      @id @default(autoincrement())
+  lastSeq   Int      @default(0) @map("last_seq")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("loja_pedido_sequence")
+}
+
 model EanSequence {
   id        Int      @id @default(autoincrement())
   prefix    String   @default("8")
