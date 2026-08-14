@@ -33,7 +33,7 @@ interface StepConfig {
 }
 
 interface Candidate {
-  sourceType: 'cart' | 'wc-pending';
+  sourceType: 'cart' | 'wc-pending' | 'ecommerce';
   sourceId: string;
   name: string | null;
   email: string | null;

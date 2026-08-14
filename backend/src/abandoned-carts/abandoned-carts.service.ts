@@ -1,5 +1,5 @@
 import { HttpService } from '@nestjs/axios';
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { firstValueFrom } from 'rxjs';
 import { PrismaService } from '../prisma/prisma.service';
@@ -19,6 +19,7 @@ import { extractAttributionRaw } from '../woocommerce/attribution.util';
 @Injectable()
 export class AbandonedCartsService {
   private readonly logger = new Logger(AbandonedCartsService.name);
+  private readonly captureHits = new Map<string, number[]>();
 
   constructor(
     private readonly http: HttpService,
@@ -26,14 +27,39 @@ export class AbandonedCartsService {
     private readonly prisma: PrismaService,
   ) {}
 
-  async captureCheckout(input: any) {
+  private enforceCaptureLimit(key: string, max: number, windowMs = 60_000) {
+    const now = Date.now();
+    const recent = (this.captureHits.get(key) ?? []).filter((at) => now - at < windowMs);
+    if (recent.length >= max) throw new HttpException('Muitas tentativas', HttpStatus.TOO_MANY_REQUESTS);
+    recent.push(now);
+    this.captureHits.set(key, recent);
+    if (this.captureHits.size > 5_000) {
+      for (const [storedKey, hits] of this.captureHits) {
+        if (!hits.some((at) => now - at < windowMs)) this.captureHits.delete(storedKey);
+      }
+    }
+  }
+
+  private sanitizeAttribution(value: unknown): Record<string, string> | undefined {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+    const allowed = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_id', 'utm_content', 'utm_term'];
+    const result: Record<string, string> = {};
+    for (const key of allowed) {
+      const raw = (value as any)[key];
+      if (typeof raw === 'string' && raw.trim()) result[key] = raw.trim().slice(0, 200);
+    }
+    return Object.keys(result).length ? result : undefined;
+  }
+
+  async captureCheckout(input: any, clientIp = 'unknown') {
     const sessionId = String(input?.sessionId ?? '').trim().slice(0, 64);
     const nome = String(input?.name ?? '').trim().replace(/\s+/g, ' ').slice(0, 120);
     const telefone = String(input?.phone ?? '').replace(/\D/g, '').replace(/^55(?=\d{10,11}$)/, '');
     if (sessionId.length < 8 || nome.length < 2 || !/^\d{10,11}$/.test(telefone)) {
       throw new BadRequestException('Contato inválido');
     }
-    const status = input?.status === 'converted' ? 'converted' : 'active';
+    this.enforceCaptureLimit(`ip:${clientIp}`, 30);
+    this.enforceCaptureLimit(`contact:${sessionId}:${telefone}`, 10);
     const rawItems = Array.isArray(input?.items) ? input.items.slice(0, 50) : [];
     const items = rawItems.map((item: any) => ({
       productId: String(item?.productId ?? '').slice(0, 120),
@@ -45,15 +71,14 @@ export class AbandonedCartsService {
     }));
     const data = {
       anonymousId: String(input?.anonymousId ?? '').slice(0, 64) || null,
-      nome, telefone, status,
+      nome, telefone,
       subtotal: Math.max(0, Number(input?.subtotal) || 0), items,
       path: String(input?.path ?? '').slice(0, 200) || null,
-      attribution: input?.attribution && typeof input.attribution === 'object' ? input.attribution : undefined,
-      convertedAt: status === 'converted' ? new Date() : null,
+      attribution: this.sanitizeAttribution(input?.attribution),
     };
     await (this.prisma as any).checkoutRecovery.upsert({
       where: { sessionId },
-      create: { sessionId, ...data },
+      create: { sessionId, ...data, status: 'active' },
       update: data,
     });
     return { ok: true };
