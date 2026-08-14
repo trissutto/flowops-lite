@@ -1628,6 +1628,41 @@ export class PdvService {
     return { ok: true, freteReais: valor, total: Number(fresh?.total) || 0 };
   }
 
+  /** Formas de entrega da venda online — o que a retaguarda sabe despachar. */
+  static readonly ENTREGA_TIPOS = ['sedex', 'pac', 'motoboy', 'retirada'] as const;
+
+  /**
+   * FORMA DE ENTREGA da venda online (14/08). Fica na venda (não na linha de
+   * frete) porque RETIRADA EM LOJA costuma ter frete 0 — e sem linha de frete
+   * não haveria onde guardar.
+   *
+   * O pedido online lê daqui: vira o `shippingMethod` do Order (SEDEX/PAC/
+   * MOTOBOY) e, no caso de retirada, marca `isPickup` na própria loja. Antes
+   * disso todo pedido online nascia "Correios R$ 0,00" e a matriz não tinha
+   * como saber se emitia etiqueta, chamava motoboy ou segurava pra retirada.
+   */
+  async setEntrega(saleId: string, tipoRaw: string) {
+    const tipo = String(tipoRaw || '').trim().toLowerCase();
+    if (!(PdvService.ENTREGA_TIPOS as readonly string[]).includes(tipo)) {
+      throw new BadRequestException(
+        `Forma de entrega inválida (use ${PdvService.ENTREGA_TIPOS.join(', ')})`,
+      );
+    }
+    const sale = await (this.prisma as any).pdvSale.findUnique({
+      where: { id: saleId },
+      select: { id: true, status: true },
+    });
+    if (!sale) throw new NotFoundException('Venda não encontrada');
+    if (sale.status !== 'open')
+      throw new BadRequestException(`Venda não está aberta (status=${sale.status})`);
+
+    await (this.prisma as any).pdvSale.update({
+      where: { id: saleId },
+      data: { entregaTipo: tipo },
+    });
+    return { ok: true, entregaTipo: tipo };
+  }
+
   /**
    * VALE PRESENTE — vende um vale dentro da venda aberta do PDV.
    *

@@ -1494,6 +1494,12 @@ model PdvSale {
   customerBairro      String?  @map("customer_bairro")
   customerCidade      String?  @map("customer_cidade")
   customerUf          String?  @map("customer_uf")
+  // FORMA DE ENTREGA da venda online (14/08). 'sedex' | 'pac' | 'motoboy' |
+  // 'retirada'. Antes disso o pedido online nascia sempre "Correios R$ 0,00":
+  // a loja escolhia o VALOR do frete e ninguém registrava COMO a peça sai —
+  // a matriz não sabia se emitia etiqueta, chamava motoboy ou segurava pra
+  // retirada. 'retirada' vira isPickup no Order (separa na própria loja).
+  entregaTipo         String?  @map("entrega_tipo")
   // Status + valores
   status          String   @default("open")
   subtotal        Float    @default(0)
