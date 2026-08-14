@@ -205,7 +205,11 @@ export class TrocasService {
         total: String((it.unitPrice || 0) * (it.quantity || 1)),
       })),
       fee_lines: [],
-      coupon_lines: [],
+      // CUPOM DO PEDIDO LOCAL (14/08): vinha sempre vazio, e é ele que diz se
+      // a compra foi paga com vale-troca — a regra que decide se este pedido
+      // tem direito à reversa grátis. Sem isto, compra feita com vale ganhava
+      // devolução gratuita de novo, num ciclo que nunca fecha.
+      coupon_lines: this.cuponsDoPedidoLocal(local),
       meta_data: local.trackingCode
         ? [{ key: '_tracking_number', value: local.trackingCode }]
         : [],
@@ -445,16 +449,62 @@ export class TrocasService {
     });
   }
 
-  // ── Benefício da reversa grátis (por CPF) ───────────────────────────
+  // ── Benefício da reversa grátis (por COMPRA) ────────────────────────
 
-  async getBeneficioReversa(cpf: string) {
+  /** Códigos de cupom de um pedido local, no shape que o WC devolve. */
+  private cuponsDoPedidoLocal(local: any): Array<{ code: string }> {
+    try {
+      const info = typeof local?.checkoutInfo === 'string' ? JSON.parse(local.checkoutInfo) : local?.checkoutInfo;
+      const code = String(info?.couponCode || '').trim();
+      return code ? [{ code }] : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * A COMPRA foi paga com vale-troca?
+   *
+   * Regra do dono (14/08): "toda vez que a pessoa usar um vale-troca,
+   * entende-se que ela já comprou, portanto sem direito". É o que impede o
+   * ciclo infinito — troca grátis → vale → nova compra com o vale → nova
+   * troca grátis → ... — em que a loja paga frete de devolução pra sempre
+   * sobre o mesmo dinheiro.
+   *
+   * O vale nasce como cupom `TROCA-XXXXXXXX` (ver a emissão do vale-compras).
+   */
+  private pagouComValeTroca(order: any): boolean {
+    const cupons: any[] = Array.isArray(order?.coupon_lines) ? order.coupon_lines : [];
+    return cupons.some((c) => /^TROCA-/i.test(String(c?.code || '').trim()));
+  }
+
+  /**
+   * UMA REVERSA GRÁTIS POR COMPRA (regra do dono, 14/08).
+   *
+   * Era por CPF: a segunda troca da cliente já saía por conta dela, mesmo
+   * sendo outra compra, de outro mês. Agora o direito acompanha o PEDIDO —
+   * cada compra carrega a sua troca grátis, e usá-la num pedido não gasta a
+   * das outras compras.
+   *
+   * Duas exceções: compra paga com vale-troca não tem direito (acima), e a
+   * concessão manual da retaguarda continua valendo como escape.
+   */
+  async getBeneficioReversa(cpf: string, wcOrderId?: number | null, order?: any) {
     const cpfDigits = onlyDigits(cpf);
     if (cpfDigits.length !== 11) {
-      return { cpf: cpfDigits, disponivel: false, usos: [], concessoes: 0, permitidas: 0, totalTrocas: 0 };
+      return { cpf: cpfDigits, disponivel: false, usos: [], concessoes: 0, permitidas: 0, totalTrocas: 0, pagouComVale: false };
     }
+    const pedidoId = wcOrderId != null ? Number(wcOrderId) : null;
+    const pagouComVale = order ? this.pagouComValeTroca(order) : false;
     const [usos, concessoes, totalTrocas] = await Promise.all([
       (this.prisma as any).trocaSolicitacao.findMany({
-        where: { customerCpf: cpfDigits, reversaGratis: true, status: { not: 'cancelada' } },
+        where: {
+          reversaGratis: true,
+          status: { not: 'cancelada' },
+          // Sem pedido no contexto (telas antigas), cai no comportamento
+          // anterior por CPF — nunca liberar mais do que a regra permite.
+          ...(pedidoId != null ? { wcOrderId: pedidoId } : { customerCpf: cpfDigits }),
+        },
         select: { id: true, numero: true, createdAt: true, reversaEnviadaAt: true },
         orderBy: { createdAt: 'asc' },
       }),
@@ -466,7 +516,8 @@ export class TrocasService {
     const permitidas = 1 + concessoes;
     return {
       cpf: cpfDigits,
-      disponivel: usos.length < permitidas,
+      pagouComVale,
+      disponivel: !pagouComVale && usos.length < permitidas,
       usos: usos.map((u: any) => ({
         trocaId: u.id,
         numero: formatTrocaNumero(u.numero),
@@ -514,7 +565,7 @@ export class TrocasService {
     const billing = order.billing || {};
     const cpfDigits = onlyDigits(billing.cpf);
     const beneficio = cpfDigits.length === 11
-      ? await this.getBeneficioReversa(cpfDigits)
+      ? await this.getBeneficioReversa(cpfDigits, Number(order.id), order)
       : { disponivel: true, usos: [], concessoes: 0, permitidas: 1, totalTrocas: 0 };
 
     return {
@@ -661,7 +712,7 @@ export class TrocasService {
     const cpfDigits = onlyDigits(billing.cpf);
 
     // ETAPAS 6/7 — benefício da reversa decide o status inicial
-    const beneficio = await this.getBeneficioReversa(cpfDigits);
+    const beneficio = await this.getBeneficioReversa(cpfDigits, Number(order.id), order);
     const usaGratis = beneficio.disponivel && cpfDigits.length === 11;
     const status = usaGratis ? 'aguardando_postagem' : 'aguardando_envio_cliente';
 
@@ -725,10 +776,41 @@ export class TrocasService {
      * WhatsApp primeiro porque é onde ela cobra; o e-mail vai junto quando há
      * endereço. Nenhum dos dois pode derrubar a solicitação já gravada.
      */
+    /**
+     * CÓDIGO DE POSTAGEM AUTOMÁTICO (decisão do dono, 14/08).
+     *
+     * Antes dependia de alguém da retaguarda abrir a troca e clicar em "gerar
+     * reversa". Medição do dia: **12 trocas abertas e ZERO códigos gerados na
+     * história do portal** — a mais antiga esperando 17 dias. E não havia
+     * alarme: o lembrete automático só olha troca que JÁ tem código, então o
+     * caso que trava era o único invisível.
+     *
+     * O prazo já foi validado acima (`checkPrazo` derruba fora da janela) e o
+     * direito à reversa também, então não sobra regra pra humano conferir aqui.
+     *
+     * Falha nos Correios NÃO derruba a solicitação: cai pro caminho manual de
+     * sempre e o cron de trocas tenta de novo. Kill-switch `TROCA_REVERSA_AUTO=0`.
+     */
+    let codigoAuto: string | null = null;
+    if (usaGratis && String(process.env.TROCA_REVERSA_AUTO ?? '1').trim() !== '0') {
+      try {
+        const r: any = await this.gerarReversaCorreios({ id: troca.id, userName: 'automático' });
+        codigoAuto = r?.codigo || null;
+      } catch (e: any) {
+        this.logger.warn(
+          `[troca ${formatTrocaNumero(troca.numero)}] reversa automática falhou (${e?.message || e}) — segue pro manual/cron`,
+        );
+      }
+    }
+
     const numeroTroca = formatTrocaNumero(troca.numero);
-    const proximoPasso = usaGratis
-      ? 'Em breve mandamos o código de postagem gratuita dos Correios pra você devolver a peça.'
-      : 'Como a reversa gratuita deste CPF já foi usada, o envio é por sua conta — o endereço está no portal.';
+    const proximoPasso = codigoAuto
+      // O WhatsApp com o código já saiu de dentro do gerarReversaCorreios —
+      // aqui só confirmamos, pra ela não ficar esperando uma segunda mensagem.
+      ? `Já mandamos o código de postagem gratuita dos Correios: ${codigoAuto}.`
+      : usaGratis
+        ? 'Em breve mandamos o código de postagem gratuita dos Correios pra você devolver a peça.'
+        : 'Esta compra não tem reversa gratuita disponível, então o envio é por sua conta — o endereço está no portal.';
     void this.avisarWhats(
       troca.customerPhone,
       `Recebemos sua solicitação de troca ${numeroTroca} 💛\n\n${proximoPasso}\n\n` +
@@ -757,9 +839,12 @@ export class TrocasService {
       reversaGratis: usaGratis,
       valorTotalPago,
       enderecoDevolucao: usaGratis ? null : ENDERECO_DEVOLUCAO,
-      mensagem: usaGratis
-        ? 'Solicitação criada! Você vai receber por e-mail o código de postagem gratuita dos Correios pra devolver a peça.'
-        : 'Solicitação criada! Como a logística reversa gratuita já foi utilizada neste CPF, a devolução é por sua conta. Envie a peça pro endereço abaixo e informe o código de rastreio aqui no portal.',
+      reversaCodigo: codigoAuto,
+      mensagem: codigoAuto
+        ? `Solicitação criada! Seu código de postagem gratuita dos Correios é ${codigoAuto} — também mandamos por WhatsApp. É só levar a peça em qualquer agência.`
+        : usaGratis
+          ? 'Solicitação criada! Em instantes você recebe o código de postagem gratuita dos Correios pra devolver a peça.'
+          : 'Solicitação criada! Esta compra não tem reversa gratuita disponível, então a devolução é por sua conta. Envie a peça pro endereço abaixo e informe o código de rastreio aqui no portal.',
     };
   }
 
@@ -875,7 +960,9 @@ export class TrocasService {
     }
 
     const beneficio = parent.customerCpf
-      ? await this.getBeneficioReversa(parent.customerCpf)
+      // Troca DA TROCA: mesma compra, então o direito já foi usado pela
+      // solicitação original — passa o pedido pra contagem enxergar isso.
+      ? await this.getBeneficioReversa(parent.customerCpf, Number(parent.wcOrderId))
       : { disponivel: false };
     const usaGratis = !!beneficio.disponivel;
     const status = usaGratis ? 'aguardando_postagem' : 'aguardando_envio_cliente';
@@ -1007,7 +1094,9 @@ export class TrocasService {
       },
     });
     if (!t) throw new NotFoundException('Troca não encontrada');
-    const beneficio = t.customerCpf ? await this.getBeneficioReversa(t.customerCpf) : null;
+    const beneficio = t.customerCpf
+      ? await this.getBeneficioReversa(t.customerCpf, Number(t.wcOrderId))
+      : null;
     return { ...t, numeroFmt: formatTrocaNumero(t.numero), beneficio };
   }
 
