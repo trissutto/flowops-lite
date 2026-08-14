@@ -632,7 +632,21 @@ export class LojaCatalogService {
     // Preço e estoque saem das ÚNICAS: somar cadastro duplicado inflaria o
     // estoque do site e faria vender peça que não existe na arara.
     const precos = unicas.map((l) => l.preco).filter((p) => p > 0);
-    const preco = precos.length ? Math.min(...precos) : 0;
+    const precoErp = precos.length ? Math.min(...precos) : 0;
+    /**
+     * PREÇO PROMOCIONAL DE SITE (dono, 14/08): quando a peça tem `precoPromo`,
+     * ele VENCE o preço do ERP na vitrine, na PDP e no checkout (a trava
+     * antifraude lê o mesmo campo). `precoDe` é o "de" riscado do criativo;
+     * sem ele, cai no próprio preço do ERP como âncora. Promo é preço único —
+     * a quebra por faixa (44–54 / 56–60) não faz sentido num "de/por".
+     */
+    const promo = site?.precoPromo != null && Number(site.precoPromo) > 0
+      ? Math.round(Number(site.precoPromo) * 100) / 100
+      : null;
+    const preco = promo ?? precoErp;
+    const precoDe = promo
+      ? (site?.precoDe != null && Number(site.precoDe) > 0 ? Math.round(Number(site.precoDe) * 100) / 100 : precoErp)
+      : null;
     const estoqueTotal = unicas.reduce((s, l) => s + (l.estoque || 0), 0);
 
     /**
@@ -644,7 +658,7 @@ export class LojaCatalogService {
      * de tamanho por preço; o site mostra "R$ 199,90 (44–54) · R$ 219,90
      * (56–60)" quando há mais de uma.
      */
-    const faixasPreco = (() => {
+    const faixasPreco = promo ? [] : (() => {
       const porNumero = new Map<number, number>();
       for (const l of unicas) {
         if (!(l.preco > 0)) continue;
@@ -951,6 +965,8 @@ export class LojaCatalogService {
       grupoErp: linhas.find((l) => l.categoria)?.categoria ?? null,
 
       preco,
+      /** "De" riscado quando há promoção de site; null = sem promo. */
+      precoDe,
       /** Vazio = preço único. Com 2+, o site mostra os dois: "44–54" e "56–60". */
       faixasPreco,
       // Pix e parcelamento são convenção da marca (5% / 12x), não dado do ERP.

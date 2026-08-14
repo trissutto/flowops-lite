@@ -129,6 +129,30 @@ export class CarrinhoGuardService {
    * Gate de publicação. Devolve o conjunto de REFs EXPLICITAMENTE
    * despublicadas — ausência de linha não conta (ver regra (a) no topo).
    */
+  /**
+   * PREÇO PROMOCIONAL DO SITE por REF (14/08). Quando setado, é o preço que a
+   * loja REALMENTE cobra no site — a trava passa a compará-lo, não o do ERP,
+   * senão recusaria a venda promocional como fraude. Ref sem promo não entra
+   * no Map (cai no preço normal do ERP).
+   */
+  private async precosPromo(refs: string[]): Promise<Map<string, number>> {
+    const m = new Map<string, number>();
+    if (!refs.length) return m;
+    try {
+      const rows: any[] = await (this.prisma as any).siteProduto.findMany({
+        where: { ref: { in: refs }, precoPromo: { not: null } },
+        select: { ref: true, precoPromo: true },
+      });
+      for (const r of rows) {
+        const p = this.dinheiro(r.precoPromo);
+        if (p > 0) m.set(this.normRef(r.ref), p);
+      }
+    } catch (e: any) {
+      this.logger.warn(`[guard] preços promo indisponíveis (segue no ERP): ${e?.message || e}`);
+    }
+    return m;
+  }
+
   private async despublicadas(refs: string[]): Promise<Set<string>> {
     if (!refs.length) return new Set();
     try {
@@ -283,6 +307,7 @@ export class CarrinhoGuardService {
     }
 
     const bloqueadas = await this.despublicadas(Array.from(porRef.keys()));
+    const promo = await this.precosPromo(Array.from(porRef.keys()));
     // Uma consulta só pra sacola inteira: os códigos de TODAS as variações das
     // REFs do carrinho, resolvidos ou não. Consultar dentro do laço faria uma
     // ida ao banco por item.
@@ -366,7 +391,12 @@ export class CarrinhoGuardService {
           erro: `"${nomePeca}" está com o preço em atualização. Tente de novo em instantes ou fale com a gente pelo WhatsApp. 💜`,
         };
       }
-      const precoCatalogo = Math.min(...precos);
+      /**
+       * PROMO DO SITE VENCE O ERP (14/08): se a REF tem `precoPromo`, é ele o
+       * preço que a loja cobra no site — a trava compara contra ele, não
+       * contra o `vendaUn`. Sem promo, segue o menor do catálogo (ERP).
+       */
+      const precoCatalogo = promo.get(chave) ?? Math.min(...precos);
 
       /**
        * 4) Item 5 — ESTOQUE no fechamento, não só ao adicionar.

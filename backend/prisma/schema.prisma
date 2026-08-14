@@ -6612,6 +6612,21 @@ model SiteProduto {
   classificadoPor   String?  @map("classificado_por")
   classificadoEm    DateTime? @map("classificado_em")
 
+  /// PREÇO PROMOCIONAL SÓ DO SITE (dono, 14/08/2026).
+  ///
+  /// O preço normal vem do ERP (`wincred_produtos.vendaUn`), que é o MESMO do
+  /// PDV das 14 lojas — baixar lá baixaria no caixa físico também. Este campo
+  /// é o override que vale SÓ no site: quando preenchido, a vitrine, a PDP e o
+  /// checkout usam ele no lugar do preço do ERP. `precoDe` é o "de" riscado
+  /// (a âncora do criativo). Nulo = sem promoção, preço normal do ERP.
+  ///
+  /// ⚠️ A trava antifraude do checkout (`CarrinhoGuardService`) TAMBÉM lê este
+  /// campo — senão recusaria o pedido com preço menor que o do ERP como
+  /// suspeita de fraude. Quem seta `precoPromo` está definindo o preço que a
+  /// loja REALMENTE cobra no site; é decisão comercial, não pode nascer errado.
+  precoPromo        Float?   @map("preco_promo")
+  precoDe           Float?   @map("preco_de")
+
   /// Curadoria: o que a loja escolheu publicar
   publicado         Boolean  @default(true)
   destaque          Boolean  @default(false)
