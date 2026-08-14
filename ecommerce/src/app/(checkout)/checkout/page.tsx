@@ -114,13 +114,13 @@ export default function CheckoutPage() {
   }, [draftReady, contact, customer, shipping, payment]);
 
   /** Captura mínima para recuperação. Nunca bloqueia nem atrasa o checkout. */
-  function saveRecovery(nextContact: CheckoutContact, status: 'active' | 'converted' = 'active') {
+  function saveRecovery(nextContact: CheckoutContact) {
     void fetch('/api/checkout/recovery', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       keepalive: true,
       body: JSON.stringify({
-        sessionId: getSessionId(), anonymousId: getAnonymousId(), status,
+        sessionId: getSessionId(), anonymousId: getAnonymousId(),
         name: nextContact.name, phone: nextContact.phone,
         subtotal, path: '/checkout', attribution: captureAttribution(),
         items: lines.map((line) => ({
@@ -232,7 +232,6 @@ export default function CheckoutPage() {
       // (Se o PIX expirar, o produto volta pro estoque no server; manter a
       // sacola viva aqui criaria pedido duplicado no F5.)
       clearCheckoutDraft(window.sessionStorage);
-      saveRecovery({ name: customer.name, phone: customer.phone }, 'converted');
       clearCart();
 
       // ⚠️ NENHUM purchase disparado aqui: o pedido ainda nem foi pago.

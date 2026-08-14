@@ -52,7 +52,7 @@ const DEFAULT_TEMPLATES: Record<number, string> = {
 
 interface CandidateRow {
   // Identificação do carrinho
-  sourceType: 'cart' | 'wc-pending';
+  sourceType: 'cart' | 'wc-pending' | 'ecommerce';
   sourceId: string;
   // Cliente
   name: string | null;
@@ -173,12 +173,20 @@ export class MarketingRecoveryService {
   } = {}): Promise<CandidateRow[]> {
     const limit = Math.min(opts.limit ?? 200, 500);
 
-    // Tenta plugin WP primeiro, fallback pra WC REST
-    let raw = await this.abandoned.list({ perPage: limit, status: 'abandoned' });
+    // Tenta plugin WP primeiro, fallback pra WC REST. Em paralelo inclui o
+    // e-commerce novo, inclusive contatos capturados antes de existir pedido.
+    let [raw, ecommerceRaw] = await Promise.all([
+      this.abandoned.list({ perPage: limit, status: 'abandoned' }),
+      this.abandoned.listEcommercePending({ status: 'abandoned' }),
+    ]);
     if ((raw as any)?.ok === false || !Array.isArray((raw as any)?.items)) {
       raw = await this.abandoned.listWcPending({ perPage: limit, status: 'abandoned' });
     }
-    const items: any[] = (raw as any)?.items ?? [];
+    const legacyItems: any[] = (raw as any)?.items ?? [];
+    const ecommerceItems: any[] = Array.isArray((ecommerceRaw as any)?.items)
+      ? (ecommerceRaw as any).items
+      : [];
+    const items: any[] = [...legacyItems, ...ecommerceItems].slice(0, limit);
     if (items.length === 0) return [];
 
     // Coleta todos os telefones normalizados pra fazer 1 query só de WaMessage + opt-outs
@@ -228,7 +236,7 @@ export class MarketingRecoveryService {
     const rows: CandidateRow[] = [];
 
     for (const { src, phone } of normalized) {
-      const sourceId = String(src.id ?? src.orderId ?? src.cartId ?? '');
+      const sourceId = String(src.recovery_id ?? src.id ?? src.orderId ?? src.cartId ?? '');
       if (!sourceId) continue;
 
       const byKey = [
@@ -241,7 +249,7 @@ export class MarketingRecoveryService {
       );
       const converted = relevant.some((m) => m.status === 'converted');
 
-      const abandonedRaw = src.created_at ?? src.abandonedAt ?? src.date_created ?? null;
+      const abandonedRaw = src.created_at ?? src.abandonedAt ?? src.date_created ?? src.time ?? null;
       const abandonedAt = abandonedRaw ? new Date(abandonedRaw).toISOString() : new Date().toISOString();
       const ageMinutes = Math.floor((now - new Date(abandonedAt).getTime()) / 60000);
 
@@ -256,7 +264,7 @@ export class MarketingRecoveryService {
       }
 
       const productSummary = (() => {
-        const list: any[] = src.items ?? [];
+        const list: any[] = src.items ?? src.cart_items ?? [];
         if (list.length === 0) return '—';
         const first = list[0]?.name ?? list[0]?.product_name ?? list[0]?.productName ?? 'item';
         if (list.length === 1) return String(first);
@@ -267,19 +275,31 @@ export class MarketingRecoveryService {
         typeof src.total === 'number' ? src.total :
         typeof src.value === 'number' ? src.value :
         typeof src.amount === 'number' ? src.amount :
+        typeof src.cart_total === 'number' ? src.cart_total :
         typeof src.total === 'string' ? Number(src.total) :
+        typeof src.cart_total === 'string' ? Number(src.cart_total) :
         null;
 
+      const sourceType: CandidateRow['sourceType'] =
+        src.source === 'ecommerce' || src.source === 'ecommerce-contact'
+          ? 'ecommerce'
+          : src.source === 'wc-pending'
+            ? 'wc-pending'
+            : 'cart';
+      const sourceItems: any[] = src.items ?? src.cart_items ?? [];
+      const displayName = src.customer_name ?? src.name ??
+        ([src.first_name, src.last_name].filter(Boolean).join(' ').trim() || null);
+
       rows.push({
-        sourceType: (src.source === 'wc-pending' ? 'wc-pending' : 'cart') as any,
+        sourceType,
         sourceId,
-        name: src.customer_name ?? src.name ?? null,
+        name: displayName,
         email: src.email ?? src.customer_email ?? null,
         phone,
         phoneFormatted: this.formatPhoneBR(phone),
         productSummary,
         amount: amount != null && !Number.isNaN(amount) ? amount : null,
-        itemCount: Array.isArray(src.items) ? src.items.length : 0,
+        itemCount: sourceItems.reduce((sum: number, item: any) => sum + Math.max(1, Number(item?.quantity ?? item?.qty) || 1), 0),
         abandonedAt,
         ageMinutes,
         nextStepIndex,

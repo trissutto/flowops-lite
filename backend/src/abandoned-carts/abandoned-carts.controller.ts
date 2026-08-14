@@ -6,6 +6,7 @@ import {
   ParseIntPipe,
   Post,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import { AbandonedCartsService } from './abandoned-carts.service';
@@ -17,8 +18,9 @@ export class CheckoutRecoveryPublicController {
   constructor(private readonly service: AbandonedCartsService) {}
 
   @Post()
-  capture(@Body() body: any) {
-    return this.service.captureCheckout(body || {});
+  capture(@Body() body: any, @Req() request: any) {
+    const ip = String(request?.ips?.[0] ?? request?.ip ?? request?.socket?.remoteAddress ?? 'unknown');
+    return this.service.captureCheckout(body || {}, ip);
   }
 }
 
