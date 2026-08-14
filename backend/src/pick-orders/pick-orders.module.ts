@@ -12,6 +12,9 @@ import { MaisEnviosModule } from '../mais-envios/mais-envios.module';
 import { DceModule } from '../dce/dce.module';
 import { NfeModule } from '../nfe/nfe.module';
 import { CorreiosPostagemReconcileCron } from './correios-postagem-reconcile.cron';
+import { HttpModule } from '@nestjs/axios';
+import { EmailModule } from '../email/email.module';
+import { PedidoEmailService } from '../loja-orders/pedido-email.service';
 
 @Module({
   // LivePdvModule → ManychatService (WhatsApp de rastreio pra cliente da LIVE)
@@ -19,9 +22,12 @@ import { CorreiosPostagemReconcileCron } from './correios-postagem-reconcile.cro
   // CorreiosModule → CorreiosService (rastreio pro cron marcar enviado na postagem)
   // DceModule → DceEmitService (declaração de conteúdo eletrônica no "Gerar envio")
   // NfeModule → NfeTransferService (NF-e da venda no "Gerar envio" + chave na pré-postagem)
-  imports: [PrismaModule, WebsocketModule, forwardRef(() => WooCommerceModule), ErpModule, LivePdvModule, WincredMirrorModule, CorreiosModule, MaisEnviosModule, DceModule, NfeModule],
+  // EmailModule/HttpModule → PedidoEmailService registrado AQUI de novo (instância
+  // própria, deps são só Email/Config/Http): o aviso de rastreio do site novo
+  // dispara do afterShipped sem criar ciclo com o LojaOrdersModule.
+  imports: [PrismaModule, WebsocketModule, forwardRef(() => WooCommerceModule), ErpModule, LivePdvModule, WincredMirrorModule, CorreiosModule, MaisEnviosModule, DceModule, NfeModule, EmailModule, HttpModule],
   controllers: [PickOrdersController],
-  providers: [PickOrdersService, CorreiosPostagemReconcileCron],
+  providers: [PickOrdersService, CorreiosPostagemReconcileCron, PedidoEmailService],
   exports: [PickOrdersService],
 })
 export class PickOrdersModule {}
