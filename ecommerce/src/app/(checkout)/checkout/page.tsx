@@ -23,6 +23,9 @@ import {
   trackBeginCheckout,
   trackCouponApplied,
   trackCouponRemoved,
+  trackCheckoutError,
+  trackCheckoutSubmission,
+  trackPixCreated,
   type TrackedItem,
 } from '@/lib/tracking';
 import {
@@ -141,6 +144,7 @@ export default function CheckoutPage() {
     if (!customer || !shipping || !payment || submitting) return;
     setSubmitting(true);
     setSubmitError(null);
+    trackCheckoutSubmission(payment.method);
 
     // O campo `tracking` costura a compra ao funil: anonymous/session ligam
     // ao GA4, fbp/fbc casam a CAPI, attribution fecha o "de onde veio".
@@ -173,6 +177,7 @@ export default function CheckoutPage() {
       const result = (await res.json().catch(() => null)) as CreateOrderResult | null;
 
       if (!result?.ok || !result.order) {
+        trackCheckoutError(payment.method, result ? 'api_rejected' : 'invalid_response');
         // A mensagem do server tem PRECEDÊNCIA: por contrato ela já vem
         // elegante e é específica ("cartão recusado", "cupom expirou") — bem
         // mais útil que o genérico. Os textos locais cobrem só o que acontece
@@ -191,12 +196,14 @@ export default function CheckoutPage() {
       // ⚠️ NENHUM purchase disparado aqui: o pedido ainda nem foi pago.
       // Quem dispara é o SERVER, no webhook de pagamento (docs/purchase.md).
       if (result.order.payment.method === 'pix' && result.order.payment.pix) {
+        trackPixCreated();
         setPixOrder(result.order);
         window.scrollTo({ top: 0 });
       } else {
         router.push(`/checkout/confirmacao/${result.order.id}`);
       }
     } catch {
+      trackCheckoutError(payment.method, 'network_error');
       setSubmitError(ERRO_GENERICO);
     } finally {
       setSubmitting(false);

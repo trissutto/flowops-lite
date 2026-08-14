@@ -56,7 +56,19 @@ type Agora = {
  * todo mundo (com e sem aceite do banner) porque vem de `site_eventos`.
  */
 type EtapaFunil = { evento: string; eventos: number; pessoas: number };
-type RespostaFunil = { de: string; ate: string; etapas: EtapaFunil[] };
+type DiagnosticoFunil = {
+  evento: string;
+  codigo: string;
+  campo: string | null;
+  pessoas: number;
+  eventos: number;
+};
+type RespostaFunil = {
+  de: string;
+  ate: string;
+  etapas: EtapaFunil[];
+  diagnosticos?: DiagnosticoFunil[];
+};
 
 const iso = (d: Date) => d.toISOString().slice(0, 10);
 
@@ -232,7 +244,7 @@ export default function CliquesLojasPage() {
 
       {/* O FUNIL — acima do bloco de cliques de propósito: dia sem clique de
           loja ainda tem funil, e um não pode esconder o outro. */}
-      {funil && <FunilSite etapas={funil.etapas} />}
+      {funil && <FunilSite etapas={funil.etapas} diagnosticos={funil.diagnosticos ?? []} />}
 
       {erro && (
         <div className="bg-rose-50 border border-rose-200 text-rose-700 rounded-xl p-4 text-sm">{erro}</div>
@@ -324,7 +336,7 @@ function Cartao({ titulo, valor, icone, cor }: { titulo: string; valor: number; 
  * O funil da visita à compra, em PESSOAS (sessões) — o % de cada etapa é
  * sobre a anterior. Números pequenos embaixo são os toques (eventos).
  */
-function FunilSite({ etapas }: { etapas: EtapaFunil[] }) {
+function FunilSite({ etapas, diagnosticos }: { etapas: EtapaFunil[]; diagnosticos: DiagnosticoFunil[] }) {
   const por = new Map(etapas.map((e) => [e.evento, e]));
   const ordem = [
     { evento: 'page_view', titulo: 'Visitas', icone: <Users className="w-4 h-4" /> },
@@ -367,6 +379,67 @@ function FunilSite({ etapas }: { etapas: EtapaFunil[] }) {
         desde 13/08/2026; período anterior aparece zerado. O % é sobre a etapa anterior.
         Compras = pagamento confirmado; o número fiscal é o da tela de Pedidos.
       </p>
+      {diagnosticos.length > 0 && (
+        <div className="bg-white border border-[#E7E2D8] rounded-xl overflow-hidden">
+          <div className="px-4 py-3 border-b border-[#E7E2D8]">
+            <h2 className="font-semibold text-slate-800">Diagnóstico das decisões e falhas</h2>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Mostra onde a cliente parou, sem armazenar dados pessoais ou dados do cartão.
+            </p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-[#FBF6E6] text-slate-600">
+                <tr>
+                  <th className="text-left px-4 py-2.5 font-semibold">Momento</th>
+                  <th className="text-left px-4 py-2.5 font-semibold">Motivo / escolha</th>
+                  <th className="text-right px-4 py-2.5 font-semibold">Pessoas</th>
+                  <th className="text-right px-4 py-2.5 font-semibold">Eventos</th>
+                </tr>
+              </thead>
+              <tbody>
+                {diagnosticos.map((d, index) => (
+                  <tr key={`${d.evento}:${d.codigo}:${d.campo ?? ''}:${index}`} className="border-t border-[#E7E2D8]">
+                    <td className="px-4 py-2.5 font-medium text-slate-700">{rotuloDiagnostico(d.evento)}</td>
+                    <td className="px-4 py-2.5 text-slate-600">{rotuloCodigo(d.codigo)}</td>
+                    <td className="px-4 py-2.5 text-right tabular-nums">{d.pessoas}</td>
+                    <td className="px-4 py-2.5 text-right tabular-nums text-slate-500">{d.eventos}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   );
+}
+
+const ROTULOS_EVENTO: Record<string, string> = {
+  color_switch: 'Escolha de cor',
+  size_switch: 'Escolha de tamanho',
+  add_to_cart_blocked: 'Sacola bloqueada',
+  add_shipping_info: 'Frete escolhido',
+  add_payment_info: 'Pagamento escolhido',
+  checkout_submission: 'Tentativa de pagamento',
+  checkout_error: 'Falha ao finalizar',
+  pix_created: 'PIX criado',
+};
+
+const ROTULOS_CODIGO: Record<string, string> = {
+  size_missing: 'Tamanho não escolhido',
+  sold_out: 'Produto esgotado',
+  api_rejected: 'Pedido recusado pelo servidor',
+  invalid_response: 'Resposta inválida do servidor',
+  network_error: 'Falha de conexão',
+  pix: 'PIX',
+  card: 'Cartão',
+};
+
+function rotuloDiagnostico(evento: string): string {
+  return ROTULOS_EVENTO[evento] ?? evento;
+}
+
+function rotuloCodigo(codigo: string): string {
+  return ROTULOS_CODIGO[codigo] ?? codigo;
 }

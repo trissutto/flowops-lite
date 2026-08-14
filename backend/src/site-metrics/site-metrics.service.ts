@@ -30,6 +30,32 @@ export interface EventoEntrada {
   semAceite?: boolean;
 }
 
+const CAMPOS_DIAGNOSTICOS: Record<string, readonly string[]> = {
+  color_switch: ['color'],
+  size_switch: ['size'],
+  add_to_cart_blocked: ['reason'],
+  add_shipping_info: ['shipping_tier'],
+  add_payment_info: ['payment_type'],
+  checkout_submission: ['method'],
+  checkout_error: ['method', 'reason'],
+  pix_created: ['method'],
+};
+
+/** Defesa final contra PII: só persiste chaves fechadas e valores curtos. */
+export function sanitizarDadosEvento(evento: string, dados: unknown): Record<string, string> | undefined {
+  if (!dados || typeof dados !== 'object' || Array.isArray(dados)) return undefined;
+  const permitidos = CAMPOS_DIAGNOSTICOS[evento] ?? [];
+  const origem = dados as Record<string, unknown>;
+  const limpo: Record<string, string> = {};
+  for (const campo of permitidos) {
+    const valor = origem[campo];
+    if (typeof valor !== 'string' && typeof valor !== 'number' && typeof valor !== 'boolean') continue;
+    const texto = String(valor).trim().slice(0, 80);
+    if (texto) limpo[campo] = texto;
+  }
+  return Object.keys(limpo).length ? limpo : undefined;
+}
+
 /** Uma linha do relatório: a loja e o que fizeram nela. */
 export interface LinhaLoja {
   loja: string;
@@ -99,7 +125,7 @@ export class SiteMetricsService {
         loja: this.corta(e.loja, 80),
         sessionId: this.corta(e.sessionId, 64),
         valor: typeof e.valor === 'number' && Number.isFinite(e.valor) ? e.valor : null,
-        dados: e.dados && typeof e.dados === 'object' ? (e.dados as object) : undefined,
+        dados: sanitizarDadosEvento(String(e.evento), e.dados),
         semAceite: e.semAceite === true,
       }));
 
@@ -213,6 +239,38 @@ export class SiteMetricsService {
       evento: l.evento,
       eventos: Number(l.eventos),
       pessoas: Number(l.pessoas),
+    }));
+  }
+
+  async diagnosticosFunil(de: Date, ate: Date): Promise<Array<{
+    evento: string; codigo: string; campo: string | null; pessoas: number; eventos: number;
+  }>> {
+    const linhas = await this.prisma.$queryRawUnsafe<Array<{
+      evento: string; codigo: string; campo: string | null; pessoas: number; eventos: number;
+    }>>(
+      `SELECT evento,
+              COALESCE(dados->>'reason', dados->>'method', dados->>'payment_type',
+                       dados->>'shipping_tier', dados->>'color', dados->>'size', 'sem_codigo') AS codigo,
+              CASE WHEN dados ? 'field' THEN dados->>'field' ELSE NULL END AS campo,
+              COUNT(DISTINCT session_id)::int AS pessoas,
+              COUNT(*)::int AS eventos
+         FROM site_eventos
+        WHERE criado_em >= $1 AND criado_em <= $2
+          AND evento IN ('color_switch','size_switch','add_to_cart_blocked',
+                         'add_shipping_info','add_payment_info','checkout_submission',
+                         'checkout_error','pix_created')
+        GROUP BY evento, codigo, campo
+        ORDER BY eventos DESC, evento, codigo
+        LIMIT 100`,
+      de,
+      ate,
+    );
+    return linhas.map((l) => ({
+      evento: l.evento,
+      codigo: l.codigo,
+      campo: l.campo,
+      pessoas: Number(l.pessoas),
+      eventos: Number(l.eventos),
     }));
   }
 

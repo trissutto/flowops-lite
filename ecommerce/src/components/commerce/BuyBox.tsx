@@ -13,7 +13,7 @@ import { useToast } from '@/components/feedback/ToastProvider';
 import { useCartStore } from '@/store/cart';
 import { useUiStore } from '@/store/ui';
 import { useWishlistStore } from '@/store/wishlist';
-import { trackAddToCart, trackViewItem } from '@/lib/tracking';
+import { trackAddToCart, trackAddToCartBlocked, trackColorSwitch, trackSizeSwitch, trackViewItem } from '@/lib/tracking';
 import { useMounted } from '@/hooks';
 import { cn, discountPercent, formatPrice } from '@/lib/utils';
 import { hexDaCor, type PecaApi } from '@/services/products';
@@ -133,6 +133,7 @@ export function BuyBox({
 
   function handleAdd() {
     if (!size) {
+      trackAddToCartBlocked(product, soldOut ? 'sold_out' : 'size_missing');
       setSizeError(true);
       document.getElementById('seletor-tamanho')?.scrollIntoView({ block: 'center' });
       return;
@@ -347,7 +348,10 @@ export function BuyBox({
                 <button
                   key={c.nome}
                   type="button"
-                  onClick={() => onSelecionarCor?.(c.nome)}
+                  onClick={() => {
+                    onSelecionarCor?.(c.nome);
+                    trackColorSwitch(product, c.nome);
+                  }}
                   aria-pressed={escolhida}
                   aria-label={`Cor ${c.nome}${esgotada ? ' (esgotada)' : ''}`}
                   // w-16 + quebra de linha: o nome inteiro aparece ("AZUL
@@ -464,6 +468,7 @@ export function BuyBox({
               disabled={!option.available}
               onSelect={() => {
                 setSize(option.label);
+                trackSizeSwitch(product, option.label);
                 setSizeError(false);
               }}
             />
