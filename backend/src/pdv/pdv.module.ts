@@ -10,6 +10,10 @@ import { AccessPolicyModule } from '../access-policy/access-policy.module';
 import { WincredMirrorModule } from '../wincred-mirror/wincred-mirror.module';
 import { ConveniosModule } from '../convenios/convenios.module';
 import { AdiantamentosModule } from '../adiantamentos/adiantamentos.module';
+// ⚠️ RoutingModule aqui é seguro: a cadeia dele (Stock/Websocket/Erp/Push)
+// não importa PdvModule — conferido antes de adicionar (lição do ciclo 07/08).
+import { RoutingModule } from '../routing/routing.module';
+import { PedidoOnlineService } from './pedido-online.service';
 import { PdvService } from './pdv.service';
 import { ErpOutboxService } from './erp-outbox.service';
 import { PdvController } from './pdv.controller';
@@ -40,13 +44,13 @@ import { PdvStoreSummaryController } from './store-summary.controller';
 import { PdvStoreSummaryService } from './store-summary.service';
 
 @Module({
-  imports: [CashbackModule, PrismaModule, ErpModule, PagarmeModule, forwardRef(() => CrediariosModule), WooCommerceModule, PromoConfigModule, AccessPolicyModule, WincredMirrorModule, AdiantamentosModule, ConveniosModule, CrediarioNativoModule],
+  imports: [CashbackModule, PrismaModule, ErpModule, PagarmeModule, forwardRef(() => CrediariosModule), WooCommerceModule, PromoConfigModule, AccessPolicyModule, WincredMirrorModule, AdiantamentosModule, ConveniosModule, CrediarioNativoModule, RoutingModule],
   controllers: [PdvController, CashController, ReturnsController, ReturnsPublicController, PdvDiagController, MarcadosController, ActiveSellersController, CarneCoordsController, FiscalReportController, ProdutosVendidosController, PdvStoreSummaryController],
   // ⚠️ `PixPagbankReconcileService` entra SÓ como provider — nenhum import de
   // módulo novo. Foi exatamente um import novo aqui (PagbankModule) que criou
   // o ciclo e impediu o backend de subir em 07/08. Ele lê a tabela do PagBank
   // pelo Prisma, que este módulo já tem.
-  providers: [PdvService, ErpOutboxService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, CoordsDbService, MarcadosService, MarcadosMirrorService, ActiveSellersService, CarneCoordsService, FiscalReportService, ProdutosVendidosService, PixPagbankReconcileService, PdvStoreSummaryService],
+  providers: [PdvService, PedidoOnlineService, ErpOutboxService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, CoordsDbService, MarcadosService, MarcadosMirrorService, ActiveSellersService, CarneCoordsService, FiscalReportService, ProdutosVendidosService, PixPagbankReconcileService, PdvStoreSummaryService],
   exports: [PdvService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, CoordsDbService, MarcadosService, MarcadosMirrorService, ActiveSellersService, CarneCoordsService, FiscalReportService, ProdutosVendidosService],
 })
 export class PdvModule {}

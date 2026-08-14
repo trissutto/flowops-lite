@@ -441,6 +441,11 @@ model Order {
   // Quando o dinheiro entrou de verdade (webhook/aprovação do cartão).
   // Distinto de createdAt: o PIX pode ser pago horas depois.
   paidAt          DateTime? @map("paid_at")
+  // ── PEDIDO ONLINE (source='pdv_online', 14/08) ──
+  // Loja VENDEDORA da venda online do PDV (Karine = loja site). É a "dona da
+  // venda" no acerto: a loja que o roteamento escolher pra enviar (fornecedora)
+  // cobra DESTA loja, não da loja-canal 13. NULL em todo pedido não-online.
+  sellerStoreCode String?  @map("seller_store_code")
   // Resgate do PIX não pago (14/08): quando o toque de 30min foi entregue ao
   // n8n. Preenchido = nunca mais toca esse pedido (um lembrete só — segundo
   // toque vira cobrança). Null com o PIX vencido = janela passou em silêncio.

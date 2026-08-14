@@ -1931,10 +1931,29 @@ function PdvPageInner() {
         body.paymentMethod = paymentMethod;
         body.paymentDetails = paymentDetails;
       }
-      await api(
+      const finResp = await api<any>(
         `/pdv/sales/${sale.id}/finalize`,
         { method: 'POST', body: JSON.stringify(body) },
       );
+      // PEDIDO ONLINE (14/08): venda 100% Venda Online virou um pedido no
+      // trilho do site. Auto-atende = esta loja tem todas as peças e o card
+      // verde já nasceu AQUI; senão foi pra fila de roteamento da matriz.
+      if (finResp?.onlineOrder) {
+        const oo = finResp.onlineOrder;
+        if (oo.autoAtendida) {
+          toast(
+            'success',
+            `${String(oo.storeName || 'Sua loja').toUpperCase()} ATENDE O PEDIDO TODO`,
+            `Separação gerada nesta unidade — pedido ${oo.wcOrderNumber} entrou na fila de pedidos da loja.`,
+          );
+        } else {
+          toast(
+            'success',
+            `Pedido ${oo.wcOrderNumber} criado`,
+            'Sem todas as peças nesta loja — o pedido foi pro roteamento da matriz escolher quem envia.',
+          );
+        }
+      }
       const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
       setSale(fresh);
       setShowPayment(false);
