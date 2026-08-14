@@ -7,6 +7,7 @@ import { api } from '@/lib/api';
 import EnderecoEntregaModal, { enderecoDoPedido } from '@/components/EnderecoEntregaModal';
 import { getSocket } from '@/lib/socket';
 import { classifyShipping } from '@/lib/shipping-method';
+import { ruaComNumero } from '@/lib/format-address';
 import { refCorTam, nomeSemVariacao } from '@/lib/peca-linha';
 import TrackingTimeline from '@/components/TrackingTimeline';
 import SellerTag from '@/components/SellerTag';
@@ -1210,7 +1211,9 @@ export default function PedidoDetailPage() {
             />
           )}
             <div>{order.shipping.first_name} {order.shipping.last_name}</div>
-            <div>{order.shipping.address_1} {order.shipping.number ? `, ${order.shipping.number}` : ''}</div>
+            {/* `address_1` já vem com o número; concatenar `number` de novo
+                escrevia "Rua Salomão Filho, 577 , 577". */}
+            <div>{ruaComNumero(order.shipping)}</div>
             {order.shipping.address_2 && <div>{order.shipping.address_2}</div>}
             <div>{order.shipping.city} / {order.shipping.state} · CEP {order.shipping.postcode}</div>
             {order.shippingLines[0] && (

@@ -54,25 +54,32 @@ export function parseShippingAddress(
   };
 }
 
+/**
+ * A LINHA DA RUA — "Rua Salomão Filho, 577", com o número UMA vez.
+ *
+ * O pedido guarda `address_1` = "rua, número" grudado E, desde a correção da
+ * etiqueta, também `number` em campo próprio. Quem junta os dois na mão
+ * escreve o número duas vezes — foi o que a tela do pedido mostrou em 13/08
+ * ("Rua Salomão Filho, 577 , 577"). Toda tela que precisa dessa linha chama
+ * aqui; concatenar `address_1 + number` na mão é o bug.
+ */
+export function ruaComNumero(addr: any): string {
+  const a = addr || {};
+  const bruto = String(a.address_1 ?? a.street ?? '').trim();
+  const numero = String(a.number ?? a.numero ?? '').toString().trim();
+  if (!numero) return bruto;
+
+  // Escapa o número: "1500-A" tem hífen, "s/n" tem barra.
+  const alvo = numero.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const rua = bruto.replace(new RegExp(`[,\\s]*${alvo}\\s*$`, 'i'), '').trim();
+  if (!rua) return bruto || `nº ${numero}`;
+  return `${rua}, ${numero}`;
+}
+
 function buildFromJson(j: any): ParsedAddress {
   const name = [j.first_name, j.last_name].filter(Boolean).join(' ').trim() || null;
 
-  /**
-   * `address_1` guarda "rua, número" grudado E o pedido do site também grava
-   * `number` em campo próprio — juntar os dois escrevia o número DUAS VEZES
-   * ("Rua Salomão Filho, 577 , 577", visto em 13/08). Antes de concatenar,
-   * tira do fim do `address_1` o número que já está lá.
-   */
-  const rua = (j.address_1 || '').trim();
-  const number = (j.number || '').toString().trim();
-  const street = number
-    ? rua.replace(new RegExp(`[,\\s]*${number.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'i'), '').trim() || rua
-    : rua;
-  const streetLine =
-    street && number ? `${street}, ${number}` :
-    street ? street :
-    number ? `nº ${number}` :
-    null;
+  const streetLine = ruaComNumero(j) || null;
 
   const complement = (j.address_2 || '').trim() || null;
   const neighborhood = (j.neighborhood || '').trim() || null;
