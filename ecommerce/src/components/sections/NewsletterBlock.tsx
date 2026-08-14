@@ -1,13 +1,11 @@
 'use client';
 
 import { useState } from 'react';
-import { motion } from 'framer-motion';
 import { Check } from 'lucide-react';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { Container } from '@/components/layout/Container';
 import { cn } from '@/lib/utils';
-import { fadeUp, reveal } from '@/lib/motion';
 
 /**
  * NEWSLETTER — bloco de seção: um campo só (e-mail), muito espaço em branco,
@@ -97,7 +95,7 @@ export function NewsletterBlock({
       )}
     >
       <Container width="text">
-        <motion.div {...reveal(fadeUp)} className="text-center">
+        <div className="text-center">
           <p className={cn('eyebrow', isDark ? 'text-primary-soft' : 'text-primary-strong')}>
             {eyebrow}
           </p>
@@ -158,7 +156,7 @@ export function NewsletterBlock({
           >
             Você pode cancelar quando quiser. A gente não compartilha seu e-mail.
           </p>
-        </motion.div>
+        </div>
       </Container>
     </section>
   );

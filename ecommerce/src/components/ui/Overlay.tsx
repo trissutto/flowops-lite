@@ -1,11 +1,9 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { motion } from 'framer-motion';
 import { X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useEscapeKey, useFocusTrap, useLockScroll } from '@/hooks';
-import { transition } from '@/lib/motion';
 
 /**
  * OVERLAY — primitivo compartilhado por Modal e Drawer.
@@ -28,22 +26,12 @@ const PANEL_POSITION: Record<Side, string> = {
   center: 'inset-0 m-auto h-fit max-h-[90vh]',
 };
 
-function hiddenTransform(side: Side) {
-  switch (side) {
-    case 'right':
-      return { x: '100%', opacity: 1 };
-    case 'left':
-      return { x: '-100%', opacity: 1 };
-    case 'bottom':
-      return { y: '100%', opacity: 1 };
-    case 'center':
-      return { y: 12, opacity: 0, scale: 0.98 };
-  }
-}
-
-function visibleTransform(side: Side) {
-  return side === 'center' ? { y: 0, opacity: 1, scale: 1 } : { x: '0%', y: '0%', opacity: 1 };
-}
+const HIDDEN_TRANSFORM: Record<Side, string> = {
+  right: 'translate-x-full',
+  left: '-translate-x-full',
+  bottom: 'translate-y-full',
+  center: 'translate-y-3 scale-[0.98] opacity-0',
+};
 
 interface OverlayProps {
   open: boolean;
@@ -85,16 +73,17 @@ export function Overlay({
 
   return (
     <>
-      <motion.div
+      <div
         aria-hidden
         onClick={onClose}
-        animate={{ opacity: open ? 1 : 0 }}
-        initial={{ opacity: 0 }}
-        transition={transition.base}
         style={{ pointerEvents: open ? 'auto' : 'none' }}
-        className={cn('fixed inset-0 bg-ink/40 backdrop-blur-sm', zBackdrop)}
+        className={cn(
+          'fixed inset-0 bg-ink/40 backdrop-blur-sm transition-opacity duration-[320ms] ease-[cubic-bezier(0.22,1,0.36,1)]',
+          open ? 'visible opacity-100' : 'invisible opacity-0',
+          zBackdrop,
+        )}
       />
-      <motion.div
+      <div
         ref={(node) => {
           inertRef.current = node;
           (panelRef as React.MutableRefObject<HTMLDivElement | null>).current = node;
@@ -103,12 +92,12 @@ export function Overlay({
         aria-modal="true"
         aria-label={label}
         aria-hidden={!open}
-        initial={hiddenTransform(side)}
-        animate={open ? visibleTransform(side) : hiddenTransform(side)}
-        transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
         style={{ pointerEvents: open ? 'auto' : 'none' }}
         className={cn(
-          'fixed flex flex-col bg-background shadow-xl',
+          'fixed flex flex-col bg-background shadow-xl transition-[transform,opacity] duration-[450ms] ease-[cubic-bezier(0.22,1,0.36,1)]',
+          open
+            ? 'visible translate-x-0 translate-y-0 scale-100 opacity-100'
+            : cn('invisible', HIDDEN_TRANSFORM[side]),
           PANEL_POSITION[side],
           zPanel,
           className,
@@ -125,7 +114,7 @@ export function Overlay({
           </button>
         )}
         {children}
-      </motion.div>
+      </div>
     </>
   );
 }

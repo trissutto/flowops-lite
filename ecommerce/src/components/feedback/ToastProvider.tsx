@@ -1,10 +1,8 @@
 'use client';
 
 import { createContext, useCallback, useContext, useMemo, useState } from 'react';
-import { motion } from 'framer-motion';
 import { Check, Info, TriangleAlert, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { transition } from '@/lib/motion';
 
 /**
  * Toast — feedback discreto no canto inferior. Nunca bloqueia a interação.
@@ -69,12 +67,9 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
         {items.map((item) => {
           const Icon = ICONS[item.tone];
           return (
-            <motion.div
+            <div
               key={item.id}
-              initial={{ opacity: 0, y: 12, scale: 0.98 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              transition={transition.base}
-              className="pointer-events-auto flex items-start gap-3 rounded-md border border-border bg-surface p-4 shadow-md"
+              className="pointer-events-auto flex animate-[widget-enter_320ms_cubic-bezier(0.22,1,0.36,1)] items-start gap-3 rounded-md border border-border bg-surface p-4 shadow-md"
             >
               <Icon className={cn('mt-0.5 size-4 shrink-0', TONES[item.tone])} strokeWidth={2} />
               <div className="flex-1">
@@ -91,7 +86,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
               >
                 <X className="size-3.5" />
               </button>
-            </motion.div>
+            </div>
           );
         })}
       </div>

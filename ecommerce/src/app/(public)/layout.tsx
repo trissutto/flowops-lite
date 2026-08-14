@@ -2,8 +2,8 @@ import { Header } from '@/components/navigation/Header';
 import { Footer } from '@/components/layout/Footer';
 import { MiniCart } from '@/components/commerce/MiniCart';
 import { QuickAddSheet } from '@/components/commerce/QuickAddSheet';
-import { AssistenteWidget } from '@/components/chat/AssistenteWidget';
-import { CupomBoasVindas } from '@/components/marketing/CupomBoasVindas';
+import { DeferredAssistenteWidget } from '@/components/chat/DeferredAssistenteWidget';
+import { DeferredCupomBoasVindas } from '@/components/marketing/DeferredCupomBoasVindas';
 import { getTarjaDoTopo } from '@/services/banners';
 import { getNavegacao } from '@/services/categorias-menu';
 
@@ -29,10 +29,10 @@ export default async function PublicLayout({ children }: { children: React.React
           carrossel, busca) e todos falam com este mesmo store. */}
       <QuickAddSheet />
       {/* Atendimento: bolha fixa em todas as páginas da vitrine. */}
-      <AssistenteWidget />
+      <DeferredAssistenteWidget />
       {/* Cupom de boas-vindas. Ele mesmo se cala no carrinho, no checkout e na
           conta — quem está comprando não pode ser interrompido. */}
-      <CupomBoasVindas />
+      <DeferredCupomBoasVindas />
     </>
   );
 }

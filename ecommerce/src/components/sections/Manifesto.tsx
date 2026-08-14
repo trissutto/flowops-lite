@@ -1,9 +1,7 @@
 'use client';
 
-import { motion } from 'framer-motion';
 import { Container } from '@/components/layout/Container';
 import { cn } from '@/lib/utils';
-import { fadeUp, reveal, staggerBase } from '@/lib/motion';
 
 /**
  * MANIFESTO — seção institucional. Não vende: posiciona.
@@ -24,7 +22,7 @@ export function Manifesto({ eyebrow, title, paragraphs, stats, className }: Mani
   return (
     <section className={cn('py-section lg:py-section-lg', className)}>
       <Container width="text">
-        <motion.div {...reveal(fadeUp)} className="text-center">
+        <div className="text-center">
           {eyebrow && <p className="eyebrow text-primary-strong">{eyebrow}</p>}
           <h2 className="mt-6 text-h1 text-ink">{title}</h2>
           <div className="hairline-gold mx-auto mt-8 w-24" />
@@ -35,15 +33,12 @@ export function Manifesto({ eyebrow, title, paragraphs, stats, className }: Mani
               </p>
             ))}
           </div>
-        </motion.div>
+        </div>
 
         {stats && stats.length > 0 && (
-          <motion.dl
-            {...reveal(staggerBase, '-40px')}
-            className="mt-16 grid grid-cols-2 gap-x-6 gap-y-12 sm:grid-cols-4"
-          >
+          <dl className="mt-16 grid grid-cols-2 gap-x-6 gap-y-12 sm:grid-cols-4">
             {stats.map((stat) => (
-              <motion.div key={stat.label} variants={fadeUp} className="text-center">
+              <div key={stat.label} className="text-center">
                 <dt className="sr-only">{stat.label}</dt>
                 <dd>
                   <span className="tabular block font-display text-[2.5rem] leading-none font-medium text-primary-strong sm:text-[3rem]">
@@ -51,9 +46,9 @@ export function Manifesto({ eyebrow, title, paragraphs, stats, className }: Mani
                   </span>
                   <span className="eyebrow mt-3 block text-ink-soft">{stat.label}</span>
                 </dd>
-              </motion.div>
+              </div>
             ))}
-          </motion.dl>
+          </dl>
         )}
       </Container>
     </section>

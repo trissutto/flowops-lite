@@ -90,9 +90,9 @@ function mascaraCelular(valor: string): string {
   return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
 }
 
-export function CupomBoasVindas() {
+export function CupomBoasVindas({ initiallyOpen = false }: { initiallyOpen?: boolean }) {
   const pathname = usePathname();
-  const [aberto, setAberto] = useState(false);
+  const [aberto, setAberto] = useState(initiallyOpen);
   const [cupom, setCupom] = useState<string | null>(null);
   const [copiado, setCopiado] = useState(false);
 
@@ -108,6 +108,7 @@ export function CupomBoasVindas() {
 
   /* --------------------------------------------------------------- gatilho */
   useEffect(() => {
+    if (initiallyOpen) return;
     if (proibida || jaApareceu.current || jaResolvido()) return;
 
     let tempoCumprido = false;
@@ -136,7 +137,7 @@ export function CupomBoasVindas() {
       clearTimeout(timer);
       window.removeEventListener('scroll', aoRolar);
     };
-  }, [proibida]);
+  }, [initiallyOpen, proibida]);
 
   const fechar = useCallback(() => {
     setAberto(false);

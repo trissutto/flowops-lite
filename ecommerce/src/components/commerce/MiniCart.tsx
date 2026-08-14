@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { motion } from 'framer-motion';
 import { ShoppingBag, Ticket, X } from 'lucide-react';
 import { Drawer } from '@/components/ui/Drawer';
 import { Button } from '@/components/ui/Button';
@@ -21,7 +20,6 @@ import {
   trackViewCart,
 } from '@/lib/tracking';
 import { cn, formatPrice } from '@/lib/utils';
-import { transition } from '@/lib/motion';
 import type { CartLine } from '@/types';
 
 /**

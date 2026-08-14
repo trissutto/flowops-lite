@@ -343,6 +343,21 @@
   }
 }
 
+@keyframes widget-enter {
+  from { opacity: 0; transform: translateY(12px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes announcement-enter {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes hero-media-enter {
+  from { transform: scale(1.08); }
+  to { transform: scale(1); }
+}
+
 /* ============================================================================
    ACESSIBILIDADE — respeita quem pediu menos movimento
    ========================================================================== */
@@ -354,6 +369,7 @@
   *::before,
   *::after {
     animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }

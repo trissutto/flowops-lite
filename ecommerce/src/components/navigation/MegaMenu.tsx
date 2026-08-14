@@ -1,10 +1,8 @@
 'use client';
 
 import { AppLink as Link } from '@/components/ui/AppLink';
-import { motion } from 'framer-motion';
 import { ArrowRight } from 'lucide-react';
 import { Container } from '@/components/layout/Container';
-import { transition } from '@/lib/motion';
 import type { NavItem } from '@/types';
 import { CategoryColumn } from './CategoryColumn';
 import { MenuCard } from './MenuCard';
@@ -23,11 +21,8 @@ export function MegaMenu({ item, onNavigate }: { item: NavItem; onNavigate: () =
   if (!menu) return null;
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: -8 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={transition.fast}
-      className="border-t border-border bg-background shadow-lg"
+    <div
+      className="animate-[announcement-enter_180ms_cubic-bezier(0.22,1,0.36,1)] border-t border-border bg-background shadow-lg"
     >
       <Container width="wide" className="py-12">
         <div className="flex flex-col gap-12 lg:flex-row lg:gap-16">
@@ -81,6 +76,6 @@ export function MegaMenu({ item, onNavigate }: { item: NavItem; onNavigate: () =
           ))}
         </div>
       </Container>
-    </motion.div>
+    </div>
   );
 }

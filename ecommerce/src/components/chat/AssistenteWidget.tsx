@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import { Loader2, MessageCircle, Send, X } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import { useChatStore } from '@/store/chat';
 
 /**
@@ -45,6 +46,7 @@ export function AssistenteWidget() {
 
   // No checkout a assistente não existe — ver comentário do topo.
   const escondida = pathname?.startsWith('/checkout');
+  const paginaProduto = pathname?.startsWith('/produto/');
 
   useEffect(() => {
     if (aberto) fimRef.current?.scrollIntoView({ block: 'end' });
@@ -88,7 +90,10 @@ export function AssistenteWidget() {
         type="button"
         onClick={() => (aberto ? fechar() : abrir())}
         aria-label={aberto ? 'Fechar atendimento' : 'Falar com a consultora virtual'}
-        className="fixed right-4 bottom-4 z-[60] flex size-14 items-center justify-center rounded-pill bg-ink text-light shadow-lg transition-transform hover:scale-105 lg:right-6 lg:bottom-6"
+        className={cn(
+          'fixed right-4 z-[60] flex size-14 items-center justify-center rounded-pill bg-ink text-light shadow-lg transition-transform hover:scale-105 lg:right-6 lg:bottom-6',
+          paginaProduto ? 'bottom-24' : 'bottom-4',
+        )}
       >
         {aberto ? <X className="size-5" strokeWidth={1.75} /> : <MessageCircle className="size-6" strokeWidth={1.5} />}
       </button>
@@ -97,9 +102,11 @@ export function AssistenteWidget() {
       <div
         {...(!aberto ? { inert: '' as unknown as boolean } : {})}
         aria-hidden={!aberto}
-        className={`fixed right-4 bottom-20 z-[60] flex w-[min(380px,calc(100vw-2rem))] flex-col overflow-hidden rounded-sm border border-border bg-background shadow-xl transition-all duration-[320ms] ease-[cubic-bezier(0.22,1,0.36,1)] lg:right-6 lg:bottom-24 ${
-          aberto ? 'pointer-events-auto translate-y-0 opacity-100' : 'pointer-events-none translate-y-3 opacity-0'
-        }`}
+        className={cn(
+          'fixed right-4 z-[60] flex w-[min(380px,calc(100vw-2rem))] flex-col overflow-hidden rounded-sm border border-border bg-background shadow-xl transition-all duration-[320ms] ease-[cubic-bezier(0.22,1,0.36,1)] lg:right-6 lg:bottom-24',
+          paginaProduto ? 'bottom-40' : 'bottom-20',
+          aberto ? 'pointer-events-auto translate-y-0 opacity-100' : 'pointer-events-none translate-y-3 opacity-0',
+        )}
         style={{ maxHeight: 'min(560px, calc(100vh - 8rem))' }}
       >
         <header className="border-b border-border px-4 py-3">

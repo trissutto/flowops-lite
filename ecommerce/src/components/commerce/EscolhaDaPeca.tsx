@@ -101,7 +101,7 @@ export function EscolhaDaPeca({ product, cores }: { product: Product; cores: Cor
       {/* `key` força a galeria a voltar pra primeira foto ao trocar de cor —
           sem isso a cliente escolhe MARINHO e continua vendo a 4ª foto do
           PRETO, que era o índice em que ela estava. */}
-      <div>
+      <div className="min-w-0">
         <ProductGallery key={cor ?? 'unica'} images={galeria} name={pecaDaCor.name} autoPlay grupos={grupos} />
         {fotoIlustrativa && (
           <p className="mt-3 text-small text-ink-muted">
@@ -110,7 +110,7 @@ export function EscolhaDaPeca({ product, cores }: { product: Product; cores: Cor
           </p>
         )}
       </div>
-      <div className="lg:sticky lg:top-28 lg:self-start">
+      <div className="min-w-0 lg:sticky lg:top-28 lg:self-start">
         <BuyBox
           alertaEstoque={alertaEstoque}
           product={pecaDaCor}
