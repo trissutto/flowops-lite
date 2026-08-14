@@ -445,25 +445,16 @@ export function BuyBox({
           </Link>
         </div>
 
-        {/* LURDS FIT AI — mata a objeção "será que serve?" antes do seletor */}
-        {!soldOut && (
-          <button
-            type="button"
-            onClick={() => setFitOpen(true)}
-            className="group mt-4 flex w-full items-center justify-center gap-2 rounded-sm border border-primary bg-primary-wash px-5 py-3.5 text-small font-medium text-primary-strong transition-all duration-[320ms] hover:border-primary-strong hover:bg-champagne"
-          >
-            <Sparkles
-              className="size-3.5 transition-transform duration-[320ms] group-hover:scale-110"
-              strokeWidth={1.75}
-            />
-            Descubra seu tamanho ideal
-          </button>
-        )}
-
+        {/* As pills COLADAS no rótulo do passo (dono, 14/08): o botão do Fit
+            AI morava aqui no meio e cortava o próprio passo que o rótulo
+            anuncia — "escolha o tamanho" seguido de um botão que NÃO é um
+            tamanho. Quem já sabe o número clica direto; a ajuda desce pra
+            linha abaixo das pills, onde procura quem está em dúvida. */}
         <div className="mt-4 flex flex-wrap gap-2">
           {product.sizes.map((option) => (
             <SizePill
               key={option.label}
+              size="lg"
               label={option.label}
               selected={size === option.label}
               disabled={!option.available}
@@ -481,6 +472,22 @@ export function BuyBox({
           <p className="mt-3 text-small text-ink-muted">
             Os números riscados estão esgotados{temCor ? ' nesta cor' : ''}.
           </p>
+        )}
+
+        {/* LURDS FIT AI — a objeção "será que serve?" respondida COMO AJUDA,
+            não como desvio no meio do passo. */}
+        {!soldOut && (
+          <button
+            type="button"
+            onClick={() => setFitOpen(true)}
+            className="group mt-3 inline-flex items-center gap-1.5 text-small text-ink-soft transition-colors hover:text-primary-strong"
+          >
+            <Sparkles className="size-3.5 text-primary-strong" strokeWidth={1.75} />
+            Não sabe seu número?{' '}
+            <span className="link-underline font-medium text-primary-strong">
+              Descubra seu tamanho ideal
+            </span>
+          </button>
         )}
 
         {sizeError && (
@@ -504,13 +511,18 @@ export function BuyBox({
         )}
       </div>
 
-      {/* PROVA SOCIAL COLADA NO BOTÃO (dono, 13/08): é o último argumento antes
-          do clique, e o único da página que vem de venda de verdade. Estava lá
-          embaixo, em cinza, no meio das garantias — onde ninguém lia. */}
-      <SeloVendas vendas={product.sold} className="mt-8" />
+      {/* PROVA SOCIAL COLADA NO BOTÃO (dono, 13/08; virou linha em 14/08): é
+          o último argumento antes do clique e o único da página que vem de
+          venda de verdade — mas em caixa ela empurrava o botão pra longe do
+          seletor. Uma linha argumenta igual sem afastar o clique. */}
+      <SeloVendas vendas={product.sold} variant="linha" className="mt-7" />
 
-      {/* Ações */}
-      <div className="mt-4 flex flex-col gap-2.5">
+      {/* Ações — UM botão grande (dono, 14/08): "Adicionar à sacola" tinha o
+          mesmo peso visual de Favoritar e do WhatsApp, e o VERDE do WhatsApp
+          era a cor mais quente da coluna — o olho ia pro botão errado. Agora
+          a ação de compra é o único botão; as outras duas viram links
+          discretos logo abaixo. */}
+      <div className="mt-3 flex flex-col gap-4">
         {/* Esgotou: em vez de deixar a cliente sair, oferece o mesmo corte em
             outras peças — é o vendedor de loja física dizendo "se gostou
             desse modelo, olha esses aqui". */}
@@ -520,14 +532,14 @@ export function BuyBox({
           </Button>
         )}
         {!soldOut && (
-          <Button size="lg" block onClick={handleAdd}>
+          <Button size="lg" block onClick={handleAdd} className="h-14 text-[1.05rem]">
             <ShoppingBag /> Adicionar à sacola
           </Button>
         )}
 
-        <div className="grid grid-cols-2 gap-2.5">
-          <Button
-            variant="secondary"
+        <div className="flex items-center justify-center gap-8">
+          <button
+            type="button"
             onClick={() => {
               toggleWishlist(product.id);
               toast({
@@ -535,13 +547,23 @@ export function BuyBox({
                   mounted && isFavorite ? 'Removido dos favoritos' : 'Salvo nos favoritos',
               });
             }}
+            className="inline-flex items-center gap-1.5 text-small text-ink-soft transition-colors hover:text-ink"
           >
-            <Heart className={cn(mounted && isFavorite && 'fill-secondary text-secondary')} />
+            <Heart
+              className={cn('size-4', mounted && isFavorite && 'fill-secondary text-secondary')}
+              strokeWidth={1.75}
+            />
             {mounted && isFavorite ? 'Salvo' : 'Favoritar'}
-          </Button>
-          <Button href={whatsapp} external variant="whatsapp">
-            <MessageCircle /> Tirar dúvida
-          </Button>
+          </button>
+          <a
+            href={whatsapp}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 text-small text-ink-soft transition-colors hover:text-ink"
+          >
+            <MessageCircle className="size-4" strokeWidth={1.75} />
+            Tirar dúvida no WhatsApp
+          </a>
         </div>
       </div>
 
