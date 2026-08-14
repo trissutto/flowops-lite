@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
-import { ArrowRight, Heart, Lock, MapPin, MessageCircle, Ruler, ShoppingBag, Sparkles, Star } from 'lucide-react';
+import { ArrowRight, Check, Heart, Lock, MapPin, MessageCircle, Ruler, ShoppingBag, Sparkles, Star } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { SimuladorFrete } from '@/components/commerce/SimuladorFrete';
 import { SizePill } from '@/components/ui/Choice';
@@ -88,6 +88,8 @@ export function BuyBox({
 
   const available = product.sizes.filter((s) => s.available);
   const soldOut = available.length === 0;
+  /** Peça com mais de uma cor: só aí a escolha de cor é um passo de verdade. */
+  const temCor = !!cores && cores.length > 1;
 
   /**
    * O TAMANHO ESCOLHIDO ACABOU ENQUANTO ELA OLHAVA (dono, 13/08).
@@ -306,14 +308,20 @@ export function BuyBox({
 
       {/* COR — vem ANTES do tamanho: a cliente escolhe a cor e só então vê a
           grade daquela cor (cada cor tem estoque próprio). Escolher o 48 e
-          depois descobrir que ele só existe no preto é o pior caminho. */}
+          depois descobrir que ele só existe no preto é o pior caminho.
+
+          DIDÁTICO POR DECISÃO DO DONO (14/08): "minha cliente é lenta com
+          tecnologia". A bolinha sozinha não ensina nada — ela não se anuncia
+          como clicável e ninguém distingue vinho de marrom num círculo de
+          43px. Agora cada cor tem NOME ESCRITO embaixo, o passo é numerado
+          ("1 Escolha a cor") e a escolhida ganha um ✓. O nome já existia, mas
+          só no `title`/`aria-label`: invisível no celular, que é onde a
+          cliente compra. Contexto: 443 pessoas abriram uma peça no dia e 28
+          puseram na sacola. */}
       {cores && cores.length > 1 && (
         <div className="mt-9">
-          <p className="eyebrow text-ink">
-            Cor
-            {corSelecionada && <span className="ml-2 text-ink-soft normal-case">{corSelecionada}</span>}
-          </p>
-          <div className="mt-4 flex flex-wrap gap-3">
+          <PassoLabel numero={1} titulo="Escolha a cor" escolhido={corSelecionada ?? null} />
+          <div className="mt-4 flex flex-wrap gap-x-4 gap-y-5">
             {cores.map((c) => {
               const escolhida = corSelecionada === c.nome;
               const esgotada = c.estoque <= 0;
@@ -338,19 +346,43 @@ export function BuyBox({
                   onClick={() => onSelecionarCor?.(c.nome)}
                   aria-pressed={escolhida}
                   aria-label={`Cor ${c.nome}${esgotada ? ' (esgotada)' : ''}`}
-                  title={c.nome}
-                  className={cn(
-                    // 2,7rem = 43px: a bolinha 20% maior que os 36px originais
-                    // (dono 07/08). É o controle que decide a compra — merece
-                    // o alvo de toque maior no celular.
-                    'relative size-[2.7rem] rounded-full border transition-all duration-[320ms]',
-                    escolhida
-                      ? 'border-ink ring-2 ring-ink ring-offset-2 ring-offset-background'
-                      : 'border-border hover:border-ink-soft',
-                    esgotada && 'opacity-40',
-                  )}
+                  // w-16 + quebra de linha: o nome inteiro aparece ("AZUL
+                  // MARINHO" em duas linhas) sem esticar o viewport no celular
+                  // — o flex-wrap acomoda, e nada de truncar justo o texto que
+                  // a gente acabou de mostrar pra ensinar.
+                  className="group flex w-16 flex-col items-center gap-2"
                 >
-                  <span style={estilo} className="absolute inset-[3px] rounded-full" />
+                  <span
+                    className={cn(
+                      // 2,7rem = 43px: a bolinha 20% maior que os 36px originais
+                      // (dono 07/08). É o controle que decide a compra — merece
+                      // o alvo de toque maior no celular.
+                      'relative flex size-[2.7rem] items-center justify-center rounded-full border transition-all duration-[320ms]',
+                      escolhida
+                        ? 'border-ink ring-2 ring-ink ring-offset-2 ring-offset-background'
+                        : 'border-border group-hover:border-ink-soft',
+                      esgotada && 'opacity-40',
+                    )}
+                  >
+                    <span style={estilo} className="absolute inset-[3px] rounded-full" />
+                    {/* ✓ por cima da bolinha: a borda escura sozinha some numa
+                        peça de cor escura — o check nunca some. */}
+                    {escolhida && (
+                      <Check
+                        className="relative size-4 text-light drop-shadow-[0_1px_2px_rgba(0,0,0,0.6)]"
+                        strokeWidth={3}
+                      />
+                    )}
+                  </span>
+                  <span
+                    className={cn(
+                      'text-center text-xs leading-tight break-words',
+                      escolhida ? 'font-medium text-ink' : 'text-ink-soft',
+                    )}
+                  >
+                    {c.nome}
+                    {esgotada && <span className="block text-ink-muted">esgotada</span>}
+                  </span>
                 </button>
               );
             })}
@@ -397,8 +429,13 @@ export function BuyBox({
 
       {/* Tamanho */}
       <div id="seletor-tamanho" className="mt-9 scroll-mt-28">
-        <div className="flex items-center justify-between">
-          <p className="eyebrow text-ink">Tamanho</p>
+        <div className="flex items-end justify-between gap-4">
+          <PassoLabel
+            numero={temCor ? 2 : 1}
+            titulo="Escolha o tamanho"
+            escolhido={size}
+            sufixoEscolhido="tamanho"
+          />
           <Link
             href="/tamanhos/guia"
             className="inline-flex items-center gap-1.5 text-small text-ink-soft underline decoration-border underline-offset-4 transition-colors hover:text-ink"
@@ -437,6 +474,14 @@ export function BuyBox({
             />
           ))}
         </div>
+
+        {/* Legenda do risco — a pílula riscada é convenção de quem compra
+            online há anos, não de quem está comprando pela primeira vez. */}
+        {!soldOut && product.sizes.some((s) => !s.available) && (
+          <p className="mt-3 text-small text-ink-muted">
+            Os números riscados estão esgotados{temCor ? ' nesta cor' : ''}.
+          </p>
+        )}
 
         {sizeError && (
           <p role="alert" className="mt-3 text-small text-danger">
@@ -554,6 +599,58 @@ export function BuyBox({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/* ────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * Rótulo de passo da compra — "1 Escolha a cor", "2 Escolha o tamanho".
+ *
+ * Existe por um motivo só (dono, 14/08): "minha cliente é lenta com
+ * tecnologia". "Cor" e "Tamanho" são TÍTULOS — descrevem o bloco e não pedem
+ * nada. Quem não tem intimidade com loja online lê um título, não entende que
+ * tem que agir, e desce direto pro botão. O verbo no imperativo é a instrução
+ * que faltava; o número diz quantas decisões faltam.
+ *
+ * Quando já escolheu, o rótulo confirma em voz alta o que ela escolheu — a
+ * mesma confirmação que a vendedora dá na loja ("o vinho, 48, isso?").
+ */
+function PassoLabel({
+  numero,
+  titulo,
+  escolhido,
+  sufixoEscolhido,
+}: {
+  numero: number;
+  titulo: string;
+  /** O que já foi escolhido (cor ou tamanho). Nulo = ainda falta escolher. */
+  escolhido: string | null;
+  /** Palavra antes do valor na confirmação ("tamanho 48"). */
+  sufixoEscolhido?: string;
+}) {
+  return (
+    <div className="flex items-center gap-2.5">
+      <span
+        aria-hidden
+        className={cn(
+          'tabular flex size-6 shrink-0 items-center justify-center rounded-pill border text-xs font-medium transition-colors duration-[320ms]',
+          escolhido ? 'border-primary bg-primary text-light' : 'border-ink-soft text-ink',
+        )}
+      >
+        {escolhido ? <Check className="size-3.5" strokeWidth={3} /> : numero}
+      </span>
+      <p className="text-small font-medium text-ink">
+        {titulo}
+        {escolhido && (
+          <span className="font-normal text-ink-soft">
+            {' · '}
+            {sufixoEscolhido ? `${sufixoEscolhido} ` : ''}
+            <span className="font-medium text-ink">{escolhido}</span>
+          </span>
+        )}
+      </p>
     </div>
   );
 }
