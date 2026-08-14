@@ -43,8 +43,33 @@ export class EmailMarketingService {
    * WhatsApp; a gente veste. Cada linha em branco separa parágrafo; `**x**`
    * vira negrito; uma linha só com um link vira botão.
    */
-  private montarHtml(assunto: string, corpo: string, cupom?: string | null): string {
+  /** Link seguro: só http(s), senão vira o site (nunca deixa `javascript:` passar). */
+  private linkSeguro(url?: string | null): string {
+    const u = String(url || '').trim();
+    return /^https?:\/\//i.test(u) ? u : 'https://www.lurdsplussize.com.br';
+  }
+
+  private montarHtml(
+    assunto: string,
+    corpo: string,
+    cupom?: string | null,
+    imagemUrl?: string | null,
+    linkDestino?: string | null,
+  ): string {
     const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const destino = this.linkSeguro(linkDestino);
+    const img = String(imagemUrl || '').trim();
+
+    /**
+     * A ARTE VAI NO TOPO e é CLICÁVEL — o clique cai direto na peça (dono,
+     * 14/08): e-mail de lançamento sem imagem não converte, e mandar pra home
+     * faz a cliente procurar de novo o que o anúncio já mostrou. `img` só entra
+     * se for http(s); a borda arredondada casa com o cartão.
+     */
+    const hero = /^https?:\/\//i.test(img)
+      ? `<tr><td style="padding:0"><a href="${destino}"><img src="${img}" alt="${esc(assunto)}" style="display:block;width:100%;max-width:560px;border-radius:10px 10px 0 0" /></a></td></tr>`
+      : '';
+
     const paras = corpo
       .split(/\n{2,}/)
       .map((p) => p.trim())
@@ -61,13 +86,14 @@ export class EmailMarketingService {
 
     return `<!doctype html><html lang="pt-BR"><body style="margin:0;padding:24px;background:#faf9f7;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif">
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;margin:0 auto;background:#fff;border:1px solid #eee;border-radius:10px">
+    ${hero}
     <tr><td style="padding:28px 28px 8px">
       <p style="margin:0;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#b8912b">Lurd's Plus Size</p>
       <h1 style="margin:12px 0 18px;font-size:22px;color:#1a1a1a;font-weight:600">${esc(assunto)}</h1>
     </td></tr>
     <tr><td style="padding:0 28px 8px">${paras}${blocoCupom}</td></tr>
     <tr><td style="padding:8px 28px 28px">
-      <a href="https://www.lurdsplussize.com.br" style="display:inline-block;background:#1a1a1a;color:#fff;text-decoration:none;padding:13px 28px;border-radius:8px;font-weight:600">Ver no site</a>
+      <a href="${destino}" style="display:inline-block;background:#1a1a1a;color:#fff;text-decoration:none;padding:13px 28px;border-radius:8px;font-weight:600">Comprar agora</a>
     </td></tr>
     <tr><td style="padding:16px 28px 28px;border-top:1px solid #eee">
       <p style="margin:0;font-size:12px;color:#999">Moda plus size do 46 ao 60 · 14 lojas físicas · troca fácil.<br>
@@ -83,11 +109,11 @@ export class EmailMarketingService {
   }
 
   /** Prévia no e-mail de teste — pelo NOSSO SES, sem tocar no Mautic. */
-  async enviarPrevia(input: { destino: string; assunto: string; corpo: string; cupom?: string | null }) {
+  async enviarPrevia(input: { destino: string; assunto: string; corpo: string; cupom?: string | null; imagemUrl?: string | null; linkDestino?: string | null }) {
     this.validar(input.assunto, input.corpo);
     const destino = String(input.destino || '').trim().toLowerCase();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(destino)) throw new BadRequestException('E-mail de teste inválido.');
-    const html = this.montarHtml(input.assunto, input.corpo, input.cupom);
+    const html = this.montarHtml(input.assunto, input.corpo, input.cupom, input.imagemUrl, input.linkDestino);
     const ok = await this.email.send(destino, `[PRÉVIA] ${input.assunto}`, html, input.corpo);
     if (!ok) throw new BadRequestException('Não conseguimos enviar a prévia — confira o SMTP/SES do backend.');
     return { ok: true, destino };
@@ -103,12 +129,14 @@ export class EmailMarketingService {
     corpo: string;
     cupom?: string | null;
     agendarPara?: string | null;
+    imagemUrl?: string | null;
+    linkDestino?: string | null;
   }) {
     this.validar(input.assunto, input.corpo);
     if (!Number.isFinite(input.segmentoId) || input.segmentoId <= 0) {
       throw new BadRequestException('Escolha o público (segmento) do disparo.');
     }
-    const html = this.montarHtml(input.assunto, input.corpo, input.cupom);
+    const html = this.montarHtml(input.assunto, input.corpo, input.cupom, input.imagemUrl, input.linkDestino);
     const nome = `[FlowOps] ${input.assunto}`.slice(0, 120);
 
     const email = await this.mautic.criarEmailLista({
