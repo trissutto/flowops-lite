@@ -716,6 +716,40 @@ export class TrocasService {
         `cpf=${cpfDigits ? cpfDigits.slice(0, 3) + '***' : '-'} status=${status} R$${valorTotalPago.toFixed(2)}`,
     );
 
+    /**
+     * CONFIRMAÇÃO DA SOLICITAÇÃO (14/08) — o portal avisava a cliente em toda
+     * etapa MENOS na primeira: ela preenchia o formulário, via a tela de
+     * sucesso e não recebia nada. Quem fecha o navegador fica sem o número da
+     * troca e liga na loja pra perguntar se "deu certo".
+     *
+     * WhatsApp primeiro porque é onde ela cobra; o e-mail vai junto quando há
+     * endereço. Nenhum dos dois pode derrubar a solicitação já gravada.
+     */
+    const numeroTroca = formatTrocaNumero(troca.numero);
+    const proximoPasso = usaGratis
+      ? 'Em breve mandamos o código de postagem gratuita dos Correios pra você devolver a peça.'
+      : 'Como a reversa gratuita deste CPF já foi usada, o envio é por sua conta — o endereço está no portal.';
+    void this.avisarWhats(
+      troca.customerPhone,
+      `Recebemos sua solicitação de troca ${numeroTroca} 💛\n\n${proximoPasso}\n\n` +
+        `Guarde este número: é por ele que a gente acompanha tudo.`,
+    ).catch(() => undefined);
+    if (troca.customerEmail) {
+      void this.email
+        .send(
+          troca.customerEmail,
+          `Recebemos sua solicitação de troca ${numeroTroca} 💛`,
+          `<div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;color:#2A2620">
+            <h2 style="color:#8C7325">Solicitação recebida 💛</h2>
+            <p>Sua troca <b>${numeroTroca}</b> foi registrada.</p>
+            <p>${proximoPasso}</p>
+            <p>Guarde este número — é por ele que acompanhamos tudo.</p>
+            <p>Equipe Lurd's Plus Size</p>
+          </div>`,
+        )
+        .catch(() => undefined);
+    }
+
     return {
       ok: true,
       numero: formatTrocaNumero(troca.numero),
@@ -1192,12 +1226,28 @@ export class TrocasService {
       );
     }
 
+    /**
+     * SIMETRIA DE CANAL (14/08): o código gerado automaticamente ia por
+     * WhatsApp, o informado À MÃO ia só por e-mail — mesmo momento, mesma
+     * informação, e justo a via manual caía no canal mais frágil. Agora os
+     * dois avisam pelos dois.
+     */
+    const whatsOk = await this.avisarWhats(
+      troca.customerPhone,
+      `Oi, ${(troca.customerName || '').split(' ')[0] || 'tudo bem'}! 💛\n\n` +
+        `Sua devolução da troca ${formatTrocaNumero(troca.numero)} está liberada.\n\n` +
+        `📮 Código de postagem: *${codigo}*\n` +
+        `Leve a peça em QUALQUER agência dos Correios e informe esse código.\n\n` +
+        `A peça precisa estar sem sinais de uso e com a etiqueta original.\n` +
+        `O código vale até ${prazo.toLocaleDateString('pt-BR')}.`,
+    );
+
     const updated = await (this.prisma as any).trocaSolicitacao.update({
       where: { id: troca.id },
       data: {
         reversaCodigo: codigo,
         reversaPrazo: prazo,
-        reversaEnviadaAt: emailOk ? new Date() : null,
+        reversaEnviadaAt: emailOk || whatsOk ? new Date() : null,
         status: troca.status === 'solicitada' || troca.status === 'aguardando_envio_cliente'
           ? 'aguardando_postagem'
           : troca.status,
@@ -1793,6 +1843,39 @@ export class TrocasService {
           },
         },
       });
+      /**
+       * REEMBOLSO ERA A ÚNICA DECISÃO MUDA (14/08). Vale-compras avisava por
+       * e-mail e WhatsApp; quem escolhia dinheiro de volta lia a mensagem na
+       * tela e nunca mais recebia nada — no caminho em que a cliente está mais
+       * ansiosa, porque espera dinheiro. O prazo escrito é o que evita a
+       * cobrança no dia seguinte.
+       */
+      const prazoTexto = isPix
+        ? 'Faremos o PIX pra chave que você informou em até 3 dias úteis.'
+        : 'O estorno vai na mesma forma de pagamento da compra — o prazo de aparecer na fatura depende da operadora do cartão.';
+      void this.avisarWhats(
+        troca.customerPhone,
+        `Oi, ${(troca.customerName || '').split(' ')[0] || 'tudo bem'}! 💛\n\n` +
+          `Registramos seu pedido de reembolso da troca ${formatTrocaNumero(troca.numero)}.\n\n` +
+          `💰 Valor: R$ ${Number(troca.valorTotalPago).toFixed(2).replace('.', ',')}\n` +
+          `${prazoTexto}`,
+      ).catch(() => undefined);
+      if (troca.customerEmail) {
+        void this.email
+          .send(
+            troca.customerEmail,
+            `Reembolso da troca ${formatTrocaNumero(troca.numero)} solicitado 💛`,
+            `<div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;color:#2A2620">
+              <h2 style="color:#8C7325">Reembolso registrado 💛</h2>
+              <p>Recebemos sua escolha de reembolso da troca <b>${formatTrocaNumero(troca.numero)}</b>.</p>
+              <p><b>Valor: R$ ${Number(troca.valorTotalPago).toFixed(2).replace('.', ',')}</b></p>
+              <p>${prazoTexto}</p>
+              <p>Equipe Lurd's Plus Size</p>
+            </div>`,
+          )
+          .catch(() => undefined);
+      }
+
       return {
         ok: true,
         status: 'reembolso_andamento',
@@ -1881,6 +1964,19 @@ export class TrocasService {
         },
       },
     });
+
+    // O dinheiro saiu — e a cliente só descobria olhando o extrato. Avisar
+    // aqui é o que fecha a troca sem ela precisar cobrar.
+    void this.avisarWhats(
+      troca.customerPhone,
+      `Oi, ${(troca.customerName || '').split(' ')[0] || 'tudo bem'}! 💛\n\n` +
+        `Seu reembolso da troca ${formatTrocaNumero(troca.numero)} foi realizado:\n\n` +
+        `💰 R$ ${Number(troca.valorTotalPago).toFixed(2).replace('.', ',')} via ${(troca.reembolsoForma || '').toUpperCase()}\n\n` +
+        (String(troca.reembolsoForma) === 'cartao'
+          ? 'No cartão, o valor aparece conforme o prazo da operadora.'
+          : 'Já deve estar na sua conta.'),
+    ).catch(() => undefined);
+
     return { ok: true, troca: updated };
   }
 

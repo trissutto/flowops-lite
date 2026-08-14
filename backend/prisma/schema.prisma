@@ -454,6 +454,11 @@ model Order {
   // cada um chama o afterShipped — sem esta trava a cliente receberia um
   // "saiu pra entrega" por pacote. Guard atômico: updateMany com null.
   rastreioAvisadoEm   DateTime? @map("rastreio_avisado_em")
+  // Aviso de ENTREGA CONCLUÍDA (14/08). O sistema já sabia que o objeto foi
+  // entregue (TrackingService.delivered) e não falava nada — o ciclo terminava
+  // em silêncio justo no momento em que a cliente está com a peça na mão e o
+  // prazo de troca começa a correr. Carimbo = avisada (uma vez só).
+  entregaAvisadaEm    DateTime? @map("entrega_avisada_em")
   createdAt       DateTime @default(now()) @map("created_at") // data que chegou no FlowOps
   updatedAt       DateTime @updatedAt @map("updated_at")
 

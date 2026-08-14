@@ -13,6 +13,12 @@ import { AdiantamentosModule } from '../adiantamentos/adiantamentos.module';
 // ⚠️ RoutingModule aqui é seguro: a cadeia dele (Stock/Websocket/Erp/Push)
 // não importa PdvModule — conferido antes de adicionar (lição do ciclo 07/08).
 import { RoutingModule } from '../routing/routing.module';
+// EmailModule/HttpModule → PedidoEmailService com instância própria (mesma
+// receita do PickOrdersModule): o aviso ao cliente do pedido online sai daqui
+// sem importar o LojaOrdersModule inteiro e sem criar ciclo.
+import { EmailModule } from '../email/email.module';
+import { HttpModule } from '@nestjs/axios';
+import { PedidoEmailService } from '../loja-orders/pedido-email.service';
 import { PedidoOnlineService } from './pedido-online.service';
 import { PdvService } from './pdv.service';
 import { ErpOutboxService } from './erp-outbox.service';
@@ -44,13 +50,13 @@ import { PdvStoreSummaryController } from './store-summary.controller';
 import { PdvStoreSummaryService } from './store-summary.service';
 
 @Module({
-  imports: [CashbackModule, PrismaModule, ErpModule, PagarmeModule, forwardRef(() => CrediariosModule), WooCommerceModule, PromoConfigModule, AccessPolicyModule, WincredMirrorModule, AdiantamentosModule, ConveniosModule, CrediarioNativoModule, RoutingModule],
+  imports: [CashbackModule, PrismaModule, ErpModule, PagarmeModule, forwardRef(() => CrediariosModule), WooCommerceModule, PromoConfigModule, AccessPolicyModule, WincredMirrorModule, AdiantamentosModule, ConveniosModule, CrediarioNativoModule, RoutingModule, EmailModule, HttpModule],
   controllers: [PdvController, CashController, ReturnsController, ReturnsPublicController, PdvDiagController, MarcadosController, ActiveSellersController, CarneCoordsController, FiscalReportController, ProdutosVendidosController, PdvStoreSummaryController],
   // ⚠️ `PixPagbankReconcileService` entra SÓ como provider — nenhum import de
   // módulo novo. Foi exatamente um import novo aqui (PagbankModule) que criou
   // o ciclo e impediu o backend de subir em 07/08. Ele lê a tabela do PagBank
   // pelo Prisma, que este módulo já tem.
-  providers: [PdvService, PedidoOnlineService, ErpOutboxService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, CoordsDbService, MarcadosService, MarcadosMirrorService, ActiveSellersService, CarneCoordsService, FiscalReportService, ProdutosVendidosService, PixPagbankReconcileService, PdvStoreSummaryService],
+  providers: [PdvService, PedidoOnlineService, PedidoEmailService, ErpOutboxService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, CoordsDbService, MarcadosService, MarcadosMirrorService, ActiveSellersService, CarneCoordsService, FiscalReportService, ProdutosVendidosService, PixPagbankReconcileService, PdvStoreSummaryService],
   exports: [PdvService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, CoordsDbService, MarcadosService, MarcadosMirrorService, ActiveSellersService, CarneCoordsService, FiscalReportService, ProdutosVendidosService],
 })
 export class PdvModule {}

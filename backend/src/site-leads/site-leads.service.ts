@@ -1,5 +1,7 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { EmailService } from '../email/email.service';
+import { WhatsappService } from '../whatsapp/whatsapp.service';
 
 /**
  * LEADS DO SITE — nome, celular e e-mail trocados por um cupom de 10%.
@@ -34,7 +36,52 @@ const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 export class SiteLeadsService {
   private readonly logger = new Logger(SiteLeadsService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly email: EmailService,
+    private readonly whats: WhatsappService,
+  ) {}
+
+  /**
+   * ENTREGA DO CUPOM (14/08) — o popup pedia nome, celular e e-mail em troca
+   * de 10% e o cupom só aparecia na tela. Quem fechava a aba perdia o código,
+   * e a loja ficava com o dado de contato sem ter cumprido a própria oferta.
+   *
+   * E-mail sai sozinho — é o combinado da troca. O WhatsApp fica atrás de
+   * `LEAD_CUPOM_WHATS=1`: o número é o TRANSACIONAL da rede e disparo pra
+   * quem nunca comprou é justamente o padrão que derruba número por ban.
+   * Ligar isso é decisão do dono, não default de código.
+   */
+  private async entregarCupom(lead: { nome: string; email: string; telefone: string; cupom: string }): Promise<void> {
+    const primeiroNome = String(lead.nome || '').trim().split(/\s+/)[0] || 'Oi';
+    try {
+      await this.email.send(
+        lead.email,
+        `${primeiroNome}, aqui está seu cupom de 10% 💛`,
+        `<div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;color:#2A2620">
+          <h2 style="color:#8C7325">Seu cupom chegou 💛</h2>
+          <p>${primeiroNome}, use o código abaixo no carrinho e ganhe <b>10% de desconto</b> na sua primeira compra:</p>
+          <p style="font-size:26px;font-weight:bold;background:#FBF6E6;border:2px dashed #B8912B;border-radius:12px;padding:16px;text-align:center;letter-spacing:3px">${lead.cupom}</p>
+          <p><a href="https://www.lurdsplussize.com.br" style="color:#b8912b">Ver as novidades do site</a></p>
+          <p style="font-size:12px;color:#777">Moda plus size do 46 ao 60 — e 14 lojas pra trocar pessoalmente, se precisar.</p>
+        </div>`,
+        `${primeiroNome}, seu cupom de 10%: ${lead.cupom} — use no carrinho em www.lurdsplussize.com.br`,
+      );
+    } catch (e: any) {
+      this.logger.warn(`[leads] e-mail do cupom falhou: ${e?.message || e}`);
+    }
+
+    if (String(process.env.LEAD_CUPOM_WHATS ?? '').trim() !== '1') return;
+    try {
+      await this.whats.sendText(
+        lead.telefone,
+        `${primeiroNome}, aqui está seu cupom de 10% 💛\n\n🎟️ *${lead.cupom}*\n\n` +
+          `É só usar no carrinho em www.lurdsplussize.com.br`,
+      );
+    } catch (e: any) {
+      this.logger.warn(`[leads] WhatsApp do cupom falhou: ${e?.message || e}`);
+    }
+  }
 
   private soDigitos(v: unknown) {
     return String(v ?? '').replace(/\D/g, '');
@@ -76,6 +123,11 @@ export class SiteLeadsService {
     });
 
     this.logger.log(`[leads] ${nome} (${telefone}) — cupom ${lead.cupom} · origem ${origem ?? '-'}`);
+
+    // Fire-and-forget: a captura do lead já está gravada e não pode falhar
+    // porque o SMTP demorou. Quem não recebeu aparece no log.
+    void this.entregarCupom({ nome, email, telefone, cupom: lead.cupom });
+
     return { ok: true, cupom: lead.cupom };
   }
 

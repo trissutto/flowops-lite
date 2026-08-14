@@ -45,6 +45,9 @@ export class PedidoEmailService {
   /** Prazo de troca — o mesmo do portal (`TrocasService`, default 7). */
   private static readonly DIAS_TROCA = 7;
 
+  /** Quantas lojas físicas aceitam a troca — o argumento que o site sozinho não tem. */
+  private static readonly LOJAS_NA_REDE = 14;
+
   constructor(
     private readonly email: EmailService,
     private readonly config: ConfigService,
@@ -90,7 +93,7 @@ export class PedidoEmailService {
    * o jeito mais rápido de o fluxo quebrar na primeira manutenção.
    */
   private async avisarN8n(
-    evento: 'pedido_criado' | 'pagamento_confirmado' | 'pix_nao_pago' | 'pedido_enviado',
+    evento: 'pedido_criado' | 'pagamento_confirmado' | 'pix_nao_pago' | 'pedido_enviado' | 'pedido_entregue',
     order: any,
   ): Promise<boolean> {
     const url = this.webhookN8n;
@@ -437,6 +440,42 @@ export class PedidoEmailService {
       `pelo portal de trocas ou em qualquer uma das nossas lojas.`;
 
     await this.enviar(para, `${titulo} · pedido ${order?.wcOrderNumber ?? ''}`.trim(), titulo, chamada, order, rodape);
+  }
+
+  /**
+   * ENTREGA CONFIRMADA — o fim do ciclo, que até 14/08 acontecia em silêncio.
+   *
+   * O sistema já sabia da entrega (`TrackingService.delivered`) e não dizia
+   * nada justo no momento mais útil: a peça está na mão da cliente e é AGORA
+   * que o prazo de troca começa a correr. Dizer a data em que ele vence evita
+   * a conversa mais cara do pós-venda ("mas eu achei que tinha mais tempo").
+   *
+   * É também o único momento em que pedir avaliação faz sentido — ela acabou
+   * de provar a roupa. Prova social real, das clientes que compraram de fato.
+   */
+  async aoEntregar(order: any): Promise<boolean> {
+    const n8nOk = await this.avisarN8n('pedido_entregue', order);
+    if (!this.emailProprioLigado) return n8nOk;
+
+    const para = this.destinatario(order);
+    if (!para) return n8nOk;
+
+    const nome = this.primeiroNome(order?.customerName);
+    const limite = new Date(Date.now() + PedidoEmailService.DIAS_TROCA * 24 * 60 * 60 * 1000);
+    const ateQuando = limite.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+    const titulo = 'Seu pedido chegou';
+    const chamada =
+      `${nome}, os Correios confirmaram a entrega do seu pedido. Esperamos que sirva certinho e que você ame as peças!` +
+      `<br><br>Se alguma coisa não ficou como você esperava, dá pra trocar até <strong>${ateQuando}</strong> ` +
+      `— pelo portal de trocas ou em qualquer uma das nossas ${PedidoEmailService.LOJAS_NA_REDE} lojas, sem complicação.`;
+    const rodape =
+      'Ficou boa em você? Responde esse e-mail com uma foto ou um "amei" — a gente adora ver, ' +
+      'e sua opinião ajuda outra cliente a escolher o tamanho certo.';
+
+    const emailOk = await this.enviar(
+      para, `${titulo} · pedido ${order?.wcOrderNumber ?? ''}`.trim(), titulo, chamada, order, rodape,
+    );
+    return n8nOk || emailOk;
   }
 
   /** Devolve se o e-mail SAIU — o resgate do PIX usa isso pra decidir o carimbo. */
