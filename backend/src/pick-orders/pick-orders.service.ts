@@ -2928,7 +2928,10 @@ export class PickOrdersService {
     // passa pelo WooCommerce que avisava o site velho. Guard atômico no
     // pedido: dividido despacha um pacote por loja, e só o PRIMEIRO com
     // rastreio avisa (updateMany com null → 1 linha = este pacote venceu).
-    if (order.source === 'ecommerce' && input.trackingCode) {
+    // 'pdv_online' entra aqui junto (14/08): a venda online do PDV nasceu muda
+    // — a cliente é atendida no WhatsApp da vendedora, mas o código de
+    // rastreio ninguém mandava. Mesmo trilho, mesma trava.
+    if ((order.source === 'ecommerce' || order.source === 'pdv_online') && input.trackingCode) {
       try {
         const venceu = await (this.prisma as any).order.updateMany({
           where: { id: order.id, rastreioAvisadoEm: null },
@@ -2959,6 +2962,20 @@ export class PickOrdersService {
               ? digits
               : null;
         if (!phone) return;
+        // TRAVA DE DUPLICIDADE (14/08): a live não tinha nenhuma, enquanto o
+        // ramo do site ao lado tinha. Carrinho separado por 2 lojas chamava
+        // este bloco 2× e a cliente recebia 2 WhatsApps do mesmo pedido.
+        // Reclamado só como "chegou repetido" — nunca como bug.
+        // Reivindicação atômica ANTES do envio, depois dos guards baratos
+        // (sem flow/telefone não queima o carimbo).
+        const venceuWhats = await (this.prisma as any).order.updateMany({
+          where: { id: order.id, rastreioAvisadoEm: null },
+          data: { rastreioAvisadoEm: new Date() },
+        });
+        if (venceuWhats.count !== 1) {
+          this.logger.log(`[rastreio-whats] pedido ${order.wcOrderNumber}: já avisado — 2º pacote não repete`);
+          return;
+        }
         let subId = await this.manychat.findWhatsAppSubscriber(phone);
         if (!subId) {
           const created = await this.manychat.createWhatsAppSubscriber(phone, order.customerName);

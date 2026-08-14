@@ -118,7 +118,15 @@ export class TrackingService {
         time: String(e.hora || ''),
         location: String(e.local || ''),
         description: String(e.status || e.descricao || ''),
-        isDelivery: /entreg/i.test(String(e.status || '')),
+        // ⚠️ `/entreg/i` (como era até 14/08) casa com "Objeto saiu para
+        // ENTREGA ao destinatário" e dava o objeto como entregue enquanto ele
+        // ainda estava no carro do carteiro. Não é cosmético: a data de
+        // entrega é o marco zero do prazo de troca (`TrocasService` lê
+        // `deliveredAt`), então errar pra mais ENCURTA o prazo da cliente.
+        // "entregue" não casa com "entrega"; "não entregue" é tentativa falha.
+        isDelivery:
+          /entregue/i.test(String(e.status || '')) &&
+          !/n[ãa]o\s+entregue/i.test(String(e.status || '')),
       }));
 
       return {

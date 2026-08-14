@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RoutingService } from '../routing/routing.service';
 import { RoutingResult } from '../routing/types';
 import { montarComplementoBairroWc, montarNumeroWc } from '../common/endereco-wc';
+import { PedidoEmailService } from '../loja-orders/pedido-email.service';
 
 /**
  * PEDIDO ONLINE (14/08) — a Venda Online do PDV vira um Order no trilho do
@@ -33,6 +34,7 @@ export class PedidoOnlineService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly routing: RoutingService,
+    private readonly pedidoEmail: PedidoEmailService,
   ) {}
 
   enabled(): boolean {
@@ -199,6 +201,9 @@ export class PedidoOnlineService {
                 })),
               },
             },
+            // `include` pro e-mail de confirmação listar as peças — sem ele o
+            // create devolve o pedido sem itens e a mensagem sai vazia.
+            include: { items: true },
           });
           break;
         } catch (e: any) {
@@ -234,6 +239,16 @@ export class PedidoOnlineService {
           this.logger.warn(`[pedido-online] auto-atende do ${order.wcOrderNumber} falhou (${e?.message || e}) — vai pro roteamento`);
         }
       }
+
+      // CONFIRMAÇÃO PRA CLIENTE (14/08) — a venda online nasceu muda. A
+      // vendedora já falou com ela no WhatsApp, mas ninguém mandava o número
+      // do pedido nem o registro do que foi comprado. Fire-and-forget e sem
+      // e-mail no cadastro simplesmente não sai (o `destinatario` filtra).
+      // O pedido já nasce PAGO, então a mensagem certa é a de pagamento
+      // confirmado, não a de "aguardando".
+      void this.pedidoEmail
+        .aoConfirmarPagamento({ ...order, items: order.items ?? [] })
+        .catch((e: any) => this.logger.warn(`[pedido-online] aviso ao cliente falhou: ${e?.message || e}`));
 
       this.logger.log(
         `[pedido-online] venda ${sale.id} → pedido ${order.wcOrderNumber} ` +

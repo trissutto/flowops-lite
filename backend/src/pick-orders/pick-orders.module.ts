@@ -12,6 +12,7 @@ import { MaisEnviosModule } from '../mais-envios/mais-envios.module';
 import { DceModule } from '../dce/dce.module';
 import { NfeModule } from '../nfe/nfe.module';
 import { CorreiosPostagemReconcileCron } from './correios-postagem-reconcile.cron';
+import { EntregaAvisoCron } from './entrega-aviso.cron';
 import { HttpModule } from '@nestjs/axios';
 import { EmailModule } from '../email/email.module';
 import { PedidoEmailService } from '../loja-orders/pedido-email.service';
@@ -27,7 +28,7 @@ import { PedidoEmailService } from '../loja-orders/pedido-email.service';
   // dispara do afterShipped sem criar ciclo com o LojaOrdersModule.
   imports: [PrismaModule, WebsocketModule, forwardRef(() => WooCommerceModule), ErpModule, LivePdvModule, WincredMirrorModule, CorreiosModule, MaisEnviosModule, DceModule, NfeModule, EmailModule, HttpModule],
   controllers: [PickOrdersController],
-  providers: [PickOrdersService, CorreiosPostagemReconcileCron, PedidoEmailService],
+  providers: [PickOrdersService, CorreiosPostagemReconcileCron, EntregaAvisoCron, PedidoEmailService],
   exports: [PickOrdersService],
 })
 export class PickOrdersModule {}
