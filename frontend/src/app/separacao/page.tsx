@@ -251,7 +251,7 @@ function SeparacaoPageInner() {
   // Filtro de ORIGEM: '' = todos · 'site' (WooCommerce antigo) · 'live' (Live
   // Commerce) · 'ecommerce' (site NOVO, sprint 011 — nº "LP-xxxxxx").
   // As três origens entram na MESMA fila: quem sabe rotear Order roteia todas.
-  const [sourceFilter, setSourceFilter] = useState<'' | 'site' | 'live' | 'ecommerce'>('');
+  const [sourceFilter, setSourceFilter] = useState<'' | 'site' | 'live' | 'ecommerce' | 'pdv_online'>('');
 
   // Carrega lojas com contagem de pedidos em aberto
   useEffect(() => {
@@ -1112,9 +1112,11 @@ function SeparacaoPageInner() {
           </button>
         )}
 
-        {/* ─── FILTRO ORIGEM (SITE / LIVE / ECOMMERCE) ─── */}
+        {/* ─── FILTRO ORIGEM (SITE / LIVE / ONLINE / ECOMMERCE) ───
+             ONLINE = venda online do PDV da loja (nº ON-xxxxxx). Fica ao lado
+             da Live porque é o mesmo tipo de fila: pedido que a LOJA abriu. */}
         <div className="flex items-center gap-1 ml-3">
-          {([['', 'Todos'], ['site', 'Site'], ['live', 'Live'], ['ecommerce', 'Ecommerce']] as const).map(([val, label]) => (
+          {([['', 'Todos'], ['site', 'Site'], ['live', 'Live'], ['pdv_online', 'Online'], ['ecommerce', 'Ecommerce']] as const).map(([val, label]) => (
             <button
               key={val || 'todos'}
               type="button"
@@ -1125,7 +1127,9 @@ function SeparacaoPageInner() {
                     ? 'bg-rose-600 border-rose-600 text-white'
                     : val === 'ecommerce'
                       ? 'bg-violet-600 border-violet-600 text-white'
-                      : 'bg-slate-800 border-slate-800 text-white'
+                      : val === 'pdv_online'
+                        ? 'bg-teal-600 border-teal-600 text-white'
+                        : 'bg-slate-800 border-slate-800 text-white'
                   : 'bg-white border-slate-300 text-slate-600 hover:bg-slate-100'
               }`}
               title={
@@ -1135,10 +1139,12 @@ function SeparacaoPageInner() {
                     ? 'Só pedidos do site antigo (WooCommerce)'
                     : val === 'ecommerce'
                       ? 'Só pedidos do site novo (nº LP-xxxxxx)'
-                      : 'Todas as origens'
+                      : val === 'pdv_online'
+                        ? 'Só vendas online das lojas (nº ON-xxxxxx)'
+                        : 'Todas as origens'
               }
             >
-              {val === 'live' ? '🔴 ' : ''}{label}
+              {val === 'live' ? '🔴 ' : val === 'pdv_online' ? '🏬 ' : ''}{label}
             </button>
           ))}
         </div>
@@ -1294,7 +1300,9 @@ function SeparacaoPageInner() {
               ? 'do site antigo '
               : sourceFilter === 'ecommerce'
                 ? 'do site novo '
-                : ''}
+                : sourceFilter === 'pdv_online'
+                  ? 'de venda online das lojas '
+                  : ''}
           com esse status no momento. 🎉
         </div>
       ) : (

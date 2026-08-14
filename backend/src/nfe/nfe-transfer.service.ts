@@ -1598,6 +1598,12 @@ export class NfeTransferService {
     storeCode: string;
     dest: { cpfCnpj: string; nome: string; endereco: string; numero: string; bairro: string; cidade: string; uf: string; cep: string; codMun: string };
     items: Array<{ sku?: string; ean?: string; descricao: string; ncm?: string; qty: number; vUn: number }>;
+    /**
+     * FRETE cobrado da cliente — sai no campo `vFrete` da nota, NUNCA como
+     * linha de produto (na mod 55 o campo existe pra isso; mesma regra da
+     * nota grande do PDV, dono 31/07). Pedido dividido: só a 1ª nota leva.
+     */
+    vFrete?: number;
     ambienteOverride?: '1' | '2';
     /** Emitir pela identidade DESSA raiz de CNPJ (ex.: site = LURDS matriz), buscada na config da loja/grupo. */
     emitirPorRaiz?: string;
@@ -1648,6 +1654,7 @@ export class NfeTransferService {
     }));
     const valorTotal = items.reduce((s, i) => s + i.vProd, 0);
     if (valorTotal <= 0) throw new BadRequestException('NF-e do envio sem valor (itens zerados).');
+    const vFrete = Math.max(0, Math.round((Number(input.vFrete) || 0) * 100) / 100);
 
     await this.garantirContinuacao(this.digits(origem.cnpj), origem.cnpj, serie);
     let numero = await this.seq.next(this.digits(origem.cnpj), serie, { start: this.startPadraoPara(origem.cnpj, serie), legacyKey: origem.identidadeEmprestada ? undefined : origem.storeCode });
@@ -1658,7 +1665,7 @@ export class NfeTransferService {
       data: {
         shipmentId: linkId, fromStoreCode: input.storeCode, toStoreCode: input.storeCode,
         modelo: '55', serie, numero, cNF: '', chave: '', tpAmb, natOp, cfop,
-        valorTotalCents: Math.round(valorTotal * 100), status: 'pending',
+        valorTotalCents: Math.round((valorTotal + vFrete) * 100), status: 'pending',
       },
     });
 
@@ -1670,7 +1677,7 @@ export class NfeTransferService {
       const dhEmi = this.dhEmiNow();
       cNF = crypto.randomInt(10_000_000, 99_999_999).toString();
       chave = this.buildChave({ cUF, cnpj: origem.cnpj, serie, numero, cNF, dataEmissao: this.agoraBrasilia() });
-      const xml = this.buildVendaXml({ chave, cUF, cNF, serie, numero, dhEmi, tpAmb, natOp, cfop, origem, dest, interestadual, items, valorTotal, saleRef: `envio ${String(input.pickOrderId).slice(0, 8)}` });
+      const xml = this.buildVendaXml({ chave, cUF, cNF, serie, numero, dhEmi, tpAmb, natOp, cfop, origem, dest, interestadual, items, valorTotal, vFrete, saleRef: `envio ${String(input.pickOrderId).slice(0, 8)}` });
       const xmlMin = xml.replace(/>\s+</g, '><').trim();
       let xmlAssinado: string;
       try {
