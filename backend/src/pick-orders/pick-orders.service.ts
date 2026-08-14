@@ -1329,6 +1329,9 @@ export class PickOrdersService {
             id: true,
             wcOrderId: true,
             wcOrderNumber: true,
+            // Card verde ONLINE (14/08): a loja distingue pedido da vendedora
+            // online (source='pdv_online') do pedido do site pela tag.
+            source: true,
             customerName: true,
             customerPhone: true,
             customerCpf: true,
@@ -2816,7 +2819,23 @@ export class PickOrdersService {
         .findUnique({ where: { code: po.transferToStoreCode } })
         .catch(() => null);
       if (st) destino = { code: st.code, name: st.name, tipo: st.tipo === 'FILIAL' ? 'FILIAL' : 'REDE' };
-    } else {
+    } else if (order.source === 'pdv_online' && order.sellerStoreCode) {
+      // PEDIDO ONLINE (14/08): a dona da venda é a LOJA VENDEDORA do PDV
+      // (Order.sellerStoreCode — Karine = loja site), não a loja-canal 13.
+      // Fornecedora → vendedora entra no MESMO acerto REDE × FRANQUIA; se a
+      // vendedora atendeu o próprio pedido, `mesmaLoja` abaixo anula tudo.
+      const st = await (this.prisma as any).store
+        .findFirst({ where: { code: order.sellerStoreCode } })
+        .catch(() => null);
+      if (st) {
+        destino = { code: st.code, name: st.name, tipo: st.tipo === 'FILIAL' ? 'FILIAL' : 'REDE' };
+      } else {
+        this.logger.warn(
+          `[acerto-÷2,5] pedido ${order.wcOrderNumber}: sellerStoreCode=${order.sellerStoreCode} não achado em Store — caindo no canal 13`,
+        );
+      }
+    }
+    if (!destino && !(po.isTransfer && po.transferToStoreCode)) {
       // VENDA DE CANAL (site OU live) — dono 30/07: o destino é SEMPRE a
       // loja-canal 13 (SITE). Antes a live acertava com a loja que fez a live
       // (session.liveStoreCode) e o site usava um código fantasma 'SITE' que
@@ -2851,7 +2870,7 @@ export class PickOrdersService {
         for (const it of itens) {
           const transfer = await (this.prisma as any).transferOrder.create({
             data: {
-              tipo: order.source === 'live' ? 'LIVE' : 'SITE',
+              tipo: order.source === 'live' ? 'LIVE' : order.source === 'pdv_online' ? 'ONLINE' : 'SITE',
               refCode: String(it.sku || ''),
               codigoBipado: String(it.sku || ''),
               descricao: it.productName || null,
@@ -2860,7 +2879,8 @@ export class PickOrdersService {
               lojaOrigemName: fromStore?.name,
               lojaDestinoCode: destino.code,
               lojaDestinoName: destino.name,
-              solicitanteNome: order.source === 'live' ? 'LIVE COMMERCE' : 'VENDA SITE',
+              solicitanteNome:
+                order.source === 'live' ? 'LIVE COMMERCE' : order.source === 'pdv_online' ? 'VENDA ONLINE' : 'VENDA SITE',
               mensagem: `Pedido ${order.wcOrderNumber} expedido${input.trackingCode ? ` (rastreio ${input.trackingCode})` : ''}`,
             },
           });

@@ -28,8 +28,10 @@ export const STATUS_LOCAL_POR_ABA: Record<string, string[]> = {
   completed: ['shipped', 'delivered'],
 };
 
-/** As origens que a fila mostra junto com o WooCommerce. */
-export const ORIGENS_NATIVAS = ['live', 'ecommerce'];
+/** As origens que a fila mostra junto com o WooCommerce.
+ *  'pdv_online' (14/08): venda online do PDV que virou pedido — faixa 960M,
+ *  mesma vida do pedido do site (roteamento → card → envio), sem WooCommerce. */
+export const ORIGENS_NATIVAS = ['live', 'ecommerce', 'pdv_online'];
 
 @Controller('orders')
 @UseGuards(JwtAuthGuard)
@@ -212,7 +214,7 @@ export class OrdersController {
     if (liveStatuses?.length) {
       const liveOrders = await (this.prisma as any).order.findMany({
         where: {
-          source: { in: ['live', 'ecommerce'] },
+          source: { in: ORIGENS_NATIVAS },
           status: { in: liveStatuses },
           ...(search
             ? {
@@ -271,7 +273,8 @@ export class OrdersController {
           // A origem sai do REGISTRO, não fixa: a mesma consulta agora traz
           // live e e-commerce, e a tela filtra/pinta por este campo.
           orderSource: o.source,
-          origem: o.source === 'ecommerce' ? 'Site (novo)' : 'Live Commerce',
+          origem:
+            o.source === 'ecommerce' ? 'Site (novo)' : o.source === 'pdv_online' ? 'Venda Online' : 'Live Commerce',
         };
       });
     }
@@ -688,7 +691,7 @@ export class OrdersController {
    * Origem sintética nova entra AQUI, num lugar só.
    */
   private origemSintetica(source?: string | null): boolean {
-    return source === 'live' || source === 'ecommerce';
+    return ORIGENS_NATIVAS.includes(String(source || ''));
   }
 
   /** Detalhe de 1 pedido direto do WC. */
@@ -720,7 +723,9 @@ export class OrdersController {
      * O comentário acima já avisava ("buscar lá dava 500"); faltou estender a
      * regra quando a segunda faixa sintética nasceu.
      */
-    if (liveLocal && liveLocal.source === 'ecommerce') {
+    if (liveLocal && (liveLocal.source === 'ecommerce' || liveLocal.source === 'pdv_online')) {
+      // 'pdv_online' grava checkoutInfo no MESMO shape do e-commerce — o
+      // detalhe local serve pros dois (buscar no WC daria o mesmo 500 da live).
       return this.detalheEcommerce(liveLocal);
     }
 

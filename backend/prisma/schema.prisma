@@ -441,6 +441,11 @@ model Order {
   // Quando o dinheiro entrou de verdade (webhook/aprovação do cartão).
   // Distinto de createdAt: o PIX pode ser pago horas depois.
   paidAt          DateTime? @map("paid_at")
+  // ── PEDIDO ONLINE (source='pdv_online', 14/08) ──
+  // Loja VENDEDORA da venda online do PDV (Karine = loja site). É a "dona da
+  // venda" no acerto: a loja que o roteamento escolher pra enviar (fornecedora)
+  // cobra DESTA loja, não da loja-canal 13. NULL em todo pedido não-online.
+  sellerStoreCode String?  @map("seller_store_code")
   // Resgate do PIX não pago (14/08): quando o toque de 30min foi entregue ao
   // n8n. Preenchido = nunca mais toca esse pedido (um lembrete só — segundo
   // toque vira cobrança). Null com o PIX vencido = janela passou em silêncio.
@@ -2366,20 +2371,22 @@ model MasterAudit {
 // e grava na tabela `produtos` do Wincred (gigasistemas21).
 // Single row (id=1). Atualizada em transação a cada batch.
 // ════════════════════════════════════════════════════════════════
-/**
- * NÚMERO DO PEDIDO DO SITE — um contador que NÃO anda pra trás.
- *
- * Até 14/08/2026 o `LP-xxxxxx` saía de `MAX(wcOrderId)` entre os pedidos
- * existentes. Cartão recusado dá rollback e o pedido não persiste — então o
- * número voltava pra fila e a cliente seguinte recebia o MESMO. No painel da
- * Pagar.me, `LP-000012` apareceu em três pessoas diferentes (Ivonete, Ana
- * Paula e, depois, um PIX em aberto): num atendimento ou numa contestação,
- * procurar por esse código devolve a pessoa errada.
- *
- * Mesma receita da `EanSequence`: o contador vive fora da transação do
- * pedido, então tentativa recusada QUEIMA o número — e queimar número é
- * barato, confundir cliente não é.
- */
+// NÚMERO DO PEDIDO DO SITE — um contador que NÃO anda pra trás.
+//
+// (⚠️ comentário era um bloco /** */ — sintaxe que o Prisma NÃO aceita; o
+// schema inteiro falhava validação (P1012) e o `prisma db push` do deploy
+// quebrava. Prisma só conhece `//` e `///`.)
+//
+// Até 14/08/2026 o `LP-xxxxxx` saía de `MAX(wcOrderId)` entre os pedidos
+// existentes. Cartão recusado dá rollback e o pedido não persiste — então o
+// número voltava pra fila e a cliente seguinte recebia o MESMO. No painel da
+// Pagar.me, `LP-000012` apareceu em três pessoas diferentes (Ivonete, Ana
+// Paula e, depois, um PIX em aberto): num atendimento ou numa contestação,
+// procurar por esse código devolve a pessoa errada.
+//
+// Mesma receita da `EanSequence`: o contador vive fora da transação do
+// pedido, então tentativa recusada QUEIMA o número — e queimar número é
+// barato, confundir cliente não é.
 model LojaPedidoSequence {
   id        Int      @id @default(autoincrement())
   lastSeq   Int      @default(0) @map("last_seq")

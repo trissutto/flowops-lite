@@ -1249,6 +1249,10 @@ export class CustomersCrmService {
             { customerCpf: { in: [cpf, cpfMascarado] } },
           ],
           status: { notIn: ['cancelled', 'failed'] },
+          // Pedido ONLINE do PDV fica FORA: a venda dele já aparece na ficha
+          // como PdvSale (caixa da loja vendedora) — listar o Order junto
+          // mostraria a MESMA compra duas vezes.
+          source: { not: 'pdv_online' },
         },
         orderBy: { createdAt: 'desc' },
         take: 100,

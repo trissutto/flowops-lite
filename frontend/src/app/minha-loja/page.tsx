@@ -93,6 +93,8 @@ interface PickOrderRow {
     id: string;
     wcOrderId: number | null;
     wcOrderNumber: string | null;
+    /** 'site' | 'live' | 'ecommerce' | 'pdv_online' — pdv_online = card verde ONLINE */
+    source?: string | null;
     customerName: string | null;
     customerPhone: string | null;
     customerCpf?: string | null;
@@ -1970,6 +1972,10 @@ function PickOrderCard({
   const [corrBusy, setCorrBusy] = useState(false);
 
   const isTransfer = !!row.isTransfer;
+  // CARD VERDE ONLINE (14/08): pedido criado pela Venda Online do PDV de outra
+  // loja (ou desta). Processo idêntico ao pedido do site — a cor/tag só dizem
+  // de onde veio.
+  const isOnline = order.source === 'pdv_online';
   const snap = row.customerSnapshot ?? null;
   // Na transferência os dados-chave vêm do snapshot (cliente final), não do order.customerName
   const customerName = isTransfer ? snap?.name ?? order.customerName : order.customerName;
@@ -1980,7 +1986,11 @@ function PickOrderCard({
   return (
     <article
       className={`bg-white rounded-xl border shadow-md overflow-hidden flex ${
-        isTransfer ? 'border-orange-400 ring-2 ring-orange-200' : 'border-slate-200'
+        isTransfer
+          ? 'border-orange-400 ring-2 ring-orange-200'
+          : isOnline
+          ? 'border-green-500 ring-2 ring-green-200'
+          : 'border-slate-200'
       }`}
       onClick={onSeen}
     >
@@ -2018,6 +2028,11 @@ function PickOrderCard({
             {isTransfer && (
               <span className="text-xs px-2 py-1 rounded bg-orange-100 text-orange-800 border border-orange-300 font-bold uppercase">
                 Transferência
+              </span>
+            )}
+            {isOnline && (
+              <span className="text-xs px-2 py-1 rounded bg-green-600 text-white border border-green-700 font-bold uppercase">
+                Online
               </span>
             )}
           </div>
