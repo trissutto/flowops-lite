@@ -54,17 +54,6 @@ export const metadata = buildMetadata({
 });
 
 export default async function HomePage() {
-  // O hero vem do cadastro de banners da retaguarda; se não houver campanha
-  // no ar (ou o backend estiver fora), volta pro estático sem quebrar a home.
-  const hero = await getHeroDaHome();
-  // As categorias do CRM com a foto da peça mais nova de cada uma. As
-  // DESTACADAS ficam de fora: elas têm aba própria no topo (estrela da
-  // retaguarda), e card + aba juntos duplicam a mesma entrada.
-  const categoriasHome = (await getCategorias()).filter((c) => !c.destaque);
-  // Posts REAIS da @lurdsplussize. Cai na grade estática se a integração não
-  // estiver configurada — ver `services/instagram`.
-  const posts = await getInstagram(6);
-
   /**
    * AS CINCO VITRINES DA HOME (dono, 10/08): Lançamentos, Blusas, Vestidos,
    * Calças e Macacões.
@@ -77,10 +66,24 @@ export default async function HomePage() {
    * `macacoes` são sem acento e no plural — errar o slug não dá erro, volta
    * lista vazia e a vitrine some sem ninguém perceber.
    *
-   * Em paralelo de propósito: são chamadas independentes, e esperar uma pela
-   * outra multiplicaria por cinco o tempo até a home renderizar.
+   * Tudo começa JUNTO. Antes, a home esperava hero → categorias → Instagram
+   * e só então iniciava as seis vitrines. Essa cascata atrasava o HTML que
+   * revela a imagem LCP, mesmo com preload correto no Hero.
    */
-  const [chegouAgora, emDestaque, blusas, vestidos, calcas, macacoes] = await Promise.all([
+  const [
+    hero,
+    categorias,
+    posts,
+    chegouAgora,
+    emDestaque,
+    blusas,
+    vestidos,
+    calcas,
+    macacoes,
+  ] = await Promise.all([
+    getHeroDaHome(),
+    getCategorias(),
+    getInstagram(6),
     fetchVitrine({ ordenar: 'novidades', limite: 12 }),
     fetchVitrine({ ordenar: 'relevancia', limite: 12 }),
     fetchVitrine({ categoria: 'blusas', ordenar: 'novidades', limite: 12 }),
@@ -88,6 +91,9 @@ export default async function HomePage() {
     fetchVitrine({ categoria: 'calcas', ordenar: 'novidades', limite: 12 }),
     fetchVitrine({ categoria: 'macacoes', ordenar: 'novidades', limite: 12 }),
   ]);
+
+  // As DESTACADAS têm aba própria no topo; card + aba duplicariam a entrada.
+  const categoriasHome = categorias.filter((c) => !c.destaque);
 
   /** Categoria sem peça publicada não vira vitrine vazia — simplesmente não sai. */
   const vitrinesPorCategoria = [

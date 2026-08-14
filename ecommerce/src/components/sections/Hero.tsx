@@ -188,7 +188,12 @@ export function Hero({
           // um pai posicionado. Sem isto o next/image reclama no console e a
           // foto passa a se ancorar no avô — funcionava por coincidência de
           // tamanho, não por desenho.
-          className="relative size-full animate-[hero-media-enter_2.2s_cubic-bezier(0.22,1,0.36,1)_both]"
+          className={cn(
+            'relative size-full',
+            // O hero prioritário é o LCP: pinta no primeiro frame. A entrada
+            // com zoom fica só para heros secundários, onde é decoração.
+            !priority && 'animate-[hero-media-enter_2.2s_cubic-bezier(0.22,1,0.36,1)_both]',
+          )}
         >
           {video ? (
             <>
