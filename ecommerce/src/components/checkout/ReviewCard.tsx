@@ -38,6 +38,7 @@ interface ReviewCardProps {
   /** Mensagem elegante quando o POST falhou — nunca status/stack técnico. */
   error: string | null;
   onSubmit: () => void;
+  onEditIdentity: () => void;
 }
 
 const METODO_LABEL: Record<PaymentSelection['method'], string> = {
@@ -58,6 +59,7 @@ export function ReviewCard({
   submitting,
   error,
   onSubmit,
+  onEditIdentity,
 }: ReviewCardProps) {
   const retirada = shipping.quote.kind === 'retirada';
   const store = retirada ? stores.find((s) => s.slug === shipping.quote.storeSlug) : undefined;
@@ -83,8 +85,14 @@ export function ReviewCard({
 
       <div className="grid gap-5 sm:grid-cols-2">
         <div>
-          <h3 className="eyebrow mb-2 text-ink-soft">Quem recebe</h3>
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <h3 className="eyebrow text-ink-soft">Quem recebe</h3>
+            <button type="button" onClick={onEditIdentity} className="text-caption text-secondary underline underline-offset-2">
+              alterar dados
+            </button>
+          </div>
           <p className="text-small text-ink">{customer.name}</p>
+          <p className="text-small text-ink-muted">{customer.email}</p>
           <p className="text-small text-ink-muted">CPF {maskCpf(customer.cpf)}</p>
         </div>
         <div>

@@ -37,6 +37,9 @@ export interface CustomerIdentity {
   phone: string;
 }
 
+/** Dados mínimos capturados antes do frete para permitir retomar a compra. */
+export type CheckoutContact = Pick<CustomerIdentity, 'name' | 'phone'>;
+
 /* -------------------------------------------------------------------- FRETE */
 
 export type ShippingKind = 'correios' | 'transportadora' | 'expressa' | 'retirada';

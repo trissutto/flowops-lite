@@ -10,6 +10,7 @@ import { EmptyState } from '@/components/feedback/EmptyState';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { SectionShell, type SectionState } from '@/components/checkout/SectionShell';
 import { IdentificationStep } from '@/components/checkout/IdentificationStep';
+import { FinalIdentityStep } from '@/components/checkout/FinalIdentityStep';
 import { ShippingStep, type ShippingSelection } from '@/components/checkout/ShippingStep';
 import { PaymentStep, type PaymentSelection } from '@/components/checkout/PaymentStep';
 import { ReviewCard } from '@/components/checkout/ReviewCard';
@@ -37,6 +38,7 @@ import {
 } from '@/lib/tracking/identity';
 import type {
   CouponResult,
+  CheckoutContact,
   CreateOrderInput,
   CreateOrderResult,
   CustomerIdentity,
@@ -82,6 +84,7 @@ export default function CheckoutPage() {
 
   /* Estado das 4 seções — a página é a dona da sequência. */
   const [step, setStep] = useState<Step>(1);
+  const [contact, setContact] = useState<CheckoutContact | null>(null);
   const [customer, setCustomer] = useState<CustomerIdentity | null>(null);
   const [shipping, setShipping] = useState<ShippingSelection | null>(null);
   const [payment, setPayment] = useState<PaymentSelection | null>(null);
@@ -96,18 +99,37 @@ export default function CheckoutPage() {
   useEffect(() => {
     const draft = readCheckoutDraft(window.sessionStorage);
     if (draft) {
+      setContact(draft.contact);
       setCustomer(draft.customer);
       setShipping(draft.shipping);
       setPayment(draft.payment);
-      setStep(draft.customer ? (draft.shipping ? (draft.payment ? 4 : 3) : 2) : 1);
+      setStep(draft.contact ? (draft.shipping ? (draft.payment ? 4 : 3) : 2) : 1);
     }
     setDraftReady(true);
   }, []);
 
   useEffect(() => {
     if (!draftReady) return;
-    writeCheckoutDraft(window.sessionStorage, { customer, shipping, payment });
-  }, [draftReady, customer, shipping, payment]);
+    writeCheckoutDraft(window.sessionStorage, { contact, customer, shipping, payment });
+  }, [draftReady, contact, customer, shipping, payment]);
+
+  /** Captura mínima para recuperação. Nunca bloqueia nem atrasa o checkout. */
+  function saveRecovery(nextContact: CheckoutContact, status: 'active' | 'converted' = 'active') {
+    void fetch('/api/checkout/recovery', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      keepalive: true,
+      body: JSON.stringify({
+        sessionId: getSessionId(), anonymousId: getAnonymousId(), status,
+        name: nextContact.name, phone: nextContact.phone,
+        subtotal, path: '/checkout', attribution: captureAttribution(),
+        items: lines.map((line) => ({
+          productId: line.productId, name: line.name, size: line.size,
+          color: line.color, quantity: line.quantity, unitPrice: line.unitPrice,
+        })),
+      }),
+    }).catch(() => undefined);
+  }
 
   /* Carrinho → formato de tracking (uma vez, reusado pelos 4 eventos). */
   const itemsTracked: TrackedItem[] = useMemo(
@@ -210,6 +232,7 @@ export default function CheckoutPage() {
       // (Se o PIX expirar, o produto volta pro estoque no server; manter a
       // sacola viva aqui criaria pedido duplicado no F5.)
       clearCheckoutDraft(window.sessionStorage);
+      saveRecovery({ name: customer.name, phone: customer.phone }, 'converted');
       clearCart();
 
       // ⚠️ NENHUM purchase disparado aqui: o pedido ainda nem foi pago.
@@ -288,19 +311,22 @@ export default function CheckoutPage() {
           <SectionShell
             step={1}
             title="Identificação"
-            state={stateOf(1, customer !== null)}
+            state={stateOf(1, contact !== null)}
             summary={
-              customer
-                ? `${customer.name} · ${customer.email} · ${maskPhone(customer.phone)}`
+              contact
+                ? `${contact.name} · ${maskPhone(contact.phone)}`
                 : undefined
             }
             onEdit={() => setStep(1)}
           >
             <IdentificationStep
-              defaults={customer}
+              defaults={contact}
               onDone={(c) => {
                 setSubmitError(null);
-                setCustomer(c);
+                setContact(c);
+                // Se o contato mudou, a identidade final precisa ser confirmada outra vez.
+                if (customer?.phone !== c.phone || customer?.name !== c.name) setCustomer(null);
+                saveRecovery(c);
                 // Editou só a identificação com o resto pronto? Volta direto
                 // pra revisão — ninguém refaz etapa já concluída.
                 setStep(!shipping ? 2 : !payment ? 3 : 4);
@@ -362,6 +388,13 @@ export default function CheckoutPage() {
           </SectionShell>
 
           <SectionShell step={4} title="Revisão" state={step === 4 ? 'active' : 'locked'}>
+            {contact && shipping && payment && !customer && (
+              <FinalIdentityStep contact={contact} onDone={(identity) => {
+                setCustomer(identity);
+                setContact({ name: identity.name, phone: identity.phone });
+                saveRecovery({ name: identity.name, phone: identity.phone });
+              }} />
+            )}
             {customer && shipping && payment && (
               <ReviewCard
                 customer={customer}
@@ -375,6 +408,7 @@ export default function CheckoutPage() {
                 total={total}
                 submitting={submitting}
                 error={submitError}
+                onEditIdentity={() => setCustomer(null)}
                 onSubmit={() => void finalizar()}
               />
             )}

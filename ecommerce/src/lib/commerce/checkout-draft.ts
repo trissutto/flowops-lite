@@ -1,14 +1,20 @@
-import type { CustomerIdentity } from '@/types/checkout';
+import type { CheckoutContact, CustomerIdentity } from '@/types/checkout';
 import type { ShippingSelection } from '@/components/checkout/ShippingStep';
 import type { PaymentSelection } from '@/components/checkout/PaymentStep';
 
 const KEY = 'lurds-checkout-draft-v1';
 
 export interface CheckoutDraft {
+  contact: CheckoutContact | null;
   customer: CustomerIdentity | null;
   shipping: ShippingSelection | null;
   /** Só PIX pode voltar concluído; token e dados de cartão nunca são persistidos. */
   payment: Pick<PaymentSelection, 'method' | 'installments'> | null;
+}
+
+function contactFrom(value: unknown): CheckoutContact | null {
+  if (!isObject(value) || typeof value.name !== 'string' || typeof value.phone !== 'string') return null;
+  return { name: value.name, phone: value.phone };
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -35,10 +41,12 @@ export function readCheckoutDraft(storage: Pick<Storage, 'getItem'>): CheckoutDr
     const parsed: unknown = JSON.parse(raw);
     if (!isObject(parsed)) return null;
     const customer = customerFrom(parsed.customer);
-    const shipping = customer ? shippingFrom(parsed.shipping) : null;
+    // Migra silenciosamente rascunhos v1, que guardavam a identidade completa.
+    const contact = contactFrom(parsed.contact) ?? (customer ? { name: customer.name, phone: customer.phone } : null);
+    const shipping = contact ? shippingFrom(parsed.shipping) : null;
     const rawPayment = isObject(parsed.payment) ? parsed.payment : null;
     const payment = rawPayment?.method === 'pix' ? { method: 'pix' as const } : null;
-    return { customer, shipping, payment };
+    return { contact, customer, shipping, payment };
   } catch {
     return null;
   }
@@ -50,7 +58,7 @@ export function writeCheckoutDraft(
 ): void {
   try {
     const payment = draft.payment?.method === 'pix' ? { method: 'pix' as const } : null;
-    storage.setItem(KEY, JSON.stringify({ customer: draft.customer, shipping: draft.shipping, payment }));
+    storage.setItem(KEY, JSON.stringify({ contact: draft.contact, customer: draft.customer, shipping: draft.shipping, payment }));
   } catch {
     // Rascunho é conveniência: storage bloqueado nunca pode quebrar o checkout.
   }
