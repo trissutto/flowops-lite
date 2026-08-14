@@ -94,53 +94,60 @@ export function ConsentBanner() {
           </fieldset>
         )}
 
-        {/* Dois botões, MESMO tamanho, lado a lado — exigência de consentimento
-            livre (ANPD). O que mudou é que agora os dois são visíveis e a
-            decisão é um toque só. */}
-        <div className="mt-4 grid grid-cols-2 gap-2.5">
-          {detalhes ? (
-            <button
-              type="button"
-              onClick={() => {
-                setConsent({ analytics, marketing, personalization });
-                fechar();
-              }}
-              className="min-h-12 rounded-sm border border-ink px-4 py-2 text-small font-medium text-ink transition-colors hover:bg-ink hover:text-light"
-            >
-              Salvar escolhas
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={() => {
-                rejectAll();
-                fechar();
-              }}
-              className="min-h-12 rounded-sm border border-ink px-4 py-2 text-small font-medium text-ink transition-colors hover:bg-ink hover:text-light"
-            >
-              Só o necessário
-            </button>
-          )}
-
+        {/* HIERARQUIA (dono, 14/08): o Aceitar é O botão — largura cheia,
+            alto, dourado da marca. O limite que não se cruza (ANPD): recusar
+            continua sendo um BOTÃO visível de UM clique logo abaixo, não um
+            link escondido — destaque visual é permitido, fricção não. */}
+        <div className="mt-4 flex flex-col gap-2.5">
           <button
             type="button"
             onClick={() => {
               acceptAll();
               fechar();
             }}
-            className="min-h-12 rounded-sm bg-ink px-4 py-2 text-small font-medium text-light transition-colors hover:bg-primary-strong"
+            className="min-h-14 w-full rounded-sm bg-primary-strong px-4 py-3 text-[1.05rem] font-semibold tracking-wide text-light shadow-[0_4px_16px_rgba(184,145,43,0.35)] transition-all duration-[180ms] hover:bg-ink hover:shadow-none"
           >
-            Aceitar
+            {/* Responde a pergunta do título — "Podemos deixar o site com a sua
+                cara?" → "Pode sim!". Conversa, não contrato. O rótulo só é
+                honesto PORQUE a pergunta está logo acima: se o título mudar,
+                este botão muda junto. */}
+            Pode sim!
           </button>
-        </div>
 
-        <button
-          type="button"
-          onClick={() => setDetalhes((v) => !v)}
-          className="link-underline mt-3 text-xs text-ink/70 hover:text-ink"
-        >
-          {detalhes ? 'Ocultar opções' : 'Escolher o que permitir'}
-        </button>
+          <div className="flex items-center justify-between gap-3">
+            {detalhes ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setConsent({ analytics, marketing, personalization });
+                  fechar();
+                }}
+                className="min-h-10 rounded-sm border border-black/15 px-4 py-1.5 text-small text-ink/80 transition-colors hover:border-ink hover:text-ink"
+              >
+                Salvar escolhas
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  rejectAll();
+                  fechar();
+                }}
+                className="min-h-10 rounded-sm border border-black/15 px-4 py-1.5 text-small text-ink/80 transition-colors hover:border-ink hover:text-ink"
+              >
+                Só o necessário
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={() => setDetalhes((v) => !v)}
+              className="link-underline text-xs text-ink/60 hover:text-ink"
+            >
+              {detalhes ? 'Ocultar opções' : 'Escolher o que permitir'}
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );
