@@ -18,7 +18,7 @@ import { getHeroDaHome } from '@/services/banners';
 import { getCategorias } from '@/services/categorias-menu';
 import { fetchVitrine } from '@/services/vitrine';
 import { buildMetadata, itemListSchema, jsonLdGraph, storeSchema } from '@/lib/seo';
-import { WHATSAPP_ATENDIMENTO } from '@/data/contato';
+import { LINK_WHATSAPP_SITE } from '@/data/contato';
 
 /**
  * HOME — a jornada da cliente.
@@ -57,8 +57,10 @@ export default async function HomePage() {
   // O hero vem do cadastro de banners da retaguarda; se não houver campanha
   // no ar (ou o backend estiver fora), volta pro estático sem quebrar a home.
   const hero = await getHeroDaHome();
-  // As categorias do CRM com a foto da peça mais nova de cada uma.
-  const categoriasHome = await getCategorias();
+  // As categorias do CRM com a foto da peça mais nova de cada uma. As
+  // DESTACADAS ficam de fora: elas têm aba própria no topo (estrela da
+  // retaguarda), e card + aba juntos duplicam a mesma entrada.
+  const categoriasHome = (await getCategorias()).filter((c) => !c.destaque);
   // Posts REAIS da @lurdsplussize. Cai na grade estática se a integração não
   // estiver configurada — ver `services/instagram`.
   const posts = await getInstagram(6);
@@ -373,7 +375,7 @@ export default async function HomePage() {
             <MapPin /> Ver todas as lojas
           </Button>
           <Button
-            href={`https://api.whatsapp.com/send?phone=${WHATSAPP_ATENDIMENTO}`}
+            href={LINK_WHATSAPP_SITE}
             external
             variant="whatsapp"
             size="lg"
@@ -391,7 +393,7 @@ export default async function HomePage() {
         primaryAction={{ label: 'Encontrar minha loja', href: '/lojas' }}
         secondaryAction={{
           label: 'Falar no WhatsApp',
-          href: `https://api.whatsapp.com/send?phone=${WHATSAPP_ATENDIMENTO}`,
+          href: LINK_WHATSAPP_SITE,
           external: true,
         }}
         height="md"

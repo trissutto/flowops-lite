@@ -13,7 +13,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { dispatchBatch } from '@/lib/tracking/server/dispatch';
-import { persistirCliquesDeLoja } from '@/lib/tracking/server/flowops-store';
+import { persistirCliquesDeLoja, persistirEventosSite } from '@/lib/tracking/server/flowops-store';
 import { getLogStore } from '@/lib/tracking/server/log-store';
 import { consentStateSchema, trackingEventSchema } from '@/lib/tracking/schemas';
 import { SERVER_ONLY_EVENTS } from '@/lib/tracking/types';
@@ -80,11 +80,18 @@ export async function POST(req: Request) {
 
   const { events, consent, meta } = parsed.data;
 
-  // Gate de consentimento, de novo. O cliente já filtrou, mas quem garante é
-  // quem tem o token da plataforma na mão.
-  if (!consent.analytics && !consent.marketing) {
-    return NextResponse.json({ ok: true, dispatched: 0, reason: 'sem consentimento' }, { status: 202 });
-  }
+  /**
+   * O CONSENTIMENTO DECIDE O DESTINO, não a entrada (dono, 13/08: "preciso de
+   * todos os cliques registrados — para todo o site").
+   *
+   *   · COM aceite → plataformas (Meta/GA4) + cópia de primeira parte.
+   *   · SEM aceite → SÓ a cópia de primeira parte (nosso Postgres), com o
+   *     evento já anonimizado na origem (sem user_id; fbp/fbc nem chegam).
+   *
+   * Repassar a terceiro sem opt-in continua proibido — quem garante é quem
+   * tem o token da plataforma na mão, e ele fica atrás do `consentido`.
+   */
+  const consentido = consent.analytics || consent.marketing;
 
   // `purchase` e `refund` NUNCA são aceitos por esta rota, venham como vierem.
   // Quem os emite é `trackServerEvent`, chamado depois do pagamento confirmar.
@@ -130,8 +137,9 @@ export async function POST(req: Request) {
      * solta (ver docs/limitacoes.md). Não dá pra soltar sem await aqui.
      */
     const [despacho] = await Promise.allSettled([
-      dispatchBatch(aceitos, signals),
+      consentido ? dispatchBatch(aceitos, signals) : Promise.resolve({ dispatched: 0 }),
       persistirCliquesDeLoja(aceitos),
+      persistirEventosSite(aceitos, !consentido),
     ]);
     const dispatched = despacho.status === 'fulfilled' ? despacho.value.dispatched : 0;
     if (despacho.status === 'rejected') throw despacho.reason;

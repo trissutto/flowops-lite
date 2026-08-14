@@ -13,7 +13,7 @@ import {
 } from '@nestjs/common';
 import * as crypto from 'crypto';
 import { JwtAuthGuard } from '../auth/jwt.guard';
-import { CliqueEntrada, SiteMetricsService } from './site-metrics.service';
+import { CliqueEntrada, EventoEntrada, SiteMetricsService } from './site-metrics.service';
 
 /**
  * A PORTA DO SITE — server-to-server, do BFF do e-commerce pra cá.
@@ -42,6 +42,39 @@ export class SiteMetricsPublicController {
     await this.service.registrar(cliques);
   }
 
+  /**
+   * TODO evento do site — a cópia de primeira parte (dono, 13/08). Chega
+   * inclusive de visitante SEM aceite do banner, já anonimizado na origem;
+   * o consentimento aqui governa só o repasse a terceiros, que é do BFF.
+   */
+  @Post('eventos')
+  @HttpCode(204)
+  async registrarEventos(
+    @Headers('x-loja-token') token: string,
+    @Body() body: { eventos?: EventoEntrada[] },
+  ): Promise<void> {
+    this.exigirToken(token);
+    const eventos = Array.isArray(body?.eventos) ? body.eventos.slice(0, 50) : [];
+    if (!eventos.length) return;
+    await this.service.registrarEventos(eventos);
+  }
+
+  /**
+   * O LEAD DO WHATSAPP — quem mandou a mensagem carimbada ("vim pelo site").
+   * Quem chama é o n8n (Evolution → webhook), com o MESMO x-loja-token.
+   */
+  @Post('whatsapp-lead')
+  async registrarLeadWhatsapp(
+    @Headers('x-loja-token') token: string,
+    @Body() body: {
+      telefone?: string; nome?: string; loja?: string;
+      mensagem?: string; instancia?: string;
+    },
+  ) {
+    this.exigirToken(token);
+    return this.service.registrarLeadWhatsapp(body ?? {});
+  }
+
   private segredoConfere(recebido: string, esperado: string): boolean {
     const a = crypto.createHash('sha256').update(recebido).digest();
     const b = crypto.createHash('sha256').update(esperado).digest();
@@ -66,6 +99,16 @@ export class SiteMetricsPublicController {
 export class SiteMetricsController {
   constructor(private readonly service: SiteMetricsService) {}
 
+  /**
+   * QUEM ESTÁ NO SITE AGORA — o card ao vivo da tela de cliques.
+   * Sem parâmetro de propósito: "agora" não tem De/Até.
+   */
+  @Get('agora')
+  async agora(@Req() req: any) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+    return this.service.agora();
+  }
+
   @Get('lojas')
   async lojas(@Req() req: any, @Query('de') de?: string, @Query('ate') ate?: string) {
     if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
@@ -79,6 +122,33 @@ export class SiteMetricsController {
       ate: fim.toISOString(),
       totalCliques,
       linhas,
+    };
+  }
+
+  /** Leads do WhatsApp (mensagem carimbada) — tela /retaguarda/leads-whatsapp. */
+  @Get('whatsapp-leads')
+  async whatsappLeads(@Req() req: any, @Query('de') de?: string, @Query('ate') ate?: string) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+
+    const fim = this.fimDoDia(ate) ?? this.fimDoDia(this.hoje())!;
+    const inicio = this.inicioDoDia(de) ?? new Date(fim.getTime() - 29 * 24 * 60 * 60 * 1000);
+
+    const dados = await this.service.leadsWhatsapp(inicio, fim);
+    return { de: inicio.toISOString(), ate: fim.toISOString(), ...dados };
+  }
+
+  /** O funil do site (visita → sacola → checkout → compra) — mesma janela De/Até. */
+  @Get('funil')
+  async funil(@Req() req: any, @Query('de') de?: string, @Query('ate') ate?: string) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+
+    const fim = this.fimDoDia(ate) ?? this.fimDoDia(this.hoje())!;
+    const inicio = this.inicioDoDia(de) ?? new Date(fim.getTime() - 29 * 24 * 60 * 60 * 1000);
+
+    return {
+      de: inicio.toISOString(),
+      ate: fim.toISOString(),
+      etapas: await this.service.funil(inicio, fim),
     };
   }
 

@@ -7,6 +7,8 @@ import { api } from '@/lib/api';
 import EnderecoEntregaModal, { enderecoDoPedido } from '@/components/EnderecoEntregaModal';
 import { getSocket } from '@/lib/socket';
 import { classifyShipping } from '@/lib/shipping-method';
+import { ruaComNumero } from '@/lib/format-address';
+import { refCorTam, nomeSemVariacao } from '@/lib/peca-linha';
 import TrackingTimeline from '@/components/TrackingTimeline';
 import SellerTag from '@/components/SellerTag';
 import { ArrowLeft, Save, ExternalLink, Truck, Package, Loader2, Check, Send, Store as StoreIcon, AlertTriangle, AlertCircle, Zap, Search, X } from 'lucide-react';
@@ -113,7 +115,11 @@ interface WcOrderDetail {
   customerNote: string;
   billing: any;
   shipping: any;
-  lineItems: Array<{ id: number; name: string; sku: string; quantity: number; total: string; price: number; image: string | null }>;
+  lineItems: Array<{
+    id: number; name: string; sku: string; quantity: number; total: string; price: number; image: string | null;
+    /** REF · COR · TAM — vêm preenchidos no pedido do site novo (13/08). */
+    ref?: string | null; cor?: string | null; tamanho?: string | null;
+  }>;
   shippingLines: Array<{ method: string; total: string }>;
   tracking: { number: string; carrier: string; url: string };
   attribution: { origem: string; source: string };
@@ -127,6 +133,15 @@ interface WcOrderDetail {
   };
   sellerId?: string | null;
   sellerName?: string | null;
+}
+
+/**
+ * "5358 · PRETO DOURADO 60" — o MESMO formato que a loja já lê no card da
+ * LIVE e na fila da /minha-loja. Pedido sem REF gravada (antes de 13/08, live,
+ * WooCommerce) continua mostrando o nome, como sempre mostrou.
+ */
+function tituloPeca(li: { name: string; sku: string; ref?: string | null; cor?: string | null; tamanho?: string | null }): string {
+  return refCorTam(li) || li.name || li.sku;
 }
 
 export default function PedidoDetailPage() {
@@ -232,7 +247,10 @@ export default function PedidoDetailPage() {
     // contra os itens que realmente vão mudar de loja.
     skus?: string[];
     // Peças que esta loja separa (descrição + qtd) — mostradas no card.
-    items?: Array<{ sku: string; descricao: string | null; qty: number }>;
+    items?: Array<{
+      sku: string; descricao: string | null; qty: number;
+      ref?: string | null; cor?: string | null; tamanho?: string | null;
+    }>;
     updatedAt: string;
     issueReason?: string | null;
     issueReasonLabel?: string | null;
@@ -1193,7 +1211,9 @@ export default function PedidoDetailPage() {
             />
           )}
             <div>{order.shipping.first_name} {order.shipping.last_name}</div>
-            <div>{order.shipping.address_1} {order.shipping.number ? `, ${order.shipping.number}` : ''}</div>
+            {/* `address_1` já vem com o número; concatenar `number` de novo
+                escrevia "Rua Salomão Filho, 577 , 577". */}
+            <div>{ruaComNumero(order.shipping)}</div>
             {order.shipping.address_2 && <div>{order.shipping.address_2}</div>}
             <div>{order.shipping.city} / {order.shipping.state} · CEP {order.shipping.postcode}</div>
             {order.shippingLines[0] && (
@@ -1224,7 +1244,14 @@ export default function PedidoDetailPage() {
           <tbody>
             {order.lineItems.map((li) => (
               <tr key={li.id} className="border-t">
-                <td className="p-3">{li.name}</td>
+                <td className="p-3">
+                  <div className="font-medium text-slate-800">{tituloPeca(li)}</div>
+                  {li.ref && (
+                    <div className="text-xs text-slate-500">
+                      {nomeSemVariacao(li.name, li.cor, li.tamanho)}
+                    </div>
+                  )}
+                </td>
                 <td className="p-3 font-mono text-xs text-slate-600">{li.sku || '—'}</td>
                 <td className="p-3 text-right">{li.quantity}</td>
                 <td className="p-3 text-right">{fmtMoney(li.price)}</td>
@@ -1491,7 +1518,11 @@ export default function PedidoDetailPage() {
                           {r.items!.map((it, i) => (
                             <li key={`${it.sku}-${i}`} className="text-xs text-slate-600 flex gap-1.5">
                               <span className="font-bold tabular-nums text-slate-500 shrink-0">{it.qty}×</span>
-                              <span className="truncate">{it.descricao || it.sku}</span>
+                              <span className="truncate">
+                                {it.ref
+                                  ? [it.ref, [it.cor, it.tamanho].filter(Boolean).join(' ')].filter(Boolean).join(' · ')
+                                  : it.descricao || it.sku}
+                              </span>
                               <span className="text-slate-300 shrink-0 font-mono">· {it.sku}</span>
                             </li>
                           ))}

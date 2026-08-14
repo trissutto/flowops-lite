@@ -1,6 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { refBaseOf } from '../common/ref-base';
+import { avisarVitrine } from '../common/avisar-vitrine';
+import { limparNomeVitrine, nomeDaDescricaoErp } from './nome-vitrine';
+import { classificarPorNome } from './classificacao-por-nome';
 
 /**
  * CATÁLOGO DO E-COMMERCE (sprint 008) — ERP é a fonte da verdade.
@@ -72,6 +75,16 @@ type LinhaErp = {
 export class LojaCatalogService {
   private readonly logger = new Logger(LojaCatalogService.name);
 
+  /**
+   * PISO DE ESTOQUE POR COR (regra do dono, 13/08): variação com menos que
+   * isto no total sai do site sozinha — e volta sozinha quando repõe. `1`
+   * desliga a regra (só cor zerada some). Env pra ajustar sem deploy.
+   */
+  private static readonly ESTOQUE_MINIMO_COR = Math.max(
+    1,
+    Number(process.env.ESTOQUE_MINIMO_COR ?? 10) || 10,
+  );
+
   /** Facetas custam um scan do catálogo — 10 min de cache resolve. */
   private cacheFiltros: { at: number; data: any } | null = null;
   private readonly TTL_FILTROS = 10 * 60_000;
@@ -119,8 +132,19 @@ export class LojaCatalogService {
         case 'preco-asc': return a.preco - b.preco;
         case 'preco-desc': return b.preco - a.preco;
         case 'nome': return a.nome.localeCompare(b.nome, 'pt-BR');
-        case 'novidades':
+        case 'novidades': {
+          /**
+           * "Novidade" é quando a peça ENTROU NO AR (`publicadoEm`), não
+           * quando o ERP mexeu nela (13/08) — o critério antigo (`dataAlt`)
+           * subia peça velha pro topo a cada acerto de estoque. Empate ou
+           * peça sem carimbo cai pro `atualizadoEm`, só pra ordem ser
+           * estável.
+           */
+          const pubB = new Date(b.publicadoEm ?? 0).getTime();
+          const pubA = new Date(a.publicadoEm ?? 0).getTime();
+          if (pubB !== pubA) return pubB - pubA;
           return new Date(b.atualizadoEm ?? 0).getTime() - new Date(a.atualizadoEm ?? 0).getTime();
+        }
         default:
           // Relevância: destaque > lançamento > estoque saudável
           if (a.destaque !== b.destaque) return a.destaque ? -1 : 1;
@@ -205,136 +229,10 @@ export class LojaCatalogService {
    * linha inteira do card com o que não diferencia nada, e empurra pra fora o
    * que a cliente usa pra pedir a peça no WhatsApp — a referência.
    */
-  private static readonly RUIDO_NO_NOME = [
-    'plus size', 'plus-size', 'plussize', 'feminina', 'feminino', 'fem',
-  ];
-
-  /**
-   * O nome como a cliente lê no card — venha da ficha, do cadastro ou do ERP.
-   *
-   * Passa em TODOS os caminhos de propósito: o título sujo não vinha só da
-   * descrição do ERP. "Regata Feminina Plus Size Ref 700979 Estampa Verde" é
-   * nome importado do WooCommerce, e nenhuma limpeza anterior o tocava.
-   *
-   * Nunca devolve vazio: se a limpeza comer o nome inteiro (peça cujo título
-   * era só "Blusa Feminina Plus Size Preto"), volta o original. Peça sem nome
-   * na vitrine é pior que peça com nome redundante.
-   */
-  private limparNomeVitrine(
-    nome: string | null | undefined,
-    ref: string,
-    cores: string[],
-    marca?: string | null,
-  ): string {
-    const original = String(nome || '').trim();
-    if (!original) return '';
-
-    const escapar = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const semAcento = (v: string) => v.normalize('NFD').replace(/[̀-ͯ]/g, '');
-    let txt = original;
-
-    // "Ref 700979", "REF: 700979" e a REF solta — ela vai pro card em campo
-    // próprio, em negrito, em vez de diluída no meio da frase.
-    txt = txt.replace(new RegExp(`\\bref\\s*:?\\s*${escapar(ref)}\\b`, 'gi'), ' ');
-    txt = txt.replace(new RegExp(`\\b${escapar(ref)}\\b`, 'gi'), ' ');
-    txt = txt.replace(/\bref\s*:?\s*\d{3,}\b/gi, ' ');
-
-    for (const ruido of LojaCatalogService.RUIDO_NO_NOME) {
-      txt = txt.replace(new RegExp(`\\b${escapar(ruido)}\\b`, 'gi'), ' ');
-    }
-
-    if (marca) txt = txt.replace(new RegExp(`\\b${escapar(marca)}\\b`, 'gi'), ' ');
-
-    /**
-     * A COR — E TUDO O QUE VEM DEPOIS DELA.
-     *
-     * Nestes nomes (importados do site antigo) a cor MARCA O FIM da parte
-     * descritiva; o que sobra atrás é sufixo interno. Exemplos reais:
-     *
-     *   "T-shirt Feminina Plus Size Manga Curta Ref Vogue Preto LENE"
-     *   "T-Shirt Feminina Plus Size Manga Curta STITCH-004 Preto ANA"
-     *
-     * "LENE" e "ANA" não são marca (as duas são MARRIE) nem cor: são resto de
-     * cadastro. Apagar só a palavra da cor deixava esse rabo pendurado.
-     *
-     * Cores da MAIS LONGA pra mais curta: "ROSA QUEIMADO" tem que casar
-     * inteira antes de "ROSA" cortar no meio dela.
-     */
-    for (const cor of [...cores].sort((a, b) => b.length - a.length)) {
-      const alvo = escapar(semAcento(cor).trim());
-      if (alvo.length < 3) continue; // "PP", "GG" — arriscado demais
-      txt = txt.replace(new RegExp(`\\b${alvo}\\b.*$`, 'i'), ' ');
-    }
-
-    /**
-     * Qualificador de cor que ficou órfão. "Blusa Manga Curta Estampa
-     * Marinho" com a cor gravada só como "MARINHO" perde o "Marinho" e deixa
-     * "Estampa" pendurado no fim, qualificando o nada. Some só quando está no
-     * FIM: "Blusa Estampa Floral" não é o caso, e "Saia Midi" não é atingida.
-     */
-    const ORFAOS = /\s+(estampa|estampada?o?|mescla|claro?a?|escuro?a?|m[ée]dio?a?)$/i;
-    let limpo = txt.replace(/\s{2,}/g, ' ').trim();
-    while (ORFAOS.test(limpo)) limpo = limpo.replace(ORFAOS, '');
-
-    limpo = limpo
-      .replace(/\s{2,}/g, ' ')
-      .replace(/^[\s·,-]+/, '')
-      .replace(/[\s·,-]+$/, '')
-      .trim();
-
-    return limpo || original;
-  }
-
-  /**
-   * A descrição CRUA do ERP virando nome de vitrine — sem a cor de outra peça.
-   *
-   * 🔴 Bug visto no pedido `#LP-000002` (06/08): a peça saiu como
-   * **"T-shirt Feminina Plus Size Manga Curta Ref Vogue Preto LENE · VINHO"**.
-   * "Preto" não é parte do nome do produto — é a cor da variação que por acaso
-   * ficou em primeiro na consulta. Como a descrição do ERP é POR VARIAÇÃO, ela
-   * sempre carrega uma cor; usá-la como nome da peça inteira gruda a cor de
-   * uma no título de todas, e aí a cliente lê "Preto · VINHO" no próprio
-   * carrinho.
-   *
-   * Tira o que é identificação interna (REF, "Ref XXX", marca) e QUALQUER cor
-   * conhecida daquela REF. Conservador: só remove o que sabe ser cor — não sai
-   * adivinhando palavra por palavra, senão come pedaço do nome de verdade
-   * ("Vinho" pode ser cor, mas "Vogue" é modelo).
-   *
-   * Isto é REMENDO do dado ruim. O certo é a ficha ter `nomeCurto` — e é por
-   * isso que ela ganha desta função na ordem de preferência.
-   */
-  private nomeDaDescricaoErp(
-    descricao: string | null | undefined,
-    ref: string,
-    cores: string[],
-    marca?: string | null,
-  ): string {
-    let txt = String(descricao || '').trim();
-    if (!txt) return '';
-
-    const escapar = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const semAcento = (v: string) =>
-      v.normalize('NFD').replace(/[̀-ͯ]/g, '');
-
-    // Remove "Ref VOGUE", "REF: VOGUE" e a REF solta.
-    txt = txt.replace(new RegExp(`\\bref\\s*:?\\s*${escapar(ref)}\\b`, 'gi'), ' ');
-    txt = txt.replace(new RegExp(`\\b${escapar(ref)}\\b`, 'gi'), ' ');
-
-    if (marca) txt = txt.replace(new RegExp(`\\b${escapar(marca)}\\b`, 'gi'), ' ');
-
-    /**
-     * Cores da MAIS LONGA pra mais curta: "ROSA QUEIMADO" tem que sair inteira
-     * antes de "ROSA" comer só um pedaço e deixar "QUEIMADO" solto no nome.
-     */
-    for (const cor of [...cores].sort((a, b) => b.length - a.length)) {
-      const alvo = escapar(semAcento(cor).trim());
-      if (alvo.length < 3) continue; // "PP", "GG" — arriscado demais
-      txt = txt.replace(new RegExp(`\\b${alvo}\\b`, 'gi'), ' ');
-    }
-
-    return txt.replace(/\s{2,}/g, ' ').replace(/[\s·,-]+$/, '').trim();
-  }
+  // A limpeza de nome (cor/REF/tamanho/caixa alta) e a classificação pelo
+  // nome moram em módulos próprios — ./nome-vitrine.ts e
+  // ./classificacao-por-nome.ts — porque o publicar() também usa e porque
+  // regra de string sem teste é regressão esperando deploy.
 
   private corAmigavel(cor: string): string {
     const bruto = String(cor || '').trim();
@@ -396,25 +294,111 @@ export class LojaCatalogService {
     );
   }
 
+  /* ── TIPO DE PEÇA: o que a cliente vê no cabide ──────────────────────────
+   *
+   * 🔴 O ERRO QUE ISTO CONSERTA (Limeira, 13/08/2026): a página "Regata
+   * Estampa Mostarda" (REF 132908) tinha DUAS bolinhas — a regata estampada e
+   * uma CAMISA LISTRADA AZUL, com outra grade (54, 56, 58, 46/48, 50/52).
+   * Dois produtos diferentes vendidos como duas cores da mesma peça. A cliente
+   * escolhia a "cor" e recebia outra roupa.
+   *
+   * A defesa contra REF reciclada existia e não pegou: ela separava pela
+   * PRIMEIRA PALAVRA da descrição, e no ERP as duas estão cadastradas como
+   * "BLUSA ..." — regata é blusa, camisa é blusa. Primeira palavra igual,
+   * produtos diferentes, e a REF reciclada passou direto pela porta.
+   *
+   * Aqui o que separa é o TIPO: regata ≠ camisa ≠ vestido ≠ calça. Sinônimos
+   * caem no mesmo balde de propósito (t-shirt/camiseta/cropped são "blusa"),
+   * senão o cadastro irregular racharia peça boa — que é o erro oposto e
+   * também custa venda ([[marca-vazia-funde-produtos]]).
+   *
+   * `familiaDe` fica como estava: é a heurística que o `ProductSearchService`
+   * também usa, e divergir ali quebraria o bipe da live. O tipo entra como
+   * discriminador ADICIONAL, só do catálogo.
+   */
+  private static readonly TIPO_POR_PALAVRA: Record<string, string> = {
+    regata: 'regata',
+    camisa: 'camisa', camisao: 'camisa', chemise: 'camisa',
+    vestido: 'vestido', vestidos: 'vestido',
+    macacao: 'macacao', macaquinho: 'macacao', jardineira: 'macacao',
+    conjunto: 'conjunto',
+    saia: 'saia',
+    calca: 'calca', calcas: 'calca', pantalona: 'calca', legging: 'calca', leggin: 'calca',
+    short: 'short', shorts: 'short', bermuda: 'short',
+    jaqueta: 'casaco', casaco: 'casaco', blazer: 'casaco', cardigan: 'casaco',
+    colete: 'casaco', kimono: 'casaco', sobretudo: 'casaco',
+    body: 'body',
+    pijama: 'pijama', robe: 'pijama', camisola: 'pijama',
+    blusa: 'blusa', camiseta: 'blusa', tshirt: 'blusa', cropped: 'blusa', bata: 'blusa',
+  };
+
+  /**
+   * Do mais específico pro mais genérico: "BLUSA REGATA" é REGATA, e "BLUSA
+   * MANGA CURTA" é blusa. Sem a ordem, quem chegasse primeiro na frase venceria
+   * — e "blusa" chega primeiro justamente nos casos que precisam ser separados.
+   */
+  private static readonly PRIORIDADE_TIPO = [
+    'regata', 'camisa', 'vestido', 'macacao', 'conjunto', 'saia', 'calca',
+    'short', 'casaco', 'body', 'pijama', 'blusa',
+  ];
+
+  private tipoDePeca(desc?: string | null): string {
+    const palavras = new Set(
+      String(desc || '')
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[̀-ͯ]/g, '')
+        // Hífen e ponto CAEM DENTRO da palavra, não a partem: quebrando em
+        // "t" + "shirt", a T-shirt não casava com nada e caía no fallback —
+        // o que separava a VOGUE das próprias irmãs.
+        .replace(/[^a-z0-9\s]+/g, '')
+        .split(/\s+/)
+        .filter(Boolean),
+    );
+    const achados = new Set<string>();
+    for (const p of palavras) {
+      const t = LojaCatalogService.TIPO_POR_PALAVRA[p];
+      if (t) achados.add(t);
+    }
+    return LojaCatalogService.PRIORIDADE_TIPO.find((t) => achados.has(t)) || '';
+  }
+
+  /**
+   * A chave que diz "isto é o mesmo produto". Tipo quando dá pra reconhecer;
+   * senão a família de sempre, pra descrição fora do vocabulário não virar um
+   * balde só ('' agruparia peças que não têm nada a ver).
+   */
+  private chaveDeProduto(desc?: string | null): string {
+    return this.tipoDePeca(desc) || this.familiaDe(desc);
+  }
+
   /**
    * Das linhas de uma REF, devolve SÓ as do produto que a retaguarda publicou.
-   * REF com uma família só (o caso normal) passa direto, sem custo.
+   * REF com um produto só (o caso normal) passa direto, sem custo.
    */
   private familiaPublicada(ref: string, linhas: LinhaErp[], site: any): LinhaErp[] {
     if (linhas.length < 2) return linhas;
 
     const porFamilia = new Map<string, LinhaErp[]>();
     for (const l of linhas) {
-      const f = this.familiaDe(l.descricao);
+      const f = this.chaveDeProduto(l.descricao);
       if (!porFamilia.has(f)) porFamilia.set(f, []);
       porFamilia.get(f)!.push(l);
     }
     if (porFamilia.size < 2) return linhas;
 
-    // 1) A família do NOME PUBLICADO manda — é a peça que a loja escolheu pôr
-    //    no site, e o nome dela veio de quem cadastrou, não do ERP.
-    const familiaDoSite = this.familiaDe(site?.nome);
-    let escolhida = familiaDoSite !== '_outros' ? porFamilia.get(familiaDoSite) : undefined;
+    /* 1) O TIPO DO NOME PUBLICADO manda — é a peça que a loja escolheu pôr no
+     *    site, e o nome dela veio de quem cadastrou, não do ERP.
+     *
+     *    Casar por TIPO (e não pela primeira palavra) também conserta um
+     *    silêncio antigo: o nome do site é "Regata Estampa Mostarda" e a
+     *    descrição do ERP é "BLUSA REGATA FEMININA PLUS SIZE" — primeira
+     *    palavra "regata" contra "blusa", nunca casava, e a escolha caía no
+     *    desempate por estoque. Ou seja: a peça que ia pro ar era a que tinha
+     *    mais peça na arara, não a que a loja publicou.
+     */
+    const tipoDoSite = this.chaveDeProduto(site?.nome);
+    let escolhida = tipoDoSite !== '_outros' ? porFamilia.get(tipoDoSite) : undefined;
     let criterio = 'nome publicado';
 
     // 2) Sem casar pelo nome: a que tem mais PEÇA EM ESTOQUE — é a que a
@@ -497,6 +481,12 @@ export class LojaCatalogService {
     ref: string, linhas: LinhaErp[], site: any, fit: any, fotos: any[] = [], ficha?: any,
     /** Peças da família já vendidas (loja + site + histórico do ERP antigo). */
     vendas = 0,
+    /**
+     * TODAS as fichas da família — não só a escolhida. O "não publicar" de uma
+     * cor pode ter sido gravado na ficha da REF irmã (é lá que a cor mora), e
+     * olhar só a ficha escolhida faria a decisão da retaguarda não valer nada.
+     */
+    fichasTodas: any[] = [],
   ) {
     /* ── ⚠️ UMA REF PODE SER TRÊS PRODUTOS (bug de preço, 07/08) ───────────
      *
@@ -592,6 +582,53 @@ export class LojaCatalogService {
       );
     }
 
+    /* ── COR SEM FOTO NÃO EXISTE PRO SITE — E NEM SEU ESTOQUE ──────────────
+     *
+     * Regra do dono, reafirmada em 13/08: **não libere cor sem foto**. Por 6
+     * horas o site mostrou cor sem foto usando a foto das irmãs; a medição
+     * mostrou o tamanho disso — 320 cores, 8.925 peças — e uma bolinha
+     * mostrando a peça errada custa mais que a venda que ela traria.
+     *
+     * O QUE MUDA DE VERDADE AQUI: o corte passou pra ANTES da conta.
+     *
+     * Antes, a cor sumia da bolinha mas o estoque dela CONTINUAVA somando no
+     * total e na grade da peça. Deu no que deu na REF VOGUE: o site anunciava
+     * 570 peças e "91 no 46", e só tinha bolinha pra 178 — 392 peças
+     * anunciadas que a cliente não tinha como comprar. Prometer o que não se
+     * vende é pior que a cor a menos.
+     *
+     * Agora a peça inteira (preço, faixas, grade, estoque total e bolinhas)
+     * nasce das MESMAS linhas: as das cores que têm foto. O que não aparece
+     * não conta.
+     *
+     * Cor sem foto continua invisível mesmo com peça na arara — a saída é
+     * subir a foto na tela master, e aí ela volta sozinha.
+     */
+    const fotosPorCor = new Map<string, any[]>();
+    for (const f of fotos) {
+      const k = String(f.cor || '').toUpperCase();
+      if (!fotosPorCor.has(k)) fotosPorCor.set(k, []);
+      fotosPorCor.get(k)!.push(f);
+    }
+    /**
+     * Duas guardas, e as duas já salvaram tela:
+     *
+     * - `fotos.length === 0`: peça sem foto NENHUMA (acervo antigo, sem cor
+     *   associada) mostra todas as cores, como sempre mostrou.
+     * - linha SEM cor entra sempre: peça de cor única não tem o que casar, e
+     *   filtrar por cor a apagaria inteira.
+     */
+    const semFotoNaPeca = fotos.length === 0;
+    const visivel = (l: LinhaErp) =>
+      !l.cor || semFotoNaPeca || fotosPorCor.has(String(l.cor).trim().toUpperCase());
+    const comFoto = unicas.filter(visivel);
+    /**
+     * Se NENHUMA linha sobrou, as fotos existem mas nenhuma está associada a
+     * cor (import antigo). Rachar a peça aqui a deixaria sem preço, sem grade
+     * e sem estoque — pior que a bolinha errada. Fica como estava.
+     */
+    if (comFoto.length) unicas = comFoto;
+
     // Preço e estoque saem das ÚNICAS: somar cadastro duplicado inflaria o
     // estoque do site e faria vender peça que não existe na arara.
     const precos = unicas.map((l) => l.preco).filter((p) => p > 0);
@@ -653,19 +690,26 @@ export class LojaCatalogService {
      * Cada cor devolve tudo que muda quando a cliente clica na bolinha:
      * suas fotos, sua grade (só os tamanhos daquela cor) e seu preço.
      *
-     * Cor SEM FOTO não vai pro site (decisão do dono, 03/08): bolinha que
-     * abre galeria vazia é pior que cor a menos. A ficha (`produto_ficha_cor`)
-     * traz a bolinha — hex do conta-gotas ou recorte da foto pra estampa.
+     * Três coisas decidem se a cor aparece, e as três são independentes:
+     * FOTO (aplicada lá em cima, nas linhas), ESTOQUE (no filtro adiante) e o
+     * "não publicar" da ficha. A foto voltou a ser critério em 13/08, algumas
+     * horas depois de ter sido solta — ver o bloco "COR SEM FOTO NÃO EXISTE
+     * PRO SITE". A ficha (`produto_ficha_cor`) traz a bolinha — hex do
+     * conta-gotas ou recorte da foto pra estampa.
      */
-    const fichaPorCor = new Map<string, any>(
-      ((ficha?.cores ?? []) as any[]).map((c) => [String(c.cor || '').toUpperCase(), c]),
-    );
-    const fotosPorCor = new Map<string, any[]>();
-    for (const f of fotos) {
-      const k = String(f.cor || '').toUpperCase();
-      if (!fotosPorCor.has(k)) fotosPorCor.set(k, []);
-      fotosPorCor.get(k)!.push(f);
+    // A ficha ESCOLHIDA entra primeiro e ganha no empate; as das irmãs
+    // completam as cores que só existem nelas.
+    const fichaPorCor = new Map<string, any>();
+    for (const fx of [ficha, ...fichasTodas]) {
+      for (const c of ((fx?.cores ?? []) as any[])) {
+        const k = String(c.cor || '').toUpperCase();
+        if (!fichaPorCor.has(k)) fichaPorCor.set(k, c);
+      }
     }
+    // `fotosPorCor` já foi montado LÁ EM CIMA, antes das contas — é ele que
+    // decide quais linhas entram na peça (ver "COR SEM FOTO NÃO EXISTE PRO
+    // SITE"). Montar de novo aqui não quebraria nada, mas esconderia que o
+    // corte acontece antes do preço e da grade, que é o ponto todo.
 
     const coresDetalhadas = Array.from(cores.keys())
       .sort((a, b) => a.localeCompare(b, 'pt-BR'))
@@ -679,6 +723,10 @@ export class LojaCatalogService {
 
         return {
           nome: nomeCor,
+          /** REF e marca DONAS da cor (numa família pode ser a irmã) — é onde
+           *  a tela de cores grava o "não publicar" da ficha. */
+          refDona: (daCor[0] as any)?.ref || ref,
+          marcaDona: (daCor[0] as any)?.marca ?? null,
           /** O que a cliente lê. Título da ficha ganha da tradução automática. */
           nomeAmigavel: String(f?.tituloComercial || '').trim() || this.corAmigavel(nomeCor),
           estoque: daCor.reduce((s, l) => s + (l.estoque || 0), 0),
@@ -711,13 +759,97 @@ export class LojaCatalogService {
             })),
         };
       })
-      // TRANSIÇÃO: enquanto a REF não tiver NENHUMA foto própria (o acervo
-      // ainda está vindo do WooCommerce, sem cor associada), mostra todas as
-      // cores. A partir da primeira foto no R2, vale a regra: cor sem foto
-      // não aparece.
-      .filter((c) => c.fotos.length > 0 || fotos.length === 0);
+      /* ── QUEM VIRA BOLINHA: TEM FOTO **E** TEM PEÇA ────────────────────
+       *
+       * As duas condições vieram de decisões do dono no mesmo dia (13/08), e
+       * cada uma conserta um erro oposto que convivia na MESMA peça:
+       *
+       *   FOTO  — "não libere cor sem foto". Sem ela, 320 cores da rede
+       *           entravam mostrando a foto de uma cor irmã. Bolinha que
+       *           mostra a peça errada custa mais que a venda que traz.
+       *   PEÇA  — "quando zerar, tirar do site — caso da VINHO". Ela estava
+       *           zerada nos 8 tamanhos e seguia na tela por ter foto bonita:
+       *           bolinha que só leva a "esgotado" gasta o clique da cliente.
+       *
+       * O filtro de FOTO já foi aplicado lá em cima, nas linhas — de propósito.
+       * Cortar só aqui deixava o estoque da cor invisível somando no total e na
+       * grade da peça, e foi assim que a VOGUE anunciou 570 peças tendo bolinha
+       * pra 178. Aqui sobra a condição de ESTOQUE, que não distorce conta
+       * nenhuma: cor zerada soma zero.
+       *
+       * Peça inteira zerada = nenhuma cor, e aí a PDP cai no caminho de
+       * esgotado que já existe ("pode ter na loja, chame uma consultora").
+       */
+      .filter((c) => c.estoque > 0);
 
-    const dataAlt = linhas.map((l) => l.dataAlt).filter(Boolean).sort()
+    /**
+     * DOIS FILTROS por cor, além do estoque zero acima:
+     *
+     * 1. "NÃO PUBLICAR" da ficha (13/08): o botão MANUAL da tela
+     *    /retaguarda/cores-sem-foto — a retaguarda marcava e a vitrine
+     *    ignorava.
+     * 2. ESTOQUE MÍNIMO POR COR (regra do dono, 13/08 à tarde): "toda
+     *    variação (cor) com menos de 10 unidades no total desativa — e fica
+     *    como regra". Cor de grade rala vende número quebrado e vira troca;
+     *    ela SOME sozinha e VOLTA sozinha quando a reposição passar do piso.
+     *    Medição na hora da regra: 210 das 554 cores no ar (38%), 1.078
+     *    peças físicas, e 127 peças ficariam sem nenhuma cor (caem no
+     *    caminho de esgotado que já existe). `ESTOQUE_MINIMO_COR` ajusta o
+     *    piso sem deploy; `1` desliga (só a zerada some, como antes).
+     *
+     * As descartadas seguem no payload (`coresOcultas`, com motivo) pra
+     * tela de cores listar — esgotamento não pode ser mistério.
+     */
+    const coresOcultas: Array<{
+      nome: string; estoque: number; refDona: string; marcaDona: string | null; motivo: string;
+    }> = [];
+    const coresVisiveis = coresDetalhadas.filter((c) => {
+      if (fichaPorCor.get(c.nome.toUpperCase())?.statusPublicacao === 'nao_publicar') {
+        coresOcultas.push({
+          nome: c.nome, estoque: c.estoque, refDona: c.refDona, marcaDona: c.marcaDona,
+          motivo: 'nao_publicar',
+        });
+        return false;
+      }
+      if (c.estoque < LojaCatalogService.ESTOQUE_MINIMO_COR) {
+        coresOcultas.push({
+          nome: c.nome, estoque: c.estoque, refDona: c.refDona, marcaDona: c.marcaDona,
+          motivo: 'estoque_baixo',
+        });
+        return false;
+      }
+      return true;
+    });
+
+    /**
+     * Com cor escondida, TOTAL e GRADE exibidos têm que ser o que dá pra
+     * COMPRAR — "91 no 46" contando cor invisível é a mentira da VOGUE ao
+     * contrário. Peça SEM cor cadastrada (linhas do ERP sem cor) não tem
+     * bolinha pra filtrar: mantém os números crus.
+     */
+    const temCores = coresDetalhadas.length > 0;
+    const estoqueExibido = temCores
+      ? coresVisiveis.reduce((s, c) => s + (c.estoque || 0), 0)
+      : estoqueTotal;
+    const porTamanhoVisivel = new Map<string, number>();
+    for (const c of coresVisiveis) {
+      for (const t of c.tamanhos) {
+        porTamanhoVisivel.set(t.label, (porTamanhoVisivel.get(t.label) || 0) + (t.estoque || 0));
+      }
+    }
+    const tamanhosExibidos = temCores
+      ? Array.from(porTamanhoVisivel.entries())
+          .sort((a, b) => ordemTam(a[0]) - ordemTam(b[0]))
+          .map(([label, est]) => ({ label, estoque: est, disponivel: est > 0 }))
+      : tamanhos;
+
+    // Comparador numérico de propósito: `.sort()` sem ele ordena Date como
+    // STRING ("Mon Jul..." antes de "Thu Aug...") e o "mais recente" da peça
+    // — que é o que ordena a página de Novidades — sai sorteado.
+    const dataAlt = linhas
+      .map((l) => l.dataAlt)
+      .filter(Boolean)
+      .sort((a, b) => new Date(a as any).getTime() - new Date(b as any).getTime())
       .slice(-1)[0] as Date | undefined;
 
     /**
@@ -743,18 +875,16 @@ export class LojaCatalogService {
       }
     };
 
-    return {
-      ref,
-      slug: site?.slug || `ref-${ref.toLowerCase()}`,
-      /**
-       * Ordem: ficha → cadastro do site → descrição do ERP LIMPA → a REF.
-       * A crua nunca entra inteira: ela carrega a cor de UMA variação, e isso
-       * gruda "Preto" no nome de uma peça vinho.
-       */
-      nome: this.limparNomeVitrine(
+    /**
+     * Ordem do NOME: ficha → cadastro do site → descrição do ERP LIMPA → a
+     * REF. A crua nunca entra inteira: ela carrega a cor de UMA variação, e
+     * isso gruda "Preto" no nome de uma peça vinho.
+     */
+    const nomeVitrine =
+      limparNomeVitrine(
         nomeDaFicha ||
           site?.nome ||
-          this.nomeDaDescricaoErp(
+          nomeDaDescricaoErp(
             linhas[0]?.descricao,
             ref,
             Array.from(cores.keys()),
@@ -764,7 +894,27 @@ export class LojaCatalogService {
         ref,
         Array.from(cores.keys()),
         linhas.find((l) => l.marca)?.marca,
-      ) || ref,
+      ) || ref;
+
+    /**
+     * CLASSIFICAÇÃO DERIVADA PELO NOME (caso 407012, 13/08): a primeira peça
+     * nascida no sistema chegou publicada com categoria NULA — visível na PDP
+     * e invisível em TODO menu do site. O fallback aplica em LEITURA as
+     * mesmas regras do lote de 10/08 (classificar-em-massa). Escolha humana
+     * vence: só preenche o que o cadastro deixou vazio, e a subcategoria
+     * derivada só vale dentro da MESMA categoria (nome que diz "blusa" não
+     * pendura manga em cima de um cadastro que diz "vestidos").
+     */
+    const derivada = classificarPorNome(nomeVitrine);
+    const categoria = site?.categoria ?? derivada?.categoria ?? null;
+    const subcategoria =
+      site?.subcategoria ??
+      (derivada && derivada.categoria === categoria ? derivada.subcategoria : null);
+
+    return {
+      ref,
+      slug: site?.slug || `ref-${ref.toLowerCase()}`,
+      nome: nomeVitrine,
       /**
        * RESUMO DA FICHA na frente do `descricaoCurta` (12/08): a curta veio do
        * WooCommerce e costuma ser a primeira frase da descrição gigante; o
@@ -788,15 +938,16 @@ export class LojaCatalogService {
        */
       vendas,
       marca: linhas.find((l) => l.marca)?.marca ?? null,
-      // Categoria COMERCIAL (do cadastro do site). O grupo do Giga vai
-      // separado: é classificação fiscal, não serve pro menu da loja.
-      categoria: site?.categoria ?? null,
+      // Categoria COMERCIAL: cadastro do site primeiro; sem ele, a derivada
+      // pelo nome (ver bloco acima). O grupo do Giga vai separado: é
+      // classificação fiscal, não serve pro menu da loja.
+      categoria,
       /**
        * Segundo nível da árvore do site ("Blusas" → "Manga curta"). Sai aqui
        * porque a PDP começa o feed de descoberta pela subcategoria da peça que
        * a cliente está vendo — sem este campo ela não saberia onde está.
        */
-      subcategoria: site?.subcategoria ?? null,
+      subcategoria,
       grupoErp: linhas.find((l) => l.categoria)?.categoria ?? null,
 
       preco,
@@ -806,10 +957,12 @@ export class LojaCatalogService {
       precoPix: preco > 0 ? Number((preco * 0.95).toFixed(2)) : null,
       parcelamento: preco > 0 ? { vezes: 12, valor: Number((preco / 12).toFixed(2)) } : null,
 
-      cores: coresDetalhadas,
-      tamanhos,
-      estoqueTotal,
-      disponivel: estoqueTotal > 0,
+      cores: coresVisiveis,
+      /** Cores escondidas (ficha ou estoque mínimo) — a tela de cores lista. */
+      coresOcultas,
+      tamanhos: tamanhosExibidos,
+      estoqueTotal: estoqueExibido,
+      disponivel: estoqueExibido > 0,
 
       // FOTO PRÓPRIA VENCE (decisão 30/07): o R2 é da Lurd's; o que veio do
       // WC é só o resto do acervo até a migração de imagem terminar.
@@ -845,9 +998,21 @@ export class LojaCatalogService {
       gradeMedidas: this.montarGrade(ficha),
 
       destaque: !!site?.destaque,
-      lancamento: !!site?.lancamento,
+      /**
+       * NOVIDADE É IDADE, NÃO ETIQUETA (dono, 13/08). O critério antigo era a
+       * tag "Novidade" herdada do WooCommerce — editorial do site velho que
+       * nunca expirava: regata de meses atrás ficava em "Novidades" pra
+       * sempre, e peça recém-publicada sem a tag nunca entrava. Agora:
+       * publicou há até 30 dias = novidade; envelheceu = sai sozinha.
+       */
+      lancamento: !!(
+        site?.publicadoEm &&
+        Date.now() - new Date(site.publicadoEm).getTime() <= 30 * 24 * 60 * 60 * 1000
+      ),
       promocao: !!site?.promocao,
       atualizadoEm: dataAlt ?? null,
+      /** Quando a peça entrou no ar — o eixo da ordenação "novidades". */
+      publicadoEm: site?.publicadoEm ?? null,
 
       // Fiscal (pro checkout futuro) — do ERP, nunca digitado
       fiscal: { ncm: linhas.find((l) => l.ncm)?.ncm ?? null, cst: linhas.find((l) => l.cst)?.cst ?? null },
@@ -1050,7 +1215,8 @@ export class LojaCatalogService {
     }
     if (this.catalogoEmVoo) return this.catalogoEmVoo;
 
-    this.catalogoEmVoo = this.montarCatalogo()
+    this.catalogoEmVoo = this.carimbarPublicadoEm()
+      .then(() => this.montarCatalogo())
       .then((pecas) => {
         this.cacheCatalogo = { at: Date.now(), pecas };
         return pecas;
@@ -1059,6 +1225,34 @@ export class LojaCatalogService {
         this.catalogoEmVoo = null;
       });
     return this.catalogoEmVoo;
+  }
+
+  /**
+   * CARIMBO DE "QUANDO ENTROU NO AR" — idempotente, roda junto da remontagem
+   * do catálogo (no máximo 1×/60s) e só toca quem está publicado SEM carimbo.
+   *
+   * É a fundação do "Novidades" automático (dono, 13/08): peça nova publicada
+   * ganha `publicado_em` em até um minuto, sem caçar cada tela e sync que
+   * escreve `publicado = true`. O backfill do acervo usa a PRIMEIRA foto R2
+   * da REF (é quando a peça passou a existir pro site de verdade) e cai pro
+   * `synced_at` quando não há foto — roda uma vez, vira data fixa, envelhece
+   * e sai de Novidades sozinha.
+   */
+  private async carimbarPublicadoEm(): Promise<void> {
+    try {
+      await this.prisma.$executeRawUnsafe(
+        `UPDATE site_produto sp
+            SET publicado_em = COALESCE(
+              (SELECT MIN(pp.created_at) FROM product_photos pp WHERE pp.ref = sp.ref),
+              sp.synced_at,
+              NOW()
+            )
+          WHERE sp.publicado = true AND sp.publicado_em IS NULL`,
+      );
+    } catch (err) {
+      // Sem carimbo o catálogo continua de pé — só o "Novidades" fica manco.
+      this.logger.warn(`carimbo de publicado_em falhou: ${String(err)}`);
+    }
   }
 
   /**
@@ -1302,6 +1496,7 @@ export class LojaCatalogService {
           [...new Set(refsDaFamilia.map(refBaseOf))].reduce(
             (s, base) => s + (vendas.get(base) ?? 0), 0,
           ),
+          fichasDaFamilia,
         ),
       );
     }
@@ -1518,6 +1713,7 @@ export class LojaCatalogService {
       descricao: string | null;
       marca: string | null;
       categoria: string | null;
+      subcategoria: string | null;
       preco: number;
       precoPromocional: number | null;
       disponivel: boolean;
@@ -1551,6 +1747,7 @@ export class LojaCatalogService {
       descricao: p.descricaoCurta || p.descricaoCompleta || null,
       marca: p.marca ?? null,
       categoria: p.categoria ?? null,
+      subcategoria: p.subcategoria ?? null,
       preco: Number(p.preco) || 0,
       // O Meta compara `sale_price` com `price` pra desenhar o "de/por". Só
       // faz sentido quando há promoção de verdade.
@@ -1560,6 +1757,62 @@ export class LojaCatalogService {
       tamanhos: (p.tamanhos ?? []).filter((t: any) => t.disponivel).map((t: any) => t.label),
       cores: (p.cores ?? []).map((c: any) => c.nome).filter(Boolean),
     }));
+  }
+
+  /**
+   * RADAR da tela /retaguarda/cores-sem-foto.
+   *
+   * Duas listas, tiradas do MESMO catálogo montado que o site serve (cache de
+   * 60s — mesma verdade da vitrine):
+   *   · `semFoto`  — cores NO AR vendendo com foto de irmã + aviso "ainda não
+   *     temos foto" (regra da VOGUE, 13/08). É a fila de quem precisa de foto.
+   *   · `ocultas`  — cores escondidas à mão (`nao_publicar` na ficha), pra
+   *     tela poder desfazer.
+   */
+  async coresSemFoto() {
+    const pecas = await this.catalogoPublicado();
+    const linhas: any[] = [];
+    for (const p of pecas as any[]) {
+      const semFoto = (p.cores ?? []).filter((c: any) => !(c.fotos?.length));
+      const ocultas = p.coresOcultas ?? [];
+      if (!semFoto.length && !ocultas.length) continue;
+      linhas.push({
+        ref: p.ref,
+        slug: p.slug,
+        nome: p.nome,
+        marca: p.marca ?? null,
+        capa:
+          (p.cores ?? []).find((c: any) => c.fotos?.length)?.fotos?.[0]?.src ??
+          p.imagens?.[0]?.src ?? null,
+        semFoto: semFoto.map((c: any) => ({
+          nome: c.nome,
+          estoque: c.estoque,
+          refDona: c.refDona ?? p.ref,
+          marcaDona: c.marcaDona ?? p.marca ?? null,
+        })),
+        ocultas,
+      });
+    }
+    return {
+      pecas: linhas,
+      totais: {
+        pecasAfetadas: linhas.length,
+        coresSemFoto: linhas.reduce((s, l) => s + l.semFoto.length, 0),
+        coresOcultas: linhas.reduce((s, l) => s + l.ocultas.length, 0),
+      },
+    };
+  }
+
+  /**
+   * Depois que a tela grava na ficha: derruba o cache do backend E avisa a
+   * vitrine, e devolve o radar já recalculado. Sem isto o clique "funciona"
+   * no banco e a tela/site seguem mostrando o passado por até 1 hora — o
+   * clássico "fiz e não mudou".
+   */
+  async coresSemFotoRecarregar() {
+    this.invalidarCache();
+    avisarVitrine(['catalogo', 'categorias', 'filtros'], this.logger, 'cores-sem-foto');
+    return this.coresSemFoto();
   }
 
   /** Detalhe da peça — por slug (site) ou pela própria REF. */
@@ -1604,6 +1857,7 @@ export class LojaCatalogService {
         return this.montarPeca(
           ref, linhasSoltas, null, c.fit.get(ref), c.fotos.get(ref) ?? [],
           this.escolherFicha(c.fichas.get(ref), linhasSoltas.find((l) => l.marca)?.marca),
+          0, c.fichas.get(ref) ?? [],
         );
       }
     }
@@ -1616,6 +1870,7 @@ export class LojaCatalogService {
     return this.montarPeca(
       registro.ref, linhas, registro, c.fit.get(registro.ref), c.fotos.get(registro.ref) ?? [],
       this.escolherFicha(c.fichas.get(registro.ref), linhas.find((l) => l.marca)?.marca),
+      0, c.fichas.get(registro.ref) ?? [],
     );
   }
 
@@ -1625,6 +1880,135 @@ export class LojaCatalogService {
     if (!peca) return [];
     const lista = await this.listar({ categoria: peca.categoria ?? undefined, perPage: limite + 1 });
     return lista.itens.filter((p: any) => p.ref !== peca.ref).slice(0, limite);
+  }
+
+  /* ── LOOK — "estas peças saem na mesma foto e se vendem juntas" ──────────
+   *
+   * Dono, 13/08: a Regata 403048 e a Calça Aladdin 406027 são o MESMO look e
+   * cada PDP tem que puxar a outra. Fase 1: bloco "Complete o look" na PDP.
+   * Fase 2 (quando houver mais fotos de conjunto): botão "Comprar o look".
+   *
+   * O look guarda REFs cruas; a resolução pro card usa o CATÁLOGO MONTADO
+   * (mesma verdade da vitrine, cache de 60s) — nome, preço e foto nunca
+   * divergem do que a cliente vê no resto do site. Membro fora da vitrine
+   * (despublicado, sem foto) simplesmente não aparece; look que resolver
+   * menos de 2 peças não vale um bloco.
+   */
+
+  /** O card compacto de um membro do look, resolvido pelo catálogo. */
+  private cartaoDoLook(catalogo: any[], ref: string): any | null {
+    const alvo = this.normRef(ref);
+    const c = catalogo.find(
+      (p: any) => this.normRef(p.ref) === alvo || this.normRef(p.ref) === refBaseOf(alvo),
+    );
+    if (!c) return null;
+    return {
+      ref: c.ref,
+      slug: c.slug,
+      nome: c.nome,
+      preco: c.preco,
+      precoPix: c.precoPix,
+      imagem: c.imagens?.[0]?.src ?? null,
+      disponivel: !!c.disponivel,
+    };
+  }
+
+  /**
+   * O look de uma peça já montada (chamado só pela PDP). Best-effort de
+   * propósito: look quebrado não pode derrubar a página do produto.
+   */
+  async lookDaPeca(peca: any): Promise<any | null> {
+    try {
+      const refs = new Set<string>([this.normRef(peca.ref), refBaseOf(this.normRef(peca.ref))]);
+      for (const c of peca.cores ?? []) {
+        if (c?.refDona) refs.add(this.normRef(c.refDona));
+      }
+      const membros: any[] = await (this.prisma as any).siteLookPeca.findMany({
+        where: { ref: { in: [...refs] } },
+        select: { lookId: true },
+      });
+      if (!membros.length) return null;
+      const look = await (this.prisma as any).siteLook.findFirst({
+        where: { id: { in: membros.map((m) => m.lookId) } },
+        include: { pecas: true },
+        orderBy: { criadoEm: 'desc' },
+      });
+      if (!look) return null;
+
+      const catalogo = await this.catalogoPublicado();
+      const vistos = new Set<string>();
+      const pecas = (look.pecas as any[])
+        .map((m) => {
+          const cartao = this.cartaoDoLook(catalogo, m.ref);
+          if (!cartao || vistos.has(cartao.ref)) return null;
+          vistos.add(cartao.ref);
+          return { ...cartao, atual: refs.has(this.normRef(m.ref)) || cartao.ref === peca.ref };
+        })
+        .filter(Boolean);
+      if (pecas.length < 2) return null;
+      return { id: look.id, nome: look.nome, pecas };
+    } catch (e: any) {
+      this.logger.warn(`[look] falha ao resolver look da peça ${peca?.ref}: ${e?.message || e}`);
+      return null;
+    }
+  }
+
+  /** A tela da retaguarda: todos os looks, com o que resolver do catálogo. */
+  async listarLooks() {
+    const looks: any[] = await (this.prisma as any).siteLook.findMany({
+      include: { pecas: true },
+      orderBy: { criadoEm: 'desc' },
+    });
+    const catalogo = await this.catalogoPublicado();
+    return looks.map((l) => ({
+      id: l.id,
+      nome: l.nome,
+      criadoPor: l.criadoPor,
+      criadoEm: l.criadoEm,
+      pecas: (l.pecas as any[]).map((m) => ({
+        ref: m.ref,
+        // null = fora da vitrine agora (sem foto/despublicada) — a tela avisa.
+        cartao: this.cartaoDoLook(catalogo, m.ref),
+      })),
+    }));
+  }
+
+  async criarLook(nome: string, refs: string[], usuario?: string) {
+    const limpo = String(nome || '').trim().slice(0, 80);
+    if (!limpo) throw new Error('Nome do look é obrigatório');
+    const unicas = [...new Set((refs || []).map((r) => this.normRef(r)).filter(Boolean))];
+    if (unicas.length < 2) throw new Error('Um look precisa de pelo menos 2 REFs');
+    return (this.prisma as any).siteLook.create({
+      data: {
+        nome: limpo,
+        criadoPor: usuario ?? null,
+        pecas: { create: unicas.map((ref) => ({ ref })) },
+      },
+      include: { pecas: true },
+    });
+  }
+
+  async adicionarPecaAoLook(lookId: string, ref: string) {
+    const limpa = this.normRef(ref);
+    if (!limpa) throw new Error('REF obrigatória');
+    await (this.prisma as any).siteLookPeca.upsert({
+      where: { lookId_ref: { lookId, ref: limpa } },
+      create: { lookId, ref: limpa },
+      update: {},
+    });
+    return { ok: true };
+  }
+
+  async removerPecaDoLook(lookId: string, ref: string) {
+    await (this.prisma as any).siteLookPeca.deleteMany({
+      where: { lookId, ref: this.normRef(ref) },
+    });
+    return { ok: true };
+  }
+
+  async excluirLook(lookId: string) {
+    await (this.prisma as any).siteLook.delete({ where: { id: lookId } });
+    return { ok: true };
   }
 
   /**
@@ -1987,13 +2371,28 @@ export class LojaCatalogService {
       `${this.SQL_VARIACOES} AND UPPER(TRIM(p.ref)) = $1`, chave,
     );
     if (!linhas.length) throw new Error(`REF ${chave} não existe no ERP`);
+    const coresDaRef = Array.from(
+      new Set(linhas.map((l) => l.cor).filter(Boolean)),
+    ) as string[];
     return (this.prisma as any).siteProduto.create({
       data: {
         ref: chave,
         slug: data.slug || `ref-${chave.toLowerCase()}`,
-        nome: data.nome || linhas[0].descricao || chave,
         publicado: data.publicado ?? false,
         ...data,
+        // Depois do spread de propósito: o nome que NASCE aqui já nasce limpo.
+        // A descrição do ERP é por VARIAÇÃO ("CAMISA MANGA LONGA POÁ MARROM
+        // 46") — gravada crua, virou o título da primeira peça do sistema
+        // (13/08). Nome escolhido por gente (data.nome) continua vencendo.
+        nome:
+          data.nome ||
+          limparNomeVitrine(
+            linhas[0].descricao,
+            chave,
+            coresDaRef,
+            linhas.find((l) => l.marca)?.marca,
+          ) ||
+          chave,
       },
     });
   }

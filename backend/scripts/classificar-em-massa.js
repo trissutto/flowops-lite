@@ -25,6 +25,11 @@
  *
  * Conecta pelo DATABASE_PUBLIC_URL: o DATABASE_URL do serviço aponta pro host
  * interno da Railway, que não resolve de fora.
+ *
+ * ⚠️ 13/08: a vitrine aplica ESTAS MESMAS regras em leitura, como fallback de
+ * peça sem categoria (src/loja-catalog/classificacao-por-nome.ts — caso
+ * 407012). Mexeu numa regra aqui, mexa lá — são o mesmo contrato em dois
+ * tempos: lote e leitura.
  */
 const { Client } = require('pg');
 const fs = require('fs');

@@ -97,6 +97,24 @@ export class ClassificacaoService {
     const slug = this.slugify(nome);
     if (!slug) return { ok: false, erro: 'Nome inválido' };
 
+    /**
+     * TRAVA (13/08): o upsert daqui CAPTURAVA categoria existente. O dono
+     * criou a sub "Blusas" dentro de Linha Conforto e a categoria Blusas
+     * inteira (248 peças) virou subcategoria — sumiu dos cards e do menu do
+     * site na hora. Sub nova não pode reaproveitar slug de categoria de cima;
+     * o reparo do acidente é o `criarCategoria`, que promove de volta.
+     */
+    const existente = await (this.prisma as any).siteCategoria.findUnique({
+      where: { slug },
+      select: { paiSlug: true },
+    });
+    if (existente && !existente.paiSlug) {
+      return {
+        ok: false,
+        erro: `"${nome}" já é uma categoria de nível de cima — use outro nome (ex: "${nome} Confort")`,
+      };
+    }
+
     const ultima = await (this.prisma as any).siteCategoria.findFirst({
       where: { paiSlug: pai },
       orderBy: { ordem: 'desc' },
@@ -113,6 +131,55 @@ export class ClassificacaoService {
       },
     });
     return { ok: true, slug, nome, pai };
+  }
+
+  /**
+   * Cria uma CATEGORIA nova (nível de cima) — "Linha Conforto" pra campanha.
+   *
+   * Nasce ATIVA e no fim da ordem, igual à subcategoria. Aparecer no menu do
+   * site continua dependendo de ter peça publicada dentro — categoria vazia
+   * não vira vitrine, e é assim que o resto do sistema já pensa.
+   */
+  async criarCategoria(input: { nome: string; quem: string }) {
+    const nome = String(input.nome || '').trim();
+    if (!nome) return { ok: false, erro: 'Nome é obrigatório' };
+    const slug = this.slugify(nome);
+    if (!slug) return { ok: false, erro: 'Nome inválido' };
+
+    /**
+     * Slug que já vive como SUBcategoria: PROMOVE de volta ao nível de cima,
+     * em vez de recusar. É o caminho de reparo de quando uma categoria foi
+     * capturada por engano (caso Blusas dentro de Linha Conforto, 13/08):
+     * digitar o nome dela aqui desfaz a captura na hora, sem SQL nem deploy.
+     */
+    const existente = await (this.prisma as any).siteCategoria.findUnique({
+      where: { slug },
+      select: { paiSlug: true },
+    });
+    if (existente?.paiSlug) {
+      await (this.prisma as any).siteCategoria.update({
+        where: { slug },
+        data: { paiSlug: null, atualizadoPor: input.quem },
+      });
+      return { ok: true, slug, nome, promovida: true };
+    }
+
+    const ultima = await (this.prisma as any).siteCategoria.findFirst({
+      where: { paiSlug: null },
+      orderBy: { ordem: 'desc' },
+      select: { ordem: true },
+    });
+
+    await (this.prisma as any).siteCategoria.upsert({
+      where: { slug },
+      update: { nome, atualizadoPor: input.quem },
+      create: {
+        slug, nome, paiSlug: null, ativo: true,
+        ordem: (ultima?.ordem ?? 0) + 1,
+        atualizadoPor: input.quem,
+      },
+    });
+    return { ok: true, slug, nome };
   }
 
   private slugify(texto: string): string {

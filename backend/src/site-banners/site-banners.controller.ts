@@ -6,6 +6,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { AdminOnly, AdminOnlyGuard } from '../auth/admin-only.guard';
 import { BannerInput, SiteBannersService, SLOTS } from './site-banners.service';
+import { conferirVitrine } from '../common/avisar-vitrine';
 
 /**
  * PÚBLICO — é o que o site consome. Sem token, como o resto de /public/loja:
@@ -37,6 +38,19 @@ export class SiteBannersController {
   @Get('slots')
   slots() {
     return SLOTS;
+  }
+
+  /**
+   * "Salvou, atualiza?" — a tela pergunta ao abrir e mostra a resposta.
+   *
+   * Existe porque a versão silenciosa disto ficou seis dias quebrada: o aviso
+   * pro site falhava sem nenhum sinal na retaguarda, e a única pessoa que
+   * descobriu foi o dono, reclamando que o banner demorava. Agora quem publica
+   * vê na hora se o site vai acompanhar ou se vai levar até 1 hora.
+   */
+  @Get('status-site')
+  statusSite() {
+    return conferirVitrine();
   }
 
   @Get()

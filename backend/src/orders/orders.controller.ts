@@ -11,6 +11,28 @@ import { ErpService } from '../erp/erp.service';
 import { extractAttribution, extractAttributionRaw } from '../woocommerce/attribution.util';
 import { extractCpf, detectPickup, extractVariantFromLineItem } from '../woocommerce/wc-order-extract.util';
 
+/**
+ * ABA DA TELA DE SEPARAÇÃO → status dos pedidos NATIVOS do Flow (live + site
+ * novo), que vivem só no Postgres e não têm status de WooCommerce.
+ *
+ * Mora aqui desde 13/08 porque a LISTA e o CONTADOR da aba liam mapas
+ * diferentes: a lista já trazia `['live', 'ecommerce']`, o contador só somava
+ * `live`. Resultado na tela: aba **"Processando 2"** com **5 pedidos na fila**
+ * — os 3 do site novo apareciam na lista e não no número. Contador que
+ * discorda da lista faz a operação achar que perdeu pedido.
+ */
+export const STATUS_LOCAL_POR_ABA: Record<string, string[]> = {
+  processing: ['processing'],
+  separacao: ['separating'],
+  'em-separacao': ['separating'],
+  completed: ['shipped', 'delivered'],
+};
+
+/** As origens que a fila mostra junto com o WooCommerce.
+ *  'pdv_online' (14/08): venda online do PDV que virou pedido — faixa 960M,
+ *  mesma vida do pedido do site (roteamento → card → envio), sem WooCommerce. */
+export const ORIGENS_NATIVAS = ['live', 'ecommerce', 'pdv_online'];
+
 @Controller('orders')
 @UseGuards(JwtAuthGuard)
 export class OrdersController {
@@ -187,18 +209,12 @@ export class OrdersController {
     // Pedido do e-commerce só entra aqui depois de PAGO: ele nasce
     // 'awaiting_payment' e vira 'processing' na confirmação — separar o que
     // não foi pago seria pedir prejuízo.
-    const LIVE_STATUS_BY_SLUG: Record<string, string[]> = {
-      processing: ['processing'],
-      separacao: ['separating'],
-      'em-separacao': ['separating'],
-      completed: ['shipped', 'delivered'],
-    };
-    const liveStatuses = status ? LIVE_STATUS_BY_SLUG[status] : undefined;
+    const liveStatuses = status ? STATUS_LOCAL_POR_ABA[status] : undefined;
     let liveRows: any[] = [];
     if (liveStatuses?.length) {
       const liveOrders = await (this.prisma as any).order.findMany({
         where: {
-          source: { in: ['live', 'ecommerce'] },
+          source: { in: ORIGENS_NATIVAS },
           status: { in: liveStatuses },
           ...(search
             ? {
@@ -257,7 +273,8 @@ export class OrdersController {
           // A origem sai do REGISTRO, não fixa: a mesma consulta agora traz
           // live e e-commerce, e a tela filtra/pinta por este campo.
           orderSource: o.source,
-          origem: o.source === 'ecommerce' ? 'Site (novo)' : 'Live Commerce',
+          origem:
+            o.source === 'ecommerce' ? 'Site (novo)' : o.source === 'pdv_online' ? 'Venda Online' : 'Live Commerce',
         };
       });
     }
@@ -461,27 +478,31 @@ export class OrdersController {
       byStatus[t.slug] = { name: t.name, total: t.total };
       grand += t.total;
     }
-    // Soma os pedidos da LIVE (source='live', só existem no Flow) nos badges
-    // das abas equivalentes: processing → Processando · separating → Em
-    // separação · shipped/delivered → Concluídos.
+    /**
+     * Soma os pedidos NATIVOS do Flow (live + site novo) nos badges das abas.
+     *
+     * Usa `STATUS_LOCAL_POR_ABA`, o MESMO mapa da lista — antes daqui o
+     * contador só somava `live` e a aba dizia "Processando 2" com 5 pedidos na
+     * tela, porque os 3 do site novo entravam na lista e não no número.
+     */
     try {
-      const liveCounts = await (this.prisma as any).order.groupBy({
+      const locais = await (this.prisma as any).order.groupBy({
         by: ['status'],
-        where: { source: 'live' },
+        where: { source: { in: ORIGENS_NATIVAS } },
         _count: { _all: true },
       });
-      const add = (slug: string, n: number) => {
-        if (!n) return;
+      const porStatus = new Map<string, number>();
+      for (const c of locais) porStatus.set(c.status, c._count._all);
+
+      for (const [slug, statuses] of Object.entries(STATUS_LOCAL_POR_ABA)) {
+        const n = statuses.reduce((s, st) => s + (porStatus.get(st) ?? 0), 0);
+        if (!n) continue;
         byStatus[slug] = { name: byStatus[slug]?.name ?? slug, total: (byStatus[slug]?.total ?? 0) + n };
-        grand += n;
-      };
-      for (const c of liveCounts) {
-        const n = c._count._all;
-        if (c.status === 'processing') add('processing', n);
-        else if (c.status === 'separating') add('separacao', n);
-        else if (c.status === 'shipped' || c.status === 'delivered') add('completed', n);
+        // 'separacao' e 'em-separacao' são a MESMA aba com dois slugs — somar
+        // os dois no grand total contaria o pedido duas vezes.
+        if (slug !== 'em-separacao') grand += n;
       }
-    } catch { /* badge sem live é melhor que quebrar a tela */ }
+    } catch { /* badge sem pedido nativo é melhor que quebrar a tela */ }
     return { byStatus, grand };
   }
 
@@ -549,6 +570,24 @@ export class OrdersController {
       select: { code: true, name: true },
     });
 
+    /**
+     * REF · COR · TAMANHO dos itens. Desde 13/08 são colunas do `OrderItem`;
+     * pedido anterior a isso não tem — e aí o snapshot do checkout salva, que
+     * guarda `productId` (= a REF que o carrinho manda), `color` e `size`.
+     * Sem esse fallback, os pedidos que já existem ficariam com a coluna vazia
+     * justamente na tela em que o dono foi olhar.
+     */
+    const doSnapshot = new Map<string, { ref: string | null; cor: string | null; tamanho: string | null }>();
+    for (const it of (ck.items || []) as any[]) {
+      const chave = String(it?.sku || '').trim();
+      if (!chave || doSnapshot.has(chave)) continue;
+      doSnapshot.set(chave, {
+        ref: it?.ref || it?.productId || null,
+        cor: it?.color || null,
+        tamanho: it?.size || null,
+      });
+    }
+
     const pagamento =
       pi.method === 'card'
         ? `Cartão de crédito${pi.installments ? ` (${pi.installments}x)` : ''}`
@@ -585,15 +624,21 @@ export class OrdersController {
       // a etiqueta e a separação leem. Não desmontar aqui.
       shipping: enderecoWc,
       customerCpf: pedido.customerCpf || '',
-      lineItems: (pedido.items || []).map((it: any) => ({
-        id: it.id,
-        name: it.productName,
-        sku: it.sku,
-        quantity: it.quantity,
-        total: String((it.unitPrice ?? 0) * (it.quantity ?? 1)),
-        price: it.unitPrice,
-        image: null,
-      })),
+      lineItems: (pedido.items || []).map((it: any) => {
+        const snap = doSnapshot.get(String(it.sku || '').trim());
+        return {
+          id: it.id,
+          name: it.productName,
+          sku: it.sku,
+          ref: it.ref || snap?.ref || null,
+          cor: it.cor || snap?.cor || null,
+          tamanho: it.tamanho || snap?.tamanho || null,
+          quantity: it.quantity,
+          total: String((it.unitPrice ?? 0) * (it.quantity ?? 1)),
+          price: it.unitPrice,
+          image: null,
+        };
+      }),
       shippingLines: [
         {
           method: ck.shipping?.label ?? pedido.shippingMethod ?? 'Entrega',
@@ -646,7 +691,7 @@ export class OrdersController {
    * Origem sintética nova entra AQUI, num lugar só.
    */
   private origemSintetica(source?: string | null): boolean {
-    return source === 'live' || source === 'ecommerce';
+    return ORIGENS_NATIVAS.includes(String(source || ''));
   }
 
   /** Detalhe de 1 pedido direto do WC. */
@@ -678,7 +723,9 @@ export class OrdersController {
      * O comentário acima já avisava ("buscar lá dava 500"); faltou estender a
      * regra quando a segunda faixa sintética nasceu.
      */
-    if (liveLocal && liveLocal.source === 'ecommerce') {
+    if (liveLocal && (liveLocal.source === 'ecommerce' || liveLocal.source === 'pdv_online')) {
+      // 'pdv_online' grava checkoutInfo no MESMO shape do e-commerce — o
+      // detalhe local serve pros dois (buscar no WC daria o mesmo 500 da live).
       return this.detalheEcommerce(liveLocal);
     }
 
@@ -725,6 +772,9 @@ export class OrdersController {
           id: it.id,
           name: it.productName,
           sku: it.sku,
+          ref: it.ref ?? null,
+          cor: it.cor ?? null,
+          tamanho: it.tamanho ?? null,
           quantity: it.quantity,
           total: String((it.unitPrice ?? 0) * (it.quantity ?? 1)),
           price: it.unitPrice,

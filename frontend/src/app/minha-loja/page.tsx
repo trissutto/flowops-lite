@@ -26,6 +26,7 @@ import EnderecoEntregaModal, { enderecoDoPedido } from '@/components/EnderecoEnt
 import { getSocket, disconnectSocket } from '@/lib/socket';
 import { parseShippingAddress, formatPhone } from '@/lib/format-address';
 import { classifyShipping } from '@/lib/shipping-method';
+import { refCorTam, nomeSemVariacao } from '@/lib/peca-linha';
 import Logo from '@/components/Logo';
 import TrackingTimeline from '@/components/TrackingTimeline';
 import ProductThumb from '@/components/ProductThumb';
@@ -36,7 +37,7 @@ import {
   Clock, PlayCircle, CheckCircle2, Truck, Printer, RefreshCw,
   Wifi, WifiOff, X, LogOut, AlertCircle, Barcode, Search, History,
   Package2, ClipboardList, Shuffle, Inbox, Package, ShoppingCart,
-  Fingerprint, Zap, Radio, ArrowLeftRight, KeyRound, ScanFace, Smartphone,
+  Fingerprint, Zap, Radio, ArrowLeftRight, KeyRound, ScanFace, Smartphone, AlertTriangle,
 } from 'lucide-react';
 
 type PickStatus = 'new' | 'separating' | 'separated' | 'ready' | 'shipped';
@@ -47,7 +48,21 @@ interface PickOrderItem {
   quantity: number;
   productName?: string | null;
   variant?: string | null;
+  /** REF · COR · TAM — o que a vendedora lê pra achar a peça (13/08). */
+  ref?: string | null;
+  cor?: string | null;
+  tamanho?: string | null;
   assignedStoreId?: string | null;
+}
+
+/**
+ * Título da peça no card do SITE — MESMO formato do card da LIVE mais abaixo
+ * nesta tela (`{refCode} · {cor} {tamanho}`), com a descrição em cinza
+ * embaixo. Pedido do site nascido antes de 13/08 não tem REF gravada; aí cai
+ * no nome, que é o que essa tela sempre mostrou.
+ */
+function tituloPeca(it: PickOrderItem): string {
+  return refCorTam(it) || it.productName || it.sku;
 }
 
 interface PickOrderRow {
@@ -78,6 +93,8 @@ interface PickOrderRow {
     id: string;
     wcOrderId: number | null;
     wcOrderNumber: string | null;
+    /** 'site' | 'live' | 'ecommerce' | 'pdv_online' — pdv_online = card verde ONLINE */
+    source?: string | null;
     customerName: string | null;
     customerPhone: string | null;
     customerCpf?: string | null;
@@ -1409,6 +1426,7 @@ function QuickActionGrid({ realignmentPending = 0, shipmentsIncoming = 0 }: { re
     { href: '/minha-loja/realinhamento', icon: Shuffle,      label: 'Realinhar',      subtitle: 'Inter-lojas', description: 'Separar pra outras lojas', tone: 'sky',     badge: realignmentPending },
     { href: '/minha-loja/transferencia', icon: ArrowLeftRight, label: 'Transferir',    subtitle: 'Ponto a ponto', description: 'Mandar pra outra loja',    tone: 'sky'    },
     { href: '/minha-loja/recebimento',   icon: Inbox,        label: 'Receber',        subtitle: 'Mercadoria',  description: 'Dar entrada de remessa',   tone: 'green',   badge: shipmentsIncoming },
+    { href: '/minha-loja/defeitos',      icon: AlertTriangle, label: 'Defeitos',      subtitle: 'Avaria',      description: 'Tirar do estoque e mandar pra matriz', tone: 'amber' },
     { href: '/minha-loja/ponto',         icon: Fingerprint,  label: 'Ponto',          subtitle: 'Bater',       description: 'Entrada · almoço · saída', tone: 'indigo' },
     { href: '/minha-loja/ponto-celular', icon: Smartphone,   label: 'Ponto Celular',  subtitle: 'Totem',       description: 'Bater no celular da loja', tone: 'indigo' },
     { href: '/minha-loja/funcionarias',  icon: KeyRound,     label: 'Funcionárias',   subtitle: 'Função & PIN', description: 'Liberar desconto no PDV',   tone: 'amber'  },
@@ -1955,6 +1973,10 @@ function PickOrderCard({
   const [corrBusy, setCorrBusy] = useState(false);
 
   const isTransfer = !!row.isTransfer;
+  // CARD VERDE ONLINE (14/08): pedido criado pela Venda Online do PDV de outra
+  // loja (ou desta). Processo idêntico ao pedido do site — a cor/tag só dizem
+  // de onde veio.
+  const isOnline = order.source === 'pdv_online';
   const snap = row.customerSnapshot ?? null;
   // Na transferência os dados-chave vêm do snapshot (cliente final), não do order.customerName
   const customerName = isTransfer ? snap?.name ?? order.customerName : order.customerName;
@@ -1965,7 +1987,11 @@ function PickOrderCard({
   return (
     <article
       className={`bg-white rounded-xl border shadow-md overflow-hidden flex ${
-        isTransfer ? 'border-orange-400 ring-2 ring-orange-200' : 'border-slate-200'
+        isTransfer
+          ? 'border-orange-400 ring-2 ring-orange-200'
+          : isOnline
+          ? 'border-green-500 ring-2 ring-green-200'
+          : 'border-slate-200'
       }`}
       onClick={onSeen}
     >
@@ -2003,6 +2029,11 @@ function PickOrderCard({
             {isTransfer && (
               <span className="text-xs px-2 py-1 rounded bg-orange-100 text-orange-800 border border-orange-300 font-bold uppercase">
                 Transferência
+              </span>
+            )}
+            {isOnline && (
+              <span className="text-xs px-2 py-1 rounded bg-green-600 text-white border border-green-700 font-bold uppercase">
+                Online
               </span>
             )}
           </div>
@@ -2099,13 +2130,20 @@ function PickOrderCard({
                     className="group/troca text-left w-full"
                   >
                     <div className="text-slate-900 font-semibold leading-tight group-hover/troca:text-[#8C7325] group-hover/troca:underline decoration-dotted underline-offset-2">
-                      {it.productName ?? it.sku}
+                      {tituloPeca(it)}
                       <span className="ml-1 text-[10px] font-bold uppercase tracking-wide text-[#B8912B] opacity-0 group-hover/troca:opacity-100">✎ trocar</span>
                     </div>
                   </button>
                 ) : (
                   <div className="text-slate-900 font-semibold leading-tight">
-                    {it.productName ?? it.sku}
+                    {tituloPeca(it)}
+                  </div>
+                )}
+                {/* Descrição embaixo, cinza — o MESMO formato do card da LIVE
+                    logo abaixo nesta tela: a linha grande é REF · COR TAM. */}
+                {it.ref && it.productName && (
+                  <div className="truncate text-xs text-slate-500">
+                    {nomeSemVariacao(it.productName, it.cor, it.tamanho)}
                   </div>
                 )}
                 {it.variant && (

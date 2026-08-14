@@ -1,5 +1,6 @@
 'use client';
 import { overlayClose } from '@/lib/overlayClose';
+import { refCorTam, nomeSemVariacao } from '@/lib/peca-linha';
 
 /**
  * BipModal — tela de bipagem por código de barras (EAN13) pra finalizar separação.
@@ -28,6 +29,10 @@ interface ScanItem {
   id: string;
   sku: string;
   productName: string | null;
+  /** REF · COR · TAM — confere a peça na mão antes de bipar. */
+  ref?: string | null;
+  cor?: string | null;
+  tamanho?: string | null;
   quantity: number;
   ean: string | null; // null = não achou EAN no ERP
   eanVariants?: string[]; // variantes tolerando zeros à esquerda/padding
@@ -447,8 +452,11 @@ export default function BipModal({
                     >
                       <div className="flex-1 min-w-0">
                         <div className="font-mono text-xs text-slate-500">{it.sku}</div>
-                        <div className="font-medium text-slate-900 truncate">
-                          {it.productName ?? '(sem descrição)'}
+                        {/* REF · COR TAM em cima, descrição embaixo — mesmo
+                            formato do card da LIVE e da fila da /minha-loja. */}
+                        {it.ref && <div className="font-medium text-slate-900">{refCorTam(it)}</div>}
+                        <div className={`truncate ${it.ref ? 'text-xs text-slate-500' : 'font-medium text-slate-900'}`}>
+                          {nomeSemVariacao(it.productName, it.cor, it.tamanho) || '(sem descrição)'}
                         </div>
                         {/* Só avisa se NEM EAN NEM SKU funcionam como barcode —
                             na prática quase nunca acontece (SKU sempre é variante). */}

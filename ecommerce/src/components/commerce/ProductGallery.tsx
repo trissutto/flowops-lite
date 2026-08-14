@@ -94,6 +94,30 @@ export function ProductGallery({
               alt={current.alt}
               fill
               priority={active === 0}
+              /**
+               * QUALIDADE 90, e não o padrão 75 do Next.
+               *
+               * A foto do produto é o produto: é nela que a cliente decide se
+               * o caimento serve. Medido em 13/08 na VLM-222 — a mesma foto em
+               * AVIF sai com 11,4 KB a 75 e 15,5 KB a 90. Quatro quilobytes
+               * pela textura do tecido é troca óbvia; 75 é ajuste de banner.
+               */
+              quality={90}
+              /**
+               * ⚠️ NÃO INFLAR ISTO. Tentei 70vw em 13/08 pra a lupa (que
+               * amplia 1,7×) e o efeito foi a FOTO SUMIR da PDP.
+               *
+               * Cada largura nova é uma otimização a frio: a Vercel busca o
+               * arquivo no R2 e reencoda na hora, e o domínio público do R2
+               * responde **429 quando é puxado em paralelo** — a imagem falha
+               * e o quadro vira texto alternativo. Com fonte de 700px ainda
+               * por cima não havia ganho nenhum: w=1280, w=1920 e w=2400
+               * devolvem os mesmos 21,8 KB, porque o teto é o arquivo.
+               *
+               * Aqui fica o tamanho REAL do quadro. Quando as fotos de
+               * 1400×2000 entrarem, a nitidez vem delas — não de pedir uma
+               * largura que o arquivo não tem.
+               */
               sizes="(max-width: 1024px) 100vw, 45vw"
               placeholder="blur"
               blurDataURL={BLUR_DATA_URL}

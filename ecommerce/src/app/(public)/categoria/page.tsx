@@ -39,7 +39,10 @@ export const metadata: Metadata = buildMetadata({
 });
 
 export default async function CategoriasPage() {
-  const categorias = await getCategorias({ fresco: true });
+  // Categoria DESTACADA (estrela da retaguarda) vive como ABA própria no topo
+  // do site — o card junto duplicava a entrada, e foi a queixa do dono em
+  // 13/08 ("tire o Conforto daqui"). A estrela MOVE: dos cards pra barra.
+  const categorias = (await getCategorias({ fresco: true })).filter((c) => !c.destaque);
 
   return (
     <>

@@ -2,6 +2,9 @@ import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { refBaseOf, refsDeBusca } from '../common/ref-base';
+import {
+  medirImagem, fotoBaixaResolucao, FOTO_LARGURA_MINIMA, FOTO_ALTURA_MINIMA,
+} from '../common/medir-imagem';
 // Só os ESTÁTICOS (assinatura de formato) — não há injeção nem ciclo aqui.
 import { CorIaService } from './cor-ia.service';
 
@@ -215,6 +218,20 @@ export class ProductPhotosService {
     const base = publicUrl.replace(/\/$/, '');
     const fullUrl = `${base}/${objectKey}`;
 
+    /**
+     * Mede o arquivo pra saber se a peça vai aparecer nítida na vitrine.
+     * Formato exótico devolve null e a foto entra sem medida — a medição é
+     * informação, não portaria (ver common/medir-imagem.ts).
+     */
+    const tamanho = medirImagem(input.file.buffer);
+    if (tamanho && fotoBaixaResolucao(tamanho.largura, tamanho.altura)) {
+      this.logger.warn(
+        `[foto] ${refUp}${corUp ? ` ${corUp}` : ''}: ${tamanho.largura}x${tamanho.altura} — ` +
+          `abaixo de ${FOTO_LARGURA_MINIMA}x${FOTO_ALTURA_MINIMA}, vai sair borrada na PDP`,
+      );
+    }
+    const medida = { larguraPx: tamanho?.largura ?? null, alturaPx: tamanho?.altura ?? null };
+
     // Trocar foto existente: a nova herda a ordem (a capa continua capa) e a
     // antiga sai do bucket.
     if (alvo) {
@@ -233,6 +250,7 @@ export class ProductPhotosService {
           url: fullUrl,
           objectKey,
           uploadedByUserId: input.userId || null,
+          ...medida,
         },
       });
     }
@@ -251,8 +269,86 @@ export class ProductPhotosService {
         objectKey,
         ordem: proximaOrdem,
         uploadedByUserId: input.userId || null,
+        ...medida,
       },
     });
+  }
+
+  /**
+   * As fotos que vão sair borradas na vitrine, capa primeiro.
+   *
+   * Capa antes das outras de propósito: é a que aparece na listagem, no Meta e
+   * no card — uma capa pequena custa mais que a 4ª foto da galeria.
+   */
+  async listarBaixaResolucao(limite = 200) {
+    const fotos: any[] = await this.prisma.$queryRawUnsafe(
+      `
+      SELECT id, ref, cor, url, ordem, largura_px AS "larguraPx", altura_px AS "alturaPx"
+        FROM product_photos
+       WHERE largura_px IS NOT NULL
+         AND (largura_px < $1 OR altura_px < $2)
+       ORDER BY ordem ASC, ref ASC
+       LIMIT $3
+      `,
+      FOTO_LARGURA_MINIMA, FOTO_ALTURA_MINIMA, Math.max(1, Math.min(1000, limite)),
+    );
+
+    const [contagem]: any[] = await this.prisma.$queryRawUnsafe(
+      `
+      SELECT COUNT(*)::int                                                        AS total,
+             COUNT(*) FILTER (WHERE largura_px IS NULL)::int                      AS "semMedida",
+             COUNT(*) FILTER (WHERE largura_px IS NOT NULL
+                              AND (largura_px < $1 OR altura_px < $2))::int        AS "abaixoDoMinimo"
+        FROM product_photos
+      `,
+      FOTO_LARGURA_MINIMA, FOTO_ALTURA_MINIMA,
+    );
+
+    return {
+      minimo: { largura: FOTO_LARGURA_MINIMA, altura: FOTO_ALTURA_MINIMA },
+      ...contagem,
+      fotos,
+    };
+  }
+
+  /**
+   * Mede o acervo ANTIGO — foto anterior a 13/08 entrou sem medida.
+   *
+   * Baixa só os primeiros 128 KB de cada arquivo (header `Range`): as
+   * dimensões moram no começo, e puxar 3.600 fotos inteiras seria gigabytes
+   * pra descobrir dois números. Em série e com teto por chamada, mesma receita
+   * do `normalizarFormatos` — o domínio público do R2 responde 429 com pressa.
+   */
+  async medirAcervo(limite = 200): Promise<{
+    olhadas: number; medidas: number; pequenas: number; falharam: number; restantes: number;
+  }> {
+    const fotos: any[] = await (this.prisma as any).productPhoto.findMany({
+      where: { larguraPx: null },
+      orderBy: { createdAt: 'desc' },
+      take: Math.max(1, Math.min(500, limite)),
+    });
+
+    let medidas = 0, pequenas = 0, falharam = 0;
+    for (const foto of fotos) {
+      try {
+        const resposta = await fetch(foto.url, { headers: { Range: 'bytes=0-131071' } });
+        if (!resposta.ok && resposta.status !== 206) throw new Error(`HTTP ${resposta.status}`);
+        const tamanho = medirImagem(Buffer.from(await resposta.arrayBuffer()));
+        if (!tamanho) { falharam++; continue; }
+        await (this.prisma as any).productPhoto.update({
+          where: { id: foto.id },
+          data: { larguraPx: tamanho.largura, alturaPx: tamanho.altura },
+        });
+        medidas++;
+        if (fotoBaixaResolucao(tamanho.largura, tamanho.altura)) pequenas++;
+      } catch (e: any) {
+        falharam++;
+        this.logger.warn(`[foto] não medi ${foto.ref}/${foto.cor ?? '—'}: ${e?.message || e}`);
+      }
+    }
+
+    const restantes = await (this.prisma as any).productPhoto.count({ where: { larguraPx: null } });
+    return { olhadas: fotos.length, medidas, pequenas, falharam, restantes };
   }
 
   /**

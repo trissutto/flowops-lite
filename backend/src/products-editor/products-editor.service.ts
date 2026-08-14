@@ -3,6 +3,8 @@ import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
 import { ProductSearchService } from '../product-search/product-search.service';
+import { LojaCatalogService } from '../loja-catalog/loja-catalog.service';
+import { avisarVitrine } from '../common/avisar-vitrine';
 
 /**
  * EDITOR DE PRODUTOS (/retaguarda/editor-produtos) — padronizar REF, corrigir
@@ -44,7 +46,25 @@ export class ProductsEditorService {
     private readonly prisma: PrismaService,
     private readonly erp: ErpService,
     private readonly search: ProductSearchService,
+    private readonly catalogo: LojaCatalogService,
   ) {}
+
+  /**
+   * SALVOU AQUI, O SITE MUDA (13/08).
+   *
+   * Esta tela renomeia REF, troca preço e marca em bloco — mexe no que a
+   * vitrine mostra. E não avisava ninguém: o catálogo montado do backend tem
+   * cache de 60 s e a página, ISR. O dono renomeou VOGUE-PD → VOGUE pra juntar
+   * a cor na peça, foi conferir no site e não viu nada mudar.
+   *
+   * As DUAS pontas, sempre juntas: derrubar o cache do site não adianta se o
+   * backend responder do dele — a página revalidaria e receberia exatamente a
+   * mesma resposta velha (a lição da classificação, 10/08).
+   */
+  private avisarSite() {
+    this.catalogo.invalidarCache();
+    avisarVitrine(['catalogo', 'vitrine', 'filtros'], this.logger, 'editor-produtos');
+  }
 
   private get shadowMode(): boolean {
     return String(process.env.EDITOR_PRODUTOS_WRITE ?? '').trim() === '0';
@@ -566,6 +586,7 @@ export class ProductsEditorService {
 
     await (this.prisma as any).productEditAudit.createMany({ data: auditRows });
     this.logger.log(`[editor-produtos] batch ${batchId}: ${atualizados} produtos gravados no Giga por ${input.userName || '?'}`);
+    this.avisarSite();
     return { ok: true, shadow: false, batchId, atualizados, planejados: erpRows.length };
   }
 
@@ -663,6 +684,9 @@ export class ProductsEditorService {
     }
     await (this.prisma as any).productEditAudit.createMany({ data: audits });
     this.logger.log(`[editor-produtos] MARCA EM MASSA "${marca}" em ${codigos.length} variações (busca "${q}") por ${input.userName || '?'}`);
+    // Marca é o que agrupa a peça no card da vitrine ([[busca-agrupa-por-marca]]):
+    // trocar em bloco e não avisar deixa o site com o agrupamento anterior.
+    this.avisarSite();
     return { ok: true, shadow: false, batchId, atualizados: atualizados || codigos.length, planejados: codigos.length };
   }
 
@@ -1196,6 +1220,9 @@ export class ProductsEditorService {
         (gigaEnfileirado ? ' + Giga via outbox' : ` + ${excluidosGiga} no Giga`) +
         ` (por ${input.userName || '?'})`,
     );
+    // Peça excluída tem que SUMIR do site na hora — é o caso em que servir a
+    // página velha vende o que não existe mais.
+    this.avisarSite();
     return { ok: true, excluidos: codigos.length, excluidosGiga, gigaEnfileirado, batchId };
   }
 

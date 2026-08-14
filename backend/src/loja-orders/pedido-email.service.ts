@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 import { EmailService } from '../email/email.service';
+import { WhatsappService } from '../whatsapp/whatsapp.service';
 
 /**
  * O E-MAIL QUE A CLIENTE ESPERA — e que não existia (achado de 12/08/2026).
@@ -45,11 +46,88 @@ export class PedidoEmailService {
   /** Prazo de troca — o mesmo do portal (`TrocasService`, default 7). */
   private static readonly DIAS_TROCA = 7;
 
+  /** Quantas lojas físicas aceitam a troca — o argumento que o site sozinho não tem. */
+  private static readonly LOJAS_NA_REDE = 14;
+
   constructor(
     private readonly email: EmailService,
     private readonly config: ConfigService,
     private readonly http: HttpService,
+    private readonly whats: WhatsappService,
   ) {}
+
+  /**
+   * WHATSAPP DIRETO — o plano B do n8n (liberado pelo dono, 14/08).
+   *
+   * O fluxo "Pedido Pago" decide com `status === 'processing'`, então só o
+   * evento de PAGAMENTO vira mensagem: `pix_nao_pago`, `pedido_enviado` e
+   * `pedido_entregue` chegam lá e são descartados pelo IF. Enquanto não
+   * existirem ramos por `body.evento`, esses três saem por aqui — pelo mesmo
+   * WhatsApp que o portal de trocas e o código de recuperação de senha já
+   * usam em produção.
+   *
+   * ⚠️ NUNCA cobre `pagamento_confirmado`: esse o n8n já manda, e ligar os
+   * dois entrega a mesma mensagem duas vezes — o defeito que a cliente lê
+   * como "comprei duas vezes".
+   *
+   * Kill-switch `WHATS_PEDIDO_DIRETO=0`. Ao criar os ramos no n8n, desligar
+   * aqui — senão a duplicidade volta pela outra ponta.
+   */
+  private get whatsDiretoLigado(): boolean {
+    return String(this.config.get<string>('WHATS_PEDIDO_DIRETO') ?? '1') === '1';
+  }
+
+  private async avisarWhatsDireto(
+    evento: 'pix_nao_pago' | 'pedido_enviado' | 'pedido_entregue',
+    order: any,
+  ): Promise<boolean> {
+    if (!this.whatsDiretoLigado) return false;
+    const telefone = String(order?.customerPhone || '').replace(/\D/g, '');
+    if (telefone.length < 10) return false;
+
+    const nome = this.primeiroNome(order?.customerName);
+    const numero = order?.wcOrderNumber ? ` ${order.wcOrderNumber}` : '';
+    let texto: string | null = null;
+
+    if (evento === 'pix_nao_pago') {
+      const pix = this.pixDoPedido(order);
+      if (!pix.copiaECola) return false; // sem o código a mensagem não serve pra nada
+      const validade =
+        pix.minutosRestantes && pix.minutosRestantes > 0
+          ? `\nEle vale por mais ${pix.minutosRestantes} minutos.`
+          : '';
+      texto =
+        `Oi, ${nome}! 💛\n\nSuas peças do pedido${numero} estão reservadas, mas o Pix ainda não caiu.${validade}\n\n` +
+        `É só copiar o código abaixo e colar em "Pix copia e cola" no app do seu banco:\n\n${pix.copiaECola}\n\n` +
+        `Se o Pix vencer, o pedido é liberado e as peças voltam pro estoque — nada é cobrado.`;
+    } else if (evento === 'pedido_enviado') {
+      const codigo = String(order?.trackingCode || '').trim();
+      const transportadora = String(order?.carrier || 'Correios');
+      const link = this.linkRastreio(codigo, transportadora);
+      texto =
+        `Oi, ${nome}! 💛\n\nSeu pedido${numero} saiu pra entrega com a ${transportadora}.` +
+        (codigo ? `\n\n📦 Código: *${codigo}*` : '') +
+        (link ? `\n${link}` : '');
+    } else {
+      const limite = new Date(Date.now() + PedidoEmailService.DIAS_TROCA * 24 * 60 * 60 * 1000);
+      texto =
+        `Oi, ${nome}! 💛\n\nOs Correios confirmaram a entrega do seu pedido${numero}. ` +
+        `Esperamos que sirva certinho!\n\n` +
+        `Se precisar trocar, você tem até ${limite.toLocaleDateString('pt-BR')} — pelo portal de trocas ` +
+        `ou em qualquer uma das nossas ${PedidoEmailService.LOJAS_NA_REDE} lojas.`;
+    }
+
+    try {
+      const r = await this.whats.sendText(telefone, texto);
+      if (!r?.ok) {
+        this.logger.warn(`[pedido-whats] ${evento} não saiu (pedido ${order?.wcOrderNumber}): ${r?.error}`);
+      }
+      return !!r?.ok;
+    } catch (e: any) {
+      this.logger.warn(`[pedido-whats] ${evento} falhou (pedido ${order?.wcOrderNumber}): ${e?.message || e}`);
+      return false;
+    }
+  }
 
   /**
    * ── O n8n É O DONO DA CONVERSA (decisão do dono, 12/08/2026) ──
@@ -89,11 +167,14 @@ export class PedidoEmailService {
    * cliques, e obrigar quem edita o fluxo a cavar dentro de objeto aninhado é
    * o jeito mais rápido de o fluxo quebrar na primeira manutenção.
    */
-  private async avisarN8n(evento: 'pedido_criado' | 'pagamento_confirmado', order: any): Promise<void> {
+  private async avisarN8n(
+    evento: 'pedido_criado' | 'pagamento_confirmado' | 'pix_nao_pago' | 'pedido_enviado' | 'pedido_entregue',
+    order: any,
+  ): Promise<boolean> {
     const url = this.webhookN8n;
     if (!url) {
       this.logger.debug(`[pedido-msg] ${evento} não disparado — N8N_PEDIDO_WEBHOOK_URL ausente`);
-      return;
+      return false;
     }
 
     /**
@@ -159,14 +240,53 @@ export class PedidoEmailService {
             },
             itens: this.itensDoPedido(order),
             prazoTrocaDias: PedidoEmailService.DIAS_TROCA,
+            // ── só no resgate: o código copia-e-cola VAI NA MENSAGEM ──
+            // A cliente paga direto do WhatsApp, sem reabrir o site. É a
+            // única saída do paymentInfo pra fora do backend, e o destino é
+            // o n8n da casa — nunca o GET público.
+            ...(evento === 'pix_nao_pago' ? { pix: this.pixDoPedido(order) } : {}),
+            // ── só no envio: código e transportadora pro WhatsApp de rastreio ──
+            ...(evento === 'pedido_enviado'
+              ? {
+                  rastreio: {
+                    codigo: order?.trackingCode ?? null,
+                    transportadora: order?.carrier ?? 'Correios',
+                    link: this.linkRastreio(order?.trackingCode, order?.carrier),
+                  },
+                }
+              : {}),
           },
           { timeout: 12000 },
         ),
       );
       this.logger.log(`[pedido-msg] ${evento} entregue ao n8n (pedido ${order?.wcOrderNumber ?? order?.id})`);
+      return true;
     } catch (e: any) {
       this.logger.warn(`[pedido-msg] n8n não recebeu ${evento}: ${e?.response?.status ?? ''} ${e?.message || e}`);
+      return false;
     }
+  }
+
+  /** Copia-e-cola e validade do PIX, lidos do paymentInfo do pedido. */
+  private pixDoPedido(order: any): { copiaECola: string | null; expiraEm: string | null; minutosRestantes: number | null } {
+    try {
+      const info = JSON.parse(String(order?.paymentInfo || '{}'));
+      const expiraEm = info?.pix?.expiresAt ?? null;
+      const restam = expiraEm ? Math.max(0, Math.round((Date.parse(expiraEm) - Date.now()) / 60000)) : null;
+      return { copiaECola: info?.pix?.copyPaste ?? null, expiraEm, minutosRestantes: restam };
+    } catch {
+      return { copiaECola: null, expiraEm: null, minutosRestantes: null };
+    }
+  }
+
+  /** Link de acompanhamento — Correios tem página pública; outras, só o código. */
+  private linkRastreio(codigo?: string | null, carrier?: string | null): string | null {
+    if (!codigo) return null;
+    const c = String(carrier || 'correios').toLowerCase();
+    if (c.includes('correio') || c.includes('pac') || c.includes('sedex')) {
+      return `https://rastreamento.correios.com.br/app/index.php?objeto=${encodeURIComponent(codigo)}`;
+    }
+    return null;
   }
 
   private moeda(v?: number | null): string {
@@ -298,6 +418,87 @@ export class PedidoEmailService {
     await this.enviar(para, `${titulo} · ${order?.wcOrderNumber ?? ''}`.trim(), titulo, chamada, order, rodape);
   }
 
+  /**
+   * PIX gerado e não pago há 30min — o resgate mais barato do e-commerce:
+   * ela preencheu TUDO (nome, telefone, endereço) e só falta pagar. Dois
+   * canais no MESMO toque: WhatsApp via n8n (ramo `evento === 'pix_nao_pago'`)
+   * e o e-mail próprio — os dois com o copia-e-cola, pra pagar sem reabrir
+   * o site.
+   *
+   * Devolve se ALGUM canal saiu: o cron carimba `pixResgateAvisadoEm` e o
+   * toque é um só — se um canal falhou mas o outro entregou, tocou. Só o
+   * fracasso duplo tenta de novo no ciclo seguinte, dentro da janela.
+   */
+  async aoPixNaoPago(order: any): Promise<boolean> {
+    const n8nOk = await this.avisarN8n('pix_nao_pago', order);
+    const whatsOk = await this.avisarWhatsDireto('pix_nao_pago', order);
+
+    let emailOk = false;
+    const para = this.emailProprioLigado ? this.destinatario(order) : null;
+    if (para) {
+      const nome = this.primeiroNome(order?.customerName);
+      const pix = this.pixDoPedido(order);
+      const validade =
+        pix.minutosRestantes !== null && pix.minutosRestantes > 0
+          ? ` Ele vale por mais ${pix.minutosRestantes} minutos.`
+          : '';
+      const titulo = 'Seu Pix está esperando';
+      const chamada =
+        `${nome}, suas peças estão reservadas e o Pix do pedido ainda não caiu.${validade} ` +
+        `É só copiar o código abaixo e colar na opção "Pix copia e cola" do app do seu banco:` +
+        (pix.copiaECola
+          ? `<div style="margin:14px 0 0;padding:12px;background:#f6f4ef;border:1px solid #e5e0d5;border-radius:6px;font-family:monospace;font-size:12px;word-break:break-all;color:#333">${this.escapar(pix.copiaECola)}</div>`
+          : '');
+      const rodape =
+        'Se o Pix vencer, o pedido é liberado automaticamente e as peças voltam pro estoque — nada é cobrado. ' +
+        'Qualquer dúvida, responda este e-mail ou chame uma consultora no WhatsApp.';
+      emailOk = await this.enviar(
+        para,
+        `${titulo} · pedido ${order?.wcOrderNumber ?? ''}`.trim(),
+        titulo, chamada, order, rodape,
+      );
+    }
+    return n8nOk || whatsOk || emailOk;
+  }
+
+  /**
+   * Pedido saiu pra entrega — o e-mail prometido no "Pagamento confirmado"
+   * ("mandamos o código de rastreio") que até 14/08 ninguém cumpria: o
+   * WhatsApp de rastreio só existia pra cliente da LIVE (ManyChat), e o
+   * pedido do site novo não passa pelo WooCommerce que avisava o site velho.
+   *
+   * Chamado pelo afterShipped do pick-orders com guard atômico no pedido
+   * (`rastreioAvisadoEm`) — pedido dividido despacha por loja e só o
+   * PRIMEIRO pacote com rastreio gera o aviso.
+   */
+  async aoEnviarPedido(order: any): Promise<void> {
+    void this.avisarN8n('pedido_enviado', order);
+    void this.avisarWhatsDireto('pedido_enviado', order);
+    if (!this.emailProprioLigado) return;
+
+    const para = this.destinatario(order);
+    if (!para) {
+      this.logger.warn(`[pedido-email] pedido ${order?.wcOrderNumber ?? order?.id} enviado, mas sem e-mail válido`);
+      return;
+    }
+    const nome = this.primeiroNome(order?.customerName);
+    const codigo = String(order?.trackingCode || '').trim();
+    const transportadora = String(order?.carrier || 'Correios');
+    const link = this.linkRastreio(codigo, transportadora);
+    const titulo = 'Seu pedido saiu pra entrega';
+    const chamada =
+      `${nome}, suas peças já estão com a ${this.escapar(transportadora)}.` +
+      (codigo
+        ? ` Acompanhe a entrega com o código <strong style="font-family:monospace">${this.escapar(codigo)}</strong>` +
+          (link ? ` — ou <a href="${link}" style="color:#b8912b">clique aqui pra rastrear</a>.` : '.')
+        : '');
+    const rodape =
+      `Não serviu? Você tem ${PedidoEmailService.DIAS_TROCA} dias corridos a partir do recebimento pra trocar ` +
+      `pelo portal de trocas ou em qualquer uma das nossas lojas.`;
+
+    await this.enviar(para, `${titulo} · pedido ${order?.wcOrderNumber ?? ''}`.trim(), titulo, chamada, order, rodape);
+  }
+
   /** Pagamento confirmado — a mensagem que a cliente realmente espera. */
   async aoConfirmarPagamento(order: any): Promise<void> {
     void this.avisarN8n('pagamento_confirmado', order);
@@ -318,9 +519,47 @@ export class PedidoEmailService {
     await this.enviar(para, `${titulo} · pedido ${order?.wcOrderNumber ?? ''}`.trim(), titulo, chamada, order, rodape);
   }
 
+  /**
+   * ENTREGA CONFIRMADA — o fim do ciclo, que até 14/08 acontecia em silêncio.
+   *
+   * O sistema já sabia da entrega (`TrackingService.delivered`) e não dizia
+   * nada justo no momento mais útil: a peça está na mão da cliente e é AGORA
+   * que o prazo de troca começa a correr. Dizer a data em que ele vence evita
+   * a conversa mais cara do pós-venda ("mas eu achei que tinha mais tempo").
+   *
+   * É também o único momento em que pedir avaliação faz sentido — ela acabou
+   * de provar a roupa. Prova social real, das clientes que compraram de fato.
+   */
+  async aoEntregar(order: any): Promise<boolean> {
+    const n8nOk = await this.avisarN8n('pedido_entregue', order);
+    const whatsOk = await this.avisarWhatsDireto('pedido_entregue', order);
+    if (!this.emailProprioLigado) return n8nOk || whatsOk;
+
+    const para = this.destinatario(order);
+    if (!para) return n8nOk || whatsOk;
+
+    const nome = this.primeiroNome(order?.customerName);
+    const limite = new Date(Date.now() + PedidoEmailService.DIAS_TROCA * 24 * 60 * 60 * 1000);
+    const ateQuando = limite.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+    const titulo = 'Seu pedido chegou';
+    const chamada =
+      `${nome}, os Correios confirmaram a entrega do seu pedido. Esperamos que sirva certinho e que você ame as peças!` +
+      `<br><br>Se alguma coisa não ficou como você esperava, dá pra trocar até <strong>${ateQuando}</strong> ` +
+      `— pelo portal de trocas ou em qualquer uma das nossas ${PedidoEmailService.LOJAS_NA_REDE} lojas, sem complicação.`;
+    const rodape =
+      'Ficou boa em você? Responde esse e-mail com uma foto ou um "amei" — a gente adora ver, ' +
+      'e sua opinião ajuda outra cliente a escolher o tamanho certo.';
+
+    const emailOk = await this.enviar(
+      para, `${titulo} · pedido ${order?.wcOrderNumber ?? ''}`.trim(), titulo, chamada, order, rodape,
+    );
+    return n8nOk || whatsOk || emailOk;
+  }
+
+  /** Devolve se o e-mail SAIU — o resgate do PIX usa isso pra decidir o carimbo. */
   private async enviar(
     para: string, assunto: string, titulo: string, chamada: string, order: any, rodape: string,
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
       const ok = await this.email.send(
         para,
@@ -338,8 +577,10 @@ export class PedidoEmailService {
             `SMTP_HOST/USER/PASS configurados?`,
         );
       }
+      return !!ok;
     } catch (e: any) {
       this.logger.warn(`[pedido-email] falhou: ${e?.message || e}`);
+      return false;
     }
   }
 }

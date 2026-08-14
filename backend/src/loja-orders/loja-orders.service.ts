@@ -96,6 +96,11 @@ export interface LojaItemInput {
   quantity: number;
   /** Em REAIS. */
   unitPrice: number;
+  /**
+   * REF da peça, preenchida pelo GUARD (não vem do carrinho). É o que a loja
+   * usa pra achar a peça na arara — o `sku` vira o código do ERP logo abaixo.
+   */
+  ref?: string;
 }
 
 export interface LojaTrackingInput {
@@ -115,6 +120,8 @@ export interface LojaTrackingInput {
 export interface CriarPedidoInput {
   customer: LojaCustomerInput;
   shippingAddress?: LojaAddressInput;
+  /** CEP digitado na cotação — vem mesmo na retirada (sem endereço completo). */
+  cep?: string;
   shipping: LojaShippingInput;
   items: LojaItemInput[];
   couponCode?: string;
@@ -373,6 +380,13 @@ export class LojaOrdersService {
        * escolhida): aí mantemos a REF, que pelo menos é rastreável na mão.
        */
       if (c.codigo) input.items[c.indice].sku = c.codigo;
+
+      /**
+       * A REF vem junto (13/08). O `sku` acima é o CÓDIGO — sete dígitos que
+       * ninguém lê na loja. Quem separa procura pela REF, e o pedido do site
+       * era o único canal que não mostrava a dela em lugar nenhum.
+       */
+      if (c.ref) input.items[c.indice].ref = c.ref;
     }
     const subtotal = this.dinheiro(conferencia.subtotal);
 
@@ -647,14 +661,42 @@ export class LojaOrdersService {
    * Próxima sequência da faixa da loja. Pega o MAIOR wcOrderId já usado (ver
    * decisão 2 no topo do arquivo) — não `count()`.
    */
+  /**
+   * O PRÓXIMO NÚMERO, E ELE NUNCA VOLTA.
+   *
+   * Era `MAX(wcOrderId)` dos pedidos existentes. Cartão recusado dá rollback e
+   * o pedido não persiste — então o número voltava pra fila e a cliente
+   * seguinte recebia o MESMO: em 14/08 o `LP-000012` apareceu no painel da
+   * Pagar.me em três pessoas diferentes. Procurar por esse código num
+   * atendimento ou numa contestação devolvia a pessoa errada.
+   *
+   * Agora o contador é uma linha própria, incrementada em transação e FORA da
+   * vida do pedido: tentativa recusada QUEIMA o número. Buraco na numeração é
+   * barato; código repetido entre clientes não é.
+   *
+   * A primeira chamada semeia o contador a partir do maior pedido já gravado,
+   * pra numeração continuar de onde parou em vez de recomeçar do zero.
+   */
   private async proximaSequencia(): Promise<number> {
     const base = LojaOrdersService.LOJA_WC_ID_BASE;
-    const ultimo = await (this.prisma as any).order.findFirst({
-      where: { source: 'ecommerce', wcOrderId: { gte: base } },
-      orderBy: { wcOrderId: 'desc' },
-      select: { wcOrderId: true },
+
+    return (this.prisma as any).$transaction(async (tx: any) => {
+      const atual = await tx.lojaPedidoSequence.findFirst({ where: { id: 1 } });
+      if (atual) {
+        const proximo = Number(atual.lastSeq) + 1;
+        await tx.lojaPedidoSequence.update({ where: { id: 1 }, data: { lastSeq: proximo } });
+        return proximo;
+      }
+
+      const ultimo = await tx.order.findFirst({
+        where: { source: 'ecommerce', wcOrderId: { gte: base } },
+        orderBy: { wcOrderId: 'desc' },
+        select: { wcOrderId: true },
+      });
+      const proximo = (ultimo ? Number(ultimo.wcOrderId) - base : 0) + 1;
+      await tx.lojaPedidoSequence.create({ data: { id: 1, lastSeq: proximo } });
+      return proximo;
     });
-    return ultimo ? Number(ultimo.wcOrderId) - base : 0;
   }
 
   private numeroPedido(seq: number): string {
@@ -688,7 +730,6 @@ export class LojaOrdersService {
     conta?: { descontoCupom: number; descontoPix: number },
   ): Promise<any> {
     const base = LojaOrdersService.LOJA_WC_ID_BASE;
-    const seq0 = await this.proximaSequencia();
     const shipping = this.montarShippingWc(input);
     const retirada = input.shipping.kind === 'retirada';
     const attr = input.tracking?.attribution || {};
@@ -731,6 +772,7 @@ export class LojaOrdersService {
       items: input.items.map((it) => ({
         productId: it.productId,
         sku: it.sku,
+        ref: it.ref || it.productId || null,
         slug: it.slug,
         name: it.name,
         size: it.size,
@@ -750,10 +792,14 @@ export class LojaOrdersService {
         }
       : null;
 
-    // Retry em colisão de wcOrderId — mesma defesa da live: dois checkouts
-    // simultâneos leem a mesma sequência e um dos dois bate P2002.
+    // Retry em colisão de wcOrderId — rede de segurança que ficou de pé mesmo
+    // com o contador transacional: número gravado à mão em produção ou
+    // importação antiga ainda podem ocupar a faixa.
     for (let tent = 0; tent < 6; tent++) {
-      const seq = seq0 + 1 + tent;
+      // Cada tentativa pede um número NOVO ao contador — inclusive a que
+      // colidiu. Somar +1 no número anterior traria de volta o problema que o
+      // contador resolve: dois checkouts simultâneos chegando no mesmo LP.
+      const seq = await this.proximaSequencia();
       try {
         return await (this.prisma as any).order.create({
           data: {
@@ -787,6 +833,12 @@ export class LojaOrdersService {
               create: input.items.map((it) => ({
                 sku: String(it.sku),
                 productName: [it.name, it.color, it.size].filter(Boolean).join(' · '),
+                // REF/COR/TAMANHO em colunas próprias: o `productName` já
+                // trazia cor e tamanho grudados no nome, mas grudado não dá
+                // pra destacar na separação nem imprimir em coluna.
+                ref: it.ref || it.productId || null,
+                cor: it.color || null,
+                tamanho: it.size || null,
                 quantity: Number(it.quantity),
                 unitPrice: this.dinheiro(it.unitPrice),
                 // No site o preço praticado JÁ é o cheio — não há tabela
@@ -939,6 +991,16 @@ export class LojaOrdersService {
             installments: parcelas,
             statement_descriptor: 'LURDS',
             card_token: String(input.payment.cardToken),
+            /**
+             * BILLING_ADDRESS OBRIGATÓRIO (incidente 14/08): a Pagar.me passou
+             * a exigir o endereço de cobrança no cartão — 4 de 4 tentativas do
+             * dia morreram com `validation_error | billing | "value" is
+             * required` SEM nenhum deploy nosso no caminho (cartão pagava às
+             * 03:44, quebrou até as 13:22 com o mesmo código). O endereço de
+             * entrega é o proxy padrão do titular; retirada na loja (sem
+             * endereço) cai pro CEP digitado + matriz.
+             */
+            card: { billing_address: this.billingAddressPagarme(end, input.cep) },
           },
           ...(cfg.recipientId
             ? {
@@ -1016,6 +1078,37 @@ export class LojaOrdersService {
     }
 
     return { ok: true, gatewayOrderId: gw.id, gatewayChargeId: charge?.id || null };
+  }
+
+  /**
+   * Endereço de cobrança pro cartão da Pagar.me (exigido desde 14/08).
+   *
+   * Entrega em casa → o endereço de entrega é o proxy do titular (padrão do
+   * varejo). Retirada na loja → não existe endereço digitado; vai o CEP que a
+   * cliente usou na cotação com a cidade da matriz como âncora — a Pagar.me
+   * valida presença dos campos, e recusar TODO cartão de retirada por falta
+   * de um formulário a mais seria pior que a aproximação.
+   */
+  private billingAddressPagarme(
+    end: CriarPedidoInput['shippingAddress'],
+    cepCotacao?: string,
+  ): Record<string, string> {
+    if (end) {
+      return {
+        line_1: [end.number, end.street, end.neighborhood].filter(Boolean).join(', '),
+        zip_code: this.digits(end.cep),
+        city: end.city,
+        state: (end.uf || '').toUpperCase().slice(0, 2),
+        country: 'BR',
+      };
+    }
+    return {
+      line_1: 'Retirada em loja',
+      zip_code: this.digits(cepCotacao || '') || '08710000',
+      city: 'Mogi das Cruzes',
+      state: 'SP',
+      country: 'BR',
+    };
   }
 
   /**
@@ -1102,13 +1195,32 @@ export class LojaOrdersService {
       } else {
         const r = await this.cobrarCartao(order, input);
         if (!r.ok) {
-          // "Cartão recusado NÃO cria pedido": apaga o Order recém-criado (os
-          // itens caem por cascade; ainda não há histórico/pick-order pendurado)
-          // pra retaguarda não encher de pedido fantasma. Se o delete falhar,
-          // pelo menos cancela — nunca deixa em awaiting_payment eterno.
-          // O PagarmePayment status='failed' FICA (não tem FK): é registro de
-          // tentativa e é justamente o que a conciliação quer enxergar.
-          await this.descartarPedido(order.id);
+          /**
+           * CARTÃO RECUSADO VIRA CARRINHO RESGATÁVEL (dono, 14/08).
+           *
+           * Até hoje o pedido recusado era APAGADO — e com ele o nome e o
+           * telefone da cliente mais quente que existe: a que JÁ tentou
+           * pagar. No incidente do billing_address (4 recusas em 25min) as
+           * duas clientes sumiram do banco sem deixar rastro na aba
+           * Carrinhos. Agora o pedido fica com `status='payment_failed'`:
+           *
+           *  - NÃO entra em nenhuma fila (roteamento/separação/reconcile/
+           *    resgate PIX filtram por status explícito, e este não está em
+           *    nenhuma lista);
+           *  - NÃO segura estoque (a baixa só acontece no bipe da separação);
+           *  - APARECE na aba Carrinhos (abandoned = sem pagamento e não
+           *    cancelado) com botão de WhatsApp.
+           *
+           * Tentou de novo e passou? Nasce outro pedido — o recusado fica
+           * como registro da tentativa, mesmo papel do PagarmePayment
+           * status='failed' que sempre ficou.
+           */
+          await (this.prisma as any).order
+            .update({ where: { id: order.id }, data: { status: 'payment_failed' } })
+            .catch(async (e: any) => {
+              this.logger.warn(`[loja] recusa não persistiu (${e?.message || e}) — descartando como antes`);
+              await this.descartarPedido(order.id);
+            });
           return { ok: false, error: r.error };
         }
         paymentInfo = {
@@ -1213,6 +1325,10 @@ export class LojaOrdersService {
   private statusPublico(order: any): 'awaiting_payment' | 'paid' | 'expired' | 'cancelled' {
     const s = String(order?.status || '');
     if (s === 'cancelled' || s === 'canceled') return 'cancelled';
+    // Cartão recusado (14/08): pro público lê como cancelado — a cliente que
+    // abrir o link não pode ver "aguardando pagamento" de uma cobrança que
+    // não existe mais.
+    if (s === 'payment_failed') return 'cancelled';
     if (s === 'awaiting_payment') {
       // PIX vencido sem pagamento vira `expired` (o pedido segue no banco pra
       // eventual pagamento tardio — o webhook ainda confirma se cair).

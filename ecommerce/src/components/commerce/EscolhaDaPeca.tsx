@@ -1,9 +1,11 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ProductGallery } from '@/components/commerce/ProductGallery';
 import { BuyBox } from '@/components/commerce/BuyBox';
-import type { CorApi } from '@/services/products';
+import { useToast } from '@/components/feedback/ToastProvider';
+import { useEstoqueAoVivo } from '@/hooks/useEstoqueAoVivo';
+import type { CorApi, PecaApi } from '@/services/products';
 import type { Product } from '@/types';
 
 /**
@@ -22,15 +24,73 @@ import type { Product } from '@/types';
  * Cor inicial: a primeira COM ESTOQUE. Abrir na cor esgotada é convidar a
  * cliente a bater na parede logo no primeiro clique.
  */
-export function EscolhaDaPeca({ product, cores }: { product: Product; cores: CorApi[] }) {
+export function EscolhaDaPeca({
+  product,
+  cores: coresDoServidor,
+  look,
+}: {
+  product: Product;
+  cores: CorApi[];
+  /** As peças que saem na MESMA foto — repassado direto pro BuyBox. */
+  look?: PecaApi['look'];
+}) {
+  /**
+   * ESTOQUE VIVO (13/08): o HTML é uma fotografia do instante em que a página
+   * abriu. Enquanto a cliente está aqui, a grade se reconfere sozinha — ver
+   * `useEstoqueAoVivo`. A COR ESCOLHIDA NUNCA MUDA POR CAUSA DISSO: esgotar
+   * enquanto ela olha vira aviso, não troca de peça debaixo do dedo dela.
+   */
+  const cores = useEstoqueAoVivo(product.slug, coresDoServidor);
+
+  /**
+   * COR DE ABERTURA: a primeira com estoque **E COM FOTO PRÓPRIA**.
+   *
+   * O "com estoque" é de sempre — abrir na cor esgotada é convidar a cliente a
+   * bater na parede no primeiro clique. O "com foto" entrou em 13/08, junto com
+   * a liberação das cores sem foto: as cores vêm em ordem alfabética, então a
+   * VOGUE passaria a abrir em BEGE — que não tem foto — e a primeira coisa que
+   * a cliente veria seria "as fotos acima são das outras cores". A cor sem foto
+   * é ótima como escolha dela; é ruim como cartão de visita da peça.
+   *
+   * Duas redes, nesta ordem: se nenhuma cor com estoque tem foto, vale a com
+   * estoque; se nem isso, a primeira que existir.
+   */
   const inicial = useMemo(() => {
-    const comEstoque = cores.find((c) => c.estoque > 0);
-    return (comEstoque ?? cores[0])?.nome ?? null;
+    const comEstoque = cores.filter((c) => c.estoque > 0);
+    const comFoto = comEstoque.find((c) => c.fotos.length > 0);
+    return (comFoto ?? comEstoque[0] ?? cores[0])?.nome ?? null;
   }, [cores]);
 
   const [cor, setCor] = useState<string | null>(inicial);
 
   const corAtual = cores.find((c) => c.nome === cor);
+
+  /**
+   * A COR ESCOLHIDA ESGOTOU E SAIU DA LISTA (13/08).
+   *
+   * Desde que "cor sem peça não aparece" virou regra no backend, a cor pode
+   * DESAPARECER da resposta enquanto a cliente está na página — o estoque se
+   * reconfere sozinho a cada 45 s (ver `useEstoqueAoVivo`).
+   *
+   * Sem tratar, `corAtual` viraria `undefined` e a página cairia calada no
+   * fallback da peça: a galeria trocaria de foto e o preço poderia mudar sem
+   * nenhum motivo visível. Trocar a peça debaixo do dedo da cliente é pior que
+   * a notícia ruim — então a notícia é dada, e a página vai pra uma cor que
+   * existe de verdade.
+   */
+  const { toast } = useToast();
+  const corSumiu = !!cor && cores.length > 0 && !corAtual;
+  useEffect(() => {
+    if (!corSumiu) return;
+    const perdida = cor;
+    setCor(inicial);
+    toast({
+      message: `A cor ${perdida} esgotou`,
+      description: 'Levaram a última enquanto você olhava. Veja as outras cores desta peça.',
+    });
+    // Só o sumiço é gatilho: reagir à própria troca reabriria o aviso em loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [corSumiu]);
 
   /**
    * A peça vista pela cor escolhida. Sem cor (ou sem ficha ainda), fica
@@ -101,6 +161,13 @@ export function EscolhaDaPeca({ product, cores }: { product: Product; cores: Cor
       {/* `key` força a galeria a voltar pra primeira foto ao trocar de cor —
           sem isso a cliente escolhe MARINHO e continua vendo a 4ª foto do
           PRETO, que era o índice em que ela estava. */}
+      {/* ⚠️ `min-w-0` NOS DOIS FILHOS — o desktop já tinha o equivalente no
+          `minmax(0,…)` das colunas, mas no MOBILE a coluna única implícita usa
+          `min-width:auto`: a fita de miniaturas (uma POR COR, 13/08) tem
+          largura mínima de 64px×N cores, e com 8 cores são 596px que o item de
+          grid se recusava a encolher. O viewport de layout do celular esticava
+          pra 620px e a PDP INTEIRA cortava à direita — grade de tamanhos,
+          "Adicionar à sacola", tudo. Quanto mais cores a peça ganhava, pior. */}
       <div className="min-w-0">
         <ProductGallery key={cor ?? 'unica'} images={galeria} name={pecaDaCor.name} autoPlay grupos={grupos} />
         {fotoIlustrativa && (
@@ -113,6 +180,7 @@ export function EscolhaDaPeca({ product, cores }: { product: Product; cores: Cor
       <div className="min-w-0 lg:sticky lg:top-28 lg:self-start">
         <BuyBox
           alertaEstoque={alertaEstoque}
+          look={look}
           product={pecaDaCor}
           cores={cores.map((c) => ({ nome: c.nome, swatch: c.swatch, estoque: c.estoque }))}
           corSelecionada={cor}

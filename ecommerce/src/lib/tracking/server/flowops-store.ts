@@ -81,3 +81,66 @@ export async function persistirCliquesDeLoja(events: TrackingEvent[]): Promise<n
     clearTimeout(timer);
   }
 }
+
+/**
+ * A CÓPIA DE PRIMEIRA PARTE DO FUNIL INTEIRO (dono, 13/08: "preciso de todos
+ * os cliques registrados — para todo o site").
+ *
+ * TODO evento vai pro Postgres do FlowOps — inclusive de visitante sem aceite
+ * do banner, que chega aqui já anonimizado (sem user_id; fbp/fbc nem saíram
+ * do navegador). O que NUNCA muda: GA4 e Meta continuam atrás do opt-in — o
+ * corte é do `/api/events`, este módulo só grava na casa.
+ *
+ * Vai o mínimo que dá leitura: nome do evento, path, loja, sessão, valor e um
+ * `dados` enxuto (REFs, termo de busca, origem). Nada de e-mail, telefone,
+ * endereço — dado pessoal não entra nesta tabela.
+ */
+export async function persistirEventosSite(events: TrackingEvent[], semAceite: boolean): Promise<number> {
+  const baseUrl = process.env.FLOWOPS_API_URL?.replace(/\/$/, '') ?? '';
+  const token = process.env.LOJA_ORDER_TOKEN ?? '';
+  if (!baseUrl || !token) return 0;
+
+  const eventos = events.map((e) => {
+    const refs = Array.isArray(e.items)
+      ? e.items.map((i) => texto(i.sku) ?? texto(i.product_id)).filter(Boolean).slice(0, 6)
+      : [];
+    const dados: Record<string, unknown> = {};
+    if (refs.length) dados.refs = refs;
+    const termo = texto((e.params as Record<string, unknown>)?.search_term);
+    if (termo) dados.busca = termo;
+    const origem = texto((e.params as Record<string, unknown>)?.source);
+    if (origem) dados.origem = origem;
+    return {
+      evento: e.event,
+      path: texto(e.context?.page?.path),
+      loja: texto((e.params as Record<string, unknown>)?.store) ?? texto(e.context?.loja),
+      sessionId: texto(e.context?.session_id),
+      valor: typeof e.value === 'number' && Number.isFinite(e.value) ? e.value : null,
+      dados: Object.keys(dados).length ? dados : undefined,
+      semAceite,
+    };
+  });
+
+  if (!eventos.length) return 0;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  try {
+    const res = await fetch(`${baseUrl}/public/site-metrics/eventos`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-loja-token': token },
+      body: JSON.stringify({ eventos }),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      console.error(`[tracking] FlowOps recusou os eventos: HTTP ${res.status}`);
+      return 0;
+    }
+    return eventos.length;
+  } catch (err) {
+    console.error('[tracking] falha ao gravar eventos no FlowOps:', err);
+    return 0;
+  } finally {
+    clearTimeout(timer);
+  }
+}

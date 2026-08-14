@@ -16,12 +16,20 @@ import { useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { Suspense } from 'react';
 import { api } from '@/lib/api';
+import { refCorTam, nomeSemVariacao } from '@/lib/peca-linha';
 
 interface OrderItem {
   sku: string;
   productName?: string | null;
+  /** REF · COR · TAM — o que a vendedora usa pra achar a peça na arara. */
+  ref?: string | null;
+  cor?: string | null;
+  tamanho?: string | null;
   quantity: number;
 }
+
+/** Nome sem a cor/tamanho que já estão na linha da REF. */
+const nomeLimpo = (it: OrderItem) => nomeSemVariacao(it.productName, it.cor, it.tamanho) || it.sku;
 
 interface PickOrderRow {
   id: string;
@@ -149,7 +157,14 @@ function ImprimirTodosContent() {
               <div className="space-y-1 mt-1">
                 {(o.items || []).map((it, i) => (
                   <div key={i} className="flex justify-between border-b border-dotted border-gray-500 pb-0.5">
-                    <span className="truncate flex-1 mr-2 font-bold">{it.productName || it.sku}</span>
+                    <span className="flex-1 mr-2 font-bold">
+                      {refCorTam(it) && (
+                        <span className="block font-black tracking-wide">{refCorTam(it)}</span>
+                      )}
+                      <span className={`block truncate ${refCorTam(it) ? 'text-[10px] font-normal text-gray-600' : ''}`}>
+                        {nomeLimpo(it)}
+                      </span>
+                    </span>
                     <span className="font-bold">{it.quantity}x</span>
                   </div>
                 ))}

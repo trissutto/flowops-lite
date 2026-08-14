@@ -19,6 +19,17 @@ export interface CliqueEntrada {
   sessionId?: string | null;
 }
 
+/** Um evento genérico do site — a cópia de primeira parte do funil inteiro. */
+export interface EventoEntrada {
+  evento?: string;
+  path?: string | null;
+  loja?: string | null;
+  sessionId?: string | null;
+  valor?: number | null;
+  dados?: unknown;
+  semAceite?: boolean;
+}
+
 /** Uma linha do relatório: a loja e o que fizeram nela. */
 export interface LinhaLoja {
   loja: string;
@@ -71,6 +82,204 @@ export class SiteMetricsService {
       this.logger.error(`falha ao gravar cliques de loja: ${String(err)}`);
       return 0;
     }
+  }
+
+  /**
+   * TODO EVENTO DO SITE, sem lista fechada (dono, 13/08: "para todo o site").
+   * Aqui aceita qualquer nome de evento — quem valida forma e teto é o BFF do
+   * e-commerce, e a rota continua atrás do token compartilhado. `semAceite`
+   * marca a linha anônima de quem não aceitou o banner.
+   */
+  async registrarEventos(entradas: EventoEntrada[]): Promise<number> {
+    const linhas = entradas
+      .filter((e) => e?.evento && String(e.evento).trim())
+      .map((e) => ({
+        evento: this.corta(e.evento, 40) as string,
+        path: this.corta(e.path, 200),
+        loja: this.corta(e.loja, 80),
+        sessionId: this.corta(e.sessionId, 64),
+        valor: typeof e.valor === 'number' && Number.isFinite(e.valor) ? e.valor : null,
+        dados: e.dados && typeof e.dados === 'object' ? (e.dados as object) : undefined,
+        semAceite: e.semAceite === true,
+      }));
+
+    if (!linhas.length) return 0;
+
+    try {
+      const r = await (this.prisma as any).siteEvento.createMany({ data: linhas });
+      return r.count;
+    } catch (err) {
+      this.logger.error(`falha ao gravar eventos do site: ${String(err)}`);
+      return 0;
+    }
+  }
+
+  /**
+   * O LEAD DO WHATSAPP — quem clicou E mandou a mensagem carimbada.
+   *
+   * Quem chama é o n8n (Evolution → webhook → cá), não o site. Dedup de
+   * rajada: a MESMA pessoa mandando de novo em menos de 1h não vira lead
+   * novo — o WhatsApp reenvia webhook com facilidade e cada toque duplicado
+   * inflaria a tela. Depois de 1h conta de novo de propósito: voltou outro
+   * dia, é interesse novo.
+   */
+  async registrarLeadWhatsapp(entrada: {
+    telefone?: string; nome?: string | null; loja?: string | null;
+    mensagem?: string | null; instancia?: string | null;
+  }): Promise<{ ok: boolean; duplicado?: boolean }> {
+    const telefone = String(entrada?.telefone || '').replace(/\D/g, '').slice(0, 20);
+    if (telefone.length < 10) return { ok: false };
+
+    try {
+      const umaHoraAtras = new Date(Date.now() - 60 * 60 * 1000);
+      const recente = await (this.prisma as any).whatsappLead.findFirst({
+        where: { telefone, criadoEm: { gte: umaHoraAtras } },
+        select: { id: true },
+      });
+      if (recente) return { ok: true, duplicado: true };
+
+      await (this.prisma as any).whatsappLead.create({
+        data: {
+          telefone,
+          nome: this.corta(entrada.nome, 120),
+          loja: this.corta(entrada.loja, 80),
+          mensagem: this.corta(entrada.mensagem, 2000),
+          instancia: this.corta(entrada.instancia, 60),
+        },
+      });
+      return { ok: true };
+    } catch (err) {
+      this.logger.error(`falha ao gravar lead do whatsapp: ${String(err)}`);
+      return { ok: false };
+    }
+  }
+
+  /** A tela de leads: lista do período + contagem por loja. */
+  async leadsWhatsapp(de: Date, ate: Date): Promise<{
+    total: number;
+    porLoja: Array<{ loja: string; leads: number }>;
+    linhas: Array<{
+      id: string; telefone: string; nome: string | null; loja: string | null;
+      mensagem: string | null; instancia: string | null; criadoEm: Date;
+    }>;
+  }> {
+    const janela = { gte: de, lte: ate };
+    const linhas = await (this.prisma as any).whatsappLead.findMany({
+      where: { criadoEm: janela },
+      orderBy: { criadoEm: 'desc' },
+      take: 500,
+    });
+
+    const porLojaMapa = new Map<string, number>();
+    for (const l of linhas as Array<{ loja: string | null }>) {
+      const chave = l.loja || 'Atendimento do site';
+      porLojaMapa.set(chave, (porLojaMapa.get(chave) || 0) + 1);
+    }
+
+    return {
+      total: linhas.length,
+      porLoja: Array.from(porLojaMapa.entries())
+        .map(([loja, leads]) => ({ loja, leads }))
+        .sort((a, b) => b.leads - a.leads),
+      linhas,
+    };
+  }
+
+  /**
+   * O FUNIL DE VENDA DO SITE (dono, 13/08: "preciso destes dados na tela de
+   * cliques — add cart, initiate checkout, etc"). Do `site_eventos` — a cópia
+   * de primeira parte, que conta todo mundo (com e sem aceite do banner).
+   *
+   * EVENTOS (toques) e PESSOAS (sessões distintas) por etapa. A coleta nasceu
+   * em 13/08/2026 à tarde: período anterior vem zerado, e a tela avisa em vez
+   * de deixar parecer que o site não vendia. `::int` nos COUNTs: BigInt na
+   * resposta é 500 mudo de serialização.
+   */
+  async funil(de: Date, ate: Date): Promise<Array<{ evento: string; eventos: number; pessoas: number }>> {
+    const linhas = await this.prisma.$queryRawUnsafe<
+      Array<{ evento: string; eventos: number; pessoas: number }>
+    >(
+      `SELECT evento,
+              COUNT(*)::int                   AS eventos,
+              COUNT(DISTINCT session_id)::int AS pessoas
+         FROM site_eventos
+        WHERE criado_em >= $1 AND criado_em <= $2
+          AND evento IN ('page_view','view_item','add_to_cart','begin_checkout','add_payment_info','purchase')
+        GROUP BY evento`,
+      de,
+      ate,
+    );
+    return linhas.map((l) => ({
+      evento: l.evento,
+      eventos: Number(l.eventos),
+      pessoas: Number(l.pessoas),
+    }));
+  }
+
+  /**
+   * QUANTAS PESSOAS ESTÃO NO SITE AGORA — do nosso dado, não do GA4.
+   *
+   * Pergunta do dono (13/08): "quantas pessoas estão no site neste momento?
+   * como vejo pelo sistema nosso?". A resposta vem de `site_eventos`: o site
+   * manda page_view/scroll/time_on_page de TODO mundo (com ou sem aceite do
+   * banner, linha anonimizada), então sessão com evento recente = pessoa
+   * navegando. Não é batida de presença: quem está parado numa página só
+   * aparece enquanto os eventos de tempo/rolagem pingam — por isso o card
+   * mostra a janela ("últimos 5 min") em vez de fingir precisão.
+   *
+   * GA4 não serve pra isso hoje: o site novo dispara no MESMO stream do
+   * WordPress ([[ga4-site-novo-stream-trocado]]), então o "tempo real" de lá
+   * soma os dois sites.
+   *
+   * Tudo em UMA query com subselects — a tela recarrega a cada 20s e não vale
+   * quatro idas ao banco. `::int` em todo COUNT: BigInt na resposta é 500 mudo
+   * de serialização.
+   */
+  async agora(): Promise<{
+    ativos5min: number;
+    ativos30min: number;
+    sessoesHoje: number;
+    pageViewsHoje: number;
+    paginasQuentes: Array<{ path: string; pessoas: number }>;
+  }> {
+    // "Hoje" no fuso da loja (São Paulo), não em UTC — meia-noite UTC é 21h
+    // daqui e comeria as três primeiras horas do dia (mesmo cuidado do
+    // relatório de cliques).
+    const [linha] = await this.prisma.$queryRawUnsafe<Array<{
+      ativos5: number; ativos30: number; sessoes_hoje: number; pv_hoje: number;
+    }>>(
+      `SELECT
+         (SELECT COUNT(DISTINCT session_id)::int FROM site_eventos
+           WHERE criado_em > NOW() - INTERVAL '5 minutes' AND session_id IS NOT NULL)  AS ativos5,
+         (SELECT COUNT(DISTINCT session_id)::int FROM site_eventos
+           WHERE criado_em > NOW() - INTERVAL '30 minutes' AND session_id IS NOT NULL) AS ativos30,
+         (SELECT COUNT(DISTINCT session_id)::int FROM site_eventos
+           WHERE criado_em >= date_trunc('day', NOW() AT TIME ZONE 'America/Sao_Paulo')
+                             AT TIME ZONE 'America/Sao_Paulo'
+             AND session_id IS NOT NULL)                                               AS sessoes_hoje,
+         (SELECT COUNT(*)::int FROM site_eventos
+           WHERE criado_em >= date_trunc('day', NOW() AT TIME ZONE 'America/Sao_Paulo')
+                             AT TIME ZONE 'America/Sao_Paulo'
+             AND evento = 'page_view')                                                 AS pv_hoje`,
+    );
+
+    const paginas = await this.prisma.$queryRawUnsafe<Array<{ path: string; pessoas: number }>>(
+      `SELECT path, COUNT(DISTINCT session_id)::int AS pessoas
+         FROM site_eventos
+        WHERE criado_em > NOW() - INTERVAL '5 minutes'
+          AND session_id IS NOT NULL AND path IS NOT NULL
+        GROUP BY path
+        ORDER BY pessoas DESC, path
+        LIMIT 8`,
+    );
+
+    return {
+      ativos5min: Number(linha?.ativos5 ?? 0),
+      ativos30min: Number(linha?.ativos30 ?? 0),
+      sessoesHoje: Number(linha?.sessoes_hoje ?? 0),
+      pageViewsHoje: Number(linha?.pv_hoje ?? 0),
+      paginasQuentes: paginas.map((p) => ({ path: p.path, pessoas: Number(p.pessoas) })),
+    };
   }
 
   /**

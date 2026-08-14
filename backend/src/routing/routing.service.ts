@@ -219,6 +219,9 @@ export class RoutingService {
           id: true,
           wcOrderId: true,
           wcOrderNumber: true,
+          // Card verde ONLINE (14/08): o front pinta pelo source já no
+          // socket, sem esperar o refetch de /pick-orders/mine.
+          source: true,
           customerName: true,
           customerPhone: true,
           shippingCep: true,

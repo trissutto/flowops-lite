@@ -441,6 +441,24 @@ model Order {
   // Quando o dinheiro entrou de verdade (webhook/aprovação do cartão).
   // Distinto de createdAt: o PIX pode ser pago horas depois.
   paidAt          DateTime? @map("paid_at")
+  // ── PEDIDO ONLINE (source='pdv_online', 14/08) ──
+  // Loja VENDEDORA da venda online do PDV (Karine = loja site). É a "dona da
+  // venda" no acerto: a loja que o roteamento escolher pra enviar (fornecedora)
+  // cobra DESTA loja, não da loja-canal 13. NULL em todo pedido não-online.
+  sellerStoreCode String?  @map("seller_store_code")
+  // Resgate do PIX não pago (14/08): quando o toque de 30min foi entregue ao
+  // n8n. Preenchido = nunca mais toca esse pedido (um lembrete só — segundo
+  // toque vira cobrança). Null com o PIX vencido = janela passou em silêncio.
+  pixResgateAvisadoEm DateTime? @map("pix_resgate_avisado_em")
+  // Aviso de rastreio (14/08): pedido dividido despacha um pacote por loja e
+  // cada um chama o afterShipped — sem esta trava a cliente receberia um
+  // "saiu pra entrega" por pacote. Guard atômico: updateMany com null.
+  rastreioAvisadoEm   DateTime? @map("rastreio_avisado_em")
+  // Aviso de ENTREGA CONCLUÍDA (14/08). O sistema já sabia que o objeto foi
+  // entregue (TrackingService.delivered) e não falava nada — o ciclo terminava
+  // em silêncio justo no momento em que a cliente está com a peça na mão e o
+  // prazo de troca começa a correr. Carimbo = avisada (uma vez só).
+  entregaAvisadaEm    DateTime? @map("entrega_avisada_em")
   createdAt       DateTime @default(now()) @map("created_at") // data que chegou no FlowOps
   updatedAt       DateTime @updatedAt @map("updated_at")
 
@@ -796,6 +814,14 @@ model OrderItem {
   orderId         String  @map("order_id")
   sku             String
   productName     String? @map("product_name")
+  // REF · COR · TAMANHO da peça, congelados no momento do pedido.
+  // O `sku` é o CÓDIGO do ERP (identifica REF+COR+TAMANHO, mas não se lê): a
+  // vendedora procura a peça na arara pela REF, e é isso que a loja pedia na
+  // separação e na impressão. Snapshot de propósito — REF reciclada troca de
+  // dono e o pedido antigo tem que continuar contando a verdade dele.
+  ref             String?
+  cor             String?
+  tamanho         String?
   quantity        Int
   unitPrice       Float?  @map("unit_price")
   // Preço CHEIO (sem promoção) — base da obrigação intercompany ÷2,5.
@@ -2350,6 +2376,30 @@ model MasterAudit {
 // e grava na tabela `produtos` do Wincred (gigasistemas21).
 // Single row (id=1). Atualizada em transação a cada batch.
 // ════════════════════════════════════════════════════════════════
+// NÚMERO DO PEDIDO DO SITE — um contador que NÃO anda pra trás.
+//
+// (⚠️ este comentário era um bloco /** */ — sintaxe que o Prisma NÃO aceita;
+// o schema inteiro falhava validação (P1012) e o `prisma db push` do deploy
+// quebrava em silêncio. Prisma só conhece `//` e `///`.)
+//
+// Até 14/08/2026 o `LP-xxxxxx` saía de `MAX(wcOrderId)` entre os pedidos
+// existentes. Cartão recusado dá rollback e o pedido não persiste — então o
+// número voltava pra fila e a cliente seguinte recebia o MESMO. No painel da
+// Pagar.me, `LP-000012` apareceu em três pessoas diferentes (Ivonete, Ana
+// Paula e, depois, um PIX em aberto): num atendimento ou numa contestação,
+// procurar por esse código devolve a pessoa errada.
+//
+// Mesma receita da `EanSequence`: o contador vive fora da transação do
+// pedido, então tentativa recusada QUEIMA o número — e queimar número é
+// barato, confundir cliente não é.
+model LojaPedidoSequence {
+  id        Int      @id @default(autoincrement())
+  lastSeq   Int      @default(0) @map("last_seq")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("loja_pedido_sequence")
+}
+
 model EanSequence {
   id        Int      @id @default(autoincrement())
   prefix    String   @default("8")
@@ -3995,6 +4045,13 @@ model ProductPhoto {
   // Quem lê uma foto só (Reposição, PDV, Separação, Realinhamento) continua
   // funcionando: `getPhoto` ordena por `ordem` e devolve a capa.
   ordem           Int      @default(0)
+  // Tamanho REAL do arquivo em pixels, medido no upload (13/08).
+  // A PDP mostra a foto num quadro de ~513 CSS px e o monitor da cliente
+  // costuma estar a 150%: abaixo de ~1400 de largura o navegador amplia e a
+  // peça aparece borrada. Sem esta medida, foto pequena entrava em silêncio e
+  // só dava as caras na vitrine. Nulo = foto anterior à medição.
+  larguraPx       Int?     @map("largura_px")
+  alturaPx        Int?     @map("altura_px")
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
 
@@ -6485,8 +6542,18 @@ model SiteProduto {
   /// Curadoria: o que a loja escolheu publicar
   publicado         Boolean  @default(true)
   destaque          Boolean  @default(false)
+  /// ⚠️ APOSENTADA (13/08): era a tag "Novidade" herdada do WooCommerce —
+  /// etiqueta editorial do site velho que nunca expirava. "Novidades" agora
+  /// é AUTOMÁTICO por `publicadoEm` (peça publicada há ≤30 dias). A coluna
+  /// fica pra histórico; ninguém mais escreve nem lê.
   lancamento        Boolean  @default(false)
   promocao          Boolean  @default(false)
+  /// QUANDO A PEÇA ENTROU NO AR (primeira publicação) — decisão do dono
+  /// 13/08: "Novidades" deixa de ser tag herdada e vira idade real. Carimbo
+  /// preenchido pela varredura do catálogo (idempotente: só onde está nulo,
+  /// backfill = primeira foto R2 da REF, senão syncedAt congelado). Nulo =
+  /// nunca publicada (ou despublicada antes do carimbo existir).
+  publicadoEm       DateTime? @map("publicado_em")
 
   /// TOMADA DE POSSE: 'woocommerce' = ainda espelha o site antigo; 'flow' =
   /// alguém editou aqui e o Flow virou dono — o importador PULA essa peça
@@ -6684,4 +6751,198 @@ model SiteStoreClick {
   @@index([createdAt])
   @@index([loja, evento, createdAt])
   @@map("site_store_clicks")
+}
+
+/// CÓPIA DE PRIMEIRA PARTE DE TODO EVENTO DO SITE (dono, 13/08: "preciso de
+/// todos os cliques registrados — para todo o site"). Diferente do
+/// SiteStoreClick (só os 4 botões de loja), aqui entra o funil inteiro:
+/// view_item, add_to_cart, search, begin_checkout… — SEMPRE, com ou sem o
+/// aceite do banner. Sem aceite o evento chega ANONIMIZADO na origem (sem
+/// user_id; fbp/fbc nem saem do navegador) — interesse legítimo de medir o
+/// próprio site, sem cruzar com terceiro. GA4/Meta continuam atrás do opt-in.
+/// Volume é de milhares/dia: quando pesar, a limpeza é por `criadoEm`.
+model SiteEvento {
+  id        String   @id @default(uuid())
+  /// Nome canônico do tracking: view_item, add_to_cart, search…
+  evento    String   @db.VarChar(40)
+  path      String?  @db.VarChar(200)
+  /// Unidade envolvida (botão de loja ou loja atribuída por CEP).
+  loja      String?  @db.VarChar(80)
+  /// Sessão anônima — separa cliques de pessoas. Nula quando não deu pra ter.
+  sessionId String?  @map("session_id") @db.VarChar(64)
+  /// Valor em reais quando o evento carrega (checkout, add_to_cart).
+  valor     Decimal? @db.Decimal(12, 2)
+  /// O resto que der contexto sem dado pessoal: REFs, termo de busca, origem.
+  dados     Json?
+  /// true = visitante sem aceite do banner (linha anônima).
+  semAceite Boolean  @default(false) @map("sem_aceite")
+  criadoEm  DateTime @default(now()) @map("criado_em")
+
+  @@index([criadoEm])
+  @@index([evento, criadoEm])
+  @@map("site_eventos")
+}
+
+/// LOOK — peças que formam um conjunto (dono, 13/08: Regata 403048 + Calça
+/// Aladdin 406027 saem na MESMA foto e têm que se vender juntas). Fase 1: a
+/// PDP de cada peça mostra as irmãs do look ("Complete o look"). Fase 2 (o
+/// plano do dono): botão "Comprar o look" e o look como card próprio quando
+/// houver mais fotos de conjunto. Curadoria HUMANA — nenhum robô cria look.
+model SiteLook {
+  id        String         @id @default(uuid())
+  nome      String         @db.VarChar(80)
+  criadoPor String?        @map("criado_por") @db.VarChar(80)
+  criadoEm  DateTime       @default(now()) @map("criado_em")
+  pecas     SiteLookPeca[]
+
+  @@map("site_look")
+}
+
+model SiteLookPeca {
+  id     String   @id @default(uuid())
+  lookId String   @map("look_id")
+  look   SiteLook @relation(fields: [lookId], references: [id], onDelete: Cascade)
+  /// REF como está em `site_produto` — a vitrine resolve pela família
+  /// (normRef/REF-BASE), então a irmã sufixada também encontra o look.
+  ref    String   @db.VarChar(20)
+
+  @@unique([lookId, ref])
+  @@index([ref])
+  @@map("site_look_peca")
+}
+
+/// O WHATSAPP DE QUEM CLICOU — enfim com nome e número (dono, 13/08: "onde
+/// vejo o whats de quem clicou?"). O clique no site é anônimo por natureza;
+/// a pessoa passa a existir quando ENVIA a mensagem carimbada ("vim pelo
+/// site") no WhatsApp da loja. A Evolution recebe, o n8n reconhece o carimbo
+/// e grava aqui via POST /public/site-metrics/whatsapp-lead. Tela:
+/// /retaguarda/leads-whatsapp.
+model WhatsappLead {
+  id        String   @id @default(uuid())
+  /// Só dígitos, como vem do remoteJid (com DDI: 5511...).
+  telefone  String   @db.VarChar(20)
+  /// pushName do WhatsApp — o nome que a pessoa usa no app.
+  nome      String?  @db.VarChar(120)
+  /// Unidade extraída do carimbo ("loja X (vim pelo site)"); nulo = botão geral.
+  loja      String?  @db.VarChar(80)
+  /// A mensagem como chegou — prova e contexto pra quem for responder.
+  mensagem  String?  @db.Text
+  /// Instância da Evolution que recebeu (o WhatsApp de qual loja atendeu).
+  instancia String?  @db.VarChar(60)
+  criadoEm  DateTime @default(now()) @map("criado_em")
+
+  @@index([criadoEm])
+  @@index([telefone, criadoEm])
+  @@map("whatsapp_leads")
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// DEFEITOS — peça avariada sai do estoque da loja e vai pra matriz (CD)
+//
+// Por que NÃO é marcado: marcado é dívida de cliente (entra no
+// LIMITECOMPRAS, aparece em marcados ativos, exige avaliação do cliente).
+// Defeito é perda de mercadoria e não tem cliente. Usar `Marcado
+// status='baixado'` pra defeito sujava os dois controles.
+//
+// REGRA CENTRAL: a peça baixa do estoque UMA vez, no registro na loja, e
+// nunca reentra — ela não volta pra vitrine (vai pro fornecedor ou pro
+// lixo). Por isso a matriz, ao receber a caixa, NÃO movimenta estoque:
+// só confirma a chegada. Isso é o que impede peça defeituosa de voltar a
+// ser vendida.
+// ═══════════════════════════════════════════════════════════════════════
+
+// A caixa física que a loja monta e manda pra matriz. Uma caixa ABERTA por
+// loja de cada vez — o registro de defeito cai nela automaticamente.
+model DefectBatch {
+  id              String    @id @default(uuid())
+  // Código humano sequencial: CX-2026-000045
+  code            String    @unique @db.VarChar(20)
+  storeCodeOrigem String    @map("store_code_origem") @db.VarChar(10)
+  storeNameOrigem String?   @map("store_name_origem") @db.VarChar(80)
+  // aberta (recebendo peças) | enviada (fechada, a caminho) | recebida
+  status          String    @default("aberta") @db.VarChar(10)
+  // Congelados no fechamento — o relatório não recalcula caixa fechada.
+  totalPecas      Int       @default(0) @map("total_pecas")
+  totalCustoCents Int       @default(0) @map("total_custo_cents")
+  fechadaAt       DateTime? @map("fechada_at")
+  fechadaPorNome  String?   @map("fechada_por_nome") @db.VarChar(80)
+  recebidaAt      DateTime? @map("recebida_at")
+  recebidaPorNome String?   @map("recebida_por_nome") @db.VarChar(80)
+  createdAt       DateTime  @default(now()) @map("created_at")
+
+  itens           DefectItem[]
+
+  @@index([status, storeCodeOrigem])
+  @@map("defect_batches")
+}
+
+// Uma linha por PEÇA com defeito.
+model DefectItem {
+  id              String    @id @default(uuid())
+  // Número de controle humano: DEF-2026-000123
+  code            String    @unique @db.VarChar(20)
+
+  // ── Peça (snapshot no registro; o cadastro pode mudar depois) ──
+  sku             String    @db.VarChar(20)
+  ref             String?   @db.VarChar(20)
+  descricao       String?   @db.VarChar(150)
+  cor             String?   @db.VarChar(30)
+  tamanho         String?   @db.VarChar(20)
+
+  // ── Fornecedor (snapshot) — é por ele que a devolução é agrupada ──
+  fornecedorCnpj  String?   @map("fornecedor_cnpj") @db.VarChar(20)
+  fornecedorNome  String?   @map("fornecedor_nome") @db.VarChar(80)
+  marca           String?   @db.VarChar(40)
+
+  // ── Valor (snapshot, em centavos) — base do valor da perda ──
+  custoUnitCents  Int       @default(0) @map("custo_unit_cents")
+  precoUnitCents  Int       @default(0) @map("preco_unit_cents")
+
+  // ── Origem ──
+  storeCodeOrigem String    @map("store_code_origem") @db.VarChar(10)
+  storeNameOrigem String?   @map("store_name_origem") @db.VarChar(80)
+  // LOJA | DEVOLUCAO_CLIENTE | MATRIZ | MIGRACAO_MARCADO
+  origem          String    @default("LOJA") @db.VarChar(20)
+
+  // ── Defeito ──
+  // FURO_RASGO | MANCHA | COSTURA_SOLTA | ZIPER_BOTAO | DESBOTADO |
+  // FALTA_PECA | MODELAGEM_ERRADA | OUTRO (exige observação)
+  motivo          String    @db.VarChar(20)
+  observacao      String?   @db.Text
+  fotoUrl         String?   @map("foto_url") @db.Text
+
+  // ── Ciclo de vida ──
+  // EM_TRANSITO -> RECEBIDO -> DEVOLVIDO_FORNECEDOR | DESCARTADO
+  status              String    @default("EM_TRANSITO") @db.VarChar(25)
+  registradoPorUserId String?   @map("registrado_por_user_id")
+  registradoPorNome   String?   @map("registrado_por_nome") @db.VarChar(80)
+  registradoAt        DateTime  @default(now()) @map("registrado_at")
+  recebidoPorNome     String?   @map("recebido_por_nome") @db.VarChar(80)
+  recebidoAt          DateTime? @map("recebido_at")
+  decididoPorNome     String?   @map("decidido_por_nome") @db.VarChar(80)
+  decididoAt          DateTime? @map("decidido_at")
+  decisaoObservacao   String?   @map("decisao_observacao") @db.Text
+
+  // ── Vínculos ──
+  batchId         String?      @map("batch_id")
+  batch           DefectBatch? @relation(fields: [batchId], references: [id])
+  // Devolução de cliente que originou o defeito (origem=DEVOLUCAO_CLIENTE).
+  returnId        String?      @map("return_id")
+  // Marcado 'baixado' que virou este registro. UNIQUE = idempotência da
+  // migração: rodar duas vezes não duplica.
+  marcadoId       String?      @unique @map("marcado_id")
+
+  // ── Controle ──
+  // Trava de idempotência da baixa, no padrão do ErpOutboxService. Na
+  // MIGRAÇÃO vem preenchido com a data original: a peça já saiu do estoque
+  // quando o marcado foi criado — rebaixar duplicaria a perda.
+  stockDecreasedAt DateTime? @map("stock_decreased_at")
+  isTraining       Boolean   @default(false) @map("is_training")
+  createdAt        DateTime  @default(now()) @map("created_at")
+
+  @@index([status, storeCodeOrigem])
+  @@index([fornecedorCnpj, status])
+  @@index([batchId])
+  @@index([registradoAt])
+  @@map("defect_items")
 }

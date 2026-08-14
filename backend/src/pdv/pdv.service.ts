@@ -17,6 +17,7 @@ import { ConveniosService } from '../convenios/convenios.service';
 import { validateMinLevel } from '../auth/auth-levels.util';
 import * as crypto from 'crypto';
 import { CashbackService } from '../cashback/cashback.service';
+import { PedidoOnlineService } from './pedido-online.service';
 
 /**
  * PdvService — frente de caixa (MVP).
@@ -46,6 +47,7 @@ export class PdvService {
     private readonly accessPolicy: AccessPolicyService,
     private readonly convenios: ConveniosService,
     private readonly cashback: CashbackService,
+    private readonly pedidoOnline: PedidoOnlineService,
   ) {}
 
   /**
@@ -2697,6 +2699,40 @@ export class PdvService {
       this.logger.warn(`[pdv] falha ao ativar vale presente da venda ${sale.id}: ${e?.message || e}`);
     }
 
+    // ── PEDIDO ONLINE (flag PEDIDO_ONLINE_ROTEAMENTO, 14/08) ──
+    // Venda 100% 'venda_online' vira um Order no trilho do site: card verde
+    // ONLINE, roteamento (ou auto-atende na própria loja) e acerto
+    // fornecedora→vendedora. A venda segue normal no caixa desta loja.
+    //
+    // ⚠️ TRAVA DE BAIXA DUPLA: com o Order criado, quem baixa o estoque é a
+    // loja que SEPARA (runAutoDebit no bipe do card) — o finalize marca
+    // stockDecreasedAt ANTES de enfileirar o outbox, então o passo de estoque
+    // do job vira no-op (guard idempotente do erpStepBaixarEstoque) e as redes
+    // de segurança (backlog/reconcile) também pulam. A gravação na CAIXA do
+    // Wincred segue normal. Se a criação do Order falhar, nada é marcado e o
+    // comportamento legado (baixa na própria loja) fica intacto.
+    let onlineOrder: { wcOrderNumber: string; autoAtendida: boolean; storeName: string | null } | null = null;
+    if (isAllVendaOnline && this.pedidoOnline.enabled()) {
+      onlineOrder = await this.pedidoOnline.criarDoFinalize(sale);
+      if (onlineOrder) {
+        const agora = new Date();
+        try {
+          await (this.prisma as any).pdvSale.update({
+            where: { id: sale.id },
+            data: { stockDecreasedAt: agora },
+          });
+          await (this.prisma as any).pdvSaleItem.updateMany({
+            where: { saleId: sale.id },
+            data: { stockDecreasedAt: agora },
+          });
+        } catch (e: any) {
+          this.logger.error(
+            `[pedido-online] venda ${sale.id}: falha ao marcar stockDecreasedAt (${e?.message || e}) — RISCO de baixa dupla, conferir estoque do pedido ${onlineOrder.wcOrderNumber}`,
+          );
+        }
+      }
+    }
+
     // PÓS-PROCESSAMENTO ERP (Wincred + estoque) — OUTBOX por padrão.
     //
     // PDV_ERP_OUTBOX (default: ligado; '0' desliga):
@@ -2909,7 +2945,7 @@ export class PdvService {
       }
     }
 
-    return { ok: true, sale: updated, nfcePreview: nfceStub };
+    return { ok: true, sale: updated, nfcePreview: nfceStub, onlineOrder };
   }
 
   /**

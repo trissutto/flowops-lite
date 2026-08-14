@@ -25,6 +25,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { getSocket } from '@/lib/socket';
 import { api } from '@/lib/api';
+import { ruaComNumero } from '@/lib/format-address';
 import { Bell, BellOff, X, AlertTriangle, Package, MapPin, User, DollarSign } from 'lucide-react';
 
 const LS_KEY = 'lurd_pdv_pending_orders';
@@ -60,7 +61,8 @@ function parseAddress(raw: string | null | undefined): string {
     const o = JSON.parse(s);
     const partes: string[] = [];
     // Logradouro + número + complemento
-    const rua = [o.address_1, o.number].filter(Boolean).join(', ');
+    // `address_1` já termina com o número — juntar os dois duplicava.
+    const rua = ruaComNumero(o);
     if (rua) partes.push(rua);
     if (o.address_2) partes.push(o.address_2);
     if (o.neighborhood) partes.push(o.neighborhood);

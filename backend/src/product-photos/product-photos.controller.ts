@@ -228,6 +228,24 @@ export class ProductPhotosController {
     return this.svc.normalizarFormatos(Number(body?.limite) || 150);
   }
 
+  /**
+   * FOTOS QUE VÃO SAIR BORRADAS — as que estão abaixo do mínimo (13/08).
+   *
+   * `medir` mede em lote o acervo antigo (só cabeçalho, via Range), porque
+   * foto anterior a esta data entrou sem medida nenhuma. Vai em lotes: são
+   * milhares e o domínio público do R2 responde 429 com pressa.
+   */
+  @Get('baixa-resolucao')
+  async baixaResolucao(@Query('limite') limite?: string) {
+    return this.svc.listarBaixaResolucao(Number(limite) || 200);
+  }
+
+  @Post('baixa-resolucao/medir')
+  async medirAcervo(@Req() req: any, @Body() body: { limite?: number }) {
+    this.requireWrite(req);
+    return this.svc.medirAcervo(Number(body?.limite) || 200);
+  }
+
   @Post('detectar-cor')
   async detectarCor(@Req() req: any, @Body('url') url: string) {
     this.requireWrite(req);

@@ -1,6 +1,7 @@
 import { Body, Controller, ForbiddenException, Get, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { CorreiosService } from './correios.service';
+import { caixaDoSite } from '../common/caixa-site';
 
 @Controller('correios')
 @UseGuards(JwtAuthGuard)
@@ -21,7 +22,14 @@ export class CorreiosController {
     return this.svc.status();
   }
 
-  /** Frete (preço + prazo) por CEP destino. */
+  /**
+   * Frete (preço + prazo) por CEP destino.
+   *
+   * `pecas` (13/08) monta a MESMA caixa que o site cota — peso e dimensões
+   * saem de `caixaDoSite`. Sem isso a tela conferia com 500 g / 20×20×10 (os
+   * defaults do serviço) e dava um preço diferente do checkout, o que torna a
+   * conferência inútil justamente quando ela é necessária.
+   */
   @Get('frete')
   frete(
     @Req() req: any,
@@ -30,14 +38,16 @@ export class CorreiosController {
     @Query('comprimento') comprimento?: string,
     @Query('largura') largura?: string,
     @Query('altura') altura?: string,
+    @Query('pecas') pecas?: string,
   ) {
     this.requireRole(req);
+    const caixa = pecas ? caixaDoSite(Number(pecas)) : null;
     return this.svc.calcularFrete({
       cepDestino: cep,
-      pesoGramas: peso ? Number(peso) : undefined,
-      comprimento: comprimento ? Number(comprimento) : undefined,
-      largura: largura ? Number(largura) : undefined,
-      altura: altura ? Number(altura) : undefined,
+      pesoGramas: peso ? Number(peso) : caixa?.pesoGramas,
+      comprimento: comprimento ? Number(comprimento) : caixa?.comprimento,
+      largura: largura ? Number(largura) : caixa?.largura,
+      altura: altura ? Number(altura) : caixa?.altura,
     });
   }
 

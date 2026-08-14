@@ -12,7 +12,11 @@ import { LojaAdminController } from './loja-admin.controller';
 import { FreteService } from './frete.service';
 import { PersonIdentityModule } from '../person-identity/person-identity.module';
 import { EmailModule } from '../email/email.module';
+// WhatsappModule → o WhatsApp direto dos eventos que o n8n descarta
+// (pix_nao_pago / pedido_enviado / pedido_entregue). Ver PedidoEmailService.
+import { WhatsappModule } from '../whatsapp/whatsapp.module';
 import { PedidoEmailService } from './pedido-email.service';
+import { PixResgateCron } from './pix-resgate.cron';
 
 /**
  * PEDIDOS DO E-COMMERCE NOVO (sprint 011).
@@ -28,7 +32,7 @@ import { PedidoEmailService } from './pedido-email.service';
  */
 @Module({
   imports: [
-    PrismaModule, HttpModule, CorreiosModule, PersonIdentityModule, EmailModule,
+    PrismaModule, HttpModule, CorreiosModule, PersonIdentityModule, EmailModule, WhatsappModule,
     forwardRef(() => PagarmeModule),
   ],
   controllers: [LojaOrdersController, LojaAdminController],
@@ -45,6 +49,8 @@ import { PedidoEmailService } from './pedido-email.service';
     // Avisa a cliente: dispara o evento pro fluxo do n8n (que já manda
     // WhatsApp e e-mail no site antigo) e, se ligado, manda o e-mail próprio.
     PedidoEmailService,
+    // Resgate do PIX não pago: toque único aos 30min, dentro da validade.
+    PixResgateCron,
   ],
   exports: [LojaOrdersService, CupomService],
 })

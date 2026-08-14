@@ -16,7 +16,7 @@ import {
 } from '@/services/search';
 import type { SearchOutcome } from '@/lib/search';
 import type { Product, SearchResult } from '@/types';
-import { WHATSAPP_ATENDIMENTO } from '@/data/contato';
+import { LINK_WHATSAPP_SITE } from '@/data/contato';
 
 /**
  * RESULTADOS DE BUSCA — /busca?q=…
@@ -201,7 +201,7 @@ export function SearchResults({ term }: { term: string }) {
             icon={<Search strokeWidth={1.5} />}
             title="A busca descansou por um instante."
             description="Nossas consultoras encontram a peça pra você no estoque das 14 lojas — ou explore a vitrine enquanto isso."
-            action={{ label: 'Falar no WhatsApp', href: `https://api.whatsapp.com/send?phone=${WHATSAPP_ATENDIMENTO}` }}
+            action={{ label: 'Falar no WhatsApp', href: LINK_WHATSAPP_SITE }}
             secondaryAction={{ label: 'Ver novidades', href: '/novidades' }}
           />
         ) : (

@@ -1,6 +1,5 @@
 'use client';
 
-import Link from 'next/link';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -11,8 +10,22 @@ import type { CustomerIdentity } from '@/types/checkout';
 
 /**
  * § 1 — IDENTIFICAÇÃO. Quatro campos, nada de senha: o checkout como
- * convidada é o caminho padrão. Login é um link discreto — obrigar cadastro
- * antes de pagar é a maior causa de abandono de checkout que existe.
+ * convidada é o caminho padrão — obrigar cadastro antes de pagar é a maior
+ * causa de abandono de checkout que existe.
+ *
+ * ⚠️ AQUI MORRE O CHECKOUT INTEIRO (medido 14/08 em `site_eventos`): das 11
+ * sessões que abriram o /checkout em 7 dias, **8 pararam nesta seção** — zero
+ * pararam na entrega, zero no pagamento. Não é o frete nem o cartão que
+ * derrubam a venda, é esta tela. Duas coisas mudaram por causa dessa medição:
+ *
+ *  1. **O link "Entrar" saiu.** Ele era a PRIMEIRA coisa da seção e levava
+ *     pra /conta, FORA do checkout — sem volta, sem prefill (os dados daqui
+ *     nunca vieram da conta) e sem sacola à vista. Uma das 8 sessões terminou
+ *     exatamente ali, parada em /conta. Porta de saída no topo do funil, em
+ *     troca de nada.
+ *  2. **Todo campo diz pra que serve.** A cliente da Lurd's não é fluente em
+ *     tecnologia: pedir CPF sem explicar, no meio de uma compra, parece
+ *     cobrança de cadastro — e ela fecha a aba.
  *
  * CPF valida dígito verificador de verdade (ver masks.ts) porque a NF-e do
  * pedido é emitida com ele — CPF errado descoberto só no faturamento vira
@@ -70,19 +83,19 @@ export function IdentificationStep({ defaults, onDone }: IdentificationStepProps
 
   return (
     <form onSubmit={handleSubmit(submit)} noValidate className="flex flex-col gap-5">
-      {/* Login opcional — NUNCA obrigatório. */}
-      <p className="text-small text-ink-muted">
-        Já tem conta?{' '}
-        <Link href="/conta" className="link-underline font-medium text-primary-strong">
-          Entrar
-        </Link>{' '}
-        — ou siga sem cadastro mesmo.
+      {/* Tira o medo do "cadastro" antes do primeiro campo: quem chega aqui
+          já escolheu a peça, e o que faz ela desistir agora é achar que vai
+          ter que criar conta e inventar senha. */}
+      <p className="text-small text-ink-soft">
+        <strong className="font-medium text-ink">Não precisa criar conta nem senha.</strong>{' '}
+        São quatro campos e a compra segue.
       </p>
 
       <Input
         label="Nome completo"
         autoComplete="name"
         placeholder="Como está no seu documento"
+        hint="Nome e sobrenome, como no RG."
         error={errors.name?.message}
         {...register('name')}
       />
@@ -102,6 +115,7 @@ export function IdentificationStep({ defaults, onDone }: IdentificationStepProps
           inputMode="numeric"
           autoComplete="off"
           placeholder="000.000.000-00"
+          hint="Vai só na nota fiscal do pedido."
           error={errors.cpf?.message}
           {...register('cpf', {
             // setValue depois do handler interno do RHF = o form guarda o
@@ -115,6 +129,7 @@ export function IdentificationStep({ defaults, onDone }: IdentificationStepProps
           inputMode="numeric"
           autoComplete="tel-national"
           placeholder="(11) 98765-4321"
+          hint="Pra avisar quando a peça sair pra entrega."
           error={errors.phone?.message}
           {...register('phone', {
             onChange: (e) => setValue('phone', maskPhone(e.target.value)),
@@ -122,10 +137,17 @@ export function IdentificationStep({ defaults, onDone }: IdentificationStepProps
         />
       </div>
 
-      <div className="pt-1">
+      <div className="flex flex-col gap-3 pt-1">
         <Button type="submit" block className="sm:w-auto">
           Continuar para a entrega
         </Button>
+        {/* "Continuar" não é "comprar" — e quem não tem intimidade com site
+            não sabe disso. Dizer que ainda faltam frete e pagamento é o que
+            faz ela clicar sem medo de já estar sendo cobrada. */}
+        <p className="text-small text-ink-muted">
+          Você ainda escolhe o frete e a forma de pagamento antes de confirmar — nada é cobrado
+          agora.
+        </p>
       </div>
     </form>
   );

@@ -31,3 +31,16 @@ export function linkWhatsapp(texto?: string): string {
   const t = String(texto || '').trim();
   return t ? `${base}&text=${encodeURIComponent(t)}` : base;
 }
+
+/**
+ * O CARIMBO GERAL — todo botão de WhatsApp do site abre com ele preenchido.
+ *
+ * Não é cosmético: "vim pelo site" é o CONTRATO DE PARSE da automação
+ * (Evolution/n8n) que transforma a mensagem recebida em LEAD com telefone e
+ * origem na tela /retaguarda/leads-whatsapp. Os botões de LOJA têm o carimbo
+ * próprio ("Quero conhecer a loja X (vim pelo site)", ver `lojas/lib.ts`) —
+ * este aqui é o dos botões gerais, que abriam a conversa em branco e a
+ * automação não tinha como reconhecer. Mudar o texto quebra o reconhecimento
+ * sem dar erro em lugar nenhum.
+ */
+export const LINK_WHATSAPP_SITE = linkWhatsapp('Olá! Vim pelo site.');

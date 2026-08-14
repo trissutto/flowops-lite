@@ -10,6 +10,7 @@ import { BuyBox } from '@/components/commerce/BuyBox';
 import { ProductPageSignals } from '@/components/commerce/ProductPageSignals';
 import { DescricaoDaPeca } from '@/components/commerce/DescricaoDaPeca';
 import { DescobrirFeed } from '@/components/commerce/DescobrirFeed';
+import { CompleteOLook } from '@/components/commerce/CompleteOLook';
 import { NewsletterBlock } from '@/components/sections/NewsletterBlock';
 import { getProduct } from '@/services/catalog';
 import { fetchPeca } from '@/services/peca';
@@ -113,7 +114,7 @@ export default async function ProductPage({ params }: { params: Promise<{ slug: 
       {/* Galeria + decisão de compra */}
       <Container width="wide" className="pb-16">
         {cores.length > 0 ? (
-          <EscolhaDaPeca product={product} cores={cores} />
+          <EscolhaDaPeca product={product} cores={cores} look={peca?.look ?? null} />
         ) : (
           <div className="grid gap-10 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)] lg:gap-16">
             <div className="min-w-0">
@@ -226,6 +227,14 @@ export default async function ProductPage({ params }: { params: Promise<{ slug: 
         A sequência é montada no servidor (`LojaCatalogService.descobrir`) —
         é o que garante que a página 7 não repita o que a página 1 mostrou.
       */}
+      {/*
+        COMPLETE O LOOK (dono, 13/08): as peças da MESMA foto vêm ANTES do
+        feed genérico — é a sugestão mais forte que existe, porque a cliente
+        está literalmente vendo a outra peça na foto que a trouxe aqui.
+        Curadoria em /retaguarda/looks; peça sem look não rende bloco.
+      */}
+      {peca?.look && <CompleteOLook look={peca.look} />}
+
       <DescobrirFeed
         slug={product.slug}
         eyebrow="Combina com"

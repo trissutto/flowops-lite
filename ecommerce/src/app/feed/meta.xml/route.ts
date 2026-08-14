@@ -49,6 +49,7 @@ interface PecaFeed {
   descricao: string | null;
   marca: string | null;
   categoria: string | null;
+  subcategoria: string | null;
   preco: number;
   precoPromocional: number | null;
   disponivel: boolean;
@@ -88,7 +89,48 @@ function rotulo(slug: string | null): string {
   return limpo.charAt(0).toUpperCase() + limpo.slice(1);
 }
 
-function item(p: PecaFeed): string {
+/**
+ * AS 20 MAIS NOVAS DE CADA CATEGORIA — `custom_label_2`.
+ *
+ * O conjunto de produtos do Meta é um FILTRO, não uma consulta: ele sabe
+ * responder "todas as blusas", nunca "as 20 blusas mais novas". Não existe
+ * ordenar-e-cortar no filtro dele, e o feed também não manda data nenhuma.
+ * Quem sabe quais são as 20 mais novas é este feed — o backend já devolve o
+ * catálogo ordenado por `novidades` (publicado_em desc), então basta contar
+ * de cima e carimbar as primeiras. O conjunto no Meta vira um `eq` bobo no
+ * carimbo e a rotação acontece sozinha: peça nova entra no topo, a 21ª sai do
+ * carimbo, e na leitura seguinte do feed o conjunto já está trocado.
+ *
+ * `custom_label_2` porque a 0 é o slug da subcategoria (acima) e a 1 fica de
+ * reserva pra não brigar com conjunto que alguém já tenha criado na mão.
+ *
+ * SÓ PEÇA DISPONÍVEL entra na conta. Esgotado continua no feed (ver o
+ * cabeçalho), mas não pode ocupar uma das 20 vagas do anúncio: gastaria
+ * vitrine com peça que não vende e encolheria o conjunto na prática.
+ */
+const NOVIDADES_TETO = 20;
+const NOVIDADES_CATEGORIA: Record<string, string> = {
+  blusas: 'novidades-blusas',
+  vestidos: 'novidades-vestidos',
+  macacoes: 'novidades-macacoes',
+};
+
+/** REF → carimbo, pras `NOVIDADES_TETO` primeiras disponíveis de cada categoria. */
+function carimbarNovidades(pecas: PecaFeed[]): Map<string, string> {
+  const usadas = new Map<string, number>();
+  const carimbo = new Map<string, string>();
+  for (const p of pecas) {
+    const alvo = NOVIDADES_CATEGORIA[String(p.categoria || '').trim()];
+    if (!alvo || !p.disponivel) continue;
+    const n = usadas.get(alvo) ?? 0;
+    if (n >= NOVIDADES_TETO) continue;
+    usadas.set(alvo, n + 1);
+    carimbo.set(p.ref, alvo);
+  }
+  return carimbo;
+}
+
+function item(p: PecaFeed, novidade?: string): string {
   const link = `${SITE.url}/produto/${p.slug}`;
   const [capa, ...resto] = p.imagens;
 
@@ -110,6 +152,13 @@ function item(p: PecaFeed): string {
     `<g:age_group>adult</g:age_group>`,
     `<g:product_type>${escapar(rotulo(p.categoria))}</g:product_type>`,
   ];
+
+  // O SLUG da subcategoria, cru — é a chave que o conjunto de produtos do
+  // Meta filtra (custom_label_0 eq "blusas-confort"). Campanha por
+  // subcategoria depende disto; sem subcategoria o campo nem vai.
+  if (p.subcategoria) campos.push(`<g:custom_label_0>${escapar(p.subcategoria)}</g:custom_label_0>`);
+  // Ver `carimbarNovidades`. Só as 20 do topo de cada categoria recebem.
+  if (novidade) campos.push(`<g:custom_label_2>${escapar(novidade)}</g:custom_label_2>`);
 
   if (capa) campos.push(`<g:image_link>${escapar(capa)}</g:image_link>`);
   // Até 10 fotos extras — o carrossel do anúncio dinâmico usa estas.
@@ -137,12 +186,23 @@ export async function GET() {
     // catálogo (POST /api/revalidar com tags:['catalogo']) — sem ela, o dado
     // preso aqui só saía pelo relógio, por mais que o backend já respondesse
     // o catálogo novo.
-    pecas = (await api<PecaFeed[]>('/public/loja/feed', { revalidate, tags: ['catalogo'], timeoutMs: 25000 })) ?? [];
+    //
+    // O `?rev=2` rotaciona a CHAVE no Data Cache da Vercel (13/08): a entrada
+    // antiga foi gravada com validade de 24h e SEM tag, e o Data Cache
+    // sobrevive a deploy — trocar revalidate/tags no código não alcança a
+    // entrada já gravada (config de cache não entra na chave). O backend
+    // ignora a query. Se um dia envenenar de novo: soma 1 aqui.
+    pecas = (await api<PecaFeed[]>('/public/loja/feed?rev=2', { revalidate, tags: ['catalogo'], timeoutMs: 25000 })) ?? [];
   } catch {
     /* Catálogo fora do ar: devolve feed VAZIO e válido, nunca erro. O Meta
        trata resposta com erro como falha de importação e pode desativar o
        agendamento; feed vazio ele só registra e tenta de novo amanhã. */
   }
+
+  // A ORDEM DA LISTA É O DADO. O backend devolve por `novidades` (mais nova
+  // primeiro) e o carimbo das 20 depende disso — nunca reordenar aqui.
+  const validas = pecas.filter((p) => p.ref && p.slug && p.preco > 0);
+  const novidades = carimbarNovidades(validas);
 
   const xml =
     `<?xml version="1.0" encoding="UTF-8"?>` +
@@ -150,7 +210,7 @@ export async function GET() {
     `<title>${escapar(SITE.name)}</title>` +
     `<link>${escapar(SITE.url)}</link>` +
     `<description>${escapar(SITE.description)}</description>` +
-    pecas.filter((p) => p.ref && p.slug && p.preco > 0).map(item).join('') +
+    validas.map((p) => item(p, novidades.get(p.ref))).join('') +
     `</channel></rss>`;
 
   return new Response(xml, {

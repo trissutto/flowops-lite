@@ -1931,10 +1931,29 @@ function PdvPageInner() {
         body.paymentMethod = paymentMethod;
         body.paymentDetails = paymentDetails;
       }
-      await api(
+      const finResp = await api<any>(
         `/pdv/sales/${sale.id}/finalize`,
         { method: 'POST', body: JSON.stringify(body) },
       );
+      // PEDIDO ONLINE (14/08): venda 100% Venda Online virou um pedido no
+      // trilho do site. Auto-atende = esta loja tem todas as peças e o card
+      // verde já nasceu AQUI; senão foi pra fila de roteamento da matriz.
+      if (finResp?.onlineOrder) {
+        const oo = finResp.onlineOrder;
+        if (oo.autoAtendida) {
+          toast(
+            'success',
+            `${String(oo.storeName || 'Sua loja').toUpperCase()} ATENDE O PEDIDO TODO`,
+            `Separação gerada nesta unidade — pedido ${oo.wcOrderNumber} entrou na fila de pedidos da loja.`,
+          );
+        } else {
+          toast(
+            'success',
+            `Pedido ${oo.wcOrderNumber} criado`,
+            'Sem todas as peças nesta loja — o pedido foi pro roteamento da matriz escolher quem envia.',
+          );
+        }
+      }
       const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
       setSale(fresh);
       setShowPayment(false);
@@ -5002,15 +5021,37 @@ function PaymentModal({
         );
         return;
       }
-      // Gerar PIX: exige o código criado. Fechar sem gerar é venda sem
-      // cobrança nenhuma — a cliente nunca recebeu o que pagar.
-      if (vendaOnlineTipo === 'pix_gerar' && !pixOnline) {
-        toast(
-          'warning',
-          'Gere o PIX primeiro',
-          'Clique em "Gerar PIX" pra criar o código e mandar pra cliente.',
-        );
-        return;
+      /**
+       * Gerar PIX: exige o código criado E o pagamento confirmado.
+       *
+       * A régua era diferente da do Link Pagar.me logo abaixo — este exigia só
+       * o código existir. Dava pra fechar a venda com a cliente ainda nem
+       * tendo aberto o WhatsApp: peça baixada do estoque, valor no caixa e
+       * nenhum dinheiro. Decisão do dono em 12/08: exigir pago, igual ao link.
+       *
+       * Isso só passou a ser viável agora porque o servidor CONFIRMA sozinho —
+       * o reconciliador pergunta pro PagBank a cada 40s. A venda fica aberta
+       * enquanto a cliente não paga e fecha sozinha quando o dinheiro entra,
+       * mesmo com o PDV desligado. Ninguém precisa ficar olhando pra tela.
+       */
+      if (vendaOnlineTipo === 'pix_gerar') {
+        if (!pixOnline) {
+          toast(
+            'warning',
+            'Gere o PIX primeiro',
+            'Clique em "Gerar PIX" pra criar o código e mandar pra cliente.',
+          );
+          return;
+        }
+        if (!pixOnlinePago) {
+          toast(
+            'warning',
+            'O PIX ainda não caiu',
+            'A venda fecha sozinha assim que o pagamento entrar — pode deixar aberta e seguir atendendo. ' +
+              'Fechar antes é entregar peça sem dinheiro na conta.',
+          );
+          return;
+        }
       }
       // Link Pagar.me: exige link gerado E pago confirmado pelo webhook
       if (vendaOnlineTipo === 'pagarme_link') {

@@ -125,6 +125,7 @@ export default function ClassificarProdutosPage() {
   const [destSubcategoria, setDestSubcategoria] = useState('');
   const [manterCategoria, setManterCategoria] = useState(false);
   const [novaSub, setNovaSub] = useState('');
+  const [novaCat, setNovaCat] = useState('');
   /** Âncora do shift+clique — marcar um intervalo inteiro sem clicar 40 vezes. */
   const ancora = useRef<number | null>(null);
 
@@ -288,6 +289,25 @@ export default function ClassificarProdutosPage() {
       setAviso(`Subcategoria "${alvo}" criada.`);
     } catch (e: any) {
       setErro(e?.message ?? 'Falha ao criar subcategoria');
+    }
+  }
+
+  /** Categoria de NÍVEL DE CIMA — "Linha Conforto" nasce aqui e já sai selecionada. */
+  async function criarCategoria() {
+    const alvo = novaCat.trim();
+    if (!alvo) return;
+    try {
+      const r = await api<{ ok: boolean; slug?: string; erro?: string }>(
+        '/loja-catalog/classificacao/categoria',
+        { method: 'POST', body: JSON.stringify({ nome: alvo }) },
+      );
+      if (!r.ok) throw new Error(r.erro || 'Falha ao criar');
+      setNovaCat('');
+      await carregarArvore();
+      if (r.slug) { setDestCategoria(r.slug); setDestSubcategoria(''); }
+      setAviso(`Categoria "${alvo}" criada.`);
+    } catch (e: any) {
+      setErro(e?.message ?? 'Falha ao criar categoria');
     }
   }
 
@@ -488,6 +508,29 @@ export default function ClassificarProdutosPage() {
               ))}
             </select>
           </div>
+          {/* Categoria nova sem sair da tela — "Linha Conforto" nasce aqui,
+              vazia, e só aparece no site quando tiver peça marcada dentro. */}
+          {!manterCategoria && (
+            <div className="flex items-end gap-1">
+              <div>
+                <label className="block text-xs text-slate-500 mb-1">ou criar categoria</label>
+                <input
+                  value={novaCat}
+                  onChange={(e) => setNovaCat(e.target.value)}
+                  placeholder="Linha Conforto"
+                  className="px-3 py-2 border rounded text-sm w-36"
+                />
+              </div>
+              <button
+                onClick={() => criarCategoria()}
+                disabled={!novaCat.trim()}
+                className="px-2.5 py-2 border rounded text-sm hover:bg-white disabled:opacity-40"
+                title="Criar categoria de nível de cima"
+              >
+                <Plus className="w-4 h-4" />
+              </button>
+            </div>
+          )}
           <div>
             <label className="block text-xs text-slate-500 mb-1">Subcategoria (opcional)</label>
             <select

@@ -11,7 +11,8 @@ import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service
 import { DceEmitService } from '../dce/dce-emit.service';
 import { NfeTransferService } from '../nfe/nfe-transfer.service';
 import { DanfePdfService } from '../nfe/danfe-pdf.service';
-import { lerComplementoBairroWc } from '../common/endereco-wc';
+import { PedidoEmailService } from '../loja-orders/pedido-email.service';
+import { lerComplementoBairroWc, lerRuaNumeroWc } from '../common/endereco-wc';
 import { servicoPagoDoPedido } from '../common/servico-envio';
 
 // Lojas que despacham pelo MAIS ENVIOS (código Flow → sender id no Mais Envios).
@@ -94,6 +95,7 @@ export class PickOrdersService {
     private readonly dce: DceEmitService,
     private readonly nfe: NfeTransferService,
     private readonly danfePdf: DanfePdfService,
+    private readonly pedidoEmail: PedidoEmailService,
   ) {}
 
   /**
@@ -504,13 +506,7 @@ export class PickOrdersService {
       let addr: any = {};
       try { addr = JSON.parse(order.shippingAddress || '{}'); } catch { /* cru */ }
       cep = String(order.shippingCep || addr.postcode || addr.cep || '').replace(/\D/g, '');
-      const address1 = String(addr.address_1 || addr.street || addr.logradouro || '').trim();
-      endereco = address1;
-      numero = String(addr.number || addr.numero || '').trim();
-      if (!numero && address1) {
-        const m = address1.match(/^(.*?),?\s*(\d+[A-Za-z]?)\s*$/);
-        if (m) { endereco = m[1].trim(); numero = m[2]; }
-      }
+      ({ rua: endereco, numero } = lerRuaNumeroWc(addr));
       uf = String(addr.state || addr.uf || '').trim().toUpperCase();
       cidade = String(addr.city || addr.cidade || '').trim();
       bairro = String(addr.neighborhood || addr.bairro || '').trim();
@@ -661,14 +657,8 @@ export class PickOrdersService {
     const cep = String(order.shippingCep || addr.postcode || addr.cep || '').replace(/\D/g, '');
     if (cep.length !== 8) throw new BadRequestException('Pedido sem CEP válido pra postar.');
 
-    // Mesmo parse do caminho Correios: número dentro de address_1 + CEP-authoritative
-    const address1 = String(addr.address_1 || addr.street || addr.logradouro || '').trim();
-    let endereco = address1;
-    let numero = String(addr.number || addr.numero || '').trim();
-    if (!numero && address1) {
-      const m = address1.match(/^(.*?),?\s*(\d+[A-Za-z]?)\s*$/);
-      if (m) { endereco = m[1].trim(); numero = m[2]; }
-    }
+    // Mesmo parse do caminho Correios: rua e número sem repetir + CEP-authoritative
+    let { rua: endereco, numero } = lerRuaNumeroWc(addr);
     let uf = String(addr.state || addr.uf || '').trim().toUpperCase();
     let cidade = String(addr.city || addr.cidade || '').trim();
     // Complemento e bairro saem SEPARADOS — inclusive de pedido antigo, que
@@ -730,14 +720,9 @@ export class PickOrdersService {
     if (cep.length !== 8) throw new BadRequestException('Pedido sem CEP válido pra postar.');
 
     // Endereço WooCommerce: número/bairro podem vir separados (plugin BR) ou
-    // dentro de address_1 ("Rua X, 123"). Extrai o número se não vier separado.
-    const address1 = String(addr.address_1 || addr.street || addr.logradouro || '').trim();
-    let endereco = address1;
-    let numero = String(addr.number || addr.numero || '').trim();
-    if (!numero && address1) {
-      const m = address1.match(/^(.*?),?\s*(\d+[A-Za-z]?)\s*$/);
-      if (m) { endereco = m[1].trim(); numero = m[2]; }
-    }
+    // dentro de address_1 ("Rua X, 123") — e no pedido do site vêm NOS DOIS,
+    // que é o que punha "Rua X, 123, 123" na etiqueta.
+    let { rua: endereco, numero } = lerRuaNumeroWc(addr);
     let uf = String(addr.state || addr.uf || '').trim().toUpperCase();
     let cidade = String(addr.city || addr.cidade || '').trim();
     // Complemento e bairro saem SEPARADOS — inclusive de pedido antigo, que
@@ -1030,7 +1015,15 @@ export class PickOrdersService {
     // Items atribuídos a essa loja (pedido multi-loja só retorna o pedaço dela)
     const items = await this.prisma.orderItem.findMany({
       where: { orderId: po.orderId, assignedStoreId: storeId },
-      select: { id: true, sku: true, productName: true, quantity: true },
+      select: {
+        id: true,
+        sku: true,
+        productName: true,
+        ref: true,
+        cor: true,
+        tamanho: true,
+        quantity: true,
+      },
     });
 
     const skus = items.map((i) => i.sku).filter(Boolean);
@@ -1064,6 +1057,9 @@ export class PickOrdersService {
           id: i.id,
           sku: i.sku,
           productName: i.productName,
+          ref: (i as any).ref ?? null,
+          cor: (i as any).cor ?? null,
+          tamanho: (i as any).tamanho ?? null,
           quantity: i.quantity,
           ean, // null = sem EAN no ERP → operador precisa reportar
           eanVariants,
@@ -1333,6 +1329,9 @@ export class PickOrdersService {
             id: true,
             wcOrderId: true,
             wcOrderNumber: true,
+            // Card verde ONLINE (14/08): a loja distingue pedido da vendedora
+            // online (source='pdv_online') do pedido do site pela tag.
+            source: true,
             customerName: true,
             customerPhone: true,
             customerCpf: true,
@@ -2200,7 +2199,15 @@ export class PickOrdersService {
     // conta pra loja se for a única pick-order.
     const itens = await this.prisma.orderItem.findMany({
       where: { orderId: order.id },
-      select: { sku: true, productName: true, quantity: true, assignedStoreId: true },
+      select: {
+        sku: true,
+        productName: true,
+        ref: true,
+        cor: true,
+        tamanho: true,
+        quantity: true,
+        assignedStoreId: true,
+      },
     });
     const soUmaLoja = rows.length === 1;
     const itensDaStore = (storeId: string) =>
@@ -2211,6 +2218,9 @@ export class PickOrdersService {
       itensDaStore(storeId).map((i) => ({
         sku: String(i.sku || '').trim(),
         descricao: i.productName || null,
+        ref: (i as any).ref || null,
+        cor: (i as any).cor || null,
+        tamanho: (i as any).tamanho || null,
         qty: Number(i.quantity) || 1,
       }));
     const reasonLabels: Record<string, string> = {
@@ -2809,7 +2819,23 @@ export class PickOrdersService {
         .findUnique({ where: { code: po.transferToStoreCode } })
         .catch(() => null);
       if (st) destino = { code: st.code, name: st.name, tipo: st.tipo === 'FILIAL' ? 'FILIAL' : 'REDE' };
-    } else {
+    } else if (order.source === 'pdv_online' && order.sellerStoreCode) {
+      // PEDIDO ONLINE (14/08): a dona da venda é a LOJA VENDEDORA do PDV
+      // (Order.sellerStoreCode — Karine = loja site), não a loja-canal 13.
+      // Fornecedora → vendedora entra no MESMO acerto REDE × FRANQUIA; se a
+      // vendedora atendeu o próprio pedido, `mesmaLoja` abaixo anula tudo.
+      const st = await (this.prisma as any).store
+        .findFirst({ where: { code: order.sellerStoreCode } })
+        .catch(() => null);
+      if (st) {
+        destino = { code: st.code, name: st.name, tipo: st.tipo === 'FILIAL' ? 'FILIAL' : 'REDE' };
+      } else {
+        this.logger.warn(
+          `[acerto-÷2,5] pedido ${order.wcOrderNumber}: sellerStoreCode=${order.sellerStoreCode} não achado em Store — caindo no canal 13`,
+        );
+      }
+    }
+    if (!destino && !(po.isTransfer && po.transferToStoreCode)) {
       // VENDA DE CANAL (site OU live) — dono 30/07: o destino é SEMPRE a
       // loja-canal 13 (SITE). Antes a live acertava com a loja que fez a live
       // (session.liveStoreCode) e o site usava um código fantasma 'SITE' que
@@ -2844,7 +2870,7 @@ export class PickOrdersService {
         for (const it of itens) {
           const transfer = await (this.prisma as any).transferOrder.create({
             data: {
-              tipo: order.source === 'live' ? 'LIVE' : 'SITE',
+              tipo: order.source === 'live' ? 'LIVE' : order.source === 'pdv_online' ? 'ONLINE' : 'SITE',
               refCode: String(it.sku || ''),
               codigoBipado: String(it.sku || ''),
               descricao: it.productName || null,
@@ -2853,7 +2879,8 @@ export class PickOrdersService {
               lojaOrigemName: fromStore?.name,
               lojaDestinoCode: destino.code,
               lojaDestinoName: destino.name,
-              solicitanteNome: order.source === 'live' ? 'LIVE COMMERCE' : 'VENDA SITE',
+              solicitanteNome:
+                order.source === 'live' ? 'LIVE COMMERCE' : order.source === 'pdv_online' ? 'VENDA ONLINE' : 'VENDA SITE',
               mensagem: `Pedido ${order.wcOrderNumber} expedido${input.trackingCode ? ` (rastreio ${input.trackingCode})` : ''}`,
             },
           });
@@ -2895,6 +2922,33 @@ export class PickOrdersService {
       this.logger.warn(`[acerto-÷2,5] pedido ${order.wcOrderNumber}: ${e?.message || e}`);
     }
 
+    // ── 2b) Rastreio pra cliente do SITE NOVO (e-mail + evento n8n) ──
+    // O e-mail de "Pagamento confirmado" promete o código de rastreio, e até
+    // 14/08 ninguém cumpria: o ManyChat abaixo é só da LIVE e o site novo não
+    // passa pelo WooCommerce que avisava o site velho. Guard atômico no
+    // pedido: dividido despacha um pacote por loja, e só o PRIMEIRO com
+    // rastreio avisa (updateMany com null → 1 linha = este pacote venceu).
+    // 'pdv_online' entra aqui junto (14/08): a venda online do PDV nasceu muda
+    // — a cliente é atendida no WhatsApp da vendedora, mas o código de
+    // rastreio ninguém mandava. Mesmo trilho, mesma trava.
+    if ((order.source === 'ecommerce' || order.source === 'pdv_online') && input.trackingCode) {
+      try {
+        const venceu = await (this.prisma as any).order.updateMany({
+          where: { id: order.id, rastreioAvisadoEm: null },
+          data: { rastreioAvisadoEm: new Date() },
+        });
+        if (venceu.count === 1) {
+          void this.pedidoEmail.aoEnviarPedido({
+            ...order,
+            trackingCode: input.trackingCode,
+            carrier: input.carrier ?? order.carrier ?? 'Correios',
+          });
+        }
+      } catch (e: any) {
+        this.logger.warn(`[rastreio-site] pedido ${order.wcOrderNumber}: ${e?.message || e}`);
+      }
+    }
+
     // ── 2) WhatsApp de rastreio pra cliente da LIVE ──
     if (order.source === 'live') {
       try {
@@ -2908,6 +2962,20 @@ export class PickOrdersService {
               ? digits
               : null;
         if (!phone) return;
+        // TRAVA DE DUPLICIDADE (14/08): a live não tinha nenhuma, enquanto o
+        // ramo do site ao lado tinha. Carrinho separado por 2 lojas chamava
+        // este bloco 2× e a cliente recebia 2 WhatsApps do mesmo pedido.
+        // Reclamado só como "chegou repetido" — nunca como bug.
+        // Reivindicação atômica ANTES do envio, depois dos guards baratos
+        // (sem flow/telefone não queima o carimbo).
+        const venceuWhats = await (this.prisma as any).order.updateMany({
+          where: { id: order.id, rastreioAvisadoEm: null },
+          data: { rastreioAvisadoEm: new Date() },
+        });
+        if (venceuWhats.count !== 1) {
+          this.logger.log(`[rastreio-whats] pedido ${order.wcOrderNumber}: já avisado — 2º pacote não repete`);
+          return;
+        }
         let subId = await this.manychat.findWhatsAppSubscriber(phone);
         if (!subId) {
           const created = await this.manychat.createWhatsAppSubscriber(phone, order.customerName);

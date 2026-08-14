@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
-import { Heart, Lock, MapPin, MessageCircle, Ruler, ShoppingBag, Sparkles, Star } from 'lucide-react';
+import Image from 'next/image';
+import { ArrowRight, Check, Heart, Lock, MapPin, MessageCircle, Ruler, ShoppingBag, Sparkles, Star } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { SimuladorFrete } from '@/components/commerce/SimuladorFrete';
 import { SizePill } from '@/components/ui/Choice';
@@ -15,11 +16,12 @@ import { useWishlistStore } from '@/store/wishlist';
 import { trackAddToCart, trackViewItem } from '@/lib/tracking';
 import { useMounted } from '@/hooks';
 import { cn, discountPercent, formatPrice } from '@/lib/utils';
-import { hexDaCor } from '@/services/products';
+import { hexDaCor, type PecaApi } from '@/services/products';
 import type { Product } from '@/types';
 import { STORE_POLICIES } from '@/data/store-policies';
 import { SeloVendas } from '@/components/commerce/SeloVendas';
-import { WHATSAPP_ATENDIMENTO } from '@/data/contato';
+import { linkWhatsapp } from '@/data/contato';
+import { SITE } from '@/lib/seo';
 
 const FitAssistant = dynamic(
   () => import('@/components/fit/FitAssistant').then((module) => module.FitAssistant),
@@ -42,7 +44,7 @@ export interface CorEscolhivel {
 }
 
 export function BuyBox({
-  product, cores, corSelecionada, onSelecionarCor, alertaEstoque,
+  product, cores, corSelecionada, onSelecionarCor, alertaEstoque, look,
 }: {
   product: Product;
   /** Cores da peça. Vazio = peça de cor única (ou catálogo sem ficha ainda). */
@@ -51,7 +53,10 @@ export function BuyBox({
   onSelecionarCor?: (nome: string) => void;
   /** "Restam 2 nesta cor" — só com número REAL do estoque, nunca inventado. */
   alertaEstoque?: string | null;
+  /** As peças que saem na MESMA foto (curadoria de /retaguarda/looks). */
+  look?: PecaApi['look'];
 }) {
+  const irmasDoLook = (look?.pecas ?? []).filter((p) => !p.atual);
   const [size, setSize] = useState<string | null>(null);
   const [sizeError, setSizeError] = useState(false);
   // LURDS FIT AI — assistente próprio de tamanho
@@ -87,6 +92,41 @@ export function BuyBox({
 
   const available = product.sizes.filter((s) => s.available);
   const soldOut = available.length === 0;
+  /** Peça com mais de uma cor: só aí a escolha de cor é um passo de verdade. */
+  const temCor = !!cores && cores.length > 1;
+
+  /**
+   * O TAMANHO ESCOLHIDO ACABOU ENQUANTO ELA OLHAVA (dono, 13/08).
+   *
+   * A grade se reconfere sozinha (ver `useEstoqueAoVivo`), então o 48 pode
+   * sair da prateleira com a cliente na página. Deixar o botão selecionado e
+   * indisponível ao mesmo tempo é o pior dos mundos: ela clica em "Adicionar",
+   * o pedido vai, e o guard do carrinho recusa lá no fim — depois de ela ter
+   * preenchido o CEP.
+   *
+   * Então a seleção cai E ela é avisada. Sumir em silêncio faria a próxima
+   * tentativa de comprar esbarrar em "Escolha um tamanho pra continuar", sem
+   * ninguém explicar por que o dela sumiu.
+   *
+   * `product.sizes.length` na condição: grade vazia por um instante (troca de
+   * cor) não é tamanho esgotado, e limpar a escolha ali seria bug puro.
+   */
+  const escolhidoEsgotou =
+    !!size && product.sizes.length > 0 && !product.sizes.some((s) => s.label === size && s.available);
+
+  useEffect(() => {
+    if (!escolhidoEsgotou) return;
+    const perdido = size;
+    setSize(null);
+    setSizeError(false);
+    toast({
+      message: `O tamanho ${perdido} acabou agora`,
+      description: 'Alguém levou a última enquanto você olhava. Escolha outro tamanho.',
+    });
+    // `size` e `toast` de fora de propósito: o gatilho é o tamanho ter deixado
+    // de existir, e reagir à própria limpeza reabriria o aviso.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [escolhidoEsgotou]);
   const discount = product.compareAtPrice
     ? discountPercent(product.compareAtPrice, product.price)
     : 0;
@@ -145,9 +185,24 @@ export function BuyBox({
     product.name.split(/s+/).slice(0, 4).join(' '),
   )}`;
 
-  const whatsapp = `https://api.whatsapp.com/send?phone=${WHATSAPP_ATENDIMENTO}&text=${encodeURIComponent(
-    `Olá! Tenho interesse na peça "${product.name}". Vocês têm no tamanho ${size ?? '__'}?`,
-  )}`;
+  /**
+   * TIRAR DÚVIDA leva REF, cor e o LINK da peça (pedido do dono, 13/08).
+   *
+   * A mensagem chegava só com o nome — "Tenho interesse na peça Blusa Manga
+   * Curta" — e a consultora respondia perguntando "qual delas?": nome limpo
+   * não identifica peça nenhuma entre 14 lojas. A REF é o código que o PDV
+   * busca, e o link faz o WhatsApp montar a prévia com a FOTO — a atendente
+   * vê a peça antes de abrir conversa. Sem emoji (ver `data/contato.ts`).
+   */
+  const refPeca = product.sku ?? product.id;
+  const corDaDuvida = corSelecionada ?? (cores?.length === 1 ? cores[0].nome : null);
+  const whatsapp = linkWhatsapp(
+    [
+      `Olá! Tenho interesse na peça "${product.name}" (Ref ${refPeca}${corDaDuvida ? `, cor ${corDaDuvida}` : ''}).`,
+      `Vocês têm no tamanho ${size ?? '__'}?`,
+      `${SITE.url}/produto/${product.slug}`,
+    ].join('\n'),
+  );
 
   return (
     <div className="flex flex-col">
@@ -257,14 +312,20 @@ export function BuyBox({
 
       {/* COR — vem ANTES do tamanho: a cliente escolhe a cor e só então vê a
           grade daquela cor (cada cor tem estoque próprio). Escolher o 48 e
-          depois descobrir que ele só existe no preto é o pior caminho. */}
+          depois descobrir que ele só existe no preto é o pior caminho.
+
+          DIDÁTICO POR DECISÃO DO DONO (14/08): "minha cliente é lenta com
+          tecnologia". A bolinha sozinha não ensina nada — ela não se anuncia
+          como clicável e ninguém distingue vinho de marrom num círculo de
+          43px. Agora cada cor tem NOME ESCRITO embaixo, o passo é numerado
+          ("1 Escolha a cor") e a escolhida ganha um ✓. O nome já existia, mas
+          só no `title`/`aria-label`: invisível no celular, que é onde a
+          cliente compra. Contexto: 443 pessoas abriram uma peça no dia e 28
+          puseram na sacola. */}
       {cores && cores.length > 1 && (
         <div className="mt-9">
-          <p className="eyebrow text-ink">
-            Cor
-            {corSelecionada && <span className="ml-2 text-ink-soft normal-case">{corSelecionada}</span>}
-          </p>
-          <div className="mt-4 flex flex-wrap gap-3">
+          <PassoLabel numero={1} titulo="Escolha a cor" escolhido={corSelecionada ?? null} />
+          <div className="mt-4 flex flex-wrap gap-x-4 gap-y-5">
             {cores.map((c) => {
               const escolhida = corSelecionada === c.nome;
               const esgotada = c.estoque <= 0;
@@ -289,19 +350,43 @@ export function BuyBox({
                   onClick={() => onSelecionarCor?.(c.nome)}
                   aria-pressed={escolhida}
                   aria-label={`Cor ${c.nome}${esgotada ? ' (esgotada)' : ''}`}
-                  title={c.nome}
-                  className={cn(
-                    // 2,7rem = 43px: a bolinha 20% maior que os 36px originais
-                    // (dono 07/08). É o controle que decide a compra — merece
-                    // o alvo de toque maior no celular.
-                    'relative size-[2.7rem] rounded-full border transition-all duration-[320ms]',
-                    escolhida
-                      ? 'border-ink ring-2 ring-ink ring-offset-2 ring-offset-background'
-                      : 'border-border hover:border-ink-soft',
-                    esgotada && 'opacity-40',
-                  )}
+                  // w-16 + quebra de linha: o nome inteiro aparece ("AZUL
+                  // MARINHO" em duas linhas) sem esticar o viewport no celular
+                  // — o flex-wrap acomoda, e nada de truncar justo o texto que
+                  // a gente acabou de mostrar pra ensinar.
+                  className="group flex w-16 flex-col items-center gap-2"
                 >
-                  <span style={estilo} className="absolute inset-[3px] rounded-full" />
+                  <span
+                    className={cn(
+                      // 2,7rem = 43px: a bolinha 20% maior que os 36px originais
+                      // (dono 07/08). É o controle que decide a compra — merece
+                      // o alvo de toque maior no celular.
+                      'relative flex size-[2.7rem] items-center justify-center rounded-full border transition-all duration-[320ms]',
+                      escolhida
+                        ? 'border-ink ring-2 ring-ink ring-offset-2 ring-offset-background'
+                        : 'border-border group-hover:border-ink-soft',
+                      esgotada && 'opacity-40',
+                    )}
+                  >
+                    <span style={estilo} className="absolute inset-[3px] rounded-full" />
+                    {/* ✓ por cima da bolinha: a borda escura sozinha some numa
+                        peça de cor escura — o check nunca some. */}
+                    {escolhida && (
+                      <Check
+                        className="relative size-4 text-light drop-shadow-[0_1px_2px_rgba(0,0,0,0.6)]"
+                        strokeWidth={3}
+                      />
+                    )}
+                  </span>
+                  <span
+                    className={cn(
+                      'text-center text-xs leading-tight break-words',
+                      escolhida ? 'font-medium text-ink' : 'text-ink-soft',
+                    )}
+                  >
+                    {c.nome}
+                    {esgotada && <span className="block text-ink-muted">esgotada</span>}
+                  </span>
                 </button>
               );
             })}
@@ -309,10 +394,52 @@ export function BuyBox({
         </div>
       )}
 
+      {/* SAI NA MESMA FOTO — a irmã do look colada na decisão (dono, 13/08:
+          "era bom aparecer aqui a indicação da peça irmã"). A cliente está
+          literalmente vendo a outra peça na foto ao lado; o bloco grande
+          "Complete o look" continua no fim da página pra quem rolou. */}
+      {irmasDoLook.length > 0 && (
+        <div className="mt-9">
+          <p className="eyebrow text-ink">Sai na mesma foto</p>
+          <div className="mt-3 flex flex-col gap-2">
+            {irmasDoLook.map((p) => (
+              <Link
+                key={p.ref}
+                href={`/produto/${p.slug}`}
+                className="group flex items-center gap-3 rounded-sm border border-border bg-surface-alt/60 px-3 py-2.5 transition-colors duration-[320ms] hover:border-ink-soft"
+              >
+                {p.imagem && (
+                  <Image
+                    src={p.imagem}
+                    alt={p.nome}
+                    width={40}
+                    height={53}
+                    className="h-[53px] w-10 shrink-0 rounded-sm object-cover"
+                  />
+                )}
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-body text-ink">{p.nome}</span>
+                  <span className="block text-small font-light text-ink-soft">
+                    {formatPrice(p.preco)}
+                    {!p.disponivel && ' · esgotada'}
+                  </span>
+                </span>
+                <ArrowRight className="size-4 shrink-0 text-ink-muted transition-transform duration-[320ms] group-hover:translate-x-0.5" />
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Tamanho */}
       <div id="seletor-tamanho" className="mt-9 scroll-mt-28">
-        <div className="flex items-center justify-between">
-          <p className="eyebrow text-ink">Tamanho</p>
+        <div className="flex items-end justify-between gap-4">
+          <PassoLabel
+            numero={temCor ? 2 : 1}
+            titulo="Escolha o tamanho"
+            escolhido={size}
+            sufixoEscolhido="tamanho"
+          />
           <Link
             href="/tamanhos/guia"
             className="inline-flex items-center gap-1.5 text-small text-ink-soft underline decoration-border underline-offset-4 transition-colors hover:text-ink"
@@ -322,25 +449,16 @@ export function BuyBox({
           </Link>
         </div>
 
-        {/* LURDS FIT AI — mata a objeção "será que serve?" antes do seletor */}
-        {!soldOut && (
-          <button
-            type="button"
-            onClick={() => setFitOpen(true)}
-            className="group mt-4 flex w-full items-center justify-center gap-2 rounded-sm border border-primary bg-primary-wash px-5 py-3.5 text-small font-medium text-primary-strong transition-all duration-[320ms] hover:border-primary-strong hover:bg-champagne"
-          >
-            <Sparkles
-              className="size-3.5 transition-transform duration-[320ms] group-hover:scale-110"
-              strokeWidth={1.75}
-            />
-            Descubra seu tamanho ideal
-          </button>
-        )}
-
+        {/* As pills COLADAS no rótulo do passo (dono, 14/08): o botão do Fit
+            AI morava aqui no meio e cortava o próprio passo que o rótulo
+            anuncia — "escolha o tamanho" seguido de um botão que NÃO é um
+            tamanho. Quem já sabe o número clica direto; a ajuda desce pra
+            linha abaixo das pills, onde procura quem está em dúvida. */}
         <div className="mt-4 flex flex-wrap gap-2">
           {product.sizes.map((option) => (
             <SizePill
               key={option.label}
+              size="lg"
               label={option.label}
               selected={size === option.label}
               disabled={!option.available}
@@ -351,6 +469,30 @@ export function BuyBox({
             />
           ))}
         </div>
+
+        {/* Legenda do risco — a pílula riscada é convenção de quem compra
+            online há anos, não de quem está comprando pela primeira vez. */}
+        {!soldOut && product.sizes.some((s) => !s.available) && (
+          <p className="mt-3 text-small text-ink-muted">
+            Os números riscados estão esgotados{temCor ? ' nesta cor' : ''}.
+          </p>
+        )}
+
+        {/* LURDS FIT AI — a objeção "será que serve?" respondida COMO AJUDA,
+            não como desvio no meio do passo. */}
+        {!soldOut && (
+          <button
+            type="button"
+            onClick={() => setFitOpen(true)}
+            className="group mt-3 inline-flex items-center gap-1.5 text-small text-ink-soft transition-colors hover:text-primary-strong"
+          >
+            <Sparkles className="size-3.5 text-primary-strong" strokeWidth={1.75} />
+            Não sabe seu número?{' '}
+            <span className="link-underline font-medium text-primary-strong">
+              Descubra seu tamanho ideal
+            </span>
+          </button>
+        )}
 
         {sizeError && (
           <p role="alert" className="mt-3 text-small text-danger">
@@ -373,13 +515,18 @@ export function BuyBox({
         )}
       </div>
 
-      {/* PROVA SOCIAL COLADA NO BOTÃO (dono, 13/08): é o último argumento antes
-          do clique, e o único da página que vem de venda de verdade. Estava lá
-          embaixo, em cinza, no meio das garantias — onde ninguém lia. */}
-      <SeloVendas vendas={product.sold} className="mt-8" />
+      {/* PROVA SOCIAL COLADA NO BOTÃO (dono, 13/08; virou linha em 14/08): é
+          o último argumento antes do clique e o único da página que vem de
+          venda de verdade — mas em caixa ela empurrava o botão pra longe do
+          seletor. Uma linha argumenta igual sem afastar o clique. */}
+      <SeloVendas vendas={product.sold} variant="linha" className="mt-7" />
 
-      {/* Ações */}
-      <div className="mt-4 flex flex-col gap-2.5">
+      {/* Ações — UM botão grande (dono, 14/08): "Adicionar à sacola" tinha o
+          mesmo peso visual de Favoritar e do WhatsApp, e o VERDE do WhatsApp
+          era a cor mais quente da coluna — o olho ia pro botão errado. Agora
+          a ação de compra é o único botão; as outras duas viram links
+          discretos logo abaixo. */}
+      <div className="mt-3 flex flex-col gap-4">
         {/* Esgotou: em vez de deixar a cliente sair, oferece o mesmo corte em
             outras peças — é o vendedor de loja física dizendo "se gostou
             desse modelo, olha esses aqui". */}
@@ -389,14 +536,14 @@ export function BuyBox({
           </Button>
         )}
         {!soldOut && (
-          <Button size="lg" block onClick={handleAdd}>
+          <Button size="lg" block onClick={handleAdd} className="h-14 text-[1.05rem]">
             <ShoppingBag /> Adicionar à sacola
           </Button>
         )}
 
-        <div className="grid grid-cols-2 gap-2.5">
-          <Button
-            variant="secondary"
+        <div className="flex items-center justify-center gap-8">
+          <button
+            type="button"
             onClick={() => {
               toggleWishlist(product.id);
               toast({
@@ -404,13 +551,23 @@ export function BuyBox({
                   mounted && isFavorite ? 'Removido dos favoritos' : 'Salvo nos favoritos',
               });
             }}
+            className="inline-flex items-center gap-1.5 text-small text-ink-soft transition-colors hover:text-ink"
           >
-            <Heart className={cn(mounted && isFavorite && 'fill-secondary text-secondary')} />
+            <Heart
+              className={cn('size-4', mounted && isFavorite && 'fill-secondary text-secondary')}
+              strokeWidth={1.75}
+            />
             {mounted && isFavorite ? 'Salvo' : 'Favoritar'}
-          </Button>
-          <Button href={whatsapp} external variant="whatsapp">
-            <MessageCircle /> Tirar dúvida
-          </Button>
+          </button>
+          <a
+            href={whatsapp}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 text-small text-ink-soft transition-colors hover:text-ink"
+          >
+            <MessageCircle className="size-4" strokeWidth={1.75} />
+            Tirar dúvida no WhatsApp
+          </a>
         </div>
       </div>
 
@@ -468,6 +625,58 @@ export function BuyBox({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/* ────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * Rótulo de passo da compra — "1 Escolha a cor", "2 Escolha o tamanho".
+ *
+ * Existe por um motivo só (dono, 14/08): "minha cliente é lenta com
+ * tecnologia". "Cor" e "Tamanho" são TÍTULOS — descrevem o bloco e não pedem
+ * nada. Quem não tem intimidade com loja online lê um título, não entende que
+ * tem que agir, e desce direto pro botão. O verbo no imperativo é a instrução
+ * que faltava; o número diz quantas decisões faltam.
+ *
+ * Quando já escolheu, o rótulo confirma em voz alta o que ela escolheu — a
+ * mesma confirmação que a vendedora dá na loja ("o vinho, 48, isso?").
+ */
+function PassoLabel({
+  numero,
+  titulo,
+  escolhido,
+  sufixoEscolhido,
+}: {
+  numero: number;
+  titulo: string;
+  /** O que já foi escolhido (cor ou tamanho). Nulo = ainda falta escolher. */
+  escolhido: string | null;
+  /** Palavra antes do valor na confirmação ("tamanho 48"). */
+  sufixoEscolhido?: string;
+}) {
+  return (
+    <div className="flex items-center gap-2.5">
+      <span
+        aria-hidden
+        className={cn(
+          'tabular flex size-6 shrink-0 items-center justify-center rounded-pill border text-xs font-medium transition-colors duration-[320ms]',
+          escolhido ? 'border-primary bg-primary text-light' : 'border-ink-soft text-ink',
+        )}
+      >
+        {escolhido ? <Check className="size-3.5" strokeWidth={3} /> : numero}
+      </span>
+      <p className="text-small font-medium text-ink">
+        {titulo}
+        {escolhido && (
+          <span className="font-normal text-ink-soft">
+            {' · '}
+            {sufixoEscolhido ? `${sufixoEscolhido} ` : ''}
+            <span className="font-medium text-ink">{escolhido}</span>
+          </span>
+        )}
+      </p>
     </div>
   );
 }
