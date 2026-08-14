@@ -120,6 +120,8 @@ export interface LojaTrackingInput {
 export interface CriarPedidoInput {
   customer: LojaCustomerInput;
   shippingAddress?: LojaAddressInput;
+  /** CEP digitado na cotação — vem mesmo na retirada (sem endereço completo). */
+  cep?: string;
   shipping: LojaShippingInput;
   items: LojaItemInput[];
   couponCode?: string;
@@ -958,6 +960,16 @@ export class LojaOrdersService {
             installments: parcelas,
             statement_descriptor: 'LURDS',
             card_token: String(input.payment.cardToken),
+            /**
+             * BILLING_ADDRESS OBRIGATÓRIO (incidente 14/08): a Pagar.me passou
+             * a exigir o endereço de cobrança no cartão — 4 de 4 tentativas do
+             * dia morreram com `validation_error | billing | "value" is
+             * required` SEM nenhum deploy nosso no caminho (cartão pagava às
+             * 03:44, quebrou até as 13:22 com o mesmo código). O endereço de
+             * entrega é o proxy padrão do titular; retirada na loja (sem
+             * endereço) cai pro CEP digitado + matriz.
+             */
+            card: { billing_address: this.billingAddressPagarme(end, input.cep) },
           },
           ...(cfg.recipientId
             ? {
@@ -1035,6 +1047,37 @@ export class LojaOrdersService {
     }
 
     return { ok: true, gatewayOrderId: gw.id, gatewayChargeId: charge?.id || null };
+  }
+
+  /**
+   * Endereço de cobrança pro cartão da Pagar.me (exigido desde 14/08).
+   *
+   * Entrega em casa → o endereço de entrega é o proxy do titular (padrão do
+   * varejo). Retirada na loja → não existe endereço digitado; vai o CEP que a
+   * cliente usou na cotação com a cidade da matriz como âncora — a Pagar.me
+   * valida presença dos campos, e recusar TODO cartão de retirada por falta
+   * de um formulário a mais seria pior que a aproximação.
+   */
+  private billingAddressPagarme(
+    end: CriarPedidoInput['shippingAddress'],
+    cepCotacao?: string,
+  ): Record<string, string> {
+    if (end) {
+      return {
+        line_1: [end.number, end.street, end.neighborhood].filter(Boolean).join(', '),
+        zip_code: this.digits(end.cep),
+        city: end.city,
+        state: (end.uf || '').toUpperCase().slice(0, 2),
+        country: 'BR',
+      };
+    }
+    return {
+      line_1: 'Retirada em loja',
+      zip_code: this.digits(cepCotacao || '') || '08710000',
+      city: 'Mogi das Cruzes',
+      state: 'SP',
+      country: 'BR',
+    };
   }
 
   /**
