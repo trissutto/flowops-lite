@@ -4003,6 +4003,13 @@ model ProductPhoto {
   // Quem lê uma foto só (Reposição, PDV, Separação, Realinhamento) continua
   // funcionando: `getPhoto` ordena por `ordem` e devolve a capa.
   ordem           Int      @default(0)
+  // Tamanho REAL do arquivo em pixels, medido no upload (13/08).
+  // A PDP mostra a foto num quadro de ~513 CSS px e o monitor da cliente
+  // costuma estar a 150%: abaixo de ~1400 de largura o navegador amplia e a
+  // peça aparece borrada. Sem esta medida, foto pequena entrava em silêncio e
+  // só dava as caras na vitrine. Nulo = foto anterior à medição.
+  larguraPx       Int?     @map("largura_px")
+  alturaPx        Int?     @map("altura_px")
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
 
