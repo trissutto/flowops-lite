@@ -24,6 +24,7 @@ export {
   trackCouponRemoved,
   trackCheckoutError,
   trackCheckoutSubmission,
+  trackCheckoutValidationError,
   trackCustom,
   trackFilterUsed,
   trackGenerateLead,

@@ -38,6 +38,7 @@ const PARAMETROS_SEGUROS: Partial<Record<string, readonly string[]>> = {
   add_payment_info: ['payment_type'],
   checkout_submission: ['method'],
   checkout_error: ['method', 'reason'],
+  checkout_validation_error: ['section', 'field'],
   pix_created: ['method'],
 };
 

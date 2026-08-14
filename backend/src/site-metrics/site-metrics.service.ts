@@ -38,6 +38,7 @@ const CAMPOS_DIAGNOSTICOS: Record<string, readonly string[]> = {
   add_payment_info: ['payment_type'],
   checkout_submission: ['method'],
   checkout_error: ['method', 'reason'],
+  checkout_validation_error: ['section', 'field'],
   pix_created: ['method'],
 };
 
@@ -249,7 +250,7 @@ export class SiteMetricsService {
       evento: string; codigo: string; campo: string | null; pessoas: number; eventos: number;
     }>>(
       `SELECT evento,
-              COALESCE(dados->>'reason', dados->>'method', dados->>'payment_type',
+              COALESCE(dados->>'reason', dados->>'method', dados->>'payment_type', dados->>'section',
                        dados->>'shipping_tier', dados->>'color', dados->>'size', 'sem_codigo') AS codigo,
               CASE WHEN dados ? 'field' THEN dados->>'field' ELSE NULL END AS campo,
               COUNT(DISTINCT session_id)::int AS pessoas,
@@ -258,7 +259,7 @@ export class SiteMetricsService {
         WHERE criado_em >= $1 AND criado_em <= $2
           AND evento IN ('color_switch','size_switch','add_to_cart_blocked',
                          'add_shipping_info','add_payment_info','checkout_submission',
-                         'checkout_error','pix_created')
+                         'checkout_error','checkout_validation_error','pix_created')
         GROUP BY evento, codigo, campo
         ORDER BY eventos DESC, evento, codigo
         LIMIT 100`,

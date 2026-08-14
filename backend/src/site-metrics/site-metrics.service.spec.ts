@@ -15,4 +15,10 @@ describe('sanitizarDadosEvento', () => {
     expect(sanitizarDadosEvento('add_to_cart_blocked', { reason: 'x'.repeat(200) }))
       .toEqual({ reason: 'x'.repeat(80) });
   });
+
+  it('registra só seção e nome do campo inválido, nunca o valor', () => {
+    expect(sanitizarDadosEvento('checkout_validation_error', {
+      section: 'identification', field: 'cpf', value: '123.456.789-00',
+    })).toEqual({ section: 'identification', field: 'cpf' });
+  });
 });

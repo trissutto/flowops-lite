@@ -223,6 +223,8 @@ export const trackCheckoutError = (
   method: 'pix' | 'card',
   reason: 'api_rejected' | 'network_error' | 'invalid_response',
 ) => track('checkout_error', { method, reason });
+export const trackCheckoutValidationError = (section: 'identification' | 'shipping' | 'card', field: string) =>
+  track('checkout_validation_error', { section, field: field.slice(0, 40) });
 export const trackPixCreated = () => track('pix_created', { method: 'pix' });
 export const trackAiConsultant = (acao: string) => track('ai_consultant', { action: acao });
 export const trackVirtualFitting = (product: TrackableProduct) =>
