@@ -401,7 +401,9 @@ function FunilSite({ etapas, diagnosticos }: { etapas: EtapaFunil[]; diagnostico
                 {diagnosticos.map((d, index) => (
                   <tr key={`${d.evento}:${d.codigo}:${d.campo ?? ''}:${index}`} className="border-t border-[#E7E2D8]">
                     <td className="px-4 py-2.5 font-medium text-slate-700">{rotuloDiagnostico(d.evento)}</td>
-                    <td className="px-4 py-2.5 text-slate-600">{rotuloCodigo(d.codigo)}</td>
+                    <td className="px-4 py-2.5 text-slate-600">
+                      {rotuloCodigo(d.codigo)}{d.campo ? ` · ${rotuloCampo(d.campo)}` : ''}
+                    </td>
                     <td className="px-4 py-2.5 text-right tabular-nums">{d.pessoas}</td>
                     <td className="px-4 py-2.5 text-right tabular-nums text-slate-500">{d.eventos}</td>
                   </tr>
@@ -423,6 +425,7 @@ const ROTULOS_EVENTO: Record<string, string> = {
   add_payment_info: 'Pagamento escolhido',
   checkout_submission: 'Tentativa de pagamento',
   checkout_error: 'Falha ao finalizar',
+  checkout_validation_error: 'Campo inválido',
   pix_created: 'PIX criado',
 };
 
@@ -432,6 +435,8 @@ const ROTULOS_CODIGO: Record<string, string> = {
   api_rejected: 'Pedido recusado pelo servidor',
   invalid_response: 'Resposta inválida do servidor',
   network_error: 'Falha de conexão',
+  identification: 'Identificação',
+  shipping: 'Entrega',
   pix: 'PIX',
   card: 'Cartão',
 };
@@ -442,4 +447,15 @@ function rotuloDiagnostico(evento: string): string {
 
 function rotuloCodigo(codigo: string): string {
   return ROTULOS_CODIGO[codigo] ?? codigo;
+}
+
+const ROTULOS_CAMPO: Record<string, string> = {
+  name: 'nome', email: 'e-mail', cpf: 'CPF', phone: 'celular',
+  street: 'rua', number: 'número', neighborhood: 'bairro', city: 'cidade', uf: 'UF',
+  shipping_method: 'forma de entrega',
+  card_number: 'número do cartão', holder: 'nome no cartão', expiry: 'validade', cvv: 'CVV',
+};
+
+function rotuloCampo(campo: string): string {
+  return ROTULOS_CAMPO[campo] ?? campo;
 }

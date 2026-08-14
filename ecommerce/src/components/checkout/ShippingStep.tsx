@@ -10,7 +10,7 @@ import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { fetchQuotes, isValidCep } from '@/lib/commerce/frete';
 import { stores } from '@/data/stores';
-import { trackAddShippingInfo, type TrackedItem } from '@/lib/tracking';
+import { trackAddShippingInfo, trackCheckoutValidationError, type TrackedItem } from '@/lib/tracking';
 import type { Address, ShippingQuote } from '@/types/checkout';
 import { maskCep, onlyDigits } from './masks';
 
@@ -159,6 +159,7 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDo
 
   function confirmar(address?: AddressValues) {
     if (!selectedQuote) {
+      trackCheckoutValidationError('shipping', 'shipping_method');
       setQuoteError('Escolha como você quer receber.');
       return;
     }
@@ -186,6 +187,7 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDo
   function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!selectedQuote) {
+      trackCheckoutValidationError('shipping', 'shipping_method');
       setQuoteError('Escolha como você quer receber.');
       return;
     }
@@ -194,7 +196,10 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDo
       confirmar();
       return;
     }
-    void handleSubmit((values) => confirmar(values))();
+    void handleSubmit(
+      (values) => confirmar(values),
+      (invalid) => trackCheckoutValidationError('shipping', Object.keys(invalid)[0] ?? 'unknown'),
+    )();
   }
 
   return (
@@ -205,6 +210,7 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDo
           label="CEP"
           inputMode="numeric"
           autoComplete="postal-code"
+          enterKeyHint="next"
           placeholder="00000-000"
           value={cep}
           onChange={(e) => {
@@ -251,6 +257,7 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDo
           <Input
             label="Rua"
             autoComplete="address-line1"
+            enterKeyHint="next"
             className="sm:col-span-4"
             error={errors.street?.message}
             {...register('street')}
@@ -259,6 +266,7 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDo
             label="Número"
             inputMode="numeric"
             autoComplete="off"
+            enterKeyHint="next"
             className="sm:col-span-2"
             error={errors.number?.message}
             {...register('number')}
@@ -267,6 +275,7 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDo
             label="Complemento"
             hint="Apartamento, bloco… (opcional)"
             autoComplete="address-line2"
+            enterKeyHint="next"
             className="sm:col-span-3"
             error={errors.complement?.message}
             {...register('complement')}
@@ -274,6 +283,7 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDo
           <Input
             label="Bairro"
             autoComplete="address-level3"
+            enterKeyHint="next"
             className="sm:col-span-3"
             error={errors.neighborhood?.message}
             {...register('neighborhood')}
@@ -281,6 +291,7 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDo
           <Input
             label="Cidade"
             autoComplete="address-level2"
+            enterKeyHint="next"
             className="sm:col-span-4"
             error={errors.city?.message}
             {...register('city')}
@@ -288,6 +299,7 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDo
           <Input
             label="UF"
             autoComplete="address-level1"
+            enterKeyHint="done"
             maxLength={2}
             className="sm:col-span-2"
             error={errors.uf?.message}

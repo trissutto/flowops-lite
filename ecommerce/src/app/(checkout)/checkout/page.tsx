@@ -18,6 +18,7 @@ import { PixPanel } from '@/components/checkout/PixPanel';
 import { maskPhone } from '@/components/checkout/masks';
 import { applyCoupon } from '@/lib/commerce/cupom';
 import { PIX_DESCONTO_PCT, pixDiscount } from '@/lib/commerce/pix';
+import { clearCheckoutDraft, readCheckoutDraft, writeCheckoutDraft } from '@/lib/commerce/checkout-draft';
 import { formatPrice } from '@/lib/utils';
 import {
   trackBeginCheckout,
@@ -90,6 +91,23 @@ export default function CheckoutPage() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   /** Pedido criado aguardando PIX — troca a página inteira pelo PixPanel. */
   const [pixOrder, setPixOrder] = useState<Order | null>(null);
+  const [draftReady, setDraftReady] = useState(false);
+
+  useEffect(() => {
+    const draft = readCheckoutDraft(window.sessionStorage);
+    if (draft) {
+      setCustomer(draft.customer);
+      setShipping(draft.shipping);
+      setPayment(draft.payment);
+      setStep(draft.customer ? (draft.shipping ? (draft.payment ? 4 : 3) : 2) : 1);
+    }
+    setDraftReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (!draftReady) return;
+    writeCheckoutDraft(window.sessionStorage, { customer, shipping, payment });
+  }, [draftReady, customer, shipping, payment]);
 
   /* Carrinho → formato de tracking (uma vez, reusado pelos 4 eventos). */
   const itemsTracked: TrackedItem[] = useMemo(
@@ -191,6 +209,7 @@ export default function CheckoutPage() {
       // Pedido existe no server → a sacola local cumpriu o papel dela.
       // (Se o PIX expirar, o produto volta pro estoque no server; manter a
       // sacola viva aqui criaria pedido duplicado no F5.)
+      clearCheckoutDraft(window.sessionStorage);
       clearCart();
 
       // ⚠️ NENHUM purchase disparado aqui: o pedido ainda nem foi pago.
@@ -214,7 +233,7 @@ export default function CheckoutPage() {
 
   // O carrinho vem do localStorage (zustand persist): antes do mount o server
   // e o client discordam — skeleton segura a tela sem flash de "sacola vazia".
-  if (!mounted) return <CheckoutSkeleton />;
+  if (!mounted || !draftReady) return <CheckoutSkeleton />;
 
   // Pedido PIX criado: a página vira o painel de pagamento.
   if (pixOrder) {
@@ -280,6 +299,7 @@ export default function CheckoutPage() {
             <IdentificationStep
               defaults={customer}
               onDone={(c) => {
+                setSubmitError(null);
                 setCustomer(c);
                 // Editou só a identificação com o resto pronto? Volta direto
                 // pra revisão — ninguém refaz etapa já concluída.
@@ -309,6 +329,7 @@ export default function CheckoutPage() {
               itemsTracked={itemsTracked}
               defaults={shipping}
               onDone={(s) => {
+                setSubmitError(null);
                 setShipping(s);
                 setStep(!payment ? 3 : 4);
               }}
@@ -333,6 +354,7 @@ export default function CheckoutPage() {
               itemsTracked={itemsTracked}
               defaults={payment}
               onDone={(p) => {
+                setSubmitError(null);
                 setPayment(p);
                 setStep(4);
               }}

@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { isValidCpf, isValidPhone, maskCpf, maskPhone, onlyDigits } from './masks';
 import type { CustomerIdentity } from '@/types/checkout';
+import { trackCheckoutValidationError } from '@/lib/tracking';
 
 /**
  * § 1 — IDENTIFICAÇÃO. Quatro campos, nada de senha: o checkout como
@@ -82,7 +83,12 @@ export function IdentificationStep({ defaults, onDone }: IdentificationStepProps
   }
 
   return (
-    <form onSubmit={handleSubmit(submit)} noValidate className="flex flex-col gap-5">
+    <form
+      onSubmit={handleSubmit(submit, (invalid) =>
+        trackCheckoutValidationError('identification', Object.keys(invalid)[0] ?? 'unknown'))}
+      noValidate
+      className="flex flex-col gap-5"
+    >
       {/* Tira o medo do "cadastro" antes do primeiro campo: quem chega aqui
           já escolheu a peça, e o que faz ela desistir agora é achar que vai
           ter que criar conta e inventar senha. */}
@@ -94,6 +100,7 @@ export function IdentificationStep({ defaults, onDone }: IdentificationStepProps
       <Input
         label="Nome completo"
         autoComplete="name"
+        enterKeyHint="next"
         placeholder="Como está no seu documento"
         hint="Nome e sobrenome, como no RG."
         error={errors.name?.message}
@@ -104,6 +111,7 @@ export function IdentificationStep({ defaults, onDone }: IdentificationStepProps
         type="email"
         autoComplete="email"
         inputMode="email"
+        enterKeyHint="next"
         placeholder="voce@email.com"
         hint="A confirmação e o rastreio chegam por aqui."
         error={errors.email?.message}
@@ -113,6 +121,7 @@ export function IdentificationStep({ defaults, onDone }: IdentificationStepProps
         <Input
           label="CPF"
           inputMode="numeric"
+          enterKeyHint="next"
           autoComplete="off"
           placeholder="000.000.000-00"
           hint="Vai só na nota fiscal do pedido."
@@ -127,6 +136,7 @@ export function IdentificationStep({ defaults, onDone }: IdentificationStepProps
           label="Celular"
           type="tel"
           inputMode="numeric"
+          enterKeyHint="done"
           autoComplete="tel-national"
           placeholder="(11) 98765-4321"
           hint="Pra avisar quando a peça sair pra entrega."

@@ -92,6 +92,7 @@ export const LURDS_EVENTS = [
   'add_to_cart_blocked',
   'checkout_submission',
   'checkout_error',
+  'checkout_validation_error',
   'pix_created',
 ] as const;
 
