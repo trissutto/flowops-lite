@@ -31,6 +31,8 @@ export default function EmailMarketingPage() {
   const [assunto, setAssunto] = useState('');
   const [corpo, setCorpo] = useState('');
   const [cupom, setCupom] = useState('');
+  const [imagemUrl, setImagemUrl] = useState('');
+  const [linkDestino, setLinkDestino] = useState('');
   const [agendar, setAgendar] = useState(false);
   const [quando, setQuando] = useState('');
 
@@ -71,7 +73,7 @@ export default function EmailMarketingPage() {
     try {
       const r = await api<{ destino: string }>('/email-marketing/previa', {
         method: 'POST',
-        body: JSON.stringify({ destino: emailTeste, assunto, corpo, cupom: cupom || null }),
+        body: JSON.stringify({ destino: emailTeste, assunto, corpo, cupom: cupom || null, imagemUrl: imagemUrl || null, linkDestino: linkDestino || null }),
       });
       setAviso({ tipo: 'ok', msg: `Prévia enviada para ${r.destino}. Veja como chegou antes de disparar.` });
     } catch (e: any) {
@@ -95,6 +97,8 @@ export default function EmailMarketingPage() {
             assunto,
             corpo,
             cupom: cupom || null,
+            imagemUrl: imagemUrl || null,
+            linkDestino: linkDestino || null,
             agendarPara: agendar && quando ? new Date(quando).toISOString() : null,
           }),
         },
@@ -208,6 +212,26 @@ export default function EmailMarketingPage() {
               maxLength={30}
               placeholder="PRIMEIRA10"
               className="w-full rounded-lg border border-neutral-300 px-3 py-2.5 text-sm uppercase"
+            />
+          </Campo>
+
+          {/* Imagem (arte) — vai no topo do e-mail, clicável */}
+          <Campo titulo="Imagem / arte (link)" dica="Cola o link da imagem (JPG/PNG). Ela vira o topo do e-mail e leva pro link de destino ao clicar.">
+            <input
+              value={imagemUrl}
+              onChange={(e) => setImagemUrl(e.target.value)}
+              placeholder="https://…/vestido-viscolycra.jpg"
+              className="w-full rounded-lg border border-neutral-300 px-3 py-2.5 text-sm"
+            />
+          </Campo>
+
+          {/* Link de destino — pra onde a imagem e o botão levam */}
+          <Campo titulo="Link de destino" dica="Pra onde o clique (imagem e botão) leva. Ex: a página do vestido.">
+            <input
+              value={linkDestino}
+              onChange={(e) => setLinkDestino(e.target.value)}
+              placeholder="https://www.lurdsplussize.com.br/produto/ref-vlm-222"
+              className="w-full rounded-lg border border-neutral-300 px-3 py-2.5 text-sm"
             />
           </Campo>
 

@@ -25,14 +25,14 @@ export class EmailMarketingController {
 
   /** Prévia no e-mail de teste (nosso SES) — não toca no Mautic. */
   @Post('previa')
-  previa(@Body() body: { destino: string; assunto: string; corpo: string; cupom?: string | null }) {
+  previa(@Body() body: { destino: string; assunto: string; corpo: string; cupom?: string | null; imagemUrl?: string | null; linkDestino?: string | null }) {
     return this.service.enviarPrevia(body);
   }
 
   /** Dispara (ou agenda) a campanha pro segmento escolhido. */
   @Post('enviar')
   enviar(
-    @Body() body: { segmentoId: number; assunto: string; corpo: string; cupom?: string | null; agendarPara?: string | null },
+    @Body() body: { segmentoId: number; assunto: string; corpo: string; cupom?: string | null; agendarPara?: string | null; imagemUrl?: string | null; linkDestino?: string | null },
   ) {
     return this.service.enviarCampanha(body);
   }
