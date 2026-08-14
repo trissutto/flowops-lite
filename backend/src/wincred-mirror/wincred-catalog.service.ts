@@ -178,6 +178,25 @@ export class WincredCatalogService {
     return this.erp.searchProductsLike(term, storeCode);
   }
 
+  /**
+   * Padrões aceitos como variação de cor da MESMA REF base (igual ao Giga):
+   * exata · base+" X" · base+"-X" · base+letras. Rejeita base+dígito
+   * ("9002" não pode trazer "900271", que é outra REF). Letras COLADAS: só
+   * sufixo curto de cor (1-2 letras, ex.: "223P", "223VN"). 3+ letras é OUTRA
+   * REF ("8709RIU" ≠ variação de "8709") — regra alinhada com o
+   * normalizeBaseRef da consulta (velho erro de "adivinhar a referência",
+   * dono 21/07).
+   */
+  private isVariationOf(foundRef: string, baseRef: string): boolean {
+    if (!foundRef) return false;
+    if (foundRef === baseRef) return true;
+    if (!foundRef.startsWith(baseRef)) return false;
+    const suffix = foundRef.slice(baseRef.length);
+    if (suffix.startsWith(' ') || suffix.startsWith('-')) return true;
+    if (/^[A-Za-z]{1,2}$/.test(suffix)) return true;
+    return false;
+  }
+
   private async searchFromMirror(term: string, storeCode?: string): Promise<any[]> {
     const cleanTerm = String(term || '').trim();
     if (!cleanTerm) return [];
@@ -205,9 +224,27 @@ export class WincredCatalogService {
       // segue CÓDIGO-primeiro (scanner intocado). Sem REF exata → código primeiro.
       const temRefExata = products.some((p: any) => String(p.ref ?? '').trim() === cleanTerm);
       if (temRefExata) {
-        products.sort((a: any, b: any) =>
-          (String(a.ref ?? '').trim() === cleanTerm ? 0 : 1) -
-          (String(b.ref ?? '').trim() === cleanTerm ? 0 : 1));
+        // IRMÃS DE COR (14/08, caso 900895): a REF exata é só UMA cor da
+        // família ("900895" = ESTAMPA PRETO); as outras cores vivem em REFs
+        // com sufixo ("900895A" = ESTAMPA AZUL). O match exato retornava
+        // direto e o passo 2 (prefixo) nunca rodava — o dropdown do PDV
+        // escondia as irmãs que a Consulta mostra.
+        const irmas = await this.produtoTable.findMany({
+          where: { ref: { startsWith: cleanTerm, not: cleanTerm } },
+          orderBy: [{ ref: 'asc' }, { cor: 'asc' }, { tamanho: 'asc' }],
+          take: 80,
+        });
+        const jaTem = new Set(products.map((p: any) => String(p.codigo)));
+        for (const p of irmas) {
+          if (jaTem.has(String(p.codigo))) continue;
+          if (this.isVariationOf(String(p.ref ?? '').trim(), cleanTerm)) products.push(p);
+        }
+        // REF exata primeiro, irmãs de cor depois, CÓDIGO homônimo por último.
+        const rank = (p: any) => {
+          const r = String(p.ref ?? '').trim();
+          return r === cleanTerm ? 0 : this.isVariationOf(r, cleanTerm) ? 1 : 2;
+        };
+        products.sort((a: any, b: any) => rank(a) - rank(b));
       } else if (codigo) {
         products.sort((a: any, b: any) => (a.codigo === codigo ? 0 : 1) - (b.codigo === codigo ? 0 : 1));
       }
@@ -352,23 +389,7 @@ export class WincredCatalogService {
     const produtos: any[] = Array.from(porCodigo.values());
     if (!produtos.length) return [];
 
-    // Padrões aceitos como variação de cor da MESMA REF base (igual ao Giga):
-    // exata · base+" X" · base+"-X" · base+letras. Rejeita base+dígito
-    // ("9002" não pode trazer "900271", que é outra REF).
-    const isVariationOf = (foundRef: string, baseRef: string): boolean => {
-      if (!foundRef) return false;
-      if (foundRef === baseRef) return true;
-      if (!foundRef.startsWith(baseRef)) return false;
-      const suffix = foundRef.slice(baseRef.length);
-      if (suffix.startsWith(' ') || suffix.startsWith('-')) return true;
-      // Letras COLADAS: só sufixo curto de cor (1-2 letras, ex.: "223P",
-      // "223VN"). 3+ letras é OUTRA REF ("8709RIU" ≠ variação de "8709") —
-      // regra alinhada com o normalizeBaseRef da consulta (velho erro de
-      // "adivinhar a referência", dono 21/07).
-      if (/^[A-Za-z]{1,2}$/.test(suffix)) return true;
-      return false;
-    };
-    const filtered = produtos.filter((p) => isVariationOf(String(p.ref || '').trim(), clean));
+    const filtered = produtos.filter((p) => this.isVariationOf(String(p.ref || '').trim(), clean));
     if (!filtered.length) return [];
 
     // TOTAL_EST por codigo (dedup de duplicidade do Wincred, igual ao Giga)
