@@ -54,12 +54,18 @@ export function ConsentBanner() {
       role="dialog"
       aria-modal="false"
       aria-labelledby="consent-title"
-      className="fixed inset-x-0 bottom-0 z-[80] p-3 sm:p-5"
+      /* bottom-24 no mobile (medição 14/08, viewport 375×812): o cartão tem
+         ~280px e terminava em y=800, POR CIMA da barra fixa de compra da PDP
+         (y=719, z-40 contra z-80 daqui) — cliente nova no celular não
+         alcançava o "Adicionar à sacola" sem decidir o cookie primeiro.
+         Consentimento nunca pode ser pedágio da compra: sobe 96px e as duas
+         coisas convivem. No desktop (lg) não há barra fixa — volta pro pé. */
+      className="fixed inset-x-0 bottom-24 z-[80] p-3 sm:p-5 lg:bottom-0"
     >
       {/* Cartão da marca, não faixa de sistema: borda dourada, sombra de
           elevação e largura de leitura. É pra parecer parte da loja falando —
           a faixa cinza anterior parecia aviso de navegador e sumia no rodapé. */}
-      <div className="mx-auto max-w-xl rounded-md border border-primary/30 bg-[#fcfaf7] p-5 shadow-[0_12px_48px_rgba(0,0,0,0.18)] sm:p-6">
+      <div className="mx-auto max-w-xl rounded-md border border-primary/30 bg-[#fcfaf7] p-4 shadow-[0_12px_48px_rgba(0,0,0,0.18)] sm:p-6">
         <h2 id="consent-title" className="font-serif text-lg text-ink">
           Podemos deixar o site com a sua cara?
         </h2>
