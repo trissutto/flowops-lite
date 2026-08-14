@@ -3,8 +3,20 @@
  *
  *   railway run --service Postgres node backend/scripts/backfill-ref-itens-pedido.js
  *   railway run --service Postgres node backend/scripts/backfill-ref-itens-pedido.js --aplicar
+ *   railway run --service Postgres node backend/scripts/backfill-ref-itens-pedido.js --tudo
  *
  * SEM `--aplicar` é ensaio: mostra o que preencheria e não grava nada.
+ *
+ * ── ESCOPO: só pedido VIVO, por padrão ──
+ *
+ * Medido em 13/08: 21.914 itens sem REF, e só **11** em pick-order aberto. O
+ * resto é histórico do site velho (18.223 entregues) que tela nenhuma lê — e
+ * carimbar a REF do catálogo de HOJE num pedido de meses atrás é exatamente
+ * onde REF reciclada mente (o código pode ter mudado de dono). Ganho zero,
+ * risco real: o padrão passa a ser só o que ainda está em jogo — pedido em
+ * pick-order aberto ou com status não finalizado.
+ *
+ * `--tudo` faz o histórico inteiro, se um dia isso for necessário.
  *
  * ── POR QUE ISTO EXISTE ──
  *
@@ -26,6 +38,18 @@
 const { Client } = require('pg');
 
 const APLICAR = process.argv.includes('--aplicar');
+const TUDO = process.argv.includes('--tudo');
+
+/** Pedido que ainda está em jogo — ver "ESCOPO" no topo. */
+const SO_VIVO = `
+     AND (
+       EXISTS (
+         SELECT 1 FROM pick_orders p
+          WHERE p.order_id = o.id
+            AND p.status IN ('new', 'separating', 'separated', 'ready')
+       )
+       OR o.status NOT IN ('delivered', 'shipped', 'cancelled', 'refunded')
+     )`;
 
 const limpar = (v) => {
   const s = String(v == null ? '' : v).trim();
@@ -39,16 +63,18 @@ const limpar = (v) => {
   });
   await c.connect();
 
+  console.log(TUDO ? 'Escopo: TODOS os pedidos (histórico incluído).' : 'Escopo: só pedido vivo (--tudo inclui o histórico).');
+
   const { rows: itens } = await c.query(`
     SELECT oi.id, oi.sku, oi.product_name, o.id AS order_id, o.wc_order_number, o.checkout_info
       FROM order_items oi
       JOIN orders o ON o.id = oi.order_id
-     WHERE oi.ref IS NULL
+     WHERE oi.ref IS NULL${TUDO ? '' : SO_VIVO}
      ORDER BY o.created_at DESC
   `);
 
   if (!itens.length) {
-    console.log('Nada a preencher — todo item já tem REF.');
+    console.log('Nada a preencher — todo item do escopo já tem REF.');
     await c.end();
     return;
   }
