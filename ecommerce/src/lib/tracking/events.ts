@@ -215,6 +215,15 @@ export const trackColorSwitch = (product: TrackableProduct, cor: string) =>
   track('color_switch', { color: cor }, { items: [toTrackedItem(product, { cor })] });
 export const trackSizeSwitch = (product: TrackableProduct, tamanho: string) =>
   track('size_switch', { size: tamanho }, { items: [toTrackedItem(product, { tamanho })] });
+export const trackAddToCartBlocked = (product: TrackableProduct, reason: 'size_missing' | 'sold_out') =>
+  track('add_to_cart_blocked', { reason }, { items: [toTrackedItem(product)] });
+export const trackCheckoutSubmission = (method: 'pix' | 'card') =>
+  track('checkout_submission', { method });
+export const trackCheckoutError = (
+  method: 'pix' | 'card',
+  reason: 'api_rejected' | 'network_error' | 'invalid_response',
+) => track('checkout_error', { method, reason });
+export const trackPixCreated = () => track('pix_created', { method: 'pix' });
 export const trackAiConsultant = (acao: string) => track('ai_consultant', { action: acao });
 export const trackVirtualFitting = (product: TrackableProduct) =>
   track('virtual_fitting', {}, { items: [toTrackedItem(product)] });
