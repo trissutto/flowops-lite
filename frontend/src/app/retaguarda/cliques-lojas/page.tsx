@@ -19,7 +19,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import {
-  ArrowLeft, BadgeCheck, CreditCard, Eye, Instagram, Loader2, MapPin,
+  AlertTriangle, ArrowLeft, BadgeCheck, CreditCard, Eye, Instagram, Loader2, MapPin,
   MessageCircle, Phone, RefreshCw, ShoppingBag, ShoppingCart, Users,
 } from 'lucide-react';
 import { api } from '@/lib/api';
@@ -63,12 +63,23 @@ type DiagnosticoFunil = {
   pessoas: number;
   eventos: number;
 };
+type AlertaCheckout = {
+  sessionId: string;
+  etapa: string;
+  pagamento: string;
+  codigo: string;
+  pedido: string | null;
+  tentativas: number;
+  primeiraFalha: string;
+  ultimaFalha: string;
+};
 type RespostaFunil = {
   de: string;
   ate: string;
   etapas: EtapaFunil[];
   diagnosticos?: DiagnosticoFunil[];
   faturamento?: { pedidos: number; valor: number };
+  alertasCheckout?: AlertaCheckout[];
 };
 
 /**
@@ -254,7 +265,7 @@ export default function CliquesLojasPage() {
 
       {/* O FUNIL — acima do bloco de cliques de propósito: dia sem clique de
           loja ainda tem funil, e um não pode esconder o outro. */}
-      {funil && <FunilSite etapas={funil.etapas} diagnosticos={funil.diagnosticos ?? []} faturamento={funil.faturamento} />}
+      {funil && <FunilSite etapas={funil.etapas} diagnosticos={funil.diagnosticos ?? []} faturamento={funil.faturamento} alertasCheckout={funil.alertasCheckout ?? []} />}
 
       {erro && (
         <div className="bg-rose-50 border border-rose-200 text-rose-700 rounded-xl p-4 text-sm">{erro}</div>
@@ -350,10 +361,12 @@ function FunilSite({
   etapas,
   diagnosticos,
   faturamento,
+  alertasCheckout,
 }: {
   etapas: EtapaFunil[];
   diagnosticos: DiagnosticoFunil[];
   faturamento?: { pedidos: number; valor: number };
+  alertasCheckout: AlertaCheckout[];
 }) {
   const por = new Map(etapas.map((e) => [e.evento, e]));
   const ordem = [
@@ -429,6 +442,47 @@ function FunilSite({
         desde 13/08/2026; período anterior aparece zerado. O % é sobre a etapa anterior.
         Compras = pagamento confirmado; o número fiscal é o da tela de Pedidos.
       </p>
+      {alertasCheckout.length > 0 && (
+        <div className="overflow-hidden rounded-xl border border-amber-300 bg-white">
+          <div className="flex items-start gap-3 border-b border-amber-200 bg-amber-50 px-4 py-3">
+            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" />
+            <div>
+              <h2 className="font-semibold text-amber-950">Alertas de checkout</h2>
+              <p className="text-xs text-amber-800">Sessões com duas ou mais falhas em até dez minutos.</p>
+            </div>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-[#FBF6E6] text-slate-600">
+                <tr>
+                  <th className="px-4 py-2.5 text-left font-semibold">Última falha</th>
+                  <th className="px-4 py-2.5 text-left font-semibold">Sessão</th>
+                  <th className="px-4 py-2.5 text-left font-semibold">Etapa / pagamento</th>
+                  <th className="px-4 py-2.5 text-left font-semibold">Código / pedido</th>
+                  <th className="px-4 py-2.5 text-right font-semibold">Tentativas</th>
+                </tr>
+              </thead>
+              <tbody>
+                {alertasCheckout.map((a) => (
+                  <tr key={a.sessionId} className="border-t border-[#E7E2D8]">
+                    <td className="whitespace-nowrap px-4 py-2.5 text-slate-600">
+                      {new Date(a.ultimaFalha).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}
+                    </td>
+                    <td className="px-4 py-2.5 font-mono text-xs text-slate-600" title={a.sessionId}>
+                      {a.sessionId.slice(0, 8)}…
+                    </td>
+                    <td className="px-4 py-2.5 text-slate-700">{a.etapa} · {rotuloCodigo(a.pagamento)}</td>
+                    <td className="px-4 py-2.5 text-slate-700">
+                      {rotuloCodigo(a.codigo)}{a.pedido ? ` · ${a.pedido}` : ''}
+                    </td>
+                    <td className="px-4 py-2.5 text-right font-bold tabular-nums text-amber-800">{a.tentativas}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
       {diagnosticos.length > 0 && (
         <div className="bg-white border border-[#E7E2D8] rounded-xl overflow-hidden">
           <div className="px-4 py-3 border-b border-[#E7E2D8]">

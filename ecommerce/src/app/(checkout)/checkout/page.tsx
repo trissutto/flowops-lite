@@ -42,6 +42,7 @@ import type {
   CreateOrderInput,
   CreateOrderResult,
   CustomerIdentity,
+  CheckoutErrorCode,
   Order,
 } from '@/types/checkout';
 
@@ -74,6 +75,26 @@ const ERRO_GENERICO =
 const ERRO_CARTAO =
   'Não conseguimos validar seu cartão agora. Tente de novo ou finalize com Pix — sai com 5% off e cai na hora.';
 
+function mensagemAcionavel(
+  code: CheckoutErrorCode,
+  serverMessage: string | undefined,
+  method: 'pix' | 'card',
+): string {
+  const mensagens: Partial<Record<CheckoutErrorCode, string>> = {
+    card_declined: 'O cartão não aprovou esta compra. Confira os dados, tente outro cartão ou escolha Pix.',
+    catalog_unavailable: 'Uma peça, preço ou estoque mudou enquanto você comprava. Revise a sacola antes de tentar novamente.',
+    coupon_invalid: 'O cupom não está mais válido para este pedido. Remova ou troque o cupom e tente novamente.',
+    shipping_invalid: 'A opção de entrega mudou ou expirou. Volte à entrega e escolha o frete novamente.',
+    validation_error: 'Alguns dados do pedido precisam ser revisados antes de continuar.',
+    rate_limited: 'Foram feitas muitas tentativas seguidas. Aguarde um minuto ou escolha Pix.',
+    payment_unavailable: 'O pagamento está temporariamente indisponível. Tente Pix ou tente novamente em instantes.',
+    internal_error: ERRO_GENERICO,
+    network_error: 'A conexão falhou antes da confirmação. Seus dados continuam preenchidos; tente novamente.',
+    invalid_response: ERRO_GENERICO,
+  };
+  return mensagens[code] ?? serverMessage ?? (method === 'card' ? ERRO_CARTAO : ERRO_GENERICO);
+}
+
 export default function CheckoutPage() {
   const router = useRouter();
   const mounted = useMounted();
@@ -92,6 +113,8 @@ export default function CheckoutPage() {
 
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [failureCount, setFailureCount] = useState(0);
+  const [lastErrorCode, setLastErrorCode] = useState<CheckoutErrorCode | null>(null);
   /** Pedido criado aguardando PIX — troca a página inteira pelo PixPanel. */
   const [pixOrder, setPixOrder] = useState<Order | null>(null);
   const [draftReady, setDraftReady] = useState(false);
@@ -217,14 +240,16 @@ export default function CheckoutPage() {
       const result = (await res.json().catch(() => null)) as CreateOrderResult | null;
 
       if (!result?.ok || !result.order) {
-        trackCheckoutError(payment.method, result?.code ?? (result ? 'api_rejected' : 'invalid_response'));
+        const code = result?.code ?? (result ? 'api_rejected' : 'invalid_response');
+        const attempt = failureCount + 1;
+        setFailureCount(attempt);
+        setLastErrorCode(code);
+        trackCheckoutError(payment.method, code, { stage: 'submission', attempt });
         // A mensagem do server tem PRECEDÊNCIA: por contrato ela já vem
         // elegante e é específica ("cartão recusado", "cupom expirou") — bem
         // mais útil que o genérico. Os textos locais cobrem só o que acontece
         // quando o server não conseguiu dizer nada.
-        setSubmitError(
-          result?.error ?? (payment.method === 'card' ? ERRO_CARTAO : ERRO_GENERICO),
-        );
+        setSubmitError(mensagemAcionavel(code, result?.error, payment.method));
         return;
       }
 
@@ -244,8 +269,11 @@ export default function CheckoutPage() {
         router.push(`/checkout/confirmacao/${result.order.id}`);
       }
     } catch {
-      trackCheckoutError(payment.method, 'network_error');
-      setSubmitError(ERRO_GENERICO);
+      const attempt = failureCount + 1;
+      setFailureCount(attempt);
+      setLastErrorCode('network_error');
+      trackCheckoutError(payment.method, 'network_error', { stage: 'submission', attempt });
+      setSubmitError(mensagemAcionavel('network_error', undefined, payment.method));
     } finally {
       setSubmitting(false);
     }
@@ -380,6 +408,8 @@ export default function CheckoutPage() {
               defaults={payment}
               onDone={(p) => {
                 setSubmitError(null);
+                setFailureCount(0);
+                setLastErrorCode(null);
                 setPayment(p);
                 setStep(4);
               }}
@@ -407,7 +437,19 @@ export default function CheckoutPage() {
                 total={total}
                 submitting={submitting}
                 error={submitError}
+                failureCount={failureCount}
+                errorCode={lastErrorCode}
                 onEditIdentity={() => setCustomer(null)}
+                onReviewData={() => {
+                  setSubmitError(null);
+                  setCustomer(null);
+                }}
+                onUsePix={() => {
+                  setSubmitError(null);
+                  setFailureCount(0);
+                  setLastErrorCode(null);
+                  setPayment({ method: 'pix' });
+                }}
                 onSubmit={() => void finalizar()}
               />
             )}

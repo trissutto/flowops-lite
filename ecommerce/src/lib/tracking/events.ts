@@ -223,7 +223,14 @@ export const trackCheckoutSubmission = (method: 'pix' | 'card') =>
 export const trackCheckoutError = (
   method: 'pix' | 'card',
   reason: CheckoutErrorCode,
-) => track('checkout_error', { method, reason });
+  context?: { stage?: string; order_id?: string; attempt?: number },
+) => track('checkout_error', {
+  method,
+  reason,
+  stage: context?.stage ?? 'submission',
+  ...(context?.order_id ? { order_id: context.order_id } : {}),
+  ...(context?.attempt ? { attempt: context.attempt } : {}),
+});
 export const trackCheckoutValidationError = (section: 'identification' | 'shipping' | 'card', field: string) =>
   track('checkout_validation_error', { section, field: field.slice(0, 40) });
 export const trackPixCreated = () => track('pix_created', { method: 'pix' });

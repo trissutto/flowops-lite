@@ -305,6 +305,55 @@ export class SiteMetricsService {
     }));
   }
 
+  /** Sessões que tiveram pelo menos duas falhas num intervalo móvel de 10 min. */
+  async alertasCheckout(de: Date, ate: Date): Promise<Array<{
+    sessionId: string; etapa: string; pagamento: string; codigo: string;
+    pedido: string | null; tentativas: number; primeiraFalha: Date; ultimaFalha: Date;
+  }>> {
+    const linhas = await this.prisma.$queryRawUnsafe<Array<{
+      session_id: string; etapa: string; pagamento: string; codigo: string;
+      pedido: string | null; tentativas: number; primeira_falha: Date; ultima_falha: Date;
+    }>>(
+      `WITH erros AS (
+         SELECT session_id, criado_em, dados
+           FROM site_eventos
+          WHERE criado_em >= $1 AND criado_em <= $2
+            AND evento = 'checkout_error' AND session_id IS NOT NULL
+       ), sessoes_alerta AS (
+         SELECT DISTINCT a.session_id
+           FROM erros a
+           JOIN erros b ON b.session_id = a.session_id
+                        AND b.criado_em > a.criado_em
+                        AND b.criado_em <= a.criado_em + INTERVAL '10 minutes'
+       )
+       SELECT e.session_id,
+              COALESCE((ARRAY_AGG(e.dados->>'stage' ORDER BY e.criado_em DESC))[1], 'submission') AS etapa,
+              COALESCE((ARRAY_AGG(e.dados->>'method' ORDER BY e.criado_em DESC))[1], 'desconhecido') AS pagamento,
+              COALESCE((ARRAY_AGG(e.dados->>'reason' ORDER BY e.criado_em DESC))[1], 'sem_codigo') AS codigo,
+              (ARRAY_AGG(e.dados->>'order_id' ORDER BY e.criado_em DESC))[1] AS pedido,
+              COUNT(*)::int AS tentativas,
+              MIN(e.criado_em) AS primeira_falha,
+              MAX(e.criado_em) AS ultima_falha
+         FROM erros e
+         JOIN sessoes_alerta s ON s.session_id = e.session_id
+        GROUP BY e.session_id
+        ORDER BY ultima_falha DESC
+        LIMIT 100`,
+      de,
+      ate,
+    );
+    return linhas.map((l) => ({
+      sessionId: l.session_id,
+      etapa: l.etapa,
+      pagamento: l.pagamento,
+      codigo: l.codigo,
+      pedido: l.pedido,
+      tentativas: Number(l.tentativas),
+      primeiraFalha: l.primeira_falha,
+      ultimaFalha: l.ultima_falha,
+    }));
+  }
+
   /**
    * QUANTAS PESSOAS ESTÃO NO SITE AGORA — do nosso dado, não do GA4.
    *
