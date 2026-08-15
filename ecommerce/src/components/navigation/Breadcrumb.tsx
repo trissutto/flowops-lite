@@ -17,10 +17,23 @@ export function Breadcrumb({
   /** Sobre foto escura (hero) usa a variante clara. */
   tone = 'default',
   className,
+  colapsarNoMobile = false,
 }: {
   items: Crumb[];
   tone?: 'default' | 'light';
   className?: string;
+  /**
+   * Esconde a ÚLTIMA migalha no celular — a que nomeia a página atual.
+   *
+   * Existe pra PDP (dono, 15/08: "temos a descrição duas vezes"): o nome da
+   * peça aparecia aqui, em 13px de navegação, e de novo como título acima do
+   * preço. Some daqui, não do título: ali ele é caminho, no `<h1>` é a
+   * manchete da peça — e no desktop é o único nome da coluna de compra.
+   *
+   * O JSON-LD do BreadcrumbList é montado pela página, com a trilha
+   * COMPLETA, então o rich snippet do Google não perde o degrau.
+   */
+  colapsarNoMobile?: boolean;
 }) {
   return (
     <nav aria-label="Você está em" className={className}>
@@ -32,8 +45,15 @@ export function Breadcrumb({
       >
         {items.map((item, i) => {
           const isLast = i === items.length - 1;
+          /* A seta mora no item ANTERIOR: escondendo só a última migalha, o
+             penúltimo ficaria com um "›" apontando pro nada. */
+          const somenteDesktop = colapsarNoMobile && items.length > 1 && isLast;
+          const setaSomenteDesktop = colapsarNoMobile && i === items.length - 2;
           return (
-            <li key={`${item.label}-${i}`} className="flex items-center gap-2">
+            <li
+              key={`${item.label}-${i}`}
+              className={cn('flex items-center gap-2', somenteDesktop && 'hidden sm:flex')}
+            >
               {item.href && !isLast ? (
                 <Link
                   href={item.href}
@@ -52,7 +72,15 @@ export function Breadcrumb({
                   {item.label}
                 </span>
               )}
-              {!isLast && <ChevronRight className="size-3 opacity-50" aria-hidden />}
+              {!isLast && (
+                <ChevronRight
+                  className={cn(
+                    'size-3 opacity-50',
+                    setaSomenteDesktop && 'hidden sm:block',
+                  )}
+                  aria-hidden
+                />
+              )}
             </li>
           );
         })}

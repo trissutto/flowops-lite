@@ -30,8 +30,8 @@ export class WhatsappCampaignController {
 
   /** Prévia: manda 1 mensagem pro número informado (teste do dono). */
   @Post('previa')
-  previa(@Body() b: { fone: string; mensagem: string }) {
-    return this.service.previa(b.fone, b.mensagem);
+  previa(@Body() b: { fone: string; mensagem: string; imagemUrl?: string | null }) {
+    return this.service.previa(b.fone, b.mensagem, b.imagemUrl);
   }
 
   /** Cria a campanha (e já inicia se `iniciar=true`). */

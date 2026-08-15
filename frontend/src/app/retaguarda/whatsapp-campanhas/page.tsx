@@ -75,8 +75,8 @@ export default function WhatsappCampanhasPage() {
     if (!foneTeste) return setMsg({ tipo: 'erro', texto: 'Coloque um número pra receber o teste.' });
     setOcupado(true); setMsg(null);
     try {
-      await api('/whatsapp-campanhas/previa', { method: 'POST', body: JSON.stringify({ fone: foneTeste, mensagem: mensagens[0].replace(/\{nome\}/gi, 'você') }) });
-      setMsg({ tipo: 'ok', texto: 'Teste enviado! Confere o WhatsApp desse número.' });
+      await api('/whatsapp-campanhas/previa', { method: 'POST', body: JSON.stringify({ fone: foneTeste, mensagem: mensagens[0].replace(/\{nome\}/gi, 'você'), imagemUrl: imagemUrl || null }) });
+      setMsg({ tipo: 'ok', texto: 'Teste enviado (texto + foto)! Confere o WhatsApp desse número.' });
     } catch (e: any) { setMsg({ tipo: 'erro', texto: e?.message || 'Falha no teste' }); }
     finally { setOcupado(false); }
   }

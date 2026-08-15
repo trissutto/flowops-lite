@@ -56,6 +56,7 @@ const GESTAO_ITEMS: GestaoItem[] = [
   { href: '/retaguarda/cliques-lojas',        label: 'Cliques nas Lojas', subtitle: 'Site → loja física', description: 'Rota, WhatsApp e Instagram por unidade', tone: 'purple', icon: MapPin      },
   { href: '/retaguarda/email-marketing',      label: 'Campanha de E-mail', subtitle: 'Disparo via Mautic', description: 'Escolher público, escrever e enviar/agendar', tone: 'amber',  icon: Mail        },
   { href: '/retaguarda/whatsapp-campanhas',   label: 'Campanha de WhatsApp', subtitle: 'Disparo via Evolution', description: 'Público, mensagem e disparo pausado c/ kill-switch', tone: 'green', icon: MessageCircle },
+  { href: '/retaguarda/whatsapp-inbox',       label: 'WhatsApp Conversas', subtitle: 'Inbox no sistema', description: 'Ler e responder as clientes do PC — celular fica na loja', tone: 'green', icon: MessageCircle },
   { href: '/retaguarda/looks',                label: 'Looks',             subtitle: 'Complete o look', description: 'Peças da mesma foto se puxam na PDP', tone: 'rose',   icon: Layers      },
   { href: '/retaguarda/relatorio-fiscal',     label: 'Relatório Fiscal',  subtitle: 'NFC-e',          description: 'Auditoria por CNPJ/série + inconsistências', tone: 'purple', icon: ClipboardList },
   { href: '/retaguarda/inteligencia-estoque', label: 'Inteligência',      subtitle: 'Estoque',       description: 'Análise de produto + venda',    tone: 'purple', icon: BarChart3       },

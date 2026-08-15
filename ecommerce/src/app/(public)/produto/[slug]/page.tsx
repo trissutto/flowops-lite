@@ -114,8 +114,12 @@ export default async function ProductPage({ params, searchParams }: { params: Pr
         }}
       />
 
-      <Container width="wide" className="pt-8 pb-4">
+      {/* Caminho de migalhas encostado na foto no celular (dono, 15/08):
+          `pt-8 pb-4` são 48px de ar entre o menu e a peça numa tela de 812px.
+          O desktop mantém o respiro original. */}
+      <Container width="wide" className="pt-4 pb-2 sm:pt-8 sm:pb-4">
         <Breadcrumb
+          colapsarNoMobile
           items={trail.map((item, i) => ({
             label: item.name,
             href: i < trail.length - 1 ? item.path : undefined,
@@ -128,9 +132,9 @@ export default async function ProductPage({ params, searchParams }: { params: Pr
         {cores.length > 0 ? (
           <EscolhaDaPeca product={product} cores={cores} look={peca?.look ?? null} />
         ) : (
-          <div className="grid gap-10 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)] lg:gap-16">
+          <div className="grid gap-5 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)] lg:gap-16">
             <div className="min-w-0">
-              <ProductGallery images={product.images} name={product.name} />
+              <ProductGallery images={product.images} name={product.name} badges={product.badges} />
             </div>
             <div className="min-w-0 lg:sticky lg:top-28 lg:self-start">
               <BuyBox product={product} />

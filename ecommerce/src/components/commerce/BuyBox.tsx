@@ -8,7 +8,6 @@ import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
 import { SimuladorFrete } from '@/components/commerce/SimuladorFrete';
 import { SizePill } from '@/components/ui/Choice';
-import { ProductBadgeTag } from '@/components/ui/Badge';
 import { useToast } from '@/components/feedback/ToastProvider';
 import { useCartStore } from '@/store/cart';
 import { useUiStore } from '@/store/ui';
@@ -203,17 +202,28 @@ export function BuyBox({
 
   return (
     <div className="flex flex-col">
-      {product.badges && product.badges.length > 0 && (
-        <div className="mb-5 flex flex-wrap gap-2">
-          {product.badges.map((badge) => (
-            <ProductBadgeTag key={badge} badge={badge} />
-          ))}
-        </div>
-      )}
-
+      {/* AS ETIQUETAS SAÍRAM DAQUI (dono, 15/08). "Novo" abria a coluna de
+          compra e custava 43px de rolagem — a pílula mais o respiro — pra
+          dizer uma palavra. Agora elas vivem SOBRE a foto, no canto superior
+          direito (ver `badges` do ProductGallery), que é onde a cliente já
+          está olhando e onde não empurram nada pra baixo. */}
       {product.fabric && <p className="eyebrow text-primary-strong">{product.fabric}</p>}
 
-      <h1 className="mt-3 font-display text-h2 text-ink">{product.name}</h1>
+      {/* TÍTULO MENOR NO CELULAR (dono, 15/08: "reduza esta quebra").
+          `text-h2` dá 28px no mobile e nessa largura (327px) quase nenhum
+          nome de peça cabe em uma linha — a mediana do catálogo é 39
+          caracteres. Medido: a 28px só 4% dos nomes cabem; a 22px o nome
+          típico de blusa ("Blusa Manga Curta — BMM-100", 314px) entra
+          inteiro, e o nome longo de vestido, que não caberia nem a 16px,
+          quebra em duas linhas de 50px em vez de 65px.
+
+          22px é o piso: abaixo disso o título fica menor que o preço e a
+          peça perde o nome como manchete. Quem quiser mais nomes em uma
+          linha só tem um caminho, e ele é de CONTEÚDO — tirar o código da
+          REF do fim do nome. */}
+      <h1 className="mt-3 font-display text-[1.375rem] leading-[1.2] text-ink sm:text-h2 sm:leading-[1.16]">
+        {product.name}
+      </h1>
 
       {product.rating && (
         <div className="mt-4 flex items-center gap-2">
@@ -255,7 +265,14 @@ export function BuyBox({
           )}
         </div>
 
-        <p className="mt-3 text-body font-light text-ink-soft">
+        {/* PIX + PARCELA EM UMA LINHA SÓ NO CELULAR (dono, 15/08).
+            A 15px a frase inteira mede 355px numa coluna de 327 e quebrava
+            "sem juros" sozinho na linha de baixo — o argumento mais forte do
+            preço saía órfão. A 13px ela mede 308px e cabe, com folga até em
+            peça de R$ 379 (318px). Encurtar o texto seria o outro caminho,
+            mas custaria "5% off" ou "sem juros", que é o que faz ela decidir.
+            Desktop segue nos 15px de sempre. */}
+        <p className="mt-3 text-small font-light text-ink-soft sm:text-body">
           {product.pixPrice && (
             <>
               <span className="tabular font-medium text-success">
