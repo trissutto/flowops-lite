@@ -10,7 +10,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Loader2, MessageCircle, RefreshCw, Send } from 'lucide-react';
+import { ArrowLeft, Loader2, MessageCircle, RefreshCw, Send, Sparkles } from 'lucide-react';
 import { api } from '@/lib/api';
 
 type Conversa = { jid: string; numero: string; nome: string; texto: string; ts: number; fromMe: boolean; naoLidas: number };
@@ -28,6 +28,7 @@ export default function WhatsappInboxPage() {
   const [carregandoLista, setCarregandoLista] = useState(true);
   const [carregandoMsgs, setCarregandoMsgs] = useState(false);
   const [enviando, setEnviando] = useState(false);
+  const [sugerindo, setSugerindo] = useState(false);
   const [erro, setErro] = useState('');
   const fimRef = useRef<HTMLDivElement>(null);
 
@@ -83,6 +84,20 @@ export default function WhatsappInboxPage() {
       setTexto(t); // devolve o texto
     } finally {
       setEnviando(false);
+    }
+  }
+
+  async function sugerir() {
+    if (!sel) return;
+    setSugerindo(true);
+    setErro('');
+    try {
+      const r = await api<{ sugestao: string }>('/whatsapp-inbox/sugerir', { method: 'POST', body: JSON.stringify({ jid: sel.jid }) });
+      setTexto(r.sugestao || '');
+    } catch (e: any) {
+      setErro(e?.message || 'IA falhou');
+    } finally {
+      setSugerindo(false);
     }
   }
 
@@ -165,6 +180,9 @@ export default function WhatsappInboxPage() {
               </div>
 
               <div className="p-3 border-t border-[#E7E2D8] flex items-end gap-2 bg-white">
+                <button onClick={sugerir} disabled={sugerindo} title="Sugerir resposta com IA (lê a conversa + pedidos da cliente)" className="p-2.5 rounded-lg border border-[#E7E2D8] hover:bg-[#FBF6E6] text-[#B8912B] disabled:opacity-40 shrink-0">
+                  {sugerindo ? <Loader2 className="w-5 h-5 animate-spin" /> : <Sparkles className="w-5 h-5" />}
+                </button>
                 <textarea
                   value={texto}
                   onChange={(e) => setTexto(e.target.value)}

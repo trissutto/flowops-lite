@@ -1,10 +1,12 @@
 import { Module } from '@nestjs/common';
+import { HttpModule } from '@nestjs/axios';
 import { PrismaModule } from '../prisma/prisma.module';
 import { EvolutionClient } from './evolution.client';
 import { WhatsappCampaignService } from './whatsapp-campaign.service';
 import { WhatsappCampaignController } from './whatsapp-campaign.controller';
 import { WhatsappInboxService } from './whatsapp-inbox.service';
 import { WhatsappInboxController } from './whatsapp-inbox.controller';
+import { WhatsappIaService } from './whatsapp-ia.service';
 
 /**
  * WHATSAPP PELO FLOWOPS — dono da própria operação, sem n8n:
@@ -13,9 +15,9 @@ import { WhatsappInboxController } from './whatsapp-inbox.controller';
  * Evolution configurado por ENV (EVOLUTION_URL/KEY/INSTANCE no Railway).
  */
 @Module({
-  imports: [PrismaModule],
+  imports: [PrismaModule, HttpModule],
   controllers: [WhatsappCampaignController, WhatsappInboxController],
-  providers: [EvolutionClient, WhatsappCampaignService, WhatsappInboxService],
+  providers: [EvolutionClient, WhatsappCampaignService, WhatsappInboxService, WhatsappIaService],
   exports: [WhatsappCampaignService],
 })
 export class WhatsappCampaignModule {}

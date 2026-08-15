@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { WhatsappInboxService } from './whatsapp-inbox.service';
+import { WhatsappIaService } from './whatsapp-ia.service';
 
 /**
  * INBOX DE WHATSAPP — retaguarda (`/retaguarda/whatsapp-inbox`).
@@ -9,7 +10,16 @@ import { WhatsappInboxService } from './whatsapp-inbox.service';
 @Controller('whatsapp-inbox')
 @UseGuards(JwtAuthGuard)
 export class WhatsappInboxController {
-  constructor(private readonly service: WhatsappInboxService) {}
+  constructor(
+    private readonly service: WhatsappInboxService,
+    private readonly ia: WhatsappIaService,
+  ) {}
+
+  /** Sugestão de resposta pela IA (Claude) — lê conversa + pedidos da cliente. */
+  @Post('sugerir')
+  sugerir(@Body() b: { jid: string }) {
+    return this.ia.sugerir(b.jid);
+  }
 
   /** Lista de conversas (mais recentes primeiro). */
   @Get('conversas')
