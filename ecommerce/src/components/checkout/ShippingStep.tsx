@@ -35,12 +35,24 @@ export interface ShippingSelection {
   quote: ShippingQuote;
 }
 
+/**
+ * Os TETOS são os mesmos do servidor (`/api/checkout`), de propósito.
+ *
+ * Estavam só lá: quem escrevia "123 - fundos, perto do mercado" no NÚMERO
+ * passava por esta tela, e o pedido morria depois, na hora de pagar, com um
+ * "alguns dados não conferem" que não dizia onde. Erro de campo tem que
+ * aparecer no campo, enquanto ela ainda está digitando nele.
+ */
 const addressSchema = z.object({
-  street: z.string().trim().min(2, 'Informe a rua.'),
-  number: z.string().trim().min(1, 'Informe o número.'),
-  complement: z.string().optional(),
-  neighborhood: z.string().trim().min(2, 'Informe o bairro.'),
-  city: z.string().trim().min(2, 'Informe a cidade.'),
+  street: z.string().trim().min(2, 'Informe a rua.').max(160, 'Encurte a rua (máx. 160 caracteres).'),
+  number: z
+    .string()
+    .trim()
+    .min(1, 'Informe o número.')
+    .max(20, 'Só o número aqui (máx. 20 caracteres) — o resto vai no complemento.'),
+  complement: z.string().trim().max(80, 'Encurte o complemento (máx. 80 caracteres).').optional(),
+  neighborhood: z.string().trim().min(2, 'Informe o bairro.').max(80, 'Encurte o bairro (máx. 80 caracteres).'),
+  city: z.string().trim().min(2, 'Informe a cidade.').max(80, 'Encurte a cidade (máx. 80 caracteres).'),
   uf: z.string().trim().length(2, 'UF.'),
 });
 
@@ -258,6 +270,7 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDo
             label="Rua"
             autoComplete="address-line1"
             enterKeyHint="next"
+            maxLength={160}
             className="sm:col-span-4"
             error={errors.street?.message}
             {...register('street')}
@@ -267,6 +280,7 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDo
             inputMode="numeric"
             autoComplete="off"
             enterKeyHint="next"
+            maxLength={20}
             className="sm:col-span-2"
             error={errors.number?.message}
             {...register('number')}
@@ -276,6 +290,7 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDo
             hint="Apartamento, bloco… (opcional)"
             autoComplete="address-line2"
             enterKeyHint="next"
+            maxLength={80}
             className="sm:col-span-3"
             error={errors.complement?.message}
             {...register('complement')}
@@ -284,6 +299,7 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDo
             label="Bairro"
             autoComplete="address-level3"
             enterKeyHint="next"
+            maxLength={80}
             className="sm:col-span-3"
             error={errors.neighborhood?.message}
             {...register('neighborhood')}
@@ -292,6 +308,7 @@ export function ShippingStep({ subtotal, pecas = 1, itemsTracked, defaults, onDo
             label="Cidade"
             autoComplete="address-level2"
             enterKeyHint="next"
+            maxLength={80}
             className="sm:col-span-4"
             error={errors.city?.message}
             {...register('city')}

@@ -932,6 +932,16 @@ const ROTULOS_CAMPO: Record<string, string> = {
   street: 'rua', number: 'número', neighborhood: 'bairro', city: 'cidade', uf: 'UF',
   shipping_method: 'forma de entrega',
   card_number: 'número do cartão', holder: 'nome no cartão', expiry: 'validade', cvv: 'CVV',
+  // Campos que o SERVIDOR reprova no envio do pedido (o site passou a mandar
+  // o nome do campo junto do erro em 15/08). Antes disto, "Dados do pedido
+  // incompletos" não dizia qual dado.
+  complement: 'complemento', cep: 'CEP',
+  endereco_ausente: 'endereço não veio', shippingQuoteId: 'frete escolhido',
+  paymentMethod: 'forma de pagamento', installments: 'parcelas', cardToken: 'token do cartão',
+  couponCode: 'cupom', total: 'total do pedido', corpo_ilegivel: 'pedido ilegível',
+  item_size: 'tamanho da peça', item_image_src: 'foto da peça', item_unitPrice: 'preço da peça',
+  item_name: 'nome da peça', item_quantity: 'quantidade', item_color: 'cor da peça',
+  backend_validacao: 'recusado na validação do backend',
 };
 
 function rotuloCampo(campo: string): string {

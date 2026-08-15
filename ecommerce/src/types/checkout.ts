@@ -178,6 +178,16 @@ export interface CreateOrderResult {
   error?: string;
   /** Causa fechada e sem PII, usada apenas no diagnóstico do funil. */
   code?: CheckoutErrorCode;
+  /**
+   * QUAL campo derrubou o pedido — só o NOME do campo, nunca o valor.
+   *
+   * Sem isto, `validation_error` chegava na retaguarda como "Dados do pedido
+   * incompletos" e ninguém conseguia dizer o que a cliente precisava corrigir:
+   * ela tentava 6 vezes, falhava 6 vezes pelo mesmo motivo e ia embora. Com o
+   * nome do campo a tela aponta a seção certa e o painel do funil agrupa por
+   * causa (a query de diagnóstico já lê `dados->>'field'`).
+   */
+  field?: string;
 }
 
 /** GET /api/checkout/:id/status — resposta (poll do PIX). */

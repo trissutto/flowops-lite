@@ -223,13 +223,17 @@ export const trackCheckoutSubmission = (method: 'pix' | 'card') =>
 export const trackCheckoutError = (
   method: 'pix' | 'card',
   reason: CheckoutErrorCode,
-  context?: { stage?: string; order_id?: string; attempt?: number },
+  context?: { stage?: string; order_id?: string; attempt?: number; field?: string },
 ) => track('checkout_error', {
   method,
   reason,
   stage: context?.stage ?? 'submission',
   ...(context?.order_id ? { order_id: context.order_id } : {}),
   ...(context?.attempt ? { attempt: context.attempt } : {}),
+  // Nome do campo que o server reprovou (nunca o valor) — é o que faz o
+  // painel dizer "Dados do pedido incompletos · número" em vez de só a
+  // primeira metade.
+  ...(context?.field ? { field: context.field } : {}),
 });
 export const trackCheckoutValidationError = (section: 'identification' | 'shipping' | 'card', field: string) =>
   track('checkout_validation_error', { section, field: field.slice(0, 40) });

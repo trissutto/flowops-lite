@@ -32,6 +32,7 @@ import { z } from 'zod';
 import { applyCoupon } from '@/lib/commerce/cupom';
 import { pixDiscount } from '@/lib/commerce/pix';
 import { resolverFrete } from '@/lib/commerce/frete-server';
+import { campoDoZod } from '@/lib/orders/campo-reprovado';
 import { getOrderStore, OrderStoreError, type NewOrderPayload } from '@/lib/orders/store';
 import type { CreateOrderResult, Order } from '@/types/checkout';
 
@@ -86,6 +87,13 @@ const trackingSchema = z
     fbp: z.string().max(100).optional(),
     fbc: z.string().max(200).optional(),
     attribution: z.record(z.string(), z.string().optional()).optional(),
+    /**
+     * O "sim" do lembrete de WhatsApp. Faltava aqui, e zod PODA chave
+     * desconhecida em silêncio: o consentimento saía do navegador, morria
+     * neste schema e nunca chegava no `trackingInfo` do pedido — o cron de
+     * resgate do PIX (`recovery_consent === true`) não achava ninguém.
+     */
+    recovery_consent: z.boolean().optional(),
   })
   .optional();
 
@@ -157,18 +165,28 @@ export async function POST(req: Request): Promise<NextResponse<CreateOrderResult
     raw = await req.json();
   } catch {
     return NextResponse.json(
-      { ok: false, error: 'Não conseguimos ler seu pedido. Tente novamente.', code: 'validation_error' },
+      {
+        ok: false,
+        error: 'Não conseguimos ler seu pedido. Tente novamente.',
+        code: 'validation_error',
+        field: 'corpo_ilegivel',
+      },
       { status: 400 },
     );
   }
 
   const parsed = bodySchema.safeParse(raw);
   if (!parsed.success) {
+    const campo = campoDoZod(parsed.error);
+    // Log com o NOME do campo (sem valor): é o que transforma "não conferem"
+    // numa causa investigável quando a mesma cliente falha cinco vezes.
+    console.warn(`[checkout] payload reprovado no zod — campo=${campo}`);
     return NextResponse.json(
       {
         ok: false,
         error: 'Alguns dados do pedido não conferem. Revise as informações e tente de novo.',
         code: 'validation_error',
+        field: campo,
       },
       { status: 400 },
     );
@@ -223,6 +241,7 @@ export async function POST(req: Request): Promise<NextResponse<CreateOrderResult
         ok: false,
         error: 'Falta o endereço de entrega. Volte uma etapa e confira os dados.',
         code: 'validation_error',
+        field: 'endereco_ausente',
       },
       { status: 400 },
     );
@@ -248,6 +267,7 @@ export async function POST(req: Request): Promise<NextResponse<CreateOrderResult
         ok: false,
         error: 'Algo não fechou no total do pedido. Revise a sacola e tente novamente.',
         code: 'validation_error',
+        field: 'total',
       },
       { status: 400 },
     );
@@ -310,7 +330,15 @@ export async function POST(req: Request): Promise<NextResponse<CreateOrderResult
     if (err instanceof OrderStoreError) {
       console.error('[checkout] backend recusou/falhou ao criar pedido:', err.message);
       return NextResponse.json(
-        { ok: false, error: err.publico, code: err.code },
+        {
+          ok: false,
+          error: err.publico,
+          code: err.code,
+          // Marca de ONDE veio a recusa: o mesmo `validation_error` pode nascer
+          // do zod daqui ou do `validar()` do backend, e a correção é em lugar
+          // diferente. Sem isto o painel mostra as duas na mesma linha.
+          ...(err.code === 'validation_error' ? { field: 'backend_validacao' } : {}),
+        },
         { status: err.status },
       );
     }

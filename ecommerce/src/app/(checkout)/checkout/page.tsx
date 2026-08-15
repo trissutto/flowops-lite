@@ -78,6 +78,35 @@ const ERRO_GENERICO =
 const ERRO_CARTAO =
   'Não conseguimos validar seu cartão agora. Tente de novo ou finalize com Pix — sai com 5% off e cai na hora.';
 
+/**
+ * CAMPO REPROVADO → A FRASE QUE DIZ ONDE MEXER.
+ *
+ * "Alguns dados do pedido precisam ser revisados" mandava a cliente procurar
+ * agulha no palheiro: as sessões do painel mostram gente tentando 4, 5, 6
+ * vezes o MESMO pedido, falhando sempre pelo mesmo campo, sem nunca descobrir
+ * qual. O `field` vem do BFF (só o nome do campo, nunca o valor) e vira a
+ * seção onde ela precisa clicar em "Editar".
+ */
+const AVISO_POR_CAMPO: Record<string, string> = {
+  name: 'Confira o nome completo em Identificação — ele não foi aceito do jeito que está.',
+  email: 'Confira o e-mail em Identificação — ele não foi aceito do jeito que está.',
+  cpf: 'Confira o CPF em Identificação — ele não foi aceito do jeito que está.',
+  phone: 'Confira o celular em Identificação — ele precisa ter DDD e só números.',
+  street: 'Confira a rua em Entrega: o texto está longo demais para a etiqueta (até 160 caracteres).',
+  number: 'Confira o número em Entrega: use só o número (até 20 caracteres) e leve o resto para o complemento.',
+  complement: 'Confira o complemento em Entrega: ele está longo demais (até 80 caracteres).',
+  neighborhood: 'Confira o bairro em Entrega — ele não foi aceito do jeito que está.',
+  city: 'Confira a cidade em Entrega — ela não foi aceita do jeito que está.',
+  uf: 'Confira o estado (UF) em Entrega — use as duas letras, como SP.',
+  cep: 'Confira o CEP em Entrega — ele precisa ter 8 números.',
+  endereco_ausente: 'Falta o endereço de entrega. Abra a seção Entrega e confira os dados.',
+  shippingQuoteId: 'A opção de entrega expirou. Abra a seção Entrega e escolha o frete de novo.',
+  item_size: 'Uma peça da sacola está com o tamanho fora do padrão. Remova e adicione ela de novo.',
+  item_image_src: 'Uma peça da sacola está sem foto no cadastro. Remova e adicione ela de novo.',
+  item_unitPrice: 'O preço de uma peça mudou. Atualize a página e confira a sacola.',
+  total: 'Algo não fechou no total do pedido. Revise a sacola e tente novamente.',
+};
+
 function mensagemAcionavel(
   code: CheckoutErrorCode,
   serverMessage: string | undefined,
@@ -250,13 +279,19 @@ export default function CheckoutPage() {
         const attempt = failureCount + 1;
         setFailureCount(attempt);
         setLastErrorCode(code);
-        trackCheckoutError(payment.method, code, { stage: 'submission', attempt });
+        const field = result?.field;
+        trackCheckoutError(payment.method, code, { stage: 'submission', attempt, field });
         if (code === 'card_declined') trackCardDeclined(attempt);
         // A mensagem do server tem PRECEDÊNCIA: por contrato ela já vem
         // elegante e é específica ("cartão recusado", "cupom expirou") — bem
         // mais útil que o genérico. Os textos locais cobrem só o que acontece
-        // quando o server não conseguiu dizer nada.
-        setSubmitError(mensagemAcionavel(code, result?.error, payment.method));
+        // quando o server não conseguiu dizer nada. E o aviso POR CAMPO ganha
+        // dos dois: repetir a mesma tentativa sem saber o que corrigir é o que
+        // fazia a cliente desistir depois da sexta vez.
+        setSubmitError(
+          (field ? AVISO_POR_CAMPO[field] : undefined) ??
+            mensagemAcionavel(code, result?.error, payment.method),
+        );
         return;
       }
 
