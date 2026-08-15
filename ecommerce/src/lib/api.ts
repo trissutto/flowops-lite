@@ -59,7 +59,7 @@ interface ApiOptions {
   tags?: string[];
   /** JWT do cliente final, quando a rota exigir. */
   token?: string;
-  method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   body?: unknown;
   /** Aborta a requisição depois de N ms (o Giga já nos ensinou a temer pendura). */
   timeoutMs?: number;
