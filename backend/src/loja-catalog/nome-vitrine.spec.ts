@@ -79,6 +79,18 @@ describe('nome-vitrine', () => {
       ).toBe('T-shirt Manga Curta');
     });
 
+    /**
+     * PDP em 15/08: "Blusa Manga Curta — — BMM-100". A marca saiu do meio e
+     * deixou os dois travessões encostados, comendo 4 caracteres de uma linha
+     * que no celular já não cabe inteira.
+     */
+    it('travessão que sobrou da marca removida some (e o hífen de "T-Shirt" fica)', () => {
+      expect(
+        limparNomeVitrine('Blusa Manga Curta — MARRIE — BMM-100', 'X9', [], 'MARRIE'),
+      ).toBe('Blusa Manga Curta — BMM-100');
+      expect(limparNomeVitrine('T-shirt Manga Curta', 'X9', [])).toBe('T-shirt Manga Curta');
+    });
+
     it('nunca devolve vazio: limpeza que come tudo volta o original (titulado)', () => {
       expect(limparNomeVitrine('FEMININA PLUS SIZE PRETO', 'B2', ['PRETO'])).toBe(
         'Feminina Plus Size Preto',
