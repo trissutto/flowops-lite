@@ -15,6 +15,7 @@
 
 import { track, type TrackOptions } from './event-manager';
 import type { EventName, TrackedItem } from './types';
+import type { CheckoutErrorCode } from '@/types/checkout';
 
 /* ────────────────────────────────────────────────────────────────────────────
  * Adaptador de produto
@@ -215,6 +216,36 @@ export const trackColorSwitch = (product: TrackableProduct, cor: string) =>
   track('color_switch', { color: cor }, { items: [toTrackedItem(product, { cor })] });
 export const trackSizeSwitch = (product: TrackableProduct, tamanho: string) =>
   track('size_switch', { size: tamanho }, { items: [toTrackedItem(product, { tamanho })] });
+export const trackAddToCartBlocked = (product: TrackableProduct, reason: 'size_missing' | 'sold_out') =>
+  track('add_to_cart_blocked', { reason }, { items: [toTrackedItem(product)] });
+export const trackCheckoutSubmission = (method: 'pix' | 'card') =>
+  track('checkout_submission', { method });
+export const trackCheckoutError = (
+  method: 'pix' | 'card',
+  reason: CheckoutErrorCode,
+  context?: { stage?: string; order_id?: string; attempt?: number },
+) => track('checkout_error', {
+  method,
+  reason,
+  stage: context?.stage ?? 'submission',
+  ...(context?.order_id ? { order_id: context.order_id } : {}),
+  ...(context?.attempt ? { attempt: context.attempt } : {}),
+});
+export const trackCheckoutValidationError = (section: 'identification' | 'shipping' | 'card', field: string) =>
+  track('checkout_validation_error', { section, field: field.slice(0, 40) });
+export const trackPixCreated = () => track('pix_created', { method: 'pix' });
+export const trackPaymentMethodSelected = (method: 'pix' | 'card') =>
+  track('payment_method_selected', { method });
+export const trackPixCopied = (orderId: string) =>
+  track('pix_copied', { method: 'pix', order_id: orderId });
+export const trackPixExpired = (orderId: string) =>
+  track('pix_expired', { method: 'pix', order_id: orderId });
+export const trackCardDeclined = (attempt: number) =>
+  track('card_declined', { method: 'card', attempt });
+export const trackPaymentRetry = (method: 'pix' | 'card', attempt: number) =>
+  track('payment_retry', { method, attempt });
+export const trackCheckoutRecovered = (method: 'pix' | 'card', orderId: string) =>
+  track('checkout_recovered', { method, order_id: orderId });
 export const trackAiConsultant = (acao: string) => track('ai_consultant', { action: acao });
 export const trackVirtualFitting = (product: TrackableProduct) =>
   track('virtual_fitting', {}, { items: [toTrackedItem(product)] });

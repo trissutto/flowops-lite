@@ -1,5 +1,5 @@
 import { HttpService } from '@nestjs/axios';
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { firstValueFrom } from 'rxjs';
 import { PrismaService } from '../prisma/prisma.service';
@@ -19,12 +19,71 @@ import { extractAttributionRaw } from '../woocommerce/attribution.util';
 @Injectable()
 export class AbandonedCartsService {
   private readonly logger = new Logger(AbandonedCartsService.name);
+  private readonly captureHits = new Map<string, number[]>();
 
   constructor(
     private readonly http: HttpService,
     private readonly config: ConfigService,
     private readonly prisma: PrismaService,
   ) {}
+
+  private enforceCaptureLimit(key: string, max: number, windowMs = 60_000) {
+    const now = Date.now();
+    const recent = (this.captureHits.get(key) ?? []).filter((at) => now - at < windowMs);
+    if (recent.length >= max) throw new HttpException('Muitas tentativas', HttpStatus.TOO_MANY_REQUESTS);
+    recent.push(now);
+    this.captureHits.set(key, recent);
+    if (this.captureHits.size > 5_000) {
+      for (const [storedKey, hits] of this.captureHits) {
+        if (!hits.some((at) => now - at < windowMs)) this.captureHits.delete(storedKey);
+      }
+    }
+  }
+
+  private sanitizeAttribution(value: unknown): Record<string, string> | undefined {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+    const allowed = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_id', 'utm_content', 'utm_term'];
+    const result: Record<string, string> = {};
+    for (const key of allowed) {
+      const raw = (value as any)[key];
+      if (typeof raw === 'string' && raw.trim()) result[key] = raw.trim().slice(0, 200);
+    }
+    return Object.keys(result).length ? result : undefined;
+  }
+
+  async captureCheckout(input: any, clientIp = 'unknown') {
+    const sessionId = String(input?.sessionId ?? '').trim().slice(0, 64);
+    const nome = String(input?.name ?? '').trim().replace(/\s+/g, ' ').slice(0, 120);
+    const telefone = String(input?.phone ?? '').replace(/\D/g, '').replace(/^55(?=\d{10,11}$)/, '');
+    if (sessionId.length < 8 || nome.length < 2 || !/^\d{10,11}$/.test(telefone)) {
+      throw new BadRequestException('Contato inválido');
+    }
+    this.enforceCaptureLimit(`ip:${clientIp}`, 30);
+    this.enforceCaptureLimit(`contact:${sessionId}:${telefone}`, 10);
+    const rawItems = Array.isArray(input?.items) ? input.items.slice(0, 50) : [];
+    const items = rawItems.map((item: any) => ({
+      productId: String(item?.productId ?? '').slice(0, 120),
+      name: String(item?.name ?? '').slice(0, 160),
+      size: String(item?.size ?? '').slice(0, 30),
+      color: String(item?.color ?? '').slice(0, 60),
+      quantity: Math.min(99, Math.max(1, Number(item?.quantity) || 1)),
+      unitPrice: Math.max(0, Number(item?.unitPrice) || 0),
+    }));
+    const data = {
+      anonymousId: String(input?.anonymousId ?? '').slice(0, 64) || null,
+      nome, telefone,
+      recoveryConsent: input?.recoveryConsent === true,
+      subtotal: Math.max(0, Number(input?.subtotal) || 0), items,
+      path: String(input?.path ?? '').slice(0, 200) || null,
+      attribution: this.sanitizeAttribution(input?.attribution),
+    };
+    await (this.prisma as any).checkoutRecovery.upsert({
+      where: { sessionId },
+      create: { sessionId, ...data, status: 'active' },
+      update: data,
+    });
+    return { ok: true };
+  }
 
   /**
    * Enriquece cada carrinho com a CAMPANHA de origem (utmCampaign) quando ele
@@ -591,6 +650,50 @@ export class AbandonedCartsService {
           cart_items: cartItems,
         };
       });
+
+      // Contatos capturados antes de existir pedido. O status acompanha os
+      // mesmos filtros da tela e evita misturar quem já concluiu com abandono.
+      const recoveryWhere: any = {};
+      if (params.since || params.until) {
+        recoveryWhere.updatedAt = {};
+        if (params.since) recoveryWhere.updatedAt.gte = new Date(params.since + 'T00:00:00');
+        if (params.until) recoveryWhere.updatedAt.lte = new Date(params.until + 'T23:59:59');
+      }
+      if (params.status === 'recovered' || params.status === 'completed') recoveryWhere.status = 'converted';
+      else if (params.status !== 'all') recoveryWhere.status = 'active';
+      if (params.search) recoveryWhere.OR = [
+        { nome: { contains: params.search, mode: 'insensitive' } },
+        { telefone: { contains: String(params.search).replace(/\D/g, '') } },
+      ];
+      const recoveries = await (this.prisma as any).checkoutRecovery.findMany({
+        where: recoveryWhere, orderBy: { updatedAt: 'desc' }, take: 200,
+      });
+      const orderSessions = new Set(orders.map((o: any) => {
+        try { return JSON.parse(o.trackingInfo || '{}').session_id; } catch { return null; }
+      }).filter(Boolean));
+      const recoveryItems = recoveries
+        // Contatos sem opt-in continuam salvos para retomar a sessão, mas não
+        // entram em nenhuma fila de contato ativo por WhatsApp.
+        .filter((r: any) => r.recoveryConsent === true && !orderSessions.has(r.sessionId))
+        .map((r: any, index: number) => {
+          const cartItems = Array.isArray(r.items) ? r.items.map((it: any) => ({
+            name: it.name || it.productId, sku: it.productId, quantity: Number(it.quantity || 1),
+            price: Number(it.unitPrice || 0), line_subtotal: Number(it.unitPrice || 0) * Number(it.quantity || 1),
+          })) : [];
+          const sp = String(r.nome).indexOf(' ');
+          return {
+            id: 970000000 + index, recovery_id: r.id, session_id: r.sessionId,
+            email: '', first_name: sp > 0 ? r.nome.slice(0, sp) : r.nome,
+            last_name: sp > 0 ? r.nome.slice(sp + 1) : '', phone: r.telefone,
+            city: '', state: '', cart_total: Number(r.subtotal || 0),
+            items_count: cartItems.reduce((sum: number, it: any) => sum + it.quantity, 0),
+            order_status: r.status === 'converted' ? 'recovered' : 'abandoned',
+            time: r.updatedAt?.toISOString?.() ?? null, order_id: null, order_number: null,
+            source: 'ecommerce-contact', utmCampaign: (r.attribution as any)?.utm_campaign ?? null,
+            cart_items: cartItems,
+          };
+        });
+      items.unshift(...recoveryItems);
 
       const stats = {
         abandoned: items.filter((i: any) => i.order_status === 'abandoned').length,

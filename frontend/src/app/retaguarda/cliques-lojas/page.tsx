@@ -19,8 +19,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import {
-  ArrowLeft, BadgeCheck, CreditCard, Eye, Instagram, Loader2, MapPin,
-  MessageCircle, Phone, RefreshCw, ShoppingBag, ShoppingCart, Users,
+  AlertTriangle, ArrowLeft, BadgeCheck, CreditCard, Eye, Gauge, Instagram, Loader2, MapPin,
+  MessageCircle, Phone, RefreshCw, ShoppingBag, ShoppingCart, Users, X,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -55,14 +55,47 @@ type Agora = {
  * add cart, initiate checkout, etc"). Mesmo período De/Até dos cliques; conta
  * todo mundo (com e sem aceite do banner) porque vem de `site_eventos`.
  */
-type EtapaFunil = { evento: string; eventos: number; pessoas: number };
-type RespostaFunil = { de: string; ate: string; etapas: EtapaFunil[] };
+type EtapaFunil = { evento: string; eventos: number; pessoas: number; valor?: number };
+type DiagnosticoFunil = {
+  evento: string;
+  codigo: string;
+  campo: string | null;
+  pessoas: number;
+  eventos: number;
+};
+type AlertaCheckout = {
+  sessionId: string;
+  etapa: string;
+  pagamento: string;
+  codigo: string;
+  pedido: string | null;
+  tentativas: number;
+  primeiraFalha: string;
+  ultimaFalha: string;
+};
+type RespostaFunil = {
+  de: string;
+  ate: string;
+  etapas: EtapaFunil[];
+  diagnosticos?: DiagnosticoFunil[];
+  faturamento?: { pedidos: number; valor: number };
+  alertasCheckout?: AlertaCheckout[];
+};
 
-const iso = (d: Date) => d.toISOString().slice(0, 10);
+/**
+ * Data 'YYYY-MM-DD' SEMPRE em Brasília, independente do fuso do PC. Era
+ * `d.toISOString().slice(0,10)` — UTC: depois das 21h de Brasília o "Hoje"
+ * pulava pra amanhã e a tela abria vazia. `en-CA` formata como YYYY-MM-DD.
+ */
+const fmtDataBr = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' });
+const iso = (d: Date) => fmtDataBr.format(d);
+const brl = (n: number) => n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
 export default function CliquesLojasPage() {
-  const [de, setDe] = useState('');
-  const [ate, setAte] = useState('');
+  // ABRE EM HOJE (dono, 15/08): a pergunta de todo dia é "como foi HOJE?", não
+  // "os últimos 30 dias". Os atalhos e o "Limpar (30 dias)" seguem na mão.
+  const [de, setDe] = useState(() => iso(new Date()));
+  const [ate, setAte] = useState(() => iso(new Date()));
   const [dados, setDados] = useState<Resposta | null>(null);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState('');
@@ -232,7 +265,7 @@ export default function CliquesLojasPage() {
 
       {/* O FUNIL — acima do bloco de cliques de propósito: dia sem clique de
           loja ainda tem funil, e um não pode esconder o outro. */}
-      {funil && <FunilSite etapas={funil.etapas} />}
+      {funil && <FunilSite etapas={funil.etapas} diagnosticos={funil.diagnosticos ?? []} faturamento={funil.faturamento} alertasCheckout={funil.alertasCheckout ?? []} />}
 
       {erro && (
         <div className="bg-rose-50 border border-rose-200 text-rose-700 rounded-xl p-4 text-sm">{erro}</div>
@@ -324,7 +357,17 @@ function Cartao({ titulo, valor, icone, cor }: { titulo: string; valor: number; 
  * O funil da visita à compra, em PESSOAS (sessões) — o % de cada etapa é
  * sobre a anterior. Números pequenos embaixo são os toques (eventos).
  */
-function FunilSite({ etapas }: { etapas: EtapaFunil[] }) {
+function FunilSite({
+  etapas,
+  diagnosticos,
+  faturamento,
+  alertasCheckout,
+}: {
+  etapas: EtapaFunil[];
+  diagnosticos: DiagnosticoFunil[];
+  faturamento?: { pedidos: number; valor: number };
+  alertasCheckout: AlertaCheckout[];
+}) {
   const por = new Map(etapas.map((e) => [e.evento, e]));
   const ordem = [
     { evento: 'page_view', titulo: 'Visitas', icone: <Users className="w-4 h-4" /> },
@@ -335,17 +378,44 @@ function FunilSite({ etapas }: { etapas: EtapaFunil[] }) {
     { evento: 'purchase', titulo: 'Compras', icone: <BadgeCheck className="w-4 h-4" /> },
   ];
 
+  const [analisando, setAnalisando] = useState(false);
+
   let anterior: number | null = null;
   const cards = ordem.map((o) => {
     const dado = por.get(o.evento);
     const pessoas = dado?.pessoas ?? 0;
     const pct = anterior !== null && anterior > 0 ? Math.round((pessoas / anterior) * 100) : null;
     anterior = pessoas;
-    return { ...o, pessoas, eventos: dado?.eventos ?? 0, pct };
+    return { ...o, pessoas, eventos: dado?.eventos ?? 0, pct, valor: dado?.valor ?? 0 };
   });
 
   return (
     <div className="space-y-2">
+      {/* O % de cada card responde "quanto passou daqui pra lá". O que ele NÃO
+          responde é "isso é bom?" — pra isso é o botão, que põe cada etapa ao
+          lado da faixa de mercado de moda feminina. */}
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-sm font-bold uppercase tracking-wide text-slate-500">
+          Da visita à compra
+        </h2>
+        <button
+          onClick={() => setAnalisando(true)}
+          className="inline-flex items-center gap-2 rounded-lg border border-[#B8912B] bg-[#FBF6E6] px-3 py-2 text-sm font-bold text-[#8C7325] hover:bg-[#F6EBCD]"
+        >
+          <Gauge className="h-4 w-4" />
+          Analisar conversão
+        </button>
+      </div>
+
+      {analisando && (
+        <AnaliseConversao
+          etapas={cards.map((c) => ({ evento: c.evento, titulo: c.titulo, pessoas: c.pessoas }))}
+          faturamento={faturamento}
+          valorCompras={cards.find((c) => c.evento === 'purchase')?.valor ?? 0}
+          aoFechar={() => setAnalisando(false)}
+        />
+      )}
+
       <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
         {cards.map((c) => (
           <div key={c.evento} className="bg-white border border-[#E7E2D8] rounded-xl p-4">
@@ -355,6 +425,16 @@ function FunilSite({ etapas }: { etapas: EtapaFunil[] }) {
             <div className={`mt-2 text-2xl font-bold tabular-nums ${c.evento === 'purchase' ? 'text-[#2E7D46]' : 'text-slate-800'}`}>
               {c.pessoas}
             </div>
+            {/* VALOR DE CONVERSÃO (dono, 15/08): o R$ somado das compras
+                confirmadas do período, colado no card Compras. */}
+            {c.evento === 'purchase' && (
+              <div
+                className="text-sm font-bold text-[#2E7D46] tabular-nums"
+                title="Valor de conversão — R$ somado das compras confirmadas no período"
+              >
+                {brl(c.valor)}
+              </div>
+            )}
             <div className="text-xs text-slate-400 tabular-nums">
               {c.eventos} evento{c.eventos === 1 ? '' : 's'}
               {c.pct !== null && <span className="ml-1 font-semibold text-[#B8912B]">· {c.pct}%</span>}
@@ -362,11 +442,498 @@ function FunilSite({ etapas }: { etapas: EtapaFunil[] }) {
           </div>
         ))}
       </div>
+
+      {/* FATURAMENTO REAL (dono, 15/08) — a Fonte B, numa linha SEPARADA do
+          valor de conversão do funil de propósito: aqui é o DINHEIRO (pedidos
+          pagos, inclusive quem veio por e-mail/orgânico e o PIX pago depois);
+          lá no card Compras é a conversão das sessões rastreadas. As duas
+          divergem e cada uma responde uma pergunta diferente. */}
+      {faturamento && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#CDE9D6] bg-[#F3FAF5] px-4 py-3">
+          <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+            <BadgeCheck className="w-4 h-4 text-[#2E7D46]" />
+            Faturamento do site no período
+            <span className="font-normal text-slate-400">· pedidos pagos, o dinheiro de verdade</span>
+          </div>
+          <div className="text-right">
+            <div className="text-xl font-bold text-[#2E7D46] tabular-nums">{brl(faturamento.valor)}</div>
+            <div className="text-xs text-slate-400 tabular-nums">
+              {faturamento.pedidos} pedido{faturamento.pedidos === 1 ? '' : 's'} pago{faturamento.pedidos === 1 ? '' : 's'}
+            </div>
+          </div>
+        </div>
+      )}
+
       <p className="text-xs text-slate-400">
         Funil em pessoas (sessões), contando todo mundo — com e sem aceite de cookies. Coleta
         desde 13/08/2026; período anterior aparece zerado. O % é sobre a etapa anterior.
         Compras = pagamento confirmado; o número fiscal é o da tela de Pedidos.
       </p>
+      {alertasCheckout.length > 0 && (
+        <div className="overflow-hidden rounded-xl border border-amber-300 bg-white">
+          <div className="flex items-start gap-3 border-b border-amber-200 bg-amber-50 px-4 py-3">
+            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" />
+            <div>
+              <h2 className="font-semibold text-amber-950">Alertas de checkout</h2>
+              <p className="text-xs text-amber-800">Sessões com duas ou mais falhas em até dez minutos.</p>
+            </div>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-[#FBF6E6] text-slate-600">
+                <tr>
+                  <th className="px-4 py-2.5 text-left font-semibold">Última falha</th>
+                  <th className="px-4 py-2.5 text-left font-semibold">Sessão</th>
+                  <th className="px-4 py-2.5 text-left font-semibold">Etapa / pagamento</th>
+                  <th className="px-4 py-2.5 text-left font-semibold">Código / pedido</th>
+                  <th className="px-4 py-2.5 text-right font-semibold">Tentativas</th>
+                </tr>
+              </thead>
+              <tbody>
+                {alertasCheckout.map((a) => (
+                  <tr key={a.sessionId} className="border-t border-[#E7E2D8]">
+                    <td className="whitespace-nowrap px-4 py-2.5 text-slate-600">
+                      {new Date(a.ultimaFalha).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}
+                    </td>
+                    <td className="px-4 py-2.5 font-mono text-xs text-slate-600" title={a.sessionId}>
+                      {a.sessionId.slice(0, 8)}…
+                    </td>
+                    <td className="px-4 py-2.5 text-slate-700">{a.etapa} · {rotuloCodigo(a.pagamento)}</td>
+                    <td className="px-4 py-2.5 text-slate-700">
+                      {rotuloCodigo(a.codigo)}{a.pedido ? ` · ${a.pedido}` : ''}
+                    </td>
+                    <td className="px-4 py-2.5 text-right font-bold tabular-nums text-amber-800">{a.tentativas}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+      {diagnosticos.length > 0 && (
+        <div className="bg-white border border-[#E7E2D8] rounded-xl overflow-hidden">
+          <div className="px-4 py-3 border-b border-[#E7E2D8]">
+            <h2 className="font-semibold text-slate-800">Diagnóstico das decisões e falhas</h2>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Mostra onde a cliente parou, sem armazenar dados pessoais ou dados do cartão.
+            </p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-[#FBF6E6] text-slate-600">
+                <tr>
+                  <th className="text-left px-4 py-2.5 font-semibold">Momento</th>
+                  <th className="text-left px-4 py-2.5 font-semibold">Motivo / escolha</th>
+                  <th className="text-right px-4 py-2.5 font-semibold">Pessoas</th>
+                  <th className="text-right px-4 py-2.5 font-semibold">Tentativas</th>
+                </tr>
+              </thead>
+              <tbody>
+                {diagnosticos.map((d, index) => (
+                  <tr key={`${d.evento}:${d.codigo}:${d.campo ?? ''}:${index}`} className="border-t border-[#E7E2D8]">
+                    <td className="px-4 py-2.5 font-medium text-slate-700">{rotuloDiagnostico(d.evento)}</td>
+                    <td className="px-4 py-2.5 text-slate-600">
+                      {rotuloCodigo(d.codigo)}{d.campo ? ` · ${rotuloCampo(d.campo)}` : ''}
+                    </td>
+                    <td className="px-4 py-2.5 text-right tabular-nums">{d.pessoas}</td>
+                    <td className="px-4 py-2.5 text-right tabular-nums text-slate-500">{d.eventos}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   );
+}
+
+/* ══════════════════ ANÁLISE DE CONVERSÃO (dono, 15/08) ══════════════════
+ *
+ * O funil já mostrava o % de cada etapa. Faltava a pergunta que vem logo
+ * depois — "isso é bom ou é ruim?". Aqui cada etapa aparece ao lado da FAIXA
+ * ESPERADA pra e-commerce de MODA FEMININA, com o veredito na cara.
+ *
+ * ⚠️ As faixas são REFERÊNCIA DE MERCADO (moda/vestuário, tráfego misto
+ * mobile+desktop), não lei — servem pra dizer "olhe aqui primeiro", não pra
+ * carimbar nota. Duas leituras honestas antes de agir:
+ *
+ *  1. AMOSTRA. Com 18 pessoas no pagamento, cada uma vale 5,5 pontos de
+ *     percentual: a etapa pula de "ótimo" pra "péssimo" com 2 pessoas de
+ *     diferença. Por isso a tela marca as etapas com base < 50 pessoas como
+ *     indício, não veredito.
+ *  2. O ALVO DE VERDADE é a NOSSA série histórica. A faixa de mercado é o
+ *     mapa enquanto a nossa medição é nova (coleta desde 13/08).
+ */
+
+type FaixaEtapa = {
+  de: string;               // evento denominador
+  para: string;             // evento numerador
+  titulo: string;
+  /** Piso e teto da faixa de mercado (%) — moda/vestuário. */
+  piso: number;
+  teto: number;
+  /** O que costuma explicar essa etapa quando ela está baixa. */
+  causa: string;
+};
+
+const FAIXAS: FaixaEtapa[] = [
+  {
+    de: 'page_view', para: 'view_item', titulo: 'Entrou → abriu uma peça',
+    piso: 40, teto: 65,
+    causa: 'vitrine e busca: se a home/categoria não puxa pra ficha, o resto do funil nem começa',
+  },
+  {
+    de: 'view_item', para: 'add_to_cart', titulo: 'Abriu a peça → botou na sacola',
+    piso: 8, teto: 15,
+    causa: 'foto, tamanho disponível, preço e frete na ficha — é aqui que a régua de tamanho pesa',
+  },
+  {
+    de: 'add_to_cart', para: 'begin_checkout', titulo: 'Sacola → começou o checkout',
+    piso: 45, teto: 65,
+    causa: 'susto de frete/prazo e sacola sem urgência',
+  },
+  {
+    de: 'begin_checkout', para: 'add_payment_info', titulo: 'Checkout → escolheu pagamento',
+    piso: 55, teto: 75,
+    causa: 'formulário longo, CEP/entrega travando, cupom que não aceita',
+  },
+  {
+    de: 'add_payment_info', para: 'purchase', titulo: 'Pagamento → compra confirmada',
+    piso: 50, teto: 75,
+    causa: 'cartão recusado, PIX que expira sem pagar, erro no gateway',
+  },
+];
+
+/** Conversão da loja inteira: visita → compra. Moda feminina fica em ~1–2,5%. */
+const FAIXA_GERAL = { piso: 1.0, teto: 2.5 };
+
+type Veredito = 'acima' | 'dentro' | 'abaixo' | 'critico' | 'sem-dado';
+
+function julgar(taxa: number | null, piso: number, teto: number): Veredito {
+  if (taxa === null) return 'sem-dado';
+  if (taxa > teto) return 'acima';
+  if (taxa >= piso) return 'dentro';
+  // Menos da metade do piso não é "abaixo", é buraco — merece cor própria.
+  return taxa >= piso / 2 ? 'abaixo' : 'critico';
+}
+
+const ESTILO_VEREDITO: Record<Veredito, { rotulo: string; classe: string; barra: string }> = {
+  acima:     { rotulo: 'Acima do esperado', classe: 'bg-[#E8F3EC] text-[#1F5C33] border-[#CDE9D6]', barra: 'bg-[#2E7D46]' },
+  dentro:    { rotulo: 'Dentro do esperado', classe: 'bg-[#E8F3EC] text-[#1F5C33] border-[#CDE9D6]', barra: 'bg-[#2E7D46]' },
+  abaixo:    { rotulo: 'Abaixo do esperado', classe: 'bg-amber-50 text-amber-900 border-amber-300', barra: 'bg-amber-500' },
+  critico:   { rotulo: 'Muito abaixo', classe: 'bg-rose-50 text-rose-900 border-rose-300', barra: 'bg-rose-600' },
+  'sem-dado': { rotulo: 'Sem dado', classe: 'bg-slate-100 text-slate-500 border-slate-200', barra: 'bg-slate-300' },
+};
+
+/** 69 → "69%" · 1,23 → "1,2%". Decimal só quando ele diz alguma coisa. */
+const pct = (n: number) =>
+  `${(Number.isInteger(n) ? String(n) : n.toFixed(1)).replace('.', ',')}%`;
+
+function AnaliseConversao({
+  etapas,
+  faturamento,
+  valorCompras,
+  aoFechar,
+}: {
+  etapas: Array<{ evento: string; titulo: string; pessoas: number }>;
+  faturamento?: { pedidos: number; valor: number };
+  valorCompras: number;
+  aoFechar: () => void;
+}) {
+  const pessoasDe = (evento: string) =>
+    etapas.find((e) => e.evento === evento)?.pessoas ?? 0;
+
+  const visitas = pessoasDe('page_view');
+  const compras = pessoasDe('purchase');
+
+  const linhas = FAIXAS.map((f) => {
+    const base = pessoasDe(f.de);
+    const chegou = pessoasDe(f.para);
+    const taxa = base > 0 ? (chegou / base) * 100 : null;
+    return {
+      ...f,
+      base,
+      chegou,
+      taxa,
+      veredito: julgar(taxa, f.piso, f.teto),
+      // Base pequena = a etapa pula de ótima pra péssima com 2 pessoas.
+      poucaBase: base > 0 && base < 50,
+    };
+  });
+
+  const taxaGeral = visitas > 0 ? (compras / visitas) * 100 : null;
+  const vereditoGeral = julgar(taxaGeral, FAIXA_GERAL.piso, FAIXA_GERAL.teto);
+
+  /**
+   * MAIOR VAZAMENTO — a etapa que mais perde gente em relação ao PISO da
+   * faixa. Compara em PESSOAS, não em pontos percentuais: 10 pontos abaixo em
+   * cima de 400 pessoas dói muito mais que 10 pontos em cima de 18.
+   */
+  const comPerda = linhas
+    .filter((l) => l.taxa !== null && (l.veredito === 'abaixo' || l.veredito === 'critico'))
+    .map((l) => ({ ...l, perdidas: Math.round(l.base * (l.piso / 100) - l.chegou) }))
+    .filter((l) => l.perdidas > 0)
+    .sort((a, b) => b.perdidas - a.perdidas);
+  const gargalo = comPerda[0] ?? null;
+
+  /**
+   * Quanto essas pessoas valeriam: leva as recuperadas pelo resto do funil
+   * usando as NOSSAS taxas de hoje (não as de mercado — seria empilhar
+   * otimismo em cima de otimismo) e multiplica pelo ticket médio real.
+   */
+  const ticket = faturamento && faturamento.pedidos > 0
+    ? faturamento.valor / faturamento.pedidos
+    : compras > 0 ? valorCompras / compras : 0;
+
+  let comprasExtra = 0;
+  if (gargalo) {
+    const iGargalo = linhas.findIndex((l) => l.para === gargalo.para);
+    const restante = linhas.slice(iGargalo + 1);
+    comprasExtra = restante.reduce(
+      (acc, l) => acc * (l.taxa !== null ? l.taxa / 100 : 0),
+      gargalo.perdidas,
+    );
+  }
+  const dinheiroExtra = comprasExtra * ticket;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4"
+      onClick={aoFechar}
+    >
+      <div
+        className="my-6 w-full max-w-3xl rounded-2xl bg-white shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start gap-3 border-b border-[#E7E2D8] px-5 py-4">
+          <Gauge className="mt-0.5 h-5 w-5 text-[#B8912B]" />
+          <div className="flex-1">
+            <h2 className="text-lg font-bold text-slate-800">Análise de conversão</h2>
+            <p className="text-sm text-slate-500">
+              Cada etapa do período comparada com a faixa de e-commerce de moda feminina.
+            </p>
+          </div>
+          <button onClick={aoFechar} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100" title="Fechar">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="space-y-5 px-5 py-5">
+          {/* VEREDITO GERAL */}
+          <div className="rounded-xl border border-[#E7E2D8] bg-[#FAFAF7] p-4">
+            <div className="flex flex-wrap items-end justify-between gap-3">
+              <div>
+                <div className="text-xs font-bold uppercase tracking-wide text-slate-500">
+                  Conversão da loja (visita → compra)
+                </div>
+                <div className="mt-1 flex items-baseline gap-2">
+                  <span className="text-4xl font-extrabold tabular-nums text-slate-800">
+                    {taxaGeral === null ? '—' : pct(taxaGeral)}
+                  </span>
+                  <span className="text-sm text-slate-500 tabular-nums">
+                    {compras} de {visitas} pessoas
+                  </span>
+                </div>
+              </div>
+              <span className={`rounded-full border px-3 py-1 text-sm font-bold ${ESTILO_VEREDITO[vereditoGeral].classe}`}>
+                {ESTILO_VEREDITO[vereditoGeral].rotulo}
+              </span>
+            </div>
+            <BarraFaixa
+              taxa={taxaGeral} piso={FAIXA_GERAL.piso} teto={FAIXA_GERAL.teto}
+              escala={4} veredito={vereditoGeral}
+            />
+            <p className="mt-2 text-xs text-slate-500">
+              Esperado em moda feminina: <b>{pct(FAIXA_GERAL.piso)} a {pct(FAIXA_GERAL.teto)}</b> das visitas
+              viram compra.
+            </p>
+          </div>
+
+          {/* ETAPA POR ETAPA */}
+          <div className="space-y-3">
+            {linhas.map((l) => {
+              const est = ESTILO_VEREDITO[l.veredito];
+              return (
+                <div key={l.para} className="rounded-xl border border-[#E7E2D8] p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="font-semibold text-slate-800">{l.titulo}</div>
+                    <div className="flex items-center gap-2">
+                      {l.poucaBase && (
+                        <span
+                          className="rounded-full border border-slate-200 bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-500"
+                          title="Menos de 50 pessoas na base: 1 ou 2 clientes já viram o número de lado. Leia como indício."
+                        >
+                          amostra pequena
+                        </span>
+                      )}
+                      <span className={`rounded-full border px-2.5 py-0.5 text-xs font-bold ${est.classe}`}>
+                        {est.rotulo}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="mt-1 flex items-baseline gap-3">
+                    <span className="text-2xl font-bold tabular-nums text-slate-800">
+                      {l.taxa === null ? '—' : pct(l.taxa)}
+                    </span>
+                    <span className="text-xs text-slate-500 tabular-nums">
+                      {l.chegou} de {l.base}
+                    </span>
+                    <span className="ml-auto text-xs text-slate-500">
+                      esperado <b className="text-slate-700">{l.piso}% a {l.teto}%</b>
+                    </span>
+                  </div>
+
+                  <BarraFaixa taxa={l.taxa} piso={l.piso} teto={l.teto} escala={100} veredito={l.veredito} />
+
+                  {(l.veredito === 'abaixo' || l.veredito === 'critico') && (
+                    <p className="mt-2 text-xs text-slate-600">
+                      <b>Onde costuma estar:</b> {l.causa}.
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* O QUE FAZER PRIMEIRO */}
+          {gargalo ? (
+            <div className="rounded-xl border border-amber-300 bg-amber-50 p-4">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" />
+                <div className="text-sm text-amber-950">
+                  <div className="font-bold">
+                    Comece por: {gargalo.titulo.toLowerCase()}
+                  </div>
+                  <p className="mt-1 leading-snug">
+                    Está em <b>{gargalo.taxa === null ? '—' : pct(gargalo.taxa)}</b> quando o piso do
+                    segmento é <b>{gargalo.piso}%</b> — <b>{gargalo.perdidas} pessoas</b> a menos
+                    passaram dessa etapa no período.
+                    {comprasExtra >= 0.5 && (
+                      <>
+                        {' '}Só voltar ao piso, mantendo o resto do funil como está hoje, daria
+                        aproximadamente <b>{Math.round(comprasExtra)} compra
+                        {Math.round(comprasExtra) === 1 ? '' : 's'}</b>
+                        {ticket > 0 && <> (~<b>{brl(dinheiroExtra)}</b>)</>}.
+                      </>
+                    )}
+                  </p>
+                  <p className="mt-1.5 leading-snug">{gargalo.causa}.</p>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-xl border border-[#CDE9D6] bg-[#F3FAF5] p-4 text-sm text-[#1F5C33]">
+              <b>Nenhuma etapa abaixo da faixa no período.</b> Quando todas passam, o ganho
+              vem de trazer mais gente (tráfego), não de consertar o funil.
+            </div>
+          )}
+
+          {/* METODOLOGIA — sem isso o número vira opinião */}
+          <div className="rounded-xl bg-[#FAFAF7] p-4 text-xs leading-relaxed text-slate-500">
+            <b className="text-slate-600">Como ler:</b> as faixas são referência de mercado pra
+            moda/vestuário (tráfego misto celular + computador) e servem pra apontar onde olhar
+            primeiro, não pra dar nota. O alvo que vale de verdade é a nossa própria série
+            histórica — a coleta começou em 13/08/2026, então ainda é curta. Etapa marcada como
+            <b> amostra pequena</b> tem menos de 50 pessoas na base: 1 ou 2 clientes já mudam o
+            veredito. O dinheiro estimado usa o ticket médio real do período
+            {ticket > 0 ? ` (${brl(ticket)})` : ''} e as nossas taxas atuais nas etapas seguintes.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * A régua: trilho 0→escala, faixa esperada pintada e o nosso número como
+ * marcador. É o que faz "dentro/fora" ser visto antes de ser lido.
+ */
+function BarraFaixa({
+  taxa, piso, teto, escala, veredito,
+}: { taxa: number | null; piso: number; teto: number; escala: number; veredito: Veredito }) {
+  const posicao = (v: number) => `${Math.min(100, Math.max(0, (v / escala) * 100))}%`;
+  return (
+    <div className="mt-2.5">
+      <div className="relative h-3 w-full rounded-full bg-slate-100">
+        {/* faixa esperada */}
+        <div
+          className="absolute top-0 h-3 rounded-full bg-[#CDE9D6]"
+          style={{ left: posicao(piso), width: `calc(${posicao(teto)} - ${posicao(piso)})` }}
+          title={`Faixa esperada: ${piso}% a ${teto}%`}
+        />
+        {/* nosso número */}
+        {taxa !== null && (
+          <div
+            className={`absolute -top-0.5 h-4 w-1.5 rounded-full ring-2 ring-white ${ESTILO_VEREDITO[veredito].barra}`}
+            style={{ left: posicao(taxa) }}
+            title={`Nós: ${pct(taxa)}`}
+          />
+        )}
+      </div>
+      <div className="mt-1 flex justify-between text-[10px] text-slate-400">
+        <span>0%</span>
+        <span>faixa esperada {pct(piso)} a {pct(teto)}</span>
+        <span>{pct(escala)}</span>
+      </div>
+    </div>
+  );
+}
+
+const ROTULOS_EVENTO: Record<string, string> = {
+  color_switch: 'Escolha de cor',
+  size_switch: 'Escolha de tamanho',
+  add_to_cart_blocked: 'Sacola bloqueada',
+  add_shipping_info: 'Frete escolhido',
+  add_payment_info: 'Pagamento escolhido',
+  checkout_submission: 'Tentativa de pagamento',
+  checkout_error: 'Falha ao finalizar',
+  checkout_validation_error: 'Campo inválido',
+  pix_created: 'PIX criado',
+  payment_method_selected: 'Meio de pagamento escolhido',
+  pix_copied: 'Código PIX copiado',
+  pix_expired: 'PIX expirado',
+  card_declined: 'Cartão recusado',
+  payment_retry: 'Nova tentativa de pagamento',
+  checkout_recovered: 'Checkout recuperado',
+};
+
+const ROTULOS_CODIGO: Record<string, string> = {
+  size_missing: 'Tamanho não escolhido',
+  sold_out: 'Produto esgotado',
+  card_declined: 'Cartão não aprovado',
+  catalog_unavailable: 'Produto, estoque ou preço alterado',
+  coupon_invalid: 'Cupom não aceito',
+  shipping_invalid: 'Entrega não confirmada',
+  validation_error: 'Dados do pedido incompletos',
+  rate_limited: 'Tentativas demais em pouco tempo',
+  payment_unavailable: 'Pagamento indisponível',
+  internal_error: 'Erro interno',
+  api_rejected: 'Motivo não detalhado (dado antigo)',
+  invalid_response: 'Resposta inválida do servidor',
+  network_error: 'Falha de conexão',
+  identification: 'Identificação',
+  shipping: 'Entrega',
+  pix: 'PIX',
+  card: 'Cartão',
+};
+
+function rotuloDiagnostico(evento: string): string {
+  return ROTULOS_EVENTO[evento] ?? evento;
+}
+
+function rotuloCodigo(codigo: string): string {
+  return ROTULOS_CODIGO[codigo] ?? codigo;
+}
+
+const ROTULOS_CAMPO: Record<string, string> = {
+  name: 'nome', email: 'e-mail', cpf: 'CPF', phone: 'celular',
+  street: 'rua', number: 'número', neighborhood: 'bairro', city: 'cidade', uf: 'UF',
+  shipping_method: 'forma de entrega',
+  card_number: 'número do cartão', holder: 'nome no cartão', expiry: 'validade', cvv: 'CVV',
+};
+
+function rotuloCampo(campo: string): string {
+  return ROTULOS_CAMPO[campo] ?? campo;
 }

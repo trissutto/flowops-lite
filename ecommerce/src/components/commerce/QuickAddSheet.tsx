@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Image from 'next/image';
-import { Loader2, ShoppingBag } from 'lucide-react';
+import { AlertCircle, Loader2, ShoppingBag } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
 import { SizePill } from '@/components/ui/Choice';
@@ -11,7 +11,7 @@ import { useCartStore } from '@/store/cart';
 import { useQuickAddStore } from '@/store/quick-add';
 import { trackAddToCart } from '@/lib/tracking';
 import { formatPrice } from '@/lib/utils';
-import { mapPeca, type CorApi, type PecaApi } from '@/services/products';
+import type { CorApi, PecaApi } from '@/services/products';
 
 /**
  * QUICK ADD — adicionar da vitrine sem sair da página.
@@ -131,13 +131,6 @@ export function QuickAddSheet() {
         </div>
         <div className="min-w-0">
           <p className="text-body">{produto.name}</p>
-          {/* A REF saiu do título quando ele foi limpo (06/08) — aqui ela
-              confirma que a peça é a certa antes de ir pra sacola. */}
-          {(produto.sku || produto.id) && (
-            <p className="tabular text-small text-muted">
-              Ref <strong className="font-semibold text-ink">{produto.sku ?? produto.id}</strong>
-            </p>
-          )}
           <p className="mt-1 text-body tabular-nums">{formatPrice(preco)}</p>
           {produto.installments && (
             <p className="text-small text-muted tabular-nums">
@@ -190,7 +183,13 @@ export function QuickAddSheet() {
             </div>
           )}
 
-          <div className="mt-6">
+          <div
+            className={`mt-6 rounded-lg transition-all duration-300 ${
+              aviso && !precisaEscolherCor
+                ? 'bg-danger/5 p-3 ring-2 ring-danger ring-offset-2 ring-offset-background'
+                : ''
+            }`}
+          >
             <p className="eyebrow text-ink">Tamanho</p>
             {precisaEscolherCor ? (
               <p className="mt-3 text-small text-muted">Escolha a cor pra ver os tamanhos disponíveis.</p>
@@ -216,7 +215,15 @@ export function QuickAddSheet() {
             )}
           </div>
 
-          {aviso && <p role="alert" className="mt-3 text-small text-danger">{aviso}</p>}
+          {aviso && (
+            <p
+              role="alert"
+              className="mt-4 flex items-center gap-2 rounded-md border border-danger/40 bg-danger/10 px-3 py-2.5 text-small font-semibold text-danger"
+            >
+              <AlertCircle className="size-4 shrink-0" strokeWidth={2} />
+              {aviso}
+            </p>
+          )}
 
           <Button size="lg" block className="mt-6" onClick={adicionar}>
             <ShoppingBag className="mr-2 size-4" strokeWidth={1.75} />

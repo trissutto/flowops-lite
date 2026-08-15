@@ -235,7 +235,11 @@ export class LojaOrdersController {
 
     if (excedeuLimite(this.ipDe(req))) {
       res.status(429);
-      return { ok: false, error: 'Muitas tentativas seguidas. Aguarde um minutinho e tente de novo. 💜' };
+      return {
+        ok: false,
+        error: 'Muitas tentativas seguidas. Aguarde um minutinho e tente de novo. 💜',
+        code: 'rate_limited',
+      };
     }
 
     const r = await this.svc.criarPedido(body);

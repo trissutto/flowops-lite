@@ -36,12 +36,14 @@ import 'server-only';
 
 import type {
   Address,
+  CheckoutErrorCode,
   CustomerIdentity,
   Order,
   OrderStatus,
   PaymentMethod,
   ShippingQuote,
 } from '@/types/checkout';
+import { checkoutErrorCode } from './checkout-error-code';
 
 /* ────────────────────────────────────────────────────────────────────────────
  * Contrato com o backend
@@ -141,6 +143,7 @@ export class OrderStoreError extends Error {
     tecnico: string,
     readonly publico: string,
     readonly status = 502,
+    readonly code: CheckoutErrorCode = 'internal_error',
   ) {
     super(tecnico);
     this.name = 'OrderStoreError';
@@ -195,6 +198,7 @@ function config(): Config {
 type BackendEnvelope = {
   ok?: boolean;
   error?: string;
+  code?: unknown;
   order?: unknown;
   status?: unknown;
   paidAt?: unknown;
@@ -240,7 +244,12 @@ async function chamar(
     // AbortError e falha de rede caem aqui iguais: pra quem chama, o backend
     // não respondeu. A distinção interessa ao log, não à cliente.
     const motivo = err instanceof Error && err.name === 'AbortError' ? 'timeout' : 'rede';
-    throw new OrderStoreError(`${motivo} em ${path}: ${err instanceof Error ? err.message : err}`, ERRO_PADRAO);
+    throw new OrderStoreError(
+      `${motivo} em ${path}: ${err instanceof Error ? err.message : err}`,
+      ERRO_PADRAO,
+      502,
+      'network_error',
+    );
   } finally {
     clearTimeout(timer);
   }
@@ -344,17 +353,23 @@ class BackendOrderStore implements OrderStore {
         `backend recusou o pedido (${httpStatus}): ${body.error ?? 'sem motivo'}`,
         body.error || ERRO_PADRAO,
         400,
+        checkoutErrorCode(body.code),
       );
     }
 
     if (httpStatus < 200 || httpStatus >= 300 || !body.order) {
-      throw new OrderStoreError(`backend respondeu ${httpStatus} sem pedido`, ERRO_PADRAO);
+      throw new OrderStoreError(
+        `backend respondeu ${httpStatus} sem pedido`,
+        ERRO_PADRAO,
+        502,
+        'invalid_response',
+      );
     }
 
     const raw = body.order as Record<string, unknown>;
     const id = asString(raw.id);
     if (!id) {
-      throw new OrderStoreError('backend devolveu pedido sem id', ERRO_PADRAO);
+      throw new OrderStoreError('backend devolveu pedido sem id', ERRO_PADRAO, 502, 'invalid_response');
     }
 
     const pagamento = (raw.payment ?? {}) as Record<string, unknown>;

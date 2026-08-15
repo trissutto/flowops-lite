@@ -37,6 +37,12 @@ export interface CustomerIdentity {
   phone: string;
 }
 
+/** Dados mínimos capturados antes do frete para permitir retomar a compra. */
+export type CheckoutContact = Pick<CustomerIdentity, 'name' | 'phone'> & {
+  /** Autorização específica para lembrete de checkout/PIX por WhatsApp. */
+  recoveryConsent: boolean;
+};
+
 /* -------------------------------------------------------------------- FRETE */
 
 export type ShippingKind = 'correios' | 'transportadora' | 'expressa' | 'retirada';
@@ -126,6 +132,7 @@ export interface Order {
     fbp?: string;
     fbc?: string;
     attribution?: Record<string, string | undefined>;
+    recovery_consent?: boolean;
   };
 }
 
@@ -151,11 +158,26 @@ export interface CreateOrderInput {
 }
 
 /** POST /api/checkout — resposta. */
+export type CheckoutErrorCode =
+  | 'card_declined'
+  | 'catalog_unavailable'
+  | 'coupon_invalid'
+  | 'shipping_invalid'
+  | 'validation_error'
+  | 'rate_limited'
+  | 'payment_unavailable'
+  | 'internal_error'
+  | 'api_rejected'
+  | 'network_error'
+  | 'invalid_response';
+
 export interface CreateOrderResult {
   ok: boolean;
   order?: Order;
   /** Mensagem elegante pra UI quando ok=false. */
   error?: string;
+  /** Causa fechada e sem PII, usada apenas no diagnóstico do funil. */
+  code?: CheckoutErrorCode;
 }
 
 /** GET /api/checkout/:id/status — resposta (poll do PIX). */

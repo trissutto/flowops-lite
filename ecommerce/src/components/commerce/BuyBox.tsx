@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
-import { ArrowRight, Check, Heart, Lock, MapPin, MessageCircle, Ruler, ShoppingBag, Star } from 'lucide-react';
+import { AlertCircle, ArrowRight, Check, Heart, Lock, MapPin, MessageCircle, Ruler, ShoppingBag, Star } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
 import { SimuladorFrete } from '@/components/commerce/SimuladorFrete';
@@ -13,7 +13,7 @@ import { useToast } from '@/components/feedback/ToastProvider';
 import { useCartStore } from '@/store/cart';
 import { useUiStore } from '@/store/ui';
 import { useWishlistStore } from '@/store/wishlist';
-import { trackAddToCart, trackViewItem } from '@/lib/tracking';
+import { trackAddToCart, trackAddToCartBlocked, trackColorSwitch, trackSizeSwitch, trackViewItem } from '@/lib/tracking';
 import { useMounted } from '@/hooks';
 import { cn, discountPercent, formatPrice } from '@/lib/utils';
 import { hexDaCor, type PecaApi } from '@/services/products';
@@ -129,6 +129,7 @@ export function BuyBox({
 
   function handleAdd() {
     if (!size) {
+      trackAddToCartBlocked(product, soldOut ? 'sold_out' : 'size_missing');
       setSizeError(true);
       document.getElementById('seletor-tamanho')?.scrollIntoView({ block: 'center' });
       return;
@@ -213,20 +214,6 @@ export function BuyBox({
       {product.fabric && <p className="eyebrow text-primary-strong">{product.fabric}</p>}
 
       <h1 className="mt-3 font-display text-h2 text-ink">{product.name}</h1>
-
-      {/* REFERÊNCIA (06/08). Ela morava dentro do título — "Blusa Feminina
-          Plus Size Ref 700984 Estampa Marinho" — e sumiu quando o título foi
-          limpo. É o código que a cliente manda no WhatsApp e que a vendedora
-          digita no PDV pra achar a peça em qualquer uma das 14 lojas: na
-          página do produto ele precisa estar visível, não deduzível. */}
-      {(product.sku || product.id) && (
-        <p className="tabular mt-2 text-small text-ink-soft">
-          Ref{' '}
-          <strong className="font-semibold tracking-wide text-ink">
-            {product.sku ?? product.id}
-          </strong>
-        </p>
-      )}
 
       {product.rating && (
         <div className="mt-4 flex items-center gap-2">
@@ -343,7 +330,10 @@ export function BuyBox({
                 <button
                   key={c.nome}
                   type="button"
-                  onClick={() => onSelecionarCor?.(c.nome)}
+                  onClick={() => {
+                    onSelecionarCor?.(c.nome);
+                    trackColorSwitch(product, c.nome);
+                  }}
                   aria-pressed={escolhida}
                   aria-label={`Cor ${c.nome}${esgotada ? ' (esgotada)' : ''}`}
                   // w-16 + quebra de linha: o nome inteiro aparece ("AZUL
@@ -428,7 +418,21 @@ export function BuyBox({
       )}
 
       {/* Tamanho */}
-      <div id="seletor-tamanho" className="mt-9 scroll-mt-28">
+      {/* IMPOSSÍVEL DE IGNORAR (dono, 15/08): "minha cliente é lenta com
+          tecnologia". Quem clicava em "Adicionar" sem escolher o número via só
+          uma linha vermelha discreta e não entendia — 20 pessoas/dia batiam
+          nessa trava (evento add_to_cart_blocked/size_missing, várias no VLM-222
+          e no bmm-100) e parte ia embora. Quando falta o tamanho, o passo
+          INTEIRO acende: moldura vermelha + fundo + a instrução em caixa
+          dizendo pra tocar num número acima. */}
+      <div
+        id="seletor-tamanho"
+        className={cn(
+          'mt-9 scroll-mt-28 rounded-lg transition-all duration-300',
+          sizeError &&
+            'bg-danger/5 p-4 ring-2 ring-danger ring-offset-2 ring-offset-background',
+        )}
+      >
         <div className="flex items-end justify-between gap-4">
           <PassoLabel
             numero={temCor ? 2 : 1}
@@ -458,6 +462,7 @@ export function BuyBox({
               disabled={!option.available}
               onSelect={() => {
                 setSize(option.label);
+                trackSizeSwitch(product, option.label);
                 setSizeError(false);
               }}
             />
@@ -473,8 +478,12 @@ export function BuyBox({
         )}
 
         {sizeError && (
-          <p role="alert" className="mt-3 text-small text-danger">
-            Escolha um tamanho pra continuar.
+          <p
+            role="alert"
+            className="mt-4 flex items-center gap-2 rounded-md border border-danger/40 bg-danger/10 px-3 py-2.5 text-small font-semibold text-danger"
+          >
+            <AlertCircle className="size-4 shrink-0" strokeWidth={2} />
+            Toque no seu número acima 👆 pra colocar na sacola.
           </p>
         )}
 

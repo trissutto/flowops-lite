@@ -10,6 +10,7 @@ import { EmptyState } from '@/components/feedback/EmptyState';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { SectionShell, type SectionState } from '@/components/checkout/SectionShell';
 import { IdentificationStep } from '@/components/checkout/IdentificationStep';
+import { FinalIdentityStep } from '@/components/checkout/FinalIdentityStep';
 import { ShippingStep, type ShippingSelection } from '@/components/checkout/ShippingStep';
 import { PaymentStep, type PaymentSelection } from '@/components/checkout/PaymentStep';
 import { ReviewCard } from '@/components/checkout/ReviewCard';
@@ -18,11 +19,18 @@ import { PixPanel } from '@/components/checkout/PixPanel';
 import { maskPhone } from '@/components/checkout/masks';
 import { applyCoupon } from '@/lib/commerce/cupom';
 import { PIX_DESCONTO_PCT, pixDiscount } from '@/lib/commerce/pix';
+import { clearCheckoutDraft, readCheckoutDraft, writeCheckoutDraft } from '@/lib/commerce/checkout-draft';
 import { formatPrice } from '@/lib/utils';
 import {
   trackBeginCheckout,
   trackCouponApplied,
   trackCouponRemoved,
+  trackCheckoutError,
+  trackCheckoutSubmission,
+  trackCheckoutRecovered,
+  trackCardDeclined,
+  trackPaymentRetry,
+  trackPixCreated,
   type TrackedItem,
 } from '@/lib/tracking';
 import {
@@ -33,9 +41,11 @@ import {
 } from '@/lib/tracking/identity';
 import type {
   CouponResult,
+  CheckoutContact,
   CreateOrderInput,
   CreateOrderResult,
   CustomerIdentity,
+  CheckoutErrorCode,
   Order,
 } from '@/types/checkout';
 
@@ -68,6 +78,26 @@ const ERRO_GENERICO =
 const ERRO_CARTAO =
   'Não conseguimos validar seu cartão agora. Tente de novo ou finalize com Pix — sai com 5% off e cai na hora.';
 
+function mensagemAcionavel(
+  code: CheckoutErrorCode,
+  serverMessage: string | undefined,
+  method: 'pix' | 'card',
+): string {
+  const mensagens: Partial<Record<CheckoutErrorCode, string>> = {
+    card_declined: 'O cartão não aprovou esta compra. Confira os dados, tente outro cartão ou escolha Pix.',
+    catalog_unavailable: 'Uma peça, preço ou estoque mudou enquanto você comprava. Revise a sacola antes de tentar novamente.',
+    coupon_invalid: 'O cupom não está mais válido para este pedido. Remova ou troque o cupom e tente novamente.',
+    shipping_invalid: 'A opção de entrega mudou ou expirou. Volte à entrega e escolha o frete novamente.',
+    validation_error: 'Alguns dados do pedido precisam ser revisados antes de continuar.',
+    rate_limited: 'Foram feitas muitas tentativas seguidas. Aguarde um minuto ou escolha Pix.',
+    payment_unavailable: 'O pagamento está temporariamente indisponível. Tente Pix ou tente novamente em instantes.',
+    internal_error: ERRO_GENERICO,
+    network_error: 'A conexão falhou antes da confirmação. Seus dados continuam preenchidos; tente novamente.',
+    invalid_response: ERRO_GENERICO,
+  };
+  return mensagens[code] ?? serverMessage ?? (method === 'card' ? ERRO_CARTAO : ERRO_GENERICO);
+}
+
 export default function CheckoutPage() {
   const router = useRouter();
   const mounted = useMounted();
@@ -78,6 +108,7 @@ export default function CheckoutPage() {
 
   /* Estado das 4 seções — a página é a dona da sequência. */
   const [step, setStep] = useState<Step>(1);
+  const [contact, setContact] = useState<CheckoutContact | null>(null);
   const [customer, setCustomer] = useState<CustomerIdentity | null>(null);
   const [shipping, setShipping] = useState<ShippingSelection | null>(null);
   const [payment, setPayment] = useState<PaymentSelection | null>(null);
@@ -85,8 +116,47 @@ export default function CheckoutPage() {
 
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [failureCount, setFailureCount] = useState(0);
+  const [lastErrorCode, setLastErrorCode] = useState<CheckoutErrorCode | null>(null);
   /** Pedido criado aguardando PIX — troca a página inteira pelo PixPanel. */
   const [pixOrder, setPixOrder] = useState<Order | null>(null);
+  const [draftReady, setDraftReady] = useState(false);
+
+  useEffect(() => {
+    const draft = readCheckoutDraft(window.sessionStorage);
+    if (draft) {
+      setContact(draft.contact);
+      setCustomer(draft.customer);
+      setShipping(draft.shipping);
+      setPayment(draft.payment);
+      setStep(draft.contact ? (draft.shipping ? (draft.payment ? 4 : 3) : 2) : 1);
+    }
+    setDraftReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (!draftReady) return;
+    writeCheckoutDraft(window.sessionStorage, { contact, customer, shipping, payment });
+  }, [draftReady, contact, customer, shipping, payment]);
+
+  /** Captura mínima para recuperação. Nunca bloqueia nem atrasa o checkout. */
+  function saveRecovery(nextContact: CheckoutContact) {
+    void fetch('/api/checkout/recovery', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      keepalive: true,
+      body: JSON.stringify({
+        sessionId: getSessionId(), anonymousId: getAnonymousId(),
+        name: nextContact.name, phone: nextContact.phone,
+        recoveryConsent: nextContact.recoveryConsent,
+        subtotal, path: '/checkout', attribution: captureAttribution(),
+        items: lines.map((line) => ({
+          productId: line.productId, name: line.name, size: line.size,
+          color: line.color, quantity: line.quantity, unitPrice: line.unitPrice,
+        })),
+      }),
+    }).catch(() => undefined);
+  }
 
   /* Carrinho → formato de tracking (uma vez, reusado pelos 4 eventos). */
   const itemsTracked: TrackedItem[] = useMemo(
@@ -141,6 +211,8 @@ export default function CheckoutPage() {
     if (!customer || !shipping || !payment || submitting) return;
     setSubmitting(true);
     setSubmitError(null);
+    if (failureCount > 0) trackPaymentRetry(payment.method, failureCount + 1);
+    trackCheckoutSubmission(payment.method);
 
     // O campo `tracking` costura a compra ao funil: anonymous/session ligam
     // ao GA4, fbp/fbc casam a CAPI, attribution fecha o "de onde veio".
@@ -161,6 +233,7 @@ export default function CheckoutPage() {
         session_id: getSessionId(),
         ...getMetaBrowserIds(),
         attribution: { ...captureAttribution() },
+        recovery_consent: contact?.recoveryConsent === true,
       },
     };
 
@@ -173,31 +246,45 @@ export default function CheckoutPage() {
       const result = (await res.json().catch(() => null)) as CreateOrderResult | null;
 
       if (!result?.ok || !result.order) {
+        const code = result?.code ?? (result ? 'api_rejected' : 'invalid_response');
+        const attempt = failureCount + 1;
+        setFailureCount(attempt);
+        setLastErrorCode(code);
+        trackCheckoutError(payment.method, code, { stage: 'submission', attempt });
+        if (code === 'card_declined') trackCardDeclined(attempt);
         // A mensagem do server tem PRECEDÊNCIA: por contrato ela já vem
         // elegante e é específica ("cartão recusado", "cupom expirou") — bem
         // mais útil que o genérico. Os textos locais cobrem só o que acontece
         // quando o server não conseguiu dizer nada.
-        setSubmitError(
-          result?.error ?? (payment.method === 'card' ? ERRO_CARTAO : ERRO_GENERICO),
-        );
+        setSubmitError(mensagemAcionavel(code, result?.error, payment.method));
         return;
       }
 
       // Pedido existe no server → a sacola local cumpriu o papel dela.
       // (Se o PIX expirar, o produto volta pro estoque no server; manter a
       // sacola viva aqui criaria pedido duplicado no F5.)
+      clearCheckoutDraft(window.sessionStorage);
       clearCart();
+
+      if (failureCount > 0 && result.order.payment.method === 'card') {
+        trackCheckoutRecovered('card', result.order.id);
+      }
 
       // ⚠️ NENHUM purchase disparado aqui: o pedido ainda nem foi pago.
       // Quem dispara é o SERVER, no webhook de pagamento (docs/purchase.md).
       if (result.order.payment.method === 'pix' && result.order.payment.pix) {
+        trackPixCreated();
         setPixOrder(result.order);
         window.scrollTo({ top: 0 });
       } else {
         router.push(`/checkout/confirmacao/${result.order.id}`);
       }
     } catch {
-      setSubmitError(ERRO_GENERICO);
+      const attempt = failureCount + 1;
+      setFailureCount(attempt);
+      setLastErrorCode('network_error');
+      trackCheckoutError(payment.method, 'network_error', { stage: 'submission', attempt });
+      setSubmitError(mensagemAcionavel('network_error', undefined, payment.method));
     } finally {
       setSubmitting(false);
     }
@@ -207,7 +294,7 @@ export default function CheckoutPage() {
 
   // O carrinho vem do localStorage (zustand persist): antes do mount o server
   // e o client discordam — skeleton segura a tela sem flash de "sacola vazia".
-  if (!mounted) return <CheckoutSkeleton />;
+  if (!mounted || !draftReady) return <CheckoutSkeleton />;
 
   // Pedido PIX criado: a página vira o painel de pagamento.
   if (pixOrder) {
@@ -262,18 +349,22 @@ export default function CheckoutPage() {
           <SectionShell
             step={1}
             title="Identificação"
-            state={stateOf(1, customer !== null)}
+            state={stateOf(1, contact !== null)}
             summary={
-              customer
-                ? `${customer.name} · ${customer.email} · ${maskPhone(customer.phone)}`
+              contact
+                ? `${contact.name} · ${maskPhone(contact.phone)}`
                 : undefined
             }
             onEdit={() => setStep(1)}
           >
             <IdentificationStep
-              defaults={customer}
+              defaults={contact}
               onDone={(c) => {
-                setCustomer(c);
+                setSubmitError(null);
+                setContact(c);
+                // Se o contato mudou, a identidade final precisa ser confirmada outra vez.
+                if (customer?.phone !== c.phone || customer?.name !== c.name) setCustomer(null);
+                saveRecovery(c);
                 // Editou só a identificação com o resto pronto? Volta direto
                 // pra revisão — ninguém refaz etapa já concluída.
                 setStep(!shipping ? 2 : !payment ? 3 : 4);
@@ -302,6 +393,7 @@ export default function CheckoutPage() {
               itemsTracked={itemsTracked}
               defaults={shipping}
               onDone={(s) => {
+                setSubmitError(null);
                 setShipping(s);
                 setStep(!payment ? 3 : 4);
               }}
@@ -326,6 +418,9 @@ export default function CheckoutPage() {
               itemsTracked={itemsTracked}
               defaults={payment}
               onDone={(p) => {
+                setSubmitError(null);
+                setFailureCount(0);
+                setLastErrorCode(null);
                 setPayment(p);
                 setStep(4);
               }}
@@ -333,6 +428,18 @@ export default function CheckoutPage() {
           </SectionShell>
 
           <SectionShell step={4} title="Revisão" state={step === 4 ? 'active' : 'locked'}>
+            {contact && shipping && payment && !customer && (
+              <FinalIdentityStep contact={contact} onDone={(identity) => {
+                setCustomer(identity);
+                const confirmedContact = {
+                  name: identity.name,
+                  phone: identity.phone,
+                  recoveryConsent: contact.recoveryConsent,
+                };
+                setContact(confirmedContact);
+                saveRecovery(confirmedContact);
+              }} />
+            )}
             {customer && shipping && payment && (
               <ReviewCard
                 customer={customer}
@@ -346,6 +453,19 @@ export default function CheckoutPage() {
                 total={total}
                 submitting={submitting}
                 error={submitError}
+                failureCount={failureCount}
+                errorCode={lastErrorCode}
+                onEditIdentity={() => setCustomer(null)}
+                onReviewData={() => {
+                  setSubmitError(null);
+                  setCustomer(null);
+                }}
+                onUsePix={() => {
+                  setSubmitError(null);
+                  setFailureCount(0);
+                  setLastErrorCode(null);
+                  setPayment({ method: 'pix' });
+                }}
                 onSubmit={() => void finalizar()}
               />
             )}

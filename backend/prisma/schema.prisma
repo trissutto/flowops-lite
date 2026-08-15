@@ -1494,6 +1494,12 @@ model PdvSale {
   customerBairro      String?  @map("customer_bairro")
   customerCidade      String?  @map("customer_cidade")
   customerUf          String?  @map("customer_uf")
+  // FORMA DE ENTREGA da venda online (14/08). 'sedex' | 'pac' | 'motoboy' |
+  // 'retirada'. Antes disso o pedido online nascia sempre "Correios R$ 0,00":
+  // a loja escolhia o VALOR do frete e ninguém registrava COMO a peça sai —
+  // a matriz não sabia se emitia etiqueta, chamava motoboy ou segurava pra
+  // retirada. 'retirada' vira isPickup no Order (separa na própria loja).
+  entregaTipo         String?  @map("entrega_tipo")
   // Status + valores
   status          String   @default("open")
   subtotal        Float    @default(0)
@@ -1867,6 +1873,11 @@ model PagarmePayment {
   status          String   @default("pending")  // pending | paid | failed | canceled
   qrCodeText      String?  @map("qr_code_text") @db.Text
   qrCodeImageUrl  String?  @map("qr_code_image_url") @db.Text
+  // Token do NOSSO link curto (/pg/<token>). A loja manda ele no lugar da URL
+  // crua da Pagar.me: link pago/vencido lá vira 404 sem saída ("Não
+  // encontramos seu pedido"), e a cliente não sabe nem se pagou. Só no link
+  // de checkout — cobrança PIX não usa.
+  linkToken       String?  @unique @map("link_token")
   expiresAt       DateTime? @map("expires_at")
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
@@ -5632,6 +5643,74 @@ model SiteLead {
   @@map("site_lead")
 }
 
+/// Checkout identificado antes do pedido existir. Guarda somente contato e
+/// snapshot comercial; nunca recebe CPF, e-mail ou dados de cartão.
+model CheckoutRecovery {
+  id          String    @id @default(uuid())
+  sessionId   String    @unique @map("session_id") @db.VarChar(64)
+  anonymousId String?   @map("anonymous_id") @db.VarChar(64)
+  nome        String    @db.VarChar(120)
+  telefone    String    @db.VarChar(11)
+  recoveryConsent Boolean @default(false) @map("recovery_consent")
+  status      String    @default("active") @db.VarChar(20)
+  subtotal    Decimal?  @db.Decimal(12, 2)
+  items       Json
+  path        String?   @db.VarChar(200)
+  attribution Json?
+  convertedAt DateTime? @map("converted_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  @@index([status, updatedAt])
+  @@index([telefone])
+  @@map("checkout_recoveries")
+}
+
+/// BASE DE MARKETING PRÓPRIA (dono, 14/08/2026).
+///
+/// Os 171 mil contatos de e-mail viviam SÓ no Mautic (mkt.lurds.com.br). O
+/// Mautic e o SES são da casa (não do prestador que operava), mas base de
+/// marketing que mora numa única ferramenta é base refém: um servidor que cai,
+/// uma conta que expira, um operador que sai — e o ativo mais valioso da loja
+/// (quem já demonstrou interesse) some. Aqui é a CÓPIA soberana, no nosso
+/// Postgres, alimentada por importação (Mautic → `importar-mautic-contatos.js`)
+/// e, no futuro, pelo próprio funil do site.
+///
+/// NÃO é o CRM (`Customer`/`Person`, base de QUEM COMPROU) nem o lead do popup
+/// (`SiteLead`, quem trocou telefone por cupom). É a MAILING LIST: e-mail é a
+/// identidade, e a maioria aqui nunca comprou no site novo — é justamente pra
+/// quem a gente quer vender.
+model MarketingContact {
+  id              String    @id @default(uuid())
+  /// Identidade: minúsculo, sem espaço. Upsert por aqui — reimportar não duplica.
+  email           String    @unique @db.VarChar(180)
+  nome            String?   @db.VarChar(160)
+  /// Só dígitos com DDD quando veio; a mailing de e-mail nem sempre tem telefone.
+  telefone        String?   @db.VarChar(13)
+  /// De onde veio a linha: 'mautic', 'popup', 'pedido'… — pra medir origem e
+  /// nunca disparar num público que não deu opt-in.
+  origem          String?   @db.VarChar(60)
+  /// Segmento/tag no sistema de origem ("GERAL ATIVO", "Leads VIP"): é o corte
+  /// que a campanha usa. Vários por contato — guardado como CSV simples.
+  tags            String?   @db.VarChar(400)
+  /// Engajamento herdado do Mautic (points) — ajuda a priorizar quem abrir.
+  pontos          Int?
+  /// Última atividade conhecida na origem — separa lista morta de lista viva.
+  ultimaAtividade DateTime? @map("ultima_atividade")
+  /// OPT-OUT é sagrado: quem descadastrou NUNCA volta a receber, venha de onde
+  /// vier a reimportação. A checagem é daqui, não da campanha.
+  descadastrado   Boolean   @default(false)
+  descadastradoEm DateTime? @map("descadastrado_em")
+  /// Id do contato no Mautic — reconcilia reimportação e liga de volta à origem.
+  mauticId        String?   @map("mautic_id") @db.VarChar(20)
+  criadoEm        DateTime  @default(now()) @map("criado_em")
+  atualizadoEm    DateTime  @updatedAt @map("atualizado_em")
+
+  @@index([descadastrado])
+  @@index([origem])
+  @@map("marketing_contact")
+}
+
 /// CLASSIFICAÇÃO DA PEÇA — Ocasião, Tecido, Modelagem e Coleção.
 ///
 /// Uma tabela só, separada por `tipo`, porque os quatro têm exatamente a mesma
@@ -6538,6 +6617,21 @@ model SiteProduto {
   /// e saber o que já foi feito evita refazer.
   classificadoPor   String?  @map("classificado_por")
   classificadoEm    DateTime? @map("classificado_em")
+
+  /// PREÇO PROMOCIONAL SÓ DO SITE (dono, 14/08/2026).
+  ///
+  /// O preço normal vem do ERP (`wincred_produtos.vendaUn`), que é o MESMO do
+  /// PDV das 14 lojas — baixar lá baixaria no caixa físico também. Este campo
+  /// é o override que vale SÓ no site: quando preenchido, a vitrine, a PDP e o
+  /// checkout usam ele no lugar do preço do ERP. `precoDe` é o "de" riscado
+  /// (a âncora do criativo). Nulo = sem promoção, preço normal do ERP.
+  ///
+  /// ⚠️ A trava antifraude do checkout (`CarrinhoGuardService`) TAMBÉM lê este
+  /// campo — senão recusaria o pedido com preço menor que o do ERP como
+  /// suspeita de fraude. Quem seta `precoPromo` está definindo o preço que a
+  /// loja REALMENTE cobra no site; é decisão comercial, não pode nascer errado.
+  precoPromo        Float?   @map("preco_promo")
+  precoDe           Float?   @map("preco_de")
 
   /// Curadoria: o que a loja escolheu publicar
   publicado         Boolean  @default(true)

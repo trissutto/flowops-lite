@@ -127,27 +127,58 @@ export default function ValeImprimirPage() {
             margin: 0 !important;
             padding: 0 !important;
             background: white !important;
-            width: 80mm !important;
+            width: 72mm !important;
           }
           body * { visibility: hidden; }
           #vale-content, #vale-content * { visibility: visible; }
+          /* PAPEL 80mm IMPRIME SÓ ~72mm. Desenhar o cupom com 80mm empurra o
+             conteúdo pra direita e CORTA o fim de cada linha — saía "1x · R$
+             23", "bipa o código TROCA-XXXXXX no PD" e "não tem troco em
+             dinheir". A NF-e já tinha apanhado disso (ver pdv/nfce/[saleId]:
+             "usar 78mm cortava a direita"); 72mm é a medida da casa em toda
+             térmica. box-sizing pra o padding entrar na conta e nunca estourar. */
           #vale-content {
             position: absolute;
             left: 0;
             top: 0;
-            width: 80mm;
-            padding: 4mm 3mm;
-            font-family: 'Courier New', monospace;
-            color: black;
+            width: 72mm;
+            max-width: 72mm;
+            box-sizing: border-box;
+            padding: 3mm 2mm;
+            /* Courier regular tem traco fino demais pra cabeca termica de
+               203dpi — a fonte de sistema em negrito queima cheia. */
+            font-family: Arial, Helvetica, sans-serif;
+            font-size: 12px;
+            line-height: 1.35;
+            color: #000;
           }
           /* IMPRESSAO: forca tudo preto sobre branco. Antes o bloco do codigo
              era bg-black text-white — browser nao imprime background por default,
              entao texto BRANCO ficava invisivel no papel BRANCO. Override pra
              garantir codigo TROCA-XXXXX legivel. */
+          /* ── LETRA FRACA/FALHADA NA TERMICA (14/08) ──
+             A cabeca termica queima PONTO: ou queima, ou nao queima. Texto
+             cinza (opacity-70/80, text-slate-700) e traco fino viram meio-tom,
+             o driver aplica dithering e a letra sai chapiscada — foi o que a
+             loja viu. No papel nao pode existir cinza: */
           #vale-content * {
-            color: black !important;
+            box-sizing: border-box;            /* padding entra na largura */
+            color: #000 !important;
             background: transparent !important;
+            opacity: 1 !important;             /* nada de cinza por opacidade */
+            font-weight: 700 !important;       /* traco cheio */
+            text-shadow: none !important;
+            filter: none !important;
+            -webkit-font-smoothing: none !important;  /* borda 1-bit, sem meio-tom */
+            text-rendering: geometricPrecision;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
           }
+          /* Piso de tamanho: abaixo de ~10px a termica come metade do traco.
+             So nas linhas miudas — por CLASSE, nao por seletor universal: um
+             #vale-content * aqui venceria o text-3xl do codigo e do valor e
+             achataria os dois pro mesmo tamanho do resto. */
+          #vale-content .mini { font-size: 10.5px !important; }
           /* Caixa do codigo: borda dupla pra dar destaque sem precisar de
              background preto (que nao imprime na termica). */
           #vale-content .bg-black {
@@ -159,7 +190,9 @@ export default function ValeImprimirPage() {
       `}</style>
 
       <div className="min-h-screen bg-slate-100 p-4 flex items-start justify-center">
-        <div className="w-[300px] bg-white shadow-lg" id="vale-content">
+        {/* 272px ≈ 72mm: a prévia na tela mostra a MESMA largura que sai no
+            papel. Com 300px a loja via um cupom que não existe. */}
+        <div className="w-[272px] bg-white shadow-lg" id="vale-content">
           {/* HEADER */}
           <div className="text-center border-b-2 border-dashed border-black pb-2 mb-2">
             <div className="text-xl font-black tracking-wider">LURD'S</div>
@@ -220,7 +253,7 @@ export default function ValeImprimirPage() {
 
           {/* HISTÓRICO — mostra peças devolvidas e levadas (transparência) */}
           {info.historico && (info.historico.pecasDevolvidas?.length > 0 || info.historico.pecasLevadas?.length > 0) && (
-            <div className="text-[9px] mt-3 pt-2 border-t-2 border-dashed border-black space-y-2">
+            <div className="mini text-[9px] mt-3 pt-2 border-t-2 border-dashed border-black space-y-2">
               <div className="font-bold uppercase text-center text-[10px]">Histórico</div>
 
               {info.historico.pecasDevolvidas?.length > 0 && (
@@ -259,7 +292,7 @@ export default function ValeImprimirPage() {
           )}
 
           {/* INSTRUÇÕES */}
-          <div className="text-[9px] mt-4 pt-2 border-t-2 border-dashed border-black space-y-1">
+          <div className="mini text-[9px] mt-4 pt-2 border-t-2 border-dashed border-black space-y-1">
             <div className="font-bold uppercase">Como usar:</div>
             <div>1. Apresente este cupom em qualquer loja Lurd's</div>
             <div>2. A vendedora bipa o código TROCA-XXXXXX no PDV</div>
@@ -268,7 +301,7 @@ export default function ValeImprimirPage() {
           </div>
 
           {/* FOOTER */}
-          <div className="text-center text-[8px] mt-4 pt-2 border-t border-dashed border-black opacity-70">
+          <div className="mini text-center text-[8px] mt-4 pt-2 border-t border-dashed border-black opacity-70">
             Emitido em {new Date().toLocaleString('pt-BR')}
             <br />
             Loja origem: {info.origem.store}

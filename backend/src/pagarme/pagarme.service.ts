@@ -749,7 +749,10 @@ export class PagarmeService {
     customerPhone?: string;
     /** Máximo de parcelas SEM JUROS no cartão. Default 6. */
     maxInstallments?: number;
-    /** Validade do link em minutos. Default 24h (1440). Máx 7d (10080). */
+    /**
+     * Validade do link em minutos. Default: `PAGARME_LINK_HORAS` (72h).
+     * Máx 7d (10080).
+     */
     expiresInMinutes?: number;
     /** Aceitar PIX no link? Default true. */
     acceptPix?: boolean;
@@ -758,6 +761,12 @@ export class PagarmeService {
   }): Promise<{
     pagarmeOrderId: string;
     paymentUrl: string;
+    /**
+     * O link que a loja MANDA pra cliente (/pg/<token>) — passa pelo nosso
+     * domínio antes de cair na Pagar.me. É ele que evita o 404 sem saída
+     * quando o link já foi pago, cancelado ou venceu.
+     */
+    shortUrl: string;
     expiresAt: Date;
     valor: number;
     /** Qual tentativa de cartão é esta, nesta venda. */
@@ -772,7 +781,11 @@ export class PagarmeService {
     const cfg = await this.getConfigInternalForStore(input.storeCode);
 
     const valorCentavos = Math.round(input.valor * 100);
-    const expiresInMin = Math.max(15, Math.min(10080, input.expiresInMinutes || 1440));
+    // 24h era pouco: link mandado no fim da tarde morria antes da cliente
+    // decidir, e ela só descobria batendo no 404 da Pagar.me. 72h por padrão,
+    // `PAGARME_LINK_HORAS` muda sem deploy (teto de 7 dias é da Pagar.me).
+    const horasEnv = Number(process.env.PAGARME_LINK_HORAS) || 72;
+    const expiresInMin = Math.max(15, Math.min(10080, input.expiresInMinutes || horasEnv * 60));
     const expiresAt = new Date(Date.now() + expiresInMin * 60 * 1000);
     // PAGARME_MAX_PARCELAS (Railway) = padrão da REDE quando o caller não
     // manda maxInstallments (caso do link do PDV). Caller explícito vence.
@@ -1069,6 +1082,8 @@ export class PagarmeService {
     // BUG FIX: schema do PagarmePayment exige storeCode e valor — sem isso o
     // create falhava silenciosamente e o webhook depois não achava a order
     // ("webhook pra order desconhecida"). Agora salva todos os campos required.
+    // Token do NOSSO link curto — 10 chars, sorteados (não dá pra enumerar).
+    const linkToken = crypto.randomBytes(8).toString('base64url').slice(0, 10);
     try {
       await (this.prisma as any).pagarmePayment.create({
         data: {
@@ -1079,6 +1094,7 @@ export class PagarmeService {
           valor: input.valor,
           status: 'pending',
           qrCodeText: paymentUrl, // reusa campo pra guardar URL
+          linkToken,
           expiresAt,
         },
       });
@@ -1109,12 +1125,97 @@ export class PagarmeService {
     return {
       pagarmeOrderId: orderId,
       paymentUrl,
+      shortUrl: `${this.baseUrlPublica()}/pg/${linkToken}`,
       expiresAt,
       valor: input.valor,
       tentativa,
       // A tela decide o que fazer com isso (avisar + oferecer PIX).
       retentativaImprodutiva: tentativa >= 3,
     };
+  }
+
+  /** Domínio das páginas públicas (o mesmo do /pagar/<cartId> da live). */
+  private baseUrlPublica(): string {
+    return (process.env.FRONTEND_URL || 'https://flowops-lite.vercel.app')
+      .split(',')[0]
+      .trim()
+      .replace(/\/$/, '');
+  }
+
+  /**
+   * ESTADO DO NOSSO LINK CURTO (/pg/<token>) — o que a página pública mostra.
+   *
+   * Por que existe: a URL crua da Pagar.me é de uso único. Assim que a order é
+   * paga, cancelada ou vence, o checkout deixa de existir e a cliente cai num
+   * "Oops — não encontramos seu pedido. Código do erro: 404", sem saber se
+   * pagou, sem link novo e sem ninguém pra falar. Caso Moema 15/08: link da
+   * Rita pago no dia anterior, reaberto no outro dia → 404.
+   *
+   * Quando o banco ainda diz `pending`, confere NA PAGAR.ME antes de mandar a
+   * cliente pro checkout: se o webhook se perdeu, o pagamento já entrou e o
+   * checkout já morreu — é exatamente o caso que produz o 404.
+   */
+  async estadoDoLink(token: string): Promise<{
+    estado: 'valido' | 'pago' | 'vencido' | 'cancelado' | 'inexistente';
+    paymentUrl?: string;
+    valor?: number;
+    lojaNome?: string;
+    lojaWhatsapp?: string | null;
+    expiraEm?: Date | null;
+    pagoEm?: Date | null;
+  }> {
+    const t = String(token || '').trim();
+    if (!t) return { estado: 'inexistente' };
+
+    const pg: any = await (this.prisma as any).pagarmePayment.findUnique({
+      where: { linkToken: t },
+    });
+    if (!pg) return { estado: 'inexistente' };
+
+    let status = String(pg.status || 'pending');
+    let paidAt: Date | null = pg.paidAt ?? null;
+
+    if (status === 'pending') {
+      try {
+        const live: any = await this.checkOrderStatus(pg.pagarmeOrderId);
+        const s = String(live?.status || '').toLowerCase();
+        if (s === 'paid') { status = 'paid'; paidAt = paidAt || new Date(); }
+        else if (s === 'canceled' || s === 'failed') status = s === 'failed' ? 'failed' : 'canceled';
+      } catch { /* Pagar.me fora → decide pelo banco, que é o que temos */ }
+    }
+
+    const loja = await this.dadosDaLoja(pg.storeCode);
+    const base = {
+      valor: Number(pg.valor) || 0,
+      lojaNome: loja.nome,
+      lojaWhatsapp: loja.whatsapp,
+      expiraEm: pg.expiresAt ?? null,
+      pagoEm: paidAt,
+    };
+
+    if (status === 'paid') return { estado: 'pago', ...base };
+    if (status === 'canceled' || status === 'failed') return { estado: 'cancelado', ...base };
+    if (pg.expiresAt && new Date(pg.expiresAt).getTime() < Date.now()) {
+      return { estado: 'vencido', ...base };
+    }
+    return { estado: 'valido', paymentUrl: String(pg.qrCodeText || ''), ...base };
+  }
+
+  /** Nome e WhatsApp da loja — a página de saída precisa dar pra quem falar. */
+  private async dadosDaLoja(storeCode: string): Promise<{ nome: string; whatsapp: string | null }> {
+    try {
+      const s: any = await this.prisma.store.findFirst({
+        where: { code: String(storeCode) },
+        select: { name: true, whatsapp: true } as any,
+      });
+      return {
+        nome: String(s?.name || 'Lurd’s Plus Size'),
+        // Já vem em E.164 sem "+" (ex: 5511999999999) — é o que o wa.me quer.
+        whatsapp: String(s?.whatsapp || '').replace(/\D/g, '') || null,
+      };
+    } catch {
+      return { nome: 'Lurd’s Plus Size', whatsapp: null };
+    }
   }
 
   /**
@@ -1485,7 +1586,11 @@ export class PagarmeService {
    */
   async listOnlinePending(storeCode: string) {
     if (!storeCode) return [];
-    const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000);
+    // Janela acompanha a validade do link (+24h de folga): com o link durando
+    // 72h, um corte fixo de 48h sumia da tela um link que a cliente ainda podia
+    // pagar — e a venda ficava esperando sem ninguém ver.
+    const horas = (Number(process.env.PAGARME_LINK_HORAS) || 72) + 24;
+    const cutoff = new Date(Date.now() - horas * 60 * 60 * 1000);
     const items = await (this.prisma as any).pagarmePayment.findMany({
       where: {
         method: 'checkout',
@@ -1530,7 +1635,12 @@ export class PagarmeService {
           sellerName: s.sellerName || s.vendedorName || null,
           total: Number(s.total) || 0,
           pagarmeOrderId: it.pagarmeOrderId,
-          paymentUrl: it.qrCodeText || null, // URL salvo no campo qrCodeText
+          // O link que a loja copia/reenvia é SEMPRE o nosso (/pg/<token>) —
+          // a URL crua da Pagar.me vira 404 assim que a cobrança fecha.
+          // Cobrança antiga (sem token) continua devolvendo a URL de lá.
+          paymentUrl: it.linkToken
+            ? `${this.baseUrlPublica()}/pg/${it.linkToken}`
+            : it.qrCodeText || null,
           status: it.status, // pending | paid | failed | canceled
           paidAt: it.paidAt,
           createdAt: it.createdAt,

@@ -89,6 +89,17 @@ export const LURDS_EVENTS = [
   'color_switch',
   'size_switch',
   'store_availability',
+  'add_to_cart_blocked',
+  'checkout_submission',
+  'checkout_error',
+  'checkout_validation_error',
+  'pix_created',
+  'payment_method_selected',
+  'pix_copied',
+  'pix_expired',
+  'card_declined',
+  'payment_retry',
+  'checkout_recovered',
 ] as const;
 
 export const ALL_EVENTS = [...STANDARD_EVENTS, ...ENGAGEMENT_EVENTS, ...LURDS_EVENTS] as const;

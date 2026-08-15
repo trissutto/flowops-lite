@@ -14,6 +14,11 @@ import { useCartStore } from '@/store/cart';
 import { useMounted } from '@/hooks';
 import { applyCoupon } from '@/lib/commerce/cupom';
 import { isValidCep, onlyDigits, quoteShipping } from '@/lib/commerce/frete';
+import {
+  cartStockBlocksCheckout,
+  currentCartStockNotice,
+  type CartStockNotice,
+} from '@/lib/commerce/cart-stock';
 import { mapPeca } from '@/services/products';
 import { toTrackedItem, trackViewCart, trackCouponApplied, trackCouponRemoved } from '@/lib/tracking';
 import { cn, formatPrice } from '@/lib/utils';
@@ -51,7 +56,7 @@ function maskCep(value: string): string {
   return d.length > 5 ? `${d.slice(0, 5)}-${d.slice(5)}` : d;
 }
 
-type AvisoEstoque = { text: string; tone: 'danger' | 'gold' };
+type AvisoEstoque = CartStockNotice;
 
 export default function CarrinhoPage() {
   const mounted = useMounted();
@@ -190,19 +195,31 @@ export default function CarrinhoPage() {
         if (!tamanho.disponivel) {
           return {
             peca: produto,
-            aviso: [line.id, { tone: 'danger', text: `Esgotou no tamanho ${line.size} — remova ou troque o tamanho.` }],
+            aviso: [line.id, {
+              tone: 'danger',
+              bloqueia: true,
+              maxQuantity: 0,
+              text: `Esgotou no tamanho ${line.size} — remova ou troque o tamanho.`,
+            }],
           };
         }
         if (tamanho.estoque === 1) {
           return {
             peca: produto,
-            aviso: [line.id, { tone: 'gold', text: 'Última peça neste tamanho — garanta a sua.' }],
+            aviso: [line.id, {
+              tone: 'gold', maxQuantity: 1, text: 'Última peça neste tamanho — garanta a sua.',
+            }],
           };
         }
         if (line.quantity > tamanho.estoque) {
           return {
             peca: produto,
-            aviso: [line.id, { tone: 'gold', text: `Restam só ${tamanho.estoque} neste tamanho.` }],
+            aviso: [line.id, {
+              tone: 'danger',
+              bloqueia: true,
+              maxQuantity: tamanho.estoque,
+              text: `Restam só ${tamanho.estoque} neste tamanho — diminua a quantidade para continuar.`,
+            }],
           };
         }
         return { aviso: null, peca: produto };
@@ -250,6 +267,12 @@ export default function CarrinhoPage() {
   }
 
   const vazio = lines.length === 0;
+  const avisoDaLinha = (line: CartLine): AvisoEstoque | undefined => {
+    return currentCartStockNotice(line.quantity, avisosEstoque[line.id]);
+  };
+  const estoqueImpedeCheckout = lines.some((line) =>
+    cartStockBlocksCheckout(line.quantity, avisosEstoque[line.id]),
+  );
 
   return (
     <>
@@ -284,7 +307,12 @@ export default function CarrinhoPage() {
               <ul className="flex flex-col divide-y divide-border">
                 {lines.map((line) => (
                   <li key={line.id} className="py-7 first:pt-0">
-                    <CartLineRow line={line} full notice={avisosEstoque[line.id]} />
+                    <CartLineRow
+                      line={line}
+                      full
+                      notice={avisoDaLinha(line)}
+                      maxQuantity={avisoDaLinha(line)?.maxQuantity}
+                    />
                   </li>
                 ))}
               </ul>
@@ -467,9 +495,20 @@ export default function CarrinhoPage() {
                   </p>
                 </div>
 
-                <Button block size="lg" href="/checkout" className="mt-6">
-                  Finalizar compra
-                </Button>
+                {estoqueImpedeCheckout ? (
+                  <div className="mt-6" role="alert">
+                    <Button block size="lg" disabled>
+                      Revise a sacola
+                    </Button>
+                    <p className="mt-2 text-center text-small text-danger">
+                      Corrija as peças marcadas acima para continuar.
+                    </p>
+                  </div>
+                ) : (
+                  <Button block size="lg" href="/checkout" className="mt-6">
+                    Finalizar compra
+                  </Button>
+                )}
                 {/* Cadeado ANTES de ela entrar no checkout (dono, 12/08): a
                     dúvida sobre o cartão nasce aqui, não lá dentro. */}
                 <SeloPagamentoSeguro compacto className="mt-3" />

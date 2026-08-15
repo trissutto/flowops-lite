@@ -11,6 +11,9 @@ import { LojaPagamentoReconcileService } from './loja-pagamento-reconcile.servic
 import { LojaAdminController } from './loja-admin.controller';
 import { FreteService } from './frete.service';
 import { PersonIdentityModule } from '../person-identity/person-identity.module';
+// A promoção de 50% do caixa: a trava do carrinho tem que cobrar o MESMO
+// preço que a vitrine mostrou (módulo folha — não cria aresta nova no grafo).
+import { PromoSiteModule } from '../promo-site/promo-site.module';
 import { EmailModule } from '../email/email.module';
 // WhatsappModule → o WhatsApp direto dos eventos que o n8n descarta
 // (pix_nao_pago / pedido_enviado / pedido_entregue). Ver PedidoEmailService.
@@ -33,6 +36,7 @@ import { PixResgateCron } from './pix-resgate.cron';
 @Module({
   imports: [
     PrismaModule, HttpModule, CorreiosModule, PersonIdentityModule, EmailModule, WhatsappModule,
+    PromoSiteModule,
     forwardRef(() => PagarmeModule),
   ],
   controllers: [LojaOrdersController, LojaAdminController],

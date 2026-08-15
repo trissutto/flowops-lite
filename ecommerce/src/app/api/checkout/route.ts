@@ -143,7 +143,11 @@ export async function POST(req: Request): Promise<NextResponse<CreateOrderResult
   const ip = clientIp(req);
   if (excedeuLimite(ip)) {
     return NextResponse.json(
-      { ok: false, error: 'Muitas tentativas seguidas. Respire fundo e tente de novo em instantes.' },
+      {
+        ok: false,
+        error: 'Muitas tentativas seguidas. Respire fundo e tente de novo em instantes.',
+        code: 'rate_limited',
+      },
       { status: 429 },
     );
   }
@@ -152,13 +156,20 @@ export async function POST(req: Request): Promise<NextResponse<CreateOrderResult
   try {
     raw = await req.json();
   } catch {
-    return NextResponse.json({ ok: false, error: 'Não conseguimos ler seu pedido. Tente novamente.' }, { status: 400 });
+    return NextResponse.json(
+      { ok: false, error: 'Não conseguimos ler seu pedido. Tente novamente.', code: 'validation_error' },
+      { status: 400 },
+    );
   }
 
   const parsed = bodySchema.safeParse(raw);
   if (!parsed.success) {
     return NextResponse.json(
-      { ok: false, error: 'Alguns dados do pedido não conferem. Revise as informações e tente de novo.' },
+      {
+        ok: false,
+        error: 'Alguns dados do pedido não conferem. Revise as informações e tente de novo.',
+        code: 'validation_error',
+      },
       { status: 400 },
     );
   }
@@ -177,7 +188,7 @@ export async function POST(req: Request): Promise<NextResponse<CreateOrderResult
   if (input.couponCode) {
     const cupom = applyCoupon(input.couponCode, subtotal);
     if (!cupom.ok) {
-      return NextResponse.json({ ok: false, error: cupom.message }, { status: 400 });
+      return NextResponse.json({ ok: false, error: cupom.message, code: 'coupon_invalid' }, { status: 400 });
     }
     discount = cupom.discount;
     couponKind = cupom.kind;
@@ -196,7 +207,11 @@ export async function POST(req: Request): Promise<NextResponse<CreateOrderResult
   });
   if (!quote) {
     return NextResponse.json(
-      { ok: false, error: 'Não conseguimos confirmar o frete para este CEP. Volte uma etapa e escolha a entrega de novo.' },
+      {
+        ok: false,
+        error: 'Não conseguimos confirmar o frete para este CEP. Volte uma etapa e escolha a entrega de novo.',
+        code: 'shipping_invalid',
+      },
       { status: 400 },
     );
   }
@@ -204,7 +219,11 @@ export async function POST(req: Request): Promise<NextResponse<CreateOrderResult
   // Entrega em casa exige endereço; retirada dispensa.
   if (quote.kind !== 'retirada' && !input.shippingAddress) {
     return NextResponse.json(
-      { ok: false, error: 'Falta o endereço de entrega. Volte uma etapa e confira os dados.' },
+      {
+        ok: false,
+        error: 'Falta o endereço de entrega. Volte uma etapa e confira os dados.',
+        code: 'validation_error',
+      },
       { status: 400 },
     );
   }
@@ -225,7 +244,11 @@ export async function POST(req: Request): Promise<NextResponse<CreateOrderResult
   const total = round2(subtotal - discount - descontoPix + shippingPrice);
   if (total <= 0) {
     return NextResponse.json(
-      { ok: false, error: 'Algo não fechou no total do pedido. Revise a sacola e tente novamente.' },
+      {
+        ok: false,
+        error: 'Algo não fechou no total do pedido. Revise a sacola e tente novamente.',
+        code: 'validation_error',
+      },
       { status: 400 },
     );
   }
@@ -244,6 +267,7 @@ export async function POST(req: Request): Promise<NextResponse<CreateOrderResult
     return NextResponse.json({
       ok: false,
       error: 'Não conseguimos validar seu cartão agora. Tente de novo ou finalize com Pix (com 5% off).',
+      code: 'payment_unavailable',
     });
   }
 
@@ -285,11 +309,18 @@ export async function POST(req: Request): Promise<NextResponse<CreateOrderResult
   } catch (err) {
     if (err instanceof OrderStoreError) {
       console.error('[checkout] backend recusou/falhou ao criar pedido:', err.message);
-      return NextResponse.json({ ok: false, error: err.publico }, { status: err.status });
+      return NextResponse.json(
+        { ok: false, error: err.publico, code: err.code },
+        { status: err.status },
+      );
     }
     console.error('[checkout] falha inesperada ao criar pedido:', err);
     return NextResponse.json(
-      { ok: false, error: 'Não conseguimos concluir seu pedido agora. Fica tranquila: nada foi cobrado — tente de novo em instantes.' },
+      {
+        ok: false,
+        error: 'Não conseguimos concluir seu pedido agora. Fica tranquila: nada foi cobrado — tente de novo em instantes.',
+        code: 'internal_error',
+      },
       { status: 502 },
     );
   }
@@ -324,7 +355,11 @@ export async function POST(req: Request): Promise<NextResponse<CreateOrderResult
     // Pedido PIX sem cobrança é pedido que a cliente não tem como pagar.
     console.error(`[checkout] backend criou pedido PIX ${ack.id} sem dados de cobrança`);
     return NextResponse.json(
-      { ok: false, error: 'Não conseguimos gerar seu Pix agora. Tente novamente em instantes.' },
+      {
+        ok: false,
+        error: 'Não conseguimos gerar seu Pix agora. Tente novamente em instantes.',
+        code: 'payment_unavailable',
+      },
       { status: 502 },
     );
   }

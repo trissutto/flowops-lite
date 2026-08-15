@@ -251,7 +251,7 @@ function SeparacaoPageInner() {
   // Filtro de ORIGEM: '' = todos · 'site' (WooCommerce antigo) · 'live' (Live
   // Commerce) · 'ecommerce' (site NOVO, sprint 011 — nº "LP-xxxxxx").
   // As três origens entram na MESMA fila: quem sabe rotear Order roteia todas.
-  const [sourceFilter, setSourceFilter] = useState<'' | 'site' | 'live' | 'ecommerce'>('');
+  const [sourceFilter, setSourceFilter] = useState<'' | 'site' | 'live' | 'ecommerce' | 'pdv_online'>('');
 
   // Carrega lojas com contagem de pedidos em aberto
   useEffect(() => {
@@ -1112,9 +1112,11 @@ function SeparacaoPageInner() {
           </button>
         )}
 
-        {/* ─── FILTRO ORIGEM (SITE / LIVE / ECOMMERCE) ─── */}
+        {/* ─── FILTRO ORIGEM (SITE / LIVE / ONLINE / ECOMMERCE) ───
+             ONLINE = venda online do PDV da loja (nº ON-xxxxxx). Fica ao lado
+             da Live porque é o mesmo tipo de fila: pedido que a LOJA abriu. */}
         <div className="flex items-center gap-1 ml-3">
-          {([['', 'Todos'], ['site', 'Site'], ['live', 'Live'], ['ecommerce', 'Ecommerce']] as const).map(([val, label]) => (
+          {([['', 'Todos'], ['site', 'Site'], ['live', 'Live'], ['pdv_online', 'Online'], ['ecommerce', 'Ecommerce']] as const).map(([val, label]) => (
             <button
               key={val || 'todos'}
               type="button"
@@ -1125,7 +1127,9 @@ function SeparacaoPageInner() {
                     ? 'bg-rose-600 border-rose-600 text-white'
                     : val === 'ecommerce'
                       ? 'bg-violet-600 border-violet-600 text-white'
-                      : 'bg-slate-800 border-slate-800 text-white'
+                      : val === 'pdv_online'
+                        ? 'bg-teal-600 border-teal-600 text-white'
+                        : 'bg-slate-800 border-slate-800 text-white'
                   : 'bg-white border-slate-300 text-slate-600 hover:bg-slate-100'
               }`}
               title={
@@ -1135,10 +1139,12 @@ function SeparacaoPageInner() {
                     ? 'Só pedidos do site antigo (WooCommerce)'
                     : val === 'ecommerce'
                       ? 'Só pedidos do site novo (nº LP-xxxxxx)'
-                      : 'Todas as origens'
+                      : val === 'pdv_online'
+                        ? 'Só vendas online das lojas (nº ON-xxxxxx)'
+                        : 'Todas as origens'
               }
             >
-              {val === 'live' ? '🔴 ' : ''}{label}
+              {val === 'live' ? '🔴 ' : val === 'pdv_online' ? '🏬 ' : ''}{label}
             </button>
           ))}
         </div>
@@ -1294,7 +1300,9 @@ function SeparacaoPageInner() {
               ? 'do site antigo '
               : sourceFilter === 'ecommerce'
                 ? 'do site novo '
-                : ''}
+                : sourceFilter === 'pdv_online'
+                  ? 'de venda online das lojas '
+                  : ''}
           com esse status no momento. 🎉
         </div>
       ) : (
@@ -1846,6 +1854,7 @@ type CarrinhoAB = {
   // Pedido WC vinculado (quando o CartFlows registrou que o carrinho virou
   // pedido). Usado pra deduplicar contra os itens do fallback WooCommerce.
   order_id?: number | null;
+  recovery_id?: string;
   // Campanha de origem (via order_id → Order local com atribuição do WC).
   // null/undefined = carrinho sem pedido ainda ou sem UTM (não atribuível).
   utmCampaign?: string | null;
@@ -1909,7 +1918,7 @@ function CarrinhosTab() {
       return;
     }
     // Carrinho do e-commerce novo já traz os itens embutidos (nosso banco).
-    if (c.source === 'ecommerce') {
+    if (c.source === 'ecommerce' || c.source === 'ecommerce-contact') {
       setDetail({ cart_items: c.cart_items || [] });
       setDetailLoading(false);
       return;
@@ -2220,6 +2229,7 @@ function CarrinhosTab() {
             const isCompleted = status === 'completed' || status === 'recovered';
             const isWc = c.source === 'woocommerce';
             const isEcom = c.source === 'ecommerce';
+            const isEcomContact = c.source === 'ecommerce-contact';
             const nome = `${c.first_name || ''} ${c.last_name || ''}`.trim() || c.email?.split('@')[0] || 'Cliente';
             const valor = Number(c.total ?? c.cart_total ?? c.cart_total_brl ?? 0);
             return (
@@ -2229,7 +2239,9 @@ function CarrinhosTab() {
                     {nome}
                     {isCompleted && <span className="ml-2 text-[10px] bg-emerald-200 text-emerald-800 px-1.5 py-0.5 rounded font-bold uppercase">Recuperado</span>}
                     {isWc && <span className="ml-2 text-[10px] bg-sky-100 text-sky-700 px-1.5 py-0.5 rounded font-bold uppercase" title="Pedido iniciado no site sem pagamento (via WooCommerce) — o plugin de carrinhos não registrou este">Site</span>}
-                    {isEcom && <span className="ml-2 text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded font-bold uppercase" title={`Checkout iniciado no site novo (lurdsplussize.com.br) sem pagamento${c.order_number ? ` — pedido ${c.order_number}` : ''}`}>Ecommerce</span>}
+                    {isEcom && !isCompleted && <span className="ml-2 text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded font-bold uppercase" title={`Pedido criado no site novo, aguardando confirmação do pagamento${c.order_number ? ` — ${c.order_number}` : ''}`}>Aguardando pagamento</span>}
+                    {isEcom && isCompleted && <span className="ml-2 text-[10px] bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded font-bold uppercase">Pagamento confirmado</span>}
+                    {isEcomContact && <span className="ml-2 text-[10px] bg-violet-100 text-violet-800 px-1.5 py-0.5 rounded font-bold uppercase" title="Nome e WhatsApp capturados antes de existir pedido">Contato capturado</span>}
                     {Boolean(c.unsubscribed) && <span className="ml-2 text-[10px] bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded font-bold uppercase">Optout</span>}
                   </div>
                   <div className="text-[11px] text-slate-500 flex flex-wrap items-center gap-2 mt-0.5">
@@ -2273,7 +2285,13 @@ function CarrinhosTab() {
 
               {selected.source === 'ecommerce' && (
                 <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-[12px] text-amber-900">
-                  <b>Origem: E-commerce novo (lurdsplussize.com.br).</b> Checkout iniciado sem pagamento confirmado{selected.order_number ? <> — pedido <b>{selected.order_number}</b></> : null}. Os itens abaixo vêm direto do nosso banco.
+                  <b>Pedido do e-commerce novo.</b> {selected.order_status === 'recovered' ? 'Pagamento confirmado' : 'Aguardando confirmação do pagamento'}{selected.order_number ? <> — pedido <b>{selected.order_number}</b></> : null}. Os itens abaixo vêm direto do nosso banco.
+                </div>
+              )}
+
+              {selected.source === 'ecommerce-contact' && (
+                <div className="bg-violet-50 border border-violet-200 rounded-lg p-3 text-[12px] text-violet-900">
+                  <b>Contato capturado no checkout.</b> A cliente informou nome e WhatsApp, mas ainda não criou um pedido. Os itens abaixo são o retrato da sacola nesse momento.
                 </div>
               )}
 

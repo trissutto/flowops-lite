@@ -40,8 +40,20 @@ export function elegivelPromo(e: PromoEntrada): boolean {
   return PROMO_COLECAO_RE.test(String(e.ref || '').trim());
 }
 
+/**
+ * O desconto aplicado num preço — sem decidir elegibilidade.
+ *
+ * Existe separado porque o SITE desconta LINHA A LINHA (cada cor e cada
+ * tamanho da peça têm o seu preço), enquanto o PDV desconta o item bipado.
+ * O arredondamento tem que ser o mesmo nos dois, senão a vitrine mostra
+ * R$ 39,95 e o caixa cobra R$ 39,96.
+ */
+export function aplicarDescontoPromo(preco: number): number {
+  return Math.round(preco * (1 - PROMO_PCT) * 100) / 100;
+}
+
 /** Preço com o desconto, ou null quando a peça não entra. */
 export function precoPromo(preco: number | null | undefined, e: PromoEntrada): number | null {
   if (preco == null || !elegivelPromo(e)) return null;
-  return Math.round(preco * (1 - PROMO_PCT) * 100) / 100;
+  return aplicarDescontoPromo(preco);
 }

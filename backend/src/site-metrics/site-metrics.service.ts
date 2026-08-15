@@ -30,6 +30,39 @@ export interface EventoEntrada {
   semAceite?: boolean;
 }
 
+const CAMPOS_DIAGNOSTICOS: Record<string, readonly string[]> = {
+  color_switch: ['color'],
+  size_switch: ['size'],
+  add_to_cart_blocked: ['reason'],
+  add_shipping_info: ['shipping_tier'],
+  add_payment_info: ['payment_type'],
+  checkout_submission: ['method'],
+  checkout_error: ['method', 'reason'],
+  checkout_validation_error: ['section', 'field'],
+  pix_created: ['method'],
+  payment_method_selected: ['method'],
+  pix_copied: ['method', 'order_id'],
+  pix_expired: ['method', 'order_id'],
+  card_declined: ['method', 'attempt'],
+  payment_retry: ['method', 'attempt'],
+  checkout_recovered: ['method', 'order_id'],
+};
+
+/** Defesa final contra PII: só persiste chaves fechadas e valores curtos. */
+export function sanitizarDadosEvento(evento: string, dados: unknown): Record<string, string> | undefined {
+  if (!dados || typeof dados !== 'object' || Array.isArray(dados)) return undefined;
+  const permitidos = CAMPOS_DIAGNOSTICOS[evento] ?? [];
+  const origem = dados as Record<string, unknown>;
+  const limpo: Record<string, string> = {};
+  for (const campo of permitidos) {
+    const valor = origem[campo];
+    if (typeof valor !== 'string' && typeof valor !== 'number' && typeof valor !== 'boolean') continue;
+    const texto = String(valor).trim().slice(0, 80);
+    if (texto) limpo[campo] = texto;
+  }
+  return Object.keys(limpo).length ? limpo : undefined;
+}
+
 /** Uma linha do relatório: a loja e o que fizeram nela. */
 export interface LinhaLoja {
   loja: string;
@@ -99,7 +132,7 @@ export class SiteMetricsService {
         loja: this.corta(e.loja, 80),
         sessionId: this.corta(e.sessionId, 64),
         valor: typeof e.valor === 'number' && Number.isFinite(e.valor) ? e.valor : null,
-        dados: e.dados && typeof e.dados === 'object' ? (e.dados as object) : undefined,
+        dados: sanitizarDadosEvento(String(e.evento), e.dados),
         semAceite: e.semAceite === true,
       }));
 
@@ -195,13 +228,17 @@ export class SiteMetricsService {
    * de deixar parecer que o site não vendia. `::int` nos COUNTs: BigInt na
    * resposta é 500 mudo de serialização.
    */
-  async funil(de: Date, ate: Date): Promise<Array<{ evento: string; eventos: number; pessoas: number }>> {
+  async funil(
+    de: Date,
+    ate: Date,
+  ): Promise<Array<{ evento: string; eventos: number; pessoas: number; valor: number }>> {
     const linhas = await this.prisma.$queryRawUnsafe<
-      Array<{ evento: string; eventos: number; pessoas: number }>
+      Array<{ evento: string; eventos: number; pessoas: number; valor: number }>
     >(
       `SELECT evento,
               COUNT(*)::int                   AS eventos,
-              COUNT(DISTINCT session_id)::int AS pessoas
+              COUNT(DISTINCT session_id)::int AS pessoas,
+              COALESCE(SUM(valor), 0)::float  AS valor
          FROM site_eventos
         WHERE criado_em >= $1 AND criado_em <= $2
           AND evento IN ('page_view','view_item','add_to_cart','begin_checkout','add_payment_info','purchase')
@@ -213,6 +250,115 @@ export class SiteMetricsService {
       evento: l.evento,
       eventos: Number(l.eventos),
       pessoas: Number(l.pessoas),
+      // VALOR DE CONVERSÃO (dono, 15/08). Só interessa em `purchase` — é o R$
+      // somado das compras do período (`valor` do evento = total do pedido). As
+      // outras etapas somam o preço da peça vista/na sacola e a tela ignora.
+      valor: Number(l.valor) || 0,
+    }));
+  }
+
+  /**
+   * FATURAMENTO REAL DO SITE no período (dono, 15/08) — a Fonte B, ao lado do
+   * valor de conversão do funil (Fonte A). O funil soma o EVENTO `purchase`
+   * (sessionizado, com/sem cookie) e casa com a coluna Compras; isto soma o
+   * DINHEIRO: pedidos `source='ecommerce'` já pagos. As duas divergem quando um
+   * PIX é pago noutro dia ou o evento do navegador não dispara — por isso ficam
+   * em linhas separadas, cada uma com seu significado. Janela por `created_at`,
+   * a mesma do funil (um PIX pago depois conta retroativo no dia do pedido).
+   */
+  async faturamentoSite(de: Date, ate: Date): Promise<{ pedidos: number; valor: number }> {
+    const r = await this.prisma.$queryRawUnsafe<Array<{ pedidos: number; valor: number }>>(
+      `SELECT COUNT(*)::int AS pedidos, COALESCE(SUM(total_amount), 0)::float AS valor
+         FROM orders
+        WHERE source = 'ecommerce'
+          AND status IN ('paid','separating','shipped','delivered','completed')
+          AND created_at >= $1 AND created_at <= $2`,
+      de,
+      ate,
+    );
+    return { pedidos: Number(r[0]?.pedidos ?? 0), valor: Number(r[0]?.valor ?? 0) };
+  }
+
+  async diagnosticosFunil(de: Date, ate: Date): Promise<Array<{
+    evento: string; codigo: string; campo: string | null; pessoas: number; eventos: number;
+  }>> {
+    const linhas = await this.prisma.$queryRawUnsafe<Array<{
+      evento: string; codigo: string; campo: string | null; pessoas: number; eventos: number;
+    }>>(
+      `SELECT evento,
+              COALESCE(dados->>'reason', dados->>'method', dados->>'payment_type', dados->>'section',
+                       dados->>'shipping_tier', dados->>'color', dados->>'size', 'sem_codigo') AS codigo,
+              CASE WHEN dados ? 'field' THEN dados->>'field' ELSE NULL END AS campo,
+              COUNT(DISTINCT session_id)::int AS pessoas,
+              COUNT(*)::int AS eventos
+         FROM site_eventos
+        WHERE criado_em >= $1 AND criado_em <= $2
+          AND evento IN ('color_switch','size_switch','add_to_cart_blocked',
+                         'add_shipping_info','add_payment_info','checkout_submission',
+                         'checkout_error','checkout_validation_error','pix_created',
+                         'payment_method_selected','pix_copied','pix_expired',
+                         'card_declined','payment_retry','checkout_recovered')
+        GROUP BY evento, codigo, campo
+        ORDER BY eventos DESC, evento, codigo
+        LIMIT 100`,
+      de,
+      ate,
+    );
+    return linhas.map((l) => ({
+      evento: l.evento,
+      codigo: l.codigo,
+      campo: l.campo,
+      pessoas: Number(l.pessoas),
+      eventos: Number(l.eventos),
+    }));
+  }
+
+  /** Sessões que tiveram pelo menos duas falhas num intervalo móvel de 10 min. */
+  async alertasCheckout(de: Date, ate: Date): Promise<Array<{
+    sessionId: string; etapa: string; pagamento: string; codigo: string;
+    pedido: string | null; tentativas: number; primeiraFalha: Date; ultimaFalha: Date;
+  }>> {
+    const linhas = await this.prisma.$queryRawUnsafe<Array<{
+      session_id: string; etapa: string; pagamento: string; codigo: string;
+      pedido: string | null; tentativas: number; primeira_falha: Date; ultima_falha: Date;
+    }>>(
+      `WITH erros AS (
+         SELECT session_id, criado_em, dados
+           FROM site_eventos
+          WHERE criado_em >= $1 AND criado_em <= $2
+            AND evento = 'checkout_error' AND session_id IS NOT NULL
+       ), sessoes_alerta AS (
+         SELECT DISTINCT a.session_id
+           FROM erros a
+           JOIN erros b ON b.session_id = a.session_id
+                        AND b.criado_em > a.criado_em
+                        AND b.criado_em <= a.criado_em + INTERVAL '10 minutes'
+       )
+       SELECT e.session_id,
+              COALESCE((ARRAY_AGG(e.dados->>'stage' ORDER BY e.criado_em DESC))[1], 'submission') AS etapa,
+              COALESCE((ARRAY_AGG(e.dados->>'method' ORDER BY e.criado_em DESC))[1], 'desconhecido') AS pagamento,
+              COALESCE((ARRAY_AGG(e.dados->>'reason' ORDER BY e.criado_em DESC))[1], 'sem_codigo') AS codigo,
+              (ARRAY_AGG(e.dados->>'order_id' ORDER BY e.criado_em DESC))[1] AS pedido,
+              COUNT(*)::int AS tentativas,
+              MIN(e.criado_em) AS primeira_falha,
+              MAX(e.criado_em) AS ultima_falha
+         FROM erros e
+         JOIN sessoes_alerta s ON s.session_id = e.session_id
+        GROUP BY e.session_id
+        ORDER BY ultima_falha DESC
+        LIMIT 100`,
+      de,
+      ate,
+    );
+    return linhas.map((l) => ({
+      sessionId: l.session_id,
+      etapa: l.etapa,
+      pagamento: l.pagamento,
+      codigo: l.codigo,
+      pedido: l.pedido,
+      tentativas: Number(l.tentativas),
+      primeiraFalha: l.primeira_falha,
+      ultimaFalha: l.ultima_falha,
     }));
   }
 

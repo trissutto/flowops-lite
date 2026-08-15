@@ -14,6 +14,7 @@ import { DanfePdfService } from '../nfe/danfe-pdf.service';
 import { PedidoEmailService } from '../loja-orders/pedido-email.service';
 import { lerComplementoBairroWc, lerRuaNumeroWc } from '../common/endereco-wc';
 import { servicoPagoDoPedido } from '../common/servico-envio';
+import { ehItemSemEstoque } from '../common/item-sem-estoque';
 
 // Lojas que despacham pelo MAIS ENVIOS (código Flow → sender id no Mais Envios).
 // As demais vão pelo Correios (CWS). Rede: Piracicaba/Sorocaba/Limeira/Moema;
@@ -295,6 +296,9 @@ export class PickOrdersService {
             storeCode: isSite && siteRaiz.length === 8 && siteStore ? siteStore : String(store?.code || ''),
             dest: dados.dest,
             items: dados.items,
+            // Frete cobrado da cliente vai no campo vFrete da nota (nunca
+            // como produto). Pedido dividido: só a nota do 1º pick leva.
+            vFrete: dados.vFrete,
             ambienteOverride: amb as any,
             emitirPorRaiz: isSite && siteRaiz.length === 8 ? siteRaiz : (lojaRaiz.length === 8 ? lojaRaiz : undefined),
           });
@@ -343,7 +347,7 @@ export class PickOrdersService {
     if (order.source === 'live') {
       if (!order.liveCartId) throw new BadRequestException('Pedido da live sem carrinho vinculado.');
       if (provider === 'maisenvios') {
-        r = await this.gerarEnvioMaisEnvios(order.liveCartId, senderId, nfeInfoME, `${order.wcOrderNumber || order.id}/${String(pick.id).slice(0, 8)}`, String(store?.name || ''));
+        r = await this.gerarEnvioMaisEnvios(order, order.liveCartId, senderId, nfeInfoME, `${order.wcOrderNumber || order.id}/${String(pick.id).slice(0, 8)}`, String(store?.name || ''));
       } else {
         r = await this.livePdv.gerarEnvioCorreios(order.liveCartId, nfeChave, remetenteLoja || undefined);
       }
@@ -411,7 +415,7 @@ export class PickOrdersService {
    * Destinatário + itens da NF-e do envio. CEP-authoritative (ViaCEP) pra
    * UF/cidade e principalmente o código IBGE (cMun, obrigatório na NF-e).
    */
-  private async montarDadosNfeEnvio(order: any, pick: any, storeCode?: string): Promise<{ dest: any; items: any[] } | null> {
+  private async montarDadosNfeEnvio(order: any, pick: any, storeCode?: string): Promise<{ dest: any; items: any[]; vFrete: number } | null> {
     let nome = '';
     let cpfCnpj = '';
     let endereco = '';
@@ -421,6 +425,15 @@ export class PickOrdersService {
     let uf = '';
     let cep = '';
     let items: any[] = [];
+    /**
+     * FRETE COBRADO DA CLIENTE → campo `vFrete` da NF-e (nunca linha de
+     * produto — mod 55 tem campo pra isso; regra do dono de 31/07, a mesma
+     * que a nota grande do PDV já seguia).
+     *
+     * Pedido DIVIDIDO em 2+ lojas: o frete inteiro vai na nota do PRIMEIRO
+     * pick (o mais antigo). Repetir em cada nota cobraria o frete 2×.
+     */
+    let vFrete = 0;
 
     // PEDIDO DIVIDIDO em 2+ lojas (dono 29/07): a NF-e de cada envio leva SÓ
     // as peças daquela loja — filtro ESTRITO (sem fallback pro pedido inteiro;
@@ -512,8 +525,30 @@ export class PickOrdersService {
       bairro = String(addr.neighborhood || addr.bairro || '').trim();
       nome = order.customerName || 'Cliente';
       cpfCnpj = String(order.customerCpf || '').replace(/\D/g, '');
-      const atribuidos = (order.items || []).filter((i: any) => i.assignedStoreId === pick.storeId);
-      const semDono = (order.items || []).filter((i: any) => !i.assignedStoreId);
+      // FRETE: valor do método de envio (checkoutInfo.shipping.price) e, como
+      // rede de segurança, a linha FRETE que pedido antigo ainda tenha dentro.
+      // Só na nota do primeiro pick — ver comentário na declaração.
+      const primeiroPick = await this.prisma.pickOrder.findFirst({
+        where: { orderId: order.id },
+        orderBy: { createdAt: 'asc' },
+        select: { id: true },
+      });
+      if (!dividido || primeiroPick?.id === pick.id) {
+        let ck: any = {};
+        try { ck = JSON.parse(order.checkoutInfo || '{}'); } catch { /* snapshot cru */ }
+        vFrete =
+          Math.round((Number(ck?.shipping?.price ?? ck?.shippingPrice ?? 0) || 0) * 100) / 100 ||
+          Math.round(
+            (order.items || [])
+              .filter((i: any) => ehItemSemEstoque(i) && String(i.sku || '').toUpperCase() === 'FRETE')
+              .reduce((s: number, i: any) => s + (Number(i.unitPrice) || 0) * (Number(i.quantity) || 1), 0) * 100,
+          ) / 100;
+      }
+      // A linha de FRETE (pedido criado antes de 14/08) NÃO pode virar produto
+      // na nota: ela não tem NCM nem estoque — vai no vFrete acima.
+      const pecas = (order.items || []).filter((i: any) => !ehItemSemEstoque(i));
+      const atribuidos = pecas.filter((i: any) => i.assignedStoreId === pick.storeId);
+      const semDono = pecas.filter((i: any) => !i.assignedStoreId);
       // Dividido: SÓ os itens atribuídos a esta loja. Loja única: mantém o
       // comportamento antigo (atribuídos + sem dono; sem nada, o pedido todo).
       const lista = dividido
@@ -561,6 +596,7 @@ export class PickOrdersService {
     return {
       dest: { cpfCnpj, nome, endereco, numero: numero || 'S/N', bairro, cidade, uf, cep, codMun },
       items,
+      vFrete,
     };
   }
 
@@ -612,17 +648,54 @@ export class PickOrdersService {
     };
   }
 
-  /** Gera a pré-postagem no MAIS ENVIOS a partir do carrinho da live. */
-  private async gerarEnvioMaisEnvios(cartId: string, senderId: number, nfe?: any, referencia?: string, departamento?: string) {
+  /**
+   * SERVIÇO DA ETIQUETA NO MAIS ENVIOS — o mesmo que a cliente pagou.
+   *
+   * Até 15/08 os dois caminhos do Mais Envios mandavam `'SEDEX'` chumbado. A
+   * tela da loja mostrava "MODALIDADE DE ENVIO: PAC" (lido do pedido) e a
+   * etiqueta saía SEDEX: 11 pedidos em 180 dias — TODOS por aqui, nenhum pelos
+   * Correios, que já lê o pedido desde 12/08 (`servicoPagoDoPedido`).
+   *
+   * Vendemos econômico e postamos expresso: a diferença sai do nosso bolso, e
+   * a loja vê a tela dizer uma coisa e a etiqueta dizer outra — que é como o
+   * dono achou o problema. O Mais Envios cota os DOIS serviços (PAC 03298 ·
+   * SEDEX 03220), então não havia limitação técnica, só o valor fixo.
+   *
+   * `MAISENVIOS_FORCA_SEDEX=1` volta o comportamento antigo (subir tudo pra
+   * expresso) numa variável, se algum dia o expresso ficar mais barato que o
+   * econômico na conta LURDS.
+   */
+  private servicoMaisEnvios(order: any, uf?: string | null): 'PAC' | 'SEDEX' {
+    if (String(process.env.MAISENVIOS_FORCA_SEDEX || '').trim() === '1') return 'SEDEX';
+    const escolha = servicoPagoDoPedido(order, uf);
+    if (escolha.origem === 'fallback-uf') {
+      this.logger.warn(
+        `[envio] pedido ${order?.wcOrderNumber || order?.id} sem método de envio legível ` +
+        `("${order?.shippingMethod ?? '—'}") — postando ${escolha.servico} pela regra de UF (${uf || '?'}).`,
+      );
+    }
+    return escolha.servico;
+  }
+
+  /**
+   * Gera a pré-postagem no MAIS ENVIOS a partir do carrinho da live.
+   *
+   * O `order` entra só pra decidir o serviço: o Order da live grava o método
+   * como "LIVE · SEDEX"/"LIVE · PAC" (o mesmo que a cliente pagou pela régua
+   * de região da live), então o `servicoPagoDoPedido` resolve pelo título e a
+   * etiqueta do Mais Envios passa a bater com a dos Correios pro mesmo carrinho.
+   */
+  private async gerarEnvioMaisEnvios(order: any, cartId: string, senderId: number, nfe?: any, referencia?: string, departamento?: string) {
     const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId }, include: { items: true } });
     if (!cart) throw new NotFoundException('Carrinho não encontrado');
     const itens = (cart.items || []).filter((i: any) => i.status !== 'cancelled');
     if (!itens.length) throw new BadRequestException('Carrinho sem itens.');
     const totalPecas = itens.reduce((s: number, i: any) => s + (Number(i.qty) || 1), 0);
     const pesoGramas = Math.max(300, totalPecas * 200);
+    const servico = this.servicoMaisEnvios(order, cart.customerUf);
     const resp: any = await this.maisEnvios.criarPrepost({
       senderId,
-      servico: 'SEDEX', // +Expresso: mais barato e mais rápido na conta LURDS
+      servico,
       destinatario: {
         nome: cart.customerName || 'Cliente',
         cpf: String(cart.customerCpf || '').replace(/\D/g, ''),
@@ -646,7 +719,7 @@ export class PickOrdersService {
     if (!resp?.ok || !resp.tag) throw new BadRequestException(`Mais Envios recusou o envio: ${resp?.erro || 'sem tag'}`);
     let etiquetaPdf: string | null = null;
     try { const et = await this.maisEnvios.baixarEtiqueta(resp.tag); if (et?.ok && et.pdfBase64) etiquetaPdf = et.pdfBase64; } catch { /* etiqueta opcional */ }
-    return { codigoRastreio: resp.tag, idPrepostagem: resp.idPrepostagem ?? null, servico: 'SEDEX', carrier: 'Mais Envios SEDEX', etiquetaPdf };
+    return { codigoRastreio: resp.tag, idPrepostagem: resp.idPrepostagem ?? null, servico, carrier: `Mais Envios ${servico}`, etiquetaPdf };
   }
 
   /** Pré-postagem no MAIS ENVIOS pro pedido do SITE (a partir do Order). */
@@ -681,10 +754,12 @@ export class PickOrdersService {
     const lista = itensLoja.length ? itensLoja : (order.items || []);
     const totalPecas = lista.reduce((s: number, i: any) => s + (Number(i.quantity) || 1), 0) || 1;
     const pesoGramas = Math.max(300, totalPecas * 200);
+    // SERVIÇO = o que a cliente PAGOU (mesma leitura do caminho Correios).
+    const servico = this.servicoMaisEnvios(order, uf);
 
     const resp: any = await this.maisEnvios.criarPrepost({
       senderId,
-      servico: 'SEDEX',
+      servico,
       destinatario: {
         nome: order.customerName || 'Cliente',
         cpf: String(order.customerCpf || '').replace(/\D/g, ''),
@@ -708,7 +783,7 @@ export class PickOrdersService {
     if (!resp?.ok || !resp.tag) throw new BadRequestException(`Mais Envios recusou o envio: ${resp?.erro || 'sem tag'}`);
     let etiquetaPdf: string | null = null;
     try { const et = await this.maisEnvios.baixarEtiqueta(resp.tag); if (et?.ok && et.pdfBase64) etiquetaPdf = et.pdfBase64; } catch { /* etiqueta opcional */ }
-    return { codigoRastreio: resp.tag, idPrepostagem: resp.idPrepostagem ?? null, servico: 'SEDEX', carrier: 'Mais Envios SEDEX', etiquetaPdf };
+    return { codigoRastreio: resp.tag, idPrepostagem: resp.idPrepostagem ?? null, servico, carrier: `Mais Envios ${servico}`, etiquetaPdf };
   }
 
   /** Gera a pré-postagem dos Correios pro pedido do SITE (a partir do Order). */

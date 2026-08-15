@@ -19,7 +19,7 @@
  *   <span className={m.color}>{m.label}</span>
  */
 
-export type ShippingKind = 'sedex' | 'pac' | 'pickup' | 'transportadora' | 'other';
+export type ShippingKind = 'sedex' | 'pac' | 'pickup' | 'motoboy' | 'transportadora' | 'other';
 
 export interface ShippingBadge {
   kind: ShippingKind;
@@ -118,6 +118,19 @@ export function classifyShipping(raw: string | null | undefined, state?: string 
       short: 'PAC',
       color: 'bg-blue-100 text-blue-800',
       colorBold: 'bg-blue-600 text-white',
+      raw: rawStr,
+    };
+  }
+
+  // MOTOBOY — entrega na mão, mesma cidade. Não gera etiqueta dos Correios,
+  // então precisa se distinguir de "transportadora" na tela da retaguarda.
+  if (text.includes('motoboy') || text.includes('moto boy') || text.includes('entrega local')) {
+    return {
+      kind: 'motoboy',
+      label: 'MOTOBOY',
+      short: 'MOTOBOY',
+      color: 'bg-orange-100 text-orange-800',
+      colorBold: 'bg-orange-600 text-white',
       raw: rawStr,
     };
   }

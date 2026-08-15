@@ -1,14 +1,15 @@
 'use client';
 
 import Link from 'next/link';
-import { LoaderCircle, Lock } from 'lucide-react';
+import { LoaderCircle, Lock, MessageCircle, RefreshCw } from 'lucide-react';
 import { formatPrice } from '@/lib/utils';
 import { PIX_DESCONTO_PCT } from '@/lib/commerce/pix';
 import { Button } from '@/components/ui/Button';
 import { SeloPagamentoSeguro } from '@/components/commerce/SeloPagamentoSeguro';
 import { stores } from '@/data/stores';
 import type { CartLine } from '@/types';
-import type { CouponResult, CustomerIdentity } from '@/types/checkout';
+import type { CheckoutErrorCode, CouponResult, CustomerIdentity } from '@/types/checkout';
+import { linkWhatsapp } from '@/data/contato';
 import type { PaymentSelection } from './PaymentStep';
 import type { ShippingSelection } from './ShippingStep';
 import { maskCpf } from './masks';
@@ -37,7 +38,12 @@ interface ReviewCardProps {
   submitting: boolean;
   /** Mensagem elegante quando o POST falhou — nunca status/stack técnico. */
   error: string | null;
+  failureCount: number;
+  errorCode: CheckoutErrorCode | null;
   onSubmit: () => void;
+  onEditIdentity: () => void;
+  onReviewData: () => void;
+  onUsePix: () => void;
 }
 
 const METODO_LABEL: Record<PaymentSelection['method'], string> = {
@@ -57,7 +63,12 @@ export function ReviewCard({
   total,
   submitting,
   error,
+  failureCount,
+  errorCode,
   onSubmit,
+  onEditIdentity,
+  onReviewData,
+  onUsePix,
 }: ReviewCardProps) {
   const retirada = shipping.quote.kind === 'retirada';
   const store = retirada ? stores.find((s) => s.slug === shipping.quote.storeSlug) : undefined;
@@ -83,8 +94,14 @@ export function ReviewCard({
 
       <div className="grid gap-5 sm:grid-cols-2">
         <div>
-          <h3 className="eyebrow mb-2 text-ink-soft">Quem recebe</h3>
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <h3 className="eyebrow text-ink-soft">Quem recebe</h3>
+            <button type="button" onClick={onEditIdentity} className="text-caption text-secondary underline underline-offset-2">
+              alterar dados
+            </button>
+          </div>
           <p className="text-small text-ink">{customer.name}</p>
+          <p className="text-small text-ink-muted">{customer.email}</p>
           <p className="text-small text-ink-muted">CPF {maskCpf(customer.cpf)}</p>
         </div>
         <div>
@@ -155,9 +172,29 @@ export function ReviewCard({
       </dl>
 
       {error && (
-        <p role="alert" className="rounded-sm bg-secondary-wash px-4 py-3 text-small text-secondary">
-          {error}
-        </p>
+        <div role="alert" className="rounded-sm bg-secondary-wash px-4 py-3 text-small text-secondary">
+          <p>{error}</p>
+          {failureCount >= 2 && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {payment.method === 'card' && (
+                <Button type="button" size="sm" variant="secondary" onClick={onUsePix}>
+                  Tentar com Pix
+                </Button>
+              )}
+              <Button type="button" size="sm" variant="secondary" onClick={onReviewData}>
+                <RefreshCw /> Revisar dados
+              </Button>
+              <a
+                href={linkWhatsapp(`Olá! Vim pelo site e não consegui finalizar minha compra. Código: ${errorCode ?? 'checkout'}.`)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex min-h-10 items-center gap-2 rounded-pill border border-secondary px-4 py-2 font-medium text-secondary transition-colors hover:bg-secondary-wash"
+              >
+                <MessageCircle className="size-4" /> Chamar atendimento
+              </a>
+            </div>
+          )}
+        </div>
       )}
 
       {/* Verde = dinheiro. A variante whatsapp é o verde oficial (#2e7d46). */}

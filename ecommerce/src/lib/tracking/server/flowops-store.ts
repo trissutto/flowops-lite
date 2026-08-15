@@ -30,6 +30,33 @@ function texto(valor: unknown): string | null {
   return t || null;
 }
 
+const PARAMETROS_SEGUROS: Partial<Record<string, readonly string[]>> = {
+  color_switch: ['color'],
+  size_switch: ['size'],
+  add_to_cart_blocked: ['reason'],
+  add_shipping_info: ['shipping_tier'],
+  add_payment_info: ['payment_type'],
+  checkout_submission: ['method'],
+  checkout_error: ['method', 'reason'],
+  checkout_validation_error: ['section', 'field'],
+  pix_created: ['method'],
+  payment_method_selected: ['method'],
+  pix_copied: ['method', 'order_id'],
+  pix_expired: ['method', 'order_id'],
+  card_declined: ['method', 'attempt'],
+  payment_retry: ['method', 'attempt'],
+  checkout_recovered: ['method', 'order_id'],
+};
+
+function dadosSeguros(evento: TrackingEvent): Record<string, unknown> {
+  const dados: Record<string, unknown> = {};
+  for (const chave of PARAMETROS_SEGUROS[evento.event] ?? []) {
+    const valor = texto(evento.params?.[chave]);
+    if (valor) dados[chave] = valor.slice(0, 80);
+  }
+  return dados;
+}
+
 /**
  * Envia o que for clique de loja. NUNCA lança: chamada em paralelo ao despacho
  * das plataformas, e uma falha aqui não pode derrubar o envio pro GA4/Meta.
@@ -104,7 +131,7 @@ export async function persistirEventosSite(events: TrackingEvent[], semAceite: b
     const refs = Array.isArray(e.items)
       ? e.items.map((i) => texto(i.sku) ?? texto(i.product_id)).filter(Boolean).slice(0, 6)
       : [];
-    const dados: Record<string, unknown> = {};
+    const dados: Record<string, unknown> = dadosSeguros(e);
     if (refs.length) dados.refs = refs;
     const termo = texto((e.params as Record<string, unknown>)?.search_term);
     if (termo) dados.busca = termo;

@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { PromoSiteService } from '../promo-site/promo-site.service';
 
 /**
  * GUARD DO CARRINHO — reconfere no CATÁLOGO tudo que o checkout mandou.
@@ -12,6 +13,8 @@ import { PrismaService } from '../prisma/prisma.service';
  *
  * O QUE ESTE SERVIÇO RESPONDE, peça a peça:
  *   preço  → o `vendaUn` do espelho Wincred, que é a MESMA fonte da vitrine
+ *   promo  → `precoPromo` digitado na retaguarda ou os 50% do caixa
+ *            (`PromoSiteService`) — o mesmo serviço que a vitrine consulta
  *   estoque→ soma de `wincred_estoque` (todas as lojas), no momento de fechar
  *   gate   → `site_produto.publicado` — despublicou no meio da sessão, não vende
  *
@@ -81,7 +84,16 @@ export class CarrinhoGuardService {
   /** Um centavo de folga — arredondamento de float no navegador. */
   private static readonly TOLERANCIA = 0.011;
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    /**
+     * A promoção de 50% do caixa. É o MESMO serviço que a vitrine consulta —
+     * de propósito: se os dois discordassem, o preço da página ficaria abaixo
+     * do preço "real" e o pedido seria RECUSADO aqui embaixo, na cara da
+     * cliente que já escolheu tudo.
+     */
+    private readonly promoSite: PromoSiteService,
+  ) {}
 
   private norm(v: any): string {
     return String(v ?? '')
@@ -129,6 +141,30 @@ export class CarrinhoGuardService {
    * Gate de publicação. Devolve o conjunto de REFs EXPLICITAMENTE
    * despublicadas — ausência de linha não conta (ver regra (a) no topo).
    */
+  /**
+   * PREÇO PROMOCIONAL DO SITE por REF (14/08). Quando setado, é o preço que a
+   * loja REALMENTE cobra no site — a trava passa a compará-lo, não o do ERP,
+   * senão recusaria a venda promocional como fraude. Ref sem promo não entra
+   * no Map (cai no preço normal do ERP).
+   */
+  private async precosPromo(refs: string[]): Promise<Map<string, number>> {
+    const m = new Map<string, number>();
+    if (!refs.length) return m;
+    try {
+      const rows: any[] = await (this.prisma as any).siteProduto.findMany({
+        where: { ref: { in: refs }, precoPromo: { not: null } },
+        select: { ref: true, precoPromo: true },
+      });
+      for (const r of rows) {
+        const p = this.dinheiro(r.precoPromo);
+        if (p > 0) m.set(this.normRef(r.ref), p);
+      }
+    } catch (e: any) {
+      this.logger.warn(`[guard] preços promo indisponíveis (segue no ERP): ${e?.message || e}`);
+    }
+    return m;
+  }
+
   private async despublicadas(refs: string[]): Promise<Set<string>> {
     if (!refs.length) return new Set();
     try {
@@ -283,6 +319,16 @@ export class CarrinhoGuardService {
     }
 
     const bloqueadas = await this.despublicadas(Array.from(porRef.keys()));
+    const promo = await this.precosPromo(Array.from(porRef.keys()));
+    /**
+     * Os 50% de peça antiga (a promoção do caixa). Vem pelas MESMAS chaves que
+     * a vitrine usou pra montar a peça — a resposta tem que ser a mesma dos
+     * dois lados, senão o guard recusa o pedido por "preço atualizado".
+     */
+    const promo50 = await this.promoSite.porChaves([
+      ...porRef.keys(),
+      ...itens.map((it) => this.normRef(it.sku)),
+    ]);
     // Uma consulta só pra sacola inteira: os códigos de TODAS as variações das
     // REFs do carrinho, resolvidos ou não. Consultar dentro do laço faria uma
     // ida ao banco por item.
@@ -366,7 +412,20 @@ export class CarrinhoGuardService {
           erro: `"${nomePeca}" está com o preço em atualização. Tente de novo em instantes ou fale com a gente pelo WhatsApp. 💜`,
         };
       }
-      const precoCatalogo = Math.min(...precos);
+      /**
+       * PROMO DO SITE VENCE O ERP (14/08): se a REF tem `precoPromo`, é ele o
+       * preço que a loja cobra no site — a trava compara contra ele, não
+       * contra o `vendaUn`. Sem promo, segue o menor do catálogo (ERP).
+       *
+       * Sem `precoPromo` digitado, entra a promoção de 50% do caixa (15/08):
+       * peça de MODA cadastrada até 2023 sai por metade na vitrine, e a
+       * cobrança tem que fechar com a página. A ordem é a mesma do catálogo —
+       * preço digitado à mão vence a regra automática.
+       */
+      const precoCheio = Math.min(...precos);
+      const daPromo50 = !!(promo50.get(chave) ?? promo50.get(ref))?.elegivel;
+      const precoCatalogo =
+        promo.get(chave) ?? (daPromo50 ? this.promoSite.precoComDesconto(precoCheio) : precoCheio);
 
       /**
        * 4) Item 5 — ESTOQUE no fechamento, não só ao adicionar.

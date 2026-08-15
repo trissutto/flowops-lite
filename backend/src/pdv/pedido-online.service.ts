@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RoutingService } from '../routing/routing.service';
 import { RoutingResult } from '../routing/types';
 import { montarComplementoBairroWc, montarNumeroWc } from '../common/endereco-wc';
+import { ehItemSemEstoque } from '../common/item-sem-estoque';
 import { PedidoEmailService } from '../loja-orders/pedido-email.service';
 
 /**
@@ -54,6 +55,35 @@ export class PedidoOnlineService {
     return `ON-${String(seq).padStart(6, '0')}`;
   }
 
+  /**
+   * FORMA DE ENTREGA escolhida no PDV (`PdvSale.entregaTipo`) → o que a
+   * retaguarda precisa saber pra despachar.
+   *
+   * `kind` é o mesmo vocabulário do checkout do site (`checkoutInfo.shipping`),
+   * então a tela de pedido, a etiqueta e a expedição leem sem tradução.
+   * Venda antiga (antes de 14/08) e venda sem escolha caem em `correios`
+   * genérico — o rótulo diz "não informada" em vez de mentir "Correios".
+   */
+  private entrega(tipo: string | null | undefined, storeName?: string | null) {
+    switch (String(tipo || '').trim().toLowerCase()) {
+      case 'sedex':
+        return { id: 'sedex', kind: 'correios', label: 'SEDEX', pickup: false };
+      case 'pac':
+        return { id: 'pac', kind: 'correios', label: 'PAC', pickup: false };
+      case 'motoboy':
+        return { id: 'motoboy', kind: 'motoboy', label: 'MOTOBOY', pickup: false };
+      case 'retirada':
+        return {
+          id: 'retirada',
+          kind: 'pickup',
+          label: `RETIRADA NA LOJA${storeName ? ` — ${storeName}` : ''}`,
+          pickup: true,
+        };
+      default:
+        return { id: 'correios', kind: 'correios', label: 'Entrega (não informada)', pickup: false };
+    }
+  }
+
   private async proximaSequencia(): Promise<number> {
     const base = PedidoOnlineService.ONLINE_WC_ID_BASE;
     const ultimo = await (this.prisma as any).order.findFirst({
@@ -81,9 +111,9 @@ export class PedidoOnlineService {
   }
 
   /** A loja vendedora tem TODAS as peças da venda? (espelho wincred_estoque) */
-  private async lojaTemTudo(sale: any, storeCode: string): Promise<boolean> {
+  private async lojaTemTudo(pecas: any[], storeCode: string): Promise<boolean> {
     const porSku = new Map<string, number>();
-    for (const it of sale.items as any[]) {
+    for (const it of pecas) {
       const sku = this.semZeros(it.sku);
       porSku.set(sku, (porSku.get(sku) || 0) + Number(it.qty || 1));
     }
@@ -118,10 +148,25 @@ export class PedidoOnlineService {
       if (!this.enabled()) return null;
       const items = (sale.items || []) as any[];
       if (!items.length) return null;
-      if (!this.digits(sale.customerCep)) {
-        this.logger.warn(`[pedido-online] venda ${sale.id} SEM CEP — não vira Order (baixa local, fluxo legado)`);
+
+      /**
+       * PEÇAS × LINHAS QUE NÃO SÃO PEÇA (14/08 — bug do ON-000001).
+       *
+       * O Order é o trilho LOGÍSTICO: só entra nele o que uma loja separa.
+       * FRETE e itens MANUAIS ficam de fora — o dinheiro deles já está no
+       * `totalAmount` (é o total da venda) e no caixa da loja vendedora.
+       * Copiar a linha de FRETE pra cá fazia o roteamento caçar estoque do
+       * SKU "FRETE" e o pedido nascer em ruptura falsa.
+       */
+      const pecas = items.filter((it) => !ehItemSemEstoque(it));
+      const freteReais = items
+        .filter((it) => String(it?.ref ?? it?.sku ?? '').trim().toUpperCase() === 'FRETE')
+        .reduce((s, it) => s + (Number(it.total) || Number(it.precoUnit) || 0), 0);
+      if (!pecas.length) {
+        this.logger.warn(`[pedido-online] venda ${sale.id} sem nenhuma PEÇA (só frete/manual) — não vira Order`);
         return null;
       }
+
       const store: any = await (this.prisma as any).store
         .findFirst({ where: { code: sale.storeCode } })
         .catch(() => null);
@@ -130,7 +175,16 @@ export class PedidoOnlineService {
         return null;
       }
 
-      const autoAtende = await this.lojaTemTudo(sale, store.code).catch(() => false);
+      // RETIRADA EM LOJA não tem entrega — a cliente busca no balcão. Exigir
+      // CEP dela derrubaria o pedido pro fluxo legado (sem card, sem trilho)
+      // justamente no caso mais simples.
+      const entrega = this.entrega(sale.entregaTipo, store.name);
+      if (!entrega.pickup && !this.digits(sale.customerCep)) {
+        this.logger.warn(`[pedido-online] venda ${sale.id} SEM CEP — não vira Order (baixa local, fluxo legado)`);
+        return null;
+      }
+
+      const autoAtende = await this.lojaTemTudo(pecas, store.code).catch(() => false);
 
       const checkoutInfo = {
         origem: 'pdv_online',
@@ -138,9 +192,16 @@ export class PedidoOnlineService {
         sellerStoreCode: sale.storeCode,
         sellerStoreName: sale.storeName,
         vendedora: sale.sellerName || sale.vendedorName || null,
-        // Stub de frete no shape do site: a etiqueta/expedição leem daqui.
-        // Venda online do PDV não cota frete no checkout — Correios padrão.
-        shipping: { id: 'correios', kind: 'correios', label: 'Correios', price: 0, etaDays: null },
+        // Frete no shape do site (a tela de pedido, a etiqueta e a expedição
+        // leem daqui): a FORMA vem da escolha da loja no PDV e o VALOR é o
+        // que ela cobrou da cliente na linha FRETE — não mais "Correios 0,00".
+        shipping: {
+          id: entrega.id,
+          kind: entrega.kind,
+          label: entrega.label,
+          price: freteReais,
+          etaDays: null,
+        },
         address: {
           cep: this.digits(sale.customerCep),
           street: sale.customerEndereco || '',
@@ -150,7 +211,7 @@ export class PedidoOnlineService {
           city: sale.customerCidade || '',
           uf: String(sale.customerUf || '').toUpperCase().slice(0, 2),
         },
-        items: items.map((it) => ({
+        items: pecas.map((it) => ({
           sku: String(it.sku),
           name: it.descricao,
           size: it.tamanho || null,
@@ -186,13 +247,24 @@ export class PedidoOnlineService {
               shippingCep: this.digits(sale.customerCep) || null,
               shippingAddress: JSON.stringify(this.montarShippingWc(sale)),
               totalAmount: Number(sale.total || 0),
-              shippingMethod: 'Envio Correios (venda online)',
+              // FORMA DE ENTREGA (14/08): SEDEX/PAC/MOTOBOY/RETIRADA, do jeito
+              // que a loja escolheu. Retirada marca `isPickup` — a separação
+              // trava na própria loja e a tela mostra o banner de retirada.
+              shippingMethod: entrega.label,
+              isPickup: entrega.pickup,
+              pickupStoreCode: entrega.pickup ? store.code : null,
               wcDateCreated: new Date(),
               checkoutInfo: JSON.stringify(checkoutInfo),
               items: {
-                create: items.map((it) => ({
+                create: pecas.map((it) => ({
                   sku: String(it.sku),
                   productName: it.descricao || [it.ref, it.cor, it.tamanho].filter(Boolean).join(' · '),
+                  // REF · COR · TAM em coluna — o formato que a loja lê na
+                  // arara (13/08). Sem isto o card do pedido online mostrava
+                  // só o nome comprido do cadastro.
+                  ref: it.ref || null,
+                  cor: it.cor || null,
+                  tamanho: it.tamanho || null,
                   quantity: Number(it.qty || 1),
                   unitPrice: Number(it.precoUnit || 0),
                   // Base do acerto ÷2,5 — preço de tabela do PDV (o desconto
@@ -225,7 +297,7 @@ export class PedidoOnlineService {
               storeId: store.id,
               storeCode: store.code,
               storeName: store.name,
-              items: items.map((it) => ({ sku: String(it.sku), quantity: Number(it.qty || 1) })),
+              items: pecas.map((it) => ({ sku: String(it.sku), quantity: Number(it.qty || 1) })),
             },
           ],
           missing: [],

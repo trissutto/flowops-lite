@@ -4675,6 +4675,10 @@ function PaymentModal({
   // FRETE à parte (venda online) — vira linha própria na venda
   const [freteStr, setFreteStr] = useState('');
   const [aplicandoFrete, setAplicandoFrete] = useState(false);
+  // COMO A PEÇA SAI (14/08) — SEDEX / PAC / MOTOBOY / RETIRADA EM LOJA.
+  // Sem isso o pedido online nascia "Correios R$ 0,00" e a matriz não sabia
+  // se emitia etiqueta, chamava motoboy ou segurava a peça pra retirada.
+  const [entregaTipo, setEntregaTipo] = useState<'sedex' | 'pac' | 'motoboy' | 'retirada' | null>(null);
   // Info do cliente vinda do Giga + pendências (pra banner de inadimplência)
   const [credCustomerInfo, setCredCustomerInfo] = useState<{
     found: boolean;
@@ -4913,6 +4917,8 @@ function PaymentModal({
   const [pagarmeLink, setPagarmeLink] = useState<{
     pagarmeOrderId: string;
     paymentUrl: string;
+    /** O link que a gente MANDA (/pg/<token>) — ver comentário no envio. */
+    shortUrl?: string;
     expiresAt: string;
   } | null>(null);
   const [pagarmeLinkLoading, setPagarmeLinkLoading] = useState(false);
@@ -5018,6 +5024,15 @@ function PaymentModal({
           'warning',
           'Escolha o tipo da venda online',
           'Gerar PIX / PIX recebido / Link externo / Link Pagar.me.',
+        );
+        return;
+      }
+      // COMO A PEÇA SAI — 1 clique, e é o que a matriz lê pra despachar.
+      if (!entregaTipo) {
+        toast(
+          'warning',
+          'Escolha a forma de entrega',
+          'SEDEX, PAC, Motoboy ou Retirada em loja.',
         );
         return;
       }
@@ -5810,10 +5825,12 @@ function PaymentModal({
     // aplicado, cliente só precisa cobrir o que falta — não a venda inteira.
     if (selected === 'dinheiro' && recebidoNum < restante) return false;
     if (needsBandeira && !bandeira) return false;
-    if (selected === 'venda_online' && (!customerCpf || !vendaOnlineTipo)) return false;
+    // Venda online também precisa da FORMA DE ENTREGA (14/08) — é o que a
+    // matriz lê pra despachar (etiqueta, motoboy ou retirada na loja).
+    if (selected === 'venda_online' && (!customerCpf || !vendaOnlineTipo || !entregaTipo)) return false;
     if (selected === 'convenio' && !convMembro) return false;
     return true;
-  }, [selected, bandeira, needsBandeira, recebidoNum, restante, customerCpf, vendaOnlineTipo, convMembro]);
+  }, [selected, bandeira, needsBandeira, recebidoNum, restante, customerCpf, vendaOnlineTipo, entregaTipo, convMembro]);
 
   const confirm = async () => {
     if (!selected) return;
@@ -6297,6 +6314,56 @@ function PaymentModal({
               </div>
             )}
 
+            {/* ── COMO A PEÇA SAI (14/08) — a matriz despacha por isto:
+                SEDEX/PAC geram etiqueta dos Correios, MOTOBOY é entrega na
+                mão e RETIRADA segura a peça na própria loja (o pedido nasce
+                como retirada, sem etiqueta). Obrigatório na venda online. ── */}
+            <div className="bg-white border-2 border-teal-200 rounded-lg p-2.5">
+              <label className="text-[10px] text-slate-600 uppercase font-semibold tracking-wider">
+                Forma de entrega <span className="text-rose-600">*</span>
+              </label>
+              <div className="grid grid-cols-2 gap-1.5 mt-1">
+                {([
+                  { id: 'sedex', label: '⚡ SEDEX' },
+                  { id: 'pac', label: '📦 PAC' },
+                  { id: 'motoboy', label: '🛵 MOTOBOY' },
+                  { id: 'retirada', label: '🏬 RETIRA NA LOJA' },
+                ] as const).map((op) => (
+                  <button
+                    key={op.id}
+                    type="button"
+                    onClick={async () => {
+                      setEntregaTipo(op.id);
+                      if (!saleId) return;
+                      try {
+                        await api(`/pdv/sales/${saleId}/entrega`, {
+                          method: 'POST',
+                          body: JSON.stringify({ tipo: op.id }),
+                        });
+                      } catch (e: any) {
+                        // A escolha fica na tela; o finalize regrava. Nunca
+                        // travar a venda por causa do registro da entrega.
+                        const h = humanizeError(e);
+                        toast('error', h.title, h.hint);
+                      }
+                    }}
+                    className={`rounded-lg border-2 py-2 text-xs font-bold transition ${
+                      entregaTipo === op.id
+                        ? 'border-teal-500 bg-teal-600 text-white'
+                        : 'border-slate-200 bg-white text-slate-700 hover:border-teal-300'
+                    }`}
+                  >
+                    {op.label}
+                  </button>
+                ))}
+              </div>
+              {entregaTipo === 'retirada' && (
+                <p className="text-[10px] text-teal-700 mt-1 font-semibold">
+                  A peça fica reservada nesta loja — o pedido nasce como retirada, sem etiqueta.
+                </p>
+              )}
+            </div>
+
             {/* ── FRETE À PARTE (dono 23/07): vira linha própria na venda —
                 soma no total, entra no caixa como receita e fica FORA da
                 base de comissão da vendedora ── */}
@@ -6506,6 +6573,7 @@ function PaymentModal({
                           const r = await api<{
                             pagarmeOrderId: string;
                             paymentUrl: string;
+                            shortUrl?: string;
                             expiresAt: string;
                             tentativa?: number;
                           }>('/pagarme/checkout/create', {
@@ -6526,7 +6594,11 @@ function PaymentModal({
                               // maxInstallments OMITIDO de propósito: o backend
                               // usa PAGARME_MAX_PARCELAS (Railway) — mandar um
                               // número aqui IGNORA a variável da rede.
-                              expiresInMinutes: 1440, // 24h
+                              // expiresInMinutes OMITIDO de propósito: quem
+                              // manda é PAGARME_LINK_HORAS (72h) no Railway.
+                              // Chumbar 1440 aqui IGNORAVA a variável e matava
+                              // o link em 24h — link mandado no fim da tarde
+                              // vencia antes da cliente decidir.
                               acceptPix: true,
                               acceptCreditCard: true,
                             }),
@@ -6557,20 +6629,23 @@ function PaymentModal({
                   <>
                     {/* Linha 1: URL compacta + status */}
                     <div className="flex items-center gap-1.5 text-[10px] font-bold text-violet-700">
-                      <span>🔗 LINK GERADO · 24h</span>
+                      <span>🔗 LINK GERADO · 72h</span>
                       {pagarmeLinkPaid && (
                         <span className="bg-emerald-600 text-white px-1.5 py-0.5 rounded">✓ PAGO</span>
                       )}
                     </div>
+                    {/* O que a loja copia é o link NOSSO (/pg/<token>). A URL
+                        crua da Pagar.me é de uso único: paga ou vencida, vira
+                        "404 — não encontramos seu pedido" na mão da cliente. */}
                     <div className="bg-white border border-violet-300 rounded px-2 py-1 font-mono text-[10px] text-violet-900 truncate">
-                      {pagarmeLink.paymentUrl}
+                      {pagarmeLink.shortUrl || pagarmeLink.paymentUrl}
                     </div>
                     {/* Linha 2: 4 botões em grid compacto */}
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
                       <button
                         type="button"
                         onClick={() => {
-                          navigator.clipboard.writeText(pagarmeLink.paymentUrl);
+                          navigator.clipboard.writeText(pagarmeLink.shortUrl || pagarmeLink.paymentUrl);
                           setPagarmeLinkCopied(true);
                           setTimeout(() => setPagarmeLinkCopied(false), 2000);
                         }}
@@ -6581,7 +6656,7 @@ function PaymentModal({
                       </button>
                       <a
                         href={`https://wa.me/${(customerPhone || '').replace(/\D/g, '') ? `55${(customerPhone || '').replace(/\D/g, '')}` : ''}?text=${encodeURIComponent(
-                          `Olá ${customerName?.split(' ')[0] || ''}! Link pra pagamento (${brl(restante > 0 ? restante : total)}):\n\n${pagarmeLink.paymentUrl}\n\nPIX ou cartão até 12x sem juros. Expira em 24h.`,
+                          `Olá ${customerName?.split(' ')[0] || ''}! Link pra pagamento (${brl(restante > 0 ? restante : total)}):\n\n${pagarmeLink.shortUrl || pagarmeLink.paymentUrl}\n\nPIX ou cartão até 12x sem juros. O link vale 3 dias.`,
                         )}`}
                         target="_blank"
                         rel="noopener noreferrer"

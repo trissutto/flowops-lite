@@ -121,8 +121,12 @@ function ImprimirTodosContent() {
             key={r.id}
             className="font-mono text-[11px] leading-tight p-2 cupom"
             style={{
-              width: '76mm',
-              maxWidth: '76mm',
+              // 72mm é a área que o papel 80mm realmente imprime — 76mm
+              // cortava a direita (mesma medida do /minha-loja/imprimir/[id],
+              // que este cupom promete copiar).
+              width: '72mm',
+              maxWidth: '72mm',
+              boxSizing: 'border-box',
               margin: '0 auto',
               // SEM page-break — térmica é papel contínuo. Separador visual abaixo.
               borderTop: idx > 0 ? '2px dashed #000' : 'none',
@@ -182,7 +186,7 @@ function ImprimirTodosContent() {
       })}
 
       {/* Botões — escondidos na impressão */}
-      <div className="mt-4 mx-auto max-w-[76mm] flex gap-2 print:hidden">
+      <div className="mt-4 mx-auto max-w-[72mm] flex gap-2 print:hidden">
         <button
           onClick={() => window.print()}
           className="flex-1 px-3 py-2 bg-violet-600 text-white font-bold rounded text-xs"

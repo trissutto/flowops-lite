@@ -139,9 +139,20 @@ export interface CriarPedidoInput {
 }
 
 /** Resposta do POST — `ok:false` sempre vem com mensagem pronta pra cliente. */
+export type CheckoutErrorCode =
+  | 'card_declined'
+  | 'catalog_unavailable'
+  | 'coupon_invalid'
+  | 'shipping_invalid'
+  | 'validation_error'
+  | 'rate_limited'
+  | 'payment_unavailable'
+  | 'internal_error';
+
 export interface CriarPedidoResult {
   ok: boolean;
   error?: string;
+  code?: CheckoutErrorCode;
   order?: any;
 }
 
@@ -341,7 +352,7 @@ export class LojaOrdersService {
    * na tela é o erro que não se desfaz com pedido de desculpas.
    */
   private async reprecificar(input: CriarPedidoInput): Promise<
-    | { ok: false; erro: string }
+    | { ok: false; erro: string; code: CheckoutErrorCode }
     | {
         ok: true;
         subtotal: number;
@@ -354,7 +365,9 @@ export class LojaOrdersService {
   > {
     // 1) Preço, estoque e publicação, peça a peça.
     const conferencia = await this.guard.conferir(input.items as any);
-    if (!conferencia.ok) return { ok: false, erro: conferencia.erro };
+    if (!conferencia.ok) {
+      return { ok: false, erro: conferencia.erro, code: 'catalog_unavailable' };
+    }
 
     for (const c of conferencia.itens) {
       // O preço COBRADO passa a ser o do catálogo, item a item — inclusive no
@@ -398,7 +411,7 @@ export class LojaOrdersService {
       const r = await this.cupons.aplicar(input.couponCode, subtotal, {
         cpf: this.digits(input.customer.cpf),
       });
-      if (!r.ok) return { ok: false, erro: r.mensagem };
+      if (!r.ok) return { ok: false, erro: r.mensagem, code: 'coupon_invalid' };
       descontoCupom = this.dinheiro(r.desconto);
       couponCode = r.code;
       freteGratisPorCupom = r.tipo === 'shipping';
@@ -433,6 +446,7 @@ export class LojaOrdersService {
         return {
           ok: false,
           erro: 'A opção de entrega que você escolheu não está mais disponível. Volte uma etapa e escolha de novo. 💜',
+          code: 'shipping_invalid',
         };
       }
       if (Math.abs(opcao.price - frete) > LojaOrdersService.TOLERANCIA) {
@@ -462,7 +476,11 @@ export class LojaOrdersService {
     const total = this.dinheiro(subtotal - descontoCupom - descontoPix + frete);
     if (total <= 0) {
       this.logger.warn(`[loja] total recalculado <= 0 (subtotal=${subtotal} cupom=${descontoCupom})`);
-      return { ok: false, erro: 'O valor do pedido ficou inválido. Confira a sacola e tente de novo. 💜' };
+      return {
+        ok: false,
+        erro: 'O valor do pedido ficou inválido. Confira a sacola e tente de novo. 💜',
+        code: 'validation_error',
+      };
     }
 
     // TETO: nunca cobrar acima do que a cliente viu.
@@ -475,6 +493,7 @@ export class LojaOrdersService {
       return {
         ok: false,
         erro: 'Os valores da sacola mudaram desde que você abriu o checkout. Atualize a página e confira antes de pagar. 💜',
+        code: 'catalog_unavailable',
       };
     }
     if (informado > 0 && Math.abs(total - informado) > LojaOrdersService.TOLERANCIA) {
@@ -1148,7 +1167,7 @@ export class LojaOrdersService {
 
   async criarPedido(input: CriarPedidoInput): Promise<CriarPedidoResult> {
     const erro = this.validar(input);
-    if (erro) return { ok: false, error: erro };
+    if (erro) return { ok: false, error: erro, code: 'validation_error' };
 
     /**
      * A CONTA É REFEITA ANTES DE QUALQUER COISA (bloco A).
@@ -1159,7 +1178,7 @@ export class LojaOrdersService {
      * (é dele que a cobrança e a etiqueta saem).
      */
     const conta = await this.reprecificar(input);
-    if (!conta.ok) return { ok: false, error: conta.erro };
+    if (!conta.ok) return { ok: false, error: conta.erro, code: conta.code };
 
     // CRM antes da cobrança de propósito: mesmo que o cartão seja recusado, a
     // cliente fica cadastrada (é lead, não venda) e a próxima tentativa dela
@@ -1176,7 +1195,11 @@ export class LojaOrdersService {
       order = await this.criarOrder(input, pickup, conta);
     } catch (e: any) {
       this.logger.error(`[loja] falha ao criar pedido: ${e?.message || e}`);
-      return { ok: false, error: 'Não conseguimos abrir o seu pedido agora. Tente de novo em instantes. 💜' };
+      return {
+        ok: false,
+        error: 'Não conseguimos abrir o seu pedido agora. Tente de novo em instantes. 💜',
+        code: 'internal_error',
+      };
     }
 
     // ── Cobrança ──
@@ -1221,7 +1244,7 @@ export class LojaOrdersService {
               this.logger.warn(`[loja] recusa não persistiu (${e?.message || e}) — descartando como antes`);
               await this.descartarPedido(order.id);
             });
-          return { ok: false, error: r.error };
+          return { ok: false, error: r.error, code: 'card_declined' };
         }
         paymentInfo = {
           ...paymentInfo,
@@ -1230,11 +1253,43 @@ export class LojaOrdersService {
         };
       }
     } catch (e: any) {
-      this.logger.error(`[loja] cobrança falhou pedido=${order.wcOrderNumber}: ${e?.message || e}`);
-      await this.descartarPedido(order.id);
+      const motivo = e?.message || String(e);
+      this.logger.error(
+        `[loja] cobrança falhou pedido=${order.wcOrderNumber} (${input.payment.method}): ${motivo}`,
+      );
+      /**
+       * COBRANÇA QUE ESTOUROU TAMBÉM VIRA CARRINHO RESGATÁVEL (dono, 15/08).
+       *
+       * Mesma razão do cartão recusado logo acima: a cliente que tentou pagar
+       * é a mais quente que existe, e o `descartarPedido` a apagava sem deixar
+       * rastro — nem na aba Carrinhos, nem pra gente diagnosticar POR QUE. Foi
+       * o que aconteceu em 15/08: duas clientes tentaram Pix num carrinho de
+       * R$209 (bmm-100, com estoque de sobra), o Pix não gerou 8× seguidas, e
+       * as duas — mais o motivo real — sumiram junto com o pedido descartado.
+       *
+       * Agora o pedido fica `payment_failed` (não segura estoque, não entra em
+       * fila nenhuma — todas filtram esse status) e o motivo técnico vai pro
+       * `paymentInfo.falha`, pra próxima falha ter nome em vez de "recusado".
+       */
+      await (this.prisma as any).order
+        .update({
+          where: { id: order.id },
+          data: {
+            status: 'payment_failed',
+            paymentInfo: JSON.stringify({ ...paymentInfo, falha: motivo, falhaEm: new Date().toISOString() }),
+          },
+        })
+        .catch(async (err: any) => {
+          this.logger.warn(`[loja] falha de cobrança não persistiu (${err?.message || err}) — descartando`);
+          await this.descartarPedido(order.id);
+        });
       return {
         ok: false,
-        error: 'Não conseguimos iniciar o pagamento agora. Tente de novo em instantes. 💜',
+        error:
+          input.payment.method === 'pix'
+            ? 'Não conseguimos gerar o seu Pix agora. Tente de novo em instantes — ou finalize no cartão, que aprova na hora. 💜'
+            : 'Não conseguimos iniciar o pagamento agora. Tente de novo em instantes. 💜',
+        code: 'payment_unavailable',
       };
     }
 

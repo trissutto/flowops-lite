@@ -1,14 +1,28 @@
 import {
   Controller,
+  Body,
   Get,
   Param,
   ParseIntPipe,
+  Post,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import { AbandonedCartsService } from './abandoned-carts.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { AdminOnly, AdminOnlyGuard } from '../auth/admin-only.guard';
+
+@Controller('public/loja/checkout-recovery')
+export class CheckoutRecoveryPublicController {
+  constructor(private readonly service: AbandonedCartsService) {}
+
+  @Post()
+  capture(@Body() body: any, @Req() request: any) {
+    const ip = String(request?.ips?.[0] ?? request?.ip ?? request?.socket?.remoteAddress ?? 'unknown');
+    return this.service.captureCheckout(body || {}, ip);
+  }
+}
 
 @Controller('abandoned-carts')
 @UseGuards(JwtAuthGuard, AdminOnlyGuard)

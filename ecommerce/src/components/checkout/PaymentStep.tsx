@@ -6,7 +6,7 @@ import { cn } from '@/lib/utils';
 import { PIX_DESCONTO_PCT } from '@/lib/commerce/pix';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
-import { trackAddPaymentInfo, type TrackedItem } from '@/lib/tracking';
+import { trackAddPaymentInfo, trackPaymentMethodSelected, type TrackedItem } from '@/lib/tracking';
 import type { PaymentMethod } from '@/types/checkout';
 import { CardForm } from './CardForm';
 
@@ -56,6 +56,7 @@ export function PaymentStep({ total, itemsTracked, defaults, onDone }: PaymentSt
   function ensureTracked(m: PaymentMethod) {
     if (!tracked.has(m)) {
       trackAddPaymentInfo(itemsTracked, m);
+      trackPaymentMethodSelected(m);
       setTracked((prev) => new Set(prev).add(m));
     }
   }

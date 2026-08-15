@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { Input, Select } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { formatPrice } from '@/lib/utils';
+import { trackCheckoutValidationError } from '@/lib/tracking';
 import {
   CARD_BRAND_LABEL,
   detectCardBrand,
@@ -140,10 +141,18 @@ export function CardForm({ total, onDone }: CardFormProps) {
   }
 
   return (
-    <form onSubmit={handleSubmit(submit)} noValidate className="flex flex-col gap-5">
+    <form
+      onSubmit={handleSubmit(submit, (invalid) => {
+        const field = Object.keys(invalid)[0] ?? 'unknown';
+        trackCheckoutValidationError('card', field === 'number' ? 'card_number' : field);
+      })}
+      noValidate
+      className="flex flex-col gap-5"
+    >
       <Input
         label="Número do cartão"
         inputMode="numeric"
+        enterKeyHint="next"
         autoComplete="cc-number"
         placeholder="0000 0000 0000 0000"
         // A bandeira detectada aparece como hint — feedback de "entendi seu
@@ -157,6 +166,7 @@ export function CardForm({ total, onDone }: CardFormProps) {
       <Input
         label="Nome impresso no cartão"
         autoComplete="cc-name"
+        enterKeyHint="next"
         placeholder="Como aparece no cartão"
         error={errors.holder?.message}
         {...register('holder')}
@@ -165,6 +175,7 @@ export function CardForm({ total, onDone }: CardFormProps) {
         <Input
           label="Validade"
           inputMode="numeric"
+          enterKeyHint="next"
           autoComplete="cc-exp"
           placeholder="MM/AA"
           error={errors.expiry?.message}
@@ -175,6 +186,7 @@ export function CardForm({ total, onDone }: CardFormProps) {
         <Input
           label="CVV"
           inputMode="numeric"
+          enterKeyHint="done"
           autoComplete="cc-csc"
           placeholder="123"
           maxLength={4}

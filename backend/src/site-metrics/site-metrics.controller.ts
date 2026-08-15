@@ -145,10 +145,19 @@ export class SiteMetricsController {
     const fim = this.fimDoDia(ate) ?? this.fimDoDia(this.hoje())!;
     const inicio = this.inicioDoDia(de) ?? new Date(fim.getTime() - 29 * 24 * 60 * 60 * 1000);
 
+    const [etapas, diagnosticos, faturamento, alertasCheckout] = await Promise.all([
+      this.service.funil(inicio, fim),
+      this.service.diagnosticosFunil(inicio, fim),
+      this.service.faturamentoSite(inicio, fim),
+      this.service.alertasCheckout(inicio, fim),
+    ]);
     return {
       de: inicio.toISOString(),
       ate: fim.toISOString(),
-      etapas: await this.service.funil(inicio, fim),
+      etapas,
+      diagnosticos,
+      faturamento,
+      alertasCheckout,
     };
   }
 

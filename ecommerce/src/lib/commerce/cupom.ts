@@ -41,6 +41,15 @@ const DEFAULT_RULES: CouponRule[] = [
   { code: 'BEMVINDA10', kind: 'percent', value: 10, minSubtotal: 149.9, label: 'Boas-vindas: 10% off' },
   { code: 'LURDS15', kind: 'percent', value: 15, minSubtotal: 349.9, label: '15% off acima de R$ 349,90' },
   { code: 'FRETEGRATIS', kind: 'shipping', value: 0, minSubtotal: 199.9, label: 'Frete grátis' },
+  /**
+   * VESTIDO139 — campanha do Vestido Viscolycra Premium (dono, 14/08/2026):
+   * R$ 50 off leva a peça de R$ 189,90 pra R$ 139,90. Espelha a linha da
+   * tabela `site_cupons` do backend (que é quem VALE) — sem ela aqui, a tela
+   * recusava um cupom que o backend aceita. Dívida conhecida: o front devia
+   * LER do backend em vez de manter esta cópia; enquanto não lê, campanha
+   * nova entra nos dois lugares. `expiresAt` casa com o `fim_em` do banco.
+   */
+  { code: 'VESTIDO139', kind: 'fixed', value: 50, minSubtotal: 179.9, expiresAt: '2026-08-21T20:35:13.860Z', label: 'R$ 50 off — o vestido por R$ 139,90' },
 ];
 
 function rules(): CouponRule[] {

@@ -672,6 +672,21 @@ export class PdvController {
   }
 
   /**
+   * POST /pdv/sales/:id/entrega { tipo }
+   * FORMA DE ENTREGA da venda online: sedex | pac | motoboy | retirada.
+   * Vira o método do pedido online (retirada = separa na própria loja).
+   */
+  @Post('sales/:id/entrega')
+  setEntrega(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: { tipo: string },
+  ) {
+    this.requireRole(req);
+    return this.svc.setEntrega(id, String(body?.tipo ?? ''));
+  }
+
+  /**
    * POST /pdv/sales/:id/gift-voucher { valor, compradorNome?, presenteadoNome? }
    * VALE PRESENTE: item manual na venda + crédito (trilho do vale-troca) que
    * ativa quando a venda finaliza. Código VP- sai impresso no cupom.
