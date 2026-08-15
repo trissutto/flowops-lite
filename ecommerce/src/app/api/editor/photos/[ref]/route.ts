@@ -31,7 +31,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ ref
       return NextResponse.json(await api('/site-media/direct-upload', { method: 'POST', token: c.token, body: { filename: body.filename, kind: 'product', resourceKey: [c.ref.toUpperCase(), c.cor.toUpperCase()].filter(Boolean).join('|') } }));
     }
     if (body.action === 'confirm') {
-      return NextResponse.json(await api(`/site-media/${encodeURIComponent(body.id)}/confirm`, { method: 'POST', token: c.token, body: { ref: c.ref, cor: c.cor }, timeoutMs: 20_000 }));
+      return NextResponse.json(await api(`/site-media/${encodeURIComponent(body.id)}/confirm`, { method: 'POST', token: c.token, body: { ref: c.ref, cor: c.cor, substituirId: body.substituirId }, timeoutMs: 20_000 }));
     }
     return NextResponse.json({ error: 'Ação inválida.' }, { status: 400 });
   } catch (error) { return failure(error); }

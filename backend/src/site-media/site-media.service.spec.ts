@@ -8,7 +8,7 @@ describe('SiteMediaService', () => {
     get: jest.fn(),
     delete: jest.fn(),
   } as unknown as CloudflareImagesClient;
-  const prisma = { productPhoto: { findMany: jest.fn(), create: jest.fn(), findUnique: jest.fn(), delete: jest.fn() } } as any;
+  const prisma = { productPhoto: { findMany: jest.fn(), create: jest.fn(), update: jest.fn(), findUnique: jest.fn(), delete: jest.fn() } } as any;
   const service = new SiteMediaService(cloudflare, prisma);
 
   beforeEach(() => jest.clearAllMocks());
@@ -61,6 +61,18 @@ describe('SiteMediaService', () => {
 
     expect(result.photo).toEqual(expect.objectContaining({ ref: 'BMM-100', cor: 'PRETO', ordem: 0 }));
     expect(prisma.productPhoto.create).toHaveBeenCalledWith({ data: expect.objectContaining({ objectKey: 'cloudflare:image_123' }) });
+  });
+
+  it('substitui a foto preservando sua posição', async () => {
+    (cloudflare.get as jest.Mock).mockResolvedValue({ id: 'image_new', variants: ['https://imagedelivery.net/hash/image_new/public'], meta: { resourceKey: 'BMM-100|PRETO' } });
+    prisma.productPhoto.findMany.mockResolvedValue([{ id: 'photo-1', ref: 'BMM-100', cor: 'PRETO', ordem: 0, objectKey: 'cloudflare:image_old' }]);
+    prisma.productPhoto.update.mockImplementation(({ data }: any) => ({ id: 'photo-1', ...data }));
+    (cloudflare.delete as jest.Mock).mockResolvedValue({});
+
+    const result = await service.confirm('image_new', { ref: 'BMM-100', cor: 'PRETO', substituirId: 'photo-1' }, { sub: 'user-1' });
+
+    expect(result.photo).toEqual(expect.objectContaining({ id: 'photo-1', ordem: 0, objectKey: 'cloudflare:image_new' }));
+    expect(cloudflare.delete).toHaveBeenCalledWith('image_old');
   });
 
   it('não consulta identificador inválido', async () => {

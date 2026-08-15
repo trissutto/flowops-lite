@@ -32,7 +32,7 @@ export class SiteMediaService {
     return { ...result, expiresAt: expiresAt.toISOString() };
   }
 
-  async confirm(idRaw: string, input?: { ref?: string; cor?: string }, user?: any) {
+  async confirm(idRaw: string, input?: { ref?: string; cor?: string; substituirId?: string }, user?: any) {
     const id = String(idRaw || '').trim();
     if (!/^[A-Za-z0-9_-]{6,128}$/.test(id)) throw new BadRequestException('Identificador de mídia inválido');
     const image = await this.cloudflare.get(id);
@@ -53,13 +53,18 @@ export class SiteMediaService {
       throw new BadRequestException('A imagem não pertence a este produto e cor');
     }
     const existing = await (this.prisma as any).productPhoto.findMany({ where: { ref, cor }, orderBy: { ordem: 'asc' } });
-    if (existing.length >= 6) throw new BadRequestException('Esta cor já tem 6 fotos');
+    const replacing = input.substituirId ? existing.find((photo: any) => photo.id === input.substituirId) : null;
+    if (input.substituirId && !replacing) throw new BadRequestException('Foto a substituir não pertence a esta galeria');
+    if (!replacing && existing.length >= 6) throw new BadRequestException('Esta cor já tem 6 fotos');
     const url = image.variants?.[0];
     if (!url) throw new BadRequestException('Cloudflare não devolveu uma variante pública');
-    const photo = await (this.prisma as any).productPhoto.create({ data: {
-      ref, cor, url, objectKey: `cloudflare:${id}`, ordem: existing.length ? Math.max(...existing.map((p: any) => Number(p.ordem) || 0)) + 1 : 0,
-      uploadedByUserId: user?.id || user?.sub || null,
-    }});
+    const data = { ref, cor, url, objectKey: `cloudflare:${id}`, ordem: replacing?.ordem ?? (existing.length ? Math.max(...existing.map((p: any) => Number(p.ordem) || 0)) + 1 : 0), uploadedByUserId: user?.id || user?.sub || null };
+    const photo = replacing
+      ? await (this.prisma as any).productPhoto.update({ where: { id: replacing.id }, data })
+      : await (this.prisma as any).productPhoto.create({ data });
+    if (replacing?.objectKey?.startsWith('cloudflare:')) {
+      await this.cloudflare.delete(String(replacing.objectKey).slice('cloudflare:'.length)).catch(() => undefined);
+    }
     return { ...result, photo };
   }
 

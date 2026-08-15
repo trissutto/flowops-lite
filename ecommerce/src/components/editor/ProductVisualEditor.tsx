@@ -79,7 +79,7 @@ export function ProductVisualEditor(props: Props) {
     window.setTimeout(() => window.location.reload(), 900);
   }
 
-  async function upload(file?: File) {
+  async function upload(file?: File, replace?: Photo) {
     if (!file) return;
     if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) return setMessage('Use JPG, PNG ou WebP.');
     if (file.size > 10 * 1024 * 1024) return setMessage('A foto deve ter no máximo 10 MB.');
@@ -90,7 +90,7 @@ export function ProductVisualEditor(props: Props) {
       const form = new FormData(); form.set('file', file);
       if (!(await fetch(prepared.uploadURL, { method: 'POST', body: form })).ok) throw new Error('Cloudflare recusou a imagem.');
       let confirmed: Response | undefined;
-      for (let attempt = 0; attempt < 5; attempt++) { confirmed = await fetch(photosEndpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'confirm', id: prepared.id }) }); if (confirmed.ok) break; await new Promise((resolve) => setTimeout(resolve, 1200)); }
+      for (let attempt = 0; attempt < 5; attempt++) { confirmed = await fetch(photosEndpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'confirm', id: prepared.id, substituirId: replace?.id }) }); if (confirmed.ok) break; await new Promise((resolve) => setTimeout(resolve, 1200)); }
       if (!confirmed?.ok) throw new Error((await confirmed?.json().catch(() => null))?.error || 'A imagem não terminou de processar.');
       await load(); setMessage('Foto adicionada. A primeira foto é a capa.');
     } catch (error) { setMessage(error instanceof Error ? error.message : 'Falha ao enviar foto.'); }
@@ -141,7 +141,7 @@ export function ProductVisualEditor(props: Props) {
                 {photos.map((photo, index) => <div key={photo.id} className="relative overflow-hidden rounded border bg-sand">
                   {/* eslint-disable-next-line @next/next/no-img-element */}<img src={photo.url} alt={`Foto ${index + 1}`} className="aspect-[3/4] w-full object-cover" />
                   {index === 0 && <span className="absolute left-2 top-2 rounded bg-ink px-2 py-1 text-xs text-white">Capa</span>}
-                  <div className="grid grid-cols-3 bg-white"><button aria-label="Mover para esquerda" disabled={busy || index === 0} onClick={() => void reorder(index, -1)} className="p-2 disabled:opacity-30"><ArrowLeft className="mx-auto h-4 w-4" /></button><button aria-label="Mover para direita" disabled={busy || index === photos.length - 1} onClick={() => void reorder(index, 1)} className="p-2 disabled:opacity-30"><ArrowRight className="mx-auto h-4 w-4" /></button><button aria-label="Excluir foto" disabled={busy} onClick={() => void remove(photo)} className="p-2 text-red-700"><Trash2 className="mx-auto h-4 w-4" /></button></div>
+                  <div className="grid grid-cols-4 bg-white"><button aria-label="Mover para esquerda" disabled={busy || index === 0} onClick={() => void reorder(index, -1)} className="p-2 disabled:opacity-30"><ArrowLeft className="mx-auto h-4 w-4" /></button><button aria-label="Mover para direita" disabled={busy || index === photos.length - 1} onClick={() => void reorder(index, 1)} className="p-2 disabled:opacity-30"><ArrowRight className="mx-auto h-4 w-4" /></button><label aria-label="Substituir foto" className="cursor-pointer p-2 text-center"><ImagePlus className="mx-auto h-4 w-4" /><input type="file" accept="image/jpeg,image/png,image/webp" disabled={busy} onChange={(e) => void upload(e.target.files?.[0], photo)} className="sr-only" /></label><button aria-label="Excluir foto" disabled={busy} onClick={() => void remove(photo)} className="p-2 text-red-700"><Trash2 className="mx-auto h-4 w-4" /></button></div>
                 </div>)}
               </div>
               <label className="flex cursor-pointer items-center justify-center gap-2 rounded border border-dashed p-4 font-semibold"><ImagePlus className="h-5 w-5" /> Adicionar foto<input type="file" accept="image/jpeg,image/png,image/webp" disabled={busy || photos.length >= 6} onChange={(e) => void upload(e.target.files?.[0])} className="sr-only" /></label>
