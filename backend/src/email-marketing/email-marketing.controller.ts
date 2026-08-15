@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { EmailMarketingService } from './email-marketing.service';
 
@@ -21,6 +21,12 @@ export class EmailMarketingController {
   @Get('segmentos')
   segmentos() {
     return this.service.segmentos();
+  }
+
+  /** Pedidos que vieram do e-mail (utm_source=email), contados no nosso banco. */
+  @Get('resultados')
+  resultados(@Query('de') de?: string, @Query('ate') ate?: string) {
+    return this.service.resultados(de, ate);
   }
 
   /** Prévia no e-mail de teste (nosso SES) — não toca no Mautic. */
