@@ -222,13 +222,17 @@ export class SiteMetricsService {
    * de deixar parecer que o site não vendia. `::int` nos COUNTs: BigInt na
    * resposta é 500 mudo de serialização.
    */
-  async funil(de: Date, ate: Date): Promise<Array<{ evento: string; eventos: number; pessoas: number }>> {
+  async funil(
+    de: Date,
+    ate: Date,
+  ): Promise<Array<{ evento: string; eventos: number; pessoas: number; valor: number }>> {
     const linhas = await this.prisma.$queryRawUnsafe<
-      Array<{ evento: string; eventos: number; pessoas: number }>
+      Array<{ evento: string; eventos: number; pessoas: number; valor: number }>
     >(
       `SELECT evento,
               COUNT(*)::int                   AS eventos,
-              COUNT(DISTINCT session_id)::int AS pessoas
+              COUNT(DISTINCT session_id)::int AS pessoas,
+              COALESCE(SUM(valor), 0)::float  AS valor
          FROM site_eventos
         WHERE criado_em >= $1 AND criado_em <= $2
           AND evento IN ('page_view','view_item','add_to_cart','begin_checkout','add_payment_info','purchase')
@@ -240,6 +244,10 @@ export class SiteMetricsService {
       evento: l.evento,
       eventos: Number(l.eventos),
       pessoas: Number(l.pessoas),
+      // VALOR DE CONVERSÃO (dono, 15/08). Só interessa em `purchase` — é o R$
+      // somado das compras do período (`valor` do evento = total do pedido). As
+      // outras etapas somam o preço da peça vista/na sacola e a tela ignora.
+      valor: Number(l.valor) || 0,
     }));
   }
 
