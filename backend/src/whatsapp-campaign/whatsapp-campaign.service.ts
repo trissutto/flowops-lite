@@ -156,15 +156,22 @@ export class WhatsappCampaignService {
     return (this.prisma as any).whatsappCampaign.update({ where: { id }, data });
   }
 
-  /** Prévia: manda UMA mensagem pra um número (o próprio dono) pra testar. */
-  async previa(fone: string, mensagem: string) {
+  /** Prévia: manda o texto (e a foto, se houver) pra um número — teste do dono. */
+  async previa(fone: string, mensagem: string, imagemUrl?: string | null) {
     if (!this.evo.configurado()) {
       throw new BadRequestException('Evolution ainda não ligado — falta a chave (EVOLUTION_URL/KEY/INSTANCE) no Railway.');
     }
     const f = this.norm(String(fone || ''));
     if (f.length < 12) throw new BadRequestException('Telefone inválido.');
     await this.evo.enviarTexto(f, mensagem || "Teste Lurd's 💛");
-    return { ok: true };
+    if (imagemUrl) {
+      // No TESTE a foto não é silenciosa: se falhar, o dono precisa saber ANTES
+      // de disparar. (No lote real ela é best-effort pra não travar a fila.)
+      await this.evo.enviarImagem(f, imagemUrl, '').catch((e: any) => {
+        throw new BadRequestException(`O texto foi, mas a FOTO falhou: ${e?.message || e}`);
+      });
+    }
+    return { ok: true, comFoto: !!imagemUrl };
   }
 
   // ── Fila: disparo pausado + kill-switch ────────────────────────────
