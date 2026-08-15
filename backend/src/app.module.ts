@@ -79,6 +79,7 @@ import { TrocasModule } from './trocas/trocas.module';
 import { TelemetriaModule } from './telemetria/telemetria.module';
 import { SiteMetricsModule } from './site-metrics/site-metrics.module';
 import { EmailMarketingModule } from './email-marketing/email-marketing.module';
+import { WhatsappCampaignModule } from './whatsapp-campaign/whatsapp-campaign.module';
 import { OrderStatusModule } from './order-status/order-status.module';
 import { PagbankModule } from './pagbank/pagbank.module';
 import { PagarmeModule } from './pagarme/pagarme.module';
@@ -199,6 +200,7 @@ import { SiteContentEditorModule } from './site-content-editor/site-content-edit
     TelemetriaModule,
     SiteMetricsModule,
     EmailMarketingModule,
+    WhatsappCampaignModule,
   ],
 })
 export class AppModule {}
