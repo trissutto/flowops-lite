@@ -21,10 +21,10 @@ export class WhatsappInboxController {
     return this.ia.sugerir(b.jid);
   }
 
-  /** Lista de conversas (mais recentes primeiro). */
+  /** Lista de conversas (mais recentes primeiro). `force=1` fura o cache. */
   @Get('conversas')
-  conversas() {
-    return this.service.conversas();
+  conversas(@Query('force') force?: string) {
+    return this.service.conversas(force === '1' || force === 'true');
   }
 
   /** Mensagens de uma conversa (por remoteJid). */
