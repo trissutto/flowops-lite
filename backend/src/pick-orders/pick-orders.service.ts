@@ -347,7 +347,7 @@ export class PickOrdersService {
     if (order.source === 'live') {
       if (!order.liveCartId) throw new BadRequestException('Pedido da live sem carrinho vinculado.');
       if (provider === 'maisenvios') {
-        r = await this.gerarEnvioMaisEnvios(order.liveCartId, senderId, nfeInfoME, `${order.wcOrderNumber || order.id}/${String(pick.id).slice(0, 8)}`, String(store?.name || ''));
+        r = await this.gerarEnvioMaisEnvios(order, order.liveCartId, senderId, nfeInfoME, `${order.wcOrderNumber || order.id}/${String(pick.id).slice(0, 8)}`, String(store?.name || ''));
       } else {
         r = await this.livePdv.gerarEnvioCorreios(order.liveCartId, nfeChave, remetenteLoja || undefined);
       }
@@ -648,17 +648,54 @@ export class PickOrdersService {
     };
   }
 
-  /** Gera a pré-postagem no MAIS ENVIOS a partir do carrinho da live. */
-  private async gerarEnvioMaisEnvios(cartId: string, senderId: number, nfe?: any, referencia?: string, departamento?: string) {
+  /**
+   * SERVIÇO DA ETIQUETA NO MAIS ENVIOS — o mesmo que a cliente pagou.
+   *
+   * Até 15/08 os dois caminhos do Mais Envios mandavam `'SEDEX'` chumbado. A
+   * tela da loja mostrava "MODALIDADE DE ENVIO: PAC" (lido do pedido) e a
+   * etiqueta saía SEDEX: 11 pedidos em 180 dias — TODOS por aqui, nenhum pelos
+   * Correios, que já lê o pedido desde 12/08 (`servicoPagoDoPedido`).
+   *
+   * Vendemos econômico e postamos expresso: a diferença sai do nosso bolso, e
+   * a loja vê a tela dizer uma coisa e a etiqueta dizer outra — que é como o
+   * dono achou o problema. O Mais Envios cota os DOIS serviços (PAC 03298 ·
+   * SEDEX 03220), então não havia limitação técnica, só o valor fixo.
+   *
+   * `MAISENVIOS_FORCA_SEDEX=1` volta o comportamento antigo (subir tudo pra
+   * expresso) numa variável, se algum dia o expresso ficar mais barato que o
+   * econômico na conta LURDS.
+   */
+  private servicoMaisEnvios(order: any, uf?: string | null): 'PAC' | 'SEDEX' {
+    if (String(process.env.MAISENVIOS_FORCA_SEDEX || '').trim() === '1') return 'SEDEX';
+    const escolha = servicoPagoDoPedido(order, uf);
+    if (escolha.origem === 'fallback-uf') {
+      this.logger.warn(
+        `[envio] pedido ${order?.wcOrderNumber || order?.id} sem método de envio legível ` +
+        `("${order?.shippingMethod ?? '—'}") — postando ${escolha.servico} pela regra de UF (${uf || '?'}).`,
+      );
+    }
+    return escolha.servico;
+  }
+
+  /**
+   * Gera a pré-postagem no MAIS ENVIOS a partir do carrinho da live.
+   *
+   * O `order` entra só pra decidir o serviço: o Order da live grava o método
+   * como "LIVE · SEDEX"/"LIVE · PAC" (o mesmo que a cliente pagou pela régua
+   * de região da live), então o `servicoPagoDoPedido` resolve pelo título e a
+   * etiqueta do Mais Envios passa a bater com a dos Correios pro mesmo carrinho.
+   */
+  private async gerarEnvioMaisEnvios(order: any, cartId: string, senderId: number, nfe?: any, referencia?: string, departamento?: string) {
     const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId }, include: { items: true } });
     if (!cart) throw new NotFoundException('Carrinho não encontrado');
     const itens = (cart.items || []).filter((i: any) => i.status !== 'cancelled');
     if (!itens.length) throw new BadRequestException('Carrinho sem itens.');
     const totalPecas = itens.reduce((s: number, i: any) => s + (Number(i.qty) || 1), 0);
     const pesoGramas = Math.max(300, totalPecas * 200);
+    const servico = this.servicoMaisEnvios(order, cart.customerUf);
     const resp: any = await this.maisEnvios.criarPrepost({
       senderId,
-      servico: 'SEDEX', // +Expresso: mais barato e mais rápido na conta LURDS
+      servico,
       destinatario: {
         nome: cart.customerName || 'Cliente',
         cpf: String(cart.customerCpf || '').replace(/\D/g, ''),
@@ -682,7 +719,7 @@ export class PickOrdersService {
     if (!resp?.ok || !resp.tag) throw new BadRequestException(`Mais Envios recusou o envio: ${resp?.erro || 'sem tag'}`);
     let etiquetaPdf: string | null = null;
     try { const et = await this.maisEnvios.baixarEtiqueta(resp.tag); if (et?.ok && et.pdfBase64) etiquetaPdf = et.pdfBase64; } catch { /* etiqueta opcional */ }
-    return { codigoRastreio: resp.tag, idPrepostagem: resp.idPrepostagem ?? null, servico: 'SEDEX', carrier: 'Mais Envios SEDEX', etiquetaPdf };
+    return { codigoRastreio: resp.tag, idPrepostagem: resp.idPrepostagem ?? null, servico, carrier: `Mais Envios ${servico}`, etiquetaPdf };
   }
 
   /** Pré-postagem no MAIS ENVIOS pro pedido do SITE (a partir do Order). */
@@ -717,10 +754,12 @@ export class PickOrdersService {
     const lista = itensLoja.length ? itensLoja : (order.items || []);
     const totalPecas = lista.reduce((s: number, i: any) => s + (Number(i.quantity) || 1), 0) || 1;
     const pesoGramas = Math.max(300, totalPecas * 200);
+    // SERVIÇO = o que a cliente PAGOU (mesma leitura do caminho Correios).
+    const servico = this.servicoMaisEnvios(order, uf);
 
     const resp: any = await this.maisEnvios.criarPrepost({
       senderId,
-      servico: 'SEDEX',
+      servico,
       destinatario: {
         nome: order.customerName || 'Cliente',
         cpf: String(order.customerCpf || '').replace(/\D/g, ''),
@@ -744,7 +783,7 @@ export class PickOrdersService {
     if (!resp?.ok || !resp.tag) throw new BadRequestException(`Mais Envios recusou o envio: ${resp?.erro || 'sem tag'}`);
     let etiquetaPdf: string | null = null;
     try { const et = await this.maisEnvios.baixarEtiqueta(resp.tag); if (et?.ok && et.pdfBase64) etiquetaPdf = et.pdfBase64; } catch { /* etiqueta opcional */ }
-    return { codigoRastreio: resp.tag, idPrepostagem: resp.idPrepostagem ?? null, servico: 'SEDEX', carrier: 'Mais Envios SEDEX', etiquetaPdf };
+    return { codigoRastreio: resp.tag, idPrepostagem: resp.idPrepostagem ?? null, servico, carrier: `Mais Envios ${servico}`, etiquetaPdf };
   }
 
   /** Gera a pré-postagem dos Correios pro pedido do SITE (a partir do Order). */
