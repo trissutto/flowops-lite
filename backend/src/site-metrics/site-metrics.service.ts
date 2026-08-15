@@ -251,6 +251,28 @@ export class SiteMetricsService {
     }));
   }
 
+  /**
+   * FATURAMENTO REAL DO SITE no período (dono, 15/08) — a Fonte B, ao lado do
+   * valor de conversão do funil (Fonte A). O funil soma o EVENTO `purchase`
+   * (sessionizado, com/sem cookie) e casa com a coluna Compras; isto soma o
+   * DINHEIRO: pedidos `source='ecommerce'` já pagos. As duas divergem quando um
+   * PIX é pago noutro dia ou o evento do navegador não dispara — por isso ficam
+   * em linhas separadas, cada uma com seu significado. Janela por `created_at`,
+   * a mesma do funil (um PIX pago depois conta retroativo no dia do pedido).
+   */
+  async faturamentoSite(de: Date, ate: Date): Promise<{ pedidos: number; valor: number }> {
+    const r = await this.prisma.$queryRawUnsafe<Array<{ pedidos: number; valor: number }>>(
+      `SELECT COUNT(*)::int AS pedidos, COALESCE(SUM(total_amount), 0)::float AS valor
+         FROM orders
+        WHERE source = 'ecommerce'
+          AND status IN ('paid','separating','shipped','delivered','completed')
+          AND created_at >= $1 AND created_at <= $2`,
+      de,
+      ate,
+    );
+    return { pedidos: Number(r[0]?.pedidos ?? 0), valor: Number(r[0]?.valor ?? 0) };
+  }
+
   async diagnosticosFunil(de: Date, ate: Date): Promise<Array<{
     evento: string; codigo: string; campo: string | null; pessoas: number; eventos: number;
   }>> {

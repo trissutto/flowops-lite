@@ -68,6 +68,7 @@ type RespostaFunil = {
   ate: string;
   etapas: EtapaFunil[];
   diagnosticos?: DiagnosticoFunil[];
+  faturamento?: { pedidos: number; valor: number };
 };
 
 /**
@@ -253,7 +254,7 @@ export default function CliquesLojasPage() {
 
       {/* O FUNIL — acima do bloco de cliques de propósito: dia sem clique de
           loja ainda tem funil, e um não pode esconder o outro. */}
-      {funil && <FunilSite etapas={funil.etapas} diagnosticos={funil.diagnosticos ?? []} />}
+      {funil && <FunilSite etapas={funil.etapas} diagnosticos={funil.diagnosticos ?? []} faturamento={funil.faturamento} />}
 
       {erro && (
         <div className="bg-rose-50 border border-rose-200 text-rose-700 rounded-xl p-4 text-sm">{erro}</div>
@@ -345,7 +346,15 @@ function Cartao({ titulo, valor, icone, cor }: { titulo: string; valor: number; 
  * O funil da visita à compra, em PESSOAS (sessões) — o % de cada etapa é
  * sobre a anterior. Números pequenos embaixo são os toques (eventos).
  */
-function FunilSite({ etapas, diagnosticos }: { etapas: EtapaFunil[]; diagnosticos: DiagnosticoFunil[] }) {
+function FunilSite({
+  etapas,
+  diagnosticos,
+  faturamento,
+}: {
+  etapas: EtapaFunil[];
+  diagnosticos: DiagnosticoFunil[];
+  faturamento?: { pedidos: number; valor: number };
+}) {
   const por = new Map(etapas.map((e) => [e.evento, e]));
   const ordem = [
     { evento: 'page_view', titulo: 'Visitas', icone: <Users className="w-4 h-4" /> },
@@ -393,6 +402,28 @@ function FunilSite({ etapas, diagnosticos }: { etapas: EtapaFunil[]; diagnostico
           </div>
         ))}
       </div>
+
+      {/* FATURAMENTO REAL (dono, 15/08) — a Fonte B, numa linha SEPARADA do
+          valor de conversão do funil de propósito: aqui é o DINHEIRO (pedidos
+          pagos, inclusive quem veio por e-mail/orgânico e o PIX pago depois);
+          lá no card Compras é a conversão das sessões rastreadas. As duas
+          divergem e cada uma responde uma pergunta diferente. */}
+      {faturamento && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#CDE9D6] bg-[#F3FAF5] px-4 py-3">
+          <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+            <BadgeCheck className="w-4 h-4 text-[#2E7D46]" />
+            Faturamento do site no período
+            <span className="font-normal text-slate-400">· pedidos pagos, o dinheiro de verdade</span>
+          </div>
+          <div className="text-right">
+            <div className="text-xl font-bold text-[#2E7D46] tabular-nums">{brl(faturamento.valor)}</div>
+            <div className="text-xs text-slate-400 tabular-nums">
+              {faturamento.pedidos} pedido{faturamento.pedidos === 1 ? '' : 's'} pago{faturamento.pedidos === 1 ? '' : 's'}
+            </div>
+          </div>
+        </div>
+      )}
+
       <p className="text-xs text-slate-400">
         Funil em pessoas (sessões), contando todo mundo — com e sem aceite de cookies. Coleta
         desde 13/08/2026; período anterior aparece zerado. O % é sobre a etapa anterior.
