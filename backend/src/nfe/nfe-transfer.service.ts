@@ -1604,6 +1604,12 @@ export class NfeTransferService {
      * nota grande do PDV, dono 31/07). Pedido dividido: só a 1ª nota leva.
      */
     vFrete?: number;
+    /**
+     * DESCONTO concedido à cliente (cupom, PIX) na parcela desta nota — sai no
+     * campo `vDesc`, rateado entre os itens. Pedido dividido: já vem rateado
+     * pela loja (ver montarDadosNfeEnvio).
+     */
+    vDesc?: number;
     ambienteOverride?: '1' | '2';
     /** Emitir pela identidade DESSA raiz de CNPJ (ex.: site = LURDS matriz), buscada na config da loja/grupo. */
     emitirPorRaiz?: string;
@@ -1655,6 +1661,11 @@ export class NfeTransferService {
     const valorTotal = items.reduce((s, i) => s + i.vProd, 0);
     if (valorTotal <= 0) throw new BadRequestException('NF-e do envio sem valor (itens zerados).');
     const vFrete = Math.max(0, Math.round((Number(input.vFrete) || 0) * 100) / 100);
+    // Desconto nunca pode passar da mercadoria (nota com vNF negativo é rejeitada).
+    const vDesc = Math.min(
+      valorTotal,
+      Math.max(0, Math.round((Number(input.vDesc) || 0) * 100) / 100),
+    );
 
     await this.garantirContinuacao(this.digits(origem.cnpj), origem.cnpj, serie);
     let numero = await this.seq.next(this.digits(origem.cnpj), serie, { start: this.startPadraoPara(origem.cnpj, serie), legacyKey: origem.identidadeEmprestada ? undefined : origem.storeCode });
@@ -1665,7 +1676,7 @@ export class NfeTransferService {
       data: {
         shipmentId: linkId, fromStoreCode: input.storeCode, toStoreCode: input.storeCode,
         modelo: '55', serie, numero, cNF: '', chave: '', tpAmb, natOp, cfop,
-        valorTotalCents: Math.round((valorTotal + vFrete) * 100), status: 'pending',
+        valorTotalCents: Math.round((valorTotal - vDesc + vFrete) * 100), status: 'pending',
       },
     });
 
@@ -1677,7 +1688,7 @@ export class NfeTransferService {
       const dhEmi = this.dhEmiNow();
       cNF = crypto.randomInt(10_000_000, 99_999_999).toString();
       chave = this.buildChave({ cUF, cnpj: origem.cnpj, serie, numero, cNF, dataEmissao: this.agoraBrasilia() });
-      const xml = this.buildVendaXml({ chave, cUF, cNF, serie, numero, dhEmi, tpAmb, natOp, cfop, origem, dest, interestadual, items, valorTotal, vFrete, saleRef: `envio ${String(input.pickOrderId).slice(0, 8)}` });
+      const xml = this.buildVendaXml({ chave, cUF, cNF, serie, numero, dhEmi, tpAmb, natOp, cfop, origem, dest, interestadual, items, valorTotal, vFrete, vDesc, saleRef: `envio ${String(input.pickOrderId).slice(0, 8)}` });
       const xmlMin = xml.replace(/>\s+</g, '><').trim();
       let xmlAssinado: string;
       try {
@@ -1727,6 +1738,15 @@ export class NfeTransferService {
     });
   }
 
+  /**
+   * Base tributável do item: SÓ a mercadoria (dono 15/08). O frete cobrado da
+   * cliente não entra e o desconto concedido sai da base — imposto não incide
+   * sobre nenhum dos dois.
+   */
+  private baseTributavel(vProd: number, vDesc: number): number {
+    return Math.max(0, Math.round((vProd - (vDesc || 0)) * 100) / 100);
+  }
+
   private buildVendaXml(p: {
     chave: string; cUF: string; cNF: string; serie: string; numero: number;
     dhEmi: string; tpAmb: '1' | '2'; natOp: string; cfop: string;
@@ -1739,6 +1759,13 @@ export class NfeTransferService {
     valorTotal: number; saleRef: string;
     /** Frete cobrado da cliente — sai no vFrete (item 1 + ICMSTot), nunca como linha. */
     vFrete?: number;
+    /**
+     * Desconto concedido (cupom, PIX) — sai no campo `vDesc`, rateado entre os
+     * itens, NUNCA embutido no preço unitário (dono 15/08). Sem isso a nota
+     * saía pelo valor CHEIO: o LP-000025 pagou R$ 152,30 e a NF-e 24 foi
+     * emitida com R$ 159,79.
+     */
+    vDesc?: number;
   }): string {
     const homolog = p.tpAmb === '2';
     const destNome = homolog ? HOMOLOG_FRASE : (p.dest.nome || 'CONSUMIDOR');
@@ -1788,26 +1815,57 @@ export class NfeTransferService {
     let totCOFINS = 0;
     const ibTot = { vBC: 0, vIBSUF: 0, vIBSMun: 0, vCBS: 0 };
     const freteNota = Math.round((p.vFrete || 0) * 100) / 100;
+    /**
+     * RATEIO DO DESCONTO entre os itens, em CENTAVOS inteiros. A SEFAZ exige
+     * que a soma dos vDesc de item bata com o vDesc do ICMSTot; dividir em
+     * float deixa sobra de centavo e derruba a nota. Proporcional ao vProd,
+     * com o resto no ÚLTIMO item — e nunca maior que o próprio item.
+     */
+    const itensCents = p.items.map((it) => Math.round(it.vProd * 100));
+    const somaProdCents = itensCents.reduce((s, c) => s + c, 0);
+    const descAlvoCents = Math.min(
+      Math.max(0, Math.round((p.vDesc || 0) * 100)),
+      Math.max(0, somaProdCents),
+    );
+    const descCents: number[] = [];
+    let jaRateado = 0;
+    for (let i = 0; i < itensCents.length; i++) {
+      if (descAlvoCents <= 0 || somaProdCents <= 0) { descCents.push(0); continue; }
+      const bruto = i === itensCents.length - 1
+        ? descAlvoCents - jaRateado
+        : Math.round((itensCents[i] * descAlvoCents) / somaProdCents);
+      const c = Math.max(0, Math.min(bruto, itensCents[i]));
+      descCents.push(c);
+      jaRateado += c;
+    }
+    // Total REAL rateado (o clamp por item pode comer centavo) — é ele que vai
+    // pro ICMSTot e pro vNF, senão a conta da nota não fecha.
+    const descNota = descCents.reduce((s, c) => s + c, 0) / 100;
     const det = p.items
       .map((it, idx) => {
         const xProd = homolog ? HOMOLOG_FRASE : this.xProdNota(it.xProd);
         // O rateio do frete e todo no PRIMEIRO item (a soma dos vFrete de
         // item tem que bater com o do ICMSTot — num item so, bate sempre).
         const freteItem = idx === 0 ? freteNota : 0;
+        const descItem = (descCents[idx] || 0) / 100;
         const prod =
           `<prod><cProd>${this.esc(it.sku)}</cProd><cEAN>${it.ean}</cEAN><xProd>${this.esc(xProd)}</xProd>` +
           `<NCM>${it.ncm}</NCM><CFOP>${it.cfop}</CFOP><uCom>UN</uCom><qCom>${it.qty.toFixed(4)}</qCom>` +
           `<vUnCom>${this.moneyUn(it.vUn)}</vUnCom><vProd>${this.money(it.vProd)}</vProd>` +
           `<cEANTrib>${it.ean}</cEANTrib><uTrib>UN</uTrib><qTrib>${it.qty.toFixed(4)}</qTrib>` +
           `<vUnTrib>${this.moneyUn(it.vUn)}</vUnTrib>` +
+          // Ordem do schema 4.00 em <prod>: vFrete, vSeg, vDesc, vOutro, indTot.
           (freteItem > 0 ? `<vFrete>${this.money(freteItem)}</vFrete>` : '') +
+          (descItem > 0 ? `<vDesc>${this.money(descItem)}</vDesc>` : '') +
           `<indTot>1</indTot></prod>`;
         let icms: string;
         let icmsUfDest = '';
         if (crt3) {
           const pIcms = p.interestadual ? aliqInter : aliqInterna;
-          // Frete integra a base do ICMS (art. 13 LC 87/96)
-          const vBC = Math.round((it.vProd + freteItem) * 100) / 100;
+          // BASE = só a MERCADORIA (dono 15/08): imposto não incide nem sobre
+          // o frete nem sobre o desconto. Antes o frete entrava na base
+          // (art. 13 LC 87/96) e o desconto não saía dela.
+          const vBC = this.baseTributavel(it.vProd, descItem);
           const vIcms = Math.round(vBC * pIcms) / 100;
           totBC += vBC;
           totICMS += vIcms;
@@ -1829,7 +1887,7 @@ export class NfeTransferService {
           // Simples Nacional — CSOSN 102 (tributada, sem crédito), igual à NFC-e.
           icms = `<ICMS><ICMSSN102><orig>0</orig><CSOSN>102</CSOSN></ICMSSN102></ICMS>`;
         }
-        const vBCItem = Math.round((it.vProd + freteItem) * 100) / 100;
+        const vBCItem = this.baseTributavel(it.vProd, descItem);
         const vPisItem = crt3 ? Math.round(vBCItem * pPIS) / 100 : 0;
         const vCofItem = crt3 ? Math.round(vBCItem * pCOFINS) / 100 : 0;
         totPIS += vPisItem;
@@ -1850,7 +1908,8 @@ export class NfeTransferService {
       .join('');
 
     const vTot = this.money(p.valorTotal);
-    const vNF = this.money(p.valorTotal + freteNota);
+    // vNF = mercadoria − desconto + frete (regra de validação da SEFAZ).
+    const vNF = this.money(p.valorTotal - descNota + freteNota);
     // ICMSTot: os campos do DIFAL (vFCPUFDest/vICMSUFDest/vICMSUFRemet) entram
     // logo após vICMSDeson quando a partilha existe.
     const difalTot = temDifal
@@ -1860,7 +1919,7 @@ export class NfeTransferService {
       `<total><ICMSTot><vBC>${this.money(totBC)}</vBC><vICMS>${this.money(totICMS)}</vICMS><vICMSDeson>0.00</vICMSDeson>` +
       difalTot +
       `<vFCP>0.00</vFCP><vBCST>0.00</vBCST><vST>0.00</vST><vFCPST>0.00</vFCPST><vFCPSTRet>0.00</vFCPSTRet>` +
-      `<vProd>${vTot}</vProd><vFrete>${this.money(freteNota)}</vFrete><vSeg>0.00</vSeg><vDesc>0.00</vDesc><vII>0.00</vII>` +
+      `<vProd>${vTot}</vProd><vFrete>${this.money(freteNota)}</vFrete><vSeg>0.00</vSeg><vDesc>${this.money(descNota)}</vDesc><vII>0.00</vII>` +
       `<vIPI>0.00</vIPI><vIPIDevol>0.00</vIPIDevol><vPIS>${this.money(totPIS)}</vPIS><vCOFINS>${this.money(totCOFINS)}</vCOFINS><vOutro>0.00</vOutro><vNF>${vNF}</vNF></ICMSTot>${this.ibscbsTot(ib, ibTot, vNF)}</total>`;
 
     // Com frete, modFrete=0 (emitente contrata os Correios e repassa) — 9
