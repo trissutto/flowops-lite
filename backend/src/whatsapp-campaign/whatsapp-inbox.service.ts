@@ -79,12 +79,13 @@ export class WhatsappInboxService {
     return '';
   }
 
-  async conversas() {
+  async conversas(force = false) {
     if (!this.evo.configurado()) throw new BadRequestException('Evolution não configurado.');
     // CACHE curto (dono, 15/08): o findChats do Evolution devolve a lista
-    // INTEIRA (25 mil+ contatos), lento. O poll de 12s da tela quase sempre
-    // bate no cache — carrega na hora depois da 1ª vez.
-    if (this.cacheConversas && Date.now() - this.cacheConversas.at < 15000) {
+    // INTEIRA (25 mil+ contatos), lento. O poll de 12s bate no cache. Mas o
+    // BOTÃO de refresh manda `force` e fura o cache — mensagem nova aparece na
+    // hora (o dono mandou do celular e não via até o cache expirar).
+    if (!force && this.cacheConversas && Date.now() - this.cacheConversas.at < 15000) {
       return this.cacheConversas.data;
     }
     const raw = await this.evo.listarConversas();

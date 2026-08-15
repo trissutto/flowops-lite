@@ -32,9 +32,9 @@ export default function WhatsappInboxPage() {
   const [erro, setErro] = useState('');
   const fimRef = useRef<HTMLDivElement>(null);
 
-  const carregarConversas = useCallback(async () => {
+  const carregarConversas = useCallback(async (force = false) => {
     try {
-      const r = await api<Conversa[]>('/whatsapp-inbox/conversas');
+      const r = await api<Conversa[]>(`/whatsapp-inbox/conversas${force ? '?force=1' : ''}`);
       setConversas(r || []);
       setErro('');
     } catch (e: any) {
@@ -44,7 +44,7 @@ export default function WhatsappInboxPage() {
     }
   }, []);
 
-  useEffect(() => { carregarConversas(); const t = setInterval(carregarConversas, 12000); return () => clearInterval(t); }, [carregarConversas]);
+  useEffect(() => { carregarConversas(true); const t = setInterval(() => carregarConversas(false), 12000); return () => clearInterval(t); }, [carregarConversas]);
 
   const carregarMsgs = useCallback(async (jid: string, comLoader = false) => {
     if (comLoader) setCarregandoMsgs(true);
@@ -78,7 +78,7 @@ export default function WhatsappInboxPage() {
     try {
       await api('/whatsapp-inbox/responder', { method: 'POST', body: JSON.stringify({ jid: sel.jid, texto: t }) });
       carregarMsgs(sel.jid);
-      carregarConversas();
+      carregarConversas(true);
     } catch (e: any) {
       setErro(e?.message || 'Falha ao enviar');
       setTexto(t); // devolve o texto
@@ -109,7 +109,7 @@ export default function WhatsappInboxPage() {
           <h1 className="text-xl font-bold text-slate-800 flex items-center gap-2"><MessageCircle className="w-5 h-5 text-[#2E7D46]" /> WhatsApp — Conversas</h1>
           <p className="text-sm text-slate-500">Leia e responda as clientes do PC. O celular fica na loja.</p>
         </div>
-        <button onClick={carregarConversas} className="px-3 py-2 rounded-lg border border-[#E7E2D8] hover:bg-[#FBF6E6] text-slate-600" title="Atualizar"><RefreshCw className={`w-4 h-4 ${carregandoLista ? 'animate-spin' : ''}`} /></button>
+        <button onClick={() => carregarConversas(true)} className="px-3 py-2 rounded-lg border border-[#E7E2D8] hover:bg-[#FBF6E6] text-slate-600" title="Atualizar"><RefreshCw className={`w-4 h-4 ${carregandoLista ? 'animate-spin' : ''}`} /></button>
       </div>
 
       {erro && <div className="mb-3 rounded-lg border border-rose-200 bg-rose-50 text-rose-700 p-3 text-sm">{erro}</div>}
