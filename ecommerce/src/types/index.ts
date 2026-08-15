@@ -39,7 +39,7 @@ export interface LinkRef {
 /* ---------------------------------------------------------------- CATÁLOGO */
 
 /** Etiqueta exibida sobre a foto do produto. */
-export type ProductBadge = 'novo' | 'promocao' | 'best-seller' | 'exclusivo' | 'loja-fisica' | 'ultimas-pecas';
+export type ProductBadge = 'novo' | 'promocao' | 'preco-especial' | 'best-seller' | 'exclusivo' | 'loja-fisica' | 'ultimas-pecas';
 
 export interface ProductSize {
   label: string; // "46", "48"…

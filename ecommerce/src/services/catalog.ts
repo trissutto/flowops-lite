@@ -1,6 +1,7 @@
 import 'server-only';
 import { api, apiSafe } from '@/lib/api';
 import { slugify } from '@/lib/utils';
+import { nomeComReferencia } from '@/lib/commerce/product-presentation';
 import type { Media, Product, ProductBadge, ProductSize } from '@/types';
 
 /**
@@ -181,7 +182,7 @@ function toProduct(item: WcListItem, detail?: WcDetail): Product {
     id: String(item.id),
     sku: item.sku ?? undefined,
     slug: item.slug,
-    name: item.name,
+    name: nomeComReferencia(item.name, item.sku),
     category: detectCategory(item.categories),
     price,
     compareAtPrice: hasDiscount ? item.regularPrice! : undefined,

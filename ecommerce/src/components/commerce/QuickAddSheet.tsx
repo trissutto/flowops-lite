@@ -11,7 +11,7 @@ import { useCartStore } from '@/store/cart';
 import { useQuickAddStore } from '@/store/quick-add';
 import { trackAddToCart } from '@/lib/tracking';
 import { formatPrice } from '@/lib/utils';
-import { mapPeca, type CorApi, type PecaApi } from '@/services/products';
+import type { CorApi, PecaApi } from '@/services/products';
 
 /**
  * QUICK ADD — adicionar da vitrine sem sair da página.
@@ -131,13 +131,6 @@ export function QuickAddSheet() {
         </div>
         <div className="min-w-0">
           <p className="text-body">{produto.name}</p>
-          {/* A REF saiu do título quando ele foi limpo (06/08) — aqui ela
-              confirma que a peça é a certa antes de ir pra sacola. */}
-          {(produto.sku || produto.id) && (
-            <p className="tabular text-small text-muted">
-              Ref <strong className="font-semibold text-ink">{produto.sku ?? produto.id}</strong>
-            </p>
-          )}
           <p className="mt-1 text-body tabular-nums">{formatPrice(preco)}</p>
           {produto.installments && (
             <p className="text-small text-muted tabular-nums">

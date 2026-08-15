@@ -1,4 +1,5 @@
 import { normalize } from '@/lib/utils';
+import { nomeComReferencia, ofertaProduto } from '@/lib/commerce/product-presentation';
 import type { FilterGroup, FilterState, Paginated, Product, ProductQuery, SortOption } from '@/types';
 
 /**
@@ -113,18 +114,19 @@ export interface PecaApi {
 
 export function mapPeca(p: PecaApi): Product {
   const badges: Product['badges'] = [];
+  const oferta = ofertaProduto(p.preco, p.precoDe, p.promocao);
   if (p.lancamento) badges.push('novo');
-  if (p.promocao) badges.push('promocao');
+  if (oferta.badge) badges.push(oferta.badge);
   if (p.estoqueTotal > 0 && p.estoqueTotal <= 3) badges.push('ultimas-pecas');
 
   return {
     id: p.ref,
     sku: p.ref,
     slug: p.slug,
-    name: p.nome,
+    name: nomeComReferencia(p.nome, p.ref),
     category: p.categoria ?? '',
     price: p.preco,
-    compareAtPrice: p.precoDe ?? undefined,
+    compareAtPrice: oferta.compareAtPrice,
     pixPrice: p.precoPix ?? undefined,
     ...(p.faixasPreco?.length
       ? { priceRanges: p.faixasPreco.map((f) => ({ from: f.de, to: f.ate, price: f.preco })) }
