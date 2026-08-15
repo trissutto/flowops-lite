@@ -6,6 +6,7 @@ import { WhatsappCampaignService } from './whatsapp-campaign.service';
 import { WhatsappCampaignController } from './whatsapp-campaign.controller';
 import { WhatsappInboxService } from './whatsapp-inbox.service';
 import { WhatsappInboxController } from './whatsapp-inbox.controller';
+import { WhatsappWebhookController } from './whatsapp-webhook.controller';
 import { WhatsappIaService } from './whatsapp-ia.service';
 
 /**
@@ -16,7 +17,7 @@ import { WhatsappIaService } from './whatsapp-ia.service';
  */
 @Module({
   imports: [PrismaModule, HttpModule],
-  controllers: [WhatsappCampaignController, WhatsappInboxController],
+  controllers: [WhatsappCampaignController, WhatsappInboxController, WhatsappWebhookController],
   providers: [EvolutionClient, WhatsappCampaignService, WhatsappInboxService, WhatsappIaService],
   exports: [WhatsappCampaignService],
 })
