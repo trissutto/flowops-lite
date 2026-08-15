@@ -143,7 +143,17 @@ export function limparNomeVitrine(
    */
   const ORFAOS = /\s+(estampa|estampada?o?|mescla|claro?a?|escuro?a?|m[ée]dio?a?)$/i;
   let limpo = txt.replace(/\s{2,}/g, ' ').trim();
-  while (ORFAOS.test(limpo)) limpo = limpo.replace(ORFAOS, '');
+  /**
+   * ⚠️ SÓ QUANDO SOBRA MESMO. Se TODA cor da peça é estampa, "Estampado" não
+   * está órfão: é a natureza da peça, e é a única palavra que a separa da
+   * versão lisa. O vestido `VLM222EST` (R$ 199,90) e o `VLM-222` (R$ 139,90)
+   * são o MESMO modelo em liso e estampado — sem esta palavra os dois cards
+   * saem na grade com o nome idêntico, um do lado do outro, R$ 60 de
+   * diferença e nada na tela explicando por quê (15/08/2026).
+   */
+  const ehEstampa = (c: string) => /^est(ampad[ao]|ampa)?\b/i.test(semAcento(c).trim());
+  const soEstampas = cores.length > 0 && cores.every(ehEstampa);
+  if (!soEstampas) while (ORFAOS.test(limpo)) limpo = limpo.replace(ORFAOS, '');
 
   // Tamanho pendurado no fim (com ou sem a cor na frente) — ver TAMANHO_NO_FIM.
   while (TAMANHO_NO_FIM.test(limpo)) limpo = limpo.replace(TAMANHO_NO_FIM, '');

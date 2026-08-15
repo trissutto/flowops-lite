@@ -899,6 +899,33 @@ export class LojaCatalogService {
           .map(([label, est]) => ({ label, estoque: est, disponivel: est > 0 }))
       : tamanhos;
 
+    /**
+     * A CAPA É DA COR QUE DÁ PRA COMPRAR (15/08/2026).
+     *
+     * A galeria chegava aqui ordenada por COR (`complementos`, `orderBy: cor
+     * asc`), e a capa era simplesmente a primeira — alfabética. Quando a cor
+     * que abre o alfabeto está escondida (`nao_publicar`, estoque abaixo do
+     * piso, ou nem existe no ERP desta REF), o card anuncia uma peça que a
+     * cliente não consegue comprar e a PDP abre com outra coisa na tela.
+     *
+     * O caso que abriu o assunto: a VLM-222 (lisa, R$ 139,90) tinha as fotos
+     * do vestido ESTAMPADO — que é outra REF, a `VLM222EST`, de R$ 199,90 —
+     * gravadas sob a REF dela. "ESTAMPA MARINHO" abre o alfabeto: a vitrine
+     * inteira mostrava o estampado no preço da lisa. Medição na produção no
+     * dia: **35 dos 721 cards** publicados tinham capa de cor fora de venda.
+     *
+     * Foto SEM cor (acervo antigo, foto de detalhe) fica: ela não promete cor
+     * nenhuma. E se sobrar zero foto — peça cuja galeria inteira é de cor
+     * escondida — vale o acervo cru, senão o card sumia da vitrine (a
+     * listagem corta peça sem imagem) e escondê-lo é pior que a capa torta.
+     */
+    const coresVendaveis = new Set(coresVisiveis.map((c) => c.nome.trim().toUpperCase()));
+    const soVendavel = fotos.filter((f) => {
+      const cor = String(f.cor || '').trim().toUpperCase();
+      return !cor || coresVendaveis.has(cor);
+    });
+    const fotosVendaveis = temCores && soVendavel.length ? soVendavel : fotos;
+
     // Comparador numérico de propósito: `.sort()` sem ele ordena Date como
     // STRING ("Mon Jul..." antes de "Thu Aug...") e o "mais recente" da peça
     // — que é o que ordena a página de Novidades — sai sorteado.
@@ -1024,8 +1051,8 @@ export class LojaCatalogService {
 
       // FOTO PRÓPRIA VENCE (decisão 30/07): o R2 é da Lurd's; o que veio do
       // WC é só o resto do acervo até a migração de imagem terminar.
-      imagens: fotos.length
-        ? fotos.map((f) => ({ src: f.url, alt: `${site?.nome || ref}${f.cor ? ` ${f.cor}` : ''}`, tipo: 'imagem', cor: f.cor ?? null, origem: 'flow' }))
+      imagens: fotosVendaveis.length
+        ? fotosVendaveis.map((f) => ({ src: f.url, alt: `${site?.nome || ref}${f.cor ? ` ${f.cor}` : ''}`, tipo: 'imagem', cor: f.cor ?? null, origem: 'flow' }))
         : ((site?.imagens as any[]) ?? []).map((i) => ({ ...i, origem: 'wc' })),
       seo: site?.seo ?? null,
 
