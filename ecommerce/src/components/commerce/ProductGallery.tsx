@@ -9,11 +9,22 @@ import { transition } from '@/lib/motion';
 import type { Media } from '@/types';
 
 /**
- * Galeria do produto.
+ * Galeria do produto — miniaturas verticais à esquerda + foto grande, NO
+ * CELULAR TAMBÉM (dono, 15/08).
  *
- * Desktop: miniaturas verticais à esquerda + foto grande.
- * Mobile: carrossel com scroll-snap nativo (gesto que a cliente já conhece)
- * e bullets — sem JS de arraste.
+ * Antes a fileira de miniaturas ficava DEITADA embaixo da foto no mobile, e
+ * isso custava 209px de rolagem: os 102px da própria fileira mais o respiro,
+ * empurrando "Escolha o tamanho" para 1.216px (1,5 tela abaixo da foto) e o
+ * botão Adicionar para 1.419px. Medido na PDP da SMILE em 375×812.
+ *
+ * Pior que a rolagem: em peça de várias cores essa fileira é **uma miniatura
+ * por cor** e clicar nela TROCA a cor — o mesmo que a bolinha do passo "1
+ * Escolha a cor" faz 435px mais abaixo. A cliente escolhia a cor em cima e o
+ * site pedia a cor de novo lá embaixo, sem ela saber se a primeira valeu.
+ *
+ * Em pé, a coluna encosta na foto: a cor deixa de ser um bloco separado no
+ * caminho e a decisão inteira sobe uma tela. O preço é a foto ficar mais
+ * estreita (~259px em vez de 327px) — troca aceita pelo dono.
  *
  * A foto é o argumento de venda: proporção 3/4 e `priority` na primeira,
  * que é o LCP da página.
@@ -75,7 +86,7 @@ export function ProductGallery({
 
   return (
     <div
-      className="flex flex-col gap-4 lg:flex-row-reverse lg:gap-6"
+      className="flex flex-row-reverse gap-3 lg:gap-6"
       onPointerDown={() => setParado(true)}
       onMouseEnter={() => setParado(true)}
     >
@@ -117,6 +128,11 @@ export function ProductGallery({
                * Aqui fica o tamanho REAL do quadro. Quando as fotos de
                * 1400×2000 entrarem, a nitidez vem delas — não de pedir uma
                * largura que o arquivo não tem.
+               *
+               * Segue 100vw no mobile mesmo depois da coluna de miniaturas
+               * comer 68px (o quadro virou ~79vw em 15/08): apertar o número
+               * faria o Next pedir uma largura NOVA e cair no reencode a frio
+               * descrito acima. Servir alguns KB a mais é o lado barato.
                */
               sizes="(max-width: 1024px) 100vw, 45vw"
               placeholder="blur"
@@ -168,92 +184,102 @@ export function ProductGallery({
         )}
       </div>
 
-      {/* Miniaturas: uma POR COR quando a peça tem variações; senão, por foto. */}
+      {/* Miniaturas: uma POR COR quando a peça tem variações; senão, por foto.
+
+          A coluna é um trilho que ROLA DENTRO da altura da foto: o `absolute`
+          tira as miniaturas do cálculo de altura, então uma peça de 8 cores
+          não estica a galeria pra baixo — ela rola ali mesmo, ao lado da
+          foto. Sem isso, cada cor a mais devolveria a rolagem que a mudança
+          de 15/08 veio eliminar. */}
       {grupos && grupos.length > 1 ? (
-        <div
-          className="no-scrollbar flex gap-3 overflow-x-auto lg:w-20 lg:flex-col lg:overflow-visible"
-          role="tablist"
-          aria-label="Cores da peça"
-        >
-          {grupos.map((g) => (
-            <button
-              key={g.nome}
-              type="button"
-              role="tab"
-              aria-selected={g.ativa}
-              aria-label={`Cor ${g.nome}`}
-              title={g.nome}
-              onClick={g.onSelect}
-              className="w-16 shrink-0 lg:w-full"
-            >
-              <span
+        <div className="relative w-14 shrink-0 lg:w-20">
+          <div
+            className="no-scrollbar absolute inset-0 flex flex-col gap-3 overflow-y-auto"
+            role="tablist"
+            aria-label="Cores da peça"
+          >
+            {grupos.map((g) => (
+              <button
+                key={g.nome}
+                type="button"
+                role="tab"
+                aria-selected={g.ativa}
+                aria-label={`Cor ${g.nome}`}
+                title={g.nome}
+                onClick={g.onSelect}
+                className="w-full shrink-0"
+              >
+                <span
+                  className={cn(
+                    'relative block aspect-3/4 overflow-hidden rounded-md border transition-all duration-[320ms]',
+                    g.ativa
+                      ? 'border-primary opacity-100'
+                      : 'border-transparent opacity-65 hover:opacity-100',
+                  )}
+                >
+                  <Image
+                    src={g.capa}
+                    alt=""
+                    aria-hidden
+                    fill
+                    sizes="80px"
+                    placeholder="blur"
+                    blurDataURL={BLUR_DATA_URL}
+                    className="object-cover"
+                  />
+                </span>
+                <span
+                  className={cn(
+                    'mt-1 block truncate text-center text-[0.625rem] leading-tight transition-colors',
+                    g.ativa ? 'text-ink' : 'text-ink-muted',
+                  )}
+                >
+                  {g.nome}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : safeImages.length > 1 && (
+        <div className="relative w-14 shrink-0 lg:w-20">
+          <div
+            className="no-scrollbar absolute inset-0 flex flex-col gap-3 overflow-y-auto"
+            role="tablist"
+            aria-label="Fotos do produto"
+          >
+            {safeImages.map((image, index) => (
+              <button
+                key={`${image.src}-${index}`}
+                type="button"
+                role="tab"
+                aria-selected={index === active}
+                aria-label={`Ver foto ${index + 1}`}
+                onClick={() => {
+                  setZoomed(false);
+                  setActive(index);
+                }}
                 className={cn(
-                  'relative block aspect-3/4 overflow-hidden rounded-md border transition-all duration-[320ms]',
-                  g.ativa
+                  'relative aspect-3/4 w-full shrink-0 overflow-hidden rounded-md border transition-all duration-[320ms]',
+                  index === active
                     ? 'border-primary opacity-100'
                     : 'border-transparent opacity-65 hover:opacity-100',
                 )}
               >
-                <Image
-                  src={g.capa}
-                  alt=""
-                  aria-hidden
-                  fill
-                  sizes="80px"
-                  placeholder="blur"
-                  blurDataURL={BLUR_DATA_URL}
-                  className="object-cover"
-                />
-              </span>
-              <span
-                className={cn(
-                  'mt-1 block truncate text-center text-[0.625rem] leading-tight transition-colors',
-                  g.ativa ? 'text-ink' : 'text-ink-muted',
+                {image.src && (
+                  <Image
+                    src={image.src}
+                    alt=""
+                    aria-hidden
+                    fill
+                    sizes="80px"
+                    placeholder="blur"
+                    blurDataURL={BLUR_DATA_URL}
+                    className="object-cover"
+                  />
                 )}
-              >
-                {g.nome}
-              </span>
-            </button>
-          ))}
-        </div>
-      ) : safeImages.length > 1 && (
-        <div
-          className="no-scrollbar flex gap-3 overflow-x-auto lg:w-20 lg:flex-col lg:overflow-visible"
-          role="tablist"
-          aria-label="Fotos do produto"
-        >
-          {safeImages.map((image, index) => (
-            <button
-              key={`${image.src}-${index}`}
-              type="button"
-              role="tab"
-              aria-selected={index === active}
-              aria-label={`Ver foto ${index + 1}`}
-              onClick={() => {
-                setZoomed(false);
-                setActive(index);
-              }}
-              className={cn(
-                'relative aspect-3/4 w-16 shrink-0 overflow-hidden rounded-md border transition-all duration-[320ms] lg:w-full',
-                index === active
-                  ? 'border-primary opacity-100'
-                  : 'border-transparent opacity-65 hover:opacity-100',
-              )}
-            >
-              {image.src && (
-                <Image
-                  src={image.src}
-                  alt=""
-                  aria-hidden
-                  fill
-                  sizes="80px"
-                  placeholder="blur"
-                  blurDataURL={BLUR_DATA_URL}
-                  className="object-cover"
-                />
-              )}
-            </button>
-          ))}
+              </button>
+            ))}
+          </div>
         </div>
       )}
     </div>
