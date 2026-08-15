@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { EvolutionClient } from './evolution.client';
 
@@ -17,6 +18,8 @@ import { EvolutionClient } from './evolution.client';
 export class WhatsappInboxService {
   private readonly logger = new Logger(WhatsappInboxService.name);
   private cacheConversas: { at: number; data: any[] } | null = null;
+  private prewarming = false;
+  private ultimoAcesso = 0;
 
   constructor(
     private readonly evo: EvolutionClient,
@@ -81,13 +84,17 @@ export class WhatsappInboxService {
 
   async conversas(force = false) {
     if (!this.evo.configurado()) throw new BadRequestException('Evolution não configurado.');
-    // CACHE curto (dono, 15/08): o findChats do Evolution devolve a lista
-    // INTEIRA (25 mil+ contatos), lento. O poll de 12s bate no cache. Mas o
-    // BOTÃO de refresh manda `force` e fura o cache — mensagem nova aparece na
-    // hora (o dono mandou do celular e não via até o cache expirar).
-    if (!force && this.cacheConversas && Date.now() - this.cacheConversas.at < 15000) {
+    this.ultimoAcesso = Date.now();
+    // O cron pré-aquece o cache, então quase sempre respondemos na hora. `force`
+    // só refaz inline se o cache estiver velho (>10s) — senão devolve o quente.
+    if (this.cacheConversas && !(force && Date.now() - this.cacheConversas.at > 10000)) {
       return this.cacheConversas.data;
     }
+    return this.refrescar();
+  }
+
+  /** Busca do Evolution + monta a lista + nome do CRM. Guarda no cache. */
+  private async refrescar(): Promise<any[]> {
     const raw = await this.evo.listarConversas();
     const arr: any[] = Array.isArray(raw) ? raw : raw?.chats || raw?.records || [];
     const lista = arr
@@ -109,8 +116,8 @@ export class WhatsappInboxService {
       .filter((x) => x.jid.endsWith('@s.whatsapp.net'));
     lista.sort((a, b) => b.ts - a.ts);
     const top = lista.slice(0, 100);
-    // NOME DO CRM (dono, 15/08): o WhatsApp mostra só o número quando o contato
-    // não está salvo — mas a gente TEM o nome no CRM pelo telefone.
+    // NOME DO CRM: o WhatsApp mostra só o número quando o contato não está
+    // salvo — mas a gente TEM o nome no CRM pelo telefone.
     const nomes = await this.nomesDoCrm(top.map((c) => c.numero));
     for (const c of top) {
       const doCrm = nomes[c.numero.slice(-8)];
@@ -118,6 +125,26 @@ export class WhatsappInboxService {
     }
     this.cacheConversas = { at: Date.now(), data: top };
     return top;
+  }
+
+  /**
+   * PRÉ-AQUECE o cache em background (dono, 15/08): o findChats é lento (25k
+   * contatos), então fazemos FORA do caminho do usuário — a tela abre sempre na
+   * hora. Só roda se o inbox foi usado nos últimos 5 min: sem ninguém olhando,
+   * não martela o Evolution.
+   */
+  @Cron('*/15 * * * * *', { name: 'wa-inbox-prewarm' })
+  async prewarm() {
+    if (this.prewarming || !this.evo.configurado()) return;
+    if (Date.now() - this.ultimoAcesso > 5 * 60 * 1000) return;
+    this.prewarming = true;
+    try {
+      await this.refrescar();
+    } catch (e: any) {
+      this.logger.warn(`[wa-inbox] pré-aquecimento falhou: ${e?.message || e}`);
+    } finally {
+      this.prewarming = false;
+    }
   }
 
   async mensagens(jid: string) {
