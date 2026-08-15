@@ -40,6 +40,12 @@ const PARAMETROS_SEGUROS: Partial<Record<string, readonly string[]>> = {
   checkout_error: ['method', 'reason'],
   checkout_validation_error: ['section', 'field'],
   pix_created: ['method'],
+  payment_method_selected: ['method'],
+  pix_copied: ['method', 'order_id'],
+  pix_expired: ['method', 'order_id'],
+  card_declined: ['method', 'attempt'],
+  payment_retry: ['method', 'attempt'],
+  checkout_recovered: ['method', 'order_id'],
 };
 
 function dadosSeguros(evento: TrackingEvent): Record<string, unknown> {

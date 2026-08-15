@@ -27,6 +27,9 @@ import {
   trackCouponRemoved,
   trackCheckoutError,
   trackCheckoutSubmission,
+  trackCheckoutRecovered,
+  trackCardDeclined,
+  trackPaymentRetry,
   trackPixCreated,
   type TrackedItem,
 } from '@/lib/tracking';
@@ -145,6 +148,7 @@ export default function CheckoutPage() {
       body: JSON.stringify({
         sessionId: getSessionId(), anonymousId: getAnonymousId(),
         name: nextContact.name, phone: nextContact.phone,
+        recoveryConsent: nextContact.recoveryConsent,
         subtotal, path: '/checkout', attribution: captureAttribution(),
         items: lines.map((line) => ({
           productId: line.productId, name: line.name, size: line.size,
@@ -207,6 +211,7 @@ export default function CheckoutPage() {
     if (!customer || !shipping || !payment || submitting) return;
     setSubmitting(true);
     setSubmitError(null);
+    if (failureCount > 0) trackPaymentRetry(payment.method, failureCount + 1);
     trackCheckoutSubmission(payment.method);
 
     // O campo `tracking` costura a compra ao funil: anonymous/session ligam
@@ -228,6 +233,7 @@ export default function CheckoutPage() {
         session_id: getSessionId(),
         ...getMetaBrowserIds(),
         attribution: { ...captureAttribution() },
+        recovery_consent: contact?.recoveryConsent === true,
       },
     };
 
@@ -245,6 +251,7 @@ export default function CheckoutPage() {
         setFailureCount(attempt);
         setLastErrorCode(code);
         trackCheckoutError(payment.method, code, { stage: 'submission', attempt });
+        if (code === 'card_declined') trackCardDeclined(attempt);
         // A mensagem do server tem PRECEDÊNCIA: por contrato ela já vem
         // elegante e é específica ("cartão recusado", "cupom expirou") — bem
         // mais útil que o genérico. Os textos locais cobrem só o que acontece
@@ -258,6 +265,10 @@ export default function CheckoutPage() {
       // sacola viva aqui criaria pedido duplicado no F5.)
       clearCheckoutDraft(window.sessionStorage);
       clearCart();
+
+      if (failureCount > 0 && result.order.payment.method === 'card') {
+        trackCheckoutRecovered('card', result.order.id);
+      }
 
       // ⚠️ NENHUM purchase disparado aqui: o pedido ainda nem foi pago.
       // Quem dispara é o SERVER, no webhook de pagamento (docs/purchase.md).
@@ -420,8 +431,13 @@ export default function CheckoutPage() {
             {contact && shipping && payment && !customer && (
               <FinalIdentityStep contact={contact} onDone={(identity) => {
                 setCustomer(identity);
-                setContact({ name: identity.name, phone: identity.phone });
-                saveRecovery({ name: identity.name, phone: identity.phone });
+                const confirmedContact = {
+                  name: identity.name,
+                  phone: identity.phone,
+                  recoveryConsent: contact.recoveryConsent,
+                };
+                setContact(confirmedContact);
+                saveRecovery(confirmedContact);
               }} />
             )}
             {customer && shipping && payment && (

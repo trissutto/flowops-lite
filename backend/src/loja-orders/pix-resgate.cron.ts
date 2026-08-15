@@ -86,11 +86,17 @@ export class PixResgateCron {
       },
       include: { items: true },
       orderBy: { createdAt: 'asc' },
-      take: PixResgateCron.MAX_POR_CICLO,
+      // O consentimento mora no trackingInfo (JSON em texto), então o banco
+      // não filtra com segurança. Busca uma folga e limita depois do parse.
+      take: PixResgateCron.MAX_POR_CICLO * 5,
     });
     if (!pendentes.length) return;
 
-    for (const pedido of pendentes) {
+    const consentidos = pendentes
+      .filter((pedido: any) => this.temConsentimento(pedido.trackingInfo))
+      .slice(0, PixResgateCron.MAX_POR_CICLO);
+
+    for (const pedido of consentidos) {
       // O reconcile de 1min pode ter confirmado o pagamento entre a busca e
       // este toque — mandar "seu PIX está esperando" pra quem JÁ PAGOU é o
       // jeito mais rápido de a cliente desconfiar da loja inteira.
@@ -110,6 +116,15 @@ export class PixResgateCron {
       this.logger.log(
         `[pix-resgate] toque enviado — pedido ${pedido.wcOrderNumber ?? pedido.id} (R$ ${pedido.totalAmount ?? '?'})`,
       );
+    }
+  }
+
+  private temConsentimento(trackingInfo: unknown): boolean {
+    if (typeof trackingInfo !== 'string' || !trackingInfo) return false;
+    try {
+      return JSON.parse(trackingInfo)?.recovery_consent === true;
+    } catch {
+      return false;
     }
   }
 }

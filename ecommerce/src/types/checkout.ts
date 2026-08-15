@@ -38,7 +38,10 @@ export interface CustomerIdentity {
 }
 
 /** Dados mínimos capturados antes do frete para permitir retomar a compra. */
-export type CheckoutContact = Pick<CustomerIdentity, 'name' | 'phone'>;
+export type CheckoutContact = Pick<CustomerIdentity, 'name' | 'phone'> & {
+  /** Autorização específica para lembrete de checkout/PIX por WhatsApp. */
+  recoveryConsent: boolean;
+};
 
 /* -------------------------------------------------------------------- FRETE */
 
@@ -129,6 +132,7 @@ export interface Order {
     fbp?: string;
     fbc?: string;
     attribution?: Record<string, string | undefined>;
+    recovery_consent?: boolean;
   };
 }
 

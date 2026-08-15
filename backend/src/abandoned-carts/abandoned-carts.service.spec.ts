@@ -18,11 +18,21 @@ describe('AbandonedCartsService checkout recovery', () => {
     }, '127.0.0.1');
 
     expect(upsert).toHaveBeenCalledWith(expect.objectContaining({
-      create: expect.objectContaining({ status: 'active', telefone: '11987654321' }),
+      create: expect.objectContaining({ status: 'active', telefone: '11987654321', recoveryConsent: false }),
       update: expect.not.objectContaining({ status: expect.anything(), convertedAt: expect.anything() }),
     }));
     const data = upsert.mock.calls[0][0].create;
     expect(data.attribution).toEqual({ utm_source: 'meta', utm_campaign: 'verao' });
+  });
+
+  it('persiste somente consentimento explícito para recuperação', async () => {
+    const service = makeService();
+    await service.captureCheckout({
+      sessionId: 'session-consentida', name: 'Bia', phone: '11999998888',
+      recoveryConsent: true, items: [],
+    }, '127.0.0.2');
+
+    expect(upsert.mock.calls[0][0].create.recoveryConsent).toBe(true);
   });
 
   it('limita rajadas do mesmo contato', async () => {

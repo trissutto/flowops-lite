@@ -531,6 +531,12 @@ const ROTULOS_EVENTO: Record<string, string> = {
   checkout_error: 'Falha ao finalizar',
   checkout_validation_error: 'Campo inválido',
   pix_created: 'PIX criado',
+  payment_method_selected: 'Meio de pagamento escolhido',
+  pix_copied: 'Código PIX copiado',
+  pix_expired: 'PIX expirado',
+  card_declined: 'Cartão recusado',
+  payment_retry: 'Nova tentativa de pagamento',
+  checkout_recovered: 'Checkout recuperado',
 };
 
 const ROTULOS_CODIGO: Record<string, string> = {
