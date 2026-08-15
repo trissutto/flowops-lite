@@ -158,10 +158,25 @@ export function limparNomeVitrine(
   // Tamanho pendurado no fim (com ou sem a cor na frente) — ver TAMANHO_NO_FIM.
   while (TAMANHO_NO_FIM.test(limpo)) limpo = limpo.replace(TAMANHO_NO_FIM, '');
 
+  /**
+   * SEPARADOR QUE SOBROU DA LIMPEZA (visto na PDP em 15/08).
+   *
+   * O título saía **"Blusa Manga Curta — — BMM-100"**: o nome do cadastro era
+   * "Blusa Manga Curta — <marca> — BMM-100" e a marca sumiu na linha de cima,
+   * deixando os dois travessões encostados. A apara de pontas não pegava
+   * porque só conhecia hífen curto (`-`) — travessão longo (`—`) e traço médio
+   * (`–`) passavam batido, e nada olhava o MEIO do texto.
+   *
+   * Dois travessões vazios comem 4 caracteres de uma linha que no celular já
+   * não cabe inteira. "T-Shirt" não é atingido: o padrão exige separadores
+   * CONSECUTIVOS, e ali o hífen é seguido de letra.
+   */
   limpo = limpo
     .replace(/\s{2,}/g, ' ')
-    .replace(/^[\s·,-]+/, '')
-    .replace(/[\s·,-]+$/, '')
+    .replace(/(?:\s*[—–·-]\s*){2,}/g, ' — ')
+    .replace(/^[\s·,—–-]+/, '')
+    .replace(/[\s·,—–-]+$/, '')
+    .replace(/\s{2,}/g, ' ')
     .trim();
 
   return titularSeCaixaAlta(limpo || original);
