@@ -24,6 +24,7 @@ export class WhatsappInboxService {
   private ultimoAcesso = 0;
   /** true quando o webhook do Evolution aponta pra NÓS (aí é tempo real, não precisa sync). */
   private webhookMeu = false;
+  private notifiquei = false;
 
   constructor(
     private readonly evo: EvolutionClient,
@@ -433,6 +434,46 @@ export class WhatsappInboxService {
       this.logger.warn(`[wa-inbox] sync falhou: ${e?.message || e}`);
     } finally {
       this.sincronizando = false;
+    }
+  }
+
+  /**
+   * Avisa o dono UMA vez (WhatsApp) que o inbox novo subiu. Ligado por env
+   * `WHATSAPP_NOTIFY_ON_READY` (= número com DDI, ex.: 5513996218277). Idempotente
+   * de verdade: marca a mensagem com `tipo:'notify-pronto'` e não repete mesmo
+   * depois de um redeploy. Manda pela PRÓPRIA instância (chave do backend).
+   */
+  @Cron('40 * * * * *', { name: 'wa-inbox-notify-ready' })
+  async notificarPronto() {
+    if (this.notifiquei) return;
+    const alvo = (process.env.WHATSAPP_NOTIFY_ON_READY || '').replace(/\D/g, '');
+    if (alvo.length < 10 || !this.evo.configurado()) return;
+    const jid = `${alvo}@s.whatsapp.net`;
+    try {
+      const ja = await this.p().whatsappMessage.findFirst({ where: { conversationJid: jid, tipo: 'notify-pronto' } });
+      if (ja) {
+        this.notifiquei = true;
+        return;
+      }
+      const texto =
+        '✅ Inbox de WhatsApp NOVO no ar (tempo real).\n\n' +
+        'As conversas agora carregam do nosso banco (rápido) e a mensagem que ' +
+        'chega do celular aparece na hora — sem depender do findChats. Abra ' +
+        '/retaguarda/whatsapp-inbox no PC.\n\n— FlowOps';
+      const r = await this.evo.enviarTexto(alvo, texto);
+      const ts = new Date();
+      await this.p().whatsappConversation.upsert({
+        where: { jid },
+        create: { jid, numero: alvo, ultimaMsg: texto, ultimaEm: ts, fromMe: true, naoLidas: 0 },
+        update: { ultimaMsg: texto, ultimaEm: ts, fromMe: true },
+      });
+      await this.p().whatsappMessage.create({
+        data: { conversationJid: jid, waId: r?.key?.id || null, fromMe: true, texto, tipo: 'notify-pronto', status: 'enviado', ts },
+      });
+      this.notifiquei = true;
+      this.logger.log(`[wa-inbox] avisei o dono em ${alvo} que o inbox subiu`);
+    } catch (e: any) {
+      this.logger.warn(`[wa-inbox] notify-pronto falhou: ${e?.message || e}`);
     }
   }
 }
