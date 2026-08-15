@@ -15,16 +15,21 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import {
   AlertTriangle, ArrowLeft, CalendarClock, CheckCircle2, Loader2, Mail,
-  Send, TestTube2, Users,
+  Send, TestTube2, TrendingUp, Users,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
 type Segmento = { id: number; nome: string; alias: string; contatos: number | null };
 type Status = { ok: boolean; configurado: boolean; erro?: string };
+type Resultados = {
+  de: string; ate: string; totalPedidos: number; totalReceita: number;
+  campanhas: Array<{ campanha: string; pedidos: number; pagos: number; receita: number }>;
+};
 
 export default function EmailMarketingPage() {
   const [status, setStatus] = useState<Status | null>(null);
   const [segmentos, setSegmentos] = useState<Segmento[]>([]);
+  const [resultados, setResultados] = useState<Resultados | null>(null);
   const [carregando, setCarregando] = useState(true);
 
   const [segmentoId, setSegmentoId] = useState<number | ''>('');
@@ -50,6 +55,12 @@ export default function EmailMarketingPage() {
       if (st.configurado && st.ok) {
         const segs = await api<Segmento[]>('/email-marketing/segmentos');
         setSegmentos(segs);
+      }
+      // Resultado é do NOSSO banco — carrega mesmo se o Mautic estiver fora.
+      try {
+        setResultados(await api<Resultados>('/email-marketing/resultados'));
+      } catch {
+        setResultados(null);
       }
     } catch (e: any) {
       setStatus({ ok: false, configurado: false, erro: e?.message ?? 'Falha ao conectar.' });
@@ -161,6 +172,34 @@ export default function EmailMarketingPage() {
         <div className="mt-10 flex justify-center text-neutral-400"><Loader2 className="size-6 animate-spin" /></div>
       ) : (
         <div className="mt-6 space-y-5">
+          {/* Resultado — quanto o e-mail vendeu de verdade (nosso banco, não o Mautic) */}
+          {resultados && resultados.campanhas.length > 0 && (
+            <div className="rounded-xl border border-neutral-200 bg-white p-4">
+              <p className="flex items-center gap-2 text-sm font-medium text-neutral-800">
+                <TrendingUp className="size-4" /> O que as campanhas venderam
+                <span className="ml-auto text-xs font-normal text-neutral-400">
+                  {new Date(`${resultados.de}T12:00`).toLocaleDateString('pt-BR')} a {new Date(`${resultados.ate}T12:00`).toLocaleDateString('pt-BR')}
+                </span>
+              </p>
+              <table className="mt-3 w-full text-sm">
+                <tbody>
+                  {resultados.campanhas.map((c) => (
+                    <tr key={c.campanha} className="border-t border-neutral-100">
+                      <td className="py-2 pr-2 text-neutral-700">{c.campanha}</td>
+                      <td className="py-2 pr-2 text-right tabular-nums text-neutral-500">{c.pagos} ped.</td>
+                      <td className="py-2 text-right font-semibold tabular-nums text-neutral-900">
+                        {c.receita.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p className="mt-2 text-xs text-neutral-400">
+                Contado pelo pedido no nosso banco (UTM), não pelo painel do Mautic.
+              </p>
+            </div>
+          )}
+
           {/* Público */}
           <Campo titulo="Público" icone={<Users className="size-4" />}>
             <select
@@ -233,6 +272,10 @@ export default function EmailMarketingPage() {
               placeholder="https://www.lurdsplussize.com.br/produto/ref-vlm-222"
               className="w-full rounded-lg border border-neutral-300 px-3 py-2.5 text-sm"
             />
+            <p className="mt-1.5 text-xs text-neutral-400">
+              O sistema carimba o rastreio sozinho (<code>utm_source=email</code>) — é assim que o pedido
+              nasce sabendo que veio desta campanha e aparece no quadro lá em cima.
+            </p>
           </Campo>
 
           {/* Agendar */}

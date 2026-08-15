@@ -103,11 +103,19 @@ export class MauticClient {
   /**
    * Cria um e-mail do tipo LISTA já vinculado ao segmento. `publishUp` opcional
    * agenda a partida — o Mautic só envia a partir dessa data.
+   *
+   * `texto` e `headers` NÃO são enfeite (medição de 15/08/2026): as 5 campanhas
+   * disparadas por aqui em 14/08 somaram 13.014 envios e **zero abertura**,
+   * enquanto as campanhas de julho — mesma base, mesmo SES — abriam ~3,8%. A
+   * diferença é que as nossas saíram sem versão texto e sem descadastro de 1
+   * clique, os dois itens que Gmail e Outlook exigem de quem manda acima de
+   * 5.000/dia. Sem eles o provedor bloqueia antes da caixa de entrada.
    */
   async criarEmailLista(input: {
     nome: string;
     assunto: string;
     html: string;
+    texto?: string | null;
     segmentoId: number;
     publishUp?: string | null;
   }): Promise<{ id: number }> {
@@ -118,7 +126,15 @@ export class MauticClient {
       emailType: 'list',
       lists: [input.segmentoId],
       isPublished: true,
+      // Descadastro de 1 clique direto no cabeçalho: o Gmail mostra o "Cancelar
+      // inscrição" ao lado do remetente e conta como sinal de remetente sério.
+      // `{unsubscribe_url}` é token do Mautic, trocado por contato no envio.
+      headers: {
+        'List-Unsubscribe': '<{unsubscribe_url}>',
+        'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+      },
     };
+    if (input.texto) body.plainText = input.texto;
     if (input.publishUp) body.publishUp = input.publishUp;
     const data = await this.call<any>('post', '/emails/new', body);
     const id = Number(data?.email?.id);
