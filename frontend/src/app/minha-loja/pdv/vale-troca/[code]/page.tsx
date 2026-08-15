@@ -127,16 +127,24 @@ export default function ValeImprimirPage() {
             margin: 0 !important;
             padding: 0 !important;
             background: white !important;
-            width: 80mm !important;
+            width: 72mm !important;
           }
           body * { visibility: hidden; }
           #vale-content, #vale-content * { visibility: visible; }
+          /* PAPEL 80mm IMPRIME SÓ ~72mm. Desenhar o cupom com 80mm empurra o
+             conteúdo pra direita e CORTA o fim de cada linha — saía "1x · R$
+             23", "bipa o código TROCA-XXXXXX no PD" e "não tem troco em
+             dinheir". A NF-e já tinha apanhado disso (ver pdv/nfce/[saleId]:
+             "usar 78mm cortava a direita"); 72mm é a medida da casa em toda
+             térmica. box-sizing pra o padding entrar na conta e nunca estourar. */
           #vale-content {
             position: absolute;
             left: 0;
             top: 0;
-            width: 80mm;
-            padding: 4mm 3mm;
+            width: 72mm;
+            max-width: 72mm;
+            box-sizing: border-box;
+            padding: 3mm 2mm;
             /* Courier regular tem traco fino demais pra cabeca termica de
                203dpi — a fonte de sistema em negrito queima cheia. */
             font-family: Arial, Helvetica, sans-serif;
@@ -154,6 +162,7 @@ export default function ValeImprimirPage() {
              o driver aplica dithering e a letra sai chapiscada — foi o que a
              loja viu. No papel nao pode existir cinza: */
           #vale-content * {
+            box-sizing: border-box;            /* padding entra na largura */
             color: #000 !important;
             background: transparent !important;
             opacity: 1 !important;             /* nada de cinza por opacidade */
@@ -181,7 +190,9 @@ export default function ValeImprimirPage() {
       `}</style>
 
       <div className="min-h-screen bg-slate-100 p-4 flex items-start justify-center">
-        <div className="w-[300px] bg-white shadow-lg" id="vale-content">
+        {/* 272px ≈ 72mm: a prévia na tela mostra a MESMA largura que sai no
+            papel. Com 300px a loja via um cupom que não existe. */}
+        <div className="w-[272px] bg-white shadow-lg" id="vale-content">
           {/* HEADER */}
           <div className="text-center border-b-2 border-dashed border-black pb-2 mb-2">
             <div className="text-xl font-black tracking-wider">LURD'S</div>
