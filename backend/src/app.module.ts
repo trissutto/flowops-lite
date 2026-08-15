@@ -98,6 +98,7 @@ import { PromoConfigModule } from './promo-config/promo-config.module';
 import { AccessPolicyModule } from './access-policy/access-policy.module';
 import { OperadorPinModule } from './operador-pin/operador-pin.module';
 import { SiteMediaModule } from './site-media/site-media.module';
+import { SiteContentEditorModule } from './site-content-editor/site-content-editor.module';
 
 @Module({
   imports: [
@@ -194,6 +195,7 @@ import { SiteMediaModule } from './site-media/site-media.module';
     AccessPolicyModule,
     OperadorPinModule,
     SiteMediaModule,
+    SiteContentEditorModule,
     ReportsModule,
     TelemetriaModule,
     SiteMetricsModule,
