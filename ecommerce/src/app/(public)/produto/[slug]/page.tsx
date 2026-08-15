@@ -119,6 +119,7 @@ export default async function ProductPage({ params, searchParams }: { params: Pr
           O desktop mantém o respiro original. */}
       <Container width="wide" className="pt-4 pb-2 sm:pt-8 sm:pb-4">
         <Breadcrumb
+          colapsarNoMobile
           items={trail.map((item, i) => ({
             label: item.name,
             href: i < trail.length - 1 ? item.path : undefined,
