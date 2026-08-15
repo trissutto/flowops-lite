@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
 import { EvolutionClient } from './evolution.client';
 
 /**
@@ -17,7 +18,40 @@ export class WhatsappInboxService {
   private readonly logger = new Logger(WhatsappInboxService.name);
   private cacheConversas: { at: number; data: any[] } | null = null;
 
-  constructor(private readonly evo: EvolutionClient) {}
+  constructor(
+    private readonly evo: EvolutionClient,
+    private readonly prisma: PrismaService,
+  ) {}
+
+  /** Status de leitura da msg (só interessa nas que a LOJA mandou). */
+  private statusDe(m: any): string {
+    const s = String(m?.status || m?.key?.status || '').toUpperCase();
+    if (s.includes('READ') || s.includes('PLAYED')) return 'lido';
+    if (s.includes('DELIVERY')) return 'entregue';
+    if (s) return 'enviado';
+    return '';
+  }
+
+  /** Enriquece os números com o NOME do nosso CRM (pelo telefone). */
+  private async nomesDoCrm(numeros: string[]): Promise<Record<string, string>> {
+    const l8s = [...new Set(numeros.map((n) => n.slice(-8)).filter((x) => x.length === 8))];
+    if (!l8s.length) return {};
+    try {
+      const rows = await this.prisma.$queryRawUnsafe<Array<{ l8: string; name: string }>>(
+        `SELECT RIGHT(regexp_replace(COALESCE(whatsapp, phone, ''), '\\D', '', 'g'), 8) l8, name
+           FROM "customers"
+          WHERE name IS NOT NULL
+            AND RIGHT(regexp_replace(COALESCE(whatsapp, phone, ''), '\\D', '', 'g'), 8) = ANY($1::text[])`,
+        l8s,
+      );
+      const map: Record<string, string> = {};
+      for (const r of rows) if (r.l8 && r.name && !map[r.l8]) map[r.l8] = r.name.trim();
+      return map;
+    } catch (e: any) {
+      this.logger.warn(`[wa-inbox] falha ao cruzar nomes do CRM: ${e?.message || e}`);
+      return {};
+    }
+  }
 
   private toMs(v: any): number {
     if (!v) return 0;
@@ -45,12 +79,13 @@ export class WhatsappInboxService {
     return '';
   }
 
-  async conversas() {
+  async conversas(force = false) {
     if (!this.evo.configurado()) throw new BadRequestException('Evolution não configurado.');
     // CACHE curto (dono, 15/08): o findChats do Evolution devolve a lista
-    // INTEIRA (25 mil+ contatos), lento. O poll de 12s da tela quase sempre
-    // bate no cache — carrega na hora depois da 1ª vez.
-    if (this.cacheConversas && Date.now() - this.cacheConversas.at < 15000) {
+    // INTEIRA (25 mil+ contatos), lento. O poll de 12s bate no cache. Mas o
+    // BOTÃO de refresh manda `force` e fura o cache — mensagem nova aparece na
+    // hora (o dono mandou do celular e não via até o cache expirar).
+    if (!force && this.cacheConversas && Date.now() - this.cacheConversas.at < 15000) {
       return this.cacheConversas.data;
     }
     const raw = await this.evo.listarConversas();
@@ -74,6 +109,13 @@ export class WhatsappInboxService {
       .filter((x) => x.jid.endsWith('@s.whatsapp.net'));
     lista.sort((a, b) => b.ts - a.ts);
     const top = lista.slice(0, 100);
+    // NOME DO CRM (dono, 15/08): o WhatsApp mostra só o número quando o contato
+    // não está salvo — mas a gente TEM o nome no CRM pelo telefone.
+    const nomes = await this.nomesDoCrm(top.map((c) => c.numero));
+    for (const c of top) {
+      const doCrm = nomes[c.numero.slice(-8)];
+      if (doCrm) c.nome = doCrm;
+    }
     this.cacheConversas = { at: Date.now(), data: top };
     return top;
   }
@@ -91,6 +133,7 @@ export class WhatsappInboxService {
         fromMe: !!m?.key?.fromMe,
         texto: this.textoDaMsg(m),
         ts: this.toMs(m.messageTimestamp),
+        status: m?.key?.fromMe ? this.statusDe(m) : '',
       }))
       .filter((m) => m.texto || m.id);
     lista.sort((a, b) => a.ts - b.ts);
