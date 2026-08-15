@@ -1,11 +1,11 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import Image from 'next/image';
-import { ArrowRight, Check, Heart, Lock, MapPin, MessageCircle, Ruler, ShoppingBag, Sparkles, Star } from 'lucide-react';
+import { ArrowRight, Check, Heart, Lock, MapPin, MessageCircle, Ruler, ShoppingBag, Star } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
+import { Modal } from '@/components/ui/Modal';
 import { SimuladorFrete } from '@/components/commerce/SimuladorFrete';
 import { SizePill } from '@/components/ui/Choice';
 import { ProductBadgeTag } from '@/components/ui/Badge';
@@ -22,10 +22,6 @@ import { STORE_POLICIES } from '@/data/store-policies';
 import { SeloVendas } from '@/components/commerce/SeloVendas';
 import { linkWhatsapp } from '@/data/contato';
 import { SITE } from '@/lib/seo';
-
-const FitAssistant = dynamic(
-  () => import('@/components/fit/FitAssistant').then((module) => module.FitAssistant),
-);
 
 /**
  * BUY BOX — a coluna de decisão de compra.
@@ -59,8 +55,8 @@ export function BuyBox({
   const irmasDoLook = (look?.pecas ?? []).filter((p) => !p.atual);
   const [size, setSize] = useState<string | null>(null);
   const [sizeError, setSizeError] = useState(false);
-  // LURDS FIT AI — assistente próprio de tamanho
-  const [fitOpen, setFitOpen] = useState(false);
+  // A tabela abre sobre a PDP para a cliente não perder a seleção da peça.
+  const [sizeChartOpen, setSizeChartOpen] = useState(false);
   const { toast } = useToast();
   const mounted = useMounted();
   const addToCart = useCartStore((s) => s.add);
@@ -440,20 +436,18 @@ export function BuyBox({
             escolhido={size}
             sufixoEscolhido="tamanho"
           />
-          <Link
-            href="/tamanhos/guia"
+          <button
+            type="button"
+            onClick={() => setSizeChartOpen(true)}
             className="inline-flex items-center gap-1.5 text-small text-ink-soft underline decoration-border underline-offset-4 transition-colors hover:text-ink"
           >
             <Ruler className="size-3.5" strokeWidth={1.75} />
-            Guia de medidas
-          </Link>
+            Tabela de medidas
+          </button>
         </div>
 
-        {/* As pills COLADAS no rótulo do passo (dono, 14/08): o botão do Fit
-            AI morava aqui no meio e cortava o próprio passo que o rótulo
-            anuncia — "escolha o tamanho" seguido de um botão que NÃO é um
-            tamanho. Quem já sabe o número clica direto; a ajuda desce pra
-            linha abaixo das pills, onde procura quem está em dúvida. */}
+        {/* As opções ficam coladas ao rótulo do passo para a instrução e a
+            escolha formarem um único bloco visual. */}
         <div className="mt-4 flex flex-wrap gap-2">
           {product.sizes.map((option) => (
             <SizePill
@@ -476,22 +470,6 @@ export function BuyBox({
           <p className="mt-3 text-small text-ink-muted">
             Os números riscados estão esgotados{temCor ? ' nesta cor' : ''}.
           </p>
-        )}
-
-        {/* LURDS FIT AI — a objeção "será que serve?" respondida COMO AJUDA,
-            não como desvio no meio do passo. */}
-        {!soldOut && (
-          <button
-            type="button"
-            onClick={() => setFitOpen(true)}
-            className="group mt-3 inline-flex items-center gap-1.5 text-small text-ink-soft transition-colors hover:text-primary-strong"
-          >
-            <Sparkles className="size-3.5 text-primary-strong" strokeWidth={1.75} />
-            Não sabe seu número?{' '}
-            <span className="link-underline font-medium text-primary-strong">
-              Descubra seu tamanho ideal
-            </span>
-          </button>
         )}
 
         {sizeError && (
@@ -595,20 +573,23 @@ export function BuyBox({
         </li>
       </ul>
 
-      {fitOpen && <FitAssistant
-        open={fitOpen}
-        onClose={() => setFitOpen(false)}
-        productRef={product.sku ?? product.id}
-        productName={product.name}
-        categoria={product.category}
-        tamanhosDisponiveis={available.map((s) => s.label)}
-        onEscolherTamanho={(tamanho) => {
-          setSize(tamanho);
-          setSizeError(false);
-          toast({ message: `Tamanho ${tamanho} selecionado`, description: 'Recomendado pelo Lurd’s Fit AI' });
-          document.getElementById('seletor-tamanho')?.scrollIntoView({ block: 'center' });
-        }}
-      />}
+      <Modal
+        open={sizeChartOpen}
+        onClose={() => setSizeChartOpen(false)}
+        label="Tabela de medidas"
+        title="Tabela de medidas"
+        size="lg"
+        className="max-h-[94vh]"
+      >
+        <Image
+          src="/images/guia-tamanhos/tabela-medidas-lurds.png"
+          alt="Tabela de medidas Lurd's para os tamanhos 46 a 60"
+          width={750}
+          height={1075}
+          sizes="(max-width: 640px) 88vw, 750px"
+          className="mx-auto h-auto w-full max-w-[750px]"
+        />
+      </Modal>
 
       {!soldOut && (
         <div className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-background/96 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-[0_-8px_30px_rgba(0,0,0,0.12)] backdrop-blur lg:hidden">
