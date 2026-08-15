@@ -75,4 +75,23 @@ export class EvolutionClient {
       fileName: 'foto.jpg',
     });
   }
+
+  /** Conversas recentes da instância (findChats). */
+  async listarConversas(): Promise<any> {
+    return this.call(`/chat/findChats/${encodeURIComponent(this.instancia)}`, {});
+  }
+
+  /** Mensagens de uma conversa por remoteJid (findMessages). */
+  async listarMensagens(remoteJid: string): Promise<any> {
+    return this.call(`/chat/findMessages/${encodeURIComponent(this.instancia)}`, {
+      where: { key: { remoteJid } },
+    });
+  }
+
+  /** Marca a conversa como lida (opcional; falha não é fatal). */
+  async marcarLida(remoteJid: string, messageId: string): Promise<any> {
+    return this.call(`/chat/markMessageAsRead/${encodeURIComponent(this.instancia)}`, {
+      readMessages: [{ remoteJid, fromMe: false, id: messageId }],
+    });
+  }
 }
