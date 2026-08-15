@@ -27,6 +27,7 @@ campo `code` pertencente a uma lista fechada:
 - `coupon_invalid`: cupom inexistente, vencido ou incompatível;
 - `shipping_invalid`: frete ou retirada não pôde ser confirmado;
 - `validation_error`: payload incompleto ou inválido;
+- `rate_limited`: excesso de tentativas no intervalo de proteção;
 - `payment_unavailable`: gateway ou tokenização indisponível;
 - `internal_error`: falha inesperada ao criar ou cobrar o pedido.
 

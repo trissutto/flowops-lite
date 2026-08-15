@@ -7,6 +7,12 @@ describe('sanitizarDadosEvento', () => {
     })).toEqual({ method: 'card', reason: 'api_rejected' });
   });
 
+  it('preserva a causa fechada sem persistir a mensagem do gateway', () => {
+    expect(sanitizarDadosEvento('checkout_error', {
+      method: 'card', reason: 'card_declined', gatewayMessage: 'do not honor', cpf: '123',
+    })).toEqual({ method: 'card', reason: 'card_declined' });
+  });
+
   it('descarta dados de eventos sem contrato diagnóstico', () => {
     expect(sanitizarDadosEvento('page_view', { email: 'cliente@exemplo.com' })).toBeUndefined();
   });

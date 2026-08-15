@@ -154,11 +154,26 @@ export interface CreateOrderInput {
 }
 
 /** POST /api/checkout — resposta. */
+export type CheckoutErrorCode =
+  | 'card_declined'
+  | 'catalog_unavailable'
+  | 'coupon_invalid'
+  | 'shipping_invalid'
+  | 'validation_error'
+  | 'rate_limited'
+  | 'payment_unavailable'
+  | 'internal_error'
+  | 'api_rejected'
+  | 'network_error'
+  | 'invalid_response';
+
 export interface CreateOrderResult {
   ok: boolean;
   order?: Order;
   /** Mensagem elegante pra UI quando ok=false. */
   error?: string;
+  /** Causa fechada e sem PII, usada apenas no diagnóstico do funil. */
+  code?: CheckoutErrorCode;
 }
 
 /** GET /api/checkout/:id/status — resposta (poll do PIX). */
