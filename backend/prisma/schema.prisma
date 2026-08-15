@@ -7040,3 +7040,37 @@ model DefectItem {
   @@index([registradoAt])
   @@map("defect_items")
 }
+
+/// Rascunho privado do editor visual. Uma linha por recurso editável.
+model SiteContentDraft {
+  id           String   @id @default(uuid())
+  resourceType String   @map("resource_type") @db.VarChar(24)
+  resourceKey  String   @map("resource_key") @db.VarChar(180)
+  payload      Json
+  state        String   @default("draft") @db.VarChar(32)
+  baseVersion  Int      @default(0) @map("base_version")
+  editedBy     String?  @map("edited_by") @db.VarChar(160)
+  errorMessage String?  @map("error_message") @db.Text
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@unique([resourceType, resourceKey])
+  @@index([state, updatedAt])
+  @@map("site_content_drafts")
+}
+
+/// Fotografia imutável de cada publicação ou restauração.
+model SiteContentVersion {
+  id           String   @id @default(uuid())
+  resourceType String   @map("resource_type") @db.VarChar(24)
+  resourceKey  String   @map("resource_key") @db.VarChar(180)
+  version      Int
+  payload      Json
+  origin       String   @default("publish") @db.VarChar(24)
+  publishedBy  String?  @map("published_by") @db.VarChar(160)
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@unique([resourceType, resourceKey, version])
+  @@index([resourceType, resourceKey, createdAt])
+  @@map("site_content_versions")
+}
