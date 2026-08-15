@@ -5646,6 +5646,7 @@ model CheckoutRecovery {
   anonymousId String?   @map("anonymous_id") @db.VarChar(64)
   nome        String    @db.VarChar(120)
   telefone    String    @db.VarChar(11)
+  recoveryConsent Boolean @default(false) @map("recovery_consent")
   status      String    @default("active") @db.VarChar(20)
   subtotal    Decimal?  @db.Decimal(12, 2)
   items       Json

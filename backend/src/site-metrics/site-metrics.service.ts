@@ -40,6 +40,12 @@ const CAMPOS_DIAGNOSTICOS: Record<string, readonly string[]> = {
   checkout_error: ['method', 'reason'],
   checkout_validation_error: ['section', 'field'],
   pix_created: ['method'],
+  payment_method_selected: ['method'],
+  pix_copied: ['method', 'order_id'],
+  pix_expired: ['method', 'order_id'],
+  card_declined: ['method', 'attempt'],
+  payment_retry: ['method', 'attempt'],
+  checkout_recovered: ['method', 'order_id'],
 };
 
 /** Defesa final contra PII: só persiste chaves fechadas e valores curtos. */
@@ -289,7 +295,9 @@ export class SiteMetricsService {
         WHERE criado_em >= $1 AND criado_em <= $2
           AND evento IN ('color_switch','size_switch','add_to_cart_blocked',
                          'add_shipping_info','add_payment_info','checkout_submission',
-                         'checkout_error','checkout_validation_error','pix_created')
+                         'checkout_error','checkout_validation_error','pix_created',
+                         'payment_method_selected','pix_copied','pix_expired',
+                         'card_declined','payment_retry','checkout_recovered')
         GROUP BY evento, codigo, campo
         ORDER BY eventos DESC, evento, codigo
         LIMIT 100`,

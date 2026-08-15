@@ -12,6 +12,7 @@ import { trackCheckoutValidationError } from '@/lib/tracking';
 const schema = z.object({
   name: z.string().trim().min(2, 'Digite seu nome.'),
   phone: z.string().refine(isValidPhone, 'Digite o celular com DDD.'),
+  recoveryConsent: z.boolean(),
 });
 
 type FormValues = z.infer<typeof schema>;
@@ -24,7 +25,9 @@ interface IdentificationStepProps {
 export function IdentificationStep({ defaults, onDone }: IdentificationStepProps) {
   const { register, handleSubmit, setValue, formState: { errors } } = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: defaults ? { name: defaults.name, phone: maskPhone(defaults.phone) } : undefined,
+    defaultValues: defaults
+      ? { name: defaults.name, phone: maskPhone(defaults.phone), recoveryConsent: defaults.recoveryConsent }
+      : { recoveryConsent: false },
     mode: 'onTouched',
   });
 
@@ -33,6 +36,7 @@ export function IdentificationStep({ defaults, onDone }: IdentificationStepProps
       onSubmit={handleSubmit((values) => onDone({
         name: values.name.trim(),
         phone: onlyDigits(values.phone),
+        recoveryConsent: values.recoveryConsent,
       }), (invalid) => trackCheckoutValidationError('identification', Object.keys(invalid)[0] ?? 'unknown'))}
       noValidate
       className="flex flex-col gap-5"
@@ -50,6 +54,14 @@ export function IdentificationStep({ defaults, onDone }: IdentificationStepProps
         error={errors.phone?.message} {...register('phone', {
           onChange: (e) => setValue('phone', maskPhone(e.target.value)),
         })} />
+      <label className="flex cursor-pointer items-start gap-3 text-small text-ink-soft">
+        <input
+          type="checkbox"
+          className="mt-0.5 size-4 shrink-0 accent-primary"
+          {...register('recoveryConsent')}
+        />
+        <span>Quero receber no WhatsApp um lembrete com link seguro se eu não terminar esta compra.</span>
+      </label>
       <div className="flex flex-col gap-3 pt-1">
         <Button type="submit" block className="sm:w-auto">Continuar para a entrega</Button>
         <p className="text-small text-ink-muted">

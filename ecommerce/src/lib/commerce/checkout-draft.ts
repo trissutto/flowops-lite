@@ -14,7 +14,7 @@ export interface CheckoutDraft {
 
 function contactFrom(value: unknown): CheckoutContact | null {
   if (!isObject(value) || typeof value.name !== 'string' || typeof value.phone !== 'string') return null;
-  return { name: value.name, phone: value.phone };
+  return { name: value.name, phone: value.phone, recoveryConsent: value.recoveryConsent === true };
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -42,7 +42,7 @@ export function readCheckoutDraft(storage: Pick<Storage, 'getItem'>): CheckoutDr
     if (!isObject(parsed)) return null;
     const customer = customerFrom(parsed.customer);
     // Migra silenciosamente rascunhos v1, que guardavam a identidade completa.
-    const contact = contactFrom(parsed.contact) ?? (customer ? { name: customer.name, phone: customer.phone } : null);
+    const contact = contactFrom(parsed.contact) ?? (customer ? { name: customer.name, phone: customer.phone, recoveryConsent: false } : null);
     const shipping = contact ? shippingFrom(parsed.shipping) : null;
     const rawPayment = isObject(parsed.payment) ? parsed.payment : null;
     const payment = rawPayment?.method === 'pix' ? { method: 'pix' as const } : null;

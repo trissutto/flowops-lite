@@ -234,6 +234,18 @@ export const trackCheckoutError = (
 export const trackCheckoutValidationError = (section: 'identification' | 'shipping' | 'card', field: string) =>
   track('checkout_validation_error', { section, field: field.slice(0, 40) });
 export const trackPixCreated = () => track('pix_created', { method: 'pix' });
+export const trackPaymentMethodSelected = (method: 'pix' | 'card') =>
+  track('payment_method_selected', { method });
+export const trackPixCopied = (orderId: string) =>
+  track('pix_copied', { method: 'pix', order_id: orderId });
+export const trackPixExpired = (orderId: string) =>
+  track('pix_expired', { method: 'pix', order_id: orderId });
+export const trackCardDeclined = (attempt: number) =>
+  track('card_declined', { method: 'card', attempt });
+export const trackPaymentRetry = (method: 'pix' | 'card', attempt: number) =>
+  track('payment_retry', { method, attempt });
+export const trackCheckoutRecovered = (method: 'pix' | 'card', orderId: string) =>
+  track('checkout_recovered', { method, order_id: orderId });
 export const trackAiConsultant = (acao: string) => track('ai_consultant', { action: acao });
 export const trackVirtualFitting = (product: TrackableProduct) =>
   track('virtual_fitting', {}, { items: [toTrackedItem(product)] });

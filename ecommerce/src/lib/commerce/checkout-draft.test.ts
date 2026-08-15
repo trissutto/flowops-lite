@@ -12,7 +12,7 @@ function memoryStorage() {
 }
 
 const base: CheckoutDraft = {
-  contact: { name: 'Maria', phone: '11999999999' },
+  contact: { name: 'Maria', phone: '11999999999', recoveryConsent: false },
   customer: { name: 'Maria Silva', email: 'maria@example.com', cpf: '12345678901', phone: '11999999999' },
   shipping: null,
   payment: { method: 'pix' },

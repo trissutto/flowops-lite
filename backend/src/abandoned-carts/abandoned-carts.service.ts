@@ -72,6 +72,7 @@ export class AbandonedCartsService {
     const data = {
       anonymousId: String(input?.anonymousId ?? '').slice(0, 64) || null,
       nome, telefone,
+      recoveryConsent: input?.recoveryConsent === true,
       subtotal: Math.max(0, Number(input?.subtotal) || 0), items,
       path: String(input?.path ?? '').slice(0, 200) || null,
       attribution: this.sanitizeAttribution(input?.attribution),
@@ -671,7 +672,9 @@ export class AbandonedCartsService {
         try { return JSON.parse(o.trackingInfo || '{}').session_id; } catch { return null; }
       }).filter(Boolean));
       const recoveryItems = recoveries
-        .filter((r: any) => !orderSessions.has(r.sessionId))
+        // Contatos sem opt-in continuam salvos para retomar a sessão, mas não
+        // entram em nenhuma fila de contato ativo por WhatsApp.
+        .filter((r: any) => r.recoveryConsent === true && !orderSessions.has(r.sessionId))
         .map((r: any, index: number) => {
           const cartItems = Array.isArray(r.items) ? r.items.map((it: any) => ({
             name: it.name || it.productId, sku: it.productId, quantity: Number(it.quantity || 1),

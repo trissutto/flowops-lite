@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Check, Copy, TimerReset } from 'lucide-react';
 import { cn, formatPrice } from '@/lib/utils';
 import { Button } from '@/components/ui/Button';
+import { trackCheckoutRecovered, trackPixCopied, trackPixExpired } from '@/lib/tracking';
 import type { Order, OrderStatusResult } from '@/types/checkout';
 
 /**
@@ -36,6 +37,16 @@ export function PixPanel({ order }: PixPanelProps) {
   const [status, setStatus] = useState<'aguardando' | 'pago' | 'expirado'>('aguardando');
   // Guarda contra poll sobreposto (rede lenta > intervalo).
   const polling = useRef(false);
+  const expiredTracked = useRef(false);
+  const recoveredTracked = useRef(false);
+
+  const markExpired = useCallback(() => {
+    setStatus('expirado');
+    if (!expiredTracked.current) {
+      expiredTracked.current = true;
+      trackPixExpired(order.id);
+    }
+  }, [order.id]);
 
   /* Contagem regressiva — 1s. Zerou = expirado (o server também expira). */
   useEffect(() => {
@@ -43,10 +54,10 @@ export function PixPanel({ order }: PixPanelProps) {
     const timer = setInterval(() => {
       const s = remainingSeconds(pix?.expiresAt);
       setRestante(s);
-      if (s <= 0) setStatus('expirado');
+      if (s <= 0) markExpired();
     }, 1_000);
     return () => clearInterval(timer);
-  }, [pix?.expiresAt, status]);
+  }, [markExpired, pix?.expiresAt, status]);
 
   /* Poll de status — pergunta ao server se o webhook já confirmou. */
   const poll = useCallback(async () => {
@@ -58,11 +69,15 @@ export function PixPanel({ order }: PixPanelProps) {
         const data = (await res.json()) as OrderStatusResult;
         if (data.ok && data.status === 'paid') {
           setStatus('pago');
+          if (!recoveredTracked.current) {
+            recoveredTracked.current = true;
+            trackCheckoutRecovered('pix', order.id);
+          }
           // O redirect leva pra thank you; o purchase JÁ foi disparado pelo
           // server nesse momento — a navegação não carrega evento nenhum.
           router.push(`/checkout/confirmacao/${order.id}`);
         } else if (data.ok && (data.status === 'expired' || data.status === 'cancelled')) {
-          setStatus('expirado');
+          markExpired();
         }
       }
     } catch {
@@ -70,7 +85,7 @@ export function PixPanel({ order }: PixPanelProps) {
     } finally {
       polling.current = false;
     }
-  }, [order.id, router]);
+  }, [markExpired, order.id, router]);
 
   useEffect(() => {
     if (status !== 'aguardando') return;
@@ -84,6 +99,7 @@ export function PixPanel({ order }: PixPanelProps) {
     try {
       await navigator.clipboard.writeText(pix.copyPaste);
       setCopied(true);
+      trackPixCopied(order.id);
       setTimeout(() => setCopied(false), 2_000);
     } catch {
       // Clipboard bloqueado (permissão/iframe): o campo é selecionável na mão.
