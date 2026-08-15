@@ -11,7 +11,9 @@
  */
 const https = require('https');
 
-const SEGMENTO = 2; // TODOS OS CLIENTES DE TODOS OS TEMPOS
+// Segmento vem por argumento: 2 = TODOS OS CLIENTES, 8 = GERAL [ATIVO] (26.735
+// e-mails únicos, a maior base alcançável da casa — medido em 15/08).
+const SEGMENTO = Number(process.argv[3] || 2);
 const ASSUNTO = 'A camiseta que estica muito e não dá bolinha — R$ 69,90 💛';
 const ARTE = 'https://pub-84da472609374e0ab161fd54571b5f38.r2.dev/email-marketing/linha-conforto-viscolycra-6990.jpg';
 const LINK = 'https://www.lurdsplussize.com.br/categoria/linha-conforto';
