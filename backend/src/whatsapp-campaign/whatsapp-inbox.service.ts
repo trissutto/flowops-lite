@@ -15,6 +15,7 @@ import { EvolutionClient } from './evolution.client';
 @Injectable()
 export class WhatsappInboxService {
   private readonly logger = new Logger(WhatsappInboxService.name);
+  private cacheConversas: { at: number; data: any[] } | null = null;
 
   constructor(private readonly evo: EvolutionClient) {}
 
@@ -46,6 +47,12 @@ export class WhatsappInboxService {
 
   async conversas() {
     if (!this.evo.configurado()) throw new BadRequestException('Evolution não configurado.');
+    // CACHE curto (dono, 15/08): o findChats do Evolution devolve a lista
+    // INTEIRA (25 mil+ contatos), lento. O poll de 12s da tela quase sempre
+    // bate no cache — carrega na hora depois da 1ª vez.
+    if (this.cacheConversas && Date.now() - this.cacheConversas.at < 15000) {
+      return this.cacheConversas.data;
+    }
     const raw = await this.evo.listarConversas();
     const arr: any[] = Array.isArray(raw) ? raw : raw?.chats || raw?.records || [];
     const lista = arr
@@ -66,7 +73,9 @@ export class WhatsappInboxService {
       // 1:1 só (fora grupos @g.us e status)
       .filter((x) => x.jid.endsWith('@s.whatsapp.net'));
     lista.sort((a, b) => b.ts - a.ts);
-    return lista.slice(0, 100);
+    const top = lista.slice(0, 100);
+    this.cacheConversas = { at: Date.now(), data: top };
+    return top;
   }
 
   async mensagens(jid: string) {
