@@ -7040,3 +7040,46 @@ model DefectItem {
   @@index([registradoAt])
   @@map("defect_items")
 }
+
+// CAMPANHA DE WHATSAPP pelo FlowOps (dono, 15/08/2026). A operadora escolhe um
+// publico, o sistema dispara pausado via Evolution, com kill-switch. Substitui
+// o disparo orfao do n8n. So `//` nos comentarios: `/** */` quebra o schema.
+model WhatsappCampaign {
+  id              String    @id @default(uuid())
+  nome            String
+  segmento        String
+  mensagens       String
+  imagemUrl       String?   @map("imagem_url")
+  status          String    @default("rascunho")
+  intervaloMinSeg Int       @default(45) @map("intervalo_min_seg")
+  intervaloMaxSeg Int       @default(120) @map("intervalo_max_seg")
+  total           Int       @default(0)
+  enviados        Int       @default(0)
+  falhas          Int       @default(0)
+  falhasSeguidas  Int       @default(0) @map("falhas_seguidas")
+  ultimoEnvioEm   DateTime? @map("ultimo_envio_em")
+  pausaMotivo     String?   @map("pausa_motivo")
+  criadoEm        DateTime  @default(now()) @map("criado_em")
+  atualizadoEm    DateTime  @default(now()) @updatedAt @map("atualizado_em")
+  recipients      WhatsappCampaignRecipient[]
+
+  @@index([status])
+  @@map("whatsapp_campaigns")
+}
+
+model WhatsappCampaignRecipient {
+  id         String    @id @default(uuid())
+  campaignId String    @map("campaign_id")
+  nome       String
+  fone       String
+  mensagem   String
+  status     String    @default("pendente")
+  erro       String?
+  tentativas Int       @default(0)
+  enviadoEm  DateTime? @map("enviado_em")
+  criadoEm   DateTime  @default(now()) @map("criado_em")
+  campaign   WhatsappCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([campaignId, status])
+  @@map("whatsapp_campaign_recipients")
+}
