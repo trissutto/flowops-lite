@@ -14,7 +14,7 @@ import { ArrowLeft, Loader2, MessageCircle, RefreshCw, Send, Sparkles } from 'lu
 import { api } from '@/lib/api';
 
 type Conversa = { jid: string; numero: string; nome: string; texto: string; ts: number; fromMe: boolean; naoLidas: number };
-type Msg = { id: string | null; fromMe: boolean; texto: string; ts: number };
+type Msg = { id: string | null; fromMe: boolean; texto: string; ts: number; status?: string };
 
 const TZ = 'America/Sao_Paulo';
 const hora = (ms: number) => (ms ? new Date(ms).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: TZ }) : '');
@@ -171,7 +171,14 @@ export default function WhatsappInboxPage() {
                     <div key={m.id || i} className={`flex ${m.fromMe ? 'justify-end' : 'justify-start'}`}>
                       <div className={`max-w-[75%] rounded-lg px-3 py-2 text-sm shadow-sm ${m.fromMe ? 'bg-[#D8F2DE] text-slate-800' : 'bg-white text-slate-800'}`}>
                         <div className="whitespace-pre-wrap break-words">{m.texto || '—'}</div>
-                        <div className="text-[10px] text-slate-400 text-right mt-0.5">{hora(m.ts)}</div>
+                        <div className="text-[10px] text-slate-400 text-right mt-0.5">
+                          {hora(m.ts)}
+                          {m.fromMe && m.status && (
+                            <span className={`ml-1 ${m.status === 'lido' ? 'text-[#34B7F1]' : 'text-slate-400'}`} title={m.status}>
+                              {m.status === 'enviado' ? '✓' : '✓✓'}
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </div>
                   ))
