@@ -4,6 +4,7 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { PagarmeService } from './pagarme.service';
 import { PagarmeReconcileService } from './pagarme-reconcile.service';
 import { PagarmeController } from './pagarme.controller';
+import { PagamentoLinkPublicController } from './pagamento-link-public.controller';
 import { CrediariosModule } from '../crediarios/crediarios.module';
 import { LojaOrdersModule } from '../loja-orders/loja-orders.module';
 
@@ -17,7 +18,7 @@ import { LojaOrdersModule } from '../loja-orders/loja-orders.module';
     forwardRef(() => CrediariosModule),
     forwardRef(() => LojaOrdersModule),
   ],
-  controllers: [PagarmeController],
+  controllers: [PagarmeController, PagamentoLinkPublicController],
   providers: [PagarmeService, PagarmeReconcileService],
   exports: [PagarmeService],
 })

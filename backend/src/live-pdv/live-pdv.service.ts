@@ -3262,7 +3262,7 @@ export class LivePdvService {
       customerCpf: cart.customerCpf || undefined,
       customerPhone: cart.customerPhone || undefined,
       customerEmail: cart.customerEmail || undefined,
-      expiresInMinutes: 1440, // 24h pra cliente pagar
+      // expiresInMinutes OMITIDO: vale a régua da casa (PAGARME_LINK_HORAS).
       maxInstallments: Number(process.env.PAGARME_MAX_PARCELAS) || 12, // sem juros no cartão (PAGARME_MAX_PARCELAS ajusta a rede)
     });
 
@@ -3272,13 +3272,15 @@ export class LivePdvService {
         status: 'awaiting_payment',
         paymentMethod: 'link',
         pagarmeOrderId: link.pagarmeOrderId,
-        qrCodeText: link.paymentUrl, // reusa o campo pra guardar a URL do link
+        // Guarda o link NOSSO (/pg/<token>): a URL crua da Pagar.me morre
+        // quando a cobrança fecha e a cliente cai no 404 deles.
+        qrCodeText: link.shortUrl || link.paymentUrl,
         paymentExpiresAt: link.expiresAt,
       },
     });
     return {
       cart: updated,
-      paymentUrl: link.paymentUrl,
+      paymentUrl: link.shortUrl || link.paymentUrl,
       expiresAt: link.expiresAt,
       valor,
     };
