@@ -6,8 +6,10 @@ describe('SiteMediaService', () => {
   const cloudflare = {
     createDirectUpload: jest.fn(),
     get: jest.fn(),
+    delete: jest.fn(),
   } as unknown as CloudflareImagesClient;
-  const service = new SiteMediaService(cloudflare);
+  const prisma = { productPhoto: { findMany: jest.fn(), create: jest.fn(), findUnique: jest.fn(), delete: jest.fn() } } as any;
+  const service = new SiteMediaService(cloudflare, prisma);
 
   beforeEach(() => jest.clearAllMocks());
 
@@ -45,6 +47,20 @@ describe('SiteMediaService', () => {
     await expect(service.confirm('image_123')).resolves.toEqual(expect.objectContaining({
       id: 'image_123', ready: true, filename: 'produto.jpg',
     }));
+  });
+
+  it('vincula imagem processada à galeria correta', async () => {
+    (cloudflare.get as jest.Mock).mockResolvedValue({
+      id: 'image_123', variants: ['https://imagedelivery.net/hash/image_123/public'],
+      meta: { kind: 'product', resourceKey: 'BMM-100|PRETO' },
+    });
+    prisma.productPhoto.findMany.mockResolvedValue([]);
+    prisma.productPhoto.create.mockImplementation(({ data }: any) => ({ id: 'photo-1', ...data }));
+
+    const result = await service.confirm('image_123', { ref: 'BMM-100', cor: 'preto' }, { sub: 'user-1' });
+
+    expect(result.photo).toEqual(expect.objectContaining({ ref: 'BMM-100', cor: 'PRETO', ordem: 0 }));
+    expect(prisma.productPhoto.create).toHaveBeenCalledWith({ data: expect.objectContaining({ objectKey: 'cloudflare:image_123' }) });
   });
 
   it('não consulta identificador inválido', async () => {
