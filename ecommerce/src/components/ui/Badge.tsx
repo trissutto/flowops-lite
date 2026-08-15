@@ -42,6 +42,7 @@ export function Badge({
 const PRODUCT_BADGES: Record<ProductBadge, { label: string; tone: BadgeTone }> = {
   novo: { label: 'Novo', tone: 'neutral' },
   promocao: { label: 'Promoção', tone: 'wine' },
+  'preco-especial': { label: 'Preço especial', tone: 'gold' },
   'best-seller': { label: 'Best seller', tone: 'gold' },
   exclusivo: { label: 'Exclusivo', tone: 'gold' },
   'loja-fisica': { label: 'Na loja física', tone: 'light' },

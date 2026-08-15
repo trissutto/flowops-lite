@@ -153,7 +153,7 @@ export function ProductCard({
         {/* Etiquetas */}
         <div className="pointer-events-none absolute top-3 left-3 flex flex-col items-start gap-1.5">
           {discount > 0 && <ProductBadgeTag badge="promocao" />}
-          {product.badges?.slice(0, 2).map((badge) => (
+          {product.badges?.filter((badge) => badge !== 'promocao').slice(0, 2).map((badge) => (
             <ProductBadgeTag key={badge} badge={badge} />
           ))}
         </div>
@@ -238,18 +238,6 @@ export function ProductCard({
             {product.name}
           </Link>
         </h3>
-
-        {/* REFERÊNCIA EM DESTAQUE (decisão do dono, 06/08).
-            Ela vivia diluída no meio do título ("...Plus Size Ref 700979
-            Estampa Verde"), onde ninguém achava. É o código que a cliente
-            manda no WhatsApp e que a vendedora digita no PDV — merece ser a
-            coisa mais fácil de copiar do card. */}
-        {product.sku && (
-          <p className="tabular mt-1 text-small font-semibold tracking-wide text-ink">
-            <span className="font-normal text-ink-muted">Ref </span>
-            {product.sku}
-          </p>
-        )}
 
         {/* ESGOTADO aparece, riscado (item 37 — decisão do dono 04/08).
             A peça esgotada sumia da vitrine sem explicação: quem viu no
