@@ -66,6 +66,7 @@ Cron de 1h espelha transferências/vendas/estoque pro financeiro. Conta corrente
 | `ERP_WRITE_ENABLED` / `PDV_ERP_WRITE_ENABLED` | — | shadow mode das escritas no Wincred (loga SQL sem executar) |
 | `PDV_FINALIZE_ASYNC` | false | legado (só vale com outbox desligado) |
 | `MAISENVIOS_FORCA_SEDEX` | **off** | `1` volta a etiqueta do Mais Envios a sair SEDEX SEMPRE (comportamento até 15/08, que postava expresso em pedido de PAC pago — 11 casos em 180 dias). Off = a etiqueta segue o serviço que a cliente pagou, igual ao caminho Correios |
+| `SITE_PROMO_50` | on | `0` desliga a promoção de 50% AUTOMÁTICA do site (peça de MODA cadastrada até 31/12/2023 — a mesma regra do caixa, `common/promo-julho.ts`). O `precoPromo` digitado por peça continua valendo. Quem decide é o `PromoSiteService`, consultado pelos DOIS lados: a vitrine que mostra e a trava do carrinho que cobra — divergir aí faz o checkout recusar o pedido |
 | `PAGARME_LINK_HORAS` | 72 | Validade do link de pagamento da loja (era 24h chumbado no front). Teto da Pagar.me = 7 dias (168). A janela da lista "links pendentes" do PDV acompanha (+24h) |
 | `PONTO_IP_CHECK` | on | `0` desliga a regra "celular só bate ponto no WiFi da loja" (batida `pwa_selfie` vs IPs do heartbeat do PDV Electron; fail-open se não há IP <48h) |
 

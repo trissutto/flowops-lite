@@ -64,7 +64,10 @@ export interface PecaApi {
   descricaoCurta: string | null; descricaoCompleta: string | null;
   marca: string | null; categoria: string | null;
   preco: number; precoPix: number | null;
-  /** "De" riscado quando há promoção de site (precoPromo). null = sem promo. */
+  /**
+   * "De" riscado quando há promoção — o `precoPromo` digitado na retaguarda ou
+   * os 50% de coleção passada (a mesma regra do caixa). null = sem promo.
+   */
   precoDe?: number | null;
   /** Faixas de preço por tamanho — vazio quando a peça tem preço único. */
   faixasPreco?: Array<{ de: number; ate: number; preco: number }>;
@@ -74,7 +77,15 @@ export interface PecaApi {
   estoqueTotal: number; disponivel: boolean;
   imagens: Array<{ src: string; alt?: string }>;
   modelagem: string | null; composicao: string | null;
-  destaque: boolean; lancamento: boolean; promocao: boolean;
+  destaque: boolean; lancamento: boolean;
+  /** `true` = tem desconto de verdade (é o que monta o Outlet). */
+  promocao: boolean;
+  /**
+   * A peça foi ESCOLHIDA pela loja (a marquinha do cadastro), sem
+   * necessariamente ter desconto — rende o selo "Preço especial". Opcional
+   * porque o backend antigo não mandava o campo.
+   */
+  selecaoComercial?: boolean;
   /**
    * Atributos da FICHA do CRM (item 44) — os eixos do menu. Opcionais porque
    * peça sem ficha ainda existe enquanto o cadastro não termina.
@@ -114,7 +125,7 @@ export interface PecaApi {
 
 export function mapPeca(p: PecaApi): Product {
   const badges: Product['badges'] = [];
-  const oferta = ofertaProduto(p.preco, p.precoDe, p.promocao);
+  const oferta = ofertaProduto(p.preco, p.precoDe, p.selecaoComercial ?? p.promocao);
   if (p.lancamento) badges.push('novo');
   if (oferta.badge) badges.push(oferta.badge);
   if (p.estoqueTotal > 0 && p.estoqueTotal <= 3) badges.push('ultimas-pecas');

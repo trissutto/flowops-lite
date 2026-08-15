@@ -18,7 +18,7 @@ import { LojaCatalogService } from './loja-catalog.service';
 
 // Métodos privados por desenho — o teste exercita a REGRA, e a regra não
 // merece virar API pública só pra ser testada.
-const svc = new LojaCatalogService({} as any) as any;
+const svc = new LojaCatalogService({} as any, {} as any) as any;
 const tipo = (d: string) => svc.tipoDePeca(d);
 const chave = (d: string) => svc.chaveDeProduto(d);
 

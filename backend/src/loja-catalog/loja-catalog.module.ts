@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { LiveModule } from '../live/live.module';
 import { HttpModule } from '@nestjs/axios';
 import { PrismaModule } from '../prisma/prisma.module';
+import { PromoSiteModule } from '../promo-site/promo-site.module';
 import { LojaCatalogService } from './loja-catalog.service';
 import { InstagramFeedService } from './instagram-feed.service';
 import { GrupoRefService } from './grupo-ref.service';
@@ -30,7 +31,7 @@ import { LojaCatalogPublicController, LojaCatalogAdminController } from './loja-
    * real: `LiveModule` não importa `LojaCatalogModule` nem nada que leve a
    * ele. Se um dia importar, o boot quebra — e o teste pega antes do deploy.
    */
-  imports: [PrismaModule, HttpModule, LiveModule],
+  imports: [PrismaModule, HttpModule, LiveModule, PromoSiteModule],
   controllers: [LojaCatalogPublicController, LojaCatalogAdminController],
   providers: [LojaCatalogService, SiteSyncService, InstagramFeedService, GrupoRefService, ClassificacaoService],
   exports: [LojaCatalogService],

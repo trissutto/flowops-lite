@@ -4,6 +4,8 @@ import { refBaseOf } from '../common/ref-base';
 import { avisarVitrine } from '../common/avisar-vitrine';
 import { limparNomeVitrine, nomeDaDescricaoErp } from './nome-vitrine';
 import { classificarPorNome } from './classificacao-por-nome';
+import { aplicarDescontoPromo } from '../common/promo-julho';
+import { PromoSiteService, type PromoDaPeca } from '../promo-site/promo-site.service';
 
 /**
  * CATÁLOGO DO E-COMMERCE (sprint 008) — ERP é a fonte da verdade.
@@ -97,7 +99,10 @@ export class LojaCatalogService {
   private catalogoEmVoo: Promise<any[]> | null = null;
   private readonly TTL_CATALOGO = 60_000;
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly promoSite: PromoSiteService,
+  ) {}
 
   private normRef(v?: string | null) {
     return String(v || '').trim().toUpperCase().replace(/\s+/g, '');
@@ -487,6 +492,11 @@ export class LojaCatalogService {
      * olhar só a ficha escolhida faria a decisão da retaguarda não valer nada.
      */
     fichasTodas: any[] = [],
+    /**
+     * A promoção de 50% do caixa, já decidida pra esta família
+     * (`PromoSiteService`). null = peça fora da promoção.
+     */
+    promoAuto: PromoDaPeca | null = null,
   ) {
     /* ── ⚠️ UMA REF PODE SER TRÊS PRODUTOS (bug de preço, 07/08) ───────────
      *
@@ -629,10 +639,14 @@ export class LojaCatalogService {
      */
     if (comFoto.length) unicas = comFoto;
 
-    // Preço e estoque saem das ÚNICAS: somar cadastro duplicado inflaria o
-    // estoque do site e faria vender peça que não existe na arara.
-    const precos = unicas.map((l) => l.preco).filter((p) => p > 0);
-    const precoErp = precos.length ? Math.min(...precos) : 0;
+    // Preço CHEIO (o "de" riscado), antes de qualquer promoção. Sai das
+    // ÚNICAS: somar cadastro duplicado inflaria o estoque do site e faria
+    // vender peça que não existe na arara.
+    const precoCheio = (() => {
+      const ps = unicas.map((l) => l.preco).filter((p) => p > 0);
+      return ps.length ? Math.min(...ps) : 0;
+    })();
+
     /**
      * PREÇO PROMOCIONAL DE SITE (dono, 14/08): quando a peça tem `precoPromo`,
      * ele VENCE o preço do ERP na vitrine, na PDP e no checkout (a trava
@@ -643,10 +657,38 @@ export class LojaCatalogService {
     const promo = site?.precoPromo != null && Number(site.precoPromo) > 0
       ? Math.round(Number(site.precoPromo) * 100) / 100
       : null;
+
+    /**
+     * PROMOÇÃO DE 50% DO CAIXA, VALENDO NO SITE (dono, 15/08).
+     *
+     * O desconto é aplicado LINHA A LINHA, antes de qualquer conta: preço da
+     * peça, faixas por tamanho, preço de cada cor, preço de cada tamanho e as
+     * variações que o carrinho lê nascem todos já com metade. Descontar só no
+     * total deixaria a bolinha da cor e a grade da PDP mostrando preço cheio —
+     * a cliente escolhe a cor e o número "sobe".
+     *
+     * O preço DIGITADO à mão vence a regra automática: quem sentou e escreveu
+     * o preço daquela peça decidiu depois da regra, não antes dela. Por isso a
+     * peça com `precoPromo` não é descontada de novo aqui — 50% em cima do
+     * preço promocional seria promoção sobre promoção.
+     *
+     * Quem decide é o `PromoSiteService`, o MESMO que a trava do carrinho
+     * consulta na hora de cobrar. Divergir aqui não faz a cliente pagar mais:
+     * faz o pedido ser RECUSADO no checkout ("o preço foi atualizado").
+     */
+    const daPromo50 = !!promoAuto?.elegivel && precoCheio > 0 && promo == null;
+    if (daPromo50) {
+      unicas = unicas.map((l) =>
+        l.preco > 0 ? { ...l, preco: aplicarDescontoPromo(l.preco) } : l,
+      );
+    }
+
+    const precos = unicas.map((l) => l.preco).filter((p) => p > 0);
+    const precoErp = precos.length ? Math.min(...precos) : 0;
     const preco = promo ?? precoErp;
     const precoDe = promo
-      ? (site?.precoDe != null && Number(site.precoDe) > 0 ? Math.round(Number(site.precoDe) * 100) / 100 : precoErp)
-      : null;
+      ? (site?.precoDe != null && Number(site.precoDe) > 0 ? Math.round(Number(site.precoDe) * 100) / 100 : precoCheio)
+      : (daPromo50 ? precoCheio : null);
     const estoqueTotal = unicas.reduce((s, l) => s + (l.estoque || 0), 0);
 
     /**
@@ -1025,7 +1067,30 @@ export class LojaCatalogService {
         site?.publicadoEm &&
         Date.now() - new Date(site.publicadoEm).getTime() <= 30 * 24 * 60 * 60 * 1000
       ),
-      promocao: !!site?.promocao,
+      /**
+       * PROMOÇÃO = TEM DESCONTO DE VERDADE (dono, 15/08). É este campo que
+       * monta o Outlet (`?promocao=1`).
+       *
+       * A marca `site.promocao` sozinha NÃO entra mais. Ela veio do `on_sale`
+       * do WooCommerce no import, e o preço promocional não veio junto: em
+       * 15/08 o Outlet tinha 49 peças e **1** com "de/por" — as outras 48
+       * anunciavam desconto mostrando preço cheio. A marca continua no
+       * cadastro (e a retaguarda continua podendo usá-la), mas quem decide o
+       * que é "promoção" pra cliente é o desconto existir.
+       *
+       * Peça que a loja quer no Outlet sem cair na regra dos 50% tem dois
+       * caminhos honestos: `precoPromo` na tela de publicação, ou o botão
+       * "liberar promoção" da tela de Classificação (que também vale no caixa).
+       */
+      promocao: precoDe != null && precoDe > preco,
+      /**
+       * A marca do cadastro segue viva, com o nome do que ela é: uma SELEÇÃO
+       * da loja. Ela ainda rende o selo "Preço especial" no card — só não
+       * fabrica mais uma aba de promoção sem preço promocional.
+       */
+      selecaoComercial: !!site?.promocao,
+      /** Por que caiu (ou não) — a retaguarda precisa poder explicar o preço. */
+      promoMotivo: promoAuto?.motivo ?? null,
       atualizadoEm: dataAlt ?? null,
       /** Quando a peça entrou no ar — o eixo da ordenação "novidades". */
       publicadoEm: site?.publicadoEm ?? null,
@@ -1450,6 +1515,13 @@ export class LojaCatalogService {
       agrupadas.get(chave)!.push(...ls);
     }
 
+    /**
+     * A PROMOÇÃO DE 50% DO CAIXA — uma consulta pro catálogo inteiro, pela
+     * chave da família (a mesma que a peça leva pro carrinho). Decidir peça a
+     * peça aqui dentro seriam ~700 idas ao banco a cada expiração do cache.
+     */
+    const promo50 = await this.promoSite.porChaves([...agrupadas.keys()]);
+
     const pecas: any[] = [];
     for (const [ref, todas] of agrupadas) {
       /**
@@ -1513,6 +1585,7 @@ export class LojaCatalogService {
             (s, base) => s + (vendas.get(base) ?? 0), 0,
           ),
           fichasDaFamilia,
+          promo50.get(this.normRef(ref)) ?? null,
         ),
       );
     }
@@ -1764,10 +1837,17 @@ export class LojaCatalogService {
       marca: p.marca ?? null,
       categoria: p.categoria ?? null,
       subcategoria: p.subcategoria ?? null,
-      preco: Number(p.preco) || 0,
-      // O Meta compara `sale_price` com `price` pra desenhar o "de/por". Só
-      // faz sentido quando há promoção de verdade.
-      precoPromocional: p.promocao && p.precoPix ? Number(p.precoPix) : null,
+      /**
+       * O Meta compara `sale_price` com `price` pra desenhar o "de/por" no
+       * anúncio. Então `price` é o preço CHEIO (`precoDe`) e `sale_price` é o
+       * que a cliente paga hoje.
+       *
+       * Antes o "de" saía do preço do Pix, o que fazia o anúncio prometer
+       * 5% em cima do preço normal — desconto que só existia se ela pagasse no
+       * Pix, e nunca era a promoção de verdade.
+       */
+      preco: Number(p.precoDe ?? p.preco) || 0,
+      precoPromocional: p.precoDe != null && p.precoDe > p.preco ? Number(p.preco) : null,
       disponivel: Boolean(p.disponivel),
       imagens: (p.imagens ?? []).map((i: any) => i.src).filter(Boolean),
       tamanhos: (p.tamanhos ?? []).filter((t: any) => t.disponivel).map((t: any) => t.label),
@@ -1874,6 +1954,9 @@ export class LojaCatalogService {
           ref, linhasSoltas, null, c.fit.get(ref), c.fotos.get(ref) ?? [],
           this.escolherFicha(c.fichas.get(ref), linhasSoltas.find((l) => l.marca)?.marca),
           0, c.fichas.get(ref) ?? [],
+          // Link direto de peça fora da vitrine: a promoção vale igual, senão
+          // a mesma peça teria dois preços dependendo de como se chega nela.
+          await this.promoSite.porChave(ref),
         );
       }
     }
@@ -1887,6 +1970,7 @@ export class LojaCatalogService {
       registro.ref, linhas, registro, c.fit.get(registro.ref), c.fotos.get(registro.ref) ?? [],
       this.escolherFicha(c.fichas.get(registro.ref), linhas.find((l) => l.marca)?.marca),
       0, c.fichas.get(registro.ref) ?? [],
+      await this.promoSite.porChave(registro.ref),
     );
   }
 
