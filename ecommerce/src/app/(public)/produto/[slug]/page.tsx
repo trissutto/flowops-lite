@@ -17,6 +17,7 @@ import { fetchPeca } from '@/services/peca';
 import { EscolhaDaPeca } from '@/components/commerce/EscolhaDaPeca';
 import { breadcrumbSchema, buildMetadata, jsonLdGraph, productSchema } from '@/lib/seo';
 import { STORE_POLICIES } from '@/data/store-policies';
+import { ProductVisualEditor } from '@/components/editor/ProductVisualEditor';
 
 /**
  * PÁGINA DE PRODUTO — dados REAIS do catálogo (backend → WooCommerce).
@@ -75,8 +76,9 @@ export async function generateMetadata({
   });
 }
 
-export default async function ProductPage({ params }: { params: Promise<{ slug: string }> }) {
+export default async function ProductPage({ params, searchParams }: { params: Promise<{ slug: string }>; searchParams: Promise<{ editar?: string }> }) {
   const { slug } = await params;
+  const { editar } = await searchParams;
 
   // CATÁLOGO NOVO primeiro (ficha do CRM: cor com foto, grade e preço por
   // cor). A vitrine antiga do WooCommerce fica como rede enquanto a migração
@@ -259,6 +261,15 @@ export default async function ProductPage({ params }: { params: Promise<{ slug: 
       {/* Fica depois do feed porque é o fecho editorial da página, e o feed
           termina de verdade — o catálogo é grande, não infinito. */}
       <NewsletterBlock tone="champagne" />
+      {editar === '1' && peca?.editorIdentity?.marca && (
+        <ProductVisualEditor
+          reference={peca.editorIdentity.ref}
+          brand={peca.editorIdentity.marca}
+          color={peca.editorIdentity.cor}
+          initialName={product.name}
+          initialDescription={description || ''}
+        />
+      )}
     </>
   );
 }

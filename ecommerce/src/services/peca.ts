@@ -31,6 +31,7 @@ export interface PecaDoSite {
   vendas: number;
   /** As peças que saem na mesma foto — ver `PecaApi['look']`. */
   look: PecaApi['look'];
+  editorIdentity: { ref: string; marca: string; cor: string | null };
 }
 
 export async function fetchPeca(slug: string): Promise<PecaDoSite | null> {
@@ -58,6 +59,7 @@ export async function fetchPeca(slug: string): Promise<PecaDoSite | null> {
       fichaTecnica: p.fichaTecnica ?? [],
       vendas: Number(p.vendas) || 0,
       look: p.look ?? null,
+      editorIdentity: { ref: p.ref, marca: p.marca ?? '', cor: p.cores?.[0]?.nome ?? null },
     };
   } catch {
     return null;
