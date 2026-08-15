@@ -28,6 +28,30 @@ describe('nome-vitrine', () => {
       expect(limparNomeVitrine('VESTIDO LONGO TAM 54', 'V1', [])).toBe('Vestido Longo');
     });
 
+    /**
+     * VLM222EST (estampado, R$ 199,90) e VLM-222 (liso, R$ 139,90) são o mesmo
+     * modelo. "Estampado" é a única palavra que separa os dois cards na grade.
+     */
+    it('peça que só tem cor de estampa MANTÉM "Estampado" no nome', () => {
+      expect(
+        limparNomeVitrine('Vestido Longo Manga Curta Estampado', 'VLM222EST', [
+          'ESTAMPA MARINHO', 'ESTAMPA VINHO',
+        ]),
+      ).toBe('Vestido Longo Manga Curta Estampado');
+    });
+
+    it('mas "Estampa" órfã de uma cor lisa continua saindo', () => {
+      expect(
+        limparNomeVitrine('Blusa Manga Curta Estampa Marinho', 'B9', ['MARINHO']),
+      ).toBe('Blusa Manga Curta');
+    });
+
+    it('peça com estampa E cor lisa não vira "Estampado" (a palavra é de uma variação só)', () => {
+      expect(
+        limparNomeVitrine('Vestido Longo Estampa', 'V9', ['ESTAMPA AZUL', 'PRETO']),
+      ).toBe('Vestido Longo');
+    });
+
     it('número que não é da grade fica ("Jeans 501" não é tamanho)', () => {
       expect(limparNomeVitrine('CALCA JEANS 501', 'J1', [])).toBe('Calca Jeans 501');
     });
