@@ -1253,11 +1253,42 @@ export class LojaOrdersService {
         };
       }
     } catch (e: any) {
-      this.logger.error(`[loja] cobrança falhou pedido=${order.wcOrderNumber}: ${e?.message || e}`);
-      await this.descartarPedido(order.id);
+      const motivo = e?.message || String(e);
+      this.logger.error(
+        `[loja] cobrança falhou pedido=${order.wcOrderNumber} (${input.payment.method}): ${motivo}`,
+      );
+      /**
+       * COBRANÇA QUE ESTOUROU TAMBÉM VIRA CARRINHO RESGATÁVEL (dono, 15/08).
+       *
+       * Mesma razão do cartão recusado logo acima: a cliente que tentou pagar
+       * é a mais quente que existe, e o `descartarPedido` a apagava sem deixar
+       * rastro — nem na aba Carrinhos, nem pra gente diagnosticar POR QUE. Foi
+       * o que aconteceu em 15/08: duas clientes tentaram Pix num carrinho de
+       * R$209 (bmm-100, com estoque de sobra), o Pix não gerou 8× seguidas, e
+       * as duas — mais o motivo real — sumiram junto com o pedido descartado.
+       *
+       * Agora o pedido fica `payment_failed` (não segura estoque, não entra em
+       * fila nenhuma — todas filtram esse status) e o motivo técnico vai pro
+       * `paymentInfo.falha`, pra próxima falha ter nome em vez de "recusado".
+       */
+      await (this.prisma as any).order
+        .update({
+          where: { id: order.id },
+          data: {
+            status: 'payment_failed',
+            paymentInfo: JSON.stringify({ ...paymentInfo, falha: motivo, falhaEm: new Date().toISOString() }),
+          },
+        })
+        .catch(async (err: any) => {
+          this.logger.warn(`[loja] falha de cobrança não persistiu (${err?.message || err}) — descartando`);
+          await this.descartarPedido(order.id);
+        });
       return {
         ok: false,
-        error: 'Não conseguimos iniciar o pagamento agora. Tente de novo em instantes. 💜',
+        error:
+          input.payment.method === 'pix'
+            ? 'Não conseguimos gerar o seu Pix agora. Tente de novo em instantes — ou finalize no cartão, que aprova na hora. 💜'
+            : 'Não conseguimos iniciar o pagamento agora. Tente de novo em instantes. 💜',
         code: 'payment_unavailable',
       };
     }
