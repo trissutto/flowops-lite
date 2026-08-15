@@ -299,6 +299,9 @@ export class PickOrdersService {
             // Frete cobrado da cliente vai no campo vFrete da nota (nunca
             // como produto). Pedido dividido: só a nota do 1º pick leva.
             vFrete: dados.vFrete,
+            // Desconto (cupom/PIX) vai no campo vDesc, rateado entre os itens
+            // — sem isso a nota sai pelo valor cheio (LP-000025, 15/08).
+            vDesc: dados.vDesc,
             ambienteOverride: amb as any,
             emitirPorRaiz: isSite && siteRaiz.length === 8 ? siteRaiz : (lojaRaiz.length === 8 ? lojaRaiz : undefined),
           });
@@ -415,7 +418,7 @@ export class PickOrdersService {
    * Destinatário + itens da NF-e do envio. CEP-authoritative (ViaCEP) pra
    * UF/cidade e principalmente o código IBGE (cMun, obrigatório na NF-e).
    */
-  private async montarDadosNfeEnvio(order: any, pick: any, storeCode?: string): Promise<{ dest: any; items: any[]; vFrete: number } | null> {
+  private async montarDadosNfeEnvio(order: any, pick: any, storeCode?: string): Promise<{ dest: any; items: any[]; vFrete: number; vDesc: number } | null> {
     let nome = '';
     let cpfCnpj = '';
     let endereco = '';
@@ -434,6 +437,17 @@ export class PickOrdersService {
      * pick (o mais antigo). Repetir em cada nota cobraria o frete 2×.
      */
     let vFrete = 0;
+    /**
+     * DESCONTO CONCEDIDO (cupom + PIX) → campo `vDesc` da NF-e (dono 15/08),
+     * nunca embutido no preço unitário. Sem isso a nota saía pelo valor CHEIO
+     * das peças: o LP-000025 pagou R$ 152,30 e a NF-e 24 foi emitida com
+     * R$ 159,79 — divergência fiscal em produção.
+     *
+     * Ao contrário do frete (inteiro na nota do 1º pick), o desconto é RATEADO
+     * pelo valor das peças de cada loja: jogar tudo numa nota só poderia deixar
+     * o desconto maior que a mercadoria dela.
+     */
+    let vDesc = 0;
 
     // PEDIDO DIVIDIDO em 2+ lojas (dono 29/07): a NF-e de cada envio leva SÓ
     // as peças daquela loja — filtro ESTRITO (sem fallback pro pedido inteiro;
@@ -533,9 +547,9 @@ export class PickOrdersService {
         orderBy: { createdAt: 'asc' },
         select: { id: true },
       });
+      let ck: any = {};
+      try { ck = JSON.parse(order.checkoutInfo || '{}'); } catch { /* snapshot cru */ }
       if (!dividido || primeiroPick?.id === pick.id) {
-        let ck: any = {};
-        try { ck = JSON.parse(order.checkoutInfo || '{}'); } catch { /* snapshot cru */ }
         vFrete =
           Math.round((Number(ck?.shipping?.price ?? ck?.shippingPrice ?? 0) || 0) * 100) / 100 ||
           Math.round(
@@ -572,6 +586,24 @@ export class PickOrdersService {
         qty: Number(i.quantity) || 1,
         vUn: Number(i.unitPrice ?? i.baseUnitPrice ?? fallbackUnit) || 0,
       }));
+
+      // DESCONTO da compra (cupom + PIX), rateado pelo valor das peças DESTA
+      // loja. `discount` é o campo consolidado do checkout; a soma das duas
+      // partes cobre snapshot antigo que só tenha as parcelas.
+      const descPedido = Math.max(0, Math.round((
+        Number(ck?.discount ?? 0) ||
+        (Number(ck?.descontoCupom ?? 0) + Number(ck?.descontoPix ?? 0))
+      ) * 100) / 100);
+      if (descPedido > 0) {
+        const valorPecas = (v: any[]) => v.reduce((s: number, i: any) => s + (Number(i.vUn ?? i.unitPrice ?? 0) || 0) * (Number(i.qty ?? i.quantity) || 1), 0);
+        const totalNota = valorPecas(items);
+        const totalPedido = valorPecas(pecas.length ? pecas : lista);
+        vDesc = totalPedido > 0
+          ? Math.round(descPedido * (totalNota / totalPedido) * 100) / 100
+          : descPedido;
+        // Nunca maior que a mercadoria da própria nota (vNF negativo é rejeitado).
+        vDesc = Math.min(vDesc, Math.round(totalNota * 100) / 100);
+      }
     }
 
     if (cep.length !== 8) {
@@ -597,6 +629,7 @@ export class PickOrdersService {
       dest: { cpfCnpj, nome, endereco, numero: numero || 'S/N', bairro, cidade, uf, cep, codMun },
       items,
       vFrete,
+      vDesc,
     };
   }
 
