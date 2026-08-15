@@ -95,6 +95,7 @@ import { LivePdvModule } from './live-pdv/live-pdv.module';
 import { PromoConfigModule } from './promo-config/promo-config.module';
 import { AccessPolicyModule } from './access-policy/access-policy.module';
 import { OperadorPinModule } from './operador-pin/operador-pin.module';
+import { SiteMediaModule } from './site-media/site-media.module';
 
 @Module({
   imports: [
@@ -190,6 +191,7 @@ import { OperadorPinModule } from './operador-pin/operador-pin.module';
     PromoConfigModule,
     AccessPolicyModule,
     OperadorPinModule,
+    SiteMediaModule,
     ReportsModule,
     TelemetriaModule,
     SiteMetricsModule,
