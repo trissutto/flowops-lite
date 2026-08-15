@@ -99,18 +99,23 @@ export default function SangriaImpressoPage() {
             margin: 0 !important;
             padding: 0 !important;
             background: white !important;
-            width: 80mm !important;
+            width: 72mm !important;
             -webkit-print-color-adjust: exact !important;
             print-color-adjust: exact !important;
           }
           body * { visibility: hidden; }
           #recibo-content, #recibo-content * { visibility: visible; color: #000 !important; }
+          #recibo-content * { box-sizing: border-box; }
+          /* Papel 80mm imprime só ~72mm — desenhar 80mm empurra pra direita e
+             corta o fim das linhas (mesmo defeito do vale-troca e da NF-e). */
           #recibo-content {
             position: absolute;
             left: 0;
             top: 0;
-            width: 80mm;
-            padding: 4mm 3mm;
+            width: 72mm;
+            max-width: 72mm;
+            box-sizing: border-box;
+            padding: 3mm 2mm;
             font-family: 'Courier New', monospace;
             color: black !important;
           }
@@ -133,7 +138,8 @@ export default function SangriaImpressoPage() {
       `}</style>
 
       <div className="min-h-screen bg-slate-100 p-4 flex items-start justify-center">
-        <div className="w-[300px] bg-white shadow-lg" id="recibo-content">
+        {/* 272px ≈ 72mm — prévia com a largura real do papel. */}
+        <div className="w-[272px] bg-white shadow-lg" id="recibo-content">
           {/* HEADER */}
           <div className="text-center border-b-2 border-dashed border-black pb-2 mb-2">
             <div className="text-xl font-black tracking-wider">LURD'S</div>
