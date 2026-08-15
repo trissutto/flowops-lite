@@ -217,7 +217,7 @@ export default function CheckoutPage() {
       const result = (await res.json().catch(() => null)) as CreateOrderResult | null;
 
       if (!result?.ok || !result.order) {
-        trackCheckoutError(payment.method, result ? 'api_rejected' : 'invalid_response');
+        trackCheckoutError(payment.method, result?.code ?? (result ? 'api_rejected' : 'invalid_response'));
         // A mensagem do server tem PRECEDÊNCIA: por contrato ela já vem
         // elegante e é específica ("cartão recusado", "cupom expirou") — bem
         // mais útil que o genérico. Os textos locais cobrem só o que acontece

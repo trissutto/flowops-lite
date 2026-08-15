@@ -15,6 +15,7 @@
 
 import { track, type TrackOptions } from './event-manager';
 import type { EventName, TrackedItem } from './types';
+import type { CheckoutErrorCode } from '@/types/checkout';
 
 /* ────────────────────────────────────────────────────────────────────────────
  * Adaptador de produto
@@ -221,7 +222,7 @@ export const trackCheckoutSubmission = (method: 'pix' | 'card') =>
   track('checkout_submission', { method });
 export const trackCheckoutError = (
   method: 'pix' | 'card',
-  reason: 'api_rejected' | 'network_error' | 'invalid_response',
+  reason: CheckoutErrorCode,
 ) => track('checkout_error', { method, reason });
 export const trackCheckoutValidationError = (section: 'identification' | 'shipping' | 'card', field: string) =>
   track('checkout_validation_error', { section, field: field.slice(0, 40) });

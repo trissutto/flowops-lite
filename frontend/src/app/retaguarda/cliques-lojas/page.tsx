@@ -394,7 +394,7 @@ function FunilSite({ etapas, diagnosticos }: { etapas: EtapaFunil[]; diagnostico
                   <th className="text-left px-4 py-2.5 font-semibold">Momento</th>
                   <th className="text-left px-4 py-2.5 font-semibold">Motivo / escolha</th>
                   <th className="text-right px-4 py-2.5 font-semibold">Pessoas</th>
-                  <th className="text-right px-4 py-2.5 font-semibold">Eventos</th>
+                  <th className="text-right px-4 py-2.5 font-semibold">Tentativas</th>
                 </tr>
               </thead>
               <tbody>
@@ -432,7 +432,15 @@ const ROTULOS_EVENTO: Record<string, string> = {
 const ROTULOS_CODIGO: Record<string, string> = {
   size_missing: 'Tamanho não escolhido',
   sold_out: 'Produto esgotado',
-  api_rejected: 'Pedido recusado pelo servidor',
+  card_declined: 'Cartão não aprovado',
+  catalog_unavailable: 'Produto, estoque ou preço alterado',
+  coupon_invalid: 'Cupom não aceito',
+  shipping_invalid: 'Entrega não confirmada',
+  validation_error: 'Dados do pedido incompletos',
+  rate_limited: 'Tentativas demais em pouco tempo',
+  payment_unavailable: 'Pagamento indisponível',
+  internal_error: 'Erro interno',
+  api_rejected: 'Motivo não detalhado (dado antigo)',
   invalid_response: 'Resposta inválida do servidor',
   network_error: 'Falha de conexão',
   identification: 'Identificação',
