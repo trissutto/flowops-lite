@@ -1873,6 +1873,11 @@ model PagarmePayment {
   status          String   @default("pending")  // pending | paid | failed | canceled
   qrCodeText      String?  @map("qr_code_text") @db.Text
   qrCodeImageUrl  String?  @map("qr_code_image_url") @db.Text
+  // Token do NOSSO link curto (/pg/<token>). A loja manda ele no lugar da URL
+  // crua da Pagar.me: link pago/vencido lá vira 404 sem saída ("Não
+  // encontramos seu pedido"), e a cliente não sabe nem se pagou. Só no link
+  // de checkout — cobrança PIX não usa.
+  linkToken       String?  @unique @map("link_token")
   expiresAt       DateTime? @map("expires_at")
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
