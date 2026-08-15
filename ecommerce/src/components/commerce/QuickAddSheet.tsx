@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Image from 'next/image';
-import { Loader2, ShoppingBag } from 'lucide-react';
+import { AlertCircle, Loader2, ShoppingBag } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
 import { SizePill } from '@/components/ui/Choice';
@@ -190,7 +190,13 @@ export function QuickAddSheet() {
             </div>
           )}
 
-          <div className="mt-6">
+          <div
+            className={`mt-6 rounded-lg transition-all duration-300 ${
+              aviso && !precisaEscolherCor
+                ? 'bg-danger/5 p-3 ring-2 ring-danger ring-offset-2 ring-offset-background'
+                : ''
+            }`}
+          >
             <p className="eyebrow text-ink">Tamanho</p>
             {precisaEscolherCor ? (
               <p className="mt-3 text-small text-muted">Escolha a cor pra ver os tamanhos disponíveis.</p>
@@ -216,7 +222,15 @@ export function QuickAddSheet() {
             )}
           </div>
 
-          {aviso && <p role="alert" className="mt-3 text-small text-danger">{aviso}</p>}
+          {aviso && (
+            <p
+              role="alert"
+              className="mt-4 flex items-center gap-2 rounded-md border border-danger/40 bg-danger/10 px-3 py-2.5 text-small font-semibold text-danger"
+            >
+              <AlertCircle className="size-4 shrink-0" strokeWidth={2} />
+              {aviso}
+            </p>
+          )}
 
           <Button size="lg" block className="mt-6" onClick={adicionar}>
             <ShoppingBag className="mr-2 size-4" strokeWidth={1.75} />

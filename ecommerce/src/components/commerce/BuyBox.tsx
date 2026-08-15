@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import Image from 'next/image';
-import { ArrowRight, Check, Heart, Lock, MapPin, MessageCircle, Ruler, ShoppingBag, Sparkles, Star } from 'lucide-react';
+import { AlertCircle, ArrowRight, Check, Heart, Lock, MapPin, MessageCircle, Ruler, ShoppingBag, Sparkles, Star } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { SimuladorFrete } from '@/components/commerce/SimuladorFrete';
 import { SizePill } from '@/components/ui/Choice';
@@ -436,7 +436,21 @@ export function BuyBox({
       )}
 
       {/* Tamanho */}
-      <div id="seletor-tamanho" className="mt-9 scroll-mt-28">
+      {/* IMPOSSÍVEL DE IGNORAR (dono, 15/08): "minha cliente é lenta com
+          tecnologia". Quem clicava em "Adicionar" sem escolher o número via só
+          uma linha vermelha discreta e não entendia — 20 pessoas/dia batiam
+          nessa trava (evento add_to_cart_blocked/size_missing, várias no VLM-222
+          e no bmm-100) e parte ia embora. Quando falta o tamanho, o passo
+          INTEIRO acende: moldura vermelha + fundo + a instrução em caixa
+          dizendo pra tocar num número acima. */}
+      <div
+        id="seletor-tamanho"
+        className={cn(
+          'mt-9 scroll-mt-28 rounded-lg transition-all duration-300',
+          sizeError &&
+            'bg-danger/5 p-4 ring-2 ring-danger ring-offset-2 ring-offset-background',
+        )}
+      >
         <div className="flex items-end justify-between gap-4">
           <PassoLabel
             numero={temCor ? 2 : 1}
@@ -500,8 +514,12 @@ export function BuyBox({
         )}
 
         {sizeError && (
-          <p role="alert" className="mt-3 text-small text-danger">
-            Escolha um tamanho pra continuar.
+          <p
+            role="alert"
+            className="mt-4 flex items-center gap-2 rounded-md border border-danger/40 bg-danger/10 px-3 py-2.5 text-small font-semibold text-danger"
+          >
+            <AlertCircle className="size-4 shrink-0" strokeWidth={2} />
+            Toque no seu número acima 👆 pra colocar na sacola.
           </p>
         )}
 
