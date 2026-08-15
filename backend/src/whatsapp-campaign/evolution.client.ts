@@ -72,6 +72,7 @@ export class EvolutionClient {
       mediatype: 'image',
       media: url,
       caption,
+      fileName: 'foto.jpg',
     });
   }
 }
